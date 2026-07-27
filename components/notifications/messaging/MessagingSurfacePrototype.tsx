@@ -7,6 +7,7 @@ import {
   CloseOutlined,
   CommentOutlined,
   CopyOutlined,
+  DeleteOutlined,
   EditOutlined,
   EyeOutlined,
   FileAddOutlined,
@@ -186,6 +187,11 @@ type TimelineEvent = {
   callType?: string;
   relatedModuleId?: string | null;
   relatedRecordId?: string | null;
+};
+
+const getTimelineEventMutationKey = (channel: ChannelKind, item: TimelineEvent) => {
+  const sourceId = String(item.sourceRow?.id || item.id || '').trim();
+  return sourceId ? `${channel}:${sourceId}` : '';
 };
 
 type ComposerSendPayload = {
@@ -1744,12 +1750,14 @@ const TimelineIconButton: React.FC<{
   active?: boolean;
   activeTone?: 'default' | 'like';
   inverse?: boolean;
-}> = ({ title, icon, onClick, active = false, activeTone = 'default', inverse = false }) => (
+  danger?: boolean;
+  disabled?: boolean;
+}> = ({ title, icon, onClick, active = false, activeTone = 'default', inverse = false, danger = false, disabled = false }) => (
   <Tooltip title={title}>
     <button
       type="button"
       aria-label={title}
-      className={`inline-flex h-7 w-7 items-center justify-center rounded-full transition ${
+      className={`inline-flex h-7 w-7 items-center justify-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-45 ${
         active
           ? activeTone === 'like'
             ? 'bg-rose-500/12 text-rose-600 shadow-sm hover:bg-rose-500/18 hover:text-rose-700 dark:bg-rose-400/16 dark:text-rose-200 dark:hover:bg-rose-400/22 dark:hover:text-rose-100'
@@ -1758,9 +1766,14 @@ const TimelineIconButton: React.FC<{
               : 'bg-[rgba(var(--brand-500-rgb),0.12)] text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--brand-300-rgb),0.12)] dark:text-[rgb(var(--brand-200-rgb))]'
           : inverse
             ? 'text-white/90 hover:bg-white/12 hover:text-white'
-            : 'text-slate-400 hover:bg-slate-100 hover:text-slate-650 dark:hover:bg-white/[0.08] dark:hover:text-slate-100'
+            : danger
+              ? inverse
+                ? 'text-rose-100 hover:bg-rose-400/20 hover:text-white'
+                : 'text-rose-500 hover:bg-rose-50 hover:text-rose-700 dark:text-rose-300 dark:hover:bg-rose-400/15 dark:hover:text-rose-100'
+              : 'text-slate-400 hover:bg-slate-100 hover:text-slate-650 dark:hover:bg-white/[0.08] dark:hover:text-slate-100'
       }`}
       onClick={onClick}
+      disabled={disabled}
     >
       {icon}
     </button>
@@ -1799,7 +1812,10 @@ const TimelineEventCard: React.FC<{
   onBindVoipOperator?: (item: TimelineEvent) => void;
   onRetryBotMedia?: (item: TimelineEvent) => void;
   retryingMedia?: boolean;
-}> = ({ item, activeConversation, unread = false, onReply, onForward, onCreateActivity, onToggleLike, onShowReceipts, onBindBotSender, onBindVoipOperator, onRetryBotMedia, retryingMedia = false }) => {
+  canDelete?: boolean;
+  deleting?: boolean;
+  onDelete?: (item: TimelineEvent) => void;
+}> = ({ item, activeConversation, unread = false, onReply, onForward, onCreateActivity, onToggleLike, onShowReceipts, onBindBotSender, onBindVoipOperator, onRetryBotMedia, retryingMedia = false, canDelete = false, deleting = false, onDelete }) => {
   const { message } = App.useApp();
   const outgoing = item.direction === 'outbound';
   const isCall = item.kind === 'call';
@@ -2025,6 +2041,7 @@ const TimelineEventCard: React.FC<{
           {activeConversation.actions.includes('forward') ? <TimelineIconButton title="هدایت" icon={<SendOutlined />} inverse={outgoing} onClick={() => onForward?.(item)} /> : null}
           {activeConversation.actions.includes('activity') ? <TimelineIconButton title="ایجاد فعالیت" icon={<FileAddOutlined />} inverse={outgoing} onClick={() => onCreateActivity?.(item)} /> : null}
           {canRetryBotMedia ? <TimelineIconButton title="تلاش دوباره برای دریافت پیوست" icon={<ReloadOutlined spin={retryingMedia} />} active={retryingMedia} inverse={outgoing} onClick={() => onRetryBotMedia?.(item)} /> : null}
+          {canDelete ? <TimelineIconButton title="حذف پیام" icon={<DeleteOutlined />} danger inverse={outgoing} disabled={deleting} onClick={() => onDelete?.(item)} /> : null}
           <TimelineIconButton title="کپی متن" icon={<CopyOutlined />} inverse={outgoing} onClick={() => void copyMessageText()} />
           <TimelineIconButton title={item.liked ? 'پسندیده شده' : 'پسندیدن'} icon={<LikeOutlined />} active={Boolean(item.liked)} activeTone="like" inverse={outgoing} onClick={() => onToggleLike?.(item)} />
           {item.seenAt ? (
@@ -2507,6 +2524,8 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const [internalConversationLocalOverrides, setInternalConversationLocalOverrides] = useState<Record<string, { preview: string; lastActivityAt: string }>>({});
   const [localReadThroughByConversation, setLocalReadThroughByConversation] = useState<Record<string, string>>({});
   const [likedOverrides, setLikedOverrides] = useState<Record<string, boolean>>({});
+  const [locallyDeletedMessageKeys, setLocallyDeletedMessageKeys] = useState<Set<string>>(() => new Set());
+  const [deletingMessageKeys, setDeletingMessageKeys] = useState<Set<string>>(() => new Set());
   const [internalGroupModalOpen, setInternalGroupModalOpen] = useState(false);
   const [internalGroupName, setInternalGroupName] = useState('');
   const [internalGroupUserIds, setInternalGroupUserIds] = useState<string[]>([]);
@@ -3250,8 +3269,11 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     ] as TimelineEvent[];
   }, [activeConversation.channel, activeConversation.key, botGroupRpcEvents, directoryUserMap, internalRecordTitleMap, liveData.events, liveData.profile.id, liveInternalEvents, optimisticBotSenderBindings, orgDisplayName, orgLogoUrl]);
   const activeEventsRaw = useMemo(
-    () => displayEvents.filter((item) => item.conversationKey === activeConversation.key),
-    [activeConversation.key, displayEvents],
+    () => displayEvents.filter((item) => (
+      item.conversationKey === activeConversation.key
+      && !locallyDeletedMessageKeys.has(getTimelineEventMutationKey(activeConversation.channel, item))
+    )),
+    [activeConversation.channel, activeConversation.key, displayEvents, locallyDeletedMessageKeys],
   );
   const activeEvents = useMemo<TimelineEvent[]>(() => {
     const eventBySourceId = new Map<string, TimelineEvent>();
@@ -4630,6 +4652,127 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     }
   };
 
+  const canDeleteMessage = (item: TimelineEvent) => {
+    const currentUserId = String(liveData.profile.id || '').trim();
+    if (!currentUserId || item.direction !== 'outbound') return false;
+    if (activeConversation.channel === 'internal') {
+      return String(item.sourceRow?.author_id || '').trim() === currentUserId;
+    }
+    if (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct') {
+      return String(item.sourceRow?.created_by || '').trim() === currentUserId;
+    }
+    return false;
+  };
+
+  const deleteMessage = async (item: TimelineEvent) => {
+    if (!canDeleteMessage(item)) {
+      message.warning('فقط فرستندهٔ پیام می‌تواند آن را حذف کند.');
+      return;
+    }
+    const rowId = String(item.sourceRow?.id || '').trim();
+    const mutationKey = getTimelineEventMutationKey(activeConversation.channel, item);
+    if (!rowId || !mutationKey) {
+      message.error('شناسهٔ پیام برای حذف پیدا نشد.');
+      return;
+    }
+    setDeletingMessageKeys((previous) => new Set(previous).add(mutationKey));
+    try {
+      if (activeConversation.channel === 'internal') {
+        const { error } = await supabase
+          .from('notes')
+          .delete()
+          .eq('id', rowId);
+        if (error) throw error;
+        internalTimeline.setItems((previous: any[]) => (
+          (previous || []).filter((row: any) => String(row?.id || '').trim() !== rowId)
+        ));
+        const sourceConversationKey = String(
+          activeConversation.sourceConversationKey
+          || getInternalSourceConversationKey(activeConversation.key)
+          || ''
+        ).trim();
+        if (sourceConversationKey) {
+          setInternalConversationLocalOverrides((previous) => {
+            const next = { ...previous };
+            delete next[sourceConversationKey];
+            return next;
+          });
+        }
+        setLocallyDeletedMessageKeys((previous) => new Set(previous).add(mutationKey));
+        await Promise.all([
+          refreshInternalConversations({ force: true }),
+          refreshInternalTimeline({ force: true }),
+        ]);
+      } else if (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct') {
+        const messageTable = activeConversation.channel === 'bot_direct'
+          ? 'counterparty_bot_direct_messages'
+          : 'counterparty_bot_messages';
+        const row = item.sourceRow || {};
+        const conversationRow = activeConversation.channel === 'bot_group'
+          ? activeBotGroupRow
+          : (liveData.botDirectThreads || []).find((entry: any) => (
+            String(entry?.id || '').trim() === getBotDirectThreadIdFromConversationKey(activeConversation.key)
+          )) || null;
+        const channel = String(row?.channel_type || conversationRow?.channel_type || '').trim() as BotChannel;
+        const chatId = String(row?.chat_id || conversationRow?.bot_chat_id || conversationRow?.chat_id || '').trim();
+        const providerMessageId = String(row?.provider_message_id || '').trim();
+        if (providerMessageId && BOT_CHANNELS.includes(channel) && chatId) {
+          const activeConnection = await getActiveChannelSettings(channel);
+          const connectionId = String(activeConnection?.id || '').trim();
+          if (!connectionId) throw new Error('اتصال فعال بات پیدا نشد.');
+          const { data, error } = await supabase.functions.invoke('bot-admin', {
+            body: {
+              action: 'delete_message',
+              channel,
+              connectionId,
+              chatId,
+              providerMessageId,
+              messageTable,
+            },
+          });
+          if (error) throw error;
+          if (!data?.success) throw new Error(String(data?.message || 'حذف پیام از کانال بات ناموفق بود.'));
+        }
+        const { error } = await supabase
+          .from(messageTable)
+          .delete()
+          .eq('id', rowId);
+        if (error) throw error;
+        botTimeline.setItems((previous: any[]) => (
+          (previous || []).filter((row: any) => String(row?.id || '').trim() !== rowId)
+        ));
+        setLocallyDeletedMessageKeys((previous) => new Set(previous).add(mutationKey));
+        await Promise.all([
+          liveData.refresh(),
+          refreshBotConversations({ force: true }),
+          botTimelineRefreshRef.current ? botTimelineRefreshRef.current({ force: true }) : Promise.resolve(null),
+        ]);
+      }
+      message.success('پیام حذف شد.');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'حذف پیام ناموفق بود.'));
+      throw error;
+    } finally {
+      setDeletingMessageKeys((previous) => {
+        const next = new Set(previous);
+        next.delete(mutationKey);
+        return next;
+      });
+    }
+  };
+
+  const requestDeleteMessage = (item: TimelineEvent) => {
+    if (!canDeleteMessage(item)) return;
+    Modal.confirm({
+      title: 'حذف پیام',
+      content: 'این پیام از پیام‌رسانی حذف می‌شود و قابل بازگردانی نیست.',
+      okText: 'حذف پیام',
+      cancelText: 'انصراف',
+      okButtonProps: { danger: true },
+      onOk: () => deleteMessage(item),
+    });
+  };
+
   const showMessageReceipts = (item: TimelineEvent) => {
     const readEntries = Object.values(readReceiptMapFromBox(item.sourceRow?.metadata));
     const likeEntries = Object.values(likeReceiptMapFromBox(item.sourceRow?.metadata));
@@ -5106,6 +5249,9 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
                       onBindVoipOperator={openVoipOperatorBindModal}
                       onRetryBotMedia={retryBotMessageMedia}
                       retryingMedia={retryingBotMediaIds.has(String(item.sourceRow?.id || '').trim())}
+                      canDelete={canDeleteMessage(item)}
+                      deleting={deletingMessageKeys.has(getTimelineEventMutationKey(activeConversation.channel, item))}
+                      onDelete={requestDeleteMessage}
                     />
                   ))}
                 </div>
