@@ -193,6 +193,12 @@ describe('communication timeline fast path', () => {
     }));
 
     await waitFor(() => {
+      expect(rpc).toHaveBeenCalledWith('get_internal_communication_conversations_v3', {
+        p_before_cursor: null,
+        p_limit: 80,
+      });
+    });
+    await waitFor(() => {
       expect(result.current.items?.[0]?.last_message_preview).toBe('تستیییی');
     });
     expect(result.current.items?.[0]?.user_id).toBe('user-b');

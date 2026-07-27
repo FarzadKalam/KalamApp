@@ -671,9 +671,18 @@ const getInternalConversationSubtitle = (summary: NotificationConversationSummar
   return String(summary?.role_label || summary?.subtitle || '').trim() || 'پیام مستقیم داخلی';
 };
 
-const buildInternalLiveConversations = (summaries: NotificationConversationSummary[] | null | undefined): Conversation[] =>
+const buildInternalLiveConversations = (
+  summaries: NotificationConversationSummary[] | null | undefined,
+  currentUserId: string,
+): Conversation[] =>
   (summaries || [])
     .filter((summary) => String(summary?.section || '').trim() === 'notes')
+    .filter((summary) => {
+      const key = String(summary?.conversation_key || '').trim();
+      if (!key.startsWith('direct:')) return true;
+      const participants = key.split(':').slice(1).map((item) => item.trim()).filter(Boolean);
+      return participants.includes(currentUserId);
+    })
     .map((summary) => {
       const sourceConversationKey = String(summary?.conversation_key || '').trim();
       const internalKind = getInternalConversationKind(summary);
@@ -823,6 +832,7 @@ const buildInternalConversationFallbackSummaries = (
     const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
     const authorId = resolveInternalAuthorId(row);
     const mentionUserIds = normalizeIdArray(row?.mention_user_ids);
+    const mentionRoleIds = normalizeIdArray(row?.mention_role_ids);
     const groupId = String(metadata?.chat_group_id || '').trim();
     if (isInternalSystemNote(row)) {
       upsertSummary('system', row, {
@@ -855,6 +865,14 @@ const buildInternalConversationFallbackSummaries = (
         .forEach((userId) => targetUserIds.add(userId));
     }
     if (authorId && authorId !== normalizedCurrentUserId && mentionUserIds.includes(normalizedCurrentUserId)) {
+      targetUserIds.add(authorId);
+    }
+    if (
+      authorId
+      && authorId !== normalizedCurrentUserId
+      && currentRoleId
+      && mentionRoleIds.includes(String(currentRoleId).trim())
+    ) {
       targetUserIds.add(authorId);
     }
     targetUserIds.forEach((targetUserId) => {
@@ -896,9 +914,18 @@ const doesInternalNoteBelongToConversation = (
   }
   if (key.startsWith(CHAT_GROUP_PREFIX)) return groupId === getChatGroupSelectionId(key);
   if (!key.startsWith('direct:') || groupId || isInternalSystemNote(row)) return false;
-  return normalizeIdArray(row?.mention_user_ids).some((targetUserId) => (
+  const userMentionMatches = normalizeIdArray(row?.mention_user_ids).some((targetUserId) => (
     buildDirectConversationKey(authorId, targetUserId) === key
   ));
+  if (userMentionMatches) return true;
+  const normalizedRoleId = String(currentRoleId || '').trim();
+  return Boolean(
+    authorId
+    && authorId !== normalizedCurrentUserId
+    && normalizedRoleId
+    && normalizeIdArray(row?.mention_role_ids).includes(normalizedRoleId)
+    && buildDirectConversationKey(authorId, normalizedCurrentUserId) === key,
+  );
 };
 
 const ensureInternalSpecialConversations = (
@@ -2880,7 +2907,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const liveInternalConversations = useMemo(
     () => sortConversationsByActivity(mergeDirectoryDirectConversations(
       ensureInternalSpecialConversations(
-        buildInternalLiveConversations(internalConversations.items),
+        buildInternalLiveConversations(internalConversations.items, String(liveData.profile.id || '').trim()),
         Boolean(liveData.profile.id && internalReelReady),
         orgLogoUrl,
       ),

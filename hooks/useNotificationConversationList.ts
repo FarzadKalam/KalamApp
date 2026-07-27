@@ -130,11 +130,23 @@ export const useNotificationConversationList = ({
       let data: any = null;
       let error: any = null;
       if (v2Available) {
-        ({ data, error } = await supabase.rpc('get_communication_conversations_v2', {
-          p_channel: section === 'notes' ? 'internal' : 'bot',
-          p_before_cursor: null,
-          p_limit: 80,
-        }));
+        ({ data, error } = section === 'notes'
+          ? await supabase.rpc('get_internal_communication_conversations_v3', {
+            p_before_cursor: null,
+            p_limit: 80,
+          })
+          : await supabase.rpc('get_communication_conversations_v2', {
+            p_channel: 'bot',
+            p_before_cursor: null,
+            p_limit: 80,
+          }));
+        if (error && isMissingRpcError(error) && section === 'notes') {
+          ({ data, error } = await supabase.rpc('get_communication_conversations_v2', {
+            p_channel: 'internal',
+            p_before_cursor: null,
+            p_limit: 80,
+          }));
+        }
         if (error && isMissingRpcError(error)) {
           setV2Available(false);
           data = null;
