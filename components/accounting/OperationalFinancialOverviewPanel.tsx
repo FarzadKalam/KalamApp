@@ -101,18 +101,25 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
   const labels = ENTITY_LABELS[entityType];
 
   const copyShareLink = useCallback(async () => {
-    const shareUrl = typeof window !== 'undefined' ? `${window.location.href}#operational-financial-overview` : '';
+    if (!entityId) return;
+    setOnlineAccountCardLoading(true);
     try {
-      if (navigator.share) {
-        await navigator.share({ title: labels.share, url: shareUrl });
-        return;
-      }
+      const card = onlineAccountCard || await getOrCreateOnlineAccountCard(supabase, {
+        entityType,
+        entityId,
+        title: `کارت حساب ${entityType === 'customer' ? 'مشتری' : entityType === 'supplier' ? 'تامین‌کننده' : 'کارمند'}`,
+      });
+      setOnlineAccountCard(card);
+      const shareUrl = await buildOnlineAccountCardPublicUrl(supabase, card);
+      if (!shareUrl) throw new Error('لینک کارت حساب آماده نشد.');
       await navigator.clipboard.writeText(shareUrl);
-      message.success('لینک بخش وضعیت مالی کپی شد.');
-    } catch {
-      message.error('اشتراک گذاری این بخش ناموفق بود.');
+      message.success('لینک کارت حساب آنلاین کپی شد.');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'اشتراک‌گذاری کارت حساب آنلاین ناموفق بود.'));
+    } finally {
+      setOnlineAccountCardLoading(false);
     }
-  }, [labels.share, message]);
+  }, [entityId, entityType, message, onlineAccountCard]);
 
   const openOnlineAccountCard = useCallback(async () => {
     if (!entityId) return;
@@ -124,7 +131,7 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
         title: `کارت حساب ${entityType === 'customer' ? 'مشتری' : entityType === 'supplier' ? 'تامین‌کننده' : 'کارمند'}`,
       });
       setOnlineAccountCard(card);
-      const url = await buildOnlineAccountCardPublicUrl(supabase, card.public_token);
+      const url = await buildOnlineAccountCardPublicUrl(supabase, card);
       if (!url) throw new Error('لینک کارت حساب آماده نشد.');
       window.open(url, '_blank', 'noopener,noreferrer');
     } catch (error: any) {
@@ -396,7 +403,7 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
             <Button size="small" icon={<PrinterOutlined />} onClick={() => listPrintManager.setIsPrintModalOpen(true)}>
               چاپ
             </Button>
-            <Button size="small" icon={<ShareAltOutlined />} onClick={() => void copyShareLink()}>
+            <Button size="small" icon={<ShareAltOutlined />} loading={onlineAccountCardLoading} onClick={() => void copyShareLink()}>
               اشتراک گذاری
             </Button>
             <Button size="small" icon={<GlobalOutlined />} loading={onlineAccountCardLoading} onClick={() => void openOnlineAccountCard()}>

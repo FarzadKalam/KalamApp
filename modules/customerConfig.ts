@@ -378,6 +378,7 @@ export const customerModule: ModuleDefinition = {
     { key: 'total_spend', labels: { fa: 'جمع فاکتورهای مشتری', en: 'Customer Invoice Total' }, type: FieldType.PRICE, blockId: 'financial_stats', readonly: true },
     { key: 'total_paid_amount', labels: { fa: 'جمع پرداخت‌های مشتری', en: 'Customer Payment Total' }, type: FieldType.PRICE, blockId: 'financial_stats', readonly: true },
     { key: 'total_balance', labels: { fa: 'جمع مانده مشتری', en: 'Customer Balance Total' }, type: FieldType.PRICE, blockId: 'financial_stats', readonly: true },
+    { key: 'online_account_card_link', labels: { fa: 'لینک کارت حساب آنلاین', en: 'Online Account Card Link' }, type: FieldType.LINK, blockId: 'financial_stats', readonly: true, nature: FieldNature.STANDARD, hideInCreateForm: true },
     { key: 'loyalty_credit_balance', labels: { fa: 'اعتبار باشگاه مشتریان', en: 'Customer Club Credit' }, type: FieldType.PRICE, blockId: 'financial_stats', readonly: true, isTableColumn: true },
     { key: 'acquaintance_days', labels: { fa: 'تعداد روزهای آشنایی', en: 'Acquaintance Days' }, type: FieldType.NUMBER, blockId: 'financial_stats', readonly: true },
     { key: 'cooperation_days', labels: { fa: 'تعداد روزهای همکاری', en: 'Cooperation Days' }, type: FieldType.NUMBER, blockId: 'financial_stats', readonly: true },

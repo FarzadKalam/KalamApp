@@ -286,9 +286,9 @@ const buildAiTopupReturnUrl = (tx: any, status: string) => {
 
 const buildAccountCardReturnUrl = (tx: any, status: string) => {
   const origin = trimSlashEnd(String(tx?.metadata?.public_origin || Deno.env.get('PUBLIC_SITE_URL') || '').trim());
-  const token = String(tx?.metadata?.account_card_token || '').trim();
-  if (!origin || !/^[0-9a-f]{48}$/i.test(token)) return '/tazesystem';
-  return `${origin}/account/${enc(token)}?payment=${enc(status)}`;
+  const code = String(tx?.metadata?.account_card_code || tx?.metadata?.account_card_token || '').trim();
+  if (!origin || !/^[0-9A-Za-z]{8,64}$/.test(code)) return '/tazesystem';
+  return `${origin}/account/${enc(code)}?payment=${enc(status)}`;
 };
 
 const buildPaymentReturnUrl = (tx: any, status: string) =>
@@ -577,14 +577,15 @@ const createInvoicePayment = async (urlBase: string, key: string, centralMerchan
 };
 
 const createAccountCardPayment = async (urlBase: string, key: string, centralMerchantId: string, body: any) => {
-  const token = String(body?.account_card_token || body?.token || '').trim();
-  if (!/^[0-9a-f]{48}$/i.test(token)) return json(400, { success: false, message: 'لینک کارت حساب معتبر نیست.' });
+  const code = String(body?.account_card_token || body?.token || '').trim();
+  if (!/^[0-9A-Za-z]{8,64}$/.test(code)) return json(400, { success: false, message: 'لینک کارت حساب معتبر نیست.' });
 
-  const paymentState = await rpc(urlBase, key, 'get_public_online_account_card_payment_state', { p_token: token });
+  const paymentState = await rpc(urlBase, key, 'get_public_online_account_card_payment_state', { p_token: code });
   if (paymentState?.available !== true || Number(paymentState?.amount || 0) <= 0) {
     return json(403, { success: false, message: 'پرداخت آنلاین برای این کارت حساب فعال نیست.' });
   }
-  const card = first(await rest(urlBase, key, `online_account_cards?select=id,org_id,entity_type,entity_id,title,public_token&public_token=eq.${enc(token)}&is_active=is.true&limit=1`));
+  let card = first(await rest(urlBase, key, `online_account_cards?select=id,org_id,entity_type,entity_id,title,public_token,public_slug,public_link&public_slug=eq.${enc(code)}&is_active=is.true&limit=1`));
+  if (!card) card = first(await rest(urlBase, key, `online_account_cards?select=id,org_id,entity_type,entity_id,title,public_token,public_slug,public_link&public_token=eq.${enc(code)}&is_active=is.true&limit=1`));
   if (!card?.id || !card?.org_id || card?.entity_type !== 'customer' || !card?.entity_id) {
     return json(404, { success: false, message: 'کارت حساب مشتری پیدا نشد.' });
   }
@@ -607,7 +608,7 @@ const createAccountCardPayment = async (urlBase: string, key: string, centralMer
     body: JSON.stringify([{
       org_id: card.org_id, gateway_scope: gatewayScope, provider: 'zarinpal', purpose: 'online_account_card',
       module_id: 'customers', record_id: card.entity_id, amount, currency, status: 'pending', callback_url: '', description,
-      metadata: { account_card_id: card.id, account_card_token: token, public_origin: returnOrigin, mode },
+      metadata: { account_card_id: card.id, account_card_token: card.public_token, account_card_code: card.public_slug || card.public_token, public_origin: returnOrigin, mode },
     }]),
   });
   const callbackUrl = `${paymentDomain}${callbackPath}?tx=${enc(tx.id)}`;

@@ -246,4 +246,14 @@ describe('messageTemplateRenderer option values', () => {
 
     expect(text).toBe(`لینک تحویل: ${window.location.origin}/d/AbC2345678`);
   });
+
+  it('prepends the site origin to the online account card link', () => {
+    const text = renderTemplateText(
+      'لینک کارت حساب: {{online_account_card_link}}',
+      { online_account_card_link: '/account/NPVShoPtwW' },
+      { moduleId: 'customers' }
+    );
+
+    expect(text).toBe(`لینک کارت حساب: ${window.location.origin}/account/NPVShoPtwW`);
+  });
 });

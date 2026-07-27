@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { hasMeaningfulPrintValue, resolveEffectivePrintFieldKeys } from './printableFields';
+import {
+  hasMeaningfulPrintValue,
+  isPrintTemplateFieldVisible,
+  resolveEffectivePrintFieldKeys,
+} from './printableFields';
 
 describe('printable field selection contract', () => {
   const fields = [
@@ -35,5 +39,15 @@ describe('printable field selection contract', () => {
   it('treats empty rich-text editor markup as empty and visible rich text as a value', () => {
     expect(hasMeaningfulPrintValue('<p><br></p>', 'description')).toBe(false);
     expect(hasMeaningfulPrintValue('<p>توضیحات ثبت‌شده</p>', 'description')).toBe(true);
+  });
+
+  it('keeps a selected invoice description visible through the system-template gate', () => {
+    expect(isPrintTemplateFieldVisible({
+      fieldPath: 'record.description',
+      canView: true,
+      controlsSelection: true,
+      knownFieldKeys: ['record.description'],
+      selectedFieldKeys: ['record.description'],
+    })).toBe(true);
   });
 });

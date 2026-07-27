@@ -42,9 +42,7 @@ const MIN_LINE_ANCHOR_HEIGHT_PX = 2;
 const MAX_LINE_ANCHORS = 5000;
 const MAX_LINE_RECT_HEIGHT_PX = 96;
 const LINE_BAND_MERGE_TOLERANCE_PX = 3;
-const LINE_BREAK_REQUIRED_GAP_PX = 6;
 const LINE_TOP_SNAP_LOOKBACK_PX = 180;
-const LINE_BREAK_GUARD_PX = 14;
 const DEFAULT_MIN_PAGE_FILL_RATIO = 0.55;
 const DEFAULT_HARD_KEEP_FILL_RATIO = 0.35;
 const OVERSIZED_KEEP_BLOCK_TOLERANCE_PX = 8;
@@ -237,28 +235,14 @@ export const collectPrintPageAnchors = (root: HTMLElement): PrintPageAnchor[] =>
     return bands;
   }, []);
 
-  lineBands.forEach((rect, index) => {
-    const nextLine = lineBands[index + 1];
-    const gapToNextLine = nextLine ? nextLine.top - rect.bottom : Number.POSITIVE_INFINITY;
-    const breakBeforeLine = Math.max(0, rect.top - LINE_BREAK_GUARD_PX);
-    const beforeKey = `line-before:${breakBeforeLine}:${rect.top}`;
-    if (!deduped.has(beforeKey)) {
-      deduped.set(beforeKey, {
-        top: Math.max(0, breakBeforeLine - 1),
-        bottom: Math.max(1, breakBeforeLine),
-        priority: 'normal',
-        source: 'line',
-      });
-    }
-
-    if (!nextLine || gapToNextLine >= LINE_BREAK_REQUIRED_GAP_PX) {
-      const safeBreakBottom = nextLine
-        ? Math.min(rect.bottom + LINE_BREAK_GUARD_PX, Math.max(rect.bottom + 1, nextLine.top - 1))
-        : rect.bottom + LINE_BREAK_GUARD_PX;
-      const afterKey = `line-after:${rect.top}:${safeBreakBottom}`;
-      if (!deduped.has(afterKey)) {
-        deduped.set(afterKey, { top: rect.top, bottom: safeBreakBottom, priority: 'normal', source: 'line' });
-      }
+  // A line anchor must represent the exact measured visual line. The previous
+  // synthetic before/after anchors were intentionally offset by up to 14px;
+  // when selected as a page offset they could land inside the next actual line.
+  // That is the source of the partially white final line at page boundaries.
+  lineBands.forEach((rect) => {
+    const lineKey = `line:${rect.top}:${rect.bottom}`;
+    if (!deduped.has(lineKey)) {
+      deduped.set(lineKey, { ...rect, priority: 'normal', source: 'line' });
     }
   });
 

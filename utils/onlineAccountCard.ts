@@ -13,6 +13,8 @@ export type OnlineAccountCard = {
   title: string;
   is_active: boolean;
   public_token: string;
+  public_slug?: string | null;
+  public_link?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -24,13 +26,22 @@ const normalizeCard = (row: any): OnlineAccountCard => ({
   title: String(row?.title || 'کارت حساب آنلاین'),
   is_active: row?.is_active !== false,
   public_token: String(row?.public_token || ''),
+  public_slug: String(row?.public_slug || '').trim() || null,
+  public_link: String(row?.public_link || '').trim() || null,
 });
 
-export const buildOnlineAccountCardPath = (token: string) => `/account/${encodeURIComponent(String(token || '').trim())}`;
+export const buildOnlineAccountCardPath = (card: Pick<OnlineAccountCard, 'public_slug' | 'public_token' | 'public_link'> | string) => {
+  if (typeof card !== 'string' && String(card?.public_link || '').trim()) return String(card.public_link).trim();
+  const publicCode = typeof card === 'string'
+    ? card
+    : String(card?.public_slug || card?.public_token || '').trim();
+  return publicCode ? `/account/${encodeURIComponent(publicCode)}` : '';
+};
 
-export const buildOnlineAccountCardPublicUrl = async (client: SupabaseClient, token: string) => {
+export const buildOnlineAccountCardPublicUrl = async (client: SupabaseClient, card: Pick<OnlineAccountCard, 'public_slug' | 'public_token' | 'public_link'> | string) => {
   const origin = await resolveOnlineCatalogPublicOrigin(client);
-  return token ? `${origin}${buildOnlineAccountCardPath(token)}` : '';
+  const path = buildOnlineAccountCardPath(card);
+  return path ? `${origin}${path}` : '';
 };
 
 export const findOnlineAccountCard = async (
@@ -40,7 +51,7 @@ export const findOnlineAccountCard = async (
 ) => {
   const { data, error } = await client
     .from('online_account_cards')
-    .select('id,org_id,entity_type,entity_id,title,is_active,public_token,created_at,updated_at')
+    .select('id,org_id,entity_type,entity_id,title,is_active,public_token,public_slug,public_link,created_at,updated_at')
     .eq('entity_type', entityType)
     .eq('entity_id', entityId)
     .maybeSingle();
@@ -66,7 +77,7 @@ export const getOrCreateOnlineAccountCard = async (
       created_by: String(role?.userId || '').trim() || null,
       updated_by: String(role?.userId || '').trim() || null,
     })
-    .select('id,org_id,entity_type,entity_id,title,is_active,public_token,created_at,updated_at')
+    .select('id,org_id,entity_type,entity_id,title,is_active,public_token,public_slug,public_link,created_at,updated_at')
     .single();
   if (!error && data) return normalizeCard(data);
   // Unique index makes concurrent clicks safe; read the winner instead of showing a false error.

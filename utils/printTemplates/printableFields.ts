@@ -118,3 +118,23 @@ export const isPrintFieldSelected = (fieldPath: string, selectedKeys: Iterable<s
 
   return getPrintFieldSelectionCandidates(fieldPath).some((candidate) => selectedKeySet.has(candidate));
 };
+
+/** Shared visibility contract for record variables and optional system-template cells. */
+export const isPrintTemplateFieldVisible = ({
+  fieldPath,
+  canView,
+  controlsSelection,
+  knownFieldKeys,
+  selectedFieldKeys,
+}: {
+  fieldPath: string;
+  canView: boolean;
+  controlsSelection: boolean;
+  knownFieldKeys: Iterable<string>;
+  selectedFieldKeys: Iterable<string>;
+}) => {
+  if (!canView) return false;
+  if (!controlsSelection) return true;
+  if (!isPrintFieldKnownToTemplate(fieldPath, knownFieldKeys)) return true;
+  return isPrintFieldSelected(fieldPath, selectedFieldKeys);
+};

@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { QRCode } from 'antd';
-import DOMPurify from 'dompurify';
 import { normalizeRichTextHtml } from '../richText';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PrintTemplate } from './index';
@@ -52,8 +51,7 @@ import {
 } from './fieldAccess';
 import {
   hasMeaningfulPrintValue,
-  isPrintFieldKnownToTemplate,
-  isPrintFieldSelected,
+  isPrintTemplateFieldVisible,
   resolveEffectivePrintFieldKeys,
 } from './printableFields';
 import { loadPrintFieldPreference, savePrintFieldPreference } from './fieldPreferences';
@@ -66,6 +64,7 @@ import { fetchAssigneeDirectory } from '../referenceData';
 import { fetchRelationOptionsForField } from '../relationOptions';
 import { buildBillboardInvoiceItemTitle, buildInvoiceAdjustmentDisplay, resolveInvoiceRowBaseAmount } from '../invoicePresentation';
 import { sanitizeOutboundDisplay } from '../../shared/recordRuntime';
+import { renderPrintTemplateHtml } from './templateRenderer';
 import {
   buildDefaultPrintSignatureConfigs,
   buildPrintSignatureBandHtml,
@@ -115,10 +114,10 @@ const MULTILINE_PRINT_STYLE = 'white-space:pre-wrap; word-break:break-word; over
 const MIN_PRINT_BODY_HEIGHT_PX = 80;
 const PRINT_SECTION_CONTENT_PADDING = '0 10px';
 const PRINT_PAGE_COUNTER_HEIGHT_PX = 18;
-const PRINT_BODY_LINE_GUARD_PX = 28;
-// Keep a physical gap between adjacent page viewports. Rendering even a tiny
-// overlap leaks part of the next line below the footer in some browsers.
-const PRINT_BODY_VIEWPORT_GAP_PX = 1;
+// A single physical pixel is reserved between adjacent sections/pages. It is
+// reserved from the page step itself, never subtracted from visible content:
+// subtracting it from a completed text line clips that line's final pixels.
+const PRINT_SECTION_BOUNDARY_GAP_PX = 1;
 const isLongTextType = (value: unknown) => LONG_TEXT_FIELD_TYPES.has(String(value || '').trim().toLowerCase());
 
 const getReducedPrintFontSize = (baseSize: number) => {
@@ -188,11 +187,14 @@ const toCssMm = (value: number) => `${Number(pxToMm(value).toFixed(3))}mm`;
 const normalizePrintBodyHeightPx = (value: number) =>
   Math.max(MIN_PRINT_BODY_HEIGHT_PX, Math.floor(Math.max(MIN_PRINT_BODY_HEIGHT_PX, value)));
 const getTemplatePageBodyStepPx = (pageBodyHeightPx: number) =>
-  normalizePrintBodyHeightPx(pageBodyHeightPx);
+  Math.max(
+    MIN_PRINT_BODY_HEIGHT_PX,
+    normalizePrintBodyHeightPx(pageBodyHeightPx) - PRINT_SECTION_BOUNDARY_GAP_PX
+  );
 const getPrintBodyViewportHeightPx = (pageBodyHeightPx: number, effectiveBodyStepPx: number) =>
   Math.min(
     normalizePrintBodyHeightPx(pageBodyHeightPx),
-    Math.max(1, Math.floor(effectiveBodyStepPx - PRINT_BODY_VIEWPORT_GAP_PX))
+    Math.max(1, Math.floor(effectiveBodyStepPx))
   );
 
 const getMeasuredPrintBlockHeight = (measureNode: HTMLElement) => {
@@ -242,7 +244,7 @@ const getEffectiveMeasuredSectionHeightPx = ({
   // The configured height is a minimum reservation, not a clipping ceiling.
   // Capping it at the configured value cuts the last header/footer line and
   // lets the body appear beneath it when font metrics settle after measuring.
-  return Math.max(Math.round(configuredHeightPx), Math.ceil(measuredHeight));
+  return Math.max(Math.round(configuredHeightPx), Math.ceil(measuredHeight)) + PRINT_SECTION_BOUNDARY_GAP_PX;
 };
 
 const getTemplatePageBodyHeightPx = ({
@@ -264,8 +266,7 @@ const getTemplatePageBodyHeightPx = ({
     mmToPx(innerHeightMm) -
       (showHeader ? headerHeight : 0) -
       (showFooter ? footerHeight : 0) -
-      signatureHeight -
-      PRINT_BODY_LINE_GUARD_PX
+      signatureHeight
   );
 
 const getPaperSizeMetrics = (
@@ -977,7 +978,6 @@ export const usePrintManager = ({
   );
   const isSystemFieldVisible = useCallback(
     (fieldPath: string, forceSelection = false) => {
-      if (!canViewPrintFieldPath(fieldPath)) return false;
       // Manual templates express their field selection through the placeholders
       // placed by their editor. Selection still controls system blocks and
       // system field collections embedded in a manual template.
@@ -985,9 +985,13 @@ export const usePrintManager = ({
         forceSelection ||
         isSelectedTemplateSystem ||
         String(fieldPath || '').startsWith('block.');
-      if (!controlsThisPath) return true;
-      if (!isPrintFieldKnownToTemplate(fieldPath, knownTemplateFieldKeys)) return true;
-      return isPrintFieldSelected(fieldPath, templateSelectedKeySet);
+      return isPrintTemplateFieldVisible({
+        fieldPath,
+        canView: canViewPrintFieldPath(fieldPath),
+        controlsSelection: controlsThisPath,
+        knownFieldKeys: knownTemplateFieldKeys,
+        selectedFieldKeys: templateSelectedKeySet,
+      });
     },
     [
       canViewPrintFieldPath,
@@ -1299,17 +1303,20 @@ export const usePrintManager = ({
       : !isSelectedTemplateSystem && Array.isArray(selectedStoredTemplate?.selectedFieldKeys)
         ? selectedStoredTemplate.selectedFieldKeys
         : null;
-    const defaultKeys = resolveEffectivePrintFieldKeys({
-      fields: printableFieldsForTemplate || [],
-      selectedKeys: persistedKeys || [],
-      hasExplicitSelection: Array.isArray(persistedKeys),
-    });
-
     setSelectedPrintFields((prev) => {
       if (Object.prototype.hasOwnProperty.call(prev, selectedTemplateId)) return prev;
+      // Value-aware defaults must remain derived from the current record.
+      // Storing them here turns a transient empty value (or an early loading
+      // render) into a permanent selection for every later record. Only an
+      // explicit saved preference is allowed to materialize state.
+      if (!Array.isArray(persistedKeys)) return prev;
       return {
         ...prev,
-        [selectedTemplateId]: defaultKeys,
+        [selectedTemplateId]: resolveEffectivePrintFieldKeys({
+          fields: printableFieldsForTemplate || [],
+          selectedKeys: persistedKeys,
+          hasExplicitSelection: true,
+        }),
       };
     });
   }, [
@@ -1413,7 +1420,11 @@ export const usePrintManager = ({
     [printSignatureStates]
   );
   const printSignatureSectionHeightPx = useMemo(
-    () => (printSignatureBandHtml ? getPrintSignatureSectionHeightPx(printSignatureStates) : 0),
+    () => (
+      printSignatureBandHtml
+        ? getPrintSignatureSectionHeightPx(printSignatureStates) + PRINT_SECTION_BOUNDARY_GAP_PX
+        : 0
+    ),
     [printSignatureBandHtml, printSignatureStates]
   );
   printSignatureSectionHeightPxRef.current = printSignatureSectionHeightPx;
@@ -2941,31 +2952,7 @@ export const usePrintManager = ({
   );
 
   const fillTemplateHtml = useCallback(
-    (templateHtml?: string) => {
-      if (!templateHtml) return '';
-      const filled = templateHtml.replace(/{{\s*([a-zA-Z0-9_.]+)\s*}}/g, (match: string, key: string) => {
-        if (key.startsWith('row.') || key.startsWith('summary.')) return match;
-        const value = resolveVariableValue(key);
-        return key === 'system.record_image' ? value : sanitizeOutboundDisplay(value);
-      });
-      return DOMPurify.sanitize(filled, {
-        ADD_TAGS: ['colgroup', 'col'],
-        ADD_ATTR: [
-          'style',
-          'width',
-          'height',
-          'span',
-          'colspan',
-          'rowspan',
-          'colwidth',
-          'data-colwidth',
-          'data-background-color',
-          'data-border-color',
-          'data-print-block',
-          'data-print-optional-field',
-        ],
-      });
-    },
+    (templateHtml?: string) => renderPrintTemplateHtml({ templateHtml, resolveVariableValue }),
     [resolveVariableValue]
   );
 
