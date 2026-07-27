@@ -214,6 +214,7 @@ export const tasksModule: ModuleDefinition = {
       titles: { fa: 'ورود و خروج کالا', en: 'Task Shelf Movements' },
       type: BlockType.TABLE,
       order: 4,
+      storedInRecord: false,
       visibleIf: { field: 'related_to_module', operator: LogicOperator.EQUALS, value: 'production_orders' },
       tableColumns: createTaskShelfStockMovementsTableColumns(),
     },

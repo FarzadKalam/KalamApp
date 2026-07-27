@@ -33,6 +33,7 @@ const isSelectableColumnKey = (value: unknown) => {
 
 const isStoredTableBlock = (block: any) => {
   if (block?.externalDataConfig) return false;
+  if (block?.storedInRecord === false) return false;
   const type = String(block?.type || '').trim();
   return type === BlockType.TABLE || type === BlockType.GRID_TABLE;
 };

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { App, Button, Card, Empty, Table, Tag } from 'antd';
 import type { ColumnsType, TableProps } from 'antd/es/table';
-import { PrinterOutlined, ShareAltOutlined } from '@ant-design/icons';
+import { GlobalOutlined, PrinterOutlined, ShareAltOutlined } from '@ant-design/icons';
 import RelatedRecordPopover from '../RelatedRecordPopover';
 import PrintSection from '../moduleShow/PrintSection';
 import { ACCOUNTING_PERMISSION_KEY, fetchCurrentUserRolePermissions } from '../../utils/permissions';
@@ -24,6 +24,12 @@ import {
 } from '../../utils/operationalFinancialOverview';
 import { createChoiceFilter, createDateRangeFilter, createNumberRangeFilter, createTextFilter } from './tableColumnFilters';
 import { useListPrintManager } from '../../utils/printTemplates/useListPrintManager';
+import {
+  buildOnlineAccountCardPublicUrl,
+  findOnlineAccountCard,
+  getOrCreateOnlineAccountCard,
+  type OnlineAccountCard,
+} from '../../utils/onlineAccountCard';
 
 type OperationalFinancialOverviewPanelProps = {
   entityType: OperationalFinancialEntityType;
@@ -89,6 +95,8 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
   const [canView, setCanView] = useState(true);
   const [rows, setRows] = useState<OperationalFinancialRow[]>([]);
   const [filteredRows, setFilteredRows] = useState<OperationalFinancialRow[]>([]);
+  const [onlineAccountCard, setOnlineAccountCard] = useState<OnlineAccountCard | null>(null);
+  const [onlineAccountCardLoading, setOnlineAccountCardLoading] = useState(false);
 
   const labels = ENTITY_LABELS[entityType];
 
@@ -105,6 +113,26 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
       message.error('اشتراک گذاری این بخش ناموفق بود.');
     }
   }, [labels.share, message]);
+
+  const openOnlineAccountCard = useCallback(async () => {
+    if (!entityId) return;
+    setOnlineAccountCardLoading(true);
+    try {
+      const card = onlineAccountCard || await getOrCreateOnlineAccountCard(supabase, {
+        entityType,
+        entityId,
+        title: `کارت حساب ${entityType === 'customer' ? 'مشتری' : entityType === 'supplier' ? 'تامین‌کننده' : 'کارمند'}`,
+      });
+      setOnlineAccountCard(card);
+      const url = await buildOnlineAccountCardPublicUrl(supabase, card.public_token);
+      if (!url) throw new Error('لینک کارت حساب آماده نشد.');
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ایجاد کارت حساب آنلاین ناموفق بود.'));
+    } finally {
+      setOnlineAccountCardLoading(false);
+    }
+  }, [entityId, entityType, message, onlineAccountCard]);
 
   const loadData = useCallback(async () => {
     if (!entityId) return;
@@ -139,6 +167,8 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
       const overview = await fetchOperationalFinancialOverview({ entityType, entityId });
       setRows(overview.rows);
       setFilteredRows(overview.rows);
+      const card = await findOnlineAccountCard(supabase, entityType, entityId);
+      setOnlineAccountCard(card);
     } catch (err: any) {
       message.error(toFaErrorMessage(err, 'خطا در دریافت وضعیت مالی'));
     } finally {
@@ -368,6 +398,9 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
             </Button>
             <Button size="small" icon={<ShareAltOutlined />} onClick={() => void copyShareLink()}>
               اشتراک گذاری
+            </Button>
+            <Button size="small" icon={<GlobalOutlined />} loading={onlineAccountCardLoading} onClick={() => void openOnlineAccountCard()}>
+              {onlineAccountCard ? 'مشاهده کارت حساب آنلاین' : 'ایجاد کارت حساب آنلاین'}
             </Button>
           </div>
         )}

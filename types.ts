@@ -286,6 +286,11 @@ export interface BlockDefinition {
     targetModule: string;
     targetColumn: string;
   };
+  /**
+   * مقدار جدول در ستون JSON خود رکورد نگه‌داری نمی‌شود و نباید هنگام دریافت
+   * رکورد، شناسهٔ بلاک به‌عنوان نام ستون دیتابیس درخواست شود.
+   */
+  storedInRecord?: boolean;
   populateConfig?: {
     relationFieldKey: string;
     targetModule: string;

@@ -182,11 +182,22 @@ const mapStatus = (value: any, talkSeconds: number | null) => {
   return 'unknown';
 };
 
-const hasTelefonchyRecording = (payload: Record<string, any>, callId: string, fileId: string) => Boolean(
-  firstValue(payload.file_record, payload.fileRecord, payload.recording_file, payload.recordingFile)
-  && callId
-  && fileId
-);
+const hasTelefonchyRecording = (_payload: Record<string, any>, callId: string, fileId: string) => Boolean(callId && fileId);
+
+const resolveTelefonchyOperator = (payload: Record<string, any>, direction: string) => {
+  const exten = isPlainObject(payload?.exten) ? payload.exten : {};
+  const contact = isPlainObject(payload?.contact) ? payload.contact : {};
+  const endpoint = direction === 'incoming' ? contact?.call_dest : contact?.call_source;
+  const operatorContact = isPlainObject(endpoint) && String(endpoint?.type || '').trim().toLowerCase() === 'exten'
+    ? endpoint
+    : {};
+  return {
+    extension: firstValue(payload.extension, payload.operator_extension, exten.number),
+    operatorCode: firstValue(payload.operator_code, payload.operatorCode, exten.exten_id, operatorContact.contact_id, exten.id),
+    providerOperatorId: firstValue(operatorContact.contact_id, exten.exten_id, exten.id),
+    displayName: firstValue(payload.operator_name, payload.operator_display_name, operatorContact.name, exten.name),
+  };
+};
 
 const fetchCandidateSettings = async (
   supabaseUrl: string,
@@ -380,12 +391,8 @@ Deno.serve(async (req) => {
     const direction = mapDirection(firstValue(providerPayload.type, providerPayload.direction, providerPayload.call_type));
     const sourceNumber = normalizePhone(firstValue(providerPayload.call_source, providerPayload.source_number, providerPayload.source, providerPayload.from, providerPayload.caller));
     const destinationNumber = normalizePhone(firstValue(providerPayload.call_dest, providerPayload.destination_number, providerPayload.destination, providerPayload.to, providerPayload.callee));
-    const explicitExtension = firstValue(
-      providerPayload.extension,
-      providerPayload.operator_extension,
-      providerPayload.exten?.number,
-      providerPayload.exten?.id,
-    );
+    const operator = resolveTelefonchyOperator(providerPayload, direction);
+    const explicitExtension = operator.extension;
     const extension = explicitExtension || (
       direction === 'outgoing' && sourceNumber.length > 0 && sourceNumber.length <= 6
         ? sourceNumber
@@ -395,9 +402,7 @@ Deno.serve(async (req) => {
     const callId = firstValue(providerPayload.call_id, providerPayload.callId, providerPayload.cuid, providerPayload.unique_id);
     const fileId = firstValue(providerPayload.file_id, providerPayload.fileId, providerPayload.record_id);
     const recordingAvailable = hasTelefonchyRecording(providerPayload, callId, fileId);
-    const status = direction === 'incoming' && !recordingAvailable
-      ? 'missed'
-      : mapStatus(firstValue(providerPayload.status, providerPayload.call_status, providerPayload.disposition), talkSeconds);
+    const status = mapStatus(firstValue(providerPayload.status, providerPayload.call_status, providerPayload.disposition), talkSeconds);
 
     await saveCallLog(supabaseUrl, serviceRoleKey, {
       org_id: settingsRow.org_id,
@@ -410,7 +415,7 @@ Deno.serve(async (req) => {
       source_number: sourceNumber || null,
       destination_number: destinationNumber || null,
       extension: extension || null,
-      operator_code: firstValue(providerPayload.operator_code, providerPayload.operatorCode) || null,
+      operator_code: operator.operatorCode || null,
       trunk: firstValue(providerPayload.trunk) || null,
       started_at: parseTehranProviderDateTimeToUtcIso(firstValue(providerPayload.started_at, providerPayload.start_at, providerPayload.start_time, providerPayload.created_at)),
       ended_at: parseTehranProviderDateTimeToUtcIso(firstValue(providerPayload.ended_at, providerPayload.end_at, providerPayload.end_time, providerPayload.updated_at)),
@@ -428,6 +433,8 @@ Deno.serve(async (req) => {
         provider_payload: scrubSecrets(providerPayload),
         recording_available: recordingAvailable,
         recording_file: recordingAvailable ? firstValue(providerPayload.file_record, providerPayload.fileRecord, providerPayload.recording_file, providerPayload.recordingFile) : null,
+        provider_operator_name: operator.displayName || null,
+        provider_operator_id: operator.providerOperatorId || null,
         user_agent: req.headers.get('user-agent') || null,
       },
     });

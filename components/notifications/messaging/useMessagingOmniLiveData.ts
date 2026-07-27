@@ -918,7 +918,7 @@ const fetchVoipCalls = async (
 
   let query = supabase
     .from('voip_call_logs')
-    .select('id, title, direction, status, source_number, destination_number, extension, module_id, record_id, related_module_id, related_record_id, phone_number_id, phone_match_status, assignee_id, assignee_type, assignee_role_id, started_at, ended_at, created_at, talk_seconds, wait_seconds, call_id, file_id, recording_url')
+    .select('id, title, provider, service_id, direction, status, source_number, destination_number, extension, operator_code, module_id, record_id, related_module_id, related_record_id, phone_number_id, phone_match_status, assignee_id, assignee_type, assignee_role_id, started_at, ended_at, created_at, talk_seconds, wait_seconds, call_id, file_id, recording_url')
     .order('started_at', { ascending: false, nullsFirst: false })
     .order('created_at', { ascending: false })
     .range(offset, offset + COMMUNICATION_PAGE_SIZE);
@@ -1176,7 +1176,9 @@ const buildVoipLiveModels = (
       const operator = operatorIdentities[String(row?.assignee_id || '').trim()];
       const extension = String(row?.extension || '').trim();
       const operatorCode = String(row?.operator_code || '').trim();
+      const providerOperatorName = String(row?.operator_display_name || '').trim();
       const operatorLabel = operator?.name
+        || providerOperatorName
         || (extension ? `داخلی ${toPersianNumber(extension)}` : '')
         || (operatorCode ? `کد اپراتور ${toPersianNumber(operatorCode)}` : '')
         || 'اپراتور نامشخص';
@@ -1194,7 +1196,7 @@ const buildVoipLiveModels = (
         kind: 'call' as const,
         direction: outgoing ? 'outbound' : 'inbound',
         author: outgoing ? operatorLabel : (thread.title || row?.source_number || 'تماس‌گیرنده'),
-        text: `${outgoing ? 'تماس خروجی' : 'تماس ورودی'}${row?.status ? ` - ${resolveVoipStatusLabel(row.status)}` : ''}`,
+        text: `${outgoing ? 'تماس خروجی' : 'تماس ورودی'}${row?.status ? ` - ${resolveVoipStatusLabel(row.status)}` : ''}${outgoing ? '' : `\nپاسخ‌دهنده: ${operatorLabel}`}`,
         time: formatTime(row?.started_at || row?.created_at),
         status: formatDuration(row),
         attachments: recordingName ? [{ name: recordingName, kind: 'audio' as const, url: row?.recording_url || null }] : undefined,

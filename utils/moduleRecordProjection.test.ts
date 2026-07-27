@@ -119,4 +119,17 @@ describe('module record projection', () => {
     expect(projection.initialColumns).toContain('items');
     expect(projection.initialColumns).not.toContain('warehouse_shelves');
   });
+
+  it('does not select presentation-only table blocks as record columns', () => {
+    const projection = buildModuleRecordProjection({
+      id: 'tasks',
+      table: 'tasks',
+      fields: [{ key: 'name', type: FieldType.TEXT }],
+      blocks: [
+        { id: 'task_shelf_stock_movements', type: 'table', storedInRecord: false },
+      ],
+    } as any);
+
+    expect(projection.initialColumns).not.toContain('task_shelf_stock_movements');
+  });
 });

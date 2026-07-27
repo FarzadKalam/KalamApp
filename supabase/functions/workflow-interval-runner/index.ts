@@ -43,10 +43,13 @@ import {
   resolveWorkflowDateCriterion,
 } from './_runtime-deps/workflowMutationContract.ts';
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-23-event-record-context-and-report-recovery';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-27-prioritized-interval-delivery';
 const MAX_WORKFLOWS = 30;
 const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
+// Process-task interval rules are a secondary scan. Keep each invocation bounded
+// so they can never delay already-queued workflow actions or scheduled deliveries.
+const MAX_PROCESS_AUTOMATION_INTERVAL_TASKS = 300;
 const TEHRAN_OFFSET_MS = 3.5 * 60 * 60 * 1000;
 const WORKFLOW_ASSIGNEE_FIELD_KEY = '__workflow_assignee';
 const WORKFLOW_RECORD_LINK_FIELD_KEY = '__workflow_record_link';
@@ -4852,11 +4855,7 @@ async function runIntervalEnqueueTick(url: string, key: string): Promise<Record<
       ? workflow.module_ids.length
       : 1;
   }
-  const [reportStats, processAutomationStats] = await Promise.all([
-    runScheduledReportsTick(url, key, now),
-    runServerProcessAutomationIntervalTick(url, key, now),
-  ]);
-  return { ...stats, ...reportStats, processAutomation: processAutomationStats };
+  return stats;
 }
 
 async function processWorkflowScanJob(url: string, key: string, job: WorkflowIntervalJob) {
@@ -5064,19 +5063,6 @@ async function processIntervalJob(url: string, key: string, job: WorkflowInterva
 async function drainIntervalJobs(url: string, key: string): Promise<Record<string, number>> {
   const stats = { claimed: 0, succeeded: 0, retried: 0, failed: 0, reconciledReports: 0 };
   await callRpc(url, key, 'requeue_stale_workflow_interval_jobs', {}).catch(() => 0);
-  // گزارش اجرا باید مستقل از پردازش actionها قابل بازیابی باشد. این RPC هم
-  // گزارش‌های جاافتادهٔ صف قبلی را برمی‌گرداند و هم در صورت قطع runner، ثبت
-  // گزارش هر اجرای نهایی‌شده را اتمیک و idempotent انجام می‌دهد.
-  const databaseReconciledReports = await callRpc(
-    url,
-    key,
-    'reconcile_workflow_interval_execution_reports',
-    { p_limit: 500 },
-  ).catch((error) => {
-    console.warn('[workflow-runner] Database interval report reconciliation failed:', error?.message || error);
-    return 0;
-  });
-  stats.reconciledReports += Number(databaseReconciledReports || 0);
   const reportCandidates = await dbGet(url, key,
     'workflow_interval_jobs?job_kind=eq.workflow_action&is_terminal_action=eq.true&report_logged_at=is.null&status=in.(succeeded,failed,skipped)&select=*&order=completed_at.asc&limit=100'
   ).catch(() => []) as WorkflowIntervalJob[];
@@ -5098,6 +5084,19 @@ async function drainIntervalJobs(url: string, key: string): Promise<Record<strin
       for (const result of results) stats[result as 'succeeded' | 'retried' | 'failed'] += 1;
     }
   }
+  // گزارش‌های جاافتادهٔ قدیمی در اولویت اجرای actionها نیستند. این کار را در
+  // انتهای tick و با batch کوچک انجام می‌دهیم تا کندی آن ارسال‌های زمان‌دار را
+  // متوقف نکند.
+  const databaseReconciledReports = await callRpc(
+    url,
+    key,
+    'reconcile_workflow_interval_execution_reports',
+    { p_limit: 25 },
+  ).catch((error) => {
+    console.warn('[workflow-runner] Database interval report reconciliation failed:', error?.message || error);
+    return 0;
+  });
+  stats.reconciledReports += Number(databaseReconciledReports || 0);
   return stats;
 }
 
@@ -5760,9 +5759,10 @@ async function getLastProcessAutomationSuccessAt(url: string, key: string, ruleI
 async function runServerProcessAutomationIntervalTick(url: string, key: string, now: Date) {
   const stats = { scannedTasks: 0, intervalCandidateTasks: 0, queuedJobs: 0, failedTasks: 0 };
   const pageSize = 100;
-  for (let offset = 0; ; offset += pageSize) {
+  for (let offset = 0; offset < MAX_PROCESS_AUTOMATION_INTERVAL_TASKS; offset += pageSize) {
+    const currentPageSize = Math.min(pageSize, MAX_PROCESS_AUTOMATION_INTERVAL_TASKS - offset);
     const rows = await dbGet(url, key,
-      `tasks?recurrence_info=not.is.null&status=not.in.(done,completed)&select=*&order=updated_at.desc&limit=${pageSize}&offset=${offset}`
+      `tasks?recurrence_info=not.is.null&status=not.in.(done,completed)&select=*&order=updated_at.desc&limit=${currentPageSize}&offset=${offset}`
     ).catch((error) => {
       console.warn('[workflow-runner] Process automation interval task fetch failed:', error?.message || error);
       return [];
@@ -5827,7 +5827,7 @@ async function runServerProcessAutomationIntervalTick(url: string, key: string, 
         }
       }
     }
-    if (rows.length < pageSize) break;
+    if (rows.length < currentPageSize) break;
   }
   return stats;
 }
@@ -5955,13 +5955,31 @@ Deno.serve(async (req) => {
       return json(200, { ok: true, mode: 'event', stats });
     }
 
-    const [enqueueStats, eventQueueStats] = await Promise.all([
-      runIntervalEnqueueTick(supabaseUrl, serviceRoleKey),
+    // اول jobهای آماده و ارسال‌های زمان‌دار را انجام می‌دهیم. اسکن اتوماسیون
+    // فعالیت‌ها در انتهای درخواست قرار دارد تا حتی در سازمان‌های پربار، پیامک
+    // و گردش‌کارهای موعددار پشت یک اسکن طولانی معطل نمانند.
+    const enqueueStats = await runIntervalEnqueueTick(supabaseUrl, serviceRoleKey);
+    const [intervalQueueResult, scheduledReportResult, eventQueueResult] = await Promise.allSettled([
+      drainIntervalJobs(supabaseUrl, serviceRoleKey),
+      runScheduledReportsTick(supabaseUrl, serviceRoleKey, new Date()),
       runQueuedWorkflowEvents(supabaseUrl, serviceRoleKey),
     ]);
-    const intervalQueueStats = await drainIntervalJobs(supabaseUrl, serviceRoleKey);
-    console.log(`[workflow-runner] build=${FUNCTION_BUILD} enqueueStats=${JSON.stringify(enqueueStats)} intervalQueueStats=${JSON.stringify(intervalQueueStats)} eventQueueStats=${JSON.stringify(eventQueueStats)}`);
-    return json(200, { ok: true, stats: enqueueStats, intervalQueueStats, eventQueueStats });
+    const intervalQueueStats = intervalQueueResult.status === 'fulfilled'
+      ? intervalQueueResult.value
+      : { error: String(intervalQueueResult.reason?.message || intervalQueueResult.reason || 'Interval queue failed') };
+    const scheduledReportStats = scheduledReportResult.status === 'fulfilled'
+      ? scheduledReportResult.value
+      : { error: String(scheduledReportResult.reason?.message || scheduledReportResult.reason || 'Scheduled report delivery failed') };
+    const eventQueueStats = eventQueueResult.status === 'fulfilled'
+      ? eventQueueResult.value
+      : { error: String(eventQueueResult.reason?.message || eventQueueResult.reason || 'Event queue failed') };
+    const processAutomationStats = await runServerProcessAutomationIntervalTick(
+      supabaseUrl,
+      serviceRoleKey,
+      new Date(),
+    ).catch((error) => ({ failed: true, error: String(error?.message || error) }));
+    console.log(`[workflow-runner] build=${FUNCTION_BUILD} enqueueStats=${JSON.stringify(enqueueStats)} intervalQueueStats=${JSON.stringify(intervalQueueStats)} scheduledReportStats=${JSON.stringify(scheduledReportStats)} eventQueueStats=${JSON.stringify(eventQueueStats)} processAutomationStats=${JSON.stringify(processAutomationStats)}`);
+    return json(200, { ok: true, stats: enqueueStats, intervalQueueStats, scheduledReportStats, eventQueueStats, processAutomationStats });
   } catch (e: any) {
     console.error('[workflow-runner] Fatal error:', e.message);
     return json(500, { ok: false, error: String(e?.message || 'internal error') });

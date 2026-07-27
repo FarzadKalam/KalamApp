@@ -148,6 +148,20 @@ const fetchVoipSettings = async (supabaseUrl: string, serviceRoleKey: string, or
   return rows.find((row) => String(row?.provider || '').toLowerCase() === 'telefonchy') || rows[0];
 };
 
+const fetchActiveTelefonchySettings = async (supabaseUrl: string, serviceRoleKey: string) => {
+  const url = new URL(`${trimTrailingSlash(supabaseUrl)}/rest/v1/integration_settings`);
+  url.searchParams.set('connection_type', 'eq.voip');
+  url.searchParams.set('is_active', 'eq.true');
+  url.searchParams.set('provider', 'eq.telefonchy');
+  url.searchParams.set('select', 'org_id,provider,settings');
+  url.searchParams.set('limit', '100');
+  const response = await fetch(url.toString(), { headers: getServiceHeaders(serviceRoleKey) });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(raw || 'خواندن اتصال‌های فعال تلفنچی ناموفق بود.');
+  const rows = parseJsonSafe(raw);
+  return Array.isArray(rows) ? rows : [];
+};
+
 const createTimeoutSignal = (timeoutMs: number) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(`timeout:${timeoutMs}`), timeoutMs);
@@ -286,11 +300,22 @@ const mapStatus = (value: any, talkSeconds: number | null) => {
   return 'unknown';
 };
 
-const hasTelefonchyRecording = (item: Record<string, any>, callId: string, fileId: string) => Boolean(
-  firstValue(item.file_record, item.fileRecord, item.recording_file, item.recordingFile)
-  && callId
-  && fileId
-);
+const hasTelefonchyRecording = (_item: Record<string, any>, callId: string, fileId: string) => Boolean(callId && fileId);
+
+const resolveTelefonchyOperator = (item: Record<string, any>, direction: string) => {
+  const exten = item?.exten && typeof item.exten === 'object' && !Array.isArray(item.exten) ? item.exten : {};
+  const contact = item?.contact && typeof item.contact === 'object' && !Array.isArray(item.contact) ? item.contact : {};
+  const endpoint = direction === 'incoming' ? contact?.call_dest : contact?.call_source;
+  const operatorContact = endpoint && typeof endpoint === 'object' && String(endpoint?.type || '').trim().toLowerCase() === 'exten'
+    ? endpoint
+    : {};
+  return {
+    extension: firstValue(item.extension, item.operator_extension, exten.number),
+    operatorCode: firstValue(item.operator_code, item.operatorCode, exten.exten_id, operatorContact.contact_id, exten.id),
+    providerOperatorId: firstValue(operatorContact.contact_id, exten.exten_id, exten.id),
+    displayName: firstValue(item.operator_name, item.operator_display_name, operatorContact.name, exten.name),
+  };
+};
 
 const extractCallsArray = (value: any): any[] => {
   if (Array.isArray(value)) return value;
@@ -391,7 +416,7 @@ const normalizeProviderCallRow = (
   const direction = mapDirection(firstValue(item.type, item.direction, item.call_type));
   const sourceNumber = normalizePhone(firstValue(item.call_source, item.source_number, item.source, item.from, item.caller));
   const destinationNumber = normalizePhone(firstValue(item.call_dest, item.destination_number, item.destination, item.to, item.callee));
-  const exten = item?.exten && typeof item.exten === 'object' && !Array.isArray(item.exten) ? item.exten : {};
+  const operator = resolveTelefonchyOperator(item, direction);
   const counterpartyPhone = direction === 'incoming' ? sourceNumber : destinationNumber;
   const callId = firstValue(item.call_id, item.callId, item.cuid, item.unique_id);
   const fileId = firstValue(item.file_id, item.fileId, item.record_id);
@@ -404,13 +429,11 @@ const normalizeProviderCallRow = (
     call_id: callId || null,
     object_id: firstValue(item.object_id, item.objectId, item.id) || null,
     direction,
-    status: direction === 'incoming' && !recordingAvailable
-      ? 'missed'
-      : mapStatus(firstValue(item.status, item.call_status, item.disposition), talkSeconds),
+    status: mapStatus(firstValue(item.status, item.call_status, item.disposition), talkSeconds),
     source_number: sourceNumber || null,
     destination_number: destinationNumber || null,
-    extension: firstValue(item.extension, item.operator_extension, exten.number, exten.caller_id) || null,
-    operator_code: firstValue(item.operator_code, item.operatorCode) || null,
+    extension: operator.extension || null,
+    operator_code: operator.operatorCode || null,
     trunk: firstValue(item.trunk, item.trunk_number) || null,
     started_at: parseTehranProviderDateTimeToUtcIso(firstValue(item.started_at, item.start_at, item.start_time, item.created_at)),
     ended_at: parseTehranProviderDateTimeToUtcIso(firstValue(item.ended_at, item.end_at, item.end_time, item.updated_at)),
@@ -425,6 +448,8 @@ const normalizeProviderCallRow = (
       build: FUNCTION_BUILD,
       recording_available: recordingAvailable,
       recording_file: recordingAvailable ? firstValue(item.file_record, item.fileRecord, item.recording_file, item.recordingFile) : null,
+      provider_operator_name: operator.displayName || null,
+      provider_operator_id: operator.providerOperatorId || null,
       provider_row: item,
     },
   };
@@ -487,6 +512,35 @@ const fetchTelefonchyCalls = async (
   };
 };
 
+const reconcileTelefonchyRecordings = async (supabaseUrl: string, serviceRoleKey: string) => {
+  const settingsRows = await fetchActiveTelefonchySettings(supabaseUrl, serviceRoleKey);
+  const stats = { organizations: 0, fetched: 0, saved: 0, failed: 0 };
+  for (const settingsRow of settingsRows) {
+    const orgId = firstValue(settingsRow?.org_id);
+    const settings = settingsRow?.settings && typeof settingsRow.settings === 'object' ? settingsRow.settings : {};
+    const serviceId = firstValue(settings.service_id, Deno.env.get('TELEFONCHY_SERVICE_ID'));
+    const token = firstValue(settings.webservice_token, Deno.env.get('TELEFONCHY_WEBSERVICE_TOKEN'));
+    if (!orgId || !serviceId || !token) continue;
+    stats.organizations += 1;
+    try {
+      const baseUrl = trimTrailingSlash(firstValue(settings.base_url, Deno.env.get('TELEFONCHY_BASE_URL'), 'https://panel.telefonchy.com'));
+      const result = await fetchTelefonchyCalls(baseUrl, token, serviceId, { perPage: 100, days: 2 });
+      stats.fetched += result.calls.length;
+      for (const item of result.calls) {
+        if (!item || typeof item !== 'object') continue;
+        const row = normalizeProviderCallRow(orgId, serviceId, item);
+        if (!row.call_id && !row.object_id) continue;
+        await saveCallLog(supabaseUrl, serviceRoleKey, row);
+        stats.saved += 1;
+      }
+    } catch (error) {
+      stats.failed += 1;
+      console.warn('[telefonchy-smartcall] recording reconciliation failed', orgId, String((error as any)?.message || error));
+    }
+  }
+  return stats;
+};
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'POST') return json(405, { success: false, message: 'روش ارسال درخواست معتبر نیست.' });
@@ -505,7 +559,13 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const action = String(body.action || 'smartcall').trim();
-    const user = await verifyUserToken(supabaseUrl, serviceRoleKey, authHeader.replace(/^Bearer\s+/i, '').trim());
+    const requestToken = authHeader.replace(/^Bearer\s+/i, '').trim();
+    if (action === 'reconcile_recordings') {
+      if (requestToken !== serviceRoleKey) return json(401, { success: false, message: 'دسترسی همگام‌سازی سروری مجاز نیست.' });
+      const stats = await reconcileTelefonchyRecordings(supabaseUrl, serviceRoleKey);
+      return json(200, { success: true, provider: 'telefonchy', stats });
+    }
+    const user = await verifyUserToken(supabaseUrl, serviceRoleKey, requestToken);
     const profile = await fetchProfile(supabaseUrl, serviceRoleKey, user.id);
     if (!profile?.id || !profile?.org_id) {
       return json(403, { success: false, message: 'پروفایل سازمانی کاربر برای VoIP کامل نیست.' });

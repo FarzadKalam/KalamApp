@@ -140,10 +140,7 @@ const isMissingSelectColumnError = (error: any) => {
   );
 };
 import {
-  evaluateActivityPerformanceRules,
   type ActivityPerformanceEntry,
-  type ActivityPerformanceFormula,
-  type ActivityPerformanceRule,
 } from '../utils/activityPerformanceRuntime';
 import {
   buildCommissionDraftRows,
@@ -1970,79 +1967,13 @@ const HRPage: React.FC = () => {
       try {
         const periodStart = toNativeGregorianDateString(monthStart);
         const periodEnd = toNativeGregorianDateString(monthEnd);
-        const [rulesResult, performanceFormulasResult, existingPerformanceResult] = await Promise.all([
-          supabase
-            .from('activity_performance_rules')
-            .select('id, name, employee_id, task_type, formula_id, output_type, priority, conditions_all, conditions_any, is_active, config')
-            .eq('is_active', true)
-            .order('priority', { ascending: true }),
-          supabase
-            .from('calculation_formulas')
-            .select('id, name, expression_config, output_type, config')
-            .eq('is_active', true),
-          periodStart && periodEnd
-            ? supabase
-              .from('payroll_calculation_entries')
-              .select('source_key, details, status')
-              .eq('source_type', 'activity_performance')
-              .eq('period_start', periodStart)
-              .eq('period_end', periodEnd)
-              .neq('status', 'voided')
-              .limit(HR_STATS_FETCH_LIMIT)
-            : Promise.resolve({ data: [], error: null } as any),
-        ]);
-
-        if (rulesResult.error) throw rulesResult.error;
-        if (performanceFormulasResult.error) throw performanceFormulasResult.error;
-        const existingPerformanceErrorText = String(
-          existingPerformanceResult.error?.message || existingPerformanceResult.error?.details || ''
-        ).toLowerCase();
-        const missingPerformanceSourceKey =
-          existingPerformanceErrorText.includes('source_key') &&
-          (existingPerformanceErrorText.includes('column') || existingPerformanceErrorText.includes('schema cache') || existingPerformanceErrorText.includes('could not find'));
-        if (existingPerformanceResult.error && !isMissingPayrollLedgerError(existingPerformanceResult.error) && !missingPerformanceSourceKey) throw existingPerformanceResult.error;
-        const alreadyIncludedSourceKeys = new Set<string>();
-        (existingPerformanceResult.data || []).forEach((entry: any) => {
-          const sourceKey = String(entry?.source_key || entry?.details?.source_key || '').trim();
-          if (sourceKey && String(entry?.status || '') === 'included_in_payroll') {
-            alreadyIncludedSourceKeys.add(sourceKey);
-          }
+        const { data, error } = await supabase.functions.invoke('activity-performance', {
+          body: { periodStart, periodEnd, mode: 'preview' },
         });
-
-        const employeeIdByAssigneeId = normalizedProfiles.reduce<Record<string, string>>((acc, profile) => {
-          const assigneeId = String(profile.related_profile_id || profile.id || '').trim();
-          const employeeId = String(profile.source_id || profile.id || '').trim();
-          if (assigneeId && employeeId) acc[assigneeId] = employeeId;
-          return acc;
-        }, {});
-        const taskMetricsById = normalizedTasks.reduce<Record<string, Record<string, any>>>((acc, task) => {
-          const performance = evaluateTaskPerformance(task, dayjs());
-          const spentHours = toNumber(task.spent_hours ?? task.actual_hours ?? task.duration_hours ?? 0);
-          const meta = PERFORMANCE_TAG_META[performance.code];
-          acc[String(task.id)] = {
-            performance_code: performance.code,
-            performance_label: meta.label,
-            early_hours: Math.max(0, performance.earlyHours),
-            late_hours: Math.max(0, performance.lateHours),
-            early_minutes: Math.round(Math.max(0, performance.earlyHours) * 60),
-            late_minutes: Math.round(Math.max(0, performance.lateHours) * 60),
-            activity_minutes: Math.round(Math.max(0, spentHours) * 60),
-            due_at: resolveDueDate(task),
-            weight: task.weight ?? task.wage ?? 0,
-          };
-          return acc;
-        }, {});
-
-        nextActivityPerformanceEntries = await evaluateActivityPerformanceRules({
-          rules: (rulesResult.data || []) as ActivityPerformanceRule[],
-          formulas: (performanceFormulasResult.data || []) as ActivityPerformanceFormula[],
-          tasks: normalizedTasks,
-          employeeIdByAssigneeId,
-          taskMetricsById,
-          alreadyIncludedSourceKeys,
-        });
+        if (error || !Array.isArray(data?.entries)) throw error || new Error('activity_performance_response_invalid');
+        nextActivityPerformanceEntries = data.entries as ActivityPerformanceEntry[];
       } catch (error) {
-        console.warn('Activity performance rules are not available yet.', error);
+        console.warn('Activity performance service is not available yet.', error);
         nextActivityPerformanceEntries = [];
       }
 
@@ -5399,6 +5330,29 @@ const HRPage: React.FC = () => {
       return;
     }
 
+    // ثبت فقط در سرویس مرکزی انجام می‌شود؛ RPC آن هم منبعِ واردشده در هر فیش
+    // را قفل می‌کند تا از هیچ تب یا بازهٔ دیگری دوباره محاسبه نشود.
+    setSavingActivityPerformance(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('activity-performance', {
+        body: {
+          periodStart,
+          periodEnd,
+          mode: 'prepare',
+          employeeIds: [String(selectedEmployeeSummary.profile.source_id)],
+        },
+      });
+      if (error || !Array.isArray(data?.entries)) throw error || new Error('activity_performance_prepare_invalid');
+      message.success(`${toPersianNumber(data.entries.length)} ردیف عملکرد از مسیر مرکزی آماده فیش شد.`);
+      await fetchData(true);
+      return;
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'آماده‌سازی سروری عملکرد ناموفق بود.'));
+      return;
+    } finally {
+      setSavingActivityPerformance(false);
+    }
+
     const candidateEntries = (selectedEmployeeSummary.activityPerformanceEntries || [])
       .filter((entry) => String(entry.source_key || '').trim() && toNumber(entry.amount) !== 0);
     if (candidateEntries.length === 0) {
@@ -6001,6 +5955,12 @@ const HRPage: React.FC = () => {
   const ensureActivityPerformanceLedgerForSummary = useCallback(async (row: EmployeeSummaryRow, periodStart: string, periodEnd: string) => {
     const employeeIdValue = String(row.profile.source_id || '').trim();
     if (!employeeIdValue) return;
+    const { data, error } = await supabase.functions.invoke('activity-performance', {
+      body: { periodStart, periodEnd, mode: 'prepare', employeeIds: [employeeIdValue] },
+    });
+    if (error || !Array.isArray(data?.entries)) throw error || new Error('activity_performance_prepare_invalid');
+    return;
+
     const candidateEntries = (row.activityPerformanceEntries || [])
       .filter((entry) => String(entry.source_key || '').trim() && toNumber(entry.amount) !== 0);
     if (candidateEntries.length === 0) return;

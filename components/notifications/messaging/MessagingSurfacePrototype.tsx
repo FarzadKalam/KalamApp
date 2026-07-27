@@ -46,6 +46,7 @@ import {
   type PhoneBindTargetModuleId,
 } from '../../../utils/phoneIdentityBindings';
 import { syncBotDirectChatIdForTarget } from '../../../utils/botIdentityBindings';
+import { bindVoipOperatorIdentity } from '../../../utils/voipOperatorBindings';
 import { toFaErrorMessage } from '../../../utils/errorMessageFa';
 import { sendSmsViaGateway } from '../../../utils/smsGateway';
 import SharedNoteComposer from '../../notes/SharedNoteComposer';
@@ -1749,9 +1750,10 @@ const TimelineEventCard: React.FC<{
   onToggleLike?: (item: TimelineEvent) => void;
   onShowReceipts?: (item: TimelineEvent) => void;
   onBindBotSender?: (item: TimelineEvent) => void;
+  onBindVoipOperator?: (item: TimelineEvent) => void;
   onRetryBotMedia?: (item: TimelineEvent) => void;
   retryingMedia?: boolean;
-}> = ({ item, activeConversation, unread = false, onReply, onForward, onCreateActivity, onToggleLike, onShowReceipts, onBindBotSender, onRetryBotMedia, retryingMedia = false }) => {
+}> = ({ item, activeConversation, unread = false, onReply, onForward, onCreateActivity, onToggleLike, onShowReceipts, onBindBotSender, onBindVoipOperator, onRetryBotMedia, retryingMedia = false }) => {
   const { message } = App.useApp();
   const outgoing = item.direction === 'outbound';
   const isCall = item.kind === 'call';
@@ -1797,6 +1799,13 @@ const TimelineEventCard: React.FC<{
     && (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct')
     && Boolean(item.botSenderChatId);
   const botSenderBindingTitle = item.botSenderBound ? 'ویرایش اتصال فرستنده' : 'اتصال فرستنده به مخاطب';
+  const canBindVoipOperator = isCall
+    && !String(item.sourceRow?.assignee_id || '').trim()
+    && Boolean(
+      String(item.sourceRow?.extension || '').trim()
+      || String(item.sourceRow?.operator_code || '').trim()
+      || String(item.sourceRow?.provider_operator_id || '').trim(),
+    );
   const showRelatedRecordLink = Boolean(item.relatedRecordLabel && activeConversation.channel !== 'bot_group' && activeConversation.channel !== 'bot_direct');
   const relatedRecordHref = showRelatedRecordLink
     ? buildRecordHref(
@@ -1858,6 +1867,21 @@ const TimelineEventCard: React.FC<{
                           : 'bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-700 dark:bg-white/[0.07] dark:text-slate-300 dark:hover:bg-white/[0.12]'
                       }`}
                       onClick={() => onBindBotSender?.(item)}
+                    >
+                      <UserAddOutlined className="text-[11px]" />
+                    </button>
+                  </Tooltip>
+                ) : null}
+                {canBindVoipOperator ? (
+                  <Tooltip title="اتصال اپراتور به کاربر">
+                    <button
+                      type="button"
+                      className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full transition ${
+                        outgoing
+                          ? 'bg-white/14 text-white hover:bg-white/22'
+                          : 'bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-700 dark:bg-white/[0.07] dark:text-slate-300 dark:hover:bg-white/[0.12]'
+                      }`}
+                      onClick={() => onBindVoipOperator?.(item)}
                     >
                       <UserAddOutlined className="text-[11px]" />
                     </button>
@@ -2339,6 +2363,16 @@ type PhoneBindDraft = {
   existingBindingLabel: string | null;
 };
 
+type VoipOperatorBindDraft = {
+  provider: string;
+  serviceId: string | null;
+  extension: string | null;
+  operatorCode: string | null;
+  providerOperatorId: string | null;
+  displayName: string | null;
+  profileId: string | null;
+};
+
 type BotIdentityBindingRow = {
   target_module_id?: BotTargetModuleId | string | null;
   target_record_id?: string | null;
@@ -2385,6 +2419,9 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const [phoneBindTargetRecordId, setPhoneBindTargetRecordId] = useState<string | null>(null);
   const [phoneBindSearch, setPhoneBindSearch] = useState('');
   const [phoneBindOptions, setPhoneBindOptions] = useState<Array<{ value: string; label: string; meta?: string | null }>>([]);
+  const [voipOperatorBindOpen, setVoipOperatorBindOpen] = useState(false);
+  const [voipOperatorBindSaving, setVoipOperatorBindSaving] = useState(false);
+  const [voipOperatorBindDraft, setVoipOperatorBindDraft] = useState<VoipOperatorBindDraft | null>(null);
   const [botIdentityBindOpen, setBotIdentityBindOpen] = useState(false);
   const [botIdentityBindLoading, setBotIdentityBindLoading] = useState(false);
   const [botIdentityBindSaving, setBotIdentityBindSaving] = useState(false);
@@ -2475,34 +2512,11 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     cacheScopeKey,
   });
   const selectedInternalSourceKey = getInternalSourceConversationKey(selectedKey);
-  const loadInternalTimelineFallback = useMemo(() => {
-    const conversationKey = String(selectedInternalSourceKey || '').trim();
-    const currentUserId = String(liveData.profile.id || '').trim();
-    if (!conversationKey || !currentUserId) return undefined;
-    return async () => {
-      const { data, error } = await supabase
-        .from('notes')
-        .select('id,org_id,module_id,record_id,content,author_id,author_name,mention_user_ids,mention_role_ids,created_at,updated_at,reply_to,source_type,metadata,is_edited,edited_at')
-        .order('created_at', { ascending: false })
-        .limit(160);
-      if (error) throw error;
-      const rows = Array.isArray(data) ? data : [];
-      const filtered = rows.filter((row: any) => {
-        return doesInternalNoteBelongToConversation(row, conversationKey, currentUserId, liveData.profile.roleId);
-      });
-      return filtered.sort((left: any, right: any) => (
-        new Date(left?.created_at || 0).getTime() - new Date(right?.created_at || 0).getTime()
-      ));
-    };
-  }, [liveData.profile.id, liveData.profile.roleId, selectedInternalSourceKey]);
   const internalTimeline = useInternalConversationTimeline<any>({
     supabase,
     enabled: Boolean(liveData.profile.id && selectedInternalSourceKey),
     conversationKey: selectedInternalSourceKey,
     pageSize: 40,
-    fallbackLoadInitial: loadInternalTimelineFallback,
-    fallbackOnEmptyInitial: true,
-    mergeFallbackInitial: true,
     cacheScopeKey,
   });
   const refreshInternalConversations = internalConversations.refresh;
@@ -3143,6 +3157,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           avatarUrl: String(orgLogoUrl || (item as any).avatarUrl || '').trim() || null,
         };
       }
+      if (item.kind === 'call') return item;
       return {
         ...item,
         author: String(currentUser?.display_name || item.author || '').trim() || 'من',
@@ -3451,6 +3466,52 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       message.error(toFaErrorMessage(error, 'خواندن اطلاعات اتصال شماره ناموفق بود.'));
     } finally {
       setPhoneBindLoading(false);
+    }
+  };
+
+  const closeVoipOperatorBindModal = () => {
+    setVoipOperatorBindOpen(false);
+    setVoipOperatorBindSaving(false);
+    setVoipOperatorBindDraft(null);
+  };
+
+  const openVoipOperatorBindModal = (item: TimelineEvent) => {
+    const row = item.sourceRow || {};
+    const extension = String(row?.extension || '').trim() || null;
+    const operatorCode = String(row?.operator_code || '').trim() || null;
+    const providerOperatorId = String(row?.provider_operator_id || '').trim() || null;
+    if (!extension && !operatorCode && !providerOperatorId) {
+      message.warning('داخلی یا کد اپراتور برای این تماس ثبت نشده است.');
+      return;
+    }
+    setVoipOperatorBindDraft({
+      provider: String(row?.provider || 'telefonchy').trim() || 'telefonchy',
+      serviceId: String(row?.service_id || '').trim() || null,
+      extension,
+      operatorCode,
+      providerOperatorId,
+      displayName: String(row?.operator_display_name || '').trim() || null,
+      profileId: String(row?.assignee_id || '').trim() || null,
+    });
+    setVoipOperatorBindOpen(true);
+  };
+
+  const saveVoipOperatorBinding = async () => {
+    const draft = voipOperatorBindDraft;
+    if (!draft?.profileId) {
+      message.warning('کاربر مقصد را انتخاب کنید.');
+      return;
+    }
+    setVoipOperatorBindSaving(true);
+    try {
+      await bindVoipOperatorIdentity(draft);
+      await liveData.refresh();
+      message.success('اتصال اپراتور ذخیره شد و پروفایل و تماس‌های مرتبط به‌روز شدند.');
+      closeVoipOperatorBindModal();
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ذخیره اتصال اپراتور ناموفق بود.'));
+    } finally {
+      setVoipOperatorBindSaving(false);
     }
   };
 
@@ -4965,6 +5026,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
                       onToggleLike={toggleMessageLike}
                       onShowReceipts={showMessageReceipts}
                       onBindBotSender={openBotIdentityBindModalForMessage}
+                      onBindVoipOperator={openVoipOperatorBindModal}
                       onRetryBotMedia={retryBotMessageMedia}
                       retryingMedia={retryingBotMediaIds.has(String(item.sourceRow?.id || '').trim())}
                     />
@@ -5057,6 +5119,44 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           />
         </React.Suspense>
       ) : null}
+      <Modal
+        open={voipOperatorBindOpen}
+        title="اتصال اپراتور تماس"
+        okText="ذخیره اتصال"
+        cancelText="انصراف"
+        confirmLoading={voipOperatorBindSaving}
+        onOk={() => void saveVoipOperatorBinding()}
+        onCancel={closeVoipOperatorBindModal}
+        destroyOnHidden
+      >
+        <div className="space-y-3" dir="rtl">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-slate-300">
+            {[
+              voipOperatorBindDraft?.displayName,
+              voipOperatorBindDraft?.extension ? `داخلی ${toPersianNumber(voipOperatorBindDraft.extension)}` : '',
+              voipOperatorBindDraft?.operatorCode ? `کد اپراتور ${toPersianNumber(voipOperatorBindDraft.operatorCode)}` : '',
+            ].filter(Boolean).join(' · ') || 'اطلاعات اپراتور از تماس'}
+          </div>
+          <div>
+            <div className="mb-1 text-xs font-semibold text-slate-600 dark:text-slate-300">کاربر سازمان</div>
+            <AdaptiveIdentityPicker
+              scopes={['user']}
+              valueMode="raw"
+              value={voipOperatorBindDraft?.profileId || undefined}
+              onChange={(value) => setVoipOperatorBindDraft((current) => current ? {
+                ...current,
+                profileId: Array.isArray(value) ? String(value[0] || '').trim() || null : String(value || '').trim() || null,
+              } : current)}
+              placeholder="انتخاب کاربر"
+              pickerTitle="انتخاب کاربر برای اپراتور تلفنچی"
+              className="w-full"
+            />
+          </div>
+          <p className="m-0 text-[11px] leading-5 text-slate-500 dark:text-slate-400">
+            پس از ذخیره، داخلی و کد اپراتور در پروفایل کاربر به‌روز و تماس‌های هم‌نام این سازمان به همان کاربر متصل می‌شوند.
+          </p>
+        </div>
+      </Modal>
       {botStatusModalOpen ? (
         <React.Suspense fallback={null}>
           <CounterpartyBotStatusModal

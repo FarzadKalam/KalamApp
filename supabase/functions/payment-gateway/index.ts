@@ -284,9 +284,18 @@ const buildAiTopupReturnUrl = (tx: any, status: string) => {
   return `${path}${suffix}tab=ai&ai_credit=${enc(status)}`;
 };
 
+const buildAccountCardReturnUrl = (tx: any, status: string) => {
+  const origin = trimSlashEnd(String(tx?.metadata?.public_origin || Deno.env.get('PUBLIC_SITE_URL') || '').trim());
+  const token = String(tx?.metadata?.account_card_token || '').trim();
+  if (!origin || !/^[0-9a-f]{48}$/i.test(token)) return '/tazesystem';
+  return `${origin}/account/${enc(token)}?payment=${enc(status)}`;
+};
+
 const buildPaymentReturnUrl = (tx: any, status: string) =>
   String(tx?.purpose || '') === 'ai_topup'
     ? buildAiTopupReturnUrl(tx, status)
+    : String(tx?.purpose || '') === 'online_account_card'
+      ? buildAccountCardReturnUrl(tx, status)
     : buildInvoiceReturnUrl(tx, status);
 
 const creditAiWalletFromTransaction = async (urlBase: string, key: string, tx: any) => {
@@ -567,6 +576,55 @@ const createInvoicePayment = async (urlBase: string, key: string, centralMerchan
   }
 };
 
+const createAccountCardPayment = async (urlBase: string, key: string, centralMerchantId: string, body: any) => {
+  const token = String(body?.account_card_token || body?.token || '').trim();
+  if (!/^[0-9a-f]{48}$/i.test(token)) return json(400, { success: false, message: 'لینک کارت حساب معتبر نیست.' });
+
+  const paymentState = await rpc(urlBase, key, 'get_public_online_account_card_payment_state', { p_token: token });
+  if (paymentState?.available !== true || Number(paymentState?.amount || 0) <= 0) {
+    return json(403, { success: false, message: 'پرداخت آنلاین برای این کارت حساب فعال نیست.' });
+  }
+  const card = first(await rest(urlBase, key, `online_account_cards?select=id,org_id,entity_type,entity_id,title,public_token&public_token=eq.${enc(token)}&is_active=is.true&limit=1`));
+  if (!card?.id || !card?.org_id || card?.entity_type !== 'customer' || !card?.entity_id) {
+    return json(404, { success: false, message: 'کارت حساب مشتری پیدا نشد.' });
+  }
+
+  const gatewaySettings = await getGatewaySettingsForOrg(urlBase, key, card.org_id);
+  const gatewayScope = normalizeGatewayScope(gatewaySettings.gateway_scope);
+  const merchantId = resolveGatewayMerchantId(gatewayScope, gatewaySettings, centralMerchantId);
+  if (!merchantId) return json(500, { success: false, message: 'تنظیمات درگاه پرداخت کامل نیست.' });
+  const amount = Math.max(0, Number(paymentState.amount || 0));
+  const paymentDomain = trimSlashEnd(String(gatewaySettings.payment_domain || ''));
+  const callbackPath = normalizeCallbackPath(gatewaySettings.callback_path);
+  const returnOrigin = await getTenantPublicOrigin(urlBase, key, String(card.org_id), gatewayScope === 'system');
+  if (!paymentDomain || !returnOrigin) return json(503, { success: false, message: 'دامنه پرداخت این سازمان تنظیم نشده است.' });
+
+  const mode = String(gatewaySettings.mode || 'production') === 'sandbox' ? 'sandbox' : 'production';
+  const currency = normalizeCurrency(gatewaySettings.currency);
+  const description = String(gatewaySettings.default_description || '').trim() || `تسویه کارت حساب ${String(card.title || '').trim()}`;
+  const [tx] = await rest(urlBase, key, 'payment_transactions', {
+    method: 'POST',
+    body: JSON.stringify([{
+      org_id: card.org_id, gateway_scope: gatewayScope, provider: 'zarinpal', purpose: 'online_account_card',
+      module_id: 'customers', record_id: card.entity_id, amount, currency, status: 'pending', callback_url: '', description,
+      metadata: { account_card_id: card.id, account_card_token: token, public_origin: returnOrigin, mode },
+    }]),
+  });
+  const callbackUrl = `${paymentDomain}${callbackPath}?tx=${enc(tx.id)}`;
+  const requestPayload = { amount: Math.round(amount), currency, callback_url: callbackUrl, description, metadata: { order_id: tx.id } };
+  try {
+    const zp = await zarinpalRequest(merchantId, mode, requestPayload);
+    const authority = String(zp?.data?.authority || '').trim();
+    if (Number(zp?.data?.code) !== 100 || !authority) throw new Error(zp?.errors?.message || 'زرین‌پال درخواست پرداخت را نپذیرفت.');
+    const paymentUrl = `${zarinpalBase(mode)}/pg/StartPay/${authority}`;
+    await rest(urlBase, key, `payment_transactions?id=eq.${enc(tx.id)}`, { method: 'PATCH', body: JSON.stringify({ status: 'redirected', authority, callback_url: callbackUrl, start_url: paymentUrl, request_payload: zp }) });
+    return json(200, { success: true, payment_url: paymentUrl, transaction_id: tx.id });
+  } catch (err: any) {
+    await rest(urlBase, key, `payment_transactions?id=eq.${enc(tx.id)}`, { method: 'PATCH', body: JSON.stringify({ status: 'failed', callback_url: callbackUrl, request_payload: requestPayload, error_message: String(err?.message || err) }) }).catch(() => null);
+    throw err;
+  }
+};
+
 const handleCallback = async (urlBase: string, key: string, merchantId: string, url: URL) => {
   const txId = String(url.searchParams.get('tx') || '').trim();
   const authority = String(url.searchParams.get('Authority') || url.searchParams.get('authority') || '').trim();
@@ -626,6 +684,8 @@ const handleCallback = async (urlBase: string, key: string, merchantId: string, 
 
     if (String(tx?.purpose || '') === 'ai_topup') {
       await creditAiWalletFromTransaction(urlBase, key, { ...tx, authority: authority || tx.authority, ref_id: data?.ref_id ? String(data.ref_id) : tx.ref_id });
+    } else if (String(tx?.purpose || '') === 'online_account_card') {
+      await rpc(urlBase, key, 'apply_online_account_card_payment_transaction', { p_transaction_id: tx.id });
     } else {
       const previousInvoice = await getInvoiceWorkflowRecord(urlBase, key, tx.record_id);
       const appendResult = await rpc(urlBase, key, 'apply_online_invoice_payment_transaction', {
@@ -710,6 +770,8 @@ const verifyCallbackPayload = async (urlBase: string, key: string, merchantId: s
 
     if (String(tx?.purpose || '') === 'ai_topup') {
       await creditAiWalletFromTransaction(urlBase, key, { ...tx, authority: authority || tx.authority, ref_id: data?.ref_id ? String(data.ref_id) : tx.ref_id });
+    } else if (String(tx?.purpose || '') === 'online_account_card') {
+      await rpc(urlBase, key, 'apply_online_account_card_payment_transaction', { p_transaction_id: tx.id });
     } else {
       const previousInvoice = await getInvoiceWorkflowRecord(urlBase, key, tx.record_id);
       const appendResult = await rpc(urlBase, key, 'apply_online_invoice_payment_transaction', {
@@ -756,6 +818,9 @@ Deno.serve(async (req: Request) => {
     const action = String(body?.action || '').trim();
     if (action === 'create_invoice_payment') {
       return await createInvoicePayment(urlBase, serviceKey, merchantId, body);
+    }
+    if (action === 'create_account_card_payment') {
+      return await createAccountCardPayment(urlBase, serviceKey, merchantId, body);
     }
     if (action === 'create_ai_credit_topup') {
       return await createAiCreditTopup(req, urlBase, serviceKey, merchantId, body);
