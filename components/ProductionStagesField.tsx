@@ -7559,7 +7559,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       setDraftSourceTemplateStagesLoading(true);
       const { data, error } = await supabase
         .from('process_template_stages')
-        .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
+        .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, process_node_key, process_lane_key, metadata')
         .eq('template_id', normalizedTemplateId)
         .order('sort_order', { ascending: true });
       if (error) throw error;
@@ -7575,6 +7575,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const handleCopyDraftStageFromTemplate = useCallback((sourceStage: any) => {
     const normalized = normalizeDraftStageForEditor(sourceStage, draftLocal.length);
     const sourceStageName = String(normalized?.name || normalized?.stage_name || '').trim();
+    const processNodeKey = createProcessNodeKey();
+    const processLaneKey = activeDraftLaneKey || 'lane_1';
     const copiedStage = {
       ...normalized,
       id: `draft_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -7583,11 +7585,18 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       name: sourceStageName || `مرحله ${draftLocal.length + 1}`,
       stage_name: sourceStageName || `مرحله ${draftLocal.length + 1}`,
       sort_order: Number(normalized?.sort_order || ((draftLocal.length + 1) * 10)),
+      [PROCESS_NODE_KEY]: processNodeKey,
+      [PROCESS_LANE_KEY]: processLaneKey,
+      metadata: {
+        ...(normalized?.metadata || {}),
+        [PROCESS_NODE_KEY]: processNodeKey,
+        [PROCESS_LANE_KEY]: processLaneKey,
+      },
     };
     setDraftStageChooserOpen(false);
     setDraftStageChooserReturnToEditor(false);
     openDraftStageModal(copiedStage, 'stage');
-  }, [draftLocal.length, normalizeDraftStageForEditor, openDraftStageModal]);
+  }, [activeDraftLaneKey, draftLocal.length, normalizeDraftStageForEditor, openDraftStageModal]);
 
   const cloneProcessActivatorWorkflows = useCallback(async (
     sourceTemplateId: string,

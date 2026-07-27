@@ -62,6 +62,21 @@ describe('module record projection', () => {
     ]));
   });
 
+  it('does not request legacy record assignee columns for V2 process templates', () => {
+    const projection = buildModuleRecordProjection({
+      id: 'process_templates',
+      table: 'process_templates',
+      fields: [{ key: 'name', type: FieldType.TEXT }],
+    } as any);
+
+    expect(projection.initialColumns).toEqual(expect.arrayContaining(['id', 'name']));
+    expect(projection.initialColumns).not.toEqual(expect.arrayContaining([
+      'assignee_type',
+      'assignee_id',
+      'assignee_role_id',
+    ]));
+  });
+
   it('keeps assignee columns for SaaS-managed CMS records', () => {
     const projection = buildModuleRecordProjection({
       id: 'cms_pages',

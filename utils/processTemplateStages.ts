@@ -147,14 +147,38 @@ export const syncProcessTemplateStages = async (
   templateId: string,
   rawStages: any[],
 ) => {
-  const nextStages = serializeProcessTemplateStages(rawStages);
-  const { data: existingRows, error: existingError } = await supabaseClient
+  let existingRows: any[] | null = null;
+  const extendedExisting = await supabaseClient
     .from('process_template_stages')
-    .select('id')
+    .select('id, process_node_key')
     .eq('template_id', templateId);
-  if (existingError) throw existingError;
+  if (extendedExisting.error) {
+    if (!isMissingColumnLikeError(extendedExisting.error)) throw extendedExisting.error;
+    const fallbackExisting = await supabaseClient
+      .from('process_template_stages')
+      .select('id')
+      .eq('template_id', templateId);
+    if (fallbackExisting.error) throw fallbackExisting.error;
+    existingRows = fallbackExisting.data;
+  } else {
+    existingRows = extendedExisting.data;
+  }
 
   const existingIds = new Set<string>((existingRows || []).map((row: any) => String(row.id)));
+  const existingIdByNodeKey = new Map<string, string>();
+  (existingRows || []).forEach((row: any) => {
+    const nodeKey = normalizeText(row?.process_node_key);
+    const id = String(row?.id || '');
+    if (nodeKey && id) existingIdByNodeKey.set(nodeKey, id);
+  });
+  // Stage IDs can be absent after a draft has been copied or restored from a V2
+  // graph snapshot. The node key is the V2 identity, so match it before deciding
+  // whether to insert; this keeps sync idempotent and prevents duplicate-node 409s.
+  const nextStages = serializeProcessTemplateStages(rawStages).map((stage) => {
+    if (stage.id && existingIds.has(stage.id)) return stage;
+    const existingId = existingIdByNodeKey.get(stage.process_node_key);
+    return existingId ? { ...stage, id: existingId } : stage;
+  });
   const keptExistingIds = new Set(
     nextStages.map((stage) => stage.id).filter((id): id is string => Boolean(id && existingIds.has(id))),
   );
