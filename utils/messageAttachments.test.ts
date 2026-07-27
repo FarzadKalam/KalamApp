@@ -28,6 +28,21 @@ describe('extractBotMessageAttachments', () => {
     expect(attachments.every((item) => item.fileType === 'image')).toBe(true);
   });
 
+  it('rewrites legacy storage hosts before rendering media', () => {
+    const attachments = extractBotMessageAttachments({
+      payload: {
+        attachments: [{
+          name: 'voice.webm',
+          url: 'https://api.kalamapp.ir/storage/v1/object/public/images/record_files/notes/unlinked/voice.webm',
+          mime_type: 'audio/webm',
+          file_type: 'voice',
+        }],
+      },
+    });
+
+    expect(attachments[0]?.url).toBe('https://api.tazesystem.ir/storage/v1/object/public/images/record_files/notes/unlinked/voice.webm');
+  });
+
   it('dedupes repeated album attachments by url', () => {
     const attachments = extractBotMessageAttachments({
       file_url: 'https://api.tazesystem.ir/storage/v1/object/public/images/a/img-1.jpg',

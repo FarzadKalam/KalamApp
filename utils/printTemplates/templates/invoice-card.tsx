@@ -77,6 +77,7 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
   const sellerManagerTitle = resolveManagerTitle(sellerInfo);
   const sellerContactSummary = [sellerMobile, sellerPhone].filter(Boolean).join(' - ');
   const currencyLabel = String(data?.company_settings?.currency_label || sellerInfo?.currency_label || 'ریال').trim() || 'ریال';
+  const invoiceDescription = String(data?.description ?? '').trim();
 
   const getInvoiceItemProductLabel = (item: any) => {
     if (!item) return '-';
@@ -531,6 +532,29 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
           </div>
         </div>
       </div>
+
+      {invoiceDescription ? (
+        <div
+          style={{
+            margin: isMobilePrint ? '6px 0' : '8px 0',
+            padding: isMobilePrint ? '5px 6px' : '7px 8px',
+            border: '1px solid #ddd',
+            borderRadius: '4px',
+            background: '#fff',
+            textAlign: 'right',
+            fontSize: isMobilePrint ? '6.5px' : '7.5px',
+            lineHeight: 1.8,
+            whiteSpace: 'pre-wrap',
+            overflowWrap: 'anywhere',
+            wordBreak: 'break-word',
+          }}
+        >
+          <div style={{ marginBottom: isMobilePrint ? '2px' : '3px', fontWeight: 'bold', color: '#374151' }}>
+            توضیحات فاکتور
+          </div>
+          <div>{invoiceDescription}</div>
+        </div>
+      ) : null}
 
       {/* فوتر */}
       <div style={{ 

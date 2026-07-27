@@ -1,4 +1,5 @@
 import { resolveNoteAttachmentFileType, type NoteAttachment } from './noteContent';
+import { normalizePublicAssetUrl } from './assetUrl';
 
 type BotMessageLike = {
   file_url?: string | null;
@@ -19,7 +20,8 @@ const normalizeText = (value: unknown) => String(value || '').trim();
 const normalizeRenderableUrl = (value: unknown) => {
   const url = normalizeText(value);
   if (!url) return '';
-  return url.replace(/^http:\/\/api\.tazesystem\.ir\//i, 'https://api.tazesystem.ir/');
+  return normalizePublicAssetUrl(url)
+    || url.replace(/^http:\/\/api\.tazesystem\.ir\//i, 'https://api.tazesystem.ir/');
 };
 
 const normalizeAttachment = (value: any): NoteAttachment | null => {
@@ -96,7 +98,8 @@ const collectNestedAttachmentLikes = (root: unknown) => {
 
 const normalizeBotMediaFileRef = (value: any, fallback?: Partial<BotMediaFileRef>): BotMediaFileRef | null => {
   const fileId = normalizeText(value?.media_file_id || value?.file_id || value?.fileId || fallback?.fileId);
-  const url = normalizeText(value?.url || value?.file_url || value?.media_url || value?.download_url || value?.link_url || fallback?.url) || null;
+  const rawUrl = normalizeText(value?.url || value?.file_url || value?.media_url || value?.download_url || value?.link_url || fallback?.url);
+  const url = (normalizePublicAssetUrl(rawUrl) || rawUrl) || null;
   if (!fileId) return null;
   return {
     fileId,

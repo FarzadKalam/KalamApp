@@ -73,8 +73,9 @@ export const isAudioNoteAttachment = (value: any) => {
 export const isImageNoteAttachment = (value: any) => resolveNoteAttachmentFileType(value) === 'image';
 
 const normalizeAttachment = (value: any): NoteAttachment | null => {
-  const url = String(value?.url || value?.file_url || '').trim();
-  if (!url) return null;
+  const rawUrl = String(value?.url || value?.file_url || '').trim();
+  if (!rawUrl) return null;
+  const url = normalizePublicAssetUrl(rawUrl) || rawUrl;
 
   const fallbackName = String(url.split('?')[0].split('/').pop() || 'file').trim() || 'file';
   const name = String(value?.name || value?.file_name || fallbackName).trim() || fallbackName;
@@ -141,3 +142,4 @@ export const serializeNoteContent = (textValue: string, attachmentsValue?: NoteA
     attachments,
   });
 };
+import { normalizePublicAssetUrl } from './assetUrl';

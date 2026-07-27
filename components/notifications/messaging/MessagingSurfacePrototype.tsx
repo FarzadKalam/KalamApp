@@ -64,6 +64,7 @@ import { buildTaskSourceInitialValues } from '../../../utils/taskMeta';
 import { buildMessageActivityDescription, buildMessageActivityTitle, filterUsableMessageAttachments } from '../../../utils/messageActivity';
 import { loadScopedCompanySettings } from '../../../utils/companySettings';
 import { collectBotMessageMediaFileRefs, extractBotMessageAttachments } from '../../../utils/messageAttachments';
+import { normalizePublicAssetUrl } from '../../../utils/assetUrl';
 import { sendBotMessageViaGateway, sendCounterpartyBotGroupMessage, type BotChannel } from '../../../utils/botGateway';
 import { getActiveChannelSettings } from '../../../utils/channelSettings';
 import { useOptionalNotificationRuntime } from '../NotificationRuntimeProvider';
@@ -377,9 +378,11 @@ const getTimelineRecordLabel = (
   return String((key ? labels[key] : '') || fallback || '').trim();
 };
 
-const normalizeRenderableAttachmentUrl = (value: any) => (
-  String(value || '').trim().replace(/^http:\/\/api\.tazesystem\.ir\//i, 'https://api.tazesystem.ir/')
-);
+const normalizeRenderableAttachmentUrl = (value: any) => {
+  const rawUrl = String(value || '').trim();
+  return normalizePublicAssetUrl(rawUrl)
+    || rawUrl.replace(/^http:\/\/api\.tazesystem\.ir\//i, 'https://api.tazesystem.ir/');
+};
 
 const buildBotTimelineAttachments = (row: any): TimelineEvent['attachments'] => {
   const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};

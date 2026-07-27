@@ -29,4 +29,29 @@ describe('InvoiceCard', () => {
     expect(html).not.toContain('overflow:hidden');
     invoiceItems.forEach((item) => expect(html).toContain(item.product_name));
   });
+
+  it.each(['invoice_sales_official', 'invoice_sales_simple'] as const)(
+    'shows multiline invoice description in the %s template',
+    (templateId) => {
+      const description = 'توضیح خط اول فاکتور\nتوضیح خط دوم فاکتور';
+      const html = renderToStaticMarkup(
+        <InvoiceCard
+          data={{
+            name: 'فاکتور آزمایشی',
+            description,
+            invoiceItems: [],
+            total_invoice_amount: 0,
+          }}
+          formatPersianPrice={(value) => String(value)}
+          toPersianNumber={(value) => value}
+          safeJalaliFormat={(value) => String(value)}
+          templateId={templateId}
+        />
+      );
+
+      expect(html).toContain('توضیحات فاکتور');
+      expect(html).toContain(description);
+      expect(html).toContain('white-space:pre-wrap');
+    }
+  );
 });
