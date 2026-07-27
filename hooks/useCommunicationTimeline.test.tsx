@@ -14,47 +14,45 @@ const timelinePayload = (items: Array<{ id: string; created_at: string }>) => ({
 });
 
 describe('communication timeline fast path', () => {
-  it('uses the unified internal RPC and does not fall back for a valid empty response', async () => {
+  it('uses the dedicated internal timeline RPC for a valid empty response', async () => {
     const rpc = vi.fn().mockResolvedValue({ data: timelinePayload([]), error: null });
     const supabase = { rpc } as any;
-    const fallbackLoadInitial = vi.fn().mockResolvedValue([{ id: 'legacy' }]);
 
     renderHook(() => useInternalConversationTimeline({
       supabase,
       enabled: true,
       conversationKey: 'direct:user-a:user-b',
       cacheScopeKey: 'empty-fast-path',
-      fallbackLoadInitial,
     }));
 
     await waitFor(() => expect(rpc).toHaveBeenCalledOnce());
-    expect(rpc).toHaveBeenCalledWith('get_communication_timeline', expect.any(Object));
-    expect(fallbackLoadInitial).not.toHaveBeenCalled();
+    expect(rpc).toHaveBeenCalledWith('get_internal_conversation_timeline_v2', expect.any(Object));
   });
 
-  it('merges internal timeline fallback rows when the unified RPC misses a persisted note', async () => {
-    const rpc = vi.fn().mockResolvedValue({
-      data: timelinePayload([{ id: 'rpc-old', created_at: '2026-06-28T09:29:36.000Z' }]),
-      error: null,
-    });
+  it('uses the bounded legacy RPC only when the dedicated internal RPC is unavailable', async () => {
+    const rpc = vi.fn()
+      .mockResolvedValueOnce({ data: null, error: { code: 'PGRST202', message: 'Could not find the function' } })
+      .mockResolvedValueOnce({
+        data: timelinePayload([{ id: 'legacy-message', created_at: '2026-07-27T15:12:37.000Z' }]),
+        error: null,
+      });
     const supabase = { rpc } as any;
-    const fallbackLoadInitial = vi.fn().mockResolvedValue([
-      { id: 'fallback-new', created_at: '2026-06-29T09:56:28.000Z' },
-    ]);
 
     const { result } = renderHook(() => useInternalConversationTimeline({
       supabase,
       enabled: true,
       conversationKey: 'direct:user-a:user-b',
-      cacheScopeKey: 'merge-missed-note',
-      fallbackLoadInitial,
-      mergeFallbackInitial: true,
+      cacheScopeKey: 'legacy-internal-rpc',
     }));
 
-    await waitFor(() => {
-      expect(result.current.items.map((item) => item.id)).toEqual(['rpc-old', 'fallback-new']);
+    await waitFor(() => expect(result.current.items.map((item) => item.id)).toEqual(['legacy-message']));
+    expect(rpc).toHaveBeenNthCalledWith(1, 'get_internal_conversation_timeline_v2', expect.any(Object));
+    expect(rpc).toHaveBeenNthCalledWith(2, 'get_internal_conversation_timeline', {
+      p_conversation_key: 'direct:user-a:user-b',
+      p_limit: 10,
+      p_before_cursor: null,
+      p_include_unread_window: false,
     });
-    expect(fallbackLoadInitial).toHaveBeenCalledOnce();
   });
 
   it('does not treat a schema error as a missing unified RPC', async () => {
@@ -63,7 +61,6 @@ describe('communication timeline fast path', () => {
       error: { code: '42703', message: 'column reader_profile.display_name does not exist' },
     });
     const supabase = { rpc } as any;
-    const fallbackLoadInitial = vi.fn().mockResolvedValue([{ id: 'legacy' }]);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     try {
@@ -72,11 +69,9 @@ describe('communication timeline fast path', () => {
         enabled: true,
         conversationKey: 'direct:user-schema-a:user-schema-b',
         cacheScopeKey: 'schema-error-no-fallback',
-        fallbackLoadInitial,
       }));
 
       await waitFor(() => expect(rpc).toHaveBeenCalledOnce());
-      expect(fallbackLoadInitial).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();
     }

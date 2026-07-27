@@ -10,16 +10,11 @@ import {
 } from '../utils/notificationConversationRpc';
 import { preloadAvatarUrls } from '../utils/profileAvatar';
 
-type LegacyLoader<TItem> = () => Promise<TItem[]>;
-
 type UseInternalConversationTimelineOptions<TItem> = {
   supabase: SupabaseClient<any, 'public', any>;
   enabled: boolean;
   conversationKey: string | null;
   pageSize?: number;
-  fallbackLoadInitial?: LegacyLoader<TItem>;
-  fallbackOnEmptyInitial?: boolean;
-  mergeFallbackInitial?: boolean;
   cacheScopeKey?: string | null;
 };
 
@@ -35,7 +30,7 @@ type TimelineCacheEntry<TItem> = {
 };
 const _internalTimelineCache = new Map<string, TimelineCacheEntry<any>>();
 const TIMELINE_CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
-let _internalUnifiedTimelineRpcAvailable = true;
+let _internalTimelineV2RpcAvailable = true;
 
 const buildCacheKey = (scopeKey: string | null | undefined, conversationKey: string) =>
   `${String(scopeKey || 'default').trim() || 'default'}:${conversationKey}`;
@@ -54,19 +49,6 @@ const isCacheFresh = (cacheKey: string) => {
 
 const sortByDate = <T>(items: T[]): T[] =>
   items.slice().sort((a: any, b: any) => compareIsoAsc(a?.created_at, b?.created_at));
-
-const mergeItemsById = <T>(primaryItems: T[], fallbackItems: T[]): T[] => {
-  const unique = new Map<string, T>();
-  fallbackItems.forEach((item: any) => {
-    const key = String(item?.id || '').trim();
-    if (key) unique.set(key, item);
-  });
-  primaryItems.forEach((item: any) => {
-    const key = String(item?.id || '').trim();
-    if (key) unique.set(key, item);
-  });
-  return sortByDate(Array.from(unique.values()));
-};
 
 const _internalTimelinePrefetchInFlight = new Set<string>();
 
@@ -91,9 +73,8 @@ export const prefetchInternalConversationTimeline = async <TItem,>({
   ) return;
   _internalTimelinePrefetchInFlight.add(normalizedConversationKey);
   try {
-    if (_internalUnifiedTimelineRpcAvailable) {
-      const { data, error } = await supabase.rpc('get_communication_timeline', {
-        p_channel: 'internal',
+    if (_internalTimelineV2RpcAvailable) {
+      const { data, error } = await supabase.rpc('get_internal_conversation_timeline_v2', {
         p_conversation_key: normalizedConversationKey,
         p_before_cursor: null,
         p_limit: pageSize,
@@ -107,7 +88,7 @@ export const prefetchInternalConversationTimeline = async <TItem,>({
         return;
       }
       if (isMissingRpcError(error)) {
-        _internalUnifiedTimelineRpcAvailable = false;
+        _internalTimelineV2RpcAvailable = false;
       } else {
         return;
       }
@@ -137,9 +118,6 @@ export const useInternalConversationTimeline = <TItem,>({
   enabled,
   conversationKey,
   pageSize = 10,
-  fallbackLoadInitial,
-  fallbackOnEmptyInitial = false,
-  mergeFallbackInitial = false,
   cacheScopeKey,
 }: UseInternalConversationTimelineOptions<TItem>) => {
   const [items, setItemsState] = useState<TItem[]>([]);
@@ -150,7 +128,7 @@ export const useInternalConversationTimeline = <TItem,>({
   const [initialAnchorId, setInitialAnchorId] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [available, setAvailable] = useState(true);
-  const [communicationApiAvailable, setCommunicationApiAvailable] = useState(_internalUnifiedTimelineRpcAvailable);
+  const [timelineV2ApiAvailable, setTimelineV2ApiAvailable] = useState(_internalTimelineV2RpcAvailable);
   const [readModel, setReadModel] = useState<NotificationReadModel>('item');
   const itemsRef = useRef<TItem[]>([]);
   const normalizedConversationKey = String(conversationKey || '').trim();
@@ -168,7 +146,7 @@ export const useInternalConversationTimeline = <TItem,>({
   useEffect(() => {
     if (enabled) {
       setAvailable(true);
-      setCommunicationApiAvailable(_internalUnifiedTimelineRpcAvailable);
+      setTimelineV2ApiAvailable(_internalTimelineV2RpcAvailable);
     }
   }, [enabled]);
 
@@ -232,24 +210,9 @@ export const useInternalConversationTimeline = <TItem,>({
     }
   }, [enabled, conversationKey, timelineCacheKey, applyPayload]);
 
-  const loadFallbackInitial = useCallback(async (options?: { preserveExistingItemsOnEmpty?: boolean }) => {
-    if (!fallbackLoadInitial) {
-      applyPayload(EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>, options);
-      return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
-    }
-    const fallbackItems = await fallbackLoadInitial();
-    const payload = {
-      ...EMPTY_TIMELINE_PAYLOAD,
-      items: sortByDate(fallbackItems || []),
-    } as NotificationTimelinePayload<TItem>;
-    applyPayload(payload, options);
-    return payload;
-  }, [applyPayload, fallbackLoadInitial]);
-
   const fetchTimelinePage = useCallback(async (beforeCursor: string | null) => {
-    if (communicationApiAvailable) {
-      const { data, error } = await supabase.rpc('get_communication_timeline', {
-        p_channel: 'internal',
+    if (timelineV2ApiAvailable) {
+      const { data, error } = await supabase.rpc('get_internal_conversation_timeline_v2', {
         p_conversation_key: conversationKey,
         p_before_cursor: beforeCursor,
         p_limit: pageSize,
@@ -258,8 +221,8 @@ export const useInternalConversationTimeline = <TItem,>({
         return normalizeTimelinePayload<TItem>(data);
       }
       if (isMissingRpcError(error)) {
-        _internalUnifiedTimelineRpcAvailable = false;
-        setCommunicationApiAvailable(false);
+        _internalTimelineV2RpcAvailable = false;
+        setTimelineV2ApiAvailable(false);
       } else {
         throw error;
       }
@@ -280,7 +243,7 @@ export const useInternalConversationTimeline = <TItem,>({
       throw error;
     }
     return normalizeTimelinePayload<TItem>(data);
-  }, [communicationApiAvailable, conversationKey, pageSize, supabase]);
+  }, [conversationKey, pageSize, supabase, timelineV2ApiAvailable]);
 
   const refresh = useCallback(async (options?: { force?: boolean }) => {
     if (!enabled || !conversationKey) {
@@ -314,10 +277,8 @@ export const useInternalConversationTimeline = <TItem,>({
         return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
       }
       if (!available) {
-        if (activeConversationKeyRef.current !== requestConversationKey) {
-          return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
-        }
-        return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
+        applyPayload(EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>);
+        return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
       }
 
       const payload = await fetchTimelinePage(null);
@@ -325,31 +286,8 @@ export const useInternalConversationTimeline = <TItem,>({
         return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
       }
       if (!payload) {
-        return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
-      }
-      if (payload.items.length === 0 && fallbackOnEmptyInitial && fallbackLoadInitial && !options?.force) {
-        const fallbackPayload = await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
-        if (fallbackPayload.items.length > 0) return fallbackPayload;
-      }
-      if (mergeFallbackInitial && fallbackLoadInitial) {
-        const fallbackItems = await fallbackLoadInitial();
-        if (activeConversationKeyRef.current !== requestConversationKey) {
-          return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
-        }
-        if (fallbackItems.length > 0) {
-          const mergedPayload = {
-            ...payload,
-            items: mergeItemsById(payload.items || [], fallbackItems || []),
-          };
-          const appliedMerged = applyPayload(mergedPayload, {
-            preserveExistingItemsOnEmpty: true,
-            mergeWithExisting: Boolean(options?.force),
-          });
-          if (appliedMerged) {
-            _internalTimelineCache.set(timelineCacheKey, { payload: { ...mergedPayload, items: itemsRef.current }, fetchedAt: Date.now() });
-          }
-          return mergedPayload;
-        }
+        applyPayload(EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>);
+        return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
       }
       // Keep loaded history only for background/force refreshes. Conversation
       // switches must replace the old timeline so messages never bleed across
@@ -367,7 +305,7 @@ export const useInternalConversationTimeline = <TItem,>({
       cacheAppliedRef.current = false;
       refreshInFlightKeysRef.current.delete(requestConversationKey);
     }
-  }, [applyPayload, available, conversationKey, enabled, fallbackLoadInitial, fallbackOnEmptyInitial, fetchTimelinePage, loadFallbackInitial, mergeFallbackInitial, timelineCacheKey]);
+  }, [applyPayload, available, conversationKey, enabled, fetchTimelinePage, timelineCacheKey]);
 
   const loadOlder = useCallback(async () => {
     if (!enabled || !conversationKey || !cursor || !available || loadingOlder) return;

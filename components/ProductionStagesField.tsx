@@ -988,7 +988,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   ), []);
   const [draftToCreate, setDraftToCreate] = useState<any | null>(null);
   const [editingDraft, setEditingDraft] = useState<any | null>(null);
-  const [draftAutomationRules, setDraftAutomationRules] = useState<ProcessAutomationRule[]>([]);
+  const [draftAutomationRules, setDraftAutomationRulesState] = useState<ProcessAutomationRule[]>([]);
   const [expandedDraftAutomationRuleIds, setExpandedDraftAutomationRuleIds] = useState<string[]>([]);
   const [automationViewMode, setAutomationViewMode] = useState<WorkflowEditorViewMode>(() => readStoredWorkflowViewMode());
   const [diagramAutomationRuleId, setDiagramAutomationRuleId] = useState<string | null>(null);
@@ -997,6 +997,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [containerWidth, setContainerWidth] = useState(0);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const draftLocalRef = useRef<any[]>(Array.isArray(draftStages) ? draftStages : []);
+  const draftAutomationRulesRef = useRef<ProcessAutomationRule[]>([]);
   const autoAssignedProcessGroupIdsRef = useRef<Set<string>>(new Set());
   const draftEditorStageIdRef = useRef<any>(null);
   const draftStageSavePromiseRef = useRef<Promise<any> | null>(null);
@@ -1024,6 +1025,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [processTemplateOptions, setProcessTemplateOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [processTemplateOptionsLoading, setProcessTemplateOptionsLoading] = useState(false);
   const [draftStageChooserOpen, setDraftStageChooserOpen] = useState(false);
+  const [draftStageChooserReturnToEditor, setDraftStageChooserReturnToEditor] = useState(false);
   const [draftSourceTemplateOptions, setDraftSourceTemplateOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [draftSourceTemplateLoading, setDraftSourceTemplateLoading] = useState(false);
   const [draftSourceTemplateId, setDraftSourceTemplateId] = useState<string | null>(null);
@@ -1054,7 +1056,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   } | null>(null);
   const [taskTypeOptions, setTaskTypeOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [draftModalTabKey, setDraftModalTabKey] = useState<DraftModalTabKey>('stage');
-  const [draftCustomFields, setDraftCustomFields] = useState<ModuleField[]>([]);
+  const [draftCustomFields, setDraftCustomFieldsState] = useState<ModuleField[]>([]);
   const [draftStageStatusOptions, setDraftStageStatusOptions] = useState<SelectOption[]>([]);
   const [draftStageTaskTypeValue, setDraftStageTaskTypeValue] = useState('');
   const [isDraftCustomFieldModalOpen, setIsDraftCustomFieldModalOpen] = useState(false);
@@ -1067,7 +1069,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [savingTaskCustomFields, setSavingTaskCustomFields] = useState<Record<string, boolean>>({});
   const [draftCustomFieldForm] = Form.useForm();
   const [draftCustomFieldOptionsForm] = Form.useForm<ProcessTaskOptionEditorFormValues>();
-  const [draftStageInstructionIds, setDraftStageInstructionIds] = useState<string[]>([]);
+  const [draftStageInstructionIds, setDraftStageInstructionIdsState] = useState<string[]>([]);
+  const draftCustomFieldsRef = useRef<ModuleField[]>([]);
+  const draftStageInstructionIdsRef = useRef<string[]>([]);
   const [instructionsForEditor, setInstructionsForEditor] = useState<any[]>([]);
   const [isLoadingInstructionsForEditor, setIsLoadingInstructionsForEditor] = useState(false);
   const [isInstructionQuickCreateOpen, setIsInstructionQuickCreateOpen] = useState(false);
@@ -1090,6 +1094,27 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const handoverEditorHistoryRef = useRef<string | null>(null);
   const watchedDraftStageStatusOptions = Form.useWatch('stage_status_options_editor', { form: draftForm, preserve: true });
   const watchedDraftStageSortOrder = Form.useWatch('sort_order', { form: draftForm, preserve: true });
+  const setDraftAutomationRules = useCallback((nextValue: ProcessAutomationRule[] | ((previous: ProcessAutomationRule[]) => ProcessAutomationRule[])) => {
+    const next = typeof nextValue === 'function'
+      ? nextValue(draftAutomationRulesRef.current)
+      : nextValue;
+    draftAutomationRulesRef.current = next;
+    setDraftAutomationRulesState(next);
+  }, []);
+  const setDraftCustomFields = useCallback((nextValue: ModuleField[] | ((previous: ModuleField[]) => ModuleField[])) => {
+    const next = typeof nextValue === 'function'
+      ? nextValue(draftCustomFieldsRef.current)
+      : nextValue;
+    draftCustomFieldsRef.current = next;
+    setDraftCustomFieldsState(next);
+  }, []);
+  const setDraftStageInstructionIds = useCallback((nextValue: string[] | ((previous: string[]) => string[])) => {
+    const next = typeof nextValue === 'function'
+      ? nextValue(draftStageInstructionIdsRef.current)
+      : nextValue;
+    draftStageInstructionIdsRef.current = next;
+    setDraftStageInstructionIdsState(next);
+  }, []);
   const activeTaskQuickModalTask = useMemo(() => {
     if (!openTaskPopoverId) return null;
     const fromTasks = tasks.find((task: any) => String(task?.id || '') === String(openTaskPopoverId));
@@ -7187,7 +7212,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         : (existingStage?.task_type ?? existingMetadata?.task_type ?? '')
     ).trim() || null;
     const stageStatusOptions = getDraftStageEditorStatusOptions();
-    const processTaskCustomFields = normalizeProcessTaskCustomFields(assignProcessTaskCustomFieldOrder(draftCustomFields));
+    const processTaskCustomFields = normalizeProcessTaskCustomFields(assignProcessTaskCustomFieldOrder(draftCustomFieldsRef.current));
     const weight = Number(values?.weight || 0);
     const startDurationValue = Number(values?.start_duration_value || 0);
     const startDurationUnit = values?.start_duration_unit || 'day';
@@ -7215,7 +7240,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       || activeDraftLaneKey
       || 'lane_1'
     );
-    const automationRules = normalizeProcessAutomationRules(draftAutomationRules.map((rule) => ({
+    const automationRules = normalizeProcessAutomationRules(draftAutomationRulesRef.current.map((rule) => ({
       ...rule,
       conditions_all: [
         ...(stageTaskType ? [{
@@ -7232,7 +7257,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         (condition) => String(condition?.field || '').trim() !== '__task__task_type'
       ),
     })));
-    const stageInstructionIds = normalizeInstructionIdList(draftStageInstructionIds);
+    const stageInstructionIds = normalizeInstructionIdList(draftStageInstructionIdsRef.current);
 
     return {
       ...(existingStage || {}),
@@ -7285,7 +7310,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         [PROCESS_STAGE_INSTRUCTION_IDS_KEY]: stageInstructionIds,
       },
     };
-  }, [activeDraftLaneKey, draftAutomationRules, draftCustomFields, draftLocal.length, draftStageInstructionIds, getDraftStageEditorStatusOptions, requiresSystemScheduleStageAnchor]);
+  }, [activeDraftLaneKey, draftLocal.length, getDraftStageEditorStatusOptions, requiresSystemScheduleStageAnchor]);
 
   const saveDraftStageFromEditor = useCallback(async (rawValues?: any) => {
     if (draftStageSavePromiseRef.current) {
@@ -7508,11 +7533,22 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       openDraftStageModal(null, 'stage');
       return;
     }
+    setDraftStageChooserReturnToEditor(false);
     setDraftSourceTemplateId(null);
     setDraftSourceTemplateStages([]);
     setDraftStageChooserOpen(true);
     void loadDraftSourceTemplateOptions();
   }, [isProcessTemplateModule, loadDraftSourceTemplateOptions, openDraftStageModal]);
+
+  const openDraftStageCopyChooserFromEditor = useCallback(() => {
+    if (!isProcessTemplateModule) return;
+    setDraftStageChooserReturnToEditor(true);
+    setDraftSourceTemplateId(null);
+    setDraftSourceTemplateStages([]);
+    setIsDraftModalOpen(false);
+    setDraftStageChooserOpen(true);
+    void loadDraftSourceTemplateOptions();
+  }, [isProcessTemplateModule, loadDraftSourceTemplateOptions]);
 
   const handleDraftSourceTemplateChange = useCallback(async (templateId?: string) => {
     const normalizedTemplateId = String(templateId || '').trim();
@@ -7549,6 +7585,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       sort_order: Number(normalized?.sort_order || ((draftLocal.length + 1) * 10)),
     };
     setDraftStageChooserOpen(false);
+    setDraftStageChooserReturnToEditor(false);
     openDraftStageModal(copiedStage, 'stage');
   }, [draftLocal.length, normalizeDraftStageForEditor, openDraftStageModal]);
 
@@ -8133,10 +8170,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     await persistProcessGraph(cloneResult.graph, cloneResult.stages);
     setActiveDraftLaneKey(targetLaneKey);
     setDraftStageChooserOpen(false);
+    if (draftStageChooserReturnToEditor) {
+      setIsDraftModalOpen(true);
+    }
+    setDraftStageChooserReturnToEditor(false);
     message.success('ردیف کامل با شناسه‌های مستقل کپی شد');
   }, [
     draftGraphSnapshot.graph,
     draftGraphSnapshot.stages,
+    draftStageChooserReturnToEditor,
     draftSourceGraphSnapshot.stages,
     persistProcessGraph,
   ]);
@@ -8161,6 +8203,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     );
     await persistProcessGraph(graphWithWorkflows, cloneResult.stages);
     setDraftStageChooserOpen(false);
+    if (draftStageChooserReturnToEditor) {
+      setIsDraftModalOpen(true);
+    }
+    setDraftStageChooserReturnToEditor(false);
     message.success('الگوی فرآیند همراه ردیف‌ها و فعال‌کننده‌ها کپی شد');
   }, [
     cloneProcessActivatorWorkflows,
@@ -8168,6 +8214,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     draftGraphSnapshot.stages,
     draftSourceGraphSnapshot,
     draftSourceTemplateId,
+    draftStageChooserReturnToEditor,
     persistProcessGraph,
     recordId,
   ]);
@@ -10567,11 +10614,18 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         rootClassName={isMobileProcessViewport ? 'process-stage-modal-root' : undefined}
         className={isMobileProcessViewport ? 'process-stage-modal' : undefined}
         open={draftStageChooserOpen}
-        onCancel={() => setDraftStageChooserOpen(false)}
+        onCancel={() => {
+          setDraftStageChooserOpen(false);
+          if (draftStageChooserReturnToEditor) {
+            setIsDraftModalOpen(true);
+          }
+          setDraftStageChooserReturnToEditor(false);
+        }}
         footer={null}
         width={isMobileProcessViewport ? '100vw' : 560}
         centered={!isMobileProcessViewport}
         destroyOnHidden
+        zIndex={10003}
         style={responsiveProcessModalStyle}
         styles={stageModalStyles}
       >
@@ -10581,6 +10635,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             className="w-full rounded-lg kalam-btn-brand"
             onClick={() => {
               setDraftStageChooserOpen(false);
+              setDraftStageChooserReturnToEditor(false);
               openDraftStageModal(null, 'stage');
             }}
           >
@@ -11117,6 +11172,18 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           </div>
           {draftModalTabKey === 'stage' && (
             <div className="grid grid-cols-12 gap-3 pt-2">
+                    {isProcessTemplateModule ? (
+                      <div className="col-span-12 flex justify-end">
+                        <Button
+                          htmlType="button"
+                          icon={<CopyOutlined />}
+                          onClick={openDraftStageCopyChooserFromEditor}
+                          className="rounded-lg"
+                        >
+                          کپی مرحله از الگوی دیگر
+                        </Button>
+                      </div>
+                    ) : null}
                     <div className="col-span-9">
                       <Form.Item
                         name="name"
