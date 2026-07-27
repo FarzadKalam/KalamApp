@@ -3,7 +3,6 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   compareIsoAsc,
   EMPTY_TIMELINE_PAYLOAD,
-  isMissingRpcError,
   normalizeTimelinePayload,
   type NotificationReadModel,
   type NotificationTimelinePayload,
@@ -30,7 +29,6 @@ type TimelineCacheEntry<TItem> = {
 };
 const _internalTimelineCache = new Map<string, TimelineCacheEntry<any>>();
 const TIMELINE_CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
-let _internalTimelineV2RpcAvailable = true;
 
 const buildCacheKey = (scopeKey: string | null | undefined, conversationKey: string) =>
   `${String(scopeKey || 'default').trim() || 'default'}:${conversationKey}`;
@@ -73,35 +71,13 @@ export const prefetchInternalConversationTimeline = async <TItem,>({
   ) return;
   _internalTimelinePrefetchInFlight.add(normalizedConversationKey);
   try {
-    if (_internalTimelineV2RpcAvailable) {
-      const { data, error } = await supabase.rpc('get_internal_conversation_timeline_v2', {
-        p_conversation_key: normalizedConversationKey,
-        p_before_cursor: null,
-        p_limit: pageSize,
-      });
-      if (!error) {
-        const payload = normalizeTimelinePayload<TItem>(data);
-        _internalTimelineCache.set(cacheKey, {
-          payload: { ...payload, items: sortByDate(payload.items || []) },
-          fetchedAt: Date.now(),
-        });
-        return;
-      }
-      if (isMissingRpcError(error)) {
-        _internalTimelineV2RpcAvailable = false;
-      } else {
-        return;
-      }
-    }
-
-    const { data: fallbackData, error: fallbackError } = await supabase.rpc('get_internal_conversation_timeline', {
+    const { data, error } = await supabase.rpc('get_internal_communication_timeline_v3', {
       p_conversation_key: normalizedConversationKey,
       p_limit: pageSize,
       p_before_cursor: null,
-      p_include_unread_window: false,
     });
-    if (fallbackError) return;
-    const payload = normalizeTimelinePayload<TItem>(fallbackData);
+    if (error) return;
+    const payload = normalizeTimelinePayload<TItem>(data);
     _internalTimelineCache.set(cacheKey, {
       payload: { ...payload, items: sortByDate(payload.items || []) },
       fetchedAt: Date.now(),
@@ -128,7 +104,6 @@ export const useInternalConversationTimeline = <TItem,>({
   const [initialAnchorId, setInitialAnchorId] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [available, setAvailable] = useState(true);
-  const [timelineV2ApiAvailable, setTimelineV2ApiAvailable] = useState(_internalTimelineV2RpcAvailable);
   const [readModel, setReadModel] = useState<NotificationReadModel>('item');
   const itemsRef = useRef<TItem[]>([]);
   const normalizedConversationKey = String(conversationKey || '').trim();
@@ -146,7 +121,6 @@ export const useInternalConversationTimeline = <TItem,>({
   useEffect(() => {
     if (enabled) {
       setAvailable(true);
-      setTimelineV2ApiAvailable(_internalTimelineV2RpcAvailable);
     }
   }, [enabled]);
 
@@ -211,39 +185,16 @@ export const useInternalConversationTimeline = <TItem,>({
   }, [enabled, conversationKey, timelineCacheKey, applyPayload]);
 
   const fetchTimelinePage = useCallback(async (beforeCursor: string | null) => {
-    if (timelineV2ApiAvailable) {
-      const { data, error } = await supabase.rpc('get_internal_conversation_timeline_v2', {
-        p_conversation_key: conversationKey,
-        p_before_cursor: beforeCursor,
-        p_limit: pageSize,
-      });
-      if (!error) {
-        return normalizeTimelinePayload<TItem>(data);
-      }
-      if (isMissingRpcError(error)) {
-        _internalTimelineV2RpcAvailable = false;
-        setTimelineV2ApiAvailable(false);
-      } else {
-        throw error;
-      }
-    }
-
-    const { data, error } = await supabase.rpc('get_internal_conversation_timeline', {
+    const { data, error } = await supabase.rpc('get_internal_communication_timeline_v3', {
       p_conversation_key: conversationKey,
       p_limit: pageSize,
       p_before_cursor: beforeCursor,
-      // Avoid the legacy unread-window path, which can return the entire backlog.
-      p_include_unread_window: false,
     });
     if (error) {
-      if (isMissingRpcError(error)) {
-        setAvailable(false);
-        return null;
-      }
       throw error;
     }
     return normalizeTimelinePayload<TItem>(data);
-  }, [conversationKey, pageSize, supabase, timelineV2ApiAvailable]);
+  }, [conversationKey, pageSize, supabase]);
 
   const refresh = useCallback(async (options?: { force?: boolean }) => {
     if (!enabled || !conversationKey) {

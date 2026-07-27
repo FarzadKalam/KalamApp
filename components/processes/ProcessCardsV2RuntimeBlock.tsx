@@ -1733,6 +1733,31 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   }, [recordData]);
 
   useEffect(() => {
+    if (!isProcessTemplateModule(normalizedModuleId) || typeof window === 'undefined') return undefined;
+    const handleTemplateStagesSaved = (event: Event) => {
+      const detail = (event as CustomEvent<any>)?.detail || {};
+      if (normalizeText(detail?.moduleId) !== 'process_templates') return;
+      if (normalizeText(detail?.recordId) !== normalizedRecordId) return;
+      const nextStages = Array.isArray(detail?.stages) ? detail.stages : [];
+      templateStagesRef.current = nextStages;
+      setTemplateStages(nextStages);
+      setDraftStagesOverride(null);
+      processRuntimeBlockCache.delete(cacheKey);
+      setCardOverrides((current) => {
+        const templateCardKey = `template:${normalizedRecordId}`;
+        if (!Object.prototype.hasOwnProperty.call(current, templateCardKey)) return current;
+        const next = { ...current };
+        delete next[templateCardKey];
+        return next;
+      });
+    };
+    window.addEventListener('kalamapp:process-template-stages-saved', handleTemplateStagesSaved as EventListener);
+    return () => {
+      window.removeEventListener('kalamapp:process-template-stages-saved', handleTemplateStagesSaved as EventListener);
+    };
+  }, [cacheKey, normalizedModuleId, normalizedRecordId]);
+
+  useEffect(() => {
     // در نمای کامل snapshot فقط مقدار اولیه است و حق بازنویسی پاسخ authoritative همین بلاک را ندارد.
     if (!runtimeSnapshot || variant === 'full' || runtimeSnapshot.loaded === false) return;
     if (

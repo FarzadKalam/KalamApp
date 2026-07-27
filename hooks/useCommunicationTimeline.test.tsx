@@ -26,33 +26,31 @@ describe('communication timeline fast path', () => {
     }));
 
     await waitFor(() => expect(rpc).toHaveBeenCalledOnce());
-    expect(rpc).toHaveBeenCalledWith('get_internal_conversation_timeline_v2', expect.any(Object));
+    expect(rpc).toHaveBeenCalledWith('get_internal_communication_timeline_v3', expect.any(Object));
   });
 
-  it('uses the bounded legacy RPC only when the dedicated internal RPC is unavailable', async () => {
-    const rpc = vi.fn()
-      .mockResolvedValueOnce({ data: null, error: { code: 'PGRST202', message: 'Could not find the function' } })
-      .mockResolvedValueOnce({
-        data: timelinePayload([{ id: 'legacy-message', created_at: '2026-07-27T15:12:37.000Z' }]),
-        error: null,
-      });
-    const supabase = { rpc } as any;
-
-    const { result } = renderHook(() => useInternalConversationTimeline({
-      supabase,
-      enabled: true,
-      conversationKey: 'direct:user-a:user-b',
-      cacheScopeKey: 'legacy-internal-rpc',
-    }));
-
-    await waitFor(() => expect(result.current.items.map((item) => item.id)).toEqual(['legacy-message']));
-    expect(rpc).toHaveBeenNthCalledWith(1, 'get_internal_conversation_timeline_v2', expect.any(Object));
-    expect(rpc).toHaveBeenNthCalledWith(2, 'get_internal_conversation_timeline', {
-      p_conversation_key: 'direct:user-a:user-b',
-      p_limit: 10,
-      p_before_cursor: null,
-      p_include_unread_window: false,
+  it('does not fall back to a legacy internal timeline RPC', async () => {
+    const rpc = vi.fn().mockResolvedValue({
+      data: null,
+      error: { code: 'PGRST202', message: 'Could not find the function' },
     });
+    const supabase = { rpc } as any;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      renderHook(() => useInternalConversationTimeline({
+        supabase,
+        enabled: true,
+        conversationKey: 'direct:user-a:user-b',
+        cacheScopeKey: 'no-legacy-internal-rpc',
+      }));
+
+      await waitFor(() => expect(rpc).toHaveBeenCalledOnce());
+      expect(rpc).toHaveBeenCalledWith('get_internal_communication_timeline_v3', expect.any(Object));
+      expect(rpc.mock.calls.some(([name]) => name === 'get_internal_conversation_timeline')).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('does not treat a schema error as a missing unified RPC', async () => {
@@ -137,7 +135,7 @@ describe('communication timeline fast path', () => {
     expect(fallbackLoadInitial).not.toHaveBeenCalled();
   });
 
-  it('merges newer internal conversation summaries from the notes fallback', async () => {
+  it('keeps internal conversation summaries on the unified RPC source', async () => {
     const rpc = vi.fn().mockResolvedValue({
       data: [{
         section: 'notes',
@@ -199,8 +197,8 @@ describe('communication timeline fast path', () => {
       });
     });
     await waitFor(() => {
-      expect(result.current.items?.[0]?.last_message_preview).toBe('تستیییی');
+      expect(result.current.items?.[0]?.last_message_preview).toBe('قدیمی');
     });
-    expect(result.current.items?.[0]?.user_id).toBe('user-b');
+    expect(fallbackLoadInitial).not.toHaveBeenCalled();
   });
 });

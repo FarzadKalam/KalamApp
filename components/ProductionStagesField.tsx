@@ -6226,6 +6226,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             }
           })();
         }
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('kalamapp:process-template-stages-saved', {
+            detail: {
+              moduleId: 'process_templates',
+              recordId: String(recordId),
+              stages: persistedStages,
+            },
+          }));
+        }
       } catch (error: any) {
         draftLocalRef.current = previousStages;
         setDraftLocal(previousStages);

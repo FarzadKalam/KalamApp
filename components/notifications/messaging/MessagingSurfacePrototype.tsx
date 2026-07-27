@@ -2837,8 +2837,13 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       if (rowOrgId && rowOrgId !== orgId) return;
       const rowAuthorId = resolveInternalAuthorId(row);
       const rowMentionUserIds = normalizeIdArray(row?.mention_user_ids);
+      const rowMentionRoleIds = normalizeIdArray(row?.mention_role_ids);
       const mightAffectCurrentUser = rowAuthorId === profileId
         || rowMentionUserIds.includes(profileId)
+        || (
+          Boolean(liveData.profile.roleId)
+          && rowMentionRoleIds.includes(String(liveData.profile.roleId).trim())
+        )
         || (
           isInternalSystemNote(row)
           && canCurrentUserAccessInternalSystemNote(row, profileId, liveData.profile.roleId)

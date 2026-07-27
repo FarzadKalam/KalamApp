@@ -129,24 +129,25 @@ export const useNotificationConversationList = ({
     try {
       let data: any = null;
       let error: any = null;
-      if (v2Available) {
-        ({ data, error } = section === 'notes'
-          ? await supabase.rpc('get_internal_communication_conversations_v3', {
-            p_before_cursor: null,
-            p_limit: 80,
-          })
-          : await supabase.rpc('get_communication_conversations_v2', {
-            p_channel: 'bot',
-            p_before_cursor: null,
-            p_limit: 80,
-          }));
-        if (error && isMissingRpcError(error) && section === 'notes') {
-          ({ data, error } = await supabase.rpc('get_communication_conversations_v2', {
-            p_channel: 'internal',
-            p_before_cursor: null,
-            p_limit: 80,
-          }));
+      if (section === 'notes') {
+        ({ data, error } = await supabase.rpc('get_internal_communication_conversations_v3', {
+          p_before_cursor: null,
+          p_limit: 80,
+        }));
+        if (error) {
+          if (isMissingRpcError(error)) {
+            setAvailable(false);
+            setItemsState(null);
+            return null;
+          }
+          throw error;
         }
+      } else if (v2Available) {
+        ({ data, error } = await supabase.rpc('get_communication_conversations_v2', {
+          p_channel: 'bot',
+          p_before_cursor: null,
+          p_limit: 80,
+        }));
         if (error && isMissingRpcError(error)) {
           setV2Available(false);
           data = null;
@@ -155,18 +156,7 @@ export const useNotificationConversationList = ({
           throw error;
         }
       }
-      if (!v2Available || data === null) {
-        ({ data, error } = section === 'notes'
-          ? await supabase.rpc('get_communication_conversations', {
-            p_channel: 'internal',
-            p_before_cursor: null,
-            p_limit: 80,
-          })
-          : await supabase.rpc('get_notification_conversations', {
-            p_section: section,
-          }));
-      }
-      if (section === 'notes' && error && isMissingRpcError(error)) {
+      if (section !== 'notes' && (!v2Available || data === null)) {
         ({ data, error } = await supabase.rpc('get_notification_conversations', {
           p_section: section,
         }));
@@ -182,7 +172,7 @@ export const useNotificationConversationList = ({
       let nextItems = Array.isArray(data)
         ? (data as NotificationConversationSummary[])
         : [];
-      if (mergeFallbackInitial && fallbackLoadInitial) {
+      if (section !== 'notes' && mergeFallbackInitial && fallbackLoadInitial) {
         // The communication RPC is the fast, paginated source of truth for the
         // first paint. Publish it before running compatibility loaders, which
         // can require several larger table queries on older installations.
