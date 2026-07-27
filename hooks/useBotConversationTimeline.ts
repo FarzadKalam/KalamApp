@@ -9,15 +9,11 @@ import {
   type NotificationTimelinePayload,
 } from '../utils/notificationConversationRpc';
 
-type LegacyLoader<TItem> = () => Promise<TItem[]>;
-
 type UseBotConversationTimelineOptions<TItem> = {
   supabase: SupabaseClient<any, 'public', any>;
   enabled: boolean;
   botGroupId: string | null;
   pageSize?: number;
-  fallbackLoadInitial?: LegacyLoader<TItem>;
-  fallbackOnEmpty?: boolean;
   cacheScopeKey?: string | null;
 };
 
@@ -33,7 +29,6 @@ type TimelineCacheEntry<TItem> = {
 };
 const _botTimelineCache = new Map<string, TimelineCacheEntry<any>>();
 const TIMELINE_CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
-let _botUnifiedTimelineRpcAvailable = true;
 
 const buildCacheKey = (scopeKey: string | null | undefined, botGroupId: string) =>
   `${String(scopeKey || 'default').trim() || 'default'}:${botGroupId}`;
@@ -71,36 +66,13 @@ export const prefetchBotConversationTimeline = async <TItem,>({
   if (!normalizedBotGroupId || readCache<TItem>(cacheKey) || _botTimelinePrefetchInFlight.has(normalizedBotGroupId)) return;
   _botTimelinePrefetchInFlight.add(normalizedBotGroupId);
   try {
-    if (_botUnifiedTimelineRpcAvailable) {
-      const { data, error } = await supabase.rpc('get_communication_timeline', {
-        p_channel: 'bot',
-        p_conversation_key: `bot:${normalizedBotGroupId}`,
-        p_before_cursor: null,
-        p_limit: pageSize,
-      });
-      if (!error) {
-        const payload = normalizeTimelinePayload<TItem>(data);
-        _botTimelineCache.set(cacheKey, {
-          payload: { ...payload, items: sortByDate(payload.items || []) },
-          fetchedAt: Date.now(),
-        });
-        return;
-      }
-      if (isMissingRpcError(error)) {
-        _botUnifiedTimelineRpcAvailable = false;
-      } else {
-        return;
-      }
-    }
-
-    const { data: fallbackData, error: fallbackError } = await supabase.rpc('get_bot_conversation_timeline', {
+    const { data, error } = await supabase.rpc('get_bot_group_timeline_v2', {
       p_bot_group_id: normalizedBotGroupId,
       p_limit: pageSize,
       p_before_cursor: null,
-      p_include_unread_window: false,
     });
-    if (fallbackError) return;
-    const payload = normalizeTimelinePayload<TItem>(fallbackData);
+    if (error) return;
+    const payload = normalizeTimelinePayload<TItem>(data);
     _botTimelineCache.set(cacheKey, {
       payload: { ...payload, items: sortByDate(payload.items || []) },
       fetchedAt: Date.now(),
@@ -117,8 +89,6 @@ export const useBotConversationTimeline = <TItem,>({
   enabled,
   botGroupId,
   pageSize = 10,
-  fallbackLoadInitial,
-  fallbackOnEmpty = false,
   cacheScopeKey,
 }: UseBotConversationTimelineOptions<TItem>) => {
   const [items, setItemsState] = useState<TItem[]>([]);
@@ -129,7 +99,6 @@ export const useBotConversationTimeline = <TItem,>({
   const [initialAnchorId, setInitialAnchorId] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [available, setAvailable] = useState(true);
-  const [communicationApiAvailable, setCommunicationApiAvailable] = useState(_botUnifiedTimelineRpcAvailable);
   const [readModel, setReadModel] = useState<NotificationReadModel>('item');
   const itemsRef = useRef<TItem[]>([]);
   const normalizedBotGroupId = String(botGroupId || '').trim();
@@ -147,7 +116,6 @@ export const useBotConversationTimeline = <TItem,>({
   useEffect(() => {
     if (enabled) {
       setAvailable(true);
-      setCommunicationApiAvailable(_botUnifiedTimelineRpcAvailable);
     }
   }, [enabled]);
 
@@ -206,45 +174,11 @@ export const useBotConversationTimeline = <TItem,>({
     }
   }, [enabled, botGroupId, timelineCacheKey, applyPayload]);
 
-  const loadFallbackInitial = useCallback(async (options?: { preserveExistingItemsOnEmpty?: boolean }) => {
-    if (!fallbackLoadInitial) {
-      applyPayload(EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>, options);
-      return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
-    }
-    const fallbackItems = await fallbackLoadInitial();
-    const payload = {
-      ...EMPTY_TIMELINE_PAYLOAD,
-      items: sortByDate(fallbackItems || []),
-    } as NotificationTimelinePayload<TItem>;
-    applyPayload(payload, options);
-    return payload;
-  }, [applyPayload, fallbackLoadInitial]);
-
   const fetchTimelinePage = useCallback(async (beforeCursor: string | null) => {
-    if (communicationApiAvailable) {
-      const { data, error } = await supabase.rpc('get_communication_timeline', {
-        p_channel: 'bot',
-        p_conversation_key: `bot:${botGroupId}`,
-        p_before_cursor: beforeCursor,
-        p_limit: pageSize,
-      });
-      if (!error) {
-        return normalizeTimelinePayload<TItem>(data);
-      }
-      if (isMissingRpcError(error)) {
-        _botUnifiedTimelineRpcAvailable = false;
-        setCommunicationApiAvailable(false);
-      } else {
-        throw error;
-      }
-    }
-
-    const { data, error } = await supabase.rpc('get_bot_conversation_timeline', {
+    const { data, error } = await supabase.rpc('get_bot_group_timeline_v2', {
       p_bot_group_id: botGroupId,
       p_limit: pageSize,
       p_before_cursor: beforeCursor,
-      // Avoid the legacy unread-window path, which can return the entire backlog.
-      p_include_unread_window: false,
     });
     if (error) {
       if (isMissingRpcError(error)) {
@@ -254,7 +188,7 @@ export const useBotConversationTimeline = <TItem,>({
       throw error;
     }
     return normalizeTimelinePayload<TItem>(data);
-  }, [botGroupId, communicationApiAvailable, pageSize, supabase]);
+  }, [botGroupId, pageSize, supabase]);
 
   const refresh = useCallback(async (options?: { force?: boolean }) => {
     if (!enabled || !botGroupId) {
@@ -287,10 +221,7 @@ export const useBotConversationTimeline = <TItem,>({
         return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
       }
       if (!available) {
-        if (activeBotGroupIdRef.current !== requestBotGroupId) {
-          return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
-        }
-        return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
+        return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
       }
 
       const payload = await fetchTimelinePage(null);
@@ -298,14 +229,7 @@ export const useBotConversationTimeline = <TItem,>({
         return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
       }
       if (!payload) {
-        return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
-      }
-      if ((payload.items || []).length === 0 && fallbackOnEmpty && fallbackLoadInitial) {
-        const fallbackPayload = await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
-        if ((fallbackPayload.items || []).length > 0) {
-          _botTimelineCache.set(timelineCacheKey, { payload: { ...fallbackPayload, items: itemsRef.current }, fetchedAt: Date.now() });
-          return fallbackPayload;
-        }
+        return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
       }
       // Always merge with existing items: a force refresh fires while the user is
       // reading (realtime updates), and replacing would trim loaded history back
@@ -321,7 +245,7 @@ export const useBotConversationTimeline = <TItem,>({
       cacheAppliedRef.current = false;
       refreshInFlightKeysRef.current.delete(requestBotGroupId);
     }
-  }, [applyPayload, available, botGroupId, enabled, fallbackLoadInitial, fallbackOnEmpty, fetchTimelinePage, loadFallbackInitial, timelineCacheKey]);
+  }, [applyPayload, available, botGroupId, enabled, fetchTimelinePage, timelineCacheKey]);
 
   const loadOlder = useCallback(async () => {
     if (!enabled || !botGroupId || !cursor || !available || loadingOlder) return;

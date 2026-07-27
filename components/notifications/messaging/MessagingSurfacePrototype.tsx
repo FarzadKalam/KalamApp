@@ -55,6 +55,7 @@ import type { AssigneeDirectory } from '../../../utils/referenceData';
 import { clearIdentityDirectoryCache, searchIdentityOptions } from '../../../utils/identityDirectory';
 import { isMissingColumnError, isMissingTableLikeError } from '../../../utils/notificationAssigneeHelpers';
 import { parseNoteContent, resolveNoteAttachmentFileType, serializeNoteContent, type NoteAttachment } from '../../../utils/noteContent';
+import { getMessageListPreview } from '../../../utils/messagePreview';
 import { ensureNoteAttachmentShortcuts, uploadNoteAttachments } from '../../../utils/noteAttachments';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from '../../../utils/noteDispatch';
 import { shortenAttachmentsForExternalShare } from '../../../utils/fileShortLinks';
@@ -702,7 +703,9 @@ const buildInternalLiveConversations = (
         channel: 'internal' as const,
         title,
         subtitle,
-        preview: String(summary?.last_message_preview || '').trim() || (internalKind === 'system' ? 'پیام‌های سیستم' : 'گفتگوی داخلی'),
+        preview: getMessageListPreview(summary?.last_message_preview, {
+          fallback: internalKind === 'system' ? 'پیام‌های سیستم' : 'گفتگوی داخلی',
+        }),
         time: latestAt ? safeJalaliFormat(latestAt, 'MM/DD HH:mm') || '' : '',
         lastActivityAt: latestAt || null,
         unread: Number(summary?.unread_count || 0),
@@ -733,7 +736,7 @@ const buildBotRpcConversations = (summaries: NotificationConversationSummary[] |
         channel: 'bot_group' as const,
         title,
         subtitle: `${channelLabel} - ${String(summary?.subtitle || title).trim() || 'گروه بات'}`,
-        preview: String(summary?.last_message_preview || '').trim() || 'گفتگوی بات',
+        preview: getMessageListPreview(summary?.last_message_preview, { fallback: 'گفتگوی بات' }),
         time: latestAt ? safeJalaliFormat(latestAt, 'MM/DD HH:mm') || '' : '',
         lastActivityAt: latestAt || null,
         unread: Math.max(0, Number(summary?.unread_count || 0)),
@@ -759,10 +762,13 @@ const mergeBotRpcConversations = (liveConversations: Conversation[], rpcConversa
     const key = normalizeMessagingConversationKey(rpcConversation.key);
     if (!key) return;
     const liveConversation = merged.get(key);
+    const livePreview = String(liveConversation?.preview || '').trim();
+    const liveHasAttachmentPreview = /(?:\s·\s(?:تصویر|ویدیو|پیام صوتی|فایل صوتی|فایل)|پیوست$)/.test(livePreview);
     merged.set(key, liveConversation
       ? {
           ...liveConversation,
           ...rpcConversation,
+          preview: liveHasAttachmentPreview ? livePreview : rpcConversation.preview,
           platform: liveConversation.platform || rpcConversation.platform,
           relatedModuleId: liveConversation.relatedModuleId,
           relatedRecordId: liveConversation.relatedRecordId,
@@ -777,12 +783,9 @@ const mergeBotRpcConversations = (liveConversations: Conversation[], rpcConversa
 };
 
 const getInternalNotePreview = (row: any) => {
-  const parsed = parseNoteContent(row?.content ?? row?.body ?? row?.message_text ?? '');
-  const text = String(parsed.text || '').trim();
-  if (text) return text;
-  const firstAttachmentName = String(parsed.attachments?.[0]?.name || '').trim();
-  if (firstAttachmentName) return firstAttachmentName;
-  return parsed.attachments?.length ? 'فایل یا تصویر پیوست' : 'پیام داخلی';
+  return getMessageListPreview(row?.content ?? row?.body ?? row?.message_text ?? '', {
+    fallback: 'پیام داخلی',
+  });
 };
 
 const buildInternalConversationFallbackSummaries = (
@@ -3121,44 +3124,12 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const activeBotGroupRow = activeBotGroupId
     ? (liveData.botGroups || []).find((row: any) => String(row?.id || '').trim() === activeBotGroupId) || null
     : null;
-  const liveBotGroupFallbackRows = useMemo(() => (
-    activeBotGroupId
-      ? liveData.events
-        .filter((item) => item.conversationKey === `bot:${activeBotGroupId}` || item.conversationKey === `live:bot_group:${activeBotGroupId}`)
-        .map((item) => item.sourceRow)
-        .filter(Boolean)
-      : []
-  ), [activeBotGroupId, liveData.events]);
-  const loadActiveBotGroupFallbackRows = useMemo(() => {
-    const groupId = String(activeBotGroupId || '').trim();
-    if (!groupId) return undefined;
-    return async () => {
-      const { data, error } = await supabase
-        .from('counterparty_bot_messages')
-        .select('id,bot_group_id,direction,message_type,chat_id,provider_message_id,content_text,file_url,file_name,mime_type,payload,created_by,created_at')
-        .eq('bot_group_id', groupId)
-        .order('created_at', { ascending: false })
-        .limit(80);
-      if (error) throw error;
-      const directRows = ((data || []) as any[]).reverse();
-      const merged = new Map<string, any>();
-      [...liveBotGroupFallbackRows, ...directRows].forEach((row: any) => {
-        const key = String(row?.id || '').trim();
-        if (key) merged.set(key, row);
-      });
-      return Array.from(merged.values()).sort((left, right) => (
-        new Date(left?.created_at || 0).getTime() - new Date(right?.created_at || 0).getTime()
-      ));
-    };
-  }, [activeBotGroupId, liveBotGroupFallbackRows]);
   const botTimeline = useBotConversationTimeline<any>({
     supabase,
     enabled: Boolean(liveData.profile.id && activeConversation.channel === 'bot_group' && activeBotGroupId),
     botGroupId: activeBotGroupId || null,
     pageSize: 40,
     cacheScopeKey,
-    fallbackLoadInitial: loadActiveBotGroupFallbackRows,
-    fallbackOnEmpty: true,
   });
   useEffect(() => {
     botTimelineRefreshRef.current = botTimeline.refresh;
@@ -4541,7 +4512,10 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       .update({
         last_outbound_at: nowIso,
         last_message_at: nowIso,
-        last_message_preview: String(text || '').trim() || String(attachments[0]?.name || '').trim() || null,
+        last_message_preview: getMessageListPreview(text, {
+          attachments,
+          fallback: 'پیام بات',
+        }) || null,
       })
       .eq('id', thread.id);
     if (threadError) throw threadError;

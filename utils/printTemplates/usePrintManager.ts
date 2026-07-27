@@ -1262,6 +1262,9 @@ export const usePrintManager = ({
 
   useEffect(() => {
     if (!selectedTemplateId || !userPreferencesReady) return;
+    // Do not persist an empty selection while templates or runtime fields are
+    // still loading. Otherwise that transient state hides every system block.
+    if (!printableFieldsForTemplate.length) return;
     const allowedKeySet = new Set(
       (printableFieldsForTemplate || [])
         .map((field: any) => String(field?.key || '').trim())
@@ -2835,7 +2838,20 @@ export const usePrintManager = ({
 
   const refreshTemplates = useCallback(async () => {
     await loadTemplates(true);
-  }, [loadTemplates]);
+    // Rebuild the active preview from current record data and the latest
+    // template definition. Removing only this template's transient selection
+    // lets the normal preference/default resolver run again without touching
+    // saved choices for other templates.
+    setSelectedPrintFields((prev) => {
+      if (!Object.prototype.hasOwnProperty.call(prev, selectedTemplateId)) return prev;
+      const next = { ...prev };
+      delete next[selectedTemplateId];
+      return next;
+    });
+    setForcedPrintPageCount(null);
+    preparedPrintPageCountRef.current = null;
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+  }, [loadTemplates, selectedTemplateId]);
 
   const previewMeta = useMemo(
     () => ({

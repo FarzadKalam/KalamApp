@@ -104,6 +104,23 @@ describe('formatListCellValue assignee display', () => {
     expect(html).toContain('سطر اول\nسطر دوم');
   });
 
+  it('keeps price and date columns on one compact line in list print', () => {
+    const html = buildListTableHtml(
+      [
+        { key: 'invoice_date', label: 'تاریخ', type: FieldType.DATE },
+        { key: 'total', label: 'مبلغ', type: FieldType.PRICE },
+        { key: 'name', label: 'عنوان', type: FieldType.TEXT },
+        { key: 'status', label: 'وضعیت', type: FieldType.TEXT },
+        { key: 'code', label: 'کد', type: FieldType.TEXT },
+        { key: 'owner', label: 'مسئول', type: FieldType.TEXT },
+      ],
+      [{ invoice_date: '2026-07-28', total: 123456789, name: 'نمونه' }],
+    );
+
+    expect(html).toContain('white-space:nowrap');
+    expect(html).toContain('font-size:8.5px');
+  });
+
   it('uses raw storage images for catalog list cards by default', () => {
     const html = buildListCatalogHtml(
       [

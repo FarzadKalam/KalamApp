@@ -106,6 +106,26 @@ describe('module record projection', () => {
     expect(projection.initialColumns).not.toContain('bot_default_channel');
   });
 
+  it('does not request virtual bot group titles when persisted field metadata is stale', () => {
+    const projection = buildModuleRecordProjection({
+      id: 'customers',
+      table: 'customers',
+      fields: [
+        { key: 'full_name', type: FieldType.TEXT },
+        { key: 'telegram_group_title', type: FieldType.TEXT },
+        { key: 'bale_group_title', type: FieldType.TEXT },
+        { key: 'rubika_group_title', type: FieldType.TEXT },
+      ],
+    } as any);
+
+    expect(projection.initialColumns).toEqual(expect.arrayContaining(['id', 'full_name']));
+    expect(projection.initialColumns).not.toEqual(expect.arrayContaining([
+      'telegram_group_title',
+      'bale_group_title',
+      'rubika_group_title',
+    ]));
+  });
+
   it('always reads a complete financial document so invoice lines cannot be omitted', () => {
     const projection = buildModuleRecordProjection({
       id: 'invoices',

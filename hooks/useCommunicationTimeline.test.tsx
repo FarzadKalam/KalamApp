@@ -112,27 +112,23 @@ describe('communication timeline fast path', () => {
     expect(result.current.items.map((item) => item.id)).toEqual(['new-message']);
   });
 
-  it('uses the unified bot RPC without invoking the legacy loader', async () => {
+  it('uses the dedicated bot-group timeline RPC', async () => {
     const rpc = vi.fn().mockResolvedValue({ data: timelinePayload([]), error: null });
     const supabase = { rpc } as any;
-    const fallbackLoadInitial = vi.fn().mockResolvedValue([{ id: 'legacy' }]);
 
     renderHook(() => useBotConversationTimeline({
       supabase,
       enabled: true,
       botGroupId: 'bot-group-a',
       cacheScopeKey: 'bot-fast-path',
-      fallbackLoadInitial,
     }));
 
     await waitFor(() => expect(rpc).toHaveBeenCalledOnce());
-    expect(rpc).toHaveBeenCalledWith('get_communication_timeline', {
-      p_channel: 'bot',
-      p_conversation_key: 'bot:bot-group-a',
+    expect(rpc).toHaveBeenCalledWith('get_bot_group_timeline_v2', {
+      p_bot_group_id: 'bot-group-a',
       p_before_cursor: null,
       p_limit: 10,
     });
-    expect(fallbackLoadInitial).not.toHaveBeenCalled();
   });
 
   it('keeps internal conversation summaries on the unified RPC source', async () => {

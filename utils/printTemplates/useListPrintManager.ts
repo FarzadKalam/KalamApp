@@ -287,6 +287,7 @@ export const useListPrintManager = ({
 
   useEffect(() => {
     if (!selectedTemplateId || !userPreferencesReady) return;
+    if (!printableFieldsForTemplate.length) return;
     const allowedKeySet = new Set(
       printableFieldsForTemplate
         .map((field) => String(field?.key || '').trim())

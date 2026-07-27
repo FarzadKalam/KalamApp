@@ -16,6 +16,7 @@ import { safeJalaliFormat, toPersianNumber } from '../../../utils/persianNumberF
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { BOT_CHANNEL_LABELS_FA, isBotChannel, type BotChannel, type BotTargetModuleId } from '../../../utils/botPlatform';
 import { collectBotMessageMediaFileRefs, extractBotMessageAttachments } from '../../../utils/messageAttachments';
+import { getMessageListPreview } from '../../../utils/messagePreview';
 import { getActiveChannelSettings } from '../../../utils/channelSettings';
 import { isAbortLikeError } from '../../../utils/requestErrors';
 import { createWorkflowEvaluationContext, evaluateWorkflowConditions } from '../../../utils/workflowRuntime';
@@ -1256,7 +1257,10 @@ const buildBotGroupLiveModels = (
       channel: 'bot_group',
       title: relatedTitle || group.group_title || 'گروه بات',
       subtitle: `${channelLabel} - ${group.group_title || 'گروه بات'}`,
-      preview: String(latest?.content_text || group.group_title || 'گفتگوی بات').trim(),
+      preview: getMessageListPreview(latest?.content_text, {
+        attachments: buildRenderableBotAttachments(latest as BotMessageRow, platform || null),
+        fallback: group.group_title || 'گفتگوی بات',
+      }),
       time: formatTime(latest?.created_at || group.last_inbound_at || group.last_outbound_at || group.updated_at),
       lastActivityAt: String(latest?.created_at || group.last_inbound_at || group.last_outbound_at || group.updated_at || '').trim() || null,
       unread,
@@ -1343,7 +1347,10 @@ const buildBotDirectLiveModels = (
       channel: 'bot_direct',
       title: relatedTitle || thread.display_name || thread.username || 'پیام شخصی بات',
       subtitle: `${channelLabel} - ${target.moduleId && target.recordId ? 'اتصال‌شده' : 'اتصال‌نشده'}`,
-      preview: String(latest?.content_text || thread.last_message_preview || 'گفتگوی شخصی بات').trim(),
+      preview: getMessageListPreview(latest?.content_text || thread.last_message_preview, {
+        attachments: buildRenderableBotAttachments(latest as BotMessageRow, platform || null),
+        fallback: 'گفتگوی شخصی بات',
+      }),
       time: formatTime(latest?.created_at || thread.last_message_at || thread.last_seen_at),
       lastActivityAt: String(latest?.created_at || thread.last_message_at || thread.last_seen_at || '').trim() || null,
       unread,

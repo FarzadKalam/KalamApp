@@ -37,6 +37,19 @@ const MULTILINE_PRINT_FIELD_TYPES = new Set([FieldType.LONG_TEXT, FieldType.SUPE
 const isMultilinePrintField = (field: ListFieldDefinition) =>
   MULTILINE_PRINT_FIELD_TYPES.has(field?.type as FieldType);
 
+const isCompactSingleLinePrintField = (field: ListFieldDefinition) => {
+  const type = String(field?.type || '').toLowerCase();
+  return [FieldType.PRICE, FieldType.DATE, FieldType.DATETIME, FieldType.TIME]
+    .map((value) => String(value).toLowerCase())
+    .includes(type);
+};
+
+const getCompactSingleLinePrintStyle = (field: ListFieldDefinition, columnCount: number) => {
+  if (!isCompactSingleLinePrintField(field)) return '';
+  const fontSize = columnCount >= 10 ? '6.5px' : columnCount >= 8 ? '7.5px' : columnCount >= 6 ? '8.5px' : '10px';
+  return `white-space:nowrap; word-break:normal; overflow:hidden; text-overflow:ellipsis; font-size:${fontSize}; line-height:1.45; font-variant-numeric:tabular-nums;`;
+};
+
 const escapeHtml = (value: any) =>
   String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -313,7 +326,8 @@ export const buildListTableHtml = (
             const multilineStyle = isMultilinePrintField(field)
               ? 'white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.8;'
               : '';
-            return `<td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top; word-break:break-word; ${multilineStyle}">${valueHtml}</td>`;
+            const compactSingleLineStyle = getCompactSingleLinePrintStyle(field, fields.length);
+            return `<td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top; word-break:break-word; ${multilineStyle}${compactSingleLineStyle}">${valueHtml}</td>`;
           })
           .join('');
         return `<tr><td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; text-align:center; background:rgba(var(--brand-50-rgb),0.18);">${toPersianNumber(startIndex + index + 1)}</td>${cells}</tr>`;
@@ -350,7 +364,7 @@ export const buildListSummaryTableHtml = (
       return `
 <tr>
   <td style="width:34%; border:1px solid var(--table-border-color, #d1d5db); padding:7px 8px; background:rgba(var(--brand-50-rgb),0.32); font-weight:800;">${escapeHtml(field.label)}</td>
-  <td style="border:1px solid var(--table-border-color, #d1d5db); padding:7px 8px; vertical-align:top; word-break:break-word;">${valueHtml}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:7px 8px; vertical-align:top; word-break:break-word; ${getCompactSingleLinePrintStyle(field, summary.fields.length)}">${valueHtml}</td>
 </tr>`.trim();
     })
     .join('');
