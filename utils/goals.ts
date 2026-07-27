@@ -600,6 +600,7 @@ const loadServerFilteredGoalRanges = async (
     const module = MODULES[goal.module_id];
     if (!module) return null;
     const dateField = resolveFilterFieldKey(goal);
+    const dateFieldMeta = module.fields.find((field) => field.key === dateField);
     const buildItem = (key: string, range: { startIso: string; endIso: string }) => ({
       key,
       goalId: goal.id,
@@ -607,6 +608,7 @@ const loadServerFilteredGoalRanges = async (
       table: module.table,
       selectColumns,
       dateField,
+      dateOnly: dateFieldMeta?.type === FieldType.DATE,
       startIso: range.startIso,
       endIso: range.endIso,
       conditionsAll: goal.conditions_all || [],

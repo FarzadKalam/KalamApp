@@ -45,11 +45,20 @@ const isCompactSingleLinePrintField = (field: ListFieldDefinition) => {
     .includes(type);
 };
 
-const getCompactSingleLinePrintStyle = (field: ListFieldDefinition, columnCount: number) => {
+const getCompactSingleLinePrintStyle = (field: ListFieldDefinition) => {
   if (!isCompactSingleLinePrintField(field)) return '';
-  const fontSize = columnCount >= 10 ? '6.5px' : columnCount >= 8 ? '7.5px' : columnCount >= 6 ? '8.5px' : '10px';
-  return `white-space:nowrap; word-break:normal; overflow:hidden; text-overflow:ellipsis; font-size:${fontSize}; line-height:1.45; font-variant-numeric:tabular-nums;`;
+  return 'white-space:nowrap; word-break:normal; overflow:hidden; text-overflow:ellipsis; line-height:1.45; font-variant-numeric:tabular-nums;';
 };
+
+const isCompactSingleLinePrintCell = (field: ListFieldDefinition) =>
+  isCompactSingleLinePrintField(field)
+    ? ' data-print-auto-fit="compact"'
+    : '';
+
+const wrapCompactSingleLinePrintValue = (field: ListFieldDefinition, valueHtml: string) =>
+  isCompactSingleLinePrintField(field)
+    ? `<span data-print-auto-fit-content style="display:inline-block; max-width:100%; white-space:nowrap;">${valueHtml}</span>`
+    : valueHtml;
 
 const escapeHtml = (value: any) =>
   String(value ?? '')
@@ -304,6 +313,13 @@ export const formatListCellHtml = (
     return `<div style="display:flex;justify-content:center;align-items:center;width:52px;height:52px;overflow:hidden;border-radius:10px;border:1px solid rgba(148,163,184,0.35);background:#fff;margin:0 auto;"><img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(field.label || key)}" style="${getPrintFramedImageStyle(normalizedImageDisplayMode)}border-radius:10px;" /></div>`;
   }
 
+  if (field?.type === FieldType.PRICE) {
+    if (rawValue === null || rawValue === undefined || rawValue === '') return '-';
+    const formatted = formatPersianPrice(rawValue);
+    const unit = String(currencyLabel || '').trim();
+    return `<span style="display:inline-flex; align-items:baseline; gap:3px; max-width:100%; white-space:nowrap; direction:rtl;"><span style="font-weight:800; font-variant-numeric:tabular-nums;">${escapeHtml(formatted)}</span>${unit ? `<span style="font-size:0.76em; font-weight:500; color:#64748b;">${escapeHtml(unit)}</span>` : ''}</span>`;
+  }
+
   if (isMultilinePrintField(field)) return normalizeRichTextHtml(rawValue);
 
   return escapeHtml(formatListCellValue(field, row, relationOptions, currencyLabel));
@@ -329,8 +345,8 @@ export const buildListTableHtml = (
             const multilineStyle = isMultilinePrintField(field)
               ? 'white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.8;'
               : '';
-            const compactSingleLineStyle = getCompactSingleLinePrintStyle(field, fields.length);
-            return `<td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top; word-break:break-word; ${multilineStyle}${compactSingleLineStyle}">${valueHtml}</td>`;
+            const compactSingleLineStyle = getCompactSingleLinePrintStyle(field);
+            return `<td${isCompactSingleLinePrintCell(field)} style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top; word-break:break-word; ${multilineStyle}${compactSingleLineStyle}">${wrapCompactSingleLinePrintValue(field, valueHtml)}</td>`;
           })
           .join('');
         return `<tr><td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; text-align:center; background:rgba(var(--brand-50-rgb),0.18);">${toPersianNumber(startIndex + index + 1)}</td>${cells}</tr>`;
@@ -367,7 +383,7 @@ export const buildListSummaryTableHtml = (
       return `
 <tr>
   <td style="width:34%; border:1px solid var(--table-border-color, #d1d5db); padding:7px 8px; background:rgba(var(--brand-50-rgb),0.32); font-weight:800;">${escapeHtml(field.label)}</td>
-      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:7px 8px; vertical-align:top; word-break:break-word; ${getCompactSingleLinePrintStyle(field, summary.fields.length)}">${valueHtml}</td>
+      <td${isCompactSingleLinePrintCell(field)} style="border:1px solid var(--table-border-color, #d1d5db); padding:7px 8px; vertical-align:top; word-break:break-word; ${getCompactSingleLinePrintStyle(field)}">${wrapCompactSingleLinePrintValue(field, valueHtml)}</td>
 </tr>`.trim();
     })
     .join('');

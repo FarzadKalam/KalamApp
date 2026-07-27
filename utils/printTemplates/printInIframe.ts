@@ -1,4 +1,5 @@
 import { printStyles } from './styles';
+import { fitCompactPrintCells } from './fitCompactPrintCells';
 
 interface PrintInIframeOptions {
   pageSize?: string;
@@ -192,6 +193,7 @@ export const printInIframe = async (options: PrintInIframeOptions) => {
     await waitForFonts();
     await waitForImages(root);
     await waitForPaint();
+    fitCompactPrintCells(root);
     await delay(PRINT_SETTLE_DELAY_MS);
     await waitForPaint();
 

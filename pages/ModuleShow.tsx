@@ -5913,6 +5913,7 @@ const ModuleShow: React.FC = () => {
       field.key === 'run_stages_preview'
     );
     const isLongTextField = field.type === FieldType.LONG_TEXT || field.type === FieldType.SUPER_LONG_TEXT;
+    const isSuperLongTextField = field.type === FieldType.SUPER_LONG_TEXT;
     const compactMode = (field.type === FieldType.PROGRESS_STAGES || isProcessDraftField) ? false : true;
 
     if (field.type === FieldType.PROGRESS_STAGES || isProcessDraftField) {

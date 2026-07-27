@@ -285,44 +285,52 @@ Deno.serve(async (request) => {
     const output: Record<string, any> = {};
     await Promise.all(items.map(async (item: any) => {
       const key = String(item?.key || '').trim();
-      const goalId = String(item?.goalId || '').trim();
-      const table = String(item?.table || '').trim();
-      const moduleId = String(item?.moduleId || '').trim();
-      const dateField = String(item?.dateField || '').trim();
-      const columns = Array.from(new Set(['id', 'org_id', ...safeColumns(item?.selectColumns), dateField])).filter(Boolean);
-      const conditionsAll = Array.isArray(item?.conditionsAll) ? item.conditionsAll : [];
-      const conditionsAny = Array.isArray(item?.conditionsAny) ? item.conditionsAny : [];
-      if (!key || !goalId || !moduleId || !safeTableName(table) || !/^[a-z][a-z0-9_]*$/.test(dateField)) {
-        output[key] = { mode: 'fallback' };
-        return;
+      try {
+        const goalId = String(item?.goalId || '').trim();
+        const table = String(item?.table || '').trim();
+        const moduleId = String(item?.moduleId || '').trim();
+        const dateField = String(item?.dateField || '').trim();
+        const columns = Array.from(new Set(['id', 'org_id', ...safeColumns(item?.selectColumns), dateField])).filter(Boolean);
+        const conditionsAll = Array.isArray(item?.conditionsAll) ? item.conditionsAll : [];
+        const conditionsAny = Array.isArray(item?.conditionsAny) ? item.conditionsAny : [];
+        if (!key || !goalId || !moduleId || !safeTableName(table) || !/^[a-z][a-z0-9_]*$/.test(dateField)) {
+          output[key] = { mode: 'fallback' };
+          return;
+        }
+        const goalUrl = new URL(`${supabaseUrl}/rest/v1/goals`);
+        goalUrl.searchParams.set('select', 'id,org_id,updated_at');
+        goalUrl.searchParams.set('id', `eq.${goalId}`);
+        goalUrl.searchParams.set('is_active', 'eq.true');
+        const goalResponse = await fetch(goalUrl, { headers });
+        if (!goalResponse.ok) throw new Error(`goal_access_failed:${goalResponse.status}`);
+        const goal = (await goalResponse.json())?.[0];
+        if (!goal?.org_id) {
+          output[key] = { mode: 'fallback' };
+          return;
+        }
+        const startIso = String(item?.startIso || '').trim();
+        const endIso = String(item?.endIso || '').trim();
+        if (!startIso || !endIso) {
+          output[key] = { mode: 'fallback' };
+          return;
+        }
+        const dateOnly = item?.dateOnly === true;
+        const rangeStart = dateOnly ? startIso.slice(0, 10) : startIso;
+        const rangeEnd = dateOnly ? endIso.slice(0, 10) : endIso;
+        // نتیجهٔ خام به تعریف یک هدف وابسته نیست؛ اشتراک آن بین هدف‌های هم‌ماژول
+        // فشار N×M را حذف می‌کند. کلید شامل کاربر و سازمان است تا پاسخ RLS هرگز
+        // میان دو کاربر یا tenant مشترک نشود.
+        const cacheKey = [authorization.slice(-32), goal.org_id, table, dateField, columns.join(','), rangeStart, rangeEnd].join('::');
+        const rows = await fetchRows({ url: supabaseUrl, headers, table, columns, orgId: goal.org_id, dateField, startIso: rangeStart, endIso: rangeEnd, cacheKey });
+        const resolveField = getConditionResolver({ url: supabaseUrl, headers, orgId: goal.org_id, moduleId });
+        const passed = await Promise.all(rows.map(async (row) =>
+          await passesConditions(row, conditionsAll, conditionsAny, resolveField) ? row : null
+        ));
+        output[key] = { mode: 'server', rows: passed.filter(Boolean) };
+      } catch {
+        // یک هدف ناسازگار یا موقتاً غیرقابل‌دسترسی نباید کل کارت‌های هدف را از کار بیندازد.
+        if (key) output[key] = { mode: 'fallback' };
       }
-      const goalUrl = new URL(`${supabaseUrl}/rest/v1/goals`);
-      goalUrl.searchParams.set('select', 'id,org_id,updated_at');
-      goalUrl.searchParams.set('id', `eq.${goalId}`);
-      goalUrl.searchParams.set('is_active', 'eq.true');
-      const goalResponse = await fetch(goalUrl, { headers });
-      if (!goalResponse.ok) throw new Error(`goal_access_failed:${goalResponse.status}`);
-      const goal = (await goalResponse.json())?.[0];
-      if (!goal?.org_id) {
-        output[key] = { mode: 'fallback' };
-        return;
-      }
-      const startIso = String(item?.startIso || '').trim();
-      const endIso = String(item?.endIso || '').trim();
-      if (!startIso || !endIso) {
-        output[key] = { mode: 'fallback' };
-        return;
-      }
-      // نتیجهٔ خام به تعریف یک هدف وابسته نیست؛ اشتراک آن بین هدف‌های هم‌ماژول
-      // فشار N×M را حذف می‌کند. کلید شامل کاربر و سازمان است تا پاسخ RLS هرگز
-      // میان دو کاربر یا tenant مشترک نشود.
-      const cacheKey = [authorization.slice(-32), goal.org_id, table, dateField, columns.join(','), startIso, endIso].join('::');
-      const rows = await fetchRows({ url: supabaseUrl, headers, table, columns, orgId: goal.org_id, dateField, startIso, endIso, cacheKey });
-      const resolveField = getConditionResolver({ url: supabaseUrl, headers, orgId: goal.org_id, moduleId });
-      const passed = await Promise.all(rows.map(async (row) =>
-        await passesConditions(row, conditionsAll, conditionsAny, resolveField) ? row : null
-      ));
-      output[key] = { mode: 'server', rows: passed.filter(Boolean) };
     }));
     return json(200, { items: output });
   } catch (error) {

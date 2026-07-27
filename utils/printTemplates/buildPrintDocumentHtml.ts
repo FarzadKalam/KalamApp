@@ -1,4 +1,5 @@
 import { printStyles } from './styles';
+import { getCompactPrintCellsFitScript } from './fitCompactPrintCells';
 import peydaExtraLightUrl from '../../font/peyada/PeydaWeb-ExtraLight.woff2?url';
 import peydaRegularUrl from '../../font/peyada/PeydaWeb-Regular.woff2?url';
 import peydaSemiBoldUrl from '../../font/peyada/PeydaWeb-SemiBold.woff2?url';
@@ -262,7 +263,10 @@ export const buildPrintDocumentHtml = async ({ pageSize, sourceHtml, title }: Bu
 
         withTimeout(Promise.all([waitForFonts(), waitForAssets()]), 8000)
           .catch(function () { return null; })
-          .then(function () { window.__KALAMAPP_PRINT_READY = true; });
+          .then(function () {
+            ${getCompactPrintCellsFitScript()}
+            window.__KALAMAPP_PRINT_READY = true;
+          });
       })();
     </script>
   </body>

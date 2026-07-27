@@ -104,7 +104,7 @@ describe('formatListCellValue assignee display', () => {
     expect(html).toContain('سطر اول<br>سطر دوم');
   });
 
-  it('keeps price and date columns on one compact line in list print', () => {
+  it('keeps price and date columns on one line and only marks them for per-cell fitting', () => {
     const html = buildListTableHtml(
       [
         { key: 'invoice_date', label: 'تاریخ', type: FieldType.DATE },
@@ -118,7 +118,22 @@ describe('formatListCellValue assignee display', () => {
     );
 
     expect(html).toContain('white-space:nowrap');
-    expect(html).toContain('font-size:8.5px');
+    expect(html).toContain('data-print-auto-fit="compact"');
+    expect(html).toContain('data-print-auto-fit-content');
+    expect(html).not.toContain('font-size:8.5px');
+  });
+
+  it('renders the currency name as a secondary label in list tables', () => {
+    const html = buildListTableHtml(
+      [{ key: 'total', label: 'مبلغ', type: FieldType.PRICE }],
+      [{ total: 123456 }],
+      {},
+      'تومان',
+    );
+
+    expect(html).toContain('۱۲۳٬۴۵۶');
+    expect(html).toContain('تومان');
+    expect(html).toContain('font-size:0.76em');
   });
 
   it('uses raw storage images for catalog list cards by default', () => {

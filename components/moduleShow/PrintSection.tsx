@@ -3,6 +3,7 @@ import { App, Button, Checkbox, Modal, Segmented, Tabs } from 'antd';
 import { DownOutlined, EyeOutlined, MinusOutlined, PlusOutlined, ReloadOutlined, UpOutlined } from '@ant-design/icons';
 import { createPortal } from 'react-dom';
 import { printStyles } from '../../utils/printTemplates';
+import { fitCompactPrintCells } from '../../utils/printTemplates/fitCompactPrintCells';
 import { resolveEffectivePrintFieldKeys } from '../../utils/printTemplates/printableFields';
 import AdaptiveSelectField from '../AdaptiveSelectField';
 import PrintSignatureConfigurator from './PrintSignatureConfigurator';
@@ -229,6 +230,14 @@ const PrintSection: React.FC<PrintSectionProps> = ({
       window.removeEventListener('resize', handleResize);
     };
   }, [activeTab, fitPreviewZoom, isPrintModalOpen, selectedTemplateId]);
+
+  useEffect(() => {
+    if (!isPrintModalOpen || activeTab !== 'preview') return;
+    const frame = window.requestAnimationFrame(() => {
+      fitCompactPrintCells(previewStageRef.current || document);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeTab, isPrintModalOpen, selectedTemplateId, zoom]);
 
   const handleRefresh = async (silent = false) => {
     if (!onRefreshPreview) return;
