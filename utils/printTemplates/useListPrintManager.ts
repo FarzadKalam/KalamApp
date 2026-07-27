@@ -26,6 +26,7 @@ import { prepareGeneratedPdfWindow, printAsPdf, shouldUseGeneratedPdfPrint } fro
 import { normalizeRenderedImages } from './normalizeRenderedImages';
 import { printInIframe } from './printInIframe';
 import { sanitizeSelectedPrintFieldKeys } from './fieldAccess';
+import { hasMeaningfulPrintValue } from './printableFields';
 import { loadPrintFieldPreference, savePrintFieldPreference } from './fieldPreferences';
 import { hasRenderablePrintFooterHtml } from './footerLayout';
 import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, sanitizePrintImageDisplayMode, type PrintImageDisplayMode } from './imageDisplay';
@@ -265,7 +266,14 @@ export const useListPrintManager = ({
     [companyInfo?.print_letterheads, selectedStoredTemplate?.letterheadId],
   );
 
-  const printableFieldsForTemplate = useMemo(() => printableFields || [], [printableFields]);
+  const printableFieldsForTemplate = useMemo(
+    () =>
+      (printableFields || []).map((field) => ({
+        ...field,
+        hasValue: (rows || []).some((row: any) => hasMeaningfulPrintValue(row?.[field.key], field.key)),
+      })),
+    [printableFields, rows]
+  );
   const isCatalogTemplate = useMemo(
     () => String(selectedStoredTemplate?.id || '').includes('_catalog_a4_portrait'),
     [selectedStoredTemplate?.id]
@@ -291,12 +299,12 @@ export const useListPrintManager = ({
       scope: 'list',
     });
     const rawDefaultKeys =
-      (Array.isArray(preferenceKeys) && preferenceKeys.length > 0
+      (Array.isArray(preferenceKeys)
         ? preferenceKeys
         : Array.isArray(selectedStoredTemplate?.selectedFieldKeys) && selectedStoredTemplate.selectedFieldKeys.length > 0
           ? selectedStoredTemplate.selectedFieldKeys
         : printableFieldsForTemplate
-            .filter((field) => field?.defaultSelected !== false)
+            .filter((field) => field?.defaultSelected !== false && field?.hasValue !== false)
             .map((field) => field.key)) || [];
 
     const defaultKeys = isCatalogTemplate
@@ -313,8 +321,6 @@ export const useListPrintManager = ({
           return [...imageKeys, ...contentKeys];
         })()
       : sanitizeSelectedPrintFieldKeys(rawDefaultKeys, allowedKeySet);
-
-    if (!defaultKeys.length) return;
 
     setSelectedPrintFields((prev) => {
       if (Object.prototype.hasOwnProperty.call(prev, selectedTemplateId)) return prev;
@@ -567,7 +573,8 @@ export const useListPrintManager = ({
 
   const selectedFields = useMemo(() => {
     const selected = selectedPrintFields[selectedTemplateId] || [];
-    if (selected.length === 0) return printableFieldsForTemplate;
+    const hasSelectionState = Object.prototype.hasOwnProperty.call(selectedPrintFields, selectedTemplateId);
+    if (selected.length === 0) return hasSelectionState ? [] : printableFieldsForTemplate;
     const fieldMap = new Map(
       printableFieldsForTemplate.map((field) => [String(field?.key || '').trim(), field])
     );

@@ -11,6 +11,7 @@ import { buildDefaultPrintFooterTemplate } from './footerLayout';
 import { getFieldLabelFa } from '../fieldLabel';
 import { getCanonicalModuleFields } from '../recordVariableCatalog';
 import { getPrintVariableProviderOptions } from './variableProviders';
+import { isPrintableModuleField } from './printableFields';
 
 export const PRINT_TEMPLATES_CONNECTION_TYPE = 'print_templates';
 const PRINT_TEMPLATES_LOCAL_KEY = 'kalamapp.print_templates.v1';
@@ -134,16 +135,6 @@ const getModuleBlockTitleMap = (module: any) =>
       .map((block: any) => [String(block.id), String(block?.titles?.fa || block.id)])
   );
 
-const isFieldPrintableFromBlockConfig = (module: any, field: any) => {
-  const blockId = String(field?.blockId || '').trim();
-  const isBlockField = String(field?.location || '').trim().toLowerCase() === 'block' && blockId;
-  if (!isBlockField) return true;
-  const block = (Array.isArray(module?.blocks) ? module.blocks : []).find(
-    (item: any) => String(item?.id || '').trim() === blockId
-  );
-  return block?.printable !== false;
-};
-
 const getFieldGroupLabel = (module: any, field: any) => {
   const blockId = String(field?.blockId || '').trim();
   const isBlockField = String(field?.location || '').trim().toLowerCase() === 'block' && blockId;
@@ -169,6 +160,7 @@ const buildCompactFieldsTemplateForCopy = (moduleId: string, selectedFieldKeys: 
       const key = String(field?.key || '').trim();
       if (!key) return false;
       if (PRINT_COLUMN_IGNORE_KEYS.has(key)) return false;
+      if (!isPrintableModuleField(module, field)) return false;
       return shouldIncludeSystemField(selectedFieldKeys, `record.${key}`);
     })
     .forEach((field: any) => {
@@ -268,7 +260,7 @@ const getInvoiceTemplateConfig = (moduleId: string) => {
 };
 
 const buildInvoiceItemsSummaryRow = () => `
-    <tr>
+    <tr data-print-optional-field="record.global_discount_amount">
       <td colspan="2" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; font-weight:800; background:rgba(var(--brand-50-rgb),0.52); vertical-align:middle; text-align:center;">تخفیف کل</td>
       <td colspan="5" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; font-weight:700; background:rgba(var(--brand-50-rgb),0.3); vertical-align:middle; text-align:center;">
         <div style="${MULTILINE_PRINT_STYLE}">{{record.global_discount_display}}</div>
@@ -754,7 +746,7 @@ export const buildPrintTemplateVariablesForModule = (module: any): PrintTemplate
   return sourceFields
     .filter((field: any) => {
       if (!field?.key) return false;
-      if (!isFieldPrintableFromBlockConfig(module, field)) return false;
+      if (!isPrintableModuleField(module, field)) return false;
       const path = `record.${field.key}`;
       if (seen.has(path)) return false;
       seen.add(path);
@@ -877,7 +869,7 @@ export const buildSystemTemplateFieldOptionsForModule = (module: any): SystemTem
 
   const recordFields: SystemTemplateFieldOption[] = (module.fields || [])
     .filter((field: any) => field?.key)
-    .filter((field: any) => isFieldPrintableFromBlockConfig(module, field))
+    .filter((field: any) => isPrintableModuleField(module, field))
     .map((field: any) => ({
       key: `record.${field.key}`,
       label: field.labels?.fa || field.key,

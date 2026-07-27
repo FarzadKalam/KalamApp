@@ -8,6 +8,7 @@ import { buildCatalogFullPageLayout } from './printTemplates/catalogFullPageLayo
 import { resolvePrintAssigneeComboLabel, resolvePrintAssigneeLabel, resolvePrintOptionLabel } from './printTemplates/assigneeDisplay';
 import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, type PrintImageDisplayMode, getPrintFramedImageStyle, sanitizePrintImageDisplayMode } from './printTemplates/imageDisplay';
 import { buildImagePreviewUrl, buildPrintImageUrl } from './imagePreview';
+import { isPrintableModuleField } from './printTemplates/printableFields';
 
 export interface ListFieldDefinition {
   key: string;
@@ -16,6 +17,7 @@ export interface ListFieldDefinition {
   options?: any[];
   group?: string;
   defaultSelected?: boolean;
+  hasValue?: boolean;
   printSection?: 'table' | 'context';
 }
 
@@ -30,6 +32,10 @@ const LIST_PRINT_EXCLUDED_FIELD_TYPES = new Set([
   FieldType.JSON,
   FieldType.READONLY_LOOKUP,
 ]);
+const MULTILINE_PRINT_FIELD_TYPES = new Set([FieldType.LONG_TEXT, FieldType.SUPER_LONG_TEXT]);
+
+const isMultilinePrintField = (field: ListFieldDefinition) =>
+  MULTILINE_PRINT_FIELD_TYPES.has(field?.type as FieldType);
 
 const escapeHtml = (value: any) =>
   String(value ?? '')
@@ -126,11 +132,6 @@ export const buildListPrintableFields = (
       .filter((block: any) => block?.id)
       .map((block: any) => [String(block.id), String(block?.titles?.fa || block.id)])
   );
-  const printableBlockMap = new Map(
-    blocks
-      .filter((block: any) => block?.id)
-      .map((block: any) => [String(block.id), block?.printable !== false])
-  );
   const fieldsForDefaultSelection = sourceFields.some((field: any) => field?.isTableColumn === true)
     ? sourceFields.filter((field: any) => field?.isTableColumn === true)
     : sourceFields.filter((field: any) => !['id', 'created_at', 'updated_at', 'created_by', 'updated_by'].includes(String(field?.key || '')));
@@ -147,10 +148,7 @@ export const buildListPrintableFields = (
       if (!normalizedKey) return false;
       if (['id', 'created_at', 'updated_at', 'created_by', 'updated_by'].includes(normalizedKey)) return false;
       if (LIST_PRINT_EXCLUDED_FIELD_TYPES.has(field?.type)) return false;
-      if (String(field?.location || '').trim().toLowerCase() === 'block' && String(field?.blockId || '').trim()) {
-        return printableBlockMap.get(String(field.blockId).trim()) !== false;
-      }
-      return true;
+      return isPrintableModuleField(moduleConfig, field);
     })
     .map((field: any) => ({
       key: String(field.key),
@@ -312,7 +310,10 @@ export const buildListTableHtml = (
         const cells = fields
           .map((field) => {
             const valueHtml = formatListCellHtml(field, row, relationOptions, currencyLabel, imageDisplayMode);
-            return `<td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top; word-break:break-word;">${valueHtml}</td>`;
+            const multilineStyle = isMultilinePrintField(field)
+              ? 'white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.8;'
+              : '';
+            return `<td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top; word-break:break-word; ${multilineStyle}">${valueHtml}</td>`;
           })
           .join('');
         return `<tr><td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; text-align:center; background:rgba(var(--brand-50-rgb),0.18);">${toPersianNumber(startIndex + index + 1)}</td>${cells}</tr>`;

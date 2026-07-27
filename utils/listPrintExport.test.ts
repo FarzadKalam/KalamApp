@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FieldLocation, FieldType } from '../types';
-import { buildListCatalogHtml, buildListPrintableFields, formatListCellValue } from './listPrintExport';
+import { buildListCatalogHtml, buildListPrintableFields, buildListTableHtml, formatListCellValue } from './listPrintExport';
 
 describe('formatListCellValue assignee display', () => {
   it('renders relation fields as labels instead of UUIDs', () => {
@@ -77,6 +77,31 @@ describe('formatListCellValue assignee display', () => {
     expect(fields.find((field) => field.key === 'address')?.defaultSelected).toBe(false);
     expect(fields.find((field) => field.key === 'name')?.defaultSelected).toBe(true);
     expect(fields.map((field) => field.key)).toEqual(expect.arrayContaining(['name', 'width', 'address']));
+  });
+
+  it('does not offer fields disabled for printing in list templates', () => {
+    const fields = buildListPrintableFields({
+      id: 'printable_list_test',
+      fields: [
+        { key: 'name', labels: { fa: 'عنوان' }, type: FieldType.TEXT, location: FieldLocation.HEADER },
+        { key: 'description', labels: { fa: 'توضیحات' }, type: FieldType.SUPER_LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'baseInfo' },
+        { key: 'internal_note', labels: { fa: 'یادداشت داخلی' }, type: FieldType.LONG_TEXT, location: FieldLocation.HEADER, printable: false },
+      ],
+      blocks: [{ id: 'baseInfo', titles: { fa: 'اطلاعات پایه' } }],
+    });
+
+    expect(fields.map((field) => field.key)).toEqual(expect.arrayContaining(['name', 'description']));
+    expect(fields.map((field) => field.key)).not.toContain('internal_note');
+  });
+
+  it('preserves line breaks for long text columns in list print', () => {
+    const html = buildListTableHtml(
+      [{ key: 'description', label: 'توضیحات', type: FieldType.SUPER_LONG_TEXT }],
+      [{ description: 'سطر اول\nسطر دوم' }],
+    );
+
+    expect(html).toContain('white-space:pre-wrap');
+    expect(html).toContain('سطر اول\nسطر دوم');
   });
 
   it('uses raw storage images for catalog list cards by default', () => {

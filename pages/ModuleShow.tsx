@@ -21,6 +21,7 @@ import RecordImageBox from '../components/RecordImageBox';
 import type { StartMaterialGroup, StartMaterialPiece, StartMaterialDeliveryRow } from '../components/production/StartProductionModal';
 import { printStyles } from '../utils/printTemplates';
 import { usePrintManager } from '../utils/printTemplates/usePrintManager';
+import { isPrintableModuleField } from '../utils/printTemplates/printableFields';
 import { createPrintPerformanceTracker, waitForNextPaint } from '../utils/printTemplates/printPerformance';
 import { resolvePrintAssigneeLabel, resolvePrintOptionLabel } from '../utils/printTemplates/assigneeDisplay';
 import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberFormatter';
@@ -5155,19 +5156,10 @@ const ModuleShow: React.FC = () => {
         .filter((block: any) => block?.id)
         .map((block: any) => [String(block.id), String(block?.titles?.fa || block.id)])
     );
-    const printableBlockMap = new Map(
-      (Array.isArray(moduleConfig?.blocks) ? moduleConfig.blocks : [])
-        .filter((block: any) => block?.id)
-        .map((block: any) => [String(block.id), block?.printable !== false])
-    );
     return moduleConfig.fields
       .filter(f => f.type !== FieldType.IMAGE && f.type !== FieldType.JSON && f.type !== FieldType.READONLY_LOOKUP)
+      .filter((field) => isPrintableModuleField(moduleConfig, field))
       .filter(f => !shouldHideManagedAssigneeField(moduleId, f.key))
-      .filter((field) => {
-        const blockId = String((field as any)?.blockId || '').trim();
-        if (field.location !== FieldLocation.BLOCK || !blockId) return true;
-        return printableBlockMap.get(blockId) !== false;
-      })
       .filter(f => conditionalFieldRuntime.isFieldVisible(f))
       .filter(f => canViewField(f.key))
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))

@@ -125,6 +125,7 @@ type Conversation = {
   sourceConversationKey?: string;
   internalKind?: 'direct' | 'group' | 'saved' | 'system';
   readOnly?: boolean;
+  inactive?: boolean;
   avatarUrl?: string | null;
   title: string;
   subtitle: string;
@@ -1014,13 +1015,16 @@ const mergeDirectoryDirectConversations = (
     if (!user) return conversation;
     const title = String(user.display_name || user.full_name || '').trim();
     const roleLabel = String(user.job_title || roleLookup[String(user.role_id || '')] || '').trim();
+    const inactive = user.is_active === false;
     return {
       ...conversation,
+      readOnly: Boolean(conversation.readOnly || inactive),
+      inactive,
       title: title && isGenericInternalTitle(conversation.title) ? title : conversation.title,
       subtitle: roleLabel || conversation.subtitle,
       avatarUrl: String(conversation.avatarUrl || user.avatar_url || '').trim() || null,
       avatarText: (title || conversation.title || '').slice(0, 1) || conversation.avatarText || 'د',
-      status: roleLabel || conversation.status,
+      status: inactive ? 'غیرفعال' : roleLabel || conversation.status,
     };
   });
   const existingSourceKeys = new Set(next.map((conversation) => String(conversation.sourceConversationKey || '').trim()).filter(Boolean));
@@ -1051,6 +1055,15 @@ const mergeDirectoryDirectConversations = (
     });
   });
   return next;
+};
+
+const getDirectConversationPeerId = (conversationKey: string, currentUserId: string) => {
+  const parts = String(conversationKey || '').trim().split(':');
+  const currentId = String(currentUserId || '').trim();
+  if (parts.length !== 3 || parts[0] !== 'direct' || !currentId) return '';
+  if (parts[1] === currentId) return String(parts[2] || '').trim();
+  if (parts[2] === currentId) return String(parts[1] || '').trim();
+  return '';
 };
 
 const normalizeIdArray = (value: any): string[] => {
@@ -2073,6 +2086,9 @@ const MessagingHeader: React.FC<{
               <span className="hidden sm:inline-flex">
                 <ChannelPill channel={conversation.channel} compact />
               </span>
+              {conversation.inactive ? (
+                <Tag color="default" className="!m-0 !rounded-full !px-1.5 !text-[10px]">غیرفعال</Tag>
+              ) : null}
             </div>
             <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
               <span className="inline-flex items-center gap-1">
@@ -2229,6 +2245,7 @@ const MessagingComposerDock: React.FC<{
   }
   if (conversation.channel === 'internal' || conversation.channel === 'bot_group' || conversation.channel === 'bot_direct') {
     const disabled = Boolean(conversation.readOnly);
+    const inactiveRecipient = Boolean(conversation.inactive);
     const canSubmit = !disabled && !sending && !suggestingReply && (draft.trim() || attachments.length > 0 || linkedAttachments.length > 0);
     const submitSharedDraft = async () => {
       if (!canSubmit) return;
@@ -2261,7 +2278,11 @@ const MessagingComposerDock: React.FC<{
           onSubmit={() => void submitSharedDraft()}
           submitLoading={sending}
           submitDisabled={!canSubmit}
-          placeholder={disabled ? 'این گفتگو فقط پیام‌های سیستم را نمایش می‌دهد.' : conversation.channel === 'internal' ? (conversation.internalKind === 'saved' ? 'یادداشت جدید...' : 'پیام داخلی...') : 'پیام بات...'}
+          placeholder={inactiveRecipient
+            ? 'این کاربر غیرفعال است و امکان ارسال پیام جدید وجود ندارد.'
+            : disabled
+              ? 'این گفتگو فقط پیام‌های سیستم را نمایش می‌دهد.'
+              : conversation.channel === 'internal' ? (conversation.internalKind === 'saved' ? 'یادداشت جدید...' : 'پیام داخلی...') : 'پیام بات...'}
           mentionOptions={mentionOptions}
           mentionValues={mentionValues}
           onMentionChange={setMentionValues}
@@ -2578,6 +2599,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     refreshInternalTimeline,
   ]);
   const [assigneeDirectory, setAssigneeDirectory] = useState<AssigneeDirectory>({ users: [], roles: [] });
+  const [historicalDirectUsers, setHistoricalDirectUsers] = useState<AssigneeDirectory['users']>([]);
   const [mentionsLoading, setMentionsLoading] = useState(false);
   const [internalRecordTitleMap, setInternalRecordTitleMap] = useState<Record<string, string>>({});
   useEffect(() => {
@@ -2642,6 +2664,42 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       else window.clearTimeout(handle);
     };
   }, [liveData.profile.id, liveData.profile.orgId, message]);
+  const historicalDirectUserIds = useMemo(() => {
+    const currentUserId = String(liveData.profile.id || '').trim();
+    return Array.from(new Set((internalConversations.items || [])
+      .map((summary) => getDirectConversationPeerId(String(summary?.conversation_key || ''), currentUserId))
+      .filter(Boolean)));
+  }, [internalConversations.items, liveData.profile.id]);
+  useEffect(() => {
+    if (!liveData.profile.id || historicalDirectUserIds.length === 0) {
+      setHistoricalDirectUsers([]);
+      return;
+    }
+    let disposed = false;
+    void searchIdentityOptions(supabase, {
+      scopes: ['user'],
+      exactTokens: historicalDirectUserIds.map((id) => `user:${id}`),
+      limitPerScope: 100,
+    }).then((result) => {
+      if (disposed) return;
+      setHistoricalDirectUsers(result.items
+        .filter((item) => item.kind === 'user')
+        .map((item) => ({
+          id: item.id,
+          display_name: item.label,
+          full_name: item.label,
+          avatar_url: item.avatarUrl || null,
+          role_id: item.roleId || null,
+          job_title: item.subtitle || null,
+          is_active: item.active,
+        })));
+    }).catch(() => {
+      if (!disposed) setHistoricalDirectUsers([]);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [historicalDirectUserIds, liveData.profile.id]);
   useEffect(() => {
     const orgId = String(liveData.profile.orgId || '').trim();
     if (!orgId) {
@@ -2708,13 +2766,23 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       value: `role:${role.id}`,
     })),
   ], [assigneeDirectory.roles, assigneeDirectory.users]);
+  const conversationDirectoryUsers = useMemo(() => {
+    const usersById = new Map<string, AssigneeDirectory['users'][number]>();
+    assigneeDirectory.users.forEach((user) => {
+      if (user.id) usersById.set(user.id, user);
+    });
+    historicalDirectUsers.forEach((user) => {
+      if (user.id) usersById.set(user.id, user);
+    });
+    return Array.from(usersById.values());
+  }, [assigneeDirectory.users, historicalDirectUsers]);
   const directoryUserMap = useMemo(() => {
     const map: Record<string, AssigneeDirectory['users'][number]> = {};
-    assigneeDirectory.users.forEach((user) => {
+    conversationDirectoryUsers.forEach((user) => {
       if (user.id) map[user.id] = user;
     });
     return map;
-  }, [assigneeDirectory.users]);
+  }, [conversationDirectoryUsers]);
   const roleLookup = useMemo(() => {
     const map: Record<string, string> = {};
     assigneeDirectory.roles.forEach((role) => {
@@ -2919,7 +2987,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         Boolean(liveData.profile.id && internalReelReady),
         orgLogoUrl,
       ),
-      assigneeDirectory.users,
+      conversationDirectoryUsers,
       String(liveData.profile.id || ''),
       roleLookup,
     ).map((conversation) => {
@@ -2933,7 +3001,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         lastActivityAt: override.lastActivityAt || conversation.lastActivityAt,
       };
     })),
-    [assigneeDirectory.users, internalConversationLocalOverrides, internalConversations.items, internalReelReady, liveData.profile.id, orgLogoUrl, roleLookup],
+    [conversationDirectoryUsers, internalConversationLocalOverrides, internalConversations.items, internalReelReady, liveData.profile.id, orgLogoUrl, roleLookup],
   );
   const liveInternalEvents = useMemo<TimelineEvent[]>(() => {
     if (!selectedInternalSourceKey) return [];

@@ -49,6 +49,7 @@ import {
   filterSystemTemplateFieldOptions,
   sanitizeSelectedPrintFieldKeys,
 } from './fieldAccess';
+import { hasMeaningfulPrintValue, isPrintFieldKnownToTemplate, isPrintFieldSelected } from './printableFields';
 import { loadPrintFieldPreference, savePrintFieldPreference } from './fieldPreferences';
 import { hasRenderablePrintFooterHtml } from './footerLayout';
 import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, sanitizePrintImageDisplayMode, type PrintImageDisplayMode } from './imageDisplay';
@@ -122,13 +123,6 @@ const getReducedPrintFontSize = (baseSize: number) => {
 
 const getPathValue = (obj: any, path: string) =>
   path.split('.').reduce((acc, key) => (acc === null || acc === undefined ? undefined : acc[key]), obj);
-
-const hasPrintableValue = (value: any) => {
-  if (value === null || value === undefined) return false;
-  if (typeof value === 'string') return value.trim() !== '';
-  if (Array.isArray(value)) return value.length > 0;
-  return true;
-};
 
 const toNumberSafe = (value: any): number => {
   if (value === null || value === undefined || value === '') return 0;
@@ -723,6 +717,26 @@ export const usePrintManager = ({
       ),
     [selectedStoredTemplate?.isSystem, selectedStoredTemplate?.scope]
   );
+  const templateUsesSystemBlocks = useMemo(() => {
+    const templateHtml = [
+      selectedStoredTemplate?.headerHtml,
+      selectedStoredTemplate?.contentHtml,
+      selectedStoredTemplate?.footerHtml,
+    ]
+      .map((value) => String(value || ''))
+      .join(' ');
+    return /data-print-block\s*=|{{\s*block\./i.test(templateHtml);
+  }, [selectedStoredTemplate?.contentHtml, selectedStoredTemplate?.footerHtml, selectedStoredTemplate?.headerHtml]);
+  const templateUsesSystemFieldCollections = useMemo(() => {
+    const templateHtml = [
+      selectedStoredTemplate?.headerHtml,
+      selectedStoredTemplate?.contentHtml,
+      selectedStoredTemplate?.footerHtml,
+    ]
+      .map((value) => String(value || ''))
+      .join(' ');
+    return /system\.(?:compact_fields_table|compact_fields_inline|compact_tables_blocks)/i.test(templateHtml);
+  }, [selectedStoredTemplate?.contentHtml, selectedStoredTemplate?.footerHtml, selectedStoredTemplate?.headerHtml]);
   const isNonInvoiceSystemSummaryTemplate = useMemo(
     () =>
       Boolean(
@@ -772,9 +786,18 @@ export const usePrintManager = ({
     const resolveSystemFieldHasValue = (fieldKey: string) => {
       const normalizedKey = String(fieldKey || '').trim();
       if (!normalizedKey) return false;
-      if (!normalizedKey.startsWith('record.')) return true;
-      const recordPath = normalizedKey.replace(/^record\./, '');
-      return hasPrintableValue(getPathValue(data, recordPath));
+      if (normalizedKey.startsWith('record.')) {
+        const recordPath = normalizedKey.replace(/^record\./, '');
+        return hasMeaningfulPrintValue(getPathValue(data, recordPath), recordPath);
+      }
+      if (normalizedKey.startsWith('block.')) {
+        const [, blockId, ...columnPath] = normalizedKey.split('.');
+        const rows = Array.isArray(data?.[blockId]) ? data[blockId] : [];
+        if (!rows.length) return false;
+        const columnKey = String(columnPath.join('.') || '').trim();
+        return !columnKey || rows.some((row: any) => hasMeaningfulPrintValue(row?.[columnKey], columnKey));
+      }
+      return true;
     };
 
     const baseOptions = filterSystemTemplateFieldOptions(
@@ -793,6 +816,23 @@ export const usePrintManager = ({
         group: item.group,
         kind: item.kind,
       }));
+
+    const invoiceComputedSystemOptions =
+      moduleId === 'invoices' || moduleId === 'purchase_invoices'
+        ? [
+            {
+              key: 'record.global_discount_amount',
+              labels: { fa: 'تخفیف کل' },
+              value: data?.global_discount_value ?? data?.invoice_discount_amount ?? data?.invoice_discount_percent,
+              hasValue: hasMeaningfulPrintValue(
+                data?.global_discount_value ?? data?.invoice_discount_amount ?? data?.invoice_discount_percent,
+                'global_discount_amount'
+              ),
+              group: 'فیلدهای عمومی',
+              kind: 'record',
+            },
+          ]
+        : [];
 
     const commonSystemOptions = [
       {
@@ -892,40 +932,49 @@ export const usePrintManager = ({
       }] : []),
     ];
 
-    return [...baseOptions, ...commonSystemOptions, ...mediaOptions];
+    return [...baseOptions, ...invoiceComputedSystemOptions, ...commonSystemOptions, ...mediaOptions];
   }, [canViewField, data, moduleConfig, moduleId, recordImageField]);
   const isSelectedTemplateSystem = Boolean(selectedStoredTemplate?.isSystem || selectedTemplateMeta?.isSystem);
   const printableFieldsForTemplate = useMemo(() => {
-    if (!isSelectedTemplateSystem) return printableFields;
-    if (!isSystemRecordTemplate) return printableFields;
+    if (!isSystemRecordTemplate && !templateUsesSystemBlocks && !templateUsesSystemFieldCollections) return printableFields;
     return systemTemplateFieldOptions;
-  }, [isSelectedTemplateSystem, isSystemRecordTemplate, printableFields, systemTemplateFieldOptions]);
+  }, [isSystemRecordTemplate, printableFields, systemTemplateFieldOptions, templateUsesSystemBlocks, templateUsesSystemFieldCollections]);
   const templateSelectedKeySet = useMemo(
     () => new Set<string>(selectedPrintFields[selectedTemplateId] || []),
     [selectedPrintFields, selectedTemplateId]
   );
-  const knownSystemFieldKeys = useMemo(
-    () => new Set<string>((systemTemplateFieldOptions || []).map((item: any) => String(item?.key || '').trim()).filter(Boolean)),
-    [systemTemplateFieldOptions]
+  const knownTemplateFieldKeys = useMemo(
+    () => new Set<string>(
+      [...(printableFieldsForTemplate || []), ...(systemTemplateFieldOptions || [])]
+        .map((item: any) => String(item?.key || '').trim())
+        .filter(Boolean)
+    ),
+    [printableFieldsForTemplate, systemTemplateFieldOptions]
   );
   const hasTemplateSelectionState = useMemo(
     () => Object.prototype.hasOwnProperty.call(selectedPrintFields, selectedTemplateId),
     [selectedPrintFields, selectedTemplateId]
   );
   const isSystemFieldVisible = useCallback(
-    (fieldPath: string) => {
+    (fieldPath: string, forceSelection = false) => {
       if (!canViewPrintFieldPath(fieldPath)) return false;
-      if (!isSelectedTemplateSystem || !isSystemRecordTemplate) return true;
+      // Manual templates express their field selection through the placeholders
+      // placed by their editor. Selection still controls system blocks and
+      // system field collections embedded in a manual template.
+      const controlsThisPath =
+        forceSelection ||
+        isSelectedTemplateSystem ||
+        String(fieldPath || '').startsWith('block.');
+      if (!controlsThisPath) return true;
       if (!hasTemplateSelectionState) return true;
-      if (!knownSystemFieldKeys.has(fieldPath)) return true;
-      return templateSelectedKeySet.has(fieldPath);
+      if (!isPrintFieldKnownToTemplate(fieldPath, knownTemplateFieldKeys)) return true;
+      return isPrintFieldSelected(fieldPath, templateSelectedKeySet);
     },
     [
       canViewPrintFieldPath,
       hasTemplateSelectionState,
       isSelectedTemplateSystem,
-      isSystemRecordTemplate,
-      knownSystemFieldKeys,
+      knownTemplateFieldKeys,
       templateSelectedKeySet,
     ]
   );
@@ -1227,7 +1276,7 @@ export const usePrintManager = ({
     const defaultKeys = isSelectedTemplateSystem
       ? (
           sanitizeSelectedPrintFieldKeys(
-            Array.isArray(preferenceKeys) && preferenceKeys.length > 0
+            Array.isArray(preferenceKeys)
               ? preferenceKeys
               : Array.isArray(selectedStoredTemplate?.selectedFieldKeys) && selectedStoredTemplate?.selectedFieldKeys.length > 0
                 ? selectedStoredTemplate.selectedFieldKeys
@@ -1238,15 +1287,13 @@ export const usePrintManager = ({
           ) || []
         )
       : sanitizeSelectedPrintFieldKeys(
-          Array.isArray(preferenceKeys) && preferenceKeys.length > 0
+          Array.isArray(preferenceKeys)
             ? preferenceKeys
             : (printableFieldsForTemplate || [])
                 .filter((field: any) => field?.hasValue !== false)
                 .map((field: any) => field.key),
           allowedKeySet
         );
-
-    if (!defaultKeys.length) return;
 
     setSelectedPrintFields((prev) => {
       if (Object.prototype.hasOwnProperty.call(prev, selectedTemplateId)) return prev;
@@ -1775,7 +1822,7 @@ export const usePrintManager = ({
       const canUseField = (fieldKey: string) =>
         ignoreTemplateSelection
           ? canViewPrintFieldPath(`record.${fieldKey}`)
-          : isSystemFieldVisible(`record.${fieldKey}`);
+          : isSystemFieldVisible(`record.${fieldKey}`, true);
 
       fields
         .filter(
@@ -1822,7 +1869,7 @@ export const usePrintManager = ({
     const hasAssigneeField = fields.some((field: any) => String(field?.key || '').trim() === 'assignee_id');
     const responsibleValue = resolvePrintAssigneeLabel(data, relationOptions || {});
 
-    if (!hasAssigneeField && responsibleValue && isSystemFieldVisible('record.assignee_id')) {
+    if (!hasAssigneeField && responsibleValue && isSystemFieldVisible('record.assignee_id', true)) {
       regularRows.unshift(`
           <tr>
             <td style="width:38%; border:1px solid var(--table-border-color, #d1d5db); padding:5px 6px; background:rgba(var(--brand-50-rgb),0.28); font-weight:700;">${getAssigneeLabel(moduleId)}</td>
@@ -2051,8 +2098,13 @@ export const usePrintManager = ({
   const buildRowMetaText = useCallback(
     (blockId: string, row: any) => {
       const optionalParts: string[] = [];
-      const descriptionValue = getDisplayValue(row?.description || row?.notes || '');
-      if (descriptionValue && descriptionValue !== '-') optionalParts.push(descriptionValue);
+      const canShowDescription =
+        isSystemFieldVisible(`block.${blockId}.description`) ||
+        isSystemFieldVisible(`block.${blockId}.notes`);
+      if (canShowDescription) {
+        const descriptionValue = getDisplayValue(row?.description || row?.notes || '');
+        if (descriptionValue && descriptionValue !== '-') optionalParts.push(descriptionValue);
+      }
       const deliveryTimeValue = getDisplayValue(row?.delivery_time || '');
       if (deliveryTimeValue && deliveryTimeValue !== '-') optionalParts.push(`زمان تحویل: ${deliveryTimeValue}`);
       if (row?.length || row?.width) {
@@ -2070,7 +2122,7 @@ export const usePrintManager = ({
       }
       return optionalParts.join(' | ');
     },
-    [formatCellValue, getDisplayValue]
+    [formatCellValue, getDisplayValue, isSystemFieldVisible]
   );
 
   const pruneEmptyTableCells = useCallback((table: HTMLTableElement) => {
@@ -2272,6 +2324,11 @@ export const usePrintManager = ({
           'style',
           `${tableStyle};width:100%;max-width:100%;${hasExplicitColumnLayout ? '' : 'table-layout:fixed;'}border-collapse:collapse;`
         );
+      });
+
+      root.querySelectorAll<HTMLElement>('[data-print-optional-field]').forEach((element) => {
+        const fieldPath = String(element.getAttribute('data-print-optional-field') || '').trim();
+        if (fieldPath && !isSystemFieldVisible(fieldPath, true)) element.remove();
       });
 
       // حذف سراسری wrapper های خالی‌مانده (مثلاً وقتی جدول فیلدها یا تصویر/QR بی‌مقدار حذف شده‌اند).
@@ -2480,7 +2537,7 @@ export const usePrintManager = ({
               !PRINT_COLUMN_IGNORE_KEYS.has(String(field.key)) &&
               String(field?.type || '').toLowerCase() !== 'image' &&
               !isLongTextType(field?.type) &&
-              isSystemFieldVisible(`record.${field.key}`)
+              isSystemFieldVisible(`record.${field.key}`, true)
           )
           .forEach((field: any) => {
             const raw = data?.[field.key];
@@ -3846,7 +3903,7 @@ export const usePrintManager = ({
     printableFieldsForTemplate,
     isSelectedTemplateSystem,
     savingPrintFields,
-    allowFieldSelectionTab: isSystemRecordTemplate,
+    allowFieldSelectionTab: isSystemRecordTemplate || templateUsesSystemBlocks || templateUsesSystemFieldCollections,
     showImageDisplayModeControl,
     renderPrintCard,
   };

@@ -43,6 +43,23 @@ describe('print template store grouping', () => {
     expect(runtimeFields.find((item) => item.key === 'record.full_address')?.group).toBe('بخش: اطلاعات پایه');
   });
 
+  it('excludes fields and blocks disabled for printing from every system field option', () => {
+    const runtimeModule = {
+      id: 'runtime_printable_test',
+      fields: [
+        { key: 'name', labels: { fa: 'عنوان' }, type: FieldType.TEXT, location: FieldLocation.HEADER },
+        { key: 'internal_note', labels: { fa: 'یادداشت داخلی' }, type: FieldType.LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'details', printable: false },
+        { key: 'hidden_by_block', labels: { fa: 'فیلد بلاک مخفی' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'private' },
+      ],
+      blocks: [
+        { id: 'details', titles: { fa: 'جزئیات' }, type: BlockType.FIELD_GROUP },
+        { id: 'private', titles: { fa: 'خصوصی' }, type: BlockType.FIELD_GROUP, printable: false },
+      ],
+    };
+
+    expect(buildSystemTemplateFieldOptionsForModule(runtimeModule).map((item) => item.key)).toEqual(['record.name']);
+  });
+
   it('exposes list and operational summary variables for operational financial overview templates', () => {
     const variableOptions = getPrintTemplateVariables('operational_financial_overview_customer');
 
@@ -75,6 +92,13 @@ describe('print template store grouping', () => {
         contentHtml: '{{system.list_catalog_fullpage}}',
       })
     ).toBe(false);
+  });
+
+  it('marks the optional invoice-wide discount row for value-aware rendering', () => {
+    const invoiceTemplate = buildDefaultTemplatesForModule('invoices')
+      .find((template) => template.id === 'default_invoice_official');
+
+    expect(invoiceTemplate?.contentHtml).toContain('data-print-optional-field="record.global_discount_amount"');
   });
 
   it('persists only custom templates because system templates are generated at runtime', () => {
