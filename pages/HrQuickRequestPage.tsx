@@ -14,6 +14,7 @@ import { FieldType, ModuleDefinition, ModuleField } from '../types';
 import { supabase } from '../supabaseClient';
 import PersianDatePicker from '../components/PersianDatePicker';
 import AdaptiveSelectField from '../components/AdaptiveSelectField';
+import RichTextEditor from '../components/RichTextEditor';
 import { getAssigneeLabel } from '../utils/assigneeLabel';
 import { safeJalaliFormat } from '../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
@@ -192,7 +193,7 @@ const HrQuickRequestPage: React.FC = () => {
           return <Input disabled={disabled} />;
         case FieldType.LONG_TEXT:
         case FieldType.SUPER_LONG_TEXT:
-          return <Input.TextArea rows={field.type === FieldType.SUPER_LONG_TEXT ? 6 : 3} disabled={disabled} />;
+          return <RichTextEditor disabled={disabled} minRows={field.type === FieldType.SUPER_LONG_TEXT ? 6 : 3} />;
       case FieldType.NUMBER:
       case FieldType.PRICE:
       case FieldType.PERCENTAGE:

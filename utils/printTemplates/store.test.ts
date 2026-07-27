@@ -101,6 +101,18 @@ describe('print template store grouping', () => {
     expect(invoiceTemplate?.contentHtml).toContain('data-print-optional-field="record.global_discount_amount"');
   });
 
+  it('marks invoice description and payment panels as optional in official and unofficial defaults', () => {
+    const templates = buildDefaultTemplatesForModule('invoices');
+    const official = templates.find((template) => template.id === 'default_invoice_official');
+    const unofficial = templates.find((template) => template.id === 'default_invoice_unofficial');
+
+    [official, unofficial].forEach((template) => {
+      expect(template?.contentHtml).toContain('{{record.description}}');
+      expect(template?.contentHtml).toContain('data-print-optional-field="record.description"');
+      expect(template?.contentHtml).toContain('data-print-optional-field="block.payments"');
+    });
+  });
+
   it('persists only custom templates because system templates are generated at runtime', () => {
     const stored = getPersistedPrintTemplatesByModule({
       products: [

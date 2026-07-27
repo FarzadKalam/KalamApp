@@ -114,6 +114,29 @@ describe('PrintSection', () => {
     expect(screen.getAllByTestId('print-card')).toHaveLength(1);
   });
 
+  it('labels an explicit empty field selection as none, never all', async () => {
+    setDesktopViewport();
+
+    render(
+      <PrintSection
+        isPrintModalOpen
+        onClose={vi.fn()}
+        onPrint={vi.fn()}
+        printTemplates={templates}
+        selectedTemplateId="custom:a4"
+        onSelectTemplate={vi.fn()}
+        renderPrintCard={() => <div data-testid="print-card">سند چاپی</div>}
+        printMode={false}
+        allowFieldSelectionTab
+        printableFields={[{ key: 'record.description', labels: { fa: 'توضیحات' }, hasValue: true }]}
+        selectedPrintFields={{ 'custom:a4': [] }}
+      />
+    );
+
+    expect(await screen.findByText('فیلدهای قابل چاپ (هیچ‌کدام)')).toBeInTheDocument();
+    expect(screen.queryByText('فیلدهای قابل چاپ (همه)')).not.toBeInTheDocument();
+  });
+
   it('removes the modal portal after cancel so it cannot block page clicks', async () => {
     setDesktopViewport();
     const user = userEvent.setup();

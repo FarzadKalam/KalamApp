@@ -3,6 +3,7 @@ import { App, Button, Checkbox, Modal, Segmented, Tabs } from 'antd';
 import { DownOutlined, EyeOutlined, MinusOutlined, PlusOutlined, ReloadOutlined, UpOutlined } from '@ant-design/icons';
 import { createPortal } from 'react-dom';
 import { printStyles } from '../../utils/printTemplates';
+import { resolveEffectivePrintFieldKeys } from '../../utils/printTemplates/printableFields';
 import AdaptiveSelectField from '../AdaptiveSelectField';
 import PrintSignatureConfigurator from './PrintSignatureConfigurator';
 import type {
@@ -159,7 +160,21 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     printableFields.length > 0;
   const isSignatureTabAvailable = Boolean(selectedTemplateId);
 
-  const selectedFieldCount = (selectedPrintFields[selectedTemplateId] || []).length;
+  const hasExplicitFieldSelection = Object.prototype.hasOwnProperty.call(selectedPrintFields, selectedTemplateId);
+  const effectiveSelectedFieldKeys = useMemo(
+    () =>
+      resolveEffectivePrintFieldKeys({
+        fields: printableFields,
+        selectedKeys: selectedPrintFields[selectedTemplateId] || [],
+        hasExplicitSelection: hasExplicitFieldSelection,
+      }),
+    [hasExplicitFieldSelection, printableFields, selectedPrintFields, selectedTemplateId],
+  );
+  const selectedFieldKeySet = useMemo(
+    () => new Set(effectiveSelectedFieldKeys),
+    [effectiveSelectedFieldKeys],
+  );
+  const selectedFieldCount = effectiveSelectedFieldKeys.length;
   const mobileTemplateOptions = useMemo(
     () =>
       printTemplates.map((template) => ({
@@ -183,10 +198,10 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     const fieldMap = new Map(
       printableFields.map((field) => [String(field?.key || '').trim(), field])
     );
-    return (selectedPrintFields[selectedTemplateId] || [])
+    return effectiveSelectedFieldKeys
       .map((key) => fieldMap.get(String(key || '').trim()))
       .filter(Boolean);
-  }, [printableFields, selectedPrintFields, selectedTemplateId]);
+  }, [effectiveSelectedFieldKeys, printableFields]);
   const paperFrame = getPaperFrame(previewMeta?.paperSize || 'A4', previewMeta?.orientation || 'portrait');
   const paperWidthPx = (paperFrame.mmWidth * 96) / 25.4;
   const paperHeightPx = (paperFrame.mmHeight * 96) / 25.4;
@@ -215,11 +230,16 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     };
   }, [activeTab, fitPreviewZoom, isPrintModalOpen, selectedTemplateId]);
 
-  const handleRefresh = async () => {
+  const handleRefresh = async (silent = false) => {
     if (!onRefreshPreview) return;
     setRefreshing(true);
     try {
       await onRefreshPreview();
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      if (!silent) message.success('پیش‌نمایش چاپ به‌روز شد');
+    } catch (error) {
+      console.error('Refresh print preview failed', error);
+      if (!silent) message.error('به‌روزرسانی پیش‌نمایش ناموفق بود');
     } finally {
       setRefreshing(false);
     }
@@ -233,7 +253,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     } else {
       message.error('ذخیره تنظیمات ناموفق بود');
     }
-    await handleRefresh();
+    await handleRefresh(true);
   };
 
   useEffect(() => {
@@ -567,7 +587,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                         key: 'fields',
                          label: (
                            <span style={{ direction: 'rtl' }}>
-                             {`فیلدهای قابل چاپ ${selectedFieldCount > 0 ? `(${selectedFieldCount})` : '(همه)'}`}
+                            {`فیلدهای قابل چاپ ${selectedFieldCount > 0 ? `(${selectedFieldCount})` : '(هیچ‌کدام)'}`}
                            </span>
                          ),
                         children: (
@@ -644,10 +664,10 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                                   <div className="print-fields-group-header">
                                     <div className="print-fields-group-title">{group}</div>
                                     <Checkbox
-                                      checked={fields.every((field) => (selectedPrintFields[selectedTemplateId] || []).includes(field.key))}
+                                      checked={fields.length > 0 && fields.every((field) => selectedFieldKeySet.has(field.key))}
                                       indeterminate={
-                                        fields.some((field) => (selectedPrintFields[selectedTemplateId] || []).includes(field.key)) &&
-                                        !fields.every((field) => (selectedPrintFields[selectedTemplateId] || []).includes(field.key))
+                                        fields.some((field) => selectedFieldKeySet.has(field.key)) &&
+                                        !fields.every((field) => selectedFieldKeySet.has(field.key))
                                       }
                                       onChange={() => onTogglePrintFieldGroup(selectedTemplateId, group)}
                                     >
@@ -656,7 +676,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                                   </div>
                                   <div className="print-fields-grid">
                                     {fields.map((field) => {
-                                      const isSelected = (selectedPrintFields[selectedTemplateId] || []).includes(field.key);
+                                      const isSelected = selectedFieldKeySet.has(field.key);
                                       const isEmpty = field?.hasValue === false;
                                       return (
                                         <div

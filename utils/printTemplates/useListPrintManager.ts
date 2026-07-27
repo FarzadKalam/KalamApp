@@ -26,7 +26,7 @@ import { prepareGeneratedPdfWindow, printAsPdf, shouldUseGeneratedPdfPrint } fro
 import { normalizeRenderedImages } from './normalizeRenderedImages';
 import { printInIframe } from './printInIframe';
 import { sanitizeSelectedPrintFieldKeys } from './fieldAccess';
-import { hasMeaningfulPrintValue } from './printableFields';
+import { hasMeaningfulPrintValue, resolveEffectivePrintFieldKeys } from './printableFields';
 import { loadPrintFieldPreference, savePrintFieldPreference } from './fieldPreferences';
 import { hasRenderablePrintFooterHtml } from './footerLayout';
 import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, sanitizePrintImageDisplayMode, type PrintImageDisplayMode } from './imageDisplay';
@@ -104,6 +104,7 @@ export const useListPrintManager = ({
   const [selectedPrintFields, setSelectedPrintFields] = useState<Record<string, string[]>>({});
   const [imageDisplayModes, setImageDisplayModes] = useState<Record<string, PrintImageDisplayMode>>({});
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
   const [currentUserProfile, setCurrentUserProfile] = useState<any>(null);
   const [currentUserRoleTitle, setCurrentUserRoleTitle] = useState('');
   const [currentUserPermissions, setCurrentUserPermissions] = useState<Record<string, any> | null>(null);
@@ -119,6 +120,7 @@ export const useListPrintManager = ({
     provider: 'tiptap',
   });
   const [savingPrintFields, setSavingPrintFields] = useState(false);
+  const [previewRevision, setPreviewRevision] = useState(0);
   const [companyInfo, setCompanyInfo] = useState<any>(null);
   const templatesLoadedRef = useRef(false);
   const companyLoadedRef = useRef(false);
@@ -132,6 +134,7 @@ export const useListPrintManager = ({
       .then((snapshot) => {
         if (!mounted) return;
         setCurrentUserId(String(snapshot?.user?.id || '').trim() || null);
+        setCurrentOrgId(String(snapshot?.orgId || '').trim() || null);
         setCurrentUserProfile(snapshot?.profile || null);
         setCurrentUserPermissions((snapshot?.permissions || null) as Record<string, any> | null);
         setUserPreferencesReady(true);
@@ -155,6 +158,7 @@ export const useListPrintManager = ({
       .catch(() => {
         if (!mounted) return;
         setCurrentUserId(null);
+        setCurrentOrgId(null);
         setCurrentUserProfile(null);
         setCurrentUserPermissions(null);
         setUserPreferencesReady(true);
@@ -288,29 +292,30 @@ export const useListPrintManager = ({
   useEffect(() => {
     if (!selectedTemplateId || !userPreferencesReady) return;
     if (!printableFieldsForTemplate.length) return;
-    const allowedKeySet = new Set(
-      printableFieldsForTemplate
-        .map((field) => String(field?.key || '').trim())
-        .filter(Boolean)
-    );
     const preferenceKeys = loadPrintFieldPreference({
+      orgId: currentOrgId,
       userId: currentUserId,
       moduleId,
       templateId: selectedStoredTemplate?.id || selectedTemplateId,
       scope: 'list',
+      // System templates deliberately discard the old unscoped browser state:
+      // historic empty selections could hide every list column on first load.
+      allowLegacy: !selectedStoredTemplate?.isSystem,
     });
-    const rawDefaultKeys =
-      (Array.isArray(preferenceKeys)
-        ? preferenceKeys
-        : Array.isArray(selectedStoredTemplate?.selectedFieldKeys) && selectedStoredTemplate.selectedFieldKeys.length > 0
-          ? selectedStoredTemplate.selectedFieldKeys
-        : printableFieldsForTemplate
-            .filter((field) => field?.defaultSelected !== false && field?.hasValue !== false)
-            .map((field) => field.key)) || [];
+    const persistedKeys = Array.isArray(preferenceKeys)
+      ? preferenceKeys
+      : !selectedStoredTemplate?.isSystem && Array.isArray(selectedStoredTemplate?.selectedFieldKeys)
+        ? selectedStoredTemplate.selectedFieldKeys
+        : null;
+    const rawDefaultKeys = resolveEffectivePrintFieldKeys({
+      fields: printableFieldsForTemplate,
+      selectedKeys: persistedKeys || [],
+      hasExplicitSelection: Array.isArray(persistedKeys),
+    });
 
     const defaultKeys = isCatalogTemplate
       ? (() => {
-          const sanitizedKeys = sanitizeSelectedPrintFieldKeys(rawDefaultKeys, allowedKeySet);
+          const sanitizedKeys = rawDefaultKeys;
           const imageKeys = printableFieldsForTemplate
             .filter((field) => String(field?.type || '').toLowerCase() === 'image' && sanitizedKeys.includes(field.key))
             .map((field) => field.key)
@@ -321,7 +326,7 @@ export const useListPrintManager = ({
             .slice(0, 5);
           return [...imageKeys, ...contentKeys];
         })()
-      : sanitizeSelectedPrintFieldKeys(rawDefaultKeys, allowedKeySet);
+      : rawDefaultKeys;
 
     setSelectedPrintFields((prev) => {
       if (Object.prototype.hasOwnProperty.call(prev, selectedTemplateId)) return prev;
@@ -331,6 +336,7 @@ export const useListPrintManager = ({
       };
     });
   }, [
+    currentOrgId,
     currentUserId,
     isCatalogTemplate,
     moduleId,
@@ -573,17 +579,17 @@ export const useListPrintManager = ({
   }, [updatePrintSignatureConfig]);
 
   const selectedFields = useMemo(() => {
-    const selected = selectedPrintFields[selectedTemplateId] || [];
     const hasSelectionState = Object.prototype.hasOwnProperty.call(selectedPrintFields, selectedTemplateId);
-    if (selected.length === 0) return hasSelectionState ? [] : printableFieldsForTemplate;
     const fieldMap = new Map(
       printableFieldsForTemplate.map((field) => [String(field?.key || '').trim(), field])
     );
-    const filtered = selected
+    return resolveEffectivePrintFieldKeys({
+      fields: printableFieldsForTemplate,
+      selectedKeys: selectedPrintFields[selectedTemplateId] || [],
+      hasExplicitSelection: hasSelectionState,
+    })
       .map((key) => fieldMap.get(String(key || '').trim()))
       .filter(Boolean) as ListFieldDefinition[];
-    const resolved = filtered.length > 0 ? filtered : printableFieldsForTemplate;
-    return resolved;
   }, [printableFieldsForTemplate, selectedPrintFields, selectedTemplateId]);
 
   const selectedContextFields = useMemo(
@@ -707,7 +713,13 @@ export const useListPrintManager = ({
 
   const handleTogglePrintField = useCallback((templateId: string, fieldName: string) => {
     setSelectedPrintFields((prev) => {
-      const current = prev[templateId] || [];
+      const current = Object.prototype.hasOwnProperty.call(prev, templateId)
+        ? prev[templateId] || []
+        : resolveEffectivePrintFieldKeys({
+            fields: printableFieldsForTemplate,
+            selectedKeys: [],
+            hasExplicitSelection: false,
+          });
       if (current.includes(fieldName)) {
         return { ...prev, [templateId]: current.filter((item) => item !== fieldName) };
       }
@@ -729,7 +741,13 @@ export const useListPrintManager = ({
 
   const handleTogglePrintFieldGroup = useCallback((templateId: string, groupName: string) => {
     setSelectedPrintFields((prev) => {
-      const current = prev[templateId] || [];
+      const current = Object.prototype.hasOwnProperty.call(prev, templateId)
+        ? prev[templateId] || []
+        : resolveEffectivePrintFieldKeys({
+            fields: printableFieldsForTemplate,
+            selectedKeys: [],
+            hasExplicitSelection: false,
+          });
       const currentSet = new Set(current);
       const groupFields = (printableFieldsForTemplate || []).filter(
         (field) => String(field?.group || '').trim() === String(groupName || '').trim()
@@ -771,7 +789,15 @@ export const useListPrintManager = ({
 
   const handleMovePrintField = useCallback((templateId: string, fieldName: string, direction: 'up' | 'down') => {
     setSelectedPrintFields((prev) => {
-      const current = [...(prev[templateId] || [])];
+      const current = [
+        ...(Object.prototype.hasOwnProperty.call(prev, templateId)
+          ? prev[templateId] || []
+          : resolveEffectivePrintFieldKeys({
+              fields: printableFieldsForTemplate,
+              selectedKeys: [],
+              hasExplicitSelection: false,
+            })),
+      ];
       const index = current.indexOf(fieldName);
       if (index < 0) return prev;
       const targetIndex = direction === 'up' ? index - 1 : index + 1;
@@ -779,7 +805,7 @@ export const useListPrintManager = ({
       [current[index], current[targetIndex]] = [current[targetIndex], current[index]];
       return { ...prev, [templateId]: current };
     });
-  }, []);
+  }, [printableFieldsForTemplate]);
 
   const handleChangeImageDisplayMode = useCallback((templateId: string, mode: PrintImageDisplayMode) => {
     setImageDisplayModes((prev) => ({
@@ -789,6 +815,9 @@ export const useListPrintManager = ({
   }, []);
 
   const handleSavePrintFields = useCallback(async () => {
+    // A print preference is tenant data. Avoid showing a false success before
+    // the current organization has been resolved.
+    if (!currentOrgId) return false;
     setSavingPrintFields(true);
     try {
       const allowedKeySet = new Set(
@@ -797,10 +826,15 @@ export const useListPrintManager = ({
           .filter(Boolean)
       );
       const selectedKeys = sanitizeSelectedPrintFieldKeys(
-        selectedPrintFields[selectedTemplateId] || [],
+        resolveEffectivePrintFieldKeys({
+          fields: printableFieldsForTemplate,
+          selectedKeys: selectedPrintFields[selectedTemplateId] || [],
+          hasExplicitSelection: Object.prototype.hasOwnProperty.call(selectedPrintFields, selectedTemplateId),
+        }),
         allowedKeySet
       );
       savePrintFieldPreference({
+        orgId: currentOrgId,
         userId: currentUserId,
         moduleId,
         templateId: selectedStoredTemplate?.id || selectedTemplateId,
@@ -833,7 +867,7 @@ export const useListPrintManager = ({
     } finally {
       setSavingPrintFields(false);
     }
-  }, [currentUserId, imageDisplayMode, moduleId, printableFieldsForTemplate, selectedPrintFields, selectedPrintSignatureConfigs, selectedStoredTemplate?.id, selectedTemplateId, showImageDisplayModeControl]);
+  }, [currentOrgId, currentUserId, imageDisplayMode, moduleId, printableFieldsForTemplate, selectedPrintFields, selectedPrintSignatureConfigs, selectedStoredTemplate?.id, selectedTemplateId, showImageDisplayModeControl]);
 
   const getPrintOutputName = useCallback(
     () =>
@@ -919,6 +953,7 @@ export const useListPrintManager = ({
         'div',
         {
           className: 'list-print-shell',
+          key: `list-letterhead-preview-${previewRevision}`,
           style: {
             width: `${metrics.widthMm}mm`,
             minHeight: `${metrics.heightMm}mm`,
@@ -1002,6 +1037,7 @@ export const useListPrintManager = ({
       'div',
       {
         className: 'list-print-shell',
+        key: `list-preview-${previewRevision}`,
         style: {
           width: `${metrics.widthMm}mm`,
           minHeight: `${metrics.heightMm}mm`,
@@ -1062,11 +1098,17 @@ export const useListPrintManager = ({
         );
       }),
     );
-  }, [companyInfo?.print_letterheads, moduleConfig?.titles?.fa, moduleId, pagedRows, printSignatureBandHtml, renderTemplateSection, rowsPerPage, selectedOrgLetterhead, selectedStoredTemplate]);
+  }, [companyInfo?.print_letterheads, moduleConfig?.titles?.fa, moduleId, pagedRows, previewRevision, printSignatureBandHtml, renderTemplateSection, rowsPerPage, selectedOrgLetterhead, selectedStoredTemplate]);
   renderPrintCardRef.current = renderPrintCard;
 
   const refreshTemplates = useCallback(async () => {
-    await loadTemplates(true);
+    const loaded = await loadTemplates(true);
+    if (!loaded) return false;
+    setPreviewRevision((value) => value + 1);
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => resolve());
+    }));
+    return true;
   }, [loadTemplates]);
 
   const previewMeta = useMemo(

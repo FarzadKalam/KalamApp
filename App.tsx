@@ -28,6 +28,7 @@ import {
   BRANDING_APPLIED_EVENT,
   BRANDING_UPDATED_EVENT,
   DEFAULT_BRANDING,
+  getAccessibleDarkBrandTextColor,
   THEME_STORAGE_KEY,
   resolveSmartThemeMode,
   type BrandingConfig,
@@ -881,6 +882,7 @@ function App() {
           algorithm: isDarkMode ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
           token: {
             colorPrimary: branding.palette.primary,
+            colorLink: isDarkMode ? getAccessibleDarkBrandTextColor(branding.palette) : branding.palette.primary,
             fontFamily: "Peyda, Tahoma, Arial, sans-serif",
             zIndexPopupBase: 13000,
           },

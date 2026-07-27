@@ -1910,3 +1910,64 @@ html.dark .smarttable-shell .ant-table-tbody > tr:nth-child(even) > td {
   from { opacity: 0.6; }
   to   { opacity: 1; }
 }
+
+/* Lightweight shared rich-text fields: only the product-approved formatting tools. */
+.rich-text-editor {
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.rich-text-editor:focus-within {
+  border-color: #c38b58;
+  box-shadow: 0 0 0 2px rgba(195, 139, 88, 0.14);
+}
+
+.rich-text-editor__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 32px;
+  padding: 3px 5px;
+  overflow-x: auto;
+  border-bottom: 1px solid #f0f0f0;
+  background: #fafafa;
+}
+
+.rich-text-editor__toolbar .ant-btn {
+  flex: 0 0 auto;
+}
+
+.rich-text-editor__content .ProseMirror {
+  min-height: inherit;
+  padding: 8px 10px;
+  outline: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.8;
+}
+
+.rich-text-editor--compact .rich-text-editor__content .ProseMirror {
+  min-height: 3.1rem;
+  padding: 6px 8px;
+}
+
+.rich-text-content {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.rich-text-content p { margin: 0 0 0.55em; }
+.rich-text-content p:last-child { margin-bottom: 0; }
+.rich-text-content h2, .rich-text-content h3, .rich-text-content h4 { margin: 0.55em 0 0.35em; font-weight: 700; line-height: 1.55; }
+.rich-text-content h2 { font-size: 1.3em; }
+.rich-text-content h3 { font-size: 1.15em; }
+.rich-text-content h4 { font-size: 1.05em; }
+.rich-text-content ul, .rich-text-content ol { margin: 0.35em 0; padding-inline-start: 1.5em; }
+.rich-text-content li { margin: 0.18em 0; }
+
+.dark .rich-text-editor { border-color: #3f3f46; background: #202020; }
+.dark .rich-text-editor__toolbar { border-color: #3f3f46; background: #292929; }
+.dark .rich-text-editor__content .ProseMirror { color: #f4f4f5; }

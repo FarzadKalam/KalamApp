@@ -101,7 +101,7 @@ describe('formatListCellValue assignee display', () => {
     );
 
     expect(html).toContain('white-space:pre-wrap');
-    expect(html).toContain('سطر اول\nسطر دوم');
+    expect(html).toContain('سطر اول<br>سطر دوم');
   });
 
   it('keeps price and date columns on one compact line in list print', () => {

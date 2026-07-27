@@ -925,11 +925,11 @@ export const buildDefaultTemplateForModule = (moduleId: string): string => {
   <table style="width:100%; border-collapse:collapse; margin-top:8px;">
     <tbody>
       <tr>
-        <td style="width:54%; border:1px solid var(--table-border-color, #d1d5db); padding:8px; vertical-align:top;">
+        <td data-print-optional-field="record.description" style="width:54%; border:1px solid var(--table-border-color, #d1d5db); padding:8px; vertical-align:top;">
           <div style="font-weight:700; margin-bottom:6px;">توضیحات</div>
           <div style="min-height:98px; ${getLongTextPrintStyle(12)}">{{record.description}}</div>
         </td>
-        <td style="width:46%; border:1px solid var(--table-border-color, #d1d5db); padding:8px; vertical-align:top;">
+        <td data-print-optional-field="block.payments" style="width:46%; border:1px solid var(--table-border-color, #d1d5db); padding:8px; vertical-align:top;">
           <div style="font-weight:700; margin-bottom:6px;">${invoiceConfig.paymentsTitle}</div>
           ${paymentsBlock}
         </td>
@@ -1863,11 +1863,11 @@ export const buildDefaultTemplatesForModule = (
   <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:11px;">
     <tbody>
       <tr>
-        <td style="width:54%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; vertical-align:top;">
+        <td data-print-optional-field="record.description" style="width:54%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; vertical-align:top;">
           <div style="font-weight:800; margin-bottom:4px; color:rgb(var(--brand-500-rgb));">توضیحات</div>
           <div style="min-height:52px; ${getLongTextPrintStyle(11)}">{{record.description}}</div>
         </td>
-        <td style="width:46%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; vertical-align:top;">
+        <td data-print-optional-field="block.payments" style="width:46%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; vertical-align:top;">
           <div style="font-weight:800; margin-bottom:4px; color:rgb(var(--brand-500-rgb));">${paymentsPanelTitle}</div>
           ${paymentsBlock}
         </td>
@@ -1973,11 +1973,11 @@ export const buildDefaultTemplatesForModule = (
   <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:11px;">
     <tbody>
       <tr>
-        <td style="width:54%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; vertical-align:top;">
+        <td data-print-optional-field="record.description" style="width:54%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; vertical-align:top;">
           <div style="font-weight:800; margin-bottom:4px; color:rgb(var(--brand-500-rgb));">شرح / توضیحات</div>
           <div style="min-height:52px; ${getLongTextPrintStyle(11)}">{{record.description}}</div>
         </td>
-        <td style="width:46%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; vertical-align:top;">
+        <td data-print-optional-field="block.payments" style="width:46%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; vertical-align:top;">
           <div style="font-weight:800; margin-bottom:4px; color:rgb(var(--brand-500-rgb));">${paymentsPanelTitle}</div>
           ${paymentsBlock}
         </td>
@@ -2032,7 +2032,7 @@ export const buildDefaultTemplatesForModule = (
   <div style="margin-top:6px;">${paymentsBlock}</div>
   <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:10px;">
     <tbody>
-      <tr>
+      <tr data-print-optional-field="record.description">
         <td style="width:26%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; font-weight:800; background:rgba(var(--brand-50-rgb),0.32);">توضیحات</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:5px; ${getLongTextPrintStyle(10)}">{{record.description}}</td>
       </tr>
@@ -2085,7 +2085,7 @@ export const buildDefaultTemplatesForModule = (
   <div style="margin-top:6px;">${paymentsBlock}</div>
   <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:10px;">
     <tbody>
-      <tr>
+      <tr data-print-optional-field="record.description">
         <td style="width:22%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; font-weight:800; background:rgba(var(--brand-50-rgb),0.32);">توضیحات</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:5px; ${getLongTextPrintStyle(10)}">{{record.description}}</td>
       </tr>

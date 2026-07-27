@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { QRCode } from 'antd';
 import DOMPurify from 'dompurify';
+import { normalizeRichTextHtml } from '../richText';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PrintTemplate } from './index';
 import { InvoiceCard } from './templates/invoice-card';
@@ -49,7 +50,12 @@ import {
   filterSystemTemplateFieldOptions,
   sanitizeSelectedPrintFieldKeys,
 } from './fieldAccess';
-import { hasMeaningfulPrintValue, isPrintFieldKnownToTemplate, isPrintFieldSelected } from './printableFields';
+import {
+  hasMeaningfulPrintValue,
+  isPrintFieldKnownToTemplate,
+  isPrintFieldSelected,
+  resolveEffectivePrintFieldKeys,
+} from './printableFields';
 import { loadPrintFieldPreference, savePrintFieldPreference } from './fieldPreferences';
 import { hasRenderablePrintFooterHtml } from './footerLayout';
 import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, sanitizePrintImageDisplayMode, type PrintImageDisplayMode } from './imageDisplay';
@@ -110,10 +116,9 @@ const MIN_PRINT_BODY_HEIGHT_PX = 80;
 const PRINT_SECTION_CONTENT_PADDING = '0 10px';
 const PRINT_PAGE_COUNTER_HEIGHT_PX = 18;
 const PRINT_BODY_LINE_GUARD_PX = 28;
-// The measured line boxes can be fractionally smaller than their final painted
-// size after a webfont settles. Keep a tiny overlap between adjacent body
-// viewports so a line can never be cut at a page boundary.
-const PRINT_BODY_VIEWPORT_OVERSCAN_PX = 2;
+// Keep a physical gap between adjacent page viewports. Rendering even a tiny
+// overlap leaks part of the next line below the footer in some browsers.
+const PRINT_BODY_VIEWPORT_GAP_PX = 1;
 const isLongTextType = (value: unknown) => LONG_TEXT_FIELD_TYPES.has(String(value || '').trim().toLowerCase());
 
 const getReducedPrintFontSize = (baseSize: number) => {
@@ -187,7 +192,7 @@ const getTemplatePageBodyStepPx = (pageBodyHeightPx: number) =>
 const getPrintBodyViewportHeightPx = (pageBodyHeightPx: number, effectiveBodyStepPx: number) =>
   Math.min(
     normalizePrintBodyHeightPx(pageBodyHeightPx),
-    Math.max(1, Math.ceil(effectiveBodyStepPx + PRINT_BODY_VIEWPORT_OVERSCAN_PX))
+    Math.max(1, Math.floor(effectiveBodyStepPx - PRINT_BODY_VIEWPORT_GAP_PX))
   );
 
 const getMeasuredPrintBlockHeight = (measureNode: HTMLElement) => {
@@ -234,7 +239,10 @@ const getEffectiveMeasuredSectionHeightPx = ({
   if (!Number.isFinite(measuredHeight) || measuredHeight <= 0) {
     return Math.max(0, Math.round(configuredHeightPx));
   }
-  return Math.max(0, Math.min(Math.round(configuredHeightPx), Math.ceil(measuredHeight)));
+  // The configured height is a minimum reservation, not a clipping ceiling.
+  // Capping it at the configured value cuts the last header/footer line and
+  // lets the body appear beneath it when font metrics settle after measuring.
+  return Math.max(Math.round(configuredHeightPx), Math.ceil(measuredHeight));
 };
 
 const getTemplatePageBodyHeightPx = ({
@@ -506,6 +514,7 @@ export const usePrintManager = ({
   const [selectedPrintFields, setSelectedPrintFields] = useState<Record<string, string[]>>({});
   const [imageDisplayModes, setImageDisplayModes] = useState<Record<string, PrintImageDisplayMode>>({});
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
   const [currentUserProfile, setCurrentUserProfile] = useState<any>(null);
   const [currentUserRoleTitle, setCurrentUserRoleTitle] = useState('');
   const [currentUserPermissions, setCurrentUserPermissions] = useState<Record<string, any> | null>(null);
@@ -526,6 +535,7 @@ export const usePrintManager = ({
     provider: 'tiptap',
   });
   const [savingPrintFields, setSavingPrintFields] = useState(false);
+  const [previewRevision, setPreviewRevision] = useState(0);
   const [measuredSectionHeights, setMeasuredSectionHeights] = useState({ header: 0, footer: 0 });
   const headerMeasureRef = useRef<HTMLDivElement | null>(null);
   const footerMeasureRef = useRef<HTMLDivElement | null>(null);
@@ -678,6 +688,7 @@ export const usePrintManager = ({
       .then((snapshot) => {
         if (!mounted) return;
         setCurrentUserId(String(snapshot?.user?.id || '').trim() || null);
+        setCurrentOrgId(String(snapshot?.orgId || '').trim() || null);
         setCurrentUserProfile(snapshot?.profile || null);
         setCurrentUserPermissions((snapshot?.permissions || null) as Record<string, any> | null);
         setUserPreferencesReady(true);
@@ -701,6 +712,7 @@ export const usePrintManager = ({
       .catch(() => {
         if (!mounted) return;
         setCurrentUserId(null);
+        setCurrentOrgId(null);
         setCurrentUserProfile(null);
         setCurrentUserPermissions(null);
         setUserPreferencesReady(true);
@@ -939,9 +951,21 @@ export const usePrintManager = ({
     if (!isSystemRecordTemplate && !templateUsesSystemBlocks && !templateUsesSystemFieldCollections) return printableFields;
     return systemTemplateFieldOptions;
   }, [isSystemRecordTemplate, printableFields, systemTemplateFieldOptions, templateUsesSystemBlocks, templateUsesSystemFieldCollections]);
-  const templateSelectedKeySet = useMemo(
-    () => new Set<string>(selectedPrintFields[selectedTemplateId] || []),
+  const hasTemplateSelectionState = useMemo(
+    () => Object.prototype.hasOwnProperty.call(selectedPrintFields, selectedTemplateId),
     [selectedPrintFields, selectedTemplateId]
+  );
+  const effectiveTemplateSelectedKeys = useMemo(
+    () => resolveEffectivePrintFieldKeys({
+      fields: printableFieldsForTemplate || [],
+      selectedKeys: selectedPrintFields[selectedTemplateId] || [],
+      hasExplicitSelection: hasTemplateSelectionState,
+    }),
+    [hasTemplateSelectionState, printableFieldsForTemplate, selectedPrintFields, selectedTemplateId]
+  );
+  const templateSelectedKeySet = useMemo(
+    () => new Set<string>(effectiveTemplateSelectedKeys),
+    [effectiveTemplateSelectedKeys]
   );
   const knownTemplateFieldKeys = useMemo(
     () => new Set<string>(
@@ -950,10 +974,6 @@ export const usePrintManager = ({
         .filter(Boolean)
     ),
     [printableFieldsForTemplate, systemTemplateFieldOptions]
-  );
-  const hasTemplateSelectionState = useMemo(
-    () => Object.prototype.hasOwnProperty.call(selectedPrintFields, selectedTemplateId),
-    [selectedPrintFields, selectedTemplateId]
   );
   const isSystemFieldVisible = useCallback(
     (fieldPath: string, forceSelection = false) => {
@@ -966,13 +986,11 @@ export const usePrintManager = ({
         isSelectedTemplateSystem ||
         String(fieldPath || '').startsWith('block.');
       if (!controlsThisPath) return true;
-      if (!hasTemplateSelectionState) return true;
       if (!isPrintFieldKnownToTemplate(fieldPath, knownTemplateFieldKeys)) return true;
       return isPrintFieldSelected(fieldPath, templateSelectedKeySet);
     },
     [
       canViewPrintFieldPath,
-      hasTemplateSelectionState,
       isSelectedTemplateSystem,
       knownTemplateFieldKeys,
       templateSelectedKeySet,
@@ -1265,38 +1283,27 @@ export const usePrintManager = ({
     // Do not persist an empty selection while templates or runtime fields are
     // still loading. Otherwise that transient state hides every system block.
     if (!printableFieldsForTemplate.length) return;
-    const allowedKeySet = new Set(
-      (printableFieldsForTemplate || [])
-        .map((field: any) => String(field?.key || '').trim())
-        .filter(Boolean)
-    );
     const preferenceKeys = loadPrintFieldPreference({
+      orgId: currentOrgId,
       userId: currentUserId,
       moduleId,
       templateId: selectedStoredTemplate?.id || selectedTemplateId,
       scope: 'record',
+      // System defaults are rebuilt from the current module definition. The
+      // old browser store is intentionally ignored to recover from the
+      // historic empty selections that hid whole invoice sections.
+      allowLegacy: !isSelectedTemplateSystem,
     });
-    const defaultKeys = isSelectedTemplateSystem
-      ? (
-          sanitizeSelectedPrintFieldKeys(
-            Array.isArray(preferenceKeys)
-              ? preferenceKeys
-              : Array.isArray(selectedStoredTemplate?.selectedFieldKeys) && selectedStoredTemplate?.selectedFieldKeys.length > 0
-                ? selectedStoredTemplate.selectedFieldKeys
-              : printableFieldsForTemplate
-                  .filter((field: any) => field?.hasValue !== false)
-                  .map((field: any) => field.key),
-            allowedKeySet
-          ) || []
-        )
-      : sanitizeSelectedPrintFieldKeys(
-          Array.isArray(preferenceKeys)
-            ? preferenceKeys
-            : (printableFieldsForTemplate || [])
-                .filter((field: any) => field?.hasValue !== false)
-                .map((field: any) => field.key),
-          allowedKeySet
-        );
+    const persistedKeys = Array.isArray(preferenceKeys)
+      ? preferenceKeys
+      : !isSelectedTemplateSystem && Array.isArray(selectedStoredTemplate?.selectedFieldKeys)
+        ? selectedStoredTemplate.selectedFieldKeys
+        : null;
+    const defaultKeys = resolveEffectivePrintFieldKeys({
+      fields: printableFieldsForTemplate || [],
+      selectedKeys: persistedKeys || [],
+      hasExplicitSelection: Array.isArray(persistedKeys),
+    });
 
     setSelectedPrintFields((prev) => {
       if (Object.prototype.hasOwnProperty.call(prev, selectedTemplateId)) return prev;
@@ -1307,6 +1314,7 @@ export const usePrintManager = ({
     });
   }, [
     isSelectedTemplateSystem,
+    currentOrgId,
     currentUserId,
     printableFieldsForTemplate,
     selectedStoredTemplate?.selectedFieldKeys,
@@ -1558,17 +1566,29 @@ export const usePrintManager = ({
 
   const handleTogglePrintField = useCallback((templateId: string, fieldName: string) => {
     setSelectedPrintFields((prev) => {
-      const current = prev[templateId] || [];
+      const current = Object.prototype.hasOwnProperty.call(prev, templateId)
+        ? prev[templateId] || []
+        : resolveEffectivePrintFieldKeys({
+            fields: printableFieldsForTemplate || [],
+            selectedKeys: [],
+            hasExplicitSelection: false,
+          });
       if (current.includes(fieldName)) {
         return { ...prev, [templateId]: current.filter((f) => f !== fieldName) };
       }
       return { ...prev, [templateId]: [...current, fieldName] };
     });
-  }, []);
+  }, [printableFieldsForTemplate]);
 
   const handleTogglePrintFieldGroup = useCallback((templateId: string, groupName: string) => {
     setSelectedPrintFields((prev) => {
-      const current = prev[templateId] || [];
+      const current = Object.prototype.hasOwnProperty.call(prev, templateId)
+        ? prev[templateId] || []
+        : resolveEffectivePrintFieldKeys({
+            fields: printableFieldsForTemplate || [],
+            selectedKeys: [],
+            hasExplicitSelection: false,
+          });
       const currentSet = new Set(current);
       const groupKeys = (printableFieldsForTemplate || [])
         .filter((field: any) => String(field?.group || '').trim() === String(groupName || '').trim())
@@ -1585,7 +1605,15 @@ export const usePrintManager = ({
 
   const handleMovePrintField = useCallback((templateId: string, fieldName: string, direction: 'up' | 'down') => {
     setSelectedPrintFields((prev) => {
-      const current = [...(prev[templateId] || [])];
+      const current = [
+        ...(Object.prototype.hasOwnProperty.call(prev, templateId)
+          ? prev[templateId] || []
+          : resolveEffectivePrintFieldKeys({
+              fields: printableFieldsForTemplate || [],
+              selectedKeys: [],
+              hasExplicitSelection: false,
+            })),
+      ];
       const index = current.indexOf(fieldName);
       if (index < 0) return prev;
       const targetIndex = direction === 'up' ? index - 1 : index + 1;
@@ -1593,7 +1621,7 @@ export const usePrintManager = ({
       [current[index], current[targetIndex]] = [current[targetIndex], current[index]];
       return { ...prev, [templateId]: current };
     });
-  }, []);
+  }, [printableFieldsForTemplate]);
 
   const handleChangeImageDisplayMode = useCallback((templateId: string, mode: PrintImageDisplayMode) => {
     setImageDisplayModes((prev) => ({
@@ -1603,6 +1631,9 @@ export const usePrintManager = ({
   }, []);
 
   const handleSavePrintFields = useCallback(async () => {
+    // A print preference is tenant data. Avoid showing a false success before
+    // the current organization has been resolved.
+    if (!currentOrgId) return false;
     setSavingPrintFields(true);
     try {
       const allowedKeySet = new Set(
@@ -1611,10 +1642,15 @@ export const usePrintManager = ({
           .filter(Boolean)
       );
       const selectedKeys = sanitizeSelectedPrintFieldKeys(
-        selectedPrintFields[selectedTemplateId] || [],
+        resolveEffectivePrintFieldKeys({
+          fields: printableFieldsForTemplate,
+          selectedKeys: selectedPrintFields[selectedTemplateId] || [],
+          hasExplicitSelection: Object.prototype.hasOwnProperty.call(selectedPrintFields, selectedTemplateId),
+        }),
         allowedKeySet
       );
       savePrintFieldPreference({
+        orgId: currentOrgId,
         userId: currentUserId,
         moduleId,
         templateId: selectedStoredTemplate?.id || selectedTemplateId,
@@ -1648,6 +1684,7 @@ export const usePrintManager = ({
       setSavingPrintFields(false);
     }
   }, [
+    currentOrgId,
     currentUserId,
     moduleId,
     printableFieldsForTemplate,
@@ -1851,7 +1888,7 @@ export const usePrintManager = ({
             longTextRows.push(`
           <div style="margin-top:8px;">
             <div style="margin:0 0 3px 0; font-size:10px; color:#64748b;">${getFieldLabelFa(field, { moduleId, fallback: field.key })}</div>
-            <div style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; background:#fff; font-size:${getReducedPrintFontSize(11)}; line-height:1.9; ${MULTILINE_PRINT_STYLE}">${displayValue}</div>
+            <div class="rich-text-print" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; background:#fff; font-size:${getReducedPrintFontSize(11)}; line-height:1.9; ${MULTILINE_PRINT_STYLE}">${normalizeRichTextHtml(raw)}</div>
           </div>
         `);
             return;
@@ -2062,6 +2099,8 @@ export const usePrintManager = ({
       if (column.type === 'number' || ['quantity', 'length', 'width', 'sub_quantity'].includes(key)) {
         return rawValue === null || rawValue === undefined || rawValue === '' ? '-' : toPersianPlain(rawValue);
       }
+
+      if (isLongTextType(column.type)) return normalizeRichTextHtml(rawValue);
 
       try {
         const rendered = formatPrintValue(
@@ -2329,9 +2368,45 @@ export const usePrintManager = ({
         );
       });
 
+      const affectedOptionalTables = new Set<HTMLTableElement>();
       root.querySelectorAll<HTMLElement>('[data-print-optional-field]').forEach((element) => {
         const fieldPath = String(element.getAttribute('data-print-optional-field') || '').trim();
-        if (fieldPath && !isSystemFieldVisible(fieldPath, true)) element.remove();
+        if (!fieldPath || isSystemFieldVisible(fieldPath, true)) return;
+
+        const table = element.closest('table');
+        if (table) affectedOptionalTables.add(table);
+
+        const tagName = String(element.tagName || '').toLowerCase();
+        if (tagName === 'td' || tagName === 'th' || tagName === 'tr') {
+          element.remove();
+          return;
+        }
+
+        const cell = element.closest('td, th');
+        if (cell) {
+          cell.remove();
+          return;
+        }
+        element.remove();
+      });
+
+      // When an optional system field owns a table cell, remove the cell as
+      // well as its label. A remaining sibling expands to the available width;
+      // if no sibling remains, the row/table disappears entirely.
+      affectedOptionalTables.forEach((table) => {
+        Array.from(table.rows || []).forEach((row) => {
+          const cells = Array.from(row.cells || []);
+          if (cells.length === 0) {
+            row.remove();
+            return;
+          }
+          if (cells.length === 1) {
+            const cell = cells[0] as HTMLTableCellElement;
+            cell.style.width = '100%';
+            cell.removeAttribute('width');
+          }
+        });
+        if (!table.querySelector('tr')) table.remove();
       });
 
       // حذف سراسری wrapper های خالی‌مانده (مثلاً وقتی جدول فیلدها یا تصویر/QR بی‌مقدار حذف شده‌اند).
@@ -2500,6 +2575,9 @@ export const usePrintManager = ({
         }
         const field = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields.find((item: any) => item.key === fieldKey) : null;
         if (field) {
+          if (isLongTextType(field.type)) {
+            return normalizeOptionalDisplay(normalizeRichTextHtml(raw));
+          }
           const option = Array.isArray(field.options) ? field.options.find((item: any) => String(item.value) === String(raw)) : null;
           if (option?.label) return normalizeOptionalDisplay(option.label);
           try {
@@ -2739,6 +2817,7 @@ export const usePrintManager = ({
       if (root === 'record') {
         const field = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields.find((item: any) => item.key === nestedPath) : null;
         if (field) {
+          if (isLongTextType(field.type)) return normalizeRichTextHtml(raw);
           const option = Array.isArray(field.options) ? field.options.find((item: any) => String(item.value) === String(raw)) : null;
           if (option?.label) return String(option.label);
           try {
@@ -2837,21 +2916,21 @@ export const usePrintManager = ({
   }, []);
 
   const refreshTemplates = useCallback(async () => {
-    await loadTemplates(true);
-    // Rebuild the active preview from current record data and the latest
-    // template definition. Removing only this template's transient selection
-    // lets the normal preference/default resolver run again without touching
-    // saved choices for other templates.
-    setSelectedPrintFields((prev) => {
-      if (!Object.prototype.hasOwnProperty.call(prev, selectedTemplateId)) return prev;
-      const next = { ...prev };
-      delete next[selectedTemplateId];
-      return next;
-    });
+    const loaded = await loadTemplates(true);
+    if (!loaded) return false;
+
+    // Refresh must never discard an explicit user selection. Selection is
+    // already value-aware and filtered against the current template, while
+    // changing this key remounts all measured preview nodes deterministically.
+    setPreviewRevision((value) => value + 1);
+    setMeasuredSectionHeights({ header: 0, footer: 0 });
     setForcedPrintPageCount(null);
     preparedPrintPageCountRef.current = null;
-    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-  }, [loadTemplates, selectedTemplateId]);
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => resolve());
+    }));
+    return true;
+  }, [loadTemplates]);
 
   const previewMeta = useMemo(
     () => ({
@@ -2883,6 +2962,7 @@ export const usePrintManager = ({
           'data-background-color',
           'data-border-color',
           'data-print-block',
+          'data-print-optional-field',
         ],
       });
     },
@@ -3079,15 +3159,17 @@ export const usePrintManager = ({
 
   const buildPrintCard = useCallback((pageCountOverride?: number | null) => {
     const shouldRenderMeasurementNodes = pageCountOverride == null;
-    const selected = selectedPrintFields[selectedTemplateId] || [];
+    const hasExplicitSelection = Object.prototype.hasOwnProperty.call(selectedPrintFields, selectedTemplateId);
     const fieldMap = new Map(
       printableFieldsForTemplate.map((field: any) => [String(field?.key || '').trim(), field])
     );
-    const fieldsToDisplay = selected.length === 0
-      ? printableFieldsForTemplate.filter((field: any) => field?.hasValue !== false)
-      : selected
-          .map((key) => fieldMap.get(String(key || '').trim()))
-          .filter(Boolean);
+    const fieldsToDisplay = resolveEffectivePrintFieldKeys({
+      fields: printableFieldsForTemplate,
+      selectedKeys: selectedPrintFields[selectedTemplateId] || [],
+      hasExplicitSelection,
+    })
+      .map((key) => fieldMap.get(String(key || '').trim()))
+      .filter(Boolean);
 
     if (selectedTemplateId.startsWith('custom:')) {
       const metrics = getPaperSizeMetrics(selectedStoredTemplate?.paperSize, selectedStoredTemplate?.orientation || 'portrait');
@@ -3148,6 +3230,7 @@ export const usePrintManager = ({
           'div',
           {
             className: 'invoice-custom-print-shell',
+            key: `print-letterhead-preview-${previewRevision}`,
             style: {
               ...paper,
               background: '#fff',
@@ -3349,6 +3432,7 @@ export const usePrintManager = ({
           'div',
           {
             className: 'invoice-custom-print-shell',
+            key: `print-catalog-preview-${previewRevision}`,
           style: {
             ...paper,
             background: '#fff',
@@ -3429,6 +3513,7 @@ export const usePrintManager = ({
         'div',
         {
           className: 'invoice-custom-print-shell',
+          key: `print-template-preview-${previewRevision}`,
           style: {
             ...paper,
             background: '#fff',
@@ -3791,6 +3876,7 @@ export const usePrintManager = ({
     printMode,
     renderedPageOffsets,
     renderedPageCount,
+    previewRevision,
     printableFieldsForTemplate,
     selectedPrintFields,
     data,

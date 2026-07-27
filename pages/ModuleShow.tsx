@@ -21,7 +21,7 @@ import RecordImageBox from '../components/RecordImageBox';
 import type { StartMaterialGroup, StartMaterialPiece, StartMaterialDeliveryRow } from '../components/production/StartProductionModal';
 import { printStyles } from '../utils/printTemplates';
 import { usePrintManager } from '../utils/printTemplates/usePrintManager';
-import { isPrintableModuleField } from '../utils/printTemplates/printableFields';
+import { hasMeaningfulPrintValue, isPrintableModuleField } from '../utils/printTemplates/printableFields';
 import { createPrintPerformanceTracker, waitForNextPaint } from '../utils/printTemplates/printPerformance';
 import { resolvePrintAssigneeLabel, resolvePrintOptionLabel } from '../utils/printTemplates/assigneeDisplay';
 import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberFormatter';
@@ -5145,12 +5145,6 @@ const ModuleShow: React.FC = () => {
 
   const printableFields = useMemo(() => {
     if (!moduleConfig || !data) return [];
-    const hasValue = (val: any) => {
-      if (val === null || val === undefined) return false;
-      if (typeof val === 'string') return val.trim() !== '';
-      if (Array.isArray(val)) return val.length > 0;
-      return true;
-    };
     const blockTitleMap = new Map(
       (Array.isArray(moduleConfig?.blocks) ? moduleConfig.blocks : [])
         .filter((block: any) => block?.id)
@@ -5172,7 +5166,7 @@ const ModuleShow: React.FC = () => {
           ...field,
           value,
           printValue: formatPrintValue(field, value),
-          hasValue: hasValue(value),
+          hasValue: hasMeaningfulPrintValue(value, field.key),
           group: isBlockField ? `بخش: ${blockTitle}` : 'فیلدهای عمومی',
           scope: isBlockField ? 'module' : 'general',
         };
@@ -5918,7 +5912,7 @@ const ModuleShow: React.FC = () => {
       field.key === 'template_stages_preview' ||
       field.key === 'run_stages_preview'
     );
-    const isSuperLongTextField = field.type === FieldType.SUPER_LONG_TEXT;
+    const isLongTextField = field.type === FieldType.LONG_TEXT || field.type === FieldType.SUPER_LONG_TEXT;
     const compactMode = (field.type === FieldType.PROGRESS_STAGES || isProcessDraftField) ? false : true;
 
     if (field.type === FieldType.PROGRESS_STAGES || isProcessDraftField) {
@@ -5993,8 +5987,8 @@ const ModuleShow: React.FC = () => {
 
     if (isEditing) {
       const inlineEditorClassName = isHeader
-        ? `flex w-full min-w-0 flex-col gap-2 ${isSuperLongTextField ? 'items-stretch' : ''}`
-        : `flex w-full min-w-[150px] gap-1 ${isSuperLongTextField ? 'items-start' : 'items-center'}`;
+        ? `flex w-full min-w-0 flex-col gap-2 ${isLongTextField ? 'items-stretch' : ''}`
+        : `flex w-full min-w-[150px] gap-1 ${isLongTextField ? 'items-start flex-col' : 'items-center'}`;
       return (
         <div className={inlineEditorClassName}>
           <div className="min-w-0 flex-1">

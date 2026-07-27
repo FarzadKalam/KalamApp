@@ -29,6 +29,7 @@ import PersianDatePicker from '../components/PersianDatePicker';
 import ChequePreviewCard from '../components/accounting/ChequePreviewCard';
 import RelatedSidebar from '../components/Sidebar/RelatedSidebar';
 import SmartFieldRenderer from '../components/SmartFieldRenderer';
+import RichTextEditor from '../components/RichTextEditor';
 import AdaptiveSelectField from '../components/AdaptiveSelectField';
 import AdaptiveIdentityPicker from '../components/AdaptiveIdentityPicker';
 import RecordImageBox from '../components/RecordImageBox';
@@ -1080,7 +1081,7 @@ const AccountingRecordPage: React.FC = () => {
     switch (field.type) {
       case FieldType.LONG_TEXT:
       case FieldType.SUPER_LONG_TEXT:
-        return <Input.TextArea rows={field.type === FieldType.SUPER_LONG_TEXT ? 6 : 3} disabled={disabled} />;
+        return <RichTextEditor disabled={disabled} minRows={field.type === FieldType.SUPER_LONG_TEXT ? 6 : 3} />;
       case FieldType.CHECKBOX:
         return <Checkbox disabled={disabled} />;
       case FieldType.DATE:

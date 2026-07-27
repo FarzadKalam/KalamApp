@@ -23,6 +23,7 @@ import { resolveLandingPalette, type LandingTheme } from '../../components/publi
 import { ICON_OPTIONS } from '../../components/publicSite/iconMap';
 import { BRAND_PALETTE_PRESETS, DEFAULT_PALETTE_KEY, type BrandingPaletteKey } from '../../theme/brandTheme';
 import type { LandingSection, SectionType } from '../../components/publicSite/types';
+import { DEFAULT_ENAMAD_TRUST_HTML } from '../../utils/publicSiteTrustSeals';
 
 const SLUG = 'home';
 const makeId = () => Math.random().toString(36).slice(2, 10);
@@ -353,7 +354,11 @@ export default function LandingPageEditor() {
           setRowId(data.id);
           setPublished(!!data.is_published);
           setTheme((data.theme as LandingTheme) ?? null);
-          setFooter((data.footer as Record<string, string>) ?? {});
+          const savedFooter = (data.footer as Record<string, string>) ?? {};
+          setFooter({
+            ...savedFooter,
+            enamadTrustHtml: savedFooter.enamadTrustHtml?.trim() || DEFAULT_ENAMAD_TRUST_HTML,
+          });
           const list = Array.isArray(data.sections) && data.sections.length > 0 ? data.sections : DEFAULT_HOME_SECTIONS;
           setSections(JSON.parse(JSON.stringify(list)));
         } else {
@@ -452,6 +457,8 @@ export default function LandingPageEditor() {
               { key: 'email', label: 'ایمیل', ltr: true },
               { key: 'address', label: 'آدرس', area: true },
               { key: 'copyright', label: 'متن کپی‌رایت' },
+              { key: 'enamadTrustHtml', label: 'کد HTML اینماد', area: true, ltr: true, ph: 'کد رسمی اینماد شامل لینک و تصویر را اینجا وارد کنید' },
+              { key: 'zarinpalTrustHtml', label: 'کد HTML نشان زرین‌پال', area: true, ltr: true, ph: 'کد رسمی نشان زرین‌پال شامل لینک و تصویر را اینجا وارد کنید' },
             ];
             return (
               <div className="grid gap-4 md:grid-cols-2">
@@ -468,7 +475,7 @@ export default function LandingPageEditor() {
               </div>
             );
           })()}
-          <div className="mt-3 text-xs text-gray-400 dark:text-gray-500">صفحات حریم خصوصی، شرایط استفاده، قوانین و SLA از بخش «صفحات سایت» در مدیریت محتوا ویرایش می‌شوند.</div>
+          <div className="mt-3 text-xs text-gray-400 dark:text-gray-500">کدهای اینماد و نشان زرین‌پال فقط در فوتر سایت عمومی نمایش داده می‌شوند. صفحات حریم خصوصی، شرایط استفاده، قوانین و SLA از بخش «صفحات سایت» در مدیریت محتوا ویرایش می‌شوند.</div>
         </Card>
 
         <Card className="shadow-sm" title="سکشن‌های صفحه" extra={

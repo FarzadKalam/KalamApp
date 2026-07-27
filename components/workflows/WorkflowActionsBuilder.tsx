@@ -14,6 +14,7 @@ import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 import FormulaEditorModal from '../formulas/FormulaEditorModal';
 import MessageComposerModal from '../MessageComposerModal';
 import PersianDatePicker from '../PersianDatePicker';
+import RichTextEditor from '../RichTextEditor';
 import { STORY_GRADIENT_PRESET_LIST } from '../../utils/storyGradients';
 import { MODULES } from '../../moduleRegistry';
 import {
@@ -1173,12 +1174,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 
     if (field.type === FieldType.LONG_TEXT || field.type === FieldType.SUPER_LONG_TEXT) {
       return (
-        <Input.TextArea
-          rows={field.type === FieldType.SUPER_LONG_TEXT ? 6 : 3}
+        <RichTextEditor
           value={value}
           disabled={disabled}
-          onChange={(e) => onValueChange(e.target.value)}
-          placeholder="مقدار"
+          onChange={onValueChange}
+          minRows={field.type === FieldType.SUPER_LONG_TEXT ? 6 : 3}
         />
       );
     }

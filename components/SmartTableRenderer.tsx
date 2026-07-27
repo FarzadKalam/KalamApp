@@ -28,6 +28,7 @@ import ResilientImage from './common/ResilientImage';
 import AssigneeAvatarDisplay from './common/AssigneeAvatarDisplay';
 import FileExtensionTile from './files/FileExtensionTile';
 import { isImageFileLike } from '../utils/imagePreview';
+import RichTextContent from './RichTextContent';
 
 const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
 const ProcessCardsV2RuntimeBlock = React.lazy(() => import('./processes/ProcessCardsV2RuntimeBlock'));
@@ -1072,6 +1073,11 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
                 ? 'w-[68%]'
                 : 'w-[64%]'
           );
+        }
+        if (field.type === FieldType.LONG_TEXT || field.type === FieldType.SUPER_LONG_TEXT) {
+          return renderRowLink(record, (
+            <RichTextContent value={value} className="max-h-28 overflow-hidden text-xs leading-5 text-gray-600 dark:text-gray-300" />
+          ));
         }
         if (field.type === FieldType.DATE && value) {
           const formatted = formatPersianDate(value, 'DATE');

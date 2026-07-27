@@ -64,6 +64,9 @@ import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFi
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { shouldRenderInGeneralModuleUi } from '../utils/moduleFieldVisibility';
 import { createFileManagerOriginForUpload, detectFileManagerTables } from '../utils/fileManagerService';
+import RichTextEditor from './RichTextEditor';
+import RichTextContent from './RichTextContent';
+import { normalizeRichTextHtml, richTextToPlainText } from '../utils/richText';
 import {
   buildStandardSelectPopupRootStyle,
   KALAM_SELECT_FIELD_CLASSNAME,
@@ -444,14 +447,6 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const isLongTextField = fieldType === FieldType.LONG_TEXT || fieldType === FieldType.SUPER_LONG_TEXT;
   const isSuperLongTextField = fieldType === FieldType.SUPER_LONG_TEXT;
   const isJsonField = fieldType === FieldType.JSON;
-  const formattedLongTextValue = isLongTextField ? formatTextForInput(value) : '';
-  const [longTextDraftValue, setLongTextDraftValue] = useState(formattedLongTextValue);
-  const longTextDraftValueRef = useRef(formattedLongTextValue);
-  const longTextFocusedRef = useRef(false);
-  const longTextComposingRef = useRef(false);
-  const longTextCommitTimerRef = useRef<number | null>(null);
-  const lastCommittedLongTextValueRef = useRef(normalizeDigitsToEnglish(formattedLongTextValue));
-  const onChangeRef = useRef(onChange);
   const [jsonDraftValue, setJsonDraftValue] = useState(() => formatJsonForEditor(value));
   const [jsonValidationError, setJsonValidationError] = useState('');
   const { label: currencyLabel } = useCurrencyConfig();
@@ -471,56 +466,11 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     );
   const collapsedLongTextMaxHeightClass = isSuperLongTextField ? 'max-h-40' : 'max-h-28';
   const collapsedLongTextMinRows = isSuperLongTextField ? 6 : 4;
-  const expandedLongTextMaxRows = isSuperLongTextField ? 24 : 16;
-
-  useEffect(() => {
-    onChangeRef.current = onChange;
-  }, [onChange]);
-
-  useEffect(() => {
-    if (!isLongTextField) return;
-    const normalizedValue = normalizeDigitsToEnglish(formattedLongTextValue);
-    lastCommittedLongTextValueRef.current = normalizedValue;
-    if (!longTextFocusedRef.current && !longTextComposingRef.current && longTextDraftValueRef.current !== formattedLongTextValue) {
-      longTextDraftValueRef.current = formattedLongTextValue;
-      setLongTextDraftValue(formattedLongTextValue);
-    }
-  }, [formattedLongTextValue, isLongTextField]);
-
   useEffect(() => {
     if (!isJsonField) return;
     setJsonDraftValue(formatJsonForEditor(value));
     setJsonValidationError('');
   }, [fieldKey, isJsonField, value]);
-
-  useEffect(() => () => {
-    if (longTextCommitTimerRef.current !== null) {
-      window.clearTimeout(longTextCommitTimerRef.current);
-      longTextCommitTimerRef.current = null;
-    }
-  }, []);
-
-  const commitLongTextValue = useCallback((nextValue: string, immediate = false) => {
-    const normalizedValue = normalizeDigitsToEnglish(nextValue);
-    const runCommit = () => {
-      longTextCommitTimerRef.current = null;
-      if (lastCommittedLongTextValueRef.current === normalizedValue) return;
-      lastCommittedLongTextValueRef.current = normalizedValue;
-      onChangeRef.current(normalizedValue);
-    };
-
-    if (longTextCommitTimerRef.current !== null) {
-      window.clearTimeout(longTextCommitTimerRef.current);
-      longTextCommitTimerRef.current = null;
-    }
-
-    if (immediate) {
-      runCommit();
-      return;
-    }
-
-    longTextCommitTimerRef.current = window.setTimeout(runCommit, 180);
-  }, []);
 
   const renderSelectOption = (option: any) => {
     const data = option?.data || option;
@@ -1384,7 +1334,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       msg.warning('دسترسی افزودن متن آماده برای این ماژول فعال نیست.');
       return;
     }
-    const content = String(newReadyTextContent || '').trim();
+    const content = normalizeRichTextHtml(newReadyTextContent).trim();
     const title = String(newReadyTextTitle || '').trim();
     if (!content) {
       msg.warning('متن آماده نمی‌تواند خالی باشد.');
@@ -1393,7 +1343,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     setAddingReadyText(true);
     try {
       const payload: any = {
-        title: title || content.slice(0, 40),
+        title: title || richTextToPlainText(content).slice(0, 40),
         content,
         module_id: moduleId || null,
       };
@@ -1435,7 +1385,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     }
 
     const title = String(editingReadyTextTitle || '').trim();
-    const content = String(editingReadyTextContent || '').trim();
+    const content = normalizeRichTextHtml(editingReadyTextContent).trim();
     if (!content) {
       msg.warning('متن آماده نمی‌تواند خالی باشد.');
       return;
@@ -1446,7 +1396,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       let query = supabase
         .from('ready_texts')
         .update({
-          title: title || content.slice(0, 40),
+          title: title || richTextToPlainText(content).slice(0, 40),
           content,
         })
         .eq('id', editingReadyTextId);
@@ -2149,11 +2099,12 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             <div className="flex items-start gap-2 w-full">
               <div className="flex-1 min-w-0">
                 <div className="relative">
-                  <div
-                    className={`text-gray-800 whitespace-pre-wrap break-words transition-all duration-200 ${isSuperLongTextField ? 'leading-7 text-[15px]' : 'leading-6'} ${shouldShowLongTextToggle && !isLongTextExpanded ? `${collapsedLongTextMaxHeightClass} overflow-hidden` : ''}`}
-                  >
-                    {rendered ? toPersianNumber(rendered) : (compactMode ? '' : '-')}
-                  </div>
+                  {rendered ? (
+                    <RichTextContent
+                      value={rendered}
+                      className={`text-gray-800 transition-all duration-200 ${isSuperLongTextField ? 'leading-7 text-[15px]' : 'leading-6'} ${shouldShowLongTextToggle && !isLongTextExpanded ? `${collapsedLongTextMaxHeightClass} overflow-hidden` : ''}`}
+                    />
+                  ) : (compactMode ? '' : '-')}
                   {shouldShowLongTextToggle && !isLongTextExpanded && (
                     <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-white dark:from-[#1f1f1f] to-transparent" />
                   )}
@@ -2230,45 +2181,12 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         return (
           <div className="w-full">
             <div className="flex items-start gap-2 w-full">
-            <Input.TextArea
-              {...commonProps}
-              value={longTextDraftValue}
-              onFocus={() => {
-                longTextFocusedRef.current = true;
-              }}
-              onCompositionStart={() => {
-                longTextComposingRef.current = true;
-              }}
-              onCompositionEnd={(event: React.CompositionEvent<HTMLTextAreaElement>) => {
-                longTextComposingRef.current = false;
-                const nextValue = event.currentTarget.value;
-                longTextDraftValueRef.current = nextValue;
-                setLongTextDraftValue(nextValue);
-                commitLongTextValue(nextValue);
-              }}
-              onBlur={(event) => {
-                longTextFocusedRef.current = false;
-                longTextComposingRef.current = false;
-                const nextValue = event.target.value;
-                longTextDraftValueRef.current = formatTextForInput(nextValue);
-                setLongTextDraftValue(formatTextForInput(nextValue));
-                commitLongTextValue(nextValue, true);
-              }}
-              onChange={(event) => {
-                const nextValue = event.target.value;
-                longTextDraftValueRef.current = nextValue;
-                setLongTextDraftValue(nextValue);
-                if (!longTextComposingRef.current) {
-                  commitLongTextValue(nextValue);
-                }
-              }}
-              rows={compactMode ? 1 : collapsedLongTextMinRows}
-              autoSize={compactMode
-                ? undefined
-                : {
-                    minRows: collapsedLongTextMinRows,
-                    maxRows: isLongTextExpanded ? expandedLongTextMaxRows : collapsedLongTextMinRows + 4,
-                  }}
+            <RichTextEditor
+              value={value}
+              onChange={onChange}
+              disabled={!forceEditMode || isReadonly}
+              compact={compactMode}
+              minRows={compactMode ? 2 : collapsedLongTextMinRows}
             />
             {readyTextPermissions.canView && (
               <Button
@@ -2933,13 +2851,13 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 placeholder="عنوان متن"
                 maxLength={120}
               />
-              <Input.TextArea
+              <div className="md:col-span-2">
+              <RichTextEditor
                 value={newReadyTextContent}
-                onChange={(e) => setNewReadyTextContent(e.target.value)}
-                placeholder="متن آماده جدید..."
-                autoSize={{ minRows: 1, maxRows: 4 }}
-                className="md:col-span-2"
+                onChange={setNewReadyTextContent}
+                minRows={3}
               />
+              </div>
             </div>
             <div className="flex items-center justify-end">
               <Button type="primary" onClick={addReadyText} loading={addingReadyText}>
@@ -2972,10 +2890,10 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                           placeholder="عنوان متن"
                           maxLength={120}
                         />
-                        <Input.TextArea
+                        <RichTextEditor
                           value={editingReadyTextContent}
-                          onChange={(e) => setEditingReadyTextContent(e.target.value)}
-                          autoSize={{ minRows: 2, maxRows: 6 }}
+                          onChange={setEditingReadyTextContent}
+                          minRows={3}
                         />
                       </div>
                     ) : (
@@ -2984,9 +2902,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                           {item.pinned ? <PushpinFilled className="text-amber-500" /> : null}
                           <span>{item.title || 'متن بدون عنوان'}</span>
                         </div>
-                        <div className="mt-1 text-xs whitespace-pre-wrap break-words text-gray-600 dark:text-gray-300">
-                          {item.content}
-                        </div>
+                        <RichTextContent value={item.content} className="mt-1 text-xs text-gray-600 dark:text-gray-300" />
                       </>
                     )}
                   </div>
@@ -3025,21 +2941,12 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                         <Button
                           size="small"
                           onClick={() => {
-                            const currentValue = isLongTextField
-                              ? normalizeDigitsToEnglish(longTextDraftValueRef.current)
-                              : String(value || '');
+                            const currentValue = String(value || '');
                             const readyTextValue = String(item.content || '');
                             const nextValue = currentValue
-                              ? `${currentValue}${currentValue.endsWith('\n') ? '' : '\n'}${readyTextValue}\n`
-                              : `${readyTextValue}\n`;
-                            if (isLongTextField) {
-                              const formattedNextValue = formatTextForInput(nextValue);
-                              longTextDraftValueRef.current = formattedNextValue;
-                              setLongTextDraftValue(formattedNextValue);
-                              commitLongTextValue(formattedNextValue, true);
-                            } else {
-                              onChange(nextValue);
-                            }
+                              ? `${currentValue}<br>${readyTextValue}`
+                              : readyTextValue;
+                            onChange(nextValue);
                           }}
                         >
                           درج

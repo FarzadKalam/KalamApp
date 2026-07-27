@@ -1,3 +1,5 @@
+import { hasMeaningfulRichTextContent } from '../richText';
+
 /** Shared, renderer-agnostic rules for fields available to print. */
 export const isPrintableModuleField = (moduleConfig: any, field: any): boolean => {
   const fieldKey = String(field?.key || '').trim();
@@ -27,7 +29,7 @@ const toComparableNumber = (value: unknown): number | null => {
 
 export const hasMeaningfulPrintValue = (value: unknown, fieldKey = ''): boolean => {
   if (value === null || value === undefined) return false;
-  if (typeof value === 'string' && value.trim() === '') return false;
+  if (typeof value === 'string' && !hasMeaningfulRichTextContent(value)) return false;
   if (Array.isArray(value)) return value.length > 0;
 
   // Zero is a storage default for financial discounts, but is visually empty.
@@ -37,6 +39,45 @@ export const hasMeaningfulPrintValue = (value: unknown, fieldKey = ''): boolean 
   }
 
   return true;
+};
+
+const normalizePrintFieldKeys = (keys: Iterable<unknown>, allowedKeys: Set<string>) =>
+  Array.from(
+    new Set(
+      Array.from(keys)
+        .map((key) => String(key || '').trim())
+        .filter((key) => key && allowedKeys.has(key)),
+    ),
+  );
+
+/**
+ * A single selection contract for record, list, and system-template printers.
+ * An absent selection uses value-aware defaults; an explicit empty selection
+ * means that the user selected nothing and must never fall back to "all".
+ */
+export const resolveEffectivePrintFieldKeys = ({
+  fields,
+  selectedKeys,
+  hasExplicitSelection,
+}: {
+  fields: Array<{ key?: unknown; hasValue?: boolean; defaultSelected?: boolean }>;
+  selectedKeys?: Iterable<unknown> | null;
+  hasExplicitSelection: boolean;
+}): string[] => {
+  const allowedKeys = new Set(
+    (fields || [])
+      .map((field) => String(field?.key || '').trim())
+      .filter(Boolean),
+  );
+
+  if (hasExplicitSelection) {
+    return normalizePrintFieldKeys(selectedKeys || [], allowedKeys);
+  }
+
+  return (fields || [])
+    .filter((field) => field?.defaultSelected !== false && field?.hasValue !== false)
+    .map((field) => String(field?.key || '').trim())
+    .filter(Boolean);
 };
 
 export const getPrintFieldSelectionCandidates = (fieldPath: string): string[] => {

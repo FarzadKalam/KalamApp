@@ -18,6 +18,7 @@ import LandingRenderer from '../components/publicSite/LandingRenderer';
 import PricingSection from '../components/publicSite/shared/PricingSection';
 import DemoForm from '../components/publicSite/shared/DemoForm';
 import { PANEL_URL, DEMO_URL, sitePath } from '../components/publicSite/siteLinks';
+import { DEFAULT_ENAMAD_TRUST_HTML } from '../utils/publicSiteTrustSeals';
 
 type PublicPage = 'home' | 'features' | 'pricing' | 'blog' | 'blog-post' | 'learn' | 'learn-post' | 'updates' | 'about' | 'contact' | 'demo' | 'privacy' | 'terms' | 'rules' | 'sla';
 
@@ -28,6 +29,8 @@ type FooterConfig = {
   email?: string;
   address?: string;
   copyright?: string;
+  enamadTrustHtml?: string;
+  zarinpalTrustHtml?: string;
 };
 
 const nav = [
@@ -38,9 +41,6 @@ const nav = [
   ['تازه‌ها', sitePath('/updates')],
   ['مستندات API', '/tazesystem/developers'],
 ] as const;
-
-const ENAMAD_TRUST_SEAL_HTML =
-  "<a referrerpolicy='origin' target='_blank' href='https://trustseal.enamad.ir/?id=746313&Code=7CboRX8cGQ2wJ4c6glCuftng2zueoJS3'><img referrerpolicy='origin' src='https://trustseal.enamad.ir/logo.aspx?id=746313&Code=7CboRX8cGQ2wJ4c6glCuftng2zueoJS3' alt='' style='cursor:pointer' code='7CboRX8cGQ2wJ4c6glCuftng2zueoJS3'></a>";
 
 const SectionTitle = ({ eyebrow, title, text }: { eyebrow: string; title: string; text: string }) => (
   <div className="mx-auto mb-10 max-w-3xl text-center">
@@ -99,6 +99,8 @@ const Footer = () => {
   const email = f?.email || 'hello@tazesystem.ir';
   const address = f?.address || '';
   const copyright = f?.copyright || `© ${new Date().getFullYear()} تازه سیستم. تمام حقوق محفوظ است.`;
+  const enamadTrustHtml = f?.enamadTrustHtml?.trim() || DEFAULT_ENAMAD_TRUST_HTML;
+  const zarinpalTrustHtml = f?.zarinpalTrustHtml?.trim();
 
   const legal: ReadonlyArray<readonly [string, string]> = [
     ['حریم خصوصی', sitePath('/privacy')],
@@ -119,9 +121,18 @@ const Footer = () => {
           <div className="mt-5 flex flex-wrap items-center gap-3">
             <div
               className="rounded-lg border border-zinc-200 bg-zinc-50 p-2"
-              dangerouslySetInnerHTML={{ __html: ENAMAD_TRUST_SEAL_HTML }}
+              aria-label="نماد اعتماد الکترونیکی"
+              dangerouslySetInnerHTML={{ __html: enamadTrustHtml }}
             />
-            {['ساماندهی', 'درگاه پرداخت'].map((item) => <span key={item} className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">{item}: در حال دریافت</span>)}
+            {zarinpalTrustHtml ? (
+              <div
+                className="rounded-lg border border-zinc-200 bg-zinc-50 p-2"
+                aria-label="نشان زرین‌پال"
+                dangerouslySetInnerHTML={{ __html: zarinpalTrustHtml }}
+              />
+            ) : (
+              <span className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">نشان زرین‌پال از تنظیمات صفحهٔ اصلی قابل افزودن است</span>
+            )}
           </div>
         </div>
         <FooterColumn title="محصول" items={[['امکانات', sitePath('/features')], ['تعرفه‌ها', sitePath('/pricing')], ['شروع رایگان', DEMO_URL], ['ورود به پنل', PANEL_URL]]} />
@@ -168,6 +179,25 @@ type ProductUpdate = {
 };
 
 const recentProductUpdates: ProductUpdate[] = [
+  {
+    version: '2.45.0.0.24',
+    title: 'مدیریت نشان‌های پرداخت و اعتماد در فوتر سایت',
+    summary: 'مدیر تازه سیستم می‌تواند کد رسمی نشان زرین‌پال و اینماد را از تنظیمات صفحهٔ اصلی مدیریت کند تا در پایین سایت عمومی نمایش داده شوند.',
+    details: [
+      'کد رسمی نشان زرین‌پال و اینماد از همان بخش تنظیمات فوتر صفحهٔ اصلی ذخیره و منتشر می‌شود.',
+      'بخش نشان ساماندهی از فوتر سایت حذف شد.',
+    ],
+  },
+  {
+    version: '2.45.0.0.18',
+    title: 'قالب‌بندی ساده برای متن‌های بلند',
+    summary: 'متن‌های بلند حالا می‌توانند خواناتر و ساخت‌یافته‌تر نوشته شوند؛ ظاهر آن‌ها نیز در نمایش و چاپ حفظ می‌شود.',
+    details: [
+      'ابزارهای بولد، ایتالیک، زیرخط، تیتر، فهرست و رنگ متن در فرم‌ها و صفحه رکورد در دسترس هستند.',
+      'پیام‌های آماده با همان قالب‌بندی ذخیره می‌شوند و هنگام درج در متن، ظاهرشان را نگه می‌دارند.',
+      'توضیحات فاکتور آنلاین و خروجی‌های چاپی، قالب‌بندی متن را نمایش می‌دهند.',
+    ],
+  },
   {
     version: '2.45.0.0.0',
     title: 'کپی مرحله از الگوهای دیگر فرآیند',

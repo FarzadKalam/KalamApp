@@ -138,6 +138,33 @@ const toRgbChannels = (hex: string) => {
   return `${r} ${g} ${b}`;
 };
 
+const relativeLuminance = (hex: string) => {
+  const { r, g, b } = hexToRgb(hex);
+  const channel = (value: number) => {
+    const normalized = value / 255;
+    return normalized <= 0.03928
+      ? normalized / 12.92
+      : ((normalized + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+};
+
+const contrastRatio = (first: string, second: string) => {
+  const [lighter, darker] = [relativeLuminance(first), relativeLuminance(second)].sort((a, b) => b - a);
+  return (lighter + 0.05) / (darker + 0.05);
+};
+
+// رنگ متنی برند در تم شب باید روی هر دو سطح تیرهٔ برند حداقل کنتراست AA داشته باشد.
+// لینک‌ها و متن‌های تأکیدی از همین رنگ استفاده می‌کنند.
+export const getAccessibleDarkBrandTextColor = (palette: BrandingPalette) => {
+  const backgrounds = [palette.darkBg, palette.darkSurface];
+  for (let ratio = 0; ratio <= 1; ratio += 0.02) {
+    const candidate = mixColors(palette.primary, '#FFFFFF', ratio);
+    if (backgrounds.every((background) => contrastRatio(candidate, background) >= 4.5)) return candidate;
+  }
+  return '#FFFFFF';
+};
+
 export const DEFAULT_BRANDING: BrandingConfig = {
   brandName: 'اتوماسیون هوشمند تازه سیستم',
   shortName: 'تازه سیستم',
@@ -227,6 +254,7 @@ export const buildBrandCssVars = (palette: BrandingPalette): Record<string, stri
     '--brand-800-rgb': toRgbChannels(shades[800]),
     '--brand-900-rgb': toRgbChannels(shades[900]),
     '--brand-accent-pink-rgb': toRgbChannels(palette.accentPink),
+    '--brand-text-rgb': toRgbChannels(getAccessibleDarkBrandTextColor(palette)),
     '--app-dark-bg-rgb': toRgbChannels(palette.darkBg),
     '--app-dark-surface-rgb': toRgbChannels(palette.darkSurface),
     '--app-dark-border-rgb': toRgbChannels(palette.darkBorder),

@@ -16,6 +16,7 @@
   --brand-800-rgb: 25 23 63;
   --brand-900-rgb: 15 23 42;
   --brand-accent-pink-rgb: 219 39 119;
+  --brand-text-rgb: 166 163 220;
   --app-dark-bg-rgb: 18 22 29;
   --app-dark-surface-rgb: 29 35 45;
   --app-dark-border-rgb: 55 65 81;
@@ -161,6 +162,24 @@ body.kalam-app-shell-lock > .ant-picker-dropdown,
   align-items: center;
   color: inherit;
   text-decoration: none;
+}
+
+/* رنگ برند برای متن و لینک در تم شب از رنگ دکمه جداست تا روی پالت‌های تیره خوانا بماند. */
+html.dark .ant-btn-link,
+html.dark .ant-typography a {
+  color: rgb(var(--brand-text-rgb)) !important;
+}
+
+html.dark [class~="text-brand-500"]:not([class*="dark:text-"]),
+html.dark [class~="text-brand-600"]:not([class*="dark:text-"]),
+html.dark [class~="text-brand-700"]:not([class*="dark:text-"]),
+html.dark [class~="text-[rgb(var(--brand-500-rgb))]"]:not([class*="dark:text-"]),
+html.dark [class~="text-[rgb(var(--brand-600-rgb))]"]:not([class*="dark:text-"]),
+html.dark [class~="text-[rgb(var(--brand-700-rgb))]"]:not([class*="dark:text-"]),
+html.dark [class~="!text-[rgb(var(--brand-500-rgb))]"]:not([class*="dark:!text-"]),
+html.dark [class~="!text-[rgb(var(--brand-600-rgb))]"]:not([class*="dark:!text-"]),
+html.dark [class~="!text-[rgb(var(--brand-700-rgb))]"]:not([class*="dark:!text-"]) {
+  color: rgb(var(--brand-text-rgb)) !important;
 }
 
 .app-main-sider .sidebar-menu-label,

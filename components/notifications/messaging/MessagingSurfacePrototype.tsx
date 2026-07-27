@@ -187,6 +187,7 @@ type TimelineEvent = {
   callType?: string;
   relatedModuleId?: string | null;
   relatedRecordId?: string | null;
+  edited?: boolean;
 };
 
 const getTimelineEventMutationKey = (channel: ChannelKind, item: TimelineEvent) => {
@@ -600,6 +601,20 @@ const isAiBotSenderPayload = (payload: any, row?: any) => {
     || Boolean(source.ai_generated || source.ai_answer || source.workflow_ai_prompt);
 };
 
+const isSystemBotSenderPayload = (payload: any, row?: any) => {
+  const source = payload && typeof payload === 'object' ? payload : {};
+  return [
+    source.sender_kind,
+    source.sender_type,
+    source.source_type,
+    source.message_source,
+    source.author_type,
+    row?.sender_kind,
+    row?.sender_type,
+  ].some((value) => ['system', 'workflow', 'automation', 'scheduled_report'].includes(String(value || '').trim().toLowerCase()))
+    || Boolean(source.workflow_action_type || source.process_automation_rule_id || source.scheduled_report_id);
+};
+
 const isAiTimelineEvent = (item: any) => {
   const payload = item?.sourceRow?.payload && typeof item.sourceRow.payload === 'object' ? item.sourceRow.payload : {};
   return Boolean(item?.isAiAuthor) || isAiBotSenderPayload(payload, item?.sourceRow);
@@ -638,7 +653,10 @@ const buildBotGroupRpcTimelineEvents = (
       author: direction === 'outbound' ? (isAiSender ? 'هوش مصنوعی' : 'کاربر سازمان') : senderTitle,
       text,
       time: safeJalaliFormat(row?.created_at, 'YYYY/MM/DD HH:mm') || '',
-      status: direction === 'outbound' ? 'ارسال شده' : undefined,
+      status: Boolean(payload?.is_edited || payload?.edited_at || payload?.message_edited)
+        ? 'ویرایش شده'
+        : (direction === 'outbound' ? 'ارسال شده' : undefined),
+      edited: Boolean(payload?.is_edited || payload?.edited_at || payload?.message_edited),
       replyTo: String(payload?.reply_to_message_id || payload?.reply_to_id || '').trim() || null,
       attachments: attachments.length ? attachments : undefined,
       avatarUrl: isAiSender ? null : resolveBotRpcSenderAvatarUrl(row),
@@ -1760,7 +1778,7 @@ const TimelineIconButton: React.FC<{
       className={`inline-flex h-7 w-7 items-center justify-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-45 ${
         active
           ? activeTone === 'like'
-            ? 'bg-rose-500/12 text-rose-600 shadow-sm hover:bg-rose-500/18 hover:text-rose-700 dark:bg-rose-400/16 dark:text-rose-200 dark:hover:bg-rose-400/22 dark:hover:text-rose-100'
+            ? 'bg-rose-500 text-white shadow-sm hover:bg-rose-600 dark:bg-rose-500 dark:text-white dark:hover:bg-rose-400'
             : inverse
               ? 'bg-white/24 text-white shadow-sm'
               : 'bg-[rgba(var(--brand-500-rgb),0.12)] text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--brand-300-rgb),0.12)] dark:text-[rgb(var(--brand-200-rgb))]'
@@ -1815,7 +1833,10 @@ const TimelineEventCard: React.FC<{
   canDelete?: boolean;
   deleting?: boolean;
   onDelete?: (item: TimelineEvent) => void;
-}> = ({ item, activeConversation, unread = false, onReply, onForward, onCreateActivity, onToggleLike, onShowReceipts, onBindBotSender, onBindVoipOperator, onRetryBotMedia, retryingMedia = false, canDelete = false, deleting = false, onDelete }) => {
+  canEdit?: boolean;
+  editing?: boolean;
+  onEdit?: (item: TimelineEvent) => void;
+}> = ({ item, activeConversation, unread = false, onReply, onForward, onCreateActivity, onToggleLike, onShowReceipts, onBindBotSender, onBindVoipOperator, onRetryBotMedia, retryingMedia = false, canDelete = false, deleting = false, onDelete, canEdit = false, editing = false, onEdit }) => {
   const { message } = App.useApp();
   const outgoing = item.direction === 'outbound';
   const isCall = item.kind === 'call';
@@ -1869,6 +1890,14 @@ const TimelineEventCard: React.FC<{
       || String(item.sourceRow?.provider_operator_id || '').trim(),
     );
   const showRelatedRecordLink = Boolean(item.relatedRecordLabel && activeConversation.channel !== 'bot_group' && activeConversation.channel !== 'bot_direct');
+  const isEdited = Boolean(
+    item.edited
+    || item.sourceRow?.is_edited
+    || item.sourceRow?.edited_at
+    || item.sourceRow?.payload?.is_edited
+    || item.sourceRow?.payload?.edited_at
+    || item.sourceRow?.payload?.message_edited,
+  );
   const relatedRecordHref = showRelatedRecordLink
     ? buildRecordHref(
       item.relatedModuleId || item.sourceRow?.module_id || item.sourceRow?.related_module_id || activeConversation.relatedModuleId,
@@ -2039,6 +2068,7 @@ const TimelineEventCard: React.FC<{
         {!isCall ? <div className={actionRowClassName}>
           {activeConversation.actions.includes('reply') ? <TimelineIconButton title="پاسخ" icon={<RollbackOutlined />} inverse={outgoing} onClick={() => onReply?.(item)} /> : null}
           {activeConversation.actions.includes('forward') ? <TimelineIconButton title="هدایت" icon={<SendOutlined />} inverse={outgoing} onClick={() => onForward?.(item)} /> : null}
+          {canEdit ? <TimelineIconButton title="ویرایش پیام" icon={<EditOutlined />} inverse={outgoing} disabled={editing} onClick={() => onEdit?.(item)} /> : null}
           {activeConversation.actions.includes('activity') ? <TimelineIconButton title="ایجاد فعالیت" icon={<FileAddOutlined />} inverse={outgoing} onClick={() => onCreateActivity?.(item)} /> : null}
           {canRetryBotMedia ? <TimelineIconButton title="تلاش دوباره برای دریافت پیوست" icon={<ReloadOutlined spin={retryingMedia} />} active={retryingMedia} inverse={outgoing} onClick={() => onRetryBotMedia?.(item)} /> : null}
           {canDelete ? <TimelineIconButton title="حذف پیام" icon={<DeleteOutlined />} danger inverse={outgoing} disabled={deleting} onClick={() => onDelete?.(item)} /> : null}
@@ -2053,6 +2083,7 @@ const TimelineEventCard: React.FC<{
               </Tooltip>
             )
           ) : null}
+          {isEdited ? <span className={`mr-1 text-[10px] ${outgoing ? 'text-white/70' : 'text-slate-400 dark:text-slate-400'}`}>ویرایش شده</span> : null}
         </div> : null}
       </div>
     </div>
@@ -2526,6 +2557,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const [likedOverrides, setLikedOverrides] = useState<Record<string, boolean>>({});
   const [locallyDeletedMessageKeys, setLocallyDeletedMessageKeys] = useState<Set<string>>(() => new Set());
   const [deletingMessageKeys, setDeletingMessageKeys] = useState<Set<string>>(() => new Set());
+  const [editingMessageKeys, setEditingMessageKeys] = useState<Set<string>>(() => new Set());
   const [internalGroupModalOpen, setInternalGroupModalOpen] = useState(false);
   const [internalGroupName, setInternalGroupName] = useState('');
   const [internalGroupUserIds, setInternalGroupUserIds] = useState<string[]>([]);
@@ -3062,6 +3094,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         text: parsed.text || (parsed.attachments.length ? '' : 'پیام داخلی'),
         time: safeJalaliFormat(row?.created_at, 'YYYY/MM/DD HH:mm') || '',
         status: direction === 'outbound' ? 'ارسال شده' : undefined,
+        edited: Boolean(row?.is_edited || row?.edited_at),
         seenAt: direction === 'outbound' ? (Object.keys(readReceipts).length > 0 ? 'وضعیت خوانده‌شدن' : 'ارسال شده') : undefined,
         replyTo: String(row?.reply_to || '').trim() || null,
         attachments: parsed.attachments.map((attachment) => ({
@@ -4491,7 +4524,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       throw new Error('شناسه چت این پی‌وی ثبت نشده است.');
     }
     const attachments = (options?.attachments || []) as NoteAttachment[];
-    await sendBotMessageViaGateway({
+    const providerResponse = await sendBotMessageViaGateway({
       channel,
       chatId,
       text: String(text || '').trim(),
@@ -4501,6 +4534,14 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       moduleId: String(thread?.target_module_id || '').trim() || undefined,
       recordId: String(thread?.target_record_id || '').trim() || undefined,
     });
+    const providerMessageId = String(
+      (providerResponse as any)?.result?.message_id
+      || (providerResponse as any)?.message_id
+      || (providerResponse as any)?.data?.message_id
+      || (providerResponse as any)?.data?.message_update?.message_id
+      || (providerResponse as any)?.data?.messageUpdate?.messageId
+      || ''
+    ).trim() || null;
     const nowIso = new Date().toISOString();
     const { error: insertError } = await supabase
       .from('counterparty_bot_direct_messages')
@@ -4517,6 +4558,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         profile_id: String(thread?.profile_id || '').trim() || null,
         direction: 'outbound',
         message_type: String(options?.messageType || (attachments.length ? 'file' : 'text')).trim() || 'text',
+        provider_message_id: providerMessageId,
         content_text: String(text || '').trim() || null,
         file_url: String(attachments[0]?.url || '').trim() || null,
         file_name: String(attachments[0]?.name || '').trim() || null,
@@ -4662,6 +4704,163 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       return String(item.sourceRow?.created_by || '').trim() === currentUserId;
     }
     return false;
+  };
+
+  const getBotMessageProviderContext = (item: TimelineEvent) => {
+    const row = item.sourceRow || {};
+    const messageTable = activeConversation.channel === 'bot_direct'
+      ? 'counterparty_bot_direct_messages'
+      : 'counterparty_bot_messages';
+    const conversationRow = activeConversation.channel === 'bot_group'
+      ? activeBotGroupRow
+      : (liveData.botDirectThreads || []).find((entry: any) => (
+        String(entry?.id || '').trim() === getBotDirectThreadIdFromConversationKey(activeConversation.key)
+      )) || null;
+    return {
+      row,
+      messageTable,
+      channel: String(row?.channel_type || conversationRow?.channel_type || activeConversation.platform || '').trim() as BotChannel,
+      chatId: String(row?.chat_id || conversationRow?.bot_chat_id || conversationRow?.chat_id || '').trim(),
+      providerMessageId: String(row?.provider_message_id || '').trim(),
+    };
+  };
+
+  const canEditMessage = (item: TimelineEvent) => {
+    const currentUserId = String(liveData.profile.id || '').trim();
+    if (!currentUserId || item.direction !== 'outbound') return false;
+    if (activeConversation.channel === 'internal') {
+      return String(item.sourceRow?.author_id || '').trim() === currentUserId;
+    }
+    if (activeConversation.channel !== 'bot_group' && activeConversation.channel !== 'bot_direct') return false;
+    const { row, channel, chatId, providerMessageId } = getBotMessageProviderContext(item);
+    const messageType = String(row?.message_type || 'text').trim().toLowerCase();
+    const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+    const isOwnMessage = String(row?.created_by || '').trim() === currentUserId;
+    const isEditableAutomatedGroupMessage = activeConversation.channel === 'bot_group'
+      && !String(row?.created_by || '').trim()
+      && (isAiBotSenderPayload(payload, row) || isSystemBotSenderPayload(payload, row));
+    return messageType === 'text'
+      && !item.attachments?.length
+      && Boolean(String(item.text || '').trim())
+      && (isOwnMessage || isEditableAutomatedGroupMessage)
+      && BOT_CHANNELS.includes(channel)
+      && Boolean(chatId)
+      && Boolean(providerMessageId);
+  };
+
+  const editMessage = async (item: TimelineEvent, nextText: string) => {
+    const normalizedText = String(nextText || '').trim();
+    const rowId = String(item.sourceRow?.id || '').trim();
+    const mutationKey = getTimelineEventMutationKey(activeConversation.channel, item);
+    if (!canEditMessage(item) || !normalizedText || !rowId || !mutationKey) {
+      throw new Error('این پیام قابل ویرایش نیست.');
+    }
+    setEditingMessageKeys((previous) => new Set(previous).add(mutationKey));
+    try {
+      const editedAt = new Date().toISOString();
+      if (activeConversation.channel === 'internal') {
+        const parsed = parseNoteContent(item.sourceRow?.content ?? '');
+        const nextContent = serializeNoteContent(normalizedText, parsed.attachments);
+        const { error } = await supabase
+          .from('notes')
+          .update({ content: nextContent, is_edited: true, edited_at: editedAt })
+          .eq('id', rowId);
+        if (error) throw error;
+        internalTimeline.setItems((previous: any[]) => (
+          (previous || []).map((row: any) => (
+            String(row?.id || '').trim() === rowId
+              ? { ...row, content: nextContent, is_edited: true, edited_at: editedAt }
+              : row
+          ))
+        ));
+        await Promise.all([
+          refreshInternalConversations({ force: true }),
+          refreshInternalTimeline({ force: true }),
+        ]);
+      } else {
+        const { row, messageTable, channel, chatId, providerMessageId } = getBotMessageProviderContext(item);
+        const activeConnection = await getActiveChannelSettings(channel);
+        const connectionId = String(activeConnection?.id || '').trim();
+        if (!connectionId) throw new Error('اتصال فعال بات پیدا نشد.');
+        const { data, error: providerError } = await supabase.functions.invoke('bot-admin', {
+          body: {
+            action: 'edit_message',
+            channel,
+            connectionId,
+            chatId,
+            providerMessageId,
+            text: normalizedText,
+            messageTable,
+          },
+        });
+        if (providerError) throw providerError;
+        if (!data?.success) throw new Error(String(data?.message || 'ویرایش پیام در کانال بات ناموفق بود.'));
+        const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+        const { error } = await supabase
+          .from(messageTable)
+          .update({
+            content_text: normalizedText,
+            payload: { ...payload, is_edited: true, edited_at: editedAt },
+          })
+          .eq('id', rowId);
+        if (error) throw error;
+        botTimeline.setItems((previous: any[]) => (
+          (previous || []).map((row: any) => (
+            String(row?.id || '').trim() === rowId
+              ? {
+                ...row,
+                content_text: normalizedText,
+                payload: { ...(row?.payload || {}), is_edited: true, edited_at: editedAt },
+              }
+              : row
+          ))
+        ));
+        await Promise.all([
+          liveData.refresh(),
+          refreshBotConversations({ force: true }),
+          botTimelineRefreshRef.current ? botTimelineRefreshRef.current({ force: true }) : Promise.resolve(null),
+        ]);
+      }
+      message.success('پیام ویرایش شد.');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ویرایش پیام ناموفق بود.'));
+      throw error;
+    } finally {
+      setEditingMessageKeys((previous) => {
+        const next = new Set(previous);
+        next.delete(mutationKey);
+        return next;
+      });
+    }
+  };
+
+  const requestEditMessage = (item: TimelineEvent) => {
+    if (!canEditMessage(item)) return;
+    let nextText = String(item.text || '').trim();
+    Modal.confirm({
+      title: 'ویرایش پیام',
+      width: 560,
+      okText: 'ذخیره تغییرات',
+      cancelText: 'انصراف',
+      content: (
+        <Input.TextArea
+          defaultValue={nextText}
+          autoSize={{ minRows: 4, maxRows: 12 }}
+          onChange={(event) => {
+            nextText = event.target.value;
+          }}
+          placeholder="متن پیام"
+          aria-label="متن ویرایش‌شدهٔ پیام"
+        />
+      ),
+      onOk: () => {
+        if (!String(nextText || '').trim()) {
+          message.warning('متن پیام نمی‌تواند خالی باشد.');
+          return Promise.reject(new Error('empty edited message'));
+        }
+        return editMessage(item, nextText);
+      },
+    });
   };
 
   const deleteMessage = async (item: TimelineEvent) => {
@@ -5252,6 +5451,9 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
                       canDelete={canDeleteMessage(item)}
                       deleting={deletingMessageKeys.has(getTimelineEventMutationKey(activeConversation.channel, item))}
                       onDelete={requestDeleteMessage}
+                      canEdit={canEditMessage(item)}
+                      editing={editingMessageKeys.has(getTimelineEventMutationKey(activeConversation.channel, item))}
+                      onEdit={requestEditMessage}
                     />
                   ))}
                 </div>
