@@ -3,6 +3,7 @@ import { FieldType, ModuleNature, ModuleDefinition } from '../types';
 import { getRelationDisplayFields, getRelationSearchFields } from './relationDisplay';
 import { getRelationLabelFallbackFields, getPreferredRelationTargetField } from './relationTargetField';
 import { isWorkflowVirtualField } from './moduleFieldVisibility';
+import { BOT_VIRTUAL_FIELD_KEYS } from './botPlatform';
 
 const INCOMPATIBLE_COLUMN_CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -83,6 +84,12 @@ const applyCacheKeyColumnExclusions = (cacheKey: string, columns: string[]) => {
     if (!rule.pattern.test(cacheKey)) return;
     rule.columns.forEach((column) => excluded.add(column.toLowerCase()));
   });
+  // عنوان و وضعیت گروه‌های بات از جدول‌های تنظیمات بات می‌آیند، نه از جدول
+  // مشتری/تأمین‌کننده. حتی اگر config قدیمی آن‌ها را در lookup وارد کند، نباید
+  // یک relation label ساده با درخواست ستون ناموجود 400 شود.
+  if (/(?:^|:)record-reference:(?:customers|suppliers|employees)(?::|$)/.test(cacheKey)) {
+    BOT_VIRTUAL_FIELD_KEYS.forEach((column) => excluded.add(column.toLowerCase()));
+  }
   if (excluded.size === 0) return columns;
   const next = columns.filter((column) => !excluded.has(column.toLowerCase()));
   return next.length > 0 ? next : ['id'];

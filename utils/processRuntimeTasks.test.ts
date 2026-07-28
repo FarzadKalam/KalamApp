@@ -33,25 +33,40 @@ describe('process runtime task batching', () => {
     expect(second).toEqual([{ id: 'task-b', process_run_id: 'run-b' }]);
   });
 
-  it('falls back to the existing record RPC until the new migration is deployed', async () => {
-    const rpc = vi.fn()
-      .mockResolvedValueOnce({ data: null, error: { code: 'PGRST202', message: 'function not found' } })
-      .mockResolvedValueOnce({ data: [{ id: 'task-a' }], error: null });
+  it('uses the lightweight record RPC for a single runtime card', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: [{ id: 'task-a' }], error: null });
 
     const tasks = await fetchProcessRuntimeTasksForRecord(
       { rpc },
       'projects',
       RECORD_A,
-      { runs: [{ id: '33333333-3333-4333-8333-333333333333' }], stages: [] },
-      { force: true },
+      { runs: [], stages: [] },
     );
 
     expect(tasks).toEqual([{ id: 'task-a' }]);
-    expect(rpc).toHaveBeenLastCalledWith('get_process_runtime_tasks_for_record', expect.objectContaining({
+    expect(rpc).toHaveBeenCalledWith('get_process_runtime_tasks_for_record', expect.objectContaining({
       p_module_id: 'projects',
       p_record_id: RECORD_A,
-      p_process_run_ids: ['33333333-3333-4333-8333-333333333333'],
     }));
+    expect(rpc).not.toHaveBeenCalledWith('get_process_runtime_tasks_batch_for_records', expect.anything());
+  });
+
+  it('uses controlled single-record fallback after an internal batch failure', async () => {
+    const rpc = vi.fn(async (name: string, params: any) => {
+      if (name === 'get_process_runtime_tasks_batch_for_records') {
+        return { data: null, error: { code: 'XX000', message: 'internal error in batch runtime function' } };
+      }
+      return { data: [{ id: `task:${params.p_record_id}` }], error: null };
+    });
+
+    const [first, second] = await Promise.all([
+      fetchProcessRuntimeTasksForRecord({ rpc }, 'projects', RECORD_A, { runs: [], stages: [] }, { force: true }),
+      fetchProcessRuntimeTasksForRecord({ rpc }, 'projects', RECORD_B, { runs: [], stages: [] }, { force: true }),
+    ]);
+
+    expect(first).toEqual([{ id: `task:${RECORD_A}` }]);
+    expect(second).toEqual([{ id: `task:${RECORD_B}` }]);
+    expect(rpc).toHaveBeenCalledTimes(3);
   });
 
   it('splits a timed-out batch and still resolves every record', async () => {

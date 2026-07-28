@@ -12,7 +12,6 @@ import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import { AI_OPEN_EVENT, type AssistantContext } from '../../utils/aiAssistantEvents';
 import { sendBotMessageViaGateway } from '../../utils/botGateway';
-import { getBotPlatformAvatarSrc } from '../../utils/botPlatform';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import { isMissingRpcError } from '../../utils/notificationConversationRpc';
 import {
@@ -336,30 +335,6 @@ const resolveBotOverlaySenderName = (row: OverlayFeedRow) => {
 const buildBotDirectConversationKey = (channel: string, chatId: string) =>
   `bot:direct:${String(channel || '').trim()}:${String(chatId || '').trim()}`;
 
-type BotDirectThreadOverlayRow = {
-  id: string;
-  channel_type: string | null;
-  chat_id: string | null;
-  target_module_id: string | null;
-  target_record_id: string | null;
-  display_name: string | null;
-  username: string | null;
-  phone_number: string | null;
-};
-
-type BotDirectMessageOverlayRow = {
-  id: string;
-  direct_thread_id: string | null;
-  direction: string | null;
-  content_text: string | null;
-  file_url: string | null;
-  file_name: string | null;
-  mime_type: string | null;
-  message_type: string | null;
-  created_at: string | null;
-  payload: Record<string, any> | null;
-};
-
 export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
   const [identity, setIdentity] = useState({ userId: '', roleId: '', orgId: '', fullName: '' });
@@ -371,128 +346,9 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
   const overlayRowsRef = useRef<OverlayFeedRow[]>([]);
   const overlayLoadMoreInFlightRef = useRef(false);
   const summaryRefreshInFlightRef = useRef<Promise<void> | null>(null);
-  const summaryRefreshQueuedRef = useRef(false);
   const overlayRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const [overlayLoadingMore, setOverlayLoadingMore] = useState(false);
   const loadOverlayPageRef = useRef<(beforeCursor: string | null, append: boolean) => Promise<void>>(async () => {});
-
-  const loadBotDirectOverlayData = useCallback(async () => {
-    if (!identity.userId || !identity.orgId) {
-      return { unreadCount: 0, rows: [] as OverlayFeedRow[] };
-    }
-    const { data: directMessages, error: directMessagesError } = await supabase
-      .from('counterparty_bot_direct_messages')
-      .select('id,direct_thread_id,direction,content_text,file_url,file_name,mime_type,message_type,created_at,payload')
-      .eq('org_id', identity.orgId)
-      .eq('direction', 'inbound')
-      .order('created_at', { ascending: false })
-      .limit(400);
-    if (directMessagesError) {
-      if (!isAbortRequestError(directMessagesError)) {
-        console.warn('Could not load bot direct overlay rows', directMessagesError);
-      }
-      return { unreadCount: 0, rows: [] as OverlayFeedRow[] };
-    }
-
-    const messageRows = (directMessages || []) as BotDirectMessageOverlayRow[];
-    const messageIds = messageRows
-      .map((row) => String(row?.id || '').trim())
-      .filter(Boolean);
-    const threadIds = Array.from(new Set(
-      messageRows
-        .map((row) => String(row?.direct_thread_id || '').trim())
-        .filter(Boolean),
-    ));
-    const [threadResult, readStateResult] = await Promise.all([
-      threadIds.length > 0
-        ? supabase
-            .from('counterparty_bot_direct_threads')
-            .select('id,channel_type,chat_id,target_module_id,target_record_id,display_name,username,phone_number')
-            .eq('org_id', identity.orgId)
-            .in('id', threadIds)
-        : Promise.resolve({ data: [], error: null }),
-      messageIds.length > 0
-        ? supabase
-            .from('notification_read_states')
-            .select('source_id')
-            .eq('org_id', identity.orgId)
-            .eq('user_id', identity.userId)
-            .in('section', ['bot_direct_messages', 'bot_messages'])
-            .eq('source_type', 'counterparty_bot_direct_message')
-            .in('source_id', messageIds)
-        : Promise.resolve({ data: [], error: null }),
-    ]);
-    if (threadResult.error && !isAbortRequestError(threadResult.error)) {
-      console.warn('Could not load bot direct threads for overlay', threadResult.error);
-    }
-    if (readStateResult.error && !isAbortRequestError(readStateResult.error)) {
-      console.warn('Could not load bot direct read states for overlay', readStateResult.error);
-    }
-
-    const threadMap = new Map(
-      ((threadResult.data || []) as BotDirectThreadOverlayRow[]).map((row) => [String(row.id), row] as const),
-    );
-    const readStateIds = new Set(
-      ((readStateResult.data || []) as Array<{ source_id?: string | null }>)
-        .map((row) => String(row?.source_id || '').trim())
-        .filter(Boolean),
-    );
-    const unreadRows = messageRows.filter((row) => {
-      const id = String(row?.id || '').trim();
-      return id && !readStateIds.has(id);
-    });
-
-    return {
-      unreadCount: unreadRows.length,
-      rows: unreadRows.map((row) => {
-        const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
-        const thread = threadMap.get(String(row?.direct_thread_id || '').trim()) || null;
-        const channel = String(thread?.channel_type || payload.channel_type || '').trim();
-        const chatId = String(thread?.chat_id || payload.chat_id || '').trim();
-        const username = String(thread?.username || payload.username || '').trim().replace(/^@+/, '');
-        const title = String(
-          thread?.display_name
-          || payload.sender_display_name
-          || (username ? `@${username}` : '')
-          || chatId
-          || 'پیام شخصی بات',
-        ).trim();
-        const text = String(row?.content_text || '').trim()
-          || (String(row?.file_name || '').trim() ? `فایل: ${String(row?.file_name || '').trim()}` : '')
-          || 'برای مشاهده جزئیات کلیک کنید.';
-        const attachmentPreviews = extractBotMessageAttachments({
-          file_url: row?.file_url || null,
-          file_name: row?.file_name || null,
-          mime_type: row?.mime_type || null,
-          payload,
-        });
-        return {
-          section: 'bot_messages' as const,
-          source_type: 'counterparty_bot_direct_message',
-          source_id: String(row?.id || '').trim(),
-          title,
-          body: text,
-          created_at: row?.created_at || null,
-          module_id: String(thread?.target_module_id || '').trim() || null,
-          record_id: String(thread?.target_record_id || '').trim() || null,
-          conversation_key: buildBotDirectConversationKey(channel, chatId),
-          payload: {
-            ...payload,
-            attachment_previews: attachmentPreviews,
-            direct_thread_id: String(row?.direct_thread_id || '').trim() || null,
-            channel_type: channel || null,
-            chat_id: chatId || null,
-            conversation_title: title || null,
-            sender_display_name: title || null,
-            username: username || null,
-            phone_number: String(thread?.phone_number || payload.phone_number || '').trim() || null,
-            avatar_url: getBotPlatformAvatarSrc(channel),
-          },
-          last_event_at: row?.created_at || null,
-        } as OverlayFeedRow;
-      }),
-    };
-  }, [identity.orgId, identity.userId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -513,37 +369,29 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
   const refreshSummary = useCallback(async () => {
     if (!identity.userId || !identity.orgId) return;
     if (summaryRefreshInFlightRef.current) {
-      summaryRefreshQueuedRef.current = true;
       await summaryRefreshInFlightRef.current;
       return;
     }
 
     const request = (async () => {
-      do {
-        summaryRefreshQueuedRef.current = false;
-        let response = await supabase.rpc('get_notification_unread_summary_v2', { p_variant: null });
-        let usedFallbackSummary = false;
-        if (isMissingRpcError(response.error)) {
-          response = await supabase.rpc('get_notification_unread_summary_v1', { p_variant: null });
-          usedFallbackSummary = true;
+      let response = await supabase.rpc('get_notification_unread_summary_v2', { p_variant: null });
+      if (isMissingRpcError(response.error)) {
+        response = await supabase.rpc('get_notification_unread_summary_v1', { p_variant: null });
+      }
+      if (response.error) {
+        if (!isMissingRpcError(response.error) && !isAbortRequestError(response.error)) {
+          console.warn('Could not refresh central notification summary', response.error);
         }
-        if (response.error) {
-          if (!isMissingRpcError(response.error) && !isAbortRequestError(response.error)) {
-            console.warn('Could not refresh central notification summary', response.error);
-          }
-          continue;
-        }
-        const nextSummary = normalizeNotificationUnreadSummary(response.data);
-        const directOverlayData = await loadBotDirectOverlayData();
-        if (usedFallbackSummary) {
-          nextSummary.bot_direct_messages = directOverlayData.unreadCount;
-          nextSummary.bot_messages += directOverlayData.unreadCount;
-        }
-        setSummary((current) => (
-          areNotificationUnreadSummariesEqual(current, nextSummary) ? current : nextSummary
-        ));
-        setReady(true);
-      } while (summaryRefreshQueuedRef.current);
+        return;
+      }
+      const nextSummary = normalizeNotificationUnreadSummary(response.data);
+      // V2 is the sole unread source. Older deployments may use V1 only until
+      // the messaging migration is applied; they intentionally do not run a
+      // second client-side query path.
+      setSummary((current) => (
+        areNotificationUnreadSummariesEqual(current, nextSummary) ? current : nextSummary
+      ));
+      setReady(true);
     })();
 
     summaryRefreshInFlightRef.current = request;
@@ -554,7 +402,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
         summaryRefreshInFlightRef.current = null;
       }
     }
-  }, [identity.orgId, identity.userId, loadBotDirectOverlayData]);
+  }, [identity.orgId, identity.userId]);
 
   const markCommunicationRead = useCallback(async (
     channel: 'internal' | 'bot',
@@ -1004,10 +852,16 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       let response: { data: unknown; error: any };
       try {
-        response = await supabase.rpc('get_notification_overlay_feed_v4', {
+        response = await supabase.rpc('get_notification_overlay_feed_v5', {
           p_before_cursor: beforeCursor,
           p_limit: 20,
         });
+        if (isMissingRpcError(response.error)) {
+          response = await supabase.rpc('get_notification_overlay_feed_v4', {
+            p_before_cursor: beforeCursor,
+            p_limit: 20,
+          });
+        }
         if (isMissingRpcError(response.error)) {
           response = await supabase.rpc('get_notification_overlay_feed_v3', {
             p_before_cursor: beforeCursor,
@@ -1042,14 +896,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
     }
     if (failed && append) return;
     const rows = Array.isArray(data) ? data as OverlayFeedRow[] : [];
-    const localDirectOverlayData = !append ? await loadBotDirectOverlayData() : { rows: [] as OverlayFeedRow[] };
-    const mergedSourceRows = append
-      ? rows
-      : [...localDirectOverlayData.rows, ...rows].sort((left, right) => {
-          const leftTime = Date.parse(String(left?.created_at || left?.last_event_at || '')) || 0;
-          const rightTime = Date.parse(String(right?.created_at || right?.last_event_at || '')) || 0;
-          return rightTime - leftTime;
-        });
+    const mergedSourceRows = rows;
     const merged = append
       ? Array.from(new Map(
         [...overlayRowsRef.current, ...mergedSourceRows].map((row) => [`${row.section}:${row.source_type}:${row.source_id}`, row]),
@@ -1077,7 +924,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
         }
         : null,
     );
-  }, [identity.orgId, identity.userId, loadBotDirectOverlayData, publishOverlayRows]);
+  }, [identity.orgId, identity.userId, publishOverlayRows]);
   loadOverlayPageRef.current = loadOverlayPage;
 
   const refreshOverlay = useCallback(async () => {
@@ -1133,7 +980,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
         });
       }
       void Promise.all([refreshSummary(), refreshOverlay()]);
-    }, 300);
+    }, 1_000);
   }, [refreshOverlay, refreshSummary]);
 
   useEffect(() => {

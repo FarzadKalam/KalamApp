@@ -44,6 +44,14 @@ const isStatementTimeout = (error: any) => {
   return code === '57014' || message.includes('statement timeout');
 };
 
+const isTransientPoolError = (error: any) => {
+  const code = normalizeText(error?.code).toUpperCase();
+  const message = normalizeText(error?.message || error?.details || error?.hint).toLowerCase();
+  return code === 'PGRST003'
+    || message.includes('connection pool')
+    || message.includes('timed out acquiring connection');
+};
+
 const readBatchRows = async (
   supabaseClient: any,
   moduleId: string,
@@ -94,6 +102,23 @@ const fetchSingle = async (
   return data && typeof data === 'object' && Array.isArray(data.tasks) ? data.tasks : [];
 };
 
+const loadFallbackTasks = async (
+  supabaseClient: any,
+  moduleId: string,
+  queue: TaskRequest[],
+  tasksByRecord: Map<string, any[]>,
+) => {
+  // در صورت اشکال RPC batch، اجرای Promise.all برای ده‌ها کارت باعث می‌شود
+  // خود fallback pool را اشباع کند. دو درخواست هم‌زمان، صفحه را قابل‌استفاده
+  // نگه می‌دارد و فشار را محدود می‌کند.
+  const concurrency = 2;
+  for (let index = 0; index < queue.length; index += concurrency) {
+    await Promise.all(queue.slice(index, index + concurrency).map(async (item) => {
+      tasksByRecord.set(item.recordId, await fetchSingle(supabaseClient, moduleId, item));
+    }));
+  }
+};
+
 const flush = async (supabaseClient: any, moduleId: string) => {
   const queue = queues.get(moduleId) || [];
   queues.delete(moduleId);
@@ -103,23 +128,43 @@ const flush = async (supabaseClient: any, moduleId: string) => {
   const uniqueRecordIds = Array.from(new Set(queue.map((item) => item.recordId)));
   const tasksByRecord = new Map<string, any[]>();
   try {
-    const rows = await readBatchRows(supabaseClient, moduleId, uniqueRecordIds);
-    rows.forEach((row: any) => {
-      const recordId = normalizeText(row?.record_id);
-      if (recordId) tasksByRecord.set(recordId, Array.isArray(row?.tasks) ? row.tasks : []);
-    });
-  } catch (error) {
-    if (!isMissingBatchRpc(error) && !isStatementTimeout(error)) {
-      queue.forEach((item) => item.reject(error));
-      return;
+    if (uniqueRecordIds.length === 1) {
+      // کارت تکی (مانند ModuleShow) از batch سنگین استفاده نمی‌کند. این مسیر
+      // هم همان داده را می‌دهد و هم در صورت خرابی RPC batch، خطای 500 تولید
+      // نمی‌کند.
+      const item = queue[0];
+      tasksByRecord.set(item.recordId, await fetchSingle(supabaseClient, moduleId, item));
+    } else {
+      const rows = await readBatchRows(supabaseClient, moduleId, uniqueRecordIds);
+      rows.forEach((row: any) => {
+        const recordId = normalizeText(row?.record_id);
+        if (recordId) tasksByRecord.set(recordId, Array.isArray(row?.tasks) ? row.tasks : []);
+      });
     }
-    try {
-      await Promise.all(queue.map(async (item) => {
-        tasksByRecord.set(item.recordId, await fetchSingle(supabaseClient, moduleId, item));
-      }));
-    } catch (fallbackError) {
-      queue.forEach((item) => item.reject(fallbackError));
+  } catch (error) {
+    // خطای داخلی batch ممکن است به function name اشاره کند ولی «نبودن function»
+    // نیست. fallback کنترل‌شدهٔ تک‌کارت هم با schemaهای قدیمی سازگار است و هم
+    // از موج درخواست هم‌زمان پس از 500/504 جلوگیری می‌کند.
+    if (!isMissingBatchRpc(error) && !isStatementTimeout(error) && !isTransientPoolError(error)) {
+      try {
+        await loadFallbackTasks(supabaseClient, moduleId, queue, tasksByRecord);
+      } catch (fallbackError) {
+        queue.forEach((item) => item.reject(fallbackError));
+        return;
+      }
+    } else if (isTransientPoolError(error)) {
+      // retry فوریِ هر کارت در اشباع موقت pool، ازدحام را بیشتر می‌کند. پاسخ
+      // خالی کوتاه‌مدت cache می‌شود؛ stageها نمایش دارند و بار بعدی پس از TTL
+      // اطلاعات فعالیت‌ها را می‌گیرد.
+      queue.forEach((item) => item.resolve([]));
       return;
+    } else {
+      try {
+        await loadFallbackTasks(supabaseClient, moduleId, queue, tasksByRecord);
+      } catch (fallbackError) {
+        queue.forEach((item) => item.reject(fallbackError));
+        return;
+      }
     }
   }
 

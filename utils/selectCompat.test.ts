@@ -5,6 +5,21 @@ import {
 } from './selectCompat';
 
 describe('runSelectWithCompatibleColumns', () => {
+  it('never requests virtual bot group fields while resolving customer labels', async () => {
+    const attempted: string[] = [];
+    const result = await runSelectWithCompatibleColumns({
+      cacheKey: 'record-reference:customers',
+      columns: ['id', 'full_name', 'telegram_group_title', 'bale_group_title', 'rubika_group_title'],
+      execute: async (selectExpr) => {
+        attempted.push(selectExpr);
+        return { data: [{ id: 'customer-1', full_name: 'مشتری نمونه' }], error: null };
+      },
+    });
+
+    expect(result.error).toBeNull();
+    expect(attempted).toEqual(['id,full_name']);
+  });
+
   it('drops known incompatible purchase invoice columns before executing lightweight selects', async () => {
     const attempted: string[] = [];
     const result = await runSelectWithCompatibleColumns({
