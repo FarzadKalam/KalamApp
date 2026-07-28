@@ -41,13 +41,6 @@ export const canCurrentUserAccessInternalSystemNote = (
   const inboxItem = note?.__notification_inbox_item && typeof note.__notification_inbox_item === 'object'
     ? note.__notification_inbox_item
     : {};
-  if (
-    note?.is_org_wide === true
-    || inboxItem?.is_org_wide === true
-    || metadata?.is_org_wide === true
-    || metadata?.org_wide === true
-  ) return true;
-
   const targetUserIds = new Set([
     ...normalizeInternalNoteRecipientIds(note?.mention_user_ids),
     ...normalizeInternalNoteRecipientIds(note?.target_user_ids),

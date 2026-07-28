@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDefaultPrintSignatureConfigs,
   buildPrintSignatureBandHtml,
+  getPrintSignatureSectionHeightPx,
   getPrintSignatureQuickAddOptions,
   materializePrintSignatureStates,
   stripLegacyPrintSignatureTokens,
@@ -163,5 +164,30 @@ describe('print signatures', () => {
 
     expect(states[0].enabled).toBe(false);
     expect(buildPrintSignatureBandHtml(states)).toBe('');
+  });
+
+  it('reserves only a single writable line for text-only signatures', () => {
+    const textOnlyRows = [{
+      id: 'manual',
+      kind: 'manual' as const,
+      enabled: true,
+      automatic: false,
+      signerModule: null,
+      signerId: null,
+      sourceFieldKey: null,
+      sourceFieldLabel: null,
+      derivedName: '',
+      derivedSubtitle: '',
+      nameValue: 'امضاکننده',
+      subtitleValue: 'مدیر',
+      signatureImageUrl: null,
+      stampImageUrl: null,
+      showCompanyAssets: false,
+      sourceDescription: '',
+      unresolved: false,
+    }];
+
+    expect(getPrintSignatureSectionHeightPx(textOnlyRows)).toBe(66);
+    expect(buildPrintSignatureBandHtml(textOnlyRows)).toContain('min-height:22px');
   });
 });

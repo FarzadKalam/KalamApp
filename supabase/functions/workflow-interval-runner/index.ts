@@ -43,10 +43,14 @@ import {
   resolveWorkflowDateCriterion,
 } from './_runtime-deps/workflowMutationContract.ts';
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-27-prioritized-interval-delivery';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-28-single-runner-backpressure';
 const MAX_WORKFLOWS = 30;
 const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
+const WORKFLOW_RUNNER_LEASE_SECONDS = 240;
+const INTERVAL_JOB_CLAIM_LIMIT = 8;
+const INTERVAL_JOB_CONCURRENCY = 2;
+const MAX_INTERVAL_JOB_WAVES = 3;
 // Process-task interval rules are a secondary scan. Keep each invocation bounded
 // so they can never delay already-queued workflow actions or scheduled deliveries.
 const MAX_PROCESS_AUTOMATION_INTERVAL_TASKS = 300;
@@ -1387,6 +1391,18 @@ async function callRpc(supabaseUrl: string, key: string, fn: string, args: any):
   if (!r.ok) { const t = await r.text(); throw new Error(`RPC ${fn} failed: ${t}`); }
   return await r.json();
 }
+
+const acquireWorkflowRunnerLease = async (url: string, key: string) => {
+  const token = await callRpc(url, key, 'acquire_workflow_runner_lease', {
+    p_lease_seconds: WORKFLOW_RUNNER_LEASE_SECONDS,
+  });
+  return String(token || '').trim() || null;
+};
+
+const releaseWorkflowRunnerLease = async (url: string, key: string, token: string) => {
+  if (!token) return;
+  await callRpc(url, key, 'release_workflow_runner_lease', { p_lease_token: token });
+};
 
 // ── Workflow DB operations ─────────────────────────────────────────────────────
 
@@ -5074,13 +5090,13 @@ async function drainIntervalJobs(url: string, key: string): Promise<Record<strin
       console.warn('[workflow-runner] Queue report reconciliation failed:', candidate.id, error?.message || error);
     }
   }
-  for (let wave = 0; wave < 10; wave += 1) {
-    const claimed = await callRpc(url, key, 'claim_workflow_interval_jobs', { p_limit: 20 })
+  for (let wave = 0; wave < MAX_INTERVAL_JOB_WAVES; wave += 1) {
+    const claimed = await callRpc(url, key, 'claim_workflow_interval_jobs', { p_limit: INTERVAL_JOB_CLAIM_LIMIT })
       .catch(() => []) as WorkflowIntervalJob[];
     if (!Array.isArray(claimed) || claimed.length === 0) break;
     stats.claimed += claimed.length;
-    for (let offset = 0; offset < claimed.length; offset += 5) {
-      const results = await Promise.all(claimed.slice(offset, offset + 5).map((job) => processIntervalJob(url, key, job)));
+    for (let offset = 0; offset < claimed.length; offset += INTERVAL_JOB_CONCURRENCY) {
+      const results = await Promise.all(claimed.slice(offset, offset + INTERVAL_JOB_CONCURRENCY).map((job) => processIntervalJob(url, key, job)));
       for (const result of results) stats[result as 'succeeded' | 'retried' | 'failed'] += 1;
     }
   }
@@ -5938,6 +5954,15 @@ Deno.serve(async (req) => {
       body = await req.json().catch(() => ({}));
     }
     const action = String(body?.action || '').trim();
+    const requiresExclusiveLease = action !== 'run_event';
+    let leaseToken: string | null = null;
+    if (requiresExclusiveLease) {
+      leaseToken = await acquireWorkflowRunnerLease(supabaseUrl, serviceRoleKey);
+      if (!leaseToken) {
+        return json(200, { ok: true, skipped: true, reason: 'runner_already_active' });
+      }
+    }
+    try {
     if (action === 'drain_events') {
       if (!isServiceRole) return json(401, { ok: false, error: 'Unauthorized event queue runner' });
       const stats = await runQueuedWorkflowEvents(supabaseUrl, serviceRoleKey);
@@ -5959,20 +5984,12 @@ Deno.serve(async (req) => {
     // فعالیت‌ها در انتهای درخواست قرار دارد تا حتی در سازمان‌های پربار، پیامک
     // و گردش‌کارهای موعددار پشت یک اسکن طولانی معطل نمانند.
     const enqueueStats = await runIntervalEnqueueTick(supabaseUrl, serviceRoleKey);
-    const [intervalQueueResult, scheduledReportResult, eventQueueResult] = await Promise.allSettled([
-      drainIntervalJobs(supabaseUrl, serviceRoleKey),
-      runScheduledReportsTick(supabaseUrl, serviceRoleKey, new Date()),
-      runQueuedWorkflowEvents(supabaseUrl, serviceRoleKey),
-    ]);
-    const intervalQueueStats = intervalQueueResult.status === 'fulfilled'
-      ? intervalQueueResult.value
-      : { error: String(intervalQueueResult.reason?.message || intervalQueueResult.reason || 'Interval queue failed') };
-    const scheduledReportStats = scheduledReportResult.status === 'fulfilled'
-      ? scheduledReportResult.value
-      : { error: String(scheduledReportResult.reason?.message || scheduledReportResult.reason || 'Scheduled report delivery failed') };
-    const eventQueueStats = eventQueueResult.status === 'fulfilled'
-      ? eventQueueResult.value
-      : { error: String(eventQueueResult.reason?.message || eventQueueResult.reason || 'Event queue failed') };
+    const intervalQueueStats = await drainIntervalJobs(supabaseUrl, serviceRoleKey)
+      .catch((error) => ({ error: String(error?.message || error || 'Interval queue failed') }));
+    const scheduledReportStats = await runScheduledReportsTick(supabaseUrl, serviceRoleKey, new Date())
+      .catch((error) => ({ error: String(error?.message || error || 'Scheduled report delivery failed') }));
+    const eventQueueStats = await runQueuedWorkflowEvents(supabaseUrl, serviceRoleKey)
+      .catch((error) => ({ error: String(error?.message || error || 'Event queue failed') }));
     const processAutomationStats = await runServerProcessAutomationIntervalTick(
       supabaseUrl,
       serviceRoleKey,
@@ -5980,6 +5997,13 @@ Deno.serve(async (req) => {
     ).catch((error) => ({ failed: true, error: String(error?.message || error) }));
     console.log(`[workflow-runner] build=${FUNCTION_BUILD} enqueueStats=${JSON.stringify(enqueueStats)} intervalQueueStats=${JSON.stringify(intervalQueueStats)} scheduledReportStats=${JSON.stringify(scheduledReportStats)} eventQueueStats=${JSON.stringify(eventQueueStats)} processAutomationStats=${JSON.stringify(processAutomationStats)}`);
     return json(200, { ok: true, stats: enqueueStats, intervalQueueStats, scheduledReportStats, eventQueueStats, processAutomationStats });
+    } finally {
+      if (leaseToken) {
+        await releaseWorkflowRunnerLease(supabaseUrl, serviceRoleKey, leaseToken).catch((error) => {
+          console.warn('[workflow-runner] Lease release failed:', error?.message || error);
+        });
+      }
+    }
   } catch (e: any) {
     console.error('[workflow-runner] Fatal error:', e.message);
     return json(500, { ok: false, error: String(e?.message || 'internal error') });

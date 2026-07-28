@@ -40,6 +40,11 @@ import {
   buildSmartPrintPageOffsets,
   collectPrintPageAnchors,
 } from './printPagination';
+import {
+  getFinalContentBodyHeightPx,
+  getPrintBodyViewportHeightPx,
+  getTemplatePageBodyStepPx,
+} from './pageLayout';
 import { detectRecordFilesTable } from '../recordFilesAvailability';
 import { fetchSessionBootstrap } from '../sessionCache';
 import { loadScopedCompanySettings } from '../companySettings';
@@ -111,13 +116,8 @@ const PRINT_COLUMN_IGNORE_KEYS = new Set(['id', 'key', 'created_at', 'updated_at
 const PRICE_PATH_PATTERN = /amount|price|total|balance|discount|vat|tax|debt|credit|cost/i;
 const LONG_TEXT_FIELD_TYPES = new Set(['long_text', 'superlongtext']);
 const MULTILINE_PRINT_STYLE = 'white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere;';
-const MIN_PRINT_BODY_HEIGHT_PX = 80;
 const PRINT_SECTION_CONTENT_PADDING = '0 10px';
 const PRINT_PAGE_COUNTER_HEIGHT_PX = 18;
-// A single physical pixel is reserved between adjacent sections/pages. It is
-// reserved from the page step itself, never subtracted from visible content:
-// subtracting it from a completed text line clips that line's final pixels.
-const PRINT_SECTION_BOUNDARY_GAP_PX = 1;
 const isLongTextType = (value: unknown) => LONG_TEXT_FIELD_TYPES.has(String(value || '').trim().toLowerCase());
 
 const getReducedPrintFontSize = (baseSize: number) => {
@@ -184,19 +184,6 @@ const toPersianWords = (value: number): string => {
 const mmToPx = (value: number) => (value * 96) / 25.4;
 const pxToMm = (value: number) => value / mmToPx(1);
 const toCssMm = (value: number) => `${Number(pxToMm(value).toFixed(3))}mm`;
-const normalizePrintBodyHeightPx = (value: number) =>
-  Math.max(MIN_PRINT_BODY_HEIGHT_PX, Math.floor(Math.max(MIN_PRINT_BODY_HEIGHT_PX, value)));
-const getTemplatePageBodyStepPx = (pageBodyHeightPx: number) =>
-  Math.max(
-    MIN_PRINT_BODY_HEIGHT_PX,
-    normalizePrintBodyHeightPx(pageBodyHeightPx) - PRINT_SECTION_BOUNDARY_GAP_PX
-  );
-const getPrintBodyViewportHeightPx = (pageBodyHeightPx: number, effectiveBodyStepPx: number) =>
-  Math.min(
-    normalizePrintBodyHeightPx(pageBodyHeightPx),
-    Math.max(1, Math.floor(effectiveBodyStepPx))
-  );
-
 const getMeasuredPrintBlockHeight = (measureNode: HTMLElement) => {
   const rootRect = measureNode.getBoundingClientRect();
   const descendantBottom = Array.from(measureNode.querySelectorAll('*')).reduce((maxBottom, element) => {
@@ -244,7 +231,7 @@ const getEffectiveMeasuredSectionHeightPx = ({
   // The configured height is a minimum reservation, not a clipping ceiling.
   // Capping it at the configured value cuts the last header/footer line and
   // lets the body appear beneath it when font metrics settle after measuring.
-  return Math.max(Math.round(configuredHeightPx), Math.ceil(measuredHeight)) + PRINT_SECTION_BOUNDARY_GAP_PX;
+  return Math.max(Math.round(configuredHeightPx), Math.ceil(measuredHeight));
 };
 
 const getTemplatePageBodyHeightPx = ({
@@ -262,12 +249,12 @@ const getTemplatePageBodyHeightPx = ({
   footerHeight: number;
   signatureHeight: number;
 }) =>
-  normalizePrintBodyHeightPx(
+  Math.max(80, Math.floor(
     mmToPx(innerHeightMm) -
       (showHeader ? headerHeight : 0) -
       (showFooter ? footerHeight : 0) -
       signatureHeight
-  );
+  ));
 
 const getPaperSizeMetrics = (
   paperSize?: 'A4' | 'A5' | 'A6',
@@ -1460,11 +1447,7 @@ export const usePrintManager = ({
     [printSignatureStates]
   );
   const printSignatureSectionHeightPx = useMemo(
-    () => (
-      printSignatureBandHtml
-        ? getPrintSignatureSectionHeightPx(printSignatureStates) + PRINT_SECTION_BOUNDARY_GAP_PX
-        : 0
-    ),
+    () => (printSignatureBandHtml ? getPrintSignatureSectionHeightPx(printSignatureStates) : 0),
     [printSignatureBandHtml, printSignatureStates]
   );
   printSignatureSectionHeightPxRef.current = printSignatureSectionHeightPx;
@@ -3146,25 +3129,33 @@ export const usePrintManager = ({
       });
     }
 
+    const measurementNodes = [
+      bodyMeasureRef.current,
+      headerMeasureRef.current,
+      footerMeasureRef.current,
+    ].filter((node): node is HTMLElement => Boolean(node));
+
     let resizeObserver: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== 'undefined' && bodyMeasureRef.current) {
+    if (typeof ResizeObserver !== 'undefined' && measurementNodes.length > 0) {
       resizeObserver = new ResizeObserver(() => scheduleMeasure());
-      resizeObserver.observe(bodyMeasureRef.current);
+      measurementNodes.forEach((node) => resizeObserver?.observe(node));
     }
 
     let mutationObserver: MutationObserver | null = null;
-    if (typeof MutationObserver !== 'undefined' && bodyMeasureRef.current) {
+    if (typeof MutationObserver !== 'undefined' && measurementNodes.length > 0) {
       mutationObserver = new MutationObserver(() => scheduleMeasure());
-      mutationObserver.observe(bodyMeasureRef.current, {
+      measurementNodes.forEach((node) => mutationObserver?.observe(node, {
         childList: true,
         subtree: true,
         characterData: true,
-      });
+        attributes: true,
+        attributeFilter: ['class', 'style', 'src', 'width', 'height'],
+      }));
     }
 
     const imageListeners: Array<{ img: HTMLImageElement; onLoad: () => void; onError: () => void }> = [];
-    if (bodyMeasureRef.current) {
-      const imgs = Array.from(bodyMeasureRef.current.querySelectorAll('img'));
+    measurementNodes.forEach((node) => {
+      const imgs = Array.from(node.querySelectorAll('img'));
       imgs.forEach((img) => {
         if (img.complete) return;
         const onLoad = () => scheduleMeasure();
@@ -3173,7 +3164,7 @@ export const usePrintManager = ({
         img.addEventListener('error', onError, { once: true });
         imageListeners.push({ img, onLoad, onError });
       });
-    }
+    });
 
     window.addEventListener('resize', scheduleMeasure);
     return () => {
@@ -3554,6 +3545,9 @@ export const usePrintManager = ({
       const pageStartOffsets = Array.from({ length: effectivePageCount }, (_value, index) =>
         effectivePageOffsets[index] ?? index * pageBodyStepPx
       );
+      const measuredBodyHeightPx = bodyMeasureRef.current
+        ? getMeasuredPrintBlockHeight(bodyMeasureRef.current)
+        : null;
 
       return React.createElement(
         'div',
@@ -3630,13 +3624,25 @@ export const usePrintManager = ({
           // this page should display. For all pages except the last this equals
           // (nextPageStartOffset - pageStartOffset), so the guard begins right
           // where the next page begins - no overlap, no partial lines.
-          const pageBodyHeightCss = toCssMm(pageBodyHeightPx);
           const pageCounterHeightCss = toCssMm(PRINT_PAGE_COUNTER_HEIGHT_PX);
           const nextPageStartOffset = pageStartOffsets[pageIndex + 1];
+          const isFinalPage = pageIndex === effectivePageCount - 1;
+          const flowFinalSignatureFooter = hasSignatureBand && isFinalPage;
           const effectiveBodyStepPx = nextPageStartOffset !== undefined
             ? Math.min(pageBodyStepPx, Math.max(1, nextPageStartOffset - pageStartOffset))
             : pageBodyStepPx;
-          const bodyViewportHeightCss = toCssMm(getPrintBodyViewportHeightPx(pageBodyHeightPx, effectiveBodyStepPx));
+          const bodyViewportHeightPx = getPrintBodyViewportHeightPx(pageBodyHeightPx, effectiveBodyStepPx);
+          const bodyRenderHeightPx = flowFinalSignatureFooter
+            ? getFinalContentBodyHeightPx({
+                pageBodyHeightPx,
+                pageStartOffset,
+                contentHeightPx: measuredBodyHeightPx,
+              })
+            : pageBodyHeightPx;
+          const bodyRenderHeightCss = toCssMm(bodyRenderHeightPx);
+          const bodyViewportHeightCss = toCssMm(
+            Math.min(bodyRenderHeightPx, bodyViewportHeightPx)
+          );
 
           return React.createElement(
             'div',
@@ -3708,10 +3714,10 @@ export const usePrintManager = ({
                 style: {
                   width: '100%',
                   boxSizing: 'border-box',
-                  flex: `0 0 ${pageBodyHeightCss}`,
-                  minHeight: pageBodyHeightCss,
-                  height: pageBodyHeightCss,
-                  maxHeight: pageBodyHeightCss,
+                  flex: `0 0 ${bodyRenderHeightCss}`,
+                  minHeight: bodyRenderHeightCss,
+                  height: bodyRenderHeightCss,
+                  maxHeight: bodyRenderHeightCss,
                   position: 'relative',
                   zIndex: 2,
                   background: '#fff',
@@ -3772,12 +3778,16 @@ export const usePrintManager = ({
                       height: footerHeightCss,
                       minHeight: footerHeightCss,
                       maxHeight: footerHeightCss,
-                      marginTop: 'auto',
+                      marginTop: flowFinalSignatureFooter ? 0 : 'auto',
                       overflow: 'hidden',
                       padding: 0,
                       display: 'flex',
                       flexDirection: 'column',
-                      justifyContent: 'flex-end',
+                      // A fixed footer reservation may be larger than its
+                      // actual HTML. Signatures must start at its top; putting
+                      // the stack at the end recreates a large blank band right
+                      // above the signer names.
+                      justifyContent: hasSignatureBand ? 'flex-start' : 'flex-end',
                       position: 'relative',
                       zIndex: 1,
                     },

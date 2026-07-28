@@ -58,7 +58,7 @@ import { isMissingColumnError, isMissingTableLikeError } from '../../../utils/no
 import { parseNoteContent, resolveNoteAttachmentFileType, serializeNoteContent, type NoteAttachment } from '../../../utils/noteContent';
 import { getMessageListPreview } from '../../../utils/messagePreview';
 import { ensureNoteAttachmentShortcuts, uploadNoteAttachments } from '../../../utils/noteAttachments';
-import { insertNotesWithFallback, sendNoteSmsNotifications } from '../../../utils/noteDispatch';
+import { sendInternalMessageV2, sendNoteSmsNotifications } from '../../../utils/noteDispatch';
 import { shortenAttachmentsForExternalShare } from '../../../utils/fileShortLinks';
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from '../../../utils/recordReference';
 import { likeReceiptMapFromBox, readReceiptMapFromBox } from '../../../utils/messageReceipts';
@@ -5091,7 +5091,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           author_name: directoryUserMap[authorId]?.display_name || null,
           metadata,
         };
-        const insertedRows = await insertNotesWithFallback([notePayload]);
+        const insertedRows = await sendInternalMessageV2(notePayload);
         if (!Array.isArray(insertedRows) || insertedRows.length === 0) {
           throw new Error('پیام در سرور ذخیره نشد.');
         }

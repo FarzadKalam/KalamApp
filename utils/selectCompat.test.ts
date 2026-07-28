@@ -184,6 +184,19 @@ describe('runSelectWithCompatibleColumns', () => {
 });
 
 describe('createSchemaCompatibleDataProvider', () => {
+  it('does not request virtual bot fields from customer records', async () => {
+    const getMany = vi.fn().mockResolvedValue({ data: [{ id: 'customer-1', full_name: 'مشتری نمونه' }] });
+    const provider = createSchemaCompatibleDataProvider({ getMany });
+
+    await provider.getMany({
+      resource: 'customers',
+      meta: { select: 'id,full_name,telegram_group_title,bale_group_title,rubika_group_title' },
+    });
+
+    expect(getMany).toHaveBeenCalledTimes(1);
+    expect(getMany.mock.calls[0][0].meta.select).toBe('id,full_name');
+  });
+
   it('removes only the unavailable field before retrying a generic module list', async () => {
     const getList = vi.fn()
       .mockRejectedValueOnce({

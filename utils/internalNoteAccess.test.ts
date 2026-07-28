@@ -29,9 +29,9 @@ describe('internal system note access', () => {
     expect(canCurrentUserAccessInternalSystemNote(note, 'user-1', 'role-other')).toBe(false);
   });
 
-  it('keeps explicitly organization-wide system notes visible', () => {
+  it('does not expose system notes merely because an old row was organization-wide', () => {
     const note = { source_type: 'system', is_org_wide: true };
-    expect(canCurrentUserAccessInternalSystemNote(note, 'user-1', null)).toBe(true);
+    expect(canCurrentUserAccessInternalSystemNote(note, 'user-1', null)).toBe(false);
   });
 
   it('does not apply system-recipient rules to ordinary direct notes', () => {

@@ -83,6 +83,31 @@ export const insertNotesWithFallback = async (rows: Record<string, any>[]) => {
   }
 };
 
+const isMissingInternalMessageDispatchRpc = (error: any) => {
+  const code = String(error?.code || '').toUpperCase();
+  const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  return code === 'PGRST202' || (text.includes('send_internal_message_v2') && text.includes('could not find'));
+};
+
+// Canonical write path for Messaging V2. The server persists both the note and
+// its inbox projection atomically; the generic insert is only a temporary
+// compatibility fallback for installations that have not run phase 415 yet.
+export const sendInternalMessageV2 = async (row: Record<string, any>) => {
+  const payload = sanitizeNoteInsertRow({ ...row });
+  const { data, error } = await supabase.rpc('send_internal_message_v2', {
+    p_content: String(payload.content || ''),
+    p_mention_user_ids: payload.mention_user_ids || [],
+    p_mention_role_ids: payload.mention_role_ids || [],
+    p_reply_to: payload.reply_to || null,
+    p_metadata: payload.metadata || {},
+    p_module_id: payload.module_id || null,
+    p_record_id: payload.record_id || null,
+  });
+  if (!error) return data ? [data as Record<string, any>] : [];
+  if (!isMissingInternalMessageDispatchRpc(error)) throw error;
+  return insertNotesWithFallback([payload]);
+};
+
 const clipWords = (value: string, limit = 10) => {
   const plain = String(value || '').replace(/\*\*(.*?)\*\*/g, '$1').trim();
   const words = plain.split(/\s+/).filter(Boolean);

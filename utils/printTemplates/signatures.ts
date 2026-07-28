@@ -51,7 +51,10 @@ export interface PrintSignatureDerivedState {
   unresolved: boolean;
 }
 
-export const PRINT_SIGNATURE_SECTION_HEIGHT_PX = 104;
+// A text-only signer needs one writable line above the title/name, not the
+// former 52px empty signature canvas. Image/stamp signers keep their larger
+// reserved area below.
+export const PRINT_SIGNATURE_SECTION_HEIGHT_PX = 66;
 export const PRINT_SIGNATURE_SECTION_WITH_COMPANY_ASSETS_HEIGHT_PX = 132;
 
 const RELATION_SIGNER_MODULES = new Set<PrintSignatureSignerModule>(['employees', 'customers', 'suppliers']);
@@ -539,14 +542,14 @@ export const buildPrintSignatureBandHtml = (rows: PrintSignatureDerivedState[]) 
   if (resolvedRows.length === 0) return '';
   const widthPercent = Math.max(22, Math.floor(100 / Math.max(1, resolvedRows.length)));
   return `
-<div data-print-signature-band="true" style="width:100%; direction:rtl; display:flex; align-items:flex-start; justify-content:center; gap:10px; padding-top:4px;">
+<div data-print-signature-band="true" style="width:100%; direction:rtl; display:flex; align-items:flex-start; justify-content:center; gap:10px; padding-top:0;">
   ${resolvedRows
     .map(
       (row) => {
         const hasCompanyAssets = row.showCompanyAssets && (row.signatureImageUrl || row.stampImageUrl);
         return `
     <div style="flex:1 1 0; max-width:${widthPercent}%; min-width:130px; text-align:center; color:#111827;">
-      <div style="min-height:${hasCompanyAssets ? 78 : 52}px; display:flex; align-items:flex-end; justify-content:center; margin-bottom:6px;">
+      <div style="min-height:${hasCompanyAssets ? 78 : 22}px; display:flex; align-items:flex-end; justify-content:center; margin-bottom:${hasCompanyAssets ? 6 : 0}px;">
         ${
           hasCompanyAssets
             ? `<div style="display:flex; align-items:flex-end; justify-content:center; gap:8px; min-height:72px;">

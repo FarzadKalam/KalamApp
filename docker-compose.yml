@@ -7,12 +7,19 @@
 
 name: supabase
 
+x-service-logging: &service-logging
+  driver: local
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 services:
 
   studio:
     container_name: supabase-studio
     image: supabase/studio:2026.02.16-sha-26c615c
     restart: unless-stopped
+    logging: *service-logging
     healthcheck:
       test:
         [
@@ -69,6 +76,7 @@ services:
     container_name: supabase-kong
     image: kong:2.8.1
     restart: unless-stopped
+    logging: *service-logging
     ports:
       - ${KONG_HTTP_PORT}:8000/tcp
       - ${KONG_HTTPS_PORT}:8443/tcp
@@ -100,6 +108,7 @@ services:
     container_name: supabase-auth
     image: supabase/gotrue:v2.186.0
     restart: unless-stopped
+    logging: *service-logging
     healthcheck:
       test:
         [
@@ -184,6 +193,7 @@ services:
     container_name: supabase-rest
     image: postgrest/postgrest:v14.5
     restart: unless-stopped
+    logging: *service-logging
     depends_on:
       db:
         # Disable this if you are using an external Postgres database
@@ -208,6 +218,7 @@ services:
     container_name: realtime-dev.supabase-realtime
     image: supabase/realtime:v2.76.5
     restart: unless-stopped
+    logging: *service-logging
     depends_on:
       db:
         # Disable this if you are using an external Postgres database
@@ -248,6 +259,7 @@ services:
     container_name: supabase-storage
     image: supabase/storage-api:v1.37.8
     restart: unless-stopped
+    logging: *service-logging
     depends_on:
       db:
         # Disable this if you are using an external Postgres database
@@ -308,6 +320,7 @@ services:
     container_name: supabase-imgproxy
     image: darthsim/imgproxy:v3.30.1
     restart: unless-stopped
+    logging: *service-logging
     volumes:
       - ./volumes/storage:/var/lib/storage:z
     healthcheck:
@@ -331,6 +344,7 @@ services:
     container_name: supabase-meta
     image: supabase/postgres-meta:v0.95.2
     restart: unless-stopped
+    logging: *service-logging
     depends_on:
       db:
         # Disable this if you are using an external Postgres database
@@ -350,6 +364,7 @@ services:
     container_name: supabase-edge-functions
     image: supabase/edge-runtime:v1.70.3
     restart: unless-stopped
+    logging: *service-logging
     volumes:
       - ./volumes/functions:/home/deno/functions:Z
       - deno-cache:/root/.cache/deno
@@ -398,14 +413,15 @@ services:
     container_name: kalamapp-gotenberg
     image: gotenberg/gotenberg:8
     restart: unless-stopped
+    logging: *service-logging
     healthcheck:
       test:
         [
           "CMD",
-          "wget",
-          "--no-verbose",
-          "--tries=1",
-          "--spider",
+          "curl",
+          "--fail",
+          "--silent",
+          "--show-error",
           "http://localhost:3000/health"
         ]
       timeout: 5s
@@ -416,6 +432,7 @@ services:
     container_name: supabase-analytics
     image: supabase/logflare:1.31.2
     restart: unless-stopped
+    logging: *service-logging
     # ports:
     #   - 4000:4000
     # Uncomment to use Big Query backend for analytics
@@ -464,6 +481,7 @@ services:
     container_name: supabase-db
     image: supabase/postgres:15.8.1.085
     restart: unless-stopped
+    logging: *service-logging
     volumes:
       - ./volumes/db/realtime.sql:/docker-entrypoint-initdb.d/migrations/99-realtime.sql:Z
       # Must be superuser to create event trigger
@@ -521,6 +539,7 @@ services:
     container_name: supabase-vector
     image: timberio/vector:0.53.0-alpine
     restart: unless-stopped
+    logging: *service-logging
     volumes:
       - ./volumes/logs/vector.yml:/etc/vector/vector.yml:ro,z
       - ${DOCKER_SOCKET_LOCATION}:/var/run/docker.sock:ro,z
@@ -552,6 +571,7 @@ services:
     container_name: supabase-pooler
     image: supabase/supavisor:2.7.4
     restart: unless-stopped
+    logging: *service-logging
     ports:
       - ${POSTGRES_PORT}:5432
       - ${POOLER_PROXY_PORT_TRANSACTION}:6543

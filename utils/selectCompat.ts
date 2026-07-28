@@ -95,6 +95,13 @@ const applyCacheKeyColumnExclusions = (cacheKey: string, columns: string[]) => {
   return next.length > 0 ? next : ['id'];
 };
 
+const excludeVirtualBotColumnsForResource = (resource: string, columns: string[]) => {
+  const normalizedResource = String(resource || '').trim();
+  if (!['customers', 'suppliers', 'employees'].includes(normalizedResource)) return columns;
+  const next = columns.filter((column) => !BOT_VIRTUAL_FIELD_KEYS.has(column));
+  return next.length > 0 ? next : ['id'];
+};
+
 const unique = (items: string[]) => Array.from(new Set(items.filter(Boolean)));
 
 const getRecordTitleCandidateColumns = (moduleId?: string | null, moduleConfig?: ModuleDefinition): string[] => {
@@ -508,7 +515,11 @@ const runCompatibleRefineRead = async <T>(
   params: RefineReadParams,
   operationName: string,
 ) => {
-  const requestedColumns = parseSimpleSelectColumns(params?.meta?.select);
+  const resource = String(params?.resource || '').trim();
+  const requestedColumns = excludeVirtualBotColumnsForResource(
+    resource,
+    parseSimpleSelectColumns(params?.meta?.select),
+  );
   if (requestedColumns.length === 0) return operation(params);
 
   // فاکتورهای فروش/خرید دادهٔ مالی و ردیف‌های JSON وابسته دارند. provider نباید
@@ -518,7 +529,6 @@ const runCompatibleRefineRead = async <T>(
   if (moduleConfig?.nature === ModuleNature.INVOICE) return operation(params);
 
   const schema = String(params?.meta?.schema || 'public').trim() || 'public';
-  const resource = String(params?.resource || '').trim();
   const cacheKey = `refine:${operationName}:${schema}:${resource}`;
   const incompatibleColumns = getCachedIncompatibleColumns(cacheKey);
   let activeColumns = requestedColumns.filter((column) => !incompatibleColumns.has(column.toLowerCase()));
