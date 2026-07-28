@@ -66,7 +66,15 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
   const buyerProvince = buyer.province;
 
   const sellerInfo = seller || data.company_settings || {};
-  const sellerName = sellerInfo.company_name || sellerInfo.name || 'فروشنده';
+  const sellerName =
+    sellerInfo.company_full_name ||
+    sellerInfo.trade_name ||
+    sellerInfo.company_name ||
+    sellerInfo.name ||
+    'فروشنده';
+  const sellerLogoUrl = String(
+    sellerInfo.logo_url || sellerInfo.logo || sellerInfo.icon_url || sellerInfo.image_url || ''
+  ).trim();
   const sellerMobile = sellerInfo.mobile;
   const sellerPhone = sellerInfo.phone;
   const sellerAddress = sellerInfo.address;
@@ -149,19 +157,47 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
           lineHeight: '1.3'
         }}
       >
-        <div style={{ 
-          fontSize: isMobilePrint ? '13px' : '16px', 
-          fontWeight: 'bold', 
-          color: 'rgb(var(--brand-500-rgb))', 
-          marginBottom: '2px' 
-        }}>
-          فاکتور فروش
-        </div>
-        <div style={{ 
-          fontSize: isMobilePrint ? '8px' : '10px', 
-          color: '#666' 
-        }}>
-          {data.system_code || data.name || '-'}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: isMobilePrint ? '6px' : '10px' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{
+              fontSize: isMobilePrint ? '13px' : '16px',
+              fontWeight: 'bold',
+              color: 'rgb(var(--brand-500-rgb))',
+              marginBottom: '2px'
+            }}>
+              فاکتور فروش
+            </div>
+            <div style={{
+              fontSize: isMobilePrint ? '8px' : '10px',
+              color: '#666'
+            }}>
+              {data.system_code || data.name || '-'}
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: isMobilePrint ? '4px' : '6px', minWidth: 0 }}>
+            <div style={{
+              fontSize: isMobilePrint ? '7px' : '8px',
+              fontWeight: 700,
+              color: '#374151',
+              overflowWrap: 'anywhere',
+              textAlign: 'left',
+            }}>
+              {sellerName}
+            </div>
+            {sellerLogoUrl ? (
+              <img
+                src={sellerLogoUrl}
+                alt="لوگوی فروشنده"
+                style={{
+                  display: 'block',
+                  width: isMobilePrint ? '28px' : '36px',
+                  height: isMobilePrint ? '28px' : '36px',
+                  objectFit: 'contain',
+                  flex: '0 0 auto',
+                }}
+              />
+            ) : null}
+          </div>
         </div>
       </div>
 

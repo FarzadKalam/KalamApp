@@ -48,6 +48,49 @@ const DEFAULT_HARD_KEEP_FILL_RATIO = 0.35;
 const OVERSIZED_KEEP_BLOCK_TOLERANCE_PX = 8;
 
 const roundPx = (value: number) => Math.max(0, Math.round(value));
+const floorPx = (value: number) => Math.max(0, Math.floor(value));
+const ceilPx = (value: number) => Math.max(0, Math.ceil(value));
+
+// DOM line and row rectangles are frequently fractional. A normal round can
+// move a measured lower edge upward, which crops the final fraction of a line
+// when that value becomes a viewport boundary. Keep the start conservative
+// and the end inclusive instead: at most one blank physical pixel is added,
+// never a clipped glyph or table border.
+export const getSafePrintAnchorBounds = (top: number, bottom: number) => ({
+  top: floorPx(top),
+  bottom: ceilPx(bottom),
+});
+
+/**
+ * The print preview is intentionally zoomed. `getBoundingClientRect()` then
+ * reports the visual (scaled) coordinates while scroll/offset dimensions stay
+ * in the document's print coordinates.  Page offsets must always use the
+ * latter, otherwise a line/table anchor is compared with a body height from
+ * two different coordinate spaces.
+ */
+export const getPrintMeasurementScale = ({
+  logicalWidth,
+  logicalHeight,
+  renderedWidth,
+  renderedHeight,
+}: {
+  logicalWidth: number;
+  logicalHeight: number;
+  renderedWidth: number;
+  renderedHeight: number;
+}) => {
+  const resolveScale = (logicalSize: number, renderedSize: number) => {
+    if (!Number.isFinite(logicalSize) || !Number.isFinite(renderedSize)) return 1;
+    if (logicalSize <= 0 || renderedSize <= 0) return 1;
+    const scale = logicalSize / renderedSize;
+    return Number.isFinite(scale) && scale > 0 ? scale : 1;
+  };
+
+  return {
+    x: resolveScale(logicalWidth, renderedWidth),
+    y: resolveScale(logicalHeight, renderedHeight),
+  };
+};
 
 const hasHardKeepSemanticHint = (element: Element) => {
   const hints = [
@@ -150,6 +193,13 @@ export const annotatePrintFlowHtml = (html: string) => {
 
 export const collectPrintPageAnchors = (root: HTMLElement): PrintPageAnchor[] => {
   const rootRect = root.getBoundingClientRect();
+  const measurementScale = getPrintMeasurementScale({
+    logicalWidth: Math.max(root.offsetWidth, root.clientWidth),
+    logicalHeight: Math.max(root.offsetHeight, root.clientHeight),
+    renderedWidth: rootRect.width,
+    renderedHeight: rootRect.height,
+  });
+  const toLogicalY = (value: number) => value * measurementScale.y;
   const deduped = new Map<string, PrintPageAnchor>();
 
   Array.from(root.querySelectorAll(`[${PRINT_FLOW_BLOCK_ATTR}]`)).forEach((element) => {
@@ -157,8 +207,10 @@ export const collectPrintPageAnchors = (root: HTMLElement): PrintPageAnchor[] =>
     if (!Number.isFinite(rect.top) || !Number.isFinite(rect.bottom)) return;
     if (rect.height < MIN_ANCHOR_HEIGHT_PX) return;
 
-    const top = roundPx(rect.top - rootRect.top);
-    const bottom = roundPx(rect.bottom - rootRect.top);
+    const { top, bottom } = getSafePrintAnchorBounds(
+      toLogicalY(rect.top - rootRect.top),
+      toLogicalY(rect.bottom - rootRect.top)
+    );
     if (bottom - top < MIN_ANCHOR_HEIGHT_PX) return;
 
     const priority = String(element.getAttribute(PRINT_FLOW_BLOCK_ATTR) || '').trim() === 'high'
@@ -190,8 +242,10 @@ export const collectPrintPageAnchors = (root: HTMLElement): PrintPageAnchor[] =>
         if (!Number.isFinite(rect.top) || !Number.isFinite(rect.bottom)) return;
         if (rect.height < MIN_LINE_ANCHOR_HEIGHT_PX) return;
         if (rect.height > MAX_LINE_RECT_HEIGHT_PX) return;
-        const top = roundPx(rect.top - rootRect.top);
-        const bottom = roundPx(rect.bottom - rootRect.top);
+        const { top, bottom } = getSafePrintAnchorBounds(
+          toLogicalY(rect.top - rootRect.top),
+          toLogicalY(rect.bottom - rootRect.top)
+        );
         if (bottom - top < MIN_LINE_ANCHOR_HEIGHT_PX) return;
         lineRects.push({ top, bottom });
         lineAnchorCount += 1;
@@ -265,8 +319,8 @@ export const buildSmartPrintPageOffsets = ({
   minPageFillRatio?: number;
   hardKeepFillRatio?: number;
 }) => {
-  const safeTotalHeight = Math.max(1, roundPx(totalHeight));
-  const safeStep = Math.max(80, roundPx(pageBodyStepPx));
+  const safeTotalHeight = Math.max(1, ceilPx(totalHeight));
+  const safeStep = Math.max(80, floorPx(pageBodyStepPx));
   if (safeTotalHeight <= safeStep) return [0];
 
   const minFill = Math.max(72, roundPx(safeStep * minPageFillRatio));
@@ -290,10 +344,13 @@ export const buildSmartPrintPageOffsets = ({
 
     const lineBottomCandidates = lineAnchors
       .map((anchor) => anchor.bottom)
-      .filter((bottom) => bottom > currentOffset + minFill && bottom <= targetBreak + 1);
+      // The viewport ends exactly at targetBreak. Allowing a lower edge one
+      // pixel past it recreates the clipped final glyph/table-border that the
+      // body guard is meant to prevent.
+      .filter((bottom) => bottom > currentOffset + minFill && bottom <= targetBreak);
     let nextOffset = lineBottomCandidates.length > 0 ? Math.max(...lineBottomCandidates) : 0;
     const hasLineAnchorsInCurrentPage = lineAnchors.some(
-      (anchor) => anchor.bottom > currentOffset + minHardFill && anchor.top < targetBreak + 1
+      (anchor) => anchor.bottom > currentOffset + minHardFill && anchor.top < targetBreak
     );
 
     if (!nextOffset) {
@@ -307,14 +364,14 @@ export const buildSmartPrintPageOffsets = ({
     if (!nextOffset && !hasLineAnchorsInCurrentPage) {
       const anyBottomCandidates = sortedAnchors
         .map((anchor) => anchor.bottom)
-        .filter((bottom) => bottom > currentOffset + minFill && bottom <= targetBreak + 1);
+        .filter((bottom) => bottom > currentOffset + minFill && bottom <= targetBreak);
       nextOffset = anyBottomCandidates.length > 0 ? Math.max(...anyBottomCandidates) : 0;
     }
 
     if (!nextOffset) {
       const protectedBlockCrossingBreak = blockAnchors
         .filter((anchor) => anchor.priority === 'high')
-        .filter((anchor) => anchor.top < targetBreak - 1 && anchor.bottom > targetBreak + 1)
+        .filter((anchor) => anchor.top < targetBreak && anchor.bottom > targetBreak)
         .filter((anchor) => anchor.bottom - anchor.top <= safeStep - OVERSIZED_KEEP_BLOCK_TOLERANCE_PX)
         .map((anchor) => anchor.top)
         .filter((top) => top > currentOffset + minHardFill && top < targetBreak - 1);

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildSmartPrintPageOffsets, type PrintPageAnchor } from './printPagination';
+import {
+  buildSmartPrintPageOffsets,
+  getPrintMeasurementScale,
+  getSafePrintAnchorBounds,
+  type PrintPageAnchor,
+} from './printPagination';
 
 const pxPerMm = 96 / 25.4;
 
@@ -18,6 +23,35 @@ const buildVariableLineAnchors = (totalHeight: number, lineHeights: number[]): P
 };
 
 describe('print pagination scenarios', () => {
+  it('keeps fractional line and row bottoms inside the preceding viewport', () => {
+    expect(getSafePrintAnchorBounds(104.25, 127.05)).toEqual({ top: 104, bottom: 128 });
+    expect(getSafePrintAnchorBounds(127.95, 171.4)).toEqual({ top: 127, bottom: 172 });
+  });
+
+  it('converts zoomed preview rectangles back to print coordinates before paginating', () => {
+    expect(getPrintMeasurementScale({
+      logicalWidth: 1120,
+      logicalHeight: 1760,
+      renderedWidth: 560,
+      renderedHeight: 880,
+    })).toEqual({ x: 2, y: 2 });
+  });
+
+  it('never chooses an anchor lower edge outside the exact body viewport', () => {
+    const offsets = buildSmartPrintPageOffsets({
+      totalHeight: 1300,
+      pageBodyStepPx: 640,
+      anchors: [
+        { top: 580, bottom: 640, priority: 'normal', source: 'line' },
+        { top: 620, bottom: 641, priority: 'normal', source: 'line' },
+      ],
+      minPageFillRatio: 0.5,
+      hardKeepFillRatio: 0.2,
+    });
+
+    expect(offsets[1]).toBe(640);
+  });
+
   it('برای محتوای کوتاه با هر ترکیب سربرگ، پاورقی و امضا فقط یک صفحه می‌سازد', () => {
     const pageBodyStepPx = Math.floor((297 - (14 + 10)) * pxPerMm - 104 - (62 + 108));
     const totalHeight = Math.floor(pageBodyStepPx * 0.72);

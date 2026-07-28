@@ -39,6 +39,7 @@ import {
   annotatePrintFlowHtml,
   buildSmartPrintPageOffsets,
   collectPrintPageAnchors,
+  getPrintMeasurementScale,
 } from './printPagination';
 import {
   getFinalContentBodyHeightPx,
@@ -186,10 +187,16 @@ const pxToMm = (value: number) => value / mmToPx(1);
 const toCssMm = (value: number) => `${Number(pxToMm(value).toFixed(3))}mm`;
 const getMeasuredPrintBlockHeight = (measureNode: HTMLElement) => {
   const rootRect = measureNode.getBoundingClientRect();
+  const measurementScale = getPrintMeasurementScale({
+    logicalWidth: Math.max(measureNode.offsetWidth, measureNode.clientWidth),
+    logicalHeight: Math.max(measureNode.offsetHeight, measureNode.clientHeight),
+    renderedWidth: rootRect.width,
+    renderedHeight: rootRect.height,
+  });
   const descendantBottom = Array.from(measureNode.querySelectorAll('*')).reduce((maxBottom, element) => {
     const rect = (element as HTMLElement).getBoundingClientRect();
     if (!rect.height && !rect.width) return maxBottom;
-    return Math.max(maxBottom, rect.bottom - rootRect.top);
+    return Math.max(maxBottom, (rect.bottom - rootRect.top) * measurementScale.y);
   }, 0);
 
   return Math.max(
@@ -534,6 +541,7 @@ export const usePrintManager = ({
   const [currentUserPermissions, setCurrentUserPermissions] = useState<Record<string, any> | null>(null);
   const [userPreferencesReady, setUserPreferencesReady] = useState(false);
   const [sellerInfo, setSellerInfo] = useState<any>(null);
+  const companySettingsRequestRef = useRef<Promise<any> | null>(null);
   const [customerInfo, setCustomerInfo] = useState<any>(null);
   const [supplierInfo, setSupplierInfo] = useState<any>(null);
   const [employeeInfo, setEmployeeInfo] = useState<any>(null);
@@ -564,6 +572,7 @@ export const usePrintManager = ({
   const dependenciesLoadedKeyRef = useRef<string | null>(null);
   const [renderedPageCount, setRenderedPageCount] = useState(1);
   const renderedPageOffsetsRef = useRef<number[]>([0]);
+  const measuredBodyContentHeightRef = useRef<{ templateId: string; height: number } | null>(null);
   const [renderedPageOffsets, setRenderedPageOffsets] = useState<number[]>([0]);
   const [forcedPrintPageCount, setForcedPrintPageCount] = useState<number | null>(null);
   const payrollEmployeeId = getRelationRecordId(data?.employee_id);
@@ -1068,6 +1077,32 @@ export const usePrintManager = ({
     [data, moduleConfig, moduleId]
   );
 
+  // A print is rendered to static HTML. Waiting for the organization settings
+  // here prevents the first click from capturing the header before its logo
+  // and seller details have arrived from the tenant-scoped source.
+  const loadPrintCompanySettings = useCallback(() => {
+    if (!companySettingsRequestRef.current) {
+      companySettingsRequestRef.current = loadScopedCompanySettings(supabase)
+        .then((result) => {
+          if (!result.error) setSellerInfo(result.data || null);
+          return result;
+        })
+        .finally(() => {
+          companySettingsRequestRef.current = null;
+        });
+    }
+    return companySettingsRequestRef.current;
+  }, []);
+
+  const waitForPrintRenderCommit = useCallback(
+    () => new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => resolve());
+      });
+    }),
+    []
+  );
+
   const measureCurrentCustomTemplatePages = useCallback(() => {
     if (!selectedTemplateId.startsWith('custom:') || !selectedStoredTemplate || !bodyMeasureRef.current) {
       return null;
@@ -1129,7 +1164,16 @@ export const usePrintManager = ({
           });
         })();
     const pageBodyStepPx = getTemplatePageBodyStepPx(pageBodyHeightPx);
-    const pageOffsets = getMeasuredPrintPageOffsets(bodyMeasureRef.current, pageBodyStepPx);
+    const measuredBodyHeightPx = getMeasuredPrintBlockHeight(bodyMeasureRef.current);
+    measuredBodyContentHeightRef.current = {
+      templateId: selectedTemplateId,
+      height: measuredBodyHeightPx,
+    };
+    const pageOffsets = buildSmartPrintPageOffsets({
+      totalHeight: measuredBodyHeightPx,
+      pageBodyStepPx,
+      anchors: collectPrintPageAnchors(bodyMeasureRef.current),
+    });
     const pageCount = Math.max(1, pageOffsets.length);
 
     renderedPageOffsetsRef.current = pageOffsets;
@@ -1153,13 +1197,25 @@ export const usePrintManager = ({
 
   const preparePrint = useCallback(() => {
     measureCurrentCustomTemplatePages();
+    void loadPrintCompanySettings().catch((error) => {
+      console.error('Load company settings before print failed', error);
+    });
     if (!shouldUseGeneratedPdfPrint()) return;
     const printTitle = getPrintOutputName();
     reservedPrintWindowRef.current = prepareGeneratedPdfWindow(printTitle);
-  }, [getPrintOutputName, measureCurrentCustomTemplatePages]);
+  }, [getPrintOutputName, loadPrintCompanySettings, measureCurrentCustomTemplatePages]);
 
-  const handlePrint = useCallback(() => {
+  const handlePrint = useCallback(async () => {
     if (!selectedTemplateId) return;
+    const companySettingsResult = await loadPrintCompanySettings();
+    const requiresCompanySettings = moduleId === 'invoices' || moduleId === 'purchase_invoices';
+    if (requiresCompanySettings && companySettingsResult?.error) {
+      console.error('Invoice print skipped because company settings could not be loaded', companySettingsResult.error);
+      return;
+    }
+    // `renderedCustomTemplate` is a memoized static-HTML snapshot. Give React
+    // a committed frame after the company state update before serializing it.
+    await waitForPrintRenderCommit();
     const printTitle = getPrintOutputName();
 
     const preparedMeasurement = measureCurrentCustomTemplatePages();
@@ -1222,9 +1278,12 @@ export const usePrintManager = ({
   }, [
     availableTemplates,
     getPrintOutputName,
+    loadPrintCompanySettings,
     measureCurrentCustomTemplatePages,
+    moduleId,
     renderedPageCount,
     selectedTemplateId,
+    waitForPrintRenderCommit,
   ]);
 
   const generateCurrentPdfBlob = useCallback(async (options?: {
@@ -1234,6 +1293,12 @@ export const usePrintManager = ({
     if (!selectedTemplateId) {
       throw new Error('print_template_missing');
     }
+    const companySettingsResult = await loadPrintCompanySettings();
+    const requiresCompanySettings = moduleId === 'invoices' || moduleId === 'purchase_invoices';
+    if (requiresCompanySettings && companySettingsResult?.error) {
+      throw companySettingsResult.error;
+    }
+    await waitForPrintRenderCommit();
 
     const tracker = options?.tracker;
     const printTitle = getPrintOutputName();
@@ -1288,7 +1353,15 @@ export const usePrintManager = ({
       filename: `${printTitle}.pdf`,
       title: printTitle,
     };
-  }, [availableTemplates, getPrintOutputName, renderedPageCount, selectedTemplateId]);
+  }, [
+    availableTemplates,
+    getPrintOutputName,
+    loadPrintCompanySettings,
+    moduleId,
+    renderedPageCount,
+    selectedTemplateId,
+    waitForPrintRenderCommit,
+  ]);
 
   useEffect(() => {
     if (printMode) return;
@@ -3027,6 +3100,7 @@ export const usePrintManager = ({
   useEffect(() => {
     if (!selectedStoredTemplate) {
       preparedPrintPageCountRef.current = null;
+      measuredBodyContentHeightRef.current = null;
       setMeasuredSectionHeights((prev) => (prev.header === 0 && prev.footer === 0 ? prev : { header: 0, footer: 0 }));
       setRenderedPageCount(1);
       renderedPageOffsetsRef.current = [0];
@@ -3094,7 +3168,16 @@ export const usePrintManager = ({
           })();
       const pageBodyStepPx = getTemplatePageBodyStepPx(pageBodyHeightPx);
 
-      const nextPageOffsets = getMeasuredPrintPageOffsets(bodyMeasure, pageBodyStepPx);
+      const measuredBodyHeightPx = getMeasuredPrintBlockHeight(bodyMeasure);
+      measuredBodyContentHeightRef.current = {
+        templateId: selectedTemplateId,
+        height: measuredBodyHeightPx,
+      };
+      const nextPageOffsets = buildSmartPrintPageOffsets({
+        totalHeight: measuredBodyHeightPx,
+        pageBodyStepPx,
+        anchors: collectPrintPageAnchors(bodyMeasure),
+      });
       renderedPageOffsetsRef.current = nextPageOffsets;
       preparedPrintPageCountRef.current = Math.max(1, nextPageOffsets.length);
       setRenderedPageOffsets((prev) =>
@@ -3547,7 +3630,9 @@ export const usePrintManager = ({
       );
       const measuredBodyHeightPx = bodyMeasureRef.current
         ? getMeasuredPrintBlockHeight(bodyMeasureRef.current)
-        : null;
+        : measuredBodyContentHeightRef.current?.templateId === selectedTemplateId
+          ? measuredBodyContentHeightRef.current.height
+          : null;
 
       return React.createElement(
         'div',
@@ -3989,7 +4074,7 @@ export const usePrintManager = ({
     let isMounted = true;
     const loadDependencies = async () => {
       try {
-        const companyReq = loadScopedCompanySettings(supabase);
+        const companyReq = loadPrintCompanySettings();
         const assigneeDirectoryReq = fetchAssigneeDirectory(supabase).catch(() => null);
         const filesCountReq =
           moduleId && data?.id
@@ -4025,7 +4110,6 @@ export const usePrintManager = ({
           supplierReq as any,
         ]);
         if (!isMounted) return;
-        if (!companyError) setSellerInfo(companyData || null);
         if (assigneeDirectoryData) setAssigneeDirectory(assigneeDirectoryData);
         if (!filesCountError) setLinkedAttachmentCount(Number.isFinite(filesCount) ? Number(filesCount) : 0);
         if (!customerError) setCustomerInfo(customerData || null);
@@ -4042,7 +4126,16 @@ export const usePrintManager = ({
     return () => {
       isMounted = false;
     };
-  }, [data?.customer_id, data?.id, data?.supplier_id, isPrintModalOpen, moduleId, payrollEmployeeId, printMode]);
+  }, [
+    data?.customer_id,
+    data?.id,
+    data?.supplier_id,
+    isPrintModalOpen,
+    loadPrintCompanySettings,
+    moduleId,
+    payrollEmployeeId,
+    printMode,
+  ]);
 
   const printSignatureQuickAddOptions = useMemo(
     () => getPrintSignatureQuickAddOptions({ canUseCeoSignature, companyInfo: sellerInfo }),

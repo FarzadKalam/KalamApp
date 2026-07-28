@@ -54,4 +54,27 @@ describe('InvoiceCard', () => {
       expect(html).toContain('white-space:pre-wrap');
     }
   );
+
+  it.each(['invoice_sales_official', 'invoice_sales_simple'] as const)(
+    'uses the company full name and logo in %s',
+    (templateId) => {
+      const html = renderToStaticMarkup(
+        <InvoiceCard
+          data={{ name: 'فاکتور آزمایشی', invoiceItems: [], total_invoice_amount: 0 }}
+          seller={{
+            company_full_name: 'شرکت نمونهٔ فروش',
+            logo_url: 'https://cdn.example.com/company-logo.png',
+          }}
+          formatPersianPrice={(value) => String(value)}
+          toPersianNumber={(value) => value}
+          safeJalaliFormat={(value) => String(value)}
+          templateId={templateId}
+        />
+      );
+
+      expect(html).toContain('شرکت نمونهٔ فروش');
+      expect(html).toContain('https://cdn.example.com/company-logo.png');
+      expect(html).toContain('alt="لوگوی فروشنده"');
+    }
+  );
 });

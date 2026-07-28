@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   loadScopedCompanySettings: vi.fn(),
   fetchAssigneeDirectory: vi.fn(),
   detectRecordFilesTable: vi.fn(),
+  printInIframe: vi.fn(),
 }));
 
 vi.mock('./store', async (importOriginal) => ({
@@ -27,6 +28,11 @@ vi.mock('../referenceData', async (importOriginal) => ({
   fetchAssigneeDirectory: mocks.fetchAssigneeDirectory,
 }));
 vi.mock('../recordFilesAvailability', () => ({ detectRecordFilesTable: mocks.detectRecordFilesTable }));
+vi.mock('./printInIframe', () => ({ printInIframe: mocks.printInIframe }));
+vi.mock('./printAsPdf', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./printAsPdf')>()),
+  shouldUseGeneratedPdfPrint: () => false,
+}));
 
 import { usePrintManager } from './usePrintManager';
 
@@ -69,6 +75,7 @@ describe('official and unofficial sales invoice descriptions', () => {
     mocks.loadScopedCompanySettings.mockResolvedValue({ data: null, error: null });
     mocks.fetchAssigneeDirectory.mockResolvedValue({ users: [], roles: [] });
     mocks.detectRecordFilesTable.mockResolvedValue(false);
+    mocks.printInIframe.mockResolvedValue(undefined);
   });
 
   it.each(['default_invoice_official', 'default_invoice_unofficial'])(
@@ -157,5 +164,44 @@ describe('official and unofficial sales invoice descriptions', () => {
       expect(view.container.textContent).toContain('۵۰۰');
     });
     view.unmount();
+  }, 15_000);
+
+  it('waits for tenant company details before serializing an official invoice for print', async () => {
+    mocks.loadScopedCompanySettings.mockResolvedValue({
+      data: {
+        company_full_name: 'شرکت نمونهٔ فروش',
+        logo_url: 'https://cdn.example.com/company-logo.png',
+        address: 'تهران، خیابان نمونه',
+      },
+      error: null,
+    });
+    const requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    vi.stubGlobal('requestAnimationFrame', requestAnimationFrame);
+
+    const { result } = renderHook(() => usePrintManager({
+      moduleId: 'invoices',
+      data: invoiceRecord,
+      moduleConfig: invoicesConfig,
+      printableFields: [],
+      formatPrintValue: (_field, value) => String(value ?? ''),
+      canViewField: () => true,
+    }));
+
+    act(() => result.current.openPrintModal());
+    await waitFor(() => expect(result.current.printTemplates.length).toBeGreaterThan(0));
+    act(() => result.current.setSelectedTemplateId('custom:default_invoice_official'));
+    await waitFor(() => expect(result.current.selectedTemplateId).toBe('custom:default_invoice_official'));
+
+    await act(async () => {
+      await result.current.handlePrint();
+    });
+
+    await waitFor(() => expect(mocks.printInIframe).toHaveBeenCalledTimes(1));
+    expect(mocks.printInIframe.mock.calls[0][0].sourceHtml).toContain('شرکت نمونهٔ فروش');
+    expect(mocks.printInIframe.mock.calls[0][0].sourceHtml).toContain('company-logo.png');
+    vi.unstubAllGlobals();
   }, 15_000);
 });

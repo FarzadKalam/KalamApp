@@ -1695,19 +1695,26 @@ const SmartForm: React.FC<SmartFormProps> = ({
             }
           }
           if (discountRow.max_uses || discountRow.per_customer_max_uses) {
-            const { data: redemptionRows, error: redemptionError } = await supabase
-              .from('customer_discount_redemptions')
-              .select('id, customer_id, invoice_id')
-              .eq('discount_code_id', discountRow.id)
-              .limit(1000);
-            if (redemptionError) throw redemptionError;
-            const effectiveRows = (redemptionRows || []).filter((row: any) => String(row?.invoice_id || '') !== String(recordId || ''));
-            if (discountRow.max_uses && effectiveRows.length >= Number(discountRow.max_uses)) {
+            const countDiscountRedemptions = async (scopeCustomerId?: string) => {
+              let query = supabase
+                .from('customer_discount_redemptions')
+                .select('id', { count: 'exact', head: true })
+                .eq('discount_code_id', discountRow.id);
+              if (scopeCustomerId) query = query.eq('customer_id', scopeCustomerId);
+              if (recordId) query = query.neq('invoice_id', recordId);
+              return query;
+            };
+            const [totalUsage, customerUsage] = await Promise.all([
+              discountRow.max_uses ? countDiscountRedemptions() : Promise.resolve({ count: 0, error: null }),
+              discountRow.per_customer_max_uses ? countDiscountRedemptions(customerId) : Promise.resolve({ count: 0, error: null }),
+            ]);
+            if (totalUsage.error) throw totalUsage.error;
+            if (customerUsage.error) throw customerUsage.error;
+            if (discountRow.max_uses && Number(totalUsage.count || 0) >= Number(discountRow.max_uses)) {
               messageApi.error('ظرفیت استفاده از این کد تخفیف تکمیل شده است.');
               return;
             }
-            const customerUseCount = effectiveRows.filter((row: any) => String(row?.customer_id || '') === customerId).length;
-            if (discountRow.per_customer_max_uses && customerUseCount >= Number(discountRow.per_customer_max_uses)) {
+            if (discountRow.per_customer_max_uses && Number(customerUsage.count || 0) >= Number(discountRow.per_customer_max_uses)) {
               messageApi.error('این مشتری قبلاً به سقف استفاده از این کد تخفیف رسیده است.');
               return;
             }
@@ -2033,14 +2040,15 @@ const SmartForm: React.FC<SmartFormProps> = ({
             if (rule.rule_type === 'first_purchase') {
               if (Number(customerRecord.previous_system_purchase_count || 0) > 0) continue;
               if (hasPriorPurchase === null) {
-                const { data: priorRows, error: priorError } = await supabase
+                let priorPurchaseQuery = supabase
                   .from('invoices')
-                  .select('id, status')
+                  .select('id', { count: 'exact', head: true })
                   .eq('customer_id', customerId)
-                  .neq('id', invoiceId)
-                  .limit(1000);
+                  .or('status.is.null,status.not.in.(created,proforma,canceled,cancelled)');
+                if (invoiceId) priorPurchaseQuery = priorPurchaseQuery.neq('id', invoiceId);
+                const { count: priorPurchaseCount, error: priorError } = await priorPurchaseQuery;
                 if (priorError) throw priorError;
-                hasPriorPurchase = (priorRows || []).some((row: any) => isCustomerPurchaseStatus(row?.status));
+                hasPriorPurchase = Number(priorPurchaseCount || 0) > 0;
               }
               if (hasPriorPurchase) continue;
             }

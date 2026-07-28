@@ -17,8 +17,8 @@ import type {
 interface PrintSectionProps {
   isPrintModalOpen: boolean;
   onClose: () => void;
-  onPrint: () => void;
-  onPreparePrint?: () => void;
+  onPrint: () => void | Promise<void>;
+  onPreparePrint?: () => void | Promise<void>;
   onSendInternalPdf?: () => void | Promise<void>;
   onSavePdfToRecord?: () => void | Promise<void>;
   onRefreshPreview?: () => void | Promise<void>;
@@ -284,14 +284,18 @@ const PrintSection: React.FC<PrintSectionProps> = ({
 
   const handleRequestPrint = () => {
     try {
-      onPreparePrint?.();
+      void Promise.resolve(onPreparePrint?.()).catch((error) => {
+        console.error('Prepare print failed', error);
+      });
     } catch (error) {
       console.error('Prepare print failed', error);
     }
 
     onClose();
     window.setTimeout(() => {
-      onPrint();
+      void Promise.resolve(onPrint()).catch((error) => {
+        console.error('Print failed', error);
+      });
     }, 0);
   };
 
