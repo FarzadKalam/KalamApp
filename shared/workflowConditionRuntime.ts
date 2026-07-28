@@ -1,7 +1,7 @@
 import {
   evaluateConditionCollection,
   evaluateCoreConditionOperator,
-} from './recordRuntime';
+} from './recordRuntime.ts';
 
 export type WorkflowConditionRuntimeCondition = {
   field?: unknown;

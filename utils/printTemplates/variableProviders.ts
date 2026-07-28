@@ -16,6 +16,13 @@ const counterpartyField = (label: string, value: string): PrintTemplateVariableO
   group: 'طرف حساب',
 });
 
+const employeeField = (label: string, value: string): PrintTemplateVariableOption => ({
+  label,
+  value,
+  kind: 'field',
+  group: 'اطلاعات کارمند',
+});
+
 const buildInvoiceComputedVariables = (
   relationKey: 'customer' | 'supplier',
   relationTitle: 'مشتری' | 'تامین‌کننده',
@@ -69,6 +76,14 @@ const PROVIDERS: Record<string, PrintVariableProvider> = {
     'جمع پرداخت‌شده',
     'مانده بدهی',
   ),
+  payroll_slips: () => [
+    employeeField('کد ملی کارمند', 'employee.national_code'),
+    employeeField('نام پدر کارمند', 'employee.father_name'),
+    employeeField('وضعیت تاهل کارمند', 'employee.marital_status'),
+    employeeField('وضعیت نظام وظیفه کارمند', 'employee.military_service_status'),
+    employeeField('تعداد فرزندان کارمند', 'employee.children_count'),
+    employeeField('شماره بیمه کارمند', 'employee.insurance_number'),
+  ],
   product_bundles: () => [
     recordField('جمع قبل از تخفیف پکیج', 'record.package_gross_total'),
     recordField('جمع تخفیف پکیج', 'record.package_discount_total'),

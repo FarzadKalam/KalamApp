@@ -1732,6 +1732,24 @@ const buildPayrollSlipPrintTemplate = (now: string): StoredPrintTemplate => ({
         <td style="width:32%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.status}}</td>
       </tr>
       <tr>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">کد ملی</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{employee.national_code}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">نام پدر</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{employee.father_name}}</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">وضعیت تاهل</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{employee.marital_status}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">وضعیت نظام وظیفه</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{employee.military_service_status}}</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">تعداد فرزند</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{employee.children_count}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">شماره بیمه</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{employee.insurance_number}}</td>
+      </tr>
+      <tr>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">ناخالص</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.gross_amount}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">خالص پرداختی</td>

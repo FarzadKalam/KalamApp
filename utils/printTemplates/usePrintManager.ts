@@ -331,6 +331,17 @@ const COMMON_VALUE_LABELS: Record<string, string> = {
   unofficial: 'غیررسمی',
 };
 
+const PAYROLL_EMPLOYEE_VALUE_LABELS: Record<string, string> = {
+  single: 'مجرد',
+  married: 'متاهل',
+  not_applicable: 'مشمول نیست',
+  completed: 'پایان خدمت',
+  permanent_exemption: 'معافیت دائم',
+  temporary_exemption: 'معافیت موقت',
+  serving: 'در حال خدمت',
+  eligible: 'مشمول',
+};
+
 const localizePlainText = (value: any): string => {
   if (value === null || value === undefined) return '-';
   const raw = String(value).trim();
@@ -523,6 +534,7 @@ export const usePrintManager = ({
   const [sellerInfo, setSellerInfo] = useState<any>(null);
   const [customerInfo, setCustomerInfo] = useState<any>(null);
   const [supplierInfo, setSupplierInfo] = useState<any>(null);
+  const [employeeInfo, setEmployeeInfo] = useState<any>(null);
   const [assigneeDirectory, setAssigneeDirectory] = useState<any>(null);
   const [printSignatureConfigs, setPrintSignatureConfigs] = useState<Record<string, PrintSignatureConfig[]>>({});
   const [signatureOptionsByRow, setSignatureOptionsByRow] = useState<Record<string, any[]>>({});
@@ -2785,6 +2797,7 @@ export const usePrintManager = ({
       if (root === 'record') source = data || {};
       if (root === 'customer') source = customerInfo || {};
       if (root === 'supplier') source = supplierInfo || {};
+      if (root === 'employee') source = employeeInfo || {};
       if (root === 'company') source = sellerInfo || {};
 
       if (root === 'record' && nestedPath && !isSystemFieldVisible(`record.${nestedPath}`)) {
@@ -2816,6 +2829,13 @@ export const usePrintManager = ({
             .filter(Boolean)
             .join(' ')
         );
+      }
+
+      if (root === 'employee' && nestedPath === 'marital_status') {
+        return PAYROLL_EMPLOYEE_VALUE_LABELS[String(source?.marital_status || '').trim()] || '';
+      }
+      if (root === 'employee' && nestedPath === 'military_service_status') {
+        return PAYROLL_EMPLOYEE_VALUE_LABELS[String(source?.military_service_status || '').trim()] || '';
       }
 
       const raw = getPathValue(source, nestedPath);
@@ -2882,6 +2902,7 @@ export const usePrintManager = ({
       buildPackageSummaryTableHtml,
       data,
       customerInfo,
+      employeeInfo,
       formatPrintValue,
       invoiceSummary.received,
       invoiceSummary.remaining,
@@ -3886,9 +3907,10 @@ export const usePrintManager = ({
 
   useEffect(() => {
     if (!isPrintModalOpen && !printMode) return;
-    const dependencyKey = `${moduleId}:${String(data?.id || '')}:${String(data?.customer_id || '')}:${String(data?.supplier_id || '')}`;
+    const dependencyKey = `${moduleId}:${String(data?.id || '')}:${String(data?.customer_id || '')}:${String(data?.supplier_id || '')}:${String(data?.employee_id || '')}`;
     if (dependenciesLoadedKeyRef.current === dependencyKey) return;
     let isMounted = true;
+    setEmployeeInfo(null);
     const loadDependencies = async () => {
       try {
         const companyReq = loadScopedCompanySettings(supabase);
@@ -3913,6 +3935,14 @@ export const usePrintManager = ({
           moduleId === 'purchase_invoices' && data?.supplier_id
             ? supabase.from('suppliers').select('*').eq('id', data.supplier_id).maybeSingle()
             : Promise.resolve({ data: null, error: null });
+        const employeeReq =
+          moduleId === 'payroll_slips' && data?.employee_id
+            ? supabase
+                .from('employees')
+                .select('national_code, father_name, marital_status, military_service_status, children_count, insurance_number')
+                .eq('id', data.employee_id)
+                .maybeSingle()
+            : Promise.resolve({ data: null, error: null });
 
         const [
           { data: companyData, error: companyError },
@@ -3920,12 +3950,14 @@ export const usePrintManager = ({
           { count: filesCount, error: filesCountError },
           { data: customerData, error: customerError },
           { data: supplierData, error: supplierError },
+          { data: employeeData, error: employeeError },
         ] = await Promise.all([
           companyReq as any,
           assigneeDirectoryReq as any,
           filesCountReq as any,
           customerReq as any,
           supplierReq as any,
+          employeeReq as any,
         ]);
         if (!isMounted) return;
         if (!companyError) setSellerInfo(companyData || null);
@@ -3933,7 +3965,8 @@ export const usePrintManager = ({
         if (!filesCountError) setLinkedAttachmentCount(Number.isFinite(filesCount) ? Number(filesCount) : 0);
         if (!customerError) setCustomerInfo(customerData || null);
         if (!supplierError) setSupplierInfo(supplierData || null);
-        if (!companyError && !customerError && !supplierError) {
+        if (!employeeError) setEmployeeInfo(employeeData || null);
+        if (!companyError && !customerError && !supplierError && !employeeError) {
           dependenciesLoadedKeyRef.current = dependencyKey;
         }
       } catch (err) {
@@ -3945,7 +3978,7 @@ export const usePrintManager = ({
     return () => {
       isMounted = false;
     };
-  }, [data?.customer_id, data?.id, data?.supplier_id, isPrintModalOpen, moduleId, printMode]);
+  }, [data?.customer_id, data?.employee_id, data?.id, data?.supplier_id, isPrintModalOpen, moduleId, printMode]);
 
   const printSignatureQuickAddOptions = useMemo(
     () => getPrintSignatureQuickAddOptions({ canUseCeoSignature, companyInfo: sellerInfo }),
