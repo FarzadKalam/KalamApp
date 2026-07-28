@@ -40,6 +40,12 @@ type ProcessStatusSyncContext = {
   tasks?: ProcessRuntimeCarrier[];
 };
 
+// چند کارت V2 (نمای کامل، فشرده یا ستونی) ممکن است هم‌زمان به یک پروژه وصل
+// باشند. همگام‌سازی هم‌زمان هر کدام، علاوه بر query تکراری، اتصال‌های pool را
+// بی‌دلیل اشغال می‌کرد. قفل فقط برای همان پروژه و فقط تا پایان درخواست نگه
+// داشته می‌شود؛ بنابراین بین سازمان‌ها یا پروژه‌های دیگر اشتراکی نیست.
+const projectStatusSyncInFlight = new Map<string, Promise<ProjectProcessStatus | null>>();
+
 const parseDraftStages = (value: any): any[] => {
   if (Array.isArray(value)) return value;
   if (typeof value !== 'string') return [];
@@ -463,65 +469,79 @@ export const syncProjectStatusWithProcessState = async (
   const normalizedProjectId = String(projectId || '').trim();
   if (!normalizedProjectId) return null;
 
-  let projectDraftStages = options?.draftStages;
-  if (projectDraftStages === undefined) {
-    const { data: projectRow, error: projectError } = await supabase
+  const activeRequest = projectStatusSyncInFlight.get(normalizedProjectId);
+  if (activeRequest) return activeRequest;
+
+  const request = (async () => {
+    let projectDraftStages = options?.draftStages;
+    if (projectDraftStages === undefined) {
+      const { data: projectRow, error: projectError } = await supabase
+        .from('projects')
+        .select('id,status,execution_process_draft')
+        .eq('id', normalizedProjectId)
+        .maybeSingle();
+      if (projectError) throw projectError;
+      if (!projectRow) return null;
+      projectDraftStages = parseDraftStages(projectRow.execution_process_draft);
+    }
+
+    const runtimeSummary = await fetchProjectProcessRuntimeSummary(normalizedProjectId);
+    const hasRuntimeSummary = Boolean(runtimeSummary && runtimeSummary.processRuns.length > 0);
+    const processRuns = hasRuntimeSummary
+      ? runtimeSummary!.processRuns
+      : await fetchProjectProcessRuns(normalizedProjectId);
+    const runIds = processRuns.map((run) => run.id);
+    const [fetchedTasks, projectRunStages] = await Promise.all([
+      options?.tasks || fetchProjectProcessTasks(normalizedProjectId, {
+        runIds,
+        // خلاصهٔ runtime، taskهای وابسته به اجرای فرآیند را با stageهای واقعی و
+        // tombstoneهای حذف‌شده برمی‌گرداند؛ این query فقط فعالیت مستقل پروژه را نگه می‌دارد.
+        includeRunTasks: !hasRuntimeSummary,
+      }),
+      hasRuntimeSummary
+        ? Promise.resolve(runtimeSummary!.runStages)
+        : fetchProjectProcessRunStages(normalizedProjectId, { runIds }),
+    ]);
+    const projectTasks = hasRuntimeSummary
+      ? filterProjectStandaloneTasksForRuntimeSummary(fetchedTasks)
+      : fetchedTasks;
+    const statusDraftStages = hasRuntimeSummary
+      ? filterProjectDraftStagesForRuntimeSummary(projectDraftStages, runtimeSummary)
+      : projectDraftStages;
+    const nextStatus = deriveProjectStatusFromProcessState(
+      statusDraftStages,
+      projectTasks,
+      projectRunStages,
+      processRuns,
+    );
+    if (!nextStatus) return null;
+
+    const { data: currentProject, error: currentProjectError } = await supabase
       .from('projects')
-      .select('id,status,execution_process_draft')
+      .select('id,status')
       .eq('id', normalizedProjectId)
       .maybeSingle();
-    if (projectError) throw projectError;
-    if (!projectRow) return null;
-    projectDraftStages = parseDraftStages(projectRow.execution_process_draft);
+    if (currentProjectError) throw currentProjectError;
+    if (!currentProject) return null;
+
+    if (String(currentProject?.status || '').trim() === nextStatus) return nextStatus;
+
+    const { error: updateError } = await supabase
+      .from('projects')
+      .update({ status: nextStatus })
+      .eq('id', normalizedProjectId);
+    if (updateError) throw updateError;
+    return nextStatus;
+  })();
+
+  projectStatusSyncInFlight.set(normalizedProjectId, request);
+  try {
+    return await request;
+  } finally {
+    if (projectStatusSyncInFlight.get(normalizedProjectId) === request) {
+      projectStatusSyncInFlight.delete(normalizedProjectId);
+    }
   }
-
-  const runtimeSummary = await fetchProjectProcessRuntimeSummary(normalizedProjectId);
-  const hasRuntimeSummary = Boolean(runtimeSummary && runtimeSummary.processRuns.length > 0);
-  const processRuns = hasRuntimeSummary
-    ? runtimeSummary!.processRuns
-    : await fetchProjectProcessRuns(normalizedProjectId);
-  const runIds = processRuns.map((run) => run.id);
-  const [fetchedTasks, projectRunStages] = await Promise.all([
-    options?.tasks || fetchProjectProcessTasks(normalizedProjectId, {
-      runIds,
-      // خلاصهٔ runtime، taskهای وابسته به اجرای فرآیند را با stageهای واقعی و
-      // tombstoneهای حذف‌شده برمی‌گرداند؛ این query فقط فعالیت مستقل پروژه را نگه می‌دارد.
-      includeRunTasks: !hasRuntimeSummary,
-    }),
-    hasRuntimeSummary
-      ? Promise.resolve(runtimeSummary!.runStages)
-      : fetchProjectProcessRunStages(normalizedProjectId, { runIds }),
-  ]);
-  const projectTasks = hasRuntimeSummary
-    ? filterProjectStandaloneTasksForRuntimeSummary(fetchedTasks)
-    : fetchedTasks;
-  const statusDraftStages = hasRuntimeSummary
-    ? filterProjectDraftStagesForRuntimeSummary(projectDraftStages, runtimeSummary)
-    : projectDraftStages;
-  const nextStatus = deriveProjectStatusFromProcessState(
-    statusDraftStages,
-    projectTasks,
-    projectRunStages,
-    processRuns,
-  );
-  if (!nextStatus) return null;
-
-  const { data: currentProject, error: currentProjectError } = await supabase
-    .from('projects')
-    .select('id,status')
-    .eq('id', normalizedProjectId)
-    .maybeSingle();
-  if (currentProjectError) throw currentProjectError;
-  if (!currentProject) return null;
-
-  if (String(currentProject?.status || '').trim() === nextStatus) return nextStatus;
-
-  const { error: updateError } = await supabase
-    .from('projects')
-    .update({ status: nextStatus })
-    .eq('id', normalizedProjectId);
-  if (updateError) throw updateError;
-  return nextStatus;
 };
 
 export const syncProjectStatusesForProcessContext = async (
@@ -530,9 +550,18 @@ export const syncProjectStatusesForProcessContext = async (
   const projectIds = collectProjectIdsFromProcessContext(context);
   const results: Array<{ projectId: string; status: ProjectProcessStatus | null }> = [];
   for (const projectId of projectIds) {
-    // Snapshot صفحه ممکن است کامل نباشد یا هم‌زمان با حذف/تبدیل مرحله قدیمی شده باشد.
-    // وضعیت پروژه همیشه از رکوردهای فعلی سرور محاسبه می‌شود، نه از همین snapshot.
-    const status = await syncProjectStatusWithProcessState(projectId);
+    // runtime حاضر، هم برای پروژهٔ مستقیم و هم برای پروژه‌ای که به این
+    // فرآیند لینک شده، stageها و فعالیتِ همین تغییر را دارد. بنابراین نیازی
+    // به خواندن دوبارهٔ JSON بزرگ execution_process_draft نیست؛ آن query در
+    // تغییر یک stage باعث timeout 504 و تمام‌شدن connection-pool می‌شد.
+    // اجرای واقعی پروژه همچنان با خلاصهٔ server-side آن محاسبه می‌شود.
+    const status = await syncProjectStatusWithProcessState(
+      projectId,
+      {
+        draftStages: context.draftStages,
+        tasks: context.tasks,
+      },
+    );
     results.push({ projectId, status });
   }
   return results;

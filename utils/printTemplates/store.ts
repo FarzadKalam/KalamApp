@@ -551,7 +551,11 @@ const normalizeTemplate = (raw: any, moduleId: string): StoredPrintTemplate | nu
   const orientation = orientationRaw === 'landscape' ? 'landscape' : 'portrait';
   const scopeRaw = String(raw?.scope || raw?.templateScope || 'record').toLowerCase();
   const scope = scopeRaw === 'list' ? 'list' : 'record';
-  const selectedFieldKeys: string[] = Array.isArray(raw?.selectedFieldKeys)
+  // Absence and an explicit empty list are not the same state. In particular,
+  // a copied system template starts with no print-field preference; coercing
+  // that absence to [] makes its dynamic system tables look deliberately
+  // unchecked after reload.
+  const selectedFieldKeys: string[] | undefined = Array.isArray(raw?.selectedFieldKeys)
     ? Array.from(
         new Set<string>(
           raw.selectedFieldKeys
@@ -559,7 +563,7 @@ const normalizeTemplate = (raw: any, moduleId: string): StoredPrintTemplate | nu
             .filter(Boolean)
         )
       )
-    : [];
+    : undefined;
   const isSystem =
     raw?.isSystem === true ||
     raw?.is_system === true ||
@@ -1195,6 +1199,13 @@ export const normalizeDynamicBlockTablesHtml = (moduleId: string, html?: string)
       const explicit = String(table.getAttribute('data-print-block') || '').trim();
       if (explicit) return explicit;
 
+      // A system invoice puts the payments table inside a wider parent table
+      // next to the description cell. Looking through descendant markup made
+      // that parent look like the payments table and replaced it wholesale,
+      // silently deleting the invoice description. Auto-detection is only for
+      // a legacy block table itself, never for a table that contains one.
+      if (table.querySelector('table')) return '';
+
       const tableHtml = String(table.innerHTML || '');
       const hasInvoiceItemsShape =
         tableHtml.includes('{{row.__row_index__}}') &&
@@ -1733,21 +1744,21 @@ const buildPayrollSlipPrintTemplate = (now: string): StoredPrintTemplate => ({
       </tr>
       <tr>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">کد ملی</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{employee.national_code}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.employee_national_code}}</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">نام پدر</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{employee.father_name}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.employee_father_name}}</td>
       </tr>
       <tr>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">وضعیت تاهل</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{employee.marital_status}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.employee_marital_status}}</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">وضعیت نظام وظیفه</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{employee.military_service_status}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.employee_military_service_status}}</td>
       </tr>
       <tr>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">تعداد فرزند</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{employee.children_count}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.employee_children_count}}</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">شماره بیمه</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{employee.insurance_number}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.employee_insurance_number}}</td>
       </tr>
       <tr>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">ناخالص</td>
@@ -2184,6 +2195,11 @@ export const materializeSystemTemplateForCopy = (
 
   return {
     ...template,
+    // The selected fields of a system template are used above only to bake
+    // system placeholder markup into its copy. A copied manual template must
+    // start without a selection preference of its own, otherwise an old empty
+    // array hides all of its dynamic system tables.
+    selectedFieldKeys: undefined,
     headerHtml: replaceSystemPlaceholders(template.headerHtml),
     contentHtml: replaceSystemPlaceholders(template.contentHtml),
     footerHtml: replaceSystemPlaceholders(template.footerHtml),

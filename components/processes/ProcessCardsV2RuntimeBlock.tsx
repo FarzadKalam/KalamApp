@@ -1981,9 +1981,6 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         if (requestId !== refreshRequestIdRef.current) return;
         setRuntime(nextRuntime);
         publishRuntimeSnapshot(nextRuntime);
-        if (liveRuntimeEnabled) {
-          void syncProjectStatusForRuntime(nextRuntime);
-        }
         processRuntimeBlockCache.set(cacheKey, {
           runtime: nextRuntime,
           templateStages: templateStagesRef.current,
@@ -2040,9 +2037,6 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       setRuntime(nextRuntime);
       setLinkedDraftStages(nextLinkedDraftStages);
       publishRuntimeSnapshot(nextRuntime);
-      if (liveRuntimeEnabled) {
-        void syncProjectStatusForRuntime(nextRuntime, [...directDrafts, ...nextLinkedDraftStages]);
-      }
       processRuntimeBlockCache.set(cacheKey, {
         runtime: nextRuntime,
         templateStages: templateStagesRef.current,
@@ -2057,7 +2051,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       setHasLoadedRuntime(true);
       setLoading(false);
     }
-  }, [cacheKey, draftLoadErrorText, enabled, liveRuntimeEnabled, loadLegacyLinkedDrafts, normalizedModuleId, normalizedRecordId, publishRuntimeSnapshot, readOnlyVariant, syncProjectStatusForRuntime, variant]);
+  }, [cacheKey, draftLoadErrorText, enabled, loadLegacyLinkedDrafts, normalizedModuleId, normalizedRecordId, publishRuntimeSnapshot, readOnlyVariant, variant]);
 
   const refreshRef = useRef(refresh);
   useEffect(() => {

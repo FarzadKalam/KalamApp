@@ -389,6 +389,23 @@ const CustomTable = Table.extend({
   },
 });
 
+const CustomTableRow = TableRow.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      printOptionalField: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-print-optional-field') || null,
+        renderHTML: (attributes) => (
+          attributes.printOptionalField
+            ? { 'data-print-optional-field': attributes.printOptionalField }
+            : {}
+        ),
+      },
+    };
+  },
+});
+
 const CustomTableCell = TableCell.extend({
   addAttributes() {
     return {
@@ -409,6 +426,15 @@ const CustomTableCell = TableCell.extend({
             style: mergeStyleParts(baseStyle, `background-color: ${attributes.backgroundColor};`),
           };
         },
+      },
+      printOptionalField: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-print-optional-field') || null,
+        renderHTML: (attributes) => (
+          attributes.printOptionalField
+            ? { 'data-print-optional-field': attributes.printOptionalField }
+            : {}
+        ),
       },
     };
   },
@@ -434,6 +460,15 @@ const CustomTableHeader = TableHeader.extend({
             style: mergeStyleParts(baseStyle, `background-color: ${attributes.backgroundColor};`),
           };
         },
+      },
+      printOptionalField: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-print-optional-field') || null,
+        renderHTML: (attributes) => (
+          attributes.printOptionalField
+            ? { 'data-print-optional-field': attributes.printOptionalField }
+            : {}
+        ),
       },
     };
   },
@@ -999,7 +1034,7 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       Placeholder.configure({ placeholder }),
       CustomTable.configure({ resizable: true, allowTableNodeSelection: true }),
-      TableRow,
+      CustomTableRow,
       CustomTableHeader,
       CustomTableCell,
     ],

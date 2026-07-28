@@ -6,6 +6,8 @@ import {
   getPrintTemplateVariables,
   getSystemTemplateFieldOptions,
   isPrintTemplateAvailableForModule,
+  materializeSystemTemplateForCopy,
+  normalizeDynamicBlockTablesHtml,
 } from './store';
 import { BlockType, FieldLocation, FieldType } from '../../types';
 
@@ -113,17 +115,43 @@ describe('print template store grouping', () => {
     });
   });
 
+  it.each(['default_invoice_official', 'default_invoice_unofficial'])(
+    'does not replace the description-and-payments parent table in %s',
+    (templateId) => {
+      const template = buildDefaultTemplatesForModule('invoices')
+        .find((item) => item.id === templateId);
+      const normalized = normalizeDynamicBlockTablesHtml('invoices', template?.contentHtml);
+
+      expect(normalized).toContain('data-print-optional-field="record.description"');
+      expect(normalized).toContain('{{record.description}}');
+      expect(normalized).toContain('data-print-block="payments"');
+    }
+  );
+
+  it('starts a copied system template without inheriting its source field selection', () => {
+    const source = buildDefaultTemplatesForModule('invoices')
+      .find((item) => item.id === 'default_invoice_unofficial');
+    const copied = materializeSystemTemplateForCopy('invoices', {
+      ...source!,
+      selectedFieldKeys: ['block.invoiceItems', 'block.payments'],
+    });
+
+    expect(copied.selectedFieldKeys).toBeUndefined();
+    expect(copied.contentHtml).toContain('data-print-block="invoiceItems"');
+    expect(copied.contentHtml).toContain('data-print-block="payments"');
+  });
+
   it('uses related employee identity fields in the formal payroll slip template', () => {
     const template = buildDefaultTemplatesForModule('payroll_slips')
       .find((item) => item.id === 'default_payroll_slip_formal_a4');
     const variables = getPrintTemplateVariables('payroll_slips');
 
-    expect(template?.contentHtml).toContain('{{employee.national_code}}');
-    expect(template?.contentHtml).toContain('{{employee.father_name}}');
-    expect(template?.contentHtml).toContain('{{employee.marital_status}}');
-    expect(template?.contentHtml).toContain('{{employee.military_service_status}}');
-    expect(template?.contentHtml).toContain('{{employee.children_count}}');
-    expect(template?.contentHtml).toContain('{{employee.insurance_number}}');
+    expect(template?.contentHtml).toContain('{{record.employee_national_code}}');
+    expect(template?.contentHtml).toContain('{{record.employee_father_name}}');
+    expect(template?.contentHtml).toContain('{{record.employee_marital_status}}');
+    expect(template?.contentHtml).toContain('{{record.employee_military_service_status}}');
+    expect(template?.contentHtml).toContain('{{record.employee_children_count}}');
+    expect(template?.contentHtml).toContain('{{record.employee_insurance_number}}');
     expect(variables.find((item) => item.value === 'employee.insurance_number')?.group).toBe('اطلاعات کارمند');
   });
 

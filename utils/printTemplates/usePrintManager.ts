@@ -342,6 +342,15 @@ const PAYROLL_EMPLOYEE_VALUE_LABELS: Record<string, string> = {
   eligible: 'مشمول',
 };
 
+const PAYROLL_EMPLOYEE_PRINT_FIELD_SOURCES: Record<string, string> = {
+  employee_national_code: 'national_code',
+  employee_father_name: 'father_name',
+  employee_marital_status: 'marital_status',
+  employee_military_service_status: 'military_service_status',
+  employee_children_count: 'children_count',
+  employee_insurance_number: 'insurance_number',
+};
+
 const localizePlainText = (value: any): string => {
   if (value === null || value === undefined) return '-';
   const raw = String(value).trim();
@@ -370,6 +379,12 @@ const normalizePrintableNumber = (value: any) => {
   return String(rounded);
 };
 const toPersianPlain = (value: any) => toPersianNumber(normalizePrintableNumber(value));
+const getRelationRecordId = (value: any): string => {
+  if (value && typeof value === 'object') {
+    return String(value.id || value.value || '').trim();
+  }
+  return String(value || '').trim();
+};
 const getAddressDisplay = (source: any) => {
   const province = String(source?.province || source?.province_name || source?.state || source?.state_name || '').trim();
   const city = String(source?.city || source?.city_name || '').trim();
@@ -564,6 +579,7 @@ export const usePrintManager = ({
   const renderedPageOffsetsRef = useRef<number[]>([0]);
   const [renderedPageOffsets, setRenderedPageOffsets] = useState<number[]>([0]);
   const [forcedPrintPageCount, setForcedPrintPageCount] = useState<number | null>(null);
+  const payrollEmployeeId = getRelationRecordId(data?.employee_id);
 
   const loadTemplates = useCallback(async (mounted = true) => {
     try {
@@ -813,7 +829,9 @@ export const usePrintManager = ({
       if (!normalizedKey) return false;
       if (normalizedKey.startsWith('record.')) {
         const recordPath = normalizedKey.replace(/^record\./, '');
-        return hasMeaningfulPrintValue(getPathValue(data, recordPath), recordPath);
+        const employeeSourceField = PAYROLL_EMPLOYEE_PRINT_FIELD_SOURCES[recordPath];
+        const value = getPathValue(data, recordPath) ?? (employeeSourceField ? employeeInfo?.[employeeSourceField] : undefined);
+        return hasMeaningfulPrintValue(value, recordPath);
       }
       if (normalizedKey.startsWith('block.')) {
         const [, blockId, ...columnPath] = normalizedKey.split('.');
@@ -835,7 +853,11 @@ export const usePrintManager = ({
         key: item.key,
         labels: { fa: item.label },
         value: item.key.startsWith('record.')
-          ? getPathValue(data, String(item.key || '').replace(/^record\./, ''))
+          ? (() => {
+              const recordPath = String(item.key || '').replace(/^record\./, '');
+              const employeeSourceField = PAYROLL_EMPLOYEE_PRINT_FIELD_SOURCES[recordPath];
+              return getPathValue(data, recordPath) ?? (employeeSourceField ? employeeInfo?.[employeeSourceField] : undefined);
+            })()
           : true,
         hasValue: resolveSystemFieldHasValue(item.key),
         group: item.group,
@@ -958,7 +980,7 @@ export const usePrintManager = ({
     ];
 
     return [...baseOptions, ...invoiceComputedSystemOptions, ...commonSystemOptions, ...mediaOptions];
-  }, [canViewField, data, moduleConfig, moduleId, recordImageField]);
+  }, [canViewField, data, employeeInfo, moduleConfig, moduleId, recordImageField]);
   const isSelectedTemplateSystem = Boolean(selectedStoredTemplate?.isSystem || selectedTemplateMeta?.isSystem);
   const printableFieldsForTemplate = useMemo(() => {
     if (!isSystemRecordTemplate && !templateUsesSystemBlocks && !templateUsesSystemFieldCollections) return printableFields;
@@ -1312,7 +1334,13 @@ export const usePrintManager = ({
     });
     const persistedKeys = Array.isArray(preferenceKeys)
       ? preferenceKeys
-      : !isSelectedTemplateSystem && Array.isArray(selectedStoredTemplate?.selectedFieldKeys)
+      // Empty arrays on manually copied system templates were historically
+      // generated as a serialization default, not a user decision. Their
+      // actual per-user choice lives in the scoped print-field preference.
+      // Only a non-empty legacy template selection may be adopted here.
+      : !isSelectedTemplateSystem &&
+          Array.isArray(selectedStoredTemplate?.selectedFieldKeys) &&
+          selectedStoredTemplate.selectedFieldKeys.length > 0
         ? selectedStoredTemplate.selectedFieldKeys
         : null;
     setSelectedPrintFields((prev) => {
@@ -2804,6 +2832,16 @@ export const usePrintManager = ({
         return '';
       }
 
+      if (root === 'record' && PAYROLL_EMPLOYEE_PRINT_FIELD_SOURCES[nestedPath]) {
+        const sourceField = PAYROLL_EMPLOYEE_PRINT_FIELD_SOURCES[nestedPath];
+        const value = source?.[nestedPath] ?? employeeInfo?.[sourceField];
+        if (value === null || value === undefined || value === '') return '';
+        if (nestedPath === 'employee_marital_status' || nestedPath === 'employee_military_service_status') {
+          return PAYROLL_EMPLOYEE_VALUE_LABELS[String(value).trim()] || localizePlainText(value);
+        }
+        return localizePlainText(value);
+      }
+
       if (root === 'company' && (nestedPath === 'logo_url' || path === 'company.logo_url')) {
           const logo = source?.logo_url || source?.logo || source?.icon_url || source?.image_url || '';
           return buildPrintImageUrl(String(logo || ''), 'printLogo');
@@ -3905,12 +3943,40 @@ export const usePrintManager = ({
   const renderPrintCard = useCallback(() => buildPrintCard(), [buildPrintCard]);
   buildPrintCardRef.current = buildPrintCard;
 
+  // اطلاعات هویتی فیش باید قبل از باز شدن پنجرهٔ چاپ آماده باشد؛ وابسته‌کردن
+  // این درخواست به خود مودال باعث می‌شد پیش‌نمایش اولیه با خانه‌های خالی دیده شود.
+  useEffect(() => {
+    if (moduleId !== 'payroll_slips' || !payrollEmployeeId) {
+      setEmployeeInfo(null);
+      return;
+    }
+
+    let isMounted = true;
+    supabase
+      .from('employees')
+      .select('national_code, father_name, marital_status, military_service_status, children_count, insurance_number')
+      .eq('id', payrollEmployeeId)
+      .maybeSingle()
+      .then(({ data: employeeData, error: employeeError }) => {
+        if (!isMounted) return;
+        if (employeeError) {
+          console.error('Load payroll employee print fields failed', employeeError);
+          setEmployeeInfo(null);
+          return;
+        }
+        setEmployeeInfo(employeeData || null);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [moduleId, payrollEmployeeId]);
+
   useEffect(() => {
     if (!isPrintModalOpen && !printMode) return;
-    const dependencyKey = `${moduleId}:${String(data?.id || '')}:${String(data?.customer_id || '')}:${String(data?.supplier_id || '')}:${String(data?.employee_id || '')}`;
+    const dependencyKey = `${moduleId}:${String(data?.id || '')}:${String(data?.customer_id || '')}:${String(data?.supplier_id || '')}:${payrollEmployeeId}`;
     if (dependenciesLoadedKeyRef.current === dependencyKey) return;
     let isMounted = true;
-    setEmployeeInfo(null);
     const loadDependencies = async () => {
       try {
         const companyReq = loadScopedCompanySettings(supabase);
@@ -3935,29 +4001,18 @@ export const usePrintManager = ({
           moduleId === 'purchase_invoices' && data?.supplier_id
             ? supabase.from('suppliers').select('*').eq('id', data.supplier_id).maybeSingle()
             : Promise.resolve({ data: null, error: null });
-        const employeeReq =
-          moduleId === 'payroll_slips' && data?.employee_id
-            ? supabase
-                .from('employees')
-                .select('national_code, father_name, marital_status, military_service_status, children_count, insurance_number')
-                .eq('id', data.employee_id)
-                .maybeSingle()
-            : Promise.resolve({ data: null, error: null });
-
         const [
           { data: companyData, error: companyError },
           assigneeDirectoryData,
           { count: filesCount, error: filesCountError },
           { data: customerData, error: customerError },
           { data: supplierData, error: supplierError },
-          { data: employeeData, error: employeeError },
         ] = await Promise.all([
           companyReq as any,
           assigneeDirectoryReq as any,
           filesCountReq as any,
           customerReq as any,
           supplierReq as any,
-          employeeReq as any,
         ]);
         if (!isMounted) return;
         if (!companyError) setSellerInfo(companyData || null);
@@ -3965,8 +4020,7 @@ export const usePrintManager = ({
         if (!filesCountError) setLinkedAttachmentCount(Number.isFinite(filesCount) ? Number(filesCount) : 0);
         if (!customerError) setCustomerInfo(customerData || null);
         if (!supplierError) setSupplierInfo(supplierData || null);
-        if (!employeeError) setEmployeeInfo(employeeData || null);
-        if (!companyError && !customerError && !supplierError && !employeeError) {
+        if (!companyError && !customerError && !supplierError) {
           dependenciesLoadedKeyRef.current = dependencyKey;
         }
       } catch (err) {
@@ -3978,7 +4032,7 @@ export const usePrintManager = ({
     return () => {
       isMounted = false;
     };
-  }, [data?.customer_id, data?.employee_id, data?.id, data?.supplier_id, isPrintModalOpen, moduleId, printMode]);
+  }, [data?.customer_id, data?.id, data?.supplier_id, isPrintModalOpen, moduleId, payrollEmployeeId, printMode]);
 
   const printSignatureQuickAddOptions = useMemo(
     () => getPrintSignatureQuickAddOptions({ canUseCeoSignature, companyInfo: sellerInfo }),
