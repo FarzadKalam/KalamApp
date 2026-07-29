@@ -1081,7 +1081,7 @@ const AccountingRecordPage: React.FC = () => {
     switch (field.type) {
       case FieldType.LONG_TEXT:
       case FieldType.SUPER_LONG_TEXT:
-        return <RichTextEditor disabled={disabled} minRows={field.type === FieldType.SUPER_LONG_TEXT ? 6 : 3} />;
+        return <RichTextEditor disabled={disabled} minRows={field.type === FieldType.SUPER_LONG_TEXT ? 6 : 3} onChange={() => undefined} />;
       case FieldType.CHECKBOX:
         return <Checkbox disabled={disabled} />;
       case FieldType.DATE:

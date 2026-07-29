@@ -72,6 +72,31 @@ describe('fetchRelationOptionsForField', () => {
     });
   });
 
+  it('does not request virtual bot group fields in a customer relation fallback', async () => {
+    const query = createQuery([{
+      id: '21000000-0000-4000-8000-000000000002',
+      full_name: 'مشتری تست',
+    }]);
+    const supabase = {
+      rpc: vi.fn(async () => ({
+        data: null,
+        error: { code: 'PGRST204', message: 'schema cache is stale' },
+      })),
+      from: vi.fn(() => query),
+    };
+
+    await fetchRelationOptionsForField(
+      supabase,
+      { relationConfig: { targetModule: 'customers', targetField: 'full_name' } },
+      { exactId: '21000000-0000-4000-8000-000000000002', limit: 1 },
+    );
+
+    const requestedProjection = String(query.select.mock.calls[0]?.[0] || '');
+    expect(requestedProjection).not.toContain('telegram_group_title');
+    expect(requestedProjection).not.toContain('bale_group_title');
+    expect(requestedProjection).not.toContain('rubika_group_title');
+  });
+
   it('falls back to a direct query when the RPC rejects an invalid uuid input', async () => {
     const query = createQuery([{
       id: '30000000-0000-4000-8000-000000000003',

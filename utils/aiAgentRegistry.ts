@@ -32,7 +32,7 @@ const toFieldCatalog = (field: ModuleField, moduleId: string) => ({
 });
 
 const toCatalogEntry = (module: ModuleDefinition): AiAgentModuleCatalogEntry => {
-  const internalTables = (module.blocks || [])
+  const internalTables: AiAgentModuleCatalogEntry['internalTables'] = (module.blocks || [])
     .filter((block: any) => String(block?.type || '') === 'table')
     .map((block: any) => ({
       id: String(block.id || ''),

@@ -41,8 +41,8 @@ const MbtiAssessmentReportPage = () => {
         .maybeSingle();
       if (error) throw error;
       setRecord(data || null);
-    } catch (error) {
-      message.error(toFaErrorMessage(error, 'بارگذاری گزارش نتیجه ناموفق بود.'));
+    } catch (error: unknown) {
+      message.error(toFaErrorMessage(error instanceof Error ? error : String(error || ''), 'بارگذاری گزارش نتیجه ناموفق بود.'));
       setRecord(null);
     } finally {
       setLoading(false);
@@ -76,8 +76,8 @@ const MbtiAssessmentReportPage = () => {
       if (data?.success === false) throw new Error(String(data?.message || 'تحلیل هوشمند ناموفق بود.'));
       await loadRecord();
       message.success('تحلیل هوشمند آماده شد.');
-    } catch (error) {
-      message.error(toFaErrorMessage(error, 'تحلیل هوشمند نتیجه ناموفق بود.'));
+    } catch (error: unknown) {
+      message.error(toFaErrorMessage(error instanceof Error ? error : String(error || ''), 'تحلیل هوشمند نتیجه ناموفق بود.'));
     } finally {
       setAnalyzing(false);
     }

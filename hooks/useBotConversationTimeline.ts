@@ -9,7 +9,7 @@ import {
   type NotificationTimelinePayload,
 } from '../utils/notificationConversationRpc';
 
-type UseBotConversationTimelineOptions<TItem> = {
+type UseBotConversationTimelineOptions = {
   supabase: SupabaseClient<any, 'public', any>;
   enabled: boolean;
   botGroupId: string | null;
@@ -90,7 +90,7 @@ export const useBotConversationTimeline = <TItem,>({
   botGroupId,
   pageSize = 10,
   cacheScopeKey,
-}: UseBotConversationTimelineOptions<TItem>) => {
+}: UseBotConversationTimelineOptions) => {
   const [items, setItemsState] = useState<TItem[]>([]);
   const [loadingInitial, setLoadingInitial] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);

@@ -737,8 +737,7 @@ const buildPaymentLines = async (
       description: `${isPurchaseReturn ? 'ثبت دریافت وجه از تامین‌کننده' : 'ثبت پرداخت وجه'} - ${getInvoiceLabel(invoice, '')}`,
     });
 
-    const isPaymentOperation = moduleId === 'purchase_invoices' || moduleId === 'sales_return_invoices';
-    if (isPaymentOperation && transferFee > 0) {
+    if (transferFee > 0) {
       const expenseAccount = defaults.default_expense_account_id;
       if (!expenseAccount) {
         pushSyncError(result, 'حساب هزینه پیش‌فرض برای ثبت کارمزد انتقال تعریف نشده است.');

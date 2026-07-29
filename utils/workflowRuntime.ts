@@ -1425,56 +1425,97 @@ const resolveCounterpartyBotGroupsByChatIds = async (
   return (data || []) as CounterpartyBotGroupRow[];
 };
 
-const resolveCounterpartyBotChatIdsForRecord = async (
-  channel: 'rubika' | 'bale' | 'telegram',
-  moduleId: string,
-  currentRecord: Record<string, any>
-) => {
-  const normalizedModuleId = String(moduleId || '').trim();
-  const customerIds = new Set<string>();
-  const supplierIds = new Set<string>();
-
-  const directCustomerId = String(currentRecord?.customer_id || currentRecord?.related_customer || '').trim();
-  const directSupplierId = String(currentRecord?.supplier_id || currentRecord?.related_supplier || '').trim();
-  if (directCustomerId) customerIds.add(directCustomerId);
-  if (directSupplierId) supplierIds.add(directSupplierId);
-
-  if (normalizedModuleId === 'customers') {
-    const id = String(currentRecord?.id || '').trim();
-    if (id) customerIds.add(id);
-  }
-  if (normalizedModuleId === 'suppliers') {
-    const id = String(currentRecord?.id || '').trim();
-    if (id) supplierIds.add(id);
-  }
-
-  return resolveCounterpartyBotGroupChatIds(channel, Array.from(customerIds), Array.from(supplierIds));
-};
-
 const COUNTERPARTY_RELATED_RECIPIENT_FIELDS = new Set([
   'customer_id',
   'related_customer',
   'supplier_id',
   'related_supplier',
 ]);
+const COUNTERPARTY_RECIPIENT_CONTEXT_PREFIX = '__workflow_counterparty__';
+
+type CounterpartyRecipientTarget = {
+  counterpartyType: 'customers' | 'suppliers';
+  id: string;
+};
 
 const isCounterpartyRelatedRecipientField = (fieldKey: string) => {
   const raw = String(fieldKey || '').trim();
+  if (raw.startsWith(COUNTERPARTY_RECIPIENT_CONTEXT_PREFIX)) return true;
   if (COUNTERPARTY_RELATED_RECIPIENT_FIELDS.has(raw)) return true;
   const processLinked = parseProcessLinkedFieldKey(raw);
   if (
     processLinked
     && ['customers', 'suppliers'].includes(String(processLinked.moduleId || '').trim())
-    && ['id', 'customer_id', 'supplier_id', 'related_customer', 'related_supplier'].includes(String(processLinked.targetFieldKey || '').trim())
   ) {
     return true;
   }
   const workflowRelated = parseWorkflowRelatedFieldKey(raw);
-  return !!(
-    workflowRelated
-    && ['customers', 'suppliers'].includes(String(workflowRelated.targetModuleId || '').trim())
-    && ['id', 'customer_id', 'supplier_id', 'related_customer', 'related_supplier'].includes(String(workflowRelated.targetFieldKey || '').trim())
-  );
+  if (workflowRelated && ['customers', 'suppliers'].includes(String(workflowRelated.targetModuleId || '').trim())) {
+    return true;
+  }
+  const multiRelation = parseWorkflowMultiRelationFieldKey(raw);
+  return !!(multiRelation && ['customers', 'suppliers'].includes(String(multiRelation.targetModuleId || '').trim()));
+};
+
+const resolveConfiguredCounterpartyRecipients = async ({
+  currentRecord,
+  moduleId,
+  recipientFields,
+}: {
+  currentRecord: Record<string, any>;
+  moduleId: string;
+  recipientFields: string[];
+}): Promise<CounterpartyRecipientTarget[]> => {
+  const targets = new Map<string, CounterpartyRecipientTarget>();
+  const add = (counterpartyType: 'customers' | 'suppliers', value: unknown) => {
+    normalizeMultiRelationIds(value).forEach((id) => {
+      const normalizedId = String(id || '').trim();
+      if (!UUID_LIKE_REGEX.test(normalizedId)) return;
+      targets.set(`${counterpartyType}:${normalizedId}`, { counterpartyType, id: normalizedId });
+    });
+  };
+  const context = getProcessLinkMapFromRecord(currentRecord);
+
+  for (const configuredFieldKey of recipientFields) {
+    const wrapped = parseWorkflowNoteRecipientFieldKey(String(configuredFieldKey || '').trim());
+    const raw = String(wrapped?.fieldKey || configuredFieldKey || '').trim();
+    if (!raw) continue;
+    if (raw === `${COUNTERPARTY_RECIPIENT_CONTEXT_PREFIX}customers` && moduleId === 'customers') {
+      add('customers', currentRecord?.id);
+      continue;
+    }
+    if (raw === `${COUNTERPARTY_RECIPIENT_CONTEXT_PREFIX}suppliers` && moduleId === 'suppliers') {
+      add('suppliers', currentRecord?.id);
+      continue;
+    }
+    if (raw === 'customer_id' || raw === 'related_customer') {
+      add('customers', currentRecord?.[raw]);
+      continue;
+    }
+    if (raw === 'supplier_id' || raw === 'related_supplier') {
+      add('suppliers', currentRecord?.[raw]);
+      continue;
+    }
+
+    const processLinked = parseProcessLinkedFieldKey(raw);
+    if (processLinked && (processLinked.moduleId === 'customers' || processLinked.moduleId === 'suppliers')) {
+      add(processLinked.moduleId, context?.[processLinked.moduleId]);
+      continue;
+    }
+
+    const related = parseWorkflowRelatedFieldKey(raw);
+    if (related && (related.targetModuleId === 'customers' || related.targetModuleId === 'suppliers')) {
+      add(related.targetModuleId, currentRecord?.[related.relationFieldKey]);
+      continue;
+    }
+
+    const multiRelation = parseWorkflowMultiRelationFieldKey(raw);
+    if (multiRelation && (multiRelation.targetModuleId === 'customers' || multiRelation.targetModuleId === 'suppliers')) {
+      add(multiRelation.targetModuleId, currentRecord?.[multiRelation.fieldKey]);
+    }
+  }
+
+  return Array.from(targets.values());
 };
 
 const resolveCommunicationValuesFromFields = async ({
@@ -2377,7 +2418,12 @@ export const executeWorkflowAction = async (
     return;
   }
 
-  if (action.type === 'send_bot_message') {
+  if (
+    action.type === 'send_bot_message'
+    || action.type === 'send_telegram_bot'
+    || action.type === 'send_bale_bot'
+    || action.type === 'send_rubika_bot'
+  ) {
     // پیام یکپارچه بات: پلتفرم از تنظیمات پیش‌فرض counterparty_bot_config خوانده می‌شود
     const rawMessageText = (await renderWorkflowTemplate(String(config.message || ''), currentRecord, moduleId)).trim();
     const attachments = await resolveWorkflowMessageAttachments({
@@ -2414,31 +2460,36 @@ export const executeWorkflowAction = async (
     const configuredRecipientAssignees = recipientConfig.recipientAssignees;
 
     // تعیین پلتفرم برای هر counterparty از counterparty_bot_config
-    const resolveChannelForCounterparty = async (counterpartyId: string, counterpartyType: 'customers' | 'suppliers'): Promise<'rubika' | 'telegram' | 'bale'> => {
+    const resolveChannelForCounterparty = async (
+      counterpartyId: string,
+      counterpartyType: 'customers' | 'suppliers',
+    ): Promise<'rubika' | 'telegram' | 'bale' | null> => {
       const configQuery = supabase
         .from('counterparty_bot_config')
         .select('default_channel, fallback_to_active')
         .eq(counterpartyType === 'customers' ? 'customer_id' : 'supplier_id', counterpartyId)
         .maybeSingle();
-      const { data: prefRow } = await configQuery;
-      const defaultChannel = (String(prefRow?.default_channel || 'rubika') as 'rubika' | 'telegram' | 'bale');
-      if (!prefRow?.fallback_to_active) return defaultChannel;
+      const { data: prefRow, error: configError } = await configQuery;
+      if (configError) throw configError;
+      const defaultChannel = String(prefRow?.default_channel || '').trim() as WorkflowBotChannel;
+      if (!['rubika', 'telegram', 'bale'].includes(defaultChannel)) return null;
       // اگر fallback فعال است، بررسی کن پلتفرم اصلی فعال است یا نه
       const groupQuery = supabase
         .from('counterparty_bot_groups')
         .select('channel_type, status, bot_chat_id')
-        .eq(counterpartyType === 'customers' ? 'customer_id' : 'supplier_id', counterpartyId);
-      const { data: groupRows } = await groupQuery;
-      if (!groupRows?.length) return defaultChannel;
-      const activeForDefault = groupRows.find((r: any) => r.channel_type === defaultChannel && String(r.status || '') === 'active' && String(r.bot_chat_id || '').trim());
+        .eq(counterpartyType === 'customers' ? 'customer_id' : 'supplier_id', counterpartyId)
+        .limit(100);
+      const { data: groupRows, error: groupError } = await groupQuery;
+      if (groupError) throw groupError;
+      const activeForDefault = (groupRows || []).find((r: any) => r.channel_type === defaultChannel && String(r.status || '') === 'active' && String(r.bot_chat_id || '').trim());
       if (activeForDefault) return defaultChannel;
-      const firstActive = groupRows.find((r: any) => String(r.status || '') === 'active' && String(r.bot_chat_id || '').trim());
-      return firstActive ? (String(firstActive.channel_type || defaultChannel) as 'rubika' | 'telegram' | 'bale') : defaultChannel;
+      if (!prefRow?.fallback_to_active) return null;
+      const firstActive = (groupRows || []).find((r: any) => String(r.status || '') === 'active' && String(r.bot_chat_id || '').trim());
+      return firstActive ? (String(firstActive.channel_type) as 'rubika' | 'telegram' | 'bale') : null;
     };
 
-    // گیرنده ضمنی نداریم: فقط فیلدها و کاربر/نقش/گروه ذخیره‌شده در اکشن اجرا می‌شوند.
-    const customerId = String(currentRecord?.customer_id || (moduleId === 'customers' ? currentRecord?.id : '') || '').trim();
-    const supplierId = String(currentRecord?.supplier_id || (moduleId === 'suppliers' ? currentRecord?.id : '') || '').trim();
+    // گیرنده ضمنی نداریم: فقط مسئول یا مشتری/تامین‌کننده‌ای که در اکشن انتخاب
+    // شده اجرا می‌شود؛ بنابراین پیام یک نقش هرگز به طرف حساب رکورد نشت نمی‌کند.
     const targetMap = new Map<string, { channel: WorkflowBotChannel; chatId: string }>();
     const addTarget = (channel: WorkflowBotChannel, chatId: unknown) => {
       const normalizedChatId = String(chatId || '').trim();
@@ -2478,13 +2529,20 @@ export const executeWorkflowAction = async (
     const assigneeTargets = await resolveUnifiedAssigneeBotTargets(identityRecipientEntries);
     assigneeTargets.forEach((target) => addTarget(target.channel, target.chatId));
 
-    const hasConfiguredCounterparty = configuredRecipientFields.some((fieldKey) => isCounterpartyRelatedRecipientField(fieldKey));
-    if (hasConfiguredCounterparty && (customerId || supplierId)) {
-      const counterpartyId = customerId || supplierId;
-      const counterpartyType = customerId ? 'customers' : 'suppliers';
-      const channel = await resolveChannelForCounterparty(counterpartyId, counterpartyType);
-      const counterpartyChatIds = await resolveCounterpartyBotChatIdsForRecord(channel, moduleId, currentRecord);
-      counterpartyChatIds.forEach((chatId) => addTarget(channel, chatId));
+    const counterpartyTargets = await resolveConfiguredCounterpartyRecipients({
+      currentRecord,
+      moduleId,
+      recipientFields: configuredRecipientFields,
+    });
+    for (const target of counterpartyTargets) {
+      const channel = await resolveChannelForCounterparty(target.id, target.counterpartyType);
+      if (!channel) continue;
+      const chatIds = await resolveCounterpartyBotGroupChatIds(
+        channel,
+        target.counterpartyType === 'customers' ? [target.id] : [],
+        target.counterpartyType === 'suppliers' ? [target.id] : [],
+      );
+      chatIds.forEach((chatId) => addTarget(channel, chatId));
     }
 
     for (const channel of WORKFLOW_BOT_CHANNEL_PRIORITY) {
@@ -2506,98 +2564,6 @@ export const executeWorkflowAction = async (
       for (const chatId of recipients.filter((recipient) => !handledChatIds.has(recipient))) {
         await sendBotMessageViaGateway({ channel, chatId, text: messageText, attachments, fallbackText, extraPayload: botSenderPayload, title: titleText || undefined, moduleId, recordId: currentRecord?.id ? String(currentRecord.id) : undefined });
       }
-    }
-    return;
-  }
-
-  if (
-    action.type === 'send_telegram_bot'
-    || action.type === 'send_bale_bot'
-    || action.type === 'send_rubika_bot'
-  ) {
-    const isTelegram = action.type === 'send_telegram_bot';
-    const isRubika = action.type === 'send_rubika_bot';
-    const channel: 'telegram' | 'bale' | 'rubika' = isTelegram ? 'telegram' : (isRubika ? 'rubika' : 'bale');
-    const rawMessageText = (await renderWorkflowTemplate(String(config.message || ''), currentRecord, moduleId)).trim();
-    const attachments = await resolveWorkflowMessageAttachments({
-      moduleId,
-      recordId: currentRecord?.id ? String(currentRecord.id) : null,
-      config,
-      resolveLegacyFields: (attachmentFields) => resolveNoteAttachmentsFromFields({
-        currentRecord,
-        moduleId,
-        attachmentFields,
-      }),
-    });
-    if (!rawMessageText && attachments.length === 0) return;
-    const externalAttachments = attachments.length > 0
-      ? await shortenAttachmentsForExternalShare(attachments, {
-          moduleId,
-          recordId: currentRecord?.id ? String(currentRecord.id) : null,
-          metadata: {
-            source_type: 'workflow',
-            workflow_action_type: action.type,
-            workflow_action_id: (action as any)?.id || null,
-          },
-        })
-      : [];
-    const messageText = attachments.length > 0 ? (rawMessageText || 'پیوست ارسال شد') : rawMessageText;
-    const fallbackText = externalAttachments.length > 0
-      ? [rawMessageText, buildAttachmentNameText(externalAttachments)].filter(Boolean).join('\n')
-      : undefined;
-    const titleText = (await renderWorkflowTemplate(String(config.title || ''), currentRecord, moduleId)).trim();
-    const recipientConfig = getWorkflowRecipientConfig(config);
-    const configuredRecipientFields = recipientConfig.recipientFields;
-    const configuredRecipientAssignees = recipientConfig.recipientAssignees;
-    const recipientsFromFields = await resolveCommunicationValuesFromFields({
-      currentRecord,
-      moduleId,
-      recipientFields: configuredRecipientFields,
-      recipientAssignees: configuredRecipientAssignees,
-      channel,
-    });
-    const recipientsManual = asArray(config.manual_chat_ids)
-      .map((chatId) => String(chatId || '').trim())
-      .filter(Boolean);
-    const recipients = Array.from(
-      new Set([...recipientsFromFields, ...recipientsManual])
-    ).filter(Boolean);
-    if (recipients.length === 0) return;
-
-    const handledChatIds = new Set<string>();
-    {
-      const groupRows = await resolveCounterpartyBotGroupsByChatIds(channel, recipients);
-      for (const group of groupRows) {
-        const groupChatId = String(group?.bot_chat_id || '').trim();
-        if (!groupChatId || handledChatIds.has(groupChatId)) continue;
-        handledChatIds.add(groupChatId);
-        await sendCounterpartyBotGroupMessage({
-          group,
-          text: messageText,
-          fallbackText,
-          attachments,
-          payload: {
-            attachments,
-            workflow_action_type: action.type,
-            workflow_action_id: (action as any)?.id || null,
-          },
-          messageType: attachments.length > 0 ? 'file' : 'text',
-        });
-      }
-    }
-
-    for (const chatId of recipients.filter((recipient) => !handledChatIds.has(String(recipient || '').trim()))) {
-      await sendBotMessageViaGateway({
-        channel,
-        chatId,
-        text: messageText,
-        attachments,
-        fallbackText,
-        title: titleText || undefined,
-        moduleId,
-        recordId: currentRecord?.id ? String(currentRecord.id) : undefined,
-        customerId: moduleId === 'customers' && currentRecord?.id ? String(currentRecord.id) : undefined,
-      });
     }
     return;
   }

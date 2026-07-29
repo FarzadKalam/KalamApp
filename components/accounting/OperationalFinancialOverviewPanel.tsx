@@ -495,7 +495,7 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
         onChangePrintSignatureSignerModule={listPrintManager.handleChangePrintSignatureSignerModule}
         onChangePrintSignatureSignerId={listPrintManager.handleChangePrintSignatureSignerId}
         onSearchPrintSignatureOptions={listPrintManager.loadSignatureSignerOptions}
-        onRefreshPreview={listPrintManager.refreshTemplates}
+        onRefreshPreview={() => { void listPrintManager.refreshTemplates(); }}
         allowFieldSelectionTab={listPrintManager.allowFieldSelectionTab}
         showImageDisplayModeControl={listPrintManager.showImageDisplayModeControl}
         previewMeta={listPrintManager.previewMeta}

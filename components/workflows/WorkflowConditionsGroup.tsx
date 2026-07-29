@@ -67,7 +67,6 @@ const getFieldOptions = (
     (
       field.type === FieldType.RELATION
       || field.type === FieldType.MULTI_RELATION
-      || field.type === FieldType.CHECKLIST
       || field.type === FieldType.USER
       || field.type === FieldType.TAGS
     ) &&

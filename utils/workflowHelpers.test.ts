@@ -7,6 +7,7 @@ import {
 import { createProcessLinkedFieldKey } from './processTargets';
 import {
   createWorkflowRelatedFieldKey,
+  WORKFLOW_ASSIGNEE_FIELD_KEY,
   WORKFLOW_RECORD_LINK_FIELD_KEY,
 } from './workflowTypes';
 
@@ -51,6 +52,13 @@ describe('workflowHelpers', () => {
       expect(fields.filter((field) => field.key === key)).toHaveLength(1);
     });
     expect(fields.some((field) => field.key === 'id' || field.key === 'org_id')).toBe(false);
+  });
+
+  it('exposes the main record assignee once through the unified assignee field', () => {
+    const fields = getWorkflowConditionFields('customers');
+
+    expect(fields.filter((field) => String(field.key) === 'assignee_id')).toHaveLength(0);
+    expect(fields.filter((field) => String(field.key) === WORKFLOW_ASSIGNEE_FIELD_KEY)).toHaveLength(1);
   });
 
   it('exposes a scoped record link for every process automation target module', () => {

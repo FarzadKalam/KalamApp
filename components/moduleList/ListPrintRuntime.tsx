@@ -82,7 +82,7 @@ const ListPrintRuntime: React.FC<ListPrintRuntimeProps> = ({
       onChangePrintSignatureSignerModule={printManager.handleChangePrintSignatureSignerModule}
       onChangePrintSignatureSignerId={printManager.handleChangePrintSignatureSignerId}
       onSearchPrintSignatureOptions={printManager.loadSignatureSignerOptions}
-      onRefreshPreview={printManager.refreshTemplates}
+      onRefreshPreview={() => { void printManager.refreshTemplates(); }}
       allowFieldSelectionTab={printManager.allowFieldSelectionTab}
       showImageDisplayModeControl={printManager.showImageDisplayModeControl}
       previewMeta={printManager.previewMeta}

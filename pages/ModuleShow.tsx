@@ -6166,7 +6166,7 @@ const ModuleShow: React.FC = () => {
       id: 'process_task_card',
       label: 'کارت فعالیت',
       variant: 'default',
-      onClick: () => openTaskProcessModal({ taskId: id || null, task: data }),
+      onClick: async () => { openTaskProcessModal({ taskId: id || null, task: data }); },
     });
   }
   if (moduleId === 'marketing_leads' && canEditModule && data?.lead_type === 'new_lead' && !data?.customer_id) {
@@ -6925,7 +6925,7 @@ const ModuleShow: React.FC = () => {
             onChangePrintSignatureSignerModule={printManager.handleChangePrintSignatureSignerModule}
             onChangePrintSignatureSignerId={printManager.handleChangePrintSignatureSignerId}
             onSearchPrintSignatureOptions={printManager.loadSignatureSignerOptions}
-            onRefreshPreview={printManager.refreshTemplates}
+            onRefreshPreview={() => { void printManager.refreshTemplates(); }}
             allowFieldSelectionTab={printManager.allowFieldSelectionTab}
             showImageDisplayModeControl={printManager.showImageDisplayModeControl}
             previewMeta={printManager.previewMeta}

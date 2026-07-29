@@ -356,6 +356,24 @@ const isMultiValueField = (field?: ModuleField | null) =>
     || field.type === FieldType.TAGS
   );
 
+const COUNTERPARTY_RECIPIENT_FIELD_KEYS = new Set([
+  'customer_id',
+  'related_customer',
+  'supplier_id',
+  'related_supplier',
+]);
+
+const getCounterpartyRecipientContextKey = (moduleId: string) =>
+  `__workflow_counterparty__${moduleId}`;
+
+const isCounterpartyRecipientField = (field?: ModuleField | null) => {
+  const key = String(field?.key || '').trim();
+  if (COUNTERPARTY_RECIPIENT_FIELD_KEYS.has(key)) return true;
+  const targetModuleId = getRelationTargetModuleId(field);
+  return (field?.type === FieldType.RELATION || field?.type === FieldType.MULTI_RELATION)
+    && (targetModuleId === 'customers' || targetModuleId === 'suppliers');
+};
+
 const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   value,
   onChange,
@@ -633,27 +651,6 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     ),
     [getCommunicationTargetFieldOptions]
   );
-  const telegramCommunicationFieldOptions = useMemo(
-    () => getCommunicationTargetFieldOptions(
-      (field) => String(field?.key || '').trim() === 'telegram_chat_id',
-      'تلگرام',
-    ),
-    [getCommunicationTargetFieldOptions]
-  );
-  const baleCommunicationFieldOptions = useMemo(
-    () => getCommunicationTargetFieldOptions(
-      (field) => String(field?.key || '').trim() === 'bale_chat_id',
-      'بله',
-    ),
-    [getCommunicationTargetFieldOptions]
-  );
-  const rubikaCommunicationFieldOptions = useMemo(
-    () => getCommunicationTargetFieldOptions(
-      (field) => String(field?.key || '').trim() === 'rubika_chat_id',
-      'روبیکا',
-    ),
-    [getCommunicationTargetFieldOptions]
-  );
   const smsRecipientFieldOptions = useMemo(
     () => Array.from(new Map([
       ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
@@ -670,12 +667,17 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   );
   const botRecipientFieldOptions = useMemo(
     () => Array.from(new Map([
-      ...noteRecipientFieldOptions.map((item) => [String(item.value), item] as const),
-      ...telegramCommunicationFieldOptions.map((item) => [String(item.value), item] as const),
-      ...baleCommunicationFieldOptions.map((item) => [String(item.value), item] as const),
-      ...rubikaCommunicationFieldOptions.map((item) => [String(item.value), item] as const),
+      ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
+      ...(currentModuleId === 'customers'
+        ? [[getCounterpartyRecipientContextKey('customers'), { label: 'همین مشتری', value: getCounterpartyRecipientContextKey('customers') }] as const]
+        : currentModuleId === 'suppliers'
+          ? [[getCounterpartyRecipientContextKey('suppliers'), { label: 'همین تامین‌کننده', value: getCounterpartyRecipientContextKey('suppliers') }] as const]
+          : []),
+      ...communicationFieldSource
+        .filter(isCounterpartyRecipientField)
+        .map((field) => [String(field.key), { label: getFieldLabel(field), value: String(field.key) }] as const),
     ]).values()),
-    [noteRecipientFieldOptions, telegramCommunicationFieldOptions, baleCommunicationFieldOptions, rubikaCommunicationFieldOptions]
+    [communicationFieldSource, currentModuleId, recipientFieldOptions]
   );
   const noteRecipientOptionValueSet = useMemo(
     () => new Set(noteRecipientFieldOptions.map((item) => String(item.value || '').trim()).filter(Boolean)),
@@ -2213,13 +2215,18 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       );
     }
 
-    if (actionType === 'send_bot_message') {
+    if (
+      actionType === 'send_bot_message'
+      || actionType === 'send_telegram_bot'
+      || actionType === 'send_bale_bot'
+      || actionType === 'send_rubika_bot'
+    ) {
       return (
         <div className="space-y-2">
           <div className="rounded-lg border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.45)] p-2 text-xs text-gray-700 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-gray-300">
-            گیرنده‌ها مانند «ارسال یادداشت» از فیلدهای رکورد یا انتخاب مستقیم کاربر، نقش و گروه تعیین می‌شوند. پلتفرم هر مخاطب از تنظیمات بات همان مخاطب تشخیص داده می‌شود.
+            فقط مسئول و مشتری یا تامین‌کنندهٔ مرتبط را انتخاب کنید. سامانه گروه پیش‌فرض هر مخاطب را از تنظیمات خودش می‌خواند و در صورت فعال‌بودن جایگزین، گروه فعال بعدی را انتخاب می‌کند.
           </div>
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+          <div>
             <Select
               {...commonSelectProps}
               mode="multiple"
@@ -2230,11 +2237,6 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               placeholder="گیرنده‌های پیام بات از روی فیلدها"
               maxTagCount="responsive"
             />
-            {renderIdentityRecipientPicker(
-              getWorkflowRecipientConfig(config).recipientAssignees,
-              (nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal, recipient_targets: [] }),
-              'انتخاب کاربر/نقش/گروه (اختیاری)',
-            )}
           </div>
           <Input
             value={config.title}
@@ -2271,74 +2273,6 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       );
     }
 
-    if (actionType === 'send_telegram_bot' || actionType === 'send_bale_bot' || actionType === 'send_rubika_bot') {
-      const isTelegram = actionType === 'send_telegram_bot';
-      const isRubika = actionType === 'send_rubika_bot';
-      const providerLabel = isRubika ? 'روبیکا' : (isTelegram ? 'تلگرام' : 'بله');
-      const providerRecipientFieldOptions = Array.from(new Map([
-        ...noteRecipientFieldOptions.map((item) => [String(item.value), item] as const),
-        ...(isRubika
-          ? rubikaCommunicationFieldOptions.map((item) => [String(item.value), item] as const)
-          : isTelegram
-            ? telegramCommunicationFieldOptions.map((item) => [String(item.value), item] as const)
-            : baleCommunicationFieldOptions.map((item) => [String(item.value), item] as const)),
-      ]).values());
-      return (
-        <div className="space-y-2">
-          <div className="rounded-lg border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.45)] p-2 text-xs text-gray-700 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-gray-300">
-            گیرنده‌ها از فیلدهای رکورد یا انتخاب مستقیم کاربر، نقش و گروه تعیین می‌شوند.
-          </div>
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-            <Select
-              {...commonSelectProps}
-              mode="multiple"
-              value={getWorkflowRecipientConfig(config).recipientFields}
-              disabled={disabled}
-              options={providerRecipientFieldOptions}
-              onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal, related_recipient_fields: [] })}
-              placeholder={`گیرنده‌های ${providerLabel} از روی فیلدها`}
-              maxTagCount="responsive"
-            />
-            {renderIdentityRecipientPicker(
-              getWorkflowRecipientConfig(config).recipientAssignees,
-              (nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal, recipient_targets: [] }),
-              'انتخاب کاربر/نقش/گروه (اختیاری)',
-            )}
-          </div>
-          <Input
-            value={config.title}
-            disabled={disabled}
-            onChange={(e) => updateActionConfig(action.id, { title: e.target.value })}
-            placeholder={`عنوان پیام (${providerLabel})`}
-          />
-          <div className="flex justify-end">
-            {renderMessageTemplateButton(action.id, 'message', `پیام‌های آماده ${providerLabel}`)}
-          </div>
-          <Input.TextArea
-            rows={4}
-            value={config.message}
-            disabled={disabled}
-            onChange={(e) => updateActionConfig(action.id, { message: e.target.value })}
-            placeholder={`متن پیام (${providerLabel})`}
-          />
-          <div className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
-            <div>
-              <div className="text-sm font-medium">ارسال تصاویر و فایل‌های ستاره‌دار</div>
-              <div className="text-xs text-gray-500">همه فایل‌های ستاره‌دار رکورد همراه پیام {providerLabel} ارسال می‌شوند.</div>
-            </div>
-            <Switch
-              checked={shouldIncludeStarredWorkflowAttachments(config)}
-              disabled={disabled}
-              onChange={(checked) => updateActionConfig(action.id, { include_starred_attachments: checked })}
-            />
-          </div>
-          {renderVariableTools(action, [
-            { key: 'title', label: `عنوان پیام (${providerLabel})` },
-            { key: 'message', label: `متن پیام (${providerLabel})` },
-          ])}
-        </div>
-      );
-    }
     if (actionType === 'lock_record') {
       const relationLockOptions = [
         ...currentModuleFields

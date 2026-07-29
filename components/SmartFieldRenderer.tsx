@@ -214,11 +214,14 @@ const buildMinimalSupplierPayload = (payload: Record<string, any>) => {
 const normalizeNumericString = (raw: any): string => {
   if (raw === null || raw === undefined) return '';
   const englishDigits = normalizeDigitsToEnglish(raw)
+    .replace(/[\u2212\u2013\u2014]/g, '-')
     .replace(/[\u066C\u060C]/g, ',')
     .replace(/\s+/g, '')
     .replace(/,/g, '');
 
-  const sign = englishDigits.startsWith('-') ? '-' : '';
+  // بعضی صفحه‌کلیدها یا داده‌های کپی‌شده، منفی را در انتهای عدد یا با کاراکتر دیگری می‌فرستند.
+  // یک منفی در هر جای مقدار، به شکل استاندارد ابتدای عدد ثبت می‌شود.
+  const sign = englishDigits.includes('-') ? '-' : '';
   const unsigned = englishDigits.replace(/-/g, '');
   const cleaned = unsigned.replace(/[^0-9.]/g, '');
   const parts = cleaned.split('.');
@@ -272,7 +275,7 @@ const NAVIGATION_KEYS = new Set([
 ]);
 
 const SHORTCUT_KEYS = new Set(['a', 'c', 'v', 'x', 'z', 'y']);
-const NUMERIC_CHAR_PATTERN = /^[0-9\u06F0-\u06F9\u0660-\u0669.,\u066b\u066c-]$/;
+const NUMERIC_CHAR_PATTERN = /^[0-9\u06F0-\u06F9\u0660-\u0669.,\u066b\u066c\-\u2212\u2013\u2014]$/;
 
 const preventNonNumericKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
   const key = String(event.key || '');
@@ -2254,7 +2257,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 className="w-full persian-number" 
                 controls={false}
                 stringMode
-                inputMode={fieldType === FieldType.PRICE ? 'numeric' : 'decimal'}
+                inputMode={field.allowNegative ? 'text' : fieldType === FieldType.PRICE ? 'numeric' : 'decimal'}
                 suffix={fieldType === FieldType.PRICE && currencyLabel ? currencyLabel : undefined}
                 formatter={(val, info) => formatNumericForInput(
                   fieldType === FieldType.PRICE

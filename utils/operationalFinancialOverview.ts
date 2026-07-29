@@ -465,6 +465,18 @@ export const computeOperationalFinancialTotals = (rows: Array<Pick<OperationalFi
   };
 };
 
+export const buildPreviousSystemOpeningAmountPair = (
+  entityType: OperationalFinancialEntityType,
+  balance: number,
+) => {
+  const amount = Math.abs(balance);
+  const isDebit = entityType === 'customer' ? balance >= 0 : balance < 0;
+  return {
+    debit: isDebit ? amount : 0,
+    credit: isDebit ? 0 : amount,
+  };
+};
+
 const buildPreviousSystemOpeningRow = (
   entityType: OperationalFinancialEntityType,
   entity: any,
@@ -474,9 +486,8 @@ const buildPreviousSystemOpeningRow = (
   const paidTotal = toNumber(entity?.previous_system_paid_total);
   if (balance === 0 && invoiceTotal === 0 && paidTotal === 0) return null;
 
-  const openingAmount = Math.abs(balance);
-  const balanceIsDebit = entityType === 'customer' ? balance >= 0 : balance < 0;
-  const hasBalance = openingAmount > 0;
+  const { debit, credit } = buildPreviousSystemOpeningAmountPair(entityType, balance);
+  const hasBalance = Math.abs(balance) > 0;
   const amountDescription = [
     invoiceTotal !== 0 ? `جمع فاکتورهای سیستم قبلی: ${invoiceTotal}` : '',
     paidTotal !== 0 ? `جمع پرداخت‌های سیستم قبلی: ${paidTotal}` : '',
@@ -493,8 +504,8 @@ const buildPreviousSystemOpeningRow = (
     status: 'opening',
     chequeStatus: '',
     date: entity?.previous_system_first_purchase_date || '1900-01-01',
-    debit: hasBalance && balanceIsDebit ? openingAmount : 0,
-    credit: hasBalance && !balanceIsDebit ? openingAmount : 0,
+    debit: hasBalance ? debit : 0,
+    credit: hasBalance ? credit : 0,
     invoiceLabel: 'سیستم قبلی',
     bankLabel: '-',
     description: amountDescription,
@@ -913,6 +924,8 @@ const fetchSingleOperationalFinancialOverview = async ({
     });
 
   const sortedRows = rows.sort((a, b) => {
+    if (a.rowType === 'opening' && b.rowType !== 'opening') return -1;
+    if (a.rowType !== 'opening' && b.rowType === 'opening') return 1;
     const aDate = new Date(a.date || a.createdAt || 0).getTime();
     const bDate = new Date(b.date || b.createdAt || 0).getTime();
     if (aDate === bDate) return String(a.key).localeCompare(String(b.key));
@@ -1038,6 +1051,8 @@ export const fetchOperationalFinancialOverview = async ({
   const distinctRows = Array.from(
     new Map(overviews.flatMap((overview) => overview.rows).map((row) => [row.key, row])).values(),
   ).sort((a, b) => {
+    if (a.rowType === 'opening' && b.rowType !== 'opening') return -1;
+    if (a.rowType !== 'opening' && b.rowType === 'opening') return 1;
     const aDate = new Date(a.date || a.createdAt || 0).getTime();
     const bDate = new Date(b.date || b.createdAt || 0).getTime();
     if (aDate === bDate) return String(a.key).localeCompare(String(b.key));

@@ -370,7 +370,7 @@ export const customerModule: ModuleDefinition = {
     { key: 'previous_system_purchase_count', labels: { fa: 'تعداد دفعات خرید سیستم قبلی', en: 'Previous System Purchase Count' }, type: FieldType.NUMBER, blockId: 'previous_system_info' },
     { key: 'previous_system_invoice_total', labels: { fa: 'جمع فاکتورهای سیستم قبلی', en: 'Previous System Invoice Total' }, type: FieldType.PRICE, blockId: 'previous_system_info' },
     { key: 'previous_system_paid_total', labels: { fa: 'جمع پرداخت‌های سیستم قبلی', en: 'Previous System Paid Total' }, type: FieldType.PRICE, blockId: 'previous_system_info' },
-    { key: 'previous_system_balance_total', labels: { fa: 'جمع مانده سیستم قبلی', en: 'Previous System Balance Total' }, type: FieldType.PRICE, blockId: 'previous_system_info' },
+    { key: 'previous_system_balance_total', labels: { fa: 'مانده اول دوره سیستم قبلی (مثبت: طلب از مشتری)', en: 'Previous System Opening Balance' }, type: FieldType.PRICE, blockId: 'previous_system_info', allowNegative: true },
 
     { key: 'first_purchase_date', labels: { fa: 'تاریخ اولین خرید', en: 'First Purchase' }, type: FieldType.DATE, blockId: 'financial_stats', readonly: true },
     { key: 'last_purchase_date', labels: { fa: 'تاریخ آخرین خرید', en: 'Last Purchase' }, type: FieldType.DATE, blockId: 'financial_stats', readonly: true },

@@ -83,7 +83,26 @@ const normalizeBool = (value: unknown, fallback = false) => {
   return String(value).trim().toLowerCase() === 'true';
 };
 
-const normalizeOrgPayload = (values: Record<string, any>, currentValues?: Record<string, any> | null) => {
+const normalizeOrgPayload = (values: Record<string, any>, currentValues?: Record<string, any> | null): {
+  source_kind: 'org' | 'request';
+  source_id: string | null;
+  request_id: string | null;
+  org_name: string;
+  slug: string | null;
+  status: string;
+  plan_code: string | null;
+  is_demo: boolean;
+  is_readonly: boolean;
+  trial_ends_at: string | null;
+  primary_contact_mobile: string | null;
+  owner_name: string | null;
+  owner_email: string | null;
+  provisioning_source: string;
+  request_status: string | null;
+  industry: string | null;
+  employee_count_band: string | null;
+  discovery_source: string | null;
+} => {
   const merged = { ...(currentValues || {}), ...(values || {}) };
   return {
     source_kind: String(merged.source_kind || 'org').trim() === 'request' ? 'request' : 'org',

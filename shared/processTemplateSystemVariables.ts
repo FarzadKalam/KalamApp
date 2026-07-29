@@ -134,10 +134,11 @@ export const assignProcessTemplateSystemVariableValues = <T extends Record<strin
   target: T,
   now = new Date(),
 ) => {
+  const writableTarget = target as Record<string, any>;
   const values = getProcessTemplateSystemVariableValues(now);
   PROCESS_TEMPLATE_SYSTEM_VARIABLES.forEach(({ key, labelFa }) => {
-    target[key] = values[key];
-    target[labelFa] = values[key];
+    writableTarget[key] = values[key];
+    writableTarget[labelFa] = values[key];
   });
   return target;
 };

@@ -10,6 +10,7 @@ import { supportsSystemCode } from './systemCode';
 import { getPreferredRelationTargetField } from './relationTargetField';
 import { MODULES } from '../moduleRegistry';
 import { FieldType } from '../types';
+import { BOT_VIRTUAL_FIELD_KEYS } from './botPlatform';
 import { resolveScopedChartOfAccountIds } from './chartOfAccountsScope';
 import { isUuidLikeValue } from './optionHelpers';
 import { fetchSessionBootstrap } from './sessionCache';
@@ -598,7 +599,11 @@ export const fetchRelationOptionsForField = async (
           ...configuredDisplayFields,
           ...searchFields,
           ...numericSearchFields,
-        ].filter(Boolean)
+        ]
+          // عنوان و وضعیت گروه بات روی خودِ مشتری/تأمین‌کننده ذخیره نمی‌شوند.
+          // این مقادیر مجازی‌اند و باید از تنظیمات بات خوانده شوند؛ وارد کردنشان
+          // در projection رابطه باعث درخواست‌های نامعتبر PostgREST می‌شود.
+          .filter((fieldKey) => Boolean(fieldKey) && !BOT_VIRTUAL_FIELD_KEYS.has(String(fieldKey).trim()))
       )
     );
 

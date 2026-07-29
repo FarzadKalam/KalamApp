@@ -9,7 +9,7 @@ import {
 } from '../utils/notificationConversationRpc';
 import { preloadAvatarUrls } from '../utils/profileAvatar';
 
-type UseInternalConversationTimelineOptions<TItem> = {
+type UseInternalConversationTimelineOptions = {
   supabase: SupabaseClient<any, 'public', any>;
   enabled: boolean;
   conversationKey: string | null;
@@ -95,7 +95,7 @@ export const useInternalConversationTimeline = <TItem,>({
   conversationKey,
   pageSize = 10,
   cacheScopeKey,
-}: UseInternalConversationTimelineOptions<TItem>) => {
+}: UseInternalConversationTimelineOptions) => {
   const [items, setItemsState] = useState<TItem[]>([]);
   const [loadingInitial, setLoadingInitial] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);

@@ -390,16 +390,6 @@ const WorkSchedulesPage: React.FC = () => {
     };
   }, [effectiveFrom, effectiveTo]);
 
-  const officialHolidayCountsByDay = useMemo(() => {
-    return officialHolidaySummaries.reduce<Record<DayKey, number>>((acc, summary) => {
-      const date = parseDateValue(summary.dateKey)?.toDate();
-      if (!date) return acc;
-      const dayKey = dayKeyFromDate(date);
-      acc[dayKey] = (acc[dayKey] || 0) + 1;
-      return acc;
-    }, { sat: 0, sun: 0, mon: 0, tue: 0, wed: 0, thu: 0, fri: 0 });
-  }, [officialHolidaySummaries]);
-
   const calendarDates = useMemo(() => buildDateRange(effectiveFrom, effectiveTo), [effectiveFrom, effectiveTo]);
   const calendarWeeks = useMemo(() => {
     const byWeek = new Map<string, Date[]>();

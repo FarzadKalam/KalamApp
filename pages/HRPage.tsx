@@ -79,7 +79,6 @@ import {
 
 const HR_TASK_FETCH_LIMIT = 1500;
 const HR_STATS_FETCH_LIMIT = 1500;
-const COMMISSION_DRAFT_SOURCE_KEY_LOOKUP_CHUNK_SIZE = 8;
 const COMMISSION_QUERY_PAGE_SIZE = 250;
 const COMMISSION_QUERY_ID_CHUNK_SIZE = 200;
 const COMMISSION_INVOICE_SELECT =
@@ -911,32 +910,6 @@ const getProductionWageMultiplier = (
   }
 
   return 1;
-};
-
-const normalizeSchedulePlan = (raw: any) => {
-  const emptyShift = { start: null as string | null, end: null as string | null };
-  const base = {
-    sat: { shift1: { ...emptyShift }, shift2: { ...emptyShift } },
-    sun: { shift1: { ...emptyShift }, shift2: { ...emptyShift } },
-    mon: { shift1: { ...emptyShift }, shift2: { ...emptyShift } },
-    tue: { shift1: { ...emptyShift }, shift2: { ...emptyShift } },
-    wed: { shift1: { ...emptyShift }, shift2: { ...emptyShift } },
-    thu: { shift1: { ...emptyShift }, shift2: { ...emptyShift } },
-    fri: { shift1: { ...emptyShift }, shift2: { ...emptyShift } },
-  };
-
-  if (!raw || typeof raw !== 'object') return base;
-
-  (Object.keys(base) as Array<keyof typeof base>).forEach((dayKey) => {
-    (['shift1', 'shift2'] as const).forEach((shiftKey) => {
-      base[dayKey][shiftKey] = {
-        start: typeof raw?.[dayKey]?.[shiftKey]?.start === 'string' ? raw[dayKey][shiftKey].start : null,
-        end: typeof raw?.[dayKey]?.[shiftKey]?.end === 'string' ? raw[dayKey][shiftKey].end : null,
-      };
-    });
-  });
-
-  return base;
 };
 
 const timeToMinutes = (value: string | null | undefined) => {
@@ -4811,67 +4784,6 @@ const HRPage: React.FC = () => {
     }
   }, [commissionRows]);
 
-  const persistCommissionDraftPayloads = useCallback(async (payloads: any[]) => {
-    if (payloads.length === 0) return;
-
-    // Update records that already have a known DB id
-    const withIds = payloads.filter((payload) => String(payload?.id || '').trim());
-    for (const payload of withIds) {
-      const draftId = String(payload.id || '').trim();
-      const { id: _ignoredId, ...updatePayload } = payload;
-      const { error } = await supabase
-        .from('commission_drafts')
-        .update(updatePayload)
-        .eq('id', draftId);
-      if (error && !isMissingCommissionDraftsError(error)) throw error;
-    }
-
-    const withoutIds = payloads.filter((payload) => !String(payload?.id || '').trim());
-    if (withoutIds.length === 0) return;
-
-    const insertPayloads: any[] = [];
-    const sourceKeys = Array.from(new Set(
-      withoutIds
-        .map((payload) => String(payload?.source_key || '').trim())
-        .filter(Boolean)
-    ));
-    const existingDraftIdBySourceKey = new Map<string, string>();
-    for (let index = 0; index < sourceKeys.length; index += COMMISSION_DRAFT_SOURCE_KEY_LOOKUP_CHUNK_SIZE) {
-      const sourceKeyChunk = sourceKeys.slice(index, index + COMMISSION_DRAFT_SOURCE_KEY_LOOKUP_CHUNK_SIZE);
-      if (sourceKeyChunk.length === 0) continue;
-      const { data, error } = await supabase
-        .from('commission_drafts')
-        .select('id, source_key')
-        .in('source_key', sourceKeyChunk);
-      if (error && !isMissingCommissionDraftsError(error)) throw error;
-      (data || []).forEach((row: any) => {
-        const sourceKey = String(row?.source_key || '').trim();
-        const draftId = String(row?.id || '').trim();
-        if (sourceKey && draftId) existingDraftIdBySourceKey.set(sourceKey, draftId);
-      });
-    }
-
-    for (const payload of withoutIds) {
-      const { id: _ignoredId, ...draftPayload } = payload;
-      const sourceKey = String(draftPayload?.source_key || '').trim();
-      const existingDraftId = sourceKey ? existingDraftIdBySourceKey.get(sourceKey) : null;
-      if (existingDraftId) {
-        const { error } = await supabase
-          .from('commission_drafts')
-          .update(draftPayload)
-          .eq('id', existingDraftId);
-        if (error && !isMissingCommissionDraftsError(error)) throw error;
-      } else {
-        insertPayloads.push(draftPayload);
-      }
-    }
-
-    if (insertPayloads.length > 0) {
-      const { error } = await supabase.from('commission_drafts').insert(insertPayloads);
-      if (error && !isMissingCommissionDraftsError(error) && String(error?.code || '') !== '23505') throw error;
-    }
-  }, []);
-
   const saveCommissionCalculationAtomically = useCallback(async ({
     ledgerPayload,
     draftPayloads,
@@ -5006,88 +4918,6 @@ const HRPage: React.FC = () => {
       },
     };
   }, [commissionForm, commissionInvoicePaymentsById, commissionRows]);
-
-  const syncCommissionCalculationLedgerEntry = useCallback(async (payload: Record<string, any>) => {
-    const employeeIdValue = String(payload.employee_id || '').trim();
-    const periodStart = String(payload.period_start || '').trim();
-    const periodEnd = String(payload.period_end || '').trim();
-    const calculationKey = String(payload.source_key || payload.details?.calculation_key || '').trim();
-    const basis = String(payload.details?.basis || '').trim();
-    const percentMode = String(payload.details?.percent_mode || '').trim();
-    if (!employeeIdValue || !periodStart || !periodEnd || !calculationKey) {
-      throw new Error('اطلاعات محاسبه پورسانت کامل نیست.');
-    }
-    let existingResult: any = await supabase
-      .from('payroll_calculation_entries')
-      .select('id, source_key, status, details')
-      .eq('source_type', 'commission')
-      .eq('employee_id', employeeIdValue)
-      .eq('period_start', periodStart)
-      .eq('period_end', periodEnd)
-      .neq('status', 'voided');
-    if (existingResult.error && isMissingSourceKeyError(existingResult.error)) {
-      existingResult = await supabase
-        .from('payroll_calculation_entries')
-        .select('id, status, details')
-        .eq('source_type', 'commission')
-        .eq('employee_id', employeeIdValue)
-        .eq('period_start', periodStart)
-        .eq('period_end', periodEnd)
-        .neq('status', 'voided');
-    }
-    if (existingResult.error) {
-      if (isMissingPayrollLedgerError(existingResult.error)) return;
-      throw existingResult.error;
-    }
-
-    const existingRows = ((existingResult.data || []) as any[]).filter((row) => (
-      String(row?.details?.basis || '') === basis && String(row?.details?.percent_mode || '') === percentMode
-    ));
-    const matchedRow = existingRows.find((row) => (
-      String(row?.source_key || row?.details?.calculation_key || '').trim() === calculationKey
-    ));
-    const staleRowIds = existingRows
-      .filter((row) => String(row?.id || '') !== String(matchedRow?.id || ''))
-      .filter((row) => ['draft', 'proposed'].includes(String(row?.status || '')))
-      .map((row) => String(row?.id || '').trim())
-      .filter(Boolean);
-
-    if (matchedRow?.id && String(matchedRow.status || '') !== 'included_in_payroll') {
-      const { error } = await supabase
-        .from('payroll_calculation_entries')
-        .update({
-          entry_type: payload.entry_type,
-          source_key: payload.source_key,
-          source_module_id: payload.source_module_id,
-          source_record_id: payload.source_record_id,
-          title: payload.title,
-          amount: payload.amount,
-          quantity: payload.quantity,
-          rate: payload.rate,
-          status: payload.status,
-          assignee_id: payload.assignee_id,
-          details: payload.details,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', matchedRow.id);
-      if (error && !isMissingPayrollLedgerError(error)) throw error;
-    } else if (!matchedRow?.id) {
-      const { error } = await supabase.from('payroll_calculation_entries').insert(payload);
-      // 23505 = unique_violation - ignore if same record was inserted concurrently
-      if (error && !isMissingPayrollLedgerError(error) && String(error?.code || '') !== '23505') throw error;
-    }
-
-    if (staleRowIds.length > 0) {
-      const { error } = await supabase
-        .from('payroll_calculation_entries')
-        .update({
-          status: 'voided',
-          updated_at: new Date().toISOString(),
-        })
-        .in('id', staleRowIds);
-      if (error && !isMissingPayrollLedgerError(error)) throw error;
-    }
-  }, []);
 
   const handleSaveCommissionDraft = useCallback(async () => {
     try {
@@ -5353,81 +5183,6 @@ const HRPage: React.FC = () => {
       setSavingActivityPerformance(false);
     }
 
-    const candidateEntries = (selectedEmployeeSummary.activityPerformanceEntries || [])
-      .filter((entry) => String(entry.source_key || '').trim() && toNumber(entry.amount) !== 0);
-    if (candidateEntries.length === 0) {
-      message.info('ردیف قابل ثبت برای محاسبه عملکرد وجود ندارد.');
-      return;
-    }
-
-    setSavingActivityPerformance(true);
-    try {
-      const sourceKeys = candidateEntries.map((entry) => String(entry.source_key || '').trim()).filter(Boolean);
-      let existingKeys = new Set<string>();
-      const { data: existingRows, error: existingError } = await supabase
-        .from('payroll_calculation_entries')
-        .select('source_key, details')
-        .eq('source_type', 'activity_performance')
-        .eq('employee_id', String(selectedEmployeeSummary.profile.source_id))
-        .eq('period_start', periodStart)
-        .eq('period_end', periodEnd)
-        .neq('status', 'voided')
-        .in('source_key', sourceKeys);
-      if (existingError) {
-        const text = String(existingError?.message || existingError?.details || '').toLowerCase();
-        const missingSourceKey = text.includes('source_key') && (text.includes('column') || text.includes('schema cache') || text.includes('could not find'));
-        if (!missingSourceKey && !isMissingPayrollLedgerError(existingError)) throw existingError;
-      } else {
-        existingKeys = new Set((existingRows || []).map((row: any) => String(row?.source_key || row?.details?.source_key || '').trim()).filter(Boolean));
-      }
-
-      const rowsToSave = candidateEntries.filter((entry) => !existingKeys.has(String(entry.source_key || '').trim()));
-      if (rowsToSave.length === 0) {
-        message.info('همه محاسبه‌های این بازه قبلا ثبت شده‌اند.');
-        return;
-      }
-
-      const payloads = rowsToSave.map((entry) => ({
-        employee_id: String(selectedEmployeeSummary.profile.source_id),
-        period_start: periodStart,
-        period_end: periodEnd,
-        entry_type: entry.output_type === 'penalty' || toNumber(entry.amount) < 0 ? 'penalty' : 'activity_performance',
-        source_type: 'activity_performance',
-        source_key: String(entry.source_key || '').trim(),
-        source_module_id: 'tasks',
-        source_record_id: entry.task_id || null,
-        title: entry.title || entry.metric_label || 'محاسبه عملکرد',
-        amount: toNumber(entry.amount),
-        quantity: entry.quantity ?? null,
-        rate: entry.rate ?? null,
-        status: 'proposed',
-        assignee_id: selectedEmployeeSummary.profile.related_profile_id || null,
-        details: {
-          source_key: entry.source_key || null,
-          source_rule_id: entry.source_rule_id,
-          formula_id: entry.formula_id || null,
-          task_id: entry.task_id,
-          metric_key: entry.metric_key || null,
-          metric_label: entry.metric_label || null,
-          output_type: entry.output_type,
-          snapshot: entry.snapshot || {},
-        },
-      }));
-
-      const { error } = await supabase.from('payroll_calculation_entries').insert(payloads);
-      if (error) throw error;
-      message.success(`${toPersianNumber(payloads.length)} ردیف محاسبه عملکرد ثبت شد.`);
-      await fetchData(true);
-    } catch (error: any) {
-      if (String(error?.code || '').toUpperCase() === '23505') {
-        message.info('برخی ردیف‌ها قبلا ثبت شده‌اند و دوباره ثبت نشدند.');
-        await fetchData(true);
-      } else {
-        message.error(toFaErrorMessage(error, 'ثبت محاسبه عملکرد ناموفق بود.'));
-      }
-    } finally {
-      setSavingActivityPerformance(false);
-    }
   }, [fetchData, message, monthEnd, monthStart, selectedEmployeeSummary]);
 
   const handleSaveGoalRewardRows = useCallback(async (rows: EmployeeGoalTouchRow[]) => {
@@ -9035,7 +8790,7 @@ const HRPage: React.FC = () => {
         onChangePrintSignatureSignerModule={commissionListPrintManager.handleChangePrintSignatureSignerModule}
         onChangePrintSignatureSignerId={commissionListPrintManager.handleChangePrintSignatureSignerId}
         onSearchPrintSignatureOptions={commissionListPrintManager.loadSignatureSignerOptions}
-        onRefreshPreview={commissionListPrintManager.refreshTemplates}
+        onRefreshPreview={() => { void commissionListPrintManager.refreshTemplates(); }}
         allowFieldSelectionTab={commissionListPrintManager.allowFieldSelectionTab}
         showImageDisplayModeControl={commissionListPrintManager.showImageDisplayModeControl}
         previewMeta={commissionListPrintManager.previewMeta}

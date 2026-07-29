@@ -532,7 +532,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                           <Button
                             size="small"
                             icon={<ReloadOutlined />}
-                            onClick={handleRefresh}
+                            onClick={() => { void handleRefresh(); }}
                             loading={refreshing}
                             disabled={!onRefreshPreview}
                             title="رفرش پیش‌نمایش"

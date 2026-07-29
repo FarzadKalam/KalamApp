@@ -111,10 +111,18 @@ export const getSyntheticWorkflowAssigneeField = (moduleId: string) =>
 export const getVisibleWorkflowModuleFields = (moduleId: string) =>
   getCanonicalModuleFields(moduleId).filter((field) => shouldIncludeWorkflowField(field));
 
+const isGlobalAssigneeStorageField = (field?: ModuleField | null) => {
+  const key = String(field?.key || '').trim();
+  return key === 'assignee_id' || key === 'assignee_type' || key === 'assignee_role_id';
+};
+
 export const getWorkflowConditionFields = (moduleId: string): ModuleField[] => {
   if (!moduleId || !MODULES[moduleId]) return [];
 
-  const currentFields = getVisibleWorkflowModuleFields(moduleId);
+  // مسئول اصلی رکورد باید فقط با فیلد مصنوعی یکپارچه نمایش داده شود تا
+  // شناسهٔ قدیمی assignee_id و مسئول کاربر/نقش، دو گزینهٔ هم‌نام نسازند.
+  const currentFields = getVisibleWorkflowModuleFields(moduleId)
+    .filter((field) => !supportsGlobalAssignee(moduleId) || !isGlobalAssigneeStorageField(field));
   const result: ModuleField[] = [getSyntheticWorkflowRecordLinkField(moduleId), ...currentFields];
 
   if (supportsGlobalAssignee(moduleId)) {

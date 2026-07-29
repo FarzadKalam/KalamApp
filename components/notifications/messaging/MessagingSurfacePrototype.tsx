@@ -3633,7 +3633,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     }
     setVoipOperatorBindSaving(true);
     try {
-      await bindVoipOperatorIdentity(draft);
+      await bindVoipOperatorIdentity({ ...draft, profileId: draft.profileId });
       await liveData.refresh();
       message.success('اتصال اپراتور ذخیره شد و پروفایل و تماس‌های مرتبط به‌روز شدند.');
       closeVoipOperatorBindModal();
@@ -4720,7 +4720,13 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       row,
       messageTable,
       channel: String(row?.channel_type || conversationRow?.channel_type || activeConversation.platform || '').trim() as BotChannel,
-      chatId: String(row?.chat_id || conversationRow?.bot_chat_id || conversationRow?.chat_id || '').trim(),
+      chatId: String(
+        row?.chat_id
+        || (activeConversation.channel === 'bot_group'
+          ? activeBotGroupRow?.bot_chat_id
+          : (conversationRow && 'chat_id' in conversationRow ? conversationRow.chat_id : null))
+        || ''
+      ).trim(),
       providerMessageId: String(row?.provider_message_id || '').trim(),
     };
   };
@@ -4913,7 +4919,13 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
             String(entry?.id || '').trim() === getBotDirectThreadIdFromConversationKey(activeConversation.key)
           )) || null;
         const channel = String(row?.channel_type || conversationRow?.channel_type || '').trim() as BotChannel;
-        const chatId = String(row?.chat_id || conversationRow?.bot_chat_id || conversationRow?.chat_id || '').trim();
+        const chatId = String(
+          row?.chat_id
+          || (activeConversation.channel === 'bot_group'
+            ? activeBotGroupRow?.bot_chat_id
+            : (conversationRow && 'chat_id' in conversationRow ? conversationRow.chat_id : null))
+          || ''
+        ).trim();
         const providerMessageId = String(row?.provider_message_id || '').trim();
         if (providerMessageId && BOT_CHANNELS.includes(channel) && chatId) {
           const activeConnection = await getActiveChannelSettings(channel);

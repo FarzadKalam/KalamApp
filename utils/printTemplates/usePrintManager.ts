@@ -3216,7 +3216,7 @@ export const usePrintManager = ({
       bodyMeasureRef.current,
       headerMeasureRef.current,
       footerMeasureRef.current,
-    ].filter((node): node is HTMLElement => Boolean(node));
+    ].filter((node): node is HTMLDivElement => node !== null);
 
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined' && measurementNodes.length > 0) {
@@ -4097,7 +4097,7 @@ export const usePrintManager = ({
             ? supabase.from('suppliers').select('*').eq('id', data.supplier_id).maybeSingle()
             : Promise.resolve({ data: null, error: null });
         const [
-          { data: companyData, error: companyError },
+          { error: companyError },
           assigneeDirectoryData,
           { count: filesCount, error: filesCountError },
           { data: customerData, error: customerError },

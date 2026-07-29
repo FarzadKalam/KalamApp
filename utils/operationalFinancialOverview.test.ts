@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildOperationAmountPair,
+  buildPreviousSystemOpeningAmountPair,
   buildOperationalFinancialEntityPrintFields,
   buildOperationalFinancialEntityPrintValues,
   isEmployeeFinancialOverviewOperation,
@@ -17,6 +18,15 @@ describe('operationalFinancialOverview', () => {
     expect(buildOperationAmountPair('customer', 'payment', 125000)).toEqual({ debit: 125000, credit: 0 });
     expect(buildOperationAmountPair('supplier', 'payment', 320000)).toEqual({ debit: 320000, credit: 0 });
     expect(buildOperationAmountPair('employee', 'receipt', 91000)).toEqual({ debit: 0, credit: 91000 });
+  });
+
+  it('keeps every signed previous-system opening balance in the correct account side', () => {
+    expect(buildPreviousSystemOpeningAmountPair('customer', 500000)).toEqual({ debit: 500000, credit: 0 });
+    expect(buildPreviousSystemOpeningAmountPair('customer', -500000)).toEqual({ debit: 0, credit: 500000 });
+    expect(buildPreviousSystemOpeningAmountPair('supplier', 500000)).toEqual({ debit: 0, credit: 500000 });
+    expect(buildPreviousSystemOpeningAmountPair('supplier', -500000)).toEqual({ debit: 500000, credit: 0 });
+    expect(buildPreviousSystemOpeningAmountPair('employee', 500000)).toEqual({ debit: 0, credit: 500000 });
+    expect(buildPreviousSystemOpeningAmountPair('employee', -500000)).toEqual({ debit: 500000, credit: 0 });
   });
 
   it('computes totals and keeps the last running balance as final balance', () => {

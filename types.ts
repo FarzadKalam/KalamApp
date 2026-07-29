@@ -183,6 +183,8 @@ export interface ModuleField {
   access?: FieldAccess;
   logic?: any; 
   readonly?: boolean;
+  /** اجازه ثبت مقدار منفی و نرمال‌سازی علامت منفی در ورودی عددی */
+  allowNegative?: boolean;
   isCalculated?: boolean;
   relationConfig?: {
     targetModule: string;

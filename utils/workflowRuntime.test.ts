@@ -472,7 +472,7 @@ describe('workflow action recipients', () => {
     ]);
   });
 
-  it('sends telegram bot messages to multi relation chat ids', async () => {
+  it('does not send a legacy telegram action to direct chat-id fields', async () => {
     mocks.rowsByTable = {
       customers: [
         { id: 'customer-1', telegram_chat_id: 'tg-100' },
@@ -498,17 +498,41 @@ describe('workflow action recipients', () => {
       }
     );
 
-    expect(mocks.sendBotMessageViaGateway).toHaveBeenCalledTimes(2);
-    expect(mocks.sendBotMessageViaGateway).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      channel: 'telegram',
-      chatId: 'tg-100',
-      text: 'سلام تلگرام',
+    expect(mocks.sendBotMessageViaGateway).not.toHaveBeenCalled();
+    expect(mocks.sendCounterpartyBotGroupMessage).not.toHaveBeenCalled();
+  });
+
+  it('sends a customer bot message only to that customer\'s configured active default group', async () => {
+    const customerId = '88888888-8888-4888-8888-888888888888';
+    mocks.rowsByTable = {
+      counterparty_bot_config: [
+        { customer_id: customerId, default_channel: 'bale', fallback_to_active: true },
+      ],
+      counterparty_bot_groups: [
+        { customer_id: customerId, channel_type: 'bale', status: 'active', bot_chat_id: 'bale-customer-group' },
+        { customer_id: customerId, channel_type: 'telegram', status: 'active', bot_chat_id: 'telegram-customer-group' },
+      ],
+    };
+
+    await executeWorkflowAction(
+      {
+        id: 'action-unified-customer-bot',
+        type: 'send_bot_message',
+        config: {
+          recipient_fields: ['__workflow_counterparty__customers'],
+          message: 'پیام مخصوص مشتری',
+        },
+      },
+      'customers',
+      { id: customerId },
+    );
+
+    expect(mocks.sendCounterpartyBotGroupMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.sendCounterpartyBotGroupMessage).toHaveBeenCalledWith(expect.objectContaining({
+      group: expect.objectContaining({ bot_chat_id: 'bale-customer-group', customer_id: customerId }),
+      text: 'پیام مخصوص مشتری',
     }));
-    expect(mocks.sendBotMessageViaGateway).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      channel: 'telegram',
-      chatId: 'tg-200',
-      text: 'سلام تلگرام',
-    }));
+    expect(mocks.sendBotMessageViaGateway).not.toHaveBeenCalled();
   });
 });
 

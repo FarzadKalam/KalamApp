@@ -193,7 +193,7 @@ const HrQuickRequestPage: React.FC = () => {
           return <Input disabled={disabled} />;
         case FieldType.LONG_TEXT:
         case FieldType.SUPER_LONG_TEXT:
-          return <RichTextEditor disabled={disabled} minRows={field.type === FieldType.SUPER_LONG_TEXT ? 6 : 3} />;
+          return <RichTextEditor disabled={disabled} minRows={field.type === FieldType.SUPER_LONG_TEXT ? 6 : 3} onChange={() => undefined} />;
       case FieldType.NUMBER:
       case FieldType.PRICE:
       case FieldType.PERCENTAGE:

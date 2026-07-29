@@ -35,9 +35,6 @@ export const canCurrentUserAccessInternalSystemNote = (
   const roleId = normalizeId(currentRoleId);
   if (!userId) return false;
 
-  const metadata = note?.metadata && typeof note.metadata === 'object' && !Array.isArray(note.metadata)
-    ? note.metadata
-    : {};
   const inboxItem = note?.__notification_inbox_item && typeof note.__notification_inbox_item === 'object'
     ? note.__notification_inbox_item
     : {};
