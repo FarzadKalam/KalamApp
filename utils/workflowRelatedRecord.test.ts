@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PROCESS_RUN_LINK_FIELD_KEY,
   getCreateRelatedRecordRelationFieldOptions,
   getCreateRelatedRecordTargetModuleOptions,
 } from './workflowRelatedRecord';
@@ -34,6 +35,22 @@ describe('workflowRelatedRecord', () => {
   it('returns matching relation fields for normal target modules', () => {
     expect(getCreateRelatedRecordRelationFieldOptions('invoices', 'customers')).toEqual([
       { label: 'نام مشتری', value: 'customer_id' },
+    ]);
+  });
+
+  it('uses process target modules even when they have no direct relation to the selected source', () => {
+    const options = getCreateRelatedRecordTargetModuleOptions(
+      'projects',
+      [
+        { label: 'فاکتورها', value: 'invoices' },
+        { label: 'فعالیت‌ها', value: 'tasks' },
+      ],
+      ['invoices'],
+    );
+
+    expect(options).toEqual([{ label: 'فاکتورها', value: 'invoices' }]);
+    expect(getCreateRelatedRecordRelationFieldOptions('invoices', 'projects', ['invoices'])).toEqual([
+      { label: 'پیوند با رکوردهای مرتبط فرآیند', value: PROCESS_RUN_LINK_FIELD_KEY },
     ]);
   });
 });

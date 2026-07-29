@@ -820,9 +820,20 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       ).values()
     );
   }, [currentModuleId, relationSourceModuleOptions]);
+  // در اتوماسیون فرآیند، «رکورد مرتبط» الزاماً relation مستقیم دیتابیسی با
+  // رکورد مرجع ندارد؛ مجموعهٔ مجاز همان ماژول‌های هدف الگوی فرآیند است.
+  const processRelatedTargetModuleIds = useMemo(() => (
+    currentModuleId === 'tasks' && (relationSourceModuleOptions?.length || 0) > 0
+      ? webFormRelationModuleOptions.map((option) => String(option.value || '').trim()).filter(Boolean)
+      : []
+  ), [currentModuleId, relationSourceModuleOptions, webFormRelationModuleOptions]);
   const getRelatedTargetModuleOptions = useCallback(
-    (sourceModuleId: string) => getCreateRelatedRecordTargetModuleOptions(sourceModuleId, moduleOptions),
-    [moduleOptions]
+    (sourceModuleId: string) => getCreateRelatedRecordTargetModuleOptions(
+      sourceModuleId,
+      moduleOptions,
+      processRelatedTargetModuleIds,
+    ),
+    [moduleOptions, processRelatedTargetModuleIds]
   );
 
   const processLockLinkedRecordOptions = useMemo(() => {
@@ -1461,7 +1472,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         };
       }
 
-      const defaultRelationFieldKey = getDefaultCreateRelatedRecordRelationFieldKey(targetModuleId, sourceModuleId);
+      const defaultRelationFieldKey = getDefaultCreateRelatedRecordRelationFieldKey(
+        targetModuleId,
+        sourceModuleId,
+        processRelatedTargetModuleIds,
+      );
       const relationFieldKey = String(config.relation_field_key || defaultRelationFieldKey || '');
 
       const rawMappings = Array.isArray(config.field_mappings)
@@ -1492,7 +1507,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     if (hasChanges) {
       onChange(next);
     }
-  }, [safeValue, onChange, currentModuleId, ensureRequiredMappings, noteRecipientOptionValueSet, noteScopedFieldMap, webFormRelationModuleOptions]);
+  }, [safeValue, onChange, currentModuleId, ensureRequiredMappings, noteRecipientOptionValueSet, noteScopedFieldMap, webFormRelationModuleOptions, processRelatedTargetModuleIds]);
 
   const renderActionFields = (action: WorkflowAction) => {
     const actionType = action.type;
@@ -2763,7 +2778,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       const targetFields = (targetModule?.fields || []).filter(
         (field) => !!field?.key && field?.nature !== 'system'
       );
-      const relationFields = getCreateRelatedRecordRelationFieldOptions(targetModuleId, sourceModuleId);
+      const relationFields = getCreateRelatedRecordRelationFieldOptions(
+        targetModuleId,
+        sourceModuleId,
+        processRelatedTargetModuleIds,
+      );
       const targetWritableOptions = targetFields.map((field) => ({
         label: getFieldLabel(field),
         value: field.key,
@@ -2795,7 +2814,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                   const nextTargetModuleId = nextTargetModuleOptions.some((option) => option.value === targetModuleId)
                     ? targetModuleId
                     : '';
-                  const defaultRelationField = getDefaultCreateRelatedRecordRelationFieldKey(nextTargetModuleId, nextSourceModuleId);
+                  const defaultRelationField = getDefaultCreateRelatedRecordRelationFieldKey(
+                    nextTargetModuleId,
+                    nextSourceModuleId,
+                    processRelatedTargetModuleIds,
+                  );
                   updateActionConfig(action.id, {
                     source_module_id: nextSourceModuleId,
                     target_module_id: nextTargetModuleId,
@@ -2819,7 +2842,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 options={allowedTargetModuleOptions}
                 onChange={(nextVal) => {
                   const nextTargetModuleId = String(nextVal || '').trim();
-                  const defaultRelationField = getDefaultCreateRelatedRecordRelationFieldKey(nextTargetModuleId, sourceModuleId);
+                  const defaultRelationField = getDefaultCreateRelatedRecordRelationFieldKey(
+                    nextTargetModuleId,
+                    sourceModuleId,
+                    processRelatedTargetModuleIds,
+                  );
                   updateActionConfig(action.id, {
                     source_module_id: sourceModuleId,
                     target_module_id: nextVal,

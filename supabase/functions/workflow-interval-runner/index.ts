@@ -1565,13 +1565,42 @@ async function shouldSkipWorkflowIntervalRecord(
 
 async function insertWorkflowLog(url: string, key: string, log: {
   workflow_id: string | null; org_id: string; module_id: string; record_id: string;
-  run_type: string; status: string; message?: string; details?: any;
+  run_type: string; status: string; message?: string; details?: any; execution_run_key?: string | null;
 }): Promise<void> {
-  await dbInsert(url, key, 'workflow_logs', {
+  const payload = {
     workflow_id: log.workflow_id, org_id: log.org_id, module_id: log.module_id,
     record_id: log.record_id, run_type: log.run_type, status: log.status,
     message: log.message || null, details: log.details || {},
-  }).catch((e) => console.warn('[workflow-runner] Failed to insert log:', e.message));
+    execution_run_key: log.execution_run_key || null,
+  };
+  if (!log.execution_run_key) {
+    await dbInsert(url, key, 'workflow_logs', payload)
+      .catch((e) => console.warn('[workflow-runner] Failed to insert log:', e.message));
+    return;
+  }
+  const existing = await dbGet(url, key,
+    `workflow_logs?execution_run_key=eq.${encodeURIComponent(log.execution_run_key)}&select=id&limit=1`,
+  ).catch(() => []);
+  if (existing[0]?.id) {
+    await dbPatch(url, key, 'workflow_logs', `id=eq.${encodeURIComponent(String(existing[0].id))}`, payload)
+      .catch((e) => console.warn('[workflow-runner] Failed to update log:', e.message));
+    return;
+  }
+  await dbInsert(url, key, 'workflow_logs', payload).catch(async (error) => {
+    // دو worker ممکن است هم‌زمان نخستین گزارش را ثبت کنند. در برخورد یکتا،
+    // نویسندهٔ دوم نتیجهٔ نهایی را روی همان گزارش موجود می‌نویسد.
+    if (!/23505|duplicate|unique/i.test(String(error?.message || error))) {
+      console.warn('[workflow-runner] Failed to insert log:', error?.message || error);
+      return;
+    }
+    const concurrent = await dbGet(url, key,
+      `workflow_logs?execution_run_key=eq.${encodeURIComponent(log.execution_run_key || '')}&select=id&limit=1`,
+    ).catch(() => []);
+    if (concurrent[0]?.id) {
+      await dbPatch(url, key, 'workflow_logs', `id=eq.${encodeURIComponent(String(concurrent[0].id))}`, payload)
+        .catch((patchError) => console.warn('[workflow-runner] Failed to reconcile concurrent log:', patchError?.message || patchError));
+    }
+  });
 }
 
 // ── Recipient resolution ───────────────────────────────────────────────────────
@@ -2534,6 +2563,74 @@ async function createRecord(url: string, key: string, moduleId: string, orgId: s
     if (!body.updated_by) body.updated_by = actorUserId;
   }
   return await dbInsert(url, key, table, body);
+}
+
+async function getProcessRelatedRecordAttachmentContext(
+  url: string,
+  key: string,
+  orgId: string,
+  record: Record<string, any>,
+  targetModuleId: string,
+): Promise<{ processRunId: string; targetModuleIds: Set<string> }> {
+  const recurrence = parseObjectValue(record?.recurrence_info);
+  const processRunId = String(record?.process_run_id || recurrence?.process_run_id || '').trim();
+  if (!processRunId) throw new Error('اجرای فرآیند برای پیوند رکورد جدید پیدا نشد.');
+  const runRows = await dbGet(url, key,
+    `process_runs?id=eq.${encodeURIComponent(processRunId)}&org_id=eq.${encodeURIComponent(orgId)}&select=id&limit=1`,
+  ).catch(() => []);
+  if (runRows.length === 0) throw new Error('اجرای فرآیند در سازمان جاری پیدا نشد.');
+  const stages = await dbGet(url, key,
+    `process_run_stages?process_run_id=eq.${encodeURIComponent(processRunId)}&select=metadata&limit=500`,
+  ).catch(() => []);
+  const targetModuleIds = new Set<string>([
+    ...(Array.isArray(record?.process_target_module_ids) ? record.process_target_module_ids : []),
+    ...Object.keys(parseObjectValue(record?.process_links)),
+    ...stages.flatMap((stage: any) => {
+      const metadata = parseObjectValue(stage?.metadata);
+      return Array.isArray(metadata?.process_target_module_ids) ? metadata.process_target_module_ids : [];
+    }),
+  ].map((value) => String(value || '').trim()).filter(Boolean));
+  if (!targetModuleIds.has(targetModuleId)) {
+    throw new Error('ماژول مقصد در رکوردهای مرتبط این فرآیند تعریف نشده است.');
+  }
+  return { processRunId, targetModuleIds };
+}
+
+async function attachCreatedRecordToProcessRun(
+  url: string,
+  key: string,
+  orgId: string,
+  processRunId: string,
+  targetModuleId: string,
+  targetRecordId: string,
+) {
+  const existing = await dbGet(url, key,
+    `process_run_links?org_id=eq.${encodeURIComponent(orgId)}&process_run_id=eq.${encodeURIComponent(processRunId)}&module_id=eq.${encodeURIComponent(targetModuleId)}&record_id=eq.${encodeURIComponent(targetRecordId)}&select=id&limit=1`,
+  ).catch(() => []);
+  if (existing.length === 0) {
+    await dbInsert(url, key, 'process_run_links', {
+      org_id: orgId,
+      process_run_id: processRunId,
+      module_id: targetModuleId,
+      record_id: targetRecordId,
+      is_primary: false,
+    });
+  }
+
+  // process_link_map نمای سریع اجرای فرآیند است. لینک نخست هر ماژول را نگه می‌داریم
+  // تا ایجاد چند رکورد، لینک مرجع مرحله‌های فعال را ناخواسته جابه‌جا نکند؛ همهٔ لینک‌ها
+  // بدون محدودیت در process_run_links باقی می‌مانند.
+  const stages = await dbGet(url, key,
+    `process_run_stages?process_run_id=eq.${encodeURIComponent(processRunId)}&select=id,metadata&limit=500`,
+  ).catch(() => []);
+  await Promise.all(stages.map(async (stage: any) => {
+    const metadata = parseObjectValue(stage?.metadata);
+    const processLinkMap = parseObjectValue(metadata?.process_link_map);
+    if (String(processLinkMap?.[targetModuleId] || '').trim()) return;
+    await dbPatch(url, key, 'process_run_stages', `id=eq.${encodeURIComponent(String(stage.id))}&process_run_id=eq.${encodeURIComponent(processRunId)}`, {
+      metadata: { ...metadata, process_link_map: { ...processLinkMap, [targetModuleId]: targetRecordId } },
+    });
+  }));
 }
 
 async function updateProcessTaskAutomationField(
@@ -4103,34 +4200,42 @@ async function executeAction(
   if (action.type === 'create_related_record') {
     const targetModuleId = String(config.target_module_id || '').trim();
     const sourceModuleId = String(config.source_module_id || moduleId).trim() || moduleId;
+    const isProcessRelatedRecord = String(config.relation_field_key || '').trim() === '__process_run_link__';
     const processLinks = parseObjectValue(record?.process_links || record?.process_link_map);
     const sourceRecordId = sourceModuleId === moduleId
       ? String(record?.id || '').trim()
       : String(processLinks?.[sourceModuleId] || record?.[`__linked__${sourceModuleId}__id`] || '').trim();
     const relationFieldKey = String(config.relation_field_key || (targetModuleId === 'tasks' ? 'source_record_id' : '')).trim();
-    if (!targetModuleId || !relationFieldKey || !sourceRecordId) return actionResult(action, 'skipped', 'تنظیمات ایجاد رکورد مرتبط کامل نیست.');
-    assertWorkflowMutationModule(targetModuleId);
-    assertWorkflowMutationModule(sourceModuleId);
-    const sourceRows = await dbGet(
-      url,
-      key,
-      `${getModuleTable(sourceModuleId)}?id=eq.${encodeURIComponent(sourceRecordId)}&org_id=eq.${encodeURIComponent(orgId)}&select=id&limit=1`,
-    ).catch(() => []);
-    if (sourceRows.length === 0) {
-      return actionResult(action, 'skipped', 'رکورد مرجع در سازمان جاری پیدا نشد.');
+    if (!targetModuleId || !relationFieldKey || (!isProcessRelatedRecord && !sourceRecordId)) {
+      return actionResult(action, 'skipped', 'تنظیمات ایجاد رکورد مرتبط کامل نیست.');
     }
-    if (targetModuleId !== 'tasks' && !isSafeWorkflowMutationFieldKey(relationFieldKey)) {
+    assertWorkflowMutationModule(targetModuleId);
+    let processAttachment: { processRunId: string; targetModuleIds: Set<string> } | null = null;
+    if (isProcessRelatedRecord) {
+      processAttachment = await getProcessRelatedRecordAttachmentContext(url, key, orgId, record, targetModuleId);
+    } else {
+      assertWorkflowMutationModule(sourceModuleId);
+      const sourceRows = await dbGet(
+        url,
+        key,
+        `${getModuleTable(sourceModuleId)}?id=eq.${encodeURIComponent(sourceRecordId)}&org_id=eq.${encodeURIComponent(orgId)}&select=id&limit=1`,
+      ).catch(() => []);
+      if (sourceRows.length === 0) {
+        return actionResult(action, 'skipped', 'رکورد مرجع در سازمان جاری پیدا نشد.');
+      }
+    }
+    if (!isProcessRelatedRecord && targetModuleId !== 'tasks' && !isSafeWorkflowMutationFieldKey(relationFieldKey)) {
       return actionResult(action, 'skipped', 'فیلد ارتباط با رکورد مرجع معتبر نیست.');
     }
-    const payload: Record<string, any> = { [relationFieldKey]: sourceRecordId };
-    if (targetModuleId === 'tasks') {
+    const payload: Record<string, any> = isProcessRelatedRecord ? {} : { [relationFieldKey]: sourceRecordId };
+    if (!isProcessRelatedRecord && targetModuleId === 'tasks') {
       payload.related_to_module = sourceModuleId;
       payload.source_record_id = sourceRecordId;
     }
     const mappings = Array.isArray(config.field_mappings) ? config.field_mappings : [];
     for (const mapping of mappings) {
       const tf = String(mapping?.field || '').trim();
-      if (!tf || tf === relationFieldKey || (targetModuleId === 'tasks' && ['source_record_id', 'related_to_module'].includes(tf))) continue;
+      if (!tf || tf === relationFieldKey || (!isProcessRelatedRecord && targetModuleId === 'tasks' && ['source_record_id', 'related_to_module'].includes(tf))) continue;
       const mappedValue = await resolveServerFieldMappingValue(mapping, record, url, key, orgId, moduleId);
       if (tf === WORKFLOW_ASSIGNEE_FIELD_KEY || tf === 'assignee_id') {
         Object.assign(payload, normalizeWorkflowAssigneeValue(mappedValue));
@@ -4139,13 +4244,28 @@ async function executeAction(
       }
     }
     // پیوند اجباری باید پس از تمام mappingها تثبیت شود و هرگز توسط تنظیم کاربر تغییر نکند.
-    payload[relationFieldKey] = sourceRecordId;
-    if (targetModuleId === 'tasks') {
+    if (!isProcessRelatedRecord) payload[relationFieldKey] = sourceRecordId;
+    if (!isProcessRelatedRecord && targetModuleId === 'tasks') {
       payload.related_to_module = sourceModuleId;
       payload.source_record_id = sourceRecordId;
     }
-    await createRecord(url, key, targetModuleId, orgId, payload, actorUserId);
-    return actionResult(action, 'success', undefined, { affected_count: 1, details: { target_module_id: targetModuleId } });
+    const created = await createRecord(url, key, targetModuleId, orgId, payload, actorUserId);
+    if (processAttachment) {
+      const createdRecordId = String(created?.id || '').trim();
+      if (!createdRecordId) throw new Error('رکورد جدید ایجاد شد اما شناسه پیوند فرآیند برنگشت.');
+      await attachCreatedRecordToProcessRun(
+        url,
+        key,
+        orgId,
+        processAttachment.processRunId,
+        targetModuleId,
+        createdRecordId,
+      );
+    }
+    return actionResult(action, 'success', undefined, {
+      affected_count: 1,
+      details: { target_module_id: targetModuleId, process_related_record: isProcessRelatedRecord },
+    });
   }
 
   // ── activate process stage ────────────────────────────────────────────
@@ -4482,6 +4602,80 @@ async function executeActionWithRetry(
   throw lastError;
 }
 
+// فقط تغییرهای ذاتاً idempotent می‌توانند پس از قطع worker بدون خطر دوباره اجرا شوند.
+// برای ارسال‌ها و ایجاد رکورد، قطع ارتباط بعد از درخواست می‌تواند به معنای انجام شدن
+// اثر بیرونی باشد؛ در آن حالت اجرا را قابل‌پیگیری نگه می‌داریم، نه اینکه کورکورانه تکرار کنیم.
+const SAFE_TO_RECLAIM_ACTIONS = new Set([
+  'update_record',
+  'lock_record',
+  'activate_next_process_stage',
+  'activate_specific_process_stage',
+]);
+
+type DurableActionContext = {
+  parentExecutionKey: string;
+  actionIndex: number;
+};
+
+async function executeDurableAction(
+  action: WorkflowAction,
+  record: Record<string, any>,
+  moduleId: string,
+  orgId: string,
+  url: string,
+  key: string,
+  actorUserId: string | null,
+  context?: DurableActionContext,
+): Promise<ActionExecutionResult> {
+  if (!context?.parentExecutionKey) {
+    return executeActionWithRetry(action, record, moduleId, orgId, url, key, actorUserId);
+  }
+
+  const actionType = String(action?.type || '').trim() || 'unknown';
+  const actionKey = intervalJobDedupeKey('action-execution', context.parentExecutionKey, context.actionIndex, action?.id || actionType);
+  const safeToReclaim = SAFE_TO_RECLAIM_ACTIONS.has(actionType);
+  const claim = await callRpc(url, key, 'claim_workflow_action_execution', {
+    p_org_id: orgId,
+    p_execution_key: actionKey,
+    p_parent_execution_key: context.parentExecutionKey,
+    p_action_type: actionType,
+    p_is_safe_to_reclaim: safeToReclaim,
+  }) as string;
+
+  if (claim === 'succeeded') {
+    return actionResult(action, 'skipped', 'این اقدام قبلاً با موفقیت انجام شده است.', {
+      durable_execution: 'already_succeeded',
+    });
+  }
+  if (claim === 'in_progress') {
+    throw new Error('اقدام هم‌اکنون توسط worker دیگری در حال اجرا است.');
+  }
+  if (claim !== 'claimed') {
+    return actionResult(action, 'failed', 'نتیجه اقدام قبلی نامشخص است؛ برای جلوگیری از اجرای تکراری نیازمند پیگیری است.', {
+      durable_execution: 'needs_attention',
+    });
+  }
+
+  try {
+    const result = await executeActionWithRetry(action, record, moduleId, orgId, url, key, actorUserId);
+    await callRpc(url, key, 'complete_workflow_action_execution', {
+      p_execution_key: actionKey,
+      p_status: result.status === 'failed' ? 'failed' : 'succeeded',
+      p_last_error: result.status === 'failed' ? result.message || null : null,
+    });
+    return result;
+  } catch (error: any) {
+    const errorMessage = String(error?.message || error || 'اجرای اقدام ناموفق بود.');
+    const status = !safeToReclaim && isTransientWorkflowError(error) ? 'needs_attention' : 'failed';
+    await callRpc(url, key, 'complete_workflow_action_execution', {
+      p_execution_key: actionKey,
+      p_status: status,
+      p_last_error: errorMessage,
+    }).catch(() => {});
+    throw error;
+  }
+}
+
 // ── Scheduled reports ─────────────────────────────────────────────────────────
 
 function getReportScheduleConfig(report: ReportDefinitionRow): Record<string, any> {
@@ -4708,13 +4902,19 @@ async function deliverScheduledReport(
   if (deliveryChannels.includes('bot_group')) {
     deliveredCount += await sendScheduledReportToBotGroups(url, key, report.org_id, botGroupIds, message, report.id);
   }
+  // ممکن است یک کانال (مثلاً یادداشت) پیش از کانال ناموفق تحویل شده باشد.
+  // retry کل گزارش در این نقطه می‌تواند همان پیام را دوباره برساند، پس وضعیت را
+  // شفاف و قابل پیگیری نگه می‌داریم تا ارسال موفق قبلی تکرار نشود.
+  if (deliveryErrors.length > 0) {
+    throw new Error(`بخشی از ارسال گزارش ناموفق بود و برای جلوگیری از تکرار نیازمند پیگیری است: ${deliveryErrors.join(' | ')}`);
+  }
   return deliveredCount > 0
     ? { status: 'success', recipientCount: deliveredCount }
     : { status: 'skipped', recipientCount: 0, message: deliveryErrors[0] || 'هیچ ارسال معتبری برای روش‌های انتخاب‌شده انجام نشد.' };
 }
 
 async function runScheduledReportsTick(url: string, key: string, now: Date): Promise<Record<string, number>> {
-  const stats = { checkedReports: 0, claimedReports: 0, sentReports: 0, skippedReports: 0, failedReports: 0 };
+  const stats = { checkedReports: 0, claimedReports: 0, queuedReports: 0, failedReports: 0 };
   const reports = await fetchQueuedReports(url, key).catch((error) => {
     console.warn('[workflow-runner] Scheduled report fetch failed:', error?.message || error);
     return [] as ReportDefinitionRow[];
@@ -4733,19 +4933,20 @@ async function runScheduledReportsTick(url: string, key: string, now: Date): Pro
     stats.claimedReports++;
 
     try {
-      const result = await deliverScheduledReport(url, key, report, scheduledDueAt);
-      if (result.status === 'success') {
-        stats.sentReports++;
-        await dbPatch(url, key, 'report_definitions', `id=eq.${report.id}`, {
-          schedule_last_sent_at: new Date().toISOString(),
-          schedule_error: null,
-        }).catch(() => {});
-      } else {
-        stats.skippedReports++;
-        await dbPatch(url, key, 'report_definitions', `id=eq.${report.id}`, {
-          schedule_error: result.message || 'ارسال دوره‌ای گزارش انجام نشد.',
-        }).catch(() => {});
-      }
+      await enqueueIntervalJob(url, key, {
+        org_id: report.org_id,
+        job_kind: 'scheduled_report_delivery',
+        dedupe_key: intervalJobDedupeKey('scheduled-report-delivery', report.id, scheduledDueAt.toISOString()),
+        workflow_id: null,
+        module_id: String(report.module_id || '').trim() || null,
+        record_id: null,
+        scheduled_due_at: scheduledDueAt.toISOString(),
+        page_offset: 0,
+        action_index: null,
+        max_attempts: 3,
+        payload: { report },
+      });
+      stats.queuedReports++;
     } catch (error: any) {
       stats.failedReports++;
       const errorMessage = String(error?.message || 'scheduled report delivery failed');
@@ -4764,7 +4965,7 @@ async function runScheduledReportsTick(url: string, key: string, now: Date): Pro
 type WorkflowIntervalJob = {
   id: string;
   org_id: string;
-  job_kind: 'workflow_scan' | 'workflow_action' | 'process_automation_interval';
+  job_kind: 'workflow_scan' | 'workflow_action' | 'process_automation_interval' | 'scheduled_report_delivery';
   workflow_id: string | null;
   module_id: string | null;
   record_id: string | null;
@@ -4807,7 +5008,8 @@ async function completeIntervalJob(
 
 async function retryOrFailIntervalJob(url: string, key: string, job: WorkflowIntervalJob, error: any) {
   const errorMessage = String(error?.message || error || 'اجرای job ناموفق بود.');
-  if (Number(job.attempts || 0) < Number(job.max_attempts || 3)) {
+  const needsAttention = /نیازمند پیگیری|نتیجه اقدام قبلی نامشخص/i.test(errorMessage);
+  if (!needsAttention && Number(job.attempts || 0) < Number(job.max_attempts || 3)) {
     const delaySeconds = Math.min(300, Math.max(5, 5 * (2 ** Math.max(0, Number(job.attempts || 1) - 1))));
     await dbPatch(url, key, 'workflow_interval_jobs', `id=eq.${encodeURIComponent(job.id)}`, {
       status: 'pending',
@@ -5028,8 +5230,9 @@ async function processWorkflowActionJob(url: string, key: string, job: WorkflowI
   const record = job.payload?.record as Record<string, any>;
   const moduleId = String(job.module_id || '').trim();
   if (!workflow?.id || !action || !record || !moduleId) throw new Error('اطلاعات اقدام گردش‌کار ناقص است.');
-  const actionResultValue = await executeActionWithRetry(
+  const actionResultValue = await executeDurableAction(
     action, record, moduleId, job.org_id, url, key, job.payload?.actor_user_id || null,
+    { parentExecutionKey: `interval-job:${job.id}`, actionIndex: Number(job.action_index || 0) },
   );
   await completeIntervalJob(url, key, job, 'succeeded', { action_result: actionResultValue });
   await finalizeWorkflowActionReport(url, key, job).catch((error) => {
@@ -5048,9 +5251,86 @@ async function processProcessAutomationIntervalJob(url: string, key: string, job
     await completeIntervalJob(url, key, job, 'skipped', { reason: 'task_unavailable_or_completed' });
     return { skipped: true };
   }
-  const result = await runServerProcessAutomationRules(url, key, task, null, 'interval', [rule]);
+  const result = await runServerProcessAutomationRules(
+    url,
+    key,
+    task,
+    null,
+    'interval',
+    [rule],
+    null,
+    `process-interval-job:${job.id}`,
+  );
   await completeIntervalJob(url, key, job, result.succeeded > 0 ? 'succeeded' : 'skipped', { process_automation: result });
   return result;
+}
+
+async function processScheduledReportDeliveryJob(url: string, key: string, job: WorkflowIntervalJob) {
+  const report = job.payload?.report as ReportDefinitionRow | undefined;
+  if (!report?.id || !report?.org_id) throw new Error('اطلاعات ارسال گزارش زمان‌دار ناقص است.');
+
+  const executionKey = intervalJobDedupeKey('scheduled-report-action', job.id);
+  const claim = await callRpc(url, key, 'claim_workflow_action_execution', {
+    p_org_id: job.org_id,
+    p_execution_key: executionKey,
+    p_parent_execution_key: `scheduled-report-job:${job.id}`,
+    p_action_type: 'scheduled_report_delivery',
+    p_is_safe_to_reclaim: false,
+  }) as string;
+  if (claim === 'succeeded') {
+    await completeIntervalJob(url, key, job, 'skipped', { reason: 'already_delivered' });
+    return { status: 'skipped', message: 'این گزارش قبلاً تحویل شده است.' };
+  }
+  if (claim === 'in_progress') {
+    throw new Error('ارسال گزارش هم‌اکنون توسط worker دیگری در حال اجرا است.');
+  }
+  if (claim !== 'claimed') {
+    throw new Error('نتیجه اقدام قبلی نامشخص است؛ برای جلوگیری از اجرای تکراری نیازمند پیگیری است.');
+  }
+
+  try {
+    const result = await deliverScheduledReport(url, key, report, new Date(job.scheduled_due_at));
+    await callRpc(url, key, 'complete_workflow_action_execution', {
+      p_execution_key: executionKey,
+      p_status: 'succeeded',
+      p_last_error: null,
+    });
+    await completeIntervalJob(url, key, job, result.status === 'success' ? 'succeeded' : 'skipped', { scheduled_report: result });
+    await dbPatch(url, key, 'report_definitions', `id=eq.${report.id}&org_id=eq.${encodeURIComponent(job.org_id)}`, {
+      ...(result.status === 'success' ? { schedule_last_sent_at: new Date().toISOString() } : {}),
+      schedule_error: result.status === 'success' ? null : result.message || 'ارسال دوره‌ای گزارش انجام نشد.',
+    }).catch(() => {});
+    await insertWorkflowLog(url, key, {
+      workflow_id: null,
+      org_id: job.org_id,
+      module_id: String(report.module_id || '').trim() || 'reports',
+      record_id: String(report.id),
+      run_type: 'scheduled_report',
+      status: result.status === 'success' ? 'success' : 'skipped',
+      message: result.message,
+      execution_run_key: `scheduled-report-report:${job.id}`,
+      details: {
+        report_name: String(report.name || '').trim() || 'گزارش زمان‌دار',
+        record_title: String(report.name || '').trim() || 'گزارش زمان‌دار',
+        scheduled_due_at: job.scheduled_due_at,
+        delivery_result: result,
+        execution_queue: 'v2',
+        runner_build: FUNCTION_BUILD,
+      },
+    });
+    return result;
+  } catch (error: any) {
+    const errorMessage = String(error?.message || error || 'ارسال گزارش زمان‌دار ناموفق بود.');
+    const status = isTransientWorkflowError(error) || /نیازمند پیگیری|نتیجه اقدام قبلی نامشخص/i.test(errorMessage)
+      ? 'needs_attention'
+      : 'failed';
+    await callRpc(url, key, 'complete_workflow_action_execution', {
+      p_execution_key: executionKey,
+      p_status: status,
+      p_last_error: errorMessage,
+    }).catch(() => {});
+    throw error;
+  }
 }
 
 async function processIntervalJob(url: string, key: string, job: WorkflowIntervalJob) {
@@ -5064,12 +5344,36 @@ async function processIntervalJob(url: string, key: string, job: WorkflowInterva
       await processProcessAutomationIntervalJob(url, key, job);
       return 'succeeded';
     }
+    if (job.job_kind === 'scheduled_report_delivery') {
+      await processScheduledReportDeliveryJob(url, key, job);
+      return 'succeeded';
+    }
     await processWorkflowActionJob(url, key, job);
     return 'succeeded';
   } catch (error: any) {
     const status = await retryOrFailIntervalJob(url, key, job, error);
     if (job.job_kind === 'workflow_action' && status === 'failed') {
       await finalizeWorkflowActionReport(url, key, job).catch(() => {});
+    }
+    if (job.job_kind === 'scheduled_report_delivery' && status === 'failed') {
+      const report = job.payload?.report as ReportDefinitionRow | undefined;
+      await insertWorkflowLog(url, key, {
+        workflow_id: null,
+        org_id: job.org_id,
+        module_id: String(report?.module_id || '').trim() || 'reports',
+        record_id: String(report?.id || job.id),
+        run_type: 'scheduled_report',
+        status: 'failed',
+        message: String(error?.message || error || 'ارسال گزارش زمان‌دار ناموفق بود.'),
+        execution_run_key: `scheduled-report-report:${job.id}`,
+        details: {
+          report_name: String(report?.name || '').trim() || 'گزارش زمان‌دار',
+          record_title: String(report?.name || '').trim() || 'گزارش زمان‌دار',
+          scheduled_due_at: job.scheduled_due_at,
+          execution_queue: 'v2',
+          runner_build: FUNCTION_BUILD,
+        },
+      }).catch(() => {});
     }
     console.error(`[workflow-runner] Interval job failed (${job.id}):`, error?.message || error);
     return status;
@@ -5333,6 +5637,7 @@ async function runEventTick(
           status: 'skipped',
           message: 'این گردش کار قبلاً برای این رکورد اجرا شده است.',
           details: { source, event, runner_build: FUNCTION_BUILD },
+          execution_run_key: body?.event_execution_key ? `event-report:${body.event_execution_key}:workflow:${workflow.id}` : null,
         });
         continue;
       }
@@ -5340,9 +5645,9 @@ async function runEventTick(
       const actorUserId = resolveWorkflowActorId(workflow);
       const errors: string[] = [];
       const actionResults: ActionExecutionResult[] = [];
-      for (const action of actions) {
+      for (const [actionIndex, action] of actions.entries()) {
         try {
-          const result = await executeActionWithRetry(
+          const result = await executeDurableAction(
             action as WorkflowAction,
             record,
             workflowModuleId,
@@ -5350,6 +5655,9 @@ async function runEventTick(
             url,
             key,
             actorUserId,
+            body?.event_execution_key
+              ? { parentExecutionKey: `event:${body.event_execution_key}:workflow:${workflow.id}`, actionIndex }
+              : undefined,
           );
           actionResults.push(result);
           if (result.status === 'success') stats.executedActions += 1;
@@ -5394,6 +5702,7 @@ async function runEventTick(
           runner_build: FUNCTION_BUILD,
           has_previous_record: previousRecord !== null,
         },
+        execution_run_key: body?.event_execution_key ? `event-report:${body.event_execution_key}:workflow:${workflow.id}` : null,
       });
 
       if (runStatus === 'success') {
@@ -5424,6 +5733,7 @@ async function runEventTick(
           status: 'failed',
           message: errorMessage,
           details: { source, event, runner_build: FUNCTION_BUILD },
+          execution_run_key: body?.event_execution_key ? `event-report:${body.event_execution_key}:workflow:${workflow.id}` : null,
         });
       }
       if (firstMatchClaimed && recordIdForLog) {
@@ -5448,8 +5758,16 @@ async function runEventTick(
       previousRecord,
       event === 'create' ? 'create' : 'update',
       eventActorUserId,
+      body?.event_execution_key ? `event:${body.event_execution_key}:process-automation` : null,
     );
     Object.assign(stats, { processAutomations: processAutomationStats });
+    stats.failedRuns += Number(processAutomationStats?.failed || 0);
+  }
+
+  // صف رویدادی فقط زمانی موفق می‌شود که همهٔ گردش‌کارها و اتوماسیون‌های منطبق
+  // نتیجهٔ قطعی داشته باشند. این خط مانع از «موفق» شدن پنهانی event با اقدام ناموفق است.
+  if (stats.failedRuns > 0) {
+    throw new Error('حداقل یک اقدام خودکار ناموفق یا نیازمند پیگیری است.');
   }
 
   return stats;
@@ -5616,6 +5934,7 @@ async function runServerProcessAutomationRules(
   event: ProcessAutomationEvent,
   candidateRules?: any[],
   actorUserId: string | null = null,
+  executionKey: string | null = null,
 ) {
   const taskId = String(task?.id || '').trim();
   const orgId = String(task?.org_id || '').trim();
@@ -5663,7 +5982,7 @@ async function runServerProcessAutomationRules(
     const errors: string[] = [];
     const results: ActionExecutionResult[] = [];
     const targetModuleId = source.moduleId || 'tasks';
-    for (const action of actions) {
+    for (const [actionIndex, action] of actions.entries()) {
       const actionConfig = action?.config && typeof action.config === 'object' ? action.config : {};
       const hasExplicitRecipient = (Array.isArray(actionConfig.recipient_assignees) && actionConfig.recipient_assignees.length > 0)
         || (Array.isArray(actionConfig.recipient_fields) && actionConfig.recipient_fields.length > 0);
@@ -5687,11 +6006,27 @@ async function runServerProcessAutomationRules(
         },
       } as WorkflowAction;
       try {
-        const result = await executeActionWithRetry(serverAction, actionRecord, targetModuleId, orgId, url, key, actorUserId);
+        const result = await executeDurableAction(
+          serverAction,
+          actionRecord,
+          targetModuleId,
+          orgId,
+          url,
+          key,
+          actorUserId,
+          executionKey ? { parentExecutionKey: `${executionKey}:rule:${ruleId || 'anonymous'}`, actionIndex } : undefined,
+        );
         results.push(result);
         if (result.status === 'failed') errors.push(result.message || String(action?.type || 'automation action failed'));
       } catch (error: any) {
-        errors.push(String(error?.message || error || 'automation action failed'));
+        const errorMessage = String(error?.message || error || 'automation action failed');
+        errors.push(errorMessage);
+        results.push({
+          action_type: String(action?.type || ''),
+          action_id: String(action?.id || '').trim() || null,
+          status: 'failed',
+          message: errorMessage,
+        });
       }
     }
     const hasFailedAction = results.some((result) => result.status === 'failed');
@@ -5722,6 +6057,9 @@ async function runServerProcessAutomationRules(
         actor_id: actorUserId,
         runner_build: FUNCTION_BUILD,
       },
+      execution_run_key: executionKey && ruleId
+        ? `process-automation-report:${executionKey}:rule:${ruleId}`
+        : null,
     });
     if (firstMatch) {
       await completeProcessAutomationFirstMatchExecution(
@@ -5747,8 +6085,11 @@ async function runServerProcessAutomationsForTaskEvent(
   previousTask: Record<string, any> | null,
   event: 'create' | 'update',
   actorUserId: string | null,
+  executionKey: string | null = null,
 ) {
-  const stats: Record<string, any> = await runServerProcessAutomationRules(url, key, task, previousTask, event, undefined, actorUserId);
+  const stats: Record<string, any> = await runServerProcessAutomationRules(
+    url, key, task, previousTask, event, undefined, actorUserId, executionKey,
+  );
   const becameCompleted = ['done', 'completed'].includes(String(task?.status || '').trim().toLowerCase())
     && !['done', 'completed'].includes(String(previousTask?.status || '').trim().toLowerCase());
   if (becameCompleted) {
@@ -5757,7 +6098,16 @@ async function runServerProcessAutomationsForTaskEvent(
     for (const nextTask of nextTasks) {
       const nextRules = getTaskProcessAutomationRulesCore(nextTask).filter((rule: any) => String(rule?.trigger_type || '') === 'previous_stage_completed');
       if (nextRules.length > 0) {
-        await runServerProcessAutomationRules(url, key, nextTask, null, 'previous_stage_completed', nextRules, actorUserId);
+        await runServerProcessAutomationRules(
+          url,
+          key,
+          nextTask,
+          null,
+          'previous_stage_completed',
+          nextRules,
+          actorUserId,
+          executionKey ? `${executionKey}:previous-stage:${String(nextTask?.id || '').trim()}` : null,
+        );
       }
     }
   }
@@ -5874,8 +6224,32 @@ async function completeWorkflowEvent(
   });
 }
 
+async function retryOrFailWorkflowEvent(
+  url: string,
+  key: string,
+  queuedEvent: WorkflowEventQueueRow,
+  error: any,
+) {
+  const errorMessage = String(error?.message || error || 'اجرای رویداد ناموفق بود.');
+  const nextAttempt = Number(queuedEvent.attempts || 0) + 1;
+  const needsAttention = /نیازمند پیگیری|نتیجه اقدام قبلی نامشخص/i.test(errorMessage);
+  if (!needsAttention && nextAttempt < 5) {
+    const delaySeconds = Math.min(300, Math.max(5, 5 * (2 ** Math.max(0, nextAttempt - 1))));
+    await dbPatch(url, key, 'workflow_event_queue', `id=eq.${encodeURIComponent(queuedEvent.id)}`, {
+      status: 'pending',
+      available_at: new Date(Date.now() + delaySeconds * 1000).toISOString(),
+      claimed_at: null,
+      completed_at: null,
+      last_error: errorMessage,
+    });
+    return 'retried' as const;
+  }
+  await completeWorkflowEvent(url, key, queuedEvent.id, 'failed', errorMessage);
+  return 'failed' as const;
+}
+
 async function runQueuedWorkflowEvents(url: string, key: string): Promise<Record<string, number>> {
-  const stats = { scanned: 0, claimed: 0, succeeded: 0, failed: 0 };
+  const stats = { scanned: 0, claimed: 0, succeeded: 0, retried: 0, failed: 0 };
   await callRpc(url, key, 'requeue_stale_workflow_events', {}).catch(() => 0);
   // PostgREST filters accept values, not SQL expressions. Passing `now()` here
   // makes the fetch fail and the catch below silently turns every event into an
@@ -5903,14 +6277,15 @@ async function runQueuedWorkflowEvents(url: string, key: string): Promise<Record
         record: queuedEvent.record_snapshot || { id: queuedEvent.record_id, org_id: queuedEvent.org_id },
         previous_record: queuedEvent.previous_snapshot || null,
         actor_user_id: queuedEvent.actor_user_id || null,
+        event_execution_key: queuedEvent.id,
         source: 'server_event_queue',
       });
       await completeWorkflowEvent(url, key, queuedEvent.id, 'succeeded');
       stats.succeeded += 1;
     } catch (error: any) {
       const message = String(error?.message || error || 'server workflow event failed');
-      await completeWorkflowEvent(url, key, queuedEvent.id, 'failed', message).catch(() => {});
-      stats.failed += 1;
+      const result = await retryOrFailWorkflowEvent(url, key, queuedEvent, error).catch(() => 'failed' as const);
+      stats[result] += 1;
       console.error('[workflow-runner] Event queue item failed:', queuedEvent.id, message);
     }
   }
@@ -5987,10 +6362,12 @@ Deno.serve(async (req) => {
     // فعالیت‌ها در انتهای درخواست قرار دارد تا حتی در سازمان‌های پربار، پیامک
     // و گردش‌کارهای موعددار پشت یک اسکن طولانی معطل نمانند.
     const enqueueStats = await runIntervalEnqueueTick(supabaseUrl, serviceRoleKey);
-    const intervalQueueStats = await drainIntervalJobs(supabaseUrl, serviceRoleKey)
-      .catch((error) => ({ error: String(error?.message || error || 'Interval queue failed') }));
     const scheduledReportStats = await runScheduledReportsTick(supabaseUrl, serviceRoleKey, new Date())
       .catch((error) => ({ error: String(error?.message || error || 'Scheduled report delivery failed') }));
+    // گزارش‌های سررسیدشده پیش از تخلیه صف وارد job می‌شوند تا در همین tick
+    // نیز فرصت اجرا داشته باشند، نه اینکه تا اجرای بعدی معطل بمانند.
+    const intervalQueueStats = await drainIntervalJobs(supabaseUrl, serviceRoleKey)
+      .catch((error) => ({ error: String(error?.message || error || 'Interval queue failed') }));
     const eventQueueStats = await runQueuedWorkflowEvents(supabaseUrl, serviceRoleKey)
       .catch((error) => ({ error: String(error?.message || error || 'Event queue failed') }));
     const processAutomationStats = await runServerProcessAutomationIntervalTick(

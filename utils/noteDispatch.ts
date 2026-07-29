@@ -89,11 +89,43 @@ const isMissingInternalMessageDispatchRpc = (error: any) => {
   return code === 'PGRST202' || (text.includes('send_internal_message_v2') && text.includes('could not find'));
 };
 
+const toInternalMessageRow = (value: unknown): Record<string, any> | null => {
+  const candidate = Array.isArray(value) ? value[value.length - 1] : value;
+  if (candidate && typeof candidate === 'object') {
+    const row = candidate as Record<string, any>;
+    return String(row.id || '').trim() && Object.prototype.hasOwnProperty.call(row, 'content')
+      ? row
+      : null;
+  }
+  if (typeof candidate === 'string') {
+    try {
+      return toInternalMessageRow(JSON.parse(candidate));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+
+const createClientMessageId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `message-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
+
 // Canonical write path for Messaging V2. The server persists both the note and
-// its inbox projection atomically; the generic insert is only a temporary
-// compatibility fallback for installations that have not run phase 415 yet.
+// its inbox projection atomically. Do not fall back to a direct `notes` insert:
+// that legacy path can save a message without creating its V2 inbox projection.
 export const sendInternalMessageV2 = async (row: Record<string, any>) => {
-  const payload = sanitizeNoteInsertRow({ ...row });
+  const suppliedMetadata = row?.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+    ? row.metadata
+    : {};
+  const clientMessageId = String(suppliedMetadata.client_message_id || '').trim() || createClientMessageId();
+  const payload = sanitizeNoteInsertRow({
+    ...row,
+    metadata: { ...suppliedMetadata, client_message_id: clientMessageId },
+  });
   const { data, error } = await supabase.rpc('send_internal_message_v2', {
     p_content: String(payload.content || ''),
     p_mention_user_ids: payload.mention_user_ids || [],
@@ -103,9 +135,28 @@ export const sendInternalMessageV2 = async (row: Record<string, any>) => {
     p_module_id: payload.module_id || null,
     p_record_id: payload.record_id || null,
   });
-  if (!error) return data ? [data as Record<string, any>] : [];
-  if (!isMissingInternalMessageDispatchRpc(error)) throw error;
-  return insertNotesWithFallback([payload]);
+  if (error) {
+    if (isMissingInternalMessageDispatchRpc(error)) {
+      throw new Error('مسیر مرکزی ارسال پیام V2 روی سرور فعال نیست. مرحلهٔ ۴۱۵ پایگاه‌داده باید اجرا شود.');
+    }
+    throw error;
+  }
+
+  const dispatchedRow = toInternalMessageRow(data);
+  if (dispatchedRow) return [dispatchedRow];
+
+  // A successful database transaction must not be rendered as an empty local
+  // message. Rare proxy/schema-cache response-shape issues are recovered by a
+  // client mutation id that is persisted inside the same atomic transaction.
+  const { data: recoveredRow, error: recoveryError } = await supabase
+    .from('notes')
+    .select('*')
+    .contains('metadata', { client_message_id: clientMessageId })
+    .maybeSingle();
+  const recovered = !recoveryError ? toInternalMessageRow(recoveredRow) : null;
+  if (recovered) return [recovered];
+
+  throw new Error('پاسخ ارسال پیام کامل دریافت نشد؛ برای جلوگیری از ارسال تکراری، پیام دوباره ثبت نشد. صفحه را تازه‌سازی کنید.');
 };
 
 const clipWords = (value: string, limit = 10) => {

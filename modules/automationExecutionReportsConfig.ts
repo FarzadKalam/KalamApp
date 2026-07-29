@@ -35,6 +35,7 @@ export const automationExecutionReportsConfig: ModuleDefinition = {
         { label: 'گردش کار زمان‌دار', value: 'workflow_scheduled', color: 'cyan' },
         { label: 'اتوماسیون شرطی', value: 'automation_conditional', color: 'green' },
         { label: 'اتوماسیون زماندار', value: 'automation_scheduled', color: 'orange' },
+        { label: 'گزارش زمان‌دار', value: 'report_scheduled', color: 'purple' },
       ],
       nature: FieldNature.SYSTEM,
     },
@@ -58,6 +59,7 @@ export const automationExecutionReportsConfig: ModuleDefinition = {
       options: [
         { label: 'موفق', value: 'success', color: 'green' },
         { label: 'ناموفق', value: 'failed', color: 'red' },
+        { label: 'نیازمند پیگیری', value: 'needs_attention', color: 'orange' },
         { label: 'رد شده / بدون اقدام', value: 'skipped', color: 'default' },
       ],
       nature: FieldNature.SYSTEM,

@@ -808,7 +808,7 @@ const mergeBotRpcConversations = (liveConversations: Conversation[], rpcConversa
 
 const getInternalNotePreview = (row: any) => {
   return getMessageListPreview(row?.content ?? row?.body ?? row?.message_text ?? '', {
-    fallback: 'پیام داخلی',
+    fallback: '',
   });
 };
 
@@ -3091,7 +3091,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         kind: 'message' as const,
         direction,
         author,
-        text: parsed.text || (parsed.attachments.length ? '' : 'پیام داخلی'),
+        text: parsed.text,
         time: safeJalaliFormat(row?.created_at, 'YYYY/MM/DD HH:mm') || '',
         status: direction === 'outbound' ? 'ارسال شده' : undefined,
         edited: Boolean(row?.is_edited || row?.edited_at),
@@ -5096,7 +5096,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           throw new Error('پیام در سرور ذخیره نشد.');
         }
         const latestInserted = insertedRows[insertedRows.length - 1] as any;
-        const latestPreview = normalizedText || (mergedAttachments.length > 0 ? 'فایل یا تصویر پیوست' : 'پیام داخلی');
+        const latestPreview = normalizedText || 'فایل یا تصویر پیوست';
         const latestAt = String(latestInserted?.created_at || new Date().toISOString()).trim();
         setInternalConversationLocalOverrides((prev) => ({
           ...prev,
@@ -5139,6 +5139,13 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         message.success('پیام داخلی ارسال شد.');
         return true;
       } catch (error: any) {
+        // If the database committed but its response was interrupted, the
+        // forced refresh above can still surface the message without inviting
+        // the user to resend it and create a duplicate.
+        void Promise.all([
+          refreshInternalConversations({ force: true }),
+          refreshInternalTimeline({ force: true }),
+        ]).catch(() => undefined);
         message.error(toFaErrorMessage(error, 'ارسال پیام داخلی ناموفق بود.'));
         return false;
       }

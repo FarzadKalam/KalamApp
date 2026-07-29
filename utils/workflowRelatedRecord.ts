@@ -5,6 +5,7 @@ import type { WorkflowModuleOption } from './workflowTypes';
 
 const TASKS_MODULE_ID = 'tasks';
 const TASK_SOURCE_RECORD_FIELD_KEY = 'source_record_id';
+export const PROCESS_RUN_LINK_FIELD_KEY = '__process_run_link__';
 
 const normalizeModuleId = (value: unknown) => String(value || '').trim();
 
@@ -28,6 +29,7 @@ export const isCreateRelatedRecordTaskTarget = (targetModuleId?: string | null) 
 export const getCreateRelatedRecordTargetModuleOptions = (
   sourceModuleId: string,
   moduleOptions: WorkflowModuleOption[] = [],
+  processTargetModuleIds: string[] = [],
 ): WorkflowModuleOption[] => {
   const normalizedSourceModuleId = normalizeModuleId(sourceModuleId);
   const result: WorkflowModuleOption[] = [];
@@ -39,6 +41,19 @@ export const getCreateRelatedRecordTargetModuleOptions = (
     seen.add(option.value);
     result.push(option);
   };
+
+  const processTargets = Array.from(new Set(
+    (Array.isArray(processTargetModuleIds) ? processTargetModuleIds : [])
+      .map(normalizeModuleId)
+      .filter((moduleId) => Boolean(moduleId && MODULES[moduleId])),
+  ));
+  if (processTargets.length > 0) {
+    processTargets.forEach((moduleId) => {
+      const configuredLabel = (moduleOptions || []).find((option) => normalizeModuleId(option?.value) === moduleId)?.label;
+      addOption(moduleId, configuredLabel);
+    });
+    return result;
+  }
 
   (Array.isArray(moduleOptions) ? moduleOptions : []).forEach((option) => {
     const targetModuleId = normalizeModuleId(option?.value);
@@ -65,10 +80,18 @@ export const getCreateRelatedRecordTargetModuleOptions = (
 export const getCreateRelatedRecordRelationFieldOptions = (
   targetModuleId: string,
   sourceModuleId: string,
+  processTargetModuleIds: string[] = [],
 ): Array<{ label: string; value: string }> => {
   const normalizedTargetModuleId = normalizeModuleId(targetModuleId);
   const normalizedSourceModuleId = normalizeModuleId(sourceModuleId);
   if (!normalizedTargetModuleId || !MODULES[normalizedTargetModuleId]) return [];
+
+  if ((processTargetModuleIds || []).map(normalizeModuleId).includes(normalizedTargetModuleId)) {
+    return [{
+      label: 'پیوند با رکوردهای مرتبط فرآیند',
+      value: PROCESS_RUN_LINK_FIELD_KEY,
+    }];
+  }
 
   if (normalizedTargetModuleId === TASKS_MODULE_ID) {
     const taskField = (MODULES.tasks?.fields || []).find(
@@ -94,5 +117,6 @@ export const getCreateRelatedRecordRelationFieldOptions = (
 export const getDefaultCreateRelatedRecordRelationFieldKey = (
   targetModuleId: string,
   sourceModuleId: string,
+  processTargetModuleIds: string[] = [],
 ) =>
-  getCreateRelatedRecordRelationFieldOptions(targetModuleId, sourceModuleId)[0]?.value || '';
+  getCreateRelatedRecordRelationFieldOptions(targetModuleId, sourceModuleId, processTargetModuleIds)[0]?.value || '';
