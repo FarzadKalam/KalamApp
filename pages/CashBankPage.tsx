@@ -7,21 +7,21 @@ import { supabase } from '../supabaseClient';
 import RelatedRecordPopover from '../components/RelatedRecordPopover';
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
-import { localizeFinancialValue } from '../utils/financialValueLabels';
+import { getFinancialPaymentTypeLabelFa, getFinancialStatusLabelFa } from '../utils/financialValueLabels';
 import { useCurrencyConfig } from '../utils/currency';
 import { createChoiceFilter, createDateRangeFilter, createNumberRangeFilter, createTextFilter } from '../components/accounting/tableColumnFilters';
 import { ACCOUNTING_PERMISSION_KEY, fetchCurrentUserRoleContext } from '../utils/permissions';
-import { buildRecordTitleSelectColumns, runSelectWithCompatibleColumns } from '../utils/selectCompat';
-import { getRecordDisplayLabel } from '../utils/recordLabel';
 
 const { Title, Text } = Typography;
 
-type RowKind = 'sales_payment' | 'purchase_payment' | 'cash_bank_operation' | 'cheque' | 'barter';
+type RowKind = 'sales_payment' | 'purchase_payment' | 'cash_bank_operation' | 'cheque' | 'barter' | 'bank_account_opening' | 'cash_box_opening' | 'petty_fund_opening' | 'customer_opening' | 'supplier_opening' | 'employee_opening';
+type LedgerSortField = 'row_type' | 'source_label' | 'payment_type' | 'status' | 'date' | 'amount' | 'invoice_label' | 'person_label' | 'bank_label' | 'cheque_label' | 'description';
 
+type RelatedRecord = { moduleId: string; recordId: string; label?: string };
 type RowItem = {
   key: string;
   kind: RowKind;
-  rowType: 'receipt' | 'payment' | 'transfer' | 'cheque' | 'barter';
+  rowType: 'receipt' | 'payment' | 'transfer' | 'cheque' | 'barter' | 'opening';
   sourceLabel: string;
   sourceRecordId?: string;
   paymentType: string;
@@ -34,56 +34,68 @@ type RowItem = {
   chequeLabel: string;
   description: string;
   createdAt: string | null;
-  invoiceRelation?: { moduleId: string; recordId: string } | null;
-  personRelation?: { moduleId: string; recordId: string } | null;
-  bankRelation?: { moduleId: string; recordId: string } | null;
-  bankRelations?: Array<{ moduleId: string; recordId: string; label: string }>;
-  chequeRelation?: { moduleId: string; recordId: string } | null;
+  invoiceRelation?: RelatedRecord | null;
+  personRelation?: RelatedRecord | null;
+  bankRelation?: RelatedRecord | null;
+  bankRelations?: RelatedRecord[];
+  chequeRelation?: RelatedRecord | null;
 };
 
-const PAYMENT_TYPE_LABEL: Record<string, string> = {
-  cash: 'نقد',
-  card: 'کارت',
-  transfer: 'انتقال',
-  cheque: 'چک',
-  online: 'آنلاین',
-  barter: 'تهاتر',
-};
+const PAYMENT_TYPE_LABEL: Record<string, string> = { cash: 'نقد', bank: 'بانکی', card: 'کارت', pos: 'دستگاه کارت‌خوان', transfer: 'انتقال', cheque: 'چک', online: 'آنلاین', credit: 'اعتباری', barter: 'تهاتر' };
+const STATUS_LABEL: Record<string, string> = { opening: 'اول دوره', pending: 'در انتظار', approved: 'تأیید شده', received: 'انجام شده', paid: 'پرداخت شده', settled: 'تسویه شده', completed: 'تکمیل شده', returned: 'برگشت', canceled: 'لغو', new: 'جدید', in_bank: 'در بانک', cleared: 'وصول شده', bounced: 'برگشتی', open: 'باز', partial: 'مصرف‌شده جزئی', closed: 'بسته' };
+const SORT_FIELD_BY_COLUMN: Record<string, LedgerSortField> = { rowType: 'row_type', sourceLabel: 'source_label', paymentType: 'payment_type', status: 'status', date: 'date', amount: 'amount', invoiceLabel: 'invoice_label', personLabel: 'person_label', bankLabel: 'bank_label', chequeLabel: 'cheque_label', description: 'description' };
+const PAYMENT_TYPE_OPTIONS = Object.entries(PAYMENT_TYPE_LABEL).map(([value, label]) => ({ value, label }));
+const STATUS_OPTIONS = Object.entries(STATUS_LABEL).map(([value, label]) => ({ value, label }));
 
-const STATUS_LABEL: Record<string, string> = {
-  pending: 'در انتظار',
-  received: 'انجام شده',
-  returned: 'برگشت',
-  canceled: 'لغو',
-  new: 'جدید',
-  in_bank: 'در بانک',
-  cleared: 'وصول شده',
-  bounced: 'برگشتی',
-  open: 'باز',
-  partial: 'مصرف‌شده جزئی',
-  closed: 'بسته',
-};
-
-const CASH_BANK_FETCH_LIMIT = 1200;
-const CASH_BANK_OPERATION_SELECT =
-  'id, operation_type, payment_type, status, operation_date, amount, sales_invoice_id, purchase_invoice_id, customer_id, supplier_id, employee_id, bank_account_id, cash_box_id, petty_fund_id, payment_bank_account_id, payment_cash_box_id, payment_petty_fund_id, receipt_bank_account_id, receipt_cash_box_id, receipt_petty_fund_id, cheque_id, description, created_at';
-
-const statusColor = (status?: string) =>
-  ['received', 'cleared'].includes(String(status))
-    ? 'success'
-    : ['returned', 'bounced', 'canceled'].includes(String(status))
-      ? 'error'
-      : 'processing';
-
-const rowTag = (type: RowItem['rowType']) => {
-  if (type === 'receipt') return { color: 'green', label: 'دریافت' };
-  if (type === 'payment') return { color: 'red', label: 'پرداخت' };
-  if (type === 'transfer') return { color: 'blue', label: 'انتقال' };
-  if (type === 'barter') return { color: 'purple', label: 'تهاتر' };
-  return { color: 'blue', label: 'چک' };
-};
-
+const statusColor = (status?: string) => ['received', 'cleared'].includes(String(status)) ? 'success' : ['returned', 'bounced', 'canceled'].includes(String(status)) ? 'error' : 'processing';
+const rowTag = (type: RowItem['rowType']) => type === 'opening' ? { color: 'gold', label: 'اول دوره' } : type === 'receipt' ? { color: 'green', label: 'دریافت' } : type === 'payment' ? { color: 'red', label: 'پرداخت' } : type === 'transfer' ? { color: 'blue', label: 'انتقال' } : type === 'barter' ? { color: 'purple', label: 'تهاتر' } : { color: 'blue', label: 'چک' };
 const today = () => new Date().toISOString().slice(0, 10);
+
+const readFirstFilter = (filters: Record<string, any>, key: string) => String(filters?.[key]?.[0] || '').trim();
+const readArrayFilter = (filters: Record<string, any>, key: string) => {
+  try {
+    const value = JSON.parse(readFirstFilter(filters, key));
+    return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
+  } catch { return []; }
+};
+const readRangeFilter = (filters: Record<string, any>, key: string) => {
+  try {
+    const value = JSON.parse(readFirstFilter(filters, key));
+    return value && typeof value === 'object' ? value : {};
+  } catch { return {}; }
+};
+const buildLedgerFilters = (filters: Record<string, any>) => {
+  const date = readRangeFilter(filters, 'date');
+  const amount = readRangeFilter(filters, 'amount');
+  return {
+    row_types: readArrayFilter(filters, 'rowType'),
+    payment_types: readArrayFilter(filters, 'paymentType'),
+    statuses: readArrayFilter(filters, 'status'),
+    source_query: readFirstFilter(filters, 'sourceLabel'),
+    date_from: date.from || '', date_to: date.to || '',
+    amount_from: amount.from ?? '', amount_to: amount.to ?? '',
+    invoice_query: readFirstFilter(filters, 'invoiceLabel'), person_query: readFirstFilter(filters, 'personLabel'),
+    bank_query: readFirstFilter(filters, 'bankLabel'), cheque_query: readFirstFilter(filters, 'chequeLabel'),
+    description_query: readFirstFilter(filters, 'description'),
+  };
+};
+
+const toRelation = (moduleId: any, recordId: any, label?: any): RelatedRecord | null => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const normalizedRecordId = String(recordId || '').trim();
+  return normalizedModuleId && normalizedRecordId ? { moduleId: normalizedModuleId, recordId: normalizedRecordId, label: String(label || '').trim() || undefined } : null;
+};
+
+const mapLedgerRow = (row: any): RowItem => ({
+  key: String(row?.row_key || ''), kind: String(row?.kind || 'cash_bank_operation') as RowKind,
+  rowType: String(row?.row_type || 'receipt') as RowItem['rowType'], sourceLabel: String(row?.source_label || '-'), sourceRecordId: String(row?.source_record_id || '') || undefined,
+  paymentType: String(row?.payment_type || ''), status: String(row?.status || ''), date: row?.row_date || null, amount: Number(row?.amount || 0),
+  invoiceLabel: String(row?.invoice_label || '-'), personLabel: String(row?.person_label || '-'), bankLabel: String(row?.bank_label || '-'), chequeLabel: String(row?.cheque_label || '-'), description: String(row?.description || ''), createdAt: row?.created_at || null,
+  invoiceRelation: toRelation(row?.invoice_module_id, row?.invoice_record_id), personRelation: toRelation(row?.person_module_id, row?.person_record_id),
+  bankRelation: toRelation(row?.bank_module_id, row?.bank_record_id),
+  bankRelations: Array.isArray(row?.bank_relations) ? row.bank_relations.map((item: any) => toRelation(item?.moduleId, item?.recordId, item?.label)).filter(Boolean) as RelatedRecord[] : [],
+  chequeRelation: toRelation('cheques', row?.cheque_record_id),
+});
 
 const CashBankPage: React.FC = () => {
   const navigate = useNavigate();
@@ -91,818 +103,111 @@ const CashBankPage: React.FC = () => {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
   const { label: currencyLabel } = useCurrencyConfig();
-
   const [loading, setLoading] = useState(true);
+  const [tableLoading, setTableLoading] = useState(false);
+  const [accessResolved, setAccessResolved] = useState(false);
   const [canViewPage, setCanViewPage] = useState(true);
   const [rows, setRows] = useState<RowItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(isMobile ? 10 : 20);
+  const [filters, setFilters] = useState<Record<string, any>>({});
+  const [sort, setSort] = useState<{ field: LedgerSortField; order: 'asc' | 'desc' }>({ field: 'date', order: 'desc' });
   const [stats, setStats] = useState({ bankAccounts: 0, cashBoxes: 0, pettyFunds: 0, openCheques: 0, chequesAmount: 0, openBarters: 0, bartersAmount: 0 });
-  const [banks, setBanks] = useState<any[]>([]);
-  const [cashBoxes, setCashBoxes] = useState<any[]>([]);
-  const [pettyFunds, setPettyFunds] = useState<any[]>([]);
-  const [salesInvoices, setSalesInvoices] = useState<any[]>([]);
-  const [purchaseInvoices, setPurchaseInvoices] = useState<any[]>([]);
-  const [operations, setOperations] = useState<any[]>([]);
-  const [cheques, setCheques] = useState<any[]>([]);
-  const [barters, setBarters] = useState<any[]>([]);
-  const [customers, setCustomers] = useState<any[]>([]);
-  const [suppliers, setSuppliers] = useState<any[]>([]);
-  const [employees, setEmployees] = useState<any[]>([]);
 
-  const financialAccountById = useMemo(
-    () =>
-      Object.fromEntries(
-        [
-          ...(banks || []).map((b: any) => [
-            String(b.id),
-            {
-              label: `${String(b.bank_name || 'بانک')} ${b.account_number ? `(${toPersianNumber(b.account_number)})` : ''}`.trim(),
-              moduleId: 'bank_accounts',
-            },
-          ]),
-          ...(cashBoxes || []).map((c: any) => [
-            String(c.id),
-            {
-              label: `${String(c.name || 'صندوق')} ${c.code ? `(${toPersianNumber(c.code)})` : ''}`.trim(),
-              moduleId: 'cash_boxes',
-            },
-          ]),
-          ...(pettyFunds || []).map((fund: any) => [
-            String(fund.id),
-            {
-              label: `${String(fund.name || 'تنخواه')} ${fund.code ? `(${toPersianNumber(fund.code)})` : ''}`.trim(),
-              moduleId: 'petty_funds',
-            },
-          ]),
-        ]
-      ),
-    [banks, cashBoxes, pettyFunds]
-  );
-  const customerLabelById = useMemo(
-    () =>
-      Object.fromEntries(
-        (customers || []).map((c: any) => [
-          String(c.id),
-          `${String(c.first_name || '')} ${String(c.last_name || '')}`.trim() || String(c.business_name || '-'),
-        ])
-      ),
-    [customers]
-  );
-  const supplierLabelById = useMemo(
-    () => Object.fromEntries((suppliers || []).map((s: any) => [String(s.id), String(s.business_name || '-') ])),
-    [suppliers]
-  );
-  const employeeLabelById = useMemo(
-    () => Object.fromEntries((employees || []).map((e: any) => [String(e.id), String(e.full_name || '-') ])),
-    [employees]
-  );
-  const chequeLabelById = useMemo(
-    () =>
-      Object.fromEntries(
-        (cheques || []).map((c: any) => [
-          String(c.id),
-          `${String(c.serial_no || 'بدون شماره')} ${c.sayad_id ? `(${toPersianNumber(c.sayad_id)})` : ''}`.trim(),
-        ])
-      ),
-    [cheques]
-  );
-  const salesById = useMemo(() => Object.fromEntries((salesInvoices || []).map((i: any) => [String(i.id), i])), [salesInvoices]);
-  const purchaseById = useMemo(
-    () => Object.fromEntries((purchaseInvoices || []).map((i: any) => [String(i.id), i])),
-    [purchaseInvoices]
-  );
+  useEffect(() => { setPageSize(isMobile ? 10 : 20); setPage(1); }, [isMobile]);
 
-  const resolvePartyLabel = useCallback(
-    (type?: string, id?: string) => {
-      if (!id) return '-';
-      if (type === 'customer') return customerLabelById[id] || id;
-      if (type === 'supplier') return supplierLabelById[id] || id;
-      if (type === 'employee') return employeeLabelById[id] || id;
-      return id;
-    },
-    [customerLabelById, employeeLabelById, supplierLabelById]
-  );
-
-  const loadData = useCallback(async () => {
+  const loadDashboard = useCallback(async () => {
     setLoading(true);
     try {
       const context = await fetchCurrentUserRoleContext(supabase);
       const accountingPerms = context.permissions?.[ACCOUNTING_PERMISSION_KEY] || {};
-      const canViewCashBankPage =
-        accountingPerms.view !== false &&
-        accountingPerms.fields?.cash_bank_page !== false;
-      setCanViewPage(canViewCashBankPage);
-      if (!canViewCashBankPage) {
-        setRows([]);
-        return;
-      }
-
-      const [
-        banksRes,
-        cashRes,
-        pettyRes,
-        chequesRes,
-        salesRes,
-        purchaseRes,
-        opsRes,
-        bartersRes,
-        customersRes,
-        suppliersRes,
-        employeesRes,
-      ] = await Promise.all([
-        supabase.from('bank_accounts').select('id, bank_name, account_number').eq('is_active', true).limit(1000),
-        supabase.from('cash_boxes').select('id, name, code').eq('is_active', true).limit(1000),
-        supabase.from('petty_funds').select('id, name, code').eq('is_active', true).limit(1000),
-        supabase
-          .from('cheques')
-          .select('id, cheque_type, status, amount, issue_date, due_date, party_type, party_id, serial_no, sayad_id, bank_account_id, notes, metadata, created_at')
-          .order('created_at', { ascending: false })
-          .limit(CASH_BANK_FETCH_LIMIT),
-        runSelectWithCompatibleColumns<any[]>({
-          cacheKey: 'cash-bank-page:invoices',
-          columns: [...buildRecordTitleSelectColumns('invoices'), 'invoice_date', 'customer_id', 'payments', 'created_at'],
-          execute: (selectExpr) =>
-            supabase
-              .from('invoices')
-              .select(selectExpr)
-              .order('created_at', { ascending: false })
-              .limit(CASH_BANK_FETCH_LIMIT),
-        }),
-        runSelectWithCompatibleColumns<any[]>({
-          cacheKey: 'cash-bank-page:purchase-invoices',
-          columns: [...buildRecordTitleSelectColumns('purchase_invoices'), 'invoice_date', 'supplier_id', 'payments', 'created_at'],
-          execute: (selectExpr) =>
-            supabase
-              .from('purchase_invoices')
-              .select(selectExpr)
-              .order('created_at', { ascending: false })
-              .limit(CASH_BANK_FETCH_LIMIT),
-        }),
-        supabase
-          .from('cash_bank_operations')
-          .select(CASH_BANK_OPERATION_SELECT)
-          .order('created_at', { ascending: false })
-          .limit(CASH_BANK_FETCH_LIMIT),
-        supabase
-          .from('barters')
-          .select('id, name, system_code, status, barter_type, barter_date, initial_amount, remaining_amount, customer_id, supplier_id, employee_id, source_invoice_id, source_purchase_invoice_id, notes, created_at')
-          .order('created_at', { ascending: false })
-          .limit(CASH_BANK_FETCH_LIMIT),
-        runSelectWithCompatibleColumns<any[]>({
-          cacheKey: 'cash-bank-page:customers',
-          columns: ['id', 'full_name', 'business_name', 'system_code', 'first_name', 'last_name', 'legal_name', 'notes'],
-          execute: (selectExpr) => supabase.from('customers').select(selectExpr).limit(CASH_BANK_FETCH_LIMIT),
-        }),
-        runSelectWithCompatibleColumns<any[]>({
-          cacheKey: 'cash-bank-page:suppliers',
-          columns: ['id', 'business_name', 'full_name', 'system_code', 'first_name', 'last_name', 'legal_name', 'notes'],
-          execute: (selectExpr) => supabase.from('suppliers').select(selectExpr).limit(CASH_BANK_FETCH_LIMIT),
-        }),
-        runSelectWithCompatibleColumns<any[]>({
-          cacheKey: 'cash-bank-page:profiles',
-          columns: ['id', 'full_name', 'first_name', 'last_name'],
-          execute: (selectExpr) => supabase.from('profiles').select(selectExpr).limit(CASH_BANK_FETCH_LIMIT),
-        }),
-      ]);
-
-      const hasError =
-        banksRes.error ||
-        cashRes.error ||
-        pettyRes.error ||
-        chequesRes.error ||
-        salesRes.error ||
-        purchaseRes.error ||
-        opsRes.error ||
-        bartersRes.error ||
-        customersRes.error ||
-        suppliersRes.error ||
-        employeesRes.error;
-      if (hasError) throw new Error('خطا در واکشی اطلاعات');
-
-      const chequeRows = chequesRes.data || [];
-      setBanks(banksRes.data || []);
-      setCashBoxes(cashRes.data || []);
-      setPettyFunds(pettyRes.data || []);
-      setCheques(chequeRows);
-      setSalesInvoices(salesRes.data || []);
-      setPurchaseInvoices(purchaseRes.data || []);
-      setOperations(opsRes.data || []);
-      setBarters(bartersRes.data || []);
-      setCustomers(customersRes.data || []);
-      setSuppliers(suppliersRes.data || []);
-      setEmployees(employeesRes.data || []);
-
-      const barterRows = bartersRes.data || [];
-      const openBarterRows = barterRows.filter((b: any) => ['open', 'partial'].includes(String(b?.status || '')));
-
+      const allowed = accountingPerms.view !== false && accountingPerms.fields?.cash_bank_page !== false;
+      setCanViewPage(allowed);
+      if (!allowed) { setRows([]); setTotal(0); return; }
+      const { data, error } = await supabase.rpc('get_cash_bank_dashboard_stats');
+      if (error) throw error;
       setStats({
-        bankAccounts: (banksRes.data || []).length,
-        cashBoxes: (cashRes.data || []).length,
-        pettyFunds: (pettyRes.data || []).length,
-        openCheques: chequeRows.filter((c: any) => ['new', 'in_bank'].includes(String(c?.status || ''))).length,
-        chequesAmount: chequeRows.reduce((sum: number, c: any) => sum + (Number(c?.amount) || 0), 0),
-        openBarters: openBarterRows.length,
-        bartersAmount: openBarterRows.reduce((sum: number, b: any) => sum + (Number(b?.remaining_amount) || 0), 0),
+        bankAccounts: Number(data?.bankAccounts || 0), cashBoxes: Number(data?.cashBoxes || 0), pettyFunds: Number(data?.pettyFunds || 0),
+        openCheques: Number(data?.openCheques || 0), chequesAmount: Number(data?.chequesAmount || 0), openBarters: Number(data?.openBarters || 0), bartersAmount: Number(data?.bartersAmount || 0),
       });
-    } catch (err: any) {
-      message.error(toFaErrorMessage(err, 'خطا در دریافت اطلاعات'));
-    } finally {
-      setLoading(false);
-    }
+    } catch (error) { message.error(toFaErrorMessage(error, 'خطا در دریافت اطلاعات نقد و بانک')); }
+    finally { setAccessResolved(true); setLoading(false); }
   }, [message]);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
-
-  useEffect(() => {
-    const isSourceBackedCashBankOperation = (op: any) => {
-      const metadata = op?.metadata && typeof op.metadata === 'object' ? op.metadata : null;
-      if (metadata?.is_auto_generated === true) return true;
-      return Boolean(
-        op?.sales_invoice_id ||
-        op?.purchase_invoice_id ||
-        op?.expense_document_id ||
-        op?.employee_advance_id ||
-        op?.payroll_slip_id
-      );
-    };
-
-    const fromSales = (salesInvoices || []).flatMap((inv: any) =>
-      (Array.isArray(inv?.payments) ? inv.payments : []).map(
-        (p: any, idx: number): RowItem => {
-          const account = financialAccountById[String(p?.target_account || '')];
-          return ({
-          key: `sales_${inv.id}_${idx}`,
-          kind: 'sales_payment',
-          rowType: 'receipt',
-          sourceLabel: 'دریافت فاکتور فروش',
-          sourceRecordId: String(inv.id),
-          paymentType: String(p?.payment_type || ''),
-          status: String(p?.status || ''),
-          date: p?.date || inv?.invoice_date || null,
-          amount: Number(p?.amount || 0),
-          invoiceLabel: String(inv?.name || inv?.system_code || inv?.id || '-'),
-          personLabel: resolvePartyLabel('customer', inv?.customer_id ? String(inv.customer_id) : undefined),
-          bankLabel: account?.label || String(p?.target_account || '-'),
-          chequeLabel: chequeLabelById[String(p?.cheque_id || '')] || '-',
-          description: String(p?.description || ''),
-          createdAt: inv?.created_at || null,
-          invoiceRelation: inv?.id ? { moduleId: 'invoices', recordId: String(inv.id) } : null,
-          personRelation: inv?.customer_id ? { moduleId: 'customers', recordId: String(inv.customer_id) } : null,
-          bankRelation: p?.target_account ? { moduleId: account?.moduleId || 'bank_accounts', recordId: String(p.target_account) } : null,
-          chequeRelation: p?.cheque_id ? { moduleId: 'cheques', recordId: String(p.cheque_id) } : null,
-        });
-        }
-      )
-    );
-
-    const fromPurchase = (purchaseInvoices || []).flatMap((inv: any) =>
-      (Array.isArray(inv?.payments) ? inv.payments : []).map(
-        (p: any, idx: number): RowItem => {
-          const account = financialAccountById[String(p?.source_account || '')];
-          return ({
-          key: `purchase_${inv.id}_${idx}`,
-          kind: 'purchase_payment',
-          rowType: 'payment',
-          sourceLabel: 'پرداخت فاکتور خرید',
-          sourceRecordId: String(inv.id),
-          paymentType: String(p?.payment_type || ''),
-          status: String(p?.status || ''),
-          date: p?.date || inv?.invoice_date || null,
-          amount: Number(p?.amount || 0),
-          invoiceLabel: String(inv?.name || inv?.system_code || inv?.id || '-'),
-          personLabel: resolvePartyLabel('supplier', inv?.supplier_id ? String(inv.supplier_id) : undefined),
-          bankLabel: account?.label || String(p?.source_account || '-'),
-          chequeLabel: chequeLabelById[String(p?.cheque_id || '')] || '-',
-          description: String(p?.description || ''),
-          createdAt: inv?.created_at || null,
-          invoiceRelation: inv?.id ? { moduleId: 'purchase_invoices', recordId: String(inv.id) } : null,
-          personRelation: inv?.supplier_id ? { moduleId: 'suppliers', recordId: String(inv.supplier_id) } : null,
-          bankRelation: p?.source_account ? { moduleId: account?.moduleId || 'bank_accounts', recordId: String(p.source_account) } : null,
-          chequeRelation: p?.cheque_id ? { moduleId: 'cheques', recordId: String(p.cheque_id) } : null,
-        });
-        }
-      )
-    );
-
-    const fromOps = (operations || [])
-      .filter((op: any) => !isSourceBackedCashBankOperation(op))
-      .map((op: any): RowItem => {
-      const operationType = String(op?.operation_type || '').trim();
-      const accountId = String(op?.bank_account_id || op?.cash_box_id || op?.petty_fund_id || '').trim();
-      const account = financialAccountById[accountId];
-      const paymentAccountId = String(op?.payment_bank_account_id || op?.payment_cash_box_id || op?.payment_petty_fund_id || '').trim();
-      const receiptAccountId = String(op?.receipt_bank_account_id || op?.receipt_cash_box_id || op?.receipt_petty_fund_id || '').trim();
-      const paymentAccount = financialAccountById[paymentAccountId];
-      const receiptAccount = financialAccountById[receiptAccountId];
-      const transferRelations = [
-        paymentAccountId
-          ? {
-              moduleId: paymentAccount?.moduleId || (op?.payment_cash_box_id ? 'cash_boxes' : op?.payment_petty_fund_id ? 'petty_funds' : 'bank_accounts'),
-              recordId: paymentAccountId,
-              label: paymentAccount?.label || 'حساب پرداخت',
-            }
-          : null,
-        receiptAccountId
-          ? {
-              moduleId: receiptAccount?.moduleId || (op?.receipt_cash_box_id ? 'cash_boxes' : op?.receipt_petty_fund_id ? 'petty_funds' : 'bank_accounts'),
-              recordId: receiptAccountId,
-              label: receiptAccount?.label || 'حساب دریافت',
-            }
-          : null,
-      ].filter(Boolean) as Array<{ moduleId: string; recordId: string; label: string }>;
-      return ({
-      key: `op_${op.id}`,
-      kind: 'cash_bank_operation',
-      rowType: operationType === 'transfer' ? 'transfer' : operationType === 'payment' ? 'payment' : 'receipt',
-      sourceLabel: operationType === 'transfer' ? 'انتقال مستقیم نقد و بانک' : 'ثبت مستقیم نقد و بانک',
-      sourceRecordId: String(op.id),
-      paymentType: String(op?.payment_type || ''),
-      status: String(op?.status || ''),
-      date: op?.operation_date || null,
-      amount: Number(op?.amount || 0),
-      invoiceLabel: operationType === 'transfer'
-        ? '-'
-        : op?.sales_invoice_id
-        ? String(
-            salesById[String(op.sales_invoice_id)]?.name
-            || getRecordDisplayLabel(salesById[String(op.sales_invoice_id)] || {}, 'invoices', { fallback: String(op.sales_invoice_id) })
-          )
-        : op?.purchase_invoice_id
-          ? String(
-              purchaseById[String(op.purchase_invoice_id)]?.name
-              || getRecordDisplayLabel(purchaseById[String(op.purchase_invoice_id)] || {}, 'purchase_invoices', { fallback: String(op.purchase_invoice_id) })
-            )
-          : '-',
-      personLabel: operationType === 'transfer'
-        ? '-'
-        : op?.customer_id
-        ? resolvePartyLabel('customer', String(op.customer_id))
-        : op?.supplier_id
-          ? resolvePartyLabel('supplier', String(op.supplier_id))
-          : op?.employee_id
-            ? resolvePartyLabel('employee', String(op.employee_id))
-            : '-',
-      bankLabel: operationType === 'transfer'
-        ? `${paymentAccount?.label || '-'} ← ${receiptAccount?.label || '-'}`
-        : account?.label || '-',
-      chequeLabel: chequeLabelById[String(op?.cheque_id || '')] || '-',
-      description: String(op?.description || ''),
-      createdAt: op?.created_at || null,
-      invoiceRelation: operationType === 'transfer'
-        ? null
-        : op?.sales_invoice_id
-        ? { moduleId: 'invoices', recordId: String(op.sales_invoice_id) }
-        : op?.purchase_invoice_id
-          ? { moduleId: 'purchase_invoices', recordId: String(op.purchase_invoice_id) }
-          : null,
-      personRelation: operationType === 'transfer'
-        ? null
-        : op?.customer_id
-        ? { moduleId: 'customers', recordId: String(op.customer_id) }
-        : op?.supplier_id
-          ? { moduleId: 'suppliers', recordId: String(op.supplier_id) }
-          : op?.employee_id
-            ? { moduleId: 'profiles', recordId: String(op.employee_id) }
-            : null,
-      bankRelation: operationType === 'transfer'
-        ? null
-        : accountId
-          ? { moduleId: account?.moduleId || (op?.cash_box_id ? 'cash_boxes' : op?.petty_fund_id ? 'petty_funds' : 'bank_accounts'), recordId: accountId }
-          : null,
-      bankRelations: operationType === 'transfer' ? transferRelations : [],
-      chequeRelation: op?.cheque_id ? { moduleId: 'cheques', recordId: String(op.cheque_id) } : null,
-    });
-    });
-
-    const fromCheques = (cheques || []).map((c: any): RowItem => ({
-      key: `cheque_${c.id}`,
-      kind: 'cheque',
-      rowType: 'cheque',
-      sourceLabel: String(c?.cheque_type || '') === 'issued' ? 'چک پرداختی' : 'چک دریافتی',
-      sourceRecordId: String(c.id),
-      paymentType: 'cheque',
-      status: String(c?.status || ''),
-      date: c?.due_date || c?.issue_date || null,
-      amount: Number(c?.amount || 0),
-      invoiceLabel: '-',
-      personLabel: resolvePartyLabel(String(c?.party_type || ''), c?.party_id ? String(c.party_id) : undefined),
-      bankLabel: financialAccountById[String(c?.bank_account_id || '')]?.label || '-',
-      chequeLabel: chequeLabelById[String(c?.id || '')] || '-',
-      description: String(c?.notes || ''),
-      createdAt: c?.created_at || null,
-      invoiceRelation: null,
-      personRelation: c?.party_id && c?.party_type
-        ? {
-            moduleId: String(c.party_type) === 'customer'
-              ? 'customers'
-              : String(c.party_type) === 'supplier'
-                ? 'suppliers'
-                : 'profiles',
-            recordId: String(c.party_id),
-          }
-        : null,
-      bankRelation: c?.bank_account_id ? { moduleId: 'bank_accounts', recordId: String(c.bank_account_id) } : null,
-      chequeRelation: c?.id ? { moduleId: 'cheques', recordId: String(c.id) } : null,
-    }));
-
-    const fromBarters = (barters || []).map((b: any): RowItem => ({
-      key: `barter_${b.id}`,
-      kind: 'barter',
-      rowType: 'barter',
-      sourceLabel: String(b?.barter_type || '') === 'outgoing' ? 'تهاتر پرداختی' : 'تهاتر دریافتی',
-      sourceRecordId: String(b.id),
-      paymentType: 'barter',
-      status: String(b?.status || ''),
-      date: b?.barter_date || null,
-      amount: Number(b?.remaining_amount || 0),
-      invoiceLabel: b?.source_invoice_id
-        ? String(salesById[String(b.source_invoice_id)]?.name || b.source_invoice_id)
-        : b?.source_purchase_invoice_id
-          ? String(purchaseById[String(b.source_purchase_invoice_id)]?.name || b.source_purchase_invoice_id)
-          : '-',
-      personLabel: b?.customer_id
-        ? resolvePartyLabel('customer', String(b.customer_id))
-        : b?.supplier_id
-          ? resolvePartyLabel('supplier', String(b.supplier_id))
-          : b?.employee_id
-            ? resolvePartyLabel('employee', String(b.employee_id))
-            : '-',
-      bankLabel: '-',
-      chequeLabel: '-',
-      description: String(b?.notes || ''),
-      createdAt: b?.created_at || null,
-      invoiceRelation: b?.source_invoice_id
-        ? { moduleId: 'invoices', recordId: String(b.source_invoice_id) }
-        : b?.source_purchase_invoice_id
-          ? { moduleId: 'purchase_invoices', recordId: String(b.source_purchase_invoice_id) }
-          : null,
-      personRelation: b?.customer_id
-        ? { moduleId: 'customers', recordId: String(b.customer_id) }
-        : b?.supplier_id
-          ? { moduleId: 'suppliers', recordId: String(b.supplier_id) }
-          : b?.employee_id
-            ? { moduleId: 'profiles', recordId: String(b.employee_id) }
-            : null,
-      bankRelation: null,
-      chequeRelation: null,
-    }));
-
-    const merged = [...fromSales, ...fromPurchase, ...fromOps, ...fromCheques, ...fromBarters];
-    merged.sort((a, b) => new Date(b.date || b.createdAt || 0).getTime() - new Date(a.date || a.createdAt || 0).getTime());
-    setRows(merged);
-  }, [
-    salesInvoices,
-    purchaseInvoices,
-    operations,
-    cheques,
-    barters,
-    financialAccountById,
-    chequeLabelById,
-    purchaseById,
-    resolvePartyLabel,
-    salesById,
-  ]);
-
-  const goCreateOperation = useCallback(
-    (operationType: 'receipt' | 'payment' | 'transfer') => {
-      navigate('/cash_bank_operations/create', {
-        state: {
-          initialValues: {
-            operation_type: operationType,
-            payment_type: operationType === 'transfer' ? 'transfer' : 'cash',
-            status: 'received',
-            operation_date: today(),
-            amount: 0,
-          },
-        },
+  const loadLedger = useCallback(async () => {
+    if (!accessResolved || !canViewPage) return;
+    setTableLoading(true);
+    try {
+      const { data, error } = await supabase.rpc('get_cash_bank_unified_ledger_page', {
+        p_page: page, p_page_size: pageSize, p_sort_field: sort.field, p_sort_order: sort.order, p_filters: buildLedgerFilters(filters),
       });
-    },
-    [navigate]
-  );
+      if (error) throw error;
+      setRows(Array.isArray(data?.rows) ? data.rows.map(mapLedgerRow) : []);
+      setTotal(Number(data?.total || 0));
+    } catch (error) { message.error(toFaErrorMessage(error, 'خطا در دریافت عملیات نقد و بانک')); setRows([]); setTotal(0); }
+    finally { setTableLoading(false); }
+  }, [accessResolved, canViewPage, filters, message, page, pageSize, sort]);
 
-  const openRow = useCallback(
-    (row: RowItem) => {
-      if (row.kind === 'cheque' && row.sourceRecordId) {
-        navigate(`/cheques/${row.sourceRecordId}`);
-        return;
-      }
-      if (row.kind === 'sales_payment' && row.sourceRecordId) {
-        navigate(`/invoices/${row.sourceRecordId}`);
-        return;
-      }
-      if (row.kind === 'purchase_payment' && row.sourceRecordId) {
-        navigate(`/purchase_invoices/${row.sourceRecordId}`);
-        return;
-      }
-      if (row.kind === 'cash_bank_operation' && row.sourceRecordId) {
-        navigate(`/cash_bank_operations/${row.sourceRecordId}`);
-        return;
-      }
-      if (row.kind === 'barter' && row.sourceRecordId) {
-        navigate(`/barters/${row.sourceRecordId}`);
-        return;
-      }
-      navigate('/cash_bank_operations');
-    },
-    [navigate]
-  );
+  useEffect(() => { void loadDashboard(); }, [loadDashboard]);
+  useEffect(() => { void loadLedger(); }, [loadLedger]);
 
-  const paymentTypeFilters = useMemo(
-    () =>
-      Array.from(new Set(rows.map((r) => r.paymentType).filter(Boolean))).map((value) => ({
-        text: localizeFinancialValue(value, 'payment_type') || PAYMENT_TYPE_LABEL[value] || value,
-        value,
-      })),
-    [rows]
-  );
+  const goCreateOperation = useCallback((operationType: 'receipt' | 'payment' | 'transfer') => navigate('/cash_bank_operations/create', { state: { initialValues: { operation_type: operationType, payment_type: operationType === 'transfer' ? 'transfer' : 'cash', status: 'received', operation_date: today(), amount: 0 } } }), [navigate]);
+  const openRow = useCallback((row: RowItem) => { const target = row.kind === 'cheque' ? 'cheques' : row.kind === 'sales_payment' ? 'invoices' : row.kind === 'purchase_payment' ? 'purchase_invoices' : row.kind === 'barter' ? 'barters' : row.kind === 'bank_account_opening' ? 'bank_accounts' : row.kind === 'cash_box_opening' ? 'cash_boxes' : row.kind === 'petty_fund_opening' ? 'petty_funds' : row.kind === 'customer_opening' ? 'customers' : row.kind === 'supplier_opening' ? 'suppliers' : row.kind === 'employee_opening' ? 'employees' : 'cash_bank_operations'; navigate(row.sourceRecordId ? `/${target}/${row.sourceRecordId}` : '/cash_bank_operations'); }, [navigate]);
 
-  const statusFilters = useMemo(
-    () =>
-      Array.from(new Set(rows.map((r) => r.status).filter(Boolean))).map((value) => ({
-        text: STATUS_LABEL[value] || localizeFinancialValue(value, 'status') || value,
-        value,
-      })),
-    [rows]
-  );
+  const columnControl = useCallback((key: string) => ({
+    filteredValue: filters[key] ?? null, sorter: true, sortOrder: SORT_FIELD_BY_COLUMN[key] === sort.field ? (sort.order === 'asc' ? 'ascend' : 'descend') : null,
+    sortDirections: ['ascend', 'descend', null] as Array<'ascend' | 'descend' | null>, showSorterTooltip: false,
+  }), [filters, sort]);
 
-  const columns: ColumnsType<RowItem> = useMemo(
-    () => [
-      {
-        title: 'نوع',
-        dataIndex: 'rowType',
-        key: 'rowType',
-        width: 95,
-        ...createChoiceFilter('نوع', [
-          { label: 'دریافت', value: 'receipt' },
-          { label: 'پرداخت', value: 'payment' },
-          { label: 'انتقال', value: 'transfer' },
-          { label: 'چک', value: 'cheque' },
-          { label: 'تهاتر', value: 'barter' },
-        ], (record) => record.rowType),
-        render: (v: RowItem['rowType']) => {
-          const t = rowTag(v);
-          return <Tag color={t.color}>{t.label}</Tag>;
-        },
-      },
-      {
-        title: 'منبع',
-        dataIndex: 'sourceLabel',
-        key: 'sourceLabel',
-        width: 180,
-        ...createTextFilter('جستجو در منبع', (record) => record.sourceLabel),
-      },
-      {
-        title: 'روش',
-        dataIndex: 'paymentType',
-        key: 'paymentType',
-        width: 130,
-        ...createChoiceFilter('روش', paymentTypeFilters.map((item) => ({ label: String(item.text), value: String(item.value) })), (record) => record.paymentType),
-        render: (v: string) => localizeFinancialValue(v, 'payment_type') || PAYMENT_TYPE_LABEL[v] || v || '-',
-      },
-      {
-        title: 'وضعیت',
-        dataIndex: 'status',
-        key: 'status',
-        width: 130,
-        ...createChoiceFilter('وضعیت', statusFilters.map((item) => ({ label: String(item.text), value: String(item.value) })), (record) => record.status),
-        render: (v: string) => <Tag color={statusColor(v)}>{STATUS_LABEL[v] || localizeFinancialValue(v, 'status') || v || '-'}</Tag>,
-      },
-      {
-        title: 'تاریخ',
-        dataIndex: 'date',
-        key: 'date',
-        width: 130,
-        ...createDateRangeFilter('تاریخ', (record) => record.date),
-        render: (v: string | null) => (v ? toPersianNumber(safeJalaliFormat(v, 'YYYY/MM/DD')) : '-'),
-      },
-      {
-        title: `مبلغ (${currencyLabel})`,
-        dataIndex: 'amount',
-        key: 'amount',
-        width: 170,
-        sorter: (a, b) => a.amount - b.amount,
-        ...createNumberRangeFilter('مبلغ', (record) => record.amount),
-        render: (v: number) => <span className="persian-number">{formatPersianPrice(v)}</span>,
-      },
-      {
-        title: 'فاکتور مرتبط',
-        dataIndex: 'invoiceLabel',
-        key: 'invoiceLabel',
-        width: 190,
-        ...createTextFilter('جستجو در فاکتور', (record) => record.invoiceLabel),
-        render: (_: string, record: RowItem) => {
-          if (!record.invoiceRelation?.moduleId || !record.invoiceRelation?.recordId) return record.invoiceLabel || '-';
-          return (
-            <div onClick={(e) => e.stopPropagation()}>
-              <RelatedRecordPopover
-                moduleId={record.invoiceRelation.moduleId}
-                recordId={record.invoiceRelation.recordId}
-                label={record.invoiceLabel || '-'}
-              />
-            </div>
-          );
-        },
-      },
-      {
-        title: 'شخص مرتبط',
-        dataIndex: 'personLabel',
-        key: 'personLabel',
-        width: 190,
-        ...createTextFilter('جستجو در شخص', (record) => record.personLabel),
-        render: (_: string, record: RowItem) => {
-          if (!record.personRelation?.moduleId || !record.personRelation?.recordId) return record.personLabel || '-';
-          return (
-            <div onClick={(e) => e.stopPropagation()}>
-              <RelatedRecordPopover
-                moduleId={record.personRelation.moduleId}
-                recordId={record.personRelation.recordId}
-                label={record.personLabel || '-'}
-              />
-            </div>
-          );
-        },
-      },
-      {
-        title: 'حساب بانکی',
-        dataIndex: 'bankLabel',
-        key: 'bankLabel',
-        width: 190,
-        ...createTextFilter('جستجو در حساب بانکی', (record) => record.bankLabel),
-        render: (_: string, record: RowItem) => {
-          if (Array.isArray(record.bankRelations) && record.bankRelations.length === 2) {
-            return (
-              <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-1 flex-wrap">
-                <RelatedRecordPopover
-                  moduleId={record.bankRelations[0].moduleId}
-                  recordId={record.bankRelations[0].recordId}
-                  label={record.bankRelations[0].label}
-                />
-                <span className="text-gray-400">←</span>
-                <RelatedRecordPopover
-                  moduleId={record.bankRelations[1].moduleId}
-                  recordId={record.bankRelations[1].recordId}
-                  label={record.bankRelations[1].label}
-                />
-              </div>
-            );
-          }
-          if (!record.bankRelation?.moduleId || !record.bankRelation?.recordId) return record.bankLabel || '-';
-          return (
-            <div onClick={(e) => e.stopPropagation()}>
-              <RelatedRecordPopover
-                moduleId={record.bankRelation.moduleId}
-                recordId={record.bankRelation.recordId}
-                label={record.bankLabel || '-'}
-              />
-            </div>
-          );
-        },
-      },
-      {
-        title: 'چک',
-        dataIndex: 'chequeLabel',
-        key: 'chequeLabel',
-        width: 220,
-        ...createTextFilter('جستجو در چک', (record) => record.chequeLabel),
-        render: (_: string, record: RowItem) => {
-          if (!record.chequeRelation?.moduleId || !record.chequeRelation?.recordId) return record.chequeLabel || '-';
-          return (
-            <div onClick={(e) => e.stopPropagation()}>
-              <RelatedRecordPopover
-                moduleId={record.chequeRelation.moduleId}
-                recordId={record.chequeRelation.recordId}
-                label={record.chequeLabel || '-'}
-              />
-            </div>
-          );
-        },
-      },
-      {
-        title: 'توضیحات',
-        dataIndex: 'description',
-        key: 'description',
-        width: 240,
-        ...createTextFilter('جستجو در توضیحات', (record) => record.description || ''),
-        render: (v: string) => v || '-',
-      },
-    ],
-    [currencyLabel, paymentTypeFilters, statusFilters]
-  );
+  const columns: ColumnsType<RowItem> = useMemo(() => [
+    { title: 'نوع', dataIndex: 'rowType', key: 'rowType', width: 95, ...columnControl('rowType'), ...createChoiceFilter('نوع', [{ label: 'اول دوره', value: 'opening' }, { label: 'دریافت', value: 'receipt' }, { label: 'پرداخت', value: 'payment' }, { label: 'انتقال', value: 'transfer' }, { label: 'چک', value: 'cheque' }, { label: 'تهاتر', value: 'barter' }], (record) => record.rowType), render: (value: RowItem['rowType']) => { const tag = rowTag(value); return <Tag color={tag.color}>{tag.label}</Tag>; } },
+    { title: 'منبع', dataIndex: 'sourceLabel', key: 'sourceLabel', width: 180, ...columnControl('sourceLabel'), ...createTextFilter('جستجو در منبع', (record) => record.sourceLabel) },
+    { title: 'روش', dataIndex: 'paymentType', key: 'paymentType', width: 130, ...columnControl('paymentType'), ...createChoiceFilter('روش', PAYMENT_TYPE_OPTIONS, (record) => record.paymentType), render: (value: string) => PAYMENT_TYPE_LABEL[value] || getFinancialPaymentTypeLabelFa(value) },
+    { title: 'وضعیت', dataIndex: 'status', key: 'status', width: 130, ...columnControl('status'), ...createChoiceFilter('وضعیت', STATUS_OPTIONS, (record) => record.status), render: (value: string) => <Tag color={statusColor(value)}>{STATUS_LABEL[value] || getFinancialStatusLabelFa(value)}</Tag> },
+    { title: 'تاریخ', dataIndex: 'date', key: 'date', width: 130, ...columnControl('date'), ...createDateRangeFilter('تاریخ', (record) => record.date), render: (value: string | null) => value ? toPersianNumber(safeJalaliFormat(value, 'YYYY/MM/DD')) : '-' },
+    { title: `مبلغ (${currencyLabel})`, dataIndex: 'amount', key: 'amount', width: 170, ...columnControl('amount'), ...createNumberRangeFilter('مبلغ', (record) => record.amount), render: (value: number) => <span className="persian-number">{formatPersianPrice(value)}</span> },
+    { title: 'فاکتور مرتبط', dataIndex: 'invoiceLabel', key: 'invoiceLabel', width: 190, ...columnControl('invoiceLabel'), ...createTextFilter('جستجو در فاکتور', (record) => record.invoiceLabel), render: (_: string, record: RowItem) => record.invoiceRelation ? <div onClick={(event) => event.stopPropagation()}><RelatedRecordPopover moduleId={record.invoiceRelation.moduleId} recordId={record.invoiceRelation.recordId} label={record.invoiceLabel || '-'} /></div> : record.invoiceLabel || '-' },
+    { title: 'شخص مرتبط', dataIndex: 'personLabel', key: 'personLabel', width: 190, ...columnControl('personLabel'), ...createTextFilter('جستجو در شخص', (record) => record.personLabel), render: (_: string, record: RowItem) => record.personRelation ? <div onClick={(event) => event.stopPropagation()}><RelatedRecordPopover moduleId={record.personRelation.moduleId} recordId={record.personRelation.recordId} label={record.personLabel || '-'} /></div> : record.personLabel || '-' },
+    { title: 'حساب بانکی', dataIndex: 'bankLabel', key: 'bankLabel', width: 190, ...columnControl('bankLabel'), ...createTextFilter('جستجو در حساب بانکی', (record) => record.bankLabel), render: (_: string, record: RowItem) => record.bankRelations?.length === 2 ? <div onClick={(event) => event.stopPropagation()} className="flex flex-wrap items-center gap-1"><RelatedRecordPopover moduleId={record.bankRelations[0].moduleId} recordId={record.bankRelations[0].recordId} label={record.bankRelations[0].label || '-'} /><span className="text-gray-400">←</span><RelatedRecordPopover moduleId={record.bankRelations[1].moduleId} recordId={record.bankRelations[1].recordId} label={record.bankRelations[1].label || '-'} /></div> : record.bankRelation ? <div onClick={(event) => event.stopPropagation()}><RelatedRecordPopover moduleId={record.bankRelation.moduleId} recordId={record.bankRelation.recordId} label={record.bankLabel || '-'} /></div> : record.bankLabel || '-' },
+    { title: 'چک', dataIndex: 'chequeLabel', key: 'chequeLabel', width: 220, ...columnControl('chequeLabel'), ...createTextFilter('جستجو در چک', (record) => record.chequeLabel), render: (_: string, record: RowItem) => record.chequeRelation ? <div onClick={(event) => event.stopPropagation()}><RelatedRecordPopover moduleId="cheques" recordId={record.chequeRelation.recordId} label={record.chequeLabel || '-'} /></div> : record.chequeLabel || '-' },
+    { title: 'توضیحات', dataIndex: 'description', key: 'description', width: 240, ...columnControl('description'), ...createTextFilter('جستجو در توضیحات', (record) => record.description || ''), render: (value: string) => value || '-' },
+  ], [columnControl, currencyLabel]);
 
-  if (loading) {
-    return (
-      <div className="h-[70vh] flex items-center justify-center">
-        <Spin size="large" />
-      </div>
-    );
-  }
+  const handleTableChange = useCallback((pagination: any, nextFilters: Record<string, any>, sorter: any, extra: any) => {
+    if (extra?.action === 'filter') { setFilters(nextFilters || {}); setPage(1); return; }
+    if (extra?.action === 'sort') {
+      const activeSorter = Array.isArray(sorter) ? sorter[0] : sorter;
+      const field = SORT_FIELD_BY_COLUMN[String(activeSorter?.field || activeSorter?.columnKey || '')] || 'date';
+      setSort({ field, order: activeSorter?.order === 'ascend' ? 'asc' : 'desc' }); setPage(1); return;
+    }
+    if (extra?.action === 'paginate') { setPage(Number(pagination?.current || 1)); setPageSize(Number(pagination?.pageSize || 20)); }
+  }, []);
 
-  if (!canViewPage) {
-    return (
-      <div className="h-[70vh] flex items-center justify-center">
-        <Card className="max-w-md text-center">
-          دسترسی به بخش نقد و بانک ندارید
-        </Card>
-      </div>
-    );
-  }
+  if (loading) return <div className="flex h-[70vh] items-center justify-center"><Spin size="large" /></div>;
+  if (!canViewPage) return <div className="flex h-[70vh] items-center justify-center"><Card className="max-w-md text-center">دسترسی به بخش نقد و بانک ندارید</Card></div>;
 
-  return (
-    <div className="p-4 md:p-8 max-w-[1700px] mx-auto animate-fadeIn">
-      <div className="bg-white dark:bg-[#1a1a1a] rounded-[2rem] shadow-sm border border-gray-200 dark:border-gray-800 p-4 md:p-6 min-h-[70vh] transition-colors">
-        <div className="mb-6">
-          <Title level={3} className="!mb-1">
-            نقد و بانک
-          </Title>
-          <Text className="text-gray-500">نمای یکپارچه دریافت‌ها، پرداخت‌ها و چک‌ها</Text>
-        </div>
-
-        <Row gutter={[12, 12]} className="mb-6">
-          <Col xs={12} lg={4}>
-            <Card>
-              <Statistic title="حساب‌های بانکی فعال" value={toPersianNumber(stats.bankAccounts)} prefix={<BankOutlined />} />
-            </Card>
-          </Col>
-          <Col xs={12} lg={4}>
-            <Card>
-              <Statistic title="صندوق‌ها" value={toPersianNumber(stats.cashBoxes)} prefix={<WalletOutlined />} />
-            </Card>
-          </Col>
-          <Col xs={12} lg={4}>
-            <Card>
-              <Statistic title="تنخواه‌ها" value={toPersianNumber(stats.pettyFunds)} prefix={<WalletOutlined />} />
-            </Card>
-          </Col>
-          <Col xs={12} lg={4}>
-            <Card>
-              <Statistic title="چک‌های باز" value={toPersianNumber(stats.openCheques)} prefix={<CreditCardOutlined />} />
-            </Card>
-          </Col>
-          <Col xs={12} lg={4}>
-            <Card>
-              <Statistic title="مبلغ چک‌های باز" value={formatPersianPrice(stats.chequesAmount)} suffix={currencyLabel} />
-            </Card>
-          </Col>
-          <Col xs={12} lg={4}>
-            <Card>
-              <Statistic title="تهاترهای باز" value={toPersianNumber(stats.openBarters)} prefix={<ApartmentOutlined />} />
-            </Card>
-          </Col>
-          <Col xs={12} lg={4}>
-            <Card>
-              <Statistic title="مانده تهاترهای باز" value={formatPersianPrice(stats.bartersAmount)} suffix={currencyLabel} />
-            </Card>
-          </Col>
-        </Row>
-
-        <Card title="عملیات">
-          <Row gutter={[8, 8]} className="mb-3">
-            <Col xs={24} md={6}>
-              <Button type="primary" block icon={<PlusOutlined />} onClick={() => goCreateOperation('receipt')}>
-                ثبت دریافت جدید
-              </Button>
-            </Col>
-            <Col xs={24} md={6}>
-              <Button block icon={<PlusOutlined />} onClick={() => goCreateOperation('payment')}>
-                ثبت پرداخت جدید
-              </Button>
-            </Col>
-            <Col xs={24} md={6}>
-              <Button block icon={<PlusOutlined />} onClick={() => goCreateOperation('transfer')}>
-                ثبت انتقال جدید
-              </Button>
-            </Col>
-            <Col xs={24} md={6}>
-              <Button block icon={<PlusOutlined />} onClick={() => navigate('/cheques/create')}>
-                ثبت چک جدید
-              </Button>
-            </Col>
-            <Col xs={24} md={6}>
-              <Button block icon={<PlusOutlined />} onClick={() => navigate('/barters/create')}>
-                افزودن تهاتر جدید
-              </Button>
-            </Col>
-          </Row>
-
-          <Table
-            className="custom-erp-table"
-            dataSource={rows}
-            columns={columns}
-            rowKey="key"
-            size={isMobile ? 'small' : 'middle'}
-            pagination={{ pageSize: isMobile ? 10 : 20, showSizeChanger: true }}
-            scroll={{ x: isMobile ? 1450 : 1800 }}
-            onRow={(record) => ({
-              onClick: () => openRow(record),
-              style: { cursor: 'pointer' },
-            })}
-          />
-        </Card>
-      </div>
-    </div>
-  );
+  return <div className="mx-auto max-w-[1700px] animate-fadeIn p-4 md:p-8"><div className="min-h-[70vh] rounded-[2rem] border border-gray-200 bg-white p-4 shadow-sm transition-colors dark:border-gray-800 dark:bg-[#1a1a1a] md:p-6">
+    <div className="mb-6"><Title level={3} className="!mb-1">نقد و بانک</Title><Text className="text-gray-500">نمای یکپارچه دریافت‌ها، پرداخت‌ها و چک‌ها</Text></div>
+    <Row gutter={[12, 12]} className="mb-6">
+      <Col xs={12} lg={4}><Card><Statistic title="حساب‌های بانکی فعال" value={toPersianNumber(stats.bankAccounts)} prefix={<BankOutlined />} /></Card></Col>
+      <Col xs={12} lg={4}><Card><Statistic title="صندوق‌ها" value={toPersianNumber(stats.cashBoxes)} prefix={<WalletOutlined />} /></Card></Col>
+      <Col xs={12} lg={4}><Card><Statistic title="تنخواه‌ها" value={toPersianNumber(stats.pettyFunds)} prefix={<WalletOutlined />} /></Card></Col>
+      <Col xs={12} lg={4}><Card><Statistic title="چک‌های باز" value={toPersianNumber(stats.openCheques)} prefix={<CreditCardOutlined />} /></Card></Col>
+      <Col xs={12} lg={4}><Card><Statistic title="مبلغ چک‌های باز" value={formatPersianPrice(stats.chequesAmount)} suffix={currencyLabel} /></Card></Col>
+      <Col xs={12} lg={4}><Card><Statistic title="تهاترهای باز" value={toPersianNumber(stats.openBarters)} prefix={<ApartmentOutlined />} /></Card></Col>
+      <Col xs={12} lg={4}><Card><Statistic title="مانده تهاترهای باز" value={formatPersianPrice(stats.bartersAmount)} suffix={currencyLabel} /></Card></Col>
+    </Row>
+    <Card title="عملیات"><Row gutter={[8, 8]} className="mb-3">
+      <Col xs={24} md={6}><Button type="primary" block icon={<PlusOutlined />} onClick={() => goCreateOperation('receipt')}>ثبت دریافت جدید</Button></Col>
+      <Col xs={24} md={6}><Button block icon={<PlusOutlined />} onClick={() => goCreateOperation('payment')}>ثبت پرداخت جدید</Button></Col>
+      <Col xs={24} md={6}><Button block icon={<PlusOutlined />} onClick={() => goCreateOperation('transfer')}>ثبت انتقال جدید</Button></Col>
+      <Col xs={24} md={6}><Button block icon={<PlusOutlined />} onClick={() => navigate('/cheques/create')}>ثبت چک جدید</Button></Col>
+      <Col xs={24} md={6}><Button block icon={<PlusOutlined />} onClick={() => navigate('/barters/create')}>افزودن تهاتر جدید</Button></Col>
+    </Row>
+      <Table<RowItem> className="custom-erp-table" loading={tableLoading} dataSource={rows} columns={columns} rowKey="key" size={isMobile ? 'small' : 'middle'} pagination={{ current: page, pageSize, total, showSizeChanger: true, showTotal: (count) => `${toPersianNumber(count)} رکورد` }} scroll={{ x: isMobile ? 1450 : 1800 }} onChange={handleTableChange} onRow={(record) => ({ onClick: () => openRow(record), style: { cursor: 'pointer' } })} />
+    </Card>
+  </div></div>;
 };
 
 export default CashBankPage;
-

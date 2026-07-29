@@ -3,7 +3,7 @@ import { SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE } from '../pages/Settings/module
 import { fetchSessionBootstrap } from './sessionCache';
 import { generateNextJournalEntryNo } from './journalEntryNumbering';
 
-export type TreasuryAccountingModule = 'cash_bank_operations' | 'cheques' | 'barters';
+export type TreasuryAccountingModule = 'cash_bank_operations' | 'cheques' | 'barters' | 'bank_accounts' | 'cash_boxes' | 'petty_funds' | 'customers' | 'suppliers' | 'employees';
 
 type Result = { journalEntryId: string | null; created: boolean; warnings: string[] };
 
@@ -59,6 +59,10 @@ const existing = async (supabase: SupabaseClient, moduleId: TreasuryAccountingMo
 const getSource = (record: any, moduleId: TreasuryAccountingModule) => {
   if (moduleId === 'cash_bank_operations') return { date: record.operation_date, label: record.description || 'بدون عنوان' };
   if (moduleId === 'cheques') return { date: record.due_date || record.issue_date, label: record.serial_no || record.sayad_id || 'بدون عنوان' };
+  if (moduleId === 'bank_accounts') return { date: record.created_at, label: record.bank_name || record.account_number || 'حساب بانکی' };
+  if (moduleId === 'cash_boxes') return { date: record.created_at, label: record.name || record.code || 'صندوق' };
+  if (moduleId === 'petty_funds') return { date: record.created_at, label: record.name || record.code || 'تنخواه' };
+  if (moduleId === 'customers' || moduleId === 'suppliers' || moduleId === 'employees') return { date: record.created_at, label: record.full_name || record.business_name || `${record.first_name || ''} ${record.last_name || ''}`.trim() || record.system_code || 'طرف حساب' };
   return { date: record.barter_date, label: record.name || record.system_code || 'بدون عنوان' };
 };
 
@@ -67,6 +71,47 @@ const missing = (warnings: string[], account: string | null, label: string) => {
 };
 
 const buildLines = async (supabase: SupabaseClient, moduleId: TreasuryAccountingModule, record: any, defaults: Record<string, string | null>, warnings: string[]) => {
+  if (moduleId === 'customers' || moduleId === 'suppliers' || moduleId === 'employees') {
+    const openingBalance = n(record.previous_system_balance_total);
+    const counterpartyAccount = moduleId === 'customers'
+      ? defaults.default_accounts_receivable_id
+      : moduleId === 'suppliers'
+        ? defaults.default_accounts_payable_id
+        : defaults.default_payroll_payable_id;
+    if (openingBalance === 0) {
+      warnings.push('برای این طرف حساب، مانده اول دوره‌ای برای صدور سند ثبت نشده است.');
+      return [];
+    }
+    missing(warnings, counterpartyAccount, moduleId === 'customers' ? 'حساب دریافتنی مشتری' : moduleId === 'suppliers' ? 'حساب پرداختنی تأمین‌کننده' : 'حساب پرداختنی کارمند');
+    if (!counterpartyAccount) return [];
+    const isDebit = moduleId === 'customers' ? openingBalance > 0 : openingBalance < 0;
+    warnings.push('طرف مقابل مانده اول دوره را در پیش‌نویس سند انتخاب و تکمیل کنید.');
+    return [{
+      account_id: counterpartyAccount,
+      debit: isDebit ? Math.abs(openingBalance) : 0,
+      credit: isDebit ? 0 : Math.abs(openingBalance),
+      description: `مانده اول دوره - ${getSource(record, moduleId).label}`,
+    }];
+  }
+
+  if (moduleId === 'bank_accounts' || moduleId === 'cash_boxes' || moduleId === 'petty_funds') {
+    const openingBalance = n(record.opening_balance);
+    const treasuryAccount = text(record.account_id) || null;
+    if (openingBalance === 0) {
+      warnings.push('برای این حساب، مانده اول دوره‌ای برای صدور سند ثبت نشده است.');
+      return [];
+    }
+    missing(warnings, treasuryAccount, 'حساب متناظر خزانه');
+    if (!treasuryAccount) return [];
+    warnings.push('طرف مقابل مانده اول دوره را در پیش‌نویس سند انتخاب و تکمیل کنید.');
+    return [{
+      account_id: treasuryAccount,
+      debit: openingBalance > 0 ? Math.abs(openingBalance) : 0,
+      credit: openingBalance < 0 ? Math.abs(openingBalance) : 0,
+      description: `مانده اول دوره - ${getSource(record, moduleId).label}`,
+    }];
+  }
+
   const amount = n(record.amount || record.initial_amount);
   if (amount <= 0) {
     warnings.push('مبلغ عملیات برای صدور سند معتبر نیست.');
@@ -184,4 +229,6 @@ export const syncTreasuryAccountingEntry = async (
 };
 
 export const isTreasuryAccountingModule = (moduleId?: string | null): moduleId is TreasuryAccountingModule =>
-  moduleId === 'cash_bank_operations' || moduleId === 'cheques' || moduleId === 'barters';
+  moduleId === 'cash_bank_operations' || moduleId === 'cheques' || moduleId === 'barters'
+  || moduleId === 'bank_accounts' || moduleId === 'cash_boxes' || moduleId === 'petty_funds'
+  || moduleId === 'customers' || moduleId === 'suppliers' || moduleId === 'employees';

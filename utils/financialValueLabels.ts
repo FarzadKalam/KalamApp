@@ -45,6 +45,7 @@ export const FINANCIAL_STATUS_LABELS_FA: Record<string, string> = {
   created: 'ایجاد شده',
   proforma: 'پیش‌فاکتور',
   prepayment: 'پیش‌پرداخت',
+  opening: 'اول دوره',
   confirmed: 'تایید شده',
   draft: 'پیش‌نویس',
   final: 'نهایی',
@@ -71,6 +72,11 @@ export const FINANCIAL_STATUS_LABELS_FA: Record<string, string> = {
   cleared: 'وصول شده',
   bounced: 'برگشتی',
   returned: 'برگشت‌خورده',
+  processing: 'در حال پردازش',
+  failed: 'ناموفق',
+  expired: 'منقضی شده',
+  refunded: 'بازپرداخت شده',
+  in_review: 'در حال بررسی',
 };
 
 // نگاشت ادغام‌شده برای حالت auto (همهٔ توکن‌های مالی شناخته‌شده).
@@ -121,3 +127,24 @@ export const localizeFinancialValue = (value: any, kind: FinancialValueKind = 'a
 /** نسخهٔ راحت برای روش پرداخت. */
 export const localizeFinancialPaymentType = (value: any): string | null =>
   localizeFinancialValue(value, 'payment_type');
+
+/** روش پرداخت را بدون افشای مقدار فنی برای مخاطب نمایش می‌دهد. */
+export const getFinancialPaymentTypeLabelFa = (value: any, fallback = '-'): string => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return fallback;
+  const localized = localizeFinancialPaymentType(raw);
+  if (localized) return localized;
+  return /[\u0600-\u06FF]/.test(raw) ? raw : 'روش پرداخت تعریف‌نشده';
+};
+
+/**
+ * برچسب امن وضعیت برای نمایش به مخاطب. مقدار فنیِ انگلیسی هیچ‌گاه بدون ترجمه
+ * برنمی‌گردد؛ وضعیت‌های اختصاصی فارسی نیز بدون تغییر حفظ می‌شوند.
+ */
+export const getFinancialStatusLabelFa = (value: any, fallback = '-'): string => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return fallback;
+  const localized = localizeFinancialValue(raw, 'status');
+  if (localized) return localized;
+  return /[\u0600-\u06FF]/.test(raw) ? raw : 'وضعیت تعریف‌نشده';
+};

@@ -24,6 +24,7 @@ import {
 } from '../../utils/operationalFinancialOverview';
 import { createChoiceFilter, createDateRangeFilter, createNumberRangeFilter, createTextFilter } from './tableColumnFilters';
 import { useListPrintManager } from '../../utils/printTemplates/useListPrintManager';
+import { getFinancialPaymentTypeLabelFa, getFinancialStatusLabelFa } from '../../utils/financialValueLabels';
 import {
   buildOnlineAccountCardPublicUrl,
   findOnlineAccountCard,
@@ -246,7 +247,7 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
   const statusFilters = useMemo(
     () =>
       Array.from(new Set(rows.map((row) => String(row.status || '').trim()).filter(Boolean))).map((value) => ({
-        label: OPERATIONAL_FINANCIAL_STATUS_LABEL[value] || value,
+        label: OPERATIONAL_FINANCIAL_STATUS_LABEL[value] || getFinancialStatusLabelFa(value),
         value,
       })),
     [rows],
@@ -254,7 +255,7 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
   const paymentTypeFilters = useMemo(
     () =>
       Array.from(new Set(rows.map((row) => String(row.paymentType || '').trim()).filter(Boolean))).map((value) => ({
-        label: OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL[value] || value,
+        label: OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL[value] || getFinancialPaymentTypeLabelFa(value),
         value,
       })),
     [rows],
@@ -283,7 +284,7 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
         key: 'paymentType',
         width: 130,
         ...createChoiceFilter('روش', paymentTypeFilters, (record) => record.paymentType),
-        render: (value: string) => OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL[value] || value || '-',
+        render: (value: string) => OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL[value] || getFinancialPaymentTypeLabelFa(value),
       },
       {
         title: 'وضعیت',
@@ -291,7 +292,7 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
         key: 'status',
         width: 130,
         ...createChoiceFilter('وضعیت', statusFilters, (record) => record.status),
-        render: (value: string) => <Tag color={statusColor(value)}>{OPERATIONAL_FINANCIAL_STATUS_LABEL[value] || value || '-'}</Tag>,
+        render: (value: string) => <Tag color={statusColor(value)}>{OPERATIONAL_FINANCIAL_STATUS_LABEL[value] || getFinancialStatusLabelFa(value)}</Tag>,
       },
       {
         title: 'تاریخ',

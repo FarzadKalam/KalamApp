@@ -9,6 +9,7 @@ import { attachMissingMapImageFallback, ensureMapLibreRTLTextPlugin } from '../.
 import { createThemeMapPinElement } from '../../utils/mapPin';
 import { resolveMapStatusColor } from '../../utils/mapStatusColor';
 import { getFieldLabelFa } from '../../utils/fieldLabel';
+import { getFinancialStatusLabelFa } from '../../utils/financialValueLabels';
 
 type PublicItem = { title?: string; image_url?: string | null; status?: string | null; location?: unknown; fields?: Record<string, unknown> };
 
@@ -24,7 +25,7 @@ const PublicCatalogMap: React.FC<{ items: PublicItem[]; displayFieldKeys: string
     .filter((entry) => !!entry.point && isInsideIran(entry.point!)), [items]);
   const legend = useMemo(() => Array.from(new Map(points.map(({ item }) => {
     const meta = statusMeta(item.status);
-    return [String(item.status || ''), { label: meta?.label || String(item.status || 'نامشخص'), color: resolveMapStatusColor(meta?.color) || '#64748b' }];
+    return [String(item.status || ''), { label: meta?.label || getFinancialStatusLabelFa(item.status, 'نامشخص'), color: resolveMapStatusColor(meta?.color) || '#64748b' }];
   })).values()), [points]);
 
   useEffect(() => {

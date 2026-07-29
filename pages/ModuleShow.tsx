@@ -6205,12 +6205,12 @@ const ModuleShow: React.FC = () => {
       onClick: () => handleHeaderAction('quick_stock_movement')
     });
   }
-  if ((moduleId === 'invoices' || moduleId === 'purchase_invoices' || moduleId === 'sales_return_invoices' || moduleId === 'purchase_return_invoices') && canIssueAccountingEntry) {
+  if ((moduleId === 'invoices' || moduleId === 'purchase_invoices' || moduleId === 'sales_return_invoices' || moduleId === 'purchase_return_invoices' || moduleId === 'bank_accounts' || moduleId === 'cash_boxes' || moduleId === 'petty_funds' || moduleId === 'customers' || moduleId === 'suppliers' || moduleId === 'employees') && canIssueAccountingEntry) {
     headerActions.push({
       id: 'issue_accounting_entry',
       label: issueAccountingLoading ? 'در حال صدور...' : 'صدور سند',
       variant: 'primary',
-      onClick: handleIssueAccountingEntry,
+      onClick: isTreasuryAccountingModule(moduleId) ? handleIssueAccounting : handleIssueAccountingEntry,
     });
   }
   if ((moduleId === 'invoices' || moduleId === 'sales_return_invoices') && canUseAction('send_taxpayer_system')) {

@@ -43,6 +43,7 @@ import { useCurrencyConfig } from '../utils/currency';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { joinStoragePath, sanitizeStorageFileName } from '../utils/storagePath';
 import { getSafeOptionFallback } from '../utils/optionHelpers';
+import { getFinancialStatusLabelFa } from '../utils/financialValueLabels';
 import { fetchCurrentUserRolePermissions, resolveReadyTextPermissions } from '../utils/permissions';
 import { fetchDynamicOptionsByCategory } from '../utils/referenceData';
 import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
@@ -251,6 +252,32 @@ const normalizePriceString = (raw: any): string => {
   const parsed = Number(normalized);
   if (!Number.isFinite(parsed)) return normalized;
   return String(Math.round(parsed));
+};
+
+const getPreviousSystemBalanceHint = (moduleId: string | undefined, fieldKey: string, rawValue: any): string | null => {
+  if (fieldKey !== 'previous_system_balance_total') return null;
+
+  const normalized = normalizeNumericString(rawValue);
+  const amount = Number(normalized);
+  const isNegative = Number.isFinite(amount) && amount < 0;
+
+  if (moduleId === 'customers') {
+    return isNegative
+      ? 'ماهیت مقدار فعلی: بدهی به مشتری'
+      : 'ماهیت مقدار فعلی: طلب از مشتری (برای بدهی به مشتری، عدد منفی وارد کنید)';
+  }
+  if (moduleId === 'suppliers') {
+    return isNegative
+      ? 'ماهیت مقدار فعلی: طلب از تأمین‌کننده'
+      : 'ماهیت مقدار فعلی: بدهی به تأمین‌کننده (برای طلب از تأمین‌کننده، عدد منفی وارد کنید)';
+  }
+  if (moduleId === 'employees') {
+    return isNegative
+      ? 'ماهیت مقدار فعلی: طلب از کارمند'
+      : 'ماهیت مقدار فعلی: بدهی به کارمند (برای طلب از کارمند، عدد منفی وارد کنید)';
+  }
+
+  return null;
 };
 
 const resolveFormatterSourceValue = (inputValue: any, currentValue: any) => {
@@ -2037,7 +2064,11 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 }
                 const resolvedLabel = fieldType === FieldType.RELATION
                   ? resolveRelationDisplayLabel()
-                  : (selectedOpt ? formatDisplayText(selectedOpt.label, '') : getSafeOptionFallback(value));
+                  : (selectedOpt
+                    ? formatDisplayText(selectedOpt.label, '')
+                    : fieldType === FieldType.STATUS
+                      ? getFinancialStatusLabelFa(value)
+                      : getSafeOptionFallback(value));
                 if (fieldType === FieldType.RELATION && resolvedRelationTargetModuleId && value) {
                    const targetModule = String(selectedOpt?.module || resolvedRelationTargetModuleId || '').trim();
                    return (
@@ -2251,7 +2282,10 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       case FieldType.PERCENTAGE:
       case FieldType.PERCENTAGE_OR_AMOUNT:
       case FieldType.STOCK:
+        {
+          const previousSystemBalanceHint = getPreviousSystemBalanceHint(moduleId, fieldKey, value);
         return (
+          <div className="w-full">
             <InputNumber 
                 {...commonProps}
                 className="w-full persian-number" 
@@ -2269,7 +2303,14 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 onKeyDown={preventNonNumericKeyDown}
                 onPaste={preventNonNumericPaste}
             />
+            {previousSystemBalanceHint ? (
+              <div className="mt-1 text-xs text-gray-500">
+                {previousSystemBalanceHint}
+              </div>
+            ) : null}
+          </div>
         );
+        }
       case FieldType.SELECT:
       case FieldType.STATUS:
         if (field.dynamicOptionsCategory) {

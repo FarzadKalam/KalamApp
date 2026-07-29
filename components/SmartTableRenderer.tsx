@@ -1108,7 +1108,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
             const opt = moduleConfig?.id === 'tasks' && String(field?.key || '') === 'status'
               ? getTaskStatusOption(value, record, field.options || [])
               : field.options?.find((o: any) => o.value === value);
-            const label = formatDisplayText(opt?.label ?? value);
+            const label = formatDisplayText(opt?.label ?? getSingleOptionLabel(effectiveField, value, dynamicOptions, relationOptions));
             return renderRowLink(record, <Tag color={opt?.color || 'default'} style={{fontSize: '10px', marginRight: 0}}>{label}</Tag>, "inline-flex min-w-0 max-w-full text-inherit no-underline hover:text-inherit");
         }
         if (field.type === FieldType.SELECT) {

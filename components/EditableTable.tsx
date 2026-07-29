@@ -50,6 +50,7 @@ import {
 } from '../utils/invoicePaymentAllocation';
 import { applyInvoicePaymentAllocation } from '../utils/invoicePaymentAllocationRuntime';
 import { buildBillboardInvoiceItemTitle } from '../utils/invoicePresentation';
+import { getFinancialStatusLabelFa } from '../utils/financialValueLabels';
 
 const { Text } = Typography;
 
@@ -5156,7 +5157,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     const accountHolder = String(row?.cheque_account_holder_name || '').trim();
     const bankName = String(row?.cheque_bank_name || '').trim();
     const chequeStatusKey = String(row?.cheque_status || '').trim();
-    const chequeStatusLabel = CHEQUE_STATUS_LABELS[chequeStatusKey] || chequeStatusKey || '-';
+    const chequeStatusLabel = CHEQUE_STATUS_LABELS[chequeStatusKey] || getFinancialStatusLabelFa(chequeStatusKey);
     const imageUrl = String(row?.cheque_image_url || row?.attachment || '').trim();
 
     return (

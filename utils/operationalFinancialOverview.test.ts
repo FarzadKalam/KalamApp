@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildOperationAmountPair,
   buildPreviousSystemOpeningAmountPair,
+  getPreviousSystemOpeningDate,
   buildOperationalFinancialEntityPrintFields,
   buildOperationalFinancialEntityPrintValues,
   isEmployeeFinancialOverviewOperation,
@@ -27,6 +28,14 @@ describe('operationalFinancialOverview', () => {
     expect(buildPreviousSystemOpeningAmountPair('supplier', -500000)).toEqual({ debit: 500000, credit: 0 });
     expect(buildPreviousSystemOpeningAmountPair('employee', 500000)).toEqual({ debit: 0, credit: 500000 });
     expect(buildPreviousSystemOpeningAmountPair('employee', -500000)).toEqual({ debit: 500000, credit: 0 });
+  });
+
+  it('uses the counterparty record creation date instead of a synthetic historical date', () => {
+    expect(getPreviousSystemOpeningDate({
+      created_at: '2026-07-29T09:30:00+03:30',
+      previous_system_first_purchase_date: '2020-01-01',
+    })).toBe('2026-07-29T09:30:00+03:30');
+    expect(getPreviousSystemOpeningDate({ previous_system_first_purchase_date: '2020-01-01' })).toBeNull();
   });
 
   it('computes totals and keeps the last running balance as final balance', () => {

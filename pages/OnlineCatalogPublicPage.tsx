@@ -17,6 +17,7 @@ import { getPublicOnlineCatalog } from '../utils/onlineCatalog';
 import { normalizePublicAssetUrl } from '../utils/assetUrl';
 import { buildImagePreviewUrl } from '../utils/imagePreview';
 import { getOnlineCatalogIcon } from '../utils/onlineCatalogIcons';
+import { getFinancialStatusLabelFa } from '../utils/financialValueLabels';
 import BrandLoadingScreen from '../components/common/BrandLoadingScreen';
 import { persistLoadingBrandIdentity, resolveLoadingBrandIdentity } from '../utils/loadingBrand';
 
@@ -85,7 +86,10 @@ const OnlineCatalogPublicPage: React.FC = () => {
     const field = moduleConfig?.fields?.find((item: any) => text(item?.key) === 'status');
     return Array.isArray(field?.options) ? field.options : [];
   }, [moduleConfig]);
-  const statusMeta = useMemo(() => new Map(statusOptions.map((option: any) => [text(option.value), { label: text(option.label || option.value), color: resolveStatusColor(option.color) }])), [statusOptions]);
+  const statusMeta = useMemo(() => new Map(statusOptions.map((option: any) => {
+    const value = text(option.value);
+    return [value, { label: text(option.label) || getFinancialStatusLabelFa(value), color: resolveStatusColor(option.color) }];
+  })), [statusOptions]);
   const visibleFields = useMemo(() => {
     const storedMeta = Array.isArray(presentation.field_meta) ? presentation.field_meta : [];
     return (Array.isArray(catalog?.display_field_keys) ? catalog.display_field_keys : []).map((key: string) => {

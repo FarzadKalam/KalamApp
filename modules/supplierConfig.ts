@@ -182,7 +182,7 @@ export const supplierModule: ModuleDefinition = {
     { key: 'previous_system_first_purchase_date', labels: { fa: 'تاریخ شروع سوابق سیستم قبلی', en: 'Previous System Start Date' }, type: FieldType.DATE, blockId: 'previous_system_info' },
     { key: 'previous_system_invoice_total', labels: { fa: 'جمع فاکتورهای خرید سیستم قبلی', en: 'Previous System Purchase Invoice Total' }, type: FieldType.PRICE, blockId: 'previous_system_info' },
     { key: 'previous_system_paid_total', labels: { fa: 'جمع پرداختی‌های سیستم قبلی', en: 'Previous System Payment Total' }, type: FieldType.PRICE, blockId: 'previous_system_info' },
-    { key: 'previous_system_balance_total', labels: { fa: 'مانده اول دوره سیستم قبلی (مثبت: بدهی به تامین‌کننده)', en: 'Previous System Opening Balance' }, type: FieldType.PRICE, blockId: 'previous_system_info', allowNegative: true },
+    { key: 'previous_system_balance_total', labels: { fa: 'مانده اول دوره سیستم قبلی', en: 'Previous System Opening Balance' }, type: FieldType.PRICE, blockId: 'previous_system_info', allowNegative: true },
   
     { key: 'assignee_id', labels: { fa: 'مسئول پیگیری', en: 'Assignee' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 6.15, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 6.2, nature: FieldNature.STANDARD, isTableColumn: true },

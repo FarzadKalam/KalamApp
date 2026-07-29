@@ -39,7 +39,7 @@ import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { DEFAULT_BRANDING, BRAND_PALETTE_PRESETS, type BrandingConfig, type BrandingPaletteKey } from '../theme/brandTheme';
 import { normalizePublicAssetUrl } from '../utils/assetUrl';
-import { localizeFinancialValue } from '../utils/financialValueLabels';
+import { getFinancialPaymentTypeLabelFa, getFinancialStatusLabelFa } from '../utils/financialValueLabels';
 import { buildImagePreviewUrl } from '../utils/imagePreview';
 import { supabasePublic } from '../supabaseClient';
 import ResilientImage from '../components/common/ResilientImage';
@@ -710,7 +710,7 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
       ? (data.payments).map((p: Record<string, any>) => `
         <tr>
           <td style="border:1px solid #d1d5db;padding:3px 5px;">${toJalali(p.date)}</td>
-          <td style="border:1px solid #d1d5db;padding:3px 5px;">${localizeFinancialValue(p.payment_type, 'payment_type') || PAYMENT_TYPE_LABELS[p.payment_type] || p.payment_type || '—'}</td>
+          <td style="border:1px solid #d1d5db;padding:3px 5px;">${PAYMENT_TYPE_LABELS[p.payment_type] || getFinancialPaymentTypeLabelFa(p.payment_type, '—')}</td>
           <td style="border:1px solid #d1d5db;padding:3px 5px;font-weight:600;color:${pc};">${formatPrice(p.amount, currencyLabel)}</td>
           <td style="border:1px solid #d1d5db;padding:3px 5px;">${p.description || '—'}</td>
         </tr>`).join('')
@@ -753,7 +753,7 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
     <td style="width:35%;padding:10px;vertical-align:middle;background:rgba(0,0,0,0.03);font-size:11px;">
       <div>شماره: <strong>${invoice.system_code || '—'}</strong></div>
       <div>تاریخ: <strong>${toJalali(invoice.invoice_date)}</strong></div>
-      <div style="margin-top:4px;"><span style="background:${pc};color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;">${STATUS_LABELS[invoice.status]?.label || localizeFinancialValue(invoice.status, 'status') || invoice.status}</span></div>
+      <div style="margin-top:4px;"><span style="background:${pc};color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;">${STATUS_LABELS[invoice.status]?.label || getFinancialStatusLabelFa(invoice.status)}</span></div>
     </td>
   </tr></tbody>
 </table>
@@ -912,7 +912,7 @@ ${invoice.description ? `
   );
 
   const invoiceStatus = String(invoice.status || '');
-  const statusInfo = STATUS_LABELS[invoiceStatus] || { label: invoiceStatus, color: 'default' };
+  const statusInfo = STATUS_LABELS[invoiceStatus] || { label: getFinancialStatusLabelFa(invoiceStatus), color: 'default' };
   const canConfirm = ['created', 'proforma'].includes(invoiceStatus);
   const confirmedAt = isSales ? invoice.customer_confirmed_at : invoice.supplier_confirmed_at;
   const confirmerName = isSales ? invoice.customer_confirmer_name : invoice.supplier_confirmer_name;
@@ -1588,7 +1588,7 @@ ${invoice.description ? `
                   {
                     title: 'روش',
                     dataIndex: 'payment_type',
-                    render: (v: any) => localizeFinancialValue(v, 'payment_type') || PAYMENT_TYPE_LABELS[v] || v || '—',
+                    render: (v: any) => PAYMENT_TYPE_LABELS[v] || getFinancialPaymentTypeLabelFa(v, '—'),
                   },
                   {
                     title: 'وضعیت',
@@ -1596,7 +1596,7 @@ ${invoice.description ? `
                     render: (v: any) => {
                       const s = PAYMENT_STATUS_LABELS[v];
                       if (s) return <Tag color={s.color}>{s.label}</Tag>;
-                      return localizeFinancialValue(v, 'status') || v || '—';
+                      return getFinancialStatusLabelFa(v, '—');
                     },
                   },
                   {

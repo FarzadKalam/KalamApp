@@ -1,5 +1,5 @@
 import { supabase as sharedSupabase } from '../supabaseClient';
-import { localizeFinancialValue, FINANCIAL_PAYMENT_TYPE_LABELS_FA } from './financialValueLabels';
+import { getFinancialPaymentTypeLabelFa, getFinancialStatusLabelFa, localizeFinancialValue, FINANCIAL_PAYMENT_TYPE_LABELS_FA } from './financialValueLabels';
 import { formatPersianNumberWithGrouping } from './persianNumberFormatter';
 import {
   buildSourceOperationKey,
@@ -125,6 +125,7 @@ export const OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL: Record<string, string> = 
 
 export const OPERATIONAL_FINANCIAL_STATUS_LABEL: Record<string, string> = {
   created: 'ایجاد شده',
+  opening: 'اول دوره',
   proforma: 'پیش فاکتور',
   confirmed: 'تایید شده',
   pending: 'در انتظار',
@@ -230,8 +231,8 @@ const buildBalanceRow = (row: Omit<OperationalFinancialRow, 'balance' | 'printab
     printableFields: {
       rowTypeLabel: OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL[row.rowType] || row.rowType,
       sourceLabel: row.sourceLabel,
-      paymentTypeLabel: localizeFinancialValue(row.paymentType, 'payment_type') || OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL[row.paymentType] || row.paymentType || '-',
-      statusLabel: OPERATIONAL_FINANCIAL_STATUS_LABEL[row.status] || localizeFinancialValue(row.status, 'status') || row.status || '-',
+      paymentTypeLabel: OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL[row.paymentType] || getFinancialPaymentTypeLabelFa(row.paymentType),
+      statusLabel: OPERATIONAL_FINANCIAL_STATUS_LABEL[row.status] || getFinancialStatusLabelFa(row.status),
       date: row.date,
       debit: row.debit,
       credit: row.credit,
@@ -477,6 +478,11 @@ export const buildPreviousSystemOpeningAmountPair = (
   };
 };
 
+export const getPreviousSystemOpeningDate = (entity: any): string | null => {
+  const createdAt = String(entity?.created_at || '').trim();
+  return createdAt || null;
+};
+
 const buildPreviousSystemOpeningRow = (
   entityType: OperationalFinancialEntityType,
   entity: any,
@@ -503,7 +509,7 @@ const buildPreviousSystemOpeningRow = (
     paymentType: '',
     status: 'opening',
     chequeStatus: '',
-    date: entity?.previous_system_first_purchase_date || '1900-01-01',
+    date: getPreviousSystemOpeningDate(entity),
     debit: hasBalance ? debit : 0,
     credit: hasBalance ? credit : 0,
     invoiceLabel: 'سیستم قبلی',

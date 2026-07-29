@@ -3,6 +3,8 @@
 // ==========================================
 // این utilities برای تمام جاهایی استفاده می‌شوند که نیاز به نمایش برچسب‌های فارسی در جای value‌های انگلیسی داریم
 
+import { getFinancialPaymentTypeLabelFa, getFinancialStatusLabelFa } from './financialValueLabels';
+
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -69,6 +71,17 @@ export const getSingleOptionLabel = (
     const rellopts = relationOptions[field.key] || [];
     const opt = rellopts.find((o: any) => o.value === value);
     if (opt) return opt.label || getSafeOptionFallback(value);
+  }
+
+  const fieldKey = String(field?.key || '').trim().toLowerCase();
+
+  // وضعیت‌های مالی و چک ممکن است از داده‌های قدیمی یا یکپارچه‌سازی خارجی بیایند؛
+  // مقدار فنی انگلیسی نباید در جدول‌ها و نمای عمومی به مخاطب نمایش داده شود.
+  if (field.type === 'status' || fieldKey.includes('status')) {
+    return getFinancialStatusLabelFa(value);
+  }
+  if (['payment_type', 'payment_method', 'paymenttype', 'paymentmethod', 'method'].includes(fieldKey)) {
+    return getFinancialPaymentTypeLabelFa(value);
   }
 
   // اگر برچسب پیدا نشد، UUID خام را به کاربر نشان نده

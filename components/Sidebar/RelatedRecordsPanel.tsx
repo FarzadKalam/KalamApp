@@ -31,6 +31,7 @@ import { buildTaskSourceInitialValues } from '../../utils/taskMeta';
 import { getPrimaryRecordPhone } from '../../utils/recordMessaging';
 import { buildVoipFallbackUrl, requestVoipSmartCall } from '../../utils/voipGateway';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { getFinancialPaymentTypeLabelFa, getFinancialStatusLabelFa } from '../../utils/financialValueLabels';
 import RelatedSurveyWebFormModal from './RelatedSurveyWebFormModal';
 
 interface RelatedRecordsPanelProps {
@@ -660,8 +661,8 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
         item?.bankLabel,
         item?.description,
         OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL[item?.rowType as keyof typeof OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL],
-        OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL[String(item?.paymentType || '')] || item?.paymentType,
-        OPERATIONAL_FINANCIAL_STATUS_LABEL[String(item?.status || '')] || item?.status,
+        OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL[String(item?.paymentType || '')] || getFinancialPaymentTypeLabelFa(item?.paymentType),
+        OPERATIONAL_FINANCIAL_STATUS_LABEL[String(item?.status || '')] || getFinancialStatusLabelFa(item?.status),
       ].map(formatValue).join(' ').toLowerCase().includes(term));
     }
 
@@ -884,7 +885,7 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
                     <div className="grid grid-cols-[92px_1fr] gap-2 items-start border-b border-gray-100 pb-1.5 dark:border-gray-800">
                       <span className="text-gray-500 dark:text-gray-400">وضعیت</span>
                       <span className="min-w-0 break-words text-gray-700 dark:text-gray-200">
-                        {OPERATIONAL_FINANCIAL_STATUS_LABEL[String(item?.status || '')] || item?.status || '-'}
+                        {OPERATIONAL_FINANCIAL_STATUS_LABEL[String(item?.status || '')] || getFinancialStatusLabelFa(item?.status)}
                       </span>
                     </div>
                     <div className="grid grid-cols-[92px_1fr] gap-2 items-start">
