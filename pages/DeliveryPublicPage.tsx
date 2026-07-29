@@ -37,6 +37,7 @@ import { supabasePublic } from '../supabaseClient';
 import ResilientImage from '../components/common/ResilientImage';
 import BrandLoadingScreen from '../components/common/BrandLoadingScreen';
 import { persistLoadingBrandIdentity, resolveLoadingBrandIdentity } from '../utils/loadingBrand';
+import { usePublicTimeTheme } from '../components/public/PublicThemeBoundary';
 
 const { Text, Title } = Typography;
 const anonClient = supabasePublic;
@@ -688,12 +689,13 @@ const DeliveryPublicContent = ({ primaryColor, onBrandingLoad }: { primaryColor:
 
 const DeliveryPublicPage = () => {
   const [primaryColor, setPrimaryColor] = useState(DEFAULT_BRANDING.palette?.primary || '#3730A3');
+  const isDark = usePublicTimeTheme();
 
   return (
     <ConfigProvider
       direction="rtl"
       theme={{
-        algorithm: antdTheme.defaultAlgorithm,
+        algorithm: isDark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
         token: {
           colorPrimary: primaryColor,
           fontFamily: 'Peyda, Tahoma, Arial, sans-serif',

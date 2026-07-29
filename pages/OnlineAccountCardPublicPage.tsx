@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Spin, Table, Tag, Typography } from 'antd';
+import { Alert, Button, ConfigProvider, Spin, Table, Tag, Typography, theme as antdTheme } from 'antd';
 import { CreditCardOutlined, WalletOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import { supabasePublic } from '../supabaseClient';
 import { getPublicOnlineAccountCard } from '../utils/onlineAccountCard';
 import { formatPersianPrice, safeJalaliFormat } from '../utils/persianNumberFormatter';
 import { OPERATIONAL_FINANCIAL_ROW_TYPE_COLOR, OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL } from '../utils/operationalFinancialOverview';
+import { usePublicTimeTheme } from '../components/public/PublicThemeBoundary';
 
 type CardRow = {
   key: string;
@@ -20,8 +21,25 @@ type CardRow = {
   payment_type?: string | null;
 };
 
+const buildPublicTheme = (isDark: boolean) => ({
+  algorithm: isDark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
+  token: {
+    colorPrimary: '#2563eb',
+    colorBgBase: isDark ? '#0f172a' : '#ffffff',
+    colorTextBase: isDark ? '#e2e8f0' : '#1e293b',
+    fontFamily: 'Peyda, Tahoma, Arial, sans-serif',
+  },
+  components: {
+    Table: {
+      headerBg: isDark ? '#1e293b' : '#f8fafc',
+      headerColor: isDark ? '#e2e8f0' : '#475569',
+    },
+  },
+});
+
 const OnlineAccountCardPublicPage = () => {
   const { token } = useParams<{ token: string }>();
+  const isDark = usePublicTimeTheme();
   const [loading, setLoading] = useState(true);
   const [startingPayment, setStartingPayment] = useState(false);
   const [payload, setPayload] = useState<any>(null);
@@ -57,6 +75,7 @@ const OnlineAccountCardPublicPage = () => {
   const currencyLabel = String(company?.currency_label || 'ریال');
   const payableAmount = Math.max(0, Number(paymentState?.amount || 0));
   const canPay = card?.entity_type === 'customer' && paymentState?.available === true && payableAmount > 0;
+  const publicTheme = useMemo(() => buildPublicTheme(isDark), [isDark]);
 
   const columns = useMemo(() => [
     {
@@ -91,15 +110,16 @@ const OnlineAccountCardPublicPage = () => {
     }
   };
 
-  if (loading) return <div dir="rtl" className="flex min-h-screen items-center justify-center bg-slate-100"><Spin size="large" /></div>;
-  if (error && !payload) return <div dir="rtl" className="mx-auto mt-16 max-w-lg px-4"><Alert type="error" showIcon message="کارت حساب در دسترس نیست" description={error} /></div>;
+  if (loading) return <ConfigProvider direction="rtl" theme={publicTheme}><div dir="rtl" className="flex min-h-screen items-center justify-center bg-slate-100 dark:bg-slate-950"><Spin size="large" /></div></ConfigProvider>;
+  if (error && !payload) return <ConfigProvider direction="rtl" theme={publicTheme}><div dir="rtl" className="mx-auto mt-16 max-w-lg px-4"><Alert type="error" showIcon message="کارت حساب در دسترس نیست" description={error} /></div></ConfigProvider>;
 
   const finalBalance = Number(summary?.final_balance || 0);
   return (
-    <main dir="rtl" className="min-h-screen bg-slate-100 px-3 py-4 text-slate-800 sm:px-6 sm:py-8">
-      <div className="mx-auto max-w-7xl">
+    <ConfigProvider direction="rtl" theme={publicTheme}>
+      <main dir="rtl" className="min-h-screen bg-slate-100 px-3 py-4 text-slate-800 dark:bg-slate-950 dark:text-slate-100 sm:px-6 sm:py-8">
+        <div className="mx-auto max-w-7xl">
         {error ? <Alert className="mb-3" type="error" showIcon message={error} /> : null}
-        <section className="overflow-hidden rounded-[2rem] border border-white/80 bg-white/85 shadow-[0_26px_80px_rgba(15,23,42,0.14)] backdrop-blur-xl">
+        <section className="overflow-hidden rounded-[2rem] border border-white/80 bg-white/85 shadow-[0_26px_80px_rgba(15,23,42,0.14)] backdrop-blur-xl dark:border-slate-700 dark:bg-slate-900/95">
           <header className="relative overflow-hidden bg-gradient-to-br from-[rgb(var(--brand-800-rgb,30,58,138))] via-[rgb(var(--brand-600-rgb,37,99,235))] to-[rgb(var(--brand-400-rgb,96,165,250))] px-5 py-7 text-white sm:px-10 sm:py-10">
             <div className="text-sm font-semibold text-white/75">{company?.trade_name || company?.company_name || 'سازمان'}</div>
             <Typography.Title level={1} className="!mb-0 !mt-2 !text-2xl !font-black !text-white sm:!text-4xl">{card?.title || 'کارت حساب آنلاین'}</Typography.Title>
@@ -107,9 +127,9 @@ const OnlineAccountCardPublicPage = () => {
           </header>
           <div className="p-4 sm:p-8">
             <div className="grid gap-3 sm:grid-cols-3">
-              <div className="rounded-2xl bg-slate-50 p-4"><div className="text-xs text-slate-500">جمع بدهکار</div><div className="mt-1 text-lg font-black persian-number">{formatPersianPrice(Number(summary?.total_debit || 0))} {currencyLabel}</div></div>
-              <div className="rounded-2xl bg-slate-50 p-4"><div className="text-xs text-slate-500">جمع بستانکار</div><div className="mt-1 text-lg font-black persian-number">{formatPersianPrice(Number(summary?.total_credit || 0))} {currencyLabel}</div></div>
-              <div className="rounded-2xl bg-slate-50 p-4"><div className="text-xs text-slate-500">مانده حساب</div><div className="mt-1 text-lg font-black persian-number">{formatPersianPrice(Math.abs(finalBalance))} {finalBalance >= 0 ? 'بدهکار' : 'بستانکار'}</div></div>
+              <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800"><div className="text-xs text-slate-500 dark:text-slate-400">جمع بدهکار</div><div className="mt-1 text-lg font-black persian-number">{formatPersianPrice(Number(summary?.total_debit || 0))} {currencyLabel}</div></div>
+              <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800"><div className="text-xs text-slate-500 dark:text-slate-400">جمع بستانکار</div><div className="mt-1 text-lg font-black persian-number">{formatPersianPrice(Number(summary?.total_credit || 0))} {currencyLabel}</div></div>
+              <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800"><div className="text-xs text-slate-500 dark:text-slate-400">مانده حساب</div><div className="mt-1 text-lg font-black persian-number">{formatPersianPrice(Math.abs(finalBalance))} {finalBalance >= 0 ? 'بدهکار' : 'بستانکار'}</div></div>
             </div>
             <section className="mt-6">
               <h2 className="mb-3 text-lg font-black">سوابق مالی</h2>
@@ -136,9 +156,10 @@ const OnlineAccountCardPublicPage = () => {
             </section>
           </div>
         </section>
-      </div>
-      {canPay ? <div className="fixed inset-x-0 bottom-0 z-[1000] border-t border-slate-200 bg-white/95 px-4 py-3 shadow-[0_-12px_32px_rgba(15,23,42,.14)] backdrop-blur"><div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3"><div><div className="text-xs text-slate-500">مبلغ قابل پرداخت</div><div className="text-lg font-black persian-number">{formatPersianPrice(payableAmount)} {currencyLabel}</div></div><Button type="primary" size="large" icon={<CreditCardOutlined />} loading={startingPayment} onClick={() => void startPayment()}><WalletOutlined /> پرداخت سریع</Button></div></div> : null}
-    </main>
+        </div>
+        {canPay ? <div className="fixed inset-x-0 bottom-0 z-[1000] border-t border-slate-200 bg-white/95 px-4 py-3 shadow-[0_-12px_32px_rgba(15,23,42,.14)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/95"><div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3"><div><div className="text-xs text-slate-500 dark:text-slate-400">مبلغ قابل پرداخت</div><div className="text-lg font-black persian-number">{formatPersianPrice(payableAmount)} {currencyLabel}</div></div><Button type="primary" size="large" icon={<CreditCardOutlined />} loading={startingPayment} onClick={() => void startPayment()}><WalletOutlined /> پرداخت سریع</Button></div></div> : null}
+      </main>
+    </ConfigProvider>
   );
 };
 

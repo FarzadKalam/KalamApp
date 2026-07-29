@@ -53,6 +53,7 @@ import { parseNoteContent, resolveNoteAttachmentFileType } from '../utils/noteCo
 import SharedNoteCard from '../components/notes/SharedNoteCard';
 import BrandLoadingScreen from '../components/common/BrandLoadingScreen';
 import { persistLoadingBrandIdentity, resolveLoadingBrandIdentity } from '../utils/loadingBrand';
+import { usePublicTimeTheme } from '../components/public/PublicThemeBoundary';
 
 const anonClient = supabasePublic;
 
@@ -167,14 +168,6 @@ const PAYMENT_STATUS_LABELS: Record<string, { label: string; color: string }> = 
 };
 
 const OTP_RESEND_SECONDS = 90;
-const NIGHT_START_HOUR = 19;
-const NIGHT_END_HOUR = 6;
-
-const isNightInvoiceView = (date = new Date()) => {
-  const hour = date.getHours();
-  return hour >= NIGHT_START_HOUR || hour < NIGHT_END_HOUR;
-};
-
 // ─── types ──────────────────────────────────────────────────────────────────
 
 type InvoiceData = {
@@ -1989,17 +1982,8 @@ ${invoice.description ? `
 // ─── outer wrapper (ConfigProvider + dark mode) ───────────────────────────────
 
 const InvoicePublicPage = () => {
-  const [isDark, setIsDark] = useState<boolean>(
-    () => typeof window !== 'undefined' && isNightInvoiceView()
-  );
+  const isDark = usePublicTimeTheme();
   const [primaryColor, setPrimaryColor] = useState(DEFAULT_BRANDING.palette?.primary || '#3730A3');
-
-  useEffect(() => {
-    const syncThemeByTime = () => setIsDark(isNightInvoiceView());
-    syncThemeByTime();
-    const intervalId = window.setInterval(syncThemeByTime, 60 * 1000);
-    return () => window.clearInterval(intervalId);
-  }, []);
 
   return (
     <ConfigProvider

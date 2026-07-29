@@ -62,24 +62,7 @@ const GLOBAL_SEARCH_FAST_MODULE_IDS = [
 ];
 
 export const GLOBAL_SEARCH_MIN_QUERY_LENGTH = 2;
-export const GLOBAL_SEARCH_RPC_SUPPORTED_MODULE_IDS = [
-  'products', 'billboards', 'product_bundles', 'warehouses', 'shelves', 'stock_transfers',
-  'secretariat_documents', 'delivery_forms', 'production_boms', 'production_orders',
-  'production_group_orders', 'customers', 'suppliers', 'invoices', 'purchase_invoices',
-  'projects', 'marketing_leads', 'personas', 'instructions', 'process_templates',
-  'process_runs', 'tasks', 'calculation_formulas', 'fiscal_years', 'chart_of_accounts',
-  'journal_entries', 'accounting_event_rules', 'cost_centers', 'cash_boxes',
-  'bank_accounts', 'petty_funds', 'cheques', 'barters', 'cash_bank_operations',
-  'profiles', 'employees', 'attendance_logs', 'work_schedules', 'leave_requests',
-  'overtime_requests', 'mission_requests', 'price_lists', 'web_forms',
-  'automation_execution_reports', 'sms_delivery_reports', 'voip_call_reports',
-  'counterparty_bot_groups', 'expense_documents', 'assets', 'employee_advances',
-  'employee_bonus_requests', 'employee_penalty_requests', 'payroll_slips',
-  'employee_contracts', 'recruitment_applicants', 'job_descriptions', 'surveys',
-] as const;
-
 const searchCache = new Map<string, { expiresAt: number; groups: GlobalSearchGroup[] }>();
-const GLOBAL_SEARCH_RPC_SUPPORTED_MODULE_ID_SET = new Set<string>(GLOBAL_SEARCH_RPC_SUPPORTED_MODULE_IDS);
 const ILIKE_SEARCHABLE_FIELD_TYPES = new Set<FieldType>([
   FieldType.TEXT,
   FieldType.LONG_TEXT,
@@ -376,16 +359,19 @@ const normalizeRpcRow = (
     const normalizedKey = String(key || '').trim();
     return { key: normalizedKey, label: module.fieldLabels[normalizedKey] || normalizedKey };
   }).filter((item: GlobalSearchMatchField) => item.key);
-  const title = getRecordTitle(payload, moduleConfigs[moduleId], { fallback: '[بدون عنوان]' });
+  const title = String(row?.title || '').trim()
+    || getRecordTitle(payload, moduleConfigs[moduleId], { fallback: '[بدون عنوان]' });
   const subtitleKey = ['system_code', 'manual_code', 'legacy_contact_code', 'legacy_system_code', 'legacy_invoice_number', 'accounting_code', 'mobile_1', 'phone']
     .find((key) => payload?.[key]);
+  const subtitle = String(row?.subtitle || '').trim()
+    || (subtitleKey ? String(payload[subtitleKey] || '').trim() : '');
 
   return {
     moduleId,
     moduleTitle: module.title,
     recordId,
     title,
-    subtitle: subtitleKey ? String(payload[subtitleKey] || '').trim() : '',
+    subtitle,
     matchedFields,
     payload: { id: recordId, ...payload },
     score: Number(row?.score || 0),
@@ -515,14 +501,10 @@ export const searchGlobalRecords = async (
   if (!options.forceRefresh && cached && cached.expiresAt > Date.now()) return cached.groups;
 
   const modulesById = new Map(activeModules.map((module) => [module.id, module]));
-  const rpcModules = activeModules.filter((module) => GLOBAL_SEARCH_RPC_SUPPORTED_MODULE_ID_SET.has(module.id));
-  const fallbackOnlyModules = activeModules.filter((module) => !GLOBAL_SEARCH_RPC_SUPPORTED_MODULE_ID_SET.has(module.id));
-
   const runRpcSearch = async (): Promise<GlobalSearchGroup[]> => {
-    if (!rpcModules.length) return [];
     let rpcRequest = supabase.rpc('global_search_records', {
       p_query: query,
-      p_modules: rpcModules.map((module) => module.id),
+      p_modules: activeModules.map((module) => module.id),
       p_limit_per_module: limitPerModule,
       p_offset: offset,
     });
@@ -537,23 +519,17 @@ export const searchGlobalRecords = async (
         throw error;
       }
       console.warn('Global search RPC unavailable, using client fallback', error);
-      return fallbackSearch(supabase, moduleConfigs, rpcModules, query, limitPerModule, offset, options.signal);
+      return fallbackSearch(supabase, moduleConfigs, activeModules, query, limitPerModule, offset, options.signal);
     }
 
     if (!Array.isArray(data)) return [];
     const results = data
       .map((row: any) => normalizeRpcRow(row, modulesById, moduleConfigs))
       .filter((item): item is GlobalSearchResult => Boolean(item));
-    return groupResults(rpcModules, results, limitPerModule);
+    return groupResults(activeModules, results, limitPerModule);
   };
 
-  const [rpcGroups, fallbackGroups] = await Promise.all([
-    runRpcSearch(),
-    fallbackOnlyModules.length
-      ? fallbackSearch(supabase, moduleConfigs, fallbackOnlyModules, query, limitPerModule, offset, options.signal)
-      : Promise.resolve([] as GlobalSearchGroup[]),
-  ]);
-  const groups = mergeGlobalSearchGroups([...rpcGroups, ...fallbackGroups]);
+  const groups = mergeGlobalSearchGroups(await runRpcSearch());
 
   if (canUseCache) {
     searchCache.set(cacheKey, { expiresAt: Date.now() + SEARCH_CACHE_TTL_MS, groups });

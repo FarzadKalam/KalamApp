@@ -470,7 +470,9 @@ export const buildOperationAmountPair = (
 export const computeOperationalFinancialTotals = (rows: Array<Pick<OperationalFinancialRow, 'debit' | 'credit' | 'balance'>>) => {
   const totalDebit = rows.reduce((sum, row) => sum + Number(row.debit || 0), 0);
   const totalCredit = rows.reduce((sum, row) => sum + Number(row.credit || 0), 0);
-  const finalBalance = rows.length ? Number(rows[rows.length - 1]?.balance || 0) : totalDebit - totalCredit;
+  // جمع کارت و footer جدول باید همواره از همان ستون‌های قابل مشاهده به‌دست
+  // آید؛ استفاده از ماندهٔ ردیف آخر پس از فیلتر کردن جدول، جمع را نادرست می‌کرد.
+  const finalBalance = totalDebit - totalCredit;
   return {
     totalDebit,
     totalCredit,

@@ -44,11 +44,11 @@ describe('operationalFinancialOverview', () => {
     expect(getPreviousSystemOpeningDate({ previous_system_first_purchase_date: '2020-01-01' })).toBeNull();
   });
 
-  it('computes totals and keeps the last running balance as final balance', () => {
+  it('computes the final balance from the visible debit and credit columns', () => {
     const totals = computeOperationalFinancialTotals([
       { debit: 800000, credit: 0, balance: 800000 },
       { debit: 0, credit: 250000, balance: 550000 },
-      { debit: 0, credit: 150000, balance: 400000 },
+      { debit: 0, credit: 150000, balance: 999999 },
     ]);
 
     expect(totals.totalDebit).toBe(800000);

@@ -52,6 +52,7 @@ import { resolveOverlayPopupContainer } from "./utils/popupContainer";
 import { isMarketingHost, isSaasAppHost } from "./utils/hostRouting";
 import { signOutLocalSession } from "./utils/authSession";
 import { readCachedLoadingBrandIdentity, type LoadingBrandIdentity } from './utils/loadingBrand';
+import { PublicThemeBoundary } from './components/public/PublicThemeBoundary';
 
 declare global {
   interface Window {
@@ -283,7 +284,9 @@ const LazyRouteBoundary: React.FC<{ children: React.ReactNode }> = ({ children }
 );
 
 const PublicLazyRouteBoundary: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <Suspense fallback={<BrandLoadingScreen branding={getInitialBranding()} message="در حال آماده‌سازی صفحه…" />}>{children}</Suspense>
+  <PublicThemeBoundary>
+    <Suspense fallback={<BrandLoadingScreen branding={getInitialBranding()} message="در حال آماده‌سازی صفحه…" />}>{children}</Suspense>
+  </PublicThemeBoundary>
 );
 
 const AuthenticatedOutletBoundary: React.FC = () => {
@@ -346,15 +349,17 @@ const MarketingSiteHostApp: React.FC = () => {
           notification={{ placement: "topLeft", duration: 4.5, maxCount: 4 }}
         >
           <PwaInstallPrompt />
-          <LazyRouteBoundary>
-            <Routes>
-              <Route path="/i/:code" element={<InvoicePublicPage />} />
-              <Route path="/d/:code" element={<DeliveryPublicPage />} />
-              <Route path="/c/:token" element={<OnlineCatalogPublicPage />} />
-              <Route path="/payment/callback" element={<PaymentCallbackPage />} />
-              <Route path="/*" element={<PublicSite />} />
-            </Routes>
-          </LazyRouteBoundary>
+          <PublicThemeBoundary>
+            <LazyRouteBoundary>
+              <Routes>
+                <Route path="/i/:code" element={<InvoicePublicPage />} />
+                <Route path="/d/:code" element={<DeliveryPublicPage />} />
+                <Route path="/c/:token" element={<OnlineCatalogPublicPage />} />
+                <Route path="/payment/callback" element={<PaymentCallbackPage />} />
+                <Route path="/*" element={<PublicSite />} />
+              </Routes>
+            </LazyRouteBoundary>
+          </PublicThemeBoundary>
         </AntdApp>
       </ConfigProvider>
     </BrowserRouter>
@@ -747,7 +752,7 @@ function App() {
           <Route path="/d/:code" element={<PublicLazyRouteBoundary><DeliveryPublicPage /></PublicLazyRouteBoundary>} />
           <Route path="/c/:token" element={<PublicLazyRouteBoundary><OnlineCatalogPublicPage /></PublicLazyRouteBoundary>} />
           <Route path="/account/:token" element={<PublicLazyRouteBoundary><OnlineAccountCardPublicPage /></PublicLazyRouteBoundary>} />
-          <Route path="/payment/callback" element={<LazyRouteBoundary><PaymentCallbackPage /></LazyRouteBoundary>} />
+          <Route path="/payment/callback" element={<PublicLazyRouteBoundary><PaymentCallbackPage /></PublicLazyRouteBoundary>} />
           <Route path="/f/:code" element={<LazyRouteBoundary><FileShortLinkRedirectPage /></LazyRouteBoundary>} />
           <Route path="/r/:code" element={<LazyRouteBoundary><FileShortLinkRedirectPage /></LazyRouteBoundary>} />
 

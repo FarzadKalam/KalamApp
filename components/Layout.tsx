@@ -937,14 +937,18 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         const remainingModules = prioritizedGlobalSearchModules.fastModules.length
           ? prioritizedGlobalSearchModules.remainingModules
           : [];
-        const remainingPromise = remainingModules.length
+        const remainingPromise = (remainingModules.length
           ? searchGlobalRecords(supabase, MODULES, remainingModules, {
             query: term,
             limitPerModule: 3,
             cacheNamespace: `${globalSearchCacheNamespace}:remaining`,
             signal: controller.signal,
           })
-          : Promise.resolve([] as GlobalSearchGroup[]);
+          : Promise.resolve([] as GlobalSearchGroup[]))
+          .then(
+            (results) => ({ results, error: null as unknown }),
+            (error) => ({ results: [] as GlobalSearchGroup[], error })
+          );
         const fastResults = await searchGlobalRecords(supabase, MODULES, fastModules, {
           query: term,
           limitPerModule: 5,
@@ -956,7 +960,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         setSearchTouched(true);
 
         if (!remainingModules.length || controller.signal.aborted) return;
-        const remainingResults = await remainingPromise;
+        const { results: remainingResults, error: remainingError } = await remainingPromise;
+        if (remainingError) throw remainingError;
         if (searchRequestRef.current !== requestId) return;
         setSearchResults(mergeGlobalSearchGroups([...fastResults, ...remainingResults]));
       } catch (err) {

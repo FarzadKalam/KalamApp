@@ -3,7 +3,6 @@ import {
   buildGlobalSearchModules,
   buildPhoneSearchVariants,
   digitsToEnglish,
-  GLOBAL_SEARCH_RPC_SUPPORTED_MODULE_IDS,
   isGlobalSearchQueryReady,
   mergeGlobalSearchGroups,
   normalizeGlobalSearchQuery,
@@ -154,7 +153,7 @@ describe('globalSearch normalization', () => {
     ]);
   });
 
-  it('falls back for modules not covered by the RPC allowlist', async () => {
+  it('uses the RPC for every active module', async () => {
     const moduleConfigs = {
       custom_forms: {
         id: 'custom_forms',
@@ -163,17 +162,19 @@ describe('globalSearch normalization', () => {
       },
     } as any;
     const modules = buildGlobalSearchModules(moduleConfigs);
-    const abortSignal = vi.fn().mockReturnThis();
-    const range = vi.fn().mockResolvedValue({
-      data: [{ id: 'cf-1', name: 'فرم قرارداد', created_at: '2026-06-28T10:00:00Z' }],
-      error: null,
-    });
-    const or = vi.fn(() => ({ range, abortSignal }));
-    const select = vi.fn(() => ({ or }));
-    const from = vi.fn(() => ({ select }));
     const supabase = {
-      rpc: vi.fn(),
-      from,
+      rpc: vi.fn().mockResolvedValue({
+        data: [{
+          module_id: 'custom_forms',
+          record_id: 'cf-1',
+          payload: { id: 'cf-1', name: 'فرم قرارداد', created_at: '2026-06-28T10:00:00Z' },
+          matched_fields: ['name'],
+          score: 50,
+          created_at: '2026-06-28T10:00:00Z',
+        }],
+        error: null,
+      }),
+      from: vi.fn(),
     } as any;
 
     const results = await searchGlobalRecords(supabase, moduleConfigs, modules, {
@@ -181,12 +182,14 @@ describe('globalSearch normalization', () => {
       cacheNamespace: 'u1',
     });
 
-    expect(supabase.rpc).not.toHaveBeenCalled();
-    expect(from).toHaveBeenCalledWith('custom_forms');
+    expect(supabase.rpc).toHaveBeenCalledWith('global_search_records', expect.objectContaining({
+      p_modules: ['custom_forms'],
+    }));
+    expect(supabase.from).not.toHaveBeenCalled();
     expect(results[0]?.items[0]?.title).toBe('فرم قرارداد');
   });
 
-  it('keeps RPC on supported modules and uses fallback only for unsupported modules', async () => {
+  it('searches all active modules in one RPC request', async () => {
     const moduleConfigs = {
       customers: {
         id: 'customers',
@@ -200,27 +203,26 @@ describe('globalSearch normalization', () => {
       },
     } as any;
     const modules = buildGlobalSearchModules(moduleConfigs);
-    const supportedModuleId = GLOBAL_SEARCH_RPC_SUPPORTED_MODULE_IDS.includes('customers') ? 'customers' : modules[0].id;
-    const range = vi.fn().mockResolvedValue({
-      data: [{ id: 'cf-1', name: 'فرم قرارداد', created_at: '2026-06-28T10:00:00Z' }],
-      error: null,
-    });
-    const or = vi.fn(() => ({ range }));
-    const select = vi.fn(() => ({ or }));
-    const from = vi.fn(() => ({ select }));
     const supabase = {
       rpc: vi.fn().mockResolvedValue({
         data: [{
-          module_id: supportedModuleId,
+          module_id: 'customers',
           record_id: 'c-1',
           payload: { id: 'c-1', full_name: 'علی جعفری', created_at: '2026-06-28T09:00:00Z' },
           matched_fields: ['full_name'],
           score: 50,
           created_at: '2026-06-28T09:00:00Z',
+        }, {
+          module_id: 'custom_forms',
+          record_id: 'cf-1',
+          payload: { id: 'cf-1', name: 'فرم قرارداد', created_at: '2026-06-28T10:00:00Z' },
+          matched_fields: ['name'],
+          score: 40,
+          created_at: '2026-06-28T10:00:00Z',
         }],
         error: null,
       }),
-      from,
+      from: vi.fn(),
     } as any;
 
     const results = await searchGlobalRecords(supabase, moduleConfigs, modules, {
@@ -229,7 +231,10 @@ describe('globalSearch normalization', () => {
     });
 
     expect(supabase.rpc).toHaveBeenCalledTimes(1);
-    expect(from).toHaveBeenCalledWith('custom_forms');
+    expect(supabase.rpc).toHaveBeenCalledWith('global_search_records', expect.objectContaining({
+      p_modules: expect.arrayContaining(['customers', 'custom_forms']),
+    }));
+    expect(supabase.from).not.toHaveBeenCalled();
     expect(results.flatMap((group) => group.items).map((item) => item.recordId)).toEqual(expect.arrayContaining(['c-1', 'cf-1']));
   });
 

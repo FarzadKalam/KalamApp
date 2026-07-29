@@ -45,6 +45,7 @@ import {
   type ConditionalFieldSettings,
 } from "../utils/conditionalFieldRules";
 import { buildResolvedConditionalFieldSettings } from "../utils/conditionalFieldDefaults";
+import { usePublicTimeTheme } from '../components/public/PublicThemeBoundary';
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -482,9 +483,7 @@ const InquiryForm = () => {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [publicForm, setPublicForm] = useState<PublicWebFormState | null>(null);
   const [branding, setBranding] = useState(() => readRuntimeBranding() || DEFAULT_BRANDING);
-  const [isDarkMode, setIsDarkMode] = useState(() =>
-    typeof document !== "undefined" ? document.documentElement.classList.contains("dark") : false
-  );
+  const isDarkMode = usePublicTimeTheme();
   const [authUser, setAuthUser] = useState<any>(null);
   const [currentEmployee, setCurrentEmployee] = useState<Record<string, any> | null>(null);
   const [currentEmployeeLoaded, setCurrentEmployeeLoaded] = useState(false);
@@ -583,20 +582,6 @@ const InquiryForm = () => {
     window.addEventListener(BRANDING_APPLIED_EVENT, syncBranding as EventListener);
     return () => {
       window.removeEventListener(BRANDING_APPLIED_EVENT, syncBranding as EventListener);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (typeof document === "undefined") return undefined;
-    const updateMode = () => setIsDarkMode(document.documentElement.classList.contains("dark"));
-    updateMode();
-    const observer = new MutationObserver(updateMode);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-    const storageListener = () => updateMode();
-    window.addEventListener("storage", storageListener);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("storage", storageListener);
     };
   }, []);
 
