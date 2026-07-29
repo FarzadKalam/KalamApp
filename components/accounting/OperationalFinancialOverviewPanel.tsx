@@ -16,6 +16,7 @@ import {
   OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL,
   OPERATIONAL_FINANCIAL_PRINT_FIELDS,
   OPERATIONAL_FINANCIAL_PRINT_SUMMARY_FIELDS,
+  OPERATIONAL_FINANCIAL_ROW_TYPE_COLOR,
   OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL,
   OPERATIONAL_FINANCIAL_STATUS_LABEL,
   type OperationalFinancialEntityType,
@@ -269,7 +270,7 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
         key: 'rowType',
         width: 120,
         ...createChoiceFilter('نوع', rowTypeFilters, (record) => record.rowType),
-        render: (value: OperationalFinancialRow['rowType']) => <Tag color="blue">{OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL[value] || value}</Tag>,
+        render: (value: OperationalFinancialRow['rowType']) => <Tag color={OPERATIONAL_FINANCIAL_ROW_TYPE_COLOR[value] || 'default'}>{OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL[value] || value}</Tag>,
       },
       {
         title: 'منبع',

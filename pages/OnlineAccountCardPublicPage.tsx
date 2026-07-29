@@ -5,6 +5,7 @@ import { useParams } from 'react-router-dom';
 import { supabasePublic } from '../supabaseClient';
 import { getPublicOnlineAccountCard } from '../utils/onlineAccountCard';
 import { formatPersianPrice, safeJalaliFormat } from '../utils/persianNumberFormatter';
+import { OPERATIONAL_FINANCIAL_ROW_TYPE_COLOR, OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL } from '../utils/operationalFinancialOverview';
 
 type CardRow = {
   key: string;
@@ -17,11 +18,6 @@ type CardRow = {
   description?: string | null;
   status?: string | null;
   payment_type?: string | null;
-};
-
-const rowTypeLabel: Record<string, string> = {
-  opening: 'اول دوره', invoice: 'فاکتور', receipt: 'دریافت', payment: 'پرداخت',
-  barter: 'تهاتر', expense: 'هزینه', payroll_slip: 'فیش حقوقی', advance: 'مساعده',
 };
 
 const OnlineAccountCardPublicPage = () => {
@@ -63,7 +59,12 @@ const OnlineAccountCardPublicPage = () => {
   const canPay = card?.entity_type === 'customer' && paymentState?.available === true && payableAmount > 0;
 
   const columns = useMemo(() => [
-    { title: 'نوع', dataIndex: 'row_type', width: 115, render: (value: string) => <Tag color="blue">{rowTypeLabel[value] || value || '—'}</Tag> },
+    {
+      title: 'نوع',
+      dataIndex: 'row_type',
+      width: 115,
+      render: (value: string) => <Tag color={OPERATIONAL_FINANCIAL_ROW_TYPE_COLOR[value as keyof typeof OPERATIONAL_FINANCIAL_ROW_TYPE_COLOR] || 'default'}>{OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL[value as keyof typeof OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL] || value || '—'}</Tag>,
+    },
     { title: 'منبع', dataIndex: 'source_label', width: 170, render: (value: string) => value || '—' },
     { title: 'تاریخ', dataIndex: 'date', width: 120, render: (value: string) => value ? safeJalaliFormat(value, 'YYYY/MM/DD') : '—' },
     { title: 'بدهکار', dataIndex: 'debit', align: 'right' as const, width: 145, render: (value: number) => <span className="persian-number">{formatPersianPrice(Number(value || 0))}</span> },
@@ -112,7 +113,26 @@ const OnlineAccountCardPublicPage = () => {
             </div>
             <section className="mt-6">
               <h2 className="mb-3 text-lg font-black">سوابق مالی</h2>
-              <Table<CardRow> rowKey="key" className="custom-erp-table" dataSource={rows} columns={columns as any} pagination={{ pageSize: 10, showSizeChanger: false }} scroll={{ x: 1100 }} locale={{ emptyText: 'سابقه مالی قابل نمایشی وجود ندارد.' }} />
+              <Table<CardRow>
+                rowKey="key"
+                className="custom-erp-table"
+                dataSource={rows}
+                columns={columns as any}
+                pagination={{ pageSize: 10, showSizeChanger: false }}
+                scroll={{ x: 1100 }}
+                locale={{ emptyText: 'سابقه مالی قابل نمایشی وجود ندارد.' }}
+                summary={() => (
+                  <Table.Summary fixed>
+                    <Table.Summary.Row>
+                      <Table.Summary.Cell index={0} colSpan={3}><span className="font-bold">جمع کل</span></Table.Summary.Cell>
+                      <Table.Summary.Cell index={3} align="right"><span className="persian-number font-bold">{formatPersianPrice(Number(summary?.total_debit || 0))}</span></Table.Summary.Cell>
+                      <Table.Summary.Cell index={4} align="right"><span className="persian-number font-bold">{formatPersianPrice(Number(summary?.total_credit || 0))}</span></Table.Summary.Cell>
+                      <Table.Summary.Cell index={5} align="right"><span className="persian-number font-bold">{formatPersianPrice(Math.abs(finalBalance))}</span></Table.Summary.Cell>
+                      <Table.Summary.Cell index={6} />
+                    </Table.Summary.Row>
+                  </Table.Summary>
+                )}
+              />
             </section>
           </div>
         </section>

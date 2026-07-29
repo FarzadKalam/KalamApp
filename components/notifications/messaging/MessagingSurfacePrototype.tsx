@@ -207,6 +207,12 @@ type ComposerSendPayload = {
 type MessagingSurfacePrototypeProps = {
   initialFilter?: ChannelKind | 'all';
   initialConversationKey?: string | null;
+  initialForwardMessage?: {
+    content?: string | null;
+    attachments?: NoteAttachment[] | null;
+    relatedModuleId?: string | null;
+    relatedRecordId?: string | null;
+  } | null;
 };
 
 const emptyConversation: Conversation = {
@@ -2506,7 +2512,11 @@ type ChatGroupRow = {
   metadata?: Record<string, any> | null;
 };
 
-const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ initialFilter = 'internal', initialConversationKey = null }) => {
+const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
+  initialFilter = 'internal',
+  initialConversationKey = null,
+  initialForwardMessage = null,
+}) => {
   const { message } = App.useApp();
   const notificationRuntime = useOptionalNotificationRuntime();
   const [selectedKey, setSelectedKey] = useState(() => normalizeMessagingConversationKey(initialConversationKey));
@@ -2544,6 +2554,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const [forwardTargetUserIds, setForwardTargetUserIds] = useState<string[]>([]);
   const [forwardMessageText, setForwardMessageText] = useState('');
   const [forwardSubmitting, setForwardSubmitting] = useState(false);
+  const initialForwardHandledRef = useRef(false);
   const [chatGroups, setChatGroups] = useState<ChatGroupRow[]>([]);
   const [messageActivityDraft, setMessageActivityDraft] = useState<MessageActivityDraft | null>(null);
   const [refreshingMessages, setRefreshingMessages] = useState(false);
@@ -4620,6 +4631,25 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     setForwardTargetUserIds([]);
     setForwardMessageText('');
   };
+
+  useEffect(() => {
+    if (!initialForwardMessage || initialForwardHandledRef.current) return;
+    const text = String(initialForwardMessage.content || '').trim();
+    const attachments = Array.isArray(initialForwardMessage.attachments)
+      ? initialForwardMessage.attachments
+      : [];
+    if (!text && attachments.length === 0) return;
+
+    initialForwardHandledRef.current = true;
+    setForwardingNote({
+      module_id: String(initialForwardMessage.relatedModuleId || '').trim() || null,
+      record_id: String(initialForwardMessage.relatedRecordId || '').trim() || null,
+      content: serializeNoteContent(text, attachments),
+      __forward_source_type: 'note',
+    });
+    setForwardTargetUserIds([]);
+    setForwardMessageText('');
+  }, [initialForwardMessage]);
 
   const openCreateActivityFromMessage = (item: TimelineEvent) => {
     const relatedModuleId = String(item.sourceRow?.module_id || item.sourceRow?.related_module_id || activeConversation.relatedModuleId || '').trim();

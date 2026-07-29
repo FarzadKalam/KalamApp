@@ -12,6 +12,9 @@ const MessagesPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
+  const [initialForwardMessage] = React.useState<any | null>(() => (
+    (location.state as { aiForwardMessage?: any } | null)?.aiForwardMessage || null
+  ));
   const requestedTab = useMemo(() => {
     const tab = String(searchParams.get('tab') || '').trim();
     return MESSAGE_TABS.has(tab as MessagesTab) ? tab as MessagesTab : undefined;
@@ -42,6 +45,11 @@ const MessagesPage: React.FC = () => {
     });
   }, [location.state, navigate, searchParams]);
 
+  useEffect(() => {
+    if (!initialForwardMessage) return;
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  }, [initialForwardMessage, location.pathname, location.search, navigate]);
+
   // Let the chat panels manage their own scroll while keeping Layout's mobile footer inset.
   useEffect(() => {
     const content = document.querySelector('.layout-main-scroll') as HTMLElement | null;
@@ -56,7 +64,11 @@ const MessagesPage: React.FC = () => {
   return (
     <div className="messages-page-root" style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <Suspense fallback={null}>
-        <MessagingSurfacePrototype initialFilter={initialFilter} initialConversationKey={initialConversationKey} />
+        <MessagingSurfacePrototype
+          initialFilter={initialFilter}
+          initialConversationKey={initialConversationKey}
+          initialForwardMessage={initialForwardMessage}
+        />
       </Suspense>
     </div>
   );

@@ -37,5 +37,6 @@ describe('communication reports', () => {
     expect(hasVoipRecording({ recording_url: 'https://example.test/call.mp3' })).toBe(true);
     expect(hasVoipRecording({ file_id: 'file-1', call_id: 'call-1' })).toBe(true);
     expect(hasVoipRecording({ file_id: 'file-1' })).toBe(false);
+    expect(hasVoipRecording({ file_id: '0', call_id: 'call-1' })).toBe(false);
   });
 });

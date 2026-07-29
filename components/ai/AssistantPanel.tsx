@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Avatar, Button, Checkbox, Drawer, Empty, Input, Popconfirm, Popover, Progress, Space, Spin, Tag, Tooltip } from 'antd';
 import { CheckOutlined, CloseOutlined, CompressOutlined, CopyOutlined, DeleteOutlined, EditOutlined, ForwardOutlined, MenuOutlined, SendOutlined, UserAddOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import { AI_CONTEXT_EVENT, type AssistantContext } from '../../utils/aiAssistantEvents';
@@ -435,6 +435,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
 }) => {
   const { message } = App.useApp();
   const location = useLocation();
+  const navigate = useNavigate();
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
@@ -837,17 +838,18 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       return;
     }
     const text = String(input?.content || '').trim();
-    if (!text) return;
-    try {
-      if (typeof navigator.share === 'function') {
-        await navigator.share({ title: 'پیام هوش مصنوعی', text });
-        return;
-      }
-      await copyText(text, 'متن فوروارد');
-    } catch {
-      await copyText(text, 'متن فوروارد');
-    }
-  }, [copyText, onForwardMessage]);
+    const attachments = Array.isArray(input?.attachments) ? input.attachments : [];
+    if (!text && attachments.length === 0) return;
+    navigate('/messages', {
+      state: {
+        aiForwardMessage: {
+          ...input,
+          content: text,
+          attachments,
+        },
+      },
+    });
+  }, [navigate, onForwardMessage]);
 
   const createActivityFromMessage = useCallback(async (input: any) => {
     if (openCreateActivityFromMessage) {
@@ -2719,7 +2721,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 />
               </Tooltip>
             ) : null}
-            {messageText ? (
+            {messageText || attachments.length > 0 ? (
               <Tooltip title="فوروارد">
                 <Button
                   type="text"

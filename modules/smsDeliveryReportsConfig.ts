@@ -36,6 +36,8 @@ export const smsDeliveryReportsConfig: ModuleDefinition = {
       'recipient',
       'message_text',
       'message_at',
+      'provider',
+      'error_message',
       'phone_match_status',
       'module_id',
       'record_id',

@@ -20,6 +20,7 @@ import {
   persistVoipRecordingAttachment,
   type VoipRecordingCall,
 } from '../../utils/voipRecording';
+import VoipCallDetailsButton from './VoipCallDetailsButton';
 
 type VoipRecordingPlayerProps = {
   call: VoipRecordingCall;
@@ -51,7 +52,13 @@ const VoipRecordingPlayer: React.FC<VoipRecordingPlayerProps> = ({ call, compact
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
   }, []);
 
-  if (!hasVoipRecording(call)) return null;
+  if (!hasVoipRecording(call)) {
+    return (
+      <div className="flex items-center">
+        <VoipCallDetailsButton call={call} compact={compact} />
+      </div>
+    );
+  }
 
   const ensureAudioUrl = async () => {
     if (audioUrl) return audioUrl;
@@ -172,6 +179,7 @@ const VoipRecordingPlayer: React.FC<VoipRecordingPlayerProps> = ({ call, compact
           <Button type="text" size="small" icon={<FastForwardOutlined />} onClick={() => seekBy(10)} disabled={!audioUrl} />
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-1">
+          <VoipCallDetailsButton call={call} compact={compact} />
           <Button type="link" size="small" icon={<DownloadOutlined />} onClick={() => void downloadRecording()}>دانلود</Button>
           <Button type="link" size="small" icon={<RobotOutlined />} loading={analyzing} onClick={() => void analyzeRecording()}>تحلیل با AI</Button>
           {onForward ? (

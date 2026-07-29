@@ -7,6 +7,7 @@ import {
   buildOperationalFinancialEntityPrintValues,
   isEmployeeFinancialOverviewOperation,
   OPERATIONAL_FINANCIAL_PRINT_SUMMARY_FIELDS,
+  OPERATIONAL_FINANCIAL_ROW_TYPE_COLOR,
   computeOperationalFinancialTotals,
   formatOperationalFinancialDescription,
   isEmployeeAdvanceIncludedInPayroll,
@@ -19,6 +20,11 @@ describe('operationalFinancialOverview', () => {
     expect(buildOperationAmountPair('customer', 'payment', 125000)).toEqual({ debit: 125000, credit: 0 });
     expect(buildOperationAmountPair('supplier', 'payment', 320000)).toEqual({ debit: 320000, credit: 0 });
     expect(buildOperationAmountPair('employee', 'receipt', 91000)).toEqual({ debit: 0, credit: 91000 });
+  });
+
+  it('assigns a distinct color to every financial history type', () => {
+    expect(new Set(Object.values(OPERATIONAL_FINANCIAL_ROW_TYPE_COLOR)).size)
+      .toBe(Object.keys(OPERATIONAL_FINANCIAL_ROW_TYPE_COLOR).length);
   });
 
   it('keeps every signed previous-system opening balance in the correct account side', () => {

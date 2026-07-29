@@ -18,7 +18,9 @@ import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import ResilientImage from './common/ResilientImage';
 import { runSelectWithCompatibleColumns } from '../utils/selectCompat';
 import PhoneMatchPickerModal from './notifications/PhoneMatchPickerModal';
+import VoipCallDetailsButton from './notifications/VoipCallDetailsButton';
 import VoipRecordingPlayer from './notifications/VoipRecordingPlayer';
+import { hasVoipRecording } from '../utils/voipRecording';
 import { fetchRecordLockState, getRecordLockStateFromRecord, mergeRecordLockIntoRecord } from '../utils/recordLockRuntime';
 import RecordLockControl from './recordLocks/RecordLockControl';
 import {
@@ -831,7 +833,13 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
           </div>
         )}
 
-        {!loading && record && moduleId === 'voip_call_reports' && (
+        {!loading && record && moduleId === 'voip_call_reports' ? (
+          <div className="mb-3 flex items-center">
+            <VoipCallDetailsButton call={record} />
+          </div>
+        ) : null}
+
+        {!loading && record && moduleId === 'voip_call_reports' && hasVoipRecording(record) && (
           <div className="mb-3">
             <div className="mb-1 text-[11px] font-semibold text-gray-600 dark:text-gray-300">فایل صوتی تماس</div>
             <VoipRecordingPlayer call={record} />
@@ -983,4 +991,3 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
 };
 
 export default RelatedRecordPopover;
-

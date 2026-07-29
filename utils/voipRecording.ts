@@ -22,7 +22,8 @@ export const hasVoipRecording = (call: VoipRecordingCall | null | undefined) => 
   if (String(call?.recording_url || '').trim()) return true;
   const recordingAvailable = call?.metadata?.recording_available;
   if (recordingAvailable === false || recordingAvailable === 'false') return false;
-  return Boolean(String(call?.file_id || '').trim() && String(call?.call_id || '').trim());
+  const fileId = String(call?.file_id || '').trim();
+  return Boolean(fileId && fileId !== '0' && String(call?.call_id || '').trim());
 };
 
 export const getVoipRecordingFileName = (call: VoipRecordingCall) => {

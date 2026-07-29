@@ -162,6 +162,18 @@ export const OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL: Record<OperationalFinancialRo
   advance: 'مساعده',
 };
 
+// هر نوع گردش رنگ اختصاصی دارد تا در همهٔ نمایش‌های سوابق از هم تفکیک شود.
+export const OPERATIONAL_FINANCIAL_ROW_TYPE_COLOR: Record<OperationalFinancialRowType, string> = {
+  opening: 'gold',
+  invoice: 'blue',
+  receipt: 'green',
+  payment: 'red',
+  barter: 'purple',
+  expense: 'orange',
+  payroll_slip: 'cyan',
+  advance: 'magenta',
+};
+
 export const OPERATIONAL_FINANCIAL_PRINT_FIELDS: OperationalFinancialOverviewResult['printFields'] = [
   {
     key: 'rowTypeLabel',
