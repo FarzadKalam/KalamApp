@@ -43,7 +43,7 @@ import {
   resolveWorkflowDateCriterion,
 } from './_runtime-deps/workflowMutationContract.ts';
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-28-single-runner-backpressure';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-29-event-queue-priority';
 const MAX_WORKFLOWS = 30;
 const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
@@ -5954,7 +5954,10 @@ Deno.serve(async (req) => {
       body = await req.json().catch(() => ({}));
     }
     const action = String(body?.action || '').trim();
-    const requiresExclusiveLease = action !== 'run_event';
+    // رویدادهای ثبت‌شدهٔ کاربر باید مستقل از اسکن‌های زمان‌دار تخلیه شوند.
+    // claim_workflow_event هر آیتم را اتمیک claim می‌کند، پس هم‌پوشانی کنترل‌شده
+    // بین این مسیر فوری و tick زمان‌دار، اجرای تکراری ایجاد نمی‌کند.
+    const requiresExclusiveLease = action !== 'run_event' && action !== 'drain_events';
     let leaseToken: string | null = null;
     if (requiresExclusiveLease) {
       leaseToken = await acquireWorkflowRunnerLease(supabaseUrl, serviceRoleKey);

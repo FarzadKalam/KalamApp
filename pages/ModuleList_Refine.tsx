@@ -458,6 +458,11 @@ const readPersistedModuleListState = (moduleId?: string | null, suffix?: string 
 };
 
 const MODULE_LIST_CREATED_AT_DEFAULT_SORT_MODULES = new Set(["automation_execution_reports"]);
+const MODULE_LIST_TAGS_UNSUPPORTED_MODULE_IDS = new Set([
+  "automation_execution_reports",
+  "sms_delivery_reports",
+  "voip_call_reports",
+]);
 
 const getDefaultSorters = (moduleConfig?: ModuleDefinition | null): CrudSort[] => {
   if (!moduleConfig) return [{ field: "created_at", order: "desc" }];
@@ -2262,9 +2267,10 @@ export const ModuleListRefine: React.FC<{
   );
   const shouldLoadTags = useMemo(() => {
     if (!tagsField) return false;
+    if (MODULE_LIST_TAGS_UNSUPPORTED_MODULE_IDS.has(String(resolvedModuleId || ""))) return false;
     if (viewMode === ViewMode.LIST) return true;
     return visibleListFieldKeys.includes(String(tagsField));
-  }, [tagsField, viewMode, visibleListFieldKeys]);
+  }, [resolvedModuleId, tagsField, viewMode, visibleListFieldKeys]);
 
   // ✅ Merge tags into allData
   const accessibleData = useMemo(() => {
