@@ -10,6 +10,10 @@ const corsHeaders = {
 };
 const response = (status: number, payload: Record<string, unknown>) => new Response(JSON.stringify(payload), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8' } });
 const PAGE_SIZE = 1000;
+// کلیدهای منبع همراه با filterهای PostgREST در URL ارسال می‌شوند. دستهٔ بزرگ
+// باعث پاسخ 414 می‌شود و پیش‌نمایش فیش را ناتمام می‌گذارد؛ 20 کلید با طول
+// معمول، فاصلهٔ امنی از سقف URL پراکسی دارد.
+const PAID_SOURCE_LOOKUP_CHUNK_SIZE = 20;
 const number = (value: unknown) => { const parsed = Number(String(value ?? '').replace(/,/g, '').trim()); return Number.isFinite(parsed) ? parsed : 0; };
 const asObject = (value: any) => value && typeof value === 'object' && !Array.isArray(value) ? value : typeof value === 'string' ? (() => { try { return JSON.parse(value); } catch { return {}; } })() : {};
 const taskTemplateId = (task: any) => String(asObject(task?.recurrence_info)?.process_group?.template_id || task?.source_template_id || asObject(task?.recurrence_info)?.source_template_id || '').trim();
@@ -120,8 +124,8 @@ Deno.serve(async (request) => {
       }
     }
     const paidSourceKeys = new Set<string>();
-    for (let index = 0; index < entries.length; index += 100) {
-      const sourceKeys = entries.slice(index, index + 100).map((entry) => String(entry.source_key || '')).filter(Boolean);
+    for (let index = 0; index < entries.length; index += PAID_SOURCE_LOOKUP_CHUNK_SIZE) {
+      const sourceKeys = entries.slice(index, index + PAID_SOURCE_LOOKUP_CHUNK_SIZE).map((entry) => String(entry.source_key || '')).filter(Boolean);
       if (!sourceKeys.length) continue;
       const target = new URL(`${url}/rest/v1/payroll_calculation_entries`);
       target.searchParams.set('select', 'source_key'); target.searchParams.set('source_type', 'eq.activity_performance'); target.searchParams.set('status', 'eq.included_in_payroll'); target.searchParams.set('source_key', `in.(${sourceKeys.join(',')})`);
