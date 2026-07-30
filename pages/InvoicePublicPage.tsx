@@ -54,6 +54,7 @@ import SharedNoteCard from '../components/notes/SharedNoteCard';
 import BrandLoadingScreen from '../components/common/BrandLoadingScreen';
 import { persistLoadingBrandIdentity, resolveLoadingBrandIdentity } from '../utils/loadingBrand';
 import { usePublicTimeTheme } from '../components/public/PublicThemeBoundary';
+import { normalizeDigitsToEnglish } from '../utils/persianNumericInput';
 
 const anonClient = supabasePublic;
 
@@ -286,7 +287,10 @@ type ContentProps = {
 const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) => {
   const { token } = antdTheme.useToken();
   const { message: antMessage } = App.useApp();
-  const { code } = useParams<{ code: string }>();
+  const { code: rawCode } = useParams<{ code: string }>();
+  // برخی سرویس‌های پیامکی رقم‌های لینک را فارسی یا عربی می‌کنند. کد عمومی
+  // باید پیش از درخواست به همان شکل لاتین ذخیره‌شده در پایگاه داده برگردد.
+  const code = normalizeDigitsToEnglish(rawCode || '').trim();
 
   const moduleParam = new URLSearchParams(window.location.search).get('t') || 'invoices';
   const moduleId = moduleParam === 'p' ? 'purchase_invoices' : 'invoices';
