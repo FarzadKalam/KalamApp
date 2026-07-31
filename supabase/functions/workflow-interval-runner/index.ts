@@ -192,6 +192,20 @@ type ReportDefinitionRow = {
   updated_by?: string | null;
 };
 
+type WorkScheduleNotificationRow = {
+  id: string;
+  org_id: string;
+  title: string | null;
+  status: string | null;
+  is_active: boolean;
+  effective_from: string | null;
+  effective_to: string | null;
+  notification_schedule: Record<string, any> | null;
+  notification_last_run_at: string | null;
+  notification_server_queued_at: string | null;
+  updated_at?: string | null;
+};
+
 function resolveWorkflowActorId(workflow: Partial<WorkflowRow> | null | undefined): string | null {
   const actor = String(workflow?.updated_by || workflow?.created_by || '').trim();
   return actor || null;
@@ -1490,6 +1504,50 @@ async function clearReportServerQueued(url: string, key: string, reportId: strin
   await dbPatch(url, key, 'report_definitions', `id=eq.${reportId}`, {
     server_queued_at: null,
     ...(scheduleError ? { schedule_error: scheduleError } : {}),
+  }).catch(() => {});
+}
+
+async function fetchQueuedWorkScheduleNotifications(url: string, key: string): Promise<WorkScheduleNotificationRow[]> {
+  const rows = await dbGet(url, key,
+    `work_schedules?is_active=eq.true&status=eq.active&notification_server_queued_at=not.is.null&select=id,org_id,title,status,is_active,effective_from,effective_to,notification_schedule,notification_last_run_at,notification_server_queued_at,updated_at&order=updated_at.asc&limit=${MAX_REPORTS}`,
+  );
+  return rows as WorkScheduleNotificationRow[];
+}
+
+async function claimWorkScheduleNotificationRun(
+  url: string,
+  key: string,
+  scheduleId: string,
+  expectedLastRunAt: string | null,
+  scheduledDueAt: Date,
+): Promise<boolean> {
+  const claimedAt = scheduledDueAt.toISOString();
+  try {
+    const result = await callRpc(url, key, 'claim_work_schedule_notification_run', {
+      p_schedule_id: scheduleId,
+      p_expected_last_run_at: expectedLastRunAt,
+      p_claimed_at: claimedAt,
+    });
+    return result === true;
+  } catch {
+    const filter = expectedLastRunAt
+      ? `id=eq.${scheduleId}&is_active=eq.true&status=eq.active&notification_last_run_at=eq.${expectedLastRunAt}`
+      : `id=eq.${scheduleId}&is_active=eq.true&status=eq.active&notification_last_run_at=is.null`;
+    try {
+      await dbPatch(url, key, 'work_schedules', filter, {
+        notification_last_run_at: claimedAt,
+        notification_server_queued_at: null,
+        notification_error: null,
+      });
+      return true;
+    } catch { return false; }
+  }
+}
+
+async function clearWorkScheduleNotificationQueued(url: string, key: string, scheduleId: string, notificationError?: string): Promise<void> {
+  await dbPatch(url, key, 'work_schedules', `id=eq.${encodeURIComponent(scheduleId)}`, {
+    notification_server_queued_at: null,
+    ...(notificationError ? { notification_error: notificationError } : {}),
   }).catch(() => {});
 }
 
@@ -5006,12 +5064,240 @@ async function runScheduledReportsTick(url: string, key: string, now: Date): Pro
   return stats;
 }
 
+// ── Scheduled work-schedule notifications ───────────────────────────────────
+
+function getWorkScheduleNotificationConfig(schedule: WorkScheduleNotificationRow): Record<string, any> {
+  return schedule?.notification_schedule && typeof schedule.notification_schedule === 'object'
+    ? schedule.notification_schedule
+    : {};
+}
+
+function getWorkScheduleNotificationDueAt(schedule: WorkScheduleNotificationRow, now: Date): Date | null {
+  const config = getWorkScheduleNotificationConfig(schedule);
+  if (schedule.is_active !== true || String(schedule.status || '').toLowerCase() !== 'active' || config.enabled !== true) return null;
+  const scheduleTime = parseIntervalAt(String(config.interval_at || '').trim());
+  return getWorkflowScheduledDueAt({
+    last_run_at: schedule.notification_last_run_at || null,
+    interval_value: Math.max(1, parseInt(String(config.interval_value || 1), 10) || 1),
+    interval_unit: String(config.interval_unit || '').toLowerCase() === 'hour' ? 'hour' : 'day',
+    interval_at: scheduleTime ? String(config.interval_at).trim() : null,
+    interval_first_run_at: String(config.first_run_at || '').trim() || null,
+    interval_minute: scheduleTime?.minute ?? null,
+    interval_allowed_from_hour: null,
+    interval_allowed_to_hour: null,
+    interval_day_of_month: null,
+    interval_day_condition: null,
+    interval_days_after_holiday: null,
+  } as WorkflowRow, now);
+}
+
+async function buildWorkScheduleUrl(url: string, key: string, orgId: string, scheduleId: string): Promise<string> {
+  const baseUrl = await getOrgTenantBaseUrl(url, key, orgId);
+  if (!baseUrl) throw new Error('دامنه اختصاصی سازمان برای ارسال برنامه حضور تنظیم نشده است.');
+  return `${baseUrl}/attendance/daily/${scheduleId}`;
+}
+
+async function buildShortWorkScheduleNotificationUrl(url: string, key: string, orgId: string, scheduleId: string): Promise<string> {
+  const targetUrl = await buildWorkScheduleUrl(url, key, orgId, scheduleId);
+  const baseUrl = await getOrgTenantBaseUrl(url, key, orgId);
+  try {
+    const existing = await dbGet(
+      url,
+      key,
+      `short_links?org_id=eq.${encodeURIComponent(orgId)}&link_type=eq.generic&metadata->>kind=eq.scheduled_work_schedule&metadata->>schedule_id=eq.${encodeURIComponent(scheduleId)}&is_active=eq.true&select=code&order=created_at.desc&limit=1`,
+    );
+    if (existing?.[0]?.code) return `${baseUrl}/r/${encodeURIComponent(String(existing[0].code))}`;
+    const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const bytes = crypto.getRandomValues(new Uint8Array(7));
+      const code = Array.from(bytes).map((value) => alphabet[value % alphabet.length]).join('');
+      try {
+        await dbInsert(url, key, 'short_links', {
+          org_id: orgId,
+          code,
+          link_type: 'generic',
+          target_url: targetUrl,
+          metadata: { kind: 'scheduled_work_schedule', schedule_id: scheduleId },
+          is_active: true,
+        });
+        return `${baseUrl}/r/${encodeURIComponent(code)}`;
+      } catch {
+        // A rare code collision is retried with a new code.
+      }
+    }
+  } catch (error) {
+    console.warn('Could not create short work-schedule notification link', error);
+  }
+  return targetUrl;
+}
+
+async function buildWorkScheduleNotificationMessage(
+  url: string,
+  key: string,
+  schedule: WorkScheduleNotificationRow,
+): Promise<string> {
+  const scheduleUrl = await buildShortWorkScheduleNotificationUrl(url, key, schedule.org_id, schedule.id);
+  const period = schedule.effective_from && schedule.effective_to
+    ? `${formatJalaliDateTime(`${schedule.effective_from}T00:00:00Z`).split(' ')[0]} تا ${formatJalaliDateTime(`${schedule.effective_to}T00:00:00Z`).split(' ')[0]}`
+    : 'بازه ثبت‌شده برای برنامه';
+  return [
+    `برنامه حضور «${String(schedule.title || 'برنامه حضور').trim()}» آماده مشاهده است.`,
+    `بازه برنامه: ${period}`,
+    `زمان ارسال: ${formatJalaliDateTime(new Date().toISOString())}`,
+    `لینک برنامه: ${scheduleUrl}`,
+  ].join('\n');
+}
+
+async function sendWorkScheduleNotificationToBotGroups(
+  url: string,
+  key: string,
+  orgId: string,
+  groupIds: string[],
+  text: string,
+  scheduleId: string,
+): Promise<number> {
+  if (groupIds.length === 0) return 0;
+  const rows = await dbGet(url, key, `counterparty_bot_groups?org_id=eq.${encodeURIComponent(orgId)}&id=in.(${groupIds.map(encodeURIComponent).join(',')})&status=eq.active&select=id,org_id,customer_id,supplier_id,employee_id,bot_chat_id,channel_type`).catch(() => []);
+  const settingsByChannel = new Map<string, any>();
+  let sentCount = 0;
+  for (const row of rows) {
+    const channel = String(row?.channel_type || '').trim().toLowerCase();
+    const chatId = String(row?.bot_chat_id || '').trim();
+    if (!chatId || !['bale', 'telegram', 'rubika'].includes(channel)) continue;
+    if (!settingsByChannel.has(channel)) settingsByChannel.set(channel, await getOrgBotSettings(url, key, orgId, channel));
+    const settings = settingsByChannel.get(channel);
+    if (!settings) continue;
+    await sendAndArchiveAutomatedBotGroupMessage(url, key, orgId, row as ServerBotGroupTarget, text, settings, {
+      work_schedule_id: scheduleId,
+      source_type: 'scheduled_work_schedule',
+      message_source: 'scheduled_work_schedule',
+      sender_kind: 'system',
+      sender_type: 'system',
+    });
+    sentCount += 1;
+  }
+  return sentCount;
+}
+
+async function deliverWorkScheduleNotification(
+  url: string,
+  key: string,
+  schedule: WorkScheduleNotificationRow,
+): Promise<{ status: 'success' | 'skipped'; recipientCount: number; message?: string }> {
+  const config = getWorkScheduleNotificationConfig(schedule);
+  const recipientUserIds = Array.from(new Set(
+    (Array.isArray(config.recipient_user_ids) ? config.recipient_user_ids : [])
+      .map((item: any) => String(item || '').trim())
+      .filter(Boolean),
+  ));
+  const botGroupIds = Array.from(new Set(
+    (Array.isArray(config.bot_group_ids) ? config.bot_group_ids : [])
+      .map((item: any) => String(item || '').trim())
+      .filter(Boolean),
+  ));
+  if (recipientUserIds.length === 0 && botGroupIds.length === 0) {
+    return { status: 'skipped', recipientCount: 0, message: 'گیرنده‌ای برای ارسال خودکار برنامه حضور انتخاب نشده است.' };
+  }
+
+  const deliveryChannels = Array.from(new Set(
+    (Array.isArray(config.delivery_channels) ? config.delivery_channels : ['note'])
+      .map((item: any) => String(item || '').trim().toLowerCase())
+      .filter(Boolean),
+  ));
+  const message = await buildWorkScheduleNotificationMessage(url, key, schedule);
+  const recipients = await getScheduledReportRecipients(url, key, schedule.org_id, recipientUserIds);
+  let deliveredCount = 0;
+  const deliveryErrors: string[] = [];
+
+  if (deliveryChannels.includes('note')) {
+    await insertNote(url, key, {
+      org_id: schedule.org_id, module_id: 'work_schedules', record_id: schedule.id, content: message,
+      mention_user_ids: recipientUserIds, mention_role_ids: [], source_type: 'system',
+      metadata: { source_type: 'system', notification_surface: 'system_feed', requires_action: false, work_schedule_id: schedule.id, runner_build: FUNCTION_BUILD },
+    });
+    deliveredCount += recipientUserIds.length;
+  }
+  if (deliveryChannels.includes('email')) {
+    const emails = Array.from(new Set(recipients.filter(isActiveProfileRow).map((item: any) => String(item?.email || '').trim()).filter((item: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(item))));
+    if (emails.length > 0) {
+      const response = await fetch(`${url.replace(/\/$/, '')}/functions/v1/send-email`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body: JSON.stringify({ to: emails, subject: `برنامه حضور: ${String(schedule.title || 'برنامه حضور').trim()}`, body: message, org_id: schedule.org_id }), signal: AbortSignal.timeout(30000) });
+      if (!response.ok) deliveryErrors.push(`ایمیل: ${await response.text().catch(() => String(response.status))}`);
+      else deliveredCount += emails.length;
+    }
+  }
+  if (deliveryChannels.includes('sms')) {
+    const phones = Array.from(new Set(recipients.filter(isActiveProfileRow).flatMap((item: any) => [item.mobile_1, item.mobile_2, item.mobile]).map(normalizePhone).filter(isValidIranMobile)));
+    const smsSettings = await getOrgSmsSettings(url, key, schedule.org_id);
+    if (phones.length > 0 && smsSettings) {
+      try {
+        const sentRecipients = await sendSmsViaProvider(smsSettings, phones, message, url, key);
+        deliveredCount += sentRecipients.length;
+        await auditSmsBatch(url, key, { orgId: schedule.org_id, moduleId: 'work_schedules', recordId: schedule.id, recipients: sentRecipients, text: message, status: 'provider_accepted', metadata: { source_type: 'scheduled_work_schedule', work_schedule_id: schedule.id } });
+      } catch (error: any) {
+        await auditSmsBatch(url, key, { orgId: schedule.org_id, moduleId: 'work_schedules', recordId: schedule.id, recipients: phones, text: message, status: 'failed', errorMessage: String(error?.message || error), metadata: { source_type: 'scheduled_work_schedule', work_schedule_id: schedule.id } });
+        throw error;
+      }
+    }
+  }
+  if (deliveryChannels.includes('bot_group')) {
+    deliveredCount += await sendWorkScheduleNotificationToBotGroups(url, key, schedule.org_id, botGroupIds, message, schedule.id);
+  }
+  if (deliveryErrors.length > 0) {
+    throw new Error(`بخشی از ارسال برنامه حضور ناموفق بود و برای جلوگیری از تکرار نیازمند پیگیری است: ${deliveryErrors.join(' | ')}`);
+  }
+  return deliveredCount > 0
+    ? { status: 'success', recipientCount: deliveredCount }
+    : { status: 'skipped', recipientCount: 0, message: 'هیچ ارسال معتبری برای روش‌های انتخاب‌شده انجام نشد.' };
+}
+
+async function runScheduledWorkScheduleNotificationsTick(url: string, key: string, now: Date): Promise<Record<string, number>> {
+  const stats = { checkedSchedules: 0, claimedSchedules: 0, queuedSchedules: 0, failedSchedules: 0 };
+  const schedules = await fetchQueuedWorkScheduleNotifications(url, key).catch((error) => {
+    console.warn('[workflow-runner] Work-schedule notification fetch failed:', error?.message || error);
+    return [] as WorkScheduleNotificationRow[];
+  });
+  stats.checkedSchedules = schedules.length;
+
+  for (const schedule of schedules) {
+    const scheduledDueAt = getWorkScheduleNotificationDueAt(schedule, now);
+    if (!scheduledDueAt) {
+      await clearWorkScheduleNotificationQueued(url, key, schedule.id);
+      continue;
+    }
+    const claimed = await claimWorkScheduleNotificationRun(url, key, schedule.id, schedule.notification_last_run_at, scheduledDueAt);
+    if (!claimed) continue;
+    stats.claimedSchedules++;
+    try {
+      await enqueueIntervalJob(url, key, {
+        org_id: schedule.org_id,
+        job_kind: 'scheduled_work_schedule_delivery',
+        dedupe_key: intervalJobDedupeKey('scheduled-work-schedule-delivery', schedule.id, scheduledDueAt.toISOString()),
+        workflow_id: null,
+        module_id: 'work_schedules',
+        record_id: schedule.id,
+        scheduled_due_at: scheduledDueAt.toISOString(),
+        page_offset: 0,
+        action_index: null,
+        max_attempts: 3,
+        payload: { schedule },
+      });
+      stats.queuedSchedules++;
+    } catch (error: any) {
+      stats.failedSchedules++;
+      const errorMessage = String(error?.message || 'work-schedule notification delivery failed');
+      console.error(`[workflow-runner] Work-schedule notification failed (${schedule.title || schedule.id}):`, errorMessage);
+      await dbPatch(url, key, 'work_schedules', `id=eq.${schedule.id}`, { notification_error: errorMessage }).catch(() => {});
+    }
+  }
+  return stats;
+}
+
 // ── Main execution loop ───────────────────────────────────────────────────────
 
 type WorkflowIntervalJob = {
   id: string;
   org_id: string;
-  job_kind: 'workflow_scan' | 'workflow_action' | 'process_automation_interval' | 'scheduled_report_delivery';
+  job_kind: 'workflow_scan' | 'workflow_action' | 'process_automation_interval' | 'scheduled_report_delivery' | 'scheduled_work_schedule_delivery';
   workflow_id: string | null;
   module_id: string | null;
   record_id: string | null;
@@ -5389,6 +5675,70 @@ async function processScheduledReportDeliveryJob(url: string, key: string, job: 
   }
 }
 
+async function processScheduledWorkScheduleDeliveryJob(url: string, key: string, job: WorkflowIntervalJob) {
+  const schedule = job.payload?.schedule as WorkScheduleNotificationRow | undefined;
+  if (!schedule?.id || !schedule?.org_id) throw new Error('اطلاعات ارسال خودکار برنامه حضور ناقص است.');
+
+  const executionKey = intervalJobDedupeKey('scheduled-work-schedule-action', job.id);
+  const claim = await callRpc(url, key, 'claim_workflow_action_execution', {
+    p_org_id: job.org_id,
+    p_execution_key: executionKey,
+    p_parent_execution_key: `scheduled-work-schedule-job:${job.id}`,
+    p_action_type: 'scheduled_work_schedule_delivery',
+    p_is_safe_to_reclaim: false,
+  }) as string;
+  if (claim === 'succeeded') {
+    await completeIntervalJob(url, key, job, 'skipped', { reason: 'already_delivered' });
+    return { status: 'skipped', message: 'این برنامه حضور قبلاً ارسال شده است.' };
+  }
+  if (claim === 'in_progress') throw new Error('ارسال برنامه حضور هم‌اکنون توسط worker دیگری در حال اجرا است.');
+  if (claim !== 'claimed') throw new Error('نتیجه اقدام قبلی نامشخص است؛ برای جلوگیری از اجرای تکراری نیازمند پیگیری است.');
+
+  try {
+    const result = await deliverWorkScheduleNotification(url, key, schedule);
+    await callRpc(url, key, 'complete_workflow_action_execution', {
+      p_execution_key: executionKey,
+      p_status: 'succeeded',
+      p_last_error: null,
+    });
+    await completeIntervalJob(url, key, job, result.status === 'success' ? 'succeeded' : 'skipped', { work_schedule_notification: result });
+    await dbPatch(url, key, 'work_schedules', `id=eq.${schedule.id}&org_id=eq.${encodeURIComponent(job.org_id)}`, {
+      ...(result.status === 'success' ? { notification_last_sent_at: new Date().toISOString() } : {}),
+      notification_error: result.status === 'success' ? null : result.message || 'ارسال خودکار برنامه حضور انجام نشد.',
+    }).catch(() => {});
+    await insertWorkflowLog(url, key, {
+      workflow_id: null,
+      org_id: job.org_id,
+      module_id: 'work_schedules',
+      record_id: schedule.id,
+      run_type: 'scheduled_work_schedule',
+      status: result.status === 'success' ? 'success' : 'skipped',
+      message: result.message,
+      execution_run_key: `scheduled-work-schedule:${job.id}`,
+      details: {
+        work_schedule_title: String(schedule.title || '').trim() || 'برنامه حضور',
+        record_title: String(schedule.title || '').trim() || 'برنامه حضور',
+        scheduled_due_at: job.scheduled_due_at,
+        delivery_result: result,
+        execution_queue: 'v2',
+        runner_build: FUNCTION_BUILD,
+      },
+    });
+    return result;
+  } catch (error: any) {
+    const errorMessage = String(error?.message || error || 'ارسال خودکار برنامه حضور ناموفق بود.');
+    const status = isTransientWorkflowError(error) || /نیازمند پیگیری|نتیجه اقدام قبلی نامشخص/i.test(errorMessage)
+      ? 'needs_attention'
+      : 'failed';
+    await callRpc(url, key, 'complete_workflow_action_execution', {
+      p_execution_key: executionKey,
+      p_status: status,
+      p_last_error: errorMessage,
+    }).catch(() => {});
+    throw error;
+  }
+}
+
 async function processIntervalJob(url: string, key: string, job: WorkflowIntervalJob) {
   try {
     if (job.job_kind === 'workflow_scan') {
@@ -5402,6 +5752,10 @@ async function processIntervalJob(url: string, key: string, job: WorkflowInterva
     }
     if (job.job_kind === 'scheduled_report_delivery') {
       await processScheduledReportDeliveryJob(url, key, job);
+      return 'succeeded';
+    }
+    if (job.job_kind === 'scheduled_work_schedule_delivery') {
+      await processScheduledWorkScheduleDeliveryJob(url, key, job);
       return 'succeeded';
     }
     await processWorkflowActionJob(url, key, job);
@@ -5425,6 +5779,30 @@ async function processIntervalJob(url: string, key: string, job: WorkflowInterva
         details: {
           report_name: String(report?.name || '').trim() || 'گزارش زمان‌دار',
           record_title: String(report?.name || '').trim() || 'گزارش زمان‌دار',
+          scheduled_due_at: job.scheduled_due_at,
+          execution_queue: 'v2',
+          runner_build: FUNCTION_BUILD,
+        },
+      }).catch(() => {});
+    }
+    if (job.job_kind === 'scheduled_work_schedule_delivery' && status === 'failed') {
+      const schedule = job.payload?.schedule as WorkScheduleNotificationRow | undefined;
+      const errorMessage = String(error?.message || error || 'ارسال خودکار برنامه حضور ناموفق بود.');
+      await dbPatch(url, key, 'work_schedules', `id=eq.${encodeURIComponent(String(schedule?.id || job.record_id || ''))}&org_id=eq.${encodeURIComponent(job.org_id)}`, {
+        notification_error: errorMessage,
+      }).catch(() => {});
+      await insertWorkflowLog(url, key, {
+        workflow_id: null,
+        org_id: job.org_id,
+        module_id: 'work_schedules',
+        record_id: String(schedule?.id || job.record_id || job.id),
+        run_type: 'scheduled_work_schedule',
+        status: 'failed',
+        message: errorMessage,
+        execution_run_key: `scheduled-work-schedule:${job.id}`,
+        details: {
+          work_schedule_title: String(schedule?.title || '').trim() || 'برنامه حضور',
+          record_title: String(schedule?.title || '').trim() || 'برنامه حضور',
           scheduled_due_at: job.scheduled_due_at,
           execution_queue: 'v2',
           runner_build: FUNCTION_BUILD,
@@ -6451,6 +6829,8 @@ Deno.serve(async (req) => {
     const enqueueStats = await runIntervalEnqueueTick(supabaseUrl, serviceRoleKey);
     const scheduledReportStats = await runScheduledReportsTick(supabaseUrl, serviceRoleKey, new Date())
       .catch((error) => ({ error: String(error?.message || error || 'Scheduled report delivery failed') }));
+    const scheduledWorkScheduleStats = await runScheduledWorkScheduleNotificationsTick(supabaseUrl, serviceRoleKey, new Date())
+      .catch((error) => ({ error: String(error?.message || error || 'Scheduled work-schedule notification delivery failed') }));
     // گزارش‌های سررسیدشده پیش از تخلیه صف وارد job می‌شوند تا در همین tick
     // نیز فرصت اجرا داشته باشند، نه اینکه تا اجرای بعدی معطل بمانند.
     const intervalQueueStats = await drainIntervalJobs(supabaseUrl, serviceRoleKey)
@@ -6462,8 +6842,8 @@ Deno.serve(async (req) => {
       serviceRoleKey,
       new Date(),
     ).catch((error) => ({ failed: true, error: String(error?.message || error) }));
-    console.log(`[workflow-runner] build=${FUNCTION_BUILD} enqueueStats=${JSON.stringify(enqueueStats)} intervalQueueStats=${JSON.stringify(intervalQueueStats)} scheduledReportStats=${JSON.stringify(scheduledReportStats)} eventQueueStats=${JSON.stringify(eventQueueStats)} processAutomationStats=${JSON.stringify(processAutomationStats)}`);
-    return json(200, { ok: true, stats: enqueueStats, intervalQueueStats, scheduledReportStats, eventQueueStats, processAutomationStats });
+    console.log(`[workflow-runner] build=${FUNCTION_BUILD} enqueueStats=${JSON.stringify(enqueueStats)} intervalQueueStats=${JSON.stringify(intervalQueueStats)} scheduledReportStats=${JSON.stringify(scheduledReportStats)} scheduledWorkScheduleStats=${JSON.stringify(scheduledWorkScheduleStats)} eventQueueStats=${JSON.stringify(eventQueueStats)} processAutomationStats=${JSON.stringify(processAutomationStats)}`);
+    return json(200, { ok: true, stats: enqueueStats, intervalQueueStats, scheduledReportStats, scheduledWorkScheduleStats, eventQueueStats, processAutomationStats });
     } finally {
       if (leaseToken) {
         await releaseWorkflowRunnerLease(supabaseUrl, serviceRoleKey, leaseToken).catch((error) => {

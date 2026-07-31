@@ -1,14 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   App,
   Button,
   Checkbox,
   Empty,
   Input,
+  InputNumber,
   Popover,
   Select,
   Space,
   Spin,
+  Switch,
   Tag,
   Typography,
 } from 'antd';
@@ -28,6 +31,7 @@ import {
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import RelatedSidebar from '../components/Sidebar/RelatedSidebar';
 import ProductionStagesField from '../components/ProductionStagesField';
+import AdaptiveIdentityPicker from '../components/AdaptiveIdentityPicker';
 import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
 import PersianDatePicker from '../components/PersianDatePicker';
@@ -40,6 +44,14 @@ import {
   type WorkScheduleDayPlan,
   type WorkScheduleMonthlyPlan,
 } from '../utils/workSchedulePlan';
+import {
+  createDefaultWorkScheduleNotificationConfig,
+  normalizeWorkScheduleNotificationConfig,
+  type WorkScheduleNotificationChannel,
+  type WorkScheduleNotificationConfig,
+  type WorkScheduleNotificationIntervalUnit,
+} from '../utils/workScheduleNotifications';
+import { resolveOverlayPopupContainer } from '../utils/popupContainer';
 
 const { Title, Text } = Typography;
 
@@ -87,6 +99,7 @@ type WorkScheduleRecord = {
   effective_from?: string | null;
   effective_to?: string | null;
   weekly_plan?: unknown;
+  notification_schedule?: unknown;
 };
 
 type SerializedColumn = {
@@ -262,6 +275,9 @@ const WorkSchedulesPage: React.FC = () => {
   const [copyTargets, setCopyTargets] = useState<string[]>([]);
   const [officialHolidaySummaries, setOfficialHolidaySummaries] = useState<HolidayDaySummary[]>([]);
   const [officialHolidaysLoading, setOfficialHolidaysLoading] = useState(false);
+  const [notificationSchedule, setNotificationSchedule] = useState<WorkScheduleNotificationConfig>(createDefaultWorkScheduleNotificationConfig);
+  const [botGroupOptions, setBotGroupOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const popupContainer = useCallback((triggerNode?: HTMLElement | null) => resolveOverlayPopupContainer(triggerNode), []);
 
   useEffect(() => {
     setRecordId(id || null);
@@ -318,6 +334,7 @@ const WorkSchedulesPage: React.FC = () => {
       setScheduleStatus((record?.status as StatusKey) || 'draft');
       setEffectiveFrom(record?.effective_from || null);
       setEffectiveTo(record?.effective_to || null);
+      setNotificationSchedule(normalizeWorkScheduleNotificationConfig(record?.notification_schedule));
     } catch (error) {
       message.error(toFaErrorMessage(error as any, 'خطا در دریافت برنامه حضور'));
     } finally {
@@ -328,6 +345,30 @@ const WorkSchedulesPage: React.FC = () => {
   useEffect(() => {
     void loadPage();
   }, [loadPage]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void supabase
+      .from('counterparty_bot_groups')
+      .select('id, group_title, channel_type')
+      .eq('status', 'active')
+      .order('group_title')
+      .then(({ data }) => {
+        if (cancelled) return;
+        setBotGroupOptions(
+          (data || []).map((group: any) => ({
+            label: `${String(group?.group_title || 'گروه بات').trim()} (${String(group?.channel_type || '').trim() || 'بات'})`,
+            value: String(group?.id || '').trim(),
+          })).filter((item) => item.value),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setBotGroupOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const employeeMap = useMemo(() => Object.fromEntries(employees.map((employee) => [employee.id, employee])), [employees]);
   const departments = useMemo(() => Array.from(new Set(employees.map((x) => String(x.department || '').trim()).filter(Boolean))), [employees]);
@@ -538,6 +579,16 @@ const WorkSchedulesPage: React.FC = () => {
         return;
       }
 
+      const normalizedNotificationSchedule = normalizeWorkScheduleNotificationConfig(notificationSchedule);
+      if (
+        normalizedNotificationSchedule.enabled
+        && normalizedNotificationSchedule.recipient_user_ids.length === 0
+        && normalizedNotificationSchedule.bot_group_ids.length === 0
+      ) {
+        message.warning('برای ارسال خودکار برنامه حضور، حداقل یک گیرنده یا گروه بات انتخاب کن.');
+        return;
+      }
+
       try {
         setSavingAll(!targetColumnKey);
         if (targetColumnKey) {
@@ -570,6 +621,7 @@ const WorkSchedulesPage: React.FC = () => {
               updatedBy: column.updatedBy,
             })),
           },
+          notification_schedule: normalizedNotificationSchedule,
           updated_by: currentUserId,
         };
 
@@ -597,7 +649,7 @@ const WorkSchedulesPage: React.FC = () => {
         setSavingAll(false);
       }
     },
-    [columns, currentUserId, effectiveFrom, effectiveTo, ensureProfileNames, message, navigate, recordId, scheduleStatus, scheduleTitle],
+    [columns, currentUserId, effectiveFrom, effectiveTo, ensureProfileNames, message, navigate, notificationSchedule, recordId, scheduleStatus, scheduleTitle],
   );
 
   const renderMetaCard = (column: ColumnState) => (
@@ -802,6 +854,110 @@ const WorkSchedulesPage: React.FC = () => {
               </span>
             </div>
           </div>
+
+          {pageMode === 'edit' && (
+            <div className="rounded-[1.5rem] border border-gray-200 p-4 dark:border-gray-700">
+              <div className="mb-4 flex items-center justify-between gap-4">
+                <div>
+                  <div className="font-black text-gray-800 dark:text-gray-100">ارسال خودکار برنامه حضور</div>
+                  <div className="text-sm text-gray-500">ارسال خودکار لینک این برنامه به کاربران و گروه‌های انتخاب‌شده</div>
+                </div>
+                <Switch
+                  checked={notificationSchedule.enabled}
+                  onChange={(enabled) => setNotificationSchedule((current) => ({ ...current, enabled }))}
+                  checkedChildren="فعال"
+                  unCheckedChildren="غیرفعال"
+                />
+              </div>
+              {notificationSchedule.enabled && (
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div className="grid grid-cols-[120px_minmax(0,1fr)] gap-3">
+                    <InputNumber
+                      min={1}
+                      className="w-full persian-number"
+                      value={notificationSchedule.interval_value}
+                      onChange={(value) => setNotificationSchedule((current) => ({ ...current, interval_value: Math.max(1, Number(value || 1)) }))}
+                    />
+                    <Select
+                      className="w-full"
+                      value={notificationSchedule.interval_unit}
+                      options={[{ label: 'ساعت', value: 'hour' }, { label: 'روز', value: 'day' }]}
+                      onChange={(value) => setNotificationSchedule((current) => ({ ...current, interval_unit: value as WorkScheduleNotificationIntervalUnit }))}
+                    />
+                  </div>
+                  <div>
+                    <div className="mb-2 font-bold">ساعت ارسال برنامه</div>
+                    <Input
+                      type="time"
+                      className="w-full"
+                      value={notificationSchedule.interval_at}
+                      onChange={(event) => setNotificationSchedule((current) => ({ ...current, interval_at: event.target.value }))}
+                    />
+                    {notificationSchedule.interval_unit === 'hour' && <div className="mt-1 text-xs text-gray-500">در ارسال ساعتی، دقیقه انتخاب‌شده در هر ساعت اعمال می‌شود.</div>}
+                  </div>
+                  <div>
+                    <div className="mb-2 font-bold">زمان اولین ارسال</div>
+                    <PersianDatePicker
+                      type="DATETIME"
+                      value={notificationSchedule.first_run_at}
+                      onChange={(value) => setNotificationSchedule((current) => ({ ...current, first_run_at: value }))}
+                      className="w-full"
+                      placeholder="اختیاری؛ از زمان فعلی محاسبه می‌شود"
+                      modalContainer={popupContainer}
+                    />
+                    <div className="mt-1 text-xs text-gray-500">ارسال فقط در بازه فعال بودن همین برنامه حضور انجام می‌شود.</div>
+                  </div>
+                  <div>
+                    <div className="mb-2 font-bold">روش‌های ارسال خودکار</div>
+                    <Checkbox.Group
+                      value={notificationSchedule.delivery_channels}
+                      onChange={(value) => setNotificationSchedule((current) => ({ ...current, delivery_channels: value as WorkScheduleNotificationChannel[] }))}
+                      options={[
+                        { label: 'ایمیل', value: 'email' },
+                        { label: 'یادداشت داخلی', value: 'note' },
+                        { label: 'پیامک', value: 'sms' },
+                        { label: 'گروه بات', value: 'bot_group' },
+                      ]}
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <AdaptiveIdentityPicker
+                      className="w-full"
+                      mode="multiple"
+                      scopes={['user']}
+                      valueMode="raw"
+                      value={notificationSchedule.recipient_user_ids}
+                      placeholder="یک یا چند کاربر را انتخاب کنید"
+                      onChange={(value) => setNotificationSchedule((current) => ({
+                        ...current,
+                        recipient_user_ids: (Array.isArray(value) ? value : []).map((item) => String(item)),
+                      }))}
+                    />
+                  </div>
+                  {notificationSchedule.delivery_channels.includes('bot_group') && (
+                    <div className="md:col-span-2">
+                      <Select
+                        className="w-full"
+                        mode="multiple"
+                        showSearch
+                        optionFilterProp="label"
+                        value={notificationSchedule.bot_group_ids}
+                        options={botGroupOptions}
+                        placeholder="یک یا چند گروه بات را انتخاب کنید"
+                        onChange={(value) => setNotificationSchedule((current) => ({
+                          ...current,
+                          bot_group_ids: (value || []).map((item) => String(item)),
+                        }))}
+                      />
+                    </div>
+                  )}
+                  <div className="md:col-span-2">
+                    <Alert type="info" showIcon message="تنظیمات همراه همین برنامه ذخیره می‌شود و ارسال‌ها از زمان‌بند مرکزی سامانه اجرا خواهند شد." />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {(officialHolidaysLoading || officialHolidaySummaries.length > 0) && (
             <div className="rounded-2xl border border-rose-200 bg-rose-50/70 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/20 dark:text-rose-200">

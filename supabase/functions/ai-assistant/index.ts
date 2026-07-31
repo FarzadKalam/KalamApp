@@ -4651,8 +4651,17 @@ const callImageGeneration = async (
     ? options.sourceImages.filter((src) => String(src?.data || '').trim())
     : [];
 
-  const allowedSizes = new Set(['1024x1024', '1024x1536', '1536x1024', '1024x1792', '1792x1024', '1080x1920', '1920x1080', 'auto']);
-  const size = allowedSizes.has(String(options.size || '').trim()) ? String(options.size).trim() : '1024x1024';
+  const requestedSize = String(options.size || '').trim();
+  // Some current image models require both dimensions to be divisible by 16.
+  // Keep previously saved 9:16 selections working by translating them before
+  // the request reaches the provider.
+  const sizeAliases: Record<string, string> = {
+    '1080x1920': '1088x1920',
+    '1920x1080': '1920x1088',
+  };
+  const normalizedRequestedSize = sizeAliases[requestedSize] || requestedSize;
+  const allowedSizes = new Set(['1024x1024', '1024x1536', '1536x1024', '1024x1792', '1792x1024', '1088x1920', '1920x1088', 'auto']);
+  const size = allowedSizes.has(normalizedRequestedSize) ? normalizedRequestedSize : '1024x1024';
   const allowedOutputFormats = new Set(['png', 'jpeg', 'webp']);
   const outputFormat = allowedOutputFormats.has(String(options.outputFormat || '').trim().toLowerCase())
     ? String(options.outputFormat).trim().toLowerCase()

@@ -8,6 +8,7 @@ import {
   isDeletedReportRecord,
 } from './reporting';
 import { createWorkflowRelatedFieldKey } from './workflowTypes';
+import { buildReportTaskProcessFieldKey } from './reportTaskProcessFields';
 
 describe('buildReportBaseSelectColumns', () => {
   const moduleConfig = {
@@ -47,6 +48,24 @@ describe('buildReportBaseSelectColumns', () => {
       'invoiceItems',
     ]));
     expect(columns).not.toEqual(expect.arrayContaining(['is_deleted', 'deleted', '_deleted', 'deleted_at']));
+  });
+
+  it('selects task runtime metadata for custom statuses and process fields', () => {
+    const fields = buildReportBaseSelectColumns({
+      id: 'tasks',
+      table: 'tasks',
+      fields: [{ key: 'status', type: FieldType.STATUS, labels: { fa: 'وضعیت' } }],
+    }, [
+      'status',
+      buildReportTaskProcessFieldKey('template-a', 'finance_review', 'approved_amount'),
+    ], []);
+
+    expect(fields).toEqual(expect.arrayContaining([
+      'status',
+      'recurrence_info',
+      'source_template_id',
+      'process_node_key',
+    ]));
   });
 
   it('does not request unsupported assignee or soft-delete columns', () => {

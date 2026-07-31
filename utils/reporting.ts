@@ -5,6 +5,7 @@ import { supportsModuleAssignee } from './assigneeSupport';
 import { buildSurveyReportFieldsFromSnapshot } from './surveyTemplates';
 import { getSyntheticWorkflowAssigneeField, getWorkflowConditionFields } from './workflowHelpers';
 import { parseWorkflowRelatedFieldKey, WORKFLOW_ASSIGNEE_FIELD_KEY, type WorkflowCondition } from './workflowTypes';
+import { isReportTaskProcessFieldKey } from './reportTaskProcessFields';
 
 export type ReportMetricType = 'count' | 'sum' | 'avg';
 export type ReportDefaultView = 'table' | 'table_and_chart';
@@ -238,6 +239,17 @@ export const buildReportBaseSelectColumns = (
     const key = String(rawKey || '').trim();
     if (!key) return;
 
+    if (isReportTaskProcessFieldKey(key)) {
+      requiredColumns.add('recurrence_info');
+      requiredColumns.add('source_template_id');
+      requiredColumns.add('process_node_key');
+      return;
+    }
+
+    if (String(moduleConfig?.id || '').trim() === 'tasks' && key === 'status') {
+      requiredColumns.add('recurrence_info');
+    }
+
     const tableFieldMeta = parseReportTableFieldKey(key);
     if (tableFieldMeta?.blockId) {
       requiredColumns.add(tableFieldMeta.blockId);
@@ -418,6 +430,7 @@ export const isSummableReportField = (field?: ModuleField | null) => !!field && 
 export const getMainReportableFields = (
   moduleId?: string | null,
   surveyTemplateSnapshot?: unknown,
+  taskProcessFields: ModuleField[] = [],
 ) => {
   const normalizedModuleId = String(moduleId || '').trim();
   const fields = MODULES[normalizedModuleId]?.fields || [];
@@ -425,11 +438,19 @@ export const getMainReportableFields = (
   const surveyTemplateFields = normalizedModuleId === 'surveys'
     ? buildSurveyReportFieldsFromSnapshot(surveyTemplateSnapshot)
     : [];
+  const moduleFields = fields
+    .filter((field) => isReportableField(field) && (!assigneeField || String(field.key || '').trim() !== 'assignee_id'))
+    .map((field) => (
+      normalizedModuleId === 'tasks' && String(field?.key || '').trim() === 'status'
+        ? { ...field, __reportTaskRuntimeStatus: true } as ModuleField
+        : field
+    ));
   return dedupeFields([
     // گزارش باید مسئول را از فیلد مصنوعی بخواند تا نام کاربر/نقش نمایش داده شود،
     // نه شناسه خام assignee_id؛ در نتیجه این ستون دوبار هم ظاهر نمی‌شود.
-    ...fields.filter((field) => isReportableField(field) && (!assigneeField || String(field.key || '').trim() !== 'assignee_id')),
+    ...moduleFields,
     ...surveyTemplateFields.filter((field) => isReportableField(field)),
+    ...(normalizedModuleId === 'tasks' ? taskProcessFields.filter((field) => isReportableField(field)) : []),
     ...(assigneeField ? [assigneeField] : []),
   ]);
 };
@@ -555,25 +576,28 @@ export const getReportableFields = (
   mainModuleId?: string | null,
   secondaryModuleId?: string | string[] | null,
   surveyTemplateSnapshot?: unknown,
+  taskProcessFields: ModuleField[] = [],
 ) =>
   dedupeFields([
-    ...getMainReportableFields(mainModuleId, surveyTemplateSnapshot),
-    ...getSecondaryReportableFields(mainModuleId, secondaryModuleId, surveyTemplateSnapshot),
+    ...getMainReportableFields(mainModuleId, surveyTemplateSnapshot, taskProcessFields),
+    ...getSecondaryReportableFields(mainModuleId, secondaryModuleId, surveyTemplateSnapshot, taskProcessFields),
   ]);
 
 export const getReportConditionFields = (
   mainModuleId?: string | null,
   secondaryModuleId?: string | string[] | null,
   surveyTemplateSnapshot?: unknown,
+  taskProcessFields: ModuleField[] = [],
 ) =>
-  getReportableFields(mainModuleId, secondaryModuleId, surveyTemplateSnapshot);
+  getReportableFields(mainModuleId, secondaryModuleId, surveyTemplateSnapshot, taskProcessFields);
 
 export const getReportableFieldMap = (
   mainModuleId?: string | null,
   secondaryModuleId?: string | string[] | null,
   surveyTemplateSnapshot?: unknown,
+  taskProcessFields: ModuleField[] = [],
 ) => {
-  return getReportableFields(mainModuleId, secondaryModuleId, surveyTemplateSnapshot).reduce<Record<string, ModuleField>>((acc, field) => {
+  return getReportableFields(mainModuleId, secondaryModuleId, surveyTemplateSnapshot, taskProcessFields).reduce<Record<string, ModuleField>>((acc, field) => {
     acc[field.key] = field;
     return acc;
   }, {});
@@ -583,15 +607,17 @@ export const getGroupableReportFields = (
   mainModuleId?: string | null,
   secondaryModuleId?: string | string[] | null,
   surveyTemplateSnapshot?: unknown,
+  taskProcessFields: ModuleField[] = [],
 ) =>
-  getReportableFields(mainModuleId, secondaryModuleId, surveyTemplateSnapshot).filter((field) => isGroupableReportField(field));
+  getReportableFields(mainModuleId, secondaryModuleId, surveyTemplateSnapshot, taskProcessFields).filter((field) => isGroupableReportField(field));
 
 export const getSummableReportFields = (
   mainModuleId?: string | null,
   secondaryModuleId?: string | string[] | null,
   surveyTemplateSnapshot?: unknown,
+  taskProcessFields: ModuleField[] = [],
 ) =>
-  getReportableFields(mainModuleId, secondaryModuleId, surveyTemplateSnapshot).filter((field) => isSummableReportField(field));
+  getReportableFields(mainModuleId, secondaryModuleId, surveyTemplateSnapshot, taskProcessFields).filter((field) => isSummableReportField(field));
 
 export const getReportModuleOptions = (permissions?: Record<string, { view?: boolean }> | null) =>
   Object.values(MODULES)

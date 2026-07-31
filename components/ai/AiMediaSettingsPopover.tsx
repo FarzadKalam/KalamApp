@@ -75,9 +75,9 @@ const IMAGE_SIZE_OPTIONS = [
   { value: 'auto', label: 'خودکار' },
   { value: '1024x1024', label: 'مربع (۱۰۲۴×۱۰۲۴)' },
   { value: '1024x1536', label: 'عمودی (۱۰۲۴×۱۵۳۶)' },
-  { value: '1080x1920', label: 'عمودی تمام‌صفحه (۱۰۸۰×۱۹۲۰)' },
+  { value: '1088x1920', label: 'عمودی تمام‌صفحه (۱۰۸۸×۱۹۲۰)' },
   { value: '1536x1024', label: 'افقی (۱۵۳۶×۱۰۲۴)' },
-  { value: '1920x1080', label: 'افقی تمام‌صفحه (۱۹۲۰×۱۰۸۰)' },
+  { value: '1920x1088', label: 'افقی تمام‌صفحه (۱۹۲۰×۱۰۸۸)' },
 ];
 
 const VIDEO_SIZE_OPTIONS = [
@@ -187,14 +187,14 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
       update({
         orientationHorizontal: checked,
         orientationVertical: checked ? false : settings.orientationVertical,
-        size: checked ? '1920x1080' : settings.orientationVertical ? '1080x1920' : settings.size,
+        size: checked ? '1920x1088' : settings.orientationVertical ? '1088x1920' : settings.size,
       });
       return;
     }
     update({
       orientationVertical: checked,
       orientationHorizontal: checked ? false : settings.orientationHorizontal,
-      size: checked ? '1080x1920' : settings.orientationHorizontal ? '1920x1080' : settings.size,
+      size: checked ? '1088x1920' : settings.orientationHorizontal ? '1920x1088' : settings.size,
     });
   };
 

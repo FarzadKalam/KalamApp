@@ -41,7 +41,7 @@ const FileShortLinkRedirectPage: React.FC = () => {
         const nestedEntryAssetUrl = String((data as any)?.file_entries?.file_assets?.target_url || '').trim();
         const targetUrl = String(data?.target_url || nestedAssetUrl || nestedEntryAssetUrl || '').trim();
         const linkTypeMatches = isRecordLink
-          ? data?.link_type === 'generic' && ['record', 'online_catalog', 'scheduled_report'].includes(String((data as any)?.metadata?.kind || ''))
+          ? data?.link_type === 'generic' && ['record', 'online_catalog', 'scheduled_report', 'scheduled_work_schedule'].includes(String((data as any)?.metadata?.kind || ''))
           : data?.link_type === 'file';
         const isActive = data?.is_active !== false;
         if (!targetUrl || !isActive || !linkTypeMatches) {

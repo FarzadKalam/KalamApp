@@ -112,6 +112,7 @@ const loadCustomerClubPage = () => import("./pages/CustomerClubPage");
 const loadPublicSite = () => import("./pages/PublicSite");
 const loadSaasPortalPage = () => import("./pages/SaasPortalPage");
 const loadWorkSchedulesPage = () => import("./pages/WorkSchedulesPage");
+const loadAttendanceDailySchedulePage = () => import("./pages/AttendanceDailySchedulePage");
 const loadRecycleBinPage = () => import("./pages/RecycleBinPage");
 const loadShareTargetPage = () => import("./pages/ShareTargetPage");
 const loadFileShortLinkRedirectPage = () => import("./pages/FileShortLinkRedirectPage");
@@ -168,6 +169,7 @@ const CustomerClubPage = lazy(loadCustomerClubPage);
 const PublicSite = lazy(loadPublicSite);
 const SaasPortalPage = lazy(loadSaasPortalPage);
 const WorkSchedulesPage = lazy(loadWorkSchedulesPage);
+const AttendanceDailySchedulePage = lazy(loadAttendanceDailySchedulePage);
 const RecycleBinPage = lazy(loadRecycleBinPage);
 const ShareTargetPage = lazy(loadShareTargetPage);
 const FileShortLinkRedirectPage = lazy(loadFileShortLinkRedirectPage);
@@ -209,6 +211,7 @@ const preloadAuthenticatedRouteChunk = (targetPath?: string): Promise<unknown> =
   else if (section === "recycle-bin") preloader = loadRecycleBinPage;
   else if (section === "search") preloader = loadGlobalSearchPage;
   else if (section === "hr") preloader = loadHRPage;
+  else if (section === "attendance" && detail === "daily") preloader = loadAttendanceDailySchedulePage;
   else if (section === "mbti_assessments" && detail && segments[2] === 'report') preloader = loadMbtiAssessmentReportPage;
   else if (section === "production_group_orders") {
     preloader = detail ? loadProductionGroupOrderWizard : loadProductionGroupOrdersList;
@@ -607,6 +610,7 @@ function App() {
     if (pathname.startsWith("/org-knowledge")) return "دانش سازمان";
     if (pathname.startsWith("/profile")) return "پروفایل";
     if (pathname.startsWith("/hr")) return "منابع انسانی";
+    if (pathname.startsWith("/attendance/daily")) return "برنامه روزانه حضور";
     if (pathname.startsWith("/work_schedules")) return "برنامه حضور";
     if (pathname.startsWith("/share-target")) return "اشتراک‌گذاری";
     if (pathname.startsWith("/search")) return "جستجو";
@@ -789,6 +793,7 @@ function App() {
             <Route path="/production_group_orders/:id" element={<ProductionGroupOrderWizard />} />
             <Route path="/hr" element={<HRPage />} />
             <Route path="/hr/:employeeId" element={<HRPage />} />
+            <Route path="/attendance/daily/:scheduleId" element={<AttendanceDailySchedulePage />} />
             <Route path="/mbti_assessments/:id/report" element={<MbtiAssessmentReportPage />} />
             <Route path="/messages" element={<MessagesPage />} />
             <Route path="/gallery" element={<FilesGalleryPage />} />

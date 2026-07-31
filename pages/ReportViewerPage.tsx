@@ -23,7 +23,6 @@ import {
   buildReportBaseSelectColumns,
   getReportConditionFields,
   getReportTableBlock,
-  getReportableFieldMap,
   getReportableFields,
   isDeletedReportRecord,
   buildReportTableFieldKey,
@@ -40,6 +39,12 @@ import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberForma
 import { getSafeOptionFallback } from '../utils/optionHelpers';
 import { printInIframe } from '../utils/printTemplates/printInIframe';
 import { readCurrencyConfig } from '../utils/currency';
+import {
+  isReportTaskProcessFieldKey,
+  loadTaskReportProcessRuntimeCatalog,
+  resolveTaskReportProcessFieldValue,
+} from '../utils/reportTaskProcessFields';
+import { getTaskStatusLabel } from '../utils/processTaskStatusOptions';
 
 const { Title, Text } = Typography;
 
@@ -126,6 +131,9 @@ const formatReportCellValue = (
   relationOptions: Record<string, Array<{ label: string; value: string }>>,
   currencyLabel = '',
 ) => {
+  if ((field as any)?.__reportTaskRuntimeStatus === true) {
+    return getTaskStatusLabel(row?.[field.key], row) || '-';
+  }
   const formatted = formatListCellValue(field, row, relationOptions, currencyLabel);
   const safeFormatted = getSafeOptionFallback(formatted, '');
   if (safeFormatted) return safeFormatted;
@@ -347,6 +355,9 @@ const ReportViewerPage: React.FC = () => {
   const [selectedPrintFields, setSelectedPrintFields] = useState<Record<string, string[]>>({});
   const [savingPrintFields, setSavingPrintFields] = useState(false);
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
+  const [dynamicOptions, setDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
+  const [taskProcessFields, setTaskProcessFields] = useState<any[]>([]);
+  const [taskProcessStatusOptions, setTaskProcessStatusOptions] = useState<any[]>([]);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [surveyTemplateSnapshot, setSurveyTemplateSnapshot] = useState(() => normalizeSurveyTemplateSnapshot({}));
 
@@ -369,13 +380,27 @@ const ReportViewerPage: React.FC = () => {
       .filter((block): block is NonNullable<typeof block> => !!block),
     [moduleId, secondaryModuleIds]
   );
-  const reportableFields = useMemo(
-    () => getReportableFields(moduleId, secondaryModuleIds, surveyTemplateSnapshot),
-    [moduleId, secondaryModuleIds, surveyTemplateSnapshot]
-  );
+  const reportableFields = useMemo(() => (
+    getReportableFields(moduleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields).map((field) => (
+      field.dynamicOptionsCategory
+        ? {
+            ...field,
+            options: [
+              ...(Array.isArray(field.options) ? field.options : []),
+              ...(dynamicOptions[field.dynamicOptionsCategory] || []),
+            ],
+          }
+        : (field as any).__reportTaskRuntimeStatus === true
+          ? { ...field, options: [...(field.options || []), ...taskProcessStatusOptions] }
+          : field
+    ))
+  ), [dynamicOptions, moduleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields, taskProcessStatusOptions]);
   const fieldMap = useMemo(
-    () => getReportableFieldMap(moduleId, secondaryModuleIds, surveyTemplateSnapshot),
-    [moduleId, secondaryModuleIds, surveyTemplateSnapshot]
+    () => reportableFields.reduce<Record<string, any>>((acc, field) => {
+      acc[field.key] = field;
+      return acc;
+    }, {}),
+    [reportableFields]
   );
   const visibleFields = useMemo(
     () => reportableFields.filter((field) => config.columns.includes(field.key)),
@@ -441,6 +466,27 @@ const ReportViewerPage: React.FC = () => {
     };
   }, [moduleId, scopedSurveyTemplateId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (moduleId !== 'tasks') {
+      setTaskProcessFields([]);
+      setTaskProcessStatusOptions([]);
+      return () => { cancelled = true; };
+    }
+    void loadTaskReportProcessRuntimeCatalog(supabase)
+      .then((catalog) => {
+        if (cancelled) return;
+        setTaskProcessFields(catalog.fields);
+        setTaskProcessStatusOptions(catalog.statusOptions);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTaskProcessFields([]);
+        setTaskProcessStatusOptions([]);
+      });
+    return () => { cancelled = true; };
+  }, [moduleId]);
+
   const loadReport = useCallback(async () => {
     if (!reportId) {
       setCanViewPage(false);
@@ -482,12 +528,13 @@ const ReportViewerPage: React.FC = () => {
         ? normalizeSurveyTemplateSnapshot((await loadSurveyTemplateDefinition(supabase, nextScopedSurveyTemplateId))?.snapshot || {})
         : normalizeSurveyTemplateSnapshot({});
       const optionFields = [
-        ...getReportConditionFields(nextModuleId, normalizedConfig.secondary_module_ids, nextSurveyTemplateSnapshot),
-        ...getReportableFields(nextModuleId, normalizedConfig.secondary_module_ids, nextSurveyTemplateSnapshot),
+        ...getReportConditionFields(nextModuleId, normalizedConfig.secondary_module_ids, nextSurveyTemplateSnapshot, taskProcessFields),
+        ...getReportableFields(nextModuleId, normalizedConfig.secondary_module_ids, nextSurveyTemplateSnapshot, taskProcessFields),
       ];
       const loadedOptions = await loadWorkflowConditionEditorOptions(nextModuleId, optionFields);
 
       setRelationOptions(loadedOptions.relationOptions);
+      setDynamicOptions(loadedOptions.dynamicOptions);
       setSurveyTemplateSnapshot(nextSurveyTemplateSnapshot);
       setReport(nextReport);
       setCanViewPage(true);
@@ -501,7 +548,7 @@ const ReportViewerPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [message, reportId]);
+  }, [message, reportId, taskProcessFields]);
 
   const executeReport = useCallback(async (forceRefresh = false) => {
     if (!report || !moduleConfig) return;
@@ -540,6 +587,10 @@ const ReportViewerPage: React.FC = () => {
         ...config.conditions_all,
         ...config.conditions_any,
       ].map((condition: any) => String(condition?.field || '').trim()).filter(Boolean);
+      const taskProcessFieldKeys = Array.from(new Set([
+        ...neededKeys,
+        ...conditionFieldKeys,
+      ].filter(isReportTaskProcessFieldKey)));
       const baseColumns = buildReportBaseSelectColumns(
         moduleConfig,
         [...neededKeys, ...conditionFieldKeys],
@@ -674,6 +725,10 @@ const ReportViewerPage: React.FC = () => {
             });
           });
 
+          taskProcessFieldKeys.forEach((fieldKey) => {
+            candidateRow[fieldKey] = resolveTaskReportProcessFieldValue(candidateRow, fieldKey);
+          });
+
           for (const fieldKey of tableRelationFieldKeys) {
             const relationMeta = parseReportTableRelationFieldKey(fieldKey);
             if (!relationMeta) continue;
@@ -699,6 +754,10 @@ const ReportViewerPage: React.FC = () => {
           const resolvedRow: ReportRow = { ...candidateRow };
 
           for (const fieldKey of neededKeys) {
+            if (isReportTaskProcessFieldKey(fieldKey)) {
+              resolvedRow[fieldKey] = candidateRow[fieldKey];
+              continue;
+            }
             if (parseReportTableFieldKey(fieldKey) || parseReportTableRelationFieldKey(fieldKey)) {
               resolvedRow[fieldKey] = candidateRow[fieldKey];
               continue;

@@ -1289,7 +1289,11 @@ const calculateAttendanceDelayAbsenceBreakdown = (
   const lateMinutes = Math.max(0, toNumber(row.lateMinutes) - graceMinutes);
   const earlyLeaveMinutes = Math.max(0, toNumber(row.earlyLeaveMinutes));
   const rawAbsenceMinutes = Math.max(0, shortageMinutes - toNumber(row.lateMinutes) - earlyLeaveMinutes);
-  const unpaidLeaveMinutes = String(row.logType || '') === 'leave' ? Math.max(0, shortageMinutes - coveredPaidLeaveMinutes) : 0;
+  const isApprovedUnpaidLeave = row.isApprovedLeave
+    && String(row.approvedLeaveType || '').trim().toLowerCase() === 'unpaid';
+  const unpaidLeaveMinutes = isApprovedUnpaidLeave || String(row.logType || '') === 'leave'
+    ? Math.max(0, shortageMinutes - coveredPaidLeaveMinutes)
+    : 0;
   const absenceMinutes = String(row.logType || '') === 'absence' ? Math.max(0, rawAbsenceMinutes - coveredPaidLeaveMinutes) : 0;
   const delayMinutes = Math.max(0, lateMinutes + earlyLeaveMinutes);
   const totalMinutes = calculateAttendanceDelayAbsenceMinutes(row, profile, coveredPaidLeaveMinutes);
@@ -1315,10 +1319,17 @@ const calculateAttendancePaidLeaveMinutes = (
   profile?: ProfileRecord | null,
   usedPaidLeaveMinutes = 0,
 ) => {
+  // کسری تردد به‌تنهایی نباید مرخصی با حقوق شود.
+  if (!row.isApprovedLeave) return 0;
+  if (String(row.approvedLeaveType || '').trim().toLowerCase() === 'unpaid') return 0;
+
   const shortageMinutes = calculateAttendanceShortageMinutes(row);
+  const approvedLeaveMinutes = Math.max(0, toNumber(row.approvedLeaveMinutes));
+  if (shortageMinutes <= 0 || approvedLeaveMinutes <= 0) return 0;
+
   const monthlyLimitMinutes = Math.max(0, toNumber(profile?.monthly_paid_leave_hours) * 60);
   const availableMinutes = Math.max(0, monthlyLimitMinutes - usedPaidLeaveMinutes);
-  return Math.min(shortageMinutes, availableMinutes);
+  return Math.min(shortageMinutes, approvedLeaveMinutes, availableMinutes);
 };
 
 const renderDateTime = (value: string | null | undefined) => safeJalaliFormat(value, 'YYYY/MM/DD HH:mm') || '-';
@@ -5505,20 +5516,20 @@ const HRPage: React.FC = () => {
     const periodEnd = toNativeGregorianDateString(monthEnd);
     if (!periodStart || !periodEnd || rows.length === 0) return;
 
-    const candidates = rows
+    const evaluatedCandidates = rows
       .filter((row) => String(row.employeeId || '').trim())
       .flatMap((row) => ([
         resolveAttendanceLedgerEntry(row, 'attendance_overtime'),
         resolveAttendanceLedgerEntry(row, 'attendance_early_bonus'),
         resolveAttendanceLedgerEntry(row, 'attendance_paid_leave'),
         resolveAttendanceLedgerEntry(row, 'attendance_delay_absence'),
-      ].map((meta) => ({ row, meta }))))
+      ].map((meta) => ({ row, meta }))));
+
+    const candidates = evaluatedCandidates
       .filter(({ meta }) => meta.sourceKey && meta.minutes > 0 && meta.amount !== 0);
 
-    if (candidates.length === 0) return;
-
-    const employeeIds = Array.from(new Set(candidates.map(({ row }) => String(row.employeeId || '').trim()).filter(Boolean)));
-    const sourceKeys = Array.from(new Set(candidates.map(({ meta }) => meta.sourceKey).filter(Boolean)));
+    const employeeIds = Array.from(new Set(evaluatedCandidates.map(({ row }) => String(row.employeeId || '').trim()).filter(Boolean)));
+    const sourceKeys = Array.from(new Set(evaluatedCandidates.map(({ meta }) => meta.sourceKey).filter(Boolean)));
     if (employeeIds.length === 0 || sourceKeys.length === 0) return;
 
     const { data: existingRows, error: existingError } = await supabase
@@ -5536,6 +5547,20 @@ const HRPage: React.FC = () => {
         entry,
       ] as const),
     );
+
+    // اگر محاسبهٔ تازه آیتمی را نامعتبر کرد، نسخهٔ پیشنهادی قبلی آن نباید در
+    // فیش باقی بماند. اقلامی که داخل فیش ثبت‌شده‌اند snapshot هستند.
+    for (const { meta } of evaluatedCandidates) {
+      const existing = existingByTypeAndKey.get(`${meta.sourceType}::${meta.sourceKey}`);
+      const isEligible = Boolean(meta.sourceKey && meta.minutes > 0 && meta.amount !== 0);
+      if (!existing?.id || isEligible || !['draft', 'proposed'].includes(String(existing.status || ''))) continue;
+
+      const { error } = await supabase
+        .from('payroll_calculation_entries')
+        .update({ status: 'voided', updated_at: new Date().toISOString() })
+        .eq('id', existing.id);
+      if (error && !isMissingPayrollLedgerError(error)) throw error;
+    }
 
     for (const { row, meta } of candidates) {
       const existing = existingByTypeAndKey.get(`${meta.sourceType}::${meta.sourceKey}`);

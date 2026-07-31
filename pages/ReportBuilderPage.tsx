@@ -42,6 +42,7 @@ import { loadWorkflowConditionEditorOptions } from '../utils/workflowConditionOp
 import { toPersianNumber } from '../utils/persianNumberFormatter';
 import type { PermissionMap } from '../utils/permissions';
 import { resolveOverlayPopupContainer } from '../utils/popupContainer';
+import { loadTaskReportProcessRuntimeCatalog } from '../utils/reportTaskProcessFields';
 
 const { Title, Text } = Typography;
 
@@ -90,6 +91,8 @@ const ReportBuilderPage: React.FC = () => {
   const [scheduleChannels, setScheduleChannels] = useState<ReportScheduleChannel[]>(['note']);
   const [scheduleBotGroupIds, setScheduleBotGroupIds] = useState<string[]>([]);
   const [surveyTemplateSnapshot, setSurveyTemplateSnapshot] = useState(() => normalizeSurveyTemplateSnapshot({}));
+  const [taskProcessFields, setTaskProcessFields] = useState<any[]>([]);
+  const [taskProcessStatusOptions, setTaskProcessStatusOptions] = useState<any[]>([]);
 
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
@@ -107,21 +110,50 @@ const ReportBuilderPage: React.FC = () => {
     [conditionsAll, conditionsAny, mainModuleId]
   );
   const reportableFields = useMemo(
-    () => getReportableFields(mainModuleId, secondaryModuleIds, surveyTemplateSnapshot),
-    [mainModuleId, secondaryModuleIds, surveyTemplateSnapshot]
+    () => getReportableFields(mainModuleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields).map((field) => (
+      (field as any).__reportTaskRuntimeStatus === true
+        ? { ...field, options: [...(field.options || []), ...taskProcessStatusOptions] }
+        : field
+    )),
+    [mainModuleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields, taskProcessStatusOptions]
   );
   const conditionFields = useMemo(
-    () => getReportConditionFields(mainModuleId, secondaryModuleIds, surveyTemplateSnapshot),
-    [mainModuleId, secondaryModuleIds, surveyTemplateSnapshot]
+    () => getReportConditionFields(mainModuleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields).map((field) => (
+      (field as any).__reportTaskRuntimeStatus === true
+        ? { ...field, options: [...(field.options || []), ...taskProcessStatusOptions] }
+        : field
+    )),
+    [mainModuleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields, taskProcessStatusOptions]
   );
   const groupableFields = useMemo(
-    () => getGroupableReportFields(mainModuleId, secondaryModuleIds, surveyTemplateSnapshot),
-    [mainModuleId, secondaryModuleIds, surveyTemplateSnapshot]
+    () => getGroupableReportFields(mainModuleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields),
+    [mainModuleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields]
   );
   const summableFields = useMemo(
-    () => getSummableReportFields(mainModuleId, secondaryModuleIds, surveyTemplateSnapshot),
-    [mainModuleId, secondaryModuleIds, surveyTemplateSnapshot]
+    () => getSummableReportFields(mainModuleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields),
+    [mainModuleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields]
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (mainModuleId !== 'tasks') {
+      setTaskProcessFields([]);
+      setTaskProcessStatusOptions([]);
+      return () => { cancelled = true; };
+    }
+    void loadTaskReportProcessRuntimeCatalog(supabase)
+      .then((catalog) => {
+        if (cancelled) return;
+        setTaskProcessFields(catalog.fields);
+        setTaskProcessStatusOptions(catalog.statusOptions);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTaskProcessFields([]);
+        setTaskProcessStatusOptions([]);
+      });
+    return () => { cancelled = true; };
+  }, [mainModuleId]);
 
   useEffect(() => {
     let cancelled = false;
