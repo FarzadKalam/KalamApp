@@ -119,4 +119,26 @@ describe('print letterheads', () => {
     expect(getPrintLetterheadEffectiveBodyItem(letterhead, false)?.height).toBe(64);
     expect(getPrintLetterheadEffectiveBodyItem(letterhead, true)?.height).toBe(50);
   });
+
+  it('reserves the signature lane before flowing content when the two areas overlap', () => {
+    const letterhead: PrintLetterheadConfig = {
+      id: 'portrait_1',
+      slotId: 'portrait_1',
+      orientation: 'portrait',
+      title: 'سربرگ آزمایشی',
+      imageUrl: 'https://example.com/p1.png',
+      isActive: true,
+      sortOrder: 1,
+      layout: {
+        orientation: 'portrait',
+        version: 1,
+        items: [
+          { id: 'body', type: 'body', x: 7, y: 22, width: 86, height: 67, visible: true, zIndex: 3 },
+          { id: 'signatures', type: 'signatures', x: 7, y: 78, width: 86, height: 12, visible: true, zIndex: 5 },
+        ],
+      },
+    };
+
+    expect(getPrintLetterheadEffectiveBodyItem(letterhead, true)?.height).toBe(56);
+  });
 });

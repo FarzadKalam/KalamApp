@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildSmartPrintPageOffsets,
+  buildSmartPrintPageRanges,
   getPrintMeasurementScale,
   getSafePrintAnchorBounds,
   type PrintPageAnchor,
@@ -52,6 +53,40 @@ describe('print pagination scenarios', () => {
     expect(offsets[1]).toBe(640);
   });
 
+  it('uses independent safe edges so a renderer cannot crop the first line of the next page', () => {
+    const ranges = buildSmartPrintPageRanges({
+      totalHeight: 1300,
+      pageBodyStepPx: 640,
+      anchors: [
+        { top: 594, bottom: 620, priority: 'normal', source: 'line' },
+        { top: 646, bottom: 672, priority: 'normal', source: 'line' },
+      ],
+      minPageFillRatio: 0.5,
+      hardKeepFillRatio: 0.2,
+    });
+
+    expect(ranges[0]).toEqual({ start: 0, end: 620 });
+    // One source pixel of guard remains above the measured line top. The
+    // preceding page still ends at its own complete line, without overlap.
+    expect(ranges[1].start).toBe(645);
+    expect(ranges[1].start).toBeGreaterThan(ranges[0].end);
+  });
+
+  it('keeps the same guard when the next printable item is a table row', () => {
+    const ranges = buildSmartPrintPageRanges({
+      totalHeight: 960,
+      pageBodyStepPx: 640,
+      anchors: [
+        { top: 594, bottom: 620, priority: 'normal', source: 'line' },
+        { top: 648, bottom: 724, priority: 'normal', source: 'block' },
+      ],
+      minPageFillRatio: 0.5,
+      hardKeepFillRatio: 0.2,
+    });
+
+    expect(ranges[1].start).toBe(647);
+  });
+
   it('برای محتوای کوتاه با هر ترکیب سربرگ، پاورقی و امضا فقط یک صفحه می‌سازد', () => {
     const pageBodyStepPx = Math.floor((297 - (14 + 10)) * pxPerMm - 104 - (62 + 108));
     const totalHeight = Math.floor(pageBodyStepPx * 0.72);
@@ -87,6 +122,15 @@ describe('print pagination scenarios', () => {
       footerPx: 96 + 108,
       lineHeights: [25, 34, 29, 38],
       tableRows: [112, 156, 92, 136],
+    },
+    {
+      name: 'A6 افقی با فونت‌های ترکیبی و ردیف‌های فشرده',
+      paperHeightMm: 105,
+      marginsMm: 6 + 6,
+      headerPx: 42,
+      footerPx: 38,
+      lineHeights: [11, 17, 13, 20, 15],
+      tableRows: [42, 61, 37, 74, 48],
     },
   ])('$name در چند صفحه متن را فقط بین خطوط کامل می‌شکند', ({ paperHeightMm, marginsMm, headerPx, footerPx, lineHeights, tableRows }) => {
     const pageBodyStepPx = Math.floor((paperHeightMm - marginsMm) * pxPerMm - headerPx - footerPx);

@@ -38,6 +38,7 @@ import { printInIframe } from './printInIframe';
 import {
   annotatePrintFlowHtml,
   buildSmartPrintPageOffsets,
+  buildSmartPrintPageRanges,
   collectPrintPageAnchors,
   getPrintMeasurementScale,
 } from './printPagination';
@@ -210,13 +211,13 @@ const getMeasuredPrintBlockHeight = (measureNode: HTMLElement) => {
 };
 
 const getMeasuredPrintPageOffsets = (bodyMeasure: HTMLElement, pageBodyStepPx: number) => {
+  return getMeasuredPrintPageRanges(bodyMeasure, pageBodyStepPx).map((range) => range.start);
+};
+
+const getMeasuredPrintPageRanges = (bodyMeasure: HTMLElement, pageBodyStepPx: number) => {
   const bodyHeight = getMeasuredPrintBlockHeight(bodyMeasure);
   const anchors = collectPrintPageAnchors(bodyMeasure);
-  return buildSmartPrintPageOffsets({
-    totalHeight: bodyHeight,
-    pageBodyStepPx,
-    anchors,
-  });
+  return buildSmartPrintPageRanges({ totalHeight: bodyHeight, pageBodyStepPx, anchors });
 };
 
 const getEffectiveMeasuredSectionHeightPx = ({
@@ -3324,10 +3325,10 @@ export const usePrintManager = ({
           attachment: Number(linkedAttachmentCount || 0) > 0 ? `پیوست: ${toPersianNumber(Number(linkedAttachmentCount || 0))}` : '',
           qrValue: printQrValue,
         });
-        const measuredCurrentPageOffsets = bodyMeasureRef.current
-          ? getMeasuredPrintPageOffsets(bodyMeasureRef.current, pageBodyStepPx)
+        const measuredCurrentPageRanges = bodyMeasureRef.current
+          ? getMeasuredPrintPageRanges(bodyMeasureRef.current, pageBodyStepPx)
           : [];
-        const measuredCurrentPageCount = measuredCurrentPageOffsets.length;
+        const measuredCurrentPageCount = measuredCurrentPageRanges.length;
         const effectivePageCount = Math.max(
           1,
           measuredCurrentPageCount,
@@ -3337,13 +3338,22 @@ export const usePrintManager = ({
               ? forcedPrintPageCount
               : renderedPageCount
         );
-        const effectivePageOffsets = measuredCurrentPageOffsets.length > 0
-          ? measuredCurrentPageOffsets
+        const effectivePageRanges = measuredCurrentPageRanges.length > 0
+          ? measuredCurrentPageRanges
           : renderedPageOffsetsRef.current.length > 0
-            ? renderedPageOffsetsRef.current
-            : renderedPageOffsets;
-        const pageStartOffsets = Array.from({ length: effectivePageCount }, (_value, index) =>
-          effectivePageOffsets[index] ?? index * pageBodyStepPx
+            ? renderedPageOffsetsRef.current.map((start, index, offsets) => ({
+                start,
+                end: offsets[index + 1] ?? start + pageBodyStepPx,
+              }))
+            : renderedPageOffsets.map((start, index, offsets) => ({
+                start,
+                end: offsets[index + 1] ?? start + pageBodyStepPx,
+              }));
+        const pageRanges = Array.from({ length: effectivePageCount }, (_value, index) =>
+          effectivePageRanges[index] ?? {
+            start: index * pageBodyStepPx,
+            end: (index + 1) * pageBodyStepPx,
+          }
         );
 
         return React.createElement(
@@ -3384,11 +3394,12 @@ export const usePrintManager = ({
                 }),
               )
             : null,
-          ...pageStartOffsets.map((pageStartOffset, pageIndex) => {
-            const nextPageStartOffset = pageStartOffsets[pageIndex + 1];
-            const effectiveBodyStepPx = nextPageStartOffset !== undefined
-              ? Math.min(pageBodyStepPx, Math.max(1, nextPageStartOffset - pageStartOffset))
-              : pageBodyStepPx;
+          ...pageRanges.map((pageRange, pageIndex) => {
+            const pageStartOffset = pageRange.start;
+            const effectiveBodyStepPx = Math.min(
+              pageBodyStepPx,
+              Math.max(1, pageRange.end - pageRange.start)
+            );
             const bodyViewportHeightCss = toCssMm(getPrintBodyViewportHeightPx(bodyHeightPx, effectiveBodyStepPx));
 
             return React.createElement(
@@ -3607,10 +3618,10 @@ export const usePrintManager = ({
         );
       }
 
-      const measuredCurrentPageOffsets = bodyMeasureRef.current
-        ? getMeasuredPrintPageOffsets(bodyMeasureRef.current, pageBodyStepPx)
+      const measuredCurrentPageRanges = bodyMeasureRef.current
+        ? getMeasuredPrintPageRanges(bodyMeasureRef.current, pageBodyStepPx)
         : [];
-      const measuredCurrentPageCount = measuredCurrentPageOffsets.length;
+      const measuredCurrentPageCount = measuredCurrentPageRanges.length;
       const effectivePageCount = Math.max(
         1,
         measuredCurrentPageCount,
@@ -3620,13 +3631,22 @@ export const usePrintManager = ({
             ? forcedPrintPageCount
             : renderedPageCount
       );
-      const effectivePageOffsets = measuredCurrentPageOffsets.length > 0
-        ? measuredCurrentPageOffsets
+      const effectivePageRanges = measuredCurrentPageRanges.length > 0
+        ? measuredCurrentPageRanges
         : renderedPageOffsetsRef.current.length > 0
-          ? renderedPageOffsetsRef.current
-          : renderedPageOffsets;
-      const pageStartOffsets = Array.from({ length: effectivePageCount }, (_value, index) =>
-        effectivePageOffsets[index] ?? index * pageBodyStepPx
+          ? renderedPageOffsetsRef.current.map((start, index, offsets) => ({
+              start,
+              end: offsets[index + 1] ?? start + pageBodyStepPx,
+            }))
+          : renderedPageOffsets.map((start, index, offsets) => ({
+              start,
+              end: offsets[index + 1] ?? start + pageBodyStepPx,
+            }));
+      const pageRanges = Array.from({ length: effectivePageCount }, (_value, index) =>
+        effectivePageRanges[index] ?? {
+          start: index * pageBodyStepPx,
+          end: (index + 1) * pageBodyStepPx,
+        }
       );
       const measuredBodyHeightPx = bodyMeasureRef.current
         ? getMeasuredPrintBlockHeight(bodyMeasureRef.current)
@@ -3704,18 +3724,19 @@ export const usePrintManager = ({
                 })
               )
             : null,
-        ...pageStartOffsets.map((pageStartOffset, pageIndex) => {
+        ...pageRanges.map((pageRange, pageIndex) => {
+          const pageStartOffset = pageRange.start;
           // Per-page effective body step: exactly the number of content pixels
           // this page should display. For all pages except the last this equals
           // (nextPageStartOffset - pageStartOffset), so the guard begins right
           // where the next page begins - no overlap, no partial lines.
           const pageCounterHeightCss = toCssMm(PRINT_PAGE_COUNTER_HEIGHT_PX);
-          const nextPageStartOffset = pageStartOffsets[pageIndex + 1];
           const isFinalPage = pageIndex === effectivePageCount - 1;
           const flowFinalSignatureFooter = hasSignatureBand && isFinalPage;
-          const effectiveBodyStepPx = nextPageStartOffset !== undefined
-            ? Math.min(pageBodyStepPx, Math.max(1, nextPageStartOffset - pageStartOffset))
-            : pageBodyStepPx;
+          const effectiveBodyStepPx = Math.min(
+            pageBodyStepPx,
+            Math.max(1, pageRange.end - pageRange.start)
+          );
           const bodyViewportHeightPx = getPrintBodyViewportHeightPx(pageBodyHeightPx, effectiveBodyStepPx);
           const bodyRenderHeightPx = flowFinalSignatureFooter
             ? getFinalContentBodyHeightPx({

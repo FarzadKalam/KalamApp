@@ -100,7 +100,22 @@ export const getPrintLetterheadEffectiveBodyItem = (
 ): PrintLetterheadLayoutItem | null => {
   const bodyItem = getPrintLetterheadBodyItem(letterhead);
   const signaturesItem = getPrintLetterheadSignaturesItem(letterhead);
-  if (!bodyItem || hasSignatureBand || !signaturesItem) return bodyItem;
+  if (!bodyItem || !signaturesItem) return bodyItem;
+
+  // The signature band is an opaque, absolute layer on every generated page.
+  // Reserve that rectangle before pagination, otherwise the body can continue
+  // beneath it and look as if its final line has been erased.
+  if (hasSignatureBand) {
+    const bodyBottom = Math.min(100, bodyItem.y + bodyItem.height);
+    const signatureTop = Math.max(0, Math.min(100, signaturesItem.y));
+    if (signatureTop < bodyBottom) {
+      return {
+        ...bodyItem,
+        height: Math.max(1, signatureTop - bodyItem.y),
+      };
+    }
+    return bodyItem;
+  }
 
   const signatureBottom = Math.min(100, signaturesItem.y + signaturesItem.height);
   if (signatureBottom <= bodyItem.y) return bodyItem;

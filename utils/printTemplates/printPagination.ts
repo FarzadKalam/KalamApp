@@ -7,6 +7,19 @@ export interface PrintPageAnchor {
   source?: 'block' | 'line';
 }
 
+/**
+ * A physical print page is a source interval, not a single shared offset.
+ *
+ * `end` is chosen after the last complete line on a page and `start` is
+ * chosen just before the first complete line on the next page.  Treating
+ * those values as one shared number is tempting, but sub-pixel text metrics
+ * let a renderer paint a glyph across that shared edge and crop half of it.
+ */
+export interface PrintPageRange {
+  start: number;
+  end: number;
+}
+
 export const PRINT_FLOW_BLOCK_ATTR = 'data-print-flow-block';
 
 const ROOT_BLOCK_TAGS = new Set([
@@ -306,7 +319,7 @@ export const collectPrintPageAnchors = (root: HTMLElement): PrintPageAnchor[] =>
   });
 };
 
-export const buildSmartPrintPageOffsets = ({
+const buildSmartPrintPageOffsetsInternal = ({
   totalHeight,
   pageBodyStepPx,
   anchors,
@@ -411,3 +424,84 @@ export const buildSmartPrintPageOffsets = ({
 
   return pageOffsets;
 };
+
+const getNextSafePageStart = ({
+  previousEnd,
+  totalHeight,
+  anchors,
+}: {
+  previousEnd: number;
+  totalHeight: number;
+  anchors: PrintPageAnchor[];
+}) => {
+  // Text lines are the usual anchors, but a table/media row can be the first
+  // printable thing after a page edge. Honour every measured anchor here so
+  // a no-text table row receives the same safe start guarantee.
+  const nextAnchor = anchors.find(
+    (anchor) => anchor.top >= previousEnd && anchor.bottom > previousEnd
+  );
+
+  if (!nextAnchor) return Math.min(totalHeight, previousEnd);
+
+  // Keep one source pixel above the measured top. This is deliberate: browser
+  // PDF backends round CSS transforms and clip rectangles independently.
+  // Starting exactly at a line top is therefore not a safe printable edge.
+  return Math.min(
+    totalHeight,
+    Math.max(previousEnd, floorPx(nextAnchor.top) - 1)
+  );
+};
+
+export const buildSmartPrintPageRanges = ({
+  totalHeight,
+  pageBodyStepPx,
+  anchors,
+  minPageFillRatio = DEFAULT_MIN_PAGE_FILL_RATIO,
+  hardKeepFillRatio = DEFAULT_HARD_KEEP_FILL_RATIO,
+}: {
+  totalHeight: number;
+  pageBodyStepPx: number;
+  anchors: PrintPageAnchor[];
+  minPageFillRatio?: number;
+  hardKeepFillRatio?: number;
+}): PrintPageRange[] => {
+  const safeTotalHeight = Math.max(1, ceilPx(totalHeight));
+  const safeAnchors = (anchors || [])
+    .filter((anchor) => Number.isFinite(anchor.top) && Number.isFinite(anchor.bottom) && anchor.bottom > anchor.top)
+    .sort((left, right) => left.top - right.top || left.bottom - right.bottom);
+  const pageEnds = buildSmartPrintPageOffsetsInternal({
+    totalHeight: safeTotalHeight,
+    pageBodyStepPx,
+    anchors: safeAnchors,
+    minPageFillRatio,
+    hardKeepFillRatio,
+  }).slice(1);
+  const ranges: PrintPageRange[] = [];
+  let pageStart = 0;
+
+  pageEnds.forEach((pageEnd) => {
+    const safeEnd = Math.max(pageStart + 1, Math.min(safeTotalHeight, floorPx(pageEnd)));
+    ranges.push({ start: pageStart, end: safeEnd });
+    pageStart = getNextSafePageStart({
+      previousEnd: safeEnd,
+      totalHeight: safeTotalHeight,
+      anchors: safeAnchors,
+    });
+  });
+
+  if (pageStart < safeTotalHeight) {
+    ranges.push({ start: pageStart, end: safeTotalHeight });
+  }
+
+  return ranges.length > 0 ? ranges : [{ start: 0, end: safeTotalHeight }];
+};
+
+// Compatibility for callers that only need the beginning of each page. New
+// rendering code must use ranges so the two printable edges stay independent.
+export const buildSmartPrintPageOffsets = (options: {
+  totalHeight: number;
+  pageBodyStepPx: number;
+  anchors: PrintPageAnchor[];
+  minPageFillRatio?: number;
+  hardKeepFillRatio?: number;
+}) => buildSmartPrintPageRanges(options).map((range) => range.start);
