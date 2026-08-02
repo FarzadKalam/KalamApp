@@ -223,7 +223,7 @@ const ProfilePage: React.FC = () => {
             .from(profilesModule.table)
             .select(`
                 *,
-                organizations (name)
+                organizations!profiles_org_id_fkey (name)
             `)
             .eq('id', userId)
             .single();

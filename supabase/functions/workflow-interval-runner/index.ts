@@ -2744,6 +2744,61 @@ async function updateProcessTaskAutomationField(
   Object.assign(task, patch);
 }
 
+async function updateProcessRunStageAutomationField(
+  url: string,
+  key: string,
+  stage: Record<string, any>,
+  fieldKey: string,
+  value: any,
+) {
+  const stageId = String(stage?.id || '').trim();
+  const normalizedFieldKey = String(fieldKey || '').replace(/^__task__/, '').trim();
+  if (!stageId || !normalizedFieldKey) throw new Error('مرحله مقصد برای بروزرسانی مشخص نیست.');
+
+  const metadata = parseObjectValue(stage?.metadata);
+  const recurrence = parseObjectValue(metadata?.recurrence_info);
+  const customFields = Array.isArray(metadata?.process_task_custom_fields)
+    ? metadata.process_task_custom_fields
+    : Array.isArray(recurrence?.process_task_custom_fields)
+      ? recurrence.process_task_custom_fields
+      : [];
+  const isCustomField = customFields.some((field: any) => String(field?.key || '').trim() === normalizedFieldKey);
+  const nextMetadata: Record<string, any> = { ...metadata };
+  const stagePatch: Record<string, any> = {};
+
+  if (isCustomField) {
+    const currentValues = {
+      ...parseObjectValue(recurrence?.process_task_custom_field_values),
+      ...parseObjectValue(metadata?.process_task_custom_field_values),
+    };
+    nextMetadata.process_task_custom_field_values = { ...currentValues, [normalizedFieldKey]: value };
+    nextMetadata.recurrence_info = {
+      ...recurrence,
+      process_task_custom_fields: customFields,
+      process_task_custom_field_values: nextMetadata.process_task_custom_field_values,
+    };
+  } else if (normalizedFieldKey === 'assignee_id') {
+    const assignee = normalizeWorkflowAssigneeValue(value);
+    stagePatch.assignee_user_id = assignee.assignee_id || null;
+    stagePatch.assignee_role_id = assignee.assignee_role_id || null;
+  } else if (normalizedFieldKey === 'assignee_role_id') {
+    stagePatch.assignee_user_id = null;
+    stagePatch.assignee_role_id = String(value || '').trim() || null;
+  } else if (normalizedFieldKey === 'name' || normalizedFieldKey === 'stage_name') {
+    stagePatch.stage_name = String(value || '').trim() || String(stage?.stage_name || '').trim();
+  } else if (['description', 'task_type', 'priority', 'tags', 'weight', 'start_date'].includes(normalizedFieldKey)) {
+    nextMetadata[normalizedFieldKey] = value;
+  } else {
+    // فیلدهای ناشناخته را نیز در snapshot نگه می‌داریم تا با تبدیل مرحله به فعالیت از دست نروند.
+    nextMetadata[normalizedFieldKey] = value;
+  }
+
+  await dbPatch(url, key, 'process_run_stages', `id=eq.${encodeURIComponent(stageId)}`, {
+    ...stagePatch,
+    metadata: nextMetadata,
+  });
+}
+
 async function createWorkflowAiThread(
   url: string,
   key: string,
@@ -3051,6 +3106,42 @@ function buildWorkflowProcessPrompt(prompt: string, input: Record<string, any>):
   ].join('\n');
 }
 
+async function resolveWorkflowProcessTaskLinks(
+  url: string,
+  key: string,
+  orgId: string,
+  moduleId: string,
+  recordId: string,
+  processRun: any,
+  runStage: any,
+  stage: any,
+) {
+  const stageMetadata = parseObjectValue(runStage?.metadata);
+  const stageRecurrence = parseObjectValue(stageMetadata?.recurrence_info);
+  const sourceMetadata = parseObjectValue(stage?.metadata);
+  const sourceRecurrence = parseObjectValue(sourceMetadata?.recurrence_info);
+  const links: Record<string, any> = {
+    ...parseObjectValue(sourceMetadata?.process_link_map),
+    ...parseObjectValue(sourceRecurrence?.process_links),
+    ...parseObjectValue(stageMetadata?.process_link_map),
+    ...parseObjectValue(stageRecurrence?.process_links),
+    ...(moduleId && recordId ? { [moduleId]: recordId } : {}),
+  };
+  const processRunId = String(processRun?.id || '').trim();
+  if (!processRunId) return links;
+  const rows = await dbGet(url, key,
+    `process_run_links?org_id=eq.${encodeURIComponent(orgId)}&process_run_id=eq.${encodeURIComponent(processRunId)}&select=module_id,record_id,is_primary&order=is_primary.desc,created_at.asc&limit=500`,
+  ).catch(() => []);
+  for (const row of rows) {
+    const linkedModuleId = String(row?.module_id || '').trim();
+    const linkedRecordId = String(row?.record_id || '').trim();
+    // نقشه سریع فرآیند برای هر ماژول یک رکورد مرجع نگه می‌دارد؛ تمام لینک‌ها
+    // همچنان در process_run_links باقی می‌مانند و حذف یا جایگزین نمی‌شوند.
+    if (linkedModuleId && linkedRecordId && (row?.is_primary === true || !links[linkedModuleId])) links[linkedModuleId] = linkedRecordId;
+  }
+  return links;
+}
+
 async function insertWorkflowProcessTask(url: string, key: string, orgId: string, moduleId: string, recordId: string, processRun: any, runStage: any, stage: any, actorUserId: string | null = null): Promise<any> {
   const name = String(stage?.name || stage?.stage_name || stage?.title || runStage?.stage_name || 'فعالیت فرآیند').trim() || 'فعالیت فرآیند';
   const processNodeKey = String(
@@ -3073,6 +3164,7 @@ async function insertWorkflowProcessTask(url: string, key: string, orgId: string
     || stage?.metadata?.process_graph
     || null
   );
+  const processLinks = await resolveWorkflowProcessTaskLinks(url, key, orgId, moduleId, recordId, processRun, runStage, stage);
   const payload = {
     org_id: orgId,
     name,
@@ -3097,8 +3189,11 @@ async function insertWorkflowProcessTask(url: string, key: string, orgId: string
     recurrence_info: {
       task_type: String(stage?.task_type || stage?.metadata?.task_type || 'فعالیت سازمانی').trim() || 'فعالیت سازمانی',
       process_automation_rules: Array.isArray(stage?.automation_rules) ? stage.automation_rules : Array.isArray(stage?.metadata?.automation_rules) ? stage.metadata.automation_rules : [],
-      process_target_module_ids: Array.isArray(stage?.process_target_module_ids) ? stage.process_target_module_ids : [moduleId],
-      process_links: { [moduleId]: recordId },
+      process_target_module_ids: Array.from(new Set([
+        ...(Array.isArray(stage?.process_target_module_ids) ? stage.process_target_module_ids : []),
+        ...Object.keys(processLinks),
+      ].map((value: any) => String(value || '').trim()).filter(Boolean))),
+      process_links: processLinks,
       process_run_id: processRun?.id || null,
       process_run_stage_id: runStage?.id || null,
       process_node_key: processNodeKey,
@@ -3544,10 +3639,36 @@ async function prepareProcessRunForAutomaticExecution(
     templateRecord.task_status = 'todo';
     templateRecord.status_label = 'در انتظار انجام';
     templateRecord.task_status_label = 'در انتظار انجام';
-    const assigneeReference = String(metadata?.default_assignee_field || '').trim().replace(/^field:/i, '');
-    const resolvedAssignee = assigneeReference
-      ? parseProcessAssigneeToken(getFieldValueForCondition(templateRecord, assigneeReference))
-      : { userId: null, roleId: null };
+    const stageRecurrence = parseObjectValue(metadata?.recurrence_info);
+    const directRoleId = String(
+      stage?.assignee_role_id
+      || metadata?.default_assignee_role_id
+      || metadata?.assignee_role_id
+      || stageRecurrence?.default_assignee_role_id
+      || stageRecurrence?.assignee_role_id
+      || '',
+    ).trim() || null;
+    const directUserCandidate = parseProcessAssigneeToken(String(
+      stage?.assignee_user_id
+      || metadata?.default_assignee_id
+      || metadata?.assignee_id
+      || metadata?.assignee_user_id
+      || stageRecurrence?.default_assignee_id
+      || stageRecurrence?.assignee_id
+      || stageRecurrence?.assignee_user_id
+      || '',
+    ).trim());
+    const assigneeReference = String(
+      metadata?.default_assignee_combo
+      || stageRecurrence?.default_assignee_combo
+      || metadata?.default_assignee_field
+      || stageRecurrence?.default_assignee_field
+      || '',
+    ).trim();
+    const referenceValue = assigneeReference.startsWith('field:')
+      ? getFieldValueForCondition(templateRecord, assigneeReference.replace(/^field:/i, ''))
+      : assigneeReference;
+    const resolvedAssignee = parseProcessAssigneeToken(referenceValue);
     const firstRenderedStage = await renderProcessStageForTaskCreation(
       {
         stageName: String(stage?.stage_name || ''),
@@ -3566,8 +3687,8 @@ async function prepareProcessRunForAutomaticExecution(
     );
     await dbPatch(url, key, 'process_run_stages', `id=eq.${encodeURIComponent(String(stage.id))}`, {
       stage_name: renderedStage.stageName,
-      assignee_user_id: stage?.assignee_user_id || resolvedAssignee.userId,
-      assignee_role_id: stage?.assignee_role_id || resolvedAssignee.roleId,
+      assignee_user_id: directRoleId ? null : (directUserCandidate.userId || resolvedAssignee.userId),
+      assignee_role_id: directRoleId || directUserCandidate.roleId || resolvedAssignee.roleId,
       metadata: {
         ...renderedStage.metadata,
         process_link_map: processLinks,
@@ -4597,33 +4718,69 @@ async function executeAction(
     const fieldMeta = parseProcessNextStageFieldKey(String(config.field || '').trim());
     const fieldKey = fieldMeta?.fieldKey || String(config.field || '').trim();
     if (!fieldKey || !record?.id) return actionResult(action, 'skipped', 'فیلد مرحله مقصد مشخص نیست.');
-    const processRunId = String(record.process_run_id || '').trim();
+    const recurrence = parseObjectValue(record?.recurrence_info);
+    const processRunId = String(record.process_run_id || recurrence?.process_run_id || '').trim();
     if (!processRunId) return actionResult(action, 'skipped', 'فرآیند مرتبط با رکورد پیدا نشد.');
     const nextValue = await resolveConfiguredActionValue(config, record, url, key, orgId, moduleId);
     const tasks = await dbGet(url, key,
-      `tasks?process_run_id=eq.${processRunId}&order=sort_order.asc&select=id,sort_order,status,process_node_key,recurrence_info`
+      `tasks?process_run_id=eq.${encodeURIComponent(processRunId)}&order=sort_order.asc&select=id,process_run_stage_id,sort_order,status,process_node_key,process_lane_key,recurrence_info`
     ).catch(() => []);
+    const stages = await dbGet(url, key,
+      `process_run_stages?process_run_id=eq.${encodeURIComponent(processRunId)}&order=sort_order.asc&select=id,sort_order,process_node_key,process_lane_key,metadata`
+    ).catch(() => []);
+    const nodeKeyOf = (item: any) => String(item?.process_node_key || parseObjectValue(item?.metadata || item?.recurrence_info)?.process_node_key || '').trim();
+    const laneKeyOf = (item: any) => String(item?.process_lane_key || parseObjectValue(item?.metadata || item?.recurrence_info)?.process_lane_key || 'lane_1').trim() || 'lane_1';
+    const currentStageId = String(record?.process_run_stage_id || recurrence?.process_run_stage_id || '').trim();
+    const currentNodeKey = String(record?.process_node_key || recurrence?.process_node_key || '').trim();
+    const currentStage = stages.find((stage: any) => String(stage?.id || '').trim() === currentStageId)
+      || stages.find((stage: any) => nodeKeyOf(stage) === currentNodeKey);
     let targetTask: any = null;
+    let targetStage: any = null;
     let offset = 0;
     if (action.type === 'send_to_specific_stage') {
       const targetNodeKey = String(config.stage_node_key || '').trim();
-      targetTask = tasks.find((task: any) => String(
-        task?.process_node_key || task?.recurrence_info?.process_node_key || '',
-      ).trim() === targetNodeKey);
+      targetStage = stages.find((stage: any) => nodeKeyOf(stage) === targetNodeKey) || null;
+      targetTask = tasks.find((task: any) => (
+        String(task?.process_run_stage_id || '').trim() === String(targetStage?.id || '').trim()
+        || nodeKeyOf(task) === targetNodeKey
+      ));
     } else {
-      const currentTaskId = String(record.task_id || record.id || '').trim();
-      const currentIdx = tasks.findIndex((t: any) => String(t.id) === currentTaskId);
       offset = fieldMeta?.offset || parseInt(String(config.stage_offset || 1), 10) || 1;
-      targetTask = tasks[currentIdx + offset];
+      if (currentStage) {
+        const laneStages = stages
+          .filter((stage: any) => laneKeyOf(stage) === laneKeyOf(currentStage))
+          .sort((left: any, right: any) => Number(left?.sort_order || 0) - Number(right?.sort_order || 0));
+        const currentIndex = laneStages.findIndex((stage: any) => String(stage?.id || '') === String(currentStage?.id || ''));
+        targetStage = currentIndex >= 0 ? laneStages[currentIndex + offset] || null : null;
+      }
+      const currentTaskId = String(record.task_id || record.id || '').trim();
+      const currentIdx = tasks.findIndex((task: any) => String(task?.id || '') === currentTaskId);
+      targetTask = targetStage
+        ? tasks.find((task: any) => String(task?.process_run_stage_id || '').trim() === String(targetStage?.id || '').trim())
+        : currentIdx >= 0 ? tasks[currentIdx + offset] : null;
     }
-    if (!targetTask?.id) return actionResult(action, 'skipped', 'مرحله مقصد پیدا نشد.');
-    await updateRecord(url, key, 'tasks', String(targetTask.id), { [fieldKey]: nextValue }, actorUserId, orgId);
+    if (!targetTask?.id && !targetStage?.id) return actionResult(action, 'skipped', 'مرحله مقصد پیدا نشد.');
+    if (targetTask?.id) {
+      await updateProcessTaskAutomationField(
+        url,
+        key,
+        targetTask,
+        `__task__${fieldKey}`,
+        nextValue,
+        actorUserId,
+        orgId,
+        String(config.__workflow_origin_execution_key || '').trim() || null,
+      );
+    } else {
+      await updateProcessRunStageAutomationField(url, key, targetStage, fieldKey, nextValue);
+    }
     return actionResult(action, 'success', undefined, {
       affected_count: 1,
       details: {
         field: fieldKey,
         stage_offset: offset || null,
         stage_node_key: action.type === 'send_to_specific_stage' ? config.stage_node_key : null,
+        target_kind: targetTask?.id ? 'task' : 'draft_stage',
       },
     });
   }

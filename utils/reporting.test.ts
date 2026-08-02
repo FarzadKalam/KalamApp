@@ -9,6 +9,7 @@ import {
 } from './reporting';
 import { createWorkflowRelatedFieldKey } from './workflowTypes';
 import { buildReportTaskProcessFieldKey } from './reportTaskProcessFields';
+import { createProcessLinkedFieldKey } from './processTargets';
 
 describe('buildReportBaseSelectColumns', () => {
   const moduleConfig = {
@@ -66,6 +67,16 @@ describe('buildReportBaseSelectColumns', () => {
       'source_template_id',
       'process_node_key',
     ]));
+  });
+
+  it('selects process runtime metadata for fields of process-linked records', () => {
+    const fields = buildReportBaseSelectColumns({
+      id: 'tasks',
+      table: 'tasks',
+      fields: [{ key: 'name', type: FieldType.TEXT, labels: { fa: 'عنوان' } }],
+    }, [createProcessLinkedFieldKey('invoices', 'total_received_amount')], []);
+
+    expect(fields).toEqual(expect.arrayContaining(['recurrence_info', 'process_run_id']));
   });
 
   it('does not request unsupported assignee or soft-delete columns', () => {

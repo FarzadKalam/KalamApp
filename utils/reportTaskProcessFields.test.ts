@@ -19,6 +19,7 @@ describe('task process report fields', () => {
     const key = fields[0].key;
 
     expect(key).toBe(buildReportTaskProcessFieldKey('template-a', 'finance_review', 'approved_amount'));
+    expect(fields[0].labels?.fa).toBe('مبلغ تاییدشده (فرآیند «فرآیند فروش» / مرحله «بررسی مالی»)');
     expect(resolveTaskReportProcessFieldValue({
       source_template_id: 'template-a',
       process_node_key: 'finance_review',

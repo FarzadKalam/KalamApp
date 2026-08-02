@@ -139,6 +139,56 @@ describe('print letterheads', () => {
       },
     };
 
-    expect(getPrintLetterheadEffectiveBodyItem(letterhead, true)?.height).toBe(56);
+    expect(getPrintLetterheadEffectiveBodyItem(letterhead, true)?.height).toBe(55.25);
+  });
+
+  it('moves the safe body below every overlapping letterhead runtime overlay', () => {
+    const letterhead: PrintLetterheadConfig = {
+      id: 'portrait_1',
+      slotId: 'portrait_1',
+      orientation: 'portrait',
+      title: 'سربرگ آزمایشی',
+      imageUrl: 'https://example.com/p1.png',
+      isActive: true,
+      sortOrder: 1,
+      layout: {
+        orientation: 'portrait',
+        version: 1,
+        items: [
+          { id: 'body', type: 'body', x: 7, y: 18, width: 86, height: 66, visible: true, zIndex: 3 },
+          { id: 'title', type: 'title', x: 30, y: 16, width: 40, height: 6, visible: true, zIndex: 4 },
+          { id: 'signatures', type: 'signatures', x: 7, y: 88, width: 86, height: 8, visible: true, zIndex: 5 },
+        ],
+      },
+    };
+
+    const safeBody = getPrintLetterheadEffectiveBodyItem(letterhead, true);
+    expect(safeBody?.y).toBe(22.75);
+    expect(safeBody?.height).toBe(61.25);
+  });
+
+  it('keeps runtime overlays out of the body even when a legacy letterhead has no signature lane', () => {
+    const letterhead: PrintLetterheadConfig = {
+      id: 'legacy_portrait_1',
+      slotId: 'portrait_1',
+      orientation: 'portrait',
+      title: 'سربرگ قدیمی',
+      imageUrl: 'https://example.com/legacy.png',
+      isActive: true,
+      sortOrder: 1,
+      layout: {
+        orientation: 'portrait',
+        version: 1,
+        items: [
+          { id: 'body', type: 'body', x: 7, y: 18, width: 86, height: 66, visible: true, zIndex: 3 },
+          { id: 'date', type: 'date', x: 30, y: 16, width: 40, height: 6, visible: true, zIndex: 4 },
+        ],
+      },
+    };
+
+    expect(getPrintLetterheadEffectiveBodyItem(letterhead, false)).toMatchObject({
+      y: 22.75,
+      height: 61.25,
+    });
   });
 });

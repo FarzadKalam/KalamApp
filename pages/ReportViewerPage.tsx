@@ -45,6 +45,7 @@ import {
   resolveTaskReportProcessFieldValue,
 } from '../utils/reportTaskProcessFields';
 import { getTaskStatusLabel } from '../utils/processTaskStatusOptions';
+import { parseProcessLinkedFieldKey } from '../utils/processTargets';
 
 const { Title, Text } = Typography;
 
@@ -476,7 +477,7 @@ const ReportViewerPage: React.FC = () => {
     void loadTaskReportProcessRuntimeCatalog(supabase)
       .then((catalog) => {
         if (cancelled) return;
-        setTaskProcessFields(catalog.fields);
+        setTaskProcessFields([...catalog.fields, ...catalog.linkedFields]);
         setTaskProcessStatusOptions(catalog.statusOptions);
       })
       .catch(() => {
@@ -615,6 +616,72 @@ const ReportViewerPage: React.FC = () => {
           allowedUserIds: roleContext.allowedUserIds,
         })
       );
+      const processLinkedFieldKeys = Array.from(new Set([
+        ...neededKeys,
+        ...conditionFieldKeys,
+      ].filter((fieldKey) => !!parseProcessLinkedFieldKey(fieldKey))));
+      const canResolveProcessConditionsOnServer = conditionFieldKeys.every((fieldKey) => (
+        !parseReportTableFieldKey(fieldKey) && !parseReportTableRelationFieldKey(fieldKey)
+      ));
+      let reportSourceRows = scopedRows;
+      let conditionsResolvedByServer = false;
+      if (moduleId === 'tasks' && processLinkedFieldKeys.length > 0) {
+        const runIds = Array.from(new Set(scopedRows
+          .map((row: any) => String(row?.process_run_id || row?.recurrence_info?.process_run_id || '').trim())
+          .filter(Boolean)));
+        const linksByRun = new Map<string, Record<string, string>>();
+        for (let offset = 0; offset < runIds.length; offset += 100) {
+          const { data: linkRows, error: linkError } = await supabase
+            .from('process_run_links')
+            .select('process_run_id, module_id, record_id, is_primary')
+            .in('process_run_id', runIds.slice(offset, offset + 100))
+            .order('is_primary', { ascending: false });
+          if (linkError) throw linkError;
+          (linkRows || []).forEach((link: any) => {
+            const runId = String(link?.process_run_id || '').trim();
+            const linkedModuleId = String(link?.module_id || '').trim();
+            const linkedRecordId = String(link?.record_id || '').trim();
+            if (!runId || !linkedModuleId || !linkedRecordId) return;
+            const current = linksByRun.get(runId) || {};
+            if (!current[linkedModuleId]) current[linkedModuleId] = linkedRecordId;
+            linksByRun.set(runId, current);
+          });
+        }
+        reportSourceRows = scopedRows.map((row: any) => {
+          const recurrence = row?.recurrence_info && typeof row.recurrence_info === 'object' ? row.recurrence_info : {};
+          const runId = String(row?.process_run_id || recurrence?.process_run_id || '').trim();
+          const runLinks = linksByRun.get(runId) || {};
+          return Object.keys(runLinks).length > 0
+            ? { ...row, recurrence_info: { ...recurrence, process_links: { ...(recurrence?.process_links || {}), ...runLinks } } }
+            : row;
+        });
+      }
+      if (moduleId === 'tasks' && canResolveProcessConditionsOnServer && conditionFieldKeys.some((fieldKey) => !!parseProcessLinkedFieldKey(fieldKey)) && reportSourceRows.length > 0) {
+        try {
+          const { data, error } = await supabase.functions.invoke('goal-progress', {
+            body: {
+              items: [{
+                key: 'report_conditions',
+                kind: 'report_conditions',
+                moduleId: 'tasks',
+                table: moduleConfig.table || 'tasks',
+                selectColumns: baseColumns.join(','),
+                recordIds: reportSourceRows.map((row: any) => row.id),
+                conditionsAll: config.conditions_all,
+                conditionsAny: config.conditions_any,
+              }],
+            },
+          });
+          const result = data?.items?.report_conditions;
+          if (!error && result?.mode === 'server') {
+            const passedIds = new Set((Array.isArray(result?.passedIds) ? result.passedIds : []).map((id: any) => String(id || '').trim()));
+            reportSourceRows = reportSourceRows.filter((row: any) => passedIds.has(String(row?.id || '').trim()));
+            conditionsResolvedByServer = true;
+          }
+        } catch {
+          // تا زمان deploy شدن resolver سرور، مسیر سازگار قبلی در ادامه اجرا می‌شود.
+        }
+      }
       const tableRelationFieldKeys = Array.from(new Set([
         ...neededKeys,
         ...conditionFieldKeys,
@@ -625,7 +692,7 @@ const ReportViewerPage: React.FC = () => {
       tableRelationFieldKeys.forEach((fieldKey) => {
         const relationMeta = parseReportTableRelationFieldKey(fieldKey);
         if (!relationMeta) return;
-        scopedRows.forEach((sourceRow: any) => {
+        reportSourceRows.forEach((sourceRow: any) => {
           const blockRows = Array.isArray(sourceRow?.[relationMeta.blockId]) ? sourceRow[relationMeta.blockId] : [];
           blockRows.forEach((tableRow: any) => {
             const relationRecordId = normalizeRelationRecordId(tableRow?.[relationMeta.relationColumnKey]);
@@ -683,10 +750,10 @@ const ReportViewerPage: React.FC = () => {
       const nextRows: ReportRow[] = [];
       const sharedContext = createWorkflowEvaluationContext(moduleId);
       if (neededKeys.includes('tags') || conditionFieldKeys.includes('tags')) {
-        await prefetchWorkflowRecordTags({ moduleId, records: scopedRows, context: sharedContext });
+        await prefetchWorkflowRecordTags({ moduleId, records: reportSourceRows, context: sharedContext });
       }
-      for (let index = 0; index < scopedRows.length; index += 1) {
-        const sourceRow = scopedRows[index];
+      for (let index = 0; index < reportSourceRows.length; index += 1) {
+        const sourceRow = reportSourceRows[index];
         const tableSources = selectedTableBlocks.map((block: any) => ({
           block,
           rows: Array.isArray(sourceRow?.[block.id])
@@ -742,7 +809,7 @@ const ReportViewerPage: React.FC = () => {
             candidateRow[fieldKey] = relatedRecord?.[relationMeta.targetFieldKey] ?? null;
           }
 
-          const passed = await evaluateWorkflowConditions({
+          const passed = conditionsResolvedByServer || await evaluateWorkflowConditions({
             conditionsAll: config.conditions_all,
             conditionsAny: config.conditions_any,
             currentRecord: candidateRow,

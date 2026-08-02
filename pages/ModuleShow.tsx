@@ -595,8 +595,6 @@ const ModuleShow: React.FC = () => {
   }, [id, moduleId]);
   useEffect(() => {
     if (moduleId !== 'attendance_logs' || !id || !data) return;
-    if (displayData?.presence_minutes !== null && displayData?.presence_minutes !== undefined && displayData?.presence_minutes !== '') return;
-    if (displayData?.presence_hours !== null && displayData?.presence_hours !== undefined && displayData?.presence_hours !== '') return;
 
     const attendanceDate = String(displayData?.attendance_date || '').trim().slice(0, 10);
     if (!attendanceDate) return;
@@ -618,16 +616,21 @@ const ModuleShow: React.FC = () => {
         return;
       }
 
-      const { data: siblingRows, error } = await query.limit(50);
+      const { data: siblingRows, error } = await query;
       if (error || !Array.isArray(siblingRows) || siblingRows.length === 0) return;
       const enrichedRows = enrichAttendancePresenceRows(siblingRows);
       const currentRow = enrichedRows.find((row: any) => String(row?.id || '') === String(id));
-      if (!currentRow?.presence_minutes && !currentRow?.presence_hours) return;
-      setData((prev: any) => ({
-        ...(prev || {}),
-        presence_minutes: currentRow.presence_minutes ?? prev?.presence_minutes,
-        presence_hours: currentRow.presence_hours ?? prev?.presence_hours,
-      }));
+      if (!currentRow) return;
+      setData((prev: any) => {
+        const presenceMinutes = currentRow.presence_minutes ?? null;
+        const presenceHours = currentRow.presence_hours ?? null;
+        if (prev?.presence_minutes === presenceMinutes && prev?.presence_hours === presenceHours) return prev;
+        return {
+          ...(prev || {}),
+          presence_minutes: presenceMinutes,
+          presence_hours: presenceHours,
+        };
+      });
     };
 
     void run();
@@ -637,8 +640,6 @@ const ModuleShow: React.FC = () => {
     displayData?.attendance_date,
     displayData?.employee_id,
     displayData?.org_id,
-    displayData?.presence_hours,
-    displayData?.presence_minutes,
     displayData?.related_profile_id,
     id,
     moduleId,

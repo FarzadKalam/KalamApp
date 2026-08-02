@@ -170,6 +170,23 @@ export const unlockRecord = async (moduleId: string, recordId: string): Promise<
   if (error) throw error;
 };
 
+export const setRecordLocksState = async (args: {
+  moduleId: string;
+  recordIds: Array<string | null | undefined>;
+  locked: boolean;
+  reason?: string | null;
+}): Promise<void> => {
+  const recordIds = Array.from(new Set(args.recordIds.map((id) => String(id || '').trim()).filter(Boolean)));
+  if (!args.moduleId || recordIds.length === 0) return;
+  const { error } = await supabase.rpc('set_record_locks_state', {
+    p_module_id: args.moduleId,
+    p_record_ids: recordIds,
+    p_locked: args.locked,
+    p_reason: args.reason || null,
+  });
+  if (error) throw error;
+};
+
 export const createRecordLockedError = (message = 'این رکورد قفل شده و قابل تغییر نیست.') => {
   const error = new Error(message) as Error & { code?: string };
   error.code = RECORD_LOCKED_ERROR_CODE;

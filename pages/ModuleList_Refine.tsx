@@ -11,7 +11,7 @@ import { buildRecordScopeCrudFilters } from "../utils/recordScopeFilters";
 import { App, Badge, Button, Drawer, Dropdown, Empty, Skeleton } from "antd";
 import type { MenuProps } from "antd";
 import type { FilterValue } from "antd/es/table/interface";
-import { AppstoreAddOutlined, AppstoreOutlined, BranchesOutlined, CalendarOutlined, ColumnWidthOutlined, EllipsisOutlined, EnvironmentOutlined, FileExcelOutlined, FilePdfOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, TableOutlined, TagsOutlined } from "@ant-design/icons";
+import { AppstoreAddOutlined, AppstoreOutlined, BranchesOutlined, CalendarOutlined, ColumnWidthOutlined, EllipsisOutlined, EnvironmentOutlined, FileExcelOutlined, FilePdfOutlined, LockOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, TableOutlined, TagsOutlined, UnlockOutlined } from "@ant-design/icons";
 import AdaptivePickerSurface from "../components/AdaptivePickerSurface";
 import ViewManager from "../components/ViewManager";
 import { supabase } from "../supabaseClient";
@@ -101,6 +101,7 @@ import {
   fetchRecordLockMap,
   getRecordLockStateFromRecord,
   mergeRecordLockIntoRecord,
+  setRecordLocksState,
   type RecordLockState,
 } from "../utils/recordLockRuntime";
 
@@ -838,6 +839,7 @@ export const ModuleListRefine: React.FC<{
   const [recordLockMap, setRecordLockMap] = useState<Map<string, RecordLockState>>(() => new Map());
   const [recordLockMapLoading, setRecordLockMapLoading] = useState(false);
   const [loadedRecordLockIdsSignature, setLoadedRecordLockIdsSignature] = useState("");
+  const [bulkRecordLockSaving, setBulkRecordLockSaving] = useState(false);
   const [allowedRoleIds, setAllowedRoleIds] = useState<string[]>([]);
   const [allowedUserIds, setAllowedUserIds] = useState<string[]>([]);
   const [isBulkProductsModalOpen, setIsBulkProductsModalOpen] = useState(false);
@@ -1093,6 +1095,10 @@ export const ModuleListRefine: React.FC<{
   }, [recordLockMap]);
   const hasLockedSelectedRows = useMemo(
     () => selectedRowKeys.some((key) => isRecordIdLocked(String(key), selectedRowsMap[String(key)])),
+    [isRecordIdLocked, selectedRowKeys, selectedRowsMap]
+  );
+  const allSelectedRowsLocked = useMemo(
+    () => selectedRowKeys.length > 0 && selectedRowKeys.every((key) => isRecordIdLocked(String(key), selectedRowsMap[String(key)])),
     [isRecordIdLocked, selectedRowKeys, selectedRowsMap]
   );
   const allSelectedPendingInProductionOrders = useMemo(() => {
@@ -4104,6 +4110,47 @@ export const ModuleListRefine: React.FC<{
     });
   };
 
+  const handleBulkRecordLockToggle = useCallback(async () => {
+    const recordIds = Array.from(new Set(selectedRowKeys.map((key) => String(key || '').trim()).filter(Boolean)));
+    if (!resolvedModuleId || recordIds.length === 0 || bulkRecordLockSaving) return;
+
+    setBulkRecordLockSaving(true);
+    try {
+      // وضعیت تازه از سرور خوانده می‌شود تا انتخاب بین چند صفحه یا تغییر هم‌زمان، تصمیم نادرست نسازد.
+      const latestLocks = await fetchRecordLockMap(resolvedModuleId, recordIds, { forceRefresh: true, throwOnError: true });
+      const shouldUnlock = recordIds.every((recordId) => latestLocks.has(recordId));
+      if (shouldUnlock && !canUnlockRecords) {
+        showListMessage('warning', 'اجازه باز کردن قفل رکوردهای انتخاب‌شده را ندارید.');
+        return;
+      }
+      if (!shouldUnlock && !canLockRecords) {
+        showListMessage('warning', 'اجازه قفل کردن رکوردهای انتخاب‌شده را ندارید.');
+        return;
+      }
+
+      await setRecordLocksState({
+        moduleId: resolvedModuleId,
+        recordIds,
+        locked: !shouldUnlock,
+      });
+      const refreshedLocks = await fetchRecordLockMap(resolvedModuleId, recordIds, { forceRefresh: true, throwOnError: true });
+      setRecordLockMap((previous) => {
+        const next = new Map(previous);
+        recordIds.forEach((recordId) => {
+          const state = refreshedLocks.get(recordId);
+          if (state) next.set(recordId, state);
+          else next.delete(recordId);
+        });
+        return next;
+      });
+      showListMessage('success', shouldUnlock ? 'قفل رکوردهای انتخاب‌شده باز شد.' : 'رکوردهای انتخاب‌شده قفل شدند.');
+    } catch (error: any) {
+      showListMessage('error', toFaErrorMessage(error, 'تغییر وضعیت قفل رکوردها ناموفق بود.'));
+    } finally {
+      setBulkRecordLockSaving(false);
+    }
+  }, [bulkRecordLockSaving, canLockRecords, canUnlockRecords, resolvedModuleId, selectedRowKeys, showListMessage]);
+
   const handleBulkEditOpen = () => {
       if (hasLockedSelectedRows) {
         showListMessage("warning", "در میان رکوردهای انتخاب‌شده، رکورد قفل‌شده وجود دارد و قابل ویرایش نیست.");
@@ -4865,6 +4912,17 @@ export const ModuleListRefine: React.FC<{
                       onExport={selectedRowKeys.length ? handleExport : undefined}
                       exportMenuItems={selectedRowKeys.length ? exportMenuItems : undefined}
                       extraActions={[
+                        ...(selectedRowKeys.length > 0 && (allSelectedRowsLocked ? canUnlockRecords : canLockRecords)
+                          ? [
+                              {
+                                key: "toggle_record_locks",
+                                icon: allSelectedRowsLocked ? <UnlockOutlined /> : <LockOutlined />,
+                                tooltip: allSelectedRowsLocked ? "باز کردن قفل انتخاب‌ها" : "قفل کردن انتخاب‌ها",
+                                onClick: handleBulkRecordLockToggle,
+                                disabled: bulkRecordLockSaving || recordLockMapLoading,
+                              },
+                            ]
+                          : []),
                         ...(selectedRowKeys.length > 1 && canEditModule && !isSystemManagedModule
                           ? [
                               {

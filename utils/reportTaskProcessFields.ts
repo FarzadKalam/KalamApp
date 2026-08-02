@@ -6,6 +6,8 @@ import {
 } from './processTaskCustomFields';
 import { normalizeProcessTaskStatusOptions } from './processTaskStatusOptions';
 import { PROCESS_NODE_KEY } from './processGraph';
+import { getProcessTargetModuleFields, normalizeProcessTargetModuleIds } from './processTargets';
+import { getSyntheticWorkflowAssigneeField, getWorkflowConditionFields } from './workflowHelpers';
 
 export const REPORT_TASK_PROCESS_FIELD_PREFIX = '__report_task_process_field__';
 
@@ -20,6 +22,7 @@ export type TaskReportProcessFieldSource = {
 
 export type TaskReportProcessRuntimeCatalog = {
   fields: ModuleField[];
+  linkedFields: ModuleField[];
   statusOptions: Array<{ label: string; value: string; color?: string; icon?: string }>;
 };
 
@@ -63,10 +66,11 @@ export const buildTaskReportProcessFields = (sources: TaskReportProcessFieldSour
       ...source.field,
       key,
       labels: {
-        fa: `${text(source.templateName) || 'فرآیند'} / ${text(source.stageName) || 'مرحله'} / ${text(source.field.labels?.fa) || fieldKey}`,
+        fa: `${text(source.field.labels?.fa) || fieldKey} (فرآیند «${text(source.templateName) || 'فرآیند'}» / مرحله «${text(source.stageName) || 'مرحله'}»)`,
         en: `${text(source.templateName) || 'Process'} / ${text(source.stageName) || 'Stage'} / ${text(source.field.labels?.en) || fieldKey}`,
       },
       nature: FieldNature.STANDARD,
+      workflowOptionScopeModuleId: 'tasks',
       __reportTaskProcessField: true,
     } as ModuleField];
   });
@@ -75,14 +79,14 @@ export const buildTaskReportProcessFields = (sources: TaskReportProcessFieldSour
 export const loadTaskReportProcessRuntimeCatalog = async (supabaseClient: any): Promise<TaskReportProcessRuntimeCatalog> => {
   const { data: templates, error: templatesError } = await supabaseClient
     .from('process_templates')
-    .select('id, name')
+    .select('id, name, module_id, module_ids')
     .eq('is_active', true)
     .order('name');
   if (templatesError) throw templatesError;
 
   const results = await Promise.all((templates || []).map(async (template: any) => {
     const templateId = text(template?.id);
-    if (!templateId) return { fieldSources: [] as TaskReportProcessFieldSource[], statusOptions: [] as TaskReportProcessRuntimeCatalog['statusOptions'] };
+    if (!templateId) return { fieldSources: [] as TaskReportProcessFieldSource[], statusOptions: [] as TaskReportProcessRuntimeCatalog['statusOptions'], linkedModuleIds: [] as string[] };
     const { data: stages, error } = await supabaseClient
       .from('process_template_stages')
       .select('id, stage_name, sort_order, process_node_key, metadata')
@@ -91,8 +95,15 @@ export const loadTaskReportProcessRuntimeCatalog = async (supabaseClient: any): 
     if (error) throw error;
     const fieldSources: TaskReportProcessFieldSource[] = [];
     const statusOptions: TaskReportProcessRuntimeCatalog['statusOptions'] = [];
+    const linkedModuleIds = normalizeProcessTargetModuleIds([
+      template?.module_id,
+      ...(Array.isArray(template?.module_ids) ? template.module_ids : []),
+    ]);
     (stages || []).forEach((stage: any) => {
       const metadata = parseObject(stage?.metadata);
+      linkedModuleIds.push(...normalizeProcessTargetModuleIds([
+        ...(Array.isArray(metadata?.process_target_module_ids) ? metadata.process_target_module_ids : []),
+      ]));
       const processNodeKey = text(stage?.process_node_key || metadata?.[PROCESS_NODE_KEY] || stage?.id);
       if (!processNodeKey) return;
       getProcessTaskCustomFieldsFromStage({ ...stage, metadata }).forEach((field) => fieldSources.push({
@@ -109,7 +120,7 @@ export const loadTaskReportProcessRuntimeCatalog = async (supabaseClient: any): 
         if (value && label) statusOptions.push({ value, label, color: text(option?.color) || undefined, icon: text((option as any)?.icon) || undefined });
       });
     });
-    return { fieldSources, statusOptions };
+    return { fieldSources, statusOptions, linkedModuleIds: normalizeProcessTargetModuleIds(linkedModuleIds) };
   }));
 
   const statusOptionMap = new Map<string, TaskReportProcessRuntimeCatalog['statusOptions'][number]>();
@@ -118,6 +129,11 @@ export const loadTaskReportProcessRuntimeCatalog = async (supabaseClient: any): 
   });
   return {
     fields: buildTaskReportProcessFields(results.flatMap((result) => result.fieldSources)),
+    linkedFields: getProcessTargetModuleFields(
+      normalizeProcessTargetModuleIds(results.flatMap((result) => result.linkedModuleIds)),
+      getWorkflowConditionFields,
+      getSyntheticWorkflowAssigneeField,
+    ),
     statusOptions: Array.from(statusOptionMap.values()),
   };
 };

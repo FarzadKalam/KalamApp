@@ -33,6 +33,7 @@ const CALENDAR_PUBLIC_BASE_URL = String(
 const holidayYearCache = new Map<number, Promise<any[] | null>>();
 
 const safeTableName = (value: unknown) => /^[a-z][a-z0-9_]*$/.test(String(value || '').trim());
+const safeRecordId = (value: unknown) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
 const safeColumns = (value: unknown) => String(value || '')
   .split(',')
   .map((column) => column.trim())
@@ -84,6 +85,7 @@ const dateHasOccasion = async (value: unknown, expected: unknown) => {
 const WORKFLOW_RELATED_FIELD_PREFIX = '__workflow_related__';
 const WORKFLOW_MULTI_RELATION_PREFIX = '__workflow_multi_relation__';
 const PROCESS_LINKED_FIELD_PREFIX = '__linked__';
+const TASK_PROCESS_FIELD_PREFIX = '__report_task_process_field__';
 const SURVEY_TEMPLATE_FIELD_PREFIX = '__survey_template__::';
 
 const getFieldValue = (record: Record<string, any> | null | undefined, field: string) => {
@@ -138,6 +140,11 @@ const resolveTable = (moduleId: string) => ({
 const getConditionResolver = ({ url, headers, orgId, moduleId }: any) => {
   const relatedCache = new Map<string, Promise<Record<string, any> | null>>();
   const tagCache = new Map<string, Promise<string[]>>();
+  const processLinkCache = new Map<string, Promise<string | null>>();
+  const serviceRoleKey = String(Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '').trim();
+  const internalHeaders = serviceRoleKey
+    ? { apikey: serviceRoleKey, authorization: `Bearer ${serviceRoleKey}` }
+    : headers;
   const fetchRelated = (targetModuleId: string, id: string) => {
     const table = resolveTable(targetModuleId);
     const cacheKey = `${table}:${id}`;
@@ -145,7 +152,7 @@ const getConditionResolver = ({ url, headers, orgId, moduleId }: any) => {
       if (!safeTableName(table) || !id) return null;
       const query = new URL(`${url}/rest/v1/${table}`);
       query.searchParams.set('select', '*'); query.searchParams.set('id', `eq.${id}`); query.searchParams.set('org_id', `eq.${orgId}`); query.searchParams.set('limit', '1');
-      const response = await fetch(query, { headers });
+      const response = await fetch(query, { headers: internalHeaders });
       if (!response.ok) return null;
       return (await response.json())?.[0] || null;
     })());
@@ -157,7 +164,7 @@ const getConditionResolver = ({ url, headers, orgId, moduleId }: any) => {
       if (!targetModuleId || !id) return [];
       const query = new URL(`${url}/rest/v1/record_tags`);
       query.searchParams.set('select', 'tag_id'); query.searchParams.set('module_id', `eq.${targetModuleId}`); query.searchParams.set('record_id', `eq.${id}`); query.searchParams.set('org_id', `eq.${orgId}`);
-      const response = await fetch(query, { headers });
+      const response = await fetch(query, { headers: internalHeaders });
       if (!response.ok) return [];
       return Array.from(new Set((await response.json()).map((row: any) => String(row?.tag_id || '').trim()).filter(Boolean)));
     })());
@@ -166,15 +173,55 @@ const getConditionResolver = ({ url, headers, orgId, moduleId }: any) => {
   const assignee = (record: any) => String(record?.assignee_type || '').toLowerCase() === 'role' || record?.assignee_role_id
     ? (record?.assignee_role_id || record?.assignee_id ? `role:${record?.assignee_role_id || record?.assignee_id}` : null)
     : (record?.assignee_id ? `user:${record.assignee_id}` : null);
+  const resolveProcessLinkId = (record: any, linkedModuleId: string) => {
+    const recurrence = parseObject(record?.recurrence_info);
+    const direct = String(
+      parseObject(record?.process_links)?.[linkedModuleId]
+      || parseObject(record?.process_link_map)?.[linkedModuleId]
+      || parseObject(recurrence?.process_links)?.[linkedModuleId]
+      || record?.[`__linked__${linkedModuleId}__id`]
+      || '',
+    ).trim();
+    const processRunId = String(record?.process_run_id || recurrence?.process_run_id || '').trim();
+    if (!processRunId || !linkedModuleId) return Promise.resolve(direct || null);
+    const cacheKey = `${processRunId}:${linkedModuleId}`;
+    if (!processLinkCache.has(cacheKey)) processLinkCache.set(cacheKey, (async () => {
+      const query = new URL(`${url}/rest/v1/process_run_links`);
+      query.searchParams.set('select', 'record_id');
+      query.searchParams.set('org_id', `eq.${orgId}`);
+      query.searchParams.set('process_run_id', `eq.${processRunId}`);
+      query.searchParams.set('module_id', `eq.${linkedModuleId}`);
+      query.searchParams.set('order', 'is_primary.desc,created_at.asc');
+      query.searchParams.set('limit', '1');
+      const response = await fetch(query, { headers: internalHeaders });
+      if (!response.ok) return null;
+      return String((await response.json())?.[0]?.record_id || '').trim() || null;
+    })());
+    return processLinkCache.get(cacheKey)!.then((canonicalLinkId) => canonicalLinkId || direct || null);
+  };
+  const resolveTaskProcessField = (fieldKey: string, record: any) => {
+    if (!fieldKey.startsWith(TASK_PROCESS_FIELD_PREFIX)) return null;
+    const [templateId, processNodeKey, customFieldKey] = fieldKey.slice(TASK_PROCESS_FIELD_PREFIX.length).split('::');
+    if (!templateId || !processNodeKey || !customFieldKey) return null;
+    const recurrence = parseObject(record?.recurrence_info);
+    const group = parseObject(recurrence?.process_group);
+    const actualTemplateId = String(record?.source_template_id || group?.template_id || '').trim();
+    const actualNodeKey = String(record?.process_node_key || recurrence?.process_node_key || '').trim();
+    if (actualTemplateId !== templateId || actualNodeKey !== processNodeKey) return null;
+    const fields = Array.isArray(recurrence?.process_task_custom_fields) ? recurrence.process_task_custom_fields : [];
+    if (!fields.some((field: any) => String(field?.key || '').trim() === customFieldKey)) return null;
+    return parseObject(recurrence?.process_task_custom_field_values)?.[customFieldKey] ?? null;
+  };
   const resolve = async (fieldKey: string, record: any): Promise<any> => {
     if (!record) return null;
     if (fieldKey === '__workflow_assignee') return assignee(record);
     if (fieldKey === 'tags') return fetchTags(moduleId, String(record.id || ''));
+    if (fieldKey.startsWith(TASK_PROCESS_FIELD_PREFIX)) return resolveTaskProcessField(fieldKey, record);
     const surveyField = fieldKey.startsWith(SURVEY_TEMPLATE_FIELD_PREFIX) ? fieldKey.slice(SURVEY_TEMPLATE_FIELD_PREFIX.length) : '';
     if (surveyField) return record?.template_field_values?.[surveyField] ?? null;
     const linked = fieldKey.match(/^__linked__(.+?)__(.+)$/);
     if (linked?.[1] && linked?.[2]) {
-      const linkedId = String(parseObject(record?.process_links)[linked[1]] || parseObject(record?.process_link_map)[linked[1]] || record?.[`__linked__${linked[1]}__id`] || '').trim();
+      const linkedId = await resolveProcessLinkId(record, linked[1]);
       const linkedRecord = linkedId ? await fetchRelated(linked[1], linkedId) : null;
       if (!linkedRecord) return linked[2] === 'tags' ? [] : null;
       if (linked[2] === '__workflow_assignee') return assignee(linkedRecord);
@@ -286,6 +333,43 @@ Deno.serve(async (request) => {
     await Promise.all(items.map(async (item: any) => {
       const key = String(item?.key || '').trim();
       try {
+        if (item?.kind === 'report_conditions') {
+          const table = String(item?.table || '').trim();
+          const moduleId = String(item?.moduleId || '').trim();
+          const recordIds = Array.from(new Set((Array.isArray(item?.recordIds) ? item.recordIds : [])
+            .map((id) => String(id || '').trim())
+            .filter(safeRecordId))).slice(0, 1000);
+          const columns = Array.from(new Set(['id', 'org_id', ...safeColumns(item?.selectColumns)])).filter(Boolean);
+          if (!key || moduleId !== 'tasks' || table !== 'tasks' || recordIds.length === 0) {
+            output[key] = { mode: 'fallback' };
+            return;
+          }
+          const query = new URL(`${supabaseUrl}/rest/v1/${table}`);
+          query.searchParams.set('select', columns.join(','));
+          query.searchParams.set('id', `in.(${recordIds.join(',')})`);
+          query.searchParams.set('limit', String(recordIds.length));
+          // فهرست فعالیت‌ها با توکن کاربر خوانده می‌شود تا محدودهٔ دسترسی خودِ فعالیت
+          // حفظ شود؛ فقط حل داخلی لینک‌های فرآیند مجاز است از کلید سرویس استفاده کند.
+          const response = await fetch(query, { headers });
+          if (!response.ok) throw new Error(`report_rows_fetch_failed:${response.status}`);
+          const rows = await response.json();
+          const orgId = String(rows?.[0]?.org_id || '').trim();
+          if (!orgId) {
+            output[key] = { mode: 'server', passedIds: [] };
+            return;
+          }
+          const resolveField = getConditionResolver({ url: supabaseUrl, headers, orgId, moduleId });
+          const passedIds: string[] = [];
+          for (const row of Array.isArray(rows) ? rows : []) {
+            if (String(row?.org_id || '').trim() !== orgId) continue;
+            if (await passesConditions(row, item?.conditionsAll || [], item?.conditionsAny || [], resolveField)) {
+              const id = String(row?.id || '').trim();
+              if (id) passedIds.push(id);
+            }
+          }
+          output[key] = { mode: 'server', passedIds };
+          return;
+        }
         const goalId = String(item?.goalId || '').trim();
         const table = String(item?.table || '').trim();
         const moduleId = String(item?.moduleId || '').trim();

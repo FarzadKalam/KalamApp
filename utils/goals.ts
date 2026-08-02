@@ -31,6 +31,7 @@ import {
   type GoalTone,
 } from './goalTypes';
 import { parseProcessLinkedFieldKey } from './processTargets';
+import { isReportTaskProcessFieldKey, resolveTaskReportProcessFieldValue } from './reportTaskProcessFields';
 import { parseSurveyTemplateFieldKey } from './surveyTemplates';
 import {
   parseWorkflowMultiRelationFieldKey,
@@ -99,6 +100,23 @@ const resolveMetricValue = (rows: any[], metricType: GoalMetricType, metricField
   return values.reduce((sum, value) => sum + value, 0);
 };
 
+const getGoalRuntimeFieldKeys = (goal: GoalRecord) => Array.from(new Set([
+  String(goal.metric_field_key || '').trim(),
+  ...(Array.isArray(goal.conditions_all) ? goal.conditions_all : []).map((condition: any) => String(condition?.field || '').trim()),
+  ...(Array.isArray(goal.conditions_any) ? goal.conditions_any : []).map((condition: any) => String(condition?.field || '').trim()),
+].filter(Boolean)));
+
+const withGoalRuntimeFieldAliases = (goal: GoalRecord, row: Record<string, any>) => {
+  if (goal.module_id !== 'tasks') return row;
+  const aliases = getGoalRuntimeFieldKeys(goal)
+    .filter(isReportTaskProcessFieldKey)
+    .reduce<Record<string, any>>((acc, fieldKey) => {
+      acc[fieldKey] = resolveTaskReportProcessFieldValue(row, fieldKey);
+      return acc;
+    }, {});
+  return Object.keys(aliases).length > 0 ? { ...row, ...aliases } : row;
+};
+
 const buildGoalLevels = (goal: GoalRecord): GoalLevelDefinition[] =>
   (['bronze', 'silver', 'gold'] as const)
     .map((key) => ({
@@ -159,8 +177,8 @@ export const getGoalModuleOptions = (permissions?: PermissionMap | null) =>
     }))
     .sort((a, b) => a.label.localeCompare(b.label, 'fa'));
 
-export const getGoalNumericFieldOptions = (moduleId?: string | null) =>
-  (MODULES[String(moduleId || '').trim()]?.fields || [])
+export const getGoalNumericFieldOptions = (moduleId?: string | null, additionalFields: any[] = []) =>
+  [...(MODULES[String(moduleId || '').trim()]?.fields || []), ...(Array.isArray(additionalFields) ? additionalFields : [])]
     .filter((field) => GOAL_NUMERIC_FIELD_TYPES.has(field.type))
     .map((field) => ({
       label: field.labels?.fa || field.key,
@@ -469,6 +487,16 @@ export const buildGoalSelectColumns = (goal: GoalRecord) => {
 
   collectGoalConditionSourceFieldKeys(goal).forEach((key) => requestedKeys.add(key));
 
+  if (goal.module_id === 'tasks' && Array.from(requestedKeys).some(isReportTaskProcessFieldKey)) {
+    requestedKeys.add('recurrence_info');
+    requestedKeys.add('source_template_id');
+    requestedKeys.add('process_node_key');
+  }
+  if (goal.module_id === 'tasks' && Array.from(requestedKeys).some((key) => !!parseProcessLinkedFieldKey(key))) {
+    requestedKeys.add('recurrence_info');
+    requestedKeys.add('process_run_id');
+  }
+
   if (supportsModuleAssignee(module)) {
     requestedKeys.add('assignee_id');
   }
@@ -488,6 +516,9 @@ export const buildGoalSelectColumns = (goal: GoalRecord) => {
     'process_links',
     'process_link_map',
     'recurrence_info',
+    'source_template_id',
+    'process_node_key',
+    'process_run_id',
     'assignee_id',
     'assignee_type',
     'assignee_role_id',
@@ -587,6 +618,40 @@ const queryRowsByDateRange = async (
   }
 
   return rows;
+};
+
+const hydrateGoalProcessLinks = async (goal: GoalRecord, rows: any[]) => {
+  if (goal.module_id !== 'tasks' || !getGoalRuntimeFieldKeys(goal).some((key) => !!parseProcessLinkedFieldKey(key))) return rows;
+  const runIds = Array.from(new Set((rows || [])
+    .map((row) => String(row?.process_run_id || row?.recurrence_info?.process_run_id || '').trim())
+    .filter(Boolean)));
+  if (runIds.length === 0) return rows;
+  const linksByRun = new Map<string, Record<string, string>>();
+  for (let offset = 0; offset < runIds.length; offset += 100) {
+    const { data, error } = await supabase
+      .from('process_run_links')
+      .select('process_run_id, module_id, record_id, is_primary')
+      .in('process_run_id', runIds.slice(offset, offset + 100))
+      .order('is_primary', { ascending: false });
+    if (error) throw error;
+    (data || []).forEach((link: any) => {
+      const runId = String(link?.process_run_id || '').trim();
+      const moduleId = String(link?.module_id || '').trim();
+      const recordId = String(link?.record_id || '').trim();
+      if (!runId || !moduleId || !recordId) return;
+      const current = linksByRun.get(runId) || {};
+      if (!current[moduleId]) current[moduleId] = recordId;
+      linksByRun.set(runId, current);
+    });
+  }
+  return rows.map((row) => {
+    const recurrence = row?.recurrence_info && typeof row.recurrence_info === 'object' ? row.recurrence_info : {};
+    const runId = String(row?.process_run_id || recurrence?.process_run_id || '').trim();
+    const runLinks = linksByRun.get(runId) || {};
+    return Object.keys(runLinks).length > 0
+      ? { ...row, recurrence_info: { ...recurrence, process_links: { ...(recurrence?.process_links || {}), ...runLinks } } }
+      : row;
+  });
 };
 
 const loadServerFilteredGoalRanges = async (
@@ -733,7 +798,7 @@ const loadScopedRows = async (
         loadedRows = [];
       }
     }
-    return loadedRows;
+    return hydrateGoalProcessLinks(goal, loadedRows);
   });
 
   const modulePerm = options.permissions?.[goal.module_id] || {};
@@ -759,13 +824,14 @@ const loadScopedRows = async (
 
 const filterGoalRows = async (goal: GoalRecord, rows: any[]) => {
   const context = createWorkflowEvaluationContext(goal.module_id);
+  const runtimeRows = rows.map((row) => withGoalRuntimeFieldAliases(goal, row));
   await prefetchWorkflowRecordTags({
     moduleId: goal.module_id,
-    records: rows,
+    records: runtimeRows,
     context,
   });
   const filtered: any[] = [];
-  for (const row of rows) {
+  for (const row of runtimeRows) {
     try {
       const passed = await evaluateWorkflowConditions({
         conditionsAll: goal.conditions_all,
@@ -907,7 +973,10 @@ const prepareGoalProgressRows = async (
   });
 
   const [filteredMainRows, filteredSubRows] = serverRows
-    ? [filterScopedServerRows(serverRows.mainRows, mainRange), filterScopedServerRows(serverRows.subRows, subRange)]
+    ? [
+      filterScopedServerRows(serverRows.mainRows, mainRange).map((row) => withGoalRuntimeFieldAliases(goal, row)),
+      filterScopedServerRows(serverRows.subRows, subRange).map((row) => withGoalRuntimeFieldAliases(goal, row)),
+    ]
     : await Promise.all([
       loadScopedRows(goal, mainRange, {
         userId: options.userId,

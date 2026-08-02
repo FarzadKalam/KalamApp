@@ -81,6 +81,7 @@ import AiAssistantLauncher from './communications/AiAssistantLauncher';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
 import AiSparkleIcon from './ai/AiSparkleIcon';
 import { useNotificationRuntime } from './notifications/NotificationRuntimeProvider';
+import { resolveMobileKeyboardViewport } from '../utils/mobileKeyboardViewport';
 
 const { Header, Sider, Content } = AntLayout;
 const NotificationsPopover = React.lazy(() => import('./NotificationsPopover'));
@@ -132,6 +133,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const searchRequestRef = useRef(0);
   const searchAbortRef = useRef<AbortController | null>(null);
   const wasMobileViewportRef = useRef(initialIsMobile);
+  const normalMobileViewportHeightRef = useRef(0);
+  const keyboardVisibleRef = useRef(false);
   const previousPathnameRef = useRef(location.pathname);
   const sidebarNavigationRef = useRef('');
   const latestNavigationStateRef = useRef({
@@ -371,10 +374,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       const layoutViewportHeight = window.innerHeight;
       const viewportHeight = visualViewport?.height || layoutViewportHeight;
       const viewportOffsetTop = visualViewport?.offsetTop || 0;
-      const keyboardInset = Math.max(
-        0,
-        layoutViewportHeight - Math.round(viewportHeight + viewportOffsetTop)
-      );
       const activeElement = document.activeElement as HTMLElement | null;
       const isTextInputFocused = Boolean(
         activeElement
@@ -385,17 +384,34 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         )
       );
       const mobileViewport = window.innerWidth < 768;
-      const keyboardVisible = mobileViewport && (
-        keyboardInset > 120
-        || (isTextInputFocused && layoutViewportHeight - viewportHeight > 100)
-      );
+      const visibleViewportBottom = Math.round(viewportHeight + viewportOffsetTop);
+      const previousKeyboardVisible = keyboardVisibleRef.current;
 
-      const appViewportHeight = keyboardVisible ? viewportHeight : layoutViewportHeight;
-      document.documentElement.style.setProperty('--app-viewport-height', `${Math.round(appViewportHeight)}px`);
-      document.documentElement.style.setProperty('--app-viewport-offset-top', `${keyboardVisible ? Math.round(viewportOffsetTop) : 0}px`);
-      document.documentElement.style.setProperty('--app-keyboard-inset', `${keyboardVisible ? keyboardInset : 0}px`);
-      document.documentElement.style.setProperty('--app-mobile-footer-height', keyboardVisible ? '0px' : '64px');
-      setIsKeyboardVisible(keyboardVisible);
+      // Keep one full-height measurement while an input is focused. This also
+      // handles Android WebViews that resize window.innerHeight with the OSK.
+      if (
+        !mobileViewport
+        || normalMobileViewportHeightRef.current === 0
+        || (!isTextInputFocused && !previousKeyboardVisible && visibleViewportBottom >= normalMobileViewportHeightRef.current - 40)
+      ) {
+        normalMobileViewportHeightRef.current = Math.max(0, visibleViewportBottom);
+      }
+
+      const viewportState = resolveMobileKeyboardViewport({
+        isMobile: mobileViewport,
+        normalViewportHeight: normalMobileViewportHeightRef.current || visibleViewportBottom,
+        visualViewportHeight: viewportHeight,
+        visualViewportOffsetTop: viewportOffsetTop,
+        isTextInputFocused,
+        wasKeyboardVisible: previousKeyboardVisible,
+      });
+
+      keyboardVisibleRef.current = viewportState.keyboardVisible;
+      document.documentElement.style.setProperty('--app-viewport-height', `${viewportState.appViewportHeight}px`);
+      document.documentElement.style.setProperty('--app-viewport-offset-top', `${viewportState.viewportOffsetTop}px`);
+      document.documentElement.style.setProperty('--app-keyboard-inset', `${viewportState.keyboardInset}px`);
+      document.documentElement.style.setProperty('--app-mobile-footer-height', viewportState.keyboardVisible ? '0px' : '64px');
+      setIsKeyboardVisible(viewportState.keyboardVisible);
     };
 
     const getUser = async () => {
@@ -422,12 +438,19 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       }
     };
 
+    const handleOrientationChange = () => {
+      normalMobileViewportHeightRef.current = 0;
+      keyboardVisibleRef.current = false;
+      window.requestAnimationFrame(handleResize);
+    };
+
     handleResize();
     window.addEventListener('resize', handleResize);
     window.visualViewport?.addEventListener('resize', handleResize);
     window.visualViewport?.addEventListener('scroll', handleResize);
     window.addEventListener('focusin', handleResize);
     window.addEventListener('focusout', handleResize);
+    window.addEventListener('orientationchange', handleOrientationChange);
     return () => {
       isMounted = false;
       window.removeEventListener('resize', handleResize);
@@ -435,6 +458,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       window.visualViewport?.removeEventListener('scroll', handleResize);
       window.removeEventListener('focusin', handleResize);
       window.removeEventListener('focusout', handleResize);
+      window.removeEventListener('orientationchange', handleOrientationChange);
     };
   }, [applySessionBootstrapSnapshot]);
 
@@ -1232,7 +1256,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   return (
     <AntLayout
       className="overflow-hidden bg-gray-100 dark:bg-dark-bg transition-colors duration-300"
-      style={{ height: 'var(--app-viewport-height, 100dvh)' }}
+      style={{
+        height: 'var(--app-viewport-height, 100dvh)',
+        ...(isKeyboardVisible ? { transform: 'translateY(var(--app-viewport-offset-top, 0px))' } : {}),
+      }}
     >
       
       {isMobile && !collapsed && (

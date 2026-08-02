@@ -29,6 +29,7 @@ import {
 } from '../../utils/goalTypes';
 import { loadWorkflowConditionEditorOptions } from '../../utils/workflowConditionOptions';
 import { getWorkflowConditionFields } from '../../utils/workflowHelpers';
+import { loadTaskReportProcessRuntimeCatalog } from '../../utils/reportTaskProcessFields';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { resolveModuleGoalAccessPermissions } from '../../utils/permissions';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
@@ -116,15 +117,29 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
   const [formulaModalOpen, setFormulaModalOpen] = useState(false);
   const [formulaTargetIndex, setFormulaTargetIndex] = useState<number | null>(null);
   const [editingFormulaId, setEditingFormulaId] = useState<string | null>(null);
+  const [taskProcessFields, setTaskProcessFields] = useState<any[]>([]);
+  const [taskProcessStatusOptions, setTaskProcessStatusOptions] = useState<any[]>([]);
 
   const isEditMode = !!record?.id;
   const metricType = Form.useWatch('metric_type', form);
+  const metricFieldKey = Form.useWatch('metric_field_key', form);
   const levelsEnabled = Form.useWatch('levels_enabled', form);
   const periodUnit = Form.useWatch('period_unit', form);
 
   const moduleOptions = useMemo(() => getGoalModuleOptions(permissions), [permissions]);
-  const numericFieldOptions = useMemo(() => getGoalNumericFieldOptions(moduleId), [moduleId]);
+  const numericFieldOptions = useMemo(
+    () => getGoalNumericFieldOptions(moduleId, moduleId === 'tasks' ? taskProcessFields : []),
+    [moduleId, taskProcessFields],
+  );
   const dateFieldOptions = useMemo(() => getGoalDateFieldOptions(moduleId), [moduleId]);
+  const formulaVariableOptions = useMemo(() => {
+    const metricLabel = numericFieldOptions.find((item) => item.value === metricFieldKey)?.label;
+    return [
+      { label: metricLabel ? `مقدار تحقق‌یافته (${metricLabel})` : 'مقدار تحقق‌یافته', token: '{{goal.achieved_value}}' },
+      { label: 'درصد تحقق هدف', token: '{{goal.achieved_percent}}' },
+      { label: 'هدف نهایی', token: '{{goal.target_value}}' },
+    ];
+  }, [metricFieldKey, numericFieldOptions]);
   const allUsersIdentityOption = useMemo(() => ({
     kind: 'user' as const,
     id: GOAL_ALL_USERS_VALUE,
@@ -138,7 +153,15 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
     if (selectedIndex < 0) return GOAL_PERIOD_UNIT_OPTIONS;
     return GOAL_PERIOD_UNIT_OPTIONS.slice(0, selectedIndex + 1);
   }, [periodUnit]);
-  const conditionFields = useMemo(() => getWorkflowConditionFields(moduleId), [moduleId]);
+  const conditionFields = useMemo(() => {
+    const baseFields = getWorkflowConditionFields(moduleId);
+    const fields = moduleId === 'tasks' ? [...baseFields, ...taskProcessFields] : baseFields;
+    return fields.map((field: any) => (
+      field?.key === 'status'
+        ? { ...field, options: [...(field.options || []), ...taskProcessStatusOptions] }
+        : field
+    ));
+  }, [moduleId, taskProcessFields, taskProcessStatusOptions]);
   const popupContainer = (triggerNode?: HTMLElement | null) => {
     const modalBodyHost = triggerNode?.closest?.('.ant-modal-body, .ant-modal-content, .ant-modal') as HTMLElement | null;
     return modalBodyHost || resolveOverlayPopupContainer(triggerNode);
@@ -223,6 +246,27 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
       cancelled = true;
     };
   }, [conditionFields, moduleId, open]);
+
+  useEffect(() => {
+    if (!open || moduleId !== 'tasks') {
+      setTaskProcessFields([]);
+      setTaskProcessStatusOptions([]);
+      return;
+    }
+    let cancelled = false;
+    void loadTaskReportProcessRuntimeCatalog(supabase)
+      .then((catalog) => {
+        if (cancelled) return;
+        setTaskProcessFields([...catalog.fields, ...catalog.linkedFields]);
+        setTaskProcessStatusOptions(catalog.statusOptions);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTaskProcessFields([]);
+        setTaskProcessStatusOptions([]);
+      });
+    return () => { cancelled = true; };
+  }, [moduleId, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -723,6 +767,7 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
         defaultScope="goal_reward"
         defaultContextType="goal"
         defaultOutputType="money"
+        variableOptions={formulaVariableOptions}
         initialFormulaId={editingFormulaId}
         onSaved={(formula) => {
           setFormulaOptions((current) => {

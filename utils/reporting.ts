@@ -6,6 +6,7 @@ import { buildSurveyReportFieldsFromSnapshot } from './surveyTemplates';
 import { getSyntheticWorkflowAssigneeField, getWorkflowConditionFields } from './workflowHelpers';
 import { parseWorkflowRelatedFieldKey, WORKFLOW_ASSIGNEE_FIELD_KEY, type WorkflowCondition } from './workflowTypes';
 import { isReportTaskProcessFieldKey } from './reportTaskProcessFields';
+import { parseProcessLinkedFieldKey } from './processTargets';
 
 export type ReportMetricType = 'count' | 'sum' | 'avg';
 export type ReportDefaultView = 'table' | 'table_and_chart';
@@ -243,6 +244,12 @@ export const buildReportBaseSelectColumns = (
       requiredColumns.add('recurrence_info');
       requiredColumns.add('source_template_id');
       requiredColumns.add('process_node_key');
+      return;
+    }
+
+    if (String(moduleConfig?.id || '').trim() === 'tasks' && parseProcessLinkedFieldKey(key)) {
+      requiredColumns.add('recurrence_info');
+      requiredColumns.add('process_run_id');
       return;
     }
 

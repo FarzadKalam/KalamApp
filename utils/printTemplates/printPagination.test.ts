@@ -38,7 +38,7 @@ describe('print pagination scenarios', () => {
     })).toEqual({ x: 2, y: 2 });
   });
 
-  it('never chooses an anchor lower edge outside the exact body viewport', () => {
+  it('moves the boundary before overlapping line rectangles instead of cutting either fragment', () => {
     const offsets = buildSmartPrintPageOffsets({
       totalHeight: 1300,
       pageBodyStepPx: 640,
@@ -50,7 +50,9 @@ describe('print pagination scenarios', () => {
       hardKeepFillRatio: 0.2,
     });
 
-    expect(offsets[1]).toBe(640);
+    // The two rectangles overlap. A 640px boundary would cut the second one,
+    // so the next page starts before that visual line band.
+    expect(offsets[1]).toBe(579);
   });
 
   it('uses independent safe edges so a renderer cannot crop the first line of the next page', () => {
@@ -85,6 +87,25 @@ describe('print pagination scenarios', () => {
     });
 
     expect(ranges[1].start).toBe(647);
+  });
+
+  it('never uses the short fragment of a mixed-font visual line as a page boundary', () => {
+    const ranges = buildSmartPrintPageRanges({
+      totalHeight: 1300,
+      pageBodyStepPx: 640,
+      anchors: [
+        // Same visual line: a small cell fragment and a larger-font fragment.
+        { top: 594, bottom: 620, priority: 'normal', source: 'line' },
+        { top: 588, bottom: 632, priority: 'normal', source: 'line' },
+        { top: 660, bottom: 684, priority: 'normal', source: 'line' },
+      ],
+      minPageFillRatio: 0.5,
+      hardKeepFillRatio: 0.2,
+    });
+
+    expect(ranges[0].end).toBe(632);
+    expect(ranges[0].end).not.toBe(620);
+    expect(ranges.at(-1)?.end).toBe(1300);
   });
 
   it('برای محتوای کوتاه با هر ترکیب سربرگ، پاورقی و امضا فقط یک صفحه می‌سازد', () => {

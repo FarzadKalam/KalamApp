@@ -19,6 +19,7 @@ export interface PrintLetterheadRuntimeValues {
 }
 
 const normalizeText = (value: unknown) => String(value || '').trim();
+const LETTERHEAD_SAFE_GUTTER_PERCENT = 0.75;
 
 const escapeHtml = (value: unknown) =>
   String(value || '')
@@ -100,21 +101,47 @@ export const getPrintLetterheadEffectiveBodyItem = (
 ): PrintLetterheadLayoutItem | null => {
   const bodyItem = getPrintLetterheadBodyItem(letterhead);
   const signaturesItem = getPrintLetterheadSignaturesItem(letterhead);
-  if (!bodyItem || !signaturesItem) return bodyItem;
+  if (!bodyItem) return null;
+
+  const bodyRight = Math.min(100, bodyItem.x + bodyItem.width);
+  const overlapsBodyHorizontally = (item: PrintLetterheadLayoutItem) =>
+    item.x < bodyRight && item.x + item.width > bodyItem.x;
+  const bodyBottom = Math.min(100, bodyItem.y + bodyItem.height);
+  const runtimeOverlayBottom = (letterhead.layout?.items || [])
+    .filter((item) => item.visible !== false && item.type !== 'body' && item.type !== 'signatures')
+    .filter(overlapsBodyHorizontally)
+    .filter((item) => item.y < bodyBottom)
+    .reduce((maxBottom, item) => Math.max(maxBottom, Math.min(100, item.y + item.height)), bodyItem.y);
+  const safeTop = Math.min(
+    bodyBottom,
+    runtimeOverlayBottom > bodyItem.y
+      ? runtimeOverlayBottom + LETTERHEAD_SAFE_GUTTER_PERCENT
+      : bodyItem.y
+  );
+
+  // Some legacy letterheads do not define a signature lane. They still need
+  // their title/date/QR overlays kept out of the printable body.
+  if (!signaturesItem) {
+    return {
+      ...bodyItem,
+      y: safeTop,
+      height: Math.max(1, bodyBottom - safeTop),
+    };
+  }
 
   // The signature band is an opaque, absolute layer on every generated page.
   // Reserve that rectangle before pagination, otherwise the body can continue
   // beneath it and look as if its final line has been erased.
   if (hasSignatureBand) {
-    const bodyBottom = Math.min(100, bodyItem.y + bodyItem.height);
-    const signatureTop = Math.max(0, Math.min(100, signaturesItem.y));
-    if (signatureTop < bodyBottom) {
-      return {
-        ...bodyItem,
-        height: Math.max(1, signatureTop - bodyItem.y),
-      };
-    }
-    return bodyItem;
+    const signatureTop = Math.max(0, Math.min(100, signaturesItem.y - LETTERHEAD_SAFE_GUTTER_PERCENT));
+    const safeBottom = overlapsBodyHorizontally(signaturesItem)
+      ? Math.min(bodyBottom, signatureTop)
+      : bodyBottom;
+    return {
+      ...bodyItem,
+      y: safeTop,
+      height: Math.max(1, safeBottom - safeTop),
+    };
   }
 
   const signatureBottom = Math.min(100, signaturesItem.y + signaturesItem.height);
@@ -122,7 +149,8 @@ export const getPrintLetterheadEffectiveBodyItem = (
 
   return {
     ...bodyItem,
-    height: Math.max(bodyItem.height, signatureBottom - bodyItem.y),
+    y: safeTop,
+    height: Math.max(bodyBottom - safeTop, signatureBottom - safeTop),
   };
 };
 

@@ -144,7 +144,7 @@ const ReportBuilderPage: React.FC = () => {
     void loadTaskReportProcessRuntimeCatalog(supabase)
       .then((catalog) => {
         if (cancelled) return;
-        setTaskProcessFields(catalog.fields);
+        setTaskProcessFields([...catalog.fields, ...catalog.linkedFields]);
         setTaskProcessStatusOptions(catalog.statusOptions);
       })
       .catch(() => {

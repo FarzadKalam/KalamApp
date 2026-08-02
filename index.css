@@ -76,7 +76,7 @@ html.kalam-app-shell-lock #root {
 
 #kalam-popup-root {
   position: fixed;
-  inset: 0;
+  inset: var(--app-viewport-offset-top, 0px) 0 auto;
   z-index: var(--kalam-popup-root-z-index, 40000);
   width: 100%;
   max-width: 100%;

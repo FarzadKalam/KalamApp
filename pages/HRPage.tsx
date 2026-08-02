@@ -79,6 +79,7 @@ import {
 
 const HR_TASK_FETCH_LIMIT = 1500;
 const HR_STATS_FETCH_LIMIT = 1500;
+const HR_ATTENDANCE_QUERY_PAGE_SIZE = 500;
 const COMMISSION_QUERY_PAGE_SIZE = 250;
 const COMMISSION_QUERY_ID_CHUNK_SIZE = 200;
 const COMMISSION_INVOICE_SELECT =
@@ -168,6 +169,8 @@ import { getHolidaySummaryForDate } from '../utils/holidayCalendar';
 import PrintSection from '../components/moduleShow/PrintSection';
 import { useListPrintManager } from '../utils/printTemplates/useListPrintManager';
 import {
+  buildAttendanceSegments,
+  getIncompleteAttendanceRowIds,
   getAttendanceCheckInAt,
   getAttendanceCheckOutAt,
   getAttendanceDateValue,
@@ -531,6 +534,16 @@ type AttendanceShiftDelta = AttendanceScheduleShift & {
 };
 
 type AttendanceModalMode = 'create' | 'view' | 'edit';
+
+type IncompleteAttendanceRow = {
+  key: string;
+  raw: AttendanceLogRecord;
+  employeeName: string;
+  attendanceDate: string | null;
+  occurredAt: string | null;
+  logType: 'check_in' | 'check_out';
+  missingLogType: 'check_in' | 'check_out';
+};
 
 type AttendanceModalValues = {
   employee_profile_id: string;
@@ -1051,49 +1064,6 @@ const normalizeAttendanceDateTimes = (values: Array<string | null | undefined>) 
     ),
   ).sort((a, b) => (parseDate(a)?.valueOf() || 0) - (parseDate(b)?.valueOf() || 0));
 
-const buildAttendanceSegments = (
-  checkIns: string[],
-  checkOuts: string[],
-  keyPrefix: string,
-): AttendanceSegment[] => {
-  const sortedIns = normalizeAttendanceDateTimes(checkIns);
-  const sortedOuts = normalizeAttendanceDateTimes(checkOuts);
-  const usedOutIndexes = new Set<number>();
-  const segments: AttendanceSegment[] = [];
-
-  sortedIns.forEach((checkInAt, index) => {
-    const checkInValue = parseDate(checkInAt)?.valueOf() || 0;
-    const matchedOutIndex = sortedOuts.findIndex((checkOutAt, outIndex) => {
-      if (usedOutIndexes.has(outIndex)) return false;
-      const checkOutValue = parseDate(checkOutAt)?.valueOf() || 0;
-      return checkOutValue >= checkInValue;
-    });
-    const checkOutAt = matchedOutIndex >= 0 ? sortedOuts[matchedOutIndex] : null;
-    if (matchedOutIndex >= 0) usedOutIndexes.add(matchedOutIndex);
-    const checkIn = parseDate(checkInAt || null);
-    const checkOut = parseDate(checkOutAt || null);
-    const diff = checkIn && checkOut ? checkOut.diff(checkIn, 'minute') : 0;
-    segments.push({
-      key: `${keyPrefix}::segment::${index}`,
-      checkInAt,
-      checkOutAt,
-      presenceMinutes: diff > 0 && diff < 24 * 60 ? diff : 0,
-    });
-  });
-
-  sortedOuts.forEach((checkOutAt, outIndex) => {
-    if (usedOutIndexes.has(outIndex)) return;
-    segments.push({
-      key: `${keyPrefix}::segment::orphan_out::${outIndex}`,
-      checkInAt: null,
-      checkOutAt,
-      presenceMinutes: 0,
-    });
-  });
-
-  return segments.sort((a, b) => (parseDate(a.checkOutAt || a.checkInAt || null)?.valueOf() || 0) - (parseDate(b.checkOutAt || b.checkInAt || null)?.valueOf() || 0));
-};
-
 const pickClosestAttendanceTime = (
   values: string[],
   usedIndexes: Set<number>,
@@ -1188,15 +1158,8 @@ type AttendanceSegment = {
 };
 
 const calculateAttendanceRowPresenceMinutes = (row: AttendanceComputedRow) => {
-  if (row.shiftDeltas.length) {
-    const shiftPresenceMinutes = row.shiftDeltas.reduce((sum, shift) => {
-      const checkIn = parseDate(shift.checkInAt || null);
-      const checkOut = parseDate(shift.checkOutAt || null);
-      if (!checkIn || !checkOut) return sum;
-      const diff = checkOut.diff(checkIn, 'minute');
-      return diff > 0 && diff < 24 * 60 ? sum + diff : sum;
-    }, 0);
-    if (shiftPresenceMinutes > 0) return shiftPresenceMinutes;
+  if (row.attendanceSegments.length) {
+    return row.attendanceSegments.reduce((sum, segment) => sum + segment.presenceMinutes, 0);
   }
 
   const checkIn = parseDate(row.checkInAt || null);
@@ -1561,6 +1524,8 @@ const HRPage: React.FC = () => {
   const [attendanceModalRecord, setAttendanceModalRecord] = useState<AttendanceLogRecord | null>(null);
   const [attendanceModalSaving, setAttendanceModalSaving] = useState(false);
   const [attendanceForm] = Form.useForm<AttendanceModalValues>();
+  const [incompleteAttendanceModalOpen, setIncompleteAttendanceModalOpen] = useState(false);
+  const [attendanceModulePermissions, setAttendanceModulePermissions] = useState<ModulePermissionConfig | null>(null);
   const [supportStats, setSupportStats] = useState<HrSupportStats>(EMPTY_HR_SUPPORT_STATS);
   const [supportDataLoading, setSupportDataLoading] = useState(false);
   const [attendanceRows, setAttendanceRows] = useState<AttendanceLogRecord[]>([]);
@@ -1592,9 +1557,11 @@ const HRPage: React.FC = () => {
         const permissions = await fetchCurrentUserRolePermissions(supabase);
         if (!mounted) return;
         setEmployeeModulePermissions(permissions?.employees || {});
+        setAttendanceModulePermissions(permissions?.attendance_logs || {});
       } catch (err) {
         console.warn('Could not fetch employee permissions:', err);
         if (mounted) setEmployeeModulePermissions({ edit: true, fields: {} });
+        if (mounted) setAttendanceModulePermissions({ edit: false, fields: {} });
       }
     };
     void loadPermissions();
@@ -1615,6 +1582,7 @@ const HRPage: React.FC = () => {
   );
 
   const canEditEmployeePayrollConfig = employeeModulePermissions.edit !== false;
+  const canCreateAttendance = attendanceModulePermissions !== null && attendanceModulePermissions.edit !== false;
 
   const monthStart = useMemo(() => selectedRange[0].startOf('day'), [selectedRange]);
   const monthEnd = useMemo(() => selectedRange[1].endOf('day'), [selectedRange]);
@@ -1967,13 +1935,25 @@ const HRPage: React.FC = () => {
         setSupportDataLoading(true);
         try {
         const [attendanceStatsResult, schedulesStatsResult, leaveStatsResult, overtimeStatsResult, missionStatsResult, bonusStatsResult, penaltyStatsResult] = await Promise.allSettled([
-        supabase
-          .from('attendance_logs')
-          .select('id, assignee_id, employee_id, related_profile_id, log_type, occurred_at, attendance_date, check_in_time, check_out_time, source_type, actual_check_in_time, actual_check_out_time, manual_check_in_time, manual_check_out_time, location_text, notes, created_by, updated_by, created_at, updated_at')
-          .gte('occurred_at', monthStart.toISOString())
-          .lte('occurred_at', monthEnd.toISOString())
-          .order('occurred_at', { ascending: false })
-          .limit(HR_STATS_FETCH_LIMIT),
+        (async () => {
+          const rows: AttendanceLogRecord[] = [];
+          for (let from = 0; ; from += HR_ATTENDANCE_QUERY_PAGE_SIZE) {
+            const result = await supabase
+              .from('attendance_logs')
+              .select('id, assignee_id, employee_id, related_profile_id, log_type, occurred_at, attendance_date, check_in_time, check_out_time, source_type, actual_check_in_time, actual_check_out_time, manual_check_in_time, manual_check_out_time, location_text, notes, created_by, updated_by, created_at, updated_at')
+              .gte('occurred_at', monthStart.toISOString())
+              .lte('occurred_at', monthEnd.toISOString())
+              .order('occurred_at', { ascending: false })
+              .order('id', { ascending: false })
+              .range(from, from + HR_ATTENDANCE_QUERY_PAGE_SIZE - 1);
+            if (result.error) return result;
+            const page = (result.data || []) as AttendanceLogRecord[];
+            rows.push(...page);
+            if (page.length < HR_ATTENDANCE_QUERY_PAGE_SIZE) {
+              return { data: rows, error: null };
+            }
+          }
+        })(),
         supabase
           .from('work_schedules')
           .select('id, title, status, is_active, effective_from, effective_to, employee_id, weekly_plan, created_at, updated_at')
@@ -2890,6 +2870,35 @@ const HRPage: React.FC = () => {
     checkIns: filteredAttendanceRows.filter((row) => String(row.log_type || '').trim() === 'check_in').length,
     checkOuts: filteredAttendanceRows.filter((row) => String(row.log_type || '').trim() === 'check_out').length,
   }), [filteredAttendanceRows]);
+  const incompleteAttendanceRows = useMemo<IncompleteAttendanceRow[]>(() => {
+    const incompleteIds = getIncompleteAttendanceRowIds(filteredAttendanceRows);
+    return filteredAttendanceRows
+      .filter((row) => incompleteIds.has(String(row.id || '').trim()))
+      .map((raw) => {
+        const directEmployeeId = String(raw.employee_id || '').trim();
+        const employee = directEmployeeId
+          ? profileById.get(directEmployeeId) || null
+          : (raw.assignee_id ? profileByRelatedId.get(String(raw.assignee_id)) : undefined)
+            || (raw.related_profile_id ? profileByRelatedId.get(String(raw.related_profile_id)) : undefined)
+            || null;
+        const logType = String(raw.log_type || '').trim().toLowerCase() === 'check_out'
+          ? 'check_out' as const
+          : 'check_in' as const;
+        const occurredAt = logType === 'check_in'
+          ? getAttendanceCheckInAt(raw)
+          : getAttendanceCheckOutAt(raw);
+        return {
+          key: String(raw.id),
+          raw,
+          employeeName: employee?.full_name || 'کارمند نامشخص',
+          attendanceDate: getAttendanceDateValue(raw) || null,
+          occurredAt,
+          logType,
+          missingLogType: logType === 'check_in' ? 'check_out' : 'check_in',
+        };
+      })
+      .sort((a, b) => (parseDate(b.occurredAt || null)?.valueOf() || 0) - (parseDate(a.occurredAt || null)?.valueOf() || 0));
+  }, [filteredAttendanceRows, profileById, profileByRelatedId]);
   const attendanceApprovedLeaveStats = useMemo(() => {
     let hourlyMinutes = 0;
     const dailyDayKeys = new Set<string>();
@@ -3099,7 +3108,20 @@ const HRPage: React.FC = () => {
         const locationText = [existing?.row.locationText, row.location_text].filter(Boolean).join(' | ') || null;
         const checkIns = normalizeAttendanceDateTimes([...(existing?.checkIns || []), checkInAt || null]);
         const checkOuts = normalizeAttendanceDateTimes([...(existing?.checkOuts || []), checkOutAt || null]);
-        const attendanceSegments = buildAttendanceSegments(checkIns, checkOuts, groupKey);
+        const attendanceSegments = buildAttendanceSegments([
+          ...checkIns.map((checkInAt, order) => ({
+            rowId: `check-in-${order}`,
+            type: 'check_in' as const,
+            at: parseDate(checkInAt)?.toDate() || new Date(0),
+            order,
+          })),
+          ...checkOuts.map((checkOutAt, order) => ({
+            rowId: `check-out-${order}`,
+            type: 'check_out' as const,
+            at: parseDate(checkOutAt)?.toDate() || new Date(0),
+            order: checkIns.length + order,
+          })),
+        ].filter((event) => event.at.getTime() > 0), groupKey);
         const nextCheckInAt = checkIns[0] || null;
         const nextCheckOutAt = checkOuts[checkOuts.length - 1] || null;
         const rowTimeValue = parsedBaseAt?.valueOf() || 0;
@@ -4189,6 +4211,26 @@ const HRPage: React.FC = () => {
     },
     [attendanceForm, profileById, profileByRelatedId, profiles, selectedEmployeeIds],
   );
+
+  const openIncompleteAttendanceCompletion = useCallback((row: IncompleteAttendanceRow) => {
+    if (!canCreateAttendance) return;
+    const now = dayjs();
+    const occurredAt = row.attendanceDate
+      ? dayjs(`${row.attendanceDate}T${now.format('HH:mm:ss')}`).toISOString()
+      : now.toISOString();
+    setIncompleteAttendanceModalOpen(false);
+    openAttendanceModal('create', {
+      id: '',
+      employee_id: row.raw.employee_id || null,
+      related_profile_id: row.raw.related_profile_id || null,
+      assignee_id: row.raw.assignee_id || null,
+      log_type: row.missingLogType,
+      occurred_at: occurredAt,
+      source_type: 'manual',
+      location_text: null,
+      notes: null,
+    });
+  }, [canCreateAttendance, openAttendanceModal]);
 
   const handleAttendanceModalSave = useCallback(async () => {
     try {
@@ -7227,6 +7269,19 @@ const HRPage: React.FC = () => {
           <Button onClick={() => navigate('/work_schedules')}>برنامه حضور</Button>
           <Button type="primary" onClick={() => openAttendanceModal('create')}>ثبت رکورد تردد</Button>
         </div>
+        {incompleteAttendanceRows.length > 0 ? (
+          <div className="mb-4">
+            <Button
+              size="small"
+              danger
+              type="dashed"
+              icon={<ClockCircleOutlined />}
+              onClick={() => setIncompleteAttendanceModalOpen(true)}
+            >
+              {toPersianNumber(incompleteAttendanceRows.length)} تردد ناقص ثبت شده است
+            </Button>
+          </div>
+        ) : null}
         {attendanceComputedRows.length === 0 ? (
           <Empty description="رکورد ترددی برای این بازه یافت نشد." />
         ) : (
@@ -8821,6 +8876,70 @@ const HRPage: React.FC = () => {
         previewMeta={commissionListPrintManager.previewMeta}
         modalZIndex={COMMISSION_PRINT_MODAL_Z_INDEX}
       />
+
+      <Modal
+        title="ترددهای ناقص"
+        open={incompleteAttendanceModalOpen}
+        onCancel={() => setIncompleteAttendanceModalOpen(false)}
+        footer={<Button onClick={() => setIncompleteAttendanceModalOpen(false)}>بستن</Button>}
+        width={900}
+        destroyOnHidden
+      >
+        <div className="space-y-4">
+          <Typography.Text type="secondary">
+            این فهرست فقط ترددهای کارمندان انتخاب‌شده در بازهٔ زمانی فعلی را نشان می‌دهد. هر مورد باید با ورود یا خروج مکمل تکمیل شود.
+          </Typography.Text>
+          <Table
+            rowKey="key"
+            size="small"
+            pagination={{ pageSize: 10, showSizeChanger: false }}
+            scroll={{ x: 760 }}
+            dataSource={incompleteAttendanceRows}
+            locale={{ emptyText: 'تردد ناقصی در این بازه وجود ندارد.' }}
+            columns={[
+              { title: 'کارمند', dataIndex: 'employeeName', key: 'employeeName' },
+              {
+                title: 'تاریخ',
+                dataIndex: 'attendanceDate',
+                key: 'attendanceDate',
+                render: (value: string | null) => value ? toPersianNumber(safeJalaliFormat(value, 'YYYY/MM/DD')) : '-',
+              },
+              {
+                title: 'ثبت‌شده',
+                key: 'logType',
+                render: (_: unknown, row: IncompleteAttendanceRow) => (
+                  <Tag color={row.logType === 'check_in' ? 'green' : 'red'}>
+                    {row.logType === 'check_in' ? 'ورود' : 'خروج'}{row.occurredAt ? `، ${toPersianNumber(safeJalaliFormat(row.occurredAt, 'HH:mm'))}` : ''}
+                  </Tag>
+                ),
+              },
+              {
+                title: 'نیازمند تکمیل',
+                key: 'missingLogType',
+                render: (_: unknown, row: IncompleteAttendanceRow) => (
+                  <Tag color={row.missingLogType === 'check_in' ? 'green' : 'red'}>
+                    {row.missingLogType === 'check_in' ? 'ثبت ورود' : 'ثبت خروج'}
+                  </Tag>
+                ),
+              },
+              {
+                title: 'عملیات',
+                key: 'actions',
+                render: (_: unknown, row: IncompleteAttendanceRow) => canCreateAttendance ? (
+                  <Button
+                    size="small"
+                    type="primary"
+                    icon={<PlusOutlined />}
+                    onClick={() => openIncompleteAttendanceCompletion(row)}
+                  >
+                    {row.missingLogType === 'check_in' ? 'افزودن ورود' : 'افزودن خروج'}
+                  </Button>
+                ) : <Tag>اجازه ثبت ندارید</Tag>,
+              },
+            ]}
+          />
+        </div>
+      </Modal>
 
       <Modal
         title={attendanceModalMode === 'create' ? 'افزودن سریع رکورد تردد' : attendanceModalMode === 'edit' ? 'ویرایش رکورد تردد' : 'نمایش رکورد تردد'}
