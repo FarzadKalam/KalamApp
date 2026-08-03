@@ -6006,7 +6006,7 @@ const ModuleShow: React.FC = () => {
         : `flex w-full min-w-[150px] gap-1 ${isLongTextField ? 'items-start flex-col' : 'items-center'}`;
       return (
         <div className={inlineEditorClassName}>
-          <div className="min-w-0 flex-1">
+          <div className={`min-w-0 flex-1 ${isLongTextField ? 'order-2 sm:order-1' : ''}`}>
             <SmartFieldRenderer
               field={field}
               value={tempValue}
@@ -6037,7 +6037,7 @@ const ModuleShow: React.FC = () => {
                 allValues={displayData}
             />
           </div>
-          <div className={`flex shrink-0 gap-1 ${isHeader ? 'justify-end' : ''}`}>
+          <div className={`flex shrink-0 gap-1 ${isHeader ? 'justify-end' : ''} ${isLongTextField ? 'order-1 sm:order-2' : ''}`}>
             <Button
               size="small"
               type="text"

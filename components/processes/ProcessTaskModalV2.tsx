@@ -871,26 +871,28 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
             </Tag>
           ) : null}
         </div>
-        <div className="flex min-w-0 items-start gap-1.5">
-          <div className="min-w-0 flex-1">{fieldNode}</div>
-          <Button
-            type="text"
-            size="small"
-            shape="circle"
-            icon={<CheckOutlined />}
-            onClick={commit}
-            aria-label="تایید"
-            className="!inline-flex !items-center !justify-center !text-green-600"
-          />
-          <Button
-            type="text"
-            size="small"
-            shape="circle"
-            icon={<CloseOutlined />}
-            onClick={cancel}
-            aria-label="لغو"
-            className="!inline-flex !items-center !justify-center !text-gray-500"
-          />
+        <div className={`flex min-w-0 items-start gap-1.5 ${useExpandedTextEditor ? 'flex-col sm:flex-row' : ''}`}>
+          <div className={`min-w-0 flex-1 ${useExpandedTextEditor ? 'order-2 w-full sm:order-1' : ''}`}>{fieldNode}</div>
+          <div className={`flex shrink-0 items-center gap-1.5 ${useExpandedTextEditor ? 'order-1 sm:order-2' : ''}`}>
+            <Button
+              type="text"
+              size="small"
+              shape="circle"
+              icon={<CheckOutlined />}
+              onClick={commit}
+              aria-label="تایید"
+              className="!inline-flex !items-center !justify-center !text-green-600"
+            />
+            <Button
+              type="text"
+              size="small"
+              shape="circle"
+              icon={<CloseOutlined />}
+              onClick={cancel}
+              aria-label="لغو"
+              className="!inline-flex !items-center !justify-center !text-gray-500"
+            />
+          </div>
         </div>
       </div>
     );
