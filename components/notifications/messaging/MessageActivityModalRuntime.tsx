@@ -27,9 +27,8 @@ type MessageActivityModalRuntimeProps = {
 };
 
 const isMissingAuditColumnError = (error: any) => {
-  const code = String(error?.code || '').toUpperCase();
   const text = String(error?.message || error?.details || '').toLowerCase();
-  return code === '42703' || code === 'PGRST204' || text.includes('created_by') || text.includes('updated_by');
+  return text.includes('created_by') || text.includes('updated_by');
 };
 
 const MessageActivityModalRuntime: React.FC<MessageActivityModalRuntimeProps> = ({ draft, profileId, onClose }) => {

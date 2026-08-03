@@ -66,6 +66,7 @@ import {
   getProcessAutomationRuleSummary,
   normalizeProcessAutomationRules,
   PROCESS_AUTOMATION_LEGACY_PREVIOUS_STAGE_TRIGGER_OPTION,
+  PROCESS_STAGE_ASSIGNEE_FIELD_KEYS,
   type ProcessAutomationRule,
 } from '../utils/processAutomationTypes';
 import {
@@ -164,7 +165,10 @@ import {
   resolveProcessTemplateLaneName,
   resolveProcessTemplateTokenValue,
 } from '../utils/processTemplateContext';
-import { resolveProcessAssigneeReference } from '../utils/processAssigneeReference';
+import {
+  findProcessAssigneeFieldReference,
+  resolveProcessAssigneeReference,
+} from '../utils/processAssigneeReference';
 import { renderTypedTemplateValue, sanitizeOutboundDisplay } from '../shared/recordRuntime';
 import {
   createProcessGroupId,
@@ -1364,9 +1368,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     ),
     [draftCustomAutomationFields, stageAutomationScopeModuleIds]
   );
-  const defaultAssigneeFieldOptions = useMemo(() => {
+  const relatedAssigneeFieldOptions = useMemo(() => {
     const fieldOptions = automationActionModuleFields
-      .filter((field: any) => String(field?.key || '').includes(WORKFLOW_ASSIGNEE_FIELD_KEY))
+      .filter((field: any) => {
+        const key = String(field?.key || '').trim();
+        const label = getFieldLabelFa(field, { fallback: key });
+        return key.includes(WORKFLOW_ASSIGNEE_FIELD_KEY)
+          || /assignee|responsible|مسئول/i.test(`${key} ${label}`);
+      })
       .map((field: any) => ({
         value: `field:${String(field.key || '').trim()}`,
         label: getFieldLabelFa(field),
@@ -1531,6 +1540,17 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
     const instructionIds = getInstructionIdsFromStage(stage);
 
+    const defaultAssigneeField = findProcessAssigneeFieldReference(
+      stage?.default_assignee_field,
+      metadata?.default_assignee_field,
+      stage?.default_assignee_combo,
+      metadata?.default_assignee_combo,
+      stage?.default_assignee_id,
+      metadata?.default_assignee_id,
+      stage?.default_assignee_role_id,
+      metadata?.default_assignee_role_id,
+    );
+
     return {
       ...(stage || {}),
       id,
@@ -1545,7 +1565,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       sort_order: sortOrder,
       wage: readNumber(stage?.wage, 0),
       weight,
-      default_assignee_id: stage?.default_assignee_id ?? stage?.assignee_id ?? metadata?.default_assignee_id ?? null,
+      default_assignee_id: defaultAssigneeField || (stage?.default_assignee_id ?? stage?.assignee_id ?? metadata?.default_assignee_id ?? null),
       default_assignee_role_id: stage?.default_assignee_role_id ?? stage?.assignee_role_id ?? metadata?.default_assignee_role_id ?? null,
       start_duration_value: startDurationValue,
       start_duration_unit: startDurationUnit,
@@ -1576,6 +1596,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         duration_from: durationFrom,
         due_anchor_type: dueAnchor.type,
         due_anchor_stage_node_key: dueAnchor.stageNodeKey,
+        default_assignee_field: defaultAssigneeField || null,
         [PROCESS_NODE_KEY]: processNodeKey,
         [PROCESS_LANE_KEY]: processLaneKey,
         [PROCESS_STAGE_INSTRUCTION_IDS_KEY]: instructionIds,
@@ -8166,6 +8187,36 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     })),
     [processStageNodeOptions],
   );
+  const defaultAssigneeFieldOptions = useMemo(() => {
+    const otherStageOptions = [
+      { label: 'مسئول مرحله قبل', value: `field:${PROCESS_STAGE_ASSIGNEE_FIELD_KEYS.previous}` },
+      { label: 'مسئول مرحله بعد', value: `field:${PROCESS_STAGE_ASSIGNEE_FIELD_KEYS.next}` },
+      ...processSpecificStageRecipientOptions.map((option) => ({
+        ...option,
+        value: `field:${option.value}`,
+      })),
+    ];
+    const customAssigneeOptions = [
+      ...draftGraphSnapshot.stages,
+      { process_task_custom_fields: draftCustomFields },
+    ].flatMap((stage: any) =>
+      getProcessTaskCustomFieldsFromStage(stage)
+        .filter((field) => {
+          const key = String(field?.key || '').trim();
+          const label = getFieldLabelFa(field, { fallback: key });
+          return key && /assignee|responsible|مسئول/i.test(`${key} ${label}`);
+        })
+        .map((field) => ({
+          value: `field:__task__${String(field.key).trim()}`,
+          label: `${getFieldLabelFa(field, { fallback: String(field.key) })} (فیلد اختصاصی فعالیت)`,
+          searchText: `${getFieldLabelFa(field, { fallback: String(field.key) })} ${field.key} مسئول فعالیت`,
+        }))
+    );
+    return Array.from(new Map(
+      [...otherStageOptions, ...relatedAssigneeFieldOptions, ...customAssigneeOptions]
+        .map((option) => [String(option.value), option] as const)
+    ).values());
+  }, [draftCustomFields, draftGraphSnapshot.stages, processSpecificStageRecipientOptions, relatedAssigneeFieldOptions]);
 
   const persistProcessGraph = useCallback(async (
     graph: ProcessGraphDefinition,
@@ -11298,7 +11349,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                 />
                               ) : (
                                 <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:border-gray-700 dark:bg-white/5 dark:text-gray-300">
-                                  مسئول از رکورد مرتبط انتخاب شده است.
+                                  مسئول از فیلد یا مرحلهٔ دیگر فرآیند انتخاب شده است.
                                 </div>
                               )}
                               {defaultAssigneeFieldOptions.length > 0 ? (
@@ -11306,7 +11357,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                   {...adaptiveModalSelectProps}
                                   value={String(watchedDraftDefaultAssigneeCombo || '').startsWith('field:') ? watchedDraftDefaultAssigneeCombo : undefined}
                                   onChange={(value) => draftForm.setFieldsValue({ default_assignee_combo: value || undefined })}
-                                  placeholder="یا مسئول را از رکورد مرتبط بگیرید"
+                                  placeholder="یا مسئول را از فیلد و مرحلهٔ دیگر بگیرید"
                                   options={defaultAssigneeFieldOptions}
                                 />
                               ) : null}

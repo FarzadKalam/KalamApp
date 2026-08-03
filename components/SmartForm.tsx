@@ -129,14 +129,8 @@ const isAbortLikeError = (error: unknown) =>
   String((error as any)?.name || '').toLowerCase() === 'aborterror'
   || String((error as any)?.message || '').toLowerCase().includes('signal is aborted');
 const isMissingAuditColumnError = (error: any) => {
-  const code = String(error?.code || '').toUpperCase();
   const text = String(error?.message || error?.details || '').toLowerCase();
-  return (
-    code === '42703'
-    || code === 'PGRST204'
-    || text.includes('created_by')
-    || text.includes('updated_by')
-  );
+  return text.includes('created_by') || text.includes('updated_by');
 };
 const isMissingColumnLikeError = (error: any) => {
   const code = String(error?.code || '').toUpperCase();

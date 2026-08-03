@@ -31,7 +31,7 @@ type ForwardMessageModalRuntimeProps = {
   sendTextToBotGroup: (group: any, text: string, options?: Record<string, any>) => Promise<any>;
   sendTextToBotDirectThread: (thread: any, text: string, options?: Record<string, any>) => Promise<any>;
   refreshSection: (section: 'notes' | 'bot_messages' | 'bot_direct_messages', options?: { force?: boolean }) => Promise<any>;
-  onForwarded: () => void;
+  onForwarded: (result: { internalRows: any[] }) => void;
   onOpenReadyTexts: () => void;
 };
 

@@ -22,6 +22,7 @@ import { syncProcessTemplateStages as syncProcessTemplateStagesShared } from "..
 import { getTaxpayerInvoicePatternForModule, getTaxpayerInvoiceSubjectForModule, isReturnInvoiceModuleId } from "../utils/invoiceModuleRouting";
 import { fetchAssigneeDirectory } from "../utils/referenceData";
 import { applyInvoicePaymentAllocation } from "../utils/invoicePaymentAllocationRuntime";
+import { runWriteWithCompatiblePayload } from "../utils/writeCompat";
 
 const isStatementTimeoutError = (error: any) =>
   String(error?.code || "").trim() === "57014"
@@ -216,29 +217,34 @@ export const ModuleCreate = () => {
                 };
               };
               const isMissingAuditColumnError = (error: any) => {
-                const code = String(error?.code || "").toUpperCase();
                 const text = String(error?.message || error?.details || "").toLowerCase();
-                return (
-                  code === "42703"
-                  || code === "PGRST204"
-                  || text.includes("created_by")
-                  || text.includes("updated_by")
-                );
+                return text.includes("created_by") || text.includes("updated_by");
               };
+              const insertWithCompatiblePayload = async (
+                recordPayload: Record<string, any>,
+                selectColumns: string,
+              ) => runWriteWithCompatiblePayload<any>({
+                cacheKey: `module-create:${moduleConfig.table}`,
+                payload: recordPayload,
+                execute: async (candidatePayload) => {
+                  let result = await supabase
+                    .from(moduleConfig.table)
+                    .insert(withCreateAuditFields(candidatePayload))
+                    .select(selectColumns)
+                    .single();
+                  if (result.error && isMissingAuditColumnError(result.error)) {
+                    result = await supabase
+                      .from(moduleConfig.table)
+                      .insert(candidatePayload)
+                      .select(selectColumns)
+                      .single();
+                  }
+                  return result;
+                },
+              });
               if (moduleId === "process_templates") {
                 const templateStagesPreview = Array.isArray(meta?.templateStagesPreview) ? meta.templateStagesPreview : [];
-                let insertResult = await supabase
-                  .from(moduleConfig.table)
-                  .insert(withCreateAuditFields(values))
-                  .select("*")
-                  .single();
-                if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
-                  insertResult = await supabase
-                    .from(moduleConfig.table)
-                    .insert(values)
-                    .select("*")
-                    .single();
-                }
+                const insertResult = await insertWithCompatiblePayload(values, "*");
                 if (insertResult.error) throw insertResult.error;
                 const inserted = insertResult.data;
                 if (!inserted?.id) throw new Error("ثبت الگوی فرآیند ناموفق بود");
@@ -268,18 +274,7 @@ export const ModuleCreate = () => {
                   taxpayer_invoice_pattern: getTaxpayerInvoicePatternForModule(moduleId, values?.taxpayer_invoice_pattern),
                   taxpayer_invoice_subject: getTaxpayerInvoiceSubjectForModule(moduleId, values?.taxpayer_invoice_subject),
                 };
-                let insertResult = await supabase
-                  .from(moduleConfig.table)
-                  .insert(withCreateAuditFields(invoiceValues))
-                  .select("*")
-                  .single();
-                if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
-                  insertResult = await supabase
-                    .from(moduleConfig.table)
-                    .insert(invoiceValues)
-                    .select("*")
-                    .single();
-                }
+                const insertResult = await insertWithCompatiblePayload(invoiceValues, "*");
                 if (insertResult.error) throw insertResult.error;
                 const inserted = insertResult.data;
                 if (!inserted?.id) throw new Error("ثبت فاکتور ناموفق بود");
@@ -360,19 +355,7 @@ export const ModuleCreate = () => {
               if (moduleId && supportsSystemCode(moduleId) && !normalizedPayload.system_code) {
                 normalizedPayload.system_code = await buildClientFallbackSystemCode(supabase, moduleId, moduleConfig.table);
               }
-              let insertResult = await supabase
-                .from(moduleConfig.table)
-                .insert(withCreateAuditFields(normalizedPayload))
-                .select("id")
-                .single();
-
-              if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
-                insertResult = await supabase
-                  .from(moduleConfig.table)
-                  .insert(normalizedPayload)
-                  .select("id")
-                  .single();
-              }
+              let insertResult = await insertWithCompatiblePayload(normalizedPayload, "id");
               for (
                 let attempt = 0;
                 insertResult.error
@@ -385,19 +368,7 @@ export const ModuleCreate = () => {
                 const fallbackSystemCode = await buildClientFallbackSystemCode(supabase, moduleId, moduleConfig.table);
                 const payloadWithSystemCode = { ...normalizedPayload, system_code: fallbackSystemCode };
 
-                insertResult = await supabase
-                  .from(moduleConfig.table)
-                  .insert(withCreateAuditFields(payloadWithSystemCode))
-                  .select("id")
-                  .single();
-
-                if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
-                  insertResult = await supabase
-                    .from(moduleConfig.table)
-                    .insert(payloadWithSystemCode)
-                    .select("id")
-                    .single();
-                }
+                insertResult = await insertWithCompatiblePayload(payloadWithSystemCode, "id");
               }
 
               if (insertResult.error) throw insertResult.error;

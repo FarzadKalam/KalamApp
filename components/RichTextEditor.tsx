@@ -50,7 +50,7 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange, disabl
     immediatelyRender: false,
     editable: !disabled,
     extensions: [
-      StarterKit.configure({ heading: { levels: [2, 3, 4] } }),
+      StarterKit.configure({ heading: { levels: [2, 3, 4] }, underline: false }),
       Underline,
       TextStyle,
       Color,

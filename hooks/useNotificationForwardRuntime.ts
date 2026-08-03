@@ -1,5 +1,5 @@
 import { useCallback, useMemo, type Dispatch, type SetStateAction } from 'react';
-import { insertNotesWithFallback } from '../utils/noteDispatch';
+import { sendInternalMessageV2 } from '../utils/noteDispatch';
 import { parseNoteContent, serializeNoteContent, type NoteAttachment } from '../utils/noteContent';
 import { normalizeNoteScope } from '../utils/noteScope';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
@@ -60,7 +60,7 @@ type UseNotificationForwardRuntimeOptions = {
   sendTextToBotGroup: (group: any, text: string, options?: Record<string, any>) => Promise<any>;
   sendTextToBotDirectThread: (thread: any, text: string, options?: Record<string, any>) => Promise<any>;
   refreshSection: (section: 'notes' | 'bot_messages' | 'bot_direct_messages', options?: { force?: boolean }) => Promise<any>;
-  onForwarded?: () => void;
+  onForwarded?: (result: { internalRows: any[] }) => void;
 };
 
 const getBotGroupForwardLabel = (group: any) => {
@@ -194,6 +194,10 @@ export const useNotificationForwardRuntime = ({
     }
 
     const sourceType = String((forwardingNote as any)?.__forward_source_type || 'note').trim() === 'bot' ? 'bot' : 'note';
+    const forwardedFrom = {
+      source_type: sourceType,
+      source_id: String(forwardingNote?.id || '').trim() || null,
+    };
     const scope = sourceType === 'note'
       ? normalizeNoteScope(forwardingNote.module_id, forwardingNote.record_id)
       : normalizeNoteScope(null, null);
@@ -207,7 +211,7 @@ export const useNotificationForwardRuntime = ({
       ? [customForwardMessageText, baseForwardText].filter(Boolean).join('\n\n')
       : baseForwardText;
     const forwardedAttachments = parsedContent.attachments || [];
-    const payloads = targetIds.flatMap((targetId) => {
+    const internalPayloads = targetIds.flatMap((targetId) => {
       if (isBotGroupForwardSelection(targetId)) {
         return [];
       }
@@ -226,10 +230,7 @@ export const useNotificationForwardRuntime = ({
           author_name: currentAuthorName,
           metadata: {
             saved_message: true,
-            forwarded_from: {
-              source_type: sourceType,
-              source_id: String(forwardingNote?.id || '').trim() || null,
-            },
+            forwarded_from: forwardedFrom,
           },
         }];
       }
@@ -246,7 +247,10 @@ export const useNotificationForwardRuntime = ({
           mention_role_ids: groupPayload.mentionRoleIds,
           author_id: profileId,
           author_name: currentAuthorName,
-          metadata: groupPayload.metadata,
+          metadata: {
+            ...(groupPayload.metadata || {}),
+            forwarded_from: forwardedFrom,
+          },
         }];
       }
 
@@ -260,7 +264,7 @@ export const useNotificationForwardRuntime = ({
         mention_role_ids: [],
         author_id: profileId,
         author_name: currentAuthorName,
-        metadata: null,
+        metadata: { forwarded_from: forwardedFrom },
       }];
     });
 
@@ -273,15 +277,24 @@ export const useNotificationForwardRuntime = ({
       .map((value) => String(getBotDirectForwardSelectionId(value) || '').trim())
       .filter(Boolean);
 
-    if (payloads.length === 0 && botTargets.length === 0 && botDirectTargets.length === 0) {
+    if (internalPayloads.length === 0 && botTargets.length === 0 && botDirectTargets.length === 0) {
       messageApi.warning('حداقل یک گیرنده معتبر انتخاب کنید.');
       return;
     }
 
     setForwardSubmitting(true);
     try {
-      if (payloads.length > 0) {
-        await insertNotesWithFallback(payloads);
+      // همهٔ ارسال‌های داخلی باید از مسیر اتمی V2 عبور کنند. درج مستقیم در
+      // notes پیام را بدون projection صندوق V2 ثبت می‌کرد و در گفت‌وگو دیده
+      // نمی‌شد؛ این موضوع برای فوروارد تصویر از هوش مصنوعی هم رخ می‌داد.
+      const internalRows = internalPayloads.length > 0
+        ? (await Promise.all(internalPayloads.map(async (payload) => {
+          const rows = await sendInternalMessageV2(payload);
+          return Array.isArray(rows) ? rows : [];
+        }))).flat()
+        : [];
+      if (internalPayloads.length > 0 && internalRows.length !== internalPayloads.length) {
+        throw new Error('پاسخ ارسال پیام داخلی کامل دریافت نشد.');
       }
       for (const botGroupId of botTargets) {
         const targetGroup = botGroups.find((row) => String(row.id) === botGroupId);
@@ -335,7 +348,7 @@ export const useNotificationForwardRuntime = ({
           messageType: forwardedAttachments.length > 0 ? 'file' : 'text',
         });
       }
-      onForwarded?.();
+      onForwarded?.({ internalRows });
       closeForwardModal();
       messageApi.success('پیام فوروارد شد.');
       await refreshSection('notes', { force: true });

@@ -52,6 +52,7 @@ import {
 } from '../utils/permissions';
 import { normalizeAutoNameEnabled } from '../utils/autoName';
 import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
+import { runWriteWithCompatiblePayload } from '../utils/writeCompat';
 import { buildCopyPayload, detectCopyNameField } from '../utils/recordCopy';
 import { useCurrencyConfig } from '../utils/currency';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
@@ -4723,23 +4724,25 @@ const ModuleShow: React.FC = () => {
         };
       };
       const isMissingAuditColumnError = (error: any) => {
-        const code = String(error?.code || '').toUpperCase();
         const text = String(error?.message || error?.details || '').toLowerCase();
-        return (
-          code === '42703'
-          || code === 'PGRST204'
-          || text.includes('created_by')
-          || text.includes('updated_by')
-        );
+        return text.includes('created_by') || text.includes('updated_by');
       };
-      const persistedValues = withUpdateAuditFields(values);
-
       const changedKeys = Object.keys(values).filter((k) => !areValuesEqual(values[k], previous[k]));
 
-      let updateResult = await supabase.from(moduleTable).update(persistedValues).eq('id', id);
-      if (updateResult.error && isMissingAuditColumnError(updateResult.error)) {
-        updateResult = await supabase.from(moduleTable).update(values).eq('id', id);
-      }
+      const updateResult = await runWriteWithCompatiblePayload<null>({
+        cacheKey: `module-update:${moduleTable}`,
+        payload: values,
+        execute: async (candidatePayload) => {
+          let result = await supabase
+            .from(moduleTable)
+            .update(withUpdateAuditFields(candidatePayload))
+            .eq('id', id);
+          if (result.error && isMissingAuditColumnError(result.error)) {
+            result = await supabase.from(moduleTable).update(candidatePayload).eq('id', id);
+          }
+          return result;
+        },
+      });
       if (updateResult.error) throw updateResult.error;
       let allocatedInvoiceIds: string[] = [String(id)];
       if (

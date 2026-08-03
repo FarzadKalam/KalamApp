@@ -76,6 +76,15 @@ export const PROCESS_AUTOMATION_LEGACY_PREVIOUS_STAGE_TRIGGER_OPTION = {
 
 export const PROCESS_STAGE_RECIPIENT_FIELD_PREFIX = '__comm_recipient__specific_process_stage__';
 
+// این کلیدها تنها برای نمایش پیام نیستند؛ منبع مسئول یک مرحله در الگو هم می‌تواند
+// به مسئول مرحله‌های دیگر اشاره کند. نگه‌داشتن آن‌ها در یک قرارداد مشترک، مقدار
+// ذخیره‌شده در ویرایشگر را با runtime V2 هم‌معنا نگه می‌دارد.
+export const PROCESS_STAGE_ASSIGNEE_FIELD_KEYS = {
+  current: '__comm_recipient__current_task_assignee',
+  previous: '__comm_recipient__previous_stage_assignee',
+  next: '__comm_recipient__next_stage_assignee',
+} as const;
+
 export const createProcessStageRecipientFieldKey = (nodeKey: string) =>
   `${PROCESS_STAGE_RECIPIENT_FIELD_PREFIX}${String(nodeKey || '').trim()}`;
 

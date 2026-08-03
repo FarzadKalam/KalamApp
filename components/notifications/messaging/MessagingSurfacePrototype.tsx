@@ -5750,7 +5750,22 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
             sendTextToBotGroup={sendTextToBotGroup}
             sendTextToBotDirectThread={sendTextToBotDirectThread}
             refreshSection={refreshForwardSection}
-            onForwarded={() => {
+            onForwarded={({ internalRows }) => {
+              const rowsForActiveConversation = internalRows.filter((row: any) => (
+                String(row?.metadata?.conversation_key || '').trim() === selectedInternalSourceKey
+              ));
+              if (rowsForActiveConversation.length > 0) {
+                internalTimeline.setItems((previous: any[]) => {
+                  const rowsById = new Map<string, any>();
+                  [...previous, ...rowsForActiveConversation].forEach((row: any) => {
+                    const id = String(row?.id || '').trim();
+                    if (id) rowsById.set(id, row);
+                  });
+                  return Array.from(rowsById.values()).sort((left: any, right: any) => (
+                    new Date(left?.created_at || 0).getTime() - new Date(right?.created_at || 0).getTime()
+                  ));
+                });
+              }
               void Promise.all([
                 refreshInternalConversations({ force: true }),
                 refreshInternalTimeline({ force: true }),

@@ -18,11 +18,17 @@ import {
   getProcessTaskStatusOptionsFromStage,
   getTaskStatusLabel,
 } from './processTaskStatusOptions';
-import { normalizeProcessAutomationRules } from './processAutomationTypes';
+import {
+  normalizeProcessAutomationRules,
+  PROCESS_STAGE_ASSIGNEE_FIELD_KEYS,
+  PROCESS_STAGE_RECIPIENT_FIELD_PREFIX,
+} from './processAutomationTypes';
 import {
   attachProcessGraphToStages,
+  getNextProcessStages,
   getProcessStageLaneKey,
   getProcessStageNodeKey,
+  getPreviousProcessStages,
   materializeLegacyProcessGraph,
 } from './processGraph';
 import {
@@ -50,7 +56,11 @@ import {
   parseProcessLinkMap,
 } from './processTargets';
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from './workflowTypes';
-import { resolveProcessAssigneeReference } from './processAssigneeReference';
+import {
+  findProcessAssigneeFieldReference,
+  getProcessAssigneeFieldKey,
+  resolveProcessAssigneeReference,
+} from './processAssigneeReference';
 import { renderTypedTemplateValue, sanitizeOutboundDisplay } from '../shared/recordRuntime';
 
 type AutoAssignArgs = {
@@ -345,6 +355,27 @@ const resolveStageAssignee = (stage: Record<string, any>, context: Record<string
   return { assigneeType: null, assigneeId: null };
 };
 
+const getStageAssigneeFieldReference = (stage: Record<string, any>) => {
+  const metadata = parseObject(stage?.metadata);
+  const recurrence = parseObject(stage?.recurrence_info);
+  return findProcessAssigneeFieldReference(
+    stage?.default_assignee_field,
+    metadata?.default_assignee_field,
+    recurrence?.default_assignee_field,
+    stage?.default_assignee_combo,
+    metadata?.default_assignee_combo,
+    recurrence?.default_assignee_combo,
+    stage?.default_assignee_id,
+    metadata?.default_assignee_id,
+    recurrence?.default_assignee_id,
+  );
+};
+
+const isResolvedTaskAssignee = (task: Record<string, any> | null | undefined) => (
+  !!task?.assignee_type
+  && !!normalizeDbUuid(task?.assignee_type === 'role' ? task?.assignee_role_id : task?.assignee_id)
+);
+
 const buildStageIdentity = (stage: Record<string, any>) => {
   const meta = getDraftStageProcessGroupMeta(stage);
   const nodeKey = getProcessStageNodeKey(stage);
@@ -359,7 +390,7 @@ const buildStageIdentity = (stage: Record<string, any>) => {
 const loadExistingProcessTasks = async (supabaseClient: any, moduleId: string, recordId: string) => {
   const { data, error } = await supabaseClient
     .from('tasks')
-    .select('id, name, status, source_template_id, source_stage_sort_order, process_group_id, process_run_id, process_run_stage_id, process_node_key, process_lane_key, assignee_id, assignee_role_id, due_date, recurrence_info')
+    .select('id, name, status, source_template_id, source_stage_sort_order, process_group_id, process_run_id, process_run_stage_id, process_node_key, process_lane_key, assignee_type, assignee_id, assignee_role_id, due_date, recurrence_info')
     .eq('source_module_id', moduleId)
     .eq('source_record_id', recordId);
   if (error) return [];
@@ -683,6 +714,11 @@ export const autoAssignProcessV2DraftStages = async ({
   );
 
   const payload: Record<string, any>[] = [];
+  const pendingStageAssigneeReferences: Array<{
+    stage: Record<string, any>;
+    task: Record<string, any>;
+    fieldKey: string;
+  }> = [];
   let runtimeSkippedCount = 0;
   let missingAssigneeCount = 0;
   let previousResolvedTask: Record<string, any> | null = null;
@@ -746,12 +782,11 @@ export const autoAssignProcessV2DraftStages = async ({
       return acc;
     }, {});
     const stageCustomFieldValues = mergeProcessTaskCustomFieldValues(resolvedStageCustomFields, renderedStageCustomFieldValues);
+    Object.entries(stageCustomFieldValues).forEach(([fieldKey, value]) => {
+      templateContext[fieldKey] = value;
+      templateContext[`__task__${fieldKey}`] = value;
+    });
     const assignee = resolveStageAssignee(stage, templateContext);
-    if (!assignee.assigneeType || !normalizeDbUuid(assignee.assigneeId)) {
-      runtimeSkippedCount += 1;
-      missingAssigneeCount += 1;
-      continue;
-    }
     const stageAutomationRules = normalizeProcessAutomationRules(stage?.automation_rules);
     const stageCustomStatusOptions = getProcessTaskStatusOptionsFromStage(stage);
     const stageTargetModuleIds = normalizeProcessTargetModuleIds(
@@ -837,9 +872,65 @@ export const autoAssignProcessV2DraftStages = async ({
       ...stageCustomFieldValues,
     };
     payload.push(taskRow);
+    const assigneeFieldKey = getProcessAssigneeFieldKey(getStageAssigneeFieldReference(stage));
+    if (assigneeFieldKey) {
+      pendingStageAssigneeReferences.push({ stage, task: taskRow, fieldKey: assigneeFieldKey });
+    }
   }
 
-  const insertedRows = await insertTasksWithFallback(supabaseClient, payload, directory);
+  const taskByStageNodeKey = new Map<string, Record<string, any>>(
+    existingTasks.map((task) => [getProcessStageNodeKey(task), task] as const),
+  );
+  payload.forEach((task, index) => {
+    taskByStageNodeKey.set(
+      getProcessStageNodeKey(creatableStages[index], index),
+      task,
+    );
+  });
+  const getReferencedStage = (stage: Record<string, any>, fieldKey: string) => {
+    const nodeKey = getProcessStageNodeKey(stage);
+    if (fieldKey === PROCESS_STAGE_ASSIGNEE_FIELD_KEYS.previous) {
+      return getPreviousProcessStages(graphSnapshot.stages, nodeKey, graphSnapshot.graph)[0] || null;
+    }
+    if (fieldKey === PROCESS_STAGE_ASSIGNEE_FIELD_KEYS.next) {
+      return getNextProcessStages(graphSnapshot.stages, nodeKey, graphSnapshot.graph)[0] || null;
+    }
+    if (fieldKey.startsWith(PROCESS_STAGE_RECIPIENT_FIELD_PREFIX)) {
+      const targetNodeKey = fieldKey.slice(PROCESS_STAGE_RECIPIENT_FIELD_PREFIX.length);
+      return graphSnapshot.stages.find((candidate, index) => (
+        getProcessStageNodeKey(candidate, index) === targetNodeKey
+      )) || null;
+    }
+    return null;
+  };
+
+  // مرحله‌های دیگر ممکن است خودشان به یک مرحلهٔ دیگر اشاره کنند. چند گذر محدود
+  // اجازه می‌دهد زنجیره‌های معتبر، مستقل از ترتیب درج، به مسئول نهایی برسند؛ حلقه‌ها
+  // fail-closed می‌مانند و فعالیت بدون مسئول ساخته نمی‌شود.
+  for (let attempt = 0; attempt < pendingStageAssigneeReferences.length; attempt += 1) {
+    let changed = false;
+    pendingStageAssigneeReferences.forEach(({ stage, task, fieldKey }) => {
+      if (isResolvedTaskAssignee(task)) return;
+      const referencedStage = getReferencedStage(stage, fieldKey);
+      const referencedTask = referencedStage
+        ? taskByStageNodeKey.get(getProcessStageNodeKey(referencedStage))
+        : null;
+      if (!isResolvedTaskAssignee(referencedTask)) return;
+      task.assignee_type = referencedTask!.assignee_type;
+      task.assignee_id = referencedTask!.assignee_id;
+      task.assignee_role_id = referencedTask!.assignee_role_id;
+      changed = true;
+    });
+    if (!changed) break;
+  }
+
+  const readyPayload = payload.filter((task) => {
+    if (isResolvedTaskAssignee(task)) return true;
+    runtimeSkippedCount += 1;
+    missingAssigneeCount += 1;
+    return false;
+  });
+  const insertedRows = await insertTasksWithFallback(supabaseClient, readyPayload, directory);
   for (const insertedTask of insertedRows) {
     await syncProcessRunStageFromTask({ supabaseClient, task: insertedTask });
   }

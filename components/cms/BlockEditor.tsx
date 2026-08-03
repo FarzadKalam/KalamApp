@@ -102,7 +102,7 @@ function MiniTiptap({
 }: { content: string; onChange: (html: string) => void; placeholder?: string }) {
   const editor = useEditor({
     extensions: [
-      StarterKit.configure({ codeBlock: false, heading: false }),
+      StarterKit.configure({ codeBlock: false, heading: false, underline: false }),
       TiptapLink.configure({ openOnClick: false }),
       TiptapUnderline,
       TextAlign.configure({ types: ['paragraph'] }),
