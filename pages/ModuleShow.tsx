@@ -100,7 +100,7 @@ import { enrichAttendancePresenceRows } from '../utils/attendancePresence';
 import { applyInvoicePaymentAllocation } from '../utils/invoicePaymentAllocationRuntime';
 import type { SmartFormSaveMeta } from '../components/SmartForm';
 import { normalizeNoteScope } from '../utils/noteScope';
-import { buildModuleRecordProjection } from '../utils/moduleRecordProjection';
+import { buildModuleRecordProjection, preserveDeferredProcessDraftColumns } from '../utils/moduleRecordProjection';
 import { runSelectWithCompatibleColumns } from '../utils/selectCompat';
 import { getActiveChannelSettings } from '../utils/channelSettings';
 import { insertNotesWithFallback } from '../utils/noteDispatch';
@@ -492,6 +492,12 @@ const ModuleShow: React.FC = () => {
       __processTaskCustomField: true,
     }));
   }, [data?.recurrence_info, moduleId]);
+  // پاسخ Supabase در هر دریافت یک object تازه می‌سازد. وابسته کردن تنظیمات
+  // runtime به identity این object، چرخهٔ fetchRecord ایجاد می‌کرد.
+  const templateSchemaSnapshotKey = useMemo(
+    () => JSON.stringify(data?.template_schema_snapshot ?? null),
+    [data?.template_schema_snapshot],
+  );
   const moduleConfig = useMemo(() => {
     let nextConfig = baseModuleConfig;
     if (moduleId === 'tasks') {
@@ -536,7 +542,7 @@ const ModuleShow: React.FC = () => {
       nextConfig = buildSurveyRuntimeModule(nextConfig, data.template_schema_snapshot, 'show');
     }
     return nextConfig;
-  }, [allRoles, allUsers, baseModuleConfig, data?.template_schema_snapshot, moduleId, taskProcessCustomFields, taskStatusOptions]);
+  }, [allRoles, allUsers, baseModuleConfig, moduleId, taskProcessCustomFields, taskStatusOptions, templateSchemaSnapshotKey]);
   const moduleTable = moduleConfig?.table || moduleId;
   const displayData = useMemo(
     () => mergeSurveyTemplateValuesIntoRecord(normalizeModuleFormValues(moduleId, data || {})) || normalizeModuleFormValues(moduleId, data || {}),
@@ -1614,7 +1620,11 @@ const ModuleShow: React.FC = () => {
         }
         if (activeRecordRequestRef.current !== requestId) return;
         skipNextOptionsFetchRef.current = true;
-        setData(nextRecord);
+        setData((previous: any) => preserveDeferredProcessDraftColumns(
+          nextRecord,
+          previous,
+          recordProjection.deferredProcessDraftColumns,
+        ));
         void fetchOptions(nextRecord, requestId);
         if (recordProjection.deferredProcessDraftColumns.length > 0) {
           void runSelectWithCompatibleColumns<any | null>({

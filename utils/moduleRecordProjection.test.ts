@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FieldType, ModuleNature } from '../types';
-import { buildModuleRecordProjection } from './moduleRecordProjection';
+import { buildModuleRecordProjection, preserveDeferredProcessDraftColumns } from './moduleRecordProjection';
 
 describe('module record projection', () => {
   it('keeps normal record fields in the first show response and defers only process drafts', () => {
@@ -166,5 +166,22 @@ describe('module record projection', () => {
     } as any);
 
     expect(projection.initialColumns).not.toContain('task_shelf_stock_movements');
+  });
+
+  it('keeps a loaded process draft while a newer lightweight record response is pending its deferred fields', () => {
+    const draft = [{ id: 'draft-1', process_group_id: 'group-1' }];
+    expect(preserveDeferredProcessDraftColumns(
+      { id: 'record-1', name: 'متقاضی' },
+      { id: 'record-1', name: 'متقاضی', execution_process_draft: draft },
+      ['execution_process_draft'],
+    )).toEqual({ id: 'record-1', name: 'متقاضی', execution_process_draft: draft });
+  });
+
+  it('does not preserve a deferred process draft when the response explicitly includes its current value', () => {
+    expect(preserveDeferredProcessDraftColumns(
+      { id: 'record-1', execution_process_draft: [] },
+      { id: 'record-1', execution_process_draft: [{ id: 'draft-1' }] },
+      ['execution_process_draft'],
+    )).toEqual({ id: 'record-1', execution_process_draft: [] });
   });
 });

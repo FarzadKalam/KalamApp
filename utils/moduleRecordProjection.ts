@@ -43,6 +43,34 @@ export const isDeferredProcessDraftField = (field: any) => (
 );
 
 /**
+ * پاسخ اولیهٔ صفحهٔ رکورد عمداً snapshotهای بزرگ فرآیند را ندارد و کمی بعد
+ * جداگانه دریافت می‌شود. در فاصلهٔ این دو درخواست، پاسخ سبک نباید snapshot
+ * معتبر قبلی را از state حذف کند؛ وگرنه کارت‌های فرآیند چشمک می‌زنند یا خالی
+ * دیده می‌شوند.
+ */
+export const preserveDeferredProcessDraftColumns = <T extends Record<string, any>>(
+  nextRecord: T,
+  previousRecord: Record<string, any> | null | undefined,
+  deferredColumns: readonly string[],
+): T => {
+  if (!previousRecord || deferredColumns.length === 0) return nextRecord;
+
+  const preserved = deferredColumns.reduce<Record<string, any>>((patch, key) => {
+    if (
+      !Object.prototype.hasOwnProperty.call(nextRecord, key)
+      && Object.prototype.hasOwnProperty.call(previousRecord, key)
+    ) {
+      patch[key] = previousRecord[key];
+    }
+    return patch;
+  }, {});
+
+  return Object.keys(preserved).length > 0
+    ? { ...nextRecord, ...preserved }
+    : nextRecord;
+};
+
+/**
  * پروجکشن show از روی تعریف ماژول ساخته می‌شود تا پاسخ اولیه شامل snapshotهای
  * بزرگ اجرای فرآیند نباشد. خود snapshot بلافاصله پس از رندر اولیه و فقط برای
  * همان رکورد دریافت می‌شود.
