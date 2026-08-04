@@ -2580,6 +2580,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
             mimeType,
             fileType,
             sortOrder: modalFiles.length,
+            starred: fileType === 'image',
           });
         } else {
           const { error } = await supabase.from('record_files').insert([{

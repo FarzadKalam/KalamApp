@@ -1,4 +1,5 @@
 import DOMPurify from 'dompurify';
+import { richTextMarkupToPlainText } from '../shared/recordRuntime';
 
 const RICH_TEXT_TAG_PATTERN = /<\/?(?:p|h[2-4]|strong|b|em|i|u|ul|ol|li|span|br)\b/i;
 
@@ -26,10 +27,19 @@ export const normalizeRichTextHtml = (value: unknown): string => {
 export const richTextToPlainText = (value: unknown): string => {
   const html = normalizeRichTextHtml(value);
   if (!html) return '';
-  if (typeof document === 'undefined') return html.replace(/<[^>]+>/g, '');
-  const element = document.createElement('div');
-  element.innerHTML = html;
-  return element.textContent || '';
+  return richTextMarkupToPlainText(html);
+};
+
+/** متن آماده را به‌صورت یک بخش جدا همراه با خط خالیِ آماده برای درج بعدی اضافه می‌کند. */
+export const appendReadyTextToRichText = (currentValue: unknown, readyTextValue: unknown): string => {
+  const current = normalizeRichTextHtml(currentValue).trim();
+  const readyText = normalizeRichTextHtml(readyTextValue).trim();
+  if (!readyText) return current;
+
+  const trailingParagraph = '<p><br></p>';
+  const hasTrailingParagraph = /<p>\s*<br\s*\/?\s*>\s*<\/p>\s*$/i.test(current);
+  const separator = current && !hasTrailingParagraph ? trailingParagraph : '';
+  return `${current}${separator}${readyText}${trailingParagraph}`;
 };
 
 /** True only when rich text has visible text; empty editor markup is not content. */

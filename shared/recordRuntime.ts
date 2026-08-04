@@ -39,6 +39,22 @@ export const sanitizeOutboundDisplay = (
   return text.replace(UUID_IN_TEXT_PATTERN, fallback);
 };
 
+/** متن HTML فیلدهای بلند را برای کانال‌های متنی، با حفظ خط‌های جدید، قابل ارسال می‌کند. */
+export const richTextMarkupToPlainText = (value: unknown): string => String(value ?? '')
+  .replace(/\r\n?/g, '\n')
+  .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+  .replace(/<\s*li\b[^>]*>/gi, '• ')
+  .replace(/<\/\s*(?:p|div|h[1-6]|li|blockquote)\s*>/gi, '\n')
+  .replace(/<[^>]+>/g, '')
+  .replace(/&nbsp;|&#160;/gi, ' ')
+  .replace(/&amp;/gi, '&')
+  .replace(/&lt;/gi, '<')
+  .replace(/&gt;/gi, '>')
+  .replace(/&quot;/gi, '"')
+  .replace(/&#(?:0*39|x0*27);/gi, "'")
+  .replace(/[ \t]+\n/g, '\n')
+  .replace(/\n{3,}/g, '\n\n');
+
 export const extractTemplateTokens = (template: unknown): string[] => {
   const tokens = new Set<string>();
   for (const match of String(template ?? '').matchAll(/\{\{\s*([^}]+)\s*\}\}/g)) {

@@ -7,7 +7,7 @@ import { readCurrencyConfig } from './currency';
 import { fetchDynamicOptionsMap } from './referenceData';
 import { fetchRelationOptionsForField } from './relationOptions';
 import { localizeFinancialValue, FinancialValueKind } from './financialValueLabels';
-import { sanitizeOutboundDisplay } from '../shared/recordRuntime';
+import { richTextMarkupToPlainText, sanitizeOutboundDisplay } from '../shared/recordRuntime';
 
 type RenderTemplateOptions = {
   moduleId?: string | null;
@@ -508,6 +508,10 @@ export const formatTemplateValueByField = ({
   if (fieldType === FieldType.TIME) {
     const out = formatPersianTime(value);
     return out ? toPersianNumber(out) : String(value);
+  }
+
+  if (fieldType === FieldType.LONG_TEXT || fieldType === FieldType.SUPER_LONG_TEXT) {
+    return richTextMarkupToPlainText(value);
   }
 
   if (fieldType === FieldType.LINK) {

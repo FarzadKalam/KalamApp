@@ -2449,10 +2449,11 @@ export const executeWorkflowAction = async (
       attachments,
       workflow_action_type: 'send_bot_message',
       workflow_action_id: (action as any)?.id || null,
-      sender_kind: String(config.sender_kind || '').trim() || null,
-      sender_type: String(config.sender_type || '').trim() || null,
-      sender_display_name: String(config.sender_display_name || '').trim() || null,
-      message_source: String(config.message_source || '').trim() || null,
+      source_type: 'workflow',
+      sender_kind: String(config.sender_kind || '').trim() || 'system',
+      sender_type: String(config.sender_type || '').trim() || 'system',
+      sender_display_name: String(config.sender_display_name || '').trim() || 'پیام‌های سیستم',
+      message_source: String(config.message_source || '').trim() || 'workflow',
       ai_generated: config.ai_generated === true || String(config.sender_kind || '').trim().toLowerCase() === 'ai',
     };
     const recipientConfig = getWorkflowRecipientConfig(config);

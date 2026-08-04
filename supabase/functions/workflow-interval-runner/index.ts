@@ -23,6 +23,7 @@ import { renderProcessStageForTaskCreation } from '../_shared/process-stage-temp
 import { buildAutomatedBotSenderPayload, extractBotProviderMessageId } from '../_shared/bot-system-message.ts';
 import {
   evaluateConditionCollection as evaluateCentralConditionCollection,
+  richTextMarkupToPlainText,
   renderTemplateAsync as renderCentralTemplateAsync,
 } from './_runtime-deps/recordRuntime.ts';
 import { evaluateWorkflowConditionWithResolver } from './_runtime-deps/workflowConditionRuntime.ts';
@@ -62,16 +63,6 @@ const WORKFLOW_MULTI_RELATION_PREFIX = '__workflow_multi_relation__';
 const PROCESS_NEXT_STAGE_FIELD_PREFIX = '__process_next_stage__';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
-const DEFAULT_BOT_API_BASE_URL: Record<string, string> = {
-  telegram: 'https://botapi.kalamnews.site/83cdbfe5940e24aaf81689a85390df5c',
-  bale: 'https://tapi.bale.ai',
-  rubika: 'https://botapi.rubika.ir',
-};
-const DEFAULT_BOT_SEND_PATH: Record<string, string> = {
-  telegram: '/bot{token}/sendMessage',
-  bale: '/bot{token}/sendMessage',
-  rubika: '/v3/{token}/sendMessage',
-};
 const UUID_LIKE_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const WORKFLOW_BOT_CHANNEL_PRIORITY = ['rubika', 'telegram', 'bale'] as const;
 const CALENDAR_PUBLIC_BASE_URL = String(
@@ -941,6 +932,18 @@ async function formatFieldValue(
     return toPersianDigits(`${hours}:${minutes}`);
   }
   const fieldContext = resolveTemplateFieldModule(moduleId, fieldKey);
+  const runtimeCustomField = String(fieldKey || '').startsWith('previous_stage__')
+    ? getPreviousTaskRuntimeCustomFieldConfig(record, fieldContext.fieldKey)
+    : getTaskRuntimeCustomFieldConfig(record, fieldContext.fieldKey);
+  const configuredFields = runtimeCustomField
+    ? null
+    : await getOrgModuleFieldConfigs(url, key, orgId, fieldContext.moduleId);
+  const fieldType = String(runtimeCustomField?.type || configuredFields?.get(fieldContext.fieldKey)?.type || '')
+    .trim()
+    .toLowerCase();
+  if (fieldType === 'long_text' || fieldType === 'superlongtext') {
+    return richTextMarkupToPlainText(str);
+  }
   const configuredPriceFields = await getOrgModulePriceFields(url, key, orgId, fieldContext.moduleId);
   const formattedNumericValue = formatWorkflowNumericValue(
     fieldContext.fieldKey,
@@ -2339,40 +2342,6 @@ async function getOrgBotSettings(url: string, key: string, orgId: string, channe
     : null;
 }
 
-function normalizeBotApiBaseUrl(value: string, channel: string): string {
-  const raw = String(DEFAULT_BOT_API_BASE_URL[channel] || '').trim().replace(/\/+$/, '');
-  if (!raw) return DEFAULT_BOT_API_BASE_URL[channel] || '';
-  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-}
-
-function buildBotSendMessageUrl(settings: any, token: string, channel: string): string {
-  const baseUrl = normalizeBotApiBaseUrl(String(settings?.api_base_url || ''), channel);
-  const pathTemplate = String(settings?.send_message_path || DEFAULT_BOT_SEND_PATH[channel] || '/bot{token}/sendMessage').trim();
-  const path = pathTemplate
-    .replace('{token}', encodeURIComponent(token))
-    .replace(/^\/*/, '/');
-  return `${baseUrl}${path}`;
-}
-
-async function sendBotMessage(chatId: string, text: string, settings: any, channel: string): Promise<any> {
-  const token = String(settings.bot_token || settings.token || '').trim();
-  if (!token || !chatId) return;
-  const isRubika = channel === 'rubika';
-  const payload = isRubika ? { chat_id: chatId, text } : { chat_id: chatId, text, parse_mode: 'HTML' };
-  return await fetch(buildBotSendMessageUrl(settings, token, channel), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(8000),
-  }).then(async (response) => {
-    const raw = await response.text().catch(() => '');
-    if (!response.ok) {
-      throw new Error(`ارسال پیام ${channel} ناموفق بود: ${raw || response.status}`);
-    }
-    try { return raw ? JSON.parse(raw) : null; } catch { return raw || null; }
-  });
-}
-
 async function sendBotMessageWithAttachments(
   url: string,
   key: string,
@@ -2383,9 +2352,6 @@ async function sendBotMessageWithAttachments(
   attachments: Array<{ name: string; url: string; mimeType: string | null }> = [],
   extraPayload: Record<string, any> = {},
 ): Promise<any> {
-  if (!Array.isArray(attachments) || attachments.length === 0) {
-    return sendBotMessage(chatId, text, settings, channel);
-  }
   const connectionId = String(settings?.__connection_id || '').trim();
   if (!connectionId) throw new Error('اتصال فعال بات برای ارسال فایل پیدا نشد.');
   const response = await fetch(`${url.replace(/\/+$/, '')}/functions/v1/bot-admin`, {

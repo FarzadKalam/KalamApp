@@ -908,6 +908,120 @@ const updateOutboundLog = async (
   return Array.isArray(parsed) ? parsed[0] : parsed;
 };
 
+const getBotProviderMessageId = (payload: any) => String(
+  payload?.result?.message_id
+  || payload?.message_id
+  || payload?.data?.message_id
+  || payload?.data?.message_update?.message_id
+  || payload?.data?.messageUpdate?.messageId
+  || ''
+).trim() || null;
+
+/**
+ * پیام‌های خودکارِ گفت‌وگوی خصوصی بات را در همان منبع داده‌ای ثبت می‌کند که
+ * پیام‌رسانی V2 برای تایم‌لاین خود می‌خواند. گروه‌ها مسیر آرشیو اختصاصی خود
+ * را دارند؛ این مسیر فقط برای پی‌وی‌هایی است که thread آن‌ها از قبل شناخته شده است.
+ */
+const archiveAutomatedDirectBotMessages = async ({
+  supabaseUrl,
+  serviceRoleKey,
+  integration,
+  channel,
+  chatId,
+  text,
+  providerMessages,
+  extraPayload,
+  attachments,
+}: {
+  supabaseUrl: string;
+  serviceRoleKey: string;
+  integration: Record<string, any>;
+  channel: BotChannel;
+  chatId: string;
+  text: string;
+  providerMessages: Array<Record<string, any>>;
+  extraPayload?: Record<string, any>;
+  attachments: Array<Record<string, any>>;
+}) => {
+  const isWorkflowMessage = String(extraPayload?.source_type || '').trim() === 'workflow'
+    || Boolean(String(extraPayload?.workflow_action_type || '').trim());
+  const orgId = String(integration?.org_id || '').trim();
+  if (!isWorkflowMessage || !orgId || !chatId) return;
+
+  const threadUrl = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_direct_threads`);
+  threadUrl.searchParams.set('org_id', `eq.${orgId}`);
+  threadUrl.searchParams.set('channel_type', `eq.${channel}`);
+  threadUrl.searchParams.set('chat_id', `eq.${chatId}`);
+  threadUrl.searchParams.set('select', 'id,target_module_id,target_record_id,customer_id,supplier_id,employee_id,profile_id');
+  threadUrl.searchParams.set('limit', '1');
+  const threadResponse = await fetch(threadUrl.toString(), { headers: getServiceHeaders(serviceRoleKey) });
+  const threadRaw = await threadResponse.text();
+  if (!threadResponse.ok) throw new Error(threadRaw || 'Could not load direct bot thread');
+  const threadRows = threadRaw ? JSON.parse(threadRaw) : [];
+  const thread = Array.isArray(threadRows) ? threadRows[0] : threadRows;
+  if (!thread?.id) return;
+
+  const rows = (providerMessages.length > 0 ? providerMessages : [{
+    message_type: attachments.length > 0 ? 'file' : 'text',
+    content_text: text,
+    attachment: attachments[0] || null,
+    provider_result: {},
+  }]).map((item) => {
+    const attachment = item?.attachment && typeof item.attachment === 'object' ? item.attachment : null;
+    const providerResult = item?.provider_result || {};
+    return {
+      org_id: orgId,
+      direct_thread_id: thread.id,
+      channel_type: channel,
+      chat_id: chatId,
+      target_module_id: thread.target_module_id || null,
+      target_record_id: thread.target_record_id || null,
+      customer_id: thread.customer_id || null,
+      supplier_id: thread.supplier_id || null,
+      employee_id: thread.employee_id || null,
+      profile_id: thread.profile_id || null,
+      direction: 'outbound',
+      message_type: String(item?.message_type || (attachment ? 'file' : 'text')).trim() || 'text',
+      provider_message_id: String(item?.provider_message_id || getBotProviderMessageId(providerResult) || '').trim() || null,
+      content_text: String(item?.content_text ?? text ?? '').trim() || null,
+      file_url: String(item?.file_url || attachment?.url || '').trim() || null,
+      file_name: String(item?.file_name || attachment?.name || '').trim() || null,
+      mime_type: String(item?.mime_type || attachment?.mime_type || attachment?.mimeType || '').trim() || null,
+      created_by: null,
+      payload: {
+        ...(extraPayload || {}),
+        attachments: attachment ? [attachment] : attachments,
+        provider_response: providerResult,
+      },
+    };
+  });
+  const insertUrl = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_direct_messages`);
+  const insertResponse = await fetch(insertUrl.toString(), {
+    method: 'POST',
+    headers: { ...getServiceHeaders(serviceRoleKey), Prefer: 'return=minimal' },
+    body: JSON.stringify(rows),
+  });
+  const insertRaw = await insertResponse.text();
+  if (!insertResponse.ok) throw new Error(insertRaw || 'Could not archive automated direct bot message');
+
+  const nowIso = new Date().toISOString();
+  const threadPatchUrl = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_direct_threads`);
+  threadPatchUrl.searchParams.set('id', `eq.${thread.id}`);
+  const threadPatchResponse = await fetch(threadPatchUrl.toString(), {
+    method: 'PATCH',
+    headers: { ...getServiceHeaders(serviceRoleKey), Prefer: 'return=minimal' },
+    body: JSON.stringify({
+      last_outbound_at: nowIso,
+      last_message_at: nowIso,
+      last_message_preview: String(text || attachments[0]?.name || 'پیام بات').trim().slice(0, 300) || null,
+    }),
+  });
+  if (!threadPatchResponse.ok) {
+    const raw = await threadPatchResponse.text();
+    throw new Error(raw || 'Could not update direct bot thread');
+  }
+};
+
 const ensureTelegramLikeSuccess = (payload: any) => {
   if (payload && typeof payload === 'object' && payload.ok === false) {
     throw new Error(String(payload?.description || payload?.message || 'درخواست به API بات ناموفق بود.'));
@@ -2706,6 +2820,17 @@ const sendTestMessage = async (
           },
       });
     }
+    await archiveAutomatedDirectBotMessages({
+      supabaseUrl,
+      serviceRoleKey,
+      integration,
+      channel,
+      chatId,
+      text: deliveredText,
+      providerMessages,
+      extraPayload: options?.extraPayload,
+      attachments: normalizedAttachments,
+    });
     return {
       provider_result: payload,
       provider_messages: providerMessages,

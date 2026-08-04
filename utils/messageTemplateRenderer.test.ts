@@ -48,6 +48,19 @@ describe('messageTemplateRenderer assignee values', () => {
 });
 
 describe('messageTemplateRenderer option values', () => {
+  it('renders long-text template values as plain text with their line breaks', () => {
+    const text = renderTemplateText(
+      'پیام: {{notes}}',
+      { notes: '<p>سطر اول</p><p>سطر دوم</p>' },
+      {
+        moduleId: 'customers',
+        optionLabelMaps: undefined,
+      }
+    );
+
+    expect(text).toBe('پیام: سطر اول\nسطر دوم');
+  });
+
   it('renders attendance log_type as the Persian option label', () => {
     const text = renderTemplateText(
       'نوع تردد: {{log_type}}',

@@ -624,6 +624,7 @@ export const createFileManagerOriginForUpload = async (input: {
   sortOrder?: number | null;
   visibility?: FileVisibility;
   tags?: Array<{ id: string; title: string; color?: string | null }>;
+  starred?: boolean;
 }) => {
   const hasTables = await detectFileManagerTables(supabase, false);
   if (!hasTables) return null;
@@ -643,6 +644,14 @@ export const createFileManagerOriginForUpload = async (input: {
   const targetFolderId = String(input.folderId || '').trim() || bundle.recordFolder?.id || null;
   const storagePath = extractStoragePathFromPublicUrl(fileUrl, FILE_STORAGE_BUCKET) || fileUrl;
   const displayName = String(input.fileName || '').trim() || String(storagePath.split('/').pop() || 'file').trim() || 'file';
+  const starMetadata = input.starred === true ? {
+    main_image: {
+      starred: true,
+      starred_at: new Date().toISOString(),
+      module_id: moduleId,
+      record_id: recordId,
+    },
+  } : {};
 
   let asset: FileAssetRow | null = null;
   const { data: existingAsset } = await supabase
@@ -668,6 +677,7 @@ export const createFileManagerOriginForUpload = async (input: {
         origin_folder_id: targetFolderId,
         metadata: {
           tags: Array.isArray(input.tags) ? input.tags : [],
+          ...starMetadata,
         },
       })
       .select('*')
@@ -686,7 +696,7 @@ export const createFileManagerOriginForUpload = async (input: {
     .eq('is_deleted', false)
     .maybeSingle();
 
-  const entry = existingEntry
+  let entry = existingEntry
     ? (existingEntry as FileEntryRow)
     : await (async () => {
       const { data: insertedEntry, error: entryError } = await supabase
@@ -708,6 +718,22 @@ export const createFileManagerOriginForUpload = async (input: {
       if (entryError) throw entryError;
       return insertedEntry as FileEntryRow;
     })();
+
+  if (input.starred === true && entry?.metadata?.main_image?.starred !== true) {
+    const { data: updatedEntry, error: entryMetadataError } = await supabase
+      .from('file_entries')
+      .update({
+        metadata: {
+          ...(entry.metadata && typeof entry.metadata === 'object' ? entry.metadata : {}),
+          ...starMetadata,
+        },
+      })
+      .eq('id', entry.id)
+      .select('*')
+      .single();
+    if (entryMetadataError) throw entryMetadataError;
+    entry = updatedEntry as FileEntryRow;
+  }
 
   let recordFileId: string | null = null;
   const hasRecordFilesTable = await detectRecordFilesTable(supabase, false);

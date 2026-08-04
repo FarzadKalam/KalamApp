@@ -67,7 +67,7 @@ import { shouldRenderInGeneralModuleUi } from '../utils/moduleFieldVisibility';
 import { createFileManagerOriginForUpload, detectFileManagerTables } from '../utils/fileManagerService';
 import RichTextEditor from './RichTextEditor';
 import RichTextContent from './RichTextContent';
-import { normalizeRichTextHtml, richTextToPlainText } from '../utils/richText';
+import { appendReadyTextToRichText, normalizeRichTextHtml, richTextToPlainText } from '../utils/richText';
 import {
   buildStandardSelectPopupRootStyle,
   KALAM_SELECT_FIELD_CLASSNAME,
@@ -2979,12 +2979,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                         <Button
                           size="small"
                           onClick={() => {
-                            const currentValue = String(value || '');
-                            const readyTextValue = String(item.content || '');
-                            const nextValue = currentValue
-                              ? `${currentValue}<br>${readyTextValue}`
-                              : readyTextValue;
-                            onChange(nextValue);
+                            onChange(appendReadyTextToRichText(value, item.content));
                           }}
                         >
                           درج
