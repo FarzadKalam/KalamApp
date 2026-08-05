@@ -89,6 +89,15 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange, disabl
 
   const colorPicker = (
     <div className="grid grid-cols-4 gap-1.5 p-1" dir="ltr">
+      <button
+        type="button"
+        aria-label="رنگ پیش‌فرض متن"
+        className="col-span-4 h-7 rounded border border-slate-300 bg-white px-2 text-xs font-medium text-slate-700"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => editor?.chain().focus().unsetColor().run()}
+      >
+        رنگ پیش‌فرض
+      </button>
       {COLORS.map((color) => (
         <button
           key={color}

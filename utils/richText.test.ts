@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appendReadyTextToRichText, hasMeaningfulRichTextContent, normalizeRichTextHtml, richTextToPlainText } from './richText';
+import { appendReadyTextToRichText, hasMeaningfulRichTextContent, normalizeRichTextHtml, normalizeRichTextHtmlForPrint, richTextToPlainText } from './richText';
 
 describe('rich text print normalization', () => {
   it('keeps supported formatting and converts legacy line breaks safely', () => {
@@ -16,6 +16,13 @@ describe('rich text print normalization', () => {
   it('keeps paragraphs as new lines when converting rich text to plain text', () => {
     expect(richTextToPlainText('<p>سطر اول</p><p>سطر دوم<br>سطر سوم</p>'))
       .toBe('سطر اول\nسطر دوم\nسطر سوم\n');
+  });
+
+  it('prints text with the default color in black while retaining an explicitly selected color', () => {
+    const printed = normalizeRichTextHtmlForPrint('<p>متن پیش‌فرض <span style="color:#dc2626">متن قرمز</span></p>');
+
+    expect(printed).toContain('style="color:#000000;"');
+    expect(printed).toContain('color:#dc2626');
   });
 
   it('leaves a new paragraph after every inserted ready text', () => {

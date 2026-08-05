@@ -1,7 +1,7 @@
 {
   "name": "tazesystem",
   "private": true,
-  "version": "2.50.0.0.4",
+  "version": "2.50.0.0.5",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -24,6 +24,16 @@ export const normalizeRichTextHtml = (value: unknown): string => {
   });
 };
 
+/**
+ * خروجی امن متن غنی برای چاپ. رنگ پایه را صریحاً مشکی می‌کنیم تا متن‌های
+ * بدون رنگ انتخاب‌شده، تحت‌تأثیر رنگ روشن حالت شب قرار نگیرند؛ رنگ‌های
+ * انتخاب‌شدهٔ کاربر در عناصر داخلی همچنان بر این رنگ غلبه می‌کنند.
+ */
+export const normalizeRichTextHtmlForPrint = (value: unknown): string => {
+  const html = normalizeRichTextHtml(value);
+  return html ? `<div class="rich-text-print" style="color:#000000;">${html}</div>` : '';
+};
+
 export const richTextToPlainText = (value: unknown): string => {
   const html = normalizeRichTextHtml(value);
   if (!html) return '';

@@ -46,7 +46,7 @@ import ResilientImage from '../components/common/ResilientImage';
 import { buildInvoiceAdjustmentDisplay, hasInvoiceAdjustmentValue, resolveInvoiceGlobalDiscountAmount, resolveInvoiceRowBaseAmount } from '../utils/invoicePresentation';
 import { FILE_STORAGE_BUCKET, fileStorageClient } from '../utils/storageClient';
 import { joinStoragePath, sanitizeStorageFileName } from '../utils/storagePath';
-import { normalizeRichTextHtml } from '../utils/richText';
+import { normalizeRichTextHtmlForPrint } from '../utils/richText';
 import RichTextContent from '../components/RichTextContent';
 import { uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 import { parseNoteContent, resolveNoteAttachmentFileType } from '../utils/noteContent';
@@ -690,7 +690,7 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
           <td style="border:1px solid #d1d5db;padding:4px 5px;word-break:break-word;">
             <div style="font-weight:700;">${row.product_name || '—'}</div>
             ${subLine ? `<div style="font-size:9px;color:#64748b;margin-top:2px;">${subLine}</div>` : ''}
-            ${desc ? `<div class="rich-text-print" style="font-size:9px;color:#64748b;white-space:normal;">${normalizeRichTextHtml(desc)}</div>` : ''}
+            ${desc ? `<div class="rich-text-print" style="font-size:9px;color:#64748b;white-space:normal;">${normalizeRichTextHtmlForPrint(desc)}</div>` : ''}
           </td>
           <td style="border:1px solid #d1d5db;padding:4px 5px;text-align:center;">
             ${formatNumber(row.quantity)}
@@ -844,7 +844,7 @@ ${invoice.description ? `
 <table style="margin-bottom:7px;" class="section">
   <tbody><tr>
     <td style="border:1px solid #e5e7eb;padding:6px 8px;font-size:10px;color:#6b7280;width:15%;font-weight:700;">توضیحات</td>
-    <td class="rich-text-print" style="border:1px solid #e5e7eb;border-right:none;padding:6px 8px;white-space:normal;">${normalizeRichTextHtml(invoice.description)}</td>
+    <td class="rich-text-print" style="border:1px solid #e5e7eb;border-right:none;padding:6px 8px;white-space:normal;">${normalizeRichTextHtmlForPrint(invoice.description)}</td>
   </tr></tbody>
 </table>` : ''}
 

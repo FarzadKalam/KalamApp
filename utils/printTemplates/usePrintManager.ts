@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { QRCode } from 'antd';
-import { normalizeRichTextHtml } from '../richText';
+import { normalizeRichTextHtmlForPrint } from '../richText';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PrintTemplate } from './index';
 import { InvoiceCard } from './templates/invoice-card';
@@ -2007,7 +2007,7 @@ export const usePrintManager = ({
             longTextRows.push(`
           <div style="margin-top:8px;">
             <div style="margin:0 0 3px 0; font-size:10px; color:#64748b;">${getFieldLabelFa(field, { moduleId, fallback: field.key })}</div>
-            <div class="rich-text-print" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; background:#fff; font-size:${getReducedPrintFontSize(11)}; line-height:1.9; ${MULTILINE_PRINT_STYLE}">${normalizeRichTextHtml(raw)}</div>
+            <div class="rich-text-print" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; background:#fff; font-size:${getReducedPrintFontSize(11)}; line-height:1.9; ${MULTILINE_PRINT_STYLE}">${normalizeRichTextHtmlForPrint(raw)}</div>
           </div>
         `);
             return;
@@ -2219,7 +2219,7 @@ export const usePrintManager = ({
         return rawValue === null || rawValue === undefined || rawValue === '' ? '-' : toPersianPlain(rawValue);
       }
 
-      if (isLongTextType(column.type)) return normalizeRichTextHtml(rawValue);
+      if (isLongTextType(column.type)) return normalizeRichTextHtmlForPrint(rawValue);
 
       try {
         const rendered = formatPrintValue(
@@ -2695,7 +2695,7 @@ export const usePrintManager = ({
         const field = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields.find((item: any) => item.key === fieldKey) : null;
         if (field) {
           if (isLongTextType(field.type)) {
-            return normalizeOptionalDisplay(normalizeRichTextHtml(raw));
+            return normalizeOptionalDisplay(normalizeRichTextHtmlForPrint(raw));
           }
           const option = Array.isArray(field.options) ? field.options.find((item: any) => String(item.value) === String(raw)) : null;
           if (option?.label) return normalizeOptionalDisplay(option.label);
@@ -2954,7 +2954,7 @@ export const usePrintManager = ({
       if (root === 'record') {
         const field = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields.find((item: any) => item.key === nestedPath) : null;
         if (field) {
-          if (isLongTextType(field.type)) return normalizeRichTextHtml(raw);
+          if (isLongTextType(field.type)) return normalizeRichTextHtmlForPrint(raw);
           const option = Array.isArray(field.options) ? field.options.find((item: any) => String(item.value) === String(raw)) : null;
           if (option?.label) return String(option.label);
           try {

@@ -9,7 +9,7 @@ import { resolvePrintAssigneeComboLabel, resolvePrintAssigneeLabel, resolvePrint
 import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, type PrintImageDisplayMode, getPrintFramedImageStyle, sanitizePrintImageDisplayMode } from './printTemplates/imageDisplay';
 import { buildImagePreviewUrl, buildPrintImageUrl } from './imagePreview';
 import { isPrintableModuleField } from './printTemplates/printableFields';
-import { normalizeRichTextHtml } from './richText';
+import { normalizeRichTextHtmlForPrint } from './richText';
 
 export interface ListFieldDefinition {
   key: string;
@@ -320,7 +320,7 @@ export const formatListCellHtml = (
     return `<span style="display:inline-flex; align-items:baseline; gap:3px; max-width:100%; white-space:nowrap; direction:rtl;"><span style="font-weight:800; font-variant-numeric:tabular-nums;">${escapeHtml(formatted)}</span>${unit ? `<span style="font-size:0.76em; font-weight:500; color:#64748b;">${escapeHtml(unit)}</span>` : ''}</span>`;
   }
 
-  if (isMultilinePrintField(field)) return normalizeRichTextHtml(rawValue);
+  if (isMultilinePrintField(field)) return normalizeRichTextHtmlForPrint(rawValue);
 
   return escapeHtml(formatListCellValue(field, row, relationOptions, currencyLabel));
 };
