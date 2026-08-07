@@ -654,9 +654,12 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   const smsRecipientFieldOptions = useMemo(
     () => Array.from(new Map([
       ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
+      // فیلدهای کاربرمحورِ مرکزی (از جمله ایجادکننده و آخرین ویرایشگر) باید
+      // برای پیامک نیز همان گزینه‌های امن و قابل‌تفسیر یادداشت را داشته باشند.
+      ...noteScopedRecipientFieldOptions.map((item) => [String(item.value), item] as const),
       ...smsCommunicationFieldOptions.map((item) => [String(item.value), item] as const),
     ]).values()),
-    [recipientFieldOptions, smsCommunicationFieldOptions]
+    [recipientFieldOptions, noteScopedRecipientFieldOptions, smsCommunicationFieldOptions]
   );
   const emailRecipientFieldOptions = useMemo(
     () => Array.from(new Map([

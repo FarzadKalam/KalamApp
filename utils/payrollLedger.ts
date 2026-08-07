@@ -79,12 +79,23 @@ const resolveLedgerMinutes = (entry: PayrollLedgerEntry) => {
   return quantityHours > 0 ? quantityHours * 60 : 0;
 };
 
+const isTimeBasedLedgerEntry = (entry: PayrollLedgerEntry) => {
+  const sourceType = String(entry.source_type || '').trim();
+  return sourceType === 'attendance_overtime'
+    || sourceType === 'attendance_early_bonus'
+    || sourceType === 'attendance_delay_absence'
+    || sourceType === 'attendance_paid_leave'
+    || sourceType === 'attendance_unpaid_leave'
+    || sourceType === 'attendance_absence'
+    || sourceType === 'attendance_late';
+};
+
 const buildLedgerDescription = (entry: PayrollLedgerEntry, currencyLabel: string) => {
   const details = entry.details || {};
   const sourceLabel = resolveLedgerSourceLabel(entry);
   const descriptionParts: string[] = [sourceLabel];
-  const minutes = resolveLedgerMinutes(entry);
-  const hours = minutes > 0 ? minutes / 60 : toNumber(entry.quantity);
+  const minutes = isTimeBasedLedgerEntry(entry) ? resolveLedgerMinutes(entry) : 0;
+  const hours = minutes > 0 ? minutes / 60 : 0;
   const rate = toNumber(entry.rate || details.rate);
 
   if (hours > 0 && rate > 0) {

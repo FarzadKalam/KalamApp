@@ -34,7 +34,7 @@ export const sumPayrollSlipLines = (lines: PayrollSlipLineLike[] | null | undefi
   return (Array.isArray(lines) ? lines : []).reduce((sum, line) => {
     const amount = Math.abs(resolveLineAmount(line));
     if (amount === 0) return sum;
-    return sum + (String(line?.line_type || '').trim() === 'deduction' ? -amount : amount);
+    return sum + (String(line?.line_type || '').trim().toLowerCase() === 'deduction' ? -amount : amount);
   }, 0);
 };
 

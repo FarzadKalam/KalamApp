@@ -359,7 +359,7 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
             comfortableMobileTrigger && 'is-comfortable'
           )}
         >
-          {selectedOptionRows.length > 0 && renderTriggerValue
+          {selectedValues.length > 0 && renderTriggerValue
             ? renderTriggerValue(selectedOptionRows)
             : displayText}
         </span>

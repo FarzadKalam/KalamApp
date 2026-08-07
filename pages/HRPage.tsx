@@ -145,7 +145,6 @@ import {
 import {
   buildCommissionDraftRows,
   buildCommissionDraftSourceKey,
-  buildCommissionInvoiceItemKey,
   getCommissionLineReviewBucket,
   mergeCommissionInvoicePayments,
   recomputeCommissionDraftRow,
@@ -743,7 +742,12 @@ const resolveCommissionEmployeeProfile = (
 ) => {
   const normalizedProfileId = String(profileId || '').trim();
   if (!normalizedProfileId) return null;
-  const selectedProfile = profiles.find((profile) => String(profile.id) === normalizedProfileId);
+  // در نمای منابع انسانی شناسهٔ کارمند و شناسهٔ پروفایل هر دو در گردش انتخاب
+  // استفاده می‌شوند. فرم پورسانت باید هر دو را به همان پروفایل سازمانی تبدیل کند.
+  const selectedProfile = profiles.find((profile) => (
+    String(profile.id) === normalizedProfileId
+    || (profile.source_table === 'employees' && String(profile.source_id || '') === normalizedProfileId)
+  ));
   if (!selectedProfile?.source_id || selectedProfile.source_table !== 'employees') return null;
   return selectedProfile;
 };
@@ -4314,11 +4318,13 @@ const HRPage: React.FC = () => {
   }, []);
 
   const openCommissionModal = useCallback(() => {
-    const defaultProfileId =
+    const selectedEmployeeId =
       (selectedEmployeeIds.length === 1 ? selectedEmployeeIds[0] : null) ||
       visibleSummaries.find((row) => row.profile.source_table === 'employees')?.profile.id ||
       profiles.find((profile) => profile.source_table === 'employees')?.id ||
       '';
+    const defaultProfile = resolveCommissionEmployeeProfile(profiles, selectedEmployeeId);
+    const defaultProfileId = String(defaultProfile?.id || '');
     setCommissionInitialValues({
       period_range: [
         toNativeGregorianDateString(selectedRange[0]),
@@ -4334,7 +4340,6 @@ const HRPage: React.FC = () => {
     setCommissionHistoryRows([]);
     setCommissionHistoryIndex(0);
     setCommissionModalOpen(true);
-    const defaultProfile = profiles.find((profile) => String(profile.id) === String(defaultProfileId));
     if (defaultProfile?.source_id) {
       void loadCommissionHistory(
         String(defaultProfile.source_id),
@@ -4367,8 +4372,8 @@ const HRPage: React.FC = () => {
   const handleBuildCommissionPreview = useCallback(async () => {
     try {
       const values = await commissionForm.validateFields();
-      const selectedProfile = profiles.find((profile) => String(profile.id) === String(values.employee_profile_id));
-      if (!selectedProfile?.source_id || selectedProfile.source_table !== 'employees') {
+      const selectedProfile = resolveCommissionEmployeeProfile(profiles, values.employee_profile_id);
+      if (!selectedProfile) {
         message.error('برای محاسبه پورسانت باید یک کارمند متصل به کاربر انتخاب شود.');
         return;
       }
@@ -4795,48 +4800,6 @@ const HRPage: React.FC = () => {
       });
   }, [commissionRows]);
 
-  const snapshotCalculatedCommissionRates = useCallback(async (percentMode: CommissionPercentMode) => {
-    if (percentMode !== 'product_default') return;
-
-    const ratesByInvoiceId = new Map<string, Map<string, number>>();
-    commissionRows.forEach((row) => {
-      row.lines.forEach((line) => {
-        if (line.selected_amount <= 0 || line.commission_percent <= 0) return;
-        const invoiceId = String(row.invoice_id || '').trim();
-        const itemKey = String(line.invoice_item_key || '').trim();
-        if (!invoiceId || !itemKey) return;
-        const rates = ratesByInvoiceId.get(invoiceId) || new Map<string, number>();
-        rates.set(itemKey, line.commission_percent);
-        ratesByInvoiceId.set(invoiceId, rates);
-      });
-    });
-
-    for (const [invoiceId, rates] of ratesByInvoiceId) {
-      const { data: invoice, error: invoiceError } = await supabase
-        .from('invoices')
-        .select('id, invoiceItems')
-        .eq('id', invoiceId)
-        .maybeSingle();
-      if (invoiceError) throw invoiceError;
-      const invoiceItems = Array.isArray(invoice?.invoiceItems) ? invoice.invoiceItems : [];
-      let changed = false;
-      const nextItems = invoiceItems.map((item: any, index: number) => {
-        const itemKey = buildCommissionInvoiceItemKey(invoiceId, item, index);
-        const rate = rates.get(itemKey);
-        const savedSnapshot = toNumber(item?.commission_percentage_snapshot);
-        if (!rate || savedSnapshot > 0) return item;
-        changed = true;
-        return { ...item, commission_percentage_snapshot: rate };
-      });
-      if (!changed) continue;
-      const { error: updateError } = await supabase
-        .from('invoices')
-        .update({ invoiceItems: nextItems, updated_at: new Date().toISOString() })
-        .eq('id', invoiceId);
-      if (updateError) throw updateError;
-    }
-  }, [commissionRows]);
-
   const saveCommissionCalculationAtomically = useCallback(async ({
     ledgerPayload,
     draftPayloads,
@@ -5042,7 +5005,6 @@ const HRPage: React.FC = () => {
       }
 
       setCommissionModalSaving(true);
-      await snapshotCalculatedCommissionRates(values.percent_mode);
       const payload = buildCommissionCalculationLedgerPayload({
         periodStart,
         periodEnd,
@@ -5066,7 +5028,7 @@ const HRPage: React.FC = () => {
     } finally {
       setCommissionModalSaving(false);
     }
-  }, [buildCommissionCalculationLedgerPayload, buildCommissionDraftPayloads, commissionForm, commissionRows, fetchCalculatedCommissionRows, getCommissionPeriodValues, message, profiles, refreshPayrollPeriodState, saveCommissionCalculationAtomically, snapshotCalculatedCommissionRates]);
+  }, [buildCommissionCalculationLedgerPayload, buildCommissionDraftPayloads, commissionForm, commissionRows, fetchCalculatedCommissionRows, getCommissionPeriodValues, message, profiles, refreshPayrollPeriodState, saveCommissionCalculationAtomically]);
 
   const handleEditCommissionDraft = useCallback((row: CommissionLedgerRow) => {
     const employeeProfile = profiles.find((profile) => (

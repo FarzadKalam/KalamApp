@@ -12,7 +12,7 @@ import { BlockType } from '../../types';
 import { getAssigneeLabel } from '../assigneeLabel';
 import { getFieldLabelFa } from '../fieldLabel';
 import { localizeFinancialValue } from '../financialValueLabels';
-import { resolvePrintAssigneeLabel } from './assigneeDisplay';
+import { resolvePrintActorLabel, resolvePrintAssigneeLabel, withPrintIdentityRelationOptions } from './assigneeDisplay';
 import {
   calculateSalesPackageDiscountTotal,
   calculateSalesPackageGrossTotal,
@@ -577,6 +577,20 @@ export const usePrintManager = ({
   const [renderedPageRanges, setRenderedPageRanges] = useState<PrintPageRange[]>([{ start: 0, end: 1 }]);
   const [forcedPrintPageCount, setForcedPrintPageCount] = useState<number | null>(null);
   const payrollEmployeeId = getRelationRecordId(data?.employee_id);
+  const printRelationOptions = useMemo(
+    () => withPrintIdentityRelationOptions(relationOptions, assigneeDirectory),
+    [assigneeDirectory, relationOptions],
+  );
+  const resolvePrintIdentityFieldLabel = useCallback((fieldKey: string, source: any = data): string | null => {
+    const normalizedKey = String(fieldKey || '').trim();
+    if (normalizedKey === 'created_by' || normalizedKey === 'updated_by') {
+      return resolvePrintActorLabel(source, normalizedKey, printRelationOptions);
+    }
+    if (normalizedKey === 'assignee_id') {
+      return resolvePrintAssigneeLabel(source, printRelationOptions);
+    }
+    return null;
+  }, [data, printRelationOptions]);
 
   const loadTemplates = useCallback(async (mounted = true) => {
     try {
@@ -1208,7 +1222,11 @@ export const usePrintManager = ({
 
   const handlePrint = useCallback(async () => {
     if (!selectedTemplateId) return;
-    const companySettingsResult = await loadPrintCompanySettings();
+    const [companySettingsResult, latestAssigneeDirectory] = await Promise.all([
+      loadPrintCompanySettings(),
+      fetchAssigneeDirectory(supabase).catch(() => null),
+    ]);
+    if (latestAssigneeDirectory) setAssigneeDirectory(latestAssigneeDirectory);
     const requiresCompanySettings = moduleId === 'invoices' || moduleId === 'purchase_invoices';
     if (requiresCompanySettings && companySettingsResult?.error) {
       console.error('Invoice print skipped because company settings could not be loaded', companySettingsResult.error);
@@ -1995,11 +2013,13 @@ export const usePrintManager = ({
         .forEach((field: any) => {
           const raw = data?.[field.key];
           if (raw === null || raw === undefined || raw === '') return;
-          let displayValue = '';
-          try {
-            displayValue = String(formatPrintValue(field, raw) || '').trim();
-          } catch {
-            displayValue = '';
+          let displayValue = resolvePrintIdentityFieldLabel(field.key) || '';
+          if (!displayValue) {
+            try {
+              displayValue = String(formatPrintValue(field, raw) || '').trim();
+            } catch {
+              displayValue = '';
+            }
           }
           if (!displayValue) displayValue = localizePlainText(raw);
           if (!displayValue || displayValue === '-') return;
@@ -2026,7 +2046,7 @@ export const usePrintManager = ({
     let { regularRows, longTextRows } = collectRows(false);
 
     const hasAssigneeField = fields.some((field: any) => String(field?.key || '').trim() === 'assignee_id');
-    const responsibleValue = resolvePrintAssigneeLabel(data, relationOptions || {});
+    const responsibleValue = resolvePrintAssigneeLabel(data, printRelationOptions);
 
     if (!hasAssigneeField && responsibleValue && isSystemFieldVisible('record.assignee_id', true)) {
       regularRows.unshift(`
@@ -2056,7 +2076,7 @@ export const usePrintManager = ({
     ]
       .filter(Boolean)
       .join('');
-  }, [data, formatPrintValue, isSystemFieldVisible, moduleConfig?.fields, moduleId, relationOptions]);
+  }, [data, formatPrintValue, isSystemFieldVisible, moduleConfig?.fields, moduleId, printRelationOptions, resolvePrintIdentityFieldLabel]);
 
   const buildInvoiceItemsTable = useCallback((items: any[]) => {
     if (!Array.isArray(items) || items.length === 0) {
@@ -2197,6 +2217,9 @@ export const usePrintManager = ({
         return '-';
       }
 
+      const identityLabel = resolvePrintIdentityFieldLabel(key, row);
+      if (identityLabel !== null) return identityLabel || '-';
+
       const optionLabel = getFieldOptionLabel(key, rawValue, blockId);
       if (optionLabel) return optionLabel;
 
@@ -2238,7 +2261,7 @@ export const usePrintManager = ({
 
       return getDisplayValue(rawValue);
     },
-    [formatPrintValue, getFieldOptionLabel, relationOptions, resolveBillboardPrintLabel]
+    [formatPrintValue, getFieldOptionLabel, relationOptions, resolveBillboardPrintLabel, resolvePrintIdentityFieldLabel]
   );
 
   const buildBlockSummaryMap = useCallback(
@@ -2687,11 +2710,8 @@ export const usePrintManager = ({
       const resolveRecordFieldDisplay = (fieldKey: string) => {
         const raw = data?.[fieldKey];
         if (raw === null || raw === undefined || raw === '') return '';
-        if (fieldKey === 'created_by' || fieldKey === 'updated_by') {
-          const user = (assigneeDirectory?.users || []).find((item: any) => String(item?.id || '').trim() === String(raw).trim());
-          const userLabel = String(user?.display_name || user?.full_name || user?.email || user?.mobile_1 || '').trim();
-          return userLabel || '[کاربر سازمان]';
-        }
+        const identityLabel = resolvePrintIdentityFieldLabel(fieldKey);
+        if (identityLabel !== null) return identityLabel;
         const field = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields.find((item: any) => item.key === fieldKey) : null;
         if (field) {
           if (isLongTextType(field.type)) {
@@ -2743,7 +2763,10 @@ export const usePrintManager = ({
             const raw = data?.[field.key];
             if (raw === null || raw === undefined || raw === '') return;
             let displayValue = '';
-            try { displayValue = String(formatPrintValue(field, raw) || '').trim(); } catch { displayValue = ''; }
+            displayValue = resolvePrintIdentityFieldLabel(field.key) || '';
+            if (!displayValue) {
+              try { displayValue = String(formatPrintValue(field, raw) || '').trim(); } catch { displayValue = ''; }
+            }
             if (!displayValue) displayValue = localizePlainText(raw);
             if (!displayValue || displayValue === '-') return;
             const label = getFieldLabelFa(field, { moduleId, fallback: field.key });
@@ -2804,7 +2827,10 @@ export const usePrintManager = ({
             const raw = data?.[field.key];
             if (raw === null || raw === undefined || raw === '') return;
             let displayValue = '';
-            try { displayValue = String(formatPrintValue(field, raw) || '').trim(); } catch { displayValue = ''; }
+            displayValue = resolvePrintIdentityFieldLabel(field.key) || '';
+            if (!displayValue) {
+              try { displayValue = String(formatPrintValue(field, raw) || '').trim(); } catch { displayValue = ''; }
+            }
             if (!displayValue) displayValue = localizePlainText(raw);
             if (!displayValue || displayValue === '-') return;
             // Move currency label from start to end (e.g. "تومان ۱,۰۰۰" → "۱,۰۰۰ تومان")
@@ -2876,7 +2902,7 @@ export const usePrintManager = ({
         return words ? `${words} ${resolvedCurrencyLabel}`.trim() : '';
       }
       if (path === 'responsible.name') {
-        return localizePlainText(resolvePrintAssigneeLabel(data, relationOptions || {}) || '');
+        return localizePlainText(resolvePrintAssigneeLabel(data, printRelationOptions) || '');
       }
       if (path === 'module.title') return getModuleTitle(moduleId, 'singular') || moduleConfig?.titles?.fa || '';
       if (path === 'module.title_plural') return getModuleTitle(moduleId, 'plural') || moduleConfig?.titles?.fa || '';
@@ -2947,8 +2973,9 @@ export const usePrintManager = ({
       const raw = getPathValue(source, nestedPath);
       if (raw === null || raw === undefined) return '';
 
-      if (root === 'record' && nestedPath === 'assignee_id') {
-        return localizePlainText(resolvePrintAssigneeLabel(data, relationOptions || {}) || '');
+      if (root === 'record') {
+        const identityLabel = resolvePrintIdentityFieldLabel(nestedPath);
+        if (identityLabel !== null) return localizePlainText(identityLabel);
       }
 
       if (root === 'record') {
@@ -3024,6 +3051,8 @@ export const usePrintManager = ({
       recordHeroImageUrl,
       recordQrSvgMarkup,
       relationOptions,
+      printRelationOptions,
+      resolvePrintIdentityFieldLabel,
       sellerInfo,
       linkedAttachmentCount,
       supplierInfo,

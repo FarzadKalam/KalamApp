@@ -68,6 +68,23 @@ describe('payrollLedger', () => {
     ]);
   });
 
+  it('does not label quantity-based money rows as hours', () => {
+    const entries: PayrollLedgerEntry[] = [
+      {
+        id: 'goal-1',
+        employee_id: 'employee-1',
+        entry_type: 'goal_bonus',
+        source_type: 'goal_reward',
+        title: 'پاداش فروش',
+        amount: 300000,
+        quantity: 3,
+        rate: 100000,
+      },
+    ];
+
+    expect(mapPayrollLedgerEntriesToLines(entries, 'ریال')[0].description).toBe('پاداش هدف');
+  });
+
   it('groups payroll ledger rows by final payroll slip line policy', () => {
     const entries: PayrollLedgerEntry[] = [
       {

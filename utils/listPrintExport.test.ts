@@ -19,6 +19,16 @@ describe('formatListCellValue assignee display', () => {
     expect(value).toBe('شرکت نمونه');
   });
 
+  it('renders creators and editors from the central user options', () => {
+    const userId = '12121212-1212-4121-8121-121212121212';
+
+    expect(formatListCellValue(
+      { key: 'created_by', label: 'ایجادکننده', type: FieldType.USER },
+      { created_by: userId },
+      { users: [{ id: userId, display_name: 'کاربر ثبت‌کننده' }] },
+    )).toBe('کاربر ثبت‌کننده');
+  });
+
   it('renders role assignee_id as a label instead of a UUID', () => {
     const roleId = '22222222-2222-2222-2222-222222222222';
 

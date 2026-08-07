@@ -1,6 +1,7 @@
 import { buildResolvedAssigneeCombo, getResolvedAssigneeId, normalizeAssigneeType, parseAssigneeValue } from '../assigneeValue';
 
 type RelationOptions = Record<string, any[]>;
+type AssigneeDirectory = { users?: any[]; roles?: any[] } | null | undefined;
 
 const ASSIGNEE_PREFIX_REGEX = /^(user|role)[:_]/i;
 const DELETED_USER_LABEL_FA = 'کاربر حذف شده';
@@ -22,6 +23,51 @@ const getOptionLabel = (option: any): string =>
     option?.business_name ||
     ''
   ).trim();
+
+const toOptionList = (value: unknown): any[] => Array.isArray(value) ? value : [];
+
+const mergeOptionLists = (...sources: unknown[]): any[] => {
+  const seen = new Set<string>();
+  return sources
+    .flatMap(toOptionList)
+    .filter((option) => {
+      const key = String(option?.value || option?.id || getOptionLabel(option) || '').trim();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+};
+
+const getUserOptions = (relationOptions: RelationOptions = {}): any[] => mergeOptionLists(
+  relationOptions.assignee_id,
+  relationOptions.profiles,
+  relationOptions.users,
+  relationOptions.profile_id,
+);
+
+const getRoleOptions = (relationOptions: RelationOptions = {}): any[] => mergeOptionLists(
+  relationOptions.org_roles,
+  relationOptions.roles,
+  relationOptions.assignee_role_id,
+);
+
+/** دایرکتوری مرکزی سازمان را به گزینه‌های قابل‌استفادهٔ همهٔ قالب‌های چاپ اضافه می‌کند. */
+export const withPrintIdentityRelationOptions = (
+  relationOptions: RelationOptions = {},
+  directory: AssigneeDirectory,
+): RelationOptions => {
+  const users = mergeOptionLists(getUserOptions(relationOptions), directory?.users);
+  const roles = mergeOptionLists(getRoleOptions(relationOptions), directory?.roles);
+  return {
+    ...relationOptions,
+    assignee_id: users,
+    profiles: users,
+    users,
+    org_roles: roles,
+    roles,
+    assignee_role_id: roles,
+  };
+};
 
 const matchOptionValue = (option: any, value: string) => {
   const normalizedValue = String(value || '').trim();
@@ -58,15 +104,8 @@ export const resolvePrintAssigneeComboLabel = (
     `${parsed.assigneeType}:${parsed.assigneeId}`,
     `${parsed.assigneeType}_${parsed.assigneeId}`,
   ];
-  const roleOptions = [
-    ...(relationOptions.org_roles || []),
-    ...(relationOptions.roles || []),
-    ...(relationOptions.assignee_role_id || []),
-  ];
-  const userOptions = [
-    ...(relationOptions.assignee_id || []),
-    ...(relationOptions.profiles || []),
-  ];
+  const roleOptions = getRoleOptions(relationOptions);
+  const userOptions = getUserOptions(relationOptions);
   const mergedOptions = Object.values(relationOptions || {}).flat();
 
   const directComboLabel = comboValues
@@ -91,7 +130,6 @@ export const resolvePrintAssigneeLabel = (
     source?.responsible_name ||
     source?.assignee_label ||
     source?.assignee_role_name ||
-    source?.created_by_name ||
     ''
   ).trim();
   if (explicitLabel) return explicitLabel;
@@ -113,15 +151,31 @@ export const resolvePrintAssigneeLabel = (
     : normalizeAssigneeType(source?.assignee_type || (source?.assignee_role_id ? 'role' : 'user'));
 
   const scopedOptions = assigneeType === 'role'
-    ? [
-        ...(relationOptions.org_roles || []),
-        ...(relationOptions.roles || []),
-        ...(relationOptions.assignee_role_id || []),
-      ]
-    : [
-        ...(relationOptions.assignee_id || []),
-        ...(relationOptions.profiles || []),
-      ];
+    ? getRoleOptions(relationOptions)
+    : getUserOptions(relationOptions);
 
   return resolvePrintOptionLabel(scopedOptions, assigneeId) || '';
+};
+
+/** نام ایجادکننده یا آخرین ویرایشگر را بدون نمایش شناسهٔ خام برمی‌گرداند. */
+export const resolvePrintActorLabel = (
+  source: any,
+  actorKey: 'created_by' | 'updated_by',
+  relationOptions: RelationOptions = {},
+): string => {
+  const actor = typeof source === 'object' && source !== null ? source : { [actorKey]: source };
+  const explicitLabel = String(
+    actor?.[`${actorKey}_name`] ||
+    actor?.[`${actorKey}_label`] ||
+    actor?.[`${actorKey}_display_name`] ||
+    ''
+  ).trim();
+  if (explicitLabel) return explicitLabel;
+
+  const rawValue = actor?.[actorKey];
+  if (rawValue && typeof rawValue === 'object') return getOptionLabel(rawValue);
+  const actorId = parseAssigneeValue(rawValue, 'user').assigneeId;
+  if (!actorId) return '';
+
+  return resolvePrintOptionLabel(getUserOptions(relationOptions), actorId) || DELETED_USER_LABEL_FA;
 };

@@ -831,7 +831,14 @@ export const buildCommissionDraftRows = ({
       if (savedDraft) consumedDraftKeys.add(sourceKey);
       const postedKey = `${invoice.id}::${itemKey}`;
       const netAmount = resolveInvoiceItemNetAmount(item);
-      const percent = getItemCommissionPercent(item, employeeId, percentMode, employeeDefaultCommissionByEmployeeId);
+      // نرخ پس از اولین ذخیره روی خود محاسبهٔ پورسانت snapshot می‌شود، نه روی
+      // فاکتور؛ بنابراین ثبت پورسانت برای فاکتورهای قفل‌شده نیز امن است.
+      const savedPercent = savedDraft?.details && Object.prototype.hasOwnProperty.call(savedDraft.details, 'commission_percent')
+        ? toNumber(savedDraft.details.commission_percent)
+        : null;
+      const percent = savedPercent === null
+        ? getItemCommissionPercent(item, employeeId, percentMode, employeeDefaultCommissionByEmployeeId)
+        : Math.max(0, savedPercent);
       return {
         key: sourceKey,
         source_key: sourceKey,

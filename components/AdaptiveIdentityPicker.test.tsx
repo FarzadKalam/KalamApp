@@ -65,6 +65,8 @@ describe('AdaptiveIdentityPicker', () => {
       />
     );
 
+    expect(screen.getByRole('button', { name: 'انتخاب مسئول' })).toHaveTextContent('در حال بارگذاری کاربر');
+    expect(screen.getByRole('button', { name: 'انتخاب مسئول' })).not.toHaveTextContent('user_u1');
     await waitFor(() => expect(screen.getByRole('button', { name: 'انتخاب مسئول' })).toHaveTextContent('الهام رضایی'));
     expect(screen.queryByText('u1')).not.toBeInTheDocument();
     expect(screen.getByAltText('الهام رضایی')).toBeInTheDocument();

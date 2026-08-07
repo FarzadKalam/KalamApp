@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCommissionDraftRows,
+  buildCommissionDraftSourceKey,
   getCommissionLineReviewBucket,
   mergeCommissionInvoicePayments,
   recomputeCommissionDraftRow,
@@ -61,6 +62,55 @@ describe('commissionRuntime', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.selected_amount).toBe(80000);
     expect(rows[0]?.lines).toHaveLength(2);
+  });
+
+  it('keeps the commission rate saved with the draft when the product rate later changes', () => {
+    const itemKey = 'inv-snapshot:0:product-1';
+    const sourceKey = buildCommissionDraftSourceKey({
+      employeeId: 'employee-1',
+      basis: 'approved_invoices',
+      percentMode: 'product_default',
+      invoiceId: 'inv-snapshot',
+      itemKey,
+      sourcePeriodStart: '2026-05-01',
+      sourcePeriodEnd: '2026-05-31',
+    });
+    const rows = buildCommissionDraftRows({
+      invoices: [{
+        id: 'inv-snapshot',
+        name: 'فاکتور ثبت‌شده',
+        status: 'confirmed',
+        invoice_date: '2026-05-10',
+        total_invoice_amount: 1000000,
+        assignee_id: 'profile-1',
+        invoiceItems: [{ product_id: 'product-1', line_total: 1000000, commission_percentage: 3 }],
+      }],
+      employeeIdByAssigneeId: { 'profile-1': 'employee-1' },
+      employeeDefaultCommissionByEmployeeId: { 'employee-1': 3 },
+      basis: 'approved_invoices',
+      percentMode: 'product_default',
+      periodStart: '2026-05-01',
+      periodEnd: '2026-05-31',
+      existingDrafts: [{
+        source_key: sourceKey,
+        employee_id: 'employee-1',
+        assignee_id: 'profile-1',
+        period_start: '2026-05-01',
+        period_end: '2026-05-31',
+        source_basis: 'approved_invoices',
+        percent_mode: 'product_default',
+        invoice_id: 'inv-snapshot',
+        invoice_item_key: itemKey,
+        entitled_amount: 90000,
+        posted_amount: 0,
+        remaining_amount: 90000,
+        decision_status: 'auto',
+        details: { commission_percent: 9 },
+      }],
+      includeNotCalculated: true,
+    });
+
+    expect(rows[0]?.lines[0]?.commission_percent).toBe(9);
   });
 
   it('includes prepayment invoices in the approved-and-higher calculation', () => {

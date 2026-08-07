@@ -42,6 +42,7 @@ import { loadScopedCompanySettings } from '../companySettings';
 import { SETTINGS_PERMISSION_KEY } from '../permissions';
 import { fetchAssigneeDirectory } from '../referenceData';
 import { fetchRelationOptionsForField } from '../relationOptions';
+import { withPrintIdentityRelationOptions } from './assigneeDisplay';
 import {
   buildDefaultPrintSignatureConfigs,
   buildPrintSignatureBandHtml,
@@ -127,6 +128,10 @@ export const useListPrintManager = ({
   const renderPrintCardRef = useRef<() => React.ReactNode>(() => null);
   const reservedPrintWindowRef = useRef<Window | null>(null);
   const currencyLabel = readCurrencyConfig().label || '';
+  const printRelationOptions = useMemo(
+    () => withPrintIdentityRelationOptions(relationOptions, assigneeDirectory),
+    [assigneeDirectory, relationOptions],
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -410,7 +415,7 @@ export const useListPrintManager = ({
         scope: 'list',
         moduleConfig,
         rows,
-        relationOptions,
+        relationOptions: printRelationOptions,
         signerLabelByKey: signatureLabelByKey,
         companyInfo,
         currentUser: currentUserProfile,
@@ -425,7 +430,7 @@ export const useListPrintManager = ({
       currentUserProfile,
       currentUserRoleTitle,
       moduleConfig,
-      relationOptions,
+      printRelationOptions,
       rows,
       selectedPrintSignatureConfigs,
       signatureLabelByKey,
@@ -628,8 +633,8 @@ export const useListPrintManager = ({
   }, [rows, rowsPerPage]);
 
   const renderedSummaryTable = useMemo(
-    () => buildListSummaryTableHtml(summary, relationOptions, currencyLabel, imageDisplayMode),
-    [currencyLabel, imageDisplayMode, relationOptions, summary]
+    () => buildListSummaryTableHtml(summary, printRelationOptions, currencyLabel, imageDisplayMode),
+    [currencyLabel, imageDisplayMode, printRelationOptions, summary]
   );
 
   const renderedContextTable = useMemo(
@@ -637,11 +642,11 @@ export const useListPrintManager = ({
       selectedContextFields.length > 0
         ? { title: contextTitle, fields: selectedContextFields, values: contextValues }
         : null,
-      relationOptions,
+      printRelationOptions,
       currencyLabel,
       imageDisplayMode,
     ),
-    [contextTitle, contextValues, currencyLabel, imageDisplayMode, relationOptions, selectedContextFields],
+    [contextTitle, contextValues, currencyLabel, imageDisplayMode, printRelationOptions, selectedContextFields],
   );
 
   const resolveValue = useCallback((path: string, pageIndex: number, pageCount: number, pageRows: any[], rowOffset: number) => {
@@ -651,14 +656,14 @@ export const useListPrintManager = ({
     if (path === 'system.page_index') return toPersianNumber(pageIndex + 1);
     if (path === 'system.page_count') return toPersianNumber(pageCount);
     if (path === 'system.list_table') {
-      return buildListTableHtml(selectedColumns, pageRows, relationOptions, currencyLabel, rowOffset, imageDisplayMode);
+      return buildListTableHtml(selectedColumns, pageRows, printRelationOptions, currencyLabel, rowOffset, imageDisplayMode);
     }
     if (path === 'system.list_catalog_a4') {
-      return buildListCatalogHtml(selectedColumns, pageRows, relationOptions, currencyLabel, imageDisplayMode);
+      return buildListCatalogHtml(selectedColumns, pageRows, printRelationOptions, currencyLabel, imageDisplayMode);
     }
     if (path === 'system.list_catalog_fullpage') {
       return buildListCatalogFullPageHtml(
-        selectedColumns, pageRows, relationOptions, currencyLabel, companyInfo,
+        selectedColumns, pageRows, printRelationOptions, currencyLabel, companyInfo,
         getModuleTitle(moduleId) || 'فهرست',
         imageDisplayMode,
       );
@@ -692,7 +697,7 @@ export const useListPrintManager = ({
       return String(companyInfo?.[key] || '');
     }
     return '';
-  }, [companyInfo, currencyLabel, extraSystemValues, imageDisplayMode, moduleConfig?.titles?.fa, moduleId, relationOptions, renderedContextTable, renderedSummaryTable, rows.length, selectedColumns, summary?.values]);
+  }, [companyInfo, currencyLabel, extraSystemValues, imageDisplayMode, moduleConfig?.titles?.fa, moduleId, printRelationOptions, renderedContextTable, renderedSummaryTable, rows.length, selectedColumns, summary?.values]);
 
   const renderTemplateSection = useCallback((html: string | undefined, pageIndex: number, pageCount: number, pageRows: any[], rowOffset: number) => {
     const rawHtml = stripLegacyPrintSignatureTokens(String(html || ''));
@@ -883,8 +888,15 @@ export const useListPrintManager = ({
     reservedPrintWindowRef.current = prepareGeneratedPdfWindow(printTitle);
   }, [getPrintOutputName]);
 
-  const handlePrint = useCallback(() => {
+  const handlePrint = useCallback(async () => {
     if (!selectedTemplateId) return;
+    const latestAssigneeDirectory = await fetchAssigneeDirectory(supabase).catch(() => null);
+    if (latestAssigneeDirectory) {
+      setAssigneeDirectory(latestAssigneeDirectory);
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+      });
+    }
     const printTitle = getPrintOutputName();
     const pageSize = `${selectedStoredTemplate?.paperSize || 'A4'} ${
       selectedStoredTemplate?.orientation === 'landscape' ? 'landscape' : 'portrait'

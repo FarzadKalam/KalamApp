@@ -10,6 +10,13 @@ describe('payrollSlipTotals', () => {
     ])).toBe(1100000);
   });
 
+  it('recognizes deduction rows regardless of letter case', () => {
+    expect(sumPayrollSlipLines([
+      { line_type: 'BONUS', amount: 500000 },
+      { line_type: 'DEDUCTION', amount: 125000 },
+    ])).toBe(375000);
+  });
+
   it('counts only included payment statuses when present', () => {
     expect(sumPayrollSlipPayments([
       { status: 'received', amount: 200000 },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolvePrintAssigneeComboLabel, resolvePrintAssigneeLabel } from './assigneeDisplay';
+import { resolvePrintActorLabel, resolvePrintAssigneeComboLabel, resolvePrintAssigneeLabel, withPrintIdentityRelationOptions } from './assigneeDisplay';
 
 describe('print assignee display', () => {
   it('resolves role combo values to a readable label', () => {
@@ -40,5 +40,18 @@ describe('print assignee display', () => {
     const userId = '11111111-1111-1111-1111-111111111111';
 
     expect(resolvePrintAssigneeComboLabel(userId, {})).toBe('');
+  });
+
+  it('uses the central directory for creator, editor, and assignee labels', () => {
+    const userId = '55555555-5555-4555-8555-555555555555';
+    const relationOptions = withPrintIdentityRelationOptions({}, {
+      users: [{ id: userId, display_name: 'کاربر نمونه' }],
+      roles: [],
+    });
+    const record = { created_by: userId, updated_by: userId, assignee_id: userId, assignee_type: 'user' };
+
+    expect(resolvePrintActorLabel(record, 'created_by', relationOptions)).toBe('کاربر نمونه');
+    expect(resolvePrintActorLabel(record, 'updated_by', relationOptions)).toBe('کاربر نمونه');
+    expect(resolvePrintAssigneeLabel(record, relationOptions)).toBe('کاربر نمونه');
   });
 });

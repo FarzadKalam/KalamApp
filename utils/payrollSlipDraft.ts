@@ -100,7 +100,11 @@ export const buildPayrollSlipDraft = ({
     netAmount: totals.netPayable,
     employeeInsuranceAmount,
     employerInsuranceAmount,
-    ledgerBonusTotal: ledgerEntries.reduce((sum, entry) => sum + Math.max(0, toNumber(entry.amount)), 0),
-    ledgerDeductionTotal: ledgerEntries.reduce((sum, entry) => sum + Math.abs(Math.min(0, toNumber(entry.amount))), 0),
+    ledgerBonusTotal: ledgerLines
+      .filter((line) => line.line_type === 'bonus')
+      .reduce((sum, line) => sum + Math.abs(toNumber(line.amount)), 0),
+    ledgerDeductionTotal: ledgerLines
+      .filter((line) => line.line_type === 'deduction')
+      .reduce((sum, line) => sum + Math.abs(toNumber(line.amount)), 0),
   };
 };

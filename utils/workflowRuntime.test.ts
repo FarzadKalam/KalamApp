@@ -293,6 +293,44 @@ describe('workflow action recipients', () => {
     }));
   });
 
+  it('resolves the creator and last editor centrally for SMS and notes', async () => {
+    mocks.profilesByUser = [
+      { id: USER_ID, mobile_1: '09111111111', is_active: true },
+      { id: DIRECT_USER_ID, mobile_1: '09222222222', is_active: true },
+    ];
+    const record = {
+      id: '55555555-5555-4555-8555-555555555555',
+      created_by: USER_ID,
+      updated_by: DIRECT_USER_ID,
+    };
+
+    await executeWorkflowAction({
+      id: 'action-system-actors-sms',
+      type: 'send_sms',
+      config: {
+        recipient_fields: ['created_by', 'updated_by'],
+        message: 'سلام',
+      },
+    }, 'customers', record);
+
+    expect(mocks.sendSmsViaGateway).toHaveBeenCalledWith(expect.objectContaining({
+      to: ['09111111111', '09222222222'],
+    }));
+
+    await executeWorkflowAction({
+      id: 'action-system-actors-note',
+      type: 'send_note',
+      config: {
+        recipient_fields: ['created_by', 'updated_by'],
+        note_text: 'یادداشت تست',
+      },
+    }, 'customers', record);
+
+    const insertedRows = mocks.insertNotesWithFallback.mock.calls.at(-1)?.[0] || [];
+    expect(insertedRows).toHaveLength(1);
+    expect(insertedRows[0].mention_user_ids).toEqual([USER_ID, DIRECT_USER_ID]);
+  });
+
   it('skips workflow system notes when all resolved user recipients are inactive', async () => {
     mocks.profilesByUser = [
       { id: USER_ID, is_active: false },

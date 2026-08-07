@@ -38,4 +38,26 @@ describe('payrollSlipDraft', () => {
       metadata: { employer_insurance_amount: 2_645_000 },
     });
   });
+
+  it('derives ledger subtotals from the final line type, not from a signed amount alone', () => {
+    const draft = buildPayrollSlipDraft({
+      baseSalary: 0,
+      baseSalaryTitle: 'حقوق پایه',
+      baseSalaryDescription: '',
+      taskWageTotal: 0,
+      taskWageDescription: '',
+      ledgerEntries: [
+        { id: 'penalty', employee_id: 'employee', entry_type: 'penalty', source_type: 'employee_penalty', title: 'جریمه', amount: 250000 },
+      ],
+      advanceLines: [],
+      insuranceSubject: false,
+      employeeInsuranceRate: 0,
+      employerInsuranceRate: 0,
+      currencyLabel: 'تومان',
+    });
+
+    expect(draft.ledgerBonusTotal).toBe(0);
+    expect(draft.ledgerDeductionTotal).toBe(250000);
+    expect(draft.grossAmount).toBe(-250000);
+  });
 });

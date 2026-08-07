@@ -5,7 +5,7 @@ import { FieldType } from '../types';
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from './persianNumberFormatter';
 import { getAssigneeLabel } from './assigneeLabel';
 import { buildCatalogFullPageLayout } from './printTemplates/catalogFullPageLayout';
-import { resolvePrintAssigneeComboLabel, resolvePrintAssigneeLabel, resolvePrintOptionLabel } from './printTemplates/assigneeDisplay';
+import { resolvePrintActorLabel, resolvePrintAssigneeComboLabel, resolvePrintAssigneeLabel, resolvePrintOptionLabel } from './printTemplates/assigneeDisplay';
 import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, type PrintImageDisplayMode, getPrintFramedImageStyle, sanitizePrintImageDisplayMode } from './printTemplates/imageDisplay';
 import { buildImagePreviewUrl, buildPrintImageUrl } from './imagePreview';
 import { isPrintableModuleField } from './printTemplates/printableFields';
@@ -216,6 +216,9 @@ export const formatListCellValue = (
   const key = String(field?.key || '').trim();
   if (key === ASSIGNEE_DISPLAY_FIELD_KEY) {
     return formatDigitsForLocale(resolvePrintAssigneeLabel(row, relationOptions) || '-', digitLocale);
+  }
+  if (key === 'created_by' || key === 'updated_by') {
+    return formatDigitsForLocale(resolvePrintActorLabel(row, key, relationOptions) || '-', digitLocale);
   }
 
   const rawValue = row?.[key];

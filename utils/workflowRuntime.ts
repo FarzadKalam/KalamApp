@@ -52,6 +52,7 @@ import { buildAiRecordCreationSchema } from './aiRecordCreation';
 import { lockRecord } from './recordLockRuntime';
 import { shouldSkipRecordForAutomation } from './recycleBinGuards';
 import { buildTaskSourceInitialValues } from './taskMeta';
+import { getCanonicalModuleFields } from './recordVariableCatalog';
 import { filterActiveGroupMentionTargets, filterActiveMentionTargets, isActiveProfileRow } from './activeProfileRecipients';
 import {
   evaluateConditionCollection as evaluateCentralConditionCollection,
@@ -1224,7 +1225,8 @@ const normalizeMultiRelationCommunicationValues = (
 };
 
 const getDirectWorkflowField = (moduleId: string, fieldKey: string) =>
-  (MODULES[moduleId]?.fields || []).find((field) => String(field?.key || '').trim() === String(fieldKey || '').trim()) || null;
+  getCanonicalModuleFields(moduleId)
+    .find((field) => String(field?.key || '').trim() === String(fieldKey || '').trim()) || null;
 
 const getNoteRecipientStrategyFromField = (field?: ModuleField | null): WorkflowNoteRecipientStrategy | null => {
   if (!field) return null;
@@ -1544,13 +1546,17 @@ const resolveCommunicationValuesFromFields = async ({
   collectRecipientTargets(recipientAssignees, { directValues, userIds, roleIds, groupIds });
 
   for (const fieldKey of asArray(recipientFields)) {
+    const wrappedMeta = parseWorkflowNoteRecipientFieldKey(String(fieldKey || '').trim());
+    const resolvedFieldKey = wrappedMeta?.fieldKey || String(fieldKey || '').trim();
     const rawValue = await resolveConditionFieldValue(
-      String(fieldKey || ''),
+      resolvedFieldKey,
       currentRecord,
       moduleId,
       context
     );
-    collectRecipientTargets(rawValue, { directValues, userIds, roleIds, groupIds });
+    const strategy = wrappedMeta?.strategy || inferLegacyNoteRecipientStrategy(moduleId, resolvedFieldKey);
+    const normalizedValue = strategy ? normalizeNoteRecipientValuesByStrategy(rawValue, strategy) : rawValue;
+    collectRecipientTargets(normalizedValue, { directValues, userIds, roleIds, groupIds });
   }
 
   await expandChatGroupsToMentionTargets(Array.from(groupIds), userIds, roleIds);
