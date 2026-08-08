@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { App, Button, Card, Col, Grid, Row, Spin, Statistic, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import type { SortOrder } from 'antd/es/table/interface';
 import { ApartmentOutlined, BankOutlined, CreditCardOutlined, PlusOutlined, WalletOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -131,7 +132,7 @@ const CashBankPage: React.FC = () => {
         bankAccounts: Number(data?.bankAccounts || 0), cashBoxes: Number(data?.cashBoxes || 0), pettyFunds: Number(data?.pettyFunds || 0),
         openCheques: Number(data?.openCheques || 0), chequesAmount: Number(data?.chequesAmount || 0), openBarters: Number(data?.openBarters || 0), bartersAmount: Number(data?.bartersAmount || 0),
       });
-    } catch (error) { message.error(toFaErrorMessage(error, 'خطا در دریافت اطلاعات نقد و بانک')); }
+    } catch (error) { message.error(toFaErrorMessage(error as any, 'خطا در دریافت اطلاعات نقد و بانک')); }
     finally { setAccessResolved(true); setLoading(false); }
   }, [message]);
 
@@ -145,7 +146,7 @@ const CashBankPage: React.FC = () => {
       if (error) throw error;
       setRows(Array.isArray(data?.rows) ? data.rows.map(mapLedgerRow) : []);
       setTotal(Number(data?.total || 0));
-    } catch (error) { message.error(toFaErrorMessage(error, 'خطا در دریافت عملیات نقد و بانک')); setRows([]); setTotal(0); }
+    } catch (error) { message.error(toFaErrorMessage(error as any, 'خطا در دریافت عملیات نقد و بانک')); setRows([]); setTotal(0); }
     finally { setTableLoading(false); }
   }, [accessResolved, canViewPage, filters, message, page, pageSize, sort]);
 
@@ -156,7 +157,7 @@ const CashBankPage: React.FC = () => {
   const openRow = useCallback((row: RowItem) => { const target = row.kind === 'cheque' ? 'cheques' : row.kind === 'sales_payment' ? 'invoices' : row.kind === 'purchase_payment' ? 'purchase_invoices' : row.kind === 'barter' ? 'barters' : row.kind === 'bank_account_opening' ? 'bank_accounts' : row.kind === 'cash_box_opening' ? 'cash_boxes' : row.kind === 'petty_fund_opening' ? 'petty_funds' : row.kind === 'customer_opening' ? 'customers' : row.kind === 'supplier_opening' ? 'suppliers' : row.kind === 'employee_opening' ? 'employees' : 'cash_bank_operations'; navigate(row.sourceRecordId ? `/${target}/${row.sourceRecordId}` : '/cash_bank_operations'); }, [navigate]);
 
   const columnControl = useCallback((key: string) => ({
-    filteredValue: filters[key] ?? null, sorter: true, sortOrder: SORT_FIELD_BY_COLUMN[key] === sort.field ? (sort.order === 'asc' ? 'ascend' : 'descend') : null,
+    filteredValue: filters[key] ?? null, sorter: true, sortOrder: (SORT_FIELD_BY_COLUMN[key] === sort.field ? (sort.order === 'asc' ? 'ascend' : 'descend') : null) as SortOrder,
     sortDirections: ['ascend', 'descend', null] as Array<'ascend' | 'descend' | null>, showSorterTooltip: false,
   }), [filters, sort]);
 

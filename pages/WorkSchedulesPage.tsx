@@ -356,11 +356,12 @@ const WorkSchedulesPage: React.FC = () => {
 
   useEffect(() => {
     let cancelled = false;
-    void supabase
+    void Promise.resolve(supabase
       .from('counterparty_bot_groups')
       .select('id, group_title, channel_type')
       .eq('status', 'active')
       .order('group_title')
+    )
       .then(({ data }) => {
         if (cancelled) return;
         setBotGroupOptions(

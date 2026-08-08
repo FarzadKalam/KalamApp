@@ -1,5 +1,5 @@
 import { supabase as sharedSupabase } from '../supabaseClient';
-import { getFinancialPaymentTypeLabelFa, getFinancialStatusLabelFa, localizeFinancialValue, FINANCIAL_PAYMENT_TYPE_LABELS_FA } from './financialValueLabels';
+import { getFinancialPaymentTypeLabelFa, getFinancialStatusLabelFa, FINANCIAL_PAYMENT_TYPE_LABELS_FA } from './financialValueLabels';
 import { formatPersianNumberWithGrouping } from './persianNumberFormatter';
 import {
   buildSourceOperationKey,

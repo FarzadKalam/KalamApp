@@ -20,6 +20,21 @@ describe('runSelectWithCompatibleColumns', () => {
     expect(attempted).toEqual(['id,full_name']);
   });
 
+  it('never requests virtual bot group fields from generic customer relation lookups', async () => {
+    const attempted: string[] = [];
+    const result = await runSelectWithCompatibleColumns({
+      cacheKey: 'relation-values:customers:customer_id',
+      columns: ['id', 'full_name', 'telegram_group_title', 'bale_group_title', 'rubika_group_title'],
+      execute: async (selectExpr) => {
+        attempted.push(selectExpr);
+        return { data: [{ id: 'customer-1', full_name: 'مشتری نمونه' }], error: null };
+      },
+    });
+
+    expect(result.error).toBeNull();
+    expect(attempted).toEqual(['id,full_name']);
+  });
+
   it('drops known incompatible purchase invoice columns before executing lightweight selects', async () => {
     const attempted: string[] = [];
     const result = await runSelectWithCompatibleColumns({

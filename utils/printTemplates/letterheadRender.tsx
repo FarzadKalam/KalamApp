@@ -107,7 +107,7 @@ export const getPrintLetterheadEffectiveBodyItem = (
   const overlapsBodyHorizontally = (item: PrintLetterheadLayoutItem) =>
     item.x < bodyRight && item.x + item.width > bodyItem.x;
   const bodyBottom = Math.min(100, bodyItem.y + bodyItem.height);
-  const runtimeOverlayBottom = (letterhead.layout?.items || [])
+  const runtimeOverlayBottom = (letterhead?.layout?.items || [])
     .filter((item) => item.visible !== false && item.type !== 'body' && item.type !== 'signatures')
     .filter(overlapsBodyHorizontally)
     .filter((item) => item.y < bodyBottom)

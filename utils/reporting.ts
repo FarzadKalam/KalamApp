@@ -587,7 +587,7 @@ export const getReportableFields = (
 ) =>
   dedupeFields([
     ...getMainReportableFields(mainModuleId, surveyTemplateSnapshot, taskProcessFields),
-    ...getSecondaryReportableFields(mainModuleId, secondaryModuleId, surveyTemplateSnapshot, taskProcessFields),
+    ...getSecondaryReportableFields(mainModuleId, secondaryModuleId, surveyTemplateSnapshot),
   ]);
 
 export const getReportConditionFields = (

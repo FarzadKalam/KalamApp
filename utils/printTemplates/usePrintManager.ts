@@ -210,10 +210,6 @@ const getMeasuredPrintBlockHeight = (measureNode: HTMLElement) => {
   );
 };
 
-const getMeasuredPrintPageOffsets = (bodyMeasure: HTMLElement, pageBodyStepPx: number) => {
-  return getMeasuredPrintPageRanges(bodyMeasure, pageBodyStepPx).map((range) => range.start);
-};
-
 const getMeasuredPrintPageRanges = (bodyMeasure: HTMLElement, pageBodyStepPx: number) => {
   const bodyHeight = getMeasuredPrintBlockHeight(bodyMeasure);
   const anchors = collectPrintPageAnchors(bodyMeasure);

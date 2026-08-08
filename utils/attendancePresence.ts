@@ -135,7 +135,8 @@ const buildAttendancePairing = (
     activeCheckIn = null;
   });
 
-  if (activeCheckIn) incompleteRowIds.push(activeCheckIn.rowId);
+  const remainingCheckIn = activeCheckIn as AttendanceEvent | null;
+  if (remainingCheckIn) incompleteRowIds.push(remainingCheckIn.rowId);
   return { segments, incompleteRowIds };
 };
 

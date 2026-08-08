@@ -2930,7 +2930,7 @@ const HRPage: React.FC = () => {
           attendanceDate: getAttendanceDateValue(raw) || null,
           occurredAt,
           logType,
-          missingLogType: logType === 'check_in' ? 'check_out' : 'check_in',
+          missingLogType: (logType === 'check_in' ? 'check_out' : 'check_in') as 'check_in' | 'check_out',
         };
       })
       .sort((a, b) => (parseDate(b.occurredAt || null)?.valueOf() || 0) - (parseDate(a.occurredAt || null)?.valueOf() || 0));

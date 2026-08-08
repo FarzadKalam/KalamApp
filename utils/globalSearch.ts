@@ -4,6 +4,7 @@ import { getFieldLabelFa } from './fieldLabel';
 import { getRecordTitle } from './recordTitle';
 import { normalizePhoneDigits, normalizePhoneForStorage } from './phoneNumber';
 import { isSaasAdminModuleId, type PermissionMap, type RecordScope } from './permissions';
+import { isWorkflowVirtualField } from './moduleFieldVisibility';
 
 export type GlobalSearchMatchField = {
   key: string;
@@ -187,8 +188,18 @@ const getModuleSearchKeys = (module: ModuleDefinition): string[] => {
 
 const getDisplayKeys = (module: ModuleDefinition, keys: string[], fieldPermissions: Record<string, any>): string[] => {
   const dashboardKeys = module.dashboard?.recentListFields || [];
+  const fieldByKey = new Map(
+    (module.fields || [])
+      .map((field: any) => [String(field?.key || '').trim(), field])
+      .filter(([key]) => Boolean(key)) as Array<[string, any]>
+  );
   return Array.from(new Set(['id', 'created_at', 'updated_at', 'system_code', 'manual_code', ...keys, ...dashboardKeys]))
-    .filter((key) => key && !key.includes('.') && (key === 'id' || key === 'created_at' || key === 'updated_at' || fieldPermissions[key] !== false));
+    .filter((key) => {
+      if (!key || key.includes('.')) return false;
+      if (fieldPermissions[key] === false) return false;
+      const field = fieldByKey.get(String(key));
+      return !field || !isWorkflowVirtualField(field);
+    });
 };
 
 export const buildGlobalSearchModules = (

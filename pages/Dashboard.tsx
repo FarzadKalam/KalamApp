@@ -63,6 +63,7 @@ import { toFaErrorMessage } from '../utils/errorMessageFa';
 import AiSparkleIcon from '../components/ai/AiSparkleIcon';
 import { buildAiRecordModuleOptions } from '../utils/aiRecordCreation';
 import { shouldSubmitComposerOnEnter } from '../utils/composeKeyboard';
+import { isWorkflowVirtualField } from '../utils/moduleFieldVisibility';
 
 type DashboardQuickAction = {
   moduleId: string;
@@ -234,14 +235,24 @@ const getModuleTitle = (moduleId: string) => {
   return MODULES[moduleId]?.titles?.faSingular || MODULES[moduleId]?.titles?.fa || moduleId;
 };
 
+const isSelectableDashboardRecentFieldKey = (module: ModuleDefinition, fieldKey: unknown) => {
+  const key = String(fieldKey || '').trim();
+  if (!key || key.startsWith('__') || key.includes('.') || key.includes('(') || key.includes(')')) return false;
+  if (SYNTHETIC_FIELD_META[key]) return true;
+  const field = module.fields?.find((item: any) => String(item?.key || '').trim() === key);
+  return Boolean(field && !isWorkflowVirtualField(field));
+};
+
 const getRecentFieldKeys = (module: ModuleDefinition) => {
-  const explicit = (module.dashboard?.recentListFields || []).filter(Boolean);
+  const explicit = (module.dashboard?.recentListFields || [])
+    .filter((fieldKey) => isSelectableDashboardRecentFieldKey(module, fieldKey));
   if (explicit.length > 0) {
     return explicit;
   }
 
   return (module.fields || [])
     .filter((field: any) => {
+      if (isWorkflowVirtualField(field)) return false;
       const isHeaderField = field.location === 'header' || String(field.location || '') === 'header';
       return isHeaderField && SIMPLE_RECENT_FIELD_TYPES.has(field.type);
     })
@@ -862,7 +873,8 @@ const loadRecentSection = async (
   const module = MODULES[moduleId];
   if (!module) return null;
 
-  const fieldKeys = Array.from(new Set(['id', ...getRecentFieldKeys(module)]));
+  const recentFieldKeys = getRecentFieldKeys(module);
+  const fieldKeys = Array.from(new Set(['id', ...recentFieldKeys]));
   const selectKeys = Array.from(new Set([...fieldKeys, 'created_at', 'updated_at']));
 
   const scopedSelectKeys = moduleSupportsScopedRecords(moduleId)
@@ -877,7 +889,7 @@ const loadRecentSection = async (
     limit: RECENT_RECORDS_LIMIT + 2,
   });
 
-  const recentFields = getRecentFieldKeys(module)
+  const recentFields = recentFieldKeys
     .map((fieldKey) => getFieldMeta(module, fieldKey))
     .filter(Boolean);
   const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess).slice(0, RECENT_RECORDS_LIMIT);
@@ -888,7 +900,7 @@ const loadRecentSection = async (
       }
     : {};
 
-  const columns = getRecentFieldKeys(module).map((fieldKey) => ({
+  const columns = recentFieldKeys.map((fieldKey) => ({
     title: getFieldMeta(module, fieldKey)?.labels?.fa || fieldKey,
     dataIndex: fieldKey,
     key: fieldKey,

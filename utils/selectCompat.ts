@@ -85,9 +85,9 @@ const applyCacheKeyColumnExclusions = (cacheKey: string, columns: string[]) => {
     rule.columns.forEach((column) => excluded.add(column.toLowerCase()));
   });
   // عنوان و وضعیت گروه‌های بات از جدول‌های تنظیمات بات می‌آیند، نه از جدول
-  // مشتری/تأمین‌کننده. حتی اگر config قدیمی آن‌ها را در lookup وارد کند، نباید
-  // یک relation label ساده با درخواست ستون ناموجود 400 شود.
-  if (/(?:^|:)record-reference:(?:customers|suppliers|employees)(?::|$)/.test(cacheKey)) {
+  // مشتری/تأمین‌کننده/کارمند. هر lookup سبک با cacheKey ماژول‌محور باید این
+  // فیلدهای مجازی را قبل از اولین درخواست حذف کند تا زنجیرهٔ 400 تولید نشود.
+  if (/(?:^|:)(?:customers|suppliers|employees)(?::|$)/.test(cacheKey)) {
     BOT_VIRTUAL_FIELD_KEYS.forEach((column) => excluded.add(column.toLowerCase()));
   }
   if (excluded.size === 0) return columns;

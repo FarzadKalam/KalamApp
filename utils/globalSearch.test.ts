@@ -260,4 +260,31 @@ describe('globalSearch normalization', () => {
       .rejects.toMatchObject({ code: '42601' });
     expect(from).not.toHaveBeenCalled();
   });
+
+  it('does not select virtual bot group fields from stale recent-list metadata', () => {
+    const [customers] = buildGlobalSearchModules({
+      customers: {
+        id: 'customers',
+        table: 'customers',
+        titles: { fa: 'مشتریان' },
+        dashboard: {
+          recentListFields: ['full_name', 'telegram_group_title', 'bale_group_title', 'rubika_group_title'],
+        },
+        fields: [
+          { key: 'full_name', type: FieldType.TEXT, labels: { fa: 'نام' } },
+          { key: 'mobile_1', type: FieldType.PHONE, labels: { fa: 'موبایل' } },
+          { key: 'telegram_group_title', type: FieldType.TEXT, labels: { fa: 'عنوان گروه تلگرام' } },
+          { key: 'bale_group_title', type: FieldType.TEXT, labels: { fa: 'عنوان گروه بله' } },
+          { key: 'rubika_group_title', type: FieldType.TEXT, labels: { fa: 'عنوان گروه روبیکا' } },
+        ],
+      } as any,
+    });
+
+    expect(customers.displayKeys).toContain('full_name');
+    expect(customers.displayKeys).not.toEqual(expect.arrayContaining([
+      'telegram_group_title',
+      'bale_group_title',
+      'rubika_group_title',
+    ]));
+  });
 });

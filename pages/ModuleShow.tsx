@@ -4744,6 +4744,7 @@ const ModuleShow: React.FC = () => {
         },
       });
       if (updateResult.error) throw updateResult.error;
+      const persistedValues = updateResult.payload;
       let allocatedInvoiceIds: string[] = [String(id)];
       if (
         (moduleId === 'invoices' || moduleId === 'purchase_invoices')

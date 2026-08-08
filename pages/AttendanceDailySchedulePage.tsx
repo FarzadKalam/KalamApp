@@ -95,7 +95,9 @@ const AttendanceDailySchedulePage: React.FC = () => {
     window.dispatchEvent(new CustomEvent('erp:breadcrumb', {
       detail: { moduleTitle: 'منابع انسانی', moduleId: 'attendance_daily_schedule', recordName: 'برنامه روزانه حضور' },
     }));
-    return () => window.dispatchEvent(new CustomEvent('erp:breadcrumb', { detail: null }));
+    return () => {
+      window.dispatchEvent(new CustomEvent('erp:breadcrumb', { detail: null }));
+    };
   }, []);
 
   const rows = useMemo(() => {
