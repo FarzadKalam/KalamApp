@@ -53,7 +53,6 @@ const MANUAL_KEEP_SELECTOR = '[style*="page-break-inside: avoid"], [style*="page
 const MIN_ANCHOR_HEIGHT_PX = 4;
 const MIN_LINE_ANCHOR_HEIGHT_PX = 2;
 const MAX_LINE_ANCHORS = 5000;
-const MAX_LINE_RECT_HEIGHT_PX = 96;
 const LINE_BAND_MERGE_TOLERANCE_PX = 3;
 const MIN_SAME_LINE_OVERLAP_RATIO = 0.6;
 const LINE_TOP_SNAP_LOOKBACK_PX = 180;
@@ -255,7 +254,6 @@ export const collectPrintPageAnchors = (root: HTMLElement): PrintPageAnchor[] =>
         if (lineAnchorCount >= MAX_LINE_ANCHORS) return;
         if (!Number.isFinite(rect.top) || !Number.isFinite(rect.bottom)) return;
         if (rect.height < MIN_LINE_ANCHOR_HEIGHT_PX) return;
-        if (rect.height > MAX_LINE_RECT_HEIGHT_PX) return;
         const { top, bottom } = getSafePrintAnchorBounds(
           toLogicalY(rect.top - rootRect.top),
           toLogicalY(rect.bottom - rootRect.top)

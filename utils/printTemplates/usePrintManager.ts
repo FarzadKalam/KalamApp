@@ -564,6 +564,9 @@ export const usePrintManager = ({
   const headerMeasureRef = useRef<HTMLDivElement | null>(null);
   const footerMeasureRef = useRef<HTMLDivElement | null>(null);
   const bodyMeasureRef = useRef<HTMLDivElement | null>(null);
+  // Unlike the hidden source node, this is the exact scaled preview that the
+  // user sees. It is the authoritative measurement for page boundaries.
+  const previewPrintRootRef = useRef<HTMLDivElement | null>(null);
   const buildPrintCardRef = useRef<(pageCountOverride?: number | null) => React.ReactNode>(() => null);
   const reservedPrintWindowRef = useRef<Window | null>(null);
   const preparedPrintPageCountRef = useRef<number | null>(null);
@@ -1118,8 +1121,16 @@ export const usePrintManager = ({
     []
   );
 
+  const getActivePrintBodyMeasurement = useCallback(() => {
+    const visibleBody = previewPrintRootRef.current?.querySelector<HTMLElement>(
+      '.print-template-page .print-template-body-inner'
+    );
+    return visibleBody || bodyMeasureRef.current;
+  }, []);
+
   const measureCurrentCustomTemplatePages = useCallback(() => {
-    if (!selectedTemplateId.startsWith('custom:') || !selectedStoredTemplate || !bodyMeasureRef.current) {
+    const activeBodyMeasure = getActivePrintBodyMeasurement();
+    if (!selectedTemplateId.startsWith('custom:') || !selectedStoredTemplate || !activeBodyMeasure) {
       return null;
     }
 
@@ -1179,7 +1190,7 @@ export const usePrintManager = ({
           });
         })();
     const pageBodyStepPx = getTemplatePageBodyStepPx(pageBodyHeightPx);
-    const measuredBodyHeightPx = getMeasuredPrintBlockHeight(bodyMeasureRef.current);
+    const measuredBodyHeightPx = getMeasuredPrintBlockHeight(activeBodyMeasure);
     measuredBodyContentHeightRef.current = {
       templateId: selectedTemplateId,
       height: measuredBodyHeightPx,
@@ -1187,7 +1198,7 @@ export const usePrintManager = ({
     const pageRanges = buildSmartPrintPageRanges({
       totalHeight: measuredBodyHeightPx,
       pageBodyStepPx,
-      anchors: collectPrintPageAnchors(bodyMeasureRef.current),
+      anchors: collectPrintPageAnchors(activeBodyMeasure),
     });
     const pageCount = Math.max(1, pageRanges.length);
 
@@ -1205,6 +1216,7 @@ export const usePrintManager = ({
   }, [
     measuredSectionHeights.footer,
     measuredSectionHeights.header,
+    getActivePrintBodyMeasurement,
     selectedTemplateId,
     selectedStoredTemplate,
     selectedOrgLetterhead,
@@ -3152,7 +3164,7 @@ export const usePrintManager = ({
     let r1 = 0;
     let r2 = 0;
     const measure = () => {
-      const bodyMeasure = bodyMeasureRef.current;
+      const bodyMeasure = getActivePrintBodyMeasurement();
       if (!bodyMeasure) return;
 
       const metrics = getPaperSizeMetrics(
@@ -3253,11 +3265,12 @@ export const usePrintManager = ({
       });
     }
 
-    const measurementNodes = [
+    const measurementNodes = Array.from(new Set([
+      getActivePrintBodyMeasurement(),
       bodyMeasureRef.current,
       headerMeasureRef.current,
       footerMeasureRef.current,
-    ].filter((node): node is HTMLDivElement => node !== null);
+    ].filter((node): node is HTMLElement => node !== null)));
 
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined' && measurementNodes.length > 0) {
@@ -3310,6 +3323,7 @@ export const usePrintManager = ({
     measuredSectionHeights.footer,
     measuredSectionHeights.header,
     selectedStoredTemplate,
+    getActivePrintBodyMeasurement,
     renderedCustomTemplate?.contentHtml,
     renderedCustomTemplate?.footerHtml,
     renderedCustomTemplate?.headerHtml,
@@ -3365,8 +3379,9 @@ export const usePrintManager = ({
           attachment: Number(linkedAttachmentCount || 0) > 0 ? `پیوست: ${toPersianNumber(Number(linkedAttachmentCount || 0))}` : '',
           qrValue: printQrValue,
         });
-        const measuredCurrentPageRanges = bodyMeasureRef.current
-          ? getMeasuredPrintPageRanges(bodyMeasureRef.current, pageBodyStepPx)
+        const activeBodyMeasure = getActivePrintBodyMeasurement();
+        const measuredCurrentPageRanges = activeBodyMeasure
+          ? getMeasuredPrintPageRanges(activeBodyMeasure, pageBodyStepPx)
           : [];
         const measuredCurrentPageCount = measuredCurrentPageRanges.length;
         const effectivePageCount = Math.max(
@@ -3395,6 +3410,7 @@ export const usePrintManager = ({
           {
             className: 'invoice-custom-print-shell',
             key: `print-letterhead-preview-${previewRevision}`,
+            ref: shouldRenderMeasurementNodes ? previewPrintRootRef : undefined,
             style: {
               ...paper,
               background: '#fff',
@@ -3652,8 +3668,9 @@ export const usePrintManager = ({
         );
       }
 
-      const measuredCurrentPageRanges = bodyMeasureRef.current
-        ? getMeasuredPrintPageRanges(bodyMeasureRef.current, pageBodyStepPx)
+      const activeBodyMeasure = getActivePrintBodyMeasurement();
+      const measuredCurrentPageRanges = activeBodyMeasure
+        ? getMeasuredPrintPageRanges(activeBodyMeasure, pageBodyStepPx)
         : [];
       const measuredCurrentPageCount = measuredCurrentPageRanges.length;
       const effectivePageCount = Math.max(
@@ -3676,8 +3693,8 @@ export const usePrintManager = ({
           end: (index + 1) * pageBodyStepPx,
         }
       );
-      const measuredBodyHeightPx = bodyMeasureRef.current
-        ? getMeasuredPrintBlockHeight(bodyMeasureRef.current)
+      const measuredBodyHeightPx = activeBodyMeasure
+        ? getMeasuredPrintBlockHeight(activeBodyMeasure)
         : measuredBodyContentHeightRef.current?.templateId === selectedTemplateId
           ? measuredBodyContentHeightRef.current.height
           : null;
@@ -3687,6 +3704,7 @@ export const usePrintManager = ({
         {
           className: 'invoice-custom-print-shell',
           key: `print-template-preview-${previewRevision}`,
+          ref: shouldRenderMeasurementNodes ? previewPrintRootRef : undefined,
           style: {
             ...paper,
             background: '#fff',
@@ -4082,6 +4100,7 @@ export const usePrintManager = ({
     printSignatureSectionHeightPx,
     selectedOrgLetterhead,
     formatPrintValue,
+    getActivePrintBodyMeasurement,
   ]);
 
   const renderPrintCard = useCallback(() => buildPrintCard(), [buildPrintCard]);

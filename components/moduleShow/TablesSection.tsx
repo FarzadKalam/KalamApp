@@ -10,6 +10,7 @@ import { normalizeProcessTargetModuleIds } from '../../utils/processTargets';
 import { syncProcessTemplateStages as syncProcessTemplateStagesShared } from '../../utils/processTemplateStages';
 import type { ProcessRuntimeSnapshot } from '../../utils/processRuntimeSnapshot';
 import { persistProcessDraftField } from '../../utils/processDraftPersistence';
+import { fetchPayrollSlipServerSummary } from '../../utils/payrollSlipSummary';
 
 const ProductionStagesField = React.lazy(() => import('../../components/ProductionStagesField'));
 const ProcessCardsV2RuntimeBlock = React.lazy(() => import('../../components/processes/ProcessCardsV2RuntimeBlock'));
@@ -126,6 +127,15 @@ const TablesSection: React.FC<TablesSectionProps> = ({
       setSummaryRefreshing(false);
     }
   }, [data?.id, module?.id, onDataUpdate]);
+  const refreshPayrollSlipSummary = useCallback(async () => {
+    if (!onDataUpdate || !data?.id || String(module?.id || '') !== 'payroll_slips') return;
+    try {
+      const latest = await fetchPayrollSlipServerSummary(supabase, String(data.id));
+      onDataUpdate(latest);
+    } catch (err) {
+      console.warn('Payroll summary refresh failed:', err);
+    }
+  }, [data?.id, module?.id, onDataUpdate]);
   const handleBlockSaveSuccess = useCallback((blockId: string, newData: any[]) => {
     onDataUpdate?.({ [blockId]: newData });
     const isInvoiceModule = ['invoices', 'purchase_invoices'].includes(String(module?.id || ''));
@@ -133,7 +143,10 @@ const TablesSection: React.FC<TablesSectionProps> = ({
     if (isInvoiceModule && isInvoiceFinancialBlock) {
       void refreshInvoiceSummary();
     }
-  }, [module?.id, onDataUpdate, refreshInvoiceSummary]);
+    if (String(module?.id || '') === 'payroll_slips' && (blockId === 'lines' || blockId === 'payments')) {
+      void refreshPayrollSlipSummary();
+    }
+  }, [module?.id, onDataUpdate, refreshInvoiceSummary, refreshPayrollSlipSummary]);
   const isProductionOrder = module.id === 'production_orders';
   const productionLocked = isProductionOrder && ['in_progress', 'completed'].includes(data?.status);
   const processStageFieldKeys = useMemo(() => new Set([

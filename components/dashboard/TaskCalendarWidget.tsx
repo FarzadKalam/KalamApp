@@ -422,6 +422,7 @@ const TaskCalendarWidget: React.FC<TaskCalendarWidgetProps> = ({ prefetchedTasks
             dateFieldKey={selectedDateField}
             onDateFieldChange={(fieldKey) => setSelectedDateField(String(fieldKey || 'due_date'))}
             navigate={handleCalendarNavigate}
+            fieldOptions={taskTypeField?.key ? { [taskTypeField.key]: allTaskTypeOptions } : {}}
           />
         </div>
       )}

@@ -121,6 +121,18 @@ export const isSameHrRange = (left: [Dayjs, Dayjs], right: [Dayjs, Dayjs]) => {
   return leftFrom === rightFrom && leftTo === rightTo;
 };
 
+/**
+ * بازهٔ فعلی را یک ماه جابه‌جا می‌کند.
+ * بازه‌های سفارشی نیز بر پایهٔ همان تاریخ‌های انتخاب‌شده جابه‌جا می‌شوند.
+ */
+export const shiftHrRangeByMonths = (
+  range: [Dayjs, Dayjs],
+  monthOffset: number,
+): [Dayjs, Dayjs] => [
+  range[0].add(monthOffset, 'month').startOf('day'),
+  range[1].add(monthOffset, 'month').endOf('day'),
+];
+
 export const parseHrEmployeeFilterParam = (rawValue: string | null): { hasValue: boolean; ids: string[] } => {
   if (rawValue === null) return { hasValue: false, ids: [] };
   const trimmed = rawValue.trim();

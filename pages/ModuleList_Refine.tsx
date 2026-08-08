@@ -3878,8 +3878,10 @@ export const ModuleListRefine: React.FC<{
       setKanbanVisibleCounts({});
     }
 
+    // فیلترهای جدول منبع مشترک همه نماها هستند؛ قبل از تغییر نما دوباره اعمال می‌شوند.
+    applyCombinedFilters(viewFiltersState, searchTerm, columnFilters, false);
     setViewMode(nextMode);
-  }, [current, pageSize, setCurrent, setPageSize, viewMode]);
+  }, [columnFilters, current, pageSize, searchTerm, setCurrent, setPageSize, viewFiltersState, viewMode]);
 
   const handleMobileViewModeSelect = useCallback((nextMode: ViewMode) => {
     handleViewModeChange(nextMode);
@@ -4246,6 +4248,13 @@ export const ModuleListRefine: React.FC<{
         p_relation_fields: relationReferences,
       });
       if (relationError) throw relationError;
+
+      const { error: mergeActivityError } = await supabase.rpc('log_module_record_merge', {
+        p_module_id: resolvedModuleId,
+        p_survivor_id: meta.survivorId,
+        p_duplicate_ids: meta.duplicateIds,
+      });
+      if (mergeActivityError) throw mergeActivityError;
 
       const { error: updateError } = await supabase
         .from(moduleConfig.table)
@@ -5301,6 +5310,8 @@ export const ModuleListRefine: React.FC<{
                       dateFieldKey={calendarDateField || availableCalendarFields[0]?.key || ""}
                       onDateFieldChange={setCalendarDateField}
                       navigate={moduleListNavigate}
+                      canViewField={canViewField}
+                      fieldOptions={{ ...dynamicOptions, ...effectiveRelationOptions }}
                     />
                   </React.Suspense>
                 </div>

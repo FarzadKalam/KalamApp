@@ -227,7 +227,6 @@ import {
   type ProcessGraphCloneResult,
 } from '../utils/processGraphCopy';
 import { syncProcessTemplateStages } from '../utils/processTemplateStages';
-import { insertRecordActivity } from '../utils/recordActivity';
 
 const InstructionQuickCreateModal = React.lazy(() => import('./instructions/InstructionQuickCreateModal'));
 const TaskHandoverModal = React.lazy(() => import('./production/TaskHandoverModal'));
@@ -6214,39 +6213,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           draftLocalRef.current = refreshed;
           setDraftLocal(refreshed);
         }
-        const previousSignature = JSON.stringify(previousStages || []);
-        const nextSignature = JSON.stringify(persistedStages || []);
-        if (previousSignature !== nextSignature) {
-          void (async () => {
-            try {
-              const session = await fetchSessionBootstrap(supabase);
-              const changedStageNames = (persistedStages || [])
-                .map((stage: any) => String(stage?.name || stage?.stage_name || stage?.title || '').trim())
-                .filter(Boolean)
-                .slice(0, 3);
-              await insertRecordActivity({
-                supabase,
-                moduleId: 'process_templates',
-                recordId: String(recordId),
-                action: 'process_updated',
-                fieldName: 'template_stages_preview',
-                fieldLabel: 'مراحل الگو',
-                oldValue: null,
-                newValue: changedStageNames.join('، ') || 'مراحل فرآیند',
-                userId: session.user?.id || null,
-                recordTitle: null,
-                metadata: {
-                  source: 'process_v2_stage_editor',
-                  changeKind: 'process_v2_stage_saved',
-                  summary: 'تنظیمات مرحله‌های فرآیند به‌روزرسانی شد',
-                  stageCount: persistedStages.length,
-                },
-              });
-            } catch (error) {
-              console.warn('Process template stage changelog failed:', error);
-            }
-          })();
-        }
+        // Stage writes are audited by the central PostgreSQL trigger.  Do not
+        // create a client-only summary here: it would miss server-side paths
+        // and would duplicate the detailed stage events.
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent('kalamapp:process-template-stages-saved', {
             detail: {

@@ -33,6 +33,7 @@ export const tasksModule: ModuleDefinition = {
       title: 'فعالیت های انجام نشده من',
     },
   },
+  calendar: { summaryFieldKeys: ['task_type'] },
   relationDisplay: {
     labelTemplate: '{{name}}',
     searchFields: ['name', 'system_code', 'id'],

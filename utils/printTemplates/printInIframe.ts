@@ -1,5 +1,6 @@
 import { printStyles } from './styles';
 import { fitCompactPrintCells } from './fitCompactPrintCells';
+import { repaginateStaticCustomPrintDocument } from './staticPrintPagination';
 
 interface PrintInIframeOptions {
   pageSize?: string;
@@ -194,6 +195,10 @@ export const printInIframe = async (options: PrintInIframeOptions) => {
     await waitForImages(root);
     await waitForPaint();
     fitCompactPrintCells(root);
+    // The static print root has different dimensions from the preview (no
+    // zoom/container). Recalculate here so a line can never fall beneath the
+    // repeated signature/footer of a cloned page.
+    repaginateStaticCustomPrintDocument(root);
     await delay(PRINT_SETTLE_DELAY_MS);
     await waitForPaint();
 

@@ -236,6 +236,7 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
   titles: { fa: 'فاکتورهای خرید', faSingular: 'فاکتور خرید', en: 'Purchase Invoices' },
   nature: ModuleNature.INVOICE,
   table: 'purchase_invoices',
+  calendar: { summaryFieldKeys: ['total_invoice_amount'] },
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
   permanentFilters: [{ field: 'taxpayer_invoice_subject', operator: 'ne', value: '4' }],

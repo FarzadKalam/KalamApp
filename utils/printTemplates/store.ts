@@ -1694,24 +1694,31 @@ const buildEmployeeContractPrintTemplate = (now: string): StoredPrintTemplate =>
   updatedAt: now,
 });
 
-const buildPayrollSlipPrintTemplate = (now: string): StoredPrintTemplate => ({
-  id: 'default_payroll_slip_formal_a4',
+const buildPayrollSlipPrintTemplate = (
+  now: string,
+  orientation: 'portrait' | 'landscape' = 'portrait'
+): StoredPrintTemplate => ({
+  id: orientation === 'landscape'
+    ? 'default_payroll_slip_formal_a4_landscape'
+    : 'default_payroll_slip_formal_a4',
   moduleId: 'payroll_slips',
   scope: 'record',
-  title: 'فیش حقوقی رسمی A4',
-  description: 'قالب رسمی فیش حقوقی با ردیف‌ها و پرداخت‌ها',
+  title: orientation === 'landscape' ? 'فیش حقوقی رسمی A4 افقی' : 'فیش حقوقی رسمی A4',
+  description: orientation === 'landscape'
+    ? 'قالب رسمی افقی فیش حقوقی با فضای بیشتر برای ردیف‌ها و پرداخت‌ها'
+    : 'قالب رسمی فیش حقوقی با ردیف‌ها و پرداخت‌ها',
   paperSize: 'A4',
-  orientation: 'portrait',
+  orientation,
   isActive: true,
   isSystem: true,
   showHeader: true,
   showFooter: true,
-  headerHeight: 84,
-  footerHeight: 84,
-  pageMarginTop: 10,
-  pageMarginRight: 10,
-  pageMarginBottom: 10,
-  pageMarginLeft: 10,
+  headerHeight: orientation === 'landscape' ? 72 : 84,
+  footerHeight: orientation === 'landscape' ? 72 : 84,
+  pageMarginTop: orientation === 'landscape' ? 8 : 10,
+  pageMarginRight: orientation === 'landscape' ? 8 : 10,
+  pageMarginBottom: orientation === 'landscape' ? 8 : 10,
+  pageMarginLeft: orientation === 'landscape' ? 8 : 10,
   headerHtml: `
 <table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
   <tbody>
@@ -1809,7 +1816,7 @@ export const buildDefaultTemplatesForModule = (
           : moduleId === 'employee_contracts'
             ? [buildEmployeeContractPrintTemplate(now)]
             : moduleId === 'payroll_slips'
-              ? [buildPayrollSlipPrintTemplate(now)]
+              ? [buildPayrollSlipPrintTemplate(now), buildPayrollSlipPrintTemplate(now, 'landscape')]
               : []
   );
 

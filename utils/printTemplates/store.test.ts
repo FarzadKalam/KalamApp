@@ -142,7 +142,8 @@ describe('print template store grouping', () => {
   });
 
   it('uses related employee identity fields in the formal payroll slip template', () => {
-    const template = buildDefaultTemplatesForModule('payroll_slips')
+    const templates = buildDefaultTemplatesForModule('payroll_slips');
+    const template = templates
       .find((item) => item.id === 'default_payroll_slip_formal_a4');
     const variables = getPrintTemplateVariables('payroll_slips');
 
@@ -153,6 +154,13 @@ describe('print template store grouping', () => {
     expect(template?.contentHtml).toContain('{{record.employee_children_count}}');
     expect(template?.contentHtml).toContain('{{record.employee_insurance_number}}');
     expect(variables.find((item) => item.value === 'employee.insurance_number')?.group).toBe('اطلاعات کارمند');
+    expect(templates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'default_payroll_slip_formal_a4_landscape',
+        orientation: 'landscape',
+        paperSize: 'A4',
+      }),
+    ]));
   });
 
   it('persists only custom templates because system templates are generated at runtime', () => {

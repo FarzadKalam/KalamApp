@@ -211,6 +211,64 @@ describe('commissionRuntime', () => {
     expect(rows[0]?.selected_amount).toBe(20000);
   });
 
+  it('splits one invoice commission across separate receipts and a later cleared cheque', () => {
+    const invoice = {
+      id: 'inv-three-parts',
+      status: 'final',
+      invoice_date: '2026-04-10',
+      total_invoice_amount: 1000000,
+      assignee_id: 'profile-1',
+      payments: [
+        { amount: 500000, status: 'settled', payment_type: 'cash', date: '2026-04-15' },
+        { amount: 250000, status: 'settled', payment_type: 'cash', date: '2026-06-12' },
+        { amount: 250000, status: 'received', payment_type: 'cheque', cheque_status: 'cleared', date: '2026-06-15', cheque_cleared_at: '2026-07-08' },
+      ],
+      invoiceItems: [{ line_total: 1000000, commission_percentage: 10 }],
+    };
+    const baseArgs = {
+      invoices: [invoice],
+      employeeIdByAssigneeId: { 'profile-1': 'employee-1' },
+      employeeDefaultCommissionByEmployeeId: { 'employee-1': 0 },
+      basis: 'prepaid_and_settled_invoices' as const,
+      percentMode: 'product_default' as const,
+    };
+
+    const aprilRows = buildCommissionDraftRows({
+      ...baseArgs,
+      periodStart: '2026-04-01',
+      periodEnd: '2026-04-30',
+    });
+    expect(aprilRows[0]?.selected_amount).toBe(50000);
+
+    const juneRows = buildCommissionDraftRows({
+      ...baseArgs,
+      periodStart: '2026-06-01',
+      periodEnd: '2026-06-30',
+      postedAllocations: [{
+        basis: 'prepaid_and_settled_invoices',
+        percent_mode: 'product_default',
+        invoice_id: 'inv-three-parts',
+        invoice_item_key: 'inv-three-parts:0:item',
+        posted_amount: 50000,
+      }],
+    });
+    expect(juneRows[0]?.selected_amount).toBe(25000);
+
+    const julyRows = buildCommissionDraftRows({
+      ...baseArgs,
+      periodStart: '2026-07-01',
+      periodEnd: '2026-07-31',
+      postedAllocations: [{
+        basis: 'prepaid_and_settled_invoices',
+        percent_mode: 'product_default',
+        invoice_id: 'inv-three-parts',
+        invoice_item_key: 'inv-three-parts:0:item',
+        posted_amount: 75000,
+      }],
+    });
+    expect(julyRows[0]?.selected_amount).toBe(25000);
+  });
+
   it('does not show an already paid item again when the calculation basis changes', () => {
     const rows = buildCommissionDraftRows({
       invoices: [{

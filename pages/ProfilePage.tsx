@@ -9,7 +9,8 @@ import {
     CloseCircleOutlined, IdcardOutlined, SafetyCertificateOutlined, EditOutlined, UploadOutlined
 } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
-import { getActivityActionLabel, getActivityFieldLabel, getModuleFaTitle, sanitizeActivityText } from '../utils/recordActivity';
+import { getModuleFaTitle, sanitizeActivityText } from '../utils/recordActivity';
+import { getRecordActivityPresentation } from '../utils/recordActivityPresentation';
 import DateObject from 'react-date-object';
 import persian from 'react-date-object/calendars/persian';
 import persian_fa from 'react-date-object/locales/persian_fa';
@@ -141,21 +142,18 @@ const ProfilePage: React.FC = () => {
         }));
 
         const changeItems = (changelogRows || []).map((row: any) => {
-            const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
             const moduleTitle = getModuleFaTitle(String(row.module_id || ''));
-            const actionLabel = getActivityActionLabel(String(row.action || ''));
-            const fieldLabel = getActivityFieldLabel(String(row.module_id || ''), String(metadata?.columnKey || row.field_name || ''), String(row.field_label || ''));
+            const presentation = getRecordActivityPresentation(row);
             const detailParts = [
                 moduleTitle,
-                metadata?.summary ? sanitizeActivityText(metadata.summary, 'تغییر ثبت شد') : '',
+                presentation.summary,
                 row.record_title ? `رکورد: ${sanitizeActivityText(row.record_title, 'رکورد')}` : '',
-                fieldLabel ? `فیلد: ${fieldLabel}` : '',
             ];
             return {
                 id: `change:${row.id}`,
                 type: 'change',
                 created_at: row.created_at,
-                title: actionLabel,
+                title: presentation.actionLabel,
                 detail: detailParts.filter(Boolean).join(' - '),
             };
         });
@@ -182,7 +180,7 @@ const ProfilePage: React.FC = () => {
                     .limit(20),
                 supabase
                     .from('changelogs')
-                    .select('id, module_id, action, record_title, field_name, field_label, metadata, created_at')
+                    .select('id, module_id, action, record_title, field_name, field_label, old_value, new_value, metadata, created_at')
                     .eq('user_id', targetUserId)
                     .order('created_at', { ascending: false })
                     .limit(20),

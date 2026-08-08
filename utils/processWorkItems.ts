@@ -10,6 +10,7 @@ export type ProcessWorkItem = {
   templateId: string | null;
   templateName: string | null;
   updatedAt: string | null;
+  processStatus: 'in_progress' | 'completed';
   reason: 'task' | 'draft_stage' | 'record' | 'linked_record';
   processLinks: Record<string, string>;
 };
@@ -133,6 +134,7 @@ const isMissingProcessWorkItemsRpcError = (error: any) => {
     || code === 'PGRST204'
     || message.includes('get_process_work_items_v1')
     || message.includes('get_process_work_items_v2')
+    || message.includes('get_process_work_items_v3')
     || message.includes('could not find the function')
   );
 };
@@ -173,6 +175,7 @@ const normalizeProcessWorkItem = (row: any): ProcessWorkItem | null => {
     templateId,
     templateName: normalizeText(row?.templateName) || null,
     updatedAt: normalizeText(row?.updatedAt) || null,
+    processStatus: normalizeText(row?.processStatus) === 'completed' ? 'completed' : 'in_progress',
     reason: ['task', 'draft_stage', 'record', 'linked_record'].includes(reason) ? reason : 'record',
     processLinks: normalizeProcessWorkItemLinks(row?.processLinks),
   };
@@ -181,30 +184,20 @@ const normalizeProcessWorkItem = (row: any): ProcessWorkItem | null => {
 export const fetchProcessWorkItems = async (
   supabaseClient: any,
   access: Pick<CurrentUserRecordAccessContext, 'permissions'> | null | undefined,
-  options?: { limit?: number }
+  options?: { limit?: number; status?: 'all' | 'in_progress' | 'completed' }
 ): Promise<ProcessWorkItem[] | null> => {
   const limit = Math.max(1, Math.min(Number(options?.limit || 15), 80));
   const moduleSpecs = buildProcessWorkItemModuleSpecs(access);
-  const { data, error } = await supabaseClient.rpc('get_process_work_items_v2', {
+  const { data, error } = await supabaseClient.rpc('get_process_work_items_v3', {
     p_module_specs: moduleSpecs,
     p_limit: limit,
+    p_status: options?.status || 'all',
   });
 
   if (error) {
     if (isMissingProcessWorkItemsRpcError(error)) {
-      const fallback = await supabaseClient.rpc('get_process_work_items_v1', {
-        p_module_specs: moduleSpecs,
-        p_limit: limit,
-      });
-      if (fallback.error) {
-        if (isMissingProcessWorkItemsRpcError(fallback.error)) return null;
-        throw fallback.error;
-      }
-      return dedupeProcessWorkItems(
-        (Array.isArray(fallback.data) ? fallback.data : [])
-          .map(normalizeProcessWorkItem)
-          .filter(Boolean) as ProcessWorkItem[]
-      );
+      // نمایش ندادن داده تا اجرای migration، از نمایش فرآیند نامرتبط با کاربر امن‌تر است.
+      return [];
     }
     throw error;
   }

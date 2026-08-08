@@ -6,6 +6,7 @@ import {
   persistHrRange,
   readHrRangeFromSearch,
   resolveHrDashboardHref,
+  shiftHrRangeByMonths,
   shouldDeferHrFilterUrlSync,
 } from './hrFilters';
 
@@ -45,5 +46,13 @@ describe('hrFilters', () => {
     persistHrRange([dayjs('2026-06-10'), dayjs('2026-06-20')]);
     persistHrEmployees(['emp-1', 'emp-2']);
     expect(resolveHrDashboardHref()).toBe('/hr?from=2026-06-10&to=2026-06-20&employees=emp-1%2Cemp-2');
+  });
+
+  it('جابجایی ماه، مرزهای بازهٔ انتخاب‌شده را یک ماه منتقل می‌کند', () => {
+    const range: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs('2026-06-10'), dayjs('2026-06-20')];
+    const shifted = shiftHrRangeByMonths(range, -1);
+
+    expect(shifted[0].format('YYYY-MM-DD')).toBe('2026-05-10');
+    expect(shifted[1].format('YYYY-MM-DD')).toBe('2026-05-20');
   });
 });

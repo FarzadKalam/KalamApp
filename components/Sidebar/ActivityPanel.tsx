@@ -30,12 +30,8 @@ import {
 } from '../../utils/recordDisplayFormatter';
 import { NOTES_UPDATED_EVENT } from '../../utils/aiAssistantEvents';
 import { insertNotesWithFallback, sendNoteSmsNotifications, sendInvoiceReplySmsToCustomer } from '../../utils/noteDispatch';
-import {
-  getActivityActionLabel,
-  getActivityFieldLabel,
-  logAndTouchRecord,
-  sanitizeActivityText,
-} from '../../utils/recordActivity';
+import { logAndTouchRecord, sanitizeActivityText } from '../../utils/recordActivity';
+import { getRecordActivityPresentation } from '../../utils/recordActivityPresentation';
 
 interface ActivityPanelProps {
   moduleId: string;
@@ -152,7 +148,13 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
 
   const getLogFieldDef = (log: any) => {
     const metadata = log?.metadata && typeof log.metadata === 'object' ? log.metadata : {};
-    return getCustomFieldDefFromMetadata(metadata, log?.field_name) || getFieldDef(log?.field_name);
+    const customField = getCustomFieldDefFromMetadata(metadata, log?.field_name);
+    if (customField) return customField;
+    const standardField = getFieldDef(log?.field_name);
+    if (standardField && Array.isArray(metadata?.options) && metadata.options.length > 0) {
+      return { ...standardField, options: metadata.options };
+    }
+    return standardField;
   };
 
   const getTableDef = (blockId?: string) => (
@@ -984,19 +986,10 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                   const metadata = log?.metadata && typeof log.metadata === 'object' ? log.metadata : {};
                   const tableDef = getTableDef(log.field_name);
                   const columnDef = metadata?.columnKey ? getTableColumnDef(log.field_name, metadata.columnKey) : null;
-                  const fieldTitle = sanitizeActivityText(
-                    metadata?.columnLabel
-                    || log.field_label
-                    || getActivityFieldLabel(moduleId, log.field_name, log.field_label)
-                  , 'فیلد نامشخص');
+                  const presentation = getRecordActivityPresentation(log);
                   const fieldDef = columnDef || getLogFieldDef(log);
                   const actor = log.user_name || authorNameMap[log.user_id] || 'سیستم';
-                  const summary = sanitizeActivityText(
-                    metadata?.summary
-                    || (tableDef
-                      ? `تغییری در جدول «${sanitizeActivityText(log.field_label || metadata?.blockLabel || 'جدول', 'جدول')}» ثبت شد`
-                      : `«${fieldTitle}» تغییر کرد`)
-                  , 'تغییر ثبت شد');
+                  const summary = presentation.summary;
                   const isTableRowAdded = action === 'table_row_added';
                   const isTableRowRemoved = action === 'table_row_removed';
                   const isTableCellUpdated = action === 'table_cell_updated';
@@ -1018,7 +1011,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                                 color: getActionColor(action),
                               }}
                             >
-                              {getActivityActionLabel(action)}
+                              {presentation.actionLabel}
                             </Tag>
                             <span className="text-[10px] text-gray-400">{formatPersianDate(log.created_at, 'HH:mm - YYYY/MM/DD')}</span>
                           </div>

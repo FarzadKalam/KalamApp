@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calculatePayrollSlipTotals, sumPayrollSlipLines, sumPayrollSlipPayments } from './payrollSlipTotals';
+import { calculatePayrollSlipLineBreakdown, calculatePayrollSlipTotals, sumPayrollSlipLines, sumPayrollSlipPayments } from './payrollSlipTotals';
 
 describe('payrollSlipTotals', () => {
   it('sums payroll lines with signed deductions', () => {
@@ -15,6 +15,18 @@ describe('payrollSlipTotals', () => {
       { line_type: 'BONUS', amount: 500000 },
       { line_type: 'DEDUCTION', amount: 125000 },
     ])).toBe(375000);
+  });
+
+  it('keeps earnings, deductions and gross total aligned for the payroll table', () => {
+    expect(calculatePayrollSlipLineBreakdown([
+      { line_type: 'earning', amount: 1000000 },
+      { line_type: 'bonus', amount: 250000 },
+      { line_type: 'deduction', amount: 150000 },
+    ])).toEqual({
+      earningsTotal: 1250000,
+      deductionTotal: 150000,
+      grossAmount: 1100000,
+    });
   });
 
   it('counts only included payment statuses when present', () => {

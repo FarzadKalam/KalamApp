@@ -8,6 +8,7 @@ import {
   Input,
   InputNumber,
   Popover,
+  Radio,
   Select,
   Space,
   Spin,
@@ -80,6 +81,9 @@ type DayKey = (typeof DAYS)[number]['key'];
 type ShiftKey = (typeof SHIFTS)[number]['key'];
 type StatusKey = 'draft' | 'active' | 'expired';
 type PageMode = 'view' | 'edit';
+type CopyScope = 'day' | 'week';
+type CopyDestination = 'single_date' | 'week_days' | 'specific_week' | 'next_week';
+type CopyPopoverState = { columnKey: string; sourceDateKey: string; sourceWeekKey: string };
 
 type ShiftPlan = { start: string | null; end: string | null };
 type WeeklyPlan = Record<DayKey, Record<ShiftKey, ShiftPlan>>;
@@ -271,8 +275,12 @@ const WorkSchedulesPage: React.FC = () => {
   const [nameFilter, setNameFilter] = useState('');
   const [teamFilter, setTeamFilter] = useState<string | undefined>();
   const [departmentFilter, setDepartmentFilter] = useState<string | undefined>();
-  const [copyPopover, setCopyPopover] = useState<{ columnKey: string; weekKey: string } | null>(null);
-  const [copyTargets, setCopyTargets] = useState<string[]>([]);
+  const [copyPopover, setCopyPopover] = useState<CopyPopoverState | null>(null);
+  const [copyScope, setCopyScope] = useState<CopyScope>('day');
+  const [copyDestination, setCopyDestination] = useState<CopyDestination>('single_date');
+  const [copyTargetDateKey, setCopyTargetDateKey] = useState<string | undefined>();
+  const [copyTargetDateKeys, setCopyTargetDateKeys] = useState<string[]>([]);
+  const [copyTargetWeekKey, setCopyTargetWeekKey] = useState<string | undefined>();
   const [officialHolidaySummaries, setOfficialHolidaySummaries] = useState<HolidayDaySummary[]>([]);
   const [officialHolidaysLoading, setOfficialHolidaysLoading] = useState(false);
   const [notificationSchedule, setNotificationSchedule] = useState<WorkScheduleNotificationConfig>(createDefaultWorkScheduleNotificationConfig);
@@ -488,36 +496,77 @@ const WorkSchedulesPage: React.FC = () => {
     }));
   };
 
-  const applyCopyWeek = (columnKey: string, sourceWeekKey: string) => {
-    if (!copyTargets.length) {
-      message.info('حداقل یک روز را انتخاب کن.');
-      return;
+  const resetCopySettings = () => {
+    setCopyScope('day');
+    setCopyDestination('single_date');
+    setCopyTargetDateKey(undefined);
+    setCopyTargetDateKeys([]);
+    setCopyTargetWeekKey(undefined);
+  };
+
+  const applyCopy = () => {
+    if (!copyPopover) return;
+
+    const sourceDate = calendarDates.find((date) => dateKeyFromDate(date) === copyPopover.sourceDateKey);
+    const sourceWeek = calendarWeeks.find((week) => week.key === copyPopover.sourceWeekKey);
+    if (!sourceDate || !sourceWeek) return;
+
+    const sourceWeekIndex = calendarWeeks.findIndex((week) => week.key === sourceWeek.key);
+    const nextWeek = sourceWeekIndex >= 0 ? calendarWeeks[sourceWeekIndex + 1] : undefined;
+    let targetDates: Date[] = [];
+    let targetWeek: { key: string; dates: Date[] } | undefined;
+
+    if (copyDestination === 'single_date') {
+      const targetDate = calendarDates.find((date) => dateKeyFromDate(date) === copyTargetDateKey);
+      if (!targetDate || dateKeyFromDate(targetDate) === copyPopover.sourceDateKey) {
+        message.info('یک روز دیگر از همین برنامه را انتخاب کن.');
+        return;
+      }
+      targetDates = [targetDate];
+    } else if (copyDestination === 'week_days') {
+      targetDates = sourceWeek.dates.filter((date) => copyTargetDateKeys.includes(dateKeyFromDate(date)) && dateKeyFromDate(date) !== copyPopover.sourceDateKey);
+      if (!targetDates.length) {
+        message.info('حداقل یک روز از همین هفته را انتخاب کن.');
+        return;
+      }
+    } else {
+      targetWeek = copyDestination === 'next_week'
+        ? nextWeek
+        : calendarWeeks.find((week) => week.key === copyTargetWeekKey);
+      if (!targetWeek) {
+        message.info(copyDestination === 'next_week' ? 'هفته بعدی در بازه این برنامه وجود ندارد.' : 'یک هفته مقصد را انتخاب کن.');
+        return;
+      }
     }
 
-    const sourceWeek = calendarWeeks.find((week) => week.key === sourceWeekKey);
-    if (!sourceWeek) return;
-    updateColumn(columnKey, (column) => {
+    updateColumn(copyPopover.columnKey, (column) => {
       const nextMonthlyPlan = { ...(column.monthlyPlan || {}) };
-      copyTargets.forEach((targetWeekKey) => {
-        const targetWeek = calendarWeeks.find((week) => week.key === targetWeekKey);
-        if (!targetWeek) return;
-        sourceWeek.dates.forEach((sourceDate) => {
-          const sourceOffset = (sourceDate.getDay() + 1) % 7;
-          const targetDate = targetWeek.dates.find((date) => ((date.getDay() + 1) % 7) === sourceOffset);
-          if (!targetDate) return;
-          const source = getDatePlan(column, sourceDate);
-          nextMonthlyPlan[dateKeyFromDate(targetDate)] = {
-            shift1: { ...source.shift1 },
-            shift2: { ...source.shift2 },
-          };
+      const copyDayPlan = (from: Date, to: Date) => {
+        const sourcePlan = getDatePlan(column, from);
+        nextMonthlyPlan[dateKeyFromDate(to)] = {
+          shift1: { ...sourcePlan.shift1 },
+          shift2: { ...sourcePlan.shift2 },
+        };
+      };
+
+      if (copyScope === 'day') {
+        const matchingWeekdayDates = targetWeek
+          ? targetWeek.dates.filter((date) => dayKeyFromDate(date) === dayKeyFromDate(sourceDate))
+          : targetDates;
+        matchingWeekdayDates.forEach((targetDate) => copyDayPlan(sourceDate, targetDate));
+      } else if (targetWeek) {
+        sourceWeek.dates.forEach((weekDate) => {
+          const targetDate = targetWeek?.dates.find((date) => dayKeyFromDate(date) === dayKeyFromDate(weekDate));
+          if (targetDate) copyDayPlan(weekDate, targetDate);
         });
-      });
+      }
+
       return { ...column, monthlyPlan: nextMonthlyPlan, dirty: true };
     });
 
     setCopyPopover(null);
-    setCopyTargets([]);
-    message.success('ساعت‌های هفته در هفته‌های انتخاب‌شده کپی شد.');
+    resetCopySettings();
+    message.success(copyScope === 'week' ? 'ساعت‌های هفته در مقصد کپی شد.' : 'ساعت‌های این روز در مقصد کپی شد.');
   };
 
   const ensureProfileNames = useCallback(
@@ -547,12 +596,14 @@ const WorkSchedulesPage: React.FC = () => {
       }
 
       if (!effectiveFrom || !effectiveTo) {
-        message.warning('بازه زمانی برنامه حضور باید کامل باشد.');
+        message.warning('تاریخ شروع و پایان برنامه حضور را انتخاب کن.');
         return;
       }
 
-      if (safeJalaliFormat(effectiveFrom, 'YYYY/MM') !== safeJalaliFormat(effectiveTo, 'YYYY/MM')) {
-        message.warning('برنامه ماهانه باید کامل و محدود به یک ماه شمسی باشد.');
+      const startDate = parseDateValue(effectiveFrom)?.toDate();
+      const endDate = parseDateValue(effectiveTo)?.toDate();
+      if (!startDate || !endDate || startDate.getTime() > endDate.getTime()) {
+        message.warning('تاریخ پایان باید بعد از تاریخ شروع باشد.');
         return;
       }
 
@@ -788,7 +839,7 @@ const WorkSchedulesPage: React.FC = () => {
                 {isCreate ? 'ایجاد برنامه حضور' : 'برنامه حضور'}
               </Title>
               <Text className="text-gray-500 dark:text-gray-400">
-              مدیریت برنامه حضور ماهانه کارکنان؛ ساعت هر تاریخ به‌صورت مستقل ثبت می‌شود.
+              ساعت هر تاریخ برای هر کارمند مستقل است؛ روزهایی که ساعت ثبت نشود، خالی می‌ماند.
               </Text>
             </div>
             <Space wrap>
@@ -1097,6 +1148,8 @@ const WorkSchedulesPage: React.FC = () => {
                   const day = DAYS.find((item) => item.key === dayKey) || DAYS[0];
                   const dateKey = dateKeyFromDate(date);
                   const weekKey = dateKeyFromDate(startOfSaturdayWeek(date));
+                  const currentWeek = calendarWeeks.find((week) => week.key === weekKey);
+                  const nextWeek = calendarWeeks[calendarWeeks.findIndex((week) => week.key === weekKey) + 1];
                   const holidaySummary = officialHolidaySummaries.find((item) => item.dateKey === dateKey);
                   return SHIFTS.map((shift, shiftIndex) => (
                     <tr key={`${dateKey}_${shift.key}`} className={day.accent}>
@@ -1134,48 +1187,137 @@ const WorkSchedulesPage: React.FC = () => {
                                   <div className="absolute left-0 -top-1">
                                     <Popover
                                       trigger="click"
-                                      open={copyPopover?.columnKey === column.key && copyPopover?.weekKey === weekKey}
+                                      open={copyPopover?.columnKey === column.key && copyPopover?.sourceDateKey === dateKey}
                                       onOpenChange={(open) => {
                                         if (open) {
-                                          setCopyPopover({ columnKey: column.key, weekKey });
-                                          setCopyTargets([]);
-                                        } else if (copyPopover?.columnKey === column.key && copyPopover?.weekKey === weekKey) {
+                                          setCopyPopover({ columnKey: column.key, sourceDateKey: dateKey, sourceWeekKey: weekKey });
+                                          resetCopySettings();
+                                        } else if (copyPopover?.columnKey === column.key && copyPopover?.sourceDateKey === dateKey) {
                                           setCopyPopover(null);
-                                          setCopyTargets([]);
+                                          resetCopySettings();
                                         }
                                       }}
                                       content={(
-                                        <div className="w-56 space-y-3">
-                                          <div className="text-xs text-gray-500">ساعت‌های این هفته برای کدام هفته‌های بعدیِ همین بازه کپی شود؟</div>
-                                          <Checkbox.Group
-                                            value={copyTargets}
-                                            onChange={(values) => setCopyTargets(values.map((value) => String(value)))}
+                                        <div className="w-72 space-y-3">
+                                          <div className="text-xs text-gray-500">
+                                            ساعت‌های {day.label} {toPersianNumber(safeJalaliFormat(dateKey, 'YYYY/MM/DD') || '')} را کپی کن.
+                                          </div>
+                                          <Radio.Group
+                                            value={copyScope}
+                                            onChange={(event) => {
+                                              const nextScope = event.target.value as CopyScope;
+                                              setCopyScope(nextScope);
+                                              setCopyTargetDateKey(undefined);
+                                              setCopyTargetDateKeys([]);
+                                              setCopyTargetWeekKey(undefined);
+                                              if (nextScope === 'week' && (copyDestination === 'single_date' || copyDestination === 'week_days')) {
+                                                setCopyDestination('specific_week');
+                                              }
+                                            }}
                                             className="flex flex-col gap-2"
                                           >
-                                            {calendarWeeks.filter((week) => week.key > weekKey).map((week, index) => (
-                                              <Checkbox key={week.key} value={week.key}>
-                                                هفته بعد {toPersianNumber(index + 1)} ({toPersianNumber(safeJalaliFormat(week.dates[0] ? dateKeyFromDate(week.dates[0]) : week.key, 'MM/DD') || '')})
-                                              </Checkbox>
-                                            ))}
-                                          </Checkbox.Group>
+                                            <Radio value="day">فقط کپی همین روز</Radio>
+                                            <Radio value="week">
+                                              کپی همین هفته
+                                              {currentWeek?.dates.length ? ` (${toPersianNumber(safeJalaliFormat(dateKeyFromDate(currentWeek.dates[0]), 'MM/DD') || '')} تا ${toPersianNumber(safeJalaliFormat(dateKeyFromDate(currentWeek.dates[currentWeek.dates.length - 1]), 'MM/DD') || '')})` : ''}
+                                            </Radio>
+                                          </Radio.Group>
+
+                                          <div className="border-t border-gray-100 pt-3 dark:border-gray-800">
+                                            <div className="mb-2 text-xs font-bold text-gray-700 dark:text-gray-200">چسباندن به</div>
+                                            <Radio.Group
+                                              value={copyDestination}
+                                              onChange={(event) => {
+                                                const nextDestination = event.target.value as CopyDestination;
+                                                setCopyDestination(nextDestination);
+                                                setCopyTargetDateKey(undefined);
+                                                setCopyTargetDateKeys([]);
+                                                setCopyTargetWeekKey(undefined);
+                                              }}
+                                              className="flex flex-col gap-2"
+                                            >
+                                              <Radio value="single_date" disabled={copyScope !== 'day'}>یک روز خاص</Radio>
+                                              <Radio value="week_days" disabled={copyScope !== 'day'}>روزهای همین هفته</Radio>
+                                              <Radio value="specific_week">یک هفته خاص</Radio>
+                                              <Radio value="next_week" disabled={!nextWeek}>هفته بعد</Radio>
+                                            </Radio.Group>
+                                          </div>
+
+                                          {copyDestination === 'single_date' && copyScope === 'day' && (
+                                            <Select
+                                              value={copyTargetDateKey}
+                                              onChange={(value) => setCopyTargetDateKey(value)}
+                                              placeholder="روز مقصد را انتخاب کن"
+                                              className="w-full"
+                                              options={calendarDates
+                                                .filter((calendarDate) => dateKeyFromDate(calendarDate) !== dateKey)
+                                                .map((calendarDate) => {
+                                                  const calendarDay = DAYS.find((item) => item.key === dayKeyFromDate(calendarDate)) || DAYS[0];
+                                                  return {
+                                                    value: dateKeyFromDate(calendarDate),
+                                                    label: `${calendarDay.label} ${toPersianNumber(safeJalaliFormat(dateKeyFromDate(calendarDate), 'YYYY/MM/DD') || '')}`,
+                                                  };
+                                                })}
+                                            />
+                                          )}
+
+                                          {copyDestination === 'week_days' && copyScope === 'day' && (
+                                            <Checkbox.Group
+                                              value={copyTargetDateKeys}
+                                              onChange={(values) => setCopyTargetDateKeys(values.map((value) => String(value)))}
+                                              className="flex flex-col gap-2"
+                                            >
+                                              {(currentWeek?.dates || []).filter((calendarDate) => dateKeyFromDate(calendarDate) !== dateKey).map((calendarDate) => {
+                                                const calendarDay = DAYS.find((item) => item.key === dayKeyFromDate(calendarDate)) || DAYS[0];
+                                                return (
+                                                  <Checkbox key={dateKeyFromDate(calendarDate)} value={dateKeyFromDate(calendarDate)}>
+                                                    {calendarDay.label} {toPersianNumber(safeJalaliFormat(dateKeyFromDate(calendarDate), 'MM/DD') || '')}
+                                                  </Checkbox>
+                                                );
+                                              })}
+                                            </Checkbox.Group>
+                                          )}
+
+                                          {copyDestination === 'specific_week' && (
+                                            <Select
+                                              value={copyTargetWeekKey}
+                                              onChange={(value) => setCopyTargetWeekKey(value)}
+                                              placeholder="هفته مقصد را انتخاب کن"
+                                              className="w-full"
+                                              options={calendarWeeks
+                                                .filter((week) => week.key !== weekKey)
+                                                .map((week) => ({
+                                                  value: week.key,
+                                                  label: `از ${toPersianNumber(safeJalaliFormat(dateKeyFromDate(week.dates[0]), 'YYYY/MM/DD') || '')} تا ${toPersianNumber(safeJalaliFormat(dateKeyFromDate(week.dates[week.dates.length - 1]), 'YYYY/MM/DD') || '')}`,
+                                                }))}
+                                            />
+                                          )}
+
+                                          {copyDestination === 'next_week' && (
+                                            <div className="text-xs text-gray-500">
+                                              {nextWeek
+                                                ? `هفته ${toPersianNumber(safeJalaliFormat(dateKeyFromDate(nextWeek.dates[0]), 'MM/DD') || '')} تا ${toPersianNumber(safeJalaliFormat(dateKeyFromDate(nextWeek.dates[nextWeek.dates.length - 1]), 'MM/DD') || '')} مقصد کپی است.`
+                                                : 'هفته بعدی در بازه این برنامه وجود ندارد.'}
+                                            </div>
+                                          )}
                                           <div className="flex items-center justify-between">
                                             <Button
                                               size="small"
                                               onClick={() => {
                                                 setCopyPopover(null);
-                                                setCopyTargets([]);
+                                                resetCopySettings();
                                               }}
                                             >
                                               انصراف
                                             </Button>
-                                            <Button type="primary" size="small" onClick={() => applyCopyWeek(column.key, weekKey)}>
+                                            <Button type="primary" size="small" onClick={applyCopy}>
                                               کپی
                                             </Button>
                                           </div>
                                         </div>
                                       )}
                                     >
-                                      <Button type="text" size="small" icon={<CopyOutlined />} />
+                                      <Button type="text" size="small" icon={<CopyOutlined />} disabled={disabled} aria-label={`کپی ساعت‌های ${day.label}`} />
                                     </Popover>
                                   </div>
                                 )}

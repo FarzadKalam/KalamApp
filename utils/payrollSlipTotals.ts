@@ -30,15 +30,26 @@ const resolveLineAmount = (line: PayrollSlipLineLike) => {
   return quantity > 0 && unitPrice > 0 ? quantity * unitPrice : 0;
 };
 
-export const sumPayrollSlipLines = (lines: PayrollSlipLineLike[] | null | undefined) => {
-  return (Array.isArray(lines) ? lines : []).reduce((sum, line) => {
-    const amount = Math.abs(resolveLineAmount(line));
-    if (amount === 0) return sum;
-    return sum + (String(line?.line_type || '').trim().toLowerCase() === 'deduction' ? -amount : amount);
-  }, 0);
+export const sumPayrollSlipLines = (lines: ReadonlyArray<PayrollSlipLineLike> | null | undefined) => {
+  return calculatePayrollSlipLineBreakdown(lines).grossAmount;
 };
 
-export const sumPayrollSlipPayments = (payments: PayrollSlipPaymentLike[] | null | undefined) => {
+/** مرجع مشترک جمع جدول فیش و فیلدهای سروری فیش؛ کسورات همیشه از جمع کم می‌شوند. */
+export const calculatePayrollSlipLineBreakdown = (lines: ReadonlyArray<PayrollSlipLineLike> | null | undefined) => {
+  return (Array.isArray(lines) ? lines : []).reduce((totals, line) => {
+    const amount = Math.abs(resolveLineAmount(line));
+    if (amount === 0) return totals;
+    if (String(line?.line_type || 'earning').trim().toLowerCase() === 'deduction') {
+      totals.deductionTotal += amount;
+    } else {
+      totals.earningsTotal += amount;
+    }
+    totals.grossAmount = totals.earningsTotal - totals.deductionTotal;
+    return totals;
+  }, { earningsTotal: 0, deductionTotal: 0, grossAmount: 0 });
+};
+
+export const sumPayrollSlipPayments = (payments: ReadonlyArray<PayrollSlipPaymentLike> | null | undefined) => {
   const rows = Array.isArray(payments) ? payments : [];
   const hasStatusColumn = rows.some((row) => row && Object.prototype.hasOwnProperty.call(row, 'status'));
   return rows.reduce((sum, row) => {

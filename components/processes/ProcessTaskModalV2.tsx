@@ -71,13 +71,11 @@ import {
 import { updateTaskStatusWithAutomation } from '../../utils/taskUpdateRuntime';
 import { syncProcessRunStageFromTask } from '../../utils/processRunRuntime';
 import { patchProcessTaskCustomFieldValues } from '../../utils/processTaskCustomFieldPersistence';
-import { insertRecordActivity } from '../../utils/recordActivity';
 import { moveModuleRecordsToRecycleBin } from '../../utils/recycleBin';
 import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
 import { fetchDynamicOptionsByCategory } from '../../utils/referenceData';
 import { searchIdentityOptions } from '../../utils/identityDirectory';
-import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import { buildTaskSourcePatch, getMergedTaskTypeOptions } from '../../utils/taskMeta';
 import { buildAssigneeSelectValue, parseAssigneeValue } from '../../utils/assigneeValue';
 import { resolveSelectPopupContainer } from '../../utils/popupContainer';
@@ -1420,40 +1418,10 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       { [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: nextValues, [fieldKey]: nextValue },
     );
     if (JSON.stringify(oldValue ?? null) !== JSON.stringify(nextValue ?? null)) {
-      void (async () => {
-        try {
-          const session = await fetchSessionBootstrap(supabase);
-          await insertRecordActivity({
-            supabase,
-            moduleId: 'tasks',
-            recordId: taskRecordId,
-            action: 'update',
-            fieldName: fieldKey,
-            fieldLabel: currentField?.label || fieldKey,
-            oldValue,
-            newValue: nextValue,
-            userId: session.user?.id || null,
-            recordTitle: taskNameValue || stage?.title || null,
-            metadata: {
-              source: 'process_v2_task_modal',
-              changeKind: 'process_task_custom_field',
-              fieldKey,
-              fieldLabel: currentField?.label || fieldKey,
-              fieldType: currentField?.type || FieldType.TEXT,
-              processTaskCustomField: currentField?.field || {
-                key: fieldKey,
-                type: currentField?.type || FieldType.TEXT,
-                labels: { fa: currentField?.label || fieldKey },
-                options: currentField?.options || [],
-              },
-              summary: `«${currentField?.label || fieldKey}» تغییر کرد`,
-            },
-          });
-          setChangelogCount((count) => count + 1);
-        } catch (error) {
-          console.warn('Process task custom field changelog failed:', error);
-        }
-      })();
+      // The database trigger writes the detailed custom-field audit row from
+      // the saved snapshot.  Keeping it server-side also covers automation,
+      // AI and public entry points.
+      setChangelogCount((count) => count + 1);
     }
   }, [customFields, persistTaskFieldPatch, source?.recurrence_info, stage?.title, taskNameValue, taskRecordId]);
   const hasFiles = modalFiles.length > 0;

@@ -17,6 +17,12 @@ import { resolveCardStatusMeta } from "../../utils/recordCardHelpers";
 import { getRecordTitle } from "../../utils/recordTitle";
 import { parseDateValue, toPersianNumber } from "../../utils/persianNumberFormatter";
 import { getTaskStatusLabel } from "../../utils/processTaskStatusOptions";
+import { fetchAssigneeDirectory } from "../../utils/referenceData";
+import { getCalendarSummaryFields } from "../../utils/calendarPresentation";
+import { resolveAssigneePresentation } from "../../utils/assigneePresentation";
+import IdentityAvatar from "../common/IdentityAvatar";
+import { supabase } from "../../supabaseClient";
+import { normalizeRoleIconKey } from "../../utils/roleIconCatalog";
 
 export type ModuleCalendarMode = "month" | "week";
 
@@ -38,6 +44,7 @@ type CalendarEvent = {
   timeLabel: string | null;
   statusLabel: string | null;
   statusColor: string | null;
+  summaryLines: Array<{ label: string; value: string }>;
 };
 
 type CalendarViewProps = {
@@ -48,6 +55,8 @@ type CalendarViewProps = {
   dateFieldKey: string;
   onDateFieldChange: (fieldKey: string) => void;
   navigate: (path: string) => void;
+  canViewField?: (fieldKey: string) => boolean;
+  fieldOptions?: Record<string, Array<{ value?: unknown; label?: unknown }>>;
 };
 
 const DATE_FIELD_COLORS = [
@@ -141,6 +150,24 @@ const normalizeEventStatusColor = (color?: string | null) => {
   return value;
 };
 
+const DEFAULT_STATUS_COLOR = "#9ca3af";
+
+const getEventAccentColor = (event: CalendarEvent, fallbackColor: string) =>
+  event.statusLabel ? (event.statusColor || DEFAULT_STATUS_COLOR) : fallbackColor;
+
+const buildFieldOptionValueMap = (
+  fieldOptions: Record<string, Array<{ value?: unknown; label?: unknown }>> = {},
+) => Object.fromEntries(
+  Object.entries(fieldOptions).map(([fieldKey, options]) => [
+    fieldKey,
+    Object.fromEntries(
+      (options || [])
+        .filter((option) => option?.value !== undefined && option?.value !== null)
+        .map((option) => [String(option.value), String(option.label || option.value)]),
+    ),
+  ]),
+);
+
 const ModuleCalendarView: React.FC<CalendarViewProps> = ({
   moduleId,
   moduleConfig,
@@ -149,6 +176,8 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
   dateFieldKey,
   onDateFieldChange,
   navigate,
+  canViewField,
+  fieldOptions,
 }) => {
   const [calendarMode, setCalendarMode] = useState<ModuleCalendarMode>("month");
   const [anchorDate, setAnchorDate] = useState(() => {
@@ -158,6 +187,7 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
   });
   const [holidaySummaries, setHolidaySummaries] = useState<Record<string, HolidayDaySummary | null>>({});
   const [expandedDayKeys, setExpandedDayKeys] = useState<string[]>([]);
+  const [assigneeDirectory, setAssigneeDirectory] = useState<{ users: any[]; roles: any[] }>({ users: [], roles: [] });
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   const selectedDateField = useMemo(
@@ -170,9 +200,15 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
     [dateFields, selectedFieldKey]
   );
   const statusField = useMemo(
-    () => moduleConfig.fields.find((field) => field.type === FieldType.STATUS || field.key === "status") || null,
-    [moduleConfig.fields]
+    () => {
+      const field = moduleConfig.fields.find((item) => item.key === "status")
+        || moduleConfig.fields.find((item) => item.type === FieldType.STATUS)
+        || null;
+      return field && canViewField?.(field.key) !== false ? field : null;
+    },
+    [canViewField, moduleConfig.fields]
   );
+  const fieldOptionValueMap = useMemo(() => buildFieldOptionValueMap(fieldOptions), [fieldOptions]);
   const days = useMemo(
     () => (calendarMode === "week" ? buildWeekDays(anchorDate) : buildMonthDays(anchorDate)),
     [anchorDate, calendarMode]
@@ -190,6 +226,22 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
     const last = toPersianDateObject(days[days.length - 1]?.date || anchorDate).format("D MMMM YYYY");
     return toPersianNumber(`${first} تا ${last}`);
   }, [anchorDate, calendarMode, days]);
+
+  useEffect(() => {
+    let isActive = true;
+    fetchAssigneeDirectory(supabase)
+      .then((directory) => {
+        if (isActive) {
+          setAssigneeDirectory({ users: directory.users || [], roles: directory.roles || [] });
+        }
+      })
+      .catch(() => {
+        if (isActive) setAssigneeDirectory({ users: [], roles: [] });
+      });
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   const eventsByDay = useMemo(() => {
     const next = new Map<string, CalendarEvent[]>();
@@ -210,6 +262,14 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
               : formatRecordDisplayValue(item[statusField.key], statusField)
           )
         : null;
+      const summaryLines = getCalendarSummaryFields(item, moduleConfig, {
+        excludedFieldKeys: [selectedDateField.key, statusField?.key || ""],
+        canViewField,
+        limit: 2,
+      }).map((field) => ({
+        label: field.labels?.fa || field.key,
+        value: formatRecordDisplayValue(item?.[field.key], field, fieldOptionValueMap, ""),
+      })).filter((line) => Boolean(line.value));
       current.push({
         key: `${String(item?.id || key)}:${selectedDateField.key}`,
         item,
@@ -218,6 +278,7 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
         timeLabel: selectedDateField.type === FieldType.DATETIME ? toPersianNumber(parsed.format("HH:mm")) : null,
         statusLabel,
         statusColor: normalizeEventStatusColor(statusMeta?.color),
+        summaryLines,
       });
       next.set(key, current);
     });
@@ -227,7 +288,25 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
     });
 
     return next;
-  }, [data, moduleConfig, selectedDateField, statusField]);
+  }, [canViewField, data, fieldOptionValueMap, moduleConfig, selectedDateField, statusField]);
+
+  const statusLegendItems = useMemo(() => {
+    if (!statusField) return [];
+    const items = new Map<string, { key: string; label: string; color: string }>();
+    Array.from(eventsByDay.values()).flat().forEach((event) => {
+      if (!event.statusLabel) return;
+      const key = `${event.statusLabel}:${event.statusColor || DEFAULT_STATUS_COLOR}`;
+      if (!items.has(key)) {
+        items.set(key, { key, label: event.statusLabel, color: event.statusColor || DEFAULT_STATUS_COLOR });
+      }
+    });
+    if (items.size > 0) return Array.from(items.values());
+    return (statusField.options || []).map((option) => ({
+      key: String(option.value),
+      label: String(option.label || option.value),
+      color: normalizeEventStatusColor(option.color) || DEFAULT_STATUS_COLOR,
+    }));
+  }, [eventsByDay, statusField]);
 
   const totalEvents = useMemo(
     () => Array.from(eventsByDay.values()).reduce((sum, items) => sum + items.length, 0),
@@ -292,8 +371,23 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
     ));
   };
 
-  const renderEvent = (event: CalendarEvent, variant: "compact" | "comfortable") => (
-    <button
+  const renderEvent = (event: CalendarEvent, variant: "compact" | "comfortable") => {
+    const accentColor = getEventAccentColor(event, selectedFieldColor);
+    const assignee = resolveAssigneePresentation({
+      source: event.item,
+      allUsers: assigneeDirectory.users,
+      allRoles: assigneeDirectory.roles,
+    });
+    const hasAssignee = Boolean(assignee.assigneeId);
+    const summaryLimit = variant === "compact" ? 1 : 2;
+    const eventTooltip = [
+      event.title,
+      ...event.summaryLines.map((line) => `${line.label}: ${line.value}`),
+      assignee.label ? `مسئول: ${assignee.label}` : "",
+    ].filter(Boolean).join("\n");
+
+    return (
+      <button
       key={event.key}
       type="button"
       className={[
@@ -302,31 +396,49 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
           ? "px-2 py-1 text-[10px] leading-4 sm:text-[11px]"
           : "px-3 py-2 text-xs leading-5",
       ].join(" ")}
-      style={{ borderRight: `3px solid ${event.statusColor || selectedFieldColor}` }}
+      style={{ borderRight: `3px solid ${accentColor}` }}
       onClick={() => navigate(`/${moduleId}/${event.item.id}`)}
-      title={event.title}
+      title={eventTooltip}
     >
       {event.timeLabel ? (
         <span className={`block min-w-0 truncate font-semibold text-gray-500 dark:text-gray-400 ${variant === "compact" ? "text-[9px] leading-4 sm:text-[10px]" : "text-[11px] leading-5"}`}>
           {event.timeLabel}
         </span>
       ) : null}
-      <span className="mt-0.5 flex min-w-0 items-start gap-1">
+      <span className="mt-0.5 flex min-w-0 items-start gap-1.5">
         <span
-          className="mt-1 h-2 w-2 shrink-0 rounded-full"
-          style={{ backgroundColor: event.statusColor || selectedFieldColor }}
-        />
+          className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-full border bg-white dark:bg-[#1d1d1d]"
+          style={{ borderColor: accentColor }}
+          title={assignee.label ? `مسئول: ${assignee.label}` : "بدون مسئول"}
+        >
+          {hasAssignee ? (
+            <IdentityAvatar
+              size={18}
+              option={{
+                kind: assignee.kind === "role" ? "role" : "user",
+                id: assignee.assigneeId || "assignee",
+                label: assignee.label || "مسئول",
+                avatarUrl: assignee.avatarUrl || undefined,
+                iconKey: normalizeRoleIconKey(assignee.role?.icon_key),
+              }}
+            />
+          ) : (
+            <span className="h-full w-full rounded-full" style={{ backgroundColor: accentColor }} />
+          )}
+        </span>
         <span className={`block min-w-0 break-words font-bold text-gray-700 dark:text-gray-100 ${variant === "compact" ? "line-clamp-2 text-[9px] leading-4 sm:text-[10px]" : "line-clamp-3 text-[11px] leading-5"}`}>
           {event.title}
         </span>
       </span>
-      {variant !== "compact" && event.statusLabel ? (
-        <span className="mt-1 block min-w-0 truncate text-[11px] text-gray-500 dark:text-gray-400">
-          {event.statusLabel}
+      {event.summaryLines.slice(0, summaryLimit).map((line) => (
+        <span key={line.label} className={`mt-0.5 block min-w-0 truncate text-gray-500 dark:text-gray-400 ${variant === "compact" ? "text-[9px] leading-4 sm:text-[10px]" : "text-[11px] leading-5"}`}>
+          <span className="font-semibold text-gray-600 dark:text-gray-300">{line.label}: </span>
+          {line.value}
         </span>
-      ) : null}
+      ))}
     </button>
-  );
+    );
+  };
 
   const renderDay = (day: CalendarDay, layout: "grid" | "list" = "grid") => {
     const isListLayout = layout === "list";
@@ -466,7 +578,7 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
         </div>
       ) : null}
 
-      <div ref={scrollContainerRef} className="min-h-0 flex-1 overflow-y-auto p-2 custom-scrollbar sm:p-3">
+       <div ref={scrollContainerRef} className="min-h-0 flex-1 overflow-y-auto p-2 custom-scrollbar sm:p-3">
         {calendarMode === "month" ? (
           <>
             <div className="space-y-2 sm:hidden">
@@ -482,6 +594,18 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
           </div>
         )}
       </div>
+      {statusLegendItems.length > 0 ? (
+        <div className="shrink-0 border-t border-gray-100 px-2 py-1.5 dark:border-gray-800 sm:px-3">
+          <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-[10px] text-gray-500 dark:text-gray-400">
+            {statusLegendItems.map((item) => (
+              <span key={item.key} className="inline-flex items-center gap-1 whitespace-nowrap">
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: item.color }} />
+                {item.label}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };

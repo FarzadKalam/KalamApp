@@ -108,6 +108,23 @@ describe('print pagination scenarios', () => {
     expect(ranges.at(-1)?.end).toBe(1300);
   });
 
+  it('moves an unusually large title line whole to the next page instead of discarding it', () => {
+    const ranges = buildSmartPrintPageRanges({
+      totalHeight: 1300,
+      pageBodyStepPx: 640,
+      anchors: [
+        { top: 590, bottom: 760, priority: 'normal', source: 'line' },
+        { top: 792, bottom: 820, priority: 'normal', source: 'line' },
+      ],
+      minPageFillRatio: 0.5,
+      hardKeepFillRatio: 0.2,
+    });
+
+    expect(ranges[0].end).toBe(590);
+    expect(ranges[1].start).toBeLessThanOrEqual(590);
+    expect(ranges.some((range) => range.start > 590 && range.start < 760)).toBe(false);
+  });
+
   it('برای محتوای کوتاه با هر ترکیب سربرگ، پاورقی و امضا فقط یک صفحه می‌سازد', () => {
     const pageBodyStepPx = Math.floor((297 - (14 + 10)) * pxPerMm - 104 - (62 + 108));
     const totalHeight = Math.floor(pageBodyStepPx * 0.72);

@@ -20,6 +20,7 @@ import {
   Typography,
 } from 'antd';
 import {
+  ArrowLeftOutlined,
   ArrowRightOutlined,
   CheckOutlined,
   CheckCircleOutlined,
@@ -73,6 +74,7 @@ import {
   persistHrRange,
   readHrRangeFromSearch,
   readPersistedHrEmployees,
+  shiftHrRangeByMonths,
   shouldDeferHrFilterUrlSync,
   toNativeGregorianDateString,
 } from '../utils/hrFilters';
@@ -1475,7 +1477,7 @@ const HRPage: React.FC = () => {
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [selectedRange, setSelectedRange] = useState<[Dayjs, Dayjs]>(() => getInitialHrRangeFromQuery());
+  const [selectedRange, setSelectedRange] = useState<[Dayjs, Dayjs]>(() => getInitialHrRangeFromQuery(location.search));
   const [profiles, setProfiles] = useState<ProfileRecord[]>([]);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [activityPerformanceEntries, setActivityPerformanceEntries] = useState<ActivityPerformanceEntry[]>([]);
@@ -1702,6 +1704,14 @@ const HRPage: React.FC = () => {
     });
   }, []);
 
+  const shiftSelectedRangeByMonth = useCallback((monthOffset: number) => {
+    setSelectedRange((current) => {
+      const nextRange = shiftHrRangeByMonths(current, monthOffset);
+      persistHrRange(nextRange);
+      return nextRange;
+    });
+  }, []);
+
   const toHrRangePickerDate = (value: Dayjs) => {
     return toNativeGregorianDateString(value);
   };
@@ -1735,6 +1745,28 @@ const HRPage: React.FC = () => {
       className="w-full"
     />
   ), []);
+
+  const renderHrPeriodControls = useCallback((overlayZIndexBase = 1400) => (
+    <div className="flex flex-wrap items-center gap-2 min-w-0">
+      <Button
+        icon={<ArrowRightOutlined />}
+        onClick={() => shiftSelectedRangeByMonth(-1)}
+        className="rounded-xl"
+      >
+        ماه قبل
+      </Button>
+      <div className="min-w-[260px] flex-1">
+        {renderHrRangePicker(selectedRange, updateSelectedRangeDates, overlayZIndexBase)}
+      </div>
+      <Button
+        icon={<ArrowLeftOutlined />}
+        onClick={() => shiftSelectedRangeByMonth(1)}
+        className="rounded-xl"
+      >
+        ماه بعد
+      </Button>
+    </div>
+  ), [renderHrRangePicker, selectedRange, shiftSelectedRangeByMonth, updateSelectedRangeDates]);
 
   const fetchData = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
@@ -1901,7 +1933,7 @@ const HRPage: React.FC = () => {
       if (!employeeFilterInitialized) {
         let defaultSelectedIds: string[];
         const validIds = new Set(normalizedProfiles.map((p) => p.id));
-        const queryEmployees = parseHrEmployeeFilterParam(new URLSearchParams(window.location.search).get(HR_QUERY_KEY_EMPLOYEES));
+        const queryEmployees = parseHrEmployeeFilterParam(new URLSearchParams(location.search).get(HR_QUERY_KEY_EMPLOYEES));
         const savedEmployeeIds = queryEmployees.hasValue ? queryEmployees.ids : readPersistedHrEmployees();
         if (savedEmployeeIds) {
           defaultSelectedIds = savedEmployeeIds.filter((id) => validIds.has(id));
@@ -5031,10 +5063,9 @@ const HRPage: React.FC = () => {
   }, [buildCommissionCalculationLedgerPayload, buildCommissionDraftPayloads, commissionForm, commissionRows, fetchCalculatedCommissionRows, getCommissionPeriodValues, message, profiles, refreshPayrollPeriodState, saveCommissionCalculationAtomically]);
 
   const handleEditCommissionDraft = useCallback((row: CommissionLedgerRow) => {
-    const employeeProfile = profiles.find((profile) => (
-      profile.source_table === 'employees'
-      && String(profile.source_id || profile.id) === String(row.employee_id || '')
-    ));
+    // شناسهٔ ذخیره‌شده در محاسبه‌های قبلی ممکن است شناسهٔ کارمند یا پروفایل باشد.
+    // همان resolver مرکزیِ مودال، هر دو حالت را به پروفایل سازمانی تبدیل می‌کند.
+    const employeeProfile = resolveCommissionEmployeeProfile(profiles, row.employee_id);
     const basis = row.details?.basis as CommissionBasis | undefined;
     const percentMode = row.details?.percent_mode as CommissionPercentMode | undefined;
     if (!employeeProfile || !row.period_start || !row.period_end || !basis || !percentMode) {
@@ -7110,7 +7141,7 @@ const HRPage: React.FC = () => {
       </div>
 
       <div className="bg-white dark:bg-[#1a1a1a] rounded-2xl border border-gray-200 dark:border-gray-800 p-2">
-        <div className={`grid gap-2 ${isMobile ? 'grid-cols-1' : 'grid-cols-[auto_minmax(320px,420px)_auto_auto]'}`}>
+        <div className={`grid gap-2 ${isMobile ? 'grid-cols-1' : 'grid-cols-[auto_minmax(420px,1fr)_auto_auto]'}`}>
           <Button
             icon={<ArrowRightOutlined />}
             onClick={() => navigate(`/hr?${selectedRangeQuery}`)}
@@ -7118,7 +7149,7 @@ const HRPage: React.FC = () => {
           >
             بازگشت
           </Button>
-          {renderHrRangePicker(selectedRange, updateSelectedRangeDates, 1400)}
+          {renderHrPeriodControls(1400)}
           <Button
             icon={<ReloadOutlined />}
             onClick={() => fetchData(true)}
@@ -7973,8 +8004,8 @@ const HRPage: React.FC = () => {
             </div>
 
             <div className="bg-white dark:bg-[#1a1a1a] rounded-2xl border border-gray-200 dark:border-gray-800 p-2">
-              <div className={`grid gap-2 ${isMobile ? 'grid-cols-1' : 'grid-cols-[minmax(320px,420px)_minmax(260px,1fr)_auto_auto]'}`}>
-                {renderHrRangePicker(selectedRange, updateSelectedRangeDates, 1400)}
+              <div className={`grid gap-2 ${isMobile ? 'grid-cols-1' : 'grid-cols-[minmax(420px,1fr)_minmax(260px,1fr)_auto_auto]'}`}>
+                {renderHrPeriodControls(1400)}
                 <AdaptiveSelectField
                   mode="multiple"
                   allowClear

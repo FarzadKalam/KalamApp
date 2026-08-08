@@ -10,6 +10,7 @@ export const cashBankOperationsConfig: ModuleDefinition = {
   titles: { fa: 'نقد و بانک', faSingular: 'رکورد نقد و بانک', en: 'Cash & Bank Operations' },
   nature: ModuleNature.FINANCE,
   table: 'cash_bank_operations',
+  calendar: { summaryFieldKeys: ['amount', 'operation_type'] },
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
   fields: [

@@ -14,6 +14,7 @@ const buildItem = (overrides: Partial<ProcessWorkItem> = {}): ProcessWorkItem =>
   templateId: 'template-1',
   templateName: 'فرآیند نمونه',
   updatedAt: '2026-07-20T10:00:00Z',
+  processStatus: 'in_progress',
   reason: 'task',
   processLinks: {},
   ...overrides,

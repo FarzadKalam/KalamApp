@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { App, Button, Card, Empty, Spin, Tag, Tooltip } from 'antd';
+import { App, Button, Card, Empty, Segmented, Spin, Tag, Tooltip } from 'antd';
 import { LinkOutlined, NodeIndexOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { MODULES } from '../../moduleRegistry';
@@ -29,6 +29,8 @@ type ProcessWidgetItem = ProcessWorkItem & {
   displayRecordId: string;
   displayTitle: string;
 };
+
+type ProcessStatusFilter = 'all' | 'in_progress' | 'completed';
 
 const INITIAL_VISIBLE_LIMIT = 15;
 const LIMIT_STEP = 15;
@@ -315,6 +317,7 @@ const OurProcessesWidget: React.FC = () => {
   const [visibleLimit, setVisibleLimit] = useState(INITIAL_VISIBLE_LIMIT);
   const [canLoadMore, setCanLoadMore] = useState(false);
   const [canViewWidget, setCanViewWidget] = useState(true);
+  const [statusFilter, setStatusFilter] = useState<ProcessStatusFilter>('all');
   const unavailableProcessModulesRef = useRef<Set<string>>(new Set());
 
   const addItem = useCallback((map: Map<string, ProcessWidgetItem>, item: ProcessWidgetItem) => {
@@ -351,7 +354,10 @@ const OurProcessesWidget: React.FC = () => {
       }
 
       setCanViewWidget(true);
-      const rpcItems = await fetchProcessWorkItems(supabase, access, { limit: nextVisibleLimit + 1 });
+      const rpcItems = await fetchProcessWorkItems(supabase, access, {
+        limit: nextVisibleLimit + 1,
+        status: statusFilter,
+      });
       if (rpcItems) {
         const titledItems = await resolveProcessDisplayTitles(rpcItems, access);
         setItems(titledItems.slice(0, nextVisibleLimit));
@@ -399,6 +405,7 @@ const OurProcessesWidget: React.FC = () => {
           templateId: meta.templateId,
           templateName: meta.templateName,
           updatedAt: normalizeId(task?.updated_at || task?.created_at) || null,
+          processStatus: 'in_progress',
           reason,
           processLinks: {
             ...normalizeProcessWorkItemLinks(parseProcessLinkMap(parseJsonObject(task?.recurrence_info)?.process_links)),
@@ -523,6 +530,7 @@ const OurProcessesWidget: React.FC = () => {
               templateId: group.templateId,
               templateName: group.templateName,
               updatedAt: normalizeId(record?.updated_at || record?.created_at) || null,
+              processStatus: 'in_progress',
               reason: assignedStages.length > 0 ? 'draft_stage' : 'record',
               processLinks: {
                 ...candidateStages.reduce<Record<string, string>>((links, stage) => ({
@@ -576,13 +584,22 @@ const OurProcessesWidget: React.FC = () => {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [addItem, message]);
+  }, [addItem, message, statusFilter]);
 
   useEffect(() => {
     void loadProcesses(INITIAL_VISIBLE_LIMIT);
   }, [loadProcesses]);
 
-  const visibleItems = useMemo(() => items, [items]);
+  const visibleItems = useMemo(
+    () => items.filter((item) => statusFilter === 'all' || item.processStatus === statusFilter),
+    [items, statusFilter],
+  );
+
+  const handleStatusFilterChange = (value: string | number) => {
+    const nextStatus = value === 'in_progress' || value === 'completed' ? value : 'all';
+    setStatusFilter(nextStatus);
+    setVisibleLimit(INITIAL_VISIBLE_LIMIT);
+  };
 
   const handleLoadMore = () => {
     const nextLimit = visibleLimit + LIMIT_STEP;
@@ -607,12 +624,26 @@ const OurProcessesWidget: React.FC = () => {
             <span>فرآیندهای ما</span>
           </div>
           <div className="text-xs text-gray-500 dark:text-gray-400">
-            فرآیندهایی که شما، نقش شما، یا رکوردهای مرتبط شما در آن‌ها حضور دارند
+            فرآیندهایی که در یکی از مرحله‌های آن مسئول یا ایجادکننده هستید
           </div>
         </div>
         <Button size="small" icon={<ReloadOutlined />} onClick={() => void loadProcesses(visibleLimit)} loading={loading}>
           بروزرسانی
         </Button>
+      </div>
+
+      <div className="mb-3">
+        <Segmented
+          size="small"
+          aria-label="فیلتر وضعیت فرآیندها"
+          value={statusFilter}
+          onChange={handleStatusFilterChange}
+          options={[
+            { label: 'همه', value: 'all' },
+            { label: 'در جریان', value: 'in_progress' },
+            { label: 'تکمیل شده', value: 'completed' },
+          ]}
+        />
       </div>
 
       {loading ? (

@@ -5,6 +5,7 @@ export const chequesConfig: ModuleDefinition = {
   titles: { fa: 'چک ها', en: 'Cheques' },
   nature: ModuleNature.FINANCE,
   table: 'cheques',
+  calendar: { summaryFieldKeys: ['amount', 'cheque_type'] },
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
   fields: [

@@ -419,6 +419,11 @@ export interface ModuleDefinition {
       title?: string;
     };
   };
+  /** تنظیمات خلاصه‌نمایی رکورد در تقویم ماژول و داشبورد */
+  calendar?: {
+    /** فیلدهایی که زیر عنوان هر رکورد، به ترتیب، نمایش داده می‌شوند. */
+    summaryFieldKeys?: string[];
+  };
   relationDisplay?: {
     labelTemplate?: string;
     searchFields?: string[];

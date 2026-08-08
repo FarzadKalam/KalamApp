@@ -68,6 +68,12 @@ const CAN_DEDUPE_BY_TRIGGER_ACTION = new Set([
   'process_updated',
 ]);
 
+const TABLE_ACTIVITY_ACTIONS = new Set([
+  'table_row_added',
+  'table_row_removed',
+  'table_cell_updated',
+]);
+
 const isMissingColumnLikeError = (error: any, columnNames: string[]) => {
   const code = String(error?.code || '').toUpperCase();
   const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
@@ -104,6 +110,11 @@ const hasRecentTriggerActivity = async (
     const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
     if (metadata.source !== 'db_trigger') return false;
     if (CAN_DEDUPE_BY_TRIGGER_ACTION.has(action)) return true;
+    // The server stores raw relation and option values so the normal renderer
+    // can resolve them later; legacy client helpers may already have turned
+    // those values into labels.  The matching action/field is enough here and
+    // prevents a second history row for the same editable-table cell.
+    if (TABLE_ACTIVITY_ACTIONS.has(action)) return true;
     if (row.old_value === null && row.new_value === null) return true;
     return isSameSerializedActivityValue(row.old_value, oldValue)
       && isSameSerializedActivityValue(row.new_value, newValue);
@@ -145,6 +156,22 @@ export const getActivityActionLabel = (action: string) => {
       return 'تغییر فرآیند';
     case 'tags_updated':
       return 'ویرایش برچسب‌ها';
+    case 'restore':
+      return 'بازگردانی';
+    case 'records_merged':
+      return 'ادغام رکوردها';
+    case 'process_run_created':
+      return 'افزودن فرآیند';
+    case 'process_stage_added':
+      return 'افزودن مرحله';
+    case 'process_stage_removed':
+      return 'حذف مرحله';
+    case 'process_stage_reordered':
+      return 'جابجایی مرحله';
+    case 'process_stage_activated':
+      return 'تبدیل به فعالیت';
+    case 'process_stages_auto_referred':
+      return 'ارجاع خودکار مراحل';
     default:
       return 'تغییر';
   }
@@ -181,6 +208,22 @@ export const getActivityFieldLabel = (
   }
 
   return sanitizeActivityText(fallback || normalizedFieldName, 'فیلد نامشخص');
+};
+
+export const getActivityTableColumnLabel = (
+  moduleId?: string | null,
+  blockId?: string | null,
+  columnKey?: string | null,
+  fallback?: string | null,
+) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const normalizedBlockId = String(blockId || '').trim();
+  const normalizedColumnKey = String(columnKey || '').trim();
+  const module = MODULES[normalizedModuleId];
+  const block = (module?.blocks || []).find((item: any) => String(item?.id || '').trim() === normalizedBlockId);
+  const column = (block?.tableColumns || []).find((item: any) => String(item?.key || '').trim() === normalizedColumnKey);
+  if (column) return sanitizeActivityText(column?.title, 'ستون ثبت‌شده');
+  return sanitizeActivityText(fallback, 'ستون ثبت‌شده');
 };
 
 export const touchParentRecord = async ({

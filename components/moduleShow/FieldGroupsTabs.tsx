@@ -8,6 +8,8 @@ import ShelfStockMovementsPanel from '../shelves/ShelfStockMovementsPanel';
 import { shouldHideManagedAssigneeField } from '../../utils/assigneeSupport';
 import { isTaskLegacySourceField } from '../../utils/taskMeta';
 import { shouldRenderInGeneralModuleUi } from '../../utils/moduleFieldVisibility';
+import { supabase } from '../../supabaseClient';
+import { fetchPayrollSlipServerSummary } from '../../utils/payrollSlipSummary';
 
 interface FieldGroupsTabsProps {
   fieldGroups: any[];
@@ -47,6 +49,13 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
   const handleStockUpdated = useCallback((stock: number) => {
     onDataUpdate?.({ stock });
   }, [onDataUpdate]);
+  const handleTableSaveSuccess = useCallback((blockId: string, rows: any[]) => {
+    onDataUpdate?.({ [blockId]: rows });
+    if (moduleId !== 'payroll_slips' || !['lines', 'payments'].includes(blockId) || !recordId) return;
+    void fetchPayrollSlipServerSummary(supabase, recordId)
+      .then((summary) => onDataUpdate?.(summary))
+      .catch((error) => console.warn('Payroll summary refresh failed:', error));
+  }, [moduleId, onDataUpdate, recordId]);
   const processStageFieldKeys = new Set([
     'execution_process_draft',
     'marketing_process_draft',
@@ -166,6 +175,7 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
                 (canViewField ? canViewField(`${block.id}.${fieldKey}`) !== false : true) &&
                 (canViewField ? canViewField(fieldKey) !== false : true)
               }
+              onSaveSuccess={(rows) => handleTableSaveSuccess(String(block.id), rows)}
               readOnly={moduleId === 'products' && block.id === 'product_inventory'}
             />
           )}

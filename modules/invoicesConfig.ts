@@ -248,6 +248,7 @@ export const invoicesConfig: ModuleDefinition = {
       title: 'جمع مبلغ فاکتورهای من',
     },
   },
+  calendar: { summaryFieldKeys: ['total_invoice_amount'] },
   relationDisplay: {
     labelTemplate: '{{name}} - {{total_invoice_amount}}',
     searchFields: ['name', 'system_code', 'legacy_invoice_number', 'id'],

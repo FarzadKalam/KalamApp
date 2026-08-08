@@ -51,6 +51,7 @@ import {
 import { applyInvoicePaymentAllocation } from '../utils/invoicePaymentAllocationRuntime';
 import { buildBillboardInvoiceItemTitle } from '../utils/invoicePresentation';
 import { getFinancialStatusLabelFa } from '../utils/financialValueLabels';
+import { calculatePayrollSlipLineBreakdown } from '../utils/payrollSlipTotals';
 
 const { Text } = Typography;
 
@@ -5467,6 +5468,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
             const pageFinalTotal = isAnyInvoiceItems
               ? Math.max(0, roundMoney(pageSubtotal - pageGlobalDiscountAmount))
               : 0;
+            const payrollLineTotals = isPayrollLines
+              ? calculatePayrollSlipLineBreakdown(pageData)
+              : null;
 
             if (isProductionOrder && isBomItemBlock) {
               cells.push(<Table.Summary.Cell index={cellIndex} key="expand-spacer" />);
@@ -5483,8 +5487,10 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
               if (!summaryLabelRendered) {
                 cells.push(
-                  <Table.Summary.Cell index={cellIndex} key={`label_${index}`}>
-                    <span className="text-[rgb(var(--brand-700-rgb))] dark:text-gray-200">جمع:</span>
+                    <Table.Summary.Cell index={cellIndex} key={`label_${index}`}>
+                    <span className="text-[rgb(var(--brand-700-rgb))] dark:text-gray-200">
+                      {isPayrollLines ? 'جمع ناخالص:' : 'جمع:'}
+                    </span>
                   </Table.Summary.Cell>
                 );
                 summaryLabelRendered = true;
@@ -5508,6 +5514,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
                   total = pageData.reduce((prev: number, current: any) =>
                     current?.status === 'received' ? prev + (parseFloat(current[col.key]) || 0) : prev,
                   0);
+                } else if (isPayrollLines && col.key === 'amount') {
+                  total = payrollLineTotals?.grossAmount || 0;
                 } else {
                   total = pageData.reduce((prev: number, current: any) => prev + (parseFloat(current[col.key]) || 0), 0);
                 }
@@ -5577,9 +5585,20 @@ const EditableTable: React.FC<EditableTableProps> = ({
                     </Table.Summary.Cell>
                   </Table.Summary.Row>
                 ) : null}
-                <Table.Summary.Row className="font-bold bg-[rgba(var(--brand-50-rgb),0.65)] dark:bg-[rgba(var(--brand-900-rgb),0.45)]">
+              <Table.Summary.Row className="font-bold bg-[rgba(var(--brand-50-rgb),0.65)] dark:bg-[rgba(var(--brand-900-rgb),0.45)]">
                   {cells}
                 </Table.Summary.Row>
+                {isPayrollLines && payrollLineTotals ? (
+                  <Table.Summary.Row className="bg-[rgba(var(--brand-50-rgb),0.25)] dark:bg-[rgba(var(--brand-900-rgb),0.15)]">
+                    <Table.Summary.Cell index={0} colSpan={columns.length}>
+                      <div className="flex flex-wrap gap-x-5 gap-y-1 py-1 text-xs">
+                        <span>جمع حقوق و مزایا: <b className="persian-number">{formatPersianPrice(payrollLineTotals.earningsTotal)} {currencyLabel}</b></span>
+                        <span>کسورات: <b className="persian-number text-red-600 dark:text-red-300">{formatPersianPrice(payrollLineTotals.deductionTotal)} {currencyLabel}</b></span>
+                        <span>جمع ناخالص: <b className="persian-number">{formatPersianPrice(payrollLineTotals.grossAmount)} {currencyLabel}</b></span>
+                      </div>
+                    </Table.Summary.Cell>
+                  </Table.Summary.Row>
+                ) : null}
               </Table.Summary>
             );
           }}
