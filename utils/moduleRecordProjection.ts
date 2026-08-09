@@ -2,6 +2,7 @@ import { BlockType, ModuleNature, type ModuleDefinition } from '../types';
 import { supportsModuleAssignee } from './assigneeSupport';
 import { isWorkflowVirtualField } from './moduleFieldVisibility';
 import { shouldSkipModuleListField } from './moduleListFieldSelection';
+import { supportsSystemCode } from './systemCode';
 
 const BASE_RECORD_COLUMNS = [
   'id',
@@ -10,7 +11,6 @@ const BASE_RECORD_COLUMNS = [
   'updated_at',
   'created_by',
   'updated_by',
-  'system_code',
   'name',
 ] as const;
 
@@ -88,6 +88,9 @@ export const buildModuleRecordProjection = (moduleConfig?: ModuleDefinition | nu
   }
 
   const initial = new Set<string>(BASE_RECORD_COLUMNS);
+  // `system_code` is not universal (notably, process templates do not have
+  // this column). Add it only to tables that actually support it.
+  if (supportsSystemCode(moduleConfig.id)) initial.add('system_code');
   if (supportsModuleAssignee(moduleConfig)) {
     ASSIGNEE_RECORD_COLUMNS.forEach((column) => initial.add(column));
   }

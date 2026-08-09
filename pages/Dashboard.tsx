@@ -1254,9 +1254,9 @@ const Dashboard: React.FC = () => {
         },
       });
       if (error) throw error;
-      if (!data?.success) throw new Error(String(data?.message || 'ارسال ویس ناموفق بود.'));
+      if (!data?.success) throw new Error(String(data?.message || 'ارسال فایل صوتی ناموفق بود.'));
       const transcript = String(data?.transcript || '').trim();
-      if (!transcript) throw new Error('متنی از ویس دریافت نشد.');
+      if (!transcript) throw new Error('متنی از فایل صوتی دریافت نشد.');
       navigate('/ai', {
         state: {
           aiInitialPrompt: transcript,
@@ -1271,7 +1271,7 @@ const Dashboard: React.FC = () => {
         },
       });
     } catch (error: any) {
-      message.error(toFaErrorMessage(error, 'ارسال ویس به هوش مصنوعی ناموفق بود.'));
+      message.error(toFaErrorMessage(error, 'ارسال فایل صوتی به هوش مصنوعی ناموفق بود.'));
     } finally {
       setDashboardVoiceSending(false);
     }

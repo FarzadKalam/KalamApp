@@ -2256,7 +2256,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       {
         id: `voice-${Date.now()}-${prev.length}`,
         type: 'voice',
-        label: `ویس ${Math.max(1, Math.round(Number(voice.durationMs || 0) / 1000)).toLocaleString('fa-IR')} ثانیه`,
+        label: `فایل صوتی ${Math.max(1, Math.round(Number(voice.durationMs || 0) / 1000)).toLocaleString('fa-IR')} ثانیه`,
         voice,
       },
     ]);
@@ -2272,7 +2272,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
 
   const bundlePreviewItems = useMemo<ComposerAttachmentChipItem[]>(() => bundleInputs.map((item) => ({
     id: item.id,
-    name: item.label || (item.type === 'voice' ? 'ویس' : item.file.fileName || 'فایل پیوست'),
+    name: item.label || (item.type === 'voice' ? 'فایل صوتی' : item.file.fileName || 'فایل پیوست'),
     mimeType: item.type === 'voice' ? item.voice.mimeType : item.file.mimeType,
     fileType: item.type === 'voice' ? 'voice' : item.type === 'image' ? 'image' : 'file',
     url: item.type === 'voice'
@@ -2306,7 +2306,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     setInput('');
     setPendingAiAction(null);
     const bundleSummary = bundleInputs.map((item) => {
-      if (item.type === 'voice') return `ویس: ${item.label}`;
+      if (item.type === 'voice') return `فایل صوتی: ${item.label}`;
       return `${item.type === 'image' ? 'تصویر' : 'فایل'}: ${item.label}`;
     });
     const userMessage: ChatMessage = {
@@ -3141,7 +3141,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 <div className="mt-1 text-amber-800 dark:text-amber-200/85">
                   {String(pendingAiAction?.actionType || '') === 'confirm_generation'
                     ? 'قبل از ساخت، دستور و تنظیمات را بررسی کنید؛ اجرا فقط بعد از تایید شما انجام می‌شود.'
-                    : 'اطلاعات فهمیده‌شده را بررسی کنید؛ می‌توانید تایید کنید، رد کنید یا با پیام/ویس توضیح تکمیلی بدهید.'}
+                    : 'اطلاعات فهمیده‌شده را بررسی کنید؛ می‌توانید تایید کنید، رد کنید یا با پیام یا فایل صوتی توضیح تکمیلی بدهید.'}
                 </div>
               </div>
             </div>
@@ -3226,7 +3226,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             <div className="mt-2">
               {String(pendingAiAction?.actionType || '') === 'confirm_generation'
                 ? 'برای تغییر دستور، درخواست اصلاح‌شده را در کادر پیام بنویسید.'
-                : 'برای اصلاح، توضیح جدید را در کادر پیام بنویسید یا ویس بفرستید؛ دستیار آن را به همین پیش‌نویس اضافه می‌کند.'}
+                : 'برای اصلاح، توضیح جدید را در کادر پیام بنویسید یا فایل صوتی بفرستید؛ دستیار آن را به همین پیش‌نویس اضافه می‌کند.'}
             </div>
             <Space size={6} className="mt-2">
               {pendingRecordMutationType ? (
@@ -3263,7 +3263,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 <AiAudioPlayer
                   key={`player-${item.id}`}
                   src={item.voice.previewUrl}
-                  title={item.label || 'ویس آماده ارسال'}
+                  title={item.label || 'فایل صوتی آماده ارسال'}
                   subtitle={item.voice.filename}
                   downloadName={item.voice.filename}
                   compact

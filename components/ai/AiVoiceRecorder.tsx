@@ -61,7 +61,7 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
   const startRecording = async () => {
     if (disabled || loading || recording) return;
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-      message.warning('مرورگر شما از ضبط ویس پشتیبانی نمی‌کند.');
+      message.warning('مرورگر شما از ضبط فایل صوتی پشتیبانی نمی‌کند.');
       return;
     }
     try {
@@ -93,7 +93,7 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
             blob,
             mimeType,
             durationMs: finalDuration,
-            filename: `voice-${Date.now()}.webm`,
+            filename: `فایل صوتی-${Date.now()}.webm`,
             previewUrl,
           });
           setRecordedUrl(previewUrl);
@@ -134,12 +134,12 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
     return (
       <Space size={4} className="shrink-0 rounded-lg border border-blue-100 bg-blue-50 px-2 py-1 dark:border-blue-900/50 dark:bg-blue-900/20">
         <div className="w-[min(72vw,320px)]">
-          <AiAudioPlayer src={recordedUrl} title="ویس آماده ارسال" subtitle={formatSeconds(recorded.durationMs)} downloadName={recorded.filename} compact />
+          <AiAudioPlayer src={recordedUrl} title="فایل صوتی آماده ارسال" subtitle={formatSeconds(recorded.durationMs)} downloadName={recorded.filename} compact />
         </div>
-        <Tooltip title="حذف ویس">
+        <Tooltip title="حذف فایل صوتی">
           <Button size="small" type="text" icon={<CloseOutlined />} onClick={discard} disabled={loading} />
         </Tooltip>
-        <Tooltip title="ارسال ویس">
+        <Tooltip title="ارسال فایل صوتی">
           <Button size="small" type="primary" icon={<SendOutlined />} loading={loading} onClick={() => void send()} />
         </Tooltip>
       </Space>
@@ -147,7 +147,7 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
   }
 
   return (
-    <Tooltip title={recording ? 'توقف ضبط ویس' : 'ضبط ویس'}>
+    <Tooltip title={recording ? 'توقف ضبط فایل صوتی' : 'ضبط فایل صوتی'}>
       <Button
         icon={recording ? <StopOutlined /> : <AudioOutlined />}
         danger={recording}

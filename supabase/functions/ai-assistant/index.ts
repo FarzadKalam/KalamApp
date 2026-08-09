@@ -335,7 +335,8 @@ const MODULE_SEARCH_FIELDS: Record<string, string[]> = {
   products: ['name', 'title', 'sku', 'system_code', 'description'],
   projects: ['name', 'title', 'system_code', 'description'],
   tasks: ['name', 'title', 'description', 'system_code'],
-  process_runs: ['name', 'title', 'system_code', 'description'],
+  process_templates: ['name', 'description', 'process_kind', 'module_id'],
+  process_runs: ['process_name', 'status', 'module_id', 'record_id'],
   marketing_leads: ['full_name', 'business_name', 'name', 'mobile_1', 'mobile', 'phone', 'system_code'],
   cash_bank_operations: ['name', 'description', 'system_code', 'tracking_code'],
   cheques: ['name', 'description', 'system_code', 'cheque_number'],
@@ -2899,6 +2900,7 @@ const buildPromptMessages = (
     businessAnalytics?: any;
     compressedContext?: any;
     calendarContext?: any;
+    authoritativeProcessContext?: any;
   } = {},
 ) => {
   const knowledge = knowledgeChunks.map((chunk, index) => ({
@@ -2945,6 +2947,7 @@ const buildPromptMessages = (
           process_guide_context: pageContext.processGuideContext || null,
         }
       : null,
+    authoritative_process_context: options.authoritativeProcessContext || null,
     retrieved_permitted_contexts: retrievedContexts,
     business_analytics: options.businessAnalytics || null,
     web_search_results: webSearchResults.length ? webSearchResults : undefined,
@@ -2971,8 +2974,16 @@ const buildPromptMessages = (
   const jalaliAndReportsInstruction = ' تاریخ و زمان را برای مخاطب فارسی‌زبان با تقویم شمسی/جلالی و منطقه زمانی تهران بیان کن؛ تاریخ میلادی را فقط وقتی لازم است کنار تاریخ شمسی بیاور. calendar context یک resolver قطعی است: برای تاریخ صریح، زمان شروع/موعد/تکمیل فرآیند و فعالیت، یا مقدار فیلد تاریخ فقط از gregorian موجود در explicit_user_dates یا upcoming_dates استفاده کن؛ آن را حدس نزن. برای مناسبت‌ها و تعطیلات فقط calendar_lookup=verified معتبر است. اگر سال، تاریخ، ساعت یا منظور کاربر از یک عبارت نسبی روشن نیست، حداکثر ۳ سوال کوتاه و دقیق بپرس. اگر retrieved_permitted_contexts شامل reports بود، برای سوال‌های تحلیلی و مدیریتی اول از گزارش‌ها و sample_rows همان گزارش استفاده کن؛ اگر گزارش مرتبط موجود نبود، به کاربر پیشنهاد بده از بخش گزارشات پیشرفته گزارش جدید بسازد یا گزارش موجود را انتخاب کند. اگر کاربر خروجی مدیریتی خواست، می‌توانی بر اساس گزارش‌ها پیشنهاد اینفوگرافیک، تصویر، فایل، Excel، PDF یا پاورپوینت بدهی.';
   const tenantIdentity = buildTenantAssistantIdentity(companyContext);
   const conversationContinuity = buildConversationContinuityInstruction(historyRows);
+  const recordScopeInstruction = pageContext?.recordId
+    ? ' گفتگو روی یک رکورد مشخص است؛ پرسش‌های وابسته به «این»، «آن» یا «رکورد» را ابتدا به همین رکورد مربوط بدان.'
+    : pageContext?.moduleId
+    ? ' گفتگو روی فهرست/ماژول مشخص است؛ پاسخ را ابتدا بر مبنای همان ماژول و رکوردهای مجاز صفحه بده.'
+    : '';
+  const processGroundingInstruction = options.authoritativeProcessContext || pageContext.intent === 'process_guide'
+    ? ' این گفتگو در زمینهٔ یک فرآیند یا رکورد فرآیندی است. authoritative_process_context و process_guide_context منبع قطعی هستند: ابتدا فرآیند انتخاب‌شده و همان رکورد را شناسایی کن، سپس فقط بر پایهٔ مرحله‌ها، ترتیب sort_order، ماژول‌های هدف، توضیحات، مسئول‌های پیش‌فرض، موعدها، وضعیت‌های اختصاصی، فیلدهای اختصاصی و اتوماسیون‌های موجود توضیح بده. اطلاعات هیچ پروژه، الگو یا دستورالعمل نامرتبطی را به این فرآیند نسبت نده. اگر دادهٔ لازم در همین context نیست، صریح بگو ثبت نشده است؛ هرگز مرحله، مسئول، موعد یا دستورالعمل را حدس نزن. وقتی کاربر می‌گوید «این فرآیند» یا «این رکورد»، منظور همان فرآیند/رکورد جاری است.'
+    : '';
 
-  const systemContent = `${tenantIdentity}${conversationContinuity} اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction}${copyableOutputInstruction}${jalaliAndReportsInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
+  const systemContent = `${tenantIdentity}${conversationContinuity}${recordScopeInstruction}${processGroundingInstruction} اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction}${copyableOutputInstruction}${jalaliAndReportsInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
 
   const historyMessages = (historyRows || [])
     .filter((item) => ['user', 'assistant'].includes(String(item?.role || '')))
@@ -4443,7 +4454,7 @@ const base64ToUint8Array = (value: string) => {
   try {
     binary = atob(normalized);
   } catch {
-    throw new Error('فایل ارسالی قابل خواندن نیست. لطفاً فایل یا ویس را دوباره انتخاب و ارسال کنید.');
+    throw new Error('فایل ارسالی قابل خواندن نیست. لطفاً فایل یا فایل صوتی را دوباره انتخاب و ارسال کنید.');
   }
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) {
@@ -4493,7 +4504,7 @@ const callAudioTranscription = async (
     const parsed = parseJsonSafe(await response.text());
     if (response.ok) {
       const transcript = String(parsed?.text || parsed?.transcript || parsed?.data?.text || '').trim();
-      if (!transcript) throw new Error('متنی از ویس دریافت نشد.');
+      if (!transcript) throw new Error('متنی از فایل صوتی دریافت نشد.');
       return {
         transcript,
         provider: providerConfig.provider,
@@ -4560,7 +4571,7 @@ const callDecisionEngineAudioTranscription = async (
   });
   const parsed = extractJsonObjectFromText(result.content) || {};
   const transcript = String(parsed?.transcript || parsed?.text || '').trim();
-  if (!transcript) throw new Error('موتور تصمیم‌گیرنده متنی از ویس برنگرداند.');
+  if (!transcript) throw new Error('موتور تصمیم‌گیرنده متنی از فایل صوتی برنگرداند.');
   return { ...result, transcript, source: 'decision_engine' };
 };
 
@@ -6106,11 +6117,16 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
   const aiUsageAccess = await assertAiUsageAllowed(supabaseUrl, serviceRoleKey, authContext);
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const canUseKnowledge = isAiCapabilityPlanAvailable(planContext, 'document_analysis');
-  const [knowledgeChunks, companyContext, orgPeopleContext, calendarContext] = await Promise.all([
+  const requiresAuthoritativeProcessContext = rawContext.intent === 'process_guide'
+    || ['process_templates', 'process_runs'].includes(String(pageContext?.moduleId || '').trim());
+  const [knowledgeChunks, companyContext, orgPeopleContext, calendarContext, authoritativeProcessContext] = await Promise.all([
     canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, message, { moduleId: pageContext.moduleId }) : Promise.resolve([]),
     loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
     loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, message),
     resolvePersianCalendarContext(message),
+    requiresAuthoritativeProcessContext
+      ? loadAiProcessContext(supabaseUrl, serviceRoleKey, authContext, pageContext)
+      : Promise.resolve(null),
   ]);
   const [retrievedContexts, businessAnalytics] = await Promise.all([
     fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, message, pageContext),
@@ -6190,6 +6206,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
       businessAnalytics,
       compressedContext,
       calendarContext,
+      authoritativeProcessContext,
     },
   );
 
@@ -6207,6 +6224,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     retrievedContexts,
     businessAnalytics,
     calendarContext,
+    authoritativeProcessContext,
     webSearchResults,
     forceWebSearch,
     nativeTools,
@@ -7653,7 +7671,7 @@ const transcribeTaskBundleVoices = async (
     }
     transcripts.push({
       inputId: input.id,
-      label: input.label || 'ویس',
+      label: input.label || 'فایل صوتی',
       transcript: result.transcript,
       source: result.source || 'decision_engine',
     });
@@ -7682,7 +7700,7 @@ const buildTaskBundlePrompt = (body: any, inputs: any[], transcripts: any[], pre
   const textParts = inputs
     .filter((input) => input.text && !input.audio)
     .map((input) => `متن ${input.label || input.type}:\n${input.text}`);
-  const voiceParts = transcripts.map((item) => `متن تبدیل‌شده از ${item.label || 'ویس'}:\n${item.transcript}`);
+  const voiceParts = transcripts.map((item) => `متن تبدیل‌شده از ${item.label || 'فایل صوتی'}:\n${item.transcript}`);
   const fileParts = inputs
     .filter((input) => input.file)
     .map((input) => {
@@ -7696,7 +7714,7 @@ const buildTaskBundlePrompt = (body: any, inputs: any[], transcripts: any[], pre
   return [
     baseMessage || 'این ورودی‌ها را بررسی کن و مطابق عملگرهای انتخاب‌شده اقدام پیشنهادی بده.',
     previousSummary ? `زمینه ذخیره‌شده از مرحله قبل همین گفتگو:\n${previousSummary}` : '',
-    transcripts.length ? 'ابتدا متن ویس را با عنوان «متن ویس» بنویس و سپس پاسخ یا اقدام موردنیاز را ارائه کن.' : '',
+    transcripts.length ? 'ابتدا متن فایل صوتی را با عنوان «متن فایل صوتی» بنویس و سپس پاسخ یا اقدام موردنیاز را ارائه کن.' : '',
     '',
     ...textParts,
     ...voiceParts,
@@ -7759,7 +7777,7 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
     'اگر کاربر فقط گفتگوی عادی می‌خواهد، capabilities را خالی برگردان.',
     'برای تحلیل، پرسش، بررسی فایل/رسانه و بررسی اطلاعات مجاز سازمان، هیچ عملگر جداگانه‌ای انتخاب نکن؛ مدل اصلی همان گفتگو این کار را انجام می‌دهد. برای اطلاعات جاری وب فقط web_search را انتخاب کن تا ابزار جستجوی همان مدل اصلی فعال شود، نه یک عملگر مستقل. فقط وقتی واقعاً باید یک خروجی تولیدی ساخته شود یا یک اقدام ساختاریافته انجام شود، capability مناسب را انتخاب کن.',
     'هرگز اطلاعات سازمان، قیمت، وضعیت فرآیند، نام رکورد یا فیلدهای لازم را حدس نزن. اگر داده کافی نیست، capabilityها را خالی بگذار تا مدل اصلی در ادامه گفتگو با حفظ تاریخچه پاسخ دهد.',
-    'اگر کاربر از فایل، تصویر یا ویس چیزی فرستاده و می‌خواهد آن را بررسی یا از آن اطلاعات استخراج شود، capabilityها را خالی بگذار تا خود مدل اصلی ورودی را بررسی کند.',
+    'اگر کاربر از فایل، تصویر یا فایل صوتی چیزی فرستاده و می‌خواهد آن را بررسی یا از آن اطلاعات استخراج شود، capabilityها را خالی بگذار تا خود مدل اصلی ورودی را بررسی کند.',
     'اگر کاربر خواسته از روی ورودی‌ها یک یا چند رکورد ساخته یا یک یا چند رکورد موجود ویرایش شود، record_creation را انتخاب کن و اگر نوع رکورد روشن است target_module_id را هم بده. این شامل ثبت هزینه، پرداخت، دریافت، فاکتور خرید/فروش، مساعده و تهاتر در وضعیت پیش‌نویس یا ایجادشده است.',
     'برای درخواست ایجاد یا ویرایش رکورد مجاز، هرگز نگویید دستیار دسترسی مستقیم ندارد یا کاربر باید خودش در CRM ثبت کند. وظیفه شما ساخت پیش‌نویس قابل‌ویرایش و ارسال آن به مودال تایید کاربر است؛ اجرای نهایی فقط پس از تایید کاربر انجام می‌شود.',
     'برای ساخت رکورد mutation_mode=create و برای ویرایش رکورد موجود mutation_mode=update برگردان.',
@@ -7769,7 +7787,7 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
     'اگر کاربر صریحاً ساخت، تولید یا تبدیل یک متن یا تصویر به ویدیو می‌خواهد، video_generation را انتخاب کن. اگر تصویر مبنا دارد، آن را در برنامه به‌عنوان ورودی ویدیو در نظر بگیر.',
     'اگر کاربر فقط سناریو، ایده یا پرامپت ویدیو می‌خواهد اما نمی‌خواهد خود ویدیو همین حالا ساخته شود، video_generation را انتخاب نکن.',
     'اگر کاربر ساخت فایل Word/Excel/PDF/CSV یا گزارش خروجی می‌خواهد، document_generation را انتخاب کن.',
-    'اگر کاربر تبدیل متن به ویس می‌خواهد، voice_output را انتخاب کن.',
+    'اگر کاربر تبدیل متن به فایل صوتی می‌خواهد، voice_output را انتخاب کن.',
     'اگر سوال نیازمند اطلاعات جاری وب است، web_search را انتخاب کن.',
     'اگر سوال حقوقی است، legal_assistant را انتخاب کن.',
     'اگر سوال پیچیده و نیازمند تحلیل چندمرحله‌ای است، deep_reasoning را انتخاب کن.',
@@ -8060,7 +8078,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
   const baseMessage = String(body?.message || body?.prompt || body?.bundle?.message || '').trim();
   const visibleUserMessage = String(body?.userMessageText || body?.user_message_text || '').trim();
   if (!baseMessage && inputs.length === 0) {
-    return json(400, { success: false, message: 'متن، فایل یا ویس برای ارسال به هوش مصنوعی دریافت نشد.' });
+    return json(400, { success: false, message: 'متن، فایل یا فایل صوتی برای ارسال به هوش مصنوعی دریافت نشد.' });
   }
 
   const rawContext = normalizeContext(body?.context || {});
@@ -8133,7 +8151,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
   provider = decisionProviderConfig.provider || null;
   model = decisionProviderConfig.model || null;
   const publicInputSummary = inputs.map((input: any) => {
-    if (input?.audio) return `فایل صوتی: ${String(input?.label || input?.audio?.filename || 'ویس').trim() || 'ویس'}`;
+    if (input?.audio) return `فایل صوتی: ${String(input?.label || input?.audio?.filename || 'فایل صوتی').trim() || 'فایل صوتی'}`;
     const file = input?.file || {};
     const label = String(file?.filename || input?.label || (input?.type === 'image' ? 'تصویر' : 'فایل')).trim() || 'فایل';
     return `${input?.type === 'image' ? 'تصویر' : 'پیوست'}: ${label}`;
@@ -8523,16 +8541,56 @@ const buildProcessTaskPayload = ({
 const loadAiProcessContext = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, pageContext: any) => {
   const moduleId = String(pageContext?.moduleId || '').trim();
   const recordId = normalizeId(pageContext?.recordId);
-  const templateRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'process_templates', {
-    org_id: `eq.${authContext.orgId}`,
-    is_active: 'eq.true',
-    select: 'id,module_id,name,description,process_kind,auto_copy_mode,created_at',
-    order: 'updated_at.desc',
-    limit: 80,
-  });
+  const processGuide = pageContext?.processGuideContext && typeof pageContext.processGuideContext === 'object'
+    ? pageContext.processGuideContext
+    : {};
+  const selectedProcessId = String(pageContext?.selectedProcessId || processGuide?.process_summary?.selected_process_id || '').trim();
+  const guideTemplates = Array.isArray(processGuide?.processes) ? processGuide.processes : [];
+  const directTemplateIds = new Set<string>([
+    ...(moduleId === 'process_templates' && isUuid(recordId) ? [recordId] : []),
+    ...guideTemplates
+      .filter((process: any) => !selectedProcessId || String(process?.id || '').trim() === selectedProcessId)
+      .map((process: any) => normalizeId(process?.template_id || process?.templateId))
+      .filter(isUuid),
+  ]);
+
+  const currentRunRows = moduleId === 'process_runs' && isUuid(recordId)
+    ? await safeRestSelect(supabaseUrl, serviceRoleKey, 'process_runs', {
+        id: `eq.${recordId}`,
+        org_id: `eq.${authContext.orgId}`,
+        select: 'id,template_id,module_id,record_id,process_name,status,copied_mode,started_at,process_group_id,created_at',
+        limit: 1,
+      })
+    : [];
+  const currentRun = currentRunRows[0] || null;
+  if (isUuid(normalizeId(currentRun?.template_id))) directTemplateIds.add(normalizeId(currentRun.template_id));
+  const targetModuleId = moduleId === 'process_runs'
+    ? String(currentRun?.module_id || '').trim()
+    : moduleId;
+
+  const templateSelect = 'id,module_id,module_ids,name,description,process_kind,auto_copy_mode,is_active,created_at,updated_at';
+  const templateRows = directTemplateIds.size > 0
+    ? await safeRestSelect(supabaseUrl, serviceRoleKey, 'process_templates', {
+        id: `in.(${Array.from(directTemplateIds).join(',')})`,
+        org_id: `eq.${authContext.orgId}`,
+        select: templateSelect,
+        order: 'updated_at.desc',
+        limit: 30,
+      })
+    : await safeRestSelect(supabaseUrl, serviceRoleKey, 'process_templates', {
+        org_id: `eq.${authContext.orgId}`,
+        is_active: 'eq.true',
+        select: templateSelect,
+        order: 'updated_at.desc',
+        limit: 80,
+      });
   const relevantTemplates = (templateRows || []).filter((template: any) => {
-    const templateModule = String(template?.module_id || '').trim();
-    return !moduleId || templateModule === moduleId || templateModule === 'tasks' || templateModule === 'process_runs';
+    if (directTemplateIds.size > 0) return directTemplateIds.has(normalizeId(template?.id));
+    const templateModules = Array.from(new Set([
+      String(template?.module_id || '').trim(),
+      ...(Array.isArray(template?.module_ids) ? template.module_ids.map((item: any) => String(item || '').trim()) : []),
+    ].filter(Boolean)));
+    return !targetModuleId || templateModules.includes(targetModuleId) || templateModules.includes('tasks');
   }).slice(0, 30);
   const templateIds = relevantTemplates.map((template: any) => normalizeId(template?.id)).filter(isUuid);
   const templateStages = templateIds.length
@@ -8543,10 +8601,12 @@ const loadAiProcessContext = async (supabaseUrl: string, serviceRoleKey: string,
         limit: 300,
       })
     : [];
-  const runs = moduleId && isUuid(recordId)
+  const runs = currentRun
+    ? [currentRun]
+    : targetModuleId && isUuid(recordId)
     ? await safeRestSelect(supabaseUrl, serviceRoleKey, 'process_runs', {
         org_id: `eq.${authContext.orgId}`,
-        module_id: `eq.${moduleId}`,
+        module_id: `eq.${targetModuleId}`,
         record_id: `eq.${recordId}`,
         select: 'id,template_id,module_id,record_id,process_name,status,copied_mode,started_at,process_group_id,created_at',
         order: 'created_at.desc',
@@ -8563,10 +8623,10 @@ const loadAiProcessContext = async (supabaseUrl: string, serviceRoleKey: string,
       })
     : [];
   const taskFilters: Promise<any[]>[] = [];
-  if (moduleId && isUuid(recordId)) {
+  if (targetModuleId && isUuid(recordId) && moduleId !== 'process_runs') {
     taskFilters.push(safeRestSelect(supabaseUrl, serviceRoleKey, 'tasks', {
       org_id: `eq.${authContext.orgId}`,
-      source_module_id: `eq.${moduleId}`,
+      source_module_id: `eq.${targetModuleId}`,
       source_record_id: `eq.${recordId}`,
       select: 'id,name,status,task_type,priority,assignee_id,assignee_role_id,assignee_type,due_date,sort_order,process_group_id,process_run_id,process_run_stage_id,source_template_id,source_stage_sort_order,recurrence_info',
       order: 'sort_order.asc',
@@ -8595,6 +8655,13 @@ const loadAiProcessContext = async (supabaseUrl: string, serviceRoleKey: string,
     stagesByRunId.set(key, [...(stagesByRunId.get(key) || []), stage]);
   });
   return {
+    scope: {
+      module_id: moduleId || null,
+      record_id: recordId || null,
+      target_module_id: targetModuleId || null,
+      selected_process_id: selectedProcessId || null,
+      source: moduleId === 'process_templates' ? 'template_record' : moduleId === 'process_runs' ? 'process_run_record' : 'record_processes',
+    },
     templates: relevantTemplates.map((template: any) => ({
       ...template,
       stages: (stagesByTemplateId.get(normalizeId(template?.id)) || []).slice(0, 30),

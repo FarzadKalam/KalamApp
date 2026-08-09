@@ -75,6 +75,7 @@ describe('module record projection', () => {
       'assignee_id',
       'assignee_role_id',
     ]));
+    expect(projection.initialColumns).not.toContain('system_code');
   });
 
   it('keeps assignee columns for SaaS-managed CMS records', () => {

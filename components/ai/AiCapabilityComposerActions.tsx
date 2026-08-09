@@ -73,7 +73,7 @@ const CAPABILITY_META: Array<{
 }> = [
   { key: 'text_chat', label: 'گفتگوی متنی', description: 'گفتگوی مستقیم بدون تصمیم‌گیری خودکار', icon: <MessageOutlined />, kind: 'toggle' },
   { key: 'document_analysis', label: 'تحلیل اسناد', description: 'تحلیل فایل، رسید، عکس یا سند', icon: <FileSearchOutlined />, kind: 'inline' },
-  { key: 'voice_input', label: 'تحلیل صدا', description: 'ضبط و تبدیل ویس به متن', icon: <AudioOutlined />, kind: 'inline' },
+  { key: 'voice_input', label: 'تحلیل صدا', description: 'ضبط و تبدیل فایل صوتی به متن', icon: <AudioOutlined />, kind: 'inline' },
   { key: 'voice_output', label: 'تولید صدا', description: 'تبدیل متن به فایل صوتی', icon: <SoundOutlined />, kind: 'toggle' },
   { key: 'image_generation', label: 'ساخت تصویر', description: 'ارسال متن برای تولید تصویر', icon: <PictureOutlined />, kind: 'toggle' },
   { key: 'video_generation', label: 'ساخت ویدیو', description: 'تولید ویدیو از متن یا تصویر', icon: <VideoCameraOutlined />, kind: 'toggle' },
