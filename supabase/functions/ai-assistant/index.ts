@@ -4016,9 +4016,9 @@ const callChatCompletionsStream = async (
 const normalizeBase64Payload = (value: any, mimeType?: string | null) => {
   const raw = String(value || '').trim();
   if (!raw) return '';
-  if (/^data:[^;]+;base64,/i.test(raw)) return raw;
+  if (/^data:[^,]+;base64,/i.test(raw)) return raw;
   const mime = String(mimeType || '').trim();
-  return mime ? `data:${mime};base64,${raw.replace(/^data:[^;]+;base64,/i, '')}` : raw.replace(/^data:[^;]+;base64,/i, '');
+  return mime ? `data:${mime};base64,${raw.replace(/^data:[^,]+;base64,/i, '')}` : raw.replace(/^data:[^,]+;base64,/i, '');
 };
 
 const getPublicSupabaseUrl = (supabaseUrl: string) => {
@@ -4372,7 +4372,7 @@ const callGeminiImageGenerate = async (
   if (!model) throw new Error('برای تولید تصویر، مدل فعال در تنظیمات سازمان پیدا نشد.');
   const content: any[] = [{ type: 'text', text: prompt }];
   for (const src of (options.sourceImages || [])) {
-    const data = String(src?.data || '').replace(/^data:[^;]+;base64,/, '').trim();
+    const data = String(src?.data || '').replace(/^data:[^,]+;base64,/, '').trim();
     if (data) {
       content.push({
         type: 'image_url',
@@ -4429,7 +4429,7 @@ const uint8ToBase64 = (bytes: Uint8Array) => {
 };
 
 const normalizeRawBase64 = (value: string) => {
-  const withoutHeader = String(value || '').replace(/^data:[^;]+;base64,/i, '');
+  const withoutHeader = String(value || '').replace(/^data:[^,]+;base64,/i, '');
   const compact = withoutHeader.replace(/\s/g, '').replace(/-/g, '+').replace(/_/g, '/');
   if (!compact) return '';
   const padding = compact.length % 4;
@@ -4481,7 +4481,8 @@ const callAudioTranscription = async (
   for (const model of candidateModels) {
     const formData = new FormData();
     formData.append('model', model);
-    formData.append('file', new Blob([bytes], { type: mimeType || 'audio/webm' }), filename || 'voice.webm');
+    const safeMimeType = String(mimeType || 'audio/webm').split(';')[0].trim() || 'audio/webm';
+    formData.append('file', new Blob([bytes], { type: safeMimeType }), filename || 'voice.webm');
     const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/audio/transcriptions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${providerConfig.apiKey}` },
@@ -4528,7 +4529,7 @@ const callDecisionEngineAudioTranscription = async (
   mimeType = 'audio/webm',
   filename = 'voice.webm',
 ) => {
-  const normalizedAudio = String(audioBase64 || '').replace(/^data:[^;]+;base64,/, '').trim();
+  const normalizedAudio = String(audioBase64 || '').replace(/^data:[^,]+;base64,/, '').trim();
   if (!normalizedAudio) throw new Error('فایل صوتی معتبر نیست.');
   const result = await callChatCompletions(providerConfig, [
     {
@@ -7621,6 +7622,7 @@ const transcribeTaskBundleVoices = async (
   authContext: any,
   inputs: any[],
   decisionProviderConfig?: any,
+  options: { preferDedicatedTranscription?: boolean } = {},
 ) => {
   const voiceInputs = inputs.filter((input) => input.audio?.data);
   if (!voiceInputs.length) return [];
@@ -7634,14 +7636,20 @@ const transcribeTaskBundleVoices = async (
     const filename = String(input.audio.filename || 'voice.webm');
     let result: any = null;
     let decisionEngineError = '';
-    try {
-      result = await callDecisionEngineAudioTranscription(baseProviderConfig, audioData, mimeType, filename);
-    } catch (error: any) {
-      decisionEngineError = String(error?.message || error || '').trim();
-      console.warn('Decision engine voice analysis failed; falling back to specialized voice model', error);
+    if (options.preferDedicatedTranscription) {
       const specializedProviderConfig = await resolveSpecializedProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'voice_input');
       result = await callAudioTranscription(specializedProviderConfig, audioData, mimeType, filename);
       result.source = 'specialized_voice_engine';
+    } else {
+      try {
+        result = await callDecisionEngineAudioTranscription(baseProviderConfig, audioData, mimeType, filename);
+      } catch (error: any) {
+        decisionEngineError = String(error?.message || error || '').trim();
+        console.warn('Decision engine voice analysis failed; falling back to specialized voice model', error);
+        const specializedProviderConfig = await resolveSpecializedProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'voice_input');
+        result = await callAudioTranscription(specializedProviderConfig, audioData, mimeType, filename);
+        result.source = 'specialized_voice_engine';
+      }
     }
     transcripts.push({
       inputId: input.id,
@@ -7688,6 +7696,7 @@ const buildTaskBundlePrompt = (body: any, inputs: any[], transcripts: any[], pre
   return [
     baseMessage || 'این ورودی‌ها را بررسی کن و مطابق عملگرهای انتخاب‌شده اقدام پیشنهادی بده.',
     previousSummary ? `زمینه ذخیره‌شده از مرحله قبل همین گفتگو:\n${previousSummary}` : '',
+    transcripts.length ? 'ابتدا متن ویس را با عنوان «متن ویس» بنویس و سپس پاسخ یا اقدام موردنیاز را ارائه کن.' : '',
     '',
     ...textParts,
     ...voiceParts,
@@ -7996,16 +8005,19 @@ const handlePrimaryModelTaskBundle = async (
   const previousTaskContext = existingThread?.metadata?.task_bundle_context && typeof existingThread.metadata.task_bundle_context === 'object'
     ? existingThread.metadata.task_bundle_context
     : null;
-  const prompt = buildTaskBundlePrompt(body, inputs, [], previousTaskContext);
-  const attachments = inputs.map((input: any) => {
-    if (input?.file) return input.file;
-    if (!input?.audio?.data) return null;
-    return {
-      filename: input.audio.filename || input.label || 'voice.webm',
-      mimeType: input.audio.mimeType || 'audio/webm',
-      data: input.audio.data,
-    };
-  }).filter(Boolean);
+  // Gemini chat models should receive files natively, but browser-recorded
+  // audio is first transcribed by AvalAI's dedicated STT endpoint. Sending
+  // `audio/webm;codecs=opus` as a generic file is rejected by Gemini.
+  const transcripts = await transcribeTaskBundleVoices(
+    supabaseUrl,
+    serviceRoleKey,
+    authContext,
+    inputs,
+    undefined,
+    { preferDedicatedTranscription: true },
+  );
+  const prompt = buildTaskBundlePrompt(body, inputs, transcripts, previousTaskContext);
+  const attachments = inputs.map((input: any) => input?.file).filter(Boolean);
 
   // A single primary-model request receives every attachment and the existing
   // thread context.  It deliberately bypasses transcription, document, web,
@@ -9203,16 +9215,12 @@ const handleTranscribeVoice = async (supabaseUrl: string, serviceRoleKey: string
   await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, decisionProviderConfig.orgAiSettings, 'voice_input');
   const mimeType = String(audio?.mimeType || audio?.mime_type || body?.mimeType || 'audio/webm');
   const filename = String(audio?.filename || body?.filename || 'voice.webm');
-  let result: any = null;
-  let decisionEngineError = '';
-  try {
-    result = await callDecisionEngineAudioTranscription(decisionProviderConfig, audioBase64, mimeType, filename);
-  } catch (error: any) {
-    decisionEngineError = String(error?.message || error || '').trim();
-    const specializedProviderConfig = await resolveSpecializedProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'voice_input');
-    result = await callAudioTranscription(specializedProviderConfig, audioBase64, mimeType, filename);
-    result.source = 'specialized_voice_engine';
-  }
+  // This endpoint is used by fast voice flows. Do not first try the chat
+  // model: Gemini chat accepts neither this multipart transcription endpoint
+  // nor browser WebM as a generic chat file.
+  const specializedProviderConfig = await resolveSpecializedProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'voice_input');
+  const result = await callAudioTranscription(specializedProviderConfig, audioBase64, mimeType, filename);
+  result.source = 'specialized_voice_engine';
   const ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
     capability: 'voice_input',
     provider: result.provider,
@@ -9221,8 +9229,7 @@ const handleTranscribeVoice = async (supabaseUrl: string, serviceRoleKey: string
     usageMetadata: result.usageMetadata,
     metadata: {
       source: 'voice_transcription',
-      transcription_engine: result.source || 'decision_engine',
-      decision_engine_error: decisionEngineError ? shortenProviderError(decisionEngineError) : null,
+      transcription_engine: result.source || 'specialized_voice_engine',
       mime_type: mimeType,
       duration_ms: numberFrom(audio?.durationMs || audio?.duration_ms || body?.durationMs, 0),
     },

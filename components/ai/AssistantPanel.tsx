@@ -517,6 +517,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const streamAbortRef = useRef<AbortController | null>(null);
   const autoSubmittedInitialPromptRef = useRef('');
   const autoSubmittedInitialBundleRef = useRef('');
+  const initializedPanelSessionRef = useRef<string | null>(null);
   const modelOverrideRef = useRef<string | null>(null);
   const composerPreferencesRef = useRef<Record<string, any>>({});
   const autoCompressedSignatureRef = useRef('');
@@ -1508,8 +1509,18 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     }
   }, []);
 
+  const initialPanelSessionKey = `${contextKey}:${normalizedInitialThreadId || 'new'}`;
+
   useEffect(() => {
-    if (!active) return;
+    if (!active) {
+      initializedPanelSessionRef.current = null;
+      return;
+    }
+    // Cosmetic updates to the thread list (such as a generated title) must
+    // never reset the live conversation. Only a real thread/context switch is
+    // allowed to initialise the composer again.
+    if (initializedPanelSessionRef.current === initialPanelSessionKey) return;
+    initializedPanelSessionRef.current = initialPanelSessionKey;
     setThreadId(normalizedInitialThreadId);
     setMessages([]);
     setThreadTitle(initialTitle);
@@ -1540,7 +1551,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     setModelOverrides({});
     autoSubmittedInitialPromptRef.current = '';
     autoSubmittedInitialBundleRef.current = '';
-  }, [active, contextKey, initialCapabilities, initialFile, initialFiles, initialMediaSettings, initialMediaSourceImages, initialModelOverride, initialRecordCreationTargetModuleId, initialThreadIsShared, initialTitle, normalizedInitialThreadId, sanitizeMediaSourceImagesForPreferences]);
+  }, [active, initialPanelSessionKey]);
 
   useEffect(() => {
     if (!active || !normalizedInitialThreadId) return;
@@ -2469,8 +2480,31 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       });
     } catch (error: any) {
       setInput(prompt);
-      setMessages((prev) => prev.filter((item) => item.id !== userMessage.id && item.id !== thinkingMessage.id));
-      message.error(toFaErrorMessage(error, 'ارسال درخواست هوش مصنوعی ناموفق بود.'));
+      const errorText = toFaErrorMessage(error, 'ارسال درخواست هوش مصنوعی ناموفق بود.');
+      const payload = error?.payload && typeof error.payload === 'object' ? error.payload : null;
+      const payloadThreadId = String(payload?.threadId || payload?.thread?.id || '').trim();
+      const serverMessages = Array.isArray(payload?.messages) ? payload.messages as ChatMessage[] : [];
+      if (payloadThreadId) setThreadId(payloadThreadId);
+      if (serverMessages.length) {
+        // The server may already have persisted both the user turn and its
+        // error message. Keep them visible instead of clearing the chat.
+        setMessages((prev) => [
+          ...prev.filter((item) => item.id !== userMessage.id && item.id !== thinkingMessage.id),
+          ...serverMessages,
+        ]);
+      } else {
+        setMessages((prev) => [
+          ...prev.filter((item) => item.id !== thinkingMessage.id),
+          {
+            id: `assistant-bundle-error-${Date.now()}`,
+            role: 'assistant',
+            content: errorText,
+            metadata: { failed: true },
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      }
+      message.error(errorText);
     } finally {
       setSubmitting(false);
     }

@@ -397,6 +397,38 @@ describe('AssistantPanel AI operators', () => {
     expect(body?.bundle?.inputs?.[0]?.audio?.data).toBe('voice-base64');
   });
 
+  it('keeps the persisted voice turn visible when task-bundle processing fails', async () => {
+    await renderPanel();
+    invokeMock.mockImplementation(async (_functionName: string, options?: any) => {
+      const action = options?.body?.action;
+      if (action === 'suggest_auto_capabilities') {
+        return { data: { success: true, capabilities: [], targetModuleId: null }, error: null };
+      }
+      if (action === 'run_task_bundle') {
+        return {
+          data: {
+            success: false,
+            message: 'تبدیل صوت به متن ناموفق بود.',
+            threadId: 'voice-thread-1',
+            messages: [
+              { id: 'voice-user-1', role: 'user', content: 'ویس: voice.webm' },
+              { id: 'voice-error-1', role: 'assistant', content: 'تبدیل صوت به متن ناموفق بود.' },
+            ],
+          },
+          error: null,
+        };
+      }
+      return { data: { success: true }, error: null };
+    });
+
+    fireEvent.click(screen.getAllByText('send-voice')[0]);
+    await typeAndSend('ویس را بررسی کن', 'ارسال');
+
+    await waitFor(() => expect(findBody('run_task_bundle')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('تبدیل صوت به متن ناموفق بود.')).toBeInTheDocument());
+    expect(screen.getByText('ویس: voice.webm')).toBeInTheDocument();
+  });
+
   it('sends image/file and voice together for record creation as one task bundle', async () => {
     await renderPanel();
     fireEvent.click(screen.getAllByText('cap-record_creation')[0]);
