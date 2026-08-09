@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { App, Avatar, Button, Checkbox, Drawer, Empty, Input, Popconfirm, Popover, Progress, Space, Spin, Tag, Tooltip } from 'antd';
-import { CheckOutlined, CloseOutlined, CompressOutlined, CopyOutlined, DeleteOutlined, EditOutlined, ForwardOutlined, MenuOutlined, SendOutlined, UserAddOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
+import { App, Avatar, Button, Checkbox, Drawer, Empty, Input, Modal, Popconfirm, Popover, Progress, Space, Spin, Tag, Tooltip } from 'antd';
+import { CheckOutlined, CloseOutlined, CompressOutlined, CopyOutlined, DeleteOutlined, EditOutlined, ForwardOutlined, MenuOutlined, SendOutlined, ShareAltOutlined, UserAddOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
@@ -12,6 +12,8 @@ import { narrowProcessGuideContext } from '../../utils/processGuideContext';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import { fetchRecordReferenceLabels } from '../../utils/recordReference';
 import ProfileAvatar from '../common/ProfileAvatar';
+import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
+import type { IdentityOption } from '../../utils/identityDirectory';
 import type { RecordedVoice } from './AiVoiceRecorder';
 import type { AiUploadedFilePrompt } from './AiFileUploadButton';
 import AiCapabilityComposerActions, { normalizeAiComposerCapabilities, type AiComposerCapability } from './AiCapabilityComposerActions';
@@ -178,6 +180,7 @@ interface AssistantPanelProps {
   active: boolean;
   initialThreadId?: string | null;
   initialThreadTitle?: string | null;
+  initialThreadIsShared?: boolean;
   initialPrompt?: string | null;
   initialInputKind?: string | null;
   initialCapabilities?: AiComposerCapability[] | null;
@@ -416,6 +419,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   active,
   initialThreadId,
   initialThreadTitle,
+  initialThreadIsShared = false,
   initialPrompt,
   initialInputKind,
   initialCapabilities,
@@ -500,6 +504,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const [draftThreadTitle, setDraftThreadTitle] = useState(initialTitle);
   const [renamingThread, setRenamingThread] = useState(false);
   const [compressingContext, setCompressingContext] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [sharingThread, setSharingThread] = useState(false);
+  const [sharedIdentityTokens, setSharedIdentityTokens] = useState<string[]>([]);
+  const [threadIsShared, setThreadIsShared] = useState(initialThreadIsShared);
   const [threadListOpen, setThreadListOpen] = useState(false);
   const [drawerThreads, setDrawerThreads] = useState<any[]>([]);
   const [drawerThreadsLoading, setDrawerThreadsLoading] = useState(false);
@@ -1056,6 +1064,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       mutationMode: String(data?.mutationMode || '').trim() === 'update' ? 'update' as const : 'create' as const,
       voiceTranscripts: Array.isArray(data?.voiceTranscripts) ? data.voiceTranscripts : [],
       agentPlan: data?.agentPlan && typeof data.agentPlan === 'object' ? data.agentPlan : null,
+      primaryModelOnly: data?.primaryModelOnly === true,
     };
     setAutoSuggestedCapabilities(result.suggestedCapabilities);
     return result;
@@ -1082,7 +1091,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       ...(await result),
       ...(route?.agentPlan ? { agentPlan: route.agentPlan } : {}),
     });
-    if (clarificationQuestions.length > 0) {
+    if (clarificationQuestions.length > 0 && !route.primaryModelOnly) {
       return {
         success: true,
         answer: `برای انجام دقیق درخواست، لطفاً این موارد را مشخص کنید:\n${clarificationQuestions.map((question: string) => `• ${question}`).join('\n')}`,
@@ -1091,6 +1100,32 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     }
     const routeCapabilities = route.suggestedCapabilities;
     const capabilitySet = new Set(routeCapabilities);
+    const needsDedicatedGenerationOperator = capabilitySet.has('image_generation')
+      || capabilitySet.has('video_generation')
+      || capabilitySet.has('document_generation')
+      || capabilitySet.has('voice_output');
+    const needsStructuredAction = capabilitySet.has('record_creation')
+      || capabilitySet.has('process_operation');
+    // In automatic mode, analysis belongs to the selected primary model.  Do
+    // not turn ordinary files, media, web questions, or internal context into
+    // a chain of specialized operators.  Creation actions intentionally keep
+    // their dedicated confirmation cards below.
+    if (route.primaryModelOnly && !needsDedicatedGenerationOperator && !needsStructuredAction) {
+      return await withAgentPlan(callAssistant({
+        action: bundlePayload.length > 0 ? 'run_task_bundle' : 'chat',
+        primaryModelOnly: true,
+        capabilities: routeCapabilities,
+        message: params.messageText || 'ورودی‌های پیوست‌شده را بررسی کن.',
+        userMessageText: params.messageText,
+        inputKind: bundlePayload.length > 0 ? 'task_bundle' : params.inputKind,
+        bundle: bundlePayload.length ? { inputs: bundlePayload } : undefined,
+        threadId: params.forceNewThread ? null : threadId,
+        forceNewThread: params.forceNewThread === true,
+        context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
+        settings: mediaSettings,
+      }));
+    }
     const mutationTargetModuleId = route.targetModuleId
       || (route.mutationMode === 'update' ? String(contextWithSelection.moduleId || '').trim() : '');
     const autoRecordSchema = capabilitySet.has('record_creation') && mutationTargetModuleId
@@ -1415,6 +1450,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       });
       setThreadId(data.threadId ? String(data.threadId) : null);
       if (data?.thread) onThreadUpserted?.(data.thread);
+      setThreadIsShared(data?.thread?.is_shared === true);
+      setSharedIdentityTokens([
+        ...(Array.isArray(data?.thread?.shared_user_ids) ? data.thread.shared_user_ids.map((id: any) => `user:${String(id || '').trim()}`) : []),
+        ...(Array.isArray(data?.thread?.shared_role_ids) ? data.thread.shared_role_ids.map((id: any) => `role:${String(id || '').trim()}`) : []),
+      ].filter((token) => token !== 'user:' && token !== 'role:'));
       const loadedThreadTitle = String(data?.thread?.title || '').trim() || 'گفتگوی هوش مصنوعی';
       setThreadTitle(loadedThreadTitle);
       setDraftThreadTitle(loadedThreadTitle);
@@ -1474,6 +1514,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     setMessages([]);
     setThreadTitle(initialTitle);
     setDraftThreadTitle(initialTitle);
+    setThreadIsShared(initialThreadIsShared);
+    setSharedIdentityTokens([]);
     setEditingThreadTitle(false);
     setPendingAiAction(null);
     const nextInitialCapabilities = normalizeInitialCapabilities(initialCapabilities);
@@ -1498,7 +1540,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     setModelOverrides({});
     autoSubmittedInitialPromptRef.current = '';
     autoSubmittedInitialBundleRef.current = '';
-  }, [active, contextKey, initialCapabilities, initialFile, initialFiles, initialMediaSettings, initialMediaSourceImages, initialModelOverride, initialRecordCreationTargetModuleId, initialTitle, normalizedInitialThreadId, sanitizeMediaSourceImagesForPreferences]);
+  }, [active, contextKey, initialCapabilities, initialFile, initialFiles, initialMediaSettings, initialMediaSourceImages, initialModelOverride, initialRecordCreationTargetModuleId, initialThreadIsShared, initialTitle, normalizedInitialThreadId, sanitizeMediaSourceImagesForPreferences]);
 
   useEffect(() => {
     if (!active || !normalizedInitialThreadId) return;
@@ -1750,6 +1792,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             : contextWithSelection.mode === 'record'
             ? 'record_chat'
             : 'dashboard_chat';
+          if (route.primaryModelOnly) {
+            streamCapabilities = [];
+            canStream = true;
+            streamCapability = contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat';
+          }
         }
         if (canStream) {
           await runStreamingChat({
@@ -1762,6 +1809,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             forceNewThread: shouldStartProcessGuideThread,
             context: contextWithSelection,
             modelOverride: modelOverrideRef.current,
+            primaryModelOnly: plannedAutoRoute?.primaryModelOnly === true,
           });
           return;
         }
@@ -2626,8 +2674,37 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     }
   }, [callAssistant, compressingContext, message, onThreadUpserted, threadId]);
 
-  const renderMessage = (item: ChatMessage, index: number) => {
+  const saveThreadSharing = useCallback(async () => {
+    if (!threadId || sharingThread) return;
+    setSharingThread(true);
+    try {
+      const selected = sharedIdentityTokens
+        .map((token) => String(token || '').trim())
+        .filter(Boolean);
+      const sharedUserIds = selected.filter((token) => token.startsWith('user:')).map((token) => token.slice(5));
+      const sharedRoleIds = selected.filter((token) => token.startsWith('role:')).map((token) => token.slice(5));
+      const data = await callAssistant({ action: 'share_thread', threadId, sharedUserIds, sharedRoleIds });
+      if (data?.success === false) throw new Error(String(data?.message || 'اشتراک‌گذاری گفتگو ناموفق بود.'));
+      const shared = data?.thread?.is_shared === true;
+      setThreadIsShared(shared);
+      if (data?.thread) onThreadUpserted?.(data.thread);
+      setShareOpen(false);
+      message.success(shared ? 'دسترسی گفتگو به‌روزرسانی شد.' : 'اشتراک‌گذاری گفتگو برداشته شد.');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'اشتراک‌گذاری گفتگو ناموفق بود.'));
+    } finally {
+      setSharingThread(false);
+    }
+  }, [callAssistant, message, onThreadUpserted, sharedIdentityTokens, sharingThread, threadId]);
+
+  // Typing in the composer must not rebuild every rich message card.  Several
+  // cards contain media previews and markdown, so keeping this callback stable
+  // makes the compose box responsive even in long conversations.
+  const renderMessage = useCallback((item: ChatMessage, index: number) => {
     const isUser = item.role === 'user';
+    const messageAuthor = item.metadata?.author && typeof item.metadata.author === 'object' ? item.metadata.author : null;
+    const authorName = String(messageAuthor?.name || '').trim() || currentUserView.name;
+    const authorAvatarUrl = String(messageAuthor?.avatar_url || '').trim() || currentUserView.avatarUrl;
     const usageText = !isUser ? formatUsageMetadata(item.metadata?.usage || item.metadata) : '';
     const messageText = normalizeAiMessageText(item.content);
     const attachments = extractAiMessageAttachments(item);
@@ -2645,7 +2722,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     return (
       <div key={item.id} className={`flex items-start gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
         {isUser ? (
-          <ProfileAvatar size={28} src={currentUserView.avatarUrl} name={currentUserView.name} icon={<UserOutlined />} />
+          <ProfileAvatar size={28} src={authorAvatarUrl} name={authorName} icon={<UserOutlined />} />
         ) : (
           <Avatar
             size={28}
@@ -2705,7 +2782,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           </div>
           )}
           <div className={`mt-1 flex flex-wrap items-center gap-1 text-[9px] leading-4 ${isUser ? 'text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-200-rgb))]' : 'text-gray-400'}`}>
-            {isUser ? <span>{currentUserView.name}</span> : null}
+            {isUser ? <span>{authorName}</span> : null}
             {item.created_at ? <span>{toFaDateTime(item.created_at)}</span> : null}
             {!isUser && item.model ? <span>{item.model}</span> : null}
             {!isUser && usageText ? <span>{usageText}</span> : null}
@@ -2766,7 +2843,24 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         </div>
       </div>
     );
-  };
+  }, [
+    context.mode,
+    context.moduleId,
+    context.recordId,
+    copyText,
+    createActivityFromMessage,
+    currentUserView.avatarUrl,
+    currentUserView.name,
+    forwardMessage,
+    handleEditImage,
+    messages,
+    recheckPending,
+    recheckingId,
+    stopActiveStream,
+    submitChat,
+  ]);
+
+  const renderedMessages = useMemo(() => messages.map(renderMessage), [messages, renderMessage]);
 
   const pendingGenerationKind = String(pendingAiAction?.generationKind || '').trim();
   const pendingRecordMutationType = ['create_record_from_prompt', 'update_record_from_prompt'].includes(String(pendingAiAction?.actionType || ''))
@@ -2888,6 +2982,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 title="ویرایش عنوان گفتگو"
               >
                 <span className="truncate">{threadTitle || 'گفتگوی هوش مصنوعی'}</span>
+                {threadIsShared ? <ShareAltOutlined className="shrink-0 text-[11px] text-[rgb(var(--brand-600-rgb))]" aria-label="گفتگوی اشتراک‌گذاری‌شده" /> : null}
                 <EditOutlined className="shrink-0 text-[11px] text-slate-400 opacity-0 transition group-hover:opacity-100" />
               </button>
             )}
@@ -2952,6 +3047,16 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 aria-label="فشرده‌سازی زمینه گفتگو"
               />
             </Tooltip>
+            <Tooltip title="اشتراک‌گذاری گفتگو">
+              <Button
+                type="text"
+                size="small"
+                icon={<ShareAltOutlined />}
+                disabled={!threadId}
+                onClick={() => setShareOpen(true)}
+                aria-label="اشتراک‌گذاری گفتگوی هوش مصنوعی"
+              />
+            </Tooltip>
             <Popconfirm
               title="این گفتگوی هوش مصنوعی حذف شود؟"
               description="این گفتگو از فهرست گفتگوهای شما حذف می‌شود."
@@ -2982,7 +3087,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           />
         ) : (
           <div className="space-y-3">
-            {messages.map(renderMessage)}
+            {renderedMessages}
           </div>
         )}
       </div>
@@ -3221,6 +3326,31 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           onConfirm={() => void confirmPendingAiAction()}
         />
       ) : null}
+      <Modal
+        open={shareOpen}
+        title="اشتراک‌گذاری گفتگو"
+        okText="ذخیره دسترسی"
+        cancelText="انصراف"
+        confirmLoading={sharingThread}
+        onCancel={() => setShareOpen(false)}
+        onOk={() => void saveThreadSharing()}
+        destroyOnHidden
+      >
+        <p className="mb-3 text-xs leading-6 text-slate-600 dark:text-slate-300">
+          افراد یا نقش‌های سازمان را انتخاب کنید. اعضای انتخاب‌شده تاریخچهٔ گفتگو را می‌بینند و می‌توانند در همان گفتگو پیام بفرستند.
+        </p>
+        <AdaptiveIdentityPicker
+          mode="multiple"
+          scopes={['user', 'role']}
+          value={sharedIdentityTokens}
+          onChange={(value: string | string[] | undefined, _options: IdentityOption[]) => {
+            setSharedIdentityTokens(Array.isArray(value) ? value : value ? [value] : []);
+          }}
+          placeholder="انتخاب کاربران یا نقش‌ها"
+          pickerTitle="اشتراک‌گذاری با اعضای سازمان"
+          className="w-full"
+        />
+      </Modal>
       <Drawer
         open={threadListOpen}
         onClose={() => setThreadListOpen(false)}
@@ -3253,7 +3383,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                   <AiSparkleIcon className="h-3.5 w-3.5" />
                 </Avatar>
                 <span className="min-w-0 flex-1">
-                  <span className="line-clamp-2 text-[12px] font-bold text-slate-800 dark:text-slate-100">{String(thread?.title || 'گفتگوی هوش مصنوعی')}</span>
+                  <span className="flex items-center gap-1"><span className="line-clamp-2 text-[12px] font-bold text-slate-800 dark:text-slate-100">{String(thread?.title || 'گفتگوی هوش مصنوعی')}</span>{thread?.is_shared ? <ShareAltOutlined className="shrink-0 text-[10px] text-[rgb(var(--brand-600-rgb))]" /> : null}</span>
                   <span className="mt-0.5 line-clamp-1 text-[10px] text-slate-500 dark:text-slate-300">
                     {thread?.updated_at ? new Intl.DateTimeFormat('fa-IR', { month: 'short', day: 'numeric' }).format(new Date(thread.updated_at)) : ''}
                   </span>

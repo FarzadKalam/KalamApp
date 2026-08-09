@@ -34,4 +34,9 @@ describe('relation display labels', () => {
   it('fetches the automatic naming flag for customer relation labels', () => {
     expect(getRelationDisplayFields('customers', 'full_name')).toContain('auto_name_enabled');
   });
+
+  it('does not fetch virtual bot group fields for customer and employee relation labels', () => {
+    expect(getRelationDisplayFields('customers', 'rubika_group_title')).not.toContain('rubika_group_title');
+    expect(getRelationDisplayFields('employees', 'telegram_group_title')).not.toContain('telegram_group_title');
+  });
 });

@@ -1,5 +1,6 @@
 import { MODULES } from '../moduleRegistry';
 import { FieldType } from '../types';
+import { BOT_VIRTUAL_FIELD_KEYS, isBotTargetModuleId } from './botPlatform';
 import { formatPhoneForDisplay } from './phoneNumber';
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from './persianNumberFormatter';
 import {
@@ -11,6 +12,8 @@ import {
 const TEMPLATE_TOKEN_REGEX = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
 
 const cleanText = (value: unknown) => String(value ?? '').trim();
+const isStoredRelationFieldKey = (moduleId: string, fieldKey: string) =>
+  !(isBotTargetModuleId(moduleId) && BOT_VIRTUAL_FIELD_KEYS.has(String(fieldKey || '').trim()));
 
 const dedupeSegments = (segments: string[]) => {
   const seen = new Set<string>();
@@ -59,7 +62,7 @@ export const getRelationDisplayFields = (moduleId: string, targetField: string) 
         ...templateKeys,
         ...(normalizedModuleId === 'customers' && moduleFieldKeys.has('auto_name_enabled') ? ['auto_name_enabled'] : []),
         ...(moduleFieldKeys.has('system_code') ? ['system_code'] : []),
-      ].filter(Boolean)
+      ].filter((fieldKey) => Boolean(fieldKey) && isStoredRelationFieldKey(normalizedModuleId, fieldKey))
     )
   );
 };
@@ -112,7 +115,7 @@ export const getRelationSearchFields = (moduleId: string, targetField: string) =
 
   return Array.from(
     new Set(
-      sourceFields.filter((fieldKey) => searchableFieldKeys.has(fieldKey))
+      sourceFields.filter((fieldKey) => searchableFieldKeys.has(fieldKey) && isStoredRelationFieldKey(normalizedModuleId, fieldKey))
     )
   );
 };

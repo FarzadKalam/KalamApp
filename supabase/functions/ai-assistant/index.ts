@@ -194,6 +194,25 @@ const AUTO_ROUTER_CAPABILITIES = [
   'process_operation',
 ];
 
+// Automatic mode is deliberately model-led: it may use the selected primary
+// model to plan a request, but it must not turn ordinary analysis into a chain
+// of separately configured capability engines.  Dedicated generation and
+// approval flows remain explicit exceptions.
+const AUTOMATIC_DEDICATED_GENERATION_CAPABILITIES = new Set([
+  'image_generation',
+  'video_generation',
+  'document_generation',
+  'voice_output',
+]);
+
+const isAutomaticStructuredActionCapability = (capability: string) =>
+  AUTOMATIC_DEDICATED_GENERATION_CAPABILITIES.has(capability)
+  // Search stays on the selected primary model.  This value merely enables
+  // its native/compatible search tool; it does not invoke a separate operator.
+  || capability === 'web_search'
+  || capability === 'record_creation'
+  || capability === 'process_operation';
+
 const MODULE_TABLE_MAP: Record<string, string> = {
   productBundles: 'product_bundles',
   purchaseInvoices: 'purchase_invoices',
@@ -1280,7 +1299,19 @@ const resolveProviderConfig = async (
     orgAiSettings: settings,
     modelMetadata: modelCatalog?.metadata && typeof modelCatalog.metadata === 'object' ? modelCatalog.metadata : {},
     modelProvider: String(modelCatalog?.provider || '').trim() || null,
+    modelCapabilities: Array.isArray(modelCatalog?.capability_tags) ? modelCatalog.capability_tags : [],
   };
+};
+
+const supportsNativeGeminiWebSearch = (providerConfig: any) => {
+  const model = String(providerConfig?.model || '').trim().toLowerCase();
+  if (!/^gemini-(?:\d|flash|pro)/.test(model) || /(?:-image|imagen)/.test(model)) return false;
+  const metadata = providerConfig?.modelMetadata && typeof providerConfig.modelMetadata === 'object'
+    ? providerConfig.modelMetadata
+    : {};
+  // A catalog may explicitly turn the tool off for a particular model.  In
+  // all other Gemini chat models use AvalAI's documented Google Search tool.
+  return metadata?.supports_web_search !== false;
 };
 
 const resolveSpecializedProviderConfig = async (
@@ -3593,6 +3624,7 @@ const callChatCompletions = async (
     safetyIdentifier?: string;
     timeoutMs?: number;
     responseFormat?: Record<string, any> | null;
+    tools?: any[];
   }
 ) => {
   if (providerConfig?.isActive === false) {
@@ -3629,6 +3661,9 @@ const callChatCompletions = async (
       if (serviceTier === 'default' || serviceTier === 'flex') requestBody.service_tier = serviceTier;
       if (options?.responseFormat && typeof options.responseFormat === 'object') {
         requestBody.response_format = options.responseFormat;
+      }
+      if (Array.isArray(options?.tools) && options.tools.length > 0) {
+        requestBody.tools = options.tools;
       }
       if (reasoning) {
         requestBody.max_completion_tokens = options?.maxCompletionTokens ?? options?.maxTokens ?? DEFAULT_REASONING_MAX_TOKENS;
@@ -3767,6 +3802,7 @@ const callChatCompletionsStream = async (
     maxCompletionTokens?: number;
     safetyIdentifier?: string;
     timeoutMs?: number;
+    tools?: any[];
     onDelta?: (text: string) => void | Promise<void>;
   } = {},
 ) => {
@@ -3798,6 +3834,7 @@ const callChatCompletionsStream = async (
     };
     const serviceTier = String(providerConfig?.serviceTier || '').trim();
     if (serviceTier === 'default' || serviceTier === 'flex') requestBody.service_tier = serviceTier;
+    if (Array.isArray(options?.tools) && options.tools.length > 0) requestBody.tools = options.tools;
     if (reasoning) {
       requestBody.max_completion_tokens = options?.maxCompletionTokens ?? options?.maxTokens ?? DEFAULT_REASONING_MAX_TOKENS;
     } else {
@@ -5219,12 +5256,40 @@ const fetchThreadMessages = async (
   limit = 120,
 ) => {
   if (!isUuid(threadId)) return [];
-  return await safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_messages', {
+  const messages = await safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_messages', {
     thread_id: `eq.${threadId}`,
     org_id: `eq.${authContext.orgId}`,
     select: 'id,thread_id,role,content,provider,model,metadata,created_at',
     order: 'created_at.asc',
     limit,
+  });
+  const authorIds = Array.from(new Set(messages
+    .map((item: any) => normalizeId(item?.metadata?.author?.user_id))
+    .filter(isUuid)));
+  if (!authorIds.length) return messages;
+  const profiles = await safeRestSelect(supabaseUrl, serviceRoleKey, 'profiles', {
+    org_id: `eq.${authContext.orgId}`,
+    id: `in.(${authorIds.join(',')})`,
+    select: 'id,full_name,avatar_url',
+    limit: 500,
+  }).catch(() => []);
+  const profilesById = new Map(profiles.map((profile: any) => [normalizeId(profile?.id), profile]));
+  return messages.map((item: any) => {
+    const authorId = normalizeId(item?.metadata?.author?.user_id);
+    const profile = profilesById.get(authorId);
+    if (!profile) return item;
+    return {
+      ...item,
+      metadata: {
+        ...(item?.metadata || {}),
+        author: {
+          ...(item?.metadata?.author || {}),
+          user_id: authorId,
+          name: String(profile?.full_name || '').trim() || null,
+          avatar_url: String(profile?.avatar_url || '').trim() || null,
+        },
+      },
+    };
   });
 };
 
@@ -5282,15 +5347,10 @@ const ensureThread = async (
 ) => {
   const requestedThreadId = normalizeId(payload.threadId);
   if (requestedThreadId && isUuid(requestedThreadId)) {
-    const rows = await restSelect(supabaseUrl, serviceRoleKey, 'ai_threads', {
-      id: `eq.${requestedThreadId}`,
-      org_id: `eq.${authContext.orgId}`,
-      user_id: `eq.${authContext.userId}`,
-      status: 'eq.active',
-      select: '*',
-      limit: 1,
-    });
-    if (rows[0]) return rows[0];
+    // A member with whom a thread is shared can continue that same thread.
+    // Access is evaluated centrally and fail-closed by fetchThreadForRead.
+    const accessibleThread = await fetchThreadForRead(supabaseUrl, serviceRoleKey, authContext, requestedThreadId);
+    if (accessibleThread) return accessibleThread;
   }
 
   const contextKey = payload.contextKey || buildContextKey(payload.pageContext?.context || {});
@@ -5335,9 +5395,19 @@ const insertAiMessage = async (
   authContext: any,
   payload: Record<string, any>,
 ) => {
+  const isHumanMessage = String(payload?.role || '').trim() === 'user';
+  const metadata = payload?.metadata && typeof payload.metadata === 'object' ? payload.metadata : {};
   const rows = await restInsert(supabaseUrl, serviceRoleKey, 'ai_messages', [{
     org_id: authContext.orgId,
     ...payload,
+    metadata: {
+      ...metadata,
+      author: isHumanMessage ? {
+        ...(metadata?.author && typeof metadata.author === 'object' ? metadata.author : {}),
+        user_id: authContext.userId,
+        role_id: authContext.roleId || null,
+      } : metadata?.author || { type: 'ai', name: AI_AUTHOR_NAME },
+    },
   }]);
   return rows[0] || null;
 };
@@ -6051,12 +6121,16 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     && isAiCapabilityPlanAvailable(planContext, 'web_search');
   const forceWebSearch = selectedCapabilitySet.has('web_search') || selectedCapabilitySet.has('legal_assistant');
   const shouldSearchWeb = webSearchEnabled && (forceWebSearch || shouldTriggerWebSearch(message));
-  const webSearchModel = shouldSearchWeb
+  const useNativeGeminiWebSearch = body?.primaryModelOnly === true
+    && shouldSearchWeb
+    && supportsNativeGeminiWebSearch(providerConfig);
+  const webSearchModel = shouldSearchWeb && !useNativeGeminiWebSearch
     ? await resolveOrgCapabilityModel(supabaseUrl, serviceRoleKey, orgAiSettings, 'web_search')
     : '';
-  const webSearchResults = shouldSearchWeb
+  const webSearchResults = shouldSearchWeb && !useNativeGeminiWebSearch
     ? await callWebSearch(providerConfig, message, webSearchModel, 5, forceWebSearch).then((r) => r.results)
     : [];
+  const nativeTools = useNativeGeminiWebSearch ? [{ googleSearch: {} }] : [];
 
   const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
     threadId: body?.threadId || null,
@@ -6134,6 +6208,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     calendarContext,
     webSearchResults,
     forceWebSearch,
+    nativeTools,
     aiUsageAccess,
     thread,
     userMessage,
@@ -6249,6 +6324,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     businessAnalytics,
     webSearchResults,
     forceWebSearch,
+    nativeTools,
     thread,
     userMessage,
     promptMessages,
@@ -6257,6 +6333,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
   try {
     aiResult = await callChatCompletions(providerConfig, promptMessages, {
       safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}`,
+      tools: nativeTools,
     });
   } catch (error: any) {
     const partialContent = getRecoverablePartialAiContent(error);
@@ -6487,6 +6564,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
 
           const aiResult = await callChatCompletionsStream(prepared.providerConfig, prepared.promptMessages, {
             safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${prepared.capability}`,
+            tools: prepared.nativeTools,
             onDelta: (text) => {
               if (text) send('delta', { text });
             },
@@ -6699,9 +6777,21 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
 };
 
 const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
-  const file = body?.file || body?.attachment || {};
-  const prompt = String(body?.message || body?.prompt || 'این فایل را تحلیل کن.').trim() || 'این فایل را تحلیل کن.';
-  const extractedText = String(file?.text || file?.extractedText || body?.extractedText || body?.extracted_text || '').trim();
+  const suppliedFiles = (Array.isArray(body?.files) ? body.files : [body?.file || body?.attachment])
+    .filter((item: any) => item && typeof item === 'object');
+  const file = suppliedFiles[0] || {};
+  let prompt = String(body?.message || body?.prompt || 'این فایل را تحلیل کن.').trim() || 'این فایل را تحلیل کن.';
+  const extractedTextEntries = suppliedFiles
+    .map((item: any) => ({
+      filename: String(item?.filename || item?.fileName || item?.name || 'فایل پیوست').trim() || 'فایل پیوست',
+      mimeType: String(item?.mimeType || item?.mime_type || item?.type || '').trim(),
+      text: String(item?.text || item?.extractedText || '').trim(),
+    }))
+    .filter((item: any) => item.text);
+  const extractedText = extractedTextEntries
+    .map((item: any) => `نام فایل: ${item.filename}${item.mimeType ? `\nنوع فایل: ${item.mimeType}` : ''}\nمحتوای فایل:\n${item.text}`)
+    .join('\n\n');
+  const allFilesHaveExtractedText = suppliedFiles.length > 0 && suppliedFiles.every((item: any) => String(item?.text || item?.extractedText || '').trim());
   const filename = String(file?.filename || file?.fileName || file?.name || 'فایل پیوست').trim() || 'فایل پیوست';
   const mimeType = String(file?.mimeType || file?.mime_type || file?.type || '').trim() || null;
   const selectedCapabilities = Array.isArray(body?.capabilities)
@@ -6709,38 +6799,38 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     : [];
   const selectedCapabilitySet = new Set(selectedCapabilities);
   const internalAgentStep = body?.metadata?.internal_agent_step === true;
+  const primaryCapability = normalizeContext(body?.context || {}).mode === 'record' ? 'record_chat' : 'dashboard_chat';
 
-  if (extractedText) {
+  if (allFilesHaveExtractedText) {
     const textMessage = [
       prompt,
       '',
-      `نام فایل: ${filename}`,
-      mimeType ? `نوع فایل: ${mimeType}` : '',
-      '',
-      'محتوای فایل:',
       extractedText,
     ].filter(Boolean).join('\n');
     return await handleChat(supabaseUrl, serviceRoleKey, authContext, {
       ...body,
       action: 'chat',
-      capability: selectedCapabilitySet.has('legal_assistant')
+      capability: body?.primaryModelOnly === true
+        ? primaryCapability
+        : selectedCapabilitySet.has('legal_assistant')
         ? 'legal_assistant'
         : selectedCapabilitySet.has('deep_reasoning')
         ? 'deep_reasoning'
         : 'document_analysis',
+      capabilities: body?.primaryModelOnly === true ? [] : selectedCapabilities,
       message: textMessage,
       inputKind: 'file',
     });
   }
 
-  const fileParts = buildOpenAiInputContentParts(prompt, file).slice(1);
+  if (extractedText) prompt = [prompt, 'متن استخراج‌شده از بخشی از پیوست‌ها:', extractedText].join('\n\n');
+  const fileParts = suppliedFiles.flatMap((item: any) => buildOpenAiInputContentParts('', item).slice(1));
   if (!fileParts.length) {
     return json(400, { success: false, message: 'فایل یا محتوای قابل تحلیل ارسال نشده است.' });
   }
 
   const rawContext = normalizeContext(body?.context || {});
-  const capability = 'document_analysis';
-  const primaryCapability = rawContext.mode === 'record' ? 'record_chat' : 'dashboard_chat';
+  const capability = body?.primaryModelOnly === true ? primaryCapability : 'document_analysis';
   const contextKey = buildContextKey(rawContext);
   // Give the organization's primary model the first opportunity to understand
   // multimodal input. A dedicated document model is only a fallback.
@@ -6823,7 +6913,10 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
   if (lastUserIndex >= 0) {
     promptMessages[lastUserIndex] = {
       role: 'user',
-      content: buildOpenAiInputContentParts(String(promptMessages[lastUserIndex].content || ''), file),
+      content: [
+        { type: 'text', text: String(promptMessages[lastUserIndex].content || '') },
+        ...fileParts,
+      ],
     };
   }
 
@@ -6836,23 +6929,25 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     });
   } catch (error: any) {
     primaryAnalysisError = String(error?.message || error || '').trim();
-    try {
-      const specializedProviderConfig = await resolveSpecializedProviderConfig(
-        supabaseUrl,
-        serviceRoleKey,
-        authContext,
-        'document_analysis',
-      );
-      aiResult = await callChatCompletions(specializedProviderConfig, promptMessages, {
-        safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_document_analysis_fallback`,
-      });
-      aiResult.analysisFallback = {
-        used: true,
-        primary_model: providerConfig.model,
-        primary_error: shortenProviderError(primaryAnalysisError),
-      };
-    } catch (fallbackError: any) {
-      analysisError = fallbackError;
+    if (body?.primaryModelOnly !== true) {
+      try {
+        const specializedProviderConfig = await resolveSpecializedProviderConfig(
+          supabaseUrl,
+          serviceRoleKey,
+          authContext,
+          'document_analysis',
+        );
+        aiResult = await callChatCompletions(specializedProviderConfig, promptMessages, {
+          safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_document_analysis_fallback`,
+        });
+        aiResult.analysisFallback = {
+          used: true,
+          primary_model: providerConfig.model,
+          primary_error: shortenProviderError(primaryAnalysisError),
+        };
+      } catch (fallbackError: any) {
+        analysisError = fallbackError;
+      }
     }
   }
   if (!aiResult) {
@@ -7613,6 +7708,7 @@ const buildAutoRouterHistoryText = (messages: any[], limit = 8) =>
     .join('\n');
 
 const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const primaryModelOnly = true;
   const rawContext = normalizeContext(body?.context || {});
   const baseCapability = rawContext.mode === 'record' ? 'record_chat' : 'dashboard_chat';
   const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, baseCapability, { modelOverride: body?.modelOverride });
@@ -7624,14 +7720,18 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
   const existingThread = body?.threadId
     ? await fetchThreadForRead(supabaseUrl, serviceRoleKey, authContext, String(body.threadId))
     : null;
-  const useConversationHistoryForBundle = body?.settings?.useConversationHistory === true || body?.useConversationHistory === true;
+  // Automatic decisions belong to the current conversation by default.  The
+  // old opt-in behaviour made each turn look like a brand-new request to the
+  // planner, which in turn caused repeated clarification questions.
+  const useConversationHistoryForBundle = body?.settings?.useConversationHistory !== false && body?.useConversationHistory !== false;
   const previousTaskContext = useConversationHistoryForBundle && existingThread?.metadata?.task_bundle_context && typeof existingThread.metadata.task_bundle_context === 'object'
     ? existingThread.metadata.task_bundle_context
     : null;
   const inputs = normalizeTaskBundleInputs(body);
-  const transcripts = availability?.voice_input?.enabled === true
-    ? await transcribeTaskBundleVoices(supabaseUrl, serviceRoleKey, authContext, inputs, providerConfig)
-    : [];
+  // Do not transcribe a voice with a separate engine while the automatic
+  // path is deciding.  The selected primary model receives the original
+  // attachment in the execution step.
+  const transcripts: any[] = [];
   const prompt = inputs.length
     ? buildTaskBundlePrompt(body, inputs, transcripts, previousTaskContext)
     : String(body?.message || body?.prompt || '').trim();
@@ -7648,8 +7748,9 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
     'فقط از capabilityهای مجاز زیر انتخاب کن و capability جدید نساز:',
     availableCapabilities.length ? availableCapabilities.join(', ') : 'هیچ capability فعال نیست',
     'اگر کاربر فقط گفتگوی عادی می‌خواهد، capabilities را خالی برگردان.',
-    'هرگز اطلاعات سازمان، قیمت، وضعیت فرآیند، نام رکورد یا فیلدهای لازم را حدس نزن. ابتدا ابزارهای خواندنی و context مجاز را برای بررسی انتخاب کن؛ اگر پس از آن داده کافی نیست، capabilities را خالی بگذار و حداکثر سه پرسش دقیق را در clarification_questions برگردان.',
-    'اگر کاربر از فایل، تصویر یا ویس چیزی فرستاده و می‌خواهد آن را بررسی یا از آن اطلاعات استخراج شود، document_analysis و در صورت وجود صوت voice_input را انتخاب کن.',
+    'برای تحلیل، پرسش، بررسی فایل/رسانه و بررسی اطلاعات مجاز سازمان، هیچ عملگر جداگانه‌ای انتخاب نکن؛ مدل اصلی همان گفتگو این کار را انجام می‌دهد. برای اطلاعات جاری وب فقط web_search را انتخاب کن تا ابزار جستجوی همان مدل اصلی فعال شود، نه یک عملگر مستقل. فقط وقتی واقعاً باید یک خروجی تولیدی ساخته شود یا یک اقدام ساختاریافته انجام شود، capability مناسب را انتخاب کن.',
+    'هرگز اطلاعات سازمان، قیمت، وضعیت فرآیند، نام رکورد یا فیلدهای لازم را حدس نزن. اگر داده کافی نیست، capabilityها را خالی بگذار تا مدل اصلی در ادامه گفتگو با حفظ تاریخچه پاسخ دهد.',
+    'اگر کاربر از فایل، تصویر یا ویس چیزی فرستاده و می‌خواهد آن را بررسی یا از آن اطلاعات استخراج شود، capabilityها را خالی بگذار تا خود مدل اصلی ورودی را بررسی کند.',
     'اگر کاربر خواسته از روی ورودی‌ها یک یا چند رکورد ساخته یا یک یا چند رکورد موجود ویرایش شود، record_creation را انتخاب کن و اگر نوع رکورد روشن است target_module_id را هم بده. این شامل ثبت هزینه، پرداخت، دریافت، فاکتور خرید/فروش، مساعده و تهاتر در وضعیت پیش‌نویس یا ایجادشده است.',
     'برای درخواست ایجاد یا ویرایش رکورد مجاز، هرگز نگویید دستیار دسترسی مستقیم ندارد یا کاربر باید خودش در CRM ثبت کند. وظیفه شما ساخت پیش‌نویس قابل‌ویرایش و ارسال آن به مودال تایید کاربر است؛ اجرای نهایی فقط پس از تایید کاربر انجام می‌شود.',
     'برای ساخت رکورد mutation_mode=create و برای ویرایش رکورد موجود mutation_mode=update برگردان.',
@@ -7697,12 +7798,20 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
         return agentPlanMutationAllowed(perm, String(parsed?.mutation_mode) === 'update');
       },
     });
+    const automaticAgentPlan = {
+      ...agentPlan,
+      capabilities: agentPlan.capabilities.filter(isAutomaticStructuredActionCapability),
+      steps: agentPlan.steps.filter((step: any) => isAutomaticStructuredActionCapability(String(step?.operator || '').trim())),
+      // Clarification belongs to the primary model with the full conversation,
+      // rather than to a planner that only sees a compact routing prompt.
+      clarification_questions: [],
+    };
     const agentRun = await recordAgentPlan(
       supabaseUrl,
       serviceRoleKey,
       authContext,
       existingThread?.id || null,
-      agentPlan,
+      automaticAgentPlan,
       {
         context_module_id: pageContext?.context?.moduleId || null,
         input_count: inputs.length,
@@ -7718,19 +7827,20 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
       usageMetadata: routeResult.usageMetadata,
       metadata: {
         source: 'agent_plan',
-        agent_plan: agentPlan,
+        agent_plan: automaticAgentPlan,
       },
     });
     return json(200, {
       success: true,
-      capabilities: agentPlan.capabilities,
-      targetModuleId: agentPlan.target_module_id,
-      mutationMode: agentPlan.mutation_mode,
+      primaryModelOnly,
+      capabilities: automaticAgentPlan.capabilities,
+      targetModuleId: automaticAgentPlan.target_module_id,
+      mutationMode: automaticAgentPlan.mutation_mode,
       voiceTranscripts: transcripts,
       capability: baseCapability,
-      reason: agentPlan.reason,
-      confidence: agentPlan.confidence,
-      agentPlan,
+      reason: automaticAgentPlan.reason,
+      confidence: automaticAgentPlan.confidence,
+      agentPlan: automaticAgentPlan,
       agentRunId: agentRun?.id || null,
       provider: routeResult.provider,
       model: routeResult.model,
@@ -7743,6 +7853,7 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
 
   return json(200, {
     success: true,
+    primaryModelOnly,
     capabilities: [],
     targetModuleId: null,
     mutationMode: 'create',
@@ -7870,6 +7981,60 @@ const createAssistantVoiceOutputMessage = async (
   };
 };
 
+const handlePrimaryModelTaskBundle = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  body: any,
+  inputs: any[],
+) => {
+  const rawContext = normalizeContext(body?.context || {});
+  const baseCapability = rawContext.mode === 'record' ? 'record_chat' : 'dashboard_chat';
+  const existingThread = body?.threadId
+    ? await fetchThreadForRead(supabaseUrl, serviceRoleKey, authContext, String(body.threadId))
+    : null;
+  const previousTaskContext = existingThread?.metadata?.task_bundle_context && typeof existingThread.metadata.task_bundle_context === 'object'
+    ? existingThread.metadata.task_bundle_context
+    : null;
+  const prompt = buildTaskBundlePrompt(body, inputs, [], previousTaskContext);
+  const attachments = inputs.map((input: any) => {
+    if (input?.file) return input.file;
+    if (!input?.audio?.data) return null;
+    return {
+      filename: input.audio.filename || input.label || 'voice.webm',
+      mimeType: input.audio.mimeType || 'audio/webm',
+      data: input.audio.data,
+    };
+  }).filter(Boolean);
+
+  // A single primary-model request receives every attachment and the existing
+  // thread context.  It deliberately bypasses transcription, document, web,
+  // and reasoning operators; generation still takes the explicit paths above.
+  if (attachments.length > 0) {
+    return await handleChatWithFile(supabaseUrl, serviceRoleKey, authContext, {
+      ...body,
+      action: 'chat_with_file',
+      capability: baseCapability,
+      capabilities: [],
+      message: prompt,
+      files: attachments,
+      file: attachments[0],
+      inputKind: 'task_bundle',
+      primaryModelOnly: true,
+    });
+  }
+
+  return await handleChat(supabaseUrl, serviceRoleKey, authContext, {
+    ...body,
+    action: 'chat',
+    capability: baseCapability,
+    capabilities: [],
+    message: prompt,
+    inputKind: 'task_bundle',
+    primaryModelOnly: true,
+  });
+};
+
 const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const selectedCapabilities = Array.from(new Set(Array.isArray(body?.capabilities)
     ? body.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean)
@@ -7891,6 +8056,10 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
   const decisionProviderConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, baseCapability, {
     modelOverride: body?.modelOverride,
   });
+
+  if (body?.primaryModelOnly === true) {
+    return await handlePrimaryModelTaskBundle(supabaseUrl, serviceRoleKey, authContext, body, inputs);
+  }
 
   for (const selectedCapability of selectedCapabilities) {
     if (selectedCapability === 'voice_input') {
@@ -10823,13 +10992,35 @@ const providerNumber = (...values: any[]) => {
   return null;
 };
 
-const inferProviderModelCapabilities = (modelId: string, raw: any) => {
-  const id = modelId.toLowerCase();
-  const sourceTags = [raw?.capabilities, raw?.capability_tags, raw?.tags, raw?.modalities]
+const extractProviderModelCapabilityHints = (raw: any) => [raw?.capabilities, raw?.capability_tags, raw?.tags, raw?.modalities, raw?.features, raw?.supported_features]
     .flatMap((value: any) => Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [])
     .map((value: any) => String(value || '').trim())
     .filter(Boolean);
-  const tags = new Set(sourceTags);
+
+const inferProviderModelCapabilities = (modelId: string, raw: any) => {
+  const id = modelId.toLowerCase();
+  const sourceTags = extractProviderModelCapabilityHints(raw);
+  const sourceText = sourceTags.join(' ').toLowerCase().replace(/[\s-]+/g, '_');
+  const tags = new Set<string>();
+  // AvalAI's model endpoint is the primary source whenever it supplies
+  // modality/feature hints. Translate provider names to our capability names.
+  if (/(?:web|google)_search|search_tool/.test(sourceText)) tags.add('web_search');
+  if (/reason|think|reasoning/.test(sourceText)) {
+    tags.add('deep_reasoning');
+    tags.add('auto_decision');
+  }
+  if (/vision|image_input|image_understanding|multimodal|audio_input|video_input|file_input/.test(sourceText)) {
+    tags.add('document_analysis');
+  }
+  if (/text|chat|function_call|tool_call|json_schema|structured_output|system_message|prompt_cache/.test(sourceText)) {
+    ['dashboard_chat', 'record_chat', 'customer_reply_suggestion', 'workflow_ai_prompt', 'customer_auto_reply'].forEach((tag) => tags.add(tag));
+  }
+  if (/image_generation|image_create|image_output/.test(sourceText)) tags.add('image_generation');
+  if (/image_edit/.test(sourceText)) tags.add('image_edit');
+  if (/video_generation|video_create|video_output/.test(sourceText)) tags.add('video_generation');
+  if (/speech_synthesis|text_to_speech|voice_output/.test(sourceText)) tags.add('voice_output');
+  if (/transcrib|speech_to_text|voice_input/.test(sourceText)) tags.add('voice_input');
+  if (/embedding/.test(sourceText)) tags.add('embedding');
   if (/(image|imagen|flux|banana)/.test(id)) {
     tags.add('image_generation');
     if (/(edit|image-1|banana)/.test(id)) tags.add('image_edit');
@@ -10886,6 +11077,7 @@ const parseModelsResponse = (parsed: any) => {
         id,
         label: String(item?.display_name || item?.label || item?.name || id).trim(),
         suggested_capability_tags: inferProviderModelCapabilities(id, item),
+        provider_capability_hints: extractProviderModelCapabilityHints(item),
         context_window: contextWindow,
         input_usd_per_1m: inputUsdPer1m,
         output_usd_per_1m: outputUsdPer1m,

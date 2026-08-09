@@ -104,6 +104,7 @@ type ProviderModel = {
   id: string;
   label: string;
   suggested_capability_tags?: string[];
+  provider_capability_hints?: string[];
   context_window?: number | null;
   input_usd_per_1m?: number | null;
   output_usd_per_1m?: number | null;
@@ -233,6 +234,7 @@ const SaasAdminAiSettings: React.FC = () => {
       metadata: {
         context_window: model.context_window ?? null,
         provider_catalog_id: model.id,
+        provider_capability_hints: Array.isArray(model.provider_capability_hints) ? model.provider_capability_hints : [],
       },
     });
     setProviderModelsOpen(false);

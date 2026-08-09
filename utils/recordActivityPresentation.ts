@@ -33,10 +33,13 @@ export const getRecordActivityPresentation = (row: any): RecordActivityPresentat
     if (changeKind === 'row_added') summary = `«${fieldLabel}» در ردیف جدید جدول «${blockLabel}» ثبت شد`;
     else if (changeKind === 'row_removed') summary = `«${fieldLabel}» از ردیف حذف‌شدهٔ جدول «${blockLabel}» بود`;
     else summary = `«${fieldLabel}» در جدول «${blockLabel}» تغییر کرد`;
+  } else if (action === 'update') {
+    // Older rows contain the vague legacy summary «یکی از فیلدهای رکورد
+    // تغییر کرد».  A field change must always be described from its modular
+    // Persian label, regardless of when the row was written.
+    summary = `فیلد «${fieldLabel}» تغییر کرد`;
   } else if (metadata?.summary) {
     summary = sanitizeActivityText(metadata.summary, 'تغییر ثبت شد');
-  } else if (action === 'update') {
-    summary = `«${fieldLabel}» تغییر کرد`;
   } else {
     summary = `${getActivityActionLabel(action)} ثبت شد`;
   }

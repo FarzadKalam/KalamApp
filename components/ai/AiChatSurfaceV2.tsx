@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Avatar, Badge, Button, Drawer, Empty, Input, Spin, Tooltip } from 'antd';
-import { CloseOutlined, MenuOutlined, PlusOutlined, PushpinFilled, PushpinOutlined, SearchOutlined } from '@ant-design/icons';
+import { CloseOutlined, MenuOutlined, PlusOutlined, PushpinFilled, PushpinOutlined, SearchOutlined, ShareAltOutlined } from '@ant-design/icons';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
@@ -22,6 +22,7 @@ type AiThreadRow = {
   module_id?: string | null;
   record_id?: string | null;
   metadata?: Record<string, any> | null;
+  is_shared?: boolean | null;
 };
 
 type AiCreditSummary = {
@@ -153,6 +154,7 @@ const AiChatSurfaceV2: React.FC = () => {
   const [dismissedAiWarning, setDismissedAiWarning] = useState(false);
   const [search, setSearch] = useState('');
   const [newConversationSeed, setNewConversationSeed] = useState(0);
+  const [initialRouteConsumed, setInitialRouteConsumed] = useState(false);
   const searchInputRef = useRef<any>(null);
   const routeState = (location.state && typeof location.state === 'object' ? location.state : {}) as Record<string, any>;
   const initialFile = routeState.aiInitialFile && typeof routeState.aiInitialFile === 'object' ? routeState.aiInitialFile : null;
@@ -161,11 +163,14 @@ const AiChatSurfaceV2: React.FC = () => {
       ? routeState.aiInitialFiles.filter((item: any) => item && typeof item === 'object')
       : []
   ), [routeState.aiInitialFiles]);
-  const initialPrompt = String(routeState.aiInitialPrompt || initialFile?.message || initialFiles[0]?.message || searchParams.get('prompt') || '').trim();
-  const forceNewThread = routeState.forceNewThread === true || searchParams.get('new') === '1' || Boolean(initialPrompt) || Boolean(initialFile) || initialFiles.length > 0;
+  const routeInitialPrompt = String(routeState.aiInitialPrompt || initialFile?.message || initialFiles[0]?.message || searchParams.get('prompt') || '').trim();
+  const initialPrompt = initialRouteConsumed ? '' : routeInitialPrompt;
+  const effectiveInitialFile = initialRouteConsumed ? null : initialFile;
+  const effectiveInitialFiles = initialRouteConsumed ? [] : initialFiles;
+  const forceNewThread = !initialRouteConsumed && (routeState.forceNewThread === true || searchParams.get('new') === '1' || Boolean(initialPrompt) || Boolean(effectiveInitialFile) || effectiveInitialFiles.length > 0);
   const autoSubmitInitial = typeof routeState.aiAutoSubmitInitial === 'boolean'
     ? routeState.aiAutoSubmitInitial
-    : Boolean(initialPrompt && !initialFile && initialFiles.length === 0 && forceNewThread);
+    : Boolean(initialPrompt && !effectiveInitialFile && effectiveInitialFiles.length === 0 && forceNewThread);
   const initialCapabilities = useMemo(() => (
     Array.isArray(routeState.aiInitialCapabilities)
       ? routeState.aiInitialCapabilities.map((item: any) => String(item || '').trim()).filter(Boolean) as AiComposerCapability[]
@@ -186,13 +191,13 @@ const AiChatSurfaceV2: React.FC = () => {
     inputKind: routeState.aiInitialInputKind || null,
     capabilities: initialCapabilities || [],
     recordCreationTarget: routeState.aiInitialRecordCreationTargetModuleId || null,
-    fileCount: initialFiles.length,
-    fileName: initialFile?.fileName || null,
+    fileCount: effectiveInitialFiles.length,
+    fileName: effectiveInitialFile?.fileName || null,
     mediaSettings: initialMediaSettings || {},
     mediaSourceImageCount: initialMediaSourceImages.length,
     forceNewThread,
     locationKey: location.key || '',
-  }), [forceNewThread, initialCapabilities, initialFile?.fileName, initialFiles.length, initialMediaSettings, initialMediaSourceImages.length, initialPrompt, location.key, routeState.aiInitialInputKind, routeState.aiInitialRecordCreationTargetModuleId]);
+  }), [effectiveInitialFile?.fileName, effectiveInitialFiles.length, forceNewThread, initialCapabilities, initialMediaSettings, initialMediaSourceImages.length, initialPrompt, location.key, routeState.aiInitialInputKind, routeState.aiInitialRecordCreationTargetModuleId]);
 
   const loadThreads = useCallback(async (preferredThreadId?: string | null) => {
     setLoadingThreads(true);
@@ -224,6 +229,10 @@ const AiChatSurfaceV2: React.FC = () => {
     if (!forceNewThread) return;
     setActiveThreadId(null);
   }, [forceNewThread, location.key]);
+
+  useEffect(() => {
+    setInitialRouteConsumed(false);
+  }, [location.key]);
 
   useEffect(() => {
     let mounted = true;
@@ -259,6 +268,9 @@ const AiChatSurfaceV2: React.FC = () => {
     const activeThread = threads.find((thread) => String(thread.id) === String(activeThreadId || ''));
     return activeThread ? getThreadTitle(activeThread) : null;
   }, [activeThreadId, threads]);
+  const activeThreadIsShared = useMemo(() => (
+    threads.find((thread) => String(thread.id) === String(activeThreadId || ''))?.is_shared === true
+  ), [activeThreadId, threads]);
   const aiUsageWarningText = useMemo(() => getAiUsageWarningText(aiCreditSummary), [aiCreditSummary]);
 
   const closeThreadList = useCallback(() => {
@@ -267,6 +279,9 @@ const AiChatSurfaceV2: React.FC = () => {
   }, []);
 
   const startNewConversation = () => {
+    // A dashboard hand-off is consumed once.  Starting a new conversation
+    // must never replay that hand-off prompt or attachment.
+    setInitialRouteConsumed(true);
     setActiveThreadId(null);
     setNewConversationSeed((value) => value + 1);
     closeThreadList();
@@ -415,7 +430,7 @@ const AiChatSurfaceV2: React.FC = () => {
                 >
                   {thread.pinned_at ? <PushpinFilled /> : <PushpinOutlined />}
                 </button>
-                <span className="line-clamp-2 min-h-7 text-center text-[9.5px] leading-3.5 text-slate-500 dark:text-slate-400">{title}</span>
+                  <span className="flex min-h-7 items-start justify-center gap-0.5 text-center text-[9.5px] leading-3.5 text-slate-500 dark:text-slate-400">{thread.is_shared ? <ShareAltOutlined className="mt-0.5 shrink-0 text-[9px] text-[rgb(var(--brand-600-rgb))]" /> : null}<span className="line-clamp-2">{title}</span></span>
               </div>
             );
           }
@@ -441,7 +456,7 @@ const AiChatSurfaceV2: React.FC = () => {
               </Avatar>
               <span className="min-w-0 flex-1">
                 <span className="flex min-w-0 items-center justify-between gap-2">
-                  <span className="line-clamp-2 text-[13px] font-bold leading-5 text-slate-800 dark:text-slate-100">{title}</span>
+                  <span className="flex min-w-0 items-start gap-1"><span className="line-clamp-2 text-[13px] font-bold leading-5 text-slate-800 dark:text-slate-100">{title}</span>{thread.is_shared ? <ShareAltOutlined className="mt-1 shrink-0 text-[11px] text-[rgb(var(--brand-600-rgb))]" /> : null}</span>
                   <span className="flex shrink-0 items-center gap-1 text-[10px] text-slate-400">
                     <button
                       type="button"
@@ -490,6 +505,7 @@ const AiChatSurfaceV2: React.FC = () => {
             active
             initialThreadId={activeThreadId}
             initialThreadTitle={activeThreadTitle}
+            initialThreadIsShared={activeThreadIsShared}
             initialPrompt={initialPrompt}
             initialInputKind={String(routeState.aiInitialInputKind || 'text')}
             initialCapabilities={initialCapabilities}
@@ -497,8 +513,8 @@ const AiChatSurfaceV2: React.FC = () => {
             initialModelOverride={String(routeState.aiInitialModelOverride || '').trim() || null}
             initialMediaSettings={initialMediaSettings as any}
             initialMediaSourceImages={initialMediaSourceImages as any}
-            initialFiles={initialFiles as any}
-            initialFile={initialFile as any}
+            initialFiles={effectiveInitialFiles as any}
+            initialFile={effectiveInitialFile as any}
             autoSubmitInitialPrompt={autoSubmitInitial}
             onThreadDeleted={handleThreadDeleted}
             onThreadRenamed={handleThreadRenamed}
