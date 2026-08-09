@@ -180,6 +180,24 @@ const CAPABILITY_SELECTION_ALIASES: Record<string, string[]> = {
   image_edit: ['image_generation'],
 };
 
+// A few runtime capabilities are implementation details of an admin-visible
+// feature.  They must never receive an independent false flag merely because
+// the settings form does not render a separate switch for them.
+const TENANT_FEATURE_FLAG_CAPABILITY_ALIASES: Record<string, string> = {
+  embedding: 'document_analysis',
+  image_edit: 'image_generation',
+  record_creation: 'auto_decision',
+  process_operation: 'auto_decision',
+};
+
+const getTenantFeatureFlagCapability = (capability: string) => {
+  const normalized = String(capability || '').trim();
+  return TENANT_FEATURE_FLAG_CAPABILITY_ALIASES[normalized] || normalized;
+};
+
+const isTenantCapabilityEnabled = (flags: Record<string, any>, capability: string) =>
+  flags?.[getTenantFeatureFlagCapability(capability)] !== false;
+
 const AUTO_ROUTER_CAPABILITIES = [
   'document_analysis',
   'voice_input',
@@ -1090,7 +1108,7 @@ const buildAiCapabilityAvailability = (planContext: any, settings: any, catalogR
         : (catalogByCapability.get(capability) || [])
           .some((model: any) => model?.is_active !== false && model?.is_coming_soon !== true);
     const tenantReady = TENANT_READY_AI_CAPABILITIES.has(capability);
-    const orgEnabled = selected?.[capability] !== false;
+    const orgEnabled = isTenantCapabilityEnabled(selected, capability);
     result[capability] = {
       planAvailable,
       tenantReady,
@@ -1118,7 +1136,7 @@ const assertAiCapabilityEnabled = async (
   if (!isAiCapabilityPlanAvailable(planContext, normalized)) {
     throw new Error('این قابلیت در پلن فعلی سازمان فعال نیست.');
   }
-  if (flags?.[normalized] === false) {
+  if (!isTenantCapabilityEnabled(flags, normalized)) {
     throw new Error('این قابلیت در تنظیمات هوش مصنوعی سازمان غیرفعال است.');
   }
   return planContext;
@@ -1194,9 +1212,20 @@ const sanitizeTenantSelectedModels = (models: any[], selectedModels: Record<stri
 
 const sanitizeTenantFeatureFlags = (availability: Record<string, any>, incoming: Record<string, any>) => {
   const result: Record<string, boolean> = {};
-  Object.keys(availability || {}).forEach((capability) => {
-    const requested = incoming?.[capability] === true;
-    result[capability] = requested && availability[capability]?.planAvailable === true && availability[capability]?.tenantReady === true && availability[capability]?.hasReadyModel !== false;
+  const capabilities = Array.from(new Set(Object.keys(availability || {}).map(getTenantFeatureFlagCapability)));
+  capabilities.forEach((capability) => {
+    const legacyAliases = Object.entries(TENANT_FEATURE_FLAG_CAPABILITY_ALIASES)
+      .filter(([, canonical]) => canonical === capability)
+      .map(([legacy]) => legacy);
+    const hasCanonicalValue = typeof incoming?.[capability] === 'boolean';
+    const requested = hasCanonicalValue
+      ? incoming[capability] === true
+      : legacyAliases.some((legacy) => incoming?.[legacy] === true);
+    const capabilityAvailability = availability?.[capability];
+    result[capability] = requested
+      && capabilityAvailability?.planAvailable === true
+      && capabilityAvailability?.tenantReady === true
+      && capabilityAvailability?.hasReadyModel !== false;
   });
   return result;
 };
@@ -4316,6 +4345,27 @@ const supportsModelEndpoint = (providerConfig: any, endpoint: string) => {
 // Nano Banana/Gemini image models on chat completions with image modalities,
 // while GPT Image/Qwen/Seedream edit-capable models use /v1/images/edits.
 const isGeminiImageModel = (model: string) => /^gemini[-.\d]*.*image/i.test(String(model || '').trim());
+const isGoogleMediaModel = (providerConfig: any) => {
+  const model = String(providerConfig?.model || '').trim().toLowerCase();
+  const modelProvider = String(providerConfig?.modelProvider || '').trim().toLowerCase();
+  return /^(?:gemini|veo)[-.\d]/.test(model) || ['gemini', 'google', 'vertex_ai'].includes(modelProvider);
+};
+
+const buildGoogleMediaExtraBody = (value: any) => {
+  const extraBody = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return {
+    ...extraBody,
+    // AvalAI maps this documented Gemini setting to the provider API. Keep the
+    // strict default for sexually explicit content while reducing false
+    // positives for legitimate news, documentary and editorial requests.
+    safety_settings: [
+      { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
+      { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_ONLY_HIGH' },
+      { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' },
+    ],
+  };
+};
+
 const isKnownImageEditModel = (model: string) => {
   const normalized = String(model || '').trim().toLowerCase();
   return /^gpt-image/i.test(normalized)
@@ -4873,7 +4923,7 @@ const callImageGeneration = async (
 const callVideoCreate = async (
   providerConfig: any,
   prompt: string,
-  options: { seconds?: number; size?: string; quality?: string; inputReference?: { data: string; mimeType?: string } } = {},
+  options: { seconds?: number; size?: string; quality?: string; inputReference?: { data: string; mimeType?: string }; extraBody?: Record<string, any> } = {},
 ) => {
   if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
   const model = String(providerConfig.model || '').trim();
@@ -4886,6 +4936,7 @@ const callVideoCreate = async (
   const quality = String(options.quality || '').trim().toLowerCase();
   const supportsQuality = providerConfig?.modelMetadata?.supports_quality === true;
   const safetyIdentifier = `org_${providerConfig.orgId || ''}_video`.slice(0, 256);
+  const extraBody = isGoogleMediaModel(providerConfig) ? buildGoogleMediaExtraBody(options.extraBody) : options.extraBody;
 
   let init: RequestInit;
   if (options.inputReference?.data) {
@@ -4896,6 +4947,7 @@ const callVideoCreate = async (
     formData.append('size', size);
     if (supportsQuality && (quality === 'standard' || quality === 'high')) formData.append('quality', quality);
     formData.append('safety_identifier', safetyIdentifier);
+    if (extraBody && typeof extraBody === 'object') formData.append('extra_body', JSON.stringify(extraBody));
     const mime = options.inputReference.mimeType || 'image/png';
     formData.append('input_reference', new Blob([base64ToUint8Array(options.inputReference.data)], { type: mime }), getSafeImageUploadFilename(mime, 0));
     init = { method: 'POST', headers: { Authorization: `Bearer ${providerConfig.apiKey}` }, body: formData, signal: AbortSignal.timeout(LONG_MEDIA_PROVIDER_TIMEOUT_MS) };
@@ -4903,7 +4955,7 @@ const callVideoCreate = async (
     init = {
       method: 'POST',
       headers: { Authorization: `Bearer ${providerConfig.apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, prompt: prompt.slice(0, 1000), seconds, size, ...(supportsQuality && (quality === 'standard' || quality === 'high') ? { quality } : {}), safety_identifier: safetyIdentifier }),
+      body: JSON.stringify({ model, prompt: prompt.slice(0, 1000), seconds, size, ...(supportsQuality && (quality === 'standard' || quality === 'high') ? { quality } : {}), safety_identifier: safetyIdentifier, ...(extraBody && typeof extraBody === 'object' ? { extra_body: extraBody } : {}) }),
       signal: AbortSignal.timeout(LONG_MEDIA_PROVIDER_TIMEOUT_MS),
     };
   }
@@ -9551,13 +9603,14 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
       console.warn('Could not fetch source image url for editing', error);
     }
   }
+  const requestedImageExtraBody = imageSettings.extraBody || imageSettings.extra_body;
   const imageCallOptions = {
     sourceImages,
     size: imageSettings.size || body?.size,
     quality: imageSettings.quality || body?.quality,
     outputFormat: imageSettings.imageOutputFormat || imageSettings.outputFormat || body?.imageOutputFormat || body?.outputFormat,
     n: imageSettings.n || body?.n,
-    extraBody: imageSettings.extraBody || imageSettings.extra_body,
+    extraBody: isGoogleMediaModel(imageProviderConfig) ? buildGoogleMediaExtraBody(requestedImageExtraBody) : requestedImageExtraBody,
   };
   const promptSettings = {
     persianText: imageSettings.persianText === true,
@@ -10362,6 +10415,7 @@ const handleGenerateVideo = async (supabaseUrl: string, serviceRoleKey: string, 
     size: settings.size || body?.size,
     quality: settings.videoQuality || body?.videoQuality,
     inputReference: firstSource,
+    extraBody: settings.extraBody || settings.extra_body,
   });
   const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: thread.id,
