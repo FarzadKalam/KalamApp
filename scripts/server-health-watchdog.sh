@@ -19,6 +19,8 @@ DISK_WARNING_PERCENT="${MONITOR_DISK_WARNING_PERCENT:-80}"
 DISK_CRITICAL_PERCENT="${MONITOR_DISK_CRITICAL_PERCENT:-90}"
 LOG_WINDOW="${MONITOR_LOG_WINDOW:-5m}"
 REQUIRED_CONTAINERS="${MONITOR_REQUIRED_CONTAINERS:-supabase-db,supabase-rest,supabase-auth,supabase-kong,supabase-edge-functions,supabase-storage,kalamapp-gotenberg}"
+SSL_HOSTS="${MONITOR_SSL_HOSTS:-kalam.tazesystem.ir,api.tazesystem.ir}"
+SSL_REMINDER_DAYS="${MONITOR_SSL_REMINDER_DAYS:-30,14,7,3,1}"
 
 mkdir -p "$STATE_DIR"
 LOCK_DIR="$STATE_DIR/run.lock"
@@ -55,6 +57,53 @@ alert_once() {
   send_bale "⚠️ Kalamapp server alert\n${message}\nزمان: $(date -Is)" || true
 }
 
+alert_reminder_once() {
+  local key="$1"
+  local message="$2"
+  local state_file="$STATE_DIR/${key//[^A-Za-z0-9_.-]/_}.sent"
+  [[ -e "$state_file" ]] && return 0
+
+  if send_bale "⏳ یادآوری سامانه\n${message}\nزمان: $(date -Is)"; then
+    printf '%s' "$(date +%s)" > "$state_file"
+  fi
+}
+
+check_ssl_certificate() {
+  local host="$1"
+  local certificate serial end_date expiry_timestamp now seconds_remaining days_remaining
+  certificate="$(timeout 20 openssl s_client -connect "${host}:443" -servername "$host" </dev/null 2>/dev/null | openssl x509 2>/dev/null)" || {
+    alert_once "ssl-${host}-unreadable" "گواهی SSL دامنه ${host} خوانده نشد؛ اتصال امن یا تنظیمات Nginx را بررسی کنید."
+    return
+  }
+
+  serial="$(printf '%s' "$certificate" | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2)"
+  end_date="$(printf '%s' "$certificate" | openssl x509 -noout -enddate 2>/dev/null | sed 's/^notAfter=//')"
+  expiry_timestamp="$(date -d "$end_date" +%s 2>/dev/null || true)"
+  if [[ ! "$expiry_timestamp" =~ ^[0-9]+$ ]]; then
+    alert_once "ssl-${host}-date-invalid" "تاریخ انقضای گواهی SSL دامنه ${host} قابل خواندن نیست."
+    return
+  fi
+
+  now="$(date +%s)"
+  seconds_remaining=$((expiry_timestamp - now))
+  if (( seconds_remaining <= 0 )); then
+    alert_once "ssl-${host}-expired-${expiry_timestamp}" "گواهی SSL دامنه ${host} منقضی شده است (تاریخ پایان: ${end_date})."
+    return
+  fi
+
+  days_remaining=$(((seconds_remaining + 86399) / 86400))
+  IFS=',' read -r -a reminder_days <<< "$SSL_REMINDER_DAYS"
+  for reminder_day in "${reminder_days[@]}"; do
+    reminder_day="${reminder_day//[[:space:]]/}"
+    [[ "$reminder_day" =~ ^[0-9]+$ ]] || continue
+    if (( days_remaining <= reminder_day )); then
+      alert_reminder_once \
+        "ssl-${serial:-$host}-expires-${expiry_timestamp}-${reminder_day}d" \
+        "گواهی SSL دامنه ${host} تا ${days_remaining} روز دیگر منقضی می‌شود (تاریخ پایان: ${end_date})."
+    fi
+  done
+}
+
 disk_percent="$(df -P "$DISK_PATH" | awk 'NR == 2 { gsub("%", "", $5); print $5 }')"
 if [[ "$disk_percent" =~ ^[0-9]+$ ]]; then
   if (( disk_percent >= DISK_CRITICAL_PERCENT )); then
@@ -88,6 +137,13 @@ fi
 if docker logs --since "$LOG_WINDOW" supabase-rest 2>&1 | grep -Eq 'PGRST003|57014'; then
   alert_once 'postgrest-pool-or-timeout' "در ${LOG_WINDOW} اخیر، خطای pool یا timeout در PostgREST دیده شد."
 fi
+
+IFS=',' read -r -a ssl_hosts <<< "$SSL_HOSTS"
+for ssl_host in "${ssl_hosts[@]}"; do
+  ssl_host="${ssl_host//[[:space:]]/}"
+  [[ -n "$ssl_host" ]] || continue
+  check_ssl_certificate "$ssl_host"
+done
 
 if [[ -n "${MONITOR_API_URL:-}" ]]; then
   api_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 15 "$MONITOR_API_URL" || true)"

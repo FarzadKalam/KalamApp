@@ -156,6 +156,42 @@ const generateVersionJson = () => ({
   }
 });
 
+const SERVICE_WORKER_CACHE_VERSION_TOKEN = '__TAZESYSTEM_CACHE_VERSION__';
+
+const stampServiceWorkerCacheVersion = () => {
+  let outputDirectory = '';
+
+  return {
+    name: 'stamp-service-worker-cache-version',
+    configResolved(config: { build: { outDir: string } }) {
+      outputDirectory = config.build.outDir;
+    },
+    closeBundle() {
+      const pkgPath = path.resolve(process.cwd(), 'package.json');
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { version?: unknown };
+      const version = String(pkg.version || '').trim();
+      if (!version) {
+        throw new Error('Cannot stamp the service worker cache without an application version.');
+      }
+
+      const serviceWorkerPath = path.join(outputDirectory, 'sw.js');
+      if (!fs.existsSync(serviceWorkerPath)) {
+        throw new Error(`Service worker output is missing: ${serviceWorkerPath}`);
+      }
+
+      const source = fs.readFileSync(serviceWorkerPath, 'utf-8');
+      if (!source.includes(SERVICE_WORKER_CACHE_VERSION_TOKEN)) {
+        throw new Error('Service worker cache version token is missing from the build output.');
+      }
+
+      fs.writeFileSync(
+        serviceWorkerPath,
+        source.replaceAll(SERVICE_WORKER_CACHE_VERSION_TOKEN, `v${version}`),
+      );
+    },
+  };
+};
+
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
@@ -177,7 +213,11 @@ export default defineConfig(({ mode }) => {
           },
         },
       },
-      plugins: [react({ babel: { compact: false } }), generateVersionJson()],
+      plugins: [
+        react({ babel: { compact: false } }),
+        generateVersionJson(),
+        stampServiceWorkerCacheVersion(),
+      ],
       build: {
         rollupOptions: {
           output: {

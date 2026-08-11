@@ -1,4 +1,6 @@
-const CACHE_VERSION = 'v7';
+// This token is stamped with the application version during every production build.
+// A release must never reuse caches that contain hashed assets from an older build.
+const CACHE_VERSION = '__TAZESYSTEM_CACHE_VERSION__';
 const SHELL_CACHE = `tazesystem-shell-${CACHE_VERSION}`;
 const PAGE_CACHE = `tazesystem-pages-${CACHE_VERSION}`;
 const ASSET_CACHE = `tazesystem-assets-${CACHE_VERSION}`;
