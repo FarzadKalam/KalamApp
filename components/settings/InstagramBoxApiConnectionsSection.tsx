@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, App, Avatar, Button, Empty, Form, Input, Modal, Popconfirm, Space, Switch, Table, Tag, Tooltip } from 'antd';
-import { ApiOutlined, CopyOutlined, DeleteOutlined, LinkOutlined, PlusOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons';
+import { CopyOutlined, DeleteOutlined, InstagramOutlined, LinkOutlined, PlusOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { normalizePublicAssetUrl } from '../../utils/assetUrl';
@@ -139,7 +139,7 @@ const InstagramBoxApiConnectionsSection: React.FC = () => {
       {providers.length === 0 && !loading ? <Empty description="هنوز حساب BoxAPI اضافه نشده است." /> : providers.map((provider) => (
         <div key={provider.id} className="rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2"><ApiOutlined /><span className="font-semibold">{provider.name}</span><Tag color={provider.isActive ? 'green' : 'default'}>{provider.isActive ? 'فعال' : 'غیرفعال'}</Tag></div>
+            <div className="flex items-center gap-2"><span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[rgba(var(--brand-500-rgb),0.10)] text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--brand-300-rgb),0.12)] dark:text-[rgb(var(--brand-200-rgb))]"><InstagramOutlined /></span><span className="font-semibold">{provider.name}</span><Tag color={provider.isActive ? 'green' : 'default'}>{provider.isActive ? 'فعال' : 'غیرفعال'}</Tag></div>
             <Space wrap>
               <Button size="small" icon={<LinkOutlined />} loading={connectingId === provider.id} disabled={!provider.isActive || !provider.hasApiKey} onClick={() => void connect(provider.id)}>اتصال پیج</Button>
               <Button size="small" icon={<SyncOutlined />} loading={syncingId === provider.id} disabled={!provider.isActive || !provider.hasApiKey} onClick={() => void sync(provider.id)}>همگام‌سازی پیج‌ها</Button>

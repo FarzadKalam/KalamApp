@@ -11,7 +11,7 @@ import {
   Space,
   Switch,
 } from 'antd';
-import { CopyOutlined, ReloadOutlined, SafetyCertificateOutlined, SaveOutlined, SearchOutlined, SendOutlined } from '@ant-design/icons';
+import { CopyOutlined, LinkOutlined, ReloadOutlined, SafetyCertificateOutlined, SaveOutlined, SearchOutlined, SendOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { getSmsBalanceViaGateway, sendSmsViaGateway } from '../../utils/smsGateway';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
@@ -2255,7 +2255,7 @@ const ConnectionsTab: React.FC = () => {
               key: 'instagram',
               label: (
                 <span className="inline-flex items-center gap-2">
-                  <ApiOutlined />
+                  <LinkOutlined />
                   اتصال اینستاگرام (BoxAPI)
                 </span>
               ),
