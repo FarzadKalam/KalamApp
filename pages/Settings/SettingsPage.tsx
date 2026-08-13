@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { Tabs, Empty, Spin } from 'antd';
-import { BankOutlined, UsergroupAddOutlined, ClusterOutlined, FunctionOutlined, ApartmentOutlined, ApiOutlined, SettingOutlined, FileTextOutlined } from '@ant-design/icons';
+import { BankOutlined, UsergroupAddOutlined, ClusterOutlined, FunctionOutlined, ApartmentOutlined, LinkOutlined, SettingOutlined, FileTextOutlined } from '@ant-design/icons';
 import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
 import CompanyTab from './CompanyTab';
 import UsersTab from './UsersTab';
@@ -116,7 +116,7 @@ const SettingsPage: React.FC = () => {
       },
       {
         key: 'connections',
-        label: <span className="flex items-center gap-2 text-base"><ApiOutlined /> اتصالات</span>,
+        label: <span className="flex items-center gap-2 text-base"><LinkOutlined /> اتصالات</span>,
         children: <ConnectionsTab />,
       },
       {
