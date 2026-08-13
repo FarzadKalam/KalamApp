@@ -32,6 +32,7 @@ import {
   BellOutlined,
   ReadOutlined,
   GiftOutlined,
+  InstagramOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -124,6 +125,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [rolePermissions, setRolePermissions] = useState<PermissionMap>({});
   const [rolePermissionsReady, setRolePermissionsReady] = useState(false);
   const [customerClubFeatureEnabled, setCustomerClubFeatureEnabled] = useState(true);
+  const [instagramInboxFeatureEnabled, setInstagramInboxFeatureEnabled] = useState(false);
   const [alertsDrawerMounted, setAlertsDrawerMounted] = useState(false);
   const [alertsDrawerOpen, setAlertsDrawerOpen] = useState(false);
   const [sessionBootstrapError, setSessionBootstrapError] = useState<any>(null);
@@ -190,6 +192,18 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     return () => {
       active = false;
     };
+  }, [currentUser?.id, rolePermissionsReady]);
+
+  useEffect(() => {
+    if (!rolePermissionsReady || !currentUser?.id) {
+      setInstagramInboxFeatureEnabled(false);
+      return;
+    }
+    let active = true;
+    void hasCurrentOrgPlanFeature('instagram_inbox', { defaultEnabled: false })
+      .then((enabled) => { if (active) setInstagramInboxFeatureEnabled(enabled); })
+      .catch(() => { if (active) setInstagramInboxFeatureEnabled(false); });
+    return () => { active = false; };
   }, [currentUser?.id, rolePermissionsReady]);
 
   useEffect(() => {
@@ -555,6 +569,11 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     rolePermissions?.[CUSTOMER_CLUB_PERMISSION_KEY]?.view !== false;
   const filesAccess = resolveFilesAccessPermissions(rolePermissions);
   const communicationsAccess = resolveCommunicationsPermissions(rolePermissions);
+  const canViewInstagramInbox = instagramInboxFeatureEnabled && (
+    rolePermissions?.[SAAS_ADMIN_PERMISSION_KEY]?.view === true
+    || rolePermissions?.[SAAS_ADMIN_PERMISSION_KEY]?.edit === true
+    || rolePermissions?.instagram_conversations?.view === true
+  );
   const {
     headerAnnouncements: userHeaderAnnouncements,
     popupAnnouncements: userPopupAnnouncements,
@@ -655,6 +674,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     return [
       { key: '/', icon: <DashboardOutlined />, label: 'داشبورد' },
       { key: '/messages', icon: <MessageOutlined />, label: 'پیام‌رسانی', disabled: !communicationsAccess.canUseWorkspace },
+      { key: '/instagram', icon: <InstagramOutlined />, label: 'صندوق اینستاگرام', disabled: !canViewInstagramInbox },
       { key: '/ai', icon: <AiSparkleIcon className="h-4 w-4" />, label: 'دستیار هوشمند سازمان', disabled: !communicationsAccess.canUseWorkspace },
       {
         key: 'resources',
@@ -813,7 +833,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       }] : []),
       { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
     ];
-  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewCustomerClub, canViewOrgKnowledge, canViewReportsHub, canViewSaasAdmin, communicationsAccess.canUseWorkspace, rolePermissions]);
+  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewCustomerClub, canViewInstagramInbox, canViewOrgKnowledge, canViewReportsHub, canViewSaasAdmin, communicationsAccess.canUseWorkspace, rolePermissions]);
 
   const visibleRawMenuItems = useMemo<NonNullable<MenuProps['items']>>(() => {
     const canShowMenuKey = (key?: string) => {
@@ -833,8 +853,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         case '/customer-club':
           return canViewCustomerClub;
         case '/messages':
+        case '/instagram':
         case '/ai':
-          return communicationsAccess.canUseWorkspace;
+          return key === '/instagram' ? canViewInstagramInbox : communicationsAccess.canUseWorkspace;
         case '/gallery':
           return filesAccess.canViewGallery;
         case RECYCLE_BIN_ROUTE:

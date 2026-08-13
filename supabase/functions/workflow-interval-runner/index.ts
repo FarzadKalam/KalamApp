@@ -3868,7 +3868,7 @@ async function executeAction(
     const deliveryChannels = Array.from(new Set(
       (Array.isArray(config.delivery_channels) ? config.delivery_channels : [])
         .map((item: any) => String(item || '').trim().toLowerCase())
-        .filter((item: string) => ['sms', 'email', 'bot', 'note'].includes(item))
+        .filter((item: string) => ['sms', 'email', 'bot', 'note', 'instagram'].includes(item))
     ));
     const noteShareTargets = deliveryChannels.includes('note')
       ? await resolveAssigneesToMentionTargets(
@@ -3973,6 +3973,10 @@ async function executeAction(
       }
       if (channel === 'note') {
         await executeAction({ ...action, type: 'send_note', config: { note_text: '{{ai_answer}}', ...(channelConfigs.note || {}) } }, actionRecord, moduleId, orgId, url, key, actorUserId);
+        continue;
+      }
+      if (channel === 'instagram') {
+        await executeAction({ ...action, type: 'send_instagram_message', config: { ...(channelConfigs.instagram || {}), recipient_source: 'current_record', message: String((channelConfigs.instagram || {}).message || '{{ai_answer}}') } }, actionRecord, moduleId, orgId, url, key, actorUserId);
       }
     }
     return actionResult(action, 'success', undefined, {
@@ -4062,6 +4066,81 @@ async function executeAction(
       successfulChannels > 0 ? undefined : 'هیچ کانال فعالی برای ارسال لینک وب‌فرم اجرا نشد.',
       { affected_count: successfulChannels, details: { channel_results: channelResults } },
     );
+  }
+
+  // ── send_instagram_message ────────────────────────────────────────────
+  if (action.type === 'send_instagram_message') {
+    const text = (await renderTemplateAsync(String(config.message || ''), record, url, key, false, orgId, moduleId)).trim();
+    const currentConversationId = moduleId === 'instagram_interaction_events'
+      ? String(record?.conversation_id || '').trim()
+      : '';
+    if (currentConversationId) {
+      try {
+        const response = await fetch(`${url.replace(/\/+$/, '')}/functions/v1/instagram-boxapi`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+          body: JSON.stringify({ action: 'send_message', orgId, conversationId: currentConversationId, message: text, showcaseId: String(config.showcase_id || '').trim() || undefined }),
+          signal: AbortSignal.timeout(30000),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload?.success === false) throw new Error(String(payload?.message || `خطای ${response.status}`));
+        return actionResult(action, 'success', undefined, { recipient_count: 1 });
+      } catch (error: any) {
+        return actionResult(action, 'failed', String(error?.message || error), { recipient_count: 0 });
+      }
+    }
+    const targetValue = String(config.recipient_source || 'current_record') === 'related_record'
+      ? record?.[String(config.related_record_field || '').trim()]
+      : recordId;
+    const targetIds = (Array.isArray(targetValue) ? targetValue : [targetValue])
+      .flatMap((value: any) => typeof value === 'object' ? [value?.id, value?.value] : [value])
+      .map((value: any) => String(value || '').trim()).filter(Boolean);
+    const targetModuleId = String(config.recipient_source || 'current_record') === 'related_record'
+      ? String(config.related_record_module_id || '').trim()
+      : moduleId;
+    if (!targetModuleId || targetIds.length === 0) return actionResult(action, 'skipped', 'رکورد مقصد اینستاگرام مشخص نیست.');
+    const linkRows = await dbGet(url, key, `instagram_conversation_links?org_id=eq.${encodeURIComponent(orgId)}&target_module_id=eq.${encodeURIComponent(targetModuleId)}&target_record_id=in.(${targetIds.map(encodeURIComponent).join(',')})&select=conversation_id`);
+    const conversationIds = Array.from(new Set(linkRows.map((row: any) => String(row?.conversation_id || '').trim()).filter(Boolean)));
+    if (conversationIds.length === 0) return actionResult(action, 'skipped', 'گفتگوی اینستاگرام متصل برای رکورد مقصد پیدا نشد.', { recipient_count: 0 });
+    let sentCount = 0;
+    const failures: string[] = [];
+    for (const conversationId of conversationIds) {
+      try {
+        const response = await fetch(`${url.replace(/\/+$/, '')}/functions/v1/instagram-boxapi`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+          body: JSON.stringify({ action: 'send_message', orgId, conversationId, message: text, showcaseId: String(config.showcase_id || '').trim() || undefined }),
+          signal: AbortSignal.timeout(30000),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload?.success === false) throw new Error(String(payload?.message || `خطای ${response.status}`));
+        sentCount += 1;
+      } catch (error: any) { failures.push(String(error?.message || error)); }
+    }
+    return actionResult(action, sentCount > 0 ? 'success' : 'failed', failures[0], { recipient_count: sentCount, details: failures.length ? { failures } : {} });
+  }
+
+  // ── reply_instagram_comment ───────────────────────────────────────────
+  if (action.type === 'reply_instagram_comment') {
+    const commentId = moduleId === 'instagram_interaction_events'
+      ? String(record?.comment_id || '').trim()
+      : String(config.comment_id || '').trim();
+    const text = (await renderTemplateAsync(String(config.message || ''), record, url, key, false, orgId, moduleId)).trim();
+    if (!commentId) return actionResult(action, 'skipped', 'این اقدام فقط برای رویدادِ کامنت قابل اجرا است.');
+    if (!text) return actionResult(action, 'skipped', 'متن پاسخ به کامنت خالی است.');
+    try {
+      const response = await fetch(`${url.replace(/\/+$/, '')}/functions/v1/instagram-boxapi`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ action: 'reply_comment', orgId, commentId, message: text }),
+        signal: AbortSignal.timeout(30000),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload?.success === false) throw new Error(String(payload?.message || `خطای ${response.status}`));
+      return actionResult(action, 'success', undefined, { recipient_count: 1 });
+    } catch (error: any) {
+      return actionResult(action, 'failed', String(error?.message || error), { recipient_count: 0 });
+    }
   }
 
   // ── send_sms ──────────────────────────────────────────────────────────

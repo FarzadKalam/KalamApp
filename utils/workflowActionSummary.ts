@@ -69,6 +69,11 @@ export const getWorkflowActionSummaryFa = (action: WorkflowAction | null | undef
         .filter(Boolean)
         .join(' — ');
     }
+    case 'send_instagram_message':
+    case 'reply_instagram_comment': {
+      const text = excerpt(config.message);
+      return text ? `«${text}»` : 'متن پیام وارد نشده';
+    }
     case 'send_email': {
       const subject = excerpt(config.subject);
       return [buildRecipientSummary(config), subject ? `موضوع: ${subject}` : '']

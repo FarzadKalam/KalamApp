@@ -32,6 +32,7 @@ import {
   WorkflowCondition,
   WorkflowModuleOption,
   WorkflowRecord,
+  WorkflowTriggerType,
   createWorkflowId,
   triggerTypeOptions,
   workflowExecutionModeOptions,
@@ -63,6 +64,14 @@ type WorkflowEditorModalProps = {
   record?: WorkflowRecord | null;
   canEdit?: boolean;
   moduleOptions: WorkflowModuleOption[];
+  initialDraft?: {
+    moduleId?: string;
+    name?: string;
+    description?: string;
+    triggerType?: WorkflowTriggerType;
+    conditionsAll?: WorkflowCondition[];
+    actions?: WorkflowAction[];
+  } | null;
 };
 
 type FormValues = {
@@ -194,6 +203,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
   record,
   canEdit = true,
   moduleOptions,
+  initialDraft,
 }) => {
   const overlayZIndexBase = 13080;
   const { message } = App.useApp();
@@ -313,13 +323,13 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
 
   useEffect(() => {
     if (!open) return;
-    const nextModuleId = record?.module_id || initialModuleId || '';
+    const nextModuleId = record?.module_id || initialDraft?.moduleId || initialModuleId || '';
     setModuleId(nextModuleId);
     form.setFieldsValue({
       module_id: nextModuleId,
-      name: record?.name || '',
-      description: record?.description || '',
-      trigger_type: (record?.trigger_type as any) || 'on_create',
+      name: record?.name || initialDraft?.name || '',
+      description: record?.description || initialDraft?.description || '',
+      trigger_type: (record?.trigger_type as any) || initialDraft?.triggerType || 'on_create',
       execution_mode: (record?.execution_mode as any) || 'first_match',
       interval_value: record?.interval_value || undefined,
       interval_unit: (record?.interval_unit as any) || 'day',
@@ -334,11 +344,11 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
       batch_size: record?.batch_size || undefined,
       is_active: record?.is_active ?? true,
     });
-    setConditionsAll(Array.isArray(record?.conditions_all) ? (record.conditions_all as any) : []);
+    setConditionsAll(Array.isArray(record?.conditions_all) ? (record.conditions_all as any) : (initialDraft?.conditionsAll || []));
     setConditionsAny(Array.isArray(record?.conditions_any) ? (record.conditions_any as any) : []);
-    setActions(Array.isArray(record?.actions) ? (record.actions as any) : []);
+    setActions(Array.isArray(record?.actions) ? (record.actions as any) : (initialDraft?.actions || []));
     setFlowSelection(null);
-  }, [open, record, initialModuleId, form]);
+  }, [open, record, initialModuleId, initialDraft, form]);
 
   useEffect(() => {
     if (!open || !moduleId) return;

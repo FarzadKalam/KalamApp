@@ -2170,7 +2170,7 @@ export const executeWorkflowAction = async (
     const deliveryChannels = Array.from(new Set(
       asArray(config.delivery_channels)
         .map((item) => String(item || '').trim().toLowerCase())
-        .filter((item) => ['sms', 'email', 'bot', 'note'].includes(item))
+        .filter((item) => ['sms', 'email', 'bot', 'note', 'instagram'].includes(item))
     ));
     for (const channel of deliveryChannels) {
       if (channel === 'sms') {
@@ -2210,6 +2210,18 @@ export const executeWorkflowAction = async (
           ...action,
           type: 'send_note',
           config: { note_text: '{{ai_answer}}', ...(channelConfigs.note || {}) },
+        }, moduleId, actionRecord);
+        continue;
+      }
+      if (channel === 'instagram') {
+        await executeWorkflowAction({
+          ...action,
+          type: 'send_instagram_message',
+          config: {
+            ...(channelConfigs.instagram || {}),
+            recipient_source: 'current_record',
+            message: String((channelConfigs.instagram || {}).message || '{{ai_answer}}'),
+          },
         }, moduleId, actionRecord);
       }
     }
@@ -2332,6 +2344,54 @@ export const executeWorkflowAction = async (
         workflow_action_id: (action as any)?.id || null,
       },
     });
+    return;
+  }
+
+  if (action.type === 'send_instagram_message') {
+    const message = (await renderWorkflowTemplate(String(config.message || ''), currentRecord, moduleId)).trim();
+    const currentConversationId = moduleId === 'instagram_interaction_events'
+      ? String(currentRecord?.conversation_id || '').trim()
+      : '';
+    if (currentConversationId) {
+      const { data, error } = await supabase.functions.invoke('instagram-boxapi', { body: { action: 'send_message', conversationId: currentConversationId, message, showcaseId: String(config.showcase_id || '').trim() || undefined } });
+      if (error || data?.success === false) throw new Error(data?.message || error?.message || 'ارسال پیام اینستاگرام ناموفق بود.');
+      return;
+    }
+    const targetValue = config.recipient_source === 'related_record'
+      ? currentRecord?.[String(config.related_record_field || '')]
+      : currentRecord?.id;
+    const targetModuleId = config.recipient_source === 'related_record'
+      ? String(config.related_record_module_id || '').trim()
+      : moduleId;
+    const targetIds = asArray(targetValue)
+      .flatMap((value: any) => typeof value === 'object' ? [value?.id, value?.value] : [value])
+      .map((value: any) => String(value || '').trim())
+      .filter(Boolean);
+    if (!targetModuleId || targetIds.length === 0) throw new Error('رکورد مرتبط برای ارسال پیام اینستاگرام پیدا نشد.');
+    const { data: linkRows, error: linkError } = await supabase
+      .from('instagram_conversation_links')
+      .select('conversation_id')
+      .eq('target_module_id', targetModuleId)
+      .in('target_record_id', targetIds);
+    if (linkError) throw linkError;
+    const conversationIds = Array.from(new Set((linkRows || []).map((row: any) => String(row?.conversation_id || '').trim()).filter(Boolean)));
+    if (conversationIds.length === 0) throw new Error('برای رکورد انتخاب‌شده گفتگوی اینستاگرام متصل پیدا نشد.');
+    const results = await Promise.all(conversationIds.map(async (conversationId) => {
+      const { data, error } = await supabase.functions.invoke('instagram-boxapi', { body: { action: 'send_message', conversationId, message, showcaseId: String(config.showcase_id || '').trim() || undefined } });
+      if (error || data?.success === false) throw new Error(data?.message || error?.message || 'ارسال پیام اینستاگرام ناموفق بود.');
+    }));
+    return results;
+  }
+
+  if (action.type === 'reply_instagram_comment') {
+    const commentId = moduleId === 'instagram_interaction_events'
+      ? String(currentRecord?.comment_id || '').trim()
+      : String(config.comment_id || '').trim();
+    const message = (await renderWorkflowTemplate(String(config.message || ''), currentRecord, moduleId)).trim();
+    if (!commentId) throw new Error('این اقدام فقط برای رویدادِ کامنت قابل اجرا است.');
+    if (!message) throw new Error('متن پاسخ به کامنت خالی است.');
+    const { data, error } = await supabase.functions.invoke('instagram-boxapi', { body: { action: 'reply_comment', commentId, message } });
+    if (error || data?.success === false) throw new Error(data?.message || error?.message || 'ارسال پاسخ کامنت ناموفق بود.');
     return;
   }
 

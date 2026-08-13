@@ -49,6 +49,8 @@ import { automationExecutionReportsConfig } from './modules/automationExecutionR
 import { smsDeliveryReportsConfig } from './modules/smsDeliveryReportsConfig';
 import { voipCallReportsConfig } from './modules/voipCallReportsConfig';
 import { counterpartyBotGroupsConfig } from './modules/counterpartyBotGroupsConfig';
+import { instagramConversationsConfig } from './modules/instagramConversationsConfig';
+import { instagramInteractionEventsConfig } from './modules/instagramInteractionEventsConfig';
 import { expenseDocumentsConfig } from './modules/expenseDocumentsConfig';
 import { assetsConfig } from './modules/assetsConfig';
 import { employeeAdvancesConfig } from './modules/employeeAdvancesConfig';
@@ -206,6 +208,8 @@ export const BASE_MODULES: Record<string, ModuleDefinition> = {
   sms_delivery_reports: smsDeliveryReportsConfig,
   voip_call_reports: voipCallReportsConfig,
   counterparty_bot_groups: counterpartyBotGroupsConfig,
+  instagram_conversations: instagramConversationsConfig,
+  instagram_interaction_events: instagramInteractionEventsConfig,
   expense_documents: expenseDocumentsConfig,
   assets: assetsConfig,
   employee_advances: employeeAdvancesConfig,

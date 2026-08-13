@@ -4,10 +4,11 @@ import { DeleteOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, Thunderb
 import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
 import WorkflowEditorModal from './WorkflowEditorModal';
-import { WorkflowRecord } from '../../utils/workflowTypes';
+import { WorkflowCondition, WorkflowRecord, createWorkflowId } from '../../utils/workflowTypes';
 import { isSaasAdminModuleId, WORKFLOWS_PERMISSION_KEY } from '../../utils/permissions';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { resolveSelectPopupContainer } from '../../utils/popupContainer';
+import { useSearchParams } from 'react-router-dom';
 
 type WorkflowsManagerProps = {
   inline?: boolean;
@@ -53,7 +54,31 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
   const [moduleFilter, setModuleFilter] = useState<string>(defaultModuleId || 'all');
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<WorkflowRecord | null>(null);
+  const [isCreatingFromMediaDraft, setIsCreatingFromMediaDraft] = useState(false);
   const [permissions, setPermissions] = useState<WorkflowsPermission>(defaultPerms);
+  const [searchParams] = useSearchParams();
+  const [openedDraftKey, setOpenedDraftKey] = useState('');
+
+  const instagramMediaDraft = useMemo(() => {
+    const permalink = String(searchParams.get('instagramMediaPermalink') || '').trim();
+    const mediaType = String(searchParams.get('instagramMediaType') || '').trim();
+    const mediaLabel = String(searchParams.get('instagramMediaLabel') || '').trim();
+    if (!permalink || !['post', 'reel', 'story'].includes(mediaType)) return null;
+    const conditionsAll: WorkflowCondition[] = [
+      { id: createWorkflowId(), field: 'event_type', operator: 'eq', value: 'comment_received' },
+      { id: createWorkflowId(), field: 'media_permalink', operator: 'eq', value: permalink },
+      { id: createWorkflowId(), field: 'media_type', operator: 'eq', value: mediaType },
+    ];
+    return {
+      key: `${mediaType}:${permalink}`,
+      moduleId: 'instagram_interaction_events',
+      name: `پاسخ خودکار کامنت ${mediaLabel || (mediaType === 'story' ? 'استوری' : 'پست')}`,
+      description: 'فقط برای کامنت‌های همین رسانه اجرا می‌شود.',
+      triggerType: 'on_create' as const,
+      conditionsAll,
+      actions: [{ id: createWorkflowId(), type: 'reply_instagram_comment' as const, config: { message: '' } }],
+    };
+  }, [searchParams]);
 
   const moduleOptions = useMemo(
     () =>
@@ -146,6 +171,15 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
       setModuleFilter(defaultModuleId);
     }
   }, [defaultModuleId, moduleFilter]);
+
+  useEffect(() => {
+    if (!instagramMediaDraft || openedDraftKey === instagramMediaDraft.key || !canEdit || !canRenderByContext) return;
+    setEditingRecord(null);
+    setIsCreatingFromMediaDraft(true);
+    setModuleFilter('instagram_interaction_events');
+    setEditorOpen(true);
+    setOpenedDraftKey(instagramMediaDraft.key);
+  }, [canEdit, canRenderByContext, instagramMediaDraft, openedDraftKey]);
 
   const toggleActive = async (record: WorkflowRecord, checked: boolean) => {
     if (!canEdit) return;
@@ -254,6 +288,7 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
                 disabled={!canEdit || isProcessActivator}
                 onClick={() => {
                   setEditingRecord(row);
+                  setIsCreatingFromMediaDraft(false);
                   setEditorOpen(true);
                 }}
               >
@@ -306,6 +341,7 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
           className="bg-leather-600 hover:!bg-leather-500"
           onClick={() => {
             setEditingRecord(null);
+            setIsCreatingFromMediaDraft(false);
             setEditorOpen(true);
           }}
         >
@@ -338,6 +374,7 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
           onClose={() => setEditorOpen(false)}
           onSaved={() => fetchRecords()}
           initialModuleId={editorInitialModuleId}
+          initialDraft={isCreatingFromMediaDraft ? instagramMediaDraft : null}
           record={editingRecord}
           canEdit={canEdit}
           moduleOptions={moduleOptions}

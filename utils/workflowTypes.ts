@@ -48,6 +48,8 @@ export type WorkflowActionType =
   | 'send_note_sms'
   | 'send_web_form_link'
   | 'send_sms'
+  | 'send_instagram_message'
+  | 'reply_instagram_comment'
   | 'send_email'
   | 'run_ai_prompt'
   | 'send_bot_message'
@@ -174,6 +176,8 @@ export const actionTypeOptions: Array<{ label: string; value: WorkflowActionType
   { label: 'ارسال یادداشت', value: 'send_note' },
   { label: 'ارسال لینک وب‌فرم', value: 'send_web_form_link' },
   { label: 'ارسال پیامک', value: 'send_sms' },
+  { label: 'ارسال پیام اینستاگرام', value: 'send_instagram_message' },
+  { label: 'پاسخ به کامنت اینستاگرام', value: 'reply_instagram_comment' },
   { label: 'ارسال ایمیل', value: 'send_email' },
   { label: 'اجرای پرامپت هوش مصنوعی', value: 'run_ai_prompt' },
   { label: 'ارسال پیام توسط بات', value: 'send_bot_message' },

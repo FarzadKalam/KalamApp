@@ -27,6 +27,8 @@ const ACTION_VISUALS: Partial<Record<WorkflowActionType, ActionVisual>> = {
   send_note_sms: { icon: <FileTextOutlined />, accentColor: '#0284c7' },
   send_web_form_link: { icon: <LinkOutlined />, accentColor: '#14b8a6' },
   send_sms: { icon: <MessageOutlined />, accentColor: '#22c55e' },
+  send_instagram_message: { icon: <SendOutlined />, accentColor: '#ec4899' },
+  reply_instagram_comment: { icon: <MessageOutlined />, accentColor: '#f97316' },
   send_email: { icon: <MailOutlined />, accentColor: '#f97316' },
   run_ai_prompt: { icon: <RobotOutlined />, accentColor: '#8b5cf6' },
   send_bot_message: { icon: <SendOutlined />, accentColor: '#3b82f6' },

@@ -27,6 +27,7 @@ import {
 } from '../../utils/taxpayerSystem';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import ApiIntegrationSection from '../../components/ApiIntegrationSection';
+import InstagramBoxApiConnectionsSection from '../../components/settings/InstagramBoxApiConnectionsSection';
 import { SAAS_ADMIN_PERMISSION_KEY } from '../../utils/permissions';
 import { loadScopedCompanySettings } from '../../utils/companySettings';
 import { normalizeCurrencyConfig } from '../../utils/currency';
@@ -215,6 +216,7 @@ const CONNECTION_PANEL_SEARCH_TEXT: Record<string, string> = {
   rubika_bot: 'بات روبیکا rubika chat id',
   portal: 'پورتال مشتریان portal',
   payment_gateway: 'درگاه پرداخت آنلاین زرین پال zarinpal pay payment gateway فاکتور آنلاین اشتراک شارژ',
+  instagram: 'اینستاگرام instagram boxapi دایرکت کامنت پیج وبهوک',
 };
 
 const normalizeConnectionSearchText = (value: string) =>
@@ -2248,6 +2250,16 @@ const ConnectionsTab: React.FC = () => {
                   {renderBotInboundCapture('rubika', 'border-amber-300 dark:border-amber-700')}
                 </>
               ),
+            },
+            {
+              key: 'instagram',
+              label: (
+                <span className="inline-flex items-center gap-2">
+                  <ApiOutlined />
+                  اتصال اینستاگرام (BoxAPI)
+                </span>
+              ),
+              children: <InstagramBoxApiConnectionsSection />,
             },
             {
               key: 'portal',

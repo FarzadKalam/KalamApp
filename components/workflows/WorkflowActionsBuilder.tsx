@@ -159,6 +159,21 @@ export const getDefaultActionConfig = (type: WorkflowActionType): Record<string,
         variable_field: '',
         variable_target: 'message',
       };
+    case 'send_instagram_message':
+      return {
+        recipient_source: 'current_record',
+        related_record_field: '',
+        message: '',
+        showcase_id: '',
+        variable_field: '',
+        variable_target: 'message',
+      };
+    case 'reply_instagram_comment':
+      return {
+        message: '',
+        variable_field: '',
+        variable_target: 'message',
+      };
     case 'send_email':
       return {
         recipient_fields: [],
@@ -203,6 +218,9 @@ export const getDefaultActionConfig = (type: WorkflowActionType): Record<string,
             title: 'پیام هوش مصنوعی',
             message: '{{ai_answer}}',
             ...buildDefaultWorkflowAttachmentConfig(),
+          },
+          instagram: {
+            message: '{{ai_answer}}',
           },
         },
       };
@@ -406,6 +424,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     ? safeValue.filter((action) => visibleActionIdSet.has(String(action.id)))
     : safeValue;
   const [templateModalTarget, setTemplateModalTarget] = useState<{ actionId: string; fieldKey: string; title: string } | null>(null);
+  const [instagramShowcaseOptions, setInstagramShowcaseOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [formulaModalTarget, setFormulaModalTarget] = useState<
     | { mode: 'action'; actionId: string; fieldKey: string }
     | { mode: 'mapping'; actionId: string; mappingId: string; fieldKey: string }
@@ -419,6 +438,12 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     (node?: HTMLElement | null) => resolveModalPopupContainer(node),
     []
   );
+  useEffect(() => {
+    let active = true;
+    void supabase.from('instagram_product_showcases').select('id,name').eq('is_active', true).order('name').limit(100)
+      .then(({ data }) => { if (active) setInstagramShowcaseOptions((data || []).map((row: any) => ({ value: String(row.id), label: String(row.name || 'ویترین محصولات') }))); });
+    return () => { active = false; };
+  }, []);
 
   const commonSelectProps = {
     showSearch: true,
@@ -1578,7 +1603,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       const relationModuleLocked = webFormRelationModuleOptions.length <= 1;
       const activeWebFormOptions = webFormOptions;
 
-      const updateChannelConfig = (channelKey: 'sms' | 'email' | 'bot' | 'note', patch: Record<string, any>) => {
+      const updateChannelConfig = (channelKey: 'sms' | 'email' | 'bot' | 'note' | 'instagram', patch: Record<string, any>) => {
         updateActionConfig(action.id, {
           channel_configs: {
             ...channelConfigs,
@@ -1849,7 +1874,8 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       const smsConfig = channelConfigs.sms || {};
       const emailConfig = channelConfigs.email || {};
       const botConfig = channelConfigs.bot || {};
-      const updateChannelConfig = (channelKey: 'sms' | 'email' | 'bot' | 'note', patch: Record<string, any>) => {
+      const instagramConfig = channelConfigs.instagram || {};
+      const updateChannelConfig = (channelKey: 'sms' | 'email' | 'bot' | 'note' | 'instagram', patch: Record<string, any>) => {
         updateActionConfig(action.id, {
           channel_configs: {
             ...channelConfigs,
@@ -1868,7 +1894,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         ] as const),
       ]).values());
       const renderAiChannelVariablePicker = (
-        channelKey: 'sms' | 'email' | 'bot' | 'note',
+        channelKey: 'sms' | 'email' | 'bot' | 'note' | 'instagram',
         targetKey: string,
         targetLabel: string,
       ) => (
@@ -1988,6 +2014,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 { label: 'پیامک', value: 'sms' },
                 { label: 'ایمیل', value: 'email' },
                 { label: 'بات', value: 'bot' },
+                { label: 'دایرکت اینستاگرامِ همان گفتگو', value: 'instagram' },
               ]}
               onChange={(nextVal) => updateActionConfig(action.id, { delivery_channels: nextVal })}
             />
@@ -2124,6 +2151,22 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               {renderAiChannelVariablePicker('bot', 'message', 'متن پیام بات')}
             </div>
           ) : null}
+          {selectedChannels.includes('instagram') && currentModuleId === 'instagram_interaction_events' ? (
+            <div className="space-y-2 rounded-xl border border-pink-200 bg-pink-50/50 p-3 dark:border-pink-400/20 dark:bg-pink-500/10">
+              <div className="text-sm font-medium">دایرکت اینستاگرام</div>
+              <div className="text-xs text-gray-500">پاسخ AI فقط به همان گفتگویی ارسال می‌شود که رویداد دایرکت آن گردش‌کار را اجرا کرده است.</div>
+              <Input.TextArea
+                rows={3}
+                value={instagramConfig.message}
+                disabled={disabled}
+                onChange={(e) => updateChannelConfig('instagram', { message: e.target.value })}
+                placeholder="متن دایرکت؛ از {{ai_answer}} استفاده کنید"
+              />
+              {renderAiChannelVariablePicker('instagram', 'message', 'متن دایرکت')}
+            </div>
+          ) : selectedChannels.includes('instagram') ? (
+            <Alert type="warning" showIcon message="ارسال دایرکتِ پاسخ AI فقط برای گردش‌کاری فعال است که منبع آن «رویدادهای اینستاگرام» باشد." />
+          ) : null}
         </div>
       );
     }
@@ -2168,6 +2211,52 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             placeholder="متن پیامک"
           />
           {renderVariableTools(action, [{ key: 'message', label: 'متن پیامک' }])}
+        </div>
+      );
+    }
+    if (actionType === 'send_instagram_message') {
+      if (currentModuleId === 'instagram_interaction_events') {
+        return (
+          <div className="space-y-2">
+            <div className="rounded-lg border border-pink-200 bg-pink-50/60 p-2 text-xs text-slate-700 dark:border-pink-400/20 dark:bg-pink-500/10 dark:text-slate-200">
+              برای رویداد «دایرکت جدید»، پیام به همان گفتگو برمی‌گردد. برای رویداد کامنت، از اقدام «پاسخ به کامنت اینستاگرام» استفاده کنید.
+            </div>
+            <Select {...commonSelectProps} value={config.showcase_id || undefined} disabled={disabled} options={instagramShowcaseOptions} onChange={(value) => updateActionConfig(action.id, { showcase_id: value })} placeholder="ویترین محصولات (اختیاری)" />
+            <div className="flex justify-end">{renderMessageTemplateButton(action.id, 'message', 'پیام‌های آماده اینستاگرام')}</div>
+            <Input.TextArea rows={4} value={config.message} disabled={disabled} onChange={(event) => updateActionConfig(action.id, { message: event.target.value })} placeholder="متن پیام اینستاگرام" />
+            {renderVariableTools(action, [{ key: 'message', label: 'متن پیام اینستاگرام' }])}
+          </div>
+        );
+      }
+      const relatedRecordOptions = currentModuleFields
+        .filter((field) => [FieldType.RELATION, FieldType.MULTI_RELATION].includes(field.type))
+        .filter((field) => ['customers', 'suppliers', 'employees'].includes(getRelationTargetModuleId(field)))
+        .map((field) => ({ value: field.key, label: `رکورد مرتبط: ${getFieldLabel(field)}`, targetModuleId: getRelationTargetModuleId(field) }));
+      return (
+        <div className="space-y-2">
+          <div className="rounded-lg border border-pink-200 bg-pink-50/60 p-2 text-xs text-slate-700 dark:border-pink-400/20 dark:bg-pink-500/10 dark:text-slate-200">
+            سامانه گفتگوی اینستاگرامِ متصل به رکورد انتخاب‌شده را پیدا می‌کند. متن از متغیرهای همین گردش‌کار پشتیبانی می‌کند و ویترین در خروجی رسمی BoxAPI به متن و دکمه‌های تعاملی تبدیل می‌شود.
+          </div>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            <Select {...commonSelectProps} value={config.recipient_source || 'current_record'} disabled={disabled} options={[{ value: 'current_record', label: 'رکورد فعلی' }, { value: 'related_record', label: 'رکورد مرتبط' }]} onChange={(value) => updateActionConfig(action.id, { recipient_source: value })} />
+            {config.recipient_source === 'related_record' ? <Select {...commonSelectProps} value={config.related_record_field || undefined} disabled={disabled} options={relatedRecordOptions} onChange={(value) => { const selected = relatedRecordOptions.find((option) => option.value === value); updateActionConfig(action.id, { related_record_field: value, related_record_module_id: selected?.targetModuleId || '' }); }} placeholder="فیلد مشتری/تأمین‌کننده/کارمند" /> : <Select {...commonSelectProps} value={config.showcase_id || undefined} disabled={disabled} options={instagramShowcaseOptions} onChange={(value) => updateActionConfig(action.id, { showcase_id: value })} placeholder="ویترین محصولات (اختیاری)" />}
+          </div>
+          {config.recipient_source === 'related_record' ? <Select {...commonSelectProps} value={config.showcase_id || undefined} disabled={disabled} options={instagramShowcaseOptions} onChange={(value) => updateActionConfig(action.id, { showcase_id: value })} placeholder="ویترین محصولات (اختیاری)" /> : null}
+          <div className="flex justify-end">{renderMessageTemplateButton(action.id, 'message', 'پیام‌های آماده اینستاگرام')}</div>
+          <Input.TextArea rows={4} value={config.message} disabled={disabled} onChange={(event) => updateActionConfig(action.id, { message: event.target.value })} placeholder="متن پیام اینستاگرام" />
+          {renderVariableTools(action, [{ key: 'message', label: 'متن پیام اینستاگرام' }])}
+        </div>
+      );
+    }
+    if (actionType === 'reply_instagram_comment') {
+      return (
+        <div className="space-y-2">
+          <div className="rounded-lg border border-orange-200 bg-orange-50/60 p-2 text-xs text-slate-700 dark:border-orange-400/20 dark:bg-orange-500/10 dark:text-slate-200">
+            این اقدام فقط در گردش‌کاری اجرا می‌شود که رویداد «کامنت جدید» را دریافت کرده باشد؛ پاسخ به همان کامنت ثبت‌شده ارسال می‌شود.
+          </div>
+          <div className="flex justify-end">{renderMessageTemplateButton(action.id, 'message', 'پیام‌های آماده اینستاگرام')}</div>
+          <Input.TextArea rows={4} value={config.message} disabled={disabled} onChange={(event) => updateActionConfig(action.id, { message: event.target.value })} placeholder="متن پاسخ به کامنت" />
+          {renderVariableTools(action, [{ key: 'message', label: 'متن پاسخ به کامنت' }])}
         </div>
       );
     }

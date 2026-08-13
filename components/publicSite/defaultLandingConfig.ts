@@ -119,6 +119,7 @@ export const DEFAULT_HOME_SECTIONS: LandingSection[] = [
         { icon: '/assets/bot-platforms/telegram.svg', title: 'بات تلگرام', text: 'دریافت و ارسال پیام از طریق بات رسمی تلگرام.' },
         { icon: '/assets/bot-platforms/bale.svg', title: 'بات بله', text: 'ارتباط با مشتریان از طریق پیام‌رسان بله.' },
         { icon: '/assets/bot-platforms/rubika.svg', title: 'بات روبیکا', text: 'پشتیبانی و اطلاع‌رسانی از طریق روبیکا.' },
+        { icon: 'message', title: 'اینستاگرام', text: 'مدیریت دایرکت و کامنت پیج‌های متصل، همراه با پاسخ‌گویی و گردش‌کار خودکار.' },
         { icon: 'phone', title: 'پیامک', text: 'ارسال پیامک تکی و انبوه با گزارش تحویل.' },
         { icon: 'mail', title: 'ایمیل', text: 'ارسال ایمیل سازمانی و اطلاع‌رسانی خودکار.' },
         { icon: 'sound', title: 'تماس و VoIP', text: 'تماس هوشمند و ثبت گزارش مکالمات.' },

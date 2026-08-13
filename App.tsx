@@ -133,6 +133,7 @@ const loadLandingPageEditor = () => import("./pages/SaasAdmin/LandingPageEditor"
 const loadCmsPageEditor = () => import("./pages/SaasAdmin/CmsPageEditor");
 const loadApiDocsPage = () => import("./pages/ApiDocsPage");
 const loadMessagesPage = () => import("./pages/MessagesPage");
+const loadInstagramInboxPage = () => import("./pages/InstagramInboxPage");
 const loadLayout = () => import("./components/Layout");
 
 const ProfilePage = lazy(loadProfilePage);
@@ -190,6 +191,7 @@ const LandingPageEditor = lazy(loadLandingPageEditor);
 const CmsPageEditor = lazy(loadCmsPageEditor);
 const ApiDocsPage = lazy(loadApiDocsPage);
 const MessagesPage = lazy(loadMessagesPage);
+const InstagramInboxPage = lazy(loadInstagramInboxPage);
 const Layout = lazy(loadLayout);
 
 const preloadAuthenticatedRouteChunk = (targetPath?: string): Promise<unknown> => {
@@ -206,6 +208,7 @@ const preloadAuthenticatedRouteChunk = (targetPath?: string): Promise<unknown> =
   else if (section === "profile") preloader = loadProfilePage;
   else if (section === "settings") preloader = loadSettingsPage;
   else if (section === "messages") preloader = loadMessagesPage;
+  else if (section === "instagram") preloader = loadInstagramInboxPage;
   else if (section === "gallery") preloader = loadFilesGalleryPage;
   else if (section === "org-knowledge") preloader = loadOrgKnowledgePage;
   else if (section === "recycle-bin") preloader = loadRecycleBinPage;
@@ -796,6 +799,7 @@ function App() {
             <Route path="/attendance/daily/:scheduleId" element={<AttendanceDailySchedulePage />} />
             <Route path="/mbti_assessments/:id/report" element={<MbtiAssessmentReportPage />} />
             <Route path="/messages" element={<MessagesPage />} />
+            <Route path="/instagram" element={<InstagramInboxPage />} />
             <Route path="/gallery" element={<FilesGalleryPage />} />
             <Route path="/org-knowledge" element={<OrgKnowledgePage />} />
             <Route path="/org-knowledge/business-model-canvas" element={<OrgKnowledgeBusinessModelCanvasPage />} />

@@ -156,6 +156,7 @@ const FEATURE_OPTIONS = [
   { id: 'own_payment_gateway', label: 'درگاه پرداخت اختصاصی سازمان' },
   { id: 'online_invoice_payment', label: 'پرداخت آنلاین فاکتورهای عمومی' },
   { id: 'online_catalog', label: 'کاتالوگ آنلاین' },
+  { id: 'instagram_inbox', label: 'صندوق اینستاگرام (BoxAPI)' },
   { id: 'saas_account_billing', label: 'مدیریت حساب و اشتراک' },
   { id: 'ai_credit_topup', label: 'شارژ اعتبار هوش مصنوعی' },
   { id: 'sms_credit_topup', label: 'شارژ اعتبار پیامک' },
