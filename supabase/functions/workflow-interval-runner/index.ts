@@ -4079,7 +4079,7 @@ async function executeAction(
         const response = await fetch(`${url.replace(/\/+$/, '')}/functions/v1/instagram-boxapi`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-          body: JSON.stringify({ action: 'send_message', orgId, conversationId: currentConversationId, message: text, showcaseId: String(config.showcase_id || '').trim() || undefined }),
+          body: JSON.stringify({ action: 'send_message', orgId, conversationId: currentConversationId, message: text, showcaseId: String(config.showcase_id || '').trim() || undefined, automated: true }),
           signal: AbortSignal.timeout(30000),
         });
         const payload = await response.json().catch(() => ({}));
@@ -4109,7 +4109,7 @@ async function executeAction(
         const response = await fetch(`${url.replace(/\/+$/, '')}/functions/v1/instagram-boxapi`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-          body: JSON.stringify({ action: 'send_message', orgId, conversationId, message: text, showcaseId: String(config.showcase_id || '').trim() || undefined }),
+          body: JSON.stringify({ action: 'send_message', orgId, conversationId, message: text, showcaseId: String(config.showcase_id || '').trim() || undefined, automated: true }),
           signal: AbortSignal.timeout(30000),
         });
         const payload = await response.json().catch(() => ({}));
@@ -4132,7 +4132,7 @@ async function executeAction(
       const response = await fetch(`${url.replace(/\/+$/, '')}/functions/v1/instagram-boxapi`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-        body: JSON.stringify({ action: 'reply_comment', orgId, commentId, message: text }),
+        body: JSON.stringify({ action: 'reply_comment', orgId, commentId, message: text, automated: true }),
         signal: AbortSignal.timeout(30000),
       });
       const payload = await response.json().catch(() => ({}));

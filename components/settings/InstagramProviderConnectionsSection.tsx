@@ -12,7 +12,6 @@ type ProviderAccount = {
   profile_photo_url?: string | null;
   is_active?: boolean;
   expires_at?: string | null;
-  settings?: { catalog_id?: string | null; default_buttons?: Array<{ title?: string; url?: string }> } | null;
 };
 type Provider = {
   id: string;
@@ -28,7 +27,6 @@ type Provider = {
   lastWebhook?: WebhookEventDiagnostic | null;
   accounts: ProviderAccount[];
 };
-type CatalogOption = { id: string; title: string };
 type SupportedProvider = { key: string; label: string; defaultBaseUrl?: string; apiKeyLabel?: string; apiBaseUrlRequired?: boolean; apiBaseUrlPlaceholder?: string };
 type WebhookEventDiagnostic = { event_type?: string; processing_status?: 'received' | 'processed' | 'ignored' | 'failed'; error_message?: string | null; received_at?: string | null; processed_at?: string | null; payload_summary?: { data_kind?: string; data_keys?: string[]; array_counts?: Record<string, number>; has_account_reference?: boolean } };
 
@@ -59,12 +57,8 @@ const InstagramProviderConnectionsSection: React.FC = () => {
   const [checkingWebhookId, setCheckingWebhookId] = useState<string | null>(null);
   const [webhookDiagnostics, setWebhookDiagnostics] = useState<Record<string, WebhookEventDiagnostic[]>>({});
   const [modalOpen, setModalOpen] = useState(false);
-  const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
-  const [settingAccount, setSettingAccount] = useState<ProviderAccount | null>(null);
-  const [catalogs, setCatalogs] = useState<CatalogOption[]>([]);
   const [editing, setEditing] = useState<Provider | null>(null);
   const [form] = Form.useForm();
-  const [accountSettingsForm] = Form.useForm();
 
   const invoke = useCallback(async (body: Record<string, any>) => {
     const { data, error } = await supabase.functions.invoke('instagram-boxapi', { body });
@@ -83,10 +77,6 @@ const InstagramProviderConnectionsSection: React.FC = () => {
     finally { setLoading(false); }
   }, [invoke, message]);
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => {
-    void supabase.from('online_catalogs').select('id,title').eq('is_active', true).order('title').limit(100)
-      .then(({ data }) => setCatalogs((data || []) as CatalogOption[]));
-  }, []);
   const providerDefinition = (providerKey?: string) => supportedProviders.find((provider) => provider.key === providerKey);
   const providerLabel = (providerKey?: string) => providerDefinition(providerKey)?.label || providerKey || 'سرویس‌دهنده';
 
@@ -169,22 +159,6 @@ const InstagramProviderConnectionsSection: React.FC = () => {
     if (status === 'failed') return 'خطای پردازش';
     return 'نامشخص';
   };
-  const openAccountSettings = (account: ProviderAccount) => {
-    setSettingAccount(account);
-    accountSettingsForm.setFieldsValue({ catalogId: account.settings?.catalog_id || undefined, buttons: account.settings?.default_buttons || [] });
-    setAccountSettingsOpen(true);
-  };
-  const saveAccountSettings = async () => {
-    if (!settingAccount) return;
-    try {
-      const value = await accountSettingsForm.validateFields();
-      setSaving(true);
-      await invoke({ action: 'save_account_config', accountId: settingAccount.id, catalogId: value.catalogId, buttons: value.buttons || [] });
-      setAccountSettingsOpen(false); message.success('تنظیمات ویترین و دکمه‌های این پیج ذخیره شد.'); await load();
-    } catch (error) { message.error(toFaErrorMessage(error, 'ذخیره تنظیمات پیج ناموفق بود.')); }
-    finally { setSaving(false); }
-  };
-
   return (
     <div className="space-y-4">
       <Alert
@@ -232,7 +206,6 @@ const InstagramProviderConnectionsSection: React.FC = () => {
               { title: 'پیج', render: (_: unknown, account: ProviderAccount) => <span className="inline-flex items-center gap-2">{account.profile_photo_url ? <Avatar size={28} src={normalizePublicAssetUrl(account.profile_photo_url) || undefined} /> : <Avatar size={28}>I</Avatar>}<span>{account.display_name || `@${account.username || 'بدون‌نام'}`}</span></span> },
               { title: 'نام کاربری', render: (_: unknown, account: ProviderAccount) => <span dir="ltr">{account.username ? `@${account.username.replace(/^@+/, '')}` : '—'}</span> },
               { title: 'وضعیت', render: (_: unknown, account: ProviderAccount) => <Tag color={account.is_active ? 'green' : 'default'}>{account.is_active ? 'فعال' : 'غیرفعال'}</Tag> },
-              { title: 'ویترین و دکمه‌ها', render: (_: unknown, account: ProviderAccount) => <Button size="small" onClick={() => openAccountSettings(account)}>تنظیمات پیج</Button> },
             ]}
           />
         </div>
@@ -256,15 +229,6 @@ const InstagramProviderConnectionsSection: React.FC = () => {
             <Form.Item name="apiKey" label={providerDefinition(editing.providerKey)?.apiKeyLabel || 'کلید API سرویس‌دهنده'} extra="اگر کلید تغییر نکرده، این فیلد را خالی بگذارید."><Input.Password autoComplete="new-password" /></Form.Item>
             <Form.Item name="isActive" label="فعال‌سازی اتصال" valuePropName="checked"><Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" /></Form.Item>
           </>}
-        </Form>
-      </Modal>
-      <Modal title={`تنظیمات پیج ${settingAccount?.username ? `@${settingAccount.username}` : ''}`} open={accountSettingsOpen} onCancel={() => setAccountSettingsOpen(false)} onOk={() => void saveAccountSettings()} confirmLoading={saving} okText="ذخیره" cancelText="انصراف" destroyOnHidden>
-        <Form form={accountSettingsForm} layout="vertical">
-          <Form.Item name="catalogId" label="ویترین پیش‌فرض محصولات" extra="از کاتالوگ‌های آنلاین و لیست‌های قیمت موجود استفاده می‌شود."><Select allowClear placeholder="انتخاب ویترین" options={catalogs.map((catalog) => ({ value: catalog.id, label: catalog.title }))} /></Form.Item>
-          <div className="mb-2 text-xs text-gray-500">دکمه‌های پیش‌فرض پیام (حداکثر ۳ دکمه)</div>
-          <Form.List name="buttons">
-            {(fields, { add, remove: removeButton }) => <div className="space-y-2">{fields.map((field) => <div key={field.key} className="flex gap-2"><Form.Item className="mb-0 flex-1" name={[field.name, 'title']} rules={[{ required: true, message: 'عنوان دکمه را وارد کنید.' }]}><Input placeholder="عنوان دکمه" /></Form.Item><Form.Item className="mb-0 flex-[1.4]" name={[field.name, 'url']} rules={[{ required: true, type: 'url', message: 'لینک معتبر وارد کنید.' }]}><Input dir="ltr" placeholder="https://..." /></Form.Item><Button danger type="text" onClick={() => removeButton(field.name)}>حذف</Button></div>)}{fields.length < 3 ? <Button type="dashed" block onClick={() => add()}>افزودن دکمه</Button> : null}</div>}
-          </Form.List>
         </Form>
       </Modal>
     </div>

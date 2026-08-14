@@ -120,6 +120,12 @@ const requireInstagramInboxView = (context: any) => {
   if (saasAdmin.view === true || saasAdmin.edit === true || instagram.view === true || instagram.edit === true) return;
   requireConnectionManagement(context);
 };
+const requireInstagramInboxEdit = (context: any) => {
+  const saasAdmin = context.permissions?.__saas_admin || {};
+  const instagram = context.permissions?.instagram_conversations || {};
+  if (saasAdmin.view === true || saasAdmin.edit === true || instagram.edit === true) return;
+  requireConnectionManagement(context);
+};
 const providerRequest = async (provider: any, operationKey: 'sync_accounts' | 'list_posts' | 'send_message' | 'reply_comment' | 'get_connect_url', body?: Record<string, any>) => {
   const adapter = getInstagramProvider(text(provider?.provider_key));
   if (!adapter) throw new Error('سرویس‌دهندهٔ این اتصال در سامانه پشتیبانی نمی‌شود.');
@@ -327,6 +333,17 @@ const processCommentWebhook = async (provider: any, envelope: any, url: string, 
     // در callback واقعی BoxAPI، شناسهٔ پست داخل data.media.id است.
     const providerMediaId = text(row?.media_id || row?.post_id || row?.media?.id);
     if (!providerCommentId || !providerMediaId) continue;
+    const authorScopedId = text(row?.from?.id || row?.sender?.id || row?.author?.id);
+    const contactRows = authorScopedId ? await rest(url, serviceKey, 'instagram_contacts?on_conflict=account_id,instagram_scoped_id', {
+      method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+      body: JSON.stringify({ org_id: provider.org_id, account_id: account.id, instagram_scoped_id: authorScopedId, username: text(row?.from?.username || row?.author?.username) || null, display_name: text(row?.from?.name || row?.author?.name) || null, profile_photo_url: text(row?.from?.profile_photo || row?.from?.profile_photo_url || row?.author?.profile_photo) || null, updated_at: now() }),
+    }) : [];
+    const contact = contactRows?.[0];
+    const conversationRows = contact?.id ? await rest(url, serviceKey, 'instagram_conversations?on_conflict=provider_id,account_id,provider_thread_id', {
+      method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+      body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, account_id: account.id, contact_id: contact.id, provider_thread_id: authorScopedId, last_message_preview: text(row?.text || row?.message || row?.content) || 'کامنت جدید', last_message_at: row?.timestamp || row?.created_at || now(), last_inbound_at: row?.timestamp || row?.created_at || now(), updated_at: now() }),
+    }) : [];
+    const conversation = conversationRows?.[0];
     let media = (await rest(url, serviceKey, `instagram_social_media?provider_id=eq.${encodeURIComponent(provider.id)}&provider_media_id=eq.${encodeURIComponent(providerMediaId)}&select=id,media_type,caption,permalink`))?.[0];
     if (!media) {
       const fallbackMediaRows = await rest(url, serviceKey, 'instagram_social_media?on_conflict=provider_id,provider_media_id', {
@@ -338,12 +355,12 @@ const processCommentWebhook = async (provider: any, envelope: any, url: string, 
     if (!media?.id) continue;
     const commentRows = await rest(url, serviceKey, 'instagram_comments?on_conflict=provider_id,provider_comment_id', {
       method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
-      body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, account_id: account.id, media_id: media.id, provider_comment_id: providerCommentId, author_scoped_id: text(row?.from?.id || row?.sender?.id) || null, author_username: text(row?.from?.username || row?.username) || null, author_name: text(row?.from?.name || row?.name) || null, author_profile_photo_url: text(row?.from?.profile_photo || row?.profile_photo) || null, content_text: text(row?.text || row?.message || row?.content), like_count: Number(row?.like_count || 0), provider_payload: row, commented_at: row?.timestamp || row?.created_at || now(), updated_at: now() }),
+      body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, account_id: account.id, media_id: media.id, provider_comment_id: providerCommentId, author_scoped_id: authorScopedId || null, author_username: text(row?.from?.username || row?.username || row?.author?.username) || null, author_name: text(row?.from?.name || row?.name || row?.author?.name) || null, author_profile_photo_url: text(row?.from?.profile_photo || row?.from?.profile_photo_url || row?.profile_photo || row?.author?.profile_photo) || null, content_text: text(row?.text || row?.message || row?.content), like_count: Number(row?.like_count || 0), provider_payload: row, commented_at: row?.timestamp || row?.created_at || now(), updated_at: now() }),
     });
     const comment = commentRows?.[0];
     if (comment?.id) {
       persisted += 1;
-      await rest(url, serviceKey, 'instagram_interaction_events', { method: 'POST', body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, account_id: account.id, account_username: account.username || null, comment_id: comment.id, event_type: 'comment_received', message_text: text(row?.text || row?.message || row?.content) || null, media_type: media.media_type || null, media_caption: media.caption || null, media_permalink: media.permalink || null, tags: comment.tags || [], payload: row, occurred_at: row?.timestamp || row?.created_at || now() }) });
+      await rest(url, serviceKey, 'instagram_interaction_events', { method: 'POST', body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, account_id: account.id, account_username: account.username || null, conversation_id: conversation?.id || null, comment_id: comment.id, event_type: 'comment_received', message_text: text(row?.text || row?.message || row?.content) || null, media_type: media.media_type || null, media_caption: media.caption || null, media_permalink: media.permalink || null, tags: comment.tags || [], payload: row, occurred_at: row?.timestamp || row?.created_at || now() }) });
     }
   }
   return persisted ? { persisted } : { persisted: 0, reason: 'در callback کامنت، شناسهٔ کامنت یا رسانهٔ قابل ثبت پیدا نشد.' };
@@ -623,8 +640,29 @@ Deno.serve(async (req: Request) => {
       }).filter((button: any) => button.title && ((button.type === 'web_url' && button.url) || (button.type === 'postback' && button.payload))).slice(0, 3) : [];
       const result = await providerRequest(providerForMessage, 'send_message', { account_id: accountForMessage.provider_account_id, recipient_id: contactForMessage.instagram_scoped_id, message, ...(buttons.length ? { buttons } : {}) });
       const providerMessageId = text(result?.data?.message_id || result?.message_id);
-      await rest(url, serviceKey, 'instagram_messages', { method: 'POST', body: JSON.stringify({ org_id: context.orgId, conversation_id: conversation.id, provider_message_id: providerMessageId || `outbound:${crypto.randomUUID()}`, direction: 'outbound', message_type: buttons.length ? 'button' : 'text', content_text: message, buttons, delivery_status: 'sent', provider_payload: result, sent_by: context.userId }) });
+      await rest(url, serviceKey, 'instagram_messages', { method: 'POST', body: JSON.stringify({ org_id: context.orgId, conversation_id: conversation.id, provider_message_id: providerMessageId || `outbound:${crypto.randomUUID()}`, direction: 'outbound', message_type: buttons.length ? 'button' : 'text', content_text: message, buttons, delivery_status: 'sent', provider_payload: { ...result, automated: body?.automated === true }, sent_by: context.userId || null }) });
       await rest(url, serviceKey, `instagram_conversations?id=eq.${encodeURIComponent(conversation.id)}&org_id=eq.${encodeURIComponent(context.orgId)}`, { method: 'PATCH', body: JSON.stringify({ last_message_preview: message, last_message_at: now(), last_outbound_at: now(), updated_at: now() }) });
+      return json(200, { success: true });
+    }
+    if (action === 'save_conversation_links') {
+      requireInstagramInboxEdit(context);
+      const conversationId = text(body?.conversationId);
+      if (!conversationId) throw new Error('گفتگوی اینستاگرام انتخاب نشده است.');
+      const conversation = (await rest(url, serviceKey, `instagram_conversations?id=eq.${encodeURIComponent(conversationId)}&org_id=eq.${encodeURIComponent(context.orgId)}&select=id`))?.[0];
+      if (!conversation) throw new Error('گفتگوی انتخاب‌شده در سازمان شما پیدا نشد.');
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const uniqueTargets = Array.from(new Map(targets.map((item: any) => {
+        const moduleId = text(item?.target_module_id);
+        const recordId = text(item?.target_record_id);
+        if (!['customers', 'suppliers', 'employees'].includes(moduleId) || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(recordId)) throw new Error('رکورد مقصد اتصال معتبر نیست.');
+        return [`${moduleId}:${recordId}`, { target_module_id: moduleId, target_record_id: recordId }];
+      })).values());
+      for (const target of uniqueTargets) {
+        const targetRecord = (await rest(url, serviceKey, `${target.target_module_id}?id=eq.${encodeURIComponent(target.target_record_id)}&org_id=eq.${encodeURIComponent(context.orgId)}&select=id`))?.[0];
+        if (!targetRecord) throw new Error('یکی از رکوردهای انتخاب‌شده در سازمان شما پیدا نشد.');
+      }
+      await rest(url, serviceKey, `instagram_conversation_links?conversation_id=eq.${encodeURIComponent(conversationId)}&org_id=eq.${encodeURIComponent(context.orgId)}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } });
+      if (uniqueTargets.length) await rest(url, serviceKey, 'instagram_conversation_links', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(Array.from(uniqueTargets).map((target) => ({ org_id: context.orgId, conversation_id: conversationId, ...target, created_by: context.userId || null }))) });
       return json(200, { success: true });
     }
     if (action === 'reply_comment') {
@@ -641,6 +679,14 @@ Deno.serve(async (req: Request) => {
       if (!provider || !account?.provider_account_id) throw new Error('اطلاعات پیج برای پاسخ به کامنت کامل نیست.');
       const result = await providerRequest(provider, 'reply_comment', { account_id: account.provider_account_id, comment_id: comment.provider_comment_id, message: reply });
       await rest(url, serviceKey, `instagram_comments?id=eq.${encodeURIComponent(comment.id)}&org_id=eq.${encodeURIComponent(context.orgId)}`, { method: 'PATCH', body: JSON.stringify({ status: 'resolved', replied_at: now(), updated_at: now() }) });
+      // پاسخ API معمولاً شناسهٔ کامنت جدید را برنمی‌گرداند. برای اینکه کاربر بلافاصله
+      // نتیجه را ببیند، یک آیتم خروجی محلی ثبت می‌کنیم؛ callback بعدی سرویس‌دهنده نیز
+      // payload اصلی را جداگانه نگه می‌دارد.
+      const providerReplyId = text(result?.data?.comment_id || result?.data?.id || result?.comment_id || result?.id) || `outbound:${crypto.randomUUID()}`;
+      await rest(url, serviceKey, 'instagram_comments?on_conflict=provider_id,provider_comment_id', {
+        method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' },
+        body: JSON.stringify({ org_id: context.orgId, provider_id: provider.id, account_id: comment.account_id, media_id: comment.media_id, provider_comment_id: providerReplyId, parent_comment_id: comment.id, direction: 'outbound', sent_by: context.userId || null, author_name: context.userId ? null : 'سیستم', content_text: reply, status: 'resolved', provider_payload: { source: 'reply_comment_action', automated: body?.automated === true, provider_result: result }, commented_at: now(), replied_at: now(), updated_at: now() }),
+      });
       const media = comment.media_id ? (await rest(url, serviceKey, `instagram_social_media?id=eq.${encodeURIComponent(comment.media_id)}&org_id=eq.${encodeURIComponent(context.orgId)}&select=media_type,caption,permalink`))?.[0] : null;
       await rest(url, serviceKey, 'instagram_interaction_events', { method: 'POST', body: JSON.stringify({ org_id: context.orgId, provider_id: provider.id, account_id: comment.account_id, account_username: account.username || null, comment_id: comment.id, event_type: 'comment_replied', message_text: reply, media_type: media?.media_type || null, media_caption: media?.caption || null, media_permalink: media?.permalink || null, payload: { message: reply, provider_result: result }, occurred_at: now() }) });
       return json(200, { success: true });

@@ -10774,7 +10774,7 @@ const fetchReplyCrossModuleContext = async (
 const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const actionKind = String(body?.action || '').trim() === 'bot_customer_agent_turn' ? 'bot_customer_agent_turn' : 'suggest_reply';
   const channel = String(body?.channel || '').trim().toLowerCase();
-  if (channel !== 'sms' && channel !== 'bot') {
+  if (channel !== 'sms' && channel !== 'bot' && channel !== 'instagram') {
     return json(400, { success: false, message: 'کانال پیشنهاد پاسخ معتبر نیست.' });
   }
 
@@ -10798,7 +10798,7 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
   await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, 'customer_reply_suggestion');
   const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
     threadId: body?.threadId || null,
-    title: channel === 'sms' ? 'پیشنهاد پاسخ پیامک' : 'پیشنهاد پاسخ بات',
+    title: channel === 'sms' ? 'پیشنهاد پاسخ پیامک' : channel === 'instagram' ? 'پیشنهاد پاسخ اینستاگرام' : 'پیشنهاد پاسخ بات',
     pageContext: { context: contextForReply, moduleId: contextForReply.moduleId || null, recordId: contextForReply.recordId || null, summary: 'reply_suggestion' },
     contextKey: `reply:${channel}:${contextKey}`,
     provider: providerConfig.provider,
