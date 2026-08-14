@@ -111,7 +111,22 @@ const providerRequest = async (provider: any, operationKey: 'sync_accounts' | 'l
   if (!response.ok || data?.success === false) throw new Error(text(data?.message || raw) || `خطای ${adapter.label}: ${response.status}`);
   return data;
 };
-const publicBase = (req: Request) => text(Deno.env.get('INSTAGRAM_WEBHOOK_PUBLIC_BASE_URL') || Deno.env.get('PUBLIC_API_BASE_URL') || new URL(req.url).origin).replace(/\/+$/, '');
+const publicBase = (req: Request) => {
+  const configuredBase = text(Deno.env.get('INSTAGRAM_WEBHOOK_PUBLIC_BASE_URL') || Deno.env.get('PUBLIC_API_BASE_URL'));
+  if (configuredBase) return configuredBase.replace(/\/+$/, '');
+  // در محیط self-hosted، req.url معمولاً آدرس داخلی functions:9000 است.
+  // gateway دامنهٔ واقعی را در headerهای استاندارد proxy نگه می‌دارد.
+  const forwardedHost = text(req.headers.get('x-forwarded-host')).split(',')[0]?.trim();
+  const requestHost = text(req.headers.get('host'));
+  const publicHost = forwardedHost || requestHost;
+  const isInternalHost = /^(functions|localhost|127\.0\.0\.1)(:\d+)?$/i.test(publicHost);
+  if (publicHost && !isInternalHost) {
+    const forwardedProtocol = text(req.headers.get('x-forwarded-proto')).split(',')[0]?.trim();
+    const protocol = forwardedProtocol === 'http' || forwardedProtocol === 'https' ? forwardedProtocol : new URL(req.url).protocol.replace(/:$/, '');
+    return `${protocol}://${publicHost}`.replace(/\/+$/, '');
+  }
+  return new URL(req.url).origin.replace(/\/+$/, '');
+};
 const providerSummary = (row: any, request: Request) => ({
   id: row.id,
   name: row.name,
