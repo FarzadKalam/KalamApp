@@ -20,6 +20,22 @@ const parse = (raw: string) => { try { return raw ? JSON.parse(raw) : {}; } catc
 // BoxAPI برای پاسخ اکشن‌های asynchronous، نام رویداد را به‌شکل action.list_posts می‌فرستد؛
 // برای سازگاری با رویدادهای مستند messaging و comment، فقط پیشوند action را نرمال می‌کنیم.
 const normalizedWebhookEventType = (value: unknown) => text(value).toLowerCase().replace(/^action[._:-]+/, '');
+const webhookPayloadSummary = (payload: any) => {
+  const data = payload?.data;
+  const dataObject = data && typeof data === 'object' && !Array.isArray(data) ? data : null;
+  return {
+    data_kind: Array.isArray(data) ? 'array' : dataObject ? 'object' : typeof data,
+    data_keys: dataObject ? Object.keys(dataObject).slice(0, 12) : [],
+    array_counts: {
+      root: Array.isArray(data) ? data.length : 0,
+      posts: Array.isArray(dataObject?.posts) ? dataObject.posts.length : 0,
+      items: Array.isArray(dataObject?.items) ? dataObject.items.length : 0,
+      nested_data: Array.isArray(dataObject?.data) ? dataObject.data.length : 0,
+      messaging: Array.isArray(dataObject?.messaging) ? dataObject.messaging.length : 0,
+    },
+    has_account_reference: Boolean(text(payload?.account_id) || text(dataObject?.account_id) || text(dataObject?.account?.id) || text(dataObject?.instagram_user_id) || text(dataObject?.id)),
+  };
+};
 const b64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
 const unb64 = (value: string) => {
   const raw = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
@@ -177,8 +193,8 @@ const webhookDiagnostics = async (url: string, serviceKey: string, context: any,
   const provider = (await rest(url, serviceKey, `instagram_providers?id=eq.${encodeURIComponent(providerId)}&org_id=eq.${encodeURIComponent(context.orgId)}&select=id`))?.[0];
   if (!provider) throw new Error('اتصال سرویس‌دهنده پیدا نشد.');
   // بدنهٔ وب‌هوک ممکن است اطلاعات مخاطب داشته باشد؛ فقط وضعیت‌های قابل‌نمایش به مدیر اتصال برگردانده می‌شوند.
-  const events = await rest(url, serviceKey, `instagram_webhook_events?org_id=eq.${encodeURIComponent(context.orgId)}&provider_id=eq.${encodeURIComponent(providerId)}&select=event_type,processing_status,error_message,received_at,processed_at&order=received_at.desc&limit=10`);
-  return json(200, { success: true, events: Array.isArray(events) ? events : [] });
+  const events = await rest(url, serviceKey, `instagram_webhook_events?org_id=eq.${encodeURIComponent(context.orgId)}&provider_id=eq.${encodeURIComponent(providerId)}&select=event_type,processing_status,error_message,received_at,processed_at,payload&order=received_at.desc&limit=10`);
+  return json(200, { success: true, events: (Array.isArray(events) ? events : []).map(({ payload, ...event }: any) => ({ ...event, payload_summary: webhookPayloadSummary(payload) })) });
 };
 
 const syncAccounts = async (provider: any, url: string, serviceKey: string, orgId: string) => {
@@ -209,6 +225,23 @@ const syncPosts = async (provider: any, account: any, fields: string[] = []) => 
     limit: 50,
 });
 
+const webhookAccountKeys = (envelope: any) => [...new Set([
+  envelope?.account_id,
+  envelope?.data?.account_id,
+  envelope?.data?.account?.id,
+  envelope?.data?.instagram_user_id,
+  envelope?.data?.id,
+].map(text).filter(Boolean))];
+const resolveWebhookAccount = async (provider: any, envelope: any, url: string, serviceKey: string) => {
+  const accountKeys = webhookAccountKeys(envelope);
+  if (!accountKeys.length) return null;
+  // مستند رسمی account_id را شناسهٔ داخلی BoxAPI معرفی می‌کند؛ شناسهٔ رسمی اینستاگرام نیز
+  // برای سازگاری با callbackهای عملیاتیِ سرویس‌دهنده پذیرفته می‌شود.
+  const accounts = await rest(url, serviceKey, `instagram_accounts?provider_id=eq.${encodeURIComponent(provider.id)}&select=id,provider_id,provider_account_id,instagram_user_id,username`);
+  return accounts.find((account: any) => accountKeys.includes(text(account.provider_account_id)) || accountKeys.includes(text(account.instagram_user_id))) || null;
+};
+const firstArray = (...candidates: any[]) => candidates.find((candidate) => Array.isArray(candidate)) || [];
+
 const resolveShowcaseItems = async (showcase: any, url: string, serviceKey: string, orgId: string) => {
   if (text(showcase?.source_kind) === 'manual') {
     const rows = await rest(url, serviceKey, `instagram_product_showcase_items?showcase_id=eq.${encodeURIComponent(showcase.id)}&org_id=eq.${encodeURIComponent(orgId)}&select=id,snapshot&order=sort_order.asc&limit=10`);
@@ -229,11 +262,11 @@ const resolveShowcaseItems = async (showcase: any, url: string, serviceKey: stri
 
 const processListPostsWebhook = async (provider: any, envelope: any, url: string, serviceKey: string) => {
   if (text(envelope?.event_type) !== 'list_posts') return;
-  const accountKey = text(envelope?.account_id);
-  const account = (await rest(url, serviceKey, `instagram_accounts?provider_id=eq.${encodeURIComponent(provider.id)}&provider_account_id=eq.${encodeURIComponent(accountKey)}&select=id,username`))?.[0];
+  const account = await resolveWebhookAccount(provider, envelope, url, serviceKey);
   if (!account) return;
   const payload = envelope?.data || {};
-  const posts = Array.isArray(payload) ? payload : Array.isArray(payload?.posts) ? payload.posts : Array.isArray(payload?.data) ? payload.data : [];
+  // پاسخ list_posts asynchronous در نسخه‌های مختلف سرویس ممکن است مستقیماً آرایه یا در data/result/response قرار گیرد.
+  const posts = firstArray(payload, payload?.posts, payload?.data, payload?.items, payload?.result, payload?.result?.posts, payload?.result?.data, payload?.response, payload?.response?.posts, payload?.response?.data, payload?.data?.posts, payload?.data?.data);
   for (const post of posts) {
     const providerMediaId = text(post?.id || post?.media_id);
     if (!providerMediaId) continue;
@@ -247,8 +280,7 @@ const processListPostsWebhook = async (provider: any, envelope: any, url: string
 const processCommentWebhook = async (provider: any, envelope: any, url: string, serviceKey: string) => {
   const eventType = text(envelope?.event_type);
   if (!['comment', 'comments', 'comment_created'].includes(eventType)) return;
-  const accountKey = text(envelope?.account_id);
-  const account = (await rest(url, serviceKey, `instagram_accounts?provider_id=eq.${encodeURIComponent(provider.id)}&provider_account_id=eq.${encodeURIComponent(accountKey)}&select=id,username`))?.[0];
+  const account = await resolveWebhookAccount(provider, envelope, url, serviceKey);
   if (!account) return;
   const payload = envelope?.data || {};
   const rows = Array.isArray(payload) ? payload : Array.isArray(payload?.comments) ? payload.comments : [payload];
@@ -276,11 +308,10 @@ const processCommentWebhook = async (provider: any, envelope: any, url: string, 
 
 const processMessagingWebhook = async (provider: any, envelope: any, url: string, serviceKey: string) => {
   if (text(envelope?.event_type) !== 'messaging') return;
-  const accountKey = text(envelope?.account_id);
-  const accounts = await rest(url, serviceKey, `instagram_accounts?provider_id=eq.${encodeURIComponent(provider.id)}&provider_account_id=eq.${encodeURIComponent(accountKey)}&select=id,provider_id,provider_account_id,instagram_user_id,username`);
-  const account = accounts?.[0];
+  const account = await resolveWebhookAccount(provider, envelope, url, serviceKey);
   if (!account) return;
-  const entries = Array.isArray(envelope?.data?.messaging) ? envelope.data.messaging : [];
+  const data = envelope?.data || {};
+  const entries = firstArray(data?.messaging, data?.data?.messaging, data?.result?.messaging, data?.result?.data?.messaging);
   for (const entry of entries) {
     const senderId = text(entry?.sender?.id);
     const recipientId = text(entry?.recipient?.id);
