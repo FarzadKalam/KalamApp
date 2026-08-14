@@ -316,20 +316,22 @@ const processListPostsWebhook = async (provider: any, envelope: any, url: string
 
 const processCommentWebhook = async (provider: any, envelope: any, url: string, serviceKey: string) => {
   const eventType = text(envelope?.event_type);
-  if (!['comment', 'comments', 'comment_created'].includes(eventType)) return;
+  if (!['comment', 'comments', 'comment_created'].includes(eventType)) return null;
   const account = await resolveWebhookAccount(provider, envelope, url, serviceKey);
-  if (!account) return;
+  if (!account) return { persisted: 0, reason: 'شناسهٔ پیج callback کامنت با هیچ پیج متصل این سازمان تطبیق نداشت.' };
   const payload = envelope?.data || {};
   const rows = Array.isArray(payload) ? payload : Array.isArray(payload?.comments) ? payload.comments : [payload];
+  let persisted = 0;
   for (const row of rows) {
     const providerCommentId = text(row?.id || row?.comment_id);
-    const providerMediaId = text(row?.media_id || row?.post_id);
+    // در callback واقعی BoxAPI، شناسهٔ پست داخل data.media.id است.
+    const providerMediaId = text(row?.media_id || row?.post_id || row?.media?.id);
     if (!providerCommentId || !providerMediaId) continue;
     let media = (await rest(url, serviceKey, `instagram_social_media?provider_id=eq.${encodeURIComponent(provider.id)}&provider_media_id=eq.${encodeURIComponent(providerMediaId)}&select=id,media_type,caption,permalink`))?.[0];
     if (!media) {
       const fallbackMediaRows = await rest(url, serviceKey, 'instagram_social_media?on_conflict=provider_id,provider_media_id', {
         method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
-        body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, account_id: account.id, provider_media_id: providerMediaId, media_type: ['story', 'reel'].includes(text(row?.media_type).toLowerCase()) ? text(row.media_type).toLowerCase() : 'post', caption: text(row?.caption) || null, permalink: text(row?.permalink) || null, provider_payload: { source: 'comment_webhook', raw: row }, last_synced_at: now(), updated_at: now() }),
+        body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, account_id: account.id, provider_media_id: providerMediaId, media_type: ['story', 'reel'].includes(text(row?.media_type || row?.media?.media_type).toLowerCase()) ? text(row?.media_type || row?.media?.media_type).toLowerCase() : 'post', caption: text(row?.caption || row?.media?.caption) || null, permalink: text(row?.permalink || row?.media?.permalink) || null, provider_payload: { source: 'comment_webhook', raw: row }, last_synced_at: now(), updated_at: now() }),
       });
       media = fallbackMediaRows?.[0];
     }
@@ -339,8 +341,12 @@ const processCommentWebhook = async (provider: any, envelope: any, url: string, 
       body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, account_id: account.id, media_id: media.id, provider_comment_id: providerCommentId, author_scoped_id: text(row?.from?.id || row?.sender?.id) || null, author_username: text(row?.from?.username || row?.username) || null, author_name: text(row?.from?.name || row?.name) || null, author_profile_photo_url: text(row?.from?.profile_photo || row?.profile_photo) || null, content_text: text(row?.text || row?.message || row?.content), like_count: Number(row?.like_count || 0), provider_payload: row, commented_at: row?.timestamp || row?.created_at || now(), updated_at: now() }),
     });
     const comment = commentRows?.[0];
-    if (comment?.id) await rest(url, serviceKey, 'instagram_interaction_events', { method: 'POST', body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, account_id: account.id, account_username: account.username || null, comment_id: comment.id, event_type: 'comment_received', message_text: text(row?.text || row?.message || row?.content) || null, media_type: media.media_type || null, media_caption: media.caption || null, media_permalink: media.permalink || null, tags: comment.tags || [], payload: row, occurred_at: row?.timestamp || row?.created_at || now() }) });
+    if (comment?.id) {
+      persisted += 1;
+      await rest(url, serviceKey, 'instagram_interaction_events', { method: 'POST', body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, account_id: account.id, account_username: account.username || null, comment_id: comment.id, event_type: 'comment_received', message_text: text(row?.text || row?.message || row?.content) || null, media_type: media.media_type || null, media_caption: media.caption || null, media_permalink: media.permalink || null, tags: comment.tags || [], payload: row, occurred_at: row?.timestamp || row?.created_at || now() }) });
+    }
   }
+  return persisted ? { persisted } : { persisted: 0, reason: 'در callback کامنت، شناسهٔ کامنت یا رسانهٔ قابل ثبت پیدا نشد.' };
 };
 
 const processMessagingWebhook = async (provider: any, envelope: any, url: string, serviceKey: string) => {
@@ -349,9 +355,11 @@ const processMessagingWebhook = async (provider: any, envelope: any, url: string
   if (!account) return { persisted: 0, reason: 'شناسهٔ پیج callback با هیچ پیج متصل این سازمان تطبیق نداشت.' };
   const data = envelope?.data || {};
   const entries = firstArray(data?.messaging, data?.data?.messaging, data?.result?.messaging, data?.result?.data?.messaging);
-  if (!entries.length) return { persisted: 0, reason: 'در callback پیام، آرایهٔ messaging پیدا نشد.' };
+  // نمونهٔ رسمی data.messaging[] را نشان می‌دهد، اما callback واقعی BoxAPI خود data را به‌عنوان پیام می‌فرستد.
+  const messageEntries = entries.length ? entries : (data?.sender || data?.recipient || data?.message ? [data] : []);
+  if (!messageEntries.length) return { persisted: 0, reason: 'در callback پیام، دادهٔ پیام قابل ثبت پیدا نشد.' };
   let persisted = 0;
-  for (const entry of entries) {
+  for (const entry of messageEntries) {
     const senderId = text(entry?.sender?.id);
     const recipientId = text(entry?.recipient?.id);
     const isInbound = Boolean(senderId && senderId !== text(account.instagram_user_id));
@@ -440,11 +448,11 @@ const handleWebhook = async (req: Request, url: string, serviceKey: string) => {
     });
     const messagingResult = await processMessagingWebhook(provider, processingEnvelope, url, serviceKey);
     await processListPostsWebhook(provider, processingEnvelope, url, serviceKey);
-    await processCommentWebhook(provider, processingEnvelope, url, serviceKey);
-    const messagingReason = text(messagingResult?.reason);
+    const commentResult = await processCommentWebhook(provider, processingEnvelope, url, serviceKey);
+    const processingReason = text(messagingResult?.reason || commentResult?.reason);
     await rest(url, serviceKey, eventPath, {
       method: 'PATCH', headers: { Prefer: 'return=minimal' },
-      body: JSON.stringify({ processing_status: messagingReason ? 'ignored' : ['messaging', 'list_posts', 'comment', 'comments', 'comment_created'].includes(normalizedEventType) ? 'processed' : 'ignored', processed_at: now(), error_message: messagingReason || null }),
+      body: JSON.stringify({ processing_status: processingReason ? 'ignored' : ['messaging', 'list_posts', 'comment', 'comments', 'comment_created'].includes(normalizedEventType) ? 'processed' : 'ignored', processed_at: now(), error_message: processingReason || null }),
     });
   } catch (error) {
     const errorMessage = text(error).slice(0, 1000) || 'خطای نامشخص در پردازش وب‌هوک';
