@@ -17,6 +17,9 @@ const json = (status: number, payload: Record<string, any>) => new Response(JSON
 const text = (value: unknown) => String(value ?? '').trim();
 const now = () => new Date().toISOString();
 const parse = (raw: string) => { try { return raw ? JSON.parse(raw) : {}; } catch { return {}; } };
+// BoxAPI برای پاسخ اکشن‌های asynchronous، نام رویداد را به‌شکل action.list_posts می‌فرستد؛
+// برای سازگاری با رویدادهای مستند messaging و comment، فقط پیشوند action را نرمال می‌کنیم.
+const normalizedWebhookEventType = (value: unknown) => text(value).toLowerCase().replace(/^action[._:-]+/, '');
 const b64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
 const unb64 = (value: string) => {
   const raw = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
@@ -198,9 +201,11 @@ const syncAccounts = async (provider: any, url: string, serviceKey: string, orgI
   return accounts.length;
 };
 
+const documentedPostFields = ['id', 'media_type', 'media_url', 'permalink', 'caption', 'timestamp'];
 const syncPosts = async (provider: any, account: any, fields: string[] = []) => providerRequest(provider, 'list_posts', {
     account_id: account.provider_account_id,
-    fields: fields.length ? fields : ['id', 'media_type', 'media_url', 'permalink', 'caption', 'timestamp', 'like_count', 'comments_count'],
+    // فقط فیلدهای صریحاً نمونه‌گذاری‌شده در مستند رسمی BoxAPI به سرویس‌دهنده ارسال می‌شوند.
+    fields: fields.filter((field) => documentedPostFields.includes(field)).length ? fields.filter((field) => documentedPostFields.includes(field)) : documentedPostFields,
     limit: 50,
 });
 
@@ -346,18 +351,20 @@ const handleWebhook = async (req: Request, url: string, serviceKey: string) => {
   const envelope = Array.isArray(body) ? body[0]?.body || body[0] : body?.body || body;
   const eventId = text(envelope?.event_id || envelope?.id || crypto.randomUUID());
   const eventType = text(envelope?.event_type || envelope?.field || 'unknown');
+  const normalizedEventType = normalizedWebhookEventType(eventType);
+  const processingEnvelope = normalizedEventType === eventType ? envelope : { ...envelope, event_type: normalizedEventType };
   const eventPath = `instagram_webhook_events?org_id=eq.${encodeURIComponent(provider.org_id)}&provider_id=eq.${encodeURIComponent(provider.id)}&provider_event_id=eq.${encodeURIComponent(eventId)}`;
   try {
     await rest(url, serviceKey, 'instagram_webhook_events?on_conflict=provider_id,provider_event_id', {
       method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' },
       body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, provider_event_id: eventId, event_type: eventType, payload: envelope }),
     });
-    await processMessagingWebhook(provider, envelope, url, serviceKey);
-    await processListPostsWebhook(provider, envelope, url, serviceKey);
-    await processCommentWebhook(provider, envelope, url, serviceKey);
+    await processMessagingWebhook(provider, processingEnvelope, url, serviceKey);
+    await processListPostsWebhook(provider, processingEnvelope, url, serviceKey);
+    await processCommentWebhook(provider, processingEnvelope, url, serviceKey);
     await rest(url, serviceKey, eventPath, {
       method: 'PATCH', headers: { Prefer: 'return=minimal' },
-      body: JSON.stringify({ processing_status: ['messaging', 'list_posts', 'comment', 'comments', 'comment_created'].includes(eventType) ? 'processed' : 'ignored', processed_at: now(), error_message: null }),
+      body: JSON.stringify({ processing_status: ['messaging', 'list_posts', 'comment', 'comments', 'comment_created'].includes(normalizedEventType) ? 'processed' : 'ignored', processed_at: now(), error_message: null }),
     });
   } catch (error) {
     const errorMessage = text(error).slice(0, 1000) || 'خطای نامشخص در پردازش وب‌هوک';
