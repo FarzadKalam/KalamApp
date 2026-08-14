@@ -20,10 +20,9 @@ export const instagramProviderRegistry: Record<string, InstagramProviderDefiniti
   boxapi: {
     key: 'boxapi',
     label: 'BoxAPI',
-    // مستند رسمی مسیرها را می‌دهد اما دامنهٔ API را تعیین نمی‌کند؛ این مقدار باید از خود سرویس‌دهنده دریافت شود.
-    defaultBaseUrl: '',
+    defaultBaseUrl: 'https://api.sendbox.chat/api/v1',
     apiBaseUrlRequired: true,
-    apiBaseUrlPlaceholder: 'https://api.example.com',
+    apiBaseUrlPlaceholder: 'https://api.sendbox.chat/api/v1',
     apiKeyHeader: 'X-Api-Key',
     apiKeyLabel: 'کلید API BoxAPI',
     operations: {
@@ -36,6 +35,6 @@ export const instagramProviderRegistry: Record<string, InstagramProviderDefiniti
   },
 };
 
-export const listInstagramProviders = () => Object.values(instagramProviderRegistry).map(({ key, label, apiKeyLabel, apiBaseUrlRequired, apiBaseUrlPlaceholder }) => ({ key, label, apiKeyLabel, apiBaseUrlRequired, apiBaseUrlPlaceholder }));
+export const listInstagramProviders = () => Object.values(instagramProviderRegistry).map(({ key, label, defaultBaseUrl, apiKeyLabel, apiBaseUrlRequired, apiBaseUrlPlaceholder }) => ({ key, label, defaultBaseUrl, apiKeyLabel, apiBaseUrlRequired, apiBaseUrlPlaceholder }));
 
 export const getInstagramProvider = (key: string) => instagramProviderRegistry[String(key || '').trim()];

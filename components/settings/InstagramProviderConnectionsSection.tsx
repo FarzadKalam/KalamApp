@@ -28,7 +28,7 @@ type Provider = {
   accounts: ProviderAccount[];
 };
 type CatalogOption = { id: string; title: string };
-type SupportedProvider = { key: string; label: string; apiKeyLabel?: string; apiBaseUrlRequired?: boolean; apiBaseUrlPlaceholder?: string };
+type SupportedProvider = { key: string; label: string; defaultBaseUrl?: string; apiKeyLabel?: string; apiBaseUrlRequired?: boolean; apiBaseUrlPlaceholder?: string };
 
 const copy = async (value: string, label: string, message: any) => {
   if (!String(value || '').trim()) return message.warning(`${label} آماده نیست.`);
@@ -90,12 +90,12 @@ const InstagramProviderConnectionsSection: React.FC = () => {
     const defaultProvider = supportedProviders[0];
     if (!defaultProvider) { message.warning('فهرست سرویس‌دهندگان اینستاگرام هنوز آماده نشده است.'); return; }
     setEditing(null);
-    form.setFieldsValue({ provider: defaultProvider.key, name: defaultProvider.label, apiKey: '', isActive: false });
+    form.setFieldsValue({ provider: defaultProvider.key, name: defaultProvider.label, apiKey: '', baseUrl: defaultProvider.defaultBaseUrl || '', isActive: false });
     setModalOpen(true);
   };
   const openEdit = (provider: Provider) => {
     setEditing(provider);
-    form.setFieldsValue({ provider: provider.providerKey, name: provider.name, apiKey: '', baseUrl: provider.apiBaseUrl || '', isActive: provider.isActive });
+    form.setFieldsValue({ provider: provider.providerKey, name: provider.name, apiKey: '', baseUrl: provider.apiBaseUrl || providerDefinition(provider.providerKey)?.defaultBaseUrl || '', isActive: provider.isActive });
     setModalOpen(true);
   };
   const save = async () => {
@@ -115,7 +115,7 @@ const InstagramProviderConnectionsSection: React.FC = () => {
       });
       if (!editing && saved?.provider) {
         setEditing(saved.provider as Provider);
-        form.setFieldsValue({ provider: saved.provider.providerKey, name: saved.provider.name, apiKey: '', baseUrl: saved.provider.apiBaseUrl || '', isActive: false });
+        form.setFieldsValue({ provider: saved.provider.providerKey, name: saved.provider.name, apiKey: '', baseUrl: saved.provider.apiBaseUrl || providerDefinition(saved.provider.providerKey)?.defaultBaseUrl || '', isActive: false });
         message.success(`آدرس وب‌هوک ساخته شد. آن را در ${providerLabel(saved.provider.providerKey)} ثبت کنید و سپس اتصال را فعال کنید.`);
       } else {
         setModalOpen(false);
