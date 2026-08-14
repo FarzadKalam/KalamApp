@@ -10,7 +10,7 @@ type Comment = { id: string; media_id: string; author_username?: string | null; 
 
 const dateText = (value?: string | null) => value ? new Intl.DateTimeFormat('fa-IR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) : '';
 
-const InstagramCommentsPanel: React.FC<{ accounts: Account[]; activeAccountId: string; onAccountChange: (id: string) => void }> = ({ accounts, activeAccountId, onAccountChange }) => {
+const InstagramCommentsPanel: React.FC<{ orgId: string; accounts: Account[]; activeAccountId: string; onAccountChange: (id: string) => void }> = ({ orgId, accounts, activeAccountId, onAccountChange }) => {
   const { message } = App.useApp();
   const navigate = useNavigate();
   const [media, setMedia] = useState<Media[]>([]);
@@ -26,8 +26,8 @@ const InstagramCommentsPanel: React.FC<{ accounts: Account[]; activeAccountId: s
   const selectedMedia = useMemo(() => media.find((item) => item.id === selectedMediaId) || null, [media, selectedMediaId]);
   const visibleComments = useMemo(() => comments.filter((item) => item.media_id === selectedMediaId), [comments, selectedMediaId]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [mediaResult, commentsResult] = await Promise.all([
         supabase.from('instagram_social_media').select('id,account_id,media_type,caption,media_url,thumbnail_url,permalink,metrics,published_at').order('published_at', { ascending: false }).limit(200),
@@ -39,9 +39,25 @@ const InstagramCommentsPanel: React.FC<{ accounts: Account[]; activeAccountId: s
       setComments((commentsResult.data || []) as Comment[]);
       setSelectedMediaId((current) => current || String(mediaResult.data?.find((item: any) => item.media_type !== 'story')?.id || ''));
     } catch (error: any) { message.error(error?.message || 'پست‌ها و کامنت‌ها بارگذاری نشدند.'); }
-    finally { setLoading(false); }
+    finally { if (!silent) setLoading(false); }
   }, [message]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!orgId) return;
+    let reloadTimer: ReturnType<typeof setTimeout> | undefined;
+    const queueReload = () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(() => { void load(true); }, 500);
+    };
+    const channel = supabase.channel(`instagram-comments-events-${orgId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'instagram_social_media', filter: `org_id=eq.${orgId}` }, queueReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'instagram_comments', filter: `org_id=eq.${orgId}` }, queueReload)
+      .subscribe();
+    return () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
+      supabase.removeChannel(channel);
+    };
+  }, [load, orgId]);
 
   const syncPosts = async () => {
     const account = accounts.find((item) => item.id === activeAccountId) || (activeAccountId === 'all' ? accounts[0] : null);

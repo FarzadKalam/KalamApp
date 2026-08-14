@@ -339,7 +339,7 @@ Deno.serve(async (req: Request) => {
   const serviceKey = text(Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'));
   if (!url || !serviceKey) return json(500, { success: false, message: 'تنظیمات سرور کامل نیست.' });
   try {
-    if (req.method === 'GET' && new URL(req.url).searchParams.has('provider')) return await handleWebhook(req, url, serviceKey);
+    if (['GET', 'POST'].includes(req.method) && new URL(req.url).searchParams.has('provider')) return await handleWebhook(req, url, serviceKey);
     const body = parse(await req.text());
     const context = await getAuthContext(req, url, serviceKey);
     if (context.isService) {

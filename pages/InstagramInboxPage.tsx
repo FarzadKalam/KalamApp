@@ -90,11 +90,25 @@ const InstagramInboxPage: React.FC = () => {
 
   useEffect(() => {
     if (!orgId) return;
+    let inboxTimer: ReturnType<typeof setTimeout> | undefined;
+    let messageTimer: ReturnType<typeof setTimeout> | undefined;
+    const queueInboxReload = () => {
+      if (inboxTimer) clearTimeout(inboxTimer);
+      inboxTimer = setTimeout(() => { void loadInbox(); }, 350);
+    };
+    const queueMessageReload = () => {
+      if (messageTimer) clearTimeout(messageTimer);
+      messageTimer = setTimeout(() => { void loadMessages(); }, 150);
+    };
     const channel = supabase.channel(`instagram-inbox-events-${orgId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'instagram_conversations', filter: `org_id=eq.${orgId}` }, () => { void loadInbox(); })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'instagram_messages', filter: `org_id=eq.${orgId}` }, () => { void loadMessages(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'instagram_conversations', filter: `org_id=eq.${orgId}` }, queueInboxReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'instagram_messages', filter: `org_id=eq.${orgId}` }, () => { queueMessageReload(); queueInboxReload(); })
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    return () => {
+      if (inboxTimer) clearTimeout(inboxTimer);
+      if (messageTimer) clearTimeout(messageTimer);
+      supabase.removeChannel(channel);
+    };
   }, [loadInbox, loadMessages, orgId]);
 
   const send = async () => {
@@ -120,7 +134,7 @@ const InstagramInboxPage: React.FC = () => {
         <div className="flex items-center gap-3"><span className="flex h-10 w-10 items-center justify-center rounded-full bg-[rgba(var(--brand-500-rgb),0.10)] text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--brand-300-rgb),0.12)] dark:text-[rgb(var(--brand-200-rgb))]"><InstagramOutlined /></span><div><div className="font-semibold">صندوق اینستاگرام</div><div className="text-[11px] text-slate-400">دایرکت، کامنت و ویترین‌های پیج‌های متصل</div></div></div>
         <div className="flex flex-wrap items-center gap-1"><Button className={surface === 'direct' ? '!border-[rgba(var(--brand-500-rgb),0.24)] !bg-[rgba(var(--brand-500-rgb),0.10)] !text-[rgb(var(--brand-800-rgb))] dark:!border-[rgba(var(--brand-300-rgb),0.22)] dark:!bg-[rgba(var(--brand-300-rgb),0.12)] dark:!text-[rgb(var(--brand-200-rgb))]' : ''} size="small" type={surface === 'direct' ? 'text' : 'default'} onClick={() => setSurface('direct')}>دایرکت‌ها</Button><Button className={surface === 'comments' ? '!border-[rgba(var(--brand-500-rgb),0.24)] !bg-[rgba(var(--brand-500-rgb),0.10)] !text-[rgb(var(--brand-800-rgb))] dark:!border-[rgba(var(--brand-300-rgb),0.22)] dark:!bg-[rgba(var(--brand-300-rgb),0.12)] dark:!text-[rgb(var(--brand-200-rgb))]' : ''} size="small" type={surface === 'comments' ? 'text' : 'default'} onClick={() => setSurface('comments')}>کامنت‌ها</Button><Tooltip title="به‌روزرسانی گفتگوها"><Button size="small" type="text" shape="circle" icon={<ReloadOutlined />} onClick={() => void loadInbox()} loading={loading} /></Tooltip><Tooltip title="تنظیمات ویترین محصولات"><Button size="small" type="text" shape="circle" icon={<SettingOutlined />} onClick={() => setShowcaseSettingsOpen(true)} /></Tooltip></div>
       </div>
-      {surface === 'comments' ? <InstagramCommentsPanel accounts={accounts} activeAccountId={activeAccountId} onAccountChange={setActiveAccountId} /> : <>
+      {surface === 'comments' ? <InstagramCommentsPanel orgId={orgId} accounts={accounts} activeAccountId={activeAccountId} onAccountChange={setActiveAccountId} /> : <>
       <Tabs className="px-3" activeKey={activeAccountId} onChange={setActiveAccountId} items={[
         { key: 'all', label: `همه (${conversations.length})` },
         ...accounts.map((account) => ({ key: account.id, label: <span className="inline-flex items-center gap-1"><Avatar size={18} src={account.profile_photo_url}>{account.username?.[0]}</Avatar>{account.username}</span> })),
