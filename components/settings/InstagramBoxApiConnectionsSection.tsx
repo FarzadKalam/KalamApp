@@ -32,6 +32,16 @@ const copy = async (value: string, label: string, message: any) => {
   catch { message.error(`کپی ${label} ناموفق بود.`); }
 };
 
+const CopyOnlyTransferLink: React.FC<{ label: string; value: string; message: any; emptyText?: string }> = ({ label, value, message, emptyText = 'پس از ذخیره حساب آماده می‌شود.' }) => (
+  <div>
+    <div className="mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">{label}</div>
+    {value ? <div className="flex gap-2">
+      <Input dir="ltr" value={value} readOnly aria-label={label} />
+      <Tooltip title={`کپی ${label}`}><Button icon={<CopyOutlined />} aria-label={`کپی ${label}`} onClick={() => void copy(value, label, message)} /></Tooltip>
+    </div> : <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-gray-500 dark:border-slate-700 dark:bg-white/5">{emptyText}</div>}
+  </div>
+);
+
 const InstagramBoxApiConnectionsSection: React.FC = () => {
   const { message } = App.useApp();
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -67,20 +77,37 @@ const InstagramBoxApiConnectionsSection: React.FC = () => {
 
   const openCreate = () => {
     setEditing(null);
-    form.setFieldsValue({ name: '', apiKey: '', baseUrl: 'https://boxapi.ir', domain: window.location.origin, redirectUrl: `${window.location.origin}/settings`, isActive: true });
+    form.setFieldsValue({ provider: 'boxapi', name: 'BoxAPI', apiKey: '', isActive: false });
     setModalOpen(true);
   };
   const openEdit = (provider: Provider) => {
     setEditing(provider);
-    form.setFieldsValue({ name: provider.name, apiKey: '', baseUrl: 'https://boxapi.ir', domain: provider.domain || window.location.origin, redirectUrl: provider.redirectUrl || `${window.location.origin}/settings`, isActive: provider.isActive });
+    form.setFieldsValue({ provider: 'boxapi', name: provider.name, apiKey: '', isActive: provider.isActive });
     setModalOpen(true);
   };
   const save = async () => {
     try {
       const value = await form.validateFields();
       setSaving(true);
-      await invoke({ action: 'save_provider', providerId: editing?.id, ...value });
-      setModalOpen(false); message.success('اتصال BoxAPI ذخیره شد.'); await load();
+      const saved = await invoke({
+        action: 'save_provider',
+        providerId: editing?.id,
+        name: value.name,
+        apiKey: value.apiKey,
+        isActive: editing ? value.isActive : false,
+        baseUrl: 'https://boxapi.ir',
+        domain: editing?.domain || window.location.origin,
+        redirectUrl: editing?.redirectUrl || `${window.location.origin}/settings`,
+      });
+      if (!editing && saved?.provider) {
+        setEditing(saved.provider as Provider);
+        form.setFieldsValue({ provider: 'boxapi', name: saved.provider.name, apiKey: '', isActive: false });
+        message.success('آدرس وب‌هوک ساخته شد. آن را در BoxAPI ثبت کنید و سپس اتصال را فعال کنید.');
+      } else {
+        setModalOpen(false);
+        message.success('اتصال BoxAPI ذخیره شد.');
+      }
+      await load();
     } catch (error) { message.error(toFaErrorMessage(error, 'ذخیره اتصال BoxAPI ناموفق بود.')); }
     finally { setSaving(false); }
   };
@@ -148,8 +175,8 @@ const InstagramBoxApiConnectionsSection: React.FC = () => {
             </Space>
           </div>
           <div className="mt-3 grid grid-cols-1 gap-2 text-xs md:grid-cols-2">
-            <div className="rounded-lg bg-slate-50 p-2 dark:bg-white/5"><span className="text-gray-500">دامنه برای ثبت در BoxAPI: </span><span dir="ltr">{provider.domain || 'ثبت نشده'}</span></div>
-            <div className="rounded-lg bg-slate-50 p-2 dark:bg-white/5"><span className="text-gray-500">آدرس بازگشت: </span><span dir="ltr">{provider.redirectUrl || 'ثبت نشده'}</span></div>
+            <div className="rounded-lg bg-slate-50 p-2 dark:bg-white/5"><span className="text-gray-500">دامنه برای ثبت در BoxAPI: </span><span dir="ltr">{provider.domain || 'ثبت نشده'}</span><Tooltip title="کپی دامنه"><Button type="text" size="small" icon={<CopyOutlined />} onClick={() => void copy(provider.domain, 'دامنه', message)} /></Tooltip></div>
+            <div className="rounded-lg bg-slate-50 p-2 dark:bg-white/5"><span className="text-gray-500">آدرس بازگشت: </span><span dir="ltr">{provider.redirectUrl || 'ثبت نشده'}</span><Tooltip title="کپی آدرس بازگشت"><Button type="text" size="small" icon={<CopyOutlined />} onClick={() => void copy(provider.redirectUrl, 'آدرس بازگشت', message)} /></Tooltip></div>
             <div className="rounded-lg bg-slate-50 p-2 dark:bg-white/5 md:col-span-2"><span className="text-gray-500">Webhook: </span><span dir="ltr" className="break-all">{provider.webhookUrl}</span><Tooltip title="کپی آدرس وب‌هوک"><Button type="text" size="small" icon={<CopyOutlined />} onClick={() => void copy(provider.webhookUrl, 'آدرس وب‌هوک', message)} /></Tooltip></div>
           </div>
           <Table
@@ -168,14 +195,22 @@ const InstagramBoxApiConnectionsSection: React.FC = () => {
           />
         </div>
       ))}
-      <Modal title={editing ? 'ویرایش حساب BoxAPI' : 'افزودن حساب BoxAPI'} open={modalOpen} onCancel={() => setModalOpen(false)} onOk={() => void save()} confirmLoading={saving} okText="ذخیره" cancelText="انصراف" destroyOnHidden>
+      <Modal title={editing ? 'فعال‌سازی یا ویرایش حساب BoxAPI' : 'افزودن حساب BoxAPI'} open={modalOpen} onCancel={() => setModalOpen(false)} onOk={() => void save()} confirmLoading={saving} okText={editing ? 'ذخیره تغییرات' : 'ایجاد آدرس وب‌هوک'} cancelText="انصراف" destroyOnHidden>
         <Form form={form} layout="vertical">
+          <Form.Item name="provider" label="سرویس‌دهنده" rules={[{ required: true, message: 'سرویس‌دهنده را انتخاب کنید.' }]}>
+            <Select options={[{ value: 'boxapi', label: 'BoxAPI' }]} />
+          </Form.Item>
           <Form.Item name="name" label="نام اتصال" rules={[{ required: true, message: 'نام اتصال را وارد کنید.' }]}><Input placeholder="مثلا حساب فروش" /></Form.Item>
-          <Form.Item name="apiKey" label={editing ? 'کلید API جدید (در صورت تغییر)' : 'کلید API BoxAPI'} rules={editing ? [] : [{ required: true, message: 'کلید API را وارد کنید.' }]} extra={editing ? 'اگر کلید تغییر نکرده، این فیلد را خالی بگذارید.' : undefined}><Input.Password autoComplete="new-password" /></Form.Item>
-          <Form.Item name="baseUrl" label="آدرس سرویس BoxAPI"><Input dir="ltr" /></Form.Item>
-          <Form.Item name="domain" label="دامنه ثبت‌شونده در BoxAPI"><Input dir="ltr" /></Form.Item>
-          <Form.Item name="redirectUrl" label="آدرس بازگشت پس از ورود Instagram"><Input dir="ltr" /></Form.Item>
-          <Form.Item name="isActive" label="وضعیت" valuePropName="checked"><Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" /></Form.Item>
+          {!editing ? <Alert showIcon type="warning" message="گام اول: ساخت آدرس وب‌هوک" description="ابتدا این اتصال به‌صورت غیرفعال ذخیره می‌شود تا آدرس وب‌هوک اختصاصی و امن آن ساخته شود. در گام بعد آن را در BoxAPI ثبت و اتصال را فعال می‌کنید." /> : <>
+            <Alert className="mb-4" showIcon type="info" message="گام دوم: ثبت در BoxAPI و فعال‌سازی" description="نشانی‌های زیر را فقط کپی کنید و در BoxAPI ثبت کنید. سپس کلید API را وارد کرده و وضعیت اتصال را فعال کنید." />
+            <div className="mb-4 space-y-3">
+              <CopyOnlyTransferLink label="دامنه ثبت‌شونده در BoxAPI" value={editing.domain || window.location.origin} message={message} />
+              <CopyOnlyTransferLink label="آدرس بازگشت پس از ورود اینستاگرام" value={editing.redirectUrl || `${window.location.origin}/settings`} message={message} />
+              <CopyOnlyTransferLink label="آدرس وب‌هوک" value={editing.webhookUrl} message={message} />
+            </div>
+            <Form.Item name="apiKey" label="کلید API BoxAPI" extra="اگر کلید تغییر نکرده، این فیلد را خالی بگذارید."><Input.Password autoComplete="new-password" /></Form.Item>
+            <Form.Item name="isActive" label="فعال‌سازی اتصال" valuePropName="checked"><Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" /></Form.Item>
+          </>}
         </Form>
       </Modal>
       <Modal title={`تنظیمات پیج ${settingAccount?.username ? `@${settingAccount.username}` : ''}`} open={accountSettingsOpen} onCancel={() => setAccountSettingsOpen(false)} onOk={() => void saveAccountSettings()} confirmLoading={saving} okText="ذخیره" cancelText="انصراف" destroyOnHidden>
