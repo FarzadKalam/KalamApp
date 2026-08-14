@@ -373,6 +373,13 @@ const processMessagingWebhook = async (provider: any, envelope: any, url: string
     const postback = entry?.postback || {};
     const providerMessageId = text(message?.mid || entry?.id);
     const content = text(message?.text || postback?.title || postback?.payload);
+    // BoxAPI در مستند عمومی ساختار ریپلای استوری را تضمین نکرده است؛ با این حال
+    // اگر permalink در هر یک از شکل‌های رایج callback باشد، آن را بدون حدس‌زدن
+    // ثبت می‌کنیم تا شرط اختصاصی همان استوری در موتور مرکزی قابل ارزیابی باشد.
+    const storyPermalink = text(
+      entry?.story?.permalink || entry?.reply_to?.permalink || message?.story?.permalink || message?.reply_to?.permalink,
+    );
+    const storyCaption = text(entry?.story?.caption || entry?.reply_to?.caption || message?.story?.caption || message?.reply_to?.caption);
     await rest(url, serviceKey, 'instagram_messages?on_conflict=conversation_id,provider_message_id', {
       method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' },
       body: JSON.stringify({ org_id: provider.org_id, conversation_id: conversation.id, provider_message_id: providerMessageId || `webhook:${crypto.randomUUID()}`, direction: isInbound ? 'inbound' : 'outbound', message_type: 'text', content_text: content || null, delivery_status: isInbound ? 'received' : 'sent', provider_payload: entry }),
@@ -382,7 +389,7 @@ const processMessagingWebhook = async (provider: any, envelope: any, url: string
       body: JSON.stringify({ last_message_preview: content || 'پیام جدید', last_message_at: new Date(Number(entry?.timestamp || Date.now())).toISOString(), ...(isInbound ? { last_inbound_at: new Date(Number(entry?.timestamp || Date.now())).toISOString() } : {}), updated_at: now() }),
     });
     persisted += 1;
-    if (isInbound) await rest(url, serviceKey, 'instagram_interaction_events', { method: 'POST', body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, account_id: account.id, account_username: account.username || null, conversation_id: conversation.id, event_type: 'direct_received', message_text: content || null, tags: conversation.tags || [], payload: entry, occurred_at: new Date(Number(entry?.timestamp || Date.now())).toISOString() }) });
+    if (isInbound) await rest(url, serviceKey, 'instagram_interaction_events', { method: 'POST', body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, account_id: account.id, account_username: account.username || null, conversation_id: conversation.id, event_type: 'direct_received', message_text: content || null, media_type: storyPermalink ? 'story' : null, media_caption: storyCaption || null, media_permalink: storyPermalink || null, tags: conversation.tags || [], payload: entry, occurred_at: new Date(Number(entry?.timestamp || Date.now())).toISOString() }) });
     const postbackPayload = text(postback?.payload);
     if (postbackPayload) {
       let decoded: any = {};

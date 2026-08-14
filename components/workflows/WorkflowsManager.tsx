@@ -64,19 +64,20 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
     const mediaType = String(searchParams.get('instagramMediaType') || '').trim();
     const mediaLabel = String(searchParams.get('instagramMediaLabel') || '').trim();
     if (!permalink || !['post', 'reel', 'story'].includes(mediaType)) return null;
+    const isStory = mediaType === 'story';
     const conditionsAll: WorkflowCondition[] = [
-      { id: createWorkflowId(), field: 'event_type', operator: 'eq', value: 'comment_received' },
+      { id: createWorkflowId(), field: 'event_type', operator: 'eq', value: isStory ? 'direct_received' : 'comment_received' },
       { id: createWorkflowId(), field: 'media_permalink', operator: 'eq', value: permalink },
       { id: createWorkflowId(), field: 'media_type', operator: 'eq', value: mediaType },
     ];
     return {
       key: `${mediaType}:${permalink}`,
       moduleId: 'instagram_interaction_events',
-      name: `پاسخ خودکار کامنت ${mediaLabel || (mediaType === 'story' ? 'استوری' : 'پست')}`,
-      description: 'فقط برای کامنت‌های همین رسانه اجرا می‌شود.',
+      name: `${isStory ? 'پاسخ خودکار ریپلای' : 'پاسخ خودکار کامنت'} ${mediaLabel || (isStory ? 'استوری' : 'پست')}`,
+      description: isStory ? 'فقط برای ریپلای‌های همین استوری اجرا می‌شود.' : 'فقط برای کامنت‌های همین رسانه اجرا می‌شود.',
       triggerType: 'on_create' as const,
       conditionsAll,
-      actions: [{ id: createWorkflowId(), type: 'reply_instagram_comment' as const, config: { message: '' } }],
+      actions: [{ id: createWorkflowId(), type: isStory ? 'send_instagram_message' as const : 'reply_instagram_comment' as const, config: { message: '' } }],
     };
   }, [searchParams]);
 
