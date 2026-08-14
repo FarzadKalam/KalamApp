@@ -1,6 +1,8 @@
 // @ts-nocheck
-// اتصال رسمی Instagram از طریق BoxAPI. کلیدهای هر Provider فقط به صورت رمزنگاری‌شده
+// اتصال رسمی Instagram از طریق adapterهای سرویس‌دهنده. کلیدهای هر اتصال فقط به صورت رمزنگاری‌شده
 // ذخیره و فقط در همین Edge Function رمزگشایی می‌شوند.
+
+import { getInstagramProvider, listInstagramProviders } from './providerRegistry.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -93,13 +95,20 @@ const requireShowcaseManagement = (context: any) => {
   if (instagram.view === true && instagram.fields?.manage_showcases === true) return;
   requireConnectionManagement(context);
 };
-const boxRequest = async (provider: any, path: string, init: RequestInit = {}) => {
+const providerRequest = async (provider: any, operationKey: 'sync_accounts' | 'list_posts' | 'send_message' | 'reply_comment' | 'get_connect_url', body?: Record<string, any>) => {
+  const adapter = getInstagramProvider(text(provider?.provider_key));
+  if (!adapter) throw new Error('سرویس‌دهندهٔ این اتصال در سامانه پشتیبانی نمی‌شود.');
+  const operation = adapter.operations[operationKey];
   const apiKey = await decryptSecret(text(provider.api_key_encrypted));
-  const baseUrl = text(provider?.settings?.base_url || 'https://boxapi.ir').replace(/\/+$/, '');
-  const response = await fetch(`${baseUrl}${path}`, { ...init, headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey, ...(init.headers || {}) } });
+  const baseUrl = text(provider?.settings?.base_url || adapter.defaultBaseUrl).replace(/\/+$/, '');
+  const response = await fetch(`${baseUrl}${operation.path}`, {
+    method: operation.method,
+    headers: { 'Content-Type': 'application/json', [adapter.apiKeyHeader]: apiKey },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
   const raw = await response.text();
   const data = parse(raw);
-  if (!response.ok || data?.success === false) throw new Error(text(data?.message || raw) || `خطای BoxAPI: ${response.status}`);
+  if (!response.ok || data?.success === false) throw new Error(text(data?.message || raw) || `خطای ${adapter.label}: ${response.status}`);
   return data;
 };
 const publicBase = (req: Request) => text(Deno.env.get('INSTAGRAM_WEBHOOK_PUBLIC_BASE_URL') || Deno.env.get('PUBLIC_API_BASE_URL') || new URL(req.url).origin).replace(/\/+$/, '');
@@ -107,6 +116,7 @@ const providerSummary = (row: any, request: Request) => ({
   id: row.id,
   name: row.name,
   providerKey: row.provider_key,
+  providerLabel: getInstagramProvider(text(row.provider_key))?.label || text(row.provider_key),
   isActive: row.is_active === true,
   hasApiKey: Boolean(text(row.api_key_encrypted)),
   webhookUrl: `${publicBase(request)}/functions/v1/instagram-boxapi?provider=${encodeURIComponent(row.id)}&secret=${encodeURIComponent(row.webhook_secret)}`,
@@ -119,11 +129,11 @@ const providerSummary = (row: any, request: Request) => ({
 const listProviders = async (request: Request, url: string, serviceKey: string, context: any) => {
   const providers = await rest(url, serviceKey, `instagram_providers?org_id=eq.${encodeURIComponent(context.orgId)}&select=*&order=created_at.asc`);
   const accounts = await rest(url, serviceKey, `instagram_accounts?org_id=eq.${encodeURIComponent(context.orgId)}&select=*&order=username.asc`);
-  return json(200, { success: true, providers: providers.map((row: any) => ({ ...providerSummary(row, request), accounts: accounts.filter((account: any) => account.provider_id === row.id) })) });
+  return json(200, { success: true, supportedProviders: listInstagramProviders(), providers: providers.map((row: any) => ({ ...providerSummary(row, request), accounts: accounts.filter((account: any) => account.provider_id === row.id) })) });
 };
 
 const syncAccounts = async (provider: any, url: string, serviceKey: string, orgId: string) => {
-  const result = await boxRequest(provider, '/service/accounts', { method: 'GET' });
+  const result = await providerRequest(provider, 'sync_accounts');
   const accounts = Array.isArray(result?.data) ? result.data : [];
   for (const account of accounts) {
     const providerAccountId = text(account?.id);
@@ -142,13 +152,10 @@ const syncAccounts = async (provider: any, url: string, serviceKey: string, orgI
   return accounts.length;
 };
 
-const syncPosts = async (provider: any, account: any, fields: string[] = []) => boxRequest(provider, '/service/actions/list_posts', {
-  method: 'POST',
-  body: JSON.stringify({
+const syncPosts = async (provider: any, account: any, fields: string[] = []) => providerRequest(provider, 'list_posts', {
     account_id: account.provider_account_id,
     fields: fields.length ? fields : ['id', 'media_type', 'media_url', 'permalink', 'caption', 'timestamp', 'like_count', 'comments_count'],
     limit: 50,
-  }),
 });
 
 const resolveShowcaseItems = async (showcase: any, url: string, serviceKey: string, orgId: string) => {
@@ -328,11 +335,13 @@ Deno.serve(async (req: Request) => {
       const name = text(body?.name);
       const apiKey = text(body?.apiKey);
       if (!name) throw new Error('نام اتصال را وارد کنید.');
-      if (!providerId && !apiKey) throw new Error('کلید API BoxAPI را وارد کنید.');
       const existing = providerId ? (await rest(url, serviceKey, `instagram_providers?id=eq.${encodeURIComponent(providerId)}&org_id=eq.${encodeURIComponent(context.orgId)}&select=*`))?.[0] : null;
       if (providerId && !existing) throw new Error('اتصال موردنظر پیدا نشد.');
-      const settings = { ...(existing?.settings || {}), base_url: text(body?.baseUrl || 'https://boxapi.ir'), domain: text(body?.domain), redirect_url: text(body?.redirectUrl) };
-      const payload = { org_id: context.orgId, provider_key: 'boxapi', name, settings, is_active: body?.isActive !== false, updated_at: now(), ...(existing ? {} : { created_by: context.userId }), ...(apiKey ? { api_key_encrypted: await encryptSecret(apiKey) } : {}) };
+      const providerKey = text(body?.providerKey || existing?.provider_key);
+      const adapter = getInstagramProvider(providerKey);
+      if (!adapter) throw new Error('سرویس‌دهندهٔ انتخاب‌شده پشتیبانی نمی‌شود.');
+      const settings = { ...(existing?.settings || {}), base_url: text(body?.baseUrl || existing?.settings?.base_url || adapter.defaultBaseUrl), domain: text(body?.domain || existing?.settings?.domain), redirect_url: text(body?.redirectUrl || existing?.settings?.redirect_url) };
+      const payload = { org_id: context.orgId, provider_key: adapter.key, name, settings, is_active: body?.isActive === true && Boolean(text(existing?.api_key_encrypted) || apiKey), updated_at: now(), ...(existing ? {} : { created_by: context.userId }), ...(apiKey ? { api_key_encrypted: await encryptSecret(apiKey) } : {}) };
       const saved = await rest(url, serviceKey, providerId ? `instagram_providers?id=eq.${encodeURIComponent(providerId)}&org_id=eq.${encodeURIComponent(context.orgId)}` : 'instagram_providers', { method: providerId ? 'PATCH' : 'POST', body: JSON.stringify(payload) });
       return json(200, { success: true, provider: providerSummary((Array.isArray(saved) ? saved[0] : saved) || { ...existing, ...payload, id: providerId }, req) });
     }
@@ -451,7 +460,7 @@ Deno.serve(async (req: Request) => {
           : text(button?.payload || button?.key || `button_${index + 1}`);
         return { type: 'postback', title, payload: rawPayload };
       }).filter((button: any) => button.title && ((button.type === 'web_url' && button.url) || (button.type === 'postback' && button.payload))).slice(0, 3) : [];
-      const result = await boxRequest(providerForMessage, '/service/actions/send_message', { method: 'POST', body: JSON.stringify({ account_id: accountForMessage.provider_account_id, recipient_id: contactForMessage.instagram_scoped_id, message, ...(buttons.length ? { buttons } : {}) }) });
+      const result = await providerRequest(providerForMessage, 'send_message', { account_id: accountForMessage.provider_account_id, recipient_id: contactForMessage.instagram_scoped_id, message, ...(buttons.length ? { buttons } : {}) });
       const providerMessageId = text(result?.data?.message_id || result?.message_id);
       await rest(url, serviceKey, 'instagram_messages', { method: 'POST', body: JSON.stringify({ org_id: context.orgId, conversation_id: conversation.id, provider_message_id: providerMessageId || `outbound:${crypto.randomUUID()}`, direction: 'outbound', message_type: buttons.length ? 'button' : 'text', content_text: message, buttons, delivery_status: 'sent', provider_payload: result, sent_by: context.userId }) });
       await rest(url, serviceKey, `instagram_conversations?id=eq.${encodeURIComponent(conversation.id)}&org_id=eq.${encodeURIComponent(context.orgId)}`, { method: 'PATCH', body: JSON.stringify({ last_message_preview: message, last_message_at: now(), last_outbound_at: now(), updated_at: now() }) });
@@ -469,14 +478,14 @@ Deno.serve(async (req: Request) => {
       const provider = (await rest(url, serviceKey, `instagram_providers?id=eq.${encodeURIComponent(comment.provider_id)}&org_id=eq.${encodeURIComponent(context.orgId)}&select=*`))?.[0];
       const account = (await rest(url, serviceKey, `instagram_accounts?id=eq.${encodeURIComponent(comment.account_id)}&org_id=eq.${encodeURIComponent(context.orgId)}&select=provider_account_id,username`))?.[0];
       if (!provider || !account?.provider_account_id) throw new Error('اطلاعات پیج برای پاسخ به کامنت کامل نیست.');
-      const result = await boxRequest(provider, '/service/actions/reply_comment', { method: 'POST', body: JSON.stringify({ account_id: account.provider_account_id, comment_id: comment.provider_comment_id, message: reply }) });
+      const result = await providerRequest(provider, 'reply_comment', { account_id: account.provider_account_id, comment_id: comment.provider_comment_id, message: reply });
       await rest(url, serviceKey, `instagram_comments?id=eq.${encodeURIComponent(comment.id)}&org_id=eq.${encodeURIComponent(context.orgId)}`, { method: 'PATCH', body: JSON.stringify({ status: 'resolved', replied_at: now(), updated_at: now() }) });
       const media = comment.media_id ? (await rest(url, serviceKey, `instagram_social_media?id=eq.${encodeURIComponent(comment.media_id)}&org_id=eq.${encodeURIComponent(context.orgId)}&select=media_type,caption,permalink`))?.[0] : null;
       await rest(url, serviceKey, 'instagram_interaction_events', { method: 'POST', body: JSON.stringify({ org_id: context.orgId, provider_id: provider.id, account_id: comment.account_id, account_username: account.username || null, comment_id: comment.id, event_type: 'comment_replied', message_text: reply, media_type: media?.media_type || null, media_caption: media?.caption || null, media_permalink: media?.permalink || null, payload: { message: reply, provider_result: result }, occurred_at: now() }) });
       return json(200, { success: true });
     }
     const provider = (await rest(url, serviceKey, `instagram_providers?id=eq.${encodeURIComponent(providerId)}&org_id=eq.${encodeURIComponent(context.orgId)}&select=*`))?.[0];
-    if (!provider) throw new Error('اتصال BoxAPI پیدا نشد.');
+    if (!provider) throw new Error('اتصال سرویس‌دهندهٔ اینستاگرام پیدا نشد.');
     if (action === 'delete_provider') {
       requireConnectionManagement(context);
       await rest(url, serviceKey, `instagram_providers?id=eq.${encodeURIComponent(providerId)}&org_id=eq.${encodeURIComponent(context.orgId)}`, { method: 'DELETE' });
@@ -493,7 +502,7 @@ Deno.serve(async (req: Request) => {
     }
     if (action === 'get_connect_url') {
       requireConnectionManagement(context);
-      const result = await boxRequest(provider, '/service/info', { method: 'GET' });
+      const result = await providerRequest(provider, 'get_connect_url');
       return json(200, { success: true, connectUrl: text(result?.data?.instagram_oauth_url), provider: providerSummary(provider, req) });
     }
     throw new Error('عملیات درخواستی پشتیبانی نمی‌شود.');

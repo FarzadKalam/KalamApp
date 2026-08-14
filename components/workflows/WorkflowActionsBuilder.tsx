@@ -2235,7 +2235,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       return (
         <div className="space-y-2">
           <div className="rounded-lg border border-pink-200 bg-pink-50/60 p-2 text-xs text-slate-700 dark:border-pink-400/20 dark:bg-pink-500/10 dark:text-slate-200">
-            سامانه گفتگوی اینستاگرامِ متصل به رکورد انتخاب‌شده را پیدا می‌کند. متن از متغیرهای همین گردش‌کار پشتیبانی می‌کند و ویترین در خروجی رسمی BoxAPI به متن و دکمه‌های تعاملی تبدیل می‌شود.
+            سامانه گفتگوی اینستاگرامِ متصل به رکورد انتخاب‌شده را پیدا می‌کند. متن از متغیرهای همین گردش‌کار پشتیبانی می‌کند و ویترین متناسب با سرویس‌دهندهٔ اتصال به متن و دکمه‌های تعاملی تبدیل می‌شود.
           </div>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
             <Select {...commonSelectProps} value={config.recipient_source || 'current_record'} disabled={disabled} options={[{ value: 'current_record', label: 'رکورد فعلی' }, { value: 'related_record', label: 'رکورد مرتبط' }]} onChange={(value) => updateActionConfig(action.id, { recipient_source: value })} />

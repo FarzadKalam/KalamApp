@@ -152,7 +152,7 @@ const InstagramInboxPage: React.FC = () => {
                   allowClear
                   onClear={() => setSelectedShowcaseId(undefined)}
                 />
-                <Tooltip title="BoxAPI در مرجع رسمی فقط متن و دکمه را برای ارسال دایرکت مستند کرده است؛ پیوست و صوت غیرفعال‌اند."><span className="text-xs text-slate-400">متن، دکمه و ویترین</span></Tooltip>
+                <Tooltip title="سرویس‌دهندهٔ فعال فقط متن و دکمه را برای ارسال دایرکت مستند کرده است؛ پیوست و صوت غیرفعال‌اند."><span className="text-xs text-slate-400">متن، دکمه و ویترین</span></Tooltip>
               </div>
               <SharedNoteComposer value={draft} onChange={setDraft} onSubmit={() => void send()} placeholder="پاسخ به دایرکت اینستاگرام..." submitText="ارسال" submitLoading={sending} submitDisabled={sending || !draft.trim()} allowMentions={false} allowAttachments={false} surfaceVariant="omni" />
             </div>

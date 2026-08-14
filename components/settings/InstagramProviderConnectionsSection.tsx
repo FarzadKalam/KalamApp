@@ -17,6 +17,8 @@ type ProviderAccount = {
 type Provider = {
   id: string;
   name: string;
+  providerKey: string;
+  providerLabel?: string;
   isActive: boolean;
   hasApiKey: boolean;
   webhookUrl: string;
@@ -25,6 +27,7 @@ type Provider = {
   accounts: ProviderAccount[];
 };
 type CatalogOption = { id: string; title: string };
+type SupportedProvider = { key: string; label: string; apiKeyLabel?: string };
 
 const copy = async (value: string, label: string, message: any) => {
   if (!String(value || '').trim()) return message.warning(`${label} آماده نیست.`);
@@ -42,9 +45,10 @@ const CopyOnlyTransferLink: React.FC<{ label: string; value: string; message: an
   </div>
 );
 
-const InstagramBoxApiConnectionsSection: React.FC = () => {
+const InstagramProviderConnectionsSection: React.FC = () => {
   const { message } = App.useApp();
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [supportedProviders, setSupportedProviders] = useState<SupportedProvider[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
@@ -60,12 +64,16 @@ const InstagramBoxApiConnectionsSection: React.FC = () => {
   const invoke = useCallback(async (body: Record<string, any>) => {
     const { data, error } = await supabase.functions.invoke('instagram-boxapi', { body });
     if (error) throw error;
-    if (!data?.success) throw new Error(String(data?.message || 'عملیات BoxAPI ناموفق بود.'));
+    if (!data?.success) throw new Error(String(data?.message || 'عملیات اتصال اینستاگرام ناموفق بود.'));
     return data;
   }, []);
   const load = useCallback(async () => {
     setLoading(true);
-    try { const data = await invoke({ action: 'list' }); setProviders(Array.isArray(data.providers) ? data.providers : []); }
+    try {
+      const data = await invoke({ action: 'list' });
+      setProviders(Array.isArray(data.providers) ? data.providers : []);
+      setSupportedProviders(Array.isArray(data.supportedProviders) ? data.supportedProviders : []);
+    }
     catch (error) { message.error(toFaErrorMessage(error, 'بارگذاری اتصال‌های اینستاگرام ناموفق بود.')); }
     finally { setLoading(false); }
   }, [invoke, message]);
@@ -74,15 +82,19 @@ const InstagramBoxApiConnectionsSection: React.FC = () => {
     void supabase.from('online_catalogs').select('id,title').eq('is_active', true).order('title').limit(100)
       .then(({ data }) => setCatalogs((data || []) as CatalogOption[]));
   }, []);
+  const providerDefinition = (providerKey?: string) => supportedProviders.find((provider) => provider.key === providerKey);
+  const providerLabel = (providerKey?: string) => providerDefinition(providerKey)?.label || providerKey || 'سرویس‌دهنده';
 
   const openCreate = () => {
+    const defaultProvider = supportedProviders[0];
+    if (!defaultProvider) { message.warning('فهرست سرویس‌دهندگان اینستاگرام هنوز آماده نشده است.'); return; }
     setEditing(null);
-    form.setFieldsValue({ provider: 'boxapi', name: 'BoxAPI', apiKey: '', isActive: false });
+    form.setFieldsValue({ provider: defaultProvider.key, name: defaultProvider.label, apiKey: '', isActive: false });
     setModalOpen(true);
   };
   const openEdit = (provider: Provider) => {
     setEditing(provider);
-    form.setFieldsValue({ provider: 'boxapi', name: provider.name, apiKey: '', isActive: provider.isActive });
+    form.setFieldsValue({ provider: provider.providerKey, name: provider.name, apiKey: '', isActive: provider.isActive });
     setModalOpen(true);
   };
   const save = async () => {
@@ -92,23 +104,23 @@ const InstagramBoxApiConnectionsSection: React.FC = () => {
       const saved = await invoke({
         action: 'save_provider',
         providerId: editing?.id,
+        providerKey: value.provider,
         name: value.name,
         apiKey: value.apiKey,
         isActive: editing ? value.isActive : false,
-        baseUrl: 'https://boxapi.ir',
         domain: editing?.domain || window.location.origin,
         redirectUrl: editing?.redirectUrl || `${window.location.origin}/settings`,
       });
       if (!editing && saved?.provider) {
         setEditing(saved.provider as Provider);
-        form.setFieldsValue({ provider: 'boxapi', name: saved.provider.name, apiKey: '', isActive: false });
-        message.success('آدرس وب‌هوک ساخته شد. آن را در BoxAPI ثبت کنید و سپس اتصال را فعال کنید.');
+        form.setFieldsValue({ provider: saved.provider.providerKey, name: saved.provider.name, apiKey: '', isActive: false });
+        message.success(`آدرس وب‌هوک ساخته شد. آن را در ${providerLabel(saved.provider.providerKey)} ثبت کنید و سپس اتصال را فعال کنید.`);
       } else {
         setModalOpen(false);
-        message.success('اتصال BoxAPI ذخیره شد.');
+        message.success('اتصال سرویس‌دهنده ذخیره شد.');
       }
       await load();
-    } catch (error) { message.error(toFaErrorMessage(error, 'ذخیره اتصال BoxAPI ناموفق بود.')); }
+    } catch (error) { message.error(toFaErrorMessage(error, 'ذخیره اتصال اینستاگرام ناموفق بود.')); }
     finally { setSaving(false); }
   };
   const sync = async (providerId: string) => {
@@ -122,7 +134,7 @@ const InstagramBoxApiConnectionsSection: React.FC = () => {
     try {
       const data = await invoke({ action: 'get_connect_url', providerId });
       const url = String(data.connectUrl || '').trim();
-      if (!url) throw new Error('لینک ورود رسمی اینستاگرام از BoxAPI دریافت نشد.');
+      if (!url) throw new Error('لینک ورود رسمی اینستاگرام از سرویس‌دهنده دریافت نشد.');
       window.open(url, '_blank', 'noopener,noreferrer');
       message.info('پس از اتصال پیج، برای دریافت وضعیت جدید روی «همگام‌سازی پیج‌ها» بزنید.');
     } catch (error) { message.error(toFaErrorMessage(error, 'دریافت لینک اتصال پیج ناموفق بود.')); }
@@ -153,20 +165,20 @@ const InstagramBoxApiConnectionsSection: React.FC = () => {
       <Alert
         showIcon
         type="info"
-        message="اتصال رسمی اینستاگرام از طریق BoxAPI"
-        description="می‌توانید چند حساب BoxAPI اضافه کنید. همه پیج‌های متصل‌شده به این حساب‌ها در صندوق اینستاگرام یکجا دیده می‌شوند؛ کلید هر حساب فقط به شکل رمزنگاری‌شده در سرور نگهداری می‌شود."
+        message="اتصال رسمی اینستاگرام از طریق سرویس‌دهنده‌ها"
+        description="می‌توانید چند اتصال از سرویس‌دهنده‌های پشتیبانی‌شده اضافه کنید. همه پیج‌های متصل‌شده به این اتصال‌ها در صندوق اینستاگرام یکجا دیده می‌شوند؛ کلید هر حساب فقط به شکل رمزنگاری‌شده در سرور نگهداری می‌شود."
       />
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="font-semibold">ارائه‌دهندگان BoxAPI و پیج‌های متصل</div>
+        <div className="font-semibold">سرویس‌دهندگان و پیج‌های متصل</div>
         <Space wrap>
           <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load()}>به‌روزرسانی</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>افزودن حساب BoxAPI</Button>
+          <Button type="primary" icon={<PlusOutlined />} disabled={supportedProviders.length === 0} onClick={openCreate}>افزودن سرویس‌دهنده</Button>
         </Space>
       </div>
-      {providers.length === 0 && !loading ? <Empty description="هنوز حساب BoxAPI اضافه نشده است." /> : providers.map((provider) => (
+      {providers.length === 0 && !loading ? <Empty description="هنوز اتصال اینستاگرامی اضافه نشده است." /> : providers.map((provider) => (
         <div key={provider.id} className="rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2"><span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[rgba(var(--brand-500-rgb),0.10)] text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--brand-300-rgb),0.12)] dark:text-[rgb(var(--brand-200-rgb))]"><InstagramOutlined /></span><span className="font-semibold">{provider.name}</span><Tag color={provider.isActive ? 'green' : 'default'}>{provider.isActive ? 'فعال' : 'غیرفعال'}</Tag></div>
+            <div className="flex items-center gap-2"><span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[rgba(var(--brand-500-rgb),0.10)] text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--brand-300-rgb),0.12)] dark:text-[rgb(var(--brand-200-rgb))]"><InstagramOutlined /></span><span className="font-semibold">{provider.name}</span><Tag>{provider.providerLabel || providerLabel(provider.providerKey)}</Tag><Tag color={provider.isActive ? 'green' : 'default'}>{provider.isActive ? 'فعال' : 'غیرفعال'}</Tag></div>
             <Space wrap>
               <Button size="small" icon={<LinkOutlined />} loading={connectingId === provider.id} disabled={!provider.isActive || !provider.hasApiKey} onClick={() => void connect(provider.id)}>اتصال پیج</Button>
               <Button size="small" icon={<SyncOutlined />} loading={syncingId === provider.id} disabled={!provider.isActive || !provider.hasApiKey} onClick={() => void sync(provider.id)}>همگام‌سازی پیج‌ها</Button>
@@ -175,7 +187,7 @@ const InstagramBoxApiConnectionsSection: React.FC = () => {
             </Space>
           </div>
           <div className="mt-3 grid grid-cols-1 gap-2 text-xs md:grid-cols-2">
-            <div className="rounded-lg bg-slate-50 p-2 dark:bg-white/5"><span className="text-gray-500">دامنه برای ثبت در BoxAPI: </span><span dir="ltr">{provider.domain || 'ثبت نشده'}</span><Tooltip title="کپی دامنه"><Button type="text" size="small" icon={<CopyOutlined />} onClick={() => void copy(provider.domain, 'دامنه', message)} /></Tooltip></div>
+            <div className="rounded-lg bg-slate-50 p-2 dark:bg-white/5"><span className="text-gray-500">دامنه برای ثبت در سرویس‌دهنده: </span><span dir="ltr">{provider.domain || 'ثبت نشده'}</span><Tooltip title="کپی دامنه"><Button type="text" size="small" icon={<CopyOutlined />} onClick={() => void copy(provider.domain, 'دامنه', message)} /></Tooltip></div>
             <div className="rounded-lg bg-slate-50 p-2 dark:bg-white/5"><span className="text-gray-500">آدرس بازگشت: </span><span dir="ltr">{provider.redirectUrl || 'ثبت نشده'}</span><Tooltip title="کپی آدرس بازگشت"><Button type="text" size="small" icon={<CopyOutlined />} onClick={() => void copy(provider.redirectUrl, 'آدرس بازگشت', message)} /></Tooltip></div>
             <div className="rounded-lg bg-slate-50 p-2 dark:bg-white/5 md:col-span-2"><span className="text-gray-500">Webhook: </span><span dir="ltr" className="break-all">{provider.webhookUrl}</span><Tooltip title="کپی آدرس وب‌هوک"><Button type="text" size="small" icon={<CopyOutlined />} onClick={() => void copy(provider.webhookUrl, 'آدرس وب‌هوک', message)} /></Tooltip></div>
           </div>
@@ -195,20 +207,20 @@ const InstagramBoxApiConnectionsSection: React.FC = () => {
           />
         </div>
       ))}
-      <Modal title={editing ? 'فعال‌سازی یا ویرایش حساب BoxAPI' : 'افزودن حساب BoxAPI'} open={modalOpen} onCancel={() => setModalOpen(false)} onOk={() => void save()} confirmLoading={saving} okText={editing ? 'ذخیره تغییرات' : 'ایجاد آدرس وب‌هوک'} cancelText="انصراف" destroyOnHidden>
+      <Modal title={editing ? `فعال‌سازی یا ویرایش ${providerLabel(editing.providerKey)}` : 'افزودن اتصال اینستاگرام'} open={modalOpen} onCancel={() => setModalOpen(false)} onOk={() => void save()} confirmLoading={saving} okText={editing ? 'ذخیره تغییرات' : 'ایجاد آدرس وب‌هوک'} cancelText="انصراف" destroyOnHidden>
         <Form form={form} layout="vertical">
           <Form.Item name="provider" label="سرویس‌دهنده" rules={[{ required: true, message: 'سرویس‌دهنده را انتخاب کنید.' }]}>
-            <Select options={[{ value: 'boxapi', label: 'BoxAPI' }]} />
+            <Select disabled={Boolean(editing)} options={supportedProviders.map((provider) => ({ value: provider.key, label: provider.label }))} />
           </Form.Item>
           <Form.Item name="name" label="نام اتصال" rules={[{ required: true, message: 'نام اتصال را وارد کنید.' }]}><Input placeholder="مثلا حساب فروش" /></Form.Item>
-          {!editing ? <Alert showIcon type="warning" message="گام اول: ساخت آدرس وب‌هوک" description="ابتدا این اتصال به‌صورت غیرفعال ذخیره می‌شود تا آدرس وب‌هوک اختصاصی و امن آن ساخته شود. در گام بعد آن را در BoxAPI ثبت و اتصال را فعال می‌کنید." /> : <>
-            <Alert className="mb-4" showIcon type="info" message="گام دوم: ثبت در BoxAPI و فعال‌سازی" description="نشانی‌های زیر را فقط کپی کنید و در BoxAPI ثبت کنید. سپس کلید API را وارد کرده و وضعیت اتصال را فعال کنید." />
+          {!editing ? <Alert showIcon type="warning" message="گام اول: ساخت آدرس وب‌هوک" description="ابتدا این اتصال به‌صورت غیرفعال ذخیره می‌شود تا آدرس وب‌هوک اختصاصی و امن آن ساخته شود. در گام بعد آن را در سرویس‌دهنده ثبت و اتصال را فعال می‌کنید." /> : <>
+            <Alert className="mb-4" showIcon type="info" message={`گام دوم: ثبت در ${providerLabel(editing.providerKey)} و فعال‌سازی`} description="نشانی‌های زیر را فقط کپی کنید و در سرویس‌دهنده ثبت کنید. سپس کلید API را وارد کرده و وضعیت اتصال را فعال کنید." />
             <div className="mb-4 space-y-3">
-              <CopyOnlyTransferLink label="دامنه ثبت‌شونده در BoxAPI" value={editing.domain || window.location.origin} message={message} />
+              <CopyOnlyTransferLink label="دامنه ثبت‌شونده در سرویس‌دهنده" value={editing.domain || window.location.origin} message={message} />
               <CopyOnlyTransferLink label="آدرس بازگشت پس از ورود اینستاگرام" value={editing.redirectUrl || `${window.location.origin}/settings`} message={message} />
               <CopyOnlyTransferLink label="آدرس وب‌هوک" value={editing.webhookUrl} message={message} />
             </div>
-            <Form.Item name="apiKey" label="کلید API BoxAPI" extra="اگر کلید تغییر نکرده، این فیلد را خالی بگذارید."><Input.Password autoComplete="new-password" /></Form.Item>
+            <Form.Item name="apiKey" label={providerDefinition(editing.providerKey)?.apiKeyLabel || 'کلید API سرویس‌دهنده'} extra="اگر کلید تغییر نکرده، این فیلد را خالی بگذارید."><Input.Password autoComplete="new-password" /></Form.Item>
             <Form.Item name="isActive" label="فعال‌سازی اتصال" valuePropName="checked"><Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" /></Form.Item>
           </>}
         </Form>
@@ -226,4 +238,4 @@ const InstagramBoxApiConnectionsSection: React.FC = () => {
   );
 };
 
-export default InstagramBoxApiConnectionsSection;
+export default InstagramProviderConnectionsSection;
