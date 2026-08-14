@@ -43,7 +43,6 @@ import {
   type PrintPageRange,
 } from './printPagination';
 import {
-  getFinalContentBodyHeightPx,
   getPrintBodyViewportHeightPx,
   getTemplatePageBodyStepPx,
 } from './pageLayout';
@@ -3465,6 +3464,8 @@ export const usePrintManager = ({
                   pageBreakAfter: pageIndex < effectivePageCount - 1 ? 'always' : 'auto',
                   breakAfter: pageIndex < effectivePageCount - 1 ? 'page' : 'auto',
                 },
+                'data-print-layout-mode': 'letterhead',
+                'data-print-body-capacity-px': Math.floor(bodyHeightPx),
               },
               React.createElement('img', {
                 src: selectedOrgLetterhead.imageUrl || '',
@@ -3689,12 +3690,6 @@ export const usePrintManager = ({
           end: (index + 1) * pageBodyStepPx,
         }
       );
-      const measuredBodyHeightPx = activeBodyMeasure
-        ? getMeasuredPrintBlockHeight(activeBodyMeasure)
-        : measuredBodyContentHeightRef.current?.templateId === selectedTemplateId
-          ? measuredBodyContentHeightRef.current.height
-          : null;
-
       return React.createElement(
         'div',
         {
@@ -3773,24 +3768,13 @@ export const usePrintManager = ({
           // (nextPageStartOffset - pageStartOffset), so the guard begins right
           // where the next page begins - no overlap, no partial lines.
           const pageCounterHeightCss = toCssMm(PRINT_PAGE_COUNTER_HEIGHT_PX);
-          const isFinalPage = pageIndex === effectivePageCount - 1;
-          const flowFinalSignatureFooter = hasSignatureBand && isFinalPage;
           const effectiveBodyStepPx = Math.min(
             pageBodyStepPx,
             Math.max(1, pageRange.end - pageRange.start)
           );
           const bodyViewportHeightPx = getPrintBodyViewportHeightPx(pageBodyHeightPx, effectiveBodyStepPx);
-          const bodyRenderHeightPx = flowFinalSignatureFooter
-            ? getFinalContentBodyHeightPx({
-                pageBodyHeightPx,
-                pageStartOffset,
-                contentHeightPx: measuredBodyHeightPx,
-              })
-            : pageBodyHeightPx;
-          const bodyRenderHeightCss = toCssMm(bodyRenderHeightPx);
-          const bodyViewportHeightCss = toCssMm(
-            Math.min(bodyRenderHeightPx, bodyViewportHeightPx)
-          );
+          const bodyRenderHeightCss = toCssMm(pageBodyHeightPx);
+          const bodyViewportHeightCss = toCssMm(bodyViewportHeightPx);
 
           return React.createElement(
             'div',
@@ -3828,6 +3812,12 @@ export const usePrintManager = ({
                 '--print-margin-right': `${pageMargins.right}mm`,
                 '--print-native-page-height': `${metrics.heightMm}mm`,
               } as unknown as React.CSSProperties,
+              'data-print-layout-mode': 'standard',
+              'data-print-body-capacity-px': Math.floor(pageBodyHeightPx),
+              'data-print-configured-header-height-px': configuredHeaderHeight,
+              'data-print-configured-footer-height-px': configuredFooterHeight,
+              'data-print-signature-height-px': signatureHeightPx,
+              'data-print-page-counter-height-px': effectivePageCount > 1 ? PRINT_PAGE_COUNTER_HEIGHT_PX : 0,
             },
             showHeader
               ? React.createElement(
@@ -3926,7 +3916,10 @@ export const usePrintManager = ({
                       height: footerHeightCss,
                       minHeight: footerHeightCss,
                       maxHeight: footerHeightCss,
-                      marginTop: flowFinalSignatureFooter ? 0 : 'auto',
+                      // Every page, including the last one, uses the same
+                      // physical footer lane. The final print pass measures
+                      // this lane again in its own DOM before paginating.
+                      marginTop: 'auto',
                       overflow: 'hidden',
                       padding: 0,
                       display: 'flex',

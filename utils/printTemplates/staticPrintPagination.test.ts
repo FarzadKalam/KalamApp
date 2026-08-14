@@ -8,6 +8,7 @@ const { buildSmartPrintPageRanges, collectPrintPageAnchors } = vi.hoisted(() => 
 vi.mock('./printPagination', () => ({
   buildSmartPrintPageRanges,
   collectPrintPageAnchors,
+  trimTrailingPrintSpacerNodes: vi.fn(),
 }));
 
 import { repaginateStaticCustomPrintDocument } from './staticPrintPagination';
@@ -70,5 +71,23 @@ describe('static custom print pagination', () => {
     expect(pages[2].querySelector<HTMLElement>('.print-template-body-viewport')?.style.height).toBe('567px');
     expect(pages[2].querySelector<HTMLElement>('.print-template-footer')?.style.marginTop).toBe('auto');
     expect(pages[2].querySelector<HTMLElement>('.print-template-page-counter')?.textContent).toBe('صفحه ۳ از ۳');
+  });
+
+  it('uses the final-context body capacity instead of a stale preview body height', () => {
+    buildSmartPrintPageRanges.mockReturnValue([{ start: 0, end: 640 }]);
+    const root = document.createElement('div');
+    const shell = document.createElement('div');
+    shell.className = 'invoice-custom-print-shell';
+    const page = createPage();
+    page.setAttribute('data-print-body-capacity-px', '720');
+    shell.append(page);
+    root.append(shell);
+    document.body.append(root);
+
+    repaginateStaticCustomPrintDocument(root);
+
+    expect(buildSmartPrintPageRanges).toHaveBeenCalledWith(expect.objectContaining({
+      pageBodyStepPx: 719,
+    }));
   });
 });

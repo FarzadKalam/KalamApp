@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  annotatePrintFlowHtml,
   buildSmartPrintPageOffsets,
   buildSmartPrintPageRanges,
   getPrintMeasurementScale,
@@ -24,6 +25,26 @@ const buildVariableLineAnchors = (totalHeight: number, lineHeights: number[]): P
 };
 
 describe('print pagination scenarios', () => {
+  it('removes only terminal editor spacer paragraphs before page ranges are measured', () => {
+    const normalized = annotatePrintFlowHtml(`
+      <p>بند واقعی آخر قرارداد</p>
+      <p style="text-align:justify"><span style="font-size:12px">\u200c</span></p>
+      <p><br></p>
+    `);
+
+    expect(normalized).toContain('بند واقعی آخر قرارداد');
+    expect(normalized).not.toContain('\u200c');
+    expect(normalized).not.toContain('<br>');
+  });
+
+  it('keeps an explicitly preserved terminal blank space', () => {
+    const normalized = annotatePrintFlowHtml(
+      '<p>متن</p><p data-print-preserve-space="true">\u200c</p>'
+    );
+
+    expect(normalized).toContain('data-print-preserve-space="true"');
+  });
+
   it('keeps fractional line and row bottoms inside the preceding viewport', () => {
     expect(getSafePrintAnchorBounds(104.25, 127.05)).toEqual({ top: 104, bottom: 128 });
     expect(getSafePrintAnchorBounds(127.95, 171.4)).toEqual({ top: 127, bottom: 172 });

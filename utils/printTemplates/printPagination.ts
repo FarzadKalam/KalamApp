@@ -59,10 +59,66 @@ const LINE_TOP_SNAP_LOOKBACK_PX = 180;
 const DEFAULT_MIN_PAGE_FILL_RATIO = 0.55;
 const DEFAULT_HARD_KEEP_FILL_RATIO = 0.35;
 const OVERSIZED_KEEP_BLOCK_TOLERANCE_PX = 8;
+const INVISIBLE_PRINT_TEXT_PATTERN = /[\s\u00a0\u200b-\u200d\u2060\ufeff]+/g;
+const TERMINAL_PRINT_CONTAINER_TAGS = new Set(['article', 'aside', 'blockquote', 'div', 'li', 'main', 'section']);
+const PRINT_MEDIA_CONTENT_SELECTOR = 'audio, canvas, embed, iframe, img, object, picture, svg, video';
+const EXPLICIT_SPACER_STYLE_PATTERN = /(?:^|;)\s*(?:border(?:-[a-z-]+)?|height|min-height|margin(?:-[a-z-]+)?|padding(?:-[a-z-]+)?)\s*:/i;
 
 const roundPx = (value: number) => Math.max(0, Math.round(value));
 const floorPx = (value: number) => Math.max(0, Math.floor(value));
 const ceilPx = (value: number) => Math.max(0, Math.ceil(value));
+
+const hasVisiblePrintText = (value: unknown) =>
+  String(value || '').replace(INVISIBLE_PRINT_TEXT_PATTERN, '').length > 0;
+
+const isRemovableTerminalPrintSpacer = (element: Element) => {
+  if (element.hasAttribute('data-print-preserve-space')) return false;
+  if (element.querySelector(PRINT_MEDIA_CONTENT_SELECTOR)) return false;
+  if (EXPLICIT_SPACER_STYLE_PATTERN.test(String(element.getAttribute('style') || ''))) return false;
+  return !hasVisiblePrintText(element.textContent);
+};
+
+/**
+ * Rich-text editors can leave terminal paragraphs containing only ZWNJ/ZWSP
+ * characters. They paint as blank lines but are still real DOM text, which
+ * used to create a final blank page (and push the true final line out of its
+ * page range). Remove only terminal, visually-empty blocks at print time.
+ * `data-print-preserve-space` is an explicit opt-out for a deliberately sized
+ * blank area.
+ */
+export const trimTrailingPrintSpacerNodes = (container: Element) => {
+  let changed = false;
+  let lastNode = container.lastChild;
+
+  while (lastNode && lastNode.nodeType === Node.TEXT_NODE && !hasVisiblePrintText(lastNode.textContent)) {
+    const previous = lastNode.previousSibling;
+    lastNode.remove();
+    changed = true;
+    lastNode = previous;
+  }
+
+  while (lastNode && lastNode.nodeType === Node.ELEMENT_NODE) {
+    const lastElement = lastNode as Element;
+    if (!isRemovableTerminalPrintSpacer(lastElement)) break;
+    const previous = lastElement.previousSibling;
+    lastElement.remove();
+    changed = true;
+    lastNode = previous;
+    while (lastNode && lastNode.nodeType === Node.TEXT_NODE && !hasVisiblePrintText(lastNode.textContent)) {
+      const previousText = lastNode.previousSibling;
+      lastNode.remove();
+      lastNode = previousText;
+    }
+  }
+
+  const terminalElement = container.lastElementChild;
+  const tagName = String(terminalElement?.tagName || '').toLowerCase();
+  if (terminalElement && TERMINAL_PRINT_CONTAINER_TAGS.has(tagName)) {
+    changed = trimTrailingPrintSpacerNodes(terminalElement) || changed;
+  }
+
+  return changed;
+};
 
 // DOM line and row rectangles are frequently fractional. A normal round can
 // move a measured lower edge upward, which crops the final fraction of a line
@@ -157,6 +213,7 @@ export const annotatePrintFlowHtml = (html: string) => {
   const doc = parser.parseFromString(`<div id="print-flow-root">${html}</div>`, 'text/html');
   const root = doc.getElementById('print-flow-root');
   if (!root) return html;
+  trimTrailingPrintSpacerNodes(root);
 
   Array.from(root.children || []).forEach((child) => {
     const tagName = String(child.tagName || '').toLowerCase();
@@ -246,7 +303,7 @@ export const collectPrintPageAnchors = (root: HTMLElement): PrintPageAnchor[] =>
   let currentNode = walker.nextNode();
   while (currentNode && lineAnchorCount < MAX_LINE_ANCHORS) {
     const textContent = String(currentNode.textContent || '');
-    if (textContent.trim()) {
+    if (hasVisiblePrintText(textContent)) {
       const range = doc.createRange();
       range.selectNodeContents(currentNode);
       const rects = Array.from(range.getClientRects());
@@ -474,6 +531,10 @@ const getNextSafePageStart = ({
     (anchor) => anchor.source === 'line' && anchor.bottom > previousEnd
   ) || anchors.find((anchor) => anchor.bottom > previousEnd);
 
+  // Keep the source interval through its measured end even when no line/row
+  // anchor follows. Unannotated embedded content can live in that tail; it is
+  // safer to preserve it than infer it is only bottom padding. Truly empty
+  // trailing editor paragraphs are removed before anchor collection instead.
   if (!nextAnchor) return Math.min(totalHeight, previousEnd);
 
   // Keep one source pixel above the measured top. This is deliberate: browser

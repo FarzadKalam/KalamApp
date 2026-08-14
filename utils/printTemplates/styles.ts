@@ -51,16 +51,32 @@ export const printStyles = `
     direction: rtl;
     text-align: right;
   }
-  .invoice-custom-print-shell .print-template-page p {
+  .invoice-custom-print-shell .print-template-page p,
+  .invoice-custom-print-shell .print-template-body-inner p,
+  .invoice-custom-print-shell .print-template-body-measure p,
+  .invoice-custom-print-shell .print-template-header-inner p,
+  .invoice-custom-print-shell .print-template-footer-inner p {
     margin: 0 0 8px 0;
   }
   .invoice-custom-print-shell .print-template-page td p,
-  .invoice-custom-print-shell .print-template-page th p {
+  .invoice-custom-print-shell .print-template-page th p,
+  .invoice-custom-print-shell .print-template-body-inner td p,
+  .invoice-custom-print-shell .print-template-body-inner th p,
+  .invoice-custom-print-shell .print-template-body-measure td p,
+  .invoice-custom-print-shell .print-template-body-measure th p,
+  .invoice-custom-print-shell .print-template-header-inner td p,
+  .invoice-custom-print-shell .print-template-header-inner th p,
+  .invoice-custom-print-shell .print-template-footer-inner td p,
+  .invoice-custom-print-shell .print-template-footer-inner th p {
     margin: 0 !important;
     font-size: inherit !important;
     line-height: 1.6 !important;
   }
-  .invoice-custom-print-shell .print-template-page h2 {
+  .invoice-custom-print-shell .print-template-page h2,
+  .invoice-custom-print-shell .print-template-body-inner h2,
+  .invoice-custom-print-shell .print-template-body-measure h2,
+  .invoice-custom-print-shell .print-template-header-inner h2,
+  .invoice-custom-print-shell .print-template-footer-inner h2 {
     margin: 0 0 10px 0;
     font-size: 20px;
     line-height: 1.8;
@@ -128,13 +144,16 @@ export const printStyles = `
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
-    body.print-mode #root {
+    body.print-mode #root,
+    body[data-kalamapp-print-session="true"] #root {
       display: none !important;
     }
-    body.print-mode > *:not(#print-root) {
+    body.print-mode > *:not(#print-root),
+    body[data-kalamapp-print-session="true"] > *:not(#print-root) {
       display: none !important;
     }
-    body.print-mode #print-root {
+    body.print-mode #print-root,
+    body[data-kalamapp-print-session="true"] #print-root {
       display: block !important;
       position: static !important;
       width: auto !important;
@@ -144,7 +163,8 @@ export const printStyles = `
       padding: 0 !important;
       background: #fff !important;
     }
-    body.print-mode #print-root .invoice-custom-print-shell {
+    body.print-mode #print-root .invoice-custom-print-shell,
+    body[data-kalamapp-print-session="true"] #print-root .invoice-custom-print-shell {
       width: fit-content !important;
       min-height: auto !important;
       max-width: none !important;
@@ -152,18 +172,21 @@ export const printStyles = `
       padding: 0 !important;
       overflow: visible !important;
     }
-    body.print-mode #print-root .print-template-page {
+    body.print-mode #print-root .print-template-page,
+    body[data-kalamapp-print-session="true"] #print-root .print-template-page {
       break-after: page !important;
       page-break-after: always !important;
       break-inside: avoid !important;
       page-break-inside: avoid !important;
       margin: 0 !important;
     }
-    body.print-mode #print-root .print-template-page:last-child {
+    body.print-mode #print-root .print-template-page:last-child,
+    body[data-kalamapp-print-session="true"] #print-root .print-template-page:last-child {
       break-after: auto !important;
       page-break-after: auto !important;
     }
-    body.print-mode #print-root * {
+    body.print-mode #print-root *,
+    body[data-kalamapp-print-session="true"] #print-root * {
       visibility: visible !important;
     }
     .invoice-custom-print-shell,
