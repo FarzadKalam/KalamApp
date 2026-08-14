@@ -174,8 +174,9 @@ const providerSummary = (row: any, request: Request) => ({
 const listProviders = async (request: Request, url: string, serviceKey: string, context: any) => {
   const providers = await rest(url, serviceKey, `instagram_providers?org_id=eq.${encodeURIComponent(context.orgId)}&select=*&order=created_at.asc`);
   const accounts = await rest(url, serviceKey, `instagram_accounts?org_id=eq.${encodeURIComponent(context.orgId)}&select=*&order=username.asc`);
-  // وضعیت رویداد، برخلاف payload، فاقد اطلاعات مخاطب است و برای تشخیص سریع سلامت اتصال نمایش داده می‌شود.
-  const events = await rest(url, serviceKey, `instagram_webhook_events?org_id=eq.${encodeURIComponent(context.orgId)}&select=provider_id,event_type,processing_status,error_message,received_at,processed_at&order=received_at.desc&limit=100`);
+  // فقط ساختار امن payload، نه متن پیام یا مشخصات مخاطب، برای تشخیص سریع سلامت اتصال نمایش داده می‌شود.
+  const eventRows = await rest(url, serviceKey, `instagram_webhook_events?org_id=eq.${encodeURIComponent(context.orgId)}&select=provider_id,event_type,processing_status,error_message,received_at,processed_at,payload&order=received_at.desc&limit=100`);
+  const events = (Array.isArray(eventRows) ? eventRows : []).map(({ payload, ...event }: any) => ({ ...event, payload_summary: webhookPayloadSummary(payload) }));
   return json(200, {
     success: true,
     supportedProviders: listInstagramProviders(),
@@ -241,6 +242,38 @@ const resolveWebhookAccount = async (provider: any, envelope: any, url: string, 
   return accounts.find((account: any) => accountKeys.includes(text(account.provider_account_id)) || accountKeys.includes(text(account.instagram_user_id))) || null;
 };
 const firstArray = (...candidates: any[]) => candidates.find((candidate) => Array.isArray(candidate)) || [];
+const isCachedInstagramCover = (value: string) => value.includes('/storage/v1/object/public/images/instagram_media/');
+const isLikelyVideoUrl = (value: string) => /\.(mp4|mov|m4v|webm)(?:$|[?#])/i.test(value);
+const coverExtension = (contentType: string, sourceUrl: string) => {
+  if (/image\/avif/i.test(contentType)) return 'avif';
+  if (/image\/webp/i.test(contentType)) return 'webp';
+  if (/image\/png/i.test(contentType)) return 'png';
+  if (/image\/gif/i.test(contentType)) return 'gif';
+  const fromUrl = text(sourceUrl).split('?')[0].match(/\.([a-z0-9]{2,5})$/i)?.[1]?.toLowerCase();
+  return ['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif'].includes(text(fromUrl)) ? text(fromUrl) : 'jpg';
+};
+const cacheInstagramCover = async (sourceUrl: string, orgId: string, accountId: string, providerMediaId: string, url: string, serviceKey: string) => {
+  const source = text(sourceUrl);
+  if (!/^https:\/\//i.test(source) || isCachedInstagramCover(source) || isLikelyVideoUrl(source)) return '';
+  try {
+    const sourceResponse = await fetch(source, { headers: { Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8' } });
+    if (!sourceResponse.ok) return '';
+    const contentType = text(sourceResponse.headers.get('content-type')).toLowerCase();
+    if (!contentType.startsWith('image/')) { await sourceResponse.body?.cancel(); return ''; }
+    const bytes = new Uint8Array(await sourceResponse.arrayBuffer());
+    // کاورهای بزرگ هم صندوق را کند می‌کنند و هم فضای tenant را بی‌دلیل مصرف می‌کنند.
+    if (!bytes.length || bytes.length > 4 * 1024 * 1024) return '';
+    const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(providerMediaId)))).map((byte) => byte.toString(16).padStart(2, '0')).join('').slice(0, 32);
+    const objectPath = `instagram_media/${orgId}/${accountId}/${hash}.${coverExtension(contentType, source)}`;
+    const uploadResponse = await fetch(`${url.replace(/\/+$/, '')}/storage/v1/object/images/${objectPath}`, {
+      method: 'POST',
+      headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, 'Content-Type': contentType, 'x-upsert': 'true' },
+      body: bytes,
+    });
+    if (!uploadResponse.ok) return '';
+    return `${url.replace(/\/+$/, '')}/storage/v1/object/public/images/${objectPath}`;
+  } catch (error) { console.warn('instagram cover cache skipped', error); return ''; }
+};
 
 const resolveShowcaseItems = async (showcase: any, url: string, serviceKey: string, orgId: string) => {
   if (text(showcase?.source_kind) === 'manual') {
@@ -267,12 +300,16 @@ const processListPostsWebhook = async (provider: any, envelope: any, url: string
   const payload = envelope?.data || {};
   // پاسخ list_posts asynchronous در نسخه‌های مختلف سرویس ممکن است مستقیماً آرایه یا در data/result/response قرار گیرد.
   const posts = firstArray(payload, payload?.posts, payload?.data, payload?.items, payload?.result, payload?.result?.posts, payload?.result?.data, payload?.response, payload?.response?.posts, payload?.response?.data, payload?.data?.posts, payload?.data?.data);
+  const storedMedia = await rest(url, serviceKey, `instagram_social_media?provider_id=eq.${encodeURIComponent(provider.id)}&account_id=eq.${encodeURIComponent(account.id)}&select=provider_media_id,thumbnail_url`);
+  const cachedCoverByMediaId = new Map((Array.isArray(storedMedia) ? storedMedia : []).filter((media: any) => isCachedInstagramCover(text(media?.thumbnail_url))).map((media: any) => [text(media.provider_media_id), text(media.thumbnail_url)]));
   for (const post of posts) {
     const providerMediaId = text(post?.id || post?.media_id);
     if (!providerMediaId) continue;
+    const sourceCover = text(post?.thumbnail_url) || text(post?.media_url);
+    const cachedCover = cachedCoverByMediaId.get(providerMediaId) || await cacheInstagramCover(sourceCover, provider.org_id, account.id, providerMediaId, url, serviceKey);
     await rest(url, serviceKey, 'instagram_social_media?on_conflict=provider_id,provider_media_id', {
       method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, account_id: account.id, provider_media_id: providerMediaId, media_type: ['story', 'reel'].includes(text(post?.media_type).toLowerCase()) ? text(post.media_type).toLowerCase() : 'post', caption: text(post?.caption) || null, media_url: text(post?.media_url) || null, thumbnail_url: text(post?.thumbnail_url) || null, permalink: text(post?.permalink) || null, metrics: { like_count: Number(post?.like_count || post?.likes || 0), comments_count: Number(post?.comments_count || post?.comment_count || 0) }, provider_payload: post, published_at: post?.timestamp || post?.published_at || null, last_synced_at: now(), updated_at: now() }),
+      body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, account_id: account.id, provider_media_id: providerMediaId, media_type: ['story', 'reel'].includes(text(post?.media_type).toLowerCase()) ? text(post.media_type).toLowerCase() : 'post', caption: text(post?.caption) || null, media_url: text(post?.media_url) || null, thumbnail_url: cachedCover || text(post?.thumbnail_url) || null, permalink: text(post?.permalink) || null, metrics: { like_count: Number(post?.like_count || post?.likes || 0), comments_count: Number(post?.comments_count || post?.comment_count || 0) }, provider_payload: post, published_at: post?.timestamp || post?.published_at || null, last_synced_at: now(), updated_at: now() }),
     });
   }
 };
@@ -307,11 +344,13 @@ const processCommentWebhook = async (provider: any, envelope: any, url: string, 
 };
 
 const processMessagingWebhook = async (provider: any, envelope: any, url: string, serviceKey: string) => {
-  if (text(envelope?.event_type) !== 'messaging') return;
+  if (text(envelope?.event_type) !== 'messaging') return null;
   const account = await resolveWebhookAccount(provider, envelope, url, serviceKey);
-  if (!account) return;
+  if (!account) return { persisted: 0, reason: 'شناسهٔ پیج callback با هیچ پیج متصل این سازمان تطبیق نداشت.' };
   const data = envelope?.data || {};
   const entries = firstArray(data?.messaging, data?.data?.messaging, data?.result?.messaging, data?.result?.data?.messaging);
+  if (!entries.length) return { persisted: 0, reason: 'در callback پیام، آرایهٔ messaging پیدا نشد.' };
+  let persisted = 0;
   for (const entry of entries) {
     const senderId = text(entry?.sender?.id);
     const recipientId = text(entry?.recipient?.id);
@@ -342,6 +381,7 @@ const processMessagingWebhook = async (provider: any, envelope: any, url: string
       method: 'PATCH', headers: { Prefer: 'return=minimal' },
       body: JSON.stringify({ last_message_preview: content || 'پیام جدید', last_message_at: new Date(Number(entry?.timestamp || Date.now())).toISOString(), ...(isInbound ? { last_inbound_at: new Date(Number(entry?.timestamp || Date.now())).toISOString() } : {}), updated_at: now() }),
     });
+    persisted += 1;
     if (isInbound) await rest(url, serviceKey, 'instagram_interaction_events', { method: 'POST', body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, account_id: account.id, account_username: account.username || null, conversation_id: conversation.id, event_type: 'direct_received', message_text: content || null, tags: conversation.tags || [], payload: entry, occurred_at: new Date(Number(entry?.timestamp || Date.now())).toISOString() }) });
     const postbackPayload = text(postback?.payload);
     if (postbackPayload) {
@@ -367,6 +407,7 @@ const processMessagingWebhook = async (provider: any, envelope: any, url: string
       });
     }
   }
+  return persisted ? { persisted } : { persisted: 0, reason: 'در callback پیام، فرستنده یا گیرندهٔ قابل ثبت پیدا نشد.' };
 };
 
 const handleWebhook = async (req: Request, url: string, serviceKey: string) => {
@@ -390,12 +431,13 @@ const handleWebhook = async (req: Request, url: string, serviceKey: string) => {
       method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' },
       body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, provider_event_id: eventId, event_type: eventType, payload: envelope }),
     });
-    await processMessagingWebhook(provider, processingEnvelope, url, serviceKey);
+    const messagingResult = await processMessagingWebhook(provider, processingEnvelope, url, serviceKey);
     await processListPostsWebhook(provider, processingEnvelope, url, serviceKey);
     await processCommentWebhook(provider, processingEnvelope, url, serviceKey);
+    const messagingReason = text(messagingResult?.reason);
     await rest(url, serviceKey, eventPath, {
       method: 'PATCH', headers: { Prefer: 'return=minimal' },
-      body: JSON.stringify({ processing_status: ['messaging', 'list_posts', 'comment', 'comments', 'comment_created'].includes(normalizedEventType) ? 'processed' : 'ignored', processed_at: now(), error_message: null }),
+      body: JSON.stringify({ processing_status: messagingReason ? 'ignored' : ['messaging', 'list_posts', 'comment', 'comments', 'comment_created'].includes(normalizedEventType) ? 'processed' : 'ignored', processed_at: now(), error_message: messagingReason || null }),
     });
   } catch (error) {
     const errorMessage = text(error).slice(0, 1000) || 'خطای نامشخص در پردازش وب‌هوک';
