@@ -95,6 +95,12 @@ const requireShowcaseManagement = (context: any) => {
   if (instagram.view === true && instagram.fields?.manage_showcases === true) return;
   requireConnectionManagement(context);
 };
+const requireInstagramInboxView = (context: any) => {
+  const saasAdmin = context.permissions?.__saas_admin || {};
+  const instagram = context.permissions?.instagram_conversations || {};
+  if (saasAdmin.view === true || saasAdmin.edit === true || instagram.view === true || instagram.edit === true) return;
+  requireConnectionManagement(context);
+};
 const providerRequest = async (provider: any, operationKey: 'sync_accounts' | 'list_posts' | 'send_message' | 'reply_comment' | 'get_connect_url', body?: Record<string, any>) => {
   const adapter = getInstagramProvider(text(provider?.provider_key));
   if (!adapter) throw new Error('سرویس‌دهندهٔ این اتصال در سامانه پشتیبانی نمی‌شود.');
@@ -149,7 +155,17 @@ const providerSummary = (row: any, request: Request) => ({
 const listProviders = async (request: Request, url: string, serviceKey: string, context: any) => {
   const providers = await rest(url, serviceKey, `instagram_providers?org_id=eq.${encodeURIComponent(context.orgId)}&select=*&order=created_at.asc`);
   const accounts = await rest(url, serviceKey, `instagram_accounts?org_id=eq.${encodeURIComponent(context.orgId)}&select=*&order=username.asc`);
-  return json(200, { success: true, supportedProviders: listInstagramProviders(), providers: providers.map((row: any) => ({ ...providerSummary(row, request), accounts: accounts.filter((account: any) => account.provider_id === row.id) })) });
+  // وضعیت رویداد، برخلاف payload، فاقد اطلاعات مخاطب است و برای تشخیص سریع سلامت اتصال نمایش داده می‌شود.
+  const events = await rest(url, serviceKey, `instagram_webhook_events?org_id=eq.${encodeURIComponent(context.orgId)}&select=provider_id,event_type,processing_status,error_message,received_at,processed_at&order=received_at.desc&limit=100`);
+  return json(200, {
+    success: true,
+    supportedProviders: listInstagramProviders(),
+    providers: providers.map((row: any) => ({
+      ...providerSummary(row, request),
+      accounts: accounts.filter((account: any) => account.provider_id === row.id),
+      lastWebhook: events.find((event: any) => event.provider_id === row.id) || null,
+    })),
+  });
 };
 
 const webhookDiagnostics = async (url: string, serviceKey: string, context: any, providerId: string) => {
@@ -543,10 +559,15 @@ Deno.serve(async (req: Request) => {
     }
     if (action === 'sync_accounts') { requireConnectionManagement(context); return json(200, { success: true, syncedCount: await syncAccounts(provider, url, serviceKey, context.orgId) }); }
     if (action === 'sync_posts') {
-      requireShowcaseManagement(context);
+      requireInstagramInboxView(context);
       const accountId = text(body?.accountId);
       const account = (await rest(url, serviceKey, `instagram_accounts?id=eq.${encodeURIComponent(accountId)}&provider_id=eq.${encodeURIComponent(provider.id)}&org_id=eq.${encodeURIComponent(context.orgId)}&select=provider_account_id`))?.[0];
       if (!account?.provider_account_id) throw new Error('پیج انتخاب‌شده برای این اتصال پیدا نشد.');
+      if (body?.automatic === true) {
+        const latestMedia = (await rest(url, serviceKey, `instagram_social_media?org_id=eq.${encodeURIComponent(context.orgId)}&account_id=eq.${encodeURIComponent(accountId)}&select=last_synced_at&order=last_synced_at.desc&limit=1`))?.[0];
+        const syncedAt = Date.parse(text(latestMedia?.last_synced_at));
+        if (Number.isFinite(syncedAt) && Date.now() - syncedAt < 5 * 60 * 1000) return json(200, { success: true, queued: false, skipped: true });
+      }
       const result = await syncPosts(provider, account, Array.isArray(body?.fields) ? body.fields.map(text).filter(Boolean) : []);
       return json(200, { success: true, queued: true, result });
     }

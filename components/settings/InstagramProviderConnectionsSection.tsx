@@ -25,6 +25,7 @@ type Provider = {
   webhookUrl: string;
   redirectUrl: string;
   domain: string;
+  lastWebhook?: WebhookEventDiagnostic | null;
   accounts: ProviderAccount[];
 };
 type CatalogOption = { id: string; title: string };
@@ -216,9 +217,9 @@ const InstagramProviderConnectionsSection: React.FC = () => {
             <div className="rounded-lg bg-slate-50 p-2 dark:bg-white/5"><span className="text-gray-500">آدرس بازگشت: </span><span dir="ltr">{provider.redirectUrl || 'ثبت نشده'}</span><Tooltip title="کپی آدرس بازگشت"><Button type="text" size="small" icon={<CopyOutlined />} onClick={() => void copy(provider.redirectUrl, 'آدرس بازگشت', message)} /></Tooltip></div>
             <div className="rounded-lg bg-slate-50 p-2 dark:bg-white/5 md:col-span-2"><span className="text-gray-500">Webhook: </span><span dir="ltr" className="break-all">{provider.webhookUrl}</span><Tooltip title="کپی آدرس وب‌هوک"><Button type="text" size="small" icon={<CopyOutlined />} onClick={() => void copy(provider.webhookUrl, 'آدرس وب‌هوک', message)} /></Tooltip></div>
           </div>
-          {webhookDiagnostics[provider.id] ? <div className="mt-3 rounded-xl border border-slate-200 p-3 text-xs dark:border-slate-700">
+          {webhookDiagnostics[provider.id] || provider.lastWebhook ? <div className="mt-3 rounded-xl border border-slate-200 p-3 text-xs dark:border-slate-700">
             <div className="mb-2 font-medium">وضعیت دریافت وب‌هوک</div>
-            {webhookDiagnostics[provider.id].length === 0 ? <div className="text-gray-500">هنوز رویدادی دریافت نشده است. در این حالت ثبت آدرس وب‌هوک در سرویس‌دهنده و دسترسی عمومی آن را بررسی کنید.</div> : <div className="space-y-2">{webhookDiagnostics[provider.id].map((event, index) => <div key={`${event.received_at || index}-${event.event_type || ''}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-slate-50 px-2 py-1.5 dark:bg-white/5"><span>نوع: <span dir="ltr">{event.event_type || 'unknown'}</span></span><Tag color={event.processing_status === 'failed' ? 'error' : event.processing_status === 'processed' ? 'success' : 'default'}>{webhookStatusLabel(event.processing_status)}</Tag><span className="text-gray-500">دریافت: {formatDateTime(event.received_at)}</span>{event.error_message ? <span className="w-full text-red-600 dark:text-red-300">خطا: {event.error_message}</span> : null}</div>)}</div>}
+            {(() => { const events = webhookDiagnostics[provider.id] || (provider.lastWebhook ? [provider.lastWebhook] : []); return events.length === 0 ? <div className="text-gray-500">هنوز رویدادی دریافت نشده است. در این حالت ثبت آدرس وب‌هوک در سرویس‌دهنده و دسترسی عمومی آن را بررسی کنید.</div> : <div className="space-y-2">{events.map((event, index) => <div key={`${event.received_at || index}-${event.event_type || ''}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-slate-50 px-2 py-1.5 dark:bg-white/5"><span>نوع: <span dir="ltr">{event.event_type || 'unknown'}</span></span><Tag color={event.processing_status === 'failed' ? 'error' : event.processing_status === 'processed' ? 'success' : 'default'}>{webhookStatusLabel(event.processing_status)}</Tag><span className="text-gray-500">دریافت: {formatDateTime(event.received_at)}</span>{event.error_message ? <span className="w-full text-red-600 dark:text-red-300">خطا: {event.error_message}</span> : null}</div>)}</div>; })()}
           </div> : null}
           <Table
             className="mt-3"
