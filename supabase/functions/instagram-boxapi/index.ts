@@ -152,6 +152,16 @@ const listProviders = async (request: Request, url: string, serviceKey: string, 
   return json(200, { success: true, supportedProviders: listInstagramProviders(), providers: providers.map((row: any) => ({ ...providerSummary(row, request), accounts: accounts.filter((account: any) => account.provider_id === row.id) })) });
 };
 
+const webhookDiagnostics = async (url: string, serviceKey: string, context: any, providerId: string) => {
+  requireConnectionManagement(context);
+  if (!providerId) throw new Error('اتصال سرویس‌دهنده را انتخاب کنید.');
+  const provider = (await rest(url, serviceKey, `instagram_providers?id=eq.${encodeURIComponent(providerId)}&org_id=eq.${encodeURIComponent(context.orgId)}&select=id`))?.[0];
+  if (!provider) throw new Error('اتصال سرویس‌دهنده پیدا نشد.');
+  // بدنهٔ وب‌هوک ممکن است اطلاعات مخاطب داشته باشد؛ فقط وضعیت‌های قابل‌نمایش به مدیر اتصال برگردانده می‌شوند.
+  const events = await rest(url, serviceKey, `instagram_webhook_events?org_id=eq.${encodeURIComponent(context.orgId)}&provider_id=eq.${encodeURIComponent(providerId)}&select=event_type,processing_status,error_message,received_at,processed_at&order=received_at.desc&limit=10`);
+  return json(200, { success: true, events: Array.isArray(events) ? events : [] });
+};
+
 const syncAccounts = async (provider: any, url: string, serviceKey: string, orgId: string) => {
   const result = await providerRequest(provider, 'sync_accounts');
   const accounts = Array.isArray(result?.data) ? result.data : [];
@@ -320,6 +330,7 @@ const handleWebhook = async (req: Request, url: string, serviceKey: string) => {
   const envelope = Array.isArray(body) ? body[0]?.body || body[0] : body?.body || body;
   const eventId = text(envelope?.event_id || envelope?.id || crypto.randomUUID());
   const eventType = text(envelope?.event_type || envelope?.field || 'unknown');
+  const eventPath = `instagram_webhook_events?org_id=eq.${encodeURIComponent(provider.org_id)}&provider_id=eq.${encodeURIComponent(provider.id)}&provider_event_id=eq.${encodeURIComponent(eventId)}`;
   try {
     await rest(url, serviceKey, 'instagram_webhook_events?on_conflict=provider_id,provider_event_id', {
       method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' },
@@ -328,7 +339,21 @@ const handleWebhook = async (req: Request, url: string, serviceKey: string) => {
     await processMessagingWebhook(provider, envelope, url, serviceKey);
     await processListPostsWebhook(provider, envelope, url, serviceKey);
     await processCommentWebhook(provider, envelope, url, serviceKey);
-  } catch (error) { console.error('instagram webhook event persistence failed', error); }
+    await rest(url, serviceKey, eventPath, {
+      method: 'PATCH', headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({ processing_status: ['messaging', 'list_posts', 'comment', 'comments', 'comment_created'].includes(eventType) ? 'processed' : 'ignored', processed_at: now(), error_message: null }),
+    });
+  } catch (error) {
+    const errorMessage = text(error).slice(0, 1000) || 'خطای نامشخص در پردازش وب‌هوک';
+    console.error('instagram webhook event persistence failed', error);
+    // خطای پردازش نباید باعث retry کور سرویس‌دهنده شود، اما باید برای مدیر اتصال قابل پیگیری بماند.
+    try {
+      await rest(url, serviceKey, eventPath, {
+        method: 'PATCH', headers: { Prefer: 'return=minimal' },
+        body: JSON.stringify({ processing_status: 'failed', processed_at: now(), error_message: errorMessage }),
+      });
+    } catch (statusError) { console.error('instagram webhook failure status persistence failed', statusError); }
+  }
   // دریافت وب‌هوک نباید با پردازش سنگین یا AI مسدود شود. پردازش کامل در runner جدا انجام می‌شود.
   return json(200, { success: true });
 };
@@ -370,6 +395,7 @@ Deno.serve(async (req: Request) => {
       return json(200, { success: true, provider: providerSummary((Array.isArray(saved) ? saved[0] : saved) || { ...existing, ...payload, id: providerId }, req) });
     }
     const providerId = text(body?.providerId);
+    if (action === 'webhook_diagnostics') return await webhookDiagnostics(url, serviceKey, context, providerId);
     if (action === 'list_showcases') {
       const instagramPermission = context.permissions?.instagram_conversations || {};
       const saasAdmin = context.permissions?.__saas_admin || {};

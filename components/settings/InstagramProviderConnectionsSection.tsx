@@ -29,6 +29,7 @@ type Provider = {
 };
 type CatalogOption = { id: string; title: string };
 type SupportedProvider = { key: string; label: string; defaultBaseUrl?: string; apiKeyLabel?: string; apiBaseUrlRequired?: boolean; apiBaseUrlPlaceholder?: string };
+type WebhookEventDiagnostic = { event_type?: string; processing_status?: 'received' | 'processed' | 'ignored' | 'failed'; error_message?: string | null; received_at?: string | null; processed_at?: string | null };
 
 const copy = async (value: string, label: string, message: any) => {
   if (!String(value || '').trim()) return message.warning(`${label} آماده نیست.`);
@@ -54,6 +55,8 @@ const InstagramProviderConnectionsSection: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [connectingId, setConnectingId] = useState<string | null>(null);
+  const [checkingWebhookId, setCheckingWebhookId] = useState<string | null>(null);
+  const [webhookDiagnostics, setWebhookDiagnostics] = useState<Record<string, WebhookEventDiagnostic[]>>({});
   const [modalOpen, setModalOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [settingAccount, setSettingAccount] = useState<ProviderAccount | null>(null);
@@ -146,6 +149,25 @@ const InstagramProviderConnectionsSection: React.FC = () => {
     try { await invoke({ action: 'delete_provider', providerId }); message.success('اتصال و پیج‌های وابسته حذف شد.'); await load(); }
     catch (error) { message.error(toFaErrorMessage(error, 'حذف اتصال ناموفق بود.')); }
   };
+  const checkWebhook = async (providerId: string) => {
+    setCheckingWebhookId(providerId);
+    try {
+      const data = await invoke({ action: 'webhook_diagnostics', providerId });
+      const events = Array.isArray(data.events) ? data.events as WebhookEventDiagnostic[] : [];
+      setWebhookDiagnostics((current) => ({ ...current, [providerId]: events }));
+      if (events.length) message.success('وضعیت آخرین وب‌هوک دریافت شد.');
+      else message.warning('هنوز هیچ وب‌هوکی از این سرویس‌دهنده به سامانه نرسیده است.');
+    } catch (error) { message.error(toFaErrorMessage(error, 'بررسی وب‌هوک ناموفق بود.')); }
+    finally { setCheckingWebhookId(null); }
+  };
+  const formatDateTime = (value?: string | null) => value ? new Intl.DateTimeFormat('fa-IR', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value)) : '—';
+  const webhookStatusLabel = (status?: WebhookEventDiagnostic['processing_status']) => {
+    if (status === 'received') return 'در انتظار پردازش';
+    if (status === 'processed') return 'پردازش شد';
+    if (status === 'ignored') return 'نادیده گرفته شد';
+    if (status === 'failed') return 'خطای پردازش';
+    return 'نامشخص';
+  };
   const openAccountSettings = (account: ProviderAccount) => {
     setSettingAccount(account);
     accountSettingsForm.setFieldsValue({ catalogId: account.settings?.catalog_id || undefined, buttons: account.settings?.default_buttons || [] });
@@ -184,6 +206,7 @@ const InstagramProviderConnectionsSection: React.FC = () => {
             <Space wrap>
               <Button size="small" icon={<LinkOutlined />} loading={connectingId === provider.id} disabled={!provider.isActive || !provider.hasApiKey} onClick={() => void connect(provider.id)}>اتصال پیج</Button>
               <Button size="small" icon={<SyncOutlined />} loading={syncingId === provider.id} disabled={!provider.isActive || !provider.hasApiKey} onClick={() => void sync(provider.id)}>همگام‌سازی پیج‌ها</Button>
+              <Button size="small" loading={checkingWebhookId === provider.id} onClick={() => void checkWebhook(provider.id)}>بررسی وب‌هوک</Button>
               <Button size="small" onClick={() => openEdit(provider)}>ویرایش</Button>
               <Popconfirm title="این اتصال و پیج‌های وابسته حذف شوند؟" okText="حذف" cancelText="انصراف" onConfirm={() => void remove(provider.id)}><Button size="small" danger icon={<DeleteOutlined />}>حذف</Button></Popconfirm>
             </Space>
@@ -193,6 +216,10 @@ const InstagramProviderConnectionsSection: React.FC = () => {
             <div className="rounded-lg bg-slate-50 p-2 dark:bg-white/5"><span className="text-gray-500">آدرس بازگشت: </span><span dir="ltr">{provider.redirectUrl || 'ثبت نشده'}</span><Tooltip title="کپی آدرس بازگشت"><Button type="text" size="small" icon={<CopyOutlined />} onClick={() => void copy(provider.redirectUrl, 'آدرس بازگشت', message)} /></Tooltip></div>
             <div className="rounded-lg bg-slate-50 p-2 dark:bg-white/5 md:col-span-2"><span className="text-gray-500">Webhook: </span><span dir="ltr" className="break-all">{provider.webhookUrl}</span><Tooltip title="کپی آدرس وب‌هوک"><Button type="text" size="small" icon={<CopyOutlined />} onClick={() => void copy(provider.webhookUrl, 'آدرس وب‌هوک', message)} /></Tooltip></div>
           </div>
+          {webhookDiagnostics[provider.id] ? <div className="mt-3 rounded-xl border border-slate-200 p-3 text-xs dark:border-slate-700">
+            <div className="mb-2 font-medium">وضعیت دریافت وب‌هوک</div>
+            {webhookDiagnostics[provider.id].length === 0 ? <div className="text-gray-500">هنوز رویدادی دریافت نشده است. در این حالت ثبت آدرس وب‌هوک در سرویس‌دهنده و دسترسی عمومی آن را بررسی کنید.</div> : <div className="space-y-2">{webhookDiagnostics[provider.id].map((event, index) => <div key={`${event.received_at || index}-${event.event_type || ''}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-slate-50 px-2 py-1.5 dark:bg-white/5"><span>نوع: <span dir="ltr">{event.event_type || 'unknown'}</span></span><Tag color={event.processing_status === 'failed' ? 'error' : event.processing_status === 'processed' ? 'success' : 'default'}>{webhookStatusLabel(event.processing_status)}</Tag><span className="text-gray-500">دریافت: {formatDateTime(event.received_at)}</span>{event.error_message ? <span className="w-full text-red-600 dark:text-red-300">خطا: {event.error_message}</span> : null}</div>)}</div>}
+          </div> : null}
           <Table
             className="mt-3"
             size="small"
