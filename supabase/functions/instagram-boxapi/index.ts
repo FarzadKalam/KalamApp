@@ -101,6 +101,7 @@ const providerRequest = async (provider: any, operationKey: 'sync_accounts' | 'l
   const operation = adapter.operations[operationKey];
   const apiKey = await decryptSecret(text(provider.api_key_encrypted));
   const baseUrl = text(provider?.settings?.base_url || adapter.defaultBaseUrl).replace(/\/+$/, '');
+  if (adapter.apiBaseUrlRequired && !baseUrl) throw new Error(`آدرس پایهٔ API ${adapter.label} را در تنظیمات اتصال وارد کنید.`);
   const response = await fetch(`${baseUrl}${operation.path}`, {
     method: operation.method,
     headers: { 'Content-Type': 'application/json', [adapter.apiKeyHeader]: apiKey },
@@ -108,7 +109,10 @@ const providerRequest = async (provider: any, operationKey: 'sync_accounts' | 'l
   });
   const raw = await response.text();
   const data = parse(raw);
-  if (!response.ok || data?.success === false) throw new Error(text(data?.message || raw) || `خطای ${adapter.label}: ${response.status}`);
+  if (!response.ok || data?.success === false) {
+    if (/^\s*<!doctype html|<title>\s*page not found/i.test(raw)) throw new Error(`آدرس پایهٔ API ${adapter.label} معتبر نیست؛ سرویس به‌جای پاسخ API، صفحهٔ وب برگرداند.`);
+    throw new Error(text(data?.message || raw) || `خطای ${adapter.label}: ${response.status}`);
+  }
   return data;
 };
 const publicBase = (req: Request) => {
@@ -137,6 +141,7 @@ const providerSummary = (row: any, request: Request) => ({
   webhookUrl: `${publicBase(request)}/functions/v1/instagram-boxapi?provider=${encodeURIComponent(row.id)}&secret=${encodeURIComponent(row.webhook_secret)}`,
   redirectUrl: text(row?.settings?.redirect_url || ''),
   domain: text(row?.settings?.domain || ''),
+  apiBaseUrl: text(row?.settings?.base_url || '') === 'https://boxapi.ir' ? '' : text(row?.settings?.base_url || ''),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -355,7 +360,11 @@ Deno.serve(async (req: Request) => {
       const providerKey = text(body?.providerKey || existing?.provider_key);
       const adapter = getInstagramProvider(providerKey);
       if (!adapter) throw new Error('سرویس‌دهندهٔ انتخاب‌شده پشتیبانی نمی‌شود.');
-      const settings = { ...(existing?.settings || {}), base_url: text(body?.baseUrl || existing?.settings?.base_url || adapter.defaultBaseUrl), domain: text(body?.domain || existing?.settings?.domain), redirect_url: text(body?.redirectUrl || existing?.settings?.redirect_url) };
+      const requestedBaseUrl = text(body?.baseUrl);
+      const existingBaseUrl = text(existing?.settings?.base_url) === 'https://boxapi.ir' ? '' : text(existing?.settings?.base_url);
+      const baseUrl = requestedBaseUrl || existingBaseUrl || adapter.defaultBaseUrl;
+      if (body?.isActive === true && adapter.apiBaseUrlRequired && !baseUrl) throw new Error(`آدرس پایهٔ API ${adapter.label} را وارد کنید.`);
+      const settings = { ...(existing?.settings || {}), base_url: baseUrl, domain: text(body?.domain || existing?.settings?.domain), redirect_url: text(body?.redirectUrl || existing?.settings?.redirect_url) };
       const payload = { org_id: context.orgId, provider_key: adapter.key, name, settings, is_active: body?.isActive === true && Boolean(text(existing?.api_key_encrypted) || apiKey), updated_at: now(), ...(existing ? {} : { created_by: context.userId }), ...(apiKey ? { api_key_encrypted: await encryptSecret(apiKey) } : {}) };
       const saved = await rest(url, serviceKey, providerId ? `instagram_providers?id=eq.${encodeURIComponent(providerId)}&org_id=eq.${encodeURIComponent(context.orgId)}` : 'instagram_providers', { method: providerId ? 'PATCH' : 'POST', body: JSON.stringify(payload) });
       return json(200, { success: true, provider: providerSummary((Array.isArray(saved) ? saved[0] : saved) || { ...existing, ...payload, id: providerId }, req) });

@@ -19,6 +19,7 @@ type Provider = {
   name: string;
   providerKey: string;
   providerLabel?: string;
+  apiBaseUrl?: string;
   isActive: boolean;
   hasApiKey: boolean;
   webhookUrl: string;
@@ -27,7 +28,7 @@ type Provider = {
   accounts: ProviderAccount[];
 };
 type CatalogOption = { id: string; title: string };
-type SupportedProvider = { key: string; label: string; apiKeyLabel?: string };
+type SupportedProvider = { key: string; label: string; apiKeyLabel?: string; apiBaseUrlRequired?: boolean; apiBaseUrlPlaceholder?: string };
 
 const copy = async (value: string, label: string, message: any) => {
   if (!String(value || '').trim()) return message.warning(`${label} آماده نیست.`);
@@ -94,7 +95,7 @@ const InstagramProviderConnectionsSection: React.FC = () => {
   };
   const openEdit = (provider: Provider) => {
     setEditing(provider);
-    form.setFieldsValue({ provider: provider.providerKey, name: provider.name, apiKey: '', isActive: provider.isActive });
+    form.setFieldsValue({ provider: provider.providerKey, name: provider.name, apiKey: '', baseUrl: provider.apiBaseUrl || '', isActive: provider.isActive });
     setModalOpen(true);
   };
   const save = async () => {
@@ -107,13 +108,14 @@ const InstagramProviderConnectionsSection: React.FC = () => {
         providerKey: value.provider,
         name: value.name,
         apiKey: value.apiKey,
+        baseUrl: value.baseUrl,
         isActive: editing ? value.isActive : false,
         domain: editing?.domain || window.location.origin,
         redirectUrl: editing?.redirectUrl || `${window.location.origin}/settings`,
       });
       if (!editing && saved?.provider) {
         setEditing(saved.provider as Provider);
-        form.setFieldsValue({ provider: saved.provider.providerKey, name: saved.provider.name, apiKey: '', isActive: false });
+        form.setFieldsValue({ provider: saved.provider.providerKey, name: saved.provider.name, apiKey: '', baseUrl: saved.provider.apiBaseUrl || '', isActive: false });
         message.success(`آدرس وب‌هوک ساخته شد. آن را در ${providerLabel(saved.provider.providerKey)} ثبت کنید و سپس اتصال را فعال کنید.`);
       } else {
         setModalOpen(false);
@@ -220,6 +222,9 @@ const InstagramProviderConnectionsSection: React.FC = () => {
               <CopyOnlyTransferLink label="آدرس بازگشت پس از ورود اینستاگرام" value={editing.redirectUrl || `${window.location.origin}/settings`} message={message} />
               <CopyOnlyTransferLink label="آدرس وب‌هوک" value={editing.webhookUrl} message={message} />
             </div>
+            <Form.Item name="baseUrl" label={`آدرس پایهٔ API ${providerLabel(editing.providerKey)}`} rules={[{ required: providerDefinition(editing.providerKey)?.apiBaseUrlRequired === true, type: 'url', message: 'آدرس معتبر API را وارد کنید.' }]} extra="این آدرسِ فنی را از پنل یا پشتیبانی سرویس‌دهنده بگیرید؛ دامنهٔ سایت معرفی سرویس نیست.">
+              <Input dir="ltr" placeholder={providerDefinition(editing.providerKey)?.apiBaseUrlPlaceholder || 'https://api.example.com'} />
+            </Form.Item>
             <Form.Item name="apiKey" label={providerDefinition(editing.providerKey)?.apiKeyLabel || 'کلید API سرویس‌دهنده'} extra="اگر کلید تغییر نکرده، این فیلد را خالی بگذارید."><Input.Password autoComplete="new-password" /></Form.Item>
             <Form.Item name="isActive" label="فعال‌سازی اتصال" valuePropName="checked"><Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" /></Form.Item>
           </>}

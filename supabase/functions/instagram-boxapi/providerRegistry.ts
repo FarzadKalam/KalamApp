@@ -7,6 +7,8 @@ export type InstagramProviderDefinition = {
   key: string;
   label: string;
   defaultBaseUrl: string;
+  apiBaseUrlRequired: boolean;
+  apiBaseUrlPlaceholder: string;
   apiKeyHeader: string;
   apiKeyLabel: string;
   operations: Record<'sync_accounts' | 'list_posts' | 'send_message' | 'reply_comment' | 'get_connect_url', InstagramProviderOperation>;
@@ -18,7 +20,10 @@ export const instagramProviderRegistry: Record<string, InstagramProviderDefiniti
   boxapi: {
     key: 'boxapi',
     label: 'BoxAPI',
-    defaultBaseUrl: 'https://boxapi.ir',
+    // مستند رسمی مسیرها را می‌دهد اما دامنهٔ API را تعیین نمی‌کند؛ این مقدار باید از خود سرویس‌دهنده دریافت شود.
+    defaultBaseUrl: '',
+    apiBaseUrlRequired: true,
+    apiBaseUrlPlaceholder: 'https://api.example.com',
     apiKeyHeader: 'X-Api-Key',
     apiKeyLabel: 'کلید API BoxAPI',
     operations: {
@@ -31,6 +36,6 @@ export const instagramProviderRegistry: Record<string, InstagramProviderDefiniti
   },
 };
 
-export const listInstagramProviders = () => Object.values(instagramProviderRegistry).map(({ key, label, apiKeyLabel }) => ({ key, label, apiKeyLabel }));
+export const listInstagramProviders = () => Object.values(instagramProviderRegistry).map(({ key, label, apiKeyLabel, apiBaseUrlRequired, apiBaseUrlPlaceholder }) => ({ key, label, apiKeyLabel, apiBaseUrlRequired, apiBaseUrlPlaceholder }));
 
 export const getInstagramProvider = (key: string) => instagramProviderRegistry[String(key || '').trim()];
