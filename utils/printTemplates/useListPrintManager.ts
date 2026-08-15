@@ -27,6 +27,9 @@ import {
   prepareGeneratedPdfWindow,
   printAsPdf,
   shouldUseGeneratedPdfPrint,
+  showPreparedPdfErrorState,
+  waitForPrintRenderCommit,
+  waitForPrintPrerequisite,
   type PdfGenerationProgress,
 } from './printAsPdf';
 import { normalizeRenderedImages } from './normalizeRenderedImages';
@@ -899,14 +902,21 @@ export const useListPrintManager = ({
 
   const handlePrint = useCallback(async () => {
     if (!selectedTemplateId) return;
-    const latestAssigneeDirectory = await fetchAssigneeDirectory(supabase).catch(() => null);
+    const printTitle = getPrintOutputName();
+    let printAbortedByPrerequisite = false;
+    const latestAssigneeDirectory = await waitForPrintPrerequisite(fetchAssigneeDirectory(supabase)).catch((error) => {
+      const targetWindow = reservedPrintWindowRef.current;
+      reservedPrintWindowRef.current = null;
+      showPreparedPdfErrorState(targetWindow, printTitle, error);
+      printAbortedByPrerequisite = Boolean(targetWindow);
+      console.error('List print prerequisites could not be loaded', error);
+      return null;
+    });
+    if (printAbortedByPrerequisite) return;
     if (latestAssigneeDirectory) {
       setAssigneeDirectory(latestAssigneeDirectory);
-      await new Promise<void>((resolve) => {
-        window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
-      });
+      await waitForPrintRenderCommit();
     }
-    const printTitle = getPrintOutputName();
     const pageSize = `${selectedStoredTemplate?.paperSize || 'A4'} ${
       selectedStoredTemplate?.orientation === 'landscape' ? 'landscape' : 'portrait'
     }`;
@@ -923,7 +933,7 @@ export const useListPrintManager = ({
         title: printTitle,
         filename: printTitle,
         targetWindow,
-        openInPdfViewer: Boolean(nativePrintFlowHtml),
+        openInPdfViewer: true,
       }).catch((error) => {
         console.error('Generated PDF print failed', error);
       });
@@ -946,12 +956,10 @@ export const useListPrintManager = ({
       throw new Error('print_template_missing');
     }
 
-    const latestAssigneeDirectory = await fetchAssigneeDirectory(supabase).catch(() => null);
+    const latestAssigneeDirectory = await waitForPrintPrerequisite(fetchAssigneeDirectory(supabase)).catch(() => null);
     if (latestAssigneeDirectory) {
       setAssigneeDirectory(latestAssigneeDirectory);
-      await new Promise<void>((resolve) => {
-        window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
-      });
+      await waitForPrintRenderCommit();
     }
 
     const printTitle = getPrintOutputName();

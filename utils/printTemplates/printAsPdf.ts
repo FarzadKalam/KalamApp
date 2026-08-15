@@ -21,6 +21,7 @@ export interface PdfGenerationProgress {
 const FUNCTION_PATH = '/functions/v1/render-pdf';
 const PREPARED_WINDOW_NAME_PREFIX = 'kalamapp-pdf-target';
 const PDF_REQUEST_TIMEOUT_MS = 135_000;
+const PRINT_PREREQUISITE_TIMEOUT_MS = 15_000;
 
 const escapeHtml = (value: string) =>
   String(value || '')
@@ -35,9 +36,11 @@ const getSourceHtml = ({ sourceHtml, sourceNode }: PrintAsPdfOptions) => {
 };
 
 export const shouldUseGeneratedPdfPrint = () => {
-  if (typeof navigator === 'undefined') return false;
-  const ua = navigator.userAgent || '';
-  return /Android|iPhone|iPad|iPod/i.test(ua);
+  // The browser print engines are not layout-compatible across desktop and
+  // mobile. All template-printing entry points therefore use the same
+  // server-rendered PDF, which makes the output independent of device and
+  // browser.
+  return typeof window !== 'undefined';
 };
 
 const ensureTargetWindowName = (targetWindow: Window) => {
@@ -67,26 +70,33 @@ const writePreparedWindowState = (targetWindow: Window, title?: string) => {
     <style>
       body {
         margin: 0;
-        min-height: 100vh;
+        min-height: 100dvh;
         display: grid;
         place-items: center;
         background: #ffffff;
         color: #0f172a;
         font-family: Peyda, Tahoma, Arial, sans-serif;
-        padding: 24px;
+        padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+        box-sizing: border-box;
         text-align: center;
       }
       .print-pdf-loading {
         display: grid;
         gap: 10px;
-        max-width: 420px;
+        width: min(100%, 440px);
+        padding: 22px;
+        border: 1px solid #e2e8f0;
+        border-radius: 18px;
+        box-sizing: border-box;
+        box-shadow: 0 12px 32px rgba(15,23,42,.08);
       }
       .print-pdf-loading strong {
-        font-size: 16px;
+        font-size: clamp(17px, 5vw, 21px);
       }
       .print-pdf-loading span {
         color: #475569;
-        font-size: 14px;
+        font-size: clamp(13px, 3.8vw, 15px);
+        line-height: 1.85;
       }
       .print-pdf-progress-track {
         width: 100%;
@@ -101,6 +111,9 @@ const writePreparedWindowState = (targetWindow: Window, title?: string) => {
         border-radius: inherit;
         background: linear-gradient(90deg, #4f46e5, #0ea5e9);
         transition: width .35s ease;
+      }
+      @media (max-width: 480px) {
+        .print-pdf-loading { padding: 20px 16px; border-radius: 16px; }
       }
     </style>
   </head>
@@ -140,9 +153,12 @@ const writeErrorState = (targetWindow: Window | null | undefined, title?: string
 
   try {
     const safeTitle = escapeHtml(title || 'چاپ');
-    const detail = String((error as any)?.message || error || '') === 'pdf_generation_timeout'
+    const errorCode = String((error as any)?.message || error || '');
+    const detail = errorCode === 'pdf_generation_timeout'
       ? 'ساخت PDF بیش از زمان مجاز طول کشید. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.'
-      : 'لطفاً دوباره تلاش کنید.';
+      : errorCode === 'print_prerequisite_timeout'
+        ? 'اطلاعات لازم برای چاپ به‌موقع دریافت نشد. لطفاً اتصال اینترنت را بررسی و دوباره تلاش کنید.'
+        : 'لطفاً دوباره تلاش کنید.';
     targetWindow.document.open();
     targetWindow.document.write(`<!doctype html>
 <html lang="fa" dir="rtl">
@@ -153,19 +169,25 @@ const writeErrorState = (targetWindow: Window | null | undefined, title?: string
     <style>
       body {
         margin: 0;
-        min-height: 100vh;
+        min-height: 100dvh;
         display: grid;
         place-items: center;
         background: #ffffff;
         color: #991b1b;
         font-family: Peyda, Tahoma, Arial, sans-serif;
-        padding: 24px;
+        padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+        box-sizing: border-box;
         text-align: center;
       }
       .print-pdf-error {
         display: grid;
         gap: 10px;
-        max-width: 420px;
+        width: min(100%, 440px);
+        padding: 22px;
+        border: 1px solid #fecaca;
+        border-radius: 18px;
+        box-sizing: border-box;
+        line-height: 1.9;
       }
     </style>
   </head>
@@ -181,6 +203,66 @@ const writeErrorState = (targetWindow: Window | null | undefined, title?: string
     console.error('Unable to write error state to prepared print window', error);
   }
 };
+
+/** Makes an already opened mobile/desktop PDF tab leave its loading state. */
+export const showPreparedPdfErrorState = (targetWindow: Window | null | undefined, title?: string, error?: unknown) => {
+  writeErrorState(targetWindow, title, error);
+};
+
+/**
+ * A print tab is opened synchronously to avoid mobile popup blocking.  Its
+ * prerequisites must never be allowed to keep that tab on the loading screen
+ * forever when a network request is stalled.
+ */
+export const waitForPrintPrerequisite = async <T>(
+  task: PromiseLike<T>,
+  timeoutMs = PRINT_PREREQUISITE_TIMEOUT_MS,
+): Promise<T> => new Promise<T>((resolve, reject) => {
+  const timeoutId = globalThis.setTimeout(
+    () => reject(new Error('print_prerequisite_timeout')),
+    timeoutMs,
+  );
+
+  Promise.resolve(task).then(
+    (result) => {
+      globalThis.clearTimeout(timeoutId);
+      resolve(result);
+    },
+    (error) => {
+      globalThis.clearTimeout(timeoutId);
+      reject(error);
+    },
+  );
+});
+
+/**
+ * Lets React commit data loaded immediately before serialization. The timeout
+ * is deliberately retained because opening a PDF tab can background the
+ * source page on mobile and pause requestAnimationFrame callbacks.
+ */
+export const waitForPrintRenderCommit = () => new Promise<void>((resolve) => {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    resolve();
+    return;
+  }
+
+  let completed = false;
+  const finish = () => {
+    if (completed) return;
+    completed = true;
+    window.clearTimeout(fallbackTimeout);
+    resolve();
+  };
+  const fallbackTimeout = window.setTimeout(finish, 320);
+
+  if (document.visibilityState === 'hidden') {
+    return;
+  }
+
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(finish);
+  });
+});
 
 const writeSuccessState = ({
   targetWindow,
@@ -211,19 +293,24 @@ const writeSuccessState = ({
     <style>
       body {
         margin: 0;
-        min-height: 100vh;
+        min-height: 100dvh;
         display: flex;
         flex-direction: column;
         background: #ffffff;
         color: #0f172a;
         font-family: Peyda, Tahoma, Arial, sans-serif;
-        padding: ${showPdfPreview ? '0' : '24px'};
+        padding: ${showPdfPreview ? '0' : 'max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left))'};
+        box-sizing: border-box;
         text-align: center;
       }
       .print-pdf-success {
         display: grid;
         gap: 12px;
-        max-width: 420px;
+        width: min(100%, 440px);
+        padding: 22px;
+        border: 1px solid #e2e8f0;
+        border-radius: 18px;
+        box-sizing: border-box;
       }
       .print-pdf-success strong {
         font-size: 16px;
@@ -257,6 +344,12 @@ const writeSuccessState = ({
       .print-pdf-preview-toolbar strong { font-size: 14px; }
       .print-pdf-preview-toolbar a { white-space: nowrap; }
       .print-pdf-preview-frame { width: 100%; flex: 1 1 auto; min-height: calc(100vh - 58px); border: 0; }
+      @media (max-width: 480px) {
+        .print-pdf-preview-toolbar { align-items: stretch; flex-direction: column; padding: 12px 16px; }
+        .print-pdf-preview-toolbar a { width: 100%; box-sizing: border-box; }
+        .print-pdf-preview-frame { min-height: calc(100dvh - 114px); }
+        .print-pdf-success { padding: 20px 16px; }
+      }
     </style>
   </head>
   <body>

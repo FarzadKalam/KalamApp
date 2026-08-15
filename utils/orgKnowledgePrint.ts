@@ -195,6 +195,7 @@ export const printKnowledgeHtml = async (args: {
       title: args.title,
       filename: sanitizePrintFilename(args.title),
       targetWindow,
+      openInPdfViewer: true,
     });
     return;
   }

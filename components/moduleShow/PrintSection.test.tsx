@@ -26,6 +26,15 @@ const setDesktopViewport = () => {
   window.dispatchEvent(new Event('resize'));
 };
 
+const setMobileViewport = () => {
+  Object.defineProperty(window, 'innerWidth', {
+    configurable: true,
+    writable: true,
+    value: 390,
+  });
+  window.dispatchEvent(new Event('resize'));
+};
+
 describe('PrintSection', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -237,6 +246,43 @@ describe('PrintSection', () => {
       expect(finalPdfFrame).toHaveAttribute('src', 'blob:final-print-preview');
       expect(screen.queryByTestId('print-card')).not.toBeInTheDocument();
       expect(screen.getByText('PDF نهایی')).toBeInTheDocument();
+    } finally {
+      Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
+      Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL });
+    }
+  });
+
+  it('opens the same final PDF in the phone viewer instead of embedding a different layout', async () => {
+    setMobileViewport();
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn(() => 'blob:final-print-preview-mobile'),
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+
+    try {
+      render(
+        <PrintSection
+          isPrintModalOpen
+          onClose={vi.fn()}
+          onPrint={vi.fn()}
+          onPreparePrint={vi.fn()}
+          onGenerateFinalPdfPreview={vi.fn(async () => ({ blob: new Blob(['%PDF-mobile-final']) }))}
+          printTemplates={templates}
+          selectedTemplateId="custom:a4"
+          onSelectTemplate={vi.fn()}
+          renderPrintCard={() => <div data-testid="print-card">پیش‌نمایش قدیمی</div>}
+          printMode={false}
+        />
+      );
+
+      const openFinalPdf = await screen.findByRole('link', { name: 'نمایش تمام‌صفحه PDF نهایی' });
+      expect(openFinalPdf).toHaveAttribute('href', 'blob:final-print-preview-mobile');
+      expect(openFinalPdf).toHaveAttribute('target', '_blank');
+      expect(screen.queryByTitle('پیش‌نمایش نهایی PDF')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'باز کردن PDF نهایی' })).toBeInTheDocument();
     } finally {
       Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
       Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL });

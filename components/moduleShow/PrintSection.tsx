@@ -444,7 +444,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
               <OkBtn />
             </div>
           )}
-          okText={isMobile && onPreparePrint ? 'ذخیره PDF' : 'چاپ'}
+          okText={isMobile && onPreparePrint ? 'باز کردن PDF نهایی' : 'چاپ'}
           cancelText="انصراف"
           width={isMobile ? '100vw' : 'min(1440px, calc(100vw - 32px))'}
           destroyOnHidden
@@ -685,7 +685,18 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                                 <Button onClick={() => { void loadFinalPdfPreview(true); }}>تلاش دوباره</Button>
                               </div>
                             ) : finalPdfPreviewUrl ? (
-                              <iframe src={finalPdfPreviewUrl} title="پیش‌نمایش نهایی PDF" style={{ width: '100%', height: isMobile ? 'calc(100vh - 290px)' : 'calc(100vh - 275px)', minHeight: isMobile ? 440 : 620, border: 0, background: '#fff' }} />
+                              isMobile ? (
+                                <div style={{ maxWidth: 440, margin: '32px auto', padding: '20px 16px', border: '1px solid #e2e8f0', borderRadius: 16, textAlign: 'center', background: '#fff' }}>
+                                  <p style={{ margin: '0 0 16px', color: '#475569', lineHeight: 1.9 }}>
+                                    پیش‌نمایش و خروجی نهایی یک فایل هستند. برای نمایش کامل، PDF را در نمایشگر خود گوشی باز کنید.
+                                  </p>
+                                  <Button type="primary" block href={finalPdfPreviewUrl} target="_blank" rel="noopener noreferrer">
+                                    نمایش تمام‌صفحه PDF نهایی
+                                  </Button>
+                                </div>
+                              ) : (
+                                <iframe src={finalPdfPreviewUrl} title="پیش‌نمایش نهایی PDF" style={{ width: '100%', height: 'calc(100vh - 275px)', minHeight: 620, border: 0, background: '#fff' }} />
+                              )
                             ) : null}
                           </div>
                         ) : <div className="print-preview-canvas">

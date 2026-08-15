@@ -1,6 +1,6 @@
 import { buildTree, type RoleNode } from './orgChartHelpers';
 import { printInIframe } from '../../utils/printTemplates/printInIframe';
-import { printAsPdf, shouldUseGeneratedPdfPrint } from '../../utils/printTemplates/printAsPdf';
+import { prepareGeneratedPdfWindow, printAsPdf, shouldUseGeneratedPdfPrint } from '../../utils/printTemplates/printAsPdf';
 
 const NODE_W = 148;
 const CONN_H = 18;
@@ -107,11 +107,14 @@ export async function printOrgChart(
   `;
 
   if (shouldUseGeneratedPdfPrint()) {
+    const title = 'چارت سازمانی';
     await printAsPdf({
       sourceHtml,
       pageSize: 'A4 landscape',
-      title: 'چارت سازمانی',
+      title,
       filename: 'org-chart.pdf',
+      targetWindow: prepareGeneratedPdfWindow(title, { force: true }),
+      openInPdfViewer: true,
     });
   } else {
     await printInIframe({

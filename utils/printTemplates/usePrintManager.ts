@@ -31,7 +31,16 @@ import {
   type StoredPrintTemplate,
 } from './store';
 import { buildPrintOutputName } from './outputName';
-import { generatePdfBlob, prepareGeneratedPdfWindow, printAsPdf, shouldUseGeneratedPdfPrint, type PdfGenerationProgress } from './printAsPdf';
+import {
+  generatePdfBlob,
+  prepareGeneratedPdfWindow,
+  printAsPdf,
+  shouldUseGeneratedPdfPrint,
+  showPreparedPdfErrorState,
+  waitForPrintRenderCommit,
+  waitForPrintPrerequisite,
+  type PdfGenerationProgress,
+} from './printAsPdf';
 import { normalizeRenderedImages } from './normalizeRenderedImages';
 import type { createPrintPerformanceTracker } from './printPerformance';
 import { printInIframe } from './printInIframe';
@@ -1112,15 +1121,6 @@ export const usePrintManager = ({
     return companySettingsRequestRef.current;
   }, []);
 
-  const waitForPrintRenderCommit = useCallback(
-    () => new Promise<void>((resolve) => {
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => resolve());
-      });
-    }),
-    []
-  );
-
   const getActivePrintBodyMeasurement = useCallback(() => {
     const visibleBody = previewPrintRootRef.current?.querySelector<HTMLElement>(
       '.print-template-page .print-template-body-inner'
@@ -1242,20 +1242,33 @@ export const usePrintManager = ({
 
   const handlePrint = useCallback(async () => {
     if (!selectedTemplateId) return;
-    const [companySettingsResult, latestAssigneeDirectory] = await Promise.all([
-      loadPrintCompanySettings(),
-      fetchAssigneeDirectory(supabase).catch(() => null),
-    ]);
+    const printTitle = getPrintOutputName();
+    let companySettingsResult: Awaited<ReturnType<typeof loadPrintCompanySettings>>;
+    let latestAssigneeDirectory: Awaited<ReturnType<typeof fetchAssigneeDirectory>> | null;
+    try {
+      [companySettingsResult, latestAssigneeDirectory] = await Promise.all([
+        waitForPrintPrerequisite(loadPrintCompanySettings()),
+        waitForPrintPrerequisite(fetchAssigneeDirectory(supabase)).catch(() => null),
+      ]);
+    } catch (error) {
+      const targetWindow = reservedPrintWindowRef.current;
+      reservedPrintWindowRef.current = null;
+      showPreparedPdfErrorState(targetWindow, printTitle, error);
+      console.error('Print prerequisites could not be loaded', error);
+      return;
+    }
     if (latestAssigneeDirectory) setAssigneeDirectory(latestAssigneeDirectory);
     const requiresCompanySettings = moduleId === 'invoices' || moduleId === 'purchase_invoices';
     if (requiresCompanySettings && companySettingsResult?.error) {
       console.error('Invoice print skipped because company settings could not be loaded', companySettingsResult.error);
+      const targetWindow = reservedPrintWindowRef.current;
+      reservedPrintWindowRef.current = null;
+      showPreparedPdfErrorState(targetWindow, printTitle, companySettingsResult.error);
       return;
     }
     // `renderedCustomTemplate` is a memoized static-HTML snapshot. Give React
     // a committed frame after the company state update before serializing it.
     await waitForPrintRenderCommit();
-    const printTitle = getPrintOutputName();
 
     const preparedMeasurement = measureCurrentCustomTemplatePages();
     let measuredPageCount =
@@ -1309,7 +1322,9 @@ export const usePrintManager = ({
         title: printTitle,
         filename: printTitle,
         targetWindow,
-        openInPdfViewer: Boolean(nativePrintFlowHtml) || isCatalogFullPageTemplate,
+        // Desktop and mobile must both display the exact PDF produced by the
+        // server; never let one platform fall back to a browser HTML print.
+        openInPdfViewer: true,
       }).catch((error) => {
         console.error('Generated PDF print failed', error);
       });
@@ -1331,7 +1346,6 @@ export const usePrintManager = ({
     moduleId,
     renderedPageCount,
     selectedTemplateId,
-    waitForPrintRenderCommit,
   ]);
 
   const generateCurrentPdfBlob = useCallback(async (options?: {
@@ -1342,7 +1356,7 @@ export const usePrintManager = ({
     if (!selectedTemplateId) {
       throw new Error('print_template_missing');
     }
-    const companySettingsResult = await loadPrintCompanySettings();
+    const companySettingsResult = await waitForPrintPrerequisite(loadPrintCompanySettings());
     const requiresCompanySettings = moduleId === 'invoices' || moduleId === 'purchase_invoices';
     if (requiresCompanySettings && companySettingsResult?.error) {
       throw companySettingsResult.error;
@@ -1424,7 +1438,6 @@ export const usePrintManager = ({
     moduleId,
     renderedPageCount,
     selectedTemplateId,
-    waitForPrintRenderCommit,
   ]);
 
   useEffect(() => {
