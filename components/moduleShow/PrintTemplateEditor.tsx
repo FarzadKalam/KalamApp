@@ -113,6 +113,19 @@ const normalizeTableMarkup = (html: string) => {
     if (!root) return html;
 
     root.querySelectorAll('table').forEach((table) => {
+      const tableStyle = String(table.getAttribute('style') || '');
+      const declaredTableWidth = extractStyleValue(tableStyle, ['width']);
+      const tableWidthAttribute = String(table.getAttribute('width') || '').trim();
+      // The editor renders every table at 100%, but Tiptap serializes a
+      // resized table as only min-width. Persist the visible default so the
+      // isolated PDF header/footer renderer gets the same geometry.
+      if ((!declaredTableWidth || /^auto$/i.test(declaredTableWidth)) && !tableWidthAttribute) {
+        let fullWidthStyle = setStyleProperty(tableStyle, 'width', '100%');
+        fullWidthStyle = setStyleProperty(fullWidthStyle, 'max-width', '100%');
+        fullWidthStyle = setStyleProperty(fullWidthStyle, 'table-layout', 'fixed');
+        table.setAttribute('style', fullWidthStyle);
+      }
+
       const firstRow = table.querySelector('tr');
       const cells = Array.from(firstRow?.children || []).filter((node) => {
         const tagName = String((node as Element)?.tagName || '').toLowerCase();

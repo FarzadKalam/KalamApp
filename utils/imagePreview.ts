@@ -124,7 +124,28 @@ export const buildImagePreviewUrl = (
 export const buildPrintImageUrl = (
   rawUrl: string | null | undefined,
   preset: Extract<ImagePreviewPreset, 'printLogo' | 'printMap' | 'printHero'> = 'printHero',
-): string => buildImagePreviewUrl(rawUrl, preset, { forceTransform: PRINT_IMAGE_TRANSFORM_ENABLED });
+): string => {
+  const normalized = normalizePublicAssetUrl(rawUrl);
+  if (!normalized || normalized.startsWith('data:') || normalized.startsWith('blob:')) return normalized;
+
+  // The PDF renderer runs on a separate server. Supabase's transformed-image
+  // endpoint is reachable from the browser but is not consistently available
+  // from that renderer, which turns an otherwise valid logo into its alt text.
+  // Use the original public object for every printed asset instead.
+  const parsed = resolveUrl(normalized);
+  if (parsed?.pathname.includes('/storage/v1/render/image/public/')) {
+    parsed.pathname = parsed.pathname.replace('/storage/v1/render/image/public/', '/storage/v1/object/public/');
+    ['width', 'height', 'quality', 'resize', 'format'].forEach((key) => parsed.searchParams.delete(key));
+    return parsed.toString();
+  }
+
+  // Print images deliberately bypass browser-only transformations. Their
+  // displayed size is controlled by the template, so a raw public asset is
+  // both reliable for the PDF renderer and layout-safe.
+  void preset;
+  void PRINT_IMAGE_TRANSFORM_ENABLED;
+  return normalized;
+};
 
 export const buildImageBackgroundStyle = (
   rawUrl: string | null | undefined,

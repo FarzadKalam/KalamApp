@@ -145,8 +145,13 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   const [finalPdfPreviewRevision, setFinalPdfPreviewRevision] = useState(0);
   const finalPdfPreviewCacheRef = useRef(new Map<string, GeneratedPrintPdf & { url: string }>());
   const finalPdfPreviewInFlightRef = useRef(new Map<string, Promise<GeneratedPrintPdf & { url: string }>>());
+  // Only one renderer request may be active for a modal. Some print inputs
+  // (notably asynchronously measured template data) settle in bursts; a
+  // per-key map alone still lets every transient key start its own request.
+  const finalPdfPreviewActiveRequestRef = useRef<Promise<GeneratedPrintPdf & { url: string }> | null>(null);
   const finalPdfPreviewRequestRef = useRef(0);
   const finalPdfPreviewGeneratorRef = useRef(onGenerateFinalPdfPreview);
+  const finalPdfPreviewLoaderRef = useRef<(force?: boolean) => Promise<GeneratedPrintPdf | null>>(async () => null);
   const previewStageRef = useRef<HTMLDivElement | null>(null);
   const pinchDistanceRef = useRef<number | null>(null);
   const [isMobile, setIsMobile] = useState(() => (typeof window !== 'undefined' ? window.innerWidth < 768 : false));
@@ -215,6 +220,29 @@ const PrintSection: React.FC<PrintSectionProps> = ({
       })),
     }),
     [effectiveSelectedFieldKeys, imageDisplayMode, previewContentVersion, printSignatureRows, selectedTemplateId],
+  );
+  // `previewContentVersion` intentionally remains in the cache key so an
+  // explicit refresh never reuses an obsolete file. It must not, however,
+  // start a new renderer request by itself: loading relation/image metadata
+  // can change that version repeatedly while the rendered document is
+  // identical. Automatic rebuilds are limited to choices made in this modal.
+  const finalPdfPreviewRenderIdentity = useMemo(
+    () => JSON.stringify({
+      templateId: selectedTemplateId,
+      fields: effectiveSelectedFieldKeys,
+      imageDisplayMode,
+      signatures: printSignatureRows.map((row) => ({
+        id: row.id,
+        kind: row.kind,
+        enabled: row.enabled,
+        automatic: row.automatic,
+        signerModule: row.signerModule,
+        signerId: row.signerId,
+        nameValue: row.nameValue,
+        subtitleValue: row.subtitleValue,
+      })),
+    }),
+    [effectiveSelectedFieldKeys, imageDisplayMode, printSignatureRows, selectedTemplateId],
   );
   const mobileTemplateOptions = useMemo(
     () =>
@@ -319,6 +347,30 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     const existingRequest = finalPdfPreviewInFlightRef.current.get(finalPdfPreviewCacheKey);
     if (existingRequest) return existingRequest;
 
+    const activeRequest = finalPdfPreviewActiveRequestRef.current;
+    if (activeRequest) {
+      let queuedRequest: Promise<GeneratedPrintPdf & { url: string }>;
+      queuedRequest = activeRequest
+        .catch(() => null)
+        .then(async () => {
+          const cachedAfterActive = finalPdfPreviewCacheRef.current.get(finalPdfPreviewCacheKey);
+          if (cachedAfterActive) return cachedAfterActive;
+          if (finalPdfPreviewInFlightRef.current.get(finalPdfPreviewCacheKey) === queuedRequest) {
+            finalPdfPreviewInFlightRef.current.delete(finalPdfPreviewCacheKey);
+          }
+          const next = await finalPdfPreviewLoaderRef.current(false);
+          if (!next) throw new Error('ساخت PDF نهایی انجام نشد.');
+          return next as GeneratedPrintPdf & { url: string };
+        })
+        .finally(() => {
+          if (finalPdfPreviewInFlightRef.current.get(finalPdfPreviewCacheKey) === queuedRequest) {
+            finalPdfPreviewInFlightRef.current.delete(finalPdfPreviewCacheKey);
+          }
+        });
+      finalPdfPreviewInFlightRef.current.set(finalPdfPreviewCacheKey, queuedRequest);
+      return queuedRequest;
+    }
+
     const requestId = ++finalPdfPreviewRequestRef.current;
     setFinalPdfPreviewUrl(null);
     setFinalPdfPreviewError('');
@@ -358,11 +410,19 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         if (finalPdfPreviewInFlightRef.current.get(finalPdfPreviewCacheKey) === pendingRequest) {
           finalPdfPreviewInFlightRef.current.delete(finalPdfPreviewCacheKey);
         }
+        if (finalPdfPreviewActiveRequestRef.current === pendingRequest) {
+          finalPdfPreviewActiveRequestRef.current = null;
+        }
       });
 
     finalPdfPreviewInFlightRef.current.set(finalPdfPreviewCacheKey, pendingRequest);
+    finalPdfPreviewActiveRequestRef.current = pendingRequest;
     return pendingRequest;
   }, [finalPdfPreviewCacheKey, removeCachedFinalPdfPreview]);
+
+  useEffect(() => {
+    finalPdfPreviewLoaderRef.current = loadFinalPdfPreview;
+  }, [loadFinalPdfPreview]);
 
   useEffect(() => {
     if (!isPrintModalOpen || activeTab !== 'preview' || !onGenerateFinalPdfPreview) return;
@@ -382,19 +442,22 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     setFinalPdfPreviewError('');
     setFinalPdfPreviewProgress({ percent: 3, label: 'در حال همگام‌سازی اطلاعات قالب…' });
     const debounceTimer = window.setTimeout(() => {
-      void loadFinalPdfPreview().catch(() => undefined);
+      // Read through the ref so a short burst of asynchronous source updates
+      // renders only the final settled document rather than every interim one.
+      void finalPdfPreviewLoaderRef.current(false).catch(() => undefined);
     }, PREVIEW_REBUILD_DEBOUNCE_MS);
     return () => {
       window.clearTimeout(debounceTimer);
       finalPdfPreviewRequestRef.current += 1;
     };
-  }, [activeTab, finalPdfPreviewRevision, isPrintModalOpen, loadFinalPdfPreview, Boolean(onGenerateFinalPdfPreview), finalPdfPreviewCacheKey]);
+  }, [activeTab, finalPdfPreviewRenderIdentity, finalPdfPreviewRevision, isPrintModalOpen, Boolean(onGenerateFinalPdfPreview)]);
 
   useEffect(() => () => {
     finalPdfPreviewRequestRef.current += 1;
     finalPdfPreviewCacheRef.current.forEach((pdf) => URL.revokeObjectURL(pdf.url));
     finalPdfPreviewCacheRef.current.clear();
     finalPdfPreviewInFlightRef.current.clear();
+    finalPdfPreviewActiveRequestRef.current = null;
   }, []);
 
   useEffect(() => {
@@ -537,6 +600,13 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         mobileSearchPlaceholder="جستجو در قالب‌های چاپ"
         popupMatchSelectWidth
         overlayZIndexBase={12020}
+        popupClassName="print-template-mobile-popup"
+        popupStyle={{
+          '--print-template-popup-bg': token.colorBgElevated,
+          '--print-template-popup-text': token.colorText,
+          '--print-template-popup-muted': token.colorTextSecondary,
+          '--print-template-popup-border': token.colorBorderSecondary,
+        } as React.CSSProperties}
         optionDisplayFallback={(option) => String(option?.title || option?.label || option?.value || '')}
         filterOption={(input, option) => {
           const search = input.trim().toLowerCase();
@@ -638,6 +708,20 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         >
         <div className="print-select-shell" style={{ background: token.colorBgLayout }}>
           <div className="print-preview-shell">
+            <div className="print-modal-controls-row">
+              {templateSelector}
+              <Button
+                type="text"
+                size="small"
+                className="print-modal-refresh"
+                icon={<ReloadOutlined />}
+                onClick={() => { void handleRefresh(); }}
+                loading={refreshing}
+                disabled={!onRefreshPreview && !onGenerateFinalPdfPreview}
+                title="به‌روزرسانی پیش‌نمایش نهایی"
+                aria-label="به‌روزرسانی پیش‌نمایش نهایی"
+              />
+            </div>
             <Tabs
               activeKey={activeTab}
               onChange={(key) => {
@@ -645,31 +729,13 @@ const PrintSection: React.FC<PrintSectionProps> = ({
               }}
               tabPosition="top"
               destroyOnHidden
-              tabBarGutter={isMobile ? 12 : 24}
-              tabBarExtraContent={{
-                right: (
-                  <div className="print-modal-tabbar-actions">
-                    {templateSelector}
-                    <Button
-                      type="text"
-                      size="small"
-                      className="print-modal-refresh"
-                      icon={<ReloadOutlined />}
-                      onClick={() => { void handleRefresh(); }}
-                      loading={refreshing}
-                      disabled={!onRefreshPreview && !onGenerateFinalPdfPreview}
-                      title="به‌روزرسانی پیش‌نمایش نهایی"
-                      aria-label="به‌روزرسانی پیش‌نمایش نهایی"
-                    />
-                  </div>
-                ),
-              }}
+              tabBarGutter={isMobile ? 18 : 32}
               style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
               tabBarStyle={{
                 margin: 0,
-                padding: isMobile ? '0 8px' : '0 16px',
-                borderBottom: '1px solid rgba(148,163,184,0.18)',
-                direction: isMobile ? 'rtl' : undefined,
+                padding: isMobile ? '0 12px' : '0 16px',
+                borderBottom: `1px solid ${token.colorBorderSecondary}`,
+                direction: 'rtl',
               }}
               items={[
                 {
@@ -1022,19 +1088,23 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           flex-direction: column;
           overflow: hidden;
         }
-        .print-modal-tabbar-actions {
-          display: inline-flex;
-          align-items: center;
-          gap: 4px;
-          min-width: 0;
-          direction: rtl;
-        }
-        .print-template-selector {
-          display: inline-flex;
+        .print-modal-controls-row {
+          display: flex;
           align-items: center;
           gap: 8px;
-          min-width: 260px;
-          max-width: min(38vw, 440px);
+          min-width: 0;
+          direction: rtl;
+          padding: 10px 16px 8px;
+          border-bottom: 1px solid var(--ant-color-border-secondary, rgba(148,163,184,0.18));
+          background: var(--ant-color-bg-container, transparent);
+        }
+        .print-template-selector {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          min-width: min(100%, 300px);
+          max-width: min(100%, 520px);
+          flex: 1 1 360px;
           direction: rtl;
         }
         .print-template-selector-label {
@@ -1081,7 +1151,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           flex-wrap: nowrap;
           font-size: 13px;
           font-weight: 700;
-          color: #0f172a;
+          color: inherit;
           line-height: 1.5;
           max-width: 100%;
           overflow: hidden;
@@ -1097,7 +1167,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           flex-wrap: wrap;
           font-size: 13px;
           font-weight: 700;
-          color: #111827;
+          color: inherit;
           direction: rtl;
           text-align: right;
         }
@@ -1105,7 +1175,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         .print-template-option-desc {
           font-size: 11px;
           line-height: 1.7;
-          color: #64748b;
+          color: var(--ant-color-text-secondary, #64748b);
           direction: rtl;
           text-align: right;
           display: block;
@@ -1127,12 +1197,14 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         .print-template-mobile-value .print-template-system-tag {
           display: inline-flex;
         }
+        .print-template-mobile-popup.ant-select-dropdown,
         .print-template-mobile-popup .ant-select-dropdown {
           padding: 6px 0;
-          background: #ffffff !important;
-          border: 1px solid rgba(148,163,184,0.2) !important;
+          background: var(--print-template-popup-bg, var(--ant-color-bg-elevated)) !important;
+          color: var(--print-template-popup-text, var(--ant-color-text)) !important;
+          border: 1px solid var(--print-template-popup-border, var(--ant-color-border-secondary)) !important;
           border-radius: 14px !important;
-          box-shadow: 0 18px 40px rgba(15,23,42,0.18) !important;
+          box-shadow: var(--ant-box-shadow-secondary, 0 12px 28px rgba(15,23,42,0.18)) !important;
           backdrop-filter: none !important;
           -webkit-backdrop-filter: none !important;
           pointer-events: auto !important;
@@ -1147,6 +1219,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         }
         .print-template-mobile-popup .ant-select-item-option {
           background: transparent !important;
+          color: var(--print-template-popup-text, var(--ant-color-text)) !important;
           pointer-events: auto !important;
         }
         .print-template-mobile-popup .ant-select-item-option-active {
@@ -1160,16 +1233,13 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           border-radius: 12px;
           margin: 0 6px;
         }
-        .dark .print-template-mobile-popup .ant-select-dropdown {
-          background: #0f172a !important;
-          border-color: rgba(71,85,105,0.42) !important;
-          box-shadow: 0 18px 40px rgba(2,6,23,0.48) !important;
+        .print-template-mobile-popup .print-template-option-title,
+        .print-template-mobile-popup .print-template-mobile-option-title {
+          color: var(--print-template-popup-text, var(--ant-color-text)) !important;
         }
-        .dark .print-template-mobile-popup .ant-select-item-option-active {
-          background: rgba(var(--brand-500-rgb), 0.16) !important;
-        }
-        .dark .print-template-mobile-popup .ant-select-item-option-selected {
-          background: rgba(var(--brand-500-rgb), 0.22) !important;
+        .print-template-mobile-popup .print-template-option-desc,
+        .print-template-mobile-popup .print-template-mobile-option-desc {
+          color: var(--print-template-popup-muted, var(--ant-color-text-secondary)) !important;
         }
         .print-preview-shell .ant-tabs,
         .print-preview-shell .ant-tabs-content-holder,
@@ -1196,11 +1266,13 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         .print-preview-shell .ant-tabs-nav-list {
           flex-wrap: nowrap !important;
           min-width: max-content;
+          gap: 12px;
         }
         .print-preview-shell .ant-tabs-tab {
           flex: 0 0 auto;
           white-space: nowrap;
           margin: 0 !important;
+          padding-inline: 10px !important;
         }
         .print-preview-shell .ant-tabs-tab-btn {
           display: inline-flex;
@@ -1252,20 +1324,13 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           gap: 8px;
           flex-wrap: wrap;
           font-size: 12px;
-          color: #64748b;
+          color: var(--ant-color-text-secondary, #64748b);
         }
         .print-preview-meta span {
-          border: 1px solid rgba(148,163,184,0.24);
+          border: 1px solid var(--ant-color-border-secondary, rgba(148,163,184,0.24));
           border-radius: 999px;
           padding: 4px 10px;
-          background: rgba(255,255,255,0.7);
-        }
-        .dark .print-preview-meta {
-          color: #cbd5e1;
-        }
-        .dark .print-preview-meta span {
-          background: rgba(15,23,42,0.74);
-          border-color: rgba(71,85,105,0.42);
+          background: var(--ant-color-bg-container, rgba(255,255,255,0.7));
         }
         .print-preview-stage {
           flex: 1;
@@ -1303,10 +1368,6 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         }
         .print-preview-stage > .print-preview-zoom-frame {
           margin-inline: auto;
-        }
-        .dark .print-preview-stage {
-          background: linear-gradient(180deg, rgba(2,6,23,0.44), rgba(15,23,42,0.9));
-          border-top-color: rgba(71,85,105,0.36);
         }
         .print-preview-scale {
           background: #fff;
@@ -1372,17 +1433,11 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         .print-fields-group-title {
           font-size: 12px;
           font-weight: 800;
-          color: #475569;
-        }
-        .dark .print-fields-group-title {
-          color: #cbd5e1;
+          color: var(--ant-color-text-secondary, #475569);
         }
         .print-fields-group-header .ant-checkbox-wrapper {
           font-size: 12px;
-          color: #64748b;
-        }
-        .dark .print-fields-group-header .ant-checkbox-wrapper {
-          color: #cbd5e1;
+          color: var(--ant-color-text-secondary, #64748b);
         }
         .print-fields-pane {
           height: 100%;
@@ -1412,7 +1467,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         }
         .print-signature-toolbar-copy {
           font-size: 12px;
-          color: #64748b;
+          color: var(--ant-color-text-secondary, #64748b);
         }
         .print-signature-toolbar-actions {
           display: flex;
@@ -1421,8 +1476,8 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         }
         .print-signature-empty {
           border-radius: 18px;
-          border: 1px dashed rgba(148,163,184,0.26);
-          background: rgba(248,250,252,0.82);
+          border: 1px dashed var(--ant-color-border-secondary, rgba(148,163,184,0.26));
+          background: var(--ant-color-fill-quaternary, rgba(248,250,252,0.82));
           padding: 18px;
         }
         .print-signature-list {
@@ -1432,8 +1487,8 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         }
         .print-signature-card {
           border-radius: 18px;
-          border: 1px solid rgba(148,163,184,0.22);
-          background: rgba(255,255,255,0.86);
+          border: 1px solid var(--ant-color-border-secondary, rgba(148,163,184,0.22));
+          background: var(--ant-color-bg-container, rgba(255,255,255,0.86));
           padding: 14px;
           display: flex;
           flex-direction: column;
@@ -1467,7 +1522,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         }
         .print-signature-card-source {
           font-size: 12px;
-          color: #64748b;
+          color: var(--ant-color-text-secondary, #64748b);
         }
         .print-signature-card-actions {
           display: flex;
@@ -1491,7 +1546,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         }
         .print-signature-label {
           font-size: 12px;
-          color: #475569;
+          color: var(--ant-color-text-secondary, #475569);
           margin-bottom: 6px;
           direction: rtl;
         }
@@ -1666,10 +1721,6 @@ const PrintSection: React.FC<PrintSectionProps> = ({
             display: flex;
             gap: 10px;
           }
-          .dark .print-select-modal .ant-modal-footer {
-            background: rgba(15,23,42,0.96) !important;
-            border-top-color: rgba(71,85,105,0.36) !important;
-          }
           .print-select-modal .ant-modal-footer .ant-btn {
             flex: 1 1 0;
             height: 42px;
@@ -1689,16 +1740,10 @@ const PrintSection: React.FC<PrintSectionProps> = ({
             height: 100%;
           }
           .print-preview-shell .ant-tabs-nav {
-            flex-wrap: wrap;
-            padding: 8px 10px 0;
-            gap: 8px;
+            padding: 0 10px;
           }
-          .print-preview-shell .ant-tabs-extra-content {
-            width: 100%;
-            order: -1;
-          }
-          .print-modal-tabbar-actions {
-            width: 100%;
+          .print-modal-controls-row {
+            padding: 10px 12px 8px;
           }
           .print-template-selector {
             flex: 1 1 auto;

@@ -1,11 +1,25 @@
 import { normalizePublicAssetUrl } from '../assetUrl';
+import { buildPrintImageUrl } from '../imagePreview';
 
 const readStyleValue = (styleText: string, propertyName: string) =>
   styleText.match(new RegExp(`(?:^|;)\\s*${propertyName}\\s*:\\s*([^;]+)`, 'i'))?.[1]?.trim() || '';
 
+const setStyleValue = (styleText: string, propertyName: string, value: string) => {
+  const normalizedName = String(propertyName || '').trim().toLowerCase();
+  const nextParts = String(styleText || '')
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => !part.toLowerCase().startsWith(`${normalizedName}:`));
+  nextParts.push(`${propertyName}:${value}`);
+  return nextParts.join(';');
+};
+
+const isAutoDimension = (value: string) => !value || /^auto(?:\s*!important)?$/i.test(value.trim());
+
 const normalizeStyleAssetUrls = (styleText: string) =>
   String(styleText || '').replace(/url\((['"]?)(.*?)\1\)/gi, (_match, _quote, rawUrl: string) => {
-    const normalizedUrl = normalizePublicAssetUrl(rawUrl) || String(rawUrl || '').trim();
+    const normalizedUrl = buildPrintImageUrl(rawUrl, 'printHero') || normalizePublicAssetUrl(rawUrl) || String(rawUrl || '').trim();
     if (!normalizedUrl) return 'url("")';
     return `url("${normalizedUrl.replace(/"/g, '&quot;')}")`;
   });
@@ -29,7 +43,7 @@ export const normalizeRenderedImages = (html: string) => {
       return;
     }
 
-    const normalizedSrc = normalizePublicAssetUrl(src) || src;
+    const normalizedSrc = buildPrintImageUrl(src, 'printHero') || normalizePublicAssetUrl(src) || src;
     img.setAttribute('src', normalizedSrc);
     img.setAttribute('loading', 'eager');
     img.setAttribute('decoding', 'sync');
@@ -42,8 +56,13 @@ export const normalizeRenderedImages = (html: string) => {
     const heightStyle = readStyleValue(style, 'height');
     const maxHeightStyle = readStyleValue(style, 'max-height');
 
-    const widthValue = widthStyle || (widthAttr ? `${widthAttr}px` : '') || maxWidthStyle;
-    const heightValue = heightStyle || (heightAttr ? `${heightAttr}px` : '') || maxHeightStyle;
+    // A max-width/max-height is a constraint, not a requested dimension.
+    // Promoting it to width/height made variable logos fill a table cell and
+    // changed the geometry the author created in the print editor.
+    const widthValue = widthStyle || (widthAttr ? `${widthAttr}px` : '');
+    const maxWidthValue = isAutoDimension(maxWidthStyle) ? (widthValue ? widthValue : '100%') : maxWidthStyle;
+    const heightValue = heightStyle || (heightAttr ? `${heightAttr}px` : '');
+    const maxHeightValue = isAutoDimension(maxHeightStyle) ? (heightValue && heightValue !== 'auto' ? heightValue : '') : maxHeightStyle;
     const altText = String(img.getAttribute('alt') || '').trim();
     const isLogoLike = /logo|لوگو/i.test(altText);
     const preservedStyle = style
@@ -57,11 +76,11 @@ export const normalizeRenderedImages = (html: string) => {
       'display:block',
       'object-fit:contain',
       widthValue ? `width:${widthValue} !important` : 'width:auto',
-      widthValue ? `max-width:${widthValue === '100%' ? '100%' : widthValue} !important` : 'max-width:100%',
+      `max-width:${maxWidthValue} !important`,
       heightValue ? `height:${heightValue} !important` : 'height:auto',
-      heightValue && heightValue !== 'auto' ? `max-height:${heightValue} !important` : '',
-      !widthValue && !heightValue && isLogoLike ? 'max-width:64px !important' : '',
-      !widthValue && !heightValue && isLogoLike ? 'max-height:64px !important' : '',
+      maxHeightValue ? `max-height:${maxHeightValue} !important` : '',
+      !widthValue && !heightValue && !maxWidthStyle && !maxHeightStyle && isLogoLike ? 'max-width:64px !important' : '',
+      !widthValue && !heightValue && !maxWidthStyle && !maxHeightStyle && isLogoLike ? 'max-height:64px !important' : '',
     ].filter(Boolean);
 
     const numericWidth = widthValue.match(/^(\d+(?:\.\d+)?)px$/i)?.[1];
@@ -86,6 +105,25 @@ export const normalizeRenderedImages = (html: string) => {
     const style = String(element.getAttribute('style') || '').trim();
     if (!style || !style.includes('url(')) return;
     element.setAttribute('style', normalizeStyleAssetUrls(style));
+  });
+
+  // Tiptap only persists its technical min-width after a table has been
+  // resized. The editor stylesheet makes such tables look full-width, while
+  // Gotenberg's isolated header/footer documents do not inherit that rule.
+  // Keep author-selected widths intact; give only those editor tables without
+  // a width the same 100% width they visibly have in the editor.
+  root.querySelectorAll<HTMLTableElement>('table').forEach((table) => {
+    if (!table.parentElement?.classList.contains('tableWrapper')) return;
+
+    const widthFromStyle = readStyleValue(table.getAttribute('style') || '', 'width');
+    const widthFromAttribute = String(table.getAttribute('width') || '').trim();
+    if (!isAutoDimension(widthFromStyle) || widthFromAttribute) return;
+
+    let nextStyle = String(table.getAttribute('style') || '').trim();
+    nextStyle = setStyleValue(nextStyle, 'width', '100% !important');
+    nextStyle = setStyleValue(nextStyle, 'max-width', '100% !important');
+    nextStyle = setStyleValue(nextStyle, 'table-layout', 'fixed !important');
+    table.setAttribute('style', nextStyle);
   });
 
   return root.innerHTML;

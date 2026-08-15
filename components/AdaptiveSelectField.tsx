@@ -34,6 +34,7 @@ interface AdaptiveSelectFieldProps {
   getPopupContainer?: (trigger: HTMLElement) => HTMLElement;
   modalContainer?: (trigger?: HTMLElement | null) => HTMLElement;
   popupStyle?: React.CSSProperties;
+  popupClassName?: string;
   overlayZIndexBase?: number;
   adaptiveMode?: AdaptivePickerMode;
   pickerTitle?: string;
@@ -103,6 +104,7 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
   getPopupContainer = resolveSelectPopupContainer,
   modalContainer,
   popupStyle,
+  popupClassName,
   overlayZIndexBase = 1400,
   adaptiveMode = 'auto',
   pickerTitle,
@@ -300,6 +302,7 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
         listHeight={listHeight}
         placement={placement}
         popupMatchSelectWidth={popupMatchSelectWidth}
+        popupClassName={popupClassName}
         optionRender={optionRender}
         popupRender={popupRender as any}
         labelRender={renderTriggerValue ? (() => renderTriggerValue(selectedOptionRows)) : undefined}

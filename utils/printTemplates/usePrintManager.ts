@@ -3441,7 +3441,7 @@ export const usePrintManager = ({
         pageMargins,
         sectionPadding: PRINT_SECTION_CONTENT_PADDING,
         contentHtml: renderedCustomTemplate?.contentHtml || '',
-        backgroundImageUrl: selectedOrgLetterhead.imageUrl,
+        backgroundImageUrl: buildPrintImageUrl(selectedOrgLetterhead.imageUrl, 'printHero'),
         fixedOverlayHtml: `${overlayHtml}${signatureOverlay}`,
       });
     }
@@ -3496,7 +3496,7 @@ export const usePrintManager = ({
       footerHeightPx: footerHeight,
       showHeader,
       showFooter,
-      backgroundImageUrl: selectedStoredTemplate.backgroundImageUrl,
+      backgroundImageUrl: buildPrintImageUrl(selectedStoredTemplate.backgroundImageUrl, 'printHero'),
     });
   }, [
     measuredSectionHeights.footer,

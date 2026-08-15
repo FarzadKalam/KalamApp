@@ -258,6 +258,44 @@ describe('PrintSection', () => {
     }
   });
 
+  it('does not start another PDF render when only transient preview source metadata changes', async () => {
+    setDesktopViewport();
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:stable-preview') });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+    const onGenerateFinalPdfPreview = vi.fn(async () => ({ blob: new Blob(['%PDF-stable']) }));
+
+    const buildSection = (previewContentVersion: string) => (
+      <PrintSection
+        isPrintModalOpen
+        onClose={vi.fn()}
+        onPrint={vi.fn()}
+        onGenerateFinalPdfPreview={onGenerateFinalPdfPreview}
+        printTemplates={templates}
+        selectedTemplateId="custom:a4"
+        onSelectTemplate={vi.fn()}
+        renderPrintCard={() => <div>سند چاپی</div>}
+        printMode={false}
+        previewContentVersion={previewContentVersion}
+      />
+    );
+
+    try {
+      const { rerender } = render(buildSection('source:initial'));
+      rerender(buildSection('source:relations-ready'));
+      rerender(buildSection('source:image-ready'));
+      rerender(buildSection('source:signature-ready'));
+
+      await waitFor(() => expect(onGenerateFinalPdfPreview).toHaveBeenCalledTimes(1));
+      await new Promise((resolve) => window.setTimeout(resolve, 650));
+      expect(onGenerateFinalPdfPreview).toHaveBeenCalledTimes(1);
+    } finally {
+      Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
+      Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL });
+    }
+  }, 10000);
+
   it('sends the already previewed PDF to print without rendering it a second time', async () => {
     setDesktopViewport();
     const user = userEvent.setup();

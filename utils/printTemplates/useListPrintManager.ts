@@ -53,6 +53,7 @@ import { resolvePrintPreferenceIdentity } from './preferenceIdentity';
 import { createPrintPreviewFingerprint } from './previewFingerprint';
 import { fetchSessionBootstrap } from '../sessionCache';
 import { loadScopedCompanySettings } from '../companySettings';
+import { buildPrintImageUrl } from '../imagePreview';
 import { SETTINGS_PERMISSION_KEY } from '../permissions';
 import { fetchAssigneeDirectory } from '../referenceData';
 import { fetchRelationOptionsForField } from '../relationOptions';
@@ -1228,7 +1229,7 @@ export const useListPrintManager = ({
         },
         sectionPadding: '0',
         contentHtml: renderTemplateSection(selectedStoredTemplate.contentHtml, 0, 1, allRows, 0),
-        backgroundImageUrl: selectedOrgLetterhead.imageUrl,
+        backgroundImageUrl: buildPrintImageUrl(selectedOrgLetterhead.imageUrl, 'printHero'),
         fixedOverlayHtml: `${overlayHtml}${signatureOverlay}`,
       });
     }
@@ -1266,7 +1267,7 @@ export const useListPrintManager = ({
       footerHeightPx: showFooter ? Number(selectedStoredTemplate.footerHeight || 62) + signatureHeightPx + 18 : 0,
       showHeader,
       showFooter,
-      backgroundImageUrl: selectedStoredTemplate.backgroundImageUrl,
+      backgroundImageUrl: buildPrintImageUrl(selectedStoredTemplate.backgroundImageUrl, 'printHero'),
     });
   }, [moduleConfig?.titles?.fa, moduleId, printSignatureBandHtml, printSignatureStates, renderTemplateSection, rows, selectedOrgLetterhead, selectedStoredTemplate]);
   buildNativeListPrintFlowRef.current = buildNativeListPrintFlow;

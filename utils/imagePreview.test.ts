@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   buildImageBackgroundStyle,
   buildImagePreviewUrl,
+  buildPrintImageUrl,
   getImagePreviewCandidates,
   reportImageTransformFailure,
   resetImageTransformFailureCacheForTest,
@@ -54,6 +55,14 @@ describe('getImagePreviewCandidates', () => {
     );
     expect(buildImagePreviewUrl(url, 'thumb', { forceTransform: true })).toBe(
       'https://example.com/storage/v1/render/image/public/images/record_files/tasks/1/photo.jpg?width=260&quality=68&resize=cover'
+    );
+  });
+
+  it('uses the original public object for PDF rendering even when given a transformed url', () => {
+    const transformed = 'https://example.com/storage/v1/render/image/public/images/company-logo.png?width=240&quality=72&resize=contain';
+
+    expect(buildPrintImageUrl(transformed, 'printLogo')).toBe(
+      'https://example.com/storage/v1/object/public/images/company-logo.png'
     );
   });
 
