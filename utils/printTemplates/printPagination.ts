@@ -514,38 +514,6 @@ const buildSmartPrintPageOffsetsInternal = ({
   return pageOffsets;
 };
 
-const getNextSafePageStart = ({
-  previousEnd,
-  totalHeight,
-  anchors,
-}: {
-  previousEnd: number;
-  totalHeight: number;
-  anchors: PrintPageAnchor[];
-}) => {
-  // Prefer actual line bands. If a prior fallback put an edge inside a band,
-  // restart immediately before that whole line instead of repeating the same
-  // unsafe edge at the top of the next page. Row/media anchors are a fallback
-  // for pages that contain no text nodes at all.
-  const nextAnchor = anchors.find(
-    (anchor) => anchor.source === 'line' && anchor.bottom > previousEnd
-  ) || anchors.find((anchor) => anchor.bottom > previousEnd);
-
-  // Keep the source interval through its measured end even when no line/row
-  // anchor follows. Unannotated embedded content can live in that tail; it is
-  // safer to preserve it than infer it is only bottom padding. Truly empty
-  // trailing editor paragraphs are removed before anchor collection instead.
-  if (!nextAnchor) return Math.min(totalHeight, previousEnd);
-
-  // Keep one source pixel above the measured top. This is deliberate: browser
-  // PDF backends round CSS transforms and clip rectangles independently.
-  // Starting exactly at a line top is therefore not a safe printable edge.
-  return Math.min(
-    totalHeight,
-    Math.max(0, floorPx(nextAnchor.top) - 1)
-  );
-};
-
 export const buildSmartPrintPageRanges = ({
   totalHeight,
   pageBodyStepPx,
@@ -576,11 +544,17 @@ export const buildSmartPrintPageRanges = ({
   pageEnds.forEach((pageEnd) => {
     const safeEnd = Math.max(pageStart + 1, Math.min(safeTotalHeight, ceilPx(pageEnd)));
     ranges.push({ start: pageStart, end: safeEnd });
-    pageStart = getNextSafePageStart({
-      previousEnd: safeEnd,
-      totalHeight: safeTotalHeight,
-      anchors: safeAnchors,
-    });
+    // Start the next page at the next complete visual line (or table/media
+    // block), never inside the preceding line's glyph box. A line-bottom
+    // boundary leaves only whitespace before that next anchor, so skipping
+    // this source gap is safe and prevents Chrome from painting a fractional
+    // tail under the following repeated header.
+    const nextAnchor = safeAnchors.find(
+      (anchor) => anchor.source === 'line' && anchor.top >= safeEnd
+    ) || safeAnchors.find((anchor) => anchor.top >= safeEnd);
+    pageStart = nextAnchor
+      ? Math.min(safeTotalHeight, floorPx(nextAnchor.top))
+      : safeEnd;
   });
 
   if (pageStart < safeTotalHeight) {

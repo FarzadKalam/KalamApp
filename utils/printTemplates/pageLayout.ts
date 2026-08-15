@@ -1,26 +1,26 @@
 /**
  * Shared physical layout rules for paginated record printouts.
  *
- * The single-pixel guard belongs to the page body only.  Reserving it again
- * for headers, footers and signatures accumulates visible blank bands and does
- * not make a line break any safer.
+ * Keep a real physical safety lane at both edges of every body viewport.
+ * Browser PDF engines independently round transforms, line boxes and clip
+ * rectangles; a one-pixel overlap can therefore erase a glyph or let content
+ * paint over a repeated header/signature band.
  */
 export const MIN_PRINT_BODY_HEIGHT_PX = 80;
-export const PRINT_BODY_BOUNDARY_GUARD_PX = 1;
+// 24 CSS px is ~6.35mm. It covers line-glyph ascent/descent and the
+// independent rounding Chrome applies to a translated source and its clip.
+export const PRINT_BODY_EDGE_GUARD_PX = 24;
 
 export const normalizePrintBodyHeightPx = (value: number) =>
   Math.max(MIN_PRINT_BODY_HEIGHT_PX, Math.floor(Math.max(MIN_PRINT_BODY_HEIGHT_PX, value)));
 
 /**
- * Leave exactly one physical pixel at the bottom of a full body region.  Page
- * offsets themselves are still aligned to measured line bottoms, so no text
- * is clipped to create this guard.
+ * Page ranges use only the safe middle lane. The surrounding space is still
+ * part of the rendered body so headers, footers and signatures keep their
+ * configured positions.
  */
 export const getTemplatePageBodyStepPx = (pageBodyHeightPx: number) =>
-  Math.max(
-    MIN_PRINT_BODY_HEIGHT_PX,
-    normalizePrintBodyHeightPx(pageBodyHeightPx) - PRINT_BODY_BOUNDARY_GUARD_PX
-  );
+  Math.max(1, normalizePrintBodyHeightPx(pageBodyHeightPx) - PRINT_BODY_EDGE_GUARD_PX * 2);
 
 export const getPrintBodyViewportHeightPx = (
   pageBodyHeightPx: number,
@@ -28,8 +28,12 @@ export const getPrintBodyViewportHeightPx = (
 ) =>
   Math.min(
     normalizePrintBodyHeightPx(pageBodyHeightPx),
-    Math.max(1, Math.floor(effectiveBodyStepPx))
+    Math.max(1, Math.ceil(effectiveBodyStepPx) + PRINT_BODY_EDGE_GUARD_PX * 2)
   );
+
+/** Translate source content so a range begins after the top safety lane. */
+export const getPrintBodySegmentTranslationPx = (pageStartOffset: number) =>
+  PRINT_BODY_EDGE_GUARD_PX - Math.max(0, Math.floor(pageStartOffset));
 
 /**
  * The final page with signatures should keep those signatures next to the

@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'render-pdf-2026-04-08-01';
+const FUNCTION_BUILD = 'render-pdf-2026-08-15-01';
 const DEFAULT_GOTENBERG_URL = 'http://gotenberg:3000';
 const GOTENBERG_TIMEOUT_MS = 120000;
 
@@ -119,6 +119,51 @@ const getPayload = async (request: Request) => {
   return {};
 };
 
+const extractNativePrintNumber = (documentHtml: string, name: string) => {
+  const match = documentHtml.match(new RegExp(`\\bdata-kalamapp-${name}="([^"]+)"`, 'i'));
+  const value = Number(match?.[1] || '');
+  return Number.isFinite(value) && value >= 0 ? value : null;
+};
+
+const extractNativePrintTemplate = (documentHtml: string, id: string) => {
+  const match = documentHtml.match(
+    new RegExp(`<template\\b[^>]*\\bid=["']${id}["'][^>]*>([\\s\\S]*?)<\\/template>`, 'i')
+  );
+  return String(match?.[1] || '').trim();
+};
+
+const getNativePrintOptions = (documentHtml: string) => {
+  if (!/\\bdata-kalamapp-native-print-flow="true"/i.test(documentHtml)) return null;
+
+  const widthMm = extractNativePrintNumber(documentHtml, 'paper-width-mm');
+  const heightMm = extractNativePrintNumber(documentHtml, 'paper-height-mm');
+  const marginTopMm = extractNativePrintNumber(documentHtml, 'margin-top-mm');
+  const marginRightMm = extractNativePrintNumber(documentHtml, 'margin-right-mm');
+  const marginBottomMm = extractNativePrintNumber(documentHtml, 'margin-bottom-mm');
+  const marginLeftMm = extractNativePrintNumber(documentHtml, 'margin-left-mm');
+  if (
+    widthMm == null ||
+    heightMm == null ||
+    marginTopMm == null ||
+    marginRightMm == null ||
+    marginBottomMm == null ||
+    marginLeftMm == null
+  ) {
+    return null;
+  }
+
+  return {
+    widthMm,
+    heightMm,
+    marginTopMm,
+    marginRightMm,
+    marginBottomMm,
+    marginLeftMm,
+    headerHtml: extractNativePrintTemplate(documentHtml, 'kalamapp-gotenberg-header'),
+    footerHtml: extractNativePrintTemplate(documentHtml, 'kalamapp-gotenberg-footer'),
+  };
+};
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -144,11 +189,28 @@ Deno.serve(async (request) => {
     return htmlError(400, 'فایل چاپ خالی است', 'محتوای قابل چاپی برای تولید PDF دریافت نشد.');
   }
 
+  const nativePrintOptions = getNativePrintOptions(documentHtml);
   const gotenbergUrl = String(Deno.env.get('GOTENBERG_URL') || DEFAULT_GOTENBERG_URL).trim().replace(/\/+$/, '');
   const traceId = crypto.randomUUID();
   const form = new FormData();
   form.append('files', new File([documentHtml], 'index.html', { type: 'text/html; charset=utf-8' }));
-  form.append('preferCssPageSize', 'true');
+  if (nativePrintOptions) {
+    form.append('preferCssPageSize', 'false');
+    form.append('paperWidth', `${nativePrintOptions.widthMm}mm`);
+    form.append('paperHeight', `${nativePrintOptions.heightMm}mm`);
+    form.append('marginTop', `${nativePrintOptions.marginTopMm}mm`);
+    form.append('marginRight', `${nativePrintOptions.marginRightMm}mm`);
+    form.append('marginBottom', `${nativePrintOptions.marginBottomMm}mm`);
+    form.append('marginLeft', `${nativePrintOptions.marginLeftMm}mm`);
+    if (nativePrintOptions.headerHtml) {
+      form.append('files', new File([nativePrintOptions.headerHtml], 'header.html', { type: 'text/html; charset=utf-8' }));
+    }
+    if (nativePrintOptions.footerHtml) {
+      form.append('files', new File([nativePrintOptions.footerHtml], 'footer.html', { type: 'text/html; charset=utf-8' }));
+    }
+  } else {
+    form.append('preferCssPageSize', 'true');
+  }
   form.append('printBackground', 'true');
   form.append('waitDelay', '1000ms');
   form.append('waitForExpression', 'window.__KALAMAPP_PRINT_READY === true');

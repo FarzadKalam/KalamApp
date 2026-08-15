@@ -1,17 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import {
+  getPrintBodySegmentTranslationPx,
   getFinalContentBodyHeightPx,
   getPrintBodyViewportHeightPx,
   getTemplatePageBodyStepPx,
 } from './pageLayout';
 
 describe('print page layout', () => {
-  it('keeps exactly one physical pixel as the body boundary guard', () => {
+  it('keeps a physical safety lane above and below every body range', () => {
     const bodyHeight = 640;
     const step = getTemplatePageBodyStepPx(bodyHeight);
 
-    expect(step).toBe(639);
-    expect(getPrintBodyViewportHeightPx(bodyHeight, step)).toBe(639);
+    expect(step).toBe(592);
+    expect(getPrintBodyViewportHeightPx(bodyHeight, step)).toBe(640);
+    expect(getPrintBodyViewportHeightPx(bodyHeight, 300)).toBe(348);
+    expect(getPrintBodySegmentTranslationPx(0)).toBe(24);
+    expect(getPrintBodySegmentTranslationPx(300)).toBe(-276);
   });
 
   it('uses the measured remaining content height for the last signed page', () => {

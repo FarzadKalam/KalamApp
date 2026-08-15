@@ -9,6 +9,7 @@ interface PrintAsPdfOptions {
   title?: string;
   filename?: string;
   targetWindow?: Window | null;
+  openInPdfViewer?: boolean;
 }
 
 const FUNCTION_PATH = '/functions/v1/render-pdf';
@@ -222,6 +223,24 @@ const writeSuccessState = ({
   }
 };
 
+const openPdfViewer = ({
+  targetWindow,
+  pdfUrl,
+}: {
+  targetWindow: Window | null | undefined;
+  pdfUrl: string;
+}) => {
+  if (!targetWindow || targetWindow.closed) return false;
+
+  try {
+    targetWindow.location.replace(pdfUrl);
+    return true;
+  } catch (error) {
+    console.error('Unable to open generated PDF in the prepared print window', error);
+    return false;
+  }
+};
+
 const requestPdfBlob = async ({
   documentHtml,
   filename,
@@ -308,8 +327,8 @@ export const generatePdfBlob = async (options: {
   return blob;
 };
 
-export const prepareGeneratedPdfWindow = (title?: string) => {
-  if (!shouldUseGeneratedPdfPrint()) return null;
+export const prepareGeneratedPdfWindow = (title?: string, options?: { force?: boolean }) => {
+  if (!options?.force && !shouldUseGeneratedPdfPrint()) return null;
 
   const targetWindow = window.open('', '_blank');
   if (!targetWindow) return null;
@@ -342,12 +361,15 @@ export const printAsPdf = async (options: PrintAsPdfOptions) => {
 
     if (targetWindow) {
       const pdfUrl = URL.createObjectURL(pdfBlob);
-      writeSuccessState({
-        targetWindow,
-        title: options.title,
-        filename,
-        pdfUrl,
-      });
+      const openedInViewer = options.openInPdfViewer && openPdfViewer({ targetWindow, pdfUrl });
+      if (!openedInViewer) {
+        writeSuccessState({
+          targetWindow,
+          title: options.title,
+          filename,
+          pdfUrl,
+        });
+      }
       targetWindow.focus();
       return;
     }

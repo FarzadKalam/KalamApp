@@ -73,10 +73,10 @@ describe('print pagination scenarios', () => {
 
     // The two rectangles overlap. A 640px boundary would cut the second one,
     // so the next page starts before that visual line band.
-    expect(offsets[1]).toBe(579);
+    expect(offsets[1]).toBe(580);
   });
 
-  it('uses independent safe edges so a renderer cannot crop the first line of the next page', () => {
+  it('starts the next source range at the next complete visual line', () => {
     const ranges = buildSmartPrintPageRanges({
       totalHeight: 1300,
       pageBodyStepPx: 640,
@@ -89,10 +89,27 @@ describe('print pagination scenarios', () => {
     });
 
     expect(ranges[0]).toEqual({ start: 0, end: 620 });
-    // One source pixel of guard remains above the measured line top. The
-    // preceding page still ends at its own complete line, without overlap.
-    expect(ranges[1].start).toBe(645);
+    // Only source whitespace is skipped. Starting at the next line top keeps
+    // a fractional glyph from the preceding line out of the repeated header.
+    expect(ranges[1].start).toBe(646);
     expect(ranges[1].start).toBeGreaterThan(ranges[0].end);
+  });
+
+  it('skips only whitespace between complete visual lines at a multi-page tail', () => {
+    const anchors = buildVariableLineAnchors(3349, [21, 24, 19, 28]);
+    const ranges = buildSmartPrintPageRanges({
+      totalHeight: 3349,
+      pageBodyStepPx: 820,
+      anchors,
+    });
+
+    expect(ranges).toHaveLength(5);
+    ranges.slice(1).forEach((range, index) => {
+      const priorEnd = ranges[index].end;
+      expect(range.start).toBeGreaterThanOrEqual(priorEnd);
+      expect(anchors.some((anchor) => anchor.top < range.start && anchor.bottom > priorEnd)).toBe(false);
+    });
+    expect(ranges.at(-1)?.end).toBe(3349);
   });
 
   it('keeps the same guard when the next printable item is a table row', () => {
@@ -107,7 +124,7 @@ describe('print pagination scenarios', () => {
       hardKeepFillRatio: 0.2,
     });
 
-    expect(ranges[1].start).toBe(647);
+    expect(ranges[1].start).toBe(648);
   });
 
   it('never uses the short fragment of a mixed-font visual line as a page boundary', () => {

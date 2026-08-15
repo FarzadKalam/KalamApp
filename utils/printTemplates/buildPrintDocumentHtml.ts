@@ -130,6 +130,7 @@ const getFontFaceCss = async (origin: string) => {
 export const buildPrintDocumentHtml = async ({ pageSize, sourceHtml, title }: BuildPrintDocumentHtmlOptions) => {
   const safeTitle = escapeHtml(title || 'چاپ');
   const safePageSize = escapeHtml(pageSize || 'A4 portrait');
+  const isNativePrintFlow = /\bdata-kalamapp-native-print-flow="true"/i.test(sourceHtml);
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const baseHref = origin ? `${origin}/` : '/';
   const fontCss = await getFontFaceCss(origin);
@@ -176,6 +177,9 @@ export const buildPrintDocumentHtml = async ({ pageSize, sourceHtml, title }: Bu
         background: #ffffff !important;
         font-family: 'Peyda', Tahoma, Arial, sans-serif !important;
       }
+      #print-root:has(.kalamapp-native-print-flow) {
+        background: transparent !important;
+      }
 
       #print-root,
       #print-root * {
@@ -186,10 +190,10 @@ export const buildPrintDocumentHtml = async ({ pageSize, sourceHtml, title }: Bu
 
       ${printStyles}
 
-      @page {
+      ${isNativePrintFlow ? '' : `@page {
         size: ${safePageSize};
         margin: 0;
-      }
+      }`}
     </style>
   </head>
   <body class="print-mode">

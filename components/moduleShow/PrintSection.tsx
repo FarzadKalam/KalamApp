@@ -1178,7 +1178,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         }
         .print-preview-scale .print-template-page {
           box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16);
-          border: 1px solid rgba(203, 213, 225, 0.95);
+          outline: 1px solid rgba(203, 213, 225, 0.95);
         }
         @media print {
           .print-preview-scale .print-template-page + .print-template-page {
@@ -1186,7 +1186,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           }
           .print-preview-scale .print-template-page {
             box-shadow: none !important;
-            border: 0 !important;
+            outline: 0 !important;
           }
         }
         .print-fields-grid {

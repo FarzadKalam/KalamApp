@@ -47,6 +47,70 @@ export const printStyles = `
     direction: rtl;
     text-align: right;
   }
+  .kalamapp-native-print-flow,
+  .kalamapp-native-print-flow * {
+    font-family: inherit;
+  }
+  .kalamapp-native-print-flow {
+    direction: rtl;
+    text-align: right;
+    color: #111827;
+    position: relative;
+  }
+  .kalamapp-native-print-flow-background {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+    pointer-events: none;
+  }
+  .kalamapp-native-print-flow-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+  }
+  .kalamapp-native-print-flow-body {
+    width: 100%;
+    box-sizing: border-box;
+    line-height: 1.9;
+    font-size: 14px;
+    direction: rtl;
+    text-align: right;
+    overflow: visible;
+    position: relative;
+    z-index: 1;
+    background: transparent;
+  }
+  .kalamapp-native-print-flow-body *,
+  .kalamapp-native-print-flow-body *::before,
+  .kalamapp-native-print-flow-body *::after {
+    box-sizing: border-box;
+    max-width: 100%;
+  }
+  .kalamapp-native-print-flow-body table {
+    width: 100%;
+    max-width: 100%;
+    border-collapse: collapse !important;
+    border-spacing: 0 !important;
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+  .kalamapp-native-print-flow-body thead { display: table-header-group; }
+  .kalamapp-native-print-flow-body tfoot { display: table-footer-group; }
+  .kalamapp-native-print-flow-body th,
+  .kalamapp-native-print-flow-body td {
+    white-space: normal;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    vertical-align: top;
+  }
+  .kalamapp-native-print-flow-body tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
   .invoice-custom-print-shell .print-template-page {
     direction: rtl;
     text-align: right;

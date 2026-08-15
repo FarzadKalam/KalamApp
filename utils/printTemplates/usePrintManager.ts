@@ -43,6 +43,7 @@ import {
   type PrintPageRange,
 } from './printPagination';
 import {
+  getPrintBodySegmentTranslationPx,
   getPrintBodyViewportHeightPx,
   getTemplatePageBodyStepPx,
 } from './pageLayout';
@@ -62,6 +63,7 @@ import {
 } from './printableFields';
 import { loadPrintFieldPreference, savePrintFieldPreference } from './fieldPreferences';
 import { hasRenderablePrintFooterHtml } from './footerLayout';
+import { buildNativeCustomPrintFlowHtml } from './nativePrintFlow';
 import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, sanitizePrintImageDisplayMode, type PrintImageDisplayMode } from './imageDisplay';
 import { loadPrintRenderPreference, savePrintRenderPreference } from './renderPreferences';
 import { parseLocationValue } from '../location';
@@ -563,6 +565,7 @@ export const usePrintManager = ({
   // user sees. It is the authoritative measurement for page boundaries.
   const previewPrintRootRef = useRef<HTMLDivElement | null>(null);
   const buildPrintCardRef = useRef<(pageCountOverride?: number | null) => React.ReactNode>(() => null);
+  const buildNativeCustomPrintFlowRef = useRef<() => string | null>(() => null);
   const reservedPrintWindowRef = useRef<Window | null>(null);
   const preparedPrintPageCountRef = useRef<number | null>(null);
   const renderedCustomTemplateRef = useRef<{ headerHtml: string; contentHtml: string; footerHtml: string } | null>(null);
@@ -1222,9 +1225,10 @@ export const usePrintManager = ({
     void loadPrintCompanySettings().catch((error) => {
       console.error('Load company settings before print failed', error);
     });
-    if (!shouldUseGeneratedPdfPrint()) return;
+    const shouldUseNativePdfFlow = selectedTemplateId.startsWith('custom:') && Boolean(buildNativeCustomPrintFlowRef.current());
+    if (!shouldUseGeneratedPdfPrint() && !shouldUseNativePdfFlow) return;
     const printTitle = getPrintOutputName();
-    reservedPrintWindowRef.current = prepareGeneratedPdfWindow(printTitle);
+    reservedPrintWindowRef.current = prepareGeneratedPdfWindow(printTitle, { force: shouldUseNativePdfFlow });
   }, [getPrintOutputName, loadPrintCompanySettings, measureCurrentCustomTemplatePages]);
 
   const handlePrint = useCallback(async () => {
@@ -1270,7 +1274,10 @@ export const usePrintManager = ({
       : selectedTemplateId === 'product_label'
         ? 'A6 portrait'
         : 'A4 portrait';
-    const staticPrintHtml = renderToStaticMarkup(
+    const nativePrintFlowHtml = selectedTemplateId.startsWith('custom:')
+      ? buildNativeCustomPrintFlowRef.current()
+      : null;
+    const staticPrintHtml = nativePrintFlowHtml || renderToStaticMarkup(
       React.createElement(
         React.Fragment,
         null,
@@ -1278,7 +1285,7 @@ export const usePrintManager = ({
       )
     );
 
-    if (shouldUseGeneratedPdfPrint()) {
+    if (nativePrintFlowHtml || shouldUseGeneratedPdfPrint()) {
       const targetWindow = reservedPrintWindowRef.current;
       reservedPrintWindowRef.current = null;
 
@@ -1288,6 +1295,7 @@ export const usePrintManager = ({
         title: printTitle,
         filename: printTitle,
         targetWindow,
+        openInPdfViewer: Boolean(nativePrintFlowHtml),
       }).catch((error) => {
         console.error('Generated PDF print failed', error);
       });
@@ -1358,7 +1366,10 @@ export const usePrintManager = ({
       renderedPageCount: renderedPageCount || 1,
       pageCountOverride: resolvedPageCount,
     });
-    const staticPrintHtml = tracker
+    const nativePrintFlowHtml = selectedTemplateId.startsWith('custom:')
+      ? buildNativeCustomPrintFlowRef.current()
+      : null;
+    const staticPrintHtml = nativePrintFlowHtml || (tracker
       ? await tracker.step(
           'render_static_print_html',
           () => Promise.resolve(renderToStaticMarkup(
@@ -1376,7 +1387,7 @@ export const usePrintManager = ({
             null,
             buildPrintCardRef.current(resolvedPageCount)
           )
-        );
+        ));
 
     return {
       blob: await generatePdfBlob({
@@ -3327,6 +3338,121 @@ export const usePrintManager = ({
     selectedOrgLetterhead?.imageUrl,
   ]);
 
+  const buildNativeCustomPrintFlow = useCallback(() => {
+    if (!selectedTemplateId.startsWith('custom:') || !selectedStoredTemplate) return null;
+    const isOrgLetterheadTemplate =
+      selectedStoredTemplate.renderMode === 'org_letterhead' && Boolean(selectedOrgLetterhead?.imageUrl);
+    if (isOrgLetterheadTemplate && selectedOrgLetterhead) {
+      const bodyItem = getPrintLetterheadEffectiveBodyItem(selectedOrgLetterhead, Boolean(printSignatureBandHtml));
+      const signaturesItem = getPrintLetterheadSignaturesItem(selectedOrgLetterhead);
+      if (!bodyItem) return null;
+
+      const metrics = getPaperSizeMetrics(selectedStoredTemplate.paperSize, selectedStoredTemplate.orientation || 'portrait');
+      const overlayHtml = buildPrintLetterheadOverlayHtml(selectedOrgLetterhead, {
+        title: getModuleTitle(moduleId, 'singular') || moduleConfig?.titles?.fa || selectedStoredTemplate.title,
+        date: (() => {
+          const rawValue = data?.date || data?.document_date || data?.invoice_date || data?.issue_date || data?.created_at || '';
+          const formatted = safeJalaliFormat(rawValue, 'YYYY/MM/DD');
+          return String(formatted || '').trim() ? `تاریخ: ${formatted}` : '';
+        })(),
+        number: (() => {
+          const rawValue = data?.system_code || data?.manual_code || data?.number || data?.document_number || '';
+          return String(rawValue || '').trim() ? `شماره: ${rawValue}` : '';
+        })(),
+        attachment: Number(linkedAttachmentCount || 0) > 0 ? `پیوست: ${toPersianNumber(Number(linkedAttachmentCount || 0))}` : '',
+        qrValue: printQrValue,
+      });
+      const signatureOverlay = signaturesItem && printSignatureBandHtml
+        ? `<div style="position:absolute;left:${signaturesItem.x}%;top:${signaturesItem.y}%;width:${signaturesItem.width}%;height:${signaturesItem.height}%;z-index:${signaturesItem.zIndex};display:flex;align-items:flex-end;justify-content:center;overflow:hidden;">${printSignatureBandHtml}</div>`
+        : '';
+      const pageMargins = {
+        top: (metrics.heightMm * bodyItem.y) / 100,
+        right: (metrics.widthMm * Math.max(0, 100 - bodyItem.x - bodyItem.width)) / 100,
+        bottom: (metrics.heightMm * Math.max(0, 100 - bodyItem.y - bodyItem.height)) / 100,
+        left: (metrics.widthMm * bodyItem.x) / 100,
+      };
+
+      return buildNativeCustomPrintFlowHtml({
+        widthMm: metrics.widthMm,
+        heightMm: metrics.heightMm,
+        pageMargins,
+        sectionPadding: PRINT_SECTION_CONTENT_PADDING,
+        contentHtml: renderedCustomTemplate?.contentHtml || '',
+        backgroundImageUrl: selectedOrgLetterhead.imageUrl,
+        fixedOverlayHtml: `${overlayHtml}${signatureOverlay}`,
+      });
+    }
+    if (
+      isCatalogFullPageTemplateId(selectedStoredTemplate.id || '')
+    ) {
+      // These templates use absolute page artwork/slots. They need their own
+      // flow adapter instead of silently dropping the artwork in a PDF.
+      return null;
+    }
+
+    const metrics = getPaperSizeMetrics(selectedStoredTemplate.paperSize, selectedStoredTemplate.orientation || 'portrait');
+    const showHeader = selectedStoredTemplate.showHeader !== false;
+    const hasSignatureBand = Boolean(printSignatureBandHtml);
+    const rawFooterHtml = String(renderedCustomTemplate?.footerHtml || '').trim();
+    const hasFooterHtml = hasRenderablePrintFooterHtml(rawFooterHtml);
+    const showFooter = hasSignatureBand || (
+      selectedStoredTemplate.showFooter !== false &&
+      (hasFooterHtml || PRINT_PAGE_COUNTER_HEIGHT_PX > 0)
+    );
+    const configuredHeaderHeight = Number(selectedStoredTemplate.headerHeight || 84);
+    const configuredFooterHeight = Number(selectedStoredTemplate.footerHeight || 62);
+    const headerHeight = getEffectiveMeasuredSectionHeightPx({
+      enabled: showHeader,
+      configuredHeightPx: configuredHeaderHeight,
+      measuredNode: headerMeasureRef.current,
+      fallbackHeightPx: measuredSectionHeights.header,
+    });
+    const measuredFooterHeight = getEffectiveMeasuredSectionHeightPx({
+      enabled: showFooter,
+      configuredHeightPx: configuredFooterHeight,
+      measuredNode: footerMeasureRef.current,
+      fallbackHeightPx: measuredSectionHeights.footer,
+    });
+    const signatureHeightPx = hasSignatureBand ? printSignatureSectionHeightPx : 0;
+    const footerHeight = showFooter
+      ? measuredFooterHeight + signatureHeightPx + PRINT_PAGE_COUNTER_HEIGHT_PX
+      : 0;
+    const footerWithPageCounter = showFooter
+      ? `<div class="print-template-footer-stack">${printSignatureBandHtml || ''}${rawFooterHtml}<div class="print-template-page-counter" style="margin-top:4px;font-size:10px;color:#64748b;direction:rtl;text-align:left;">صفحه <span class="pageNumber"></span> از <span class="totalPages"></span></div></div>`
+      : '';
+
+    return buildNativeCustomPrintFlowHtml({
+      widthMm: metrics.widthMm,
+      heightMm: metrics.heightMm,
+      pageMargins: getResolvedTemplatePageMargins(selectedStoredTemplate),
+      sectionPadding: PRINT_SECTION_CONTENT_PADDING,
+      contentHtml: renderedCustomTemplate?.contentHtml || '',
+      headerHtml: renderedCustomTemplate?.headerHtml || '',
+      footerHtml: footerWithPageCounter,
+      headerHeightPx: headerHeight,
+      footerHeightPx: footerHeight,
+      showHeader,
+      showFooter,
+      backgroundImageUrl: selectedStoredTemplate.backgroundImageUrl,
+    });
+  }, [
+    measuredSectionHeights.footer,
+    measuredSectionHeights.header,
+    printSignatureBandHtml,
+    printSignatureSectionHeightPx,
+    data,
+    linkedAttachmentCount,
+    moduleConfig?.titles?.fa,
+    moduleId,
+    printQrValue,
+    renderedCustomTemplate?.contentHtml,
+    renderedCustomTemplate?.footerHtml,
+    renderedCustomTemplate?.headerHtml,
+    selectedStoredTemplate,
+    selectedTemplateId,
+    selectedOrgLetterhead,
+  ]);
+
   const buildPrintCard = useCallback((pageCountOverride?: number | null) => {
     const shouldRenderMeasurementNodes = pageCountOverride == null;
     const hasExplicitSelection = Object.prototype.hasOwnProperty.call(selectedPrintFields, selectedTemplateId);
@@ -3510,7 +3636,8 @@ export const usePrintManager = ({
                       height: bodyViewportHeightCss,
                       maxHeight: bodyViewportHeightCss,
                       minHeight: 0,
-                      overflow: 'hidden',
+                      overflow: 'clip',
+                      contain: 'layout paint',
                       position: 'relative',
                       boxSizing: 'border-box',
                     },
@@ -3519,7 +3646,17 @@ export const usePrintManager = ({
                     'div',
                     {
                       className: 'print-template-body-segment',
-                      style: { width: '100%', boxSizing: 'border-box', transform: `translateY(-${pageStartOffset}px)` },
+                      // The complete source stays out of normal flow: Chromium
+                      // otherwise paginates this tall translated node after its
+                      // clipped viewport and leaks it into the next sheet.
+                      style: {
+                        position: 'absolute',
+                        top: 0,
+                        insetInlineStart: 0,
+                        width: '100%',
+                        boxSizing: 'border-box',
+                        transform: `translateY(${getPrintBodySegmentTranslationPx(pageStartOffset)}px)`,
+                      },
                     },
                     React.createElement('div', {
                       className: 'print-template-body-inner',
@@ -3735,7 +3872,11 @@ export const usePrintManager = ({
                         width: '100%',
                         padding: sectionPadding,
                         boxSizing: 'border-box',
-                        overflow: 'visible',
+                        // Match the live header's block-formatting context so
+                        // terminal paragraph margins cannot collapse out of
+                        // the hidden measurement box.
+                        display: 'flow-root',
+                        overflow: 'hidden',
                       },
                       dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.headerHtml || '' },
                     })
@@ -3748,7 +3889,10 @@ export const usePrintManager = ({
                         width: '100%',
                         padding: sectionPadding,
                         boxSizing: 'border-box',
-                        overflow: 'visible',
+                        // Match the live footer's block-formatting context so
+                        // its final paragraph margin is reserved as well.
+                        display: 'flow-root',
+                        overflow: 'hidden',
                       },
                       dangerouslySetInnerHTML: { __html: rawFooterHtml },
                     })
@@ -3835,7 +3979,7 @@ export const usePrintManager = ({
                       overflow: 'hidden',
                       padding: 0,
                       position: 'relative',
-                      zIndex: 1,
+                      zIndex: 3,
                     },
                   },
                   React.createElement('div', {
@@ -3857,7 +4001,7 @@ export const usePrintManager = ({
                   height: bodyRenderHeightCss,
                   maxHeight: bodyRenderHeightCss,
                   position: 'relative',
-                  zIndex: 2,
+                  zIndex: 1,
                   background: '#fff',
                   overflow: 'hidden',
                   display: 'flex',
@@ -3874,7 +4018,8 @@ export const usePrintManager = ({
                     height: bodyViewportHeightCss,
                     maxHeight: bodyViewportHeightCss,
                     minHeight: 0,
-                    overflow: 'hidden',
+                    overflow: 'clip',
+                    contain: 'layout paint',
                     position: 'relative',
                     boxSizing: 'border-box',
                   },
@@ -3883,7 +4028,17 @@ export const usePrintManager = ({
                   'div',
                   {
                     className: 'print-template-body-segment',
-                    style: { width: '100%', boxSizing: 'border-box', transform: `translateY(-${pageStartOffset}px)` },
+                    // The complete source stays out of normal flow: Chromium
+                    // otherwise paginates this tall translated node after its
+                    // clipped viewport and leaks it into the next sheet.
+                    style: {
+                      position: 'absolute',
+                      top: 0,
+                      insetInlineStart: 0,
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      transform: `translateY(${getPrintBodySegmentTranslationPx(pageStartOffset)}px)`,
+                    },
                   },
                   React.createElement('div', {
                     className: 'print-template-body-inner',
@@ -3930,7 +4085,7 @@ export const usePrintManager = ({
                       // above the signer names.
                       justifyContent: hasSignatureBand ? 'flex-start' : 'flex-end',
                       position: 'relative',
-                      zIndex: 1,
+                      zIndex: 3,
                     },
                   },
                   React.createElement(
@@ -4094,6 +4249,7 @@ export const usePrintManager = ({
 
   const renderPrintCard = useCallback(() => buildPrintCard(), [buildPrintCard]);
   buildPrintCardRef.current = buildPrintCard;
+  buildNativeCustomPrintFlowRef.current = buildNativeCustomPrintFlow;
 
   // اطلاعات هویتی فیش باید قبل از باز شدن پنجرهٔ چاپ آماده باشد؛ وابسته‌کردن
   // این درخواست به خود مودال باعث می‌شد پیش‌نمایش اولیه با خانه‌های خالی دیده شود.

@@ -29,6 +29,7 @@ import { sanitizeSelectedPrintFieldKeys } from './fieldAccess';
 import { hasMeaningfulPrintValue, resolveEffectivePrintFieldKeys } from './printableFields';
 import { loadPrintFieldPreference, savePrintFieldPreference } from './fieldPreferences';
 import { hasRenderablePrintFooterHtml } from './footerLayout';
+import { buildNativeCustomPrintFlowHtml } from './nativePrintFlow';
 import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, sanitizePrintImageDisplayMode, type PrintImageDisplayMode } from './imageDisplay';
 import {
   buildPrintLetterheadOverlayHtml,
@@ -48,6 +49,7 @@ import {
   buildPrintSignatureBandHtml,
   createPrintSignatureRowId,
   getPrintSignatureQuickAddOptions,
+  getPrintSignatureSectionHeightPx,
   getSignerModuleLabel,
   materializePrintSignatureStates,
   sanitizePrintSignatureConfigs,
@@ -126,6 +128,7 @@ export const useListPrintManager = ({
   const templatesLoadedRef = useRef(false);
   const companyLoadedRef = useRef(false);
   const renderPrintCardRef = useRef<() => React.ReactNode>(() => null);
+  const buildNativeListPrintFlowRef = useRef<() => string | null>(() => null);
   const reservedPrintWindowRef = useRef<Window | null>(null);
   const currencyLabel = readCurrencyConfig().label || '';
   const printRelationOptions = useMemo(
@@ -883,9 +886,10 @@ export const useListPrintManager = ({
   );
 
   const preparePrint = useCallback(() => {
-    if (!shouldUseGeneratedPdfPrint()) return;
+    const shouldUseNativePdfFlow = Boolean(buildNativeListPrintFlowRef.current());
+    if (!shouldUseGeneratedPdfPrint() && !shouldUseNativePdfFlow) return;
     const printTitle = getPrintOutputName();
-    reservedPrintWindowRef.current = prepareGeneratedPdfWindow(printTitle);
+    reservedPrintWindowRef.current = prepareGeneratedPdfWindow(printTitle, { force: shouldUseNativePdfFlow });
   }, [getPrintOutputName]);
 
   const handlePrint = useCallback(async () => {
@@ -901,9 +905,10 @@ export const useListPrintManager = ({
     const pageSize = `${selectedStoredTemplate?.paperSize || 'A4'} ${
       selectedStoredTemplate?.orientation === 'landscape' ? 'landscape' : 'portrait'
     }`;
-    const staticPrintHtml = renderToStaticMarkup(React.createElement(React.Fragment, null, renderPrintCardRef.current()));
+    const nativePrintFlowHtml = buildNativeListPrintFlowRef.current();
+    const staticPrintHtml = nativePrintFlowHtml || renderToStaticMarkup(React.createElement(React.Fragment, null, renderPrintCardRef.current()));
 
-    if (shouldUseGeneratedPdfPrint()) {
+    if (nativePrintFlowHtml || shouldUseGeneratedPdfPrint()) {
       const targetWindow = reservedPrintWindowRef.current;
       reservedPrintWindowRef.current = null;
 
@@ -913,6 +918,7 @@ export const useListPrintManager = ({
         title: printTitle,
         filename: printTitle,
         targetWindow,
+        openInPdfViewer: Boolean(nativePrintFlowHtml),
       }).catch((error) => {
         console.error('Generated PDF print failed', error);
       });
@@ -1112,6 +1118,82 @@ export const useListPrintManager = ({
     );
   }, [companyInfo?.print_letterheads, moduleConfig?.titles?.fa, moduleId, pagedRows, previewRevision, printSignatureBandHtml, renderTemplateSection, rowsPerPage, selectedOrgLetterhead, selectedStoredTemplate]);
   renderPrintCardRef.current = renderPrintCard;
+
+  const buildNativeListPrintFlow = useCallback(() => {
+    if (!selectedStoredTemplate) return null;
+    const isOrgLetterheadTemplate =
+      selectedStoredTemplate.renderMode === 'org_letterhead' && Boolean(selectedOrgLetterhead?.imageUrl);
+    if (isOrgLetterheadTemplate && selectedOrgLetterhead) {
+      const bodyItem = getPrintLetterheadEffectiveBodyItem(selectedOrgLetterhead, Boolean(printSignatureBandHtml));
+      const signaturesItem = getPrintLetterheadSignaturesItem(selectedOrgLetterhead);
+      if (!bodyItem) return null;
+
+      const metrics = getPaperMetrics(selectedStoredTemplate.paperSize, selectedStoredTemplate.orientation || 'portrait');
+      const allRows = Array.isArray(rows) ? rows : [];
+      const overlayHtml = buildPrintLetterheadOverlayHtml(selectedOrgLetterhead, {
+        title: moduleConfig?.titles?.fa || getModuleTitle(moduleId) || selectedStoredTemplate.title,
+        date: `تاریخ چاپ: ${toPersianNumber(safeJalaliFormat(new Date().toISOString(), 'YYYY/MM/DD HH:mm'))}`,
+        number: '',
+        attachment: '',
+        qrValue: '',
+      });
+      const signatureOverlay = signaturesItem && printSignatureBandHtml
+        ? `<div style="position:absolute;left:${signaturesItem.x}%;top:${signaturesItem.y}%;width:${signaturesItem.width}%;height:${signaturesItem.height}%;z-index:${signaturesItem.zIndex};display:flex;align-items:flex-end;justify-content:center;overflow:hidden;">${printSignatureBandHtml}</div>`
+        : '';
+
+      return buildNativeCustomPrintFlowHtml({
+        widthMm: metrics.widthMm,
+        heightMm: metrics.heightMm,
+        pageMargins: {
+          top: (metrics.heightMm * bodyItem.y) / 100,
+          right: (metrics.widthMm * Math.max(0, 100 - bodyItem.x - bodyItem.width)) / 100,
+          bottom: (metrics.heightMm * Math.max(0, 100 - bodyItem.y - bodyItem.height)) / 100,
+          left: (metrics.widthMm * bodyItem.x) / 100,
+        },
+        sectionPadding: '0',
+        contentHtml: renderTemplateSection(selectedStoredTemplate.contentHtml, 0, 1, allRows, 0),
+        backgroundImageUrl: selectedOrgLetterhead.imageUrl,
+        fixedOverlayHtml: `${overlayHtml}${signatureOverlay}`,
+      });
+    }
+    const metrics = getPaperMetrics(selectedStoredTemplate.paperSize, selectedStoredTemplate.orientation || 'portrait');
+    const pageMargins = {
+      top: Number(selectedStoredTemplate.pageMarginTop ?? PAGE_MARGINS.top),
+      right: Number(selectedStoredTemplate.pageMarginRight ?? PAGE_MARGINS.right),
+      bottom: Number(selectedStoredTemplate.pageMarginBottom ?? PAGE_MARGINS.bottom),
+      left: Number(selectedStoredTemplate.pageMarginLeft ?? PAGE_MARGINS.left),
+    };
+    const allRows = Array.isArray(rows) ? rows : [];
+    const headerHtml = renderTemplateSection(selectedStoredTemplate.headerHtml, 0, 1, allRows, 0);
+    const contentHtml = renderTemplateSection(selectedStoredTemplate.contentHtml, 0, 1, allRows, 0);
+    const footerHtml = renderTemplateSection(selectedStoredTemplate.footerHtml, 0, 1, allRows, 0);
+    const showHeader = selectedStoredTemplate.showHeader !== false;
+    const showFooter = selectedStoredTemplate.showFooter !== false && (
+      hasRenderablePrintFooterHtml(footerHtml) || Boolean(printSignatureBandHtml)
+    );
+    const signatureHeightPx = printSignatureBandHtml
+      ? getPrintSignatureSectionHeightPx(printSignatureStates)
+      : 0;
+    const footerWithPageCounter = showFooter
+      ? `${printSignatureBandHtml || ''}${footerHtml}<div class="print-template-page-counter" style="margin-top:4px;font-size:10px;color:#64748b;direction:rtl;text-align:left;">صفحه <span class="pageNumber"></span> از <span class="totalPages"></span></div>`
+      : '';
+
+    return buildNativeCustomPrintFlowHtml({
+      widthMm: metrics.widthMm,
+      heightMm: metrics.heightMm,
+      pageMargins,
+      sectionPadding: '0',
+      contentHtml,
+      headerHtml,
+      footerHtml: footerWithPageCounter,
+      headerHeightPx: showHeader ? Number(selectedStoredTemplate.headerHeight || 84) : 0,
+      footerHeightPx: showFooter ? Number(selectedStoredTemplate.footerHeight || 62) + signatureHeightPx + 18 : 0,
+      showHeader,
+      showFooter,
+      backgroundImageUrl: selectedStoredTemplate.backgroundImageUrl,
+    });
+  }, [moduleConfig?.titles?.fa, moduleId, printSignatureBandHtml, printSignatureStates, renderTemplateSection, rows, selectedOrgLetterhead, selectedStoredTemplate]);
+  buildNativeListPrintFlowRef.current = buildNativeListPrintFlow;
 
   const refreshTemplates = useCallback(async () => {
     const loaded = await loadTemplates(true);
