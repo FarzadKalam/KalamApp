@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { Button, App, Checkbox, Modal, Select, Form, Input, Skeleton } from 'antd';
+import { Button, App, Checkbox, Modal, Progress, Select, Form, Input, Skeleton } from 'antd';
 import { EditOutlined, CheckOutlined, CloseOutlined, CopyOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
@@ -1426,6 +1426,7 @@ const ModuleShow: React.FC = () => {
   }>>([]);
   const [pendingPrintShareFile, setPendingPrintShareFile] = useState<{ url: string; name: string } | null>(null);
   const [printShareMessageText, setPrintShareMessageText] = useState('');
+  const [pdfGenerationProgress, setPdfGenerationProgress] = useState<{ percent: number; label: string } | null>(null);
   const [isOnlineCatalogManagerOpen, setIsOnlineCatalogManagerOpen] = useState(false);
 
   const mergeUsersById = _msMergeUsersById;
@@ -5199,6 +5200,12 @@ const ModuleShow: React.FC = () => {
     canViewField,
   });
 
+  const generateFinalPrintPreview = useCallback(
+    async (onProgress: (progress: { percent: number; label: string }) => void) =>
+      await printManager.generateCurrentPdfBlob({ onProgress }),
+    [printManager.generateCurrentPdfBlob],
+  );
+
   const prepareDirectPdfAsset = useCallback(async (flow: 'print_share_prepare' | 'print_save_to_record') => {
     if (!id) {
       throw new Error('record_missing');
@@ -5213,23 +5220,32 @@ const ModuleShow: React.FC = () => {
     const messageKey = `${flow}:${Date.now()}`;
 
     try {
+      setPdfGenerationProgress({ percent: 5, label: 'در حال آماده‌سازی چاپ…' });
       msg.open({ key: messageKey, type: 'loading', content: 'در حال بستن پیش‌نمایش چاپ...', duration: 0 });
       tracker.mark('close_print_modal_requested');
       printManager.closePrintModal();
 
       await tracker.step('wait_for_ui_paint', () => waitForNextPaint(2));
+      setPdfGenerationProgress({ percent: 12, label: 'در حال آماده‌سازی قالب PDF…' });
       msg.open({ key: messageKey, type: 'loading', content: 'در حال ساخت PDF...', duration: 0 });
 
-      const pdfResult = await printManager.generateCurrentPdfBlob({ tracker });
+      const pdfResult = await printManager.generateCurrentPdfBlob({
+        tracker,
+        onProgress: ({ percent, label }) => setPdfGenerationProgress({ percent, label }),
+      });
+      setPdfGenerationProgress({ percent: 93, label: 'PDF آماده شد؛ در حال بارگذاری فایل…' });
       msg.open({ key: messageKey, type: 'loading', content: 'در حال بارگذاری فایل PDF...', duration: 0 });
 
       const uploaded = await uploadGeneratedPdf(pdfResult.blob, pdfResult.filename, pdfResult.title, tracker);
+      setPdfGenerationProgress({ percent: 100, label: 'فایل PDF آماده شد.' });
+      window.setTimeout(() => setPdfGenerationProgress(null), 450);
       return { tracker, messageKey, uploaded, pdfResult };
     } catch (error) {
       tracker.finalize({
         status: 'failed',
         error: String((error as any)?.message || error || 'unknown_error'),
       });
+      setPdfGenerationProgress(null);
       msg.destroy(messageKey);
       throw error;
     }
@@ -6328,6 +6344,21 @@ const ModuleShow: React.FC = () => {
 
   return (
     <div className="p-4 pt-1 md:p-6 md:pt-1 max-w-[1600px] mx-auto pb-20 transition-all overflow-x-hidden pl-0 md:pl-[88px] scrollbar-wide">
+      <Modal
+        open={Boolean(pdfGenerationProgress)}
+        footer={null}
+        closable={false}
+        maskClosable={false}
+        keyboard={false}
+        title="در حال آماده‌سازی PDF"
+        width={420}
+      >
+        <div className="py-3" dir="rtl">
+          <p className="mb-4 text-sm text-gray-600 dark:text-gray-300">{pdfGenerationProgress?.label || 'در حال آماده‌سازی PDF…'}</p>
+          <Progress percent={Math.max(0, Math.min(100, Math.round(pdfGenerationProgress?.percent || 0)))} />
+          <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">این پنجره پس از پایان ساخت و بارگذاری فایل خودکار بسته می‌شود.</p>
+        </div>
+      </Modal>
       <div className="mb-4 md:mb-0">
         <RelatedSidebar
           moduleConfig={moduleConfig}
@@ -6913,6 +6944,7 @@ const ModuleShow: React.FC = () => {
             onPrint={printManager.handlePrint}
             onSendInternalPdf={handleOpenPrintShare}
             onSavePdfToRecord={recordSupportsFileSave ? handleSavePrintPdfToRecord : undefined}
+            onGenerateFinalPdfPreview={generateFinalPrintPreview}
             printTemplates={printManager.printTemplates}
             selectedTemplateId={printManager.selectedTemplateId}
             onSelectTemplate={printManager.setSelectedTemplateId}

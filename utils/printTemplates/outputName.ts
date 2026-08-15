@@ -21,7 +21,6 @@ const RECORD_CODE_KEYS = [
   'legacy_invoice_number',
   'accounting_code',
   'code',
-  'id',
 ];
 
 const normalizeCandidate = (value: unknown): string => {

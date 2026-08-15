@@ -10,10 +10,17 @@ interface PrintAsPdfOptions {
   filename?: string;
   targetWindow?: Window | null;
   openInPdfViewer?: boolean;
+  onProgress?: (progress: PdfGenerationProgress) => void;
+}
+
+export interface PdfGenerationProgress {
+  percent: number;
+  label: string;
 }
 
 const FUNCTION_PATH = '/functions/v1/render-pdf';
 const PREPARED_WINDOW_NAME_PREFIX = 'kalamapp-pdf-target';
+const PDF_REQUEST_TIMEOUT_MS = 135_000;
 
 const escapeHtml = (value: string) =>
   String(value || '')
@@ -81,11 +88,27 @@ const writePreparedWindowState = (targetWindow: Window, title?: string) => {
         color: #475569;
         font-size: 14px;
       }
+      .print-pdf-progress-track {
+        width: 100%;
+        height: 8px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: #e2e8f0;
+      }
+      .print-pdf-progress-value {
+        width: 8%;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #4f46e5, #0ea5e9);
+        transition: width .35s ease;
+      }
     </style>
   </head>
   <body>
     <div class="print-pdf-loading">
       <strong>در حال آماده‌سازی فایل PDF</strong>
+      <span id="print-pdf-progress-label">در حال آماده‌سازی قالب چاپ…</span>
+      <div class="print-pdf-progress-track" aria-hidden="true"><div id="print-pdf-progress-value" class="print-pdf-progress-value"></div></div>
       <span>این صفحه را نبندید.</span>
     </div>
   </body>
@@ -96,11 +119,30 @@ const writePreparedWindowState = (targetWindow: Window, title?: string) => {
   }
 };
 
-const writeErrorState = (targetWindow: Window | null | undefined, title?: string) => {
+const updatePreparedWindowProgress = (
+  targetWindow: Window | null | undefined,
+  progress: PdfGenerationProgress,
+) => {
+  if (!targetWindow || targetWindow.closed) return;
+
+  try {
+    const label = targetWindow.document.getElementById('print-pdf-progress-label');
+    const value = targetWindow.document.getElementById('print-pdf-progress-value');
+    if (label) label.textContent = progress.label;
+    if (value) value.style.width = `${Math.max(0, Math.min(100, Math.round(progress.percent)))}%`;
+  } catch (error) {
+    console.error('Unable to update generated PDF progress', error);
+  }
+};
+
+const writeErrorState = (targetWindow: Window | null | undefined, title?: string, error?: unknown) => {
   if (!targetWindow || targetWindow.closed) return;
 
   try {
     const safeTitle = escapeHtml(title || 'چاپ');
+    const detail = String((error as any)?.message || error || '') === 'pdf_generation_timeout'
+      ? 'ساخت PDF بیش از زمان مجاز طول کشید. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.'
+      : 'لطفاً دوباره تلاش کنید.';
     targetWindow.document.open();
     targetWindow.document.write(`<!doctype html>
 <html lang="fa" dir="rtl">
@@ -130,7 +172,7 @@ const writeErrorState = (targetWindow: Window | null | undefined, title?: string
   <body>
     <div class="print-pdf-error">
       <strong>آماده‌سازی فایل PDF ناموفق بود.</strong>
-      <span>لطفاً دوباره تلاش کنید.</span>
+      <span>${detail}</span>
     </div>
   </body>
 </html>`);
@@ -145,11 +187,13 @@ const writeSuccessState = ({
   title,
   filename,
   pdfUrl,
+  showPdfPreview = false,
 }: {
   targetWindow: Window | null | undefined;
   title?: string;
   filename: string;
   pdfUrl: string;
+  showPdfPreview?: boolean;
 }) => {
   if (!targetWindow || targetWindow.closed) return;
 
@@ -168,12 +212,12 @@ const writeSuccessState = ({
       body {
         margin: 0;
         min-height: 100vh;
-        display: grid;
-        place-items: center;
+        display: flex;
+        flex-direction: column;
         background: #ffffff;
         color: #0f172a;
         font-family: Peyda, Tahoma, Arial, sans-serif;
-        padding: 24px;
+        padding: ${showPdfPreview ? '0' : '24px'};
         text-align: center;
       }
       .print-pdf-success {
@@ -201,20 +245,40 @@ const writeSuccessState = ({
         padding: 10px 16px;
         text-decoration: none;
       }
+      .print-pdf-preview-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 14px;
+        border-bottom: 1px solid #e2e8f0;
+        text-align: right;
+      }
+      .print-pdf-preview-toolbar strong { font-size: 14px; }
+      .print-pdf-preview-toolbar a { white-space: nowrap; }
+      .print-pdf-preview-frame { width: 100%; flex: 1 1 auto; min-height: calc(100vh - 58px); border: 0; }
     </style>
   </head>
   <body>
-    <div class="print-pdf-success">
-      <strong>فایل PDF آماده شد.</strong>
-      <span>اگر دانلود یا باز شدن فایل به صورت خودکار شروع نشد، از دکمه زیر استفاده کنید.</span>
-      <a id="pdf-download-link" href="${safePdfUrl}" download="${safeFilename}" target="_self" rel="noopener">باز کردن / دانلود PDF</a>
-    </div>
-    <script>
-      window.setTimeout(function () {
-        var link = document.getElementById('pdf-download-link');
-        if (link) link.click();
-      }, 250);
-    </script>
+    ${showPdfPreview ? `
+      <div class="print-pdf-preview-toolbar">
+        <strong>پیش‌نمایش نهایی PDF</strong>
+        <a id="pdf-download-link" href="${safePdfUrl}" download="${safeFilename}" rel="noopener">دانلود با نام «${safeFilename}»</a>
+      </div>
+      <iframe class="print-pdf-preview-frame" src="${safePdfUrl}" title="پیش‌نمایش نهایی PDF"></iframe>
+    ` : `
+      <div class="print-pdf-success">
+        <strong>فایل PDF آماده شد.</strong>
+        <span>اگر دانلود یا باز شدن فایل به صورت خودکار شروع نشد، از دکمه زیر استفاده کنید.</span>
+        <a id="pdf-download-link" href="${safePdfUrl}" download="${safeFilename}" target="_self" rel="noopener">باز کردن / دانلود PDF</a>
+      </div>
+      <script>
+        window.setTimeout(function () {
+          var link = document.getElementById('pdf-download-link');
+          if (link) link.click();
+        }, 250);
+      </script>
+    `}
   </body>
 </html>`);
     targetWindow.document.close();
@@ -223,34 +287,18 @@ const writeSuccessState = ({
   }
 };
 
-const openPdfViewer = ({
-  targetWindow,
-  pdfUrl,
-}: {
-  targetWindow: Window | null | undefined;
-  pdfUrl: string;
-}) => {
-  if (!targetWindow || targetWindow.closed) return false;
-
-  try {
-    targetWindow.location.replace(pdfUrl);
-    return true;
-  } catch (error) {
-    console.error('Unable to open generated PDF in the prepared print window', error);
-    return false;
-  }
-};
-
 const requestPdfBlob = async ({
   documentHtml,
   filename,
   pageSize,
   title,
+  onProgress,
 }: {
   documentHtml: string;
   filename?: string;
   pageSize?: string;
   title?: string;
+  onProgress?: (progress: PdfGenerationProgress) => void;
 }) => {
   const formData = new FormData();
   formData.append('documentHtml', documentHtml);
@@ -258,17 +306,35 @@ const requestPdfBlob = async ({
   formData.append('filename', normalizePdfFilename(filename, title));
   formData.append('pageSize', pageSize || 'A4 portrait');
 
-  const response = await fetch(buildFunctionUrl(), {
-    method: 'POST',
-    body: formData,
-  });
+  const controller = new AbortController();
+  let progressValue = 45;
+  const progressTimer = globalThis.setInterval(() => {
+    progressValue = Math.min(90, progressValue + 3);
+    onProgress?.({ percent: progressValue, label: 'در حال ساخت PDF روی سرور…' });
+  }, 1_500);
+  const timeout = globalThis.setTimeout(() => controller.abort(), PDF_REQUEST_TIMEOUT_MS);
 
-  const contentType = response.headers.get('content-type') || '';
-  if (!response.ok || !contentType.includes('application/pdf')) {
-    throw new Error(`PDF request failed: ${response.status}`);
+  try {
+    onProgress?.({ percent: progressValue, label: 'در حال ارسال فایل برای ساخت PDF…' });
+    const response = await fetch(buildFunctionUrl(), {
+      method: 'POST',
+      body: formData,
+      signal: controller.signal,
+    });
+    const contentType = response.headers.get('content-type') || '';
+    if (!response.ok || !contentType.includes('application/pdf')) {
+      throw new Error(`PDF request failed: ${response.status}`);
+    }
+    // `fetch` finishes once headers arrive; keep both the timeout and the
+    // progress indicator alive until the entire PDF stream has been received.
+    return await response.blob();
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('pdf_generation_timeout');
+    throw error;
+  } finally {
+    globalThis.clearInterval(progressTimer);
+    globalThis.clearTimeout(timeout);
   }
-
-  return response.blob();
 };
 
 export const generatePdfBlob = async (options: {
@@ -278,6 +344,7 @@ export const generatePdfBlob = async (options: {
   title?: string;
   filename?: string;
   tracker?: ReturnType<typeof createPrintPerformanceTracker>;
+  onProgress?: (progress: PdfGenerationProgress) => void;
 }) => {
   const sourceHtml = getSourceHtml(options).trim();
   if (!sourceHtml) {
@@ -288,6 +355,7 @@ export const generatePdfBlob = async (options: {
     pageSize: options.pageSize || 'A4 portrait',
     sourceHtmlLength: sourceHtml.length,
   });
+  options.onProgress?.({ percent: 15, label: 'در حال آماده‌سازی قالب PDF…' });
 
   const documentHtml = options.tracker
     ? await options.tracker.step(
@@ -304,6 +372,7 @@ export const generatePdfBlob = async (options: {
         sourceHtml,
         title: options.title,
       });
+  options.onProgress?.({ percent: 40, label: 'قالب آماده شد؛ در حال ساخت PDF…' });
 
   const blob = options.tracker
     ? await options.tracker.step(
@@ -313,6 +382,7 @@ export const generatePdfBlob = async (options: {
           filename: options.filename,
           pageSize: options.pageSize,
           title: options.title,
+          onProgress: options.onProgress,
         }),
         (result) => ({ blobSize: result.size })
       )
@@ -321,9 +391,11 @@ export const generatePdfBlob = async (options: {
         filename: options.filename,
         pageSize: options.pageSize,
         title: options.title,
+        onProgress: options.onProgress,
       });
 
   options.tracker?.addMetadata({ blobSize: blob.size });
+  options.onProgress?.({ percent: 100, label: 'فایل PDF آماده شد.' });
   return blob;
 };
 
@@ -349,27 +421,31 @@ export const printAsPdf = async (options: PrintAsPdfOptions) => {
     const targetWindow =
       options.targetWindow && !options.targetWindow.closed ? options.targetWindow : null;
     if (targetWindow) ensureTargetWindowName(targetWindow);
+    const reportProgress = (progress: PdfGenerationProgress) => {
+      updatePreparedWindowProgress(targetWindow, progress);
+      options.onProgress?.(progress);
+    };
+    reportProgress({ percent: 12, label: 'در حال آماده‌سازی قالب PDF…' });
 
     const pdfBlob = await generatePdfBlob({
       filename: options.filename,
       pageSize: options.pageSize,
       sourceHtml,
       title: options.title,
+      onProgress: reportProgress,
     });
 
     const filename = normalizePdfFilename(options.filename, options.title);
 
     if (targetWindow) {
       const pdfUrl = URL.createObjectURL(pdfBlob);
-      const openedInViewer = options.openInPdfViewer && openPdfViewer({ targetWindow, pdfUrl });
-      if (!openedInViewer) {
-        writeSuccessState({
-          targetWindow,
-          title: options.title,
-          filename,
-          pdfUrl,
-        });
-      }
+      writeSuccessState({
+        targetWindow,
+        title: options.title,
+        filename,
+        pdfUrl,
+        showPdfPreview: Boolean(options.openInPdfViewer),
+      });
       targetWindow.focus();
       return;
     }
@@ -385,7 +461,7 @@ export const printAsPdf = async (options: PrintAsPdfOptions) => {
     window.setTimeout(() => URL.revokeObjectURL(pdfUrl), 60_000);
 
   } catch (error) {
-    writeErrorState(options.targetWindow, options.title);
+    writeErrorState(options.targetWindow, options.title, error);
     throw error;
   }
 };

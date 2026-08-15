@@ -22,7 +22,13 @@ import {
 } from './store';
 import type { PrintTemplate } from './index';
 import { buildPrintOutputName } from './outputName';
-import { prepareGeneratedPdfWindow, printAsPdf, shouldUseGeneratedPdfPrint } from './printAsPdf';
+import {
+  generatePdfBlob,
+  prepareGeneratedPdfWindow,
+  printAsPdf,
+  shouldUseGeneratedPdfPrint,
+  type PdfGenerationProgress,
+} from './printAsPdf';
 import { normalizeRenderedImages } from './normalizeRenderedImages';
 import { printInIframe } from './printInIframe';
 import { sanitizeSelectedPrintFieldKeys } from './fieldAccess';
@@ -934,6 +940,43 @@ export const useListPrintManager = ({
     });
   }, [getPrintOutputName, selectedStoredTemplate, selectedTemplateId]);
 
+  const generateCurrentPdfBlob = useCallback(async (options?: {
+    onProgress?: (progress: PdfGenerationProgress) => void;
+  }) => {
+    if (!selectedTemplateId) {
+      throw new Error('print_template_missing');
+    }
+
+    const latestAssigneeDirectory = await fetchAssigneeDirectory(supabase).catch(() => null);
+    if (latestAssigneeDirectory) {
+      setAssigneeDirectory(latestAssigneeDirectory);
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+      });
+    }
+
+    const printTitle = getPrintOutputName();
+    const pageSize = `${selectedStoredTemplate?.paperSize || 'A4'} ${
+      selectedStoredTemplate?.orientation === 'landscape' ? 'landscape' : 'portrait'
+    }`;
+    const nativePrintFlowHtml = buildNativeListPrintFlowRef.current();
+    const sourceHtml = nativePrintFlowHtml || renderToStaticMarkup(
+      React.createElement(React.Fragment, null, renderPrintCardRef.current())
+    );
+
+    return {
+      blob: await generatePdfBlob({
+        pageSize,
+        sourceHtml,
+        title: printTitle,
+        filename: printTitle,
+        onProgress: options?.onProgress,
+      }),
+      filename: `${printTitle}.pdf`,
+      title: printTitle,
+    };
+  }, [getPrintOutputName, selectedStoredTemplate, selectedTemplateId]);
+
   useEffect(() => {
     if (!printMode) return;
     const handleAfterPrint = () => setPrintMode(false);
@@ -1247,6 +1290,7 @@ export const useListPrintManager = ({
     loadSignatureSignerOptions,
     savingPrintFields,
     handlePrint,
+    generateCurrentPdfBlob,
     preparePrint,
     refreshTemplates,
     renderPrintCard,

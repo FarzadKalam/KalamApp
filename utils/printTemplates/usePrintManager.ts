@@ -31,7 +31,7 @@ import {
   type StoredPrintTemplate,
 } from './store';
 import { buildPrintOutputName } from './outputName';
-import { generatePdfBlob, prepareGeneratedPdfWindow, printAsPdf, shouldUseGeneratedPdfPrint } from './printAsPdf';
+import { generatePdfBlob, prepareGeneratedPdfWindow, printAsPdf, shouldUseGeneratedPdfPrint, type PdfGenerationProgress } from './printAsPdf';
 import { normalizeRenderedImages } from './normalizeRenderedImages';
 import type { createPrintPerformanceTracker } from './printPerformance';
 import { printInIframe } from './printInIframe';
@@ -1225,11 +1225,18 @@ export const usePrintManager = ({
     void loadPrintCompanySettings().catch((error) => {
       console.error('Load company settings before print failed', error);
     });
+    const isCatalogFullPageTemplate = selectedTemplateId.startsWith('custom:') && isCatalogFullPageTemplateId(
+      selectedTemplateId.replace('custom:', '')
+    );
     const shouldUseNativePdfFlow = selectedTemplateId.startsWith('custom:') && Boolean(buildNativeCustomPrintFlowRef.current());
-    if (!shouldUseGeneratedPdfPrint() && !shouldUseNativePdfFlow) return;
+    // Full-page catalog artwork is intentionally not converted to the flowing
+    // header/footer adapter. It still must use the PDF engine, however, so the
+    // preview and the file opened by the user are byte-for-byte from one path.
+    const shouldUseFinalPdf = shouldUseGeneratedPdfPrint() || shouldUseNativePdfFlow || isCatalogFullPageTemplate;
+    if (!shouldUseFinalPdf) return;
     const printTitle = getPrintOutputName();
-    reservedPrintWindowRef.current = prepareGeneratedPdfWindow(printTitle, { force: shouldUseNativePdfFlow });
-  }, [getPrintOutputName, loadPrintCompanySettings, measureCurrentCustomTemplatePages]);
+    reservedPrintWindowRef.current = prepareGeneratedPdfWindow(printTitle, { force: shouldUseFinalPdf });
+  }, [getPrintOutputName, loadPrintCompanySettings, measureCurrentCustomTemplatePages, selectedTemplateId]);
 
   const handlePrint = useCallback(async () => {
     if (!selectedTemplateId) return;
@@ -1285,7 +1292,12 @@ export const usePrintManager = ({
       )
     );
 
-    if (nativePrintFlowHtml || shouldUseGeneratedPdfPrint()) {
+    const isCatalogFullPageTemplate = selectedTemplateId.startsWith('custom:') && isCatalogFullPageTemplateId(
+      selectedTemplateId.replace('custom:', '')
+    );
+    const shouldUseFinalPdf = Boolean(nativePrintFlowHtml) || shouldUseGeneratedPdfPrint() || isCatalogFullPageTemplate;
+
+    if (shouldUseFinalPdf) {
       const targetWindow = reservedPrintWindowRef.current;
       reservedPrintWindowRef.current = null;
 
@@ -1295,7 +1307,7 @@ export const usePrintManager = ({
         title: printTitle,
         filename: printTitle,
         targetWindow,
-        openInPdfViewer: Boolean(nativePrintFlowHtml),
+        openInPdfViewer: Boolean(nativePrintFlowHtml) || isCatalogFullPageTemplate,
       }).catch((error) => {
         console.error('Generated PDF print failed', error);
       });
@@ -1323,6 +1335,7 @@ export const usePrintManager = ({
   const generateCurrentPdfBlob = useCallback(async (options?: {
     tracker?: ReturnType<typeof createPrintPerformanceTracker>;
     pageCountOverride?: number | null;
+    onProgress?: (progress: PdfGenerationProgress) => void;
   }) => {
     if (!selectedTemplateId) {
       throw new Error('print_template_missing');
@@ -1396,6 +1409,7 @@ export const usePrintManager = ({
         title: printTitle,
         filename: printTitle,
         tracker,
+        onProgress: options?.onProgress,
       }),
       filename: `${printTitle}.pdf`,
       title: printTitle,

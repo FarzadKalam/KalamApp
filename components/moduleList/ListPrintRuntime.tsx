@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from "react";
+import React, { useCallback, useEffect, useMemo } from "react";
 import PrintSection from "../moduleShow/PrintSection";
 import type { ModuleDefinition } from "../../types";
 import { buildListPrintableFields } from "../../utils/listPrintExport";
@@ -39,6 +39,11 @@ const ListPrintRuntime: React.FC<ListPrintRuntimeProps> = ({
     printableFields,
     relationOptions,
   });
+  const generateFinalPdfPreview = useCallback(
+    (onProgress: (progress: { percent: number; label: string }) => void) =>
+      printManager.generateCurrentPdfBlob({ onProgress }),
+    [printManager.generateCurrentPdfBlob],
+  );
 
   useEffect(() => {
     if (open) {
@@ -55,6 +60,7 @@ const ListPrintRuntime: React.FC<ListPrintRuntimeProps> = ({
       }}
       onPreparePrint={printManager.preparePrint}
       onPrint={printManager.handlePrint}
+      onGenerateFinalPdfPreview={generateFinalPdfPreview}
       printTemplates={printManager.printTemplates}
       selectedTemplateId={printManager.selectedTemplateId}
       onSelectTemplate={printManager.setSelectedTemplateId}

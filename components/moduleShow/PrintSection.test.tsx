@@ -204,6 +204,45 @@ describe('PrintSection', () => {
     });
   });
 
+  it('uses the generated final PDF for preview instead of a separate React layout', async () => {
+    setDesktopViewport();
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const createObjectURL = vi.fn(() => 'blob:final-print-preview');
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL });
+    const onGenerateFinalPdfPreview = vi.fn(async (onProgress) => {
+      onProgress({ percent: 60, label: 'در حال ساخت PDF نهایی…' });
+      return { blob: new Blob(['%PDF-final-preview']) };
+    });
+
+    try {
+      render(
+        <PrintSection
+          isPrintModalOpen
+          onClose={vi.fn()}
+          onPrint={vi.fn()}
+          onGenerateFinalPdfPreview={onGenerateFinalPdfPreview}
+          printTemplates={templates}
+          selectedTemplateId="custom:a4"
+          onSelectTemplate={vi.fn()}
+          renderPrintCard={() => <div data-testid="print-card">پیش‌نمایش قدیمی</div>}
+          printMode={false}
+        />
+      );
+
+      await waitFor(() => expect(onGenerateFinalPdfPreview).toHaveBeenCalledTimes(1));
+      const finalPdfFrame = await screen.findByTitle('پیش‌نمایش نهایی PDF');
+      expect(finalPdfFrame).toHaveAttribute('src', 'blob:final-print-preview');
+      expect(screen.queryByTestId('print-card')).not.toBeInTheDocument();
+      expect(screen.getByText('PDF نهایی')).toBeInTheDocument();
+    } finally {
+      Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
+      Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL });
+    }
+  });
+
   it('groups printable fields by section and marks empty values', async () => {
     setDesktopViewport();
     const user = userEvent.setup();

@@ -22,6 +22,7 @@ interface PrintSectionProps {
   onSendInternalPdf?: () => void | Promise<void>;
   onSavePdfToRecord?: () => void | Promise<void>;
   onRefreshPreview?: () => void | Promise<void>;
+  onGenerateFinalPdfPreview?: (onProgress: (progress: { percent: number; label: string }) => void) => Promise<{ blob: Blob }>;
   printTemplates: { id: string; title: string; description: string; isSystem?: boolean }[];
   selectedTemplateId: string;
   onSelectTemplate: (id: string) => void;
@@ -87,6 +88,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   onSendInternalPdf,
   onSavePdfToRecord,
   onRefreshPreview,
+  onGenerateFinalPdfPreview,
   printTemplates,
   selectedTemplateId,
   onSelectTemplate,
@@ -126,6 +128,13 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   const [savingPdfToRecord, setSavingPdfToRecord] = useState(false);
   const [orderPanelOpen, setOrderPanelOpen] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [finalPdfPreviewUrl, setFinalPdfPreviewUrl] = useState<string | null>(null);
+  const [finalPdfPreviewProgress, setFinalPdfPreviewProgress] = useState<{ percent: number; label: string } | null>(null);
+  const [finalPdfPreviewError, setFinalPdfPreviewError] = useState('');
+  const [finalPdfPreviewRevision, setFinalPdfPreviewRevision] = useState(0);
+  const finalPdfPreviewUrlRef = useRef<string | null>(null);
+  const finalPdfPreviewRequestRef = useRef(0);
+  const finalPdfPreviewGeneratorRef = useRef(onGenerateFinalPdfPreview);
   const previewStageRef = useRef<HTMLDivElement | null>(null);
   const pinchDistanceRef = useRef<number | null>(null);
   const [isMobile, setIsMobile] = useState(() => (typeof window !== 'undefined' ? window.innerWidth < 768 : false));
@@ -217,6 +226,53 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   }, [paperWidthPx]);
 
   useEffect(() => {
+    finalPdfPreviewGeneratorRef.current = onGenerateFinalPdfPreview;
+  }, [onGenerateFinalPdfPreview]);
+
+  const loadFinalPdfPreview = useCallback(async () => {
+    const generateFinalPdfPreview = finalPdfPreviewGeneratorRef.current;
+    if (!generateFinalPdfPreview) return;
+    const requestId = ++finalPdfPreviewRequestRef.current;
+    if (finalPdfPreviewUrlRef.current) {
+      URL.revokeObjectURL(finalPdfPreviewUrlRef.current);
+      finalPdfPreviewUrlRef.current = null;
+    }
+    setFinalPdfPreviewUrl(null);
+    setFinalPdfPreviewError('');
+    setFinalPdfPreviewProgress({ percent: 5, label: 'در حال آماده‌سازی پیش‌نمایش نهایی…' });
+    try {
+      const result = await generateFinalPdfPreview((progress) => setFinalPdfPreviewProgress(progress));
+      const nextUrl = URL.createObjectURL(result.blob);
+      if (requestId !== finalPdfPreviewRequestRef.current) {
+        URL.revokeObjectURL(nextUrl);
+        return;
+      }
+      finalPdfPreviewUrlRef.current = nextUrl;
+      setFinalPdfPreviewUrl(nextUrl);
+      setFinalPdfPreviewProgress(null);
+    } catch (error) {
+      if (requestId !== finalPdfPreviewRequestRef.current) return;
+      console.error('Generate final PDF preview failed', error);
+      setFinalPdfPreviewUrl(null);
+      setFinalPdfPreviewProgress(null);
+      setFinalPdfPreviewError('ساخت پیش‌نمایش نهایی PDF ناموفق بود. دوباره تلاش کنید.');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isPrintModalOpen || activeTab !== 'preview' || !onGenerateFinalPdfPreview) return;
+    void loadFinalPdfPreview();
+    return () => {
+      finalPdfPreviewRequestRef.current += 1;
+    };
+  }, [activeTab, finalPdfPreviewRevision, isPrintModalOpen, loadFinalPdfPreview, Boolean(onGenerateFinalPdfPreview), selectedTemplateId]);
+
+  useEffect(() => () => {
+    finalPdfPreviewRequestRef.current += 1;
+    if (finalPdfPreviewUrlRef.current) URL.revokeObjectURL(finalPdfPreviewUrlRef.current);
+  }, []);
+
+  useEffect(() => {
     if (!isPrintModalOpen || activeTab !== 'preview') return;
     let raf2 = 0;
     const raf1 = window.requestAnimationFrame(() => {
@@ -240,11 +296,14 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   }, [activeTab, isPrintModalOpen, selectedTemplateId, zoom]);
 
   const handleRefresh = async (silent = false) => {
-    if (!onRefreshPreview) return;
+    if (!onRefreshPreview && !onGenerateFinalPdfPreview) return;
     setRefreshing(true);
     try {
-      await onRefreshPreview();
+      if (onRefreshPreview) await onRefreshPreview();
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      if (onGenerateFinalPdfPreview) {
+        setFinalPdfPreviewRevision((value) => value + 1);
+      }
       if (!silent) message.success('پیش‌نمایش چاپ به‌روز شد');
     } catch (error) {
       console.error('Refresh print preview failed', error);
@@ -514,28 +573,30 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                         <div className="print-preview-meta">
                           <span>{previewMeta?.paperSize || 'A4'}</span>
                           <span>{(previewMeta?.orientation || 'portrait') === 'landscape' ? 'افقی' : 'عمودی'}</span>
-                          <span>{`${Math.round(zoom * 100)}%`}</span>
+                          <span>{onGenerateFinalPdfPreview ? 'PDF نهایی' : `${Math.round(zoom * 100)}%`}</span>
                         </div>
                         <div className="print-preview-actions">
-                          <Button
-                            size="small"
-                            icon={<MinusOutlined />}
-                            onClick={() => setZoom((prev) => Math.max(0.5, Math.round((prev - 0.1) * 10) / 10))}
-                            title="کوچک‌نمایی"
-                          />
-                          <Button
-                            size="small"
-                            icon={<PlusOutlined />}
-                            onClick={() => setZoom((prev) => Math.min(1.8, Math.round((prev + 0.1) * 10) / 10))}
-                            title="بزرگ‌نمایی"
-                          />
+                          {!onGenerateFinalPdfPreview ? <>
+                            <Button
+                              size="small"
+                              icon={<MinusOutlined />}
+                              onClick={() => setZoom((prev) => Math.max(0.5, Math.round((prev - 0.1) * 10) / 10))}
+                              title="کوچک‌نمایی"
+                            />
+                            <Button
+                              size="small"
+                              icon={<PlusOutlined />}
+                              onClick={() => setZoom((prev) => Math.min(1.8, Math.round((prev + 0.1) * 10) / 10))}
+                              title="بزرگ‌نمایی"
+                            />
+                          </> : null}
                           <Button
                             size="small"
                             icon={<ReloadOutlined />}
                             onClick={() => { void handleRefresh(); }}
                             loading={refreshing}
-                            disabled={!onRefreshPreview}
-                            title="رفرش پیش‌نمایش"
+                            disabled={!onRefreshPreview && !onGenerateFinalPdfPreview}
+                            title="رفرش پیش‌نمایش نهایی"
                           />
                         </div>
                       </div>
@@ -566,7 +627,25 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                           pinchDistanceRef.current = null;
                         }}
                       >
-                        <div className="print-preview-canvas">
+                        {onGenerateFinalPdfPreview ? (
+                          <div style={{ width: '100%', minHeight: '100%', padding: 12, boxSizing: 'border-box' }} dir="rtl">
+                            {finalPdfPreviewProgress ? (
+                              <div style={{ maxWidth: 420, margin: '48px auto', textAlign: 'right' }}>
+                                <p style={{ marginBottom: 12, color: '#475569' }}>{finalPdfPreviewProgress.label}</p>
+                                <div style={{ height: 8, borderRadius: 999, overflow: 'hidden', background: '#e2e8f0' }}>
+                                  <div style={{ width: `${Math.max(0, Math.min(100, finalPdfPreviewProgress.percent))}%`, height: '100%', background: '#4f46e5', transition: 'width .25s ease' }} />
+                                </div>
+                              </div>
+                            ) : finalPdfPreviewError ? (
+                              <div style={{ maxWidth: 420, margin: '48px auto', textAlign: 'center', color: '#b91c1c' }}>
+                                <p>{finalPdfPreviewError}</p>
+                                <Button onClick={() => { void loadFinalPdfPreview(); }}>تلاش دوباره</Button>
+                              </div>
+                            ) : finalPdfPreviewUrl ? (
+                              <iframe src={finalPdfPreviewUrl} title="پیش‌نمایش نهایی PDF" style={{ width: '100%', height: 'calc(100vh - 330px)', minHeight: 460, border: 0, background: '#fff' }} />
+                            ) : null}
+                          </div>
+                        ) : <div className="print-preview-canvas">
                           <div
                             className="print-preview-zoom-frame"
                               style={{
@@ -589,7 +668,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                               {!printMode ? renderPrintCard() : null}
                             </div>
                           </div>
-                        </div>
+                        </div>}
                       </div>
                     </div>
                   ),

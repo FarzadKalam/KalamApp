@@ -3899,6 +3899,11 @@ const HRPage: React.FC = () => {
       },
     },
   });
+  const generateCommissionFinalPdfPreview = useCallback(
+    (onProgress: (progress: { percent: number; label: string }) => void) =>
+      commissionListPrintManager.generateCurrentPdfBlob({ onProgress }),
+    [commissionListPrintManager.generateCurrentPdfBlob],
+  );
 
   useEffect(() => {
     setCommissionHistoryIndex((current) => Math.min(current, Math.max(commissionHistoryRows.length - 1, 0)));
@@ -8836,6 +8841,7 @@ const HRPage: React.FC = () => {
         onClose={() => commissionListPrintManager.setIsPrintModalOpen(false)}
         onPreparePrint={commissionListPrintManager.preparePrint}
         onPrint={commissionListPrintManager.handlePrint}
+        onGenerateFinalPdfPreview={generateCommissionFinalPdfPreview}
         printTemplates={commissionListPrintManager.printTemplates}
         selectedTemplateId={commissionListPrintManager.selectedTemplateId}
         onSelectTemplate={commissionListPrintManager.setSelectedTemplateId}

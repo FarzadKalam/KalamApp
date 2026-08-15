@@ -1,4 +1,5 @@
-﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { Alert, App, Button, Card, Empty, Form, Input, InputNumber, Modal, Select, Spin, Table, Tag } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -21,6 +22,7 @@ import PrintSection from '../components/moduleShow/PrintSection';
 import { ACCOUNTING_PERMISSION_KEY, fetchCurrentUserRolePermissions } from '../utils/permissions';
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { buildPrintOutputName } from '../utils/printTemplates/outputName';
+import { generatePdfBlob, prepareGeneratedPdfWindow, printAsPdf } from '../utils/printTemplates/printAsPdf';
 import {
   formatNumericForInput,
   parseNumericInput,
@@ -219,7 +221,7 @@ const JournalEntryShowPage: React.FC = () => {
   const [statusLoading, setStatusLoading] = useState(false);
   const [saveRowId, setSaveRowId] = useState<string | null>(null);
   const [isPrintOpen, setIsPrintOpen] = useState(false);
-  const [printMode, setPrintMode] = useState(false);
+  const journalPrintTargetWindowRef = useRef<Window | null>(null);
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [correctionReason, setCorrectionReason] = useState('');
   const [userNames, setUserNames] = useState<Record<string, string>>({});
@@ -1508,6 +1510,76 @@ const JournalEntryShowPage: React.FC = () => {
   }
 
   const diff = parseNum(entry.total_debit) - parseNum(entry.total_credit);
+  const renderJournalPrintCard = () => (
+    <div className="print-card" style={{ width: '148mm', minHeight: '210mm', padding: '10mm' }}>
+      <div className="font-bold mb-2">سند حسابداری</div>
+      <div className="text-xs mb-2">
+        شماره: <span className="persian-number">{toPersianNumber(entry.entry_no || '-')}</span> | تاریخ:{' '}
+        <span className="persian-number">{toPersianNumber(safeJalaliFormat(entry.entry_date, 'YYYY/MM/DD') || '-')}</span>
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr>
+            <th style={{ border: '1px solid #d1d5db', padding: 4 }}>ردیف</th>
+            <th style={{ border: '1px solid #d1d5db', padding: 4 }}>حساب</th>
+            <th style={{ border: '1px solid #d1d5db', padding: 4 }}>شرح</th>
+            <th style={{ border: '1px solid #d1d5db', padding: 4 }}>بدهکار</th>
+            <th style={{ border: '1px solid #d1d5db', padding: 4 }}>بستانکار</th>
+          </tr>
+        </thead>
+        <tbody>
+          {lines.map((line) => (
+            <tr key={line.id}>
+              <td style={{ border: '1px solid #d1d5db', padding: 4 }} className="persian-number">
+                {toPersianNumber(line.line_no)}
+              </td>
+              <td style={{ border: '1px solid #d1d5db', padding: 4 }}>
+                {`[${toPersianNumber(line?.chart_of_accounts?.code || '-')}] ${line?.chart_of_accounts?.name || '-'}`}
+              </td>
+              <td style={{ border: '1px solid #d1d5db', padding: 4 }}>{line.description || '-'}</td>
+              <td style={{ border: '1px solid #d1d5db', padding: 4 }} className="persian-number">
+                {formatPersianPrice(line.debit || 0)}
+              </td>
+              <td style={{ border: '1px solid #d1d5db', padding: 4 }} className="persian-number">
+                {formatPersianPrice(line.credit || 0)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+  const getJournalPrintSourceHtml = () => renderToStaticMarkup(
+    React.createElement(React.Fragment, null, renderJournalPrintCard())
+  );
+  const prepareJournalPrint = () => {
+    journalPrintTargetWindowRef.current = prepareGeneratedPdfWindow(journalPrintOutputName, { force: true });
+  };
+  const handleJournalPrint = () => {
+    const targetWindow = journalPrintTargetWindowRef.current;
+    journalPrintTargetWindowRef.current = null;
+    void printAsPdf({
+      pageSize: 'A5 portrait',
+      sourceHtml: getJournalPrintSourceHtml(),
+      title: journalPrintOutputName,
+      filename: journalPrintOutputName,
+      targetWindow,
+      openInPdfViewer: true,
+    }).catch((error) => {
+      console.error('Journal PDF print failed', error);
+    });
+  };
+  const generateFinalJournalPdfPreview = async (onProgress: (progress: { percent: number; label: string }) => void) => ({
+    blob: await generatePdfBlob({
+      pageSize: 'A5 portrait',
+      sourceHtml: getJournalPrintSourceHtml(),
+      title: journalPrintOutputName,
+      filename: journalPrintOutputName,
+      onProgress,
+    }),
+    filename: `${journalPrintOutputName}.pdf`,
+    title: journalPrintOutputName,
+  });
 
   return (
     <div className="p-4 md:p-6 max-w-[1600px] mx-auto pb-20 animate-fadeIn">
@@ -1717,62 +1789,15 @@ const JournalEntryShowPage: React.FC = () => {
       <PrintSection
         isPrintModalOpen={isPrintOpen}
         onClose={() => setIsPrintOpen(false)}
-        onPrint={() => {
-          const previousTitle = document.title;
-          setIsPrintOpen(false);
-          setPrintMode(true);
-          setTimeout(() => {
-            document.title = journalPrintOutputName;
-            window.print();
-            setTimeout(() => {
-              document.title = previousTitle;
-              setPrintMode(false);
-            }, 700);
-          }, 120);
-        }}
+        onPreparePrint={prepareJournalPrint}
+        onPrint={handleJournalPrint}
+        onGenerateFinalPdfPreview={generateFinalJournalPdfPreview}
         printTemplates={[{ id: 'journal_voucher', title: 'سند حسابداری', description: 'نسخه چاپی سند' }]}
         selectedTemplateId="journal_voucher"
         onSelectTemplate={() => undefined}
-        renderPrintCard={() => (
-          <div className="print-card" style={{ width: '148mm', minHeight: '210mm', padding: '10mm' }}>
-            <div className="font-bold mb-2">سند حسابداری</div>
-            <div className="text-xs mb-2">
-              شماره: <span className="persian-number">{toPersianNumber(entry.entry_no || '-')}</span> | تاریخ:{' '}
-              <span className="persian-number">{toPersianNumber(safeJalaliFormat(entry.entry_date, 'YYYY/MM/DD') || '-')}</span>
-            </div>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th style={{ border: '1px solid #d1d5db', padding: 4 }}>ردیف</th>
-                  <th style={{ border: '1px solid #d1d5db', padding: 4 }}>حساب</th>
-                  <th style={{ border: '1px solid #d1d5db', padding: 4 }}>شرح</th>
-                  <th style={{ border: '1px solid #d1d5db', padding: 4 }}>بدهکار</th>
-                  <th style={{ border: '1px solid #d1d5db', padding: 4 }}>بستانکار</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lines.map((line) => (
-                  <tr key={line.id}>
-                    <td style={{ border: '1px solid #d1d5db', padding: 4 }} className="persian-number">
-                      {toPersianNumber(line.line_no)}
-                    </td>
-                    <td style={{ border: '1px solid #d1d5db', padding: 4 }}>
-                      {`[${toPersianNumber(line?.chart_of_accounts?.code || '-')}] ${line?.chart_of_accounts?.name || '-'}`}
-                    </td>
-                    <td style={{ border: '1px solid #d1d5db', padding: 4 }}>{line.description || '-'}</td>
-                    <td style={{ border: '1px solid #d1d5db', padding: 4 }} className="persian-number">
-                      {formatPersianPrice(line.debit || 0)}
-                    </td>
-                    <td style={{ border: '1px solid #d1d5db', padding: 4 }} className="persian-number">
-                      {formatPersianPrice(line.credit || 0)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        printMode={printMode}
+        renderPrintCard={renderJournalPrintCard}
+        printMode={false}
+        previewMeta={{ paperSize: 'A5', orientation: 'portrait' }}
       />
 
       <Modal

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Button, Empty, Progress, Select, Spin, Statistic, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { BarChartOutlined, CopyOutlined, EditOutlined, EyeOutlined, FileExcelOutlined, PieChartOutlined, PrinterOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
@@ -37,7 +37,7 @@ import { loadWorkflowConditionEditorOptions } from '../utils/workflowConditionOp
 import { escapeCsvCell, formatListCellValue } from '../utils/listPrintExport';
 import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberFormatter';
 import { getSafeOptionFallback } from '../utils/optionHelpers';
-import { printInIframe } from '../utils/printTemplates/printInIframe';
+import { generatePdfBlob, prepareGeneratedPdfWindow, printAsPdf } from '../utils/printTemplates/printAsPdf';
 import { readCurrencyConfig } from '../utils/currency';
 import {
   isReportTaskProcessFieldKey,
@@ -353,6 +353,7 @@ const ReportViewerPage: React.FC = () => {
   const [activeMetricKey, setActiveMetricKey] = useState<string>('__count');
   const [printTemplate, setPrintTemplate] = useState<'landscape' | 'portrait'>('landscape');
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const reportPrintTargetWindowRef = useRef<Window | null>(null);
   const [selectedPrintFields, setSelectedPrintFields] = useState<Record<string, string[]>>({});
   const [savingPrintFields, setSavingPrintFields] = useState(false);
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
@@ -1480,12 +1481,41 @@ const ReportViewerPage: React.FC = () => {
     `;
   };
 
+  const prepareReportPrint = () => {
+    reportPrintTargetWindowRef.current = prepareGeneratedPdfWindow(report?.name || 'گزارش', { force: true });
+  };
+
   const handlePrint = (orientation: 'portrait' | 'landscape' = 'landscape') => {
-    void printInIframe({
+    const title = report?.name || 'گزارش';
+    const targetWindow = reportPrintTargetWindowRef.current || prepareGeneratedPdfWindow(title, { force: true });
+    reportPrintTargetWindowRef.current = null;
+    void printAsPdf({
       pageSize: `A4 ${orientation}`,
       sourceHtml: buildReportPrintHtml(orientation),
-      title: report?.name || 'گزارش',
+      title,
+      filename: title,
+      targetWindow,
+      openInPdfViewer: true,
+    }).catch((error) => {
+      console.error('Report PDF print failed', error);
     });
+  };
+
+  const generateFinalReportPdfPreview = async (
+    onProgress: (progress: { percent: number; label: string }) => void,
+  ) => {
+    const title = report?.name || 'گزارش';
+    return {
+      blob: await generatePdfBlob({
+        pageSize: `A4 ${printTemplate}`,
+        sourceHtml: buildReportPrintHtml(printTemplate),
+        title,
+        filename: title,
+        onProgress,
+      }),
+      filename: `${title}.pdf`,
+      title,
+    };
   };
 
   const handleCopyReport = useCallback(async () => {
@@ -1709,7 +1739,9 @@ const ReportViewerPage: React.FC = () => {
       <PrintSection
         isPrintModalOpen={isPrintModalOpen}
         onClose={() => setIsPrintModalOpen(false)}
+        onPreparePrint={prepareReportPrint}
         onPrint={() => handlePrint(printTemplate)}
+        onGenerateFinalPdfPreview={generateFinalReportPdfPreview}
         printTemplates={reportPrintTemplates}
         selectedTemplateId={printTemplate}
         onSelectTemplate={(id) => setPrintTemplate(id as 'landscape' | 'portrait')}

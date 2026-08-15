@@ -240,6 +240,11 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
       final_balance_side: visibleTotals.finalBalance >= 0 ? 'بدهکار' : 'بستانکار',
     },
   });
+  const generateOperationalFinalPdfPreview = useCallback(
+    (onProgress: (progress: { percent: number; label: string }) =>
+      void) => listPrintManager.generateCurrentPdfBlob({ onProgress }),
+    [listPrintManager.generateCurrentPdfBlob],
+  );
 
   const rowTypeFilters = useMemo(
     () => Object.entries(OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL).map(([value, label]) => ({ label, value })),
@@ -470,6 +475,7 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
         onClose={() => listPrintManager.setIsPrintModalOpen(false)}
         onPreparePrint={listPrintManager.preparePrint}
         onPrint={listPrintManager.handlePrint}
+        onGenerateFinalPdfPreview={generateOperationalFinalPdfPreview}
         printTemplates={listPrintManager.printTemplates}
         selectedTemplateId={listPrintManager.selectedTemplateId}
         onSelectTemplate={listPrintManager.setSelectedTemplateId}
