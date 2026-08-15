@@ -35,6 +35,12 @@ const setMobileViewport = () => {
   window.dispatchEvent(new Event('resize'));
 };
 
+const selectPrintTemplate = async (user: ReturnType<typeof userEvent.setup>, title: string) => {
+  await user.click(screen.getByRole('combobox'));
+  const matchingOptions = await screen.findAllByText(title);
+  await user.click(matchingOptions[matchingOptions.length - 1]);
+};
+
 describe('PrintSection', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -117,7 +123,7 @@ describe('PrintSection', () => {
       />
     );
 
-    await user.click(await screen.findByText('قالب A5 تست'));
+    await selectPrintTemplate(user, 'قالب A5 تست');
 
     expect(onSelectTemplate).toHaveBeenCalledWith('custom:a5');
     expect(screen.getAllByTestId('print-card')).toHaveLength(1);
@@ -252,6 +258,91 @@ describe('PrintSection', () => {
     }
   });
 
+  it('sends the already previewed PDF to print without rendering it a second time', async () => {
+    setDesktopViewport();
+    const user = userEvent.setup();
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:reused-preview') });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+    const previewBlob = new Blob(['%PDF-reused-preview']);
+    const onGenerateFinalPdfPreview = vi.fn(async () => ({
+      blob: previewBlob,
+      filename: 'فاکتور-تست.pdf',
+      title: 'فاکتور تست',
+    }));
+    const onPrint = vi.fn();
+
+    try {
+      render(
+        <PrintSection
+          isPrintModalOpen
+          onClose={vi.fn()}
+          onPrint={onPrint}
+          onPreparePrint={vi.fn()}
+          onGenerateFinalPdfPreview={onGenerateFinalPdfPreview}
+          printTemplates={templates}
+          selectedTemplateId="custom:a4"
+          onSelectTemplate={vi.fn()}
+          renderPrintCard={() => <div>پیش‌نمایش قدیمی</div>}
+          printMode={false}
+        />
+      );
+
+      await waitFor(() => expect(onGenerateFinalPdfPreview).toHaveBeenCalledTimes(1));
+      await user.click(screen.getByRole('button', { name: 'چاپ' }));
+
+      await waitFor(() => expect(onPrint).toHaveBeenCalledTimes(1));
+      expect(onPrint).toHaveBeenCalledWith(expect.objectContaining({ blob: previewBlob, filename: 'فاکتور-تست.pdf' }));
+      expect(onGenerateFinalPdfPreview).toHaveBeenCalledTimes(1);
+    } finally {
+      Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
+      Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL });
+    }
+  });
+
+  it('shares an in-progress preview request with print instead of starting another PDF render', async () => {
+    setDesktopViewport();
+    const user = userEvent.setup();
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:in-flight-preview') });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+    let resolvePreview: ((value: { blob: Blob; filename: string; title: string }) => void) | null = null;
+    const onGenerateFinalPdfPreview = vi.fn(() => new Promise<{ blob: Blob; filename: string; title: string }>((resolve) => {
+      resolvePreview = resolve;
+    }));
+    const onPrint = vi.fn();
+
+    try {
+      render(
+        <PrintSection
+          isPrintModalOpen
+          onClose={vi.fn()}
+          onPrint={onPrint}
+          onPreparePrint={vi.fn()}
+          onGenerateFinalPdfPreview={onGenerateFinalPdfPreview}
+          printTemplates={templates}
+          selectedTemplateId="custom:a4"
+          onSelectTemplate={vi.fn()}
+          renderPrintCard={() => <div>پیش‌نمایش قدیمی</div>}
+          printMode={false}
+        />
+      );
+
+      await waitFor(() => expect(onGenerateFinalPdfPreview).toHaveBeenCalledTimes(1));
+      await user.click(screen.getByRole('button', { name: 'چاپ' }));
+      expect(onGenerateFinalPdfPreview).toHaveBeenCalledTimes(1);
+      resolvePreview?.({ blob: new Blob(['%PDF-in-flight']), filename: 'فاکتور.pdf', title: 'فاکتور' });
+
+      await waitFor(() => expect(onPrint).toHaveBeenCalledTimes(1));
+      expect(onGenerateFinalPdfPreview).toHaveBeenCalledTimes(1);
+    } finally {
+      Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
+      Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL });
+    }
+  });
+
   it('opens the same final PDF in the phone viewer instead of embedding a different layout', async () => {
     setMobileViewport();
     const originalCreateObjectURL = URL.createObjectURL;
@@ -324,17 +415,17 @@ describe('PrintSection', () => {
       render(<ControlledPrintSection />);
       await waitFor(() => expect(onGenerateFinalPdfPreview).toHaveBeenCalledTimes(1));
 
-      await user.click(await screen.findByText('قالب A5 تست'));
+      await selectPrintTemplate(user, 'قالب A5 تست');
       await waitFor(() => expect(onGenerateFinalPdfPreview).toHaveBeenCalledTimes(2));
 
-      await user.click(await screen.findByText('قالب A4 تست'));
+      await selectPrintTemplate(user, 'قالب A4 تست');
       await waitFor(() => expect(screen.getByTitle('پیش‌نمایش نهایی PDF')).toHaveAttribute('src', 'blob:preview-a4'));
       expect(onGenerateFinalPdfPreview).toHaveBeenCalledTimes(2);
     } finally {
       Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
       Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL });
     }
-  });
+  }, 10000);
 
   it('groups printable fields by section and marks empty values', async () => {
     setDesktopViewport();

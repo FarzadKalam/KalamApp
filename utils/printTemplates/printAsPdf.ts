@@ -18,6 +18,13 @@ export interface PdfGenerationProgress {
   label: string;
 }
 
+/** A final PDF that can be previewed, printed or attached without rebuilding it. */
+export interface GeneratedPrintPdf {
+  blob: Blob;
+  filename?: string;
+  title?: string;
+}
+
 const FUNCTION_PATH = '/functions/v1/render-pdf';
 const PREPARED_WINDOW_NAME_PREFIX = 'kalamapp-pdf-target';
 const PDF_REQUEST_TIMEOUT_MS = 135_000;
@@ -503,6 +510,49 @@ export const prepareGeneratedPdfWindow = (title?: string, options?: { force?: bo
   return targetWindow;
 };
 
+/**
+ * Delivers an already rendered PDF to the prepared print tab. Keeping this
+ * separate from generation ensures preview, print and download can share one
+ * byte-identical Blob.
+ */
+export const presentGeneratedPdf = ({
+  pdf,
+  targetWindow: candidateWindow,
+  openInPdfViewer = true,
+}: {
+  pdf: GeneratedPrintPdf;
+  targetWindow?: Window | null;
+  openInPdfViewer?: boolean;
+}) => {
+  const title = pdf.title || 'چاپ';
+  const filename = normalizePdfFilename(pdf.filename, title);
+  const targetWindow = candidateWindow && !candidateWindow.closed ? candidateWindow : null;
+
+  if (targetWindow) {
+    ensureTargetWindowName(targetWindow);
+    const pdfUrl = URL.createObjectURL(pdf.blob);
+    writeSuccessState({
+      targetWindow,
+      title,
+      filename,
+      pdfUrl,
+      showPdfPreview: openInPdfViewer,
+    });
+    targetWindow.focus();
+    return;
+  }
+
+  const pdfUrl = URL.createObjectURL(pdf.blob);
+  const link = document.createElement('a');
+  link.href = pdfUrl;
+  link.download = filename;
+  link.target = '_blank';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(pdfUrl), 60_000);
+};
+
 export const printAsPdf = async (options: PrintAsPdfOptions) => {
   const sourceHtml = getSourceHtml(options).trim();
   if (!sourceHtml) {
@@ -528,30 +578,15 @@ export const printAsPdf = async (options: PrintAsPdfOptions) => {
       onProgress: reportProgress,
     });
 
-    const filename = normalizePdfFilename(options.filename, options.title);
-
-    if (targetWindow) {
-      const pdfUrl = URL.createObjectURL(pdfBlob);
-      writeSuccessState({
-        targetWindow,
+    presentGeneratedPdf({
+      pdf: {
+        blob: pdfBlob,
+        filename: options.filename,
         title: options.title,
-        filename,
-        pdfUrl,
-        showPdfPreview: Boolean(options.openInPdfViewer),
-      });
-      targetWindow.focus();
-      return;
-    }
-
-    const pdfUrl = URL.createObjectURL(pdfBlob);
-    const link = document.createElement('a');
-    link.href = pdfUrl;
-    link.download = filename;
-    link.target = '_blank';
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(pdfUrl), 60_000);
+      },
+      targetWindow,
+      openInPdfViewer: Boolean(options.openInPdfViewer),
+    });
 
   } catch (error) {
     writeErrorState(options.targetWindow, options.title, error);

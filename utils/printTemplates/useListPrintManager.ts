@@ -25,11 +25,13 @@ import { buildPrintOutputName } from './outputName';
 import {
   generatePdfBlob,
   prepareGeneratedPdfWindow,
+  presentGeneratedPdf,
   printAsPdf,
   shouldUseGeneratedPdfPrint,
   showPreparedPdfErrorState,
   waitForPrintRenderCommit,
   waitForPrintPrerequisite,
+  type GeneratedPrintPdf,
   type PdfGenerationProgress,
 } from './printAsPdf';
 import { normalizeRenderedImages } from './normalizeRenderedImages';
@@ -900,8 +902,18 @@ export const useListPrintManager = ({
     reservedPrintWindowRef.current = prepareGeneratedPdfWindow(printTitle, { force: shouldUseNativePdfFlow });
   }, [getPrintOutputName]);
 
-  const handlePrint = useCallback(async () => {
+  const handlePrint = useCallback(async (preparedPdf?: GeneratedPrintPdf) => {
     if (!selectedTemplateId) return;
+    if (preparedPdf?.blob) {
+      const targetWindow = reservedPrintWindowRef.current;
+      reservedPrintWindowRef.current = null;
+      presentGeneratedPdf({
+        pdf: preparedPdf,
+        targetWindow,
+        openInPdfViewer: true,
+      });
+      return;
+    }
     const printTitle = getPrintOutputName();
     let printAbortedByPrerequisite = false;
     const latestAssigneeDirectory = await waitForPrintPrerequisite(fetchAssigneeDirectory(supabase)).catch((error) => {

@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { printStyles } from '../../utils/printTemplates';
 import { fitCompactPrintCells } from '../../utils/printTemplates/fitCompactPrintCells';
 import { resolveEffectivePrintFieldKeys } from '../../utils/printTemplates/printableFields';
+import type { GeneratedPrintPdf } from '../../utils/printTemplates/printAsPdf';
 import AdaptiveSelectField from '../AdaptiveSelectField';
 import PrintSignatureConfigurator from './PrintSignatureConfigurator';
 import type {
@@ -14,15 +15,17 @@ import type {
   PrintSignatureSignerModule,
 } from '../../utils/printTemplates/signatures';
 
+const PREVIEW_REBUILD_DEBOUNCE_MS = 500;
+
 interface PrintSectionProps {
   isPrintModalOpen: boolean;
   onClose: () => void;
-  onPrint: () => void | Promise<void>;
+  onPrint: (preparedPdf?: GeneratedPrintPdf) => void | Promise<void>;
   onPreparePrint?: () => void | Promise<void>;
   onSendInternalPdf?: () => void | Promise<void>;
   onSavePdfToRecord?: () => void | Promise<void>;
   onRefreshPreview?: () => void | Promise<void>;
-  onGenerateFinalPdfPreview?: (onProgress: (progress: { percent: number; label: string }) => void) => Promise<{ blob: Blob }>;
+  onGenerateFinalPdfPreview?: (onProgress: (progress: { percent: number; label: string }) => void) => Promise<GeneratedPrintPdf>;
   /** Stable version of the rendered document source, supplied by each print runtime. */
   previewContentVersion?: string;
   printTemplates: { id: string; title: string; description: string; isSystem?: boolean }[];
@@ -135,7 +138,8 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   const [finalPdfPreviewProgress, setFinalPdfPreviewProgress] = useState<{ percent: number; label: string } | null>(null);
   const [finalPdfPreviewError, setFinalPdfPreviewError] = useState('');
   const [finalPdfPreviewRevision, setFinalPdfPreviewRevision] = useState(0);
-  const finalPdfPreviewCacheRef = useRef(new Map<string, string>());
+  const finalPdfPreviewCacheRef = useRef(new Map<string, GeneratedPrintPdf & { url: string }>());
+  const finalPdfPreviewInFlightRef = useRef(new Map<string, Promise<GeneratedPrintPdf & { url: string }>>());
   const finalPdfPreviewRequestRef = useRef(0);
   const finalPdfPreviewGeneratorRef = useRef(onGenerateFinalPdfPreview);
   const previewStageRef = useRef<HTMLDivElement | null>(null);
@@ -252,65 +256,103 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   }, [onGenerateFinalPdfPreview]);
 
   const removeCachedFinalPdfPreview = useCallback((cacheKey: string) => {
-    const cachedUrl = finalPdfPreviewCacheRef.current.get(cacheKey);
-    if (!cachedUrl) return;
-    URL.revokeObjectURL(cachedUrl);
+    const cachedPdf = finalPdfPreviewCacheRef.current.get(cacheKey);
+    if (!cachedPdf) return;
+    URL.revokeObjectURL(cachedPdf.url);
     finalPdfPreviewCacheRef.current.delete(cacheKey);
   }, []);
 
-  const loadFinalPdfPreview = useCallback(async (force = false) => {
+  const loadFinalPdfPreview = useCallback(async (force = false): Promise<GeneratedPrintPdf | null> => {
     const generateFinalPdfPreview = finalPdfPreviewGeneratorRef.current;
-    if (!generateFinalPdfPreview) return;
+    if (!generateFinalPdfPreview) return null;
     if (force) removeCachedFinalPdfPreview(finalPdfPreviewCacheKey);
-    const cachedUrl = finalPdfPreviewCacheRef.current.get(finalPdfPreviewCacheKey);
-    if (cachedUrl) {
+    const cachedPdf = finalPdfPreviewCacheRef.current.get(finalPdfPreviewCacheKey);
+    if (cachedPdf) {
       setFinalPdfPreviewError('');
       setFinalPdfPreviewProgress(null);
-      setFinalPdfPreviewUrl(cachedUrl);
-      return;
+      setFinalPdfPreviewUrl(cachedPdf.url);
+      return cachedPdf;
     }
+
+    const existingRequest = finalPdfPreviewInFlightRef.current.get(finalPdfPreviewCacheKey);
+    if (existingRequest) return existingRequest;
+
     const requestId = ++finalPdfPreviewRequestRef.current;
     setFinalPdfPreviewUrl(null);
     setFinalPdfPreviewError('');
     setFinalPdfPreviewProgress({ percent: 5, label: 'در حال آماده‌سازی پیش‌نمایش نهایی…' });
-    try {
-      const result = await generateFinalPdfPreview((progress) => setFinalPdfPreviewProgress(progress));
-      const nextUrl = URL.createObjectURL(result.blob);
-      if (requestId !== finalPdfPreviewRequestRef.current) {
-        URL.revokeObjectURL(nextUrl);
-        return;
+
+    const pendingRequest = generateFinalPdfPreview((progress) => {
+      if (requestId === finalPdfPreviewRequestRef.current) {
+        setFinalPdfPreviewProgress(progress);
       }
-      finalPdfPreviewCacheRef.current.set(finalPdfPreviewCacheKey, nextUrl);
-      // Keep a short LRU-like cache so switching templates does not rebuild a
-      // PDF the user has already seen, while avoiding unbounded Blob URLs.
-      while (finalPdfPreviewCacheRef.current.size > 8) {
-        const oldestKey = finalPdfPreviewCacheRef.current.keys().next().value;
-        if (!oldestKey) break;
-        removeCachedFinalPdfPreview(oldestKey);
-      }
-      setFinalPdfPreviewUrl(nextUrl);
-      setFinalPdfPreviewProgress(null);
-    } catch (error) {
-      if (requestId !== finalPdfPreviewRequestRef.current) return;
-      console.error('Generate final PDF preview failed', error);
-      setFinalPdfPreviewUrl(null);
-      setFinalPdfPreviewProgress(null);
-      setFinalPdfPreviewError('ساخت پیش‌نمایش نهایی PDF ناموفق بود. دوباره تلاش کنید.');
-    }
+    })
+      .then((result) => {
+        const previewPdf = { ...result, url: URL.createObjectURL(result.blob) };
+        finalPdfPreviewCacheRef.current.set(finalPdfPreviewCacheKey, previewPdf);
+        // Keep a short LRU-like cache so switching templates does not rebuild a
+        // PDF the user has already seen, while avoiding unbounded Blob URLs.
+        while (finalPdfPreviewCacheRef.current.size > 8) {
+          const oldestKey = finalPdfPreviewCacheRef.current.keys().next().value;
+          if (!oldestKey) break;
+          removeCachedFinalPdfPreview(oldestKey);
+        }
+        if (requestId === finalPdfPreviewRequestRef.current) {
+          setFinalPdfPreviewUrl(previewPdf.url);
+          setFinalPdfPreviewProgress(null);
+        }
+        return previewPdf;
+      })
+      .catch((error) => {
+        if (requestId === finalPdfPreviewRequestRef.current) {
+          console.error('Generate final PDF preview failed', error);
+          setFinalPdfPreviewUrl(null);
+          setFinalPdfPreviewProgress(null);
+          setFinalPdfPreviewError('ساخت پیش‌نمایش نهایی PDF ناموفق بود. دوباره تلاش کنید.');
+        }
+        throw error;
+      })
+      .finally(() => {
+        if (finalPdfPreviewInFlightRef.current.get(finalPdfPreviewCacheKey) === pendingRequest) {
+          finalPdfPreviewInFlightRef.current.delete(finalPdfPreviewCacheKey);
+        }
+      });
+
+    finalPdfPreviewInFlightRef.current.set(finalPdfPreviewCacheKey, pendingRequest);
+    return pendingRequest;
   }, [finalPdfPreviewCacheKey, removeCachedFinalPdfPreview]);
 
   useEffect(() => {
     if (!isPrintModalOpen || activeTab !== 'preview' || !onGenerateFinalPdfPreview) return;
-    void loadFinalPdfPreview();
+    const cachedPdf = finalPdfPreviewCacheRef.current.get(finalPdfPreviewCacheKey);
+    if (cachedPdf) {
+      setFinalPdfPreviewError('');
+      setFinalPdfPreviewProgress(null);
+      setFinalPdfPreviewUrl(cachedPdf.url);
+      return;
+    }
+
+    // Opening a system template can settle several independent pieces of
+    // print data (company, fields, signatures and images). Coalesce that
+    // short burst into one final PDF instead of starting one request per
+    // intermediate React render.
+    setFinalPdfPreviewUrl(null);
+    setFinalPdfPreviewError('');
+    setFinalPdfPreviewProgress({ percent: 3, label: 'در حال همگام‌سازی اطلاعات قالب…' });
+    const debounceTimer = window.setTimeout(() => {
+      void loadFinalPdfPreview().catch(() => undefined);
+    }, PREVIEW_REBUILD_DEBOUNCE_MS);
     return () => {
+      window.clearTimeout(debounceTimer);
       finalPdfPreviewRequestRef.current += 1;
     };
   }, [activeTab, finalPdfPreviewRevision, isPrintModalOpen, loadFinalPdfPreview, Boolean(onGenerateFinalPdfPreview), finalPdfPreviewCacheKey]);
 
   useEffect(() => () => {
     finalPdfPreviewRequestRef.current += 1;
-    finalPdfPreviewCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
+    finalPdfPreviewCacheRef.current.forEach((pdf) => URL.revokeObjectURL(pdf.url));
     finalPdfPreviewCacheRef.current.clear();
+    finalPdfPreviewInFlightRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -383,18 +425,24 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     onClose();
   };
 
-  const handleRequestPrint = () => {
+  const handleRequestPrint = async () => {
+    let preparedPdf: GeneratedPrintPdf | undefined;
     try {
-      void Promise.resolve(onPreparePrint?.()).catch((error) => {
-        console.error('Prepare print failed', error);
-      });
+      // This call must remain synchronous from the click event so mobile
+      // browsers allow the prepared PDF tab to open.
+      await Promise.resolve(onPreparePrint?.());
+      if (onGenerateFinalPdfPreview) {
+        preparedPdf = (await loadFinalPdfPreview()) || undefined;
+      }
     } catch (error) {
-      console.error('Prepare print failed', error);
+      // A failed preview may be retried once by the print runtime. Normal
+      // successful previews never take this branch and never render twice.
+      console.error('Prepare or reuse preview PDF failed', error);
     }
 
     onClose();
     window.setTimeout(() => {
-      void Promise.resolve(onPrint()).catch((error) => {
+      void Promise.resolve(onPrint(preparedPdf)).catch((error) => {
         console.error('Print failed', error);
       });
     }, 0);
@@ -498,92 +546,61 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           }}
         >
         <div className="print-select-shell">
-          {isMobile ? (
-            <div className="print-template-mobile-select-wrap">
-              <div className="print-template-mobile-select-label">قالب چاپ</div>
-              <AdaptiveSelectField
-                value={selectedTemplateId || undefined}
-                onChange={(value) => {
-                  onSelectTemplate(value);
-                  setActiveTab('preview');
-                }}
-                showSearch
-                allowClear={false}
-                className="print-template-mobile-select"
-                placeholder="انتخاب قالب چاپ"
-                listHeight={320}
-                optionFilterProp="label"
-                adaptiveMode="auto"
-                pickerTitle="انتخاب قالب چاپ"
-                mobileSearchPlaceholder="جستجو در قالب‌های چاپ"
-                popupMatchSelectWidth
-                overlayZIndexBase={12020}
-                optionDisplayFallback={(option) => String(option?.title || option?.label || option?.value || '')}
-                filterOption={(input, option) => {
-                  const search = input.trim().toLowerCase();
-                  if (!search) return true;
-                  const title = String(option?.title || '').toLowerCase();
-                  const description = String(option?.description || '').toLowerCase();
-                  return title.includes(search) || description.includes(search);
-                }}
-                options={mobileTemplateOptions}
-                optionRender={(option) => {
-                  const data = option.data as {
-                    title?: string;
-                    description?: string;
-                    isSystem?: boolean;
-                  };
-                  return (
-                    <div className="print-template-mobile-option">
-                      <div className="print-template-mobile-option-title">
-                        <span>{data.title}</span>
-                        {data.isSystem ? <span className="print-template-system-tag">سیستمی</span> : null}
-                      </div>
-                      {data.description ? <div className="print-template-mobile-option-desc">{data.description}</div> : null}
-                    </div>
-                  );
-                }}
-                renderMobileOption={(option) => (
+          <div className="print-template-mobile-select-wrap">
+            <div className="print-template-mobile-select-label">قالب چاپ</div>
+            <AdaptiveSelectField
+              value={selectedTemplateId || undefined}
+              onChange={(value) => {
+                onSelectTemplate(value);
+                setActiveTab('preview');
+              }}
+              showSearch
+              allowClear={false}
+              className="print-template-mobile-select"
+              placeholder="انتخاب قالب چاپ"
+              listHeight={320}
+              optionFilterProp="label"
+              adaptiveMode="auto"
+              pickerTitle="انتخاب قالب چاپ"
+              mobileSearchPlaceholder="جستجو در قالب‌های چاپ"
+              popupMatchSelectWidth
+              overlayZIndexBase={12020}
+              optionDisplayFallback={(option) => String(option?.title || option?.label || option?.value || '')}
+              filterOption={(input, option) => {
+                const search = input.trim().toLowerCase();
+                if (!search) return true;
+                const title = String(option?.title || '').toLowerCase();
+                const description = String(option?.description || '').toLowerCase();
+                return title.includes(search) || description.includes(search);
+              }}
+              options={mobileTemplateOptions}
+              optionRender={(option) => {
+                const data = option.data as {
+                  title?: string;
+                  description?: string;
+                  isSystem?: boolean;
+                };
+                return (
                   <div className="print-template-mobile-option">
                     <div className="print-template-mobile-option-title">
-                      <span>{String(option?.title || option?.label || option?.value || '')}</span>
-                      {option?.isSystem ? <span className="print-template-system-tag">سیستمی</span> : null}
+                      <span>{data.title}</span>
+                      {data.isSystem ? <span className="print-template-system-tag">سیستمی</span> : null}
                     </div>
-                    {option?.description ? <div className="print-template-mobile-option-desc">{String(option.description)}</div> : null}
+                    {data.description ? <div className="print-template-mobile-option-desc">{data.description}</div> : null}
                   </div>
-                )}
-              />
-            </div>
-          ) : null}
-          {!isMobile ? (
-          <div
-            className="print-template-list"
-            style={{
-              gridTemplateColumns: isMobile ? 'repeat(auto-fit, minmax(160px, 1fr))' : undefined,
-            }}
-          >
-            {printTemplates.map((template) => {
-              const isSelected = selectedTemplateId === template.id;
-              return (
-                <button
-                  key={template.id}
-                  type="button"
-                  onClick={() => {
-                    onSelectTemplate(template.id);
-                    setActiveTab('preview');
-                  }}
-                  className={`print-template-card ${isSelected ? 'selected' : ''}`}
-                >
-                  <div className="print-template-card-title">
-                    {template.title}
-                     {template.isSystem ? <span className="print-template-system-tag">سیستمی</span> : null}
+                );
+              }}
+              renderMobileOption={(option) => (
+                <div className="print-template-mobile-option">
+                  <div className="print-template-mobile-option-title">
+                    <span>{String(option?.title || option?.label || option?.value || '')}</span>
+                    {option?.isSystem ? <span className="print-template-system-tag">سیستمی</span> : null}
                   </div>
-                  <div className="print-template-card-desc">{template.description}</div>
-                </button>
-              );
-            })}
+                  {option?.description ? <div className="print-template-mobile-option-desc">{String(option.description)}</div> : null}
+                </div>
+              )}
+            />
           </div>
-          ) : null}
 
           <div className="print-preview-shell">
             <Tabs
@@ -682,7 +699,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                             ) : finalPdfPreviewError ? (
                               <div style={{ maxWidth: 420, margin: '48px auto', textAlign: 'center', color: '#b91c1c' }}>
                                 <p>{finalPdfPreviewError}</p>
-                                <Button onClick={() => { void loadFinalPdfPreview(true); }}>تلاش دوباره</Button>
+                                <Button onClick={() => { void loadFinalPdfPreview(true).catch(() => undefined); }}>تلاش دوباره</Button>
                               </div>
                             ) : finalPdfPreviewUrl ? (
                               isMobile ? (
@@ -925,8 +942,10 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         }
         .print-select-shell {
           display: grid;
-          grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
-          height: 76vh;
+          grid-template-columns: minmax(0, 1fr);
+          grid-template-rows: auto minmax(0, 1fr);
+          height: 100%;
+          min-height: 0;
           background:
             radial-gradient(circle at top right, rgba(var(--brand-500-rgb), 0.16), transparent 28%),
             linear-gradient(180deg, rgba(248,250,252,0.96), rgba(241,245,249,0.98));
@@ -935,59 +954,6 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           background:
             radial-gradient(circle at top right, rgba(var(--brand-500-rgb), 0.18), transparent 28%),
             linear-gradient(180deg, rgba(15,23,42,0.98), rgba(17,24,39,0.98));
-        }
-        .print-template-list {
-          display: flex;
-          flex-direction: column;
-          gap: 10px;
-          padding: 14px;
-          overflow: auto;
-          border-inline-end: 1px solid rgba(148,163,184,0.18);
-          background: rgba(255,255,255,0.44);
-          backdrop-filter: blur(12px);
-        }
-        .dark .print-template-list {
-          background: rgba(2,6,23,0.26);
-          border-inline-end-color: rgba(71,85,105,0.36);
-        }
-        .print-template-card {
-          width: 100%;
-          text-align: right;
-          border-radius: 18px;
-          border: 1px solid rgba(148,163,184,0.24);
-          background: rgba(255,255,255,0.78);
-          padding: 14px 12px;
-          cursor: pointer;
-          transition: 0.18s ease;
-          box-shadow: 0 8px 18px rgba(15,23,42,0.04);
-        }
-        .print-template-card:hover {
-          transform: translateY(-1px);
-          border-color: rgba(var(--brand-500-rgb), 0.42);
-        }
-        .print-template-card.selected {
-          border-color: rgba(var(--brand-500-rgb), 0.75);
-          background: linear-gradient(180deg, rgba(255,248,240,0.96), rgba(255,255,255,0.98));
-          box-shadow: 0 14px 28px rgba(var(--brand-500-rgb), 0.16);
-        }
-        .dark .print-template-card {
-          background: rgba(15,23,42,0.74);
-          border-color: rgba(71,85,105,0.44);
-          box-shadow: none;
-        }
-        .dark .print-template-card.selected {
-          background: linear-gradient(180deg, rgba(51,30,18,0.86), rgba(15,23,42,0.94));
-        }
-        .print-template-card-title {
-          font-size: 13px;
-          font-weight: 800;
-          color: #111827;
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-        }
-        .dark .print-template-card-title {
-          color: #f8fafc;
         }
         .print-template-system-tag {
           font-size: 10px;
@@ -1019,7 +985,11 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           overflow: hidden;
         }
         .print-template-mobile-select-wrap {
-          display: none;
+          display: block;
+          padding: 12px 16px 10px;
+          border-bottom: 1px solid rgba(148,163,184,0.18);
+          background: rgba(248,250,252,0.88);
+          backdrop-filter: blur(10px);
         }
         .print-template-mobile-select-label {
           font-size: 12px;
@@ -1036,6 +1006,22 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           border: 1px solid rgba(148,163,184,0.28);
           background: #fff;
           box-shadow: 0 10px 24px rgba(15,23,42,0.06);
+        }
+        .print-template-mobile-select.ant-select {
+          width: 100%;
+          direction: rtl;
+        }
+        .print-template-mobile-select.ant-select .ant-select-selector {
+          min-height: 48px !important;
+          padding: 7px 14px !important;
+          border-radius: 14px !important;
+          border-color: rgba(148,163,184,0.28) !important;
+          box-shadow: 0 10px 24px rgba(15,23,42,0.06);
+        }
+        .print-template-mobile-select.ant-select .ant-select-selection-item,
+        .print-template-mobile-select.ant-select .ant-select-selection-placeholder {
+          line-height: 32px !important;
+          text-align: right;
         }
         .print-template-mobile-select .kalam-adaptive-picker__trigger-text {
           direction: rtl;
@@ -1126,9 +1112,17 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         .dark .print-template-mobile-select-label {
           color: #cbd5e1;
         }
+        .dark .print-template-mobile-select-wrap {
+          background: rgba(15,23,42,0.88);
+        }
         .dark .print-template-mobile-select.kalam-adaptive-picker__trigger {
           background: rgba(15,23,42,0.92);
           border-color: rgba(71,85,105,0.42);
+          box-shadow: none;
+        }
+        .dark .print-template-mobile-select.ant-select .ant-select-selector {
+          background: rgba(15,23,42,0.92) !important;
+          border-color: rgba(71,85,105,0.42) !important;
           box-shadow: none;
         }
         .dark .print-template-mobile-popup .ant-select-dropdown {
@@ -1665,9 +1659,6 @@ const PrintSection: React.FC<PrintSectionProps> = ({
             grid-template-columns: 1fr;
             grid-template-rows: auto minmax(0, 1fr);
             height: 100%;
-          }
-          .print-template-list {
-            display: none;
           }
           .print-template-mobile-select-wrap {
             display: block;

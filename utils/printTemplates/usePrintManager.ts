@@ -34,11 +34,13 @@ import { buildPrintOutputName } from './outputName';
 import {
   generatePdfBlob,
   prepareGeneratedPdfWindow,
+  presentGeneratedPdf,
   printAsPdf,
   shouldUseGeneratedPdfPrint,
   showPreparedPdfErrorState,
   waitForPrintRenderCommit,
   waitForPrintPrerequisite,
+  type GeneratedPrintPdf,
   type PdfGenerationProgress,
 } from './printAsPdf';
 import { normalizeRenderedImages } from './normalizeRenderedImages';
@@ -1240,8 +1242,18 @@ export const usePrintManager = ({
     reservedPrintWindowRef.current = prepareGeneratedPdfWindow(printTitle, { force: shouldUseFinalPdf });
   }, [getPrintOutputName, loadPrintCompanySettings, measureCurrentCustomTemplatePages, selectedTemplateId]);
 
-  const handlePrint = useCallback(async () => {
+  const handlePrint = useCallback(async (preparedPdf?: GeneratedPrintPdf) => {
     if (!selectedTemplateId) return;
+    if (preparedPdf?.blob) {
+      const targetWindow = reservedPrintWindowRef.current;
+      reservedPrintWindowRef.current = null;
+      presentGeneratedPdf({
+        pdf: preparedPdf,
+        targetWindow,
+        openInPdfViewer: true,
+      });
+      return;
+    }
     const printTitle = getPrintOutputName();
     let companySettingsResult: Awaited<ReturnType<typeof loadPrintCompanySettings>>;
     let latestAssigneeDirectory: Awaited<ReturnType<typeof fetchAssigneeDirectory>> | null;
