@@ -301,6 +301,43 @@ describe('PrintSection', () => {
     }
   });
 
+  it('reuses the previewed PDF when saving or sending directly', async () => {
+    setDesktopViewport();
+    const user = userEvent.setup();
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:direct-preview') });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+    const previewBlob = new Blob(['%PDF-direct-preview']);
+    const onGenerateFinalPdfPreview = vi.fn(async () => ({ blob: previewBlob, filename: 'فاکتور.pdf' }));
+    const onSendInternalPdf = vi.fn(async () => undefined);
+
+    try {
+      render(
+        <PrintSection
+          isPrintModalOpen
+          onClose={vi.fn()}
+          onPrint={vi.fn()}
+          onSendInternalPdf={onSendInternalPdf}
+          onGenerateFinalPdfPreview={onGenerateFinalPdfPreview}
+          printTemplates={templates}
+          selectedTemplateId="custom:a4"
+          onSelectTemplate={vi.fn()}
+          renderPrintCard={() => <div>پیش‌نمایش قدیمی</div>}
+          printMode={false}
+        />
+      );
+
+      await waitFor(() => expect(onGenerateFinalPdfPreview).toHaveBeenCalledTimes(1));
+      await user.click(screen.getByRole('button', { name: 'ارسال مستقیم' }));
+      await waitFor(() => expect(onSendInternalPdf).toHaveBeenCalledWith(expect.objectContaining({ blob: previewBlob })));
+      expect(onGenerateFinalPdfPreview).toHaveBeenCalledTimes(1);
+    } finally {
+      Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
+      Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL });
+    }
+  }, 10000);
+
   it('shares an in-progress preview request with print instead of starting another PDF render', async () => {
     setDesktopViewport();
     const user = userEvent.setup();

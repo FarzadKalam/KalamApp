@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlignCenterOutlined,
+  BarsOutlined,
   AlignLeftOutlined,
   AlignRightOutlined,
   BgColorsOutlined,
@@ -267,6 +268,7 @@ const PrintTemplateToolbar: React.FC<PrintTemplateToolbarProps> = ({
         {iconBtn('تراز راست', <AlignRightOutlined />, () => editor?.chain().focus().setTextAlign('right').run(), !editor, editor?.isActive({ textAlign: 'right' }))}
         {iconBtn('تراز وسط', <AlignCenterOutlined />, () => editor?.chain().focus().setTextAlign('center').run(), !editor, editor?.isActive({ textAlign: 'center' }))}
         {iconBtn('تراز چپ', <AlignLeftOutlined />, () => editor?.chain().focus().setTextAlign('left').run(), !editor, editor?.isActive({ textAlign: 'left' }))}
+        {iconBtn('دوطرفه (justify)', <BarsOutlined />, () => editor?.chain().focus().setTextAlign('justify').run(), !editor, editor?.isActive({ textAlign: 'justify' }))}
         <Divider type="vertical" />
         {iconBtn('جدول', <TableOutlined />, () => editor?.chain().focus().insertTable({ rows: 3, cols: 4, withHeaderRow: true }).run(), !editor)}
         {iconBtn('تصویر با آدرس', <PictureOutlined />, insertImageByUrl, !editor)}

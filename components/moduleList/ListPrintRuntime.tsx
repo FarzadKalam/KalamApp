@@ -3,6 +3,7 @@ import PrintSection from "../moduleShow/PrintSection";
 import type { ModuleDefinition } from "../../types";
 import { buildListPrintableFields } from "../../utils/listPrintExport";
 import { useListPrintManager } from "../../utils/printTemplates/useListPrintManager";
+import { openPrintTemplateEditor } from "../../utils/printTemplates/openTemplateEditor";
 
 type ListPrintRuntimeProps = {
   open: boolean;
@@ -65,6 +66,8 @@ const ListPrintRuntime: React.FC<ListPrintRuntimeProps> = ({
       printTemplates={printManager.printTemplates}
       selectedTemplateId={printManager.selectedTemplateId}
       onSelectTemplate={printManager.setSelectedTemplateId}
+      canEditPrintTemplates={printManager.canEditPrintTemplates}
+      onEditTemplate={(templateId) => openPrintTemplateEditor(moduleId, templateId)}
       renderPrintCard={printManager.renderPrintCard}
       printMode={printManager.printMode}
       printableFields={printManager.printableFieldsForTemplate}

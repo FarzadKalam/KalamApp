@@ -169,6 +169,7 @@ import { DEFAULT_SALARY_TYPE, getSalaryTypeLabelFa, resolvePayrollBaseCompensati
 import { getHolidaySummaryForDate } from '../utils/holidayCalendar';
 import PrintSection from '../components/moduleShow/PrintSection';
 import { useListPrintManager } from '../utils/printTemplates/useListPrintManager';
+import { openPrintTemplateEditor } from '../utils/printTemplates/openTemplateEditor';
 import {
   buildAttendanceSegments,
   getIncompleteAttendanceRowIds,
@@ -8846,6 +8847,8 @@ const HRPage: React.FC = () => {
         printTemplates={commissionListPrintManager.printTemplates}
         selectedTemplateId={commissionListPrintManager.selectedTemplateId}
         onSelectTemplate={commissionListPrintManager.setSelectedTemplateId}
+        canEditPrintTemplates={commissionListPrintManager.canEditPrintTemplates}
+        onEditTemplate={(templateId) => openPrintTemplateEditor('commission_calculations', templateId)}
         renderPrintCard={commissionListPrintManager.renderPrintCard}
         printMode={commissionListPrintManager.printMode}
         printableFields={commissionListPrintManager.printableFieldsForTemplate}

@@ -1,4 +1,5 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   App,
   Checkbox,
@@ -154,6 +155,7 @@ const getPersistedEditorHtml = (editorInstance: any): string | null => {
 
 const PrintTemplatesTab: React.FC = () => {
   const { message } = App.useApp();
+  const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [settingsRowId, setSettingsRowId] = useState<string | null>(null);
@@ -173,6 +175,9 @@ const PrintTemplatesTab: React.FC = () => {
   const [toolbarVisible, setToolbarVisible] = useState(true);
   const [rolePermissions, setRolePermissions] = useState<Record<string, any> | null>(null);
   const [loadingRolePermissions, setLoadingRolePermissions] = useState(true);
+  const openedExternalTemplateRef = React.useRef<string | null>(null);
+  const requestedModuleId = String(searchParams.get('moduleId') || '').trim();
+  const requestedTemplateId = String(searchParams.get('templateId') || '').trim();
 
   const moduleOptions = useMemo(
     () =>
@@ -218,7 +223,9 @@ const PrintTemplatesTab: React.FC = () => {
       loadingRolePermissions
         ? []
         : currentScope === 'list'
-        ? buildListPrintableFields(MODULES[selectedModuleId], canViewSelectedModuleField)
+        ? (MODULES[selectedModuleId]
+          ? buildListPrintableFields(MODULES[selectedModuleId], canViewSelectedModuleField)
+          : [])
             .map((field) => ({
               key: field.key,
               label: field.label,
@@ -364,6 +371,12 @@ const PrintTemplatesTab: React.FC = () => {
     fetchRolePermissions();
   }, []);
 
+  useEffect(() => {
+    if (requestedModuleId && !isSaasAdminModuleId(requestedModuleId)) {
+      setSelectedModuleId(requestedModuleId);
+    }
+  }, [requestedModuleId]);
+
   const persistTemplates = async (nextState: Record<string, StoredPrintTemplate[]>) => {
     setSaving(true);
     try {
@@ -450,6 +463,17 @@ const PrintTemplatesTab: React.FC = () => {
     setActiveSection('body');
     setEditorOpen(true);
   };
+
+  useEffect(() => {
+    if (loading || !requestedTemplateId || !requestedModuleId || openedExternalTemplateRef.current) return;
+    const template = (templatesByModule[requestedModuleId] || []).find(
+      (item) => String(item.id || '') === requestedTemplateId && item.isSystem !== true,
+    );
+    if (!template) return;
+    openedExternalTemplateRef.current = `${requestedModuleId}:${requestedTemplateId}`;
+    setSelectedModuleId(requestedModuleId);
+    openEditTemplate(template);
+  }, [loading, requestedModuleId, requestedTemplateId, templatesByModule]);
 
   const openSystemFieldsEditor = (template: StoredPrintTemplate) => {
     const allKeys = systemFieldOptions.map((item) => item.key);

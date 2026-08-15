@@ -21,6 +21,7 @@ import RecordImageBox from '../components/RecordImageBox';
 import type { StartMaterialGroup, StartMaterialPiece, StartMaterialDeliveryRow } from '../components/production/StartProductionModal';
 import { printStyles } from '../utils/printTemplates';
 import { usePrintManager } from '../utils/printTemplates/usePrintManager';
+import { openPrintTemplateEditor } from '../utils/printTemplates/openTemplateEditor';
 import { hasMeaningfulPrintValue, isPrintableModuleField } from '../utils/printTemplates/printableFields';
 import { createPrintPerformanceTracker, waitForNextPaint } from '../utils/printTemplates/printPerformance';
 import { resolvePrintAssigneeLabel, resolvePrintOptionLabel } from '../utils/printTemplates/assigneeDisplay';
@@ -104,7 +105,8 @@ import { normalizeNoteScope } from '../utils/noteScope';
 import { buildModuleRecordProjection, preserveDeferredProcessDraftColumns } from '../utils/moduleRecordProjection';
 import { runSelectWithCompatibleColumns } from '../utils/selectCompat';
 import { getActiveChannelSettings } from '../utils/channelSettings';
-import { insertNotesWithFallback } from '../utils/noteDispatch';
+import { sendInternalMessageV2 } from '../utils/noteDispatch';
+import type { GeneratedPrintPdf } from '../utils/printTemplates/printAsPdf';
 import { sendSmsViaGateway } from '../utils/smsGateway';
 import { isOperationalAccountingModule, syncOperationalAccountingEntry } from '../utils/operationalAccounting';
 import { isTreasuryAccountingModule, syncTreasuryAccountingEntry } from '../utils/treasuryAccounting';
@@ -1423,6 +1425,10 @@ const ModuleShow: React.FC = () => {
     bot_chat_id: string;
     customer_id: string | null;
     supplier_id: string | null;
+  }>>([]);
+  const [printShareInstagramConversations, setPrintShareInstagramConversations] = useState<Array<{
+    id: string;
+    title: string;
   }>>([]);
   const [pendingPrintShareFile, setPendingPrintShareFile] = useState<{ url: string; name: string } | null>(null);
   const [printShareMessageText, setPrintShareMessageText] = useState('');
@@ -3920,6 +3926,10 @@ const ModuleShow: React.FC = () => {
   }, [buildDirectPrintDisplayName, id, moduleId, sanitizePrintFileName]);
 
   const printShareTargetOptions = useMemo(() => [
+    ...printShareInstagramConversations.map((conversation) => ({
+      label: `دایرکت اینستاگرام: ${conversation.title}`,
+      value: `instagram:${conversation.id}`,
+    })),
     ...printShareBotGroups.map((group) => ({
       label: `بات ${CUSTOMER_BOT_CHANNEL_LABELS[group.channel_type]}: ${group.title}`,
       value: `bot_group:${group.id}`,
@@ -3940,7 +3950,7 @@ const ModuleShow: React.FC = () => {
         label: `پیامک: ${user.full_name || user.email || user.mobile_1 || user.id}`,
         value: `sms_user:${user.id}`,
       })),
-  ], [allUsers, currentUserId, printShareBotGroups, printShareGroups]);
+  ], [allUsers, currentUserId, printShareBotGroups, printShareGroups, printShareInstagramConversations]);
 
   useEffect(() => {
     if (!printShareModalOpen || !currentOrgId) return;
@@ -3998,6 +4008,28 @@ const ModuleShow: React.FC = () => {
             supplier_id: string | null;
           }>);
       }
+
+      const { data: instagramData, error: instagramError } = await supabase
+        .from('instagram_conversations')
+        .select('id, last_message_at, contacts:contact_id(username, display_name)')
+        .eq('org_id', currentOrgId)
+        .order('last_message_at', { ascending: false })
+        .limit(100);
+      if (instagramError) {
+        if (!cancelled) setPrintShareInstagramConversations([]);
+        return;
+      }
+      if (!cancelled) {
+        setPrintShareInstagramConversations((instagramData || []).map((conversation: any) => {
+          const contact = Array.isArray(conversation?.contacts)
+            ? conversation.contacts[0]
+            : conversation?.contacts;
+          const title = String(
+            contact?.display_name || contact?.username || conversation?.last_message_preview || 'کاربر اینستاگرام'
+          ).trim();
+          return { id: String(conversation?.id || ''), title: title || 'کاربر اینستاگرام' };
+        }).filter((conversation) => Boolean(conversation.id)));
+      }
     };
     void loadPrintShareGroups();
     return () => {
@@ -4005,12 +4037,12 @@ const ModuleShow: React.FC = () => {
     };
   }, [currentOrgId, printShareModalOpen]);
 
-  const handleSavePrintPdfToRecord = async () => {
+  const handleSavePrintPdfToRecord = async (preparedPdf?: GeneratedPrintPdf) => {
     if (!id) {
       msg.warning('ابتدا رکورد را ذخیره کنید');
       return;
     }
-    const { tracker, messageKey, uploaded } = await prepareDirectPdfAsset('print_save_to_record');
+    const { tracker, messageKey, uploaded } = await prepareDirectPdfAsset('print_save_to_record', preparedPdf);
     try {
       msg.open({ key: messageKey, type: 'loading', content: 'در حال ثبت PDF در فایل‌های رکورد...', duration: 0 });
       const hasFileManagerTables = await detectFileManagerTables(supabase, false);
@@ -4077,12 +4109,12 @@ const ModuleShow: React.FC = () => {
     }
   };
 
-  const handleOpenPrintShare = async () => {
+  const handleOpenPrintShare = async (preparedPdf?: GeneratedPrintPdf) => {
     if (!id) {
       msg.warning('ابتدا رکورد را ذخیره کنید');
       return;
     }
-    const { tracker, messageKey, uploaded } = await prepareDirectPdfAsset('print_share_prepare');
+    const { tracker, messageKey, uploaded } = await prepareDirectPdfAsset('print_share_prepare', preparedPdf);
     tracker.finalize({ status: 'ready_for_share', uploadedUrl: uploaded.url });
     msg.destroy(messageKey);
     setPendingPrintShareFile(uploaded);
@@ -4125,6 +4157,7 @@ const ModuleShow: React.FC = () => {
       customer_id: string | null;
       supplier_id: string | null;
     }> = [];
+    const instagramConversationIds = new Set<string>();
     normalizedTargets.forEach((targetId) => {
       const normalizedTarget = String(targetId || '').trim();
       if (!normalizedTarget) return;
@@ -4156,6 +4189,13 @@ const ModuleShow: React.FC = () => {
         botTargets.push(group);
         return;
       }
+      if (normalizedTarget.startsWith('instagram:')) {
+        const conversationId = normalizedTarget.replace('instagram:', '');
+        if (printShareInstagramConversations.some((conversation) => conversation.id === conversationId)) {
+          instagramConversationIds.add(conversationId);
+        }
+        return;
+      }
       if (normalizedTarget.startsWith('sms_user:')) {
         const userId = normalizedTarget.replace('sms_user:', '');
         const user = allUsers.find((item) => String(item?.id || '') === userId);
@@ -4181,7 +4221,7 @@ const ModuleShow: React.FC = () => {
       }
     });
 
-    if (payloads.length === 0 && botTargets.length === 0 && smsRecipients.size === 0) {
+    if (payloads.length === 0 && botTargets.length === 0 && instagramConversationIds.size === 0 && smsRecipients.size === 0) {
       msg.warning('حداقل یک مقصد معتبر انتخاب کنید');
       return;
     }
@@ -4189,7 +4229,7 @@ const ModuleShow: React.FC = () => {
     setPrintShareSubmitting(true);
     try {
       if (payloads.length > 0) {
-        await insertNotesWithFallback(payloads);
+        await Promise.all(payloads.map((payload) => sendInternalMessageV2(payload)));
       }
       for (const target of botTargets) {
         if (!target.bot_chat_id) {
@@ -4261,6 +4301,29 @@ const ModuleShow: React.FC = () => {
             },
           }]);
         if (insertError) throw insertError;
+      }
+      for (const conversationId of instagramConversationIds) {
+        // Instagram direct messages do not accept PDF attachments. The same
+        // uploaded public asset is sent as a URL, through its server-side
+        // conversation dispatch so the inbox remains the source of truth.
+        const instagramMessage = [
+          noteText,
+          externalAttachment
+            .map((item) => String(item?.url || '').trim())
+            .filter(Boolean)
+            .join('\n'),
+        ].filter(Boolean).join('\n') || 'لینک فایل PDF آماده است.';
+        const { data: instagramResult, error: instagramError } = await supabase.functions.invoke('instagram-boxapi', {
+          body: {
+            action: 'send_message',
+            conversationId,
+            message: instagramMessage,
+          },
+        });
+        if (instagramError) throw instagramError;
+        if (!instagramResult?.success) {
+          throw new Error(String(instagramResult?.message || 'ارسال دایرکت اینستاگرام ناموفق بود.'));
+        }
       }
       if (smsRecipients.size > 0) {
         await sendSmsViaGateway({
@@ -5206,7 +5269,10 @@ const ModuleShow: React.FC = () => {
     [printManager.generateCurrentPdfBlob],
   );
 
-  const prepareDirectPdfAsset = useCallback(async (flow: 'print_share_prepare' | 'print_save_to_record') => {
+  const prepareDirectPdfAsset = useCallback(async (
+    flow: 'print_share_prepare' | 'print_save_to_record',
+    preparedPdf?: GeneratedPrintPdf,
+  ) => {
     if (!id) {
       throw new Error('record_missing');
     }
@@ -5220,23 +5286,38 @@ const ModuleShow: React.FC = () => {
     const messageKey = `${flow}:${Date.now()}`;
 
     try {
-      setPdfGenerationProgress({ percent: 5, label: 'در حال آماده‌سازی چاپ…' });
-      msg.open({ key: messageKey, type: 'loading', content: 'در حال بستن پیش‌نمایش چاپ...', duration: 0 });
-      tracker.mark('close_print_modal_requested');
-      printManager.closePrintModal();
+      let pdfResult = preparedPdf;
+      if (!pdfResult) {
+        setPdfGenerationProgress({ percent: 5, label: 'در حال آماده‌سازی چاپ…' });
+        msg.open({ key: messageKey, type: 'loading', content: 'در حال بستن پیش‌نمایش چاپ...', duration: 0 });
+        tracker.mark('close_print_modal_requested');
+        printManager.closePrintModal();
 
-      await tracker.step('wait_for_ui_paint', () => waitForNextPaint(2));
-      setPdfGenerationProgress({ percent: 12, label: 'در حال آماده‌سازی قالب PDF…' });
-      msg.open({ key: messageKey, type: 'loading', content: 'در حال ساخت PDF...', duration: 0 });
-
-      const pdfResult = await printManager.generateCurrentPdfBlob({
-        tracker,
-        onProgress: ({ percent, label }) => setPdfGenerationProgress({ percent, label }),
-      });
+        await tracker.step('wait_for_ui_paint', () => waitForNextPaint(2));
+        setPdfGenerationProgress({ percent: 12, label: 'در حال آماده‌سازی قالب PDF…' });
+        msg.open({ key: messageKey, type: 'loading', content: 'در حال ساخت PDF...', duration: 0 });
+        pdfResult = await printManager.generateCurrentPdfBlob({
+          tracker,
+          onProgress: ({ percent, label }) => setPdfGenerationProgress({ percent, label }),
+        });
+      } else {
+        tracker.mark('reuse_print_preview_pdf', {
+          filename: pdfResult.filename,
+          size: pdfResult.blob.size,
+        });
+        setPdfGenerationProgress({ percent: 68, label: 'PDF پیش‌نمایش آماده است؛ در حال بارگذاری فایل…' });
+        msg.open({ key: messageKey, type: 'loading', content: 'در حال بارگذاری PDF آماده...', duration: 0 });
+      }
+      if (!pdfResult) throw new Error('ساخت PDF انجام نشد.');
       setPdfGenerationProgress({ percent: 93, label: 'PDF آماده شد؛ در حال بارگذاری فایل…' });
       msg.open({ key: messageKey, type: 'loading', content: 'در حال بارگذاری فایل PDF...', duration: 0 });
 
-      const uploaded = await uploadGeneratedPdf(pdfResult.blob, pdfResult.filename, pdfResult.title, tracker);
+      const uploaded = await uploadGeneratedPdf(
+        pdfResult.blob,
+        pdfResult.filename || buildDirectPrintDisplayName(pdfResult.title),
+        pdfResult.title,
+        tracker,
+      );
       setPdfGenerationProgress({ percent: 100, label: 'فایل PDF آماده شد.' });
       window.setTimeout(() => setPdfGenerationProgress(null), 450);
       return { tracker, messageKey, uploaded, pdfResult };
@@ -5253,6 +5334,7 @@ const ModuleShow: React.FC = () => {
     id,
     moduleId,
     msg,
+    buildDirectPrintDisplayName,
     printManager,
     uploadGeneratedPdf,
   ]);
@@ -6949,6 +7031,8 @@ const ModuleShow: React.FC = () => {
             printTemplates={printManager.printTemplates}
             selectedTemplateId={printManager.selectedTemplateId}
             onSelectTemplate={printManager.setSelectedTemplateId}
+            canEditPrintTemplates={printManager.canEditPrintTemplates}
+            onEditTemplate={(templateId) => openPrintTemplateEditor(moduleId, templateId)}
             renderPrintCard={printManager.renderPrintCard}
             printMode={printManager.printMode}
             printableFields={printManager.printableFieldsForTemplate || printableFields}
@@ -7033,7 +7117,7 @@ const ModuleShow: React.FC = () => {
             onChange={(values) => setPrintShareTargetIds((values || []).map((value) => String(value)))}
             options={printShareTargetOptions}
             optionFilterProp="label"
-            placeholder="انتخاب مقصد (داخلی، بات، پیامک)"
+            placeholder="انتخاب مقصد (داخلی، بات، دایرکت اینستاگرام، پیامک)"
             className="w-full"
             maxTagCount="responsive"
             getPopupContainer={(trigger) => trigger.parentElement || document.body}

@@ -143,6 +143,13 @@ export const useListPrintManager = ({
   const renderPrintCardRef = useRef<() => React.ReactNode>(() => null);
   const buildNativeListPrintFlowRef = useRef<() => string | null>(() => null);
   const reservedPrintWindowRef = useRef<Window | null>(null);
+  const printRenderTimestampRef = useRef(new Date().toISOString());
+
+  useEffect(() => {
+    if (isPrintModalOpen) {
+      printRenderTimestampRef.current = new Date().toISOString();
+    }
+  }, [isPrintModalOpen]);
   const currencyLabel = readCurrencyConfig().label || '';
   const printRelationOptions = useMemo(
     () => withPrintIdentityRelationOptions(relationOptions, assigneeDirectory),
@@ -372,6 +379,13 @@ export const useListPrintManager = ({
     () => currentUserPermissions?.[SETTINGS_PERMISSION_KEY]?.fields?.ceo_signature === true,
     [currentUserPermissions]
   );
+  const canEditPrintTemplates = useMemo(() => {
+    if (!currentUserPermissions) return false;
+    const settingsPermissions = currentUserPermissions[SETTINGS_PERMISSION_KEY] || {};
+    return settingsPermissions.view !== false
+      && settingsPermissions.edit !== false
+      && settingsPermissions.fields?.print_templates !== false;
+  }, [currentUserPermissions]);
 
   useEffect(() => {
     if (!selectedTemplateId || !userPreferencesReady) return;
@@ -669,7 +683,7 @@ export const useListPrintManager = ({
   const resolveValue = useCallback((path: string, pageIndex: number, pageCount: number, pageRows: any[], rowOffset: number) => {
     if (path === 'system.list_title') return moduleConfig?.titles?.fa || moduleId;
     if (path === 'system.selected_count') return toPersianNumber(rows.length);
-    if (path === 'system.print_date') return toPersianNumber(safeJalaliFormat(new Date().toISOString(), 'YYYY/MM/DD HH:mm'));
+    if (path === 'system.print_date') return toPersianNumber(safeJalaliFormat(printRenderTimestampRef.current, 'YYYY/MM/DD HH:mm'));
     if (path === 'system.page_index') return toPersianNumber(pageIndex + 1);
     if (path === 'system.page_count') return toPersianNumber(pageCount);
     if (path === 'system.list_table') {
@@ -1023,7 +1037,7 @@ export const useListPrintManager = ({
       if (!bodyItem) return null;
       const overlayHtml = buildPrintLetterheadOverlayHtml(selectedOrgLetterhead, {
         title: moduleConfig?.titles?.fa || getModuleTitle(moduleId) || selectedStoredTemplate.title,
-        date: `تاریخ چاپ: ${toPersianNumber(safeJalaliFormat(new Date().toISOString(), 'YYYY/MM/DD HH:mm'))}`,
+        date: `تاریخ چاپ: ${toPersianNumber(safeJalaliFormat(printRenderTimestampRef.current, 'YYYY/MM/DD HH:mm'))}`,
         number: '',
         attachment: '',
         qrValue: '',
@@ -1258,6 +1272,7 @@ export const useListPrintManager = ({
   buildNativeListPrintFlowRef.current = buildNativeListPrintFlow;
 
   const refreshTemplates = useCallback(async () => {
+    printRenderTimestampRef.current = new Date().toISOString();
     const loaded = await loadTemplates(true);
     if (!loaded) return false;
     setPreviewRevision((value) => value + 1);
@@ -1342,6 +1357,7 @@ export const useListPrintManager = ({
     renderPrintCard,
     previewMeta,
     printPreviewSourceVersion,
+    canEditPrintTemplates,
     allowFieldSelectionTab: true,
     showImageDisplayModeControl,
   };

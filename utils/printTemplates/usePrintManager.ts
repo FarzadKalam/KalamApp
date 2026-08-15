@@ -582,6 +582,10 @@ export const usePrintManager = ({
   const reservedPrintWindowRef = useRef<Window | null>(null);
   const preparedPrintPageCountRef = useRef<number | null>(null);
   const renderedCustomTemplateRef = useRef<{ headerHtml: string; contentHtml: string; footerHtml: string } | null>(null);
+  // System date placeholders are part of the rendered HTML. They must stay
+  // constant for one preview session; otherwise every measurement render
+  // invalidates the PDF cache and starts another render request.
+  const printRenderTimestampRef = useRef(new Date().toISOString());
   const printSignatureSectionHeightPxRef = useRef(0);
   const templatesLoadedRef = useRef(false);
   const dependenciesLoadedKeyRef = useRef<string | null>(null);
@@ -1090,6 +1094,7 @@ export const usePrintManager = ({
   }, [printQrValue]);
 
   const openPrintModal = useCallback(() => {
+    printRenderTimestampRef.current = new Date().toISOString();
     setIsPrintModalOpen(true);
   }, []);
 
@@ -1524,6 +1529,13 @@ export const usePrintManager = ({
     () => currentUserPermissions?.[SETTINGS_PERMISSION_KEY]?.fields?.ceo_signature === true,
     [currentUserPermissions]
   );
+  const canEditPrintTemplates = useMemo(() => {
+    if (!currentUserPermissions) return false;
+    const settingsPermissions = currentUserPermissions[SETTINGS_PERMISSION_KEY] || {};
+    return settingsPermissions.view !== false
+      && settingsPermissions.edit !== false
+      && settingsPermissions.fields?.print_templates !== false;
+  }, [currentUserPermissions]);
 
   useEffect(() => {
     if (!selectedTemplateId || !userPreferencesReady) return;
@@ -2784,7 +2796,7 @@ export const usePrintManager = ({
         return normalizeOptionalDisplay(sanitizeOutboundDisplay(localizePlainText(raw)));
       };
 
-      const now = new Date();
+      const now = new Date(printRenderTimestampRef.current);
       if (
         (path.startsWith('record.') || path.startsWith('block.') || path === 'responsible.name') &&
         !canViewPrintFieldPath(path)
@@ -3025,7 +3037,16 @@ export const usePrintManager = ({
         return PAYROLL_EMPLOYEE_VALUE_LABELS[String(source?.military_service_status || '').trim()] || '';
       }
 
-      const raw = getPathValue(source, nestedPath);
+      let raw = getPathValue(source, nestedPath);
+      // Some historical sales records use a different persisted date key.
+      // Keep the documented print variable stable across those records rather
+      // than silently rendering an empty cell.
+      if (
+        path === 'record.invoice_date' &&
+        (raw === null || raw === undefined || raw === '')
+      ) {
+        raw = source?.document_date ?? source?.issue_date ?? source?.date ?? source?.created_at ?? '';
+      }
       if (raw === null || raw === undefined) return '';
 
       if (root === 'record') {
@@ -3064,7 +3085,8 @@ export const usePrintManager = ({
       }
 
       if (path === 'record.invoice_date' || path === 'record.updated_at' || path === 'record.created_at') {
-        return toPersianNumber(safeJalaliFormat(raw, 'YYYY/MM/DD'));
+        const formattedDate = safeJalaliFormat(raw, 'YYYY/MM/DD');
+        return toPersianNumber(formattedDate || String(raw || ''));
       }
       if (path === 'company.logo_url' || nestedPath.endsWith('logo_url')) {
           const logo = source?.logo_url || source?.logo || source?.icon_url || source?.image_url || raw || '';
@@ -3138,6 +3160,10 @@ export const usePrintManager = ({
   }, []);
 
   const refreshTemplates = useCallback(async () => {
+    // Refresh is deliberate, unlike React's measurement renders. Start a
+    // fresh timestamp only here so `system.print_date` cannot form a cache
+    // invalidation loop.
+    printRenderTimestampRef.current = new Date().toISOString();
     const loaded = await loadTemplates(true);
     if (!loaded) return false;
 
@@ -4461,6 +4487,7 @@ export const usePrintManager = ({
     refreshTemplates,
     previewMeta,
     printPreviewSourceVersion,
+    canEditPrintTemplates,
     printableFieldsForTemplate,
     isSelectedTemplateSystem,
     savingPrintFields,

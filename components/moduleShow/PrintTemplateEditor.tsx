@@ -1125,19 +1125,6 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
             return true;
           }
           if (resizeIntent === 'row') {
-            if (!mouseEvent.altKey) {
-              cellDragSelectionRef.current = null;
-              rowResizeStateRef.current = null;
-              if (mouseEvent.detail < 2) {
-                setEditorResizeCursor(view, 'row');
-                return false;
-              }
-              const selection = createAxisSelection(view, cell, 'row');
-              if (!selection) return false;
-              view.dispatch(view.state.tr.setSelection(selection));
-              view.focus();
-              return true;
-            }
             const row = cell.closest('tr') as HTMLTableRowElement | null;
             if (!row) return false;
             const startHeight = Math.max(24, Math.round(row.getBoundingClientRect().height || 0));
@@ -1162,6 +1149,22 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
             };
             window.addEventListener('mousemove', handleMove);
             window.addEventListener('mouseup', handleUp, { once: true });
+            return true;
+          }
+          // An empty table cell contains only a placeholder paragraph. It must
+          // behave like a normal writing area, not like a table-range drag.
+          if (!mouseEvent.shiftKey && !String(cell.textContent || '').trim()) {
+            const cellPos = resolveCellPos(view, cell);
+            if (cellPos === null) return false;
+            mouseEvent.preventDefault();
+            cellDragSelectionRef.current = null;
+            setEditorResizeCursor(view, null);
+            const selection = TextSelection.near(
+              view.state.doc.resolve(Math.min(view.state.doc.content.size, cellPos + 1)),
+              1,
+            );
+            view.dispatch(view.state.tr.setSelection(selection));
+            view.focus();
             return true;
           }
           if (!shouldStartCellRangeDrag(target, cell, mouseEvent)) {
@@ -1293,6 +1296,7 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
         </Tooltip>
         {tableMenuOpen ? (
           <div className="table-bubble-menu">
+            <span className="table-size-hint">عرض ستون و ارتفاع ردیف را با کشیدن لبهٔ سلول تغییر دهید.</span>
             {iconBtn('نوشتن قبل از جدول', <ArrowUpOutlined />, () => insertParagraphAroundTable('before'), !editor)}
             {iconBtn('نوشتن بعد از جدول', <ArrowDownOutlined />, () => insertParagraphAroundTable('after'), !editor)}
             {iconBtn('کوچک‌تر کردن عرض جدول', <MinusOutlined />, () => updateCurrentTableWidth(-10), !editor)}
@@ -1485,7 +1489,9 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
         }
         .print-template-editor-content td p:empty,
         .print-template-editor-content th p:empty {
-          display: none !important;
+          display: block !important;
+          min-height: 1.6em;
+          cursor: text;
         }
         .print-template-editor-content td br.ProseMirror-trailingBreak,
         .print-template-editor-content th br.ProseMirror-trailingBreak {
@@ -1717,6 +1723,14 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
           box-shadow: 0 12px 30px rgba(15, 23, 42, 0.16);
           backdrop-filter: blur(10px);
         }
+        .table-size-hint {
+          flex: 1 1 100%;
+          color: #64748b;
+          font-size: 11px;
+          line-height: 1.65;
+          padding: 0 2px 2px;
+        }
+        .dark .table-size-hint { color: #cbd5e1; }
         .dark .table-bubble-menu {
           background: rgba(17, 24, 39, 0.96);
           border-color: rgba(71, 85, 105, 0.95);

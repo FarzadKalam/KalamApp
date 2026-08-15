@@ -25,6 +25,7 @@ import {
 } from '../../utils/operationalFinancialOverview';
 import { createChoiceFilter, createDateRangeFilter, createNumberRangeFilter, createTextFilter } from './tableColumnFilters';
 import { useListPrintManager } from '../../utils/printTemplates/useListPrintManager';
+import { openPrintTemplateEditor } from '../../utils/printTemplates/openTemplateEditor';
 import { getFinancialPaymentTypeLabelFa, getFinancialStatusLabelFa } from '../../utils/financialValueLabels';
 import {
   buildOnlineAccountCardPublicUrl,
@@ -480,6 +481,8 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
         printTemplates={listPrintManager.printTemplates}
         selectedTemplateId={listPrintManager.selectedTemplateId}
         onSelectTemplate={listPrintManager.setSelectedTemplateId}
+        canEditPrintTemplates={listPrintManager.canEditPrintTemplates}
+        onEditTemplate={(templateId) => openPrintTemplateEditor(`operational_financial_overview_${entityType}`, templateId)}
         renderPrintCard={listPrintManager.renderPrintCard}
         printMode={listPrintManager.printMode}
         printableFields={listPrintManager.printableFieldsForTemplate}

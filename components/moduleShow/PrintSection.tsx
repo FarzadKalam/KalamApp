@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { App, Button, Checkbox, Modal, Segmented, Tabs } from 'antd';
-import { DownOutlined, EyeOutlined, MinusOutlined, PlusOutlined, ReloadOutlined, UpOutlined } from '@ant-design/icons';
+import { App, Button, Checkbox, Modal, Segmented, Tabs, theme } from 'antd';
+import { DownOutlined, EditOutlined, EyeOutlined, MinusOutlined, PlusOutlined, ReloadOutlined, UpOutlined } from '@ant-design/icons';
 import { createPortal } from 'react-dom';
 import { printStyles } from '../../utils/printTemplates';
 import { fitCompactPrintCells } from '../../utils/printTemplates/fitCompactPrintCells';
@@ -22,8 +22,8 @@ interface PrintSectionProps {
   onClose: () => void;
   onPrint: (preparedPdf?: GeneratedPrintPdf) => void | Promise<void>;
   onPreparePrint?: () => void | Promise<void>;
-  onSendInternalPdf?: () => void | Promise<void>;
-  onSavePdfToRecord?: () => void | Promise<void>;
+  onSendInternalPdf?: (preparedPdf?: GeneratedPrintPdf) => void | Promise<void>;
+  onSavePdfToRecord?: (preparedPdf?: GeneratedPrintPdf) => void | Promise<void>;
   onRefreshPreview?: () => void | Promise<void>;
   onGenerateFinalPdfPreview?: (onProgress: (progress: { percent: number; label: string }) => void) => Promise<GeneratedPrintPdf>;
   /** Stable version of the rendered document source, supplied by each print runtime. */
@@ -31,6 +31,8 @@ interface PrintSectionProps {
   printTemplates: { id: string; title: string; description: string; isSystem?: boolean }[];
   selectedTemplateId: string;
   onSelectTemplate: (id: string) => void;
+  canEditPrintTemplates?: boolean;
+  onEditTemplate?: (templateId: string) => void;
   renderPrintCard: () => React.ReactNode;
   printMode: boolean;
   printableFields?: any[];
@@ -98,6 +100,8 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   printTemplates,
   selectedTemplateId,
   onSelectTemplate,
+  canEditPrintTemplates = false,
+  onEditTemplate,
   renderPrintCard,
   printMode,
   printableFields = [],
@@ -128,6 +132,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   modalZIndex = 1000,
 }) => {
   const { message } = App.useApp();
+  const { token } = theme.useToken();
   const [activeTab, setActiveTab] = useState('preview');
   const [refreshing, setRefreshing] = useState(false);
   const [sendingInternal, setSendingInternal] = useState(false);
@@ -222,6 +227,43 @@ const PrintSection: React.FC<PrintSectionProps> = ({
       })),
     [printTemplates]
   );
+  const handleEditTemplate = useCallback((event: React.SyntheticEvent, templateId: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onEditTemplate?.(templateId);
+  }, [onEditTemplate]);
+  const renderTemplateOption = useCallback((option: any) => {
+    const data = (option.data || option) as {
+      value?: string;
+      title?: string;
+      description?: string;
+      isSystem?: boolean;
+    };
+    const templateId = String(data?.value || option?.value || '').trim();
+    return (
+      <div className="print-template-option">
+        <div className="print-template-option-copy">
+          <div className="print-template-option-title">
+            <span>{data?.title}</span>
+            {data?.isSystem ? <span className="print-template-system-tag">سیستمی</span> : null}
+          </div>
+          {data?.description ? <div className="print-template-option-desc">{data.description}</div> : null}
+        </div>
+        {!data?.isSystem && canEditPrintTemplates && templateId ? (
+          <Button
+            type="text"
+            size="small"
+            icon={<EditOutlined />}
+            title="ویرایش قالب در تب جدید"
+            aria-label={`ویرایش قالب ${data.title || ''}`}
+            className="print-template-option-edit"
+            onMouseDown={(event) => handleEditTemplate(event, templateId)}
+            onClick={(event) => handleEditTemplate(event, templateId)}
+          />
+        ) : null}
+      </div>
+    );
+  }, [canEditPrintTemplates, handleEditTemplate]);
   const groupedPrintableFields = useMemo(() => {
     const groups = new Map<string, any[]>();
     printableFields.forEach((field) => {
@@ -452,7 +494,10 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     if (!onSendInternalPdf) return;
     setSendingInternal(true);
     try {
-      await onSendInternalPdf();
+      const preparedPdf = onGenerateFinalPdfPreview
+        ? (await loadFinalPdfPreview()) || undefined
+        : undefined;
+      await onSendInternalPdf(preparedPdf);
     } finally {
       setSendingInternal(false);
     }
@@ -462,11 +507,50 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     if (!onSavePdfToRecord) return;
     setSavingPdfToRecord(true);
     try {
-      await onSavePdfToRecord();
+      const preparedPdf = onGenerateFinalPdfPreview
+        ? (await loadFinalPdfPreview()) || undefined
+        : undefined;
+      await onSavePdfToRecord(preparedPdf);
     } finally {
       setSavingPdfToRecord(false);
     }
   };
+
+  const templateSelector = (
+    <div className="print-template-selector">
+      <span className="print-template-selector-label">قالب</span>
+      <AdaptiveSelectField
+        value={selectedTemplateId || undefined}
+        onChange={(value) => {
+          onSelectTemplate(value);
+          setActiveTab('preview');
+        }}
+        showSearch
+        allowClear={false}
+        className="print-template-mobile-select"
+        placeholder="انتخاب قالب چاپ"
+        listHeight={320}
+        virtual
+        optionFilterProp="label"
+        adaptiveMode="auto"
+        pickerTitle="انتخاب قالب چاپ"
+        mobileSearchPlaceholder="جستجو در قالب‌های چاپ"
+        popupMatchSelectWidth
+        overlayZIndexBase={12020}
+        optionDisplayFallback={(option) => String(option?.title || option?.label || option?.value || '')}
+        filterOption={(input, option) => {
+          const search = input.trim().toLowerCase();
+          if (!search) return true;
+          const title = String(option?.title || '').toLowerCase();
+          const description = String(option?.description || '').toLowerCase();
+          return title.includes(search) || description.includes(search);
+        }}
+        options={mobileTemplateOptions}
+        optionRender={renderTemplateOption}
+        renderMobileOption={renderTemplateOption}
+      />
+    </div>
+  );
 
   return (
     <>
@@ -503,6 +587,12 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           styles={{
             mask: { zIndex: modalZIndex },
             wrapper: { zIndex: modalZIndex + 1 },
+            header: {
+              background: token.colorBgElevated,
+              borderBottom: `1px solid ${token.colorBorderSecondary}`,
+              marginBottom: 0,
+              paddingBottom: 14,
+            },
             content: isMobile
               ? {
                   borderRadius: 0,
@@ -513,8 +603,9 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                   height: '100dvh',
                   paddingBottom: 0,
                   overflow: 'hidden',
+                  background: token.colorBgElevated,
                 }
-              : undefined,
+              : { background: token.colorBgElevated },
             body: {
               padding: 0,
               ...(isMobile
@@ -538,70 +629,14 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                   zIndex: 2,
                   padding: '12px 16px calc(12px + env(safe-area-inset-bottom, 0px))',
                   marginTop: 0,
-                  borderTop: '1px solid rgba(148,163,184,0.18)',
-                  background: 'rgba(248,250,252,0.96)',
+                  borderTop: `1px solid ${token.colorBorderSecondary}`,
+                  background: token.colorBgElevated,
                   backdropFilter: 'blur(12px)',
                 }
-              : undefined,
+              : { borderTop: `1px solid ${token.colorBorderSecondary}`, background: token.colorBgElevated },
           }}
         >
-        <div className="print-select-shell">
-          <div className="print-template-mobile-select-wrap">
-            <div className="print-template-mobile-select-label">قالب چاپ</div>
-            <AdaptiveSelectField
-              value={selectedTemplateId || undefined}
-              onChange={(value) => {
-                onSelectTemplate(value);
-                setActiveTab('preview');
-              }}
-              showSearch
-              allowClear={false}
-              className="print-template-mobile-select"
-              placeholder="انتخاب قالب چاپ"
-              listHeight={320}
-              optionFilterProp="label"
-              adaptiveMode="auto"
-              pickerTitle="انتخاب قالب چاپ"
-              mobileSearchPlaceholder="جستجو در قالب‌های چاپ"
-              popupMatchSelectWidth
-              overlayZIndexBase={12020}
-              optionDisplayFallback={(option) => String(option?.title || option?.label || option?.value || '')}
-              filterOption={(input, option) => {
-                const search = input.trim().toLowerCase();
-                if (!search) return true;
-                const title = String(option?.title || '').toLowerCase();
-                const description = String(option?.description || '').toLowerCase();
-                return title.includes(search) || description.includes(search);
-              }}
-              options={mobileTemplateOptions}
-              optionRender={(option) => {
-                const data = option.data as {
-                  title?: string;
-                  description?: string;
-                  isSystem?: boolean;
-                };
-                return (
-                  <div className="print-template-mobile-option">
-                    <div className="print-template-mobile-option-title">
-                      <span>{data.title}</span>
-                      {data.isSystem ? <span className="print-template-system-tag">سیستمی</span> : null}
-                    </div>
-                    {data.description ? <div className="print-template-mobile-option-desc">{data.description}</div> : null}
-                  </div>
-                );
-              }}
-              renderMobileOption={(option) => (
-                <div className="print-template-mobile-option">
-                  <div className="print-template-mobile-option-title">
-                    <span>{String(option?.title || option?.label || option?.value || '')}</span>
-                    {option?.isSystem ? <span className="print-template-system-tag">سیستمی</span> : null}
-                  </div>
-                  {option?.description ? <div className="print-template-mobile-option-desc">{String(option.description)}</div> : null}
-                </div>
-              )}
-            />
-          </div>
-
+        <div className="print-select-shell" style={{ background: token.colorBgLayout }}>
           <div className="print-preview-shell">
             <Tabs
               activeKey={activeTab}
@@ -610,7 +645,25 @@ const PrintSection: React.FC<PrintSectionProps> = ({
               }}
               tabPosition="top"
               destroyOnHidden
-              tabBarGutter={isMobile ? 8 : 12}
+              tabBarGutter={isMobile ? 12 : 24}
+              tabBarExtraContent={{
+                right: (
+                  <div className="print-modal-tabbar-actions">
+                    {templateSelector}
+                    <Button
+                      type="text"
+                      size="small"
+                      className="print-modal-refresh"
+                      icon={<ReloadOutlined />}
+                      onClick={() => { void handleRefresh(); }}
+                      loading={refreshing}
+                      disabled={!onRefreshPreview && !onGenerateFinalPdfPreview}
+                      title="به‌روزرسانی پیش‌نمایش نهایی"
+                      aria-label="به‌روزرسانی پیش‌نمایش نهایی"
+                    />
+                  </div>
+                ),
+              }}
               style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
               tabBarStyle={{
                 margin: 0,
@@ -650,14 +703,6 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                               title="بزرگ‌نمایی"
                             />
                           </> : null}
-                          <Button
-                            size="small"
-                            icon={<ReloadOutlined />}
-                            onClick={() => { void handleRefresh(); }}
-                            loading={refreshing}
-                            disabled={!onRefreshPreview && !onGenerateFinalPdfPreview}
-                            title="رفرش پیش‌نمایش نهایی"
-                          />
                         </div>
                       </div>
                       <div
@@ -946,14 +991,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           grid-template-rows: auto minmax(0, 1fr);
           height: 100%;
           min-height: 0;
-          background:
-            radial-gradient(circle at top right, rgba(var(--brand-500-rgb), 0.16), transparent 28%),
-            linear-gradient(180deg, rgba(248,250,252,0.96), rgba(241,245,249,0.98));
-        }
-        .dark .print-select-shell {
-          background:
-            radial-gradient(circle at top right, rgba(var(--brand-500-rgb), 0.18), transparent 28%),
-            linear-gradient(180deg, rgba(15,23,42,0.98), rgba(17,24,39,0.98));
+          background: transparent;
         }
         .print-template-system-tag {
           font-size: 10px;
@@ -984,43 +1022,45 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           flex-direction: column;
           overflow: hidden;
         }
-        .print-template-mobile-select-wrap {
-          display: block;
-          padding: 12px 16px 10px;
-          border-bottom: 1px solid rgba(148,163,184,0.18);
-          background: rgba(248,250,252,0.88);
-          backdrop-filter: blur(10px);
-        }
-        .print-template-mobile-select-label {
-          font-size: 12px;
-          color: #64748b;
-          margin-bottom: 10px;
-          font-weight: 700;
+        .print-modal-tabbar-actions {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          min-width: 0;
           direction: rtl;
+        }
+        .print-template-selector {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          min-width: 260px;
+          max-width: min(38vw, 440px);
+          direction: rtl;
+        }
+        .print-template-selector-label {
+          color: var(--ant-color-text-secondary, #64748b);
+          font-size: 12px;
+          font-weight: 700;
+          flex: 0 0 auto;
         }
         .print-template-mobile-select.kalam-adaptive-picker__trigger {
           width: 100%;
-          min-height: 48px;
-          padding: 10px 14px;
-          border-radius: 14px;
-          border: 1px solid rgba(148,163,184,0.28);
-          background: #fff;
-          box-shadow: 0 10px 24px rgba(15,23,42,0.06);
+          min-height: 34px;
+          padding: 4px 10px;
+          border-radius: 9px;
         }
         .print-template-mobile-select.ant-select {
           width: 100%;
           direction: rtl;
         }
         .print-template-mobile-select.ant-select .ant-select-selector {
-          min-height: 48px !important;
-          padding: 7px 14px !important;
-          border-radius: 14px !important;
-          border-color: rgba(148,163,184,0.28) !important;
-          box-shadow: 0 10px 24px rgba(15,23,42,0.06);
+          min-height: 34px !important;
+          padding: 1px 10px !important;
+          border-radius: 9px !important;
         }
         .print-template-mobile-select.ant-select .ant-select-selection-item,
         .print-template-mobile-select.ant-select .ant-select-selection-placeholder {
-          line-height: 32px !important;
+          line-height: 30px !important;
           text-align: right;
         }
         .print-template-mobile-select .kalam-adaptive-picker__trigger-text {
@@ -1049,7 +1089,8 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           text-overflow: ellipsis;
         }
         .print-template-mobile-value-title,
-        .print-template-mobile-option-title {
+        .print-template-mobile-option-title,
+        .print-template-option-title {
           display: inline-flex;
           align-items: center;
           gap: 6px;
@@ -1060,7 +1101,8 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           direction: rtl;
           text-align: right;
         }
-        .print-template-mobile-option-desc {
+        .print-template-mobile-option-desc,
+        .print-template-option-desc {
           font-size: 11px;
           line-height: 1.7;
           color: #64748b;
@@ -1068,10 +1110,19 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           text-align: right;
           display: block;
         }
-        .print-template-mobile-option {
+        .print-template-mobile-option,
+        .print-template-option {
           direction: rtl;
           text-align: right;
         }
+        .print-template-option {
+          display: flex;
+          align-items: flex-start;
+          gap: 8px;
+          min-width: 0;
+        }
+        .print-template-option-copy { flex: 1 1 auto; min-width: 0; }
+        .print-template-option-edit { flex: 0 0 auto; margin-inline-start: auto; }
         .print-template-mobile-option .print-template-system-tag,
         .print-template-mobile-value .print-template-system-tag {
           display: inline-flex;
@@ -1109,33 +1160,10 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           border-radius: 12px;
           margin: 0 6px;
         }
-        .dark .print-template-mobile-select-label {
-          color: #cbd5e1;
-        }
-        .dark .print-template-mobile-select-wrap {
-          background: rgba(15,23,42,0.88);
-        }
-        .dark .print-template-mobile-select.kalam-adaptive-picker__trigger {
-          background: rgba(15,23,42,0.92);
-          border-color: rgba(71,85,105,0.42);
-          box-shadow: none;
-        }
-        .dark .print-template-mobile-select.ant-select .ant-select-selector {
-          background: rgba(15,23,42,0.92) !important;
-          border-color: rgba(71,85,105,0.42) !important;
-          box-shadow: none;
-        }
         .dark .print-template-mobile-popup .ant-select-dropdown {
           background: #0f172a !important;
           border-color: rgba(71,85,105,0.42) !important;
           box-shadow: 0 18px 40px rgba(2,6,23,0.48) !important;
-        }
-        .dark .print-template-mobile-value-title,
-        .dark .print-template-mobile-option-title {
-          color: #f8fafc;
-        }
-        .dark .print-template-mobile-option-desc {
-          color: #94a3b8;
         }
         .dark .print-template-mobile-popup .ant-select-item-option-active {
           background: rgba(var(--brand-500-rgb), 0.16) !important;
@@ -1244,7 +1272,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           overflow: auto;
           min-height: 0;
           border-top: 1px solid rgba(148,163,184,0.18);
-          background: linear-gradient(180deg, rgba(226,232,240,0.42), rgba(241,245,249,0.92));
+          background: var(--ant-color-fill-quaternary, rgba(148,163,184,0.1));
           padding: 8px 10px 10px;
           display: flex;
           justify-content: flex-start;
@@ -1660,15 +1688,22 @@ const PrintSection: React.FC<PrintSectionProps> = ({
             grid-template-rows: auto minmax(0, 1fr);
             height: 100%;
           }
-          .print-template-mobile-select-wrap {
-            display: block;
-            padding: 12px 12px 10px;
-            border-bottom: 1px solid rgba(148,163,184,0.18);
-            background: rgba(248,250,252,0.88);
-            backdrop-filter: blur(10px);
+          .print-preview-shell .ant-tabs-nav {
+            flex-wrap: wrap;
+            padding: 8px 10px 0;
+            gap: 8px;
           }
-          .dark .print-template-mobile-select-wrap {
-            background: rgba(15,23,42,0.88);
+          .print-preview-shell .ant-tabs-extra-content {
+            width: 100%;
+            order: -1;
+          }
+          .print-modal-tabbar-actions {
+            width: 100%;
+          }
+          .print-template-selector {
+            flex: 1 1 auto;
+            min-width: 0;
+            max-width: none;
           }
           .print-preview-shell {
             min-height: 0;

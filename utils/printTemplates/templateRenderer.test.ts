@@ -44,6 +44,31 @@ describe('system invoice template rendering', () => {
     expect(rendered).toContain(imageUrl);
   });
 
+  it('renders a bare organization-logo variable as a bounded image', () => {
+    const logoUrl = 'https://cdn.example.test/logo.png';
+    const rendered = renderPrintTemplateHtml({
+      templateHtml: '<table><tr><td>{{company.logo_url}}</td></tr></table>',
+      resolveVariableValue: () => logoUrl,
+    });
+
+    expect(rendered).toContain(`<img src="${logoUrl}"`);
+    expect(rendered).toContain('data-print-variable-image="company.logo_url"');
+    expect(rendered).toContain('max-width:100%');
+    expect(rendered).toContain('max-height:36px');
+    expect(rendered).not.toContain(`<td>${logoUrl}</td>`);
+  });
+
+  it('keeps an authored logo image source as a URL rather than nesting an image', () => {
+    const logoUrl = 'https://cdn.example.test/logo.png';
+    const rendered = renderPrintTemplateHtml({
+      templateHtml: '<img src="{{company.logo_url}}" style="width:72px">',
+      resolveVariableValue: () => logoUrl,
+    });
+
+    expect(rendered).toContain(`<img src="${logoUrl}" style="width:72px">`);
+    expect(rendered).not.toContain('<img src="<img');
+  });
+
   it('replaces stale stored system markup with the current official invoice template', () => {
     const merged = mergeTemplatesWithDefaults('invoices', [{
       id: 'default_invoice_official',
