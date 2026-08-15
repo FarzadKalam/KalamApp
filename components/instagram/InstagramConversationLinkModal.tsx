@@ -8,11 +8,11 @@ import { supabase } from '../../supabaseClient';
 
 type LinkTarget = { id?: string; target_module_id: 'customers' | 'suppliers' | 'employees'; target_record_id: string | null };
 
-const targetModules = [
+const targetModules: Array<{ value: LinkTarget['target_module_id']; label: string }> = [
   { value: 'customers', label: 'مشتری' },
   { value: 'suppliers', label: 'تأمین‌کننده' },
   { value: 'employees', label: 'کارمند' },
-] as const;
+];
 
 const relationField = (targetModule: LinkTarget['target_module_id']) => ({
   key: `instagram_link_${targetModule}`,
@@ -38,15 +38,30 @@ const InstagramConversationLinkModal: React.FC<{
     if (!open || !conversationId) return;
     let active = true;
     setLoading(true);
-    void supabase.from('instagram_conversation_links')
-      .select('id,target_module_id,target_record_id')
-      .eq('conversation_id', conversationId)
-      .then(({ data, error }) => {
+    void (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('instagram_conversation_links')
+          .select('id,target_module_id,target_record_id')
+          .eq('conversation_id', conversationId);
         if (!active) return;
-        if (error) { message.error(error.message || 'اتصال‌های مخاطب بارگذاری نشد.'); return; }
-        setTargets((data || []).map((item: any) => ({ id: item.id, target_module_id: item.target_module_id, target_record_id: item.target_record_id })));
-      })
-      .finally(() => { if (active) setLoading(false); });
+        if (error) {
+          message.error(error.message || 'اتصال‌های مخاطب بارگذاری نشد.');
+          return;
+        }
+        setTargets((data || []).map((item: any) => ({
+          id: item.id,
+          target_module_id: item.target_module_id,
+          target_record_id: item.target_record_id,
+        })));
+      } catch (error) {
+        if (active) {
+          message.error(error instanceof Error ? error.message : 'اتصال‌های مخاطب بارگذاری نشد.');
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
     return () => { active = false; };
   }, [conversationId, message, open]);
 

@@ -23,6 +23,8 @@ interface PrintSectionProps {
   onSavePdfToRecord?: () => void | Promise<void>;
   onRefreshPreview?: () => void | Promise<void>;
   onGenerateFinalPdfPreview?: (onProgress: (progress: { percent: number; label: string }) => void) => Promise<{ blob: Blob }>;
+  /** Stable version of the rendered document source, supplied by each print runtime. */
+  previewContentVersion?: string;
   printTemplates: { id: string; title: string; description: string; isSystem?: boolean }[];
   selectedTemplateId: string;
   onSelectTemplate: (id: string) => void;
@@ -89,6 +91,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   onSavePdfToRecord,
   onRefreshPreview,
   onGenerateFinalPdfPreview,
+  previewContentVersion = '',
   printTemplates,
   selectedTemplateId,
   onSelectTemplate,
@@ -132,7 +135,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   const [finalPdfPreviewProgress, setFinalPdfPreviewProgress] = useState<{ percent: number; label: string } | null>(null);
   const [finalPdfPreviewError, setFinalPdfPreviewError] = useState('');
   const [finalPdfPreviewRevision, setFinalPdfPreviewRevision] = useState(0);
-  const finalPdfPreviewUrlRef = useRef<string | null>(null);
+  const finalPdfPreviewCacheRef = useRef(new Map<string, string>());
   const finalPdfPreviewRequestRef = useRef(0);
   const finalPdfPreviewGeneratorRef = useRef(onGenerateFinalPdfPreview);
   const previewStageRef = useRef<HTMLDivElement | null>(null);
@@ -185,6 +188,25 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     [effectiveSelectedFieldKeys],
   );
   const selectedFieldCount = effectiveSelectedFieldKeys.length;
+  const finalPdfPreviewCacheKey = useMemo(
+    () => JSON.stringify({
+      templateId: selectedTemplateId,
+      source: previewContentVersion,
+      fields: effectiveSelectedFieldKeys,
+      imageDisplayMode,
+      signatures: printSignatureRows.map((row) => ({
+        id: row.id,
+        kind: row.kind,
+        enabled: row.enabled,
+        automatic: row.automatic,
+        signerModule: row.signerModule,
+        signerId: row.signerId,
+        nameValue: row.nameValue,
+        subtitleValue: row.subtitleValue,
+      })),
+    }),
+    [effectiveSelectedFieldKeys, imageDisplayMode, previewContentVersion, printSignatureRows, selectedTemplateId],
+  );
   const mobileTemplateOptions = useMemo(
     () =>
       printTemplates.map((template) => ({
@@ -229,14 +251,25 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     finalPdfPreviewGeneratorRef.current = onGenerateFinalPdfPreview;
   }, [onGenerateFinalPdfPreview]);
 
-  const loadFinalPdfPreview = useCallback(async () => {
+  const removeCachedFinalPdfPreview = useCallback((cacheKey: string) => {
+    const cachedUrl = finalPdfPreviewCacheRef.current.get(cacheKey);
+    if (!cachedUrl) return;
+    URL.revokeObjectURL(cachedUrl);
+    finalPdfPreviewCacheRef.current.delete(cacheKey);
+  }, []);
+
+  const loadFinalPdfPreview = useCallback(async (force = false) => {
     const generateFinalPdfPreview = finalPdfPreviewGeneratorRef.current;
     if (!generateFinalPdfPreview) return;
-    const requestId = ++finalPdfPreviewRequestRef.current;
-    if (finalPdfPreviewUrlRef.current) {
-      URL.revokeObjectURL(finalPdfPreviewUrlRef.current);
-      finalPdfPreviewUrlRef.current = null;
+    if (force) removeCachedFinalPdfPreview(finalPdfPreviewCacheKey);
+    const cachedUrl = finalPdfPreviewCacheRef.current.get(finalPdfPreviewCacheKey);
+    if (cachedUrl) {
+      setFinalPdfPreviewError('');
+      setFinalPdfPreviewProgress(null);
+      setFinalPdfPreviewUrl(cachedUrl);
+      return;
     }
+    const requestId = ++finalPdfPreviewRequestRef.current;
     setFinalPdfPreviewUrl(null);
     setFinalPdfPreviewError('');
     setFinalPdfPreviewProgress({ percent: 5, label: 'در حال آماده‌سازی پیش‌نمایش نهایی…' });
@@ -247,7 +280,14 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         URL.revokeObjectURL(nextUrl);
         return;
       }
-      finalPdfPreviewUrlRef.current = nextUrl;
+      finalPdfPreviewCacheRef.current.set(finalPdfPreviewCacheKey, nextUrl);
+      // Keep a short LRU-like cache so switching templates does not rebuild a
+      // PDF the user has already seen, while avoiding unbounded Blob URLs.
+      while (finalPdfPreviewCacheRef.current.size > 8) {
+        const oldestKey = finalPdfPreviewCacheRef.current.keys().next().value;
+        if (!oldestKey) break;
+        removeCachedFinalPdfPreview(oldestKey);
+      }
       setFinalPdfPreviewUrl(nextUrl);
       setFinalPdfPreviewProgress(null);
     } catch (error) {
@@ -257,7 +297,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
       setFinalPdfPreviewProgress(null);
       setFinalPdfPreviewError('ساخت پیش‌نمایش نهایی PDF ناموفق بود. دوباره تلاش کنید.');
     }
-  }, []);
+  }, [finalPdfPreviewCacheKey, removeCachedFinalPdfPreview]);
 
   useEffect(() => {
     if (!isPrintModalOpen || activeTab !== 'preview' || !onGenerateFinalPdfPreview) return;
@@ -265,11 +305,12 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     return () => {
       finalPdfPreviewRequestRef.current += 1;
     };
-  }, [activeTab, finalPdfPreviewRevision, isPrintModalOpen, loadFinalPdfPreview, Boolean(onGenerateFinalPdfPreview), selectedTemplateId]);
+  }, [activeTab, finalPdfPreviewRevision, isPrintModalOpen, loadFinalPdfPreview, Boolean(onGenerateFinalPdfPreview), finalPdfPreviewCacheKey]);
 
   useEffect(() => () => {
     finalPdfPreviewRequestRef.current += 1;
-    if (finalPdfPreviewUrlRef.current) URL.revokeObjectURL(finalPdfPreviewUrlRef.current);
+    finalPdfPreviewCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
+    finalPdfPreviewCacheRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -302,6 +343,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
       if (onRefreshPreview) await onRefreshPreview();
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
       if (onGenerateFinalPdfPreview) {
+        removeCachedFinalPdfPreview(finalPdfPreviewCacheKey);
         setFinalPdfPreviewRevision((value) => value + 1);
       }
       if (!silent) message.success('پیش‌نمایش چاپ به‌روز شد');
@@ -316,11 +358,11 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   const handleSaveFields = async () => {
     if (!onSavePrintFields) return;
     const result = await onSavePrintFields();
-    if (result !== false) {
-      message.success('تنظیمات فیلدهای چاپی ذخیره شد');
-    } else {
+    if (result === false) {
       message.error('ذخیره تنظیمات ناموفق بود');
+      return;
     }
+    message.success('تنظیمات چاپی ذخیره شد');
     await handleRefresh(true);
   };
 
@@ -404,12 +446,12 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           )}
           okText={isMobile && onPreparePrint ? 'ذخیره PDF' : 'چاپ'}
           cancelText="انصراف"
-          width={isMobile ? '100vw' : 1180}
+          width={isMobile ? '100vw' : 'min(1440px, calc(100vw - 32px))'}
           destroyOnHidden
-          centered={!isMobile}
+          centered={false}
           zIndex={modalZIndex}
           rootClassName="print-select-modal"
-          style={isMobile ? { top: 0, paddingBottom: 0, maxWidth: '100vw' } : undefined}
+          style={isMobile ? { top: 0, paddingBottom: 0, maxWidth: '100vw' } : { top: 16, paddingBottom: 0 }}
           styles={{
             mask: { zIndex: modalZIndex },
             wrapper: { zIndex: modalZIndex + 1 },
@@ -435,7 +477,8 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                     overflow: 'hidden',
                   }
                 : {
-                    maxHeight: '85vh',
+                  height: 'calc(100vh - 140px)',
+                  maxHeight: 'calc(100vh - 140px)',
                     overflow: 'hidden',
                   }),
             },
@@ -628,7 +671,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                         }}
                       >
                         {onGenerateFinalPdfPreview ? (
-                          <div style={{ width: '100%', minHeight: '100%', padding: 12, boxSizing: 'border-box' }} dir="rtl">
+                          <div style={{ width: '100%', height: '100%', minHeight: '100%', padding: isMobile ? 8 : 12, boxSizing: 'border-box' }} dir="rtl">
                             {finalPdfPreviewProgress ? (
                               <div style={{ maxWidth: 420, margin: '48px auto', textAlign: 'right' }}>
                                 <p style={{ marginBottom: 12, color: '#475569' }}>{finalPdfPreviewProgress.label}</p>
@@ -639,10 +682,10 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                             ) : finalPdfPreviewError ? (
                               <div style={{ maxWidth: 420, margin: '48px auto', textAlign: 'center', color: '#b91c1c' }}>
                                 <p>{finalPdfPreviewError}</p>
-                                <Button onClick={() => { void loadFinalPdfPreview(); }}>تلاش دوباره</Button>
+                                <Button onClick={() => { void loadFinalPdfPreview(true); }}>تلاش دوباره</Button>
                               </div>
                             ) : finalPdfPreviewUrl ? (
-                              <iframe src={finalPdfPreviewUrl} title="پیش‌نمایش نهایی PDF" style={{ width: '100%', height: 'calc(100vh - 330px)', minHeight: 460, border: 0, background: '#fff' }} />
+                              <iframe src={finalPdfPreviewUrl} title="پیش‌نمایش نهایی PDF" style={{ width: '100%', height: isMobile ? 'calc(100vh - 290px)' : 'calc(100vh - 275px)', minHeight: isMobile ? 440 : 620, border: 0, background: '#fff' }} />
                             ) : null}
                           </div>
                         ) : <div className="print-preview-canvas">
@@ -816,6 +859,8 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                                 onChangeSignerModule={onChangePrintSignatureSignerModule}
                                 onChangeSignerId={onChangePrintSignatureSignerId}
                                 onSearchSignerOptions={onSearchPrintSignatureOptions}
+                                onSave={handleSaveFields}
+                                saving={savingPrintFields}
                               />
                             </div>
                           </div>

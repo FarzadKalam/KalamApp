@@ -243,6 +243,53 @@ describe('PrintSection', () => {
     }
   });
 
+  it('reuses a final PDF when returning to an unchanged template', async () => {
+    setDesktopViewport();
+    const user = userEvent.setup();
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const createObjectURL = vi
+      .fn()
+      .mockReturnValueOnce('blob:preview-a4')
+      .mockReturnValueOnce('blob:preview-a5');
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+
+    const onGenerateFinalPdfPreview = vi.fn(async () => ({ blob: new Blob(['%PDF']) }));
+    const ControlledPrintSection = () => {
+      const [templateId, setTemplateId] = React.useState('custom:a4');
+      return (
+        <PrintSection
+          isPrintModalOpen
+          onClose={vi.fn()}
+          onPrint={vi.fn()}
+          onGenerateFinalPdfPreview={onGenerateFinalPdfPreview}
+          printTemplates={templates}
+          selectedTemplateId={templateId}
+          onSelectTemplate={setTemplateId}
+          renderPrintCard={() => <div>سند چاپی</div>}
+          printMode={false}
+          previewContentVersion={`template:${templateId}`}
+        />
+      );
+    };
+
+    try {
+      render(<ControlledPrintSection />);
+      await waitFor(() => expect(onGenerateFinalPdfPreview).toHaveBeenCalledTimes(1));
+
+      await user.click(await screen.findByText('قالب A5 تست'));
+      await waitFor(() => expect(onGenerateFinalPdfPreview).toHaveBeenCalledTimes(2));
+
+      await user.click(await screen.findByText('قالب A4 تست'));
+      await waitFor(() => expect(screen.getByTitle('پیش‌نمایش نهایی PDF')).toHaveAttribute('src', 'blob:preview-a4'));
+      expect(onGenerateFinalPdfPreview).toHaveBeenCalledTimes(2);
+    } finally {
+      Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
+      Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL });
+    }
+  });
+
   it('groups printable fields by section and marks empty values', async () => {
     setDesktopViewport();
     const user = userEvent.setup();

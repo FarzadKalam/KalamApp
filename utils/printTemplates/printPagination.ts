@@ -86,7 +86,7 @@ const isRemovableTerminalPrintSpacer = (element: Element) => {
  * `data-print-preserve-space` is an explicit opt-out for a deliberately sized
  * blank area.
  */
-export const trimTrailingPrintSpacerNodes = (container: Element) => {
+export const trimTrailingPrintSpacerNodes = (container: Element): boolean => {
   let changed = false;
   let lastNode = container.lastChild;
 

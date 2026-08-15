@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { App, Avatar, Button, Empty, Input, List, Select, Spin, Tabs, Tag, Tooltip } from 'antd';
+import { App, Avatar, Button, Empty, List, Select, Spin, Tabs, Tag, Tooltip } from 'antd';
 import { ArrowRightOutlined, EditOutlined, HistoryOutlined, InstagramOutlined, LinkOutlined, ReloadOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';

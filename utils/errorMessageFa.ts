@@ -15,14 +15,15 @@ const contains = (value: string, pattern: RegExp | string) => {
 
 const hasPersianText = (value: string) => /[\u0600-\u06FF]/.test(value);
 
-export const toFaErrorMessage = (error: ErrorLike | string | null | undefined, fallback = 'خطا در انجام عملیات'): string => {
+export const toFaErrorMessage = (error: unknown, fallback = 'خطا در انجام عملیات'): string => {
+  const errorLike = error && typeof error === 'object' ? error as ErrorLike : null;
   const raw =
     typeof error === 'string'
       ? error.trim()
-      : String(error?.message || error?.error_description || error?.details || error?.hint || '').trim();
+      : String(errorLike?.message || errorLike?.error_description || errorLike?.details || errorLike?.hint || '').trim();
   const normalized = raw.toLowerCase();
-  const code = typeof error === 'string' ? '' : String(error?.code || '').trim();
-  const status = typeof error === 'string' ? undefined : Number(error?.status || 0) || undefined;
+  const code = typeof error === 'string' ? '' : String(errorLike?.code || '').trim();
+  const status = typeof error === 'string' ? undefined : Number(errorLike?.status || 0) || undefined;
 
   if (!raw) return fallback;
 

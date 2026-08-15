@@ -1,6 +1,7 @@
 import { printStyles } from './styles';
 import { getCompactPrintCellsFitScript } from './fitCompactPrintCells';
 import { getStaticCustomPrintPaginationScript } from './staticPrintPagination';
+import { NATIVE_PRINT_BASE_HREF_TOKEN, NATIVE_PRINT_FONT_CSS_TOKEN } from './nativePrintFlow';
 import peydaExtraLightUrl from '../../font/peyada/PeydaWeb-ExtraLight.woff2?url';
 import peydaRegularUrl from '../../font/peyada/PeydaWeb-Regular.woff2?url';
 import peydaSemiBoldUrl from '../../font/peyada/PeydaWeb-SemiBold.woff2?url';
@@ -127,6 +128,18 @@ const getFontFaceCss = async (origin: string) => {
   return embeddedFontCssPromise;
 };
 
+export const materializeNativePrintAssets = ({
+  sourceHtml,
+  fontCss,
+  baseHref,
+}: {
+  sourceHtml: string;
+  fontCss: string;
+  baseHref: string;
+}) => sourceHtml
+  .replaceAll(NATIVE_PRINT_FONT_CSS_TOKEN, fontCss)
+  .replaceAll(NATIVE_PRINT_BASE_HREF_TOKEN, escapeHtml(baseHref));
+
 export const buildPrintDocumentHtml = async ({ pageSize, sourceHtml, title }: BuildPrintDocumentHtmlOptions) => {
   const safeTitle = escapeHtml(title || 'چاپ');
   const safePageSize = escapeHtml(pageSize || 'A4 portrait');
@@ -135,6 +148,9 @@ export const buildPrintDocumentHtml = async ({ pageSize, sourceHtml, title }: Bu
   const baseHref = origin ? `${origin}/` : '/';
   const fontCss = await getFontFaceCss(origin);
   const rootVars = getThemeVariableCss();
+  const preparedSourceHtml = isNativePrintFlow
+    ? materializeNativePrintAssets({ sourceHtml, fontCss, baseHref })
+    : sourceHtml;
 
   return `<!doctype html>
 <html lang="fa" dir="rtl">
@@ -197,7 +213,7 @@ export const buildPrintDocumentHtml = async ({ pageSize, sourceHtml, title }: Bu
     </style>
   </head>
   <body class="print-mode">
-    <div id="print-root">${sourceHtml}</div>
+    <div id="print-root">${preparedSourceHtml}</div>
     <script>
       window.__KALAMAPP_PRINT_READY = false;
       (function () {
@@ -252,9 +268,27 @@ export const buildPrintDocumentHtml = async ({ pageSize, sourceHtml, title }: Bu
         }
 
         function waitForAssets() {
+          var templateImageAssets = [];
+          var templateInlineAssets = [];
+          Array.prototype.slice.call(document.querySelectorAll('template')).forEach(function (template) {
+            var content = template && template.content;
+            if (!content || !content.querySelectorAll) return;
+            Array.prototype.slice.call(content.querySelectorAll('img')).forEach(function (image) {
+              var source = String(image.getAttribute('src') || '').trim();
+              if (source && !/^data:/i.test(source)) templateImageAssets.push(source);
+            });
+            Array.prototype.slice.call(content.querySelectorAll('[style]')).forEach(function (element) {
+              var styleText = String(element.getAttribute('style') || '');
+              styleText.replace(/url\\((['"]?)(.*?)\\1\\)/gi, function (_match, _quote, rawUrl) {
+                var nextUrl = String(rawUrl || '').trim();
+                if (nextUrl && !/^data:/i.test(nextUrl)) templateInlineAssets.push(nextUrl);
+                return _match;
+              });
+            });
+          });
           var domImages = Array.prototype.slice.call(document.images || []).map(waitForDomImage);
-          var inlineAssets = extractInlineStyleUrls().map(preloadImageUrl);
-          return Promise.all(domImages.concat(inlineAssets));
+          var externalAssets = templateImageAssets.concat(extractInlineStyleUrls(), templateInlineAssets).map(preloadImageUrl);
+          return Promise.all(domImages.concat(externalAssets));
         }
 
         function withTimeout(promise, timeoutMs) {

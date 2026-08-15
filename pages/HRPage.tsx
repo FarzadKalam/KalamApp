@@ -8842,6 +8842,7 @@ const HRPage: React.FC = () => {
         onPreparePrint={commissionListPrintManager.preparePrint}
         onPrint={commissionListPrintManager.handlePrint}
         onGenerateFinalPdfPreview={generateCommissionFinalPdfPreview}
+        previewContentVersion={commissionListPrintManager.printPreviewSourceVersion}
         printTemplates={commissionListPrintManager.printTemplates}
         selectedTemplateId={commissionListPrintManager.selectedTemplateId}
         onSelectTemplate={commissionListPrintManager.setSelectedTemplateId}

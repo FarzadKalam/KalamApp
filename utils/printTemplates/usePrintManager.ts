@@ -66,6 +66,8 @@ import { hasRenderablePrintFooterHtml } from './footerLayout';
 import { buildNativeCustomPrintFlowHtml } from './nativePrintFlow';
 import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, sanitizePrintImageDisplayMode, type PrintImageDisplayMode } from './imageDisplay';
 import { loadPrintRenderPreference, savePrintRenderPreference } from './renderPreferences';
+import { resolvePrintPreferenceIdentity } from './preferenceIdentity';
+import { createPrintPreviewFingerprint } from './previewFingerprint';
 import { parseLocationValue } from '../location';
 import { SETTINGS_PERMISSION_KEY } from '../permissions';
 import { fetchAssigneeDirectory } from '../referenceData';
@@ -1024,12 +1026,13 @@ export const usePrintManager = ({
   );
   const isSystemFieldVisible = useCallback(
     (fieldPath: string, forceSelection = false) => {
-      // Manual templates express their field selection through the placeholders
-      // placed by their editor. Selection still controls system blocks and
-      // system field collections embedded in a manual template.
+      // A selection is a template-level visibility contract. It must apply to
+      // direct placeholders in manual templates as well as system blocks,
+      // otherwise the "printable fields" tab would save a setting that has no
+      // effect on a large class of real templates.
       const controlsThisPath =
         forceSelection ||
-        isSelectedTemplateSystem ||
+        String(fieldPath || '').startsWith('record.') ||
         String(fieldPath || '').startsWith('block.');
       return isPrintTemplateFieldVisible({
         fieldPath,
@@ -1041,7 +1044,6 @@ export const usePrintManager = ({
     },
     [
       canViewPrintFieldPath,
-      isSelectedTemplateSystem,
       knownTemplateFieldKeys,
       templateSelectedKeySet,
     ]
@@ -1501,6 +1503,7 @@ export const usePrintManager = ({
   useEffect(() => {
     if (!selectedTemplateId || !userPreferencesReady) return;
     const preference = loadPrintRenderPreference({
+      orgId: currentOrgId,
       userId: currentUserId,
       moduleId,
       templateId: selectedStoredTemplate?.id || selectedTemplateId,
@@ -1800,11 +1803,18 @@ export const usePrintManager = ({
   }, []);
 
   const handleSavePrintFields = useCallback(async () => {
-    // A print preference is tenant data. Avoid showing a false success before
-    // the current organization has been resolved.
-    if (!currentOrgId) return false;
     setSavingPrintFields(true);
     try {
+      const preferenceIdentity = await resolvePrintPreferenceIdentity({
+        currentOrgId,
+        currentUserId,
+        loadSession: () => fetchSessionBootstrap(supabase),
+      });
+      if (!preferenceIdentity) return false;
+      if (preferenceIdentity.orgId !== currentOrgId) setCurrentOrgId(preferenceIdentity.orgId);
+      if (preferenceIdentity.userId && preferenceIdentity.userId !== currentUserId) {
+        setCurrentUserId(preferenceIdentity.userId);
+      }
       const allowedKeySet = new Set(
         (printableFieldsForTemplate || [])
           .map((field: any) => String(field?.key || '').trim())
@@ -1819,33 +1829,22 @@ export const usePrintManager = ({
         allowedKeySet
       );
       savePrintFieldPreference({
-        orgId: currentOrgId,
-        userId: currentUserId,
+        orgId: preferenceIdentity.orgId,
+        userId: preferenceIdentity.userId,
         moduleId,
         templateId: selectedStoredTemplate?.id || selectedTemplateId,
         scope: 'record',
         selectedFieldKeys: selectedKeys,
       });
-      if (showImageDisplayModeControl) {
-        savePrintRenderPreference({
-          userId: currentUserId,
-          moduleId,
-          templateId: selectedStoredTemplate?.id || selectedTemplateId,
-          scope: 'record',
-          imageDisplayMode,
-          signatureConfigs: selectedPrintSignatureConfigs,
-        });
-      } else {
-        savePrintRenderPreference({
-          userId: currentUserId,
-          moduleId,
-          templateId: selectedStoredTemplate?.id || selectedTemplateId,
-          scope: 'record',
-          imageDisplayMode,
-          signatureConfigs: selectedPrintSignatureConfigs,
-        });
-      }
-      return true;
+      return savePrintRenderPreference({
+        orgId: preferenceIdentity.orgId,
+        userId: preferenceIdentity.userId,
+        moduleId,
+        templateId: selectedStoredTemplate?.id || selectedTemplateId,
+        scope: 'record',
+        imageDisplayMode,
+        signatureConfigs: selectedPrintSignatureConfigs,
+      });
     } catch (error) {
       console.error('Save print field selection failed', error);
       return false;
@@ -1862,7 +1861,6 @@ export const usePrintManager = ({
     selectedStoredTemplate?.id,
     selectedTemplateId,
     selectedPrintSignatureConfigs,
-    showImageDisplayModeControl,
   ]);
 
   const invoiceSummary = useMemo(() => {
@@ -4369,6 +4367,37 @@ export const usePrintManager = ({
     [canUseCeoSignature, sellerInfo?.manager_title]
   );
 
+  const printPreviewSourceVersion = useMemo(
+    () => createPrintPreviewFingerprint({
+      template: selectedStoredTemplate || activeTemplate || null,
+      renderedTemplate: renderedCustomTemplate,
+      record: dataWithResolvedPrintLabels || data || null,
+      relations: relationOptions || {},
+      company: sellerInfo || null,
+      customer: customerInfo || null,
+      supplier: supplierInfo || null,
+      employee: employeeInfo || null,
+      letterhead: selectedOrgLetterhead || null,
+      attachmentCount: linkedAttachmentCount,
+      revision: previewRevision,
+    }),
+    [
+      activeTemplate,
+      customerInfo,
+      data,
+      dataWithResolvedPrintLabels,
+      employeeInfo,
+      linkedAttachmentCount,
+      previewRevision,
+      relationOptions,
+      renderedCustomTemplate,
+      selectedOrgLetterhead,
+      selectedStoredTemplate,
+      sellerInfo,
+      supplierInfo,
+    ],
+  );
+
   return {
     isPrintModalOpen,
     selectedTemplateId,
@@ -4406,10 +4435,14 @@ export const usePrintManager = ({
     loadSignatureSignerOptions,
     refreshTemplates,
     previewMeta,
+    printPreviewSourceVersion,
     printableFieldsForTemplate,
     isSelectedTemplateSystem,
     savingPrintFields,
-    allowFieldSelectionTab: isSystemRecordTemplate || templateUsesSystemBlocks || templateUsesSystemFieldCollections,
+    // Every template receives the resolved printable-field contract.  System
+    // blocks and manual placeholders consume the same selected field set, so
+    // the user can consistently control print fields across all template types.
+    allowFieldSelectionTab: printableFieldsForTemplate.length > 0,
     showImageDisplayModeControl,
     renderPrintCard,
   };

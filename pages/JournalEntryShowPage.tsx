@@ -23,6 +23,7 @@ import { ACCOUNTING_PERMISSION_KEY, fetchCurrentUserRolePermissions } from '../u
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { buildPrintOutputName } from '../utils/printTemplates/outputName';
 import { generatePdfBlob, prepareGeneratedPdfWindow, printAsPdf } from '../utils/printTemplates/printAsPdf';
+import { createPrintPreviewFingerprint } from '../utils/printTemplates/previewFingerprint';
 import {
   formatNumericForInput,
   parseNumericInput,
@@ -233,7 +234,6 @@ const JournalEntryShowPage: React.FC = () => {
       }),
     [entry]
   );
-
   const isDraft = entry?.status === 'draft';
   const canEditDraft = canEdit && isDraft;
   const isRealtimeEnabled = import.meta.env.DEV
@@ -261,6 +261,10 @@ const JournalEntryShowPage: React.FC = () => {
     const draftRows = newRows.map((row) => ({ ...row, __isNew: true }));
     return [...existingRows, ...draftRows].sort((a, b) => Number(a.line_no) - Number(b.line_no));
   }, [lines, newRows]);
+  const journalPrintPreviewSourceVersion = useMemo(
+    () => createPrintPreviewFingerprint({ entry, lines, tableRows }),
+    [entry, lines, tableRows],
+  );
 
   const nextLineNo = useMemo(() => {
     const maxLineNo = tableRows.reduce((max, row) => Math.max(max, Number(row.line_no) || 0), 0);
@@ -1792,6 +1796,7 @@ const JournalEntryShowPage: React.FC = () => {
         onPreparePrint={prepareJournalPrint}
         onPrint={handleJournalPrint}
         onGenerateFinalPdfPreview={generateFinalJournalPdfPreview}
+        previewContentVersion={journalPrintPreviewSourceVersion}
         printTemplates={[{ id: 'journal_voucher', title: 'سند حسابداری', description: 'نسخه چاپی سند' }]}
         selectedTemplateId="journal_voucher"
         onSelectTemplate={() => undefined}

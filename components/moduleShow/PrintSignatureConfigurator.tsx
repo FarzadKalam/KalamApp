@@ -29,6 +29,8 @@ type PrintSignatureConfiguratorProps = {
     search?: string,
     exactId?: string | null
   ) => Promise<void> | void;
+  onSave?: () => void | Promise<void>;
+  saving?: boolean;
 };
 
 const SIGNER_MODULE_OPTIONS = [
@@ -69,6 +71,8 @@ const PrintSignatureConfigurator: React.FC<PrintSignatureConfiguratorProps> = ({
   onChangeSignerModule,
   onChangeSignerId,
   onSearchSignerOptions,
+  onSave,
+  saving = false,
 }) => {
   return (
     <div className="print-signature-pane">
@@ -86,6 +90,11 @@ const PrintSignatureConfigurator: React.FC<PrintSignatureConfiguratorProps> = ({
               {option.label}
             </Button>
           ))}
+          {onSave ? (
+            <Button type="primary" size="small" onClick={() => { void onSave(); }} loading={saving}>
+              ذخیره تغییرات
+            </Button>
+          ) : null}
         </div>
       </div>
 

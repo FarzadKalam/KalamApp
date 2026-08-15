@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildNativeCustomPrintFlowHtml } from './nativePrintFlow';
+import { materializeNativePrintAssets } from './buildPrintDocumentHtml';
+import {
+  buildNativeCustomPrintFlowHtml,
+  NATIVE_PRINT_BASE_HREF_TOKEN,
+  NATIVE_PRINT_FONT_CSS_TOKEN,
+} from './nativePrintFlow';
 
 describe('buildNativeCustomPrintFlowHtml', () => {
   it('keeps one uncut body while reserving dedicated Gotenberg lanes for header and footer', () => {
@@ -63,5 +68,35 @@ describe('buildNativeCustomPrintFlowHtml', () => {
     expect(html).toContain('kalamapp-native-print-flow-overlay');
     expect(html).toContain('LETTERHEAD-SIGNATURE');
     expect(html).toContain('LETTERHEAD-BODY');
+  });
+
+  it('gives the separate header and footer documents the project font and asset base URL', () => {
+    const sourceHtml = buildNativeCustomPrintFlowHtml({
+      widthMm: 210,
+      heightMm: 297,
+      pageMargins: { top: 8, right: 8, bottom: 8, left: 8 },
+      sectionPadding: '0',
+      contentHtml: '<p>بدنه</p>',
+      headerHtml: '<img src="uploads/logo.png" alt="لوگو" />',
+      footerHtml: '<img src="uploads/signature.png" alt="امضا" />',
+      headerHeightPx: 70,
+      footerHeightPx: 60,
+      showHeader: true,
+      showFooter: true,
+    });
+
+    expect(sourceHtml).toContain(NATIVE_PRINT_FONT_CSS_TOKEN);
+    expect(sourceHtml).toContain(NATIVE_PRINT_BASE_HREF_TOKEN);
+    const materialized = materializeNativePrintAssets({
+      sourceHtml,
+      fontCss: '@font-face { font-family: Peyda; src: url(data:font/woff2;base64,abc); }',
+      baseHref: 'https://app.example.test/',
+    });
+
+    expect(materialized).not.toContain(NATIVE_PRINT_FONT_CSS_TOKEN);
+    expect(materialized).not.toContain(NATIVE_PRINT_BASE_HREF_TOKEN);
+    expect(materialized).toContain('font-family: Peyda');
+    expect(materialized).toContain('<base href="https://app.example.test/" />');
+    expect(materialized).toContain("font-family: 'Peyda', Tahoma, Arial, sans-serif !important");
   });
 });

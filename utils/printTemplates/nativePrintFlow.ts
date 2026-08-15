@@ -1,5 +1,7 @@
 const PX_PER_MM = 96 / 25.4;
 const NATIVE_PRINT_GUARD_MM = 2;
+export const NATIVE_PRINT_FONT_CSS_TOKEN = '__KALAMAPP_NATIVE_PRINT_FONT_CSS__';
+export const NATIVE_PRINT_BASE_HREF_TOKEN = '__KALAMAPP_NATIVE_PRINT_BASE_HREF__';
 
 export interface PrintPageMargins {
   top: number;
@@ -49,10 +51,12 @@ const buildMarginDocument = ({
 <html lang="fa" dir="rtl">
   <head>
     <meta charset="utf-8" />
+    <base href="${NATIVE_PRINT_BASE_HREF_TOKEN}" />
     <style>
+      ${NATIVE_PRINT_FONT_CSS_TOKEN}
       html {
         margin: ${outerMargin};
-        font-family: Tahoma, Arial, sans-serif;
+        font-family: 'Peyda', Tahoma, Arial, sans-serif;
         font-size: 16px;
         direction: rtl;
         -webkit-print-color-adjust: exact;
@@ -65,12 +69,12 @@ const buildMarginDocument = ({
         color: #111827;
         direction: rtl;
         text-align: right;
-        font-family: inherit;
+        font-family: 'Peyda', Tahoma, Arial, sans-serif;
         font-size: 16px;
         line-height: 1.8;
         overflow: hidden;
       }
-      body, body * { box-sizing: border-box; max-width: 100%; }
+      body, body * { box-sizing: border-box; max-width: 100%; font-family: 'Peyda', Tahoma, Arial, sans-serif !important; }
       body img { max-width: 100%; height: auto; }
       body table { width: 100%; border-collapse: collapse; }
       body p { margin: 0 0 6px; }

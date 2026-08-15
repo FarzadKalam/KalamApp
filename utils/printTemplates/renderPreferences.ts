@@ -1,7 +1,7 @@
 import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, sanitizePrintImageDisplayMode, type PrintImageDisplayMode } from './imageDisplay';
 import { sanitizePrintSignatureConfigs, type PrintSignatureConfig } from './signatures';
 
-const PRINT_RENDER_PREFERENCES_KEY = 'kalamapp.print_render_preferences.v1';
+const PRINT_RENDER_PREFERENCES_KEY = 'kalamapp.print_render_preferences.v2';
 
 type PrintFieldScope = 'record' | 'list';
 
@@ -28,16 +28,19 @@ const writeStore = (store: PrintRenderPreferenceStore) => {
 };
 
 const buildPreferenceKey = ({
+  orgId,
   userId,
   moduleId,
   templateId,
   scope,
 }: {
+  orgId?: string | null;
   userId?: string | null;
   moduleId: string;
   templateId: string;
   scope: PrintFieldScope;
 }) => [
+  String(orgId || '').trim(),
   String(userId || 'anonymous').trim() || 'anonymous',
   String(moduleId || '').trim(),
   String(templateId || '').trim(),
@@ -45,17 +48,26 @@ const buildPreferenceKey = ({
 ].join('::');
 
 export const loadPrintRenderPreference = ({
+  orgId,
   userId,
   moduleId,
   templateId,
   scope,
 }: {
+  orgId?: string | null;
   userId?: string | null;
   moduleId: string;
   templateId: string;
   scope: PrintFieldScope;
 }): { imageDisplayMode: PrintImageDisplayMode; signatureConfigs: PrintSignatureConfig[] } => {
-  const key = buildPreferenceKey({ userId, moduleId, templateId, scope });
+  const normalizedOrgId = String(orgId || '').trim();
+  if (!normalizedOrgId) {
+    return {
+      imageDisplayMode: DEFAULT_PRINT_IMAGE_DISPLAY_MODE,
+      signatureConfigs: [],
+    };
+  }
+  const key = buildPreferenceKey({ orgId: normalizedOrgId, userId, moduleId, templateId, scope });
   const store = readStore();
   const value = store[key];
   return {
@@ -65,6 +77,7 @@ export const loadPrintRenderPreference = ({
 };
 
 export const savePrintRenderPreference = ({
+  orgId,
   userId,
   moduleId,
   templateId,
@@ -72,6 +85,7 @@ export const savePrintRenderPreference = ({
   imageDisplayMode,
   signatureConfigs,
 }: {
+  orgId?: string | null;
   userId?: string | null;
   moduleId: string;
   templateId: string;
@@ -79,11 +93,14 @@ export const savePrintRenderPreference = ({
   imageDisplayMode: PrintImageDisplayMode;
   signatureConfigs?: PrintSignatureConfig[];
 }) => {
-  const key = buildPreferenceKey({ userId, moduleId, templateId, scope });
+  const normalizedOrgId = String(orgId || '').trim();
+  if (!normalizedOrgId) return false;
+  const key = buildPreferenceKey({ orgId: normalizedOrgId, userId, moduleId, templateId, scope });
   const store = readStore();
   store[key] = {
     imageDisplayMode: sanitizePrintImageDisplayMode(imageDisplayMode),
     signatureConfigs: sanitizePrintSignatureConfigs(signatureConfigs || []),
   };
   writeStore(store);
+  return true;
 };

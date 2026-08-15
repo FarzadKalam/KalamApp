@@ -127,7 +127,10 @@ const InstagramCommentsPanel: React.FC<{ orgId: string; accounts: Account[]; act
   }, [message]);
   const syncPosts = async () => {
     const targets = activeAccountId === 'all' ? accounts : accounts.filter((account) => account.id === activeAccountId);
-    if (!targets.length) return message.warning('ابتدا یک پیج متصل انتخاب کنید.');
+    if (!targets.length) {
+      message.warning('ابتدا یک پیج متصل انتخاب کنید.');
+      return;
+    }
     await Promise.all(targets.map((account) => syncAccountPosts(account)));
   };
   useEffect(() => {
@@ -165,7 +168,10 @@ const InstagramCommentsPanel: React.FC<{ orgId: string; accounts: Account[]; act
     finally { setSuggestingCommentId(null); }
   };
   const openMediaWorkflow = () => {
-    if (!selectedMedia?.permalink) return message.warning('برای ساخت گردش‌کار اختصاصی، ابتدا این پست باید لینک رسمی داشته باشد.');
+    if (!selectedMedia?.permalink) {
+      message.warning('برای ساخت گردش‌کار اختصاصی، ابتدا این پست باید لینک رسمی داشته باشد.');
+      return;
+    }
     const params = new URLSearchParams({ tab: 'workflows', instagramMediaPermalink: selectedMedia.permalink, instagramMediaType: selectedMedia.media_type, instagramMediaLabel: selectedMedia.caption?.slice(0, 45) || 'پست' });
     navigate(`/settings?${params.toString()}`);
   };

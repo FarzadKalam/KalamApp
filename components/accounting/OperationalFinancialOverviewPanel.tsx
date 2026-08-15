@@ -476,6 +476,7 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
         onPreparePrint={listPrintManager.preparePrint}
         onPrint={listPrintManager.handlePrint}
         onGenerateFinalPdfPreview={generateOperationalFinalPdfPreview}
+        previewContentVersion={listPrintManager.printPreviewSourceVersion}
         printTemplates={listPrintManager.printTemplates}
         selectedTemplateId={listPrintManager.selectedTemplateId}
         onSelectTemplate={listPrintManager.setSelectedTemplateId}

@@ -44,6 +44,8 @@ import {
   getPrintLetterheadSignaturesItem,
 } from './letterheadRender';
 import { loadPrintRenderPreference, savePrintRenderPreference } from './renderPreferences';
+import { resolvePrintPreferenceIdentity } from './preferenceIdentity';
+import { createPrintPreviewFingerprint } from './previewFingerprint';
 import { fetchSessionBootstrap } from '../sessionCache';
 import { loadScopedCompanySettings } from '../companySettings';
 import { SETTINGS_PERMISSION_KEY } from '../permissions';
@@ -369,6 +371,7 @@ export const useListPrintManager = ({
   useEffect(() => {
     if (!selectedTemplateId || !userPreferencesReady) return;
     const preference = loadPrintRenderPreference({
+      orgId: currentOrgId,
       userId: currentUserId,
       moduleId,
       templateId: selectedStoredTemplate?.id || selectedTemplateId,
@@ -829,11 +832,18 @@ export const useListPrintManager = ({
   }, []);
 
   const handleSavePrintFields = useCallback(async () => {
-    // A print preference is tenant data. Avoid showing a false success before
-    // the current organization has been resolved.
-    if (!currentOrgId) return false;
     setSavingPrintFields(true);
     try {
+      const preferenceIdentity = await resolvePrintPreferenceIdentity({
+        currentOrgId,
+        currentUserId,
+        loadSession: () => fetchSessionBootstrap(supabase),
+      });
+      if (!preferenceIdentity) return false;
+      if (preferenceIdentity.orgId !== currentOrgId) setCurrentOrgId(preferenceIdentity.orgId);
+      if (preferenceIdentity.userId && preferenceIdentity.userId !== currentUserId) {
+        setCurrentUserId(preferenceIdentity.userId);
+      }
       const allowedKeySet = new Set(
         printableFieldsForTemplate
           .map((field) => String(field?.key || '').trim())
@@ -848,40 +858,29 @@ export const useListPrintManager = ({
         allowedKeySet
       );
       savePrintFieldPreference({
-        orgId: currentOrgId,
-        userId: currentUserId,
+        orgId: preferenceIdentity.orgId,
+        userId: preferenceIdentity.userId,
         moduleId,
         templateId: selectedStoredTemplate?.id || selectedTemplateId,
         scope: 'list',
         selectedFieldKeys: selectedKeys,
       });
-      if (showImageDisplayModeControl) {
-        savePrintRenderPreference({
-          userId: currentUserId,
-          moduleId,
-          templateId: selectedStoredTemplate?.id || selectedTemplateId,
-          scope: 'list',
-          imageDisplayMode,
-          signatureConfigs: selectedPrintSignatureConfigs,
-        });
-      } else {
-        savePrintRenderPreference({
-          userId: currentUserId,
-          moduleId,
-          templateId: selectedStoredTemplate?.id || selectedTemplateId,
-          scope: 'list',
-          imageDisplayMode,
-          signatureConfigs: selectedPrintSignatureConfigs,
-        });
-      }
-      return true;
+      return savePrintRenderPreference({
+        orgId: preferenceIdentity.orgId,
+        userId: preferenceIdentity.userId,
+        moduleId,
+        templateId: selectedStoredTemplate?.id || selectedTemplateId,
+        scope: 'list',
+        imageDisplayMode,
+        signatureConfigs: selectedPrintSignatureConfigs,
+      });
     } catch (error) {
       console.error('Save list print fields failed', error);
       return false;
     } finally {
       setSavingPrintFields(false);
     }
-  }, [currentOrgId, currentUserId, imageDisplayMode, moduleId, printableFieldsForTemplate, selectedPrintFields, selectedPrintSignatureConfigs, selectedStoredTemplate?.id, selectedTemplateId, showImageDisplayModeControl]);
+  }, [currentOrgId, currentUserId, imageDisplayMode, moduleId, printableFieldsForTemplate, selectedPrintFields, selectedPrintSignatureConfigs, selectedStoredTemplate?.id, selectedTemplateId]);
 
   const getPrintOutputName = useCallback(
     () =>
@@ -1259,6 +1258,33 @@ export const useListPrintManager = ({
     () => getPrintSignatureQuickAddOptions({ canUseCeoSignature, companyInfo }),
     [canUseCeoSignature, companyInfo?.manager_title]
   );
+  const printPreviewSourceVersion = useMemo(
+    () => createPrintPreviewFingerprint({
+      template: selectedStoredTemplate || null,
+      rows,
+      selectedColumns,
+      summary,
+      context: { title: contextTitle, values: contextValues },
+      extraSystemValues,
+      relations: printRelationOptions,
+      company: companyInfo || null,
+      letterhead: selectedOrgLetterhead || null,
+      revision: previewRevision,
+    }),
+    [
+      companyInfo,
+      contextTitle,
+      contextValues,
+      extraSystemValues,
+      previewRevision,
+      printRelationOptions,
+      rows,
+      selectedColumns,
+      selectedOrgLetterhead,
+      selectedStoredTemplate,
+      summary,
+    ],
+  );
 
   return {
     isPrintModalOpen,
@@ -1295,6 +1321,7 @@ export const useListPrintManager = ({
     refreshTemplates,
     renderPrintCard,
     previewMeta,
+    printPreviewSourceVersion,
     allowFieldSelectionTab: true,
     showImageDisplayModeControl,
   };

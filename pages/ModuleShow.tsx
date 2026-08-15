@@ -6945,6 +6945,7 @@ const ModuleShow: React.FC = () => {
             onSendInternalPdf={handleOpenPrintShare}
             onSavePdfToRecord={recordSupportsFileSave ? handleSavePrintPdfToRecord : undefined}
             onGenerateFinalPdfPreview={generateFinalPrintPreview}
+            previewContentVersion={printManager.printPreviewSourceVersion}
             printTemplates={printManager.printTemplates}
             selectedTemplateId={printManager.selectedTemplateId}
             onSelectTemplate={printManager.setSelectedTemplateId}

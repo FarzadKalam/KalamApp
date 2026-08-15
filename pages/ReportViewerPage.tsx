@@ -38,6 +38,7 @@ import { escapeCsvCell, formatListCellValue } from '../utils/listPrintExport';
 import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberFormatter';
 import { getSafeOptionFallback } from '../utils/optionHelpers';
 import { generatePdfBlob, prepareGeneratedPdfWindow, printAsPdf } from '../utils/printTemplates/printAsPdf';
+import { createPrintPreviewFingerprint } from '../utils/printTemplates/previewFingerprint';
 import { readCurrencyConfig } from '../utils/currency';
 import {
   isReportTaskProcessFieldKey,
@@ -1588,6 +1589,28 @@ const ReportViewerPage: React.FC = () => {
     ],
     []
   );
+  const reportPrintPreviewSourceVersion = useMemo(
+    () => createPrintPreviewFingerprint({
+      report,
+      rows,
+      groupedDetailRows,
+      selectedPrintVisibleFields,
+      selectedPrintCards,
+      selectedPrintGroupFields,
+      activeMetricKey,
+      renderMode,
+    }),
+    [
+      activeMetricKey,
+      groupedDetailRows,
+      renderMode,
+      report,
+      rows,
+      selectedPrintCards,
+      selectedPrintGroupFields,
+      selectedPrintVisibleFields,
+    ],
+  );
   const renderPrintCard = useCallback(
     () => <div dangerouslySetInnerHTML={{ __html: buildReportPrintHtml(printTemplate) }} />,
     [printTemplate, buildReportPrintHtml]
@@ -1742,6 +1765,7 @@ const ReportViewerPage: React.FC = () => {
         onPreparePrint={prepareReportPrint}
         onPrint={() => handlePrint(printTemplate)}
         onGenerateFinalPdfPreview={generateFinalReportPdfPreview}
+        previewContentVersion={reportPrintPreviewSourceVersion}
         printTemplates={reportPrintTemplates}
         selectedTemplateId={printTemplate}
         onSelectTemplate={(id) => setPrintTemplate(id as 'landscape' | 'portrait')}

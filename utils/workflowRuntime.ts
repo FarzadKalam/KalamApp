@@ -2376,11 +2376,11 @@ export const executeWorkflowAction = async (
     if (linkError) throw linkError;
     const conversationIds = Array.from(new Set((linkRows || []).map((row: any) => String(row?.conversation_id || '').trim()).filter(Boolean)));
     if (conversationIds.length === 0) throw new Error('برای رکورد انتخاب‌شده گفتگوی اینستاگرام متصل پیدا نشد.');
-    const results = await Promise.all(conversationIds.map(async (conversationId) => {
+    await Promise.all(conversationIds.map(async (conversationId) => {
       const { data, error } = await supabase.functions.invoke('instagram-boxapi', { body: { action: 'send_message', conversationId, message, showcaseId: String(config.showcase_id || '').trim() || undefined, automated: true } });
       if (error || data?.success === false) throw new Error(data?.message || error?.message || 'ارسال پیام اینستاگرام ناموفق بود.');
     }));
-    return results;
+    return;
   }
 
   if (action.type === 'reply_instagram_comment') {
