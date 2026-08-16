@@ -56,9 +56,11 @@ import { getFieldLabelFa } from '../../utils/fieldLabel';
 import { getCanonicalModuleFields } from '../../utils/recordVariableCatalog';
 import {
   getCreateRelatedRecordRelationFieldOptions,
+  getCreateRelatedRecordSourceModuleOptions,
   getCreateRelatedRecordTargetModuleOptions,
   getDefaultCreateRelatedRecordRelationFieldKey,
   isCreateRelatedRecordTaskTarget,
+  PROCESS_RUN_SOURCE_MODULE_ID,
 } from '../../utils/workflowRelatedRecord';
 
 const Select = AdaptiveSelectField;
@@ -73,6 +75,8 @@ interface WorkflowActionsBuilderProps {
   dynamicOptions: Record<string, Array<{ label: string; value: string }>>;
   relationOptions: Record<string, Array<{ label: string; value: string }>>;
   relationSourceModuleOptions?: WorkflowModuleOption[];
+  /** ماژول‌های هدف الگوی فرآیند؛ در صورت وجود، ایجاد رکورد به خود اجرای فرآیند متصل می‌شود. */
+  processTargetModuleIds?: string[];
   additionalRecipientFieldOptions?: Array<{ label: string; value: string }>;
   actionOptions?: Array<{ label: string; value: WorkflowActionType }>;
   nextStageFields?: ModuleField[];
@@ -402,6 +406,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   dynamicOptions,
   relationOptions,
   relationSourceModuleOptions,
+  processTargetModuleIds,
   additionalRecipientFieldOptions,
   actionOptions,
   nextStageFields,
@@ -852,11 +857,25 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   }, [currentModuleId, relationSourceModuleOptions]);
   // در اتوماسیون فرآیند، «رکورد مرتبط» الزاماً relation مستقیم دیتابیسی با
   // رکورد مرجع ندارد؛ مجموعهٔ مجاز همان ماژول‌های هدف الگوی فرآیند است.
-  const processRelatedTargetModuleIds = useMemo(() => (
-    currentModuleId === 'tasks' && (relationSourceModuleOptions?.length || 0) > 0
+  const processRelatedTargetModuleIds = useMemo(() => {
+    const explicitTargetModuleIds = (Array.isArray(processTargetModuleIds) ? processTargetModuleIds : [])
+      .map((moduleId) => String(moduleId || '').trim())
+      .filter((moduleId) => Boolean(moduleId && MODULES[moduleId]));
+    if (explicitTargetModuleIds.length > 0) return Array.from(new Set(explicitTargetModuleIds));
+    return currentModuleId === 'tasks' && (relationSourceModuleOptions?.length || 0) > 0
       ? webFormRelationModuleOptions.map((option) => String(option.value || '').trim()).filter(Boolean)
-      : []
-  ), [currentModuleId, relationSourceModuleOptions, webFormRelationModuleOptions]);
+      : [];
+  }, [currentModuleId, processTargetModuleIds, relationSourceModuleOptions, webFormRelationModuleOptions]);
+  const createRelatedSourceModuleOptions = useMemo(
+    () => getCreateRelatedRecordSourceModuleOptions(
+      webFormRelationModuleOptions,
+      processRelatedTargetModuleIds,
+    ),
+    [processRelatedTargetModuleIds, webFormRelationModuleOptions],
+  );
+  const defaultCreateRelatedSourceModuleId = processRelatedTargetModuleIds.length > 0
+    ? PROCESS_RUN_SOURCE_MODULE_ID
+    : String(webFormRelationModuleOptions[0]?.value || currentModuleId).trim();
   const getRelatedTargetModuleOptions = useCallback(
     (sourceModuleId: string) => getCreateRelatedRecordTargetModuleOptions(
       sourceModuleId,
@@ -1486,8 +1505,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       const config = action.config || {};
       const sourceModuleId = String(
         config.source_module_id
-        || webFormRelationModuleOptions[0]?.value
-        || currentModuleId
+        || defaultCreateRelatedSourceModuleId
       );
       const targetModuleId = String(config.target_module_id || '').trim();
       if (!targetModuleId) {
@@ -1537,7 +1555,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     if (hasChanges) {
       onChange(next);
     }
-  }, [safeValue, onChange, currentModuleId, ensureRequiredMappings, noteRecipientOptionValueSet, noteScopedFieldMap, webFormRelationModuleOptions, processRelatedTargetModuleIds]);
+  }, [safeValue, onChange, defaultCreateRelatedSourceModuleId, ensureRequiredMappings, noteRecipientOptionValueSet, noteScopedFieldMap, processRelatedTargetModuleIds]);
 
   const renderActionFields = (action: WorkflowAction) => {
     const actionType = action.type;
@@ -2796,8 +2814,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       const targetModuleId = String(config.target_module_id || '').trim();
       const sourceModuleId = String(
         config.source_module_id
-        || webFormRelationModuleOptions[0]?.value
-        || currentModuleId
+        || defaultCreateRelatedSourceModuleId
       );
       const allowedTargetModuleOptions = getRelatedTargetModuleOptions(sourceModuleId);
       const targetModule = targetModuleId ? MODULES[targetModuleId] : undefined;
@@ -2833,7 +2850,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 {...commonSelectProps}
                 value={config.source_module_id || sourceModuleId}
                 disabled={disabled}
-                options={webFormRelationModuleOptions}
+                options={createRelatedSourceModuleOptions}
                 onChange={(nextVal) => {
                   const nextSourceModuleId = String(nextVal || '');
                   const nextTargetModuleOptions = getRelatedTargetModuleOptions(nextSourceModuleId);

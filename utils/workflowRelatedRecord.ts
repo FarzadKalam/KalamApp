@@ -6,6 +6,7 @@ import type { WorkflowModuleOption } from './workflowTypes';
 const TASKS_MODULE_ID = 'tasks';
 const TASK_SOURCE_RECORD_FIELD_KEY = 'source_record_id';
 export const PROCESS_RUN_LINK_FIELD_KEY = '__process_run_link__';
+export const PROCESS_RUN_SOURCE_MODULE_ID = '__process_run__';
 
 const normalizeModuleId = (value: unknown) => String(value || '').trim();
 
@@ -16,6 +17,39 @@ const buildModuleOption = (moduleId: string, label?: string): WorkflowModuleOpti
     value: normalizedModuleId,
     label: String(label || MODULES[normalizedModuleId]?.titles?.fa || normalizedModuleId).trim() || normalizedModuleId,
   };
+};
+
+export const isProcessRunRelatedRecordSource = (moduleId: unknown) =>
+  normalizeModuleId(moduleId) === PROCESS_RUN_SOURCE_MODULE_ID;
+
+/**
+ * در اتوماسیون الگوی فرآیند، مرجع واقعی یک اجرای فرآیند است نه صرفاً یکی از
+ * رکوردهای هدف آن. گزینهٔ نخست عمداً ثابت است تا backend بتواند رکورد ساخته‌شده
+ * را به همان process_run متصل کند.
+ */
+export const getCreateRelatedRecordSourceModuleOptions = (
+  sourceModuleOptions: WorkflowModuleOption[] = [],
+  processTargetModuleIds: string[] = [],
+): WorkflowModuleOption[] => {
+  const normalizedProcessTargetIds = (Array.isArray(processTargetModuleIds) ? processTargetModuleIds : [])
+    .map(normalizeModuleId)
+    .filter((moduleId) => Boolean(moduleId && MODULES[moduleId]));
+  const sourceOptions = (Array.isArray(sourceModuleOptions) ? sourceModuleOptions : [])
+    .map((option) => {
+      const value = normalizeModuleId(option?.value);
+      if (!value || value === PROCESS_RUN_SOURCE_MODULE_ID) return null;
+      return {
+        value,
+        label: String(option?.label || MODULES[value]?.titles?.fa || value).trim() || value,
+      };
+    })
+    .filter((option): option is WorkflowModuleOption => Boolean(option));
+
+  if (normalizedProcessTargetIds.length === 0) return sourceOptions;
+  return [
+    { value: PROCESS_RUN_SOURCE_MODULE_ID, label: 'همین فرآیند' },
+    ...sourceOptions,
+  ];
 };
 
 const hasRelationToSourceModule = (field: ModuleField | null | undefined, sourceModuleId: string) =>

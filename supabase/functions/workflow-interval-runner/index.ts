@@ -4470,12 +4470,15 @@ async function executeAction(
   if (action.type === 'create_related_record') {
     const targetModuleId = String(config.target_module_id || '').trim();
     const sourceModuleId = String(config.source_module_id || moduleId).trim() || moduleId;
-    const isProcessRelatedRecord = String(config.relation_field_key || '').trim() === '__process_run_link__';
+    const isProcessRelatedRecord = sourceModuleId === '__process_run__'
+      || String(config.relation_field_key || '').trim() === '__process_run_link__';
     const processLinks = parseObjectValue(record?.process_links || record?.process_link_map);
     const sourceRecordId = sourceModuleId === moduleId
       ? String(record?.id || '').trim()
       : String(processLinks?.[sourceModuleId] || record?.[`__linked__${sourceModuleId}__id`] || '').trim();
-    const relationFieldKey = String(config.relation_field_key || (targetModuleId === 'tasks' ? 'source_record_id' : '')).trim();
+    const relationFieldKey = isProcessRelatedRecord
+      ? '__process_run_link__'
+      : String(config.relation_field_key || (targetModuleId === 'tasks' ? 'source_record_id' : '')).trim();
     if (!targetModuleId || !relationFieldKey || (!isProcessRelatedRecord && !sourceRecordId)) {
       return actionResult(action, 'skipped', 'تنظیمات ایجاد رکورد مرتبط کامل نیست.');
     }

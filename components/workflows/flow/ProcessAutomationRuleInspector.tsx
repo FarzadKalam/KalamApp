@@ -42,6 +42,7 @@ export type ProcessAutomationRuleInspectorContext = {
     activationStageOptions?: OptionList;
     moduleOptions: WorkflowModuleOption[];
     relationSourceModuleOptions: WorkflowModuleOption[];
+    processTargetModuleIds: string[];
     additionalRecipientFieldOptions: OptionList;
   };
   overlayZIndexBase: number;
@@ -272,6 +273,7 @@ const ProcessAutomationRuleInspector: React.FC<ProcessAutomationRuleInspectorPro
       activationStageOptions={context.actionsBuilder.activationStageOptions}
       moduleOptions={context.actionsBuilder.moduleOptions}
       relationSourceModuleOptions={context.actionsBuilder.relationSourceModuleOptions}
+      processTargetModuleIds={context.actionsBuilder.processTargetModuleIds}
       additionalRecipientFieldOptions={context.actionsBuilder.additionalRecipientFieldOptions}
       dynamicOptions={context.dynamicOptions}
       relationOptions={context.relationOptions}

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   PROCESS_RUN_LINK_FIELD_KEY,
+  PROCESS_RUN_SOURCE_MODULE_ID,
   getCreateRelatedRecordRelationFieldOptions,
+  getCreateRelatedRecordSourceModuleOptions,
   getCreateRelatedRecordTargetModuleOptions,
 } from './workflowRelatedRecord';
 
@@ -51,6 +53,17 @@ describe('workflowRelatedRecord', () => {
     expect(options).toEqual([{ label: 'فاکتورها', value: 'invoices' }]);
     expect(getCreateRelatedRecordRelationFieldOptions('invoices', 'projects', ['invoices'])).toEqual([
       { label: 'پیوند با رکوردهای مرتبط فرآیند', value: PROCESS_RUN_LINK_FIELD_KEY },
+    ]);
+  });
+
+  it('puts the current process first as the source for process automations', () => {
+    expect(getCreateRelatedRecordSourceModuleOptions([
+      { label: 'فاکتورها', value: 'invoices' },
+      { label: 'پروژه‌ها', value: 'projects' },
+    ], ['invoices', 'projects'])).toEqual([
+      { label: 'همین فرآیند', value: PROCESS_RUN_SOURCE_MODULE_ID },
+      { label: 'فاکتورها', value: 'invoices' },
+      { label: 'پروژه‌ها', value: 'projects' },
     ]);
   });
 });

@@ -12114,6 +12114,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                         value: scopeModuleId,
                                         label: MODULES[scopeModuleId]?.titles?.fa || scopeModuleId,
                                       }))}
+                                      processTargetModuleIds={automationScopeModuleIds}
                                       additionalRecipientFieldOptions={[
                                         { label: 'مسئول همین فعالیت', value: '__comm_recipient__current_task_assignee' },
                                         { label: 'مسئول مرحله قبل', value: '__comm_recipient__previous_stage_assignee' },
@@ -12184,6 +12185,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                 value: scopeModuleId,
                                 label: MODULES[scopeModuleId]?.titles?.fa || scopeModuleId,
                               })),
+                              processTargetModuleIds: automationScopeModuleIds,
                               additionalRecipientFieldOptions: [
                                 { label: 'مسئول همین فعالیت', value: '__comm_recipient__current_task_assignee' },
                                 { label: 'مسئول مرحله قبل', value: '__comm_recipient__previous_stage_assignee' },
