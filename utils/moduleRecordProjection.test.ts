@@ -104,6 +104,7 @@ describe('module record projection', () => {
     } as any);
 
     expect(projection.initialColumns).toEqual(expect.arrayContaining(['id', 'full_name', 'telegram_chat_id']));
+    expect(projection.initialColumns).not.toContain('name');
     expect(projection.initialColumns).not.toContain('bot_default_channel');
   });
 

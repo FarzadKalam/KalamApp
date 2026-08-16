@@ -11,7 +11,6 @@ const BASE_RECORD_COLUMNS = [
   'updated_at',
   'created_by',
   'updated_by',
-  'name',
 ] as const;
 
 const ASSIGNEE_RECORD_COLUMNS = [
@@ -88,6 +87,12 @@ export const buildModuleRecordProjection = (moduleConfig?: ModuleDefinition | nu
   }
 
   const initial = new Set<string>(BASE_RECORD_COLUMNS);
+  // «name» ستون مشترک همهٔ جدول‌ها نیست؛ برای نمونه کارکنان عنوان خود را
+  // در full_name نگه می‌دارند. نام را فقط وقتی از config همان ماژول آمده
+  // انتخاب می‌کنیم تا projection هرگز ستونی ناموجود درخواست نکند.
+  if ((moduleConfig.fields || []).some((field: any) => String(field?.key || '').trim() === 'name')) {
+    initial.add('name');
+  }
   // `system_code` is not universal (notably, process templates do not have
   // this column). Add it only to tables that actually support it.
   if (supportsSystemCode(moduleConfig.id)) initial.add('system_code');
