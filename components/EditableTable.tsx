@@ -2664,6 +2664,15 @@ const EditableTable: React.FC<EditableTableProps> = ({
       nextRow.row_key = rowKey;
       const allocationKey = existingAllocationKey || rowKey;
 
+      // این ردیف، پرداختی است که قبلاً با مساعده به کارمند انجام شده است؛
+      // ایجاد عملیات نقد و بانک دوم برای آن، هم موجودی خزانه و هم ماندهٔ شخص
+      // را دوباره محاسبه می‌کند. فقط relation فیش به همان مساعده نگه داشته می‌شود.
+      if (isPayrollPayments && String(nextRow?.employee_advance_id || '').trim()) {
+        nextRow._cash_bank_operation_id = null;
+        nextRows.push(nextRow);
+        continue;
+      }
+
       const syncCashBankBarterOperation = async (linkedBarterId?: string | null) => {
         if (paymentType !== 'barter' || amount <= 0) {
           await syncCashBankOperation({

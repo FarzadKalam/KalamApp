@@ -47,6 +47,9 @@ export const fetchMissingCashBankFallbackRows = async (
       const payments = parseOperationalPayments(record?.payments);
       for (let index = 0; index < payments.length; index += 1) {
         const row = payments[index];
+        // پرداخت فیشِ متصل به مساعده صرفاً رابطهٔ تسویه است؛ عملیات واقعیِ
+        // خزانه از خود مساعده می‌آید و نباید دوباره ساخته یا نمایش داده شود.
+        if (source.moduleId === 'payroll_slips' && normalizeOperationalText(row?.employee_advance_id)) continue;
         const rowKey = resolveOperationalPaymentRowKey(row, index);
         const sourceKeyCandidates = getOperationalPaymentRowKeyCandidates(row, index)
           .map((candidate) => buildSourceOperationKey(source.moduleId, recordId, candidate));

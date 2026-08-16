@@ -215,6 +215,9 @@ export const backfillOperationalCashBankOperations = async (
 
       for (let index = 0; index < nextPayments.length; index += 1) {
         const row = nextPayments[index];
+        if (source.moduleId === 'payroll_slips' && normalizeOperationalText(row?.employee_advance_id)) {
+          continue;
+        }
         let rowKey = resolveOperationalPaymentRowKey(row, index);
         if (!rowKey) {
           rowKey = createLocalRowKey();

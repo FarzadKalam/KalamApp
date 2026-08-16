@@ -34,6 +34,7 @@ export const employeeAdvancesConfig: ModuleDefinition = {
         { label: 'تایید شده', value: 'approved', color: 'blue' },
         { label: 'پرداخت شده', value: 'paid', color: 'green' },
         { label: 'تسویه شده', value: 'settled', color: 'purple' },
+        { label: 'تکمیل شده', value: 'completed', color: 'green' },
         { label: 'سند شده', value: 'posted', color: 'cyan' },
         { label: 'رد شده', value: 'rejected', color: 'red' },
         { label: 'لغو شده', value: 'canceled', color: 'default' },

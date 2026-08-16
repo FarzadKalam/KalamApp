@@ -10,7 +10,6 @@ import {
   OPERATIONAL_FINANCIAL_ROW_TYPE_COLOR,
   computeOperationalFinancialTotals,
   formatOperationalFinancialDescription,
-  isEmployeeAdvanceIncludedInPayroll,
 } from './operationalFinancialOverview';
 import { buildListSummaryTableHtml } from './listPrintExport';
 
@@ -87,23 +86,6 @@ describe('operationalFinancialOverview', () => {
       metadata: { source_table: 'employee_advances' },
       operation_type: 'payment',
     })).toBe(true);
-  });
-
-  it('does not show an advance again when its amount was deducted in a payroll slip', () => {
-    expect(isEmployeeAdvanceIncludedInPayroll({
-      id: 'advance-direct',
-      related_payroll_slip_id: 'payroll-1',
-    })).toBe(true);
-
-    expect(isEmployeeAdvanceIncludedInPayroll(
-      { id: 'advance-legacy' },
-      [{ performance_snapshot: { employee_advance_ids: ['advance-legacy'] } }],
-    )).toBe(true);
-
-    expect(isEmployeeAdvanceIncludedInPayroll(
-      { id: 'advance-open', related_payroll_slip_id: null },
-      [{ performance_snapshot: { employee_advance_ids: ['other-advance'] } }],
-    )).toBe(false);
   });
 
   it('renders printable summary html with shared list formatters', () => {

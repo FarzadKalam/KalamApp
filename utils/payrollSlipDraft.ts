@@ -12,12 +12,26 @@ const toNumber = (value: unknown) => {
 
 export type PayrollSlipDraft = {
   lines: PayrollSlipLine[];
+  payments: PayrollSlipPayment[];
   grossAmount: number;
   netAmount: number;
   employeeInsuranceAmount: number;
   employerInsuranceAmount: number;
   ledgerBonusTotal: number;
   ledgerDeductionTotal: number;
+};
+
+export type PayrollSlipPayment = {
+  row_key: string;
+  employee_advance_id?: string;
+  payment_type: string;
+  status: string;
+  date?: string | null;
+  amount: number;
+  description: string;
+  is_advance_settlement?: boolean;
+  _readonly?: boolean;
+  _lockedFields?: string[];
 };
 
 /**
@@ -31,7 +45,7 @@ export const buildPayrollSlipDraft = ({
   taskWageTotal,
   taskWageDescription,
   ledgerEntries,
-  advanceLines,
+  advancePayments,
   insuranceSubject,
   employeeInsuranceRate,
   employerInsuranceRate,
@@ -43,7 +57,7 @@ export const buildPayrollSlipDraft = ({
   taskWageTotal: unknown;
   taskWageDescription: string;
   ledgerEntries: PayrollLedgerEntry[];
-  advanceLines: PayrollSlipLine[];
+  advancePayments: PayrollSlipPayment[];
   insuranceSubject: boolean | null | undefined;
   employeeInsuranceRate: unknown;
   employerInsuranceRate: unknown;
@@ -68,7 +82,6 @@ export const buildPayrollSlipDraft = ({
       description: taskWageDescription,
     }] : []),
     ...ledgerLines,
-    ...advanceLines,
   ];
 
   // مبنای بیمه مجموع مزایای مثبتِ همین فیش است؛ کسورات و مساعده مبنای بیمه نیستند.
@@ -92,10 +105,14 @@ export const buildPayrollSlipDraft = ({
       metadata: { employer_insurance_amount: employerInsuranceAmount },
     }] : []),
   ];
-  const totals = calculatePayrollSlipTotals({ lines, payments: [] });
+  const payments = advancePayments
+    .filter((payment) => Math.abs(toNumber(payment?.amount)) > 0)
+    .map((payment) => ({ ...payment, amount: Math.abs(toNumber(payment.amount)) }));
+  const totals = calculatePayrollSlipTotals({ lines, payments });
 
   return {
     lines,
+    payments,
     grossAmount: totals.grossAmount,
     netAmount: totals.netPayable,
     employeeInsuranceAmount,

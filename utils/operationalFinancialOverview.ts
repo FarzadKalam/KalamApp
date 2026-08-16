@@ -1060,31 +1060,67 @@ export const fetchOperationalFinancialOverview = async ({
   supabase = sharedSupabase,
 }: OverviewArgs): Promise<OperationalFinancialOverviewResult> => {
   const normalizedEntityId = normalizeOperationalText(entityId);
-  if (!normalizedEntityId) return fetchSingleOperationalFinancialOverview({ entityType, entityId, supabase });
+  if (!normalizedEntityId) {
+    return {
+      rows: [],
+      recentItems: [],
+      summary: { totalDebit: 0, totalCredit: 0, finalBalance: 0 },
+      totals: { totalDebit: 0, totalCredit: 0, finalBalance: 0 },
+      printFields: OPERATIONAL_FINANCIAL_PRINT_FIELDS,
+    };
+  }
 
-  const linkedEntities = await resolveLinkedFinancialEntities(supabase, entityType, normalizedEntityId);
-  const overviews = await Promise.all([
-    fetchSingleOperationalFinancialOverview({ entityType, entityId: normalizedEntityId, supabase }),
-    ...linkedEntities.map((linked) => fetchSingleOperationalFinancialOverview({ ...linked, supabase })),
+  // صفحهٔ داخلی و کارت حساب آنلاین هر دو از همین RPC سروری استفاده می‌کنند.
+  // هیچ fallback کلاینتی نداریم تا یک رکورد در دو مسیر با دو منطق متفاوت
+  // محاسبه نشود.
+  const { data, error } = await supabase.rpc('get_operational_financial_history', {
+    p_entity_type: entityType,
+    p_entity_id: normalizedEntityId,
+  });
+  if (error) throw error;
+
+  const payload = (data && typeof data === 'object' ? data : {}) as Record<string, any>;
+  const rawRows = Array.isArray(payload.rows) ? payload.rows : [];
+  const allowedRowTypes = new Set<OperationalFinancialRowType>([
+    'opening', 'invoice', 'receipt', 'payment', 'barter', 'expense', 'payroll_slip', 'advance',
   ]);
-
-  const distinctRows = Array.from(
-    new Map(overviews.flatMap((overview) => overview.rows).map((row) => [row.key, row])).values(),
-  ).sort((a, b) => {
-    if (a.rowType === 'opening' && b.rowType !== 'opening') return -1;
-    if (a.rowType !== 'opening' && b.rowType === 'opening') return 1;
-    const aDate = new Date(a.date || a.createdAt || 0).getTime();
-    const bDate = new Date(b.date || b.createdAt || 0).getTime();
-    if (aDate === bDate) return String(a.key).localeCompare(String(b.key));
-    return aDate - bDate;
+  const rows = rawRows.map((raw: any, index: number) => {
+    const rowTypeCandidate = String(raw?.row_type || 'payment') as OperationalFinancialRowType;
+    const rowType = allowedRowTypes.has(rowTypeCandidate) ? rowTypeCandidate : 'payment';
+    const sourceModuleId = normalizeOperationalText(raw?.source_module_id || 'cash_bank_operations');
+    const sourceRecordId = normalizeOperationalText(raw?.source_record_id) || null;
+    const bankModuleId = normalizeOperationalText(raw?.bank_module_id);
+    const bankRecordId = normalizeOperationalText(raw?.bank_record_id);
+    return buildBalanceRow({
+      key: normalizeOperationalText(raw?.key) || `financial_row_${index}`,
+      rowType,
+      sourceLabel: String(raw?.source_label || 'ثبت مالی'),
+      sourceModuleId,
+      sourceRecordId,
+      paymentType: String(raw?.payment_type || ''),
+      status: String(raw?.status || ''),
+      chequeStatus: String(raw?.cheque_status || ''),
+      date: raw?.date || null,
+      debit: toNumber(raw?.debit),
+      credit: toNumber(raw?.credit),
+      invoiceLabel: String(raw?.invoice_label || '-'),
+      bankLabel: String(raw?.bank_label || '-'),
+      description: String(raw?.description || ''),
+      createdAt: raw?.created_at || null,
+      invoiceRelation: sourceRecordId && sourceModuleId
+        ? { moduleId: sourceModuleId, recordId: sourceRecordId }
+        : null,
+      bankRelation: bankModuleId && bankRecordId
+        ? { moduleId: bankModuleId, recordId: bankRecordId }
+        : null,
+    }, toNumber(raw?.balance));
   });
-
-  let runningBalance = 0;
-  const rows = distinctRows.map((row) => {
-    runningBalance += Number(row.debit || 0) - Number(row.credit || 0);
-    return buildBalanceRow(row, runningBalance);
-  });
-  const totals = computeOperationalFinancialTotals(rows);
+  const rawSummary = payload.summary && typeof payload.summary === 'object' ? payload.summary : {};
+  const totals = {
+    totalDebit: toNumber(rawSummary.total_debit),
+    totalCredit: toNumber(rawSummary.total_credit),
+    finalBalance: toNumber(rawSummary.final_balance),
+  };
 
   return {
     rows,
