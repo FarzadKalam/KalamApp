@@ -98,7 +98,7 @@ const LONG_MEDIA_PROVIDER_TIMEOUT_MS = 45000;
 const IMAGE_STATUS_STALE_MS = 180000;
 const IMAGE_STATUS_HARD_TIMEOUT_MS = 1800000;
 const IMAGE_STATUS_WARN_MS = 60000;
-const IMAGE_PROMPT_MAX_CHARS = 4000;
+const IMAGE_PROMPT_MAX_CHARS = 7000;
 const DEFAULT_AI_MARGIN_PERCENT = 30;
 const DEFAULT_AI_EXCHANGE_RATE_IRT = 115000;
 const DEFAULT_AI_DAILY_TOKEN_LIMIT = 80000;
@@ -3004,12 +3004,12 @@ const buildPromptMessages = (
   const tenantIdentity = buildTenantAssistantIdentity(companyContext);
   const conversationContinuity = buildConversationContinuityInstruction(historyRows);
   const recordScopeInstruction = pageContext?.recordId
-    ? ' گفتگو روی یک رکورد مشخص است؛ پرسش‌های وابسته به «این»، «آن» یا «رکورد» را ابتدا به همین رکورد مربوط بدان.'
+    ? ' گفتگو روی یک رکورد مشخص است؛ اولویت پاسخ با همین رکورد و فرآیندهای متصل به آن است. پرسش‌های وابسته به «این»، «آن» یا «رکورد» را ابتدا به همین رکورد مربوط بدان و فقط برای کامل‌کردن پاسخ از دانش سازمان، دستورالعمل‌های مجاز، کاربران و نقش‌های همین سازمان یا رکوردهای مجاز دیگر استفاده کن.'
     : pageContext?.moduleId
     ? ' گفتگو روی فهرست/ماژول مشخص است؛ پاسخ را ابتدا بر مبنای همان ماژول و رکوردهای مجاز صفحه بده.'
     : '';
   const processGroundingInstruction = options.authoritativeProcessContext || pageContext.intent === 'process_guide'
-    ? ' این گفتگو در زمینهٔ یک فرآیند یا رکورد فرآیندی است. authoritative_process_context و process_guide_context منبع قطعی هستند: ابتدا فرآیند انتخاب‌شده و همان رکورد را شناسایی کن، سپس فقط بر پایهٔ مرحله‌ها، ترتیب sort_order، ماژول‌های هدف، توضیحات، مسئول‌های پیش‌فرض، موعدها، وضعیت‌های اختصاصی، فیلدهای اختصاصی و اتوماسیون‌های موجود توضیح بده. اطلاعات هیچ پروژه، الگو یا دستورالعمل نامرتبطی را به این فرآیند نسبت نده. اگر دادهٔ لازم در همین context نیست، صریح بگو ثبت نشده است؛ هرگز مرحله، مسئول، موعد یا دستورالعمل را حدس نزن. وقتی کاربر می‌گوید «این فرآیند» یا «این رکورد»، منظور همان فرآیند/رکورد جاری است.'
+    ? ' این گفتگو در زمینهٔ یک فرآیند یا رکورد فرآیندی است. authoritative_process_context و process_guide_context منبع قطعی هستند: ابتدا فرآیند انتخاب‌شده و همان رکورد را شناسایی کن، سپس فقط بر پایهٔ مرحله‌ها، ترتیب sort_order، ماژول‌های هدف، توضیحات، مسئول‌های پیش‌فرض، موعدها، وضعیت‌های اختصاصی، فیلدهای اختصاصی و اتوماسیون‌های موجود توضیح بده. وقتی کاربر گزارش کامل، توضیح کامل، مستندات، دیاگرام یا فلوچارت فرآیند را می‌خواهد، پاسخ را کوتاه‌سازی نکن: نام و هدف الگو، همهٔ مرحله‌ها به ترتیب، مسئول یا نقش هر مرحله، زمان و مبنای زمان، فیلدها و وضعیت‌های اختصاصی، سپس هر اتوماسیون شامل trigger، شرط‌ها، اکشن‌ها و مقصد را صریح و منظم ارائه کن. در توضیح مقصد، بین مسئول همان فعالیت، مرحلهٔ قبل/بعد/خاص، نقش، کاربر و ماژول مقصد تفاوت بگذار. اطلاعات هیچ پروژه، الگو یا دستورالعمل نامرتبطی را به این فرآیند نسبت نده. اگر دادهٔ لازم در همین context نیست، صریح بگو ثبت نشده است؛ هرگز مرحله، مسئول، موعد یا دستورالعمل را حدس نزن. وقتی کاربر می‌گوید «این فرآیند» یا «این رکورد»، منظور همان فرآیند/رکورد جاری است.'
     : '';
 
   const systemContent = `${tenantIdentity}${conversationContinuity}${recordScopeInstruction}${processGroundingInstruction} اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction}${copyableOutputInstruction}${jalaliAndReportsInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
@@ -4418,6 +4418,86 @@ const appendImageContextToPrompt = (prompt: string, args: { companyContext?: any
   }
   if (!contextLines.length) return prompt;
   return clampImagePrompt(`${prompt}\n\nزمینه مجاز سازمان برای استفاده در تصویر:\n${contextLines.join('\n')}`);
+};
+
+const stripProcessTechnicalIds = (value: any, depth = 0): any => {
+  if (depth > 8 || value === null || value === undefined) return value;
+  if (typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.trim())) return null;
+  if (Array.isArray(value)) return value.slice(0, 40).map((item) => stripProcessTechnicalIds(item, depth + 1));
+  if (typeof value !== 'object') return value;
+  return Object.entries(value).reduce<Record<string, any>>((result, [key, item]) => {
+    const normalizedKey = String(key || '').trim().toLowerCase();
+    if (normalizedKey === 'id' || normalizedKey.endsWith('_id') || normalizedKey.startsWith('__')) return result;
+    result[key] = stripProcessTechnicalIds(item, depth + 1);
+    return result;
+  }, {});
+};
+
+const buildProcessImageSource = (processGuideContext: any, authoritativeProcessContext: any) => {
+  const guideProcesses = Array.isArray(processGuideContext?.processes)
+    ? processGuideContext.processes.map((process: any) => ({
+        label: process?.label || null,
+        template_name: process?.template_name || null,
+        stage_count: process?.stage_count || 0,
+        stages: Array.isArray(process?.stages) ? process.stages.map((stage: any) => ({
+          stage_name: stage?.stage_name || null,
+          sort_order: stage?.sort_order || null,
+          status: stage?.status || null,
+          assignee: stage?.assignee ? {
+            type: stage.assignee.type || null,
+            summary: stage.assignee.summary || stage.assignee.name || stage.assignee.role_name || null,
+          } : null,
+          duration: stage?.duration || null,
+          timing: stage?.timing || null,
+          field_values: stage?.linked_task?.field_values || [],
+        })) : [],
+        automation_rules: process?.automation_rules || [],
+      }))
+    : [];
+  const templates = Array.isArray(authoritativeProcessContext?.templates)
+    ? authoritativeProcessContext.templates.map((template: any) => ({
+        name: template?.name || null,
+        description: template?.description || null,
+        target_modules: template?.module_ids || template?.module_id || [],
+        process_kind: template?.process_kind || null,
+        stages: Array.isArray(template?.stages) ? template.stages.map((stage: any) => ({
+          stage_name: stage?.stage_name || null,
+          sort_order: stage?.sort_order || null,
+          default_status: stage?.default_status || null,
+          default_assignee_role: stage?.default_assignee_role_id || null,
+          default_assignee_user: stage?.default_assignee_id || null,
+          wage: stage?.wage || null,
+          details: stage?.metadata || {},
+        })) : [],
+      }))
+    : [];
+  const runs = Array.isArray(authoritativeProcessContext?.runs)
+    ? authoritativeProcessContext.runs.map((run: any) => ({
+        process_name: run?.process_name || null,
+        status: run?.status || null,
+        stages: run?.stages || [],
+      }))
+    : [];
+  return stripProcessTechnicalIds({
+    process_summary: processGuideContext?.process_summary || authoritativeProcessContext?.scope || null,
+    processes: guideProcesses,
+    templates,
+    active_runs: runs,
+  });
+};
+
+const appendProcessContextToImagePrompt = (prompt: string, args: { processGuideContext?: any; authoritativeProcessContext?: any }) => {
+  if (!args.processGuideContext && !args.authoritativeProcessContext) return prompt;
+  const source = buildProcessImageSource(args.processGuideContext, args.authoritativeProcessContext);
+  const serialized = JSON.stringify(source, null, 2);
+  if (!serialized || serialized === '{}') return prompt;
+  const available = Math.max(800, IMAGE_PROMPT_MAX_CHARS - String(prompt || '').length - 680);
+  const trimmed = serialized.length > available ? `${serialized.slice(0, available)}\n[ادامهٔ جزئیات در دادهٔ زندهٔ فرآیند موجود است]` : serialized;
+  return clampImagePrompt([
+    prompt,
+    'دادهٔ قطعی فرآیند برای تصویر زیر است. اگر کاربر تصویر فرآیند، فلوچارت یا دیاگرام خواسته، همهٔ مرحله‌های موجود را به‌ترتیب و با مسیرهای واقعی نمایش بده؛ مسئول، زمان، شرط، اکشن و مقصد هر اکشن را از همین داده بگیر. متن داخل نمودار را فارسی، کوتاه و خوانا بنویس؛ هیچ شناسهٔ فنی یا مقدار حدسی نشان نده.',
+    trimmed,
+  ].join('\n\n'));
 };
 
 // Gemini image (Nano Banana) models are served by AvalAI via OpenAI-compatible
@@ -5886,6 +5966,9 @@ const isHiddenAssistantThread = (thread: any) => {
 
 const handleListThreads = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const search = String(body?.search || '').trim();
+  const requestedModuleId = String(body?.moduleId || body?.module_id || '').trim();
+  const requestedRecordId = normalizeId(body?.recordId || body?.record_id);
+  const hasRecordScope = Boolean(requestedModuleId && isUuid(requestedRecordId));
   const baseSelect = 'id,org_id,title,context_type,context_key,module_id,record_id,provider,model,metadata,created_at,updated_at,pinned_at,is_shared,shared_user_ids,shared_role_ids,user_id';
   const limit = Math.max(10, Math.min(100, Number(body?.limit || 50)));
   const ownParams: Record<string, any> = {
@@ -5916,6 +5999,13 @@ const handleListThreads = async (supabaseUrl: string, serviceRoleKey: string, au
   if (search) {
     sharedUserParams.title = `ilike.*${search}*`;
     if (authContext.roleId) sharedRoleParams.title = `ilike.*${search}*`;
+  }
+  if (hasRecordScope) {
+    [ownParams, sharedUserParams, sharedRoleParams].forEach((params) => {
+      if (!params || Object.keys(params).length === 0) return;
+      params.module_id = `eq.${requestedModuleId}`;
+      params.record_id = `eq.${requestedRecordId}`;
+    });
   }
   const [ownRows, sharedUserRows, sharedRoleRows] = await Promise.all([
     safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_threads', ownParams),
@@ -9543,9 +9633,14 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const useOrganizationContext = imageSettings.useOrganizationContext === true;
   const canUseKnowledge = useOrganizationContext && isAiCapabilityPlanAvailable(planContext, 'document_analysis');
-  const [companyContext, knowledgeChunks] = await Promise.all([
+  const requiresAuthoritativeProcessContext = rawContext.intent === 'process_guide'
+    || ['process_templates', 'process_runs'].includes(String(pageContext?.moduleId || '').trim());
+  const [companyContext, knowledgeChunks, authoritativeProcessContext] = await Promise.all([
     useOrganizationContext ? loadCompanyContext(supabaseUrl, serviceRoleKey, authContext) : Promise.resolve(null),
     canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, prompt, { moduleId: pageContext.moduleId }) : Promise.resolve([]),
+    requiresAuthoritativeProcessContext
+      ? loadAiProcessContext(supabaseUrl, serviceRoleKey, authContext, pageContext)
+      : Promise.resolve(null),
   ]);
   const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
     threadId: body?.threadId || null,
@@ -9570,10 +9665,16 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
       capability: 'image_generation',
     },
   });
-  const providerPrompt = clampImagePrompt(appendImageContextToPrompt(
-    buildImagePromptWithSettings(prompt, imageSettings),
-    { companyContext, pageSummary: pageContext.summary || null, knowledgeChunks },
-  ));
+  const providerPrompt = appendProcessContextToImagePrompt(
+    appendImageContextToPrompt(
+      buildImagePromptWithSettings(prompt, imageSettings),
+      { companyContext, pageSummary: pageContext.summary || null, knowledgeChunks },
+    ),
+    {
+      processGuideContext: pageContext.processGuideContext || null,
+      authoritativeProcessContext,
+    },
+  );
   const rawSources = Array.isArray(body?.sourceImages) ? body.sourceImages
     : Array.isArray(imageSettings.sourceImages) ? imageSettings.sourceImages
     : [];

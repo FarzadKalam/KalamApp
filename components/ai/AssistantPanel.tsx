@@ -246,6 +246,40 @@ const buildClientContextKey = (context: AssistantContext) => {
   return 'page:unknown';
 };
 
+const getThreadContext = (thread: any): AssistantContext | null => {
+  const metadata = thread?.metadata && typeof thread.metadata === 'object' ? thread.metadata : {};
+  const stored = metadata?.context && typeof metadata.context === 'object' ? metadata.context : {};
+  const moduleId = String(stored?.moduleId || thread?.module_id || metadata?.module_id || '').trim() || null;
+  const recordId = String(stored?.recordId || thread?.record_id || metadata?.record_id || '').trim() || null;
+  const storedMode = String(stored?.mode || '').trim();
+  const mode = recordId
+    ? 'record'
+    : storedMode === 'list' || storedMode === 'record' || storedMode === 'page'
+      ? storedMode
+      : moduleId
+        ? 'list'
+        : 'page';
+  const route = String(stored?.route || metadata?.route || '').trim()
+    || (moduleId ? (recordId ? `/${moduleId}/${recordId}` : `/${moduleId}`) : '/ai-chat');
+  if (!moduleId && mode === 'page' && !route) return null;
+  return {
+    route,
+    mode,
+    moduleId,
+    recordId,
+    visibleRecordIds: Array.isArray(stored?.visibleRecordIds) ? stored.visibleRecordIds.map(String) : [],
+    selectedRecordIds: Array.isArray(stored?.selectedRecordIds) ? stored.selectedRecordIds.map(String) : [],
+    intent: stored?.intent ? String(stored.intent) : undefined,
+    processFieldKey: stored?.processFieldKey ? String(stored.processFieldKey) : null,
+    selectedProcessId: stored?.selectedProcessId ? String(stored.selectedProcessId) : null,
+    selectedProcessGroupId: stored?.selectedProcessGroupId ? String(stored.selectedProcessGroupId) : null,
+    processGuideContext: stored?.processGuideContext && typeof stored.processGuideContext === 'object'
+      ? stored.processGuideContext
+      : null,
+    availableProcesses: Array.isArray(stored?.availableProcesses) ? stored.availableProcesses : [],
+  };
+};
+
 const PARTIAL_STREAM_NOTICE = 'ادامه پاسخ کامل دریافت نشد، اما متن دریافت‌شده حفظ شد. برای ادامه می‌توانید پیام «ادامه بده» را ارسال کنید.';
 
 const isRecoverableStreamError = (payload: any) => {
@@ -489,6 +523,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const bundleInputsRef = useRef<AiBundleInput[]>([]);
   const [contextRecordLabel, setContextRecordLabel] = useState<string | null>(null);
   const [liveContext, setLiveContext] = useState<AssistantContext | null>(null);
+  const [threadContext, setThreadContext] = useState<AssistantContext | null>(null);
   const [pendingProcessSelectionId, setPendingProcessSelectionId] = useState<string | null>(null);
   const [recordCreationTargetModuleId, setRecordCreationTargetModuleId] = useState<string | null>(null);
   const [processOperationMode, setProcessOperationMode] = useState(false);
@@ -521,6 +556,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const modelOverrideRef = useRef<string | null>(null);
   const composerPreferencesRef = useRef<Record<string, any>>({});
   const autoCompressedSignatureRef = useRef('');
+  const restoredRecordThreadScopeRef = useRef('');
   const appliedInitialPromptRef = useRef('');
   const normalizedInitialThreadId = String(initialThreadId || '').trim() || null;
   const normalizedInitialInputKind = String(initialInputKind || 'text').trim() || 'text';
@@ -705,11 +741,15 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
 
   const contextKey = useMemo(() => buildClientContextKey(context), [context]);
 
+  const conversationContext = useMemo<AssistantContext>(() => (
+    threadId && threadContext ? threadContext : context
+  ), [context, threadContext, threadId]);
+
   useEffect(() => {
     let active = true;
-    const moduleId = String(context.moduleId || '').trim();
-    const recordId = String(context.recordId || '').trim();
-    if (context.mode !== 'record' || !moduleId || !recordId) {
+    const moduleId = String(conversationContext.moduleId || '').trim();
+    const recordId = String(conversationContext.recordId || '').trim();
+    if (conversationContext.mode !== 'record' || !moduleId || !recordId) {
       setContextRecordLabel(null);
       return () => { active = false; };
     }
@@ -722,50 +762,50 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         if (active) setContextRecordLabel(null);
       });
     return () => { active = false; };
-  }, [context.mode, context.moduleId, context.recordId]);
+  }, [conversationContext.mode, conversationContext.moduleId, conversationContext.recordId]);
 
   const contextLabel = useMemo(() => {
-    if (!context.moduleId) return 'صفحه فعلی';
-    const moduleTitle = MODULES[context.moduleId]?.titles?.fa || context.moduleId;
-    if (context.mode === 'record' && context.recordId) return contextRecordLabel || `${moduleTitle} / رکورد فعلی`;
-    if (context.mode === 'list') {
-      const selectedCount = context.selectedRecordIds?.length || 0;
-      const visibleCount = context.visibleRecordIds?.length || 0;
+    if (!conversationContext.moduleId) return 'گفتگوی آزاد';
+    const moduleTitle = MODULES[conversationContext.moduleId]?.titles?.fa || conversationContext.moduleId;
+    if (conversationContext.mode === 'record' && conversationContext.recordId) return contextRecordLabel || `رکورد ${moduleTitle}`;
+    if (conversationContext.mode === 'list') {
+      const selectedCount = conversationContext.selectedRecordIds?.length || 0;
+      const visibleCount = conversationContext.visibleRecordIds?.length || 0;
       if (selectedCount > 0) return `${moduleTitle} / ${selectedCount} رکورد انتخاب‌شده`;
       return visibleCount > 0 ? `${moduleTitle} / ${Math.min(visibleCount, 10)} رکورد صفحه` : `${moduleTitle} / لیست`;
     }
     return moduleTitle;
-  }, [context, contextRecordLabel]);
+  }, [contextRecordLabel, conversationContext]);
 
   const processGuideAvailableProcesses = useMemo(
-    () => Array.isArray(context.availableProcesses) ? context.availableProcesses : [],
-    [context.availableProcesses]
+    () => Array.isArray(conversationContext.availableProcesses) ? conversationContext.availableProcesses : [],
+    [conversationContext.availableProcesses]
   );
 
   const selectedProcessId = useMemo(
     () => String(
-      context.selectedProcessId
-      || context.selectedProcessGroupId
+      conversationContext.selectedProcessId
+      || conversationContext.selectedProcessGroupId
       || pendingProcessSelectionId
       || ''
     ).trim() || null,
-    [context.selectedProcessGroupId, context.selectedProcessId, pendingProcessSelectionId]
+    [conversationContext.selectedProcessGroupId, conversationContext.selectedProcessId, pendingProcessSelectionId]
   );
 
   const resolvedProcessGuideContext = useMemo(() => {
-    if (context.intent !== 'process_guide') return null;
-    return narrowProcessGuideContext(context.processGuideContext || null, selectedProcessId);
-  }, [context.intent, context.processGuideContext, selectedProcessId]);
+    if (conversationContext.intent !== 'process_guide') return null;
+    return narrowProcessGuideContext(conversationContext.processGuideContext || null, selectedProcessId);
+  }, [conversationContext.intent, conversationContext.processGuideContext, selectedProcessId]);
 
   const contextWithSelection = useMemo<AssistantContext>(() => {
-    if (context.intent !== 'process_guide') return context;
+    if (conversationContext.intent !== 'process_guide') return conversationContext;
     return {
-      ...context,
+      ...conversationContext,
       selectedProcessId,
       selectedProcessGroupId: selectedProcessId,
       processGuideContext: resolvedProcessGuideContext,
     };
-  }, [context, resolvedProcessGuideContext, selectedProcessId]);
+  }, [conversationContext, resolvedProcessGuideContext, selectedProcessId]);
 
   const fileRecordScope = useMemo(() => ({
     moduleId: contextWithSelection.mode === 'record' ? String(contextWithSelection.moduleId || '').trim() || null : null,
@@ -867,8 +907,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     }
     const content = String(input?.content || '').trim();
     if (!content) return;
-    const relatedModuleId = context.mode === 'record' ? String(context.moduleId || '').trim() : '';
-    const relatedRecordId = context.mode === 'record' ? String(context.recordId || '').trim() : '';
+    const relatedModuleId = contextWithSelection.mode === 'record' ? String(contextWithSelection.moduleId || '').trim() : '';
+    const relatedRecordId = contextWithSelection.mode === 'record' ? String(contextWithSelection.recordId || '').trim() : '';
     if (!relatedModuleId || !relatedRecordId) {
       message.info('برای ایجاد فعالیت، گفتگو باید روی صفحه یک رکورد باز باشد.');
       return;
@@ -895,7 +935,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'ایجاد فعالیت از روی پیام ناموفق بود.'));
     }
-  }, [context.mode, context.moduleId, context.recordId, message, openCreateActivityFromMessage]);
+  }, [contextWithSelection.mode, contextWithSelection.moduleId, contextWithSelection.recordId, message, openCreateActivityFromMessage]);
 
   const stopActiveStream = useCallback(() => {
     streamAbortRef.current?.abort();
@@ -1440,6 +1480,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     if (!active) return;
     const requestedThreadId = String(targetThreadId || threadId || '').trim();
     if (!requestedThreadId) {
+      setThreadContext(null);
       setMessages([]);
       return;
     }
@@ -1450,6 +1491,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         threadId: requestedThreadId,
       });
       setThreadId(data.threadId ? String(data.threadId) : null);
+      setThreadContext(getThreadContext(data?.thread));
       if (data?.thread) onThreadUpserted?.(data.thread);
       setThreadIsShared(data?.thread?.is_shared === true);
       setSharedIdentityTokens([
@@ -1522,6 +1564,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     if (initializedPanelSessionRef.current === initialPanelSessionKey) return;
     initializedPanelSessionRef.current = initialPanelSessionKey;
     setThreadId(normalizedInitialThreadId);
+    setThreadContext(null);
     setMessages([]);
     setThreadTitle(initialTitle);
     setDraftThreadTitle(initialTitle);
@@ -1566,11 +1609,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   }, [active, initialPrompt]);
 
   useEffect(() => {
-    if (context.intent !== 'process_guide') {
+    if (conversationContext.intent !== 'process_guide') {
       setPendingProcessSelectionId(null);
       return;
     }
-    const nextSelectedId = String(context.selectedProcessId || context.selectedProcessGroupId || '').trim() || null;
+    const nextSelectedId = String(conversationContext.selectedProcessId || conversationContext.selectedProcessGroupId || '').trim() || null;
     if (nextSelectedId) {
       setPendingProcessSelectionId(nextSelectedId);
       return;
@@ -1580,7 +1623,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       return;
     }
     setPendingProcessSelectionId(null);
-  }, [context.intent, context.selectedProcessGroupId, context.selectedProcessId, processGuideAvailableProcesses]);
+  }, [conversationContext.intent, conversationContext.selectedProcessGroupId, conversationContext.selectedProcessId, processGuideAvailableProcesses]);
 
   useEffect(() => {
     if (!active) return;
@@ -2677,6 +2720,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       }
       const deletedThreadId = threadId;
       setThreadId(null);
+      setThreadContext(null);
       setMessages([]);
       setThreadTitle('گفتگوی هوش مصنوعی');
       setDraftThreadTitle('گفتگوی هوش مصنوعی');
@@ -2846,8 +2890,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                     createdAtLabel: item.created_at ? toFaDateTime(item.created_at) : '',
                     content: messageText,
                     attachments,
-                    relatedModuleId: context.mode === 'record' ? context.moduleId : null,
-                    relatedRecordId: context.mode === 'record' ? context.recordId : null,
+                    relatedModuleId: contextWithSelection.mode === 'record' ? contextWithSelection.moduleId : null,
+                    relatedRecordId: contextWithSelection.mode === 'record' ? contextWithSelection.recordId : null,
                   })}
                   aria-label="فوروارد پیام"
                 />
@@ -2867,8 +2911,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                     createdAtLabel: item.created_at ? toFaDateTime(item.created_at) : '',
                     content: messageText,
                     attachments,
-                    relatedModuleId: context.mode === 'record' ? context.moduleId : null,
-                    relatedRecordId: context.mode === 'record' ? context.recordId : null,
+                    relatedModuleId: contextWithSelection.mode === 'record' ? contextWithSelection.moduleId : null,
+                    relatedRecordId: contextWithSelection.mode === 'record' ? contextWithSelection.recordId : null,
                   })}
                 />
               </Tooltip>
@@ -2878,9 +2922,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       </div>
     );
   }, [
-    context.mode,
-    context.moduleId,
-    context.recordId,
+    contextWithSelection.mode,
+    contextWithSelection.moduleId,
+    contextWithSelection.recordId,
     copyText,
     createActivityFromMessage,
     currentUserView.avatarUrl,
@@ -2939,23 +2983,52 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const estimatedContextTokens = useMemo(() => estimateAiMessageTokens(messages), [messages]);
   const estimatedContextLimit = estimateModelContextLimit(activeModelForContext);
   const estimatedContextPercent = Math.max(0, Math.min(100, Math.round((estimatedContextTokens / Math.max(1, estimatedContextLimit)) * 100)));
+  const recordThreadScope = useMemo(() => {
+    const moduleId = String(contextWithSelection.moduleId || '').trim();
+    const recordId = String(contextWithSelection.recordId || '').trim();
+    return showThreadListButton && contextWithSelection.mode === 'record' && moduleId && recordId
+      ? { moduleId, recordId }
+      : null;
+  }, [contextWithSelection.mode, contextWithSelection.moduleId, contextWithSelection.recordId, showThreadListButton]);
+  const fetchDrawerThreads = useCallback(async () => {
+    const data = await callAssistant({
+      action: 'list_threads',
+      limit: 80,
+      ...(recordThreadScope || {}),
+    });
+    return Array.isArray(data?.threads) ? data.threads : [];
+  }, [callAssistant, recordThreadScope]);
   const loadDrawerThreads = useCallback(async () => {
     if (!showThreadListButton) return;
     setDrawerThreadsLoading(true);
     try {
-      const data = await callAssistant({ action: 'list_threads', limit: 80 });
-      const rows = Array.isArray(data?.threads) ? data.threads : [];
-      setDrawerThreads(rows);
+      setDrawerThreads(await fetchDrawerThreads());
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'دریافت فهرست گفتگوها ناموفق بود.'));
     } finally {
       setDrawerThreadsLoading(false);
     }
-  }, [callAssistant, message, showThreadListButton]);
+  }, [fetchDrawerThreads, message, showThreadListButton]);
 
   useEffect(() => {
     if (threadListOpen) void loadDrawerThreads();
   }, [loadDrawerThreads, threadListOpen]);
+
+  useEffect(() => {
+    if (!active || !recordThreadScope || threadId || loadingThread) return;
+    const scopeKey = `${recordThreadScope.moduleId}:${recordThreadScope.recordId}`;
+    if (restoredRecordThreadScopeRef.current === scopeKey) return;
+    restoredRecordThreadScopeRef.current = scopeKey;
+    void fetchDrawerThreads()
+      .then((rows) => {
+        setDrawerThreads(rows);
+        const mostRecentThreadId = String(rows?.[0]?.id || '').trim();
+        if (mostRecentThreadId) void loadThread(mostRecentThreadId);
+      })
+      .catch(() => {
+        // The drawer action will show a readable error if the user opens it.
+      });
+  }, [active, fetchDrawerThreads, loadThread, loadingThread, recordThreadScope, threadId]);
 
   useEffect(() => {
     if (!threadId || compressingContext || estimatedContextPercent < 90 || messages.length < 8) return;
@@ -3021,16 +3094,18 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               </button>
             )}
             <div className="truncate text-[10px] font-normal text-gray-500 dark:text-gray-400">
-              گفتگو در خصوص{' '}
-              {context.moduleId ? (
-                <Link
-                  to={context.mode === 'record' && context.recordId ? `/${context.moduleId}/${context.recordId}` : `/${context.moduleId}`}
-                  className="font-semibold text-[rgb(var(--brand-700-rgb))] underline decoration-dotted underline-offset-2"
-                >
-                  {contextLabel}
-                </Link>
+              {conversationContext.moduleId ? (
+                <>
+                  گفتگو در خصوص{' '}
+                  <Link
+                    to={conversationContext.mode === 'record' && conversationContext.recordId ? `/${conversationContext.moduleId}/${conversationContext.recordId}` : `/${conversationContext.moduleId}`}
+                    className="font-semibold text-[rgb(var(--brand-700-rgb))] underline decoration-dotted underline-offset-2"
+                  >
+                    {contextLabel}
+                  </Link>
+                </>
               ) : (
-                <span className="font-semibold">{contextLabel}</span>
+                <span className="font-semibold">گفتگوی آزاد در داشبورد</span>
               )}
             </div>
           </div>
@@ -3103,8 +3178,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           </Space>
         </div>
         <Space size={[6, 6]} wrap>
-          {context.mode === 'list' && (context.selectedRecordIds?.length || 0) > 0 ? (
-            <Tag color="blue">{Math.min(context.selectedRecordIds?.length || 0, 10).toLocaleString('fa-IR')} انتخاب‌شده</Tag>
+          {conversationContext.mode === 'list' && (conversationContext.selectedRecordIds?.length || 0) > 0 ? (
+            <Tag color="blue">{Math.min(conversationContext.selectedRecordIds?.length || 0, 10).toLocaleString('fa-IR')} انتخاب‌شده</Tag>
           ) : null}
         </Space>
       </div>
@@ -3390,7 +3465,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         onClose={() => setThreadListOpen(false)}
         placement="right"
         width="min(92vw, 360px)"
-        title="گفتگوهای هوش مصنوعی"
+        title={recordThreadScope ? 'گفتگوهای این رکورد' : 'گفتگوهای هوش مصنوعی'}
         classNames={{ body: '!p-0' }}
         destroyOnHidden
         getContainer={typeof document === 'undefined' ? undefined : () => document.body}

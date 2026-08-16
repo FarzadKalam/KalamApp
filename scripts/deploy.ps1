@@ -76,6 +76,35 @@ function Assert-Command {
   }
 }
 
+function Test-GzipArchive {
+  param([string]$ArchivePath)
+
+  & tar -tzf $ArchivePath *> $null
+  if ($LASTEXITCODE -ne 0) {
+    throw "Deploy archive is invalid before upload: $ArchivePath"
+  }
+}
+
+function Get-RemoteArchiveSha256 {
+  param(
+    [string[]]$SshArgs,
+    [string]$Target,
+    [string]$RemotePath
+  )
+
+  $output = @(& ssh @SshArgs $Target "sha256sum -- '$RemotePath'")
+  if ($LASTEXITCODE -ne 0) {
+    return ""
+  }
+
+  $match = [regex]::Match(($output -join "`n").Trim(), '^[A-Fa-f0-9]{64}(?=\s)')
+  if (-not $match.Success) {
+    return ""
+  }
+
+  return $match.Value.ToLowerInvariant()
+}
+
 function ConvertTo-Bool {
   param(
     [string]$Value,
@@ -178,6 +207,10 @@ try {
   $archiveName = Get-OptionalEnv -Name "DEPLOY_ARCHIVE_NAME" -DefaultValue "kalamapp-dist.tar.gz"
   $useSharedSsh = ConvertTo-Bool -Value (Get-OptionalEnv -Name 'DEPLOY_USE_SHARED_SSH') -DefaultValue $false
 
+  if ($archiveName -notmatch '^[A-Za-z0-9._-]+\.tar\.gz$') {
+    throw "DEPLOY_ARCHIVE_NAME must be a simple .tar.gz file name."
+  }
+
   if (-not $SkipBuild) {
     Write-Step "Building production bundle"
     & $env:ComSpec /d /s /c $buildCommand
@@ -191,19 +224,21 @@ try {
     throw "dist folder does not exist. Run build first or remove -SkipBuild."
   }
 
-  $localArchive = Join-Path ([System.IO.Path]::GetTempPath()) $archiveName
-  if (Test-Path -LiteralPath $localArchive) {
-    Remove-Item -LiteralPath $localArchive -Force
-  }
+  $archiveStem = $archiveName.Substring(0, $archiveName.Length - '.tar.gz'.Length)
+  $archiveToken = "{0}-{1}" -f (Get-Date -Format 'yyyyMMddHHmmssfff'), ([guid]::NewGuid().ToString('N').Substring(0, 8))
+  $releaseArchiveName = "$archiveStem-$archiveToken.tar.gz"
+  $localArchive = Join-Path ([System.IO.Path]::GetTempPath()) $releaseArchiveName
 
   Write-Step "Packing dist into $localArchive"
   & tar -czf $localArchive -C $distPath .
   if ($LASTEXITCODE -ne 0) {
     throw "Could not create deploy archive."
   }
+  Test-GzipArchive -ArchivePath $localArchive
+  $localArchiveHash = (Get-FileHash -LiteralPath $localArchive -Algorithm SHA256).Hash.ToLowerInvariant()
 
   $target = "{0}@{1}" -f $deployUser, $deployHost
-  $remoteArchive = "/tmp/$archiveName"
+  $remoteArchive = "/tmp/$releaseArchiveName"
   $identityArgs = @()
   if (-not [string]::IsNullOrWhiteSpace($sshKeyPath)) {
     $identityArgs = @('-i', $sshKeyPath)
@@ -228,10 +263,32 @@ try {
     }
   }
 
-  Write-Step "Uploading archive to $target"
-  & scp @scpCommonArgs $localArchive "$target`:$remoteArchive"
-  if ($LASTEXITCODE -ne 0) {
-    throw "Upload failed."
+  $archiveUploaded = $false
+  for ($attempt = 1; $attempt -le 2; $attempt++) {
+    Write-Step "Uploading archive to $target (attempt $attempt/2)"
+    & scp @scpCommonArgs $localArchive "$target`:$remoteArchive"
+    if ($LASTEXITCODE -ne 0) {
+      if ($attempt -eq 2) {
+        throw "Upload failed."
+      }
+      Write-Warning "Archive upload failed; retrying with a fresh remote file."
+      continue
+    }
+
+    $remoteArchiveHash = Get-RemoteArchiveSha256 -SshArgs $sshCommonArgs -Target $target -RemotePath $remoteArchive
+    if ($remoteArchiveHash -eq $localArchiveHash) {
+      $archiveUploaded = $true
+      break
+    }
+
+    if ($attempt -eq 2) {
+      throw "Uploaded archive checksum does not match the local archive."
+    }
+    Write-Warning "Uploaded archive checksum mismatch; retrying before activation."
+    & ssh @sshCommonArgs $target "rm -f -- '$remoteArchive'" 2>$null
+  }
+  if (-not $archiveUploaded) {
+    throw "Upload verification failed."
   }
 
   $remoteScript = @'

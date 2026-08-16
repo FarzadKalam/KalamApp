@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Avatar, Badge, Button, Drawer, Empty, Input, Spin, Tooltip } from 'antd';
 import { CloseOutlined, MenuOutlined, PlusOutlined, PushpinFilled, PushpinOutlined, SearchOutlined, ShareAltOutlined } from '@ant-design/icons';
-import { useLocation, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
@@ -76,14 +76,39 @@ const getThreadTitle = (thread: AiThreadRow) => {
   return 'گفتگوی هوش مصنوعی';
 };
 
+type AiThreadSource = {
+  href: string;
+  label: string;
+};
+
+const getThreadSource = (thread: AiThreadRow): AiThreadSource | null => {
+  const metadata = thread.metadata || {};
+  const storedContext = metadata.context && typeof metadata.context === 'object' ? metadata.context : {};
+  const moduleId = String(storedContext.moduleId || thread.module_id || metadata.module_id || '').trim();
+  const recordId = String(storedContext.recordId || thread.record_id || metadata.record_id || '').trim();
+  const storedRoute = String(storedContext.route || metadata.route || '').trim();
+  const moduleTitle = getModuleTitleFa(moduleId);
+  if (!moduleId) return null;
+  const href = storedRoute.startsWith('/')
+    ? storedRoute
+    : recordId
+      ? `/${moduleId}/${recordId}`
+      : `/${moduleId}`;
+  return {
+    href,
+    label: recordId ? `رکورد ${moduleTitle || moduleId}` : `فهرست ${moduleTitle || moduleId}`,
+  };
+};
+
 const getThreadSubtitle = (thread: AiThreadRow) => {
+  const source = getThreadSource(thread);
+  if (source) return source.label;
   const metadata = thread.metadata || {};
   const contextLabel = String(metadata.context_label || '').trim();
   if (contextLabel) return contextLabel;
-  const moduleTitle = getModuleTitleFa(thread.module_id || metadata.module_id);
   const kind = String(metadata.context_kind || thread.context_type || '').trim();
-  if (kind === 'record') return moduleTitle ? `رکورد ${moduleTitle}` : 'رکورد';
-  if (kind === 'module_page' || kind === 'list') return moduleTitle ? `لیست ${moduleTitle}` : 'لیست ماژول';
+  if (kind === 'record') return 'رکورد';
+  if (kind === 'module_page' || kind === 'list') return 'فهرست ماژول';
   return 'گفتگوی عمومی';
 };
 
@@ -398,6 +423,7 @@ const AiChatSurfaceV2: React.FC = () => {
         ) : filteredThreads.map((thread) => {
           const active = thread.id === activeThreadId;
           const title = getThreadTitle(thread);
+          const source = getThreadSource(thread);
           if (compact) {
             return (
               <div
@@ -469,7 +495,18 @@ const AiChatSurfaceV2: React.FC = () => {
                     {formatThreadTime(thread.updated_at || thread.created_at)}
                   </span>
                 </span>
-                <span className="mt-1 line-clamp-1 text-[11px] leading-5 text-slate-500 dark:text-slate-300">{getThreadSubtitle(thread)}</span>
+                {source ? (
+                  <Link
+                    to={source.href}
+                    onClick={(event) => event.stopPropagation()}
+                    className="mt-1 block line-clamp-1 text-[11px] leading-5 text-[rgb(var(--brand-700-rgb))] underline decoration-dotted underline-offset-2 dark:text-[rgb(var(--brand-300-rgb))]"
+                    title={`باز کردن ${source.label}`}
+                  >
+                    {source.label}
+                  </Link>
+                ) : (
+                  <span className="mt-1 line-clamp-1 text-[11px] leading-5 text-slate-500 dark:text-slate-300">{getThreadSubtitle(thread)}</span>
+                )}
               </span>
             </div>
           );
