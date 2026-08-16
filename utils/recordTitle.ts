@@ -78,13 +78,20 @@ export const getRecordTitle = (
   const fallback = options.fallback ?? "";
   if (!record || typeof record !== "object") return fallback;
 
+  const candidateKeys = getRecordTitleCandidateKeys(moduleConfig);
+  // بعضی ماژول‌ها (مانند کارکنان) نام کاملِ محاسبه‌شده را به‌عنوان کلید اصلی
+  // تعریف می‌کنند. در این حالت عنوان باید همان مقدار مرکزی باشد، نه فقط نام.
+  if (candidateKeys[0] === 'full_name') {
+    const fullName = normalize(record.full_name);
+    if (fullName) return fullName;
+  }
+
   const firstName = normalize(record.first_name);
   const lastName = normalize(record.last_name);
   if (firstName || lastName) {
     return [firstName, lastName].filter(Boolean).join(" ").trim();
   }
 
-  const candidateKeys = getRecordTitleCandidateKeys(moduleConfig);
   for (const key of candidateKeys) {
     const value = normalize(record[key]);
     if (!value) continue;

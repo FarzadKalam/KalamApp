@@ -29,7 +29,7 @@ export const employeesModule: ModuleDefinition = {
   titles: { fa: 'کارکنان', faSingular: 'کارمند', en: 'Employees' },
   nature: ModuleNature.STANDARD,
   relationDisplay: {
-    labelTemplate: '{{prefix}} {{first_name}} {{last_name}} - {{legacy_system_code}}',
+    labelTemplate: '{{full_name}} - {{legacy_system_code}}',
     searchFields: ['full_name', 'first_name', 'last_name', 'legacy_system_code', 'system_code', 'national_code', 'mobile_1', 'phone', 'id'],
   },
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
@@ -40,8 +40,9 @@ export const employeesModule: ModuleDefinition = {
   },
   fields: [
     { key: 'image_url', labels: { fa: 'تصویر', en: 'Image' }, type: FieldType.IMAGE, location: FieldLocation.HEADER, order: 0.8 },
+    { key: 'full_name', labels: { fa: 'نام کامل', en: 'Full Name' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1.05, readonly: true, hideInCreateForm: true, isTableColumn: true, isKey: true },
     { key: 'prefix', labels: { fa: 'پیشوند', en: 'Prefix' }, type: FieldType.SELECT, location: FieldLocation.HEADER, order: 1, options: [{ label: 'آقای', value: 'آقای' }, { label: 'خانم', value: 'خانم' }, { label: 'آقای دکتر', value: 'آقای دکتر' }, { label: 'خانم دکتر', value: 'خانم دکتر' }, { label: 'آقای مهندس', value: 'آقای مهندس' }, { label: 'خانم مهندس', value: 'خانم مهندس' }] },
-    { key: 'first_name', labels: { fa: 'نام', en: 'First Name' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1.1, isTableColumn: true, isKey: true },
+    { key: 'first_name', labels: { fa: 'نام', en: 'First Name' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1.1, isTableColumn: true },
     { key: 'last_name', labels: { fa: 'نام خانوادگی', en: 'Last Name' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1.2, isTableColumn: true },
     { key: 'legacy_system_code', labels: { fa: 'کد سیستم قبلی', en: 'Legacy System Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1.3, isTableColumn: true },
     { key: 'system_code', labels: { fa: 'کد پرسنلی', en: 'Employee Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1.4, isTableColumn: true },

@@ -234,7 +234,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6 mt-6">
               {moduleConfig.fields
-                .filter((f: any) => f.location === FieldLocation.HEADER && !['name', recordTitleFieldKey, 'image_url', 'system_code', 'tags'].filter(Boolean).includes(f.key))
+                .filter((f: any) => f.location === FieldLocation.HEADER && !['name', 'full_name', recordTitleFieldKey, 'image_url', 'system_code', 'tags'].filter(Boolean).includes(f.key))
                 .filter((f: any) => !shouldHideManagedAssigneeField(moduleId, f.key))
                 .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
                 .filter((f: any) => (isFieldVisible ? isFieldVisible(f) : (!f.logic || (checkVisibility ? checkVisibility(f.logic) : true))))
