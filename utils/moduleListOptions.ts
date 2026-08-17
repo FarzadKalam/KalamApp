@@ -409,13 +409,27 @@ export const hydrateModuleListRelationOptionsForRows = async (
 
   const requestsByModule = new Map<string, Set<string>>();
   const fieldTargets = new Map<string, Array<{ moduleId: string; recordId: string }>>();
+  const userFieldKeys = new Set<string>();
 
   (fields || []).forEach((field) => {
     const fieldKey = normalizeOptionValue(field?.key);
     if (!fieldKey) return;
 
     if (field.type === FieldType.USER) {
-      relationOptions[fieldKey] = profileOptions;
+      // فهرست اصلیِ کاربران فقط افراد فعال را نگه می‌دارد تا نتوان یک کاربر
+      // غیرفعال را برای رکورد تازه انتخاب کرد. اما مقدارِ ثبت‌شده روی ردیف‌های
+      // قدیمی باید همچنان با نام همان شخص دیده شود؛ به همین دلیل شناسه‌های
+      // موجود در این صفحه را جداگانه و دقیق واکشی می‌کنیم.
+      userFieldKeys.add(fieldKey);
+      (rows || []).forEach((row: any) => {
+        getRowFieldValues(row, fieldKey).forEach((recordId) => {
+          if (!requestsByModule.has('profiles')) requestsByModule.set('profiles', new Set<string>());
+          requestsByModule.get('profiles')!.add(recordId);
+          const fieldEntries = fieldTargets.get(fieldKey) || [];
+          fieldEntries.push({ moduleId: 'profiles', recordId });
+          fieldTargets.set(fieldKey, fieldEntries);
+        });
+      });
       return;
     }
 
@@ -464,6 +478,33 @@ export const hydrateModuleListRelationOptionsForRows = async (
       }
     });
     relationOptions[fieldKey] = Array.from(merged.values());
+  });
+
+  // فیلدهای سیستمی مانند «ایجادکننده» ممکن است از گزینهٔ عمومی profiles
+  // استفاده کنند. نام کاربران غیرفعالِ موجود در همین ردیف‌ها را به همان
+  // نقشه اضافه می‌کنیم، بدون آن‌که allUsers (فهرست قابل انتساب) تغییر کند.
+  const resolvedProfiles = new Map(
+    profileOptions.map((option: any) => [normalizeOptionValue(option?.value), option] as const),
+  );
+  fieldTargets.forEach((entries) => {
+    entries
+      .filter((entry) => entry.moduleId === 'profiles')
+      .forEach((entry) => {
+        const recordId = normalizeOptionValue(entry.recordId);
+        if (!recordId || resolvedProfiles.has(recordId)) return;
+        const label = String(labelMap[buildRecordReferenceKey('profiles', recordId)] || 'کاربر مرتبط').trim();
+        resolvedProfiles.set(recordId, {
+          label,
+          value: recordId,
+          module: 'profiles',
+          searchText: label.toLowerCase(),
+          inactiveHistorical: true,
+        });
+      });
+  });
+  relationOptions.profiles = Array.from(resolvedProfiles.values());
+  userFieldKeys.forEach((fieldKey) => {
+    relationOptions[fieldKey] = Array.from(resolvedProfiles.values());
   });
 
   return relationOptions;

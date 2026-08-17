@@ -1,10 +1,25 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { customerModule } from '../modules/customerConfig';
 import { cashBankOperationsConfig } from '../modules/cashBankOperationsConfig';
 import { FieldNature, FieldType, type ModuleDefinition } from '../types';
-import { buildModuleListOptionPlan, getModuleListSelectableFields, getModuleListVisibleFields } from './moduleListOptions';
+import {
+  buildModuleListOptionPlan,
+  getModuleListSelectableFields,
+  getModuleListVisibleFields,
+  hydrateModuleListRelationOptionsForRows,
+} from './moduleListOptions';
+import { fetchRecordReferenceLabels } from './recordReference';
+
+vi.mock('./recordReference', () => ({
+  buildRecordReferenceKey: (moduleId?: string, recordId?: string) => `${String(moduleId || '').trim()}:${String(recordId || '').trim()}`,
+  fetchRecordReferenceLabels: vi.fn(),
+}));
 
 describe('buildModuleListOptionPlan', () => {
+  beforeEach(() => {
+    vi.mocked(fetchRecordReferenceLabels).mockReset();
+  });
+
   it('keeps initial list preload limited to visible list fields', () => {
     const plan = buildModuleListOptionPlan(customerModule);
 
@@ -88,5 +103,30 @@ describe('buildModuleListOptionPlan', () => {
     expect(selectableKeys).not.toContain('template_field_values');
     expect(selectableKeys).not.toContain('template_schema_snapshot');
     expect(getModuleListVisibleFields(moduleConfig, ['template_field_values', 'template_schema_snapshot', 'name']).map((field) => field.key)).toEqual(['name']);
+  });
+
+  it('keeps an inactive user named on historical rows without adding them to assignable users', async () => {
+    vi.mocked(fetchRecordReferenceLabels).mockResolvedValue({
+      'profiles:user-inactive': 'کاربر غیرفعال',
+    });
+
+    const options = await hydrateModuleListRelationOptionsForRows(
+      {} as any,
+      [{ key: 'created_by', type: FieldType.USER, labels: { fa: 'ایجادکننده' } }],
+      [{ created_by: 'user-inactive' }],
+      {
+        users: [{ id: 'user-active', full_name: 'کاربر فعال' }],
+        roles: [],
+      },
+    );
+
+    expect(options.created_by).toEqual(expect.arrayContaining([
+      expect.objectContaining({ value: 'user-inactive', label: 'کاربر غیرفعال' }),
+      expect.objectContaining({ value: 'user-active', label: 'کاربر فعال' }),
+    ]));
+    expect(options.profiles).toEqual(expect.arrayContaining([
+      expect.objectContaining({ value: 'user-active', label: 'کاربر فعال' }),
+      expect.objectContaining({ value: 'user-inactive', label: 'کاربر غیرفعال', inactiveHistorical: true }),
+    ]));
   });
 });

@@ -1102,7 +1102,7 @@ const Dashboard: React.FC = () => {
   const handleDashboardCapabilitiesChange = useCallback((next: AiComposerCapability[]) => {
     const normalizedNext = normalizeAiComposerCapabilities(next);
     setDashboardAiCapabilities(normalizedNext);
-    if (normalizedNext.includes('text_chat')) {
+    if (normalizedNext.includes('free_chat')) {
       setDashboardMediaSourceImages([]);
     }
     if (normalizedNext.includes('process_operation') || !normalizedNext.includes('record_creation')) {

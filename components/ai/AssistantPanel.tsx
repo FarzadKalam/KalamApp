@@ -653,7 +653,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     if (Object.prototype.hasOwnProperty.call(prefs, 'currentModelOverride')) {
       modelOverrideRef.current = String(prefs.currentModelOverride || '').trim() || null;
     }
-    if (preferenceCapabilities?.includes('text_chat')) {
+    if (preferenceCapabilities?.includes('free_chat')) {
       setProcessOperationMode(false);
       setRecordCreationTargetModuleId(null);
       setMediaSourceImages([]);
@@ -838,7 +838,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const shouldUseTaskBundle = !imageMode && !videoMode && (bundleInputs.length > 0 || workflowCapabilityCount > 1);
   const handleComposerCapabilitiesChange = useCallback((next: AiComposerCapability[]) => {
     const normalizedNext = normalizeAiComposerCapabilities(next);
-    const entersFreeChat = normalizedNext.includes('text_chat') && !selectedCapabilities.includes('text_chat');
+    const entersFreeChat = normalizedNext.includes('free_chat') && !selectedCapabilities.includes('free_chat');
     setSelectedCapabilities(normalizedNext);
     setAutoSuggestedCapabilities([]);
     if (entersFreeChat) {
@@ -854,7 +854,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     }
     const wantsProcessOperation = normalizedNext.includes('process_operation');
     setProcessOperationMode(wantsProcessOperation);
-    if (normalizedNext.includes('text_chat')) setPendingAiAction(null);
+    if (normalizedNext.includes('free_chat')) setPendingAiAction(null);
     if (!normalizedNext.includes('record_creation')) {
       setRecordCreationTargetModuleId(null);
     }
@@ -1604,14 +1604,14 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     setEditingThreadTitle(false);
     setPendingAiAction(null);
     const nextInitialCapabilities = normalizeInitialCapabilities(initialCapabilities);
-    const startsInTextChatMode = nextInitialCapabilities.includes('text_chat');
+    const startsInFreeChatMode = nextInitialCapabilities.includes('free_chat');
     setSelectedCapabilities(nextInitialCapabilities);
     setAutoSuggestedCapabilities([]);
-    setRecordCreationTargetModuleId(startsInTextChatMode ? null : String(initialRecordCreationTargetModuleId || '').trim() || null);
+    setRecordCreationTargetModuleId(startsInFreeChatMode ? null : String(initialRecordCreationTargetModuleId || '').trim() || null);
     setProcessOperationMode(nextInitialCapabilities.includes('process_operation'));
     setMediaSettings(initialMediaSettings && typeof initialMediaSettings === 'object' ? initialMediaSettings : {});
-    setMediaSourceImages(startsInTextChatMode ? [] : sanitizeMediaSourceImagesForPreferences(Array.isArray(initialMediaSourceImages) ? initialMediaSourceImages : []));
-    const seededFiles = (startsInTextChatMode
+    setMediaSourceImages(startsInFreeChatMode ? [] : sanitizeMediaSourceImagesForPreferences(Array.isArray(initialMediaSourceImages) ? initialMediaSourceImages : []));
+    const seededFiles = (startsInFreeChatMode
       ? []
       : (Array.isArray(initialFiles) ? initialFiles : []).concat(initialFile?.fileName ? [initialFile] : []))
       .filter((item): item is AiUploadedFilePrompt & { message?: string | null } => Boolean(item?.fileName));
@@ -2526,11 +2526,14 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         return;
       }
       const serverMessages = Array.isArray(data?.messages) ? data.messages as ChatMessage[] : [];
-      if (serverMessages.length) {
+      const hasVisibleAssistantReply = serverMessages.some((item) => item?.role === 'assistant');
+      if (serverMessages.length && hasVisibleAssistantReply) {
         setMessages(serverMessages);
       } else {
         setMessages((prev) => [
-          ...prev.filter((item) => item.id !== thinkingMessage.id),
+          ...(serverMessages.length
+            ? serverMessages
+            : prev.filter((item) => item.id !== thinkingMessage.id)),
           {
             id: data.messageId || `assistant-bundle-${Date.now()}`,
             role: 'assistant',

@@ -300,11 +300,17 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   const taskModuleMetaLabel = relatedModuleTitle || categoryLabel || moduleConfig?.titles?.fa || 'فعالیت';
 
   const renderAssignee = () => {
+    const assigneeId = String(cardItem?.assignee_id || '').trim();
+    const historicalAssigneeLabel = assigneeId
+      ? (relationOptions.assignee_id || relationOptions.profiles || [])
+          .find((option: any) => String(option?.value || '').trim() === assigneeId)?.label || null
+      : null;
     return (
       <AssigneeAvatarDisplay
         source={cardItem}
         allUsers={allUsers}
         allRoles={allRoles}
+        explicitLabel={historicalAssigneeLabel}
         avatarSize={18}
         className="flex items-center gap-1 min-w-0"
         labelClassName="text-[10px] text-gray-600 dark:text-gray-300 truncate max-w-[90px]"

@@ -1379,11 +1379,17 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       if (deferredDataLoading) {
         return renderDeferredAssigneePlaceholder();
       }
+      const assigneeId = String(record?.assignee_id || '').trim();
+      const historicalAssigneeLabel = assigneeId
+        ? (relationOptions.assignee_id || relationOptions.profiles || [])
+            .find((option: any) => String(option?.value || '').trim() === assigneeId)?.label || null
+        : null;
       return (
         <AssigneeAvatarDisplay
           source={record}
           allUsers={allUsers}
           allRoles={allRoles}
+          explicitLabel={historicalAssigneeLabel}
           avatarSize="small"
           className="flex min-h-[24px] items-center gap-1 min-w-0"
           labelClassName="text-[10px] text-gray-600 dark:text-gray-300 truncate max-w-[80px]"

@@ -6,7 +6,7 @@ import AiCapabilityComposerActions from './AiCapabilityComposerActions';
 describe('AiCapabilityComposerActions', () => {
   afterEach(() => cleanup());
 
-  it('shows text chat first and keeps it exclusive from automatic and specialized operators', async () => {
+  it('keeps text chat first and adds free chat as the final, separate operator', async () => {
     const onChange = vi.fn();
     const { rerender } = render(
       <AiCapabilityComposerActions
@@ -21,6 +21,10 @@ describe('AiCapabilityComposerActions', () => {
     const textChatLabel = await screen.findByText('گفتگوی متنی');
     const operatorList = textChatLabel.closest('label')?.parentElement;
     expect(operatorList?.querySelector('label')?.textContent).toContain('گفتگوی متنی');
+    const freeChatLabel = await screen.findByText('گفتگوی آزاد');
+    const capabilityLabels = Array.from(document.querySelectorAll('label'))
+      .filter((label) => label.textContent?.includes('گفتگوی متنی') || label.textContent?.includes('گفتگوی آزاد') || label.textContent?.includes('تحلیل اسناد'));
+    expect(capabilityLabels.at(-1)?.textContent).toContain('گفتگوی آزاد');
 
     fireEvent.click(textChatLabel.closest('label')?.querySelector('input[type="checkbox"]') as HTMLInputElement);
     expect(onChange).toHaveBeenLastCalledWith(['text_chat']);
@@ -36,6 +40,8 @@ describe('AiCapabilityComposerActions', () => {
     const documentLabel = await screen.findByText('تحلیل اسناد');
     fireEvent.click(documentLabel.closest('label')?.querySelector('input[type="checkbox"]') as HTMLInputElement);
     expect(onChange).toHaveBeenLastCalledWith(['document_analysis']);
+    fireEvent.click(freeChatLabel.closest('label')?.querySelector('input[type="checkbox"]') as HTMLInputElement);
+    expect(onChange).toHaveBeenLastCalledWith(['free_chat']);
     fireEvent.click(document.querySelector('button.ant-drawer-close') as HTMLButtonElement);
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });

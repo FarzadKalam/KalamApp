@@ -24,8 +24,9 @@ import { getOtpErrorMessage, normalizeOtpToken, verifyPhoneChangeOtp } from '../
 import { normalizeIranMobile } from '../utils/phoneNumber';
 import { getPreferredRelationTargetField } from '../utils/relationTargetField';
 import { fetchCurrentUserRoleContext } from '../utils/permissions';
-import { fetchSessionBootstrap, getCachedAuthUser } from '../utils/sessionCache';
+import { clearSessionBootstrapCache, fetchSessionBootstrap, getCachedAuthUser } from '../utils/sessionCache';
 import { clearReferenceDataCache } from '../utils/referenceData';
+import { clearIdentityDirectoryCache } from '../utils/identityDirectory';
 import { SOFTWARE_ROLE_OPTIONS, canManageSuperAdminByRoleContext, canManageUsersByRoleContext } from '../utils/softwareRoles';
 import PhoneActionsPopover from '../components/PhoneActionsPopover';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
@@ -412,8 +413,16 @@ const ProfilePage: React.FC = () => {
             const { error } = await supabase.from('profiles').update({ is_active: checked }).eq('id', record.id);
             if (error) throw error;
             clearReferenceDataCache();
+            clearIdentityDirectoryCache(currentOrgId || record.org_id || null);
+            if (String(record.id) === String(currentUserId || '')) {
+                clearSessionBootstrapCache();
+            }
             setRecord((prev: any) => ({ ...(prev || {}), is_active: checked }));
-            message.success('وضعیت کاربر بروزرسانی شد');
+            message.success(
+                checked
+                    ? 'کاربر فعال شد.'
+                    : 'دسترسی کاربر غیرفعال شد؛ سوابق، فعالیت‌ها، ترددها و ارتباط رکوردهای او حفظ می‌شوند.'
+            );
         } catch (error: any) {
             message.error(toFaErrorMessage(error, 'بروزرسانی وضعیت ناموفق بود.'));
         } finally {
@@ -491,6 +500,10 @@ const ProfilePage: React.FC = () => {
                 }).eq('id', record.id);
                 if (error) throw error;
                 clearReferenceDataCache();
+                clearIdentityDirectoryCache(currentOrgId || record.org_id || null);
+                if (String(record.id) === String(currentUserId || '')) {
+                    clearSessionBootstrapCache();
+                }
 
                 if (values.password) {
                     const authUser = await getCachedAuthUser(supabase);

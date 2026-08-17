@@ -51,6 +51,7 @@ vi.mock('./AiCapabilityComposerActions', async () => {
     { 'data-testid': 'ai-operator-actions' },
     React.createElement('div', { 'data-testid': 'selected-capabilities' }, (props.selected || []).join(',')),
     button('cap-text_chat', () => props.onChange(['text_chat'])),
+    button('cap-free_chat', () => props.onChange(['free_chat'])),
     button('cap-web_search', () => props.onChange(['web_search'])),
     button('cap-deep_reasoning', () => props.onChange(['deep_reasoning'])),
     button('cap-legal_assistant', () => props.onChange(['legal_assistant', 'web_search', 'deep_reasoning'])),
@@ -92,6 +93,7 @@ vi.mock('./AiCapabilityComposerActions', async () => {
     default: MockActions,
     normalizeAiComposerCapabilities: (items: string[]) => {
       const normalized = Array.from(new Set(items || []));
+      if (normalized.includes('free_chat')) return ['free_chat'];
       return normalized.includes('text_chat') ? ['text_chat'] : normalized;
     },
   };
@@ -326,6 +328,19 @@ describe('AssistantPanel AI operators', () => {
     expect(findBody('suggest_auto_capabilities')).toBeFalsy();
   });
 
+  it('uses free chat independently and sends its explicit no-organization mode to the server', async () => {
+    await renderPanel();
+    fireEvent.click(screen.getAllByText('cap-free_chat')[0]);
+    await waitFor(() => expect(screen.getByTestId('selected-capabilities')).toHaveTextContent('free_chat'));
+    await typeAndSend('فقط یک گفتگوی آزاد معمولی', 'ارسال');
+
+    await waitFor(() => expect(findFetchBody('chat_stream')).toBeTruthy());
+    const body = findFetchBody('chat_stream') as any;
+    expect(body?.capability).toBe('dashboard_chat');
+    expect(body?.capabilities).toEqual(['free_chat']);
+    expect(findBody('suggest_auto_capabilities')).toBeFalsy();
+  });
+
   it('does not generate an image automatically when the user only asks for an image prompt', async () => {
     await renderPanel();
     await typeAndSend('یک پرامپت برای تولید تصویر بهم بده', 'ارسال');
@@ -389,7 +404,7 @@ describe('AssistantPanel AI operators', () => {
     fireEvent.click(screen.getAllByText('cap-voice_input')[0]);
     await waitFor(() => expect(screen.getByTestId('selected-capabilities')).toHaveTextContent('voice_input'));
     fireEvent.click(screen.getAllByText('send-voice')[0]);
-    expect(screen.getAllByText(/ویس/).length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.getAllByText(/فایل صوتی/).length).toBeGreaterThan(0));
     await typeAndSend('این ویس را بررسی کن', 'ارسال');
     await waitFor(() => expect(findBody('run_task_bundle')).toBeTruthy());
     const body = findBody('run_task_bundle');
@@ -426,6 +441,35 @@ describe('AssistantPanel AI operators', () => {
 
     await waitFor(() => expect(findBody('run_task_bundle')).toBeTruthy());
     await waitFor(() => expect(screen.getByText('تبدیل صوت به متن ناموفق بود.')).toBeInTheDocument());
+    expect(screen.getByText('ویس: voice.webm')).toBeInTheDocument();
+  });
+
+  it('keeps a visible answer when an older task-bundle response contains only the persisted user turn', async () => {
+    await renderPanel();
+    invokeMock.mockImplementation(async (_functionName: string, options?: any) => {
+      const action = options?.body?.action;
+      if (action === 'suggest_auto_capabilities') {
+        return { data: { success: true, capabilities: [], targetModuleId: null }, error: null };
+      }
+      if (action === 'run_task_bundle') {
+        return {
+          data: {
+            success: true,
+            threadId: 'voice-thread-2',
+            answer: 'متن تماس با موفقیت تحلیل شد.',
+            messages: [{ id: 'voice-user-2', role: 'user', content: 'ویس: voice.webm' }],
+          },
+          error: null,
+        };
+      }
+      return { data: { success: true }, error: null };
+    });
+
+    fireEvent.click(screen.getAllByText('send-voice')[0]);
+    await typeAndSend('ویس را بررسی کن', 'ارسال');
+
+    await waitFor(() => expect(findBody('run_task_bundle')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('متن تماس با موفقیت تحلیل شد.')).toBeInTheDocument());
     expect(screen.getByText('ویس: voice.webm')).toBeInTheDocument();
   });
 

@@ -23,6 +23,7 @@ import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 
 export type AiComposerCapability =
   | 'text_chat'
+  | 'free_chat'
   | 'document_analysis'
   | 'voice_input'
   | 'voice_output'
@@ -71,7 +72,7 @@ const CAPABILITY_META: Array<{
   icon: React.ReactNode;
   kind: 'toggle' | 'inline';
 }> = [
-  { key: 'text_chat', label: 'گفتگوی آزاد', description: 'گفتگوی خام با هوش مصنوعی بدون استفاده از دانش سازمان', icon: <MessageOutlined />, kind: 'toggle' },
+  { key: 'text_chat', label: 'گفتگوی متنی', description: 'گفتگوی مستقیم بدون تصمیم‌گیری خودکار', icon: <MessageOutlined />, kind: 'toggle' },
   { key: 'document_analysis', label: 'تحلیل اسناد', description: 'تحلیل فایل، رسید، عکس یا سند', icon: <FileSearchOutlined />, kind: 'inline' },
   { key: 'voice_input', label: 'تحلیل صدا', description: 'ضبط و تبدیل فایل صوتی به متن', icon: <AudioOutlined />, kind: 'inline' },
   { key: 'voice_output', label: 'تولید صدا', description: 'تبدیل متن به فایل صوتی', icon: <SoundOutlined />, kind: 'toggle' },
@@ -83,6 +84,7 @@ const CAPABILITY_META: Array<{
   { key: 'legal_assistant', label: 'دستیار حقوقی', description: 'پاسخ حقوقی با تکیه بر اسناد و وب', icon: <SafetyCertificateOutlined />, kind: 'toggle' },
   { key: 'record_creation', label: 'ایجاد/ویرایش رکورد', description: 'پیشنهاد ایجاد یا ویرایش فاکتور، هزینه، مشتری، محصول و...', icon: <PlusOutlined />, kind: 'toggle' },
   { key: 'process_operation', label: 'اقدام فرآیندی', description: 'پیشنهاد اجرای فرآیند یا تغییر مرحله', icon: <ThunderboltOutlined />, kind: 'toggle' },
+  { key: 'free_chat', label: 'گفتگوی آزاد', description: 'گفتگوی خام با هوش مصنوعی بدون استفاده از دانش سازمان', icon: <MessageOutlined />, kind: 'toggle' },
 ];
 
 const isCapabilityUsable = (availability: CapabilityAvailability | undefined, key: AiComposerCapability) => {
@@ -96,6 +98,7 @@ const isCapabilityUsable = (availability: CapabilityAvailability | undefined, ke
 
 export const normalizeAiComposerCapabilities = (items: AiComposerCapability[]): AiComposerCapability[] => {
   const normalized = Array.from(new Set((items || []).filter(Boolean)));
+  if (normalized.includes('free_chat')) return ['free_chat'];
   return normalized.includes('text_chat') ? ['text_chat'] : normalized;
 };
 
@@ -163,10 +166,11 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
 
   const setCapability = (key: AiComposerCapability, checked: boolean) => {
     const base = autoMode && autoSuggested.length > 0 ? autoSuggested : selected;
-    let next = key === 'text_chat' && checked
-      ? ['text_chat'] as AiComposerCapability[]
+    const isExclusiveChatMode = key === 'text_chat' || key === 'free_chat';
+    let next = isExclusiveChatMode && checked
+      ? [key] as AiComposerCapability[]
       : checked
-      ? normalizeAiComposerCapabilities([...base.filter((item) => item !== 'text_chat'), key])
+      ? normalizeAiComposerCapabilities([...base.filter((item) => item !== 'text_chat' && item !== 'free_chat'), key])
       : base.filter((item) => item !== key);
     if (key === 'legal_assistant' && checked) {
       next = normalizeAiComposerCapabilities([...next, 'web_search', 'deep_reasoning']);

@@ -6447,7 +6447,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     ? body.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean)
     : [];
   const selectedCapabilitySet = new Set(selectedCapabilities);
-  const freeChatMode = selectedCapabilitySet.has('text_chat');
+  const freeChatMode = selectedCapabilitySet.has('free_chat');
   const capability = requestedCapability
     || (selectedCapabilitySet.has('legal_assistant') ? 'legal_assistant' : '')
     || (selectedCapabilitySet.has('deep_reasoning') ? 'deep_reasoning' : '')
@@ -8032,9 +8032,15 @@ const transcribeTaskBundleVoices = async (
     const audioData = String(input.audio.data || '');
     const mimeType = String(input.audio.mimeType || 'audio/webm');
     const filename = String(input.audio.filename || 'voice.webm');
+    // Call recordings are often considerably larger than browser snippets.
+    // Sending those blobs to a general chat model first causes avoidable
+    // timeouts before the dedicated STT fallback gets a chance to run.
+    const shouldUseDedicatedTranscription = options.preferDedicatedTranscription
+      || input.type === 'audio'
+      || audioData.length > 1_500_000;
     let result: any = null;
     let decisionEngineError = '';
-    if (options.preferDedicatedTranscription) {
+    if (shouldUseDedicatedTranscription) {
       const specializedProviderConfig = await resolveSpecializedProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'voice_input');
       result = await callAudioTranscription(specializedProviderConfig, audioData, mimeType, filename);
       result.source = 'specialized_voice_engine';
@@ -8685,7 +8691,12 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     if (data?.answer) finalAnswerParts.push(String(data.answer));
   }
 
-  if (!collectedResults.length) {
+  // تحلیل یک مرحلهٔ داخلی است و نباید تنها خروجی باندل باشد؛ در غیر این صورت
+  // صوتِ VoIP پس از فیلترشدن پیام داخلی، پاسخی قابل‌نمایش برای کاربر ندارد.
+  const needsVisibleFinalAnswer = !selectedCapabilitySet.has('record_creation')
+    && !selectedCapabilitySet.has('process_operation')
+    && !selectedCapabilitySet.has('document_generation');
+  if (needsVisibleFinalAnswer) {
     const data = await runStep('chat', handleChat(supabaseUrl, serviceRoleKey, authContext, {
       ...body,
       action: 'chat',
