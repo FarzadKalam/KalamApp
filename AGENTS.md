@@ -98,7 +98,9 @@ const title = getRecordTitle(record, moduleConfig);
 - آیا `search_path` برای functions تعریف شده؟
 
 #### Production Drift
-بررسی drift بین migration repo و Supabase production فقط دستی انجام می‌شود. Agent نباید دستورهای remote migration/drift مثل `npm run db:migrate:server:list` یا اسکریپت‌های نیازمند پسورد SSH/سرور را اجرا کند. اگر تغییر دیتابیس یا migration داریم، فقط به کاربر یادآوری کن که بررسی drift production باید دستی انجام شود و نتیجه‌اش در صورت نیاز به agent اعلام شود.
+بررسی drift بین migration repo و Supabase production در حالت عادی فقط دستی انجام می‌شود و Agent نباید خودسرانه دستورهای remote migration/drift یا اسکریپت‌های نیازمند SSH/سرور را اجرا کند.
+
+**استثنای تأییدشده توسط کاربر:** اگر کاربر در همان گفتگو صریحاً اجازهٔ استقرار migration با کلید deploy را بدهد، Agent مجاز است migrationها را با این ترتیب مستقر کند: ابتدا فهرست و hash فایل‌های مشخص را بررسی کند، فقط همان فایل‌ها را به‌ترتیب phase اجرا کند، در اولین خطا متوقف شود و نتیجهٔ هر فایل را گزارش کند. در این حالت اجرای کورِ همهٔ migrationهای pending ممنوع است، مگر کاربر صریحاً همان مجموعه را تأیید کرده باشد. اگر history migration خالی یا نامطمئن است، Agent باید به‌جای حدس‌زدن baseline، فقط فایل‌های جدید و تأییدشده را با `-SqlFiles` اجرا کند. پس از اجرا نیز باید سلامت migrationهای اعمال‌شده و endpointهای وابسته را بررسی کند. هیچ رمز، کلید یا مقدار حساس نباید در خروجی یا گزارش نمایش داده شود.
 
 ---
 
