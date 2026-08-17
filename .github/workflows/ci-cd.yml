@@ -105,7 +105,12 @@ jobs:
           SERVER_PORT: ${{ secrets.SERVER_PORT }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
         run: |
-          scp -P "$SERVER_PORT" dist.tar.gz "$SERVER_USER@$SERVER_HOST:/tmp/kalamapp-dist.tar.gz"
+          timeout 120 scp \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=2 \
+            -P "$SERVER_PORT" dist.tar.gz "$SERVER_USER@$SERVER_HOST:/tmp/kalamapp-dist.tar.gz"
 
       - name: Activate release
         env:
@@ -115,7 +120,12 @@ jobs:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
           # Note: SSH does not forward env vars by default, so we pass DEPLOY_PATH explicitly.
-          ssh -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "DEPLOY_PATH='$DEPLOY_PATH' bash -s" << 'EOF'
+          timeout 120 ssh \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=2 \
+            -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "DEPLOY_PATH='$DEPLOY_PATH' bash -s" << 'EOF'
           set -euo pipefail
 
           DEPLOY_PATH="${DEPLOY_PATH:-/var/www/kalamapp}"

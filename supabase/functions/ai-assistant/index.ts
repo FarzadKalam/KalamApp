@@ -6,6 +6,7 @@ import {
   type AgentExecutionPolicy,
 } from '../_shared/ai-agent-contract.ts';
 import { resolvePersianCalendarContext } from '../_shared/persian-calendar-resolver.ts';
+import { PEYDA_REGULAR_WOFF2_BASE64 } from './peyda-font.ts';
 
 type AssistantAction =
   | 'chat'
@@ -41,6 +42,9 @@ type AssistantAction =
   | 'toggle_thread_pin'
   | 'compress_thread_context'
   | 'share_thread'
+  | 'list_user_memories'
+  | 'save_user_memory'
+  | 'delete_user_memory'
   | 'transcribe_voice'
   | 'generate_voice_output'
   | 'generate_image'
@@ -802,6 +806,88 @@ const restDelete = async (
     throw new Error(typeof parsed === 'string' ? parsed : JSON.stringify(parsed || {}));
   }
   return Array.isArray(parsed) ? parsed : [];
+};
+
+const AI_USER_MEMORY_MAX_ITEMS = 40;
+const AI_USER_MEMORY_CONTEXT_ITEMS = 15;
+const AI_USER_MEMORY_CONTEXT_CHARS = 4500;
+const AI_USER_MEMORY_MAX_CHARS = 600;
+
+const normalizeAiUserMemoryContent = (value: any) => String(value || '')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .slice(0, AI_USER_MEMORY_MAX_CHARS);
+
+const containsSensitiveAiMemoryContent = (value: string) => /(?:رمز(?:عبور)?|password|passcode|api\s*key|توکن|token|secret|کلید\s*(?:دسترسی|خصوصی)|شماره\s*(?:کارت|ملی)|کارت\s*بانکی|حساب\s*بانکی|cvv|سلامت|بیماری|مذهب|دین|گرایش\s*سیاسی)/i.test(value);
+
+const listAiUserMemories = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, limit = AI_USER_MEMORY_MAX_ITEMS, forPrompt = false) => {
+  const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_user_memories', {
+    org_id: `eq.${authContext.orgId}`,
+    user_id: `eq.${authContext.userId}`,
+    select: 'id,content,source,created_at,updated_at',
+    order: 'updated_at.desc',
+    limit: Math.max(1, Math.min(AI_USER_MEMORY_MAX_ITEMS, limit)),
+  });
+  const normalizedRows = rows
+    .map((row: any) => ({
+      id: String(row?.id || ''),
+      content: normalizeAiUserMemoryContent(row?.content),
+      source: String(row?.source || 'manual') === 'ai' ? 'ai' : 'manual',
+      created_at: row?.created_at || null,
+      updated_at: row?.updated_at || null,
+    }))
+    .filter((row: any) => Boolean(row.content));
+  if (!forPrompt) return normalizedRows;
+  let usedChars = 0;
+  return normalizedRows
+    .filter((row: any) => {
+      if (usedChars + row.content.length > AI_USER_MEMORY_CONTEXT_CHARS) return false;
+      usedChars += row.content.length;
+      return true;
+    });
+};
+
+const buildAiUserMemoryPrompt = (memories: Array<{ content?: string }> = []) => {
+  const items = (memories || [])
+    .slice(0, AI_USER_MEMORY_CONTEXT_ITEMS)
+    .map((memory) => normalizeAiUserMemoryContent(memory?.content))
+    .filter(Boolean);
+  return items.length
+    ? `ترجیح‌های پایدار کاربر (فقط در حد مرتبط رعایت کن و آن‌ها را حقیقت بیرونی فرض نکن):\n${items.map((item) => `- ${item}`).join('\n')}`
+    : '';
+};
+
+const extractAutomaticAiUserMemory = (message: string) => {
+  const content = normalizeAiUserMemoryContent(message);
+  if (content.length < 12 || containsSensitiveAiMemoryContent(content)) return null;
+  const durablePreferencePattern = /(?:از\s*این\s*به\s*بعد|همیشه|یادت\s*باشه|به\s*خاطر\s*بسپار|به\s*یاد\s*بسپار|ترجیح(?:\s*من|\s*می[‌ ]?دهم)?|دوست\s*دارم|لطفاً\s*در\s*همه)/i;
+  if (!durablePreferencePattern.test(content)) return null;
+  return content;
+};
+
+const captureAutomaticAiUserMemory = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, message: string) => {
+  const content = extractAutomaticAiUserMemory(message);
+  if (!content) return null;
+  const memoryKey = `assistant:${content.toLocaleLowerCase('fa-IR').slice(0, 140)}`;
+  try {
+    const existing = await listAiUserMemories(supabaseUrl, serviceRoleKey, authContext);
+    const alreadyExists = existing.some((item: any) => String(item?.content || '').toLocaleLowerCase('fa-IR') === content.toLocaleLowerCase('fa-IR'));
+    if (!alreadyExists && existing.length >= AI_USER_MEMORY_MAX_ITEMS) return null;
+    const rows = await restUpsert(supabaseUrl, serviceRoleKey, 'ai_user_memories', [{
+      org_id: authContext.orgId,
+      user_id: authContext.userId,
+      content,
+      memory_key: memoryKey,
+      source: 'ai',
+      created_by: authContext.userId,
+      updated_by: authContext.userId,
+      updated_at: new Date().toISOString(),
+    }], 'org_id,user_id,memory_key');
+    return rows[0] || null;
+  } catch (error) {
+    console.warn('AI user memory capture skipped', error);
+    return null;
+  }
 };
 
 const restRpc = async (
@@ -2962,8 +3048,37 @@ const buildPromptMessages = (
     compressedContext?: any;
     calendarContext?: any;
     authoritativeProcessContext?: any;
+    userMemories?: Array<{ content?: string; source?: string }>;
+    freeChatMode?: boolean;
   } = {},
 ) => {
+  const userMemories = (options.userMemories || [])
+    .slice(0, AI_USER_MEMORY_CONTEXT_ITEMS)
+    .map((memory) => normalizeAiUserMemoryContent(memory?.content))
+    .filter(Boolean);
+  if (options.freeChatMode) {
+    const freeChatHistory = (historyRows || [])
+      .filter((item) => ['user', 'assistant'].includes(String(item?.role || '')))
+      .slice(-12)
+      .map((item) => ({
+        role: String(item.role),
+        content: String(item.content || '').slice(0, 3000),
+      }));
+    return [
+      {
+        role: 'system',
+        content: 'شما در حالت گفتگوی آزاد هستید. فقط به پرسش کاربر، دانش عمومی خود و حافظهٔ شخصیِ مجاز زیر تکیه کنید. از دانش، اسناد، رکوردها، گزارش‌ها، نام شرکت، کاربران، نقش‌ها، تنظیمات، فرآیندها، صفحهٔ فعلی یا هر دادهٔ سازمانی استفاده نکنید و دربارهٔ آن‌ها ادعا نکنید. اگر کاربر به اطلاعات سازمانی نیاز دارد، از او بخواهید حالت گفتگوی آزاد را خاموش کند. پاسخ‌ها فارسی، روشن و کوتاه باشند. حافظه فقط برای رعایت ترجیح‌های پایدار کاربر است و نباید به‌عنوان حقیقت بیرونی تلقی شود.',
+      },
+      ...freeChatHistory,
+      {
+        role: 'user',
+        content: JSON.stringify({
+          personal_memory: userMemories,
+          user_question: message,
+        }, null, 2),
+      },
+    ];
+  }
   const knowledge = knowledgeChunks.map((chunk, index) => ({
     index: index + 1,
     id: chunk.id,
@@ -3017,6 +3132,7 @@ const buildPromptMessages = (
     ai_instructions: aiInstructions,
     operational_instructions: operationalInstructions,
     organization_knowledge: otherKnowledge,
+    personal_memory: userMemories,
     user_question: message,
   };
 
@@ -3044,7 +3160,7 @@ const buildPromptMessages = (
     ? ' این گفتگو در زمینهٔ یک فرآیند یا رکورد فرآیندی است. authoritative_process_context و process_guide_context منبع قطعی هستند: ابتدا فرآیند انتخاب‌شده و همان رکورد را شناسایی کن، سپس فقط بر پایهٔ مرحله‌ها، ترتیب sort_order، ماژول‌های هدف، توضیحات، مسئول‌های پیش‌فرض، موعدها، وضعیت‌های اختصاصی، فیلدهای اختصاصی و اتوماسیون‌های موجود توضیح بده. وقتی کاربر گزارش کامل، توضیح کامل، مستندات، دیاگرام یا فلوچارت فرآیند را می‌خواهد، پاسخ را کوتاه‌سازی نکن: نام و هدف الگو، همهٔ مرحله‌ها به ترتیب، مسئول یا نقش هر مرحله، زمان و مبنای زمان، فیلدها و وضعیت‌های اختصاصی، سپس هر اتوماسیون شامل trigger، شرط‌ها، اکشن‌ها و مقصد را صریح و منظم ارائه کن. در توضیح مقصد، بین مسئول همان فعالیت، مرحلهٔ قبل/بعد/خاص، نقش، کاربر و ماژول مقصد تفاوت بگذار. اطلاعات هیچ پروژه، الگو یا دستورالعمل نامرتبطی را به این فرآیند نسبت نده. اگر دادهٔ لازم در همین context نیست، صریح بگو ثبت نشده است؛ هرگز مرحله، مسئول، موعد یا دستورالعمل را حدس نزن. وقتی کاربر می‌گوید «این فرآیند» یا «این رکورد»، منظور همان فرآیند/رکورد جاری است.'
     : '';
 
-  const systemContent = `${tenantIdentity}${conversationContinuity}${recordScopeInstruction}${processGroundingInstruction} اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction}${copyableOutputInstruction}${jalaliAndReportsInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
+  const systemContent = `${tenantIdentity}${conversationContinuity}${recordScopeInstruction}${processGroundingInstruction} اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. personal_memory شامل ترجیح‌های پایدار خود همین کاربر است؛ فقط در حد مرتبط آن‌ها را رعایت کنید و آن را دادهٔ سازمان یا حقیقت بیرونی فرض نکنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction}${copyableOutputInstruction}${jalaliAndReportsInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
 
   const historyMessages = (historyRows || [])
     .filter((item) => ['user', 'assistant'].includes(String(item?.role || '')))
@@ -5519,7 +5635,7 @@ const ensureThread = async (
   supabaseUrl: string,
   serviceRoleKey: string,
   authContext: any,
-  payload: { threadId?: string | null; title?: string; pageContext?: any; contextKey?: string; provider?: string; model?: string; forceNew?: boolean; continueByContext?: boolean },
+  payload: { threadId?: string | null; title?: string; pageContext?: any; contextKey?: string; provider?: string; model?: string; forceNew?: boolean; continueByContext?: boolean; metadata?: Record<string, any> },
 ) => {
   const requestedThreadId = normalizeId(payload.threadId);
   if (requestedThreadId && isUuid(requestedThreadId)) {
@@ -5560,6 +5676,7 @@ const ensureThread = async (
       process_field_key: payload.pageContext?.processFieldKey || payload.pageContext?.context?.processFieldKey || null,
       selected_process_id: payload.pageContext?.selectedProcessId || payload.pageContext?.context?.selectedProcessId || payload.pageContext?.context?.selectedProcessGroupId || null,
       last_activity_kind: 'created',
+      ...(payload.metadata || {}),
     },
   }]);
   return inserted[0];
@@ -5945,6 +6062,60 @@ const handleSaveAgentConfirmationGrant = async (supabaseUrl: string, serviceRole
   return json(200, { success: true });
 };
 
+const handleListUserMemories = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
+  const memories = await listAiUserMemories(supabaseUrl, serviceRoleKey, authContext);
+  return json(200, { success: true, memories, maxItems: AI_USER_MEMORY_MAX_ITEMS });
+};
+
+const handleSaveUserMemory = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const content = normalizeAiUserMemoryContent(body?.content);
+  if (!content) return json(400, { success: false, message: 'متن حافظه را وارد کنید.' });
+  if (containsSensitiveAiMemoryContent(content)) {
+    return json(400, { success: false, message: 'برای حفظ حریم خصوصی، اطلاعات حساس را در حافظه هوش مصنوعی ثبت نکنید.' });
+  }
+  const requestedId = normalizeId(body?.id);
+  if (requestedId && !isUuid(requestedId)) return json(400, { success: false, message: 'حافظه انتخاب‌شده معتبر نیست.' });
+  if (requestedId) {
+    const updated = await restPatch(supabaseUrl, serviceRoleKey, 'ai_user_memories', {
+      id: `eq.${requestedId}`,
+      org_id: `eq.${authContext.orgId}`,
+      user_id: `eq.${authContext.userId}`,
+    }, {
+      content,
+      source: 'manual',
+      updated_by: authContext.userId,
+      updated_at: new Date().toISOString(),
+    });
+    if (!updated[0]) return json(404, { success: false, message: 'این مورد حافظه پیدا نشد یا به شما تعلق ندارد.' });
+    return json(200, { success: true, memory: updated[0] });
+  }
+  const existing = await listAiUserMemories(supabaseUrl, serviceRoleKey, authContext);
+  if (existing.length >= AI_USER_MEMORY_MAX_ITEMS) {
+    return json(400, { success: false, message: `حداکثر ${AI_USER_MEMORY_MAX_ITEMS.toLocaleString('fa-IR')} مورد حافظه قابل نگهداری است. برای افزودن مورد جدید، یکی از موارد قبلی را حذف کنید.` });
+  }
+  const inserted = await restInsert(supabaseUrl, serviceRoleKey, 'ai_user_memories', [{
+    org_id: authContext.orgId,
+    user_id: authContext.userId,
+    content,
+    memory_key: `manual:${crypto.randomUUID()}`,
+    source: 'manual',
+    created_by: authContext.userId,
+    updated_by: authContext.userId,
+  }]);
+  return json(200, { success: true, memory: inserted[0] || null });
+};
+
+const handleDeleteUserMemory = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const requestedId = normalizeId(body?.id);
+  if (!requestedId || !isUuid(requestedId)) return json(400, { success: false, message: 'حافظه انتخاب‌شده معتبر نیست.' });
+  await restDelete(supabaseUrl, serviceRoleKey, 'ai_user_memories', {
+    id: `eq.${requestedId}`,
+    org_id: `eq.${authContext.orgId}`,
+    user_id: `eq.${authContext.userId}`,
+  });
+  return json(200, { success: true });
+};
+
 const handleGetThread = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const requestedThreadId = normalizeId(body?.threadId);
   if (requestedThreadId && isUuid(requestedThreadId)) {
@@ -6276,11 +6447,12 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     ? body.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean)
     : [];
   const selectedCapabilitySet = new Set(selectedCapabilities);
+  const freeChatMode = selectedCapabilitySet.has('text_chat');
   const capability = requestedCapability
     || (selectedCapabilitySet.has('legal_assistant') ? 'legal_assistant' : '')
     || (selectedCapabilitySet.has('deep_reasoning') ? 'deep_reasoning' : '')
     || (rawContext.mode === 'record' ? 'record_chat' : 'dashboard_chat');
-  const contextKey = buildContextKey(rawContext);
+  const contextKey = freeChatMode ? 'free_chat' : buildContextKey(rawContext);
   const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, capability, { modelOverride: body?.modelOverride });
   const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, capability);
   for (const selectedCapability of selectedCapabilities) {
@@ -6289,29 +6461,43 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     }
   }
   const aiUsageAccess = await assertAiUsageAllowed(supabaseUrl, serviceRoleKey, authContext);
-  const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
-  const canUseKnowledge = isAiCapabilityPlanAvailable(planContext, 'document_analysis');
-  const requiresAuthoritativeProcessContext = rawContext.intent === 'process_guide'
-    || ['process_templates', 'process_runs'].includes(String(pageContext?.moduleId || '').trim());
+  const pageContext = freeChatMode
+    ? {
+        context: { route: '/ai', mode: 'page', moduleId: null, recordId: null },
+        permitted: false,
+        summary: 'گفتگوی آزاد بدون استفاده از دانش سازمان.',
+        records: [],
+        moduleId: null,
+        recordId: null,
+        relatedContexts: [],
+      }
+    : await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
+  const canUseKnowledge = !freeChatMode && isAiCapabilityPlanAvailable(planContext, 'document_analysis');
+  const requiresAuthoritativeProcessContext = !freeChatMode && (
+    rawContext.intent === 'process_guide'
+    || ['process_templates', 'process_runs'].includes(String(pageContext?.moduleId || '').trim())
+  );
   const [knowledgeChunks, companyContext, orgPeopleContext, calendarContext, authoritativeProcessContext] = await Promise.all([
     canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, message, { moduleId: pageContext.moduleId }) : Promise.resolve([]),
-    loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
-    loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, message),
-    resolvePersianCalendarContext(message),
+    freeChatMode ? Promise.resolve(null) : loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
+    freeChatMode ? Promise.resolve(null) : loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, message),
+    freeChatMode ? Promise.resolve(null) : resolvePersianCalendarContext(message),
     requiresAuthoritativeProcessContext
       ? loadAiProcessContext(supabaseUrl, serviceRoleKey, authContext, pageContext)
       : Promise.resolve(null),
   ]);
-  const [retrievedContexts, businessAnalytics] = await Promise.all([
-    fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, message, pageContext),
-    fetchFinancialAnalyticsContext(supabaseUrl, serviceRoleKey, authContext, message),
+  const [retrievedContexts, businessAnalytics, userMemories] = await Promise.all([
+    freeChatMode ? Promise.resolve([]) : fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, message, pageContext),
+    freeChatMode ? Promise.resolve(null) : fetchFinancialAnalyticsContext(supabaseUrl, serviceRoleKey, authContext, message),
+    captureAutomaticAiUserMemory(supabaseUrl, serviceRoleKey, authContext, message)
+      .then(() => listAiUserMemories(supabaseUrl, serviceRoleKey, authContext, AI_USER_MEMORY_CONTEXT_ITEMS, true)),
   ]);
 
   const orgAiSettings = providerConfig.orgAiSettings;
   const webSearchEnabled = orgAiSettings?.feature_flags?.web_search === true
     && isAiCapabilityPlanAvailable(planContext, 'web_search');
   const forceWebSearch = selectedCapabilitySet.has('web_search') || selectedCapabilitySet.has('legal_assistant');
-  const shouldSearchWeb = webSearchEnabled && (forceWebSearch || shouldTriggerWebSearch(message));
+  const shouldSearchWeb = !freeChatMode && webSearchEnabled && (forceWebSearch || shouldTriggerWebSearch(message));
   const useNativeGeminiWebSearch = body?.primaryModelOnly === true
     && shouldSearchWeb
     && supportsNativeGeminiWebSearch(providerConfig);
@@ -6323,7 +6509,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     : [];
   const nativeTools = useNativeGeminiWebSearch ? [{ googleSearch: {} }] : [];
 
-  const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
+  let thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
     threadId: body?.threadId || null,
     title: message.slice(0, 90),
     pageContext,
@@ -6331,7 +6517,21 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     provider: providerConfig.provider,
     model: providerConfig.model,
     forceNew: body?.forceNewThread === true,
+    metadata: { free_chat: freeChatMode },
   });
+  const existingThreadIsFreeChat = thread?.metadata?.free_chat === true;
+  if (thread && existingThreadIsFreeChat !== freeChatMode) {
+    thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
+      threadId: null,
+      title: message.slice(0, 90),
+      pageContext,
+      contextKey,
+      provider: providerConfig.provider,
+      model: providerConfig.model,
+      forceNew: true,
+      metadata: { free_chat: freeChatMode },
+    });
+  }
   const previousMessages = await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, thread.id, 30);
   const compressedContext = thread?.metadata?.compressed_context && typeof thread.metadata.compressed_context === 'object'
     ? thread.metadata.compressed_context
@@ -6350,6 +6550,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
       input_kind: String(body?.inputKind || body?.input_kind || 'text').trim() || 'text',
       internal_agent_step: body?.metadata?.internal_agent_step === true || body?.metadata?.internal_agent_input === true,
       capabilities: selectedCapabilities,
+      free_chat: freeChatMode,
       file: body?.file ? {
         filename: body.file?.filename || body.file?.fileName || body.file?.name || null,
         mime_type: body.file?.mimeType || body.file?.mime_type || null,
@@ -6381,6 +6582,8 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
       compressedContext,
       calendarContext,
       authoritativeProcessContext,
+      userMemories,
+      freeChatMode,
     },
   );
 
@@ -6402,6 +6605,8 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     webSearchResults,
     forceWebSearch,
     nativeTools,
+    freeChatMode,
+    userMemories,
     aiUsageAccess,
     thread,
     userMessage,
@@ -6493,6 +6698,7 @@ const patchChatThreadAfterAssistant = async (
       module_id: prepared.pageContext.moduleId || null,
       record_id: prepared.pageContext.recordId || null,
       intent: prepared.pageContext.intent || prepared.pageContext.context?.intent || null,
+      free_chat: prepared.freeChatMode === true,
       selected_process_id: prepared.pageContext.selectedProcessId || prepared.pageContext.context?.selectedProcessId || prepared.pageContext.context?.selectedProcessGroupId || null,
       model_overrides: buildThreadModelOverrides(prepared.thread, prepared.capability, aiResult?.model || prepared.providerConfig.model, prepared.body?.modelOverride),
       composer_preferences: buildThreadComposerPreferences(prepared.body, prepared.thread),
@@ -9667,12 +9873,14 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
   const canUseKnowledge = useOrganizationContext && isAiCapabilityPlanAvailable(planContext, 'document_analysis');
   const requiresAuthoritativeProcessContext = rawContext.intent === 'process_guide'
     || ['process_templates', 'process_runs'].includes(String(pageContext?.moduleId || '').trim());
-  const [companyContext, knowledgeChunks, authoritativeProcessContext] = await Promise.all([
+  const [companyContext, knowledgeChunks, authoritativeProcessContext, userMemories] = await Promise.all([
     useOrganizationContext ? loadCompanyContext(supabaseUrl, serviceRoleKey, authContext) : Promise.resolve(null),
     canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, prompt, { moduleId: pageContext.moduleId }) : Promise.resolve([]),
     requiresAuthoritativeProcessContext
       ? loadAiProcessContext(supabaseUrl, serviceRoleKey, authContext, pageContext)
       : Promise.resolve(null),
+    captureAutomaticAiUserMemory(supabaseUrl, serviceRoleKey, authContext, prompt)
+      .then(() => listAiUserMemories(supabaseUrl, serviceRoleKey, authContext, AI_USER_MEMORY_CONTEXT_ITEMS, true)),
   ]);
   const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
     threadId: body?.threadId || null,
@@ -9707,6 +9915,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
       authoritativeProcessContext,
     },
   );
+  const providerPromptWithUserMemory = [providerPrompt, buildAiUserMemoryPrompt(userMemories)].filter(Boolean).join('\n\n');
   const rawSources = Array.isArray(body?.sourceImages) ? body.sourceImages
     : Array.isArray(imageSettings.sourceImages) ? imageSettings.sourceImages
     : [];
@@ -9764,7 +9973,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
     status: 'processing',
     started_at: Date.now(),
     prompt,
-    provider_prompt: providerPrompt,
+    provider_prompt: providerPromptWithUserMemory,
     prompt_settings: promptSettings,
     context: pageContext.context,
     context_key: contextKey,
@@ -9832,7 +10041,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
           },
         },
       }).catch(() => []);
-      const imageResult = await callImageGeneration(imageProviderConfig, providerPrompt, imageCallOptions);
+      const imageResult = await callImageGeneration(imageProviderConfig, providerPromptWithUserMemory, imageCallOptions);
       const storedImage = await uploadGeneratedImage(supabaseUrl, serviceRoleKey, authContext, imageResult);
       const fileManagerResult = await registerAiGeneratedFileInFileManager(supabaseUrl, serviceRoleKey, authContext, pageContext, storedImage, {
         displayName: `تصویر هوش مصنوعی ${new Date().toISOString().slice(0, 10)}.png`,
@@ -9876,7 +10085,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
           pending_status: false,
           status: 'completed',
           prompt,
-          provider_prompt: providerPrompt,
+          provider_prompt: providerPromptWithUserMemory,
           prompt_settings: promptSettings,
           background_task: {
             ...(pendingImageMetadata.background_task || {}),
@@ -9935,7 +10144,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
           status: 'failed',
           failed: true,
           prompt,
-          provider_prompt: providerPrompt,
+          provider_prompt: providerPromptWithUserMemory,
           prompt_settings: promptSettings,
           background_task: {
             ...(pendingImageMetadata.background_task || {}),
@@ -10277,7 +10486,8 @@ const buildDocumentHtml = (spec: any) => {
   }
   return `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8" />
 <style>
-  body{font-family:Tahoma,'IRANSans',sans-serif;direction:rtl;padding:32px;color:#1f2937;line-height:1.9}
+  @font-face{font-family:'Peyda';font-style:normal;font-weight:400;src:url(data:font/woff2;base64,${PEYDA_REGULAR_WOFF2_BASE64}) format('woff2')}
+  body{font-family:'Peyda',Tahoma,'IRANSans',sans-serif;direction:rtl;padding:32px;color:#1f2937;line-height:1.9}
   h1{font-size:22px} h2{font-size:18px} h3{font-size:16px}
   table{border-collapse:collapse;width:100%;margin:12px 0}
   th{background:#f3f4f6} th,td{border:1px solid #d1d5db;padding:6px;text-align:right}
@@ -10304,29 +10514,33 @@ const buildCsvBytes = (spec: any) => {
 const buildDocxBytes = async (spec: any) => {
   const docx = await import('https://esm.sh/docx@8.5.0');
   const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType, AlignmentType } = docx as any;
+  const peydaRun = (text: any, options: Record<string, any> = {}) => new TextRun({ text: String(text || ''), font: 'Peyda', ...options });
   const children: any[] = [
-    new Paragraph({ heading: HeadingLevel.TITLE, alignment: AlignmentType.RIGHT, bidirectional: true, children: [new TextRun(String(spec.title))] }),
+    new Paragraph({ heading: HeadingLevel.TITLE, alignment: AlignmentType.RIGHT, bidirectional: true, children: [peydaRun(spec.title, { bold: true })] }),
   ];
   for (const block of spec.blocks) {
     if (!block || typeof block !== 'object') continue;
     if (block.type === 'heading') {
       const level = Number(block.level) || 2;
       const heading = level <= 1 ? HeadingLevel.HEADING_1 : level === 2 ? HeadingLevel.HEADING_2 : HeadingLevel.HEADING_3;
-      children.push(new Paragraph({ heading, alignment: AlignmentType.RIGHT, bidirectional: true, children: [new TextRun(String(block.text || ''))] }));
+      children.push(new Paragraph({ heading, alignment: AlignmentType.RIGHT, bidirectional: true, children: [peydaRun(block.text, { bold: true })] }));
     } else if (block.type === 'paragraph') {
-      children.push(new Paragraph({ alignment: AlignmentType.RIGHT, bidirectional: true, children: [new TextRun(String(block.text || ''))] }));
+      children.push(new Paragraph({ alignment: AlignmentType.RIGHT, bidirectional: true, children: [peydaRun(block.text)] }));
     } else if (block.type === 'list' && Array.isArray(block.items)) {
       for (const item of block.items) {
-        children.push(new Paragraph({ bullet: { level: 0 }, alignment: AlignmentType.RIGHT, bidirectional: true, children: [new TextRun(String(item || ''))] }));
+        children.push(new Paragraph({ bullet: { level: 0 }, alignment: AlignmentType.RIGHT, bidirectional: true, children: [peydaRun(item)] }));
       }
     } else if (block.type === 'table' && Array.isArray(block.columns)) {
-      const headerRow = new TableRow({ children: block.columns.map((c: any) => new TableCell({ children: [new Paragraph({ alignment: AlignmentType.RIGHT, bidirectional: true, children: [new TextRun({ text: String(c ?? ''), bold: true })] })] })) });
+      const headerRow = new TableRow({ children: block.columns.map((c: any) => new TableCell({ children: [new Paragraph({ alignment: AlignmentType.RIGHT, bidirectional: true, children: [peydaRun(c, { bold: true })] })] })) });
       const bodyRows = (Array.isArray(block.rows) ? block.rows : []).map((row: any[]) =>
-        new TableRow({ children: block.columns.map((_: any, idx: number) => new TableCell({ children: [new Paragraph({ alignment: AlignmentType.RIGHT, bidirectional: true, children: [new TextRun(String((Array.isArray(row) ? row[idx] : '') ?? ''))] })] })) }));
+        new TableRow({ children: block.columns.map((_: any, idx: number) => new TableCell({ children: [new Paragraph({ alignment: AlignmentType.RIGHT, bidirectional: true, children: [peydaRun((Array.isArray(row) ? row[idx] : '') ?? '')] })] })) }));
       children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [headerRow, ...bodyRows] }));
     }
   }
-  const document = new Document({ sections: [{ properties: {}, children }] });
+  const document = new Document({
+    styles: { default: { document: { run: { font: 'Peyda' } } } },
+    sections: [{ properties: {}, children }],
+  });
   const buffer = await Packer.toBuffer(document);
   return new Uint8Array(buffer);
 };
@@ -10400,8 +10614,10 @@ const handleGenerateDocument = async (supabaseUrl: string, serviceRoleKey: strin
   const schemaHint = format === 'xlsx' || format === 'csv'
     ? 'برای فایل صفحه‌گسترده، آرایه‌ی sheets را پر کن: [{"name":"...","columns":["..."],"rows":[["..."]]}].'
     : 'برای سند متنی، آرایه‌ی blocks را پر کن: heading {type,text,level}، paragraph {type,text}، list {type,items[]}، table {type,columns[],rows[[]]}.';
+  await captureAutomaticAiUserMemory(supabaseUrl, serviceRoleKey, authContext, prompt);
+  const userMemoryPrompt = buildAiUserMemoryPrompt(await listAiUserMemories(supabaseUrl, serviceRoleKey, authContext, AI_USER_MEMORY_CONTEXT_ITEMS, true));
   const aiResult = await callChatCompletions(providerConfig, [
-    { role: 'system', content: `تو یک تولیدکننده‌ی محتوای ساختاریافته برای ساخت فایل هستی. فقط و فقط یک JSON معتبر برگردان (بدون توضیح، بدون markdown). ساختار: {"title":"...","blocks":[...],"sheets":[...]}. ${schemaHint} همه‌ی متن‌ها فارسی و رسمی باشند.` },
+    { role: 'system', content: `تو یک تولیدکننده‌ی محتوای ساختاریافته برای ساخت فایل هستی. فقط و فقط یک JSON معتبر برگردان (بدون توضیح، بدون markdown). ساختار: {"title":"...","blocks":[...],"sheets":[...]}. ${schemaHint} همه‌ی متن‌ها فارسی و رسمی باشند.${userMemoryPrompt ? `\n${userMemoryPrompt}` : ''}` },
     { role: 'user', content: prompt },
   ], { safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_document_generation`, maxTokens: 4000 });
 
@@ -10514,11 +10730,14 @@ const handleGenerateVideo = async (supabaseUrl: string, serviceRoleKey: string, 
   const videoStyle = String(settings?.videoStyle || '').trim();
   const videoMotion = String(settings?.videoMotion || '').trim();
   const videoCamera = String(settings?.videoCamera || '').trim();
+  await captureAutomaticAiUserMemory(supabaseUrl, serviceRoleKey, authContext, prompt);
+  const userMemoryPrompt = buildAiUserMemoryPrompt(await listAiUserMemories(supabaseUrl, serviceRoleKey, authContext, AI_USER_MEMORY_CONTEXT_ITEMS, true));
   const videoPrompt = [
     prompt,
     videoStyle ? `سبک تصویری: ${videoStyle}.` : '',
     videoMotion ? `نوع حرکت: ${videoMotion}.` : '',
     videoCamera && videoCamera !== 'auto' ? `نمای دوربین: ${videoCamera}.` : '',
+    userMemoryPrompt,
   ].filter(Boolean).join('\n');
   const sources = Array.isArray(body?.sourceImages) ? body.sourceImages : (Array.isArray(settings.sourceImages) ? settings.sourceImages : []);
   const firstSource = sources.map((src: any) => ({
@@ -12814,6 +13033,9 @@ Deno.serve(async (req: Request) => {
     if (action === 'test_provider') return await handleTestProvider(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'list_models') return await handleListModels(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_credit') return await handleGetCredit(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'list_user_memories') return await handleListUserMemories(supabaseUrl, serviceRoleKey, authContext);
+    if (action === 'save_user_memory') return await handleSaveUserMemory(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'delete_user_memory') return await handleDeleteUserMemory(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'list_threads') return await handleListThreads(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'rename_thread') return await handleRenameThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'archive_thread') return await handleArchiveThread(supabaseUrl, serviceRoleKey, authContext, body);

@@ -23,6 +23,11 @@ SSL_HOSTS="${MONITOR_SSL_HOSTS:-kalam.tazesystem.ir,api.tazesystem.ir}"
 SSL_REMINDER_DAYS="${MONITOR_SSL_REMINDER_DAYS:-30,14,7,3,1}"
 EVENT_LOG="${MONITOR_EVENT_LOG:-$STATE_DIR/events.log}"
 EVENT_LOG_MAX_LINES="${MONITOR_EVENT_LOG_MAX_LINES:-1000}"
+COMMAND_TIMEOUT_SECONDS="${MONITOR_COMMAND_TIMEOUT_SECONDS:-12}"
+
+if [[ ! "$COMMAND_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  COMMAND_TIMEOUT_SECONDS=12
+fi
 
 mkdir -p "$STATE_DIR"
 LOCK_DIR="$STATE_DIR/run.lock"
@@ -128,7 +133,7 @@ check_ssl_certificate() {
   done
 }
 
-disk_percent="$(df -P "$DISK_PATH" | awk 'NR == 2 { gsub("%", "", $5); print $5 }')"
+disk_percent="$(timeout "$COMMAND_TIMEOUT_SECONDS" df -P "$DISK_PATH" 2>/dev/null | awk 'NR == 2 { gsub("%", "", $5); print $5 }' || true)"
 if [[ "$disk_percent" =~ ^[0-9]+$ ]]; then
   if (( disk_percent >= DISK_CRITICAL_PERCENT )); then
     alert_once 'disk-critical' "فضای دیسک ${DISK_PATH} به ${disk_percent}% رسیده است."
@@ -143,30 +148,30 @@ IFS=',' read -r -a containers <<< "$REQUIRED_CONTAINERS"
 for container in "${containers[@]}"; do
   container="${container//[[:space:]]/}"
   [[ -n "$container" ]] || continue
-  running="$(docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null || echo false)"
+  running="$(timeout "$COMMAND_TIMEOUT_SECONDS" docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null || echo false)"
   if [[ "$running" != 'true' ]]; then
     alert_once "container-${container}-stopped" "کانتینر ${container} در حال اجرا نیست."
     continue
   fi
-  health="$(docker inspect --format '{{if .Config.Healthcheck}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null || echo unknown)"
+  health="$(timeout "$COMMAND_TIMEOUT_SECONDS" docker inspect --format '{{if .Config.Healthcheck}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null || echo unknown)"
   if [[ "$health" == 'unhealthy' ]]; then
     alert_once "container-${container}-unhealthy" "وضعیت سلامت کانتینر ${container} unhealthy است."
   fi
 done
 
-if ! docker exec supabase-db pg_isready -U postgres -h localhost >/dev/null 2>&1; then
+if ! timeout "$COMMAND_TIMEOUT_SECONDS" docker exec supabase-db pg_isready -U postgres -h localhost >/dev/null 2>&1; then
   alert_once 'postgres-not-ready' 'PostgreSQL آمادهٔ پاسخ‌گویی نیست.'
 fi
 
-if docker logs --since "$LOG_WINDOW" supabase-rest 2>&1 | grep -Eq 'PGRST003'; then
+if timeout "$COMMAND_TIMEOUT_SECONDS" docker logs --since "$LOG_WINDOW" supabase-rest 2>&1 | grep -Eq 'PGRST003'; then
   alert_once 'postgrest-pool-exhausted' "در ${LOG_WINDOW} اخیر، pool اتصال PostgREST پر شده است."
 fi
 
-if docker logs --since "$LOG_WINDOW" supabase-rest 2>&1 | grep -Eq '57014'; then
+if timeout "$COMMAND_TIMEOUT_SECONDS" docker logs --since "$LOG_WINDOW" supabase-rest 2>&1 | grep -Eq '57014'; then
   alert_once 'postgrest-statement-timeout' "در ${LOG_WINDOW} اخیر، query دیتابیس از سقف زمان PostgREST عبور کرده است."
 fi
 
-if docker logs --since "$LOG_WINDOW" supabase-storage 2>&1 | grep -Eq '"statusCode":500|ECONNREFUSED|S3Error'; then
+if timeout "$COMMAND_TIMEOUT_SECONDS" docker logs --since "$LOG_WINDOW" supabase-storage 2>&1 | grep -Eq '"statusCode":500|ECONNREFUSED|S3Error'; then
   alert_once 'storage-backend-unreachable' "در ${LOG_WINDOW} اخیر، Storage به فضای ذخیره‌سازی پشت‌صحنه متصل نشده یا پاسخ ۵xx داده است."
 fi
 

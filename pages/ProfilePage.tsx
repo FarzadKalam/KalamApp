@@ -6,7 +6,7 @@ import {
 } from 'antd';
 import { 
     UserOutlined, ArrowRightOutlined, CheckCircleOutlined, 
-    CloseCircleOutlined, IdcardOutlined, SafetyCertificateOutlined, EditOutlined, UploadOutlined
+    CloseCircleOutlined, IdcardOutlined, SafetyCertificateOutlined, EditOutlined, UploadOutlined, RobotOutlined
 } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { getModuleFaTitle, sanitizeActivityText } from '../utils/recordActivity';
@@ -33,6 +33,7 @@ import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import ProfileAvatar from '../components/common/ProfileAvatar';
 import { emitProfileAvatarUpdated } from '../utils/profileAvatarEvents';
+import AiUserMemoryManager from '../components/ai/AiUserMemoryManager';
 
 const ProfilePage: React.FC = () => {
   const { id } = useParams();
@@ -864,6 +865,13 @@ const ProfilePage: React.FC = () => {
                                         </div>
                                     ) : null}
                                 </div>
+                            )
+                        },
+                        {
+                            key: 'ai-memory',
+                            label: <span><RobotOutlined /> حافظه هوش مصنوعی</span>,
+                            children: (
+                                <AiUserMemoryManager enabled={Boolean(record?.id && currentUserId && String(record.id) === String(currentUserId))} />
                             )
                         }
                     ]} 

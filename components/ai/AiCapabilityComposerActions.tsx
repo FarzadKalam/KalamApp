@@ -71,7 +71,7 @@ const CAPABILITY_META: Array<{
   icon: React.ReactNode;
   kind: 'toggle' | 'inline';
 }> = [
-  { key: 'text_chat', label: 'گفتگوی متنی', description: 'گفتگوی مستقیم بدون تصمیم‌گیری خودکار', icon: <MessageOutlined />, kind: 'toggle' },
+  { key: 'text_chat', label: 'گفتگوی آزاد', description: 'گفتگوی خام با هوش مصنوعی بدون استفاده از دانش سازمان', icon: <MessageOutlined />, kind: 'toggle' },
   { key: 'document_analysis', label: 'تحلیل اسناد', description: 'تحلیل فایل، رسید، عکس یا سند', icon: <FileSearchOutlined />, kind: 'inline' },
   { key: 'voice_input', label: 'تحلیل صدا', description: 'ضبط و تبدیل فایل صوتی به متن', icon: <AudioOutlined />, kind: 'inline' },
   { key: 'voice_output', label: 'تولید صدا', description: 'تبدیل متن به فایل صوتی', icon: <SoundOutlined />, kind: 'toggle' },

@@ -459,6 +459,7 @@ const readPersistedModuleListState = (moduleId?: string | null, suffix?: string 
 };
 
 const MODULE_LIST_CREATED_AT_DEFAULT_SORT_MODULES = new Set(["automation_execution_reports"]);
+const MODULE_LIST_PLANNED_COUNT_MODULE_IDS = new Set(["automation_execution_reports"]);
 const MODULE_LIST_TAGS_UNSUPPORTED_MODULE_IDS = new Set([
   "automation_execution_reports",
   "sms_delivery_reports",
@@ -963,7 +964,10 @@ export const ModuleListRefine: React.FC<{
 
   const { tableProps, tableQueryResult, setFilters, sorters, setSorters, current, setCurrent, pageSize, setPageSize } = useTable({
     resource: dataResource,
-    meta: { select: moduleListRowSelect },
+    meta: {
+      select: moduleListRowSelect,
+      count: MODULE_LIST_PLANNED_COUNT_MODULE_IDS.has(String(resolvedModuleId || "")) ? "planned" : "exact",
+    },
     sorters: { initial: ensureStableCrudSorters(defaultSorters) },
     pagination: { pageSize: DEFAULT_LIST_PAGE_SIZE },
     queryOptions: {

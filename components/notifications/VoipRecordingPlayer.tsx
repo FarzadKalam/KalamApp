@@ -128,7 +128,7 @@ const VoipRecordingPlayer: React.FC<VoipRecordingPlayerProps> = ({ call, compact
           forceNewThread: true,
           aiAutoSubmitInitial: false,
           aiInitialInputKind: 'task_bundle',
-          aiInitialCapabilities: [],
+          aiInitialCapabilities: ['voice_input'],
           aiInitialFiles: [prepared],
           aiInitialPrompt: 'فایل صوتی این تماس پیوست شده است. ابتدا اگر امکان تبدیل مستقیم صوت به متن داری، متن مکالمه را استخراج کن؛ در غیر این صورت از عملگر تحلیل صدا استفاده کن. سپس خلاصه، موضوعات مهم، تعهدها، احساس کلی و اقدام‌های پیشنهادی را به فارسی آماده کن. اگر برای نتیجه‌ی دقیق به اطلاعات بیشتری نیاز داری، پیش از حدس‌زدن سوال کوتاه بپرس.',
         },

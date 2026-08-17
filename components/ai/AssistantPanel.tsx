@@ -45,13 +45,19 @@ type ChatMessage = {
 };
 
 type AiBundleInput =
-  | { id: string; type: 'file' | 'image'; label: string; file: AiUploadedFilePrompt }
+  | { id: string; type: 'file' | 'image' | 'audio'; label: string; file: AiUploadedFilePrompt }
   | { id: string; type: 'voice'; label: string; voice: RecordedVoice };
 
 const isAiImageFilePrompt = (file: Pick<AiUploadedFilePrompt, 'fileName' | 'mimeType'>) => {
   const mimeType = String(file?.mimeType || '').toLowerCase();
   const fileName = String(file?.fileName || '').toLowerCase();
   return mimeType.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(fileName);
+};
+
+const isAiAudioFilePrompt = (file: Pick<AiUploadedFilePrompt, 'fileName' | 'mimeType'>) => {
+  const mimeType = String(file?.mimeType || '').toLowerCase();
+  const fileName = String(file?.fileName || '').toLowerCase();
+  return mimeType.startsWith('audio/') || /\.(mp3|wav|ogg|oga|m4a|aac|flac|webm|opus)$/i.test(fileName);
 };
 
 const revokeBundleInputPreviewUrls = (items: AiBundleInput[]) => {
@@ -80,7 +86,7 @@ const buildBundleMessageAttachments = (items: AiBundleInput[]) => items.map((ite
     name: item.file.fileName || item.label || 'فایل پیوست',
     url,
     mimeType,
-    fileType: item.type === 'image' ? 'image' : 'file',
+    fileType: item.type === 'image' ? 'image' : item.type === 'audio' ? 'audio' : 'file',
     assetId: item.file.assetId || null,
     entryId: item.file.entryId || null,
     moduleId: item.file.moduleId || null,
@@ -137,7 +143,7 @@ const buildAiPendingStatusText = (capabilities: string[], fallback = 'در حا�
 const buildTaskBundlePendingStatusText = (inputs: Array<{ type?: string }>, capabilities: string[]) => {
   const types = (inputs || []).map((item) => String(item?.type || '').trim());
   const imageCount = types.filter((type) => type === 'image').length;
-  const voiceCount = types.filter((type) => type === 'voice').length;
+  const voiceCount = types.filter((type) => type === 'voice' || type === 'audio').length;
   const fileCount = types.filter((type) => type === 'file').length;
   const imageLabel = imageCount > 1 ? 'تصاویر' : 'تصویر';
   const voiceLabel = voiceCount > 1 ? 'فایل‌های صوتی' : 'فایل صوتی';
@@ -832,15 +838,27 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const shouldUseTaskBundle = !imageMode && !videoMode && (bundleInputs.length > 0 || workflowCapabilityCount > 1);
   const handleComposerCapabilitiesChange = useCallback((next: AiComposerCapability[]) => {
     const normalizedNext = normalizeAiComposerCapabilities(next);
+    const entersFreeChat = normalizedNext.includes('text_chat') && !selectedCapabilities.includes('text_chat');
     setSelectedCapabilities(normalizedNext);
     setAutoSuggestedCapabilities([]);
+    if (entersFreeChat) {
+      setThreadId(null);
+      setThreadContext(null);
+      setMessages([]);
+      setThreadTitle('');
+      setDraftThreadTitle('');
+      setBundleInputs((previous) => {
+        revokeBundleInputPreviewUrls(previous);
+        return [];
+      });
+    }
     const wantsProcessOperation = normalizedNext.includes('process_operation');
     setProcessOperationMode(wantsProcessOperation);
     if (normalizedNext.includes('text_chat')) setPendingAiAction(null);
     if (!normalizedNext.includes('record_creation')) {
       setRecordCreationTargetModuleId(null);
     }
-  }, []);
+  }, [selectedCapabilities]);
   const recordCreationModuleOptions = useMemo(() => buildAiRecordModuleOptions(), []);
   const recordCreationSchema = useMemo(
     () => recordCreationTargetModuleId ? buildAiRecordCreationSchema(recordCreationTargetModuleId) : null,
@@ -1053,6 +1071,19 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           mimeType: item.voice.mimeType,
           durationMs: item.voice.durationMs,
           filename: item.voice.filename,
+        },
+      };
+    }
+    if (item.type === 'audio') {
+      return {
+        id: item.id,
+        type: 'audio',
+        label: item.label,
+        audio: {
+          data: String(item.file.data || '').trim(),
+          mimeType: item.file.mimeType || 'audio/mpeg',
+          durationMs: 0,
+          filename: item.file.fileName || item.label || 'audio.mp3',
         },
       };
     }
@@ -1586,7 +1617,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       .filter((item): item is AiUploadedFilePrompt & { message?: string | null } => Boolean(item?.fileName));
     setBundleInputs(seededFiles.map((filePrompt, index) => ({
       id: `initial-file-${Date.now()}-${index}`,
-      type: isAiImageFilePrompt(filePrompt) ? 'image' : 'file',
+      type: isAiImageFilePrompt(filePrompt) ? 'image' : isAiAudioFilePrompt(filePrompt) ? 'audio' : 'file',
       label: filePrompt.fileName || 'فایل پیوست',
       file: filePrompt,
     })));
@@ -2272,7 +2303,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       ...prev,
       {
         id: `file-${Date.now()}-${prev.length}`,
-        type: isAiImageFilePrompt(filePrompt) ? 'image' : 'file',
+        type: isAiImageFilePrompt(filePrompt) ? 'image' : isAiAudioFilePrompt(filePrompt) ? 'audio' : 'file',
         label: filePrompt.fileName || 'فایل پیوست',
         file: filePrompt,
       },
@@ -2286,7 +2317,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       ...prev,
       ...nextFiles.map((filePrompt, index) => ({
         id: `file-${Date.now()}-${prev.length + index}`,
-        type: isAiImageFilePrompt(filePrompt) ? 'image' as const : 'file' as const,
+        type: isAiImageFilePrompt(filePrompt) ? 'image' as const : isAiAudioFilePrompt(filePrompt) ? 'audio' as const : 'file' as const,
         label: filePrompt.fileName || 'فایل پیوست',
         file: filePrompt,
       })),
@@ -2315,12 +2346,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
 
   const bundlePreviewItems = useMemo<ComposerAttachmentChipItem[]>(() => bundleInputs.map((item) => ({
     id: item.id,
-    name: item.label || (item.type === 'voice' ? 'فایل صوتی' : item.file.fileName || 'فایل پیوست'),
+    name: item.label || ((item.type === 'voice' || item.type === 'audio') ? 'فایل صوتی' : item.file.fileName || 'فایل پیوست'),
     mimeType: item.type === 'voice' ? item.voice.mimeType : item.file.mimeType,
-    fileType: item.type === 'voice' ? 'voice' : item.type === 'image' ? 'image' : 'file',
+    fileType: item.type === 'voice' || item.type === 'audio' ? 'voice' : item.type === 'image' ? 'image' : 'file',
     url: item.type === 'voice'
       ? (item.voice.previewUrl || null)
-      : (item.type === 'image' ? (item.file.data || item.file.url || null) : null),
+      : ((item.type === 'image' || item.type === 'audio') ? (item.file.data || item.file.url || null) : null),
     subtitle: null,
     sizeText: item.type === 'voice'
       ? `${Math.max(1, Math.round(Number(item.voice.durationMs || 0) / 1000)).toLocaleString('fa-IR')} ثانیه`
@@ -2341,7 +2372,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       if (selectedCapabilities.length > 0 && bundleInputs.some((item) => item.type === 'file' || item.type === 'image') && !next.includes('document_analysis')) {
         next.push('document_analysis' as AiComposerCapability);
       }
-      if (selectedCapabilities.length > 0 && bundleInputs.some((item) => item.type === 'voice') && !next.includes('voice_input')) {
+      if (selectedCapabilities.length > 0 && bundleInputs.some((item) => item.type === 'voice' || item.type === 'audio') && !next.includes('voice_input')) {
         next.push('voice_input' as AiComposerCapability);
       }
       return next;
@@ -2349,7 +2380,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     setInput('');
     setPendingAiAction(null);
     const bundleSummary = bundleInputs.map((item) => {
-      if (item.type === 'voice') return `فایل صوتی: ${item.label}`;
+      if (item.type === 'voice' || item.type === 'audio') return `فایل صوتی: ${item.label}`;
       return `${item.type === 'image' ? 'تصویر' : 'فایل'}: ${item.label}`;
     });
     const userMessage: ChatMessage = {

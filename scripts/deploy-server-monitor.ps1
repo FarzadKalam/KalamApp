@@ -183,8 +183,15 @@ try {
   if (-not [string]::IsNullOrWhiteSpace($sshKeyPath)) {
     $identityArgs = @('-i', $sshKeyPath)
   }
-  $sshArgs = @('-p', $deployPort) + $identityArgs
-  $scpArgs = @('-P', $deployPort) + $identityArgs
+  # انتقال یا اجرای SSH نباید اجرای انتشار را برای مدت نامحدود معطل کند.
+  $networkTimeoutArgs = @(
+    '-o', 'BatchMode=yes',
+    '-o', 'ConnectTimeout=20',
+    '-o', 'ServerAliveInterval=15',
+    '-o', 'ServerAliveCountMax=2'
+  )
+  $sshArgs = @('-p', $deployPort) + $identityArgs + $networkTimeoutArgs
+  $scpArgs = @('-P', $deployPort) + $identityArgs + $networkTimeoutArgs
   if ($useSudo) {
     $sshArgs += '-tt'
   } else {
