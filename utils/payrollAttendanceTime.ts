@@ -18,3 +18,20 @@ export const calculatePayablePresenceMinutes = (
   presenceMinutes: unknown,
   excludedExcessPresenceMinutes: unknown,
 ) => Math.max(0, toWholeMinutes(presenceMinutes) - toWholeMinutes(excludedExcessPresenceMinutes));
+
+/**
+ * سهم قابل پرداخت از یک کسری تردد را تا سقف باقی‌ماندهٔ مرخصی با حقوق تقسیم می‌کند.
+ */
+export const allocatePaidLeaveMinutes = (
+  requestedMinutes: unknown,
+  availablePaidLeaveMinutes: unknown,
+) => {
+  const requested = toWholeMinutes(requestedMinutes);
+  const available = toWholeMinutes(availablePaidLeaveMinutes);
+  const paidMinutes = Math.min(requested, available);
+  return {
+    requestedMinutes: requested,
+    paidMinutes,
+    unpaidMinutes: Math.max(0, requested - paidMinutes),
+  };
+};

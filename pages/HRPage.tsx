@@ -165,7 +165,7 @@ import { employeesModule } from '../modules/employeesConfig';
 import { fetchCurrentUserRecordAccessContext, fetchCurrentUserRolePermissions, type ModulePermissionConfig } from '../utils/permissions';
 import { evaluateLegacyVisibilityRule } from '../utils/conditionalFieldRules';
 import { DEFAULT_SALARY_TYPE, getSalaryTypeLabelFa, resolvePayrollBaseCompensation } from '../utils/payrollSalaryType';
-import { calculateExcessPresenceMinutes, calculatePayablePresenceMinutes } from '../utils/payrollAttendanceTime';
+import { allocatePaidLeaveMinutes, calculateExcessPresenceMinutes, calculatePayablePresenceMinutes } from '../utils/payrollAttendanceTime';
 import { getHolidaySummaryForDate } from '../utils/holidayCalendar';
 import PrintSection from '../components/moduleShow/PrintSection';
 import { useListPrintManager } from '../utils/printTemplates/useListPrintManager';
@@ -519,6 +519,10 @@ type AttendanceComputedRow = {
   deltaColor: string;
 };
 
+type AttendanceShortageDecision = 'paid_leave' | 'unpaid_leave' | 'absence';
+
+const ATTENDANCE_SHORTAGE_DECISION_SOURCE_TYPE = 'attendance_shortage_decision';
+
 type AttendanceScheduleShift = {
   key: 'shift1' | 'shift2';
   label: string;
@@ -694,6 +698,7 @@ const PAYROLL_LEDGER_SOURCE_LABELS: Record<string, string> = {
   attendance_early_bonus: 'پاداش تعجیل',
   attendance_delay_absence: 'تاخیر / غیبت',
   attendance_paid_leave: 'مرخصی با حقوق',
+  attendance_shortage_decision: 'تصمیم تردد',
   attendance_excess_presence_exclusion: 'ساعات مازاد حضورِ لحاظ‌نشده',
   employee_bonus: 'پاداش پرسنلی',
   employee_penalty: 'جریمه پرسنلی',
@@ -1186,6 +1191,9 @@ const calculatePresenceMinutes = (rows: AttendanceComputedRow[]) => {
 const calculateAttendanceRowScheduledMinutes = (row: AttendanceComputedRow) =>
   getScheduledMinutesByShifts(row.scheduleShifts || []);
 
+const buildAttendanceShortageDecisionSourceKey = (row: AttendanceComputedRow) =>
+  `${ATTENDANCE_SHORTAGE_DECISION_SOURCE_TYPE}:${String(row.employeeId || '').trim()}:${String(row.attendanceDate || row.key || '').trim()}`;
+
 const calculateAttendanceExcessPresenceMinutes = (row: AttendanceComputedRow) =>
   calculateExcessPresenceMinutes(
     calculateAttendanceRowPresenceMinutes(row),
@@ -1257,6 +1265,7 @@ const calculateAttendanceDelayAbsenceBreakdown = (
   row: AttendanceComputedRow,
   profile: ProfileRecord | null | undefined,
   paidLeaveMinutes?: number,
+  manualDecision?: AttendanceShortageDecision | null,
 ) => {
   const scheduledMinutes = calculateAttendanceRowScheduledMinutes(row);
   const presenceMinutes = calculateAttendanceRowPresenceMinutes(row);
@@ -1268,19 +1277,32 @@ const calculateAttendanceDelayAbsenceBreakdown = (
   const rawAbsenceMinutes = Math.max(0, shortageMinutes - toNumber(row.lateMinutes) - earlyLeaveMinutes);
   const isApprovedUnpaidLeave = row.isApprovedLeave
     && String(row.approvedLeaveType || '').trim().toLowerCase() === 'unpaid';
-  const unpaidLeaveMinutes = isApprovedUnpaidLeave || String(row.logType || '') === 'leave'
-    ? Math.max(0, shortageMinutes - coveredPaidLeaveMinutes)
+  const requiresUnpaidLeave = isApprovedUnpaidLeave
+    || String(row.logType || '') === 'leave'
+    || manualDecision === 'paid_leave'
+    || manualDecision === 'unpaid_leave';
+  const unpaidLeaveMinutes = requiresUnpaidLeave
+    ? calculateAttendanceDelayAbsenceMinutes(row, profile, coveredPaidLeaveMinutes)
     : 0;
-  const absenceMinutes = String(row.logType || '') === 'absence' ? Math.max(0, rawAbsenceMinutes - coveredPaidLeaveMinutes) : 0;
+  const absenceMinutes = manualDecision === 'absence' || String(row.logType || '') === 'absence'
+    ? Math.max(0, rawAbsenceMinutes - coveredPaidLeaveMinutes)
+    : 0;
   const delayMinutes = Math.max(0, lateMinutes + earlyLeaveMinutes);
   const totalMinutes = calculateAttendanceDelayAbsenceMinutes(row, profile, coveredPaidLeaveMinutes);
-  const deductionSubtype = unpaidLeaveMinutes > 0
-    ? 'unpaid_leave'
-    : absenceMinutes > 0
-      ? 'absence'
-      : delayMinutes > 0
-        ? 'late'
-        : 'delay_absence';
+  let deductionSubtype: 'unpaid_leave' | 'absence' | 'late' | 'delay_absence';
+  if (manualDecision === 'paid_leave' || manualDecision === 'unpaid_leave') {
+    deductionSubtype = 'unpaid_leave';
+  } else if (manualDecision === 'absence') {
+    deductionSubtype = 'absence';
+  } else if (unpaidLeaveMinutes > 0) {
+    deductionSubtype = 'unpaid_leave';
+  } else if (absenceMinutes > 0) {
+    deductionSubtype = 'absence';
+  } else if (delayMinutes > 0) {
+    deductionSubtype = 'late';
+  } else {
+    deductionSubtype = 'delay_absence';
+  }
   return {
     deductionSubtype,
     delayMinutes,
@@ -1295,18 +1317,25 @@ const calculateAttendancePaidLeaveMinutes = (
   row: AttendanceComputedRow,
   profile?: ProfileRecord | null,
   usedPaidLeaveMinutes = 0,
+  manualDecision?: AttendanceShortageDecision | null,
 ) => {
-  // کسری تردد به‌تنهایی نباید مرخصی با حقوق شود.
-  if (!row.isApprovedLeave) return 0;
+  const isManualPaidLeave = manualDecision === 'paid_leave';
+  // کسری تردد فقط با مرخصی تاییدشده یا تصمیم صریح اپراتور می‌تواند با حقوق شود.
+  if (!row.isApprovedLeave && !isManualPaidLeave) return 0;
   if (String(row.approvedLeaveType || '').trim().toLowerCase() === 'unpaid') return 0;
 
   const shortageMinutes = calculateAttendanceShortageMinutes(row);
-  const approvedLeaveMinutes = Math.max(0, toNumber(row.approvedLeaveMinutes));
-  if (shortageMinutes <= 0 || approvedLeaveMinutes <= 0) return 0;
+  const requestedMinutes = isManualPaidLeave
+    ? shortageMinutes
+    : Math.max(0, toNumber(row.approvedLeaveMinutes));
+  if (shortageMinutes <= 0 || requestedMinutes <= 0) return 0;
 
   const monthlyLimitMinutes = Math.max(0, toNumber(profile?.monthly_paid_leave_hours) * 60);
   const availableMinutes = Math.max(0, monthlyLimitMinutes - usedPaidLeaveMinutes);
-  return Math.min(shortageMinutes, approvedLeaveMinutes, availableMinutes);
+  return allocatePaidLeaveMinutes(
+    Math.min(shortageMinutes, requestedMinutes),
+    availableMinutes,
+  ).paidMinutes;
 };
 
 const renderDateTime = (value: string | null | undefined) => safeJalaliFormat(value, 'YYYY/MM/DD HH:mm') || '-';
@@ -3185,6 +3214,10 @@ const HRPage: React.FC = () => {
           : rawSchedule;
         const scheduledMinutes = attendanceDate ? getScheduledMinutesByShifts(schedule.shifts) : 0;
         const requiredMinutes = scheduledMinutes;
+        const hourlyApprovedMinutes = approvedLeaveRequests.reduce((sum, request) => {
+          if (String(request.leaveType || '').trim().toLowerCase() !== 'hourly') return sum;
+          return sum + Math.max(0, toNumber(request.totalMinutes ?? 0));
+        }, 0);
         const coveredScheduledMinutes = attendanceDate
           ? Math.min(scheduledMinutes, getLeaveCoveredScheduledMinutes(leaveIntervals, attendanceDate, schedule.shifts))
           : 0;
@@ -3253,10 +3286,6 @@ const HRPage: React.FC = () => {
         const earlyArrivalMinutes = totalsForDelta.earlyArrivalMinutes;
         let earlyLeaveMinutes = totalsForDelta.earlyLeaveMinutes;
         const overtimeStayMinutes = totalsForDelta.overtimeStayMinutes;
-        const hourlyApprovedMinutes = approvedLeaveRequests.reduce((sum, request) => {
-          if (String(request.leaveType || '').trim().toLowerCase() !== 'hourly') return sum;
-          return sum + Math.max(0, toNumber(request.totalMinutes ?? 0));
-        }, 0);
         // Fallback for hourly leaves that are approved but do not carry a usable time interval.
         if (leaveIntervals.length === 0 && hourlyApprovedMinutes > 0) {
           const deductLate = Math.min(lateMinutes, hourlyApprovedMinutes);
@@ -3356,6 +3385,10 @@ const HRPage: React.FC = () => {
         const requiredMinutes = scheduledMinutes;
         const approvedLeaveRequests = approvedLeaveByEmployeeDate.get(employeeId)?.get(attendanceDate) || [];
         const leaveIntervals = getLeaveIntervalsForDay(approvedLeaveRequests, attendanceDate);
+        const hourlyApprovedMinutes = approvedLeaveRequests.reduce((sum, request) => {
+          if (String(request.leaveType || '').trim().toLowerCase() !== 'hourly') return sum;
+          return sum + Math.max(0, toNumber(request.totalMinutes ?? 0));
+        }, 0);
         const coveredScheduledMinutes = Math.min(
           scheduledMinutes,
           getLeaveCoveredScheduledMinutes(leaveIntervals, attendanceDate, schedule.shifts),
@@ -3363,7 +3396,7 @@ const HRPage: React.FC = () => {
         const coveredRequiredMinutes = scheduledMinutes > 0
           ? coveredScheduledMinutes
           : (leaveIntervals.length > 0 ? requiredMinutes : 0);
-        const hasApprovedLeave = leaveIntervals.length > 0;
+        const hasApprovedLeave = leaveIntervals.length > 0 || hourlyApprovedMinutes > 0 || approvedLeaveRequests.length > 0;
         const hasAnySchedule = scheduledMinutes > 0 || schedule.shifts.length > 0;
         if (!hasAnySchedule && !hasApprovedLeave) {
           cursor = cursor.add(1, 'day');
@@ -3466,8 +3499,22 @@ const HRPage: React.FC = () => {
     return next;
   }, [attendanceComputedRows]);
 
+  const attendanceShortageDecisionByRowKey = useMemo(() => {
+    const next = new Map<string, AttendanceShortageDecision>();
+    payrollLedgerRows
+      .filter((entry) => String(entry.source_type || '') === ATTENDANCE_SHORTAGE_DECISION_SOURCE_TYPE)
+      .forEach((entry) => {
+        const rowKey = String(entry.details?.attendance_row_key || '').trim();
+        const decision = String(entry.details?.decision || '').trim() as AttendanceShortageDecision;
+        if (!rowKey || !['paid_leave', 'unpaid_leave', 'absence'].includes(decision)) return;
+        next.set(rowKey, decision);
+      });
+    return next;
+  }, [payrollLedgerRows]);
+
   const computeRequiredWorkMinutesForProfile = useCallback((profile: ProfileRecord | null | undefined) => {
-    if (!profile?.id) return 0;
+    const employeeIdValue = String(profile?.source_id || profile?.id || '').trim();
+    if (!employeeIdValue) return 0;
     let total = 0;
     let cursor = monthStart.startOf('day');
     const end = monthEnd.startOf('day');
@@ -3477,15 +3524,13 @@ const HRPage: React.FC = () => {
         cursor = cursor.add(1, 'day');
         continue;
       }
-      const schedule = computeScheduleForEmployee(String(profile.id), dateIso);
+      const schedule = computeScheduleForEmployee(employeeIdValue, dateIso);
       if (schedule.shifts.length > 0) {
         total += schedule.shifts.reduce((sum, shift) => {
           const start = timeToMinutes(shift.start);
           const finish = timeToMinutes(shift.end);
           return sum + (start !== null && finish !== null && finish > start ? finish - start : 0);
         }, 0);
-      } else if (cursor.toDate().getDay() !== 5) {
-        total += toNumber(profile.expected_daily_minutes || 480);
       }
       cursor = cursor.add(1, 'day');
     }
@@ -3501,12 +3546,50 @@ const HRPage: React.FC = () => {
       if (!employeeIdValue) return;
       const profile = profileById.get(employeeIdValue) || null;
       const usedPaidLeaveMinutes = usedPaidLeaveMinutesByEmployeeId.get(employeeIdValue) || 0;
-      const eligibleMinutes = calculateAttendancePaidLeaveMinutes(row, profile, usedPaidLeaveMinutes);
+      const eligibleMinutes = calculateAttendancePaidLeaveMinutes(
+        row,
+        profile,
+        usedPaidLeaveMinutes,
+        attendanceShortageDecisionByRowKey.get(row.key),
+      );
       usedPaidLeaveMinutesByEmployeeId.set(employeeIdValue, usedPaidLeaveMinutes + eligibleMinutes);
       next.set(row.key, eligibleMinutes);
     });
     return next;
-  }, [attendanceComputedRows, profileById]);
+  }, [attendanceComputedRows, attendanceShortageDecisionByRowKey, profileById]);
+
+  const calculateManualPaidLeaveAllocation = useCallback((targetRow: AttendanceComputedRow) => {
+    const employeeIdValue = String(targetRow.employeeId || '').trim();
+    const profile = profileById.get(employeeIdValue) || null;
+    const requestedMinutes = calculateAttendanceShortageMinutes(targetRow);
+    if (!employeeIdValue || !profile || requestedMinutes <= 0) {
+      return allocatePaidLeaveMinutes(requestedMinutes, 0);
+    }
+    const employeeRows = attendanceComputedRows
+      .filter((row) => String(row.employeeId || '').trim() === employeeIdValue)
+      .sort((a, b) => String(a.attendanceDate || '').localeCompare(String(b.attendanceDate || '')));
+    let usedPaidLeaveMinutes = 0;
+    for (const row of employeeRows) {
+      const decision = row.key === targetRow.key
+        ? 'paid_leave'
+        : attendanceShortageDecisionByRowKey.get(row.key);
+      const paidMinutes = calculateAttendancePaidLeaveMinutes(
+        row,
+        profile,
+        usedPaidLeaveMinutes,
+        decision,
+      );
+      if (row.key === targetRow.key) {
+        return {
+          requestedMinutes,
+          paidMinutes,
+          unpaidMinutes: Math.max(0, requestedMinutes - paidMinutes),
+        };
+      }
+      usedPaidLeaveMinutes += paidMinutes;
+    }
+    return allocatePaidLeaveMinutes(requestedMinutes, 0);
+  }, [attendanceComputedRows, attendanceShortageDecisionByRowKey, profileById]);
 
   const payrollAttendanceTotalsByEmployeeId = useMemo(() => {
     const next = new Map<string, {
@@ -4050,7 +4133,10 @@ const HRPage: React.FC = () => {
   }, [payrollWizardEmployeeId, visibleSummaries]);
 
   const visiblePayrollConfigFields = useMemo(
-    () => HR_PAYROLL_CONFIG_FIELDS.filter((field: any) => canViewEmployeePayrollField(String(field.key || ''))),
+    () => HR_PAYROLL_CONFIG_FIELDS.filter((field: any) => (
+      String(field.key || '') !== 'default_work_schedule_id'
+      && canViewEmployeePayrollField(String(field.key || ''))
+    )),
     [canViewEmployeePayrollField],
   );
 
@@ -4083,6 +4169,31 @@ const HRPage: React.FC = () => {
     if (!payrollWizardEmployeeId) return [];
     return attendanceComputedRows.filter((row) => String(row.employeeId || '') === String(payrollWizardEmployeeId));
   }, [attendanceComputedRows, payrollWizardEmployeeId]);
+
+  const payrollWizardMissingAttendanceScheduleDates = useMemo(() => {
+    const profile = payrollWizardSummary?.profile;
+    const employeeIdValue = String(profile?.source_id || profile?.id || '').trim();
+    if (!employeeIdValue || profile?.has_flexible_hours === true) return [];
+
+    const missingDates: string[] = [];
+    let cursor = monthStart.startOf('day');
+    const end = monthEnd.startOf('day');
+    while (cursor.valueOf() <= end.valueOf()) {
+      const dateIso = toNativeGregorianDateString(cursor);
+      if (!dateIso) {
+        cursor = cursor.add(1, 'day');
+        continue;
+      }
+      if (officialHolidayDateKeys.has(dateIso) && profile?.works_on_official_holidays !== true) {
+        cursor = cursor.add(1, 'day');
+        continue;
+      }
+      const schedule = computeScheduleForEmployee(employeeIdValue, dateIso);
+      if (!schedule.title) missingDates.push(dateIso);
+      cursor = cursor.add(1, 'day');
+    }
+    return missingDates;
+  }, [computeScheduleForEmployee, monthEnd, monthStart, officialHolidayDateKeys, payrollWizardSummary?.profile]);
 
   const payrollWizardActualPresenceMinutes = useMemo(
     () => calculatePresenceMinutes(payrollWizardAttendanceRows),
@@ -5348,6 +5459,7 @@ const HRPage: React.FC = () => {
     const requiredMinutes = computeRequiredWorkMinutesForProfile(employee || null);
     const presenceMinutes = calculateAttendanceRowPresenceMinutes(row);
     const hourlyRate = resolvePayrollHourlyRateForProfile(employee || null, presenceMinutes, requiredMinutes);
+    const manualDecision = attendanceShortageDecisionByRowKey.get(row.key) || null;
 
     if (sourceType === 'attendance_overtime') {
       const minutes = calculateAttendanceOvertimeMinutes(row);
@@ -5386,13 +5498,23 @@ const HRPage: React.FC = () => {
         employee || null,
         paidLeaveMinutes,
       );
-      const breakdown = calculateAttendanceDelayAbsenceBreakdown(row, employee || null, paidLeaveMinutes);
+      const breakdown = calculateAttendanceDelayAbsenceBreakdown(
+        row,
+        employee || null,
+        paidLeaveMinutes,
+        manualDecision,
+      );
       const rate = Math.max(0, toNumber(employee?.late_penalty_rate));
+      const title = breakdown.deductionSubtype === 'unpaid_leave'
+        ? `مرخصی بدون حقوق ${row.employeeName}`
+        : breakdown.deductionSubtype === 'absence'
+          ? `غیبت ${row.employeeName}`
+          : `تاخیر / غیبت ${row.employeeName}`;
       return {
         sourceKey: buildAttendanceDelayAbsenceSourceKey(row),
         sourceType,
         entryType: 'attendance_delay_absence',
-        title: `مرخصی بدون حقوق / تاخیر و غیبت ${row.employeeName}`,
+        title,
         minutes,
         rate,
         amount: -Math.round((minutes / 60) * rate),
@@ -5407,17 +5529,18 @@ const HRPage: React.FC = () => {
 
     const minutes = paidLeaveEligibleMinutesByAttendanceRowKey.get(row.key) || 0;
     const rate = hourlyRate;
+    const isManualPaidLeave = manualDecision === 'paid_leave';
     return {
       sourceKey: buildAttendancePaidLeaveSourceKey(row),
       sourceType,
       entryType: 'attendance_paid_leave',
-      title: `مرخصی با حقوق ${row.employeeName}`,
+      title: isManualPaidLeave ? `مرخصی با حقوق (تصمیم اپراتور) ${row.employeeName}` : `مرخصی با حقوق ${row.employeeName}`,
       minutes,
       rate,
       amount: Math.round((minutes / 60) * rate),
-      sourceModuleId: 'leave_requests',
+      sourceModuleId: isManualPaidLeave ? 'attendance_logs' : 'leave_requests',
     };
-  }, [computeRequiredWorkMinutesForProfile, paidLeaveEligibleMinutesByAttendanceRowKey, profiles]);
+  }, [attendanceShortageDecisionByRowKey, computeRequiredWorkMinutesForProfile, paidLeaveEligibleMinutesByAttendanceRowKey, profiles]);
 
   const handleApproveAttendanceOvertime = useCallback(async (row: AttendanceComputedRow) => {
     const meta = resolveAttendanceLedgerEntry(row, 'attendance_overtime');
@@ -5464,7 +5587,7 @@ const HRPage: React.FC = () => {
           source_type: meta.sourceType,
           source_key: sourceKey,
           source_module_id: meta.sourceModuleId,
-          source_record_id: row.rawIds[0] || row.id || null,
+          source_record_id: row.rawIds[0] || null,
           title: meta.title,
           amount,
           quantity: overtimeHours,
@@ -5556,7 +5679,7 @@ const HRPage: React.FC = () => {
           source_type: meta.sourceType,
           source_key: meta.sourceKey,
           source_module_id: meta.sourceModuleId,
-          source_record_id: sourceType === 'attendance_paid_leave' ? row.approvedLeaveRequestId : row.rawIds[0] || row.id || null,
+          source_record_id: sourceType === 'attendance_paid_leave' ? row.approvedLeaveRequestId : row.rawIds[0] || null,
           title: meta.title,
           amount: meta.amount,
           quantity: meta.minutes / 60,
@@ -5597,6 +5720,152 @@ const HRPage: React.FC = () => {
       await refreshPayrollPeriodState();
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'عدم لحاظ ردیف ناموفق بود.'));
+    } finally {
+      setSavingOvertimeLedgerKey(null);
+    }
+  }, [message, refreshPayrollPeriodState]);
+
+  const saveAttendanceShortageDecision = useCallback(async (
+    row: AttendanceComputedRow,
+    decision: AttendanceShortageDecision,
+    allocation?: { requestedMinutes: number; paidMinutes: number; unpaidMinutes: number },
+  ) => {
+    if (!row.employeeId) return;
+    const shortageMinutes = calculateAttendanceShortageMinutes(row);
+    if (shortageMinutes <= 0) return;
+    const periodStart = toNativeGregorianDateString(monthStart);
+    const periodEnd = toNativeGregorianDateString(monthEnd);
+    if (!periodStart || !periodEnd) {
+      message.error('بازه محاسبه معتبر نیست.');
+      return;
+    }
+    const sourceKey = buildAttendanceShortageDecisionSourceKey(row);
+    setSavingOvertimeLedgerKey(sourceKey);
+    try {
+      const { data: existingRows, error: existingError } = await supabase
+        .from('payroll_calculation_entries')
+        .select('id, status')
+        .eq('employee_id', row.employeeId)
+        .eq('period_start', periodStart)
+        .eq('period_end', periodEnd)
+        .eq('source_type', ATTENDANCE_SHORTAGE_DECISION_SOURCE_TYPE)
+        .eq('source_key', sourceKey);
+      if (existingError && !isMissingPayrollLedgerError(existingError) && !isMissingSourceKeyError(existingError)) throw existingError;
+
+      const existing = (existingRows || [])[0] as any;
+      if (String(existing?.status || '') === 'included_in_payroll') {
+        message.info('این روز در فیش ثبت شده است و قابل تغییر نیست.');
+        return;
+      }
+      const labels: Record<AttendanceShortageDecision, string> = {
+        paid_leave: 'مرخصی با حقوق',
+        unpaid_leave: 'مرخصی بدون حقوق',
+        absence: 'غیبت',
+      };
+      const details = {
+        source_key: sourceKey,
+        attendance_row_key: row.key,
+        attendance_date: row.attendanceDate,
+        raw_ids: row.rawIds,
+        decision,
+        scheduled_minutes: calculateAttendanceRowScheduledMinutes(row),
+        presence_minutes: calculateAttendanceRowPresenceMinutes(row),
+        shortage_minutes: shortageMinutes,
+        planned_paid_leave_minutes: allocation?.paidMinutes || 0,
+        planned_unpaid_leave_minutes: allocation?.unpaidMinutes || 0,
+        employee_name: row.employeeName,
+      };
+      const values = {
+        entry_type: ATTENDANCE_SHORTAGE_DECISION_SOURCE_TYPE,
+        title: `تصمیم اپراتور: ${labels[decision]} ${row.employeeName}`,
+        amount: 0,
+        quantity: shortageMinutes / 60,
+        rate: 0,
+        status: 'proposed',
+        details,
+        updated_at: new Date().toISOString(),
+      };
+      if (existing?.id) {
+        const { error } = await supabase
+          .from('payroll_calculation_entries')
+          .update(values)
+          .eq('id', existing.id);
+        if (error && !isMissingPayrollLedgerError(error)) throw error;
+      } else {
+        const { error } = await supabase.from('payroll_calculation_entries').insert({
+          employee_id: row.employeeId,
+          period_start: periodStart,
+          period_end: periodEnd,
+          source_type: ATTENDANCE_SHORTAGE_DECISION_SOURCE_TYPE,
+          source_key: sourceKey,
+          source_module_id: 'attendance_logs',
+          source_record_id: row.rawIds[0] || null,
+          ...values,
+        });
+        if (error && !isMissingPayrollLedgerError(error)) throw error;
+      }
+      message.success(`${labels[decision]} برای این روز ثبت شد.`);
+      await refreshPayrollPeriodState();
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ثبت تصمیم تردد ناموفق بود.'));
+    } finally {
+      setSavingOvertimeLedgerKey(null);
+    }
+  }, [message, monthEnd, monthStart, refreshPayrollPeriodState]);
+
+  const handleChooseAttendanceShortageDecision = useCallback((
+    row: AttendanceComputedRow,
+    decision: AttendanceShortageDecision,
+  ) => {
+    if (decision !== 'paid_leave') {
+      void saveAttendanceShortageDecision(row, decision);
+      return;
+    }
+    const employeeIdValue = String(row.employeeId || '').trim();
+    const profile = profiles.find((item) => String(item.source_id || item.id) === employeeIdValue) || null;
+    const monthlyLimitMinutes = Math.max(0, toNumber(profile?.monthly_paid_leave_hours) * 60);
+    if (monthlyLimitMinutes <= 0) {
+      message.info('برای این کارمند سقف مرخصی با حقوق تعیین نشده است.');
+      return;
+    }
+    const allocation = calculateManualPaidLeaveAllocation(row);
+    if (allocation.paidMinutes <= 0) {
+      Modal.confirm({
+        title: 'سقف مرخصی با حقوق تکمیل شده است',
+        content: `برای این کارمند در این ماه، ${formatMinutesLabel(allocation.requestedMinutes)} کسری باقی مانده اما سقف مرخصی با حقوقی ندارد. در صورت تایید، همهٔ این زمان به‌عنوان مرخصی بدون حقوق لحاظ می‌شود.`,
+        okText: 'تایید و ثبت مرخصی بدون حقوق',
+        cancelText: 'انصراف',
+        onOk: () => saveAttendanceShortageDecision(row, 'paid_leave', allocation),
+      });
+      return;
+    }
+    if (allocation.unpaidMinutes > 0) {
+      Modal.confirm({
+        title: 'بخشی از سقف مرخصی با حقوق باقی مانده است',
+        content: `از ${formatMinutesLabel(allocation.requestedMinutes)} کسری این روز، ${formatMinutesLabel(allocation.paidMinutes)} با حقوق و ${formatMinutesLabel(allocation.unpaidMinutes)} بدون حقوق لحاظ می‌شود.`,
+        okText: 'تایید و اعمال',
+        cancelText: 'انصراف',
+        onOk: () => saveAttendanceShortageDecision(row, 'paid_leave', allocation),
+      });
+      return;
+    }
+    void saveAttendanceShortageDecision(row, 'paid_leave', allocation);
+  }, [calculateManualPaidLeaveAllocation, message, profiles, saveAttendanceShortageDecision]);
+
+  const handleClearAttendanceShortageDecision = useCallback(async (entryId: string | null | undefined) => {
+    const id = String(entryId || '').trim();
+    if (!id) return;
+    setSavingOvertimeLedgerKey(id);
+    try {
+      const { error } = await supabase
+        .from('payroll_calculation_entries')
+        .update({ status: 'voided', updated_at: new Date().toISOString() })
+        .eq('id', id);
+      if (error && !isMissingPayrollLedgerError(error)) throw error;
+      message.success('تصمیم اپراتور حذف شد و تشخیص خودکار تردد دوباره اعمال می‌شود.');
+      await refreshPayrollPeriodState();
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'بازگشت به تشخیص خودکار ناموفق بود.'));
     } finally {
       setSavingOvertimeLedgerKey(null);
     }
@@ -5807,7 +6076,7 @@ const HRPage: React.FC = () => {
         source_type: meta.sourceType,
         source_key: meta.sourceKey,
         source_module_id: meta.sourceModuleId,
-        source_record_id: meta.sourceType === 'attendance_paid_leave' ? row.approvedLeaveRequestId : row.rawIds[0] || row.id || null,
+        source_record_id: meta.sourceType === 'attendance_paid_leave' ? row.approvedLeaveRequestId : row.rawIds[0] || null,
         title: meta.title,
         amount: meta.amount,
         quantity: meta.minutes / 60,
@@ -8328,6 +8597,15 @@ const HRPage: React.FC = () => {
                   </div>
                 </Card>
 
+                {payrollWizardMissingAttendanceScheduleDates.length > 0 ? (
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                    <div className="text-sm leading-6">
+                      برنامه حضور این کارمند برای {toPersianNumber(payrollWizardMissingAttendanceScheduleDates.length)} روز کاریِ بازهٔ {toPersianNumber(safeJalaliFormat(monthStart.toISOString(), 'YYYY/MM/DD'))} تا {toPersianNumber(safeJalaliFormat(monthEnd.toISOString(), 'YYYY/MM/DD'))} تعریف نشده است. تا زمان تعریف برنامهٔ مؤثر، ساعت موظف و کسری این روزها محاسبه نمی‌شود.
+                    </div>
+                    <Button size="small" onClick={() => navigate('/work_schedules')}>مشاهده برنامه حضور</Button>
+                  </div>
+                ) : null}
+
                 <Card>
                   <div className="mb-3 text-sm font-bold text-gray-700 dark:text-gray-200">لاگ تردد و اضافه‌کاری</div>
                   {payrollWizardAttendanceRows.length === 0 ? (
@@ -8361,14 +8639,33 @@ const HRPage: React.FC = () => {
                               { label: 'تعجیل', sourceType: 'attendance_early_bonus', sourceKey: buildAttendanceEarlyBonusSourceKey(row) },
                               { label: 'تاخیر/غیبت', sourceType: 'attendance_delay_absence', sourceKey: buildAttendanceDelayAbsenceSourceKey(row) },
                               { label: 'مرخصی', sourceType: 'attendance_paid_leave', sourceKey: buildAttendancePaidLeaveSourceKey(row) },
+                              { label: 'تصمیم تردد', sourceType: ATTENDANCE_SHORTAGE_DECISION_SOURCE_TYPE, sourceKey: buildAttendanceShortageDecisionSourceKey(row) },
                               { label: 'مازاد حضور', sourceType: 'attendance_excess_presence_exclusion', sourceKey: buildAttendanceExcessPresenceExclusionSourceKey(row) },
                             ].map((item) => {
                               const entry = payrollWizardEmployeeLedger.find((ledger) => ledger.source_type === item.sourceType && String(ledger.source_key || ledger.details?.source_key || '') === item.sourceKey);
                               if (!entry) return null;
                               const isExcessPresenceExclusion = item.sourceType === 'attendance_excess_presence_exclusion';
+                              const decisionLabel: Record<string, string> = {
+                                paid_leave: 'مرخصی با حقوق',
+                                unpaid_leave: 'مرخصی بدون حقوق',
+                                absence: 'غیبت',
+                              };
+                              const isAttendanceDecision = item.sourceType === ATTENDANCE_SHORTAGE_DECISION_SOURCE_TYPE;
+                              const decision = String(entry.details?.decision || '');
+                              const plannedPaidLeaveMinutes = Math.max(0, toNumber(entry.details?.planned_paid_leave_minutes));
+                              const plannedUnpaidLeaveMinutes = Math.max(0, toNumber(entry.details?.planned_unpaid_leave_minutes));
+                              const decisionStatusLabel = decision === 'paid_leave' && plannedUnpaidLeaveMinutes > 0
+                                ? (plannedPaidLeaveMinutes > 0 ? 'مرخصی ترکیبی' : 'مرخصی بدون حقوق')
+                                : (decisionLabel[decision] || 'ثبت شده');
                               return (
                                 <Tag key={item.sourceType} color={entry.status === 'included_in_payroll' ? 'green' : 'cyan'}>
-                                  {item.label}: {entry.status === 'included_in_payroll' ? 'در فیش' : isExcessPresenceExclusion ? 'لحاظ نشده' : 'آماده'}
+                                  {item.label}: {entry.status === 'included_in_payroll'
+                                    ? 'در فیش'
+                                    : isExcessPresenceExclusion
+                                      ? 'لحاظ نشده'
+                                      : isAttendanceDecision
+                                        ? decisionStatusLabel
+                                        : 'آماده'}
                                 </Tag>
                               );
                             }).filter(Boolean);
@@ -8383,15 +8680,34 @@ const HRPage: React.FC = () => {
                             const earlyBonusEntry = payrollWizardEmployeeLedger.find((ledger) => ledger.source_type === 'attendance_early_bonus' && String(ledger.source_key || ledger.details?.source_key || '') === buildAttendanceEarlyBonusSourceKey(row));
                             const delayEntry = payrollWizardEmployeeLedger.find((ledger) => ledger.source_type === 'attendance_delay_absence' && String(ledger.source_key || ledger.details?.source_key || '') === buildAttendanceDelayAbsenceSourceKey(row));
                             const leaveEntry = payrollWizardEmployeeLedger.find((ledger) => ledger.source_type === 'attendance_paid_leave' && String(ledger.source_key || ledger.details?.source_key || '') === buildAttendancePaidLeaveSourceKey(row));
+                            const shortageDecisionEntry = payrollWizardEmployeeLedger.find((ledger) => ledger.source_type === ATTENDANCE_SHORTAGE_DECISION_SOURCE_TYPE && String(ledger.source_key || ledger.details?.source_key || '') === buildAttendanceShortageDecisionSourceKey(row));
                             const excessPresenceEntry = payrollWizardEmployeeLedger.find((ledger) => ledger.source_type === 'attendance_excess_presence_exclusion' && String(ledger.source_key || ledger.details?.source_key || '') === buildAttendanceExcessPresenceExclusionSourceKey(row));
                             const overtimeMeta = resolveAttendanceLedgerEntry(row, 'attendance_overtime');
                             const earlyBonusMeta = resolveAttendanceLedgerEntry(row, 'attendance_early_bonus');
-                            const delayMeta = resolveAttendanceLedgerEntry(row, 'attendance_delay_absence');
                             const leaveMeta = resolveAttendanceLedgerEntry(row, 'attendance_paid_leave');
                             const excessPresenceMinutes = calculateAttendanceExcessPresenceMinutes(row);
                             const canExcludeExcessPresence = payrollWizardBaseCompensation.isHourly && excessPresenceMinutes > 0;
+                            const shortageMinutes = calculateAttendanceShortageMinutes(row);
+                            const manualDecision = attendanceShortageDecisionByRowKey.get(row.key) || null;
+                            const canClassifyShortage = !row.isApprovedLeave && shortageMinutes > 0;
+                            const monthlyPaidLeaveMinutes = Math.max(0, toNumber(payrollWizardSummary?.profile?.monthly_paid_leave_hours) * 60);
                             return (
                               <Space size="small" wrap>
+                                {canClassifyShortage && monthlyPaidLeaveMinutes > 0 && manualDecision !== 'paid_leave' ? (
+                                  <Button size="small" loading={savingOvertimeLedgerKey === buildAttendanceShortageDecisionSourceKey(row)} onClick={() => handleChooseAttendanceShortageDecision(row, 'paid_leave')}>
+                                    لحاظ مرخصی با حقوق
+                                  </Button>
+                                ) : null}
+                                {canClassifyShortage && manualDecision !== 'unpaid_leave' ? (
+                                  <Button size="small" danger loading={savingOvertimeLedgerKey === buildAttendanceShortageDecisionSourceKey(row)} onClick={() => handleChooseAttendanceShortageDecision(row, 'unpaid_leave')}>
+                                    لحاظ مرخصی بدون حقوق
+                                  </Button>
+                                ) : null}
+                                {canClassifyShortage && manualDecision !== 'absence' ? (
+                                  <Button size="small" loading={savingOvertimeLedgerKey === buildAttendanceShortageDecisionSourceKey(row)} onClick={() => handleChooseAttendanceShortageDecision(row, 'absence')}>
+                                    ثبت غیبت
+                                  </Button>
+                                ) : null}
                                 {canExcludeExcessPresence && !excessPresenceEntry ? (
                                   <Button size="small" danger loading={savingOvertimeLedgerKey === buildAttendanceExcessPresenceExclusionSourceKey(row)} onClick={() => handleExcludeAttendanceExcessPresence(row)}>
                                     عدم لحاظ ساعات مازاد
@@ -8407,20 +8723,16 @@ const HRPage: React.FC = () => {
                                     لحاظ پاداش تعجیل
                                   </Button>
                                 ) : null}
-                                {delayMeta.minutes > 0 && !delayEntry ? (
-                                  <Button size="small" danger loading={savingOvertimeLedgerKey === delayMeta.sourceKey} onClick={() => handlePrepareAttendanceLedgerEntry(row, 'attendance_delay_absence')}>
-                                    لحاظ مرخصی بدون حقوق
-                                  </Button>
-                                ) : null}
-                                {leaveMeta.minutes > 0 && !leaveEntry ? (
+                                {leaveMeta.minutes > 0 && !leaveEntry && !manualDecision ? (
                                   <Button size="small" loading={savingOvertimeLedgerKey === leaveMeta.sourceKey} onClick={() => handlePrepareAttendanceLedgerEntry(row, 'attendance_paid_leave')}>
                                     لحاظ مرخصی
                                   </Button>
                                 ) : null}
                                 {overtimeEntry && overtimeEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === overtimeEntry.id} onClick={() => handleVoidAttendanceLedgerEntry(overtimeEntry.id)}>عدم لحاظ اضافه‌کاری</Button> : null}
                                 {earlyBonusEntry && earlyBonusEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === earlyBonusEntry.id} onClick={() => handleVoidAttendanceLedgerEntry(earlyBonusEntry.id)}>عدم لحاظ تعجیل</Button> : null}
-                                {delayEntry && delayEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === delayEntry.id} onClick={() => handleVoidAttendanceLedgerEntry(delayEntry.id)}>عدم لحاظ تاخیر/غیبت</Button> : null}
-                                {leaveEntry && leaveEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === leaveEntry.id} onClick={() => handleVoidAttendanceLedgerEntry(leaveEntry.id)}>عدم لحاظ مرخصی</Button> : null}
+                                {delayEntry && !manualDecision && delayEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === delayEntry.id} onClick={() => handleVoidAttendanceLedgerEntry(delayEntry.id)}>عدم لحاظ تاخیر/غیبت</Button> : null}
+                                {leaveEntry && !manualDecision && leaveEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === leaveEntry.id} onClick={() => handleVoidAttendanceLedgerEntry(leaveEntry.id)}>عدم لحاظ مرخصی</Button> : null}
+                                {shortageDecisionEntry && shortageDecisionEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === shortageDecisionEntry.id} onClick={() => handleClearAttendanceShortageDecision(shortageDecisionEntry.id)}>بازگشت به تشخیص خودکار</Button> : null}
                                 {excessPresenceEntry && excessPresenceEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === excessPresenceEntry.id} onClick={() => handleIncludeAttendanceExcessPresence(excessPresenceEntry.id)}>لحاظ ساعات مازاد</Button> : null}
                               </Space>
                             );

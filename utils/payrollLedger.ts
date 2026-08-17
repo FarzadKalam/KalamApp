@@ -48,6 +48,7 @@ const PAYROLL_LEDGER_SOURCE_LABELS: Record<string, string> = {
   attendance_early_bonus: 'پاداش تعجیل',
   attendance_delay_absence: 'تاخیر / غیبت',
   attendance_paid_leave: 'مرخصی با حقوق',
+  attendance_shortage_decision: 'تصمیم تردد',
   attendance_excess_presence_exclusion: 'ساعات مازاد حضورِ لحاظ‌نشده',
   employee_bonus: 'پاداش پرسنلی',
   employee_penalty: 'جریمه پرسنلی',
