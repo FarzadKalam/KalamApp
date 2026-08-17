@@ -121,6 +121,7 @@ const EMPTY_REVISIONS: RuntimeRevisions = {
   bot_messages: 0,
   bot_group_messages: 0,
   bot_direct_messages: 0,
+  system_messages: 0,
   sms_messages: 0,
   voip_calls: 0,
   tasks: 0,
@@ -136,6 +137,7 @@ const toSummarySection = (section: RuntimeSection): NotificationUnreadSection | 
     section === 'notes'
     || section === 'bot_messages'
     || section === 'bot_direct_messages'
+    || section === 'system_messages'
     || section === 'sms_messages'
     || section === 'voip_calls'
     || section === 'tasks'

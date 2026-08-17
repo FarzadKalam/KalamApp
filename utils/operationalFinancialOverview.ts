@@ -535,7 +535,7 @@ const buildPreviousSystemOpeningRow = (
   };
 };
 
-const fetchSingleOperationalFinancialOverview = async ({
+export const fetchSingleOperationalFinancialOverview = async ({
   entityType,
   entityId,
   supabase = sharedSupabase,
@@ -983,7 +983,7 @@ type LinkedFinancialEntityRow = {
   linked_employee_id?: string | null;
 };
 
-const resolveLinkedFinancialEntities = async (
+export const resolveLinkedFinancialEntities = async (
   supabase: typeof sharedSupabase,
   entityType: OperationalFinancialEntityType,
   entityId: string,

@@ -3600,7 +3600,7 @@ const HRPage: React.FC = () => {
     const end = monthEnd.startOf('day');
     while (cursor.valueOf() <= end.valueOf()) {
       const dateIso = toNativeGregorianDateString(cursor);
-      if (dateIso && officialHolidayDateKeys.has(dateIso) && profile.works_on_official_holidays !== true) {
+      if (dateIso && officialHolidayDateKeys.has(dateIso) && profile?.works_on_official_holidays !== true) {
         cursor = cursor.add(1, 'day');
         continue;
       }
