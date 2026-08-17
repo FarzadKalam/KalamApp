@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   App,
   Badge,
@@ -105,6 +105,19 @@ const fetchAllCommissionPages = async <T,>(
   }
 };
 
+const fetchAllHrPages = async <T,>(
+  fetchPage: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: any }>,
+) => {
+  const rows: T[] = [];
+  for (let from = 0; ; from += HR_ATTENDANCE_QUERY_PAGE_SIZE) {
+    const result = await fetchPage(from, from + HR_ATTENDANCE_QUERY_PAGE_SIZE - 1);
+    if (result.error) return { data: null, error: result.error };
+    const page = result.data || [];
+    rows.push(...page);
+    if (page.length < HR_ATTENDANCE_QUERY_PAGE_SIZE) return { data: rows, error: null };
+  }
+};
+
 const chunkCommissionQueryIds = <T,>(items: T[]) => {
   const chunks: T[][] = [];
   for (let index = 0; index < items.length; index += COMMISSION_QUERY_ID_CHUNK_SIZE) {
@@ -166,6 +179,12 @@ import { fetchCurrentUserRecordAccessContext, fetchCurrentUserRolePermissions, t
 import { evaluateLegacyVisibilityRule } from '../utils/conditionalFieldRules';
 import { DEFAULT_SALARY_TYPE, getSalaryTypeLabelFa, resolvePayrollBaseCompensation } from '../utils/payrollSalaryType';
 import { allocatePaidLeaveMinutes, calculateExcessPresenceMinutes, calculatePayablePresenceMinutes } from '../utils/payrollAttendanceTime';
+import {
+  ATTENDANCE_AUTO_VOID_REASON,
+  ATTENDANCE_MANUAL_VOID_REASON,
+  buildAttendanceShortageDecisionSignature,
+  canRefreshAttendanceLedgerEntry,
+} from '../utils/payrollAttendancePreparation';
 import { getHolidaySummaryForDate } from '../utils/holidayCalendar';
 import PrintSection from '../components/moduleShow/PrintSection';
 import { useListPrintManager } from '../utils/printTemplates/useListPrintManager';
@@ -1536,6 +1555,8 @@ const HRPage: React.FC = () => {
   const [payrollStatusLoading, setPayrollStatusLoading] = useState(false);
   const [payrollWizardOpen, setPayrollWizardOpen] = useState(false);
   const [payrollWizardPreparing, setPayrollWizardPreparing] = useState(false);
+  const [payrollWizardPreparationIssue, setPayrollWizardPreparationIssue] = useState<string | null>(null);
+  const [payrollWizardPreparationRetry, setPayrollWizardPreparationRetry] = useState(0);
   const [payrollWizardEmployeeId, setPayrollWizardEmployeeId] = useState<string | null>(null);
   const [payrollWizardStep, setPayrollWizardStep] = useState(0);
   const [employeeModulePermissions, setEmployeeModulePermissions] = useState<ModulePermissionConfig>({});
@@ -1571,6 +1592,13 @@ const HRPage: React.FC = () => {
   const [attendanceModulePermissions, setAttendanceModulePermissions] = useState<ModulePermissionConfig | null>(null);
   const [supportStats, setSupportStats] = useState<HrSupportStats>(EMPTY_HR_SUPPORT_STATS);
   const [supportDataLoading, setSupportDataLoading] = useState(false);
+  const [payrollAttendanceInputs, setPayrollAttendanceInputs] = useState<{
+    rangeKey: string;
+    status: 'loading' | 'ready' | 'error';
+    errorMessage: string | null;
+  }>({ rangeKey: '', status: 'loading', errorMessage: null });
+  const payrollAttendanceInputRequestRef = useRef(0);
+  const payrollWizardPreparationRunRef = useRef(0);
   const [attendanceRows, setAttendanceRows] = useState<AttendanceLogRecord[]>([]);
   const [scheduleRows, setScheduleRows] = useState<WorkScheduleDashboardRow[]>([]);
   const [requestRows, setRequestRows] = useState<HrRequestRecord[]>([]);
@@ -1629,6 +1657,10 @@ const HRPage: React.FC = () => {
 
   const monthStart = useMemo(() => selectedRange[0].startOf('day'), [selectedRange]);
   const monthEnd = useMemo(() => selectedRange[1].endOf('day'), [selectedRange]);
+  const payrollAttendanceInputRangeKey = useMemo(
+    () => `${toNativeGregorianDateString(monthStart) || ''}:${toNativeGregorianDateString(monthEnd) || ''}`,
+    [monthEnd, monthStart],
+  );
   const goalPeriodOverride = useMemo(
     () => ({ startIso: monthStart.toISOString(), endIso: monthEnd.toISOString() }),
     [monthEnd, monthStart],
@@ -1808,6 +1840,13 @@ const HRPage: React.FC = () => {
   const fetchData = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
     else setLoading(true);
+    const attendanceInputRequestId = ++payrollAttendanceInputRequestRef.current;
+    const attendanceInputRangeKey = `${toNativeGregorianDateString(monthStart) || ''}:${toNativeGregorianDateString(monthEnd) || ''}`;
+    setPayrollAttendanceInputs({
+      rangeKey: attendanceInputRangeKey,
+      status: 'loading',
+      errorMessage: null,
+    });
 
     try {
       const buildHrTasksQuery = (selectExpr: string) => {
@@ -2007,43 +2046,56 @@ const HRPage: React.FC = () => {
       const supportStatsPromise = (async () => {
         setSupportDataLoading(true);
         try {
+        const supportPeriodStart = toNativeGregorianDateString(monthStart);
+        const supportPeriodEnd = toNativeGregorianDateString(monthEnd);
         const [attendanceStatsResult, schedulesStatsResult, leaveStatsResult, overtimeStatsResult, missionStatsResult, bonusStatsResult, penaltyStatsResult] = await Promise.allSettled([
         (async () => {
-          const rows: AttendanceLogRecord[] = [];
-          for (let from = 0; ; from += HR_ATTENDANCE_QUERY_PAGE_SIZE) {
-            const result = await supabase
+          const selectColumns = 'id, assignee_id, employee_id, related_profile_id, log_type, occurred_at, attendance_date, check_in_time, check_out_time, source_type, actual_check_in_time, actual_check_out_time, manual_check_in_time, manual_check_out_time, location_text, notes, created_by, updated_by, created_at, updated_at';
+          const [attendanceDateResult, occurredAtResult] = await Promise.all([
+            fetchAllHrPages<any>((from, to) => supabase
               .from('attendance_logs')
-              .select('id, assignee_id, employee_id, related_profile_id, log_type, occurred_at, attendance_date, check_in_time, check_out_time, source_type, actual_check_in_time, actual_check_out_time, manual_check_in_time, manual_check_out_time, location_text, notes, created_by, updated_by, created_at, updated_at')
+              .select(selectColumns)
+              .gte('attendance_date', supportPeriodStart || '')
+              .lte('attendance_date', supportPeriodEnd || '')
+              .order('attendance_date', { ascending: false })
+              .order('id', { ascending: false })
+              .range(from, to)),
+            fetchAllHrPages<any>((from, to) => supabase
+              .from('attendance_logs')
+              .select(selectColumns)
               .gte('occurred_at', monthStart.toISOString())
               .lte('occurred_at', monthEnd.toISOString())
               .order('occurred_at', { ascending: false })
               .order('id', { ascending: false })
-              .range(from, from + HR_ATTENDANCE_QUERY_PAGE_SIZE - 1);
-            if (result.error) return result;
-            const page = (result.data || []) as AttendanceLogRecord[];
-            rows.push(...page);
-            if (page.length < HR_ATTENDANCE_QUERY_PAGE_SIZE) {
-              return { data: rows, error: null };
-            }
-          }
+              .range(from, to)),
+          ]);
+          if (attendanceDateResult.error) return attendanceDateResult;
+          if (occurredAtResult.error) return occurredAtResult;
+          const rowsById = new Map<string, any>();
+          [...(attendanceDateResult.data || []), ...(occurredAtResult.data || [])]
+            .forEach((row: any) => rowsById.set(String(row?.id || ''), row));
+          return { data: Array.from(rowsById.values()), error: null };
         })(),
-        supabase
+        fetchAllHrPages<any>((from, to) => supabase
           .from('work_schedules')
           .select('id, title, status, is_active, effective_from, effective_to, employee_id, weekly_plan, created_at, updated_at')
+          .or(`effective_from.is.null,effective_from.lte.${supportPeriodEnd || ''}`)
+          .or(`effective_to.is.null,effective_to.gte.${supportPeriodStart || ''}`)
           .order('updated_at', { ascending: false })
-          .limit(2000),
+          .order('id', { ascending: false })
+          .range(from, to)),
         (async () => {
-          const primary = await supabase
+          const fetchLeavePages = (selectColumns: string) => fetchAllHrPages<any>((from, to) => supabase
             .from('leave_requests')
-            .select('id, employee_id, assignee_id, related_profile_id, status, leave_type, start_date, end_date, total_days, total_minutes, notes, created_at, updated_at')
-            .order('created_at', { ascending: false })
-            .limit(HR_STATS_FETCH_LIMIT);
+            .select(selectColumns)
+            .lte('start_date', supportPeriodEnd || '')
+            .or(`end_date.gte.${supportPeriodStart || ''},end_date.is.null`)
+            .order('start_date', { ascending: false })
+            .order('id', { ascending: false })
+            .range(from, to));
+          const primary = await fetchLeavePages('id, employee_id, assignee_id, related_profile_id, status, leave_type, start_date, end_date, total_days, total_minutes, notes, created_at, updated_at');
           if (!primary.error || !isMissingLeaveOptionalColumnError(primary.error)) return primary;
-          return supabase
-            .from('leave_requests')
-            .select('id, employee_id, status, leave_type, start_date, end_date, total_days, total_minutes, notes, created_at, updated_at')
-            .order('created_at', { ascending: false })
-            .limit(HR_STATS_FETCH_LIMIT);
+          return fetchLeavePages('id, employee_id, status, leave_type, start_date, end_date, total_days, total_minutes, notes, created_at, updated_at');
         })(),
         supabase
           .from('overtime_requests')
@@ -2067,6 +2119,12 @@ const HRPage: React.FC = () => {
           .limit(HR_STATS_FETCH_LIMIT),
         ]);
 
+        const hasSupportResultError = (result: any) => result.status !== 'fulfilled' || Boolean(result.value?.error);
+        const attendanceInputIssues = [
+          hasSupportResultError(attendanceStatsResult) ? 'تردد' : null,
+          hasSupportResultError(schedulesStatsResult) ? 'برنامه حضور' : null,
+          hasSupportResultError(leaveStatsResult) ? 'مرخصی' : null,
+        ].filter((label): label is string => Boolean(label));
         const nextSupportStats: HrSupportStats = { ...EMPTY_HR_SUPPORT_STATS };
         let nextAttendanceRows: AttendanceLogRecord[] = [];
         let nextScheduleRows: WorkScheduleDashboardRow[] = [];
@@ -2272,6 +2330,7 @@ const HRPage: React.FC = () => {
         nextSupportStats.requests.penaltyPending = rows.filter((row: any) => row?.status === 'pending').length;
       }
 
+      if (attendanceInputRequestId !== payrollAttendanceInputRequestRef.current) return;
       setSupportStats(nextSupportStats);
       setAttendanceRows(nextAttendanceRows);
       setScheduleRows(nextScheduleRows);
@@ -2283,8 +2342,17 @@ const HRPage: React.FC = () => {
           return bDate - aDate;
         }),
       );
+      setPayrollAttendanceInputs({
+        rangeKey: attendanceInputRangeKey,
+        status: attendanceInputIssues.length > 0 ? 'error' : 'ready',
+        errorMessage: attendanceInputIssues.length > 0
+          ? `دریافت داده‌های ${attendanceInputIssues.join('، ')} کامل نشد.`
+          : null,
+      });
         } finally {
-          setSupportDataLoading(false);
+          if (attendanceInputRequestId === payrollAttendanceInputRequestRef.current) {
+            setSupportDataLoading(false);
+          }
         }
       })();
 
@@ -2338,6 +2406,13 @@ const HRPage: React.FC = () => {
 
       await supportStatsPromise;
     } catch (err: any) {
+      if (attendanceInputRequestId === payrollAttendanceInputRequestRef.current) {
+        setPayrollAttendanceInputs({
+          rangeKey: attendanceInputRangeKey,
+          status: 'error',
+          errorMessage: 'دریافت داده‌های لازم برای محاسبه تردد ناموفق بود.',
+        });
+      }
       message.error(toFaErrorMessage(err as any, 'خطا در دریافت داده‌های منابع انسانی'));
     } finally {
       setLoading(false);
@@ -3499,6 +3574,11 @@ const HRPage: React.FC = () => {
     return next;
   }, [attendanceComputedRows]);
 
+  const attendanceShortageDecisionSignature = useMemo(
+    () => buildAttendanceShortageDecisionSignature(payrollLedgerRows),
+    [payrollLedgerRows],
+  );
+
   const attendanceShortageDecisionByRowKey = useMemo(() => {
     const next = new Map<string, AttendanceShortageDecision>();
     payrollLedgerRows
@@ -3510,7 +3590,7 @@ const HRPage: React.FC = () => {
         next.set(rowKey, decision);
       });
     return next;
-  }, [payrollLedgerRows]);
+  }, [attendanceShortageDecisionSignature]);
 
   const computeRequiredWorkMinutesForProfile = useCallback((profile: ProfileRecord | null | undefined) => {
     const employeeIdValue = String(profile?.source_id || profile?.id || '').trim();
@@ -4357,6 +4437,8 @@ const HRPage: React.FC = () => {
   const openPayrollWizard = useCallback((employeeIdValue: string) => {
     setPayrollWizardEmployeeId(employeeIdValue);
     setPayrollWizardStep(0);
+    setPayrollWizardPreparationIssue(null);
+    setPayrollWizardPreparationRetry(0);
     setEditingPayrollWizardFieldKey(null);
     setPayrollWizardDraftValues({});
     setPayrollWizardPreparing(true);
@@ -4365,8 +4447,11 @@ const HRPage: React.FC = () => {
   }, [fetchEmployeeAdvancesForDashboard]);
 
   const closePayrollWizard = useCallback(() => {
+    payrollWizardPreparationRunRef.current += 1;
     setPayrollWizardOpen(false);
     setPayrollWizardPreparing(false);
+    setPayrollWizardPreparationIssue(null);
+    setPayrollWizardPreparationRetry(0);
     setPayrollWizardEmployeeId(null);
     setPayrollWizardStep(0);
     setEditingPayrollWizardFieldKey(null);
@@ -5706,14 +5791,22 @@ const HRPage: React.FC = () => {
     }
   }, [message, monthEnd, monthStart, refreshPayrollPeriodState, resolveAttendanceLedgerEntry]);
 
-  const handleVoidAttendanceLedgerEntry = useCallback(async (entryId: string | null | undefined) => {
-    const id = String(entryId || '').trim();
+  const handleVoidAttendanceLedgerEntry = useCallback(async (entry: PayrollDashboardLedgerRow | null | undefined) => {
+    const id = String(entry?.id || '').trim();
     if (!id) return;
     setSavingOvertimeLedgerKey(id);
     try {
       const { error } = await supabase
         .from('payroll_calculation_entries')
-        .update({ status: 'voided', updated_at: new Date().toISOString() })
+        .update({
+          status: 'voided',
+          details: {
+            ...(entry?.details || {}),
+            void_reason: ATTENDANCE_MANUAL_VOID_REASON,
+            voided_at: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', id);
       if (error && !isMissingPayrollLedgerError(error)) throw error;
       message.success('ردیف از فیش حقوقی کنار گذاشته شد.');
@@ -6025,14 +6118,22 @@ const HRPage: React.FC = () => {
 
       const { error } = await supabase
         .from('payroll_calculation_entries')
-        .update({ status: 'voided', updated_at: new Date().toISOString() })
+        .update({
+          status: 'voided',
+          details: {
+            ...(existing.details || {}),
+            void_reason: ATTENDANCE_AUTO_VOID_REASON,
+            voided_at: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', existing.id);
       if (error && !isMissingPayrollLedgerError(error)) throw error;
     }
 
     for (const { row, meta } of candidates) {
       const existing = existingByTypeAndKey.get(`${meta.sourceType}::${meta.sourceKey}`);
-      if (String(existing?.status || '') === 'included_in_payroll' || String(existing?.status || '') === 'voided') continue;
+      if (!canRefreshAttendanceLedgerEntry(existing)) continue;
       const payloadDetails = {
         source_key: meta.sourceKey,
         attendance_date: row.attendanceDate,
@@ -6265,60 +6366,121 @@ const HRPage: React.FC = () => {
     const periodStart = toNativeGregorianDateString(monthStart);
     const periodEnd = toNativeGregorianDateString(monthEnd);
     if (!periodStart || !periodEnd) return;
-    let cancelled = false;
+    if (
+      payrollAttendanceInputs.rangeKey !== payrollAttendanceInputRangeKey
+      || payrollAttendanceInputs.status === 'loading'
+    ) {
+      setPayrollWizardPreparing(true);
+      return;
+    }
+    if (payrollAttendanceInputs.status === 'error') {
+      setPayrollWizardPreparing(false);
+      setPayrollWizardPreparationIssue(
+        payrollAttendanceInputs.errorMessage || 'داده‌های لازم برای آماده‌سازی تردد کامل نیست.',
+      );
+      return;
+    }
+
+    const runId = ++payrollWizardPreparationRunRef.current;
+    let disposed = false;
+    const isCurrentRun = () => !disposed && payrollWizardPreparationRunRef.current === runId;
     const run = async () => {
       setPayrollWizardPreparing(true);
+      setPayrollWizardPreparationIssue(null);
+      const preparationErrors: string[] = [];
       try {
-        await ensureActivityPerformanceLedgerForSummary(payrollWizardSummary, periodStart, periodEnd);
         const profile = payrollWizardSummary.profile;
         if (profile?.source_id) {
-          const directory = await fetchAssigneeDirectory(supabase);
           const profileUserId = String(profile.related_profile_id || profile.id || '').trim();
-          const directoryUser = (directory.users || []).find((user) => String(user.id || '').trim() === profileUserId);
-          await Promise.all([
-            syncEmployeeCompensationEntriesForPayroll(supabase as any, {
-              employeeIds: [String(profile.source_id)],
-              periodStart,
-              periodEnd,
-            }),
-            syncGoalRewardEntriesForPayroll(supabase as any, {
-              profiles: [{
+          const preparationTasks: Array<{ label: string; run: () => Promise<unknown> }> = [
+            {
+              label: 'تردد، تاخیر، غیبت و مرخصی',
+              run: () => prepareAttendancePayrollLedgerEntriesForRows(payrollWizardAttendanceRows),
+            },
+            {
+              label: 'اقلام حقوق کارکنان',
+              run: () => syncEmployeeCompensationEntriesForPayroll(supabase as any, {
+                employeeIds: [String(profile.source_id)],
+                periodStart,
+                periodEnd,
+              }),
+            },
+            {
+              label: 'عملکرد فعالیت‌ها',
+              run: () => ensureActivityPerformanceLedgerForSummary(payrollWizardSummary, periodStart, periodEnd),
+            },
+            {
+              label: 'تحقق اهداف',
+              run: async () => {
+                const directory = await fetchAssigneeDirectory(supabase);
+                const directoryUser = (directory.users || []).find((user) => String(user.id || '').trim() === profileUserId);
+                return syncGoalRewardEntriesForPayroll(supabase as any, {
+                  profiles: [{
+                    employeeId: String(profile.source_id),
+                    profileUserId,
+                    profileRoleId: directoryUser?.role_id ? String(directoryUser.role_id) : null,
+                    profileName: payrollWizardSummary.name,
+                  }],
+                  periodStart,
+                  periodEnd,
+                });
+              },
+            },
+          ];
+          if (profile.seniority_mode === 'labor_law' && profile.hire_date) {
+            preparationTasks.push({
+              label: 'سنوات',
+              run: () => syncSeniorityPayrollEntry(supabase as any, {
                 employeeId: String(profile.source_id),
-                profileUserId,
-                profileRoleId: directoryUser?.role_id ? String(directoryUser.role_id) : null,
-                profileName: payrollWizardSummary.name,
-              }],
-              periodStart,
-              periodEnd,
-            }),
-          ]);
-          await prepareAttendancePayrollLedgerEntriesForRows(payrollWizardAttendanceRows);
-        }
-        if (profile?.seniority_mode === 'labor_law' && profile?.hire_date && profile?.source_id) {
-          await syncSeniorityPayrollEntry(supabase as any, {
-            employeeId: String(profile.source_id),
-            hireDate: profile.hire_date,
-            periodStart,
-            periodEnd,
+                hireDate: profile.hire_date!,
+                periodStart,
+                periodEnd,
+              }),
+            });
+          }
+
+          const results = await Promise.allSettled(preparationTasks.map((task) => task.run()));
+          results.forEach((result, index) => {
+            if (result.status === 'rejected') preparationErrors.push(preparationTasks[index].label);
           });
+        } else {
+          preparationErrors.push('شناسه کارمند');
         }
-        if (!cancelled) await refreshPayrollPeriodState();
+        if (!isCurrentRun()) return;
+        try {
+          await refreshPayrollPeriodState();
+        } catch (error) {
+          preparationErrors.push('دریافت ردیف‌های آماده فیش');
+          console.warn('Could not refresh payroll wizard entries.', error);
+        }
+        if (preparationErrors.length > 0) {
+          console.warn('Could not prepare some payroll wizard sections.', preparationErrors);
+          setPayrollWizardPreparationIssue(`آماده‌سازی ${preparationErrors.join('، ')} کامل نشد. برای جلوگیری از ایجاد فیش ناقص، دوباره تلاش کنید.`);
+        }
       } catch (error) {
         console.warn('Could not prepare payroll wizard.', error);
+        if (isCurrentRun()) {
+          setPayrollWizardPreparationIssue('آماده‌سازی فیش کامل نشد. برای جلوگیری از ایجاد فیش ناقص، دوباره تلاش کنید.');
+        }
       } finally {
-        if (!cancelled) setPayrollWizardPreparing(false);
+        if (isCurrentRun()) setPayrollWizardPreparing(false);
       }
     };
     void run();
     return () => {
-      cancelled = true;
+      disposed = true;
     };
   }, [
     ensureActivityPerformanceLedgerForSummary,
     monthEnd,
     monthStart,
+    payrollAttendanceInputRangeKey,
+    payrollAttendanceInputs.errorMessage,
+    payrollAttendanceInputs.rangeKey,
+    payrollAttendanceInputs.status,
     payrollWizardAttendanceRows,
     payrollWizardOpen,
+    payrollWizardPreparationRetry,
     payrollWizardSummary,
     prepareAttendancePayrollLedgerEntriesForRows,
     refreshPayrollPeriodState,
@@ -6376,6 +6538,10 @@ const HRPage: React.FC = () => {
     }
     if (payrollWizardPreparing) {
       message.info('اقلام فیش هنوز در حال آماده‌سازی هستند؛ چند لحظه دیگر دوباره تلاش کنید.');
+      return;
+    }
+    if (payrollWizardPreparationIssue) {
+      message.error(payrollWizardPreparationIssue);
       return;
     }
 
@@ -6468,6 +6634,7 @@ const HRPage: React.FC = () => {
     payrollWizardSettleableAdvances,
     payrollWizardDraft,
     payrollWizardOpenLedger,
+    payrollWizardPreparationIssue,
     payrollWizardPreparing,
     payrollWizardSummary,
     refreshPayrollPeriodState,
@@ -8539,6 +8706,23 @@ const HRPage: React.FC = () => {
               ]}
             />
 
+            {payrollWizardPreparationIssue ? (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-100">
+                <span>{payrollWizardPreparationIssue}</span>
+                <Button
+                  size="small"
+                  loading={payrollWizardPreparing}
+                  onClick={() => {
+                    setPayrollWizardPreparationIssue(null);
+                    setPayrollWizardPreparationRetry((current) => current + 1);
+                    void fetchData(true);
+                  }}
+                >
+                  تلاش مجدد
+                </Button>
+              </div>
+            ) : null}
+
             {payrollWizardStep === 0 ? (
               <div className="space-y-4">
                 <Row gutter={[12, 12]}>
@@ -8728,10 +8912,10 @@ const HRPage: React.FC = () => {
                                     لحاظ مرخصی
                                   </Button>
                                 ) : null}
-                                {overtimeEntry && overtimeEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === overtimeEntry.id} onClick={() => handleVoidAttendanceLedgerEntry(overtimeEntry.id)}>عدم لحاظ اضافه‌کاری</Button> : null}
-                                {earlyBonusEntry && earlyBonusEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === earlyBonusEntry.id} onClick={() => handleVoidAttendanceLedgerEntry(earlyBonusEntry.id)}>عدم لحاظ تعجیل</Button> : null}
-                                {delayEntry && !manualDecision && delayEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === delayEntry.id} onClick={() => handleVoidAttendanceLedgerEntry(delayEntry.id)}>عدم لحاظ تاخیر/غیبت</Button> : null}
-                                {leaveEntry && !manualDecision && leaveEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === leaveEntry.id} onClick={() => handleVoidAttendanceLedgerEntry(leaveEntry.id)}>عدم لحاظ مرخصی</Button> : null}
+                                {overtimeEntry && overtimeEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === overtimeEntry.id} onClick={() => handleVoidAttendanceLedgerEntry(overtimeEntry)}>عدم لحاظ اضافه‌کاری</Button> : null}
+                                {earlyBonusEntry && earlyBonusEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === earlyBonusEntry.id} onClick={() => handleVoidAttendanceLedgerEntry(earlyBonusEntry)}>عدم لحاظ تعجیل</Button> : null}
+                                {delayEntry && !manualDecision && delayEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === delayEntry.id} onClick={() => handleVoidAttendanceLedgerEntry(delayEntry)}>عدم لحاظ تاخیر/غیبت</Button> : null}
+                                {leaveEntry && !manualDecision && leaveEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === leaveEntry.id} onClick={() => handleVoidAttendanceLedgerEntry(leaveEntry)}>عدم لحاظ مرخصی</Button> : null}
                                 {shortageDecisionEntry && shortageDecisionEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === shortageDecisionEntry.id} onClick={() => handleClearAttendanceShortageDecision(shortageDecisionEntry.id)}>بازگشت به تشخیص خودکار</Button> : null}
                                 {excessPresenceEntry && excessPresenceEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === excessPresenceEntry.id} onClick={() => handleIncludeAttendanceExcessPresence(excessPresenceEntry.id)}>لحاظ ساعات مازاد</Button> : null}
                               </Space>
@@ -8909,7 +9093,7 @@ const HRPage: React.FC = () => {
                 {payrollWizardStep < 3 ? (
                   <Button type="primary" loading={payrollWizardPreparing} disabled={payrollWizardPreparing} onClick={() => setPayrollWizardStep((current) => Math.min(3, current + 1))}>مرحله بعد</Button>
                 ) : (
-                  <Button type="primary" loading={creatingPayrollSlip || payrollWizardPreparing} disabled={payrollWizardPreparing} onClick={handleCreatePayrollSlipFromWizard}>ایجاد فیش پیش‌نویس</Button>
+                  <Button type="primary" loading={creatingPayrollSlip || payrollWizardPreparing} disabled={payrollWizardPreparing || Boolean(payrollWizardPreparationIssue)} onClick={handleCreatePayrollSlipFromWizard}>ایجاد فیش پیش‌نویس</Button>
                 )}
               </Space>
             </div>

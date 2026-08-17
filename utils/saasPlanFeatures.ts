@@ -1,6 +1,6 @@
 import { supabase } from '../supabaseClient';
 import { getAppRuntimeCached } from './appRuntimeCache';
-import { fetchCurrentUserRoleContext, SAAS_ADMIN_PERMISSION_KEY } from './permissions';
+import { fetchSessionBootstrap } from './sessionCache';
 
 export const MULTI_LANE_PROCESSES_FEATURE = 'multi_lane_processes';
 
@@ -11,10 +11,10 @@ export const hasCurrentOrgPlanFeature = async (
   const normalizedFeatureKey = String(featureKey || '').trim();
   if (!normalizedFeatureKey) return false;
 
-  const roleContext = await fetchCurrentUserRoleContext(supabase, { force: options?.force });
-  const saasAdminPermission = roleContext?.permissions?.[SAAS_ADMIN_PERMISSION_KEY] || {};
-  if (saasAdminPermission.view === true || saasAdminPermission.edit === true) return true;
-  const orgId = String(roleContext?.orgId || '').trim() || '__guest__';
+  // تصمیم دربارهٔ ویژگی، در سطح سازمان گرفته می‌شود؛ نه نقش کاربرِ درخواست‌دهنده.
+  // RPC علاوه بر تنظیمات پلن، سازمان داخلیِ دارای دسترسی SaaS Admin را هم تشخیص می‌دهد.
+  const session = await fetchSessionBootstrap(supabase, { force: options?.force });
+  const orgId = String(session.orgId || '').trim() || '__guest__';
   const defaultEnabled = options?.defaultEnabled === true;
 
   return getAppRuntimeCached({

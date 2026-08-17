@@ -190,3 +190,8 @@ export const CMS_MODULES = [
   cmsTagsConfig,
   cmsPagesConfig,
 ];
+
+const CMS_MODULE_ID_SET = new Set(CMS_MODULES.map((module) => module.id));
+
+export const isCmsModuleId = (moduleId?: string | null) =>
+  CMS_MODULE_ID_SET.has(String(moduleId || '').trim());

@@ -88,6 +88,7 @@ import {
 } from '../../utils/roleIconCatalog';
 import { clearIdentityDirectoryCache } from '../../utils/identityDirectory';
 import { clearReferenceDataCache } from '../../utils/referenceData';
+import { isCmsModuleId } from '../../utils/cmsModules';
 
 const CURRENT_USER_OPTION_VALUE = '__current_user__';
 const CURRENT_ROLE_OPTION_VALUE = '__current_role__';
@@ -161,7 +162,7 @@ const RolesTab: React.FC = () => {
   const mobileFooterModuleOptions = useMemo(
     () =>
       Object.values(MODULES)
-        .filter((module) => !isSaasAdminModuleId(module.id))
+        .filter((module) => !isSaasAdminModuleId(module.id) && !isCmsModuleId(module.id))
         .map((module) => ({
           label: module.titles.faSingular || module.titles.fa,
           value: module.id,
@@ -759,6 +760,101 @@ const RolesTab: React.FC = () => {
     );
   };
 
+  const renderModulePermissionPanel = (module: any) => {
+    const modPerms = getModulePerms(module.id);
+    const fields = collectModulePermissionFields(module);
+    const disabled = modPerms.view === false;
+
+    return (
+      <Panel key={module.id} className="dark:border-gray-800" header={
+        <div className="flex items-center justify-between w-full dark:text-gray-200">
+          <span className="font-bold">{module.titles.fa}</span>
+          <div className="flex gap-4 text-xs" onClick={(e) => e.stopPropagation()}>
+            <Checkbox className="dark:text-gray-400" checked={modPerms.view !== false} onChange={(e) => handlePermissionChange(module.id, 'view', undefined, e.target.checked)}>مشاهده</Checkbox>
+            <Checkbox className="dark:text-gray-400" checked={modPerms.edit !== false} disabled={disabled} onChange={(e) => handlePermissionChange(module.id, 'edit', undefined, e.target.checked)}>ویرایش/ایجاد</Checkbox>
+            <Checkbox className="dark:text-gray-400" checked={modPerms.delete !== false} disabled={disabled} onChange={(e) => handlePermissionChange(module.id, 'delete', undefined, e.target.checked)}>حذف</Checkbox>
+          </div>
+        </div>
+      }>
+        <div className="pl-6 pt-2">
+          <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">نمایش رکوردها</Divider>
+          <Radio.Group value={modPerms.record_scope || 'all'} onChange={(e) => handlePermissionChange(module.id, 'scope', undefined, e.target.value)} className="mb-4 flex flex-col gap-2">
+            <Radio value="all">مشاهده همه رکوردها</Radio>
+            <Radio value="own">فقط مشاهده رکوردهای به نام شخص</Radio>
+            <Radio value="team">فقط مشاهده رکوردهای به نام تیم (جایگاه)</Radio>
+            <Radio value="subtree">مشاهده رکوردهای افراد زیرمجموعه</Radio>
+          </Radio.Group>
+
+          {(() => {
+            const condOpen = conditionEditorOpen[module.id] || false;
+            const condOpts = moduleConditionOptions[module.id];
+            const existingConditions = normalizeViewConditionGroup(modPerms.view_conditions);
+            const conditionsAll = existingConditions.conditions_all || [];
+            const conditionsAny = existingConditions.conditions_any || [];
+            const condCount = conditionsAll.length + conditionsAny.length;
+            const condFields = getWorkflowConditionFields(module.id);
+            return (
+              <div className="mb-5">
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-xl border border-dashed border-[rgba(var(--brand-300-rgb),0.6)] bg-[rgba(var(--brand-50-rgb),0.4)] px-3 py-2 text-sm text-[rgba(var(--brand-700-rgb),1)] transition hover:border-[rgba(var(--brand-500-rgb),0.7)] hover:bg-[rgba(var(--brand-50-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-white/5 dark:text-[rgba(var(--brand-200-rgb),1)] dark:hover:bg-white/10"
+                  onClick={() => toggleConditionEditor(module.id)}
+                  disabled={disabled}
+                >
+                  <FilterOutlined className="text-xs" />
+                  <span className="flex-1 text-right text-xs font-medium">شرط‌های نمایش پیشرفته</span>
+                  {condCount > 0 && !condOpen && <Badge count={condCount} size="small" color="rgb(var(--brand-500-rgb))" />}
+                  <CaretDownOutlined className={`text-xs transition-transform ${condOpen ? 'rotate-180' : ''}`} />
+                </button>
+                {condOpen && (
+                  <div className="mt-2 rounded-xl border border-[rgba(var(--brand-200-rgb),0.5)] bg-white/60 p-3 dark:border-[rgba(var(--brand-300-rgb),0.15)] dark:bg-white/5">
+                    <div className="mb-3">
+                      <span className="text-xs font-medium text-gray-500 dark:text-gray-400">رکوردهایی که این شرط‌ها را دارند قابل مشاهده می‌شوند</span>
+                    </div>
+                    <div className="space-y-4">
+                      <div>
+                        <div className="mb-2 text-xs font-semibold text-gray-500 dark:text-gray-400">حتماً همه این شرط‌ها برقرار باشند</div>
+                        <WorkflowConditionsGroup
+                          value={conditionsAll as any}
+                          onChange={(next) => handleViewConditionsChange(module.id, { ...existingConditions, conditions_all: next as any })}
+                          fields={condFields}
+                          dynamicOptions={condOpts?.dynamicOptions || {}}
+                          relationOptions={condOpts?.relationOptions || {}}
+                          getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte'].includes(String(opt.value || '')))}
+                          getDefaultOperator={getDefaultWorkflowOperator}
+                          overlayZIndexBase={2000}
+                          disabled={disabled}
+                        />
+                      </div>
+                      <div>
+                        <div className="mb-2 text-xs font-semibold text-gray-500 dark:text-gray-400">کافی است یکی از این شرط‌ها برقرار باشد</div>
+                        <WorkflowConditionsGroup
+                          value={conditionsAny as any}
+                          onChange={(next) => handleViewConditionsChange(module.id, { ...existingConditions, conditions_any: next as any })}
+                          fields={condFields}
+                          dynamicOptions={condOpts?.dynamicOptions || {}}
+                          relationOptions={condOpts?.relationOptions || {}}
+                          getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte'].includes(String(opt.value || '')))}
+                          getDefaultOperator={getDefaultWorkflowOperator}
+                          overlayZIndexBase={2000}
+                          disabled={disabled}
+                        />
+                      </div>
+                    </div>
+                    {condCount === 0 && <div className="mt-2 text-xs text-gray-400 dark:text-gray-500">بدون شرط — همه رکوردها (با توجه به محدوده بالا) نمایش داده می‌شوند</div>}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">دسترسی به فیلدها و جداول</Divider>
+          {renderFieldSwitches(module.id, fields, disabled)}
+        </div>
+      </Panel>
+    );
+  };
+
   // ─── Drag-drop ─────────────────────────────────────────────────────────────
   const { activeId, overId, handleDragStart, handleDragOver, handleDragEnd, handleDragCancel } =
     useRoleDragDrop({
@@ -877,6 +973,7 @@ const RolesTab: React.FC = () => {
               <Collapse defaultActiveKey={[Object.values(MODULES)[0]?.id || 'products']} className="dark:bg-transparent dark:border-gray-800">
                 {Object.values(MODULES).filter((module) => (
                   !isSaasAdminModuleId(module.id)
+                  && !isCmsModuleId(module.id)
                   && module.id !== 'voip_call_reports'
                   // دسترسی پیام‌رسانی گروه‌های بات فقط در بخش «ارتباطات» و با دو حالت مشخص تنظیم می‌شود.
                   && module.id !== 'counterparty_bot_groups'
@@ -1144,6 +1241,15 @@ const RolesTab: React.FC = () => {
                     <div className="pl-6 pt-2">
                       <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">دسترسی‌های اضافی</Divider>
                       {renderFieldSwitches(SAAS_ADMIN_PERMISSION_KEY, SAAS_ADMIN_PERMISSION_FIELDS, getModulePerms(SAAS_ADMIN_PERMISSION_KEY).view !== true)}
+                      <Divider orientation="left" className="text-xs text-gray-400 m-0 mt-6 mb-2 border-gray-200 dark:border-gray-700">مدیریت محتوای تازه سیستم</Divider>
+                      <p className="mb-3 text-xs text-gray-500 dark:text-gray-400">
+                        دسترسی‌های بلاگ، آموزش‌ها و صفحات سایت فقط برای نقش‌های دارای دسترسی SaaS کاربرد دارند.
+                      </p>
+                      <Collapse className="dark:bg-transparent dark:border-gray-800">
+                        {Object.values(MODULES)
+                          .filter((module) => isCmsModuleId(module.id))
+                          .map(renderModulePermissionPanel)}
+                      </Collapse>
                     </div>
                   </Panel>
                 ) : null}

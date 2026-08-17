@@ -1418,6 +1418,15 @@ async function callRpc(supabaseUrl: string, key: string, fn: string, args: any):
   return await r.json();
 }
 
+async function isSaasAdminOrganization(supabaseUrl: string, key: string, orgId: string): Promise<boolean> {
+  if (!orgId) return false;
+  try {
+    return (await callRpc(supabaseUrl, key, 'org_is_saas_admin', { p_org_id: orgId })) === true;
+  } catch {
+    return false;
+  }
+}
+
 const acquireWorkflowRunnerLease = async (url: string, key: string) => {
   const token = await callRpc(url, key, 'acquire_workflow_runner_lease', {
     p_lease_seconds: WORKFLOW_RUNNER_LEASE_SECONDS,
@@ -2865,27 +2874,30 @@ const truthyPlanFeature = (value: any) => {
 };
 
 async function assertWorkflowAiEnabled(url: string, key: string, orgId: string): Promise<void> {
-  const orgRows = await dbGet(
-    url,
-    key,
-    `saas_org_settings?org_id=eq.${orgId}&select=plan_code,feature_overrides,status,is_readonly&limit=1`,
-  ).catch(() => []);
-  const orgSettings = orgRows[0] || null;
-  if (!orgSettings) throw new Error('تنظیمات پلن سازمان برای اجرای هوش مصنوعی پیدا نشد.');
-  const planCode = String(orgSettings?.plan_code || '').trim();
-  const planRows = planCode
-    ? await dbGet(url, key, `saas_plans?code=eq.${encodeURIComponent(planCode)}&select=enabled_features,is_active&limit=1`).catch(() => [])
-    : [];
-  const plan = planRows[0] || null;
-  if (!plan || plan?.is_active === false) {
-    throw new Error('پلن فعال سازمان برای اجرای هوش مصنوعی پیدا نشد.');
-  }
-  const features = {
-    ...(plan?.enabled_features && typeof plan.enabled_features === 'object' ? plan.enabled_features : {}),
-    ...(orgSettings?.feature_overrides && typeof orgSettings.feature_overrides === 'object' ? orgSettings.feature_overrides : {}),
-  };
-  if (!truthyPlanFeature(features.ai_chat) && !truthyPlanFeature(features.ai_knowledge)) {
-    throw new Error('قابلیت هوش مصنوعی گردش کار در پلن فعلی سازمان فعال نیست.');
+  const isSaasAdminOrg = await isSaasAdminOrganization(url, key, orgId);
+  if (!isSaasAdminOrg) {
+    const orgRows = await dbGet(
+      url,
+      key,
+      `saas_org_settings?org_id=eq.${orgId}&select=plan_code,feature_overrides,status,is_readonly&limit=1`,
+    ).catch(() => []);
+    const orgSettings = orgRows[0] || null;
+    if (!orgSettings) throw new Error('تنظیمات پلن سازمان برای اجرای هوش مصنوعی پیدا نشد.');
+    const planCode = String(orgSettings?.plan_code || '').trim();
+    const planRows = planCode
+      ? await dbGet(url, key, `saas_plans?code=eq.${encodeURIComponent(planCode)}&select=enabled_features,is_active&limit=1`).catch(() => [])
+      : [];
+    const plan = planRows[0] || null;
+    if (!plan || plan?.is_active === false) {
+      throw new Error('پلن فعال سازمان برای اجرای هوش مصنوعی پیدا نشد.');
+    }
+    const features = {
+      ...(plan?.enabled_features && typeof plan.enabled_features === 'object' ? plan.enabled_features : {}),
+      ...(orgSettings?.feature_overrides && typeof orgSettings.feature_overrides === 'object' ? orgSettings.feature_overrides : {}),
+    };
+    if (!truthyPlanFeature(features.ai_chat) && !truthyPlanFeature(features.ai_knowledge)) {
+      throw new Error('قابلیت هوش مصنوعی گردش کار در پلن فعلی سازمان فعال نیست.');
+    }
   }
   const aiSettingsRows = await dbGet(
     url,

@@ -823,6 +823,22 @@ const restRpc = async (
   return parsed;
 };
 
+const isSaasAdminOrganization = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  orgId: string,
+) => {
+  const normalizedOrgId = String(orgId || '').trim();
+  if (!normalizedOrgId) return false;
+  try {
+    return (await restRpc(supabaseUrl, serviceRoleKey, 'org_is_saas_admin', {
+      p_org_id: normalizedOrgId,
+    })) === true;
+  } catch {
+    return false;
+  }
+};
+
 const verifyUserToken = async (supabaseUrl: string, serviceRoleKey: string, userToken: string) => {
   const response = await fetch(`${supabaseUrl.replace(/\/+$/, '')}/auth/v1/user`, {
     method: 'GET',
@@ -1029,18 +1045,34 @@ const loadTenantAiPlanContext = async (supabaseUrl: string, serviceRoleKey: stri
   if (!authContext?.orgId) {
     return { available: false, planCode: null, features: {}, reason: 'missing_org' };
   }
-  const orgRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'saas_org_settings', {
-    org_id: `eq.${authContext.orgId}`,
-    select: 'org_id,plan_code,feature_overrides,status,is_readonly',
-    limit: 1,
-  });
+  const [orgRows, isSaasAdminOrg] = await Promise.all([
+    safeRestSelect(supabaseUrl, serviceRoleKey, 'saas_org_settings', {
+      org_id: `eq.${authContext.orgId}`,
+      select: 'org_id,plan_code,feature_overrides,status,is_readonly',
+      limit: 1,
+    }),
+    isSaasAdminOrganization(supabaseUrl, serviceRoleKey, authContext.orgId),
+  ]);
   const orgSettings = orgRows[0] || null;
+  if (isSaasAdminOrg) {
+    return {
+      available: true,
+      planCode: String(orgSettings?.plan_code || '').trim() || null,
+      features: {
+        ...Object.fromEntries(Object.values(AI_CAPABILITY_FEATURE_KEYS).map((key) => [key, true])),
+        mbti_ai_analysis: true,
+      },
+      status: orgSettings?.status || null,
+      isReadonly: orgSettings?.is_readonly === true,
+      reason: 'saas_admin_organization',
+    };
+  }
   if (!orgSettings) {
     return {
       available: true,
       planCode: null,
       features: Object.fromEntries(Object.values(AI_CAPABILITY_FEATURE_KEYS).map((key) => [key, true])),
-      reason: canViewSaasAdmin(authContext) ? 'saas_admin_internal' : 'missing_saas_org_settings_fallback',
+      reason: 'missing_saas_org_settings_fallback',
     };
   }
   const planCode = String(orgSettings?.plan_code || '').trim();
@@ -11911,7 +11943,7 @@ const handleAnalyzeMbtiAssessment = async (supabaseUrl: string, serviceRoleKey: 
     loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext),
   ]);
   const hasMbtiAnalysisPlanSetting = Object.prototype.hasOwnProperty.call(planContext?.features || {}, 'mbti_ai_analysis');
-  if (!canViewSaasAdmin(authContext) && hasMbtiAnalysisPlanSetting && !truthyPlanFeature(planContext?.features?.mbti_ai_analysis)) {
+  if (hasMbtiAnalysisPlanSetting && !truthyPlanFeature(planContext?.features?.mbti_ai_analysis)) {
     return json(403, { success: false, message: 'ویژگی تحلیل هوشمند تست شخصیت‌شناسی در پلن این سازمان فعال نیست.' });
   }
   await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, settings, 'document_analysis');
