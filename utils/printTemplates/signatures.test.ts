@@ -144,6 +144,35 @@ describe('print signatures', () => {
     expect(html).toContain('نام دوم');
     expect(html).toContain('signature.png');
     expect(html).toContain('stamp.png');
+    expect(html).toContain('data-print-signature-columns="2"');
+    expect(html).toContain('grid-template-columns:repeat(2, minmax(0, 1fr))');
+    expect(html).toContain('min-width:100%');
+  });
+
+  it('uses all available signature space with one column per remaining signer', () => {
+    const createRow = (id: string) => ({
+      id,
+      kind: 'manual' as const,
+      enabled: true,
+      automatic: false,
+      signerModule: null,
+      signerId: null,
+      sourceFieldKey: null,
+      sourceFieldLabel: null,
+      derivedName: '',
+      derivedSubtitle: '',
+      nameValue: `امضاکننده ${id}`,
+      subtitleValue: 'امضا',
+      signatureImageUrl: null,
+      stampImageUrl: null,
+      showCompanyAssets: false,
+      sourceDescription: '',
+      unresolved: false,
+    });
+
+    expect(buildPrintSignatureBandHtml([createRow('۱')])).toContain('grid-template-columns:repeat(1, minmax(0, 1fr))');
+    expect(buildPrintSignatureBandHtml([createRow('۱'), createRow('۲')])).toContain('grid-template-columns:repeat(2, minmax(0, 1fr))');
+    expect(buildPrintSignatureBandHtml([createRow('۱'), createRow('۲'), createRow('۳')])).toContain('grid-template-columns:repeat(3, minmax(0, 1fr))');
   });
 
   it('does not render the signature band when every signature is disabled', () => {

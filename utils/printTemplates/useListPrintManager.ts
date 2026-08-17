@@ -37,7 +37,11 @@ import {
 import { normalizeRenderedImages } from './normalizeRenderedImages';
 import { printInIframe } from './printInIframe';
 import { sanitizeSelectedPrintFieldKeys } from './fieldAccess';
-import { hasMeaningfulPrintValue, resolveEffectivePrintFieldKeys } from './printableFields';
+import {
+  hasMeaningfulPrintValue,
+  resolveEffectivePrintFieldKeys,
+  shouldInitializePrintFieldSelection,
+} from './printableFields';
 import { loadPrintFieldPreference, savePrintFieldPreference } from './fieldPreferences';
 import { hasRenderablePrintFooterHtml } from './footerLayout';
 import { buildNativeCustomPrintFlowHtml } from './nativePrintFlow';
@@ -341,6 +345,12 @@ export const useListPrintManager = ({
       selectedKeys: persistedKeys || [],
       hasExplicitSelection: Array.isArray(persistedKeys),
     });
+
+    // Data for list and account-report views can arrive after the print modal
+    // has opened. Do not turn that temporary "no values yet" state into an
+    // explicit empty selection: it would otherwise survive after the rows
+    // load and keep every system-template column unchecked.
+    if (!shouldInitializePrintFieldSelection({ persistedKeys, defaultKeys: rawDefaultKeys })) return;
 
     const defaultKeys = isCatalogTemplate
       ? (() => {

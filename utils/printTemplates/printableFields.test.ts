@@ -3,6 +3,7 @@ import {
   hasMeaningfulPrintValue,
   isPrintTemplateFieldVisible,
   resolveEffectivePrintFieldKeys,
+  shouldInitializePrintFieldSelection,
 } from './printableFields';
 
 describe('printable field selection contract', () => {
@@ -26,6 +27,12 @@ describe('printable field selection contract', () => {
       selectedKeys: [],
       hasExplicitSelection: true,
     })).toEqual([]);
+  });
+
+  it('waits for a value-aware default instead of storing a temporary empty selection', () => {
+    expect(shouldInitializePrintFieldSelection({ persistedKeys: null, defaultKeys: [] })).toBe(false);
+    expect(shouldInitializePrintFieldSelection({ persistedKeys: null, defaultKeys: ['record.title'] })).toBe(true);
+    expect(shouldInitializePrintFieldSelection({ persistedKeys: [], defaultKeys: [] })).toBe(true);
   });
 
   it('allows a user to explicitly show an empty field', () => {

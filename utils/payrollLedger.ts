@@ -48,6 +48,7 @@ const PAYROLL_LEDGER_SOURCE_LABELS: Record<string, string> = {
   attendance_early_bonus: 'پاداش تعجیل',
   attendance_delay_absence: 'تاخیر / غیبت',
   attendance_paid_leave: 'مرخصی با حقوق',
+  attendance_excess_presence_exclusion: 'ساعات مازاد حضورِ لحاظ‌نشده',
   employee_bonus: 'پاداش پرسنلی',
   employee_penalty: 'جریمه پرسنلی',
   seniority: 'پایه سنوات',
@@ -70,6 +71,7 @@ const resolveLedgerMinutes = (entry: PayrollLedgerEntry) => {
     details.delay_absence_minutes,
     details.paid_leave_minutes,
     details.unpaid_leave_minutes,
+    details.excluded_excess_presence_minutes,
   ];
   for (const candidate of candidates) {
     const minutes = toNumber(candidate);
@@ -85,6 +87,7 @@ const isTimeBasedLedgerEntry = (entry: PayrollLedgerEntry) => {
     || sourceType === 'attendance_early_bonus'
     || sourceType === 'attendance_delay_absence'
     || sourceType === 'attendance_paid_leave'
+    || sourceType === 'attendance_excess_presence_exclusion'
     || sourceType === 'attendance_unpaid_leave'
     || sourceType === 'attendance_absence'
     || sourceType === 'attendance_late';

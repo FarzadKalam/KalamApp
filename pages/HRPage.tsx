@@ -165,6 +165,7 @@ import { employeesModule } from '../modules/employeesConfig';
 import { fetchCurrentUserRecordAccessContext, fetchCurrentUserRolePermissions, type ModulePermissionConfig } from '../utils/permissions';
 import { evaluateLegacyVisibilityRule } from '../utils/conditionalFieldRules';
 import { DEFAULT_SALARY_TYPE, getSalaryTypeLabelFa, resolvePayrollBaseCompensation } from '../utils/payrollSalaryType';
+import { calculateExcessPresenceMinutes, calculatePayablePresenceMinutes } from '../utils/payrollAttendanceTime';
 import { getHolidaySummaryForDate } from '../utils/holidayCalendar';
 import PrintSection from '../components/moduleShow/PrintSection';
 import { useListPrintManager } from '../utils/printTemplates/useListPrintManager';
@@ -693,6 +694,7 @@ const PAYROLL_LEDGER_SOURCE_LABELS: Record<string, string> = {
   attendance_early_bonus: 'پاداش تعجیل',
   attendance_delay_absence: 'تاخیر / غیبت',
   attendance_paid_leave: 'مرخصی با حقوق',
+  attendance_excess_presence_exclusion: 'ساعات مازاد حضورِ لحاظ‌نشده',
   employee_bonus: 'پاداش پرسنلی',
   employee_penalty: 'جریمه پرسنلی',
 };
@@ -1183,6 +1185,12 @@ const calculatePresenceMinutes = (rows: AttendanceComputedRow[]) => {
 
 const calculateAttendanceRowScheduledMinutes = (row: AttendanceComputedRow) =>
   getScheduledMinutesByShifts(row.scheduleShifts || []);
+
+const calculateAttendanceExcessPresenceMinutes = (row: AttendanceComputedRow) =>
+  calculateExcessPresenceMinutes(
+    calculateAttendanceRowPresenceMinutes(row),
+    calculateAttendanceRowScheduledMinutes(row),
+  );
 
 const calculateAttendanceShortageMinutes = (row: AttendanceComputedRow) => {
   const scheduledMinutes = calculateAttendanceRowScheduledMinutes(row);
@@ -4076,6 +4084,36 @@ const HRPage: React.FC = () => {
     return attendanceComputedRows.filter((row) => String(row.employeeId || '') === String(payrollWizardEmployeeId));
   }, [attendanceComputedRows, payrollWizardEmployeeId]);
 
+  const payrollWizardActualPresenceMinutes = useMemo(
+    () => calculatePresenceMinutes(payrollWizardAttendanceRows),
+    [payrollWizardAttendanceRows],
+  );
+
+  const payrollWizardExcludedExcessPresenceMinutes = useMemo(() => {
+    const minutesBySourceKey = new Map<string, number>();
+    payrollWizardOpenLedger
+      .filter((entry) => String(entry.source_type || '') === 'attendance_excess_presence_exclusion')
+      .forEach((entry) => {
+        const sourceKey = String(entry.source_key || entry.details?.source_key || entry.id || '').trim();
+        const excludedMinutes = Math.max(0, Math.round(toNumber(
+          entry.details?.excluded_excess_presence_minutes
+          ?? entry.details?.minutes
+          ?? (toNumber(entry.quantity) * 60),
+        )));
+        if (!sourceKey || excludedMinutes <= 0) return;
+        minutesBySourceKey.set(sourceKey, Math.max(minutesBySourceKey.get(sourceKey) || 0, excludedMinutes));
+      });
+    return Array.from(minutesBySourceKey.values()).reduce((sum, minutes) => sum + minutes, 0);
+  }, [payrollWizardOpenLedger]);
+
+  const payrollWizardPayablePresenceMinutes = useMemo(
+    () => calculatePayablePresenceMinutes(
+      payrollWizardActualPresenceMinutes,
+      payrollWizardExcludedExcessPresenceMinutes,
+    ),
+    [payrollWizardActualPresenceMinutes, payrollWizardExcludedExcessPresenceMinutes],
+  );
+
   const payrollWizardGoalRows = useMemo(() => {
     if (!payrollWizardEmployeeId) return [];
     return goalTouchRows.filter((row) => String(row.employeeId || '') === String(payrollWizardEmployeeId));
@@ -4091,11 +4129,11 @@ const HRPage: React.FC = () => {
       salaryType: payrollWizardSummary?.profile?.salary_type,
       baseSalary: payrollWizardSummary?.profile?.base_salary,
       hourlyRate: payrollWizardSummary?.profile?.hourly_rate,
-      presenceMinutes: calculatePresenceMinutes(payrollWizardAttendanceRows),
+      presenceMinutes: payrollWizardPayablePresenceMinutes,
       requiredMinutes: payrollWizardRequiredMinutes,
     });
   }, [
-    payrollWizardAttendanceRows,
+    payrollWizardPayablePresenceMinutes,
     payrollWizardRequiredMinutes,
     payrollWizardSummary?.profile?.base_salary,
     payrollWizardSummary?.profile?.hourly_rate,
@@ -4144,10 +4182,15 @@ const HRPage: React.FC = () => {
   ), []);
 
   const payrollWizardDraft = useMemo(() => {
-    const presenceMinutesValue = calculatePresenceMinutes(payrollWizardAttendanceRows);
+    const presenceMinutesValue = payrollWizardPayablePresenceMinutes;
     const presenceHours = presenceMinutesValue / 60;
     const baseSalaryDescription = payrollWizardBaseCompensation.isHourly
-      ? `${presenceHours.toFixed(1)} ساعت × ${formatPersianPrice(payrollWizardHourlyRate)} ${currencyLabel}/ساعت`
+      ? [
+        `${presenceHours.toFixed(1)} ساعت × ${formatPersianPrice(payrollWizardHourlyRate)} ${currencyLabel}/ساعت`,
+        payrollWizardExcludedExcessPresenceMinutes > 0
+          ? `${formatMinutesLabel(payrollWizardExcludedExcessPresenceMinutes)} مازاد حضور لحاظ نشده است`
+          : '',
+      ].filter(Boolean).join('؛ ')
       : `بازه ${toNativeGregorianDateString(monthStart) || ''} تا ${toNativeGregorianDateString(monthEnd) || ''}`;
     return buildPayrollSlipDraft({
       baseSalary: payrollWizardBaseCompensation.amount,
@@ -4167,13 +4210,14 @@ const HRPage: React.FC = () => {
     currencyLabel,
     monthEnd,
     monthStart,
-    payrollWizardAttendanceRows,
+    payrollWizardExcludedExcessPresenceMinutes,
     payrollWizardBaseCompensation.amount,
     payrollWizardBaseCompensation.displayTitle,
     payrollWizardBaseCompensation.isHourly,
     payrollWizardSettleableAdvances,
     payrollWizardHourlyRate,
     payrollWizardOpenLedger,
+    payrollWizardPayablePresenceMinutes,
     payrollWizardSummary,
   ]);
 
@@ -5293,6 +5337,9 @@ const HRPage: React.FC = () => {
   const buildAttendancePaidLeaveSourceKey = (row: AttendanceComputedRow) =>
     `attendance_paid_leave:${String(row.employeeId || '').trim()}:${String(row.attendanceDate || row.key || '').trim()}:${String(row.approvedLeaveRequestId || 'auto')}`;
 
+  const buildAttendanceExcessPresenceExclusionSourceKey = (row: AttendanceComputedRow) =>
+    `attendance_excess_presence_exclusion:${String(row.employeeId || '').trim()}:${String(row.attendanceDate || row.key || '').trim()}`;
+
   const resolveAttendanceLedgerEntry = useCallback((
     row: AttendanceComputedRow,
     sourceType: 'attendance_overtime' | 'attendance_early_bonus' | 'attendance_delay_absence' | 'attendance_paid_leave',
@@ -5550,6 +5597,114 @@ const HRPage: React.FC = () => {
       await refreshPayrollPeriodState();
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'عدم لحاظ ردیف ناموفق بود.'));
+    } finally {
+      setSavingOvertimeLedgerKey(null);
+    }
+  }, [message, refreshPayrollPeriodState]);
+
+  const handleExcludeAttendanceExcessPresence = useCallback(async (row: AttendanceComputedRow) => {
+    if (!row.employeeId) return;
+    const excludedMinutes = calculateAttendanceExcessPresenceMinutes(row);
+    if (excludedMinutes <= 0) return;
+    const employee = profiles.find((item) => String(item.source_id || item.id) === String(row.employeeId));
+    const requiredMinutes = computeRequiredWorkMinutesForProfile(employee || null);
+    const compensation = resolvePayrollBaseCompensation({
+      salaryType: employee?.salary_type,
+      baseSalary: employee?.base_salary,
+      hourlyRate: employee?.hourly_rate,
+      presenceMinutes: calculateAttendanceRowPresenceMinutes(row),
+      requiredMinutes,
+    });
+    if (!compensation.isHourly) {
+      message.info('این کنترل فقط برای دستمزد ساعتی قابل استفاده است.');
+      return;
+    }
+    const periodStart = toNativeGregorianDateString(monthStart);
+    const periodEnd = toNativeGregorianDateString(monthEnd);
+    if (!periodStart || !periodEnd) {
+      message.error('بازه محاسبه معتبر نیست.');
+      return;
+    }
+    const sourceKey = buildAttendanceExcessPresenceExclusionSourceKey(row);
+    setSavingOvertimeLedgerKey(sourceKey);
+    try {
+      const { data: existingRows, error: existingError } = await supabase
+        .from('payroll_calculation_entries')
+        .select('id, status')
+        .eq('employee_id', row.employeeId)
+        .eq('period_start', periodStart)
+        .eq('period_end', periodEnd)
+        .eq('source_type', 'attendance_excess_presence_exclusion')
+        .eq('source_key', sourceKey);
+      if (existingError && !isMissingPayrollLedgerError(existingError) && !isMissingSourceKeyError(existingError)) throw existingError;
+
+      const existing = (existingRows || [])[0] as any;
+      const details = {
+        source_key: sourceKey,
+        attendance_date: row.attendanceDate,
+        raw_ids: row.rawIds,
+        presence_minutes: calculateAttendanceRowPresenceMinutes(row),
+        scheduled_minutes: calculateAttendanceRowScheduledMinutes(row),
+        excluded_excess_presence_minutes: excludedMinutes,
+        employee_name: row.employeeName,
+      };
+      if (existing?.id && String(existing.status || '') !== 'included_in_payroll') {
+        const { error } = await supabase
+          .from('payroll_calculation_entries')
+          .update({
+            entry_type: 'attendance_excess_presence_exclusion',
+            title: `عدم لحاظ ساعات مازاد حضور ${row.employeeName}`,
+            amount: 0,
+            quantity: excludedMinutes / 60,
+            rate: compensation.hourlyRate,
+            status: 'proposed',
+            details,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existing.id);
+        if (error && !isMissingPayrollLedgerError(error)) throw error;
+      } else if (!existing?.id) {
+        const { error } = await supabase.from('payroll_calculation_entries').insert({
+          employee_id: row.employeeId,
+          period_start: periodStart,
+          period_end: periodEnd,
+          entry_type: 'attendance_excess_presence_exclusion',
+          source_type: 'attendance_excess_presence_exclusion',
+          source_key: sourceKey,
+          source_module_id: 'attendance_logs',
+          source_record_id: row.rawIds[0] || null,
+          title: `عدم لحاظ ساعات مازاد حضور ${row.employeeName}`,
+          amount: 0,
+          quantity: excludedMinutes / 60,
+          rate: compensation.hourlyRate,
+          status: 'proposed',
+          details,
+        });
+        if (error && !isMissingPayrollLedgerError(error)) throw error;
+      }
+      message.success('ساعات مازاد حضور از دستمزد ساعتی این روز کنار گذاشته شد.');
+      await refreshPayrollPeriodState();
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'عدم لحاظ ساعات مازاد حضور ناموفق بود.'));
+    } finally {
+      setSavingOvertimeLedgerKey(null);
+    }
+  }, [computeRequiredWorkMinutesForProfile, message, monthEnd, monthStart, profiles, refreshPayrollPeriodState]);
+
+  const handleIncludeAttendanceExcessPresence = useCallback(async (entryId: string | null | undefined) => {
+    const id = String(entryId || '').trim();
+    if (!id) return;
+    setSavingOvertimeLedgerKey(id);
+    try {
+      const { error } = await supabase
+        .from('payroll_calculation_entries')
+        .update({ status: 'voided', updated_at: new Date().toISOString() })
+        .eq('id', id);
+      if (error && !isMissingPayrollLedgerError(error)) throw error;
+      message.success('ساعات مازاد حضور دوباره در دستمزد ساعتی لحاظ شد.');
+      await refreshPayrollPeriodState();
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'لحاظ ساعات مازاد حضور ناموفق بود.'));
     } finally {
       setSavingOvertimeLedgerKey(null);
     }
@@ -5989,7 +6144,9 @@ const HRPage: React.FC = () => {
           attendance: {
             required_minutes: payrollWizardRequiredMinutes,
             hourly_rate: payrollWizardHourlyRate,
-            presence_minutes: calculatePresenceMinutes(payrollWizardAttendanceRows),
+            presence_minutes: payrollWizardActualPresenceMinutes,
+            payable_presence_minutes: payrollWizardPayablePresenceMinutes,
+            excluded_excess_presence_minutes: payrollWizardExcludedExcessPresenceMinutes,
           },
         },
         task_ids: row.payrollTaskIds,
@@ -6033,9 +6190,11 @@ const HRPage: React.FC = () => {
     monthStart,
     navigate,
     payrollSlipByEmployeeId,
-    payrollWizardAttendanceRows,
+    payrollWizardActualPresenceMinutes,
     payrollWizardBaseCompensation.amount,
+    payrollWizardExcludedExcessPresenceMinutes,
     payrollWizardHourlyRate,
+    payrollWizardPayablePresenceMinutes,
     payrollWizardRequiredMinutes,
     payrollWizardSettleableAdvances,
     payrollWizardDraft,
@@ -8114,7 +8273,15 @@ const HRPage: React.FC = () => {
             {payrollWizardStep === 0 ? (
               <div className="space-y-4">
                 <Row gutter={[12, 12]}>
-                  <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">حضور موثر</div><div className="persian-number text-2xl font-black">{toPersianNumber((calculatePresenceMinutes(payrollWizardAttendanceRows) / 60).toFixed(1))} ساعت</div></Card></Col>
+                  <Col xs={24} md={6}>
+                    <Card>
+                      <div className="text-xs text-gray-500 mb-1">{payrollWizardBaseCompensation.isHourly ? 'حضور قابل پرداخت' : 'حضور موثر'}</div>
+                      <div className="persian-number text-2xl font-black">{toPersianNumber(((payrollWizardBaseCompensation.isHourly ? payrollWizardPayablePresenceMinutes : payrollWizardActualPresenceMinutes) / 60).toFixed(1))} ساعت</div>
+                      {payrollWizardBaseCompensation.isHourly && payrollWizardExcludedExcessPresenceMinutes > 0 ? (
+                        <div className="mt-1 text-xs text-orange-700">{formatMinutesLabel(payrollWizardExcludedExcessPresenceMinutes)} مازاد حضور لحاظ نشده است.</div>
+                      ) : null}
+                    </Card>
+                  </Col>
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">ساعات موظف</div><div className="persian-number text-2xl font-black">{toPersianNumber((payrollWizardRequiredMinutes / 60).toFixed(1))} ساعت</div></Card></Col>
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">نرخ ساعتی</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardHourlyRate)}</div></Card></Col>
                   <Col xs={24} md={6}>
@@ -8170,7 +8337,7 @@ const HRPage: React.FC = () => {
                       rowKey="key"
                       size="small"
                       pagination={{ pageSize: 8, showSizeChanger: false }}
-                      scroll={{ x: 1200 }}
+                      scroll={{ x: 1450 }}
                       dataSource={payrollWizardAttendanceRows}
                       columns={[
                         { title: 'تاریخ', key: 'attendanceDate', render: (_: unknown, row: any) => row.attendanceDate ? toPersianNumber(safeJalaliFormat(row.attendanceDate, 'YYYY/MM/DD')) : '-' },
@@ -8181,6 +8348,7 @@ const HRPage: React.FC = () => {
                         { title: 'مرخصی تاییدشده (دقیقه)', key: 'approved_leave', render: (_: unknown, row: any) => <span className="persian-number text-cyan-700">{toPersianNumber(row.approvedLeaveMinutes || 0)}</span> },
                         { title: 'تعجیل (دقیقه)', key: 'early', render: (_: unknown, row: any) => <span className="persian-number text-green-700">{toPersianNumber(row.earlyArrivalMinutes)}</span> },
                         { title: 'اضافه‌کاری (دقیقه)', key: 'overtime', render: (_: unknown, row: any) => <span className="persian-number">{toPersianNumber(calculateAttendanceOvertimeMinutes(row))}</span> },
+                        { title: 'مازاد حضور نسبت به برنامه', key: 'excess_presence', render: (_: unknown, row: any) => { const minutes = calculateAttendanceExcessPresenceMinutes(row); return minutes > 0 ? <span className="persian-number text-orange-700">{formatMinutesLabel(minutes)}</span> : '-'; } },
                         { title: 'پاداش تعجیل قابل لحاظ', key: 'early_bonus_amount', render: (_: unknown, row: any) => { const meta = resolveAttendanceLedgerEntry(row, 'attendance_early_bonus'); return meta.minutes > 0 ? <span className="persian-number text-green-700">{formatMoney(meta.amount)}</span> : '-'; } },
                         { title: 'تاخیر / غیبت قابل لحاظ', key: 'delay_absence_amount', render: (_: unknown, row: any) => { const meta = resolveAttendanceLedgerEntry(row, 'attendance_delay_absence'); return meta.minutes > 0 ? <span className="persian-number text-red-700">{formatMoney(Math.abs(meta.amount))}</span> : '-'; } },
                         { title: 'مرخصی با حقوق قابل لحاظ', key: 'paid_leave_amount', render: (_: unknown, row: any) => { const meta = resolveAttendanceLedgerEntry(row, 'attendance_paid_leave'); return meta.minutes > 0 ? <span className="persian-number text-cyan-700">{formatMoney(meta.amount)}</span> : '-'; } },
@@ -8193,12 +8361,14 @@ const HRPage: React.FC = () => {
                               { label: 'تعجیل', sourceType: 'attendance_early_bonus', sourceKey: buildAttendanceEarlyBonusSourceKey(row) },
                               { label: 'تاخیر/غیبت', sourceType: 'attendance_delay_absence', sourceKey: buildAttendanceDelayAbsenceSourceKey(row) },
                               { label: 'مرخصی', sourceType: 'attendance_paid_leave', sourceKey: buildAttendancePaidLeaveSourceKey(row) },
+                              { label: 'مازاد حضور', sourceType: 'attendance_excess_presence_exclusion', sourceKey: buildAttendanceExcessPresenceExclusionSourceKey(row) },
                             ].map((item) => {
                               const entry = payrollWizardEmployeeLedger.find((ledger) => ledger.source_type === item.sourceType && String(ledger.source_key || ledger.details?.source_key || '') === item.sourceKey);
                               if (!entry) return null;
+                              const isExcessPresenceExclusion = item.sourceType === 'attendance_excess_presence_exclusion';
                               return (
                                 <Tag key={item.sourceType} color={entry.status === 'included_in_payroll' ? 'green' : 'cyan'}>
-                                  {item.label}: {entry.status === 'included_in_payroll' ? 'در فیش' : 'آماده'}
+                                  {item.label}: {entry.status === 'included_in_payroll' ? 'در فیش' : isExcessPresenceExclusion ? 'لحاظ نشده' : 'آماده'}
                                 </Tag>
                               );
                             }).filter(Boolean);
@@ -8213,12 +8383,20 @@ const HRPage: React.FC = () => {
                             const earlyBonusEntry = payrollWizardEmployeeLedger.find((ledger) => ledger.source_type === 'attendance_early_bonus' && String(ledger.source_key || ledger.details?.source_key || '') === buildAttendanceEarlyBonusSourceKey(row));
                             const delayEntry = payrollWizardEmployeeLedger.find((ledger) => ledger.source_type === 'attendance_delay_absence' && String(ledger.source_key || ledger.details?.source_key || '') === buildAttendanceDelayAbsenceSourceKey(row));
                             const leaveEntry = payrollWizardEmployeeLedger.find((ledger) => ledger.source_type === 'attendance_paid_leave' && String(ledger.source_key || ledger.details?.source_key || '') === buildAttendancePaidLeaveSourceKey(row));
+                            const excessPresenceEntry = payrollWizardEmployeeLedger.find((ledger) => ledger.source_type === 'attendance_excess_presence_exclusion' && String(ledger.source_key || ledger.details?.source_key || '') === buildAttendanceExcessPresenceExclusionSourceKey(row));
                             const overtimeMeta = resolveAttendanceLedgerEntry(row, 'attendance_overtime');
                             const earlyBonusMeta = resolveAttendanceLedgerEntry(row, 'attendance_early_bonus');
                             const delayMeta = resolveAttendanceLedgerEntry(row, 'attendance_delay_absence');
                             const leaveMeta = resolveAttendanceLedgerEntry(row, 'attendance_paid_leave');
+                            const excessPresenceMinutes = calculateAttendanceExcessPresenceMinutes(row);
+                            const canExcludeExcessPresence = payrollWizardBaseCompensation.isHourly && excessPresenceMinutes > 0;
                             return (
                               <Space size="small" wrap>
+                                {canExcludeExcessPresence && !excessPresenceEntry ? (
+                                  <Button size="small" danger loading={savingOvertimeLedgerKey === buildAttendanceExcessPresenceExclusionSourceKey(row)} onClick={() => handleExcludeAttendanceExcessPresence(row)}>
+                                    عدم لحاظ ساعات مازاد
+                                  </Button>
+                                ) : null}
                                 {overtimeMeta.minutes > 0 && !overtimeEntry ? (
                                   <Button size="small" loading={savingOvertimeLedgerKey === overtimeMeta.sourceKey} onClick={() => handleApproveAttendanceOvertime(row)}>
                                     لحاظ اضافه‌کاری
@@ -8243,6 +8421,7 @@ const HRPage: React.FC = () => {
                                 {earlyBonusEntry && earlyBonusEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === earlyBonusEntry.id} onClick={() => handleVoidAttendanceLedgerEntry(earlyBonusEntry.id)}>عدم لحاظ تعجیل</Button> : null}
                                 {delayEntry && delayEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === delayEntry.id} onClick={() => handleVoidAttendanceLedgerEntry(delayEntry.id)}>عدم لحاظ تاخیر/غیبت</Button> : null}
                                 {leaveEntry && leaveEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === leaveEntry.id} onClick={() => handleVoidAttendanceLedgerEntry(leaveEntry.id)}>عدم لحاظ مرخصی</Button> : null}
+                                {excessPresenceEntry && excessPresenceEntry.status !== 'included_in_payroll' ? <Button size="small" loading={savingOvertimeLedgerKey === excessPresenceEntry.id} onClick={() => handleIncludeAttendanceExcessPresence(excessPresenceEntry.id)}>لحاظ ساعات مازاد</Button> : null}
                               </Space>
                             );
                           },

@@ -540,15 +540,15 @@ export const buildPrintSignatureBandHtml = (rows: PrintSignatureDerivedState[]) 
     (row) => row?.enabled !== false && (normalizeText(row?.nameValue) || normalizeText(row?.subtitleValue))
   );
   if (resolvedRows.length === 0) return '';
-  const widthPercent = Math.max(22, Math.floor(100 / Math.max(1, resolvedRows.length)));
+  const columnCount = resolvedRows.length;
   return `
-<div data-print-signature-band="true" style="width:100%; direction:rtl; display:flex; align-items:flex-start; justify-content:center; gap:10px; padding-top:0;">
+<div data-print-signature-band="true" data-print-signature-columns="${columnCount}" style="width:100%; min-width:100%; max-width:100%; direction:rtl; display:grid; grid-template-columns:repeat(${columnCount}, minmax(0, 1fr)); align-items:flex-start; gap:10px; padding-top:0;">
   ${resolvedRows
     .map(
       (row) => {
         const hasCompanyAssets = row.showCompanyAssets && (row.signatureImageUrl || row.stampImageUrl);
         return `
-    <div style="flex:1 1 0; max-width:${widthPercent}%; min-width:130px; text-align:center; color:#111827;">
+    <div style="width:100%; min-width:0; text-align:center; color:#111827;">
       <div style="min-height:${hasCompanyAssets ? 78 : 22}px; display:flex; align-items:flex-end; justify-content:center; margin-bottom:${hasCompanyAssets ? 6 : 0}px;">
         ${
           hasCompanyAssets

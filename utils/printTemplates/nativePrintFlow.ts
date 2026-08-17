@@ -78,9 +78,10 @@ const buildMarginDocument = ({
       body img { max-width: 100%; height: auto; }
       body table { width: 100%; border-collapse: collapse; }
       body p { margin: 0 0 6px; }
+      [data-kalamapp-print-margin-content] { display: block; width: 100%; min-width: 0; max-width: 100%; }
     </style>
   </head>
-  <body>${contentHtml}</body>
+  <body><div data-kalamapp-print-margin-content="true">${contentHtml}</div></body>
 </html>`;
 };
 

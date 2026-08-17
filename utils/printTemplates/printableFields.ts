@@ -80,6 +80,18 @@ export const resolveEffectivePrintFieldKeys = ({
     .filter(Boolean);
 };
 
+/**
+ * An empty saved preference is intentional; an empty value-aware default can
+ * merely mean that asynchronous list rows have not arrived yet.
+ */
+export const shouldInitializePrintFieldSelection = ({
+  persistedKeys,
+  defaultKeys,
+}: {
+  persistedKeys: Iterable<unknown> | null | undefined;
+  defaultKeys: Iterable<unknown>;
+}) => Array.isArray(persistedKeys) || Array.from(defaultKeys).length > 0;
+
 export const getPrintFieldSelectionCandidates = (fieldPath: string): string[] => {
   const normalizedPath = String(fieldPath || '').trim();
   if (!normalizedPath) return [];
