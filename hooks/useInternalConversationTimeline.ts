@@ -185,11 +185,13 @@ export const useInternalConversationTimeline = <TItem,>({
   }, [enabled, conversationKey, timelineCacheKey, applyPayload]);
 
   const fetchTimelinePage = useCallback(async (beforeCursor: string | null) => {
-    const { data, error } = await supabase.rpc('get_internal_communication_timeline_v3', {
-      p_conversation_key: conversationKey,
-      p_limit: pageSize,
-      p_before_cursor: beforeCursor,
-    });
+    const isSystemConversation = String(conversationKey || '').trim() === 'system';
+    const { data, error } = await supabase.rpc(
+      isSystemConversation ? 'get_system_communication_timeline_v1' : 'get_internal_communication_timeline_v3',
+      isSystemConversation
+        ? { p_limit: pageSize, p_before_cursor: beforeCursor }
+        : { p_conversation_key: conversationKey, p_limit: pageSize, p_before_cursor: beforeCursor },
+    );
     if (error) {
       throw error;
     }

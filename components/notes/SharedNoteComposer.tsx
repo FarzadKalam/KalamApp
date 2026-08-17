@@ -226,10 +226,9 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
     setPendingFileName(prompts[0]?.suggestedName || '');
   };
 
-  const collectImageFilesFromDataTransfer = (dataTransfer: DataTransfer | null | undefined) => {
+  const collectFilesFromDataTransfer = (dataTransfer: DataTransfer | null | undefined) => {
     if (!dataTransfer) return [] as File[];
-    const files = Array.from(dataTransfer.files || []);
-    return files.filter((file) => String(file.type || '').toLowerCase().startsWith('image/'));
+    return Array.from(dataTransfer.files || []).filter((file) => file instanceof File && file.size >= 0);
   };
 
   const closePrompt = () => {
@@ -428,23 +427,23 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
             }}
             onPaste={(event) => {
               if (!enableImagePasteAndDrop || !allowAttachments) return;
-              const imageFiles = collectImageFilesFromDataTransfer(event.clipboardData);
-              if (!imageFiles.length) return;
+              const files = collectFilesFromDataTransfer(event.clipboardData);
+              if (!files.length) return;
               event.preventDefault();
-              handleFilesPicked(imageFiles);
+              handleFilesPicked(files);
             }}
             onDragOver={(event) => {
               if (!enableImagePasteAndDrop || !allowAttachments) return;
-              const imageFiles = collectImageFilesFromDataTransfer(event.dataTransfer);
-              if (!imageFiles.length) return;
+              const files = collectFilesFromDataTransfer(event.dataTransfer);
+              if (!files.length) return;
               event.preventDefault();
             }}
             onDrop={(event) => {
               if (!enableImagePasteAndDrop || !allowAttachments) return;
-              const imageFiles = collectImageFilesFromDataTransfer(event.dataTransfer);
-              if (!imageFiles.length) return;
+              const files = collectFilesFromDataTransfer(event.dataTransfer);
+              if (!files.length) return;
               event.preventDefault();
-              handleFilesPicked(imageFiles);
+              handleFilesPicked(files);
             }}
             autoSize={{ minRows: 1, maxRows: 12 }}
             className={inputClassName}

@@ -3,6 +3,7 @@ export type NotificationUnreadSection =
   | 'bot_messages'
   | 'bot_group_messages'
   | 'bot_direct_messages'
+  | 'system_messages'
   | 'sms_messages'
   | 'voip_calls'
   | 'tasks'
@@ -15,6 +16,7 @@ export const EMPTY_NOTIFICATION_UNREAD_SUMMARY: NotificationUnreadSummaryMap = {
   bot_messages: 0,
   bot_group_messages: 0,
   bot_direct_messages: 0,
+  system_messages: 0,
   sms_messages: 0,
   voip_calls: 0,
   tasks: 0,
@@ -30,6 +32,8 @@ const SECTION_ALIASES: Record<string, NotificationUnreadSection> = {
   bot_group_messages: 'bot_group_messages',
   bot_direct: 'bot_direct_messages',
   bot_direct_messages: 'bot_direct_messages',
+  system: 'system_messages',
+  system_messages: 'system_messages',
   sms: 'sms_messages',
   sms_messages: 'sms_messages',
   voip: 'voip_calls',
@@ -58,6 +62,7 @@ export const normalizeNotificationUnreadSummary = (value: unknown): Notification
     if ('bot_unread' in row) next.bot_messages = toSafeCount(row.bot_unread);
     if ('bot_group_unread' in row) next.bot_group_messages = toSafeCount(row.bot_group_unread);
     if ('bot_direct_unread' in row) next.bot_direct_messages = toSafeCount(row.bot_direct_unread);
+    if ('system_unread' in row) next.system_messages = toSafeCount(row.system_unread);
     if ('sms_unread' in row) next.sms_messages = toSafeCount(row.sms_unread);
     if ('voip_unread' in row) next.voip_calls = toSafeCount(row.voip_unread);
     if ('tasks_unread' in row) next.tasks = toSafeCount(row.tasks_unread);
@@ -80,6 +85,7 @@ export const areNotificationUnreadSummariesEqual = (
   && left.bot_messages === right.bot_messages
   && left.bot_group_messages === right.bot_group_messages
   && left.bot_direct_messages === right.bot_direct_messages
+  && left.system_messages === right.system_messages
   && left.sms_messages === right.sms_messages
   && left.voip_calls === right.voip_calls
   && left.tasks === right.tasks

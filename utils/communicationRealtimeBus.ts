@@ -38,3 +38,9 @@ export const noteInsertBus = createTopic();
 
 /** Fired with the inserted `counterparty_bot_messages` row from any realtime subscription. */
 export const botMessageInsertBus = createTopic();
+
+/** Fired with the inserted SMS log row from any realtime subscription. */
+export const smsMessageInsertBus = createTopic();
+
+/** Fired with the inserted VoIP call row from any realtime subscription. */
+export const voipCallInsertBus = createTopic();

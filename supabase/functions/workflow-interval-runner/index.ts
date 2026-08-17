@@ -44,7 +44,7 @@ import {
   resolveWorkflowDateCriterion,
 } from './_runtime-deps/workflowMutationContract.ts';
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-29-event-queue-priority';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-08-17-related-record-repair';
 const MAX_WORKFLOWS = 30;
 const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
@@ -2633,6 +2633,7 @@ async function getProcessRelatedRecordAttachmentContext(
   ).catch(() => []);
   const targetModuleIds = new Set<string>([
     ...(Array.isArray(record?.process_target_module_ids) ? record.process_target_module_ids : []),
+    ...(Array.isArray(recurrence?.process_target_module_ids) ? recurrence.process_target_module_ids : []),
     ...Object.keys(parseObjectValue(record?.process_links)),
     ...stages.flatMap((stage: any) => {
       const metadata = parseObjectValue(stage?.metadata);
@@ -3169,6 +3170,7 @@ async function insertWorkflowProcessTask(url: string, key: string, orgId: string
       process_automation_rules: Array.isArray(stage?.automation_rules) ? stage.automation_rules : Array.isArray(stage?.metadata?.automation_rules) ? stage.metadata.automation_rules : [],
       process_target_module_ids: Array.from(new Set([
         ...(Array.isArray(stage?.process_target_module_ids) ? stage.process_target_module_ids : []),
+        ...(Array.isArray(stage?.metadata?.process_target_module_ids) ? stage.metadata.process_target_module_ids : []),
         ...Object.keys(processLinks),
       ].map((value: any) => String(value || '').trim()).filter(Boolean))),
       process_links: processLinks,
@@ -3531,6 +3533,7 @@ async function prepareProcessRunForAutomaticExecution(
   };
   const targetModuleIds = Array.from(new Set([
     ...(Array.isArray(record?.process_target_module_ids) ? record.process_target_module_ids : []),
+    ...(Array.isArray(recurrence?.process_target_module_ids) ? recurrence.process_target_module_ids : []),
     ...Object.keys(processLinks),
   ].map((value) => String(value || '').trim()).filter(Boolean)));
 
@@ -4491,7 +4494,17 @@ async function executeAction(
     const relationFieldKey = isProcessRelatedRecord
       ? '__process_run_link__'
       : String(config.relation_field_key || (targetModuleId === 'tasks' ? 'source_record_id' : '')).trim();
-    if (!targetModuleId || !relationFieldKey || (!isProcessRelatedRecord && !sourceRecordId)) {
+    const mappings = Array.isArray(config.field_mappings) ? config.field_mappings : [];
+    const relationFieldMapping = !isProcessRelatedRecord && targetModuleId !== 'tasks'
+      ? mappings.find((mapping: any) => String(mapping?.field || '').trim() === relationFieldKey)
+      : null;
+    const mappedRelationRecordId = relationFieldMapping
+      ? String(await resolveServerFieldMappingValue(relationFieldMapping, record, url, key, orgId, moduleId) || '').trim()
+      : '';
+    // اگر خود فیلد ارتباطی از فعالیت جاری نگاشت شده باشد، همان مقدار صریح کاربر
+    // منبع پیوند است؛ در غیر این صورت رفتار سازگار قبلی (رکورد مرجع فرآیند) حفظ می‌شود.
+    const relationRecordId = mappedRelationRecordId || sourceRecordId;
+    if (!targetModuleId || !relationFieldKey || (!isProcessRelatedRecord && !relationRecordId)) {
       return actionResult(action, 'skipped', 'تنظیمات ایجاد رکورد مرتبط کامل نیست.');
     }
     assertWorkflowMutationModule(targetModuleId);
@@ -4503,7 +4516,7 @@ async function executeAction(
       const sourceRows = await dbGet(
         url,
         key,
-        `${getModuleTable(sourceModuleId)}?id=eq.${encodeURIComponent(sourceRecordId)}&org_id=eq.${encodeURIComponent(orgId)}&select=id&limit=1`,
+        `${getModuleTable(sourceModuleId)}?id=eq.${encodeURIComponent(relationRecordId)}&org_id=eq.${encodeURIComponent(orgId)}&select=id&limit=1`,
       ).catch(() => []);
       if (sourceRows.length === 0) {
         return actionResult(action, 'skipped', 'رکورد مرجع در سازمان جاری پیدا نشد.');
@@ -4512,12 +4525,11 @@ async function executeAction(
     if (!isProcessRelatedRecord && targetModuleId !== 'tasks' && !isSafeWorkflowMutationFieldKey(relationFieldKey)) {
       return actionResult(action, 'skipped', 'فیلد ارتباط با رکورد مرجع معتبر نیست.');
     }
-    const payload: Record<string, any> = isProcessRelatedRecord ? {} : { [relationFieldKey]: sourceRecordId };
+    const payload: Record<string, any> = isProcessRelatedRecord ? {} : { [relationFieldKey]: relationRecordId };
     if (!isProcessRelatedRecord && targetModuleId === 'tasks') {
       payload.related_to_module = sourceModuleId;
       payload.source_record_id = sourceRecordId;
     }
-    const mappings = Array.isArray(config.field_mappings) ? config.field_mappings : [];
     for (const mapping of mappings) {
       const tf = String(mapping?.field || '').trim();
       if (!tf || tf === relationFieldKey || (!isProcessRelatedRecord && targetModuleId === 'tasks' && ['source_record_id', 'related_to_module'].includes(tf))) continue;
@@ -4528,8 +4540,9 @@ async function executeAction(
         payload[tf] = mappedValue;
       }
     }
-    // پیوند اجباری باید پس از تمام mappingها تثبیت شود و هرگز توسط تنظیم کاربر تغییر نکند.
-    if (!isProcessRelatedRecord) payload[relationFieldKey] = sourceRecordId;
+    // پیوند نهایی یا از نگاشت صریح کاربر آمده است یا از رکورد مرجع فرآیند؛
+    // هر دو حالت پس از mappingها تثبیت می‌شوند.
+    if (!isProcessRelatedRecord) payload[relationFieldKey] = relationRecordId;
     if (!isProcessRelatedRecord && targetModuleId === 'tasks') {
       payload.related_to_module = sourceModuleId;
       payload.source_record_id = sourceRecordId;
@@ -6500,6 +6513,9 @@ function buildProcessAutomationTaskRecord(
     process_run_stage_id: task?.process_run_stage_id || recurrence?.process_run_stage_id,
     process_node_key: getTaskProcessNodeKeyCore(task),
     process_lane_key: getTaskProcessLaneKeyCore(task),
+    process_target_module_ids: Array.from(new Set([
+      ...(Array.isArray(recurrence?.process_target_module_ids) ? recurrence.process_target_module_ids : []),
+    ].map((value) => String(value || '').trim()).filter(Boolean))),
     recurrence_info: recurrence,
   };
   const processIdentity = getTaskProcessIdentity(task);
@@ -6523,8 +6539,15 @@ function buildProcessAutomationTaskRecord(
     if (nodeKey) record[`__comm_recipient__specific_process_stage__${nodeKey}`] = taskRecipientTokenCore(stage);
   });
 
-  const processLinks = parseObjectValue(recurrence?.process_links);
+  const processLinks = {
+    ...parseObjectValue(recurrence?.process_links),
+    ...(sourceModuleId && sourceRecord?.id ? { [sourceModuleId]: String(sourceRecord.id) } : {}),
+  };
   record.process_links = processLinks;
+  record.process_target_module_ids = Array.from(new Set([
+    ...(Array.isArray(recurrence?.process_target_module_ids) ? recurrence.process_target_module_ids : []),
+    ...Object.keys(processLinks),
+  ].map((value) => String(value || '').trim()).filter(Boolean)));
   if (sourceModuleId && sourceRecord) {
     Object.entries(sourceRecord).forEach(([field, value]) => {
       record[`__linked__${sourceModuleId}__${field}`] = value;

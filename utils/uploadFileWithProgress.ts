@@ -84,6 +84,19 @@ const readErrorMessage = (xhr: XMLHttpRequest) => {
 export const isUploadCanceledError = (error: unknown) =>
   error instanceof UploadCanceledError || String((error as any)?.name || '') === 'UploadCanceledError';
 
+const STORAGE_RETRY_DELAYS_MS = [350, 900] as const;
+
+const isTransientStorageStatus = (status: number) =>
+  status === 0
+  || status === 408
+  || status === 425
+  || status === 429
+  || (status >= 500 && status <= 504);
+
+const waitForStorageRetry = (delayMs: number) => new Promise<void>((resolve) => {
+  window.setTimeout(resolve, delayMs);
+});
+
 export const uploadFileWithProgress = async ({
   client,
   bucket,
@@ -121,22 +134,25 @@ export const uploadFileWithProgress = async ({
       detail,
     });
   });
-  const formData = new FormData();
-  formData.append('cacheControl', cacheControl);
-  if (metadata) {
-    formData.append('metadata', JSON.stringify(metadata));
-  }
-  if (contentType && file instanceof File && !file.type) {
-    formData.append('', file, file.name);
-  } else if (file instanceof File) {
-    formData.append('', file, file.name);
-  } else {
-    formData.append('', file, normalizeLabel(path, label));
-  }
+  let activeXhr: XMLHttpRequest | null = null;
+  let canceled = false;
+  setUploadTaskCancel(taskId, () => {
+    canceled = true;
+    activeXhr?.abort();
+  });
 
-  return await new Promise<{ id?: string; path: string; fullPath: string }>((resolve, reject) => {
+  const createFormData = () => {
+    const formData = new FormData();
+    formData.append('cacheControl', cacheControl);
+    if (metadata) formData.append('metadata', JSON.stringify(metadata));
+    if (file instanceof File) formData.append('', file, file.name);
+    else formData.append('', file, normalizeLabel(path, label));
+    return formData;
+  };
+
+  const uploadOnce = () => new Promise<{ id?: string; path: string; fullPath: string }>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    setUploadTaskCancel(taskId, () => xhr.abort());
+    activeXhr = xhr;
 
     xhr.upload.addEventListener('progress', (event) => {
       if (!event.lengthComputable) return;
@@ -144,19 +160,17 @@ export const uploadFileWithProgress = async ({
     });
 
     xhr.addEventListener('abort', () => {
-      markUploadTaskCanceled(taskId);
       reject(new UploadCanceledError());
     });
 
     xhr.addEventListener('error', () => {
-      const message = 'ارتباط با سرور هنگام آپلود قطع شد.';
-      failUploadTask(taskId, message);
-      reject(new Error(message));
+      const error = new Error('ارتباط با سرور هنگام آپلود قطع شد.');
+      (error as any).status = 0;
+      reject(error);
     });
 
     xhr.addEventListener('load', () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        finishUploadTask(taskId);
         let parsed: any = {};
         try {
           parsed = JSON.parse(xhr.responseText || '{}');
@@ -171,9 +185,7 @@ export const uploadFileWithProgress = async ({
         return;
       }
 
-      const message = readErrorMessage(xhr);
-      failUploadTask(taskId, message);
-      const error = new Error(message);
+      const error = new Error(readErrorMessage(xhr));
       (error as any).status = xhr.status;
       reject(error);
     });
@@ -183,6 +195,35 @@ export const uploadFileWithProgress = async ({
     xhr.setRequestHeader('x-upsert', String(Boolean(upsert)));
     xhr.setRequestHeader('x-client-info', 'kalamapp-upload-progress/1.0');
     xhr.setRequestHeader('authorization', `Bearer ${authorizationToken}`);
-    xhr.send(formData);
+    xhr.send(createFormData());
   });
+
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt <= STORAGE_RETRY_DELAYS_MS.length; attempt += 1) {
+    if (canceled) {
+      markUploadTaskCanceled(taskId);
+      throw new UploadCanceledError();
+    }
+
+    try {
+      const result = await uploadOnce();
+      finishUploadTask(taskId);
+      return result;
+    } catch (error) {
+      activeXhr = null;
+      if (isUploadCanceledError(error) || canceled) {
+        markUploadTaskCanceled(taskId);
+        throw new UploadCanceledError();
+      }
+
+      lastError = error;
+      const status = Number((error as any)?.status || 0);
+      if (!isTransientStorageStatus(status) || attempt >= STORAGE_RETRY_DELAYS_MS.length) break;
+      await waitForStorageRetry(STORAGE_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+
+  const message = String((lastError as any)?.message || 'آپلود فایل ناموفق بود.');
+  failUploadTask(taskId, message);
+  throw lastError instanceof Error ? lastError : new Error(message);
 };

@@ -417,12 +417,13 @@ export const sendCounterpartyBotGroupMessage = async ({
     };
   });
 
-  const { error: insertError } = await supabase
+  const { data: insertedRows, error: insertError } = await supabase
     .from('counterparty_bot_messages')
-    .insert(rowsToInsert);
+    .insert(rowsToInsert)
+    .select('id,org_id,bot_group_id,direction,message_type,chat_id,provider_message_id,content_text,file_url,file_name,mime_type,payload,created_by,created_at');
   if (insertError) throw insertError;
 
-  return proxyData;
+  return { ...proxyData, insertedRows: insertedRows || [] };
 };
 
 export const sendCustomerBotMessage = async ({

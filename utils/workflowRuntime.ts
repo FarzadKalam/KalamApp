@@ -2762,11 +2762,32 @@ export const executeWorkflowAction = async (
       config.relation_field_key
       || (targetModuleId === 'tasks' ? 'source_record_id' : '')
     ).trim();
-    if (!targetModuleId || !relationFieldKey || !sourceRecordId) return;
+    const mappings = Array.isArray(config.field_mappings) ? config.field_mappings : [];
+    const mappingContext: WorkflowEvaluationContext = {
+      moduleId,
+      relatedRecordCache: new Map(),
+      tagsCache: new Map(),
+    };
+    const relationFieldMapping = targetModuleId !== 'tasks'
+      ? mappings.find((mapping: any) => String(mapping?.field || '').trim() === relationFieldKey)
+      : null;
+    const mappedRelationRecordId = relationFieldMapping
+      ? String(
+        relationFieldMapping?.mode === 'from_source' || relationFieldMapping?.mode === 'from_related'
+          ? await resolveConditionFieldValue(String(relationFieldMapping?.source_field || '').trim(), currentRecord, moduleId, mappingContext)
+          : relationFieldMapping?.mode === 'formula'
+            ? relationFieldMapping?.formula_expression_config && typeof relationFieldMapping.formula_expression_config === 'object'
+              ? evaluateFormulaExpression(relationFieldMapping.formula_expression_config, currentRecord || {}).value
+              : null
+            : relationFieldMapping?.value ?? ''
+      ).trim()
+      : '';
+    const relationRecordId = mappedRelationRecordId || sourceRecordId;
+    if (!targetModuleId || !relationFieldKey || !relationRecordId || (targetModuleId === 'tasks' && !sourceRecordId)) return;
 
     const user = await getCurrentAuthUser();
     const payload: Record<string, any> = {
-      [relationFieldKey]: sourceRecordId,
+      [relationFieldKey]: relationRecordId,
     };
     if (targetModuleId === 'tasks') {
       Object.assign(payload, buildTaskSourceInitialValues(sourceModuleId, sourceRecordId));
@@ -2779,15 +2800,9 @@ export const executeWorkflowAction = async (
       payload.updated_by = user.id;
     }
 
-    const mappings = Array.isArray(config.field_mappings) ? config.field_mappings : [];
-    const mappingContext: WorkflowEvaluationContext = {
-      moduleId,
-      relatedRecordCache: new Map(),
-      tagsCache: new Map(),
-    };
     for (const mapping of mappings) {
       const targetField = String(mapping?.field || '').trim();
-      if (!targetField) continue;
+      if (!targetField || targetField === relationFieldKey) continue;
       if (mapping?.mode === 'from_source' || mapping?.mode === 'from_related') {
         const sourceField = String(mapping?.source_field || '').trim();
         applyWorkflowPayloadValue(payload, targetField, sourceField

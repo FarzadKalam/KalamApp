@@ -330,21 +330,37 @@ const uploadBinaryToStorage = async ({
     .map((part) => encodeURIComponent(part))
     .join('/');
   const url = `${supabaseUrl.replace(/\/+$/, '')}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedPath}`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      apikey: serviceRoleKey,
-      Authorization: `Bearer ${serviceRoleKey}`,
-      'Content-Type': contentType || 'application/octet-stream',
-      'x-upsert': 'true',
-    },
-    body: bytes,
-  });
-  const raw = await response.text();
-  if (!response.ok) {
-    throw new Error(raw || 'آپلود فایل در فضای ذخیره‌سازی ناموفق بود.');
+  let lastError = 'آپلود فایل در فضای ذخیره‌سازی ناموفق بود.';
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          apikey: serviceRoleKey,
+          Authorization: `Bearer ${serviceRoleKey}`,
+          'Content-Type': contentType || 'application/octet-stream',
+          'x-upsert': 'true',
+        },
+        body: bytes,
+      });
+      const raw = await response.text();
+      if (response.ok) {
+        return buildPublicObjectUrl(publicBaseUrl, bucket, objectPath);
+      }
+
+      lastError = raw || `Storage HTTP ${response.status}`;
+      const retryable = response.status === 408
+        || response.status === 425
+        || response.status === 429
+        || (response.status >= 500 && response.status <= 504);
+      if (!retryable || attempt === 2) break;
+    } catch (error: any) {
+      lastError = String(error?.message || error || lastError);
+      if (attempt === 2) break;
+    }
+    await sleep(350 * (attempt + 1));
   }
-  return buildPublicObjectUrl(publicBaseUrl, bucket, objectPath);
+  throw new Error(lastError);
 };
 
 const downloadBinaryFromUrl = async (url: string, extraHeaders?: Record<string, string>) => {

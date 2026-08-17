@@ -568,6 +568,17 @@ html:not(.dark) .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-danger
   font-family: var(--font-family-persian-numerals);
 }
 
+@keyframes messaging-v2-message-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 /* ورودی‌های عددی RTL با ارقام فارسی؛ فرم‌های LTR با ارقام لاتین Peyda نمایش داده می‌شوند. */
 .ant-input-number-input {
   font-family: var(--font-family-persian-numerals) !important;

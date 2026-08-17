@@ -39,4 +39,14 @@ describe('notificationUnreadSummary', () => {
     expect(summary.bot_group_messages).toBe(9);
     expect(summary.bot_direct_messages).toBe(3);
   });
+
+  it('keeps the dedicated system-message count separate from internal messages', () => {
+    const summary = normalizeNotificationUnreadSummary([
+      { section: 'notes', unread_count: 8 },
+      { section: 'system_messages', unread_count: 3 },
+    ]);
+
+    expect(summary.notes).toBe(8);
+    expect(summary.system_messages).toBe(3);
+  });
 });

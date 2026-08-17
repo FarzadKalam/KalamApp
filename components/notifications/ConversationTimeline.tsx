@@ -46,7 +46,6 @@ const ConversationTimeline = <T,>({
   // «مشاهده پیام‌های قبلی» button is a fallback rather than a requirement.
   // Re-armed when items change (the older page has been prepended).
   const autoLoadFiredRef = useRef(false);
-  const lastScrollTopRef = useRef(0);
   const lastAutoLoadAtRef = useRef(0);
   useEffect(() => {
     autoLoadFiredRef.current = false;
@@ -55,11 +54,8 @@ const ConversationTimeline = <T,>({
   const handleScroll: React.UIEventHandler<HTMLDivElement> = (event) => {
     onScroll?.(event);
     const node = event.currentTarget;
-    const scrollingUp = node.scrollTop < lastScrollTopRef.current;
-    lastScrollTopRef.current = node.scrollTop;
     if (!hasMoreBefore || loadingOlder || autoLoadFiredRef.current || !onLoadOlder) return;
     if (Date.now() - lastAutoLoadAtRef.current < AUTO_LOAD_COOLDOWN_MS) return;
-    if (!scrollingUp) return;
     if (node.scrollTop > AUTO_LOAD_OLDER_THRESHOLD_PX) return;
     // Ignore when the thread doesn't actually scroll (content shorter than view).
     if (node.scrollHeight <= node.clientHeight + 10) return;

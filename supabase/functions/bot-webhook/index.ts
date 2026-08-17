@@ -1533,21 +1533,37 @@ const uploadBinaryToStorage = async ({
     .map((part) => encodeURIComponent(part))
     .join('/');
   const url = `${supabaseUrl.replace(/\/+$/, '')}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedPath}`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      apikey: serviceRoleKey,
-      Authorization: `Bearer ${serviceRoleKey}`,
-      'Content-Type': contentType || 'application/octet-stream',
-      'x-upsert': 'true',
-    },
-    body: bytes,
-  });
-  const raw = await response.text();
-  if (!response.ok) {
-    throw new Error(raw || 'Could not upload media file to storage');
+  let lastError = 'Could not upload media file to storage';
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          apikey: serviceRoleKey,
+          Authorization: `Bearer ${serviceRoleKey}`,
+          'Content-Type': contentType || 'application/octet-stream',
+          'x-upsert': 'true',
+        },
+        body: bytes,
+      });
+      const raw = await response.text();
+      if (response.ok) {
+        return buildPublicObjectUrl(publicBaseUrl, bucket, objectPath);
+      }
+
+      lastError = raw || `Storage HTTP ${response.status}`;
+      const retryable = response.status === 408
+        || response.status === 425
+        || response.status === 429
+        || (response.status >= 500 && response.status <= 504);
+      if (!retryable || attempt === 2) break;
+    } catch (error: any) {
+      lastError = String(error?.message || error || lastError);
+      if (attempt === 2) break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
   }
-  return buildPublicObjectUrl(publicBaseUrl, bucket, objectPath);
+  throw new Error(lastError);
 };
 
 const inferMimeTypeFromFileName = (fileName: string) => {

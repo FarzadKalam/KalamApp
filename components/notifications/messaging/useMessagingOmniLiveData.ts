@@ -616,6 +616,7 @@ const isRpcSchemaCompatibilityError = (error: any) => {
 };
 
 const COMMUNICATION_PAGE_SIZE = 80;
+const BOT_DIRECT_TIMELINE_PAGE_SIZE = 40;
 
 type CommunicationPage = {
   rows: any[];
@@ -1427,6 +1428,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
   const [botGroupMessages, setBotGroupMessages] = useState<BotMessageRow[]>([]);
   const [botDirectThreads, setBotDirectThreads] = useState<BotDirectThreadRow[]>([]);
   const [botDirectMessages, setBotDirectMessages] = useState<BotMessageRow[]>([]);
+  const [botDirectTimelinePaging, setBotDirectTimelinePaging] = useState<Record<string, { hasMore: boolean; loading: boolean; initialized: boolean }>>({});
   const [botSenderBindings, setBotSenderBindings] = useState<BotIdentityBindingRow[]>([]);
   const [recordTitleMap, setRecordTitleMap] = useState<Record<string, string>>({});
   const [readStateKeys, setReadStateKeys] = useState<Set<string>>(() => new Set());
@@ -1438,6 +1440,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
   const hydratingRubikaMessageIdsRef = useRef<Set<string>>(new Set());
   const rubikaHydrationFailuresRef = useRef<Map<string, { attempts: number; lastAttemptAt: number }>>(new Map());
   const loggedRubikaHydrationFailuresRef = useRef<Set<string>>(new Set());
+  const botDirectTimelinePagingRef = useRef<Record<string, { hasMore: boolean; loading: boolean; initialized: boolean }>>({});
   const smsPageOffsetRef = useRef(0);
   const voipPageOffsetRef = useRef(0);
   const smsPageCursorRef = useRef<CommunicationPageCursor | null>(null);
@@ -1672,6 +1675,91 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
       setLoadingMoreCalls(false);
     }
   }, [hasMoreCalls, loadingMoreCalls, mergeRecordLabels, profile]);
+
+  const appendSmsMessage = useCallback((row: any) => {
+    if (String(row?.channel_type || '').trim() !== 'sms') return;
+    if (profile.orgId && String(row?.org_id || '').trim() && String(row.org_id).trim() !== profile.orgId) return;
+    setSmsMessages((current) => appendDistinctRows(current, [row]));
+    void mergeRecordLabels([row]);
+  }, [mergeRecordLabels, profile.orgId]);
+
+  const appendVoipCall = useCallback((row: any) => {
+    if (profile.orgId && String(row?.org_id || '').trim() && String(row.org_id).trim() !== profile.orgId) return;
+    setVoipCalls((current) => appendDistinctRows(current, [row]));
+    void mergeRecordLabels([row]);
+  }, [mergeRecordLabels, profile.orgId]);
+
+  const appendBotDirectMessage = useCallback((row: any) => {
+    if (!String(row?.direct_thread_id || '').trim()) return;
+    if (profile.orgId && String(row?.org_id || '').trim() && String(row.org_id).trim() !== profile.orgId) return;
+    setBotDirectMessages((current) => appendDistinctRows(current, [row]) as BotMessageRow[]);
+  }, [profile.orgId]);
+
+  const setBotDirectTimelinePagingState = useCallback((threadId: string, patch: Partial<{ hasMore: boolean; loading: boolean; initialized: boolean }>) => {
+    const normalizedThreadId = String(threadId || '').trim();
+    if (!normalizedThreadId) return;
+    const previous = botDirectTimelinePagingRef.current[normalizedThreadId] || { hasMore: false, loading: false, initialized: false };
+    const next = { ...previous, ...patch };
+    botDirectTimelinePagingRef.current = { ...botDirectTimelinePagingRef.current, [normalizedThreadId]: next };
+    setBotDirectTimelinePaging(botDirectTimelinePagingRef.current);
+  }, []);
+
+  const fetchBotDirectTimelinePage = useCallback(async (threadId: string, beforeCreatedAt?: string | null) => {
+    const normalizedThreadId = String(threadId || '').trim();
+    if (!normalizedThreadId || !profile.orgId) return { rows: [] as BotMessageRow[], hasMore: false };
+    let query = supabase
+      .from('counterparty_bot_direct_messages')
+      .select('id,org_id,direct_thread_id,direction,message_type,chat_id,channel_type,content_text,file_url,file_name,mime_type,payload,created_by,created_at')
+      .eq('org_id', profile.orgId)
+      .eq('direct_thread_id', normalizedThreadId)
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(BOT_DIRECT_TIMELINE_PAGE_SIZE + 1);
+    const before = String(beforeCreatedAt || '').trim();
+    if (before) query = query.lt('created_at', before);
+    const { data, error } = await query;
+    if (error) throw error;
+    const rows = (data || []) as BotMessageRow[];
+    return {
+      rows: rows.slice(0, BOT_DIRECT_TIMELINE_PAGE_SIZE).reverse(),
+      hasMore: rows.length > BOT_DIRECT_TIMELINE_PAGE_SIZE,
+    };
+  }, [profile.orgId]);
+
+  const ensureBotDirectThreadTimeline = useCallback(async (threadId: string) => {
+    const normalizedThreadId = String(threadId || '').trim();
+    const current = botDirectTimelinePagingRef.current[normalizedThreadId];
+    if (!normalizedThreadId || current?.initialized || current?.loading) return;
+    setBotDirectTimelinePagingState(normalizedThreadId, { loading: true });
+    try {
+      const page = await fetchBotDirectTimelinePage(normalizedThreadId);
+      setBotDirectMessages((rows) => appendDistinctRows(rows, page.rows) as BotMessageRow[]);
+      setBotDirectTimelinePagingState(normalizedThreadId, { initialized: true, hasMore: page.hasMore, loading: false });
+    } catch (error) {
+      setBotDirectTimelinePagingState(normalizedThreadId, { initialized: true, hasMore: false, loading: false });
+      console.warn('Messaging v2 could not load the direct bot timeline.', error);
+    }
+  }, [fetchBotDirectTimelinePage, setBotDirectTimelinePagingState]);
+
+  const loadMoreBotDirectThread = useCallback(async (threadId: string) => {
+    const normalizedThreadId = String(threadId || '').trim();
+    const current = botDirectTimelinePagingRef.current[normalizedThreadId];
+    if (!normalizedThreadId || !current?.initialized || current.loading || !current.hasMore) return;
+    const threadRows = botDirectMessages
+      .filter((row) => String(row?.direct_thread_id || '').trim() === normalizedThreadId)
+      .sort((left, right) => new Date(left?.created_at || 0).getTime() - new Date(right?.created_at || 0).getTime());
+    const oldestCreatedAt = String(threadRows[0]?.created_at || '').trim();
+    if (!oldestCreatedAt) return;
+    setBotDirectTimelinePagingState(normalizedThreadId, { loading: true });
+    try {
+      const page = await fetchBotDirectTimelinePage(normalizedThreadId, oldestCreatedAt);
+      setBotDirectMessages((rows) => appendDistinctRows(rows, page.rows) as BotMessageRow[]);
+      setBotDirectTimelinePagingState(normalizedThreadId, { hasMore: page.hasMore, loading: false });
+    } catch (error) {
+      setBotDirectTimelinePagingState(normalizedThreadId, { loading: false });
+      console.warn('Messaging v2 could not load older direct bot messages.', error);
+    }
+  }, [botDirectMessages, fetchBotDirectTimelinePage, setBotDirectTimelinePagingState]);
 
   const hydrateBotGroupMessageMedia = useCallback(async (rows: BotMessageRow[], groups: BotGroupRow[]) => {
     const groupById = new Map((groups || []).map((group) => [String(group?.id || '').trim(), group] as const));
@@ -1922,10 +2010,14 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
       .channel(`messaging-v2-live-${profile.orgId}-${profile.id}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'outbound_messages', filter }, (payload: any) => {
         const row = payload?.new || payload?.old || {};
-        if (String(row?.channel_type || '').trim() === 'sms') void refresh();
+        if (String(row?.channel_type || '').trim() === 'sms') {
+          if (payload?.eventType === 'INSERT' && payload?.new) appendSmsMessage(payload.new);
+          void refresh({ background: true });
+        }
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'voip_call_logs', filter }, () => {
-        void refresh();
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'voip_call_logs', filter }, (payload: any) => {
+        if (payload?.eventType === 'INSERT' && payload?.new) appendVoipCall(payload.new);
+        void refresh({ background: true });
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'counterparty_bot_groups', filter }, () => {
         void refresh();
@@ -1939,8 +2031,9 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
       .on('postgres_changes', { event: '*', schema: 'public', table: 'bot_chat_identity_bindings', filter }, () => {
         void refresh();
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'counterparty_bot_direct_messages', filter }, () => {
-        void refresh();
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'counterparty_bot_direct_messages', filter }, (payload: any) => {
+        if (payload?.eventType === 'INSERT' && payload?.new) appendBotDirectMessage(payload.new);
+        void refresh({ background: true });
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'notification_read_states', filter }, (payload: any) => {
         const row = payload?.new || payload?.old || {};
@@ -1954,7 +2047,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
         channel = null;
       }
     };
-  }, [profile.id, profile.orgId, profile.voipExtension, realtimeEnabled, refresh]);
+  }, [appendBotDirectMessage, appendSmsMessage, appendVoipCall, profile.id, profile.orgId, profile.voipExtension, realtimeEnabled, refresh]);
 
   return useMemo(() => {
     const smsModels = buildSmsLiveModels(smsMessages, recordTitleMap, readStateKeys);
@@ -1979,6 +2072,12 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
       loadingMoreCalls,
       loadMoreSms,
       loadMoreCalls,
+      appendSmsMessage,
+      appendVoipCall,
+      appendBotDirectMessage,
+      ensureBotDirectThreadTimeline,
+      loadMoreBotDirectThread,
+      botDirectTimelinePaging,
       profile,
       liveSummary: [
         botGroupModels.conversations.length ? `${toPersianNumber(botGroupModels.conversations.length)} گروه بات` : '',
@@ -1988,5 +2087,5 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
       ].filter(Boolean).join('، '),
       getModuleLabel,
     };
-  }, [botDirectMessages, botDirectThreads, botGroupMessages, botGroups, botSenderBindings, hasMoreCalls, hasMoreSms, loadMoreCalls, loadMoreSms, loading, loadingMoreCalls, loadingMoreSms, profile, readStateKeys, recordTitleMap, refresh, smsMessages, voipCalls, voipOperatorIdentities]);
+  }, [appendBotDirectMessage, appendSmsMessage, appendVoipCall, botDirectMessages, botDirectThreads, botDirectTimelinePaging, botGroupMessages, botGroups, botSenderBindings, ensureBotDirectThreadTimeline, hasMoreCalls, hasMoreSms, loadMoreBotDirectThread, loadMoreCalls, loadMoreSms, loading, loadingMoreCalls, loadingMoreSms, profile, readStateKeys, recordTitleMap, refresh, smsMessages, voipCalls, voipOperatorIdentities]);
 };

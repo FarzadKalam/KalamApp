@@ -255,6 +255,18 @@ const getOtpTimeoutMs = (settings: SmsSettings, fallbackMs: number) => {
   return fallbackMs;
 };
 
+// GoTrue برای پاسخ hook پیامک زمان محدودی دارد. مسیر خدماتی ملی‌پیامک گاهی
+// پیامک را ثبت می‌کند اما پاسخ HTTP را کمی دیرتر برمی‌گرداند؛ کمتر از ۴ ثانیه
+// باعث می‌شود خود GoTrue خطای 500 بدهد، با اینکه پیامک به دست کاربر رسیده است.
+const MIN_CONSOLE_SHARED_OTP_TIMEOUT_MS = 4000;
+
+const getEffectiveOtpTimeoutMs = (
+  providerMode: ReturnType<typeof getOtpProviderMode>,
+  configuredTimeoutMs: number,
+) => providerMode === 'console_shared'
+  ? Math.max(configuredTimeoutMs, MIN_CONSOLE_SHARED_OTP_TIMEOUT_MS)
+  : configuredTimeoutMs;
+
 const normalizeRecipientPhone = (value: string) => {
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -1239,13 +1251,16 @@ const sendOtpViaConsoleShared = async (phone: string, otp: string, settings: Sms
 const sendOtpWithProvider = async (phone: string, otp: string, settings: SmsSettings, options?: { disableAutoFallback?: boolean }) => {
   const requestedMode = getOtpProviderMode(settings);
   const providerMode = options?.disableAutoFallback && requestedMode === 'auto' ? 'soap' : requestedMode;
-  const timeoutMs = getOtpTimeoutMs(settings, 2600);
+  const configuredTimeoutMs = getOtpTimeoutMs(settings, 2600);
+  const timeoutMs = getEffectiveOtpTimeoutMs(providerMode, configuredTimeoutMs);
 
   logOtpAttempt('select_provider', {
     phone: maskPhoneForLog(phone),
     requested_mode: requestedMode,
     effective_mode: providerMode,
+    configured_timeout_ms: configuredTimeoutMs,
     timeout_ms: timeoutMs,
+    timeout_adjusted: timeoutMs !== configuredTimeoutMs,
     disable_auto_fallback: options?.disableAutoFallback === true,
   });
 
@@ -1368,16 +1383,30 @@ Deno.serve(async (req) => {
     // OTP همیشه از یک ساختار واحد استفاده می‌کند: env vars (MELIPAYAMAK_*)
     // هیچ‌گاه از تنظیمات پیام‌کوتاه سازمان‌ها استفاده نمی‌شود
     if (isAuthHookRequest && hookOtp) {
+      const startedAt = Date.now();
+      let requestedMode = 'unknown';
       try {
         if (!hookPhone) {
           console.warn('[send-sms] otp payload missing phone', JSON.stringify(payloadShape));
           return authHookError(400, 'OTP payload did not include phone number');
         }
         const otpSettings = getHookSmsSettings(null);
+        requestedMode = getOtpProviderMode(otpSettings);
         await sendOtpWithProvider(hookPhone, hookOtp, otpSettings, { disableAutoFallback: true });
+        logOtpAttempt('delivery:ok', {
+          phone: maskPhoneForLog(hookPhone),
+          provider_mode: requestedMode,
+          duration_ms: Date.now() - startedAt,
+        });
         return authHookSuccess();
       } catch (otpError: any) {
         const message = String(otpError?.message || otpError || 'OTP delivery failed');
+        logOtpAttempt('delivery:failed', {
+          phone: maskPhoneForLog(hookPhone),
+          provider_mode: requestedMode,
+          duration_ms: Date.now() - startedAt,
+          error: message.slice(0, 300),
+        });
         console.error('[send-sms] otp delivery error', message);
         return authHookError(400, message);
       }

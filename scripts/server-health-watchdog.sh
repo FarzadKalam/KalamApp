@@ -21,6 +21,8 @@ LOG_WINDOW="${MONITOR_LOG_WINDOW:-5m}"
 REQUIRED_CONTAINERS="${MONITOR_REQUIRED_CONTAINERS:-supabase-db,supabase-rest,supabase-auth,supabase-kong,supabase-edge-functions,supabase-storage,kalamapp-gotenberg}"
 SSL_HOSTS="${MONITOR_SSL_HOSTS:-kalam.tazesystem.ir,api.tazesystem.ir}"
 SSL_REMINDER_DAYS="${MONITOR_SSL_REMINDER_DAYS:-30,14,7,3,1}"
+EVENT_LOG="${MONITOR_EVENT_LOG:-$STATE_DIR/events.log}"
+EVENT_LOG_MAX_LINES="${MONITOR_EVENT_LOG_MAX_LINES:-1000}"
 
 mkdir -p "$STATE_DIR"
 LOCK_DIR="$STATE_DIR/run.lock"
@@ -28,6 +30,27 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   exit 0
 fi
 trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+
+record_monitor_event() {
+  local key="$1"
+  local message="$2"
+  local compact_message
+  compact_message="$(printf '%s' "$message" | tr '\r\n' ' ' | sed -E 's/[[:space:]]+/ /g' | cut -c1-500)"
+  printf '%s\t%s\t%s\n' "$(date -Is)" "$key" "$compact_message" >> "$EVENT_LOG"
+  chmod 600 "$EVENT_LOG" 2>/dev/null || true
+
+  if [[ "$EVENT_LOG_MAX_LINES" =~ ^[0-9]+$ ]] && (( EVENT_LOG_MAX_LINES > 0 )); then
+    local event_count
+    event_count="$(wc -l < "$EVENT_LOG" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+    if [[ "$event_count" =~ ^[0-9]+$ ]] && (( event_count > EVENT_LOG_MAX_LINES )); then
+      local event_tmp
+      event_tmp="${EVENT_LOG}.tmp.$$"
+      tail -n "$EVENT_LOG_MAX_LINES" "$EVENT_LOG" > "$event_tmp"
+      chmod 600 "$event_tmp" 2>/dev/null || true
+      mv -f "$event_tmp" "$EVENT_LOG"
+    fi
+  fi
+}
 
 send_bale() {
   local message="$1"
@@ -54,6 +77,7 @@ alert_once() {
     return 0
   fi
   printf '%s' "$now" > "$state_file"
+  record_monitor_event "$key" "$message"
   send_bale "⚠️ Kalamapp server alert\n${message}\nزمان: $(date -Is)" || true
 }
 
@@ -134,8 +158,16 @@ if ! docker exec supabase-db pg_isready -U postgres -h localhost >/dev/null 2>&1
   alert_once 'postgres-not-ready' 'PostgreSQL آمادهٔ پاسخ‌گویی نیست.'
 fi
 
-if docker logs --since "$LOG_WINDOW" supabase-rest 2>&1 | grep -Eq 'PGRST003|57014'; then
-  alert_once 'postgrest-pool-or-timeout' "در ${LOG_WINDOW} اخیر، خطای pool یا timeout در PostgREST دیده شد."
+if docker logs --since "$LOG_WINDOW" supabase-rest 2>&1 | grep -Eq 'PGRST003'; then
+  alert_once 'postgrest-pool-exhausted' "در ${LOG_WINDOW} اخیر، pool اتصال PostgREST پر شده است."
+fi
+
+if docker logs --since "$LOG_WINDOW" supabase-rest 2>&1 | grep -Eq '57014'; then
+  alert_once 'postgrest-statement-timeout' "در ${LOG_WINDOW} اخیر، query دیتابیس از سقف زمان PostgREST عبور کرده است."
+fi
+
+if docker logs --since "$LOG_WINDOW" supabase-storage 2>&1 | grep -Eq '"statusCode":500|ECONNREFUSED|S3Error'; then
+  alert_once 'storage-backend-unreachable' "در ${LOG_WINDOW} اخیر، Storage به فضای ذخیره‌سازی پشت‌صحنه متصل نشده یا پاسخ ۵xx داده است."
 fi
 
 IFS=',' read -r -a ssl_hosts <<< "$SSL_HOSTS"
@@ -146,9 +178,26 @@ for ssl_host in "${ssl_hosts[@]}"; do
 done
 
 if [[ -n "${MONITOR_API_URL:-}" ]]; then
-  api_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 15 "$MONITOR_API_URL" || true)"
+  api_probe_error_file="$(mktemp "${STATE_DIR}/api-probe.XXXXXX")"
+  api_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 15 "$MONITOR_API_URL" 2>"$api_probe_error_file" || true)"
+  api_probe_error_raw="$(tr '\r\n' ' ' < "$api_probe_error_file" | sed -E 's/[[:space:]]+/ /g')"
+  rm -f "$api_probe_error_file"
+  api_probe_error=''
+  if [[ -n "$api_probe_error_raw" ]]; then
+    case "$api_probe_error_raw" in
+      *"timed out"*|*"Timeout"*) api_probe_error='timeout شبکه' ;;
+      *"Could not resolve"*|*"resolve host"*) api_probe_error='خطای DNS' ;;
+      *"SSL"*|*"certificate"*) api_probe_error='خطای TLS/SSL' ;;
+      *"Connection refused"*|*"connect"*) api_probe_error='اتصال رد شد' ;;
+      *) api_probe_error='خطای شبکه' ;;
+    esac
+  fi
   if [[ ! "$api_status" =~ ^[1-4][0-9][0-9]$ ]]; then
-    alert_once 'public-api-unreachable' "API عمومی در دسترس نیست یا پاسخ 5xx دارد (HTTP ${api_status:-000})."
+    api_details="HTTP ${api_status:-000}"
+    if [[ -n "$api_probe_error" ]]; then
+      api_details="${api_details}; curl: ${api_probe_error}"
+    fi
+    alert_once 'public-api-unreachable' "API عمومی در دسترس نیست یا پاسخ 5xx دارد (${api_details})."
   fi
 fi
 

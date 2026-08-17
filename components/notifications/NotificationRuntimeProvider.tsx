@@ -30,9 +30,15 @@ import {
   setUiNotificationOverlayItems,
   setUiNotificationOverlayPagination,
 } from '../../utils/uiNotificationOverlayStore';
-import { botMessageInsertBus, noteInsertBus } from '../../utils/communicationRealtimeBus';
+import {
+  botMessageInsertBus,
+  noteInsertBus,
+  smsMessageInsertBus,
+  voipCallInsertBus,
+} from '../../utils/communicationRealtimeBus';
 import { dedupeAttachments, extractBotMessageAttachments } from '../../utils/messageAttachments';
-import type { NoteAttachment } from '../../utils/noteContent';
+import { parseNoteContent, type NoteAttachment } from '../../utils/noteContent';
+import { canCurrentUserAccessInternalSystemNote, isInternalSystemNoteRow } from '../../utils/internalNoteAccess';
 
 type RuntimeSection = NotificationUnreadSection | 'bot_direct_messages';
 type RuntimeRevisions = Record<RuntimeSection, number>;
@@ -334,6 +340,62 @@ const resolveBotOverlaySenderName = (row: OverlayFeedRow) => {
 
 const buildBotDirectConversationKey = (channel: string, chatId: string) =>
   `bot:direct:${String(channel || '').trim()}:${String(chatId || '').trim()}`;
+
+const normalizeRealtimeIdArray = (value: unknown) => (
+  Array.isArray(value)
+    ? value.map((item) => String(item || '').trim()).filter(Boolean)
+    : [] as string[]
+);
+
+const buildRealtimeInternalOverlayRow = (
+  row: Record<string, any>,
+  identity: { userId: string; roleId: string },
+): OverlayFeedRow | null => {
+  const userId = String(identity.userId || '').trim();
+  if (!userId) return null;
+  const authorId = String(row?.author_id || row?.metadata?.author_id || '').trim();
+  const mentionedUsers = normalizeRealtimeIdArray(row?.mention_user_ids);
+  const mentionedRoles = normalizeRealtimeIdArray(row?.mention_role_ids);
+  const isSystem = isInternalSystemNoteRow(row);
+  const allowed = isSystem
+    ? canCurrentUserAccessInternalSystemNote(row, userId, identity.roleId)
+    : authorId !== userId && (
+      mentionedUsers.includes(userId)
+      || (Boolean(identity.roleId) && mentionedRoles.includes(String(identity.roleId).trim()))
+    );
+  if (!allowed) return null;
+
+  const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+  const groupId = String(metadata?.chat_group_id || '').trim();
+  const directConversationKey = authorId && mentionedUsers.includes(userId)
+    ? `direct:${[authorId, userId].sort().join(':')}`
+    : '';
+  const conversationKey = isSystem
+    ? 'system'
+    : String(metadata?.conversation_key || '').trim() || (groupId ? `group:${groupId}` : directConversationKey);
+  const parsed = parseNoteContent(String(row?.content || ''));
+  const category = isSystem
+    ? (String(row?.source_type || metadata?.source_type || '').trim().toLowerCase() === 'ai' ? 'assistant' : 'system')
+    : (groupId ? 'group' : 'internal');
+  return {
+    section: 'notes',
+    source_type: 'note',
+    source_id: String(row?.id || '').trim(),
+    title: isSystem ? 'پیام سیستم' : (String(row?.author_name || metadata?.author_name || '').trim() || 'پیام داخلی'),
+    body: parsed.text || (parsed.attachments.length > 0 ? 'فایل ارسال شد.' : 'پیام جدید'),
+    created_at: String(row?.created_at || row?.updated_at || '').trim() || null,
+    module_id: String(row?.module_id || '').trim() || null,
+    record_id: String(row?.record_id || '').trim() || null,
+    conversation_key: conversationKey || null,
+    payload: {
+      ...metadata,
+      category,
+      conversation_key: conversationKey || null,
+      author_name: String(row?.author_name || metadata?.author_name || '').trim() || null,
+      attachment_previews: parsed.attachments,
+    },
+  };
+};
 
 export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
@@ -1021,8 +1083,19 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
             // Hand the inserted row to any open conversation view so the new
             // message renders instantly without waiting for an RPC refetch.
             if (payload?.eventType === 'INSERT' && payload?.new) {
-              if (table === 'notes') noteInsertBus.emit(payload.new);
+              if (table === 'notes') {
+                noteInsertBus.emit(payload.new);
+                const overlayRow = buildRealtimeInternalOverlayRow(payload.new, identity);
+                if (overlayRow?.source_id) {
+                  overlayRowsRef.current = Array.from(new Map(
+                    [overlayRow, ...overlayRowsRef.current].map((item) => [`${item.section}:${item.source_type}:${item.source_id}`, item]),
+                  ).values());
+                  publishOverlayRows(overlayRowsRef.current);
+                }
+              }
               else if (table === 'counterparty_bot_messages' || table === 'counterparty_bot_direct_messages') botMessageInsertBus.emit(payload.new);
+              else if (table === 'outbound_messages' && String(payload.new?.channel_type || '').trim() === 'sms') smsMessageInsertBus.emit(payload.new);
+              else if (table === 'voip_call_logs') voipCallInsertBus.emit(payload.new);
             }
             const section = mapRealtimeSection(table, row);
             if (section) scheduleRefresh(section);

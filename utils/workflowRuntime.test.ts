@@ -791,6 +791,64 @@ describe('formula-based workflow actions', () => {
     }));
   });
 
+  it('uses a relation value mapped from the current activity when no process link exists', async () => {
+    const inserts: Array<Record<string, any>> = [];
+
+    mocks.from.mockImplementation((table: string) => {
+      if (table === 'purchase_invoices') {
+        return {
+          insert: vi.fn((payload: Record<string, any>) => {
+            inserts.push(payload);
+            return {
+              select: vi.fn(() => ({
+                maybeSingle: vi.fn(async () => ({ data: { id: 'purchase-invoice-1' }, error: null })),
+              })),
+            };
+          }),
+        };
+      }
+      return makeQuery(table);
+    });
+
+    await executeWorkflowAction(
+      {
+        id: 'action-create-purchase-invoice',
+        type: 'create_related_record',
+        config: {
+          source_module_id: 'suppliers',
+          target_module_id: 'purchase_invoices',
+          relation_field_key: 'supplier_id',
+          field_mappings: [
+            {
+              id: 'mapping-supplier',
+              field: 'supplier_id',
+              mode: 'from_source',
+              source_field: 'selected_supplier_id',
+            },
+            {
+              id: 'mapping-name',
+              field: 'name',
+              mode: 'from_source',
+              source_field: 'invoice_name',
+            },
+          ],
+        },
+      },
+      'tasks',
+      {
+        id: 'task-1',
+        selected_supplier_id: 'supplier-1',
+        invoice_name: 'خرید مواد اولیه',
+      }
+    );
+
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]).toEqual(expect.objectContaining({
+      supplier_id: 'supplier-1',
+      name: 'خرید مواد اولیه',
+    }));
+  });
+
   it('creates a related activity with normalized source linkage fields', async () => {
     const inserts: Array<Record<string, any>> = [];
 

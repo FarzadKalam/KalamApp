@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   AudioOutlined,
   BookOutlined,
@@ -70,7 +70,12 @@ import { normalizePublicAssetUrl } from '../../../utils/assetUrl';
 import { sendBotMessageViaGateway, sendCounterpartyBotGroupMessage, type BotChannel } from '../../../utils/botGateway';
 import { getActiveChannelSettings } from '../../../utils/channelSettings';
 import { useOptionalNotificationRuntime } from '../NotificationRuntimeProvider';
-import { botMessageInsertBus, noteInsertBus } from '../../../utils/communicationRealtimeBus';
+import {
+  botMessageInsertBus,
+  noteInsertBus,
+  smsMessageInsertBus,
+  voipCallInsertBus,
+} from '../../../utils/communicationRealtimeBus';
 import { useNotificationConversationList } from '../../../hooks/useNotificationConversationList';
 import { shouldSubmitComposerOnEnter } from '../../../utils/composeKeyboard';
 import { useInternalConversationTimeline } from '../../../hooks/useInternalConversationTimeline';
@@ -1923,7 +1928,7 @@ const TimelineEventCard: React.FC<{
     }
   };
   return (
-    <div id={`timeline-event-${item.id}`} data-source-id={String(item.sourceRow?.id || '') || undefined} className={`flex ${outgoing ? 'justify-start' : 'justify-end'}`}>
+    <div id={`timeline-event-${item.id}`} data-source-id={String(item.sourceRow?.id || '') || undefined} className={`animate-[messaging-v2-message-enter_240ms_ease-out] flex ${outgoing ? 'justify-start' : 'justify-end'}`}>
       <div
         className={`relative max-w-[min(680px,88%)] rounded-3xl px-3 py-2.5 ${
           outgoing
@@ -2591,6 +2596,13 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
   const [botStatusWatchingChannel, setBotStatusWatchingChannel] = useState<BotChannel | null>(null);
   const timelineViewportRef = useRef<HTMLDivElement | null>(null);
   const lastTimelineConversationRef = useRef('');
+  const timelineWasNearBottomRef = useRef(true);
+  const timelinePrependAnchorRef = useRef<{
+    conversationKey: string;
+    scrollTop: number;
+    scrollHeight: number;
+  } | null>(null);
+  const timelineAutoLoadFiredRef = useRef(false);
   const markReadDedupeRef = useRef('');
   const runtimeRevisionRef = useRef(notificationRuntime.revisions);
   const botStatusWatchTimerRef = useRef<number | null>(null);
@@ -3167,7 +3179,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
       bot_direct: Math.max(0, Number(notificationRuntime.summary.bot_direct_messages || botDirectFallback || 0)),
       sms: Math.max(0, Number(notificationRuntime.summary.sms_messages || 0)),
       call: Math.max(0, Number(notificationRuntime.summary.voip_calls || 0)),
-      system: Math.max(0, Number(systemConversation?.unread || 0)),
+      system: Math.max(0, Number(notificationRuntime.summary.system_messages || systemConversation?.unread || 0)),
       saved: Math.max(0, Number(savedConversation?.unread || 0)),
     };
   }, [
@@ -3178,6 +3190,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
     notificationRuntime.summary.bot_group_messages,
     notificationRuntime.summary.notes,
     notificationRuntime.summary.sms_messages,
+    notificationRuntime.summary.system_messages,
     notificationRuntime.summary.voip_calls,
   ]);
   const activeConversation = displayConversations.find((conversation) => conversation.key === selectedKey) || displayConversations[0] || emptyConversation;
@@ -3187,6 +3200,9 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
   const activeBotGroupRow = activeBotGroupId
     ? (liveData.botGroups || []).find((row: any) => String(row?.id || '').trim() === activeBotGroupId) || null
     : null;
+  const activeBotDirectThreadId = activeConversation.channel === 'bot_direct'
+    ? getBotDirectThreadIdFromConversationKey(activeConversation.key)
+    : '';
   const botTimeline = useBotConversationTimeline<any>({
     supabase,
     enabled: Boolean(liveData.profile.id && activeConversation.channel === 'bot_group' && activeBotGroupId),
@@ -3215,6 +3231,10 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
     notificationRuntime.revisions.bot_messages,
   ]);
   useEffect(() => {
+    if (activeConversation.channel !== 'bot_direct' || !activeBotDirectThreadId) return;
+    void liveData.ensureBotDirectThreadTimeline(activeBotDirectThreadId);
+  }, [activeBotDirectThreadId, activeConversation.channel, liveData]);
+  useEffect(() => {
     const orgId = String(liveData.profile.orgId || '').trim();
     if (!orgId) return undefined;
     const unsubscribeBot = botMessageInsertBus.subscribe((row) => {
@@ -3233,7 +3253,8 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
         rowGroupId
         || (activeConversation.channel === 'bot_direct' && rowDirectThreadId && activeConversation.key === `live:bot_direct:${rowDirectThreadId}`)
       ) {
-        void liveData.refresh();
+        if (rowDirectThreadId) liveData.appendBotDirectMessage(row);
+        void liveData.refresh({ background: true });
         void refreshBotConversations({ force: true });
       }
     });
@@ -3241,6 +3262,22 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
       unsubscribeBot();
     };
   }, [activeBotGroupId, activeConversation.channel, activeConversation.key, botTimeline.setItems, liveData, refreshBotConversations]);
+  useEffect(() => {
+    const orgId = String(liveData.profile.orgId || '').trim();
+    if (!orgId) return undefined;
+    const unsubscribeSms = smsMessageInsertBus.subscribe((row) => {
+      if (String(row?.org_id || '').trim() && String(row.org_id).trim() !== orgId) return;
+      liveData.appendSmsMessage(row);
+    });
+    const unsubscribeVoip = voipCallInsertBus.subscribe((row) => {
+      if (String(row?.org_id || '').trim() && String(row.org_id).trim() !== orgId) return;
+      liveData.appendVoipCall(row);
+    });
+    return () => {
+      unsubscribeSms();
+      unsubscribeVoip();
+    };
+  }, [liveData]);
   const botGroupRpcEvents = useMemo<TimelineEvent[]>(() => (
     activeConversation.channel === 'bot_group'
       ? buildBotGroupRpcTimelineEvents(botTimeline.items || [], activeBotGroupRow, internalRecordTitleMap, [
@@ -3249,6 +3286,49 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
         ])
       : []
   ), [activeBotGroupRow, activeConversation.channel, botTimeline.items, internalRecordTitleMap, liveData.botSenderBindings, optimisticBotSenderBindings]);
+  const activeTimelineHasMore = activeConversation.channel === 'internal'
+    ? internalTimeline.hasMore
+    : activeConversation.channel === 'bot_group'
+      ? botTimeline.hasMore
+      : activeConversation.channel === 'bot_direct'
+        ? Boolean(liveData.botDirectTimelinePaging[activeBotDirectThreadId]?.hasMore)
+      : activeConversation.channel === 'sms'
+        ? liveData.hasMoreSms
+        : activeConversation.channel === 'call'
+          ? liveData.hasMoreCalls
+          : false;
+  const activeTimelineLoadingOlder = activeConversation.channel === 'internal'
+    ? internalTimeline.loadingOlder
+    : activeConversation.channel === 'bot_group'
+      ? botTimeline.loadingOlder
+      : activeConversation.channel === 'bot_direct'
+        ? Boolean(liveData.botDirectTimelinePaging[activeBotDirectThreadId]?.loading)
+      : activeConversation.channel === 'sms'
+        ? liveData.loadingMoreSms
+        : activeConversation.channel === 'call'
+          ? liveData.loadingMoreCalls
+          : false;
+  const loadOlderActiveTimeline = useCallback(async () => {
+    if (activeConversation.channel === 'internal') {
+      await internalTimeline.loadOlder();
+      return;
+    }
+    if (activeConversation.channel === 'bot_group') {
+      await botTimeline.loadOlder();
+      return;
+    }
+    if (activeConversation.channel === 'bot_direct' && activeBotDirectThreadId) {
+      await liveData.loadMoreBotDirectThread(activeBotDirectThreadId);
+      return;
+    }
+    if (activeConversation.channel === 'sms') {
+      await liveData.loadMoreSms();
+      return;
+    }
+    if (activeConversation.channel === 'call') {
+      await liveData.loadMoreCalls();
+    }
+  }, [activeBotDirectThreadId, activeConversation.channel, botTimeline.loadOlder, internalTimeline.loadOlder, liveData]);
   const displayEvents = useMemo<TimelineEvent[]>(() => {
     const currentUserId = String(liveData.profile.id || '').trim();
     const currentUser = currentUserId ? directoryUserMap[currentUserId] : null;
@@ -3360,6 +3440,16 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
       ...(item.attachments || []).map((attachment) => attachment.name),
     ].some((value) => String(value || '').toLocaleLowerCase('fa').includes(normalizedConversationSearch)));
   }, [activeEvents, normalizedConversationSearch]);
+  const visibleTimelineRows = useMemo(() => {
+    let lastDate = '';
+    return visibleActiveEvents.map((item) => {
+      const timestamp = String(item.sourceRow?.created_at || item.sourceRow?.message_at || item.sourceRow?.started_at || item.time || '').trim();
+      const dateLabel = safeJalaliFormat(timestamp, 'YYYY/MM/DD') || 'تاریخ نامشخص';
+      const showDate = dateLabel !== lastDate;
+      lastDate = dateLabel;
+      return { item, dateLabel, showDate };
+    });
+  }, [visibleActiveEvents]);
   const activeUnreadEventIds = useMemo(() => {
     const unreadCount = Math.max(0, Number(activeConversation?.unread || 0));
     if (!unreadCount) return new Set<string>();
@@ -3369,12 +3459,44 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
     return new Set(candidates.map((item) => item.id));
   }, [activeConversation?.unread, activeEvents]);
 
+  useEffect(() => {
+    timelineAutoLoadFiredRef.current = false;
+  }, [activeConversation.key, activeEvents.length]);
+
+  const requestOlderTimeline = useCallback(() => {
+    if (!activeTimelineHasMore || activeTimelineLoadingOlder || timelineAutoLoadFiredRef.current) return;
+    const node = timelineViewportRef.current;
+    if (!node) return;
+    timelineAutoLoadFiredRef.current = true;
+    timelinePrependAnchorRef.current = {
+      conversationKey: activeConversation.key,
+      scrollTop: node.scrollTop,
+      scrollHeight: node.scrollHeight,
+    };
+    void loadOlderActiveTimeline().catch((error) => {
+      timelineAutoLoadFiredRef.current = false;
+      console.warn('Could not load older messaging V2 timeline entries', error);
+    });
+  }, [activeConversation.key, activeTimelineHasMore, activeTimelineLoadingOlder, loadOlderActiveTimeline]);
+
+  const handleTimelineScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const node = event.currentTarget;
+    timelineWasNearBottomRef.current = node.scrollHeight - node.scrollTop - node.clientHeight < 96;
+    if (node.scrollTop <= 80) requestOlderTimeline();
+  }, [requestOlderTimeline]);
+
   useLayoutEffect(() => {
     const node = timelineViewportRef.current;
     if (!node || !activeConversation?.key) return;
     const conversationChanged = lastTimelineConversationRef.current !== activeConversation.key;
     lastTimelineConversationRef.current = activeConversation.key;
-    if (conversationChanged || activeEvents.length > 0) {
+    const prependAnchor = timelinePrependAnchorRef.current;
+    if (prependAnchor?.conversationKey === activeConversation.key) {
+      node.scrollTop = prependAnchor.scrollTop + (node.scrollHeight - prependAnchor.scrollHeight);
+      timelinePrependAnchorRef.current = null;
+      return;
+    }
+    if (conversationChanged || timelineWasNearBottomRef.current) {
       node.scrollTop = node.scrollHeight;
     }
   }, [activeConversation?.key, activeEvents.length]);
@@ -4554,7 +4676,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
       || ''
     ).trim() || null;
     const nowIso = new Date().toISOString();
-    const { error: insertError } = await supabase
+    const { data: insertedRow, error: insertError } = await supabase
       .from('counterparty_bot_direct_messages')
       .insert([{
         org_id: String(liveData.profile.orgId || '').trim() || null,
@@ -4580,7 +4702,9 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
           ...(options?.extraPayload || {}),
           attachments,
         },
-      }]);
+      }])
+      .select('id,org_id,direct_thread_id,direction,message_type,chat_id,channel_type,content_text,file_url,file_name,mime_type,payload,created_by,created_at')
+      .single();
     if (insertError) throw insertError;
     const { error: threadError } = await supabase
       .from('counterparty_bot_direct_threads')
@@ -4594,6 +4718,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
       })
       .eq('id', thread.id);
     if (threadError) throw threadError;
+    return insertedRow;
   };
 
   const timelineAttachmentsToNoteAttachments = (item: TimelineEvent): NoteAttachment[] => (
@@ -5223,11 +5348,12 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
           message.warning('متن یا پیوست پیام خالی است.');
           return false;
         }
+        let insertedBotRows: any[] = [];
         if (conversation.channel === 'bot_group') {
           const groupId = getBotGroupIdFromConversationKey(conversation.key);
           const group = (liveData.botGroups || []).find((row: any) => String(row?.id || '') === groupId);
           if (!group) throw new Error('گروه بات انتخاب‌شده پیدا نشد.');
-          await sendTextToBotGroup(group, finalText, {
+          const result = await sendTextToBotGroup(group, finalText, {
             attachments: outboundAttachments.length > 0 ? outboundAttachments : undefined,
             fallbackText: outboundAttachments.length > 0 ? [normalizedText, attachmentNameText].filter(Boolean).join('\n') : undefined,
             messageType: outboundAttachments.length > 0 ? 'file' : 'text',
@@ -5237,11 +5363,12 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
               reply_to_message_id: replyTarget?.sourceRow?.provider_message_id || null,
             },
           });
+          insertedBotRows = Array.isArray((result as any)?.insertedRows) ? (result as any).insertedRows : [];
         } else {
           const threadId = getBotDirectThreadIdFromConversationKey(conversation.key);
           const thread = (liveData.botDirectThreads || []).find((row: any) => String(row?.id || '') === threadId);
           if (!thread) throw new Error('گفتگوی شخصی بات انتخاب‌شده پیدا نشد.');
-          await sendTextToBotDirectThread(thread, finalText, {
+          const insertedRow = await sendTextToBotDirectThread(thread, finalText, {
             attachments: outboundAttachments.length > 0 ? outboundAttachments : undefined,
             fallbackText: outboundAttachments.length > 0 ? [normalizedText, attachmentNameText].filter(Boolean).join('\n') : undefined,
             messageType: outboundAttachments.length > 0 ? 'file' : 'text',
@@ -5251,7 +5378,14 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
               reply_to_message_id: replyTarget?.sourceRow?.provider_message_id || null,
             },
           });
+          insertedBotRows = insertedRow ? [insertedRow] : [];
         }
+        insertedBotRows.forEach((row) => {
+          if (String(row?.direct_thread_id || '').trim()) {
+            liveData.appendBotDirectMessage(row);
+          }
+          botMessageInsertBus.emit(row);
+        });
         // ارسال بات و ثبت پیام کامل شده است. refreshهای عمومی می‌توانند در
         // پس‌زمینه اجرا شوند؛ منتظر ماندن برای آن‌ها باعث گیرکردن دکمه می‌شد.
         void Promise.all([
@@ -5469,41 +5603,58 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
                 searchValue={conversationSearchValue}
                 onSearchValueChange={setConversationSearchValue}
               />
-              <div ref={timelineViewportRef} className="min-h-0 flex-1 overflow-y-auto bg-[linear-gradient(180deg,rgba(248,250,252,0.94),rgba(241,245,249,0.82))] px-3 py-3 dark:bg-none dark:bg-[#101113]">
+              <div ref={timelineViewportRef} onScroll={handleTimelineScroll} className="min-h-0 flex-1 overflow-y-auto bg-[linear-gradient(180deg,rgba(248,250,252,0.94),rgba(241,245,249,0.82))] px-3 py-3 dark:bg-none dark:bg-[#101113]" style={{ overflowAnchor: 'none', overscrollBehavior: 'contain' }}>
                 <div className="mx-auto flex max-w-5xl flex-col gap-3">
-                  <div className="flex justify-center">
-                    <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white/88 px-3 py-1 text-[11px] text-slate-500 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-slate-300">
-                      <ClockCircleOutlined />
-                      امروز
-                    </span>
-                  </div>
+                  {activeTimelineHasMore || activeTimelineLoadingOlder ? (
+                    <div className="flex justify-center">
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<ClockCircleOutlined />}
+                        loading={activeTimelineLoadingOlder}
+                        onClick={requestOlderTimeline}
+                        className="!h-auto !rounded-full !border !border-slate-200 !bg-white/88 !px-3 !py-1 !text-[11px] !text-slate-500 hover:!text-slate-700 dark:!border-white/[0.08] dark:!bg-white/[0.05] dark:!text-slate-300"
+                      >
+                        پیام‌های قدیمی‌تر
+                      </Button>
+                    </div>
+                  ) : null}
                   {normalizedConversationSearch && visibleActiveEvents.length === 0 ? (
                     <div className="mx-auto rounded-full border border-slate-200 bg-white/85 px-4 py-2 text-xs font-semibold text-slate-500 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-slate-300">
                       نتیجه‌ای برای این جستجو پیدا نشد.
                     </div>
                   ) : null}
-                  {visibleActiveEvents.map((item) => (
-                    <TimelineEventCard
-                      key={item.id}
-                      item={item}
-                      activeConversation={activeConversation}
-                      unread={activeUnreadEventIds.has(item.id)}
-                      onReply={(event) => setReplyTarget(event)}
-                      onForward={openForwardModal}
-                      onCreateActivity={openCreateActivityFromMessage}
-                      onToggleLike={toggleMessageLike}
-                      onShowReceipts={showMessageReceipts}
-                      onBindBotSender={openBotIdentityBindModalForMessage}
-                      onBindVoipOperator={openVoipOperatorBindModal}
-                      onRetryBotMedia={retryBotMessageMedia}
-                      retryingMedia={retryingBotMediaIds.has(String(item.sourceRow?.id || '').trim())}
-                      canDelete={canDeleteMessage(item)}
-                      deleting={deletingMessageKeys.has(getTimelineEventMutationKey(activeConversation.channel, item))}
-                      onDelete={requestDeleteMessage}
-                      canEdit={canEditMessage(item)}
-                      editing={editingMessageKeys.has(getTimelineEventMutationKey(activeConversation.channel, item))}
-                      onEdit={requestEditMessage}
-                    />
+                  {visibleTimelineRows.map(({ item, dateLabel, showDate }) => (
+                    <React.Fragment key={item.id}>
+                      {showDate ? (
+                        <div className="flex justify-center pt-1">
+                          <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white/88 px-3 py-1 text-[11px] text-slate-500 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-slate-300">
+                            <ClockCircleOutlined />
+                            {dateLabel}
+                          </span>
+                        </div>
+                      ) : null}
+                      <TimelineEventCard
+                        item={item}
+                        activeConversation={activeConversation}
+                        unread={activeUnreadEventIds.has(item.id)}
+                        onReply={(event) => setReplyTarget(event)}
+                        onForward={openForwardModal}
+                        onCreateActivity={openCreateActivityFromMessage}
+                        onToggleLike={toggleMessageLike}
+                        onShowReceipts={showMessageReceipts}
+                        onBindBotSender={openBotIdentityBindModalForMessage}
+                        onBindVoipOperator={openVoipOperatorBindModal}
+                        onRetryBotMedia={retryBotMessageMedia}
+                        retryingMedia={retryingBotMediaIds.has(String(item.sourceRow?.id || '').trim())}
+                        canDelete={canDeleteMessage(item)}
+                        deleting={deletingMessageKeys.has(getTimelineEventMutationKey(activeConversation.channel, item))}
+                        onDelete={requestDeleteMessage}
+                        canEdit={canEditMessage(item)}
+                        editing={editingMessageKeys.has(getTimelineEventMutationKey(activeConversation.channel, item))}
+                        onEdit={requestEditMessage}
+                      />
+                    </React.Fragment>
                   ))}
                 </div>
               </div>
