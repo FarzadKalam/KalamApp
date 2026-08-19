@@ -86,6 +86,10 @@ const OCCASION_OPERATORS = new Set([
 ]);
 
 const MULTI_OCCASION_OPERATORS = new Set(['occasion_contains', 'occasion_not_contains']);
+const JALALI_MONTH_OPTIONS = [
+  'فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور',
+  'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند',
+].map((label, index) => ({ label, value: String(index + 1) }));
 
 const isOccasionOperator = (operator?: string) => OCCASION_OPERATORS.has(String(operator || ''));
 
@@ -232,6 +236,19 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           min={0}
         />
       );
+    }
+
+    if (condition.operator === 'jalali_month_in' || condition.operator === 'jalali_month_not_in') {
+      return <AdaptiveSelectField {...commonSelectProps} mode="multiple" options={JALALI_MONTH_OPTIONS} value={Array.isArray(condition.value) ? condition.value : []} disabled={disabled || isLocked} onChange={(value) => updateCondition(condition.id, { value })} placeholder="ماه‌های سال" pickerTitle="ماه‌های سال" />;
+    }
+
+    if (condition.operator === 'date_between' || condition.operator === 'datetime_between' || condition.operator === 'time_between') {
+      const range = condition.value && typeof condition.value === 'object' && !Array.isArray(condition.value) ? condition.value as any : {};
+      const pickerType = condition.operator === 'datetime_between' ? 'DATETIME' : condition.operator === 'time_between' ? 'TIME' : 'DATE';
+      return <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+        <PersianDatePicker type={pickerType} value={range.from || null} onChange={(from) => updateCondition(condition.id, { value: { ...range, from } })} disabled={disabled || isLocked} placeholder="از" overlayZIndexBase={overlayZIndexBase} modalContainer={resolvedPopupContainer} adaptiveMode={adaptiveMode} />
+        <PersianDatePicker type={pickerType} value={range.to || null} onChange={(to) => updateCondition(condition.id, { value: { ...range, to } })} disabled={disabled || isLocked} placeholder="تا" overlayZIndexBase={overlayZIndexBase} modalContainer={resolvedPopupContainer} adaptiveMode={adaptiveMode} />
+      </div>;
     }
 
     if (isOccasionOperator(condition.operator)) {

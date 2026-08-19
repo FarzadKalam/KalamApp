@@ -91,6 +91,7 @@ const CustomerClubNotificationActions: React.FC<Props> = ({ value, onChange, var
               dynamicOptions={{}}
               relationOptions={{}}
               actionOptions={communicationActions}
+              customerClubReminderTiming
               disabled={disabled}
               overlayZIndexBase={31000}
             />

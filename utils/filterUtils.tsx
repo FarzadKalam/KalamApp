@@ -48,6 +48,11 @@ export const WORKFLOW_OPERATORS = {
   hours_passed_lt: 'کمتر از چند ساعت گذشته باشد',
   hours_remaining_gt: 'بیشتر از چند ساعت مانده باشد',
   hours_remaining_lt: 'کمتر از چند ساعت مانده باشد',
+  jalali_month_in: 'شامل کدام ماه‌(ها) باشد',
+  jalali_month_not_in: 'شامل کدام ماه‌(ها) نباشد',
+  date_between: 'بین این دو تاریخ باشد',
+  datetime_between: 'بین این دو تاریخ/زمان باشد',
+  time_between: 'بین این دو ساعت باشد',
   multi_count_gt: 'بیشتر از چه تعداد انتخاب شده باشد',
   multi_count_lt: 'کمتر از چه تعداد انتخاب شده باشد',
 } as const;
@@ -153,6 +158,9 @@ const baseDateOperators: WorkflowOperator[] = [
   'days_remaining_eq',
   'days_remaining_gt',
   'days_remaining_lt',
+  'jalali_month_in',
+  'jalali_month_not_in',
+  'date_between',
   'is_null',
   'not_null',
 ];
@@ -171,6 +179,7 @@ const baseTimeOperators: WorkflowOperator[] = [
   'hours_passed_lt',
   'hours_remaining_gt',
   'hours_remaining_lt',
+  'time_between',
   'is_null',
   'not_null',
 ];
@@ -213,6 +222,9 @@ const baseDateTimeOperators: WorkflowOperator[] = [
   'hours_passed_lt',
   'hours_remaining_gt',
   'hours_remaining_lt',
+  'jalali_month_in',
+  'jalali_month_not_in',
+  'datetime_between',
   'is_null',
   'not_null',
 ];

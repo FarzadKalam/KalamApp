@@ -185,6 +185,20 @@ const parseDate = (value: unknown): Date | null => {
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
+const getJalaliMonthNumber = (date: Date): number | null => {
+  try {
+    const raw = new Intl.DateTimeFormat('en-u-ca-persian', { month: 'numeric' }).formatToParts(date).find((item) => item.type === 'month')?.value;
+    const month = Number(raw);
+    return Number.isFinite(month) ? month : null;
+  } catch { return null; }
+};
+
+const compareTimeValue = (value: unknown): number | null => {
+  const match = String(value ?? '').trim().match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!match) return null;
+  return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3] || 0);
+};
+
 const sameDate = (left: Date, right: Date) =>
   left.getFullYear() === right.getFullYear()
   && left.getMonth() === right.getMonth()
@@ -274,6 +288,11 @@ export const evaluateCoreConditionOperator = ({
     case 'is_last_week': { if (!date) return false; const startThis = new Date(now); startThis.setDate(now.getDate() - now.getDay()); startThis.setHours(0, 0, 0, 0); const start = new Date(startThis); start.setDate(start.getDate() - 7); const end = new Date(startThis); end.setMilliseconds(-1); return date >= start && date <= end; }
     case 'is_this_month': return !!date && date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
     case 'is_last_month': { const last = new Date(now.getFullYear(), now.getMonth() - 1, 1); return !!date && date.getFullYear() === last.getFullYear() && date.getMonth() === last.getMonth(); }
+    case 'jalali_month_in': { const month = date ? getJalaliMonthNumber(date) : null; return month !== null && normalizeList(expectedValue).includes(String(month)); }
+    case 'jalali_month_not_in': return !evaluateCoreConditionOperator({ operator: 'jalali_month_in', currentValue, expectedValue, now });
+    case 'date_between':
+    case 'datetime_between': { const range = expectedValue && typeof expectedValue === 'object' ? expectedValue as any : {}; const from = parseDate(range.from); const to = parseDate(range.to); return !!date && !!from && !!to && date >= from && date <= to; }
+    case 'time_between': { const range = expectedValue && typeof expectedValue === 'object' ? expectedValue as any : {}; const currentTime = compareTimeValue(currentValue); const from = compareTimeValue(range.from); const to = compareTimeValue(range.to); return currentTime !== null && from !== null && to !== null && currentTime >= from && currentTime <= to; }
     case 'day_of_month_eq': return !!date && date.getDate() === Number(expectedValue ?? 0);
     case 'day_of_month_neq': return !!date && date.getDate() !== Number(expectedValue ?? 0);
     case 'day_of_week_eq': return !!date && date.getDay() === Number(expectedValue ?? 0);

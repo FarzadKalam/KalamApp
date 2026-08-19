@@ -155,7 +155,7 @@ const clubFields = {
 } as Record<string, ModuleField>;
 
 const ClubField = ({ form, name, field, required = false, onChange }: { form: any; name: string; field: ModuleField; required?: boolean; onChange?: (value: any) => void }) => (
-  <Form.Item name={name} label={field.labels?.fa} rules={required ? [{ required: true, message: `${field.labels?.fa || 'این فیلد'} را وارد کنید` }] : undefined} valuePropName={field.type === FieldType.CHECKBOX ? 'checked' : 'value'}>
+  <Form.Item name={name} noStyle rules={required ? [{ required: true, message: `${field.labels?.fa || 'این فیلد'} را وارد کنید` }] : undefined} valuePropName={field.type === FieldType.CHECKBOX ? 'checked' : 'value'}>
     <SmartFieldRenderer
       field={field}
       value={Form.useWatch(name, form)}
@@ -607,7 +607,7 @@ const CustomerClubPage: React.FC = () => {
         <Form form={discountForm} layout="vertical">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <ClubField form={discountForm} name="code_scope" field={clubFields.discountScope} />
-            <Form.Item label="کد" required><div className="flex gap-2"><div className="min-w-0 flex-1"><ClubField form={discountForm} name="code" field={clubFields.discountCode} required onChange={(value) => discountForm.setFieldValue('code', normalizeCustomerClubCode(value))} /></div><Button aria-label="ساخت کد پیشنهادی" icon={<ThunderboltOutlined />} onClick={() => discountForm.setFieldValue('code', `${tenantCodePrefix}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`)} /></div></Form.Item>
+            <div className="flex items-end gap-2"><div className="min-w-0 flex-1"><ClubField form={discountForm} name="code" field={clubFields.discountCode} required onChange={(value) => discountForm.setFieldValue('code', normalizeCustomerClubCode(value))} /></div><Button aria-label="ساخت کد پیشنهادی" icon={<ThunderboltOutlined />} onClick={() => discountForm.setFieldValue('code', `${tenantCodePrefix}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`)} /></div>
             <ClubField form={discountForm} name="customer_id" field={clubFields.customer} />
             <ClubField form={discountForm} name="title" field={clubFields.discountTitle} required />
             <ClubField form={discountForm} name="discount_type" field={clubFields.discountType} />

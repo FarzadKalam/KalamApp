@@ -6,6 +6,7 @@ export interface SimpleBarChartItem {
   label: string;
   value: number;
   count?: number;
+  tone?: 'increase' | 'decrease';
 }
 
 interface SimpleBarChartProps {
@@ -15,8 +16,8 @@ interface SimpleBarChartProps {
 }
 
 const SimpleBarChart: React.FC<SimpleBarChartProps> = ({ items, valueLabel = 'مقدار', valueFormatter }) => {
-  const safeItems = Array.isArray(items) ? items.filter((item) => Number(item?.value || 0) > 0) : [];
-  const maxValue = safeItems.reduce((max, item) => Math.max(max, Number(item.value || 0)), 0);
+  const safeItems = Array.isArray(items) ? items.filter((item) => Number(item?.value || 0) !== 0) : [];
+  const maxValue = safeItems.reduce((max, item) => Math.max(max, Math.abs(Number(item.value || 0))), 0);
   const renderValue = valueFormatter || ((value: number) => formatPersianPrice(value));
 
   if (!safeItems.length || maxValue <= 0) {
@@ -26,7 +27,8 @@ const SimpleBarChart: React.FC<SimpleBarChartProps> = ({ items, valueLabel = 'م
   return (
     <div className="space-y-3">
       {safeItems.map((item, index) => {
-        const ratio = Math.max(8, Math.round((Number(item.value || 0) / maxValue) * 100));
+        const ratio = Math.max(8, Math.round((Math.abs(Number(item.value || 0)) / maxValue) * 100));
+        const isDecrease = item.tone === 'decrease' || Number(item.value || 0) < 0;
         return (
           <div
             key={`${item.label}-${index}`}
@@ -45,8 +47,13 @@ const SimpleBarChart: React.FC<SimpleBarChartProps> = ({ items, valueLabel = 'م
             </div>
             <div className="h-3 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
               <div
-                className="h-full rounded-full bg-gradient-to-l from-leather-500 to-amber-400 transition-all"
-                style={{ width: `${Math.min(100, ratio)}%` }}
+                className="h-full rounded-full transition-all"
+                style={{
+                  width: `${Math.min(100, ratio)}%`,
+                  background: isDecrease
+                    ? 'linear-gradient(90deg, #dc2626, #fb7185)'
+                    : 'linear-gradient(90deg, #16a34a, #4ade80)',
+                }}
               />
             </div>
           </div>

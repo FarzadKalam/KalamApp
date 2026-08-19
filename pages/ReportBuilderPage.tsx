@@ -43,6 +43,7 @@ import { toPersianNumber } from '../utils/persianNumberFormatter';
 import type { PermissionMap } from '../utils/permissions';
 import { resolveOverlayPopupContainer } from '../utils/popupContainer';
 import { loadTaskReportProcessRuntimeCatalog } from '../utils/reportTaskProcessFields';
+import { FieldType } from '../types';
 
 const { Title, Text } = Typography;
 
@@ -78,8 +79,9 @@ const ReportBuilderPage: React.FC = () => {
   const [conditionsAll, setConditionsAll] = useState<any[]>([]);
   const [conditionsAny, setConditionsAny] = useState<any[]>([]);
   const [groupBys, setGroupBys] = useState<ReportGroupingDefinition[]>([]);
-  const [metricType, setMetricType] = useState<'count' | 'sum' | 'avg'>('count');
+  const [metricType, setMetricType] = useState<'count' | 'sum' | 'avg' | 'difference'>('count');
   const [metricFields, setMetricFields] = useState<string[]>([]);
+  const [metricSubtractFields, setMetricSubtractFields] = useState<string[]>([]);
   const [chartDimensionField, setChartDimensionField] = useState<string | null>(null);
   const [defaultView, setDefaultView] = useState<'table' | 'table_and_chart'>('table_and_chart');
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
@@ -297,6 +299,7 @@ const ReportBuilderPage: React.FC = () => {
       setGroupBys(config.group_bys);
       setMetricType(config.metric_type);
       setMetricFields(config.metric_fields);
+      setMetricSubtractFields(config.metric_subtract_fields);
       setChartDimensionField(config.chart_dimension_field);
       setDefaultView(config.default_view);
       setScheduleEnabled(config.schedule.enabled);
@@ -365,14 +368,18 @@ const ReportBuilderPage: React.FC = () => {
           message.error('همه‌ی گروه‌بندی‌ها باید فیلد معتبر داشته باشند.');
           return false;
         }
-        if ((metricType === 'sum' || metricType === 'avg') && metricFields.length === 0) {
+        if ((metricType === 'sum' || metricType === 'avg' || metricType === 'difference') && metricFields.length === 0) {
           message.error('برای معیار آماری انتخاب‌شده، حداقل یک فیلد عددی انتخاب کنید.');
+          return false;
+        }
+        if (metricType === 'difference' && metricSubtractFields.length === 0) {
+          message.error('برای محاسبه جمع و تفریق، حداقل یک فیلد کاهشی انتخاب کنید.');
           return false;
         }
       }
       return true;
     },
-    [columns.length, groupBys, mainModuleId, message, metricFields.length, metricType, name, scheduleBotGroupIds.length, scheduleChannels.length, scheduleEnabled, scheduleFirstRunAt, scheduleIntervalAt, scheduleRecipientIds.length]
+    [columns.length, groupBys, mainModuleId, message, metricFields.length, metricSubtractFields.length, metricType, name, scheduleBotGroupIds.length, scheduleChannels.length, scheduleEnabled, scheduleFirstRunAt, scheduleIntervalAt, scheduleRecipientIds.length]
   );
 
   const handleSave = async () => {
@@ -391,7 +398,8 @@ const ReportBuilderPage: React.FC = () => {
         row_limit: clampReportRowLimit(rowLimit),
         group_bys: groupBys.slice(0, 3),
         metric_type: metricType,
-        metric_fields: metricType === 'sum' || metricType === 'avg' ? metricFields.slice(0, 4) : [],
+        metric_fields: metricType === 'sum' || metricType === 'avg' || metricType === 'difference' ? metricFields.slice(0, 4) : [],
+        metric_subtract_fields: metricType === 'difference' ? metricSubtractFields.slice(0, 4) : [],
         show_group_summaries: true,
         chart_dimension_field: chartDimensionField || groupBys[0]?.field || null,
         default_view: defaultView,
@@ -688,7 +696,7 @@ const ReportBuilderPage: React.FC = () => {
               <div className="space-y-3">
                 {groupBys.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="بدون گروه‌بندی، گزارش فقط جدولی اجرا می‌شود" />}
                 {groupBys.map((item, index) => (
-                  <div key={`${item.field}-${index}`} className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_180px_56px]">
+                  <div key={`${item.field}-${index}`} className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_170px_180px_56px]">
                     <Select
                       className="w-full"
                       showSearch
@@ -699,6 +707,14 @@ const ReportBuilderPage: React.FC = () => {
                         .map((field) => ({ label: field.labels?.fa || field.key, value: field.key }))}
                       onChange={(value) => setGroupBys((current) => current.map((group, groupIndex) => groupIndex === index ? { ...group, field: String(value || '') } : group))}
                     />
+                    {([FieldType.DATE, FieldType.DATETIME] as any[]).includes(groupableFields.find((field) => field.key === item.field)?.type) ? (
+                      <Select
+                        className="w-full"
+                        value={item.date_granularity || 'daily'}
+                        options={[{ label: 'روزانه', value: 'daily' }, { label: 'هفتگی', value: 'weekly' }, { label: 'ماهانه', value: 'monthly' }]}
+                        onChange={(value) => setGroupBys((current) => current.map((group, groupIndex) => groupIndex === index ? { ...group, date_granularity: value } : group))}
+                      />
+                    ) : <div />}
                     <Select
                       className="w-full"
                       value={item.direction}
@@ -717,11 +733,11 @@ const ReportBuilderPage: React.FC = () => {
                 این تنظیمات برای کارت‌های آماری، نمودار و ردیف جمع زیر هر گروه استفاده می‌شود.
               </div>
               <div className="space-y-4">
-                <Select className="w-full" value={metricType} options={[{ label: 'تعداد رکوردها', value: 'count' }, { label: 'جمع فیلدهای عددی/مبلغی', value: 'sum' }, { label: 'میانگین فیلدهای عددی/مبلغی', value: 'avg' }]} onChange={(value) => {
-                  setMetricType(value as 'count' | 'sum' | 'avg');
-                  if (value !== 'sum' && value !== 'avg') setMetricFields([]);
+                <Select className="w-full" value={metricType} options={[{ label: 'تعداد رکوردها', value: 'count' }, { label: 'جمع فیلدهای عددی/مبلغی', value: 'sum' }, { label: 'میانگین فیلدهای عددی/مبلغی', value: 'avg' }, { label: 'جمع و تفریق فیلدهای عددی/مبلغی', value: 'difference' }]} onChange={(value) => {
+                  setMetricType(value as 'count' | 'sum' | 'avg' | 'difference');
+                  if (value !== 'sum' && value !== 'avg' && value !== 'difference') { setMetricFields([]); setMetricSubtractFields([]); }
                 }} />
-                {(metricType === 'sum' || metricType === 'avg') && (
+                {(metricType === 'sum' || metricType === 'avg' || metricType === 'difference') && (
                   <Select
                     className="w-full"
                     mode="multiple"
@@ -731,6 +747,18 @@ const ReportBuilderPage: React.FC = () => {
                     options={summableFields.map((field) => ({ label: field.labels?.fa || field.key, value: field.key }))}
                     placeholder="یک یا چند فیلد عددی انتخاب کنید"
                     onChange={(value) => setMetricFields((value || []).map((item) => String(item)).slice(0, 4))}
+                  />
+                )}
+                {metricType === 'difference' && (
+                  <Select
+                    className="w-full"
+                    mode="multiple"
+                    showSearch
+                    optionFilterProp="label"
+                    value={metricSubtractFields}
+                    options={summableFields.map((field) => ({ label: field.labels?.fa || field.key, value: field.key }))}
+                    placeholder="فیلدهای کاهشی (از جمع کم می‌شوند)"
+                    onChange={(value) => setMetricSubtractFields((value || []).map((item) => String(item)).slice(0, 4))}
                   />
                 )}
               </div>

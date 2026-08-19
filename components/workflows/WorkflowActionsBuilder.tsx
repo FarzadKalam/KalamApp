@@ -91,6 +91,8 @@ interface WorkflowActionsBuilderProps {
   visibleActionIds?: string[];
   hideAddButton?: boolean;
   hideReorderControls?: boolean;
+  /** زمان‌بندی نسبی هر اقدام، ویژهٔ اعلان‌های باشگاه مشتریان. */
+  customerClubReminderTiming?: boolean;
 }
 
 type CreateRelatedFieldMapping = {
@@ -420,6 +422,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   visibleActionIds,
   hideAddButton = false,
   hideReorderControls = false,
+  customerClubReminderTiming = false,
 }) => {
   const safeValue = Array.isArray(value) ? value : [];
   const visibleActionIdSet = Array.isArray(visibleActionIds)
@@ -3319,6 +3322,49 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               ) : null}
             </div>
             {renderActionFields(action)}
+            {customerClubReminderTiming ? (() => {
+              const timing = action.config?.customer_club_reminder_timing || {};
+              const direction = timing.direction === 'before' ? 'before' : 'after';
+              const reference = String(timing.reference || 'credit_added');
+              return (
+                <div className="grid grid-cols-1 gap-2 rounded-lg border border-dashed border-gray-300 p-2 md:grid-cols-[auto_minmax(120px,1fr)_minmax(120px,1fr)_minmax(180px,1fr)] md:items-end dark:border-gray-600">
+                  <div className="text-xs font-medium text-gray-600 dark:text-gray-300">تعیین زمان یادآوری:</div>
+                  <InputNumber
+                    className="w-full persian-number"
+                    min={0}
+                    precision={0}
+                    disabled={disabled}
+                    value={Number.isFinite(Number(timing.value)) ? Number(timing.value) : 0}
+                    onChange={(value) => updateActionConfig(action.id, { customer_club_reminder_timing: { ...timing, value: Math.max(0, Number(value || 0)), unit: timing.unit === 'hour' ? 'hour' : 'day', direction, reference } })}
+                  />
+                  <Select
+                    value={timing.unit === 'hour' ? 'hour' : 'day'}
+                    disabled={disabled}
+                    options={[{ label: 'روز', value: 'day' }, { label: 'ساعت', value: 'hour' }]}
+                    onChange={(unit) => updateActionConfig(action.id, { customer_club_reminder_timing: { ...timing, value: Math.max(0, Number(timing.value || 0)), unit, direction, reference } })}
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <Select
+                      value={direction}
+                      disabled={disabled}
+                      options={[{ label: 'قبل از', value: 'before' }, { label: 'بعد از', value: 'after' }]}
+                      onChange={(nextDirection) => updateActionConfig(action.id, { customer_club_reminder_timing: { ...timing, value: Math.max(0, Number(timing.value || 0)), unit: timing.unit === 'hour' ? 'hour' : 'day', direction: nextDirection, reference: nextDirection === 'before' && reference === 'credit_added' ? 'plan_expiry' : reference } })}
+                    />
+                    <Select
+                      value={reference}
+                      disabled={disabled}
+                      options={[
+                        { label: 'ثبت اعتبار', value: 'credit_added', disabled: direction === 'before' },
+                        { label: 'انقضای طرح', value: 'plan_expiry' },
+                        { label: 'انقضای اعتبار', value: 'credit_expiry' },
+                        { label: 'انقضای تخفیف', value: 'discount_expiry' },
+                      ]}
+                      onChange={(nextReference) => updateActionConfig(action.id, { customer_club_reminder_timing: { ...timing, value: Math.max(0, Number(timing.value || 0)), unit: timing.unit === 'hour' ? 'hour' : 'day', direction, reference: nextReference } })}
+                    />
+                  </div>
+                </div>
+              );
+            })() : null}
           </div>
           );
         })

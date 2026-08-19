@@ -8,7 +8,7 @@ import { parseWorkflowRelatedFieldKey, WORKFLOW_ASSIGNEE_FIELD_KEY, type Workflo
 import { isReportTaskProcessFieldKey } from './reportTaskProcessFields';
 import { parseProcessLinkedFieldKey } from './processTargets';
 
-export type ReportMetricType = 'count' | 'sum' | 'avg';
+export type ReportMetricType = 'count' | 'sum' | 'avg' | 'difference';
 export type ReportDefaultView = 'table' | 'table_and_chart';
 export type ReportGroupDirection = 'asc' | 'desc';
 export type ReportScheduleUnit = 'hour' | 'day';
@@ -17,6 +17,7 @@ export type ReportScheduleChannel = 'note' | 'email' | 'sms' | 'bot_group';
 export interface ReportGroupingDefinition {
   field: string;
   direction: ReportGroupDirection;
+  date_granularity?: 'monthly' | 'weekly' | 'daily';
 }
 
 export interface ReportScheduleConfig {
@@ -43,6 +44,7 @@ export interface ReportDefinitionConfig {
   group_bys: ReportGroupingDefinition[];
   metric_type: ReportMetricType;
   metric_fields: string[];
+  metric_subtract_fields: string[];
   show_group_summaries: boolean;
   chart_dimension_field: string | null;
   default_view: ReportDefaultView;
@@ -305,6 +307,7 @@ export const createDefaultReportConfig = (): ReportDefinitionConfig => ({
   group_bys: [],
   metric_type: 'count',
   metric_fields: [],
+  metric_subtract_fields: [],
   show_group_summaries: true,
   chart_dimension_field: null,
   default_view: 'table_and_chart',
@@ -327,6 +330,9 @@ export const clampGroupingDefinitions = (value: unknown): ReportGroupingDefiniti
       return {
         field: String((item as any)?.field || '').trim(),
         direction,
+        date_granularity: ['monthly', 'weekly', 'daily'].includes(String((item as any)?.date_granularity || ''))
+          ? String((item as any).date_granularity) as 'monthly' | 'weekly' | 'daily'
+          : undefined,
       };
     })
     .filter((item) => !!item.field)
@@ -368,7 +374,7 @@ export const normalizeReportScheduleConfig = (value: unknown): ReportScheduleCon
 export const normalizeReportConfig = (value: Partial<ReportDefinitionConfig> | null | undefined): ReportDefinitionConfig => {
   const defaults = createDefaultReportConfig();
   const metricType: ReportMetricType =
-    value?.metric_type === 'sum' || value?.metric_type === 'avg' ? value.metric_type : 'count';
+    value?.metric_type === 'sum' || value?.metric_type === 'avg' || value?.metric_type === 'difference' ? value.metric_type : 'count';
   const legacyGroupBy = value && (value as any).group_by ? String((value as any).group_by || '').trim() : '';
   const legacyMetricField = value && (value as any).metric_field ? String((value as any).metric_field || '').trim() : '';
 
@@ -377,6 +383,9 @@ export const normalizeReportConfig = (value: Partial<ReportDefinitionConfig> | n
     : legacyMetricField
       ? [legacyMetricField]
       : [];
+  const metricSubtractFields = Array.isArray((value as any)?.metric_subtract_fields)
+    ? (value as any).metric_subtract_fields.map((item: any) => String(item || '').trim()).filter(Boolean)
+    : [];
 
   const secondaryModuleIds = Array.isArray((value as any)?.secondary_module_ids)
     ? (value as any).secondary_module_ids.map((item: any) => String(item || '').trim()).filter(Boolean)
@@ -415,7 +424,8 @@ export const normalizeReportConfig = (value: Partial<ReportDefinitionConfig> | n
     row_limit: clampReportRowLimit(value?.row_limit),
     group_bys: groupBys,
     metric_type: metricType,
-    metric_fields: metricType === 'sum' || metricType === 'avg' ? metricFields.slice(0, 4) : [],
+    metric_fields: metricType === 'sum' || metricType === 'avg' || metricType === 'difference' ? metricFields.slice(0, 4) : [],
+    metric_subtract_fields: metricType === 'difference' ? metricSubtractFields.slice(0, 4) : [],
     show_group_summaries: (value as any)?.show_group_summaries === false ? false : true,
     chart_dimension_field: chartDimensionField,
     default_view: value?.default_view === 'table' ? 'table' : 'table_and_chart',

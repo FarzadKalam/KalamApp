@@ -6,6 +6,7 @@ export interface SimplePieChartItem {
   label: string;
   value: number;
   count?: number;
+  tone?: 'increase' | 'decrease';
 }
 
 interface SimplePieChartProps {
@@ -14,14 +15,18 @@ interface SimplePieChartProps {
   valueFormatter?: (value: number) => React.ReactNode;
 }
 
-const PIE_COLORS = ['#b45309', '#d97706', '#f59e0b', '#fbbf24', '#92400e', '#78350f', '#fcd34d', '#fde68a'];
+// رنگ نخست از پالت هر Tenant می‌آید و رنگ‌های مکمل برای تفکیک واضح sliceها ساخته می‌شوند.
+const PIE_COLORS = [
+  'rgb(var(--brand-600-rgb))', 'rgb(var(--brand-accent-pink-rgb))', '#0ea5e9', '#8b5cf6',
+  '#10b981', '#f97316', '#ec4899', '#14b8a6',
+];
 
 const SimplePieChart: React.FC<SimplePieChartProps> = ({ items, valueLabel = 'مقدار', valueFormatter }) => {
   const safeItems = useMemo(
-    () => (Array.isArray(items) ? items.filter((item) => Number(item?.value || 0) > 0).slice(0, 8) : []),
+    () => (Array.isArray(items) ? items.filter((item) => Number(item?.value || 0) !== 0).slice(0, 8) : []),
     [items]
   );
-  const total = safeItems.reduce((sum, item) => sum + Number(item.value || 0), 0);
+  const total = safeItems.reduce((sum, item) => sum + Math.abs(Number(item.value || 0)), 0);
   const renderValue = valueFormatter || ((value: number) => formatPersianPrice(value));
 
   const gradient = useMemo(() => {
@@ -29,11 +34,12 @@ const SimplePieChart: React.FC<SimplePieChartProps> = ({ items, valueLabel = 'م
     let currentPercent = 0;
     return safeItems
       .map((item, index) => {
-        const percent = (Number(item.value || 0) / total) * 100;
+        const percent = (Math.abs(Number(item.value || 0)) / total) * 100;
         const start = currentPercent;
         const end = currentPercent + percent;
         currentPercent = end;
-        return `${PIE_COLORS[index % PIE_COLORS.length]} ${start}% ${end}%`;
+        const color = item.tone === 'decrease' || Number(item.value || 0) < 0 ? '#dc2626' : '#16a34a';
+        return `${color} ${start}% ${end}%`;
       })
       .join(', ');
   }, [safeItems, total]);
@@ -60,7 +66,7 @@ const SimplePieChart: React.FC<SimplePieChartProps> = ({ items, valueLabel = 'م
 
       <div className="space-y-3">
         {safeItems.map((item, index) => {
-          const ratio = total > 0 ? (Number(item.value || 0) / total) * 100 : 0;
+          const ratio = total > 0 ? (Math.abs(Number(item.value || 0)) / total) * 100 : 0;
           return (
             <div
               key={`${item.label}-${index}`}
@@ -69,7 +75,7 @@ const SimplePieChart: React.FC<SimplePieChartProps> = ({ items, valueLabel = 'م
               <div className="flex min-w-0 items-center gap-3">
                 <div
                   className="h-3.5 w-3.5 shrink-0 rounded-full"
-                  style={{ backgroundColor: PIE_COLORS[index % PIE_COLORS.length] }}
+                  style={{ backgroundColor: item.tone === 'decrease' || Number(item.value || 0) < 0 ? '#dc2626' : '#16a34a' }}
                 />
                 <div className="truncate font-bold text-gray-700 dark:text-gray-100">{item.label || '-'}</div>
               </div>

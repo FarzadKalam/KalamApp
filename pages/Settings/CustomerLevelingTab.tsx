@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
-import { App, Button, Card, Form, InputNumber, Select, Switch, Typography } from 'antd';
+import { App, Button, Card, Form, Typography } from 'antd';
 import { SaveOutlined, SyncOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import {
@@ -11,6 +11,9 @@ import {
   type CustomerLevelingConfig,
 } from '../../utils/customerLeveling';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import SmartFieldRenderer from '../../components/SmartFieldRenderer';
+import { FieldType, type ModuleField } from '../../types';
+import { useCurrencyConfig } from '../../utils/currency';
 
 const { Text } = Typography;
 
@@ -28,8 +31,23 @@ const rankCards: Array<{ key: 'silver' | 'gold' | 'vip'; title: string; color: s
   { key: 'vip', title: 'سطح VIP', color: '#7c3aed' },
 ];
 
+const levelingFields: Record<string, ModuleField> = {
+  enabled: { key: 'enabled', labels: { fa: 'فعال بودن سطح‌بندی خودکار' }, type: FieldType.CHECKBOX },
+  statuses: { key: 'eligible_statuses', labels: { fa: 'وضعیت‌های موثر در خرید' }, type: FieldType.MULTI_SELECT, options: statusOptions },
+  count: { key: 'min_purchase_count', labels: { fa: 'حداقل تعداد دفعات خرید' }, type: FieldType.NUMBER },
+  spend: { key: 'min_total_spend', labels: { fa: 'حداقل جمع خرید' }, type: FieldType.PRICE },
+  days: { key: 'min_acquaintance_days', labels: { fa: 'حداقل مدت زمان آشنایی (روز)' }, type: FieldType.NUMBER },
+};
+
+const LevelField = ({ form, name, field, required = false }: { form: any; name: string | string[]; field: ModuleField; required?: boolean }) => {
+  return <Form.Item name={name} noStyle rules={required ? [{ required: true, message: 'اجباری است' }] : undefined} valuePropName={field.type === FieldType.CHECKBOX ? 'checked' : 'value'}>
+    <SmartFieldRenderer field={field} value={Form.useWatch(name as any, form)} onChange={(value) => form.setFieldValue(name, value)} forceEditMode moduleId="customers" allValues={form.getFieldsValue(true)} />
+  </Form.Item>;
+};
+
 const CustomerLevelingTab: React.FC = () => {
   const { message } = App.useApp();
+  const { label: currencyLabel } = useCurrencyConfig();
   const [form] = Form.useForm<CustomerLevelingConfig>();
   const [recordId, setRecordId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -111,17 +129,8 @@ const CustomerLevelingTab: React.FC = () => {
       <Form form={form} layout="vertical" onFinish={saveSettings} initialValues={getDefaultLevelingConfig()}>
         <Card className="mb-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Form.Item label="فعال بودن سطح‌بندی خودکار" name="enabled" valuePropName="checked" className="mb-0">
-              <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
-            </Form.Item>
-            <Form.Item
-              label="وضعیت‌های موثر در خرید"
-              name="eligible_statuses"
-              rules={[{ required: true, message: 'حداقل یک وضعیت انتخاب کنید' }]}
-              className="mb-0"
-            >
-              <Select mode="multiple" options={statusOptions} placeholder="وضعیت‌ها را انتخاب کنید" />
-            </Form.Item>
+            <LevelField form={form} name="enabled" field={levelingFields.enabled} />
+            <LevelField form={form} name="eligible_statuses" field={levelingFields.statuses} required />
           </div>
           <div className="mt-4">
             <Text type="secondary">
@@ -137,28 +146,10 @@ const CustomerLevelingTab: React.FC = () => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {rankCards.map((rank) => (
             <Card key={rank.key} title={<span style={{ color: rank.color, fontWeight: 700 }}>{rank.title}</span>} variant="outlined">
-              <Form.Item
-                label="حداقل تعداد دفعات خرید"
-                name={[rank.key, 'min_purchase_count']}
-                rules={[{ required: true, message: 'اجباری است' }]}
-              >
-                <InputNumber min={0} style={{ width: '100%' }} />
-              </Form.Item>
-              <Form.Item
-                label="حداقل جمع خرید (تومان)"
-                name={[rank.key, 'min_total_spend']}
-                rules={[{ required: true, message: 'اجباری است' }]}
-              >
-                <InputNumber min={0} style={{ width: '100%' }} />
-              </Form.Item>
-              <Form.Item
-                label="حداقل مدت زمان آشنایی (روز)"
-                name={[rank.key, 'min_acquaintance_days']}
-                rules={[{ required: true, message: 'اجباری است' }]}
-                className="mb-0"
-              >
-                <InputNumber min={0} style={{ width: '100%' }} />
-              </Form.Item>
+              <LevelField form={form} name={[rank.key, 'min_purchase_count']} field={levelingFields.count} required />
+              <div className="mb-4 text-xs text-gray-500">واحد مبلغ: {currencyLabel}</div>
+              <LevelField form={form} name={[rank.key, 'min_total_spend']} field={levelingFields.spend} required />
+              <LevelField form={form} name={[rank.key, 'min_acquaintance_days']} field={levelingFields.days} required />
             </Card>
           ))}
         </div>

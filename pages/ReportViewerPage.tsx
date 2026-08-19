@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { App, Button, Empty, Progress, Select, Spin, Statistic, Table, Typography } from 'antd';
+import { App, Button, Collapse, Empty, Progress, Select, Spin, Statistic, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { BarChartOutlined, CopyOutlined, EditOutlined, EyeOutlined, FileExcelOutlined, PieChartOutlined, PrinterOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import PrintSection from '../components/moduleShow/PrintSection';
 import SimpleBarChart from '../components/reports/SimpleBarChart';
 import SimplePieChart from '../components/reports/SimplePieChart';
+import SimpleLineChart from '../components/reports/SimpleLineChart';
 import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
 import {
@@ -45,12 +46,13 @@ import {
   loadTaskReportProcessRuntimeCatalog,
   resolveTaskReportProcessFieldValue,
 } from '../utils/reportTaskProcessFields';
-import { getTaskStatusLabel } from '../utils/processTaskStatusOptions';
+import { getTaskStatusLabel, getTaskStatusOptions } from '../utils/processTaskStatusOptions';
 import { parseProcessLinkedFieldKey } from '../utils/processTargets';
+import WorkflowConditionsGroup from '../components/workflows/WorkflowConditionsGroup';
 
 const { Title, Text } = Typography;
 
-type RenderMode = 'table' | 'bar' | 'pie';
+type RenderMode = 'table' | 'bar' | 'pie' | 'line';
 
 type ReportRow = Record<string, any> & {
   __report_row_key: string;
@@ -119,6 +121,35 @@ const compareValues = (left: any, right: any) => {
   return String(a).localeCompare(String(b), 'fa', { numeric: true, sensitivity: 'base' });
 };
 
+/**
+ * گزارش‌های قدیمیِ فعالیت ممکن است مقدار شرط وضعیت را با عنوان فارسی ذخیره
+ * کرده باشند، در حالی که مقدار واقعی وضعیت (به‌خصوص در فرآیندها) یک کلید
+ * اختصاصی است. این تبدیل فقط در زمان اجرای گزارش انجام می‌شود تا هم گزارش
+ * قدیمی و هم وضعیت‌های اختصاصی هر فعالیت، با یک منطق واحد ارزیابی شوند.
+ */
+const normalizeTaskStatusConditionForRow = (condition: any, row: Record<string, any>) => {
+  if (String(condition?.field || '').trim() !== 'status') return condition;
+
+  const options = getTaskStatusOptions(row);
+  const resolveValue = (value: any) => {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) return value;
+    const option = options.find((item) => (
+      String(item?.value || '').trim() === normalized
+      || String(item?.label || '').trim() === normalized
+    ));
+    return option?.value ?? value;
+  };
+  const rawValue = condition?.value;
+  const value = Array.isArray(rawValue)
+    ? rawValue.map(resolveValue)
+    : resolveValue(rawValue);
+  return { ...condition, value };
+};
+
+const normalizeTaskStatusConditionsForRow = (conditions: any[], row: Record<string, any>) =>
+  (Array.isArray(conditions) ? conditions : []).map((condition) => normalizeTaskStatusConditionForRow(condition, row));
+
 const formatMetricValue = (value: number, fieldType?: string, currencyLabel = '') => {
   if (fieldType === 'price') {
     const formatted = formatPersianPrice(value);
@@ -176,6 +207,31 @@ const isGroupingFieldAvailableForRow = (fieldKey: string, row: Record<string, an
   const blockId = tableFieldMeta?.blockId || tableRelationMeta?.blockId || '';
   if (!blockId) return true;
   return !!row?.__report_table_rows?.[blockId];
+};
+
+const getDateGroupingValue = (value: any, granularity?: string) => {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime()) || !granularity) return null;
+  const parts = new Intl.DateTimeFormat('en-u-ca-persian', { year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(date)
+    .reduce<Record<string, string>>((acc, part) => ({ ...acc, [part.type]: part.value }), {});
+  const year = Number(parts.year || 0); const month = Number(parts.month || 0); const day = Number(parts.day || 0);
+  const months = ['فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور', 'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'];
+  if (!year || !month || !day) return null;
+  if (granularity === 'monthly') return { value: `${year}-${String(month).padStart(2, '0')}`, label: `${months[month - 1]} ${toPersianNumber(year)}` };
+  if (granularity === 'weekly') {
+    const week = Math.ceil(day / 7);
+    return { value: `${year}-${String(month).padStart(2, '0')}-w${week}`, label: `هفته ${toPersianNumber(week)} ${months[month - 1]} ${toPersianNumber(year)}` };
+  }
+  return { value: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`, label: `${toPersianNumber(day)} ${months[month - 1]} ${toPersianNumber(year)}` };
+};
+
+const getReportGroupingValue = (grouping: any, field: any, row: Record<string, any>, relationOptions: Record<string, Array<{ label: string; value: string }>>, currencyLabel: string) => {
+  const isDate = String(field?.type || '').toLowerCase() === 'date' || String(field?.type || '').toLowerCase() === 'datetime';
+  const temporal = isDate ? getDateGroupingValue(row[grouping.field], grouping.date_granularity) : null;
+  return temporal || {
+    value: row[grouping.field],
+    label: field ? formatReportCellValue(field, row, relationOptions, currencyLabel) : String(row[grouping.field] ?? '-'),
+  };
 };
 
 const buildFlatGroupedRows = (
@@ -323,7 +379,9 @@ const getGroupSummaryMetricText = (
   currencyLabel = ''
 ) => {
   const parts = [`تعداد: ${toPersianNumber(summary.row_count)}`];
-  if (config.metric_type === 'sum' || config.metric_type === 'avg') {
+  if (config.metric_type === 'difference') {
+    parts.push(`جمع و تفریق: ${formatMetricValue(Number(summary.metrics.__difference || 0), 'number', currencyLabel)}`);
+  } else if (config.metric_type === 'sum' || config.metric_type === 'avg') {
     metricFieldKeys.forEach((fieldKey) => {
       const value = config.metric_type === 'avg'
         ? Number(summary.metrics[fieldKey] || 0) / Math.max(1, Number(summary.metric_counts[fieldKey] || 0))
@@ -363,6 +421,9 @@ const ReportViewerPage: React.FC = () => {
   const [taskProcessStatusOptions, setTaskProcessStatusOptions] = useState<any[]>([]);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [surveyTemplateSnapshot, setSurveyTemplateSnapshot] = useState(() => normalizeSurveyTemplateSnapshot({}));
+  const [conditionsOpen, setConditionsOpen] = useState(false);
+  const [draftConditionsAll, setDraftConditionsAll] = useState<any[]>([]);
+  const [draftConditionsAny, setDraftConditionsAny] = useState<any[]>([]);
 
   const config = useMemo(() => normalizeReportConfig(report?.config), [report?.config]);
   const moduleId = String(report?.module_id || '').trim();
@@ -409,6 +470,27 @@ const ReportViewerPage: React.FC = () => {
     () => reportableFields.filter((field) => config.columns.includes(field.key)),
     [config.columns, reportableFields]
   );
+  useEffect(() => {
+    setDraftConditionsAll(config.conditions_all);
+    setDraftConditionsAny(config.conditions_any);
+  }, [config.conditions_all, config.conditions_any, reportId]);
+
+  const applyTemporaryConditions = useCallback(() => {
+    setReport((current) => current ? {
+      ...current,
+      config: { ...config, conditions_all: draftConditionsAll, conditions_any: draftConditionsAny },
+    } : current);
+    message.success('شرایط برای همین مشاهده اعمال شد.');
+  }, [config, draftConditionsAll, draftConditionsAny, message]);
+
+  const saveReportConditions = useCallback(async () => {
+    if (!report || !reportId || !canEditReport) return;
+    const nextConfig = { ...config, conditions_all: draftConditionsAll, conditions_any: draftConditionsAny };
+    const { error } = await supabase.from('report_definitions').update({ config: nextConfig }).eq('id', reportId);
+    if (error) throw error;
+    setReport((current) => current ? { ...current, config: nextConfig } : current);
+    message.success('شرایط گزارش ذخیره شد.');
+  }, [canEditReport, config, draftConditionsAll, draftConditionsAny, message, report, reportId]);
   const groupingFields = useMemo(
     () => config.group_bys.map((item) => fieldMap[item.field]).filter(Boolean),
     [config.group_bys, fieldMap]
@@ -418,7 +500,9 @@ const ReportViewerPage: React.FC = () => {
     [groupingFields]
   );
   const metricFieldKeys = useMemo(
-    () => (config.metric_type === 'sum' || config.metric_type === 'avg' ? config.metric_fields.filter((key) => !!fieldMap[key]) : ['__count']),
+    () => (config.metric_type === 'sum' || config.metric_type === 'avg'
+      ? config.metric_fields.filter((key) => !!fieldMap[key])
+      : config.metric_type === 'difference' ? ['__difference'] : ['__count']),
     [config.metric_fields, config.metric_type, fieldMap]
   );
   const metricOptions = useMemo(
@@ -428,7 +512,9 @@ const ReportViewerPage: React.FC = () => {
             value: key,
             label: `${config.metric_type === 'avg' ? 'میانگین' : 'جمع'} ${fieldMap[key]?.labels?.fa || key}`,
           }))
-        : [{ value: '__count', label: 'تعداد رکوردها' }],
+        : config.metric_type === 'difference'
+          ? [{ value: '__difference', label: 'جمع فیلدهای افزایشی منهای کاهشی' }]
+          : [{ value: '__count', label: 'تعداد رکوردها' }],
     [config.metric_type, fieldMap, metricFieldKeys]
   );
   const chartDimensionField = config.chart_dimension_field || config.group_bys[0]?.field || null;
@@ -585,6 +671,7 @@ const ReportViewerPage: React.FC = () => {
         ...config.group_bys.map((item) => item.field),
         chartDimensionField,
         ...config.metric_fields,
+        ...config.metric_subtract_fields,
       ].filter((item): item is string => !!item)));
       const conditionFieldKeys = [
         ...config.conditions_all,
@@ -812,8 +899,12 @@ const ReportViewerPage: React.FC = () => {
           }
 
           const passed = conditionsResolvedByServer || await evaluateWorkflowConditions({
-            conditionsAll: config.conditions_all,
-            conditionsAny: config.conditions_any,
+            conditionsAll: moduleId === 'tasks'
+              ? normalizeTaskStatusConditionsForRow(config.conditions_all, candidateRow)
+              : config.conditions_all,
+            conditionsAny: moduleId === 'tasks'
+              ? normalizeTaskStatusConditionsForRow(config.conditions_any, candidateRow)
+              : config.conditions_any,
             currentRecord: candidateRow,
             moduleId,
             context: sharedContext,
@@ -878,10 +969,9 @@ const ReportViewerPage: React.FC = () => {
 
         config.group_bys.forEach((grouping) => {
           const field = fieldMap[grouping.field];
-          groupValues[grouping.field] = row[grouping.field];
-          groupLabels[grouping.field] = field
-            ? formatReportCellValue(field as any, row, relationOptions, currencyLabel)
-            : String(row[grouping.field] ?? '-');
+          const groupValue = getReportGroupingValue(grouping, field, row, relationOptions, currencyLabel);
+          groupValues[grouping.field] = groupValue.value;
+          groupLabels[grouping.field] = groupValue.label;
         });
 
         config.group_bys.forEach((grouping, depth) => {
@@ -920,7 +1010,22 @@ const ReportViewerPage: React.FC = () => {
           current.detail_rows.push(row);
           current.metrics.__count = Number(current.metrics.__count || 0) + 1;
 
-          if (config.metric_type === 'sum' || config.metric_type === 'avg') {
+          if (config.metric_type === 'difference') {
+            const sourceKeys = ((current as any).__metric_source_keys || {}) as Record<string, Set<string>>;
+            const addFields = config.metric_fields;
+            const subtractFields = config.metric_subtract_fields;
+            [...addFields, ...subtractFields].forEach((fieldKey) => {
+              sourceKeys[fieldKey] = sourceKeys[fieldKey] || new Set<string>();
+              const sourceKey = getMetricSourceKey(fieldKey, row);
+              if (sourceKeys[fieldKey].has(sourceKey)) return;
+              sourceKeys[fieldKey].add(sourceKey);
+              const numericValue = Number(row[fieldKey] || 0);
+              const signedValue = (Number.isFinite(numericValue) ? numericValue : 0) * (subtractFields.includes(fieldKey) ? -1 : 1);
+              current.metrics.__difference = Number(current.metrics.__difference || 0) + signedValue;
+              current.metric_counts.__difference = Number(current.metric_counts.__difference || 0) + 1;
+            });
+            (current as any).__metric_source_keys = sourceKeys;
+          } else if (config.metric_type === 'sum' || config.metric_type === 'avg') {
             const metricSourceKeys = ((current as any).__metric_source_keys || {}) as Record<string, Set<string>>;
             config.metric_fields.forEach((fieldKey) => {
               metricSourceKeys[fieldKey] = metricSourceKeys[fieldKey] || new Set<string>();
@@ -988,7 +1093,7 @@ const ReportViewerPage: React.FC = () => {
     } finally {
       setExecuting(false);
     }
-  }, [chartDimensionField, config.conditions_all, config.conditions_any, config.columns, config.group_bys, config.metric_fields, config.metric_type, config.row_limit, config.show_group_summaries, currencyLabel, fieldMap, message, moduleConfig, moduleId, relationOptions, report, selectedTableBlocks]);
+  }, [chartDimensionField, config.conditions_all, config.conditions_any, config.columns, config.group_bys, config.metric_fields, config.metric_subtract_fields, config.metric_type, config.row_limit, config.show_group_summaries, currencyLabel, fieldMap, message, moduleConfig, moduleId, relationOptions, report, selectedTableBlocks]);
 
   useEffect(() => {
     void loadReport();
@@ -1014,6 +1119,16 @@ const ReportViewerPage: React.FC = () => {
       const count = groupedRows.reduce((current, row) => current + Number(row.metric_counts[activeMetricKey] || 0), 0);
       return config.metric_type === 'avg' ? (count > 0 ? sum / count : 0) : sum;
     }
+    if (activeMetricKey === '__difference') {
+      const seen = new Set<string>();
+      return [...config.metric_fields, ...config.metric_subtract_fields].reduce((total, fieldKey) => rows.reduce((sum, row) => {
+        const sourceKey = `${fieldKey}:${getMetricSourceKey(fieldKey, row)}`;
+        if (seen.has(sourceKey)) return sum;
+        seen.add(sourceKey);
+        const amount = Number(row[fieldKey] || 0);
+        return sum + (Number.isFinite(amount) ? amount : 0) * (config.metric_subtract_fields.includes(fieldKey) ? -1 : 1);
+      }, total), 0);
+    }
     const seen = new Set<string>();
     let sum = 0;
     let count = 0;
@@ -1026,11 +1141,28 @@ const ReportViewerPage: React.FC = () => {
       count += 1;
     });
     return config.metric_type === 'avg' ? (count > 0 ? sum / count : 0) : sum;
-  }, [activeMetricKey, config.group_bys.length, config.metric_type, groupedRows, rows]);
+  }, [activeMetricKey, config.group_bys.length, config.metric_fields, config.metric_subtract_fields, config.metric_type, groupedRows, rows]);
 
   const metricCardValues = useMemo(() => {
     if (config.metric_type === 'count') {
       return [{ key: '__count', label: 'تعداد رکوردها', value: rows.length, fieldType: 'number' }];
+    }
+    if (config.metric_type === 'difference') {
+      const calculate = (fieldKeys: string[]) => {
+        const seen = new Set<string>();
+        return fieldKeys.reduce((total, fieldKey) => rows.reduce((sum, row) => {
+          const sourceKey = `${fieldKey}:${getMetricSourceKey(fieldKey, row)}`;
+          if (seen.has(sourceKey)) return sum;
+          seen.add(sourceKey);
+          const amount = Number(row[fieldKey] || 0);
+          return sum + (Number.isFinite(amount) ? amount : 0);
+        }, total), 0);
+      };
+      return [
+        { key: '__difference_add', label: 'جمع افزایشی‌ها', value: calculate(config.metric_fields), fieldType: 'number', tone: 'increase' },
+        { key: '__difference_subtract', label: 'جمع کاهشی‌ها', value: calculate(config.metric_subtract_fields), fieldType: 'number', tone: 'decrease' },
+        { key: '__difference', label: 'تفاضل نهایی', value: totalMetricValue, fieldType: 'number', tone: totalMetricValue < 0 ? 'decrease' : 'increase' },
+      ];
     }
     return metricFieldKeys.map((fieldKey) => {
       let sum = 0;
@@ -1056,7 +1188,7 @@ const ReportViewerPage: React.FC = () => {
         fieldType: String(fieldMap[fieldKey]?.type || '').toLowerCase(),
       };
     });
-  }, [config.group_bys.length, config.metric_type, fieldMap, groupedRows, metricFieldKeys, rows]);
+  }, [config.group_bys.length, config.metric_type, fieldMap, groupedRows, metricFieldKeys, rows, totalMetricValue]);
   const summaryCards = useMemo(
     () => [
       { key: '__report_card__rows', label: 'تعداد ردیف نتیجه', value: rows.length, fieldType: 'number' },
@@ -1129,10 +1261,9 @@ const ReportViewerPage: React.FC = () => {
         const groupValues: Record<string, any> = {};
         config.group_bys.forEach((grouping) => {
           const field = fieldMap[grouping.field];
-          groupValues[grouping.field] = row[grouping.field];
-          groupLabels[grouping.field] = field
-            ? formatReportCellValue(field as any, row, relationOptions, currencyLabel)
-            : String(row[grouping.field] ?? '-');
+          const groupValue = getReportGroupingValue(grouping, field, row, relationOptions, currencyLabel);
+          groupValues[grouping.field] = groupValue.value;
+          groupLabels[grouping.field] = groupValue.label;
         });
         return {
           ...row,
@@ -1219,9 +1350,15 @@ const ReportViewerPage: React.FC = () => {
         title: field.labels?.fa || field.key,
         dataIndex: field.key,
         key: field.key,
-        render: (_value, row) => formatReportCellValue(field as any, row, relationOptions, currencyLabel),
+        render: (_value, row) => {
+          const content = formatReportCellValue(field as any, row, relationOptions, currencyLabel);
+          if (config.metric_type !== 'difference') return content;
+          if (config.metric_subtract_fields.includes(field.key)) return <span className="font-semibold text-red-600 dark:text-red-300">{content}</span>;
+          if (config.metric_fields.includes(field.key)) return <span className="font-semibold text-green-600 dark:text-green-300">{content}</span>;
+          return content;
+        },
       })),
-    [currencyLabel, relationOptions, visibleFields]
+    [config.metric_fields, config.metric_subtract_fields, config.metric_type, currencyLabel, relationOptions, visibleFields]
   );
 
   const groupedDetailColumns = useMemo<ColumnsType<GroupedDetailRow>>(
@@ -1236,7 +1373,9 @@ const ReportViewerPage: React.FC = () => {
               {row.__group_labels[field.key] || '-'}
             </div>
           ),
-          props: { rowSpan: row.__group_row_spans[field.key] || 0 },
+          // با تکرار عنوان گروه در هر ردیف، صفحه‌بندی Ant Design هیچ صفحه‌ای را
+          // بدون نام گروه باقی نمی‌گذارد (rowSpan بین دو صفحه قابل اتکا نیست).
+          props: { rowSpan: 1 },
         }),
       })),
       ...visibleDetailFields.map((field) => ({
@@ -1248,14 +1387,18 @@ const ReportViewerPage: React.FC = () => {
             const isFirstDetailColumn = visibleDetailFields[0]?.key === field.key;
             return {
               children: isFirstDetailColumn ? (
-                <div className="rounded-lg bg-gray-100 px-3 py-2 text-sm font-bold text-gray-800 dark:bg-white/10 dark:text-gray-100">
+                <div className={`rounded-lg px-3 py-2 text-sm font-bold ${config.metric_type === 'difference' && Number(row.__group_summary?.metrics?.__difference || 0) < 0 ? 'bg-red-50 text-red-800 dark:bg-red-950/30 dark:text-red-200' : config.metric_type === 'difference' ? 'bg-green-50 text-green-800 dark:bg-green-950/30 dark:text-green-200' : 'bg-gray-100 text-gray-800 dark:bg-white/10 dark:text-gray-100'}`}>
                   جمع گروه: {row.__group_summary ? getGroupSummaryMetricText(row.__group_summary, config, metricFieldKeys, fieldMap, currencyLabel) : '-'}
                 </div>
               ) : null,
               props: { colSpan: isFirstDetailColumn ? Math.max(1, visibleDetailFields.length) : 0 },
             };
           }
-          return formatReportCellValue(field as any, row, relationOptions, currencyLabel);
+          const tone = config.metric_type === 'difference'
+            ? (config.metric_subtract_fields.includes(field.key) ? 'decrease' : config.metric_fields.includes(field.key) ? 'increase' : null)
+            : null;
+          const content = formatReportCellValue(field as any, row, relationOptions, currencyLabel);
+          return tone ? <span className={tone === 'decrease' ? 'font-semibold text-red-600 dark:text-red-300' : 'font-semibold text-green-600 dark:text-green-300'}>{content}</span> : content;
         },
       })),
       ...(visibleDetailFields.length === 0 ? [{
@@ -1278,7 +1421,7 @@ const ReportViewerPage: React.FC = () => {
         : config.metric_type === 'avg'
           ? Number(row.metrics[activeMetricKey] || 0) / Math.max(1, Number(row.metric_counts[activeMetricKey] || 0))
           : Number(row.metrics[activeMetricKey] || 0);
-      return { label, value, count: row.row_count };
+      return { label, value, count: row.row_count, tone: config.metric_type === 'difference' ? (value < 0 ? 'decrease' : 'increase') : undefined };
     });
   }, [activeMetricKey, chartAvailable, chartDimensionField, chartRows, config.metric_type]);
 
@@ -1661,7 +1804,7 @@ const ReportViewerPage: React.FC = () => {
         </div>
 
         <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
-          <div className="rounded-[1.5rem] border border-gray-200 bg-gray-50/70 p-4 dark:border-gray-700 dark:bg-white/5">
+          <div className={`rounded-[1.5rem] border p-4 ${config.metric_type === 'difference' ? (totalMetricValue < 0 ? 'border-red-200 bg-red-50/70 dark:border-red-900/70 dark:bg-red-950/20' : 'border-green-200 bg-green-50/70 dark:border-green-900/70 dark:bg-green-950/20') : 'border-gray-200 bg-gray-50/70 dark:border-gray-700 dark:bg-white/5'}`}>
             <Statistic title="تعداد ردیف نتیجه" value={rows.length} formatter={(value) => toPersianNumber(value)} />
           </div>
           <div className="rounded-[1.5rem] border border-gray-200 bg-gray-50/70 p-4 dark:border-gray-700 dark:bg-white/5">
@@ -1681,10 +1824,28 @@ const ReportViewerPage: React.FC = () => {
           </div>
         </div>
 
+        <Collapse
+          className="mb-6"
+          activeKey={conditionsOpen ? ['conditions'] : []}
+          onChange={(keys) => setConditionsOpen((keys as string[]).includes('conditions'))}
+          items={[{
+            key: 'conditions',
+            label: 'شرایط گزارش',
+            children: <div className="space-y-4">
+              <WorkflowConditionsGroup value={draftConditionsAll} onChange={setDraftConditionsAll} fields={reportableFields} dynamicOptions={dynamicOptions} relationOptions={relationOptions} />
+              <WorkflowConditionsGroup value={draftConditionsAny} onChange={setDraftConditionsAny} fields={reportableFields} dynamicOptions={dynamicOptions} relationOptions={relationOptions} />
+              <div className="flex flex-wrap gap-2">
+                <Button type="primary" className="kalam-btn-brand" onClick={applyTemporaryConditions}>اعمال موقت</Button>
+                <Button disabled={!canEditReport} onClick={() => void saveReportConditions().catch((error) => message.error(String(error?.message || 'ذخیره گزارش ناموفق بود')))}>ذخیره گزارش</Button>
+              </div>
+            </div>,
+          }]}
+        />
+
         {metricCardValues.length > 1 && (
           <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
             {metricCardValues.map((metric) => (
-              <div key={metric.key} className="rounded-[1.5rem] border border-gray-200 bg-gray-50/70 p-4 dark:border-gray-700 dark:bg-white/5">
+              <div key={metric.key} className={`rounded-[1.5rem] border p-4 ${metric.tone === 'decrease' ? 'border-red-200 bg-red-50/70 dark:border-red-900/70 dark:bg-red-950/20' : metric.tone === 'increase' ? 'border-green-200 bg-green-50/70 dark:border-green-900/70 dark:bg-green-950/20' : 'border-gray-200 bg-gray-50/70 dark:border-gray-700 dark:bg-white/5'}`}>
                 <Statistic
                   title={metric.label}
                   value={metric.value}
@@ -1698,8 +1859,9 @@ const ReportViewerPage: React.FC = () => {
         {chartAvailable && (
           <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-[1.5rem] border border-gray-200 p-4 dark:border-gray-700">
             <div className="flex flex-wrap items-center gap-2">
-              <Button icon={<TableOutlined />} type={renderMode === 'table' ? 'primary' : 'default'} className={renderMode === 'table' ? 'kalam-btn-brand' : ''} onClick={() => setRenderMode('table')}>جدول</Button>
-              <Button icon={<BarChartOutlined />} type={renderMode === 'bar' ? 'primary' : 'default'} className={renderMode === 'bar' ? 'kalam-btn-brand' : ''} onClick={() => setRenderMode('bar')}>نمودار ستونی</Button>
+            <Button icon={<TableOutlined />} type={renderMode === 'table' ? 'primary' : 'default'} className={renderMode === 'table' ? 'kalam-btn-brand' : ''} onClick={() => setRenderMode('table')}>جدول</Button>
+            <Button icon={<BarChartOutlined />} type={renderMode === 'bar' ? 'primary' : 'default'} className={renderMode === 'bar' ? 'kalam-btn-brand' : ''} onClick={() => setRenderMode('bar')}>نمودار ستونی</Button>
+            <Button icon={<BarChartOutlined />} type={renderMode === 'line' ? 'primary' : 'default'} className={renderMode === 'line' ? 'kalam-btn-brand' : ''} onClick={() => setRenderMode('line')}>نمودار خطی</Button>
               <Button icon={<PieChartOutlined />} type={renderMode === 'pie' ? 'primary' : 'default'} className={renderMode === 'pie' ? 'kalam-btn-brand' : ''} onClick={() => setRenderMode('pie')}>نمودار دایره‌ای</Button>
             </div>
             {metricOptions.length > 1 && (
@@ -1731,6 +1893,10 @@ const ReportViewerPage: React.FC = () => {
               ? toPersianNumber(value)
               : formatMetricValue(Number(value || 0), String(fieldMap[activeMetricKey]?.type || '').toLowerCase(), currencyLabel)}
           />
+        )}
+
+        {renderMode === 'line' && chartAvailable && (
+          <SimpleLineChart items={chartItems} valueFormatter={(value) => activeMetricKey === '__count' ? toPersianNumber(value) : formatMetricValue(Number(value || 0), String(fieldMap[activeMetricKey]?.type || '').toLowerCase(), currencyLabel)} />
         )}
 
         {executing && <ReportExecutionProgress />}
