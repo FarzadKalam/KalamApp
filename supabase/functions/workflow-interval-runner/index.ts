@@ -7005,6 +7005,65 @@ async function runQueuedWorkflowEvents(url: string, key: string): Promise<Record
   return stats;
 }
 
+// اعلان‌های باشگاه مشتریان نیز با همان executor مقاومِ گردش‌کار اجرا می‌شوند؛
+// تنها منبع آن‌ها تنظیمات طرح/کد/اعتبار است، نه جدول workflows.
+async function runCustomerClubNotificationQueue(url: string, key: string): Promise<Record<string, number>> {
+  const stats = { scanned: 0, succeeded: 0, retried: 0, failed: 0, executedActions: 0 };
+  const dueAt = encodeURIComponent(new Date().toISOString());
+  const rows = await dbGet(url, key,
+    `customer_club_notification_queue?status=eq.pending&available_at=lte.${dueAt}&order=created_at.asc&limit=100`
+  ).catch((error) => {
+    console.warn('[workflow-runner] Customer club notification queue fetch failed:', error?.message || error);
+    return [];
+  }) as any[];
+
+  for (const row of rows) {
+    stats.scanned += 1;
+    const claimed = await dbPatch(url, key, 'customer_club_notification_queue', `id=eq.${encodeURIComponent(String(row.id))}&status=eq.pending`, {
+      status: 'processing', attempts: Number(row.attempts || 0) + 1,
+    }).then(() => true).catch(() => false);
+    if (!claimed) continue;
+    try {
+      const customers = row.customer_id
+        ? await dbGet(url, key, `customers?id=eq.${encodeURIComponent(String(row.customer_id))}&org_id=eq.${encodeURIComponent(String(row.org_id))}&select=*&limit=1`)
+        : [];
+      const record = { ...(customers?.[0] || {}), ...(row.context && typeof row.context === 'object' ? row.context : {}), id: String(row.customer_id || row.id), customer_id: row.customer_id || null, customer_club_event: row.event_key };
+      const actions = Array.isArray(row.actions) ? row.actions : [];
+      const failures: string[] = [];
+      for (const [index, action] of actions.entries()) {
+        const result = await executeDurableAction(
+          { ...action, config: { ...(action?.config || {}), __workflow_origin_execution_key: `customer-club:${row.id}` } } as WorkflowAction,
+          record, 'customers', String(row.org_id), url, key, null,
+          { parentExecutionKey: `customer-club:${row.id}`, actionIndex: index },
+        );
+        if (result.status === 'success') stats.executedActions += 1;
+        if (result.status === 'failed') failures.push(result.message || String(action?.type || 'action failed'));
+      }
+      if (failures.length > 0) throw new Error(failures.join(' | '));
+      await dbPatch(url, key, 'customer_club_notification_queue', `id=eq.${encodeURIComponent(String(row.id))}`, {
+        status: 'succeeded', completed_at: new Date().toISOString(), last_error: null,
+      });
+      stats.succeeded += 1;
+    } catch (error: any) {
+      const message = String(error?.message || error || 'اجرای اطلاع‌رسانی باشگاه ناموفق بود.');
+      const attempts = Number(row.attempts || 0) + 1;
+      if (attempts < 5) {
+        await dbPatch(url, key, 'customer_club_notification_queue', `id=eq.${encodeURIComponent(String(row.id))}`, {
+          status: 'pending', available_at: new Date(Date.now() + Math.min(300, 5 * (2 ** attempts)) * 1000).toISOString(), last_error: message,
+        });
+        stats.retried += 1;
+      } else {
+        await dbPatch(url, key, 'customer_club_notification_queue', `id=eq.${encodeURIComponent(String(row.id))}`, {
+          status: 'failed', completed_at: new Date().toISOString(), last_error: message,
+        });
+        stats.failed += 1;
+      }
+      console.error('[workflow-runner] Customer club notification failed:', row.id, message);
+    }
+  }
+  return stats;
+}
+
 // ── Deno.serve ─────────────────────────────────────────────────────────────────
 
 const corsHeaders = {
@@ -7085,13 +7144,15 @@ Deno.serve(async (req) => {
       .catch((error) => ({ error: String(error?.message || error || 'Interval queue failed') }));
     const eventQueueStats = await runQueuedWorkflowEvents(supabaseUrl, serviceRoleKey)
       .catch((error) => ({ error: String(error?.message || error || 'Event queue failed') }));
+    const customerClubNotificationStats = await runCustomerClubNotificationQueue(supabaseUrl, serviceRoleKey)
+      .catch((error) => ({ error: String(error?.message || error || 'Customer club notification queue failed') }));
     const processAutomationStats = await runServerProcessAutomationIntervalTick(
       supabaseUrl,
       serviceRoleKey,
       new Date(),
     ).catch((error) => ({ failed: true, error: String(error?.message || error) }));
-    console.log(`[workflow-runner] build=${FUNCTION_BUILD} enqueueStats=${JSON.stringify(enqueueStats)} intervalQueueStats=${JSON.stringify(intervalQueueStats)} scheduledReportStats=${JSON.stringify(scheduledReportStats)} scheduledWorkScheduleStats=${JSON.stringify(scheduledWorkScheduleStats)} eventQueueStats=${JSON.stringify(eventQueueStats)} processAutomationStats=${JSON.stringify(processAutomationStats)}`);
-    return json(200, { ok: true, stats: enqueueStats, intervalQueueStats, scheduledReportStats, scheduledWorkScheduleStats, eventQueueStats, processAutomationStats });
+    console.log(`[workflow-runner] build=${FUNCTION_BUILD} enqueueStats=${JSON.stringify(enqueueStats)} intervalQueueStats=${JSON.stringify(intervalQueueStats)} scheduledReportStats=${JSON.stringify(scheduledReportStats)} scheduledWorkScheduleStats=${JSON.stringify(scheduledWorkScheduleStats)} eventQueueStats=${JSON.stringify(eventQueueStats)} customerClubNotificationStats=${JSON.stringify(customerClubNotificationStats)} processAutomationStats=${JSON.stringify(processAutomationStats)}`);
+    return json(200, { ok: true, stats: enqueueStats, intervalQueueStats, scheduledReportStats, scheduledWorkScheduleStats, eventQueueStats, customerClubNotificationStats, processAutomationStats });
     } finally {
       if (leaseToken) {
         await releaseWorkflowRunnerLease(supabaseUrl, serviceRoleKey, leaseToken).catch((error) => {

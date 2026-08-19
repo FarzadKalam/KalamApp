@@ -6,21 +6,22 @@ import {
   Empty,
   Form,
   Input,
-  InputNumber,
   Modal,
-  Select,
   Statistic,
-  Switch,
   Table,
   Tabs,
   Tag,
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { GiftOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
+import { GiftOutlined, PlusOutlined, ReloadOutlined, SaveOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import WorkflowConditionsGroup from '../components/workflows/WorkflowConditionsGroup';
+import SmartFieldRenderer from '../components/SmartFieldRenderer';
+import CustomerClubNotificationActions, { type CustomerClubNotificationConfig } from '../components/customerClub/CustomerClubNotificationActions';
 import CustomerLevelingTab from './Settings/CustomerLevelingTab';
 import { customerModule } from '../modules/customerConfig';
+import { invoicesConfig } from '../modules/invoicesConfig';
+import { FieldType, type ModuleField } from '../types';
 import { supabase } from '../supabaseClient';
 import { getRecordTitle } from '../utils/recordTitle';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
@@ -51,6 +52,7 @@ type LoyaltyRule = {
   starts_at: string | null;
   ends_at: string | null;
   is_active: boolean;
+  config?: { notifications?: CustomerClubNotificationConfig };
   created_at: string;
 };
 
@@ -68,6 +70,8 @@ type DiscountCode = {
   conditions_all: WorkflowCondition[];
   conditions_any: WorkflowCondition[];
   is_active: boolean;
+  customer_id?: string | null;
+  metadata?: { notifications?: CustomerClubNotificationConfig; code_scope?: 'public' | 'private' };
   created_at: string;
 };
 
@@ -80,6 +84,15 @@ type LedgerRow = {
   effective_date: string | null;
   description: string | null;
   created_at: string;
+  customer?: Record<string, any> | null;
+};
+
+type ClubEvent = {
+  id: string;
+  event_type: string;
+  title: string;
+  created_at: string;
+  payload?: Record<string, any>;
   customer?: Record<string, any> | null;
 };
 
@@ -111,6 +124,49 @@ const entryTypeLabel: Record<string, string> = {
 };
 
 const conditionFields = getWorkflowConditionFields('customers');
+const customerClubVariableFields: ModuleField[] = Array.from(new Map(
+  [...(customerModule.fields || []), ...(invoicesConfig.fields || [])]
+    .map((field: ModuleField) => [field.key, field])
+).values());
+
+const clubFields = {
+  ruleName: { key: 'name', labels: { fa: 'عنوان طرح' }, type: FieldType.TEXT },
+  ruleType: { key: 'rule_type', labels: { fa: 'نوع طرح' }, type: FieldType.SELECT, options: ruleTypeOptions },
+  rewardType: { key: 'reward_type', labels: { fa: 'نوع پاداش' }, type: FieldType.SELECT, options: rewardTypeOptions },
+  amount: { key: 'reward_amount', labels: { fa: 'مبلغ ثابت' }, type: FieldType.PRICE },
+  percent: { key: 'reward_percent', labels: { fa: 'درصد از فاکتور' }, type: FieldType.PERCENTAGE },
+  maxAmount: { key: 'max_reward_amount', labels: { fa: 'سقف پاداش' }, type: FieldType.PRICE },
+  start: { key: 'starts_at', labels: { fa: 'شروع' }, type: FieldType.DATE },
+  end: { key: 'ends_at', labels: { fa: 'پایان' }, type: FieldType.DATE },
+  active: { key: 'is_active', labels: { fa: 'فعال' }, type: FieldType.CHECKBOX },
+  discountCode: { key: 'code', labels: { fa: 'کد' }, type: FieldType.TEXT },
+  discountTitle: { key: 'title', labels: { fa: 'عنوان' }, type: FieldType.TEXT },
+  discountScope: { key: 'code_scope', labels: { fa: 'نوع کد تخفیف' }, type: FieldType.SELECT, options: [{ label: 'عمومی', value: 'public' }, { label: 'اختصاصی', value: 'private' }] },
+  discountType: { key: 'discount_type', labels: { fa: 'نوع تخفیف' }, type: FieldType.SELECT, options: [{ label: 'مبلغ ثابت', value: 'amount' }, { label: 'درصدی', value: 'percent' }] },
+  discountValue: { key: 'discount_value', labels: { fa: 'مقدار تخفیف' }, type: FieldType.PRICE },
+  maxDiscount: { key: 'max_discount_amount', labels: { fa: 'سقف تخفیف' }, type: FieldType.PRICE },
+  maxUses: { key: 'max_uses', labels: { fa: 'حداکثر تعداد مصرف کل' }, type: FieldType.NUMBER },
+  perCustomerUses: { key: 'per_customer_max_uses', labels: { fa: 'حداکثر مصرف هر مشتری' }, type: FieldType.NUMBER },
+  customer: { key: 'customer_id', labels: { fa: 'مشتری' }, type: FieldType.RELATION, relationConfig: { targetModule: 'customers' } },
+  entryType: { key: 'entry_type', labels: { fa: 'نوع ثبت' }, type: FieldType.SELECT, options: [{ label: 'افزایش اعتبار', value: 'credit' }, { label: 'مصرف اعتبار', value: 'debit' }, { label: 'اصلاح اعتبار', value: 'adjustment' }] },
+  ledgerAmount: { key: 'amount', labels: { fa: 'مبلغ' }, type: FieldType.PRICE },
+  effectiveDate: { key: 'effective_date', labels: { fa: 'تاریخ اثر' }, type: FieldType.DATE },
+  description: { key: 'description', labels: { fa: 'توضیحات' }, type: FieldType.LONG_TEXT },
+} as Record<string, ModuleField>;
+
+const ClubField = ({ form, name, field, required = false, onChange }: { form: any; name: string; field: ModuleField; required?: boolean; onChange?: (value: any) => void }) => (
+  <Form.Item name={name} label={field.labels?.fa} rules={required ? [{ required: true, message: `${field.labels?.fa || 'این فیلد'} را وارد کنید` }] : undefined} valuePropName={field.type === FieldType.CHECKBOX ? 'checked' : 'value'}>
+    <SmartFieldRenderer
+      field={field}
+      value={Form.useWatch(name, form)}
+      onChange={(value) => { form.setFieldValue(name, value); onChange?.(value); }}
+      forceEditMode
+      moduleId="customers"
+      allValues={form.getFieldsValue(true)}
+      overlayZIndexBase={31000}
+    />
+  </Form.Item>
+);
 
 const dateText = (value?: string | null) => value ? toPersianNumber(safeJalaliFormat(value, 'YYYY/MM/DD') || value) : '-';
 
@@ -123,10 +179,12 @@ const CustomerClubPage: React.FC = () => {
   const [canView, setCanView] = useState(false);
   const [canEdit, setCanEdit] = useState(false);
   const [featureEnabled, setFeatureEnabled] = useState(true);
+  const [tenantCodePrefix, setTenantCodePrefix] = useState('CLUB');
   const [summary, setSummary] = useState({ customerCount: 0, totalCredit: 0, totalBalance: 0, activeRules: 0, activeDiscounts: 0 });
   const [rules, setRules] = useState<LoyaltyRule[]>([]);
   const [discountCodes, setDiscountCodes] = useState<DiscountCode[]>([]);
   const [ledgerRows, setLedgerRows] = useState<LedgerRow[]>([]);
+  const [clubEvents, setClubEvents] = useState<ClubEvent[]>([]);
   const [customerOptions, setCustomerOptions] = useState<CustomerOption[]>([]);
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
@@ -135,15 +193,18 @@ const CustomerClubPage: React.FC = () => {
   const [editingRule, setEditingRule] = useState<LoyaltyRule | null>(null);
   const [ruleConditionsAll, setRuleConditionsAll] = useState<WorkflowCondition[]>([]);
   const [ruleConditionsAny, setRuleConditionsAny] = useState<WorkflowCondition[]>([]);
+  const [ruleNotifications, setRuleNotifications] = useState<CustomerClubNotificationConfig>({});
   const [ruleForm] = Form.useForm();
 
   const [discountModalOpen, setDiscountModalOpen] = useState(false);
   const [editingDiscount, setEditingDiscount] = useState<DiscountCode | null>(null);
   const [discountConditionsAll, setDiscountConditionsAll] = useState<WorkflowCondition[]>([]);
   const [discountConditionsAny, setDiscountConditionsAny] = useState<WorkflowCondition[]>([]);
+  const [discountNotifications, setDiscountNotifications] = useState<CustomerClubNotificationConfig>({});
   const [discountForm] = Form.useForm();
 
   const [ledgerModalOpen, setLedgerModalOpen] = useState(false);
+  const [ledgerNotifications, setLedgerNotifications] = useState<CustomerClubNotificationConfig>({});
   const [ledgerForm] = Form.useForm();
 
   const loadAccess = useCallback(async () => {
@@ -161,7 +222,7 @@ const CustomerClubPage: React.FC = () => {
     setLoading(true);
     try {
       await loadAccess();
-      const [customersRes, rulesRes, discountsRes, ledgerRes, optionsRes, conditionOptions] = await Promise.all([
+      const [customersRes, rulesRes, discountsRes, ledgerRes, optionsRes, conditionOptions, eventsRes] = await Promise.all([
         supabase
           .from('customers')
           .select('id, full_name, business_name, system_code, total_balance, loyalty_credit_balance', { count: 'exact' })
@@ -188,6 +249,7 @@ const CustomerClubPage: React.FC = () => {
           .order('full_name', { ascending: true })
           .limit(500),
         loadWorkflowConditionEditorOptions('customers', conditionFields),
+        supabase.from('customer_club_events').select('id, event_type, title, created_at, payload, customer:customers(id, full_name, business_name, system_code)').order('created_at', { ascending: false }).limit(300),
       ]);
 
       const firstError = customersRes.error || rulesRes.error || discountsRes.error || ledgerRes.error || optionsRes.error;
@@ -201,6 +263,7 @@ const CustomerClubPage: React.FC = () => {
       setRules(ruleRows);
       setDiscountCodes(discountRows);
       setLedgerRows(ledger);
+      setClubEvents(eventsRes.error ? [] : (eventsRes.data || []) as ClubEvent[]);
       setCustomerOptions((optionsRes.data || []).map((record: any) => ({
         value: String(record.id),
         label: getCustomerTitle(record),
@@ -226,10 +289,17 @@ const CustomerClubPage: React.FC = () => {
     void loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    const hostPart = typeof window === 'undefined' ? '' : window.location.hostname.split('.')[0];
+    const normalized = hostPart.replace(/[^a-z0-9]/gi, '').slice(0, 10).toUpperCase();
+    if (normalized && !['WWW', 'LOCALHOST'].includes(normalized)) setTenantCodePrefix(normalized);
+  }, []);
+
   const openRuleModal = (row?: LoyaltyRule) => {
     setEditingRule(row || null);
     setRuleConditionsAll(Array.isArray(row?.conditions_all) ? row!.conditions_all : []);
     setRuleConditionsAny(Array.isArray(row?.conditions_any) ? row!.conditions_any : []);
+    setRuleNotifications(row?.config?.notifications || {});
     ruleForm.setFieldsValue({
       name: row?.name || '',
       rule_type: row?.rule_type || 'cashback',
@@ -257,6 +327,7 @@ const CustomerClubPage: React.FC = () => {
       ends_at: String(values.ends_at || '').trim() || null,
       conditions_all: ruleConditionsAll,
       conditions_any: ruleConditionsAny,
+      config: { notifications: ruleNotifications },
       is_active: values.is_active !== false,
     };
     const query = editingRule?.id
@@ -273,6 +344,7 @@ const CustomerClubPage: React.FC = () => {
     setEditingDiscount(row || null);
     setDiscountConditionsAll(Array.isArray(row?.conditions_all) ? row!.conditions_all : []);
     setDiscountConditionsAny(Array.isArray(row?.conditions_any) ? row!.conditions_any : []);
+    setDiscountNotifications(row?.metadata?.notifications || {});
     discountForm.setFieldsValue({
       code: row?.code || '',
       title: row?.title || '',
@@ -284,12 +356,17 @@ const CustomerClubPage: React.FC = () => {
       max_uses: row?.max_uses ?? undefined,
       per_customer_max_uses: row?.per_customer_max_uses ?? undefined,
       is_active: row?.is_active !== false,
+      code_scope: row?.metadata?.code_scope || (row?.customer_id ? 'private' : 'public'),
+      customer_id: row?.customer_id || undefined,
     });
     setDiscountModalOpen(true);
   };
 
   const saveDiscount = async () => {
     const values = await discountForm.validateFields();
+    if (values.code_scope === 'private' && !String(values.customer_id || '').trim()) {
+      throw new Error('برای کد تخفیف اختصاصی، مشتری را انتخاب کنید.');
+    }
     const payload = {
       code: normalizeCustomerClubCode(values.code),
       title: values.title,
@@ -302,6 +379,8 @@ const CustomerClubPage: React.FC = () => {
       per_customer_max_uses: values.per_customer_max_uses === undefined || values.per_customer_max_uses === null ? null : Number(values.per_customer_max_uses),
       conditions_all: discountConditionsAll,
       conditions_any: discountConditionsAny,
+      customer_id: values.code_scope === 'private' ? String(values.customer_id || '').trim() || null : null,
+      metadata: { notifications: discountNotifications, code_scope: values.code_scope === 'private' ? 'private' : 'public' },
       is_active: values.is_active !== false,
     };
     const query = editingDiscount?.id
@@ -316,6 +395,7 @@ const CustomerClubPage: React.FC = () => {
 
   const openLedgerModal = () => {
     ledgerForm.resetFields();
+    setLedgerNotifications({});
     ledgerForm.setFieldsValue({ entry_type: 'credit', effective_date: new Date().toISOString().slice(0, 10) });
     setLedgerModalOpen(true);
   };
@@ -331,6 +411,7 @@ const CustomerClubPage: React.FC = () => {
       effective_date: String(values.effective_date || '').trim() || new Date().toISOString().slice(0, 10),
       idempotency_key: `manual:${customerId}:${Date.now()}`,
       description: String(values.description || '').trim() || null,
+      metadata: { notifications: ledgerNotifications },
     };
     const { error } = await supabase.from('customer_loyalty_ledger').insert([payload]);
     if (error) throw error;
@@ -389,6 +470,13 @@ const CustomerClubPage: React.FC = () => {
     { title: 'توضیحات', dataIndex: 'description', key: 'description', render: (value) => value || '-' },
   ], []);
 
+  const eventColumns: ColumnsType<ClubEvent> = useMemo(() => [
+    { title: 'رویداد', dataIndex: 'title', key: 'title' },
+    { title: 'مشتری', key: 'customer', render: (_, row) => getCustomerTitle(row.customer) },
+    { title: 'جزئیات', key: 'details', render: (_, row) => row.payload?.amount ? formatPersianPrice(Number(row.payload.amount)) : row.payload?.to ? `سطح ${row.payload.to}` : '-' },
+    { title: 'زمان', dataIndex: 'created_at', key: 'created_at', render: dateText },
+  ], []);
+
   if (!featureEnabled || !canView) {
     return (
       <div className="p-4 md:p-8 max-w-[1200px] mx-auto">
@@ -421,8 +509,8 @@ const CustomerClubPage: React.FC = () => {
                   <Card><Statistic title="طرح‌های فعال" value={summary.activeRules} /></Card>
                   <Card><Statistic title="کدهای فعال" value={summary.activeDiscounts} /></Card>
                 </div>
-                <Card title="آخرین گردش اعتبار">
-                  <Table rowKey="id" loading={loading} dataSource={ledgerRows.slice(0, 8)} columns={ledgerColumns} pagination={false} size="small" />
+                <Card title="آخرین رویدادهای باشگاه">
+                  <Table rowKey="id" loading={loading} dataSource={clubEvents.slice(0, 12)} columns={eventColumns} pagination={false} size="small" />
                 </Card>
               </div>
             ),
@@ -483,15 +571,15 @@ const CustomerClubPage: React.FC = () => {
       >
         <Form form={ruleForm} layout="vertical">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <Form.Item name="name" label="عنوان طرح" rules={[{ required: true, message: 'عنوان طرح را وارد کنید' }]}><Input /></Form.Item>
-            <Form.Item name="rule_type" label="نوع طرح" rules={[{ required: true }]}><Select options={ruleTypeOptions} /></Form.Item>
-            <Form.Item name="reward_type" label="نوع پاداش"><Select options={rewardTypeOptions} /></Form.Item>
-            <Form.Item name="reward_amount" label="مبلغ ثابت"><InputNumber min={0} className="w-full" /></Form.Item>
-            <Form.Item name="reward_percent" label="درصد از فاکتور"><InputNumber min={0} max={100} className="w-full" /></Form.Item>
-            <Form.Item name="max_reward_amount" label="سقف پاداش"><InputNumber min={0} className="w-full" /></Form.Item>
-            <Form.Item name="starts_at" label="شروع"><Input placeholder="2026-06-17" /></Form.Item>
-            <Form.Item name="ends_at" label="پایان"><Input placeholder="بدون محدودیت" /></Form.Item>
-            <Form.Item name="is_active" label="فعال" valuePropName="checked"><Switch /></Form.Item>
+            <ClubField form={ruleForm} name="name" field={clubFields.ruleName} required />
+            <ClubField form={ruleForm} name="rule_type" field={clubFields.ruleType} required />
+            <ClubField form={ruleForm} name="reward_type" field={clubFields.rewardType} />
+            <ClubField form={ruleForm} name="reward_amount" field={clubFields.amount} />
+            <ClubField form={ruleForm} name="reward_percent" field={clubFields.percent} />
+            <ClubField form={ruleForm} name="max_reward_amount" field={clubFields.maxAmount} />
+            <ClubField form={ruleForm} name="starts_at" field={clubFields.start} />
+            <ClubField form={ruleForm} name="ends_at" field={clubFields.end} />
+            <ClubField form={ruleForm} name="is_active" field={clubFields.active} />
           </div>
           <div className="mt-2 space-y-4">
             <div>
@@ -503,6 +591,7 @@ const CustomerClubPage: React.FC = () => {
               <WorkflowConditionsGroup value={ruleConditionsAny} onChange={setRuleConditionsAny} fields={conditionFields} dynamicOptions={dynamicOptions} relationOptions={relationOptions} />
             </div>
           </div>
+          <CustomerClubNotificationActions value={ruleNotifications} onChange={setRuleNotifications} variableFields={customerClubVariableFields} disabled={!canEdit} />
         </Form>
       </Modal>
 
@@ -517,16 +606,18 @@ const CustomerClubPage: React.FC = () => {
       >
         <Form form={discountForm} layout="vertical">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <Form.Item name="code" label="کد" rules={[{ required: true, message: 'کد را وارد کنید' }]}><Input onBlur={(e) => discountForm.setFieldValue('code', normalizeCustomerClubCode(e.target.value))} /></Form.Item>
-            <Form.Item name="title" label="عنوان" rules={[{ required: true, message: 'عنوان را وارد کنید' }]}><Input /></Form.Item>
-            <Form.Item name="discount_type" label="نوع تخفیف"><Select options={rewardTypeOptions.map((item) => ({ ...item, label: item.value === 'amount' ? 'مبلغ ثابت' : 'درصدی' }))} /></Form.Item>
-            <Form.Item name="discount_value" label="مقدار تخفیف"><InputNumber min={0} className="w-full" /></Form.Item>
-            <Form.Item name="max_discount_amount" label="سقف تخفیف"><InputNumber min={0} className="w-full" /></Form.Item>
-            <Form.Item name="max_uses" label="حداکثر تعداد مصرف کل"><InputNumber min={0} className="w-full" /></Form.Item>
-            <Form.Item name="per_customer_max_uses" label="حداکثر مصرف هر مشتری"><InputNumber min={0} className="w-full" /></Form.Item>
-            <Form.Item name="starts_at" label="شروع"><Input placeholder="2026-06-17" /></Form.Item>
-            <Form.Item name="ends_at" label="پایان"><Input placeholder="بدون محدودیت" /></Form.Item>
-            <Form.Item name="is_active" label="فعال" valuePropName="checked"><Switch /></Form.Item>
+            <ClubField form={discountForm} name="code_scope" field={clubFields.discountScope} />
+            <Form.Item label="کد" required><div className="flex gap-2"><div className="min-w-0 flex-1"><ClubField form={discountForm} name="code" field={clubFields.discountCode} required onChange={(value) => discountForm.setFieldValue('code', normalizeCustomerClubCode(value))} /></div><Button aria-label="ساخت کد پیشنهادی" icon={<ThunderboltOutlined />} onClick={() => discountForm.setFieldValue('code', `${tenantCodePrefix}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`)} /></div></Form.Item>
+            <ClubField form={discountForm} name="customer_id" field={clubFields.customer} />
+            <ClubField form={discountForm} name="title" field={clubFields.discountTitle} required />
+            <ClubField form={discountForm} name="discount_type" field={clubFields.discountType} />
+            <ClubField form={discountForm} name="discount_value" field={clubFields.discountValue} />
+            <ClubField form={discountForm} name="max_discount_amount" field={clubFields.maxDiscount} />
+            <ClubField form={discountForm} name="max_uses" field={clubFields.maxUses} />
+            <ClubField form={discountForm} name="per_customer_max_uses" field={clubFields.perCustomerUses} />
+            <ClubField form={discountForm} name="starts_at" field={clubFields.start} />
+            <ClubField form={discountForm} name="ends_at" field={clubFields.end} />
+            <ClubField form={discountForm} name="is_active" field={clubFields.active} />
           </div>
           <div className="mt-2 space-y-4">
             <div>
@@ -538,6 +629,7 @@ const CustomerClubPage: React.FC = () => {
               <WorkflowConditionsGroup value={discountConditionsAny} onChange={setDiscountConditionsAny} fields={conditionFields} dynamicOptions={dynamicOptions} relationOptions={relationOptions} />
             </div>
           </div>
+          <CustomerClubNotificationActions value={discountNotifications} onChange={setDiscountNotifications} variableFields={customerClubVariableFields} disabled={!canEdit} />
         </Form>
       </Modal>
 
@@ -550,25 +642,12 @@ const CustomerClubPage: React.FC = () => {
         cancelText="انصراف"
       >
         <Form form={ledgerForm} layout="vertical">
-          <Form.Item name="customer_id" label="مشتری" rules={[{ required: true, message: 'مشتری را انتخاب کنید' }]}>
-            <Select options={customerOptions} showSearch optionFilterProp="label" />
-          </Form.Item>
-          <Form.Item name="entry_type" label="نوع ثبت">
-            <Select options={[
-              { label: 'افزایش اعتبار', value: 'credit' },
-              { label: 'مصرف اعتبار', value: 'debit' },
-              { label: 'اصلاح اعتبار', value: 'adjustment' },
-            ]} />
-          </Form.Item>
-          <Form.Item name="amount" label="مبلغ" rules={[{ required: true, message: 'مبلغ را وارد کنید' }]}>
-            <InputNumber min={0} className="w-full" />
-          </Form.Item>
-          <Form.Item name="effective_date" label="تاریخ اثر">
-            <Input placeholder="2026-06-17" />
-          </Form.Item>
-          <Form.Item name="description" label="توضیحات">
-            <Input.TextArea rows={3} />
-          </Form.Item>
+          <ClubField form={ledgerForm} name="customer_id" field={clubFields.customer} required />
+          <ClubField form={ledgerForm} name="entry_type" field={clubFields.entryType} />
+          <ClubField form={ledgerForm} name="amount" field={clubFields.ledgerAmount} required />
+          <ClubField form={ledgerForm} name="effective_date" field={clubFields.effectiveDate} />
+          <ClubField form={ledgerForm} name="description" field={clubFields.description} />
+          <CustomerClubNotificationActions value={ledgerNotifications} onChange={setLedgerNotifications} variableFields={customerClubVariableFields} disabled={!canEdit} />
         </Form>
       </Modal>
     </div>
