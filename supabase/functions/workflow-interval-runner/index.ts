@@ -1808,7 +1808,7 @@ async function filterActiveGroupMentionTargets(
 }
 
 async function resolveAssigneesToSmsRecipients(
-  url: string, key: string, orgId: string,
+  url: string, key: string, orgId: string, moduleId: string,
   recipientAssignees: any[], recipientFields: any[], record: Record<string, any>
 ): Promise<string[]> {
   const userIds = new Set<string>();
@@ -1827,7 +1827,7 @@ async function resolveAssigneesToSmsRecipients(
 
   (Array.isArray(recipientAssignees) ? recipientAssignees : []).forEach(processEntry);
   for (const fieldKey of (Array.isArray(recipientFields) ? recipientFields : [])) {
-    const val = await resolveWorkflowFieldValue(url, key, String(fieldKey ?? ''), record);
+    const val = await resolveWorkflowFieldValue(url, key, String(fieldKey ?? ''), record, orgId, moduleId);
     if (Array.isArray(val)) val.forEach(processEntry);
     else processEntry(val);
   }
@@ -1858,7 +1858,7 @@ async function resolveAssigneesToSmsRecipients(
 }
 
 async function resolveAssigneesToMentionTargets(
-  url: string, key: string, orgId: string,
+  url: string, key: string, orgId: string, moduleId: string,
   recipientAssignees: any[], recipientFields: any[], record: Record<string, any>
 ): Promise<{ mentionUserIds: string[]; mentionRoleIds: string[]; groupTargets: Array<{ groupId: string; userIds: string[]; roleIds: string[] }> }> {
   const userIds = new Set<string>();
@@ -1874,7 +1874,7 @@ async function resolveAssigneesToMentionTargets(
 
   (Array.isArray(recipientAssignees) ? recipientAssignees : []).forEach(processEntry);
   for (const fieldKey of (Array.isArray(recipientFields) ? recipientFields : [])) {
-    const val = await resolveWorkflowFieldValue(url, key, String(fieldKey ?? ''), record);
+    const val = await resolveWorkflowFieldValue(url, key, String(fieldKey ?? ''), record, orgId, moduleId);
     if (Array.isArray(val)) val.forEach(processEntry);
     else processEntry(val);
   }
@@ -1918,13 +1918,20 @@ function normalizeWorkflowAttachmentValues(value: any, fallbackName: string): Ar
   });
 }
 
-async function resolveServerNoteAttachments(url: string, key: string, fields: any[], record: Record<string, any>) {
+async function resolveServerNoteAttachments(
+  url: string,
+  key: string,
+  orgId: string,
+  moduleId: string,
+  fields: any[],
+  record: Record<string, any>,
+) {
   const attachments: Array<{ name: string; url: string; mimeType: string | null }> = [];
   for (const field of (Array.isArray(fields) ? fields : [])) {
     const fieldKey = String(field || '').trim();
     if (!fieldKey) continue;
     attachments.push(...normalizeWorkflowAttachmentValues(
-      await resolveWorkflowFieldValue(url, key, fieldKey, record),
+      await resolveWorkflowFieldValue(url, key, fieldKey, record, orgId, moduleId),
       fieldKey,
     ));
   }
@@ -1982,7 +1989,7 @@ async function resolveServerWorkflowMessageAttachments({
       ? resolveServerStarredRecordAttachments(url, key, orgId, moduleId, recordId)
       : Promise.resolve([]),
     legacyFields.length > 0
-      ? resolveServerNoteAttachments(url, key, legacyFields, record)
+      ? resolveServerNoteAttachments(url, key, orgId, moduleId, legacyFields, record)
       : Promise.resolve([]),
   ]);
   return Array.from(new Map([...starred, ...legacy].map((item) => [item.url, item])).values());
@@ -2144,7 +2151,7 @@ async function resolveCounterpartyBotTargets(
 
   for (const fieldKey of (Array.isArray(recipientFields) ? recipientFields : [])) {
     const normalizedFieldKey = String(fieldKey || '').trim();
-    const value = await resolveWorkflowFieldValue(url, key, normalizedFieldKey, record);
+    const value = await resolveWorkflowFieldValue(url, key, normalizedFieldKey, record, orgId, moduleId);
     const values = Array.isArray(value) ? value : [value];
     const targetSet = /supplier/i.test(normalizedFieldKey) ? supplierIds : customerIds;
     values.forEach((item) => addUuid(targetSet, item));
@@ -3890,6 +3897,7 @@ async function executeAction(
           url,
           key,
           orgId,
+          moduleId,
           (channelConfigs.note || {}).recipient_assignees || [],
           (channelConfigs.note || {}).recipient_fields || [],
           record
@@ -4163,7 +4171,7 @@ async function executeAction(
     const text = (await renderTemplateAsync(String(config.message || ''), record, url, key, false, orgId, moduleId)).trim();
     if (!text) return actionResult(action, 'skipped', 'متن پیامک خالی است.');
     const recipients = await resolveAssigneesToSmsRecipients(
-      url, key, orgId,
+      url, key, orgId, moduleId,
       config.recipient_assignees || [], config.recipient_fields || [], record
     );
     const manuals = (config.manual_numbers || []).map(normalizePhone).filter(isValidIranMobile);
@@ -4192,7 +4200,7 @@ async function executeAction(
     if (!noteText && attachments.length === 0) return actionResult(action, 'skipped', 'متن و پیوست یادداشت خالی است.');
     if (!moduleId || !recordId) return actionResult(action, 'skipped', 'رکورد مقصد برای یادداشت مشخص نیست.');
     const mentionTargets = await resolveAssigneesToMentionTargets(
-      url, key, orgId,
+      url, key, orgId, moduleId,
       recipientConfig.recipientAssignees, recipientConfig.recipientFields, record
     );
     const noteRows: Record<string, any>[] = [];
@@ -4219,7 +4227,7 @@ async function executeAction(
     let smsRecipientCount = 0;
     if (action.type === 'send_note_sms') {
       const smsText = `پیام جدید از طرف "سیستم"\n"${noteText.replace(/\*\*/g, '').substring(0, 80)}"\nبرای مشاهده به سامانه مراجعه کنید`;
-      const recipients = await resolveAssigneesToSmsRecipients(url, key, orgId, recipientConfig.recipientAssignees, recipientConfig.recipientFields, record);
+      const recipients = await resolveAssigneesToSmsRecipients(url, key, orgId, moduleId, recipientConfig.recipientAssignees, recipientConfig.recipientFields, record);
       if (recipients.length > 0) {
         const smsSettings = await getOrgSmsSettings(url, key, orgId);
         if (smsSettings) {
@@ -6690,7 +6698,7 @@ async function runServerProcessAutomationRules(
         && Array.isArray(actionConfig.recipient_fields)
         && actionConfig.recipient_fields.length > 0
       ) {
-        const resolved = await resolveAssigneesToMentionTargets(url, key, orgId, [], actionConfig.recipient_fields, actionRecord);
+        const resolved = await resolveAssigneesToMentionTargets(url, key, orgId, targetModuleId, [], actionConfig.recipient_fields, actionRecord);
         shouldUseTargetFallback = resolved.mentionUserIds.length === 0
           && resolved.mentionRoleIds.length === 0
           && resolved.groupTargets.length === 0;
