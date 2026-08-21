@@ -93,6 +93,36 @@ type ReportPrintFieldDefinition = {
   type: 'column' | 'metric_card';
 };
 
+type ServerReportRuntime = {
+  mode: 'normal' | 'difference' | 'percentage';
+  groups: Array<{ key: string; label: string; row_count: number; increase: number; decrease: number; target: number; total: number; metrics: Record<string, number> }>;
+  generated_at?: string;
+};
+
+const DifferenceBarChart: React.FC<{ groups: ServerReportRuntime['groups']; currencyLabel: string }> = ({ groups, currencyLabel }) => {
+  const maxValue = Math.max(1, ...groups.flatMap((row) => [Number(row.increase || 0), Number(row.decrease || 0)]));
+  return <div className="space-y-3">{groups.map((row) => {
+    const increase = Number(row.increase || 0); const decrease = Number(row.decrease || 0); const net = increase - decrease;
+    const percent = increase > 0 ? (net / increase) * 100 : null;
+    return <div key={row.key} className="rounded-2xl border border-gray-200 p-4 dark:border-gray-700"><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><Text strong>{row.label || '-'}</Text><Text type={net < 0 ? 'danger' : 'success'}>خالص: {formatMetricValue(net, 'price', currencyLabel)}{percent === null ? '' : ` (${toPersianNumber(percent.toFixed(1))}٪)`}</Text></div><div className="space-y-2 text-xs"><div className="flex items-center gap-2"><span className="w-16 text-green-700">افزاینده</span><div className="h-3 flex-1 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800"><div className="h-full rounded-full bg-green-500" style={{ width: `${Math.max(2, increase / maxValue * 100)}%` }} /></div><span className="persian-number w-28 text-left">{formatMetricValue(increase, 'price', currencyLabel)}</span></div><div className="flex items-center gap-2"><span className="w-16 text-red-700">کاهنده</span><div className="h-3 flex-1 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800"><div className="h-full rounded-full bg-red-500" style={{ width: `${Math.max(2, decrease / maxValue * 100)}%` }} /></div><span className="persian-number w-28 text-left">{formatMetricValue(decrease, 'price', currencyLabel)}</span></div></div></div>;
+  })}</div>;
+};
+
+const ServerReportResultView: React.FC<{ report: ReportDefinitionRecord; runtime: ServerReportRuntime; currencyLabel: string; onRefresh: () => void; refreshing: boolean }> = ({ report, runtime, currencyLabel, onRefresh, refreshing }) => {
+  const [view, setView] = useState<'table' | 'bar' | 'pie' | 'line'>('table');
+  const groups = runtime.groups || [];
+  const totals = groups.reduce((acc, row) => ({ increase: acc.increase + Number(row.increase || 0), decrease: acc.decrease + Number(row.decrease || 0), target: acc.target + Number(row.target || 0), total: acc.total + Number(row.total || 0), count: acc.count + Number(row.row_count || 0) }), { increase: 0, decrease: 0, target: 0, total: 0, count: 0 });
+  const isDifference = runtime.mode === 'difference';
+  const isPercentage = runtime.mode === 'percentage';
+  const value = (row: ServerReportRuntime['groups'][number]) => isDifference ? Number(row.increase || 0) - Number(row.decrease || 0) : isPercentage ? (Number(row.total || 0) > 0 ? Number(row.target || 0) / Number(row.total || 0) * 100 : 0) : Number(Object.values(row.metrics || {})[0] || row.row_count || 0);
+  const items = groups.map((row) => ({ label: row.label || '-', value: value(row), tone: value(row) < 0 ? 'decrease' as const : 'increase' as const }));
+  const increaseItems = groups.map((row) => ({ label: row.label || '-', value: Number(row.increase || 0), tone: 'increase' as const }));
+  const decreaseItems = groups.map((row) => ({ label: row.label || '-', value: Number(row.decrease || 0), tone: 'decrease' as const }));
+  const columns: ColumnsType<ServerReportRuntime['groups'][number]> = isDifference ? [{ title: 'گروه', dataIndex: 'label', key: 'label' }, { title: 'افزاینده', key: 'increase', render: (_, row) => formatMetricValue(row.increase, 'price', currencyLabel) }, { title: 'کاهنده', key: 'decrease', render: (_, row) => formatMetricValue(row.decrease, 'price', currencyLabel) }, { title: 'خالص', key: 'net', render: (_, row) => formatMetricValue(Number(row.increase || 0) - Number(row.decrease || 0), 'price', currencyLabel) }, { title: 'درصد تغییر', key: 'change', render: (_, row) => Number(row.increase || 0) > 0 ? `${toPersianNumber(((Number(row.increase || 0) - Number(row.decrease || 0)) / Number(row.increase || 0) * 100).toFixed(1))}٪` : '—' }] : isPercentage ? [{ title: 'گروه', dataIndex: 'label', key: 'label' }, { title: 'مقدار هدف', dataIndex: 'target', key: 'target', render: (amount) => formatMetricValue(amount, 'number') }, { title: 'مقدار کل', dataIndex: 'total', key: 'total', render: (amount) => formatMetricValue(amount, 'number') }, { title: 'نرخ', key: 'rate', render: (_, row) => Number(row.total || 0) > 0 ? `${toPersianNumber((Number(row.target || 0) / Number(row.total || 0) * 100).toFixed(1))}٪` : '—' }] : [{ title: 'گروه', dataIndex: 'label', key: 'label' }, { title: 'تعداد', dataIndex: 'row_count', key: 'row_count', render: (amount) => toPersianNumber(amount) }, { title: 'نتیجه', key: 'metric', render: (_, row) => formatMetricValue(value(row), 'number', currencyLabel) }];
+  const pie = isDifference ? <div className="grid grid-cols-1 gap-5 xl:grid-cols-2"><div><Text strong>ترکیب افزاینده‌ها</Text><SimplePieChart items={increaseItems} valueLabel="افزاینده" valueFormatter={(amount) => formatMetricValue(amount, 'price', currencyLabel)} /></div><div><Text strong>ترکیب کاهنده‌ها</Text><SimplePieChart items={decreaseItems} valueLabel="کاهنده" valueFormatter={(amount) => formatMetricValue(amount, 'price', currencyLabel)} /></div></div> : isPercentage ? <SimplePieChart items={[{ label: 'هدف تحقق‌یافته', value: totals.target, tone: 'increase' }, { label: 'باقی‌مانده تا کل', value: Math.max(0, totals.total - totals.target), tone: 'decrease' }]} valueLabel="تقسیم هدف و کل" valueFormatter={(amount) => formatMetricValue(amount, 'number')} /> : <SimplePieChart items={items} valueLabel="مقدار" valueFormatter={(amount) => formatMetricValue(amount, 'number', currencyLabel)} />;
+  return <div className="mx-auto max-w-[1680px] animate-fadeIn p-4 md:p-8"><div className="rounded-[2rem] border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-[#1a1a1a]"><div className="mb-6 flex flex-wrap items-start justify-between gap-3"><div><Title level={3} className="!mb-1">{report.name}</Title><Text className="text-gray-500">{report.description || 'نتیجه محاسبه‌شده از داده‌های مجاز سرور'}</Text></div><Button icon={<ReloadOutlined />} loading={refreshing} onClick={onRefresh}>به‌روزرسانی</Button></div><div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-3">{isDifference ? <><Statistic title="جمع افزاینده‌ها" value={totals.increase} formatter={() => formatMetricValue(totals.increase, 'price', currencyLabel)} /><Statistic title="جمع کاهنده‌ها" value={totals.decrease} formatter={() => formatMetricValue(totals.decrease, 'price', currencyLabel)} /><Statistic title="خالص" value={totals.increase - totals.decrease} formatter={() => formatMetricValue(totals.increase - totals.decrease, 'price', currencyLabel)} /></> : isPercentage ? <><Statistic title="مقدار هدف" value={totals.target} formatter={() => formatMetricValue(totals.target, 'number')} /><Statistic title="مقدار کل" value={totals.total} formatter={() => formatMetricValue(totals.total, 'number')} /><Statistic title="نرخ" value={totals.total > 0 ? totals.target / totals.total * 100 : 0} suffix="٪" /></> : <><Statistic title="تعداد نتیجه" value={totals.count} formatter={() => toPersianNumber(totals.count)} /><Statistic title="تعداد گروه‌ها" value={groups.length} formatter={() => toPersianNumber(groups.length)} /><Statistic title="آخرین محاسبه" value={runtime.generated_at ? formatLastUpdatedAt(runtime.generated_at) : '—'} /></>}</div>{groups.length > 0 && <div className="mb-5 flex flex-wrap gap-2"><Button type={view === 'table' ? 'primary' : 'default'} onClick={() => setView('table')}>جدول</Button><Button icon={<BarChartOutlined />} type={view === 'bar' ? 'primary' : 'default'} onClick={() => setView('bar')}>ستونی</Button><Button icon={<PieChartOutlined />} type={view === 'pie' ? 'primary' : 'default'} onClick={() => setView('pie')}>دایره‌ای</Button><Button icon={<BarChartOutlined />} type={view === 'line' ? 'primary' : 'default'} onClick={() => setView('line')}>خطی</Button></div>}{view === 'table' ? <Table rowKey="key" columns={columns} dataSource={groups} pagination={{ pageSize: 20 }} scroll={{ x: true }} locale={{ emptyText: 'داده‌ای یافت نشد' }} /> : view === 'bar' ? isDifference ? <DifferenceBarChart groups={groups} currencyLabel={currencyLabel} /> : <SimpleBarChart items={items} valueLabel={isPercentage ? 'نرخ' : 'مقدار'} valueFormatter={(amount) => isPercentage ? `${toPersianNumber(amount.toFixed(1))}٪` : formatMetricValue(amount, 'number', currencyLabel)} /> : view === 'pie' ? pie : <SimpleLineChart items={items} valueFormatter={(amount) => isPercentage ? `${toPersianNumber(amount.toFixed(1))}٪` : formatMetricValue(amount, isDifference ? 'price' : 'number', currencyLabel)} />}</div></div>;
+};
+
 const isMissingReportsTableError = (error: any) => {
   const text = String(error?.message || error?.details || error || '').toLowerCase();
   return text.includes('report_definitions') && (text.includes('does not exist') || text.includes('could not find'));
@@ -216,7 +246,13 @@ const getDateGroupingValue = (value: any, granularity?: string) => {
     .reduce<Record<string, string>>((acc, part) => ({ ...acc, [part.type]: part.value }), {});
   const year = Number(parts.year || 0); const month = Number(parts.month || 0); const day = Number(parts.day || 0);
   const months = ['فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور', 'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'];
+  const quarters = ['بهار', 'تابستان', 'پاییز', 'زمستان'];
   if (!year || !month || !day) return null;
+  if (granularity === 'yearly') return { value: `${year}`, label: `سال ${toPersianNumber(year)}` };
+  if (granularity === 'quarterly') {
+    const quarter = Math.floor((month - 1) / 3);
+    return { value: `${year}-q${quarter + 1}`, label: `${quarters[quarter]} ${toPersianNumber(year)}` };
+  }
   if (granularity === 'monthly') return { value: `${year}-${String(month).padStart(2, '0')}`, label: `${months[month - 1]} ${toPersianNumber(year)}` };
   if (granularity === 'weekly') {
     const week = Math.ceil(day / 7);
@@ -236,7 +272,7 @@ const getReportGroupingValue = (grouping: any, field: any, row: Record<string, a
 
 const buildFlatGroupedRows = (
   sourceRows: ReportRow[],
-  groupBys: Array<{ field: string; direction: 'asc' | 'desc' }>,
+  groupBys: Array<{ field: string; direction: 'asc' | 'desc'; date_granularity?: string }>,
   fieldMap: Record<string, any>,
   relationOptions: Record<string, Array<{ label: string; value: string }>>,
   metricType: string,
@@ -251,10 +287,9 @@ const buildFlatGroupedRows = (
     const groupValues: Record<string, any> = {};
     groupBys.forEach((grouping) => {
       const field = fieldMap[grouping.field];
-      groupValues[grouping.field] = row[grouping.field];
-      groupLabels[grouping.field] = field
-        ? formatReportCellValue(field as any, row, relationOptions, currencyLabel)
-        : String(row[grouping.field] ?? '-');
+      const groupValue = getReportGroupingValue(grouping, field, row, relationOptions, currencyLabel);
+      groupValues[grouping.field] = groupValue.value;
+      groupLabels[grouping.field] = groupValue.label;
     });
 
     const bucketKey = groupBys
@@ -338,20 +373,6 @@ const buildReportResultCacheKey = (report: ReportDefinitionRecord, normalizedCon
     config: normalizedConfig,
   })}`;
 
-const readCachedReportResult = (cacheKey: string) => {
-  try {
-    const cached = sessionStorage.getItem(cacheKey);
-    return cached ? JSON.parse(cached) : null;
-  } catch {
-    try {
-      sessionStorage.removeItem(cacheKey);
-    } catch {
-      // ignore cache cleanup failures
-    }
-    return null;
-  }
-};
-
 const removeCachedReportResult = (cacheKey: string) => {
   try {
     sessionStorage.removeItem(cacheKey);
@@ -421,6 +442,7 @@ const ReportViewerPage: React.FC = () => {
   const [taskProcessStatusOptions, setTaskProcessStatusOptions] = useState<any[]>([]);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [surveyTemplateSnapshot, setSurveyTemplateSnapshot] = useState(() => normalizeSurveyTemplateSnapshot({}));
+  const [serverRuntime, setServerRuntime] = useState<ServerReportRuntime | null>(null);
   const [conditionsOpen, setConditionsOpen] = useState(false);
   const [draftConditionsAll, setDraftConditionsAll] = useState<any[]>([]);
   const [draftConditionsAny, setDraftConditionsAny] = useState<any[]>([]);
@@ -584,6 +606,7 @@ const ReportViewerPage: React.FC = () => {
     }
 
     setLoading(true);
+    setServerRuntime(null);
     try {
       const roleContext = await fetchCurrentUserRecordAccessContext(supabase);
       const access = resolveReportsAccessPermissions(roleContext.permissions);
@@ -602,13 +625,15 @@ const ReportViewerPage: React.FC = () => {
         return;
       }
 
-      if (roleContext.permissions?.[String(nextReport.module_id || '').trim()]?.view === false) {
+      const normalizedConfig = normalizeReportConfig(nextReport.config);
+      const hasExplicitReportAccess = normalizedConfig.viewer_user_ids.includes(String(roleContext.userId || ''))
+        || normalizedConfig.viewer_role_ids.includes(String(roleContext.roleId || ''));
+      if (roleContext.permissions?.[String(nextReport.module_id || '').trim()]?.view === false && !hasExplicitReportAccess) {
         setCanViewPage(false);
         setLoading(false);
         return;
       }
 
-      const normalizedConfig = normalizeReportConfig(nextReport.config);
       const nextModuleId = String(nextReport.module_id || '').trim();
       const nextScopedSurveyTemplateId = nextModuleId === 'surveys'
         ? getSurveyTemplateScopedIdFromConditions(normalizedConfig.conditions_all, normalizedConfig.conditions_any)
@@ -640,23 +665,23 @@ const ReportViewerPage: React.FC = () => {
   }, [message, reportId, taskProcessFields]);
 
   const executeReport = useCallback(async (forceRefresh = false) => {
-    if (!report || !moduleConfig) return;
+    if (!report) return;
     const cacheKey = buildReportResultCacheKey(report, config);
-    if (!forceRefresh) {
-      const parsed = readCachedReportResult(cacheKey);
-      if (parsed) {
-        setRows(Array.isArray(parsed.rows) ? parsed.rows : []);
-        setGroupedRows(Array.isArray(parsed.groupedRows) ? parsed.groupedRows : []);
-        setGroupedTreeRows(Array.isArray(parsed.groupedTreeRows) ? parsed.groupedTreeRows : []);
-        setChartRows(Array.isArray(parsed.chartRows) ? parsed.chartRows : []);
-        setLastUpdatedAt(String(parsed.lastUpdatedAt || ''));
-        return;
-      }
-    } else {
-      removeCachedReportResult(cacheKey);
-    }
+    if (forceRefresh) removeCachedReportResult(cacheKey);
     setExecuting(true);
     try {
+      const { data: runtimeData, error: runtimeError } = await supabase.functions.invoke('report-runtime', { body: { reportId: report.id } });
+      if (runtimeError) {
+        const runtimeFailure = await (runtimeError as any)?.context?.json?.().catch(() => null);
+        throw new Error(String(runtimeFailure?.error || runtimeError.message || 'report_runtime_failed'));
+      }
+      if (!runtimeData || !Array.isArray(runtimeData.groups)) throw new Error('خروجی محاسبهٔ گزارش معتبر نیست.');
+      setServerRuntime(runtimeData as ServerReportRuntime);
+      setCanViewPage(true);
+      setRows([]); setGroupedRows([]); setGroupedTreeRows([]); setChartRows([]);
+      setLastUpdatedAt(String(runtimeData.generated_at || new Date().toISOString()));
+      return;
+      if (!moduleConfig) return;
       const roleContext = await fetchCurrentUserRecordAccessContext(supabase);
       const modulePerm = roleContext.permissions?.[moduleId] || {};
       if (modulePerm.view === false) {
@@ -888,14 +913,15 @@ const ReportViewerPage: React.FC = () => {
           for (const fieldKey of tableRelationFieldKeys) {
             const relationMeta = parseReportTableRelationFieldKey(fieldKey);
             if (!relationMeta) continue;
-            const relationValue = candidateRow[buildReportTableFieldKey(relationMeta.blockId, relationMeta.relationColumnKey)];
+            const { blockId, relationColumnKey, targetModuleId, targetFieldKey } = relationMeta!;
+            const relationValue = candidateRow[buildReportTableFieldKey(blockId, relationColumnKey)];
             const relationRecordId = normalizeRelationRecordId(relationValue);
             if (!relationRecordId) {
               candidateRow[fieldKey] = null;
               continue;
             }
-            const relatedRecord = await fetchTableRelationRecord(relationMeta.targetModuleId, relationRecordId);
-            candidateRow[fieldKey] = relatedRecord?.[relationMeta.targetFieldKey] ?? null;
+            const relatedRecord = await fetchTableRelationRecord(targetModuleId, relationRecordId);
+            candidateRow[fieldKey] = relatedRecord?.[targetFieldKey] ?? null;
           }
 
           const passed = conditionsResolvedByServer || await evaluateWorkflowConditions({
@@ -936,7 +962,7 @@ const ReportViewerPage: React.FC = () => {
 
       const nextChartRows = chartDimensionField ? buildFlatGroupedRows(
         nextRows,
-        [{ field: chartDimensionField, direction: 'asc' }],
+        [config.group_bys.find((group) => group.field === chartDimensionField) || { field: String(chartDimensionField || ''), direction: 'asc' as const }],
         fieldMap,
         relationOptions,
         config.metric_type,
@@ -1083,8 +1109,17 @@ const ReportViewerPage: React.FC = () => {
         chartRows: nextChartRows,
         lastUpdatedAt: now,
       });
-    } catch {
-      message.error('اجرای گزارش ناموفق بود.');
+    } catch (error) {
+      const reason = String((error as any)?.message || error || '');
+      if (reason.includes('report_row_limit_exceeded') || reason.includes('report_expanded_row_limit_exceeded')) {
+        message.error('حجم داده گزارش از سقف اجرای امن عبور کرده است؛ برای اجرای کامل، بازه یا شرط‌های گزارش را محدود کنید.');
+      } else if (reason.includes('unsupported_report_grouping') || reason.includes('unsupported_report_metric') || reason.includes('unsupported_report_condition')) {
+        message.error('یکی از فیلدهای انتخاب‌شده در این گزارش هنوز برای اجرای سروری قابل محاسبه نیست؛ هیچ نتیجه ناقصی نمایش داده نشد.');
+      } else if (reason.includes('report_conditions_')) {
+        message.error('ارزیابی شرط‌های گزارش ناموفق بود؛ هیچ نتیجه ناقصی نمایش داده نشد.');
+      } else {
+        message.error('اجرای گزارش ناموفق بود.');
+      }
       setRows([]);
       setGroupedRows([]);
       setGroupedTreeRows([]);
@@ -1143,7 +1178,7 @@ const ReportViewerPage: React.FC = () => {
     return config.metric_type === 'avg' ? (count > 0 ? sum / count : 0) : sum;
   }, [activeMetricKey, config.group_bys.length, config.metric_fields, config.metric_subtract_fields, config.metric_type, groupedRows, rows]);
 
-  const metricCardValues = useMemo(() => {
+  const metricCardValues = useMemo<Array<{ key: string; label: string; value: number; fieldType: string; tone?: 'increase' | 'decrease' }>>(() => {
     if (config.metric_type === 'count') {
       return [{ key: '__count', label: 'تعداد رکوردها', value: rows.length, fieldType: 'number' }];
     }
@@ -1421,7 +1456,7 @@ const ReportViewerPage: React.FC = () => {
         : config.metric_type === 'avg'
           ? Number(row.metrics[activeMetricKey] || 0) / Math.max(1, Number(row.metric_counts[activeMetricKey] || 0))
           : Number(row.metrics[activeMetricKey] || 0);
-      return { label, value, count: row.row_count, tone: config.metric_type === 'difference' ? (value < 0 ? 'decrease' : 'increase') : undefined };
+      return { label, value, count: row.row_count, tone: config.metric_type === 'difference' ? (value < 0 ? 'decrease' as const : 'increase' as const) : undefined };
     });
   }, [activeMetricKey, chartAvailable, chartDimensionField, chartRows, config.metric_type]);
 
@@ -1761,6 +1796,10 @@ const ReportViewerPage: React.FC = () => {
 
   if (loading) {
     return <div className="flex h-[70vh] items-center justify-center"><Spin size="large" /></div>;
+  }
+
+  if (report && serverRuntime) {
+    return <ServerReportResultView report={report} runtime={serverRuntime} currencyLabel={currencyLabel} onRefresh={() => void executeReport(true)} refreshing={executing} />;
   }
 
   if (!canViewPage) {

@@ -5098,20 +5098,20 @@ const REPORT_MODULE_LABELS_FA: Record<string, string> = {
 };
 
 async function executeScheduledReport(url: string, key: string, report: ReportDefinitionRow): Promise<number> {
-  const config = report?.config && typeof report.config === 'object' ? report.config as Record<string, any> : {};
-  const moduleId = String(report.module_id || '').trim();
-  const table = getModuleTable(moduleId);
-  if (!moduleId || !table) return 0;
-  const rowLimit = Math.min(500, Math.max(1, Number(config.row_limit || 200)));
-  const rows = await dbGet(url, key, `${table}?org_id=eq.${encodeURIComponent(report.org_id)}&select=*&limit=${rowLimit}`).catch(() => []);
-  const conditionsAll = Array.isArray(config.conditions_all) ? config.conditions_all : [];
-  const conditionsAny = Array.isArray(config.conditions_any) ? config.conditions_any : [];
-  if (conditionsAll.length === 0 && conditionsAny.length === 0) return rows.length;
-  let count = 0;
-  for (const row of rows) {
-    if (await evaluateConditions(conditionsAll, conditionsAny, row, null, { url, key, orgId: report.org_id, moduleId })) count += 1;
-  }
-  return count;
+  const response = await fetch(`${url}/functions/v1/report-runtime`, {
+    method: 'POST',
+    headers: {
+      apikey: key,
+      authorization: `Bearer ${key}`,
+      'content-type': 'application/json',
+      'x-report-runtime-internal': '1',
+    },
+    body: JSON.stringify({ reportId: report.id }),
+  });
+  if (!response.ok) throw new Error(`محاسبهٔ سروری گزارش ناموفق بود: ${response.status}`);
+  const runtime = await response.json().catch(() => null);
+  if (!Array.isArray(runtime?.groups)) throw new Error('خروجی محاسبهٔ سروری گزارش معتبر نیست.');
+  return runtime.groups.reduce((count: number, group: any) => count + Number(group?.row_count || 0), 0);
 }
 
 async function buildScheduledReportMessage(url: string, key: string, report: ReportDefinitionRow, scheduledDueAt: Date): Promise<string> {

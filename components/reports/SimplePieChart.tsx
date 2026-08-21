@@ -15,12 +15,6 @@ interface SimplePieChartProps {
   valueFormatter?: (value: number) => React.ReactNode;
 }
 
-// رنگ نخست از پالت هر Tenant می‌آید و رنگ‌های مکمل برای تفکیک واضح sliceها ساخته می‌شوند.
-const PIE_COLORS = [
-  'rgb(var(--brand-600-rgb))', 'rgb(var(--brand-accent-pink-rgb))', '#0ea5e9', '#8b5cf6',
-  '#10b981', '#f97316', '#ec4899', '#14b8a6',
-];
-
 const SimplePieChart: React.FC<SimplePieChartProps> = ({ items, valueLabel = 'مقدار', valueFormatter }) => {
   const safeItems = useMemo(
     () => (Array.isArray(items) ? items.filter((item) => Number(item?.value || 0) !== 0).slice(0, 8) : []),
@@ -33,7 +27,7 @@ const SimplePieChart: React.FC<SimplePieChartProps> = ({ items, valueLabel = 'م
     if (total <= 0 || safeItems.length === 0) return '';
     let currentPercent = 0;
     return safeItems
-      .map((item, index) => {
+      .map((item) => {
         const percent = (Math.abs(Number(item.value || 0)) / total) * 100;
         const start = currentPercent;
         const end = currentPercent + percent;

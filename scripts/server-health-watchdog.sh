@@ -24,9 +24,17 @@ SSL_REMINDER_DAYS="${MONITOR_SSL_REMINDER_DAYS:-30,14,7,3,1}"
 EVENT_LOG="${MONITOR_EVENT_LOG:-$STATE_DIR/events.log}"
 EVENT_LOG_MAX_LINES="${MONITOR_EVENT_LOG_MAX_LINES:-1000}"
 COMMAND_TIMEOUT_SECONDS="${MONITOR_COMMAND_TIMEOUT_SECONDS:-12}"
+NETWORK_RETRY_ATTEMPTS="${MONITOR_NETWORK_RETRY_ATTEMPTS:-3}"
+NETWORK_RETRY_DELAY_SECONDS="${MONITOR_NETWORK_RETRY_DELAY_SECONDS:-2}"
 
 if [[ ! "$COMMAND_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   COMMAND_TIMEOUT_SECONDS=12
+fi
+if [[ ! "$NETWORK_RETRY_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
+  NETWORK_RETRY_ATTEMPTS=3
+fi
+if [[ ! "$NETWORK_RETRY_DELAY_SECONDS" =~ ^[0-9]+$ ]]; then
+  NETWORK_RETRY_DELAY_SECONDS=2
 fi
 
 mkdir -p "$STATE_DIR"
@@ -99,8 +107,18 @@ alert_reminder_once() {
 
 check_ssl_certificate() {
   local host="$1"
-  local certificate serial end_date expiry_timestamp now seconds_remaining days_remaining
-  certificate="$(timeout 20 openssl s_client -connect "${host}:443" -servername "$host" </dev/null 2>/dev/null | openssl x509 2>/dev/null)" || {
+  local certificate serial end_date expiry_timestamp now seconds_remaining days_remaining attempt
+  certificate=''
+  for ((attempt = 1; attempt <= NETWORK_RETRY_ATTEMPTS; attempt++)); do
+    if certificate="$(timeout 20 openssl s_client -connect "${host}:443" -servername "$host" </dev/null 2>/dev/null | openssl x509 2>/dev/null)"; then
+      break
+    fi
+    certificate=''
+    if (( attempt < NETWORK_RETRY_ATTEMPTS )); then
+      sleep "$NETWORK_RETRY_DELAY_SECONDS"
+    fi
+  done
+  [[ -n "$certificate" ]] || {
     alert_once "ssl-${host}-unreadable" "گواهی SSL دامنه ${host} خوانده نشد؛ اتصال امن یا تنظیمات Nginx را بررسی کنید."
     return
   }
@@ -183,10 +201,20 @@ for ssl_host in "${ssl_hosts[@]}"; do
 done
 
 if [[ -n "${MONITOR_API_URL:-}" ]]; then
-  api_probe_error_file="$(mktemp "${STATE_DIR}/api-probe.XXXXXX")"
-  api_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 15 "$MONITOR_API_URL" 2>"$api_probe_error_file" || true)"
-  api_probe_error_raw="$(tr '\r\n' ' ' < "$api_probe_error_file" | sed -E 's/[[:space:]]+/ /g')"
-  rm -f "$api_probe_error_file"
+  api_status=''
+  api_probe_error_raw=''
+  for ((api_attempt = 1; api_attempt <= NETWORK_RETRY_ATTEMPTS; api_attempt++)); do
+    api_probe_error_file="$(mktemp "${STATE_DIR}/api-probe.XXXXXX")"
+    api_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 15 "$MONITOR_API_URL" 2>"$api_probe_error_file" || true)"
+    api_probe_error_raw="$(tr '\r\n' ' ' < "$api_probe_error_file" | sed -E 's/[[:space:]]+/ /g')"
+    rm -f "$api_probe_error_file"
+    if [[ "$api_status" =~ ^[1-4][0-9][0-9]$ ]]; then
+      break
+    fi
+    if (( api_attempt < NETWORK_RETRY_ATTEMPTS )); then
+      sleep "$NETWORK_RETRY_DELAY_SECONDS"
+    fi
+  done
   api_probe_error=''
   if [[ -n "$api_probe_error_raw" ]]; then
     case "$api_probe_error_raw" in

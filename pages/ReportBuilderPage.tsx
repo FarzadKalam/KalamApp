@@ -33,6 +33,8 @@ import {
   isReportTableRelationFieldKey,
   normalizeReportConfig,
   type ReportDefinitionRecord,
+  type ReportCalculationMode,
+  type ReportReferenceMetric,
   type ReportGroupingDefinition,
   type ReportScheduleChannel,
   type ReportScheduleUnit,
@@ -44,6 +46,7 @@ import type { PermissionMap } from '../utils/permissions';
 import { resolveOverlayPopupContainer } from '../utils/popupContainer';
 import { loadTaskReportProcessRuntimeCatalog } from '../utils/reportTaskProcessFields';
 import { FieldType } from '../types';
+import { parseIdentityToken } from '../utils/identityDirectory';
 
 const { Title, Text } = Typography;
 
@@ -73,15 +76,23 @@ const ReportBuilderPage: React.FC = () => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [mainModuleId, setMainModuleId] = useState('');
+  const [calculationMode, setCalculationMode] = useState<ReportCalculationMode>('normal');
+  const [referenceReportIds, setReferenceReportIds] = useState<string[]>([]);
+  const [increaseMetrics, setIncreaseMetrics] = useState<ReportReferenceMetric[]>([]);
+  const [decreaseMetrics, setDecreaseMetrics] = useState<ReportReferenceMetric[]>([]);
+  const [percentageTargetMetric, setPercentageTargetMetric] = useState<ReportReferenceMetric | null>(null);
+  const [percentageTotalMetric, setPercentageTotalMetric] = useState<ReportReferenceMetric | null>(null);
+  const [referenceReports, setReferenceReports] = useState<ReportDefinitionRecord[]>([]);
+  const [viewerUserIds, setViewerUserIds] = useState<string[]>([]);
+  const [viewerRoleIds, setViewerRoleIds] = useState<string[]>([]);
   const [secondaryModuleIds, setSecondaryModuleIds] = useState<string[]>([]);
   const [rowLimit, setRowLimit] = useState(200);
   const [columns, setColumns] = useState<string[]>([]);
   const [conditionsAll, setConditionsAll] = useState<any[]>([]);
   const [conditionsAny, setConditionsAny] = useState<any[]>([]);
   const [groupBys, setGroupBys] = useState<ReportGroupingDefinition[]>([]);
-  const [metricType, setMetricType] = useState<'count' | 'sum' | 'avg' | 'difference'>('count');
+  const [metricType, setMetricType] = useState<'count' | 'sum' | 'avg'>('count');
   const [metricFields, setMetricFields] = useState<string[]>([]);
-  const [metricSubtractFields, setMetricSubtractFields] = useState<string[]>([]);
   const [chartDimensionField, setChartDimensionField] = useState<string | null>(null);
   const [defaultView, setDefaultView] = useState<'table' | 'table_and_chart'>('table_and_chart');
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
@@ -135,6 +146,54 @@ const ReportBuilderPage: React.FC = () => {
     () => getSummableReportFields(mainModuleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields),
     [mainModuleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields]
   );
+  const selectedReferenceReports = useMemo(
+    () => referenceReports.filter((report) => referenceReportIds.includes(String(report.id))),
+    [referenceReportIds, referenceReports]
+  );
+  const referenceMetricOptions = useMemo(() => selectedReferenceReports.flatMap((report) => {
+    const config = normalizeReportConfig(report.config);
+    const moduleFields = getReportableFields(String(report.module_id || ''), config.secondary_module_ids);
+    const fieldMap = new Map(moduleFields.map((field) => [field.key, field]));
+    const metrics = config.metric_type === 'sum'
+      ? config.metric_fields.map((fieldKey) => ({
+          key: fieldKey,
+          label: `${config.metric_type === 'avg' ? 'میانگین' : 'جمع'} ${fieldMap.get(fieldKey)?.labels?.fa || fieldKey}`,
+        }))
+      : config.metric_type === 'count' ? [{ key: '__count', label: 'تعداد رکوردها' }] : [];
+    return metrics.map((metric) => ({
+      value: `${report.id}::${metric.key}`,
+      label: `${report.name} — ${metric.label}`,
+      reportId: String(report.id),
+      metricKey: metric.key,
+    }));
+  }), [selectedReferenceReports]);
+  const compositeGroupOptions = useMemo(() => {
+    if (selectedReferenceReports.length === 0) return [];
+    const fieldLists = selectedReferenceReports.map((report) => {
+      const config = normalizeReportConfig(report.config);
+      return getGroupableReportFields(String(report.module_id || ''), config.secondary_module_ids);
+    });
+    const firstFields = fieldLists[0] || [];
+    const shared = firstFields.filter((field) => fieldLists.every((list) => list.some((candidate) => candidate.key === field.key && candidate.type === field.type)));
+    return [
+      { label: 'زمان گزارش‌ها', value: '__report_date__' },
+      ...shared.map((field) => ({ label: field.labels?.fa || field.key, value: field.key })),
+    ];
+  }, [selectedReferenceReports]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void supabase
+      .from('report_definitions')
+      .select('id,name,description,module_id,report_type,config,is_active,updated_at')
+      .eq('is_active', true)
+      .order('name')
+      .then(({ data, error }) => {
+        if (cancelled || error) return;
+        setReferenceReports((data || []).filter((item: any) => normalizeReportConfig(item.config).calculation_mode === 'normal') as ReportDefinitionRecord[]);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -290,6 +349,14 @@ const ReportBuilderPage: React.FC = () => {
       const config = normalizeReportConfig(report.config);
       setName(String(report.name || ''));
       setDescription(String(report.description || ''));
+      setCalculationMode(config.calculation_mode);
+      setReferenceReportIds(config.reference_report_ids);
+      setIncreaseMetrics(config.increase_metrics);
+      setDecreaseMetrics(config.decrease_metrics);
+      setPercentageTargetMetric(config.percentage_target_metric);
+      setPercentageTotalMetric(config.percentage_total_metric);
+      setViewerUserIds(config.viewer_user_ids);
+      setViewerRoleIds(config.viewer_role_ids);
       setMainModuleId(String(report.module_id || ''));
       setSecondaryModuleIds(config.secondary_module_ids);
       setRowLimit(config.row_limit);
@@ -297,9 +364,8 @@ const ReportBuilderPage: React.FC = () => {
       setConditionsAll(config.conditions_all);
       setConditionsAny(config.conditions_any);
       setGroupBys(config.group_bys);
-      setMetricType(config.metric_type);
+      setMetricType(config.metric_type === 'sum' || config.metric_type === 'avg' ? config.metric_type : 'count');
       setMetricFields(config.metric_fields);
-      setMetricSubtractFields(config.metric_subtract_fields);
       setChartDimensionField(config.chart_dimension_field);
       setDefaultView(config.default_view);
       setScheduleEnabled(config.schedule.enabled);
@@ -333,8 +399,12 @@ const ReportBuilderPage: React.FC = () => {
           message.error('نام گزارش الزامی است.');
           return false;
         }
-        if (!mainModuleId) {
+        if (calculationMode === 'normal' && !mainModuleId) {
           message.error('ماژول اصلی را انتخاب کنید.');
+          return false;
+        }
+        if (calculationMode !== 'normal' && referenceReportIds.length === 0) {
+          message.error('حداقل یک گزارش مرجع انتخاب کنید.');
           return false;
         }
         if (scheduleEnabled) {
@@ -359,7 +429,7 @@ const ReportBuilderPage: React.FC = () => {
           }
         }
       }
-      if (targetStep === 1 && columns.length === 0) {
+      if (targetStep === 1 && calculationMode === 'normal' && columns.length === 0) {
         message.error('حداقل یک ستون برای گزارش انتخاب کنید.');
         return false;
       }
@@ -368,18 +438,26 @@ const ReportBuilderPage: React.FC = () => {
           message.error('همه‌ی گروه‌بندی‌ها باید فیلد معتبر داشته باشند.');
           return false;
         }
-        if ((metricType === 'sum' || metricType === 'avg' || metricType === 'difference') && metricFields.length === 0) {
+        if (calculationMode === 'difference' && (increaseMetrics.length === 0 || decreaseMetrics.length === 0)) {
+          message.error('حداقل یک مقدار افزاینده و یک مقدار کاهنده انتخاب کنید.');
+          return false;
+        }
+        if (calculationMode === 'percentage' && (!percentageTargetMetric || !percentageTotalMetric)) {
+          message.error('مقدار هدف و مقدار کل را انتخاب کنید.');
+          return false;
+        }
+        if (calculationMode === 'normal' && (metricType === 'sum' || metricType === 'avg') && metricFields.length === 0) {
           message.error('برای معیار آماری انتخاب‌شده، حداقل یک فیلد عددی انتخاب کنید.');
           return false;
         }
-        if (metricType === 'difference' && metricSubtractFields.length === 0) {
-          message.error('برای محاسبه جمع و تفریق، حداقل یک فیلد کاهشی انتخاب کنید.');
+        if (calculationMode !== 'normal' && groupBys.some((group) => !group.field || selectedReferenceReports.some((report) => !group.source_fields?.[String(report.id)]))) {
+          message.error('برای هر گروه‌بندی، فیلد متناظر همه گزارش‌های مرجع را انتخاب کنید.');
           return false;
         }
       }
       return true;
     },
-    [columns.length, groupBys, mainModuleId, message, metricFields.length, metricSubtractFields.length, metricType, name, scheduleBotGroupIds.length, scheduleChannels.length, scheduleEnabled, scheduleFirstRunAt, scheduleIntervalAt, scheduleRecipientIds.length]
+    [calculationMode, columns.length, decreaseMetrics.length, groupBys, increaseMetrics.length, mainModuleId, message, metricFields.length, name, percentageTargetMetric, percentageTotalMetric, referenceReportIds.length, scheduleBotGroupIds.length, scheduleChannels.length, scheduleEnabled, scheduleFirstRunAt, scheduleIntervalAt, scheduleRecipientIds.length, selectedReferenceReports]
   );
 
   const handleSave = async () => {
@@ -390,6 +468,14 @@ const ReportBuilderPage: React.FC = () => {
       const userId = authData?.user?.id || null;
       const config = {
         ...createDefaultReportConfig(),
+        calculation_mode: calculationMode,
+        viewer_user_ids: viewerUserIds,
+        viewer_role_ids: viewerRoleIds,
+        reference_report_ids: calculationMode === 'normal' ? [] : referenceReportIds,
+        increase_metrics: calculationMode === 'difference' ? increaseMetrics : [],
+        decrease_metrics: calculationMode === 'difference' ? decreaseMetrics : [],
+        percentage_target_metric: calculationMode === 'percentage' ? percentageTargetMetric : null,
+        percentage_total_metric: calculationMode === 'percentage' ? percentageTotalMetric : null,
         secondary_module_id: secondaryModuleIds[0] || null,
         secondary_module_ids: secondaryModuleIds,
         columns,
@@ -397,9 +483,9 @@ const ReportBuilderPage: React.FC = () => {
         conditions_any: conditionsAny,
         row_limit: clampReportRowLimit(rowLimit),
         group_bys: groupBys.slice(0, 3),
-        metric_type: metricType,
-        metric_fields: metricType === 'sum' || metricType === 'avg' || metricType === 'difference' ? metricFields.slice(0, 4) : [],
-        metric_subtract_fields: metricType === 'difference' ? metricSubtractFields.slice(0, 4) : [],
+        metric_type: calculationMode === 'normal' ? metricType : 'count',
+        metric_fields: calculationMode === 'normal' && (metricType === 'sum' || metricType === 'avg') ? metricFields.slice(0, 4) : [],
+        metric_subtract_fields: [],
         show_group_summaries: true,
         chart_dimension_field: chartDimensionField || groupBys[0]?.field || null,
         default_view: defaultView,
@@ -409,7 +495,7 @@ const ReportBuilderPage: React.FC = () => {
           interval_unit: scheduleIntervalUnit,
           interval_at: scheduleIntervalAt,
           first_run_at: scheduleFirstRunAt,
-          module_label: MODULES[mainModuleId]?.titles?.fa || mainModuleId,
+          module_label: calculationMode === 'normal' ? (MODULES[mainModuleId]?.titles?.fa || mainModuleId) : 'گزارش ترکیبی',
           recipient_user_ids: scheduleRecipientIds,
           bot_group_ids: scheduleBotGroupIds,
           delivery_channels: scheduleChannels,
@@ -419,7 +505,7 @@ const ReportBuilderPage: React.FC = () => {
       const payload = {
         name: name.trim(),
         description: description.trim() || null,
-        module_id: mainModuleId,
+        module_id: calculationMode === 'normal' ? mainModuleId : '__composite_report__',
         report_type: 'module_report',
         config,
         updated_by: userId,
@@ -449,8 +535,11 @@ const ReportBuilderPage: React.FC = () => {
   };
 
   const addGrouping = () => {
-    if (groupBys.length >= 3 || groupableFields.length === 0) return;
-    const nextField = groupableFields.find((field) => !groupBys.some((item) => item.field === field.key));
+    const availableFields = calculationMode === 'normal'
+      ? groupableFields.map((field) => ({ key: field.key }))
+      : compositeGroupOptions.map((field) => ({ key: field.value }));
+    if (groupBys.length >= 3 || availableFields.length === 0) return;
+    const nextField = availableFields.find((field) => !groupBys.some((item) => item.field === field.key));
     setGroupBys((current) => [...current, { field: nextField?.key || '', direction: 'asc' }]);
   };
 
@@ -518,32 +607,60 @@ const ReportBuilderPage: React.FC = () => {
                 <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="مثال: فروش تفکیک‌شده بازاریاب‌ها" />
               </div>
               <div>
-                <div className="mb-2 font-bold">ماژول اصلی</div>
-                <Select className="w-full" showSearch optionFilterProp="label" value={mainModuleId || undefined} options={moduleOptions} placeholder="انتخاب ماژول اصلی" onChange={(value) => {
-                  setMainModuleId(String(value || ''));
-                  resetSecondarySelections();
-                }} />
-              </div>
-              <div>
-                <div className="mb-2 font-bold">ماژول فرعی</div>
-                <Select className="w-full" mode="multiple" allowClear showSearch optionFilterProp="label" value={secondaryModuleIds} options={secondaryModuleOptions} placeholder="در صورت نیاز انتخاب کنید" onChange={(value) => {
-                  setSecondaryModuleIds((value || []).map((item) => String(item)));
-                  setColumns([]);
-                  setConditionsAll([]);
-                  setConditionsAny([]);
+                <div className="mb-2 font-bold">نوع گزارش</div>
+                <Select className="w-full" value={calculationMode} options={[{ label: 'عادی', value: 'normal' }, { label: 'تفاضلی', value: 'difference' }, { label: 'درصدی', value: 'percentage' }]} onChange={(value) => {
+                  const nextMode = value as ReportCalculationMode;
+                  setCalculationMode(nextMode);
                   setGroupBys([]);
-                  setMetricFields([]);
+                  if (nextMode !== 'normal') {
+                    setColumns([]); setConditionsAll([]); setConditionsAny([]); setMetricFields([]);
+                  }
                 }} />
               </div>
-              <div>
-                <div className="mb-2 font-bold">حداکثر ردیف</div>
-                <InputNumber min={20} max={500} className="w-full persian-number" value={rowLimit} onChange={(value) => setRowLimit(clampReportRowLimit(value))} />
-              </div>
+              {calculationMode === 'normal' ? <>
+                <div>
+                  <div className="mb-2 font-bold">ماژول اصلی</div>
+                  <Select className="w-full" showSearch optionFilterProp="label" value={mainModuleId || undefined} options={moduleOptions} placeholder="انتخاب ماژول اصلی" onChange={(value) => { setMainModuleId(String(value || '')); resetSecondarySelections(); }} />
+                </div>
+                <div>
+                  <div className="mb-2 font-bold">ماژول فرعی</div>
+                  <Select className="w-full" mode="multiple" allowClear showSearch optionFilterProp="label" value={secondaryModuleIds} options={secondaryModuleOptions} placeholder="در صورت نیاز انتخاب کنید" onChange={(value) => { setSecondaryModuleIds((value || []).map((item) => String(item))); setColumns([]); setConditionsAll([]); setConditionsAny([]); setGroupBys([]); setMetricFields([]); }} />
+                </div>
+                <div>
+                  <div className="mb-2 font-bold">حداکثر ردیف</div>
+                  <InputNumber min={20} max={500} className="w-full persian-number" value={rowLimit} onChange={(value) => setRowLimit(clampReportRowLimit(value))} />
+                </div>
+              </> : <div className="md:col-span-2">
+                <div className="mb-2 font-bold">گزارش‌های مرجع</div>
+                <Select className="w-full" mode="multiple" showSearch optionFilterProp="label" value={referenceReportIds} options={referenceReports.filter((report) => String(report.id) !== String(reportId || '')).map((report) => ({ label: report.name, value: String(report.id) }))} placeholder="یک یا چند گزارش عادی را انتخاب کنید" onChange={(value) => {
+                  const ids = (value || []).map((item) => String(item));
+                  setReferenceReportIds(ids); setIncreaseMetrics((current) => current.filter((item) => ids.includes(item.report_id))); setDecreaseMetrics((current) => current.filter((item) => ids.includes(item.report_id))); setPercentageTargetMetric((current) => current && ids.includes(current.report_id) ? current : null); setPercentageTotalMetric((current) => current && ids.includes(current.report_id) ? current : null); setGroupBys([]);
+                }} />
+                <div className="mt-1 text-xs text-gray-500">فقط گزارش‌های عادیِ قابل‌دسترسی انتخاب می‌شوند؛ گزارش ترکیبی نمی‌تواند مرجع خودش باشد.</div>
+              </div>}
             </div>
 
             <div>
               <div className="mb-2 font-bold">توضیحات</div>
               <Input.TextArea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="شرح کوتاه هدف گزارش" />
+            </div>
+
+            <div className="rounded-[1.5rem] border border-gray-200 p-4 dark:border-gray-700">
+              <div className="mb-1 font-black text-gray-800 dark:text-gray-100">اجازه مشاهده گزارش</div>
+              <div className="mb-3 text-sm text-gray-500">کاربران یا نقش‌های انتخاب‌شده، نتیجه کامل محاسبات این گزارش را می‌بینند؛ جزئیات خام ماژول‌ها همچنان با سطح دسترسی خودشان کنترل می‌شود.</div>
+              <AdaptiveIdentityPicker
+                className="w-full"
+                mode="multiple"
+                scopes={['user', 'role']}
+                valueMode="token"
+                value={[...viewerUserIds.map((id) => `user:${id}`), ...viewerRoleIds.map((id) => `role:${id}`)]}
+                placeholder="انتخاب کاربر یا نقش برای مشاهده گزارش"
+                onChange={(value) => {
+                  const tokens = (Array.isArray(value) ? value : []).map((item) => parseIdentityToken(item).token).filter((token): token is Exclude<typeof token, null> => token !== null);
+                  setViewerUserIds(tokens.filter((token) => token.startsWith('user:')).map((token) => token.slice('user:'.length)));
+                  setViewerRoleIds(tokens.filter((token) => token.startsWith('role:')).map((token) => token.slice('role:'.length)));
+                }}
+              />
             </div>
 
             <div className="rounded-[1.5rem] border border-gray-200 p-4 dark:border-gray-700">
@@ -630,7 +747,7 @@ const ReportBuilderPage: React.FC = () => {
         )}
 
         {step === 1 && (
-          <div className="space-y-4">
+          calculationMode !== 'normal' ? <Alert type="info" showIcon message="بر اساس گزارش‌های مرجع" description="ستون‌های گزارش ترکیبی از خروجی‌های گزارش‌های مرجع ساخته می‌شوند." /> : <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <div className="font-black text-gray-800 dark:text-gray-100">انتخاب ستون‌ها</div>
@@ -655,7 +772,7 @@ const ReportBuilderPage: React.FC = () => {
         )}
 
         {step === 2 && (
-          <div className="space-y-6">
+          calculationMode !== 'normal' ? <Alert type="info" showIcon message="بر اساس گزارش‌های مرجع" description="فیلترهای هر منبع در خود گزارش مرجع حفظ می‌شوند." /> : <div className="space-y-6">
             <div className="rounded-[1.5rem] border border-gray-200 p-4 dark:border-gray-700">
               <div className="mb-4 font-black text-gray-800 dark:text-gray-100">همه این شرط‌ها باید برقرار باشند</div>
               <WorkflowConditionsGroup
@@ -702,16 +819,17 @@ const ReportBuilderPage: React.FC = () => {
                       showSearch
                       optionFilterProp="label"
                       value={item.field || undefined}
-                      options={groupableFields
-                        .filter((field) => field.key === item.field || !groupBys.some((group, groupIndex) => group.field === field.key && groupIndex !== index))
-                        .map((field) => ({ label: field.labels?.fa || field.key, value: field.key }))}
-                      onChange={(value) => setGroupBys((current) => current.map((group, groupIndex) => groupIndex === index ? { ...group, field: String(value || '') } : group))}
+                      options={(calculationMode === 'normal'
+                        ? groupableFields.map((field) => ({ label: field.labels?.fa || field.key, value: field.key }))
+                        : compositeGroupOptions
+                      ).filter((field) => field.value === item.field || !groupBys.some((group, groupIndex) => group.field === field.value && groupIndex !== index))}
+                      onChange={(value) => setGroupBys((current) => current.map((group, groupIndex) => groupIndex === index ? { ...group, field: String(value || ''), source_fields: {} } : group))}
                     />
-                    {([FieldType.DATE, FieldType.DATETIME] as any[]).includes(groupableFields.find((field) => field.key === item.field)?.type) ? (
+                    {(item.field === '__report_date__' || ([FieldType.DATE, FieldType.DATETIME] as any[]).includes(groupableFields.find((field) => field.key === item.field)?.type)) ? (
                       <Select
                         className="w-full"
                         value={item.date_granularity || 'daily'}
-                        options={[{ label: 'روزانه', value: 'daily' }, { label: 'هفتگی', value: 'weekly' }, { label: 'ماهانه', value: 'monthly' }]}
+                        options={[{ label: 'روزانه', value: 'daily' }, { label: 'هفتگی', value: 'weekly' }, { label: 'ماهانه', value: 'monthly' }, { label: 'فصلی', value: 'quarterly' }, { label: 'سالانه', value: 'yearly' }]}
                         onChange={(value) => setGroupBys((current) => current.map((group, groupIndex) => groupIndex === index ? { ...group, date_granularity: value } : group))}
                       />
                     ) : <div />}
@@ -722,6 +840,20 @@ const ReportBuilderPage: React.FC = () => {
                       onChange={(value) => setGroupBys((current) => current.map((group, groupIndex) => groupIndex === index ? { ...group, direction: value as 'asc' | 'desc' } : group))}
                     />
                     <Button danger icon={<DeleteOutlined />} onClick={() => setGroupBys((current) => current.filter((_, groupIndex) => groupIndex !== index))} />
+                    {calculationMode !== 'normal' && item.field && (
+                      <div className="md:col-span-4 rounded-xl bg-gray-50 p-3 dark:bg-white/5">
+                        <div className="mb-2 text-xs font-bold text-gray-600 dark:text-gray-300">فیلد متناظر در هر گزارش مرجع</div>
+                        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                          {selectedReferenceReports.map((report) => {
+                            const refConfig = normalizeReportConfig(report.config);
+                            const fields = item.field === '__report_date__'
+                              ? getGroupableReportFields(String(report.module_id || ''), refConfig.secondary_module_ids).filter((field) => [FieldType.DATE, FieldType.DATETIME].includes(field.type))
+                              : getGroupableReportFields(String(report.module_id || ''), refConfig.secondary_module_ids).filter((field) => field.key === item.field);
+                            return <Select key={report.id} className="w-full" value={item.source_fields?.[String(report.id)] || undefined} options={fields.map((field) => ({ label: `${report.name}: ${field.labels?.fa || field.key}`, value: field.key }))} placeholder={`${report.name}: انتخاب فیلد`} onChange={(value) => setGroupBys((current) => current.map((group, groupIndex) => groupIndex === index ? { ...group, source_fields: { ...(group.source_fields || {}), [String(report.id)]: String(value || '') } } : group))} />;
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -733,11 +865,12 @@ const ReportBuilderPage: React.FC = () => {
                 این تنظیمات برای کارت‌های آماری، نمودار و ردیف جمع زیر هر گروه استفاده می‌شود.
               </div>
               <div className="space-y-4">
-                <Select className="w-full" value={metricType} options={[{ label: 'تعداد رکوردها', value: 'count' }, { label: 'جمع فیلدهای عددی/مبلغی', value: 'sum' }, { label: 'میانگین فیلدهای عددی/مبلغی', value: 'avg' }, { label: 'جمع و تفریق فیلدهای عددی/مبلغی', value: 'difference' }]} onChange={(value) => {
-                  setMetricType(value as 'count' | 'sum' | 'avg' | 'difference');
-                  if (value !== 'sum' && value !== 'avg' && value !== 'difference') { setMetricFields([]); setMetricSubtractFields([]); }
-                }} />
-                {(metricType === 'sum' || metricType === 'avg' || metricType === 'difference') && (
+                {calculationMode === 'normal' ? <>
+                  <Select className="w-full" value={metricType} options={[{ label: 'تعداد رکوردها', value: 'count' }, { label: 'جمع فیلدهای عددی/مبلغی', value: 'sum' }, { label: 'میانگین فیلدهای عددی/مبلغی', value: 'avg' }]} onChange={(value) => {
+                    setMetricType(value as 'count' | 'sum' | 'avg');
+                    if (value !== 'sum' && value !== 'avg') setMetricFields([]);
+                  }} />
+                {(metricType === 'sum' || metricType === 'avg') && (
                   <Select
                     className="w-full"
                     mode="multiple"
@@ -749,18 +882,19 @@ const ReportBuilderPage: React.FC = () => {
                     onChange={(value) => setMetricFields((value || []).map((item) => String(item)).slice(0, 4))}
                   />
                 )}
-                {metricType === 'difference' && (
-                  <Select
-                    className="w-full"
-                    mode="multiple"
-                    showSearch
-                    optionFilterProp="label"
-                    value={metricSubtractFields}
-                    options={summableFields.map((field) => ({ label: field.labels?.fa || field.key, value: field.key }))}
-                    placeholder="فیلدهای کاهشی (از جمع کم می‌شوند)"
-                    onChange={(value) => setMetricSubtractFields((value || []).map((item) => String(item)).slice(0, 4))}
-                  />
-                )}
+                </> : calculationMode === 'difference' ? <>
+                  <div className="font-bold">مقادیر افزاینده</div>
+                  <Select className="w-full" mode="multiple" showSearch optionFilterProp="label" value={increaseMetrics.map((item) => `${item.report_id}::${item.metric_key}`)} options={referenceMetricOptions.filter((option) => !decreaseMetrics.some((item) => `${item.report_id}::${item.metric_key}` === option.value))} placeholder="نتیجه‌های اصلی گزارش‌های مرجع" onChange={(values) => setIncreaseMetrics((values || []).map((value) => { const [report_id, metric_key] = String(value).split('::'); return { report_id, metric_key }; }))} />
+                  <div className="font-bold">مقادیر کاهنده</div>
+                  <Select className="w-full" mode="multiple" showSearch optionFilterProp="label" value={decreaseMetrics.map((item) => `${item.report_id}::${item.metric_key}`)} options={referenceMetricOptions.filter((option) => !increaseMetrics.some((item) => `${item.report_id}::${item.metric_key}` === option.value))} placeholder="نتیجه‌هایی که از مقدار افزاینده کم می‌شوند" onChange={(values) => setDecreaseMetrics((values || []).map((value) => { const [report_id, metric_key] = String(value).split('::'); return { report_id, metric_key }; }))} />
+                  <Alert type="info" showIcon message="خالص هر گروه از مجموع افزاینده‌ها منهای مجموع کاهنده‌ها به‌دست می‌آید." />
+                </> : <>
+                  <div className="font-bold">مقدار هدف (صورت)</div>
+                  <Select className="w-full" showSearch optionFilterProp="label" value={percentageTargetMetric ? `${percentageTargetMetric.report_id}::${percentageTargetMetric.metric_key}` : undefined} options={referenceMetricOptions.filter((option) => option.value !== (percentageTotalMetric ? `${percentageTotalMetric.report_id}::${percentageTotalMetric.metric_key}` : ''))} placeholder="خروجی هدف را انتخاب کنید" onChange={(value) => { const [report_id, metric_key] = String(value).split('::'); setPercentageTargetMetric({ report_id, metric_key }); }} />
+                  <div className="font-bold">مقدار کل (مخرج)</div>
+                  <Select className="w-full" showSearch optionFilterProp="label" value={percentageTotalMetric ? `${percentageTotalMetric.report_id}::${percentageTotalMetric.metric_key}` : undefined} options={referenceMetricOptions.filter((option) => option.value !== (percentageTargetMetric ? `${percentageTargetMetric.report_id}::${percentageTargetMetric.metric_key}` : ''))} placeholder="خروجی کل را انتخاب کنید" onChange={(value) => { const [report_id, metric_key] = String(value).split('::'); setPercentageTotalMetric({ report_id, metric_key }); }} />
+                  <Alert type="info" showIcon message="نرخ هر گروه از مقدار هدف تقسیم بر مقدار کل محاسبه می‌شود." />
+                </>}
               </div>
             </div>
 
@@ -775,7 +909,7 @@ const ReportBuilderPage: React.FC = () => {
                     showSearch
                     optionFilterProp="label"
                     value={chartDimensionField || undefined}
-                    options={groupableFields.map((field) => ({ label: field.labels?.fa || field.key, value: field.key }))}
+                    options={calculationMode === 'normal' ? groupableFields.map((field) => ({ label: field.labels?.fa || field.key, value: field.key })) : compositeGroupOptions}
                     placeholder="معیار/عنوان نمودار؛ اگر خالی باشد گروه اول استفاده می‌شود"
                     onChange={(value) => setChartDimensionField(value ? String(value) : null)}
                   />

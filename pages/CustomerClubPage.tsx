@@ -5,7 +5,6 @@ import {
   Card,
   Empty,
   Form,
-  Input,
   Modal,
   Statistic,
   Table,
@@ -96,12 +95,6 @@ type ClubEvent = {
   customer?: Record<string, any> | null;
 };
 
-type CustomerOption = {
-  label: string;
-  value: string;
-  record: Record<string, any>;
-};
-
 const ruleTypeOptions = [
   { label: 'پورسانت معرفی مشتری', value: 'referral' },
   { label: 'هدیه تولد', value: 'birthday' },
@@ -185,7 +178,6 @@ const CustomerClubPage: React.FC = () => {
   const [discountCodes, setDiscountCodes] = useState<DiscountCode[]>([]);
   const [ledgerRows, setLedgerRows] = useState<LedgerRow[]>([]);
   const [clubEvents, setClubEvents] = useState<ClubEvent[]>([]);
-  const [customerOptions, setCustomerOptions] = useState<CustomerOption[]>([]);
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
 
@@ -222,7 +214,7 @@ const CustomerClubPage: React.FC = () => {
     setLoading(true);
     try {
       await loadAccess();
-      const [customersRes, rulesRes, discountsRes, ledgerRes, optionsRes, conditionOptions, eventsRes] = await Promise.all([
+      const [customersRes, rulesRes, discountsRes, ledgerRes, conditionOptions, eventsRes] = await Promise.all([
         supabase
           .from('customers')
           .select('id, full_name, business_name, system_code, total_balance, loyalty_credit_balance', { count: 'exact' })
@@ -243,16 +235,11 @@ const CustomerClubPage: React.FC = () => {
           .select('id, customer_id, entry_type, source_type, amount, effective_date, description, created_at, customer:customers(id, full_name, business_name, system_code)')
           .order('created_at', { ascending: false })
           .limit(300),
-        supabase
-          .from('customers')
-          .select('id, full_name, business_name, system_code')
-          .order('full_name', { ascending: true })
-          .limit(500),
         loadWorkflowConditionEditorOptions('customers', conditionFields),
         supabase.from('customer_club_events').select('id, event_type, title, created_at, payload, customer:customers(id, full_name, business_name, system_code)').order('created_at', { ascending: false }).limit(300),
       ]);
 
-      const firstError = customersRes.error || rulesRes.error || discountsRes.error || ledgerRes.error || optionsRes.error;
+      const firstError = customersRes.error || rulesRes.error || discountsRes.error || ledgerRes.error;
       if (firstError) throw firstError;
 
       const customerRows = customersRes.data || [];
@@ -264,11 +251,6 @@ const CustomerClubPage: React.FC = () => {
       setDiscountCodes(discountRows);
       setLedgerRows(ledger);
       setClubEvents(eventsRes.error ? [] : (eventsRes.data || []) as ClubEvent[]);
-      setCustomerOptions((optionsRes.data || []).map((record: any) => ({
-        value: String(record.id),
-        label: getCustomerTitle(record),
-        record,
-      })));
       setDynamicOptions(conditionOptions.dynamicOptions);
       setRelationOptions(conditionOptions.relationOptions);
       setSummary({

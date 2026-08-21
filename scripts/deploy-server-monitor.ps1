@@ -253,6 +253,24 @@ cleanup() {
 } > "$CRON_STAGING"
 run_privileged install -D -m 644 "$CRON_STAGING" "$REMOTE_CRON"
 
+# نسخه‌های قدیمی نصب، همان watchdog را در crontab کاربر root هم نگه می‌داشتند.
+# فقط همان خط دقیقِ قدیمی را حذف می‌کنیم تا زمان‌بندی‌های دیگر root دست‌نخورده بمانند.
+ROOT_CRONTAB_STAGING="$(mktemp)"
+ROOT_CRONTAB_NORMALIZED="$(mktemp)"
+ROOT_CRONTAB_FILTERED="$(mktemp)"
+cleanup() {
+  rm -f "$UPLOADED_SCRIPT" "$CRON_STAGING" "$ROOT_CRONTAB_STAGING" "$ROOT_CRONTAB_NORMALIZED" "$ROOT_CRONTAB_FILTERED"
+}
+if run_privileged crontab -l > "$ROOT_CRONTAB_STAGING" 2>/dev/null; then
+  # crontabهای قدیمی ممکن است با انتهای خط Windows باقی مانده باشند.
+  sed 's/\r$//' "$ROOT_CRONTAB_STAGING" > "$ROOT_CRONTAB_NORMALIZED"
+  grep -Fvx "* * * * * $REMOTE_SCRIPT >/dev/null 2>&1" "$ROOT_CRONTAB_NORMALIZED" > "$ROOT_CRONTAB_FILTERED" || true
+  if ! cmp -s "$ROOT_CRONTAB_NORMALIZED" "$ROOT_CRONTAB_FILTERED"; then
+    run_privileged crontab "$ROOT_CRONTAB_FILTERED"
+    echo 'Removed the legacy duplicate root crontab entry for the watchdog'
+  fi
+fi
+
 run_privileged bash -n "$REMOTE_SCRIPT"
 
 if [ ! -r "$REMOTE_CONFIG" ]; then

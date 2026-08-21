@@ -8,7 +8,10 @@ import { parseWorkflowRelatedFieldKey, WORKFLOW_ASSIGNEE_FIELD_KEY, type Workflo
 import { isReportTaskProcessFieldKey } from './reportTaskProcessFields';
 import { parseProcessLinkedFieldKey } from './processTargets';
 
+/** `difference` is retained only to safely read old stored configurations; the builder no longer creates it. */
 export type ReportMetricType = 'count' | 'sum' | 'avg' | 'difference';
+export type ReportCalculationMode = 'normal' | 'difference' | 'percentage';
+export type ReportDateGranularity = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
 export type ReportDefaultView = 'table' | 'table_and_chart';
 export type ReportGroupDirection = 'asc' | 'desc';
 export type ReportScheduleUnit = 'hour' | 'day';
@@ -17,7 +20,14 @@ export type ReportScheduleChannel = 'note' | 'email' | 'sms' | 'bot_group';
 export interface ReportGroupingDefinition {
   field: string;
   direction: ReportGroupDirection;
-  date_granularity?: 'monthly' | 'weekly' | 'daily';
+  date_granularity?: ReportDateGranularity;
+  /** For composite reports, the equivalent source field for every reference report. */
+  source_fields?: Record<string, string>;
+}
+
+export interface ReportReferenceMetric {
+  report_id: string;
+  metric_key: string;
 }
 
 export interface ReportScheduleConfig {
@@ -35,6 +45,15 @@ export interface ReportScheduleConfig {
 }
 
 export interface ReportDefinitionConfig {
+  calculation_mode: ReportCalculationMode;
+  /** Explicit report viewers. These grants are scoped to the report and organization. */
+  viewer_user_ids: string[];
+  viewer_role_ids: string[];
+  reference_report_ids: string[];
+  increase_metrics: ReportReferenceMetric[];
+  decrease_metrics: ReportReferenceMetric[];
+  percentage_target_metric: ReportReferenceMetric | null;
+  percentage_total_metric: ReportReferenceMetric | null;
   secondary_module_id: string | null;
   secondary_module_ids: string[];
   columns: string[];
@@ -298,6 +317,14 @@ export const createDefaultReportScheduleConfig = (): ReportScheduleConfig => ({
 });
 
 export const createDefaultReportConfig = (): ReportDefinitionConfig => ({
+  calculation_mode: 'normal',
+  viewer_user_ids: [],
+  viewer_role_ids: [],
+  reference_report_ids: [],
+  increase_metrics: [],
+  decrease_metrics: [],
+  percentage_target_metric: null,
+  percentage_total_metric: null,
   secondary_module_id: null,
   secondary_module_ids: [],
   columns: [],
@@ -330,8 +357,16 @@ export const clampGroupingDefinitions = (value: unknown): ReportGroupingDefiniti
       return {
         field: String((item as any)?.field || '').trim(),
         direction,
-        date_granularity: ['monthly', 'weekly', 'daily'].includes(String((item as any)?.date_granularity || ''))
-          ? String((item as any).date_granularity) as 'monthly' | 'weekly' | 'daily'
+        date_granularity: ['monthly', 'weekly', 'daily', 'quarterly', 'yearly'].includes(String((item as any)?.date_granularity || ''))
+          ? String((item as any).date_granularity) as ReportDateGranularity
+          : undefined,
+        source_fields: (item as any)?.source_fields && typeof (item as any).source_fields === 'object'
+          ? Object.entries((item as any).source_fields).reduce<Record<string, string>>((acc, [reportId, fieldKey]) => {
+              const normalizedReportId = String(reportId || '').trim();
+              const normalizedFieldKey = String(fieldKey || '').trim();
+              if (normalizedReportId && normalizedFieldKey) acc[normalizedReportId] = normalizedFieldKey;
+              return acc;
+            }, {})
           : undefined,
       };
     })
@@ -373,8 +408,12 @@ export const normalizeReportScheduleConfig = (value: unknown): ReportScheduleCon
 
 export const normalizeReportConfig = (value: Partial<ReportDefinitionConfig> | null | undefined): ReportDefinitionConfig => {
   const defaults = createDefaultReportConfig();
-  const metricType: ReportMetricType =
-    value?.metric_type === 'sum' || value?.metric_type === 'avg' || value?.metric_type === 'difference' ? value.metric_type : 'count';
+  const calculationMode: ReportCalculationMode = (value as any)?.calculation_mode === 'difference' || (value as any)?.calculation_mode === 'percentage'
+    ? (value as any).calculation_mode
+    : 'normal';
+  // گزارش‌های تفاضلی نسخه‌های قبل از این نسخه، گزارش عادی‌اند؛ تفاضل آن‌ها عمداً
+  // به مدل جدید تبدیل نمی‌شود تا هیچ منبع یا معنای مالی به‌صورت حدسی تغییر نکند.
+  const metricType: ReportMetricType = value?.metric_type === 'sum' || value?.metric_type === 'avg' ? value.metric_type : 'count';
   const legacyGroupBy = value && (value as any).group_by ? String((value as any).group_by || '').trim() : '';
   const legacyMetricField = value && (value as any).metric_field ? String((value as any).metric_field || '').trim() : '';
 
@@ -383,8 +422,13 @@ export const normalizeReportConfig = (value: Partial<ReportDefinitionConfig> | n
     : legacyMetricField
       ? [legacyMetricField]
       : [];
-  const metricSubtractFields = Array.isArray((value as any)?.metric_subtract_fields)
-    ? (value as any).metric_subtract_fields.map((item: any) => String(item || '').trim()).filter(Boolean)
+  const normalizeReferenceMetric = (candidate: any): ReportReferenceMetric | null => {
+    const reportId = String(candidate?.report_id || '').trim();
+    const metricKey = String(candidate?.metric_key || '').trim();
+    return reportId && metricKey ? { report_id: reportId, metric_key: metricKey } : null;
+  };
+  const referenceReportIds: string[] = Array.isArray((value as any)?.reference_report_ids)
+    ? Array.from(new Set<string>((value as any).reference_report_ids.map((item: any) => String(item || '').trim()).filter(Boolean)))
     : [];
 
   const secondaryModuleIds = Array.isArray((value as any)?.secondary_module_ids)
@@ -416,6 +460,22 @@ export const normalizeReportConfig = (value: Partial<ReportDefinitionConfig> | n
   return {
     ...defaults,
     ...value,
+    calculation_mode: calculationMode,
+    viewer_user_ids: Array.isArray((value as any)?.viewer_user_ids)
+      ? Array.from(new Set<string>((value as any).viewer_user_ids.map((item: any) => String(item || '').trim()).filter(Boolean)))
+      : [],
+    viewer_role_ids: Array.isArray((value as any)?.viewer_role_ids)
+      ? Array.from(new Set<string>((value as any).viewer_role_ids.map((item: any) => String(item || '').trim()).filter(Boolean)))
+      : [],
+    reference_report_ids: referenceReportIds,
+    increase_metrics: Array.isArray((value as any)?.increase_metrics)
+      ? (value as any).increase_metrics.map(normalizeReferenceMetric).filter(Boolean).slice(0, 24) as ReportReferenceMetric[]
+      : [],
+    decrease_metrics: Array.isArray((value as any)?.decrease_metrics)
+      ? (value as any).decrease_metrics.map(normalizeReferenceMetric).filter(Boolean).slice(0, 24) as ReportReferenceMetric[]
+      : [],
+    percentage_target_metric: normalizeReferenceMetric((value as any)?.percentage_target_metric),
+    percentage_total_metric: normalizeReferenceMetric((value as any)?.percentage_total_metric),
     secondary_module_id: secondaryModuleIds[0] || null,
     secondary_module_ids: Array.from(new Set(secondaryModuleIds)),
     columns: Array.isArray(value?.columns) ? value!.columns.map((item) => String(item || '').trim()).filter(Boolean) : defaults.columns,
@@ -424,8 +484,9 @@ export const normalizeReportConfig = (value: Partial<ReportDefinitionConfig> | n
     row_limit: clampReportRowLimit(value?.row_limit),
     group_bys: groupBys,
     metric_type: metricType,
-    metric_fields: metricType === 'sum' || metricType === 'avg' || metricType === 'difference' ? metricFields.slice(0, 4) : [],
-    metric_subtract_fields: metricType === 'difference' ? metricSubtractFields.slice(0, 4) : [],
+    metric_fields: metricType === 'sum' || metricType === 'avg' ? metricFields.slice(0, 4) : [],
+    // این تنظیم قدیمی دیگر نباید وارد هیچ مسیر اجرایی تازه‌ای شود.
+    metric_subtract_fields: [],
     show_group_summaries: (value as any)?.show_group_summaries === false ? false : true,
     chart_dimension_field: chartDimensionField,
     default_view: value?.default_view === 'table' ? 'table' : 'table_and_chart',

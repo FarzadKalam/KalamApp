@@ -6,6 +6,7 @@ import {
   buildReportTableRelationFieldKey,
   getMainReportableFields,
   isDeletedReportRecord,
+  normalizeReportConfig,
 } from './reporting';
 import { createWorkflowRelatedFieldKey } from './workflowTypes';
 import { buildReportTaskProcessFieldKey } from './reportTaskProcessFields';
@@ -131,5 +132,43 @@ describe('getMainReportableFields', () => {
     const fields = getMainReportableFields('tasks');
     expect(fields.map((field) => field.key)).toContain('__workflow_assignee');
     expect(fields.map((field) => field.key)).not.toContain('assignee_id');
+  });
+});
+
+describe('normalizeReportConfig', () => {
+  it('keeps composite sources, explicit viewers, and quarterly date grouping', () => {
+    const config = normalizeReportConfig({
+      calculation_mode: 'difference',
+      viewer_user_ids: ['user-a', '', 'user-a'],
+      viewer_role_ids: ['role-a'],
+      reference_report_ids: ['report-a', 'report-b', 'report-a'],
+      increase_metrics: [{ report_id: 'report-a', metric_key: '__count' }],
+      decrease_metrics: [{ report_id: 'report-b', metric_key: 'amount' }],
+      group_bys: [{
+        field: '__report_date__',
+        direction: 'asc',
+        date_granularity: 'quarterly',
+        source_fields: { 'report-a': 'created_at', 'report-b': 'issued_at' },
+      }],
+    });
+
+    expect(config.calculation_mode).toBe('difference');
+    expect(config.viewer_user_ids).toEqual(['user-a']);
+    expect(config.reference_report_ids).toEqual(['report-a', 'report-b']);
+    expect(config.group_bys[0]).toMatchObject({
+      date_granularity: 'quarterly',
+      source_fields: { 'report-a': 'created_at', 'report-b': 'issued_at' },
+    });
+  });
+
+  it('converts the removed legacy difference metric to a safe normal report', () => {
+    const config = normalizeReportConfig({
+      metric_type: 'difference',
+      metric_fields: ['income'],
+      metric_subtract_fields: ['expense'],
+    });
+
+    expect(config.calculation_mode).toBe('normal');
+    expect(config.metric_type).toBe('count');
   });
 });
