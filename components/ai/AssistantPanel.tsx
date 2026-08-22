@@ -27,6 +27,7 @@ import { buildAiRecordCreationSchema, buildAiRecordModuleOptions } from '../../u
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 import { shouldSubmitComposerOnEnter } from '../../utils/composeKeyboard';
 import { buildSmartAiThreadTitle } from '../../utils/aiThreadTitle';
+import { resolveModalPopupContainer } from '../../utils/popupContainer';
 import MessageAttachmentGallery from '../messaging/MessageAttachmentGallery';
 import { extractAiMessageAttachments, normalizeAiMessageText } from '../../utils/aiMessageParts';
 import ComposerAttachmentChips, { type ComposerAttachmentChipItem } from '../common/ComposerAttachmentChips';
@@ -3492,6 +3493,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           placeholder="انتخاب کاربران یا نقش‌ها"
           pickerTitle="اشتراک‌گذاری با اعضای سازمان"
           className="w-full"
+          getPopupContainer={resolveModalPopupContainer}
+          modalContainer={resolveModalPopupContainer}
+          preferLocalPopupContainer
+          overlayZIndexBase={1100}
         />
       </Modal>
       <Drawer
