@@ -4,6 +4,7 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
   Col,
   Empty,
   Form,
@@ -539,6 +540,7 @@ type AttendanceComputedRow = {
 };
 
 type AttendanceShortageDecision = 'paid_leave' | 'unpaid_leave' | 'absence';
+type AttendanceBulkAction = 'overtime' | 'early_bonus' | 'paid_leave' | 'unpaid_leave' | 'absence' | 'exclude_excess';
 
 const ATTENDANCE_SHORTAGE_DECISION_SOURCE_TYPE = 'attendance_shortage_decision';
 
@@ -1568,6 +1570,10 @@ const HRPage: React.FC = () => {
   const [savingGoalLedger, setSavingGoalLedger] = useState(false);
   const [hrActiveGoalId, setHrActiveGoalId] = useState<string | null>(null);
   const [savingOvertimeLedgerKey, setSavingOvertimeLedgerKey] = useState<string | null>(null);
+  const [attendanceBulkActionsOpen, setAttendanceBulkActionsOpen] = useState(false);
+  const [selectedAttendanceBulkActions, setSelectedAttendanceBulkActions] = useState<AttendanceBulkAction[]>([]);
+  const [selectedAttendanceBulkRowKeys, setSelectedAttendanceBulkRowKeys] = useState<React.Key[]>([]);
+  const [applyingAttendanceBulkActions, setApplyingAttendanceBulkActions] = useState(false);
   const [commissionModalOpen, setCommissionModalOpen] = useState(false);
   const [commissionModalSaving, setCommissionModalSaving] = useState(false);
   const [commissionInvoicePaymentsById, setCommissionInvoicePaymentsById] = useState<Map<string, any[]>>(new Map());
@@ -4441,6 +4447,9 @@ const HRPage: React.FC = () => {
     setPayrollWizardPreparationRetry(0);
     setEditingPayrollWizardFieldKey(null);
     setPayrollWizardDraftValues({});
+    setAttendanceBulkActionsOpen(false);
+    setSelectedAttendanceBulkActions([]);
+    setSelectedAttendanceBulkRowKeys([]);
     setPayrollWizardPreparing(true);
     setPayrollWizardOpen(true);
     void fetchEmployeeAdvancesForDashboard();
@@ -4456,6 +4465,9 @@ const HRPage: React.FC = () => {
     setPayrollWizardStep(0);
     setEditingPayrollWizardFieldKey(null);
     setPayrollWizardDraftValues({});
+    setAttendanceBulkActionsOpen(false);
+    setSelectedAttendanceBulkActions([]);
+    setSelectedAttendanceBulkRowKeys([]);
     setCalculatingPayrollWizardSeniority(false);
   }, []);
 
@@ -6090,8 +6102,8 @@ const HRPage: React.FC = () => {
       .filter(({ meta }) => meta.sourceKey && meta.minutes > 0 && meta.amount !== 0);
 
     const employeeIds = Array.from(new Set(evaluatedCandidates.map(({ row }) => String(row.employeeId || '').trim()).filter(Boolean)));
-    const sourceKeys = Array.from(new Set(evaluatedCandidates.map(({ meta }) => meta.sourceKey).filter(Boolean)));
-    if (employeeIds.length === 0 || sourceKeys.length === 0) return;
+    const sourceTypes = Array.from(new Set(evaluatedCandidates.map(({ meta }) => meta.sourceType).filter(Boolean)));
+    if (employeeIds.length === 0 || sourceTypes.length === 0) return;
 
     const { data: existingRows, error: existingError } = await supabase
       .from('payroll_calculation_entries')
@@ -6099,7 +6111,10 @@ const HRPage: React.FC = () => {
       .eq('period_start', periodStart)
       .eq('period_end', periodEnd)
       .in('employee_id', employeeIds)
-      .in('source_key', sourceKeys);
+      // فهرست کلیدهای روزانه در بازه‌های طولانی از سقف URL پراکسی عبور می‌کرد
+      // و پاسخ 502 آن در مرورگر به شکل خطای CORS دیده می‌شد. با توجه به بازه، کارمند
+      // و نوع منبع، این query همچنان دقیق است و فقط چند ردیف آمادهٔ همان فیش را می‌خواند.
+      .in('source_type', sourceTypes);
     if (existingError && !isMissingPayrollLedgerError(existingError) && !isMissingSourceKeyError(existingError)) throw existingError;
 
     const existingByTypeAndKey = new Map(
@@ -8443,6 +8458,59 @@ const HRPage: React.FC = () => {
     </>
   );
 
+  const getAttendanceBulkEligibleActions = (row: AttendanceComputedRow): AttendanceBulkAction[] => {
+    const findEntry = (sourceType: string, sourceKey: string) => payrollWizardEmployeeLedger.find(
+      (entry) => entry.source_type === sourceType && String(entry.source_key || entry.details?.source_key || '') === sourceKey,
+    );
+    const hasManualDecision = Boolean(attendanceShortageDecisionByRowKey.get(row.key));
+    const shortageMinutes = calculateAttendanceShortageMinutes(row);
+    const overtime = resolveAttendanceLedgerEntry(row, 'attendance_overtime');
+    const earlyBonus = resolveAttendanceLedgerEntry(row, 'attendance_early_bonus');
+    const paidLeave = resolveAttendanceLedgerEntry(row, 'attendance_paid_leave');
+    const result: AttendanceBulkAction[] = [];
+    if (overtime.minutes > 0 && !findEntry('attendance_overtime', overtime.sourceKey)) result.push('overtime');
+    if (earlyBonus.minutes > 0 && !findEntry('attendance_early_bonus', earlyBonus.sourceKey)) result.push('early_bonus');
+    if (paidLeave.minutes > 0 && !hasManualDecision && !findEntry('attendance_paid_leave', paidLeave.sourceKey)) result.push('paid_leave');
+    if (!row.isApprovedLeave && shortageMinutes > 0 && !hasManualDecision) result.push('unpaid_leave', 'absence');
+    if (
+      payrollWizardBaseCompensation.isHourly
+      && calculateAttendanceExcessPresenceMinutes(row) > 0
+      && !findEntry('attendance_excess_presence_exclusion', buildAttendanceExcessPresenceExclusionSourceKey(row))
+    ) result.push('exclude_excess');
+    return result;
+  };
+
+  const applyAttendanceBulkActions = async () => {
+    const selectedKeys = new Set(selectedAttendanceBulkRowKeys.map(String));
+    const rows = payrollWizardAttendanceRows.filter((row) => selectedKeys.has(row.key));
+    if (rows.length === 0 || selectedAttendanceBulkActions.length === 0) {
+      message.info('حداقل یک اقدام و یک ردیف را انتخاب کنید.');
+      return;
+    }
+    setApplyingAttendanceBulkActions(true);
+    try {
+      for (const row of rows) {
+        const eligible = new Set(getAttendanceBulkEligibleActions(row));
+        for (const action of selectedAttendanceBulkActions) {
+          if (!eligible.has(action)) continue;
+          if (action === 'overtime') await handleApproveAttendanceOvertime(row);
+          else if (action === 'early_bonus') await handlePrepareAttendanceLedgerEntry(row, 'attendance_early_bonus');
+          else if (action === 'paid_leave') await handlePrepareAttendanceLedgerEntry(row, 'attendance_paid_leave');
+          else if (action === 'unpaid_leave') await saveAttendanceShortageDecision(row, 'unpaid_leave');
+          else if (action === 'absence') await saveAttendanceShortageDecision(row, 'absence');
+          else if (action === 'exclude_excess') await handleExcludeAttendanceExcessPresence(row);
+        }
+      }
+      setAttendanceBulkActionsOpen(false);
+      setSelectedAttendanceBulkActions([]);
+      setSelectedAttendanceBulkRowKeys([]);
+      await refreshPayrollPeriodState();
+      message.success('اقدام‌های گروهی برای ردیف‌های انتخاب‌شده اعمال شد.');
+    } finally {
+      setApplyingAttendanceBulkActions(false);
+    }
+  };
+
   return (
     <div className="p-3 md:p-6 max-w-[1700px] mx-auto pb-20 animate-fadeIn">
       {employeeId ? (
@@ -8666,6 +8734,49 @@ const HRPage: React.FC = () => {
       )}
 
       <Modal
+        title="اقدام‌های گروهی تردد"
+        open={attendanceBulkActionsOpen}
+        onCancel={() => setAttendanceBulkActionsOpen(false)}
+        destroyOnHidden
+        footer={(
+          <Space>
+            <Button onClick={() => {
+              setAttendanceBulkActionsOpen(false);
+              setSelectedAttendanceBulkActions([]);
+              setSelectedAttendanceBulkRowKeys([]);
+            }}>انصراف</Button>
+            <Button type="primary" onClick={() => setAttendanceBulkActionsOpen(false)}>
+              نمایش ردیف‌های قابل‌اعمال
+            </Button>
+          </Space>
+        )}
+      >
+        <Typography.Paragraph type="secondary">
+          چند اقدام را انتخاب کنید. فقط ردیف‌های قابل‌اعمال نمایش داده می‌شوند و ابتدا همگی انتخاب می‌شوند؛ می‌توانید تیک هر ردیف را بردارید.
+        </Typography.Paragraph>
+        <Checkbox.Group
+          className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+          value={selectedAttendanceBulkActions}
+          onChange={(values) => {
+            const actions = values as AttendanceBulkAction[];
+            setSelectedAttendanceBulkActions(actions);
+            const nextKeys = payrollWizardAttendanceRows
+              .filter((row) => actions.some((action) => getAttendanceBulkEligibleActions(row).includes(action)))
+              .map((row) => row.key);
+            setSelectedAttendanceBulkRowKeys(nextKeys);
+          }}
+          options={[
+            { label: 'لحاظ اضافه‌کاری', value: 'overtime' },
+            { label: 'لحاظ پاداش تعجیل', value: 'early_bonus' },
+            { label: 'لحاظ مرخصی با حقوق', value: 'paid_leave' },
+            { label: 'ثبت مرخصی بدون حقوق', value: 'unpaid_leave' },
+            { label: 'ثبت غیبت', value: 'absence' },
+            { label: 'عدم لحاظ ساعات مازاد', value: 'exclude_excess' },
+          ]}
+        />
+      </Modal>
+
+      <Modal
         title={payrollWizardSummary ? `ویزارد فیش حقوقی - ${payrollWizardSummary.name}` : 'ویزارد فیش حقوقی'}
         open={payrollWizardOpen}
         onCancel={closePayrollWizard}
@@ -8791,7 +8902,22 @@ const HRPage: React.FC = () => {
                 ) : null}
 
                 <Card>
-                  <div className="mb-3 text-sm font-bold text-gray-700 dark:text-gray-200">لاگ تردد و اضافه‌کاری</div>
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-sm font-bold text-gray-700 dark:text-gray-200">لاگ تردد و اضافه‌کاری</div>
+                    <Space size="small" wrap>
+                      {selectedAttendanceBulkActions.length > 0 ? (
+                        <>
+                          <Tag color="blue">{toPersianNumber(selectedAttendanceBulkRowKeys.length)} ردیف انتخاب شده</Tag>
+                          <Button size="small" loading={applyingAttendanceBulkActions} type="primary" onClick={() => void applyAttendanceBulkActions()}>اعمال انتخاب‌شده</Button>
+                          <Button size="small" onClick={() => {
+                            setSelectedAttendanceBulkActions([]);
+                            setSelectedAttendanceBulkRowKeys([]);
+                          }}>لغو انتخاب گروهی</Button>
+                        </>
+                      ) : null}
+                      <Button size="small" onClick={() => setAttendanceBulkActionsOpen(true)}>اقدام‌های گروهی</Button>
+                    </Space>
+                  </div>
                   {payrollWizardAttendanceRows.length === 0 ? (
                     <Empty description="برای این بازه رکورد ترددی وجود ندارد." />
                   ) : (
@@ -8799,10 +8925,31 @@ const HRPage: React.FC = () => {
                       rowKey="key"
                       size="small"
                       pagination={{ pageSize: 8, showSizeChanger: false }}
-                      scroll={{ x: 1450 }}
-                      dataSource={payrollWizardAttendanceRows}
+                      scroll={{ x: 1650 }}
+                      rowSelection={selectedAttendanceBulkActions.length > 0 ? {
+                        selectedRowKeys: selectedAttendanceBulkRowKeys,
+                        onChange: (keys) => setSelectedAttendanceBulkRowKeys(keys),
+                      } : undefined}
+                      dataSource={payrollWizardAttendanceRows.filter((row) => (
+                        selectedAttendanceBulkActions.length === 0
+                        || selectedAttendanceBulkActions.some((action) => getAttendanceBulkEligibleActions(row).includes(action))
+                      ))}
                       columns={[
                         { title: 'تاریخ', key: 'attendanceDate', render: (_: unknown, row: any) => row.attendanceDate ? toPersianNumber(safeJalaliFormat(row.attendanceDate, 'YYYY/MM/DD')) : '-' },
+                        {
+                          title: 'برنامه حضور',
+                          key: 'schedule',
+                          width: 190,
+                          render: (_: unknown, row: AttendanceComputedRow) => row.scheduleShifts.length > 0 ? (
+                            <div className="space-y-1 text-xs">
+                              {row.scheduleShifts.map((shift) => (
+                                <div key={shift.key} className="whitespace-nowrap">
+                                  {shift.label}: <span className="persian-number">{shift.start || '-'} تا {shift.end || '-'}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : <span className="text-gray-400">تعریف نشده</span>,
+                        },
                         { title: 'ورود', dataIndex: 'checkInAt', key: 'checkInAt', render: (val: string | null) => <span className="persian-number">{renderAttendanceTime(val)}</span> },
                         { title: 'خروج', dataIndex: 'checkOutAt', key: 'checkOutAt', render: (val: string | null) => <span className="persian-number">{renderAttendanceTime(val)}</span> },
                         { title: 'حضور', key: 'presence', render: (_: unknown, row: any) => { const pm = calculatePresenceMinutes([row]); return <span className="persian-number">{toPersianNumber((pm / 60).toFixed(1))} ساعت</span>; } },
@@ -8859,6 +9006,8 @@ const HRPage: React.FC = () => {
                         {
                           title: 'عملیات',
                           key: 'actions',
+                          fixed: 'right',
+                          width: 250,
                           render: (_: unknown, row: any) => {
                             const overtimeEntry = payrollWizardEmployeeLedger.find((ledger) => ledger.source_type === 'attendance_overtime' && String(ledger.source_key || ledger.details?.source_key || '') === buildAttendanceOvertimeSourceKey(row));
                             const earlyBonusEntry = payrollWizardEmployeeLedger.find((ledger) => ledger.source_type === 'attendance_early_bonus' && String(ledger.source_key || ledger.details?.source_key || '') === buildAttendanceEarlyBonusSourceKey(row));
