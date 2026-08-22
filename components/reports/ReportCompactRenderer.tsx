@@ -1,798 +1,380 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { App, Button, Empty, Select, Spin, Table } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { BarChartOutlined, PieChartOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
-import SimpleBarChart from './SimpleBarChart';
-import SimplePieChart from './SimplePieChart';
-import { MODULES } from '../../moduleRegistry';
-import { supabase } from '../../supabaseClient';
-import { canAccessAssignedRecord, fetchCurrentUserRecordAccessContext } from '../../utils/permissions';
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { App, Button, Empty, Spin, Table } from "antd";
+import type { ColumnsType } from "antd/es/table";
 import {
-  createWorkflowEvaluationContext,
-  evaluateWorkflowConditions,
-  resolveWorkflowFieldValue,
-} from '../../utils/workflowRuntime';
+  BarChartOutlined,
+  LineChartOutlined,
+  PieChartOutlined,
+  ReloadOutlined,
+  TableOutlined,
+} from "@ant-design/icons";
+import { supabase } from "../../supabaseClient";
 import {
-  buildReportBaseSelectColumns,
-  buildReportTableFieldKey,
-  getReportConditionFields,
-  getReportTableBlock,
-  getReportableFieldMap,
-  getReportableFields,
-  isDeletedReportRecord,
   normalizeReportConfig,
-  parseReportTableFieldKey,
-  parseReportTableRelationFieldKey,
   type ReportDefinitionRecord,
-} from '../../utils/reporting';
-import { getSurveyTemplateScopedIdFromConditions, loadSurveyTemplateDefinition, normalizeSurveyTemplateSnapshot } from '../../utils/surveyTemplates';
-import { loadWorkflowConditionEditorOptions } from '../../utils/workflowConditionOptions';
-import { formatListCellValue } from '../../utils/listPrintExport';
-import { formatPersianPrice, toPersianNumber } from '../../utils/persianNumberFormatter';
-import { readCurrencyConfig } from '../../utils/currency';
-import { buildRecordTitleSelectColumns, runSelectWithCompatibleColumns } from '../../utils/selectCompat';
+} from "../../utils/reporting";
+import {
+  formatPersianPrice,
+  toPersianNumber,
+} from "../../utils/persianNumberFormatter";
+import { readCurrencyConfig } from "../../utils/currency";
+import SimpleBarChart from "./SimpleBarChart";
+import SimpleLineChart from "./SimpleLineChart";
+import SimplePieChart from "./SimplePieChart";
 
-type RenderMode = 'table' | 'bar' | 'pie';
-
-type ReportRow = Record<string, any> & {
-  __report_row_key: string;
-};
-
-type GroupedRow = {
+type RenderMode = "table" | "bar" | "pie" | "line";
+type RuntimeGroup = {
   key: string;
-  parent_key?: string;
-  group_field?: string;
-  group_label?: string;
-  group_depth: number;
-  group_values: Record<string, any>;
-  group_labels: Record<string, string>;
-  metrics: Record<string, number>;
-  metric_counts: Record<string, number>;
+  label: string;
   row_count: number;
-  children?: GroupedRow[];
+  increase: number;
+  decrease: number;
+  target: number;
+  total: number;
+  metrics: Record<string, number>;
 };
-
+type ReportRuntime = {
+  mode: "normal" | "difference" | "percentage";
+  groups: RuntimeGroup[];
+};
 type ReportCompactRendererProps = {
   report: ReportDefinitionRecord;
   maxHeight?: number;
-  rowLimitCap?: number;
 };
 
-const normalizeCompareValue = (value: any) => {
-  if (Array.isArray(value)) return value.map((item) => String(item ?? '')).join(', ');
-  if (value === null || value === undefined) return '';
-  const asNumber = Number(String(value).replace(/,/g, '').trim());
-  if (String(value).trim() !== '' && Number.isFinite(asNumber)) return asNumber;
-  return String(value);
+const numberValue = (value: unknown) => Number(value || 0);
+const formatValue = (value: unknown, currencyLabel = "") => {
+  const formatted = formatPersianPrice(numberValue(value));
+  return currencyLabel ? `${formatted} ${currencyLabel}` : formatted;
 };
-
-const compareValues = (left: any, right: any) => {
-  const a = normalizeCompareValue(left);
-  const b = normalizeCompareValue(right);
-  if (typeof a === 'number' && typeof b === 'number') return a - b;
-  return String(a).localeCompare(String(b), 'fa', { numeric: true, sensitivity: 'base' });
-};
-
-const normalizeRelationRecordId = (value: any) => {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'object') {
-    return String(value?.id || value?.value || '').trim();
-  }
-  return String(value || '').trim();
-};
-
-const formatMetricValue = (value: number, fieldType?: string, currencyLabel = '') => {
-  if (fieldType === 'price') {
-    const formatted = formatPersianPrice(value);
-    return currencyLabel ? `${formatted} ${currencyLabel}` : formatted;
-  }
-  return toPersianNumber(Number(value || 0).toLocaleString('en-US'));
-};
-
-const formatReportCellValue = (
-  field: any,
-  row: Record<string, any>,
-  relationOptions: Record<string, Array<{ label: string; value: string }>>,
-  currencyLabel = '',
-) => {
-  const formatted = formatListCellValue(field, row, relationOptions, currencyLabel);
-  if (formatted && formatted !== '-') return formatted;
-
-  const tableFieldMeta = parseReportTableFieldKey(field?.key);
-  const tableRow = tableFieldMeta ? row?.__report_table_rows?.[tableFieldMeta.blockId] : null;
-  const columnKey = tableFieldMeta?.columnKey || '';
-  const fallbackLabel = tableRow && columnKey
-    ? tableRow[`${columnKey}_label`]
-      || tableRow[`${columnKey}_name`]
-      || tableRow[`${columnKey}_title`]
-      || tableRow[`${columnKey}_bank_name`]
-      || tableRow[`${columnKey}_full_name`]
-      || tableRow[`${columnKey}_display`]
-    : null;
-  return fallbackLabel || '-';
-};
-
-const getMetricSourceKey = (fieldKey: string, row: Record<string, any>) => {
-  const tableFieldMeta = parseReportTableFieldKey(fieldKey);
-  if (tableFieldMeta) return `table:${tableFieldMeta.blockId}:${row.__report_row_key || ''}`;
-
-  const tableRelationMeta = parseReportTableRelationFieldKey(fieldKey);
-  if (tableRelationMeta) {
-    const relationValue = row[buildReportTableFieldKey(tableRelationMeta.blockId, tableRelationMeta.relationColumnKey)];
-    return `table-relation:${tableRelationMeta.blockId}:${tableRelationMeta.targetModuleId}:${normalizeRelationRecordId(relationValue) || row.__report_row_key || ''}`;
-  }
-
-  return `record:${String(row?.id || row?.__report_parent_row?.id || row.__report_row_key || '')}`;
-};
-
-const isDeletedReportTableRow = (row: Record<string, any> | null | undefined) =>
-  isDeletedReportRecord(row) || row?.__deleted === true || row?._destroy === true;
-
-const isGroupingFieldAvailableForRow = (fieldKey: string, row: Record<string, any>) => {
-  const tableFieldMeta = parseReportTableFieldKey(fieldKey);
-  const tableRelationMeta = parseReportTableRelationFieldKey(fieldKey);
-  const blockId = tableFieldMeta?.blockId || tableRelationMeta?.blockId || '';
-  if (!blockId) return true;
-  return !!row?.__report_table_rows?.[blockId];
-};
-
-const buildFlatGroupedRows = (
-  sourceRows: ReportRow[],
-  groupBys: Array<{ field: string; direction: 'asc' | 'desc' }>,
-  fieldMap: Record<string, any>,
-  relationOptions: Record<string, Array<{ label: string; value: string }>>,
-  metricType: string,
-  metricFields: string[],
-  currencyLabel = '',
-) => {
-  if (groupBys.length === 0) return [];
-  const buckets = new Map<string, GroupedRow>();
-  sourceRows.forEach((row) => {
-    if (!groupBys.every((item) => isGroupingFieldAvailableForRow(item.field, row))) return;
-    const groupLabels: Record<string, string> = {};
-    const groupValues: Record<string, any> = {};
-    groupBys.forEach((grouping) => {
-      const field = fieldMap[grouping.field];
-      groupValues[grouping.field] = row[grouping.field];
-      groupLabels[grouping.field] = field
-        ? formatReportCellValue(field as any, row, relationOptions, currencyLabel)
-        : String(row[grouping.field] ?? '-');
-    });
-    const bucketKey = groupBys
-      .map((grouping) => `${grouping.field}:${String(groupValues[grouping.field] ?? groupLabels[grouping.field] ?? '-')}`)
-      .join('||');
-    const current = buckets.get(bucketKey) || {
-      key: bucketKey,
-      group_depth: groupBys.length - 1,
-      group_field: groupBys[groupBys.length - 1]?.field,
-      group_label: groupLabels[groupBys[groupBys.length - 1]?.field] || '-',
-      group_values: groupValues,
-      group_labels: groupLabels,
-      metrics: {},
-      metric_counts: {},
-      row_count: 0,
-    };
-    current.row_count += 1;
-    current.metrics.__count = Number(current.metrics.__count || 0) + 1;
-    if (metricType === 'sum' || metricType === 'avg') {
-      const metricSourceKeys = ((current as any).__metric_source_keys || {}) as Record<string, Set<string>>;
-      metricFields.forEach((fieldKey) => {
-        metricSourceKeys[fieldKey] = metricSourceKeys[fieldKey] || new Set<string>();
-        const sourceKey = getMetricSourceKey(fieldKey, row);
-        if (metricSourceKeys[fieldKey].has(sourceKey)) return;
-        metricSourceKeys[fieldKey].add(sourceKey);
-        const numericValue = Number(row[fieldKey] || 0);
-        current.metrics[fieldKey] = Number(current.metrics[fieldKey] || 0) + (Number.isFinite(numericValue) ? numericValue : 0);
-        current.metric_counts[fieldKey] = Number(current.metric_counts[fieldKey] || 0) + 1;
-      });
-      (current as any).__metric_source_keys = metricSourceKeys;
-    }
-    buckets.set(bucketKey, current);
-  });
-  return Array.from(buckets.values()).map((row) => {
-    const { __metric_source_keys: _ignored, ...cleanRow } = row as any;
-    return cleanRow as GroupedRow;
-  }).sort((left, right) => {
-    for (const grouping of groupBys) {
-      const base = compareValues(left.group_values[grouping.field], right.group_values[grouping.field]);
-      if (base !== 0) return grouping.direction === 'desc' ? -base : base;
-    }
-    return 0;
-  });
+const groupValue = (group: RuntimeGroup, mode: ReportRuntime["mode"]) => {
+  if (mode === "difference")
+    return numberValue(group.increase) - numberValue(group.decrease);
+  if (mode === "percentage")
+    return numberValue(group.total) > 0
+      ? (numberValue(group.target) / numberValue(group.total)) * 100
+      : 0;
+  return numberValue(Object.values(group.metrics || {})[0] ?? group.row_count);
 };
 
 const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
   report,
   maxHeight = 360,
-  rowLimitCap = 120,
 }) => {
   const { message } = App.useApp();
+  const config = useMemo(
+    () => normalizeReportConfig(report.config),
+    [report.config],
+  );
+  const [runtime, setRuntime] = useState<ReportRuntime | null>(null);
   const [loading, setLoading] = useState(true);
-  const [executing, setExecuting] = useState(false);
-  const [canView, setCanView] = useState(true);
-  const [rows, setRows] = useState<ReportRow[]>([]);
-  const [, setGroupedRows] = useState<GroupedRow[]>([]);
-  const [groupedTreeRows, setGroupedTreeRows] = useState<GroupedRow[]>([]);
-  const [chartRows, setChartRows] = useState<GroupedRow[]>([]);
-  const [renderMode, setRenderMode] = useState<RenderMode>('table');
-  const [activeMetricKey, setActiveMetricKey] = useState<string>('__count');
-  const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
-  const [surveyTemplateSnapshot, setSurveyTemplateSnapshot] = useState(() => normalizeSurveyTemplateSnapshot({}));
+  const [renderMode, setRenderMode] = useState<RenderMode>(
+    config.default_view === "table" ? "table" : "bar",
+  );
+  const currencyLabel = readCurrencyConfig().label || "";
 
-  const config = useMemo(() => {
-    const normalized = normalizeReportConfig(report?.config);
-    return {
-      ...normalized,
-      row_limit: Math.min(normalized.row_limit, Math.max(20, rowLimitCap)),
-    };
-  }, [report?.config, rowLimitCap]);
-
-  const moduleId = String(report?.module_id || '').trim();
-  const scopedSurveyTemplateId = useMemo(
-    () => (
-      moduleId === 'surveys'
-        ? getSurveyTemplateScopedIdFromConditions(config.conditions_all, config.conditions_any)
-        : null
-    ),
-    [config.conditions_all, config.conditions_any, moduleId]
-  );
-  const moduleConfig = MODULES[moduleId];
-  const currencyLabel = readCurrencyConfig().label || '';
-  const selectedTableBlocks = useMemo(
-    () => config.secondary_module_ids
-      .map((sourceId) => getReportTableBlock(moduleId, sourceId))
-      .filter((block): block is NonNullable<typeof block> => !!block),
-    [config.secondary_module_ids, moduleId]
-  );
-  const reportableFields = useMemo(
-    () => getReportableFields(moduleId, config.secondary_module_ids, surveyTemplateSnapshot),
-    [config.secondary_module_ids, moduleId, surveyTemplateSnapshot]
-  );
-  const fieldMap = useMemo(
-    () => getReportableFieldMap(moduleId, config.secondary_module_ids, surveyTemplateSnapshot),
-    [config.secondary_module_ids, moduleId, surveyTemplateSnapshot]
-  );
-  const visibleFields = useMemo(
-    () => reportableFields.filter((field) => config.columns.includes(field.key)),
-    [config.columns, reportableFields]
-  );
-  const metricFieldKeys = useMemo(
-    () => (config.metric_type === 'sum' || config.metric_type === 'avg' ? config.metric_fields.filter((key) => !!fieldMap[key]) : ['__count']),
-    [config.metric_fields, config.metric_type, fieldMap]
-  );
-  const metricOptions = useMemo(
-    () =>
-      config.metric_type === 'sum' || config.metric_type === 'avg'
-        ? metricFieldKeys.map((key) => ({
-            value: key,
-            label: `${config.metric_type === 'avg' ? 'میانگین' : 'جمع'} ${fieldMap[key]?.labels?.fa || key}`,
-          }))
-        : [{ value: '__count', label: 'تعداد رکوردها' }],
-    [config.metric_type, fieldMap, metricFieldKeys]
-  );
-  const chartDimensionField = config.chart_dimension_field || config.group_bys[0]?.field || null;
-  const chartAvailable = !!chartDimensionField && chartRows.length > 0;
-
-  useEffect(() => {
-    let cancelled = false;
-    if (moduleId !== 'surveys' || !scopedSurveyTemplateId) {
-      setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot({}));
-      return () => {
-        cancelled = true;
-      };
-    }
-    const run = async () => {
-      try {
-        const definition = await loadSurveyTemplateDefinition(supabase, scopedSurveyTemplateId);
-        if (cancelled) return;
-        setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot(definition?.snapshot || {}));
-      } catch {
-        if (!cancelled) {
-          setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot({}));
-        }
-      }
-    };
-    void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [moduleId, scopedSurveyTemplateId]);
-
-  const executeReport = React.useCallback(async () => {
-    if (!moduleConfig) return;
-    setExecuting(true);
+  const executeReport = useCallback(async () => {
+    setLoading(true);
     try {
-      const roleContext = await fetchCurrentUserRecordAccessContext(supabase);
-      const modulePerm = roleContext.permissions?.[moduleId] || {};
-      if (modulePerm.view === false) {
-        setCanView(false);
-        setRows([]);
-        setGroupedRows([]);
-        return;
-      }
-
-      const optionFields = [
-        ...getReportConditionFields(moduleId, config.secondary_module_ids, surveyTemplateSnapshot),
-        ...getReportableFields(moduleId, config.secondary_module_ids, surveyTemplateSnapshot),
-      ];
-      const loadedOptions = await loadWorkflowConditionEditorOptions(moduleId, optionFields);
-      setRelationOptions(loadedOptions.relationOptions);
-
-      const neededKeys = Array.from(
-        new Set([...config.columns, ...config.group_bys.map((item) => item.field), chartDimensionField, ...config.metric_fields].filter((item): item is string => !!item))
+      const { data, error } = await supabase.functions.invoke(
+        "report-runtime",
+        { body: { reportId: report.id } },
       );
-      const conditionFieldKeys = [
-        ...config.conditions_all,
-        ...config.conditions_any,
-      ].map((condition: any) => String(condition?.field || '').trim()).filter(Boolean);
-      const baseColumns = buildReportBaseSelectColumns(
-        moduleConfig,
-        [...neededKeys, ...conditionFieldKeys],
-        selectedTableBlocks,
-      );
-
-      const baseResult = await runSelectWithCompatibleColumns<any[]>({
-        cacheKey: `report-compact:${moduleId}`,
-        columns: baseColumns,
-        execute: (selectExpr) =>
-          supabase
-            .from(moduleConfig.table || moduleId)
-            .select(selectExpr)
-            .limit(config.row_limit),
-      });
-      if (baseResult.error) throw baseResult.error;
-
-      const scopedRows = (baseResult.data || []).filter((row: any) =>
-        !isDeletedReportRecord(row) && canAccessAssignedRecord(row, roleContext.userId, roleContext.roleId, modulePerm.record_scope || 'all', {
-          currentOrgId: roleContext.orgId,
-          allowedRoleIds: roleContext.allowedRoleIds,
-          allowedUserIds: roleContext.allowedUserIds,
-        })
-      );
-      const tableRelationFieldKeys = Array.from(new Set([
-        ...neededKeys,
-        ...conditionFieldKeys,
-      ].filter((fieldKey) => !!parseReportTableRelationFieldKey(fieldKey))));
-      const tableRelationRecordCache = new Map<string, Record<string, any> | null>();
-      const relationIdsByModule = new Map<string, Set<string>>();
-      const relationTargetFieldsByModule = new Map<string, Set<string>>();
-
-      tableRelationFieldKeys.forEach((fieldKey) => {
-        const relationMeta = parseReportTableRelationFieldKey(fieldKey);
-        if (!relationMeta) return;
-        const targetFields = relationTargetFieldsByModule.get(relationMeta.targetModuleId) || new Set<string>();
-        if (relationMeta.targetFieldKey) targetFields.add(relationMeta.targetFieldKey);
-        relationTargetFieldsByModule.set(relationMeta.targetModuleId, targetFields);
-        scopedRows.forEach((sourceRow: any) => {
-          const blockRows = Array.isArray(sourceRow?.[relationMeta.blockId]) ? sourceRow[relationMeta.blockId] : [];
-          blockRows.forEach((tableRow: any) => {
-            const relationRecordId = normalizeRelationRecordId(tableRow?.[relationMeta.relationColumnKey]);
-            if (!relationRecordId) return;
-            const ids = relationIdsByModule.get(relationMeta.targetModuleId) || new Set<string>();
-            ids.add(relationRecordId);
-            relationIdsByModule.set(relationMeta.targetModuleId, ids);
-          });
-        });
-      });
-
-      await Promise.all(Array.from(relationIdsByModule.entries()).map(async ([targetModuleId, idSet]) => {
-        const targetModule = MODULES[targetModuleId];
-        const ids = Array.from(idSet);
-        if (!targetModule || ids.length === 0) return;
-        const relationColumns = Array.from(new Set([
-          ...buildRecordTitleSelectColumns(targetModuleId),
-          ...(Array.from(relationTargetFieldsByModule.get(targetModuleId) || [])),
-        ]));
-        for (let offset = 0; offset < ids.length; offset += 50) {
-          const chunk = ids.slice(offset, offset + 50);
-          const relatedRowsResult = await runSelectWithCompatibleColumns<any[]>({
-            cacheKey: `report-compact:relation:${targetModuleId}`,
-            columns: relationColumns,
-            execute: (selectExpr) =>
-              supabase
-                .from(targetModule.table || targetModuleId)
-                .select(selectExpr)
-                .in('id', chunk),
-          });
-          if (relatedRowsResult.error) throw relatedRowsResult.error;
-          const relatedRows = relatedRowsResult.data || [];
-          (relatedRows || []).forEach((relatedRow: any) => {
-            const relatedId = String(relatedRow?.id || '').trim();
-            if (relatedId) tableRelationRecordCache.set(`${targetModuleId}:${relatedId}`, isDeletedReportRecord(relatedRow) ? null : relatedRow);
-          });
-          chunk.forEach((id) => {
-            const cacheKey = `${targetModuleId}:${id}`;
-            if (!tableRelationRecordCache.has(cacheKey)) tableRelationRecordCache.set(cacheKey, null);
-          });
-        }
-      }));
-
-      const fetchTableRelationRecord = async (targetModuleId: string, recordId: string) => {
-        const targetModule = MODULES[targetModuleId];
-        const normalizedRecordId = String(recordId || '').trim();
-        if (!targetModule || !normalizedRecordId) return null;
-        const cacheKey = `${targetModuleId}:${normalizedRecordId}`;
-        if (tableRelationRecordCache.has(cacheKey)) {
-          return tableRelationRecordCache.get(cacheKey) || null;
-        }
-        const relationColumns = Array.from(new Set([
-          ...buildRecordTitleSelectColumns(targetModuleId),
-          ...(Array.from(relationTargetFieldsByModule.get(targetModuleId) || [])),
-        ]));
-        const relatedRecordResult = await runSelectWithCompatibleColumns<any | null>({
-          cacheKey: `report-compact:relation:${targetModuleId}`,
-          columns: relationColumns,
-          execute: (selectExpr) =>
-            supabase
-              .from(targetModule.table || targetModuleId)
-              .select(selectExpr)
-              .eq('id', normalizedRecordId)
-              .maybeSingle(),
-        });
-        if (relatedRecordResult.error) throw relatedRecordResult.error;
-        const relatedRecord = relatedRecordResult.data;
-        const normalizedRelatedRecord = relatedRecord && !isDeletedReportRecord(relatedRecord)
-          ? relatedRecord as Record<string, any>
-          : null;
-        tableRelationRecordCache.set(cacheKey, normalizedRelatedRecord);
-        return normalizedRelatedRecord;
-      };
-
-      const nextRows: ReportRow[] = [];
-      const reportEvaluationContext = createWorkflowEvaluationContext(moduleId);
-      for (let index = 0; index < scopedRows.length; index += 1) {
-        const sourceRow = scopedRows[index];
-        const tableSources = selectedTableBlocks.map((block: any) => ({
-          block,
-          rows: Array.isArray(sourceRow?.[block.id])
-            ? sourceRow[block.id].filter((tableRow: any) => !isDeletedReportTableRow(tableRow))
-            : [],
-        }));
-
-        const tableCombos = tableSources.length === 0
-          ? [{ rowsByBlockId: {}, keyParts: [] as string[] }]
-          : tableSources.flatMap((source) =>
-              source.rows.map((tableRow: any, tableIndex: number) => ({
-                rowsByBlockId: { [source.block.id]: tableRow },
-                keyParts: [`${source.block.id}:${tableIndex}`],
-              }))
-            );
-
-        for (const tableCombo of tableCombos) {
-          const candidateRow: ReportRow = {
-            ...sourceRow,
-            __report_table_rows: tableCombo.rowsByBlockId,
-            __report_row_key: tableCombo.keyParts.length > 0
-              ? `${String(sourceRow?.id || index)}:${tableCombo.keyParts.join(':')}`
-              : String(sourceRow?.id || index),
-          };
-
-          selectedTableBlocks.forEach((block: any) => {
-            const tableRow = tableCombo.rowsByBlockId[block.id];
-            if (!tableRow || typeof tableRow !== 'object') return;
-            (block.tableColumns || []).forEach((column: any) => {
-              const columnKey = String(column?.key || '').trim();
-              if (!columnKey) return;
-              const reportFieldKey = buildReportTableFieldKey(String(block.id || ''), columnKey);
-              candidateRow[reportFieldKey] = tableRow?.[columnKey];
-            });
-          });
-
-          for (const fieldKey of tableRelationFieldKeys) {
-            const relationMeta = parseReportTableRelationFieldKey(fieldKey);
-            if (!relationMeta) continue;
-            const relationValue = candidateRow[buildReportTableFieldKey(relationMeta.blockId, relationMeta.relationColumnKey)];
-            const relationRecordId = normalizeRelationRecordId(relationValue);
-            if (!relationRecordId) {
-              candidateRow[fieldKey] = null;
-              continue;
-            }
-            const relatedRecord = await fetchTableRelationRecord(relationMeta.targetModuleId, relationRecordId);
-            candidateRow[fieldKey] = relatedRecord?.[relationMeta.targetFieldKey] ?? null;
-          }
-
-          const passed = await evaluateWorkflowConditions({
-            conditionsAll: config.conditions_all,
-            conditionsAny: config.conditions_any,
-            currentRecord: candidateRow,
-            moduleId,
-            context: reportEvaluationContext,
-          });
-          if (!passed) continue;
-
-          const context = createWorkflowEvaluationContext(moduleId);
-          const resolvedRow: ReportRow = { ...candidateRow };
-
-          for (const fieldKey of neededKeys) {
-            if (parseReportTableFieldKey(fieldKey) || parseReportTableRelationFieldKey(fieldKey)) {
-              resolvedRow[fieldKey] = candidateRow[fieldKey];
-              continue;
-            }
-            resolvedRow[fieldKey] = await resolveWorkflowFieldValue({
-              fieldKey,
-              currentRecord: candidateRow,
-              moduleId,
-              context,
-            });
-          }
-          nextRows.push(resolvedRow);
-        }
+      if (error) {
+        const failure = await (error as any)?.context
+          ?.json?.()
+          .catch(() => null);
+        throw new Error(
+          String(failure?.error || error.message || "report_runtime_failed"),
+        );
       }
-
-      setCanView(true);
-      setRows(nextRows);
-      setChartRows(chartDimensionField ? buildFlatGroupedRows(
-        nextRows,
-        [{ field: chartDimensionField, direction: 'asc' }],
-        fieldMap,
-        loadedOptions.relationOptions,
-        config.metric_type,
-        config.metric_fields,
-        currencyLabel
-      ) : []);
-
-      if (config.group_bys.length === 0) {
-        setGroupedRows([]);
-        setGroupedTreeRows([]);
-        return;
-      }
-
-      const buckets = new Map<string, GroupedRow>();
-      nextRows.forEach((row) => {
-        const groupLabels: Record<string, string> = {};
-        const groupValues: Record<string, any> = {};
-
-        config.group_bys.forEach((grouping) => {
-          const field = fieldMap[grouping.field];
-          groupValues[grouping.field] = row[grouping.field];
-          groupLabels[grouping.field] = field
-            ? formatReportCellValue(field as any, row, loadedOptions.relationOptions, currencyLabel)
-            : String(row[grouping.field] ?? '-');
-        });
-
-        config.group_bys.forEach((grouping, depth) => {
-          const activeGroupings = config.group_bys.slice(0, depth + 1);
-          if (!activeGroupings.every((item) => isGroupingFieldAvailableForRow(item.field, row))) return;
-          const bucketKey = activeGroupings
-            .map((item) => `${item.field}:${String(groupValues[item.field] ?? groupLabels[item.field] ?? '-')}`)
-            .join('||');
-          const parentKey = depth > 0
-            ? activeGroupings
-                .slice(0, -1)
-                .map((item) => `${item.field}:${String(groupValues[item.field] ?? groupLabels[item.field] ?? '-')}`)
-                .join('||')
-            : undefined;
-          const current = buckets.get(bucketKey) || {
-            key: bucketKey,
-            parent_key: parentKey,
-            group_field: grouping.field,
-            group_label: groupLabels[grouping.field] || '-',
-            group_depth: depth,
-            group_values: activeGroupings.reduce<Record<string, any>>((acc, item) => {
-              acc[item.field] = groupValues[item.field];
-              return acc;
-            }, {}),
-            group_labels: activeGroupings.reduce<Record<string, string>>((acc, item) => {
-              acc[item.field] = groupLabels[item.field];
-              return acc;
-            }, {}),
-            metrics: {},
-            metric_counts: {},
-            row_count: 0,
-          };
-
-          current.row_count += 1;
-          current.metrics.__count = Number(current.metrics.__count || 0) + 1;
-
-          if (config.metric_type === 'sum' || config.metric_type === 'avg') {
-            const metricSourceKeys = ((current as any).__metric_source_keys || {}) as Record<string, Set<string>>;
-            config.metric_fields.forEach((fieldKey) => {
-              metricSourceKeys[fieldKey] = metricSourceKeys[fieldKey] || new Set<string>();
-              const sourceKey = getMetricSourceKey(fieldKey, row);
-              if (metricSourceKeys[fieldKey].has(sourceKey)) return;
-              metricSourceKeys[fieldKey].add(sourceKey);
-              const numericValue = Number(row[fieldKey] || 0);
-              current.metrics[fieldKey] = Number(current.metrics[fieldKey] || 0) + (Number.isFinite(numericValue) ? numericValue : 0);
-              current.metric_counts[fieldKey] = Number(current.metric_counts[fieldKey] || 0) + 1;
-            });
-            (current as any).__metric_source_keys = metricSourceKeys;
-          }
-
-          buckets.set(bucketKey, current);
-        });
-      });
-
-      const nextGroupedRows = Array.from(buckets.values()).map((row) => {
-        const { __metric_source_keys: _ignored, ...cleanRow } = row as any;
-        return cleanRow as GroupedRow;
-      }).sort((left, right) => {
-        for (const grouping of config.group_bys) {
-          const base = compareValues(left.group_values[grouping.field], right.group_values[grouping.field]);
-          if (base !== 0) return grouping.direction === 'desc' ? -base : base;
-        }
-        return 0;
-      });
-      const rowsByKey = new Map(nextGroupedRows.map((row) => [row.key, { ...row, children: [] as GroupedRow[] }]));
-      const nextTreeRows: GroupedRow[] = [];
-      rowsByKey.forEach((row) => {
-        if (row.parent_key && rowsByKey.has(row.parent_key)) {
-          rowsByKey.get(row.parent_key)!.children!.push(row);
-          return;
-        }
-        nextTreeRows.push(row);
-      });
-      const normalizeChildren = (items: GroupedRow[]): GroupedRow[] =>
-        items.map((item) => {
-          const children = item.children && item.children.length > 0 ? normalizeChildren(item.children) : [];
-          if (children.length === 1 && String(children[0].group_label || '') === String(item.group_label || '')) {
-            return { ...children[0], parent_key: item.parent_key, group_depth: item.group_depth };
-          }
-          return { ...item, children: children.length > 0 ? children : undefined };
-        });
-
-      setGroupedRows(nextGroupedRows.filter((row) => row.group_depth === config.group_bys.length - 1));
-      setGroupedTreeRows(normalizeChildren(nextTreeRows));
-    } catch {
-      message.error('اجرای گزارش ناموفق بود.');
-      setRows([]);
-      setGroupedRows([]);
-      setGroupedTreeRows([]);
-      setChartRows([]);
+      if (!data || !Array.isArray(data.groups))
+        throw new Error("report_runtime_invalid");
+      setRuntime(data as ReportRuntime);
+    } catch (error) {
+      const reason = String((error as any)?.message || error || "");
+      message.error(
+        reason.includes("report_row_limit_exceeded") ||
+          reason.includes("report_expanded_row_limit_exceeded")
+          ? "حجم داده این گزارش برای اجرای کامل زیاد است."
+          : "اجرای گزارش داشبورد ناموفق بود.",
+      );
+      setRuntime(null);
     } finally {
       setLoading(false);
-      setExecuting(false);
     }
-  }, [
-    config.columns,
-    config.conditions_all,
-    config.conditions_any,
-    chartDimensionField,
-    config.group_bys,
-    config.metric_fields,
-    config.metric_type,
-    config.row_limit,
-    config.secondary_module_ids,
-    currencyLabel,
-    fieldMap,
-    message,
-    moduleConfig,
-    moduleId,
-    selectedTableBlocks,
-  ]);
+  }, [message, report.id]);
 
   useEffect(() => {
-    setLoading(true);
-    setRows([]);
-    setGroupedRows([]);
-    setRenderMode(config.default_view === 'table_and_chart' && chartDimensionField ? 'bar' : 'table');
-    setActiveMetricKey('__count');
+    setRenderMode(config.default_view === "table" ? "table" : "bar");
     void executeReport();
-  }, [chartDimensionField, config.default_view, executeReport, report?.id]);
+  }, [config.default_view, executeReport]);
 
-  useEffect(() => {
-    const fallback = metricOptions[0]?.value || '__count';
-    if (!metricOptions.some((item) => item.value === activeMetricKey)) {
-      setActiveMetricKey(fallback);
-    }
-  }, [activeMetricKey, metricOptions]);
-
-  const rawColumns = useMemo<ColumnsType<ReportRow>>(
+  const groups = runtime?.groups || [];
+  const mode = runtime?.mode || config.calculation_mode;
+  const chartItems = useMemo(
     () =>
-      visibleFields.map((field) => ({
-        title: field.labels?.fa || field.key,
-        dataIndex: field.key,
-        key: field.key,
-        render: (_value, row) => formatReportCellValue(field as any, row, relationOptions, currencyLabel),
+      groups.map((group) => ({
+        label: group.label || "—",
+        value: groupValue(group, mode),
+        tone:
+          groupValue(group, mode) < 0
+            ? ("decrease" as const)
+            : ("increase" as const),
       })),
-    [currencyLabel, relationOptions, visibleFields]
+    [groups, mode],
+  );
+  const increaseItems = useMemo(
+    () =>
+      groups.map((group) => ({
+        label: group.label || "—",
+        value: numberValue(group.increase),
+        tone: "increase" as const,
+      })),
+    [groups],
+  );
+  const decreaseItems = useMemo(
+    () =>
+      groups.map((group) => ({
+        label: group.label || "—",
+        value: numberValue(group.decrease),
+        tone: "decrease" as const,
+      })),
+    [groups],
+  );
+  const totals = useMemo(
+    () =>
+      groups.reduce(
+        (result, group) => ({
+          increase: result.increase + numberValue(group.increase),
+          decrease: result.decrease + numberValue(group.decrease),
+          target: result.target + numberValue(group.target),
+          total: result.total + numberValue(group.total),
+        }),
+        { increase: 0, decrease: 0, target: 0, total: 0 },
+      ),
+    [groups],
   );
 
-  const groupedColumns = useMemo<ColumnsType<GroupedRow>>(
-    () => [
+  const columns = useMemo<ColumnsType<RuntimeGroup>>(() => {
+    const base: ColumnsType<RuntimeGroup> = [
+      { title: "گروه", dataIndex: "label", key: "label", ellipsis: true },
+    ];
+    if (mode === "difference")
+      return [
+        ...base,
+        {
+          title: "افزاینده",
+          key: "increase",
+          render: (_, row) => formatValue(row.increase, currencyLabel),
+        },
+        {
+          title: "کاهنده",
+          key: "decrease",
+          render: (_, row) => formatValue(row.decrease, currencyLabel),
+        },
+        {
+          title: "خالص",
+          key: "net",
+          render: (_, row) => formatValue(groupValue(row, mode), currencyLabel),
+        },
+      ];
+    if (mode === "percentage")
+      return [
+        ...base,
+        {
+          title: "هدف",
+          dataIndex: "target",
+          key: "target",
+          render: (value) =>
+            toPersianNumber(numberValue(value).toLocaleString("en-US")),
+        },
+        {
+          title: "کل",
+          dataIndex: "total",
+          key: "total",
+          render: (value) =>
+            toPersianNumber(numberValue(value).toLocaleString("en-US")),
+        },
+        {
+          title: "نرخ",
+          key: "rate",
+          render: (_, row) =>
+            `${toPersianNumber(groupValue(row, mode).toFixed(1))}٪`,
+        },
+      ];
+    return [
+      ...base,
       {
-        title: 'گروه‌بندی',
-        key: '__group_label',
-        render: (_value: unknown, row: GroupedRow) => row.group_label || '-',
+        title: "نتیجه",
+        key: "value",
+        render: (_, row) => formatValue(groupValue(row, mode), currencyLabel),
       },
-      ...metricOptions.map((metric) => ({
-        title: metric.label,
-        key: metric.value,
-        render: (_value: unknown, row: GroupedRow) =>
-          metric.value === '__count'
-            ? toPersianNumber(row.row_count)
-            : formatMetricValue(
-                config.metric_type === 'avg'
-                  ? Number(row.metrics[metric.value] || 0) / Math.max(1, Number(row.metric_counts[metric.value] || 0))
-                  : row.metrics[metric.value] || 0,
-                String(fieldMap[metric.value]?.type || '').toLowerCase(),
-                currencyLabel
-              ),
-      })),
-    ],
-    [config.metric_type, currencyLabel, fieldMap, metricOptions]
-  );
+    ];
+  }, [currencyLabel, mode]);
 
-  const chartItems = useMemo(() => {
-    if (!chartAvailable) return [];
-    return chartRows.map((row) => {
-      const label = row.group_label || (chartDimensionField ? row.group_labels[chartDimensionField] : '') || '-';
-      const value = activeMetricKey === '__count'
-        ? row.row_count
-        : config.metric_type === 'avg'
-          ? Number(row.metrics[activeMetricKey] || 0) / Math.max(1, Number(row.metric_counts[activeMetricKey] || 0))
-          : Number(row.metrics[activeMetricKey] || 0);
-      return { label, value, count: row.row_count };
-    });
-  }, [activeMetricKey, chartAvailable, chartDimensionField, chartRows, config.metric_type]);
-
-  if (!canView) {
-    return <Empty description="دسترسی به این گزارش ندارید" />;
-  }
+  const renderChart = () => {
+    if (renderMode === "table")
+      return (
+        <Table<RuntimeGroup>
+          rowKey="key"
+          size="small"
+          columns={columns}
+          dataSource={groups}
+          pagination={{ pageSize: 6, hideOnSinglePage: true }}
+          scroll={{ x: true }}
+          locale={{ emptyText: "داده‌ای یافت نشد" }}
+        />
+      );
+    if (renderMode === "pie") {
+      if (mode === "difference")
+        return (
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <SimplePieChart
+              items={increaseItems}
+              valueLabel="افزاینده"
+              valueFormatter={(value) => formatValue(value, currencyLabel)}
+            />
+            <SimplePieChart
+              items={decreaseItems}
+              valueLabel="کاهنده"
+              valueFormatter={(value) => formatValue(value, currencyLabel)}
+            />
+          </div>
+        );
+      if (mode === "percentage")
+        return (
+          <SimplePieChart
+            items={[
+              {
+                label: "هدف تحقق‌یافته",
+                value: totals.target,
+                tone: "increase",
+              },
+              {
+                label: "باقی‌مانده تا کل",
+                value: Math.max(0, totals.total - totals.target),
+                tone: "decrease",
+              },
+            ]}
+            valueLabel="نرخ"
+            valueFormatter={(value) =>
+              toPersianNumber(numberValue(value).toLocaleString("en-US"))
+            }
+          />
+        );
+      return (
+        <SimplePieChart
+          items={chartItems}
+          valueLabel="مقدار"
+          valueFormatter={(value) => formatValue(value, currencyLabel)}
+        />
+      );
+    }
+    if (renderMode === "line")
+      return (
+        <SimpleLineChart
+          items={chartItems}
+          valueFormatter={(value) =>
+            mode === "percentage"
+              ? `${toPersianNumber(numberValue(value).toFixed(1))}٪`
+              : formatValue(value, currencyLabel)
+          }
+        />
+      );
+    if (mode === "difference")
+      return (
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <SimpleBarChart
+            items={increaseItems}
+            valueLabel="افزاینده"
+            valueFormatter={(value) => formatValue(value, currencyLabel)}
+          />
+          <SimpleBarChart
+            items={decreaseItems}
+            valueLabel="کاهنده"
+            valueFormatter={(value) => formatValue(value, currencyLabel)}
+          />
+        </div>
+      );
+    return (
+      <SimpleBarChart
+        items={chartItems}
+        valueLabel={mode === "percentage" ? "نرخ" : "مقدار"}
+        valueFormatter={(value) =>
+          mode === "percentage"
+            ? `${toPersianNumber(numberValue(value).toFixed(1))}٪`
+            : formatValue(value, currencyLabel)
+        }
+      />
+    );
+  };
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex h-full flex-col gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-1">
-          <Button size="small" icon={<ReloadOutlined />} loading={executing} onClick={() => void executeReport()} />
-          <Button size="small" icon={<TableOutlined />} type={renderMode === 'table' ? 'primary' : 'default'} onClick={() => setRenderMode('table')} />
-          <Button size="small" icon={<BarChartOutlined />} type={renderMode === 'bar' ? 'primary' : 'default'} onClick={() => setRenderMode('bar')} />
-          <Button size="small" icon={<PieChartOutlined />} type={renderMode === 'pie' ? 'primary' : 'default'} onClick={() => setRenderMode('pie')} />
-        </div>
-        {metricOptions.length > 1 && (
-          <Select
+        <div className="flex flex-wrap gap-1">
+          <Button
             size="small"
-            className="min-w-[200px]"
-            value={activeMetricKey}
-            options={metricOptions}
-            onChange={(value) => setActiveMetricKey(String(value))}
+            icon={<ReloadOutlined />}
+            loading={loading}
+            onClick={() => void executeReport()}
+            aria-label="به‌روزرسانی گزارش"
           />
+          <Button
+            size="small"
+            icon={<TableOutlined />}
+            type={renderMode === "table" ? "primary" : "default"}
+            onClick={() => setRenderMode("table")}
+          />
+          <Button
+            size="small"
+            icon={<BarChartOutlined />}
+            type={renderMode === "bar" ? "primary" : "default"}
+            onClick={() => setRenderMode("bar")}
+          />
+          <Button
+            size="small"
+            icon={<LineChartOutlined />}
+            type={renderMode === "line" ? "primary" : "default"}
+            onClick={() => setRenderMode("line")}
+          />
+          <Button
+            size="small"
+            icon={<PieChartOutlined />}
+            type={renderMode === "pie" ? "primary" : "default"}
+            onClick={() => setRenderMode("pie")}
+          />
+        </div>
+        {mode === "difference" && (
+          <span className="text-xs text-gray-500">
+            خالص:{" "}
+            {formatValue(totals.increase - totals.decrease, currencyLabel)}
+          </span>
+        )}
+        {mode === "percentage" && (
+          <span className="text-xs text-gray-500">
+            نرخ:{" "}
+            {totals.total > 0
+              ? `${toPersianNumber(((totals.target / totals.total) * 100).toFixed(1))}٪`
+              : "—"}
+          </span>
         )}
       </div>
-
-      <div className="overflow-auto rounded-xl border border-gray-200 p-2 dark:border-gray-700" style={{ maxHeight }}>
+      <div
+        className="min-h-0 flex-1 overflow-auto rounded-xl border border-gray-200 p-2 dark:border-gray-700"
+        style={{ maxHeight }}
+      >
         {loading ? (
-          <div className="flex h-[180px] items-center justify-center"><Spin /></div>
-        ) : rows.length === 0 ? (
-          <div className="flex h-[180px] items-center justify-center"><Empty description="برای این گزارش داده‌ای پیدا نشد" /></div>
-        ) : renderMode === 'bar' && chartAvailable ? (
-          <SimpleBarChart
-            items={chartItems}
-            valueLabel={metricOptions.find((item) => item.value === activeMetricKey)?.label || 'معیار'}
-            valueFormatter={(value) => activeMetricKey === '__count'
-              ? toPersianNumber(value)
-              : formatMetricValue(Number(value || 0), String(fieldMap[activeMetricKey]?.type || '').toLowerCase(), currencyLabel)}
-          />
-        ) : renderMode === 'pie' && chartAvailable ? (
-          <SimplePieChart
-            items={chartItems}
-            valueLabel={metricOptions.find((item) => item.value === activeMetricKey)?.label || 'معیار'}
-            valueFormatter={(value) => activeMetricKey === '__count'
-              ? toPersianNumber(value)
-              : formatMetricValue(Number(value || 0), String(fieldMap[activeMetricKey]?.type || '').toLowerCase(), currencyLabel)}
-          />
-        ) : config.group_bys.length > 0 ? (
-          <Table<GroupedRow>
-            loading={executing}
-            rowKey="key"
-            dataSource={groupedTreeRows}
-            columns={groupedColumns}
-            expandable={{ defaultExpandAllRows: true }}
-            pagination={{ pageSize: 8, showSizeChanger: false }}
-            scroll={{ x: true }}
-            locale={{ emptyText: 'داده‌ای پیدا نشد' }}
-            size="small"
-          />
+          <div className="flex h-[180px] items-center justify-center">
+            <Spin />
+          </div>
+        ) : groups.length === 0 ? (
+          <div className="flex h-[180px] items-center justify-center">
+            <Empty description="برای این گزارش داده‌ای پیدا نشد" />
+          </div>
         ) : (
-          <Table<ReportRow>
-            loading={executing}
-            rowKey="__report_row_key"
-            dataSource={rows}
-            columns={rawColumns}
-            pagination={{ pageSize: 8, showSizeChanger: false }}
-            scroll={{ x: true }}
-            locale={{ emptyText: 'داده‌ای پیدا نشد' }}
-            size="small"
-          />
+          renderChart()
         )}
       </div>
     </div>

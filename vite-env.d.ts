@@ -10,6 +10,8 @@ interface ImportMetaEnv {
   readonly VITE_MAP_MAX_ZOOM?: string;
 }
 
+declare const __TAZESYSTEM_APP_VERSION__: string;
+
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }

@@ -49,6 +49,8 @@ export interface ReportDefinitionConfig {
   /** Explicit report viewers. These grants are scoped to the report and organization. */
   viewer_user_ids: string[];
   viewer_role_ids: string[];
+  /** Opt-in only: show this report as a compact slide on members' dashboards. */
+  show_in_members_dashboard: boolean;
   reference_report_ids: string[];
   increase_metrics: ReportReferenceMetric[];
   decrease_metrics: ReportReferenceMetric[];
@@ -320,6 +322,7 @@ export const createDefaultReportConfig = (): ReportDefinitionConfig => ({
   calculation_mode: 'normal',
   viewer_user_ids: [],
   viewer_role_ids: [],
+  show_in_members_dashboard: false,
   reference_report_ids: [],
   increase_metrics: [],
   decrease_metrics: [],
@@ -467,6 +470,7 @@ export const normalizeReportConfig = (value: Partial<ReportDefinitionConfig> | n
     viewer_role_ids: Array.isArray((value as any)?.viewer_role_ids)
       ? Array.from(new Set<string>((value as any).viewer_role_ids.map((item: any) => String(item || '').trim()).filter(Boolean)))
       : [],
+    show_in_members_dashboard: (value as any)?.show_in_members_dashboard === true,
     reference_report_ids: referenceReportIds,
     increase_metrics: Array.isArray((value as any)?.increase_metrics)
       ? (value as any).increase_metrics.map(normalizeReferenceMetric).filter(Boolean).slice(0, 24) as ReportReferenceMetric[]

@@ -1,43 +1,26 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { App, Button, Card, Empty, Spin } from 'antd';
 import { LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
-import {
-  fetchCurrentUserRolePermissions,
-  resolveReportsAccessPermissions,
-  type PermissionMap,
-} from '../../utils/permissions';
-import { type ReportDefinitionRecord } from '../../utils/reporting';
+import { normalizeReportConfig, type ReportDefinitionRecord } from '../../utils/reporting';
 import ReportCompactRenderer from '../reports/ReportCompactRenderer';
-import { MODULES } from '../../moduleRegistry';
 
 const ReportsSliderWidget: React.FC = () => {
   const navigate = useNavigate();
   const { message } = App.useApp();
   const [loading, setLoading] = useState(true);
-  const [permissions, setPermissions] = useState<PermissionMap | null>(null);
   const [reports, setReports] = useState<ReportDefinitionRecord[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [setupMissing, setSetupMissing] = useState(false);
 
-  const access = useMemo(() => resolveReportsAccessPermissions(permissions), [permissions]);
-
   const loadReports = useCallback(async () => {
     setLoading(true);
     try {
-      const rolePermissions = await fetchCurrentUserRolePermissions(supabase);
-      setPermissions(rolePermissions);
-      const reportAccess = resolveReportsAccessPermissions(rolePermissions);
-      if (!reportAccess.canViewHub) {
-        setReports([]);
-        setSetupMissing(false);
-        return;
-      }
-
       const { data, error } = await supabase
         .from('report_definitions')
         .select('id, name, description, module_id, report_type, config, is_active, created_at, updated_at')
+        .eq('config->>show_in_members_dashboard', 'true')
         .order('updated_at', { ascending: false });
 
       if (error) {
@@ -52,9 +35,7 @@ const ReportsSliderWidget: React.FC = () => {
 
       const allowed = ((data || []) as ReportDefinitionRecord[]).filter((report) => {
         if (report?.is_active === false) return false;
-        const moduleId = String(report?.module_id || '').trim();
-        if (!moduleId || !MODULES[moduleId]) return false;
-        return rolePermissions?.[moduleId]?.view !== false;
+        return normalizeReportConfig(report.config).show_in_members_dashboard;
       });
       setSetupMissing(false);
       setReports(allowed);
@@ -74,14 +55,6 @@ const ReportsSliderWidget: React.FC = () => {
     void loadReports();
   }, [loadReports]);
 
-  if (!access.canViewHub) {
-    return (
-      <Card className="h-full shadow-sm">
-        <Empty description="دسترسی به ویجت گزارش‌ها ندارید" />
-      </Card>
-    );
-  }
-
   if (setupMissing) {
     return (
       <Card className="h-full shadow-sm">
@@ -97,7 +70,7 @@ const ReportsSliderWidget: React.FC = () => {
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-base font-bold">گزارش‌ها</div>
-          <div className="text-xs text-gray-500 dark:text-gray-400">نمایش اسلایدی گزارش‌های در دسترس</div>
+          <div className="text-xs text-gray-500 dark:text-gray-400">نمایش اسلایدی گزارش‌های منتخب و مجاز</div>
         </div>
         <div className="flex items-center gap-1">
           <Button size="small" onClick={() => void loadReports()} loading={loading}>بروزرسانی</Button>
@@ -137,7 +110,7 @@ const ReportsSliderWidget: React.FC = () => {
             {reports.length > 0 ? `${activeIndex + 1} / ${reports.length}` : '0 / 0'}
           </div>
           <div className="min-h-0 flex-1 overflow-hidden">
-            <ReportCompactRenderer report={activeReport} maxHeight={360} rowLimitCap={100} />
+            <ReportCompactRenderer report={activeReport} maxHeight={360} />
           </div>
         </div>
       )}

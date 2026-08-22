@@ -16,6 +16,16 @@ interface VersionChangesRelease {
 
 const VERSION_MANIFEST_RELEASE_LIMIT = 30;
 
+const readAppVersion = () => {
+  const pkgPath = path.resolve(process.cwd(), 'package.json');
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { version?: unknown };
+  const version = String(pkg.version || '').trim();
+  if (!version) {
+    throw new Error('Application version is missing from package.json.');
+  }
+  return version;
+};
+
 const normalizeVersionChangesRelease = (value: unknown): VersionChangesRelease | null => {
   if (!value || typeof value !== 'object') return null;
   const candidate = value as Partial<VersionChangesRelease>;
@@ -117,8 +127,7 @@ const resolveManualChunk = (id: string) => {
 const generateVersionJson = () => ({
   name: 'generate-version-json',
   buildStart() {
-    const pkgPath = path.resolve(process.cwd(), 'package.json');
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+    const version = readAppVersion();
 
     const changesFile = path.resolve(process.cwd(), '.version-changes.json');
     if (!fs.existsSync(changesFile)) {
@@ -131,22 +140,22 @@ const generateVersionJson = () => ({
     const releases = (Array.isArray(changesData.releases) ? changesData.releases : [])
       .map(normalizeVersionChangesRelease)
       .filter((release): release is VersionChangesRelease => Boolean(release));
-    const currentRelease = releases.find((release) => release.version === pkg.version);
+    const currentRelease = releases.find((release) => release.version === version);
     if (!currentRelease) {
       throw new Error(
-        `Version ${pkg.version} must have an entry in .version-changes.json. `
+        `Version ${version} must have an entry in .version-changes.json. `
         + 'Use an empty changes array when there are no user-facing changes.'
       );
     }
 
     const releasedAt = new Date().toISOString();
     const versionFile = {
-      version: pkg.version,
+      version,
       releasedAt,
       changes: currentRelease.changes,
       releases: releases.slice(0, VERSION_MANIFEST_RELEASE_LIMIT).map((release) => ({
         ...release,
-        releasedAt: release.version === pkg.version ? releasedAt : release.releasedAt,
+        releasedAt: release.version === version ? releasedAt : release.releasedAt,
       })),
     };
 
@@ -231,7 +240,7 @@ export default defineConfig(({ mode }) => {
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'import.meta.env.VITE_APP_VERSION': JSON.stringify(process.env.npm_package_version)
+        __TAZESYSTEM_APP_VERSION__: JSON.stringify(readAppVersion()),
       },
       resolve: {
         alias: {

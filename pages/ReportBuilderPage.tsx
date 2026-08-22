@@ -85,6 +85,7 @@ const ReportBuilderPage: React.FC = () => {
   const [referenceReports, setReferenceReports] = useState<ReportDefinitionRecord[]>([]);
   const [viewerUserIds, setViewerUserIds] = useState<string[]>([]);
   const [viewerRoleIds, setViewerRoleIds] = useState<string[]>([]);
+  const [showInMembersDashboard, setShowInMembersDashboard] = useState(false);
   const [secondaryModuleIds, setSecondaryModuleIds] = useState<string[]>([]);
   const [rowLimit, setRowLimit] = useState(200);
   const [columns, setColumns] = useState<string[]>([]);
@@ -357,6 +358,7 @@ const ReportBuilderPage: React.FC = () => {
       setPercentageTotalMetric(config.percentage_total_metric);
       setViewerUserIds(config.viewer_user_ids);
       setViewerRoleIds(config.viewer_role_ids);
+      setShowInMembersDashboard(config.show_in_members_dashboard);
       setMainModuleId(String(report.module_id || ''));
       setSecondaryModuleIds(config.secondary_module_ids);
       setRowLimit(config.row_limit);
@@ -471,6 +473,7 @@ const ReportBuilderPage: React.FC = () => {
         calculation_mode: calculationMode,
         viewer_user_ids: viewerUserIds,
         viewer_role_ids: viewerRoleIds,
+        show_in_members_dashboard: showInMembersDashboard,
         reference_report_ids: calculationMode === 'normal' ? [] : referenceReportIds,
         increase_metrics: calculationMode === 'difference' ? increaseMetrics : [],
         decrease_metrics: calculationMode === 'difference' ? decreaseMetrics : [],
@@ -646,8 +649,13 @@ const ReportBuilderPage: React.FC = () => {
             </div>
 
             <div className="rounded-[1.5rem] border border-gray-200 p-4 dark:border-gray-700">
-              <div className="mb-1 font-black text-gray-800 dark:text-gray-100">اجازه مشاهده گزارش</div>
-              <div className="mb-3 text-sm text-gray-500">کاربران یا نقش‌های انتخاب‌شده، نتیجه کامل محاسبات این گزارش را می‌بینند؛ جزئیات خام ماژول‌ها همچنان با سطح دسترسی خودشان کنترل می‌شود.</div>
+              <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
+                <div className="font-black text-gray-800 dark:text-gray-100">اجازه مشاهده گزارش</div>
+                <Checkbox checked={showInMembersDashboard} onChange={(event) => setShowInMembersDashboard(event.target.checked)}>
+                  نمایش در داشبورد اعضا
+                </Checkbox>
+              </div>
+              <div className="mb-3 text-sm text-gray-500">کاربران یا نقش‌های انتخاب‌شده، نتیجه کامل محاسبات این گزارش را می‌بینند؛ جزئیات خام ماژول‌ها همچنان با سطح دسترسی خودشان کنترل می‌شود. با فعال‌سازی گزینه داشبورد، همین خروجی فشرده به‌عنوان یک اسلاید برای اعضای مجاز نمایش داده می‌شود.</div>
               <AdaptiveIdentityPicker
                 className="w-full"
                 mode="multiple"

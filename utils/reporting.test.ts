@@ -139,6 +139,7 @@ describe('normalizeReportConfig', () => {
   it('keeps composite sources, explicit viewers, and quarterly date grouping', () => {
     const config = normalizeReportConfig({
       calculation_mode: 'difference',
+      show_in_members_dashboard: true,
       viewer_user_ids: ['user-a', '', 'user-a'],
       viewer_role_ids: ['role-a'],
       reference_report_ids: ['report-a', 'report-b', 'report-a'],
@@ -153,6 +154,7 @@ describe('normalizeReportConfig', () => {
     });
 
     expect(config.calculation_mode).toBe('difference');
+    expect(config.show_in_members_dashboard).toBe(true);
     expect(config.viewer_user_ids).toEqual(['user-a']);
     expect(config.reference_report_ids).toEqual(['report-a', 'report-b']);
     expect(config.group_bys[0]).toMatchObject({

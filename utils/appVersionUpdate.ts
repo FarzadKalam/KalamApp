@@ -16,7 +16,7 @@ interface RefreshIntent {
   attempts: number;
 }
 
-export const CURRENT_APP_VERSION = String(import.meta.env.VITE_APP_VERSION || '0.0.0').trim();
+export const CURRENT_APP_VERSION = __TAZESYSTEM_APP_VERSION__.trim();
 export const APP_VERSION_MANIFEST_URL = '/version.json';
 
 const REFRESH_INTENT_KEY = 'tazesystem:app-update-refresh-intent:v1';
