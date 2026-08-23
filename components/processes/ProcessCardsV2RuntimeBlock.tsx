@@ -1332,6 +1332,34 @@ const buildDraftProcessCards = (
     });
 };
 
+const getProcessCardCreatedAt = (card: ProcessV2CardData) => {
+  const source = card.auditSource && typeof card.auditSource === 'object' ? card.auditSource : {};
+  const metadata = parseObject(source?.metadata);
+  const firstStageSource = card.lanes.flatMap((lane) => lane.stages)
+    .map((stage) => (stage.source && typeof stage.source === 'object' ? stage.source : {}))[0] || {};
+  const firstStageMetadata = parseObject(firstStageSource?.metadata);
+  const rawValue = source?.process_created_at
+    || metadata?.process_created_at
+    || source?.created_at
+    || source?.started_at
+    || source?.updated_at
+    || firstStageSource?.process_created_at
+    || firstStageMetadata?.process_created_at
+    || firstStageSource?.created_at
+    || firstStageSource?.updated_at;
+  const timestamp = new Date(rawValue || 0).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const isCompletedProcessCard = (card: ProcessV2CardData) => {
+  const status = normalizeText(card.statusLabel).toLowerCase();
+  if (['done', 'completed', 'confirmed', 'final', 'settled'].includes(status)) return true;
+  const stages = card.lanes.flatMap((lane) => lane.stages);
+  return stages.length > 0 && stages.every((stage) => (
+    stage.kind === 'activity' && ['done', 'canceled'].includes(stage.status)
+  ));
+};
+
 const fetchRunStages = async (runId: string, options?: { force?: boolean }) => {
   if (!runId) return [];
   const extended = await supabase
@@ -1632,6 +1660,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   const [cardOverrides, setCardOverrides] = useState<Record<string, ProcessV2CardData>>({});
   const [extraCards, setExtraCards] = useState<ProcessV2CardData[]>([]);
   const [hiddenCardIds, setHiddenCardIds] = useState<Set<string>>(() => new Set());
+  const [showCompletedProcesses, setShowCompletedProcesses] = useState(false);
   const [draftStagesOverride, setDraftStagesOverride] = useState<any[] | null>(null);
   const [linkedDraftStages, setLinkedDraftStages] = useState<any[]>(() => (
     cacheFresh && cachedRuntimeBlock ? cachedRuntimeBlock.linkedDraftStages || EMPTY_STAGE_LIST : EMPTY_STAGE_LIST
@@ -2633,11 +2662,27 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
   const cardKey = useCallback((card: ProcessV2CardData) => `${card.mode}:${card.id}`, []);
 
-  const displayCards = useMemo(
+  const allDisplayCards = useMemo(
     () => [...extraCards, ...cards]
       .map((card) => cardOverrides[cardKey(card)] || card)
-      .filter((card) => !hiddenCardIds.has(cardKey(card))),
+      .filter((card) => !hiddenCardIds.has(cardKey(card)))
+      .map((card, index) => ({ card, index }))
+      .sort((left, right) => (
+        getProcessCardCreatedAt(right.card) - getProcessCardCreatedAt(left.card)
+        || left.index - right.index
+      ))
+      .map(({ card }) => card),
     [cardKey, cardOverrides, cards, extraCards, hiddenCardIds],
+  );
+  const completedCards = useMemo(
+    () => allDisplayCards.filter(isCompletedProcessCard),
+    [allDisplayCards],
+  );
+  const displayCards = useMemo(
+    () => showCompletedProcesses
+      ? allDisplayCards
+      : allDisplayCards.filter((card) => !isCompletedProcessCard(card)),
+    [allDisplayCards, showCompletedProcesses],
   );
 
   useEffect(() => {
@@ -4010,6 +4055,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       templateTitle: templateTitle || '',
       relatedRecordLabel: fallbackRecordLabel,
       statusLabel: 'draft',
+      auditSource: { process_created_at: new Date().toISOString() },
       lanes: [{ id: `lane_${Date.now()}`, title: 'ردیف اصلی', stages: [] }],
     };
   }, [fallbackRecordLabel, templateNameById, templates]);
@@ -4083,6 +4129,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
           startSortOrder: 10,
         }).map((stage: any) => ({
           ...stage,
+          process_created_at: new Date().toISOString(),
           automation_rules: Array.isArray(stage?.automation_rules) ? stage.automation_rules : [],
           [PROCESS_TASK_CUSTOM_FIELDS_KEY]: normalizeProcessTaskCustomFields(stage?.[PROCESS_TASK_CUSTOM_FIELDS_KEY] || stage?.metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]),
           [PROCESS_TASK_STATUS_OPTIONS_KEY]: normalizeProcessTaskStatusOptions(stage?.[PROCESS_TASK_STATUS_OPTIONS_KEY] || stage?.metadata?.[PROCESS_TASK_STATUS_OPTIONS_KEY]),
@@ -4175,6 +4222,28 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         targetGroupId,
       });
       if (result.createdCount > 0) {
+        const createdStageIdentityKeys = new Set(
+          (Array.isArray(result.createdTasks) ? result.createdTasks : []).flatMap((task: any) => {
+            const recurrence = parseObject(task?.recurrence_info);
+            return [
+              task?.process_node_key,
+              task?.process_run_stage_id,
+              task?.template_stage_id,
+              task?.source_template_stage_id,
+              recurrence?.process_node_key,
+              recurrence?.process_run_stage_id,
+              recurrence?.template_stage_id,
+            ].map(normalizeText).filter(Boolean);
+          }),
+        );
+        const createdDraftStages = itemDraftStages.filter((stage, index) => {
+          const source = stage.source && typeof stage.source === 'object' ? stage.source : stage;
+          const stageIds = collectV2StageAutoAssignIds(stage, index);
+          return stageIds.some((stageId) => createdStageIdentityKeys.has(normalizeText(stageId)));
+        });
+        // فقط مرحله‌هایی که واقعاً فعالیت متناظرشان ساخته شده حذف می‌شوند؛
+        // مرحله‌های بدون مسئول یا مرحله‌هایی که ساختشان ناموفق بوده‌اند پیش‌نویس می‌مانند.
+        await removeDraftSourceForV2Stages(createdDraftStages);
         setCardOverrides((current) => {
           const next = { ...current };
           delete next[cardKey(item)];
@@ -4206,7 +4275,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         return next;
       });
     }
-  }, [autoAssigningCardIds, cardKey, markRuntimeModuleListsChanged, message, normalizedModuleId, normalizedRecordId, recordData, refresh, resolveRawDraftStagesForV2Stages]);
+  }, [autoAssigningCardIds, cardKey, markRuntimeModuleListsChanged, message, normalizedModuleId, normalizedRecordId, recordData, refresh, removeDraftSourceForV2Stages, resolveRawDraftStagesForV2Stages]);
 
   const handleAutoAssignStage = useCallback(async (stage: ProcessV2Stage, _laneTitle: string, item: ProcessV2CardData, overrides?: Record<string, any>) => {
     if (stage.kind !== 'draft') return;
@@ -4298,6 +4367,9 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         targetStageId,
       });
       if (result.createdCount > 0) {
+        // ارجاع تک‌مرحله‌ای باید همان پیش‌نویس را به فعالیت تبدیل کند، نه اینکه
+        // یک فعالیت موازی در ردیف دیگری بسازد و پیش‌نویس را باقی بگذارد.
+        await removeDraftSourceForV2Stages([stage]);
         setCardOverrides((current) => {
           const next = { ...current };
           delete next[cardKey(item)];
@@ -4327,7 +4399,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         return next;
       });
     }
-  }, [autoAssigningCardIds, cardKey, markRuntimeModuleListsChanged, message, normalizedModuleId, normalizedRecordId, recordData, refresh, resolveRawDraftStagesForV2Stages]);
+  }, [autoAssigningCardIds, cardKey, markRuntimeModuleListsChanged, message, normalizedModuleId, normalizedRecordId, recordData, refresh, removeDraftSourceForV2Stages, resolveRawDraftStagesForV2Stages]);
 
   const mergeDraftStageOverrides = useCallback((rawStage: any, overrides?: Record<string, any>) => {
     const patch = overrides && typeof overrides === 'object' ? overrides : {};
@@ -4520,7 +4592,11 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     const processGroupName = normalizeText(source?.process_group_name || sourceMetadata?.process_group_name || item.title) || 'فرآیند پیش نویس';
     const processNodeKey = normalizeText(source?.process_node_key || source?.[PROCESS_NODE_KEY] || sourceMetadata?.process_node_key || sourceMetadata?.[PROCESS_NODE_KEY] || stage.id) || `node_${Date.now()}`;
     const processLaneKey = normalizeText(source?.process_lane_key || source?.[PROCESS_LANE_KEY] || sourceMetadata?.process_lane_key || sourceMetadata?.[PROCESS_LANE_KEY]) || normalizeText(laneTitle) || 'lane_1';
-    const nextSortOrder = Number.isFinite(Number(stage.layoutSlot))
+    const itemStageCount = item.lanes.reduce((sum, lane) => sum + lane.stages.length, 0);
+    const isNewProcess = itemStageCount <= 1 && /^(draft|new-run):/.test(normalizedItemIdForDraftSave);
+    const nextSortOrder = isNewProcess
+      ? 10
+      : Number.isFinite(Number(stage.layoutSlot))
       ? (Number(stage.layoutSlot) + 1) * 10
       : ((currentStages.length + 1) * 10);
     const itemTemplateId = item.mode === 'run' ? item.templateId : '';
@@ -4539,17 +4615,24 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       source_template_name: normalizeText(source?.source_template_name || itemTemplateTitle) || null,
       process_node_key: processNodeKey,
       process_lane_key: processLaneKey,
+      process_created_at: normalizeText(source?.process_created_at || sourceMetadata?.process_created_at) || new Date().toISOString(),
       metadata: {
         ...sourceMetadata,
         process_group_id: processGroupId,
         process_group_name: processGroupName,
         process_node_key: processNodeKey,
         process_lane_key: processLaneKey,
+        process_created_at: normalizeText(source?.process_created_at || sourceMetadata?.process_created_at) || new Date().toISOString(),
       },
     };
     const nextDraftStage = mergeDraftStageOverrides(baseDraftStage, overrides);
-    await persistDraftStageList([...currentStages, nextDraftStage].sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0)));
-    const itemStageCount = item.lanes.reduce((sum, lane) => sum + lane.stages.length, 0);
+    const shiftedExistingStages = isNewProcess
+      ? currentStages.map((candidate: any, index: number) => ({
+          ...candidate,
+          sort_order: Number(candidate?.sort_order || ((index + 1) * 10)) + 20,
+        }))
+      : currentStages;
+    await persistDraftStageList([...shiftedExistingStages, nextDraftStage].sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0)));
     if (itemStageCount <= 1) {
       setExtraCards((current) => current.filter((card) => card.id !== item.id));
       setCardOverrides((current) => {
@@ -4657,7 +4740,9 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     loading,
     waitingForContext: waitingForTemplateContext,
     hasError: Boolean(errorText),
-    cardCount: displayCards.length,
+    // فرآیندهای تکمیل‌شده در حالت جمع‌شده هم دادهٔ معتبر هستند؛ اگر همهٔ کارت‌ها
+    // تکمیل شده باشند، سطح خالی نباید toggle بازگرداندن آن‌ها را پنهان کند.
+    cardCount: allDisplayCards.length,
   });
   const stageDeleteHasTask = Boolean(stageDeleteRequest && getTaskIdForProcessStage(stageDeleteRequest.stage));
   const bulkDeleteStages = getBulkDeleteStages(bulkDeleteRequest);
@@ -4721,6 +4806,13 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         </div>
       ) : (
         <div className="space-y-3">
+          {completedCards.length > 0 ? (
+            <div className="flex justify-end">
+              <Button type="link" size="small" onClick={() => setShowCompletedProcesses((current) => !current)}>
+                {getCompletedProcessesToggleLabel(completedCards.length, showCompletedProcesses)}
+              </Button>
+            </div>
+          ) : null}
           {displayCards.map((card) => {
             const key = cardKey(card);
             return (
