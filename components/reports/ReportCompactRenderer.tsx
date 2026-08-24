@@ -69,7 +69,7 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
   const [runtime, setRuntime] = useState<ReportRuntime | null>(null);
   const [loading, setLoading] = useState(true);
   const [renderMode, setRenderMode] = useState<RenderMode>(
-    config.default_view === "table" ? "table" : "bar",
+    (config.output_modes.find((mode) => mode !== "table") || config.output_modes[0] || "table") as RenderMode,
   );
   const currencyLabel = readCurrencyConfig().label || "";
 
@@ -106,7 +106,7 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
   }, [message, report.id]);
 
   useEffect(() => {
-    setRenderMode(config.default_view === "table" ? "table" : "bar");
+    setRenderMode((config.output_modes.find((mode) => mode !== "table") || config.output_modes[0] || "table") as RenderMode);
     void executeReport();
   }, [config.default_view, executeReport]);
 
@@ -117,8 +117,9 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
       groups.map((group) => ({
         label: group.label || "—",
         value: groupValue(group, mode),
-        tone:
-          groupValue(group, mode) < 0
+        tone: mode === "normal"
+          ? undefined
+          : groupValue(group, mode) < 0
             ? ("decrease" as const)
             : ("increase" as const),
       })),
@@ -314,31 +315,31 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
     <div className="flex h-full flex-col gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap gap-1">
-          <Button
+          {config.output_modes.includes("table") && <Button
             size="small"
             icon={<ReloadOutlined />}
             loading={loading}
             onClick={() => void executeReport()}
             aria-label="به‌روزرسانی گزارش"
-          />
-          <Button
+          />}
+          {config.output_modes.includes("bar") && <Button
             size="small"
             icon={<TableOutlined />}
             type={renderMode === "table" ? "primary" : "default"}
             onClick={() => setRenderMode("table")}
-          />
-          <Button
+          />}
+          {config.output_modes.includes("line") && <Button
             size="small"
             icon={<BarChartOutlined />}
             type={renderMode === "bar" ? "primary" : "default"}
             onClick={() => setRenderMode("bar")}
-          />
-          <Button
+          />}
+          {config.output_modes.includes("pie") && <Button
             size="small"
             icon={<LineChartOutlined />}
             type={renderMode === "line" ? "primary" : "default"}
             onClick={() => setRenderMode("line")}
-          />
+          />}
           <Button
             size="small"
             icon={<PieChartOutlined />}

@@ -34,6 +34,7 @@ import {
   normalizeReportConfig,
   type ReportDefinitionRecord,
   type ReportCalculationMode,
+  type ReportOutputMode,
   type ReportReferenceMetric,
   type ReportGroupingDefinition,
   type ReportScheduleChannel,
@@ -95,7 +96,7 @@ const ReportBuilderPage: React.FC = () => {
   const [metricType, setMetricType] = useState<'count' | 'sum' | 'avg'>('count');
   const [metricFields, setMetricFields] = useState<string[]>([]);
   const [chartDimensionField, setChartDimensionField] = useState<string | null>(null);
-  const [defaultView, setDefaultView] = useState<'table' | 'table_and_chart'>('table_and_chart');
+  const [outputModes, setOutputModes] = useState<ReportOutputMode[]>(['table', 'bar']);
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduleIntervalValue, setScheduleIntervalValue] = useState(1);
   const [scheduleIntervalUnit, setScheduleIntervalUnit] = useState<ReportScheduleUnit>('day');
@@ -369,7 +370,7 @@ const ReportBuilderPage: React.FC = () => {
       setMetricType(config.metric_type === 'sum' || config.metric_type === 'avg' ? config.metric_type : 'count');
       setMetricFields(config.metric_fields);
       setChartDimensionField(config.chart_dimension_field);
-      setDefaultView(config.default_view);
+      setOutputModes(config.output_modes);
       setScheduleEnabled(config.schedule.enabled);
       setScheduleIntervalValue(config.schedule.interval_value);
       setScheduleIntervalUnit(config.schedule.interval_unit);
@@ -436,6 +437,14 @@ const ReportBuilderPage: React.FC = () => {
         return false;
       }
       if (targetStep === 3) {
+        if (outputModes.length === 0) {
+          message.error('حداقل یک خروجی برای نمایش گزارش انتخاب کنید.');
+          return false;
+        }
+        if (outputModes.some((mode) => mode !== 'table') && groupBys.length === 0) {
+          message.error('برای نمودار، حداقل یک گروه‌بندی انتخاب کنید.');
+          return false;
+        }
         if (groupBys.some((item) => !item.field)) {
           message.error('همه‌ی گروه‌بندی‌ها باید فیلد معتبر داشته باشند.');
           return false;
@@ -459,7 +468,7 @@ const ReportBuilderPage: React.FC = () => {
       }
       return true;
     },
-    [calculationMode, columns.length, decreaseMetrics.length, groupBys, increaseMetrics.length, mainModuleId, message, metricFields.length, name, percentageTargetMetric, percentageTotalMetric, referenceReportIds.length, scheduleBotGroupIds.length, scheduleChannels.length, scheduleEnabled, scheduleFirstRunAt, scheduleIntervalAt, scheduleRecipientIds.length, selectedReferenceReports]
+    [calculationMode, columns.length, decreaseMetrics.length, groupBys, increaseMetrics.length, mainModuleId, message, metricFields.length, name, outputModes.length, percentageTargetMetric, percentageTotalMetric, referenceReportIds.length, scheduleBotGroupIds.length, scheduleChannels.length, scheduleEnabled, scheduleFirstRunAt, scheduleIntervalAt, scheduleRecipientIds.length, selectedReferenceReports]
   );
 
   const handleSave = async () => {
@@ -491,7 +500,9 @@ const ReportBuilderPage: React.FC = () => {
         metric_subtract_fields: [],
         show_group_summaries: true,
         chart_dimension_field: chartDimensionField || groupBys[0]?.field || null,
-        default_view: defaultView,
+        output_modes: outputModes,
+        // نگه‌داشتن سازگاری برای کارت‌های گزارش و تنظیمات نسخه‌های پیشین.
+        default_view: outputModes.length === 1 && outputModes[0] === 'table' ? 'table' : 'table_and_chart',
         schedule: {
           enabled: scheduleEnabled,
           interval_value: Math.max(1, Number(scheduleIntervalValue || 1)),
@@ -907,10 +918,21 @@ const ReportBuilderPage: React.FC = () => {
             </div>
 
             <div className="rounded-[1.5rem] border border-gray-200 p-4 dark:border-gray-700">
-              <div className="mb-4 font-black text-gray-800 dark:text-gray-100">نوع نمایش پیش‌فرض</div>
+              <div className="mb-2 font-black text-gray-800 dark:text-gray-100">خروجی‌های قابل نمایش</div>
+              <div className="mb-4 text-xs text-gray-500">فقط خروجی‌های انتخاب‌شده در صفحهٔ گزارش نشان داده می‌شوند.</div>
               <div className="space-y-4">
-                <Select className="w-full" value={defaultView} options={[{ label: 'فقط جدول', value: 'table' }, { label: 'جدول + نمودار', value: 'table_and_chart' }]} onChange={(value) => setDefaultView(value as 'table' | 'table_and_chart')} />
-                {defaultView === 'table_and_chart' && (
+                <Checkbox.Group
+                  className="flex flex-wrap gap-x-5 gap-y-3"
+                  value={outputModes}
+                  options={[
+                    { label: 'جدول', value: 'table' },
+                    { label: 'نمودار ستونی', value: 'bar' },
+                    { label: 'نمودار خطی', value: 'line' },
+                    { label: 'نمودار دایره‌ای', value: 'pie' },
+                  ]}
+                  onChange={(values) => setOutputModes((values as ReportOutputMode[]).filter((value) => ['table', 'bar', 'pie', 'line'].includes(value)))}
+                />
+                {outputModes.some((mode) => mode !== 'table') && (
                   <Select
                     className="w-full"
                     allowClear

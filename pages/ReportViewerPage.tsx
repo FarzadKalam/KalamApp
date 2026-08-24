@@ -96,6 +96,7 @@ type ReportPrintFieldDefinition = {
 type ServerReportRuntime = {
   mode: 'normal' | 'difference' | 'percentage';
   groups: Array<{ key: string; label: string; row_count: number; increase: number; decrease: number; target: number; total: number; metrics: Record<string, number> }>;
+  group_tree?: Array<{ key: string; label: string; row_count: number; increase: number; decrease: number; target: number; total: number; metrics: Record<string, number>; children?: any[] }>;
   generated_at?: string;
 };
 
@@ -109,7 +110,8 @@ const DifferenceBarChart: React.FC<{ groups: ServerReportRuntime['groups']; curr
 };
 
 const ServerReportResultView: React.FC<{ report: ReportDefinitionRecord; runtime: ServerReportRuntime; currencyLabel: string; onRefresh: () => void; refreshing: boolean }> = ({ report, runtime, currencyLabel, onRefresh, refreshing }) => {
-  const [view, setView] = useState<'table' | 'bar' | 'pie' | 'line'>('table');
+  const config = normalizeReportConfig(report.config);
+  const [view, setView] = useState<'table' | 'bar' | 'pie' | 'line'>(config.output_modes[0] || 'table');
   const groups = runtime.groups || [];
   const totals = groups.reduce((acc, row) => ({ increase: acc.increase + Number(row.increase || 0), decrease: acc.decrease + Number(row.decrease || 0), target: acc.target + Number(row.target || 0), total: acc.total + Number(row.total || 0), count: acc.count + Number(row.row_count || 0) }), { increase: 0, decrease: 0, target: 0, total: 0, count: 0 });
   const isDifference = runtime.mode === 'difference';
@@ -120,7 +122,14 @@ const ServerReportResultView: React.FC<{ report: ReportDefinitionRecord; runtime
   const decreaseItems = groups.map((row) => ({ label: row.label || '-', value: Number(row.decrease || 0), tone: 'decrease' as const }));
   const columns: ColumnsType<ServerReportRuntime['groups'][number]> = isDifference ? [{ title: 'گروه', dataIndex: 'label', key: 'label' }, { title: 'افزاینده', key: 'increase', render: (_, row) => formatMetricValue(row.increase, 'price', currencyLabel) }, { title: 'کاهنده', key: 'decrease', render: (_, row) => formatMetricValue(row.decrease, 'price', currencyLabel) }, { title: 'خالص', key: 'net', render: (_, row) => formatMetricValue(Number(row.increase || 0) - Number(row.decrease || 0), 'price', currencyLabel) }, { title: 'درصد تغییر', key: 'change', render: (_, row) => Number(row.increase || 0) > 0 ? `${toPersianNumber(((Number(row.increase || 0) - Number(row.decrease || 0)) / Number(row.increase || 0) * 100).toFixed(1))}٪` : '—' }] : isPercentage ? [{ title: 'گروه', dataIndex: 'label', key: 'label' }, { title: 'مقدار هدف', dataIndex: 'target', key: 'target', render: (amount) => formatMetricValue(amount, 'number') }, { title: 'مقدار کل', dataIndex: 'total', key: 'total', render: (amount) => formatMetricValue(amount, 'number') }, { title: 'نرخ', key: 'rate', render: (_, row) => Number(row.total || 0) > 0 ? `${toPersianNumber((Number(row.target || 0) / Number(row.total || 0) * 100).toFixed(1))}٪` : '—' }] : [{ title: 'گروه', dataIndex: 'label', key: 'label' }, { title: 'تعداد', dataIndex: 'row_count', key: 'row_count', render: (amount) => toPersianNumber(amount) }, { title: 'نتیجه', key: 'metric', render: (_, row) => formatMetricValue(value(row), 'number', currencyLabel) }];
   const pie = isDifference ? <div className="grid grid-cols-1 gap-5 xl:grid-cols-2"><div><Text strong>ترکیب افزاینده‌ها</Text><SimplePieChart items={increaseItems} valueLabel="افزاینده" valueFormatter={(amount) => formatMetricValue(amount, 'price', currencyLabel)} /></div><div><Text strong>ترکیب کاهنده‌ها</Text><SimplePieChart items={decreaseItems} valueLabel="کاهنده" valueFormatter={(amount) => formatMetricValue(amount, 'price', currencyLabel)} /></div></div> : isPercentage ? <SimplePieChart items={[{ label: 'هدف تحقق‌یافته', value: totals.target, tone: 'increase' }, { label: 'باقی‌مانده تا کل', value: Math.max(0, totals.total - totals.target), tone: 'decrease' }]} valueLabel="تقسیم هدف و کل" valueFormatter={(amount) => formatMetricValue(amount, 'number')} /> : <SimplePieChart items={items} valueLabel="مقدار" valueFormatter={(amount) => formatMetricValue(amount, 'number', currencyLabel)} />;
-  return <div className="mx-auto max-w-[1680px] animate-fadeIn p-4 md:p-8"><div className="rounded-[2rem] border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-[#1a1a1a]"><div className="mb-6 flex flex-wrap items-start justify-between gap-3"><div><Title level={3} className="!mb-1">{report.name}</Title><Text className="text-gray-500">{report.description || 'نتیجه محاسبه‌شده از داده‌های مجاز سرور'}</Text></div><Button icon={<ReloadOutlined />} loading={refreshing} onClick={onRefresh}>به‌روزرسانی</Button></div><div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-3">{isDifference ? <><Statistic title="جمع افزاینده‌ها" value={totals.increase} formatter={() => formatMetricValue(totals.increase, 'price', currencyLabel)} /><Statistic title="جمع کاهنده‌ها" value={totals.decrease} formatter={() => formatMetricValue(totals.decrease, 'price', currencyLabel)} /><Statistic title="خالص" value={totals.increase - totals.decrease} formatter={() => formatMetricValue(totals.increase - totals.decrease, 'price', currencyLabel)} /></> : isPercentage ? <><Statistic title="مقدار هدف" value={totals.target} formatter={() => formatMetricValue(totals.target, 'number')} /><Statistic title="مقدار کل" value={totals.total} formatter={() => formatMetricValue(totals.total, 'number')} /><Statistic title="نرخ" value={totals.total > 0 ? totals.target / totals.total * 100 : 0} suffix="٪" /></> : <><Statistic title="تعداد نتیجه" value={totals.count} formatter={() => toPersianNumber(totals.count)} /><Statistic title="تعداد گروه‌ها" value={groups.length} formatter={() => toPersianNumber(groups.length)} /><Statistic title="آخرین محاسبه" value={runtime.generated_at ? formatLastUpdatedAt(runtime.generated_at) : '—'} /></>}</div>{groups.length > 0 && <div className="mb-5 flex flex-wrap gap-2"><Button type={view === 'table' ? 'primary' : 'default'} onClick={() => setView('table')}>جدول</Button><Button icon={<BarChartOutlined />} type={view === 'bar' ? 'primary' : 'default'} onClick={() => setView('bar')}>ستونی</Button><Button icon={<PieChartOutlined />} type={view === 'pie' ? 'primary' : 'default'} onClick={() => setView('pie')}>دایره‌ای</Button><Button icon={<BarChartOutlined />} type={view === 'line' ? 'primary' : 'default'} onClick={() => setView('line')}>خطی</Button></div>}{view === 'table' ? <Table rowKey="key" columns={columns} dataSource={groups} pagination={{ pageSize: 20 }} scroll={{ x: true }} locale={{ emptyText: 'داده‌ای یافت نشد' }} /> : view === 'bar' ? isDifference ? <DifferenceBarChart groups={groups} currencyLabel={currencyLabel} /> : <SimpleBarChart items={items} valueLabel={isPercentage ? 'نرخ' : 'مقدار'} valueFormatter={(amount) => isPercentage ? `${toPersianNumber(amount.toFixed(1))}٪` : formatMetricValue(amount, 'number', currencyLabel)} /> : view === 'pie' ? pie : <SimpleLineChart items={items} valueFormatter={(amount) => isPercentage ? `${toPersianNumber(amount.toFixed(1))}٪` : formatMetricValue(amount, isDifference ? 'price' : 'number', currencyLabel)} />}</div></div>;
+  const availableViews = config.output_modes;
+  const visibleView = availableViews.includes(view) ? view : availableViews[0] || 'table';
+  return <div className="mx-auto max-w-[1680px] animate-fadeIn p-4 md:p-8"><div className="rounded-[2rem] border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-[#1a1a1a]">
+    <div className="mb-6 flex flex-wrap items-start justify-between gap-3"><div><Title level={3} className="!mb-1">{report.name}</Title><Text className="text-gray-500">{report.description || 'بدون توضیح'}</Text></div><Button icon={<ReloadOutlined />} loading={refreshing} onClick={onRefresh}>به‌روزرسانی</Button></div>
+    <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">{isDifference ? <><div className="rounded-[1.5rem] border border-green-200 bg-green-50/70 p-4"><Statistic title="جمع افزاینده‌ها" value={totals.increase} formatter={() => formatMetricValue(totals.increase, 'price', currencyLabel)} /></div><div className="rounded-[1.5rem] border border-red-200 bg-red-50/70 p-4"><Statistic title="جمع کاهنده‌ها" value={totals.decrease} formatter={() => formatMetricValue(totals.decrease, 'price', currencyLabel)} /></div><div className={`rounded-[1.5rem] border p-4 ${totals.increase - totals.decrease < 0 ? 'border-red-200 bg-red-50/70' : 'border-green-200 bg-green-50/70'}`}><Statistic title="خالص" value={totals.increase - totals.decrease} formatter={() => formatMetricValue(totals.increase - totals.decrease, 'price', currencyLabel)} /></div></> : <><div className="rounded-[1.5rem] border border-gray-200 bg-gray-50/70 p-4"><Statistic title={isPercentage ? 'مقدار هدف' : 'تعداد نتیجه'} value={isPercentage ? totals.target : totals.count} formatter={() => isPercentage ? formatMetricValue(totals.target, 'number') : toPersianNumber(totals.count)} /></div><div className="rounded-[1.5rem] border border-gray-200 bg-gray-50/70 p-4"><Statistic title={isPercentage ? 'مقدار کل' : 'تعداد گروه‌ها'} value={isPercentage ? totals.total : groups.length} formatter={() => isPercentage ? formatMetricValue(totals.total, 'number') : toPersianNumber(groups.length)} /></div><div className="rounded-[1.5rem] border border-gray-200 bg-gray-50/70 p-4"><Statistic title={isPercentage ? 'نرخ' : 'آخرین محاسبه'} value={isPercentage ? (totals.total > 0 ? totals.target / totals.total * 100 : 0) : (runtime.generated_at ? formatLastUpdatedAt(runtime.generated_at) : '—')} suffix={isPercentage ? '٪' : undefined} /></div></>}</div>
+    {groups.length > 0 && <div className="mb-5 flex flex-wrap gap-2">{availableViews.includes('table') && <Button icon={<TableOutlined />} type={visibleView === 'table' ? 'primary' : 'default'} onClick={() => setView('table')}>جدول</Button>}{availableViews.includes('bar') && <Button icon={<BarChartOutlined />} type={visibleView === 'bar' ? 'primary' : 'default'} onClick={() => setView('bar')}>ستونی</Button>}{availableViews.includes('pie') && <Button icon={<PieChartOutlined />} type={visibleView === 'pie' ? 'primary' : 'default'} onClick={() => setView('pie')}>دایره‌ای</Button>}{availableViews.includes('line') && <Button icon={<BarChartOutlined />} type={visibleView === 'line' ? 'primary' : 'default'} onClick={() => setView('line')}>خطی</Button>}</div>}
+    {visibleView === 'table' ? <Table rowKey="key" columns={columns} dataSource={runtime.group_tree || groups} pagination={{ pageSize: 20 }} scroll={{ x: true }} locale={{ emptyText: 'داده‌ای یافت نشد' }} /> : visibleView === 'bar' ? isDifference ? <DifferenceBarChart groups={groups} currencyLabel={currencyLabel} /> : <SimpleBarChart items={items} valueLabel={isPercentage ? 'نرخ' : 'مقدار'} valueFormatter={(amount) => isPercentage ? `${toPersianNumber(amount.toFixed(1))}٪` : formatMetricValue(amount, 'number', currencyLabel)} /> : visibleView === 'pie' ? pie : <SimpleLineChart items={items} valueFormatter={(amount) => isPercentage ? `${toPersianNumber(amount.toFixed(1))}٪` : formatMetricValue(amount, isDifference ? 'price' : 'number', currencyLabel)} />}
+  </div></div>;
 };
 
 const isMissingReportsTableError = (error: any) => {
@@ -670,17 +679,24 @@ const ReportViewerPage: React.FC = () => {
     if (forceRefresh) removeCachedReportResult(cacheKey);
     setExecuting(true);
     try {
-      const { data: runtimeData, error: runtimeError } = await supabase.functions.invoke('report-runtime', { body: { reportId: report.id } });
-      if (runtimeError) {
-        const runtimeFailure = await (runtimeError as any)?.context?.json?.().catch(() => null);
-        throw new Error(String(runtimeFailure?.error || runtimeError.message || 'report_runtime_failed'));
+      // گزارش‌های عادی باید همان نمای کامل و قدیمی (جزئیات، جدول‌های داخلی،
+      // کارت‌ها، چاپ و خروجی) را حفظ کنند. فقط گزارش‌های ترکیبی به جمع‌بندی
+      // سروری نیاز دارند؛ انتقال اجباری همهٔ گزارش‌ها به نمای فشرده باعث
+      // حذف جزئیات و باز نشدن گزارش‌های قدیمی شده بود.
+      if (config.calculation_mode !== 'normal') {
+        const { data: runtimeData, error: runtimeError } = await supabase.functions.invoke('report-runtime', { body: { reportId: report.id } });
+        if (runtimeError) {
+          const runtimeFailure = await (runtimeError as any)?.context?.json?.().catch(() => null);
+          throw new Error(String(runtimeFailure?.error || runtimeError.message || 'report_runtime_failed'));
+        }
+        if (!runtimeData || !Array.isArray(runtimeData.groups)) throw new Error('خروجی محاسبهٔ گزارش معتبر نیست.');
+        setServerRuntime(runtimeData as ServerReportRuntime);
+        setCanViewPage(true);
+        setRows([]); setGroupedRows([]); setGroupedTreeRows([]); setChartRows([]);
+        setLastUpdatedAt(String(runtimeData.generated_at || new Date().toISOString()));
+        return;
       }
-      if (!runtimeData || !Array.isArray(runtimeData.groups)) throw new Error('خروجی محاسبهٔ گزارش معتبر نیست.');
-      setServerRuntime(runtimeData as ServerReportRuntime);
-      setCanViewPage(true);
-      setRows([]); setGroupedRows([]); setGroupedTreeRows([]); setChartRows([]);
-      setLastUpdatedAt(String(runtimeData.generated_at || new Date().toISOString()));
-      return;
+      setServerRuntime(null);
       if (!moduleConfig) return;
       const roleContext = await fetchCurrentUserRecordAccessContext(supabase);
       const modulePerm = roleContext.permissions?.[moduleId] || {};
@@ -1895,14 +1911,9 @@ const ReportViewerPage: React.FC = () => {
           </div>
         )}
 
-        {chartAvailable && (
+        {chartAvailable && config.output_modes.some((mode) => mode !== 'table') && (
           <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-[1.5rem] border border-gray-200 p-4 dark:border-gray-700">
-            <div className="flex flex-wrap items-center gap-2">
-            <Button icon={<TableOutlined />} type={renderMode === 'table' ? 'primary' : 'default'} className={renderMode === 'table' ? 'kalam-btn-brand' : ''} onClick={() => setRenderMode('table')}>جدول</Button>
-            <Button icon={<BarChartOutlined />} type={renderMode === 'bar' ? 'primary' : 'default'} className={renderMode === 'bar' ? 'kalam-btn-brand' : ''} onClick={() => setRenderMode('bar')}>نمودار ستونی</Button>
-            <Button icon={<BarChartOutlined />} type={renderMode === 'line' ? 'primary' : 'default'} className={renderMode === 'line' ? 'kalam-btn-brand' : ''} onClick={() => setRenderMode('line')}>نمودار خطی</Button>
-              <Button icon={<PieChartOutlined />} type={renderMode === 'pie' ? 'primary' : 'default'} className={renderMode === 'pie' ? 'kalam-btn-brand' : ''} onClick={() => setRenderMode('pie')}>نمودار دایره‌ای</Button>
-            </div>
+            <div className="text-sm font-bold text-gray-700 dark:text-gray-100">نمایش‌های انتخاب‌شدهٔ گزارش</div>
             {metricOptions.length > 1 && (
               <Select
                 className="min-w-[260px]"
@@ -1914,7 +1925,7 @@ const ReportViewerPage: React.FC = () => {
           </div>
         )}
 
-        {renderMode === 'bar' && chartAvailable && (
+        {config.output_modes.includes('bar') && chartAvailable && (
           <SimpleBarChart
             items={chartItems}
             valueLabel={metricOptions.find((item) => item.value === activeMetricKey)?.label || 'معیار'}
@@ -1924,7 +1935,7 @@ const ReportViewerPage: React.FC = () => {
           />
         )}
 
-        {renderMode === 'pie' && chartAvailable && (
+        {config.output_modes.includes('pie') && chartAvailable && (
           <SimplePieChart
             items={chartItems}
             valueLabel={metricOptions.find((item) => item.value === activeMetricKey)?.label || 'معیار'}
@@ -1934,13 +1945,13 @@ const ReportViewerPage: React.FC = () => {
           />
         )}
 
-        {renderMode === 'line' && chartAvailable && (
+        {config.output_modes.includes('line') && chartAvailable && (
           <SimpleLineChart items={chartItems} valueFormatter={(value) => activeMetricKey === '__count' ? toPersianNumber(value) : formatMetricValue(Number(value || 0), String(fieldMap[activeMetricKey]?.type || '').toLowerCase(), currencyLabel)} />
         )}
 
         {executing && <ReportExecutionProgress />}
 
-        {(renderMode === 'table' || !chartAvailable) && (
+        {(config.output_modes.includes('table') || !chartAvailable) && (
           config.group_bys.length > 0 ? (
             <Table<GroupedDetailRow>
               loading={executing}

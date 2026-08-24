@@ -1082,6 +1082,39 @@ const rawDraftCandidateMatchesV2StagePoint = (candidate: any, candidateIndex: nu
     && getRawStageTitleKey(candidate) === targetTitle;
 };
 
+// بعضی previewهای قدیمی، context اجرایی را کامل برنمی‌گردانند. در حذف نباید
+// صرفاً به خاطر این نقص، مرحلهٔ واقعیِ همان گروه پیدا نشود؛ اما fallback فقط
+// در مرز process_group و با node پایدار یا lane+sort فعال است، نه با عنوان.
+const isSameDraftStageWithinProcessGroup = (
+  candidate: any,
+  candidateIndex: number,
+  stage: ProcessV2Stage,
+  stageIndex = 0,
+) => {
+  const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+  const candidateGroupId = normalizeText(resolveDraftGroupMeta(candidate).groupId);
+  const sourceGroupId = normalizeText(resolveDraftGroupMeta(source).groupId);
+  if (!candidateGroupId || !sourceGroupId || candidateGroupId !== sourceGroupId) return false;
+
+  const candidateIds = new Set(collectRawStageIdentityIds(candidate, candidateIndex));
+  const sourceIds = collectV2StageAutoAssignIds(stage, stageIndex);
+  if (sourceIds.some((id) => candidateIds.has(normalizeText(id)))) return true;
+
+  const sourceNodeKey = normalizeText(
+    source?.process_node_key
+    || source?.[PROCESS_NODE_KEY]
+    || parseObject(source?.metadata)?.process_node_key
+    || parseObject(source?.metadata)?.[PROCESS_NODE_KEY],
+  );
+  if (sourceNodeKey && candidateIds.has(sourceNodeKey)) return true;
+
+  const sourceLaneKey = getV2StageSourceLaneKey(stage);
+  const sourceSortOrder = getV2StageSourceSortOrder(stage);
+  return Boolean(sourceLaneKey && sourceSortOrder > 0)
+    && getRawStageLaneKey(candidate) === sourceLaneKey
+    && getRawStageSortOrder(candidate) === sourceSortOrder;
+};
+
 const collectV2CardStagePositions = (card: ProcessV2CardData) => (
   card.lanes.flatMap((lane) => (
     [...(lane.stages || [])]
@@ -3277,7 +3310,8 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     const targetStages = Array.isArray(stages) ? stages : [];
     if (targetStages.length === 0) return false;
     const matchesTarget = (candidate: any, index: number) => targetStages.some((stage, stageIndex) => {
-      return rawDraftCandidateMatchesV2StagePoint(candidate, index, stage, stageIndex);
+      return rawDraftCandidateMatchesV2StagePoint(candidate, index, stage, stageIndex)
+        || isSameDraftStageWithinProcessGroup(candidate, index, stage, stageIndex);
     });
 
     const directStages = Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : [];

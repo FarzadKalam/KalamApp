@@ -22,6 +22,21 @@ const SimplePieChart: React.FC<SimplePieChartProps> = ({ items, valueLabel = 'م
   );
   const total = safeItems.reduce((sum, item) => sum + Math.abs(Number(item.value || 0)), 0);
   const renderValue = valueFormatter || ((value: number) => formatPersianPrice(value));
+  const colorFor = (item: SimplePieChartItem, index: number) => {
+    const decreasePalette = ['#b91c1c', '#dc2626', '#ef4444', '#f87171', '#fb7185', '#e11d48', '#9f1239', '#fecaca'];
+    const increasePalette = ['#166534', '#15803d', '#16a34a', '#22c55e', '#4ade80', '#65a30d', '#4d7c0f', '#86efac'];
+    // نمودارهای معمولی فقط از تونالیتهٔ رنگ سازمان استفاده می‌کنند؛ متغیرهای
+    // برند در هر سازمان از تنظیمات همان سازمان مقدار می‌گیرند.
+    const brandPalette = [
+      'rgb(var(--brand-800-rgb))', 'rgb(var(--brand-700-rgb))',
+      'rgb(var(--brand-600-rgb))', 'rgb(var(--brand-500-rgb))',
+      'rgb(var(--brand-400-rgb))', 'rgb(var(--brand-300-rgb))',
+      'rgb(var(--brand-200-rgb))', 'rgb(var(--brand-100-rgb))',
+    ];
+    if (item.tone === 'decrease' || Number(item.value || 0) < 0) return decreasePalette[index % decreasePalette.length];
+    if (item.tone === 'increase') return increasePalette[index % increasePalette.length];
+    return brandPalette[index % brandPalette.length];
+  };
 
   const gradient = useMemo(() => {
     if (total <= 0 || safeItems.length === 0) return '';
@@ -32,7 +47,7 @@ const SimplePieChart: React.FC<SimplePieChartProps> = ({ items, valueLabel = 'م
         const start = currentPercent;
         const end = currentPercent + percent;
         currentPercent = end;
-        const color = item.tone === 'decrease' || Number(item.value || 0) < 0 ? '#dc2626' : '#16a34a';
+        const color = colorFor(item, safeItems.indexOf(item));
         return `${color} ${start}% ${end}%`;
       })
       .join(', ');
@@ -69,7 +84,7 @@ const SimplePieChart: React.FC<SimplePieChartProps> = ({ items, valueLabel = 'م
               <div className="flex min-w-0 items-center gap-3">
                 <div
                   className="h-3.5 w-3.5 shrink-0 rounded-full"
-                  style={{ backgroundColor: item.tone === 'decrease' || Number(item.value || 0) < 0 ? '#dc2626' : '#16a34a' }}
+                  style={{ backgroundColor: colorFor(item, index) }}
                 />
                 <div className="truncate font-bold text-gray-700 dark:text-gray-100">{item.label || '-'}</div>
               </div>

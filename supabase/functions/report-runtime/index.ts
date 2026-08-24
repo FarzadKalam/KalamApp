@@ -344,15 +344,16 @@ const resolvePassedIds = async (
   rows: any[],
   conditionsAll: any[],
   conditionsAny: any[],
+  reportFieldKeys: string[],
 ) => {
-  if (rows.length === 0) return new Set<string>();
-  if (conditionsAll.length === 0 && conditionsAny.length === 0)
-    return new Set(
-      rows
-        .map((row) => String(row?.__report_runtime_key || row?.id || ""))
-        .filter(Boolean),
-    );
+  if (rows.length === 0) return { passedIds: new Set<string>(), resolvedRows: {} as Record<string, any> };
+  if (conditionsAll.length === 0 && conditionsAny.length === 0 && reportFieldKeys.length === 0)
+    return {
+      passedIds: new Set(rows.map((row) => String(row?.__report_runtime_key || row?.id || "")).filter(Boolean)),
+      resolvedRows: {},
+    };
   const passedIds = new Set<string>();
+  const resolvedRows: Record<string, any> = {};
   for (let offset = 0; offset < rows.length; offset += 500) {
     const slice = rows.slice(offset, offset + 500);
     const response = await fetch(`${url}/functions/v1/goal-progress`, {
@@ -370,6 +371,7 @@ const resolvePassedIds = async (
             selectColumns: columns.join(","),
             conditionsAll,
             conditionsAny,
+            reportFieldKeys,
           },
         ],
       }),
@@ -381,8 +383,11 @@ const resolvePassedIds = async (
     if (item?.mode !== "server" || !Array.isArray(item?.passedIds))
       throw new Error("report_conditions_unavailable");
     item.passedIds.forEach((id: unknown) => passedIds.add(String(id || "")));
+    if (item?.resolvedRows && typeof item.resolvedRows === "object") {
+      Object.assign(resolvedRows, item.resolvedRows);
+    }
   }
-  return passedIds;
+  return { passedIds, resolvedRows };
 };
 
 const jalaliBucket = (value: any, granularity: string) => {
@@ -567,7 +572,7 @@ Deno.serve(async (request) => {
     const refsQuery = new URL(`${url}/rest/v1/report_definitions`);
     refsQuery.searchParams.set(
       "select",
-      "id,org_id,name,module_id,config,is_active",
+      "id,org_id,name,module_id,config,is_active,updated_at",
     );
     refsQuery.searchParams.set("id", `in.(${referenceIds.join(",")})`);
     refsQuery.searchParams.set("is_active", "eq.true");
@@ -627,7 +632,7 @@ Deno.serve(async (request) => {
       );
       if (
         groupFields.some(
-          (field) => !safeColumn(field) && !isTableRuntimeField(field),
+          (field) => field !== "__report_date__" && !isSupportedConditionField(field),
         )
       )
         return json(422, { error: "unsupported_report_grouping" });
@@ -687,11 +692,15 @@ Deno.serve(async (request) => {
         selected.some(
           (item: any) =>
             String(item?.metric_key || "") !== "__count" &&
-            !safeColumn(item?.metric_key) &&
-            !isTableRuntimeField(item?.metric_key),
+            !isSupportedConditionField(item?.metric_key),
         )
       )
         return json(422, { error: "unsupported_report_metric" });
+      const runtimeFieldKeys = Array.from(new Set([
+        ...groupFields.filter((field) => field !== "__report_date__"),
+        ...selected.map((item: any) => String(item?.metric_key || "")).filter((field) => field !== "__count"),
+      ]));
+      const runtimeBaseColumns = conditionBaseColumns(runtimeFieldKeys.map((field) => ({ field })));
       const columns = Array.from(
         new Set([
           "id",
@@ -699,9 +708,12 @@ Deno.serve(async (request) => {
           "assignee_id",
           "assignee_role_id",
           "assignee_type",
+          "updated_at",
+          ...(String(source.module_id || "") === "tasks" && reportConditions.some((condition: any) => String(condition?.field || "").trim() === "status") ? ["recurrence_info"] : []),
           ...conditionFields,
           ...metricFields,
           ...groupFields.filter(safeColumn),
+          ...runtimeBaseColumns,
           ...tableBlockIds,
         ]),
       );
@@ -729,7 +741,7 @@ Deno.serve(async (request) => {
         url,
         serviceHeaders,
       );
-      const passedIds = await resolvePassedIds(
+      const evaluated = await resolvePassedIds(
         url,
         serviceHeaders,
         source,
@@ -738,19 +750,24 @@ Deno.serve(async (request) => {
         rawRows,
         readArray(sourceConfig.conditions_all),
         readArray(sourceConfig.conditions_any),
+        runtimeFieldKeys.filter((field) => field !== "__report_date__"),
       );
       for (const row of rawRows) {
-        if (!passedIds.has(String(row?.__report_runtime_key || row?.id || "")))
+        const rowKey = String(row?.__report_runtime_key || row?.id || "");
+        if (!evaluated.passedIds.has(rowKey))
           continue;
-        let key = "__total__",
-          label = "کل گزارش";
+        const resolvedValues = evaluated.resolvedRows?.[rowKey] || {};
+        const valueFor = (field: string) => resolvedValues?.[field]?.value ?? row[field];
+        const labelFor = (field: string, fallback: any) => String(resolvedValues?.[field]?.label || fallback || "").trim();
+        const values: Array<{ key: string; label: string }> = [];
         if (groupings.length > 0) {
-          const values: Array<{ key: string; label: string }> = [];
           let completeGroup = true;
           groupings.forEach((grouping: any, index: number) => {
             if (!completeGroup) return;
             const field = groupFields[index];
-            const rawValue = row[field];
+            // «زمان گزارش‌ها» در گزارش ترکیبی، زمان آخرین به‌روزرسانی گزارش
+            // مرجع است؛ سایر گروه‌ها از مقدار واقعی همان ردیف استفاده می‌کنند.
+            const rawValue = field === "__report_date__" ? source.updated_at : valueFor(field);
             const temporal = grouping?.date_granularity
               ? jalaliBucket(rawValue, String(grouping.date_granularity))
               : null;
@@ -770,66 +787,61 @@ Deno.serve(async (request) => {
               completeGroup = false;
               return;
             }
-            const rawLabel = isUuid(rawValue)
-              ? "رکورد انتخاب‌شده"
-              : String(rawValue);
+            const rawLabel = labelFor(field, isUuid(rawValue) ? "رکورد انتخاب‌شده" : rawValue);
             values.push({ key: String(rawValue), label: rawLabel });
           });
           if (!completeGroup || values.length !== groupings.length) continue;
-          key = values.map((item, index) => `${index}:${item.key}`).join("|");
-          label = values.map((item) => item.label).join(" / ");
         }
-        const bucket = buckets.get(key) || {
-          key,
-          label,
-          row_count: 0,
-          increase: 0,
-          decrease: 0,
-          target: 0,
-          total: 0,
-          metrics: {},
-          metric_counts: {},
-          metric_modes: {},
-        };
-        bucket.row_count += 1;
-        for (const metric of selected) {
-          const value =
-            metric.metric_key === "__count"
-              ? 1
-              : Number(row[metric.metric_key] || 0);
-          if (!Number.isFinite(value)) continue;
-          const id = metricId(metric);
-          const resultMetricKey =
-            mode === "normal" ? String(metric.metric_key) : id;
-          bucket.metrics[resultMetricKey] =
-            Number(bucket.metrics[resultMetricKey] || 0) + value;
-          bucket.metric_counts[resultMetricKey] =
-            Number(bucket.metric_counts[resultMetricKey] || 0) + 1;
-          if (mode === "normal")
-            bucket.metric_modes[resultMetricKey] = String(
-              sourceConfig.metric_type || "count",
-            );
-          if (
-            readArray(config.increase_metrics).some(
-              (item: any) => metricId(item) === id,
-            )
-          )
-            bucket.increase += value;
-          if (
-            readArray(config.decrease_metrics).some(
-              (item: any) => metricId(item) === id,
-            )
-          )
-            bucket.decrease += value;
-          if (metricId(config.percentage_target_metric) === id)
-            bucket.target += value;
-          if (metricId(config.percentage_total_metric) === id)
-            bucket.total += value;
+        // هر عمق گروه به‌عنوان یک bucket مستقل نگه‌داری می‌شود. به این ترتیب
+        // جدول نتیجه می‌تواند گروه‌های تو‌در‌تو را بدون از دست دادن ردیف‌های
+        // داخلی نشان دهد، نه فقط برچسب ترکیب‌شدهٔ برگ‌ها را.
+        const depths = groupings.length > 0
+          ? Array.from({ length: values.length }, (_, depth) => depth)
+          : [-1];
+        for (const depth of depths) {
+          const active = depth < 0 ? [] : values.slice(0, depth + 1);
+          const key = active.length > 0
+            ? active.map((item, index) => `${index}:${item.key}`).join("|")
+            : "__total__";
+          const parentKey = active.length > 1
+            ? active.slice(0, -1).map((item, index) => `${index}:${item.key}`).join("|")
+            : undefined;
+          const bucket = buckets.get(key) || {
+            key,
+            parent_key: parentKey,
+            group_depth: depth,
+            group_label: active[active.length - 1]?.label || "کل گزارش",
+            group_values: Object.fromEntries(active.map((item, index) => [String(groupings[index]?.field || index), item.key])),
+            group_labels: Object.fromEntries(active.map((item, index) => [String(groupings[index]?.field || index), item.label])),
+            label: active.length > 0 ? active.map((item) => item.label).join(" / ") : "کل گزارش",
+            row_count: 0,
+            increase: 0,
+            decrease: 0,
+            target: 0,
+            total: 0,
+            metrics: {},
+            metric_counts: {},
+            metric_modes: {},
+          };
+          bucket.row_count += 1;
+          for (const metric of selected) {
+            const value = metric.metric_key === "__count" ? 1 : Number(valueFor(String(metric.metric_key || "")) || 0);
+            if (!Number.isFinite(value)) continue;
+            const id = metricId(metric);
+            const resultMetricKey = mode === "normal" ? String(metric.metric_key) : id;
+            bucket.metrics[resultMetricKey] = Number(bucket.metrics[resultMetricKey] || 0) + value;
+            bucket.metric_counts[resultMetricKey] = Number(bucket.metric_counts[resultMetricKey] || 0) + 1;
+            if (mode === "normal") bucket.metric_modes[resultMetricKey] = String(sourceConfig.metric_type || "count");
+            if (readArray(config.increase_metrics).some((item: any) => metricId(item) === id)) bucket.increase += value;
+            if (readArray(config.decrease_metrics).some((item: any) => metricId(item) === id)) bucket.decrease += value;
+            if (metricId(config.percentage_target_metric) === id) bucket.target += value;
+            if (metricId(config.percentage_total_metric) === id) bucket.total += value;
+          }
+          buckets.set(key, bucket);
         }
-        buckets.set(key, bucket);
       }
     }
-    const groups = Array.from(buckets.values())
+    const allGroups = Array.from(buckets.values())
       .map((bucket: any) => {
         Object.keys(bucket.metrics || {}).forEach((key) => {
           if (bucket.metric_modes?.[key] === "avg")
@@ -842,10 +854,24 @@ Deno.serve(async (request) => {
       .sort((a: any, b: any) =>
         String(a.key).localeCompare(String(b.key), "fa", { numeric: true }),
       );
+    const rowsByKey = new Map(allGroups.map((group: any) => [group.key, { ...group, children: [] as any[] }]));
+    const groupTree: any[] = [];
+    rowsByKey.forEach((group: any) => {
+      if (group.parent_key && rowsByKey.has(group.parent_key)) {
+        rowsByKey.get(group.parent_key).children.push(group);
+        return;
+      }
+      groupTree.push(group);
+    });
+    const leafDepth = groupings.length - 1;
+    const groups = groupings.length > 0
+      ? allGroups.filter((group: any) => Number(group.group_depth) === leafDepth)
+      : allGroups;
     return json(200, {
       mode,
       report: { id: report.id, name: report.name },
       groups,
+      group_tree: groupTree,
       generated_at: new Date().toISOString(),
     });
   } catch (error) {

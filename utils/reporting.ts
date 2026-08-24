@@ -12,6 +12,8 @@ import { parseProcessLinkedFieldKey } from './processTargets';
 export type ReportMetricType = 'count' | 'sum' | 'avg' | 'difference';
 export type ReportCalculationMode = 'normal' | 'difference' | 'percentage';
 export type ReportDateGranularity = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+export type ReportOutputMode = 'table' | 'bar' | 'pie' | 'line';
+/** فقط برای خواندن تنظیمات ذخیره‌شدهٔ پیش از خروجی‌های قابل انتخاب نگه داشته شده است. */
 export type ReportDefaultView = 'table' | 'table_and_chart';
 export type ReportGroupDirection = 'asc' | 'desc';
 export type ReportScheduleUnit = 'hour' | 'day';
@@ -68,6 +70,7 @@ export interface ReportDefinitionConfig {
   metric_subtract_fields: string[];
   show_group_summaries: boolean;
   chart_dimension_field: string | null;
+  output_modes: ReportOutputMode[];
   default_view: ReportDefaultView;
   schedule: ReportScheduleConfig;
   print_selected_field_keys: Record<string, string[]>;
@@ -340,6 +343,7 @@ export const createDefaultReportConfig = (): ReportDefinitionConfig => ({
   metric_subtract_fields: [],
   show_group_summaries: true,
   chart_dimension_field: null,
+  output_modes: ['table', 'bar'],
   default_view: 'table_and_chart',
   schedule: createDefaultReportScheduleConfig(),
   print_selected_field_keys: {},
@@ -459,6 +463,13 @@ export const normalizeReportConfig = (value: Partial<ReportDefinitionConfig> | n
         return acc;
       }, {})
     : defaults.print_selected_field_keys;
+  const outputModes = Array.isArray((value as any)?.output_modes)
+    ? Array.from(new Set((value as any).output_modes
+      .map((item: unknown) => String(item || '').trim())
+      .filter((item: string): item is ReportOutputMode => ['table', 'bar', 'pie', 'line'].includes(item))))
+    : value?.default_view === 'table'
+      ? ['table']
+      : defaults.output_modes;
 
   return {
     ...defaults,
@@ -493,6 +504,7 @@ export const normalizeReportConfig = (value: Partial<ReportDefinitionConfig> | n
     metric_subtract_fields: [],
     show_group_summaries: (value as any)?.show_group_summaries === false ? false : true,
     chart_dimension_field: chartDimensionField,
+    output_modes: outputModes.length > 0 ? outputModes : ['table'],
     default_view: value?.default_view === 'table' ? 'table' : 'table_and_chart',
     schedule: normalizeReportScheduleConfig((value as any)?.schedule),
     print_selected_field_keys: printSelectedFieldKeys,

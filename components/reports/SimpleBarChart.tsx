@@ -29,6 +29,7 @@ const SimpleBarChart: React.FC<SimpleBarChartProps> = ({ items, valueLabel = 'م
       {safeItems.map((item, index) => {
         const ratio = Math.max(8, Math.round((Math.abs(Number(item.value || 0)) / maxValue) * 100));
         const isDecrease = item.tone === 'decrease' || Number(item.value || 0) < 0;
+        const isIncrease = item.tone === 'increase';
         return (
           <div
             key={`${item.label}-${index}`}
@@ -52,7 +53,9 @@ const SimpleBarChart: React.FC<SimpleBarChartProps> = ({ items, valueLabel = 'م
                   width: `${Math.min(100, ratio)}%`,
                   background: isDecrease
                     ? 'linear-gradient(90deg, #dc2626, #fb7185)'
-                    : 'linear-gradient(90deg, #16a34a, #4ade80)',
+                    : isIncrease
+                      ? 'linear-gradient(90deg, #16a34a, #4ade80)'
+                      : 'linear-gradient(90deg, rgb(var(--brand-700-rgb)), rgb(var(--brand-400-rgb)))',
                 }}
               />
             </div>

@@ -38,6 +38,10 @@ const CALENDAR_PUBLIC_BASE_URL = String(
   .trim()
   .replace(/\/+$/, "");
 const holidayYearCache = new Map<number, Promise<any[] | null>>();
+const orgModuleFieldConfigCache = new Map<string, Promise<{ fields: Map<string, any>; tableFields: Map<string, any> }>>();
+const dynamicOptionLabelCache = new Map<string, Promise<string | null>>();
+const dynamicOptionValueCache = new Map<string, Promise<string | null>>();
+const identityLabelCache = new Map<string, Promise<string | null>>();
 
 const safeTableName = (value: unknown) =>
   /^[a-z][a-z0-9_]*$/.test(String(value || "").trim());
@@ -149,6 +153,161 @@ const WORKFLOW_MULTI_RELATION_PREFIX = "__workflow_multi_relation__";
 const PROCESS_LINKED_FIELD_PREFIX = "__linked__";
 const TASK_PROCESS_FIELD_PREFIX = "__report_task_process_field__";
 const SURVEY_TEMPLATE_FIELD_PREFIX = "__survey_template__::";
+const REPORT_TABLE_FIELD_PREFIX = "__report_table_field__";
+const REPORT_TABLE_RELATION_FIELD_PREFIX = "__report_table_relation_field__";
+
+const getOrgModuleFieldConfigs = async (
+  url: string,
+  headers: Record<string, string>,
+  orgId: string,
+  moduleId: string,
+) => {
+  const cacheKey = `${orgId}:${moduleId}`;
+  if (!orgModuleFieldConfigCache.has(cacheKey)) {
+    orgModuleFieldConfigCache.set(cacheKey, (async () => {
+      const query = new URL(`${url}/rest/v1/integration_settings`);
+      query.searchParams.set("select", "settings");
+      query.searchParams.set("org_id", `eq.${orgId}`);
+      query.searchParams.set("connection_type", "eq.module_settings");
+      query.searchParams.set("is_active", "eq.true");
+      query.searchParams.set("order", "updated_at.desc");
+      query.searchParams.set("limit", "1");
+      const response = await fetch(query, { headers });
+      const settings = response.ok ? (await response.json())?.[0]?.settings : null;
+      const schema = settings?.modules?.[moduleId]?.schema || {};
+      const fields = Array.isArray(schema?.fields) ? schema.fields : [];
+      const blocks = Array.isArray(schema?.blocks) ? schema.blocks : [];
+      const columns = blocks.flatMap((block: any) => Array.isArray(block?.tableColumns) ? block.tableColumns : []);
+      const tableFields = new Map(blocks.flatMap((block: any) =>
+        (Array.isArray(block?.tableColumns) ? block.tableColumns : []).map((field: any) => [
+          `${String(block?.id || "").trim()}::${String(field?.key || "").trim()}`,
+          field,
+        ] as const)
+      ).filter(([fieldKey]) => fieldKey !== "::"));
+      return {
+        fields: new Map([...fields, ...columns]
+        .map((field: any) => [String(field?.key || "").trim(), field] as const)
+        .filter(([fieldKey]) => !!fieldKey)),
+        tableFields,
+      };
+    })());
+  }
+  return orgModuleFieldConfigCache.get(cacheKey)!;
+};
+
+const findOptionLabel = (options: any, value: unknown) => {
+  const normalizedValue = String(value ?? "").trim();
+  if (!normalizedValue || !Array.isArray(options)) return null;
+  const option = options.find((item: any) => String(item?.value ?? "").trim() === normalizedValue);
+  return String(option?.label ?? "").trim() || null;
+};
+
+const getDynamicOptionLabel = async (
+  url: string,
+  headers: Record<string, string>,
+  orgId: string,
+  category: string,
+  value: unknown,
+) => {
+  const normalizedValue = String(value ?? "").trim();
+  if (!orgId || !category || !normalizedValue) return null;
+  const cacheKey = `${orgId}:${category}:${normalizedValue}`;
+  if (!dynamicOptionLabelCache.has(cacheKey)) {
+    dynamicOptionLabelCache.set(cacheKey, (async () => {
+      const query = new URL(`${url}/rest/v1/dynamic_options`);
+      query.searchParams.set("select", "label");
+      query.searchParams.set("org_id", `eq.${orgId}`);
+      query.searchParams.set("category", `eq.${category}`);
+      query.searchParams.set("value", `eq.${normalizedValue}`);
+      query.searchParams.set("is_active", "eq.true");
+      query.searchParams.set("limit", "1");
+      const response = await fetch(query, { headers });
+      return response.ok ? String((await response.json())?.[0]?.label || "").trim() || null : null;
+    })());
+  }
+  return dynamicOptionLabelCache.get(cacheKey)!;
+};
+
+const getDynamicOptionValueByLabel = async (
+  url: string,
+  headers: Record<string, string>,
+  orgId: string,
+  category: string,
+  label: unknown,
+) => {
+  const normalizedLabel = String(label ?? "").trim();
+  if (!orgId || !category || !normalizedLabel) return null;
+  const cacheKey = `${orgId}:${category}:label:${normalizedLabel}`;
+  if (!dynamicOptionValueCache.has(cacheKey)) {
+    dynamicOptionValueCache.set(cacheKey, (async () => {
+      const query = new URL(`${url}/rest/v1/dynamic_options`);
+      query.searchParams.set("select", "value");
+      query.searchParams.set("org_id", `eq.${orgId}`);
+      query.searchParams.set("category", `eq.${category}`);
+      query.searchParams.set("label", `eq.${normalizedLabel}`);
+      query.searchParams.set("is_active", "eq.true");
+      query.searchParams.set("limit", "1");
+      const response = await fetch(query, { headers });
+      return response.ok ? String((await response.json())?.[0]?.value || "").trim() || null : null;
+    })());
+  }
+  return dynamicOptionValueCache.get(cacheKey)!;
+};
+
+const getIdentityLabel = async (
+  url: string,
+  headers: Record<string, string>,
+  orgId: string,
+  identity: unknown,
+) => {
+  const token = String(identity ?? "").trim();
+  const [kind, id] = token.split(":", 2);
+  if ((kind !== "user" && kind !== "role") || !safeRecordId(id)) return null;
+  const cacheKey = `${orgId}:${token}`;
+  if (!identityLabelCache.has(cacheKey)) {
+    identityLabelCache.set(cacheKey, (async () => {
+      const table = kind === "user" ? "profiles" : "org_roles";
+      const query = new URL(`${url}/rest/v1/${table}`);
+      query.searchParams.set("select", kind === "user" ? "full_name,display_name" : "title,name");
+      query.searchParams.set("org_id", `eq.${orgId}`);
+      query.searchParams.set("id", `eq.${id}`);
+      query.searchParams.set("limit", "1");
+      const response = await fetch(query, { headers });
+      const row = response.ok ? (await response.json())?.[0] : null;
+      return String(row?.display_name || row?.full_name || row?.title || row?.name || "").trim() || null;
+    })());
+  }
+  return identityLabelCache.get(cacheKey)!;
+};
+
+const parseLooseObject = (value: any): Record<string, any> => {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+const normalizeTaskStatusConditionForRecord = (condition: any, record: any) => {
+  if (String(condition?.field || "").trim() !== "status") return condition;
+  const recurrence = parseLooseObject(record?.recurrence_info);
+  const options = Array.isArray(recurrence?.process_task_status_options)
+    ? recurrence.process_task_status_options
+    : [];
+  const resolve = (candidate: any) => {
+    const raw = String(candidate ?? "").trim();
+    if (!raw) return candidate;
+    const match = options.find((option: any) => (
+      String(option?.value || "").trim() === raw
+      || String(option?.label || "").trim() === raw
+    ));
+    return match?.value ?? candidate;
+  };
+  const rawValue = condition?.value;
+  return { ...condition, value: Array.isArray(rawValue) ? rawValue.map(resolve) : resolve(rawValue) };
+};
 
 const getFieldValue = (
   record: Record<string, any> | null | undefined,
@@ -386,6 +545,84 @@ const getConditionResolver = ({ url, headers, orgId, moduleId }: any) => {
       ] ?? null
     );
   };
+  const getRuntimeFieldConfig = async (fieldKey: string, record: any) => {
+    const tableMatch = fieldKey.startsWith(REPORT_TABLE_FIELD_PREFIX)
+      ? fieldKey.slice(REPORT_TABLE_FIELD_PREFIX.length).split("::")
+      : null;
+    const normalizedFieldKey = tableMatch?.[1] || fieldKey;
+    const tableRelationMatch = fieldKey.startsWith(REPORT_TABLE_RELATION_FIELD_PREFIX)
+      ? fieldKey.slice(REPORT_TABLE_RELATION_FIELD_PREFIX.length).split("::")
+      : null;
+    const relatedMatch = fieldKey.startsWith(WORKFLOW_RELATED_FIELD_PREFIX)
+      ? fieldKey.slice(WORKFLOW_RELATED_FIELD_PREFIX.length).split("::")
+      : fieldKey.startsWith(WORKFLOW_MULTI_RELATION_PREFIX)
+        ? fieldKey.slice(WORKFLOW_MULTI_RELATION_PREFIX.length).split("::")
+        : null;
+    const linkedMatch = fieldKey.match(/^__linked__(.+?)__(.+)$/);
+    if (fieldKey.startsWith(TASK_PROCESS_FIELD_PREFIX)) {
+      const customFieldKey = fieldKey.slice(TASK_PROCESS_FIELD_PREFIX.length).split("::")[2] || "";
+      const recurrence = parseObject(record?.recurrence_info);
+      return (Array.isArray(recurrence?.process_task_custom_fields) ? recurrence.process_task_custom_fields : [])
+        .find((field: any) => String(field?.key || "").trim() === customFieldKey) || null;
+    }
+    const configModuleId = tableRelationMatch?.[2] || relatedMatch?.[1] || linkedMatch?.[1] || moduleId;
+    const configFieldKey = tableRelationMatch?.[3] || relatedMatch?.[2] || linkedMatch?.[2] || normalizedFieldKey;
+    const configs = await getOrgModuleFieldConfigs(url, internalHeaders, orgId, configModuleId);
+    return tableMatch
+      ? configs.tableFields.get(`${String(tableMatch[0] || "").trim()}::${String(tableMatch[1] || "").trim()}`) || configs.fields.get(configFieldKey) || null
+      : configs.fields.get(configFieldKey) || null;
+  };
+  const resolveDisplayValue = async (fieldKey: string, record: any, value: any) => {
+    if (value === null || value === undefined || value === "") return "";
+    if (Array.isArray(value)) {
+      const labels = await Promise.all(value.map((item) => resolveDisplayValue(fieldKey, record, item)));
+      return labels.filter(Boolean).join("، ");
+    }
+    if (fieldKey === "__workflow_assignee") return await getIdentityLabel(url, internalHeaders, orgId, value) || "مسئول تعیین‌شده";
+    if (fieldKey === "status") {
+      const recurrence = parseObject(record?.recurrence_info);
+      const taskLabel = findOptionLabel(recurrence?.process_task_status_options, value)
+        || String(record?.status_label || record?.task_status_label || "").trim();
+      if (taskLabel) return taskLabel;
+    }
+    const field = await getRuntimeFieldConfig(fieldKey, record);
+    if (String(field?.type || "").toLowerCase() === "user") {
+      return await getIdentityLabel(url, internalHeaders, orgId, `user:${String(value || "").trim()}`) || "کاربر انتخاب‌شده";
+    }
+    const staticLabel = findOptionLabel(field?.options, value);
+    if (staticLabel) return staticLabel;
+    const category = String(field?.dynamicOptionsCategory || field?.dynamic_options_category || "").trim();
+    const dynamicLabel = category
+      ? await getDynamicOptionLabel(url, internalHeaders, orgId, category, value)
+      : null;
+    if (dynamicLabel) return dynamicLabel;
+    const text = String(value ?? "").trim();
+    return safeRecordId(text) ? "رکورد انتخاب‌شده" : text;
+  };
+  const normalizeCondition = async (condition: any, record: any) => {
+    const statusNormalized = normalizeTaskStatusConditionForRecord(condition, record);
+    const fieldKey = String(statusNormalized?.field || "").trim();
+    if (!fieldKey || !Object.prototype.hasOwnProperty.call(statusNormalized || {}, "value")) return statusNormalized;
+    const field = await getRuntimeFieldConfig(fieldKey, record);
+    if (!field) return statusNormalized;
+    const resolveOptionValue = async (candidate: any) => {
+      const raw = String(candidate ?? "").trim();
+      if (!raw) return candidate;
+      const staticOption = Array.isArray(field?.options)
+        ? field.options.find((option: any) => String(option?.value ?? "").trim() === raw || String(option?.label ?? "").trim() === raw)
+        : null;
+      if (staticOption?.value !== undefined) return staticOption.value;
+      const category = String(field?.dynamicOptionsCategory || field?.dynamic_options_category || "").trim();
+      return category ? await getDynamicOptionValueByLabel(url, internalHeaders, orgId, category, raw) || candidate : candidate;
+    };
+    const rawValue = statusNormalized.value;
+    return {
+      ...statusNormalized,
+      value: Array.isArray(rawValue)
+        ? await Promise.all(rawValue.map(resolveOptionValue))
+        : await resolveOptionValue(rawValue),
+    };
+  };
   const resolve = async (fieldKey: string, record: any): Promise<any> => {
     if (!record) return null;
     if (fieldKey === "__workflow_assignee") return assignee(record);
@@ -446,7 +683,7 @@ const getConditionResolver = ({ url, headers, orgId, moduleId }: any) => {
     }
     return getFieldValue(record, fieldKey);
   };
-  return resolve;
+  return { resolve, resolveDisplayValue, getRuntimeFieldConfig, normalizeCondition };
 };
 
 const evaluateAsyncWorkflowOperator = async ({
@@ -596,6 +833,21 @@ Deno.serve(async (request) => {
             // دوباره رکوردهای مجاز را با JWT کاربر می‌خواند.
             const internalReportRuntime =
               !!serviceRoleKey && authorization === `Bearer ${serviceRoleKey}`;
+            const reportFieldKeys = internalReportRuntime && Array.isArray(item?.reportFieldKeys)
+              ? Array.from(new Set(item.reportFieldKeys
+                .map((field: any) => String(field || "").trim())
+                .filter((field: string) => safeTableName(field)
+                  || field === "tags"
+                  || field === "__workflow_assignee"
+                  || field.startsWith("__workflow_related__")
+                  || field.startsWith("__workflow_multi_relation__")
+                  || field.startsWith("__linked__")
+                  || field.startsWith(TASK_PROCESS_FIELD_PREFIX)
+                  || field.startsWith(SURVEY_TEMPLATE_FIELD_PREFIX)
+                  || field.startsWith(REPORT_TABLE_FIELD_PREFIX)
+                  || field.startsWith(REPORT_TABLE_RELATION_FIELD_PREFIX))))
+                .slice(0, 48)
+              : [];
             const recordOverrides =
               internalReportRuntime && Array.isArray(item?.recordOverrides)
                 ? item.recordOverrides
@@ -647,30 +899,43 @@ Deno.serve(async (request) => {
               output[key] = { mode: "server", passedIds: [] };
               return;
             }
-            const resolveField = getConditionResolver({
+            const fieldResolver = getConditionResolver({
               url: supabaseUrl,
               headers,
               orgId,
               moduleId,
             });
             const passedIds: string[] = [];
+            const resolvedRows: Record<string, Record<string, { value: any; label: string }>> = {};
             for (const row of Array.isArray(rows) ? rows : []) {
               if (String(row?.org_id || "").trim() !== orgId) continue;
+              const conditionsAll = await Promise.all((item?.conditionsAll || []).map((condition: any) => fieldResolver.normalizeCondition(condition, row)));
+              const conditionsAny = await Promise.all((item?.conditionsAny || []).map((condition: any) => fieldResolver.normalizeCondition(condition, row)));
               if (
                 await passesConditions(
                   row,
-                  item?.conditionsAll || [],
-                  item?.conditionsAny || [],
-                  resolveField,
+                  conditionsAll,
+                  conditionsAny,
+                  fieldResolver.resolve,
                 )
               ) {
                 const id = String(
                   row?.__report_runtime_key || row?.id || "",
                 ).trim();
-                if (id) passedIds.push(id);
+                if (id) {
+                  passedIds.push(id);
+                  if (reportFieldKeys.length > 0) {
+                    const values = await Promise.all(reportFieldKeys.map(async (fieldKey: string) => {
+                      const value = await fieldResolver.resolve(fieldKey, row);
+                      const label = await fieldResolver.resolveDisplayValue(fieldKey, row, value);
+                      return [fieldKey, { value, label }] as const;
+                    }));
+                    resolvedRows[id] = Object.fromEntries(values);
+                  }
+                }
               }
             }
-            output[key] = { mode: "server", passedIds };
+            output[key] = { mode: "server", passedIds, resolvedRows };
             return;
           }
           const goalId = String(item?.goalId || "").trim();
@@ -745,23 +1010,25 @@ Deno.serve(async (request) => {
             endIso: rangeEnd,
             cacheKey,
           });
-          const resolveField = getConditionResolver({
+          const fieldResolver = getConditionResolver({
             url: supabaseUrl,
             headers,
             orgId: goal.org_id,
             moduleId,
           });
           const passed = await Promise.all(
-            rows.map(async (row) =>
-              (await passesConditions(
+            rows.map(async (row) => {
+              const normalizedAll = await Promise.all(conditionsAll.map((condition: any) => fieldResolver.normalizeCondition(condition, row)));
+              const normalizedAny = await Promise.all(conditionsAny.map((condition: any) => fieldResolver.normalizeCondition(condition, row)));
+              return (await passesConditions(
                 row,
-                conditionsAll,
-                conditionsAny,
-                resolveField,
+                normalizedAll,
+                normalizedAny,
+                fieldResolver.resolve,
               ))
                 ? row
-                : null,
-            ),
+                : null;
+            }),
           );
           output[key] = { mode: "server", rows: passed.filter(Boolean) };
         } catch {
