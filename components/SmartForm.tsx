@@ -70,6 +70,7 @@ import {
 import { applyInvoicePaymentAllocation } from '../utils/invoicePaymentAllocationRuntime';
 import { isCustomerPurchaseStatus, normalizeCustomerClubCode, resolveCustomerClubAmount } from '../utils/customerClub';
 import { evaluateWorkflowConditions } from '../utils/workflowRuntime';
+import { useCurrencyConfig } from '../utils/currency';
 
 const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
 const SAAS_ANNOUNCEMENT_CONDITION_FIELD_KEYS = new Set(['conditions_all', 'conditions_any']);
@@ -140,6 +141,7 @@ const CustomerClubCreditConflictOptions: React.FC<{
   candidates: CustomerClubCreditCandidate[];
   onAmountChange: (amount: number) => void;
 }> = ({ candidates, onAmountChange }) => {
+  const { label: currencyLabel } = useCurrencyConfig();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [finalAmount, setFinalAmount] = useState<number>(candidates[0]?.amount || 0);
   const setAmount = (amount: number) => {
@@ -166,14 +168,14 @@ const CustomerClubCreditConflictOptions: React.FC<{
             checked={selectedIds.includes(candidate.recordId)}
             onChange={(event) => toggleCandidate(candidate.recordId, event.target.checked)}
           >
-            اعتبار بعنوان «{candidate.roleLabel}»: <span className="persian-number">{formatCustomerClubCredit(candidate.amount)}</span>
+            اعتبار بعنوان «{candidate.roleLabel}»: <span className="persian-number">{formatCustomerClubCredit(candidate.amount)} {currencyLabel}</span>
           </Checkbox>
           <Button size="small" onClick={() => setAmount(candidate.amount)}>اعمال</Button>
         </div>
       ))}
       <Button onClick={applySum} disabled={selectedIds.length === 0}>جمع انتخاب‌شده‌ها</Button>
       <div className="rounded bg-gray-50 p-2 text-sm dark:bg-gray-800">
-        اعتبار نهایی باشگاه مشتریان: <strong className="persian-number">{formatCustomerClubCredit(finalAmount)}</strong>
+        اعتبار نهایی باشگاه مشتریان: <strong className="persian-number">{formatCustomerClubCredit(finalAmount)} {currencyLabel}</strong>
       </div>
     </div>
   );

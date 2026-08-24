@@ -180,7 +180,7 @@ type ProductUpdate = {
 
 const recentProductUpdates: ProductUpdate[] = [
   {
-    version: '2.67.0.0.6',
+    version: '2.67.0.0.7',
     title: 'اعتبار یکپارچهٔ باشگاه مشتریان',
     summary: 'اعتبار باشگاه برای مشتری، تأمین‌کننده و کارمندِ یک شخص همگام می‌ماند و گردش‌های آن در سابقهٔ مالی قابل مشاهده است.',
     details: [
