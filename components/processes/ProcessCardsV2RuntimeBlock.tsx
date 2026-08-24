@@ -14,7 +14,11 @@ import {
   shouldLoadProcessRuntime,
 } from '../../utils/processRuntimePresentation';
 import { filterDeletedProcessRunStageMarks } from '../../utils/processDeletedStageMarks';
-import { isProcessExecutionStarted, type ProcessRuntimeSnapshot } from '../../utils/processRuntimeSnapshot';
+import {
+  getCompletedProcessesToggleLabel,
+  isProcessExecutionStarted,
+  type ProcessRuntimeSnapshot,
+} from '../../utils/processRuntimeSnapshot';
 import {
   fetchAssigneeDirectory,
   fetchDynamicOptionsMap,
@@ -3108,6 +3112,83 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     });
   }, [cardKey, message, persistCardStagePositions, persistTemplateCardLabels]);
 
+  const handleDraftStageTransfer = useCallback(async (
+    payload: { processId?: string; laneId: string; stageId: string },
+    targetProcess: ProcessV2CardData,
+    targetLaneId: string,
+    targetSlot: number,
+  ) => {
+    const sourceProcess = allDisplayCards.find((card) => normalizeText(card.id) === normalizeText(payload.processId));
+    const targetGroupId = normalizeText(targetProcess.id).replace(/^draft:/, '');
+    if (!sourceProcess || !targetGroupId) {
+      message.warning('انتقال بین اجرای واقعی فرآیند در این مرحله پشتیبانی نمی‌شود.');
+      return;
+    }
+    const sourceLane = sourceProcess.lanes.find((lane) => lane.id === payload.laneId);
+    const sourceStage = sourceLane?.stages.find((stage) => stage.id === payload.stageId);
+    if (!sourceLane || !sourceStage || sourceStage.kind !== 'draft') {
+      message.warning('فقط مرحله‌های پیش‌نویس قابل انتقال بین فرآیندها هستند.');
+      return;
+    }
+    const sourceIndex = sourceLane.stages.findIndex((stage) => stage.id === sourceStage.id);
+    const shiftedTargetStages = targetProcess.lanes
+      .find((lane) => lane.id === targetLaneId)?.stages
+      .map((stage) => ({ ...stage, layoutSlot: (stage.layoutSlot ?? 0) >= targetSlot ? (stage.layoutSlot ?? 0) + 1 : stage.layoutSlot })) || [];
+    const movedSource = sourceStage.source && typeof sourceStage.source === 'object' ? sourceStage.source : {};
+    const movedMetadata = parseObject(movedSource?.metadata);
+    const movedStage: ProcessV2Stage = {
+      ...sourceStage,
+      layoutSlot: targetSlot,
+      source: {
+        ...movedSource,
+        process_group_id: targetGroupId,
+        process_lane_key: targetLaneId,
+        metadata: { ...movedMetadata, process_group_id: targetGroupId, process_lane_key: targetLaneId },
+      },
+    };
+    const nextSource: ProcessV2CardData = {
+      ...sourceProcess,
+      lanes: sourceProcess.lanes.map((lane) => lane.id === sourceLane.id
+        ? { ...lane, stages: lane.stages.filter((stage) => stage.id !== sourceStage.id) }
+        : lane),
+    };
+    const nextTarget: ProcessV2CardData = {
+      ...targetProcess,
+      lanes: targetProcess.lanes.map((lane) => lane.id === targetLaneId
+        ? { ...lane, stages: [...shiftedTargetStages, movedStage] }
+        : lane),
+    };
+    setCardOverrides((current) => ({
+      ...current,
+      [cardKey(sourceProcess)]: nextSource,
+      [cardKey(targetProcess)]: nextTarget,
+    }));
+    const directStages = Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : [];
+    const nextDraftStages = directStages.map((candidate, index) => {
+      if (!rawDraftCandidateMatchesV2StagePoint(candidate, index, sourceStage, sourceIndex)) return candidate;
+      const metadata = parseObject(candidate?.metadata);
+      return {
+        ...candidate,
+        process_group_id: targetGroupId,
+        process_lane_key: targetLaneId,
+        sort_order: (targetSlot + 1) * 10,
+        metadata: { ...metadata, process_group_id: targetGroupId, process_lane_key: targetLaneId, sort_order: (targetSlot + 1) * 10 },
+      };
+    });
+    try {
+      await persistDraftStageList(nextDraftStages);
+      markRuntimeModuleListsChanged();
+    } catch (error: any) {
+      setCardOverrides((current) => {
+        const next = { ...current };
+        delete next[cardKey(sourceProcess)];
+        delete next[cardKey(targetProcess)];
+        return next;
+      });
+      message.error(normalizeText(error?.message || error?.details) || 'انتقال مرحله پیش‌نویس ناموفق بود');
+    }
+  }, [allDisplayCards, cardKey, markRuntimeModuleListsChanged, message, persistDraftStageList]);
+
   const resolveRawDraftStagesForV2Stages = useCallback((
     stages: ProcessV2Stage[],
     targetGroupId?: string | null,
@@ -4828,6 +4909,9 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
                   templates={templates}
                   variant={variant}
                   onChange={handleCardChange}
+                  onStageTransfer={(payload, laneId, slot) => {
+                    void handleDraftStageTransfer(payload, card, laneId, slot);
+                  }}
                   onStageStatusChange={handleStageStatusChange}
                   onDelete={handleDeleteCard}
                   onDeleteLane={handleDeleteLane}

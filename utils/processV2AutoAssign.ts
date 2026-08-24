@@ -379,10 +379,15 @@ const isResolvedTaskAssignee = (task: Record<string, any> | null | undefined) =>
 const buildStageIdentity = (stage: Record<string, any>) => {
   const meta = getDraftStageProcessGroupMeta(stage);
   const nodeKey = getProcessStageNodeKey(stage);
+  const laneKey = getProcessStageLaneKey(stage);
   const sortOrder = Number(stage?.sort_order || 0);
   const name = normalizeText(stage?.name || stage?.stage_name || stage?.title).toLowerCase();
-  if (sortOrder > 0 && name) return [`${meta.groupId}:sort-name:${sortOrder}:${name}`];
+  // عنوان مرحله شناسه نیست. اولویت با node پایدار هر مرحله است تا دو مرحلهٔ هم‌نام
+  // در فرآیندها یا ردیف‌های متفاوت، مانع ساخت یکدیگر نشوند.
   if (nodeKey) return [`${meta.groupId}:node:${nodeKey}`];
+  if (laneKey && sortOrder > 0) return [`${meta.groupId}:lane-sort:${laneKey}:${sortOrder}`];
+  if (laneKey && name) return [`${meta.groupId}:lane-name:${laneKey}:${name}`];
+  if (sortOrder > 0 && name) return [`${meta.groupId}:sort-name:${sortOrder}:${name}`];
   if (name) return [`${meta.groupId}:name:${name}`];
   return [`${meta.groupId}:stage:${JSON.stringify(stage).slice(0, 120)}`];
 };
@@ -405,10 +410,13 @@ const getExistingIdentitySet = (tasks: Record<string, any>[]) => {
     if (!groupId) return;
     const nodeKey = normalizeText(task?.process_node_key || recurrence?.process_node_key);
     if (nodeKey) set.add(`${groupId}:node:${nodeKey}`);
+    const laneKey = normalizeText(task?.process_lane_key || recurrence?.process_lane_key);
     const sortOrder = Number(task?.source_stage_sort_order || 0);
     const name = normalizeText(task?.name).toLowerCase();
-    if (sortOrder > 0 && name) set.add(`${groupId}:sort-name:${sortOrder}:${name}`);
-    if (!nodeKey && name) set.add(`${groupId}:name:${name}`);
+    if (!nodeKey && laneKey && sortOrder > 0) set.add(`${groupId}:lane-sort:${laneKey}:${sortOrder}`);
+    if (!nodeKey && laneKey && name) set.add(`${groupId}:lane-name:${laneKey}:${name}`);
+    if (!nodeKey && !laneKey && sortOrder > 0 && name) set.add(`${groupId}:sort-name:${sortOrder}:${name}`);
+    if (!nodeKey && !laneKey && name) set.add(`${groupId}:name:${name}`);
   });
   return set;
 };

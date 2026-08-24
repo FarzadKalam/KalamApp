@@ -102,6 +102,7 @@ type ProcessCardsV2Props = {
   templates?: ProcessV2TemplateOption[];
   variant?: ProcessV2Variant;
   onChange?: (next: ProcessV2CardData) => void;
+  onStageTransfer?: (payload: StageDragPayload, targetLaneId: string, targetSlot: number) => void;
   onDelete?: (id: string) => void;
   onDeleteLane?: (lane: ProcessV2Lane, process: ProcessV2CardData) => boolean | void | Promise<boolean | void>;
   onDeleteStage?: (stage: ProcessV2Stage, lane: ProcessV2Lane, process: ProcessV2CardData) => boolean | void | Promise<boolean | void>;
@@ -133,7 +134,7 @@ type ConnectorMode = 'idle' | 'add' | 'connect';
 type ConnectorPlacement = 'top' | 'bottom' | 'left' | 'right';
 type ConnectorPoint = { x: number; y: number };
 type ConnectorPair = { id: string; from: string; to: string };
-type StageDragPayload = { laneId: string; stageId: string };
+type StageDragPayload = { laneId: string; stageId: string; processId?: string };
 type LaneDragPayload = { laneId: string };
 type TouchStageDragState = {
   pointerId: number;
@@ -1107,6 +1108,7 @@ const ProcessStagePill = memo(({
       className={`group relative box-border cursor-pointer rounded-xl border border-[var(--process-stage-border)] bg-[var(--process-stage-fill)] text-[var(--process-stage-text)] shadow-[var(--process-stage-shadow)] transition hover:brightness-[1.02] hover:shadow-[var(--process-stage-shadow-hover)] dark:border-[var(--process-stage-border-dark)] dark:bg-[var(--process-stage-fill-dark)] dark:text-[var(--process-stage-text-dark)] ${highlighted ? 'ring-2 ring-offset-2 ring-[rgba(var(--brand-500-rgb),0.75)] ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.85)] dark:ring-offset-slate-950' : ''} ${fitClass}`}
       role="button"
       tabIndex={0}
+      data-process-stage-card
       data-process-stage-lane={laneId}
       data-process-stage-slot={slot}
       onClick={onOpenDetails}
@@ -1996,6 +1998,7 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
   templates = [],
   variant = 'full',
   onChange,
+  onStageTransfer,
   onDelete,
   onDeleteLane,
   onDeleteStage,
@@ -2259,7 +2262,21 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
   const handleStageDragStart = useCallback((event: React.DragEvent<HTMLElement>, payload: StageDragPayload) => {
     event.stopPropagation();
     event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('application/x-process-stage', JSON.stringify(payload));
+    event.dataTransfer.setData('application/x-process-stage', JSON.stringify({ ...payload, processId: item.id }));
+    // تصویر پیش‌نمایش باید خود کارتِ مرحله باشد تا مقصد و جایگاه drop برای کاربر
+    // در طول کشیدن روشن بماند، نه فقط یک آیکن کوچکِ دستگیره.
+    const stageCard = event.currentTarget.closest<HTMLElement>('[data-process-stage-card]');
+    if (!stageCard || typeof document === 'undefined') return;
+    const dragPreview = stageCard.cloneNode(true) as HTMLElement;
+    dragPreview.style.position = 'fixed';
+    dragPreview.style.top = '-10000px';
+    dragPreview.style.left = '-10000px';
+    dragPreview.style.width = `${Math.max(140, stageCard.getBoundingClientRect().width)}px`;
+    dragPreview.style.opacity = '0.88';
+    dragPreview.style.pointerEvents = 'none';
+    document.body.appendChild(dragPreview);
+    event.dataTransfer.setDragImage(dragPreview, 24, 18);
+    window.setTimeout(() => dragPreview.remove(), 0);
   }, []);
 
   const handleStageDragEnd = useCallback(() => {
@@ -2299,7 +2316,12 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
       const sourceStageIndex = lanes[sourceLaneIndex].stages.findIndex((stage) => stage.id === stageId);
       if (sourceStageIndex < 0) return current;
       const [stage] = lanes[sourceLaneIndex].stages.splice(sourceStageIndex, 1);
-      const normalizedTargetSlot = Math.max(0, Math.floor(targetSlot));
+      const requestedTargetSlot = Math.max(0, Math.floor(targetSlot));
+      // drop slot پیش از برداشتن مرحله محاسبه می‌شود. در جابه‌جایی داخل همان
+      // ردیف، برداشتن مرحلهٔ قبلی یک خانه از مقصد کم می‌کند.
+      const normalizedTargetSlot = sourceLaneId === targetLaneId && sourceStageIndex < requestedTargetSlot
+        ? Math.max(0, requestedTargetSlot - 1)
+        : requestedTargetSlot;
       stage.layoutSlot = normalizedTargetSlot;
 
       lanes[targetLaneIndex].stages = sortStagesByLayoutSlot([
@@ -2320,11 +2342,15 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
     try {
       const payload = JSON.parse(rawPayload) as StageDragPayload;
       if (!payload?.laneId || !payload?.stageId) return;
+      if (payload.processId && payload.processId !== item.id) {
+        onStageTransfer?.(payload, targetLaneId, targetSlot);
+        return;
+      }
       moveStageToSlot(payload.laneId, payload.stageId, targetLaneId, targetSlot);
     } catch {
       return;
     }
-  }, [moveStageToSlot]);
+  }, [item.id, moveStageToSlot, onStageTransfer]);
 
   const handleDeleteEmptySlot = useCallback((laneId: string, slot: number) => {
     updateItem((current) => ({
