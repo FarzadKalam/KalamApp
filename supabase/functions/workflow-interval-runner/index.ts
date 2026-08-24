@@ -7024,16 +7024,20 @@ async function runCustomerClubNotificationQueue(url: string, key: string): Promi
     }).then(() => true).catch(() => false);
     if (!claimed) continue;
     try {
-      const customers = row.customer_id
-        ? await dbGet(url, key, `customers?id=eq.${encodeURIComponent(String(row.customer_id))}&org_id=eq.${encodeURIComponent(String(row.org_id))}&select=*&limit=1`)
+      const recipientModuleId = ['customers', 'suppliers', 'employees'].includes(String(row.recipient_module_id || ''))
+        ? String(row.recipient_module_id)
+        : 'customers';
+      const recipientRecordId = String(row.recipient_record_id || row.customer_id || '').trim();
+      const recipients = recipientRecordId
+        ? await dbGet(url, key, `${recipientModuleId}?id=eq.${encodeURIComponent(recipientRecordId)}&org_id=eq.${encodeURIComponent(String(row.org_id))}&select=*&limit=1`)
         : [];
-      const record = { ...(customers?.[0] || {}), ...(row.context && typeof row.context === 'object' ? row.context : {}), id: String(row.customer_id || row.id), customer_id: row.customer_id || null, customer_club_event: row.event_key };
+      const record = { ...(recipients?.[0] || {}), ...(row.context && typeof row.context === 'object' ? row.context : {}), id: recipientRecordId || String(row.id), customer_id: row.customer_id || null, customer_club_event: row.event_key };
       const actions = Array.isArray(row.actions) ? row.actions : [];
       const failures: string[] = [];
       for (const [index, action] of actions.entries()) {
         const result = await executeDurableAction(
           { ...action, config: { ...(action?.config || {}), __workflow_origin_execution_key: `customer-club:${row.id}` } } as WorkflowAction,
-          record, 'customers', String(row.org_id), url, key, null,
+          record, recipientModuleId, String(row.org_id), url, key, null,
           { parentExecutionKey: `customer-club:${row.id}`, actionIndex: index },
         );
         if (result.status === 'success') stats.executedActions += 1;

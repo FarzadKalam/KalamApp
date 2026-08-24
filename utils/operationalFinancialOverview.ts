@@ -22,7 +22,8 @@ export type OperationalFinancialRowType =
   | 'barter'
   | 'expense'
   | 'payroll_slip'
-  | 'advance';
+  | 'advance'
+  | 'club_credit';
 
 export type OperationalFinancialRow = {
   key: string;
@@ -36,6 +37,9 @@ export type OperationalFinancialRow = {
   date: string | null;
   debit: number;
   credit: number;
+  // اعتبار باشگاه پول نقد یا ماندهٔ بدهکار/بستانکار نیست؛ جدا نگه می‌داریم
+  // تا در سابقه دیده شود اما محاسبهٔ حساب عملیاتی را تغییر ندهد.
+  clubCreditAmount?: number;
   balance: number;
   invoiceLabel: string;
   bankLabel: string;
@@ -160,6 +164,7 @@ export const OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL: Record<OperationalFinancialRo
   expense: 'هزینه',
   payroll_slip: 'فیش حقوقی',
   advance: 'مساعده',
+  club_credit: 'اعتبار باشگاه مشتریان',
 };
 
 // هر نوع گردش رنگ اختصاصی دارد تا در همهٔ نمایش‌های سوابق از هم تفکیک شود.
@@ -172,6 +177,7 @@ export const OPERATIONAL_FINANCIAL_ROW_TYPE_COLOR: Record<OperationalFinancialRo
   expense: 'orange',
   payroll_slip: 'cyan',
   advance: 'magenta',
+  club_credit: 'geekblue',
 };
 
 export const OPERATIONAL_FINANCIAL_PRINT_FIELDS: OperationalFinancialOverviewResult['printFields'] = [
@@ -197,6 +203,7 @@ export const OPERATIONAL_FINANCIAL_PRINT_FIELDS: OperationalFinancialOverviewRes
   { key: 'date', label: 'تاریخ', type: 'date' },
   { key: 'debit', label: 'بدهکار', type: 'price' },
   { key: 'credit', label: 'بستانکار', type: 'price' },
+  { key: 'clubCreditAmount', label: 'اعتبار باشگاه', type: 'price' },
   { key: 'balance', label: 'مانده', type: 'price' },
   { key: 'invoiceLabel', label: 'مرجع', type: 'text' },
   { key: 'bankLabel', label: 'بانک / صندوق', type: 'text' },
@@ -1073,16 +1080,23 @@ export const fetchOperationalFinancialOverview = async ({
   // صفحهٔ داخلی و کارت حساب آنلاین هر دو از همین RPC سروری استفاده می‌کنند.
   // هیچ fallback کلاینتی نداریم تا یک رکورد در دو مسیر با دو منطق متفاوت
   // محاسبه نشود.
-  const { data, error } = await supabase.rpc('get_operational_financial_history', {
-    p_entity_type: entityType,
-    p_entity_id: normalizedEntityId,
-  });
+  const [{ data, error }, { data: clubHistoryData, error: clubHistoryError }] = await Promise.all([
+    supabase.rpc('get_operational_financial_history', {
+      p_entity_type: entityType,
+      p_entity_id: normalizedEntityId,
+    }),
+    supabase.rpc('get_customer_club_financial_history', {
+      p_entity_type: entityType,
+      p_entity_id: normalizedEntityId,
+    }),
+  ]);
   if (error) throw error;
+  if (clubHistoryError) throw clubHistoryError;
 
   const payload = (data && typeof data === 'object' ? data : {}) as Record<string, any>;
   const rawRows = Array.isArray(payload.rows) ? payload.rows : [];
   const allowedRowTypes = new Set<OperationalFinancialRowType>([
-    'opening', 'invoice', 'receipt', 'payment', 'barter', 'expense', 'payroll_slip', 'advance',
+    'opening', 'invoice', 'receipt', 'payment', 'barter', 'expense', 'payroll_slip', 'advance', 'club_credit',
   ]);
   const rows = rawRows.map((raw: any, index: number) => {
     const rowTypeCandidate = String(raw?.row_type || 'payment') as OperationalFinancialRowType;
@@ -1103,6 +1117,7 @@ export const fetchOperationalFinancialOverview = async ({
       date: raw?.date || null,
       debit: toNumber(raw?.debit),
       credit: toNumber(raw?.credit),
+      clubCreditAmount: toNumber(raw?.club_credit_amount),
       invoiceLabel: String(raw?.invoice_label || '-'),
       bankLabel: String(raw?.bank_label || '-'),
       description: String(raw?.description || ''),
@@ -1114,6 +1129,29 @@ export const fetchOperationalFinancialOverview = async ({
         ? { moduleId: bankModuleId, recordId: bankRecordId }
         : null,
     }, toNumber(raw?.balance));
+  });
+  const clubRows = Array.isArray(clubHistoryData) ? clubHistoryData : [];
+  clubRows.forEach((raw: any, index: number) => {
+    rows.push(buildBalanceRow({
+      key: normalizeOperationalText(raw?.key) || `club_credit_${index}`,
+      rowType: 'club_credit',
+      sourceLabel: String(raw?.source_label || 'باشگاه مشتریان'),
+      sourceModuleId: 'customer_club',
+      sourceRecordId: null,
+      paymentType: '',
+      status: String(raw?.status || 'ثبت شده'),
+      chequeStatus: '',
+      date: raw?.date || null,
+      debit: 0,
+      credit: 0,
+      clubCreditAmount: toNumber(raw?.club_credit_amount),
+      invoiceLabel: String(raw?.invoice_label || '-'),
+      bankLabel: '-',
+      description: String(raw?.description || ''),
+      createdAt: raw?.created_at || null,
+      invoiceRelation: null,
+      bankRelation: null,
+    }, 0));
   });
   const rawSummary = payload.summary && typeof payload.summary === 'object' ? payload.summary : {};
   const totals = {

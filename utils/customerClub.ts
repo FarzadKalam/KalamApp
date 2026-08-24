@@ -3,6 +3,14 @@ export const CUSTOMER_CLUB_PERMISSION_KEY = '__customer_club';
 
 export type CustomerClubDiscountType = 'amount' | 'percent';
 
+/**
+ * متن صفحهٔ نتیجهٔ پرداخت فقط به پاداشی تعلق دارد که خودِ پرداخت‌کننده
+ * دریافت می‌کند. پاداش معرفی به معرف تعلق می‌گیرد و نباید در رسید مشتری
+ * نمایش داده شود.
+ */
+export const customerClubRuleSupportsOnlinePaymentMessage = (ruleType?: string | null) =>
+  ['cashback', 'first_purchase'].includes(String(ruleType || '').trim().toLowerCase());
+
 export const isCustomerPurchaseStatus = (status?: string | null) => {
   const normalized = String(status || '').trim().toLowerCase();
   return !['created', 'proforma', 'canceled', 'cancelled'].includes(normalized);

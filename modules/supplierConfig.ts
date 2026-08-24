@@ -177,6 +177,7 @@ export const supplierModule: ModuleDefinition = {
     { key: 'first_supply_date', labels: { fa: 'تاریخ شروع همکاری', en: 'Start Date' }, type: FieldType.DATE, blockId: 'financial_info' },
     { key: 'supply_count', labels: { fa: 'تعداد فاکتور خرید', en: 'Supply Count' }, type: FieldType.NUMBER, blockId: 'financial_info', readonly: true },
     { key: 'total_paid', labels: { fa: 'جمع پرداختی‌ها', en: 'Total Paid' }, type: FieldType.PRICE, blockId: 'financial_info', readonly: true },
+    { key: 'loyalty_credit_balance', labels: { fa: 'اعتبار باشگاه مشتریان', en: 'Customer Club Credit' }, type: FieldType.PRICE, blockId: 'financial_info', readonly: true, isTableColumn: false },
     { key: 'online_account_card_link', labels: { fa: 'لینک کارت حساب آنلاین', en: 'Online Account Card Link' }, type: FieldType.LINK, blockId: 'financial_info', readonly: true, nature: FieldNature.STANDARD, hideInCreateForm: true },
 
     { key: 'previous_system_first_purchase_date', labels: { fa: 'تاریخ شروع سوابق سیستم قبلی', en: 'Previous System Start Date' }, type: FieldType.DATE, blockId: 'previous_system_info' },

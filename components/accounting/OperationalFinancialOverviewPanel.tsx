@@ -328,6 +328,17 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
         render: (value: number) => <span className="persian-number">{formatPersianPrice(value || 0)}</span>,
       },
       {
+        title: 'اعتبار باشگاه',
+        dataIndex: 'clubCreditAmount',
+        key: 'clubCreditAmount',
+        align: 'right',
+        width: 170,
+        ...createNumberRangeFilter('اعتبار باشگاه', (record) => record.clubCreditAmount || 0),
+        render: (value: number | undefined, record) => record.rowType === 'club_credit'
+          ? <span className="persian-number">{formatPersianPrice(value || 0)}</span>
+          : '-',
+      },
+      {
         title: 'مانده',
         dataIndex: 'balance',
         key: 'balance',

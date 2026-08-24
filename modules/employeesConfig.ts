@@ -398,6 +398,7 @@ export const employeesModule: ModuleDefinition = {
     { key: 'previous_system_paid_total', labels: { fa: 'جمع پرداختی‌های سیستم قبلی', en: 'Previous System Paid Total' }, type: FieldType.PRICE, blockId: 'previous_system_info', order: 9.6 },
     { key: 'previous_system_balance_total', labels: { fa: 'مانده اول دوره سیستم قبلی', en: 'Previous System Opening Balance' }, type: FieldType.PRICE, blockId: 'previous_system_info', order: 9.7, allowNegative: true },
     { key: 'online_account_card_link', labels: { fa: 'لینک کارت حساب آنلاین', en: 'Online Account Card Link' }, type: FieldType.LINK, blockId: 'financial_history', order: 9.75, readonly: true, nature: FieldNature.STANDARD, hideInCreateForm: true },
+    { key: 'loyalty_credit_balance', labels: { fa: 'اعتبار باشگاه مشتریان', en: 'Customer Club Credit' }, type: FieldType.PRICE, blockId: 'financial_history', order: 9.76, readonly: true, isTableColumn: false },
 
     {
       key: 'job_description_id',

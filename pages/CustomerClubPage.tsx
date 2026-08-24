@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   App,
+  Alert,
   Button,
   Card,
   Empty,
@@ -42,6 +43,7 @@ import { hasCurrentOrgPlanFeature } from "../utils/saasPlanFeatures";
 import {
   CUSTOMER_CLUB_FEATURE,
   CUSTOMER_CLUB_PERMISSION_KEY,
+  customerClubRuleSupportsOnlinePaymentMessage,
   normalizeCustomerClubCode,
 } from "../utils/customerClub";
 import { fetchCurrentUserRoleContext } from "../utils/permissions";
@@ -344,6 +346,8 @@ const CustomerClubPage: React.FC = () => {
   const [ruleNotifications, setRuleNotifications] =
     useState<CustomerClubNotificationConfig>({});
   const [ruleForm] = Form.useForm();
+  const selectedRuleType = String(Form.useWatch("rule_type", ruleForm) || "cashback");
+  const supportsOnlinePaymentMessage = customerClubRuleSupportsOnlinePaymentMessage(selectedRuleType);
 
   const [discountModalOpen, setDiscountModalOpen] = useState(false);
   const [editingDiscount, setEditingDiscount] = useState<DiscountCode | null>(
@@ -510,9 +514,20 @@ const CustomerClubPage: React.FC = () => {
 
   const saveRule = async () => {
     const values = await ruleForm.validateFields();
+    const ruleType = String(values.rule_type || "").trim();
+    const nextConfig = {
+      ...(editingRule?.config || {}),
+      notifications: ruleNotifications,
+    } as NonNullable<LoyaltyRule["config"]>;
+    if (customerClubRuleSupportsOnlinePaymentMessage(ruleType)) {
+      nextConfig.online_payment_success_message =
+        String(values.online_payment_success_message || "").trim() || undefined;
+    } else {
+      delete nextConfig.online_payment_success_message;
+    }
     const payload = {
       name: values.name,
-      rule_type: values.rule_type,
+      rule_type: ruleType,
       reward_type: values.reward_type,
       reward_amount: Number(values.reward_amount || 0),
       reward_percent: Number(values.reward_percent || 0),
@@ -525,12 +540,7 @@ const CustomerClubPage: React.FC = () => {
       ends_at: String(values.ends_at || "").trim() || null,
       conditions_all: ruleConditionsAll,
       conditions_any: ruleConditionsAny,
-      config: {
-        ...(editingRule?.config || {}),
-        notifications: ruleNotifications,
-        online_payment_success_message:
-          String(values.online_payment_success_message || "").trim() || null,
-      },
+      config: nextConfig,
       is_active: values.is_active !== false,
     };
     const query = editingRule?.id
@@ -1085,20 +1095,28 @@ const CustomerClubPage: React.FC = () => {
             />
           </div>
           <div className="mt-2 space-y-4">
-            <Form.Item
-              name="online_payment_success_message"
-              label="پیام پس از پرداخت آنلاین"
-            >
-              <Input.TextArea
-                autoSize={{ minRows: 2, maxRows: 5 }}
-                placeholder="مثال: {{نام مشتری}} عزیز، {{مبلغ پاداش}} اعتبار از طرح {{نام طرح}} به شما تعلق گرفت."
-              />
-            </Form.Item>
-            <Text type="secondary" className="!block !text-xs">
-              {
-                "متغیرهای قابل استفاده: {{نام مشتری}}، {{نام طرح}}، {{مبلغ پاداش}}، {{مبلغ پرداخت}} و {{کد تخفیف}}"
-              }
-            </Text>
+            {supportsOnlinePaymentMessage && <>
+              <Form.Item
+                name="online_payment_success_message"
+                label="پیام پس از پرداخت آنلاین"
+              >
+                <Input.TextArea
+                  autoSize={{ minRows: 2, maxRows: 5 }}
+                  placeholder="مثال: {{نام مشتری}} عزیز، {{مبلغ پاداش}} اعتبار از طرح {{نام طرح}} به شما تعلق گرفت."
+                />
+              </Form.Item>
+              <Text type="secondary" className="!block !text-xs">
+                {
+                  "متغیرهای قابل استفاده: {{نام مشتری}}، {{نام طرح}}، {{مبلغ پاداش}}، {{مبلغ پرداخت}} و {{کد تخفیف}}"
+                }
+              </Text>
+            </>}
+            {selectedRuleType === "referral" && <Alert
+              type="info"
+              showIcon
+              message="پاداش و اعلان این طرح فقط برای معرفِ مشتری ارسال می‌شود"
+              description="در پروندهٔ مشتری جدید، نوع معرف و رکورد معرف را انتخاب کنید. اعتبار و اطلاع‌رسانیِ «هنگام وقوع شرط‌ها» برای همان معرف ثبت و ارسال می‌شود؛ مشتری معرفی‌شده پیام دریافت نمی‌کند. مشتری، کارمند و تأمین‌کننده هر سه پشتیبانی می‌شوند."
+            />}
             <div>
               <div className="mb-2 text-sm font-semibold">
                 همه شرط‌های هدف‌گیری

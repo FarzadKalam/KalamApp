@@ -125,6 +125,60 @@ type PendingSmartFormInvoiceAllocation = {
   partyId: string;
 };
 
+type CustomerClubCreditCandidate = {
+  moduleId: 'customers' | 'suppliers' | 'employees';
+  recordId: string;
+  roleLabel: string;
+  amount: number;
+};
+
+const formatCustomerClubCredit = (value: number) => new Intl.NumberFormat('fa-IR', {
+  maximumFractionDigits: 2,
+}).format(Number(value || 0));
+
+const CustomerClubCreditConflictOptions: React.FC<{
+  candidates: CustomerClubCreditCandidate[];
+  onAmountChange: (amount: number) => void;
+}> = ({ candidates, onAmountChange }) => {
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [finalAmount, setFinalAmount] = useState<number>(candidates[0]?.amount || 0);
+  const setAmount = (amount: number) => {
+    setFinalAmount(amount);
+    onAmountChange(amount);
+  };
+  const toggleCandidate = (recordId: string, checked: boolean) => {
+    setSelectedIds((current) => checked
+      ? [...new Set([...current, recordId])]
+      : current.filter((id) => id !== recordId));
+  };
+  const applySum = () => {
+    const total = candidates
+      .filter((candidate) => selectedIds.includes(candidate.recordId))
+      .reduce((sum, candidate) => sum + candidate.amount, 0);
+    setAmount(total);
+  };
+  return (
+    <div className="space-y-3">
+      <div>در اعتبار باشگاه مشتریان این مخاطب، تناقض وجود دارد. ماندهٔ نهایی را انتخاب کنید:</div>
+      {candidates.map((candidate) => (
+        <div key={`${candidate.moduleId}:${candidate.recordId}`} className="flex items-center justify-between gap-3 rounded border border-gray-200 p-2 dark:border-gray-700">
+          <Checkbox
+            checked={selectedIds.includes(candidate.recordId)}
+            onChange={(event) => toggleCandidate(candidate.recordId, event.target.checked)}
+          >
+            اعتبار بعنوان «{candidate.roleLabel}»: <span className="persian-number">{formatCustomerClubCredit(candidate.amount)}</span>
+          </Checkbox>
+          <Button size="small" onClick={() => setAmount(candidate.amount)}>اعمال</Button>
+        </div>
+      ))}
+      <Button onClick={applySum} disabled={selectedIds.length === 0}>جمع انتخاب‌شده‌ها</Button>
+      <div className="rounded bg-gray-50 p-2 text-sm dark:bg-gray-800">
+        اعتبار نهایی باشگاه مشتریان: <strong className="persian-number">{formatCustomerClubCredit(finalAmount)}</strong>
+      </div>
+    </div>
+  );
+};
+
 const isAbortLikeError = (error: unknown) =>
   String((error as any)?.name || '').toLowerCase() === 'aborterror'
   || String((error as any)?.message || '').toLowerCase().includes('signal is aborted');
@@ -1808,6 +1862,65 @@ const SmartForm: React.FC<SmartFormProps> = ({
         clearSmartFormDraft(draftKey);
         formDirtyRef.current = false;
       } else {
+        let customerClubCreditResolution: number | null | undefined;
+        const personModuleMap = {
+          customers: { entityType: 'customer', table: 'customers', links: ['linked_supplier_id', 'linked_employee_id'] },
+          suppliers: { entityType: 'supplier', table: 'suppliers', links: ['linked_customer_id', 'linked_employee_id'] },
+          employees: { entityType: 'employee', table: 'employees', links: ['linked_customer_id', 'linked_supplier_id'] },
+        } as const;
+        const personModule = personModuleMap[module.id as keyof typeof personModuleMap];
+        if (personModule) {
+          const linkedRoleByField: Record<string, CustomerClubCreditCandidate['moduleId']> = {
+            linked_customer_id: 'customers',
+            linked_supplier_id: 'suppliers',
+            linked_employee_id: 'employees',
+          };
+          const ownAmount = Number(values?.loyalty_credit_balance ?? initialRecord?.loyalty_credit_balance ?? 0);
+          const candidates: CustomerClubCreditCandidate[] = recordId
+            ? [{
+              moduleId: module.id as CustomerClubCreditCandidate['moduleId'],
+              recordId,
+              roleLabel: module.id === 'customers' ? 'مشتری' : module.id === 'suppliers' ? 'تأمین‌کننده' : 'کارمند',
+              amount: Number.isFinite(ownAmount) ? ownAmount : 0,
+            }]
+            : [];
+          for (const linkField of personModule.links) {
+            const linkedRecordId = String(values?.[linkField] ?? initialRecord?.[linkField] ?? '').trim();
+            const linkedModuleId = linkedRoleByField[linkField];
+            if (!linkedRecordId || !linkedModuleId) continue;
+            const linkedTable = linkedModuleId === 'customers' ? 'customers' : linkedModuleId === 'suppliers' ? 'suppliers' : 'employees';
+            const { data: linkedRecord, error: linkedRecordError } = await supabase
+              .from(linkedTable)
+              .select('id, loyalty_credit_balance')
+              .eq('id', linkedRecordId)
+              .maybeSingle();
+            if (linkedRecordError) throw linkedRecordError;
+            if (!linkedRecord?.id) continue;
+            candidates.push({
+              moduleId: linkedModuleId,
+              recordId: String(linkedRecord.id),
+              roleLabel: linkedModuleId === 'customers' ? 'مشتری' : linkedModuleId === 'suppliers' ? 'تأمین‌کننده' : 'کارمند',
+              amount: Number(linkedRecord.loyalty_credit_balance || 0),
+            });
+          }
+          const nonZeroAmounts = candidates.map((candidate) => candidate.amount).filter((amount) => amount !== 0);
+          const hasConflict = nonZeroAmounts.length > 1 && new Set(nonZeroAmounts.map((amount) => String(amount))).size > 1;
+          if (hasConflict) {
+            let resolvedAmount = candidates[0]?.amount || 0;
+            customerClubCreditResolution = await new Promise<number | null>((resolve) => {
+              Modal.confirm({
+                title: 'هماهنگ‌سازی اعتبار باشگاه مشتریان',
+                width: 620,
+                content: <CustomerClubCreditConflictOptions candidates={candidates} onAmountChange={(amount) => { resolvedAmount = amount; }} />,
+                okText: 'ثبت اعتبار نهایی',
+                cancelText: 'انصراف',
+                onOk: () => resolve(resolvedAmount),
+                onCancel: () => resolve(null),
+              });
+            });
+            if (customerClubCreditResolution === null) return;
+          }
+        }
         const userId = authUserId;
         const withAuditFields = (payload: Record<string, any>, mode: 'create' | 'update') => {
           if (!userId) return { ...payload };
@@ -1937,6 +2050,23 @@ const SmartForm: React.FC<SmartFormProps> = ({
           }
           return insertResult;
         };
+        const synchronizeCustomerClubCredit = async (persistedRecordId: string) => {
+          if (!personModule) return;
+          if (customerClubCreditResolution !== undefined && customerClubCreditResolution !== null) {
+            const { error } = await supabase.rpc('reconcile_customer_club_credit', {
+              p_entity_type: personModule.entityType,
+              p_entity_id: persistedRecordId,
+              p_target_amount: customerClubCreditResolution,
+            });
+            if (error) throw error;
+            return;
+          }
+          const { error } = await supabase.rpc('sync_customer_club_credit_group', {
+            p_entity_type: personModule.entityType,
+            p_entity_id: persistedRecordId,
+          });
+          if (error && !isMissingColumnLikeError(error)) throw error;
+        };
         const registerCustomerClubDiscountRedemption = async (invoiceId?: string | null) => {
           if (!customerClubDiscountRedemption || !invoiceId) return;
           const payload = {
@@ -1981,6 +2111,15 @@ const SmartForm: React.FC<SmartFormProps> = ({
             .eq('source_record_id', invoiceId)
             .in('source_type', rewardSourceTypes);
           if (cleanupError) throw cleanupError;
+          // معرف می‌تواند کارمند یا تأمین‌کننده باشد. رکوردهای این دو نقش در
+          // دفتر مرکزی اعتبار نگهداری می‌شوند، اما کلید منبع همان فاکتور است.
+          const { error: entityCleanupError } = await supabase
+            .from('customer_club_entity_credits')
+            .delete()
+            .eq('source_table', 'invoices')
+            .eq('source_record_id', invoiceId)
+            .in('source_type', rewardSourceTypes);
+          if (entityCleanupError && !isMissingColumnLikeError(entityCleanupError)) throw entityCleanupError;
           if (previousCustomerId) {
             await supabase.rpc('sync_customer_loyalty_balance', { p_customer_id: previousCustomerId });
           }
@@ -2047,12 +2186,20 @@ const SmartForm: React.FC<SmartFormProps> = ({
               if (hasPriorPurchase) continue;
             }
 
-            const targetCustomerId = rule.rule_type === 'referral'
-              ? String(customerRecord.referrer_module || '') === 'customers'
+            const referrerModule = String(customerRecord.referrer_module || '').trim().toLowerCase();
+            const targetModuleId = rule.rule_type === 'referral'
+              ? referrerModule
+              : 'customers';
+            const targetRecordId = rule.rule_type === 'referral'
+              ? referrerModule === 'customers'
                 ? String(customerRecord.referrer_customer_id || '').trim()
-                : ''
+                : referrerModule === 'employees'
+                  ? String(customerRecord.referrer_employee_id || '').trim()
+                  : referrerModule === 'suppliers'
+                    ? String(customerRecord.referrer_supplier_id || '').trim()
+                    : ''
               : customerId;
-            if (!targetCustomerId) continue;
+            if (!targetRecordId || !['customers', 'employees', 'suppliers'].includes(targetModuleId)) continue;
 
             const amount = resolveCustomerClubAmount({
               baseAmount: values?.total_invoice_amount ?? summaryData?.total ?? 0,
@@ -2064,11 +2211,12 @@ const SmartForm: React.FC<SmartFormProps> = ({
             if (amount <= 0) continue;
 
             const sourceType = `conditioned_${rule.rule_type}_reward`;
-            const { error: ledgerError } = await supabase
-              .from('customer_loyalty_ledger')
-              .upsert([{
+            if (targetModuleId === 'customers') {
+              const { error: ledgerError } = await supabase
+                .from('customer_loyalty_ledger')
+                .upsert([{
                 org_id: customerRecord.org_id,
-                customer_id: targetCustomerId,
+                customer_id: targetRecordId,
                 rule_id: rule.id,
                 entry_type: 'credit',
                 source_type: sourceType,
@@ -2083,9 +2231,26 @@ const SmartForm: React.FC<SmartFormProps> = ({
                   customer_id: customerId,
                   conditioned: true,
                 },
-              }], { onConflict: 'org_id,idempotency_key' });
-            if (ledgerError) throw ledgerError;
-            syncedCustomerIds.add(targetCustomerId);
+                }], { onConflict: 'org_id,idempotency_key' });
+              if (ledgerError) throw ledgerError;
+              syncedCustomerIds.add(targetRecordId);
+            } else {
+              const { error: entityCreditError } = await supabase.rpc('record_customer_club_entity_credit', {
+                p_recipient_module_id: targetModuleId,
+                p_recipient_record_id: targetRecordId,
+                p_rule_id: rule.id,
+                p_entry_type: 'credit',
+                p_source_type: sourceType,
+                p_source_table: 'invoices',
+                p_source_record_id: invoiceId,
+                p_amount: amount,
+                p_effective_date: invoiceDate,
+                p_idempotency_key: `${sourceType}:${rule.id}:${invoiceId}`,
+                p_description: 'پاداش معرفی مشتری',
+                p_metadata: { invoice_id: invoiceId, customer_id: customerId, conditioned: true },
+              });
+              if (entityCreditError) throw entityCreditError;
+            }
           }
 
           for (const syncCustomerId of syncedCustomerIds) {
@@ -2096,6 +2261,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
         if (recordId) {
           const { error: updateError } = await persistWithAuditFallback('update', values, recordId);
           if (updateError) throw updateError;
+          await synchronizeCustomerClubCredit(recordId);
           if (hasInlineTagsDraft) {
             await syncRecordTags(supabase, module.id, recordId, selectedTags);
           }
@@ -2192,6 +2358,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
           if (error) throw error;
 
           if (inserted?.id) {
+            await synchronizeCustomerClubCredit(String(inserted.id));
             if (hasInlineTagsDraft) {
               await syncRecordTags(supabase, module.id, String(inserted.id), selectedTags);
             }

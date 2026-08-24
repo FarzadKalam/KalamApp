@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { isCustomerPurchaseStatus, normalizeCustomerClubCode, resolveCustomerClubAmount } from './customerClub';
+import {
+  customerClubRuleSupportsOnlinePaymentMessage,
+  isCustomerPurchaseStatus,
+  normalizeCustomerClubCode,
+  resolveCustomerClubAmount,
+} from './customerClub';
 
 describe('customerClub utilities', () => {
   it('calculates fixed customer club amounts with an optional cap', () => {
@@ -42,5 +47,13 @@ describe('customerClub utilities', () => {
     expect(isCustomerPurchaseStatus('created')).toBe(false);
     expect(isCustomerPurchaseStatus('proforma')).toBe(false);
     expect(isCustomerPurchaseStatus('cancelled')).toBe(false);
+  });
+
+  it('only exposes a post-payment customer message for rewards of the paying customer', () => {
+    expect(customerClubRuleSupportsOnlinePaymentMessage('cashback')).toBe(true);
+    expect(customerClubRuleSupportsOnlinePaymentMessage('first_purchase')).toBe(true);
+    expect(customerClubRuleSupportsOnlinePaymentMessage('referral')).toBe(false);
+    expect(customerClubRuleSupportsOnlinePaymentMessage('birthday')).toBe(false);
+    expect(customerClubRuleSupportsOnlinePaymentMessage('leveling')).toBe(false);
   });
 });
