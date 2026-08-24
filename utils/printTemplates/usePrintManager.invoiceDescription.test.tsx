@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   fetchAssigneeDirectory: vi.fn(),
   detectRecordFilesTable: vi.fn(),
   printInIframe: vi.fn(),
+  printAsPdf: vi.fn(),
 }));
 
 vi.mock('./store', async (importOriginal) => ({
@@ -31,6 +32,7 @@ vi.mock('../recordFilesAvailability', () => ({ detectRecordFilesTable: mocks.det
 vi.mock('./printInIframe', () => ({ printInIframe: mocks.printInIframe }));
 vi.mock('./printAsPdf', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./printAsPdf')>()),
+  printAsPdf: mocks.printAsPdf,
   shouldUseGeneratedPdfPrint: () => false,
 }));
 
@@ -76,6 +78,7 @@ describe('official and unofficial sales invoice descriptions', () => {
     mocks.fetchAssigneeDirectory.mockResolvedValue({ users: [], roles: [] });
     mocks.detectRecordFilesTable.mockResolvedValue(false);
     mocks.printInIframe.mockResolvedValue(undefined);
+    mocks.printAsPdf.mockResolvedValue(undefined);
   });
 
   it.each(['default_invoice_official', 'default_invoice_unofficial'])(
@@ -199,9 +202,11 @@ describe('official and unofficial sales invoice descriptions', () => {
       await result.current.handlePrint();
     });
 
-    await waitFor(() => expect(mocks.printInIframe).toHaveBeenCalledTimes(1));
-    expect(mocks.printInIframe.mock.calls[0][0].sourceHtml).toContain('شرکت نمونهٔ فروش');
-    expect(mocks.printInIframe.mock.calls[0][0].sourceHtml).toContain('company-logo.png');
+    // قالب فاکتور رسمی اکنون در مسیر PDF نهایی اجرا می‌شود؛ باید همان HTML
+    // آماده‌شده با مشخصات سازمان را به آن مسیر بدهد.
+    await waitFor(() => expect(mocks.printAsPdf).toHaveBeenCalledTimes(1));
+    expect(mocks.printAsPdf.mock.calls[0][0].sourceHtml).toContain('شرکت نمونهٔ فروش');
+    expect(mocks.printAsPdf.mock.calls[0][0].sourceHtml).toContain('company-logo.png');
     vi.unstubAllGlobals();
   }, 15_000);
 });

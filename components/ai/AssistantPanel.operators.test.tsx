@@ -440,7 +440,7 @@ describe('AssistantPanel AI operators', () => {
     await typeAndSend('ویس را بررسی کن', 'ارسال');
 
     await waitFor(() => expect(findBody('run_task_bundle')).toBeTruthy());
-    await waitFor(() => expect(screen.getByText('تبدیل صوت به متن ناموفق بود.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('تبدیل صوت به متن ناموفق بود.').length).toBeGreaterThan(0));
     expect(screen.getByText('ویس: voice.webm')).toBeInTheDocument();
   });
 

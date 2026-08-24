@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import PrintSection from './PrintSection';
@@ -44,7 +44,9 @@ const selectPrintTemplate = async (user: ReturnType<typeof userEvent.setup>, tit
 describe('PrintSection', () => {
   afterEach(() => {
     vi.useRealTimers();
-    document.body.innerHTML = '';
+    // ابتدا React و portalهای Ant Design را unmount کن؛ پاک‌کردن مستقیم body
+    // باعث می‌شد React در cleanup یک node حذف‌شده را دوباره remove کند.
+    cleanup();
   });
 
   it('runs direct PDF send once without triggering print or closing the modal', async () => {
@@ -79,7 +81,7 @@ describe('PrintSection', () => {
     expect(onPrint).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByText('انتخاب قالب چاپ')).toBeInTheDocument();
-  }, 10000);
+  }, 20_000);
 
   it('places the print modal above the modal that opened it', async () => {
     setDesktopViewport();
@@ -294,7 +296,7 @@ describe('PrintSection', () => {
       Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
       Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL });
     }
-  }, 10000);
+  }, 15_000);
 
   it('sends the already previewed PDF to print without rendering it a second time', async () => {
     setDesktopViewport();
@@ -374,7 +376,7 @@ describe('PrintSection', () => {
       Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
       Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL });
     }
-  }, 10000);
+  }, 15_000);
 
   it('shares an in-progress preview request with print instead of starting another PDF render', async () => {
     setDesktopViewport();
@@ -500,7 +502,7 @@ describe('PrintSection', () => {
       Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
       Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL });
     }
-  }, 10000);
+  }, 20_000);
 
   it('groups printable fields by section and marks empty values', async () => {
     setDesktopViewport();

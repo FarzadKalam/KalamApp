@@ -7,6 +7,7 @@ import { getSyntheticWorkflowAssigneeField, getWorkflowConditionFields } from '.
 import { parseWorkflowRelatedFieldKey, WORKFLOW_ASSIGNEE_FIELD_KEY, type WorkflowCondition } from './workflowTypes';
 import { isReportTaskProcessFieldKey } from './reportTaskProcessFields';
 import { parseProcessLinkedFieldKey } from './processTargets';
+import { getCanonicalModuleFields } from './recordVariableCatalog';
 
 /** `difference` is retained only to safely read old stored configurations; the builder no longer creates it. */
 export type ReportMetricType = 'count' | 'sum' | 'avg' | 'difference';
@@ -243,7 +244,7 @@ export const buildReportBaseSelectColumns = (
   selectedTableBlocks: readonly Pick<BlockDefinition, 'id'>[],
 ) => {
   const moduleFieldKeys = new Set(
-    (moduleConfig?.fields || [])
+    getCanonicalModuleFields(String(moduleConfig?.id || '')).concat(moduleConfig?.fields || [])
       .map((field) => String(field?.key || '').trim())
       .filter(Boolean)
   );
@@ -504,7 +505,7 @@ export const normalizeReportConfig = (value: Partial<ReportDefinitionConfig> | n
     metric_subtract_fields: [],
     show_group_summaries: (value as any)?.show_group_summaries === false ? false : true,
     chart_dimension_field: chartDimensionField,
-    output_modes: outputModes.length > 0 ? outputModes : ['table'],
+    output_modes: (outputModes.length > 0 ? outputModes : ['table']) as ReportOutputMode[],
     default_view: value?.default_view === 'table' ? 'table' : 'table_and_chart',
     schedule: normalizeReportScheduleConfig((value as any)?.schedule),
     print_selected_field_keys: printSelectedFieldKeys,
@@ -527,7 +528,10 @@ export const getMainReportableFields = (
   taskProcessFields: ModuleField[] = [],
 ) => {
   const normalizedModuleId = String(moduleId || '').trim();
-  const fields = MODULES[normalizedModuleId]?.fields || [];
+  // فیلدهای سیستم (ایجادکننده، آخرین ویرایشگر و زمان‌های ثبت/ویرایش) باید
+  // برای خودِ رکورد اصلی هم از همان catalog مرکزی در دسترس باشند؛ نه فقط وقتی
+  // همان ماژول به‌عنوان رکورد مرتبط استفاده می‌شود.
+  const fields = getCanonicalModuleFields(normalizedModuleId);
   const assigneeField = getSyntheticWorkflowAssigneeField(normalizedModuleId);
   const surveyTemplateFields = normalizedModuleId === 'surveys'
     ? buildSurveyReportFieldsFromSnapshot(surveyTemplateSnapshot)

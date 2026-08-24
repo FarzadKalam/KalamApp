@@ -94,6 +94,20 @@ describe('buildReportBaseSelectColumns', () => {
     expect(columns).toEqual(['id', 'org_id', 'created_at', 'updated_at', 'name']);
   });
 
+  it('selects main-record creator and last editor when they are used by a report', () => {
+    const columns = buildReportBaseSelectColumns(
+      {
+        id: 'marketing_leads',
+        table: 'marketing_leads',
+        fields: [{ key: 'name', type: FieldType.TEXT, labels: { fa: 'نام' } }],
+      },
+      ['created_by', 'updated_by'],
+      [],
+    );
+
+    expect(columns).toEqual(expect.arrayContaining(['created_by', 'updated_by']));
+  });
+
   it('always selects a declared soft-delete marker so deleted rows can be excluded', () => {
     const columns = buildReportBaseSelectColumns(
       {
@@ -132,6 +146,16 @@ describe('getMainReportableFields', () => {
     const fields = getMainReportableFields('tasks');
     expect(fields.map((field) => field.key)).toContain('__workflow_assignee');
     expect(fields.map((field) => field.key)).not.toContain('assignee_id');
+  });
+
+  it('includes central system fields for the main record with Persian labels', () => {
+    const fields = getMainReportableFields('marketing_leads');
+    expect(fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'created_at', labels: expect.objectContaining({ fa: 'زمان ایجاد' }) }),
+      expect.objectContaining({ key: 'created_by', labels: expect.objectContaining({ fa: 'ایجادکننده' }), type: FieldType.USER }),
+      expect.objectContaining({ key: 'updated_at', labels: expect.objectContaining({ fa: 'زمان ویرایش' }) }),
+      expect.objectContaining({ key: 'updated_by', labels: expect.objectContaining({ fa: 'آخرین ویرایشگر' }), type: FieldType.USER }),
+    ]));
   });
 });
 

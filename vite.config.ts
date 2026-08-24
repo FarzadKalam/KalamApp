@@ -252,6 +252,12 @@ export default defineConfig(({ mode }) => {
         environment: 'jsdom',
         setupFiles: './test/setup.ts',
         css: true,
+        // چند فایل UI/PDF سنگین هم‌زمان، زمان‌سنج آزمون‌ها را به‌صورت کاذب
+        // مصرف می‌کردند. اجرای ترتیبی، نتیجهٔ قطعی و تکرارپذیر می‌دهد.
+        fileParallelism: false,
+        // رابط‌های Ant Design در آزمون‌های یکپارچهٔ سنگین (به‌ویژه پیش‌نمایش چاپ)
+        // با وجود پایان صحیح، از سقف پیش‌فرض پنج‌ثانیه عبور می‌کنند.
+        testTimeout: 20_000,
       }
     };
 });

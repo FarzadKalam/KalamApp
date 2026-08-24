@@ -72,6 +72,28 @@ describe('workflowHelpers', () => {
     ]));
   });
 
+  it('keeps creator, last editor, and timestamps available for every automation target', () => {
+    const fields = getProcessAutomationConditionFieldsForModules(['marketing_leads']);
+    expect(fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: createProcessLinkedFieldKey('marketing_leads', 'created_by'),
+        labels: expect.objectContaining({ fa: 'ایجادکننده (لیدهای بازاریابی)' }),
+      }),
+      expect.objectContaining({
+        key: createProcessLinkedFieldKey('marketing_leads', 'updated_by'),
+        labels: expect.objectContaining({ fa: 'آخرین ویرایشگر (لیدهای بازاریابی)' }),
+      }),
+      expect.objectContaining({
+        key: createProcessLinkedFieldKey('marketing_leads', 'created_at'),
+        labels: expect.objectContaining({ fa: 'زمان ایجاد (لیدهای بازاریابی)' }),
+      }),
+      expect.objectContaining({
+        key: createProcessLinkedFieldKey('marketing_leads', 'updated_at'),
+        labels: expect.objectContaining({ fa: 'زمان ویرایش (لیدهای بازاریابی)' }),
+      }),
+    ]));
+  });
+
   it('keeps process-linked assignee profile labels scoped to the source module', () => {
     const fields = getProcessAutomationConditionFieldsForModules(['purchase_invoices']);
     const fullNameField = fields.find((field) =>

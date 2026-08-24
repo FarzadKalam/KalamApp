@@ -241,6 +241,25 @@ const getWebFormSuggestionPriority = (field: Pick<WebFormTargetFieldItem, "isMod
   return 999;
 };
 
+const getWebFormPrimaryInputFieldKey = (fields: readonly ModuleField[]) => {
+  const isWritable = (field?: ModuleField) => {
+    if (!field?.key) return false;
+    return !field.readonly && !field.hideInCreateForm;
+  };
+  const writableKeyField = fields.find((field) => field.isKey === true && isWritable(field));
+  if (writableKeyField) return writableKeyField.key;
+
+  // بعضی ماژول‌ها عنوان اصلیِ محاسبه‌شده (مانند نام کامل) دارند. فرم عمومی
+  // نمی‌تواند آن مقدار readonly را ارسال کند، پس اولین ورودی سازندهٔ عنوان
+  // را طبق قرارداد مرکزی نام‌گذاری رکورد، به‌عنوان ورودی اصلی پیشنهاد می‌دهد.
+  const hasComputedFullNameKey = fields.some((field) => field.key === 'full_name' && field.isKey === true);
+  if (hasComputedFullNameKey) {
+    const firstNameField = fields.find((field) => field.key === 'first_name' && isWritable(field));
+    if (firstNameField) return firstNameField.key;
+  }
+  return null;
+};
+
 const compareWebFormTargetFieldItems = (left: WebFormTargetFieldItem, right: WebFormTargetFieldItem) => {
   const leftOrder = Number(left.field?.order ?? Number.MAX_SAFE_INTEGER);
   const rightOrder = Number(right.field?.order ?? Number.MAX_SAFE_INTEGER);
@@ -290,8 +309,10 @@ export const getWebFormTargetFields = (
   const normalized = String(moduleId || "").trim();
   if (!isWebFormTargetModule(normalized)) return [];
   const allowRelation = String(options?.accessScope || "").trim() === "internal";
+  const sourceFields = MODULES[normalized]?.fields || [];
+  const primaryInputFieldKey = getWebFormPrimaryInputFieldKey(sourceFields);
 
-  const moduleFields = (MODULES[normalized]?.fields || [])
+  const moduleFields = sourceFields
     .filter((field) => {
       if (!field?.key) return false;
       if (field.hideInCreateForm) return false;
@@ -309,7 +330,7 @@ export const getWebFormTargetFields = (
           : rawModuleDefaultValue;
       const isModuleRequired = field.validation?.required === true;
       const hasModuleDefault = hasMeaningfulDefaultValue(moduleDefaultValue);
-      const isKeyField = field.isKey === true;
+      const isKeyField = field.isKey === true || field.key === primaryInputFieldKey;
       const isTableColumn = field.isTableColumn === true;
       const suggestionPriority = getWebFormSuggestionPriority({
         isModuleRequired,

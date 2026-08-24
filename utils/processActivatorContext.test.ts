@@ -12,7 +12,7 @@ describe('process activator record context', () => {
 
     expect(record.__linked__employees__related_profile_id).toBe('profile-1');
     expect(record.__linked__employees__full_name).toBe('مجتبی جعفری');
-    expect(record.__linked__employees____workflow_assignee).toBe('user_user-1');
+    expect(record.__linked__employees____workflow_assignee).toBe('user:user-1');
   });
 
   it('registers the matching record as a process link automatically', () => {

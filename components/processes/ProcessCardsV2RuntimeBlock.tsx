@@ -1,5 +1,6 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, App, Button, Modal, Skeleton } from 'antd';
+import { DownOutlined, UpOutlined } from '@ant-design/icons';
 import { FieldType, type ModuleField } from '../../types';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
@@ -1389,6 +1390,7 @@ const getProcessCardCreatedAt = (card: ProcessV2CardData) => {
 };
 
 const isCompletedProcessCard = (card: ProcessV2CardData) => {
+  if (card.mode !== 'run') return false;
   const status = normalizeText(card.statusLabel).toLowerCase();
   if (['done', 'completed', 'confirmed', 'final', 'settled'].includes(status)) return true;
   const stages = card.lanes.flatMap((lane) => lane.stages);
@@ -4352,7 +4354,6 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
           }),
         );
         const createdDraftStages = itemDraftStages.filter((stage, index) => {
-          const source = stage.source && typeof stage.source === 'object' ? stage.source : stage;
           const stageIds = collectV2StageAutoAssignIds(stage, index);
           return stageIds.some((stageId) => createdStageIdentityKeys.has(normalizeText(stageId)));
         });
@@ -4921,13 +4922,6 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         </div>
       ) : (
         <div className="space-y-3">
-          {completedCards.length > 0 ? (
-            <div className="flex justify-end">
-              <Button type="link" size="small" onClick={() => setShowCompletedProcesses((current) => !current)}>
-                {getCompletedProcessesToggleLabel(completedCards.length, showCompletedProcesses)}
-              </Button>
-            </div>
-          ) : null}
           {displayCards.map((card) => {
             const key = cardKey(card);
             return (
@@ -4973,6 +4967,21 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
               </div>
             );
           })}
+          {completedCards.length > 0 ? (
+            <div className="flex justify-center pt-1">
+              <Button
+                type="text"
+                size="small"
+                className="!h-auto !rounded-full !px-2.5 !py-1 !text-slate-500 hover:!bg-slate-100 hover:!text-slate-700 dark:!text-slate-400 dark:hover:!bg-white/10 dark:hover:!text-slate-200"
+                onClick={() => setShowCompletedProcesses((current) => !current)}
+              >
+                <span>{getCompletedProcessesToggleLabel(completedCards.length, showCompletedProcesses)}</span>
+                {showCompletedProcesses
+                  ? <UpOutlined className="mr-1 text-[10px]" aria-hidden />
+                  : <DownOutlined className="mr-1 text-[10px]" aria-hidden />}
+              </Button>
+            </div>
+          ) : null}
         </div>
       )}
       {activatorModal ? (
