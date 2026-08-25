@@ -83,8 +83,8 @@ const CampaignToolBlock: React.FC<Props> = ({ tool, onChange, disabled, initiall
                 <RecordImageBox moduleId={ADVERTISING_CAMPAIGN_TOOLS_MODULE_ID} recordId={persistedToolId || undefined} compact canEdit={!disabled && Boolean(persistedToolId)} />
                 <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                   <CampaignField fieldKey="title" label="عنوان این اجرا" value={tool.title} onChange={(title) => onChange({ title })} readonly={disabled} moduleId={ADVERTISING_CAMPAIGN_TOOLS_MODULE_ID} recordId={persistedToolId} />
-                  <div>
-                    <div className="mb-1.5 text-xs font-medium text-slate-500">وضعیت ابزار</div>
+                  <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+                    <div className="mb-1 text-xs font-medium text-slate-500">وضعیت ابزار</div>
                     <AdaptiveSelectField value={tool.status} onChange={(status) => onChange({ status })} options={CAMPAIGN_TOOL_STATUS_OPTIONS.map((item) => ({ ...item }))} disabled={disabled} pickerTitle="وضعیت ابزار" getPopupContainer={resolveOverlayPopupContainer as any} modalContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={13200} />
                   </div>
                   <CampaignField fieldKey="planned_start_at" label="شروع برنامه‌ریزی‌شده" type={FieldType.DATETIME} value={tool.planned_start_at} onChange={(planned_start_at) => onChange({ planned_start_at })} readonly={disabled} moduleId={ADVERTISING_CAMPAIGN_TOOLS_MODULE_ID} recordId={persistedToolId} />
@@ -157,8 +157,12 @@ const CampaignToolBlock: React.FC<Props> = ({ tool, onChange, disabled, initiall
 
             <Card size="small" title="تنظیمات اختصاصی ابزار" className="!rounded-xl">{channelEditor}</Card>
 
-            <CampaignAttachmentsField moduleId={ADVERTISING_CAMPAIGN_TOOLS_MODULE_ID} recordId={persistedToolId} value={(config as any).attachments || []} onChange={(attachments) => onChange({ config: { ...config, attachments } })} disabled={disabled} />
-            <CampaignField fieldKey="tool_notes" label="یادداشت برنامه‌ریزی ابزار" type={FieldType.LONG_TEXT} value={(config as any).notes} onChange={(notes) => onChange({ config: { ...config, notes } })} readonly={disabled} moduleId={ADVERTISING_CAMPAIGN_TOOLS_MODULE_ID} recordId={persistedToolId} />
+            <Card size="small" title="توضیحات تکمیلی ابزار" className="!rounded-xl">
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 xl:items-start">
+                <CampaignAttachmentsField moduleId={ADVERTISING_CAMPAIGN_TOOLS_MODULE_ID} recordId={persistedToolId} value={(config as any).attachments || []} onChange={(attachments) => onChange({ config: { ...config, attachments } })} disabled={disabled} />
+                <CampaignField fieldKey="tool_notes" label="یادداشت برنامه‌ریزی ابزار" type={FieldType.LONG_TEXT} value={(config as any).notes} onChange={(notes) => onChange({ config: { ...config, notes } })} readonly={disabled} moduleId={ADVERTISING_CAMPAIGN_TOOLS_MODULE_ID} recordId={persistedToolId} />
+              </div>
+            </Card>
 
             <CampaignAuditStrip createdBy={tool.created_by} createdAt={tool.created_at} updatedBy={tool.updated_by} updatedAt={tool.updated_at} />
           </div>

@@ -93,20 +93,14 @@ const CampaignSmsEditor: React.FC<CampaignSmsEditorProps> = ({ tool, onChange, d
         </div>
       </Card>
 
-      <div>
-        <div className="mb-1.5 text-xs font-medium text-slate-500">مخاطبان ارسال</div>
-        <AdaptiveSelectField
-          mode="multiple"
-          value={config.audience_sources || []}
-          onChange={(audience_sources) => patchConfig({ audience_sources })}
-          options={[{ label: 'از داخل نرم‌افزار', value: 'internal' }, { label: 'افزودن از اکسل', value: 'excel' }]}
-          disabled={disabled}
-          pickerTitle="منبع مخاطبان پیامک"
-          getPopupContainer={resolveOverlayPopupContainer as any}
-          modalContainer={resolveOverlayPopupContainer}
-          preferLocalPopupContainer
-          overlayZIndexBase={13200}
-        />
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+          <div className="mb-1 text-xs font-medium text-slate-500">مخاطبان ارسال</div>
+          <AdaptiveSelectField mode="multiple" value={config.audience_sources || []} onChange={(audience_sources) => patchConfig({ audience_sources })} options={[{ label: 'از داخل نرم‌افزار', value: 'internal' }, { label: 'افزودن از اکسل', value: 'excel' }]} disabled={disabled} pickerTitle="منبع مخاطبان پیامک" getPopupContainer={resolveOverlayPopupContainer as any} modalContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={13200} />
+        </div>
+        <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+          <CampaignField fieldKey="sms_scheduled_at" label="زمان برنامه‌ریزی شروع ارسال" type={FieldType.DATETIME} value={config.scheduled_at} onChange={(scheduled_at) => patchConfig({ scheduled_at })} readonly={disabled} />
+        </div>
       </div>
       {config.audience_sources?.includes('excel') ? (
         <div className="space-y-2">
@@ -124,7 +118,6 @@ const CampaignSmsEditor: React.FC<CampaignSmsEditorProps> = ({ tool, onChange, d
           {persistedToolId ? <CampaignImportProgress campaignId={tool.campaign_id} toolId={persistedToolId} channel="sms" attachments={config.import_attachments || []} disabled={disabled} /> : null}
         </div>
       ) : null}
-      <CampaignField fieldKey="sms_scheduled_at" label="زمان برنامه‌ریزی شروع ارسال" type={FieldType.DATETIME} value={config.scheduled_at} onChange={(scheduled_at) => patchConfig({ scheduled_at })} readonly={disabled} />
 
       <Divider />
       <div className="flex items-center justify-between gap-3">
@@ -138,12 +131,12 @@ const CampaignSmsEditor: React.FC<CampaignSmsEditorProps> = ({ tool, onChange, d
         <div className="space-y-3 rounded-2xl border border-slate-200 p-3 dark:border-white/10">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <CampaignField fieldKey="reply_window_value" label="بازه دریافت پاسخ" type={FieldType.NUMBER} value={config.reply_window_value} onChange={(reply_window_value) => patchConfig({ reply_window_value })} readonly={disabled} />
-            <div>
-              <div className="mb-1.5 text-xs font-medium text-slate-500">واحد بازه</div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+              <div className="mb-1 text-xs font-medium text-slate-500">واحد بازه</div>
               <AdaptiveSelectField value={config.reply_window_unit} onChange={(reply_window_unit) => patchConfig({ reply_window_unit })} options={[{ label: 'ساعت', value: 'hour' }, { label: 'روز', value: 'day' }]} disabled={disabled} pickerTitle="واحد بازه پاسخ" getPopupContainer={resolveOverlayPopupContainer as any} modalContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={13200} />
             </div>
-            <div>
-              <div className="mb-1.5 text-xs font-medium text-slate-500">نوع تطبیق متن</div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+              <div className="mb-1 text-xs font-medium text-slate-500">نوع تطبیق متن</div>
               <AdaptiveSelectField value={config.inbound_match_mode} onChange={(inbound_match_mode) => patchConfig({ inbound_match_mode })} options={[{ label: 'دقیقاً برابر باشد', value: 'exact' }, { label: 'شامل عبارت باشد', value: 'contains' }]} disabled={disabled} pickerTitle="نوع تطبیق" getPopupContainer={resolveOverlayPopupContainer as any} modalContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={13200} />
             </div>
           </div>

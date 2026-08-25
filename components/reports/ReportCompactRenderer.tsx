@@ -11,8 +11,11 @@ import {
 import { supabase } from "../../supabaseClient";
 import {
   normalizeReportConfig,
+  getReportTableBlock,
+  parseReportTableFieldKey,
   type ReportDefinitionRecord,
 } from "../../utils/reporting";
+import { MODULES } from "../../moduleRegistry";
 import {
   formatPersianPrice,
   toPersianNumber,
@@ -36,6 +39,7 @@ type RuntimeGroup = {
 type ReportRuntime = {
   mode: "normal" | "difference" | "percentage";
   groups: RuntimeGroup[];
+  metric_sources?: Record<string, { module_id: string; metric_key: string }>;
 };
 type ReportCompactRendererProps = {
   report: ReportDefinitionRecord;
@@ -43,9 +47,28 @@ type ReportCompactRendererProps = {
 };
 
 const numberValue = (value: unknown) => Number(value || 0);
-const formatValue = (value: unknown, currencyLabel = "") => {
-  const formatted = formatPersianPrice(numberValue(value));
-  return currencyLabel ? `${formatted} ${currencyLabel}` : formatted;
+const formatValue = (value: unknown, fieldType = "number", currencyLabel = "") => {
+  if (fieldType === "price") {
+    const formatted = formatPersianPrice(numberValue(value));
+    return currencyLabel ? `${formatted} ${currencyLabel}` : formatted;
+  }
+  return toPersianNumber(numberValue(value).toLocaleString("en-US"));
+};
+
+const resolveMetricField = (moduleId: string, metricKey: string) => {
+  const tableField = parseReportTableFieldKey(metricKey);
+  if (tableField) {
+    return getReportTableBlock(moduleId, `__report_table__${tableField.blockId}`)?.tableColumns
+      ?.find((column: any) => String(column?.key || "") === tableField.columnKey);
+  }
+  return MODULES[moduleId]?.fields?.find((field: any) => String(field?.key || "") === metricKey);
+};
+
+const resolveRuntimeMetricType = (runtime: ReportRuntime | null, metrics: Array<{ report_id: string; metric_key: string }>) => {
+  const sources = runtime?.metric_sources || {};
+  const selected = metrics.map((metric) => sources[`${metric.report_id}::${metric.metric_key}`]).filter(Boolean) as Array<{ module_id: string; metric_key: string }>;
+  if (!selected.length || selected.length !== metrics.length) return "number";
+  return selected.every((source) => String(resolveMetricField(source.module_id, source.metric_key)?.type || "").toLowerCase() === "price") ? "price" : "number";
 };
 const groupValue = (group: RuntimeGroup, mode: ReportRuntime["mode"]) => {
   if (mode === "difference")
@@ -112,6 +135,13 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
 
   const groups = runtime?.groups || [];
   const mode = runtime?.mode || config.calculation_mode;
+  const runtimeMetricKeys = Object.keys(groups[0]?.metrics || {});
+  const selectedMetrics = mode === "difference"
+    ? [...config.increase_metrics, ...config.decrease_metrics]
+    : runtimeMetricKeys.map((metric_key) => ({ report_id: report.id, metric_key }));
+  const metricFieldType = resolveRuntimeMetricType(runtime, selectedMetrics);
+  const primaryMetricField = runtimeMetricKeys.length === 1 ? resolveMetricField(report.module_id, runtimeMetricKeys[0]) : null;
+  const metricLabel = (primaryMetricField as any)?.labels?.fa || (primaryMetricField as any)?.label || (mode === "normal" && config.metric_type === "count" ? "تعداد رکوردها" : "نتیجه");
   const chartItems = useMemo(
     () =>
       groups.map((group) => ({
@@ -167,17 +197,17 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
         {
           title: "افزاینده",
           key: "increase",
-          render: (_, row) => formatValue(row.increase, currencyLabel),
+          render: (_, row) => formatValue(row.increase, metricFieldType, currencyLabel),
         },
         {
           title: "کاهنده",
           key: "decrease",
-          render: (_, row) => formatValue(row.decrease, currencyLabel),
+          render: (_, row) => formatValue(row.decrease, metricFieldType, currencyLabel),
         },
         {
           title: "خالص",
           key: "net",
-          render: (_, row) => formatValue(groupValue(row, mode), currencyLabel),
+          render: (_, row) => formatValue(groupValue(row, mode), metricFieldType, currencyLabel),
         },
       ];
     if (mode === "percentage")
@@ -207,12 +237,12 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
     return [
       ...base,
       {
-        title: "نتیجه",
+        title: metricLabel,
         key: "value",
-        render: (_, row) => formatValue(groupValue(row, mode), currencyLabel),
+        render: (_, row) => formatValue(groupValue(row, mode), metricFieldType, currencyLabel),
       },
     ];
-  }, [currencyLabel, mode]);
+  }, [currencyLabel, metricFieldType, metricLabel, mode]);
 
   const renderChart = () => {
     if (renderMode === "table")
@@ -234,12 +264,12 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
             <SimplePieChart
               items={increaseItems}
               valueLabel="افزاینده"
-              valueFormatter={(value) => formatValue(value, currencyLabel)}
+              valueFormatter={(value) => formatValue(value, metricFieldType, currencyLabel)}
             />
             <SimplePieChart
               items={decreaseItems}
               valueLabel="کاهنده"
-              valueFormatter={(value) => formatValue(value, currencyLabel)}
+              valueFormatter={(value) => formatValue(value, metricFieldType, currencyLabel)}
             />
           </div>
         );
@@ -268,7 +298,7 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
         <SimplePieChart
           items={chartItems}
           valueLabel="مقدار"
-          valueFormatter={(value) => formatValue(value, currencyLabel)}
+          valueFormatter={(value) => formatValue(value, metricFieldType, currencyLabel)}
         />
       );
     }
@@ -279,7 +309,7 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
           valueFormatter={(value) =>
             mode === "percentage"
               ? `${toPersianNumber(numberValue(value).toFixed(1))}٪`
-              : formatValue(value, currencyLabel)
+              : formatValue(value, metricFieldType, currencyLabel)
           }
         />
       );
@@ -289,12 +319,12 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
           <SimpleBarChart
             items={increaseItems}
             valueLabel="افزاینده"
-            valueFormatter={(value) => formatValue(value, currencyLabel)}
+            valueFormatter={(value) => formatValue(value, metricFieldType, currencyLabel)}
           />
           <SimpleBarChart
             items={decreaseItems}
             valueLabel="کاهنده"
-            valueFormatter={(value) => formatValue(value, currencyLabel)}
+            valueFormatter={(value) => formatValue(value, metricFieldType, currencyLabel)}
           />
         </div>
       );
@@ -305,7 +335,7 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
         valueFormatter={(value) =>
           mode === "percentage"
             ? `${toPersianNumber(numberValue(value).toFixed(1))}٪`
-            : formatValue(value, currencyLabel)
+            : formatValue(value, metricFieldType, currencyLabel)
         }
       />
     );
@@ -350,7 +380,7 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
         {mode === "difference" && (
           <span className="text-xs text-gray-500">
             خالص:{" "}
-            {formatValue(totals.increase - totals.decrease, currencyLabel)}
+            {formatValue(totals.increase - totals.decrease, metricFieldType, currencyLabel)}
           </span>
         )}
         {mode === "percentage" && (

@@ -41,6 +41,7 @@ const CampaignConditionsTab: React.FC<Props> = ({ campaignName, tools, rules, on
     setLoadingModule(target);
     void loadWorkflowConditionEditorOptions(target, fields)
       .then((options) => { if (active) setOptionsByModule((current) => ({ ...current, [target]: options })); })
+      .catch(() => { if (active) setOptionsByModule((current) => ({ ...current, [target]: EMPTY_OPTIONS })); })
       .finally(() => { if (active) setLoadingModule(null); });
     return () => { active = false; };
   }, [activeKeys, loadingModule, optionsByModule]);

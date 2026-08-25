@@ -57,6 +57,9 @@ const CUSTOMER_STAT_FIELDS = [
   'rank',
 ] as const;
 const CUSTOMER_INTERESTS_CATEGORY = 'customer_interests';
+// شناسه‌ها در فیلتر `in` به query string تبدیل می‌شوند؛ دسته‌های کوچک از بسته‌شدن
+// اتصال در سازمان‌هایی با مشتریان زیاد جلوگیری می‌کنند.
+const CUSTOMER_LEVELING_BATCH_SIZE = 100;
 
 const missingCustomerColumnsCache = new Set<string>();
 let knownCustomerColumns: Set<string> | null = null;
@@ -470,7 +473,7 @@ const ensureCustomerInterestOptions = async (supabase: SupabaseClient, values: s
   }
 };
 
-export const syncCustomerLevelsByInvoiceCustomers = async ({
+const syncCustomerLevelsBatch = async ({
   supabase,
   customerIds,
 }: {
@@ -617,4 +620,52 @@ export const syncCustomerLevelsByInvoiceCustomers = async ({
       throw updateError;
     }
   }
+};
+
+export const syncCustomerLevelsByInvoiceCustomers = async ({
+  supabase,
+  customerIds,
+}: {
+  supabase: SupabaseClient;
+  customerIds: Array<string | null | undefined>;
+}) => {
+  const ids = Array.from(new Set((customerIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
+  for (let start = 0; start < ids.length; start += CUSTOMER_LEVELING_BATCH_SIZE) {
+    await syncCustomerLevelsBatch({
+      supabase,
+      customerIds: ids.slice(start, start + CUSTOMER_LEVELING_BATCH_SIZE),
+    });
+  }
+};
+
+export const syncAllCustomerLevels = async ({
+  supabase,
+  onProgress,
+}: {
+  supabase: SupabaseClient;
+  onProgress?: (processed: number) => void;
+}) => {
+  let offset = 0;
+  let processed = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from('customers')
+      .select('id')
+      .order('id', { ascending: true })
+      .range(offset, offset + CUSTOMER_LEVELING_BATCH_SIZE - 1);
+    if (error) throw error;
+
+    const ids = (data || []).map((row: any) => row?.id).filter(Boolean);
+    if (ids.length === 0) break;
+
+    await syncCustomerLevelsByInvoiceCustomers({ supabase, customerIds: ids });
+    processed += ids.length;
+    onProgress?.(processed);
+
+    if (ids.length < CUSTOMER_LEVELING_BATCH_SIZE) break;
+    offset += ids.length;
+  }
+
+  return { processed };
 };

@@ -183,7 +183,18 @@ export const useCampaignWizard = (campaignId?: string | null) => {
       };
       const serverUpdatedAt = Date.parse(String(workspace.campaign.updated_at || '')) || 0;
       const shouldRecover = Boolean(localSnapshot && localSnapshot.savedAt > serverUpdatedAt);
-      replaceDraft(shouldRecover ? localSnapshot!.draft : serverDraft);
+      // پیش‌نویس محلی نباید یک مقدار خالیِ قدیمی را جای اطلاعات ذخیره‌شده
+      // بگذارد؛ به‌ویژه نام کمپین باید همیشه از رکورد سرور قابل بازیابی باشد.
+      const recoveredDraft = shouldRecover ? {
+        ...serverDraft,
+        ...localSnapshot!.draft,
+        campaign: {
+          ...serverDraft.campaign,
+          ...localSnapshot!.draft.campaign,
+          name: String(localSnapshot!.draft.campaign?.name || '').trim() || serverDraft.campaign.name,
+        },
+      } : serverDraft;
+      replaceDraft(recoveredDraft);
       if (shouldRecover && mountedRef.current) setRecoveredLocalDraft(true);
       setAccessMode(workspace.accessMode);
     } catch (error) {

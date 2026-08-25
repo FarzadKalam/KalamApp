@@ -58,7 +58,7 @@ const CampaignBotEditor: React.FC<Props> = ({ tool, onChange, disabled }) => {
       </div>
       {isGroup ? (
         <div>
-          <div className="mb-1.5 text-xs font-medium text-slate-500">گروه‌های مقصد</div>
+          <div className="mb-1.5 text-xs font-medium text-slate-500">گروه‌های مقصد (دستی)</div>
           <AdaptiveSelectField mode="multiple" value={config.group_ids || []} onChange={(group_ids) => patch({ group_ids })} options={groupOptions} disabled={disabled} placeholder="انتخاب گروه‌های فعال" pickerTitle="گروه‌های بات" optionFilterProp="label" showSearch getPopupContainer={resolveOverlayPopupContainer as any} modalContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={13200} />
         </div>
       ) : (

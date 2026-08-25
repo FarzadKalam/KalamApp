@@ -7,7 +7,7 @@ import {
   loadCustomerLevelingConfig,
   normalizeLevelingConfig,
   saveCustomerLevelingConfig,
-  syncCustomerLevelsByInvoiceCustomers,
+  syncAllCustomerLevels,
   type CustomerLevelingConfig,
 } from '../../utils/customerLeveling';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
@@ -110,13 +110,8 @@ const CustomerLevelingTab: React.FC = () => {
   const syncAllCustomers = async () => {
     setSyncing(true);
     try {
-      const { data, error } = await supabase.from('customers').select('id');
-      if (error) throw error;
-      await syncCustomerLevelsByInvoiceCustomers({
-        supabase: supabase as any,
-        customerIds: (data || []).map((row: any) => row.id),
-      });
-      message.success('سطح مشتریان براساس تنظیمات جدید بروزرسانی شد');
+      const { processed } = await syncAllCustomerLevels({ supabase: supabase as any });
+      message.success(`سطح ${processed} مشتری براساس تنظیمات جدید بروزرسانی شد`);
     } catch (err: any) {
       message.error(toFaErrorMessage(err, 'خطا در بروزرسانی سطح مشتریان'));
     } finally {
