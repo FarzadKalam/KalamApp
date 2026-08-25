@@ -265,6 +265,7 @@ const CampaignWizardPage: React.FC = () => {
           {!readOnly ? <Button type="primary" icon={wizard.saveState === 'saved' ? <CheckOutlined /> : <SaveOutlined />} loading={manualSaving || wizard.saveState === 'saving'} onClick={() => void persistAndStay(!wizard.draft.campaign.id)}>ذخیره کمپین</Button> : null}
         </div>
         {wizard.saveError ? <Alert type="error" showIcon className="mt-3" message={wizard.saveError} /> : null}
+        {wizard.recoveredLocalDraft ? <Alert type="info" showIcon className="mt-3" message="پیش‌نویس ذخیره‌شده روی این دستگاه بازیابی شد. با برقرار شدن اتصال، تغییرات به‌صورت خودکار ذخیره می‌شوند." /> : null}
         <div className="mt-4 border-t border-slate-100 pt-4 dark:border-white/10">
           <Steps
             current={Math.max(0, tabItems.findIndex((item) => item.key === activeTab))}

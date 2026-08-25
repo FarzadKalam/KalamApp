@@ -1,6 +1,7 @@
 import React from 'react';
 import SmartFieldRenderer from '../SmartFieldRenderer';
 import { FieldNature, FieldType, type ModuleField } from '../../types';
+import { MODULES } from '../../moduleRegistry';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 
 type CampaignFieldProps = {
@@ -22,7 +23,7 @@ type CampaignFieldProps = {
 const CampaignField: React.FC<CampaignFieldProps> = ({
   fieldKey,
   label,
-  type = FieldType.TEXT,
+  type,
   value,
   onChange,
   options,
@@ -34,15 +35,17 @@ const CampaignField: React.FC<CampaignFieldProps> = ({
   compact,
   dynamicOptionsCategory,
 }) => {
+  const registeredField = MODULES[moduleId]?.fields?.find((candidate: ModuleField) => candidate.key === fieldKey);
   const field: ModuleField = {
+    ...(registeredField || {}),
     key: fieldKey,
-    labels: { fa: label },
-    type,
-    nature: FieldNature.STANDARD,
-    options: options as any,
-    validation: required ? { required: true } : undefined,
-    readonly,
-    dynamicOptionsCategory,
+    labels: { ...(registeredField?.labels || {}), fa: label || registeredField?.labels?.fa || fieldKey },
+    type: type || registeredField?.type || FieldType.TEXT,
+    nature: registeredField?.nature || FieldNature.STANDARD,
+    options: options as any || registeredField?.options,
+    validation: required ? { ...(registeredField?.validation || {}), required: true } : registeredField?.validation,
+    readonly: Boolean(readonly || registeredField?.readonly),
+    dynamicOptionsCategory: dynamicOptionsCategory || registeredField?.dynamicOptionsCategory,
   };
   return (
     <SmartFieldRenderer
@@ -54,7 +57,7 @@ const CampaignField: React.FC<CampaignFieldProps> = ({
       options={options}
       moduleId={moduleId}
       recordId={recordId || undefined}
-      allValues={allValues}
+      allValues={allValues || { [fieldKey]: value }}
       overlayZIndexBase={13200}
       popupContainer={resolveOverlayPopupContainer}
       preferLocalPopupContainer

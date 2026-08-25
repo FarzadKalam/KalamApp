@@ -189,14 +189,25 @@ export const createAdvertisingCampaign = async (campaign: CampaignRecord): Promi
     'advertising_campaigns',
     { orgId },
   );
-  const result = await supabase.from('advertising_campaigns').insert([{
+  // PostgREST evaluates SELECT policies for `return=representation`. The
+  // campaign's read policy intentionally scopes a newly-created record, so
+  // creation and its subsequent read must be separate requests.
+  const insertResult = await supabase.from('advertising_campaigns').insert([{
     ...campaignPayload(campaign),
     org_id: orgId,
     system_code: systemCode,
     created_by: session.userId,
     updated_by: session.userId,
-  }]).select(CAMPAIGN_COLUMNS).single();
+  }]);
+  throwIfError(insertResult);
+  const result = await supabase
+    .from('advertising_campaigns')
+    .select(CAMPAIGN_COLUMNS)
+    .eq('org_id', orgId)
+    .eq('system_code', systemCode)
+    .maybeSingle();
   throwIfError(result);
+  if (!result.data) throw new Error('کمپین ساخته شد، اما خواندن اطلاعات آن کامل نشد. صفحه را تازه‌سازی کنید.');
   return normalizeCampaign(result.data);
 };
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { hasCurrentOrgPlanFeature } from '../../utils/saasPlanFeatures';
 import { CAMPAIGN_TOOL_DEFINITIONS } from '../../utils/advertisingCampaigns';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import { supabase } from '../../supabaseClient';
 import {
   createAdvertisingCampaign,
@@ -12,6 +13,12 @@ import {
   updateAdvertisingCampaign,
 } from './campaignApi';
 import { createCampaignToolDraft, createEmptyCampaign } from './campaignUtils';
+import {
+  buildCampaignDraftStorageKey,
+  clearCampaignDraftSnapshot,
+  readCampaignDraftSnapshot,
+  writeCampaignDraftSnapshot,
+} from './campaignDraftStorage';
 import type {
   CampaignAudienceRule,
   CampaignRecord,
@@ -65,15 +72,32 @@ export const useCampaignWizard = (campaignId?: string | null) => {
   const [saveState, setSaveState] = useState<CampaignWizardSaveState>('idle');
   const [saveError, setSaveError] = useState<string | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [draftStorageKey, setDraftStorageKey] = useState('');
+  const [recoveredLocalDraft, setRecoveredLocalDraft] = useState(false);
   const dirtyRevisionRef = useRef(0);
   const savedRevisionRef = useRef(0);
   const saveQueueRef = useRef<Promise<string | null>>(Promise.resolve(null));
   const mountedRef = useRef(true);
   const saveStateRef = useRef<CampaignWizardSaveState>('idle');
   const pendingRuntimeToolsRef = useRef<Map<string, Partial<CampaignToolRecord>>>(new Map());
+  const draftRef = useRef(draft);
+  const draftStorageKeyRef = useRef('');
+  const localDraftReadyRef = useRef(false);
 
   useEffect(() => () => { mountedRef.current = false; }, []);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
+  useEffect(() => { draftRef.current = draft; }, [draft]);
+  useEffect(() => { draftStorageKeyRef.current = draftStorageKey; }, [draftStorageKey]);
+
+  const saveLocalDraft = useCallback((snapshot = draftRef.current) => {
+    const key = draftStorageKeyRef.current;
+    if (!key || !localDraftReadyRef.current) return;
+    writeCampaignDraftSnapshot(key, {
+      savedAt: Date.now(),
+      routeCampaignId: normalizedId,
+      draft: snapshot,
+    });
+  }, [normalizedId]);
 
   const mergeRuntimeTool = useCallback((toolId: string, row: Record<string, unknown>) => {
     const patch: Partial<CampaignToolRecord> = {
@@ -121,10 +145,20 @@ export const useCampaignWizard = (campaignId?: string | null) => {
   }, []);
 
   const load = useCallback(async () => {
+    localDraftReadyRef.current = false;
+    setRecoveredLocalDraft(false);
+    const bootstrap = await fetchSessionBootstrap(supabase).catch(() => null);
+    const orgId = String(bootstrap?.orgId || '').trim();
+    const userId = String(bootstrap?.user?.id || '').trim();
+    const localKey = orgId && userId ? buildCampaignDraftStorageKey(orgId, userId, normalizedId || 'create') : '';
+    const localSnapshot = readCampaignDraftSnapshot(localKey);
+    if (mountedRef.current) setDraftStorageKey(localKey);
     if (isCreateMode) {
-      replaceDraft(createEmptyDraft());
+      replaceDraft(localSnapshot?.draft || createEmptyDraft());
+      if (localSnapshot && mountedRef.current) setRecoveredLocalDraft(true);
       setAccessMode('full');
       setLoading(false);
+      localDraftReadyRef.current = true;
       return;
     }
     setLoading(true);
@@ -132,20 +166,48 @@ export const useCampaignWizard = (campaignId?: string | null) => {
     try {
       const workspace = await loadCampaignWorkspace(normalizedId);
       if (!mountedRef.current) return;
-      replaceDraft({
+      const serverDraft = {
         campaign: workspace.campaign,
         tools: workspace.tools,
         audienceRules: workspace.audienceRules,
-      });
+      };
+      const serverUpdatedAt = Date.parse(String(workspace.campaign.updated_at || '')) || 0;
+      const shouldRecover = Boolean(localSnapshot && localSnapshot.savedAt > serverUpdatedAt);
+      replaceDraft(shouldRecover ? localSnapshot!.draft : serverDraft);
+      if (shouldRecover && mountedRef.current) setRecoveredLocalDraft(true);
       setAccessMode(workspace.accessMode);
     } catch (error) {
-      if (mountedRef.current) setLoadError(toFaErrorMessage(error, 'خواندن کمپین ناموفق بود.'));
+      if (localSnapshot) {
+        replaceDraft(localSnapshot.draft);
+        if (mountedRef.current) {
+          setRecoveredLocalDraft(true);
+          setAccessMode('full');
+        }
+      } else if (mountedRef.current) {
+        setLoadError(toFaErrorMessage(error, 'خواندن کمپین ناموفق بود.'));
+      }
     } finally {
+      localDraftReadyRef.current = true;
       if (mountedRef.current) setLoading(false);
     }
   }, [isCreateMode, normalizedId, replaceDraft]);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    if (!draftStorageKey || !localDraftReadyRef.current) return;
+    saveLocalDraft(draft);
+  }, [draft, draftStorageKey, saveLocalDraft]);
+
+  useEffect(() => {
+    const flush = () => saveLocalDraft();
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', flush);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', flush);
+    };
+  }, [saveLocalDraft]);
 
   useEffect(() => {
     if (isCreateMode || !normalizedId || accessMode !== 'full') return;
@@ -294,6 +356,11 @@ export const useCampaignWizard = (campaignId?: string | null) => {
           savedRevisionRef.current = Math.max(savedRevisionRef.current, requestedRevision);
           setSaveState(dirtyRevisionRef.current > requestedRevision ? 'dirty' : 'saved');
           setLastSavedAt(new Date());
+          if (dirtyRevisionRef.current <= requestedRevision) {
+            clearCampaignDraftSnapshot(draftStorageKeyRef.current);
+          } else {
+            saveLocalDraft();
+          }
         }
         return campaign.id;
       } catch (error) {
@@ -306,13 +373,24 @@ export const useCampaignWizard = (campaignId?: string | null) => {
     };
     saveQueueRef.current = saveQueueRef.current.catch(() => null).then(execute);
     return saveQueueRef.current;
-  }, [draft, validateBasics]);
+  }, [draft, saveLocalDraft, validateBasics]);
 
   useEffect(() => {
     if (!draft.campaign.id || accessMode !== 'full' || saveState !== 'dirty') return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     const timer = window.setTimeout(() => { void persist().catch(() => undefined); }, 1200);
     return () => window.clearTimeout(timer);
   }, [accessMode, draft, persist, saveState]);
+
+  useEffect(() => {
+    const resume = () => {
+      if (draftRef.current.campaign.id && saveStateRef.current === 'dirty') {
+        void persist().catch(() => undefined);
+      }
+    };
+    window.addEventListener('online', resume);
+    return () => window.removeEventListener('online', resume);
+  }, [persist]);
 
   const selectedTools = useMemo(() => {
     const selected = new Set((draft.campaign.tool_types || []).map(String));
@@ -328,6 +406,7 @@ export const useCampaignWizard = (campaignId?: string | null) => {
     saveState,
     saveError,
     lastSavedAt,
+    recoveredLocalDraft,
     isCreateMode,
     updateCampaign,
     setToolTypes,

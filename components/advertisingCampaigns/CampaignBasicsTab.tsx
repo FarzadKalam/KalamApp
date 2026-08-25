@@ -74,8 +74,8 @@ const CampaignBasicsTab: React.FC<CampaignBasicsTabProps> = ({
             {!campaign.id ? <Typography.Text type="secondary" className="mt-1 block text-xs">برای افزودن تصویر، ابتدا مشخصات را ذخیره کنید.</Typography.Text> : null}
           </div>
           <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2">
-            <CampaignField fieldKey="name" label="نام کمپین" value={campaign.name} onChange={(name) => onChange({ name })} required readonly={disabled} />
-            <CampaignField fieldKey="system_code" label="کد سیستمی" value={campaign.system_code || 'پس از ذخیره ساخته می‌شود'} onChange={() => undefined} readonly />
+            <CampaignField fieldKey="name" label="نام کمپین" value={campaign.name} onChange={(name) => onChange({ name })} required readonly={disabled} allValues={campaign} />
+            <CampaignField fieldKey="system_code" label="کد سیستمی" value={campaign.system_code || 'پس از ذخیره ساخته می‌شود'} onChange={() => undefined} readonly allValues={campaign} />
             <div>
               <div className="mb-1.5 text-xs font-medium text-slate-500">وضعیت</div>
               <AdaptiveSelectField
@@ -159,13 +159,13 @@ const CampaignBasicsTab: React.FC<CampaignBasicsTabProps> = ({
       <Card title={<span className="inline-flex items-center gap-2"><CalendarOutlined /> شرح و زمان‌بندی</span>} className="!rounded-2xl">
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <div className="lg:col-span-2">
-            <CampaignField fieldKey="description" label="توضیحات" type={FieldType.LONG_TEXT} value={campaign.description} onChange={(description) => onChange({ description })} readonly={disabled} recordId={campaign.id} />
+            <CampaignField fieldKey="description" label="توضیحات" type={FieldType.LONG_TEXT} value={campaign.description} onChange={(description) => onChange({ description })} readonly={disabled} recordId={campaign.id} allValues={campaign} />
           </div>
           <div className="lg:col-span-2">
-            <CampaignField fieldKey="target_audience" label="جامعه هدف" type={FieldType.LONG_TEXT} value={campaign.target_audience} onChange={(target_audience) => onChange({ target_audience })} readonly={disabled} recordId={campaign.id} />
+            <CampaignField fieldKey="target_audience" label="جامعه هدف" type={FieldType.LONG_TEXT} value={campaign.target_audience} onChange={(target_audience) => onChange({ target_audience })} readonly={disabled} recordId={campaign.id} allValues={campaign} />
           </div>
-          <CampaignField fieldKey="start_at" label="زمان شروع" type={FieldType.DATETIME} value={campaign.start_at} onChange={(start_at) => onChange({ start_at })} readonly={disabled} />
-          <CampaignField fieldKey="end_at" label="زمان پایان" type={FieldType.DATETIME} value={campaign.end_at} onChange={(end_at) => onChange({ end_at })} readonly={disabled} />
+          <CampaignField fieldKey="start_at" label="زمان شروع" value={campaign.start_at} onChange={(start_at) => onChange({ start_at })} readonly={disabled} allValues={campaign} />
+          <CampaignField fieldKey="end_at" label="زمان پایان" value={campaign.end_at} onChange={(end_at) => onChange({ end_at })} readonly={disabled} allValues={campaign} />
         </div>
       </Card>
 
