@@ -79,6 +79,7 @@ import { PROFILE_AVATAR_UPDATED_EVENT, type ProfileAvatarUpdatedDetail } from '.
 import useUserAnnouncements from '../hooks/useUserAnnouncements';
 import UserAnnouncementsBanner from './announcements/UserAnnouncementsBanner';
 import UserAnnouncementsPopupHost from './announcements/UserAnnouncementsPopupHost';
+import DrawerInteractionRecovery from './DrawerInteractionRecovery';
 import AiAssistantLauncher from './communications/AiAssistantLauncher';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
 import AiSparkleIcon from './ai/AiSparkleIcon';
@@ -1756,6 +1757,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         <React.Suspense fallback={null}>
           <GlobalTaskProcessModalHost />
         </React.Suspense>
+        <DrawerInteractionRecovery />
         <UserAnnouncementsPopupHost
           items={userPopupAnnouncements}
           onDismiss={dismissUserAnnouncement}

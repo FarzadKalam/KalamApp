@@ -795,7 +795,15 @@ Deno.serve(async (request) => {
         rawRows,
         readArray(sourceConfig.conditions_all),
         readArray(sourceConfig.conditions_any),
-        runtimeFieldKeys.filter((field) => field !== "__report_date__"),
+        // Base and expanded table values are already available in `rawRows`.
+        // Only relation/workflow expressions require the condition service;
+        // invoking it for every nested row makes composite reports time out.
+        runtimeFieldKeys.filter(
+          (field) =>
+            field !== "__report_date__" &&
+            !safeColumn(field) &&
+            !isTableRuntimeField(field),
+        ),
       );
       for (const row of rawRows) {
         const rowKey = String(row?.__report_runtime_key || row?.id || "");
