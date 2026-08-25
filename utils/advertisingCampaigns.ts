@@ -94,4 +94,3 @@ export const getCampaignToolDefinition = (value: unknown) => {
 
 export const getCampaignToolLabel = (value: unknown) =>
   getCampaignToolDefinition(value)?.label || String(value || '').trim() || 'ابزار سفارشی';
-

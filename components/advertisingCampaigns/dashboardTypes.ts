@@ -13,7 +13,6 @@ export type CampaignAttributionRecord = {
   amount?: number | null;
   total_invoice_amount?: number | null;
 };
-
 export type CampaignToolReport = {
   summary: CampaignDashboardSummary;
   leads: CampaignAttributionRecord[];
@@ -41,4 +40,3 @@ export type CampaignTimelineMetric = {
   label: string;
   value: number;
 };
-

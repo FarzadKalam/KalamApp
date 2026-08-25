@@ -23,4 +23,3 @@ describe('advertising campaign central contracts', () => {
     expect(supportsGlobalRoleAssignee(ADVERTISING_CAMPAIGNS_MODULE_ID)).toBe(true);
   });
 });
-

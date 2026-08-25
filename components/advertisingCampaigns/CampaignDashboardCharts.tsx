@@ -103,4 +103,3 @@ const CampaignDashboardCharts: React.FC<CampaignDashboardChartsProps> = ({
 };
 
 export default CampaignDashboardCharts;
-
