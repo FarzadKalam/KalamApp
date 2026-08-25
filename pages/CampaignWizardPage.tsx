@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, App, Button, Result, Skeleton, Tabs, Tag, Typography } from 'antd';
+import { Alert, App, Button, Result, Skeleton, Steps, Tag, Typography } from 'antd';
 import { ArrowRightOutlined, CheckOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import CampaignBasicsTab from '../components/advertisingCampaigns/CampaignBasicsTab';
@@ -250,7 +250,7 @@ const CampaignWizardPage: React.FC = () => {
   const readOnly = wizard.accessMode !== 'full';
   return (
     <div className="mx-auto w-full max-w-[1680px] px-3 py-4 sm:px-4 md:px-6" dir="rtl">
-      <div className="sticky top-0 z-20 mb-4 rounded-2xl border border-slate-200/80 bg-white/95 p-3 shadow-sm backdrop-blur dark:border-white/10 dark:bg-[#181818]/95">
+      <div className="sticky top-0 z-20 mb-4 overflow-hidden rounded-[2rem] border border-slate-200/80 bg-white/95 p-4 shadow-sm backdrop-blur dark:border-white/10 dark:bg-[#181818]/95">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex min-w-0 items-center gap-3">
             <Button shape="circle" icon={<ArrowRightOutlined />} onClick={() => navigate('/advertising_campaigns')} aria-label="بازگشت به فهرست کمپین‌ها" />
@@ -265,7 +265,15 @@ const CampaignWizardPage: React.FC = () => {
           {!readOnly ? <Button type="primary" icon={wizard.saveState === 'saved' ? <CheckOutlined /> : <SaveOutlined />} loading={manualSaving || wizard.saveState === 'saving'} onClick={() => void persistAndStay(!wizard.draft.campaign.id)}>ذخیره کمپین</Button> : null}
         </div>
         {wizard.saveError ? <Alert type="error" showIcon className="mt-3" message={wizard.saveError} /> : null}
-        <Tabs activeKey={activeTab} items={tabItems} onChange={(key) => void changeTab(key)} className="mt-2" />
+        <div className="mt-4 border-t border-slate-100 pt-4 dark:border-white/10">
+          <Steps
+            current={Math.max(0, tabItems.findIndex((item) => item.key === activeTab))}
+            items={tabItems.map((item) => ({ title: item.label.replace(/^\d+\.\s*/, '') }))}
+            onChange={(index) => { const item = tabItems[index]; if (item) void changeTab(item.key); }}
+            responsive
+            size="small"
+          />
+        </div>
       </div>
 
       {activeTab === 'basics' ? (

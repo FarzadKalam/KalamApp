@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Card, Typography } from 'antd';
+import { AimOutlined, CalendarOutlined, TagsOutlined, UserOutlined } from '@ant-design/icons';
 import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 import AdaptiveSelectField from '../AdaptiveSelectField';
 import RecordImageBox from '../RecordImageBox';
@@ -14,6 +15,7 @@ import CampaignRelationsPicker from './CampaignRelationsPicker';
 import CampaignToolSelector from './CampaignToolSelector';
 import type { CampaignRecord, CampaignToolType } from './types';
 import CampaignAuditStrip from './CampaignAuditStrip';
+import TagInput from '../TagInput';
 
 type CampaignBasicsTabProps = {
   campaign: CampaignRecord;
@@ -34,7 +36,7 @@ const CampaignBasicsTab: React.FC<CampaignBasicsTabProps> = ({
   canQuickCreateClub,
   disabled,
 }) => {
-  const [tagOptions, setTagOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [tagOptions, setTagOptions] = useState<Array<{ label: string; value: string; color?: string }>>([]);
   useEffect(() => {
     let active = true;
     void fetchTagOptions(supabase).then((items) => { if (active) setTagOptions(items); }).catch(() => undefined);
@@ -45,11 +47,21 @@ const CampaignBasicsTab: React.FC<CampaignBasicsTabProps> = ({
     ? campaign.assignee_role_id ? `role:${campaign.assignee_role_id}` : undefined
     : campaign.assignee_id ? `user:${campaign.assignee_id}` : undefined;
   const viewerTokens = joinIdentityTokens(campaign.viewer_user_ids, campaign.viewer_role_ids);
+  const heroTags = (campaign.tags || []).map((id) => {
+    const tag = tagOptions.find((item) => item.value === id);
+    return { id, title: tag?.label || 'برچسب', color: tag?.color || '#1677ff' };
+  });
 
   return (
     <div className="space-y-4 pb-4">
-      <Card className="!rounded-2xl">
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+      <Card className="overflow-hidden !rounded-[2rem] !border-slate-200/80 dark:!border-white/10">
+        <div className="-mx-6 -mt-6 mb-5 bg-gradient-to-l from-[rgb(var(--brand-600-rgb),0.13)] via-sky-50 to-white px-6 pb-5 pt-6 dark:from-[rgb(var(--brand-500-rgb),0.2)] dark:via-slate-900 dark:to-[#181818]">
+          <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-slate-500 dark:text-slate-300">
+            <span className="inline-flex items-center gap-1 rounded-full bg-white/85 px-3 py-1.5 shadow-sm dark:bg-white/10"><AimOutlined /> برنامه‌ریزی و اجرای کمپین</span>
+            <span className="text-slate-400">مشخصات اصلی، مسئول و زمان‌بندی را اینجا تنظیم کنید.</span>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
           <div>
             <RecordImageBox
               moduleId="advertising_campaigns"
@@ -61,7 +73,7 @@ const CampaignBasicsTab: React.FC<CampaignBasicsTabProps> = ({
             />
             {!campaign.id ? <Typography.Text type="secondary" className="mt-1 block text-xs">برای افزودن تصویر، ابتدا مشخصات را ذخیره کنید.</Typography.Text> : null}
           </div>
-          <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2">
             <CampaignField fieldKey="name" label="نام کمپین" value={campaign.name} onChange={(name) => onChange({ name })} required readonly={disabled} />
             <CampaignField fieldKey="system_code" label="کد سیستمی" value={campaign.system_code || 'پس از ذخیره ساخته می‌شود'} onChange={() => undefined} readonly />
             <div>
@@ -79,9 +91,10 @@ const CampaignBasicsTab: React.FC<CampaignBasicsTabProps> = ({
                 overlayZIndexBase={13200}
               />
             </div>
-            <div>
-              <div className="mb-1.5 text-xs font-medium text-slate-500">مسئول</div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+              <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-slate-500"><UserOutlined /> مسئول</div>
               <AdaptiveIdentityPicker
+                variant="borderless"
                 value={assigneeToken}
                 onChange={(value) => {
                   const token = String(value || '');
@@ -91,30 +104,31 @@ const CampaignBasicsTab: React.FC<CampaignBasicsTabProps> = ({
                 }}
                 scopes={['user', 'role']}
                 disabled={disabled}
-                className="w-full"
+                className="w-full font-bold text-slate-700 dark:text-slate-200"
                 placeholder="انتخاب مسئول یا نقش"
                 pickerTitle="مسئول کمپین"
                 overlayZIndexBase={13200}
               />
             </div>
-            <div className="md:col-span-2">
-              <div className="mb-1.5 text-xs font-medium text-slate-500">برچسب‌ها</div>
-              <AdaptiveSelectField
-                mode="multiple"
-                value={campaign.tags || []}
-                onChange={(tags) => onChange({ tags: Array.isArray(tags) ? tags : [] })}
-                options={tagOptions}
-                disabled={disabled}
-                className="w-full"
-                placeholder="انتخاب برچسب‌ها"
-                pickerTitle="برچسب‌های کمپین"
-                optionFilterProp="label"
-                showSearch
-                getPopupContainer={resolveOverlayPopupContainer as any}
-                modalContainer={resolveOverlayPopupContainer}
-                preferLocalPopupContainer
-                overlayZIndexBase={13200}
-              />
+            <div className="md:col-span-2 rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+              <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-slate-500"><TagsOutlined /> برچسب‌ها</div>
+              {campaign.id ? (
+                <TagInput
+                  recordId={campaign.id}
+                  moduleId="advertising_campaigns"
+                  initialTags={heroTags}
+                  disabled={disabled}
+                  popupZIndex={13240}
+                  onChange={(tags) => onChange({ tags: (tags || []).map((tag) => tag.id) })}
+                />
+              ) : (
+                <AdaptiveSelectField
+                  mode="multiple" value={campaign.tags || []} onChange={(tags) => onChange({ tags: Array.isArray(tags) ? tags : [] })}
+                  options={tagOptions} disabled={disabled} className="w-full" placeholder="انتخاب برچسب‌ها" pickerTitle="برچسب‌های کمپین"
+                  optionFilterProp="label" showSearch getPopupContainer={resolveOverlayPopupContainer as any} modalContainer={resolveOverlayPopupContainer}
+                  preferLocalPopupContainer overlayZIndexBase={13200}
+                />
+              )}
             </div>
           </div>
         </div>
@@ -142,7 +156,7 @@ const CampaignBasicsTab: React.FC<CampaignBasicsTabProps> = ({
         />
       </Card>
 
-      <Card title="شرح و زمان‌بندی" className="!rounded-2xl">
+      <Card title={<span className="inline-flex items-center gap-2"><CalendarOutlined /> شرح و زمان‌بندی</span>} className="!rounded-2xl">
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <div className="lg:col-span-2">
             <CampaignField fieldKey="description" label="توضیحات" type={FieldType.LONG_TEXT} value={campaign.description} onChange={(description) => onChange({ description })} readonly={disabled} recordId={campaign.id} />

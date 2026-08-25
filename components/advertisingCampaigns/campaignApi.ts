@@ -1,7 +1,7 @@
 import { supabase } from '../../supabaseClient';
 import { fetchRecordTagsMap } from '../../utils/referenceData';
 import { syncRecordTags } from '../../utils/recordTags';
-import { fetchSessionBootstrap } from '../../utils/sessionCache';
+import { clearSessionBootstrapCache, fetchSessionBootstrap } from '../../utils/sessionCache';
 import { buildClientFallbackSystemCode } from '../../utils/systemCode';
 import { ADVERTISING_CAMPAIGNS_MODULE_ID, getCampaignToolLabel } from '../../utils/advertisingCampaigns';
 import { createCampaignToolDraft, createEmptyCampaign } from './campaignUtils';
@@ -73,6 +73,26 @@ const normalizeAudienceRule = (row: any): CampaignAudienceRule => ({
 
 const throwIfError = (result: { error?: any }) => {
   if (result?.error) throw result.error;
+};
+
+const getCampaignWriteSession = async () => {
+  let sessionResult = await supabase.auth.getSession();
+  let session = sessionResult.data.session;
+  const expiresSoon = !session?.expires_at || session.expires_at * 1000 <= Date.now() + 60_000;
+  if (expiresSoon) {
+    const refreshed = await supabase.auth.refreshSession();
+    if (!refreshed.error && refreshed.data.session) session = refreshed.data.session;
+  }
+  if (!session?.user?.id || !session.access_token) {
+    clearSessionBootstrapCache();
+    throw new Error('نشست ورود شما معتبر نیست. لطفاً یک‌بار از حساب خارج و دوباره وارد شوید.');
+  }
+  const bootstrap = await fetchSessionBootstrap(supabase, { force: true });
+  if (!bootstrap.orgId || bootstrap.user?.id !== session.user.id) {
+    clearSessionBootstrapCache();
+    throw new Error('سازمان جاری برای ایجاد کمپین مشخص نیست. لطفاً صفحه را تازه‌سازی کنید.');
+  }
+  return { userId: session.user.id, orgId: bootstrap.orgId };
 };
 
 const readJoinIds = async (
@@ -160,8 +180,8 @@ const campaignPayload = (campaign: CampaignRecord) => ({
 });
 
 export const createAdvertisingCampaign = async (campaign: CampaignRecord): Promise<CampaignRecord> => {
-  const session = await fetchSessionBootstrap(supabase);
-  const orgId = String(session?.orgId || '').trim();
+  const session = await getCampaignWriteSession();
+  const orgId = String(session.orgId || '').trim();
   if (!orgId) throw new Error('سازمان جاری برای ایجاد کمپین مشخص نیست.');
   const systemCode = await buildClientFallbackSystemCode(
     supabase,
@@ -173,18 +193,18 @@ export const createAdvertisingCampaign = async (campaign: CampaignRecord): Promi
     ...campaignPayload(campaign),
     org_id: orgId,
     system_code: systemCode,
-    created_by: session?.user?.id || null,
-    updated_by: session?.user?.id || null,
+    created_by: session.userId,
+    updated_by: session.userId,
   }]).select(CAMPAIGN_COLUMNS).single();
   throwIfError(result);
   return normalizeCampaign(result.data);
 };
 
 export const updateAdvertisingCampaign = async (campaign: CampaignRecord): Promise<CampaignRecord> => {
-  const session = await fetchSessionBootstrap(supabase);
+  const session = await getCampaignWriteSession();
   const result = await supabase.from('advertising_campaigns').update({
     ...campaignPayload(campaign),
-    updated_by: session?.user?.id || null,
+    updated_by: session.userId,
     updated_at: new Date().toISOString(),
   }).eq('id', campaign.id).select(CAMPAIGN_COLUMNS).single();
   throwIfError(result);
