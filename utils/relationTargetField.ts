@@ -75,7 +75,9 @@ const MODULE_RELATION_SELECTABLE_FIELDS: Record<string, string[]> = {
   bank_accounts: ['bank_name', 'account_number', 'card_number', 'shaba', 'code'],
   petty_funds: ['name', 'code'],
   org_roles: ['title', 'name'],
-  work_schedules: ['title', 'name'],
+  // جدول برنامه حضور ستون name ندارد؛ استفاده از آن یک درخواست ۴۰۰ اضافی
+  // در فرم‌های شرط و انتخاب‌گرها ایجاد می‌کرد.
+  work_schedules: ['title'],
   journal_entries: ['entry_no', 'source_record_title', 'description'],
   products: ['name', 'system_code', 'manual_code', 'crm_code', 'accounting_code', 'product_identifier', 'status'],
   product_bundles: ['name', 'bundle_number', 'status'],
@@ -130,7 +132,7 @@ export const getRelationLabelFallbackFields = (targetModule?: string | null): st
     return ['title', 'name'];
   }
   if (moduleName === 'work_schedules') {
-    return ['title', 'name'];
+    return ['title'];
   }
   if (moduleName === 'journal_entries') {
     return ['entry_no', 'source_record_title', 'description'];
