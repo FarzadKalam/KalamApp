@@ -45,8 +45,6 @@ const getKalamPopupRoot = () => {
   let root = document.getElementById(KALAM_POPUP_ROOT_ID);
   if (root) {
     root.style.setProperty('--kalam-popup-root-z-index', String(KALAM_POPUP_ROOT_Z_INDEX));
-    root.style.position = 'relative';
-    root.style.isolation = 'isolate';
     root.style.zIndex = String(KALAM_POPUP_ROOT_Z_INDEX);
     return root;
   }
@@ -54,10 +52,6 @@ const getKalamPopupRoot = () => {
   root = document.createElement('div');
   root.id = KALAM_POPUP_ROOT_ID;
   root.style.setProperty('--kalam-popup-root-z-index', String(KALAM_POPUP_ROOT_Z_INDEX));
-  // این ریشه باید واقعاً یک stacking context باشد؛ صرف z-index روی div بدون
-  // position در برخی مرورگرها، picker را زیر Modal/Drawer والد قرار می‌داد.
-  root.style.position = 'relative';
-  root.style.isolation = 'isolate';
   root.style.zIndex = String(KALAM_POPUP_ROOT_Z_INDEX);
   document.body.appendChild(root);
   return root;

@@ -49,15 +49,10 @@ import {
 import { fetchCurrentUserRoleContext } from "../utils/permissions";
 import { getWorkflowConditionFields } from "../utils/workflowHelpers";
 import { loadWorkflowConditionEditorOptions } from "../utils/workflowConditionOptions";
-import { resolveOverlayPopupContainer } from "../utils/popupContainer";
 import type { WorkflowCondition } from "../utils/workflowTypes";
 
 const { Text } = Typography;
 const CUSTOMER_CLUB_MODAL_Z_INDEX = 31000;
-// همهٔ مودال‌های باشگاه باید در همان portal پایدار pickerها قرار بگیرند. در غیر
-// این صورت یک overlay قدیمیِ AdaptivePicker می‌تواند آن‌ها را زیر خود نگه دارد
-// و کلیک روی «طرح جدید»، «کد جدید» یا «ثبت اعتبار» بی‌اثر به نظر برسد.
-const getCustomerClubModalContainer = () => resolveOverlayPopupContainer();
 
 type LoyaltyRule = {
   id: string;
@@ -388,7 +383,7 @@ const CustomerClubPage: React.FC = () => {
 
   const loadAccess = useCallback(async () => {
     const [roleContext, hasFeature] = await Promise.all([
-      fetchCurrentUserRoleContext(supabase),
+      fetchCurrentUserRoleContext(supabase, { force: true }),
       hasCurrentOrgPlanFeature(CUSTOMER_CLUB_FEATURE, { defaultEnabled: true }),
     ]);
     const perms = roleContext.permissions?.[CUSTOMER_CLUB_PERMISSION_KEY] || {};
@@ -1065,7 +1060,6 @@ const CustomerClubPage: React.FC = () => {
         cancelText="انصراف"
         width={980}
         zIndex={CUSTOMER_CLUB_MODAL_Z_INDEX}
-        getContainer={getCustomerClubModalContainer}
         okButtonProps={{ icon: <SaveOutlined /> }}
       >
         <Form form={ruleForm} layout="vertical">
@@ -1184,7 +1178,6 @@ const CustomerClubPage: React.FC = () => {
         cancelText="انصراف"
         width={980}
         zIndex={CUSTOMER_CLUB_MODAL_Z_INDEX}
-        getContainer={getCustomerClubModalContainer}
       >
         <Form form={discountForm} layout="vertical">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -1318,7 +1311,6 @@ const CustomerClubPage: React.FC = () => {
         okText="ثبت"
         cancelText="انصراف"
         zIndex={CUSTOMER_CLUB_MODAL_Z_INDEX}
-        getContainer={getCustomerClubModalContainer}
       >
         <Form form={ledgerForm} layout="vertical">
           <ClubField
