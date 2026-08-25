@@ -52,6 +52,7 @@ import {
   parseProcessLinkMap,
 } from '../../utils/processTargets';
 import { fetchLinkedProcessDraftStagesForRecord } from '../../utils/processLinkedDraftLookup';
+import { resolveProcessDraftExecutionOwner } from '../../utils/processLinkedDraftOwner';
 import { fetchRecordReferenceLabels, buildRecordReferenceKey } from '../../utils/recordReference';
 import { fetchRelationOptionsForField } from '../../utils/relationOptions';
 import { getAssigneeLabel } from '../../utils/assigneeLabel';
@@ -4326,15 +4327,30 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       ? normalizeText(item.id).replace(/^draft:/, '')
       : (itemGroupIds.length === 1 ? itemGroupIds[0] : '');
     const sourceDraftStages = resolveRawDraftStagesForV2Stages(itemDraftStages, targetGroupId);
+    const executionOwners = sourceDraftStages.map((stage) => resolveProcessDraftExecutionOwner({
+      stage,
+      currentModuleId: normalizedModuleId,
+      currentRecordId: normalizedRecordId,
+    }));
+    const executionOwnerKeys = new Set(executionOwners.map((owner) => `${owner.moduleId}:${owner.recordId}`));
+    if (executionOwnerKeys.size !== 1) {
+      message.error('مرحله‌های انتخاب‌شده متعلق به یک رکورد فرآیندی واحد نیستند.');
+      return;
+    }
+    const executionOwner = executionOwners[0];
+    if (!executionOwner?.moduleId || !executionOwner.recordId) {
+      message.error('رکورد مالک پیش‌نویس فرآیند پیدا نشد.');
+      return;
+    }
     const key = cardKey(item);
     if (autoAssigningCardIds[key]) return;
     setAutoAssigningCardIds((current) => ({ ...current, [key]: true }));
     try {
       const result = await autoAssignProcessV2DraftStages({
         supabaseClient: supabase,
-        moduleId: normalizedModuleId,
-        recordId: normalizedRecordId,
-        recordData,
+        moduleId: executionOwner.moduleId,
+        recordId: executionOwner.recordId,
+        recordData: executionOwner.isLinkedOwner ? null : recordData,
         draftStages: sourceDraftStages,
         targetGroupId,
       });
@@ -4440,6 +4456,15 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     const sourceDraftStagesBase = resolveRawDraftStagesForV2Stages(itemDraftStages, targetGroupId).map(applyExistingRunContext);
     const targetDraftStagesBase = resolveRawDraftStagesForV2Stages([stage], targetGroupId).map(applyExistingRunContext);
     const targetRawStage = targetDraftStagesBase[0] || sourceStage;
+    const executionOwner = resolveProcessDraftExecutionOwner({
+      stage: targetRawStage,
+      currentModuleId: normalizedModuleId,
+      currentRecordId: normalizedRecordId,
+    });
+    if (!executionOwner.moduleId || !executionOwner.recordId) {
+      message.error('رکورد مالک پیش‌نویس فرآیند پیدا نشد.');
+      return { createdCount: 0, skippedCount: 0, groupIds: [], createdTasks: [] };
+    }
     const targetStageId = normalizeText(
       targetRawStage?.process_node_key
       || targetRawStage?.[PROCESS_NODE_KEY]
@@ -4475,9 +4500,9 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     try {
       const result = await autoAssignProcessV2DraftStages({
         supabaseClient: supabase,
-        moduleId: normalizedModuleId,
-        recordId: normalizedRecordId,
-        recordData,
+        moduleId: executionOwner.moduleId,
+        recordId: executionOwner.recordId,
+        recordData: executionOwner.isLinkedOwner ? null : recordData,
         draftStages: sourceDraftStages,
         targetGroupId,
         targetStageId,
