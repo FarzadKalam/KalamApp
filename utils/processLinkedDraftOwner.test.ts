@@ -30,4 +30,20 @@ describe('resolveProcessDraftExecutionOwner', () => {
       isLinkedOwner: false,
     });
   });
+
+  it('uses the runtime run owner when its draft stage is displayed on a related record', () => {
+    expect(resolveProcessDraftExecutionOwner({
+      currentModuleId: 'customers',
+      currentRecordId: '11111111-1111-4111-8111-111111111111',
+      stage: { id: 'run-stage' },
+      runtimeRun: {
+        module_id: 'projects',
+        record_id: '22222222-2222-4222-8222-222222222222',
+      },
+    })).toEqual({
+      moduleId: 'projects',
+      recordId: '22222222-2222-4222-8222-222222222222',
+      isLinkedOwner: true,
+    });
+  });
 });

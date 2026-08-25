@@ -4326,11 +4326,16 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     const targetGroupId = isDraftCard
       ? normalizeText(item.id).replace(/^draft:/, '')
       : (itemGroupIds.length === 1 ? itemGroupIds[0] : '');
+    const itemRunId = item.mode === 'run' ? normalizeDbUuid(item.id) : '';
+    const runtimeRun = itemRunId
+      ? (runtimeRef.current.runs || []).find((row: any) => normalizeDbUuid(row?.id) === itemRunId)
+      : null;
     const sourceDraftStages = resolveRawDraftStagesForV2Stages(itemDraftStages, targetGroupId);
     const executionOwners = sourceDraftStages.map((stage) => resolveProcessDraftExecutionOwner({
       stage,
       currentModuleId: normalizedModuleId,
       currentRecordId: normalizedRecordId,
+      runtimeRun,
     }));
     const executionOwnerKeys = new Set(executionOwners.map((owner) => `${owner.moduleId}:${owner.recordId}`));
     if (executionOwnerKeys.size !== 1) {
@@ -4460,6 +4465,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       stage: targetRawStage,
       currentModuleId: normalizedModuleId,
       currentRecordId: normalizedRecordId,
+      runtimeRun: runRow,
     });
     if (!executionOwner.moduleId || !executionOwner.recordId) {
       message.error('رکورد مالک پیش‌نویس فرآیند پیدا نشد.');

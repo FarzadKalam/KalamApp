@@ -28,14 +28,18 @@ export const resolveProcessDraftExecutionOwner = ({
   stage,
   currentModuleId,
   currentRecordId,
+  runtimeRun,
 }: {
   stage: Record<string, any> | null | undefined;
   currentModuleId: string;
   currentRecordId: string;
+  runtimeRun?: Record<string, any> | null;
 }): ProcessDraftExecutionOwner => {
   const source = getStageSource(stage);
   const ownerModuleId = normalizeText(source?.__process_v2_linked_owner_module_id);
   const ownerRecordId = normalizeDbUuid(source?.__process_v2_linked_owner_record_id);
+  const runtimeOwnerModuleId = normalizeText(runtimeRun?.module_id);
+  const runtimeOwnerRecordId = normalizeDbUuid(runtimeRun?.record_id);
   const normalizedCurrentModuleId = normalizeText(currentModuleId);
   const normalizedCurrentRecordId = normalizeDbUuid(currentRecordId);
 
@@ -44,6 +48,17 @@ export const resolveProcessDraftExecutionOwner = ({
       moduleId: ownerModuleId,
       recordId: ownerRecordId,
       isLinkedOwner: ownerModuleId !== normalizedCurrentModuleId || ownerRecordId !== normalizedCurrentRecordId,
+    };
+  }
+
+  // A process run can be rendered on one of its related records. Unlike legacy
+  // draft fields, run-stage rows do not carry the linked-owner marker, so the
+  // run itself is the authoritative owner for creation and conversion.
+  if (runtimeOwnerModuleId && runtimeOwnerRecordId) {
+    return {
+      moduleId: runtimeOwnerModuleId,
+      recordId: runtimeOwnerRecordId,
+      isLinkedOwner: runtimeOwnerModuleId !== normalizedCurrentModuleId || runtimeOwnerRecordId !== normalizedCurrentRecordId,
     };
   }
 
