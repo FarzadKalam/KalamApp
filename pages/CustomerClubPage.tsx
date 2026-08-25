@@ -111,6 +111,7 @@ type ClubEvent = {
   id: string;
   event_type: string;
   title: string;
+  customer_id?: string | null;
   created_at: string;
   payload?: Record<string, any>;
   customer?: Record<string, any> | null;
@@ -328,6 +329,17 @@ const CustomerClubPage: React.FC = () => {
   const [discountCodes, setDiscountCodes] = useState<DiscountCode[]>([]);
   const [ledgerRows, setLedgerRows] = useState<LedgerRow[]>([]);
   const [clubEvents, setClubEvents] = useState<ClubEvent[]>([]);
+  const summaryClubEvents = useMemo(() => {
+    const displayedLevelChanges = new Set<string>();
+    return clubEvents.filter((event) => {
+      if (event.event_type !== "level_changed") return true;
+      const customerId = String(event.customer_id || event.customer?.id || "").trim();
+      if (!customerId) return true;
+      if (displayedLevelChanges.has(customerId)) return false;
+      displayedLevelChanges.add(customerId);
+      return true;
+    });
+  }, [clubEvents]);
   const [dynamicOptions, setDynamicOptions] = useState<
     Record<string, Array<{ label: string; value: string }>>
   >({});
@@ -420,7 +432,7 @@ const CustomerClubPage: React.FC = () => {
         supabase
           .from("customer_club_events")
           .select(
-            "id, event_type, title, created_at, payload, customer:customers(id, full_name, business_name, system_code)",
+            "id, event_type, title, customer_id, created_at, payload, customer:customers(id, full_name, business_name, system_code)",
           )
           .order("created_at", { ascending: false })
           .limit(300),
@@ -936,7 +948,7 @@ const CustomerClubPage: React.FC = () => {
                   <Table
                     rowKey="id"
                     loading={loading}
-                    dataSource={clubEvents.slice(0, 12)}
+                    dataSource={summaryClubEvents.slice(0, 12)}
                     columns={eventColumns}
                     pagination={false}
                     size="small"

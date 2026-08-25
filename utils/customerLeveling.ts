@@ -659,8 +659,12 @@ export const syncAllCustomerLevels = async ({
     const ids = (data || []).map((row: any) => row?.id).filter(Boolean);
     if (ids.length === 0) break;
 
-    await syncCustomerLevelsByInvoiceCustomers({ supabase, customerIds: ids });
-    processed += ids.length;
+    const { data: batchProcessed, error: syncError } = await supabase.rpc('sync_customer_club_levels', {
+      p_customer_ids: ids,
+    });
+    if (syncError) throw syncError;
+
+    processed += Number.isFinite(Number(batchProcessed)) ? Number(batchProcessed) : ids.length;
     onProgress?.(processed);
 
     if (ids.length < CUSTOMER_LEVELING_BATCH_SIZE) break;
