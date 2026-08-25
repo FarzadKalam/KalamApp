@@ -26,6 +26,11 @@ describe('processModuleSupport', () => {
     expect(result.fields.map((field) => field.key)).toEqual(['name']);
   });
 
+  it('does not inject execution-process fields into campaign records', () => {
+    const result = withProcessModuleSupport(buildModule('advertising_campaigns'));
+    expect(result.fields.map((field) => field.key)).toEqual(['name']);
+  });
+
   it('still injects execution-process fields into supported modules', () => {
     const result = withProcessModuleSupport(buildModule('personas'));
     expect(result.fields.some((field) => field.key === 'process_template_id')).toBe(true);

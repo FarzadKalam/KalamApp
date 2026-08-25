@@ -11,6 +11,8 @@ export const PROCESS_TEMPLATE_TARGET_MODULE_EXCLUDED_IDS = new Set([
   'process_runs',
   'tasks',
   'instructions',
+  // اجرای فرآیند برای هر ابزارِ کمپین تعریف می‌شود، نه برای رکورد مادر کمپین.
+  'advertising_campaigns',
 ]);
 
 const PROCESS_DRAFT_FIELD_KEYS = new Set([
