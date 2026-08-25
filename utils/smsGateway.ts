@@ -8,6 +8,7 @@ export type SmsSettings = {
   username?: string;
   password?: string;
   api_key?: string;
+  sender_numbers?: string[];
   sender_number?: string;
   body_id?: string;
   credit_url?: string;
@@ -40,6 +41,7 @@ export type SmsGatewaySendResult = {
   provider_method?: string;
   provider_attempts?: Array<{ method: string; success: boolean; error?: string }>;
   build?: string;
+  sender_number?: string;
 };
 
 type SendSmsViaGatewayArgs = {
@@ -54,6 +56,8 @@ type SendSmsViaGatewayArgs = {
   provider?: string;
   metadata?: Record<string, any>;
   skipReportLog?: boolean;
+  /** خط انتخاب‌شده کمپین؛ باید در خطوط ثبت‌شده سازمان وجود داشته باشد. */
+  senderNumber?: string;
 };
 
 type SmsLogRowRef = {
@@ -75,6 +79,7 @@ const createSmsPendingLogs = async ({
   title,
   provider,
   metadata,
+  senderNumber,
 }: {
   recipients: string[];
   messageText: string;
@@ -84,6 +89,7 @@ const createSmsPendingLogs = async ({
   title?: string;
   provider?: string;
   metadata?: Record<string, any>;
+  senderNumber?: string;
 }): Promise<SmsLogRowRef[]> => {
   const rows: SmsLogRowRef[] = [];
   const baseMetadata = normalizeMetadata(metadata);
@@ -97,6 +103,7 @@ const createSmsPendingLogs = async ({
         recordId,
         customerId,
         recipient,
+        sender: normalizeSenderNumber(senderNumber) || undefined,
         title,
         messageText,
         metadata: {
@@ -118,6 +125,29 @@ const createSmsPendingLogs = async ({
 };
 
 const toMode = (value: unknown): SmsMode => (String(value || '').toLowerCase() === 'soap' ? 'soap' : 'rest');
+
+const normalizeSenderNumber = (value: unknown) => String(value || '')
+  .trim()
+  .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+  .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+  .replace(/\s+/g, '');
+
+export const getConfiguredSmsSenderNumbers = (settings: SmsSettings | null | undefined) => {
+  const values = Array.isArray(settings?.sender_numbers) ? settings?.sender_numbers : [];
+  const normalized = values.map(normalizeSenderNumber).filter((value) => /^\d{3,20}$/.test(value));
+  const legacy = normalizeSenderNumber(settings?.sender_number);
+  if (/^\d{3,20}$/.test(legacy)) normalized.unshift(legacy);
+  return Array.from(new Set(normalized));
+};
+
+const withSelectedSmsSender = (settings: SmsSettings, requested?: string): SmsSettings => {
+  const configured = getConfiguredSmsSenderNumbers(settings);
+  const selected = normalizeSenderNumber(requested) || configured[0] || '';
+  if (!selected || !configured.includes(selected)) {
+    throw new Error('خط ارسال انتخاب‌شده در تنظیمات پیامک سازمان ثبت نشده است.');
+  }
+  return { ...settings, sender_numbers: configured, sender_number: selected };
+};
 
 const normalizeSmsUrl = (url: string, mode: SmsMode) => {
   if (!url) return url;
@@ -342,9 +372,11 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const invokeSmsFunction = async (
   to: string[],
   text: string,
-  overrideSettings?: SmsSettings
+  overrideSettings?: SmsSettings,
+  senderNumber?: string,
 ): Promise<SmsGatewaySendResult> => {
   const payload: Record<string, any> = { action: 'send', to, text };
+  if (normalizeSenderNumber(senderNumber)) payload.sender_number = normalizeSenderNumber(senderNumber);
   if (overrideSettings && Object.keys(overrideSettings).length > 0) {
     payload.overrideSettings = overrideSettings;
   }
@@ -409,6 +441,7 @@ export const sendSmsViaGateway = async ({
   provider,
   metadata,
   skipReportLog = false,
+  senderNumber,
 }: SendSmsViaGatewayArgs): Promise<SmsGatewaySendResult> => {
   const recipients = Array.from(new Set((to || []).map((value) => String(value || '').trim()).filter(Boolean)));
   const messageText = String(text || '').trim();
@@ -431,6 +464,7 @@ export const sendSmsViaGateway = async ({
         title,
         provider,
         metadata,
+        senderNumber,
       });
   const baseMetadata = normalizeMetadata(metadata);
   const attemptedAt = new Date().toISOString();
@@ -438,7 +472,7 @@ export const sendSmsViaGateway = async ({
   try {
     let sendResult: SmsGatewaySendResult;
     try {
-      sendResult = await invokeSmsFunction(recipients, messageText, overrideSettings);
+      sendResult = await invokeSmsFunction(recipients, messageText, overrideSettings, senderNumber);
     } catch (edgeError: any) {
       if (!allowDirectFallback) throw edgeError;
       const rawMessage = String(edgeError?.message || edgeError || '').toLowerCase();
@@ -456,9 +490,10 @@ export const sendSmsViaGateway = async ({
         rawMessage.includes('http 504');
       if (!shouldFallbackDirect) throw edgeError;
 
-      const smsSettings = overrideSettings && Object.keys(overrideSettings).length > 0
+      const rawSmsSettings = overrideSettings && Object.keys(overrideSettings).length > 0
         ? overrideSettings
         : await getActiveSmsSettings();
+      const smsSettings = withSelectedSmsSender(rawSmsSettings, senderNumber);
       sendResult = await sendSmsDirect(recipients, messageText, smsSettings);
     }
 
@@ -476,6 +511,7 @@ export const sendSmsViaGateway = async ({
           await updateOutboundMessageStatus(row.id, nextStatus, {
             providerMessageId: String(providerResult?.result || '').trim() || null,
             sentAt: attemptedAt,
+            sender: String(sendResult?.sender_number || senderNumber || '').trim() || null,
             metadata: {
               ...baseMetadata,
               channel: 'sms',

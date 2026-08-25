@@ -32,6 +32,8 @@ import { SAAS_ADMIN_PERMISSION_KEY } from '../../utils/permissions';
 import { loadScopedCompanySettings } from '../../utils/companySettings';
 import { normalizeCurrencyConfig } from '../../utils/currency';
 import { listScopedIntegrationSettings } from '../../utils/integrationSettings';
+import AdaptiveSelectField from '../../components/AdaptiveSelectField';
+import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 
 type ConnectionType =
   | 'sms'
@@ -83,6 +85,8 @@ type FormValues = {
     username?: string;
     password?: string;
     api_key?: string;
+    sender_numbers?: string[];
+    /** اولین خط برای سازگاری تنظیمات و ارسال‌های قدیمی. */
     sender_number?: string;
     body_id?: string;
     webhook_secret?: string;
@@ -228,12 +232,30 @@ const normalizeConnectionSearchText = (value: string) =>
     .trim()
     .toLowerCase();
 
+const normalizeSmsSenderNumber = (value: unknown) =>
+  String(value || '')
+    .trim()
+    .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+    .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+    .replace(/\s+/g, '');
+
+const normalizeSmsSenderNumbers = (value: unknown, legacyValue?: unknown) => {
+  const rawValues = Array.isArray(value) ? value : [];
+  const normalized = rawValues
+    .map(normalizeSmsSenderNumber)
+    .filter((item) => /^\d{3,20}$/.test(item));
+  const legacy = normalizeSmsSenderNumber(legacyValue);
+  if (/^\d{3,20}$/.test(legacy)) normalized.unshift(legacy);
+  return Array.from(new Set(normalized));
+};
+
 const DEFAULT_VALUES: FormValues = {
   sms: {
     provider: 'meli_payamak',
     username: '',
     password: '',
     api_key: '',
+    sender_numbers: [],
     sender_number: '',
     body_id: '',
     webhook_secret: '',
@@ -580,18 +602,22 @@ const ConnectionsTab: React.FC = () => {
     }));
   };
 
-  const buildSmsOverrideSettings = (smsValues: FormValues['sms']) => ({
+  const buildSmsOverrideSettings = (smsValues: FormValues['sms']) => {
+    const senderNumbers = normalizeSmsSenderNumbers(smsValues?.sender_numbers, smsValues?.sender_number);
+    return ({
     mode: 'soap' as const,
     base_url: 'https://api.payamak-panel.com/post/send.asmx/SendSimpleSMS2',
     username: String(smsValues?.username || '').trim(),
     password: String(smsValues?.password || '').trim(),
     api_key: String(smsValues?.api_key || '').trim(),
-    sender_number: String(smsValues?.sender_number || '').trim(),
+    sender_numbers: senderNumbers,
+    sender_number: senderNumbers[0] || '',
     body_id: String(smsValues?.body_id || '').trim(),
     webhook_secret: String(smsValues?.webhook_secret || '').trim(),
     inbound_webhook_secret: String(smsValues?.webhook_secret || '').trim(),
     is_flash: false,
   });
+  };
 
   const buildVoipRequestSettings = (voipValues: FormValues['voip']) => ({
     provider: String(voipValues?.provider || 'telefonchy').trim(),
@@ -713,6 +739,11 @@ const ConnectionsTab: React.FC = () => {
       const telegramBotRow = byType.telegram_bot || byType.telegram;
       const baleBotRow = byType.bale_bot || byType.bale;
       const rubikaBotRow = byType.rubika_bot || byType.rubika;
+      const storedSmsSettings = byType.sms?.settings || {};
+      const storedSmsSenderNumbers = normalizeSmsSenderNumbers(
+        storedSmsSettings.sender_numbers,
+        storedSmsSettings.sender_number,
+      );
 
       setRowIds({
         sms: byType.sms?.id,
@@ -730,7 +761,9 @@ const ConnectionsTab: React.FC = () => {
         sms: {
           ...DEFAULT_VALUES.sms,
           provider: String(byType.sms?.provider || DEFAULT_VALUES.sms.provider),
-          ...(byType.sms?.settings || {}),
+          ...storedSmsSettings,
+          sender_numbers: storedSmsSenderNumbers,
+          sender_number: storedSmsSenderNumbers[0] || '',
           is_active: byType.sms?.is_active ?? true,
         },
         email: {
@@ -1164,7 +1197,7 @@ const ConnectionsTab: React.FC = () => {
       const username = String(smsValues?.username || '').trim();
       const password = String(smsValues?.password || '').trim();
       const apiKey = String(smsValues?.api_key || '').trim();
-      const senderNumber = String(smsValues?.sender_number || '').trim();
+      const senderNumber = normalizeSmsSenderNumbers(smsValues?.sender_numbers, smsValues?.sender_number)[0] || '';
 
       if (provider !== 'meli_payamak') {
         message.error('در حال حاضر فقط ارسال تست برای ملی پیامک فعال است.');
@@ -1657,8 +1690,31 @@ const ConnectionsTab: React.FC = () => {
                     <Input.Password placeholder="طبق مستندات ملی‌پیامک می‌توانید API Key را اینجا قرار دهید" />
                   </Form.Item>
 
-                  <Form.Item label="خط ارسال" name={['sms', 'sender_number']}>
-                    <Input placeholder="مثال: 5000..." />
+                  <Form.Item
+                    label="خطوط ارسال"
+                    name={['sms', 'sender_numbers']}
+                    rules={[{
+                      validator: async (_, value) => {
+                        const raw = Array.isArray(value) ? value : [];
+                        if (raw.some((item) => !/^\d{3,20}$/.test(normalizeSmsSenderNumber(item)))) {
+                          throw new Error('هر خط باید فقط شامل ۳ تا ۲۰ رقم فارسی یا انگلیسی باشد.');
+                        }
+                      },
+                    }]}
+                    tooltip="هر خط را تایپ کنید و Enter بزنید. اولین خط، خط پیش‌فرض ارسال‌های قبلی است."
+                  >
+                    <AdaptiveSelectField
+                      mode="tags"
+                      tokenSeparators={[',', '،', '\n']}
+                      placeholder="مثال: 5000... سپس Enter"
+                      options={[]}
+                      maxTagCount="responsive"
+                      pickerTitle="خطوط ارسال پیامک"
+                      getPopupContainer={resolveOverlayPopupContainer}
+                      modalContainer={resolveOverlayPopupContainer}
+                      preferLocalPopupContainer
+                      overlayZIndexBase={13200}
+                    />
                   </Form.Item>
                   <Form.Item label="کد الگو (اختیاری)" name={['sms', 'body_id']}>
                     <Input placeholder="برای Pattern/Base Number در صورت نیاز" />

@@ -1,6 +1,6 @@
 // @ts-nocheck
 
-const FUNCTION_BUILD = 'melipayamak-inbound-2026-04-15-01';
+const FUNCTION_BUILD = 'melipayamak-inbound-2026-08-25-02';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -128,13 +128,36 @@ const insertInboundSms = async (
     method: 'POST',
     headers: {
       ...getServiceHeaders(serviceRoleKey),
-      Prefer: 'return=minimal',
+      Prefer: 'return=representation',
     },
     body: JSON.stringify(row),
   });
   const raw = await response.text();
-  if (response.status === 409) return;
+  if (response.status === 409) return null;
   if (!response.ok) throw new Error(raw || 'Could not insert inbound SMS');
+  const rows = raw ? JSON.parse(raw) : [];
+  return String(Array.isArray(rows) ? rows[0]?.id || '' : rows?.id || '').trim() || null;
+};
+
+const captureCampaignResponse = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  payload: { orgId: string; inboundMessageId: string; sender: string; receiver: string; messageText: string },
+) => {
+  const response = await fetch(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/rpc/capture_advertising_campaign_sms_response`, {
+    method: 'POST',
+    headers: getServiceHeaders(serviceRoleKey),
+    body: JSON.stringify({
+      p_org_id: payload.orgId,
+      p_inbound_message_id: payload.inboundMessageId,
+      p_sender: payload.sender,
+      p_receiver: payload.receiver,
+      p_message_text: payload.messageText,
+    }),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(raw || 'Could not capture campaign SMS response');
+  return raw ? JSON.parse(raw) : null;
 };
 
 Deno.serve(async (req) => {
@@ -206,6 +229,15 @@ Deno.serve(async (req) => {
     ]));
     const providerMessageId = pickPayloadValue(payload, ['id', 'message_id', 'msgid', 'recId', 'rec_id', 'MessageId', 'messageId']);
 
+    const configuredSenderNumbers = Array.from(new Set([
+      ...(Array.isArray(settings.sender_numbers) ? settings.sender_numbers : []),
+      settings.sender_number,
+    ].map(normalizePhone).filter(Boolean)));
+    if (recipient && configuredSenderNumbers.length > 0 && !configuredSenderNumbers.includes(recipient)) {
+      console.warn('[melipayamak-inbound] ignored unknown receiver line');
+      return text(200, 'ok');
+    }
+
     if (!sender || !recipient || !messageText) {
       console.warn('[melipayamak-inbound] ignored incomplete payload', JSON.stringify({ hasSender: !!sender, hasRecipient: !!recipient, hasText: !!messageText }));
       await insertInboundSms(supabaseUrl, serviceRoleKey, {
@@ -233,7 +265,7 @@ Deno.serve(async (req) => {
       return text(200, 'ok');
     }
 
-    await insertInboundSms(supabaseUrl, serviceRoleKey, {
+    const inboundMessageId = await insertInboundSms(supabaseUrl, serviceRoleKey, {
       org_id: orgId,
       channel_type: 'sms',
       direction: 'inbound',
@@ -253,6 +285,21 @@ Deno.serve(async (req) => {
       },
       received_at: new Date().toISOString(),
     });
+
+    if (inboundMessageId) {
+      try {
+        await captureCampaignResponse(supabaseUrl, serviceRoleKey, {
+          orgId,
+          inboundMessageId,
+          sender,
+          receiver: recipient,
+          messageText,
+        });
+      } catch (campaignError: any) {
+        // The canonical inbound SMS remains stored even if campaign matching is unavailable.
+        console.warn('[melipayamak-inbound] campaign response capture failed', String(campaignError?.message || campaignError));
+      }
+    }
 
     return text(200, 'ok');
   } catch (error: any) {

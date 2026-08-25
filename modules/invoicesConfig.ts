@@ -10,6 +10,11 @@ import {
   SummaryCalculationType,
 } from '../types';
 import {
+  ADVERTISING_CAMPAIGN_SOURCE_OPTION,
+  createAdvertisingCampaignAttributionFields,
+  protectAdvertisingCampaignSourceField,
+} from './advertisingCampaignAttributionFields';
+import {
   CASH_BANK_OPERATION_STATUS_OPTIONS,
   CASH_BANK_PAYMENT_TYPE_OPTIONS,
   CASH_BANK_RESPONSIBLE_LABEL_FA,
@@ -296,15 +301,21 @@ export const invoicesConfig: ModuleDefinition = {
       isTableColumn: true,
       defaultValue: true,
     },
-    {
+    protectAdvertisingCampaignSourceField({
       key: 'sale_source',
       labels: { fa: 'منبع فروش', en: 'Source' },
       type: FieldType.SELECT,
       dynamicOptionsCategory: 'sales_source',
+      options: [ADVERTISING_CAMPAIGN_SOURCE_OPTION],
       location: FieldLocation.HEADER,
       order: 6,
       nature: FieldNature.STANDARD,
-    },
+    }),
+    ...createAdvertisingCampaignAttributionFields({
+      sourceFieldKey: 'sale_source',
+      location: FieldLocation.HEADER,
+      order: 6.01,
+    }),
     {
       key: 'notify_customer',
       labels: { fa: 'اطلاع‌رسانی به مشتری', en: 'Notify Customer' },

@@ -25,6 +25,7 @@ export type OutboundMessagePayload = {
   recordId?: string;
   customerId?: string;
   recipient?: string;
+  sender?: string;
   title?: string;
   messageText: string;
   metadata?: Record<string, any>;
@@ -59,9 +60,13 @@ const normalizePayload = async (payload: OutboundMessagePayload) => {
     related_record_id: payload.recordId || null,
     customer_id: payload.customerId || null,
     recipient: payload.recipient || null,
+    sender: payload.sender || null,
     title: payload.title || null,
     message_text: String(payload.messageText || ''),
     metadata,
+    advertising_campaign_id: String((metadata as any)?.advertising_campaign_id || '').trim() || null,
+    advertising_campaign_tool_id: String((metadata as any)?.advertising_campaign_tool_id || '').trim() || null,
+    advertising_campaign_dispatch_id: String((metadata as any)?.advertising_campaign_dispatch_id || '').trim() || null,
   };
 };
 
@@ -87,6 +92,7 @@ export const updateOutboundMessageStatus = async (
     errorMessage?: string | null;
     metadata?: Record<string, any>;
     sentAt?: string | null;
+    sender?: string | null;
   }
 ) => {
   const nextPatch: Record<string, any> = {
@@ -106,6 +112,9 @@ export const updateOutboundMessageStatus = async (
     nextPatch.sent_at = patch.sentAt;
   } else if (status === 'sent' || status === 'provider_accepted' || status === 'delivered') {
     nextPatch.sent_at = new Date().toISOString();
+  }
+  if (patch?.sender !== undefined) {
+    nextPatch.sender = patch.sender;
   }
 
   const { data, error } = await supabase

@@ -47,6 +47,16 @@ describe('getWorkflowActionSummaryFa', () => {
     expect(summary).toContain('بدون گیرنده');
   });
 
+  it('ویرایش رکورد مرتبط را با ماژول و فیلد خلاصه می‌کند', () => {
+    const summary = getWorkflowActionSummaryFa({
+      id: 'related-update',
+      type: 'update_related_record',
+      config: { target_module_id: 'customers', field: 'status' },
+    });
+    expect(summary).toContain('status');
+    expect(summary).toContain('مشتری');
+  });
+
   it('متن طولانی بریده می‌شود', () => {
     const longText = 'الف'.repeat(120);
     const summary = getWorkflowActionSummaryFa({

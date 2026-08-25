@@ -52,6 +52,7 @@ import {
 } from '../utils/permissions';
 import { CUSTOMER_CLUB_FEATURE } from '../utils/customerClub';
 import { hasCurrentOrgPlanFeature } from '../utils/saasPlanFeatures';
+import { hasCurrentOrgPlanModule } from '../utils/saasPlanModules';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { RECYCLE_BIN_ROUTE } from '../utils/recycleBin';
 import {
@@ -83,6 +84,7 @@ import { toPersianNumber } from '../utils/persianNumberFormatter';
 import AiSparkleIcon from './ai/AiSparkleIcon';
 import { useNotificationRuntime } from './notifications/NotificationRuntimeProvider';
 import { resolveMobileKeyboardViewport } from '../utils/mobileKeyboardViewport';
+import { ADVERTISING_CAMPAIGNS_MODULE_ID } from '../utils/advertisingCampaigns';
 
 const { Header, Sider, Content } = AntLayout;
 const NotificationsPopover = React.lazy(() => import('./NotificationsPopover'));
@@ -126,6 +128,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [rolePermissionsReady, setRolePermissionsReady] = useState(false);
   const [customerClubFeatureEnabled, setCustomerClubFeatureEnabled] = useState(true);
   const [instagramInboxFeatureEnabled, setInstagramInboxFeatureEnabled] = useState(false);
+  const [advertisingCampaignsModuleEnabled, setAdvertisingCampaignsModuleEnabled] = useState(false);
   const [alertsDrawerMounted, setAlertsDrawerMounted] = useState(false);
   const [alertsDrawerOpen, setAlertsDrawerOpen] = useState(false);
   const [sessionBootstrapError, setSessionBootstrapError] = useState<any>(null);
@@ -203,6 +206,18 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     void hasCurrentOrgPlanFeature('instagram_inbox', { defaultEnabled: false })
       .then((enabled) => { if (active) setInstagramInboxFeatureEnabled(enabled); })
       .catch(() => { if (active) setInstagramInboxFeatureEnabled(false); });
+    return () => { active = false; };
+  }, [currentUser?.id, rolePermissionsReady]);
+
+  useEffect(() => {
+    if (!rolePermissionsReady || !currentUser?.id) {
+      setAdvertisingCampaignsModuleEnabled(false);
+      return;
+    }
+    let active = true;
+    void hasCurrentOrgPlanModule(ADVERTISING_CAMPAIGNS_MODULE_ID, { defaultEnabled: false })
+      .then((enabled) => { if (active) setAdvertisingCampaignsModuleEnabled(enabled); })
+      .catch(() => { if (active) setAdvertisingCampaignsModuleEnabled(false); });
     return () => { active = false; };
   }, [currentUser?.id, rolePermissionsReady]);
 
@@ -574,6 +589,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     || rolePermissions?.[SAAS_ADMIN_PERMISSION_KEY]?.edit === true
     || rolePermissions?.instagram_conversations?.view === true
   );
+  const canViewAdvertisingCampaigns = advertisingCampaignsModuleEnabled && canViewModule(ADVERTISING_CAMPAIGNS_MODULE_ID);
   const {
     headerAnnouncements: userHeaderAnnouncements,
     popupAnnouncements: userPopupAnnouncements,
@@ -673,9 +689,18 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const rawMenuItems = useMemo<NonNullable<MenuProps['items']>>(() => {
     return [
       { key: '/', icon: <DashboardOutlined />, label: 'داشبورد' },
-      { key: '/messages', icon: <MessageOutlined />, label: 'پیام‌رسانی', disabled: !communicationsAccess.canUseWorkspace },
-      { key: '/instagram', icon: <InstagramOutlined />, label: 'صندوق اینستاگرام', disabled: !canViewInstagramInbox },
-      { key: '/ai', icon: <AiSparkleIcon className="h-4 w-4" />, label: 'دستیار هوشمند سازمان', disabled: !communicationsAccess.canUseWorkspace },
+      {
+        key: 'communications',
+        icon: <MessageOutlined />,
+        label: 'ارتباطات',
+        children: [
+          { key: '/messages', icon: <MessageOutlined />, label: 'پیام‌رسانی', disabled: !communicationsAccess.canUseWorkspace },
+          { key: '/instagram', icon: <InstagramOutlined />, label: 'صندوق اینستاگرام', disabled: !canViewInstagramInbox },
+          { key: '/ai', icon: <AiSparkleIcon className="h-4 w-4" />, label: 'دستیار هوشمند سازمان', disabled: !communicationsAccess.canUseWorkspace },
+          { key: '/secretariat_documents', label: 'نامه‌ها و مکاتبات', disabled: !canViewModule('secretariat_documents') },
+          { key: `/${ADVERTISING_CAMPAIGNS_MODULE_ID}`, label: 'کمپین‌های تبلیغاتی', disabled: !canViewAdvertisingCampaigns },
+        ],
+      },
       {
         key: 'resources',
         icon: <AppstoreOutlined />,
@@ -690,6 +715,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/shelves', label: 'قفسه‌ها' },
           { key: '/stock_transfers', label: 'تردد کالاها و حواله‌ها', disabled: !canViewModule('stock_transfers') },
           { key: '/billboards', label: 'تبلیغات محیطی', disabled: false },
+          { key: '/delivery_forms', label: 'فرم‌های تحویل', disabled: !canViewModule('delivery_forms') },
         ]
       },
       {
@@ -754,15 +780,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/leave_requests', label: 'مرخصی‌ها' },
           { key: '/overtime_requests', label: 'اضافه‌کاری‌ها' },
           { key: '/mission_requests', label: 'ماموریت‌ها' },
-        ]
-      },
-      {
-        key: 'secretariat',
-        icon: <FileTextOutlined />,
-        label: 'دبیرخانه',
-        children: [
-          { key: '/secretariat_documents', label: 'نامه‌ها و مکاتبات', disabled: !canViewModule('secretariat_documents') },
-          { key: '/delivery_forms', label: 'فرم‌های تحویل', disabled: !canViewModule('delivery_forms') },
         ]
       },
       {
@@ -833,7 +850,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       }] : []),
       { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
     ];
-  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewCustomerClub, canViewInstagramInbox, canViewOrgKnowledge, canViewReportsHub, canViewSaasAdmin, communicationsAccess.canUseWorkspace, rolePermissions]);
+  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewAdvertisingCampaigns, canViewCustomerClub, canViewInstagramInbox, canViewOrgKnowledge, canViewReportsHub, canViewSaasAdmin, communicationsAccess.canUseWorkspace, rolePermissions]);
 
   const visibleRawMenuItems = useMemo<NonNullable<MenuProps['items']>>(() => {
     const canShowMenuKey = (key?: string) => {
@@ -852,6 +869,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           return canViewReportsHub;
         case '/customer-club':
           return canViewCustomerClub;
+        case `/${ADVERTISING_CAMPAIGNS_MODULE_ID}`:
+          return canViewAdvertisingCampaigns;
         case '/messages':
         case '/instagram':
         case '/ai':
@@ -910,6 +929,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     rawMenuItems,
     canViewAccountingDashboard,
     canViewAccountingSettings,
+    canViewAdvertisingCampaigns,
     canViewCashBank,
     canViewCustomerClub,
     canViewReportsHub,
@@ -1085,7 +1105,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       production_orders: 'تولید',
       invoices: 'فروش',
       purchase_invoices: 'خرید',
-      secretariat_documents: 'دبیرخانه',
+      secretariat_documents: 'نامه‌ها',
       delivery_forms: 'تحویل',
       expense_documents: 'هزینه',
       assets: 'اموال',
@@ -1104,6 +1124,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       warehouses: 'انبار',
       stock_transfers: 'حواله',
       marketing_leads: 'لیدها',
+      advertising_campaigns: 'کمپین‌ها',
       process_runs: 'فرآیند',
       process_templates: 'الگوها',
       attendance_logs: 'تردد',
@@ -1133,6 +1154,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       warehouses: <BankOutlined />,
       stock_transfers: <BankOutlined />,
       marketing_leads: <FileTextOutlined />,
+      advertising_campaigns: <BarChartOutlined />,
       attendance_logs: <CheckSquareOutlined />,
       process_runs: <NodeIndexOutlined />,
       process_templates: <NodeIndexOutlined />,

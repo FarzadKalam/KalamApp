@@ -57,6 +57,7 @@ export type WorkflowActionType =
   | 'send_bale_bot'
   | 'send_rubika_bot'
   | 'update_record'
+  | 'update_related_record'
   | 'lock_record'
   | 'send_to_next_stages'
   | 'send_to_specific_stage'
@@ -182,6 +183,7 @@ export const actionTypeOptions: Array<{ label: string; value: WorkflowActionType
   { label: 'اجرای پرامپت هوش مصنوعی', value: 'run_ai_prompt' },
   { label: 'ارسال پیام توسط بات', value: 'send_bot_message' },
   { label: 'به‌روزرسانی رکورد', value: 'update_record' },
+  { label: 'ویرایش رکورد مرتبط', value: 'update_related_record' },
   { label: 'قفل کردن رکورد', value: 'lock_record' },
   { label: 'ارسال اطلاعات به مراحل بعد', value: 'send_to_next_stages' },
   { label: 'ارسال اطلاعات به مرحله خاص', value: 'send_to_specific_stage' },

@@ -15,6 +15,9 @@ import { shelvesConfig } from './modules/shelvesConfig';
 import { stockTransfersConfig } from './modules/stockTransfersConfig';
 import { secretariatDocumentsConfig } from './modules/secretariatDocumentsConfig';
 import { deliveryFormsConfig } from './modules/deliveryFormsConfig';
+import { advertisingCampaignsConfig } from './modules/advertisingCampaignsConfig';
+import { advertisingCampaignToolsConfig } from './modules/advertisingCampaignToolsConfig';
+import { advertisingCampaignResponsesConfig } from './modules/advertisingCampaignResponsesConfig';
 import { calculationFormulasModule } from './modules/calculationFormulasConfig';
 import { productionGroupOrdersModule } from './modules/productionGroupOrdersConfig';
 import { projectsModule } from './modules/projectsConfig';
@@ -165,6 +168,9 @@ export const BASE_MODULES: Record<string, ModuleDefinition> = {
   stock_transfers: stockTransfersConfig,
   secretariat_documents: secretariatDocumentsConfig,
   delivery_forms: deliveryFormsConfig,
+  advertising_campaigns: advertisingCampaignsConfig,
+  advertising_campaign_tools: advertisingCampaignToolsConfig,
+  advertising_campaign_responses: advertisingCampaignResponsesConfig,
   production_boms: productionBomModule,
   production_orders: productionOrderModule,
   production_group_orders: productionGroupOrdersModule,

@@ -6,6 +6,7 @@ type SmsSettings = {
   username?: string;
   password?: string;
   api_key?: string;
+  sender_numbers?: string[];
   sender_number?: string;
   body_id?: string;
   credit_url?: string;
@@ -41,7 +42,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'send-sms-2026-04-15-01';
+const FUNCTION_BUILD = 'send-sms-2026-08-25-02';
 
 const json = (status: number, payload: Record<string, any>) =>
   new Response(JSON.stringify({ build: FUNCTION_BUILD, ...payload }), {
@@ -127,6 +128,26 @@ const normalizeDigitsToEnglish = (value: unknown): string =>
   String(value ?? '')
     .replace(/[\u06F0-\u06F9]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0))
     .replace(/[\u0660-\u0669]/g, (digit) => String(digit.charCodeAt(0) - 0x0660));
+
+const normalizeSenderNumber = (value: unknown) => normalizeDigitsToEnglish(value).trim().replace(/\s+/g, '');
+
+const getConfiguredSenderNumbers = (settings: SmsSettings | null | undefined) => {
+  const values = Array.isArray(settings?.sender_numbers) ? settings?.sender_numbers : [];
+  const normalized = values.map(normalizeSenderNumber).filter((value) => /^\d{3,20}$/.test(value));
+  const legacy = normalizeSenderNumber(settings?.sender_number);
+  if (/^\d{3,20}$/.test(legacy)) normalized.unshift(legacy);
+  return Array.from(new Set(normalized));
+};
+
+const selectConfiguredSender = (settings: SmsSettings, requested?: unknown): SmsSettings => {
+  const configured = getConfiguredSenderNumbers(settings);
+  const requestedSender = normalizeSenderNumber(requested);
+  const selected = requestedSender || configured[0] || '';
+  if (!selected || !configured.includes(selected)) {
+    throw new Error('خط ارسال انتخاب‌شده در تنظیمات پیامک این سازمان ثبت نشده است.');
+  }
+  return { ...settings, sender_numbers: configured, sender_number: selected };
+};
 
 const decodeSoapScalar = (raw: string) => {
   const text = String(raw || '').trim();
@@ -338,14 +359,23 @@ const getSoapMethodUrl = (url: string, method: string) => {
   }
 };
 
-const getSmsSettings = async (supabaseUrl: string, serviceRoleKey: string, overrideSettings?: SmsSettings | null) => {
-  if (overrideSettings && typeof overrideSettings === 'object') {
+const getSmsSettings = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  orgId: string | null,
+  overrideSettings?: SmsSettings | null,
+  allowOverride = false,
+) => {
+  if (allowOverride && overrideSettings && typeof overrideSettings === 'object') {
     return mergeEnvFallbackSmsSettings(overrideSettings);
   }
+
+  if (!orgId) throw new Error('سازمان جاری برای تنظیمات پیامک مشخص نیست.');
 
   const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/integration_settings`);
   url.searchParams.set('connection_type', 'eq.sms');
   url.searchParams.set('is_active', 'eq.true');
+  url.searchParams.set('org_id', `eq.${orgId}`);
   url.searchParams.set('select', 'id,settings');
   url.searchParams.set('limit', '1');
 
@@ -411,6 +441,33 @@ const verifyUserToken = async (supabaseUrl: string, serviceRoleKey: string, user
   const user = await response.json();
   if (!user?.id) throw new Error('نشست شما معتبر نیست. دوباره وارد حساب کاربری شوید.');
   return user;
+};
+
+const getUserSmsContext = async (supabaseUrl: string, serviceRoleKey: string, userId: string) => {
+  const profilesUrl = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/profiles`);
+  profilesUrl.searchParams.set('id', `eq.${userId}`);
+  profilesUrl.searchParams.set('select', 'org_id,role_id');
+  profilesUrl.searchParams.set('limit', '1');
+  const profileResponse = await fetch(profilesUrl.toString(), { headers: getServiceHeaders(serviceRoleKey) });
+  const profileRows = profileResponse.ok ? await profileResponse.json() : [];
+  const profile = Array.isArray(profileRows) ? profileRows[0] : null;
+  const orgId = String(profile?.org_id || '').trim();
+  if (!orgId) throw new Error('سازمان کاربر برای ارسال پیامک مشخص نیست.');
+
+  let canManageSettings = false;
+  const roleId = String(profile?.role_id || '').trim();
+  if (roleId) {
+    const rolesUrl = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/org_roles`);
+    rolesUrl.searchParams.set('id', `eq.${roleId}`);
+    rolesUrl.searchParams.set('org_id', `eq.${orgId}`);
+    rolesUrl.searchParams.set('select', 'permissions');
+    rolesUrl.searchParams.set('limit', '1');
+    const roleResponse = await fetch(rolesUrl.toString(), { headers: getServiceHeaders(serviceRoleKey) });
+    const roleRows = roleResponse.ok ? await roleResponse.json() : [];
+    const permissions = Array.isArray(roleRows) ? roleRows[0]?.permissions || {} : {};
+    canManageSettings = permissions?.__settings_tabs?.view !== false && permissions?.__settings_tabs?.edit !== false;
+  }
+  return { orgId, canManageSettings };
 };
 
 type HookLeafEntry = { path: string; value: string };
@@ -1344,6 +1401,8 @@ Deno.serve(async (req) => {
       action?: 'send' | 'get_balance';
       to?: string[];
       text?: string;
+      sender_number?: string;
+      org_id?: string;
       overrideSettings?: SmsSettings;
     } & AuthHookPayload);
 
@@ -1357,7 +1416,9 @@ Deno.serve(async (req) => {
     const token = hasBearerToken ? authHeader.replace(/^Bearer\s+/i, '').trim() : '';
     const isInternalServiceRequest =
       token === serviceRoleKey &&
-      String(req.headers.get('x-kalam-internal') || '').trim() === 'workflow-interval-runner';
+      ['workflow-interval-runner', 'campaign-runtime'].includes(
+        String(req.headers.get('x-kalam-internal') || '').trim(),
+      );
     const action = String(body?.action || 'send').trim();
     const isSupabaseAuthHookPayload = !hasBearerToken && !!body?.user && (!!body?.sms || !!hookOtp);
     const isHookSmsPayload =
@@ -1438,15 +1499,27 @@ Deno.serve(async (req) => {
       return json(401, { success: false, message: 'Missing bearer token' });
     }
 
+    let requestOrgId = String(body?.org_id || '').trim() || null;
+    let allowSettingsOverride = isInternalServiceRequest;
     if (!isInternalServiceRequest) {
       try {
-        await verifyUserToken(supabaseUrl, serviceRoleKey, token);
+        const user = await verifyUserToken(supabaseUrl, serviceRoleKey, token);
+        const context = await getUserSmsContext(supabaseUrl, serviceRoleKey, String(user.id));
+        requestOrgId = context.orgId;
+        allowSettingsOverride = context.canManageSettings;
       } catch {
         return json(401, { success: false, message: 'Unauthorized' });
       }
     }
 
-    const settings = await getSmsSettings(supabaseUrl, serviceRoleKey, body?.overrideSettings);
+    const rawSettings = await getSmsSettings(
+      supabaseUrl,
+      serviceRoleKey,
+      requestOrgId,
+      body?.overrideSettings,
+      allowSettingsOverride,
+    );
+    const settings = selectConfiguredSender(rawSettings, body?.sender_number);
 
     if (action === 'get_balance') {
       const result = await getSmsCreditWithProvider(settings);
@@ -1461,7 +1534,7 @@ Deno.serve(async (req) => {
 
     const sentResult = await sendSmsWithProviderFallback(to, text, settings);
 
-    return json(200, { success: true, ...sentResult });
+    return json(200, { success: true, ...sentResult, sender_number: settings.sender_number });
   } catch (error: any) {
     console.error('[send-sms] error', String(error?.message || error));
     return json(400, {

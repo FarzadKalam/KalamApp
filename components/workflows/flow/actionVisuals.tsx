@@ -41,6 +41,7 @@ const ACTION_VISUALS: Partial<Record<WorkflowActionType, ActionVisual>> = {
   send_to_specific_stage: { icon: <ForwardOutlined />, accentColor: '#0891b2' },
   create_standalone_record: { icon: <PlusSquareOutlined />, accentColor: '#84cc16' },
   create_related_record: { icon: <NodeIndexOutlined />, accentColor: '#10b981' },
+  update_related_record: { icon: <NodeIndexOutlined />, accentColor: '#0ea5e9' },
   copy_process_template: { icon: <CopyOutlined />, accentColor: '#a855f7' },
   execute_process: { icon: <PlayCircleOutlined />, accentColor: '#ec4899' },
   activate_next_process_stage: { icon: <PlayCircleOutlined />, accentColor: '#0ea5e9' },

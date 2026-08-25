@@ -53,6 +53,8 @@ import { isMarketingHost, isSaasAppHost } from "./utils/hostRouting";
 import { signOutLocalSession } from "./utils/authSession";
 import { readCachedLoadingBrandIdentity, type LoadingBrandIdentity } from './utils/loadingBrand';
 import { PublicThemeBoundary } from './components/public/PublicThemeBoundary';
+import { hasCurrentOrgPlanModule } from './utils/saasPlanModules';
+import { ADVERTISING_CAMPAIGNS_MODULE_ID } from './utils/advertisingCampaigns';
 
 declare global {
   interface Window {
@@ -134,6 +136,7 @@ const loadCmsPageEditor = () => import("./pages/SaasAdmin/CmsPageEditor");
 const loadApiDocsPage = () => import("./pages/ApiDocsPage");
 const loadMessagesPage = () => import("./pages/MessagesPage");
 const loadInstagramInboxPage = () => import("./pages/InstagramInboxPage");
+const loadCampaignWizardPage = () => import("./pages/CampaignWizardPage");
 const loadLayout = () => import("./components/Layout");
 
 const ProfilePage = lazy(loadProfilePage);
@@ -192,7 +195,26 @@ const CmsPageEditor = lazy(loadCmsPageEditor);
 const ApiDocsPage = lazy(loadApiDocsPage);
 const MessagesPage = lazy(loadMessagesPage);
 const InstagramInboxPage = lazy(loadInstagramInboxPage);
+const CampaignWizardPage = lazy(loadCampaignWizardPage);
 const Layout = lazy(loadLayout);
+
+const AdvertisingCampaignModuleGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void hasCurrentOrgPlanModule(ADVERTISING_CAMPAIGNS_MODULE_ID, { defaultEnabled: false })
+      .then((nextEnabled) => { if (active) setEnabled(nextEnabled); })
+      .catch(() => { if (active) setEnabled(false); });
+    return () => { active = false; };
+  }, []);
+
+  if (enabled === null) {
+    return <div className="flex min-h-[35vh] items-center justify-center text-sm text-gray-500">در حال بررسی دسترسی کمپین‌های تبلیغاتی…</div>;
+  }
+  if (!enabled) return <Navigate to="/" replace />;
+  return <>{children}</>;
+};
 
 const preloadAuthenticatedRouteChunk = (targetPath?: string): Promise<unknown> => {
   const pathname = String(targetPath || "").split(/[?#]/)[0] || "/";
@@ -209,6 +231,7 @@ const preloadAuthenticatedRouteChunk = (targetPath?: string): Promise<unknown> =
   else if (section === "settings") preloader = loadSettingsPage;
   else if (section === "messages") preloader = loadMessagesPage;
   else if (section === "instagram") preloader = loadInstagramInboxPage;
+  else if (section === ADVERTISING_CAMPAIGNS_MODULE_ID && detail) preloader = loadCampaignWizardPage;
   else if (section === "gallery") preloader = loadFilesGalleryPage;
   else if (section === "org-knowledge") preloader = loadOrgKnowledgePage;
   else if (section === "recycle-bin") preloader = loadRecycleBinPage;
@@ -673,6 +696,9 @@ function App() {
 
   const ModuleListRouteResolver: React.FC = () => {
     const { moduleId: routeModuleId } = useParams();
+    if (routeModuleId === ADVERTISING_CAMPAIGNS_MODULE_ID) {
+      return <AdvertisingCampaignModuleGate><ModuleListRefine key="module-list:advertising_campaigns" /></AdvertisingCampaignModuleGate>;
+    }
     if (routeModuleId === "chart_of_accounts") {
       return <ChartOfAccountsTreePage />;
     }
@@ -684,6 +710,9 @@ function App() {
 
   const ModuleCreateRouteResolver: React.FC = () => {
     const { moduleId: routeModuleId } = useParams();
+    if (routeModuleId === ADVERTISING_CAMPAIGNS_MODULE_ID) {
+      return <AdvertisingCampaignModuleGate><CampaignWizardPage /></AdvertisingCampaignModuleGate>;
+    }
     if (routeModuleId && MODULES[routeModuleId]?.disableCreate) {
       return <ModuleListRefine key={`module-list:${routeModuleId}`} />;
     }
@@ -701,6 +730,9 @@ function App() {
 
   const ModuleShowRouteResolver: React.FC = () => {
     const { moduleId: routeModuleId } = useParams();
+    if (routeModuleId === ADVERTISING_CAMPAIGNS_MODULE_ID) {
+      return <AdvertisingCampaignModuleGate><CampaignWizardPage /></AdvertisingCampaignModuleGate>;
+    }
     if (routeModuleId && MODULES[routeModuleId]?.disableDetailView) {
       return <ModuleListRefine key={`module-list:${routeModuleId}`} />;
     }

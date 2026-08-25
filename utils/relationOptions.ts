@@ -50,6 +50,50 @@ type RelationSourceConfig = {
   requireDetail?: boolean;
 };
 
+const RELATION_FILTER_FIELD_REF_KEY = '$field';
+
+type ResolvedRelationFilter = {
+  filter?: Record<string, any>;
+  unresolved: boolean;
+};
+
+/**
+ * فیلتر رابطه می‌تواند مقدار یک فیلد دیگر همان فرم را به‌صورت
+ * `{ $field: 'field_key' }` دریافت کند. اگر فیلد مبنا هنوز مقدار نداشته
+ * باشد، رابطه باید fail-closed بماند و هیچ گزینه‌ای را بدون فیلتر نشان ندهد.
+ */
+export const resolveRelationFilterFieldRefs = (
+  filter?: Record<string, any>,
+  allValues?: Record<string, any>,
+): ResolvedRelationFilter => {
+  if (!filter || Object.keys(filter).length === 0) {
+    return { filter, unresolved: false };
+  }
+
+  let unresolved = false;
+  const resolvedEntries = Object.entries(filter).map(([key, rawValue]) => {
+    if (
+      rawValue
+      && typeof rawValue === 'object'
+      && !Array.isArray(rawValue)
+      && Object.prototype.hasOwnProperty.call(rawValue, RELATION_FILTER_FIELD_REF_KEY)
+    ) {
+      const sourceField = String(rawValue[RELATION_FILTER_FIELD_REF_KEY] || '').trim();
+      const sourceValue = sourceField ? allValues?.[sourceField] : undefined;
+      if (sourceValue === undefined || sourceValue === null || sourceValue === '') {
+        unresolved = true;
+      }
+      return [key, sourceValue] as const;
+    }
+    return [key, rawValue] as const;
+  });
+
+  return {
+    filter: Object.fromEntries(resolvedEntries),
+    unresolved,
+  };
+};
+
 const normalizeSelectFieldList = (fields: string[]) =>
   Array.from(
     new Set(
@@ -607,11 +651,13 @@ export const fetchRelationOptionsForField = async (
       )
     );
 
+    const resolvedFilter = resolveRelationFilterFieldRefs(source.filter, allValues);
     return {
       moduleName: sourceTargetModule,
       tableName: sourceTargetTable,
       targetField: sourceTargetField,
-      filter: source.filter,
+      filter: resolvedFilter.filter,
+      skipBecauseFilterIsUnresolved: resolvedFilter.unresolved,
       searchFields,
       numericSearchFields,
       selectVariants: buildSelectVariants(selectFields, buildModuleExtraSelect(sourceTargetModule, sourceTargetField)),
@@ -648,6 +694,9 @@ export const fetchRelationOptionsForField = async (
     const allOptions: any[] = [];
 
     for (const source of sources as any[]) {
+      if (source.skipBecauseFilterIsUnresolved) {
+        continue;
+      }
       let scopedFilter = source.filter;
       if (
         source.moduleName === 'chart_of_accounts' &&

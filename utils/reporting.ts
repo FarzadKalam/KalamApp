@@ -720,6 +720,7 @@ export const getSummableReportFields = (
 export const getReportModuleOptions = (permissions?: Record<string, { view?: boolean }> | null) =>
   Object.values(MODULES)
     .filter((module) => !isSaasAdminModuleId(module.id))
+    .filter((module) => module.registryVisibility?.reports !== false)
     .filter((module) => !REPORT_BUILDER_EXCLUDED_MODULE_IDS.has(module.id))
     .filter((module) => permissions?.[module.id]?.view !== false)
     .map((module) => ({

@@ -247,6 +247,16 @@ export const getDefaultActionConfig = (type: WorkflowActionType): Record<string,
     case 'update_record':
     case 'lock_record':
       return { target_scope: 'current_record', relation_field_key: '', stage_node_key: '', reason: '' };
+    case 'update_related_record':
+      return {
+        target_module_id: '',
+        target_module_id_field: 'source_module_id',
+        target_record_id_field: 'source_record_id',
+        field: '',
+        value_mode: 'static',
+        value: null,
+        source_field: '',
+      };
     case 'send_to_next_stages':
       return { field: '', value_mode: 'static', value: null, source_field: '' };
     case 'send_to_specific_stage':
@@ -1325,9 +1335,14 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 
   const renderUpdateValueInput = (action: WorkflowAction) => {
     const targetFieldKey = String(action?.config?.field || '');
-    const targetFields = ['send_to_next_stages', 'send_to_specific_stage'].includes(action.type)
-      ? (Array.isArray(nextStageFields) ? nextStageFields : [])
-      : currentModuleFields;
+    const relatedTargetModule = action.type === 'update_related_record'
+      ? MODULES[String(action?.config?.target_module_id || '').trim()]
+      : undefined;
+    const targetFields = action.type === 'update_related_record'
+      ? (relatedTargetModule?.fields || [])
+      : ['send_to_next_stages', 'send_to_specific_stage'].includes(action.type)
+        ? (Array.isArray(nextStageFields) ? nextStageFields : [])
+        : currentModuleFields;
     const targetField = targetFields.find((f) => f.key === targetFieldKey);
     const valueMode = String(action?.config?.value_mode || 'static');
     if (valueMode === 'from_source' || valueMode === 'from_related') {
@@ -2562,6 +2577,105 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             </div>
             {renderUpdateValueInput(action)}
           </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (actionType === 'update_related_record') {
+      const targetModuleId = String(config.target_module_id || '').trim();
+      const targetModule = targetModuleId ? MODULES[targetModuleId] : undefined;
+      const targetFields = (targetModule?.fields || []).filter(
+        (field) => !!field?.key && field?.nature !== 'system' && field?.readonly !== true
+      );
+      const targetField = targetFields.find((field) => field.key === String(config.field || '').trim());
+      const recordIdFieldOptions = currentModuleFields
+        .filter((field) => !!field?.key)
+        .map((field) => ({ label: getFieldLabel(field), value: field.key }));
+      return (
+        <div className="space-y-2">
+          <Alert
+            type="info"
+            showIcon
+            message="رکورد مقصد فقط در همان سازمان و با شناسه موجود در فیلد انتخاب‌شده ویرایش می‌شود."
+          />
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-12">
+            <div className="space-y-1 md:col-span-4">
+              <div className="text-xs text-gray-500">ماژول رکورد مرتبط</div>
+              <Select
+                {...commonSelectProps}
+                value={config.target_module_id || undefined}
+                disabled={disabled}
+                options={moduleOptions}
+                onChange={(nextVal) => updateActionConfig(action.id, {
+                  target_module_id: nextVal,
+                  field: '',
+                  value: null,
+                  source_field: '',
+                })}
+                placeholder="انتخاب ماژول"
+              />
+            </div>
+            <div className="space-y-1 md:col-span-4">
+              <div className="text-xs text-gray-500">فیلد شناسه رکورد مرتبط</div>
+              {currentModuleId === 'advertising_campaign_responses' ? (
+                <div className="flex h-10 items-center rounded-md border border-gray-200 px-3 text-sm text-gray-600 dark:border-gray-700 dark:text-gray-300">
+                  مخاطب تطبیق‌یافته پیام ورودی
+                </div>
+              ) : (
+                <Select
+                  {...commonSelectProps}
+                  value={config.target_record_id_field || undefined}
+                  disabled={disabled}
+                  options={recordIdFieldOptions}
+                  onChange={(nextVal) => updateActionConfig(action.id, { target_record_id_field: nextVal })}
+                  placeholder="مثلاً شناسه رکورد منبع"
+                />
+              )}
+            </div>
+            <div className="space-y-1 md:col-span-4">
+              <div className="text-xs text-gray-500">فیلد مقصد</div>
+              <Select
+                {...commonSelectProps}
+                value={config.field || undefined}
+                disabled={disabled || !targetModuleId}
+                options={targetFields.map((field) => ({ label: getFieldLabel(field), value: field.key }))}
+                onChange={(nextVal) => {
+                  const selectedField = targetFields.find((field) => field.key === String(nextVal || '').trim());
+                  updateActionConfig(action.id, {
+                    field: nextVal,
+                    target_field_type: selectedField?.type || '',
+                    value: null,
+                    source_field: '',
+                    value_mode: 'static',
+                  });
+                }}
+                placeholder="فیلد قابل ویرایش"
+              />
+            </div>
+            <div className="space-y-1 md:col-span-4">
+              <div className="text-xs text-gray-500">نوع مقدار</div>
+              <Select
+                {...commonSelectProps}
+                value={config.value_mode || 'static'}
+                disabled={disabled || !config.field}
+                options={[
+                  { label: 'مقدار ثابت', value: 'static' },
+                  { label: 'از فیلد رکورد جاری', value: 'from_source' },
+                  { label: 'از فیلد رکورد مرتبط', value: 'from_related' },
+                  ...(canFieldUseFormula(targetField) ? [{ label: 'محاسبه با فرمول', value: 'formula' }] : []),
+                ]}
+                onChange={(nextVal) => updateActionConfig(action.id, {
+                  value_mode: nextVal,
+                  value: null,
+                  source_field: '',
+                })}
+              />
+            </div>
+            <div className="space-y-1 md:col-span-8">
+              <div className="text-xs text-gray-500">مقدار نهایی</div>
+              {renderUpdateValueInput(action)}
+            </div>
           </div>
         </div>
       );

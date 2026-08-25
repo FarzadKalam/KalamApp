@@ -389,6 +389,13 @@ export interface ModuleDefinition {
   table: string;
   resource?: string;
   systemManaged?: boolean;
+  /** کنترل نمایش entityهای پشتیبان در سطوح مرکزی؛ مقدار پیش‌فرض هر سطح true است. */
+  registryVisibility?: {
+    globalSearch?: boolean;
+    moduleSettings?: boolean;
+    reports?: boolean;
+    workflows?: boolean;
+  };
   disableCreate?: boolean;
   disableDetailView?: boolean;
   disableInlineFieldEditing?: boolean;

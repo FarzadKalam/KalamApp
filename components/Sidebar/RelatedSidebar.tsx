@@ -5,7 +5,8 @@ import {
     RightOutlined, SkinOutlined, AppstoreOutlined,
     BgColorsOutlined, ScissorOutlined, ToolOutlined, ExperimentOutlined,
     DropboxOutlined, UsergroupAddOutlined, CreditCardOutlined, NodeIndexOutlined,
-    ShoppingOutlined, ShoppingCartOutlined, ProjectOutlined, PhoneOutlined, MessageOutlined, WalletOutlined
+    ShoppingOutlined, ShoppingCartOutlined, ProjectOutlined, PhoneOutlined, MessageOutlined, WalletOutlined,
+    TeamOutlined, UserAddOutlined
 } from '@ant-design/icons';
 import ActivityPanel from './ActivityPanel';
 import RelatedRecordsPanel from './RelatedRecordsPanel';
@@ -34,6 +35,8 @@ const iconMap: Record<string, React.ReactNode> = {
   'PhoneOutlined': <PhoneOutlined />,
   'MessageOutlined': <MessageOutlined />,
   'WalletOutlined': <WalletOutlined />,
+  'TeamOutlined': <TeamOutlined />,
+  'UserAddOutlined': <UserAddOutlined />,
   'BgColorsOutlined': <BgColorsOutlined />,
   'ScissorOutlined': <ScissorOutlined />,
   'ToolOutlined': <ToolOutlined />,

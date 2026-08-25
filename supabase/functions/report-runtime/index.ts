@@ -77,13 +77,17 @@ const RUNTIME_MAX_ROWS = 100000;
 const REPORT_TABLE_SOURCE_PREFIX = "__report_table__";
 const REPORT_TABLE_FIELD_PREFIX = "__report_table_field__";
 const REPORT_TABLE_RELATION_FIELD_PREFIX = "__report_table_relation_field__";
+// شناسهٔ جدول‌های فرعی از شناسهٔ ستون‌های SQL جداست. بعضی بلوک‌های معتبر
+// (مثل invoiceItems) camelCase هستند و تنها برای خواندن کلید JSON به کار می‌روند.
+const safeTableBlockId = (value: unknown) =>
+  /^[A-Za-z][A-Za-z0-9_]*$/.test(String(value || "").trim());
 const parseTableSource = (value: unknown) => {
   const raw = String(value || "").trim();
   if (!raw.startsWith(REPORT_TABLE_SOURCE_PREFIX)) return null;
   const blockId = raw
     .slice(REPORT_TABLE_SOURCE_PREFIX.length)
     .replace(/^::/, "");
-  return safeColumn(blockId) ? blockId : null;
+  return safeTableBlockId(blockId) ? blockId : null;
 };
 const parseTableField = (value: unknown) => {
   const raw = String(value || "").trim();
@@ -91,7 +95,7 @@ const parseTableField = (value: unknown) => {
   const [blockId, columnKey] = raw
     .slice(REPORT_TABLE_FIELD_PREFIX.length)
     .split("::");
-  return safeColumn(blockId) && safeColumn(columnKey)
+  return safeTableBlockId(blockId) && safeTableBlockId(columnKey)
     ? { blockId, columnKey }
     : null;
 };
@@ -101,15 +105,50 @@ const parseTableRelationField = (value: unknown) => {
   const [blockId, relationColumnKey, targetModuleId, targetFieldKey] = raw
     .slice(REPORT_TABLE_RELATION_FIELD_PREFIX.length)
     .split("::");
-  return safeColumn(blockId) &&
-    safeColumn(relationColumnKey) &&
+  return safeTableBlockId(blockId) &&
+    safeTableBlockId(relationColumnKey) &&
     targetModuleId &&
     safeColumn(targetFieldKey)
     ? { blockId, relationColumnKey, targetModuleId, targetFieldKey }
     : null;
 };
+// سازگاری با گزارش‌هایی که پیش از اصلاح سازنده، خود جدول فرعی را به‌عنوان
+// معیار ذخیره کرده‌اند. هر ردیف بازشدهٔ جدول در این حالت یک واحد محسوب می‌شود.
+const parseTableBlockMetric = (value: unknown) => {
+  const raw = String(value || "").trim();
+  if (!raw.startsWith(REPORT_TABLE_FIELD_PREFIX)) return null;
+  const blockId = raw.slice(REPORT_TABLE_FIELD_PREFIX.length);
+  return !blockId.includes("::") && safeTableBlockId(blockId) ? blockId : null;
+};
 const isTableRuntimeField = (value: unknown) =>
-  !!parseTableField(value) || !!parseTableRelationField(value);
+  !!parseTableField(value) ||
+  !!parseTableRelationField(value) ||
+  !!parseTableBlockMetric(value);
+const uniqueMetrics = (metrics: any[]) => {
+  const seen = new Set<string>();
+  return metrics.filter((metric) => {
+    const key = metricId(metric);
+    if (!String(metric?.report_id || "") || !String(metric?.metric_key || "") || seen.has(key))
+      return false;
+    seen.add(key);
+    return true;
+  });
+};
+const repairLegacyTableBlockMetrics = (metrics: any[], sourceConfig: any) => {
+  const sourceMetricFields = Array.from(
+    new Set(readArray(sourceConfig?.metric_fields).map((field) => String(field || ""))),
+  );
+  return metrics.map((metric) => {
+    const blockId = parseTableBlockMetric(metric?.metric_key);
+    if (!blockId) return metric;
+    const matches = sourceMetricFields.filter(
+      (field) => parseTableField(field)?.blockId === blockId,
+    );
+    // اگر گزارش مرجع فقط یک فیلد از این جدول دارد، کلید ناقص نسخهٔ قبلی را
+    // بدون دخالت کاربر به همان فیلد کامل برمی‌گردانیم.
+    return matches.length === 1 ? { ...metric, metric_key: matches[0] } : metric;
+  });
+};
 const normalizeNestedRows = (value: unknown) => {
   if (Array.isArray(value))
     return value.filter((item) => item && typeof item === "object");
@@ -608,24 +647,30 @@ Deno.serve(async (request) => {
       const sourceScope = explicitViewer
         ? "all"
         : String(modulePermission.record_scope || "all");
-      const selected =
-        mode === "difference"
-          ? [
-              ...readArray(config.increase_metrics),
-              ...readArray(config.decrease_metrics),
-            ].filter((item: any) => String(item?.report_id || "") === sourceId)
-          : mode === "percentage"
-            ? [
-                config.percentage_target_metric,
-                config.percentage_total_metric,
-              ].filter(
-                (item: any) => String(item?.report_id || "") === sourceId,
-              )
-            : ["sum", "avg"].includes(String(sourceConfig.metric_type || ""))
-              ? readArray(sourceConfig.metric_fields).map(
-                  (metric_key: string) => ({ report_id: sourceId, metric_key }),
-                )
-              : [{ report_id: sourceId, metric_key: "__count" }];
+      const selected = uniqueMetrics(
+        repairLegacyTableBlockMetrics(
+          uniqueMetrics(
+            mode === "difference"
+              ? [
+                  ...readArray(config.increase_metrics),
+                  ...readArray(config.decrease_metrics),
+                ].filter((item: any) => String(item?.report_id || "") === sourceId)
+              : mode === "percentage"
+                ? [
+                    config.percentage_target_metric,
+                    config.percentage_total_metric,
+                  ].filter(
+                    (item: any) => String(item?.report_id || "") === sourceId,
+                  )
+                : ["sum", "avg"].includes(String(sourceConfig.metric_type || ""))
+                  ? readArray(sourceConfig.metric_fields).map(
+                      (metric_key: string) => ({ report_id: sourceId, metric_key }),
+                    )
+                  : [{ report_id: sourceId, metric_key: "__count" }],
+          ),
+          sourceConfig,
+        ),
+      );
       if (!selected.length) continue;
       const groupFields = groupings.map((grouping: any) =>
         String(grouping?.source_fields?.[sourceId] || grouping?.field || ""),
@@ -652,7 +697,7 @@ Deno.serve(async (request) => {
       // مستقل برای شمارش و محاسبه می‌کند. این‌جا هر دو منبع را در نظر می‌گیریم.
       const selectedTableBlockIds = readArray(sourceConfig.secondary_module_ids)
         .map(parseTableSource)
-        .filter(safeColumn);
+        .filter(safeTableBlockId);
       const tableRuntimeKeys = Array.from(
         new Set(
           [
@@ -680,9 +725,9 @@ Deno.serve(async (request) => {
             .map((field) => {
               const plain = parseTableField(field);
               const relation = parseTableRelationField(field);
-              return plain?.blockId || relation?.blockId || "";
+              return plain?.blockId || relation?.blockId || parseTableBlockMetric(field) || "";
             })
-            .filter(safeColumn),
+            .filter(safeTableBlockId),
         ]),
       );
       const metricFields = selected
@@ -697,8 +742,8 @@ Deno.serve(async (request) => {
       )
         return json(422, { error: "unsupported_report_metric" });
       const runtimeFieldKeys = Array.from(new Set([
-        ...groupFields.filter((field) => field !== "__report_date__"),
-        ...selected.map((item: any) => String(item?.metric_key || "")).filter((field) => field !== "__count"),
+        ...groupFields.filter((field) => field !== "__report_date__" && !parseTableBlockMetric(field)),
+        ...selected.map((item: any) => String(item?.metric_key || "")).filter((field) => field !== "__count" && !parseTableBlockMetric(field)),
       ]));
       const runtimeBaseColumns = conditionBaseColumns(runtimeFieldKeys.map((field) => ({ field })));
       const columns = Array.from(
@@ -825,7 +870,9 @@ Deno.serve(async (request) => {
           };
           bucket.row_count += 1;
           for (const metric of selected) {
-            const value = metric.metric_key === "__count" ? 1 : Number(valueFor(String(metric.metric_key || "")) || 0);
+            const value = metric.metric_key === "__count" || parseTableBlockMetric(metric.metric_key)
+              ? 1
+              : Number(valueFor(String(metric.metric_key || "")) || 0);
             if (!Number.isFinite(value)) continue;
             const id = metricId(metric);
             const resultMetricKey = mode === "normal" ? String(metric.metric_key) : id;

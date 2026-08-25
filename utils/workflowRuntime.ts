@@ -1075,6 +1075,7 @@ type WorkflowSmsSendArgs = {
   customerId?: string;
   title?: string;
   metadata?: Record<string, any>;
+  senderNumber?: string;
 };
 
 const sendSms = async ({
@@ -1085,6 +1086,7 @@ const sendSms = async ({
   customerId,
   title,
   metadata,
+  senderNumber,
 }: WorkflowSmsSendArgs) => {
   try {
     await sendSmsViaGateway({
@@ -1096,6 +1098,7 @@ const sendSms = async ({
       customerId,
       title,
       metadata,
+      senderNumber,
     });
   } catch (error) {
     const useLegacyFallback = String(import.meta.env.VITE_SMS_LEGACY_FALLBACK || '').trim() === 'true';
@@ -2338,6 +2341,7 @@ export const executeWorkflowAction = async (
       recordId: currentRecord?.id ? String(currentRecord.id) : undefined,
       customerId: moduleId === 'customers' && currentRecord?.id ? String(currentRecord.id) : undefined,
       title: 'ارسال پیامک خودکار',
+      senderNumber: String(config.sender_number || '').trim() || undefined,
       metadata: {
         source_type: 'workflow',
         workflow_action_type: 'send_sms',
@@ -2748,6 +2752,33 @@ export const executeWorkflowAction = async (
     if (error) throw error;
     currentRecord[fieldKey] = nextValue;
     Object.assign(currentRecord, patch);
+    return;
+  }
+
+  if (action.type === 'update_related_record') {
+    const configuredModuleId = String(config.target_module_id || '').trim();
+    const moduleFieldKey = String(config.target_module_id_field || 'source_module_id').trim();
+    const targetModuleId = configuredModuleId || String(currentRecord?.[moduleFieldKey] || '').trim();
+    const recordIdFieldKey = String(config.target_record_id_field || 'source_record_id').trim();
+    const targetRecordId = String(currentRecord?.[recordIdFieldKey] || '').trim();
+    const targetFieldKey = String(config.field || '').trim();
+    if (!targetModuleId || !MODULES[targetModuleId] || !targetRecordId || !targetFieldKey) return;
+    const targetField = (MODULES[targetModuleId]?.fields || []).find((field) => field.key === targetFieldKey);
+    if (!targetField || targetField.readonly === true || targetField.nature === 'system') return;
+
+    const nextValue = await resolveConfiguredActionValue(moduleId, config, currentRecord);
+    const user = await getCurrentAuthUser();
+    const orgId = await resolveWorkflowOrgId(currentRecord);
+    if (!orgId) throw new Error('سازمان رکورد مرتبط برای ویرایش مشخص نیست.');
+    const patch: Record<string, any> = { updated_at: new Date().toISOString() };
+    applyWorkflowPayloadValue(patch, targetFieldKey, nextValue);
+    if (user?.id) patch.updated_by = user.id;
+    const { error } = await supabase
+      .from(getModuleTable(targetModuleId))
+      .update(patch)
+      .eq('id', targetRecordId)
+      .eq('org_id', orgId);
+    if (error) throw error;
     return;
   }
 

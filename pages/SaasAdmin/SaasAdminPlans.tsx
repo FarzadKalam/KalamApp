@@ -33,6 +33,7 @@ import {
   DownOutlined,
 } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
+import { ADVERTISING_CAMPAIGNS_MODULE_ID, CAMPAIGN_PLAN_FEATURES } from '../../utils/advertisingCampaigns';
 
 const { Title, Text } = Typography;
 const { Panel } = Collapse;
@@ -114,9 +115,15 @@ const MODULE_GROUPS: { label: string; modules: { id: string; label: string }[] }
     ],
   },
   {
-    label: 'دبیرخانه',
+    label: 'ارتباطات',
     modules: [
       { id: 'secretariat_documents', label: 'نامه‌ها و مکاتبات' },
+      { id: ADVERTISING_CAMPAIGNS_MODULE_ID, label: 'کمپین‌های تبلیغاتی' },
+    ],
+  },
+  {
+    label: 'منابع',
+    modules: [
       { id: 'delivery_forms', label: 'فرم‌های تحویل' },
     ],
   },
@@ -157,6 +164,12 @@ const FEATURE_OPTIONS = [
   { id: 'online_invoice_payment', label: 'پرداخت آنلاین فاکتورهای عمومی' },
   { id: 'online_catalog', label: 'کاتالوگ آنلاین' },
   { id: 'instagram_inbox', label: 'صندوق اینستاگرام' },
+  { id: CAMPAIGN_PLAN_FEATURES.sms, label: 'کمپین پیامکی' },
+  { id: CAMPAIGN_PLAN_FEATURES.email, label: 'کمپین ایمیلی' },
+  { id: CAMPAIGN_PLAN_FEATURES.bot_group, label: 'کمپین گروه بات' },
+  { id: CAMPAIGN_PLAN_FEATURES.bot_private, label: 'کمپین پی‌وی بات' },
+  { id: CAMPAIGN_PLAN_FEATURES.instagram_post, label: 'کمپین پست اینستاگرام' },
+  { id: CAMPAIGN_PLAN_FEATURES.voice_call, label: 'کمپین تماس صوتی (فعلاً غیرفعال)' },
   { id: 'saas_account_billing', label: 'مدیریت حساب و اشتراک' },
   { id: 'ai_credit_topup', label: 'شارژ اعتبار هوش مصنوعی' },
   { id: 'sms_credit_topup', label: 'شارژ اعتبار پیامک' },

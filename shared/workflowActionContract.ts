@@ -29,6 +29,7 @@ export const WORKFLOW_ACTION_CONTRACTS: Record<string, WorkflowActionContract> =
   send_to_specific_stage: { templateFields: [], valueModes: ['static', 'from_source', 'from_related', 'formula'] },
   create_standalone_record: { templateFields: [], valueModes: ['static', 'from_source', 'from_related', 'formula'] },
   create_related_record: { templateFields: [], valueModes: ['static', 'from_source', 'from_related', 'formula'] },
+  update_related_record: { templateFields: [], valueModes: ['static', 'from_source', 'from_related', 'formula'] },
   copy_process_template: { templateFields: [] },
   execute_process: { templateFields: [] },
   activate_next_process_stage: { templateFields: [] },

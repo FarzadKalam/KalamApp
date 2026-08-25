@@ -1,4 +1,7 @@
+import { ADVERTISING_CAMPAIGNS_MODULE_ID } from './advertisingCampaigns';
+
 const GLOBAL_ASSIGNEE_MODULE_IDS = [
+  ADVERTISING_CAMPAIGNS_MODULE_ID,
   'billboards',
   'products',
   'product_bundles',
@@ -72,6 +75,7 @@ const GLOBAL_ASSIGNEE_MODULE_IDS = [
 ] as const;
 
 const GLOBAL_ROLE_ASSIGNEE_MODULE_IDS = [
+  ADVERTISING_CAMPAIGNS_MODULE_ID,
   'billboards',
   'products',
   'product_bundles',

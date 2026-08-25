@@ -2200,8 +2200,28 @@ async function getOrgSmsSettings(url: string, key: string, orgId: string): Promi
     username: Deno.env.get('MELIPAYAMAK_USERNAME') || settings.username || '',
     password: Deno.env.get('MELIPAYAMAK_PASSWORD') || settings.password || '',
     api_key: Deno.env.get('MELIPAYAMAK_API_KEY') || settings.api_key || '',
+    sender_numbers: Array.isArray(settings.sender_numbers) ? settings.sender_numbers : [],
     sender_number: Deno.env.get('MELIPAYAMAK_SENDER_NUMBER') || settings.sender_number || '',
   };
+}
+
+const normalizeSmsSenderLine = (value: unknown) => String(value || '')
+  .trim()
+  .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+  .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+  .replace(/\s+/g, '');
+
+function selectOrgSmsSender(settings: any, requested?: unknown) {
+  const configured = [
+    ...(Array.isArray(settings?.sender_numbers) ? settings.sender_numbers : []),
+    settings?.sender_number,
+  ].map(normalizeSmsSenderLine).filter((value) => /^\d{3,20}$/.test(value));
+  const uniqueConfigured = Array.from(new Set(configured));
+  const selected = normalizeSmsSenderLine(requested) || uniqueConfigured[0] || '';
+  if (!selected || !uniqueConfigured.includes(selected)) {
+    throw new Error('خط ارسال انتخاب‌شده در تنظیمات پیامک سازمان ثبت نشده است.');
+  }
+  return { ...settings, sender_numbers: uniqueConfigured, sender_number: selected };
 }
 
 async function insertSmsAudit(url: string, key: string, payload: {
@@ -2265,7 +2285,8 @@ async function sendSmsViaGatewayFunction(
   key: string,
   settings: any,
   recipients: string[],
-  text: string
+  text: string,
+  orgId: string,
 ): Promise<string[]> {
   const functionUrl = `${url.replace(/\/+$/, '')}/functions/v1/send-sms`;
   const response = await fetch(functionUrl, {
@@ -2278,6 +2299,8 @@ async function sendSmsViaGatewayFunction(
       action: 'send',
       to: recipients,
       text,
+      org_id: orgId,
+      sender_number: settings.sender_number,
       overrideSettings: settings,
     }),
     signal: AbortSignal.timeout(20000),
@@ -2321,7 +2344,7 @@ async function sendSmsViaProvider(settings: any, to: string[], text: string, url
 
   if (url && key) {
     try {
-      return await sendSmsViaGatewayFunction(url, key, settings, recipients, text);
+      return await sendSmsViaGatewayFunction(url, key, settings, recipients, text, String(settings.org_id || ''));
     } catch (gatewayError: any) {
       console.warn('[workflow-runner] send-sms gateway failed, falling back to direct SOAP:', String(gatewayError?.message || gatewayError));
     }
@@ -4177,7 +4200,8 @@ async function executeAction(
     const manuals = (config.manual_numbers || []).map(normalizePhone).filter(isValidIranMobile);
     const allRecipients = Array.from(new Set([...recipients, ...manuals]));
     if (allRecipients.length === 0) return actionResult(action, 'skipped', 'گیرنده معتبر برای پیامک پیدا نشد.', { recipient_count: 0 });
-    const smsSettings = await getOrgSmsSettings(url, key, orgId);
+    const rawSmsSettings = await getOrgSmsSettings(url, key, orgId);
+    const smsSettings = rawSmsSettings ? { ...selectOrgSmsSender(rawSmsSettings, config.sender_number), org_id: orgId } : null;
     if (!smsSettings) {
       await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: allRecipients, text, status: 'skipped', errorMessage: 'تنظیمات پیامک فعال نیست.', metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
       return actionResult(action, 'skipped', 'تنظیمات پیامک فعال نیست.', { recipient_count: allRecipients.length });
@@ -4467,6 +4491,44 @@ async function executeAction(
     return changed
       ? actionResult(action, 'success', undefined, { affected_count: 1, details: { field: fieldKey } })
       : actionResult(action, 'skipped', 'مقدار رکورد تغییری نکرده است.');
+  }
+
+  // ── update_related_record ─────────────────────────────────────────────
+  if (action.type === 'update_related_record') {
+    const moduleFieldKey = String(config.target_module_id_field || 'source_module_id').trim();
+    const targetModuleId = String(config.target_module_id || record?.[moduleFieldKey] || '').trim();
+    const recordIdFieldKey = String(config.target_record_id_field || 'source_record_id').trim();
+    const targetRecordId = String(record?.[recordIdFieldKey] || '').trim();
+    const targetFieldKey = String(config.field || '').trim();
+    if (!targetModuleId || !targetRecordId || !isSafeWorkflowMutationFieldKey(targetFieldKey)) {
+      return actionResult(action, 'skipped', 'ماژول، رکورد یا فیلد مرتبط برای ویرایش مشخص نیست.');
+    }
+    assertWorkflowMutationModule(targetModuleId);
+    const targetRows = await dbGet(
+      url,
+      key,
+      `${getModuleTable(targetModuleId)}?id=eq.${encodeURIComponent(targetRecordId)}&org_id=eq.${encodeURIComponent(orgId)}&select=id&limit=1`,
+    ).catch(() => []);
+    if (targetRows.length === 0) {
+      return actionResult(action, 'skipped', 'رکورد مرتبط در سازمان جاری پیدا نشد.');
+    }
+    const nextValue = await resolveConfiguredActionValue(config, record, url, key, orgId, moduleId);
+    const patch = targetFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY || targetFieldKey === 'assignee_id'
+      ? normalizeWorkflowAssigneeValue(nextValue)
+      : { [targetFieldKey]: nextValue };
+    const changed = await updateRecord(
+      url,
+      key,
+      targetModuleId,
+      targetRecordId,
+      patch,
+      actorUserId,
+      orgId,
+      String(config.__workflow_origin_execution_key || '').trim() || null,
+    );
+    return changed
+      ? actionResult(action, 'success', undefined, { affected_count: 1, details: { target_module_id: targetModuleId, field: targetFieldKey } })
+      : actionResult(action, 'skipped', 'مقدار رکورد مرتبط تغییری نکرده است.');
   }
 
   // ── create_standalone_record ──────────────────────────────────────────
@@ -6219,6 +6281,158 @@ async function completeEventFirstMatchExecution(
   });
 }
 
+const CAMPAIGN_INBOUND_ACTION_TYPES = new Set([
+  'create_related_record', 'create_standalone_record', 'update_related_record',
+]);
+const CAMPAIGN_ATTRIBUTION_MODULES = new Set(['marketing_leads', 'customers', 'invoices']);
+
+const normalizeCampaignInboundText = (value: unknown) => String(value ?? '')
+  .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+  .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+  .replace(/\s+/g, '')
+  .trim()
+  .toLowerCase();
+
+const campaignInboundRuleMatches = (config: Record<string, any>, message: unknown) => {
+  if (config?.inbound_enabled !== true) return false;
+  const expected = (Array.isArray(config?.inbound_expected_values) ? config.inbound_expected_values : [])
+    .map(normalizeCampaignInboundText)
+    .filter(Boolean);
+  if (expected.length === 0) return false;
+  const actual = normalizeCampaignInboundText(message);
+  return String(config?.inbound_match_mode || 'exact').trim().toLowerCase() === 'contains'
+    ? expected.some((item: string) => actual.includes(item))
+    : expected.includes(actual);
+};
+
+const withCampaignAttributionMappings = (
+  action: WorkflowAction,
+  response: Record<string, any>,
+): WorkflowAction => {
+  const config = { ...(action?.config || {}) };
+  const targetModuleId = String(config.target_module_id || '').trim();
+  if (!CAMPAIGN_ATTRIBUTION_MODULES.has(targetModuleId)) {
+    throw new Error('ماژول مقصد اقدام پیام ورودی مجاز نیست.');
+  }
+  if (action.type === 'update_related_record') {
+    const sourceModuleId = String(response?.source_module_id || '').trim();
+    const sourceRecordId = String(response?.source_record_id || '').trim();
+    if (!sourceRecordId || sourceModuleId !== targetModuleId) {
+      throw new Error('رکورد مرتبط پیام ورودی با ماژول مقصد تطبیق ندارد.');
+    }
+    return {
+      ...action,
+      config: {
+        ...config,
+        target_module_id: sourceModuleId,
+        target_module_id_field: 'source_module_id',
+        target_record_id_field: 'source_record_id',
+      },
+    } as WorkflowAction;
+  }
+
+  const sourceField = targetModuleId === 'marketing_leads'
+    ? 'source' : targetModuleId === 'customers' ? 'lead_source' : 'sale_source';
+  const forcedFields = new Set(['advertising_campaign_id', 'advertising_campaign_tool_id', sourceField]);
+  const fieldMappings = (Array.isArray(config.field_mappings) ? config.field_mappings : [])
+    .filter((mapping: any) => !forcedFields.has(String(mapping?.field || '').trim()));
+  fieldMappings.push(
+    { field: 'advertising_campaign_id', mode: 'from_source', source_field: 'campaign_id' },
+    { field: 'advertising_campaign_tool_id', mode: 'from_source', source_field: 'tool_id' },
+    { field: sourceField, mode: 'static', value: 'advertising_campaign' },
+  );
+  return { ...action, config: { ...config, field_mappings: fieldMappings } } as WorkflowAction;
+};
+
+async function runCampaignInboundConfiguredActions(
+  url: string,
+  key: string,
+  responseSnapshot: Record<string, any>,
+  eventExecutionKey: string | null,
+  eventAttempt: number,
+) {
+  const responseId = String(responseSnapshot?.id || '').trim();
+  const orgId = String(responseSnapshot?.org_id || '').trim();
+  if (!responseId || !orgId) return { status: 'skipped', executedActions: 0 };
+  const responseRows = await dbGet(url, key,
+    `advertising_campaign_responses?id=eq.${encodeURIComponent(responseId)}&org_id=eq.${encodeURIComponent(orgId)}&select=*&limit=1`
+  ).catch(() => []);
+  const response = responseRows[0];
+  if (!response || !['pending', 'processing'].includes(String(response.workflow_status || ''))) {
+    return { status: 'skipped', executedActions: 0 };
+  }
+  const toolRows = await dbGet(url, key,
+    `advertising_campaign_tools?id=eq.${encodeURIComponent(String(response.tool_id || ''))}&org_id=eq.${encodeURIComponent(orgId)}&select=id,tool_type,config,created_by,updated_by&limit=1`
+  ).catch(() => []);
+  const tool = toolRows[0];
+  const config = tool?.config && typeof tool.config === 'object' ? tool.config : {};
+  const [moduleEnabled, featureEnabled] = await Promise.all([
+    callRpc(url, key, 'org_has_plan_module', { p_org_id: orgId, p_module_id: 'advertising_campaigns', p_default_enabled: false }).catch(() => false),
+    callRpc(url, key, 'org_has_plan_feature', { p_org_id: orgId, p_feature_key: 'campaign_sms', p_default_enabled: false }).catch(() => false),
+  ]);
+  const ruleMatches = response?.match_status === 'matched'
+    && response?.metadata?.inbound_rule_match === true
+    && campaignInboundRuleMatches(config, response.message_text);
+  if (!tool || tool.tool_type !== 'sms' || moduleEnabled !== true || featureEnabled !== true || !ruleMatches) {
+    await dbPatch(url, key, 'advertising_campaign_responses', `id=eq.${encodeURIComponent(responseId)}&org_id=eq.${encodeURIComponent(orgId)}`, {
+      workflow_status: 'ignored',
+      metadata: { ...(response.metadata || {}), configured_actions_status: 'ignored' },
+    });
+    return { status: 'ignored', executedActions: 0 };
+  }
+
+  const actions = (Array.isArray(config.inbound_actions) ? config.inbound_actions : [])
+    .filter((action: any) => action && CAMPAIGN_INBOUND_ACTION_TYPES.has(String(action.type || '')));
+  if (actions.length === 0) {
+    await dbPatch(url, key, 'advertising_campaign_responses', `id=eq.${encodeURIComponent(responseId)}&org_id=eq.${encodeURIComponent(orgId)}`, {
+      workflow_status: 'succeeded',
+      metadata: { ...(response.metadata || {}), configured_actions_status: 'no_actions' },
+    });
+    return { status: 'succeeded', executedActions: 0 };
+  }
+
+  await dbPatch(url, key, 'advertising_campaign_responses', `id=eq.${encodeURIComponent(responseId)}&org_id=eq.${encodeURIComponent(orgId)}`, {
+    workflow_status: 'processing',
+  });
+  const actorUserId = String(tool.updated_by || tool.created_by || '').trim() || null;
+  const results: ActionExecutionResult[] = [];
+  try {
+    for (const [actionIndex, rawAction] of actions.entries()) {
+      const action = withCampaignAttributionMappings(rawAction as WorkflowAction, response);
+      const result = await executeDurableAction(
+        {
+          ...action,
+          config: {
+            ...(action.config || {}),
+            __workflow_origin_execution_key: `campaign-inbound:${responseId}`,
+          },
+        } as WorkflowAction,
+        response,
+        'advertising_campaign_responses',
+        orgId,
+        url,
+        key,
+        actorUserId,
+        { parentExecutionKey: `campaign-inbound:${responseId}`, actionIndex },
+      );
+      results.push(result);
+      if (result.status === 'failed') throw new Error(result.message || 'اجرای اقدام پیام ورودی ناموفق بود.');
+    }
+    await dbPatch(url, key, 'advertising_campaign_responses', `id=eq.${encodeURIComponent(responseId)}&org_id=eq.${encodeURIComponent(orgId)}`, {
+      workflow_status: 'succeeded',
+      metadata: { ...(response.metadata || {}), configured_actions_status: 'succeeded', configured_action_results: results },
+    });
+    return { status: 'succeeded', executedActions: results.filter((item) => item.status === 'success').length };
+  } catch (error: any) {
+    const finalAttempt = eventAttempt >= 4;
+    await dbPatch(url, key, 'advertising_campaign_responses', `id=eq.${encodeURIComponent(responseId)}&org_id=eq.${encodeURIComponent(orgId)}`, {
+      workflow_status: finalAttempt ? 'failed' : 'pending',
+      metadata: { ...(response.metadata || {}), configured_actions_status: finalAttempt ? 'failed' : 'retrying', configured_action_results: results, configured_actions_error: String(error?.message || error).slice(0, 1000) },
+    }).catch(() => {});
+    throw error;
+  }
+}
+
 async function runEventTick(
   url: string,
   key: string,
@@ -6266,6 +6480,18 @@ async function runEventTick(
   if (await shouldSkipWorkflowIntervalRecord(url, key, orgId, table, record)) {
     stats.skippedRuns += 1;
     return stats;
+  }
+
+  if (moduleId === 'advertising_campaign_responses') {
+    const configuredActions = await runCampaignInboundConfiguredActions(
+      url,
+      key,
+      record,
+      String(body?.event_execution_key || '').trim() || null,
+      Math.max(0, Number(body?.event_attempts || 0)),
+    );
+    Object.assign(stats, { campaignInboundActions: configuredActions });
+    stats.executedActions += Number(configuredActions?.executedActions || 0);
   }
 
   const workflows = await fetchEventWorkflows(url, key, orgId, moduleId, event);
@@ -6991,6 +7217,7 @@ async function runQueuedWorkflowEvents(url: string, key: string): Promise<Record
         actor_user_id: queuedEvent.actor_user_id || null,
         origin_execution_key: queuedEvent.origin_execution_key || null,
         event_execution_key: queuedEvent.id,
+        event_attempts: queuedEvent.attempts || 0,
         source: 'server_event_queue',
       });
       await completeWorkflowEvent(url, key, queuedEvent.id, 'succeeded');

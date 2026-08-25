@@ -207,7 +207,12 @@ export const buildGlobalSearchModules = (
   permissions?: PermissionMap | null
 ): GlobalSearchModule[] =>
   Object.entries(modules)
-    .filter(([moduleId, module]) => module && !isSaasAdminModuleId(moduleId) && permissions?.[moduleId]?.view !== false)
+    .filter(([moduleId, module]) => (
+      module
+      && module.registryVisibility?.globalSearch !== false
+      && !isSaasAdminModuleId(moduleId)
+      && permissions?.[moduleId]?.view !== false
+    ))
     .map(([moduleId, module]) => {
       const recordScope = permissions?.[moduleId]?.record_scope ?? (permissions?.[moduleId]?.view === false ? 'own' : 'all');
       const fieldPermissions = permissions?.[moduleId]?.fields || {};

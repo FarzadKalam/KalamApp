@@ -9,6 +9,11 @@ import {
   ViewMode,
 } from '../types';
 import { createWebFormTemplateRecordSaver } from '../utils/webFormTemplateFormAdapter';
+import {
+  ADVERTISING_CAMPAIGN_SOURCE_OPTION,
+  createAdvertisingCampaignAttributionFields,
+  protectAdvertisingCampaignSourceField,
+} from './advertisingCampaignAttributionFields';
 
 const saveMarketingLeadRecord = createWebFormTemplateRecordSaver({
   moduleId: 'marketing_leads',
@@ -98,16 +103,22 @@ export const marketingLeadsModule: ModuleDefinition = {
       isTableColumn: true,
       nature: FieldNature.STANDARD,
     },
-    {
+    protectAdvertisingCampaignSourceField({
       key: 'source',
       labels: { fa: 'منبع سرنخ', en: 'Lead Source' },
       type: FieldType.SELECT,
       location: FieldLocation.HEADER,
       order: 6,
       dynamicOptionsCategory: 'lead_source',
+      options: [ADVERTISING_CAMPAIGN_SOURCE_OPTION],
       isTableColumn: true,
       nature: FieldNature.STANDARD,
-    },
+    }),
+    ...createAdvertisingCampaignAttributionFields({
+      sourceFieldKey: 'source',
+      location: FieldLocation.HEADER,
+      order: 6.01,
+    }),
     {
       key: 'survey_template_id',
       labels: { fa: 'قالب وب‌فرم', en: 'Web Form Template' },

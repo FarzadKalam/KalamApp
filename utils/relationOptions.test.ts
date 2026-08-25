@@ -4,7 +4,7 @@ vi.mock('./sessionCache', () => ({
   fetchSessionBootstrap: vi.fn(async () => ({ orgId: 'org-1' })),
 }));
 
-import { fetchRelationOptionsForField } from './relationOptions';
+import { fetchRelationOptionsForField, resolveRelationFilterFieldRefs } from './relationOptions';
 
 const createQuery = (rows: any[]) => {
   const query: any = {
@@ -20,6 +20,47 @@ const createQuery = (rows: any[]) => {
 };
 
 describe('fetchRelationOptionsForField', () => {
+  it('resolves field references in relation filters without exposing unscoped options', async () => {
+    expect(resolveRelationFilterFieldRefs(
+      { campaign_id: { $field: 'advertising_campaign_id' }, enabled: true },
+      { advertising_campaign_id: 'campaign-1' },
+    )).toEqual({
+      filter: { campaign_id: 'campaign-1', enabled: true },
+      unresolved: false,
+    });
+
+    expect(resolveRelationFilterFieldRefs(
+      { campaign_id: { $field: 'advertising_campaign_id' } },
+      {},
+    )).toEqual({
+      filter: { campaign_id: undefined },
+      unresolved: true,
+    });
+  });
+
+  it('does not query a dependent relation until its filter source has a value', async () => {
+    const supabase = {
+      rpc: vi.fn(),
+      from: vi.fn(),
+    };
+
+    const options = await fetchRelationOptionsForField(
+      supabase,
+      {
+        relationConfig: {
+          targetModule: 'advertising_campaign_tools',
+          targetField: 'title',
+          filter: { campaign_id: { $field: 'advertising_campaign_id' } },
+        },
+      },
+      { allValues: {} },
+    );
+
+    expect(options).toEqual([]);
+    expect(supabase.rpc).not.toHaveBeenCalled();
+    expect(supabase.from).not.toHaveBeenCalled();
+  });
+
   it('uses the local query path for modules with incompatible legacy RPC projections', async () => {
     const query = createQuery([{
       id: '10000000-0000-4000-8000-000000000001',

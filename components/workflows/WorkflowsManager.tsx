@@ -84,7 +84,7 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
   const moduleOptions = useMemo(
     () =>
       Object.values(MODULES)
-        .filter((module) => !isSaasAdminModuleId(module.id))
+        .filter((module) => !isSaasAdminModuleId(module.id) && module.registryVisibility?.workflows !== false)
         .map((module) => ({ label: module.titles.fa, value: module.id }))
         .sort((a, b) => a.label.localeCompare(b.label, 'fa')),
     []

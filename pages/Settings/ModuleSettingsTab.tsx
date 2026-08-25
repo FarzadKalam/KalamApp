@@ -458,6 +458,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
   const moduleOptions = useMemo(() => {
     return Object.values(MODULES)
       .filter((mod) => !isSaasAdminModuleId(mod.id))
+      .filter((mod) => mod.registryVisibility?.moduleSettings !== false)
       .filter((mod) => canOpenModuleSettings(mod.id))
       .map((mod) => ({
         value: mod.id,
@@ -467,7 +468,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
 
   const allModuleOptions = useMemo(
     () =>
-      Object.values(MODULES).filter((mod) => !isSaasAdminModuleId(mod.id)).map((mod) => ({
+      Object.values(MODULES).filter((mod) => !isSaasAdminModuleId(mod.id) && mod.registryVisibility?.moduleSettings !== false).map((mod) => ({
         value: mod.id,
         label: mod.titles.fa,
       })),

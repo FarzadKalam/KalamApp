@@ -1,6 +1,8 @@
 import { fetchSessionBootstrap } from './sessionCache';
+import { ADVERTISING_CAMPAIGNS_MODULE_ID } from './advertisingCampaigns';
 
 const MODULES_WITH_SYSTEM_CODE = new Set([
+  ADVERTISING_CAMPAIGNS_MODULE_ID,
   'attendance_logs',
   'barters',
   'billboards',

@@ -132,6 +132,11 @@ export const getWorkflowActionSummaryFa = (action: WorkflowAction | null | undef
         : '';
       return fieldKey ? `به‌روزرسانی فیلد «${fieldKey}»${stageText}` : 'فیلدی انتخاب نشده';
     }
+    case 'update_related_record': {
+      const target = getModuleTitleFa(config.target_module_id) || 'ماژول مرتبط رکورد';
+      const fieldKey = String(config.field || '').trim();
+      return fieldKey ? `ویرایش «${fieldKey}» در ${target}` : 'فیلد رکورد مرتبط انتخاب نشده';
+    }
     case 'create_standalone_record':
     case 'create_related_record': {
       const target = getModuleTitleFa(config.target_module_id);

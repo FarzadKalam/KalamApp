@@ -737,6 +737,51 @@ describe('formula-based workflow actions', () => {
     });
   });
 
+  it('updates an explicitly related record inside the current organization', async () => {
+    const updates: Array<{ filters: Array<[string, string]>; payload: Record<string, any> }> = [];
+    mocks.from.mockImplementation((table: string) => {
+      if (table === 'customers') {
+        return {
+          update: vi.fn((payload: Record<string, any>) => {
+            const filters: Array<[string, string]> = [];
+            const chain: any = {
+              eq: vi.fn((field: string, value: string) => {
+                filters.push([field, value]);
+                if (filters.length === 2) {
+                  updates.push({ filters, payload });
+                  return Promise.resolve({ data: null, error: null });
+                }
+                return chain;
+              }),
+            };
+            return chain;
+          }),
+        };
+      }
+      return makeQuery(table);
+    });
+
+    await executeWorkflowAction(
+      {
+        id: 'update-related-customer',
+        type: 'update_related_record',
+        config: {
+          target_module_id: 'customers',
+          target_record_id_field: 'source_record_id',
+          field: 'business_name',
+          value_mode: 'static',
+          value: 'active',
+        },
+      },
+      'advertising_campaign_responses',
+      { source_record_id: 'customer-1', org_id: 'org-1' },
+    );
+
+    expect(updates).toHaveLength(1);
+    expect(updates[0].filters).toEqual([['id', 'customer-1'], ['org_id', 'org-1']]);
+    expect(updates[0].payload).toEqual(expect.objectContaining({ business_name: 'active' }));
+  });
+
   it('creates a related record with a calculated formula mapping', async () => {
     const inserts: Array<Record<string, any>> = [];
 

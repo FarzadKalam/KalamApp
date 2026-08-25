@@ -61,6 +61,23 @@ const isMissingReportsTableError = (error: any) => {
   return text.includes('report_definitions') && (text.includes('does not exist') || text.includes('could not find'));
 };
 
+const parseReferenceMetricValue = (value: unknown): ReportReferenceMetric | null => {
+  const raw = String(value || '');
+  const separator = raw.indexOf('::');
+  if (separator <= 0 || separator >= raw.length - 2) return null;
+  return { report_id: raw.slice(0, separator), metric_key: raw.slice(separator + 2) };
+};
+
+const uniqueReferenceMetrics = (metrics: ReportReferenceMetric[]) => {
+  const seen = new Set<string>();
+  return metrics.filter((metric) => {
+    const key = `${String(metric?.report_id || '')}::${String(metric?.metric_key || '')}`;
+    if (!metric?.report_id || !metric?.metric_key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
 const ReportBuilderPage: React.FC = () => {
   const { reportId } = useParams();
   const isEditMode = !!reportId;
@@ -484,8 +501,8 @@ const ReportBuilderPage: React.FC = () => {
         viewer_role_ids: viewerRoleIds,
         show_in_members_dashboard: showInMembersDashboard,
         reference_report_ids: calculationMode === 'normal' ? [] : referenceReportIds,
-        increase_metrics: calculationMode === 'difference' ? increaseMetrics : [],
-        decrease_metrics: calculationMode === 'difference' ? decreaseMetrics : [],
+        increase_metrics: calculationMode === 'difference' ? uniqueReferenceMetrics(increaseMetrics) : [],
+        decrease_metrics: calculationMode === 'difference' ? uniqueReferenceMetrics(decreaseMetrics) : [],
         percentage_target_metric: calculationMode === 'percentage' ? percentageTargetMetric : null,
         percentage_total_metric: calculationMode === 'percentage' ? percentageTotalMetric : null,
         secondary_module_id: secondaryModuleIds[0] || null,
@@ -903,15 +920,15 @@ const ReportBuilderPage: React.FC = () => {
                 )}
                 </> : calculationMode === 'difference' ? <>
                   <div className="font-bold">مقادیر افزاینده</div>
-                  <Select className="w-full" mode="multiple" showSearch optionFilterProp="label" value={increaseMetrics.map((item) => `${item.report_id}::${item.metric_key}`)} options={referenceMetricOptions.filter((option) => !decreaseMetrics.some((item) => `${item.report_id}::${item.metric_key}` === option.value))} placeholder="نتیجه‌های اصلی گزارش‌های مرجع" onChange={(values) => setIncreaseMetrics((values || []).map((value) => { const [report_id, metric_key] = String(value).split('::'); return { report_id, metric_key }; }))} />
+                  <Select className="w-full" mode="multiple" showSearch optionFilterProp="label" value={increaseMetrics.map((item) => `${item.report_id}::${item.metric_key}`)} options={referenceMetricOptions.filter((option) => !decreaseMetrics.some((item) => `${item.report_id}::${item.metric_key}` === option.value))} placeholder="نتیجه‌های اصلی گزارش‌های مرجع" onChange={(values) => setIncreaseMetrics(uniqueReferenceMetrics((values || []).map(parseReferenceMetricValue).filter((item): item is ReportReferenceMetric => !!item)))} />
                   <div className="font-bold">مقادیر کاهنده</div>
-                  <Select className="w-full" mode="multiple" showSearch optionFilterProp="label" value={decreaseMetrics.map((item) => `${item.report_id}::${item.metric_key}`)} options={referenceMetricOptions.filter((option) => !increaseMetrics.some((item) => `${item.report_id}::${item.metric_key}` === option.value))} placeholder="نتیجه‌هایی که از مقدار افزاینده کم می‌شوند" onChange={(values) => setDecreaseMetrics((values || []).map((value) => { const [report_id, metric_key] = String(value).split('::'); return { report_id, metric_key }; }))} />
+                  <Select className="w-full" mode="multiple" showSearch optionFilterProp="label" value={decreaseMetrics.map((item) => `${item.report_id}::${item.metric_key}`)} options={referenceMetricOptions.filter((option) => !increaseMetrics.some((item) => `${item.report_id}::${item.metric_key}` === option.value))} placeholder="نتیجه‌هایی که از مقدار افزاینده کم می‌شوند" onChange={(values) => setDecreaseMetrics(uniqueReferenceMetrics((values || []).map(parseReferenceMetricValue).filter((item): item is ReportReferenceMetric => !!item)))} />
                   <Alert type="info" showIcon message="خالص هر گروه از مجموع افزاینده‌ها منهای مجموع کاهنده‌ها به‌دست می‌آید." />
                 </> : <>
                   <div className="font-bold">مقدار هدف (صورت)</div>
-                  <Select className="w-full" showSearch optionFilterProp="label" value={percentageTargetMetric ? `${percentageTargetMetric.report_id}::${percentageTargetMetric.metric_key}` : undefined} options={referenceMetricOptions.filter((option) => option.value !== (percentageTotalMetric ? `${percentageTotalMetric.report_id}::${percentageTotalMetric.metric_key}` : ''))} placeholder="خروجی هدف را انتخاب کنید" onChange={(value) => { const [report_id, metric_key] = String(value).split('::'); setPercentageTargetMetric({ report_id, metric_key }); }} />
+                  <Select className="w-full" showSearch optionFilterProp="label" value={percentageTargetMetric ? `${percentageTargetMetric.report_id}::${percentageTargetMetric.metric_key}` : undefined} options={referenceMetricOptions.filter((option) => option.value !== (percentageTotalMetric ? `${percentageTotalMetric.report_id}::${percentageTotalMetric.metric_key}` : ''))} placeholder="خروجی هدف را انتخاب کنید" onChange={(value) => setPercentageTargetMetric(parseReferenceMetricValue(value))} />
                   <div className="font-bold">مقدار کل (مخرج)</div>
-                  <Select className="w-full" showSearch optionFilterProp="label" value={percentageTotalMetric ? `${percentageTotalMetric.report_id}::${percentageTotalMetric.metric_key}` : undefined} options={referenceMetricOptions.filter((option) => option.value !== (percentageTargetMetric ? `${percentageTargetMetric.report_id}::${percentageTargetMetric.metric_key}` : ''))} placeholder="خروجی کل را انتخاب کنید" onChange={(value) => { const [report_id, metric_key] = String(value).split('::'); setPercentageTotalMetric({ report_id, metric_key }); }} />
+                  <Select className="w-full" showSearch optionFilterProp="label" value={percentageTotalMetric ? `${percentageTotalMetric.report_id}::${percentageTotalMetric.metric_key}` : undefined} options={referenceMetricOptions.filter((option) => option.value !== (percentageTargetMetric ? `${percentageTargetMetric.report_id}::${percentageTargetMetric.metric_key}` : ''))} placeholder="خروجی کل را انتخاب کنید" onChange={(value) => setPercentageTotalMetric(parseReferenceMetricValue(value))} />
                   <Alert type="info" showIcon message="نرخ هر گروه از مقدار هدف تقسیم بر مقدار کل محاسبه می‌شود." />
                 </>}
               </div>

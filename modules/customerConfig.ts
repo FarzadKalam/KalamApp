@@ -8,6 +8,11 @@ import {
   ModuleNature,
   ViewMode,
 } from '../types';
+import {
+  ADVERTISING_CAMPAIGN_SOURCE_OPTION,
+  createAdvertisingCampaignAttributionFields,
+  protectAdvertisingCampaignSourceField,
+} from './advertisingCampaignAttributionFields';
 
 export const customerModule: ModuleDefinition = {
   id: 'customers',
@@ -168,14 +173,20 @@ export const customerModule: ModuleDefinition = {
       order: 4.45,
       isTableColumn: true,
     },
-    {
+    protectAdvertisingCampaignSourceField({
       key: 'lead_source',
       labels: { fa: 'منبع سرنخ', en: 'Lead Source' },
       type: FieldType.SELECT,
       blockId: 'basic_info',
       order: 4.5,
       dynamicOptionsCategory: 'lead_source',
-    },
+      options: [ADVERTISING_CAMPAIGN_SOURCE_OPTION],
+    }),
+    ...createAdvertisingCampaignAttributionFields({
+      sourceFieldKey: 'lead_source',
+      blockId: 'basic_info',
+      order: 4.51,
+    }),
     {
       key: 'industry',
       labels: { fa: 'صنعت', en: 'Industry' },
