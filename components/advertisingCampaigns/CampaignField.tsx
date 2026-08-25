@@ -47,10 +47,15 @@ const CampaignField: React.FC<CampaignFieldProps> = ({
     readonly: Boolean(readonly || registeredField?.readonly),
     dynamicOptionsCategory: dynamicOptionsCategory || registeredField?.dynamicOptionsCategory,
   };
+  const isTemporalField = field.type === FieldType.DATE || field.type === FieldType.TIME || field.type === FieldType.DATETIME;
   return (
     <SmartFieldRenderer
+      key={isTemporalField ? `${fieldKey}:${String(value ?? '')}` : fieldKey}
       field={field}
-      value={value}
+      // همهٔ تاریخ‌های کمپین از همان SmartFieldRenderer و PersianDatePicker
+      // مرکزی استفاده می‌کنند. کلید کنترل‌شده، مقدار تأییدشده را بلافاصله
+      // پس از بستن picker دوباره به ورودی متصل می‌کند.
+      value={isTemporalField && value != null ? String(value) : value}
       onChange={onChange}
       forceEditMode={!readonly}
       compactMode={compact}

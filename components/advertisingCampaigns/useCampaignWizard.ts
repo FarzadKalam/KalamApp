@@ -154,7 +154,17 @@ export const useCampaignWizard = (campaignId?: string | null) => {
     const localSnapshot = readCampaignDraftSnapshot(localKey);
     if (mountedRef.current) setDraftStorageKey(localKey);
     if (isCreateMode) {
-      replaceDraft(localSnapshot?.draft || createEmptyDraft());
+      const nextDraft = localSnapshot?.draft || createEmptyDraft();
+      // همان پیش‌فرض فرم‌های مرکزی: مسئول رکورد جدید، کاربر واردشده است.
+      // فقط برای پیش‌نویس تازه اعمال می‌شود تا انتخاب قبلی کاربر بازنویسی نشود.
+      if (!localSnapshot && !nextDraft.campaign.assignee_id && !nextDraft.campaign.assignee_role_id && userId) {
+        nextDraft.campaign = {
+          ...nextDraft.campaign,
+          assignee_id: userId,
+          assignee_type: 'user',
+        };
+      }
+      replaceDraft(nextDraft);
       if (localSnapshot && mountedRef.current) setRecoveredLocalDraft(true);
       setAccessMode('full');
       setLoading(false);
@@ -378,7 +388,9 @@ export const useCampaignWizard = (campaignId?: string | null) => {
   useEffect(() => {
     if (!draft.campaign.id || accessMode !== 'full' || saveState !== 'dirty') return;
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
-    const timer = window.setTimeout(() => { void persist().catch(() => undefined); }, 1200);
+    // ذخیره محلی فوراً انجام می‌شود؛ ذخیرهٔ سرور را با فاصلهٔ بیشتری انجام
+    // می‌دهیم تا تایپ در فرم‌های طولانی باعث موجی از به‌روزرسانی ابزارها نشود.
+    const timer = window.setTimeout(() => { void persist().catch(() => undefined); }, 3500);
     return () => window.clearTimeout(timer);
   }, [accessMode, draft, persist, saveState]);
 

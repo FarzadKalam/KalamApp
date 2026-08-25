@@ -97,38 +97,55 @@ type ServerReportRuntime = {
   mode: 'normal' | 'difference' | 'percentage';
   groups: Array<{ key: string; label: string; row_count: number; increase: number; decrease: number; target: number; total: number; metrics: Record<string, number> }>;
   group_tree?: Array<{ key: string; label: string; row_count: number; increase: number; decrease: number; target: number; total: number; metrics: Record<string, number>; children?: any[] }>;
+  metric_sources?: Record<string, { module_id: string; metric_key: string }>;
   generated_at?: string;
 };
 
-const DifferenceBarChart: React.FC<{ groups: ServerReportRuntime['groups']; currencyLabel: string }> = ({ groups, currencyLabel }) => {
+const getCompositeMetricFieldType = (runtime: ServerReportRuntime, metrics: Array<{ report_id: string; metric_key: string }>) => {
+  const sources = runtime.metric_sources || {};
+  const selected = metrics
+    .map((metric) => sources[`${metric.report_id}::${metric.metric_key}`])
+    .filter((source): source is { module_id: string; metric_key: string } => !!source);
+  if (selected.length === 0 || selected.length !== metrics.length) return 'number';
+  return selected.every((source) => {
+    const tableField = parseReportTableFieldKey(source.metric_key);
+    const field = tableField
+      ? getReportTableBlock(source.module_id, `__report_table__${tableField.blockId}`)?.tableColumns?.find((column: any) => column.key === tableField.columnKey)
+      : MODULES[source.module_id]?.fields?.find((candidate: any) => candidate.key === source.metric_key);
+    return String(field?.type || '').toLowerCase() === 'price';
+  }) ? 'price' : 'number';
+};
+
+const DifferenceBarChart: React.FC<{ groups: ServerReportRuntime['groups']; currencyLabel: string; fieldType: string }> = ({ groups, currencyLabel, fieldType }) => {
   const maxValue = Math.max(1, ...groups.flatMap((row) => [Number(row.increase || 0), Number(row.decrease || 0)]));
   return <div className="space-y-3">{groups.map((row) => {
     const increase = Number(row.increase || 0); const decrease = Number(row.decrease || 0); const net = increase - decrease;
     const percent = increase > 0 ? (net / increase) * 100 : null;
-    return <div key={row.key} className="rounded-2xl border border-gray-200 p-4 dark:border-gray-700"><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><Text strong>{row.label || '-'}</Text><Text type={net < 0 ? 'danger' : 'success'}>خالص: {formatMetricValue(net, 'price', currencyLabel)}{percent === null ? '' : ` (${toPersianNumber(percent.toFixed(1))}٪)`}</Text></div><div className="space-y-2 text-xs"><div className="flex items-center gap-2"><span className="w-16 text-green-700">افزاینده</span><div className="h-3 flex-1 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800"><div className="h-full rounded-full bg-green-500" style={{ width: `${Math.max(2, increase / maxValue * 100)}%` }} /></div><span className="persian-number w-28 text-left">{formatMetricValue(increase, 'price', currencyLabel)}</span></div><div className="flex items-center gap-2"><span className="w-16 text-red-700">کاهنده</span><div className="h-3 flex-1 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800"><div className="h-full rounded-full bg-red-500" style={{ width: `${Math.max(2, decrease / maxValue * 100)}%` }} /></div><span className="persian-number w-28 text-left">{formatMetricValue(decrease, 'price', currencyLabel)}</span></div></div></div>;
+    return <div key={row.key} className="rounded-2xl border border-gray-200 p-4 dark:border-gray-700"><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><Text strong>{row.label || '-'}</Text><Text type={net < 0 ? 'danger' : 'success'}>خالص: {formatMetricValue(net, fieldType, currencyLabel)}{percent === null ? '' : ` (${toPersianNumber(percent.toFixed(1))}٪)`}</Text></div><div className="space-y-2 text-xs"><div className="flex items-center gap-2"><span className="w-16 text-green-700">افزاینده</span><div className="h-3 flex-1 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800"><div className="h-full rounded-full bg-green-500" style={{ width: `${Math.max(2, increase / maxValue * 100)}%` }} /></div><span className="persian-number w-28 text-left">{formatMetricValue(increase, fieldType, currencyLabel)}</span></div><div className="flex items-center gap-2"><span className="w-16 text-red-700">کاهنده</span><div className="h-3 flex-1 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800"><div className="h-full rounded-full bg-red-500" style={{ width: `${Math.max(2, decrease / maxValue * 100)}%` }} /></div><span className="persian-number w-28 text-left">{formatMetricValue(decrease, fieldType, currencyLabel)}</span></div></div></div>;
   })}</div>;
 };
 
-const ServerReportResultView: React.FC<{ report: ReportDefinitionRecord; runtime: ServerReportRuntime; currencyLabel: string; onRefresh: () => void; refreshing: boolean }> = ({ report, runtime, currencyLabel, onRefresh, refreshing }) => {
+const ServerReportResultView: React.FC<{ report: ReportDefinitionRecord; runtime: ServerReportRuntime; currencyLabel: string; onRefresh: () => void; refreshing: boolean; canEdit: boolean; onEdit: () => void; onCopy: () => void; onExport: () => void; onConfigurePrint: () => void; onPrint: () => void }> = ({ report, runtime, currencyLabel, onRefresh, refreshing, canEdit, onEdit, onCopy, onExport, onConfigurePrint, onPrint }) => {
   const config = normalizeReportConfig(report.config);
   const [view, setView] = useState<'table' | 'bar' | 'pie' | 'line'>(config.output_modes[0] || 'table');
   const groups = runtime.groups || [];
   const totals = groups.reduce((acc, row) => ({ increase: acc.increase + Number(row.increase || 0), decrease: acc.decrease + Number(row.decrease || 0), target: acc.target + Number(row.target || 0), total: acc.total + Number(row.total || 0), count: acc.count + Number(row.row_count || 0) }), { increase: 0, decrease: 0, target: 0, total: 0, count: 0 });
   const isDifference = runtime.mode === 'difference';
+  const differenceFieldType = getCompositeMetricFieldType(runtime, [...config.increase_metrics, ...config.decrease_metrics]);
   const isPercentage = runtime.mode === 'percentage';
   const value = (row: ServerReportRuntime['groups'][number]) => isDifference ? Number(row.increase || 0) - Number(row.decrease || 0) : isPercentage ? (Number(row.total || 0) > 0 ? Number(row.target || 0) / Number(row.total || 0) * 100 : 0) : Number(Object.values(row.metrics || {})[0] || row.row_count || 0);
   const items = groups.map((row) => ({ label: row.label || '-', value: value(row), tone: value(row) < 0 ? 'decrease' as const : 'increase' as const }));
   const increaseItems = groups.map((row) => ({ label: row.label || '-', value: Number(row.increase || 0), tone: 'increase' as const }));
   const decreaseItems = groups.map((row) => ({ label: row.label || '-', value: Number(row.decrease || 0), tone: 'decrease' as const }));
-  const columns: ColumnsType<ServerReportRuntime['groups'][number]> = isDifference ? [{ title: 'گروه', dataIndex: 'label', key: 'label' }, { title: 'افزاینده', key: 'increase', render: (_, row) => formatMetricValue(row.increase, 'price', currencyLabel) }, { title: 'کاهنده', key: 'decrease', render: (_, row) => formatMetricValue(row.decrease, 'price', currencyLabel) }, { title: 'خالص', key: 'net', render: (_, row) => formatMetricValue(Number(row.increase || 0) - Number(row.decrease || 0), 'price', currencyLabel) }, { title: 'درصد تغییر', key: 'change', render: (_, row) => Number(row.increase || 0) > 0 ? `${toPersianNumber(((Number(row.increase || 0) - Number(row.decrease || 0)) / Number(row.increase || 0) * 100).toFixed(1))}٪` : '—' }] : isPercentage ? [{ title: 'گروه', dataIndex: 'label', key: 'label' }, { title: 'مقدار هدف', dataIndex: 'target', key: 'target', render: (amount) => formatMetricValue(amount, 'number') }, { title: 'مقدار کل', dataIndex: 'total', key: 'total', render: (amount) => formatMetricValue(amount, 'number') }, { title: 'نرخ', key: 'rate', render: (_, row) => Number(row.total || 0) > 0 ? `${toPersianNumber((Number(row.target || 0) / Number(row.total || 0) * 100).toFixed(1))}٪` : '—' }] : [{ title: 'گروه', dataIndex: 'label', key: 'label' }, { title: 'تعداد', dataIndex: 'row_count', key: 'row_count', render: (amount) => toPersianNumber(amount) }, { title: 'نتیجه', key: 'metric', render: (_, row) => formatMetricValue(value(row), 'number', currencyLabel) }];
-  const pie = isDifference ? <div className="grid grid-cols-1 gap-5 xl:grid-cols-2"><div><Text strong>ترکیب افزاینده‌ها</Text><SimplePieChart items={increaseItems} valueLabel="افزاینده" valueFormatter={(amount) => formatMetricValue(amount, 'price', currencyLabel)} /></div><div><Text strong>ترکیب کاهنده‌ها</Text><SimplePieChart items={decreaseItems} valueLabel="کاهنده" valueFormatter={(amount) => formatMetricValue(amount, 'price', currencyLabel)} /></div></div> : isPercentage ? <SimplePieChart items={[{ label: 'هدف تحقق‌یافته', value: totals.target, tone: 'increase' }, { label: 'باقی‌مانده تا کل', value: Math.max(0, totals.total - totals.target), tone: 'decrease' }]} valueLabel="تقسیم هدف و کل" valueFormatter={(amount) => formatMetricValue(amount, 'number')} /> : <SimplePieChart items={items} valueLabel="مقدار" valueFormatter={(amount) => formatMetricValue(amount, 'number', currencyLabel)} />;
+  const columns: ColumnsType<ServerReportRuntime['groups'][number]> = isDifference ? [{ title: 'گروه', dataIndex: 'label', key: 'label' }, { title: 'افزاینده', key: 'increase', render: (_, row) => formatMetricValue(row.increase, differenceFieldType, currencyLabel) }, { title: 'کاهنده', key: 'decrease', render: (_, row) => formatMetricValue(row.decrease, differenceFieldType, currencyLabel) }, { title: 'خالص', key: 'net', render: (_, row) => formatMetricValue(Number(row.increase || 0) - Number(row.decrease || 0), differenceFieldType, currencyLabel) }, { title: 'درصد تغییر', key: 'change', render: (_, row) => Number(row.increase || 0) > 0 ? `${toPersianNumber(((Number(row.increase || 0) - Number(row.decrease || 0)) / Number(row.increase || 0) * 100).toFixed(1))}٪` : '—' }] : isPercentage ? [{ title: 'گروه', dataIndex: 'label', key: 'label' }, { title: 'مقدار هدف', dataIndex: 'target', key: 'target', render: (amount) => formatMetricValue(amount, 'number') }, { title: 'مقدار کل', dataIndex: 'total', key: 'total', render: (amount) => formatMetricValue(amount, 'number') }, { title: 'نرخ', key: 'rate', render: (_, row) => Number(row.total || 0) > 0 ? `${toPersianNumber((Number(row.target || 0) / Number(row.total || 0) * 100).toFixed(1))}٪` : '—' }] : [{ title: 'گروه', dataIndex: 'label', key: 'label' }, { title: 'تعداد', dataIndex: 'row_count', key: 'row_count', render: (amount) => toPersianNumber(amount) }, { title: 'نتیجه', key: 'metric', render: (_, row) => formatMetricValue(value(row), 'number', currencyLabel) }];
+  const pie = isDifference ? <div className="grid grid-cols-1 gap-5 xl:grid-cols-2"><div><Text strong>ترکیب افزاینده‌ها</Text><SimplePieChart items={increaseItems} valueLabel="افزاینده" valueFormatter={(amount) => formatMetricValue(amount, differenceFieldType, currencyLabel)} /></div><div><Text strong>ترکیب کاهنده‌ها</Text><SimplePieChart items={decreaseItems} valueLabel="کاهنده" valueFormatter={(amount) => formatMetricValue(amount, differenceFieldType, currencyLabel)} /></div></div> : isPercentage ? <SimplePieChart items={[{ label: 'هدف تحقق‌یافته', value: totals.target, tone: 'increase' }, { label: 'باقی‌مانده تا کل', value: Math.max(0, totals.total - totals.target), tone: 'decrease' }]} valueLabel="تقسیم هدف و کل" valueFormatter={(amount) => formatMetricValue(amount, 'number')} /> : <SimplePieChart items={items} valueLabel="مقدار" valueFormatter={(amount) => formatMetricValue(amount, 'number', currencyLabel)} />;
   const availableViews = config.output_modes;
   const visibleView = availableViews.includes(view) ? view : availableViews[0] || 'table';
   return <div className="mx-auto max-w-[1680px] animate-fadeIn p-4 md:p-8"><div className="rounded-[2rem] border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-[#1a1a1a]">
-    <div className="mb-6 flex flex-wrap items-start justify-between gap-3"><div><Title level={3} className="!mb-1">{report.name}</Title><Text className="text-gray-500">{report.description || 'بدون توضیح'}</Text></div><Button icon={<ReloadOutlined />} loading={refreshing} onClick={onRefresh}>به‌روزرسانی</Button></div>
-    <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">{isDifference ? <><div className="rounded-[1.5rem] border border-green-200 bg-green-50/70 p-4"><Statistic title="جمع افزاینده‌ها" value={totals.increase} formatter={() => formatMetricValue(totals.increase, 'price', currencyLabel)} /></div><div className="rounded-[1.5rem] border border-red-200 bg-red-50/70 p-4"><Statistic title="جمع کاهنده‌ها" value={totals.decrease} formatter={() => formatMetricValue(totals.decrease, 'price', currencyLabel)} /></div><div className={`rounded-[1.5rem] border p-4 ${totals.increase - totals.decrease < 0 ? 'border-red-200 bg-red-50/70' : 'border-green-200 bg-green-50/70'}`}><Statistic title="خالص" value={totals.increase - totals.decrease} formatter={() => formatMetricValue(totals.increase - totals.decrease, 'price', currencyLabel)} /></div></> : <><div className="rounded-[1.5rem] border border-gray-200 bg-gray-50/70 p-4"><Statistic title={isPercentage ? 'مقدار هدف' : 'تعداد نتیجه'} value={isPercentage ? totals.target : totals.count} formatter={() => isPercentage ? formatMetricValue(totals.target, 'number') : toPersianNumber(totals.count)} /></div><div className="rounded-[1.5rem] border border-gray-200 bg-gray-50/70 p-4"><Statistic title={isPercentage ? 'مقدار کل' : 'تعداد گروه‌ها'} value={isPercentage ? totals.total : groups.length} formatter={() => isPercentage ? formatMetricValue(totals.total, 'number') : toPersianNumber(groups.length)} /></div><div className="rounded-[1.5rem] border border-gray-200 bg-gray-50/70 p-4"><Statistic title={isPercentage ? 'نرخ' : 'آخرین محاسبه'} value={isPercentage ? (totals.total > 0 ? totals.target / totals.total * 100 : 0) : (runtime.generated_at ? formatLastUpdatedAt(runtime.generated_at) : '—')} suffix={isPercentage ? '٪' : undefined} /></div></>}</div>
+    <div className="mb-6 flex flex-wrap items-start justify-between gap-3"><div><Title level={3} className="!mb-1">{report.name}</Title><Text className="text-gray-500">{report.description || 'بدون توضیح'}</Text></div><div className="flex flex-wrap gap-2"><Button icon={<ReloadOutlined />} loading={refreshing} onClick={onRefresh}>به‌روزرسانی</Button><Button icon={<FileExcelOutlined />} onClick={onExport}>خروجی Excel</Button><Button icon={<EyeOutlined />} onClick={onConfigurePrint}>تنظیم چاپ</Button><Button icon={<PrinterOutlined />} onClick={onPrint}>چاپ</Button><Button icon={<CopyOutlined />} onClick={onCopy}>کپی</Button>{canEdit && <Button icon={<EditOutlined />} onClick={onEdit}>ویرایش</Button>}</div></div>
+    <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">{isDifference ? <><div className="rounded-[1.5rem] border border-gray-200 bg-gray-50/70 p-4 dark:border-gray-700 dark:bg-white/5"><Statistic title="جمع افزاینده‌ها" value={totals.increase} formatter={() => formatMetricValue(totals.increase, differenceFieldType, currencyLabel)} /></div><div className="rounded-[1.5rem] border border-gray-200 bg-gray-50/70 p-4 dark:border-gray-700 dark:bg-white/5"><Statistic title="جمع کاهنده‌ها" value={totals.decrease} formatter={() => formatMetricValue(totals.decrease, differenceFieldType, currencyLabel)} /></div><div className="rounded-[1.5rem] border border-gray-200 bg-gray-50/70 p-4 dark:border-gray-700 dark:bg-white/5"><Statistic title="تفاضل نهایی" value={totals.increase - totals.decrease} formatter={() => formatMetricValue(totals.increase - totals.decrease, differenceFieldType, currencyLabel)} /></div></> : <><div className="rounded-[1.5rem] border border-gray-200 bg-gray-50/70 p-4"><Statistic title={isPercentage ? 'مقدار هدف' : 'تعداد نتیجه'} value={isPercentage ? totals.target : totals.count} formatter={() => isPercentage ? formatMetricValue(totals.target, 'number') : toPersianNumber(totals.count)} /></div><div className="rounded-[1.5rem] border border-gray-200 bg-gray-50/70 p-4"><Statistic title={isPercentage ? 'مقدار کل' : 'تعداد گروه‌ها'} value={isPercentage ? totals.total : groups.length} formatter={() => isPercentage ? formatMetricValue(totals.total, 'number') : toPersianNumber(groups.length)} /></div><div className="rounded-[1.5rem] border border-gray-200 bg-gray-50/70 p-4"><Statistic title={isPercentage ? 'نرخ' : 'آخرین محاسبه'} value={isPercentage ? (totals.total > 0 ? totals.target / totals.total * 100 : 0) : (runtime.generated_at ? formatLastUpdatedAt(runtime.generated_at) : '—')} suffix={isPercentage ? '٪' : undefined} /></div></>}</div>
     {groups.length > 0 && <div className="mb-5 flex flex-wrap gap-2">{availableViews.includes('table') && <Button icon={<TableOutlined />} type={visibleView === 'table' ? 'primary' : 'default'} onClick={() => setView('table')}>جدول</Button>}{availableViews.includes('bar') && <Button icon={<BarChartOutlined />} type={visibleView === 'bar' ? 'primary' : 'default'} onClick={() => setView('bar')}>ستونی</Button>}{availableViews.includes('pie') && <Button icon={<PieChartOutlined />} type={visibleView === 'pie' ? 'primary' : 'default'} onClick={() => setView('pie')}>دایره‌ای</Button>}{availableViews.includes('line') && <Button icon={<BarChartOutlined />} type={visibleView === 'line' ? 'primary' : 'default'} onClick={() => setView('line')}>خطی</Button>}</div>}
-    {visibleView === 'table' ? <Table rowKey="key" columns={columns} dataSource={runtime.group_tree || groups} pagination={{ pageSize: 20 }} scroll={{ x: true }} locale={{ emptyText: 'داده‌ای یافت نشد' }} /> : visibleView === 'bar' ? isDifference ? <DifferenceBarChart groups={groups} currencyLabel={currencyLabel} /> : <SimpleBarChart items={items} valueLabel={isPercentage ? 'نرخ' : 'مقدار'} valueFormatter={(amount) => isPercentage ? `${toPersianNumber(amount.toFixed(1))}٪` : formatMetricValue(amount, 'number', currencyLabel)} /> : visibleView === 'pie' ? pie : <SimpleLineChart items={items} valueFormatter={(amount) => isPercentage ? `${toPersianNumber(amount.toFixed(1))}٪` : formatMetricValue(amount, isDifference ? 'price' : 'number', currencyLabel)} />}
+    {visibleView === 'table' ? <Table rowKey="key" columns={columns} dataSource={runtime.group_tree || groups} pagination={{ pageSize: 20 }} scroll={{ x: true }} locale={{ emptyText: 'داده‌ای یافت نشد' }} /> : visibleView === 'bar' ? isDifference ? <DifferenceBarChart groups={groups} currencyLabel={currencyLabel} fieldType={differenceFieldType} /> : <SimpleBarChart items={items} valueLabel={isPercentage ? 'نرخ' : 'مقدار'} valueFormatter={(amount) => isPercentage ? `${toPersianNumber(amount.toFixed(1))}٪` : formatMetricValue(amount, 'number', currencyLabel)} /> : visibleView === 'pie' ? pie : <SimpleLineChart items={items} valueFormatter={(amount) => isPercentage ? `${toPersianNumber(amount.toFixed(1))}٪` : formatMetricValue(amount, isDifference ? differenceFieldType : 'number', currencyLabel)} />}
   </div></div>;
 };
 
@@ -1210,9 +1227,9 @@ const ReportViewerPage: React.FC = () => {
         }, total), 0);
       };
       return [
-        { key: '__difference_add', label: 'جمع افزایشی‌ها', value: calculate(config.metric_fields), fieldType: 'number', tone: 'increase' },
-        { key: '__difference_subtract', label: 'جمع کاهشی‌ها', value: calculate(config.metric_subtract_fields), fieldType: 'number', tone: 'decrease' },
-        { key: '__difference', label: 'تفاضل نهایی', value: totalMetricValue, fieldType: 'number', tone: totalMetricValue < 0 ? 'decrease' : 'increase' },
+        { key: '__difference_add', label: 'جمع افزایشی‌ها', value: calculate(config.metric_fields), fieldType: 'number' },
+        { key: '__difference_subtract', label: 'جمع کاهشی‌ها', value: calculate(config.metric_subtract_fields), fieldType: 'number' },
+        { key: '__difference', label: 'تفاضل نهایی', value: totalMetricValue, fieldType: 'number' },
       ];
     }
     return metricFieldKeys.map((fieldKey) => {
@@ -1815,7 +1832,41 @@ const ReportViewerPage: React.FC = () => {
   }
 
   if (report && serverRuntime) {
-    return <ServerReportResultView report={report} runtime={serverRuntime} currencyLabel={currencyLabel} onRefresh={() => void executeReport(true)} refreshing={executing} />;
+    return <>
+      <ServerReportResultView
+        report={report}
+        runtime={serverRuntime}
+        currencyLabel={currencyLabel}
+        onRefresh={() => void executeReport(true)}
+        refreshing={executing}
+        canEdit={canEditReport}
+        onEdit={() => navigate(`/reports/${report.id}/edit`)}
+        onCopy={() => void handleCopyReport()}
+        onExport={() => void handleExportExcel()}
+        onConfigurePrint={() => setIsPrintModalOpen(true)}
+        onPrint={() => handlePrint(printTemplate)}
+      />
+      <PrintSection
+        isPrintModalOpen={isPrintModalOpen}
+        onClose={() => setIsPrintModalOpen(false)}
+        onPreparePrint={prepareReportPrint}
+        onPrint={() => handlePrint(printTemplate)}
+        onGenerateFinalPdfPreview={generateFinalReportPdfPreview}
+        previewContentVersion={reportPrintPreviewSourceVersion}
+        printTemplates={reportPrintTemplates}
+        selectedTemplateId={printTemplate}
+        onSelectTemplate={(id) => setPrintTemplate(id as 'landscape' | 'portrait')}
+        renderPrintCard={renderPrintCard}
+        printMode={false}
+        printableFields={reportPrintableFields}
+        selectedPrintFields={selectedPrintFields}
+        onTogglePrintField={handleTogglePrintField}
+        onSavePrintFields={handleSavePrintFields}
+        savingPrintFields={savingPrintFields}
+        allowFieldSelectionTab
+        previewMeta={{ paperSize: 'A4', orientation: printTemplate }}
+      />
+    </>;
   }
 
   if (!canViewPage) {

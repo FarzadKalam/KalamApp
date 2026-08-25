@@ -629,6 +629,7 @@ Deno.serve(async (request) => {
       return json(422, { error: "invalid_reference_reports" });
     const groupings = readArray(config.group_bys).slice(0, 3);
     const buckets = new Map<string, any>();
+    const metricSources: Record<string, { module_id: string; metric_key: string }> = {};
     for (const source of references) {
       const sourceConfig =
         source?.config && typeof source.config === "object"
@@ -883,6 +884,10 @@ Deno.serve(async (request) => {
               : Number(valueFor(String(metric.metric_key || "")) || 0);
             if (!Number.isFinite(value)) continue;
             const id = metricId(metric);
+            metricSources[id] = {
+              module_id: String(source.module_id || ""),
+              metric_key: String(metric.metric_key || ""),
+            };
             const resultMetricKey = mode === "normal" ? String(metric.metric_key) : id;
             bucket.metrics[resultMetricKey] = Number(bucket.metrics[resultMetricKey] || 0) + value;
             bucket.metric_counts[resultMetricKey] = Number(bucket.metric_counts[resultMetricKey] || 0) + 1;
@@ -927,6 +932,7 @@ Deno.serve(async (request) => {
       report: { id: report.id, name: report.name },
       groups,
       group_tree: groupTree,
+      metric_sources: metricSources,
       generated_at: new Date().toISOString(),
     });
   } catch (error) {

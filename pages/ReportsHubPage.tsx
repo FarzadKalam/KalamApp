@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { App, Button, Card, Col, Empty, Popconfirm, Row, Spin, Tag, Typography } from 'antd';
-import { BarChartOutlined, CopyOutlined, DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { App, Button, Card, Col, Empty, Input, Popconfirm, Row, Spin, Tag, Typography } from 'antd';
+import { BarChartOutlined, CopyOutlined, DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
@@ -26,6 +26,7 @@ const ReportsHubPage: React.FC = () => {
   const [reports, setReports] = useState<ReportDefinitionRecord[]>([]);
   const [permissions, setPermissions] = useState<PermissionMap | null>(null);
   const [setupMissing, setSetupMissing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
     window.dispatchEvent(
@@ -112,6 +113,13 @@ const ReportsHubPage: React.FC = () => {
     }
   };
 
+  const visibleReports = useMemo(() => {
+    const query = searchQuery.trim().toLocaleLowerCase('fa-IR');
+    if (!query) return reports;
+    return reports.filter((report) => [report.name, report.description, MODULES[report.module_id]?.titles?.fa]
+      .some((value) => String(value || '').toLocaleLowerCase('fa-IR').includes(query)));
+  }, [reports, searchQuery]);
+
   if (loading) {
     return (
       <div className="flex h-[70vh] items-center justify-center">
@@ -176,8 +184,17 @@ const ReportsHubPage: React.FC = () => {
             )}
           </Empty>
         ) : (
-          <Row gutter={[16, 16]}>
-            {reports.map((report) => {
+          <>
+            <Input
+              className="mb-5 max-w-xl"
+              allowClear
+              prefix={<SearchOutlined className="text-gray-400" />}
+              placeholder="جستجو در نام، توضیح یا ماژول گزارش"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+            />
+            {visibleReports.length === 0 ? <Empty description="گزارشی با این جستجو پیدا نشد" image={Empty.PRESENTED_IMAGE_SIMPLE} /> : <Row gutter={[16, 16]}>
+            {visibleReports.map((report) => {
               const config = normalizeReportConfig(report.config);
               const moduleTitle = MODULES[report.module_id]?.titles?.fa || report.module_id;
               const chartReady = config.group_bys.length > 0;
@@ -251,7 +268,8 @@ const ReportsHubPage: React.FC = () => {
                 </Col>
               );
             })}
-          </Row>
+            </Row>}
+          </>
         )}
       </div>
     </div>

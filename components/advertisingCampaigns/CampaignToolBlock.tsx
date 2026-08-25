@@ -65,6 +65,9 @@ const CampaignToolBlock: React.FC<Props> = ({ tool, onChange, disabled, initiall
       className="overflow-hidden !rounded-2xl border border-slate-200/90 bg-white dark:border-white/10 dark:bg-[#1e1e1e]"
       items={[{
         key: 'tool',
+        classNames: {
+          header: 'sticky top-0 z-10 border-b border-slate-100 bg-white/95 shadow-sm backdrop-blur dark:border-white/10 dark:bg-[#1e1e1e]/95',
+        },
         label: (
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <AppstoreOutlined />

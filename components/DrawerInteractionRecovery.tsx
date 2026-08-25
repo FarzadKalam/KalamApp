@@ -5,8 +5,10 @@ const isVisible = (element: Element) => {
   return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
 };
 
+const hasOpenDrawer = () => Array.from(document.querySelectorAll('.ant-drawer-open')).some(isVisible);
+
 const hasOpenOverlay = () => (
-  Array.from(document.querySelectorAll('.ant-drawer-open')).some(isVisible)
+  hasOpenDrawer()
   || Array.from(document.querySelectorAll('.ant-modal-wrap')).some(isVisible)
 );
 
@@ -22,6 +24,14 @@ const DrawerInteractionRecovery = () => {
     const recover = () => {
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
+        // A Drawer mask belongs only to an open Drawer. Ant can keep a closed
+        // mask mounted after its animation; even a transparent mask captures
+        // every pointer event and makes the page appear frozen.
+        if (!hasOpenDrawer()) {
+          document.querySelectorAll<HTMLElement>('.ant-drawer-mask').forEach((mask) => {
+            mask.style.pointerEvents = 'none';
+          });
+        }
         if (hasOpenOverlay()) return;
         if (document.body.classList.contains('ant-scrolling-effect')) {
           document.body.classList.remove('ant-scrolling-effect');
@@ -30,9 +40,6 @@ const DrawerInteractionRecovery = () => {
           if (document.body.style.getPropertyValue(property)) {
             document.body.style.removeProperty(property);
           }
-        });
-        document.querySelectorAll<HTMLElement>('.ant-drawer-mask').forEach((mask) => {
-          if (!isVisible(mask) && mask.style.pointerEvents !== 'none') mask.style.pointerEvents = 'none';
         });
       }, 360);
     };

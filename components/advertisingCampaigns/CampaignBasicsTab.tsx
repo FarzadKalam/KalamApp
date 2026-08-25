@@ -76,8 +76,8 @@ const CampaignBasicsTab: React.FC<CampaignBasicsTabProps> = ({
           <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2">
             <CampaignField fieldKey="name" label="نام کمپین" value={campaign.name} onChange={(name) => onChange({ name })} required readonly={disabled} allValues={campaign} />
             <CampaignField fieldKey="system_code" label="کد سیستمی" value={campaign.system_code || 'پس از ذخیره ساخته می‌شود'} onChange={() => undefined} readonly allValues={campaign} />
-            <div>
-              <div className="mb-1.5 text-xs font-medium text-slate-500">وضعیت</div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+              <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-slate-500"><AimOutlined /> وضعیت</div>
               <AdaptiveSelectField
                 value={campaign.status}
                 onChange={(status) => onChange({ status })}

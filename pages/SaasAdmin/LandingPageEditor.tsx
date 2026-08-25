@@ -489,7 +489,7 @@ export default function LandingPageEditor() {
           {sections.length === 0 ? (
             <Empty description="سکشنی وجود ندارد" />
           ) : (
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <DndContext sensors={editingSection ? [] : sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
               <SortableContext items={sections.map((s) => s.id)} strategy={verticalListSortingStrategy}>
                 {sections.map((section) => (
                   <SortableSectionRow
@@ -510,6 +510,10 @@ export default function LandingPageEditor() {
       <Drawer
         open={!!editingSection}
         onClose={() => setEditingId(null)}
+        destroyOnHidden
+        afterOpenChange={(open) => {
+          if (!open) document.querySelectorAll<HTMLElement>('.ant-drawer-mask').forEach((mask) => { mask.style.pointerEvents = 'none'; });
+        }}
         title={editingSection ? `ویرایش: ${SECTION_REGISTRY[editingSection.type].labelFa}` : ''}
         width={520}
         styles={{ body: { direction: 'rtl' } }}
