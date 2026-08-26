@@ -2,7 +2,6 @@ import React from 'react';
 import SmartFieldRenderer from '../SmartFieldRenderer';
 import { FieldNature, FieldType, type ModuleField } from '../../types';
 import { MODULES } from '../../moduleRegistry';
-import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 
 type CampaignFieldProps = {
   fieldKey: string;
@@ -36,35 +35,30 @@ const CampaignField: React.FC<CampaignFieldProps> = ({
   dynamicOptionsCategory,
 }) => {
   const registeredField = MODULES[moduleId]?.fields?.find((candidate: ModuleField) => candidate.key === fieldKey);
-  const field: ModuleField = {
-    ...(registeredField || {}),
+  // برای فیلدهای ثبت‌شدهٔ کمپین، همان تعریف مرکزی ماژول بدون هیچ override
+  // محلی استفاده می‌شود؛ درست مانند مسیر ModuleShow و SmartForm. fallback
+  // فقط برای کلیدهای پیکربندی داخلیِ ابزارهاست که در schema ماژول ستون ندارند.
+  const fallbackField: ModuleField = {
     key: fieldKey,
-    labels: { ...(registeredField?.labels || {}), fa: label || registeredField?.labels?.fa || fieldKey },
-    type: type || registeredField?.type || FieldType.TEXT,
-    nature: registeredField?.nature || FieldNature.STANDARD,
-    options: options as any || registeredField?.options,
-    validation: required ? { ...(registeredField?.validation || {}), required: true } : registeredField?.validation,
-    readonly: Boolean(readonly || registeredField?.readonly),
-    dynamicOptionsCategory: dynamicOptionsCategory || registeredField?.dynamicOptionsCategory,
+    labels: { fa: label || fieldKey },
+    type: type || FieldType.TEXT,
+    nature: FieldNature.STANDARD,
+    options: options as any,
+    validation: required ? { required: true } : undefined,
+    dynamicOptionsCategory,
   };
-  const isTemporalField = field.type === FieldType.DATE || field.type === FieldType.TIME || field.type === FieldType.DATETIME;
+  const field = registeredField || fallbackField;
   return (
     <SmartFieldRenderer
       field={field}
-      // تاریخ‌ها فقط از وضعیت واحد wizard خوانده می‌شوند. نگه‌داشتن یک
-      // state محلی باعث می‌شد بعد از ذخیره یا همگام‌سازی realtime، متن بعضی
-      // pickerهای کمپین با مقدار واقعی رکورد از هم جدا شود.
-      value={isTemporalField && value != null ? String(value) : value}
+      value={value}
       onChange={onChange}
       forceEditMode={!readonly}
       compactMode={compact}
-      options={options}
+      options={options || registeredField?.options}
       moduleId={moduleId}
       recordId={recordId || undefined}
       allValues={allValues || { [fieldKey]: value }}
-      overlayZIndexBase={13200}
-      popupContainer={resolveOverlayPopupContainer}
-      preferLocalPopupContainer
     />
   );
 };
