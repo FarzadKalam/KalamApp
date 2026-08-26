@@ -88,6 +88,20 @@ const fromJsDate = (date: Date) =>
     locale: gregorian_en,
   }).convert(persian, persian_fa);
 
+// Safari (به‌ویژه روی iOS) قالب timestamp بازگشتی PostgreSQL با فاصله و
+// timezone کوتاه مثل `2026-08-26 22:26:00+00` را مانند Chromium نمی‌خواند.
+// ورودی را پیش از ساخت Date به ISO استاندارد تبدیل می‌کنیم تا picker و متن
+// انتخاب‌شده در موبایل و دسکتاپ دقیقاً یک رفتار داشته باشند.
+const parseDateTimeValue = (value: string): Date | null => {
+  const normalized = normalizeDigits(String(value || ''))
+    .trim()
+    .replace(' ', 'T')
+    .replace(/([+-]\d{2})(\d{2})$/, '$1:$2')
+    .replace(/([+-]\d{2})$/, '$1:00');
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
 const convertToPersianDateObject = (value?: string | null, type?: PickerType): DateObject | null => {
   if (!value) return null;
   try {
@@ -110,8 +124,8 @@ const convertToPersianDateObject = (value?: string | null, type?: PickerType): D
       }).convert(persian, persian_fa);
     }
 
-    const jsDate = new Date(value);
-    if (Number.isNaN(jsDate.getTime())) return null;
+    const jsDate = parseDateTimeValue(value);
+    if (!jsDate) return null;
     return new DateObject({
       date: jsDate,
       calendar: gregorian,
@@ -134,8 +148,13 @@ const serializeDateObject = (date: DateObject | null, type: PickerType): string 
 
 const getDisplayValue = (value: string | null | undefined, type: PickerType) => {
   if (!value) return "";
-  if (type === "DATE") return toPersianNumber(safeJalaliFormat(value, "YYYY/MM/DD") || "");
-  if (type === "DATETIME") return toPersianNumber(safeJalaliFormat(value, "YYYY/MM/DD HH:mm") || "");
+  if (type === "DATE") {
+    return toPersianNumber(safeJalaliFormat(value, "YYYY/MM/DD") || String(value));
+  }
+  if (type === "DATETIME") {
+    const parsed = parseDateTimeValue(value);
+    return toPersianNumber(safeJalaliFormat(parsed || value, "YYYY/MM/DD HH:mm") || String(value));
+  }
 
   const normalized = normalizeDigits(value);
   const timePart = normalized.split(":");

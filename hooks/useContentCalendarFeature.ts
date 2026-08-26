@@ -29,8 +29,10 @@ export const useContentCalendarFeature = () => {
   useEffect(() => {
     let active = true;
     void Promise.all([
-      hasContentCalendarFeature(),
-      fetchCurrentUserRoleContext(supabase),
+      // نقش و قابلیت پلن ممکن است همین لحظه توسط مدیر SaaS تغییر کرده باشد؛
+      // این مسیر نباید به cache قدیمیِ همان نشست تکیه کند.
+      hasContentCalendarFeature({ force: true }),
+      fetchCurrentUserRoleContext(supabase, { force: true }),
     ])
       .then(([featureEnabled, roleContext]) => {
         const saasAdmin = roleContext.permissions?.[SAAS_ADMIN_PERMISSION_KEY];

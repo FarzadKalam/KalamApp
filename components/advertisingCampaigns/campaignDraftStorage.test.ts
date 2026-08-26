@@ -22,4 +22,16 @@ describe('campaign draft storage', () => {
     clearCampaignDraftSnapshot(key);
     expect(readCampaignDraftSnapshot(key)).toBeNull();
   });
+
+  it('keeps the unsaved marker so stored campaigns do not restore a stale snapshot', () => {
+    const key = buildCampaignDraftStorageKey('org-a', 'user-a', 'campaign-a');
+    writeCampaignDraftSnapshot(key, {
+      savedAt: 2,
+      routeCampaignId: 'campaign-a',
+      hasUnsavedChanges: true,
+      draft: { campaign: { name: 'تغییر ذخیره‌نشده' } as any, tools: [], audienceRules: [] },
+    });
+
+    expect(readCampaignDraftSnapshot(key)?.hasUnsavedChanges).toBe(true);
+  });
 });

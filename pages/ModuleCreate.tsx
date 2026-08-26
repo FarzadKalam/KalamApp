@@ -24,6 +24,7 @@ import { fetchAssigneeDirectory } from "../utils/referenceData";
 import { applyInvoicePaymentAllocation } from "../utils/invoicePaymentAllocationRuntime";
 import { runWriteWithCompatiblePayload } from "../utils/writeCompat";
 import { useContentCalendarPlanModule } from '../hooks/useContentCalendarFeature';
+import { CONTENT_CALENDAR_MODULE_ID } from '../modules/contentCalendarsConfig';
 
 const isStatementTimeoutError = (error: any) =>
   String(error?.code || "").trim() === "57014"
@@ -73,7 +74,9 @@ export const ModuleCreate = () => {
         return;
       }
       try {
-        const context = await fetchCurrentUserRoleContext(supabase);
+        const context = await fetchCurrentUserRoleContext(supabase, {
+          force: moduleId === CONTENT_CALENDAR_MODULE_ID,
+        });
         if (!context.userId) {
           if (active) {
             setCanCreate(false);

@@ -95,6 +95,7 @@ export const useCampaignWizard = (campaignId?: string | null) => {
     writeCampaignDraftSnapshot(key, {
       savedAt: Date.now(),
       routeCampaignId: normalizedId,
+      hasUnsavedChanges: saveStateRef.current === 'dirty' || saveStateRef.current === 'error',
       draft: snapshot,
     });
   }, [normalizedId]);
@@ -182,7 +183,13 @@ export const useCampaignWizard = (campaignId?: string | null) => {
         audienceRules: workspace.audienceRules,
       };
       const serverUpdatedAt = Date.parse(String(workspace.campaign.updated_at || '')) || 0;
-      const shouldRecover = Boolean(localSnapshot && localSnapshot.savedAt > serverUpdatedAt);
+      // یک snapshot صرفاً برای سرعت و بازیابی آفلاین است، نه منبع حقیقت رکورد.
+      // snapshotهای قدیمی که این نشان را ندارند قبلاً می‌توانستند مقدار خالیِ
+      // یک فیلد را روی مقدار ذخیره‌شدهٔ سرور بنشانند.
+      const shouldRecover = Boolean(
+        localSnapshot?.hasUnsavedChanges === true
+        && localSnapshot.savedAt > serverUpdatedAt,
+      );
       // پیش‌نویس محلی نباید یک مقدار خالیِ قدیمی را جای اطلاعات ذخیره‌شده
       // بگذارد؛ به‌ویژه نام کمپین باید همیشه از رکورد سرور قابل بازیابی باشد.
       const recoveredDraft = shouldRecover ? {

@@ -5,6 +5,11 @@ const STORAGE_PREFIX = 'kalamapp:campaign-wizard-draft:v1';
 export type CampaignDraftSnapshot = {
   savedAt: number;
   routeCampaignId: string;
+  /**
+   * Only unsaved changes may replace a newer server record on reload. Older
+   * snapshots did not carry this flag and are intentionally treated as saved.
+   */
+  hasUnsavedChanges?: boolean;
   draft: CampaignWizardDraft;
 };
 

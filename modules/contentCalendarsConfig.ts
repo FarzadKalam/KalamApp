@@ -27,6 +27,7 @@ export const contentCalendarsConfig: ModuleDefinition = {
       { label: 'پیش‌نویس', value: 'draft', color: 'default' }, { label: 'فعال', value: 'active', color: 'blue' }, { label: 'تکمیل‌شده', value: 'completed', color: 'green' }, { label: 'بایگانی', value: 'archived', color: 'gray' },
     ] },
     { key: 'image_url', labels: { fa: 'تصویر تقویم', en: 'Calendar image' }, type: FieldType.IMAGE, location: FieldLocation.HEADER, order: 4, nature: FieldNature.STANDARD },
+    { key: 'assignee_id', labels: { fa: 'مسئول', en: 'Assignee' }, type: FieldType.USER, location: FieldLocation.HEADER, order: 5, isTableColumn: true, nature: FieldNature.STANDARD },
     { key: 'customer_id', labels: { fa: 'مشتری', en: 'Customer' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'context', order: 1, isTableColumn: true, nature: FieldNature.STANDARD, relationConfig: { targetModule: 'customers', targetField: 'full_name' } },
     { key: 'source_invoice_id', labels: { fa: 'فاکتور فروش مرتبط', en: 'Sales invoice' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'context', order: 2, nature: FieldNature.STANDARD, relationConfig: { targetModule: 'invoices', targetField: 'name' } },
     { key: 'start_date', labels: { fa: 'تاریخ شروع', en: 'Start date' }, type: FieldType.DATE, location: FieldLocation.BLOCK, blockId: 'schedule', order: 1, isTableColumn: true, nature: FieldNature.STANDARD },
@@ -34,7 +35,8 @@ export const contentCalendarsConfig: ModuleDefinition = {
     { key: 'description', labels: { fa: 'توضیحات', en: 'Description' }, type: FieldType.LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'context', order: 3, nature: FieldNature.STANDARD },
     { key: 'created_by', labels: { fa: 'ایجادکننده', en: 'Created by' }, type: FieldType.USER, location: FieldLocation.SYSTEM_FOOTER, order: 89, readonly: true, nature: FieldNature.SYSTEM },
     { key: 'created_at', labels: { fa: 'زمان ایجاد', en: 'Created at' }, type: FieldType.DATETIME, location: FieldLocation.SYSTEM_FOOTER, order: 90, readonly: true, nature: FieldNature.SYSTEM },
-    { key: 'updated_at', labels: { fa: 'زمان ویرایش', en: 'Updated at' }, type: FieldType.DATETIME, location: FieldLocation.SYSTEM_FOOTER, order: 91, readonly: true, nature: FieldNature.SYSTEM },
+    { key: 'updated_by', labels: { fa: 'آخرین ویرایش‌کننده', en: 'Last editor' }, type: FieldType.USER, location: FieldLocation.SYSTEM_FOOTER, order: 91, readonly: true, nature: FieldNature.SYSTEM },
+    { key: 'updated_at', labels: { fa: 'زمان ویرایش', en: 'Updated at' }, type: FieldType.DATETIME, location: FieldLocation.SYSTEM_FOOTER, order: 92, readonly: true, nature: FieldNature.SYSTEM },
   ],
   blocks: [
     { id: 'context', titles: { fa: 'اطلاعات پایه', en: 'Context' }, type: BlockType.FIELD_GROUP, order: 1 },
