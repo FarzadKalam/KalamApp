@@ -86,6 +86,7 @@ import AiSparkleIcon from './ai/AiSparkleIcon';
 import { useNotificationRuntime } from './notifications/NotificationRuntimeProvider';
 import { resolveMobileKeyboardViewport } from '../utils/mobileKeyboardViewport';
 import { ADVERTISING_CAMPAIGNS_MODULE_ID } from '../utils/advertisingCampaigns';
+import { CONTENT_CALENDAR_PLAN_FEATURE } from '../modules/contentCalendarsConfig';
 
 const { Header, Sider, Content } = AntLayout;
 const NotificationsPopover = React.lazy(() => import('./NotificationsPopover'));
@@ -130,6 +131,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [customerClubFeatureEnabled, setCustomerClubFeatureEnabled] = useState(true);
   const [instagramInboxFeatureEnabled, setInstagramInboxFeatureEnabled] = useState(false);
   const [advertisingCampaignsModuleEnabled, setAdvertisingCampaignsModuleEnabled] = useState(false);
+  const [contentCalendarFeatureEnabled, setContentCalendarFeatureEnabled] = useState(false);
   const [alertsDrawerMounted, setAlertsDrawerMounted] = useState(false);
   const [alertsDrawerOpen, setAlertsDrawerOpen] = useState(false);
   const [sessionBootstrapError, setSessionBootstrapError] = useState<any>(null);
@@ -196,6 +198,18 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     return () => {
       active = false;
     };
+  }, [currentUser?.id, rolePermissionsReady]);
+
+  useEffect(() => {
+    if (!rolePermissionsReady || !currentUser?.id) {
+      setContentCalendarFeatureEnabled(false);
+      return;
+    }
+    let active = true;
+    void hasCurrentOrgPlanFeature(CONTENT_CALENDAR_PLAN_FEATURE, { defaultEnabled: false })
+      .then((enabled) => { if (active) setContentCalendarFeatureEnabled(enabled); })
+      .catch(() => { if (active) setContentCalendarFeatureEnabled(false); });
+    return () => { active = false; };
   }, [currentUser?.id, rolePermissionsReady]);
 
   useEffect(() => {
@@ -591,6 +605,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     || rolePermissions?.instagram_conversations?.view === true
   );
   const canViewAdvertisingCampaigns = advertisingCampaignsModuleEnabled && canViewModule(ADVERTISING_CAMPAIGNS_MODULE_ID);
+  const canViewContentCalendars = contentCalendarFeatureEnabled && canViewModule('content_calendars');
   const {
     headerAnnouncements: userHeaderAnnouncements,
     popupAnnouncements: userPopupAnnouncements,
@@ -725,6 +740,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         label: 'پروژه‌ها',
         children: [
           { key: '/projects', label: 'پروژه‌ها' },
+          { key: '/content_calendars', label: 'تقویم‌های محتوایی', disabled: !canViewContentCalendars },
         ]
       },
       {
@@ -851,7 +867,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       }] : []),
       { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
     ];
-  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewAdvertisingCampaigns, canViewCustomerClub, canViewInstagramInbox, canViewOrgKnowledge, canViewReportsHub, canViewSaasAdmin, communicationsAccess.canUseWorkspace, rolePermissions]);
+  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewAdvertisingCampaigns, canViewContentCalendars, canViewCustomerClub, canViewInstagramInbox, canViewOrgKnowledge, canViewReportsHub, canViewSaasAdmin, communicationsAccess.canUseWorkspace, rolePermissions]);
 
   const visibleRawMenuItems = useMemo<NonNullable<MenuProps['items']>>(() => {
     const canShowMenuKey = (key?: string) => {
@@ -872,6 +888,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           return canViewCustomerClub;
         case `/${ADVERTISING_CAMPAIGNS_MODULE_ID}`:
           return canViewAdvertisingCampaigns;
+        case '/content_calendars':
+          return canViewContentCalendars;
         case '/messages':
         case '/instagram':
         case '/ai':

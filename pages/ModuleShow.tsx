@@ -88,6 +88,8 @@ import {
 } from '../utils/processTaskCustomFields';
 import { getTaskStatusOptions } from '../utils/processTaskStatusOptions';
 import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
+import { useContentCalendarPlanModule } from '../hooks/useContentCalendarFeature';
+import ContentCalendarRuntime from '../components/contentCalendars/ContentCalendarRuntime';
 import { isRecycleBinEnabledModule } from '../utils/recycleBin';
 import { isOnlineCatalogModule } from '../utils/onlineCatalog';
 import type { BotChannel, BotPlatformState } from '../components/bot/CounterpartyBotStatusModal';
@@ -457,6 +459,7 @@ const ModuleShow: React.FC = () => {
   const { message: msg, modal } = App.useApp();
   const { label: currencyLabel } = useCurrencyConfig();
   const baseModuleConfig = MODULES[moduleId];
+  const { moduleConfig: planBaseModuleConfig } = useContentCalendarPlanModule(baseModuleConfig);
   const focusBlockId = useMemo(
     () => String((location.state as any)?.focusBlockId || '').trim() || null,
     [location.state]
@@ -502,7 +505,7 @@ const ModuleShow: React.FC = () => {
     [data?.template_schema_snapshot],
   );
   const moduleConfig = useMemo(() => {
-    let nextConfig = baseModuleConfig;
+    let nextConfig = planBaseModuleConfig;
     if (moduleId === 'tasks') {
       const existingFieldKeys = new Set((nextConfig?.fields || []).map((field: any) => String(field?.key || '').trim()));
       const extraFields = taskProcessCustomFields.filter((field: any) => !existingFieldKeys.has(String(field?.key || '').trim()));
@@ -545,7 +548,7 @@ const ModuleShow: React.FC = () => {
       nextConfig = buildSurveyRuntimeModule(nextConfig, data.template_schema_snapshot, 'show');
     }
     return nextConfig;
-  }, [allRoles, allUsers, baseModuleConfig, moduleId, taskProcessCustomFields, taskStatusOptions, templateSchemaSnapshotKey]);
+  }, [allRoles, allUsers, moduleId, planBaseModuleConfig, taskProcessCustomFields, taskStatusOptions, templateSchemaSnapshotKey]);
   const moduleTable = moduleConfig?.table || moduleId;
   const displayData = useMemo(
     () => mergeSurveyTemplateValuesIntoRecord(normalizeModuleFormValues(moduleId, data || {})) || normalizeModuleFormValues(moduleId, data || {}),
@@ -6512,6 +6515,10 @@ const ModuleShow: React.FC = () => {
         recordTitleFieldKey={recordTitleField?.key || null}
         renderRecordTitle={renderEditableRecordTitle}
       />
+
+      {moduleId === 'content_calendars' && data ? (
+        <ContentCalendarRuntime calendar={{ ...displayData, id }} canEdit={canEditModule} />
+      ) : null}
 
       <FieldGroupsTabs
         fieldGroups={fieldGroups}

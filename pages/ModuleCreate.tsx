@@ -23,6 +23,7 @@ import { getTaxpayerInvoicePatternForModule, getTaxpayerInvoiceSubjectForModule,
 import { fetchAssigneeDirectory } from "../utils/referenceData";
 import { applyInvoicePaymentAllocation } from "../utils/invoicePaymentAllocationRuntime";
 import { runWriteWithCompatiblePayload } from "../utils/writeCompat";
+import { useContentCalendarPlanModule } from '../hooks/useContentCalendarFeature';
 
 const isStatementTimeoutError = (error: any) =>
   String(error?.code || "").trim() === "57014"
@@ -43,6 +44,7 @@ export const ModuleCreate = () => {
   const location = useLocation();
   const { message: messageApi } = App.useApp();
   const baseModuleConfig = moduleId ? MODULES[moduleId] : null;
+  const { moduleConfig: planBaseModuleConfig } = useContentCalendarPlanModule(baseModuleConfig);
   const [permissionLoading, setPermissionLoading] = useState(true);
   const [canCreate, setCanCreate] = useState(true);
   const [instructionUsers, setInstructionUsers] = useState<any[]>([]);
@@ -140,9 +142,9 @@ export const ModuleCreate = () => {
   }, [moduleId]);
 
   const moduleConfig = useMemo(() => {
-    if (!baseModuleConfig) return null;
-    if (moduleId !== INSTRUCTIONS_MODULE_ID) return baseModuleConfig;
-    return buildInstructionModuleConfig(baseModuleConfig, {
+    if (!planBaseModuleConfig) return null;
+    if (moduleId !== INSTRUCTIONS_MODULE_ID) return planBaseModuleConfig;
+    return buildInstructionModuleConfig(planBaseModuleConfig, {
       moduleOptions: buildInstructionModuleOptions(),
       userOptions: instructionUsers.map((user: any) => ({
         value: String(user?.id || ''),
@@ -153,7 +155,7 @@ export const ModuleCreate = () => {
         label: String(role?.title || role?.id || '').trim() || '-',
       })).filter((option: any) => option.value),
     });
-  }, [baseModuleConfig, instructionRoles, instructionUsers, moduleId]);
+  }, [instructionRoles, instructionUsers, moduleId, planBaseModuleConfig]);
 
   if (!moduleConfig) {
     return <Result status="404" title="ماژول یافت نشد" />;

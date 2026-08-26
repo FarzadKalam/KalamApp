@@ -52,6 +52,7 @@ import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from "../uti
 import { findModuleRelationReferences } from "../utils/moduleListMerge";
 import { toPersianNumber } from "../utils/persianNumberFormatter";
 import { AI_CONTEXT_EVENT } from "../utils/aiAssistantEvents";
+import { useContentCalendarPlanModule } from '../hooks/useContentCalendarFeature';
 import { getRecordPhoneCandidates } from "../utils/recordMessaging";
 import { formatIranMobileForInput } from "../utils/phoneNumber";
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from "../utils/workflowTypes";
@@ -703,13 +704,14 @@ export const ModuleListRefine: React.FC<{
   
   const [surveyTemplateSnapshot, setSurveyTemplateSnapshot] = useState(() => normalizeSurveyTemplateSnapshot({}));
   const baseModuleConfig = resolvedModuleId ? MODULES[resolvedModuleId] : null;
+  const { moduleConfig: planBaseModuleConfig } = useContentCalendarPlanModule(baseModuleConfig);
   const moduleConfig = useMemo(
     () => (
-      baseModuleConfig && supportsWebFormTemplateRuntime(baseModuleConfig)
-        ? buildSurveyRuntimeModule(baseModuleConfig, surveyTemplateSnapshot, "list")
-        : baseModuleConfig
+      planBaseModuleConfig && supportsWebFormTemplateRuntime(planBaseModuleConfig)
+        ? buildSurveyRuntimeModule(planBaseModuleConfig, surveyTemplateSnapshot, "list")
+        : planBaseModuleConfig
     ),
-    [baseModuleConfig, surveyTemplateSnapshot]
+    [planBaseModuleConfig, surveyTemplateSnapshot]
   );
   const dataResource = moduleConfig?.table || resolvedModuleId;
   const searchTargetField = useMemo(() => {

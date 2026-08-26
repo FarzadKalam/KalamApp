@@ -34,6 +34,7 @@ import {
 } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { ADVERTISING_CAMPAIGNS_MODULE_ID, CAMPAIGN_PLAN_FEATURES } from '../../utils/advertisingCampaigns';
+import { CONTENT_CALENDAR_MODULE_ID, CONTENT_CALENDAR_PLAN_FEATURE } from '../../modules/contentCalendarsConfig';
 
 const { Title, Text } = Typography;
 const { Panel } = Collapse;
@@ -76,6 +77,7 @@ const MODULE_GROUPS: { label: string; modules: { id: string; label: string }[] }
     modules: [
       { id: 'projects', label: 'پروژه‌ها' },
       { id: 'tasks', label: 'فعالیت‌ها' },
+      { id: CONTENT_CALENDAR_MODULE_ID, label: 'تقویم‌های محتوایی' },
       { id: 'process_templates', label: 'الگوهای فرآیند' },
       { id: 'process_runs', label: 'اجرای فرآیند' },
     ],
@@ -158,6 +160,7 @@ const FEATURE_OPTIONS = [
   { id: 'api_access', label: 'دسترسی API' },
   { id: 'advanced_reports', label: 'گزارش‌ساز پیشرفته' },
   { id: 'multi_lane_processes', label: 'فرآیندهای چندردیفه و فعال‌کننده‌ها' },
+  { id: CONTENT_CALENDAR_PLAN_FEATURE, label: 'تقویم محتوایی' },
   { id: 'white_label', label: 'White Label' },
   { id: 'custom_domain', label: 'دامنه اختصاصی' },
   { id: 'own_payment_gateway', label: 'درگاه پرداخت اختصاصی سازمان' },

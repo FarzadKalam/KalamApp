@@ -208,7 +208,7 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({
 
     const relatedTabs = (moduleConfig.relatedTabs || [])
       .filter((tab) => (
-        String(tab?.targetModule || '').trim() !== 'tasks'
+        (String(tab?.targetModule || '').trim() !== 'tasks' || String(tab?.id || '').trim() === 'content_calendar_activities')
         && String(tab?.targetModule || '').trim() !== 'surveys'
       ))
       .map((tab) => ({

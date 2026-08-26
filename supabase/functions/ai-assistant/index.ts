@@ -287,6 +287,7 @@ const MODULE_TABLE_MAP: Record<string, string> = {
   overtime_requests: 'overtime_requests',
   mission_requests: 'mission_requests',
   process_runs: 'process_runs',
+  content_calendars: 'content_calendars',
 };
 
 // This is data registry, not a decision rule. It is the backend-safe projection
@@ -322,6 +323,7 @@ const MODULE_ALIASES: Record<string, string[]> = {
   petty_funds: ['تنخواه', 'تنخواه گردان', 'petty', 'petty fund'],
   products: ['محصول', 'محصولات', 'کالا', 'product', 'products', 'اقلام', 'کالاها', 'جنس', 'موجودی کالا'],
   projects: ['پروژه', 'پروژه‌ها', 'project', 'projects', 'پروژه‌ام', 'پروژه‌هام'],
+  content_calendars: ['تقویم محتوا', 'تقویم محتوایی', 'تقویم‌های محتوایی', 'برنامه محتوا', 'content calendar', 'content calendars'],
   tasks: ['فعالیت', 'کار', 'وظیفه', 'task', 'tasks', 'یادآوری', 'کارها', 'فعالیت‌ها', 'تسک'],
   process_runs: ['فرآیند', 'فرایند', 'مراحل', 'مرحله', 'process', 'workflow', 'گردش کار'],
   marketing_leads: ['سرنخ', 'لید', 'lead', 'leads', 'بازاریابی', 'فرصت فروش', 'مشتری بالقوه'],
@@ -356,6 +358,7 @@ const MODULE_SEARCH_FIELDS: Record<string, string[]> = {
   purchase_invoices: ['name', 'system_code', 'invoice_number', 'description'],
   products: ['name', 'title', 'sku', 'system_code', 'description'],
   projects: ['name', 'title', 'system_code', 'description'],
+  content_calendars: ['name', 'system_code', 'description', 'status'],
   tasks: ['name', 'title', 'description', 'system_code'],
   process_templates: ['name', 'description', 'process_kind', 'module_id'],
   process_runs: ['process_name', 'status', 'module_id', 'record_id'],
@@ -1777,6 +1780,22 @@ const buildRelatedContexts = async (
     await push('purchase_invoices', { project_id: `eq.${recordId}`, order: 'updated_at.desc' }, 'فاکتورهای خرید پروژه');
   }
 
+  if (moduleId === 'content_calendars' && recordId) {
+    const calendarProjects = await fetchPermittedRows(supabaseUrl, serviceRoleKey, authContext, 'projects', { content_calendar_id: `eq.${recordId}`, order: 'updated_at.desc' }, 8);
+    if (calendarProjects.length) {
+      related.push({ moduleId: 'projects', summary: 'پروژه‌های متصل به تقویم محتوایی', records: calendarProjects });
+      const projectIds = calendarProjects.map((item: any) => normalizeId(item?.id)).filter(isUuid);
+      if (projectIds.length) {
+        await push('tasks', { project_id: `in.(${projectIds.join(',')})`, order: 'updated_at.desc' }, 'فعالیت‌های فرآیندی و اجرایی پروژه‌های تقویم');
+      }
+    }
+    await push('tasks', { content_calendar_id: `eq.${recordId}`, order: 'updated_at.desc' }, 'فعالیت‌های مستقیم تقویم محتوایی');
+    const customerId = normalizeId(record?.customer_id);
+    const invoiceId = normalizeId(record?.source_invoice_id);
+    if (customerId) await push('customers', { id: `eq.${customerId}` }, 'مشتری تقویم محتوایی');
+    if (invoiceId) await push('invoices', { id: `eq.${invoiceId}` }, 'فاکتور فروش تقویم محتوایی');
+  }
+
   if (moduleId === 'employees' && recordId) {
     const profileId = normalizeId(record?.assignee_id);
     const jobDescriptionId = normalizeId(record?.job_description_id);
@@ -1890,6 +1909,25 @@ const buildPermittedPageContext = async (
       recordId: null,
       relatedContexts: [],
     };
+  }
+
+  // Edge Function با service role داده را می‌خواند؛ بنابراین برای ماژول‌های وابسته
+  // به پلن، کنترل قابلیت باید پیش از هر query صریحاً تکرار شود.
+  if (moduleId === 'content_calendars') {
+    const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+    const featureEnabled = planContext?.reason === 'saas_admin_organization'
+      || truthyPlanFeature(planContext?.features?.content_calendar);
+    if (!planContext?.available || !featureEnabled) {
+      return {
+        context,
+        permitted: false,
+        summary: 'قابلیت تقویم محتوایی در پلن این سازمان فعال نیست.',
+        records: [],
+        moduleId,
+        recordId: context.recordId || null,
+        relatedContexts: [],
+      };
+    }
   }
 
   const perm = getModulePermission(authContext.permissions, moduleId);

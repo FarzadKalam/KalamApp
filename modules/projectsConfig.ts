@@ -133,6 +133,17 @@ export const projectsModule: ModuleDefinition = {
       nature: FieldNature.STANDARD,
     },
     {
+      key: 'content_calendar_id',
+      labels: { fa: 'تقویم محتوایی مرتبط', en: 'Content Calendar' },
+      type: FieldType.RELATION,
+      location: FieldLocation.BLOCK,
+      blockId: 'base_info',
+      order: 3.25,
+      relationConfig: { targetModule: 'content_calendars', targetField: 'name' },
+      nature: FieldNature.STANDARD,
+      isTableColumn: true,
+    },
+    {
       key: 'start_date',
       labels: { fa: 'تاریخ شروع', en: 'Start Date' },
       type: FieldType.DATE,
