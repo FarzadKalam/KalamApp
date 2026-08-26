@@ -12,7 +12,7 @@ import {
   saveCampaignTools,
   updateAdvertisingCampaign,
 } from './campaignApi';
-import { createCampaignToolDraft, createEmptyCampaign } from './campaignUtils';
+import { createCampaignToolDraft, createEmptyCampaign, keepCampaignDateRangeValid } from './campaignUtils';
 import {
   buildCampaignDraftStorageKey,
   clearCampaignDraftSnapshot,
@@ -266,7 +266,10 @@ export const useCampaignWizard = (campaignId?: string | null) => {
   }, []);
 
   const updateCampaign = useCallback((patch: Partial<CampaignRecord>) => {
-    setDraft((current) => ({ ...current, campaign: { ...current.campaign, ...patch } }));
+    setDraft((current) => {
+      const normalizedPatch = keepCampaignDateRangeValid(current.campaign, patch, 'start_at', 'end_at');
+      return { ...current, campaign: { ...current.campaign, ...normalizedPatch } };
+    });
     markDirty();
   }, [markDirty]);
 
@@ -299,7 +302,12 @@ export const useCampaignWizard = (campaignId?: string | null) => {
   const updateTool = useCallback((toolId: string, patch: Partial<CampaignToolRecord>) => {
     setDraft((current) => ({
       ...current,
-      tools: current.tools.map((tool) => tool.id === toolId ? { ...tool, ...patch } : tool),
+      tools: current.tools.map((tool) => {
+        if (tool.id !== toolId) return tool;
+        const plannedPatch = keepCampaignDateRangeValid(tool, patch, 'planned_start_at', 'planned_end_at');
+        const actualPatch = keepCampaignDateRangeValid(tool, plannedPatch, 'actual_start_at', 'actual_end_at');
+        return { ...tool, ...actualPatch };
+      }),
     }));
     markDirty();
   }, [markDirty]);

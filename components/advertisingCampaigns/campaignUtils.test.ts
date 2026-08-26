@@ -3,6 +3,7 @@ import {
   calculateSmsEstimatedCost,
   containsSmsOptOutPhrase,
   estimateSmsPages,
+  keepCampaignDateRangeValid,
   normalizeCampaignSenderNumbers,
 } from './campaignUtils';
 
@@ -35,5 +36,14 @@ describe('campaignUtils', () => {
       .toBe(2200);
     expect(calculateSmsEstimatedCost({ costPerPage: -1, audienceCount: 10, pages: 2, vatPercent: 10 }))
       .toBe(0);
+  });
+
+  it('keeps automatically saved campaign date ranges valid', () => {
+    expect(keepCampaignDateRangeValid(
+      { start_at: '2026-08-26T10:00:00.000Z', end_at: '2026-08-26T11:00:00.000Z' },
+      { start_at: '2026-08-26T12:00:00.000Z' },
+      'start_at',
+      'end_at',
+    )).toEqual({ start_at: '2026-08-26T12:00:00.000Z', end_at: '2026-08-26T12:00:00.000Z' });
   });
 });

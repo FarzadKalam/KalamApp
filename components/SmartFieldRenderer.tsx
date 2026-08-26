@@ -365,6 +365,8 @@ interface SmartFieldRendererProps {
   canEditFilesManager?: boolean;
   canDeleteFilesManager?: boolean;
   disableRequired?: boolean;
+  /** رندر کنترل بدون Form.Item، برای صفحه‌هایی که فرم Ant ندارند. */
+  standalone?: boolean;
   overlayZIndexBase?: number;
   popupContainer?: (trigger?: HTMLElement | null) => HTMLElement;
   preferLocalPopupContainer?: boolean;
@@ -378,7 +380,7 @@ type ReadyTextItem = {
 };
 
 const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({ 
-  field, value, onChange, label, type, options, forceEditMode, onOptionsUpdate, allValues = {}, recordId, moduleId, compactMode = false, canViewFilesManager = true, disableRequired = false, overlayZIndexBase = 1400, popupContainer, preferLocalPopupContainer = false
+  field, value, onChange, label, type, options, forceEditMode, onOptionsUpdate, allValues = {}, recordId, moduleId, compactMode = false, canViewFilesManager = true, disableRequired = false, standalone = false, overlayZIndexBase = 1400, popupContainer, preferLocalPopupContainer = false
 }) => {
   const { message: msg } = App.useApp();
   const [uploading, setUploading] = useState(false);
@@ -3156,9 +3158,11 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
 
   return (
     <>
-        <Form.Item {...formItemProps}>
-            {renderInputContent()}
-        </Form.Item>
+        {standalone ? renderInputContent() : (
+          <Form.Item {...formItemProps}>
+              {renderInputContent()}
+          </Form.Item>
+        )}
 
         {canRelationQuickCreate && !relationTargetNeedsFullCreate && (
             <RelationQuickCreateInline 

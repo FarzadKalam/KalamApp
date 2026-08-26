@@ -168,3 +168,29 @@ export const getPersistedCampaignToolId = (toolId: unknown): string | null => {
   if (!normalized || normalized.startsWith('draft:')) return null;
   return normalized;
 };
+
+/**
+ * ذخیرهٔ خودکار نباید بازه‌ای موقتاً نامعتبر را به پایگاه‌داده بفرستد. هنگام
+ * جابه‌جایی یکی از دو سر بازه، سر مقابل در صورت نیاز با آن هماهنگ می‌شود.
+ */
+export const keepCampaignDateRangeValid = <T extends Record<string, any>>(
+  current: T,
+  patch: Partial<T>,
+  startKey: keyof T,
+  endKey: keyof T,
+): Partial<T> => {
+  const next = { ...current, ...patch };
+  const start = next[startKey];
+  const end = next[endKey];
+  const startTime = start ? Date.parse(String(start)) : Number.NaN;
+  const endTime = end ? Date.parse(String(end)) : Number.NaN;
+  if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || startTime <= endTime) return patch;
+
+  if (Object.prototype.hasOwnProperty.call(patch, startKey)) {
+    return { ...patch, [endKey]: start } as Partial<T>;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, endKey)) {
+    return { ...patch, [startKey]: end } as Partial<T>;
+  }
+  return patch;
+};

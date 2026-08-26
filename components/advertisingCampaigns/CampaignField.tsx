@@ -54,6 +54,7 @@ const CampaignField: React.FC<CampaignFieldProps> = ({
       value={value}
       onChange={onChange}
       forceEditMode={!readonly}
+      standalone
       compactMode={compact}
       options={options || registeredField?.options}
       moduleId={moduleId}
