@@ -6200,6 +6200,58 @@ function shouldRunWorkflowForEventSourceTable(workflow: WorkflowRow, sourceTable
   return workflowTargetsSourceTable(workflow, sourceTable);
 }
 
+const BOT_WORKFLOW_TARGET_MODULES = new Set(['customers', 'suppliers', 'employees']);
+const BOT_WORKFLOW_CHANNELS = ['telegram', 'bale', 'rubika'] as const;
+
+/**
+ * لینک، عنوان و وضعیت گروه‌ها در جدول گروه‌های بات نگهداری می‌شود و فیلدهای
+ * هم‌نام روی طرف حساب صرفاً نمای مجازی هستند. اجرای سروری گردش کار باید پیش
+ * از شرط و رندر قالب، همین نمای مجازی را از منبع اصلی بسازد.
+ */
+async function hydrateBotWorkflowVirtualFields(
+  url: string,
+  key: string,
+  moduleId: string,
+  record: Record<string, any> | null | undefined,
+  fallbackOrgId = '',
+): Promise<Record<string, any> | null | undefined> {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const recordId = String(record?.id || '').trim();
+  const orgId = String(record?.org_id || fallbackOrgId || '').trim();
+  if (!record || !BOT_WORKFLOW_TARGET_MODULES.has(normalizedModuleId) || !recordId || !orgId) return record;
+
+  const targetColumn = normalizedModuleId === 'customers'
+    ? 'customer_id'
+    : normalizedModuleId === 'suppliers'
+      ? 'supplier_id'
+      : 'employee_id';
+  const rows = await dbGet(
+    url,
+    key,
+    `counterparty_bot_groups?org_id=eq.${encodeURIComponent(orgId)}&${targetColumn}=eq.${encodeURIComponent(recordId)}&select=channel_type,status,group_title,group_join_link&limit=10`,
+  ).catch((error) => {
+    console.warn('[workflow-runner] Bot group context fetch failed:', error?.message || error);
+    return [];
+  });
+
+  const groupsByChannel = new Map<string, any>();
+  (Array.isArray(rows) ? rows : []).forEach((row: any) => {
+    const channel = String(row?.channel_type || '').trim();
+    if (BOT_WORKFLOW_CHANNELS.includes(channel as typeof BOT_WORKFLOW_CHANNELS[number]) && !groupsByChannel.has(channel)) {
+      groupsByChannel.set(channel, row);
+    }
+  });
+
+  const patch: Record<string, any> = {};
+  BOT_WORKFLOW_CHANNELS.forEach((channel) => {
+    const group = groupsByChannel.get(channel);
+    patch[`${channel}_group_join_link`] = String(group?.group_join_link || '').trim() || null;
+    patch[`${channel}_group_status`] = String(group?.status || '').trim() || null;
+    patch[`${channel}_group_title`] = String(group?.group_title || '').trim() || null;
+  });
+  return { ...record, ...patch };
+}
+
 async function fetchWorkflowEventRecord(
   url: string,
   key: string,
@@ -6461,7 +6513,9 @@ async function runEventTick(
     throw new Error('module_id و record_id برای اجرای event لازم است.');
   }
 
-  const { table, record } = await fetchWorkflowEventRecord(url, key, moduleId, recordId, providedRecord);
+  const fetchedEventRecord = await fetchWorkflowEventRecord(url, key, moduleId, recordId, providedRecord);
+  const table = fetchedEventRecord.table;
+  let record = fetchedEventRecord.record;
   if (!record?.id) {
     throw new Error('رکورد مقصد گردش کار پیدا نشد.');
   }
@@ -6470,6 +6524,8 @@ async function runEventTick(
   if (!orgId) {
     throw new Error('شناسه سازمان رکورد مقصد گردش کار مشخص نیست.');
   }
+  record = (await hydrateBotWorkflowVirtualFields(url, key, moduleId, record, orgId)) || record;
+  const hydratedPreviousRecord = await hydrateBotWorkflowVirtualFields(url, key, moduleId, previousRecord, orgId);
 
   const stats = {
     event,
@@ -6520,7 +6576,7 @@ async function runEventTick(
         Array.isArray(workflow.conditions_all) ? workflow.conditions_all : [],
         Array.isArray(workflow.conditions_any) ? workflow.conditions_any : [],
         record,
-        previousRecord,
+        hydratedPreviousRecord || null,
         { url, key, orgId, moduleId: workflowModuleId },
       );
       if (!matched) continue;
@@ -6676,7 +6732,7 @@ async function runEventTick(
       url,
       key,
       record,
-      previousRecord,
+      hydratedPreviousRecord || null,
       event === 'create' ? 'create' : 'update',
       eventActorUserId,
       body?.event_execution_key ? `event:${body.event_execution_key}:process-automation` : null,
@@ -6702,7 +6758,14 @@ async function loadTaskSourceRecord(url: string, key: string, task: Record<strin
   const rows = await dbGet(url, key,
     `${getModuleTable(link.moduleId)}?id=eq.${encodeURIComponent(link.recordId)}&org_id=eq.${encodeURIComponent(String(task?.org_id || '').trim())}&select=*&limit=1`
   ).catch(() => []);
-  return { ...link, record: rows[0] || null };
+  const record = await hydrateBotWorkflowVirtualFields(
+    url,
+    key,
+    link.moduleId,
+    rows[0] || null,
+    String(task?.org_id || '').trim(),
+  );
+  return { ...link, record: record || null };
 }
 
 async function loadSiblingProcessTasks(url: string, key: string, task: Record<string, any>): Promise<Record<string, any>[]> {
