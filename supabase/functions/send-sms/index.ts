@@ -653,12 +653,15 @@ const sendSmsWithProvider = async (to: string[], text: string, settings: SmsSett
 
     if (useSoapRequest) {
       const form = new URLSearchParams({
-        UserName: username,
-        PassWord: password || apiKey,
-        To: recipient,
-        From: senderNumber,
-        Text: text,
-        IsFlash: isFlash ? 'true' : 'false',
+        // Endpoint SendSimpleSMS2 نام پارامترها را با حروف کوچک می‌خواند.
+        // استفاده از PascalCase در برخی درخواست‌های مستقیم پذیرفته می‌شد،
+        // اما در runtime کمپین به کد 17 («متن خالی») منتهی می‌شد.
+        username,
+        password: password || apiKey,
+        to: recipient,
+        from: senderNumber,
+        text,
+        isflash: isFlash ? 'true' : 'false',
       });
       if (bodyId) form.set('bodyId', bodyId);
 

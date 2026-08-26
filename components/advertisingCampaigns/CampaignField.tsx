@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import SmartFieldRenderer from '../SmartFieldRenderer';
 import { FieldNature, FieldType, type ModuleField } from '../../types';
 import { MODULES } from '../../moduleRegistry';
@@ -35,7 +35,6 @@ const CampaignField: React.FC<CampaignFieldProps> = ({
   compact,
   dynamicOptionsCategory,
 }) => {
-  const [pendingTemporalValue, setPendingTemporalValue] = useState<unknown>(value);
   const registeredField = MODULES[moduleId]?.fields?.find((candidate: ModuleField) => candidate.key === fieldKey);
   const field: ModuleField = {
     ...(registeredField || {}),
@@ -49,21 +48,14 @@ const CampaignField: React.FC<CampaignFieldProps> = ({
     dynamicOptionsCategory: dynamicOptionsCategory || registeredField?.dynamicOptionsCategory,
   };
   const isTemporalField = field.type === FieldType.DATE || field.type === FieldType.TIME || field.type === FieldType.DATETIME;
-  useEffect(() => {
-    if (isTemporalField) setPendingTemporalValue(value);
-  }, [isTemporalField, value]);
-  const handleChange = (nextValue: unknown) => {
-    if (isTemporalField) setPendingTemporalValue(nextValue);
-    onChange(nextValue);
-  };
   return (
     <SmartFieldRenderer
       field={field}
-      // همهٔ تاریخ‌های کمپین از همان SmartFieldRenderer و PersianDatePicker
-      // مرکزی استفاده می‌کنند. state محلیِ کنترل‌شده، مقدار تأییدشده را
-      // بلافاصله پس از بستن picker دوباره به ورودی متصل می‌کند.
-      value={isTemporalField && pendingTemporalValue != null ? String(pendingTemporalValue) : (isTemporalField ? pendingTemporalValue : value)}
-      onChange={handleChange}
+      // تاریخ‌ها فقط از وضعیت واحد wizard خوانده می‌شوند. نگه‌داشتن یک
+      // state محلی باعث می‌شد بعد از ذخیره یا همگام‌سازی realtime، متن بعضی
+      // pickerهای کمپین با مقدار واقعی رکورد از هم جدا شود.
+      value={isTemporalField && value != null ? String(value) : value}
+      onChange={onChange}
       forceEditMode={!readonly}
       compactMode={compact}
       options={options}

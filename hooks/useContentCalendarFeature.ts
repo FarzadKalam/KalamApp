@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ModuleDefinition } from '../types';
 import { CONTENT_CALENDAR_MODULE_ID } from '../modules/contentCalendarsConfig';
 import { hasContentCalendarFeature } from '../utils/saasPlanFeatures';
+import { fetchCurrentUserRoleContext, SAAS_ADMIN_PERMISSION_KEY } from '../utils/permissions';
+import { supabase } from '../supabaseClient';
 
 const CONTENT_CALENDAR_RELATION_FIELD = 'content_calendar_id';
 
@@ -26,8 +28,15 @@ export const useContentCalendarFeature = () => {
   const [resolved, setResolved] = useState(false);
   useEffect(() => {
     let active = true;
-    void hasContentCalendarFeature()
-      .then((value) => { if (active) setEnabled(value); })
+    void Promise.all([
+      hasContentCalendarFeature(),
+      fetchCurrentUserRoleContext(supabase),
+    ])
+      .then(([featureEnabled, roleContext]) => {
+        const saasAdmin = roleContext.permissions?.[SAAS_ADMIN_PERMISSION_KEY];
+        const isSaasAdmin = saasAdmin?.view === true || saasAdmin?.edit === true;
+        if (active) setEnabled(featureEnabled || isSaasAdmin);
+      })
       .catch(() => { if (active) setEnabled(false); })
       .finally(() => { if (active) setResolved(true); });
     return () => { active = false; };

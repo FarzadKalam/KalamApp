@@ -103,7 +103,9 @@ export const ModuleCreate = () => {
 
         const modulePerms = context.permissions?.[moduleId] || {};
         if (active) {
-          setCanCreate(modulePerms.edit !== false);
+          const saasAdminPerms = context.permissions?.[SAAS_ADMIN_PERMISSION_KEY] || {};
+          const isSaasAdmin = saasAdminPerms.view === true || saasAdminPerms.edit === true;
+          setCanCreate(isSaasAdmin || modulePerms.edit !== false);
           setPermissionLoading(false);
         }
       } catch {
