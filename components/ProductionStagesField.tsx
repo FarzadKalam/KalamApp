@@ -98,6 +98,7 @@ import WorkflowIntervalScheduleFields, {
   type WorkflowIntervalFieldNames,
 } from './workflows/WorkflowIntervalScheduleFields';
 import { fetchRecordLockState, getRecordLockStateFromRecord, mergeRecordLockIntoRecord, type RecordLockState } from '../utils/recordLockRuntime';
+import { attachWorkflowTemplateFieldCatalog } from '../utils/workflowTemplateFieldCatalog';
 import HelpHint from './HelpHint';
 import {
   buildProcessLinkMapFromRecord,
@@ -12099,7 +12100,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                     <WorkflowActionsBuilder
                                       value={ruleActions}
                                       onChange={(next) => updateDraftAutomationRule(rule.id, {
-                                        actions: next,
+                                        actions: attachWorkflowTemplateFieldCatalog(next, automationScopeModuleId || 'tasks', automationActionVariableFields),
                                         note_text: extractRuleNoteTextFromActions(next),
                                       })}
                                       currentModuleId={automationScopeModuleId || 'tasks'}

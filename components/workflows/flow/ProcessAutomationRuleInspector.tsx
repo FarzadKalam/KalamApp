@@ -14,6 +14,7 @@ import {
   intervalUnitOptions,
   workflowExecutionModeOptions,
 } from '../../../utils/workflowTypes';
+import { attachWorkflowTemplateFieldCatalog } from '../../../utils/workflowTemplateFieldCatalog';
 import AdaptiveSelectField from '../../AdaptiveSelectField';
 import PersianDatePicker from '../../PersianDatePicker';
 import WorkflowActionsBuilder from '../WorkflowActionsBuilder';
@@ -68,7 +69,11 @@ const ProcessAutomationRuleInspector: React.FC<ProcessAutomationRuleInspectorPro
 
   const applyActionsPatch = (next: WorkflowAction[]) => {
     onPatch({
-      actions: next,
+      actions: attachWorkflowTemplateFieldCatalog(
+        next,
+        context.actionsBuilder.currentModuleId,
+        context.actionsBuilder.variableFields,
+      ),
       note_text: extractRuleNoteTextFromActions(next),
     });
   };

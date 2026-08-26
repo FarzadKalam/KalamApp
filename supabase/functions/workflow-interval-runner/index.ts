@@ -389,6 +389,16 @@ function getServerRecordTitle(record: Record<string, any>): string {
   ).trim() || '[بدون عنوان]';
 }
 
+function getServerProfileDisplayName(profile: Record<string, any>): string {
+  const fullName = String(profile?.full_name || profile?.display_name || '').trim();
+  if (fullName) return fullName;
+  const composedName = [profile?.first_name, profile?.last_name]
+    .map((part) => String(part || '').trim())
+    .filter(Boolean)
+    .join(' ');
+  return composedName || String(profile?.email || profile?.mobile_1 || 'کاربر').trim() || 'کاربر';
+}
+
 function buildResolvedAssigneeCombo(record: Record<string, any>): string | null {
   const assigneeType = String(record?.assignee_type || '').trim().toLowerCase();
   const roleId = String(record?.assignee_role_id || '').trim();
@@ -717,6 +727,7 @@ async function resolveServerOptionLabel(
   orgId: string,
   moduleId: string,
   templateFieldKey = fieldKey,
+  templateFieldSnapshot?: any,
 ): Promise<{ label: string | null; isOptionField: boolean }> {
   const taskStatusLabel = moduleId === 'tasks' ? getTaskRuntimeOptionLabel(record, fieldKey, value) : null;
   if (taskStatusLabel) return { label: taskStatusLabel, isOptionField: true };
@@ -724,8 +735,10 @@ async function resolveServerOptionLabel(
   const runtimeCustomField = String(templateFieldKey || '').startsWith('previous_stage__')
     ? getPreviousTaskRuntimeCustomFieldConfig(record, fieldKey)
     : getTaskRuntimeCustomFieldConfig(record, fieldKey);
-  const fields = runtimeCustomField ? null : await getOrgModuleFieldConfigs(url, key, orgId, moduleId);
-  const field = runtimeCustomField || fields?.get(fieldKey);
+  const fields = runtimeCustomField || templateFieldSnapshot
+    ? null
+    : await getOrgModuleFieldConfigs(url, key, orgId, moduleId);
+  const field = runtimeCustomField || templateFieldSnapshot || fields?.get(fieldKey);
   const type = String(field?.type || '').trim().toLowerCase();
   const isOptionField = ['select', 'multi_select', 'status', 'checklist', 'tags'].includes(type);
   const staticLabel = findWorkflowOptionLabel(field?.options, value);
@@ -915,7 +928,7 @@ async function formatFieldValue(
       `${table}?id=eq.${encodeURIComponent(identityReference.id)}&org_id=eq.${encodeURIComponent(orgId)}&select=*&limit=1`
     ).catch(() => []);
     return rows[0]
-      ? getServerRecordTitle(rows[0])
+      ? (identityReference.type === 'user' ? getServerProfileDisplayName(rows[0]) : getServerRecordTitle(rows[0]))
       : (identityReference.type === 'role' ? 'نقش سازمانی' : 'کاربر');
   }
   if (typeof value === 'string' && /^\/?(?:i|d)\//i.test(str)) {
@@ -932,13 +945,14 @@ async function formatFieldValue(
     return toPersianDigits(`${hours}:${minutes}`);
   }
   const fieldContext = resolveTemplateFieldModule(moduleId, fieldKey);
+  const templateFieldSnapshot = record?.__workflow_template_field_catalog?.[fieldKey];
   const runtimeCustomField = String(fieldKey || '').startsWith('previous_stage__')
     ? getPreviousTaskRuntimeCustomFieldConfig(record, fieldContext.fieldKey)
     : getTaskRuntimeCustomFieldConfig(record, fieldContext.fieldKey);
-  const configuredFields = runtimeCustomField
+  const configuredFields = runtimeCustomField || templateFieldSnapshot
     ? null
     : await getOrgModuleFieldConfigs(url, key, orgId, fieldContext.moduleId);
-  const fieldType = String(runtimeCustomField?.type || configuredFields?.get(fieldContext.fieldKey)?.type || '')
+  const fieldType = String(runtimeCustomField?.type || templateFieldSnapshot?.type || configuredFields?.get(fieldContext.fieldKey)?.type || '')
     .trim()
     .toLowerCase();
   if (fieldType === 'long_text' || fieldType === 'superlongtext') {
@@ -970,6 +984,7 @@ async function formatFieldValue(
     orgId,
     fieldContext.moduleId,
     fieldKey,
+    templateFieldSnapshot,
   );
   if (optionLabel.label) return optionLabel.label;
   const staticLabel = getWorkflowStaticValueLabel(fieldContext.fieldKey, value, fieldContext.moduleId);
@@ -980,10 +995,12 @@ async function formatFieldValue(
     /(^|_)(status|type|kind|category|method|direction|priority)$/i.test(String(fieldKey || '').trim())
     && /^[a-z][a-z0-9_-]*$/i.test(str.trim())
   ) {
-    return str;
+    return /(^|_)status$/i.test(String(fieldContext.fieldKey || fieldKey || '').trim())
+      ? 'وضعیت تعریف‌نشده'
+      : 'مقدار تعریف‌نشده';
   }
   if (UUID_LIKE_REGEX.test(str)) {
-    const normalizedField = String(fieldKey || '').toLowerCase();
+    const normalizedField = String(fieldContext.fieldKey || fieldKey || '').toLowerCase();
     if (normalizedField.includes('tags') || normalizedField.endsWith('tag_id')) {
       const tagRows = await dbGet(
         url,
@@ -993,10 +1010,10 @@ async function formatFieldValue(
       const tagTitle = String(tagRows?.[0]?.title || '').trim();
       if (tagTitle) return tagTitle;
     }
+    const isAuditUserField = normalizedField === 'created_by' || normalizedField === 'updated_by';
     const candidates = normalizedField.includes('role')
       ? ['org_roles']
-      : normalizedField === 'created_by'
-        || normalizedField === 'updated_by'
+      : isAuditUserField
         || normalizedField.includes('profile')
         || normalizedField.includes('user')
         || normalizedField.includes('assignee')
@@ -1013,7 +1030,7 @@ async function formatFieldValue(
       const rows = await dbGet(url, key,
         `${table}?id=eq.${encodeURIComponent(str)}&org_id=eq.${encodeURIComponent(orgId)}&select=*&limit=1`
       ).catch(() => []);
-      if (rows[0]) return getServerRecordTitle(rows[0]);
+      if (rows[0]) return table === 'profiles' ? getServerProfileDisplayName(rows[0]) : getServerRecordTitle(rows[0]);
     }
     return '[رکورد مرتبط]';
   }
@@ -3816,6 +3833,9 @@ async function executeAction(
   moduleId: string, orgId: string, url: string, key: string, actorUserId: string | null = null
 ): Promise<ActionExecutionResult> {
   const config = action.config || {};
+  if (config.__template_field_catalog && typeof config.__template_field_catalog === 'object') {
+    record = { ...record, __workflow_template_field_catalog: config.__template_field_catalog };
+  }
   const recordId = String(record?.id || '').trim();
 
   // ── run_ai_prompt ─────────────────────────────────────────────────────

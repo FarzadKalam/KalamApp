@@ -39,6 +39,7 @@ import {
 } from '../../utils/workflowTypes';
 import { getWorkflowActionTypeLabelFa } from '../../utils/workflowActionSummary';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { attachWorkflowTemplateFieldCatalog } from '../../utils/workflowTemplateFieldCatalog';
 import {
   resolveOverlayPopupContainer,
 } from '../../utils/popupContainer';
@@ -260,7 +261,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
         is_active: isActiveValue !== false,
         conditionsAll,
         conditionsAny,
-        actions,
+        actions: attachWorkflowTemplateFieldCatalog(actions, values.module_id, conditionFields),
       }),
     [triggerType, intervalValue, intervalUnit, intervalDayOfMonth, intervalDayCondition, isActiveValue, conditionsAll, conditionsAny, actions]
   );
@@ -429,7 +430,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
         batch_size: isInterval ? values.batch_size || null : null,
         conditions_all: conditionsAll,
         conditions_any: conditionsAny,
-        actions,
+        actions: attachWorkflowTemplateFieldCatalog(actions, values.module_id, conditionFields),
         is_active: values.is_active !== false,
         updated_by: userId,
       };
