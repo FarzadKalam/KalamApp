@@ -52,7 +52,7 @@ import { buildAiRecordCreationSchema } from './aiRecordCreation';
 import { lockRecord } from './recordLockRuntime';
 import { shouldSkipRecordForAutomation } from './recycleBinGuards';
 import { buildTaskSourceInitialValues } from './taskMeta';
-import { getCanonicalModuleFields } from './recordVariableCatalog';
+import { getCanonicalModuleFields, isRecordAuditUserFieldKey } from './recordVariableCatalog';
 import { filterActiveGroupMentionTargets, filterActiveMentionTargets, isActiveProfileRow } from './activeProfileRecipients';
 import {
   evaluateConditionCollection as evaluateCentralConditionCollection,
@@ -288,8 +288,14 @@ const getValueByPath = (record: Record<string, any> | null | undefined, path: st
   return current;
 };
 
-const templateMayNeedAssigneeDirectory = (template: string) =>
-  /\{\{\s*[^}]*assignee[^}]*\s*\}\}/i.test(String(template || ''));
+const templateMayNeedIdentityDirectory = (template: string) => {
+  const tokens = String(template || '').matchAll(/\{\{\s*([^}]+)\s*\}\}/g);
+  for (const match of tokens) {
+    const key = String(match[1] || '').trim();
+    if (/assignee/i.test(key) || isRecordAuditUserFieldKey(key)) return true;
+  }
+  return false;
+};
 
 const ASSIGNEE_PROFILE_TEMPLATE_FIELDS: Record<string, string> = {
   assignee_full_name: 'full_name',
@@ -363,7 +369,7 @@ const renderWorkflowTemplate = async (
   const rawTemplate = String(template || '');
   if (!rawTemplate) return '';
   const context = createWorkflowEvaluationContext(String(moduleId || ''));
-  const assigneeDirectory = templateMayNeedAssigneeDirectory(rawTemplate)
+  const assigneeDirectory = templateMayNeedIdentityDirectory(rawTemplate)
     ? await fetchAssigneeDirectory(supabase).catch(() => null)
     : null;
   const optionLabelMaps = await resolveTemplateOptionLabelMaps(supabase, rawTemplate, moduleId, record);

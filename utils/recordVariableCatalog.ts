@@ -5,6 +5,27 @@ import { getFieldLabelFa } from './fieldLabel';
 
 const HIDDEN_CATALOG_KEYS = new Set(['id', 'org_id']);
 
+/**
+ * فیلدهای حسابرسی متعلق به خود رکورد هستند؛ وقتی در زمینهٔ پروفایل مسئول
+ * دیده شوند، معنای «ویرایشگر پروفایل» می‌گیرند و نباید به‌عنوان متغیر مسئول
+ * یا بازاریاب نمایش داده شوند.
+ */
+export const RECORD_AUDIT_FIELD_KEYS = new Set([
+  'system_code',
+  'created_at',
+  'created_by',
+  'updated_at',
+  'updated_by',
+]);
+
+export const isRecordAuditFieldKey = (fieldKey: unknown) =>
+  RECORD_AUDIT_FIELD_KEYS.has(String(fieldKey || '').trim());
+
+export const isRecordAuditUserFieldKey = (fieldKey: unknown) => {
+  const normalized = String(fieldKey || '').trim();
+  return normalized === 'created_by' || normalized === 'updated_by';
+};
+
 const SYSTEM_FIELDS: ModuleField[] = [
   { key: 'system_code', labels: { fa: 'کد سیستمی', en: 'System Code' }, type: FieldType.TEXT, readonly: true, nature: FieldNature.SYSTEM },
   { key: 'created_at', labels: { fa: 'زمان ایجاد', en: 'Created At' }, type: FieldType.DATETIME, readonly: true, nature: FieldNature.SYSTEM },

@@ -23,6 +23,7 @@ import {
   buildRelatedVariableLabel,
   dedupeModuleFields,
   getCanonicalModuleFields,
+  isRecordAuditFieldKey,
 } from './recordVariableCatalog';
 
 const HIDDEN_WORKFLOW_FIELD_KEYS = new Set([
@@ -89,7 +90,11 @@ const getAssigneeProfileFields = (sourceModuleId: string, assigneeFieldKey = 'as
   return getVisibleWorkflowModuleFields('profiles')
     .filter((field) => {
       const key = String(field?.key || '').trim();
-      return key && key !== 'assignee_id' && key !== 'tags' && key !== 'org_id';
+      return key
+        && key !== 'assignee_id'
+        && key !== 'tags'
+        && key !== 'org_id'
+        && !isRecordAuditFieldKey(key);
     })
     .map((field) => {
       const profileFieldLabel = getFieldLabelFa(field, { moduleId: 'profiles', fallback: field.key });

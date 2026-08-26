@@ -12,6 +12,16 @@ const directory = {
 };
 
 describe('messageTemplateRenderer assignee values', () => {
+  it.each(['created_by', 'updated_by'])('renders %s as the user display name', (fieldKey) => {
+    const text = renderTemplateText(
+      `کاربر: {{${fieldKey}}}`,
+      { [fieldKey]: '11111111-1111-1111-1111-111111111111' },
+      { assigneeDirectory: directory }
+    );
+
+    expect(text).toBe('کاربر: علی رضایی');
+  });
+
   it('renders assignee_id as the user display name', () => {
     const text = renderTemplateText(
       'مسئول: {{assignee_id}}',
@@ -114,14 +124,13 @@ describe('messageTemplateRenderer option values', () => {
     expect(text).toBe('نوع فعالیت: تماس خروجی');
   });
 
-  it('leaves an unresolved technical option value blank', () => {
+  it('keeps an unmatched customized option value visible', () => {
     const text = renderTemplateText(
       'اولویت: {{priority}}',
       { priority: 'unknown_internal_code' },
       { moduleId: 'tasks' }
     );
-    expect(text).toBe('اولویت: ');
-    expect(text).not.toContain('unknown_internal_code');
+    expect(text).toBe('اولویت: unknown_internal_code');
   });
 
   it('renders process-specific activity status labels before the default task status labels', () => {

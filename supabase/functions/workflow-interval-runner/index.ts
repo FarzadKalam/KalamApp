@@ -974,12 +974,13 @@ async function formatFieldValue(
   if (optionLabel.label) return optionLabel.label;
   const staticLabel = getWorkflowStaticValueLabel(fieldContext.fieldKey, value, fieldContext.moduleId);
   if (staticLabel) return staticLabel;
-  if (optionLabel.isOptionField) return '';
+  // اگر مقدار قدیمی با گزینه‌های فعلی منطبق نبود، آن را پنهان نکن؛ برچسب گزینه
+  // در resolveServerOptionLabel اولویت دارد و این فقط fallback پیام است.
   if (
     /(^|_)(status|type|kind|category|method|direction|priority)$/i.test(String(fieldKey || '').trim())
     && /^[a-z][a-z0-9_-]*$/i.test(str.trim())
   ) {
-    return '';
+    return str;
   }
   if (UUID_LIKE_REGEX.test(str)) {
     const normalizedField = String(fieldKey || '').toLowerCase();
@@ -994,7 +995,11 @@ async function formatFieldValue(
     }
     const candidates = normalizedField.includes('role')
       ? ['org_roles']
-      : normalizedField.includes('profile') || normalizedField.includes('user') || normalizedField.includes('assignee')
+      : normalizedField === 'created_by'
+        || normalizedField === 'updated_by'
+        || normalizedField.includes('profile')
+        || normalizedField.includes('user')
+        || normalizedField.includes('assignee')
         ? ['profiles']
         : normalizedField.includes('customer') ? ['customers']
         : normalizedField.includes('supplier') ? ['suppliers']

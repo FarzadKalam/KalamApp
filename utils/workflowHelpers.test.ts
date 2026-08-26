@@ -112,6 +112,20 @@ describe('workflowHelpers', () => {
     expect(fullNameField?.labels?.fa).toBe('بازاریاب: نام و نام خانوادگی');
   });
 
+  it('does not expose profile audit fields as misleading assignee variables', () => {
+    const fields = getWorkflowConditionFields('invoices');
+    const profileAuditFields = fields.filter((field) =>
+      String(field?.key || '').startsWith('__workflow_related__assignee_id::profiles::')
+      && /(?:created_by|updated_by|created_at|updated_at)$/.test(String(field?.key || ''))
+    );
+
+    expect(profileAuditFields).toHaveLength(0);
+    expect(fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'created_by', labels: expect.objectContaining({ fa: 'ایجادکننده' }) }),
+      expect.objectContaining({ key: 'updated_by', labels: expect.objectContaining({ fa: 'آخرین ویرایشگر' }) }),
+    ]));
+  });
+
   it('exposes stable process and lane identity variables for process templates', () => {
     expect(getProcessTemplateIdentityFields()).toEqual(expect.arrayContaining([
       expect.objectContaining({ key: 'process_name', labels: expect.objectContaining({ fa: 'نام فرآیند' }) }),

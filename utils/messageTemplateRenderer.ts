@@ -62,6 +62,7 @@ const ASSIGNEE_FIELD_KEYS = new Set([
   'default_assignee_role_id',
   WORKFLOW_ASSIGNEE_FIELD_KEY,
 ]);
+const AUDIT_USER_FIELD_KEYS = new Set(['created_by', 'updated_by']);
 const TASK_AUTOMATION_FIELD_PREFIX = '__task__';
 const PREVIOUS_STAGE_TASK_AUTOMATION_FIELD_PREFIX = 'previous_stage__';
 const TASK_TEMPLATE_ALIAS_KEYS: Record<string, string> = {
@@ -198,7 +199,8 @@ const resolveFieldContext = (moduleId: string | null | undefined, fieldKey: stri
 };
 
 const isAssigneeFieldKey = (key: string | null | undefined) =>
-  ASSIGNEE_FIELD_KEYS.has(String(key || '').trim());
+  ASSIGNEE_FIELD_KEYS.has(String(key || '').trim())
+  || AUDIT_USER_FIELD_KEYS.has(String(key || '').trim());
 
 // فیلدهای مالی که مقدار خام انگلیسی‌شان باید به فارسی نمایش داده شود.
 const resolveFinancialValueKind = (key: string | null | undefined): FinancialValueKind | null => {
@@ -482,13 +484,8 @@ export const formatTemplateValueByField = ({
     if (financialLabel) return financialLabel;
   }
 
-  if (
-    [FieldType.SELECT, FieldType.MULTI_SELECT, FieldType.STATUS].includes(fieldType as FieldType)
-    && typeof value === 'string'
-    && /^[a-z][a-z0-9_-]*$/i.test(value.trim())
-  ) {
-    return '';
-  }
+  // مقدار گزینه‌ای که تنظیماتش تغییر کرده نباید از پیام حذف شود. برچسب تنظیم‌شده
+  // در مسیرهای بالاتر ترجیح دارد؛ این مقدار صرفاً fallback امن برای تنظیمات قدیمی است.
 
   if (fieldType === FieldType.CHECKBOX || typeof value === 'boolean') {
     return value === true || String(value).toLowerCase() === 'true' ? 'بله' : 'خیر';
