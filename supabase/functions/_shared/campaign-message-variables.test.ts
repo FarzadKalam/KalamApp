@@ -19,6 +19,8 @@ const render = (
   descriptors,
   fetchRecord,
   appBaseUrl: 'https://app.example.test',
+  currencyCode: 'IRR',
+  currencyLabel: 'ریال سازمان',
 });
 
 describe('campaign runtime message variables', () => {
@@ -27,6 +29,12 @@ describe('campaign runtime message variables', () => {
       key: 'status', module_id: 'invoices', field_key: 'status', field_type: 'status',
       options: [{ value: 'approved', label: 'تأییدشده' }],
     }])).resolves.toBe('وضعیت: تأییدشده');
+  });
+
+  it('adds the organization currency unit to campaign price variables', async () => {
+    await expect(render('مبلغ: {{total_invoice_amount}}', { total_invoice_amount: 1250000 }, [{
+      key: 'total_invoice_amount', module_id: 'invoices', field_key: 'total_invoice_amount', field_type: 'price',
+    }])).resolves.toBe('مبلغ: ۱٬۲۵۰٬۰۰۰ ریال سازمان');
   });
 
   it('resolves relation and user UUIDs to their record labels', async () => {

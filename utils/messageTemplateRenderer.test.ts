@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { formatTemplateValueByField, renderTemplateText } from './messageTemplateRenderer';
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from './workflowTypes';
+import { CURRENCY_STORAGE_KEY } from './currency';
 
 const directory = {
   users: [
@@ -58,6 +59,18 @@ describe('messageTemplateRenderer assignee values', () => {
 });
 
 describe('messageTemplateRenderer option values', () => {
+  it('adds the organization currency unit to every price variable', () => {
+    window.localStorage.setItem(CURRENCY_STORAGE_KEY, JSON.stringify({ code: 'IRR', label: 'ریال سازمان' }));
+    const text = renderTemplateText(
+      'مبلغ: {{total_invoice_amount}}',
+      { total_invoice_amount: 1250000 },
+      { moduleId: 'invoices' },
+    );
+    window.localStorage.removeItem(CURRENCY_STORAGE_KEY);
+
+    expect(text).toBe('مبلغ: ۱٬۲۵۰٬۰۰۰ ریال سازمان');
+  });
+
   it('renders long-text template values as plain text with their line breaks', () => {
     const text = renderTemplateText(
       'پیام: {{notes}}',

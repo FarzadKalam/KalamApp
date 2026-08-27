@@ -3,7 +3,7 @@
 
 import { renderCampaignMessageVariables } from '../_shared/campaign-message-variables.ts';
 
-const FUNCTION_BUILD = 'campaign-runtime-2026-08-27-03-variable-resolver';
+const FUNCTION_BUILD = 'campaign-runtime-2026-08-27-04-currency-variables';
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-kalam-internal',
@@ -139,8 +139,8 @@ const loadConnection = async (baseUrl: string, key: string, connectionId: string
 };
 
 const sendRecipient = async ({
-  baseUrl, key, dispatch, tool, recipient,
-}: { baseUrl: string; key: string; dispatch: any; tool: any; recipient: any }) => {
+  baseUrl, key, dispatch, tool, recipient, currencyCode, currencyLabel,
+}: { baseUrl: string; key: string; dispatch: any; tool: any; recipient: any; currencyCode: string; currencyLabel: string }) => {
   const snapshot = dispatch.message_snapshot && typeof dispatch.message_snapshot === 'object'
     ? dispatch.message_snapshot : {};
   const variables = {
@@ -171,6 +171,8 @@ const sendRecipient = async ({
     descriptors: variableCatalog,
     fetchRecord: fetchVariableRecord,
     appBaseUrl: Deno.env.get('KALAMAPP_PUBLIC_BASE_URL') || Deno.env.get('PUBLIC_APP_URL') || '',
+    currencyCode,
+    currencyLabel,
   });
   const configuredMessage = tool.config?.message_template || tool.config?.html_body || tool.config?.message || '';
   const renderedMessage = (await renderMessage(snapshot.message || snapshot.text || configuredMessage)).trim();
@@ -256,6 +258,12 @@ const processDispatch = async (baseUrl: string, key: string, dispatch: any) => {
       || !(await isFeatureEnabled(baseUrl, key, dispatch.org_id, feature))) {
     throw new Error('قابلیت ارسال این کانال در پلن سازمان فعال نیست.');
   }
+  const companyRows = await rest(baseUrl, key,
+    `company_settings?org_id=eq.${encodeURIComponent(dispatch.org_id)}&select=currency_code,currency_label&limit=1`,
+  ).catch(() => []);
+  const companyCurrency = Array.isArray(companyRows) ? companyRows[0] || {} : {};
+  const currencyCode = String(companyCurrency.currency_code || '').trim();
+  const currencyLabel = String(companyCurrency.currency_label || '').trim();
 
   const isTestDispatch = dispatch?.message_snapshot?.is_test === true
     || dispatch?.audience_snapshot?.is_test === true;
@@ -283,7 +291,7 @@ const processDispatch = async (baseUrl: string, key: string, dispatch: any) => {
       last_attempt_at: new Date().toISOString(),
     });
     try {
-      await sendRecipient({ baseUrl, key, dispatch, tool, recipient });
+      await sendRecipient({ baseUrl, key, dispatch, tool, recipient, currencyCode, currencyLabel });
     } catch (error: any) {
       await patchRows(baseUrl, key, `advertising_campaign_recipients?id=eq.${recipient.id}`, {
         status: 'failed', error_message: String(error?.message || error).slice(0, 1500),

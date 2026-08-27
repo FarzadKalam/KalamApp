@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatWorkflowNumericValue,
+  formatWorkflowPriceWithCurrency,
   getWorkflowStaticValueLabel,
   parseWorkflowIdentityReference,
   resolveWorkflowCurrencyLabel,
@@ -42,5 +43,8 @@ describe('server workflow value labels', () => {
     expect(resolveWorkflowCurrencyLabel('IRR', '')).toBe('ریال');
     expect(resolveWorkflowCurrencyLabel('USD', '')).toBe('دلار');
     expect(resolveWorkflowCurrencyLabel('EUR', 'یورو سازمان')).toBe('یورو سازمان');
+    expect(formatWorkflowPriceWithCurrency(1250000, 'IRR', '')).toBe('۱٬۲۵۰٬۰۰۰ ریال');
+    expect(formatWorkflowPriceWithCurrency('۱۲۵۰۰۰۰', 'IRT', 'تومان ویژه')).toBe('۱٬۲۵۰٬۰۰۰ تومان ویژه');
+    expect(formatWorkflowPriceWithCurrency('۱٬۲۵۰٬۰۰۰ تومان', 'IRT', 'تومان')).toBe('۱٬۲۵۰٬۰۰۰ تومان');
   });
 });

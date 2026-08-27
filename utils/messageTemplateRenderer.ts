@@ -4,6 +4,7 @@ import { parseProcessLinkedFieldKey } from './processTargets';
 import { parseWorkflowRelatedFieldKey, WORKFLOW_ASSIGNEE_FIELD_KEY } from './workflowTypes';
 import { formatPersianPrice, formatPersianTime, safeJalaliFormat, toPersianNumber } from './persianNumberFormatter';
 import { readCurrencyConfig } from './currency';
+import { formatWorkflowPriceWithCurrency } from '../supabase/functions/_shared/workflow-value-labels';
 import { fetchDynamicOptionsMap } from './referenceData';
 import { fetchRelationOptionsForField } from './relationOptions';
 import { localizeFinancialValue, FinancialValueKind } from './financialValueLabels';
@@ -262,10 +263,9 @@ const resolveAssigneeLabel = (
 };
 
 const formatPriceWithCurrency = (value: unknown) => {
-  const formatted = String(formatPersianPrice(value, true) || '').trim();
-  if (!formatted) return '';
-  const currencyLabel = String(readCurrencyConfig().label || '').trim();
-  return currencyLabel ? `${formatted} ${currencyLabel}` : formatted;
+  const currency = readCurrencyConfig();
+  return formatWorkflowPriceWithCurrency(value, currency.code, currency.label)
+    || String(formatPersianPrice(value, true) || '').trim();
 };
 
 const findOptionLabel = (options: TemplateOptionRow[] | null | undefined, value: unknown): string | null => {

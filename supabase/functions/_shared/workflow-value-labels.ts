@@ -83,3 +83,23 @@ export const resolveWorkflowCurrencyLabel = (code: unknown, label: unknown): str
   if (normalizedCode === 'EUR') return 'یورو';
   return 'تومان';
 };
+
+/**
+ * خروجی واحد برای تمام متغیرهای پیام از نوع مبلغ. نوع فیلد باید پیش از فراخوانی
+ * احراز شده باشد تا فیلدهای عددی معمولی صرفاً به‌خاطر نامشان پولی نشوند.
+ */
+export const formatWorkflowPriceWithCurrency = (
+  value: unknown,
+  currencyCode?: unknown,
+  currencyLabel?: unknown,
+): string | null => {
+  const resolvedCurrencyLabel = resolveWorkflowCurrencyLabel(currencyCode, currencyLabel);
+  const formatted = formatWorkflowNumericValue('', value, true);
+  if (formatted) return `${formatted} ${resolvedCurrencyLabel}`;
+
+  // دادهٔ قدیمی ممکن است از قبل همراه واحد ذخیره شده باشد؛ در این حالت واحد را
+  // دوباره اضافه نکن و همان مقدار قابل‌خواندن را حفظ کن.
+  const raw = normalizeText(value);
+  if (raw && resolvedCurrencyLabel && raw.endsWith(resolvedCurrencyLabel)) return raw;
+  return null;
+};

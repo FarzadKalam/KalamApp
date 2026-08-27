@@ -17,7 +17,7 @@ import {
   taskRecipientToken as taskRecipientTokenCore,
   type ProcessAutomationEvent,
 } from '../_shared/process-automation-core.ts';
-import { formatWorkflowNumericValue, getWorkflowStaticValueLabel, parseWorkflowIdentityReference, resolveWorkflowCurrencyLabel } from '../_shared/workflow-value-labels.ts';
+import { formatWorkflowPriceWithCurrency, getWorkflowStaticValueLabel, parseWorkflowIdentityReference, resolveWorkflowCurrencyLabel } from '../_shared/workflow-value-labels.ts';
 import { buildProcessActivatorRecordContext } from '../_shared/process-activator-context.ts';
 import { renderProcessStageForTaskCreation } from '../_shared/process-stage-template-renderer.ts';
 import { buildAutomatedBotSenderPayload, extractBotProviderMessageId } from '../_shared/bot-system-message.ts';
@@ -959,15 +959,14 @@ async function formatFieldValue(
   if (fieldType === 'long_text' || fieldType === 'superlongtext') {
     return richTextMarkupToPlainText(str);
   }
-  const configuredPriceFields = await getOrgModulePriceFields(url, key, orgId, fieldContext.moduleId);
-  const formattedNumericValue = formatWorkflowNumericValue(
-    fieldContext.fieldKey,
-    value,
-    configuredPriceFields.has(fieldContext.fieldKey),
-  );
-  if (formattedNumericValue) {
+  const configuredPriceFields = fieldType === 'price'
+    ? null
+    : await getOrgModulePriceFields(url, key, orgId, fieldContext.moduleId);
+  const isPriceField = fieldType === 'price' || configuredPriceFields?.has(fieldContext.fieldKey) === true;
+  if (isPriceField) {
     const currencyLabel = await getOrgCurrencyLabel(url, key, orgId);
-    return `${formattedNumericValue} ${currencyLabel}`;
+    const formattedPrice = formatWorkflowPriceWithCurrency(value, '', currencyLabel);
+    if (formattedPrice) return formattedPrice;
   }
   if (typeof value === 'number') {
     return value.toLocaleString('fa-IR', { maximumFractionDigits: 6 });

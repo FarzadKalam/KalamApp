@@ -1,3 +1,5 @@
+import { formatWorkflowPriceWithCurrency } from './workflow-value-labels.ts';
+
 export type CampaignMessageVariableDescriptor = {
   key: string;
   module_id: string;
@@ -16,6 +18,8 @@ type CampaignVariableResolverContext = {
   descriptors: CampaignMessageVariableDescriptor[];
   fetchRecord: (moduleId: string, recordId: string) => Promise<Record<string, any> | null>;
   appBaseUrl?: string | null;
+  currencyCode?: string | null;
+  currencyLabel?: string | null;
 };
 
 const UUID_LIKE_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -74,7 +78,11 @@ const formatDateValue = (value: unknown, includeTime: boolean) => {
   }).format(date);
 };
 
-const formatScalar = (value: unknown, descriptor: CampaignMessageVariableDescriptor): string => {
+const formatScalar = (
+  value: unknown,
+  descriptor: CampaignMessageVariableDescriptor,
+  context: Pick<CampaignVariableResolverContext, 'currencyCode' | 'currencyLabel'>,
+): string => {
   if (value === null || value === undefined || value === '') return '';
   const fieldType = normalize(descriptor.field_type).toLowerCase();
   const option = (descriptor.options || []).find((item) => normalize(item.value) === normalize(value));
@@ -82,13 +90,16 @@ const formatScalar = (value: unknown, descriptor: CampaignMessageVariableDescrip
   if (fieldType === 'checkbox' || typeof value === 'boolean') return value ? 'بله' : 'خیر';
   if (fieldType === 'date') return formatDateValue(value, false);
   if (fieldType === 'datetime') return formatDateValue(value, true);
-  if (['number', 'price', 'stock', 'percentage', 'percentage_or_amount'].includes(fieldType)) {
+  if (fieldType === 'price') {
+    return formatWorkflowPriceWithCurrency(value, context.currencyCode, context.currencyLabel) || normalize(value);
+  }
+  if (['number', 'stock', 'percentage', 'percentage_or_amount'].includes(fieldType)) {
     const numeric = Number(value);
     return Number.isFinite(numeric) ? new Intl.NumberFormat('fa-IR').format(numeric) : normalize(value);
   }
   if (fieldType === 'long_text' || fieldType === 'superlongtext') return stripMarkup(value);
   if (Array.isArray(value)) {
-    return value.map((item) => formatScalar(item, descriptor)).filter(Boolean).join('، ');
+    return value.map((item) => formatScalar(item, descriptor, context)).filter(Boolean).join('، ');
   }
   if (typeof value === 'object') {
     const objectLabel = normalize((value as any).label || (value as any).title || (value as any).name);
@@ -116,7 +127,7 @@ const resolveRelationValue = async (
   if (!related) return '';
   const targetField = normalize(descriptor.relation_target_field);
   if (targetField && related[targetField] !== null && related[targetField] !== undefined && related[targetField] !== '') {
-    const targetValue = formatScalar(related[targetField], descriptor);
+    const targetValue = formatScalar(related[targetField], descriptor, context);
     if (targetValue) return targetValue;
   }
   return recordLabel(related, targetModule);
@@ -176,7 +187,7 @@ const resolveDescriptor = async (
     const targetId = normalize(alias.kind === 'role' ? sourceRecord.assignee_role_id : sourceRecord.assignee_id);
     if (!targetId) return '';
     const identity = await context.fetchRecord(targetModule, targetId);
-    return formatScalar(identity?.[alias.field], descriptor) || recordLabel(identity, targetModule);
+    return formatScalar(identity?.[alias.field], descriptor, context) || recordLabel(identity, targetModule);
   }
 
   const rawValue = sourceRecord[valueKey];
@@ -191,7 +202,7 @@ const resolveDescriptor = async (
     const labels = await Promise.all(values.map((item) => resolveRelationValue(item, descriptor, context)));
     return labels.filter(Boolean).join('، ');
   }
-  return formatScalar(rawValue, descriptor);
+  return formatScalar(rawValue, descriptor, context);
 };
 
 export const renderCampaignMessageVariables = async (
