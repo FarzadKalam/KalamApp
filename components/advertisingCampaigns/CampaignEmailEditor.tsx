@@ -12,6 +12,7 @@ import CampaignField, { useCampaignFieldSurface } from './CampaignField';
 import { getPersistedCampaignToolId } from './campaignUtils';
 import CampaignImportProgress from './CampaignImportProgress';
 import { downloadCampaignAudienceSample } from './campaignImportSample';
+import CampaignMessageVariablePicker, { appendCampaignMessageVariable } from './CampaignMessageVariables';
 
 type Props = { tool: CampaignToolRecord; onChange: (patch: Partial<CampaignToolRecord>) => void; disabled?: boolean };
 
@@ -49,7 +50,16 @@ const CampaignEmailEditor: React.FC<Props> = ({ tool, onChange, disabled }) => {
       ) : null}
       <CampaignField fieldKey="email_subject" label="موضوع ایمیل" value={config.subject} onChange={(subject) => patch({ subject })} readonly={disabled} required />
       <CampaignField fieldKey="email_preheader" label="پیش‌نمایش کوتاه (Preheader)" value={config.preheader} onChange={(preheader) => patch({ preheader })} readonly={disabled} />
-      <CampaignField fieldKey="email_html_body" label="متن ایمیل" type={FieldType.SUPER_LONG_TEXT} value={config.html_body} onChange={(html_body) => patch({ html_body })} readonly={disabled} moduleId="advertising_campaign_tools" recordId={persistedToolId} />
+      <div className="space-y-2">
+        <CampaignField fieldKey="email_html_body" label="متن ایمیل" type={FieldType.SUPER_LONG_TEXT} value={config.html_body} onChange={(html_body) => patch({ html_body })} readonly={disabled} moduleId="advertising_campaign_tools" recordId={persistedToolId} />
+        {config.audience_sources?.includes('internal') ? (
+          <CampaignMessageVariablePicker
+            disabled={disabled}
+            targetLabel="متن ایمیل"
+            onInsert={(token) => patch({ html_body: appendCampaignMessageVariable(config.html_body, token) })}
+          />
+        ) : null}
+      </div>
       <CampaignField fieldKey="email_plain_body" label="نسخه متنی جایگزین" type={FieldType.LONG_TEXT} value={config.plain_text_body} onChange={(plain_text_body) => patch({ plain_text_body })} readonly={disabled} moduleId="advertising_campaign_tools" recordId={persistedToolId} />
       <CampaignAttachmentsField moduleId="advertising_campaign_tools" recordId={persistedToolId} title="پیوست‌های ایمیل" value={config.attachments} onChange={(attachments) => patch({ attachments })} disabled={disabled} />
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">

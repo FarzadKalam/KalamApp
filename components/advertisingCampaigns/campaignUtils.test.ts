@@ -95,8 +95,21 @@ describe('campaignUtils', () => {
     expect(buildCampaignMessageSnapshot(tool)).toMatchObject({
       message: 'پیام کمپین',
       text: 'پیام کمپین',
+      variable_catalog: [],
     });
     expect(getCampaignToolEmptyMessageError(tool)).toBeNull();
+  });
+
+  it('snapshots only descriptors that are actually used in the message', () => {
+    const tool = createCampaignToolDraft('campaign-1', 'sms');
+    tool.config = { ...tool.config, message_template: 'سلام {{full_name}}' } as any;
+    const descriptors = [
+      { key: 'full_name', module_id: 'customers', field_key: 'full_name', field_type: 'text' },
+      { key: 'email', module_id: 'customers', field_key: 'email', field_type: 'email' },
+    ];
+
+    expect(buildCampaignMessageSnapshot(tool, { variableCatalog: descriptors }).variable_catalog)
+      .toEqual([descriptors[0]]);
   });
 
   it('rejects visually empty rich text for every automatic message tool', () => {

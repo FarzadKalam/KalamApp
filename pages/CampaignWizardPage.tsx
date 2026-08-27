@@ -12,6 +12,8 @@ import CampaignManualToolEditor from '../components/advertisingCampaigns/Campaig
 import CampaignSettingsTab from '../components/advertisingCampaigns/CampaignSettingsTab';
 import CampaignSmsEditor from '../components/advertisingCampaigns/CampaignSmsEditor';
 import CampaignField from '../components/advertisingCampaigns/CampaignField';
+import { CampaignMessageVariableProvider } from '../components/advertisingCampaigns/CampaignMessageVariables';
+import { buildCampaignMessageVariableOptions } from '../components/advertisingCampaigns/campaignMessageVariableCatalog';
 import WizardStepCards from '../components/wizards/WizardStepCards';
 import { patchAdvertisingCampaignCollaborationTool, patchAdvertisingCampaignToolExecution } from '../components/advertisingCampaigns/campaignApi';
 import { useCampaignPlanAvailability, useCampaignWizard } from '../components/advertisingCampaigns/useCampaignWizard';
@@ -41,6 +43,14 @@ const CampaignWizardPage: React.FC = () => {
   const [manualSaving, setManualSaving] = useState(false);
   const [actionLoading, setActionLoading] = useState<Record<string, CampaignToolAction | null>>({});
   const [canQuickCreateClub, setCanQuickCreateClub] = useState(false);
+  const campaignVariableOptions = useMemo(
+    () => buildCampaignMessageVariableOptions(wizard.draft.audienceRules),
+    [wizard.draft.audienceRules],
+  );
+  const campaignVariableCatalog = useMemo(
+    () => campaignVariableOptions.map((option) => option.descriptor),
+    [campaignVariableOptions],
+  );
 
   useEffect(() => {
     let active = true;
@@ -148,7 +158,7 @@ const CampaignWizardPage: React.FC = () => {
           p_tool_id: tool.id,
           p_channel_type: tool.tool_type,
           p_file_recipients: [],
-          p_message_snapshot: buildCampaignMessageSnapshot(tool),
+          p_message_snapshot: buildCampaignMessageSnapshot(tool, { variableCatalog: campaignVariableCatalog }),
           p_scheduled_at: scheduledAt,
           p_idempotency_key: `${tool.id}:${action}:${Date.now()}`,
         });
@@ -244,6 +254,7 @@ const CampaignWizardPage: React.FC = () => {
 
   const readOnly = wizard.accessMode !== 'full';
   return (
+    <CampaignMessageVariableProvider options={campaignVariableOptions}>
     <div className="mx-auto w-full max-w-[1680px] px-3 py-4 sm:px-4 md:px-6" dir="rtl">
       <div className="sticky top-0 z-20 mb-4 overflow-hidden rounded-2xl border border-slate-200/80 bg-white/95 p-3 shadow-sm backdrop-blur md:rounded-[2rem] md:p-4 dark:border-white/10 dark:bg-[#181818]/95">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -306,6 +317,7 @@ const CampaignWizardPage: React.FC = () => {
         />
       )}
     </div>
+    </CampaignMessageVariableProvider>
   );
 };
 

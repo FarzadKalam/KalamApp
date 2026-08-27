@@ -41,6 +41,7 @@ import TaskStatusActionStrip, {
 import CampaignToolDeliverySummaryCards from './CampaignToolDeliverySummaryCards';
 import { buildCampaignMessageSnapshot, getCampaignToolEmptyMessageError } from './campaignUtils';
 import { CampaignFieldSurfaceProvider } from './CampaignField';
+import { useCampaignMessageVariableOptions } from './CampaignMessageVariables';
 
 const ProcessCardsV2RuntimeBlock = React.lazy(() => import('../processes/ProcessCardsV2RuntimeBlock'));
 
@@ -121,6 +122,7 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
   renderToolFields,
   renderResultFields,
 }) => {
+  const campaignVariableOptions = useCampaignMessageVariableOptions();
   const [sideTab, setSideTab] = useState<ToolModalSideTab>('files');
   const [mainTab, setMainTab] = useState<ToolModalMainTab>('details');
   const [statusSaving, setStatusSaving] = useState<CampaignToolStatus | null>(null);
@@ -193,7 +195,9 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
     if (emptyMessageError) { message.warning(emptyMessageError); return; }
     setTestSending(true);
     try {
-      const snapshot = buildCampaignMessageSnapshot(tool);
+      const snapshot = buildCampaignMessageSnapshot(tool, {
+        variableCatalog: campaignVariableOptions.map((option) => option.descriptor),
+      });
       const result = await supabase.rpc('create_advertising_campaign_test_dispatch', {
         p_tool_id: tool.id,
         p_recipient: recipient,
@@ -458,8 +462,13 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
               <div className="space-y-4">
                 <div className="rounded-xl border border-gray-100 p-3 dark:border-white/10">
                   <div className="mb-2 text-xs font-bold">ارسال آزمایشی</div>
-                  <div className="flex flex-col gap-2 sm:flex-row">
-                    <Input value={testRecipient} onChange={(event) => setTestRecipient(event.target.value)} placeholder={tool.tool_type === 'email' ? 'ایمیل گیرنده' : tool.tool_type.startsWith('bot_') ? 'شناسه کاربر یا چت' : 'شماره موبایل'} />
+                  <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-end">
+                    <div className="min-w-0 flex-1">
+                      <div className="mb-1.5 text-xs font-bold text-slate-600 dark:text-slate-300">
+                        {tool.tool_type === 'email' ? 'ایمیل گیرنده آزمایشی' : tool.tool_type.startsWith('bot_') ? 'شناسه کاربر یا چت آزمایشی' : 'شماره موبایل گیرنده آزمایشی'}
+                      </div>
+                      <Input value={testRecipient} onChange={(event) => setTestRecipient(event.target.value)} placeholder={tool.tool_type === 'email' ? 'ایمیل گیرنده' : tool.tool_type.startsWith('bot_') ? 'شناسه کاربر یا چت' : 'شماره موبایل'} />
+                    </div>
                     <Button type="primary" icon={<SendOutlined />} loading={testSending} onClick={() => void sendTest()}>ارسال آزمایشی</Button>
                   </div>
                 </div>

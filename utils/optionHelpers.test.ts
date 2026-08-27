@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FieldType } from '../types';
-import { findRelationOption, getSingleOptionLabel } from './optionHelpers';
+import { findRelationOption, getSingleOptionLabel, isEmptyRelationValue } from './optionHelpers';
 
 const relationField = {
   key: 'customer_id',
@@ -33,5 +33,20 @@ describe('relation option labels', () => {
     };
 
     expect(getSingleOptionLabel(field, '33333333-3333-4333-8333-333333333333', {}, options)).toBe('مریم رضایی');
+  });
+
+  it.each([null, undefined, '', true, false, 'true', 'false', {}, []])(
+    'renders an empty legacy relation value as blank: %p',
+    (value) => {
+      expect(isEmptyRelationValue(value)).toBe(true);
+      expect(getSingleOptionLabel(relationField, value)).toBe('');
+      expect(findRelationOption(relationField, value)).toBeNull();
+    },
+  );
+
+  it('keeps actual relation identifiers and hydrated objects non-empty', () => {
+    expect(isEmptyRelationValue('11111111-1111-4111-8111-111111111111')).toBe(false);
+    expect(isEmptyRelationValue({ id: '11111111-1111-4111-8111-111111111111' })).toBe(false);
+    expect(isEmptyRelationValue({ label: 'مشتری آفتاب' })).toBe(false);
   });
 });

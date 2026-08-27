@@ -22,6 +22,7 @@ import { getRecordLockStateFromRecord, mergeRecordLockIntoRecord, type RecordLoc
 import { supabase } from "../../supabaseClient";
 import { hasProcessTaskTitleTokens, resolveProcessTaskTitle } from "../../utils/processTaskTitle";
 import TaskRelatedProcessBar from "../tasks/TaskRelatedProcessBar";
+import { isEmptyRelationValue } from "../../utils/optionHelpers";
 
 const ProductionStagesField = React.lazy(() => import("../ProductionStagesField"));
 
@@ -205,16 +206,17 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   const fallbackRelationRecordId = fallbackRelationKey ? cardItem?.[fallbackRelationKey] : null;
   const selectedRelationField = isTasks
     ? (
-        relatedRelationFields.find((f: any) => f?.relationConfig?.targetModule === cardItem?.related_to_module && cardItem?.[f.key])
-        || relatedRelationFields.find((f: any) => cardItem?.[f.key])
+        relatedRelationFields.find((f: any) => f?.relationConfig?.targetModule === cardItem?.related_to_module && !isEmptyRelationValue(cardItem?.[f.key]))
+        || relatedRelationFields.find((f: any) => !isEmptyRelationValue(cardItem?.[f.key]))
         || (
-          fallbackRelationKey && fallbackRelationRecordId
+          fallbackRelationKey && !isEmptyRelationValue(fallbackRelationRecordId)
             ? { key: fallbackRelationKey, relationConfig: { targetModule: cardItem?.related_to_module } }
             : null
         )
       )
     : null;
-  const relatedRecordId = sourceLink.recordId || (selectedRelationField ? cardItem?.[selectedRelationField.key] : null);
+  const relatedRecordIdCandidate = sourceLink.recordId || (selectedRelationField ? cardItem?.[selectedRelationField.key] : null);
+  const relatedRecordId = isEmptyRelationValue(relatedRecordIdCandidate) ? null : relatedRecordIdCandidate;
   const relatedModuleId = isTasks
     ? (sourceLink.moduleId || cardItem?.related_to_module || selectedRelationField?.relationConfig?.targetModule || null)
     : null;
@@ -245,7 +247,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     : null;
   const relatedRecordLabel = relatedOptionLabel
     || anyRelatedOptionLabel
-    || (relatedRecordId ? String(relatedRecordId) : null);
+    || (relatedRecordId ? 'رکورد مرتبط' : null);
   const relatedModuleTitle = relatedModuleId
     ? (MODULES as Record<string, any>)?.[String(relatedModuleId)]?.titles?.fa || String(relatedModuleId)
     : null;
@@ -387,6 +389,12 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
 
   if (!isTasks) {
     const renderFieldValue = (field: any, value: any) => {
+      if (
+        [FieldType.RELATION, FieldType.MULTI_RELATION, FieldType.USER].includes(field?.type)
+        && isEmptyRelationValue(value)
+      ) {
+        return <span />;
+      }
       if (value === null || value === undefined || value === '') {
         return <span className="break-words text-gray-400">-</span>;
       }

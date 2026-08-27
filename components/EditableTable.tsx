@@ -30,6 +30,7 @@ import { getCachedAuthUser } from '../utils/sessionCache';
 import { syncRecordTags } from '../utils/recordTags';
 import { runWriteWithCompatiblePayload } from '../utils/writeCompat';
 import { transformModulePayloadForSave } from '../utils/moduleFormRuntime';
+import { getSafeOptionFallback, isEmptyRelationValue } from '../utils/optionHelpers';
 import { resolveOperationalPaymentRowKey } from '../utils/operationalCashBankSources';
 import {
   buildSalesPackageDescription,
@@ -1982,6 +1983,11 @@ const EditableTable: React.FC<EditableTableProps> = ({
       if (isNumeric) {
         const normalized = normalizeNumericString(value);
         nextRow[key] = normalized === '' ? null : normalized;
+        return;
+      }
+
+      if (col?.type === FieldType.RELATION && isEmptyRelationValue(value)) {
+        nextRow[key] = null;
         return;
       }
 
@@ -4425,7 +4431,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         const existsInEligible = eligibleReceivedChequeOptions.some((opt) => String(opt.value) === selectedId);
         options = existsInEligible || !selectedId
           ? eligibleReceivedChequeOptions
-          : [...eligibleReceivedChequeOptions, selectedFallback || { value: selectedId, label: selectedId }];
+          : [...eligibleReceivedChequeOptions, selectedFallback || { value: selectedId, label: getSafeOptionFallback(selectedId, 'چک مرتبط') }];
       }
       if (isInvoiceItems && col.key === 'price_list_id') {
         options = getPriceListOptionsForProduct(record?.product_id, record?.price_list_id);

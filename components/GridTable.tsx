@@ -5,7 +5,7 @@ import { supabase } from '../supabaseClient';
 import { BlockDefinition, FieldType } from '../types';
 import { MODULES } from '../moduleRegistry';
 import { convertArea, HARD_CODED_UNIT_OPTIONS } from '../utils/unitConversions';
-import { getSingleOptionLabel } from '../utils/optionHelpers';
+import { getSingleOptionLabel, isEmptyRelationValue } from '../utils/optionHelpers';
 import { toPersianNumber, formatPersianPrice } from '../utils/persianNumberFormatter';
 import { mergeSelectOptions } from '../utils/selectOptions';
 import { fetchDynamicOptionsByCategory } from '../utils/referenceData';
@@ -1769,6 +1769,7 @@ const ProductsPreview: React.FC<{
   if (!rows.length) return <div className="text-xs text-gray-400">محصولی یافت نشد</div>;
 
   const renderSpecValue = (field: any, value: any) => {
+    if (field.type === FieldType.RELATION && isEmptyRelationValue(value)) return '';
     if (value === undefined || value === null || value === '') return '-';
     if (field.type === FieldType.MULTI_SELECT && Array.isArray(value)) {
       return value
@@ -1777,7 +1778,7 @@ const ProductsPreview: React.FC<{
         .join('، ') || '-';
     }
     if (field.type === FieldType.SELECT || field.type === FieldType.RELATION) {
-      return getSingleOptionLabel(field, value, dynamicOptions, {}) || '-';
+      return getSingleOptionLabel(field, value, dynamicOptions, {}) || (field.type === FieldType.RELATION ? '' : '-');
     }
     return Array.isArray(value) ? value.join('، ') : value;
   };

@@ -469,12 +469,13 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
                   <Table.Summary.Cell index={6} align="right">
                     <span className="persian-number font-bold">{formatPersianPrice(visibleTotals.totalCredit)}</span>
                   </Table.Summary.Cell>
-                  <Table.Summary.Cell index={7} align="right">
+                  <Table.Summary.Cell index={7} />
+                  <Table.Summary.Cell index={8} align="right">
                     <span className="persian-number font-bold">{formatPersianPrice(Math.abs(visibleTotals.finalBalance))}</span>
                   </Table.Summary.Cell>
-                  <Table.Summary.Cell index={8} />
                   <Table.Summary.Cell index={9} />
                   <Table.Summary.Cell index={10} />
+                  <Table.Summary.Cell index={11} />
                 </Table.Summary.Row>
               </Table.Summary>
             )}

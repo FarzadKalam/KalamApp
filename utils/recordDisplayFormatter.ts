@@ -6,6 +6,7 @@ import { getRecordDisplayLabel } from './recordLabel';
 import { getPreferredRelationTargetField } from './relationTargetField';
 import { selectByIdsWithCompatibleColumns } from './selectCompat';
 import { supportsSystemCode } from './systemCode';
+import { isEmptyRelationValue } from './optionHelpers';
 
 export type RelationValueMap = Record<string, Record<string, string>>;
 
@@ -38,7 +39,7 @@ const mergeRelationMaps = (...maps: RelationValueMap[]): RelationValueMap => {
 };
 
 const collectRelationIds = (value: any): string[] => {
-  if (value === null || value === undefined || value === '') return [];
+  if (isEmptyRelationValue(value)) return [];
   if (Array.isArray(value)) {
     return Array.from(new Set(value.flatMap((item) => collectRelationIds(item))));
   }
@@ -186,6 +187,7 @@ export const formatRecordDisplayValue = (
   relationValueMap: RelationValueMap = {},
   emptyLabel = '-',
 ): string => {
+  if (isRelationLikeField(field) && isEmptyRelationValue(value)) return emptyLabel;
   if (value === null || value === undefined || value === '') return emptyLabel;
 
   if (Array.isArray(value)) {
@@ -208,7 +210,7 @@ export const formatRecordDisplayValue = (
   const fieldType = normalizeFieldType(field);
   const fieldKey = String(field?.key || '').trim();
   const rawString = String(value);
-  if (UUID_REGEX.test(rawString)) return 'مقدار ثبت‌شده';
+  if (!isRelationLikeField(field) && UUID_REGEX.test(rawString)) return 'مقدار ثبت‌شده';
   const optionLabel = resolveOptionLabel(value, field);
   if (optionLabel) return optionLabel;
 

@@ -8,6 +8,7 @@ import type { CampaignBotConfig, CampaignToolRecord } from './types';
 import CampaignAttachmentsField from './CampaignAttachmentsField';
 import CampaignField, { useCampaignFieldSurface } from './CampaignField';
 import { getPersistedCampaignToolId } from './campaignUtils';
+import CampaignMessageVariablePicker, { appendCampaignMessageVariable } from './CampaignMessageVariables';
 
 type Props = { tool: CampaignToolRecord; onChange: (patch: Partial<CampaignToolRecord>) => void; disabled?: boolean };
 
@@ -67,7 +68,16 @@ const CampaignBotEditor: React.FC<Props> = ({ tool, onChange, disabled }) => {
       ) : (
         <Alert type="info" showIcon message="فقط مخاطبانی که شناسه چت معتبر و متصل به همین سازمان دارند وارد ارسال خصوصی می‌شوند؛ تعداد حذف‌شده پیش از تأیید نهایی نمایش داده خواهد شد." />
       )}
-      <CampaignField fieldKey="bot_message" label="متن پیام" type={FieldType.SUPER_LONG_TEXT} value={config.message_template} onChange={(message_template) => patch({ message_template })} readonly={disabled} moduleId="advertising_campaign_tools" recordId={persistedToolId} />
+      <div className="space-y-2">
+        <CampaignField fieldKey="bot_message" label="متن پیام" type={FieldType.SUPER_LONG_TEXT} value={config.message_template} onChange={(message_template) => patch({ message_template })} readonly={disabled} moduleId="advertising_campaign_tools" recordId={persistedToolId} />
+        {!isGroup ? (
+          <CampaignMessageVariablePicker
+            disabled={disabled}
+            targetLabel="متن پیام بات"
+            onInsert={(token) => patch({ message_template: appendCampaignMessageVariable(config.message_template, token) })}
+          />
+        ) : null}
+      </div>
       <CampaignAttachmentsField moduleId="advertising_campaign_tools" recordId={persistedToolId} title="پیوست‌های پیام بات" value={config.attachments} onChange={(attachments) => patch({ attachments })} disabled={disabled} />
       <CampaignField fieldKey="bot_scheduled_at" label="زمان شروع ارسال" type={FieldType.DATETIME} value={config.scheduled_at} onChange={(scheduled_at) => patch({ scheduled_at })} readonly={disabled} />
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">

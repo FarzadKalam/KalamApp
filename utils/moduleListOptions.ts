@@ -7,7 +7,7 @@ import { shouldSkipModuleListField } from './moduleListFieldSelection';
 import { fetchRelationOptionsForField } from './relationOptions';
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from './recordReference';
 import { isWorkflowVirtualField, shouldRenderInGeneralModuleUi } from './moduleFieldVisibility';
-import { isUuidLikeValue } from './optionHelpers';
+import { isEmptyRelationValue, isUuidLikeValue } from './optionHelpers';
 
 type RelationConfigLike = {
   targetModule?: string;
@@ -386,10 +386,14 @@ const fetchRelationOptionsByTarget = async (
 
 const getRowFieldValues = (row: any, fieldKey: string) => {
   const rawValue = row?.[fieldKey];
-  if (Array.isArray(rawValue)) {
-    return rawValue.map((item) => normalizeOptionValue(item)).filter(Boolean);
-  }
-  const normalizedValue = normalizeOptionValue(rawValue);
+  const normalizeRelationId = (item: any) => {
+    if (isEmptyRelationValue(item)) return '';
+    return normalizeOptionValue(
+      item && typeof item === 'object' ? (item.id ?? item.value ?? item.record_id) : item,
+    );
+  };
+  if (Array.isArray(rawValue)) return rawValue.map(normalizeRelationId).filter(Boolean);
+  const normalizedValue = normalizeRelationId(rawValue);
   return normalizedValue ? [normalizedValue] : [];
 };
 

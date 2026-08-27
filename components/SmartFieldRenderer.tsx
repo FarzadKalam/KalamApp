@@ -42,7 +42,7 @@ import { isAutoNameEnabled, normalizeAutoNameEnabled } from '../utils/autoName';
 import { useCurrencyConfig } from '../utils/currency';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { joinStoragePath, sanitizeStorageFileName } from '../utils/storagePath';
-import { getSafeOptionFallback } from '../utils/optionHelpers';
+import { getSafeOptionFallback, isEmptyRelationValue } from '../utils/optionHelpers';
 import { getFinancialStatusLabelFa } from '../utils/financialValueLabels';
 import { fetchCurrentUserRolePermissions, resolveReadyTextPermissions } from '../utils/permissions';
 import { fetchDynamicOptionsByCategory } from '../utils/referenceData';
@@ -561,6 +561,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     || (Array.isArray(block?.tableColumns) && block.tableColumns.length > 0)
   ));
   const resolveRelationDisplayLabel = useCallback(() => {
+    if (isEmptyRelationValue(value)) return '';
     const matchedOption = relationResolvedOptions.find((item: any) => String(item?.value) === String(value))
       || (fieldOptions as any[]).find((item: any) => String(item?.value) === String(value));
     if (matchedOption?.label) {
@@ -1007,7 +1008,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
 
   useEffect(() => {
     if (fieldType !== FieldType.RELATION) return;
-    if (value === undefined || value === null || value === '') return;
+    if (isEmptyRelationValue(value)) return;
     if (!isValidRelationId(value)) return;
     if (String(relationSearchQuery || '').trim().length > 0) return;
     const exists = relationResolvedOptions.some((item: any) => String(item?.value) === String(value));
@@ -1022,7 +1023,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       setRelationExactOption(null);
       return;
     }
-    if (value === undefined || value === null || value === '') {
+    if (isEmptyRelationValue(value)) {
       setRelationExactOption(null);
       return;
     }
@@ -1094,7 +1095,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   // بارگذاری label برای مقادیر آرایه MULTI_RELATION
   useEffect(() => {
     if (fieldType !== FieldType.MULTI_RELATION) return;
-    const ids = Array.isArray(value) ? value.filter((v: any) => v !== null && v !== undefined && v !== '') : [];
+    const ids = Array.isArray(value) ? value.filter((item: any) => !isEmptyRelationValue(item)) : [];
     if (ids.length === 0) return;
     ids.forEach((id: any) => {
       const exists = relationResolvedOptions.some((item: any) => String(item?.value) === String(id));
@@ -2052,6 +2053,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
           );
         }
         if (fieldType === FieldType.SELECT || fieldType === FieldType.RELATION || fieldType === FieldType.STATUS) {
+             if (fieldType === FieldType.RELATION && isEmptyRelationValue(value)) return <span />;
              const selectedOpt = (fieldType === FieldType.RELATION ? relationResolvedOptions : fieldOptions).find((o: any) => String(o?.value) === String(value));
               if (fieldType === FieldType.STATUS && selectedOpt) {
                    return <Tag color={selectedOpt.color}>{formatDisplayText(selectedOpt.label, getSafeOptionFallback(value))}</Tag>;
@@ -2085,8 +2087,8 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 return <span className="text-gray-800">{formatDisplayText(resolvedLabel, compactMode ? '' : '-')}</span>;
           }
         if (fieldType === FieldType.MULTI_RELATION) {
-          const multiRelReadValues = Array.isArray(value) ? value.filter(Boolean) : [];
-          if (multiRelReadValues.length === 0) return <span>{compactMode ? '' : '-'}</span>;
+          const multiRelReadValues = Array.isArray(value) ? value.filter((item: any) => !isEmptyRelationValue(item)) : [];
+          if (multiRelReadValues.length === 0) return <span />;
           const multiRelTargetModRead = String(field.multiRelationConfig?.targetModule || '').trim();
           return (
             <div className="flex flex-wrap gap-1">
@@ -2394,7 +2396,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         const multiRelNormalizedQuery = String(relationSearchQuery || '').trim();
         const multiRelIsSearching = multiRelNormalizedQuery.length > 0;
         const multiRelOptions = multiRelIsSearching ? relationLiveOptions : relationResolvedOptions;
-        const multiRelValues = Array.isArray(value) ? value.filter(Boolean) : [];
+        const multiRelValues = Array.isArray(value) ? value.filter((item: any) => !isEmptyRelationValue(item)) : [];
         const multiRelTargetModule = String(field.multiRelationConfig?.targetModule || field.relationConfig?.targetModule || '').trim();
         return (
           <AdaptiveSelectField
@@ -2472,6 +2474,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
               <div className="flex w-full min-w-0 flex-wrap items-start gap-1">
                 <AdaptiveSelectField
                     {...commonProps}
+                    value={isEmptyRelationValue(value) ? undefined : value}
                     style={{ ...((commonProps as any)?.style || {}), width: '100%', flex: '1 1 180px', minWidth: 0 }}
                     className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'min-w-0')}
                     showSearch

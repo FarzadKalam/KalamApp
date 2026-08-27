@@ -2,7 +2,7 @@ import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react'
 import { Table, Tag, Avatar, Input, InputNumber, Button, Space, Popover, Tooltip, Skeleton } from 'antd';
 import { AppstoreOutlined, SearchOutlined, ArrowUpOutlined, ArrowDownOutlined, TagOutlined, LockOutlined } from '@ant-design/icons';
 import { ModuleDefinition, FieldType } from '../types';
-import { findRelationOption, getFieldOptions, getRelationFallbackLabel, getSingleOptionLabel } from '../utils/optionHelpers';
+import { findRelationOption, getFieldOptions, getRelationFallbackLabel, getSingleOptionLabel, isEmptyRelationValue } from '../utils/optionHelpers';
 import { toPersianNumber, formatPersianPrice, fromPersianNumber } from '../utils/persianNumberFormatter';
 import DateObject from 'react-date-object';
 import persian from 'react-date-object/calendars/persian';
@@ -1115,6 +1115,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
             ));
         }
         if (field.type === FieldType.RELATION) {
+            if (isEmptyRelationValue(value)) return null;
             const relationOption = findRelationOption(field, value, relationOptions);
             const label = getSingleOptionLabel(field, value, dynamicOptions, relationOptions);
             const targetModule = String(
@@ -1156,7 +1157,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
             );
         }
         if (field.type === FieldType.USER) {
-            if (!value) return '-';
+            if (isEmptyRelationValue(value)) return null;
             const relationOption = findRelationOption(field, value, relationOptions);
             const userLabel = getSingleOptionLabel(field, value, dynamicOptions, relationOptions);
             if (relationLabelsLoading && !relationOption) {
@@ -1292,9 +1293,10 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
             );
         }
         if (field.type === FieldType.MULTI_RELATION) {
-            if (!Array.isArray(value) || value.length === 0) return '-';
-            const visibleValues = value.slice(0, 1);
-            const hiddenCount = value.length - visibleValues.length;
+            const validValues = Array.isArray(value) ? value.filter((item: any) => !isEmptyRelationValue(item)) : [];
+            if (validValues.length === 0) return null;
+            const visibleValues = validValues.slice(0, 1);
+            const hiddenCount = validValues.length - visibleValues.length;
             const relationConfig = (field as any).multiRelationConfig || (field as any).relationConfig || {};
             return (
               <div className="flex min-h-[22px] max-w-[220px] items-center gap-1 overflow-hidden whitespace-nowrap">

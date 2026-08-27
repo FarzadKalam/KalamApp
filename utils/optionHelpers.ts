@@ -22,6 +22,37 @@ export const getSafeOptionFallback = (value: unknown, fallback = '-'): string =>
 
 const normalizeOptionValue = (value: unknown): string => String(value ?? '').trim();
 
+const RELATION_FIELD_TYPES = new Set(['relation', 'multi_relation', 'user']);
+
+/**
+ * داده‌های قدیمی بعضی relationها به‌جای null با boolean یا متن‌های معادل آن
+ * ذخیره شده‌اند. این مقادیر هیچ شناسه/عنوان معتبری ندارند و باید در همه نماها
+ * دقیقاً مانند مقدار خالی رفتار کنند.
+ */
+export const isEmptyRelationValue = (value: unknown): boolean => {
+  if (value === null || value === undefined || typeof value === 'boolean') return true;
+  if (Array.isArray(value)) return value.length === 0 || value.every(isEmptyRelationValue);
+
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return !normalized || ['true', 'false', 'null', 'undefined', '{}', '[]'].includes(normalized);
+  }
+
+  if (typeof value === 'object') {
+    const relationObject = value as Record<string, unknown>;
+    const candidate = relationObject.id
+      ?? relationObject.value
+      ?? relationObject.record_id
+      ?? relationObject.label
+      ?? relationObject.name
+      ?? relationObject.title
+      ?? relationObject.system_code;
+    return isEmptyRelationValue(candidate);
+  }
+
+  return false;
+};
+
 const getRelationConfig = (field: any) => (
   String(field?.type || '') === 'multi_relation'
     ? (field?.multiRelationConfig || field?.relationConfig)
@@ -38,6 +69,7 @@ export const findRelationOption = (
   value: unknown,
   relationOptions: Record<string, any[]> = {},
 ): any | null => {
+  if (isEmptyRelationValue(value)) return null;
   const normalizedValue = normalizeOptionValue(value);
   if (!normalizedValue) return null;
 
@@ -76,11 +108,15 @@ export const getOptionLabel = (
   dynamicOptions: Record<string, any[]> = {},
   relationOptions: Record<string, any[]> = {}
 ): string => {
+  if (RELATION_FIELD_TYPES.has(String(field?.type || '')) && isEmptyRelationValue(value)) return '';
   if (!value) return '-';
 
   // برای MULTI_SELECT (آرایه)
   if (Array.isArray(value)) {
-    return value.map(v => getSingleOptionLabel(field, v, dynamicOptions, relationOptions)).join(', ');
+    const labels = value
+      .map(v => getSingleOptionLabel(field, v, dynamicOptions, relationOptions))
+      .filter(Boolean);
+    return labels.join(', ') || (RELATION_FIELD_TYPES.has(String(field?.type || '')) ? '' : '-');
   }
 
   // برای SELECT و RELATION (تک مقدار)
@@ -96,6 +132,7 @@ export const getSingleOptionLabel = (
   dynamicOptions: Record<string, any[]> = {},
   relationOptions: Record<string, any[]> = {}
 ): string => {
+  if (RELATION_FIELD_TYPES.has(String(field?.type || '')) && isEmptyRelationValue(value)) return '';
   if (!value) return '-';
 
   // ابتدا از field.options جستجو کن (static options)
@@ -119,7 +156,7 @@ export const getSingleOptionLabel = (
   }
 
   // برای RELATION، MULTI_RELATION و USER fields
-  if (['relation', 'multi_relation', 'user'].includes(String(field?.type || ''))) {
+  if (RELATION_FIELD_TYPES.has(String(field?.type || ''))) {
     const opt = findRelationOption(field, value, relationOptions);
     const optionLabel = normalizeOptionValue(opt?.label);
     if (optionLabel && !isUuidLikeValue(optionLabel)) return optionLabel;

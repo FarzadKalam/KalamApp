@@ -73,7 +73,7 @@ const CampaignField: React.FC<CampaignFieldProps> = ({
   return (
     <div className="min-w-0">
       {showFieldLabel ? (
-        <div className={`mb-1.5 text-xs font-bold text-slate-600 dark:text-slate-300 ${surface.alwaysShowLabels ? '' : 'sm:hidden'}`}>
+        <div className="mb-1.5 text-xs font-bold text-slate-600 dark:text-slate-300">
           {label || field.labels.fa}{required ? <span className="mr-1 text-red-500">*</span> : null}
         </div>
       ) : null}

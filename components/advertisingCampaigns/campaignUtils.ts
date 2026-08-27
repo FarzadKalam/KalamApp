@@ -5,6 +5,7 @@ import type {
   CampaignToolRecord,
   CampaignToolType,
 } from './types';
+import type { CampaignMessageVariableDescriptor } from '../../supabase/functions/_shared/campaign-message-variables';
 
 const PERSIAN_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
 const ARABIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
@@ -67,13 +68,23 @@ export type CampaignMessageSnapshot = {
   connection_id: string | null;
   channel: string | null;
   attachments: unknown[];
+  variable_catalog: CampaignMessageVariableDescriptor[];
 };
 
-export const buildCampaignMessageSnapshot = (tool: CampaignToolRecord): CampaignMessageSnapshot => {
+export const buildCampaignMessageSnapshot = (
+  tool: CampaignToolRecord,
+  options: { variableCatalog?: CampaignMessageVariableDescriptor[] } = {},
+): CampaignMessageSnapshot => {
   const config = (tool.config || {}) as Record<string, any>;
   const rawMessage = String(config.message_template || config.html_body || '');
   const plainMessage = campaignRichTextToPlainText(config.message_template || config.plain_text_body || config.html_body || '');
   const message = tool.tool_type === 'email' ? rawMessage.trim() : campaignRichTextToPlainText(rawMessage);
+  const usedVariableKeys = new Set(
+    [rawMessage, plainMessage, config.subject]
+      .flatMap((item) => Array.from(String(item || '').matchAll(/{{\s*([a-zA-Z0-9_.:-]+)\s*}}/g)))
+      .map((match) => String(match[1] || '').trim())
+      .filter(Boolean),
+  );
   return {
     message,
     text: plainMessage,
@@ -82,6 +93,9 @@ export const buildCampaignMessageSnapshot = (tool: CampaignToolRecord): Campaign
     connection_id: String(config.connection_id || '').trim() || null,
     channel: String(config.channel || '').trim() || null,
     attachments: Array.isArray(config.attachments) ? config.attachments : [],
+    variable_catalog: (options.variableCatalog || []).filter((descriptor) => (
+      usedVariableKeys.has(String(descriptor.key || descriptor.field_key || '').trim())
+    )),
   };
 };
 

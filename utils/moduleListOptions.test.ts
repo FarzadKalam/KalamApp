@@ -209,4 +209,20 @@ describe('buildModuleListOptionPlan', () => {
       }),
     ]);
   });
+
+  it('does not hydrate legacy boolean or empty relation values', async () => {
+    vi.mocked(fetchRecordReferenceLabels).mockResolvedValue({});
+    const supabase = { from: vi.fn() };
+
+    const options = await hydrateModuleListRelationOptionsForRows(
+      supabase as any,
+      [{ key: 'customer_id', type: FieldType.RELATION, labels: { fa: 'مشتری' }, relationConfig: { targetModule: 'customers' } }],
+      [{ customer_id: true }, { customer_id: false }, { customer_id: null }, { customer_id: '' }],
+      null,
+    );
+
+    expect(options.customer_id).toBeUndefined();
+    expect(fetchRecordReferenceLabels).toHaveBeenCalledWith(supabase, []);
+    expect(supabase.from).not.toHaveBeenCalled();
+  });
 });

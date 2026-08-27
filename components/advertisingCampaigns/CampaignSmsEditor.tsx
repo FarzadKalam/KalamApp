@@ -23,6 +23,7 @@ import CampaignAttachmentsField from './CampaignAttachmentsField';
 import CampaignField, { useCampaignFieldSurface } from './CampaignField';
 import CampaignImportProgress from './CampaignImportProgress';
 import { downloadCampaignAudienceSample } from './campaignImportSample';
+import CampaignMessageVariablePicker, { appendCampaignMessageVariable } from './CampaignMessageVariables';
 
 type CampaignSmsEditorProps = {
   tool: CampaignToolRecord;
@@ -73,7 +74,16 @@ const CampaignSmsEditor: React.FC<CampaignSmsEditorProps> = ({ tool, onChange, d
         <Typography.Text type="danger" className="mt-1 block text-[11px]">هرگز از خطوط خدماتی برای ارسال پیامک تبلیغاتی استفاده نکنید.</Typography.Text>
       </div>
       <CampaignField fieldKey="estimated_audience" label="تعداد تخمینی مخاطبان پیامک" type={FieldType.NUMBER} value={config.estimated_audience} onChange={(estimated_audience) => patchConfig({ estimated_audience })} readonly={disabled} />
-      <CampaignField fieldKey="message_template" label="متن پیامک" type={FieldType.LONG_TEXT} value={config.message_template} onChange={(message_template) => patchConfig({ message_template })} readonly={disabled} moduleId="advertising_campaign_tools" recordId={persistedToolId} />
+      <div className="space-y-2">
+        <CampaignField fieldKey="message_template" label="متن پیامک" type={FieldType.LONG_TEXT} value={config.message_template} onChange={(message_template) => patchConfig({ message_template })} readonly={disabled} moduleId="advertising_campaign_tools" recordId={persistedToolId} />
+        {config.audience_sources?.includes('internal') ? (
+          <CampaignMessageVariablePicker
+            disabled={disabled}
+            targetLabel="متن پیامک"
+            onInsert={(token) => patchConfig({ message_template: appendCampaignMessageVariable(config.message_template, token) })}
+          />
+        ) : null}
+      </div>
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <Tag color="blue">{toPersianNumber(pageEstimate.length)} نویسه</Tag>
         <Tag color={pageEstimate.pages > 1 ? 'gold' : 'green'}>{toPersianNumber(pageEstimate.pages)} صفحه پیامک</Tag>

@@ -1,7 +1,9 @@
 // @ts-nocheck
 // Durable advertising-campaign dispatcher. Invoked only with the service role.
 
-const FUNCTION_BUILD = 'campaign-runtime-2026-08-27-02';
+import { renderCampaignMessageVariables } from '../_shared/campaign-message-variables.ts';
+
+const FUNCTION_BUILD = 'campaign-runtime-2026-08-27-03-variable-resolver';
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-kalam-internal',
@@ -56,14 +58,6 @@ const insertRows = (baseUrl: string, key: string, table: string, body: Record<st
   key,
   table,
   { method: 'POST', headers: headers(key, 'return=representation'), body: JSON.stringify(body) },
-);
-
-const render = (template: unknown, variables: Record<string, any>) => String(template || '').replace(
-  /{{\s*([a-zA-Z0-9_.-]+)\s*}}/g,
-  (_match, path) => {
-    const value = String(path).split('.').reduce((cursor: any, key: string) => cursor?.[key], variables);
-    return value === null || value === undefined ? '' : String(value);
-  },
 );
 
 const HTML_ENTITY_MAP: Record<string, string> = {
@@ -154,9 +148,33 @@ const sendRecipient = async ({
     display_name: recipient.display_name || '',
     recipient: recipient.contact_value,
   };
+  const variableCatalog = Array.isArray(snapshot.variable_catalog) ? snapshot.variable_catalog : [];
+  const recordCache = new Map<string, Promise<Record<string, any> | null>>();
+  const fetchVariableRecord = (moduleId: string, recordId: string) => {
+    const normalizedModuleId = String(moduleId || '').trim();
+    const normalizedRecordId = String(recordId || '').trim();
+    const cacheId = `${normalizedModuleId}:${normalizedRecordId}`;
+    if (!normalizedModuleId || !normalizedRecordId) return Promise.resolve(null);
+    if (!recordCache.has(cacheId)) {
+      recordCache.set(cacheId, rest(
+        baseUrl,
+        key,
+        `${encodeURIComponent(normalizedModuleId)}?id=eq.${encodeURIComponent(normalizedRecordId)}&org_id=eq.${encodeURIComponent(dispatch.org_id)}&select=*&limit=1`,
+      ).then((rows) => Array.isArray(rows) ? rows[0] || null : null).catch(() => null));
+    }
+    return recordCache.get(cacheId)!;
+  };
+  const renderMessage = (template: unknown) => renderCampaignMessageVariables(template, {
+    orgId: dispatch.org_id,
+    sourceModuleId: String(recipient.source_module_id || '').trim(),
+    sourceRecord: variables,
+    descriptors: variableCatalog,
+    fetchRecord: fetchVariableRecord,
+    appBaseUrl: Deno.env.get('KALAMAPP_PUBLIC_BASE_URL') || Deno.env.get('PUBLIC_APP_URL') || '',
+  });
   const configuredMessage = tool.config?.message_template || tool.config?.html_body || tool.config?.message || '';
-  const renderedMessage = render(snapshot.message || snapshot.text || configuredMessage, variables).trim();
-  const plainMessage = richTextToPlainText(snapshot.text ? render(snapshot.text, variables) : renderedMessage);
+  const renderedMessage = (await renderMessage(snapshot.message || snapshot.text || configuredMessage)).trim();
+  const plainMessage = richTextToPlainText(snapshot.text ? await renderMessage(snapshot.text) : renderedMessage);
   let providerPayload: any = null;
   let sender: string | null = null;
 
@@ -169,7 +187,7 @@ const sendRecipient = async ({
     }, { 'x-kalam-internal': 'campaign-runtime' });
     sender = String(providerPayload?.sender_number || sender || '').trim() || null;
   } else if (tool.tool_type === 'email') {
-    const subject = render(snapshot.subject || tool.config?.subject || '', variables).trim();
+    const subject = (await renderMessage(snapshot.subject || tool.config?.subject || '')).trim();
     if (!plainMessage) throw new Error('متن ایمیل خالی است.');
     providerPayload = await callFunction(baseUrl, key, 'send-email', {
       org_id: dispatch.org_id, to: [recipient.contact_value], subject, body: renderedMessage,
