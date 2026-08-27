@@ -54,3 +54,6 @@ export const CAMPAIGN_TARGET_MODULES = [
 
 export const isAutomaticCampaignTool = (toolType: string) =>
   CAMPAIGN_TOOL_DEFINITIONS.some((option) => option.value === toolType && option.dispatchable === true);
+
+export const usesCampaignAudience = (toolType: string) =>
+  CAMPAIGN_TOOL_DEFINITIONS.some((option) => option.value === toolType && option.automatedAudience === true);

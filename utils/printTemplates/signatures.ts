@@ -54,8 +54,11 @@ export interface PrintSignatureDerivedState {
 // A text-only signer needs one writable line above the title/name, not the
 // former 52px empty signature canvas. Image/stamp signers keep their larger
 // reserved area below.
-export const PRINT_SIGNATURE_SECTION_HEIGHT_PX = 66;
-export const PRINT_SIGNATURE_SECTION_WITH_COMPANY_ASSETS_HEIGHT_PX = 132;
+// Keep a small physical-print safety buffer after the writable line and the
+// two text lines. PDF renderers can use slightly different Peyda metrics than
+// the preview; the former exact-fit heights could clip the signer title.
+export const PRINT_SIGNATURE_SECTION_HEIGHT_PX = 76;
+export const PRINT_SIGNATURE_SECTION_WITH_COMPANY_ASSETS_HEIGHT_PX = 148;
 
 const RELATION_SIGNER_MODULES = new Set<PrintSignatureSignerModule>(['employees', 'customers', 'suppliers']);
 const FIELD_RELATION_TYPES = new Set([
@@ -542,13 +545,13 @@ export const buildPrintSignatureBandHtml = (rows: PrintSignatureDerivedState[]) 
   if (resolvedRows.length === 0) return '';
   const columnCount = resolvedRows.length;
   return `
-<div data-print-signature-band="true" data-print-signature-columns="${columnCount}" style="width:100%; min-width:100%; max-width:100%; direction:rtl; display:grid; grid-template-columns:repeat(${columnCount}, minmax(0, 1fr)); align-items:flex-start; gap:10px; padding-top:0;">
+<div data-print-signature-band="true" data-print-signature-columns="${columnCount}" style="width:100%; min-width:100%; max-width:100%; direction:rtl; display:grid; grid-template-columns:repeat(${columnCount}, minmax(0, 1fr)); align-items:flex-start; gap:10px; padding-top:0; font-family:'Peyda',Tahoma,Arial,sans-serif; break-inside:avoid; page-break-inside:avoid;">
   ${resolvedRows
     .map(
       (row) => {
         const hasCompanyAssets = row.showCompanyAssets && (row.signatureImageUrl || row.stampImageUrl);
         return `
-    <div style="width:100%; min-width:0; text-align:center; color:#111827;">
+    <div style="width:100%; min-width:0; text-align:center; color:#111827; font-family:'Peyda',Tahoma,Arial,sans-serif; break-inside:avoid; page-break-inside:avoid;">
       <div style="min-height:${hasCompanyAssets ? 78 : 22}px; display:flex; align-items:flex-end; justify-content:center; margin-bottom:${hasCompanyAssets ? 6 : 0}px;">
         ${
           hasCompanyAssets

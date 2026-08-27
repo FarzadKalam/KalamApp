@@ -99,6 +99,9 @@ describe('buildNativeCustomPrintFlowHtml', () => {
     expect(materialized).toContain('<base href="https://app.example.test/" />');
     expect(materialized).toContain("font-family: 'Peyda', Tahoma, Arial, sans-serif !important");
     expect(materialized).toContain('data-kalamapp-print-margin-content="true"');
-    expect(materialized).toContain('[data-kalamapp-print-margin-content] { display: block; width: 100%; min-width: 0; max-width: 100%; }');
+    expect(materialized).toContain("body, body * { box-sizing: border-box; max-width: 100%; font-family: 'Peyda', Tahoma, Arial, sans-serif !important; }");
+    expect(materialized).toContain('overflow: visible;');
+    expect(materialized).toContain('[data-kalamapp-print-margin-content] { display: block; width: 100%; min-width: 0; max-width: 100%; overflow: visible; }');
+    expect(materialized).toContain('[data-print-signature-band] {');
   });
 });

@@ -150,13 +150,24 @@ const getRecordTitleCandidateColumns = (moduleId?: string | null, moduleConfig?:
     .filter(Boolean)
     .slice(0, 4);
 
-  const primaryCandidates = unique([
+  const rawPrimaryCandidates = unique([
     ...keyFields,
     ...relationDisplayFields,
     ...relationSearchFields,
     ...relationFallbackFields,
     ...safeFallbackFields,
   ]);
+
+  const heavyDisplayFieldKeys = new Set(
+    moduleConfig.fields
+      .filter((field) => [FieldType.LONG_TEXT, FieldType.SUPER_LONG_TEXT, FieldType.JSON].includes(field?.type as FieldType))
+      .map((field) => String(field?.key || '').trim())
+      .filter(Boolean)
+  );
+  const compactPrimaryCandidates = rawPrimaryCandidates.filter((fieldKey) => !heavyDisplayFieldKeys.has(fieldKey));
+  const primaryCandidates = compactPrimaryCandidates.length > 0
+    ? compactPrimaryCandidates
+    : rawPrimaryCandidates;
 
   if (primaryCandidates.length > 0) {
     return primaryCandidates;

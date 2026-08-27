@@ -174,11 +174,12 @@ const buildRelationOptionLabel = (targetModule: string, item: any, targetField: 
   }
 
   if (targetModule === 'customers') {
-    return String(item?.[targetField] || item?.business_name || item?.full_name || item?.system_code || item?.id || 'بدون نام').trim();
+    const customerLabel = String(item?.[targetField] || item?.business_name || item?.full_name || item?.system_code || '').trim();
+    return customerLabel && !isUuidLikeValue(customerLabel) ? customerLabel : 'مشتری بدون نام';
   }
 
   if (targetModule === 'cheques') {
-    const serial = String(item?.serial_no || item?.[targetField] || item?.system_code || item?.id || 'بدون شماره').trim();
+    const serial = String(item?.serial_no || item?.[targetField] || item?.system_code || 'بدون شماره').trim();
     const dueDate = String(item?.due_date || '').trim()
       ? toPersianNumber(safeJalaliFormat(item.due_date, 'YYYY/MM/DD') || item.due_date)
       : '-';
@@ -187,12 +188,12 @@ const buildRelationOptionLabel = (targetModule: string, item: any, targetField: 
   }
 
   if (targetModule === 'barters') {
-    const name = String(item?.[targetField] || item?.name || item?.system_code || item?.id || 'بدون عنوان').trim();
+    const name = String(item?.[targetField] || item?.name || item?.system_code || 'بدون عنوان').trim();
     return `${name} (مانده: ${formatPersianPrice(Number(item?.remaining_amount || 0))})`;
   }
 
   if (targetModule === 'billboards' && targetField === 'address') {
-    const address = String(item?.address || item?.name || item?.system_code || item?.id || 'بدون آدرس').trim();
+    const address = String(item?.address || item?.name || item?.system_code || 'بدون آدرس').trim();
     const systemCode = String(item?.system_code || '').trim();
     const baseLabel = systemCode && systemCode !== address ? `${address} - ${systemCode}` : address;
     const statusLabel = getRelationStatusLabel(targetModule, item);
@@ -595,13 +596,17 @@ const fetchRelationOptionsViaRpc = async (
     throw error;
   }
 
-  return (Array.isArray(data) ? data : []).map((item: any) => ({
-    label: String(item?.label || item?.value || '').trim() || 'بدون عنوان',
-    value: item?.value,
-    module: targetModule,
-    name: String(item?.label || item?.value || '').trim(),
-    searchText: String(item?.search_text || item?.label || item?.value || '').trim().toLowerCase(),
-  }));
+  return (Array.isArray(data) ? data : []).map((item: any) => {
+    const rawLabel = String(item?.label || '').trim();
+    const safeLabel = rawLabel && !isUuidLikeValue(rawLabel) ? rawLabel : 'بدون عنوان';
+    return {
+      label: safeLabel,
+      value: item?.value,
+      module: targetModule,
+      name: safeLabel,
+      searchText: String(item?.search_text || safeLabel).trim().toLowerCase(),
+    };
+  });
 };
 
 export const fetchRelationOptionsForField = async (

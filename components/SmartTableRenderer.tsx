@@ -2,7 +2,7 @@ import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react'
 import { Table, Tag, Avatar, Input, InputNumber, Button, Space, Popover, Tooltip, Skeleton } from 'antd';
 import { AppstoreOutlined, SearchOutlined, ArrowUpOutlined, ArrowDownOutlined, TagOutlined, LockOutlined } from '@ant-design/icons';
 import { ModuleDefinition, FieldType } from '../types';
-import { getSafeOptionFallback, getSingleOptionLabel } from '../utils/optionHelpers';
+import { findRelationOption, getFieldOptions, getRelationFallbackLabel, getSingleOptionLabel } from '../utils/optionHelpers';
 import { toPersianNumber, formatPersianPrice, fromPersianNumber } from '../utils/persianNumberFormatter';
 import DateObject from 'react-date-object';
 import persian from 'react-date-object/calendars/persian';
@@ -38,6 +38,7 @@ interface SmartTableRendererProps {
   data: any[];
   loading: boolean;
   deferredDataLoading?: boolean;
+  relationLabelsLoading?: boolean;
   visibleColumns?: string[];  // ✅ ستون‌های انتخاب‌شده از View
   rowSelection?: any;
   onRow?: (record: any) => any;
@@ -174,6 +175,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   data, 
   loading, 
   deferredDataLoading = false,
+  relationLabelsLoading = false,
   visibleColumns,  // ✅ اضافه شد
   rowSelection, 
   onRow,
@@ -844,12 +846,12 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       const category = (field as any).dynamicOptionsCategory;
       const dynopts = dynamicOptions[category] || [];
       options = dynopts.map((o: any) => ({ text: o.label, value: o.value }));
-    } else if (field.type === FieldType.RELATION || field.type === FieldType.USER) {
-      const relopts =
-        relationOptions[field.key] ||
-        relationOptions[(field as any).relationConfig?.targetModule] ||
-        relationOptions.profiles ||
-        [];
+    } else if (
+      field.type === FieldType.RELATION
+      || field.type === FieldType.MULTI_RELATION
+      || field.type === FieldType.USER
+    ) {
+      const relopts = getFieldOptions(field, dynamicOptions, relationOptions);
       options = relopts.map((o: any) => ({ text: o.label, value: o.value }));
     }
     return options.length > 0 ? options : undefined;
@@ -871,6 +873,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         field.type === FieldType.SELECT ||
         field.type === FieldType.MULTI_SELECT ||
         field.type === FieldType.RELATION ||
+        field.type === FieldType.MULTI_RELATION ||
         field.type === FieldType.USER);
     const choiceOptions = hasChoiceFilter ? resolveFieldFilterOptions(field) : undefined;
     const fieldLabel = getFieldLabel(field, field.key);
@@ -922,15 +925,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       FieldType.TAGS,
       FieldType.PROGRESS_STAGES,
     ].includes(field.type);
-    const shouldDeferFieldValue =
-      deferredDataLoading &&
-      [
-        FieldType.SELECT,
-        FieldType.MULTI_SELECT,
-        FieldType.RELATION,
-        FieldType.USER,
-        FieldType.TAGS,
-      ].includes(field.type);
+    const shouldDeferFieldValue = deferredDataLoading && field.type === FieldType.TAGS;
 
     return {
       title: isPrimaryTitleColumn && keyFieldTagFilterContent ? (
@@ -984,7 +979,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
             ? (isMobileViewport && keyFieldMobileWidth ? keyFieldMobileWidth : (moduleConfig?.id === 'products' ? 380 : 340))
             : isTagField
               ? 120
-              : field.type === FieldType.RELATION || field.type === FieldType.USER
+              : field.type === FieldType.RELATION || field.type === FieldType.MULTI_RELATION || field.type === FieldType.USER
                 ? 180
                 : field.type === FieldType.SELECT || field.type === FieldType.MULTI_SELECT
                   ? 150
@@ -992,6 +987,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       ellipsis:
         isKeyLikeField ||
         field.type === FieldType.RELATION ||
+        field.type === FieldType.MULTI_RELATION ||
         field.type === FieldType.USER ||
         field.type === FieldType.SELECT ||
         field.type === FieldType.MULTI_SELECT
@@ -1002,7 +998,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       sortOrder,
       sortDirections: ['ascend', 'descend', null],
       showSorterTooltip: false,
-      filterSearch: field.type === FieldType.RELATION || field.type === FieldType.USER ? true : undefined,
+      filterSearch: field.type === FieldType.RELATION || field.type === FieldType.MULTI_RELATION || field.type === FieldType.USER ? true : undefined,
       sortIcon: () =>
         canSortField ? (
           <span className="inline-flex flex-col leading-none text-[9px] mr-1 text-gray-300">
@@ -1119,16 +1115,39 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
             ));
         }
         if (field.type === FieldType.RELATION) {
+            const relationOption = findRelationOption(field, value, relationOptions);
             const label = getSingleOptionLabel(field, value, dynamicOptions, relationOptions);
-            const targetModule = (field as any)?.relationConfig?.targetModule;
+            const targetModule = String(
+              relationOption?.module
+              || ((field as any)?.relationConfig?.dependsOn ? record?.[(field as any).relationConfig.dependsOn] : '')
+              || (field as any)?.relationConfig?.targetModule
+              || ''
+            ).trim();
+            const canOpenRelation = Boolean(
+              targetModule
+              && value
+              && relationOption
+              && relationOption?.linkable !== false
+              && relationOption?.missing !== true
+              && relationOption?.inaccessible !== true
+            );
+            if (relationLabelsLoading && value && !relationOption) {
+              return renderDeferredInlinePlaceholder('w-[82%]');
+            }
             if (!targetModule || !value) {
               return renderStableTextCell(
                 formatDisplayText(label),
-                "block w-full truncate text-xs text-leather-600 hover:underline font-medium"
+                "block w-full truncate text-xs text-gray-600 dark:text-gray-300 font-medium"
+              );
+            }
+            if (!canOpenRelation) {
+              return renderStableTextCell(
+                formatDisplayText(label, getRelationFallbackLabel(field)),
+                "block w-full truncate text-xs text-gray-600 dark:text-gray-300 font-medium"
               );
             }
             return (
-              <RelatedRecordPopover moduleId={targetModule} recordId={String(value)} label={String(label || value)}>
+              <RelatedRecordPopover moduleId={targetModule} recordId={String(value)} label={String(label)}>
                 {renderStableTextCell(
                   formatDisplayText(label),
                   "block w-full truncate text-xs text-leather-600 hover:underline font-medium"
@@ -1138,11 +1157,17 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         }
         if (field.type === FieldType.USER) {
             if (!value) return '-';
-            // Try to find the label from relationOptions
-            const userLabel = 
-              relationOptions[field.key]?.find((o: any) => o.value === value)?.label ||
-              relationOptions['profiles']?.find((o: any) => o.value === value)?.label || 
-              getSafeOptionFallback(value);
+            const relationOption = findRelationOption(field, value, relationOptions);
+            const userLabel = getSingleOptionLabel(field, value, dynamicOptions, relationOptions);
+            if (relationLabelsLoading && !relationOption) {
+              return renderDeferredInlinePlaceholder('w-[82%]');
+            }
+            if (!relationOption || relationOption?.linkable === false || relationOption?.missing === true || relationOption?.inaccessible === true) {
+              return renderStableTextCell(
+                formatDisplayText(userLabel, 'کاربر مرتبط'),
+                "block w-full truncate text-xs text-gray-600 dark:text-gray-300 font-medium"
+              );
+            }
             return (
               <RelatedRecordPopover moduleId="profiles" recordId={String(value)} label={String(userLabel)}>
                 {renderStableTextCell(
@@ -1263,6 +1288,45 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
                     +{hiddenCount}
                   </span>
                 )}
+              </div>
+            );
+        }
+        if (field.type === FieldType.MULTI_RELATION) {
+            if (!Array.isArray(value) || value.length === 0) return '-';
+            const visibleValues = value.slice(0, 1);
+            const hiddenCount = value.length - visibleValues.length;
+            const relationConfig = (field as any).multiRelationConfig || (field as any).relationConfig || {};
+            return (
+              <div className="flex min-h-[22px] max-w-[220px] items-center gap-1 overflow-hidden whitespace-nowrap">
+                {visibleValues.map((item: any, idx: number) => {
+                  const itemValue = typeof item === 'object' ? (item?.value || item?.id) : item;
+                  const relationOption = findRelationOption(field, itemValue, relationOptions);
+                  const itemLabel = getSingleOptionLabel(field, itemValue, dynamicOptions, relationOptions);
+                  const targetModule = String(
+                    relationOption?.module
+                    || (relationConfig?.dependsOn ? record?.[relationConfig.dependsOn] : '')
+                    || relationConfig?.targetModule
+                    || ''
+                  ).trim();
+                  const tag = (
+                    <Tag
+                      color="default"
+                      style={{ fontSize: '9px', marginRight: 0, maxWidth: 140 }}
+                      className="kalam-multi-value-tag truncate rounded-md font-medium"
+                    >
+                      {itemLabel}
+                    </Tag>
+                  );
+                  const canOpen = Boolean(targetModule && itemValue && relationOption && relationOption?.linkable !== false && relationOption?.missing !== true && relationOption?.inaccessible !== true);
+                  return canOpen ? (
+                    <RelatedRecordPopover key={`${String(itemValue)}-${idx}`} moduleId={targetModule} recordId={String(itemValue)} label={itemLabel}>
+                      {tag}
+                    </RelatedRecordPopover>
+                  ) : <React.Fragment key={`${String(itemValue)}-${idx}`}>{tag}</React.Fragment>;
+                })}
+                {hiddenCount > 0 ? (
+                  <span className="kalam-multi-value-more rounded-md px-1.5 py-0.5 text-[9px] font-medium">+{hiddenCount}</span>
+                ) : null}
               </div>
             );
         }
@@ -1430,6 +1494,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     moduleConfig?.id,
     sorters,
     deferredDataLoading,
+    relationLabelsLoading,
     dynamicOptions,
     relationOptions,
     allUsers,

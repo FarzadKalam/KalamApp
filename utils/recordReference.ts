@@ -12,6 +12,7 @@ type RecordReferenceLike = {
 const normalizeText = (value: unknown): string => String(value || '').trim();
 const RECORD_REFERENCE_LABEL_TTL_MS = 5 * 60_000;
 const recordReferenceLabelCache = new Map<string, { label: string; expiresAt: number }>();
+const recordReferenceRequestCache = new Map<string, Promise<Record<string, string>>>();
 
 // Some application routes are record-reference module ids but do not have a
 // table with the same name. Keep their title lookups on the actual tenant table.
@@ -58,34 +59,54 @@ export const fetchRecordReferenceLabels = async (
       if (!table) return;
 
       const batchSize = table === 'customers' || table === 'suppliers' ? 25 : 80;
-      const result = await selectByIdsWithCompatibleColumns<any>({
-        cacheKey: `record-reference:${moduleId}`,
-        columns: buildRecordTitleSelectColumns(moduleId),
-        ids,
-        batchSize,
-        // عنوان رکوردِ مرتبط فقط برای نمایش است. در schemaهای قدیمی، به‌جای
-        // حذف‌کردن ستون‌ها یکی‌یکی و ایجاد ده‌ها درخواست 400، اولین projection
-        // سازگار و عنوان‌محور برای همان جدول cache می‌شود.
-        preferCompactProjectionAfterMissingColumn: true,
-        execute: (selectExpr, idBatch) =>
-          supabaseClient
-            .from(table)
-            .select(selectExpr)
-            .in('id', idBatch),
-      });
+      const requestKey = `${moduleId}:${ids.slice().sort().join(',')}`;
+      let pending = recordReferenceRequestCache.get(requestKey);
+      if (!pending) {
+        pending = (async () => {
+          const resolvedMap: Record<string, string> = {};
+          const result = await selectByIdsWithCompatibleColumns<any>({
+            cacheKey: `record-reference:${moduleId}`,
+            columns: buildRecordTitleSelectColumns(moduleId),
+            ids,
+            batchSize,
+            // عنوان رکوردِ مرتبط فقط برای نمایش است. در schemaهای قدیمی، به‌جای
+            // حذف‌کردن ستون‌ها یکی‌یکی و ایجاد ده‌ها درخواست 400، اولین projection
+            // سازگار و عنوان‌محور برای همان جدول cache می‌شود.
+            preferCompactProjectionAfterMissingColumn: true,
+            execute: (selectExpr, idBatch) =>
+              supabaseClient
+                .from(table)
+                .select(selectExpr)
+                .in('id', idBatch),
+          });
 
-      if (result.error || !Array.isArray(result.data)) return;
+          if (result.error || !Array.isArray(result.data)) return resolvedMap;
 
-      (result.data || []).forEach((row: any) => {
-        const label = getRecordDisplayLabel(row, moduleId, { fallback: '' });
-        if (!label) return;
-        const referenceKey = buildRecordReferenceKey(moduleId, row?.id);
-        nextMap[referenceKey] = label;
-        recordReferenceLabelCache.set(referenceKey, {
-          label,
-          expiresAt: Date.now() + RECORD_REFERENCE_LABEL_TTL_MS,
+          (result.data || []).forEach((row: any) => {
+            const label = getRecordDisplayLabel(row, moduleId, { fallback: '' });
+            if (!label) return;
+            const referenceKey = buildRecordReferenceKey(moduleId, row?.id);
+            resolvedMap[referenceKey] = label;
+            recordReferenceLabelCache.set(referenceKey, {
+              label,
+              expiresAt: Date.now() + RECORD_REFERENCE_LABEL_TTL_MS,
+            });
+          });
+          return resolvedMap;
+        })();
+        recordReferenceRequestCache.set(requestKey, pending);
+        void pending.then(() => {
+          if (recordReferenceRequestCache.get(requestKey) === pending) {
+            recordReferenceRequestCache.delete(requestKey);
+          }
+        }, () => {
+          if (recordReferenceRequestCache.get(requestKey) === pending) {
+            recordReferenceRequestCache.delete(requestKey);
+          }
         });
-      });
+      }
+
+      Object.assign(nextMap, await pending);
     }),
   );
 

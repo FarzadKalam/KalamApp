@@ -8,10 +8,10 @@ import { FieldType } from '../../types';
 import { fetchProcessTemplateOptions } from '../../utils/referenceData';
 import { supabase } from '../../supabaseClient';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
-import { formatPersianPrice } from '../../utils/persianNumberFormatter';
+import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
 import { useCurrencyConfig } from '../../utils/currency';
 import { ADVERTISING_CAMPAIGN_TOOLS_MODULE_ID } from '../../utils/advertisingCampaigns';
-import { CAMPAIGN_TOOL_STATUS_OPTIONS, getCampaignToolLabel } from './constants';
+import { CAMPAIGN_TOOL_STATUS_OPTIONS, getCampaignToolLabel, usesCampaignAudience } from './constants';
 import { joinIdentityTokens, splitIdentityTokens } from './campaignUtils';
 import type { CampaignToolRecord } from './types';
 import CampaignAttachmentsField from './CampaignAttachmentsField';
@@ -41,6 +41,7 @@ const CampaignToolBlock: React.FC<Props> = ({ tool, onChange, disabled, initiall
   const assigneeToken = tool.assignee_role_id ? `role:${tool.assignee_role_id}` : tool.assignee_id ? `user:${tool.assignee_id}` : undefined;
   const costPerLead = Number(tool.expected_leads || 0) > 0 ? Number(tool.estimated_cost || 0) / Number(tool.expected_leads) : 0;
   const costPerCustomer = Number(tool.expected_customers || 0) > 0 ? Number(tool.estimated_cost || 0) / Number(tool.expected_customers) : 0;
+  const finalizedAudience = usesCampaignAudience(tool.tool_type) && Boolean((config as any).audience_finalized_at);
 
   useEffect(() => {
     let mounted = true;
@@ -77,6 +78,24 @@ const CampaignToolBlock: React.FC<Props> = ({ tool, onChange, disabled, initiall
         ),
         children: active.includes('tool') ? (
           <div className="space-y-5">
+            {finalizedAudience ? (
+              <Card size="small" title="فهرست نهایی مخاطبان این ابزار" className="!rounded-xl">
+                <div className="flex flex-wrap gap-2">
+                  <Tag>منطبق: {toPersianNumber(Number((config as any).matched_audience_count || 0).toLocaleString())}</Tag>
+                  <Tag color="blue">یکتا: {toPersianNumber(Number((config as any).unique_audience_count || 0).toLocaleString())}</Tag>
+                  <Tag color="orange">تکراری: {toPersianNumber(Number((config as any).duplicate_audience_count || 0).toLocaleString())}</Tag>
+                  <Tag color="red">بدون راه ارتباطی: {toPersianNumber(Number((config as any).invalid_audience_count || 0).toLocaleString())}</Tag>
+                  <Tag>حذف دستی: {toPersianNumber(Number((config as any).excluded_audience_count || 0).toLocaleString())}</Tag>
+                  <Tag color="volcano">فهرست عدم ارسال: {toPersianNumber(Number((config as any).suppressed_audience_count || 0).toLocaleString())}</Tag>
+                  <Tag color="green">قابل ارسال: {toPersianNumber(Number((config as any).sendable_audience_count || 0).toLocaleString())}</Tag>
+                </div>
+                <Typography.Text type="secondary" className="mt-2 block text-xs">
+                  آخرین نهایی‌سازی: {safeJalaliFormat((config as any).audience_finalized_at, 'YYYY/MM/DD HH:mm') || '—'}؛ با تغییر شرط‌ها یا انتخاب مخاطبان، این آمار تا نهایی‌سازی دوباره پاک می‌شود.
+                </Typography.Text>
+              </Card>
+            ) : usesCampaignAudience(tool.tool_type) ? (
+              <Alert type="info" showIcon message="تعداد واقعی قابل ارسال پس از جست‌وجو و نهایی‌سازی فهرست در مرحله «مخاطبان و شرط‌ها» اینجا ثبت می‌شود." />
+            ) : null}
             <Card size="small" className="!rounded-xl">
               <div className="grid grid-cols-1 gap-4 xl:grid-cols-[180px_minmax(0,1fr)]">
                 <RecordImageBox moduleId={ADVERTISING_CAMPAIGN_TOOLS_MODULE_ID} recordId={persistedToolId || undefined} compact canEdit={!disabled && Boolean(persistedToolId)} />

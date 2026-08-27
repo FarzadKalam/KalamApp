@@ -147,6 +147,8 @@ describe('print signatures', () => {
     expect(html).toContain('data-print-signature-columns="2"');
     expect(html).toContain('grid-template-columns:repeat(2, minmax(0, 1fr))');
     expect(html).toContain('min-width:100%');
+    expect(html).toContain("font-family:'Peyda',Tahoma,Arial,sans-serif");
+    expect(html).toContain('break-inside:avoid');
   });
 
   it('uses all available signature space with one column per remaining signer', () => {
@@ -216,7 +218,7 @@ describe('print signatures', () => {
       unresolved: false,
     }];
 
-    expect(getPrintSignatureSectionHeightPx(textOnlyRows)).toBe(66);
+    expect(getPrintSignatureSectionHeightPx(textOnlyRows)).toBe(76);
     expect(buildPrintSignatureBandHtml(textOnlyRows)).toContain('min-height:22px');
   });
 });

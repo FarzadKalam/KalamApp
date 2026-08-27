@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   calculateSmsEstimatedCost,
+  applyCampaignAudienceSummaryToConfig,
   containsSmsOptOutPhrase,
   estimateSmsPages,
   keepCampaignDateRangeValid,
+  invalidateCampaignAudienceSummaryConfig,
   normalizeCampaignSenderNumbers,
+  normalizeCampaignAudienceSummary,
 } from './campaignUtils';
 
 describe('campaignUtils', () => {
@@ -45,5 +48,38 @@ describe('campaignUtils', () => {
       'start_at',
       'end_at',
     )).toEqual({ start_at: '2026-08-26T12:00:00.000Z', end_at: '2026-08-26T12:00:00.000Z' });
+  });
+
+  it('normalizes audience counts and maps the sendable count to SMS estimates', () => {
+    const summary = normalizeCampaignAudienceSummary({
+      matched_count: '12', unique_count: 10, duplicate_count: 2,
+      invalid_count: 1, excluded_count: 1, suppressed_count: -4, sendable_count: 8.9,
+    });
+    expect(summary).toEqual({
+      matched_count: 12, unique_count: 10, duplicate_count: 2,
+      invalid_count: 1, excluded_count: 1, suppressed_count: 0, sendable_count: 8,
+    });
+    expect(applyCampaignAudienceSummaryToConfig('sms', { kind: 'sms', message: 'سلام' }, summary, '2026-08-27T10:00:00.000Z'))
+      .toMatchObject({
+        message: 'سلام', estimated_audience: 8, sendable_audience_count: 8,
+        audience_finalized_at: '2026-08-27T10:00:00.000Z',
+      });
+  });
+
+  it('stores audience summaries without inventing an estimate for private bot tools', () => {
+    const config = applyCampaignAudienceSummaryToConfig('bot_private', { kind: 'bot_private', channel: 'telegram' }, { sendable_count: 4 });
+    expect(config).toMatchObject({ sendable_audience_count: 4, unique_audience_count: 0 });
+    expect(config).not.toHaveProperty('estimated_audience');
+  });
+
+  it('invalidates a finalized count when its conditions change', () => {
+    const config = invalidateCampaignAudienceSummaryConfig('email', {
+      kind: 'email', estimated_audience: 9, sendable_audience_count: 9,
+      audience_finalized_at: '2026-08-27T10:00:00.000Z', subject: 'خبرنامه',
+    });
+    expect(config).toMatchObject({ subject: 'خبرنامه' });
+    expect(config).not.toHaveProperty('estimated_audience');
+    expect(config).not.toHaveProperty('sendable_audience_count');
+    expect(config).not.toHaveProperty('audience_finalized_at');
   });
 });

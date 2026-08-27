@@ -613,7 +613,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       .map((item) => formatDisplayText(item, '').trim())
       .find(Boolean);
 
-    return getSafeOptionFallback(resolvedCandidate || relationExactOption?.label || value);
+    return getSafeOptionFallback(resolvedCandidate || relationExactOption?.label || value, 'رکورد مرتبط');
   }, [allValues, fieldKey, fieldOptions, relationBaseKey, relationConfigAny?.targetField, relationExactOption?.label, relationResolvedOptions, value]);
   const configuredQuickCreateKeys = useMemo(
     () =>
@@ -964,10 +964,11 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
               ...prev,
               {
                 value: exactId,
-                label: 'رکورد حذف شده',
-                searchText: `رکورد حذف شده ${normalizedExactId}`.trim(),
-                module: resolvedRelationTargetModuleId || field.relationConfig?.targetModule,
-                missing: true,
+                label: resolveRelationDisplayLabel(),
+                searchText: resolveRelationDisplayLabel(),
+                module: resolvedRelationTargetModuleId || relationConfigAny?.targetModule,
+                linkable: false,
+                inaccessible: true,
               },
             ];
           });
@@ -1048,15 +1049,6 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     }
 
     const localResolvedLabel = String(resolveRelationDisplayLabel() || '').trim();
-    const safeRawValue = String(value ?? '').trim();
-    if (localResolvedLabel && localResolvedLabel !== '-' && localResolvedLabel !== safeRawValue) {
-      setRelationExactOption({
-        value,
-        label: localResolvedLabel,
-        module: resolvedRelationTargetModuleId || relationConfigAny?.targetModule,
-      });
-      return;
-    }
 
     let cancelled = false;
     const loadExactOption = async () => {
@@ -1073,7 +1065,13 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             });
         if (cancelled) return;
         const matched = (remoteOptions || []).find((item: any) => String(item?.value) === String(value)) || null;
-        setRelationExactOption(matched);
+        setRelationExactOption(matched || {
+          value,
+          label: localResolvedLabel || 'رکورد مرتبط',
+          module: resolvedRelationTargetModuleId || relationConfigAny?.targetModule,
+          linkable: false,
+          inaccessible: true,
+        });
       } catch {
         if (!cancelled) {
           setRelationExactOption(null);
@@ -2067,6 +2065,10 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                       : getSafeOptionFallback(value));
                 if (fieldType === FieldType.RELATION && resolvedRelationTargetModuleId && value) {
                    const targetModule = String(selectedOpt?.module || resolvedRelationTargetModuleId || '').trim();
+                   const canOpenRelation = Boolean(selectedOpt && selectedOpt?.linkable !== false && selectedOpt?.missing !== true && selectedOpt?.inaccessible !== true);
+                   if (!canOpenRelation) {
+                     return <span className="break-words font-medium text-gray-700 dark:text-gray-200">{formatDisplayText(resolvedLabel, 'رکورد مرتبط')}</span>;
+                   }
                    return (
                       <RelatedRecordPopover
                         moduleId={targetModule || resolvedRelationTargetModuleId}
@@ -2090,10 +2092,12 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             <div className="flex flex-wrap gap-1">
               {multiRelReadValues.map((id: any) => {
                 const opt = relationResolvedOptions.find((o: any) => String(o?.value) === String(id));
-                const label = opt?.label ? formatDisplayText(opt.label, String(id)) : String(id);
-                if (multiRelTargetModRead) {
+                const label = opt?.label ? formatDisplayText(opt.label, 'رکورد مرتبط') : 'رکورد مرتبط';
+                const targetModule = String(opt?.module || multiRelTargetModRead || '').trim();
+                const canOpenRelation = Boolean(targetModule && opt && opt?.linkable !== false && opt?.missing !== true && opt?.inaccessible !== true);
+                if (canOpenRelation) {
                   return (
-                    <RelatedRecordPopover key={String(id)} moduleId={multiRelTargetModRead} recordId={String(id)} label={label} overlayZIndex={overlayZIndexBase + 40}>
+                    <RelatedRecordPopover key={String(id)} moduleId={targetModule} recordId={String(id)} label={label} overlayZIndex={overlayZIndexBase + 40}>
                       <Tag className="cursor-pointer">{label}</Tag>
                     </RelatedRecordPopover>
                   );

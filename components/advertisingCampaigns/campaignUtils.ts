@@ -169,6 +169,71 @@ export const getPersistedCampaignToolId = (toolId: unknown): string | null => {
   return normalized;
 };
 
+export type CampaignAudienceSummary = {
+  matched_count: number;
+  unique_count: number;
+  duplicate_count: number;
+  invalid_count: number;
+  excluded_count: number;
+  suppressed_count: number;
+  sendable_count: number;
+};
+
+const audienceCount = (value: unknown) => {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? Math.max(0, Math.trunc(number)) : 0;
+};
+
+export const normalizeCampaignAudienceSummary = (value: unknown): CampaignAudienceSummary => {
+  const source = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    matched_count: audienceCount(source.matched_count),
+    unique_count: audienceCount(source.unique_count),
+    duplicate_count: audienceCount(source.duplicate_count),
+    invalid_count: audienceCount(source.invalid_count),
+    excluded_count: audienceCount(source.excluded_count),
+    suppressed_count: audienceCount(source.suppressed_count),
+    sendable_count: audienceCount(source.sendable_count),
+  };
+};
+
+export const applyCampaignAudienceSummaryToConfig = (
+  toolType: CampaignToolType,
+  config: CampaignChannelConfig | null | undefined,
+  value: unknown,
+  finalizedAt = new Date().toISOString(),
+): CampaignChannelConfig => {
+  const summary = normalizeCampaignAudienceSummary(value);
+  return {
+    ...(config || getDefaultToolConfig(toolType)),
+    matched_audience_count: summary.matched_count,
+    unique_audience_count: summary.unique_count,
+    duplicate_audience_count: summary.duplicate_count,
+    invalid_audience_count: summary.invalid_count,
+    excluded_audience_count: summary.excluded_count,
+    suppressed_audience_count: summary.suppressed_count,
+    sendable_audience_count: summary.sendable_count,
+    audience_finalized_at: finalizedAt,
+    ...(['sms', 'email'].includes(toolType)
+      ? { estimated_audience: summary.sendable_count }
+      : {}),
+  } as CampaignChannelConfig;
+};
+
+export const invalidateCampaignAudienceSummaryConfig = (
+  toolType: CampaignToolType,
+  config: CampaignChannelConfig | null | undefined,
+): CampaignChannelConfig => {
+  const next = { ...(config || getDefaultToolConfig(toolType)) } as Record<string, unknown>;
+  [
+    'matched_audience_count', 'unique_audience_count', 'duplicate_audience_count',
+    'invalid_audience_count', 'excluded_audience_count', 'suppressed_audience_count',
+    'sendable_audience_count', 'audience_finalized_at',
+  ].forEach((key) => delete next[key]);
+  if (['sms', 'email'].includes(toolType)) delete next.estimated_audience;
+  return next as CampaignChannelConfig;
+};
+
 /**
  * ذخیرهٔ خودکار نباید بازه‌ای موقتاً نامعتبر را به پایگاه‌داده بفرستد. هنگام
  * جابه‌جایی یکی از دو سر بازه، سر مقابل در صورت نیاز با آن هماهنگ می‌شود.

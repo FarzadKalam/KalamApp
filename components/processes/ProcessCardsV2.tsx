@@ -1105,7 +1105,9 @@ const ProcessStagePill = memo(({
 
   return (
     <div
-      className={`group relative box-border cursor-pointer rounded-xl border border-[var(--process-stage-border)] bg-[var(--process-stage-fill)] text-[var(--process-stage-text)] shadow-[var(--process-stage-shadow)] transition hover:brightness-[1.02] hover:shadow-[var(--process-stage-shadow-hover)] dark:border-[var(--process-stage-border-dark)] dark:bg-[var(--process-stage-fill-dark)] dark:text-[var(--process-stage-text-dark)] ${highlighted ? 'ring-2 ring-offset-2 ring-[rgba(var(--brand-500-rgb),0.75)] ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.85)] dark:ring-offset-slate-950' : ''} ${fitClass}`}
+      className={`group relative box-border cursor-pointer rounded-xl border border-[var(--process-stage-border)] bg-[var(--process-stage-fill)] text-[var(--process-stage-text)] shadow-[var(--process-stage-shadow)] transition hover:brightness-[1.02] hover:shadow-[var(--process-stage-shadow-hover)] dark:border-[var(--process-stage-border-dark)] dark:bg-[var(--process-stage-fill-dark)] dark:text-[var(--process-stage-text-dark)] ${highlighted ? 'ring-[3px] ring-offset-2 ring-[rgba(var(--brand-500-rgb),0.9)] ring-offset-white outline outline-2 outline-offset-[-5px] outline-[rgba(var(--brand-500-rgb),0.38)] shadow-[0_0_0_1px_rgba(var(--brand-500-rgb),0.28),var(--process-stage-shadow-hover)] dark:ring-[rgba(var(--brand-300-rgb),0.95)] dark:ring-offset-slate-950 dark:outline-[rgba(var(--brand-300-rgb),0.45)]' : ''} ${fitClass}`}
+      data-process-stage-highlighted={highlighted ? 'true' : undefined}
+      aria-current={highlighted ? 'step' : undefined}
       role="button"
       tabIndex={0}
       data-process-stage-card

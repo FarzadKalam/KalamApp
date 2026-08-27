@@ -146,6 +146,10 @@ const CampaignWizardPage: React.FC = () => {
         return;
       }
       if (action === 'send_now' || action === 'schedule') {
+        // شرط‌ها و انتخاب/حذف دستی مخاطبان بخشی از payload اجرای واقعی‌اند.
+        // پیش از snapshot و ساخت dispatch منتظر ذخیرهٔ قطعی می‌مانیم تا کلیک
+        // سریع روی «ارسال اکنون» از autosave جلو نزند و فرد حذف‌شده ارسال نگیرد.
+        await wizard.persist({ createIfNeeded: true });
         const scheduledAt = action === 'schedule'
           ? ((tool.config as any)?.scheduled_at || tool.planned_start_at || null)
           : null;
@@ -238,8 +242,8 @@ const CampaignWizardPage: React.FC = () => {
     if (wizard.accessMode === 'tool_limited') return [{ key: 'dashboard', label: 'داشبورد همکاری', children: null }];
     return [
       { key: 'basics', label: '۱. مشخصات کمپین', children: null },
-      { key: 'settings', label: '۲. تنظیمات کمپین', children: null },
-      { key: 'conditions', label: '۳. شرط‌ها', children: null },
+      { key: 'conditions', label: '۲. مخاطبان و شرط‌ها', children: null },
+      { key: 'settings', label: '۳. تنظیمات ابزارها', children: null },
       { key: 'dashboard', label: '۴. داشبورد کمپین', children: null },
     ];
   }, [wizard.accessMode]);
@@ -282,7 +286,16 @@ const CampaignWizardPage: React.FC = () => {
       ) : activeTab === 'settings' ? (
         <CampaignSettingsTab campaignId={wizard.draft.campaign.id} tools={wizard.selectedTools} onToolChange={wizard.updateTool} disabled={readOnly} />
       ) : activeTab === 'conditions' ? (
-        <CampaignConditionsTab campaignId={wizard.draft.campaign.id} campaignName={wizard.draft.campaign.name} tools={wizard.selectedTools} rules={wizard.draft.audienceRules} onRuleChange={wizard.updateAudienceRule} onToolChange={wizard.updateTool} disabled={readOnly} />
+        <CampaignConditionsTab
+          campaignId={wizard.draft.campaign.id}
+          campaignName={wizard.draft.campaign.name}
+          tools={wizard.selectedTools}
+          rules={wizard.draft.audienceRules}
+          onRuleChange={wizard.updateAudienceRule}
+          onToolChange={wizard.updateTool}
+          onBeforeAudienceSearch={() => wizard.persist({ createIfNeeded: true })}
+          disabled={readOnly}
+        />
       ) : (
         <CampaignDashboard
           campaign={{ ...wizard.draft.campaign, access_mode: wizard.accessMode }}

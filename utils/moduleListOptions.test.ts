@@ -43,6 +43,28 @@ describe('buildModuleListOptionPlan', () => {
     expect(plan.immediateRelationFields.map((field) => field.key)).toEqual(['referrer_customer_id']);
   });
 
+  it('loads visible multi-relation fields through their own target config', () => {
+    const config: ModuleDefinition = {
+      id: 'sample_records',
+      table: 'sample_records',
+      titles: { fa: 'نمونه‌ها' },
+      fields: [
+        { key: 'name', type: FieldType.TEXT, labels: { fa: 'نام' }, isTableColumn: true },
+        {
+          key: 'reviewer_ids',
+          type: FieldType.MULTI_RELATION,
+          labels: { fa: 'بازبین‌ها' },
+          isTableColumn: true,
+          multiRelationConfig: { targetModule: 'profiles' },
+        },
+      ],
+      blocks: [],
+    };
+
+    const plan = buildModuleListOptionPlan(config, ['name', 'reviewer_ids']);
+    expect(plan.immediateRelationFields.map((field) => field.key)).toContain('reviewer_ids');
+  });
+
   it('keeps cash bank operational columns visible when a saved view is too narrow', () => {
     const fields = getModuleListVisibleFields(cashBankOperationsConfig, ['image_url', 'assignee_id'])
       .map((field) => field.key);
@@ -128,5 +150,63 @@ describe('buildModuleListOptionPlan', () => {
       expect.objectContaining({ value: 'user-active', label: 'کاربر فعال' }),
       expect.objectContaining({ value: 'user-inactive', label: 'کاربر غیرفعال', inactiveHistorical: true }),
     ]));
+  });
+
+  it('keeps deleted relation titles as plain metadata with a Persian deletion marker', async () => {
+    vi.mocked(fetchRecordReferenceLabels).mockResolvedValue({});
+    const relationId = '44444444-4444-4444-8444-444444444444';
+    const supabase = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({
+          in: vi.fn().mockResolvedValue({
+            data: [{ module_id: 'customers', source_record_id: relationId, record_title: 'مشتری قدیمی' }],
+            error: null,
+          }),
+        })),
+      })),
+    };
+
+    const options = await hydrateModuleListRelationOptionsForRows(
+      supabase as any,
+      [{ key: 'customer_id', type: FieldType.RELATION, labels: { fa: 'مشتری' }, relationConfig: { targetModule: 'customers' } }],
+      [{ customer_id: relationId }],
+      null,
+    );
+
+    expect(options.customer_id).toEqual([
+      expect.objectContaining({
+        value: relationId,
+        label: 'مشتری قدیمی (حذف شده)',
+        deleted: true,
+        linkable: false,
+      }),
+    ]);
+  });
+
+  it('uses a stored relation title as plain text when the target record is not viewable', async () => {
+    vi.mocked(fetchRecordReferenceLabels).mockResolvedValue({});
+    const relationId = '55555555-5555-4555-8555-555555555555';
+    const supabase = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({
+          in: vi.fn().mockResolvedValue({ data: [], error: null }),
+        })),
+      })),
+    };
+
+    const options = await hydrateModuleListRelationOptionsForRows(
+      supabase as any,
+      [{ key: 'customer_id', type: FieldType.RELATION, labels: { fa: 'مشتری' }, relationConfig: { targetModule: 'customers' } }],
+      [{ customer_id: relationId, customer_name: 'مشتری محدود' }],
+      null,
+    );
+
+    expect(options.customer_id).toEqual([
+      expect.objectContaining({
+        label: 'مشتری محدود',
+        inaccessible: true,
+        linkable: false,
+      }),
+    ]);
   });
 });

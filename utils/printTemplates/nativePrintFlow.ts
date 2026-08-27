@@ -72,13 +72,24 @@ const buildMarginDocument = ({
         font-family: 'Peyda', Tahoma, Arial, sans-serif;
         font-size: 16px;
         line-height: 1.8;
-        overflow: hidden;
+        /* Header/footer HTML is rendered by Chromium in a separate document.
+           Clipping that document hides the lower part of the signature lane
+           in some Windows PDF print paths, even though the PDF preview has
+           already painted it. The outer PDF margin remains the physical
+           boundary; this document itself must not introduce another clip. */
+        overflow: visible;
       }
       body, body * { box-sizing: border-box; max-width: 100%; font-family: 'Peyda', Tahoma, Arial, sans-serif !important; }
       body img { max-width: 100%; height: auto; }
       body table { width: 100%; border-collapse: collapse; }
       body p { margin: 0 0 6px; }
-      [data-kalamapp-print-margin-content] { display: block; width: 100%; min-width: 0; max-width: 100%; }
+      [data-kalamapp-print-margin-content] { display: block; width: 100%; min-width: 0; max-width: 100%; overflow: visible; }
+      [data-print-signature-band] {
+        display: grid !important;
+        break-inside: avoid;
+        page-break-inside: avoid;
+        overflow: visible !important;
+      }
     </style>
   </head>
   <body><div data-kalamapp-print-margin-content="true">${contentHtml}</div></body>

@@ -7,6 +7,21 @@ import { shouldSkipModuleListField } from './moduleListFieldSelection';
 import { fetchRelationOptionsForField } from './relationOptions';
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from './recordReference';
 import { isWorkflowVirtualField, shouldRenderInGeneralModuleUi } from './moduleFieldVisibility';
+import { isUuidLikeValue } from './optionHelpers';
+
+type RelationConfigLike = {
+  targetModule?: string;
+  targetField?: string;
+  dependsOn?: string;
+  filter?: Record<string, any>;
+  sourceModules?: Array<{
+    targetModule?: string;
+    targetField?: string;
+    filter?: Record<string, any>;
+    tagLabel?: string;
+    tagColor?: string;
+  }>;
+};
 
 type ModuleFieldLike = {
   key: string;
@@ -18,20 +33,15 @@ type ModuleFieldLike = {
   };
   order?: number;
   dynamicOptionsCategory?: string;
-  relationConfig?: {
-    targetModule?: string;
-    targetField?: string;
-    dependsOn?: string;
-    filter?: Record<string, any>;
-    sourceModules?: Array<{
-      targetModule?: string;
-      targetField?: string;
-      filter?: Record<string, any>;
-      tagLabel?: string;
-      tagColor?: string;
-    }>;
-  };
+  relationConfig?: RelationConfigLike;
+  multiRelationConfig?: RelationConfigLike;
 };
+
+const getFieldRelationConfig = (field?: ModuleFieldLike | null): RelationConfigLike | undefined => (
+  field?.type === FieldType.MULTI_RELATION
+    ? (field.multiRelationConfig || field.relationConfig)
+    : field?.relationConfig
+);
 
 const MODULE_LIST_SYSTEM_FIELDS: ModuleFieldLike[] = [
   { key: 'created_at', labels: { fa: 'زمان ایجاد' }, type: FieldType.DATETIME },
@@ -219,13 +229,13 @@ const collectFullDynamicOptionFields = (moduleConfig: ModuleDefinition): ModuleF
 
 const collectFullRelationFields = (moduleConfig: ModuleDefinition): ModuleFieldLike[] => {
   const fields: ModuleFieldLike[] = [
-    ...(moduleConfig.fields || []).filter((field) => field.type === FieldType.RELATION || field.type === FieldType.USER || field.type === FieldType.TAGS),
+    ...(moduleConfig.fields || []).filter((field) => field.type === FieldType.RELATION || field.type === FieldType.MULTI_RELATION || field.type === FieldType.USER || field.type === FieldType.TAGS),
   ];
 
   (moduleConfig.blocks || []).forEach((block) => {
     if ((block.type === BlockType.TABLE || block.type === BlockType.GRID_TABLE) && block.tableColumns) {
       block.tableColumns.forEach((column) => {
-        if (column.type === FieldType.RELATION || column.type === FieldType.USER || column.type === FieldType.TAGS) {
+        if (column.type === FieldType.RELATION || column.type === FieldType.MULTI_RELATION || column.type === FieldType.USER || column.type === FieldType.TAGS) {
           fields.push({ ...column, key: `${block.id}_${column.key}` });
         }
       });
@@ -284,7 +294,7 @@ export const buildModuleListOptionPlan = (
   );
   const immediateRelationFields = visibleFields.filter(
     (field) =>
-      (field.type === FieldType.RELATION || field.type === FieldType.USER || field.type === FieldType.TAGS) &&
+      (field.type === FieldType.RELATION || field.type === FieldType.MULTI_RELATION || field.type === FieldType.USER || field.type === FieldType.TAGS) &&
       (hasExplicitVisibleColumns || isCheapImmediateRelationField(field))
   );
 
@@ -312,10 +322,9 @@ const buildRelationOptionsFromRows = (
           || (resolvedTargetField ? row?.[resolvedTargetField] : '')
           || row?.business_name
           || row?.system_code
-          || row?.id
           || 'بدون نام'
         ).trim()
-      : ((resolvedTargetField ? row?.[resolvedTargetField] : null) || row?.shelf_number || row?.system_code || row?.id);
+      : ((resolvedTargetField ? row?.[resolvedTargetField] : null) || row?.shelf_number || row?.system_code || 'بدون عنوان');
     const systemCodeSuffix = !isCustomer && row?.system_code ? ` (${row.system_code})` : '';
     return {
       label: `${labelValue}${systemCodeSuffix}`,
@@ -384,6 +393,47 @@ const getRowFieldValues = (row: any, fieldKey: string) => {
   return normalizedValue ? [normalizedValue] : [];
 };
 
+const getRowRelationLabelHint = (row: any, fieldKey: string, recordId: string): string => {
+  const rawValue = row?.[fieldKey];
+  const objectValues = Array.isArray(rawValue) ? rawValue : [rawValue];
+  const matchedObject = objectValues.find((item: any) => (
+    item && typeof item === 'object' && normalizeOptionValue(item?.value || item?.id) === recordId
+  ));
+  const objectLabel = matchedObject && normalizeOptionValue(
+    matchedObject.label
+    || matchedObject.name
+    || matchedObject.title
+    || matchedObject.full_name
+    || matchedObject.system_code
+  );
+  if (objectLabel && !isUuidLikeValue(objectLabel)) return objectLabel;
+
+  const baseKey = fieldKey.replace(/_id$/i, '');
+  const companionKeys = [
+    `${fieldKey}_label`,
+    `${fieldKey}_name`,
+    `${fieldKey}_title`,
+    `${baseKey}_label`,
+    `${baseKey}_name`,
+    `${baseKey}_title`,
+    `${baseKey}_system_code`,
+  ];
+  for (const key of companionKeys) {
+    const candidate = normalizeOptionValue(row?.[key]);
+    if (candidate && !isUuidLikeValue(candidate)) return candidate;
+  }
+
+  const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+  const snapshot = metadata?.relation_labels?.[fieldKey]
+    || metadata?.record_relation_labels?.[fieldKey]
+    || row?.relation_labels?.[fieldKey];
+  const snapshotValue = snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)
+    ? snapshot[recordId]
+    : snapshot;
+  const snapshotLabel = normalizeOptionValue(snapshotValue?.label || snapshotValue);
+  return snapshotLabel && !isUuidLikeValue(snapshotLabel) ? snapshotLabel : '';
+};
+
 export const hydrateModuleListRelationOptionsForRows = async (
   supabaseClient: any,
   fields: ModuleFieldLike[],
@@ -408,7 +458,7 @@ export const hydrateModuleListRelationOptionsForRows = async (
   };
 
   const requestsByModule = new Map<string, Set<string>>();
-  const fieldTargets = new Map<string, Array<{ moduleId: string; recordId: string }>>();
+  const fieldTargets = new Map<string, Array<{ moduleId: string; recordId: string; labelHint?: string }>>();
   const userFieldKeys = new Set<string>();
 
   (fields || []).forEach((field) => {
@@ -426,14 +476,14 @@ export const hydrateModuleListRelationOptionsForRows = async (
           if (!requestsByModule.has('profiles')) requestsByModule.set('profiles', new Set<string>());
           requestsByModule.get('profiles')!.add(recordId);
           const fieldEntries = fieldTargets.get(fieldKey) || [];
-          fieldEntries.push({ moduleId: 'profiles', recordId });
+          fieldEntries.push({ moduleId: 'profiles', recordId, labelHint: getRowRelationLabelHint(row, fieldKey, recordId) });
           fieldTargets.set(fieldKey, fieldEntries);
         });
       });
       return;
     }
 
-    const relationConfig = field?.relationConfig;
+    const relationConfig = getFieldRelationConfig(field);
     if (!relationConfig) return;
 
     (rows || []).forEach((row: any) => {
@@ -446,7 +496,7 @@ export const hydrateModuleListRelationOptionsForRows = async (
         if (!requestsByModule.has(targetModule)) requestsByModule.set(targetModule, new Set<string>());
         requestsByModule.get(targetModule)!.add(recordId);
         const fieldEntries = fieldTargets.get(fieldKey) || [];
-        fieldEntries.push({ moduleId: targetModule, recordId });
+        fieldEntries.push({ moduleId: targetModule, recordId, labelHint: getRowRelationLabelHint(row, fieldKey, recordId) });
         fieldTargets.set(fieldKey, fieldEntries);
       });
     });
@@ -459,6 +509,34 @@ export const hydrateModuleListRelationOptionsForRows = async (
     )
   ).catch(() => ({} as Record<string, string>));
 
+  const unresolvedTargetIds = Array.from(
+    new Set(
+      Array.from(fieldTargets.values())
+        .flat()
+        .filter((entry) => !labelMap[buildRecordReferenceKey(entry.moduleId, entry.recordId)])
+        .map((entry) => entry.recordId)
+        .filter(Boolean)
+    )
+  );
+  const deletedLabelMap: Record<string, string> = {};
+  if (unresolvedTargetIds.length > 0) {
+    const { data: deletedRows, error: deletedRowsError } = await supabaseClient
+      .from('recycle_bin_records')
+      .select('module_id,source_record_id,record_title')
+      .in('source_record_id', unresolvedTargetIds.slice(0, 500));
+    if (!deletedRowsError) {
+      (deletedRows || []).forEach((row: any) => {
+        const moduleId = normalizeOptionValue(row?.module_id);
+        const recordId = normalizeOptionValue(row?.source_record_id);
+        if (!moduleId || !recordId) return;
+        const title = normalizeOptionValue(row?.record_title);
+        deletedLabelMap[buildRecordReferenceKey(moduleId, recordId)] = title
+          ? `${title.replace(/\s*\(حذف شده\)\s*$/u, '')} (حذف شده)`
+          : 'رکورد حذف شده';
+      });
+    }
+  }
+
   fieldTargets.forEach((entries, fieldKey) => {
     const merged = new Map<string, any>();
     entries.forEach((entry) => {
@@ -466,7 +544,9 @@ export const hydrateModuleListRelationOptionsForRows = async (
       // اگر lookup عنوان به‌علت schema قدیمی هنوز پاسخ نداد، شناسهٔ فنی را
       // هرگز وارد UI نکن. ردیف اصلی همچنان نمایش داده می‌شود و با دریافت
       // عنوان در retry بعدی، گزینه نیز به‌روز خواهد شد.
-      const label = String(labelMap[referenceKey] || 'رکورد مرتبط').trim();
+      const resolvedLabel = String(labelMap[referenceKey] || '').trim();
+      const deletedLabel = String(deletedLabelMap[referenceKey] || '').trim();
+      const label = resolvedLabel || deletedLabel || String(entry.labelHint || 'رکورد مرتبط').trim();
       const optionKey = `${entry.moduleId}:${entry.recordId}`;
       if (!merged.has(optionKey)) {
         merged.set(optionKey, {
@@ -474,6 +554,10 @@ export const hydrateModuleListRelationOptionsForRows = async (
           value: entry.recordId,
           module: entry.moduleId,
           searchText: label.toLowerCase(),
+          linkable: Boolean(resolvedLabel),
+          missing: Boolean(deletedLabel),
+          deleted: Boolean(deletedLabel),
+          inaccessible: !resolvedLabel && !deletedLabel,
         });
       }
     });
@@ -492,13 +576,19 @@ export const hydrateModuleListRelationOptionsForRows = async (
       .forEach((entry) => {
         const recordId = normalizeOptionValue(entry.recordId);
         if (!recordId || resolvedProfiles.has(recordId)) return;
-        const label = String(labelMap[buildRecordReferenceKey('profiles', recordId)] || 'کاربر مرتبط').trim();
+        const referenceKey = buildRecordReferenceKey('profiles', recordId);
+        const deletedLabel = String(deletedLabelMap[referenceKey] || '').trim();
+        const label = String(labelMap[referenceKey] || deletedLabel || 'کاربر مرتبط').trim();
         resolvedProfiles.set(recordId, {
           label,
           value: recordId,
           module: 'profiles',
           searchText: label.toLowerCase(),
           inactiveHistorical: true,
+          linkable: Boolean(labelMap[referenceKey]),
+          missing: Boolean(deletedLabel),
+          deleted: Boolean(deletedLabel),
+          inaccessible: !labelMap[referenceKey] && !deletedLabel,
         });
       });
   });
@@ -568,9 +658,10 @@ export const fetchModuleListRelationOptions = async (
       return;
     }
 
-    const targetModule = normalizeOptionValue(field.relationConfig?.targetModule);
-    const sourceModules = Array.isArray(field.relationConfig?.sourceModules)
-      ? field.relationConfig?.sourceModules || []
+    const relationConfig = getFieldRelationConfig(field);
+    const targetModule = normalizeOptionValue(relationConfig?.targetModule);
+    const sourceModules = Array.isArray(relationConfig?.sourceModules)
+      ? relationConfig?.sourceModules || []
       : [];
     if (!targetModule && sourceModules.length === 0) return;
 
@@ -606,8 +697,8 @@ export const fetchModuleListRelationOptions = async (
       return;
     }
 
-    const targetField = normalizeOptionValue(field.relationConfig?.targetField) || undefined;
-    const filter = normalizeFilter(field.relationConfig?.filter);
+    const targetField = normalizeOptionValue(relationConfig?.targetField) || undefined;
+    const filter = normalizeFilter(relationConfig?.filter);
     const signature = JSON.stringify({ targetModule, targetField, filter });
     const existing = groupedTargets.get(signature);
     if (existing) {

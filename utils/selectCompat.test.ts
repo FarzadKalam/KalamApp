@@ -1,10 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  buildRecordTitleSelectColumns,
   createSchemaCompatibleDataProvider,
   runSelectWithCompatibleColumns,
 } from './selectCompat';
 
 describe('runSelectWithCompatibleColumns', () => {
+  it('keeps relation-title projections compact when a lightweight title exists', () => {
+    const columns = buildRecordTitleSelectColumns('invoices');
+    expect(columns).toEqual(expect.arrayContaining(['id', 'name', 'system_code']));
+    expect(columns).not.toContain('description');
+  });
+
   it('never requests virtual bot group fields while resolving customer labels', async () => {
     const attempted: string[] = [];
     const result = await runSelectWithCompatibleColumns({

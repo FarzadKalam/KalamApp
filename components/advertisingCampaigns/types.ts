@@ -45,6 +45,15 @@ export type CampaignCommonToolConfig = {
   notes?: string | null;
   result_notes?: string | null;
   content_items?: CampaignContentItem[];
+  matched_audience_count?: number | null;
+  unique_audience_count?: number | null;
+  duplicate_audience_count?: number | null;
+  invalid_audience_count?: number | null;
+  excluded_audience_count?: number | null;
+  suppressed_audience_count?: number | null;
+  sendable_audience_count?: number | null;
+  audience_finalized_at?: string | null;
+  excluded_audience_refs?: string[];
 };
 
 export type CampaignSmsConfig = CampaignCommonToolConfig & {

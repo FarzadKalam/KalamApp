@@ -4,11 +4,12 @@ import WorkflowConditionsGroup from '../workflows/WorkflowConditionsGroup';
 import { getWorkflowConditionFields } from '../../utils/workflowHelpers';
 import { loadWorkflowConditionEditorOptions } from '../../utils/workflowConditionOptions';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
-import { CAMPAIGN_TARGET_MODULES, getCampaignToolLabel } from './constants';
+import { CAMPAIGN_TARGET_MODULES, getCampaignToolLabel, usesCampaignAudience } from './constants';
 import type { CampaignAudienceRule, CampaignTargetModule, CampaignToolRecord } from './types';
 import CampaignField from './CampaignField';
 import { FieldType } from '../../types';
 import CampaignAudiencePreview from './CampaignAudiencePreview';
+import { invalidateCampaignAudienceSummaryConfig } from './campaignUtils';
 
 type OptionState = {
   dynamicOptions: Record<string, Array<{ label: string; value: string }>>;
@@ -23,17 +24,29 @@ type Props = {
   onRuleChange: (targetModule: CampaignTargetModule, patch: Partial<CampaignAudienceRule>) => void;
   disabled?: boolean;
   onToolChange: (toolId: string, patch: Partial<CampaignToolRecord>) => void;
+  onBeforeAudienceSearch?: () => Promise<unknown>;
 };
 
 const EMPTY_OPTIONS: OptionState = { dynamicOptions: {}, relationOptions: {} };
 
-const CampaignConditionsTab: React.FC<Props> = ({ campaignId, campaignName, tools, rules, onRuleChange, onToolChange, disabled }) => {
+const CampaignConditionsTab: React.FC<Props> = ({ campaignId, campaignName, tools, rules, onRuleChange, onToolChange, onBeforeAudienceSearch, disabled }) => {
   const [activeKeys, setActiveKeys] = useState<string[]>(['marketing_leads']);
   const [optionsByModule, setOptionsByModule] = useState<Partial<Record<CampaignTargetModule, OptionState>>>({});
   const applicableTools = useMemo(() => tools.filter((tool) => {
     const sources = (tool.config as any)?.audience_sources;
-    return Array.isArray(sources) && sources.includes('internal');
+    return tool.enabled !== false
+      && usesCampaignAudience(tool.tool_type)
+      && Array.isArray(sources)
+      && sources.includes('internal');
   }), [tools]);
+
+  const updateRule = (targetModule: CampaignTargetModule, patch: Partial<CampaignAudienceRule>) => {
+    onRuleChange(targetModule, patch);
+    applicableTools.forEach((tool) => {
+      if (!(tool.config as any)?.audience_finalized_at) return;
+      onToolChange(tool.id, { config: invalidateCampaignAudienceSummaryConfig(tool.tool_type, tool.config) });
+    });
+  };
 
   useEffect(() => {
     const targets = activeKeys
@@ -87,7 +100,7 @@ const CampaignConditionsTab: React.FC<Props> = ({ campaignId, campaignName, tool
                 <span>{moduleOption.label}</span>
                 <label className="flex items-center gap-2 text-xs" onClick={(event) => event.stopPropagation()}>
                   اعمال شرط‌ها
-                  <div className="w-24"><CampaignField fieldKey={`rule_enabled_${targetModule}`} label="فعال" type={FieldType.CHECKBOX} value={rule.enabled !== false} readonly={disabled} compact onChange={(enabled) => onRuleChange(targetModule, { enabled })} /></div>
+                  <div className="w-24"><CampaignField fieldKey={`rule_enabled_${targetModule}`} label="فعال" type={FieldType.CHECKBOX} value={rule.enabled !== false} readonly={disabled} compact onChange={(enabled) => updateRule(targetModule, { enabled })} /></div>
                 </label>
               </div>
             ),
@@ -96,7 +109,7 @@ const CampaignConditionsTab: React.FC<Props> = ({ campaignId, campaignName, tool
                   <Card size="small" title="همه شرط‌های زیر باید برقرار باشند" className="!rounded-xl">
                     <WorkflowConditionsGroup
                       value={rule.conditions_all || []}
-                      onChange={(conditions_all) => onRuleChange(targetModule, { conditions_all })}
+                      onChange={(conditions_all) => updateRule(targetModule, { conditions_all })}
                       fields={fields}
                       dynamicOptions={options.dynamicOptions}
                       relationOptions={options.relationOptions}
@@ -109,7 +122,7 @@ const CampaignConditionsTab: React.FC<Props> = ({ campaignId, campaignName, tool
                     <Typography.Text type="secondary" className="mb-3 block text-xs">اگر این بخش خالی باشد، فقط مجموعه «همه شرط‌ها» ارزیابی می‌شود.</Typography.Text>
                     <WorkflowConditionsGroup
                       value={rule.conditions_any || []}
-                      onChange={(conditions_any) => onRuleChange(targetModule, { conditions_any })}
+                      onChange={(conditions_any) => updateRule(targetModule, { conditions_any })}
                       fields={fields}
                       dynamicOptions={options.dynamicOptions}
                       relationOptions={options.relationOptions}
@@ -123,7 +136,14 @@ const CampaignConditionsTab: React.FC<Props> = ({ campaignId, campaignName, tool
           };
         })}
       />
-      <CampaignAudiencePreview campaignId={campaignId} tools={applicableTools} disabled={disabled} onToolChange={onToolChange} />
+      <CampaignAudiencePreview
+        campaignId={campaignId}
+        tools={applicableTools}
+        disabled={disabled}
+        onToolChange={onToolChange}
+        onBeforeSearch={onBeforeAudienceSearch}
+        criteriaSignature={JSON.stringify(rules)}
+      />
     </div>
   );
 };

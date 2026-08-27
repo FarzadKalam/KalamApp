@@ -82,6 +82,7 @@ import {
   isModuleListSearchFilter,
 } from "../utils/moduleListSearch";
 import { buildJsonArrayViewCrudFilters, isJsonArrayViewFilterField } from "../utils/viewCrudFilters";
+import { buildModuleListColumnCrudFilters } from "../utils/moduleListColumnFilters";
 import {
   buildSurveyRuntimeModule,
   getSurveyTemplateScopedIdFromCrudFilters,
@@ -742,16 +743,6 @@ export const ModuleListRefine: React.FC<{
     () => readModuleOptionSnapshot(resolvedModuleId),
     [resolvedModuleId]
   );
-  const hasCachedModuleOptions = useMemo(
-    () =>
-      !!cachedOptionSnapshot && (
-        Object.keys(cachedOptionSnapshot.dynamicOptions || {}).length > 0 ||
-        Object.keys(cachedOptionSnapshot.relationOptions || {}).length > 0 ||
-        (cachedOptionSnapshot.allUsers?.length || 0) > 0 ||
-        (cachedOptionSnapshot.allRoles?.length || 0) > 0
-      ),
-    [cachedOptionSnapshot]
-  );
   const effectiveInitialViewFilters = useMemo(
     () =>
       Array.isArray(initialViewFiltersOverride) && initialViewFiltersOverride.length > 0
@@ -808,7 +799,7 @@ export const ModuleListRefine: React.FC<{
   const [relationOptions, setRelationOptions] = useState<Record<string, any[]>>(
     () => cachedOptionSnapshot?.relationOptions || {}
   );  // ✅ اضافه شد
-  const [optionsReady, setOptionsReady] = useState(() => hasCachedModuleOptions);
+  const [relationLabelsLoading, setRelationLabelsLoading] = useState(false);
   const [tagsMap, setTagsMap] = useState<Record<string, any[]>>({});  // ✅ Map of record id to tags
   const [tagsLoading, setTagsLoading] = useState(false);
   const [loadedTagsRecordIdsSignature, setLoadedTagsRecordIdsSignature] = useState("");
@@ -841,7 +832,6 @@ export const ModuleListRefine: React.FC<{
   const [currentSoftwareRole, setCurrentSoftwareRole] = useState<string | null>(null);
   const [recordLockMap, setRecordLockMap] = useState<Map<string, RecordLockState>>(() => new Map());
   const [recordLockMapLoading, setRecordLockMapLoading] = useState(false);
-  const [loadedRecordLockIdsSignature, setLoadedRecordLockIdsSignature] = useState("");
   const [bulkRecordLockSaving, setBulkRecordLockSaving] = useState(false);
   const [allowedRoleIds, setAllowedRoleIds] = useState<string[]>([]);
   const [allowedUserIds, setAllowedUserIds] = useState<string[]>([]);
@@ -870,8 +860,6 @@ export const ModuleListRefine: React.FC<{
   const [previewRecordId, setPreviewRecordId] = useState<string | null>(null);
   const [saasUserDrawerRecord, setSaasUserDrawerRecord] = useState<SaasAdminUserRow | null>(null);
   const [taskRelationOptionsByField, setTaskRelationOptionsByField] = useState<Record<string, any[]>>({});
-  const [taskRelationOptionsLoading, setTaskRelationOptionsLoading] = useState(false);
-  const [loadedTaskRelationOptionsSignature, setLoadedTaskRelationOptionsSignature] = useState("");
   const stableFiltersKey = useMemo(
     () => JSON.stringify(effectiveInitialFilters),
     [effectiveInitialFilters]
@@ -1700,9 +1688,9 @@ export const ModuleListRefine: React.FC<{
     setColumnFilters(restoredState?.columnFilters || {});
     setDynamicOptions(cachedOptionSnapshot?.dynamicOptions || {});
     setRelationOptions(cachedOptionSnapshot?.relationOptions || {});
+    setRelationLabelsLoading(false);
     setAllUsers(cachedOptionSnapshot?.allUsers || []);
     setAllRoles(cachedOptionSnapshot?.allRoles || []);
-    setOptionsReady(hasCachedModuleOptions);
     setTagsMap({});
     setTagsLoading(false);
     setLoadedTagsRecordIdsSignature("");
@@ -1721,8 +1709,6 @@ export const ModuleListRefine: React.FC<{
     setPreviewRecordId(null);
     setSaasUserDrawerRecord(null);
     setTaskRelationOptionsByField({});
-    setTaskRelationOptionsLoading(false);
-    setLoadedTaskRelationOptionsSignature("");
     setHasListInitialPaintCompleted(false);
     searchSyncInitializedRef.current = false;
     applyCombinedFilters(
@@ -1735,7 +1721,6 @@ export const ModuleListRefine: React.FC<{
     setSorters(ensureStableCrudSorters(restoredSorters));
   }, [
     cachedOptionSnapshot,
-    hasCachedModuleOptions,
     initialViewFiltersOverride,
     moduleConfig,
     resolvedModuleId,
@@ -2349,7 +2334,6 @@ export const ModuleListRefine: React.FC<{
   useEffect(() => {
     if (!resolvedModuleId || normalizedAccessibleRecordIds.length === 0) {
       setRecordLockMap(new Map());
-      setLoadedRecordLockIdsSignature("");
       setRecordLockMapLoading(false);
       return;
     }
@@ -2359,14 +2343,12 @@ export const ModuleListRefine: React.FC<{
       .then((nextMap) => {
         if (!cancelled) {
           setRecordLockMap(nextMap);
-          setLoadedRecordLockIdsSignature(normalizedAccessibleRecordIdsSignature);
         }
       })
       .catch((error) => {
         console.warn("Could not load record locks for list", error);
         if (!cancelled) {
           setRecordLockMap(new Map());
-          setLoadedRecordLockIdsSignature(normalizedAccessibleRecordIdsSignature);
         }
       })
       .finally(() => {
@@ -2400,7 +2382,7 @@ export const ModuleListRefine: React.FC<{
   );
   const visibleRelationFields = useMemo(
     () => getModuleListVisibleFields(moduleConfig, visibleColumns).filter((field: any) =>
-      field?.type === FieldType.RELATION || field?.type === FieldType.USER
+      field?.type === FieldType.RELATION || field?.type === FieldType.MULTI_RELATION || field?.type === FieldType.USER
     ),
     [moduleConfig, visibleColumns]
   );
@@ -2472,21 +2454,11 @@ export const ModuleListRefine: React.FC<{
     shouldLoadTags &&
     accessibleRecordIdsSignature.length > 0 &&
     loadedTagsRecordIdsSignature !== accessibleRecordIdsSignature;
-  const shouldWaitForTaskRelationLabels =
-    resolvedModuleId === "tasks" &&
-    taskRelationLabelRequestsSignature.length > 0 &&
-    loadedTaskRelationOptionsSignature !== taskRelationLabelRequestsSignature;
-  const shouldWaitForRecordLocks =
-    normalizedAccessibleRecordIdsSignature.length > 0 &&
-    loadedRecordLockIdsSignature !== normalizedAccessibleRecordIdsSignature;
+  // بارگذاری قفل، کاربران یا یک relation نباید همهٔ ستون‌های انتخابی را خالی
+  // نگه دارد. فقط دادهٔ برچسب‌ها placeholder عمومی جدول را کنترل می‌کند؛
+  // relationها placeholder اختصاصی و مستقل خود را دارند.
   const deferredListDataLoading = viewMode === ViewMode.LIST && !queryPending && (
-    !optionsReady ||
-    recordLockMapLoading ||
-    shouldWaitForRecordLocks ||
-    tagsLoading ||
-    shouldWaitForTags ||
-    taskRelationOptionsLoading ||
-    shouldWaitForTaskRelationLabels
+    tagsLoading || shouldWaitForTags
   );
   const effectiveRelationOptions = useMemo(() => {
     if (resolvedModuleId !== "tasks") return relationOptions;
@@ -2534,8 +2506,6 @@ export const ModuleListRefine: React.FC<{
   useEffect(() => {
     if (resolvedModuleId !== "tasks" || !taskRelationLabelRequests.length) {
       setTaskRelationOptionsByField((prev) => (Object.keys(prev).length > 0 ? {} : prev));
-      setTaskRelationOptionsLoading(false);
-      setLoadedTaskRelationOptionsSignature("");
       return;
     }
 
@@ -2544,7 +2514,6 @@ export const ModuleListRefine: React.FC<{
     const loadTaskRelationLabels = async () => {
       let labelMap: Record<string, string> = {};
       try {
-        setTaskRelationOptionsLoading(true);
         labelMap = await fetchRecordReferenceLabels(
           supabase,
           taskRelationLabelRequests.map((request) => ({
@@ -2572,8 +2541,6 @@ export const ModuleListRefine: React.FC<{
         next[request.fieldKey] = current;
       });
       setTaskRelationOptionsByField(next);
-      setLoadedTaskRelationOptionsSignature(taskRelationLabelRequestsSignature);
-      setTaskRelationOptionsLoading(false);
     };
 
     void loadTaskRelationLabels();
@@ -2585,6 +2552,7 @@ export const ModuleListRefine: React.FC<{
 
   useEffect(() => {
     if (!resolvedModuleId || !moduleConfig || visibleRelationFields.length === 0 || normalizedAccessibleData.length === 0) {
+      setRelationLabelsLoading(false);
       return;
     }
 
@@ -2592,6 +2560,7 @@ export const ModuleListRefine: React.FC<{
 
     const hydrateVisibleRelationLabels = async () => {
       try {
+        setRelationLabelsLoading(true);
         const hydratedOptions = await hydrateModuleListRelationOptionsForRows(
           supabase,
           visibleRelationFields as any[],
@@ -2609,6 +2578,8 @@ export const ModuleListRefine: React.FC<{
         setRelationOptions(snapshot.relationOptions || {});
       } catch (error) {
         console.warn("Could not hydrate visible relation labels for module list", error);
+      } finally {
+        if (isActive) setRelationLabelsLoading(false);
       }
     };
 
@@ -2721,37 +2692,56 @@ export const ModuleListRefine: React.FC<{
       setAllRoles(snapshot.allRoles || []);
     };
 
+    const mergeAndApplySnapshot = (patch: Parameters<typeof writeModuleOptionSnapshot>[1]) => {
+      if (!isActive) return;
+      const current = readModuleOptionSnapshot(resolvedModuleId);
+      const snapshot = writeModuleOptionSnapshot(resolvedModuleId, {
+        dynamicOptions: mergeOptionMaps(current?.dynamicOptions, patch.dynamicOptions),
+        relationOptions: mergeOptionMaps(current?.relationOptions, patch.relationOptions),
+        allUsers: patch.allUsers ?? current?.allUsers ?? [],
+        allRoles: patch.allRoles ?? current?.allRoles ?? [],
+      });
+      applySnapshotToState(snapshot);
+    };
+
     const fetchOptions = async () => {
-      if (!hasCachedModuleOptions) {
-        setOptionsReady(false);
-      }
+      // هر منبع به‌محض آماده‌شدن state را به‌روزرسانی می‌کند؛ کندی دایرکتوری
+      // کاربران دیگر عنوان relation یا گزینه‌های داینامیک را معطل نمی‌کند.
+      const dynamicTask = (
+        optionPlan.immediateDynamicCategories.length > 0
+          ? fetchDynamicOptionsMap(supabase, optionPlan.immediateDynamicCategories)
+          : Promise.resolve({} as Record<string, any[]>)
+      ).then((immediateDynamicOptions) => {
+        mergeAndApplySnapshot({ dynamicOptions: immediateDynamicOptions });
+      }).catch((error) => {
+        console.warn('Could not load module list dynamic options', error);
+      });
 
-      try {
-        // همه ۳ درخواست موازی شروع می‌شوند — relation options بدون directory (null-safe)
-        const [directory, immediateDynamicOptions, partialRelationOptions] = await Promise.all([
-          fetchAssigneeDirectory(supabase),
-          optionPlan.immediateDynamicCategories.length > 0
-            ? fetchDynamicOptionsMap(supabase, optionPlan.immediateDynamicCategories)
-            : Promise.resolve({} as Record<string, any[]>),
-          fetchModuleListRelationOptions(supabase, optionPlan.immediateRelationFields, null),
-        ]);
+      const relationTask = fetchModuleListRelationOptions(
+        supabase,
+        optionPlan.immediateRelationFields,
+        null,
+      ).then((partialRelationOptions) => {
+        mergeAndApplySnapshot({ relationOptions: partialRelationOptions });
+      }).catch((error) => {
+        console.warn('Could not load module list relation options', error);
+      });
+
+      const directoryTask = fetchAssigneeDirectory(supabase).then((directory) => {
         if (!isActive) return;
-
-        setAllUsers(directory.users);
-        setAllRoles(directory.roles);
-
-        // پس از دریافت directory، فیلدهای user/profile/role را بدون کوئری DB جدید override می‌کنیم
-        const profileOptions = (directory.users || []).map((u: any) => ({
-          label: u.display_name || u.full_name || u.id,
-          value: u.id,
+        const profileOptions = (directory.users || []).map((user: any) => ({
+          label: user.display_name || user.full_name || 'کاربر مرتبط',
+          value: user.id,
+          module: 'profiles',
         }));
-        const roleOptions = (directory.roles || []).map((r: any) => ({
-          label: r.title || r.id,
-          value: r.id,
+        const roleOptions = (directory.roles || []).map((role: any) => ({
+          label: role.title || 'نقش مرتبط',
+          value: role.id,
+          module: 'org_roles',
         }));
         const assigneeOptions = [
           ...profileOptions,
-          ...roleOptions.filter((r) => !profileOptions.some((u) => String(u.value) === String(r.value))),
+          ...roleOptions.filter((role) => !profileOptions.some((user) => String(user.value) === String(role.value))),
         ];
         const directoryOverrides: Record<string, any[]> = {
           profiles: profileOptions,
@@ -2759,36 +2749,28 @@ export const ModuleListRefine: React.FC<{
           org_roles: roleOptions,
           roles: roleOptions,
         };
-        (optionPlan.immediateRelationFields || []).forEach((f) => {
-          const k = String(f.key || '').trim();
-          if (!k) return;
-          if (f.type === FieldType.USER || f.relationConfig?.targetModule === 'profiles') {
-            directoryOverrides[k] = profileOptions;
-          } else if (f.relationConfig?.targetModule === 'org_roles' || f.relationConfig?.targetModule === 'roles') {
-            directoryOverrides[k] = roleOptions;
+        (optionPlan.immediateRelationFields || []).forEach((field: any) => {
+          const key = String(field.key || '').trim();
+          const relationConfig = field.type === FieldType.MULTI_RELATION
+            ? (field.multiRelationConfig || field.relationConfig)
+            : field.relationConfig;
+          if (!key) return;
+          if (field.type === FieldType.USER || relationConfig?.targetModule === 'profiles') {
+            directoryOverrides[key] = profileOptions;
+          } else if (relationConfig?.targetModule === 'org_roles' || relationConfig?.targetModule === 'roles') {
+            directoryOverrides[key] = roleOptions;
           }
         });
-        const immediateRelationOptions = { ...partialRelationOptions, ...directoryOverrides };
-
-        const snapshot = writeModuleOptionSnapshot(resolvedModuleId, {
-          dynamicOptions: mergeOptionMaps(readModuleOptionSnapshot(resolvedModuleId)?.dynamicOptions, immediateDynamicOptions),
-          relationOptions: mergeOptionMaps(readModuleOptionSnapshot(resolvedModuleId)?.relationOptions, immediateRelationOptions),
+        mergeAndApplySnapshot({
+          relationOptions: directoryOverrides,
           allUsers: directory.users,
           allRoles: directory.roles,
         });
+      }).catch((error) => {
+        console.warn('Could not load module list assignee directory', error);
+      });
 
-        applySnapshotToState(snapshot);
-        if (isActive) {
-          setOptionsReady(true);
-        }
-
-      } catch (error) {
-        console.error('Error fetching options', error);
-      } finally {
-        if (isActive) {
-          setOptionsReady(true);
-        }
-      }
+      await Promise.allSettled([dynamicTask, relationTask, directoryTask]);
     };
 
     applySnapshotToState(readModuleOptionSnapshot(resolvedModuleId));
@@ -2797,7 +2779,7 @@ export const ModuleListRefine: React.FC<{
     return () => {
       isActive = false;
     };
-  }, [hasCachedModuleOptions, moduleConfig, resolvedModuleId, visibleColumns]);
+  }, [moduleConfig, resolvedModuleId, visibleColumns]);
   useEffect(() => {
     if (!tagsField || !shouldLoadTags || !resolvedModuleId || accessibleRecordIds.length === 0) {
       setTagsMap((prev) => (Object.keys(prev).length > 0 ? {} : prev));
@@ -3246,108 +3228,7 @@ export const ModuleListRefine: React.FC<{
   }, [enrichedData, navigate, resolvedModuleId, useQuickPreviewModal, useSaasUserDrawer]);
 
   function buildColumnCrudFilters(nextColumnFilters: ColumnFiltersState): CrudFilters {
-    if (!moduleConfig) return [];
-
-    const filters: CrudFilters = [];
-
-    Object.entries(nextColumnFilters || {}).forEach(([fieldKey, values]) => {
-      if (!Array.isArray(values) || values.length === 0) return;
-      const field = moduleConfig.fields.find((item) => item.key === fieldKey);
-      if (isWorkflowVirtualField(field)) return;
-
-      if (fieldKey === "assignee_id") {
-        const assigneeValues = values
-          .map((value) => String(value ?? "").trim())
-          .filter(Boolean);
-        if (assigneeValues.length === 0) return;
-        filters.push({
-          operator: "or",
-          value:
-            assigneeValues.length === 1
-              ? [
-                  { field: "assignee_id", operator: "eq", value: assigneeValues[0] },
-                  { field: "assignee_role_id", operator: "eq", value: assigneeValues[0] },
-                ]
-              : [
-                  { field: "assignee_id", operator: "in", value: assigneeValues },
-                  { field: "assignee_role_id", operator: "in", value: assigneeValues },
-                ],
-        });
-        return;
-      }
-
-      if (
-        moduleConfig.id === "products" &&
-        (fieldKey === "category" || fieldKey === "product_category")
-      ) {
-        const categoryValues = values
-          .map((value) => String(value ?? "").trim())
-          .filter(Boolean);
-        if (categoryValues.length === 0) return;
-        const operator = categoryValues.length > 1 ? "in" : "eq";
-        const payload = categoryValues.length > 1 ? categoryValues : categoryValues[0];
-        filters.push({
-          operator: "or",
-          value: [
-            { field: "category", operator, value: payload },
-            { field: "product_category", operator, value: payload },
-          ],
-        });
-        return;
-      }
-
-      if (!field) return;
-
-      if (
-        field.type === FieldType.PRICE ||
-        field.type === FieldType.DATE ||
-        field.type === FieldType.TIME ||
-        field.type === FieldType.DATETIME
-      ) {
-        const range = parseColumnRangeFilter(values[0]);
-        if (range.from !== undefined && range.from !== "") {
-          filters.push({ field: fieldKey, operator: "gte", value: range.from });
-        }
-        if (range.to !== undefined && range.to !== "") {
-          filters.push({ field: fieldKey, operator: "lte", value: range.to });
-        }
-        return;
-      }
-
-      if (
-        field.type === FieldType.MULTI_SELECT ||
-        field.type === FieldType.TAGS ||
-        field.type === FieldType.PROGRESS_STAGES
-      ) {
-        return;
-      }
-
-      if (
-        field.type === FieldType.TEXT ||
-        field.key.includes("name") ||
-        field.key.includes("code") ||
-        field.key.includes("title")
-      ) {
-        const searchValue = String(values[0] ?? "").trim();
-        if (searchValue) {
-          filters.push({ field: fieldKey, operator: "contains", value: searchValue });
-        }
-        return;
-      }
-
-      const scalarValues = values
-        .map((value) => String(value ?? "").trim())
-        .filter(Boolean);
-
-      if (scalarValues.length === 0) return;
-      filters.push({
-        field: fieldKey,
-        operator: scalarValues.length > 1 ? "in" : "eq",
-        value: scalarValues.length > 1 ? scalarValues : scalarValues[0],
-      });
-    });
-
-    return filters;
+    return buildModuleListColumnCrudFilters(moduleConfig, nextColumnFilters as any);
   }
 
   function buildMergedFilters(
@@ -5233,6 +5114,7 @@ export const ModuleListRefine: React.FC<{
                      data={enrichedData} 
                      loading={queryPending}
                      deferredDataLoading={deferredListDataLoading}
+                     relationLabelsLoading={relationLabelsLoading}
                      tableLayout="fixed"
                      visibleColumns={visibleColumns.length > 0 ? visibleColumns : undefined}
                      pagination={effectiveTablePagination}

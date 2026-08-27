@@ -20,6 +20,52 @@ export const getSafeOptionFallback = (value: unknown, fallback = '-'): string =>
   return isUuidLikeValue(normalized) ? fallback : normalized;
 };
 
+const normalizeOptionValue = (value: unknown): string => String(value ?? '').trim();
+
+const getRelationConfig = (field: any) => (
+  String(field?.type || '') === 'multi_relation'
+    ? (field?.multiRelationConfig || field?.relationConfig)
+    : field?.relationConfig
+);
+
+/**
+ * همهٔ مصرف‌کننده‌های relation باید گزینه را از یک مسیر مشترک پیدا کنند.
+ * بعضی loaderها گزینه‌ها را با کلید خود فیلد و بعضی با کلید ماژول مقصد cache
+ * می‌کنند؛ جستجو در هر دو مسیر مانع نمایش fallback یا UUID با وجود عنوان آماده می‌شود.
+ */
+export const findRelationOption = (
+  field: any,
+  value: unknown,
+  relationOptions: Record<string, any[]> = {},
+): any | null => {
+  const normalizedValue = normalizeOptionValue(value);
+  if (!normalizedValue) return null;
+
+  const relationConfig = getRelationConfig(field);
+  const candidateKeys = new Set<string>([
+    normalizeOptionValue(field?.key),
+    normalizeOptionValue(relationConfig?.targetModule),
+  ]);
+  (relationConfig?.sourceModules || []).forEach((source: any) => {
+    candidateKeys.add(normalizeOptionValue(source?.targetModule));
+  });
+  if (String(field?.type || '') === 'user') candidateKeys.add('profiles');
+
+  for (const key of candidateKeys) {
+    if (!key) continue;
+    const option = (relationOptions[key] || []).find(
+      (item: any) => normalizeOptionValue(item?.value) === normalizedValue,
+    );
+    if (option) return option;
+  }
+
+  return null;
+};
+
+export const getRelationFallbackLabel = (field: any): string => (
+  String(field?.type || '') === 'user' ? 'کاربر مرتبط' : 'رکورد مرتبط'
+);
+
 /**
  * گرفتن برچسب برای یک مقدار بر اساس فیلد و options موجود
  * این تابع برای SELECT، MULTI_SELECT و RELATION کار می‌کند
@@ -55,7 +101,10 @@ export const getSingleOptionLabel = (
   // ابتدا از field.options جستجو کن (static options)
   if (field.options) {
     const opt = field.options.find((o: any) => o.value === value);
-    if (opt) return opt.label || getSafeOptionFallback(value);
+    if (opt) {
+      const label = normalizeOptionValue(opt.label);
+      if (label && !isUuidLikeValue(label)) return label;
+    }
   }
 
   // سپس از dynamicOptions جستجو کن
@@ -63,14 +112,18 @@ export const getSingleOptionLabel = (
     const category = (field as any).dynamicOptionsCategory;
     const dynopts = dynamicOptions[category] || [];
     const opt = dynopts.find((o: any) => o.value === value);
-    if (opt) return opt.label || getSafeOptionFallback(value);
+    if (opt) {
+      const label = normalizeOptionValue(opt.label);
+      if (label && !isUuidLikeValue(label)) return label;
+    }
   }
 
-  // برای RELATION fields
-  if (field.type === 'relation') {
-    const rellopts = relationOptions[field.key] || [];
-    const opt = rellopts.find((o: any) => o.value === value);
-    if (opt) return opt.label || getSafeOptionFallback(value);
+  // برای RELATION، MULTI_RELATION و USER fields
+  if (['relation', 'multi_relation', 'user'].includes(String(field?.type || ''))) {
+    const opt = findRelationOption(field, value, relationOptions);
+    const optionLabel = normalizeOptionValue(opt?.label);
+    if (optionLabel && !isUuidLikeValue(optionLabel)) return optionLabel;
+    return getRelationFallbackLabel(field);
   }
 
   const fieldKey = String(field?.key || '').trim().toLowerCase();
@@ -116,9 +169,33 @@ export const getFieldOptions = (
     return dynamicOptions[category] || [];
   }
 
-  // اگر RELATION است
-  if (field.type === 'relation') {
-    return relationOptions[field.key] || [];
+  // اگر relation است، گزینه‌های field-scoped بر target-scoped اولویت دارند.
+  if (['relation', 'multi_relation', 'user'].includes(String(field?.type || ''))) {
+    const relationConfig = getRelationConfig(field);
+    const keys = new Set<string>([
+      normalizeOptionValue(field?.key),
+      normalizeOptionValue(relationConfig?.targetModule),
+    ]);
+    (relationConfig?.sourceModules || []).forEach((source: any) => {
+      keys.add(normalizeOptionValue(source?.targetModule));
+    });
+    if (String(field?.type || '') === 'user') keys.add('profiles');
+    const merged = new Map<string, any>();
+    keys.forEach((key) => {
+      (relationOptions[key] || []).forEach((option: any) => {
+        const optionValue = normalizeOptionValue(option?.value);
+        const optionModule = normalizeOptionValue(option?.module);
+        if (!optionValue) return;
+        const mergeKey = `${optionModule}:${optionValue}`;
+        const current = merged.get(mergeKey);
+        // field-scoped hydrated options carry access/deletion metadata and must
+        // win over a generic recent-option entry for the same target.
+        if (!current || option?.missing || option?.inaccessible || option?.linkable === false) {
+          merged.set(mergeKey, option);
+        }
+      });
+    });
+    return Array.from(merged.values());
   }
 
   return [];

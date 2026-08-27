@@ -44,6 +44,7 @@ interface RelatedRecordPopoverProps {
   overlayZIndex?: number;
   onNavigate?: (path: string) => void;
   hideFullRecordAction?: boolean;
+  linkable?: boolean;
 }
 
 const isEmptyValue = (value: any) => (
@@ -159,6 +160,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
   overlayZIndex = 5000,
   onNavigate,
   hideFullRecordAction = false,
+  linkable = true,
 }) => {
   const { message } = App.useApp();
   const [internalOpen, setInternalOpen] = useState(false);
@@ -169,6 +171,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, { label: string; value: string }[]>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, { label: string; value: string }[]>>({});
   const [rolePermissions, setRolePermissions] = useState<PermissionMap | null>(null);
+  const [unavailableRelation, setUnavailableRelation] = useState<{ label: string; deleted: boolean } | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [phoneIdentityBindModalOpen, setPhoneIdentityBindModalOpen] = useState(false);
   const [phoneIdentityBindModalLoading, setPhoneIdentityBindModalLoading] = useState(false);
@@ -498,9 +501,10 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
   };
 
   const previewTitle = useMemo(() => {
-    if (!moduleConfig) return label || recordId || '-';
-    return getRecordDisplayLabel(record || {}, moduleId, { fallback: label || recordId || '-' });
-  }, [label, moduleConfig, moduleId, record, recordId]);
+    const safeFallback = unavailableRelation?.label || label || 'رکورد مرتبط';
+    if (!moduleConfig) return safeFallback;
+    return getRecordDisplayLabel(record || {}, moduleId, { fallback: safeFallback });
+  }, [label, moduleConfig, moduleId, record, unavailableRelation?.label]);
 
   const hasQuickMessageActions = useMemo(() => {
     if (!record) return false;
@@ -526,6 +530,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
 
     const loadData = async () => {
       setLoading(true);
+      setUnavailableRelation(null);
       try {
         const recordResult = await runSelectWithCompatibleColumns<any | null>({
           cacheKey: `related-record-popover:${moduleId}`,
@@ -540,6 +545,22 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
         if (recordResult.error) throw recordResult.error;
         if (cancelled) return;
         let nextRecord = recordResult.data || null;
+        if (!nextRecord) {
+          const { data: deletedRecord } = await supabase
+            .from('recycle_bin_records')
+            .select('record_title')
+            .eq('module_id', moduleId)
+            .eq('source_record_id', recordId)
+            .maybeSingle();
+          if (cancelled) return;
+          const storedTitle = String(deletedRecord?.record_title || label || '').trim();
+          setUnavailableRelation({
+            label: deletedRecord
+              ? (storedTitle ? `${storedTitle.replace(/\s*\(حذف شده\)\s*$/u, '')} (حذف شده)` : 'رکورد حذف شده')
+              : (storedTitle || 'رکورد مرتبط'),
+            deleted: Boolean(deletedRecord),
+          });
+        }
         const tagsField = fields.find((field: any) => field.type === FieldType.TAGS);
         if (nextRecord && tagsField) {
           const tagsMap = (await fetchRecordTagsMap(supabase, moduleId, [recordId]).catch(() => ({}))) as Record<string, any[]>;
@@ -969,6 +990,17 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
     );
   }
 
+  if (!linkable || unavailableRelation) {
+    return (
+      <span
+        className="inline min-w-0 max-w-full text-gray-600 dark:text-gray-300"
+        title={unavailableRelation?.deleted ? 'این رکورد حذف شده است.' : undefined}
+      >
+        {children || unavailableRelation?.label || label || 'رکورد مرتبط'}
+      </span>
+    );
+  }
+
   return (
     <Popover
       content={content}
@@ -983,7 +1015,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
     >
       {children || (
         <span className="text-leather-600 cursor-pointer hover:underline">
-          {label || recordId}
+          {label || 'رکورد مرتبط'}
         </span>
       )}
     </Popover>
