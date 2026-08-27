@@ -13,6 +13,7 @@ import { getPersistedCampaignToolId } from './campaignUtils';
 type Props = { tool: CampaignToolRecord; onChange: (patch: Partial<CampaignToolRecord>) => void; disabled?: boolean };
 
 const FIELD_LABELS: Record<string, { vendor: string; location: string; platform: string; objective: string }> = {
+  voice_call: { vendor: 'اپراتور / مجری تماس', location: 'مخاطبان یا محدوده تماس', platform: 'سامانه یا خط تماس', objective: 'هدف و سناریوی تماس' },
   outdoor: { vendor: 'مجری / مالک رسانه', location: 'محل نصب یا نمایش', platform: 'نوع رسانه محیطی', objective: 'شرح مجوز و ابعاد' },
   instagram_ads: { vendor: 'مجری یا صفحه تبلیغ‌کننده', location: 'محدوده جامعه هدف', platform: 'حساب / پلتفرم', objective: 'هدف تبلیغ' },
   click_ads: { vendor: 'مجری / ارائه‌دهنده', location: 'محدوده نمایش', platform: 'شبکه تبلیغاتی', objective: 'هدف تبدیل' },

@@ -33,7 +33,7 @@ export const tasksModule: ModuleDefinition = {
       title: 'فعالیت های انجام نشده من',
     },
   },
-  calendar: { summaryFieldKeys: ['task_type'] },
+  calendar: { summaryFieldKeys: ['content_type', 'task_type'] },
   relationDisplay: {
     labelTemplate: '{{name}}',
     searchFields: ['name', 'system_code', 'id'],
@@ -157,6 +157,7 @@ export const tasksModule: ModuleDefinition = {
     { key: 'related_invoice', labels: { fa: 'فاکتور مرتبط', en: 'Related Invoice' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'general', order: 6, relationConfig: { targetModule: 'invoices', targetField: 'name' }, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'related_to_module', operator: LogicOperator.EQUALS, value: 'invoices' } } },
     { key: 'project_id', labels: { fa: 'پروژه مرتبط', en: 'Related Project' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'general', order: 6.5, relationConfig: { targetModule: 'projects', targetField: 'name' }, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'related_to_module', operator: LogicOperator.EQUALS, value: 'projects' } } },
     { key: 'content_calendar_id', labels: { fa: 'تقویم محتوایی مرتبط', en: 'Content Calendar' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'general', order: 6.55, relationConfig: { targetModule: 'content_calendars', targetField: 'name' }, nature: FieldNature.STANDARD },
+    { key: 'content_type', labels: { fa: 'نوع محتوا', en: 'Content Type' }, type: FieldType.SELECT, location: FieldLocation.BLOCK, blockId: 'general', order: 6.56, dynamicOptionsCategory: 'content_type', options: [{ label: 'پست', value: 'post' }, { label: 'استوری', value: 'story' }, { label: 'ویدئو', value: 'video' }, { label: 'مقاله', value: 'article' }, { label: 'خبرنامه', value: 'newsletter' }, { label: 'سایر', value: 'other' }], nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'content_calendar_id', operator: LogicOperator.IS_NOT_EMPTY } }, isTableColumn: true },
     { key: 'purchase_invoice_id', labels: { fa: 'فاکتور خرید مرتبط', en: 'Related Purchase Invoice' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'general', order: 6.6, relationConfig: { targetModule: 'purchase_invoices', targetField: 'name' }, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'related_to_module', operator: LogicOperator.EQUALS, value: 'purchase_invoices' } } },
     { key: 'marketing_lead_id', labels: { fa: 'سرنخ مرتبط', en: 'Related Lead' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'general', order: 6.7, relationConfig: { targetModule: 'marketing_leads', targetField: 'name' }, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'related_to_module', operator: LogicOperator.EQUALS, value: 'marketing_leads' } } },
     { key: 'sort_order', labels: { fa: 'ترتیب نمایش', en: 'Sort Order' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'general', order: 10, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'related_to_module', operator: LogicOperator.EQUALS, value: 'production_orders' } } },

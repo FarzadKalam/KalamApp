@@ -106,6 +106,7 @@ export enum LogicOperator {
   CONTAINS = 'contains',
   IS_TRUE = 'is_true',
   IS_FALSE = 'is_false',
+  IS_NOT_EMPTY = 'not_null',
   IN = 'in',
   NOT_IN = 'not_in',
 }

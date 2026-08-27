@@ -6,6 +6,7 @@ import {
   MessageOutlined,
   NodeIndexOutlined,
   ReadOutlined,
+  SendOutlined,
   FileTextOutlined,
   TeamOutlined,
   UserAddOutlined,
@@ -27,7 +28,8 @@ import AssistantPanel from '../ai/AssistantPanel';
 import AiSparkleIcon from '../ai/AiSparkleIcon';
 import SmartFieldRenderer from '../SmartFieldRenderer';
 import type { ModuleField } from '../../types';
-import type { CampaignRecord, CampaignToolRecord } from './types';
+import type { CampaignRecord, CampaignToolAction, CampaignToolRecord } from './types';
+import { isAutomatedCampaignTool } from './CampaignToolCard';
 import CampaignToolReportPanel from './CampaignToolReportPanel';
 
 const ProcessCardsV2RuntimeBlock = React.lazy(() => import('../processes/ProcessCardsV2RuntimeBlock'));
@@ -46,6 +48,8 @@ type CampaignToolWorkspaceModalProps = {
   onClose: () => void;
   onToolPatch?: (toolId: string, patch: Partial<CampaignToolRecord> & Record<string, unknown>) => void | Promise<void>;
   onStatusChange?: (tool: CampaignToolRecord, status: CampaignToolStatus) => void | Promise<void>;
+  onToolAction?: (action: CampaignToolAction, tool: CampaignToolRecord) => void | Promise<void>;
+  actionLoading?: CampaignToolAction | null;
   onCreateRelated?: (moduleId: 'marketing_leads' | 'customers' | 'invoices') => void;
   renderToolFields?: (context: {
     tool: CampaignToolRecord;
@@ -94,6 +98,8 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
   onClose,
   onToolPatch,
   onStatusChange,
+  onToolAction,
+  actionLoading = null,
   onCreateRelated,
   renderToolFields,
   renderResultFields,
@@ -160,6 +166,7 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
   const allowedStatusValues = accessMode === 'tool_limited'
     ? new Set<CampaignToolStatus>(['running', 'paused', 'completed'])
     : null;
+  const automated = isAutomatedCampaignTool(tool);
 
   const renderCentralFields = (fields: ModuleField[], fieldReadonly: boolean) => (
     fields.length > 0 ? (
@@ -277,6 +284,18 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
                 </Button>
               );
             })}
+            {automated && onToolAction ? (
+              <Button
+                size="small"
+                type="primary"
+                icon={<SendOutlined />}
+                loading={actionLoading === 'send_now'}
+                disabled={Boolean(actionLoading) || tool.status !== 'ready'}
+                onClick={() => void onToolAction('send_now', tool)}
+              >
+                ارسال اکنون
+              </Button>
+            ) : null}
           </div>
           <div className="flex max-w-full gap-2 overflow-x-auto">
             {onCreateRelated ? (

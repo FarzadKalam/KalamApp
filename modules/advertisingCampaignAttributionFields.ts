@@ -74,7 +74,7 @@ export const createAdvertisingCampaignAttributionFields = ({
       blockId,
       order: order + 0.01,
       nature: FieldNature.STANDARD,
-      logic: visibleIfCampaignSource,
+      logic: { visibleIf: { field: 'advertising_campaign_id', operator: LogicOperator.IS_NOT_EMPTY } },
       relationConfig: {
         targetModule: ADVERTISING_CAMPAIGN_TOOLS_MODULE_ID,
         targetField: 'title',

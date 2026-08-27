@@ -291,7 +291,7 @@
         "day": {
           "jalali": "۱۶",
           "gregorian": "5",
-          "hijri": "١٧"
+          "hijri": "١٦"
         },
         "events": {
           "isHoliday": false,
@@ -458,7 +458,7 @@
           "hijri": "٢٥"
         },
         "events": {
-          "isHoliday": true,
+          "isHoliday": false,
           "list": [
             {
               "isHoliday": true,
@@ -3697,6 +3697,25 @@
           "isHoliday": true,
           "list": [
             {
+              "isHoliday": false,
+              "event": "روز جهانی علیه آزمایش‌های هسته‌ای",
+              "calendarType": "gregorian"
+            }
+          ],
+          "holidayType": ""
+        }
+      },
+      {
+        "disabled": false,
+        "day": {
+          "jalali": "۸",
+          "gregorian": "30",
+          "hijri": "١٧"
+        },
+        "events": {
+          "isHoliday": true,
+          "list": [
+            {
               "isHoliday": true,
               "event": "ولادت حضرت رسول اکرم(ص)(۵۳ سال قبل از هجرت) و روز اخلاق و مهرورزی",
               "calendarType": "hijri"
@@ -3708,25 +3727,6 @@
             },
             {
               "isHoliday": false,
-              "event": "بنای مسجدالنبی در مدینه",
-              "calendarType": "hijri"
-            }
-          ],
-          "holidayType": "hijri"
-        }
-      },
-      {
-        "disabled": false,
-        "day": {
-          "jalali": "۸",
-          "gregorian": "30",
-          "hijri": "١٨"
-        },
-        "events": {
-          "isHoliday": false,
-          "list": [
-            {
-              "isHoliday": false,
               "event": "انفجار دفتر نخست‌وزیری به دست منافقان و شهادت مظلومانهٔ شهیدان رجایی و باهنر (۱۳۶۰ ه‍.ش)",
               "calendarType": "jalali"
             },
@@ -3736,7 +3736,7 @@
               "calendarType": "jalali"
             }
           ],
-          "holidayType": ""
+          "holidayType": "hijri"
         }
       },
       {

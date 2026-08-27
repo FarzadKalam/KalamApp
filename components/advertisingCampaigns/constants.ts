@@ -32,7 +32,7 @@ export const CAMPAIGN_TOOL_OPTIONS: CampaignToolOption[] = [
   { value: 'bot_group', label: 'گروه بات', group: 'automatic', featureKey: CAMPAIGN_PLAN_FEATURES.bot_group, description: 'ارسال به گروه‌های متصل سازمان' },
   { value: 'bot_private', label: 'پی‌وی بات', group: 'automatic', featureKey: CAMPAIGN_PLAN_FEATURES.bot_private, description: 'ارسال خصوصی به مخاطبان متصل' },
   { value: 'instagram_post', label: 'پست اینستاگرام', group: 'automatic', featureKey: CAMPAIGN_PLAN_FEATURES.instagram_post, description: 'برنامه‌ریزی محتوا و ثبت انتشار' },
-  { value: 'voice_call', label: 'تماس صوتی', group: 'automatic', featureKey: CAMPAIGN_PLAN_FEATURES.voice_call, releaseDisabled: true, description: 'این ابزار فعلاً در دست توسعه است' },
+  { value: 'voice_call', label: 'تماس تلفنی', group: 'manual', featureKey: CAMPAIGN_PLAN_FEATURES.voice_call, description: 'ثبت و پیگیری تماس‌های اجرایی کمپین' },
   { value: 'outdoor', label: 'تبلیغات محیطی', group: 'manual', description: 'بیلبورد، تابلو و رسانه‌های محیطی' },
   { value: 'instagram_ads', label: 'تبلیغ اینستاگرامی', group: 'manual', description: 'تبلیغ صفحه یا محتوای اینستاگرامی' },
   { value: 'click_ads', label: 'تبلیغات کلیکی', group: 'manual', description: 'کمپین‌های CPC، CPM و CPA' },

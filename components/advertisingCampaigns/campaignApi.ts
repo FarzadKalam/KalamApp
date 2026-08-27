@@ -4,7 +4,7 @@ import { syncRecordTags } from '../../utils/recordTags';
 import { clearSessionBootstrapCache, fetchSessionBootstrap } from '../../utils/sessionCache';
 import { buildClientFallbackSystemCode } from '../../utils/systemCode';
 import { ADVERTISING_CAMPAIGNS_MODULE_ID, getCampaignToolLabel } from '../../utils/advertisingCampaigns';
-import { createCampaignToolDraft, createEmptyCampaign } from './campaignUtils';
+import { createCampaignToolDraft, createEmptyCampaign, keepCampaignDateRangeValid } from './campaignUtils';
 import type {
   CampaignAccessMode,
   CampaignAudienceRule,
@@ -244,31 +244,36 @@ export const saveCampaignRelations = async (campaign: CampaignRecord) => {
   ]);
 };
 
-const toolPayload = (tool: CampaignToolRecord) => ({
-  campaign_id: tool.campaign_id,
-  tool_type: tool.tool_type,
-  title: String(tool.title || '').trim() || getCampaignToolLabel(tool.tool_type),
-  enabled: tool.enabled !== false,
-  status: tool.status || 'draft',
-  config: tool.config || {},
-  estimated_cost: Number(tool.estimated_cost || 0),
-  actual_cost: Number(tool.actual_cost || 0),
-  planned_start_at: tool.planned_start_at || null,
-  planned_end_at: tool.planned_end_at || null,
-  actual_start_at: tool.actual_start_at || null,
-  actual_end_at: tool.actual_end_at || null,
-  expected_leads: Number(tool.expected_leads || 0),
-  expected_customers: Number(tool.expected_customers || 0),
-  actual_leads: Number(tool.actual_leads || 0),
-  actual_customers: Number(tool.actual_customers || 0),
-  collaborator_user_ids: normalizeArray(tool.collaborator_user_ids),
-  collaborator_role_ids: normalizeArray(tool.collaborator_role_ids),
-  process_template_id: tool.process_template_id || null,
-  execution_process_draft: tool.execution_process_draft || {},
-  result_summary: String(tool.result_summary || '').trim() || null,
-  assignee_id: tool.assignee_id || null,
-  assignee_role_id: tool.assignee_role_id || null,
-});
+const toolPayload = (tool: CampaignToolRecord) => {
+  const plannedPatch = keepCampaignDateRangeValid(tool, tool, 'planned_start_at', 'planned_end_at');
+  const temporalPatch = keepCampaignDateRangeValid({ ...tool, ...plannedPatch }, plannedPatch, 'actual_start_at', 'actual_end_at');
+  const safeTool = { ...tool, ...temporalPatch };
+  return ({
+    campaign_id: safeTool.campaign_id,
+    tool_type: safeTool.tool_type,
+    title: String(safeTool.title || '').trim() || getCampaignToolLabel(safeTool.tool_type),
+    enabled: safeTool.enabled !== false,
+    status: safeTool.status || 'draft',
+    config: safeTool.config || {},
+    estimated_cost: Number(safeTool.estimated_cost || 0),
+    actual_cost: Number(safeTool.actual_cost || 0),
+    planned_start_at: safeTool.planned_start_at || null,
+    planned_end_at: safeTool.planned_end_at || null,
+    actual_start_at: safeTool.actual_start_at || null,
+    actual_end_at: safeTool.actual_end_at || null,
+    expected_leads: Number(safeTool.expected_leads || 0),
+    expected_customers: Number(safeTool.expected_customers || 0),
+    actual_leads: Number(safeTool.actual_leads || 0),
+    actual_customers: Number(safeTool.actual_customers || 0),
+    collaborator_user_ids: normalizeArray(safeTool.collaborator_user_ids),
+    collaborator_role_ids: normalizeArray(safeTool.collaborator_role_ids),
+    process_template_id: safeTool.process_template_id || null,
+    execution_process_draft: safeTool.execution_process_draft || {},
+    result_summary: String(safeTool.result_summary || '').trim() || null,
+    assignee_id: safeTool.assignee_id || null,
+    assignee_role_id: safeTool.assignee_role_id || null,
+  });
+};
 
 export const saveCampaignTools = async (
   campaignId: string,

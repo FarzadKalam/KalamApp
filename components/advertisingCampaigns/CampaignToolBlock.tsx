@@ -54,7 +54,6 @@ const CampaignToolBlock: React.FC<Props> = ({ tool, onChange, disabled, initiall
     if (tool.tool_type === 'email') return <CampaignEmailEditor {...props} />;
     if (tool.tool_type === 'bot_group' || tool.tool_type === 'bot_private') return <CampaignBotEditor {...props} />;
     if (tool.tool_type === 'instagram_post') return <CampaignInstagramEditor {...props} />;
-    if (tool.tool_type === 'voice_call') return <Alert type="info" showIcon message="تماس صوتی فعلاً غیرفعال است و پس از آماده‌شدن provider در دسترس قرار می‌گیرد." />;
     return <CampaignManualToolEditor {...props} />;
   }, [disabled, onChange, tool]);
 

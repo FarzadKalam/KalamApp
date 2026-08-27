@@ -48,7 +48,7 @@ export const CAMPAIGN_TOOL_DEFINITIONS: CampaignToolDefinition[] = [
   { value: 'bot_group', label: 'گروه بات', planFeature: CAMPAIGN_PLAN_FEATURES.bot_group, dispatchable: true },
   { value: 'bot_private', label: 'پی‌وی بات', planFeature: CAMPAIGN_PLAN_FEATURES.bot_private, automatedAudience: true, dispatchable: true },
   { value: 'instagram_post', label: 'پست اینستاگرام', planFeature: CAMPAIGN_PLAN_FEATURES.instagram_post, dispatchable: false },
-  { value: 'voice_call', label: 'تماس صوتی', planFeature: CAMPAIGN_PLAN_FEATURES.voice_call, dispatchable: false, releaseAvailable: false },
+  { value: 'voice_call', label: 'تماس تلفنی', planFeature: CAMPAIGN_PLAN_FEATURES.voice_call, dispatchable: false },
   { value: 'outdoor', label: 'تبلیغات محیطی' },
   { value: 'instagram_ads', label: 'تبلیغ اینستاگرامی' },
   { value: 'click_ads', label: 'تبلیغات کلیکی' },

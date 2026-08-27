@@ -249,6 +249,8 @@ const CampaignDashboard: React.FC<CampaignDashboardProps> = ({
         onClose={() => setSelectedToolId(null)}
         onToolPatch={onToolPatch}
         onStatusChange={onToolStatusChange}
+        onToolAction={onToolAction}
+        actionLoading={selectedTool ? (actionLoadingByToolId[selectedTool.id] || null) : null}
         onCreateRelated={accessMode === 'full' && onCreateRelated
           ? (moduleId) => createRelated(moduleId, selectedTool?.id)
           : undefined}

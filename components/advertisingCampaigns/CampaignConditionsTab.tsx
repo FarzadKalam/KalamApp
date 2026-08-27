@@ -27,24 +27,32 @@ const EMPTY_OPTIONS: OptionState = { dynamicOptions: {}, relationOptions: {} };
 const CampaignConditionsTab: React.FC<Props> = ({ campaignName, tools, rules, onRuleChange, disabled }) => {
   const [activeKeys, setActiveKeys] = useState<string[]>(['marketing_leads']);
   const [optionsByModule, setOptionsByModule] = useState<Partial<Record<CampaignTargetModule, OptionState>>>({});
-  const [loadingModule, setLoadingModule] = useState<string | null>(null);
+  const [loadingModules, setLoadingModules] = useState<string[]>([]);
   const applicableTools = useMemo(() => tools.filter((tool) => {
     const sources = (tool.config as any)?.audience_sources;
     return Array.isArray(sources) && sources.includes('internal');
   }), [tools]);
 
   useEffect(() => {
-    const target = activeKeys.find((key) => !optionsByModule[key as CampaignTargetModule]) as CampaignTargetModule | undefined;
-    if (!target || loadingModule) return;
+    const targets = activeKeys
+      .map((key) => key as CampaignTargetModule)
+      .filter((target) => !optionsByModule[target] && !loadingModules.includes(target));
+    if (targets.length === 0) return;
     let active = true;
-    const fields = getWorkflowConditionFields(target);
-    setLoadingModule(target);
-    void loadWorkflowConditionEditorOptions(target, fields)
-      .then((options) => { if (active) setOptionsByModule((current) => ({ ...current, [target]: options })); })
-      .catch(() => { if (active) setOptionsByModule((current) => ({ ...current, [target]: EMPTY_OPTIONS })); })
-      .finally(() => { if (active) setLoadingModule(null); });
+    setLoadingModules((current) => Array.from(new Set([...current, ...targets])));
+    void Promise.all(targets.map(async (target) => {
+      try {
+        const options = await loadWorkflowConditionEditorOptions(target, getWorkflowConditionFields(target));
+        return [target, options] as const;
+      } catch {
+        return [target, EMPTY_OPTIONS] as const;
+      }
+    })).then((entries) => {
+      if (!active) return;
+      setOptionsByModule((current) => ({ ...current, ...Object.fromEntries(entries) }));
+    }).finally(() => { if (active) setLoadingModules((current) => current.filter((target) => !targets.includes(target as CampaignTargetModule))); });
     return () => { active = false; };
-  }, [activeKeys, loadingModule, optionsByModule]);
+  }, [activeKeys, loadingModules, optionsByModule]);
 
   if (applicableTools.length === 0) {
     return <Empty description="هیچ ابزار انتخاب‌شده‌ای مخاطب داخل نرم‌افزار ندارد؛ در تنظیمات پیامک، ایمیل یا پی‌وی بات گزینه «از داخل نرم‌افزار» را فعال کنید." />;
@@ -83,7 +91,7 @@ const CampaignConditionsTab: React.FC<Props> = ({ campaignName, tools, rules, on
               </div>
             ),
             children: activeKeys.includes(targetModule) ? (
-              loadingModule === targetModule && !optionsByModule[targetModule] ? <div className="p-8 text-center"><Spin /></div> : (
+              loadingModules.includes(targetModule) && !optionsByModule[targetModule] ? <div className="p-8 text-center"><Spin /></div> : (
                 <div className="space-y-5">
                   <Card size="small" title="همه شرط‌های زیر باید برقرار باشند" className="!rounded-xl">
                     <WorkflowConditionsGroup
