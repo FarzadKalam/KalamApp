@@ -33,6 +33,67 @@ export const containsSmsOptOutPhrase = (value: unknown): boolean => {
   return normalized.includes('لغو11');
 };
 
+const HTML_ENTITY_MAP: Record<string, string> = {
+  amp: '&', apos: "'", gt: '>', lt: '<', nbsp: ' ', quot: '"',
+};
+
+export const campaignRichTextToPlainText = (value: unknown): string => String(value ?? '')
+  .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+  .replace(/<\/(p|div|li|h[1-6]|tr)>/gi, '\n')
+  .replace(/<li[^>]*>/gi, '• ')
+  .replace(/<[^>]*>/g, '')
+  .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (_match, entity: string) => {
+    const normalized = String(entity || '').toLowerCase();
+    if (normalized.startsWith('#x')) {
+      const code = Number.parseInt(normalized.slice(2), 16);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : '';
+    }
+    if (normalized.startsWith('#')) {
+      const code = Number.parseInt(normalized.slice(1), 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : '';
+    }
+    return HTML_ENTITY_MAP[normalized] ?? '';
+  })
+  .replace(/[\u200e\u200f\ufeff]/g, '')
+  .replace(/[ \t]+\n/g, '\n')
+  .replace(/\n{3,}/g, '\n\n')
+  .trim();
+
+export type CampaignMessageSnapshot = {
+  message: string;
+  text: string;
+  subject: string;
+  sender_number: string | null;
+  connection_id: string | null;
+  channel: string | null;
+  attachments: unknown[];
+};
+
+export const buildCampaignMessageSnapshot = (tool: CampaignToolRecord): CampaignMessageSnapshot => {
+  const config = (tool.config || {}) as Record<string, any>;
+  const rawMessage = String(config.message_template || config.html_body || '');
+  const plainMessage = campaignRichTextToPlainText(config.message_template || config.plain_text_body || config.html_body || '');
+  const message = tool.tool_type === 'email' ? rawMessage.trim() : campaignRichTextToPlainText(rawMessage);
+  return {
+    message,
+    text: plainMessage,
+    subject: campaignRichTextToPlainText(config.subject || ''),
+    sender_number: String(config.sender_number || '').trim() || null,
+    connection_id: String(config.connection_id || '').trim() || null,
+    channel: String(config.channel || '').trim() || null,
+    attachments: Array.isArray(config.attachments) ? config.attachments : [],
+  };
+};
+
+export const getCampaignToolEmptyMessageError = (tool: CampaignToolRecord): string | null => {
+  if (!['sms', 'email', 'bot_group', 'bot_private'].includes(String(tool.tool_type || ''))) return null;
+  const snapshot = buildCampaignMessageSnapshot(tool);
+  if (snapshot.text) return null;
+  if (tool.tool_type === 'sms') return 'متن پیامک خالی است؛ پیش از ارسال، متن پیامک را تکمیل کنید.';
+  if (tool.tool_type === 'email') return 'متن ایمیل خالی است؛ پیش از ارسال، متن ایمیل را تکمیل کنید.';
+  return 'متن پیام بات خالی است؛ پیش از ارسال، متن پیام را تکمیل کنید.';
+};
+
 const GSM_BASIC = new Set(Array.from('@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&\'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà'));
 const GSM_EXTENDED = new Set(Array.from('^{}\\[~]|€'));
 

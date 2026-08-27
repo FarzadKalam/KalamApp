@@ -14,6 +14,7 @@ import CampaignSmsEditor from '../components/advertisingCampaigns/CampaignSmsEdi
 import CampaignField from '../components/advertisingCampaigns/CampaignField';
 import { patchAdvertisingCampaignCollaborationTool, patchAdvertisingCampaignToolExecution } from '../components/advertisingCampaigns/campaignApi';
 import { useCampaignPlanAvailability, useCampaignWizard } from '../components/advertisingCampaigns/useCampaignWizard';
+import { buildCampaignMessageSnapshot, getCampaignToolEmptyMessageError } from '../components/advertisingCampaigns/campaignUtils';
 import type { CampaignToolAction, CampaignToolRecord } from '../components/advertisingCampaigns/types';
 import { advertisingCampaignsConfig } from '../modules/advertisingCampaignsConfig';
 import { FieldType } from '../types';
@@ -93,19 +94,6 @@ const CampaignWizardPage: React.FC = () => {
     setActiveTab(tab);
   };
 
-  const messageSnapshot = (tool: CampaignToolRecord) => {
-    const config = (tool.config || {}) as any;
-    return {
-      message: config.message_template || config.html_body || '',
-      text: config.message_template || config.plain_text_body || config.html_body || '',
-      subject: config.subject || '',
-      sender_number: config.sender_number || null,
-      connection_id: config.connection_id || null,
-      channel: config.channel || null,
-      attachments: config.attachments || [],
-    };
-  };
-
   const runToolAction = async (action: CampaignToolAction, tool: CampaignToolRecord) => {
     setActionLoading((current) => ({ ...current, [tool.id]: action }));
     try {
@@ -146,6 +134,8 @@ const CampaignWizardPage: React.FC = () => {
         return;
       }
       if (action === 'send_now' || action === 'schedule') {
+        const emptyMessageError = getCampaignToolEmptyMessageError(tool);
+        if (emptyMessageError) throw new Error(emptyMessageError);
         // شرط‌ها و انتخاب/حذف دستی مخاطبان بخشی از payload اجرای واقعی‌اند.
         // پیش از snapshot و ساخت dispatch منتظر ذخیرهٔ قطعی می‌مانیم تا کلیک
         // سریع روی «ارسال اکنون» از autosave جلو نزند و فرد حذف‌شده ارسال نگیرد.
@@ -157,7 +147,7 @@ const CampaignWizardPage: React.FC = () => {
           p_tool_id: tool.id,
           p_channel_type: tool.tool_type,
           p_file_recipients: [],
-          p_message_snapshot: messageSnapshot(tool),
+          p_message_snapshot: buildCampaignMessageSnapshot(tool),
           p_scheduled_at: scheduledAt,
           p_idempotency_key: `${tool.id}:${action}:${Date.now()}`,
         });

@@ -12,6 +12,7 @@ import { supabase } from '../../supabaseClient';
 import TaskInstructionsModal from './TaskInstructionsModal';
 import SnoozeScheduleModal from '../notifications/SnoozeScheduleModal';
 import TaskStatusIcon from './TaskStatusIcon';
+import { buildStatusIconActionClassName, getStatusIconActionStyle } from '../statusIconActionAppearance';
 
 type TaskActionButtonsProps = {
   task: any;
@@ -63,7 +64,7 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
   const isInProgress = normalizedStatus === 'in_progress';
   const isInReview = normalizedStatus === 'review';
   const actionSizePx = size === 'large' ? 40 : size === 'middle' ? 36 : 30;
-  const actionButtonClassName = `task-action-button ${buttonClassName} !transition-all hover:!scale-110 hover:!ring-2 hover:!ring-[rgba(var(--brand-500-rgb),0.28)] hover:!ring-offset-1 hover:!ring-offset-white dark:hover:!ring-[rgba(var(--brand-300-rgb),0.34)] dark:hover:!ring-offset-slate-950`;
+  const actionButtonClassName = buildStatusIconActionClassName(buttonClassName);
 
   useEffect(() => {
     if (!rescheduleOpen) {
@@ -153,28 +154,7 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
     const activeColor = targetStatus ? getStatusColor(targetStatus) : '#6b7280';
     const isActive = options.active === true;
     const isDisabled = options.disabled === true;
-    return {
-      width: actionSizePx,
-      minWidth: actionSizePx,
-      height: actionSizePx,
-      padding: 0,
-      borderRadius: 8,
-      display: 'inline-flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      flex: '0 0 auto',
-      lineHeight: 1,
-      color: isActive ? activeColor : (isDisabled ? '#cbd5e1' : '#4b5563'),
-      backgroundColor: isActive ? `${activeColor}1a` : 'transparent',
-      border: 'none',
-      position: 'relative',
-      zIndex: isActive ? 4 : 3,
-      boxShadow: isActive
-        ? `0 4px 12px ${activeColor}33`
-        : (isDisabled ? 'none' : '0 3px 10px rgba(15, 23, 42, 0.10)'),
-      opacity: isDisabled ? 0.42 : 1,
-      cursor: isActive ? 'default' : (isDisabled ? 'not-allowed' : 'pointer'),
-    };
+    return getStatusIconActionStyle({ color: activeColor, active: isActive, disabled: isDisabled, size: actionSizePx });
   };
 
   const handleComplete = async (event?: React.SyntheticEvent) => {

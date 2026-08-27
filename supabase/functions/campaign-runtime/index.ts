@@ -1,7 +1,7 @@
 // @ts-nocheck
 // Durable advertising-campaign dispatcher. Invoked only with the service role.
 
-const FUNCTION_BUILD = 'campaign-runtime-2026-08-27-01';
+const FUNCTION_BUILD = 'campaign-runtime-2026-08-27-02';
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-kalam-internal',
@@ -66,6 +66,32 @@ const render = (template: unknown, variables: Record<string, any>) => String(tem
   },
 );
 
+const HTML_ENTITY_MAP: Record<string, string> = {
+  amp: '&', apos: "'", gt: '>', lt: '<', nbsp: ' ', quot: '"',
+};
+
+const richTextToPlainText = (value: unknown) => String(value ?? '')
+  .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+  .replace(/<\/(p|div|li|h[1-6]|tr)>/gi, '\n')
+  .replace(/<li[^>]*>/gi, '• ')
+  .replace(/<[^>]*>/g, '')
+  .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (_match, entity: string) => {
+    const normalized = String(entity || '').toLowerCase();
+    if (normalized.startsWith('#x')) {
+      const code = Number.parseInt(normalized.slice(2), 16);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : '';
+    }
+    if (normalized.startsWith('#')) {
+      const code = Number.parseInt(normalized.slice(1), 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : '';
+    }
+    return HTML_ENTITY_MAP[normalized] ?? '';
+  })
+  .replace(/[\u200e\u200f\ufeff]/g, '')
+  .replace(/[ \t]+\n/g, '\n')
+  .replace(/\n{3,}/g, '\n\n')
+  .trim();
+
 const callFunction = async (
   baseUrl: string,
   key: string,
@@ -128,29 +154,32 @@ const sendRecipient = async ({
     display_name: recipient.display_name || '',
     recipient: recipient.contact_value,
   };
-  const message = render(snapshot.message || snapshot.text || tool.config?.message || '', variables).trim();
+  const configuredMessage = tool.config?.message_template || tool.config?.html_body || tool.config?.message || '';
+  const renderedMessage = render(snapshot.message || snapshot.text || configuredMessage, variables).trim();
+  const plainMessage = richTextToPlainText(snapshot.text ? render(snapshot.text, variables) : renderedMessage);
   let providerPayload: any = null;
   let sender: string | null = null;
 
   if (tool.tool_type === 'sms') {
     sender = String(snapshot.sender_number || tool.config?.sender_number || '').trim() || null;
-    if (!message) throw new Error('متن پیامک خالی است.');
+    if (!plainMessage) throw new Error('متن پیامک خالی است.');
     providerPayload = await callFunction(baseUrl, key, 'send-sms', {
-      action: 'send', org_id: dispatch.org_id, to: [recipient.contact_value], text: message,
+      action: 'send', org_id: dispatch.org_id, to: [recipient.contact_value], text: plainMessage,
       sender_number: sender,
     }, { 'x-kalam-internal': 'campaign-runtime' });
     sender = String(providerPayload?.sender_number || sender || '').trim() || null;
   } else if (tool.tool_type === 'email') {
     const subject = render(snapshot.subject || tool.config?.subject || '', variables).trim();
-    if (!subject && !message) throw new Error('موضوع یا متن ایمیل خالی است.');
+    if (!plainMessage) throw new Error('متن ایمیل خالی است.');
     providerPayload = await callFunction(baseUrl, key, 'send-email', {
-      org_id: dispatch.org_id, to: [recipient.contact_value], subject, body: message,
+      org_id: dispatch.org_id, to: [recipient.contact_value], subject, body: renderedMessage,
     });
   } else if (tool.tool_type === 'bot_group' || tool.tool_type === 'bot_private') {
     const connectionId = String(snapshot.connection_id || tool.config?.connection_id || '').trim();
     const channel = String(snapshot.channel || tool.config?.channel || '').trim().toLowerCase();
     const connection = connectionId ? await loadConnection(baseUrl, key, connectionId, dispatch.org_id) : null;
     if (!connection) throw new Error('اتصال بات فعال و متعلق به سازمان پیدا نشد.');
+    if (!plainMessage) throw new Error('متن پیام بات خالی است.');
     const validConnectionTypes = channel === 'telegram' ? ['telegram','telegram_bot']
       : channel === 'bale' ? ['bale','bale_bot'] : channel === 'rubika' ? ['rubika','rubika_bot'] : [];
     if (!validConnectionTypes.includes(String(connection.connection_type || '').trim().toLowerCase())) {
@@ -158,7 +187,7 @@ const sendRecipient = async ({
     }
     providerPayload = await callFunction(baseUrl, key, 'bot-admin', {
       action: 'send_test_message', channel, connectionId, chatId: recipient.contact_value,
-      text: message, skipLog: true,
+      text: plainMessage, skipLog: true,
       attachments: Array.isArray(snapshot.attachments) ? snapshot.attachments : [],
     });
   } else {
@@ -174,7 +203,7 @@ const sendRecipient = async ({
     sender,
     recipient: recipient.contact_value,
     title: String(snapshot.subject || tool.title || 'ارسال کمپین'),
-    message_text: message,
+    message_text: plainMessage,
     status: 'provider_accepted',
     sent_at: new Date().toISOString(),
     advertising_campaign_id: dispatch.campaign_id,

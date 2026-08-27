@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { App, Badge, Button, Descriptions, Drawer, Input, Modal, Skeleton, Tag, Tooltip } from 'antd';
+import { App, Badge, Button, Descriptions, Input, Modal, Skeleton, Tag, Tooltip } from 'antd';
 import {
   FileOutlined,
   HistoryOutlined,
@@ -7,10 +7,6 @@ import {
   NodeIndexOutlined,
   ReadOutlined,
   SendOutlined,
-  CheckCircleOutlined,
-  ClockCircleOutlined,
-  PlayCircleOutlined,
-  PauseCircleOutlined,
   FileTextOutlined,
   TeamOutlined,
   UserAddOutlined,
@@ -37,11 +33,15 @@ import { isAutomatedCampaignTool } from './CampaignToolCard';
 import CampaignToolReportPanel from './CampaignToolReportPanel';
 import CampaignDeliveryReportPanel from './CampaignDeliveryReportPanel';
 import { supabase } from '../../supabaseClient';
+import TaskStatusIcon from '../tasks/TaskStatusIcon';
+import { buildStatusIconActionClassName, getStatusIconActionStyle } from '../statusIconActionAppearance';
+import CampaignToolDeliverySummaryCards from './CampaignToolDeliverySummaryCards';
+import { buildCampaignMessageSnapshot, getCampaignToolEmptyMessageError } from './campaignUtils';
 
 const ProcessCardsV2RuntimeBlock = React.lazy(() => import('../processes/ProcessCardsV2RuntimeBlock'));
 
 type ToolModalSideTab = 'files' | 'conversation' | 'ai' | 'changelogs';
-type ToolModalMainTab = 'details' | 'process' | 'results' | 'delivery';
+type ToolModalMainTab = 'details' | 'process' | 'results' | 'delivery' | 'report';
 
 type CampaignToolWorkspaceModalProps = {
   open: boolean;
@@ -115,7 +115,6 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
 }) => {
   const [sideTab, setSideTab] = useState<ToolModalSideTab>('files');
   const [mainTab, setMainTab] = useState<ToolModalMainTab>('details');
-  const [reportOpen, setReportOpen] = useState(false);
   const [statusSaving, setStatusSaving] = useState<CampaignToolStatus | null>(null);
   const [testRecipient, setTestRecipient] = useState('');
   const [testSending, setTestSending] = useState(false);
@@ -129,7 +128,6 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
     if (!open) return;
     setSideTab('files');
     setMainTab('details');
-    setReportOpen(false);
     setTestRecipient('');
   }, [open, tool?.id]);
 
@@ -180,26 +178,22 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
     ? new Set<CampaignToolStatus>(['running', 'paused', 'completed'])
     : null;
   const automated = isAutomatedCampaignTool(tool);
-  const statusIcon = (value: CampaignToolStatus) => value === 'completed' ? <CheckCircleOutlined /> : value === 'running' ? <PlayCircleOutlined /> : value === 'paused' || value === 'failed' ? <PauseCircleOutlined /> : <ClockCircleOutlined />;
+  const statusIconKey = (value: CampaignToolStatus) => ({
+    draft: 'circle', ready: 'check', scheduled: 'clock', running: 'play', paused: 'pause',
+    completed: 'approve', failed: 'warning', canceled: 'cancel',
+  }[value] || 'circle');
   const sendTest = async () => {
     const recipient = testRecipient.trim();
     if (!recipient) { message.warning('گیرنده آزمایشی را وارد کنید.'); return; }
+    const emptyMessageError = getCampaignToolEmptyMessageError(tool);
+    if (emptyMessageError) { message.warning(emptyMessageError); return; }
     setTestSending(true);
     try {
-      const config = (tool.config || {}) as any;
+      const snapshot = buildCampaignMessageSnapshot(tool);
       const result = await supabase.rpc('create_advertising_campaign_test_dispatch', {
         p_tool_id: tool.id,
         p_recipient: recipient,
-        p_message_snapshot: {
-          message: config.message_template || config.html_body || '',
-          text: config.message_template || config.plain_text_body || config.html_body || '',
-          subject: config.subject || '',
-          sender_number: config.sender_number || null,
-          connection_id: config.connection_id || null,
-          channel: config.channel || null,
-          attachments: config.attachments || [],
-          is_test: true,
-        },
+        p_message_snapshot: { ...snapshot, is_test: true },
         p_idempotency_key: `${tool.id}:test:${Date.now()}`,
       });
       if (result.error) throw result.error;
@@ -306,56 +300,63 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
           </div>
         )}
       >
-        <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-gray-100 bg-gray-50/70 p-3 dark:border-white/10 dark:bg-white/5 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 flex-wrap gap-2">
-            {CAMPAIGN_TOOL_STATUS_OPTIONS.map((option) => {
-              const active = option.value === tool.status;
-              const tone = STATUS_TONES[option.color] || STATUS_TONES.default;
-              const disabled = !onStatusChange || (!active && allowedStatusValues !== null && !allowedStatusValues.has(option.value));
-              return (
-                <React.Fragment key={option.value}>
-                  <Button
-                    size="small"
-                    type={active ? 'primary' : 'default'}
-                    icon={statusIcon(option.value)}
-                    className="!rounded-full"
-                    style={active
-                      ? { backgroundColor: tone, borderColor: tone, color: '#fff' }
-                      : { borderColor: `${tone}66`, color: tone }}
-                    loading={statusSaving === option.value}
-                    disabled={disabled || (Boolean(statusSaving) && statusSaving !== option.value)}
-                    onClick={() => void changeStatus(option.value)}
-                  >
-                    {option.label}
-                  </Button>
-                  {option.value === 'scheduled' && automated && onToolAction ? (
-                    <Button
-                      size="small"
-                      type="primary"
-                      icon={<SendOutlined />}
-                      className="!rounded-full"
-                      loading={actionLoading === 'send_now'}
-                      disabled={Boolean(actionLoading) || tool.status !== 'ready'}
-                      onClick={() => void onToolAction('send_now', tool)}
-                    >
-                      ارسال اکنون
-                    </Button>
-                  ) : null}
-                </React.Fragment>
-              );
-            })}
+        <div className="mb-4 overflow-hidden rounded-2xl border border-gray-100 bg-gray-50/70 dark:border-white/10 dark:bg-white/5">
+          <div className="p-3">
+            <div>
+              <div className="mb-2 text-xs font-bold text-slate-500">تغییر وضعیت اجرا</div>
+              <div className="flex min-w-0 flex-wrap items-center gap-1">
+                {CAMPAIGN_TOOL_STATUS_OPTIONS.map((option) => {
+                  const active = option.value === tool.status;
+                  const tone = STATUS_TONES[option.color] || STATUS_TONES.default;
+                  const unavailable = !onStatusChange || (!active && allowedStatusValues !== null && !allowedStatusValues.has(option.value));
+                  const disabled = unavailable || active || (Boolean(statusSaving) && statusSaving !== option.value);
+                  return (
+                    <React.Fragment key={option.value}>
+                      <Tooltip title={option.label} getPopupContainer={resolveOverlayPopupContainer} zIndex={15360}>
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<TaskStatusIcon iconKey={statusIconKey(option.value)} />}
+                          className={buildStatusIconActionClassName()}
+                          style={getStatusIconActionStyle({ color: tone, active, disabled })}
+                          title={option.label}
+                          aria-label={option.label}
+                          aria-disabled={disabled}
+                          loading={statusSaving === option.value}
+                          onClick={() => { if (!disabled) void changeStatus(option.value); }}
+                        />
+                      </Tooltip>
+                      {option.value === 'scheduled' && automated && onToolAction ? (
+                        <Button
+                          type="primary"
+                          size="small"
+                          icon={<SendOutlined />}
+                          loading={actionLoading === 'send_now'}
+                          disabled={Boolean(actionLoading) || tool.status !== 'ready'}
+                          onClick={() => void onToolAction('send_now', tool)}
+                        >
+                          ارسال اکنون
+                        </Button>
+                      ) : null}
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+            </div>
           </div>
-          <div className="flex max-w-full gap-2 overflow-x-auto">
-            {onCreateRelated ? (
-              <>
+          {onCreateRelated ? (
+            <div className="border-t border-gray-100 bg-white/70 p-3 dark:border-white/10 dark:bg-black/10">
+              <div className="mb-2 text-xs font-bold text-slate-500">افزودن نتیجه مرتبط</div>
+              <div className="flex max-w-full flex-wrap gap-2">
                 <Button size="small" icon={<UserAddOutlined />} onClick={() => onCreateRelated('marketing_leads')}>ثبت لید</Button>
                 <Button size="small" icon={<TeamOutlined />} onClick={() => onCreateRelated('customers')}>ثبت مشتری</Button>
                 <Button size="small" icon={<FileTextOutlined />} onClick={() => onCreateRelated('invoices')}>ثبت فاکتور</Button>
-              </>
-            ) : null}
-            <Button type="primary" icon={<ReadOutlined />} onClick={() => setReportOpen(true)}>مشاهده گزارش</Button>
-          </div>
+              </div>
+            </div>
+          ) : null}
         </div>
+
+        {automated ? <CampaignToolDeliverySummaryCards tool={tool} /> : null}
 
         <div className="flex flex-col gap-4 xl:flex-row" dir="ltr">
           <aside className="min-w-0 rounded-2xl border border-gray-200 bg-white p-2 dark:border-white/10 dark:bg-white/5 xl:w-[19rem] xl:shrink-0" dir="rtl">
@@ -388,6 +389,7 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
                 { key: 'process' as const, label: 'فرآیندها', icon: <NodeIndexOutlined /> },
                 { key: 'results' as const, label: 'نتیجه اجرا', icon: <HistoryOutlined /> },
                 ...(automated ? [{ key: 'delivery' as const, label: 'گزارش ارسال', icon: <SendOutlined /> }] : []),
+                { key: 'report' as const, label: 'گزارش نتایج', icon: <ReadOutlined /> },
               ]).map((tab) => (
                 <Button key={tab.key} type={mainTab === tab.key ? 'primary' : 'text'} icon={tab.icon} onClick={() => setMainTab(tab.key)}>
                   {tab.label}
@@ -455,21 +457,12 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
                 <CampaignDeliveryReportPanel toolId={tool.id} />
               </div>
             ) : null}
+            {mainTab === 'report' ? (
+              <CampaignToolReportPanel toolId={tool.id} currencyLabel={currencyLabel} />
+            ) : null}
           </main>
         </div>
       </Modal>
-
-      <Drawer
-        title={`گزارش ${getCampaignToolLabel(tool.tool_type)}`}
-        open={reportOpen}
-        onClose={() => setReportOpen(false)}
-        width="min(96vw, 980px)"
-        zIndex={16050}
-        getContainer={() => resolveOverlayPopupContainer()}
-        destroyOnHidden
-      >
-        <CampaignToolReportPanel toolId={tool.id} currencyLabel={currencyLabel} />
-      </Drawer>
     </>
   );
 };

@@ -48,19 +48,27 @@ const CampaignField: React.FC<CampaignFieldProps> = ({
     dynamicOptionsCategory,
   };
   const field = registeredField || fallbackField;
+  const showMobileLabel = field.type !== FieldType.CHECKBOX;
   return (
-    <SmartFieldRenderer
-      field={field}
-      value={value}
-      onChange={onChange}
-      forceEditMode={!readonly}
-      standalone
-      compactMode={compact}
-      options={options || registeredField?.options}
-      moduleId={moduleId}
-      recordId={recordId || undefined}
-      allValues={allValues || { [fieldKey]: value }}
-    />
+    <div className="min-w-0">
+      {showMobileLabel ? (
+        <div className="mb-1.5 text-xs font-bold text-slate-600 dark:text-slate-300 sm:hidden">
+          {label || field.labels.fa}{required ? <span className="mr-1 text-red-500">*</span> : null}
+        </div>
+      ) : null}
+      <SmartFieldRenderer
+        field={field}
+        value={value}
+        onChange={onChange}
+        forceEditMode={!readonly}
+        standalone
+        compactMode={compact}
+        options={options || registeredField?.options}
+        moduleId={moduleId}
+        recordId={recordId || undefined}
+        allValues={allValues || { [fieldKey]: value }}
+      />
+    </div>
   );
 };
 

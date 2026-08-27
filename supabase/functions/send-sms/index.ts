@@ -42,7 +42,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'send-sms-2026-08-25-02';
+const FUNCTION_BUILD = 'send-sms-2026-08-27-01';
 
 const json = (status: number, payload: Record<string, any>) =>
   new Response(JSON.stringify({ build: FUNCTION_BUILD, ...payload }), {
@@ -128,6 +128,32 @@ const normalizeDigitsToEnglish = (value: unknown): string =>
   String(value ?? '')
     .replace(/[\u06F0-\u06F9]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0))
     .replace(/[\u0660-\u0669]/g, (digit) => String(digit.charCodeAt(0) - 0x0660));
+
+const SMS_HTML_ENTITY_MAP: Record<string, string> = {
+  amp: '&', apos: "'", gt: '>', lt: '<', nbsp: ' ', quot: '"',
+};
+
+const normalizeSmsMessageText = (value: unknown): string => String(value ?? '')
+  .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+  .replace(/<\/(p|div|li|h[1-6]|tr)>/gi, '\n')
+  .replace(/<li[^>]*>/gi, '• ')
+  .replace(/<[^>]*>/g, '')
+  .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (_match, entity: string) => {
+    const normalized = String(entity || '').toLowerCase();
+    if (normalized.startsWith('#x')) {
+      const code = Number.parseInt(normalized.slice(2), 16);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : '';
+    }
+    if (normalized.startsWith('#')) {
+      const code = Number.parseInt(normalized.slice(1), 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : '';
+    }
+    return SMS_HTML_ENTITY_MAP[normalized] ?? '';
+  })
+  .replace(/[\u200e\u200f\ufeff]/g, '')
+  .replace(/[ \t]+\n/g, '\n')
+  .replace(/\n{3,}/g, '\n\n')
+  .trim();
 
 const normalizeSenderNumber = (value: unknown) => normalizeDigitsToEnglish(value).trim().replace(/\s+/g, '');
 
@@ -783,7 +809,7 @@ const querySmsDeliveryStatus = async (
 
 const sendSmsWithProviderFallback = async (to: string[], text: string, settings: SmsSettings) => {
   const recipients = Array.from(new Set((to || []).map((value) => normalizeRecipientPhone(String(value || '').trim())).filter(Boolean)));
-  const messageText = String(text || '').trim();
+  const messageText = normalizeSmsMessageText(text);
   const username = String(settings.username || '').trim();
   const password = String(settings.password || '').trim();
   const apiKey = String(settings.api_key || '').trim();

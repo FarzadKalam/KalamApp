@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   calculateSmsEstimatedCost,
+  buildCampaignMessageSnapshot,
+  campaignRichTextToPlainText,
+  createCampaignToolDraft,
   applyCampaignAudienceSummaryToConfig,
   containsSmsOptOutPhrase,
   estimateSmsPages,
   keepCampaignDateRangeValid,
   invalidateCampaignAudienceSummaryConfig,
+  getCampaignToolEmptyMessageError,
   normalizeCampaignSenderNumbers,
   normalizeCampaignAudienceSummary,
 } from './campaignUtils';
@@ -81,5 +85,25 @@ describe('campaignUtils', () => {
     expect(config).not.toHaveProperty('estimated_audience');
     expect(config).not.toHaveProperty('sendable_audience_count');
     expect(config).not.toHaveProperty('audience_finalized_at');
+  });
+
+  it('converts rich campaign SMS content to provider-safe plain text', () => {
+    expect(campaignRichTextToPlainText('<p>سلام&nbsp;دوست من</p><p>لغو۱۱</p>'))
+      .toBe('سلام دوست من\nلغو۱۱');
+    const tool = createCampaignToolDraft('campaign-1', 'sms');
+    tool.config = { ...tool.config, message_template: '<p>پیام کمپین</p>' } as any;
+    expect(buildCampaignMessageSnapshot(tool)).toMatchObject({
+      message: 'پیام کمپین',
+      text: 'پیام کمپین',
+    });
+    expect(getCampaignToolEmptyMessageError(tool)).toBeNull();
+  });
+
+  it('rejects visually empty rich text for every automatic message tool', () => {
+    (['sms', 'email', 'bot_group', 'bot_private'] as const).forEach((toolType) => {
+      const tool = createCampaignToolDraft('campaign-1', toolType);
+      tool.config = { ...tool.config, message_template: '<p><br></p>', html_body: '<p>&nbsp;</p>' } as any;
+      expect(getCampaignToolEmptyMessageError(tool)).toContain('خالی است');
+    });
   });
 });
