@@ -94,7 +94,7 @@ export const getDefaultToolConfig = (toolType: CampaignToolType): CampaignChanne
     unsubscribe_footer_enabled: true, attachments: [], import_attachments: [],
   };
   if (toolType === 'bot_group' || toolType === 'bot_private') return {
-    kind: toolType, channel: 'telegram', group_ids: [], audience_sources: ['internal'], attachments: [],
+    kind: toolType as 'bot_group' | 'bot_private', channel: 'telegram', group_ids: [], audience_sources: ['internal'], attachments: [],
   };
   if (toolType === 'instagram_post') return { kind: 'instagram_post', attachments: [], content_items: [] };
   return { kind: 'manual', attachments: [], content_items: [], custom_values: {} };

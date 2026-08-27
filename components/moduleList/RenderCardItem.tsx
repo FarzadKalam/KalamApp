@@ -1,5 +1,5 @@
 import React from "react";
-import { Avatar, Checkbox, Popover, Skeleton, Tag } from "antd";
+import { Avatar, Checkbox, Popover, Tag } from "antd";
 import { AppstoreOutlined, DragOutlined, LockOutlined } from "@ant-design/icons";
 import { FieldType } from "../../types";
 import { formatPersianPrice, toPersianNumber, safeJalaliFormat, parseDateValue } from "../../utils/persianNumberFormatter";
@@ -21,9 +21,9 @@ import RecordLockControl from "../recordLocks/RecordLockControl";
 import { getRecordLockStateFromRecord, mergeRecordLockIntoRecord, type RecordLockState } from "../../utils/recordLockRuntime";
 import { supabase } from "../../supabaseClient";
 import { hasProcessTaskTitleTokens, resolveProcessTaskTitle } from "../../utils/processTaskTitle";
+import TaskRelatedProcessBar from "../tasks/TaskRelatedProcessBar";
 
 const ProductionStagesField = React.lazy(() => import("../ProductionStagesField"));
-const ProcessCardsV2RuntimeBlock = React.lazy(() => import("../processes/ProcessCardsV2RuntimeBlock"));
 
 export interface RenderCardItemProps {
   item: any;
@@ -158,37 +158,12 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   const displayTitle = isTasks
     ? (resolvedTaskTitle || (hasProcessTaskTitleTokens(title) ? "فعالیت" : title))
     : title;
-  const processRecordKeyByModule: Record<string, string> = {
-    projects: 'project_id',
-    customers: 'related_customer',
-    invoices: 'related_invoice',
-    purchase_invoices: 'purchase_invoice_id',
-    marketing_leads: 'marketing_lead_id',
-  };
   const isProductionTask = (
     isTasks
     && String(cardItem?.related_to_module || '') === 'production_orders'
     && cardItem?.related_production_order
     && cardItem?.production_line_id
   );
-  const relatedProcessModuleId = String(cardItem?.related_to_module || '');
-  const relatedProcessRecordKey = processRecordKeyByModule[relatedProcessModuleId];
-  const relatedProcessRecordId = relatedProcessRecordKey ? cardItem?.[relatedProcessRecordKey] : null;
-  const isExecutionProcessTask = (
-    isTasks
-    && !isProductionTask
-    && !!relatedProcessRecordId
-    && Object.prototype.hasOwnProperty.call(processRecordKeyByModule, relatedProcessModuleId)
-  );
-  const relatedProcessRecordData = React.useMemo(() => (
-    relatedProcessRecordId
-      ? {
-          id: relatedProcessRecordId,
-          module_id: relatedProcessModuleId,
-        }
-      : null
-  ), [relatedProcessModuleId, relatedProcessRecordId]);
-
   const statusFieldConfig = moduleConfig?.fields.find(
     (f: any) => f.type === FieldType.STATUS || f.key === statusField,
   );
@@ -856,23 +831,14 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           </React.Suspense>
         </div>
       )}
-      {isExecutionProcessTask && (
-        <div
-          className={`${showRelatedRecord ? 'mt-1' : (minimal ? 'mt-2' : 'mt-3')}`}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <React.Suspense fallback={<Skeleton active title={false} paragraph={{ rows: 1 }} />}>
-            <ProcessCardsV2RuntimeBlock
-              recordId={String(relatedProcessRecordId)}
-              moduleId={relatedProcessModuleId}
-              recordData={relatedProcessRecordData}
-              variant="compact"
-              highlightedTaskId={String(cardItem?.id || '')}
-              highlightedRunStageId={String(cardItem?.process_run_stage_id || '')}
-            />
-          </React.Suspense>
-        </div>
-      )}
+      {isTasks && !isProductionTask ? (
+        <TaskRelatedProcessBar
+          task={cardItem}
+          variant="compact"
+          className={showRelatedRecord ? 'mt-1' : (minimal ? 'mt-2' : 'mt-3')}
+          stopClickPropagation
+        />
+      ) : null}
     </div>
   );
 

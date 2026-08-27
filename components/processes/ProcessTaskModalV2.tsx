@@ -86,6 +86,7 @@ import {
   getProcessTaskCustomFieldLabelFa,
 } from '../../utils/processStageCardLabels';
 import TagInput from '../TagInput';
+import TaskRelatedProcessBar from '../tasks/TaskRelatedProcessBar';
 import type { ProcessV2CardData, ProcessV2Stage, ProcessV2TemplateOption } from './ProcessCardsV2';
 
 type ProcessTaskModalV2Props = {
@@ -3413,6 +3414,14 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                 />
               </div>
             </div>
+
+            {!isDraftActivityCreationMode && taskRecordId ? (
+              <TaskRelatedProcessBar
+                task={{ ...source, id: taskRecordId, task_id: taskRecordId }}
+                variant="full"
+                className="border-t border-[rgba(var(--brand-200-rgb),0.45)] pt-1 dark:border-[rgba(var(--brand-300-rgb),0.18)]"
+              />
+            ) : null}
 
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[rgba(var(--brand-200-rgb),0.45)] pt-2 dark:border-[rgba(var(--brand-300-rgb),0.18)]">
               <span />

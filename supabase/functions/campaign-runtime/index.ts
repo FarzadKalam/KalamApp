@@ -1,7 +1,7 @@
 // @ts-nocheck
 // Durable advertising-campaign dispatcher. Invoked only with the service role.
 
-const FUNCTION_BUILD = 'campaign-runtime-2026-08-25-01';
+const FUNCTION_BUILD = 'campaign-runtime-2026-08-27-01';
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-kalam-internal',
@@ -210,9 +210,13 @@ const processDispatch = async (baseUrl: string, key: string, dispatch: any) => {
     throw new Error('قابلیت ارسال این کانال در پلن سازمان فعال نیست.');
   }
 
-  await patchRows(baseUrl, key, `advertising_campaign_tools?id=eq.${tool.id}`, {
-    status: 'running', actual_start_at: tool.actual_start_at || new Date().toISOString(),
-  });
+  const isTestDispatch = dispatch?.message_snapshot?.is_test === true
+    || dispatch?.audience_snapshot?.is_test === true;
+  if (!isTestDispatch) {
+    await patchRows(baseUrl, key, `advertising_campaign_tools?id=eq.${tool.id}`, {
+      status: 'running', actual_start_at: tool.actual_start_at || new Date().toISOString(),
+    });
+  }
   const recipients = await rest(baseUrl, key,
     `advertising_campaign_recipients?dispatch_id=eq.${dispatch.id}&status=eq.pending&select=*&order=created_at.asc&limit=100`,
   );
@@ -260,7 +264,7 @@ const processDispatch = async (baseUrl: string, key: string, dispatch: any) => {
     claimed_at: remaining > 0 ? null : dispatch.claimed_at,
     completed_at: remaining > 0 || externallyControlledStatus === 'paused' ? null : new Date().toISOString(),
   });
-  if (remaining === 0 && !externallyControlledStatus) {
+  if (remaining === 0 && !externallyControlledStatus && !isTestDispatch) {
     await patchRows(baseUrl, key, `advertising_campaign_tools?id=eq.${tool.id}`, {
       status: finalStatus === 'succeeded' ? 'completed' : finalStatus === 'failed' ? 'failed' : 'completed',
       actual_end_at: new Date().toISOString(),

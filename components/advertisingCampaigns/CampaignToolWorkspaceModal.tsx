@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Badge, Button, Descriptions, Drawer, Modal, Skeleton, Tag, Tooltip } from 'antd';
+import { App, Badge, Button, Descriptions, Drawer, Input, Modal, Skeleton, Tag, Tooltip } from 'antd';
 import {
   FileOutlined,
   HistoryOutlined,
@@ -7,6 +7,10 @@ import {
   NodeIndexOutlined,
   ReadOutlined,
   SendOutlined,
+  CheckCircleOutlined,
+  ClockCircleOutlined,
+  PlayCircleOutlined,
+  PauseCircleOutlined,
   FileTextOutlined,
   TeamOutlined,
   UserAddOutlined,
@@ -31,11 +35,13 @@ import type { ModuleField } from '../../types';
 import type { CampaignRecord, CampaignToolAction, CampaignToolRecord } from './types';
 import { isAutomatedCampaignTool } from './CampaignToolCard';
 import CampaignToolReportPanel from './CampaignToolReportPanel';
+import CampaignDeliveryReportPanel from './CampaignDeliveryReportPanel';
+import { supabase } from '../../supabaseClient';
 
 const ProcessCardsV2RuntimeBlock = React.lazy(() => import('../processes/ProcessCardsV2RuntimeBlock'));
 
 type ToolModalSideTab = 'files' | 'conversation' | 'ai' | 'changelogs';
-type ToolModalMainTab = 'details' | 'process' | 'results';
+type ToolModalMainTab = 'details' | 'process' | 'results' | 'delivery';
 
 type CampaignToolWorkspaceModalProps = {
   open: boolean;
@@ -79,6 +85,9 @@ const COMMON_FIELD_KEYS = new Set([
 ]);
 
 const RESULT_FIELD_KEYS = new Set(['actual_cost', 'actual_start_at', 'actual_end_at', 'actual_leads', 'actual_customers', 'result_summary']);
+const STATUS_TONES: Record<string, string> = {
+  default: '#64748b', blue: '#2563eb', cyan: '#0891b2', orange: '#ea580c', red: '#dc2626', green: '#16a34a',
+};
 
 const sideTabs: Array<{ key: ToolModalSideTab; label: string; icon: React.ReactNode }> = [
   { key: 'files', label: 'فایل‌ها', icon: <FileOutlined /> },
@@ -108,6 +117,9 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
   const [mainTab, setMainTab] = useState<ToolModalMainTab>('details');
   const [reportOpen, setReportOpen] = useState(false);
   const [statusSaving, setStatusSaving] = useState<CampaignToolStatus | null>(null);
+  const [testRecipient, setTestRecipient] = useState('');
+  const [testSending, setTestSending] = useState(false);
+  const { message } = App.useApp();
   const moduleConfig = MODULES[ADVERTISING_CAMPAIGN_TOOLS_MODULE_ID];
   const detailsReadonly = accessMode !== 'full' || !onToolPatch;
   const resultsReadonly = !onToolPatch;
@@ -118,6 +130,7 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
     setSideTab('files');
     setMainTab('details');
     setReportOpen(false);
+    setTestRecipient('');
   }, [open, tool?.id]);
 
   const dispatchAiContext = React.useCallback(() => {
@@ -167,6 +180,33 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
     ? new Set<CampaignToolStatus>(['running', 'paused', 'completed'])
     : null;
   const automated = isAutomatedCampaignTool(tool);
+  const statusIcon = (value: CampaignToolStatus) => value === 'completed' ? <CheckCircleOutlined /> : value === 'running' ? <PlayCircleOutlined /> : value === 'paused' || value === 'failed' ? <PauseCircleOutlined /> : <ClockCircleOutlined />;
+  const sendTest = async () => {
+    const recipient = testRecipient.trim();
+    if (!recipient) { message.warning('گیرنده آزمایشی را وارد کنید.'); return; }
+    setTestSending(true);
+    try {
+      const config = (tool.config || {}) as any;
+      const result = await supabase.rpc('create_advertising_campaign_test_dispatch', {
+        p_tool_id: tool.id,
+        p_recipient: recipient,
+        p_message_snapshot: {
+          message: config.message_template || config.html_body || '',
+          text: config.message_template || config.plain_text_body || config.html_body || '',
+          subject: config.subject || '',
+          sender_number: config.sender_number || null,
+          connection_id: config.connection_id || null,
+          channel: config.channel || null,
+          attachments: config.attachments || [],
+          is_test: true,
+        },
+        p_idempotency_key: `${tool.id}:test:${Date.now()}`,
+      });
+      if (result.error) throw result.error;
+      message.success('ارسال آزمایشی در صف اجرا قرار گرفت.');
+    } catch (cause: any) { message.error(String(cause?.message || 'ارسال آزمایشی ناموفق بود.')); }
+    finally { setTestSending(false); }
+  };
 
   const renderCentralFields = (fields: ModuleField[], fieldReadonly: boolean) => (
     fields.length > 0 ? (
@@ -270,32 +310,40 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
           <div className="flex min-w-0 flex-wrap gap-2">
             {CAMPAIGN_TOOL_STATUS_OPTIONS.map((option) => {
               const active = option.value === tool.status;
+              const tone = STATUS_TONES[option.color] || STATUS_TONES.default;
               const disabled = !onStatusChange || (!active && allowedStatusValues !== null && !allowedStatusValues.has(option.value));
               return (
-                <Button
-                  key={option.value}
-                  size="small"
-                  type={active ? 'primary' : 'default'}
-                  loading={statusSaving === option.value}
-                  disabled={disabled || (Boolean(statusSaving) && statusSaving !== option.value)}
-                  onClick={() => void changeStatus(option.value)}
-                >
-                  {option.label}
-                </Button>
+                <React.Fragment key={option.value}>
+                  <Button
+                    size="small"
+                    type={active ? 'primary' : 'default'}
+                    icon={statusIcon(option.value)}
+                    className="!rounded-full"
+                    style={active
+                      ? { backgroundColor: tone, borderColor: tone, color: '#fff' }
+                      : { borderColor: `${tone}66`, color: tone }}
+                    loading={statusSaving === option.value}
+                    disabled={disabled || (Boolean(statusSaving) && statusSaving !== option.value)}
+                    onClick={() => void changeStatus(option.value)}
+                  >
+                    {option.label}
+                  </Button>
+                  {option.value === 'scheduled' && automated && onToolAction ? (
+                    <Button
+                      size="small"
+                      type="primary"
+                      icon={<SendOutlined />}
+                      className="!rounded-full"
+                      loading={actionLoading === 'send_now'}
+                      disabled={Boolean(actionLoading) || tool.status !== 'ready'}
+                      onClick={() => void onToolAction('send_now', tool)}
+                    >
+                      ارسال اکنون
+                    </Button>
+                  ) : null}
+                </React.Fragment>
               );
             })}
-            {automated && onToolAction ? (
-              <Button
-                size="small"
-                type="primary"
-                icon={<SendOutlined />}
-                loading={actionLoading === 'send_now'}
-                disabled={Boolean(actionLoading) || tool.status !== 'ready'}
-                onClick={() => void onToolAction('send_now', tool)}
-              >
-                ارسال اکنون
-              </Button>
-            ) : null}
           </div>
           <div className="flex max-w-full gap-2 overflow-x-auto">
             {onCreateRelated ? (
@@ -339,6 +387,7 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
                 { key: 'details' as const, label: 'مشخصات ابزار', icon: <FileOutlined /> },
                 { key: 'process' as const, label: 'فرآیندها', icon: <NodeIndexOutlined /> },
                 { key: 'results' as const, label: 'نتیجه اجرا', icon: <HistoryOutlined /> },
+                ...(automated ? [{ key: 'delivery' as const, label: 'گزارش ارسال', icon: <SendOutlined /> }] : []),
               ]).map((tab) => (
                 <Button key={tab.key} type={mainTab === tab.key ? 'primary' : 'text'} icon={tab.icon} onClick={() => setMainTab(tab.key)}>
                   {tab.label}
@@ -392,6 +441,18 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
                     <Descriptions.Item label="پایان واقعی">{safeJalaliFormat(tool.actual_end_at, 'YYYY/MM/DD HH:mm') || '-'}</Descriptions.Item>
                   </Descriptions>
                 ) : null}
+              </div>
+            ) : null}
+            {mainTab === 'delivery' && automated ? (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-gray-100 p-3 dark:border-white/10">
+                  <div className="mb-2 text-xs font-bold">ارسال آزمایشی</div>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input value={testRecipient} onChange={(event) => setTestRecipient(event.target.value)} placeholder={tool.tool_type === 'email' ? 'ایمیل گیرنده' : tool.tool_type.startsWith('bot_') ? 'شناسه کاربر یا چت' : 'شماره موبایل'} />
+                    <Button type="primary" icon={<SendOutlined />} loading={testSending} onClick={() => void sendTest()}>ارسال آزمایشی</Button>
+                  </div>
+                </div>
+                <CampaignDeliveryReportPanel toolId={tool.id} />
               </div>
             ) : null}
           </main>

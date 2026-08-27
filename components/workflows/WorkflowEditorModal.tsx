@@ -249,6 +249,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
   const intervalValue = Form.useWatch('interval_value', form);
   const intervalDayOfMonth = Form.useWatch('interval_day_of_month', form);
   const isActiveValue = Form.useWatch('is_active', form);
+  const workflowModuleId = Form.useWatch('module_id', form);
 
   const flowDocument = useMemo(
     () =>
@@ -261,9 +262,9 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
         is_active: isActiveValue !== false,
         conditionsAll,
         conditionsAny,
-        actions: attachWorkflowTemplateFieldCatalog(actions, values.module_id, conditionFields),
+        actions: attachWorkflowTemplateFieldCatalog(actions, workflowModuleId, conditionFields),
       }),
-    [triggerType, intervalValue, intervalUnit, intervalDayOfMonth, intervalDayCondition, isActiveValue, conditionsAll, conditionsAny, actions]
+    [triggerType, intervalValue, intervalUnit, intervalDayOfMonth, intervalDayCondition, isActiveValue, conditionsAll, conditionsAny, actions, workflowModuleId]
   );
 
   const handleViewModeChange = useCallback((nextMode: WorkflowEditorViewMode) => {

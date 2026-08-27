@@ -11,53 +11,14 @@ import { syncProcessTemplateStages as syncProcessTemplateStagesShared } from '..
 import type { ProcessRuntimeSnapshot } from '../../utils/processRuntimeSnapshot';
 import { persistProcessDraftField } from '../../utils/processDraftPersistence';
 import { fetchPayrollSlipServerSummary } from '../../utils/payrollSlipSummary';
+import TaskRelatedProcessBar, { resolveTaskRelatedProcessTarget } from '../tasks/TaskRelatedProcessBar';
 
 const ProductionStagesField = React.lazy(() => import('../../components/ProductionStagesField'));
 const ProcessCardsV2RuntimeBlock = React.lazy(() => import('../../components/processes/ProcessCardsV2RuntimeBlock'));
 
-const normalizeText = (value: unknown) => String(value || '').trim();
-
-const getTaskProcessRunId = (task: any) => {
-  const recurrence = task?.recurrence_info && typeof task.recurrence_info === 'object'
-    ? task.recurrence_info
-    : {};
-  return normalizeText(task?.process_run_id || recurrence?.process_run_id);
-};
-
 const TaskProcessRuntimeSection: React.FC<{ task: any }> = ({ task }) => {
-  const processRunId = getTaskProcessRunId(task);
-  const [run, setRun] = useState<any | null>(null);
-  const [loading, setLoading] = useState(Boolean(processRunId));
-  const [errorText, setErrorText] = useState('');
-
-  useEffect(() => {
-    let active = true;
-    if (!processRunId) {
-      setRun(null);
-      setLoading(false);
-      return () => { active = false; };
-    }
-    setLoading(true);
-    setErrorText('');
-    void (async () => {
-      const { data, error } = await (supabase.from('process_runs') as any)
-        .select('id,org_id,module_id,record_id,template_id,process_name,metadata,created_at,updated_at')
-        .eq('id', processRunId)
-        .maybeSingle();
-      if (!active) return;
-      if (error) {
-        setRun(null);
-        setErrorText('خواندن فرآیند مرتبط با این فعالیت ناموفق بود.');
-        return;
-      }
-      setRun(data || null);
-    })().finally(() => {
-      if (active) setLoading(false);
-    });
-    return () => { active = false; };
-  }, [processRunId]);
-
-  if (!processRunId) return null;
+  const target = resolveTaskRelatedProcessTarget(task, { preferProcessRun: true });
+  if (!target) return null;
 
   return (
     <section className="bg-white dark:bg-[#1e1e1e] p-4 md:p-6 rounded-3xl border border-gray-100 dark:border-gray-800 shadow-sm">
@@ -65,21 +26,7 @@ const TaskProcessRuntimeSection: React.FC<{ task: any }> = ({ task }) => {
         <span className="w-1 h-6 bg-leather-500 rounded-full inline-block" />
         <h3 className="m-0 text-sm md:text-lg font-bold text-gray-700 dark:text-gray-200">فرآیند مرتبط</h3>
       </div>
-      {loading ? <Skeleton active paragraph={{ rows: 3 }} /> : null}
-      {!loading && errorText ? <div className="text-sm text-red-600 dark:text-red-300">{errorText}</div> : null}
-      {!loading && !errorText && run ? (
-        <React.Suspense fallback={<Skeleton active paragraph={{ rows: 3 }} />}>
-          <ProcessCardsV2RuntimeBlock
-            moduleId="process_runs"
-            recordId={run.id}
-            recordData={run}
-            fieldKey="run_stages_preview"
-            draftStages={[]}
-            variant="full"
-          />
-        </React.Suspense>
-      ) : null}
-      {!loading && !errorText && !run ? <div className="text-sm text-gray-500">فرآیند مرتبط پیدا نشد.</div> : null}
+      <TaskRelatedProcessBar task={task} variant="full" />
     </section>
   );
 };

@@ -12,11 +12,10 @@ import { openTaskProcessModal } from '../../utils/taskProcessModalEvents';
 import ResilientImage from '../common/ResilientImage';
 import RecordLockControl from '../recordLocks/RecordLockControl';
 import { getRecordLockStateFromRecord, mergeRecordLockIntoRecord, type RecordLockState } from '../../utils/recordLockRuntime';
-import ProcessCardsV2RuntimeBlock from '../processes/ProcessCardsV2RuntimeBlock';
 import { supabase } from '../../supabaseClient';
 import { hasProcessTaskTitleTokens, resolveProcessTaskTitle } from '../../utils/processTaskTitle';
-import type { ProcessRuntimeSnapshot } from '../../utils/processRuntimeSnapshot';
 import AssigneeAvatarDisplay from '../common/AssigneeAvatarDisplay';
+import TaskRelatedProcessBar from './TaskRelatedProcessBar';
 
 const ProductionStagesField = React.lazy(() => import('../ProductionStagesField'));
 
@@ -38,14 +37,6 @@ interface TaskSummaryCardProps {
   canUnlockRecord?: boolean;
 }
 
-const processRecordKeyByModule: Record<string, string> = {
-  projects: 'project_id',
-  customers: 'related_customer',
-  invoices: 'related_invoice',
-  purchase_invoices: 'purchase_invoice_id',
-  marketing_leads: 'marketing_lead_id',
-};
-
 const resolveOptionLabel = (value: any, options?: Array<{ label: string; value: any }>) => {
   if (!options?.length) return null;
   const found = options.find((option) => String(option.value) === String(value));
@@ -59,18 +50,6 @@ const toNumber = (value: any) => {
 
 const isVideoUrl = (value: unknown) => /\.(mp4|webm|ogg|mov|m4v|avi|mkv)(\?|#|$)/i.test(String(value || '').trim());
 const isImageUrl = (value: unknown) => /\.(png|jpe?g|gif|webp|bmp|svg|avif|heic|heif)(\?|#|$)/i.test(String(value || '').trim());
-const parsePlainObject = (value: unknown): Record<string, any> => {
-  if (!value) return {};
-  if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
-  if (typeof value !== 'string') return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-};
-
 const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
   task,
   statusOptions,
@@ -133,55 +112,6 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
     && effectiveTask?.related_production_order
     && effectiveTask?.production_line_id
   );
-
-  const relatedProcessRecordKey = processRecordKeyByModule[relatedModuleId];
-  const relatedProcessRecordId = relatedProcessRecordKey ? effectiveTask?.[relatedProcessRecordKey] : null;
-  const isExecutionProcessTask = (
-    !isProductionTask
-    && !!relatedProcessRecordId
-    && Object.prototype.hasOwnProperty.call(processRecordKeyByModule, relatedModuleId)
-  );
-  const relatedProcessRuntimeSnapshot = React.useMemo<ProcessRuntimeSnapshot | null>(() => {
-    if (!isExecutionProcessTask || !relatedModuleId || !relatedProcessRecordId) return null;
-    const recurrence = parsePlainObject(effectiveTask?.recurrence_info);
-    const metadata = parsePlainObject(effectiveTask?.metadata);
-    const processNodeKey = String(
-      effectiveTask?.process_node_key
-      || recurrence.process_node_key
-      || metadata.process_node_key
-      || effectiveTask?.process_run_stage_id
-      || effectiveTask?.id
-      || ''
-    ).trim();
-    const processLaneKey = String(
-      effectiveTask?.process_lane_key
-      || recurrence.process_lane_key
-      || metadata.process_lane_key
-      || 'lane_1'
-    ).trim();
-    const snapshotTask = {
-      ...effectiveTask,
-      source_module_id: effectiveTask?.source_module_id || relatedModuleId,
-      source_record_id: effectiveTask?.source_record_id || String(relatedProcessRecordId),
-      process_node_key: processNodeKey || undefined,
-      process_lane_key: processLaneKey || 'lane_1',
-      recurrence_info: {
-        ...recurrence,
-        ...(processNodeKey ? { process_node_key: processNodeKey } : {}),
-        process_lane_key: processLaneKey || recurrence.process_lane_key || 'lane_1',
-      },
-      metadata,
-    };
-    return {
-      moduleId: relatedModuleId,
-      recordId: String(relatedProcessRecordId),
-      loaded: true,
-      runs: [],
-      stages: [],
-      tasks: [snapshotTask],
-      hasStartedExecution: true,
-    };
-  }, [effectiveTask, isExecutionProcessTask, relatedModuleId, relatedProcessRecordId]);
 
   const canEditProducedQty = !isLocked && !['todo', 'pending'].includes(String(effectiveTask?.status || '').toLowerCase());
   const taskMainFileUrl = String(effectiveTask?.image_url || '').trim();
@@ -362,19 +292,12 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
           </div>
         ) : null}
 
-        {isExecutionProcessTask ? (
-          <div className="mt-3">
-            <ProcessCardsV2RuntimeBlock
-              recordId={String(relatedProcessRecordId)}
-              moduleId={relatedModuleId}
-              variant="compact"
-              enabled
-              runtimeSnapshot={relatedProcessRuntimeSnapshot}
-              snapshotOnly
-              highlightedTaskId={String(effectiveTask?.id || '')}
-              highlightedRunStageId={String(effectiveTask?.process_run_stage_id || '')}
-            />
-          </div>
+        {!isProductionTask ? (
+          <TaskRelatedProcessBar
+            task={effectiveTask}
+            variant="compact"
+            className="mt-3"
+          />
         ) : null}
       </div>
     </div>

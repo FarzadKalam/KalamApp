@@ -44,7 +44,7 @@ import {
   resolveWorkflowDateCriterion,
 } from './_runtime-deps/workflowMutationContract.ts';
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-08-17-related-record-repair';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-08-27-persian-variable-resolution';
 const MAX_WORKFLOWS = 30;
 const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
@@ -952,7 +952,8 @@ async function formatFieldValue(
   const configuredFields = runtimeCustomField || templateFieldSnapshot
     ? null
     : await getOrgModuleFieldConfigs(url, key, orgId, fieldContext.moduleId);
-  const fieldType = String(runtimeCustomField?.type || templateFieldSnapshot?.type || configuredFields?.get(fieldContext.fieldKey)?.type || '')
+  const fieldDefinition = runtimeCustomField || templateFieldSnapshot || configuredFields?.get(fieldContext.fieldKey) || null;
+  const fieldType = String(fieldDefinition?.type || '')
     .trim()
     .toLowerCase();
   if (fieldType === 'long_text' || fieldType === 'superlongtext') {
@@ -987,6 +988,12 @@ async function formatFieldValue(
     templateFieldSnapshot,
   );
   if (optionLabel.label) return optionLabel.label;
+  const relationConfig = fieldDefinition?.relationConfig || fieldDefinition?.multiRelationConfig;
+  const relationTargetModule = String(relationConfig?.targetModule || '').trim();
+  if (relationTargetModule && UUID_LIKE_REGEX.test(str)) {
+    const relatedRecord = await fetchRelatedRecord(url, key, relationTargetModule, str, orgId).catch(() => null);
+    if (relatedRecord) return getServerRecordTitle(relatedRecord);
+  }
   const staticLabel = getWorkflowStaticValueLabel(fieldContext.fieldKey, value, fieldContext.moduleId);
   if (staticLabel) return staticLabel;
   // اگر مقدار قدیمی با گزینه‌های فعلی منطبق نبود، آن را پنهان نکن؛ برچسب گزینه

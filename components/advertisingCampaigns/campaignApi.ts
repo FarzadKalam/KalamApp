@@ -124,11 +124,13 @@ const loadFullWorkspace = async (campaignId: string): Promise<CampaignWorkspace>
   ]);
   throwIfError(toolsResult);
   throwIfError(audienceResult);
+  const campaignRow = campaignResult.data as Record<string, any>;
+  const recordTags = tagsMap as Record<string, any[]>;
   const campaign = normalizeCampaign({
-    ...campaignResult.data,
+    ...campaignRow,
     loyalty_rule_ids: loyaltyRuleIds,
     discount_code_ids: discountCodeIds,
-    tags: (tagsMap[campaignId] || []).map((tag: any) => String(tag?.id || '')).filter(Boolean),
+    tags: (recordTags[campaignId] || []).map((tag: any) => String(tag?.id || '')).filter(Boolean),
   });
   return {
     campaign,
@@ -219,7 +221,8 @@ export const updateAdvertisingCampaign = async (campaign: CampaignRecord): Promi
     updated_at: new Date().toISOString(),
   }).eq('id', campaign.id).select(CAMPAIGN_COLUMNS).single();
   throwIfError(result);
-  return normalizeCampaign({ ...campaign, ...result.data });
+  if (!result.data) throw new Error('ذخیره کمپین انجام شد، اما دریافت اطلاعات به‌روز کامل نشد.');
+  return normalizeCampaign({ ...campaign, ...(result.data as Record<string, any>) });
 };
 
 const replaceJoinRows = async (
@@ -402,6 +405,7 @@ export const createQuickLoyaltyRule = async (name: string): Promise<CampaignRela
     reward_percent: 0, conditions_all: [], conditions_any: [], config: {}, is_active: true,
   }]).select('id,name').single();
   throwIfError(result);
+  if (!result.data) throw new Error('طرح وفاداری ساخته شد، اما دریافت اطلاعات آن کامل نشد.');
   return { value: String(result.data.id), label: String(result.data.name) };
 };
 
@@ -412,6 +416,7 @@ export const createQuickDiscountCode = async (input: { code: string; title: stri
     conditions_all: [], conditions_any: [], metadata: { code_scope: 'public' }, is_active: true,
   }]).select('id,code,title').single();
   throwIfError(result);
+  if (!result.data) throw new Error('کد تخفیف ساخته شد، اما دریافت اطلاعات آن کامل نشد.');
   return { value: String(result.data.id), label: `${String(result.data.title)} (${String(result.data.code)})` };
 };
 

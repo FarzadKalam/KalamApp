@@ -4,7 +4,7 @@ import { Button, App, Checkbox, Modal, Progress, Select, Form, Input, Skeleton }
 import { EditOutlined, CheckOutlined, CloseOutlined, CopyOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
-import { FieldType, BlockType, FieldLocation, FieldNature } from '../types';
+import { FieldType, BlockType, FieldLocation, FieldNature, type ModuleDefinition } from '../types';
 import RelatedSidebar from '../components/Sidebar/RelatedSidebar';
 import SmartFieldRenderer from '../components/SmartFieldRenderer';
 import DateObject from 'react-date-object';
@@ -504,8 +504,9 @@ const ModuleShow: React.FC = () => {
     () => JSON.stringify(data?.template_schema_snapshot ?? null),
     [data?.template_schema_snapshot],
   );
-  const moduleConfig = useMemo(() => {
-    let nextConfig = planBaseModuleConfig;
+  const moduleConfig = useMemo<ModuleDefinition | null>(() => {
+    if (!planBaseModuleConfig) return null;
+    let nextConfig: ModuleDefinition = planBaseModuleConfig;
     if (moduleId === 'tasks') {
       const existingFieldKeys = new Set((nextConfig?.fields || []).map((field: any) => String(field?.key || '').trim()));
       const extraFields = taskProcessCustomFields.filter((field: any) => !existingFieldKeys.has(String(field?.key || '').trim()));
@@ -747,6 +748,7 @@ const ModuleShow: React.FC = () => {
   const [quickProjectLinkedRecords, setQuickProjectLinkedRecords] = useState<Record<string, string | null>>({});
   const [quickProjectRelationOptions, setQuickProjectRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [quickProjectRelationLoading, setQuickProjectRelationLoading] = useState<Record<string, boolean>>({});
+  const [quickProjectInitialValues, setQuickProjectInitialValues] = useState<Record<string, any>>({});
   const quickProjectSubmitLockRef = useRef(false);
   const [quickProjectForm] = Form.useForm();
   const quickProjectName = Form.useWatch('name', quickProjectForm);
@@ -2567,7 +2569,7 @@ const ModuleShow: React.FC = () => {
 
   useEffect(() => {
     if (!moduleConfig) return;
-    const recordName = getRecordTitle(data, moduleConfig, { fallback: '' });
+    const recordName = getRecordTitle(data, moduleConfig || undefined, { fallback: '' });
     window.dispatchEvent(new CustomEvent('erp:breadcrumb', {
       detail: {
         moduleTitle: moduleConfig.titles?.fa || moduleId,
@@ -2583,7 +2585,7 @@ const ModuleShow: React.FC = () => {
   useEffect(() => {
     if (!moduleConfig) return;
     const moduleTitle = moduleConfig.titles?.fa || moduleId;
-    const recordName = getRecordTitle(data, moduleConfig, { fallback: '' });
+    const recordName = getRecordTitle(data, moduleConfig || undefined, { fallback: '' });
     const brandTitle = document.documentElement.getAttribute('data-brand-title') || 'هلدینگ رسانه ای کلام تازه.';
     document.title = recordName ? `${recordName} | ${moduleTitle} | ${brandTitle}` : `${moduleTitle} | ${brandTitle}`;
   }, [moduleConfig, moduleId, data]);
@@ -2669,7 +2671,7 @@ const ModuleShow: React.FC = () => {
           oldValue: oldLabel,
           newValue: newLabel,
           userId: authUser?.id || null,
-          recordTitle: getRecordTitle(data, moduleConfig) || null,
+          recordTitle: getRecordTitle(data, moduleConfig || undefined) || null,
         });
 
         msg.success(`${assigneeLabel} رکورد تغییر کرد`);
@@ -3291,12 +3293,17 @@ const ModuleShow: React.FC = () => {
     }
   }, [quickProjectCustomerField, quickProjectModalFields]);
 
-  const handleOpenQuickProjectModal = useCallback(async () => {
-    const baseTitle = String(getRecordTitle(data, moduleConfig, { fallback: '' }) || data?.name || data?.title || data?.system_code || 'جدید').trim();
+  const handleOpenQuickProjectModal = useCallback(async (prefill?: {
+    contentCalendarId?: string | null;
+    customerId?: string | null;
+    sourceInvoiceId?: string | null;
+    dateKey?: string | null;
+  }) => {
+    const baseTitle = String(getRecordTitle(data, moduleConfig || undefined, { fallback: '' }) || data?.name || data?.title || data?.system_code || 'جدید').trim();
     const suggestedName = `پروژه "${baseTitle || 'جدید'}"`;
-    const suggestedCustomerId = moduleId === 'invoices'
+    const suggestedCustomerId = prefill?.customerId || (moduleId === 'invoices'
       ? (data?.customer_id || null)
-      : (moduleId === 'tasks' ? (data?.related_customer || null) : null);
+      : (moduleId === 'tasks' ? (data?.related_customer || null) : null));
     const { templateOptions } = await loadQuickProjectModalOptions({
       customerId: suggestedCustomerId,
       templateId: data?.process_template_id || null,
@@ -3316,6 +3323,12 @@ const ModuleShow: React.FC = () => {
     setQuickProjectRelationOptions({});
     setQuickProjectRelationLoading({});
     setQuickProjectDynamicOptions({});
+    setQuickProjectInitialValues({
+      content_calendar_id: prefill?.contentCalendarId || null,
+      source_invoice_id: prefill?.sourceInvoiceId || null,
+      start_date: prefill?.dateKey || null,
+      due_date: prefill?.dateKey || null,
+    });
     setIsQuickProjectModalOpen(true);
   }, [data, loadQuickProjectModalOptions, moduleConfig, moduleId, quickProjectForm]);
 
@@ -3435,13 +3448,14 @@ const ModuleShow: React.FC = () => {
       const authUser = await getCachedAuthUser(supabase);
       const userId = authUser?.id || null;
       const payload: Record<string, any> = {
+        ...quickProjectInitialValues,
         name: String(values?.name || '').trim(),
         status: 'draft',
         customer_id: values?.customer_id || quickProjectLinkedRecords.customers || null,
         project_alignment: Array.isArray(values?.project_alignment) ? values.project_alignment : [],
         process_template_id: selectedTemplateId,
         execution_process_draft: executionDraft,
-        source_invoice_id: moduleId === 'invoices' ? id : (quickProjectLinkedRecords.invoices || null),
+        source_invoice_id: moduleId === 'invoices' ? id : (quickProjectLinkedRecords.invoices || quickProjectInitialValues.source_invoice_id || null),
         source_purchase_invoice_id: moduleId === 'purchase_invoices' ? id : (quickProjectLinkedRecords.purchase_invoices || null),
         created_by: userId,
       };
@@ -3515,6 +3529,7 @@ const ModuleShow: React.FC = () => {
       }
 
       setIsQuickProjectModalOpen(false);
+      setQuickProjectInitialValues({});
       quickProjectForm.resetFields();
       msg.success('پروژه ایجاد شد');
       navigate(`/projects/${projectId}`);
@@ -3524,7 +3539,7 @@ const ModuleShow: React.FC = () => {
       quickProjectSubmitLockRef.current = false;
       setQuickProjectLoading(false);
     }
-  }, [id, moduleId, msg, navigate, quickProjectLinkedRecords, quickProjectTargetModuleIds, quickProjectForm, quickProjectTemplateOptions]);
+  }, [id, moduleId, msg, navigate, quickProjectInitialValues, quickProjectLinkedRecords, quickProjectTargetModuleIds, quickProjectForm, quickProjectTemplateOptions]);
 
 
 
@@ -3787,7 +3802,7 @@ const ModuleShow: React.FC = () => {
           await createFileManagerOriginForUpload({
             moduleId,
             recordId: id,
-            recordTitle: getRecordTitle(data || { id }, moduleConfig, { fallback: String(id) }),
+            recordTitle: getRecordTitle(data || { id }, moduleConfig || undefined, { fallback: String(id) }),
             fileUrl: urlData.publicUrl,
             fileName: file.name || null,
             mimeType: file.type || null,
@@ -3860,7 +3875,7 @@ const ModuleShow: React.FC = () => {
   }, []);
 
   const buildDirectPrintDisplayName = useCallback((templateTitleValue?: string | null) => {
-    const recordTitle = String(getRecordTitle(data || { id }, moduleConfig, { fallback: '' }) || '').trim();
+    const recordTitle = String(getRecordTitle(data || { id }, moduleConfig || undefined, { fallback: '' }) || '').trim();
     const templateTitle = String(templateTitleValue || '').trim();
     const baseName = [recordTitle, templateTitle]
       .filter(Boolean)
@@ -4055,7 +4070,7 @@ const ModuleShow: React.FC = () => {
           async () => await createFileManagerOriginForUpload({
             moduleId,
             recordId: id,
-            recordTitle: getRecordTitle(data || { id }, moduleConfig, { fallback: String(id) }),
+            recordTitle: getRecordTitle(data || { id }, moduleConfig || undefined, { fallback: String(id) }),
             fileUrl: uploaded.url,
             fileName: uploaded.name,
             mimeType: 'application/pdf',
@@ -4374,7 +4389,7 @@ const ModuleShow: React.FC = () => {
         if (!moduleId || !id) return;
         const authUser = await getCachedAuthUser(supabase);
         const userId = authUser?.id || null;
-        const recordTitle = getRecordTitle(data, moduleConfig) || null;
+        const recordTitle = getRecordTitle(data, moduleConfig || undefined) || null;
 
         if (payload.touchRecord) {
           await logAndTouchRecord({
@@ -6407,7 +6422,7 @@ const ModuleShow: React.FC = () => {
     });
   }
 
-  const resolvedRecordTitle = getRecordTitle(data, moduleConfig, { fallback: '' });
+  const resolvedRecordTitle = getRecordTitle(data, moduleConfig || undefined, { fallback: '' });
   const primaryTitleField = (moduleConfig?.fields || []).find((field: any) => field?.isKey);
   const hasDerivedFullNameTitle = primaryTitleField?.key === 'full_name' && primaryTitleField?.readonly === true;
   const recordTitleField = hasDerivedFullNameTitle
@@ -6517,7 +6532,11 @@ const ModuleShow: React.FC = () => {
       />
 
       {moduleId === 'content_calendars' && data ? (
-        <ContentCalendarRuntime calendar={{ ...displayData, id }} canEdit={canEditModule} />
+        <ContentCalendarRuntime
+          calendar={{ ...displayData, id }}
+          canEdit={canEditModule}
+          onOpenTemplateProject={(prefill) => handleOpenQuickProjectModal(prefill)}
+        />
       ) : null}
 
       <FieldGroupsTabs
@@ -6658,6 +6677,7 @@ const ModuleShow: React.FC = () => {
           setQuickProjectRelationOptions({});
           setQuickProjectRelationLoading({});
           setQuickProjectDynamicOptions({});
+          setQuickProjectInitialValues({});
           quickProjectSubmitLockRef.current = false;
           quickProjectForm.resetFields();
         }}
@@ -6754,6 +6774,7 @@ const ModuleShow: React.FC = () => {
               setQuickProjectLinkedRecords({});
               setQuickProjectRelationOptions({});
               setQuickProjectRelationLoading({});
+              setQuickProjectInitialValues({});
               quickProjectSubmitLockRef.current = false;
               quickProjectForm.resetFields();
             }}>

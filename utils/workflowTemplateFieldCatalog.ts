@@ -4,8 +4,11 @@ import type { WorkflowAction } from './workflowTypes';
 
 export type WorkflowTemplateFieldSnapshot = {
   type?: string;
+  label?: string;
   options?: Array<{ label: string; value: string }>;
   dynamicOptionsCategory?: string;
+  relationConfig?: Record<string, unknown>;
+  multiRelationConfig?: Record<string, unknown>;
   moduleId?: string;
   fieldKey?: string;
 };
@@ -39,8 +42,11 @@ const toSnapshot = (field: ModuleField, defaultModuleId: string): WorkflowTempla
     : undefined;
   return {
     type: field.type,
+    label: String(field.labels?.fa || field.labels?.en || field.key || '').trim(),
     ...(options?.length ? { options } : {}),
     ...(field.dynamicOptionsCategory ? { dynamicOptionsCategory: field.dynamicOptionsCategory } : {}),
+    ...((field as any).relationConfig ? { relationConfig: (field as any).relationConfig } : {}),
+    ...((field as any).multiRelationConfig ? { multiRelationConfig: (field as any).multiRelationConfig } : {}),
     moduleId: source.workflowOptionScopeModuleId || defaultModuleId,
     fieldKey: field.key,
   };

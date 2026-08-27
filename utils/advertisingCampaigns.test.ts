@@ -13,7 +13,7 @@ describe('advertising campaign central contracts', () => {
     const codes = CAMPAIGN_TOOL_DEFINITIONS.map((item) => item.value);
     expect(new Set(codes).size).toBe(codes.length);
     expect(getCampaignToolDefinition('sms')?.planFeature).toBe(CAMPAIGN_PLAN_FEATURES.sms);
-    expect(getCampaignToolDefinition('voice_call')?.releaseAvailable).toBe(false);
+    expect(getCampaignToolDefinition('voice_call')?.releaseAvailable).toBeUndefined();
     expect(getCampaignToolDefinition('outdoor')?.planFeature).toBeUndefined();
   });
 

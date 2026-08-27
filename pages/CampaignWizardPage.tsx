@@ -282,7 +282,7 @@ const CampaignWizardPage: React.FC = () => {
       ) : activeTab === 'settings' ? (
         <CampaignSettingsTab campaignId={wizard.draft.campaign.id} tools={wizard.selectedTools} onToolChange={wizard.updateTool} disabled={readOnly} />
       ) : activeTab === 'conditions' ? (
-        <CampaignConditionsTab campaignName={wizard.draft.campaign.name} tools={wizard.selectedTools} rules={wizard.draft.audienceRules} onRuleChange={wizard.updateAudienceRule} disabled={readOnly} />
+        <CampaignConditionsTab campaignId={wizard.draft.campaign.id} campaignName={wizard.draft.campaign.name} tools={wizard.selectedTools} rules={wizard.draft.audienceRules} onRuleChange={wizard.updateAudienceRule} onToolChange={wizard.updateTool} disabled={readOnly} />
       ) : (
         <CampaignDashboard
           campaign={{ ...wizard.draft.campaign, access_mode: wizard.accessMode }}

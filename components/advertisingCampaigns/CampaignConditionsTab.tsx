@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Card, Collapse, Empty, Spin, Typography } from 'antd';
+import { Alert, Card, Collapse, Empty, Typography } from 'antd';
 import WorkflowConditionsGroup from '../workflows/WorkflowConditionsGroup';
 import { getWorkflowConditionFields } from '../../utils/workflowHelpers';
 import { loadWorkflowConditionEditorOptions } from '../../utils/workflowConditionOptions';
@@ -8,6 +8,7 @@ import { CAMPAIGN_TARGET_MODULES, getCampaignToolLabel } from './constants';
 import type { CampaignAudienceRule, CampaignTargetModule, CampaignToolRecord } from './types';
 import CampaignField from './CampaignField';
 import { FieldType } from '../../types';
+import CampaignAudiencePreview from './CampaignAudiencePreview';
 
 type OptionState = {
   dynamicOptions: Record<string, Array<{ label: string; value: string }>>;
@@ -16,18 +17,19 @@ type OptionState = {
 
 type Props = {
   campaignName: string;
+  campaignId: string;
   tools: CampaignToolRecord[];
   rules: CampaignAudienceRule[];
   onRuleChange: (targetModule: CampaignTargetModule, patch: Partial<CampaignAudienceRule>) => void;
   disabled?: boolean;
+  onToolChange: (toolId: string, patch: Partial<CampaignToolRecord>) => void;
 };
 
 const EMPTY_OPTIONS: OptionState = { dynamicOptions: {}, relationOptions: {} };
 
-const CampaignConditionsTab: React.FC<Props> = ({ campaignName, tools, rules, onRuleChange, disabled }) => {
+const CampaignConditionsTab: React.FC<Props> = ({ campaignId, campaignName, tools, rules, onRuleChange, onToolChange, disabled }) => {
   const [activeKeys, setActiveKeys] = useState<string[]>(['marketing_leads']);
   const [optionsByModule, setOptionsByModule] = useState<Partial<Record<CampaignTargetModule, OptionState>>>({});
-  const [loadingModules, setLoadingModules] = useState<string[]>([]);
   const applicableTools = useMemo(() => tools.filter((tool) => {
     const sources = (tool.config as any)?.audience_sources;
     return Array.isArray(sources) && sources.includes('internal');
@@ -36,10 +38,9 @@ const CampaignConditionsTab: React.FC<Props> = ({ campaignName, tools, rules, on
   useEffect(() => {
     const targets = activeKeys
       .map((key) => key as CampaignTargetModule)
-      .filter((target) => !optionsByModule[target] && !loadingModules.includes(target));
+      .filter((target) => !optionsByModule[target]);
     if (targets.length === 0) return;
     let active = true;
-    setLoadingModules((current) => Array.from(new Set([...current, ...targets])));
     void Promise.all(targets.map(async (target) => {
       try {
         const options = await loadWorkflowConditionEditorOptions(target, getWorkflowConditionFields(target));
@@ -50,9 +51,9 @@ const CampaignConditionsTab: React.FC<Props> = ({ campaignName, tools, rules, on
     })).then((entries) => {
       if (!active) return;
       setOptionsByModule((current) => ({ ...current, ...Object.fromEntries(entries) }));
-    }).finally(() => { if (active) setLoadingModules((current) => current.filter((target) => !targets.includes(target as CampaignTargetModule))); });
+    });
     return () => { active = false; };
-  }, [activeKeys, loadingModules, optionsByModule]);
+  }, [activeKeys, optionsByModule]);
 
   if (applicableTools.length === 0) {
     return <Empty description="هیچ ابزار انتخاب‌شده‌ای مخاطب داخل نرم‌افزار ندارد؛ در تنظیمات پیامک، ایمیل یا پی‌وی بات گزینه «از داخل نرم‌افزار» را فعال کنید." />;
@@ -91,7 +92,6 @@ const CampaignConditionsTab: React.FC<Props> = ({ campaignName, tools, rules, on
               </div>
             ),
             children: activeKeys.includes(targetModule) ? (
-              loadingModules.includes(targetModule) && !optionsByModule[targetModule] ? <div className="p-8 text-center"><Spin /></div> : (
                 <div className="space-y-5">
                   <Card size="small" title="همه شرط‌های زیر باید برقرار باشند" className="!rounded-xl">
                     <WorkflowConditionsGroup
@@ -119,11 +119,11 @@ const CampaignConditionsTab: React.FC<Props> = ({ campaignName, tools, rules, on
                     />
                   </Card>
                 </div>
-              )
             ) : null,
           };
         })}
       />
+      <CampaignAudiencePreview campaignId={campaignId} tools={applicableTools} disabled={disabled} onToolChange={onToolChange} />
     </div>
   );
 };
