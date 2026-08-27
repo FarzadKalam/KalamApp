@@ -3415,55 +3415,56 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
               </div>
             </div>
 
-            {!isDraftActivityCreationMode && taskRecordId ? (
-              <TaskRelatedProcessBar
-                task={{ ...source, id: taskRecordId, task_id: taskRecordId }}
-                variant="full"
-                className="border-t border-[rgba(var(--brand-200-rgb),0.45)] pt-1 dark:border-[rgba(var(--brand-300-rgb),0.18)]"
-              />
-            ) : null}
-
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[rgba(var(--brand-200-rgb),0.45)] pt-2 dark:border-[rgba(var(--brand-300-rgb),0.18)]">
-              <span />
-              <div className="flex items-center justify-end gap-1">
-                {!isDraftActivityCreationMode && taskRecordId ? (
-                  <>
-                    <Tooltip title="قطع اتصال از این فرآیند و رکورد">
-                      <Button
-                        size="small"
-                        type="text"
-                        icon={<LinkOutlined />}
-                        loading={taskActionBusy === 'unlink'}
-                        disabled={taskActionBusy !== null}
-                        onClick={confirmUnlinkTaskFromProcess}
-                        className="text-gray-500 hover:!text-amber-600"
-                      />
-                    </Tooltip>
-                    <Tooltip title="حذف کامل وظیفه">
-                      <Button
-                        size="small"
-                        type="text"
-                        danger
-                        icon={<DeleteOutlined />}
-                        loading={taskActionBusy === 'delete'}
-                        disabled={taskActionBusy !== null}
-                        onClick={confirmDeleteTaskCompletely}
-                      />
-                    </Tooltip>
-                    {isInsideRouter ? (
-                      <Link
-                        to={`/tasks/${taskRecordId}`}
-                        onClick={onClose}
-                        className="inline-flex items-center gap-1 px-2 text-xs text-[rgba(var(--brand-700-rgb),1)] hover:text-[rgba(var(--brand-600-rgb),1)] hover:underline"
-                      >
-                        جزئیات کامل
-                      </Link>
-                    ) : null}
-                  </>
-                ) : null}
-              </div>
-            </div>
           </main>
+        </div>
+
+        {!isDraftActivityCreationMode && taskRecordId ? (
+          <TaskRelatedProcessBar
+            task={{ ...source, id: taskRecordId, task_id: taskRecordId }}
+            variant="full"
+            className="mt-3 w-full min-w-0 overflow-x-hidden border-t border-[rgba(var(--brand-200-rgb),0.45)] pt-1 dark:border-[rgba(var(--brand-300-rgb),0.18)]"
+          />
+        ) : null}
+
+        <div className="flex w-full flex-wrap items-center justify-between gap-2 border-t border-[rgba(var(--brand-200-rgb),0.45)] pt-2 dark:border-[rgba(var(--brand-300-rgb),0.18)]" dir="rtl">
+          <span />
+          <div className="flex items-center justify-end gap-1">
+            {!isDraftActivityCreationMode && taskRecordId ? (
+              <>
+                <Tooltip title="قطع اتصال از این فرآیند و رکورد">
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<LinkOutlined />}
+                    loading={taskActionBusy === 'unlink'}
+                    disabled={taskActionBusy !== null}
+                    onClick={confirmUnlinkTaskFromProcess}
+                    className="text-gray-500 hover:!text-amber-600"
+                  />
+                </Tooltip>
+                <Tooltip title="حذف کامل وظیفه">
+                  <Button
+                    size="small"
+                    type="text"
+                    danger
+                    icon={<DeleteOutlined />}
+                    loading={taskActionBusy === 'delete'}
+                    disabled={taskActionBusy !== null}
+                    onClick={confirmDeleteTaskCompletely}
+                  />
+                </Tooltip>
+                {isInsideRouter ? (
+                  <Link
+                    to={`/tasks/${taskRecordId}`}
+                    onClick={onClose}
+                    className="inline-flex items-center gap-1 px-2 text-xs text-[rgba(var(--brand-700-rgb),1)] hover:text-[rgba(var(--brand-600-rgb),1)] hover:underline"
+                  >
+                    جزئیات کامل
+                  </Link>
+                ) : null}
+              </>
+            ) : null}
+          </div>
         </div>
         {isDraftActivityCreationMode ? (
           <div className="sticky bottom-0 z-20 -mx-3 mt-3 border-t border-gray-200 bg-white/95 px-3 py-2 backdrop-blur dark:border-gray-700 dark:bg-[#141416]/95 lg:hidden">
