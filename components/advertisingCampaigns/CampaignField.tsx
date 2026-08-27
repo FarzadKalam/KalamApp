@@ -19,6 +19,26 @@ type CampaignFieldProps = {
   dynamicOptionsCategory?: string;
 };
 
+type CampaignFieldSurfaceContextValue = {
+  alwaysShowLabels?: boolean;
+  overlayZIndexBase?: number;
+  popupContainer?: (trigger?: HTMLElement | null) => HTMLElement;
+  preferLocalPopupContainer?: boolean;
+};
+
+const CampaignFieldSurfaceContext = React.createContext<CampaignFieldSurfaceContextValue>({});
+
+export const CampaignFieldSurfaceProvider: React.FC<React.PropsWithChildren<CampaignFieldSurfaceContextValue>> = ({
+  children,
+  ...value
+}) => (
+  <CampaignFieldSurfaceContext.Provider value={value}>
+    {children}
+  </CampaignFieldSurfaceContext.Provider>
+);
+
+export const useCampaignFieldSurface = () => React.useContext(CampaignFieldSurfaceContext);
+
 const CampaignField: React.FC<CampaignFieldProps> = ({
   fieldKey,
   label,
@@ -34,6 +54,7 @@ const CampaignField: React.FC<CampaignFieldProps> = ({
   compact,
   dynamicOptionsCategory,
 }) => {
+  const surface = useCampaignFieldSurface();
   const registeredField = MODULES[moduleId]?.fields?.find((candidate: ModuleField) => candidate.key === fieldKey);
   // برای فیلدهای ثبت‌شدهٔ کمپین، همان تعریف مرکزی ماژول بدون هیچ override
   // محلی استفاده می‌شود؛ درست مانند مسیر ModuleShow و SmartForm. fallback
@@ -48,11 +69,11 @@ const CampaignField: React.FC<CampaignFieldProps> = ({
     dynamicOptionsCategory,
   };
   const field = registeredField || fallbackField;
-  const showMobileLabel = field.type !== FieldType.CHECKBOX;
+  const showFieldLabel = field.type !== FieldType.CHECKBOX;
   return (
     <div className="min-w-0">
-      {showMobileLabel ? (
-        <div className="mb-1.5 text-xs font-bold text-slate-600 dark:text-slate-300 sm:hidden">
+      {showFieldLabel ? (
+        <div className={`mb-1.5 text-xs font-bold text-slate-600 dark:text-slate-300 ${surface.alwaysShowLabels ? '' : 'sm:hidden'}`}>
           {label || field.labels.fa}{required ? <span className="mr-1 text-red-500">*</span> : null}
         </div>
       ) : null}
@@ -67,6 +88,9 @@ const CampaignField: React.FC<CampaignFieldProps> = ({
         moduleId={moduleId}
         recordId={recordId || undefined}
         allValues={allValues || { [fieldKey]: value }}
+        overlayZIndexBase={surface.overlayZIndexBase}
+        popupContainer={surface.popupContainer}
+        preferLocalPopupContainer={surface.preferLocalPopupContainer}
       />
     </div>
   );

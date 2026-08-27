@@ -6,6 +6,7 @@ import { ensureNoteAttachmentShortcuts, uploadNoteAttachments } from '../../util
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { supabase } from '../../supabaseClient';
 import type { CampaignAttachment } from './types';
+import { useCampaignFieldSurface } from './CampaignField';
 
 type CampaignAttachmentsFieldProps = {
   moduleId: string;
@@ -26,6 +27,7 @@ const CampaignAttachmentsField: React.FC<CampaignAttachmentsFieldProps> = ({
   fileTypes,
   disabled,
 }) => {
+  const fieldSurface = useCampaignFieldSurface();
   const { message } = App.useApp();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -115,7 +117,7 @@ const CampaignAttachmentsField: React.FC<CampaignAttachmentsFieldProps> = ({
         multiple
         fileTypes={fileTypes}
         title={title}
-        zIndex={13350}
+        zIndex={(fieldSurface.overlayZIndexBase || 13250) + 100}
       />
     </div>
   );

@@ -54,7 +54,7 @@ import {
   getTaskStatusOptions,
   getTaskStatusSwatchColor,
 } from '../../utils/processTaskStatusOptions';
-import TaskStatusIcon from '../tasks/TaskStatusIcon';
+import TaskStatusActionStrip from '../tasks/TaskStatusActionStrip';
 import { invalidateFileManagerFolderCaches, loadRecordFileItems, type FileManagerListItem } from '../../utils/fileManagerQueries';
 import { FILE_STORAGE_BUCKET, fileStorageClient } from '../../utils/storageClient';
 import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploadFileWithProgress';
@@ -2920,39 +2920,14 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                 </div>
               </div>
             ) : (
-              <div className="flex max-w-full items-start gap-1.5 overflow-x-auto">
-                {effectiveStatusOptions.map((option) => {
-                  const value = String(option.value || '').trim();
-                  const isActive = value === statusValue;
-                  const color = getTaskStatusSwatchColor(value, taskForActions || source) || '#64748b';
-                  return (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => void handleStatusActionClick(value)}
-                      disabled={savingStatusValue !== null}
-                      className="group flex w-[4.25rem] shrink-0 flex-col items-center gap-1 rounded-lg px-1.5 py-1 text-center transition hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_10px_22px_rgba(15,23,42,0.10)] disabled:cursor-wait disabled:opacity-60 dark:hover:bg-white/10 dark:hover:shadow-[0_10px_22px_rgba(0,0,0,0.22)]"
-                      aria-label={`تغییر وضعیت به ${option.label}`}
-                      title={String(option.label || value)}
-                    >
-                      <span
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-[17px] shadow-sm transition group-hover:scale-110 group-hover:ring-2 group-hover:ring-offset-1 group-hover:ring-offset-white dark:group-hover:ring-offset-slate-950"
-                        style={{
-                          color: isActive ? '#fff' : color,
-                          opacity: isActive ? 1 : 0.48,
-                          backgroundColor: isActive ? color : `${color}0f`,
-                          boxShadow: isActive ? `0 8px 18px ${color}33` : '0 2px 8px rgba(15, 23, 42, 0.05)',
-                        }}
-                      >
-                        {savingStatusValue === value ? <ClockCircleOutlined spin /> : <TaskStatusIcon iconKey={(option as any).icon || getTaskStatusIconKey(value, taskForActions || source)} />}
-                      </span>
-                      <span className={`line-clamp-2 min-h-[1.5rem] text-[10px] leading-3 ${isActive ? 'font-black text-gray-700 dark:text-gray-100' : 'font-semibold text-gray-300 dark:text-gray-500'}`}>
-                        {option.label}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+              <TaskStatusActionStrip
+                options={effectiveStatusOptions}
+                currentValue={statusValue}
+                savingValue={savingStatusValue}
+                onChange={handleStatusActionClick}
+                getColor={(value) => getTaskStatusSwatchColor(value, taskForActions || source) || '#64748b'}
+                getIconKey={(value, option) => option.icon || getTaskStatusIconKey(value, taskForActions || source)}
+              />
             )}
           </div>
         </div>

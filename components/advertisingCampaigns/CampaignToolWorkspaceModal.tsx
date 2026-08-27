@@ -3,6 +3,7 @@ import { App, Badge, Button, Descriptions, Input, Modal, Skeleton, Tag, Tooltip 
 import {
   FileOutlined,
   HistoryOutlined,
+  ClockCircleOutlined,
   MessageOutlined,
   NodeIndexOutlined,
   ReadOutlined,
@@ -33,10 +34,13 @@ import { isAutomatedCampaignTool } from './CampaignToolCard';
 import CampaignToolReportPanel from './CampaignToolReportPanel';
 import CampaignDeliveryReportPanel from './CampaignDeliveryReportPanel';
 import { supabase } from '../../supabaseClient';
-import TaskStatusIcon from '../tasks/TaskStatusIcon';
-import { buildStatusIconActionClassName, getStatusIconActionStyle } from '../statusIconActionAppearance';
+import TaskStatusActionStrip, {
+  TASK_STATUS_TILE_CLASS_NAME,
+  TASK_STATUS_TILE_ICON_CLASS_NAME,
+} from '../tasks/TaskStatusActionStrip';
 import CampaignToolDeliverySummaryCards from './CampaignToolDeliverySummaryCards';
 import { buildCampaignMessageSnapshot, getCampaignToolEmptyMessageError } from './campaignUtils';
+import { CampaignFieldSurfaceProvider } from './CampaignField';
 
 const ProcessCardsV2RuntimeBlock = React.lazy(() => import('../processes/ProcessCardsV2RuntimeBlock'));
 
@@ -87,6 +91,10 @@ const COMMON_FIELD_KEYS = new Set([
 const RESULT_FIELD_KEYS = new Set(['actual_cost', 'actual_start_at', 'actual_end_at', 'actual_leads', 'actual_customers', 'result_summary']);
 const STATUS_TONES: Record<string, string> = {
   default: '#64748b', blue: '#2563eb', cyan: '#0891b2', orange: '#ea580c', red: '#dc2626', green: '#16a34a',
+};
+const CAMPAIGN_STATUS_ICON_KEYS: Record<CampaignToolStatus, string> = {
+  draft: 'circle', ready: 'check', scheduled: 'clock', running: 'play', paused: 'pause',
+  completed: 'approve', failed: 'warning', canceled: 'cancel',
 };
 
 const sideTabs: Array<{ key: ToolModalSideTab; label: string; icon: React.ReactNode }> = [
@@ -178,10 +186,6 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
     ? new Set<CampaignToolStatus>(['running', 'paused', 'completed'])
     : null;
   const automated = isAutomatedCampaignTool(tool);
-  const statusIconKey = (value: CampaignToolStatus) => ({
-    draft: 'circle', ready: 'check', scheduled: 'clock', running: 'play', paused: 'pause',
-    completed: 'approve', failed: 'warning', canceled: 'cancel',
-  }[value] || 'circle');
   const sendTest = async () => {
     const recipient = testRecipient.trim();
     if (!recipient) { message.warning('گیرنده آزمایشی را وارد کنید.'); return; }
@@ -300,61 +304,66 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
           </div>
         )}
       >
-        <div className="mb-4 overflow-hidden rounded-2xl border border-gray-100 bg-gray-50/70 dark:border-white/10 dark:bg-white/5">
-          <div className="p-3">
-            <div>
-              <div className="mb-2 text-xs font-bold text-slate-500">تغییر وضعیت اجرا</div>
-              <div className="flex min-w-0 flex-wrap items-center gap-1">
-                {CAMPAIGN_TOOL_STATUS_OPTIONS.map((option) => {
-                  const active = option.value === tool.status;
-                  const tone = STATUS_TONES[option.color] || STATUS_TONES.default;
-                  const unavailable = !onStatusChange || (!active && allowedStatusValues !== null && !allowedStatusValues.has(option.value));
-                  const disabled = unavailable || active || (Boolean(statusSaving) && statusSaving !== option.value);
-                  return (
-                    <React.Fragment key={option.value}>
-                      <Tooltip title={option.label} getPopupContainer={resolveOverlayPopupContainer} zIndex={15360}>
-                        <Button
-                          type="text"
-                          size="small"
-                          icon={<TaskStatusIcon iconKey={statusIconKey(option.value)} />}
-                          className={buildStatusIconActionClassName()}
-                          style={getStatusIconActionStyle({ color: tone, active, disabled })}
-                          title={option.label}
-                          aria-label={option.label}
-                          aria-disabled={disabled}
-                          loading={statusSaving === option.value}
-                          onClick={() => { if (!disabled) void changeStatus(option.value); }}
-                        />
-                      </Tooltip>
-                      {option.value === 'scheduled' && automated && onToolAction ? (
-                        <Button
-                          type="primary"
-                          size="small"
-                          icon={<SendOutlined />}
-                          loading={actionLoading === 'send_now'}
-                          disabled={Boolean(actionLoading) || tool.status !== 'ready'}
-                          onClick={() => void onToolAction('send_now', tool)}
-                        >
-                          ارسال اکنون
-                        </Button>
-                      ) : null}
-                    </React.Fragment>
-                  );
-                })}
-              </div>
+        <CampaignFieldSurfaceProvider
+          alwaysShowLabels
+          overlayZIndexBase={15380}
+          popupContainer={resolveOverlayPopupContainer}
+          preferLocalPopupContainer
+        >
+        <div className="mb-3 flex flex-wrap items-stretch gap-2 rounded-lg border border-gray-100 bg-gray-50/70 p-2 dark:border-gray-700 dark:bg-transparent">
+          <div className="flex min-w-0 flex-1 items-center justify-center gap-2 rounded-lg bg-white px-2 py-2 dark:bg-white/5">
+            <TaskStatusActionStrip
+              options={CAMPAIGN_TOOL_STATUS_OPTIONS.map((option) => ({
+                ...option,
+                color: STATUS_TONES[option.color] || STATUS_TONES.default,
+                icon: CAMPAIGN_STATUS_ICON_KEYS[option.value],
+              }))}
+              currentValue={tool.status}
+              savingValue={statusSaving}
+              onChange={(value) => changeStatus(value as CampaignToolStatus)}
+              isDisabled={(value) => !onStatusChange || (
+                allowedStatusValues !== null
+                && value !== tool.status
+                && !allowedStatusValues.has(value as CampaignToolStatus)
+              )}
+              renderAfterOption={(value) => value === 'scheduled' && automated && onToolAction ? (
+                <button
+                  type="button"
+                  className={TASK_STATUS_TILE_CLASS_NAME}
+                  disabled={Boolean(actionLoading) || tool.status !== 'ready'}
+                  onClick={() => void onToolAction('send_now', tool)}
+                  aria-label="ارسال اکنون"
+                  title="ارسال اکنون"
+                >
+                  <span
+                    className={TASK_STATUS_TILE_ICON_CLASS_NAME}
+                    style={{
+                      color: '#fff',
+                      backgroundColor: 'rgba(var(--brand-600-rgb),1)',
+                      boxShadow: '0 8px 18px rgba(var(--brand-600-rgb),0.24)',
+                    }}
+                  >
+                    {actionLoading === 'send_now' ? <ClockCircleOutlined spin /> : <SendOutlined />}
+                  </span>
+                  <span className="line-clamp-2 min-h-[1.5rem] text-[10px] font-black leading-3 text-[rgba(var(--brand-700-rgb),1)] dark:text-[rgba(var(--brand-200-rgb),1)]">
+                    ارسال اکنون
+                  </span>
+                </button>
+              ) : null}
+            />
+          </div>
+        </div>
+
+        {onCreateRelated ? (
+          <div className="mb-4 rounded-xl border border-gray-100 bg-white/70 p-3 dark:border-white/10 dark:bg-white/5">
+            <div className="mb-2 text-xs font-bold text-slate-500">افزودن نتیجه مرتبط</div>
+            <div className="flex max-w-full flex-wrap gap-2">
+              <Button size="small" icon={<UserAddOutlined />} onClick={() => onCreateRelated('marketing_leads')}>ثبت لید</Button>
+              <Button size="small" icon={<TeamOutlined />} onClick={() => onCreateRelated('customers')}>ثبت مشتری</Button>
+              <Button size="small" icon={<FileTextOutlined />} onClick={() => onCreateRelated('invoices')}>ثبت فاکتور</Button>
             </div>
           </div>
-          {onCreateRelated ? (
-            <div className="border-t border-gray-100 bg-white/70 p-3 dark:border-white/10 dark:bg-black/10">
-              <div className="mb-2 text-xs font-bold text-slate-500">افزودن نتیجه مرتبط</div>
-              <div className="flex max-w-full flex-wrap gap-2">
-                <Button size="small" icon={<UserAddOutlined />} onClick={() => onCreateRelated('marketing_leads')}>ثبت لید</Button>
-                <Button size="small" icon={<TeamOutlined />} onClick={() => onCreateRelated('customers')}>ثبت مشتری</Button>
-                <Button size="small" icon={<FileTextOutlined />} onClick={() => onCreateRelated('invoices')}>ثبت فاکتور</Button>
-              </div>
-            </div>
-          ) : null}
-        </div>
+        ) : null}
 
         {automated ? <CampaignToolDeliverySummaryCards tool={tool} /> : null}
 
@@ -462,6 +471,7 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
             ) : null}
           </main>
         </div>
+        </CampaignFieldSurfaceProvider>
       </Modal>
     </>
   );

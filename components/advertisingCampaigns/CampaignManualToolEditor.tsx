@@ -7,7 +7,7 @@ import { getCampaignToolLabel } from '../../utils/advertisingCampaigns';
 import type { CampaignManualToolConfig, CampaignToolRecord } from './types';
 import CampaignAttachmentsField from './CampaignAttachmentsField';
 import CampaignContentTable from './CampaignContentTable';
-import CampaignField from './CampaignField';
+import CampaignField, { useCampaignFieldSurface } from './CampaignField';
 import { getPersistedCampaignToolId } from './campaignUtils';
 
 type Props = { tool: CampaignToolRecord; onChange: (patch: Partial<CampaignToolRecord>) => void; disabled?: boolean };
@@ -27,6 +27,9 @@ const FIELD_LABELS: Record<string, { vendor: string; location: string; platform:
 };
 
 const CampaignManualToolEditor: React.FC<Props> = ({ tool, onChange, disabled }) => {
+  const fieldSurface = useCampaignFieldSurface();
+  const campaignPopupContainer = fieldSurface.popupContainer || resolveOverlayPopupContainer;
+  const campaignOverlayZIndexBase = fieldSurface.overlayZIndexBase || 13200;
   const config: CampaignManualToolConfig = { attachments: [], content_items: [], custom_values: {}, ...tool.config, kind: 'manual' } as CampaignManualToolConfig;
   const persistedToolId = getPersistedCampaignToolId(tool.id);
   const patch = (next: Partial<CampaignManualToolConfig>) => onChange({ config: { ...config, ...next } });
@@ -41,7 +44,7 @@ const CampaignManualToolEditor: React.FC<Props> = ({ tool, onChange, disabled })
         <CampaignField fieldKey="manual_objective" label={labels.objective} type={FieldType.LONG_TEXT} value={config.objective} onChange={(objective) => patch({ objective })} readonly={disabled} />
         <div>
           <div className="mb-1.5 text-xs font-medium text-slate-500">مدل هزینه</div>
-          <AdaptiveSelectField value={config.pricing_model} onChange={(pricing_model) => patch({ pricing_model })} options={[{ label: 'مبلغ ثابت', value: 'fixed' }, { label: 'به‌ازای کلیک (CPC)', value: 'cpc' }, { label: 'به‌ازای هزار نمایش (CPM)', value: 'cpm' }, { label: 'به‌ازای اقدام (CPA)', value: 'cpa' }]} disabled={disabled} pickerTitle="مدل هزینه" getPopupContainer={resolveOverlayPopupContainer as any} modalContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={13200} />
+          <AdaptiveSelectField value={config.pricing_model} onChange={(pricing_model) => patch({ pricing_model })} options={[{ label: 'مبلغ ثابت', value: 'fixed' }, { label: 'به‌ازای کلیک (CPC)', value: 'cpc' }, { label: 'به‌ازای هزار نمایش (CPM)', value: 'cpm' }, { label: 'به‌ازای اقدام (CPA)', value: 'cpa' }]} disabled={disabled} pickerTitle="مدل هزینه" getPopupContainer={campaignPopupContainer as any} modalContainer={campaignPopupContainer} preferLocalPopupContainer overlayZIndexBase={campaignOverlayZIndexBase} />
         </div>
         <CampaignField fieldKey="manual_landing_url" label="لینک مقصد / صفحه فرود" type={FieldType.LINK} value={config.landing_url} onChange={(landing_url) => patch({ landing_url })} readonly={disabled} />
       </div>

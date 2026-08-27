@@ -8,7 +8,7 @@ import { formatPersianPrice } from '../../utils/persianNumberFormatter';
 import { useCurrencyConfig } from '../../utils/currency';
 import type { CampaignEmailConfig, CampaignToolRecord } from './types';
 import CampaignAttachmentsField from './CampaignAttachmentsField';
-import CampaignField from './CampaignField';
+import CampaignField, { useCampaignFieldSurface } from './CampaignField';
 import { getPersistedCampaignToolId } from './campaignUtils';
 import CampaignImportProgress from './CampaignImportProgress';
 import { downloadCampaignAudienceSample } from './campaignImportSample';
@@ -16,6 +16,9 @@ import { downloadCampaignAudienceSample } from './campaignImportSample';
 type Props = { tool: CampaignToolRecord; onChange: (patch: Partial<CampaignToolRecord>) => void; disabled?: boolean };
 
 const CampaignEmailEditor: React.FC<Props> = ({ tool, onChange, disabled }) => {
+  const fieldSurface = useCampaignFieldSurface();
+  const campaignPopupContainer = fieldSurface.popupContainer || resolveOverlayPopupContainer;
+  const campaignOverlayZIndexBase = fieldSurface.overlayZIndexBase || 13200;
   const { label: currencyLabel } = useCurrencyConfig();
   const config: CampaignEmailConfig = { audience_sources: ['internal'], vat_percent: 10, unsubscribe_footer_enabled: true, attachments: [], ...tool.config, kind: 'email' } as CampaignEmailConfig;
   const persistedToolId = getPersistedCampaignToolId(tool.id);
@@ -35,7 +38,7 @@ const CampaignEmailEditor: React.FC<Props> = ({ tool, onChange, disabled }) => {
       </div>
       <div>
         <div className="mb-1.5 text-xs font-medium text-slate-500">مخاطبان ارسال</div>
-        <AdaptiveSelectField mode="multiple" value={config.audience_sources || []} onChange={(audience_sources) => patch({ audience_sources })} options={[{ label: 'از داخل نرم‌افزار', value: 'internal' }, { label: 'افزودن از اکسل', value: 'excel' }]} disabled={disabled} pickerTitle="منبع مخاطبان ایمیل" getPopupContainer={resolveOverlayPopupContainer as any} modalContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={13200} />
+        <AdaptiveSelectField mode="multiple" value={config.audience_sources || []} onChange={(audience_sources) => patch({ audience_sources })} options={[{ label: 'از داخل نرم‌افزار', value: 'internal' }, { label: 'افزودن از اکسل', value: 'excel' }]} disabled={disabled} pickerTitle="منبع مخاطبان ایمیل" getPopupContainer={campaignPopupContainer as any} modalContainer={campaignPopupContainer} preferLocalPopupContainer overlayZIndexBase={campaignOverlayZIndexBase} />
       </div>
       {config.audience_sources?.includes('excel') ? (
         <div className="space-y-3">

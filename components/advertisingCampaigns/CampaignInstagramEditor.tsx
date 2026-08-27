@@ -7,10 +7,14 @@ import type { CampaignInstagramPostConfig, CampaignToolRecord } from './types';
 import CampaignAttachmentsField from './CampaignAttachmentsField';
 import CampaignContentTable from './CampaignContentTable';
 import { getPersistedCampaignToolId } from './campaignUtils';
+import { useCampaignFieldSurface } from './CampaignField';
 
 type Props = { tool: CampaignToolRecord; onChange: (patch: Partial<CampaignToolRecord>) => void; disabled?: boolean };
 
 const CampaignInstagramEditor: React.FC<Props> = ({ tool, onChange, disabled }) => {
+  const fieldSurface = useCampaignFieldSurface();
+  const campaignPopupContainer = fieldSurface.popupContainer || resolveOverlayPopupContainer;
+  const campaignOverlayZIndexBase = fieldSurface.overlayZIndexBase || 13200;
   const config: CampaignInstagramPostConfig = { attachments: [], content_items: [], ...tool.config, kind: 'instagram_post' } as CampaignInstagramPostConfig;
   const persistedToolId = getPersistedCampaignToolId(tool.id);
   const patch = (next: Partial<CampaignInstagramPostConfig>) => onChange({ config: { ...config, ...next } });
@@ -26,7 +30,7 @@ const CampaignInstagramEditor: React.FC<Props> = ({ tool, onChange, disabled }) 
       <Alert type="info" showIcon message="در این نسخه انتشار مستقیم انجام نمی‌شود. محتوا را برنامه‌ریزی کنید و پس از انتشار، پست همگام‌شده یا لینک آن را به ردیف متصل کنید." />
       <div>
         <div className="mb-1.5 text-xs font-medium text-slate-500">حساب پیش‌فرض اینستاگرام</div>
-        <AdaptiveSelectField value={config.account_id} onChange={(account_id) => patch({ account_id })} options={accounts} disabled={disabled} placeholder="انتخاب حساب متصل" pickerTitle="حساب اینستاگرام" optionFilterProp="label" showSearch getPopupContainer={resolveOverlayPopupContainer as any} modalContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={13200} />
+        <AdaptiveSelectField value={config.account_id} onChange={(account_id) => patch({ account_id })} options={accounts} disabled={disabled} placeholder="انتخاب حساب متصل" pickerTitle="حساب اینستاگرام" optionFilterProp="label" showSearch getPopupContainer={campaignPopupContainer as any} modalContainer={campaignPopupContainer} preferLocalPopupContainer overlayZIndexBase={campaignOverlayZIndexBase} />
       </div>
       <CampaignAttachmentsField moduleId="advertising_campaign_tools" recordId={persistedToolId} title="فایل‌های عمومی تولید محتوا" fileTypes={['image', 'video', 'file']} value={config.attachments} onChange={(attachments) => patch({ attachments })} disabled={disabled} />
       <CampaignContentTable value={config.content_items} onChange={(content_items) => patch({ content_items })} recordId={persistedToolId || undefined} variant="instagram" readOnly={disabled} />

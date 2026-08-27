@@ -20,7 +20,7 @@ import {
 } from './campaignUtils';
 import type { CampaignSmsConfig, CampaignToolRecord } from './types';
 import CampaignAttachmentsField from './CampaignAttachmentsField';
-import CampaignField from './CampaignField';
+import CampaignField, { useCampaignFieldSurface } from './CampaignField';
 import CampaignImportProgress from './CampaignImportProgress';
 import { downloadCampaignAudienceSample } from './campaignImportSample';
 
@@ -31,6 +31,9 @@ type CampaignSmsEditorProps = {
 };
 
 const CampaignSmsEditor: React.FC<CampaignSmsEditorProps> = ({ tool, onChange, disabled }) => {
+  const fieldSurface = useCampaignFieldSurface();
+  const campaignPopupContainer = fieldSurface.popupContainer || resolveOverlayPopupContainer;
+  const campaignOverlayZIndexBase = fieldSurface.overlayZIndexBase || 13200;
   const { label: currencyLabel } = useCurrencyConfig();
   const config = mergeSmsConfig(tool.config);
   const persistedToolId = getPersistedCampaignToolId(tool.id);
@@ -62,10 +65,10 @@ const CampaignSmsEditor: React.FC<CampaignSmsEditorProps> = ({ tool, onChange, d
           disabled={disabled}
           placeholder="انتخاب خط ثبت‌شده در تنظیمات پیامک"
           pickerTitle="خط ارسال پیامک"
-          getPopupContainer={resolveOverlayPopupContainer as any}
-          modalContainer={resolveOverlayPopupContainer}
+          getPopupContainer={campaignPopupContainer as any}
+          modalContainer={campaignPopupContainer}
           preferLocalPopupContainer
-          overlayZIndexBase={13200}
+          overlayZIndexBase={campaignOverlayZIndexBase}
         />
         <Typography.Text type="danger" className="mt-1 block text-[11px]">هرگز از خطوط خدماتی برای ارسال پیامک تبلیغاتی استفاده نکنید.</Typography.Text>
       </div>
@@ -96,7 +99,7 @@ const CampaignSmsEditor: React.FC<CampaignSmsEditorProps> = ({ tool, onChange, d
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 dark:border-white/10 dark:bg-white/5">
           <div className="mb-1 text-xs font-medium text-slate-500">مخاطبان ارسال</div>
-          <AdaptiveSelectField mode="multiple" value={config.audience_sources || []} onChange={(audience_sources) => patchConfig({ audience_sources })} options={[{ label: 'از داخل نرم‌افزار', value: 'internal' }, { label: 'افزودن از اکسل', value: 'excel' }]} disabled={disabled} pickerTitle="منبع مخاطبان پیامک" getPopupContainer={resolveOverlayPopupContainer as any} modalContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={13200} />
+          <AdaptiveSelectField mode="multiple" value={config.audience_sources || []} onChange={(audience_sources) => patchConfig({ audience_sources })} options={[{ label: 'از داخل نرم‌افزار', value: 'internal' }, { label: 'افزودن از اکسل', value: 'excel' }]} disabled={disabled} pickerTitle="منبع مخاطبان پیامک" getPopupContainer={campaignPopupContainer as any} modalContainer={campaignPopupContainer} preferLocalPopupContainer overlayZIndexBase={campaignOverlayZIndexBase} />
         </div>
         <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 dark:border-white/10 dark:bg-white/5">
           <CampaignField fieldKey="sms_scheduled_at" label="زمان برنامه‌ریزی شروع ارسال" type={FieldType.DATETIME} value={config.scheduled_at} onChange={(scheduled_at) => patchConfig({ scheduled_at })} readonly={disabled} />
@@ -133,16 +136,16 @@ const CampaignSmsEditor: React.FC<CampaignSmsEditorProps> = ({ tool, onChange, d
             <CampaignField fieldKey="reply_window_value" label="بازه دریافت پاسخ" type={FieldType.NUMBER} value={config.reply_window_value} onChange={(reply_window_value) => patchConfig({ reply_window_value })} readonly={disabled} />
             <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 dark:border-white/10 dark:bg-white/5">
               <div className="mb-1 text-xs font-medium text-slate-500">واحد بازه</div>
-              <AdaptiveSelectField value={config.reply_window_unit} onChange={(reply_window_unit) => patchConfig({ reply_window_unit })} options={[{ label: 'ساعت', value: 'hour' }, { label: 'روز', value: 'day' }]} disabled={disabled} pickerTitle="واحد بازه پاسخ" getPopupContainer={resolveOverlayPopupContainer as any} modalContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={13200} />
+              <AdaptiveSelectField value={config.reply_window_unit} onChange={(reply_window_unit) => patchConfig({ reply_window_unit })} options={[{ label: 'ساعت', value: 'hour' }, { label: 'روز', value: 'day' }]} disabled={disabled} pickerTitle="واحد بازه پاسخ" getPopupContainer={campaignPopupContainer as any} modalContainer={campaignPopupContainer} preferLocalPopupContainer overlayZIndexBase={campaignOverlayZIndexBase} />
             </div>
             <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 dark:border-white/10 dark:bg-white/5">
               <div className="mb-1 text-xs font-medium text-slate-500">نوع تطبیق متن</div>
-              <AdaptiveSelectField value={config.inbound_match_mode} onChange={(inbound_match_mode) => patchConfig({ inbound_match_mode })} options={[{ label: 'دقیقاً برابر باشد', value: 'exact' }, { label: 'شامل عبارت باشد', value: 'contains' }]} disabled={disabled} pickerTitle="نوع تطبیق" getPopupContainer={resolveOverlayPopupContainer as any} modalContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={13200} />
+              <AdaptiveSelectField value={config.inbound_match_mode} onChange={(inbound_match_mode) => patchConfig({ inbound_match_mode })} options={[{ label: 'دقیقاً برابر باشد', value: 'exact' }, { label: 'شامل عبارت باشد', value: 'contains' }]} disabled={disabled} pickerTitle="نوع تطبیق" getPopupContainer={campaignPopupContainer as any} modalContainer={campaignPopupContainer} preferLocalPopupContainer overlayZIndexBase={campaignOverlayZIndexBase} />
             </div>
           </div>
           <div>
             <div className="mb-1.5 text-xs font-medium text-slate-500">در صورت دریافت این مقادیر</div>
-            <AdaptiveSelectField mode="tags" tokenSeparators={[',', '،', '\n']} value={config.inbound_expected_values || []} onChange={(inbound_expected_values) => patchConfig({ inbound_expected_values })} options={[]} disabled={disabled} placeholder="مقدار را بنویسید و Enter بزنید" pickerTitle="مقادیر پاسخ" getPopupContainer={resolveOverlayPopupContainer as any} modalContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={13200} />
+            <AdaptiveSelectField mode="tags" tokenSeparators={[',', '،', '\n']} value={config.inbound_expected_values || []} onChange={(inbound_expected_values) => patchConfig({ inbound_expected_values })} options={[]} disabled={disabled} placeholder="مقدار را بنویسید و Enter بزنید" pickerTitle="مقادیر پاسخ" getPopupContainer={campaignPopupContainer as any} modalContainer={campaignPopupContainer} preferLocalPopupContainer overlayZIndexBase={campaignOverlayZIndexBase} />
           </div>
           <WorkflowActionsBuilder
             value={(config.inbound_actions || []) as WorkflowAction[]}
@@ -163,8 +166,8 @@ const CampaignSmsEditor: React.FC<CampaignSmsEditorProps> = ({ tool, onChange, d
               { label: 'ویرایش رکورد مرتبط', value: 'update_related_record' },
             ]}
             disabled={disabled}
-            overlayZIndexBase={13200}
-            popupContainer={resolveOverlayPopupContainer}
+            overlayZIndexBase={campaignOverlayZIndexBase}
+            popupContainer={campaignPopupContainer}
           />
         </div>
       ) : null}
