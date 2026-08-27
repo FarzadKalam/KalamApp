@@ -130,7 +130,7 @@ const CampaignDashboard: React.FC<CampaignDashboardProps> = ({
   if (loading) return <Skeleton active paragraph={{ rows: 12 }} />;
 
   return (
-    <div className="space-y-5 pb-10">
+    <div className={`space-y-5 pb-10 ${accessMode === 'full' && showRelatedSidebar ? 'md:pl-[88px]' : ''}`}>
       {accessMode === 'tool_limited' ? (
         <Alert
           type="info"

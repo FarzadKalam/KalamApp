@@ -42,12 +42,12 @@ import {
 } from '../utils/reporting';
 import { getSurveyTemplateScopedIdFromConditions, loadSurveyTemplateDefinition, normalizeSurveyTemplateSnapshot } from '../utils/surveyTemplates';
 import { loadWorkflowConditionEditorOptions } from '../utils/workflowConditionOptions';
-import { toPersianNumber } from '../utils/persianNumberFormatter';
 import type { PermissionMap } from '../utils/permissions';
 import { resolveOverlayPopupContainer } from '../utils/popupContainer';
 import { loadTaskReportProcessRuntimeCatalog } from '../utils/reportTaskProcessFields';
 import { FieldType } from '../types';
 import { parseIdentityToken } from '../utils/identityDirectory';
+import WizardStepCards from '../components/wizards/WizardStepCards';
 
 const { Title, Text } = Typography;
 
@@ -610,25 +610,14 @@ const ReportBuilderPage: React.FC = () => {
           />
         )}
 
-        <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-4">
-          {STEPS.map((title, index) => {
-            const active = step === index;
-            const done = step > index;
-            return (
-              <button
-                key={title}
-                type="button"
-                onClick={() => {
-                  if (index <= step || validateStep(step)) setStep(index as WizardStep);
-                }}
-                className={`rounded-2xl border px-4 py-4 text-right transition-colors ${active ? 'border-leather-500 bg-leather-600 text-white' : done ? 'border-leather-300 bg-leather-50 text-leather-800 dark:border-leather-700 dark:bg-leather-900/30 dark:text-leather-200' : 'border-gray-200 bg-white text-gray-700 dark:border-gray-700 dark:bg-[#1c1c1c] dark:text-gray-200'}`}
-              >
-                <div className="text-xs opacity-80">مرحله {toPersianNumber(index + 1)}</div>
-                <div className="mt-1 font-black">{title}</div>
-              </button>
-            );
-          })}
-        </div>
+        <WizardStepCards
+          className="mb-6"
+          items={STEPS.map((title, index) => ({ key: String(index), title }))}
+          currentIndex={step}
+          onChange={(index) => {
+            if (index <= step || validateStep(step)) setStep(index as WizardStep);
+          }}
+        />
 
         {step === 0 && (
           <div className="space-y-6">

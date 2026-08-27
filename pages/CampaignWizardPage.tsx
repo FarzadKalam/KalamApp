@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, App, Button, Result, Skeleton, Steps, Tag, Typography } from 'antd';
+import { Alert, App, Button, Result, Skeleton, Tag, Typography } from 'antd';
 import { ArrowRightOutlined, CheckOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import CampaignBasicsTab from '../components/advertisingCampaigns/CampaignBasicsTab';
@@ -12,6 +12,7 @@ import CampaignManualToolEditor from '../components/advertisingCampaigns/Campaig
 import CampaignSettingsTab from '../components/advertisingCampaigns/CampaignSettingsTab';
 import CampaignSmsEditor from '../components/advertisingCampaigns/CampaignSmsEditor';
 import CampaignField from '../components/advertisingCampaigns/CampaignField';
+import WizardStepCards from '../components/wizards/WizardStepCards';
 import { patchAdvertisingCampaignCollaborationTool, patchAdvertisingCampaignToolExecution } from '../components/advertisingCampaigns/campaignApi';
 import { useCampaignPlanAvailability, useCampaignWizard } from '../components/advertisingCampaigns/useCampaignWizard';
 import { buildCampaignMessageSnapshot, getCampaignToolEmptyMessageError } from '../components/advertisingCampaigns/campaignUtils';
@@ -244,7 +245,7 @@ const CampaignWizardPage: React.FC = () => {
   const readOnly = wizard.accessMode !== 'full';
   return (
     <div className="mx-auto w-full max-w-[1680px] px-3 py-4 sm:px-4 md:px-6" dir="rtl">
-      <div className="sticky top-0 z-20 mb-4 overflow-hidden rounded-[2rem] border border-slate-200/80 bg-white/95 p-4 shadow-sm backdrop-blur dark:border-white/10 dark:bg-[#181818]/95">
+      <div className="sticky top-0 z-20 mb-4 overflow-hidden rounded-2xl border border-slate-200/80 bg-white/95 p-3 shadow-sm backdrop-blur md:rounded-[2rem] md:p-4 dark:border-white/10 dark:bg-[#181818]/95">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex min-w-0 items-center gap-3">
             <Button shape="circle" icon={<ArrowRightOutlined />} onClick={() => navigate('/advertising_campaigns')} aria-label="بازگشت به فهرست کمپین‌ها" />
@@ -260,13 +261,14 @@ const CampaignWizardPage: React.FC = () => {
         </div>
         {wizard.saveError ? <Alert type="error" showIcon className="mt-3" message={wizard.saveError} /> : null}
         {wizard.recoveredLocalDraft ? <Alert type="info" showIcon className="mt-3" message="پیش‌نویس ذخیره‌شده روی این دستگاه بازیابی شد. با برقرار شدن اتصال، تغییرات به‌صورت خودکار ذخیره می‌شوند." /> : null}
-        <div className="mt-4 border-t border-slate-100 pt-4 dark:border-white/10">
-          <Steps
-            current={Math.max(0, tabItems.findIndex((item) => item.key === activeTab))}
-            items={tabItems.map((item) => ({ title: item.label.replace(/^\d+\.\s*/, '') }))}
-            onChange={(index) => { const item = tabItems[index]; if (item) void changeTab(item.key); }}
-            responsive
-            size="small"
+        <div className="mt-3 border-t border-slate-100 pt-3 md:mt-4 md:pt-4 dark:border-white/10">
+          <WizardStepCards
+            items={tabItems.map((item) => ({
+              key: item.key,
+              title: item.label.replace(/^\d+\.\s*/, ''),
+            }))}
+            currentIndex={Math.max(0, tabItems.findIndex((item) => item.key === activeTab))}
+            onChange={(_index, item) => { void changeTab(item.key); }}
           />
         </div>
       </div>

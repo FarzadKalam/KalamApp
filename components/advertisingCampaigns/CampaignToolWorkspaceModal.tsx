@@ -329,23 +329,23 @@ const CampaignToolWorkspaceModal: React.FC<CampaignToolWorkspaceModalProps> = ({
               renderAfterOption={(value) => value === 'scheduled' && automated && onToolAction ? (
                 <button
                   type="button"
-                  className={TASK_STATUS_TILE_CLASS_NAME}
+                  className={`${TASK_STATUS_TILE_CLASS_NAME} !rounded-xl bg-[rgba(var(--brand-50-rgb),0.92)] ring-1 ring-[rgba(var(--brand-300-rgb),0.75)] shadow-[0_8px_22px_rgba(var(--brand-600-rgb),0.12)] hover:!bg-[rgba(var(--brand-100-rgb),0.98)] hover:shadow-[0_12px_28px_rgba(var(--brand-600-rgb),0.24)] disabled:!opacity-70 dark:bg-[rgba(var(--brand-500-rgb),0.14)] dark:ring-[rgba(var(--brand-400-rgb),0.45)] dark:hover:!bg-[rgba(var(--brand-500-rgb),0.22)]`}
                   disabled={Boolean(actionLoading) || tool.status !== 'ready'}
                   onClick={() => void onToolAction('send_now', tool)}
                   aria-label="ارسال اکنون"
                   title="ارسال اکنون"
                 >
                   <span
-                    className={TASK_STATUS_TILE_ICON_CLASS_NAME}
+                    className={`${TASK_STATUS_TILE_ICON_CLASS_NAME} !h-10 !w-10 !rounded-xl`}
                     style={{
                       color: '#fff',
-                      backgroundColor: 'rgba(var(--brand-600-rgb),1)',
-                      boxShadow: '0 8px 18px rgba(var(--brand-600-rgb),0.24)',
+                      backgroundImage: 'linear-gradient(135deg, rgba(var(--brand-500-rgb),1), rgba(var(--brand-700-rgb),1))',
+                      boxShadow: '0 10px 24px rgba(var(--brand-600-rgb),0.38)',
                     }}
                   >
-                    {actionLoading === 'send_now' ? <ClockCircleOutlined spin /> : <SendOutlined />}
+                    {actionLoading === 'send_now' ? <ClockCircleOutlined className="!text-xl" spin /> : <SendOutlined className="!text-xl" />}
                   </span>
-                  <span className="line-clamp-2 min-h-[1.5rem] text-[10px] font-black leading-3 text-[rgba(var(--brand-700-rgb),1)] dark:text-[rgba(var(--brand-200-rgb),1)]">
+                  <span className="line-clamp-2 min-h-[1.5rem] text-[11px] font-black leading-3 text-[rgba(var(--brand-700-rgb),1)] dark:text-[rgba(var(--brand-200-rgb),1)]">
                     ارسال اکنون
                   </span>
                 </button>
