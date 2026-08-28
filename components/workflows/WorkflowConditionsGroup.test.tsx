@@ -93,6 +93,42 @@ describe('WorkflowConditionsGroup', () => {
     expect(screen.getAllByRole('combobox')).toHaveLength(3);
   });
 
+  it('honors an explicit popup host above a high-z-index modal', async () => {
+    const user = userEvent.setup();
+    const popupHost = document.createElement('div');
+    popupHost.setAttribute('data-testid', 'workflow-popup-host');
+    popupHost.style.zIndex = '40000';
+    document.body.appendChild(popupHost);
+
+    render(
+      <ConfigProvider direction="rtl">
+        <App>
+          <Modal open footer={null} zIndex={31000} onCancel={() => undefined}>
+            <WorkflowConditionsGroup
+              value={[{ id: 'cond-popup', field: 'status', operator: 'eq', value: undefined } as any]}
+              onChange={vi.fn()}
+              fields={[{
+                key: 'status',
+                type: FieldType.SELECT,
+                labels: { fa: 'وضعیت' },
+                options: [{ label: 'باز', value: 'open' }],
+              } as any]}
+              dynamicOptions={{}}
+              relationOptions={{}}
+              popupContainer={() => popupHost}
+              overlayZIndexBase={31200}
+              adaptiveMode="desktop"
+            />
+          </Modal>
+        </App>
+      </ConfigProvider>,
+    );
+
+    await user.click(screen.getAllByRole('combobox')[0]);
+    expect(popupHost.querySelector('.ant-select-dropdown')).toBeInTheDocument();
+    popupHost.remove();
+  });
+
   it('uses mobile sheet mode for workflow condition values on small screens and commits single-select immediately', async () => {
     const originalWidth = window.innerWidth;
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 480 });

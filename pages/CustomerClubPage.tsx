@@ -50,9 +50,11 @@ import { fetchCurrentUserRoleContext } from "../utils/permissions";
 import { getWorkflowConditionFields } from "../utils/workflowHelpers";
 import { loadWorkflowConditionEditorOptions } from "../utils/workflowConditionOptions";
 import type { WorkflowCondition } from "../utils/workflowTypes";
+import { resolveOverlayPopupContainer } from "../utils/popupContainer";
 
 const { Text } = Typography;
 const CUSTOMER_CLUB_MODAL_Z_INDEX = 31000;
+const CUSTOMER_CLUB_CONDITION_OVERLAY_Z_INDEX = CUSTOMER_CLUB_MODAL_Z_INDEX + 200;
 
 type LoyaltyRule = {
   id: string;
@@ -1141,6 +1143,8 @@ const CustomerClubPage: React.FC = () => {
                 fields={conditionFields}
                 dynamicOptions={dynamicOptions}
                 relationOptions={relationOptions}
+                popupContainer={resolveOverlayPopupContainer}
+                overlayZIndexBase={CUSTOMER_CLUB_CONDITION_OVERLAY_Z_INDEX}
               />
             </div>
             <div>
@@ -1153,6 +1157,8 @@ const CustomerClubPage: React.FC = () => {
                 fields={conditionFields}
                 dynamicOptions={dynamicOptions}
                 relationOptions={relationOptions}
+                popupContainer={resolveOverlayPopupContainer}
+                overlayZIndexBase={CUSTOMER_CLUB_CONDITION_OVERLAY_Z_INDEX}
               />
             </div>
           </div>
@@ -1275,6 +1281,8 @@ const CustomerClubPage: React.FC = () => {
                 fields={conditionFields}
                 dynamicOptions={dynamicOptions}
                 relationOptions={relationOptions}
+                popupContainer={resolveOverlayPopupContainer}
+                overlayZIndexBase={CUSTOMER_CLUB_CONDITION_OVERLAY_Z_INDEX}
               />
             </div>
             <div>
@@ -1287,6 +1295,8 @@ const CustomerClubPage: React.FC = () => {
                 fields={conditionFields}
                 dynamicOptions={dynamicOptions}
                 relationOptions={relationOptions}
+                popupContainer={resolveOverlayPopupContainer}
+                overlayZIndexBase={CUSTOMER_CLUB_CONDITION_OVERLAY_Z_INDEX}
               />
             </div>
           </div>

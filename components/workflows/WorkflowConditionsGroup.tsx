@@ -118,8 +118,12 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
   const safeValue = Array.isArray(value) ? value : [];
   const [occasionOptions, setOccasionOptions] = useState<HolidayOccasionOption[]>([]);
   const resolvedPopupContainer = (trigger?: HTMLElement | null) => {
+    const configuredHost = popupContainer(trigger);
+    if (configuredHost && (typeof document === 'undefined' || configuredHost !== document.body)) {
+      return configuredHost;
+    }
     const modalBodyHost = trigger?.closest?.('.ant-modal-body, .ant-modal-content, .ant-modal') as HTMLElement | null;
-    return modalBodyHost || popupContainer(trigger) || resolveOverlayPopupContainer(trigger);
+    return modalBodyHost || configuredHost || resolveOverlayPopupContainer(trigger);
   };
   const lockedConditionIdSet = useMemo(() => new Set(lockedConditionIds), [lockedConditionIds]);
   const requiredConditionIdSet = useMemo(() => new Set(requiredConditionIds), [requiredConditionIds]);
