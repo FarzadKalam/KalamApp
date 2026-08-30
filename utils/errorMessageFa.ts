@@ -78,6 +78,16 @@ export const toFaErrorMessage = (error: unknown, fallback = 'خطا در انج�
     return 'به دلیل هم‌زمانی تغییرات روی سند، عملیات کامل نشد. صفحه را بروزرسانی کنید و دوباره تلاش کنید.';
   }
 
+  if (contains(normalized, 'commission_calculation_delete_not_allowed')) {
+    return 'شما دسترسی حذف محاسبه پورسانت را ندارید.';
+  }
+  if (contains(normalized, 'commission_calculation_not_found')) {
+    return 'محاسبه پورسانت موردنظر پیدا نشد یا قبلاً حذف شده است.';
+  }
+  if (contains(normalized, 'commission_calculation_cannot_be_deleted')) {
+    return 'این محاسبه پورسانت قبلاً وارد فیش شده یا دیگر قابل حذف نیست.';
+  }
+
   if (contains(normalized, 'process template not found')) {
     return 'الگوی فرآیند برای این سازمان پیدا نشد.';
   }

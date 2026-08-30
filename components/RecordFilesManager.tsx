@@ -10,7 +10,12 @@ import {
   isMissingRecordFilesError,
   setRecordFilesTableAvailability,
 } from '../utils/recordFilesAvailability';
-import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
+import {
+  getUploadFileSizeError,
+  isUploadCanceledError,
+  MAX_UPLOAD_FILE_SIZE_LABEL_FA,
+  uploadFileWithProgress,
+} from '../utils/uploadFileWithProgress';
 import { joinStoragePath, sanitizeStorageFileName } from '../utils/storagePath';
 import { parseNoteContent, serializeNoteContent } from '../utils/noteContent';
 import { insertNotesWithFallback } from '../utils/noteDispatch';
@@ -1556,6 +1561,11 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       msg.warning('ابتدا رکورد را ذخیره کنید');
       return false;
     }
+    const fileSizeError = getUploadFileSizeError(file);
+    if (fileSizeError) {
+      msg.error(fileSizeError);
+      return false;
+    }
     const fileName = String(file.name || '').trim();
     const lastDotIndex = fileName.lastIndexOf('.');
     const baseName = lastDotIndex > 0 ? fileName.slice(0, lastDotIndex) : fileName || 'file';
@@ -2263,7 +2273,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
 
       <div className="mt-4 flex items-center justify-between">
         <Upload showUploadList={false} beforeUpload={handleBeforeUpload} disabled={!recordId || !canUploadFiles} fileList={[]}>
-          <Button icon={<UploadOutlined />}>افزودن فایل (عکس، فیلم، فایل)</Button>
+          <Button icon={<UploadOutlined />}>افزودن فایل (تا {MAX_UPLOAD_FILE_SIZE_LABEL_FA})</Button>
         </Upload>
         <div className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500">
           <PaperClipOutlined />

@@ -4256,6 +4256,78 @@ const HRPage: React.FC = () => {
     return attendanceComputedRows.filter((row) => String(row.employeeId || '') === String(payrollWizardEmployeeId));
   }, [attendanceComputedRows, payrollWizardEmployeeId]);
 
+  const payrollWizardApprovedMissionDates = useMemo(() => {
+    const dates = new Set<string>();
+    if (!payrollWizardEmployeeId) return dates;
+    requestRows
+      .filter((row) => (
+        row.moduleId === 'mission_requests'
+        && String(row.employeeId || '') === String(payrollWizardEmployeeId)
+        && isApprovedLeaveStatus(row.status)
+      ))
+      .forEach((row) => {
+        let cursor = parseDate(row.dateFrom || null)?.startOf('day');
+        const end = (parseDate(row.dateTo || row.dateFrom || null) || cursor)?.startOf('day');
+        while (cursor && end && cursor.valueOf() <= end.valueOf()) {
+          const dateIso = toNativeGregorianDateString(cursor);
+          if (dateIso) dates.add(dateIso);
+          cursor = cursor.add(1, 'day');
+        }
+      });
+    return dates;
+  }, [payrollWizardEmployeeId, requestRows]);
+
+  const payrollWizardSeniorityAttendanceDays = useMemo(() => {
+    const profile = payrollWizardSummary?.profile;
+    const employeeIdValue = String(profile?.source_id || profile?.id || '').trim();
+    if (!employeeIdValue) return [];
+    const daysByDate = new Map(payrollWizardAttendanceRows
+      .filter((row) => Boolean(row.attendanceDate))
+      .map((row) => {
+        const date = String(row.attendanceDate);
+        const scheduledMinutes = calculateAttendanceRowScheduledMinutes(row);
+        return [date, {
+          date,
+          scheduledMinutes,
+          presenceMinutes: payrollWizardApprovedMissionDates.has(date)
+            ? Math.max(scheduledMinutes, calculateAttendanceRowPresenceMinutes(row))
+            : calculateAttendanceRowPresenceMinutes(row),
+          paidLeaveMinutes: paidLeaveEligibleMinutesByAttendanceRowKey.get(row.key) || 0,
+        }] as const;
+      }));
+
+    let cursor = monthStart.startOf('day');
+    const end = monthEnd.startOf('day');
+    while (cursor.valueOf() <= end.valueOf()) {
+      const dateIso = toNativeGregorianDateString(cursor);
+      if (dateIso && !daysByDate.has(dateIso)) {
+        const isHolidayOff = officialHolidayDateKeys.has(dateIso)
+          && profile?.works_on_official_holidays !== true;
+        const schedule = isHolidayOff
+          ? { shifts: [] as AttendanceScheduleShift[] }
+          : computeScheduleForEmployee(employeeIdValue, dateIso);
+        const scheduledMinutes = getScheduledMinutesByShifts(schedule.shifts);
+        daysByDate.set(dateIso, {
+          date: dateIso,
+          scheduledMinutes,
+          presenceMinutes: payrollWizardApprovedMissionDates.has(dateIso) ? scheduledMinutes : 0,
+          paidLeaveMinutes: 0,
+        });
+      }
+      cursor = cursor.add(1, 'day');
+    }
+    return Array.from(daysByDate.values());
+  }, [
+    computeScheduleForEmployee,
+    monthEnd,
+    monthStart,
+    officialHolidayDateKeys,
+    paidLeaveEligibleMinutesByAttendanceRowKey,
+    payrollWizardApprovedMissionDates,
+    payrollWizardAttendanceRows,
+    payrollWizardSummary?.profile,
+  ]);
+
   const payrollWizardMissingAttendanceScheduleDates = useMemo(() => {
     const profile = payrollWizardSummary?.profile;
     const employeeIdValue = String(profile?.source_id || profile?.id || '').trim();
@@ -4431,6 +4503,12 @@ const HRPage: React.FC = () => {
       .reduce((sum, e) => sum + toNumber(e.amount), 0),
     [payrollWizardOpenLedger],
   );
+
+  const payrollWizardSeniorityPayableDays = useMemo(() => (
+    payrollWizardOpenLedger
+      .filter((entry) => String(entry.source_type || '') === 'seniority')
+      .reduce((sum, entry) => sum + Math.max(0, toNumber(entry.details?.payable_days)), 0)
+  ), [payrollWizardOpenLedger]);
 
   const payrollWizardSeniorityYears = useMemo(() => {
     const profile = payrollWizardSummary?.profile;
@@ -5363,70 +5441,20 @@ const HRPage: React.FC = () => {
         .map((value: unknown) => String(value || '').trim())
         .filter((value) => Boolean(value) && isUuidLike(value)),
     ));
-    const calculationKey = String(row.details?.calculation_key || '').trim();
-    const sourceKeys = Array.from(new Set(
-      (Array.isArray(row.details?.rows) ? row.details.rows : [])
-        .flatMap((invoiceRow: any) => Array.isArray(invoiceRow?.lines) ? invoiceRow.lines : [])
-        .map((line: any) => String(line?.source_key || '').trim())
-        .filter(Boolean),
-    ));
-
     Modal.confirm({
       title: 'حذف محاسبه پورسانت',
-      content: 'در این صورت همه پورسانت های لحاظ شده در این محاسبه پورسانت حذف خواهند شد.',
+      content: 'در این صورت همه پورسانت‌های لحاظ‌شده در این محاسبه آزاد می‌شوند و دوباره در محاسبه همان ماه قابل انتخاب خواهند بود.',
       okText: 'حذف',
       okButtonProps: { danger: true },
       cancelText: 'انصراف',
       onOk: async () => {
         setCommissionModalSaving(true);
         try {
-          if (ledgerEntryIds.length > 0) {
-            const { error } = await supabase
-              .from('payroll_calculation_entries')
-              .update({ status: 'voided', updated_at: new Date().toISOString() })
-              .in('id', ledgerEntryIds);
-            if (error && !isMissingPayrollLedgerError(error)) throw error;
-          } else if (calculationKey && row.employee_id && row.period_start && row.period_end) {
-            const { error } = await supabase
-              .from('payroll_calculation_entries')
-              .update({ status: 'voided', updated_at: new Date().toISOString() })
-              .eq('source_type', 'commission')
-              .eq('employee_id', row.employee_id)
-              .eq('period_start', row.period_start)
-              .eq('period_end', row.period_end)
-              .eq('source_key', calculationKey);
-            if (error && !isMissingPayrollLedgerError(error) && !isMissingSourceKeyError(error)) throw error;
-          }
-          if (sourceKeys.length > 0) {
-            const { error } = await supabase
-              .from('commission_drafts')
-              .update({
-                draft_status: 'canceled',
-                posted_amount: 0,
-                remaining_amount: 0,
-                updated_at: new Date().toISOString(),
-              })
-              .in('source_key', sourceKeys);
-            if (error && !isMissingCommissionDraftsError(error)) throw error;
-          }
-          const basis = String(row.details?.basis || '').trim();
-          const percentMode = String(row.details?.percent_mode || '').trim();
-          if (row.employee_id && row.period_start && row.period_end && basis && percentMode) {
-            const { error } = await supabase
-              .from('commission_drafts')
-              .update({
-                draft_status: 'canceled',
-                posted_amount: 0,
-                remaining_amount: 0,
-                updated_at: new Date().toISOString(),
-              })
-              .eq('employee_id', row.employee_id)
-              .eq('period_start', row.period_start)
-              .eq('period_end', row.period_end)
-              .eq('source_basis', basis)
-              .eq('percent_mode', percentMode);
-            if (error && !isMissingCommissionDraftsError(error)) throw error;
-          }
+          if (ledgerEntryIds.length === 0) throw new Error('اطلاعات محاسبه پورسانت برای حذف کامل نیست.');
+          const { error } = await supabase.rpc('void_commission_calculation', {
+            p_ledger_entry_ids: ledgerEntryIds,
+          });
+          if (error) throw error;
           message.success('محاسبه پورسانت حذف شد و ردیف‌های آن دوباره قابل محاسبه هستند.');
           await refreshPayrollPeriodState();
           await fetchCalculatedCommissionRows();
@@ -6450,6 +6478,7 @@ const HRPage: React.FC = () => {
                 hireDate: profile.hire_date!,
                 periodStart,
                 periodEnd,
+                attendanceDays: payrollWizardSeniorityAttendanceDays,
               }),
             });
           }
@@ -6496,6 +6525,7 @@ const HRPage: React.FC = () => {
     payrollWizardAttendanceRows,
     payrollWizardOpen,
     payrollWizardPreparationRetry,
+    payrollWizardSeniorityAttendanceDays,
     payrollWizardSummary,
     prepareAttendancePayrollLedgerEntriesForRows,
     refreshPayrollPeriodState,
@@ -6523,6 +6553,7 @@ const HRPage: React.FC = () => {
         hireDate,
         periodStart,
         periodEnd,
+        attendanceDays: payrollWizardSeniorityAttendanceDays,
       });
       await refreshPayrollPeriodState();
       message.success(amount > 0 ? 'سنوات این ماه محاسبه و به اقلام فیش اضافه شد.' : 'برای این بازه، کارمند هنوز شرایط دریافت پایه سنوات را ندارد.');
@@ -6531,7 +6562,7 @@ const HRPage: React.FC = () => {
     } finally {
       setCalculatingPayrollWizardSeniority(false);
     }
-  }, [message, monthEnd, monthStart, payrollWizardSummary?.profile, refreshPayrollPeriodState]);
+  }, [message, monthEnd, monthStart, payrollWizardSeniorityAttendanceDays, payrollWizardSummary?.profile, refreshPayrollPeriodState]);
 
   const handleCreatePayrollSlipFromWizard = useCallback(async () => {
     const row = payrollWizardSummary;
@@ -8866,7 +8897,11 @@ const HRPage: React.FC = () => {
                       <Card>
                         <div className="text-xs text-gray-500 mb-1">پایه سنوات (قانون کار)</div>
                         <div className="persian-number text-2xl font-black text-emerald-700">{formatMoney(payrollWizardSeniorityAmount)}</div>
-                        <div className="text-xs text-gray-400 mt-1">{toPersianNumber(payrollWizardSeniorityYears)} سال سابقه</div>
+                        <div className="text-xs text-gray-400 mt-1">
+                          {toPersianNumber(payrollWizardSeniorityYears)} سال سابقه تجمیعی
+                          {' • '}
+                          {toPersianNumber(Number(payrollWizardSeniorityPayableDays.toFixed(2)))} روز قابل پرداخت
+                        </div>
                         <div className="mt-3">
                           <label className="mb-1 block text-xs text-gray-500">سنوات این ماه</label>
                           <Input readOnly value={formatMoney(payrollWizardSeniorityAmount)} className="persian-number" />

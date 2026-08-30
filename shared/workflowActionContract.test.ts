@@ -3,7 +3,7 @@ import { getWorkflowActionContract, isWorkflowOutputVariableAllowed, WORKFLOW_AC
 
 describe('workflow action central contract', () => {
   it('defines every supported workflow action in one registry', () => {
-    expect(Object.keys(WORKFLOW_ACTION_CONTRACTS)).toHaveLength(21);
+    expect(Object.keys(WORKFLOW_ACTION_CONTRACTS)).toHaveLength(22);
     expect(getWorkflowActionContract('send_email').templateFields).toEqual(['subject', 'body']);
   });
 
@@ -14,7 +14,7 @@ describe('workflow action central contract', () => {
   });
 
   it('keeps all record mutation modes aligned', () => {
-    for (const type of ['update_record', 'create_related_record', 'create_standalone_record']) {
+    for (const type of ['update_record', 'create_related_record', 'update_related_record', 'create_standalone_record']) {
       expect(getWorkflowActionContract(type).valueModes).toEqual(['static', 'from_source', 'from_related', 'formula']);
     }
   });

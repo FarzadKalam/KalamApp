@@ -11,6 +11,7 @@ type SeniorityRateRow = {
   daily_rate_rials: number;
   monthly_rate_30day_rials: number;
   monthly_rate_31day_rials: number;
+  prior_base_increase_percent: number;
   notes: string | null;
   updated_at: string | null;
 };
@@ -18,6 +19,7 @@ type SeniorityRateRow = {
 type RateFormValues = {
   persian_year: number;
   daily_rate_rials: number;
+  prior_base_increase_percent: number;
   notes?: string;
 };
 
@@ -40,7 +42,7 @@ const SaasAdminSeniorityRates: React.FC = () => {
     try {
       const { data, error } = await supabase
         .from('saas_seniority_annual_rates')
-        .select('id, persian_year, daily_rate_rials, monthly_rate_30day_rials, monthly_rate_31day_rials, notes, updated_at')
+        .select('id, persian_year, daily_rate_rials, monthly_rate_30day_rials, monthly_rate_31day_rials, prior_base_increase_percent, notes, updated_at')
         .order('persian_year', { ascending: false });
       if (error) throw error;
       setRows((data || []) as SeniorityRateRow[]);
@@ -63,6 +65,7 @@ const SaasAdminSeniorityRates: React.FC = () => {
     form.setFieldsValue({
       persian_year: Number(row.persian_year),
       daily_rate_rials: Number(row.daily_rate_rials),
+      prior_base_increase_percent: Number(row.prior_base_increase_percent || 0),
       notes: row.notes || '',
     });
   };
@@ -76,6 +79,7 @@ const SaasAdminSeniorityRates: React.FC = () => {
         daily_rate_rials: dailyRateRials,
         monthly_rate_30day_rials: dailyRateRials * 30,
         monthly_rate_31day_rials: dailyRateRials * 31,
+        prior_base_increase_percent: Number(values.prior_base_increase_percent || 0),
         notes: String(values.notes || '').trim() || null,
         updated_at: new Date().toISOString(),
       };
@@ -109,7 +113,7 @@ const SaasAdminSeniorityRates: React.FC = () => {
         className="mb-5"
         type="info"
         showIcon
-        message="این نرخ‌ها برای همه سازمان‌ها مشترک هستند. مبلغ ماهانه به‌صورت خودکار از نرخ روزانه و تعداد روزهای ماه محاسبه می‌شود."
+        message="این نرخ‌ها برای همه سازمان‌ها مشترک هستند. مبلغ تجمیعی هر سابقه از نرخ روزانه سال جدید و درصد افزایش پایه‌های سنواتی سال قبل ساخته می‌شود."
       />
 
       <Row gutter={[16, 16]}>
@@ -123,6 +127,7 @@ const SaasAdminSeniorityRates: React.FC = () => {
                 columns={[
                   { title: 'سال شمسی', dataIndex: 'persian_year', width: 120, render: (value: number) => <span className="persian-number font-bold">{toPersianNumber(value)}</span> },
                   { title: 'نرخ روزانه (ریال)', dataIndex: 'daily_rate_rials', render: (value: number) => <span className="persian-number">{formatPersianPrice(value)}</span> },
+                  { title: 'افزایش پایه‌های قبل', dataIndex: 'prior_base_increase_percent', render: (value: number) => <span className="persian-number">{toPersianNumber(value)}٪</span> },
                   { title: 'ماه ۳۰ روزه', dataIndex: 'monthly_rate_30day_rials', render: (value: number) => <span className="persian-number">{formatPersianPrice(value)}</span> },
                   { title: 'ماه ۳۱ روزه', dataIndex: 'monthly_rate_31day_rials', render: (value: number) => <span className="persian-number">{formatPersianPrice(value)}</span> },
                   { title: 'یادداشت', dataIndex: 'notes', render: (value: string | null) => value || '-' },
@@ -143,6 +148,13 @@ const SaasAdminSeniorityRates: React.FC = () => {
               </Form.Item>
               <Form.Item name="daily_rate_rials" label="نرخ روزانه پایه سنوات (ریال)" rules={[{ required: true, message: 'نرخ روزانه را وارد کنید.' }, { type: 'number', min: 1, message: 'نرخ باید بیشتر از صفر باشد.' }]}>
                 <InputNumber className="w-full" min={1} precision={0} controls={false} />
+              </Form.Item>
+              <Form.Item
+                name="prior_base_increase_percent"
+                label="درصد افزایش پایه‌های سنواتی سال قبل"
+                rules={[{ required: true, message: 'درصد افزایش پایه‌های سال قبل را وارد کنید.' }]}
+              >
+                <InputNumber className="w-full" min={0} max={500} precision={2} controls={false} addonAfter="٪" />
               </Form.Item>
               <div className="mb-4 grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-3 text-sm dark:bg-white/5">
                 <div><div className="text-xs text-gray-500">مبلغ ماه ۳۰ روزه</div><div className="persian-number mt-1 font-black">{formatPersianPrice(monthly30)}</div></div>

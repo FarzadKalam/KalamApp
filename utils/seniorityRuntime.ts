@@ -7,11 +7,38 @@ type SeniorityAnnualRate = {
   monthly_rate_31day_rials: number;
 };
 
+export type SeniorityAttendanceDay = {
+  date: string;
+  scheduledMinutes: number;
+  presenceMinutes: number;
+  paidLeaveMinutes?: number;
+};
+
+export type SeniorityServiceRate = {
+  persianYear: number;
+  completedServiceYears: number;
+  dailyRateRials: number;
+};
+
+export type SeniorityPayableDay = {
+  date: string;
+  persianYear: number;
+  completedServiceYears: number;
+  payableWeight: number;
+};
+
 type SeniorityPeriodCalculation = {
   amount: number;
   eligibleDays: number;
+  payableDays: number;
   yearsOfService: number;
-  rateDetails: Array<{ persianYear: number; dailyRateRials: number; eligibleDays: number }>;
+  rateDetails: Array<{
+    persianYear: number;
+    completedServiceYears: number;
+    dailyRateRials: number;
+    eligibleDays: number;
+    payableDays: number;
+  }>;
 };
 
 const TEHRAN_TZ = 'Asia/Tehran';
@@ -119,6 +146,63 @@ export const getEligibleSeniorityDays = (
 ) => getIsoDatesInRange(periodStart, periodEnd)
   .filter((date) => calcYearsOfService(hireDateIso, date) >= 1);
 
+const clampUnit = (value: number) => Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+
+/**
+ * وزن روزهای قابل پرداخت پایه سنوات را می‌سازد. روز تعطیل/استراحت در دورهٔ
+ * اشتغال یک روز کامل است؛ در روز برنامه‌دار، حضور و مرخصی باحقوق تا سقف همان
+ * برنامه اعتبار دارند تا اضافه‌حضور یک روز، غیبت روز دیگری را جبران نکند.
+ */
+export const getSeniorityPayableDays = (
+  hireDateIso: string,
+  periodStart: string,
+  periodEnd: string,
+  attendanceDays: SeniorityAttendanceDay[] = [],
+): SeniorityPayableDay[] => {
+  const attendanceByDate = new Map<string, SeniorityAttendanceDay>();
+  attendanceDays.forEach((item) => {
+    const date = getIsoDateOnly(item.date);
+    if (!date) return;
+    const current = attendanceByDate.get(date);
+    attendanceByDate.set(date, {
+      date,
+      scheduledMinutes: Math.max(Number(current?.scheduledMinutes || 0), Number(item.scheduledMinutes || 0)),
+      presenceMinutes: Math.max(0, Number(current?.presenceMinutes || 0)) + Math.max(0, Number(item.presenceMinutes || 0)),
+      paidLeaveMinutes: Math.max(Number(current?.paidLeaveMinutes || 0), Number(item.paidLeaveMinutes || 0)),
+    });
+  });
+
+  return getEligibleSeniorityDays(hireDateIso, periodStart, periodEnd).map((date) => {
+    const attendance = attendanceByDate.get(date);
+    const scheduledMinutes = Math.max(0, Number(attendance?.scheduledMinutes || 0));
+    const creditedMinutes = Math.max(0, Number(attendance?.presenceMinutes || 0))
+      + Math.max(0, Number(attendance?.paidLeaveMinutes || 0));
+    return {
+      date,
+      persianYear: getPersianYear(date),
+      completedServiceYears: calcYearsOfService(hireDateIso, date),
+      payableWeight: scheduledMinutes > 0 ? clampUnit(creditedMinutes / scheduledMinutes) : 1,
+    };
+  });
+};
+
+export const calculateSeniorityAmountFromRates = (
+  payableDays: SeniorityPayableDay[],
+  serviceRates: SeniorityServiceRate[],
+) => {
+  const rateByKey = new Map(serviceRates.map((rate) => [
+    `${rate.persianYear}:${rate.completedServiceYears}`,
+    Math.max(0, Number(rate.dailyRateRials || 0)),
+  ]));
+  return Math.round(payableDays.reduce((sum, day) => {
+    const rate = rateByKey.get(`${day.persianYear}:${day.completedServiceYears}`);
+    if (rate === undefined) {
+      throw new Error(`نرخ تجمیعی پایه سنوات سال ${day.persianYear} برای ${day.completedServiceYears} سال سابقه ثبت نشده است.`);
+    }
+    return sum + (rate * day.payableWeight);
+  }, 0));
+};
+
 /**
  * نرخ سالانه پایه سنوات را برای یک سال شمسی مشخص از دیتابیس می‌خواند.
  */
@@ -140,11 +224,9 @@ export const fetchSeniorityAnnualRate = async (
 };
 
 /**
- * مبلغ پایه سنوات ماهانه را طبق قانون کار ایران محاسبه می‌کند:
- *   سنوات = نرخ روزانه مصوب همان سال × تعداد روزهای ماه
- * داشتن حداقل یک سال سابقه، شرط برخورداری است؛ مبلغ پایه سنوات به تعداد سال‌های سابقه ضرب نمی‌شود.
- *
- * نکته: نرخ ماهانه بستگی به تعداد روزهای ماه شمسی دارد (۳۰ یا ۳۱ روز).
+ * سازگاری با مصرف‌کننده‌های قدیمی نرخ یک‌سالۀ مصوب.
+ * این helper نرخ تجمیعی سابقه را محاسبه نمی‌کند؛ محاسبهٔ جاری فیش از
+ * `saas_seniority_service_rates` و روزهای قابل پرداخت استفاده می‌کند.
  */
 export const calcMonthlySeniorityPay = (
   yearsOfService: number,
@@ -161,37 +243,54 @@ const calculateSeniorityForPeriod = async (
   hireDate: string,
   periodStart: string,
   periodEnd: string,
+  attendanceDays: SeniorityAttendanceDay[] = [],
 ): Promise<SeniorityPeriodCalculation> => {
-  const eligibleDates = getEligibleSeniorityDays(hireDate, periodStart, periodEnd);
+  const payableDayRows = getSeniorityPayableDays(hireDate, periodStart, periodEnd, attendanceDays);
   const yearsOfService = calcYearsOfService(hireDate, periodEnd);
-  if (eligibleDates.length === 0) {
-    return { amount: 0, eligibleDays: 0, yearsOfService, rateDetails: [] };
+  if (payableDayRows.length === 0) {
+    return { amount: 0, eligibleDays: 0, payableDays: 0, yearsOfService, rateDetails: [] };
   }
 
-  const eligibleDaysByPersianYear = eligibleDates.reduce<Map<number, number>>((result, date) => {
-    const persianYear = getPersianYear(date);
-    result.set(persianYear, (result.get(persianYear) || 0) + 1);
-    return result;
-  }, new Map());
-  const ratesByYear = new Map<number, SeniorityAnnualRate>();
-  await Promise.all(Array.from(eligibleDaysByPersianYear.keys()).map(async (persianYear) => {
-    const rate = await fetchSeniorityAnnualRate(supabase, persianYear);
-    if (!rate || rate.daily_rate_rials <= 0) {
-      throw new Error(`نرخ مصوب پایه سنوات سال ${persianYear} ثبت نشده است.`);
-    }
-    ratesByYear.set(persianYear, rate);
-  }));
+  const persianYears = Array.from(new Set(payableDayRows.map((item) => item.persianYear)));
+  const serviceYears = Array.from(new Set(payableDayRows.map((item) => item.completedServiceYears)));
+  const { data, error } = await supabase
+    .from('saas_seniority_service_rates')
+    .select('persian_year, completed_service_years, daily_rate_rials')
+    .in('persian_year', persianYears)
+    .in('completed_service_years', serviceYears);
+  if (error) throw error;
 
-  const rateDetails = Array.from(eligibleDaysByPersianYear.entries()).map(([persianYear, eligibleDays]) => ({
-    persianYear,
-    eligibleDays,
-    dailyRateRials: ratesByYear.get(persianYear)?.daily_rate_rials || 0,
+  const serviceRates: SeniorityServiceRate[] = (data || []).map((rate: any) => ({
+    persianYear: Number(rate.persian_year || 0),
+    completedServiceYears: Number(rate.completed_service_years || 0),
+    dailyRateRials: Number(rate.daily_rate_rials || 0),
   }));
-  const amount = Math.round(rateDetails.reduce(
-    (sum, item) => sum + (item.dailyRateRials * item.eligibleDays),
-    0,
-  ));
-  return { amount, eligibleDays: eligibleDates.length, yearsOfService, rateDetails };
+  const amount = calculateSeniorityAmountFromRates(payableDayRows, serviceRates);
+  const rateByKey = new Map(serviceRates.map((rate) => [
+    `${rate.persianYear}:${rate.completedServiceYears}`,
+    rate.dailyRateRials,
+  ]));
+  const grouped = new Map<string, SeniorityPeriodCalculation['rateDetails'][number]>();
+  payableDayRows.forEach((day) => {
+    const key = `${day.persianYear}:${day.completedServiceYears}`;
+    const current = grouped.get(key) || {
+      persianYear: day.persianYear,
+      completedServiceYears: day.completedServiceYears,
+      dailyRateRials: rateByKey.get(key) || 0,
+      eligibleDays: 0,
+      payableDays: 0,
+    };
+    current.eligibleDays += 1;
+    current.payableDays += day.payableWeight;
+    grouped.set(key, current);
+  });
+  return {
+    amount,
+    eligibleDays: payableDayRows.length,
+    payableDays: payableDayRows.reduce((sum, day) => sum + day.payableWeight, 0),
+    yearsOfService,
+    rateDetails: Array.from(grouped.values()),
+  };
 };
 
 /**
@@ -206,14 +305,22 @@ export const syncSeniorityPayrollEntry = async (
     hireDate,
     periodStart,
     periodEnd,
+    attendanceDays = [],
   }: {
     employeeId: string;
     hireDate: string;
     periodStart: string;
     periodEnd: string;
+    attendanceDays?: SeniorityAttendanceDay[];
   },
 ): Promise<number> => {
-  const calculation = await calculateSeniorityForPeriod(supabase, hireDate, periodStart, periodEnd);
+  const calculation = await calculateSeniorityForPeriod(
+    supabase,
+    hireDate,
+    periodStart,
+    periodEnd,
+    attendanceDays,
+  );
   if (calculation.eligibleDays === 0) {
     // اگر entry قبلاً وجود دارد و سابقه کافی نیست، void می‌کنیم
     await supabase
@@ -258,6 +365,7 @@ export const syncSeniorityPayrollEntry = async (
       years_of_service: calculation.yearsOfService,
       hire_date: hireDate,
       eligible_days: calculation.eligibleDays,
+      payable_days: calculation.payableDays,
       rate_details: calculation.rateDetails,
     },
     updated_at: new Date().toISOString(),

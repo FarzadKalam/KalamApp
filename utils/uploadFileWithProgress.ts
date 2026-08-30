@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import * as tus from 'tus-js-client';
 import { FILE_STORAGE_ANON_KEY, FILE_STORAGE_URL, fileStorageClient } from './storageClient';
 import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from '../supabaseClient';
 import {
@@ -34,6 +35,20 @@ export class UploadCanceledError extends Error {
   }
 }
 
+export const MAX_UPLOAD_FILE_SIZE_BYTES = 500 * 1024 * 1024;
+export const MAX_UPLOAD_FILE_SIZE_LABEL_FA = '۵۰۰ مگابایت';
+export const RESUMABLE_UPLOAD_CHUNK_SIZE_BYTES = 6 * 1024 * 1024;
+
+export const getUploadFileSizeError = (file: Pick<Blob, 'size'>) => (
+  Number(file?.size || 0) > MAX_UPLOAD_FILE_SIZE_BYTES
+    ? `حجم هر فایل باید حداکثر ${MAX_UPLOAD_FILE_SIZE_LABEL_FA} باشد.`
+    : null
+);
+
+export const shouldUseResumableUpload = (file: Pick<Blob, 'size'>) => (
+  Number(file?.size || 0) > RESUMABLE_UPLOAD_CHUNK_SIZE_BYTES
+);
+
 const resolveClientConfig = (client: AnySupabaseClient) => {
   if (client === fileStorageClient) {
     return {
@@ -65,6 +80,10 @@ const encodeStorageObjectUrl = (baseUrl: string, bucket: string, path: string) =
 
   return `${normalizedBase}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedPath}`;
 };
+
+const encodeResumableStorageUrl = (baseUrl: string) => (
+  `${baseUrl.replace(/\/+$/, '')}/storage/v1/upload/resumable`
+);
 
 const normalizeLabel = (path: string, explicitLabel?: string) => {
   if (explicitLabel?.trim()) return explicitLabel.trim();
@@ -117,6 +136,8 @@ export const uploadFileWithProgress = async ({
     file instanceof File || file instanceof Blob
       ? Number(file.size || 0)
       : 0;
+  const fileSizeError = getUploadFileSizeError(file);
+  if (fileSizeError) throw new Error(fileSizeError);
 
   const taskId = createUploadTask(normalizeLabel(path, label), totalBytes, detail);
   setUploadTaskRetry(taskId, () => {
@@ -135,10 +156,12 @@ export const uploadFileWithProgress = async ({
     });
   });
   let activeXhr: XMLHttpRequest | null = null;
+  let cancelActiveResumableUpload: (() => void) | null = null;
   let canceled = false;
   setUploadTaskCancel(taskId, () => {
     canceled = true;
     activeXhr?.abort();
+    cancelActiveResumableUpload?.();
   });
 
   const createFormData = () => {
@@ -197,6 +220,107 @@ export const uploadFileWithProgress = async ({
     xhr.setRequestHeader('authorization', `Bearer ${authorizationToken}`);
     xhr.send(createFormData());
   });
+
+  const uploadResumable = () => new Promise<{ id?: string; path: string; fullPath: string }>((resolve, reject) => {
+    let settled = false;
+    const finishResolve = () => {
+      if (settled) return;
+      settled = true;
+      resolve({ path, fullPath: `${bucket}/${path}` });
+    };
+    const finishReject = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      reject(error instanceof Error ? error : new Error(String(error || 'آپلود فایل ناموفق بود.')));
+    };
+    const fileName = file instanceof File ? file.name : normalizeLabel(path, label);
+    const lastModified = file instanceof File ? Number(file.lastModified || 0) : 0;
+    const upload = new tus.Upload(file, {
+      endpoint: encodeResumableStorageUrl(url),
+      retryDelays: [0, 1000, 3000, 5000, 10000, 20000],
+      headers: {
+        'x-upsert': String(Boolean(upsert)),
+        'x-client-info': 'kalamapp-resumable-upload/1.0',
+      },
+      uploadDataDuringCreation: true,
+      removeFingerprintOnSuccess: true,
+      storeFingerprintForResuming: true,
+      chunkSize: RESUMABLE_UPLOAD_CHUNK_SIZE_BYTES,
+      fingerprint: async () => [
+        'kalamapp-tus-v1',
+        url,
+        bucket,
+        path,
+        fileName,
+        totalBytes,
+        lastModified,
+      ].join('::'),
+      metadata: {
+        bucketName: bucket,
+        objectName: path,
+        contentType: contentType || file.type || 'application/octet-stream',
+        cacheControl,
+        ...(metadata ? { metadata: JSON.stringify(metadata) } : {}),
+      },
+      onBeforeRequest: async (request) => {
+        const { data: latestAuthData } = await client.auth.getSession();
+        const latestToken = latestAuthData?.session?.access_token || authorizationToken;
+        request.setHeader('apikey', anonKey);
+        request.setHeader('authorization', `Bearer ${latestToken}`);
+      },
+      onProgress: (bytesUploaded, bytesTotal) => {
+        updateUploadTaskProgress(taskId, bytesUploaded, bytesTotal);
+      },
+      onSuccess: () => {
+        if (canceled) {
+          finishReject(new UploadCanceledError());
+          return;
+        }
+        finishResolve();
+      },
+      onError: (error) => {
+        if (canceled) {
+          finishReject(new UploadCanceledError());
+          return;
+        }
+        finishReject(error);
+      },
+    });
+
+    cancelActiveResumableUpload = () => {
+      void upload.abort(false).finally(() => finishReject(new UploadCanceledError()));
+    };
+
+    void upload.findPreviousUploads()
+      .catch(() => [])
+      .then((previousUploads) => {
+        if (canceled) {
+          finishReject(new UploadCanceledError());
+          return;
+        }
+        if (previousUploads.length > 0) {
+          upload.resumeFromPreviousUpload(previousUploads[0]);
+        }
+        upload.start();
+      });
+  });
+
+  if (shouldUseResumableUpload(file) && tus.isSupported) {
+    try {
+      const result = await uploadResumable();
+      finishUploadTask(taskId);
+      return result;
+    } catch (error) {
+      cancelActiveResumableUpload = null;
+      if (isUploadCanceledError(error) || canceled) {
+        markUploadTaskCanceled(taskId);
+        throw new UploadCanceledError();
+      }
+      const message = String((error as any)?.message || 'آپلود فایل ناموفق بود.');
+      failUploadTask(taskId, message);
+      throw error instanceof Error ? error : new Error(message);
+    }
+  }
 
   let lastError: unknown = null;
   for (let attempt = 0; attempt <= STORAGE_RETRY_DELAYS_MS.length; attempt += 1) {

@@ -461,6 +461,21 @@ describe('ExcelImportWizard import scenarios', () => {
     });
   }, 15000);
 
+  it('requires campaign attribution only when the imported source is an advertising campaign', async () => {
+    renderWizard('customers', MODULES.customers);
+    await uploadCsv(
+      [
+        'نام کامل مشتری,منبع سرنخ',
+        'مشتری کمپین,کمپین تبلیغاتی',
+      ].join('\n')
+    );
+    await goToMappingStep('ثبت نکن');
+    await runImportExpectFailures();
+
+    expect(currentDb.customers).toHaveLength(1);
+    expect(document.body.textContent || '').toContain('مقدار فیلدهای اجباری کامل نیست');
+  }, 15000);
+
   it('does not autocreate invoice customers during grouped import', async () => {
     renderWizard('invoices', MODULES.invoices);
     await uploadCsv(

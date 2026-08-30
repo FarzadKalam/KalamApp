@@ -1894,7 +1894,11 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
   }, [itemImportableFields]);
 
   const requiredFields = useMemo(
-    () => headerImportableFields.filter((field) => field.validation?.required),
+    () => headerImportableFields.filter((field) => field.validation?.required && !field.logic),
+    [headerImportableFields]
+  );
+  const conditionalRequiredFields = useMemo(
+    () => headerImportableFields.filter((field) => field.validation?.required && Boolean(field.logic)),
     [headerImportableFields]
   );
 
@@ -1929,7 +1933,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     const set = new Set(mappedHeaderFieldKeys);
     if (set.has("legacy_status")) set.add("status");
     return requiredFields
-      .filter((field) => set.has(field.key) || !isValueEmpty(resolveImportFieldDefaultValue(field)))
+      .filter((field) => set.has(field.key) || !isValueEmpty(getImportFieldDefaultValueForPayload(field, {})))
       .map((field) => field.key);
   }, [mappedHeaderFieldKeys, requiredFields]);
 
@@ -3891,7 +3895,11 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
               invoiceItems: itemPayloads,
             });
 
-            const missingInRow = requiredFields.filter((field) => isValueEmpty(payload[field.key]));
+            const activeRequiredFields = [
+              ...requiredFields,
+              ...conditionalRequiredFields.filter((field) => isLogicVisibleForPayload(field.logic, payload)),
+            ];
+            const missingInRow = activeRequiredFields.filter((field) => isValueEmpty(payload[field.key]));
             if (missingInRow.length > 0) {
               failed += 1;
               errors.push(`فاکتور ${record.key} در ردیف ${sourceLine}: مقدار فیلدهای اجباری کامل نیست.`);
@@ -3987,7 +3995,11 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
                 : payloadRawWithLinks;
             const payload = finalizeImportedPayload(payloadPrepared as Record<string, unknown>);
 
-            const missingInRow = requiredFields.filter((field) => isValueEmpty(payload[field.key]));
+            const activeRequiredFields = [
+              ...requiredFields,
+              ...conditionalRequiredFields.filter((field) => isLogicVisibleForPayload(field.logic, payload)),
+            ];
+            const missingInRow = activeRequiredFields.filter((field) => isValueEmpty(payload[field.key]));
             if (missingInRow.length > 0) {
               failed += 1;
               errors.push(`ردیف ${sourceLine}: مقدار فیلدهای اجباری کامل نیست.`);
@@ -4089,6 +4101,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
   }, [
     autoSyncCustomerStats,
     buildPayloadFromMappings,
+    conditionalRequiredFields,
     duplicateStrategy,
     finalizeImportedPayload,
     findExistingRecord,

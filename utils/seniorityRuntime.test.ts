@@ -1,22 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { calcMonthlySeniorityPay, calcYearsOfService, getEligibleSeniorityDays } from './seniorityRuntime';
+import {
+  calculateSeniorityAmountFromRates,
+  calcYearsOfService,
+  getEligibleSeniorityDays,
+  getSeniorityPayableDays,
+} from './seniorityRuntime';
 
-const RATE_1405 = {
-  daily_rate_rials: 166_667,
-  monthly_rate_30day_rials: 5_000_010,
-  monthly_rate_31day_rials: 5_166_677,
-};
+const SERVICE_RATES_1405 = [
+  { persianYear: 1405, completedServiceYears: 1, dailyRateRials: 166_667 },
+  { persianYear: 1405, completedServiceYears: 2, dailyRateRials: 302_967 },
+  { persianYear: 1405, completedServiceYears: 3, dailyRateRials: 436_947 },
+  { persianYear: 1405, completedServiceYears: 4, dailyRateRials: 600_403 },
+];
 
 describe('seniorityRuntime', () => {
   it('requires one completed year of service', () => {
     expect(calcYearsOfService('2024-03-20', '2025-03-22')).toBeGreaterThanOrEqual(1);
     expect(calcYearsOfService('2025-03-21', '2026-03-20')).toBe(0);
-  });
-
-  it('uses the statutory monthly base rate once after eligibility, not once per year of service', () => {
-    expect(calcMonthlySeniorityPay(1, RATE_1405, 30)).toBe(5_000_010);
-    expect(calcMonthlySeniorityPay(8, RATE_1405, 31)).toBe(5_166_677);
-    expect(calcMonthlySeniorityPay(0, RATE_1405, 31)).toBe(0);
   });
 
   it('prorates the month in which the employee completes one year of service', () => {
@@ -25,9 +25,31 @@ describe('seniorityRuntime', () => {
     expect(eligibleDays[0]).toBe('2026-03-21');
   });
 
-  it('calculates the statutory rate once for an employee with three full years of service', () => {
-    expect(calcYearsOfService('2023-03-21', '2026-04-20')).toBe(3);
-    // ماه فروردین ۱۴۰۵، ۳۱ روز دارد: ۱۶۶٬۶۶۷ × ۳۱؛ نه سه برابر این مبلغ.
-    expect(calcMonthlySeniorityPay(3, RATE_1405, 31)).toBe(5_166_677);
+  it('uses the cumulative statutory daily rate for completed service years', () => {
+    const twoYearDays = getSeniorityPayableDays('2024-03-20', '2026-03-21', '2026-04-20');
+    const fourYearDays = getSeniorityPayableDays('2022-03-21', '2026-03-21', '2026-04-20');
+
+    expect(new Set(twoYearDays.map((day) => day.completedServiceYears))).toEqual(new Set([2]));
+    expect(new Set(fourYearDays.map((day) => day.completedServiceYears))).toEqual(new Set([4]));
+    expect(calculateSeniorityAmountFromRates(twoYearDays, SERVICE_RATES_1405)).toBe(302_967 * 31);
+    expect(calculateSeniorityAmountFromRates(fourYearDays, SERVICE_RATES_1405)).toBe(600_403 * 31);
+  });
+
+  it('does not let excess presence on one day cover absence on another day', () => {
+    const payableDays = getSeniorityPayableDays('2024-03-20', '2026-03-21', '2026-04-20', [
+      { date: '2026-03-25', scheduledMinutes: 480, presenceMinutes: 0 },
+      { date: '2026-03-26', scheduledMinutes: 480, presenceMinutes: 720 },
+    ]);
+
+    expect(payableDays.reduce((sum, day) => sum + day.payableWeight, 0)).toBe(30);
+    expect(calculateSeniorityAmountFromRates(payableDays, SERVICE_RATES_1405)).toBe(302_967 * 30);
+  });
+
+  it('counts approved paid leave as payable attendance', () => {
+    const payableDays = getSeniorityPayableDays('2024-03-20', '2026-03-21', '2026-04-20', [
+      { date: '2026-03-25', scheduledMinutes: 480, presenceMinutes: 0, paidLeaveMinutes: 480 },
+    ]);
+
+    expect(payableDays.reduce((sum, day) => sum + day.payableWeight, 0)).toBe(31);
   });
 });

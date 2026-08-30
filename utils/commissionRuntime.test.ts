@@ -111,6 +111,7 @@ describe('commissionRuntime', () => {
     });
 
     expect(rows[0]?.lines[0]?.commission_percent).toBe(9);
+    expect(rows[0]?.selected_amount).toBe(90000);
   });
 
   it('includes prepayment invoices in the approved-and-higher calculation', () => {

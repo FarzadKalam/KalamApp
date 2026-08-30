@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Checkbox, Input, Modal, Tag } from 'antd';
+import { App, Button, Checkbox, Input, Modal, Tag } from 'antd';
 import {
   AudioOutlined,
   CaretRightOutlined,
@@ -13,6 +13,7 @@ import {
 import type { NoteAttachment } from '../../utils/noteContent';
 import FileManagerPickerModal from '../files/FileManagerPickerModal';
 import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
+import { getUploadFileSizeError, MAX_UPLOAD_FILE_SIZE_LABEL_FA } from '../../utils/uploadFileWithProgress';
 
 interface SharedNoteComposerProps {
   header?: React.ReactNode;
@@ -130,6 +131,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
   enableImagePasteAndDrop = false,
   surfaceVariant = 'default',
 }) => {
+  const { message } = App.useApp();
   const lastExternalValueRef = useRef(value);
   const [pendingPrompts, setPendingPrompts] = useState<PendingFilePrompt[]>([]);
   const [preparedFiles, setPreparedFiles] = useState<File[]>([]);
@@ -217,8 +219,18 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
 
   const handleFilesPicked = (files: File[]) => {
     if (!files.length) return;
+    const acceptedFiles = files.filter((file) => !getUploadFileSizeError(file));
+    const rejectedCount = files.length - acceptedFiles.length;
+    if (rejectedCount > 0) {
+      message.error(
+        rejectedCount === 1
+          ? `حجم فایل باید حداکثر ${MAX_UPLOAD_FILE_SIZE_LABEL_FA} باشد.`
+          : `${rejectedCount.toLocaleString('fa-IR')} فایل بزرگ‌تر از ${MAX_UPLOAD_FILE_SIZE_LABEL_FA} انتخاب شده و افزوده نشد.`,
+      );
+    }
+    if (!acceptedFiles.length) return;
     setPreparedFiles([]);
-    const prompts = files.map((file) => ({
+    const prompts = acceptedFiles.map((file) => ({
       original: file,
       suggestedName: splitFileName(file.name).name || 'file',
     }));
@@ -600,7 +612,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
                   icon={<PaperClipOutlined />}
                   onClick={() => setFilePickerOpen(true)}
                   aria-label="افزودن پیوست"
-                  title="افزودن پیوست"
+                  title={`افزودن پیوست تا ${MAX_UPLOAD_FILE_SIZE_LABEL_FA}`}
                   className={iconButtonClassName}
                 />
               ) : null}
