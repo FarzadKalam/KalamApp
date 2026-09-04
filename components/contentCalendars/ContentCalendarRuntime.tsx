@@ -351,7 +351,11 @@ const ContentCalendarRuntime: React.FC<{
         rows.filter(
           (row) =>
             row.is_active !== false &&
-            doesProcessTemplateSupportModule(row, "tasks"),
+            // فعالیت نهایی در جدول tasks ساخته می‌شود، اما خود فرآیند ممکن
+            // است برای تقویم محتوایی تعریف شده باشد. هر دو نوع الگو باید
+            // در این نقطه قابل استفاده باشند.
+            (doesProcessTemplateSupportModule(row, "content_calendars") ||
+              doesProcessTemplateSupportModule(row, "tasks")),
         ),
       );
     } catch {
@@ -515,10 +519,11 @@ const ContentCalendarRuntime: React.FC<{
     const rows = events.get(day.key) || [];
     const holiday = holidays[day.key];
     const isHoliday = !!holiday?.isOfficialHoliday || day.date.getDay() === 5;
+    const hasOfficialOccasion = holiday?.isOfficialHoliday === true;
     return (
       <div
         key={day.key}
-        className={`min-w-0 overflow-hidden rounded-xl border border-gray-100 p-1.5 dark:border-white/10 ${list ? "p-3" : "min-h-[120px] sm:min-h-[145px]"} ${isHoliday ? "bg-rose-50/80 dark:bg-rose-950/20" : "bg-white dark:bg-[#151515]"} ${day.inMonth || list ? "" : "opacity-50"}`}
+        className={`min-w-0 overflow-hidden rounded-xl border border-gray-100 p-1.5 dark:border-white/10 ${list ? "p-3" : "min-h-[120px] sm:min-h-[145px]"} ${isHoliday ? "bg-rose-50/80 dark:bg-rose-950/20" : "bg-white dark:bg-[#151515]"} ${day.inMonth || list ? "" : "opacity-50"} ${day.isToday ? "ring-1 ring-[rgba(var(--brand-500-rgb),0.7)]" : ""}`}
       >
         <div className="mb-1 flex items-start justify-between">
           <div>
@@ -532,6 +537,11 @@ const ContentCalendarRuntime: React.FC<{
             ) : null}
           </div>
           <div className="flex items-center gap-1">
+            {day.isToday ? (
+              <span className="rounded bg-[rgba(var(--brand-100-rgb),0.9)] px-1 text-[9px] font-bold text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--brand-500-rgb),0.2)] dark:text-[rgb(var(--brand-200-rgb))]">
+                امروز
+              </span>
+            ) : null}
             {isHoliday ? (
               <span
                 className="h-2 w-2 rounded-full bg-rose-500"
@@ -555,7 +565,7 @@ const ContentCalendarRuntime: React.FC<{
         </div>
         {holiday?.occasions?.length ? (
           <div
-            className="mb-1 truncate text-[9px] font-medium text-rose-600 dark:text-rose-300"
+            className={`mb-1 truncate text-[9px] font-medium ${hasOfficialOccasion ? "text-rose-600 dark:text-rose-300" : "text-gray-500 dark:text-gray-400"}`}
             title={holiday.occasions.map((item) => item.title).join("، ")}
           >
             {holiday.occasions[0].title}
@@ -630,6 +640,9 @@ const ContentCalendarRuntime: React.FC<{
           />
         </div>
         <div className="flex items-center justify-between gap-2">
+          <Button size="small" onClick={() => setAnchor(new Date())}>
+            امروز
+          </Button>
           <Button
             type="text"
             icon={<RightOutlined />}

@@ -445,6 +445,7 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
     const summary = holidaySummaries[day.key];
     const events = eventsByDay.get(day.key) || [];
     const isHoliday = !!summary?.isOfficialHoliday || day.date.getDay() === 5;
+    const hasOfficialOccasion = summary?.isOfficialHoliday === true;
     const isExpandableMonthDay = calendarMode === "month";
     const isExpanded = expandedDayKeySet.has(day.key);
     const collapsedLimit = isListLayout ? 4 : 3;
@@ -484,8 +485,8 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
           </div>
         </div>
 
-        {isHoliday && summary?.occasions?.length ? (
-          <div className={`mb-1 truncate font-medium text-rose-600 dark:text-rose-300 ${isListLayout ? "text-[11px]" : "text-[9px]"}`} title={summary.occasions.map((item) => item.title).join("، ")}>
+        {summary?.occasions?.length ? (
+          <div className={`mb-1 truncate font-medium ${hasOfficialOccasion ? "text-rose-600 dark:text-rose-300" : "text-gray-500 dark:text-gray-400"} ${isListLayout ? "text-[11px]" : "text-[9px]"}`} title={summary.occasions.map((item) => item.title).join("، ")}>
             {summary.occasions[0]?.title}
           </div>
         ) : null}

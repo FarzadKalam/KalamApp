@@ -3197,8 +3197,11 @@ const buildPromptMessages = (
   const processGroundingInstruction = options.authoritativeProcessContext || pageContext.intent === 'process_guide'
     ? ' این گفتگو در زمینهٔ یک فرآیند یا رکورد فرآیندی است. authoritative_process_context و process_guide_context منبع قطعی هستند: ابتدا فرآیند انتخاب‌شده و همان رکورد را شناسایی کن، سپس فقط بر پایهٔ مرحله‌ها، ترتیب sort_order، ماژول‌های هدف، توضیحات، مسئول‌های پیش‌فرض، موعدها، وضعیت‌های اختصاصی، فیلدهای اختصاصی و اتوماسیون‌های موجود توضیح بده. وقتی کاربر گزارش کامل، توضیح کامل، مستندات، دیاگرام یا فلوچارت فرآیند را می‌خواهد، پاسخ را کوتاه‌سازی نکن: نام و هدف الگو، همهٔ مرحله‌ها به ترتیب، مسئول یا نقش هر مرحله، زمان و مبنای زمان، فیلدها و وضعیت‌های اختصاصی، سپس هر اتوماسیون شامل trigger، شرط‌ها، اکشن‌ها و مقصد را صریح و منظم ارائه کن. در توضیح مقصد، بین مسئول همان فعالیت، مرحلهٔ قبل/بعد/خاص، نقش، کاربر و ماژول مقصد تفاوت بگذار. اطلاعات هیچ پروژه، الگو یا دستورالعمل نامرتبطی را به این فرآیند نسبت نده. اگر دادهٔ لازم در همین context نیست، صریح بگو ثبت نشده است؛ هرگز مرحله، مسئول، موعد یا دستورالعمل را حدس نزن. وقتی کاربر می‌گوید «این فرآیند» یا «این رکورد»، منظور همان فرآیند/رکورد جاری است.'
     : '';
+  const contentCalendarDesignerInstruction = pageContext?.moduleId === 'content_calendars'
+    ? ' شما در نقش طراح تقویم محتوایی این کسب‌وکار هستید. تقویم، مشتری مرتبط، پروژه‌ها، فعالیت‌ها، سازمان، نقش‌ها و الگوهای فرآیندِ موجود در current_page و authoritative_process_context منابع اصلی شما هستند. اگر این تقویم برای مشتری تعریف شده، لحن، مخاطب، پیشنهاد محتوا و اولویت‌ها را بر اساس همان مشتری و داده‌های مجاز او تنظیم کن؛ اما هیچ داده‌ای از مشتری یا سازمان دیگر حدس نزن. در گفتگوی متنی ابتدا هدف تجاری، مخاطب، کانال‌ها، بازه زمانی، تعداد یا فرمت محتوا، پیام اصلی، محدودیت‌های برند یا تاییدکننده را فقط در صورت نامشخص بودن و حداکثر در ۲ تا ۳ سوال کوتاه بپرس. پیش از پیشنهاد زمان‌بندی، تعارض با محتوای موجود و تعطیلی یا مناسبت تاییدشده را بررسی کن. برای اجرای فرآیند، فقط الگوها، مرحله‌ها، مسئول پیش‌فرض، فیلدها، وضعیت‌ها و اتوماسیون‌هایی را به‌کار ببر که واقعاً در context آمده‌اند؛ جزئیات ثبت‌نشده را نساز یا به الگو نسبت نده.'
+    : '';
 
-  const systemContent = `${tenantIdentity}${conversationContinuity}${recordScopeInstruction}${processGroundingInstruction} اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. personal_memory شامل ترجیح‌های پایدار خود همین کاربر است؛ فقط در حد مرتبط آن‌ها را رعایت کنید و آن را دادهٔ سازمان یا حقیقت بیرونی فرض نکنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction}${copyableOutputInstruction}${jalaliAndReportsInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
+  const systemContent = `${tenantIdentity}${conversationContinuity}${recordScopeInstruction}${processGroundingInstruction}${contentCalendarDesignerInstruction} اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. personal_memory شامل ترجیح‌های پایدار خود همین کاربر است؛ فقط در حد مرتبط آن‌ها را رعایت کنید و آن را دادهٔ سازمان یا حقیقت بیرونی فرض نکنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction}${copyableOutputInstruction}${jalaliAndReportsInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
 
   const historyMessages = (historyRows || [])
     .filter((item) => ['user', 'assistant'].includes(String(item?.role || '')))
@@ -6513,7 +6516,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
   const canUseKnowledge = !freeChatMode && isAiCapabilityPlanAvailable(planContext, 'document_analysis');
   const requiresAuthoritativeProcessContext = !freeChatMode && (
     rawContext.intent === 'process_guide'
-    || ['process_templates', 'process_runs'].includes(String(pageContext?.moduleId || '').trim())
+    || ['process_templates', 'process_runs', 'content_calendars'].includes(String(pageContext?.moduleId || '').trim())
   );
   const [knowledgeChunks, companyContext, orgPeopleContext, calendarContext, authoritativeProcessContext] = await Promise.all([
     canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, message, { moduleId: pageContext.moduleId }) : Promise.resolve([]),
@@ -8206,6 +8209,7 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
     'برای درخواست ایجاد یا ویرایش رکورد مجاز، هرگز نگویید دستیار دسترسی مستقیم ندارد یا کاربر باید خودش در CRM ثبت کند. وظیفه شما ساخت پیش‌نویس قابل‌ویرایش و ارسال آن به مودال تایید کاربر است؛ اجرای نهایی فقط پس از تایید کاربر انجام می‌شود.',
     'برای ساخت رکورد mutation_mode=create و برای ویرایش رکورد موجود mutation_mode=update برگردان.',
     'اگر کاربر خواسته مرحله، فعالیت یا فرآیند اجرا/تغییر/ارجاع شود، process_operation را انتخاب کن.',
+    'اگر صفحهٔ فعلی تقویم محتوایی است و کاربر می‌خواهد چند محتوای واقعی، فعالیت‌های تولید محتوا یا پروژه‌های تقویمی برنامه‌ریزی و ثبت شوند، process_operation را انتخاب کن تا پیش‌نویس‌های جداگانه برای تایید کاربر ساخته شود.',
     'اگر کاربر ساخت یا اصلاح تصویر می‌خواهد، image_generation را انتخاب کن؛ مخصوصاً وقتی تصویر مبنا هم فرستاده شده است.',
     'اگر کاربر فقط پرامپت، متن، توضیح یا دستور برای تولید تصویر می‌خواهد، image_generation را انتخاب نکن؛ این یک گفتگوی متنی عادی است مگر اینکه صریحاً بخواهد خود تصویر همین حالا ساخته شود.',
     'اگر کاربر صریحاً ساخت، تولید یا تبدیل یک متن یا تصویر به ویدیو می‌خواهد، video_generation را انتخاب کن. اگر تصویر مبنا دارد، آن را در برنامه به‌عنوان ورودی ویدیو در نظر بگیر.',
@@ -8941,6 +8945,7 @@ const buildProcessTaskPayload = ({
     related_to_module: moduleId,
     source_module_id: moduleId,
     source_record_id: recordId,
+    ...(moduleId === 'content_calendars' ? { content_calendar_id: recordId } : {}),
     ...assignee,
     created_by: authContext.userId || null,
     updated_by: authContext.userId || null,
@@ -9019,7 +9024,10 @@ const loadAiProcessContext = async (supabaseUrl: string, serviceRoleKey: string,
       String(template?.module_id || '').trim(),
       ...(Array.isArray(template?.module_ids) ? template.module_ids.map((item: any) => String(item || '').trim()) : []),
     ].filter(Boolean)));
-    return !targetModuleId || templateModules.includes(targetModuleId) || templateModules.includes('tasks');
+    return !targetModuleId
+      || templateModules.includes(targetModuleId)
+      || templateModules.includes('tasks')
+      || (targetModuleId === 'content_calendars' && templateModules.includes('projects'));
   }).slice(0, 30);
   const templateIds = relevantTemplates.map((template: any) => normalizeId(template?.id)).filter(isUuid);
   const templateStages = templateIds.length
@@ -9112,6 +9120,8 @@ const buildAiProcessOperationPrompt = (input: any) => [
   'سوال‌ها باید بر اساس هدف کاربر و مسیر واقعی فرآیند باشد، نه فقط فیلدهای اجباری.',
   'حذف مرحله واقعی مجاز نیست؛ برای حذف/کم کردن مرحله واقعی از cancel_stage_task استفاده کن.',
   'برای ساخت فرآیند خام، stages را کامل و مرتب بده. وضعیت فعالیت باید یکی از todo/planned/in_progress/review/done/canceled باشد.',
+  'وقتی رکورد جاری content_calendars است، هر فعالیت یا اجرای الگوی پیشنهادی باید به همان تقویم متصل بماند. برای چند محتوای مستقل، یک operation جدا برای هر محتوا بساز تا کاربر بتواند هر کدام را جداگانه تایید کند.',
+  'در تقویم محتوایی می‌توانی create_content_project برای پروژه خام واقعی، یا همان operation با template_id از الگوی هدف projects برای پروژهٔ مبتنی بر الگو پیشنهاد بدهی. برای فعالیت یا مرحله از materialize_template_to_tasks یا create_raw_process_with_tasks استفاده کن.',
   'برای وضعیت‌ها و فیلدهای اختصاصی هر فعالیت، از status_options و custom_fields/custom_values داخل stage استفاده کن؛ فیلدهای عمومی فعالیت مثل status، task_type، due_date، start_date و completed_at را هم جداگانه در نظر بگیر.',
   'process_context شامل templates، runs، stages و tasks مجاز همین رکورد است. ترتیب فعالیت‌ها را از sort_order/source_stage_sort_order بخوان و بدون داده واقعی حدس نزن.',
   'شرط‌های اجرای اتوماسیون‌ها conditions_all و conditions_any هستند؛ همه شرط‌ها را قبل از پیشنهاد اکشن بررسی کن و اگر شرط نامشخص است، آن را به‌عنوان ابهام برگردان.',
@@ -9124,9 +9134,10 @@ const buildAiProcessOperationPrompt = (input: any) => [
   '- add_stage_task: افزودن مرحله/task به اجرای موجود یا رکورد جاری',
   '- update_stage_task: ویرایش task/stage موجود',
   '- cancel_stage_task: لغو مرحله/task موجود',
+  '- create_content_project: ساخت پروژه واقعی متصل به تقویم محتوایی؛ می‌تواند template_id یکی از الگوهای مجاز projects داشته باشد',
   '',
   'قالب خروجی:',
-  '{"reply":"پیام کوتاه فارسی","needs_clarification":false,"questions":[],"operations":[{"type":"create_raw_process_with_tasks","process_name":"...","stages":[{"name":"...","sort_order":10,"task_type":"فعالیت سازمانی","status":"todo","due_days":2,"assignee":{"type":"role","id":"..."}, "custom_fields":[], "custom_values":{}, "status_options":[], "automation_rules":[]}]}]}',
+  '{"reply":"پیام کوتاه فارسی","needs_clarification":false,"questions":[],"operations":[{"type":"create_raw_process_with_tasks","process_name":"...","stages":[{"name":"...","sort_order":10,"task_type":"فعالیت سازمانی","status":"todo","due_days":2,"assignee":{"type":"role","id":"..."}, "custom_fields":[], "custom_values":{}, "status_options":[], "automation_rules":[]}]},{"type":"create_content_project","name":"...","start_date":"...","due_date":"...","template_id":null}]}',
   '',
   JSON.stringify(input),
 ].join('\n');
@@ -9148,6 +9159,72 @@ const executeAiProcessOperation = async (
   const taskPerm = getModulePermission(authContext.permissions, 'tasks');
   if (!canViewModule(modulePerm) || !canCreateModule(taskPerm)) {
     throw new Error('دسترسی ایجاد یا تغییر فعالیت‌های فرآیند را ندارید.');
+  }
+
+  if (type === 'create_content_project') {
+    if (moduleId !== 'content_calendars') {
+      throw new Error('پروژهٔ تقویمی فقط از داخل تقویم محتوایی ساخته می‌شود.');
+    }
+    const projectPerm = getModulePermission(authContext.permissions, 'projects');
+    if (!canCreateModule(projectPerm)) throw new Error('دسترسی ایجاد پروژه را ندارید.');
+    const calendar = pageContext?.records?.[0] || {};
+    const projectName = String(operation?.name || operation?.project_name || '').trim();
+    if (!projectName) throw new Error('عنوان پروژهٔ تقویمی مشخص نیست.');
+    const templateId = normalizeId(operation?.template_id);
+    const template = templateId
+      ? (processContext.templates || []).find((item: any) => normalizeId(item?.id) === templateId)
+      : null;
+    const templateModules = Array.from(new Set([
+      String(template?.module_id || '').trim(),
+      ...(Array.isArray(template?.module_ids) ? template.module_ids.map((item: any) => String(item || '').trim()) : []),
+    ].filter(Boolean)));
+    if (templateId && (!template || !templateModules.includes('projects'))) {
+      throw new Error('الگوی انتخاب‌شده برای پروژه معتبر نیست.');
+    }
+    const projectRows = await restInsert(supabaseUrl, serviceRoleKey, 'projects', [{
+      org_id: authContext.orgId,
+      name: projectName,
+      status: String(operation?.status || 'planning').trim() || 'planning',
+      priority: String(operation?.priority || 'medium').trim() || 'medium',
+      description: String(operation?.description || '').trim() || null,
+      start_date: operation?.start_date || null,
+      due_date: operation?.due_date || null,
+      content_calendar_id: recordId,
+      customer_id: normalizeId(calendar?.customer_id) || null,
+      source_invoice_id: normalizeId(calendar?.source_invoice_id) || null,
+      created_by: authContext.userId || null,
+      updated_by: authContext.userId || null,
+    }]);
+    const project = projectRows[0] || null;
+    if (!project?.id) throw new Error('پروژهٔ تقویمی ساخته نشد.');
+    const baseResult: any = {
+      type,
+      project_id: project.id,
+      title: buildAiRecordTitle(project, projectName),
+    };
+    if (!templateId) return baseResult;
+    try {
+      const processResult = await executeAiProcessOperation(
+        supabaseUrl,
+        serviceRoleKey,
+        authContext,
+        { ...pageContext, moduleId: 'projects', recordId: String(project.id), records: [project] },
+        {
+          type: 'materialize_template_to_tasks',
+          template_id: templateId,
+          process_name: String(operation?.process_name || template.name || projectName).trim(),
+        },
+        processContext,
+        orgPeopleContext,
+      );
+      return { ...baseResult, process: processResult };
+    } catch (error) {
+      await restDelete(supabaseUrl, serviceRoleKey, 'projects', {
+        id: `eq.${project.id}`,
+        org_id: `eq.${authContext.orgId}`,
+      }).catch(() => []);
+      throw error;
+    }
   }
 
   if (type === 'materialize_template_to_tasks') {
@@ -12960,12 +13037,23 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
     }
     const operations = Array.isArray(proposed.operations) ? proposed.operations : [];
     if (operations.length === 0) return json(400, { success: false, message: 'اقدام فرآیندی قابل اجرا پیدا نشد.' });
+    const requestedIndexes = Array.isArray(body?.selectedOperationIndexes)
+      ? body.selectedOperationIndexes
+      : operations.map((_operation: any, index: number) => index);
+    const selectedIndexes = Array.from(new Set(
+      requestedIndexes
+        .map((value: any) => Number(value))
+        .filter((value: number) => Number.isInteger(value) && value >= 0 && value < operations.length),
+    ));
+    if (selectedIndexes.length === 0) {
+      return json(400, { success: false, message: 'حداقل یک اقدام فرآیندی را برای اجرا انتخاب کنید.' });
+    }
     const [processContext, orgPeopleContext] = await Promise.all([
       loadAiProcessContext(supabaseUrl, serviceRoleKey, authContext, pageContext),
       loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, String(proposed.prompt || '')),
     ]);
     const executed: any[] = [];
-    for (const operation of operations.slice(0, 8)) {
+    for (const operation of selectedIndexes.slice(0, 8).map((index) => operations[index])) {
       executed.push(await executeAiProcessOperation(supabaseUrl, serviceRoleKey, authContext, pageContext, operation, processContext, orgPeopleContext));
     }
     await restPatch(supabaseUrl, serviceRoleKey, 'ai_action_logs', { id: `eq.${actionLogId}` }, {
@@ -12989,7 +13077,7 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
         },
       }).catch(() => null);
     }
-    return json(200, { success: true, actionLogId, operations: executed });
+    return json(200, { success: true, executed: true, actionLogId, operations: executed });
   }
 
   if (String(action.action_type) !== 'send_note') {

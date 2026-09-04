@@ -34,6 +34,7 @@ import ComposerAttachmentChips, { type ComposerAttachmentChipItem } from '../com
 import AiMessageRenderer from './AiMessageRenderer';
 import { type AiRecordMutationDraft } from './AiRecordMutationApprovalCard';
 import QuickRecordFormModal from './QuickRecordFormModal';
+import AiProcessOperationApprovalCard from './AiProcessOperationApprovalCard';
 
 type ChatMessage = {
   id: string;
@@ -2671,19 +2672,31 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       if (Array.isArray(proposedRecords) && proposedRecords.length === 0) {
         throw new Error('حداقل یک رکورد را برای اجرا انتخاب کنید.');
       }
+      const proposedOperations = Array.isArray(pendingAiAction?.operations)
+        ? pendingAiAction.operations
+            .map((_operation: any, index: number) => index)
+            .filter((index: number) => pendingAiAction?.selectedOperationIndexes?.includes?.(index) !== false)
+        : null;
+      if (Array.isArray(proposedOperations) && proposedOperations.length === 0) {
+        throw new Error('حداقل یک اقدام را برای اجرا انتخاب کنید.');
+      }
       const data = await callAssistant({
         action: 'confirm_action',
         actionLogId: actionId,
         proposedRecords,
+        selectedOperationIndexes: proposedOperations,
       });
       const executedRecords = [
         ...(Array.isArray(data?.createdRecords) ? data.createdRecords : []),
         ...(Array.isArray(data?.updatedRecords) ? data.updatedRecords : []),
       ];
-      if (data?.executed !== true || executedRecords.length === 0) {
+      const executedOperationCount = Array.isArray(data?.operations) ? data.operations.length : 0;
+      if ((data?.executed !== true && data?.success !== true) || (executedRecords.length === 0 && executedOperationCount === 0)) {
         throw new Error('ثبت یا ویرایش رکورد نتیجه قابل تایید نداشت.');
       }
-      message.success(`${executedRecords.length.toLocaleString('fa-IR')} رکورد با موفقیت ثبت یا ویرایش شد.`);
+      message.success(executedOperationCount > 0
+        ? `${executedOperationCount.toLocaleString('fa-IR')} اقدام با موفقیت اجرا شد.`
+        : `${executedRecords.length.toLocaleString('fa-IR')} رکورد با موفقیت ثبت یا ویرایش شد.`);
       setPendingAiAction(null);
       setQuickRecordFormOpen(false);
       await loadThread();
@@ -2994,6 +3007,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       ? [{ selected: true, fields: proposedPayload.payload }]
       : [];
   }, [pendingAiAction, pendingRecordMutationType]);
+  const pendingProcessOperations = useMemo(() => (
+    String(pendingAiAction?.actionType || '') === 'process_operation_from_prompt'
+      && Array.isArray(pendingAiAction?.operations)
+      ? pendingAiAction.operations
+      : []
+  ), [pendingAiAction]);
   const pendingGenerationCanChooseModel = pendingAiAction?.actionType === 'confirm_generation'
     && ['image_generation', 'video_generation', 'voice_output', 'document_generation', 'deep_reasoning'].includes(pendingGenerationKind);
   const pendingGenerationSourceImageCount = useMemo(() => {
@@ -3332,6 +3351,18 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               <Button size="small" onClick={() => setQuickRecordFormOpen(true)}>
                 بررسی و ویرایش فرم
               </Button>
+            ) : null}
+            {pendingProcessOperations.length > 0 ? (
+              <AiProcessOperationApprovalCard
+                operations={pendingProcessOperations}
+                selectedIndexes={Array.isArray(pendingAiAction?.selectedOperationIndexes)
+                  ? pendingAiAction.selectedOperationIndexes
+                  : pendingProcessOperations.map((_operation: any, index: number) => index)}
+                onChange={(selectedOperationIndexes) => setPendingAiAction((current: any) => current ? {
+                  ...current,
+                  selectedOperationIndexes,
+                } : current)}
+              />
             ) : null}
             <div className="mt-2">
               {String(pendingAiAction?.actionType || '') === 'confirm_generation'

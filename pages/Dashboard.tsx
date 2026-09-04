@@ -1441,7 +1441,7 @@ const Dashboard: React.FC = () => {
                 }}
               >
                 <div className="rounded-lg bg-white p-2 dark:bg-dark-surface">
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     <AiSparkleIcon className="h-5 w-5 shrink-0 text-leather-500" />
                     <Input.TextArea
                       variant="borderless"
@@ -1454,7 +1454,7 @@ const Dashboard: React.FC = () => {
                       }}
                       placeholder="از دستیار هوشمند سازمان بپرسید..."
                       autoSize={{ minRows: 1, maxRows: 4 }}
-                      className="!leading-6"
+                      className="min-w-0 flex-1 !leading-6"
                     />
                     <Button
                       type="primary"
@@ -1465,6 +1465,8 @@ const Dashboard: React.FC = () => {
                       onClick={handleSubmitDashboardAiQuestion}
                       aria-label={dashboardVideoMode ? 'ساخت ویدیو با هوش مصنوعی' : dashboardVoiceOutputMode ? 'تولید صدا با هوش مصنوعی' : dashboardImageMode ? 'ساخت تصویر با هوش مصنوعی' : 'ارسال پیام به هوش مصنوعی'}
                     />
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
                     <AiCapabilityComposerActions
                       selected={dashboardAiCapabilities}
                       onChange={handleDashboardCapabilitiesChange}
