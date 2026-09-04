@@ -35,8 +35,8 @@ const THEME_VARIABLE_FALLBACKS: Record<string, string> = {
 };
 
 const NATIVE_PRINT_MARGIN_TEMPLATE_IDS = ['kalamapp-gotenberg-header', 'kalamapp-gotenberg-footer'];
-const PRINT_MARGIN_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
-const PRINT_MARGIN_IMAGE_FETCH_TIMEOUT_MS = 8_000;
+const PRINT_IMAGE_MAX_BYTES = 12 * 1024 * 1024;
+const PRINT_IMAGE_FETCH_TIMEOUT_MS = 8_000;
 
 let embeddedFontCssPromise: Promise<string> | null = null;
 
@@ -144,40 +144,66 @@ export const materializeNativePrintAssets = ({
   .replaceAll(NATIVE_PRINT_FONT_CSS_TOKEN, fontCss)
   .replaceAll(NATIVE_PRINT_BASE_HREF_TOKEN, escapeHtml(baseHref));
 
-const isEmbeddableMarginImageUrl = (value: string) => /^(?:https?:|blob:)/i.test(value);
+const isEmbeddablePrintImageUrl = (value: string) => /^(?:https?:|blob:)/i.test(value);
 const getNativePrintMarginTemplatePattern = (id: string) =>
   new RegExp(`(<template\\b[^>]*\\bid=["']${id}["'][^>]*>)([\\s\\S]*?)(<\\/template>)`, 'gi');
 const IMAGE_SRC_ATTRIBUTE_PATTERN = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
 const IMAGE_TAG_PATTERN = /<img\b[^>]*>/gi;
+const STYLE_ATTRIBUTE_PATTERN = /\bstyle\s*=\s*(["'])([\s\S]*?)\1/gi;
+const STYLE_IMAGE_URL_PATTERN = /url\((['"]?)(.*?)\1\)/gi;
+
+const decodeHtmlAttribute = (value: string) => String(value || '')
+  .replaceAll('&amp;', '&')
+  .replaceAll('&quot;', '"')
+  .replaceAll('&#39;', "'");
 
 const getImageSources = (html: string) => Array.from(html.matchAll(IMAGE_TAG_PATTERN))
   .map((match) => {
     const sourceMatch = match[0].match(IMAGE_SRC_ATTRIBUTE_PATTERN);
-    return String(sourceMatch?.[1] || sourceMatch?.[2] || sourceMatch?.[3] || '').trim();
+    return decodeHtmlAttribute(String(sourceMatch?.[1] || sourceMatch?.[2] || sourceMatch?.[3] || '')).trim();
   })
-  .filter(isEmbeddableMarginImageUrl);
+  .filter(isEmbeddablePrintImageUrl);
+
+const getInlineStyleImageSources = (html: string) => Array.from(html.matchAll(STYLE_ATTRIBUTE_PATTERN))
+  .flatMap((match) => Array.from(String(match[2] || '').matchAll(STYLE_IMAGE_URL_PATTERN)))
+  .map((match) => decodeHtmlAttribute(String(match[2] || '')).trim())
+  .filter(isEmbeddablePrintImageUrl);
 
 const replaceImageSources = (html: string, dataUrlBySource: Map<string, string>, origin: string) =>
   html.replace(IMAGE_TAG_PATTERN, (imageTag) => imageTag.replace(IMAGE_SRC_ATTRIBUTE_PATTERN, (attribute, doubleQuoted, singleQuoted, unquoted) => {
-    const source = String(doubleQuoted || singleQuoted || unquoted || '').trim();
-    if (!isEmbeddableMarginImageUrl(source)) return attribute;
+    const source = decodeHtmlAttribute(String(doubleQuoted || singleQuoted || unquoted || '')).trim();
+    if (!isEmbeddablePrintImageUrl(source)) return attribute;
     const replacement = dataUrlBySource.get(resolveAssetUrl(source, origin));
     return replacement ? `src="${escapeHtml(replacement)}"` : attribute;
   }));
 
-const fetchPrintMarginImageDataUrl = async (url: string) => {
+const replaceInlineStyleImageSources = (html: string, dataUrlBySource: Map<string, string>, origin: string) =>
+  html.replace(STYLE_ATTRIBUTE_PATTERN, (attribute, quote, styleText) => {
+    const nextStyle = String(styleText || '').replace(STYLE_IMAGE_URL_PATTERN, (urlMatch, _urlQuote, rawSource) => {
+      const source = decodeHtmlAttribute(String(rawSource || '')).trim();
+      if (!isEmbeddablePrintImageUrl(source)) return urlMatch;
+      const replacement = dataUrlBySource.get(resolveAssetUrl(source, origin));
+      return replacement ? `url(${replacement})` : urlMatch;
+    });
+    return `style=${quote}${nextStyle}${quote}`;
+  });
+
+const fetchPrintImageDataUrl = async (url: string) => {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), PRINT_MARGIN_IMAGE_FETCH_TIMEOUT_MS);
+  const timeout = window.setTimeout(() => controller.abort(), PRINT_IMAGE_FETCH_TIMEOUT_MS);
 
   try {
-    const response = await fetch(url, { credentials: 'omit', signal: controller.signal });
+    // The PDF renderer runs in a different network context. Resolve an image
+    // in the user's browser first, where signed URLs and local blob URLs are
+    // valid, then send an inline copy to Chromium.
+    const response = await fetch(url, { credentials: 'same-origin', signal: controller.signal });
     if (!response.ok) return url;
 
     const contentType = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     if (!contentType.startsWith('image/')) return url;
 
     const bytes = await response.arrayBuffer();
-    if (bytes.byteLength === 0 || bytes.byteLength > PRINT_MARGIN_IMAGE_MAX_BYTES) return url;
+    if (bytes.byteLength === 0 || bytes.byteLength > PRINT_IMAGE_MAX_BYTES) return url;
 
     return `data:${contentType};base64,${arrayBufferToBase64(bytes)}`;
   } catch {
@@ -187,6 +213,29 @@ const fetchPrintMarginImageDataUrl = async (url: string) => {
   } finally {
     window.clearTimeout(timeout);
   }
+};
+
+/**
+ * Makes body images self-contained before the document crosses from the
+ * browser to Gotenberg. This covers catalog artwork as well as user-authored
+ * template images; previously only images in native header/footer templates
+ * were embedded.
+ */
+export const materializePrintImageAssets = async (sourceHtml: string, origin: string) => {
+  if (typeof window === 'undefined' || !sourceHtml) return sourceHtml;
+
+  const sourceUrls = Array.from(new Set([...getImageSources(sourceHtml), ...getInlineStyleImageSources(sourceHtml)]
+    .map((source) => resolveAssetUrl(source, origin))));
+  if (sourceUrls.length === 0) return sourceHtml;
+
+  const dataUrlBySource = new Map(await Promise.all(
+    sourceUrls.map(async (source) => [source, await fetchPrintImageDataUrl(source)] as const),
+  ));
+  return replaceInlineStyleImageSources(
+    replaceImageSources(sourceHtml, dataUrlBySource, origin),
+    dataUrlBySource,
+    origin,
+  );
 };
 
 /**
@@ -208,11 +257,11 @@ export const materializeNativePrintMarginImages = async (sourceHtml: string, ori
 
   const sourceUrls = Array.from(new Set(marginTemplateContents
     .flatMap(getImageSources)
-    .filter(isEmbeddableMarginImageUrl)
+    .filter(isEmbeddablePrintImageUrl)
     .map((source) => resolveAssetUrl(source, origin))));
   if (sourceUrls.length === 0) return sourceHtml;
 
-  const dataUrlBySource = new Map(await Promise.all(sourceUrls.map(async (source) => [source, await fetchPrintMarginImageDataUrl(source)] as const)));
+  const dataUrlBySource = new Map(await Promise.all(sourceUrls.map(async (source) => [source, await fetchPrintImageDataUrl(source)] as const)));
   return NATIVE_PRINT_MARGIN_TEMPLATE_IDS.reduce(
     (html, id) => html.replace(getNativePrintMarginTemplatePattern(id), (_match, openingTag, content, closingTag) =>
       `${openingTag}${replaceImageSources(String(content || ''), dataUrlBySource, origin)}${closingTag}`),
@@ -228,12 +277,13 @@ export const buildPrintDocumentHtml = async ({ pageSize, sourceHtml, title }: Bu
   const baseHref = origin ? `${origin}/` : '/';
   const fontCss = await getFontFaceCss(origin);
   const rootVars = getThemeVariableCss();
-  const preparedSourceHtml = isNativePrintFlow
+  const sourceHtmlWithNativeAssets = isNativePrintFlow
     ? await materializeNativePrintMarginImages(
         materializeNativePrintAssets({ sourceHtml, fontCss, baseHref }),
         origin,
       )
     : sourceHtml;
+  const preparedSourceHtml = await materializePrintImageAssets(sourceHtmlWithNativeAssets, origin);
 
   return `<!doctype html>
 <html lang="fa" dir="rtl">

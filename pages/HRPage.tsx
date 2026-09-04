@@ -200,6 +200,8 @@ import {
 
 const COMMISSION_MODAL_Z_INDEX = 14000;
 const COMMISSION_PRINT_MODAL_Z_INDEX = COMMISSION_MODAL_Z_INDEX + 100;
+const ATTENDANCE_MODAL_Z_INDEX = 15000;
+const ATTENDANCE_SELECT_OVERLAY_Z_INDEX = ATTENDANCE_MODAL_Z_INDEX + 100;
 
 type TaskRecord = {
   id: string;
@@ -9765,6 +9767,7 @@ const HRPage: React.FC = () => {
         footer={<Button onClick={() => setIncompleteAttendanceModalOpen(false)}>بستن</Button>}
         width={900}
         destroyOnHidden
+        zIndex={ATTENDANCE_MODAL_Z_INDEX - 10}
       >
         <div className="space-y-4">
           <Typography.Text type="secondary">
@@ -9829,6 +9832,7 @@ const HRPage: React.FC = () => {
         footer={null}
         destroyOnHidden
         width={760}
+        zIndex={ATTENDANCE_MODAL_Z_INDEX}
       >
         <div className="space-y-4">
           <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-[#17191f]">
@@ -9846,7 +9850,7 @@ const HRPage: React.FC = () => {
                   placeholder="نام کارمند"
                   getPopupContainer={resolveOverlayPopupContainer}
                   modalContainer={resolveOverlayPopupContainer}
-                  overlayZIndexBase={12000}
+                  overlayZIndexBase={ATTENDANCE_SELECT_OVERLAY_Z_INDEX}
                 />
               </Form.Item>
 
@@ -9864,7 +9868,7 @@ const HRPage: React.FC = () => {
                     ]}
                     getPopupContainer={resolveOverlayPopupContainer}
                     modalContainer={resolveOverlayPopupContainer}
-                    overlayZIndexBase={12000}
+                    overlayZIndexBase={ATTENDANCE_SELECT_OVERLAY_Z_INDEX}
                   />
                 </Form.Item>
 
@@ -9883,7 +9887,7 @@ const HRPage: React.FC = () => {
                     ]}
                     getPopupContainer={resolveOverlayPopupContainer}
                     modalContainer={resolveOverlayPopupContainer}
-                    overlayZIndexBase={12000}
+                    overlayZIndexBase={ATTENDANCE_SELECT_OVERLAY_Z_INDEX}
                   />
                 </Form.Item>
 

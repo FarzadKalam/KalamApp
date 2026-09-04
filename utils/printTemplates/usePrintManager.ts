@@ -2545,6 +2545,12 @@ export const usePrintManager = ({
         }
 
         const autoHiddenIndexes: number[] = [];
+        const conditionallyHiddenIndexes =
+          blockId === 'payments' && !rows.some((row: any) => String(row?.payment_type || '').trim().toLowerCase() === 'cheque')
+            ? templateCells
+                .map((cell, index) => String(cell.getAttribute('data-print-conditional-column') || '').trim() === 'cheque' ? index : -1)
+                .filter((index) => index >= 0)
+            : [];
         if (rows.length > 0) {
           const liveRows = Array.from(tbody.rows || []);
           const maxColumnCount = Math.max(
@@ -2560,7 +2566,11 @@ export const usePrintManager = ({
           }
         }
 
-        const allHiddenIndexes = Array.from(new Set([...hiddenColumnIndexes, ...autoHiddenIndexes]));
+        const allHiddenIndexes = Array.from(new Set([
+          ...hiddenColumnIndexes,
+          ...conditionallyHiddenIndexes,
+          ...autoHiddenIndexes,
+        ]));
         if (allHiddenIndexes.length > 0) {
           applyHiddenColumnIndexes(table, allHiddenIndexes);
         }
@@ -2801,6 +2811,13 @@ export const usePrintManager = ({
         (path.startsWith('record.') || path.startsWith('block.') || path === 'responsible.name') &&
         !canViewPrintFieldPath(path)
       ) {
+        return '';
+      }
+      // Keep the print-field selection authoritative for every record token.
+      // Several computed record variables return before the generic resolver
+      // below; without this shared gate, unchecked fields could still appear
+      // in system and manually authored templates.
+      if (path.startsWith('record.') && !isSystemFieldVisible(path)) {
         return '';
       }
       if (path === 'system.today_date') return toPersianNumber(safeJalaliFormat(now, 'YYYY/MM/DD'));

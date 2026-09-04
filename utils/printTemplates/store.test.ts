@@ -128,6 +128,25 @@ describe('print template store grouping', () => {
     }
   );
 
+  it('adds localized payment status alongside cheque status to current and existing payment tables', () => {
+    const defaultTemplate = buildDefaultTemplatesForModule('invoices')
+      .find((item) => item.id === 'default_invoice_official');
+    const normalizedLegacyTable = normalizeDynamicBlockTablesHtml('invoices', `
+      <table data-print-block="payments"><tbody><tr>
+        <td>{{row.__row_index__}}</td><td>{{row.payment_type}}</td>
+        <td>{{row.amount}}</td><td>{{row.cheque_status}}</td>
+      </tr></tbody></table>
+    `);
+
+    [defaultTemplate?.contentHtml, normalizedLegacyTable].forEach((html) => {
+      expect(html).toContain('>وضعیت<');
+      expect(html).toContain('>وضعیت چک<');
+      expect(html).toContain('{{row.status}}');
+      expect(html).toContain('{{row.cheque_status}}');
+      expect(html).toContain('data-print-conditional-column="cheque"');
+    });
+  });
+
   it('starts a copied system template without inheriting its source field selection', () => {
     const source = buildDefaultTemplatesForModule('invoices')
       .find((item) => item.id === 'default_invoice_unofficial');

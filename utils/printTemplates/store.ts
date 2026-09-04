@@ -422,25 +422,27 @@ const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
     <tr style="background:rgba(var(--brand-500-rgb),0.12);">
       <th style="width:5%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">ردیف</th>
       <th style="width:13%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">${invoiceConfig.paymentTypeTitle}</th>
-      <th style="width:12%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">شماره چک</th>
-      <th style="width:12%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">سررسید</th>
-      <th style="width:11%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">بانک</th>
+      <th data-print-conditional-column="cheque" style="width:12%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">شماره چک</th>
+      <th data-print-conditional-column="cheque" style="width:12%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">سررسید</th>
+      <th data-print-conditional-column="cheque" style="width:11%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">بانک</th>
       <th style="width:11%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">تاریخ</th>
-      <th style="width:14%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">مبلغ</th>
+      <th style="width:12%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">مبلغ</th>
       <th style="width:10%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">وضعیت</th>
-      <th style="width:12%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">توضیحات</th>
+      <th data-print-conditional-column="cheque" style="width:10%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">وضعیت چک</th>
+      <th style="width:10%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">توضیحات</th>
     </tr>
   </thead>
   <tbody>
     <tr>
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.__row_index__}}</td>
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.payment_type}}</td>
-      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.cheque_serial_no}}</td>
-      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.cheque_due_date}}</td>
-      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.cheque_bank_name}}</td>
+      <td data-print-conditional-column="cheque" style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.cheque_serial_no}}</td>
+      <td data-print-conditional-column="cheque" style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.cheque_due_date}}</td>
+      <td data-print-conditional-column="cheque" style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.cheque_bank_name}}</td>
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.date}}</td>
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.amount}} <span style="font-size:8.2px; color:#64748b;">{{company.currency_label}}</span></td>
-      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.cheque_status}}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.status}}</td>
+      <td data-print-conditional-column="cheque" style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.cheque_status}}</td>
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; word-break:break-word; overflow-wrap:anywhere; ${getLongTextPrintStyle(9.6)}">{{row.description}}</td>
     </tr>
     ${buildInvoicePaymentsSummaryRow(paymentSummaryTitle, 'جمع باقیمانده')}
@@ -1220,7 +1222,7 @@ export const normalizeDynamicBlockTablesHtml = (moduleId: string, html?: string)
         tableHtml.includes('{{row.__row_index__}}') &&
         tableHtml.includes('{{row.payment_type}}') &&
         tableHtml.includes('{{row.amount}}') &&
-        tableHtml.includes('{{row.cheque_status}}');
+        (tableHtml.includes('{{row.status}}') || tableHtml.includes('{{row.cheque_status}}'));
       if (hasPaymentsShape) return 'payments';
 
       return '';
