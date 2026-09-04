@@ -387,4 +387,47 @@ describe('process draft task flow', () => {
       expect(screen.queryByTestId('global-process-modal')).toBeNull();
     });
   });
+
+  it('opens the same global modal for an explicitly prepared V2 draft stage', async () => {
+    render(
+      <App>
+        <GlobalTaskProcessModalHost />
+      </App>
+    );
+
+    openTaskProcessModal({
+      draftModal: {
+        process: {
+          mode: 'run',
+          id: '77777777-7777-4777-8777-777777777777',
+          title: 'فرآیند محتوایی',
+          templateId: TEMPLATE_ID,
+          templateTitle: 'فرآیند محتوایی',
+          relatedRecordLabel: 'تقویم شهریور',
+          statusLabel: 'draft',
+          lanes: [],
+        },
+        stage: {
+          id: '88888888-8888-4888-8888-888888888880',
+          title: 'طراحی پست',
+          kind: 'draft',
+          status: 'draft',
+          layoutSlot: 10,
+          assigneeLabel: 'مسئول پیش‌فرض',
+          source: {
+            id: 'content_calendar_draft_1',
+            process_run_stage_id: '88888888-8888-4888-8888-888888888880',
+            process_link_map: { content_calendars: PROJECT_ID },
+          },
+        },
+        onCreateDraftActivity: vi.fn(),
+        onSaveDraftActivity: vi.fn(),
+      },
+    });
+
+    const modal = await screen.findByTestId('global-process-modal');
+    expect(modal).toHaveAttribute('data-module-id', 'content_calendars');
+    expect(modal).toHaveAttribute('data-record-id', PROJECT_ID);
+    expect(modal).not.toHaveAttribute('data-task-id');
+  });
 });

@@ -29,7 +29,7 @@ import {
   RelationValueMap,
 } from '../../utils/recordDisplayFormatter';
 import { NOTES_UPDATED_EVENT } from '../../utils/aiAssistantEvents';
-import { insertNotesWithFallback, sendNoteSmsNotifications, sendInvoiceReplySmsToCustomer } from '../../utils/noteDispatch';
+import { insertNotesWithFallback, sendInternalMessageV2, sendNoteSmsNotifications, sendInvoiceReplySmsToCustomer } from '../../utils/noteDispatch';
 import { logAndTouchRecord, sanitizeActivityText } from '../../utils/recordActivity';
 import { getRecordActivityPresentation } from '../../utils/recordActivityPresentation';
 
@@ -600,11 +600,23 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
         ...(isPublicReply ? { is_public: true } : {}),
       } as any;
 
-      await insertNotesWithFallback([payload]);
+      // یادداشتِ دارای منشن علاوه بر رکورد، باید در صندوق گفتگوی شخصی مخاطب
+      // نیز حاضر باشد. مسیر مرکزی V2 این دو نمایش را با یک ثبت اتمیک نگه می‌دارد.
+      const insertedRows = mention_user_ids.length > 0 || mention_role_ids.length > 0
+        ? await sendInternalMessageV2({
+            ...payload,
+            metadata: {
+              source_type: 'record_note',
+              record_note: true,
+            },
+          })
+        : await insertNotesWithFallback([payload]);
+      const insertedNote = insertedRows[insertedRows.length - 1] || payload;
       setItems((prev) => [
         {
           ...payload,
-          id: `optimistic-note-${Date.now()}`,
+          ...insertedNote,
+          id: insertedNote.id || `optimistic-note-${Date.now()}`,
         },
         ...prev,
       ]);

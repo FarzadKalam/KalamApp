@@ -22,7 +22,8 @@ type TaskProcessTarget = {
 
 type ModalSession = {
   key: number;
-  task: any;
+  task: any | null;
+  draftModal?: NonNullable<import('../../utils/taskProcessModalEvents').OpenTaskProcessModalPayload['draftModal']>;
 };
 
 const isProcessRunStagePreviewTask = (task: any) => {
@@ -128,7 +129,15 @@ const GlobalTaskProcessModalHost: React.FC = () => {
 
   const task = session?.task || null;
   const target = useMemo(() => resolveTaskProcessTarget(task), [task]);
-  const modalPayload = useMemo(() => buildTaskProcessCard(task, target, assigneeDirectory), [assigneeDirectory, task, target]);
+  const modalPayload = useMemo(() => {
+    if (session?.draftModal) {
+      return {
+        process: session.draftModal.process,
+        stage: session.draftModal.stage,
+      };
+    }
+    return buildTaskProcessCard(task, target, assigneeDirectory);
+  }, [assigneeDirectory, session?.draftModal, task, target]);
 
   useEffect(() => {
     let cancelled = false;
@@ -144,11 +153,12 @@ const GlobalTaskProcessModalHost: React.FC = () => {
     };
   }, []);
 
-  const openSession = (nextTask: any) => {
+  const openSession = (nextTask: any, draftModal?: ModalSession['draftModal']) => {
     sessionKeyRef.current += 1;
     setSession({
       key: sessionKeyRef.current,
       task: nextTask,
+      draftModal,
     });
   };
 
@@ -161,6 +171,10 @@ const GlobalTaskProcessModalHost: React.FC = () => {
     mountedRef.current = true;
     const handleOpen = async (event: Event) => {
       const detail = (event as CustomEvent<any>)?.detail || {};
+      if (detail?.draftModal?.process && detail?.draftModal?.stage) {
+        openSession(null, detail.draftModal);
+        return;
+      }
       const providedTask = detail?.task && typeof detail.task === 'object' ? detail.task : null;
       const resolvedTaskId = String(detail?.taskId || providedTask?.id || '').trim();
       if (!resolvedTaskId) return;
@@ -219,8 +233,10 @@ const GlobalTaskProcessModalHost: React.FC = () => {
           open
           process={modalPayload.process}
           stage={modalPayload.stage}
-          laneTitle="ردیف فعالیت"
+          laneTitle={session?.draftModal?.laneTitle || "ردیف فعالیت"}
           onClose={closeSession}
+          onCreateDraftActivity={session?.draftModal?.onCreateDraftActivity}
+          onSaveDraftActivity={session?.draftModal?.onSaveDraftActivity}
           onStageStatusChange={(_stageId, status, sourcePatch) => {
             const nextTask = {
               ...(task || {}),

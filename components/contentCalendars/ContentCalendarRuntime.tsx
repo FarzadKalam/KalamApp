@@ -43,9 +43,16 @@ import {
   getTaskStatusLabel,
 } from "../../utils/processTaskStatusOptions";
 import { loadProcessTemplateStages } from "../../utils/processTemplateStages";
-import { mapProcessTemplateStagesToDraft } from "../../utils/processRunRuntime";
+import {
+  createProcessGroupId,
+  ensureProcessRunForDraftStageGroup,
+  mapProcessTemplateStagesToDraft,
+  resolveProcessRunStageId,
+} from "../../utils/processRunRuntime";
 import { autoAssignProcessV2DraftStages } from "../../utils/processV2AutoAssign";
 import { doesProcessTemplateSupportModule } from "../../utils/processTargets";
+import { saveProcessV2DraftStage } from "../../utils/processV2DraftStagePersistence";
+import type { ProcessV2CardData, ProcessV2Stage } from "../processes/ProcessCardsV2";
 
 type RuntimeItem = {
   id: string;
@@ -111,6 +118,8 @@ const formatTime = (value: any) => {
 const formatContentType = (value: any) =>
   CONTENT_TYPES.find((item) => item.value === String(value || ""))?.label ||
   String(value || "").trim();
+const asObject = (value: any): Record<string, any> =>
+  value && typeof value === "object" && !Array.isArray(value) ? value : {};
 const buildDays = (anchor: Date) => {
   const source = toPersian(anchor);
   const start = toGregorian(
@@ -312,36 +321,203 @@ const ContentCalendarRuntime: React.FC<{
     setTemplateStages([]);
     setTemplateStageId(undefined);
   };
+  const openDraftActivity = async ({
+    draftStages,
+    targetStage,
+    processTitle,
+    templateId: sourceTemplateId = null,
+    templateTitle = null,
+    contentType = null,
+  }: {
+    draftStages: any[];
+    targetStage: any;
+    processTitle: string;
+    templateId?: string | null;
+    templateTitle?: string | null;
+    contentType?: string | null;
+  }) => {
+    if (!createDate || !calendarId) return;
+    setCreating(true);
+    try {
+      const dateKey = toKey(createDate);
+      const defaultSchedule = {
+        start_date: `${dateKey}T09:00:00`,
+        due_date: `${dateKey}T17:00:00`,
+      };
+      const context = await ensureProcessRunForDraftStageGroup({
+        supabaseClient: supabase,
+        moduleId: "content_calendars",
+        recordId: calendarId,
+        stages: draftStages,
+        targetStage,
+      });
+      if (!context.processRunId || !context.processRunStageId) {
+        throw new Error("ایجاد پیش‌نویس فرآیند ناموفق بود.");
+      }
+      const stagesWithRuntime = draftStages.map((stage) => {
+        const processRunStageId = resolveProcessRunStageId(context.stageMap, stage);
+        const metadata = asObject(stage?.metadata);
+        const recurrence = asObject(stage?.recurrence_info);
+        return {
+          ...stage,
+          ...(String(stage?.id) === String(targetStage?.id) ? defaultSchedule : {}),
+          process_run_id: context.processRunId,
+          process_run_stage_id: processRunStageId || null,
+          process_link_map: {
+            ...asObject(stage?.process_link_map),
+            content_calendars: calendarId,
+          },
+          metadata: {
+            ...metadata,
+            process_run_id: context.processRunId,
+            process_run_stage_id: processRunStageId || null,
+            content_calendar_id: calendarId,
+            ...(String(stage?.id) === String(targetStage?.id) ? defaultSchedule : {}),
+          },
+          recurrence_info: {
+            ...recurrence,
+            process_run_id: context.processRunId,
+            process_run_stage_id: processRunStageId || null,
+          },
+        };
+      });
+      const selectedSource = stagesWithRuntime.find((stage) => String(stage?.id) === String(targetStage?.id));
+      if (!selectedSource) throw new Error("مرحلهٔ پیش‌نویس انتخاب‌شده پیدا نشد.");
+
+      const laneMap = new Map<string, { id: string; title: string; stages: ProcessV2Stage[] }>();
+      stagesWithRuntime.forEach((source, index) => {
+        const laneId = String(source?.process_lane_key || source?.metadata?.process_lane_key || "content_calendar_lane");
+        const lane = laneMap.get(laneId) || {
+          id: laneId,
+          title: String(source?.process_lane_name || source?.metadata?.process_lane_name || "فعالیت‌های محتوا"),
+          stages: [],
+        };
+        lane.stages.push({
+          id: String(source?.process_run_stage_id || source?.id || `draft-${index}`),
+          title: String(source?.stage_name || source?.name || "فعالیت"),
+          kind: "draft",
+          status: "draft",
+          layoutSlot: Number(source?.sort_order || (index + 1) * 10),
+          assigneeLabel: String(source?.assignee_label || "مسئول پیش‌فرض"),
+          activityTypeLabel: String(source?.task_type || source?.metadata?.task_type || "فعالیت سازمانی"),
+          dueLabel: String(source?.due_date || ""),
+          actionCount: Array.isArray(source?.automation_rules) ? source.automation_rules.length : 0,
+          source,
+        });
+        laneMap.set(laneId, lane);
+      });
+      const modalStage = Array.from(laneMap.values()).flatMap((lane) => lane.stages)
+        .find((stage) => String(stage.source?.id) === String(selectedSource.id)) || null;
+      if (!modalStage) throw new Error("مرحلهٔ پیش‌نویس قابل نمایش نیست.");
+      const modalProcess: ProcessV2CardData = {
+        mode: "run",
+        id: context.processRunId,
+        title: processTitle,
+        templateId: sourceTemplateId || undefined,
+        templateTitle: templateTitle || processTitle,
+        relatedRecordLabel: getRecordTitle(calendar, MODULES.content_calendars, { fallback: "تقویم محتوایی" }),
+        statusLabel: "draft",
+        lanes: Array.from(laneMap.values()),
+      };
+      const mergeTargetOverrides = (overrides?: Record<string, any>) => stagesWithRuntime.map((stage) => {
+        if (String(stage?.id) !== String(selectedSource.id)) return stage;
+        const patch = asObject(overrides);
+        return {
+          ...stage,
+          ...patch,
+          metadata: { ...asObject(stage?.metadata), ...asObject(patch.metadata) },
+          recurrence_info: { ...asObject(stage?.recurrence_info), ...asObject(patch.recurrence_info) },
+        };
+      });
+      openTaskProcessModal({
+        draftModal: {
+          process: modalProcess,
+          stage: modalStage,
+          laneTitle: Array.from(laneMap.values()).find((lane) => lane.stages.includes(modalStage))?.title || "فعالیت‌های محتوا",
+          onSaveDraftActivity: async (overrides) => {
+            const savedStage = mergeTargetOverrides(overrides).find((stage) => String(stage?.id) === String(selectedSource.id));
+            await saveProcessV2DraftStage({
+              supabaseClient: supabase,
+              stageId: selectedSource.process_run_stage_id,
+              stageName: savedStage?.stage_name || savedStage?.name,
+              assigneeUserId: savedStage?.assignee_id || savedStage?.default_assignee_id,
+              assigneeRoleId: savedStage?.assignee_role_id || savedStage?.default_assignee_role_id,
+              wage: savedStage?.wage,
+              plannedStartAt: savedStage?.start_date,
+              plannedDueAt: savedStage?.due_date,
+              metadata: asObject(savedStage?.metadata),
+            });
+          },
+          onCreateDraftActivity: async (overrides) => {
+            const result = await autoAssignProcessV2DraftStages({
+              supabaseClient: supabase,
+              moduleId: "content_calendars",
+              recordId: calendarId,
+              recordData: calendar,
+              draftStages: mergeTargetOverrides(overrides),
+              targetGroupId: selectedSource.process_group_id,
+              targetStageId: selectedSource.process_node_key || selectedSource.id,
+            });
+            const ids = (result.createdTasks || []).map((item: any) => String(item?.id || "")).filter(Boolean);
+            if (ids.length > 0) {
+              const patch = asObject(overrides);
+              const { error } = await supabase
+                .from("tasks")
+                .update({
+                  content_calendar_id: calendarId,
+                  content_type: contentType || null,
+                  start_date: patch.start_date || defaultSchedule.start_date,
+                  due_date: patch.due_date || defaultSchedule.due_date,
+                })
+                .in("id", ids);
+              if (error) throw error;
+              await load();
+            }
+            if (!ids.length && result.missingAssigneeCount) {
+              throw new Error("برای ایجاد فعالیت، مسئول مرحله را تعیین کنید.");
+            }
+            return result;
+          },
+        },
+      });
+      resetCreate();
+    } catch (error: any) {
+      message.error(`باز کردن پیش‌نویس فعالیت ناموفق بود: ${String(error?.message || "خطای نامشخص")}`);
+    } finally {
+      setCreating(false);
+    }
+  };
   const createRaw = async () => {
     if (!createDate || !rawName.trim()) {
       message.warning("عنوان فعالیت را وارد کنید.");
       return;
     }
-    setCreating(true);
-    try {
-      const key = toKey(createDate);
-      const { error } = await supabase
-        .from("tasks")
-        .insert({
-          name: rawName.trim(),
-          status: "todo",
-          task_type: "فعالیت سازمانی",
-          content_calendar_id: calendarId,
-          content_type: rawContentType || null,
-          start_date: `${key}T09:00:00`,
-          due_date: `${key}T17:00:00`,
-        });
-      if (error) throw error;
-      message.success("فعالیت به تقویم افزوده شد.");
-      resetCreate();
-      await load();
-    } catch (error: any) {
-      message.error(
-        `ایجاد فعالیت ناموفق بود: ${String(error?.message || "خطای نامشخص")}`,
-      );
-    } finally {
-      setCreating(false);
-    }
+    const groupId = createProcessGroupId();
+    const draftStage = {
+      id: `content_calendar_draft_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      name: rawName.trim(),
+      stage_name: rawName.trim(),
+      status: "draft",
+      is_draft: true,
+      task_type: "فعالیت سازمانی",
+      sort_order: 10,
+      process_group_id: groupId,
+      process_group_name: "فعالیت‌های تقویم محتوایی",
+      process_target_module_ids: ["content_calendars"],
+      process_link_map: { content_calendars: calendarId },
+      process_node_key: `${groupId}__activity_1`,
+      process_lane_key: `${groupId}__content_calendar_lane`,
+      metadata: {
+        task_type: "فعالیت سازمانی",
+        content_calendar_id: calendarId,
+      },
+    };
+    await openDraftActivity({
+      draftStages: [draftStage],
+      targetStage: draftStage,
+      processTitle: "فعالیت‌های تقویم محتوایی",
+      contentType: rawContentType || null,
+    });
   };
   const openTemplate = async () => {
     setCreateMode("template");
@@ -379,9 +555,7 @@ const ContentCalendarRuntime: React.FC<{
     }
     const template = templates.find((row) => row.id === templateId);
     if (!template) return;
-    setCreating(true);
     try {
-      const key = toKey(createDate);
       const draft = mapProcessTemplateStagesToDraft(
         templateId,
         templateStages,
@@ -394,42 +568,18 @@ const ContentCalendarRuntime: React.FC<{
       const selected = draft.find(
         (row: any) => String(row.template_stage_id) === templateStageId,
       );
-      const result = await autoAssignProcessV2DraftStages({
-        supabaseClient: supabase,
-        moduleId: "content_calendars",
-        recordId: calendarId,
-        recordData: calendar,
+      if (!selected) throw new Error("مرحلهٔ الگو پیدا نشد.");
+      await openDraftActivity({
         draftStages: draft,
-        targetGroupId: selected?.process_group_id,
-        targetStageId: selected?.id,
+        targetStage: selected,
+        processTitle: String(template.name || "فرآیند محتوا"),
+        templateId,
+        templateTitle: String(template.name || "فرآیند محتوا"),
       });
-      const ids = (result.createdTasks || [])
-        .map((item: any) => String(item.id || ""))
-        .filter(Boolean);
-      if (!ids.length)
-        throw new Error(
-          result.missingAssigneeCount
-            ? "مسئول مرحله در الگو مشخص نشده است."
-            : "فعالیتی از مرحله انتخاب‌شده ساخته نشد.",
-        );
-      const { error } = await supabase
-        .from("tasks")
-        .update({
-          content_calendar_id: calendarId,
-          start_date: `${key}T09:00:00`,
-          due_date: `${key}T17:00:00`,
-        })
-        .in("id", ids);
-      if (error) throw error;
-      message.success("فعالیت الگو به تقویم افزوده شد.");
-      resetCreate();
-      await load();
     } catch (error: any) {
       message.error(
-        `ایجاد فعالیت از الگو ناموفق بود: ${String(error?.message || "خطای نامشخص")}`,
+        `آماده‌سازی پیش‌نویس از الگو ناموفق بود: ${String(error?.message || "خطای نامشخص")}`,
       );
-    } finally {
-      setCreating(false);
     }
   };
   const renderEvent = (item: RuntimeItem, large = false) => {
@@ -451,6 +601,25 @@ const ContentCalendarRuntime: React.FC<{
       allUsers: directory.users,
       allRoles: directory.roles,
     });
+    const projectProcesses = !isTask
+      ? Array.from(
+          tasks
+            .filter((task) => String(task?.project_id || "") === String(record?.id || ""))
+            .reduce((groups, task) => {
+              const recurrence = asObject(task?.recurrence_info);
+              const processGroup = asObject(recurrence?.process_group);
+              const key = String(processGroup?.id || task?.process_group_id || "project_tasks");
+              const title = String(
+                processGroup?.name || task?.process_group_name || processGroup?.template_name || "فعالیت‌های پروژه",
+              );
+              const current = groups.get(key) || { title, tasks: [] as any[] };
+              current.tasks.push(task);
+              groups.set(key, current);
+              return groups;
+            }, new Map<string, { title: string; tasks: any[] }>())
+            .values(),
+        ).slice(0, 3)
+      : [];
     return (
       <button
         type="button"
@@ -509,6 +678,21 @@ const ContentCalendarRuntime: React.FC<{
           {label ? <span style={{ color }}>{label}</span> : null}
           {item.inherited ? <span>پروژه</span> : null}
         </span>
+        {!isTask && projectProcesses.length ? (
+          <span className="mt-1.5 block space-y-1 border-t border-dashed border-gray-200 pt-1.5 dark:border-white/10">
+            {projectProcesses.map((process, processIndex) => (
+              <span key={`${process.title}-${processIndex}`} className="block min-w-0">
+                <span className="block truncate text-[9px] font-bold text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-200-rgb))]">
+                  فرآیند: {process.title}
+                </span>
+                <span className="block truncate text-[9px] text-gray-500 dark:text-gray-400">
+                  {process.tasks.slice(0, 3).map((task) => getRecordTitle(task, MODULES.tasks, { fallback: "فعالیت" })).join("، ")}
+                  {process.tasks.length > 3 ? ` و ${process.tasks.length - 3} فعالیت دیگر` : ""}
+                </span>
+              </span>
+            ))}
+          </span>
+        ) : null}
       </button>
     );
   };
@@ -730,7 +914,7 @@ const ContentCalendarRuntime: React.FC<{
               icon={<PlusOutlined />}
               onClick={() => setCreateMode("raw")}
             >
-              ایجاد فعالیت خام
+              ایجاد پیش‌نویس فعالیت خام
             </Button>
             <Button
               block
@@ -807,7 +991,7 @@ const ContentCalendarRuntime: React.FC<{
               loading={creating}
               onClick={() => void createRaw()}
             >
-              ایجاد فعالیت
+              باز کردن پیش‌نویس فعالیت
             </Button>
           </div>
         ) : null}
@@ -843,7 +1027,7 @@ const ContentCalendarRuntime: React.FC<{
               disabled={!templateStageId}
               onClick={() => void createTemplateTask()}
             >
-              ایجاد فعالیت از مرحله
+              باز کردن پیش‌نویس مرحله
             </Button>
           </div>
         ) : null}
