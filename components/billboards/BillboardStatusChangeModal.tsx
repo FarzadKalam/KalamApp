@@ -3,6 +3,7 @@ import { App, Alert, Form, Input, Modal, Select, Spin } from 'antd';
 import PersianDatePicker from '../PersianDatePicker';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import {
   BILLBOARD_STATUS_OPTIONS,
   isBillboardOccupancyStatus,
@@ -23,6 +24,11 @@ const labelForBillboard = (row: any) => {
   const code = String(row?.system_code || row?.manual_code || '').trim();
   return code ? `${title} — ${code}` : title;
 };
+
+// سطح مودال درخواست از پنجره‌های عمومی بالاتر است؛ همهٔ pickerها باید در
+// ریشهٔ overlay قرار بگیرند تا در موبایل و دسکتاپ زیر mask یا محتوای مودال نروند.
+const BILLBOARD_STATUS_MODAL_Z_INDEX = 15100;
+const BILLBOARD_STATUS_PICKER_Z_INDEX = BILLBOARD_STATUS_MODAL_Z_INDEX + 220;
 
 const toOptions = (rows: any[], label: (row: any) => string): Option[] =>
   (rows || []).map((row) => ({ value: String(row.id), label: label(row) })).filter((item) => item.value);
@@ -117,36 +123,37 @@ const BillboardStatusChangeModal: React.FC<BillboardStatusChangeModalProps> = ({
       confirmLoading={loading}
       destroyOnHidden
       width={680}
+      zIndex={BILLBOARD_STATUS_MODAL_Z_INDEX}
     >
       {initialNotice ? <Alert className="mb-4" type="info" showIcon message={initialNotice} /> : null}
       {optionsLoading ? <div className="flex justify-center py-10"><Spin /></div> : (
         <Form form={form} layout="vertical" className="pt-2">
           {!isBulk ? (
             <Form.Item name="billboard_id" label="تابلو" rules={[{ required: true, message: 'تابلو را انتخاب کنید.' }]}>
-              <Select showSearch optionFilterProp="label" options={billboards} placeholder="انتخاب تابلو" />
+              <Select showSearch optionFilterProp="label" options={billboards} placeholder="انتخاب تابلو" getPopupContainer={resolveOverlayPopupContainer} />
             </Form.Item>
           ) : null}
           <Form.Item name="target_status" label="وضعیت مقصد" rules={[{ required: true, message: 'وضعیت مقصد را انتخاب کنید.' }]}>
-            <Select options={[...BILLBOARD_STATUS_OPTIONS]} placeholder="انتخاب وضعیت" />
+            <Select options={[...BILLBOARD_STATUS_OPTIONS]} placeholder="انتخاب وضعیت" getPopupContainer={resolveOverlayPopupContainer} />
           </Form.Item>
           {occupancyRequired ? <Alert className="mb-4" type="info" showIcon message="برای این وضعیت، مشتری و بازه اکران الزامی است." /> : null}
           <div className="grid grid-cols-1 gap-x-3 md:grid-cols-2">
             <Form.Item name="customer_id" label="مشتری" rules={[{ required: occupancyRequired, message: 'مشتری را انتخاب کنید.' }]}>
-              <Select allowClear showSearch optionFilterProp="label" options={customers} placeholder="انتخاب مشتری" />
+              <Select allowClear showSearch optionFilterProp="label" options={customers} placeholder="انتخاب مشتری" getPopupContainer={resolveOverlayPopupContainer} />
             </Form.Item>
             <Form.Item name="invoice_id" label="فاکتور مرتبط">
-              <Select allowClear showSearch optionFilterProp="label" options={invoices} placeholder="انتخاب فاکتور (اختیاری)" />
+              <Select allowClear showSearch optionFilterProp="label" options={invoices} placeholder="انتخاب فاکتور (اختیاری)" getPopupContainer={resolveOverlayPopupContainer} />
             </Form.Item>
             <Form.Item name="start_date" label="شروع اکران" rules={[{ required: occupancyRequired, message: 'تاریخ شروع را وارد کنید.' }]}>
-              <PersianDatePicker type="DATE" className="w-full" />
+              <PersianDatePicker type="DATE" className="w-full" modalContainer={resolveOverlayPopupContainer} overlayZIndexBase={BILLBOARD_STATUS_PICKER_Z_INDEX} />
             </Form.Item>
             <Form.Item name="end_date" label="پایان اکران" rules={[{ required: occupancyRequired, message: 'تاریخ پایان را وارد کنید.' }]}>
-              <PersianDatePicker type="DATE" className="w-full" />
+              <PersianDatePicker type="DATE" className="w-full" modalContainer={resolveOverlayPopupContainer} overlayZIndexBase={BILLBOARD_STATUS_PICKER_Z_INDEX} />
             </Form.Item>
           </div>
           {blocked ? <Form.Item name="block_reason" label="دلیل مسدودسازی" rules={[{ required: true, message: 'دلیل مسدودسازی را وارد کنید.' }]}><Input.TextArea rows={2} /></Form.Item> : null}
           <Form.Item name="process_template_id" label="الگوی فرآیند (اختیاری)">
-            <Select allowClear showSearch optionFilterProp="label" options={templates} placeholder="مثلاً فرآیند جمع‌آوری تابلو" />
+            <Select allowClear showSearch optionFilterProp="label" options={templates} placeholder="مثلاً فرآیند جمع‌آوری تابلو" getPopupContainer={resolveOverlayPopupContainer} />
           </Form.Item>
           <Form.Item name="description" label="توضیحات">
             <Input.TextArea rows={3} placeholder="شرح درخواست یا نکات اجرایی" />
