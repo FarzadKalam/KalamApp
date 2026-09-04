@@ -951,15 +951,11 @@ describe('evaluateWorkflowConditions', () => {
     months[2] = {
       days: [
         {
-          day: { jalali: '۵', gregorian: '26', hijri: '١٠' },
+          day: { jalali: '۶', gregorian: '27', hijri: '١١' },
           events: {
             isHoliday: true,
             list: [{ isHoliday: true, event: 'عید سعید قربان', calendarType: 'hijri' }],
           },
-        },
-        {
-          day: { jalali: '۶', gregorian: '27', hijri: '١١' },
-          events: { isHoliday: false, list: [] },
         },
         {
           day: { jalali: '۱۴', gregorian: '4', hijri: '١٩' },

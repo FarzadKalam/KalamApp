@@ -87,6 +87,7 @@ import { useNotificationRuntime } from './notifications/NotificationRuntimeProvi
 import { resolveMobileKeyboardViewport } from '../utils/mobileKeyboardViewport';
 import { ADVERTISING_CAMPAIGNS_MODULE_ID } from '../utils/advertisingCampaigns';
 import { CONTENT_CALENDAR_PLAN_FEATURE } from '../modules/contentCalendarsConfig';
+import { BILLBOARD_STATUS_MANAGEMENT_PLAN_FEATURE } from '../utils/billboardStatusChanges';
 
 const { Header, Sider, Content } = AntLayout;
 const NotificationsPopover = React.lazy(() => import('./NotificationsPopover'));
@@ -132,6 +133,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [instagramInboxFeatureEnabled, setInstagramInboxFeatureEnabled] = useState(false);
   const [advertisingCampaignsModuleEnabled, setAdvertisingCampaignsModuleEnabled] = useState(false);
   const [contentCalendarFeatureEnabled, setContentCalendarFeatureEnabled] = useState(false);
+  const [billboardStatusManagementFeatureEnabled, setBillboardStatusManagementFeatureEnabled] = useState(true);
   const [alertsDrawerMounted, setAlertsDrawerMounted] = useState(false);
   const [alertsDrawerOpen, setAlertsDrawerOpen] = useState(false);
   const [sessionBootstrapError, setSessionBootstrapError] = useState<any>(null);
@@ -198,6 +200,18 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     return () => {
       active = false;
     };
+  }, [currentUser?.id, rolePermissionsReady]);
+
+  useEffect(() => {
+    if (!rolePermissionsReady || !currentUser?.id) {
+      setBillboardStatusManagementFeatureEnabled(true);
+      return;
+    }
+    let active = true;
+    void hasCurrentOrgPlanFeature(BILLBOARD_STATUS_MANAGEMENT_PLAN_FEATURE, { defaultEnabled: true })
+      .then((enabled) => { if (active) setBillboardStatusManagementFeatureEnabled(enabled); })
+      .catch(() => { if (active) setBillboardStatusManagementFeatureEnabled(true); });
+    return () => { active = false; };
   }, [currentUser?.id, rolePermissionsReady]);
 
   useEffect(() => {
@@ -606,6 +620,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   );
   const canViewAdvertisingCampaigns = advertisingCampaignsModuleEnabled && canViewModule(ADVERTISING_CAMPAIGNS_MODULE_ID);
   const canViewContentCalendars = contentCalendarFeatureEnabled && canViewModule('content_calendars');
+  const canViewBillboardStatusChanges = billboardStatusManagementFeatureEnabled && canViewModule('billboard_status_changes');
   const {
     headerAnnouncements: userHeaderAnnouncements,
     popupAnnouncements: userPopupAnnouncements,
@@ -730,7 +745,14 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/warehouses', label: 'انبارها' },
           { key: '/shelves', label: 'قفسه‌ها' },
           { key: '/stock_transfers', label: 'تردد کالاها و حواله‌ها', disabled: !canViewModule('stock_transfers') },
-          { key: '/billboards', label: 'تبلیغات محیطی', disabled: false },
+          {
+            key: 'billboards',
+            label: 'تبلیغات محیطی',
+            children: [
+              { key: '/billboards', label: 'تابلوها', disabled: !canViewModule('billboards') },
+              { key: '/billboard_status_changes', label: 'تغییر وضعیت تبلیغات محیطی', disabled: !canViewBillboardStatusChanges },
+            ],
+          },
           { key: '/delivery_forms', label: 'فرم‌های تحویل', disabled: !canViewModule('delivery_forms') },
         ]
       },

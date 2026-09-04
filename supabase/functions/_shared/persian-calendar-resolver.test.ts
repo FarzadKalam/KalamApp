@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { jalaliToGregorian, resolvePersianCalendarContext } from './persian-calendar-resolver';
+import { isFridayAtTehranDate, jalaliToGregorian, resolvePersianCalendarContext } from './persian-calendar-resolver';
 
 describe('Persian calendar resolver', () => {
   it('converts explicit Jalali dates deterministically', () => {
@@ -15,5 +15,10 @@ describe('Persian calendar resolver', () => {
         gregorian: '2026-03-21',
       }),
     ]));
+  });
+
+  it('recognizes Friday in Tehran separately from a statutory holiday lookup', () => {
+    expect(isFridayAtTehranDate('2026-03-27T12:00:00+03:30')).toBe(true);
+    expect(isFridayAtTehranDate('2026-03-28T12:00:00+03:30')).toBe(false);
   });
 });

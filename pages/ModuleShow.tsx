@@ -142,6 +142,9 @@ const CounterpartyBotStatusModal = React.lazy(() => import('../components/bot/Co
 const MessageComposerModal = React.lazy(() => import('../components/MessageComposerModal'));
 const DeleteModuleRecordsModal = React.lazy(() => import('../components/moduleDelete/DeleteModuleRecordsModal'));
 const OnlineCatalogManagerModal = React.lazy(() => import('../components/onlineCatalog/OnlineCatalogManagerModal'));
+const BillboardStatusChangeModal = React.lazy(() => import('../components/billboards/BillboardStatusChangeModal'));
+const BillboardStatusHistoryTable = React.lazy(() => import('../components/billboards/BillboardStatusHistoryTable'));
+const BillboardStatusChangeDecisionModal = React.lazy(() => import('../components/billboards/BillboardStatusChangeDecisionModal'));
 
 const DEFAULT_BOT_PLATFORM_STATE: BotPlatformState = {
   groupTitle: '',
@@ -664,6 +667,8 @@ const ModuleShow: React.FC = () => {
 
   const [isEditDrawerOpen, setIsEditDrawerOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isBillboardStatusChangeOpen, setIsBillboardStatusChangeOpen] = useState(false);
+  const [isBillboardStatusDecisionOpen, setIsBillboardStatusDecisionOpen] = useState(false);
   const [editingFields, setEditingFields] = useState<Record<string, boolean>>({});
   const [tempValues, setTempValues] = useState<Record<string, any>>({});
   const [savingField, setSavingField] = useState<string | null>(null);
@@ -2124,7 +2129,7 @@ const ModuleShow: React.FC = () => {
   );
 
   const baseCanEditModule = modulePermissions.edit !== false;
-  const baseCanDeleteModule = modulePermissions.delete !== false;
+  const baseCanDeleteModule = modulePermissions.delete !== false && moduleConfig?.disableDelete !== true;
   const canLockCurrentRecord = canUseRecordLockPermission(currentPermissionMap, moduleId, 'lock', currentSoftwareRole);
   const canUnlockCurrentRecord = canUseRecordLockPermission(currentPermissionMap, moduleId, 'unlock', currentSoftwareRole);
   const canEditModule = baseCanEditModule && !isRecordLocked;
@@ -3600,6 +3605,19 @@ const ModuleShow: React.FC = () => {
   };
 
     const handleHeaderAction = async (actionId: string) => {
+
+      if (actionId === 'request_status_change' && moduleId === 'billboards') {
+        if (!canEditModule) {
+          msg.error('دسترسی ثبت درخواست تغییر وضعیت ندارید.');
+          return;
+        }
+        setIsBillboardStatusChangeOpen(true);
+        return;
+      }
+      if (actionId === 'approve_billboard_status_change' && moduleId === 'billboard_status_changes') {
+        setIsBillboardStatusDecisionOpen(true);
+        return;
+      }
 
       if (actionId === 'create_journal_entry') {
 
@@ -5957,6 +5975,13 @@ const ModuleShow: React.FC = () => {
         </React.Suspense>
       );
     }
+    if (moduleId === 'billboards' && id) {
+      content.openingInfo = (
+        <React.Suspense fallback={<Skeleton active paragraph={{ rows: 3 }} />}>
+          <BillboardStatusHistoryTable billboardId={id} />
+        </React.Suspense>
+      );
+    }
     if (moduleId === 'employees' && id) {
       content.financial_history = (
         <React.Suspense fallback={<Skeleton active paragraph={{ rows: 3 }} />}>
@@ -6616,6 +6641,31 @@ const ModuleShow: React.FC = () => {
         />
         </React.Suspense>
       )}
+
+      {moduleId === 'billboards' && id && isBillboardStatusChangeOpen ? (
+        <React.Suspense fallback={null}>
+          <BillboardStatusChangeModal
+            open
+            billboardIds={[id]}
+            onClose={() => setIsBillboardStatusChangeOpen(false)}
+            onCreated={() => {
+              setIsBillboardStatusChangeOpen(false);
+              void fetchRecord(true);
+            }}
+          />
+        </React.Suspense>
+      ) : null}
+      {moduleId === 'billboard_status_changes' && id && isBillboardStatusDecisionOpen ? (
+        <React.Suspense fallback={null}>
+          <BillboardStatusChangeDecisionModal
+            open
+            requestId={id}
+            requestStatus={data?.request_status}
+            onClose={() => setIsBillboardStatusDecisionOpen(false)}
+            onChanged={() => void fetchRecord(true)}
+          />
+        </React.Suspense>
+      ) : null}
 
       {isCreateOrderOpen && MODULES['production_orders'] && (
         <React.Suspense fallback={null}>

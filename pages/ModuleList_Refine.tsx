@@ -11,7 +11,7 @@ import { buildRecordScopeCrudFilters } from "../utils/recordScopeFilters";
 import { App, Badge, Button, Drawer, Dropdown, Empty, Skeleton } from "antd";
 import type { MenuProps } from "antd";
 import type { FilterValue } from "antd/es/table/interface";
-import { AppstoreAddOutlined, AppstoreOutlined, BranchesOutlined, CalendarOutlined, ColumnWidthOutlined, EllipsisOutlined, EnvironmentOutlined, FileExcelOutlined, FilePdfOutlined, LockOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, TableOutlined, TagsOutlined, UnlockOutlined } from "@ant-design/icons";
+import { AppstoreAddOutlined, AppstoreOutlined, BranchesOutlined, CalendarOutlined, ColumnWidthOutlined, EllipsisOutlined, EnvironmentOutlined, FileExcelOutlined, FilePdfOutlined, LockOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, SwapOutlined, TableOutlined, TagsOutlined, UnlockOutlined } from "@ant-design/icons";
 import AdaptivePickerSurface from "../components/AdaptivePickerSurface";
 import ViewManager from "../components/ViewManager";
 import { supabase } from "../supabaseClient";
@@ -124,6 +124,7 @@ const SaasUserAdminDrawer = React.lazy(() => import("../components/saas/SaasUser
 const RelatedRecordPopover = React.lazy(() => import("../components/RelatedRecordPopover"));
 const DeleteModuleRecordsModal = React.lazy(() => import("../components/moduleDelete/DeleteModuleRecordsModal"));
 const OnlineCatalogManagerModal = React.lazy(() => import("../components/onlineCatalog/OnlineCatalogManagerModal"));
+const BillboardStatusChangeModal = React.lazy(() => import("../components/billboards/BillboardStatusChangeModal"));
 
 const DEFAULT_LIST_PAGE_SIZE = 20;
 const SELECTED_RECORD_FETCH_CHUNK_SIZE = 25;
@@ -855,6 +856,7 @@ export const ModuleListRefine: React.FC<{
   const [canShowGoalCards, setCanShowGoalCards] = useState(true);
   const [isListPrintModalOpen, setIsListPrintModalOpen] = useState(false);
   const [isOnlineCatalogManagerOpen, setIsOnlineCatalogManagerOpen] = useState(false);
+  const [isBillboardStatusChangeOpen, setIsBillboardStatusChangeOpen] = useState(false);
   const [listPrintRows, setListPrintRows] = useState<any[]>([]);
   const [bulkBuildTarget, setBulkBuildTarget] = useState<BulkBuildTarget>(null);
   const [previewRecordId, setPreviewRecordId] = useState<string | null>(null);
@@ -2066,7 +2068,7 @@ export const ModuleListRefine: React.FC<{
   const recordScope = modulePermissions.record_scope ?? (modulePermissions.view === false ? 'own' : 'all');
   const canViewModule = modulePermissions.view !== false || recordScope !== 'all';
   const canEditModule = modulePermissions.edit !== false;
-  const canDeleteModule = modulePermissions.delete !== false;
+  const canDeleteModule = modulePermissions.delete !== false && moduleConfig?.disableDelete !== true;
   const canLockRecords = canUseRecordLockPermission(currentPermissionMap, resolvedModuleId, "lock", currentSoftwareRole);
   const canUnlockRecords = canUseRecordLockPermission(currentPermissionMap, resolvedModuleId, "unlock", currentSoftwareRole);
   const canOpenModuleSettings = modulePermissions.view !== false && fieldPermissions.__module_settings !== false;
@@ -4855,6 +4857,16 @@ export const ModuleListRefine: React.FC<{
                               },
                             ]
                           : []),
+                        ...(resolvedModuleId === 'billboards' && selectedRowKeys.length > 0 && canEditModule
+                          ? [
+                              {
+                                key: 'billboard_status_change',
+                                icon: <SwapOutlined />,
+                                tooltip: 'تغییر وضعیت گروهی',
+                                onClick: () => setIsBillboardStatusChangeOpen(true),
+                              },
+                            ]
+                          : []),
                       ]}
                       primaryActionLabel={
                         selectedRowKeys.length > 0 && resolvedModuleId === 'production_orders'
@@ -4911,7 +4923,13 @@ export const ModuleListRefine: React.FC<{
                   <Button
                     type="primary"
                     icon={<PlusOutlined />}
-                    onClick={() => navigate(`/${resolvedModuleId}/create`)}
+                    onClick={() => {
+                      if (resolvedModuleId === 'billboard_status_changes') {
+                        setIsBillboardStatusChangeOpen(true);
+                        return;
+                      }
+                      navigate(`/${resolvedModuleId}/create`);
+                    }}
                     aria-label={`افزودن ${getModuleTitleFa(moduleConfig, { singular: true })}`}
                     className="rounded-xl bg-leather-600 hover:!bg-leather-500 shadow-lg shadow-leather-500/30 shrink-0"
                   >
@@ -5382,6 +5400,21 @@ export const ModuleListRefine: React.FC<{
             tableQueryResult.refetch();
           }}
         />
+        </React.Suspense>
+      ) : null}
+      {isBillboardStatusChangeOpen && (resolvedModuleId === 'billboards' || resolvedModuleId === 'billboard_status_changes') ? (
+        <React.Suspense fallback={null}>
+          <BillboardStatusChangeModal
+            open
+            billboardIds={resolvedModuleId === 'billboards' ? selectedRowKeys.map((key) => String(key)) : []}
+            onClose={() => setIsBillboardStatusChangeOpen(false)}
+            onCreated={() => {
+              setIsBillboardStatusChangeOpen(false);
+              setSelectedRowKeys([]);
+              setSelectedRowsMap({});
+              void tableQueryResult.refetch();
+            }}
+          />
         </React.Suspense>
       ) : null}
       {isWorkflowsModalOpen ? (

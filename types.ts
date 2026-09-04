@@ -398,6 +398,8 @@ export interface ModuleDefinition {
     workflows?: boolean;
   };
   disableCreate?: boolean;
+  /** رکوردهای این ماژول فقط تاریخچه هستند و حذف‌شدنی نیستند. */
+  disableDelete?: boolean;
   disableDetailView?: boolean;
   disableInlineFieldEditing?: boolean;
   hideFullRecordAction?: boolean;

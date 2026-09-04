@@ -15,12 +15,15 @@ export const buildDailyAttendanceSchedule = ({
   employees,
   schedules,
   leaves,
+  isOfficialHoliday = false,
 }: {
   dateKey: string;
   weekdayKey: string;
-  employees: Array<{ id: string; full_name?: string | null }>;
+  employees: Array<{ id: string; full_name?: string | null; works_on_official_holidays?: boolean | null }>;
   schedules: Array<any>;
   leaves: Array<any>;
+  /** جمعه با weekdayKey مدیریت می‌شود و نباید به‌جای تعطیل رسمی ارسال شود. */
+  isOfficialHoliday?: boolean;
 }): DailyAttendanceSchedule[] => employees.map((employee) => {
   const schedule = schedules.find((item) => {
     const columns = Array.isArray(item?.weekly_plan?.columns) ? item.weekly_plan.columns : [];
@@ -30,7 +33,8 @@ export const buildDailyAttendanceSchedule = ({
     ? schedule.weekly_plan.columns.find((item: any) => String(item?.employeeId || '') === String(employee.id))
     : null;
   const shifts = resolveWorkScheduleDayPlan({ monthlyPlan: column?.monthlyPlan, weeklyPlan: column?.weeklyPlan, dateKey, weekdayKey });
-  const isScheduled = Boolean(shifts.shift1.start || shifts.shift1.end || shifts.shift2.start || shifts.shift2.end);
+  const hasShift = Boolean(shifts.shift1.start || shifts.shift1.end || shifts.shift2.start || shifts.shift2.end);
+  const isScheduled = hasShift && (!isOfficialHoliday || employee.works_on_official_holidays === true);
   const leaveRow = leaves.find((item) => String(item?.employee_id || '') === String(employee.id));
   return {
     employeeId: employee.id,

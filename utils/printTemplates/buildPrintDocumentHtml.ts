@@ -178,7 +178,7 @@ const replaceImageSources = (html: string, dataUrlBySource: Map<string, string>,
   }));
 
 const replaceInlineStyleImageSources = (html: string, dataUrlBySource: Map<string, string>, origin: string) =>
-  html.replace(STYLE_ATTRIBUTE_PATTERN, (attribute, quote, styleText) => {
+  html.replace(STYLE_ATTRIBUTE_PATTERN, (_attribute, quote, styleText) => {
     const nextStyle = String(styleText || '').replace(STYLE_IMAGE_URL_PATTERN, (urlMatch, _urlQuote, rawSource) => {
       const source = decodeHtmlAttribute(String(rawSource || '')).trim();
       if (!isEmbeddablePrintImageUrl(source)) return urlMatch;

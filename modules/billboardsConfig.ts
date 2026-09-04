@@ -9,6 +9,7 @@ import {
   ViewMode,
 } from '../types';
 import { HARD_CODED_UNIT_OPTIONS } from '../utils/unitConversions';
+import { BILLBOARD_STATUS_OPTIONS } from '../utils/billboardStatusChanges';
 
 export const createShelfInventoryTableColumns = () => {
   return [
@@ -149,9 +150,9 @@ const fieldsArray: any[] = [
   { key: 'catalog_code', labels: { fa: 'کد کاتالوگ', en: 'Catalog Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 3.5, nature: FieldNature.STANDARD, isTableColumn: false },
   { key: 'catalog_link', labels: { fa: 'لینک عمومی کاتالوگ', en: 'Public Catalog Link' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 3.7, nature: FieldNature.STANDARD, isTableColumn: false, printable: true },
   { key: 'location', labels: { fa: 'لوکیشن', en: 'Location' }, type: FieldType.LOCATION, location: FieldLocation.HEADER, order: 4, nature: FieldNature.STANDARD },
-  { key: 'status', labels: { fa: 'وضعیت', en: 'Status' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 4, options: [{ label: 'آزاد', value: 'free', color: 'green' }, { label: 'رزرو شفاهی', value: 'oral_reserve', color: 'orange' }, { label: 'رزرو قطعی', value: 'final_reserve', color: 'pink' }, { label: 'در صف نصب', value: 'in_line', color: 'blue' }, { label: 'در حال اکران', value: 'opening', color: 'red' }, { label: 'نزدیک به اتمام', value: 'near_finish', color: 'orange' }, { label: 'پایان مهلت اکران', value: 'opening_deadline_ended', color: 'volcano' }, { label: 'در صف جمع‌آوری', value: 'pickup_queue', color: 'gold' }, { label: 'غیرفعال', value: 'inactive', color: 'default' }], isTableColumn: true },
-  { key: 'start_date', labels: { fa: 'تاریخ شروع', en: 'Start Date' }, type: FieldType.DATE, location: FieldLocation.HEADER, order: 7, nature: FieldNature.STANDARD, isTableColumn: true },
-  { key: 'end_date', labels: { fa: 'تاریخ پایان', en: 'End Date' }, type: FieldType.DATE, location: FieldLocation.HEADER, order: 8, nature: FieldNature.STANDARD, isTableColumn: true },
+  { key: 'status', labels: { fa: 'وضعیت', en: 'Status' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 4, options: [...BILLBOARD_STATUS_OPTIONS], readonly: true, isTableColumn: true },
+  { key: 'start_date', labels: { fa: 'تاریخ شروع', en: 'Start Date' }, type: FieldType.DATE, location: FieldLocation.HEADER, order: 7, nature: FieldNature.STANDARD, readonly: true, isTableColumn: true },
+  { key: 'end_date', labels: { fa: 'تاریخ پایان', en: 'End Date' }, type: FieldType.DATE, location: FieldLocation.HEADER, order: 8, nature: FieldNature.STANDARD, readonly: true, isTableColumn: true },
   { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 6, nature: FieldNature.STANDARD, isTableColumn: true },
 
   //بلاک اطلاعات پایه
@@ -176,8 +177,8 @@ const fieldsArray: any[] = [
   { key: 'location_image', labels: { fa: 'تصویر موقعیت در نقشه', en: 'Location Map Image' }, type: FieldType.IMAGE, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 8, nature: FieldNature.STANDARD, isTableColumn: false, printable: true },
 
 //بلاک جزئیات اکران
-  { key: 'related_customer', labels: { fa: 'مشتری مرتبط', en: 'Related Customer' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'openingInfo', order: 10, relationConfig: { targetModule: 'customers', targetField: 'business_name' }, nature: FieldNature.STANDARD, },
-  { key: 'related_invoice', labels: { fa: 'فاکتور مرتبط', en: 'Related invoice' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'openingInfo', order: 12, relationConfig: { targetModule: 'invoices', targetField: 'name' }, nature: FieldNature.STANDARD, },
+  { key: 'related_customer', labels: { fa: 'مشتری مرتبط', en: 'Related Customer' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'openingInfo', order: 10, readonly: true, relationConfig: { targetModule: 'customers', targetField: 'business_name' }, nature: FieldNature.STANDARD, },
+  { key: 'related_invoice', labels: { fa: 'فاکتور مرتبط', en: 'Related invoice' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'openingInfo', order: 12, readonly: true, relationConfig: { targetModule: 'invoices', targetField: 'name' }, nature: FieldNature.STANDARD, },
 
   { key: 'auto_name_enabled', labels: { fa: 'نامگذاری خودکار', en: 'Auto Name' }, type: FieldType.CHECKBOX, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 8, nature: FieldNature.PREDEFINED, defaultValue: false },
 ];
@@ -237,5 +238,5 @@ export const billboardConfig: ModuleDefinition = {
     },
 
   ],
-  //actionButtons: [{ id: 'auto_name', label: 'نامگذاری خودکار', placement: 'form', variant: 'primary' }],
+  actionButtons: [{ id: 'request_status_change', label: 'تغییر وضعیت', placement: 'header', variant: 'primary' }],
 };

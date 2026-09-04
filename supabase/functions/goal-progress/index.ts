@@ -6,6 +6,10 @@ import {
   evaluateWorkflowConditionCollectionWithResolver,
   evaluateWorkflowConditionWithResolver,
 } from "./_runtime-deps/workflowConditionRuntime.ts";
+import {
+  getOfficialCalendarEventsForDate,
+  isFridayAtTehranDate,
+} from "../_shared/persian-calendar-resolver.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -28,16 +32,6 @@ const ROW_CACHE_TTL_MS = 60_000;
 const ROW_CACHE_MAX_ENTRIES = 240;
 const rowCache = new Map<string, { expiresAt: number; rows: any[] }>();
 const rowPromises = new Map<string, Promise<any[]>>();
-const CALENDAR_PUBLIC_BASE_URL = String(
-  Deno.env.get("KALAMAPP_PUBLIC_BASE_URL") ||
-    Deno.env.get("PUBLIC_APP_URL") ||
-    Deno.env.get("PUBLIC_SITE_URL") ||
-    Deno.env.get("SITE_URL") ||
-    "",
-)
-  .trim()
-  .replace(/\/+$/, "");
-const holidayYearCache = new Map<number, Promise<any[] | null>>();
 const orgModuleFieldConfigCache = new Map<string, Promise<{ fields: Map<string, any>; tableFields: Map<string, any> }>>();
 const dynamicOptionLabelCache = new Map<string, Promise<string | null>>();
 const dynamicOptionValueCache = new Map<string, Promise<string | null>>();
@@ -59,67 +53,9 @@ const toEnglishDigits = (value: unknown) =>
   String(value ?? "")
     .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)))
     .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)));
-const gregorianToJalali = (
-  year: number,
-  month: number,
-  day: number,
-): [number, number, number] => {
-  const jalaliDays = [31, 31, 31, 31, 31, 31, 30, 30, 30, 30, 30, 29];
-  let gy = year - 1600,
-    gm = month - 1,
-    gd = day - 1;
-  let count =
-    365 * gy +
-    Math.floor((gy + 3) / 4) -
-    Math.floor((gy + 99) / 100) +
-    Math.floor((gy + 399) / 400);
-  const gregorianDays = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  for (let index = 0; index < gm; index += 1) count += gregorianDays[index];
-  if (gm > 1 && ((gy % 4 === 0 && gy % 100 !== 0) || gy % 400 === 0))
-    count += 1;
-  count += gd;
-  count -= 79;
-  const cycle = Math.floor(count / 12053);
-  count %= 12053;
-  let jy = 979 + 33 * cycle + 4 * Math.floor(count / 1461);
-  count %= 1461;
-  if (count >= 366) {
-    jy += Math.floor((count - 1) / 365);
-    count = (count - 1) % 365;
-  }
-  let jm = 0;
-  for (; jm < 11 && count >= jalaliDays[jm]; jm += 1) count -= jalaliDays[jm];
-  return [jy, jm + 1, count + 1];
-};
 const getHolidayEvents = async (value: unknown): Promise<any[]> => {
-  const date = value ? new Date(String(value)) : null;
-  if (!date || Number.isNaN(date.getTime()) || !CALENDAR_PUBLIC_BASE_URL)
-    return [];
-  const [year, month, day] = gregorianToJalali(
-    date.getUTCFullYear(),
-    date.getUTCMonth() + 1,
-    date.getUTCDate(),
-  );
-  if (!holidayYearCache.has(year))
-    holidayYearCache.set(
-      year,
-      (async () => {
-        const response = await fetch(
-          `${CALENDAR_PUBLIC_BASE_URL}/calendar/${year}.json`,
-          { cache: "force-cache" },
-        );
-        if (!response.ok) return null;
-        const payload = await response.json();
-        return Array.isArray(payload) ? payload : null;
-      })().catch(() => null),
-    );
-  const months = await holidayYearCache.get(year)!;
-  const dayData = Array.isArray(months?.[month - 1]?.days)
-    ? months[month - 1].days.find(
-        (item: any) => Number(toEnglishDigits(item?.day?.jalali || 0)) === day,
-      )
-    : null;
-  return Array.isArray(dayData?.events?.list) ? dayData.events.list : [];
+  const lookup = await getOfficialCalendarEventsForDate(value);
+  return lookup.events;
 };
 const occasionValues = (value: any): string[] =>
   (Array.isArray(value) ? value : [value])
@@ -691,9 +627,8 @@ const evaluateAsyncWorkflowOperator = async ({
   currentValue,
   expectedValue,
 }: any) => {
-  const date = currentValue ? new Date(String(currentValue)) : null;
   if (operator === "is_friday")
-    return !!date && !Number.isNaN(date.getTime()) && date.getDay() === 5;
+    return isFridayAtTehranDate(currentValue);
   if (operator === "is_official_holiday")
     return (await getHolidayEvents(currentValue)).some(
       (event) => event?.isHoliday === true,
@@ -703,6 +638,7 @@ const evaluateAsyncWorkflowOperator = async ({
   if (operator === "occasion_neq" || operator === "occasion_not_contains")
     return !(await dateHasOccasion(currentValue, expectedValue));
   if (operator === "days_before_occasion") {
+    const date = currentValue ? new Date(String(currentValue)) : null;
     const config =
       expectedValue &&
       typeof expectedValue === "object" &&

@@ -6,6 +6,7 @@ const MODULES_WITH_SYSTEM_CODE = new Set([
   'attendance_logs',
   'barters',
   'billboards',
+  'billboard_status_changes',
   'customers',
   'employees',
   'employee_advances',

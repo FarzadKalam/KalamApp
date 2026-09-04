@@ -1,6 +1,7 @@
 import { FieldLocation, FieldNature, FieldType, ModuleDefinition } from './types';
 import { productsConfig } from './modules/productsConfig';
 import { billboardConfig } from './modules/billboardsConfig';
+import { billboardStatusChangesConfig } from './modules/billboardStatusChangesConfig';
 import { productBundlesConfig } from './modules/productBundlesConfig';
 import { productionBomModule, productionOrderModule } from './modules/productionConfig';
 import { customerModule } from './modules/customerConfig';
@@ -163,6 +164,7 @@ const withStandardAssigneeField = (module: ModuleDefinition): ModuleDefinition =
 export const BASE_MODULES: Record<string, ModuleDefinition> = {
   products: productsConfig,
   billboards: billboardConfig,
+  billboard_status_changes: billboardStatusChangesConfig,
   product_bundles: productBundlesConfig,
   warehouses: warehousesConfig,
   shelves: shelvesConfig,

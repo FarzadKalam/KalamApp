@@ -5,6 +5,7 @@ type CalendarEvent = {
 };
 
 type CalendarDay = {
+  disabled?: boolean;
   day?: { jalali?: string };
   events?: { isHoliday?: boolean; list?: CalendarEvent[] };
 };
@@ -127,12 +128,30 @@ const loadCalendarYear = async (jalaliYear: number): Promise<CalendarMonth[] | n
   return yearCache.get(jalaliYear) || null;
 };
 
-const getEventsForJalaliDate = async (year: number, month: number, day: number) => {
+export const getOfficialCalendarEventsForJalaliDate = async (year: number, month: number, day: number) => {
   const calendar = await loadCalendarYear(year);
   if (!calendar) return { available: false, events: [] as CalendarEvent[] };
   const monthDays = calendar[month - 1]?.days || [];
-  const match = monthDays.find((item) => Number(toEnglishDigits(item?.day?.jalali || '0')) === day);
+  const match = monthDays.find(
+    (item) => !item?.disabled && Number(toEnglishDigits(item?.day?.jalali || '0')) === day,
+  );
   return { available: true, events: Array.isArray(match?.events?.list) ? match.events.list : [] as CalendarEvent[] };
+};
+
+/** همهٔ مسیرهای سروری، روز را در منطقهٔ زمانی رسمی ایران به دادهٔ سالانهٔ واحد نگاشت می‌کنند. */
+export const getOfficialCalendarEventsForDate = async (value: unknown) => {
+  const date = value instanceof Date ? value : new Date(String(value || ''));
+  if (Number.isNaN(date.getTime())) return { available: false, events: [] as CalendarEvent[] };
+  const tehran = getTehranDateParts(date);
+  const [year, month, day] = gregorianToJalali(tehran.year, tehran.month, tehran.day);
+  return getOfficialCalendarEventsForJalaliDate(year, month, day);
+};
+
+export const isFridayAtTehranDate = (value: unknown) => {
+  const date = value instanceof Date ? value : new Date(String(value || ''));
+  if (Number.isNaN(date.getTime())) return false;
+  const weekday = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Tehran', weekday: 'short' }).format(date);
+  return weekday === 'Fri';
 };
 
 const extractExplicitJalaliDateKeys = (message: string) => Array.from(toEnglishDigits(message).matchAll(/(^|[^\d])((?:13|14)\d{2})\s*[\/-]\s*(\d{1,2})\s*[\/-]\s*(\d{1,2})(?!\d)/g))
@@ -148,7 +167,7 @@ const formatWeekday = (isoDate: string) => new Intl.DateTimeFormat('fa-IR-u-ca-p
 const resolveDateDetails = async (year: number, month: number, day: number, source: string) => {
   const [gregorianYear, gregorianMonth, gregorianDay] = jalaliToGregorian(year, month, day);
   const gregorian = toIsoDate(gregorianYear, gregorianMonth, gregorianDay);
-  const lookup = await getEventsForJalaliDate(year, month, day);
+  const lookup = await getOfficialCalendarEventsForJalaliDate(year, month, day);
   const events = lookup.events.map((event) => ({
     title: String(event?.event || '').trim(),
     is_official_holiday: event?.isHoliday === true,

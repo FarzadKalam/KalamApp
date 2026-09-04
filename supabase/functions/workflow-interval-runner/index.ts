@@ -43,6 +43,10 @@ import {
   normalizeWorkflowAssigneeValue,
   resolveWorkflowDateCriterion,
 } from './_runtime-deps/workflowMutationContract.ts';
+import {
+  getOfficialCalendarEventsForDate,
+  isFridayAtTehranDate,
+} from '../_shared/persian-calendar-resolver.ts';
 
 const FUNCTION_BUILD = 'workflow-interval-runner-2026-08-27-persian-variable-resolution';
 const MAX_WORKFLOWS = 30;
@@ -65,13 +69,6 @@ const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 const UUID_LIKE_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const WORKFLOW_BOT_CHANNEL_PRIORITY = ['rubika', 'telegram', 'bale'] as const;
-const CALENDAR_PUBLIC_BASE_URL = String(
-  Deno.env.get('KALAMAPP_PUBLIC_BASE_URL')
-  || Deno.env.get('PUBLIC_APP_URL')
-  || Deno.env.get('PUBLIC_SITE_URL')
-  || Deno.env.get('SITE_URL')
-  || ''
-).trim().replace(/\/+$/, '');
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -81,36 +78,6 @@ type WorkflowCondition = {
   operator: string;
   value?: any;
 };
-
-type HolidayApiEvent = {
-  isHoliday?: boolean;
-  event?: string;
-  calendarType?: 'jalali' | 'hijri' | 'gregorian';
-};
-
-type HolidayApiDay = {
-  day?: {
-    jalali?: string;
-    gregorian?: string;
-    hijri?: string;
-  };
-  events?: {
-    isHoliday?: boolean;
-    list?: HolidayApiEvent[];
-  };
-};
-
-type HolidayApiMonth = {
-  days?: HolidayApiDay[];
-};
-
-const holidayYearCache = new Map<number, Promise<HolidayApiMonth[] | null>>();
-
-const CALENDAR_EVENT_MOVES = [
-  { from: '1405/03/05', to: '1405/03/06', eventIncludes: 'عید سعید قربان', event: { isHoliday: true, event: 'عید سعید قربان', calendarType: 'hijri' as const } },
-  { from: '1405/03/05', to: '1405/03/06', eventIncludes: 'آغاز دههٔ امامت و ولایت', event: { isHoliday: false, event: 'آغاز دههٔ امامت و ولایت', calendarType: 'hijri' as const } },
-  { from: '1405/03/13', to: '1405/03/14', eventIncludes: 'عید سعید غدیر خم', event: { isHoliday: true, event: 'عید سعید غدیر خم(۱۰ ه‍‍.ق)', calendarType: 'hijri' as const } },
-];
 
 type WorkflowAction = {
   id?: string;
@@ -239,49 +206,6 @@ function toEnglishDigits(value: string): string {
     .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)));
 }
 
-function normalizeDateKey(value: string): string {
-  return toEnglishDigits(value)
-    .replace(/-/g, '/')
-    .split('/')
-    .map((part, index) => (index === 0 ? part.padStart(4, '0') : part.padStart(2, '0')))
-    .join('/');
-}
-
-async function loadHolidayYear(jalaliYear: number): Promise<HolidayApiMonth[] | null> {
-  if (!CALENDAR_PUBLIC_BASE_URL || !Number.isFinite(jalaliYear)) return null;
-  if (!holidayYearCache.has(jalaliYear)) {
-    holidayYearCache.set(jalaliYear, (async () => {
-      const response = await fetch(`${CALENDAR_PUBLIC_BASE_URL}/calendar/${jalaliYear}.json`, { cache: 'force-cache' });
-      if (!response.ok) return null;
-      const data = await response.json();
-      return Array.isArray(data) ? data : null;
-    })().catch((error) => {
-      console.warn(`[workflow-runner] Calendar fetch failed for ${jalaliYear}:`, error?.message || error);
-      return null;
-    }));
-  }
-  return holidayYearCache.get(jalaliYear) || null;
-}
-
-function applyCalendarEventMoves(dateKey: string, events: HolidayApiEvent[]): HolidayApiEvent[] {
-  const normalizedDateKey = normalizeDateKey(dateKey);
-  let nextEvents = [...events];
-  for (const move of CALENDAR_EVENT_MOVES) {
-    const from = normalizeDateKey(move.from);
-    const to = normalizeDateKey(move.to);
-    if (normalizedDateKey === from) {
-      nextEvents = nextEvents.filter((item) => !String(item?.event || '').includes(move.eventIncludes));
-    }
-    if (
-      normalizedDateKey === to &&
-      !nextEvents.some((item) => String(item?.event || '').includes(move.eventIncludes))
-    ) {
-      nextEvents.push(move.event);
-    }
-  }
-  return nextEvents;
-}
-
 function normalizeOccasionText(value: unknown): string {
   return toEnglishDigits(String(value ?? '')).trim().toLocaleLowerCase('fa-IR');
 }
@@ -309,18 +233,9 @@ function occasionMatches(title: string, expected: string): boolean {
   );
 }
 
-async function getHolidayEventsForDate(value: unknown): Promise<HolidayApiEvent[]> {
-  const date = value ? new Date(String(value)) : null;
-  if (!date || isNaN(date.getTime())) return [];
-  const dateKey = formatJalaliDate(date.toISOString());
-  const [yearText, monthText, dayText] = normalizeDateKey(dateKey).split('/');
-  const year = Number(yearText);
-  const month = Number(monthText);
-  const day = Number(dayText);
-  const yearData = await loadHolidayYear(year);
-  const monthData = Array.isArray(yearData) ? yearData[month - 1] : null;
-  const dayData = monthData?.days?.find((item) => Number(toEnglishDigits(item?.day?.jalali || '0')) === day);
-  return applyCalendarEventMoves(dateKey, (dayData?.events?.list || []) as HolidayApiEvent[]);
+async function getHolidayEventsForDate(value: unknown) {
+  const lookup = await getOfficialCalendarEventsForDate(value);
+  return lookup.events;
 }
 
 async function dateHasAnyOccasion(value: unknown, expectedValue: unknown): Promise<boolean> {
@@ -1331,14 +1246,12 @@ function checkIntervalDue(workflow: WorkflowRow, now: Date): boolean {
 }
 
 async function isOfficialHolidayAtTehranDate(value: Date): Promise<boolean> {
-  const tehranDate = toTehranDate(value);
-  const events = await getHolidayEventsForDate(tehranDate.toISOString());
+  const events = await getHolidayEventsForDate(value);
   return events.some((event) => event?.isHoliday === true);
 }
 
 async function isFridayOrOfficialHoliday(value: Date): Promise<boolean> {
-  const tehranDate = toTehranDate(value);
-  if (tehranDate.getUTCDay() === 5) return true;
+  if (isFridayAtTehranDate(value)) return true;
   return isOfficialHolidayAtTehranDate(value);
 }
 

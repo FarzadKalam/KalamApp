@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { App, Button, Card, Empty, Spin, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Empty, Spin, Tag, Typography } from 'antd';
 import { CalendarOutlined, LeftOutlined, ReloadOutlined, RightOutlined, TeamOutlined } from '@ant-design/icons';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { resolveWorkScheduleDayPlan, type WorkScheduleDayPlan } from '../utils/workSchedulePlan';
+import { getHolidaySummaryForDate, type HolidayDaySummary } from '../utils/holidayCalendar';
 
 const { Title, Text } = Typography;
 
@@ -23,7 +24,13 @@ type WorkSchedule = {
   weekly_plan: { columns?: ScheduleColumn[] } | null;
 };
 
-type Employee = { id: string; full_name: string | null; department: string | null; team: string | null };
+type Employee = {
+  id: string;
+  full_name: string | null;
+  department: string | null;
+  team: string | null;
+  works_on_official_holidays: boolean | null;
+};
 
 const toDateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 
@@ -48,6 +55,7 @@ const AttendanceDailySchedulePage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [schedule, setSchedule] = useState<WorkSchedule | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [holidaySummary, setHolidaySummary] = useState<HolidayDaySummary | null>(null);
 
   const selectedDate = useMemo(() => parseDateKey(searchParams.get('date')) || new Date(), [searchParams]);
   const selectedDateKey = useMemo(() => toDateKey(selectedDate), [selectedDate]);
@@ -75,7 +83,7 @@ const AttendanceDailySchedulePage: React.FC = () => {
           .filter(Boolean),
       ));
       const employeesResult = employeeIds.length
-        ? await supabase.from('employees').select('id, full_name, department, team').in('id', employeeIds).order('full_name')
+        ? await supabase.from('employees').select('id, full_name, department, team, works_on_official_holidays').in('id', employeeIds).order('full_name')
         : { data: [], error: null };
       if (employeesResult.error) throw employeesResult.error;
       setSchedule(nextSchedule);
@@ -90,6 +98,14 @@ const AttendanceDailySchedulePage: React.FC = () => {
   useEffect(() => {
     void loadPage();
   }, [loadPage]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getHolidaySummaryForDate(selectedDateKey).then((summary) => {
+      if (!cancelled) setHolidaySummary(summary);
+    });
+    return () => { cancelled = true; };
+  }, [selectedDateKey]);
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('erp:breadcrumb', {
@@ -113,9 +129,14 @@ const AttendanceDailySchedulePage: React.FC = () => {
         dateKey: selectedDateKey,
         weekdayKey: weekdayKey(selectedDate),
       });
-      return { employee, plan, hasShift: Boolean(plan.shift1.start || plan.shift1.end || plan.shift2.start || plan.shift2.end) };
+      const hasShift = Boolean(plan.shift1.start || plan.shift1.end || plan.shift2.start || plan.shift2.end);
+      // تعطیلی رسمی برای کارکنانی که مجوز کار در تعطیل ندارند، برنامهٔ حضور ایجاد نمی‌کند.
+      // جمعه جداست: ممکن است در برنامهٔ هفتگی برای آن شیفت تعریف شده باشد.
+      const isClosedForEmployee = holidaySummary?.isOfficialHoliday === true
+        && employee.works_on_official_holidays !== true;
+      return { employee, plan, hasShift: hasShift && !isClosedForEmployee };
     }).filter((item) => item.hasShift);
-  }, [employees, schedule?.weekly_plan, selectedDate, selectedDateKey]);
+  }, [employees, holidaySummary?.isOfficialHoliday, schedule?.weekly_plan, selectedDate, selectedDateKey]);
 
   const moveDay = (offset: number) => {
     const next = new Date(selectedDate);
@@ -154,10 +175,23 @@ const AttendanceDailySchedulePage: React.FC = () => {
           <div className="text-center">
             <div className="font-black text-lg">{toPersianNumber(safeJalaliFormat(selectedDate.toISOString(), 'dddd، YYYY/MM/DD') || selectedDateKey)}</div>
             <div className="mt-1 text-sm text-gray-500">{schedule.effective_from && schedule.effective_to ? `بازه برنامه: ${toPersianNumber(safeJalaliFormat(schedule.effective_from, 'YYYY/MM/DD') || '')} تا ${toPersianNumber(safeJalaliFormat(schedule.effective_to, 'YYYY/MM/DD') || '')}` : 'برنامه فعال'}</div>
+            <div className="mt-2 flex flex-wrap justify-center gap-1">
+              {holidaySummary?.isFriday && <Tag color="red">تعطیل هفتگی</Tag>}
+              {holidaySummary?.isOfficialHoliday && <Tag color="red">تعطیل رسمی</Tag>}
+            </div>
           </div>
           <Button icon={<LeftOutlined />} iconPosition="end" onClick={() => moveDay(1)}>روز بعد</Button>
         </div>
       </Card>
+
+      {holidaySummary?.isOfficialHoliday && (
+        <Alert
+          type="info"
+          showIcon
+          message="تعطیل رسمی"
+          description={`این روز به‌دلیل ${holidaySummary.occasions.filter((item) => item.isHoliday).map((item) => item.title).join(' و ') || 'مناسبت رسمی'} تعطیل است. فقط کارکنانی که «کار در روزهای تعطیل» برایشان فعال شده، در برنامه حضور نمایش داده می‌شوند.`}
+        />
+      )}
 
       {!dateIsInSchedule ? (
         <Empty description="این تاریخ خارج از بازه برنامه حضور است." className="py-16" />

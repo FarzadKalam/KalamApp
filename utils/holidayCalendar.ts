@@ -37,6 +37,7 @@ type HolidayApiEvent = {
 };
 
 type HolidayApiDay = {
+  disabled?: boolean;
   day?: {
     jalali?: string;
     gregorian?: string;
@@ -50,13 +51,6 @@ type HolidayApiDay = {
 
 type HolidayApiMonth = {
   days?: HolidayApiDay[];
-};
-
-type CalendarEventMove = {
-  from: string;
-  to: string;
-  eventIncludes: string;
-  event: HolidayApiEvent;
 };
 
 const OCCASION_EMPTY_GROUPS: Record<OccasionCategory, HolidayOccasion[]> = {
@@ -79,39 +73,6 @@ const FALLBACK_HOLIDAY_OCCASION_OPTIONS: HolidayOccasionOption[] = [
   { label: 'قیام 15 خرداد', value: 'قیام 15 خرداد', isHoliday: true, source: 'jalali' },
   { label: 'روز جمهوری اسلامی', value: 'روز جمهوری اسلامی', isHoliday: true, source: 'jalali' },
   { label: 'روز طبیعت', value: 'روز طبیعت', isHoliday: true, source: 'jalali' },
-];
-
-const CALENDAR_EVENT_MOVES: CalendarEventMove[] = [
-  {
-    from: '1405/03/05',
-    to: '1405/03/06',
-    eventIncludes: 'عید سعید قربان',
-    event: {
-      isHoliday: true,
-      event: 'عید سعید قربان',
-      calendarType: 'hijri',
-    },
-  },
-  {
-    from: '1405/03/05',
-    to: '1405/03/06',
-    eventIncludes: 'آغاز دههٔ امامت و ولایت',
-    event: {
-      isHoliday: false,
-      event: 'آغاز دههٔ امامت و ولایت',
-      calendarType: 'hijri',
-    },
-  },
-  {
-    from: '1405/03/13',
-    to: '1405/03/14',
-    eventIncludes: 'عید سعید غدیر خم',
-    event: {
-      isHoliday: true,
-      event: 'عید سعید غدیر خم(۱۰ ه‍‍.ق)',
-      calendarType: 'hijri',
-    },
-  },
 ];
 
 const toEnglishDigits = (value: string) =>
@@ -157,35 +118,6 @@ const mapCategory = (calendarType?: string): OccasionCategory => {
   return 'national';
 };
 
-const normalizeDateKey = (dateKey: string) =>
-  toEnglishDigits(dateKey)
-    .replace(/-/g, '/')
-    .split('/')
-    .map((part, index) => (index === 0 ? part.padStart(4, '0') : part.padStart(2, '0')))
-    .join('/');
-
-const applyCalendarEventMoves = (dateKey: string, events: HolidayApiEvent[]) => {
-  const normalizedDateKey = normalizeDateKey(dateKey);
-  let nextEvents = [...events];
-
-  for (const move of CALENDAR_EVENT_MOVES) {
-    const from = normalizeDateKey(move.from);
-    const to = normalizeDateKey(move.to);
-    if (normalizedDateKey === from) {
-      nextEvents = nextEvents.filter((item) => !String(item?.event || '').includes(move.eventIncludes));
-    }
-
-    if (
-      normalizedDateKey === to &&
-      !nextEvents.some((item) => String(item?.event || '').includes(move.eventIncludes))
-    ) {
-      nextEvents.push(move.event);
-    }
-  }
-
-  return nextEvents;
-};
-
 const buildEmptySummary = (dateObject: DateObject): HolidayDaySummary => {
   const dateKey = dateObject.convert(persian, persian_fa).format('YYYY/MM/DD');
   const weekdayLabel = dateObject.convert(persian, persian_fa).format('dddd');
@@ -196,7 +128,9 @@ const buildEmptySummary = (dateObject: DateObject): HolidayDaySummary => {
     jalaliLabel: dateKey,
     weekdayLabel,
     isFriday,
-    isOfficialHoliday: isFriday,
+    // جمعه تعطیل هفتگی است، نه مناسبت/تعطیل رسمی. مصرف‌کننده در صورت نیاز
+    // با isFriday هر دو نوع تعطیلی را کنار هم نمایش می‌دهد.
+    isOfficialHoliday: false,
     occasions: [],
     categories: {
       national: [],
@@ -278,13 +212,16 @@ export const getHolidaySummaryForDate = async (
   const fallback = buildEmptySummary(jalaliDate);
   const yearData = await loadHolidayYear(jalaliYear);
   const monthData = Array.isArray(yearData) ? yearData[jalaliMonth - 1] : null;
-  const dayData = monthData?.days?.find((item) => Number(toEnglishDigits(item?.day?.jalali || '0')) === jalaliDay);
+  // هر ماه چند خانهٔ غیرفعال از ماه قبل/بعد دارد؛ فقط روز واقعی همان ماه معتبر است.
+  const dayData = monthData?.days?.find(
+    (item) => !item?.disabled && Number(toEnglishDigits(item?.day?.jalali || '0')) === jalaliDay
+  );
 
   if (!dayData) {
     return fallback;
   }
 
-  const rawEvents = applyCalendarEventMoves(fallback.dateKey, (dayData.events?.list || []) as HolidayApiEvent[]);
+  const rawEvents = (dayData.events?.list || []) as HolidayApiEvent[];
   const occasions = rawEvents
     .map((item) => ({
       title: String(item?.event || '').trim(),
@@ -311,7 +248,7 @@ export const getHolidaySummaryForDate = async (
     }
   );
 
-  const isOfficialHoliday = fallback.isFriday || dedupedOccasions.some((item) => item.isHoliday);
+  const isOfficialHoliday = dedupedOccasions.some((item) => item.isHoliday);
 
   return {
     dateKey: jalaliDate.format('YYYY/MM/DD'),

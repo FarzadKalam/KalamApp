@@ -35,6 +35,7 @@ import {
 import { supabase } from '../../supabaseClient';
 import { ADVERTISING_CAMPAIGNS_MODULE_ID, CAMPAIGN_PLAN_FEATURES } from '../../utils/advertisingCampaigns';
 import { CONTENT_CALENDAR_MODULE_ID, CONTENT_CALENDAR_PLAN_FEATURE } from '../../modules/contentCalendarsConfig';
+import { BILLBOARD_STATUS_MANAGEMENT_PLAN_FEATURE } from '../../utils/billboardStatusChanges';
 
 const { Title, Text } = Typography;
 const { Panel } = Collapse;
@@ -161,6 +162,7 @@ const FEATURE_OPTIONS = [
   { id: 'advanced_reports', label: 'گزارش‌ساز پیشرفته' },
   { id: 'multi_lane_processes', label: 'فرآیندهای چندردیفه و فعال‌کننده‌ها' },
   { id: CONTENT_CALENDAR_PLAN_FEATURE, label: 'تقویم محتوایی' },
+  { id: BILLBOARD_STATUS_MANAGEMENT_PLAN_FEATURE, label: 'مدیریت تغییر وضعیت تابلوها' },
   { id: 'white_label', label: 'White Label' },
   { id: 'custom_domain', label: 'دامنه اختصاصی' },
   { id: 'own_payment_gateway', label: 'درگاه پرداخت اختصاصی سازمان' },
