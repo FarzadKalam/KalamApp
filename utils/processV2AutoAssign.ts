@@ -10,6 +10,7 @@ import { fetchAssigneeDirectory } from './referenceData';
 import {
   PROCESS_TASK_CUSTOM_FIELDS_KEY,
   PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY,
+  applyProcessLinkedRelationValues,
   getProcessTaskCustomFieldsFromStage,
   mergeProcessTaskCustomFieldValues,
 } from './processTaskCustomFields';
@@ -789,7 +790,11 @@ export const autoAssignProcessV2DraftStages = async ({
       acc[key] = renderProcessV2TemplateValueFromRecord(rawStageCustomFieldValues[key], templateContext, field.type);
       return acc;
     }, {});
-    const stageCustomFieldValues = mergeProcessTaskCustomFieldValues(resolvedStageCustomFields, renderedStageCustomFieldValues);
+    const stageCustomFieldValues = applyProcessLinkedRelationValues(
+      resolvedStageCustomFields,
+      mergeProcessTaskCustomFieldValues(resolvedStageCustomFields, renderedStageCustomFieldValues),
+      effectiveProcessLinkMap,
+    );
     Object.entries(stageCustomFieldValues).forEach(([fieldKey, value]) => {
       templateContext[fieldKey] = value;
       templateContext[`__task__${fieldKey}`] = value;

@@ -15,7 +15,7 @@ describe('process task custom field persistence', () => {
       fallbackRecurrence: {},
     });
     expect(result.id).toBe('task-1');
-    expect(rpc).toHaveBeenCalledWith('patch_process_task_v2_custom_field_values', {
+    expect(rpc).toHaveBeenCalledWith('sync_process_task_v2_custom_field_values', {
       p_task_id: 'task-1',
       p_field_values: { approved: true },
     });

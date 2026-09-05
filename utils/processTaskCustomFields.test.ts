@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { FieldType } from '../types';
-import { getMissingRequiredProcessTaskCustomFields, normalizeProcessTaskCustomField } from './processTaskCustomFields';
+import {
+  applyProcessLinkedRelationValues,
+  getMissingRequiredProcessTaskCustomFields,
+  mergeProcessLinksFromLinkedRelationValues,
+  normalizeProcessTaskCustomField,
+} from './processTaskCustomFields';
 
 describe('getMissingRequiredProcessTaskCustomFields', () => {
   it('returns the required custom fields that are empty', () => {
@@ -138,5 +143,22 @@ describe('getMissingRequiredProcessTaskCustomFields', () => {
         process_task_custom_field_values: { approved: true },
       },
     })).toEqual([]);
+  });
+
+  it('keeps a linked relation field and the process link in sync', () => {
+    const fields = [{
+      key: 'supplier',
+      type: FieldType.RELATION,
+      labels: { fa: 'تأمین‌کننده' },
+      relationConfig: { targetModule: 'suppliers', linkToProcessRelatedRecord: true },
+    }] as any;
+
+    expect(applyProcessLinkedRelationValues(fields, { supplier: 'old-supplier' }, {
+      suppliers: 'process-supplier',
+    })).toEqual({ supplier: 'process-supplier' });
+    expect(mergeProcessLinksFromLinkedRelationValues(fields, { supplier: 'new-supplier' }, {
+      projects: 'project-1',
+      suppliers: 'old-supplier',
+    })).toEqual({ projects: 'project-1', suppliers: 'new-supplier' });
   });
 });

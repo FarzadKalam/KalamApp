@@ -2501,7 +2501,7 @@ function getModuleTable(moduleId: string): string {
 }
 
 const WORKFLOW_MUTATION_MODULE_IDS = new Set([
-  'products', 'billboards', 'product_bundles', 'warehouses', 'shelves', 'stock_transfers',
+  'products', 'billboards', 'billboard_status_changes', 'product_bundles', 'warehouses', 'shelves', 'stock_transfers',
   'secretariat_documents', 'delivery_forms', 'production_boms', 'production_orders',
   'production_group_orders', 'customers', 'suppliers', 'invoices', 'purchase_invoices',
   'sales_return_invoices', 'purchase_return_invoices', 'projects', 'marketing_leads',
@@ -2574,8 +2574,28 @@ async function updateRecord(
   return changed === true;
 }
 
-async function createRecord(url: string, key: string, moduleId: string, orgId: string, payload: Record<string, any>, actorUserId: string | null = null): Promise<any> {
+async function createRecord(
+  url: string,
+  key: string,
+  moduleId: string,
+  orgId: string,
+  payload: Record<string, any>,
+  actorUserId: string | null = null,
+  originExecutionKey: string | null = null,
+): Promise<any> {
   assertWorkflowMutationModule(moduleId);
+  if (moduleId === 'billboard_status_changes') {
+    if (!actorUserId) throw new Error('کاربر اجرای گردش‌کار برای ثبت تغییر وضعیت تابلو مشخص نیست.');
+    const createdId = await callRpc(url, key, 'workflow_create_billboard_status_change', {
+      p_org_id: orgId,
+      p_actor_user_id: actorUserId,
+      p_input: sanitizeWorkflowMutationPayload(payload),
+      p_origin_execution_key: originExecutionKey,
+    });
+    const id = Array.isArray(createdId) ? String(createdId[0] || '').trim() : String(createdId || '').trim();
+    if (!id) throw new Error('ثبت درخواست تغییر وضعیت تابلو تأیید نشد.');
+    return { id };
+  }
   const table = getModuleTable(moduleId);
   const body = { ...sanitizeWorkflowMutationPayload(payload), org_id: orgId };
   if (actorUserId) {
@@ -2679,8 +2699,16 @@ async function updateProcessTaskAutomationField(
       process_task_custom_fields: customFields,
       process_task_custom_field_values: { ...currentValues, [normalizedFieldKey]: value },
     };
-    await updateRecord(url, key, 'tasks', taskId, { recurrence_info: nextRecurrence }, actorUserId, orgId, originExecutionKey);
-    task.recurrence_info = nextRecurrence;
+    const result = await callRpc(url, key, 'workflow_patch_process_task_v2_custom_field_values', {
+      p_org_id: orgId,
+      p_task_id: taskId,
+      p_field_values: { [normalizedFieldKey]: value },
+      p_actor_user_id: actorUserId,
+      p_origin_execution_key: originExecutionKey,
+    });
+    task.recurrence_info = result?.recurrence_info && typeof result.recurrence_info === 'object'
+      ? result.recurrence_info
+      : nextRecurrence;
     task[`__task__${normalizedFieldKey}`] = value;
     return;
   }
@@ -4448,6 +4476,20 @@ async function executeAction(
       return actionResult(action, 'skipped', 'ماژول، رکورد یا فیلد مرتبط برای ویرایش مشخص نیست.');
     }
     assertWorkflowMutationModule(targetModuleId);
+    if (targetModuleId === 'billboard_status_changes') {
+      if (!actorUserId) return actionResult(action, 'skipped', 'کاربر اجرای گردش‌کار برای ویرایش درخواست تغییر وضعیت تابلو مشخص نیست.');
+      const nextValue = await resolveConfiguredActionValue(config, record, url, key, orgId, moduleId);
+      const changed = await callRpc(url, key, 'workflow_update_billboard_status_change', {
+        p_org_id: orgId,
+        p_actor_user_id: actorUserId,
+        p_change_id: targetRecordId,
+        p_patch: { [targetFieldKey]: nextValue },
+        p_origin_execution_key: String(config.__workflow_origin_execution_key || '').trim() || null,
+      });
+      return changed === true
+        ? actionResult(action, 'success', undefined, { affected_count: 1, details: { target_module_id: targetModuleId, field: targetFieldKey } })
+        : actionResult(action, 'skipped', 'مقدار درخواست تغییر وضعیت تابلو تغییری نکرده است.');
+    }
     const targetRows = await dbGet(
       url,
       key,
@@ -4561,7 +4603,15 @@ async function executeAction(
       payload.related_to_module = sourceModuleId;
       payload.source_record_id = sourceRecordId;
     }
-    const created = await createRecord(url, key, targetModuleId, orgId, payload, actorUserId);
+    const created = await createRecord(
+      url,
+      key,
+      targetModuleId,
+      orgId,
+      payload,
+      actorUserId,
+      String(config.__workflow_origin_execution_key || '').trim() || null,
+    );
     if (processAttachment) {
       const createdRecordId = String(created?.id || '').trim();
       if (!createdRecordId) throw new Error('رکورد جدید ایجاد شد اما شناسه پیوند فرآیند برنگشت.');

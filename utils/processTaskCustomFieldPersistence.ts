@@ -8,7 +8,7 @@ const isMissingPatchRpc = (error: any) => {
   return code === '42883'
     || code === 'PGRST202'
     || code === 'PGRST204'
-    || message.includes('patch_process_task_v2_custom_field_values')
+    || message.includes('sync_process_task_v2_custom_field_values')
     || message.includes('could not find the function');
 };
 
@@ -23,7 +23,7 @@ export const patchProcessTaskCustomFieldValues = async ({
   values: Record<string, any>;
   fallbackRecurrence: Record<string, any>;
 }) => {
-  const { data, error } = await supabaseClient.rpc('patch_process_task_v2_custom_field_values', {
+  const { data, error } = await supabaseClient.rpc('sync_process_task_v2_custom_field_values', {
     p_task_id: taskId,
     p_field_values: values,
   });

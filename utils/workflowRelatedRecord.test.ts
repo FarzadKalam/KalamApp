@@ -56,6 +56,22 @@ describe('workflowRelatedRecord', () => {
     ]);
   });
 
+  it('offers controlled billboard status requests when the process includes a billboard', () => {
+    const options = getCreateRelatedRecordTargetModuleOptions(
+      'billboards',
+      [
+        { label: 'تابلوها', value: 'billboards' },
+        { label: 'تغییر وضعیت تبلیغات محیطی', value: 'billboard_status_changes' },
+      ],
+      ['billboards'],
+    );
+
+    expect(options.map((option) => option.value)).toEqual(['billboards', 'billboard_status_changes']);
+    expect(getCreateRelatedRecordRelationFieldOptions('billboard_status_changes', 'billboards')).toEqual([
+      { label: 'تابلو', value: 'billboard_id' },
+    ]);
+  });
+
   it('puts the current process first as the source for process automations', () => {
     expect(getCreateRelatedRecordSourceModuleOptions([
       { label: 'فاکتورها', value: 'invoices' },

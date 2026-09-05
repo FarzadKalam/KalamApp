@@ -118,6 +118,7 @@ import {
   getProcessTaskCustomFieldValuesFromRecurrence,
   getProcessTaskCustomFieldsFromRecurrence,
   getProcessTaskCustomFieldsFromStage,
+  PROCESS_TASK_RELATION_PROCESS_LINK_FLAG,
   isReservedProcessTaskCustomFieldKey,
   isSupportedProcessTaskCustomFieldType,
   mergeProcessTaskCustomFieldValues,
@@ -7808,7 +7809,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       type: nextField?.type || FieldType.TEXT,
       required: !!nextField?.validation?.required,
       relationTargetModule: nextField?.relationConfig?.targetModule || undefined,
-      relationTargetField: nextField?.relationConfig?.targetField || undefined,
+      relationLinkedToProcess: (nextField?.relationConfig as any)?.[PROCESS_TASK_RELATION_PROCESS_LINK_FLAG] === true
+        || (nextField?.relationConfig as any)?.link_to_process_related_record === true,
       dynamicCategory: nextField?.dynamicOptionsCategory || undefined,
     });
     setIsDraftCustomFieldModalOpen(true);
@@ -7855,7 +7857,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         relationConfig: fieldType === FieldType.RELATION
           ? {
               targetModule: String(values?.relationTargetModule || '').trim(),
-              targetField: String(values?.relationTargetField || '').trim() || undefined,
+              ...(values?.relationLinkedToProcess
+                ? { [PROCESS_TASK_RELATION_PROCESS_LINK_FLAG]: true }
+                : {}),
             }
           : undefined,
         dynamicOptionsCategory: supportsProcessTaskDynamicCategory(fieldType)
@@ -12420,16 +12424,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               >
                 <AdaptiveSelectField {...adaptiveModalSelectProps} options={workflowModuleOptions} />
               </Form.Item>
-              <Form.Item label="فیلد نمایشی مقصد" name="relationTargetField">
-                <AdaptiveSelectField
-                  {...adaptiveModalSelectProps}
-                  allowClear
-                  options={(MODULES[String(draftCustomFieldRelationTargetModule || '')]?.fields || []).map((field) => ({
-                    value: field.key,
-                    label: getFieldLabelFa(field),
-                  }))}
-                />
-              </Form.Item>
+              {draftCustomFieldRelationTargetModule ? (
+                <Form.Item name="relationLinkedToProcess" valuePropName="checked" className="mb-0">
+                  <Checkbox>اتصال به مرتبط با فرآیند</Checkbox>
+                </Form.Item>
+              ) : null}
             </>
           )}
 

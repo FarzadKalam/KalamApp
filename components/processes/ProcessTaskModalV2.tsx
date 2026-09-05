@@ -43,6 +43,8 @@ import {
   getProcessTaskCustomFieldValuesFromRecurrence,
   getProcessTaskCustomFieldsFromRecurrence,
   getProcessTaskCustomFieldsFromStage,
+  applyProcessLinkedRelationValues,
+  mergeProcessLinksFromLinkedRelationValues,
   mergeProcessTaskCustomFieldValues,
   normalizeProcessTaskCustomFields,
   PROCESS_TASK_CUSTOM_FIELDS_KEY,
@@ -441,10 +443,22 @@ const buildCustomFields = (stage: ProcessV2Stage | null): MockCustomField[] => {
     if (value !== undefined) acc[key] = value;
     return acc;
   }, {});
-  const values = mergeProcessTaskCustomFieldValues(fields, {
+  const processLinks = [
+    source?.process_links,
+    source?.process_link_map,
+    sourceMetadata?.process_links,
+    sourceMetadata?.process_link_map,
+    recurrence?.process_links,
+    sourceStage?.process_links,
+    sourceStage?.process_link_map,
+    sourceStageMetadata?.process_links,
+    sourceStageMetadata?.process_link_map,
+    sourceStageRecurrence?.process_links,
+  ].reduce<Record<string, string>>((links, value) => ({ ...links, ...parseProcessLinkMap(value) }), {});
+  const values = applyProcessLinkedRelationValues(fields, mergeProcessTaskCustomFieldValues(fields, {
     ...rawValues,
     ...fallbackValues,
-  });
+  }), processLinks);
 
   return fields.map((field: any, index) => {
     const key = String(field?.key || '').trim();
@@ -1409,14 +1423,27 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       ...currentFieldValues,
       [fieldKey]: nextValue,
     };
+    const currentProcessLinks = parseProcessLinkMap(currentRecurrence?.process_links);
+    const nextProcessLinks = mergeProcessLinksFromLinkedRelationValues(
+      customFields.map((field) => field.field).filter(Boolean) as ModuleField[],
+      nextValues,
+      currentProcessLinks,
+    );
     setCustomFields((current) => current.map((item) => (
       item.key === fieldKey ? { ...item, value: nextValue } : item
     )));
     await persistTaskFieldPatch(
       fieldKey,
       {},
-      { [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: nextValues },
-      { [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: nextValues, [fieldKey]: nextValue },
+      {
+        [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: nextValues,
+        process_links: nextProcessLinks,
+      },
+      {
+        [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: nextValues,
+        process_links: nextProcessLinks,
+        [fieldKey]: nextValue,
+      },
     );
     if (JSON.stringify(oldValue ?? null) !== JSON.stringify(nextValue ?? null)) {
       // The database trigger writes the detailed custom-field audit row from

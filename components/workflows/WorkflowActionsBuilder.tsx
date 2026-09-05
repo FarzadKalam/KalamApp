@@ -2597,7 +2597,9 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           <Alert
             type="info"
             showIcon
-            message="رکورد مقصد فقط در همان سازمان و با شناسه موجود در فیلد انتخاب‌شده ویرایش می‌شود."
+            message={targetModuleId === 'billboard_status_changes'
+              ? 'فقط درخواست در انتظار تأیید ویرایش می‌شود؛ اعمال وضعیت روی تابلو پس از تأیید و از مسیر کنترل‌شده انجام می‌شود.'
+              : 'رکورد مقصد فقط در همان سازمان و با شناسه موجود در فیلد انتخاب‌شده ویرایش می‌شود.'}
           />
           <div className="grid grid-cols-1 gap-2 md:grid-cols-12">
             <div className="space-y-1 md:col-span-4">
@@ -2774,6 +2776,13 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           </div>
 
           <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-2 space-y-2">
+            {targetModuleId === 'billboard_status_changes' ? (
+              <Alert
+                type="info"
+                showIcon
+                message="برای ثبت درخواست تغییر وضعیت، «تابلو» و «وضعیت مقصد» را نگاشت کنید. برای وضعیت‌های رزرو و اکران، مشتری و تاریخ شروع و پایان نیز الزامی‌اند."
+              />
+            ) : null}
             <div className="flex items-center justify-between">
               <div className="text-sm font-semibold">فیلدهای رکورد جدید</div>
               <Button
@@ -3045,6 +3054,13 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           </div>
 
           <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-2 space-y-2">
+            {targetModuleId === 'billboard_status_changes' ? (
+              <Alert
+                type="info"
+                showIcon
+                message="این اقدام درخواست تغییر وضعیت را از روی تابلوی مرتبط ایجاد می‌کند. وضعیت مقصد و، در صورت رزرو یا اکران، مشتری و تاریخ‌ها را نگاشت کنید."
+              />
+            ) : null}
             <div className="flex items-center justify-between">
               <div className="text-sm font-semibold">فیلدهای رکورد جدید</div>
               <Button

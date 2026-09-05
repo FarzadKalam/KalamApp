@@ -86,6 +86,12 @@ export const getCreateRelatedRecordTargetModuleOptions = (
       const configuredLabel = (moduleOptions || []).find((option) => normalizeModuleId(option?.value) === moduleId)?.label;
       addOption(moduleId, configuredLabel);
     });
+    // تغییر وضعیت تابلو یک رکورد اجراییِ کنترل‌شده است، نه ویرایش مستقیم تابلو.
+    // فقط وقتی خود تابلو در پیوندهای فرآیند وجود دارد، در اتوماسیون همان فرآیند دیده می‌شود.
+    if (processTargets.includes('billboards')) {
+      const configuredLabel = (moduleOptions || []).find((option) => normalizeModuleId(option?.value) === 'billboard_status_changes')?.label;
+      addOption('billboard_status_changes', configuredLabel);
+    }
     return result;
   }
 

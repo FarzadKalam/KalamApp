@@ -264,6 +264,7 @@ try {
   # for frontend reuse, so materialize deploy-local copies before creating its
   # archive. This avoids unresolved /home/shared and /home/utils imports in Deno.
   $archiveSourceRoot = $functionsRoot
+  $archiveEntries = @($selectedFunctions)
   if ($selectedFunctions -contains 'workflow-interval-runner' -or $selectedFunctions -contains 'goal-progress' -or $selectedFunctions -contains 'activity-performance') {
     $archiveStagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("kalamapp-functions-{0}" -f [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $archiveStagingRoot -Force | Out-Null
@@ -290,11 +291,16 @@ try {
         Copy-Item -LiteralPath (Join-Path $repoRoot 'utils/formulaRuntime.ts') -Destination (Join-Path $runtimeDepsRoot 'formulaRuntime.ts') -Force
       }
     }
+    # این توابع از ماژول‌های مشترک بیرون از پوشهٔ خودشان import می‌کنند. بدون
+    # بسته‌بندی _shared، نسخهٔ قدیمی سرور کنار نسخهٔ جدید function می‌ماند و Deno
+    # هنگام بوت ممکن است export موردنیاز را پیدا نکند.
+    Copy-Item -LiteralPath (Join-Path $functionsRoot '_shared') -Destination (Join-Path $archiveStagingRoot '_shared') -Recurse -Force
+    $archiveEntries += '_shared'
     $archiveSourceRoot = $archiveStagingRoot
   }
 
   Write-Step "Packing functions: $($selectedFunctions -join ', ')"
-  $tarArgs = @('-czf', $localArchive, '-C', $archiveSourceRoot, '--') + $selectedFunctions
+  $tarArgs = @('-czf', $localArchive, '-C', $archiveSourceRoot, '--') + $archiveEntries
   & tar @tarArgs
   if ($LASTEXITCODE -ne 0) {
     throw 'Could not create function deploy archive.'
@@ -367,6 +373,12 @@ run_files_cmd() {
 
 run_files_cmd mkdir -p "$FUNCTIONS_PATH"
 tar -xzf "$ARCHIVE" -C "$STAGING_DIR"
+
+if [ -d "$STAGING_DIR/_shared" ]; then
+  run_files_cmd rm -rf "$FUNCTIONS_PATH/_shared"
+  run_files_cmd mkdir -p "$FUNCTIONS_PATH/_shared"
+  run_files_cmd cp -a "$STAGING_DIR/_shared/." "$FUNCTIONS_PATH/_shared/"
+fi
 
 for function_name in "${FUNCTION_NAMES[@]}"; do
   if [ ! -d "$STAGING_DIR/$function_name" ]; then

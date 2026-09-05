@@ -3,6 +3,11 @@ import { FieldNature, FieldType, ModuleField } from '../types';
 
 export const PROCESS_TASK_CUSTOM_FIELDS_KEY = 'process_task_custom_fields';
 export const PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY = 'process_task_custom_field_values';
+/**
+ * رابطهٔ این فیلد، همان پیوند هم‌نام در اجرای فرآیند است. نام camelCase برای
+ * داده‌های جدید است و خواندن نام snake_case نیز برای تعریف‌های قدیمی پشتیبانی می‌شود.
+ */
+export const PROCESS_TASK_RELATION_PROCESS_LINK_FLAG = 'linkToProcessRelatedRecord';
 export const TASK_AUTOMATION_FIELD_PREFIX = '__task__';
 export const PREVIOUS_STAGE_TASK_AUTOMATION_FIELD_PREFIX = 'previous_stage__';
 
@@ -252,6 +257,56 @@ export const mergeProcessTaskCustomFieldValues = (
     ...defaults,
     ...rawValues,
   };
+};
+
+export const isProcessTaskRelationLinkedToProcess = (field: ModuleField | null | undefined) => {
+  if (field?.type !== FieldType.RELATION) return false;
+  const config = field.relationConfig as any;
+  return config?.[PROCESS_TASK_RELATION_PROCESS_LINK_FLAG] === true
+    || config?.link_to_process_related_record === true;
+};
+
+export const getProcessTaskRelationTargetModuleId = (field: ModuleField | null | undefined) =>
+  String((field?.relationConfig as any)?.targetModule || '').trim();
+
+/**
+ * فیلدهای رابطه‌ای متصل به فرآیند از یک منبع مشترک می‌خوانند؛ بنابراین تغییر
+ * پیوند فرآیند و تغییر همان فیلد در فعالیت، دو مقدار ناسازگار تولید نمی‌کند.
+ */
+export const applyProcessLinkedRelationValues = (
+  fields: ModuleField[],
+  values: Record<string, any> | null | undefined,
+  processLinks: Record<string, any> | null | undefined,
+) => {
+  const nextValues = { ...(values || {}) };
+  const links = processLinks && typeof processLinks === 'object' && !Array.isArray(processLinks)
+    ? processLinks
+    : {};
+  normalizeProcessTaskCustomFields(fields).forEach((field) => {
+    if (!isProcessTaskRelationLinkedToProcess(field)) return;
+    const fieldKey = String(field.key || '').trim();
+    const targetModuleId = getProcessTaskRelationTargetModuleId(field);
+    const linkedRecordId = String(links[targetModuleId] || '').trim();
+    if (fieldKey && targetModuleId && linkedRecordId) nextValues[fieldKey] = linkedRecordId;
+  });
+  return nextValues;
+};
+
+export const mergeProcessLinksFromLinkedRelationValues = (
+  fields: ModuleField[],
+  values: Record<string, any> | null | undefined,
+  processLinks: Record<string, any> | null | undefined,
+) => {
+  const nextLinks = { ...(processLinks || {}) };
+  const fieldValues = values && typeof values === 'object' ? values : {};
+  normalizeProcessTaskCustomFields(fields).forEach((field) => {
+    if (!isProcessTaskRelationLinkedToProcess(field)) return;
+    const fieldKey = String(field.key || '').trim();
+    const targetModuleId = getProcessTaskRelationTargetModuleId(field);
+    const recordId = String(fieldValues[fieldKey] || '').trim();
+    if (fieldKey && targetModuleId && recordId) nextLinks[targetModuleId] = recordId;
+  });
+  return nextLinks;
 };
 
 const hasProcessTaskCustomFieldValue = (field: ModuleField, value: unknown): boolean => {
