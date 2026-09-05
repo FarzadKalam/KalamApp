@@ -1080,18 +1080,11 @@ export const fetchOperationalFinancialOverview = async ({
   // صفحهٔ داخلی و کارت حساب آنلاین هر دو از همین RPC سروری استفاده می‌کنند.
   // هیچ fallback کلاینتی نداریم تا یک رکورد در دو مسیر با دو منطق متفاوت
   // محاسبه نشود.
-  const [{ data, error }, { data: clubHistoryData, error: clubHistoryError }] = await Promise.all([
-    supabase.rpc('get_operational_financial_history', {
-      p_entity_type: entityType,
-      p_entity_id: normalizedEntityId,
-    }),
-    supabase.rpc('get_customer_club_financial_history', {
-      p_entity_type: entityType,
-      p_entity_id: normalizedEntityId,
-    }),
-  ]);
+  const { data, error } = await supabase.rpc('get_operational_financial_history', {
+    p_entity_type: entityType,
+    p_entity_id: normalizedEntityId,
+  });
   if (error) throw error;
-  if (clubHistoryError) throw clubHistoryError;
 
   const payload = (data && typeof data === 'object' ? data : {}) as Record<string, any>;
   const rawRows = Array.isArray(payload.rows) ? payload.rows : [];
@@ -1129,29 +1122,6 @@ export const fetchOperationalFinancialOverview = async ({
         ? { moduleId: bankModuleId, recordId: bankRecordId }
         : null,
     }, toNumber(raw?.balance));
-  });
-  const clubRows = Array.isArray(clubHistoryData) ? clubHistoryData : [];
-  clubRows.forEach((raw: any, index: number) => {
-    rows.push(buildBalanceRow({
-      key: normalizeOperationalText(raw?.key) || `club_credit_${index}`,
-      rowType: 'club_credit',
-      sourceLabel: String(raw?.source_label || 'باشگاه مشتریان'),
-      sourceModuleId: 'customer_club',
-      sourceRecordId: null,
-      paymentType: '',
-      status: String(raw?.status || 'ثبت شده'),
-      chequeStatus: '',
-      date: raw?.date || null,
-      debit: 0,
-      credit: 0,
-      clubCreditAmount: toNumber(raw?.club_credit_amount),
-      invoiceLabel: String(raw?.invoice_label || '-'),
-      bankLabel: '-',
-      description: String(raw?.description || ''),
-      createdAt: raw?.created_at || null,
-      invoiceRelation: null,
-      bankRelation: null,
-    }, 0));
   });
   const rawSummary = payload.summary && typeof payload.summary === 'object' ? payload.summary : {};
   const totals = {

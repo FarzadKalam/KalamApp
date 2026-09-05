@@ -50,8 +50,7 @@ type CustomerDerivedStats = {
 const LEVELING_INTEGRATION_KEY = 'customer_leveling_config';
 const CUSTOMER_STAT_FIELDS = [
   'purchase_count',
-  'total_spend',
-  'total_paid_amount',
+  'loyalty_total_spend',
   'first_purchase_date',
   'last_purchase_date',
   'rank',
@@ -578,8 +577,7 @@ const syncCustomerLevelsBatch = async ({
 
     const fullPayload: Record<string, any> = {
       purchase_count: stats.purchaseCount,
-      total_spend: stats.totalSpend,
-      total_paid_amount: stats.totalPaidAmount,
+      loyalty_total_spend: stats.totalSpend,
       first_purchase_date: stats.firstPurchaseDate,
       last_purchase_date: stats.lastPurchaseDate,
       rank,
