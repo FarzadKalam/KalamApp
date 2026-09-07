@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { App, Alert, Form, Input, Modal, Select, Spin } from 'antd';
 import PersianDatePicker from '../PersianDatePicker';
+import SmartFieldRenderer from '../SmartFieldRenderer';
 import { supabase } from '../../supabaseClient';
+import { FieldType, ModuleField } from '../../types';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import {
@@ -30,6 +32,12 @@ const labelForBillboard = (row: any) => {
 const BILLBOARD_STATUS_MODAL_Z_INDEX = 15100;
 const BILLBOARD_STATUS_PICKER_Z_INDEX = BILLBOARD_STATUS_MODAL_Z_INDEX + 220;
 
+const statusChangeRelationFields: Record<'customer' | 'invoice' | 'marketingLead', ModuleField> = {
+  customer: { key: 'customer_id', labels: { fa: 'نام مشتری', en: 'Customer' }, type: FieldType.RELATION, relationConfig: { targetModule: 'customers', targetField: 'business_name' } },
+  invoice: { key: 'invoice_id', labels: { fa: 'فاکتور مرتبط', en: 'Invoice' }, type: FieldType.RELATION, relationConfig: { targetModule: 'invoices', targetField: 'name' } },
+  marketingLead: { key: 'marketing_lead_id', labels: { fa: 'لید مرتبط', en: 'Related lead' }, type: FieldType.RELATION, relationConfig: { targetModule: 'marketing_leads', targetField: 'name' } },
+};
+
 const toOptions = (rows: any[], label: (row: any) => string): Option[] =>
   (rows || []).map((row) => ({ value: String(row.id), label: label(row) })).filter((item) => item.value);
 
@@ -44,10 +52,9 @@ const BillboardStatusChangeModal: React.FC<BillboardStatusChangeModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [optionsLoading, setOptionsLoading] = useState(false);
   const [billboards, setBillboards] = useState<Option[]>([]);
-  const [customers, setCustomers] = useState<Option[]>([]);
-  const [invoices, setInvoices] = useState<Option[]>([]);
   const [templates, setTemplates] = useState<Option[]>([]);
   const targetStatus = Form.useWatch('target_status', form);
+  const formValues = Form.useWatch([], form) || {};
   const isBulk = billboardIds.length > 1;
   const occupancyRequired = isBillboardOccupancyStatus(targetStatus);
   const blocked = String(targetStatus || '') === 'blocked';
@@ -60,18 +67,12 @@ const BillboardStatusChangeModal: React.FC<BillboardStatusChangeModalProps> = ({
     setOptionsLoading(true);
     void Promise.all([
       supabase.from('billboards').select('id,name,address,system_code,manual_code').order('name').limit(250),
-      supabase.from('customers').select('id,business_name,full_name,system_code').order('business_name').limit(250),
-      supabase.from('invoices').select('id,name,system_code').order('created_at', { ascending: false }).limit(250),
       supabase.from('process_templates').select('id,name,module_id,module_ids').order('name').limit(250),
-    ]).then(([billboardsResult, customersResult, invoicesResult, templatesResult]) => {
+    ]).then(([billboardsResult, templatesResult]) => {
       if (!active) return;
       if (billboardsResult.error) throw billboardsResult.error;
-      if (customersResult.error) throw customersResult.error;
-      if (invoicesResult.error) throw invoicesResult.error;
       if (templatesResult.error) throw templatesResult.error;
       setBillboards(toOptions(billboardsResult.data || [], labelForBillboard));
-      setCustomers(toOptions(customersResult.data || [], (row) => String(row.business_name || row.full_name || row.system_code || 'مشتری بدون عنوان')));
-      setInvoices(toOptions(invoicesResult.data || [], (row) => String(row.name || row.system_code || 'فاکتور بدون عنوان')));
       setTemplates(toOptions(
         (templatesResult.data || []).filter((row: any) => doesProcessTemplateSupportModule(row, 'billboard_status_changes')),
         (row) => String(row.name || 'فرآیند بدون عنوان'),
@@ -138,11 +139,17 @@ const BillboardStatusChangeModal: React.FC<BillboardStatusChangeModalProps> = ({
           </Form.Item>
           {occupancyRequired ? <Alert className="mb-4" type="info" showIcon message="برای این وضعیت، مشتری و بازه اکران الزامی است." /> : null}
           <div className="grid grid-cols-1 gap-x-3 md:grid-cols-2">
-            <Form.Item name="customer_id" label="مشتری" rules={[{ required: occupancyRequired, message: 'مشتری را انتخاب کنید.' }]}>
-              <Select allowClear showSearch optionFilterProp="label" options={customers} placeholder="انتخاب مشتری" getPopupContainer={resolveOverlayPopupContainer} />
+            <Form.Item label="نام مشتری" required={occupancyRequired}>
+              <Form.Item name="customer_id" rules={[{ required: occupancyRequired, message: 'مشتری را انتخاب کنید.' }]} noStyle><Input type="hidden" /></Form.Item>
+              <SmartFieldRenderer field={statusChangeRelationFields.customer} value={formValues.customer_id} onChange={(value) => form.setFieldValue('customer_id', value)} allValues={formValues} moduleId="billboard_status_changes" forceEditMode standalone popupContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={BILLBOARD_STATUS_PICKER_Z_INDEX} />
             </Form.Item>
-            <Form.Item name="invoice_id" label="فاکتور مرتبط">
-              <Select allowClear showSearch optionFilterProp="label" options={invoices} placeholder="انتخاب فاکتور (اختیاری)" getPopupContainer={resolveOverlayPopupContainer} />
+            <Form.Item label="فاکتور مرتبط">
+              <Form.Item name="invoice_id" noStyle><Input type="hidden" /></Form.Item>
+              <SmartFieldRenderer field={statusChangeRelationFields.invoice} value={formValues.invoice_id} onChange={(value) => form.setFieldValue('invoice_id', value)} allValues={formValues} moduleId="billboard_status_changes" forceEditMode standalone popupContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={BILLBOARD_STATUS_PICKER_Z_INDEX} />
+            </Form.Item>
+            <Form.Item label="لید مرتبط">
+              <Form.Item name="marketing_lead_id" noStyle><Input type="hidden" /></Form.Item>
+              <SmartFieldRenderer field={statusChangeRelationFields.marketingLead} value={formValues.marketing_lead_id} onChange={(value) => form.setFieldValue('marketing_lead_id', value)} allValues={formValues} moduleId="billboard_status_changes" forceEditMode standalone popupContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={BILLBOARD_STATUS_PICKER_Z_INDEX} />
             </Form.Item>
             <Form.Item name="start_date" label="شروع اکران" rules={[{ required: occupancyRequired, message: 'تاریخ شروع را وارد کنید.' }]}>
               <PersianDatePicker type="DATE" className="w-full" modalContainer={resolveOverlayPopupContainer} overlayZIndexBase={BILLBOARD_STATUS_PICKER_Z_INDEX} />

@@ -29,6 +29,9 @@ describe('قرارداد تغییر وضعیت تبلیغات محیطی', () =>
     expect(billboardConfig.actionButtons?.some((action) => action.id === 'request_status_change')).toBe(true);
     expect(billboardStatusChangesConfig.disableInlineFieldEditing).toBe(true);
     expect(billboardStatusChangesConfig.actionButtons?.some((action) => action.id === 'approve_billboard_status_change')).toBe(true);
+    expect(billboardStatusChangesConfig.fields.find((field) => field.key === 'customer_id')?.labels.fa).toBe('نام مشتری');
+    expect(billboardStatusChangesConfig.fields.find((field) => field.key === 'marketing_lead_id')?.relationConfig?.targetModule).toBe('marketing_leads');
+    expect(billboardConfig.fields.find((field) => field.key === 'marketing_lead_id')?.readonly).toBe(true);
 
     const processReadyModule = withProcessModuleSupport(billboardStatusChangesConfig);
     expect(processReadyModule.fields.some((field) => field.key === 'process_template_id')).toBe(true);

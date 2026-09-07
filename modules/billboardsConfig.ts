@@ -178,6 +178,7 @@ const fieldsArray: any[] = [
 
 //بلاک جزئیات اکران
   { key: 'related_customer', labels: { fa: 'مشتری مرتبط', en: 'Related Customer' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'openingInfo', order: 10, readonly: true, relationConfig: { targetModule: 'customers', targetField: 'business_name' }, nature: FieldNature.STANDARD, },
+  { key: 'marketing_lead_id', labels: { fa: 'لید مرتبط', en: 'Related lead' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'openingInfo', order: 11, readonly: true, relationConfig: { targetModule: 'marketing_leads', targetField: 'name' }, nature: FieldNature.STANDARD, },
   { key: 'related_invoice', labels: { fa: 'فاکتور مرتبط', en: 'Related invoice' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'openingInfo', order: 12, readonly: true, relationConfig: { targetModule: 'invoices', targetField: 'name' }, nature: FieldNature.STANDARD, },
 
   { key: 'auto_name_enabled', labels: { fa: 'نامگذاری خودکار', en: 'Auto Name' }, type: FieldType.CHECKBOX, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 8, nature: FieldNature.PREDEFINED, defaultValue: false },
