@@ -31,6 +31,9 @@ describe('قرارداد تغییر وضعیت تبلیغات محیطی', () =>
     expect(billboardStatusChangesConfig.actionButtons?.some((action) => action.id === 'approve_billboard_status_change')).toBe(true);
     expect(billboardStatusChangesConfig.fields.find((field) => field.key === 'customer_id')?.labels.fa).toBe('نام مشتری');
     expect(billboardStatusChangesConfig.fields.find((field) => field.key === 'marketing_lead_id')?.relationConfig?.targetModule).toBe('marketing_leads');
+    expect(billboardStatusChangesConfig.fields.find((field) => field.key === 'assignee_id')).toMatchObject({ readonly: true, relationConfig: { targetModule: 'profiles' } });
+    expect(billboardStatusChangesConfig.fields.some((field) => field.key === 'requested_by')).toBe(false);
+    expect(billboardStatusChangesConfig.fields.find((field) => field.key === 'approved_by')).toMatchObject({ readonly: true, relationConfig: { targetModule: 'profiles' } });
     expect(billboardConfig.fields.find((field) => field.key === 'marketing_lead_id')?.readonly).toBe(true);
 
     const processReadyModule = withProcessModuleSupport(billboardStatusChangesConfig);
