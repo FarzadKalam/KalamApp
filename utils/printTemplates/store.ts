@@ -6,6 +6,7 @@ import { getResolvedCurrentOrgId } from '../companySettings';
 import { loadScopedIntegrationSettings } from '../integrationSettings';
 import { attachAbortSignalIfSupported, runWithSupabaseTimeout } from '../supabaseTimeout';
 import { buildCatalogFullPageLayout } from './catalogFullPageLayout';
+import { isCompositeCatalogModule } from './compositeCatalog';
 import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, type PrintImageDisplayMode } from './imageDisplay';
 import { buildDefaultPrintFooterTemplate } from './footerLayout';
 import { getFieldLabelFa } from '../fieldLabel';
@@ -828,6 +829,8 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
     { label: 'نقشه کاتالوگ (سایدبار)', value: 'system.catalog_map_section', kind: 'field', group: 'سیستم', scopes: ['record'] },
     { label: 'فیلدهای سایدبار کاتالوگ', value: 'system.compact_fields_sidebar', kind: 'field', group: 'سیستم', scopes: ['record'] },
     { label: 'فیلدهای کد (روی تصویر)', value: 'system.catalog_code_fields', kind: 'field', group: 'سیستم', scopes: ['record'] },
+    { label: 'اقلام کاتالوگ شبکه‌ای رکورد', value: 'system.record_catalog_grid', kind: 'field', group: 'سیستم', scopes: ['record'] },
+    { label: 'اقلام کاتالوگ تمام‌صفحه رکورد', value: 'system.record_catalog_fullpage', kind: 'field', group: 'سیستم', scopes: ['record'] },
     { label: 'شعار سازمان', value: 'company.slogan', kind: 'field', group: 'اطلاعات سازمان' },
   ];
   const commonListFields: PrintTemplateVariableOption[] = [
@@ -1272,6 +1275,7 @@ export const buildCatalogFullPageContentHtml = (
   moduleId: string,
   imageDisplayMode: PrintImageDisplayMode = DEFAULT_PRINT_IMAGE_DISPLAY_MODE,
 ): string => {
+  if (isCompositeCatalogModule(moduleId)) return '{{system.record_catalog_fullpage}}';
   const isBillboard = moduleId === 'billboards';
   const primaryTitle = isBillboard ? '{{record.address}}' : '{{record.name}}';
   return buildCatalogFullPageLayout({
@@ -1336,7 +1340,7 @@ const buildCatalogGridRecordTemplate = (moduleId: string, now: string): StoredPr
   pageMarginLeft: 10,
   headerHtml: '<div style="direction:rtl;text-align:right;font-size:15px;font-weight:800;color:rgb(var(--brand-500-rgb));">{{company.company_full_name}}</div>',
   footerHtml: '<div style="direction:rtl;text-align:center;color:#64748b;font-size:9px;">{{company.phone}} · {{company.website}}</div>',
-  contentHtml: `<div style="direction:rtl;border:1px solid rgba(148,163,184,.45);border-radius:18px;padding:18px;background:linear-gradient(135deg,rgba(var(--brand-50-rgb),.8),#fff);font-family:inherit;">
+  contentHtml: isCompositeCatalogModule(moduleId) ? '{{system.record_catalog_grid}}' : `<div style="direction:rtl;border:1px solid rgba(148,163,184,.45);border-radius:18px;padding:18px;background:linear-gradient(135deg,rgba(var(--brand-50-rgb),.8),#fff);font-family:inherit;">
   <div style="display:flex;gap:16px;align-items:flex-start;">
     <div style="width:42%;min-height:180px;border-radius:14px;background:rgba(255,255,255,.9);display:flex;align-items:center;justify-content:center;overflow:hidden;"><img src="{{system.record_image_url}}" alt="تصویر رکورد" style="max-width:100%;max-height:240px;object-fit:contain;" /></div>
     <div style="flex:1;"><h1 style="margin:0 0 8px;font-size:23px;color:rgb(var(--brand-500-rgb));">{{record.name}}</h1><div style="font-size:11px;color:#64748b;line-height:1.9;">{{system.compact_fields_inline}}</div></div>

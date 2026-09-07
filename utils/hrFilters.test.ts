@@ -8,6 +8,7 @@ import {
   resolveHrDashboardHref,
   shiftHrRangeByMonths,
   shouldDeferHrFilterUrlSync,
+  toNativeGregorianDateString,
 } from './hrFilters';
 
 describe('hrFilters', () => {
@@ -20,6 +21,17 @@ describe('hrFilters', () => {
     const range = readHrRangeFromSearch('?from=2026-06-10&to=2026-06-20&employees=all');
     expect(range?.[0].format('YYYY-MM-DD')).toBe('2026-06-10');
     expect(range?.[1].format('YYYY-MM-DD')).toBe('2026-06-20');
+  });
+
+  it('برای تطبیق با داده‌های ذخیره‌شده، تاریخ میلادی را حتی با تقویم نمای شمسی نگه می‌دارد', async () => {
+    await import('../initDayjs');
+    try {
+      const attendanceMoment = dayjs('2026-08-20T07:30:00+00:00');
+
+      expect(toNativeGregorianDateString(attendanceMoment)).toBe('2026-08-20');
+    } finally {
+      dayjs.calendar('gregory');
+    }
   });
 
   it('تا وقتی state با query یکی نشده، sync آدرس را عقب می‌اندازد', () => {

@@ -84,7 +84,15 @@ import { SETTINGS_PERMISSION_KEY } from '../permissions';
 import { fetchAssigneeDirectory } from '../referenceData';
 import { fetchRelationOptionsForField } from '../relationOptions';
 import { buildBillboardInvoiceItemTitle, buildInvoiceAdjustmentDisplay, resolveInvoiceRowBaseAmount } from '../invoicePresentation';
-import { sanitizeOutboundDisplay } from '../../shared/recordRuntime';
+import { isUuidLike, sanitizeOutboundDisplay } from '../../shared/recordRuntime';
+import { buildListCatalogFullPageHtml, buildListCatalogHtml } from '../listPrintExport';
+import {
+  buildCompositeCatalogFields,
+  buildCompositeCatalogRows,
+  getCompositeCatalogReferenceIds,
+  isCompositeCatalogModule,
+} from './compositeCatalog';
+import { getSafePrintText, hasUnsafeObjectPrintText } from './safePrintValue';
 import { renderPrintTemplateHtml } from './templateRenderer';
 import {
   buildDefaultPrintSignatureConfigs,
@@ -357,8 +365,7 @@ const PAYROLL_EMPLOYEE_PRINT_FIELD_SOURCES: Record<string, string> = {
 };
 
 const localizePlainText = (value: any): string => {
-  if (value === null || value === undefined) return '-';
-  const raw = String(value).trim();
+  const raw = getSafePrintText(value, '-').trim();
   if (!raw) return '-';
   if (/^https?:\/\//i.test(raw) || /^data:image\//i.test(raw)) return raw;
   const normalized = raw.toLowerCase();
@@ -372,7 +379,7 @@ const getDisplayValue = (value: any): string => {
   if (value === null || value === undefined || value === '') return '-';
   if (Array.isArray(value)) return value.map((item) => getDisplayValue(item)).join('، ');
   if (typeof value === 'object') {
-    return localizePlainText(value.name || value.title || value.full_name || value.system_code || value.id || '-');
+    return localizePlainText(getSafePrintText(value, '-'));
   }
   return localizePlainText(value);
 };
@@ -448,7 +455,7 @@ const getInvoiceItemTitle = (
   row: any,
   resolveBillboardLabel: (row: any) => string = () => ''
 ) =>
-  String(
+  getSafePrintText(
     row?.package_name ||
     row?.package?.name ||
     row?.selected_package_name ||
@@ -472,11 +479,9 @@ const getInvoiceItemTitle = (
     row?.product_name ||
     row?.product?.name ||
     row?.service_name ||
-    row?.system_code ||
-    row?.package_id ||
-    row?.product_id ||
+    row?.system_code,
     '-'
-  ).trim() || '-';
+  );
 const hasMeaningfulCellValue = (cell: Element | null) => {
   if (!cell) return false;
   if (cell.querySelector('img,svg,canvas,video,iframe')) return true;
@@ -561,6 +566,7 @@ export const usePrintManager = ({
   const [signatureOptionsByRow, setSignatureOptionsByRow] = useState<Record<string, any[]>>({});
   const [signatureLabelByKey, setSignatureLabelByKey] = useState<Record<string, string>>({});
   const [billboardPrintLabelsById, setBillboardPrintLabelsById] = useState<Record<string, string>>({});
+  const [catalogReferencesById, setCatalogReferencesById] = useState<Record<string, any>>({});
   const [linkedAttachmentCount, setLinkedAttachmentCount] = useState<number | null>(null);
   const [storedTemplates, setStoredTemplates] = useState<StoredPrintTemplate[]>([]);
   const [templatesByModuleStore, setTemplatesByModuleStore] = useState<Record<string, StoredPrintTemplate[]>>({});
@@ -657,35 +663,48 @@ export const usePrintManager = ({
     };
 
     collectFromItems(data?.invoiceItems);
+    collectFromItems(data?.items);
     collectFromItems(data?.products);
-    return Array.from(ids).sort();
-  }, [data?.invoiceItems, data?.products]);
+    getCompositeCatalogReferenceIds(moduleId, data).forEach((id) => ids.add(id));
+    return Array.from(ids).filter(isUuidLike).sort();
+  }, [data, data?.invoiceItems, data?.items, data?.products, moduleId]);
 
   useEffect(() => {
     if (!billboardPrintCandidateIds.length) {
       setBillboardPrintLabelsById({});
+      setCatalogReferencesById({});
       return;
     }
 
     let mounted = true;
-    supabase
-      .from('billboards')
-      .select('id, address, city_name, category, name, system_code')
-      .in('id', billboardPrintCandidateIds)
-      .then(({ data: rows, error }) => {
+    Promise.all([
+      supabase
+        .from('billboards')
+        .select('id, address, city_name, category, name, system_code, image_url, status, catalog_link, location, location_image')
+        .in('id', billboardPrintCandidateIds),
+      supabase
+        .from('products')
+        .select('id, name, system_code, image_url, status, catalog_link, main_unit')
+        .in('id', billboardPrintCandidateIds),
+    ]).then(([billboardResult, productResult]) => {
         if (!mounted) return;
-        if (error) {
-          console.error('Load billboard print labels failed', error);
-          return;
-        }
+        if (billboardResult.error) console.error('Load billboard print labels failed', billboardResult.error);
+        if (productResult.error) console.error('Load product print references failed', productResult.error);
         const nextLabels: Record<string, string> = {};
-        (rows || []).forEach((row: any) => {
+        const nextReferences: Record<string, any> = {};
+        (billboardResult.data || []).forEach((row: any) => {
           const id = String(row?.id || '').trim();
           const label = buildBillboardInvoiceItemTitle(row)
             || String(row?.address || row?.name || row?.system_code || '').trim();
           if (id && label) nextLabels[id] = label;
+          if (id) nextReferences[id] = row;
+        });
+        (productResult.data || []).forEach((row: any) => {
+          const id = String(row?.id || '').trim();
+          if (id) nextReferences[id] = row;
         });
         setBillboardPrintLabelsById(nextLabels);
+        setCatalogReferencesById(nextReferences);
       });
 
     return () => {
@@ -1998,6 +2017,40 @@ export const usePrintManager = ({
     () => localizePlainText(sellerInfo?.currency_label || sellerInfo?.currency_code || 'ریال'),
     [sellerInfo?.currency_code, sellerInfo?.currency_label]
   );
+  const compositeCatalogRows = useMemo(
+    () => buildCompositeCatalogRows({ moduleId, record: data, referencesById: catalogReferencesById }),
+    [catalogReferencesById, data, moduleId]
+  );
+  const compositeCatalogFields = useMemo(
+    () => buildCompositeCatalogFields(moduleId),
+    [moduleId]
+  );
+  const buildRecordCatalogGridHtml = useCallback(
+    () => isCompositeCatalogModule(moduleId)
+      ? buildListCatalogHtml(
+          compositeCatalogFields,
+          compositeCatalogRows,
+          printRelationOptions,
+          resolvedCurrencyLabel,
+          imageDisplayMode,
+        )
+      : '',
+    [compositeCatalogFields, compositeCatalogRows, imageDisplayMode, moduleId, printRelationOptions, resolvedCurrencyLabel]
+  );
+  const buildRecordCatalogFullPageHtml = useCallback(
+    () => isCompositeCatalogModule(moduleId)
+      ? buildListCatalogFullPageHtml(
+          compositeCatalogFields,
+          compositeCatalogRows,
+          printRelationOptions,
+          resolvedCurrencyLabel,
+          sellerInfo,
+          moduleConfig?.titles?.fa || '',
+          imageDisplayMode,
+        )
+      : '',
+    [compositeCatalogFields, compositeCatalogRows, imageDisplayMode, moduleConfig?.titles?.fa, moduleId, printRelationOptions, resolvedCurrencyLabel, sellerInfo]
+  );
   const resolveBillboardPrintLabel = useCallback((row: any) => {
     const directLabel = buildBillboardInvoiceItemTitle(row?.billboard || {
       address: row?.billboard_address || row?.selected_billboard_address || row?.address,
@@ -2083,7 +2136,7 @@ export const usePrintManager = ({
           let displayValue = resolvePrintIdentityFieldLabel(field.key) || '';
           if (!displayValue) {
             try {
-              displayValue = String(formatPrintValue(field, raw) || '').trim();
+              displayValue = getSafePrintText(formatPrintValue(field, raw), '').trim();
             } catch {
               displayValue = '';
             }
@@ -2156,7 +2209,7 @@ export const usePrintManager = ({
       return sum + (toNumberSafe(item?.quantity) * toNumberSafe(item?.unit_price));
     }, 0);
     const rows = items
-      .map((item: any) => {
+      .map((item: any, rowIndex: number) => {
         const productName = getInvoiceItemTitle(item, resolveBillboardPrintLabel);
         const deliveryTime = String(item?.delivery_time || '').trim();
         const quantity = toPersianNumber(String(item?.quantity || 0));
@@ -2168,7 +2221,7 @@ export const usePrintManager = ({
             : (toNumberSafe(item?.quantity) * toNumberSafe(item?.unit_price))
         );
         return `
-          <tr>
+          <tr data-print-source-row="${rowIndex}">
             <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;vertical-align:top;"><div style="font-weight:700;">${productName}</div>${deliveryTime ? `<div style="margin-top:2px;font-size:${getReducedPrintFontSize(11)};color:#64748b;line-height:1.7;${MULTILINE_PRINT_STYLE}">زمان تحویل: ${deliveryTime}</div>` : ''}</td>
             <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">${quantity}</td>
             <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">${unitPrice}</td>
@@ -2195,7 +2248,7 @@ export const usePrintManager = ({
     `;
 
     return `
-      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <table data-print-preserve-rows="true" style="width:100%;border-collapse:collapse;font-size:12px;">
         <thead>
           <tr>
             <th style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">کالا</th>
@@ -2542,6 +2595,9 @@ export const usePrintManager = ({
             )
             .join('');
           tbody.innerHTML = `${staticRowsBefore}${renderedRows}${staticRowsAfter}`;
+          Array.from(tbody.rows || []).forEach((row, rowIndex) => {
+            row.setAttribute('data-print-source-row', String(rowIndex));
+          });
         }
 
         const autoHiddenIndexes: number[] = [];
@@ -2704,7 +2760,7 @@ export const usePrintManager = ({
             })
             .join('');
 
-          return `<tr><td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">${toPersianNumber(
+          return `<tr data-print-source-row="${rowIndex}"><td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">${toPersianNumber(
             String(rowIndex + 1)
           )}</td>${cells}</tr>`;
         })
@@ -2713,7 +2769,7 @@ export const usePrintManager = ({
       return `
         <div style="margin-top:8px;">
           <div style="font-size:11px;font-weight:800;margin-bottom:4px;color:rgb(var(--brand-500-rgb));">${block?.titles?.fa || 'جدول'}</div>
-          <table style="width:100%;border-collapse:collapse;font-size:11px;">
+          <table data-print-block="${blockId}" data-print-preserve-rows="true" style="width:100%;border-collapse:collapse;font-size:11px;">
           <thead><tr><th style="border:1px solid var(--table-border-color, #d1d5db);padding:4px 5px;width:44px;">ردیف</th>${header}</tr></thead>
           <tbody>${body}</tbody>
           </table>
@@ -2798,7 +2854,9 @@ export const usePrintManager = ({
           if (option?.label) return normalizeOptionalDisplay(option.label);
           try {
             const rendered = formatPrintValue(field, raw);
-            if (rendered) return normalizeOptionalDisplay(localizePlainText(rendered));
+            if (rendered && !hasUnsafeObjectPrintText(rendered)) {
+              return normalizeOptionalDisplay(localizePlainText(rendered));
+            }
           } catch {
             // noop
           }
@@ -2849,7 +2907,7 @@ export const usePrintManager = ({
             let displayValue = '';
             displayValue = resolvePrintIdentityFieldLabel(field.key) || '';
             if (!displayValue) {
-              try { displayValue = String(formatPrintValue(field, raw) || '').trim(); } catch { displayValue = ''; }
+              try { displayValue = getSafePrintText(formatPrintValue(field, raw), '').trim(); } catch { displayValue = ''; }
             }
             if (!displayValue) displayValue = localizePlainText(raw);
             if (!displayValue || displayValue === '-') return;
@@ -2864,6 +2922,8 @@ export const usePrintManager = ({
       }
       if (path === 'system.compact_tables_blocks') return buildCompactTablesBlocksHtml();
       if (path === 'system.package_summary_table') return buildPackageSummaryTableHtml();
+      if (path === 'system.record_catalog_grid') return buildRecordCatalogGridHtml();
+      if (path === 'system.record_catalog_fullpage') return buildRecordCatalogFullPageHtml();
       if (path === 'system.record_image') {
         if (!isSystemFieldVisible('system.record_image') || !recordCardImageUrl) return '';
         return `<div style="display:inline-block;border:1px solid var(--table-border-color, #d1d5db);border-radius:10px;padding:3px;background:#fff;line-height:0;"><img src="${recordCardImageUrl}" alt="\u062A\u0635\u0648\u06CC\u0631 \u0631\u06A9\u0648\u0631\u062F" style="display:block;width:320px;height:auto;object-fit:contain;border-radius:7px;" /></div>`;
@@ -2913,7 +2973,7 @@ export const usePrintManager = ({
             let displayValue = '';
             displayValue = resolvePrintIdentityFieldLabel(field.key) || '';
             if (!displayValue) {
-              try { displayValue = String(formatPrintValue(field, raw) || '').trim(); } catch { displayValue = ''; }
+              try { displayValue = getSafePrintText(formatPrintValue(field, raw), '').trim(); } catch { displayValue = ''; }
             }
             if (!displayValue) displayValue = localizePlainText(raw);
             if (!displayValue || displayValue === '-') return;
@@ -2938,7 +2998,7 @@ export const usePrintManager = ({
             if (!raw) return;
             const label = getFieldLabelFa(field, { moduleId, fallback: field.key });
             parts.push(
-              `<span style="display:inline-flex; align-items:baseline; gap:4px; direction:rtl; unicode-bidi:isolate;"><span>${label}:</span><span style="direction:ltr; unicode-bidi:isolate; font-family:monospace;">${String(raw)}</span></span>`
+              `<span style="display:inline-flex; align-items:baseline; gap:4px; direction:rtl; unicode-bidi:isolate;"><span>${label}:</span><span style="direction:ltr; unicode-bidi:isolate; font-family:monospace;">${getSafePrintText(raw, '')}</span></span>`
             );
           });
         return parts.join(' <span style="color:rgba(255,255,255,0.38); margin:0 4px;">·</span> ');
@@ -3079,7 +3139,7 @@ export const usePrintManager = ({
           if (option?.label) return String(option.label);
           try {
             const rendered = formatPrintValue(field, raw);
-            if (rendered) return localizePlainText(rendered);
+            if (rendered && !hasUnsafeObjectPrintText(rendered)) return localizePlainText(rendered);
           } catch {
             // noop
           }
@@ -3127,6 +3187,8 @@ export const usePrintManager = ({
       buildCompactFieldsTableHtml,
       buildInvoiceItemsTable,
       buildPackageSummaryTableHtml,
+      buildRecordCatalogFullPageHtml,
+      buildRecordCatalogGridHtml,
       data,
       customerInfo,
       employeeInfo,
@@ -3823,6 +3885,23 @@ export const usePrintManager = ({
       const sectionPadding = isCatalogFullPageTemplate ? '0' : PRINT_SECTION_CONTENT_PADDING;
 
       if (isCatalogFullPageTemplate) {
+        if (isCompositeCatalogModule(moduleId)) {
+          return React.createElement('div', {
+            className: 'invoice-custom-print-shell',
+            key: `print-composite-catalog-${previewRevision}`,
+            style: {
+              ...paper,
+              height: 'auto',
+              minHeight: `${metrics.heightMm}mm`,
+              overflow: 'visible',
+              background: '#fff',
+              color: '#111827',
+            },
+            'data-page-size': pageSize,
+            'data-native-single-page': 'false',
+            dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.contentHtml || '' },
+          });
+        }
         return React.createElement(
           'div',
           {

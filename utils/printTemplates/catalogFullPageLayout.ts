@@ -153,7 +153,7 @@ const watermarkLayer = watermarkText ? `
     website ? `<span style="color:rgba(255,255,255,0.7); font-size:7.5px; flex-shrink:0; direction:ltr; white-space:nowrap; padding:0 4px;">🌐 ${website}</span>` : '',
   ].filter(Boolean).join('<span style="color:rgba(255,255,255,0.2); font-size:9px; padding:0 2px;">|</span>');
 
-  return `<div style="direction:rtl; width:100%; height:210mm; max-height:210mm; display:flex; flex-direction:column; overflow:hidden; ${pageBreak} page-break-inside:avoid !important; break-inside:avoid !important; box-sizing:border-box; font-family:inherit; background:#0f172a;">
+  return `<div class="catalog-fullpage-sheet" data-print-preserve-page="true" style="direction:rtl; width:100%; height:210mm; max-height:210mm; display:flex; flex-direction:column; overflow:hidden; ${pageBreak} page-break-inside:avoid !important; break-inside:avoid !important; box-sizing:border-box; font-family:inherit; background:#0f172a;">
 
   <!-- ── Main row ──────────────────────────────────────────────────── -->
   <div style="flex:1; display:flex; flex-direction:row; min-height:0; overflow:hidden;">

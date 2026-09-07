@@ -10,6 +10,7 @@ import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, type PrintImageDisplayMode, getPrintF
 import { buildImagePreviewUrl, buildPrintImageUrl } from './imagePreview';
 import { isPrintableModuleField } from './printTemplates/printableFields';
 import { normalizeRichTextHtmlForPrint } from './richText';
+import { getSafePrintText } from './printTemplates/safePrintValue';
 
 export interface ListFieldDefinition {
   key: string;
@@ -122,16 +123,7 @@ const formatArrayItemLabel = (
   if (item === null || item === undefined || item === '') return '';
 
   if (typeof item === 'object') {
-    const objectLabel = String(
-      item?.label ||
-      item?.title ||
-      item?.name ||
-      item?.full_name ||
-      item?.business_name ||
-      item?.value ||
-      item?.id ||
-      ''
-    ).trim();
+    const objectLabel = getSafePrintText(item, '');
     if (objectLabel) return formatDigitsForLocale(objectLabel, digitLocale);
   }
 
@@ -245,19 +237,19 @@ export const formatListCellValue = (
   }
 
   if (field?.type === FieldType.NUMBER || field?.type === FieldType.STOCK || field?.type === FieldType.PERCENTAGE) {
-    return formatDigitsForLocale(rawValue, digitLocale);
+    return formatDigitsForLocale(getSafePrintText(rawValue, '-'), digitLocale);
   }
 
   if (field?.type === FieldType.DATE) {
-    return formatDigitsForLocale(safeJalaliFormat(rawValue, 'YYYY/MM/DD') || String(rawValue), digitLocale);
+    return formatDigitsForLocale(safeJalaliFormat(rawValue, 'YYYY/MM/DD') || getSafePrintText(rawValue, '-'), digitLocale);
   }
 
   if (field?.type === FieldType.DATETIME) {
-    return formatDigitsForLocale(safeJalaliFormat(rawValue, 'YYYY/MM/DD HH:mm') || String(rawValue), digitLocale);
+    return formatDigitsForLocale(safeJalaliFormat(rawValue, 'YYYY/MM/DD HH:mm') || getSafePrintText(rawValue, '-'), digitLocale);
   }
 
   if (field?.type === FieldType.TIME) {
-    return formatDigitsForLocale(String(rawValue), digitLocale);
+    return formatDigitsForLocale(getSafePrintText(rawValue, '-'), digitLocale);
   }
 
   if (
@@ -267,7 +259,7 @@ export const formatListCellValue = (
     field?.type === FieldType.USER
   ) {
     const label = resolveMergedOptionLabel(key, field, relationOptions, rawValue);
-    return label || String(rawValue);
+    return label || getSafePrintText(rawValue, '-');
   }
 
   if (field?.type === FieldType.MULTI_SELECT || field?.type === FieldType.TAGS) {
@@ -286,17 +278,14 @@ export const formatListCellValue = (
   }
 
   if (typeof rawValue === 'object') {
-    return formatDigitsForLocale(
-      String(rawValue?.name || rawValue?.title || rawValue?.full_name || rawValue?.label || rawValue?.id || '-'),
-      digitLocale
-    );
+    return formatDigitsForLocale(getSafePrintText(rawValue, '-'), digitLocale);
   }
 
   if (field?.type === FieldType.LINK) {
-    return String(rawValue);
+    return getSafePrintText(rawValue, '-');
   }
 
-  return formatDigitsForLocale(String(rawValue), digitLocale);
+  return formatDigitsForLocale(getSafePrintText(rawValue, '-'), digitLocale);
 };
 
 export const formatListCellHtml = (
@@ -352,12 +341,12 @@ export const buildListTableHtml = (
             return `<td${isCompactSingleLinePrintCell(field)} style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top; word-break:break-word; ${multilineStyle}${compactSingleLineStyle}">${wrapCompactSingleLinePrintValue(field, valueHtml)}</td>`;
           })
           .join('');
-        return `<tr><td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; text-align:center; background:rgba(var(--brand-50-rgb),0.18);">${toPersianNumber(startIndex + index + 1)}</td>${cells}</tr>`;
+        return `<tr data-print-source-row="${startIndex + index}"><td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; text-align:center; background:rgba(var(--brand-50-rgb),0.18);">${toPersianNumber(startIndex + index + 1)}</td>${cells}</tr>`;
       }).join('')
     : `<tr><td colspan="${fields.length + 1}" style="border:1px solid var(--table-border-color, #d1d5db); padding:12px; text-align:center; color:#64748b;">داده‌ای برای چاپ انتخاب نشده است.</td></tr>`;
 
   return `
-<table style="width:100%; border-collapse:collapse; table-layout:fixed; direction:rtl; color:#111827; font-size:11px;">
+<table data-print-preserve-rows="true" style="width:100%; border-collapse:collapse; table-layout:fixed; direction:rtl; color:#111827; font-size:11px;">
   <thead>
     <tr>
       <th style="width:56px; border:1px solid var(--table-border-color, #d1d5db); padding:6px; background:rgba(var(--brand-500-rgb),0.14); font-weight:800;">ردیف</th>

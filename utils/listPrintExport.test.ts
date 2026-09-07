@@ -65,6 +65,19 @@ describe('formatListCellValue assignee display', () => {
     expect(value).toBe('نقش فروش');
   });
 
+  it('does not print object placeholders or raw identifiers', () => {
+    const recordId = '11111111-1111-4111-8111-111111111111';
+
+    expect(formatListCellValue(
+      { key: 'process_snapshot', label: 'فرآیند اجرا', type: FieldType.JSON },
+      { process_snapshot: { steps: [] } },
+    )).toBe('-');
+    expect(formatListCellValue(
+      { key: 'related', label: 'مرتبط', type: FieldType.RELATION },
+      { related: recordId },
+    )).toBe('-');
+  });
+
   it('includes non-list block fields in list printable fields and keeps visible columns as defaults', () => {
     const fields = buildListPrintableFields(
       {

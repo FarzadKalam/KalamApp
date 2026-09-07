@@ -79,14 +79,22 @@ describe('print template store grouping', () => {
       .toBe('شناسه ملی / کد ملی مشتری');
   });
 
-  it('keeps full-page catalog defaults only for products and billboards', () => {
+  it('keeps full-page catalog defaults for products, billboards, price lists and packages', () => {
     const productDefaults = buildDefaultTemplatesForModule('products');
     const billboardDefaults = buildDefaultTemplatesForModule('billboards');
+    const priceListDefaults = buildDefaultTemplatesForModule('price_lists');
+    const bundleDefaults = buildDefaultTemplatesForModule('product_bundles');
     const customerDefaults = buildDefaultTemplatesForModule('customers');
 
     expect(productDefaults.some((item) => item.id === 'default_products_catalog_fullpage_landscape')).toBe(true);
     expect(productDefaults.some((item) => item.id === 'default_products_catalog_fullpage_list_landscape')).toBe(true);
     expect(billboardDefaults.some((item) => item.id === 'default_billboards_catalog_fullpage_landscape')).toBe(true);
+    expect(priceListDefaults.find((item) => item.id === 'default_price_lists_catalog_fullpage_landscape')?.contentHtml)
+      .toBe('{{system.record_catalog_fullpage}}');
+    expect(priceListDefaults.find((item) => item.id === 'default_price_lists_catalog_grid')?.contentHtml)
+      .toBe('{{system.record_catalog_grid}}');
+    expect(bundleDefaults.find((item) => item.id === 'default_product_bundles_catalog_fullpage_landscape')?.contentHtml)
+      .toBe('{{system.record_catalog_fullpage}}');
     expect(customerDefaults.some((item) => item.id.includes('_catalog_fullpage_'))).toBe(false);
     expect(
       isPrintTemplateAvailableForModule('customers', {

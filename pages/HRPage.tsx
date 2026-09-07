@@ -68,6 +68,7 @@ import {
   HR_QUERY_KEY_EMPLOYEES,
   buildHrFilterQuery,
   getInitialHrRangeFromQuery,
+  isSameHrEmployeeFilter,
   isSameHrRange,
   parseHrEmployeeFilterParam,
   persistHrEmployees,
@@ -75,7 +76,6 @@ import {
   readHrRangeFromSearch,
   readPersistedHrEmployees,
   shiftHrRangeByMonths,
-  shouldDeferHrFilterUrlSync,
   toNativeGregorianDateString,
 } from '../utils/hrFilters';
 
@@ -1586,6 +1586,11 @@ const HRPage: React.FC = () => {
   const [orderQuantityById, setOrderQuantityById] = useState<Record<string, number>>({});
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
   const [employeeFilterInitialized, setEmployeeFilterInitialized] = useState(false);
+  // URL can change independently (back/forward or a shared link).  Until its
+  // filters are applied to state, it must remain the source of truth.  Local
+  // picker changes, on the other hand, are immediately written back to URL.
+  const pendingIncomingHrFilterRef = useRef<string | null>(location.search);
+  const lastWrittenHrFilterSearchRef = useRef<string | null>(null);
   const [configModalOpen, setConfigModalOpen] = useState(false);
   const [payrollConfigModalOpen, setPayrollConfigModalOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<ProfileRecord | null>(null);
@@ -1727,6 +1732,9 @@ const HRPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (location.search !== lastWrittenHrFilterSearchRef.current) {
+      pendingIncomingHrFilterRef.current = location.search;
+    }
     const rangeFromUrl = readHrRangeFromSearch(location.search);
     if (!rangeFromUrl) return;
     setSelectedRange((current) => {
@@ -1753,7 +1761,18 @@ const HRPage: React.FC = () => {
 
   useEffect(() => {
     if (!employeeFilterInitialized) return;
-    if (shouldDeferHrFilterUrlSync(location.search, [monthStart, monthEnd], selectedEmployeeIds)) return;
+    const pendingIncomingSearch = pendingIncomingHrFilterRef.current;
+    if (pendingIncomingSearch !== null) {
+      const incomingRange = readHrRangeFromSearch(pendingIncomingSearch);
+      const incomingEmployees = parseHrEmployeeFilterParam(
+        new URLSearchParams(pendingIncomingSearch).get(HR_QUERY_KEY_EMPLOYEES),
+      );
+      const isIncomingRangeApplied = !incomingRange || isSameHrRange([monthStart, monthEnd], incomingRange);
+      const isIncomingEmployeeFilterApplied = !incomingEmployees.hasValue
+        || isSameHrEmployeeFilter(selectedEmployeeIds, incomingEmployees.ids);
+      if (!isIncomingRangeApplied || !isIncomingEmployeeFilterApplied) return;
+      pendingIncomingHrFilterRef.current = null;
+    }
     const from = toNativeGregorianDateString(monthStart);
     const to = toNativeGregorianDateString(monthEnd);
     if (!from || !to) return;
@@ -1762,6 +1781,7 @@ const HRPage: React.FC = () => {
     const nextUrl = `${nextPath}?${buildHrFilterQuery([monthStart, monthEnd], selectedEmployeeIds)}`;
     const currentUrl = `${location.pathname}${location.search}`;
     if (currentUrl !== nextUrl) {
+      lastWrittenHrFilterSearchRef.current = nextUrl.slice(nextUrl.indexOf('?'));
       navigate(nextUrl, { replace: true });
     }
   }, [employeeFilterInitialized, employeeId, location.pathname, location.search, monthEnd, monthStart, navigate, selectedEmployeeIds]);
@@ -3177,7 +3197,10 @@ const HRPage: React.FC = () => {
         const currentDayPlan = resolveWorkScheduleDayPlan({
           monthlyPlan: matchedColumn?.monthlyPlan,
           weeklyPlan: matchedColumn ? matchedColumn?.weeklyPlan : schedule.weekly_plan,
-          dateKey: targetDate.format('YYYY-MM-DD'),
+          // تقویم نمای برنامه می‌تواند شمسی باشد، اما کلیدهای monthlyPlan همیشه
+          // با تاریخ میلادی ذخیره می‌شوند. format مستقیم dayjs در این پروژه
+          // تاریخ شمسی می‌دهد و باعث می‌شود برنامهٔ ماهانه پیدا نشود.
+          dateKey: toNativeGregorianDateString(targetDate) || targetDate.calendar('gregory').format('YYYY-MM-DD'),
           weekdayKey: dayKey,
         });
         if (!currentDayPlan) continue;

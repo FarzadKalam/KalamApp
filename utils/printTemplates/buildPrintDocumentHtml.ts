@@ -1,6 +1,7 @@
 import { printStyles } from './styles';
 import { getCompactPrintCellsFitScript } from './fitCompactPrintCells';
 import { getStaticCustomPrintPaginationScript } from './staticPrintPagination';
+import { getNativeTablePaginationScript } from './nativeTablePagination';
 import { NATIVE_PRINT_BASE_HREF_TOKEN, NATIVE_PRINT_FONT_CSS_TOKEN } from './nativePrintFlow';
 import peydaExtraLightUrl from '../../font/peyada/PeydaWeb-ExtraLight.woff2?url';
 import peydaRegularUrl from '../../font/peyada/PeydaWeb-Regular.woff2?url';
@@ -437,6 +438,7 @@ export const buildPrintDocumentHtml = async ({ pageSize, sourceHtml, title }: Bu
           .catch(function () { return null; })
           .then(function () {
             ${getCompactPrintCellsFitScript()}
+            ${getNativeTablePaginationScript()}
             ${getStaticCustomPrintPaginationScript()}
             window.__KALAMAPP_PRINT_READY = true;
           });
