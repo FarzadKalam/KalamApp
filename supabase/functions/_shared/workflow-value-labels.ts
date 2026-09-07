@@ -1,6 +1,18 @@
 const normalizeText = (value: unknown) => String(value ?? '').trim();
 
 const FIELD_VALUE_LABELS: Record<string, Record<string, string>> = {
+  billboard_status: {
+    free: 'آزاد',
+    oral_reserve: 'رزرو شفاهی',
+    final_reserve: 'رزرو قطعی',
+    in_line: 'در صف نصب',
+    opening: 'در حال اکران',
+    near_finish: 'نزدیک به اتمام',
+    opening_deadline_ended: 'پایان مهلت اکران',
+    pickup_queue: 'در صف جمع‌آوری',
+    inactive: 'غیرفعال',
+    blocked: 'مسدود',
+  },
   priority: {
     urgent: 'بسیار بالا',
     high: 'بالا',
@@ -41,6 +53,12 @@ export const getWorkflowStaticValueLabel = (
   const normalizedFieldKey = normalizeText(fieldKey).split('.').pop()?.toLowerCase() || '';
   const normalizedValue = normalizeText(value);
   if (!normalizedFieldKey || !normalizedValue) return null;
+  if (
+    ['status', 'source_status', 'target_status'].includes(normalizedFieldKey)
+    && ['billboards', 'billboard_status_changes'].includes(normalizeText(moduleId))
+  ) {
+    return FIELD_VALUE_LABELS.billboard_status?.[normalizedValue] || null;
+  }
   if (normalizedFieldKey === 'status' && normalizeText(moduleId) === 'tasks') {
     return FIELD_VALUE_LABELS.task_status?.[normalizedValue] || null;
   }

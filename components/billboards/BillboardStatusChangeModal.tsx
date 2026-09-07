@@ -54,7 +54,14 @@ const BillboardStatusChangeModal: React.FC<BillboardStatusChangeModalProps> = ({
   const [billboards, setBillboards] = useState<Option[]>([]);
   const [templates, setTemplates] = useState<Option[]>([]);
   const targetStatus = Form.useWatch('target_status', form);
-  const formValues = Form.useWatch([], form) || {};
+  const customerId = Form.useWatch('customer_id', form);
+  const invoiceId = Form.useWatch('invoice_id', form);
+  const marketingLeadId = Form.useWatch('marketing_lead_id', form);
+  const relationFormValues = useMemo(() => ({
+    customer_id: customerId,
+    invoice_id: invoiceId,
+    marketing_lead_id: marketingLeadId,
+  }), [customerId, invoiceId, marketingLeadId]);
   const isBulk = billboardIds.length > 1;
   const occupancyRequired = isBillboardOccupancyStatus(targetStatus);
   const blocked = String(targetStatus || '') === 'blocked';
@@ -141,15 +148,15 @@ const BillboardStatusChangeModal: React.FC<BillboardStatusChangeModalProps> = ({
           <div className="grid grid-cols-1 gap-x-3 md:grid-cols-2">
             <Form.Item label="نام مشتری" required={occupancyRequired}>
               <Form.Item name="customer_id" rules={[{ required: occupancyRequired, message: 'مشتری را انتخاب کنید.' }]} noStyle><Input type="hidden" /></Form.Item>
-              <SmartFieldRenderer field={statusChangeRelationFields.customer} value={formValues.customer_id} onChange={(value) => form.setFieldValue('customer_id', value)} allValues={formValues} moduleId="billboard_status_changes" forceEditMode standalone popupContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={BILLBOARD_STATUS_PICKER_Z_INDEX} />
+              <SmartFieldRenderer field={statusChangeRelationFields.customer} value={customerId} onChange={(value) => form.setFieldValue('customer_id', value)} allValues={relationFormValues} moduleId="billboard_status_changes" forceEditMode standalone popupContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={BILLBOARD_STATUS_PICKER_Z_INDEX} />
             </Form.Item>
             <Form.Item label="فاکتور مرتبط">
               <Form.Item name="invoice_id" noStyle><Input type="hidden" /></Form.Item>
-              <SmartFieldRenderer field={statusChangeRelationFields.invoice} value={formValues.invoice_id} onChange={(value) => form.setFieldValue('invoice_id', value)} allValues={formValues} moduleId="billboard_status_changes" forceEditMode standalone popupContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={BILLBOARD_STATUS_PICKER_Z_INDEX} />
+              <SmartFieldRenderer field={statusChangeRelationFields.invoice} value={invoiceId} onChange={(value) => form.setFieldValue('invoice_id', value)} allValues={relationFormValues} moduleId="billboard_status_changes" forceEditMode standalone popupContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={BILLBOARD_STATUS_PICKER_Z_INDEX} />
             </Form.Item>
             <Form.Item label="لید مرتبط">
               <Form.Item name="marketing_lead_id" noStyle><Input type="hidden" /></Form.Item>
-              <SmartFieldRenderer field={statusChangeRelationFields.marketingLead} value={formValues.marketing_lead_id} onChange={(value) => form.setFieldValue('marketing_lead_id', value)} allValues={formValues} moduleId="billboard_status_changes" forceEditMode standalone popupContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={BILLBOARD_STATUS_PICKER_Z_INDEX} />
+              <SmartFieldRenderer field={statusChangeRelationFields.marketingLead} value={marketingLeadId} onChange={(value) => form.setFieldValue('marketing_lead_id', value)} allValues={relationFormValues} moduleId="billboard_status_changes" forceEditMode standalone popupContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={BILLBOARD_STATUS_PICKER_Z_INDEX} />
             </Form.Item>
             <Form.Item name="start_date" label="شروع اکران" rules={[{ required: occupancyRequired, message: 'تاریخ شروع را وارد کنید.' }]}>
               <PersianDatePicker type="DATE" className="w-full" modalContainer={resolveOverlayPopupContainer} overlayZIndexBase={BILLBOARD_STATUS_PICKER_Z_INDEX} />

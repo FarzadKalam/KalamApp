@@ -18,6 +18,8 @@ describe('server workflow value labels', () => {
     expect(getWorkflowStaticValueLabel('priority', 'urgent')).toBe('بسیار بالا');
     expect(getWorkflowStaticValueLabel('task_status', 'in_progress')).toBe('در حال انجام');
     expect(getWorkflowStaticValueLabel('status', 'done', 'tasks')).toBe('تکمیل شده');
+    expect(getWorkflowStaticValueLabel('target_status', 'oral_reserve', 'billboard_status_changes')).toBe('رزرو شفاهی');
+    expect(getWorkflowStaticValueLabel('status', 'opening', 'billboards')).toBe('در حال اکران');
   });
 
   it('extracts user and role references without exposing their raw identifiers', () => {
