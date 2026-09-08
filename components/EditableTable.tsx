@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Table, Button, Space, App, Empty, Typography, Spin, Select, InputNumber, Popover, Input, Modal, Checkbox } from 'antd';
 import { EditOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, CloseOutlined, CloseCircleOutlined, RightOutlined, CopyOutlined, FileTextOutlined, EnvironmentOutlined, CalendarOutlined, AppstoreOutlined, CheckOutlined, EyeOutlined, DownloadOutlined, ShareAltOutlined, PrinterOutlined, UpOutlined, DownOutlined, ClockCircleOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
@@ -534,9 +534,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const applyPackageRowChanges = (rows: any[], rowIndex: number, nextRow: any) => {
     const nextRows = [...rows];
     nextRows[rowIndex] = nextRow;
-    if (isEditing) setTempData(nextRows);
-    else setData(nextRows);
-    if (mode === 'local' && onChange) onChange(nextRows);
+    // همهٔ تغییرهای برنامه‌ای ردیف باید از همین مسیر بگذرند تا ref، input و
+    // محاسبات پایین جدول هم‌زمان از یک snapshot استفاده کنند.
+    applyRowUpdate(nextRows);
   };
   const loadPackageSnapshot = async (bundleId: string) => {
     const { data: bundleRecord, error } = await supabase
@@ -975,27 +975,30 @@ const EditableTable: React.FC<EditableTableProps> = ({
     };
   }, [supportsReceivedChequeSpending, isEditing, saving]);
 
+  const loadActiveInvoicePriceLists = useCallback(async () => {
+    const { data: rows, error } = await supabase
+      .from('price_lists')
+      .select('id, name, items')
+      .eq('status', 'active')
+      .order('updated_at', { ascending: false })
+      .limit(1000);
+    if (error) throw error;
+    return (rows || []).map((row: any) => ({
+      id: String(row?.id || '').trim(),
+      name: String(row?.name || row?.id || '').trim(),
+      items: Array.isArray(row?.items) ? row.items : [],
+    })).filter((row: any) => row.id);
+  }, []);
+
   useEffect(() => {
     if (!isInvoiceItems) return;
     let active = true;
 
     const loadPriceLists = async () => {
       try {
-        const { data: rows, error } = await supabase
-          .from('price_lists')
-          .select('id, name, items')
-          .eq('status', 'active')
-          .order('updated_at', { ascending: false })
-          .limit(1000);
-        if (error) throw error;
+        const priceLists = await loadActiveInvoicePriceLists();
         if (!active) return;
-        setInvoicePriceLists(
-          (rows || []).map((row: any) => ({
-            id: String(row?.id || '').trim(),
-            name: String(row?.name || row?.id || '').trim(),
-            items: Array.isArray(row?.items) ? row.items : [],
-          })).filter((row: any) => row.id),
-        );
+        setInvoicePriceLists(priceLists);
       } catch (err) {
         if (!isAbortLikeError(err)) {
           console.warn('Could not load price lists for invoice items', err);
@@ -1008,7 +1011,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     return () => {
       active = false;
     };
-  }, [isInvoiceItems]);
+  }, [isInvoiceItems, loadActiveInvoicePriceLists]);
 
   const AREA_AUTO_UNITS = new Set(['متر مربع', 'سانتیمتر مربع', 'میلیمتر مربع']);
   const DAY_UNIT_VALUES = new Set(['روز', 'day', 'days']);
@@ -1656,22 +1659,54 @@ const EditableTable: React.FC<EditableTableProps> = ({
               currentRow.selected_product_name = record?.name || currentRow.selected_product_name || null;
               currentRow.product_name = record?.name || currentRow.product_name || null;
               currentRow.delivery_time = String(record?.delivery_time || '').trim() || null;
-              const matchedPriceListId = String(currentRow?.price_list_id || '').trim();
-              if (matchedPriceListId) {
+              const fallbackUnitPrice = isPurchaseInvoiceItems
+                ? toSafeNumber(record?.buy_price)
+                : toSafeNumber(record?.sell_price);
+              let matchedPriceListId = '';
+              let priceLists = invoicePriceLists;
+
+              // ممکن است کاربر سریع‌تر از پایان بارگذاری اولیهٔ لیست‌ها کالا را
+              // انتخاب کند؛ در این حالت همان‌جا لیست‌های فعال را می‌خوانیم تا
+              // قیمت و input ردیف با تأخیر یا صفر نمایش داده نشود.
+              if (isInvoiceItems && priceLists.length === 0) {
+                try {
+                  priceLists = await loadActiveInvoicePriceLists();
+                  setInvoicePriceLists(priceLists);
+                } catch (priceListError) {
+                  // انتخاب کالا نباید به‌خاطر بارگیری ناموفق لیست قیمت متوقف شود؛
+                  // در این وضعیت، قیمت خود کالا جایگزین می‌شود.
+                  console.warn('Could not load price lists while selecting an invoice product', priceListError);
+                  priceLists = [];
+                }
+              }
+
+              if (isInvoiceItems) {
+                const defaultPriceList = priceLists.find((priceList) =>
+                  !!findPriceListItemByProduct(priceList.items, String(value)),
+                );
+                if (defaultPriceList) {
+                  matchedPriceListId = defaultPriceList.id;
+                  currentRow.price_list_id = defaultPriceList.id;
+                } else {
+                  currentRow.price_list_id = null;
+                }
+              }
+
+              if (isInvoiceItems && matchedPriceListId) {
                 const matchedItem = findPriceListItemByProduct(
-                  invoicePriceLists.find((item) => item.id === matchedPriceListId)?.items,
+                  priceLists.find((item) => item.id === matchedPriceListId)?.items,
                   String(value),
                 );
                 if (matchedItem) {
                   currentRow.unit_price = toSafeNumber(matchedItem?.price);
                 } else {
                   currentRow.price_list_id = null;
+                  currentRow.unit_price = fallbackUnitPrice;
                 }
-              }
-              if (record?.sell_price !== undefined && record?.sell_price !== null && String(record.sell_price).trim() !== '') {
-                currentRow.unit_price = currentRow.price_list_id
-                  ? currentRow.unit_price
-                  : toSafeNumber(record.sell_price);
+              } else {
+                // فاکتور خرید فقط از قیمت خرید محصول استفاده می‌کند و هرگز
+                // قیمت فروش محصول را به‌عنوان جایگزین نمی‌گیرد.
+                currentRow.unit_price = fallbackUnitPrice;
               }
             }
             if (targetModule === 'billboards') {
@@ -1720,7 +1755,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
           newData[index] = currentRow;
           applyRowUpdate(newData);
           if (isAnyInvoiceItems && ['product_id', 'price_list_id', 'package_id'].includes(key)) {
-            bumpRowReloadVersion(String(currentRow?.key || currentRow?.id || index));
+            bumpRowReloadVersion(getRowKey(currentRow) || String(index));
           }
 
           if (isInvoiceItems && key === 'product_id' && value && targetModule === 'products' && !isServiceProduct(currentRow.product_type)) {
@@ -4014,7 +4049,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       : pickFirstNumber(record?.sell_price);
     const sourceBuyPrice = isBillboardSource
       ? sourceSellPrice
-      : pickFirstNumber(record?.buy_price, record?.sell_price);
+      : pickFirstNumber(record?.buy_price);
 
     nextRow.selected_product_name = sourceName;
     nextRow.product_name = sourceName;
@@ -4520,12 +4555,15 @@ const EditableTable: React.FC<EditableTableProps> = ({
     };
   };
 
-  const renderColumnEditor = (col: any, record: any, index: number, text?: any) => {
+  const renderColumnEditor = (col: any, record: any, index: number, _text?: any) => {
     const rowKey = getRowKey(record);
     const cellRendererKey = `${rowKey}-${col.key}-${rowReloadVersion[rowKey] || 0}`;
+    // مقدار جدول ممکن است در جریان محاسبهٔ برنامه‌ای ردیف، یک render عقب‌تر
+    // باشد. منبع قطعی input همواره رکورد فعلی است؛ نه آرگومان کش‌شدهٔ Table.
+    const recordValue = (record as any)?.[col.key];
     const value = isPriceListItems && col.key === 'currency_label'
-      ? ((text !== undefined ? text : (record as any)?.[col.key]) || currencyLabel)
-      : (text !== undefined ? text : (record as any)?.[col.key]);
+      ? (recordValue || currencyLabel)
+      : recordValue;
     const fieldConfig = getFieldConfigForColumn(col, record);
     const options = getColumnOptions(col, rowKey, record);
     const showNoPriceListHint =

@@ -1,6 +1,8 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import App from 'antd/es/app';
+import { useLocation } from 'react-router-dom';
 import { setUiNotificationOverlayItems } from '../utils/uiNotificationOverlayStore';
+import { isPublicOverlaySuppressedPath } from '../utils/publicOverlay';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -52,6 +54,7 @@ const writeDismissed = () => {
 
 const PwaInstallPrompt = () => {
   const { message } = App.useApp();
+  const location = useLocation();
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [dismissed, setDismissed] = useState<boolean>(readDismissed);
   const [isStandalone, setIsStandalone] = useState<boolean>(isStandaloneMode);
@@ -59,7 +62,8 @@ const PwaInstallPrompt = () => {
   const isMobile = useMemo(() => isMobileUserAgent(), []);
   const isIos = useMemo(() => isIosUserAgent(), []);
 
-  const shouldShow = isMobile && !isStandalone && !dismissed;
+  const isPublicExperience = isPublicOverlaySuppressedPath(location.pathname);
+  const shouldShow = !isPublicExperience && isMobile && !isStandalone && !dismissed;
 
   const dismissPrompt = () => {
     setDismissed(true);

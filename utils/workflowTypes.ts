@@ -44,6 +44,7 @@ export const INTERVAL_DAY_CONDITION_OPTIONS: Array<{ label: string; value: Inter
 ];
 
 export type WorkflowActionType =
+  | 'send_message'
   | 'send_note'
   | 'send_note_sms'
   | 'send_web_form_link'
@@ -174,14 +175,14 @@ export const intervalUnitOptions: Array<{ label: string; value: WorkflowInterval
 ];
 
 export const actionTypeOptions: Array<{ label: string; value: WorkflowActionType }> = [
-  { label: 'ارسال یادداشت', value: 'send_note' },
+  { label: 'ارسال پیام', value: 'send_message' },
   { label: 'ارسال لینک وب‌فرم', value: 'send_web_form_link' },
   { label: 'ارسال پیامک', value: 'send_sms' },
   { label: 'ارسال پیام اینستاگرام', value: 'send_instagram_message' },
   { label: 'پاسخ به کامنت اینستاگرام', value: 'reply_instagram_comment' },
   { label: 'ارسال ایمیل', value: 'send_email' },
   { label: 'اجرای پرامپت هوش مصنوعی', value: 'run_ai_prompt' },
-  { label: 'ارسال پیام توسط بات', value: 'send_bot_message' },
+  { label: 'ارسال پیام در گروه توسط بات', value: 'send_bot_message' },
   { label: 'به‌روزرسانی رکورد', value: 'update_record' },
   { label: 'ویرایش رکورد مرتبط', value: 'update_related_record' },
   { label: 'قفل کردن رکورد', value: 'lock_record' },

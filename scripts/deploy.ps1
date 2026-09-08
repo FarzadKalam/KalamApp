@@ -85,6 +85,47 @@ function Test-GzipArchive {
   }
 }
 
+function Assert-PwaReleaseBundle {
+  param(
+    [string]$DistPath,
+    [string]$RepoRoot
+  )
+
+  $packagePath = Join-Path $RepoRoot 'package.json'
+  $serviceWorkerPath = Join-Path $DistPath 'sw.js'
+  $versionManifestPath = Join-Path $DistPath 'version.json'
+  $expectedToken = '__TAZESYSTEM_CACHE_VERSION__'
+  $package = Get-Content -LiteralPath $packagePath -Raw | ConvertFrom-Json
+  $version = [string]$package.version
+  if ([string]::IsNullOrWhiteSpace($version)) {
+    throw 'Application version is missing from package.json.'
+  }
+  if (-not (Test-Path -LiteralPath $serviceWorkerPath -PathType Leaf)) {
+    throw "PWA release check failed: sw.js is missing from $DistPath."
+  }
+  if (-not (Test-Path -LiteralPath $versionManifestPath -PathType Leaf)) {
+    throw "PWA release check failed: version.json is missing from $DistPath."
+  }
+
+  $serviceWorker = Get-Content -LiteralPath $serviceWorkerPath -Raw
+  if ($serviceWorker.Contains($expectedToken)) {
+    throw 'PWA release check failed: the service-worker cache version was not stamped.'
+  }
+  $expectedCacheVersion = "const CACHE_VERSION = 'v$version';"
+  if (-not $serviceWorker.Contains($expectedCacheVersion)) {
+    throw "PWA release check failed: sw.js cache version does not match package.json ($version)."
+  }
+
+  try {
+    $versionManifest = Get-Content -LiteralPath $versionManifestPath -Raw | ConvertFrom-Json
+  } catch {
+    throw 'PWA release check failed: version.json is not valid JSON.'
+  }
+  if ([string]$versionManifest.version -ne $version) {
+    throw "PWA release check failed: version.json does not match package.json ($version)."
+  }
+}
+
 function Get-RemoteArchiveSha256 {
   param(
     [string[]]$SshArgs,
@@ -223,6 +264,9 @@ try {
   if (-not (Test-Path -LiteralPath $distPath)) {
     throw "dist folder does not exist. Run build first or remove -SkipBuild."
   }
+
+  Write-Step 'Verifying PWA release artifacts'
+  Assert-PwaReleaseBundle -DistPath $distPath -RepoRoot $repoRoot
 
   $archiveStem = $archiveName.Substring(0, $archiveName.Length - '.tar.gz'.Length)
   $archiveToken = "{0}-{1}" -f (Get-Date -Format 'yyyyMMddHHmmssfff'), ([guid]::NewGuid().ToString('N').Substring(0, 8))

@@ -86,6 +86,29 @@ const normalizePhone = (raw: string): string => {
   return d;
 };
 
+const getClientIp = (req: Request): string | null => {
+  const candidates = [
+    req.headers.get('cf-connecting-ip'),
+    req.headers.get('x-real-ip'),
+    req.headers.get('x-forwarded-for')?.split(',')[0],
+  ];
+
+  for (const candidate of candidates) {
+    const value = String(candidate || '').trim();
+    if (value && value.length <= 64 && /^[0-9A-Fa-f:.]+$/.test(value)) return value;
+  }
+  return null;
+};
+
+const releaseRateLimitRequest = async (requestId: string | null) => {
+  if (!requestId) return;
+  try {
+    await callRpc('release_public_confirmation_otp_request', { p_request_id: requestId });
+  } catch (err: any) {
+    console.warn('invoice-otp: could not release failed request permit', err?.message || err);
+  }
+};
+
 // ── Handler ──────────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
@@ -100,8 +123,19 @@ Deno.serve(async (req: Request) => {
   }
 
   const { system_code, module: p_module, phone, party } = body;
-  if (!system_code || !p_module || !phone) {
+  const systemCode = String(system_code || '').trim();
+  const moduleId = String(p_module || '').trim();
+  const partyKey = String(party || '').trim();
+  if (!systemCode || !moduleId || !phone || systemCode.length > 256) {
     return json(400, { error: 'missing_params' });
+  }
+
+  if (!['invoices', 'purchase_invoices', 'delivery_forms'].includes(moduleId)) {
+    return json(400, { error: 'invalid_module', message: 'نوع سند معتبر نیست.' });
+  }
+
+  if (moduleId === 'delivery_forms' && !['delivered_by', 'received_by'].includes(partyKey)) {
+    return json(400, { error: 'invalid_party', message: 'نوع تاییدکننده معتبر نیست.' });
   }
 
   const normalizedPhone = normalizePhone(String(phone));
@@ -109,18 +143,38 @@ Deno.serve(async (req: Request) => {
     return json(400, { error: 'invalid_phone', message: 'شماره موبایل معتبر نیست.' });
   }
 
+  let rateLimitRequestId: string | null = null;
   try {
+    const isDeliveryForm = moduleId === 'delivery_forms';
+    const rateResult = await callRpc('allow_public_confirmation_otp_request', {
+      p_scope: isDeliveryForm ? 'delivery_confirmation' : 'invoice_confirmation',
+      p_source_token: systemCode,
+      p_module: moduleId,
+      p_party: isDeliveryForm ? partyKey : '',
+      p_phone: normalizedPhone,
+      p_client_ip: getClientIp(req),
+    });
+
+    if (!rateResult?.allowed) {
+      const retryAfterSeconds = Math.max(1, Number(rateResult?.retry_after_seconds || 90));
+      return json(429, {
+        error: 'rate_limited',
+        message: 'درخواست کد بیش از حد تکرار شده است. کمی بعد دوباره تلاش کنید.',
+        retry_after_seconds: retryAfterSeconds,
+      });
+    }
+    rateLimitRequestId = String(rateResult?.request_id || '').trim() || null;
+
     // 1. Generate OTP hash in DB and get the plain OTP code back
-    const isDeliveryForm = String(p_module || '').trim() === 'delivery_forms';
     const otpResult = isDeliveryForm
       ? await callRpc('send_delivery_confirm_otp', {
-          p_code: system_code,
-          p_party: String(party || '').trim(),
+          p_code: systemCode,
+          p_party: partyKey,
           p_phone: normalizedPhone,
         })
       : await callRpc('send_invoice_confirm_otp', {
-          p_system_code: system_code,
-          p_module,
+          p_system_code: systemCode,
+          p_module: moduleId,
           p_phone: normalizedPhone,
         });
 
@@ -137,6 +191,8 @@ Deno.serve(async (req: Request) => {
         errMap.invalid_status = 'وضعیت فرم تحویل اجازه تایید را نمی‌دهد.';
         errMap.phone_not_allowed = 'این شماره برای تایید این فرم تحویل مجاز نیست.';
       }
+      await releaseRateLimitRequest(rateLimitRequestId);
+      rateLimitRequestId = null;
       return json(400, {
         error:   otpResult.error,
         message: errMap[otpResult.error] ?? 'خطا در ارسال کد.',
@@ -146,6 +202,8 @@ Deno.serve(async (req: Request) => {
     const otpCode = String(otpResult?.otp_code || '').trim();
     if (!otpCode) {
       console.error('invoice-otp: otp_code missing in RPC response', JSON.stringify(otpResult));
+      await releaseRateLimitRequest(rateLimitRequestId);
+      rateLimitRequestId = null;
       return json(500, { error: 'otp_generation_failed' });
     }
 
@@ -154,10 +212,11 @@ Deno.serve(async (req: Request) => {
 
     return json(200, { success: true });
   } catch (err: any) {
+    await releaseRateLimitRequest(rateLimitRequestId);
     console.error('invoice-otp error:', err?.message || err);
     return json(500, {
       error:   'internal_error',
-      message: String(err?.message || 'خطای سرور'),
+      message: 'ارسال کد در حال حاضر ممکن نیست. لطفاً دوباره تلاش کنید.',
     });
   }
 });

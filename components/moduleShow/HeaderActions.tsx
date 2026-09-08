@@ -1,18 +1,16 @@
 import React, { useCallback } from 'react';
 import { App, Button, Popover, QRCode, Tooltip } from 'antd';
 import {
-  AppstoreOutlined,
   ArrowRightOutlined,
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
-  PlusOutlined,
   PrinterOutlined,
   QrcodeOutlined,
   ReloadOutlined,
   ShareAltOutlined,
-  StarOutlined,
 } from '@ant-design/icons';
+import { resolveModuleShowActionIcon } from '../../utils/moduleShowActionIcons';
 
 interface HeaderActionsProps {
   moduleTitle: string;
@@ -93,15 +91,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
         {extraActions.map((action) => (
           <Button
             key={action.id}
-            icon={
-              action.icon
-                ? action.icon
-                : action.id === 'auto_name'
-                  ? <StarOutlined />
-                  : action.variant === 'primary'
-                    ? <PlusOutlined />
-                    : <AppstoreOutlined />
-            }
+            icon={resolveModuleShowActionIcon(action.id, action.icon)}
             type={action.variant === 'primary' ? 'primary' : 'default'}
             onClick={action.onClick}
             size="middle"

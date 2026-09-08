@@ -4,6 +4,7 @@ import { CrudFilter, CrudFilters, CrudSort, useDeleteMany } from "@refinedev/cor
 import { dataProvider as refineSupabaseDataProvider } from "@refinedev/supabase";
 import { useNavigate, useParams } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
+import { renderModuleIcon } from "../utils/moduleIcons";
 import SmartTableRenderer from "../components/SmartTableRenderer";
 import { BlockType, FieldType, ModuleDefinition, SavedView, ViewMode } from "../types";
 import { supportsModuleAssignee } from "../utils/assigneeSupport";
@@ -4766,7 +4767,9 @@ export const ModuleListRefine: React.FC<{
         <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0 shrink-0">
                 <h1 className="text-2xl font-black text-gray-800 dark:text-white m-0 flex items-center gap-2 min-w-0">
-                <span className="w-2 h-8 bg-leather-500 rounded-full inline-block shrink-0"></span>
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-leather-50 text-leather-600 dark:bg-leather-900/30 dark:text-leather-300">
+                  {renderModuleIcon(moduleConfig, { className: 'text-lg' })}
+                </span>
                 <span className="truncate">{getModuleTitleFa(moduleConfig)}</span>
             </h1>
             <Badge

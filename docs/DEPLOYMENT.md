@@ -28,13 +28,14 @@ Before every production deploy, run this checklist for the current release:
 
 1. Confirm `package.json` version and `.version-changes.json` entry are in sync.
 2. Run `npx tsc --noEmit` and make sure there are no type errors.
-3. Make sure the current database migration phase required by the release has already been executed on production.
-4. Smoke-test the critical paths after the final build:
+3. Verify `dist/sw.js` has the stamped cache version of the current release (and no raw version token), and `dist/version.json` reports that same version. After deploy, verify that the actual PWA host serves `sw.js`, `index.html`, and `version.json` with `Cache-Control: no-cache, no-store, must-revalidate`.
+4. Make sure the current database migration phase required by the release has already been executed on production.
+5. Smoke-test the critical paths after the final build:
    - Dashboard open
    - One heavy module list
    - One process-enabled module show page
    - Public site routes such as `/blog`, `/learn`, `/updates`
-5. If the release contains runtime/performance changes, verify that no obvious `select('*')`, per-row process fetch, or full relation scan remains on the main user flow.
+6. If the release contains runtime/performance changes, verify that no obvious `select('*')`, per-row process fetch, or full relation scan remains on the main user flow.
 
 ## Local Deploy Without GitHub
 

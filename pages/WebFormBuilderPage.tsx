@@ -201,7 +201,7 @@ const SortableWebFormFieldCard: React.FC<{
     </Tooltip>
   );
   return (
-    <div ref={setNodeRef} style={style}>
+    <div ref={setNodeRef} style={style} className="min-w-0 max-w-full">
       {children(dragHandle)}
     </div>
   );
@@ -1327,7 +1327,7 @@ const WebFormBuilderPage: React.FC = () => {
                           {(dragHandle) => (
                         <Card
                           size="small"
-                          className="rounded-2xl border border-dashed"
+                          className="web-form-builder-field-card min-w-0 max-w-full rounded-2xl border border-dashed"
                           title={(
                             <div className="flex min-w-0 items-center gap-1">
                               {dragHandle}

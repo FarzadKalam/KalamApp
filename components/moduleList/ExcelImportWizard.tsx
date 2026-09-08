@@ -554,6 +554,8 @@ const LEGACY_INVOICE_HEADER_ALIASES: Record<string, { scope: MappingTargetScope;
   [normalizeKey("لیست قیمت")]: { scope: "item", key: "unit_price" },
   [normalizeKey("پیش فرض فروش")]: { scope: "item", key: "is_default_sell_price" },
   [normalizeKey("پیش‌فرض فروش")]: { scope: "item", key: "is_default_sell_price" },
+  [normalizeKey("قیمت پیش فرض")]: { scope: "item", key: "is_default_sell_price" },
+  [normalizeKey("قیمت پیش‌فرض")]: { scope: "item", key: "is_default_sell_price" },
   [normalizeKey("قیمت خرید")]: { scope: "item", key: "buy_price" },
   [normalizeKey("درصد سود")]: { scope: "item", key: "profit_percentage" },
   [normalizeKey("قیمت خالص")]: { scope: "item", key: "total_price" },

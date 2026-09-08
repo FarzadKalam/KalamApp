@@ -23,6 +23,7 @@ type ActionVisual = {
 };
 
 const ACTION_VISUALS: Partial<Record<WorkflowActionType, ActionVisual>> = {
+  send_message: { icon: <SendOutlined />, accentColor: '#2563eb' },
   send_note: { icon: <FileTextOutlined />, accentColor: '#0ea5e9' },
   send_note_sms: { icon: <FileTextOutlined />, accentColor: '#0284c7' },
   send_web_form_link: { icon: <LinkOutlined />, accentColor: '#14b8a6' },

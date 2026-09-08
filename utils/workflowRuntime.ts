@@ -2092,6 +2092,69 @@ export const executeWorkflowAction = async (
     return;
   }
 
+  // اکشن چندکانالهٔ جدید فقط یک هماهنگ‌کننده است؛ هر کانال با همان مسیر اجرای
+  // آزموده‌شدهٔ قبلی اجرا می‌شود تا قرارداد اکشن‌های موجود تغییر نکند.
+  if (action.type === 'send_message') {
+    const messageChannels = Array.from(new Set(
+      asArray(config.message_channels)
+        .map((item) => String(item || '').trim())
+        .filter((item) => ['note', 'sms', 'bot_group', 'bot_private', 'instagram', 'email'].includes(item)),
+    ));
+    if (messageChannels.length === 0) return;
+
+    let actionRecord = currentRecord;
+    if (config.include_web_form_link === true) {
+      const webFormId = String(config.web_form_id || '').trim();
+      if (!webFormId) throw new Error('برای درج لینک وب‌فرم/نظرسنجی، ابتدا وب‌فرم را انتخاب کنید.');
+      const { data: webFormRow, error: webFormError } = await supabase
+        .from('web_forms')
+        .select('id, route_slug, target_module_id, is_active')
+        .eq('id', webFormId)
+        .maybeSingle();
+      if (webFormError) throw webFormError;
+      if (!webFormRow?.id || webFormRow.is_active !== true) throw new Error('وب‌فرم/نظرسنجی انتخاب‌شده فعال نیست.');
+      const relatedModuleId = String(config.web_form_related_module_id || moduleId).trim() || moduleId;
+      const processLinks = getProcessLinkMapFromRecord(currentRecord);
+      const relatedRecordId = relatedModuleId === moduleId
+        ? String(currentRecord?.id || '').trim()
+        : String(processLinks?.[relatedModuleId] || '').trim();
+      if (!relatedRecordId) throw new Error('رکورد مرتبط برای ساخت لینک وب‌فرم پیدا نشد.');
+      const { data: tokenResult, error: tokenError } = await supabase.rpc('create_web_form_link_token', {
+        p_web_form_id: webFormId,
+        p_target_module_id: String(webFormRow.target_module_id || '').trim() || null,
+        p_related_module_id: relatedModuleId,
+        p_related_record_id: relatedRecordId,
+      });
+      if (tokenError) throw tokenError;
+      const accessToken = String((tokenResult as any)?.token || '').trim();
+      if (!accessToken) throw new Error('لینک امن وب‌فرم ساخته نشد.');
+      actionRecord = {
+        ...currentRecord,
+        web_form_link: await buildWorkflowWebFormUrl(String(webFormRow.route_slug || '').trim(), accessToken),
+      };
+    }
+
+    const sharedRecipients = {
+      recipient_fields: Array.isArray(config.recipient_fields) ? config.recipient_fields : [],
+      recipient_assignees: Array.isArray(config.recipient_assignees) ? config.recipient_assignees : [],
+    };
+    for (const channel of messageChannels) {
+      const nestedAction = channel === 'note'
+        ? { ...action, type: 'send_note' as const, config: { ...config, ...sharedRecipients, note_text: String(config.message_note || '') } }
+        : channel === 'sms'
+          ? { ...action, type: 'send_sms' as const, config: { ...config, ...sharedRecipients, message: String(config.message_sms || ''), title: String(config.message_title || ''), manual_numbers: Array.isArray(config.manual_numbers) ? config.manual_numbers : [] } }
+          : channel === 'bot_group'
+            ? { ...action, type: 'send_bot_message' as const, config: { ...config, ...sharedRecipients, message: String(config.message_bot_group || ''), title: String(config.message_title || ''), bot_recipient_mode: 'group' } }
+            : channel === 'bot_private'
+              ? { ...action, type: 'send_bot_message' as const, config: { ...config, ...sharedRecipients, message: String(config.message_bot_private || ''), title: String(config.message_title || ''), bot_recipient_mode: 'private' } }
+              : channel === 'instagram'
+                ? { ...action, type: 'send_instagram_message' as const, config: { ...config, message: String(config.message_instagram || ''), recipient_source: String(config.instagram_recipient_source || 'current_record') } }
+                : { ...action, type: 'send_email' as const, config: { ...config, ...sharedRecipients, subject: String(config.message_title || ''), body: String(config.message_email || '') } };
+      await executeWorkflowAction(nestedAction, moduleId, actionRecord);
+    }
+    return;
+  }
+
   if (action.type === 'run_ai_prompt') {
     const prompt = (await renderWorkflowTemplate(String(config.prompt_template || config.prompt || ''), currentRecord, moduleId)).trim();
     if (!prompt) return;
@@ -2346,7 +2409,7 @@ export const executeWorkflowAction = async (
       moduleId,
       recordId: currentRecord?.id ? String(currentRecord.id) : undefined,
       customerId: moduleId === 'customers' && currentRecord?.id ? String(currentRecord.id) : undefined,
-      title: 'ارسال پیامک خودکار',
+      title: String(config.title || '').trim() || 'ارسال پیامک خودکار',
       senderNumber: String(config.sender_number || '').trim() || undefined,
       metadata: {
         source_type: 'workflow',
@@ -2630,15 +2693,20 @@ export const executeWorkflowAction = async (
         : undefined;
       const messageText = rawMessageText || (attachments.length > 0 ? 'پیوست ارسال شد' : '');
       const recipients = channelTargets.map((target) => target.chatId);
-      const handledChatIds = new Set<string>();
       const groupRows = await resolveCounterpartyBotGroupsByChatIds(channel, recipients);
-      for (const group of groupRows) {
+      const groupChatIds = new Set(groupRows.map((group: any) => String(group?.bot_chat_id || '').trim()).filter(Boolean));
+      const recipientMode = String(config.bot_recipient_mode || '').trim();
+      const handledChatIds = new Set<string>();
+      if (recipientMode !== 'private') for (const group of groupRows) {
         const groupChatId = String(group?.bot_chat_id || '').trim();
         if (!groupChatId || handledChatIds.has(groupChatId)) continue;
         handledChatIds.add(groupChatId);
         await sendCounterpartyBotGroupMessage({ group, text: messageText, fallbackText, attachments, payload: botSenderPayload, extraPayload: botSenderPayload, messageType: attachments.length > 0 ? 'file' : 'text' });
       }
-      for (const chatId of recipients.filter((recipient) => !handledChatIds.has(recipient))) {
+      const privateRecipients = recipientMode === 'group'
+        ? []
+        : recipients.filter((recipient) => !handledChatIds.has(recipient) && !groupChatIds.has(recipient));
+      for (const chatId of privateRecipients) {
         await sendBotMessageViaGateway({ channel, chatId, text: messageText, attachments, fallbackText, extraPayload: botSenderPayload, title: titleText || undefined, moduleId, recordId: currentRecord?.id ? String(currentRecord.id) : undefined });
       }
     }

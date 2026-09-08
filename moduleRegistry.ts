@@ -73,6 +73,7 @@ import { CMS_MODULES } from './utils/cmsModules';
 import { withProcessModuleSupport } from './utils/processModuleSupport';
 import { supportsGlobalAssignee } from './utils/assigneeSupport';
 import { getAssigneeLabel } from './utils/assigneeLabel';
+import { getModuleIconKey } from './utils/moduleIcons';
 
 const TAGS_FIELD_KEY = 'tags';
 
@@ -113,6 +114,11 @@ const withStandardTagsField = (module: ModuleDefinition): ModuleDefinition => {
       : [...fields, normalizedTagsField],
   };
 };
+
+const withModuleIcon = (module: ModuleDefinition): ModuleDefinition => ({
+  ...module,
+  iconKey: module.iconKey || getModuleIconKey(module.id),
+});
 
 const resolveAssigneeOrder = (module: ModuleDefinition) => {
   const headerFields = (module.fields || [])
@@ -239,7 +245,7 @@ export const MODULES: Record<string, ModuleDefinition> = {
   ...Object.fromEntries(
     Object.entries(BASE_MODULES).map(([moduleId, module]) => [
       moduleId,
-      withStandardTagsField(withStandardAssigneeField(withProcessModuleSupport(module))),
+      withModuleIcon(withStandardTagsField(withStandardAssigneeField(withProcessModuleSupport(module)))),
     ])
   ),
   // CMS records also participate in assignment and execution processes. Tags
@@ -247,7 +253,7 @@ export const MODULES: Record<string, ModuleDefinition> = {
   ...Object.fromEntries(
     CMS_MODULES.map((module) => [
       module.id,
-      withStandardAssigneeField(withProcessModuleSupport(module)),
+      withModuleIcon(withStandardAssigneeField(withProcessModuleSupport(module))),
     ])
   ),
 };

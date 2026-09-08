@@ -86,6 +86,7 @@ import AiSparkleIcon from './ai/AiSparkleIcon';
 import { useNotificationRuntime } from './notifications/NotificationRuntimeProvider';
 import { resolveMobileKeyboardViewport } from '../utils/mobileKeyboardViewport';
 import { ADVERTISING_CAMPAIGNS_MODULE_ID } from '../utils/advertisingCampaigns';
+import { renderModuleIcon } from '../utils/moduleIcons';
 import { CONTENT_CALENDAR_PLAN_FEATURE } from '../modules/contentCalendarsConfig';
 import { BILLBOARD_STATUS_MANAGEMENT_PLAN_FEATURE } from '../utils/billboardStatusChanges';
 
@@ -391,10 +392,14 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
       const href = typeof item.key === 'string' && item.key.startsWith('/') ? resolveSidebarHref(item.key) : undefined;
       const label = 'label' in item ? item.label : null;
+      const moduleId = href ? href.slice(1).split('/')[0] : '';
+      const configuredModuleIcon = moduleId && MODULES[moduleId]
+        ? renderModuleIcon(MODULES[moduleId], { className: 'text-[16px]' })
+        : null;
       const nextItem: any = {
         ...item,
         label: buildSidebarLabel(label, href, Boolean((item as any).disabled)),
-        icon: buildSidebarIcon((item as any).icon, href, Boolean((item as any).disabled)),
+        icon: buildSidebarIcon((item as any).icon || configuredModuleIcon, href, Boolean((item as any).disabled)),
       };
 
       if ('children' in item && Array.isArray(item.children) && item.children.length > 0) {
@@ -1018,6 +1023,13 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   }, [findMenuPath, rawMenuItems, selectedSidebarKey]);
 
   useEffect(() => {
+    document.documentElement.style.setProperty(
+      '--app-main-sider-width',
+      isMobile ? '0px' : (collapsed ? '80px' : '260px'),
+    );
+  }, [collapsed, isMobile]);
+
+  useEffect(() => {
     const term = globalSearch.trim();
     if (!term || !rolePermissionsReady || !isGlobalSearchQueryReady(term)) {
       searchAbortRef.current?.abort();
@@ -1203,7 +1215,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     };
     const dynamicItems = mobileFooterModuleIds.map((moduleId) => ({
       key: `/${moduleId}`,
-      icon: iconMap[moduleId] || <AppstoreOutlined />,
+      icon: MODULES[moduleId]
+        ? renderModuleIcon(MODULES[moduleId], { className: 'text-xl' })
+        : (iconMap[moduleId] || <AppstoreOutlined />),
       label: labelMap[moduleId] || MODULES[moduleId]?.titles?.faSingular || MODULES[moduleId]?.titles?.fa || moduleId,
     }));
     return [
@@ -1258,6 +1272,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   }, [handleSidebarNavigate]);
 
   const getSearchModuleIcon = (moduleId: string) => {
+    if (MODULES[moduleId]) return renderModuleIcon(MODULES[moduleId]);
     if (moduleId === 'customers' || moduleId === 'suppliers' || moduleId === 'employees') return <TeamOutlined />;
     if (moduleId === 'tasks' || moduleId === 'attendance_logs') return <CheckSquareOutlined />;
     if (moduleId === 'projects') return <ProjectOutlined />;
@@ -1353,10 +1368,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       <Sider 
         trigger={null} 
         collapsible 
-        collapsed={collapsed}
+        collapsed={isMobile ? false : collapsed}
         collapsedWidth={isMobile ? 0 : 80}
         zeroWidthTriggerStyle={{ display: 'none' }}
-        className={`app-main-sider border-l border-gray-200 dark:border-dark-border shadow-2xl transition-all duration-300 z-[1200] overflow-visible ${isMobile && collapsed ? 'mobile-collapsed !hidden w-0 !min-w-0 !max-w-0 overflow-hidden' : ''}`}
+        className={`app-main-sider border-l border-gray-200 dark:border-dark-border shadow-2xl transition-[width,transform] duration-200 ease-out z-[1200] overflow-visible ${isMobile && collapsed ? 'translate-x-full pointer-events-none' : ''}`}
         style={{ 
           height: 'var(--app-viewport-height, 100dvh)',
           position: 'fixed', 
@@ -1366,7 +1381,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           zIndex: 1200,
           pointerEvents: 'auto',
           touchAction: 'manipulation',
-          display: (isMobile && collapsed) ? 'none' : 'block',
+          display: 'block',
           backgroundColor: isDarkMode ? 'rgb(var(--app-dark-surface-rgb))' : undefined,
         }}
         theme={isDarkMode ? 'dark' : 'light'}
@@ -1412,7 +1427,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       </Sider>
 
       <AntLayout 
-        className="bg-gray-100 dark:bg-dark-bg transition-all duration-300 overflow-hidden flex flex-col"
+        className="bg-gray-100 dark:bg-dark-bg transition-[padding] duration-200 ease-out overflow-hidden flex flex-col"
         style={{ 
           paddingRight: isMobile ? 0 : (collapsed ? 80 : 260), 
           width: '100%',

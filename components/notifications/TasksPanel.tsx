@@ -1,15 +1,14 @@
 import React from 'react';
-import { Button, Empty, List, Skeleton } from 'antd';
-import { PlusOutlined, DownOutlined, UpOutlined } from '@ant-design/icons';
+import { Button, Empty, Skeleton, Tooltip } from 'antd';
+import { AppstoreOutlined, PlusOutlined, DownOutlined, UnorderedListOutlined, UpOutlined } from '@ant-design/icons';
 import { MODULES } from '../../moduleRegistry';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { getTaskRelationFieldKey, resolveTaskSourceLink } from '../../utils/taskMeta';
-import { updateTaskStatusWithAutomation } from '../../utils/taskUpdateRuntime';
 import { buildRecordReferenceKey } from '../../utils/recordReference';
 import { openTaskProcessModal } from '../../utils/taskProcessModalEvents';
 import { fetchRecordLockMap, mergeRecordLockIntoRecord, type RecordLockState } from '../../utils/recordLockRuntime';
-import TaskSummaryCard from '../tasks/TaskSummaryCard';
 import RenderCardItem from '../moduleList/RenderCardItem';
+import TaskNotificationListRow from '../tasks/TaskNotificationListRow';
 
 type CreatedSortDirection = 'desc' | 'asc';
 
@@ -24,7 +23,7 @@ const TASK_VIEW_PRESETS = [
 type TaskViewPresetKey = typeof TASK_VIEW_PRESETS[number]['key'];
 type TasksPanelProps = {
   mode: 'list' | 'grid';
-  tasks: any[];
+  onModeChange: (mode: 'list' | 'grid') => void;
   filteredTasks: any[];
   visibleCount: number;
   onShowMore: () => void;
@@ -45,8 +44,6 @@ type TasksPanelProps = {
   handleClose: () => void;
   navigate: (path: string) => void;
   setTasks: React.Dispatch<React.SetStateAction<any[]>>;
-  lastLoadedAtRef: React.MutableRefObject<Record<string, number>>;
-  handleTaskProducedQtyChange: (taskId: string, value: number | null) => Promise<void>;
   profile: { id: string };
   maxItems: number;
   canLockTaskRecord?: boolean;
@@ -55,7 +52,7 @@ type TasksPanelProps = {
 
 const TasksPanel: React.FC<TasksPanelProps> = ({
   mode,
-  tasks,
+  onModeChange,
   filteredTasks,
   visibleCount,
   onShowMore,
@@ -76,8 +73,6 @@ const TasksPanel: React.FC<TasksPanelProps> = ({
   handleClose,
   navigate,
   setTasks,
-  lastLoadedAtRef,
-  handleTaskProducedQtyChange,
   profile,
   maxItems,
   canLockTaskRecord = false,
@@ -165,7 +160,7 @@ const TasksPanel: React.FC<TasksPanelProps> = ({
 
   return (
     <div className="flex flex-col gap-3 h-full min-h-0">
-      <div className="flex items-center gap-2 rounded-xl border border-gray-200/80 bg-white/88 p-1 h-10 shadow-sm overflow-hidden dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.88)]">
+      <div className="grid h-10 grid-cols-[auto,minmax(0,1fr),auto] items-center gap-2 overflow-hidden rounded-xl border border-gray-200/80 bg-white/88 p-1 shadow-sm dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.88)]">
         {renderCreatedAtSortControls()}
         <div className="flex items-center gap-1 overflow-x-auto flex-1 no-scrollbar px-1">
           {TASK_VIEW_PRESETS.map((view) => (
@@ -183,6 +178,30 @@ const TasksPanel: React.FC<TasksPanelProps> = ({
               {view.label}
             </div>
           ))}
+        </div>
+        <div className="flex shrink-0 items-center rounded-lg border border-gray-200 bg-gray-50 p-0.5 dark:border-gray-700 dark:bg-white/5" role="group" aria-label="حالت نمایش فعالیت‌ها">
+          <Tooltip title="نمایش شبکه‌ای">
+            <Button
+              type="text"
+              size="small"
+              icon={<AppstoreOutlined />}
+              className={mode === 'grid' ? '!bg-white !text-[rgb(var(--brand-700-rgb))] !shadow-sm dark:!bg-white/15' : '!text-gray-400'}
+              aria-label="نمایش شبکه‌ای"
+              aria-pressed={mode === 'grid'}
+              onClick={() => onModeChange('grid')}
+            />
+          </Tooltip>
+          <Tooltip title="نمایش فهرستی">
+            <Button
+              type="text"
+              size="small"
+              icon={<UnorderedListOutlined />}
+              className={mode === 'list' ? '!bg-white !text-[rgb(var(--brand-700-rgb))] !shadow-sm dark:!bg-white/15' : '!text-gray-400'}
+              aria-label="نمایش فهرستی"
+              aria-pressed={mode === 'list'}
+              onClick={() => onModeChange('list')}
+            />
+          </Tooltip>
         </div>
       </div>
 
@@ -241,14 +260,14 @@ const TasksPanel: React.FC<TasksPanelProps> = ({
             ))}
           </div>
         ) : (
-          <List
-            dataSource={data}
-            renderItem={(task: any) => {
+          <div className="grid grid-cols-1 gap-2.5">
+            {data.map((task: any) => {
               const sourceLink = resolveTaskSourceLink(task);
               const recordKey = sourceLink.moduleId && sourceLink.recordId ? `${sourceLink.moduleId}:${sourceLink.recordId}` : null;
               const recordTitle = recordKey ? recordTitleMap[recordKey] : null;
               return (
-                <TaskSummaryCard
+                <TaskNotificationListRow
+                  key={task.id}
                   task={task}
                   statusOptions={statusOptions}
                   priorityOptions={priorityOptions}
@@ -258,42 +277,6 @@ const TasksPanel: React.FC<TasksPanelProps> = ({
                   allRoles={directoryRoles}
                   recordTitle={recordTitle}
                   onClose={handleClose}
-                  onStatusChange={async (taskId, status) => {
-                    const currentTask = tasks.find((row: any) => String(row?.id) === String(taskId)) || null;
-                    const previousTask = currentTask ? { ...currentTask } : null;
-                    setTasks((prev) => prev.map((row: any) => (
-                      String(row?.id || '') === String(taskId)
-                        ? { ...row, status }
-                        : row
-                    )));
-                    try {
-                      const updatedTask = await updateTaskStatusWithAutomation({
-                        taskId,
-                        nextStatus: status,
-                        previousTask: currentTask,
-                        currentUser: {
-                          id: profile.id,
-                          fullName: createdByNameMap[String(profile.id || '')] || null,
-                        },
-                      });
-                      setTasks((prev) => prev.map((row: any) => (
-                        row.id === taskId ? { ...row, ...updatedTask } : row
-                      )));
-                      lastLoadedAtRef.current.tasks = 0;
-                    } catch (error) {
-                      if (previousTask) {
-                        setTasks((prev) => prev.map((row: any) => (
-                          String(row?.id || '') === String(taskId)
-                            ? { ...row, ...previousTask }
-                            : row
-                        )));
-                      }
-                      throw error;
-                    }
-                  }}
-                  onProducedQtyChange={async (taskId, value) => {
-                    await handleTaskProducedQtyChange(taskId, value);
-                  }}
                   onTaskUpdated={async (updatedTask) => {
                     setTasks((prev) => prev.map((row: any) => (
                       String(row?.id || '') === String(updatedTask?.id || '')
@@ -309,8 +292,8 @@ const TasksPanel: React.FC<TasksPanelProps> = ({
                   canUnlockRecord={canUnlockTaskRecord}
                 />
               );
-            }}
-          />
+            })}
+          </div>
         )}
       </div>
 

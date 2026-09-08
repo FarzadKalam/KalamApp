@@ -39,7 +39,7 @@ const BLOCKS = {
       },
       {
         key: 'is_default_sell_price',
-        title: 'پیش‌فرض فروش',
+        title: 'قیمت پیش‌فرض',
         type: FieldType.CHECKBOX,
         width: 120,
         defaultValue: false,

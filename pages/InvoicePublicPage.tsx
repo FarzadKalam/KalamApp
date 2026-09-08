@@ -480,7 +480,12 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
         body: { system_code: code, module: moduleId, phone: phoneObj.phone },
       });
       if (res.error || res.data?.error) {
-        setOtpError(res.data?.message || 'ارسال کد تایید ناموفق بود.');
+        setOtpError(
+          res.data?.message
+          || (res.error && (res.error as any)?.context?.status === 429
+            ? 'درخواست کد بیش از حد تکرار شده است. کمی بعد دوباره تلاش کنید.'
+            : 'ارسال کد تایید ناموفق بود.')
+        );
       } else {
         setConfirmStep('enter_otp');
         startCountdown();

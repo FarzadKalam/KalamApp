@@ -385,6 +385,8 @@ export interface ModuleRecordAction {
 
 export interface ModuleDefinition {
   id: string;
+  /** کلید آیکون یکپارچهٔ ماژول؛ برای منو، عنوان‌ها و سایر سطوح UI استفاده می‌شود. */
+  iconKey?: string;
   titles: { fa: string; en?: string; faSingular?: string };
   nature?: ModuleNature;
   table: string;

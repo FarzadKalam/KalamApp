@@ -8,12 +8,13 @@ import {
   intervalUnitOptions,
   triggerTypeOptions,
 } from './workflowTypes';
+import { getWorkflowMessageChannels, WORKFLOW_MESSAGE_CHANNEL_LABELS } from '../shared/workflowMessageAction';
 
 const ACTION_TYPE_LABELS_FA: Partial<Record<WorkflowActionType, string>> = {
   send_note_sms: 'ارسال یادداشت + اطلاع‌رسانی پیامکی',
-  send_telegram_bot: 'ارسال پیام توسط بات (قدیمی)',
-  send_bale_bot: 'ارسال پیام توسط بات (قدیمی)',
-  send_rubika_bot: 'ارسال پیام توسط بات (قدیمی)',
+  send_telegram_bot: 'ارسال پیام در گروه توسط بات (قدیمی)',
+  send_bale_bot: 'ارسال پیام در گروه توسط بات (قدیمی)',
+  send_rubika_bot: 'ارسال پیام در گروه توسط بات (قدیمی)',
 };
 
 export const getWorkflowActionTypeLabelFa = (type: WorkflowActionType | string): string => {
@@ -56,6 +57,15 @@ export const getWorkflowActionSummaryFa = (action: WorkflowAction | null | undef
   const config = (action?.config || {}) as Record<string, any>;
 
   switch (type) {
+    case 'send_message': {
+      const channels = getWorkflowMessageChannels(action)
+        .map((channel) => WORKFLOW_MESSAGE_CHANNEL_LABELS[channel])
+        .join('، ');
+      const title = excerpt(config.message_title);
+      return [channels || 'بدون کانال ارسال', buildRecipientSummary(config), title ? `«${title}»` : '']
+        .filter(Boolean)
+        .join(' — ');
+    }
     case 'send_note':
     case 'send_note_sms': {
       const text = excerpt(config.note_text);

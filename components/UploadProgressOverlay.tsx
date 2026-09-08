@@ -1,7 +1,9 @@
 ﻿import React, { useMemo, useState } from 'react';
 import App from 'antd/es/app';
+import { useLocation } from 'react-router-dom';
 import Badge from 'antd/es/badge';
 import Button from 'antd/es/button';
+import Grid from 'antd/es/grid';
 import Input from 'antd/es/input';
 import Progress from 'antd/es/progress';
 import theme from 'antd/es/theme';
@@ -44,6 +46,7 @@ import ResilientImage from './common/ResilientImage';
 import FileExtensionTile from './files/FileExtensionTile';
 import { isImageFileLike } from '../utils/imagePreview';
 import { isAudioNoteAttachment, type NoteAttachment } from '../utils/noteContent';
+import { isPublicOverlaySuppressedPath } from '../utils/publicOverlay';
 
 const SnoozeScheduleModal = React.lazy(() => import('./notifications/SnoozeScheduleModal'));
 
@@ -267,11 +270,14 @@ const OverlayAttachmentPreviewStrip: React.FC<{ attachments?: NoteAttachment[] }
 OverlayAttachmentPreviewStrip.displayName = 'OverlayAttachmentPreviewStrip';
 
 const UploadProgressOverlay: React.FC = () => {
+  const location = useLocation();
   const tasks = useUploadTasks();
   const notifications = useUiNotificationOverlayItems();
   const overlayPagination = useUiNotificationOverlayPagination();
   const { message } = App.useApp();
   const { token } = theme.useToken();
+  const screens = Grid.useBreakpoint();
+  const isMobileViewport = !screens.md;
   const [minimized, setMinimized] = useState(false);
   const [activeTab, setActiveTab] = useState<OverlayFilterTab>('all');
   const [hiddenSignature, setHiddenSignature] = useState<string | null>(null);
@@ -279,6 +285,7 @@ const UploadProgressOverlay: React.FC = () => {
   const [replyItemId, setReplyItemId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
   const [replySending, setReplySending] = useState(false);
+  const isPublicExperience = isPublicOverlaySuppressedPath(location.pathname);
 
   const activeCount = useMemo(
     () => tasks.filter((task) => task.status === 'uploading').length,
@@ -375,21 +382,27 @@ const UploadProgressOverlay: React.FC = () => {
     }
   }, [displaySignature, hiddenSignature]);
 
-  if (!hasDisplayedUploads && !hasDisplayedNotifications) return null;
+  if (isPublicExperience || (!hasDisplayedUploads && !hasDisplayedNotifications)) return null;
   if (hiddenSignature && hiddenSignature === displaySignature) return null;
+
+  // در موبایل، footer ثابت بخشی از viewport مفید را می‌پوشاند. موقعیت هر دو
+  // حالت باز و کوچک‌شده بر اساس همان footer محاسبه می‌شود تا قابل لمس بمانند.
+  const floatingBottom = isMobileViewport
+    ? 'calc(var(--app-mobile-footer-height, 64px) + 14px + env(safe-area-inset-bottom, 0px))'
+    : 16;
 
   if (minimized) {
     return (
       <div
-        className="pointer-events-none fixed bottom-[calc(var(--app-mobile-footer-height,64px)+0.75rem+env(safe-area-inset-bottom,0px))] right-3 flex items-center gap-2 md:bottom-3 md:right-4"
-        style={{ zIndex: 2147483000 }}
+        className="pointer-events-none fixed right-3 flex items-center gap-2 md:right-4"
+        style={{ zIndex: 2147483000, bottom: floatingBottom }}
       >
         {hasDisplayedNotifications ? (
           <Badge count={displayNotificationCount ? toPersianNumber(String(displayNotificationCount)) : 0} size="small" color="#2563eb">
             <button
               type="button"
               onClick={() => setMinimized(false)}
-              className="pointer-events-auto flex h-12 w-12 items-center justify-center rounded-full border text-base shadow-2xl backdrop-blur transition-transform hover:scale-105"
+              className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border text-sm shadow-2xl backdrop-blur transition-transform hover:scale-105 md:h-12 md:w-12 md:text-base"
               style={{
                 background: token.colorBgElevated,
                 borderColor: token.colorBorderSecondary,
@@ -407,7 +420,7 @@ const UploadProgressOverlay: React.FC = () => {
             <button
               type="button"
               onClick={() => setMinimized(false)}
-              className="pointer-events-auto flex h-12 w-12 items-center justify-center rounded-full border text-base shadow-2xl backdrop-blur transition-transform hover:scale-105"
+              className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border text-sm shadow-2xl backdrop-blur transition-transform hover:scale-105 md:h-12 md:w-12 md:text-base"
               style={{
                 background: token.colorBgElevated,
                 borderColor: token.colorBorderSecondary,
@@ -426,19 +439,23 @@ const UploadProgressOverlay: React.FC = () => {
 
   return (
     <div
-      className="pointer-events-none fixed inset-x-3 bottom-3 md:left-auto md:right-4 md:w-[420px]"
-      style={{ zIndex: 2147483000 }}
+      className="pointer-events-none fixed w-[88vw] max-w-[340px] md:w-[368px] md:max-w-none"
+      style={{
+        zIndex: 2147483000,
+        bottom: floatingBottom,
+        right: isMobileViewport ? 12 : 'calc(var(--app-main-sider-width, 0px) + 16px)',
+      }}
     >
       <div
-        className="pointer-events-auto overflow-hidden rounded-[24px] border shadow-2xl backdrop-blur"
+        className="pointer-events-auto overflow-hidden rounded-[20px] border shadow-2xl backdrop-blur md:rounded-[22px]"
         style={{
           background: token.colorBgElevated,
-          borderColor: token.colorBorderSecondary,
-          boxShadow: token.boxShadowSecondary,
+          borderColor: token.colorBorder,
+          boxShadow: `0 18px 42px rgba(15, 23, 42, 0.24), ${token.boxShadowSecondary}`,
         }}
       >
         <div
-          className="flex items-center justify-between px-4 py-3"
+          className="flex items-center justify-between px-3 py-2.5 md:px-4 md:py-3"
           style={{ borderBottom: `1px solid ${token.colorBorderSecondary}` }}
         >
           <div className="min-w-0">
@@ -472,7 +489,7 @@ const UploadProgressOverlay: React.FC = () => {
         </div>
 
         <div
-          className="overflow-x-auto px-3 py-2"
+          className="overflow-x-auto px-2.5 py-1.5 md:px-3 md:py-2"
           style={{ borderBottom: `1px solid ${token.colorBorderSecondary}` }}
         >
           <div className="flex min-w-max items-center gap-2">
@@ -505,13 +522,13 @@ const UploadProgressOverlay: React.FC = () => {
         </div>
 
         <div
-          className="max-h-[55vh] overflow-y-auto px-3 py-3"
+          className="max-h-[28svh] overflow-y-auto px-2.5 py-2.5 md:max-h-[36vh] md:px-3 md:py-3"
           style={{ scrollbarGutter: 'stable both-edges', overscrollBehavior: 'contain' }}
         >
           <div className="flex flex-col gap-2.5">
             {renderedNotifications.length > 0 ? (
               <div
-                className="max-h-[330px] overflow-y-auto pr-1"
+                className="max-h-[20svh] overflow-y-auto pr-1 md:max-h-[240px]"
                 style={{ scrollbarGutter: 'stable', overscrollBehavior: 'contain' }}
                 onScroll={(event) => {
                   const node = event.currentTarget;

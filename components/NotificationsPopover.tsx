@@ -199,6 +199,27 @@ type NotificationSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_mess
 type NotificationStateSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'bot_direct_messages' | 'sms' | 'voip_calls';
 type DrawerTabKey = NotificationSectionKey;
 type CreatedSortDirection = 'desc' | 'asc';
+type AlertPanelDisplayMode = 'list' | 'grid';
+type AlertPanelDisplaySection = 'tasks' | 'responsibilities';
+const ALERT_PANEL_DISPLAY_STORAGE_PREFIX = 'kalam:notification-alert-display:v1';
+const getAlertPanelDisplayStorageKey = (orgId: string, section: AlertPanelDisplaySection) =>
+  `${ALERT_PANEL_DISPLAY_STORAGE_PREFIX}:${orgId}:${section}`;
+const readAlertPanelDisplayMode = (orgId: string, section: AlertPanelDisplaySection): AlertPanelDisplayMode => {
+  if (typeof window === 'undefined') return 'grid';
+  try {
+    return window.sessionStorage.getItem(getAlertPanelDisplayStorageKey(orgId, section)) === 'list' ? 'list' : 'grid';
+  } catch {
+    return 'grid';
+  }
+};
+const saveAlertPanelDisplayMode = (orgId: string, section: AlertPanelDisplaySection, mode: AlertPanelDisplayMode) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(getAlertPanelDisplayStorageKey(orgId, section), mode);
+  } catch {
+    // Session storage is optional; the in-memory preference remains available.
+  }
+};
 const CHAT_TAB_KEYS: DrawerTabKey[] = ['notes', 'bot_messages', 'bot_direct_messages', 'sms_messages', 'voip_calls'];
 const ALERT_TAB_KEYS: DrawerTabKey[] = ['tasks', 'responsibilities'];
 const CHAT_SECTION_KEYS: NotificationSectionKey[] = ['notes', 'bot_messages', 'bot_direct_messages', 'sms_messages', 'voip_calls'];
@@ -953,6 +974,24 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const [taskSortDirection, setTaskSortDirection] = useState<CreatedSortDirection>('desc');
   const [profile, setProfile] = useState<{ id: string | null; role_id: string | null; org_id?: string | null; full_name?: string | null; avatar_url?: string | null; voip_extension?: string | null; voip_operator_code?: string | null; can_view_all_calls?: boolean; software_role?: string | null }>({ id: null, role_id: null, org_id: null, full_name: null, avatar_url: null });
   const [currentPermissionMap, setCurrentPermissionMap] = useState<PermissionMap | null>(null);
+  const [taskDisplayMode, setTaskDisplayMode] = useState<AlertPanelDisplayMode>('grid');
+  const [responsibilityDisplayMode, setResponsibilityDisplayMode] = useState<AlertPanelDisplayMode>('grid');
+  const [alertDisplayModeScope, setAlertDisplayModeScope] = useState('');
+
+  const currentAlertDisplayScope = String(profile.org_id || 'pending').trim() || 'pending';
+  useEffect(() => {
+    setTaskDisplayMode(readAlertPanelDisplayMode(currentAlertDisplayScope, 'tasks'));
+    setResponsibilityDisplayMode(readAlertPanelDisplayMode(currentAlertDisplayScope, 'responsibilities'));
+    setAlertDisplayModeScope(currentAlertDisplayScope);
+  }, [currentAlertDisplayScope]);
+  useEffect(() => {
+    if (alertDisplayModeScope !== currentAlertDisplayScope) return;
+    saveAlertPanelDisplayMode(currentAlertDisplayScope, 'tasks', taskDisplayMode);
+  }, [alertDisplayModeScope, currentAlertDisplayScope, taskDisplayMode]);
+  useEffect(() => {
+    if (alertDisplayModeScope !== currentAlertDisplayScope) return;
+    saveAlertPanelDisplayMode(currentAlertDisplayScope, 'responsibilities', responsibilityDisplayMode);
+  }, [alertDisplayModeScope, currentAlertDisplayScope, responsibilityDisplayMode]);
 
   // ── Activity & Responsibility hooks (optimized: cache + efficient queries) ──
   const detailRuntimeEnabled = variant === 'alerts' && (standalone || open);
@@ -8345,10 +8384,10 @@ useEffect(() => {
       />
     );
   };
-  const renderTasksPanel = (mode: 'list' | 'grid' = 'list') => (
+  const renderTasksPanel = () => (
     <TasksPanel
-      mode={mode}
-      tasks={tasks}
+      mode={taskDisplayMode}
+      onModeChange={setTaskDisplayMode}
       filteredTasks={filteredTasks}
       visibleCount={panelVisibleCounts.tasks}
       onShowMore={() => setPanelVisibleCounts((prev) => ({ ...prev, tasks: prev.tasks + MAX_ITEMS }))}
@@ -8369,8 +8408,6 @@ useEffect(() => {
       handleClose={handleClose}
       navigate={navigate}
       setTasks={setTasks}
-      lastLoadedAtRef={lastLoadedAtRef}
-      handleTaskProducedQtyChange={handleTaskProducedQtyChange}
       profile={{ id: String(profile.id || '') }}
       maxItems={MAX_ITEMS}
       canLockTaskRecord={canUseRecordLockPermission(currentPermissionMap, 'tasks', 'lock', profile.software_role)}
@@ -8378,9 +8415,10 @@ useEffect(() => {
     />
   );
 
-  const renderResponsibilitiesPanel = (mode: 'list' | 'grid' = 'list') => (
+  const renderResponsibilitiesPanel = () => (
     <ResponsibilitiesPanel
-      mode={mode}
+      mode={responsibilityDisplayMode}
+      onModeChange={setResponsibilityDisplayMode}
       filteredResponsibilities={filteredResponsibilities}
       visibleCount={panelVisibleCounts.responsibilities}
       onShowMore={() => setPanelVisibleCounts((prev) => ({ ...prev, responsibilities: prev.responsibilities + MAX_ITEMS }))}
@@ -8454,12 +8492,12 @@ useEffect(() => {
       {
         key: 'tasks',
         label: <Badge count={formatBadgeCount(effectiveTasksCount)} color={badgeColor}>فعالیت‌های من</Badge>,
-        children: renderLazyDrawerPane('tasks', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden px-3 pb-3`, () => renderTasksPanel('grid')),
+        children: renderLazyDrawerPane('tasks', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden px-3 pb-3`, () => renderTasksPanel()),
       },
       {
         key: 'responsibilities',
         label: <Badge count={formatBadgeCount(effectiveResponsibilitiesCount)} color={badgeColor}>مسئولیت‌های من</Badge>,
-        children: renderLazyDrawerPane('responsibilities', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden px-3 pb-3`, () => renderResponsibilitiesPanel('grid')),
+        children: renderLazyDrawerPane('responsibilities', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden px-3 pb-3`, () => renderResponsibilitiesPanel()),
       },
     ];
 
@@ -8530,12 +8568,12 @@ useEffect(() => {
       {
         key: 'tasks',
         label: <Badge count={formatBadgeCount(effectiveTasksCount)} color={badgeColor}>فعالیت‌های من</Badge>,
-        children: renderLazyDrawerPane('tasks', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden px-2 pb-2', () => renderTasksPanel('grid')),
+        children: renderLazyDrawerPane('tasks', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden px-2 pb-2', () => renderTasksPanel()),
       },
       {
         key: 'responsibilities',
         label: <Badge count={formatBadgeCount(effectiveResponsibilitiesCount)} color={badgeColor}>مسئولیت‌های من</Badge>,
-        children: renderLazyDrawerPane('responsibilities', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden px-2 pb-2', () => renderResponsibilitiesPanel('grid')),
+        children: renderLazyDrawerPane('responsibilities', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden px-2 pb-2', () => renderResponsibilitiesPanel()),
       },
     ];
 

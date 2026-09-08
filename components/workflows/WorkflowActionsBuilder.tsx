@@ -13,6 +13,7 @@ import AdaptiveSelectField from '../AdaptiveSelectField';
 import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 import FormulaEditorModal from '../formulas/FormulaEditorModal';
 import MessageComposerModal from '../MessageComposerModal';
+import WorkflowMessageActionFields from './WorkflowMessageActionFields';
 import PersianDatePicker from '../PersianDatePicker';
 import RichTextEditor from '../RichTextEditor';
 import { STORY_GRADIENT_PRESET_LIST } from '../../utils/storyGradients';
@@ -41,6 +42,12 @@ import {
   getWorkflowRecipientConfig,
   shouldIncludeStarredWorkflowAttachments,
 } from '../../shared/workflowMessagingContract';
+import {
+  buildDefaultWorkflowMessageConfig,
+  buildUnifiedWorkflowMessageConfig,
+  isWorkflowMessageActionType,
+  type WorkflowMessageChannel,
+} from '../../shared/workflowMessageAction';
 import { normalizeWorkflowValueByFieldType } from '../../utils/filterUtils';
 import { supportsWorkflowProcessTemplateActions } from '../../utils/workflowHelpers';
 import { createProcessLinkedFieldKey, parseProcessLinkedFieldKey } from '../../utils/processTargets';
@@ -113,6 +120,8 @@ type BasicSelectOption = { label: string; value: string };
 
 export const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> => {
   switch (type) {
+    case 'send_message':
+      return buildDefaultWorkflowMessageConfig();
     case 'send_note':
     case 'send_note_sms':
       return {
@@ -725,6 +734,15 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     ]).values()),
     [communicationFieldSource, currentModuleId, recipientFieldOptions]
   );
+  const unifiedMessageRecipientFieldOptions = useMemo(
+    () => Array.from(new Map([
+      ...noteRecipientFieldOptions,
+      ...smsRecipientFieldOptions,
+      ...emailRecipientFieldOptions,
+      ...botRecipientFieldOptions,
+    ].map((item) => [String(item.value), item] as const)).values()),
+    [noteRecipientFieldOptions, smsRecipientFieldOptions, emailRecipientFieldOptions, botRecipientFieldOptions],
+  );
   const noteRecipientOptionValueSet = useMemo(
     () => new Set(noteRecipientFieldOptions.map((item) => String(item.value || '').trim()).filter(Boolean)),
     [noteRecipientFieldOptions]
@@ -931,7 +949,14 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     const baseOptions = actionOptions && actionOptions.length > 0
       ? actionOptions
       : actionTypeOptions.filter((option) => (
-          option.value !== 'send_email'
+          ![
+            'send_note',
+            'send_sms',
+            'send_instagram_message',
+            'send_email',
+            'send_bot_message',
+            'send_web_form_link',
+          ].includes(option.value)
           && (option.value !== 'send_to_next_stages' || enableNextStageActions)
           && (
             ![
@@ -950,6 +975,10 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     safeValue.forEach((action) => {
       const actionType = String(action?.type || '') as WorkflowActionType;
       if (!actionType || optionsByValue.has(actionType)) return;
+      if (isWorkflowMessageActionType(actionType)) {
+        optionsByValue.set(actionType, { label: 'ارسال پیام (ثبت‌شده)', value: actionType });
+        return;
+      }
       const legacyOption = actionTypeOptions.find((option) => option.value === actionType);
       if (legacyOption) {
         optionsByValue.set(actionType, { ...legacyOption, label: `${legacyOption.label} (غیرفعال)` });
@@ -1292,7 +1321,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     return (
       <div className="rounded-lg border border-dashed border-gray-300 dark:border-gray-700 p-2">
         <div className="text-xs text-gray-500 mb-2">انتخاب فیلد برای متغیر</div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
           <AdaptiveSelectField
             {...commonSelectProps}
             value={config.variable_field}
@@ -1323,11 +1352,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               placeholder="محل درج متغیر"
               pickerTitle="محل درج متغیر"
             />
-          ) : (
-            <div className="h-10 flex items-center text-xs text-gray-400 px-2 border rounded-md border-gray-200 dark:border-gray-700">
-              محل درج: {targets[0]?.label || '-'}
-            </div>
-          )}
+          ) : null}
         </div>
       </div>
     );
@@ -1579,6 +1604,33 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     const actionType = action.type;
     const config = action.config || {};
 
+    if (isWorkflowMessageActionType(actionType)) {
+      return (
+        <WorkflowMessageActionFields
+          action={action}
+          disabled={disabled}
+          recipientFieldOptions={unifiedMessageRecipientFieldOptions}
+          renderIdentityRecipientPicker={renderIdentityRecipientPicker}
+          onConfigPatch={(patch) => updateActionConfig(action.id, patch)}
+          onChannelsChange={(channels: WorkflowMessageChannel[]) => {
+            if (action.type === 'send_message') {
+              updateActionConfig(action.id, { message_channels: channels });
+              return;
+            }
+            updateAction(action.id, {
+              type: 'send_message',
+              config: buildUnifiedWorkflowMessageConfig(action, channels),
+            });
+          }}
+          renderMessageTemplateButton={(fieldKey, title) => renderMessageTemplateButton(action.id, fieldKey, title)}
+          renderVariableTools={(targets) => renderVariableTools(action, targets)}
+          onInsertVariable={(fieldKey, variableKey) => insertVariableToken(action, fieldKey, variableKey)}
+          webFormOptions={webFormOptions}
+          webFormRelationModuleOptions={webFormRelationModuleOptions}
+        />
+      );
+    }
+
     if (actionType === 'send_note' || actionType === 'send_note_sms') {
       return (
         <div className="space-y-2">
@@ -1658,7 +1710,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         channelKey: 'sms' | 'email' | 'bot' | 'note',
         targets: Array<{ key: string; label: string }>
       ) => (
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+        <div>
           <AdaptiveSelectField
             {...commonSelectProps}
             options={webFormVariableOptions}
@@ -1674,9 +1726,6 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             placeholder="درج متغیر"
             pickerTitle="متغیرهای مجاز این وب‌فرم"
           />
-          <div className="flex h-10 items-center rounded-md border border-gray-200 px-2 text-xs text-gray-500 dark:border-gray-700">
-            محل درج: {targets[0]?.label || '-'}
-          </div>
         </div>
       );
 
@@ -1934,7 +1983,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         targetKey: string,
         targetLabel: string,
       ) => (
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+        <div>
           <AdaptiveSelectField
             {...commonSelectProps}
             options={aiChannelVariableOptions}
@@ -1951,9 +2000,6 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             placeholder="درج متغیر"
             pickerTitle="متغیرهای مجاز خروجی هوش مصنوعی"
           />
-          <div className="flex h-10 items-center rounded-md border border-gray-200 px-2 text-xs text-gray-500 dark:border-gray-700">
-            محل درج: {targetLabel}
-          </div>
         </div>
       );
       const updateRecordCreationSchema = (nextModuleId: string, nextAllowedFieldKeys?: string[]) => {

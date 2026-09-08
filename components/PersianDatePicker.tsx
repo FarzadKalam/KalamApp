@@ -503,9 +503,11 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
         <div className="kalam-adaptive-picker__chips">
           <QuickActionButton label="الان" onClick={applyNow} />
           <QuickActionButton label="۰۸:۰۰" onClick={() => applyQuickTime(8, 0)} />
+          <QuickActionButton label="۰۹:۰۰" onClick={() => applyQuickTime(9, 0)} />
           <QuickActionButton label="۱۲:۰۰" onClick={() => applyQuickTime(12, 0)} />
           <QuickActionButton label="۱۶:۰۰" onClick={() => applyQuickTime(16, 0)} />
-          <QuickActionButton label="۲۰:۰۰" onClick={() => applyQuickTime(20, 0)} />
+          <QuickActionButton label="۱۸:۰۰" onClick={() => applyQuickTime(18, 0)} />
+          <QuickActionButton label="شب · ۲۱:۰۰" onClick={() => applyQuickTime(21, 0)} />
         </div>
       </div>
     );

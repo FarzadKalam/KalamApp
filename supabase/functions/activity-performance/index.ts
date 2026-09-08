@@ -135,8 +135,18 @@ Deno.serve(async (request) => {
     }
     const availableEntries = entries.filter((entry) => !paidSourceKeys.has(String(entry.source_key)));
     if (mode === 'prepare' && availableEntries.length) {
-      const result = await fetch(`${url}/rest/v1/rpc/sync_activity_performance_entries`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ p_period_start: periodStart, p_period_end: periodEnd, p_entries: entries }) });
-      if (!result.ok) throw new Error(`activity_performance_sync_failed:${result.status}`);
+      const result = await fetch(`${url}/rest/v1/rpc/sync_activity_performance_entries_v2`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ p_period_start: periodStart, p_period_end: periodEnd, p_entries: entries }) });
+      if (!result.ok) {
+        const errorPayload = await result.json().catch(() => null) as Record<string, unknown> | null;
+        // جزئیات پاسخ RPC ممکن است حاوی نام قید یا متن داخلی پایگاه‌داده باشد؛
+        // برای عیب‌یابی در لاگ نگه‌داری می‌شود، اما به رابط کاربر برنمی‌گردد.
+        console.error('activity_performance_sync_failed', {
+          status: result.status,
+          code: errorPayload?.code || null,
+          message: errorPayload?.message || null,
+        });
+        throw new Error(result.status === 409 ? 'activity_performance_sync_conflict' : `activity_performance_sync_failed:${result.status}`);
+      }
       const statuses = await result.json(); const included = new Set((Array.isArray(statuses) ? statuses : []).filter((item: any) => item?.status === 'included_in_payroll').map((item: any) => String(item.source_key)));
       return response(200, { mode, entries: availableEntries.filter((entry) => !included.has(String(entry.source_key))), statuses });
     }

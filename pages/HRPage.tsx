@@ -2492,11 +2492,17 @@ const HRPage: React.FC = () => {
 
     setPayrollStatusLoading(true);
     try {
-      await syncEmployeeCompensationEntriesForPayroll(supabase as any, {
-        employeeIds,
-        periodStart,
-        periodEnd,
-      });
+      try {
+        await syncEmployeeCompensationEntriesForPayroll(supabase as any, {
+          employeeIds,
+          periodStart,
+          periodEnd,
+        });
+      } catch (syncError) {
+        // همگام‌سازی پاداش/جریمه برای تازه‌سازی است؛ اقلام ثبت‌شدهٔ همان بازه
+        // همچنان باید برای ساخت فیش خوانده و نمایش داده شوند.
+        console.warn('Payroll compensation synchronization did not complete.', syncError);
+      }
       const [slipsResult, initialLedgerResult] = await Promise.all([
         supabase
           .from('payroll_slips')

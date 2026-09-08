@@ -3,7 +3,7 @@ import { getWorkflowActionContract, isWorkflowOutputVariableAllowed, WORKFLOW_AC
 
 describe('workflow action central contract', () => {
   it('defines every supported workflow action in one registry', () => {
-    expect(Object.keys(WORKFLOW_ACTION_CONTRACTS)).toHaveLength(22);
+    expect(Object.keys(WORKFLOW_ACTION_CONTRACTS)).toHaveLength(23);
     expect(getWorkflowActionContract('send_email').templateFields).toEqual(['subject', 'body']);
   });
 

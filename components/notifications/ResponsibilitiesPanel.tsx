@@ -1,11 +1,12 @@
 import React from 'react';
-import { Button, Empty, Skeleton } from 'antd';
-import { DownOutlined, UpOutlined } from '@ant-design/icons';
+import { Button, Empty, Skeleton, Tooltip } from 'antd';
+import { AppstoreOutlined, DownOutlined, UnorderedListOutlined, UpOutlined } from '@ant-design/icons';
 import { MODULES } from '../../moduleRegistry';
 import { FieldType } from '../../types';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { fetchRecordLockMap, mergeRecordLockIntoRecord, type RecordLockState } from '../../utils/recordLockRuntime';
 import RenderCardItem from '../moduleList/RenderCardItem';
+import ResponsibilityListRow from './ResponsibilityListRow';
 
 type CreatedSortDirection = 'desc' | 'asc';
 
@@ -23,6 +24,7 @@ const getModuleCardFields = (moduleConfig: any) => {
 
 type ResponsibilitiesPanelProps = {
   mode: 'list' | 'grid';
+  onModeChange: (mode: 'list' | 'grid') => void;
   filteredResponsibilities: any[];
   visibleCount: number;
   onShowMore: () => void;
@@ -49,6 +51,7 @@ type ResponsibilitiesPanelProps = {
 
 const ResponsibilitiesPanel: React.FC<ResponsibilitiesPanelProps> = ({
   mode,
+  onModeChange,
   filteredResponsibilities,
   visibleCount,
   onShowMore,
@@ -148,28 +151,50 @@ const ResponsibilitiesPanel: React.FC<ResponsibilitiesPanelProps> = ({
 
   return (
     <div className="flex flex-col gap-3 h-full min-h-0">
-      {mode === 'grid' ? (
-        <div className="flex items-center gap-2 rounded-xl border border-gray-200/80 bg-white/88 p-1 h-10 shadow-sm overflow-hidden dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.88)]">
-          {renderCreatedAtSortControls()}
-          <div className="flex items-center gap-1 overflow-x-auto flex-1 no-scrollbar px-1">
-            {responsibilityViews.map((view) => (
-              <div
-                key={view.key}
-                onClick={() => {
-                  setResponsibilityViewKey(view.key);
-                }}
-                className={`group px-3 py-1 rounded-lg text-xs cursor-pointer whitespace-nowrap transition-all flex items-center gap-2 select-none border ${
-                  responsibilityViewKey === view.key
-                    ? 'bg-leather-600 text-white border-leather-600 shadow-sm font-bold'
-                    : 'bg-transparent border-transparent hover:bg-gray-100/80 dark:hover:bg-white/10 text-gray-600 dark:text-gray-300'
-                }`}
-              >
-                {view.label}
-              </div>
-            ))}
-          </div>
+      <div className="grid h-10 grid-cols-[auto,minmax(0,1fr),auto] items-center gap-2 overflow-hidden rounded-xl border border-gray-200/80 bg-white/88 p-1 shadow-sm dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.88)]">
+        {renderCreatedAtSortControls()}
+        <div className="flex items-center gap-1 overflow-x-auto flex-1 no-scrollbar px-1">
+          {responsibilityViews.map((view) => (
+            <div
+              key={view.key}
+              onClick={() => {
+                setResponsibilityViewKey(view.key);
+              }}
+              className={`group px-3 py-1 rounded-lg text-xs cursor-pointer whitespace-nowrap transition-all flex items-center gap-2 select-none border ${
+                responsibilityViewKey === view.key
+                  ? 'bg-leather-600 text-white border-leather-600 shadow-sm font-bold'
+                  : 'bg-transparent border-transparent hover:bg-gray-100/80 dark:hover:bg-white/10 text-gray-600 dark:text-gray-300'
+              }`}
+            >
+              {view.label}
+            </div>
+          ))}
         </div>
-      ) : null}
+        <div className="flex shrink-0 items-center rounded-lg border border-gray-200 bg-gray-50 p-0.5 dark:border-gray-700 dark:bg-white/5" role="group" aria-label="حالت نمایش مسئولیت‌ها">
+          <Tooltip title="نمایش شبکه‌ای">
+            <Button
+              type="text"
+              size="small"
+              icon={<AppstoreOutlined />}
+              className={mode === 'grid' ? '!bg-white !text-[rgb(var(--brand-700-rgb))] !shadow-sm dark:!bg-white/15' : '!text-gray-400'}
+              aria-label="نمایش شبکه‌ای"
+              aria-pressed={mode === 'grid'}
+              onClick={() => onModeChange('grid')}
+            />
+          </Tooltip>
+          <Tooltip title="نمایش فهرستی">
+            <Button
+              type="text"
+              size="small"
+              icon={<UnorderedListOutlined />}
+              className={mode === 'list' ? '!bg-white !text-[rgb(var(--brand-700-rgb))] !shadow-sm dark:!bg-white/15' : '!text-gray-400'}
+              aria-label="نمایش فهرستی"
+              aria-pressed={mode === 'list'}
+              onClick={() => onModeChange('list')}
+            />
+          </Tooltip>
+        </div>
+      </div>
 
       {loadingResponsibilities ? (
         <div className="space-y-2">
@@ -223,14 +248,14 @@ const ResponsibilitiesPanel: React.FC<ResponsibilitiesPanelProps> = ({
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto min-h-0">
-          <div className="grid grid-cols-1 gap-3">
+          <div className="grid grid-cols-1 gap-2.5">
             {data.map((item: any) => {
               const moduleConfig = MODULES[item.module_id];
               if (!moduleConfig) return null;
               const { imageField, tagsField, statusField, categoryField } = getModuleCardFields(moduleConfig);
               const moduleBadgeLabel = moduleConfig.titles?.fa || item.module_title || item.module_id;
               return (
-                <RenderCardItem
+                <ResponsibilityListRow
                   key={`${item.module_id}:${item.id}`}
                   item={{
                     ...item,
@@ -244,22 +269,16 @@ const ResponsibilitiesPanel: React.FC<ResponsibilitiesPanelProps> = ({
                   categoryField={categoryField}
                   allUsers={directoryUsers}
                   allRoles={directoryRoles}
-                  selectedRowKeys={[]}
-                  setSelectedRowKeys={() => undefined}
-                  navigate={(path) => {
-                    const [, moduleId, recordId] = String(path || '').split('/');
+                  moduleBadgeLabel={moduleBadgeLabel}
+                  onOpen={(moduleId, recordId, label) => {
                     if (!moduleId || !recordId) return;
                     openPreviewRecord(
                       moduleId,
                       recordId,
-                      recordTitleMap[`${moduleId}:${recordId}`] || formatRecordLabel({ ...item, id: recordId, module_id: moduleId }, moduleId)
+                      label || recordTitleMap[`${moduleId}:${recordId}`] || formatRecordLabel({ ...item, id: recordId, module_id: moduleId }, moduleId)
                     );
                     handleClose();
                   }}
-                  canViewField={() => true}
-                  hideSelection
-                  minimal
-                  moduleBadgeLabel={moduleBadgeLabel}
                   canLockRecord={canLockModuleRecord?.(item.module_id) || false}
                   canUnlockRecord={canUnlockModuleRecord?.(item.module_id) || false}
                 />

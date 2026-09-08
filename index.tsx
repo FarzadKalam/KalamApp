@@ -57,10 +57,30 @@ const persistInstalledPwaStorage = () => {
 
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   window.addEventListener("load", () => {
+    const serviceWorkerUrl = `${import.meta.env.BASE_URL}sw.js?v=${encodeURIComponent(__TAZESYSTEM_APP_VERSION__)}`;
+    const controllerBeforeRegistration = navigator.serviceWorker.controller;
+    const reloadMarker = `tazesystem:pwa-controller-reload:${__TAZESYSTEM_APP_VERSION__}`;
+
+    const reloadAfterControllerUpdate = () => {
+      // نصب نخست نباید صفحه را دوباره بارگذاری کند. فقط وقتی یک کنترلر قدیمی
+      // وجود داشته، پس از جایگزینی آن یک‌بار شِل قدیمی برنامه را تازه می‌کنیم.
+      if (!controllerBeforeRegistration) return;
+      try {
+        if (window.sessionStorage.getItem(reloadMarker)) return;
+        window.sessionStorage.setItem(reloadMarker, "1");
+      } catch {
+        // در مرورگرهای محدود هم به‌روزرسانی Service Worker ادامه پیدا می‌کند.
+      }
+      window.location.reload();
+    };
+
+    navigator.serviceWorker.addEventListener("controllerchange", reloadAfterControllerUpdate, { once: true });
+
     void navigator.serviceWorker
-      .register(`${import.meta.env.BASE_URL}sw.js`, { updateViaCache: "none" })
+      .register(serviceWorkerUrl, { updateViaCache: "none" })
       .then((registration) => {
         registration.waiting?.postMessage({ type: "SKIP_WAITING" });
+        void registration.update().catch(() => undefined);
         persistInstalledPwaStorage();
       })
       .catch(() => undefined);

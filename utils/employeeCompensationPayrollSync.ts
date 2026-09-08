@@ -17,7 +17,7 @@ type CompensationRecord = {
   notes?: string | null;
 };
 
-type ExistingLedgerRow = {
+export type ExistingPayrollCompensationLedgerRow = {
   id: string;
   source_key?: string | null;
   source_type?: string | null;
@@ -91,12 +91,12 @@ const buildPayload = (
   };
 };
 
-const resolveExistingRowKey = (sourceType: CompensationSourceType, row: ExistingLedgerRow) =>
+const resolveExistingRowKey = (sourceType: CompensationSourceType, row: ExistingPayrollCompensationLedgerRow) =>
   String(row.source_key || buildSourceKey(sourceType, String(row.source_record_id || ''))).trim();
 
 const pickPreferredExistingRow = (
-  current: ExistingLedgerRow | undefined,
-  candidate: ExistingLedgerRow,
+  current: ExistingPayrollCompensationLedgerRow | undefined,
+  candidate: ExistingPayrollCompensationLedgerRow,
   periodStart: string,
   periodEnd: string,
 ) => {
@@ -104,11 +104,36 @@ const pickPreferredExistingRow = (
   const candidateInPeriod = candidate.period_start === periodStart && candidate.period_end === periodEnd;
   const currentInPeriod = current.period_start === periodStart && current.period_end === periodEnd;
   if (candidateInPeriod && !currentInPeriod) return candidate;
-  const candidateEditable = ['draft', 'proposed'].includes(String(candidate.status || ''));
-  const currentEditable = ['draft', 'proposed'].includes(String(current.status || ''));
-  if (candidateEditable && !currentEditable) return candidate;
+  // یک قلمی که در فیش ثبت شده، حتی در صورت وجود دادهٔ قدیمی ناسازگار، هرگز
+  // نباید با قلم باز دیگری جایگزین یا به بازهٔ دیگری منتقل شود.
+  const priority = (row: ExistingPayrollCompensationLedgerRow) => {
+    const status = String(row.status || '').trim();
+    if (status === 'included_in_payroll') return 3;
+    if (status === 'draft' || status === 'proposed') return 2;
+    return 1;
+  };
+  if (priority(candidate) > priority(current)) return candidate;
   return current;
 };
+
+/**
+ * هر همگام‌سازی فقط مجاز است با قلم‌های همان بازهٔ حقوقی کار کند. نگه‌داشتن
+ * سابقهٔ دوره‌های پیشین لازم است و انتقال آن‌ها به ماه جدید هم تعارض یکتا می‌سازد
+ * و هم ممکن است قلم یک فیش نهایی را دوباره قابل محاسبه نشان دهد.
+ */
+export const selectCurrentPeriodCompensationEntriesBySourceKey = (
+  sourceType: CompensationSourceType,
+  existingRows: ExistingPayrollCompensationLedgerRow[],
+  periodStart: string,
+  periodEnd: string,
+) => existingRows
+  .filter((row) => row.period_start === periodStart && row.period_end === periodEnd)
+  .reduce<Map<string, ExistingPayrollCompensationLedgerRow>>((acc, row) => {
+    const key = resolveExistingRowKey(sourceType, row);
+    if (!key) return acc;
+    acc.set(key, pickPreferredExistingRow(acc.get(key), row, periodStart, periodEnd));
+    return acc;
+  }, new Map());
 
 const syncCompensationSource = async (
   supabase: SupabaseClient,
@@ -158,14 +183,14 @@ const syncCompensationSource = async (
     .filter((record) => Math.abs(toNumber(record.amount)) > 0);
   const desiredRecords = records.filter((record) => ELIGIBLE_STATUSES.has(String(record.status || '').trim().toLowerCase()));
 
-  const existingRows = (existingResult.data || []) as ExistingLedgerRow[];
+  const existingRows = (existingResult.data || []) as ExistingPayrollCompensationLedgerRow[];
   const currentPeriodExistingRows = existingRows.filter((row) => row.period_start === periodStart && row.period_end === periodEnd);
-  const existingByKey = existingRows.reduce<Map<string, ExistingLedgerRow>>((acc, row) => {
-    const key = resolveExistingRowKey(sourceType, row);
-    if (!key) return acc;
-    acc.set(key, pickPreferredExistingRow(acc.get(key), row, periodStart, periodEnd));
-    return acc;
-  }, new Map());
+  const existingByKey = selectCurrentPeriodCompensationEntriesBySourceKey(
+    sourceType,
+    existingRows,
+    periodStart,
+    periodEnd,
+  );
   const desiredByKey = new Map(
     desiredRecords.map((record) => [buildSourceKey(sourceType, record.id), record] as const),
   );
@@ -212,7 +237,10 @@ const syncCompensationSource = async (
           updated_at: new Date().toISOString(),
         })
         .eq('id', existing!.id);
-      if (error && !isMissingPayrollLedgerError(error)) throw error;
+      // در صورت اجرای هم‌زمان، ممکن است یک تب دیگر قلم همین منبع را بسازد.
+      // قید یکتا منبع درست عمل کرده است؛ خواندن تازهٔ ledger، قلم برنده را نشان
+      // خواهد داد و نباید کل ویزارد را متوقف کند.
+      if (error && String(error?.code || '').toUpperCase() !== '23505' && !isMissingPayrollLedgerError(error)) throw error;
     }));
   }
 

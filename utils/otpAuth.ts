@@ -96,6 +96,12 @@ export const createOtpUiError = (error: any, fallback?: string) => {
 
 export const normalizeOtpPhone = (value: unknown) => normalizeIranMobile(value);
 
+const shouldResendExistingPhoneOtp = (error: any, shouldCreateUser?: boolean) => {
+  if (shouldCreateUser !== false) return false;
+  const raw = getRawErrorText(error);
+  return raw.includes('signups not allowed for otp') || raw.includes('signup not allowed for otp');
+};
+
 export const requestSmsOtp = async (
   authClient: any,
   phone: string,
@@ -112,7 +118,20 @@ export const requestSmsOtp = async (
     : { phone: normalizedPhone, options: { shouldCreateUser } };
 
   const { error } = await authClient.signInWithOtp(payload);
-  if (error) throw createOtpUiError(error, 'ارسال کد تایید ناموفق بود.');
+  if (error) {
+    // در نصب‌های GoTrue که ثبت‌نام بسته است، /otp ممکن است برای یک حساب ایمیلیِ
+    // دارای شماره نیز به‌اشتباه مسیر ثبت‌نام را بگیرد. فقط در ورودِ حساب موجود
+    // از /resend استفاده می‌کنیم؛ هیچ حساب تازه‌ای از این مسیر ساخته نمی‌شود.
+    if (shouldResendExistingPhoneOtp(error, shouldCreateUser) && typeof authClient.resend === 'function') {
+      const { error: resendError } = await authClient.resend({
+        phone: normalizedPhone,
+        type: 'sms',
+      });
+      if (!resendError) return normalizedPhone;
+      throw createOtpUiError(resendError, 'ارسال کد تایید ناموفق بود.');
+    }
+    throw createOtpUiError(error, 'ارسال کد تایید ناموفق بود.');
+  }
   return normalizedPhone;
 };
 

@@ -2,11 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Badge, Drawer, Tooltip } from 'antd';
 import {
     FileTextOutlined, CheckSquareOutlined, HistoryOutlined,
-    RightOutlined, SkinOutlined, AppstoreOutlined,
-    BgColorsOutlined, ScissorOutlined, ToolOutlined, ExperimentOutlined,
-    DropboxOutlined, UsergroupAddOutlined, CreditCardOutlined, NodeIndexOutlined,
-    ShoppingOutlined, ShoppingCartOutlined, ProjectOutlined, PhoneOutlined, MessageOutlined, WalletOutlined,
-    TeamOutlined, UserAddOutlined
+    RightOutlined, NodeIndexOutlined, MessageOutlined,
 } from '@ant-design/icons';
 import ActivityPanel from './ActivityPanel';
 import RelatedRecordsPanel from './RelatedRecordsPanel';
@@ -22,30 +18,7 @@ import { buildProcessGuideContext, type ProcessGuideContext } from '../../utils/
 import type { ProcessRuntimeSnapshot } from '../../utils/processRuntimeSnapshot';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 import { isSaasAdminModuleId } from '../../utils/permissions';
-
-// نقشه آیکون‌ها: نام متنی را به کامپوننت واقعی وصل می‌کند
-const iconMap: Record<string, React.ReactNode> = {
-  'SkinOutlined': <SkinOutlined />,
-  'AppstoreOutlined': <AppstoreOutlined />,
-    'FileTextOutlined': <FileTextOutlined />,
-    'CreditCardOutlined': <CreditCardOutlined />,
-  'ShoppingOutlined': <ShoppingOutlined />,
-  'ShoppingCartOutlined': <ShoppingCartOutlined />,
-  'ProjectOutlined': <ProjectOutlined />,
-  'PhoneOutlined': <PhoneOutlined />,
-  'MessageOutlined': <MessageOutlined />,
-  'WalletOutlined': <WalletOutlined />,
-  'TeamOutlined': <TeamOutlined />,
-  'UserAddOutlined': <UserAddOutlined />,
-  'BgColorsOutlined': <BgColorsOutlined />,
-  'ScissorOutlined': <ScissorOutlined />,
-  'ToolOutlined': <ToolOutlined />,
-  'ExperimentOutlined': <ExperimentOutlined />,
-  'DropboxOutlined': <DropboxOutlined />,
-  'UsergroupAddOutlined': <UsergroupAddOutlined />,
-  // آیکون پیش‌فرض
-  'default': <AppstoreOutlined />
-};
+import { renderModuleIcon } from '../../utils/moduleIcons';
 
 interface RelatedSidebarProps {
   moduleConfig: ModuleDefinition;
@@ -214,7 +187,9 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({
       .map((tab) => ({
         ...tab,
         key: tab.id || `related_${tab.targetModule}`,
-        icon: iconMap[tab.icon || 'default'] || iconMap['default'],
+        // تب مرتبط، نمای همان ماژول مقصد است؛ از آیکون مرکزی ماژول استفاده می‌کند
+        // تا در سایدبار، فهرست و این نوار نشانهٔ بصری واحدی داشته باشد.
+        icon: renderModuleIcon(tab.targetModule),
         label: tab.title,
     }));
 

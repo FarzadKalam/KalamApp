@@ -2295,12 +2295,20 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 stringMode
                 inputMode={field.allowNegative ? 'text' : fieldType === FieldType.PRICE ? 'numeric' : 'decimal'}
                 suffix={fieldType === FieldType.PRICE && currencyLabel ? currencyLabel : undefined}
-                formatter={(val, info) => formatNumericForInput(
-                  fieldType === FieldType.PRICE
-                    ? normalizePriceString(resolveFormatterSourceValue(info?.input, val))
-                    : resolveFormatterSourceValue(info?.input, val),
-                  true,
-                )}
+                formatter={(val, info) => {
+                  // هنگام تایپ، متن خود کاربر را نگه می‌داریم؛ اما پس از تغییر
+                  // برنامه‌ای (مثل انتخاب کالا یا لیست قیمت)، value کنترل‌شده
+                  // باید بر متن قبلی input اولویت داشته باشد.
+                  const formatterValue = info?.userTyping
+                    ? resolveFormatterSourceValue(info?.input, val)
+                    : val;
+                  return formatNumericForInput(
+                    fieldType === FieldType.PRICE
+                      ? normalizePriceString(formatterValue)
+                      : formatterValue,
+                    true,
+                  );
+                }}
                 parser={(val) => fieldType === FieldType.PRICE ? normalizePriceString(val) : normalizeNumericString(val)}
                 onKeyDown={preventNonNumericKeyDown}
                 onPaste={preventNonNumericPaste}

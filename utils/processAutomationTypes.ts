@@ -25,6 +25,7 @@ export type ProcessAutomationTargetType =
   | 'specific_role';
 
 export type ProcessAutomationActionType =
+  | 'send_message'
   | 'send_note'
   | 'send_note_sms'
   | 'send_sms'

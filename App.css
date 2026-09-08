@@ -652,11 +652,28 @@ html.dark .kalam-adaptive-picker__empty {
   padding: 0 !important;
 }
 
+.kalam-adaptive-picker__calendar-wrap .rmdp-calendar > div[style*="position: relative"] {
+  isolation: isolate;
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-day-picker {
+  position: relative;
+  z-index: 1;
+}
+
 .kalam-adaptive-picker__calendar-wrap .rmdp-month-picker,
 .kalam-adaptive-picker__calendar-wrap .rmdp-year-picker {
+  position: absolute !important;
+  inset: 0;
+  z-index: 2;
+  box-sizing: border-box;
   width: 100%;
-  background: transparent;
+  min-height: 100%;
+  overflow-y: auto;
+  border-radius: 14px;
+  background: #fafafa !important;
   color: rgba(15, 23, 42, 0.92);
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.04), 0 12px 28px rgba(15, 23, 42, 0.08);
 }
 
 .kalam-adaptive-picker__calendar-wrap .rmdp-ym {
@@ -1023,6 +1040,44 @@ html.dark .webform-slide-date-trigger .kalam-adaptive-picker__trigger {
   border-color: rgb(var(--brand-300-rgb));
 }
 
+@media (max-width: 639px) {
+  .web-form-builder-field-card .ant-card-head {
+    min-width: 0;
+    min-height: 0;
+    padding-inline: 12px;
+  }
+
+  .web-form-builder-field-card .ant-card-head-wrapper {
+    min-width: 0;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .web-form-builder-field-card .ant-card-head-title {
+    min-width: 0;
+    padding-block: 10px;
+  }
+
+  .web-form-builder-field-card .ant-card-extra {
+    flex: 0 0 auto;
+    margin-inline-start: 0;
+    padding-block: 6px;
+  }
+
+  .web-form-builder-field-card .ant-card-body {
+    min-width: 0;
+    padding: 12px;
+  }
+
+  .web-form-builder-field-card .ant-form-item,
+  .web-form-builder-field-card .ant-form-item-control,
+  .web-form-builder-field-card .ant-select,
+  .web-form-builder-field-card .ant-input-number {
+    min-width: 0;
+    max-width: 100%;
+  }
+}
+
 .kalam-adaptive-picker__action.is-muted {
   background: #f5f5f5;
   color: rgba(15, 23, 42, 0.7);
@@ -1101,8 +1156,9 @@ html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-day:not(.rmdp-disabled) sp
 
 html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-month-picker,
 html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-year-picker {
-  background: transparent;
+  background: #1a1a1a !important;
   color: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 16px 32px rgba(0, 0, 0, 0.3);
 }
 
 html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-month-picker .rmdp-ym > div,
@@ -1971,3 +2027,24 @@ html.dark .smarttable-shell .ant-table-tbody > tr:nth-child(even) > td {
 .dark .rich-text-editor { border-color: #3f3f46; background: #202020; }
 .dark .rich-text-editor__toolbar { border-color: #3f3f46; background: #292929; }
 .dark .rich-text-editor__content .ProseMirror { color: #f4f4f5; }
+
+/* Sidebar navigation: short compositor-friendly motions keep nested menus responsive. */
+.app-main-sider .ant-menu-submenu > .ant-menu-sub,
+.app-main-sider .ant-motion-collapse,
+.app-main-sider .ant-motion-collapse-active {
+  transition-duration: 160ms !important;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1) !important;
+}
+
+.app-main-sider .ant-menu-submenu-title,
+.app-main-sider .ant-menu-item {
+  transition: background-color 140ms ease, color 140ms ease !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-main-sider,
+  .app-main-sider * {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+  }
+}

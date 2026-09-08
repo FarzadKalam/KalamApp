@@ -2171,6 +2171,7 @@ async function insertSmsAudit(url: string, key: string, payload: {
   recordId?: string | null;
   recipient: string;
   text: string;
+  title?: string | null;
   status: 'provider_accepted' | 'failed' | 'skipped';
   errorMessage?: string | null;
   metadata?: Record<string, any>;
@@ -2184,7 +2185,7 @@ async function insertSmsAudit(url: string, key: string, payload: {
     related_record_id: payload.recordId || null,
     customer_id: null,
     recipient: payload.recipient || null,
-    title: 'ارسال پیامک خودکار',
+    title: String(payload.title || '').trim() || 'ارسال پیامک خودکار',
     message_text: payload.text,
     status: payload.status,
     error_message: payload.errorMessage || null,
@@ -2203,6 +2204,7 @@ async function auditSmsBatch(url: string, key: string, payload: {
   recordId: string | null;
   recipients: string[];
   text: string;
+  title?: string | null;
   status: 'provider_accepted' | 'failed' | 'skipped';
   errorMessage?: string | null;
   metadata?: Record<string, any>;
@@ -2214,6 +2216,7 @@ async function auditSmsBatch(url: string, key: string, payload: {
       recordId: payload.recordId,
       recipient,
       text: payload.text,
+      title: payload.title,
       status: payload.status,
       errorMessage: payload.errorMessage,
       metadata: payload.metadata,
@@ -3785,6 +3788,83 @@ async function executeAction(
   }
   const recordId = String(record?.id || '').trim();
 
+  // اکشن چندکانالهٔ جدید یک لایهٔ هماهنگ‌کننده است و هر کانال را با مسیر
+  // تثبیت‌شدهٔ پیشین اجرا می‌کند؛ بنابراین گردش‌کارهای ذخیره‌شده تغییر معنا نمی‌دهند.
+  if (action.type === 'send_message') {
+    const messageChannels = Array.from(new Set(
+      asArray(config.message_channels)
+        .map((item: any) => String(item || '').trim())
+        .filter((item: string) => ['note', 'sms', 'bot_group', 'bot_private', 'instagram', 'email'].includes(item)),
+    ));
+    if (messageChannels.length === 0) return actionResult(action, 'skipped', 'کانالی برای ارسال پیام انتخاب نشده است.');
+
+    let actionRecord = record;
+    if (config.include_web_form_link === true) {
+      const webFormId = String(config.web_form_id || '').trim();
+      if (!webFormId) return actionResult(action, 'skipped', 'وب‌فرم/نظرسنجی انتخاب نشده است.');
+      const webForms = await dbGet(
+        url,
+        key,
+        `web_forms?id=eq.${encodeURIComponent(webFormId)}&org_id=eq.${encodeURIComponent(orgId)}&select=id,route_slug,target_module_id,is_active&limit=1`,
+      );
+      const webForm = webForms[0] || null;
+      if (!webForm?.id || webForm.is_active !== true) {
+        return actionResult(action, 'skipped', 'وب‌فرم/نظرسنجی انتخاب‌شده فعال نیست.');
+      }
+      const relatedModuleId = String(config.web_form_related_module_id || moduleId).trim() || moduleId;
+      const processLinks = parseObjectValue(record?.process_links || record?.process_link_map);
+      const relatedRecordId = relatedModuleId === moduleId
+        ? recordId
+        : String(processLinks?.[relatedModuleId] || '').trim();
+      if (!relatedRecordId) return actionResult(action, 'skipped', 'رکورد مرتبط برای ساخت لینک وب‌فرم پیدا نشد.');
+
+      const baseUrl = await getOrgTenantBaseUrl(url, key, orgId);
+      if (!baseUrl) return actionResult(action, 'skipped', 'دامنه معتبر سازمان برای وب‌فرم پیدا نشد.');
+      const tokenBytes = crypto.getRandomValues(new Uint8Array(24));
+      const accessToken = Array.from(tokenBytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+      await dbInsert(url, key, 'web_form_link_tokens', {
+        org_id: orgId,
+        web_form_id: webFormId,
+        target_module_id: String(webForm.target_module_id || '').trim() || null,
+        related_module_id: relatedModuleId,
+        related_record_id: relatedRecordId,
+        access_token: accessToken,
+        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        created_by: actorUserId || null,
+      });
+      const routeSlug = String(webForm.route_slug || '').trim();
+      const formPath = routeSlug ? `/inquiry/${encodeURIComponent(routeSlug)}` : '/inquiry';
+      actionRecord = { ...record, web_form_link: `${baseUrl}${formPath}?token=${encodeURIComponent(accessToken)}` };
+    }
+
+    const sharedRecipients = {
+      recipient_fields: Array.isArray(config.recipient_fields) ? config.recipient_fields : [],
+      recipient_assignees: Array.isArray(config.recipient_assignees) ? config.recipient_assignees : [],
+    };
+    const channelResults: ActionExecutionResult[] = [];
+    for (const channel of messageChannels) {
+      const nestedAction = channel === 'note'
+        ? { ...action, type: 'send_note', config: { ...config, ...sharedRecipients, note_text: String(config.message_note || '') } }
+        : channel === 'sms'
+          ? { ...action, type: 'send_sms', config: { ...config, ...sharedRecipients, message: String(config.message_sms || ''), title: String(config.message_title || ''), manual_numbers: Array.isArray(config.manual_numbers) ? config.manual_numbers : [] } }
+          : channel === 'bot_group'
+            ? { ...action, type: 'send_bot_message', config: { ...config, ...sharedRecipients, message: String(config.message_bot_group || ''), title: String(config.message_title || ''), bot_recipient_mode: 'group' } }
+            : channel === 'bot_private'
+              ? { ...action, type: 'send_bot_message', config: { ...config, ...sharedRecipients, message: String(config.message_bot_private || ''), title: String(config.message_title || ''), bot_recipient_mode: 'private' } }
+              : channel === 'instagram'
+                ? { ...action, type: 'send_instagram_message', config: { ...config, message: String(config.message_instagram || ''), recipient_source: String(config.instagram_recipient_source || 'current_record') } }
+                : { ...action, type: 'send_email', config: { ...config, ...sharedRecipients, subject: String(config.message_title || ''), body: String(config.message_email || '') } };
+      channelResults.push(await executeAction(nestedAction as WorkflowAction, actionRecord, moduleId, orgId, url, key, actorUserId));
+    }
+    const successfulChannels = channelResults.filter((result) => result.status === 'success').length;
+    return actionResult(
+      action,
+      successfulChannels > 0 ? 'success' : 'skipped',
+      successfulChannels > 0 ? undefined : 'هیچ کانال انتخاب‌شده‌ای ارسال نشد.',
+      { affected_count: successfulChannels, details: { channel_results: channelResults } },
+    );
+  }
+
   // ── run_ai_prompt ─────────────────────────────────────────────────────
   if (action.type === 'run_ai_prompt') {
     const prompt = (await renderTemplateAsync(String(config.prompt_template || config.prompt || ''), record, url, key, false, orgId, moduleId)).trim();
@@ -4175,15 +4255,15 @@ async function executeAction(
     const rawSmsSettings = await getOrgSmsSettings(url, key, orgId);
     const smsSettings = rawSmsSettings ? { ...selectOrgSmsSender(rawSmsSettings, config.sender_number), org_id: orgId } : null;
     if (!smsSettings) {
-      await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: allRecipients, text, status: 'skipped', errorMessage: 'تنظیمات پیامک فعال نیست.', metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
+      await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: allRecipients, text, title: String(config.title || '').trim() || null, status: 'skipped', errorMessage: 'تنظیمات پیامک فعال نیست.', metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
       return actionResult(action, 'skipped', 'تنظیمات پیامک فعال نیست.', { recipient_count: allRecipients.length });
     }
     try {
       const sentRecipients = await sendSmsViaProvider(smsSettings, allRecipients, text, url, key);
-      await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: sentRecipients, text, status: 'provider_accepted', metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
+      await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: sentRecipients, text, title: String(config.title || '').trim() || null, status: 'provider_accepted', metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
       return actionResult(action, sentRecipients.length > 0 ? 'success' : 'skipped', sentRecipients.length > 0 ? undefined : 'هیچ شماره معتبری ارسال نشد.', { recipient_count: sentRecipients.length });
     } catch (e: any) {
-      await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: allRecipients, text, status: 'failed', errorMessage: String(e?.message || e), metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
+      await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: allRecipients, text, title: String(config.title || '').trim() || null, status: 'failed', errorMessage: String(e?.message || e), metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
       throw e;
     }
   }
@@ -4307,6 +4387,7 @@ async function executeAction(
       attachments,
     };
     let sentCount = 0;
+    const recipientMode = String(config.bot_recipient_mode || '').trim();
     for (const target of targets) {
       if (!settingsByChannel.has(target.channel)) {
         settingsByChannel.set(target.channel, await getOrgBotSettings(url, key, orgId, target.channel));
@@ -4315,9 +4396,11 @@ async function executeAction(
       if (!botSettings) continue;
       const botGroup = target.group || await findServerBotGroup(url, key, orgId, target.channel, target.chatId);
       if (botGroup) {
+        if (recipientMode === 'private') continue;
         if (!groupText) continue;
         await sendAndArchiveAutomatedBotGroupMessage(url, key, orgId, botGroup, groupText, botSettings, automatedSenderPayload, attachments);
       } else {
+        if (recipientMode === 'group') continue;
         await sendBotMessageWithAttachments(url, key, target.chatId, effectiveText, botSettings, target.channel, attachments, automatedSenderPayload);
       }
       sentCount += 1;

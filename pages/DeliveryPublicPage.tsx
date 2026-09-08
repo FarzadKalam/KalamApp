@@ -423,7 +423,14 @@ const DeliveryPublicContent = ({ primaryColor, onBrandingLoad }: { primaryColor:
         body: { system_code: code, module: 'delivery_forms', party, phone },
       });
       if (response.error || response.data?.error) {
-        patchPartyState(setOtpError, party, response.data?.message || 'ارسال کد تایید ناموفق بود.');
+        patchPartyState(
+          setOtpError,
+          party,
+          response.data?.message
+          || (response.error && (response.error as any)?.context?.status === 429
+            ? 'درخواست کد بیش از حد تکرار شده است. کمی بعد دوباره تلاش کنید.'
+            : 'ارسال کد تایید ناموفق بود.')
+        );
         return;
       }
       patchPartyState(setStep, party, 'enter_otp');

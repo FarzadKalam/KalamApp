@@ -801,31 +801,6 @@ const resendOtp = async (
   return parsed || null;
 };
 
-const sendSmsOtp = async (
-  supabaseUrl: string,
-  serviceRoleKey: string,
-  phone: string,
-) => {
-  const response = await fetch(authUrl(supabaseUrl, '/otp'), {
-    method: 'POST',
-    headers: getServiceHeaders(serviceRoleKey),
-    body: JSON.stringify({
-      phone,
-      create_user: false,
-      channel: 'sms',
-    }),
-  });
-  const parsed = await readJsonSafe(response);
-  if (!response.ok) {
-    throw createReasonedError(
-      extractAuthMessage(parsed, 'ارسال کد تایید ناموفق بود'),
-      inferOtpReasonCode(parsed, response.status, 'otp_request_failed'),
-      response.status,
-    );
-  }
-  return parsed || null;
-};
-
 const verifyPhoneOtp = async (
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -1227,9 +1202,21 @@ Deno.serve(async (request) => {
         const targetProfile = await fetchProfile(supabaseUrl, serviceRoleKey, targetUserId);
         if (!targetProfile?.id) return json(404, { success: false, message: 'ابتدا پروفایل کاربر را تکمیل کنید.' });
         if (action === 'saas_send_phone_otp') {
-          await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, { phone: toGoTruePhone(normalizedPhone), phone_confirm: false });
+          const authUser = await fetchAuthUserById(supabaseUrl, serviceRoleKey, targetUserId);
+          const phoneAlreadyConfirmed =
+            normalizeIranMobileE164(authUser?.phone || '') === normalizedPhone &&
+            !!authUser?.phone_confirmed_at;
+          if (!phoneAlreadyConfirmed) {
+            await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, {
+              phone: toGoTruePhone(normalizedPhone),
+              phone_confirm: false,
+            });
+          }
           await upsertProfile(supabaseUrl, serviceRoleKey, { id: targetUserId, mobile_1: toLocalIranMobile(normalizedPhone) });
-          const otpResult = await sendSmsOtp(supabaseUrl, serviceRoleKey, normalizedPhone);
+          // /otp در GoTrue خودمیزبان با ثبت‌نام غیرفعال، حتی برای شمارهٔ تأییدشده
+          // ممکن است مسیر ثبت‌نام را انتخاب کند. /resend فقط برای حساب موجود، کد
+          // تازه صادر می‌کند و وضعیت تایید شماره را تغییر نمی‌دهد.
+          const otpResult = await resendOtp(supabaseUrl, serviceRoleKey, normalizedPhone, 'sms');
           return json(200, { success: true, messageId: otpResult?.message_id || null, otpType: 'sms' });
         }
         const token = normalizeDigitsToEnglish(body?.token).replace(/\D+/g, '');
@@ -1632,22 +1619,21 @@ Deno.serve(async (request) => {
 
       const authUser = await fetchAuthUserById(supabaseUrl, serviceRoleKey, targetUserId);
       const currentAuthPhone = normalizeIranMobileE164(authUser?.phone || '');
-      if (currentAuthPhone === normalizedPhone && !authUser?.phone_confirmed_at) {
-        // Reset stale unconfirmed state before requesting a fresh central SMS OTP.
+      const phoneAlreadyConfirmed = currentAuthPhone === normalizedPhone && !!authUser?.phone_confirmed_at;
+      if (!phoneAlreadyConfirmed) {
         await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, {
-          phone: null,
+          phone: toGoTruePhone(normalizedPhone),
           phone_confirm: false,
         });
       }
-      await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, {
-        phone: toGoTruePhone(normalizedPhone),
-        phone_confirm: false,
-      });
       await upsertProfile(supabaseUrl, serviceRoleKey, {
         id: targetUserId,
         mobile_1: toLocalIranMobile(normalizedPhone),
       });
-      const otpResult = await sendSmsOtp(supabaseUrl, serviceRoleKey, normalizedPhone);
+      // /otp در GoTrue خودمیزبان با ثبت‌نام غیرفعال، حتی برای شمارهٔ تأییدشده
+      // ممکن است مسیر ثبت‌نام را انتخاب کند. /resend فقط برای حساب موجود، کد
+      // تازه صادر می‌کند و وضعیت تایید شماره را تغییر نمی‌دهد.
+      const otpResult = await resendOtp(supabaseUrl, serviceRoleKey, normalizedPhone, 'sms');
       return json(200, {
         success: true,
         messageId: otpResult?.message_id || null,

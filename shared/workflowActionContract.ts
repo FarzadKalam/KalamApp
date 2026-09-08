@@ -7,6 +7,17 @@ export type WorkflowActionContract = {
 };
 
 export const WORKFLOW_ACTION_CONTRACTS: Record<string, WorkflowActionContract> = {
+  send_message: {
+    templateFields: [
+      'message_title',
+      'message_note',
+      'message_sms',
+      'message_bot_group',
+      'message_bot_private',
+      'message_instagram',
+      'message_email',
+    ],
+  },
   send_note: { templateFields: ['note_text'] },
   send_note_sms: { templateFields: ['note_text'] },
   send_web_form_link: {
