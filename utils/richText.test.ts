@@ -21,7 +21,7 @@ describe('rich text print normalization', () => {
   it('prints text with the default color in black while retaining an explicitly selected color', () => {
     const printed = normalizeRichTextHtmlForPrint('<p>متن پیش‌فرض <span style="color:#dc2626">متن قرمز</span></p>');
 
-    expect(printed).toContain('style="color:#000000;"');
+    expect(printed).toContain('style="color:#000000; font-size:calc(1em + 2px);"');
     expect(printed).toContain('color:#dc2626');
   });
 

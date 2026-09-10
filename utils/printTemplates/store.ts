@@ -322,18 +322,20 @@ const buildInvoiceFooterTemplate = () => buildDefaultFooterTemplateForModule('in
 
 const buildOfficialLetterHeaderTemplate = () => `
 <div style="width:100%; direction:rtl; color:#111827; font-size:12px; font-family:inherit;">
-  <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:2px 2px 10px 2px; border-bottom:1px solid rgba(17,24,39,0.28);">
-    <div style="width:32%; text-align:right; font-size:10.5px; line-height:1.9; color:#374151;">
+  <div style="display:flex; direction:ltr; align-items:flex-start; justify-content:space-between; gap:16px; padding:2px 2px 10px 2px; border-bottom:1px solid rgba(17,24,39,0.28);">
+    <div style="width:32%; direction:rtl; text-align:right; font-size:10.5px; line-height:1.9; color:#374151;">
       <div><span style="font-weight:700;">شماره:</span> {{record.system_code}}</div>
       <div><span style="font-weight:700;">تاریخ:</span> {{record.document_date}}</div>
       <div><span style="font-weight:700;">پیوست:</span> {{record.attachment_count}}</div>
     </div>
-    <div style="width:36%; text-align:center; line-height:1.9;">
-      <div style="font-weight:800; font-size:13px; margin-bottom:2px;">بسمه تعالی</div>
-      <img src="{{company.logo_url}}" alt="لوگو" style="display:block; margin:0 auto 2px auto; width:48px; height:48px; max-width:48px; max-height:48px; object-fit:contain;" />
-      <div style="font-weight:900; font-size:14px; color:#111827; overflow-wrap:anywhere;">{{company.company_full_name}}</div>
-      <div style="font-size:10px; color:#6b7280; overflow-wrap:anywhere;">{{company.trade_name}}</div>
-      <div style="font-size:9px; color:#6b7280; overflow-wrap:anywhere;">زمان چاپ: {{system.print_date}}</div>
+    <div style="width:36%; direction:rtl; line-height:1.9;">
+      <div style="text-align:center; font-weight:800; font-size:13px; margin-bottom:2px;">بسمه تعالی</div>
+      <img src="{{company.logo_url}}" alt="لوگو" style="display:block; margin:0 auto 2px auto; width:40px; height:40px; max-width:40px; max-height:40px; object-fit:contain;" />
+      <div style="text-align:right;">
+        <div style="font-weight:900; font-size:14px; color:#111827; overflow-wrap:anywhere;">{{company.company_full_name}}</div>
+        <div style="font-size:10px; color:#6b7280; overflow-wrap:anywhere;">{{company.trade_name}}</div>
+        <div style="font-size:9px; color:#6b7280; overflow-wrap:anywhere;">زمان چاپ: {{system.print_date}}</div>
+      </div>
     </div>
     <div style="width:32%;"></div>
   </div>

@@ -31,7 +31,10 @@ export const normalizeRichTextHtml = (value: unknown): string => {
  */
 export const normalizeRichTextHtmlForPrint = (value: unknown): string => {
   const html = normalizeRichTextHtml(value);
-  return html ? `<div class="rich-text-print" style="color:#000000;">${html}</div>` : '';
+  // Long-text field values use this shared print wrapper in every print path.
+  // Increase only the inherited default by two pixels, while preserving any
+  // explicit font size the user applied inside the rich-text editor.
+  return html ? `<div class="rich-text-print" style="color:#000000; font-size:calc(1em + 2px);">${html}</div>` : '';
 };
 
 export const richTextToPlainText = (value: unknown): string => {
