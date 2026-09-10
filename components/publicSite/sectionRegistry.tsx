@@ -46,8 +46,8 @@ const iconItemFields: EditorField[] = [
 export const SECTION_REGISTRY: Record<SectionType, SectionDef> = {
   hero_tree: {
     type: 'hero_tree',
-    labelFa: 'هیرو درختی (اسکرول‌محور)',
-    description: 'هیرو با گراف/درختی که با اسکرول شاخه‌هایش رشد می‌کند.',
+    labelFa: 'هیرو اکوسیستم محصول (تعاملی)',
+    description: 'هیرو با هستهٔ محصول، جریان‌های متصل و واکنش به اسکرول و نشانگر ماوس.',
     Component: HeroTreeSection,
     editor: [
       { key: 'eyebrow', label: 'برچسب بالا', type: 'text' },
@@ -56,12 +56,14 @@ export const SECTION_REGISTRY: Record<SectionType, SectionDef> = {
       { key: 'titleAfter', label: 'عنوان — بعد از واژه رنگی', type: 'textarea' },
       { key: 'subtitle', label: 'زیرعنوان', type: 'textarea' },
       { key: 'hubLabel', label: 'متن هستهٔ مرکزی', type: 'text' },
+      { key: 'media', label: 'تصویر واقعی محیط محصول (اختیاری)', type: 'image' },
       { key: 'caption', label: 'زیرنویس پایانی', type: 'text' },
       { key: 'primaryCta', label: 'دکمه اصلی', type: 'cta' },
       { key: 'secondaryCta', label: 'دکمه دوم', type: 'cta' },
-      { key: 'nodes', label: 'شاخه‌ها (انتهای هر شاخه)', type: 'item-list', itemLabel: 'شاخه', fields: [
+      { key: 'nodes', label: 'جریان‌های اصلی (حداکثر ۵ مورد)', type: 'item-list', itemLabel: 'جریان', fields: [
         { key: 'icon', label: 'آیکن', type: 'icon' },
         { key: 'title', label: 'عنوان', type: 'text' },
+        { key: 'text', label: 'توضیح کوتاه', type: 'text' },
       ] },
     ],
   },

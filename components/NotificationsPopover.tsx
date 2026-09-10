@@ -205,11 +205,14 @@ const ALERT_PANEL_DISPLAY_STORAGE_PREFIX = 'kalam:notification-alert-display:v1'
 const getAlertPanelDisplayStorageKey = (orgId: string, section: AlertPanelDisplaySection) =>
   `${ALERT_PANEL_DISPLAY_STORAGE_PREFIX}:${orgId}:${section}`;
 const readAlertPanelDisplayMode = (orgId: string, section: AlertPanelDisplaySection): AlertPanelDisplayMode => {
-  if (typeof window === 'undefined') return 'grid';
+  const defaultMode: AlertPanelDisplayMode = section === 'tasks' ? 'list' : 'grid';
+  if (typeof window === 'undefined') return defaultMode;
   try {
-    return window.sessionStorage.getItem(getAlertPanelDisplayStorageKey(orgId, section)) === 'list' ? 'list' : 'grid';
+    const stored = window.sessionStorage.getItem(getAlertPanelDisplayStorageKey(orgId, section));
+    if (stored === 'list' || stored === 'grid') return stored;
+    return defaultMode;
   } catch {
-    return 'grid';
+    return defaultMode;
   }
 };
 const saveAlertPanelDisplayMode = (orgId: string, section: AlertPanelDisplaySection, mode: AlertPanelDisplayMode) => {
@@ -974,7 +977,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const [taskSortDirection, setTaskSortDirection] = useState<CreatedSortDirection>('desc');
   const [profile, setProfile] = useState<{ id: string | null; role_id: string | null; org_id?: string | null; full_name?: string | null; avatar_url?: string | null; voip_extension?: string | null; voip_operator_code?: string | null; can_view_all_calls?: boolean; software_role?: string | null }>({ id: null, role_id: null, org_id: null, full_name: null, avatar_url: null });
   const [currentPermissionMap, setCurrentPermissionMap] = useState<PermissionMap | null>(null);
-  const [taskDisplayMode, setTaskDisplayMode] = useState<AlertPanelDisplayMode>('grid');
+  const [taskDisplayMode, setTaskDisplayMode] = useState<AlertPanelDisplayMode>('list');
   const [responsibilityDisplayMode, setResponsibilityDisplayMode] = useState<AlertPanelDisplayMode>('grid');
   const [alertDisplayModeScope, setAlertDisplayModeScope] = useState('');
 
