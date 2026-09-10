@@ -118,7 +118,7 @@ const TasksPanel: React.FC<TasksPanelProps> = ({
   const remainingCount = Math.max(0, lockedFilteredTasks.length - data.length);
   const canShowLess = visibleCount > maxItems;
 
-  const relationOptionsByField = tasks.reduce<Record<string, Array<{ label: string; value: string }>>>((acc, task: any) => {
+  const relationOptionsByField = lockedFilteredTasks.reduce<Record<string, Array<{ label: string; value: string }>>>((acc, task: any) => {
     const sourceLink = resolveTaskSourceLink(task);
     const relatedModuleId = String(sourceLink.moduleId || task?.related_to_module || '').trim();
     const relatedRecordId = String(sourceLink.recordId || '').trim();

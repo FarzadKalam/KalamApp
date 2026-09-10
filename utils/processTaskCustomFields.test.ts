@@ -85,6 +85,38 @@ describe('getMissingRequiredProcessTaskCustomFields', () => {
     expect(creationField?.requiredForCreation).toBe(true);
   });
 
+  it('keeps the target status of a required field and applies it only to that transition', () => {
+    const task = {
+      recurrence_info: {
+        process_task_custom_fields: [{
+          key: 'review_note',
+          type: FieldType.TEXT,
+          labels: { fa: 'یادداشت بازبینی' },
+          required_for_status: 'review',
+        }],
+        process_task_custom_field_values: { review_note: '' },
+      },
+    };
+
+    expect(getMissingRequiredProcessTaskCustomFields(task, 'review').map((field) => field.key)).toEqual(['review_note']);
+    expect(getMissingRequiredProcessTaskCustomFields(task, 'done')).toEqual([]);
+    expect(normalizeProcessTaskCustomField(task.recurrence_info.process_task_custom_fields[0])?.requiredForStatus).toBe('review');
+  });
+
+  it('keeps legacy completion requirements for both completed status values', () => {
+    const task = {
+      recurrence_info: {
+        process_task_custom_fields: [{
+          key: 'completion_note', type: FieldType.TEXT, labels: { fa: 'توضیح تکمیل' }, validation: { required: true },
+        }],
+        process_task_custom_field_values: { completion_note: '' },
+      },
+    };
+
+    expect(getMissingRequiredProcessTaskCustomFields(task, 'done')).toHaveLength(1);
+    expect(getMissingRequiredProcessTaskCustomFields(task, 'completed')).toHaveLength(1);
+  });
+
   it('preserves central relation configuration for process task fields', () => {
     const relationField = normalizeProcessTaskCustomField({
       key: 'project_contact',

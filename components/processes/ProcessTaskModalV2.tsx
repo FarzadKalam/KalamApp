@@ -48,7 +48,10 @@ import {
   mergeProcessTaskCustomFieldValues,
   normalizeProcessTaskCustomFields,
   PROCESS_TASK_CUSTOM_FIELDS_KEY,
+  PROCESS_TASK_CUSTOM_FIELD_ASSIGNEES_KEY,
+  PROCESS_TASK_CUSTOM_FIELD_CREATE_STATUS,
   PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY,
+  getProcessTaskCustomFieldAssigneesFromRecurrence,
 } from '../../utils/processTaskCustomFields';
 import {
   getProcessTaskStatusOptionsFromStage,
@@ -112,6 +115,8 @@ type MockCustomField = {
   options?: Array<{ value: string; label: string; color?: string }>;
   requiredForCompletion?: boolean;
   requiredForCreation?: boolean;
+  requiredForStatus?: string;
+  defaultAssigneeCombo?: string;
 };
 type ModalFileItem = {
   id: string;
@@ -355,6 +360,13 @@ const isFieldRequiredForCreation = (field: any): boolean => {
   ));
 };
 
+const getFieldRequiredForStatus = (field: any): string => String(
+  field?.requiredForStatus
+  || field?.required_for_status
+  || (isFieldRequiredForCreation(field) ? PROCESS_TASK_CUSTOM_FIELD_CREATE_STATUS : '')
+  || (isFieldRequiredForCompletion(field) ? 'done' : '')
+).trim();
+
 const isEmptyFieldValue = (value: any): boolean => {
   if (value === null || value === undefined) return true;
   if (Array.isArray(value)) return value.length === 0;
@@ -497,6 +509,8 @@ const buildCustomFields = (stage: ProcessV2Stage | null): MockCustomField[] => {
       } as ModuleField,
       requiredForCompletion: isFieldRequiredForCompletion(field),
       requiredForCreation: isFieldRequiredForCreation(field),
+      requiredForStatus: getFieldRequiredForStatus(field),
+      defaultAssigneeCombo: String(field?.default_assignee_combo || field?.defaultAssigneeCombo || '').trim(),
       options,
     };
   });
@@ -675,6 +689,7 @@ type InlineEditableFieldProps = {
   forceEditMode?: boolean;
   requiredForCompletion?: boolean;
   requiredForCreation?: boolean;
+  requiredForStatusLabel?: string;
   allValues?: Record<string, any>;
   moduleId?: string;
   recordId?: string | null;
@@ -696,6 +711,7 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
   forceEditMode = false,
   requiredForCompletion = false,
   requiredForCreation = false,
+  requiredForStatusLabel,
   allValues,
   moduleId,
   recordId,
@@ -815,9 +831,9 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
           ضروری برای ایجاد
         </Tag>
       ) : null}
-      {requiredForCompletion ? (
+      {requiredForStatusLabel ? (
         <Tag className="!m-0 !rounded-full !border-amber-200 !bg-amber-50 !px-1.5 !py-0 !text-[10px] !font-bold !text-amber-700 dark:!border-amber-500/30 dark:!bg-amber-500/10 dark:!text-amber-200">
-          ضروری برای تکمیل
+          ضروری برای وضعیت «{requiredForStatusLabel}»
         </Tag>
       ) : null}
     </span>
@@ -833,9 +849,9 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
               ضروری برای ایجاد
             </Tag>
           ) : null}
-          {requiredForCompletion ? (
+          {requiredForStatusLabel ? (
             <Tag className="!m-0 !rounded-full !border-amber-200 !bg-amber-50 !px-1.5 !py-0 !text-[10px] !font-bold !text-amber-700 dark:!border-amber-500/30 dark:!bg-amber-500/10 dark:!text-amber-200">
-              ضروری برای تکمیل
+              ضروری برای وضعیت «{requiredForStatusLabel}»
             </Tag>
           ) : null}
         </div>
@@ -878,9 +894,9 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
               ضروری برای ایجاد
             </Tag>
           ) : null}
-          {requiredForCompletion ? (
+          {requiredForStatusLabel ? (
             <Tag className="!m-0 !rounded-full !border-amber-200 !bg-amber-50 !px-1.5 !py-0 !text-[10px] !font-bold !text-amber-700 dark:!border-amber-500/30 dark:!bg-amber-500/10 dark:!text-amber-200">
-              ضروری برای تکمیل
+              ضروری برای وضعیت «{requiredForStatusLabel}»
             </Tag>
           ) : null}
         </div>
@@ -936,9 +952,9 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
               ضروری برای ایجاد
             </Tag>
           ) : null}
-          {requiredForCompletion ? (
+          {requiredForStatusLabel ? (
             <Tag className="!m-0 !rounded-full !border-amber-200 !bg-amber-50 !px-1.5 !py-0 !text-[10px] !font-bold !text-amber-700 dark:!border-amber-500/30 dark:!bg-amber-500/10 dark:!text-amber-200">
-              ضروری برای تکمیل
+              ضروری برای وضعیت «{requiredForStatusLabel}»
             </Tag>
           ) : null}
         </span>
@@ -1022,6 +1038,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   const [dueDurationUnitValue, setDueDurationUnitValue] = useState('day');
   const [dueAnchorStageValue, setDueAnchorStageValue] = useState('');
   const [customFields, setCustomFields] = useState<MockCustomField[]>([]);
+  const [editingCustomFieldAssigneeKey, setEditingCustomFieldAssigneeKey] = useState<string | null>(null);
   const [isLocked, setIsLocked] = useState(false);
   const [filesExpanded, setFilesExpanded] = useState(false);
   const [modalFiles, setModalFiles] = useState<ModalFileItem[]>([]);
@@ -1107,6 +1124,10 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   processTemplateContextRef.current = processTemplateContext;
   const recurrence = useMemo(() => parseObject(effectiveSource?.recurrence_info), [effectiveSource?.recurrence_info]);
   const effectiveStatusOptions = useMemo(() => buildStatusOptions(effectiveConfigStage), [effectiveConfigStage]);
+  const customFieldRequiredStatusLabelByValue = useMemo(() => new Map([
+    [PROCESS_TASK_CUSTOM_FIELD_CREATE_STATUS, 'ایجاد فعالیت'],
+    ...effectiveStatusOptions.map((option) => [String(option.value), String(option.label)] as const),
+  ]), [effectiveStatusOptions]);
   const draftSourceStageMetadata = useMemo(() => parseObject(sourceStage?.metadata), [sourceStage?.metadata]);
   const draftSourceRecurrence = useMemo(() => parseObject(source?.recurrence_info), [source?.recurrence_info]);
   const draftSourceStageRecurrence = useMemo(
@@ -1378,6 +1399,23 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     () => Object.fromEntries(effectiveStatusOptions.map((option) => [option.value, option.label])),
     [effectiveStatusOptions],
   );
+  const customFieldAssigneeReferences = useMemo(() => {
+    const overrides = getProcessTaskCustomFieldAssigneesFromRecurrence(recurrence);
+    return customFields.reduce<Record<string, string>>((next, field) => {
+      const key = String(field?.key || '').trim();
+      if (!key) return next;
+      const reference = String((field as any).assigneeOverride || overrides[key] || field.defaultAssigneeCombo || '').trim();
+      if (reference) next[key] = reference;
+      return next;
+    }, {});
+  }, [customFields, recurrence]);
+  const getCustomFieldAssigneeDisplay = useCallback((reference: string) => {
+    const resolved = String(resolveProcessAssigneeReference(reference, processTemplateContext) || reference || '').trim();
+    return {
+      resolved,
+      label: getAssigneeDisplayLabel(resolved) || 'تعیین نشده',
+    };
+  }, [getAssigneeDisplayLabel, processTemplateContext]);
   const saveTaskAssignee = useCallback(async (nextValue: string) => {
     const normalized = String(nextValue || '').trim();
     const parsed = parseAssigneeValue(normalized, null);
@@ -1452,6 +1490,27 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       setChangelogCount((count) => count + 1);
     }
   }, [customFields, persistTaskFieldPatch, source?.recurrence_info, stage?.title, taskNameValue, taskRecordId]);
+  const saveCustomFieldAssignee = useCallback(async (fieldKey: string, nextValue: string | undefined) => {
+    const normalizedKey = String(fieldKey || '').trim();
+    if (!normalizedKey) return;
+    const currentAssignees = getProcessTaskCustomFieldAssigneesFromRecurrence(recurrence);
+    const normalizedValue = String(nextValue || '').trim();
+    const nextAssignees = { ...currentAssignees };
+    if (normalizedValue) nextAssignees[normalizedKey] = normalizedValue;
+    else delete nextAssignees[normalizedKey];
+
+    if (isDraftActivityCreationMode) {
+      setCustomFields((current) => current.map((field) => (
+        field.key === normalizedKey ? { ...field, assigneeOverride: normalizedValue || undefined } as any : field
+      )));
+      return;
+    }
+    await persistTaskFieldPatch(`custom-assignee:${normalizedKey}`, {}, {
+      [PROCESS_TASK_CUSTOM_FIELD_ASSIGNEES_KEY]: nextAssignees,
+    }, {
+      [PROCESS_TASK_CUSTOM_FIELD_ASSIGNEES_KEY]: nextAssignees,
+    });
+  }, [isDraftActivityCreationMode, persistTaskFieldPatch, recurrence]);
   const hasFiles = modalFiles.length > 0;
   const customFieldAllValues = useMemo(
     () => customFields.reduce<Record<string, any>>((values, field) => {
@@ -1658,6 +1717,11 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
         acc[field.key] = field.value;
         return acc;
       }, {});
+      const customFieldAssignees = customFields.reduce<Record<string, string>>((acc, field) => {
+        const override = String((field as any).assigneeOverride || '').trim();
+        if (field.key && override) acc[field.key] = override;
+        return acc;
+      }, {});
       const overrides: Record<string, any> = {
         name: nextTaskName,
         stage_name: nextTaskName,
@@ -1686,9 +1750,11 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
         duration_unit: dueScheduleMode === 'system' ? dueDurationUnitValue : null,
         due_anchor_stage_node_key: dueScheduleMode === 'system' ? (dueAnchorStageValue || null) : null,
         [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: customFieldValues,
+        [PROCESS_TASK_CUSTOM_FIELD_ASSIGNEES_KEY]: customFieldAssignees,
         recurrence_info: {
           ...draftSourceRecurrence,
           [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: customFieldValues,
+          [PROCESS_TASK_CUSTOM_FIELD_ASSIGNEES_KEY]: customFieldAssignees,
           ...(activityTags.length > 0 ? { tags: activityTags } : {}),
           ...(String(descriptionDraft || '').trim() ? { description: String(descriptionDraft || '').trim() } : {}),
         },
@@ -1702,6 +1768,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
           description: String(descriptionDraft || '').trim() || null,
           tags: activityTags,
           [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: customFieldValues,
+          [PROCESS_TASK_CUSTOM_FIELD_ASSIGNEES_KEY]: customFieldAssignees,
           start_schedule_mode: startScheduleMode,
           due_schedule_mode: dueScheduleMode,
           start_duration_from: startScheduleMode === 'system' ? startDurationFromValue : null,
@@ -1717,7 +1784,10 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     return {
       nextTaskName,
       nextTaskType,
-      missingCreationField: customFields.find((field) => field.requiredForCreation && isEmptyFieldValue(field.value)) || null,
+      missingCreationField: customFields.find((field) => (
+        field.requiredForStatus === PROCESS_TASK_CUSTOM_FIELD_CREATE_STATUS
+        && isEmptyFieldValue(field.value)
+      )) || null,
       overrides,
     };
   }, [
@@ -3329,6 +3399,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                           forceEditMode={isDraftActivityCreationMode}
                           requiredForCompletion={field.requiredForCompletion}
                           requiredForCreation={field.requiredForCreation}
+                          requiredForStatusLabel={customFieldRequiredStatusLabelByValue.get(field.requiredForStatus || '')}
                           saving={savingFieldKey === field.key}
                           onDraftChange={(nextValue) => {
                             const current = readCreationDraftSnapshot(fieldDraftStorageKey) || {};
@@ -3352,6 +3423,49 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                             void saveCustomFieldValue(field.key, nextValue);
                           }}
                         />
+                        {customFieldAssigneeReferences[field.key] ? (() => {
+                          const assignee = getCustomFieldAssigneeDisplay(customFieldAssigneeReferences[field.key]);
+                          const isEditingAssignee = editingCustomFieldAssigneeKey === field.key;
+                          return (
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pr-2 text-[11px] text-gray-500 dark:text-gray-400">
+                              <span>مسئول:</span>
+                              <AssigneeAvatarDisplay
+                                source={{
+                                  assignee_type: parseAssigneeValue(assignee.resolved, null).assigneeType,
+                                  assignee_id: parseAssigneeValue(assignee.resolved, null).assigneeType === 'user'
+                                    ? parseAssigneeValue(assignee.resolved, null).assigneeId : null,
+                                  assignee_role_id: parseAssigneeValue(assignee.resolved, null).assigneeType === 'role'
+                                    ? parseAssigneeValue(assignee.resolved, null).assigneeId : null,
+                                }}
+                                allUsers={assigneeUsers}
+                                allRoles={assigneeRoles}
+                                avatarSize={18}
+                                showLabel={false}
+                              />
+                              <span className="font-semibold text-gray-700 dark:text-gray-200">{assignee.label}</span>
+                              <Tooltip title="تغییر مسئول این فیلد">
+                                <Button
+                                  type="text"
+                                  size="small"
+                                  shape="circle"
+                                  icon={<EditOutlined />}
+                                  onClick={() => setEditingCustomFieldAssigneeKey(isEditingAssignee ? null : field.key)}
+                                  aria-label={`تغییر مسئول ${field.label}`}
+                                />
+                              </Tooltip>
+                              {isEditingAssignee ? (
+                                <AdaptiveIdentityPicker
+                                  value={customFieldAssigneeReferences[field.key]}
+                                  onChange={(value) => { void saveCustomFieldAssignee(field.key, typeof value === 'string' ? value : undefined); }}
+                                  scopes={['user', 'role']}
+                                  pickerTitle={`انتخاب مسئول ${field.label}`}
+                                  className="min-w-[13rem]"
+                                  overlayZIndexBase={16060}
+                                />
+                              ) : null}
+                            </div>
+                          );
+                        })() : null}
                       </div>
                     ))}
                   </div>

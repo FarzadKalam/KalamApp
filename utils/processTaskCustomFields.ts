@@ -3,6 +3,8 @@ import { FieldNature, FieldType, ModuleField } from '../types';
 
 export const PROCESS_TASK_CUSTOM_FIELDS_KEY = 'process_task_custom_fields';
 export const PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY = 'process_task_custom_field_values';
+export const PROCESS_TASK_CUSTOM_FIELD_ASSIGNEES_KEY = 'process_task_custom_field_assignees';
+export const PROCESS_TASK_CUSTOM_FIELD_CREATE_STATUS = '__create__';
 /**
  * رابطهٔ این فیلد، همان پیوند هم‌نام در اجرای فرآیند است. نام camelCase برای
  * داده‌های جدید است و خواندن نام snake_case نیز برای تعریف‌های قدیمی پشتیبانی می‌شود.
@@ -45,6 +47,8 @@ const normalizeFieldOrder = (value: any) => {
   const order = Number(value);
   return Number.isFinite(order) ? order : undefined;
 };
+
+const normalizeRequiredForStatus = (value: unknown) => String(value || '').trim();
 
 const copyPlainObject = (value: any): Record<string, any> | undefined => (
   value && typeof value === 'object' && !Array.isArray(value)
@@ -147,6 +151,28 @@ export const normalizeProcessTaskCustomField = (value: any): ModuleField | null 
     'required_on_create',
     'requiredOnCreate',
   ]);
+  const requiredForStatus = normalizeRequiredForStatus(
+    value?.required_for_status
+    || value?.requiredForStatus
+    || rawMetadata?.required_for_status
+    || rawMetadata?.requiredForStatus
+    || rawConfig?.required_for_status
+    || rawConfig?.requiredForStatus
+    || rawRules?.required_for_status
+    || rawRules?.requiredForStatus
+    || rawValidation?.required_for_status
+    || rawValidation?.requiredForStatus
+    || (requiredForCreation ? PROCESS_TASK_CUSTOM_FIELD_CREATE_STATUS : '')
+    // Existing templates used validation.required for the completed state.
+    || (requiredForCompletion ? 'done' : '')
+  );
+  const defaultAssigneeCombo = String(
+    value?.default_assignee_combo
+    || value?.defaultAssigneeCombo
+    || rawMetadata?.default_assignee_combo
+    || rawMetadata?.defaultAssigneeCombo
+    || ''
+  ).trim();
   const normalized: ModuleField = {
     key,
     type,
@@ -180,6 +206,14 @@ export const normalizeProcessTaskCustomField = (value: any): ModuleField | null 
     ...(requiredForCreation ? {
       requiredForCreation: true,
       required_for_creation: true,
+    } : {}),
+    ...(requiredForStatus ? {
+      requiredForStatus,
+      required_for_status: requiredForStatus,
+    } : {}),
+    ...(defaultAssigneeCombo ? {
+      default_assignee_combo: defaultAssigneeCombo,
+      defaultAssigneeCombo,
     } : {}),
   } as ModuleField;
 
@@ -259,6 +293,17 @@ export const mergeProcessTaskCustomFieldValues = (
   };
 };
 
+export const getProcessTaskCustomFieldAssigneesFromRecurrence = (recurrence: any): Record<string, string> => {
+  const rawValues = recurrence?.[PROCESS_TASK_CUSTOM_FIELD_ASSIGNEES_KEY];
+  if (!rawValues || typeof rawValues !== 'object' || Array.isArray(rawValues)) return {};
+  return Object.entries(rawValues).reduce<Record<string, string>>((next, [key, value]) => {
+    const normalizedKey = String(key || '').trim();
+    const normalizedValue = String(value || '').trim();
+    if (normalizedKey && normalizedValue) next[normalizedKey] = normalizedValue;
+    return next;
+  }, {});
+};
+
 export const isProcessTaskRelationLinkedToProcess = (field: ModuleField | null | undefined) => {
   if (field?.type !== FieldType.RELATION) return false;
   const config = field.relationConfig as any;
@@ -335,7 +380,7 @@ const hasProcessTaskCustomFieldValue = (field: ModuleField, value: unknown): boo
   return true;
 };
 
-export const getMissingRequiredProcessTaskCustomFields = (task: any): ModuleField[] => {
+export const getMissingRequiredProcessTaskCustomFields = (task: any, targetStatus?: unknown): ModuleField[] => {
   const recurrence = task?.recurrence_info && typeof task.recurrence_info === 'object'
     ? task.recurrence_info
     : {};
@@ -359,8 +404,19 @@ export const getMissingRequiredProcessTaskCustomFields = (task: any): ModuleFiel
     }
   );
 
-  return fields.filter((field) => {
-    if (!field?.validation?.required) return false;
+  const normalizedTargetStatus = String(targetStatus || '').trim();
+  const matchesTargetStatus = (requiredForStatus: string) => {
+    if (!normalizedTargetStatus) return true;
+    if (requiredForStatus === normalizedTargetStatus) return true;
+    const required = requiredForStatus.toLowerCase();
+    const target = normalizedTargetStatus.toLowerCase();
+    return (required === 'done' || required === 'completed')
+      && (target === 'done' || target === 'completed');
+  };
+  return fields.filter((field: any) => {
+    const requiredForStatus = String(field?.requiredForStatus || field?.required_for_status || '').trim();
+    if (!requiredForStatus || requiredForStatus === PROCESS_TASK_CUSTOM_FIELD_CREATE_STATUS) return false;
+    if (!matchesTargetStatus(requiredForStatus)) return false;
     const key = String(field?.key || '').trim();
     if (!key) return false;
     return !hasProcessTaskCustomFieldValue(field, values[key]);

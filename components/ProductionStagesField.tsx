@@ -126,6 +126,7 @@ import {
   normalizeProcessTaskCustomFields,
   PREVIOUS_STAGE_TASK_AUTOMATION_FIELD_PREFIX,
   PROCESS_TASK_CUSTOM_FIELDS_KEY,
+  PROCESS_TASK_CUSTOM_FIELD_CREATE_STATUS,
   PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY,
   withProcessTaskCustomFieldValues,
 } from '../utils/processTaskCustomFields';
@@ -1401,6 +1402,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   );
   const draftCustomFieldType = Form.useWatch('type', draftCustomFieldForm) || FieldType.TEXT;
   const draftCustomFieldRelationTargetModule = Form.useWatch('relationTargetModule', draftCustomFieldForm);
+  const draftCustomFieldDefaultAssigneeCombo = Form.useWatch('default_assignee_combo', draftCustomFieldForm);
   const draftStageTaskType = String(draftStageTaskTypeValue || '').trim();
   const baseTaskStatusOptions = useMemo(() => getBaseTaskStatusOptions(), []);
   const draftStageStatusValueSet = useMemo(
@@ -7807,7 +7809,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       key: nextField?.key || undefined,
       labelFa: nextField?.labels?.fa || '',
       type: nextField?.type || FieldType.TEXT,
-      required: !!nextField?.validation?.required,
+      required_for_status: (nextField as any)?.requiredForStatus
+        || (nextField as any)?.required_for_status
+        || ((nextField as any)?.requiredForCreation ? PROCESS_TASK_CUSTOM_FIELD_CREATE_STATUS : undefined)
+        || ((nextField as any)?.requiredForCompletion || nextField?.validation?.required ? 'done' : undefined),
+      default_assignee_combo: (nextField as any)?.default_assignee_combo || (nextField as any)?.defaultAssigneeCombo || undefined,
       relationTargetModule: nextField?.relationConfig?.targetModule || undefined,
       relationLinkedToProcess: (nextField?.relationConfig as any)?.[PROCESS_TASK_RELATION_PROCESS_LINK_FLAG] === true
         || (nextField?.relationConfig as any)?.link_to_process_related_record === true,
@@ -7868,6 +7874,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         options: processTaskOptionEditableTypes.has(fieldType) ? (previousField?.options || []) : undefined,
         defaultValue: previousField?.defaultValue,
         order: previousField?.order,
+        required_for_status: String(values?.required_for_status || '').trim() || undefined,
+        default_assignee_combo: String(values?.default_assignee_combo || '').trim() || undefined,
       }])[0];
 
       if (!normalizedField) {
@@ -12438,8 +12446,44 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             </Form.Item>
           )}
 
-          <Form.Item label="الزام در تکمیل فعالیت" name="required" valuePropName="checked">
-            <Switch checkedChildren="اجباری" unCheckedChildren="اختیاری" />
+          <Form.Item label="ضروری برای تغییر وضعیت" name="required_for_status">
+            <AdaptiveSelectField
+              {...adaptiveModalSelectProps}
+              allowClear
+              placeholder="در صورت نیاز وضعیت مقصد را انتخاب کنید"
+              options={[
+                { value: PROCESS_TASK_CUSTOM_FIELD_CREATE_STATUS, label: 'ایجاد فعالیت' },
+                ...mergedDraftStageStatusOptions.map((option) => ({ value: String(option.value), label: String(option.label) })),
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="default_assignee_combo" hidden><Input /></Form.Item>
+          <Form.Item label="مسئول پیش‌فرض این فیلد">
+            <div className="space-y-2">
+              {!String(draftCustomFieldDefaultAssigneeCombo || '').startsWith('field:') ? (
+                <AdaptiveIdentityPicker
+                  value={draftCustomFieldDefaultAssigneeCombo || undefined}
+                  onChange={(value) => draftCustomFieldForm.setFieldsValue({ default_assignee_combo: value || undefined })}
+                  scopes={['user', 'role']}
+                  placeholder="کاربر یا نقش را انتخاب کنید"
+                  pickerTitle="انتخاب مسئول پیش‌فرض فیلد"
+                  overlayZIndexBase={10020}
+                />
+              ) : (
+                <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:border-gray-700 dark:bg-white/5 dark:text-gray-300">
+                  مسئول از فیلد یا رکورد مرتبط فرآیند انتخاب شده است.
+                </div>
+              )}
+              {defaultAssigneeFieldOptions.length > 0 ? (
+                <AdaptiveSelectField
+                  {...adaptiveModalSelectProps}
+                  value={String(draftCustomFieldDefaultAssigneeCombo || '').startsWith('field:') ? draftCustomFieldDefaultAssigneeCombo : undefined}
+                  onChange={(value) => draftCustomFieldForm.setFieldsValue({ default_assignee_combo: value || undefined })}
+                  placeholder="یا مسئول را از فیلد و رکورد مرتبط بگیرید"
+                  options={defaultAssigneeFieldOptions}
+                />
+              ) : null}
+            </div>
           </Form.Item>
         </Form>
       </Modal>
