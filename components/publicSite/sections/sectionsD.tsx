@@ -24,16 +24,25 @@ const Cta: React.FC<{ cta?: { label: string; href: string }; variant?: any }> = 
 // HERO TREE — هستهٔ محصول و جریان‌های متصل آن
 // مختصات بر حسب درصد هستند تا شاخه‌ها و گره‌ها در هر اندازه هم‌راستا بمانند.
 // ══════════════════════════════════════════════════
-type TreeNode = { icon?: string; title: string; text?: string; href?: string };
+type TreeNode = {
+  icon?: string;
+  title: string;
+  text?: string;
+  href?: string;
+  previewTitle?: string;
+  previewValue?: string;
+  previewLabel?: string;
+  previewItems?: string[];
+};
 type TreePosition = { x: number; y: number; start: number; mid: number };
 
 // این چیدمان عمداً نامتقارن است: حس شبکهٔ زندهٔ محصول می‌دهد، نه نمودار مفهومی.
 const TREE_POSITIONS: TreePosition[] = [
-  { x: 17, y: 25, start: 0.1, mid: 0.23 },
-  { x: 84, y: 23, start: 0.18, mid: 0.31 },
-  { x: 11, y: 68, start: 0.27, mid: 0.4 },
-  { x: 88, y: 67, start: 0.35, mid: 0.48 },
-  { x: 52, y: 87, start: 0.44, mid: 0.57 },
+  { x: 20, y: 14, start: 0.1, mid: 0.23 },
+  { x: 80, y: 14, start: 0.18, mid: 0.31 },
+  { x: 9, y: 50, start: 0.27, mid: 0.4 },
+  { x: 91, y: 50, start: 0.35, mid: 0.48 },
+  { x: 50, y: 88, start: 0.44, mid: 0.57 },
 ];
 
 const TreeBranch: React.FC<{
@@ -74,7 +83,7 @@ const TreeNodeCard: React.FC<{
   return (
     <motion.div
       style={{ left: `${position.x}%`, top: `${position.y}%`, x: '-50%', y: '-50%', opacity, scale }}
-      className="absolute z-10 w-[clamp(132px,15vw,185px)]"
+      className={`absolute w-[clamp(132px,15vw,185px)] ${active ? 'z-40' : 'z-30'}`}
     >
       <button
         type="button"
@@ -103,43 +112,42 @@ const TreeNodeCard: React.FC<{
   );
 };
 
-const ProductCore: React.FC<{ label: string; media?: string; activeNode?: TreeNode }> = ({ label, media, activeNode }) => (
-  <div className="relative overflow-hidden rounded-[1.65rem] border border-white/80 bg-white shadow-[0_30px_90px_rgba(24,24,27,0.2)]">
-    {media ? (
-      <img src={media} alt="نمایی از محیط تازه سیستم" className="aspect-[1.25/1] h-full w-full object-cover" />
-    ) : (
-      <div className="aspect-[1.25/1] bg-[linear-gradient(145deg,#ffffff_0%,#f4f7fb_100%)] p-3">
-        <div className="flex items-center justify-between border-b border-zinc-100 pb-2.5">
-          <div className="flex gap-1.5"><i className="h-2 w-2 rounded-full bg-zinc-200" /><i className="h-2 w-2 rounded-full bg-zinc-200" /><i className="h-2 w-2 rounded-full bg-zinc-200" /></div>
-          <span className="text-[10px] font-bold text-zinc-400">نمای عملیات امروز</span>
-          <span className="h-5 w-5 rounded-md" style={{ background: 'rgb(var(--brand-600-rgb))' }} />
+const ProductCore: React.FC<{ label: string; media?: string; activeNode?: TreeNode }> = ({ label, media, activeNode }) => {
+  const context = activeNode ?? {
+    title: label,
+    text: 'نمای یکپارچهٔ عملیات سازمان',
+    previewTitle: 'وضعیت امروز سازمان',
+    previewValue: '۳۶',
+    previewLabel: 'اقدام نیازمند پیگیری',
+    previewItems: ['پیگیری‌های مشتریان', 'کارهای در حال اجرا', 'گزارش‌های آماده'],
+  };
+  const items = context.previewItems?.slice(0, 3) ?? [context.text ?? 'کارهای در جریان', 'گزارش و پیگیری', 'اقدام بعدی آماده است'];
+
+  return (
+    <div className="relative isolate aspect-[1.25/1] overflow-hidden rounded-[1.65rem] border border-white/90 bg-white shadow-[0_30px_90px_rgba(24,24,27,0.24)]">
+      {media && <img src={media} alt="نمایی از محیط تازه سیستم" className="absolute inset-0 h-full w-full object-cover opacity-[0.13]" />}
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_100%_0%,rgb(var(--brand-100-rgb)),transparent_42%),linear-gradient(145deg,#fff_0%,#f7f8fb_100%)]" />
+      <motion.div key={context.title} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.22 }} className="relative h-full p-3">
+        <div className="flex items-center justify-between border-b border-zinc-200/80 pb-2.5">
+          <div className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-zinc-200" /><i className="h-2 w-2 rounded-full bg-zinc-200" /><i className="h-2 w-2 rounded-full bg-zinc-200" /></div>
+          <span className="rounded-md px-2 py-1 text-[9px] font-black" style={{ background: 'rgb(var(--brand-50-rgb))', color: 'rgb(var(--brand-700-rgb))' }}>نمای فعال</span>
         </div>
-        <div className="mt-3 grid grid-cols-[.75fr_1.25fr] gap-2.5">
-          <div className="space-y-2 rounded-xl bg-zinc-50 p-2">
-            <span className="block h-2 w-3/5 rounded-full bg-zinc-200" />
-            <span className="block h-2 w-4/5 rounded-full" style={{ background: 'rgb(var(--brand-100-rgb))' }} />
-            <span className="block h-2 w-2/3 rounded-full bg-zinc-200" />
-            <span className="block h-2 w-3/4 rounded-full bg-zinc-200" />
+        <div className="mt-3 grid grid-cols-[.7fr_1.3fr] gap-2.5">
+          <div className="flex flex-col justify-between rounded-xl bg-zinc-950 p-2.5 text-white shadow-sm">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/12 text-base">{renderIcon(context.icon)}</span>
+            <div><span className="block text-[9px] font-medium text-zinc-400">جریان منتخب</span><strong className="mt-1 block text-[11px] leading-5">{context.title}</strong></div>
           </div>
-          <div className="space-y-2.5">
-            <div className="rounded-xl p-2.5 text-right text-[10px] text-white" style={{ background: 'rgb(var(--brand-600-rgb))' }}>
-              <span className="block font-black">{activeNode?.title ?? label}</span>
-              <span className="mt-1 block text-white/75">وضعیت کارها، لحظه‌ای و یکپارچه</span>
-            </div>
-            <div className="grid grid-cols-3 gap-1.5">
-              {[['۲۴', 'پیگیری'], ['۱۲', 'کار فعال'], ['۷', 'اقدام امروز']].map(([value, text]) => <div key={text} className="rounded-lg border border-zinc-100 bg-white p-1.5 text-center"><b className="block text-xs text-zinc-900">{value}</b><span className="text-[8px] text-zinc-400">{text}</span></div>)}
-            </div>
-            <div className="h-12 rounded-xl border border-zinc-100 bg-white p-2"><span className="block h-1.5 w-3/4 rounded-full bg-zinc-200" /><span className="mt-2 block h-1.5 w-full rounded-full" style={{ background: 'rgb(var(--brand-100-rgb))' }} /></div>
+          <div>
+            <span className="block text-[10px] font-bold text-zinc-500">{context.previewTitle ?? context.title}</span>
+            <div className="mt-1 flex items-end gap-2"><strong className="text-3xl leading-none tracking-tight text-zinc-950">{context.previewValue ?? '۱۲'}</strong><span className="mb-0.5 text-[9px] leading-4 text-zinc-500">{context.previewLabel ?? context.text}</span></div>
+            <div className="mt-3 space-y-1.5">{items.map((item, index) => <div key={item} className="flex items-center gap-1.5 rounded-lg border border-zinc-100 bg-white/85 px-2 py-1.5"><span className="h-1.5 w-1.5 rounded-full" style={{ background: index === 0 ? 'rgb(var(--brand-600-rgb))' : '#d4d4d8' }} /><span className="truncate text-[9px] font-bold text-zinc-600">{item}</span></div>)}</div>
           </div>
         </div>
-      </div>
-    )}
-    <div className="absolute inset-x-0 bottom-0 flex items-center justify-between border-t border-zinc-100 bg-white/95 px-3 py-2 backdrop-blur">
-      <span className="text-[10px] font-bold text-zinc-400">یک هسته، همهٔ جریان‌ها</span>
-      <span className="text-xs font-black text-zinc-900">{label}</span>
+      </motion.div>
+      <div className="absolute inset-x-0 bottom-0 flex items-center justify-between border-t border-zinc-200/80 bg-white/90 px-3 py-2 backdrop-blur"><span className="text-[9px] font-bold text-zinc-400">با حرکت روی هر جریان، نما تغییر می‌کند</span><span className="text-[10px] font-black text-zinc-900">{context.title}</span></div>
     </div>
-  </div>
-);
+  );
+};
 
 const MobileCell: React.FC<{ node: TreeNode; active: boolean; onActivate: () => void }> = ({ node, active, onActivate }) => {
   return (
