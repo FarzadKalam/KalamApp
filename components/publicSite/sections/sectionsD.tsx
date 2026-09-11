@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  ArrowDownOutlined, CheckCircleFilled, ClockCircleOutlined,
+  ArrowLeftOutlined, ArrowDownOutlined, CheckCircleFilled, ClockCircleOutlined,
   ExclamationCircleFilled, SyncOutlined,
 } from '@ant-design/icons';
 import { motion, useMotionValue, useReducedMotion, useScroll, useSpring, useTransform, type MotionValue } from 'framer-motion';
