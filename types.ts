@@ -173,6 +173,8 @@ export interface ModuleField {
   // --- ویژگی اضافه شده برای رفع خطا ---
   dynamicOptionsCategory?: string; 
   mode?: 'multiple' | 'tags'; // حالت انتخاب: چندگانه یا با قابلیت افزودن
+  /** نوع‌های قابل انتخاب برای فیلد عمومی تصویر/فایل در فایل‌منیجر */
+  fileTypes?: Array<'image' | 'video' | 'file'>;
   
   validation?: FieldValidation;
   location?: FieldLocation | 'header' | 'block'; 

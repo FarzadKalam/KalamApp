@@ -1610,6 +1610,12 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           action={action}
           disabled={disabled}
           recipientFieldOptions={unifiedMessageRecipientFieldOptions}
+          recipientFieldPickerProps={{
+            ...commonSelectProps,
+            // این popup باید در لایهٔ مشترک مودال/دراور گردش‌کار باز شود؛
+            // در غیر این صورت Select با z-index پیش‌فرض زیر مودال قرار می‌گیرد.
+            preferLocalPopupContainer: true,
+          }}
           renderIdentityRecipientPicker={renderIdentityRecipientPicker}
           onConfigPatch={(patch) => updateActionConfig(action.id, patch)}
           onChannelsChange={(channels: WorkflowMessageChannel[]) => {

@@ -8199,6 +8199,22 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         .map((option) => [String(option.value), option] as const)
     ).values());
   }, [draftCustomFields, draftGraphSnapshot.stages, processSpecificStageRecipientOptions, relatedAssigneeFieldOptions]);
+  const draftCustomFieldRequirementLabel = useCallback((field: ModuleField) => {
+    const value = String((field as any)?.requiredForStatus || (field as any)?.required_for_status || '').trim();
+    if (!value) return '';
+    if (value === PROCESS_TASK_CUSTOM_FIELD_CREATE_STATUS) return 'هنگام ایجاد فعالیت';
+    return String(mergedDraftStageStatusOptions.find((option) => String(option?.value || '') === value)?.label || value).trim();
+  }, [mergedDraftStageStatusOptions]);
+  const draftCustomFieldAssigneeLabel = useCallback((field: ModuleField) => {
+    const reference = String((field as any)?.defaultAssigneeCombo || (field as any)?.default_assignee_combo || '').trim();
+    if (!reference) return '';
+    if (reference.startsWith('field:')) {
+      return String(defaultAssigneeFieldOptions.find((option) => String(option?.value || '') === reference)?.label || 'فیلد مرتبط فرآیند').trim();
+    }
+    const parsed = parseAssigneeValue(reference, null);
+    if (!parsed.assigneeId || !parsed.assigneeType) return '';
+    return assigneeLabelFromIds(parsed.assigneeId, parsed.assigneeType);
+  }, [assigneeLabelFromIds, defaultAssigneeFieldOptions]);
 
   const persistProcessGraph = useCallback(async (
     graph: ProcessGraphDefinition,
@@ -11688,6 +11704,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                       </div>
                                       <Tag color="default">{processTaskCustomFieldTypeLabels[field.type] || field.type}</Tag>
                                       {field.validation?.required ? <Tag color="error">اجباری در تکمیل</Tag> : null}
+                                      {draftCustomFieldRequirementLabel(field) ? (
+                                        <Tag color="gold">ضروری برای «{draftCustomFieldRequirementLabel(field)}»</Tag>
+                                      ) : null}
+                                      {draftCustomFieldAssigneeLabel(field) ? (
+                                        <Tag color="blue">مسئول: {draftCustomFieldAssigneeLabel(field)}</Tag>
+                                      ) : null}
                                       <Tag>{field.key}</Tag>
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
@@ -11746,14 +11768,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                     <div className="text-xs text-gray-500">مقدار پیش‌فرض / قالب</div>
                                     {renderDraftTemplatePicker(`custom:${String(field.key)}`)}
                                   </div>
-                                  {field.type === FieldType.LONG_TEXT || field.type === FieldType.SUPER_LONG_TEXT ? (
+                                  {typeof field?.defaultValue === 'string' && field.defaultValue.includes('{{') ? (
                                     <Input.TextArea
                                       ref={(node) => {
                                         draftCustomFieldDefaultInputRefs.current[String(field.key)] = node;
                                       }}
                                       value={stringifyTemplateValue(field?.defaultValue)}
                                       autoSize={{ minRows: 2, maxRows: 4 }}
-                                      placeholder="در صورت نیاز مقدار یا متغیر قرار دهید"
+                                      placeholder="متغیر قالب یا مقدار متنی"
                                       onChange={(event) => setDraftCustomFields((prev) => prev.map((item) => (
                                         String(item?.key || '') === String(field.key)
                                           ? { ...item, defaultValue: event.target.value }
@@ -11764,20 +11786,23 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                       onKeyUp={(event) => rememberDraftTemplateSelection(`custom:${String(field.key)}`, event.currentTarget)}
                                     />
                                   ) : (
-                                    <Input
-                                      ref={(node) => {
-                                        draftCustomFieldDefaultInputRefs.current[String(field.key)] = node;
-                                      }}
-                                      value={stringifyTemplateValue(field?.defaultValue)}
-                                      placeholder="در صورت نیاز مقدار یا متغیر قرار دهید"
-                                      onChange={(event) => setDraftCustomFields((prev) => prev.map((item) => (
+                                    <SmartFieldRenderer
+                                      field={field}
+                                      value={field.defaultValue}
+                                      onChange={(nextValue) => setDraftCustomFields((prev) => prev.map((item) => (
                                         String(item?.key || '') === String(field.key)
-                                          ? { ...item, defaultValue: event.target.value }
+                                          ? { ...item, defaultValue: nextValue }
                                           : item
                                       )))}
-                                      onSelect={(event) => rememberDraftTemplateSelection(`custom:${String(field.key)}`, event.currentTarget)}
-                                      onClick={(event) => rememberDraftTemplateSelection(`custom:${String(field.key)}`, event.currentTarget)}
-                                      onKeyUp={(event) => rememberDraftTemplateSelection(`custom:${String(field.key)}`, event.currentTarget)}
+                                      forceEditMode
+                                      compactMode
+                                      allValues={draftCustomFields.reduce<Record<string, any>>((values, item) => {
+                                        values[String(item?.key || '')] = item?.defaultValue;
+                                        return values;
+                                      }, {})}
+                                      moduleId="tasks"
+                                      overlayZIndexBase={10020}
+                                      popupContainer={resolveOverlayPopupContainer}
                                     />
                                   )}
                                 </div>

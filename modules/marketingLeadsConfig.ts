@@ -32,6 +32,16 @@ export const marketingLeadsModule: ModuleDefinition = {
   },
   fields: [
     {
+      key: 'image_url',
+      labels: { fa: 'تصویر / فایل لید', en: 'Lead image / file' },
+      type: FieldType.IMAGE,
+      fileTypes: ['image', 'file'],
+      location: FieldLocation.HEADER,
+      order: 0,
+      nature: FieldNature.PREDEFINED,
+      isTableColumn: true,
+    },
+    {
       key: 'name',
       labels: { fa: 'عنوان لید', en: 'Lead Title' },
       type: FieldType.TEXT,

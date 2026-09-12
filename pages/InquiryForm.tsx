@@ -15,6 +15,7 @@ import { FILE_STORAGE_BUCKET, fileStorageClient } from "../utils/storageClient";
 import { joinStoragePath, sanitizeStorageFileName } from "../utils/storagePath";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
 import { fetchDynamicOptionsMap } from "../utils/referenceData";
+import { fetchRelationOptionsForField } from "../utils/relationOptions";
 import ResilientImage from "../components/common/ResilientImage";
 import BrandLoadingScreen from '../components/common/BrandLoadingScreen';
 import { persistLoadingBrandIdentity, resolveLoadingBrandIdentity } from '../utils/loadingBrand';
@@ -489,6 +490,8 @@ const InquiryForm = () => {
   const [currentEmployeeLoaded, setCurrentEmployeeLoaded] = useState(false);
   const [uploadingFieldKeys, setUploadingFieldKeys] = useState<Record<string, boolean>>({});
   const [dynamicFieldOptions, setDynamicFieldOptions] = useState<Record<string, PublicChoiceOption[]>>({});
+  const [relationFieldOptions, setRelationFieldOptions] = useState<Record<string, PublicChoiceOption[]>>({});
+  const [loadingRelationFieldKeys, setLoadingRelationFieldKeys] = useState<Record<string, boolean>>({});
   const watchedFormValues = Form.useWatch([], form) || {};
 
   const requestedSlug = useMemo(() => {
@@ -892,6 +895,9 @@ const InquiryForm = () => {
   };
 
   const getChoiceOptions = (field: WebFormFieldRecord) => {
+    if (field.field_type === "relation") {
+      return relationFieldOptions[String(field.field_key || "")] || [];
+    }
     const moduleField = buildPublicModuleField(field, publicForm?.targetModuleId);
     const staticOptions = Array.isArray(moduleField.options)
       ? moduleField.options
@@ -907,6 +913,41 @@ const InquiryForm = () => {
     const dynamicOptions = dynamicCategory ? (dynamicFieldOptions[dynamicCategory] || []) : [];
     return dynamicOptions.length > 0 ? dynamicOptions : staticOptions;
   };
+
+  const loadPublicRelationOptions = useCallback(async (field: WebFormFieldRecord, search = "") => {
+    const fieldKey = String(field.field_key || "").trim();
+    const relationField = buildPublicModuleField(field, publicForm?.targetModuleId);
+    if (!fieldKey || relationField.type !== FieldType.RELATION || !relationField.relationConfig?.targetModule) return;
+    setLoadingRelationFieldKeys((current) => ({ ...current, [fieldKey]: true }));
+    try {
+      const options = await fetchRelationOptionsForField(supabase, relationField, {
+        allValues: form.getFieldsValue(true),
+        search,
+        // برای فهرست اولیه سبک می‌ماند، اما جست‌وجو روی همهٔ رکوردهای مجازِ ماژول هدف انجام می‌شود.
+        limit: search.trim() ? 80 : 50,
+      });
+      setRelationFieldOptions((current) => ({
+        ...current,
+        [fieldKey]: (options || []).map((option: any) => ({
+          label: String(option?.label || option?.value || "").trim(),
+          value: String(option?.value || "").trim(),
+        })).filter((option: PublicChoiceOption) => Boolean(option.label && option.value)),
+      }));
+    } catch {
+      setRelationFieldOptions((current) => ({ ...current, [fieldKey]: [] }));
+    } finally {
+      setLoadingRelationFieldKeys((current) => ({ ...current, [fieldKey]: false }));
+    }
+  }, [form, publicForm?.targetModuleId]);
+
+  useEffect(() => {
+    if (!publicForm || publicForm.accessScope !== "internal") {
+      setRelationFieldOptions({});
+      return;
+    }
+    const relationFields = publicForm.fields.filter((field) => buildPublicModuleField(field, publicForm.targetModuleId).type === FieldType.RELATION);
+    void Promise.all(relationFields.map((field) => loadPublicRelationOptions(field)));
+  }, [loadPublicRelationOptions, publicForm]);
 
   const getRenderedChoiceOptions = (field: WebFormFieldRecord) => {
     const options = [...getChoiceOptions(field)];
@@ -1400,8 +1441,14 @@ const InquiryForm = () => {
               allowClear
               showSearch
               optionFilterProp="label"
+              filterOption={field.field_type === "relation" ? false : true}
+              loading={field.field_type === "relation" && !!loadingRelationFieldKeys[String(field.field_key || "")]}
               options={selectOptions}
               placeholder={field.placeholder || field.label}
+              onSearch={field.field_type === "relation" ? (search) => { void loadPublicRelationOptions(field, search); } : undefined}
+              onDropdownVisibleChange={field.field_type === "relation" ? (open) => {
+                if (open && selectOptions.length === 0) void loadPublicRelationOptions(field);
+              } : undefined}
               onChange={(nextValue) => setChoiceFieldValue(field, nextValue)}
             />
           </Form.Item>

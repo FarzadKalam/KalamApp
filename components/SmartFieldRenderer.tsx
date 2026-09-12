@@ -38,6 +38,7 @@ import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { formatLocationValue, LocationLatLng, parseLocationValue } from '../utils/location';
 import { MAP_STYLE_URL } from '../utils/mapConfig';
 import ResilientImage from './common/ResilientImage';
+import FileExtensionTile from './files/FileExtensionTile';
 import { isAutoNameEnabled, normalizeAutoNameEnabled } from '../utils/autoName';
 import { useCurrencyConfig } from '../utils/currency';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
@@ -85,6 +86,11 @@ const normalizeDigitsToEnglish = (raw: any): string => {
   return String(raw)
     .replace(/[\u06F0-\u06F9]/g, (digit) => String(digit.charCodeAt(0) - 0x06F0))
     .replace(/[\u0660-\u0669]/g, (digit) => String(digit.charCodeAt(0) - 0x0660));
+};
+
+const isImageFileUrl = (url: unknown): boolean => {
+  const normalized = String(url || '').split('?')[0].split('#')[0].toLowerCase();
+  return /\.(?:avif|bmp|gif|heic|heif|jpe?g|png|svg|webp)$/.test(normalized);
 };
 
 const isDuplicateSystemCodeError = (error: any) => {
@@ -1182,6 +1188,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       });
 
       const { data: { publicUrl } } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
+      const uploadedFileType = file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : 'file';
 
       if (recordId && moduleId) {
         const hasFileManagerTables = await detectFileManagerTables(supabase, false);
@@ -1194,7 +1201,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
               fileUrl: publicUrl,
               fileName: file.name || null,
               mimeType: file.type || null,
-              fileType: 'image',
+              fileType: uploadedFileType,
               sortOrder: 0,
             });
           } catch (fileManagerError) {
@@ -1208,7 +1215,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 module_id: moduleId,
                 record_id: recordId,
                 file_url: publicUrl,
-                file_type: 'image',
+                file_type: uploadedFileType,
                 file_name: file.name || null,
                 mime_type: file.type || null,
               },
@@ -1219,7 +1226,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         }
       }
 
-      msg.success('تصویر با موفقیت آپلود شد');
+      msg.success(uploadedFileType === 'image' ? 'تصویر با موفقیت آپلود شد' : 'فایل با موفقیت آپلود شد');
       onChange(publicUrl);
       return publicUrl;
     } catch (error: any) {
@@ -2735,6 +2742,9 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         }
         if (canShowFilesGallery) {
           const isEditable = !!forceEditMode && !isReadonly;
+          const acceptedFileTypes = field.fileTypes?.length ? field.fileTypes : ['image'];
+          const allowsNonImageFiles = acceptedFileTypes.some((fileType) => fileType !== 'image');
+          const selectedValueIsImage = isImageFileUrl(value);
           const useCompactFileButtons = !!compactMode;
           const fileActionsWrapperClass = useCompactFileButtons
             ? 'flex flex-wrap items-center justify-end gap-1'
@@ -2745,13 +2755,15 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
           return (
             <div className="flex flex-col gap-2">
               {/* Image preview */}
-              {value ? (
+              {value && (selectedValueIsImage || !allowsNonImageFiles) ? (
                 <ResilientImage
                   src={String(value)}
                   preset="thumb"
                   alt="image"
                   style={{ width: '100%', borderRadius: 10, border: '1px solid #e2e8f0', maxHeight: 140, objectFit: 'cover', display: 'block' }}
                 />
+              ) : value ? (
+                <FileExtensionTile url={String(value)} className="h-[140px] rounded-[10px]" />
               ) : (
                 <div className="rounded-lg border-2 border-dashed border-gray-200 bg-gray-50 dark:bg-white/5 dark:border-gray-700 flex items-center justify-center text-[11px] text-gray-400 dark:text-gray-500" style={{ height: 72 }}>
                   تصویری انتخاب نشده
@@ -2782,9 +2794,9 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 onClose={() => setIsImagePickerOpen(false)}
                 moduleId={String(moduleId || '')}
                 recordId={recordId}
-                title="انتخاب تصویر برای فیلد"
+                title={allowsNonImageFiles ? 'انتخاب تصویر یا فایل برای فیلد' : 'انتخاب تصویر برای فیلد'}
                 multiple={false}
-                fileTypes={['image']}
+                fileTypes={acceptedFileTypes}
                 onUploadFiles={handleImagePickerUpload}
                 onSelect={(attachments) => {
                   const url = String(attachments[0]?.url || '').trim();

@@ -34,6 +34,8 @@ type Props = {
   action: WorkflowAction;
   disabled?: boolean;
   recipientFieldOptions: Array<{ label: string; value: string }>;
+  /** قرارداد لایهٔ نمایشِ سازندهٔ گردش‌کار برای popup انتخاب فیلدهای گیرنده. */
+  recipientFieldPickerProps?: Pick<React.ComponentProps<typeof AdaptiveSelectField>, 'getPopupContainer' | 'modalContainer' | 'overlayZIndexBase' | 'adaptiveMode' | 'preferLocalPopupContainer' | 'listHeight' | 'popupMatchSelectWidth' | 'showSearch' | 'optionFilterProp'>;
   renderIdentityRecipientPicker: (value: unknown, onChange: (nextValue: any) => void, placeholder: string) => React.ReactNode;
   onConfigPatch: (patch: Record<string, any>) => void;
   onChannelsChange: (channels: WorkflowMessageChannel[]) => void;
@@ -48,6 +50,7 @@ const WorkflowMessageActionFields: React.FC<Props> = ({
   action,
   disabled = false,
   recipientFieldOptions,
+  recipientFieldPickerProps,
   renderIdentityRecipientPicker,
   onConfigPatch,
   onChannelsChange,
@@ -153,6 +156,7 @@ const WorkflowMessageActionFields: React.FC<Props> = ({
 
       <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
         <AdaptiveSelectField
+          {...recipientFieldPickerProps}
           mode="multiple"
           value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
           disabled={disabled}

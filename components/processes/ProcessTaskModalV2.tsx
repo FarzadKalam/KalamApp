@@ -4,6 +4,7 @@ import {
   CheckOutlined,
   ClockCircleOutlined,
   CloseOutlined,
+  DollarOutlined,
   DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
@@ -21,6 +22,7 @@ import {
   StarOutlined,
   UnlockOutlined,
   UploadOutlined,
+  WarningOutlined,
 } from '@ant-design/icons';
 import { Link, useInRouterContext } from 'react-router-dom';
 import AdaptiveSelectField from '../AdaptiveSelectField';
@@ -697,6 +699,7 @@ type InlineEditableFieldProps = {
   displayNode?: React.ReactNode;
   onOptionsUpdate?: () => void;
   saving?: boolean;
+  footer?: React.ReactNode;
   renderEditor?: (args: { value: any; onChange: (value: any) => void }) => React.ReactNode;
 };
 
@@ -719,6 +722,7 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
   displayNode,
   onOptionsUpdate,
   saving = false,
+  footer,
   renderEditor,
 }) => {
   const [editing, setEditing] = useState(false);
@@ -856,6 +860,7 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
           ) : null}
         </div>
         <div className="min-w-0">{fieldNode}</div>
+        {footer ? <div className="mt-2 border-t border-gray-200/75 pt-2 dark:border-white/10">{footer}</div> : null}
       </div>
     );
   }
@@ -863,7 +868,7 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
   if (normalizedFieldType === FieldType.CHECKBOX) {
     const checked = Boolean(rendererValue);
     return (
-      <div className="flex min-h-[3.25rem] w-full min-w-0 items-center justify-between gap-3 rounded-lg border border-transparent bg-gray-50 px-3 py-2 text-right transition hover:border-[rgba(var(--brand-200-rgb),0.7)] hover:bg-white dark:bg-white/5 dark:hover:border-[rgba(var(--brand-300-rgb),0.25)] dark:hover:bg-white/10">
+      <div className="flex min-h-[3.25rem] w-full min-w-0 flex-wrap items-center justify-between gap-3 rounded-lg border border-transparent bg-gray-50 px-3 py-2 text-right transition hover:border-[rgba(var(--brand-200-rgb),0.7)] hover:bg-white dark:bg-white/5 dark:hover:border-[rgba(var(--brand-300-rgb),0.25)] dark:hover:bg-white/10">
         <span className="min-w-0 flex-1">
           {labelNode}
           <span className="mt-1 block text-xs font-semibold text-gray-500 dark:text-gray-400">
@@ -880,6 +885,7 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
             onSave(Boolean(nextChecked));
           }}
         />
+        {footer ? <div className="w-full border-t border-gray-200/75 pt-2 dark:border-white/10">{footer}</div> : null}
       </div>
     );
   }
@@ -923,6 +929,7 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
             />
           </div>
         </div>
+        {footer ? <div className="mt-2 border-t border-gray-200/75 pt-2 dark:border-white/10">{footer}</div> : null}
       </div>
     );
   }
@@ -961,6 +968,7 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
         <span className="mt-1 block min-w-0 text-sm font-semibold text-gray-800 dark:text-gray-100">
           {displayNode || fieldNode}
         </span>
+        {footer ? <span className="mt-2 block border-t border-gray-200/75 pt-2 dark:border-white/10">{footer}</span> : null}
       </span>
       <button
         type="button"
@@ -1025,6 +1033,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   const [activityTags, setActivityTags] = useState<TagItem[]>([]);
   const [wageValue, setWageValue] = useState('0');
   const [weightValue, setWeightValue] = useState('0');
+  const [activeDetailsBubble, setActiveDetailsBubble] = useState<'compensation' | 'timing' | null>(null);
   const [dueDateValue, setDueDateValue] = useState('');
   const [startDateValue, setStartDateValue] = useState('');
   const [startScheduleMode, setStartScheduleMode] = useState<'manual' | 'system'>('manual');
@@ -1443,6 +1452,25 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   const saveTaskReport = useCallback(async (nextValue: string) => {
     setReportDraft(nextValue);
     await persistTaskFieldPatch('task_report', { task_report: String(nextValue || '').trim() || null });
+  }, [persistTaskFieldPatch]);
+  const saveTaskWage = useCallback(async (nextValue: any) => {
+    const normalized = String(nextValue ?? '').trim() || '0';
+    setWageValue(normalized);
+    await persistTaskFieldPatch('wage', { wage: Number(normalized) || 0 });
+  }, [persistTaskFieldPatch]);
+  const saveTaskWeight = useCallback(async (nextValue: any) => {
+    const normalized = String(nextValue ?? '').trim() || '0';
+    setWeightValue(normalized);
+    await persistTaskFieldPatch('weight', { weight: Number(normalized) || 0 });
+  }, [persistTaskFieldPatch]);
+  const saveTaskTimingSetting = useCallback(async (
+    fieldKey: string,
+    nextValue: any,
+    recurrenceKey: string,
+    taskPatch: Record<string, any> = {},
+  ) => {
+    const normalized = String(nextValue ?? '').trim();
+    await persistTaskFieldPatch(fieldKey, taskPatch, { [recurrenceKey]: normalized || null }, { [recurrenceKey]: normalized || null });
   }, [persistTaskFieldPatch]);
   const saveCustomFieldValue = useCallback(async (fieldKey: string, nextValue: any) => {
     const currentRecurrence = parseObject(source?.recurrence_info);
@@ -2386,6 +2414,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     setTaskActionBusy(null);
     setSavingFieldKey(null);
     setLocalTaskPatch({});
+    setActiveDetailsBubble(null);
   }, [applyStageSettingsToDraft, fieldDraftStorageKey, isDraftActivityCreationMode, isTemplateBackedDraft, modalInitKey, open, runProcess?.templateId, stage, templateBackedStageId, templateBackedTemplateId]);
 
   useLayoutEffect(() => {
@@ -2570,6 +2599,14 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     ? 'پیش نویس'
     : (statusLabelMap[statusValue] || statusLabel[statusValue] || statusValue);
   const currentStatusColor = getTaskStatusSwatchColor(headerStatusValue, source) || statusColor[headerStatusValue] || '#64748b';
+  const hasCompensationDetails = (Number(wageValue) || 0) > 0 || (Number(weightValue) || 0) > 0;
+  const hasStartTiming = startScheduleMode === 'manual'
+    ? Boolean(String(startDateValue || '').trim())
+    : (Number(startDurationValue) || 0) > 0;
+  const hasDueTiming = dueScheduleMode === 'manual'
+    ? Boolean(String(dueDateValue || '').trim())
+    : (Number(dueDurationValue) || 0) > 0;
+  const timingIsEmpty = !hasStartTiming && !hasDueTiming;
   const relatedRows = useMemo<RelatedRecordRow[]>(() => {
     const refs = collectProcessRelatedRecordRefs(process);
     const rows = refs.map((ref) => {
@@ -3330,56 +3367,145 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                 forceEditMode={isDraftActivityCreationMode}
               />
 
-              {isDraftActivityCreationMode ? (
-                <div className="grid grid-cols-1 gap-2 rounded-lg border border-gray-200 bg-gray-50/80 p-2 dark:border-gray-700 dark:bg-white/5 sm:grid-cols-2">
-                  <InlineEditableField
-                    label="دستمزد"
-                    value={wageValue}
-                    onSave={setWageValue}
-                    onDraftChange={(value) => writeModalFieldDraftPatch({ wageValue: value })}
-                    fieldType={FieldType.NUMBER}
-                    forceEditMode
-                  />
-                  <InlineEditableField
-                    label="وزن"
-                    value={weightValue}
-                    onSave={setWeightValue}
-                    onDraftChange={(value) => writeModalFieldDraftPatch({ weightValue: value })}
-                    fieldType={FieldType.NUMBER}
-                    forceEditMode
-                  />
-                  {renderScheduleEditor({
-                    title: 'زمان شروع',
-                    mode: startScheduleMode,
-                    onModeChange: setStartScheduleMode,
-                    manualValue: startDateValue,
-                    onManualSave: setStartDateValue,
-                    durationFrom: startDurationFromValue,
-                    onDurationFromSave: setStartDurationFromValue,
-                    durationValue: startDurationValue,
-                    onDurationValueSave: setStartDurationValue,
-                    durationUnit: startDurationUnitValue,
-                    onDurationUnitSave: setStartDurationUnitValue,
-                    anchorStage: startAnchorStageValue,
-                    onAnchorStageSave: setStartAnchorStageValue,
-                  })}
-                  {renderScheduleEditor({
-                    title: 'موعد انجام',
-                    mode: dueScheduleMode,
-                    onModeChange: setDueScheduleMode,
-                    manualValue: dueDateValue,
-                    onManualSave: setDueDateValue,
-                    durationFrom: dueDurationFromValue,
-                    onDurationFromSave: setDueDurationFromValue,
-                    durationValue: dueDurationValue,
-                    onDurationValueSave: setDueDurationValue,
-                    durationUnit: dueDurationUnitValue,
-                    onDurationUnitSave: setDueDurationUnitValue,
-                    anchorStage: dueAnchorStageValue,
-                    onAnchorStageSave: setDueAnchorStageValue,
-                  })}
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    aria-expanded={activeDetailsBubble === 'compensation'}
+                    onClick={() => setActiveDetailsBubble((current) => current === 'compensation' ? null : 'compensation')}
+                    className={`group min-w-0 rounded-xl border px-3 py-2.5 text-right transition ${
+                      activeDetailsBubble === 'compensation'
+                        ? 'border-[rgba(var(--brand-400-rgb),0.8)] bg-[rgba(var(--brand-50-rgb),0.9)] shadow-[0_7px_16px_rgba(var(--brand-700-rgb),0.12)] dark:border-[rgba(var(--brand-300-rgb),0.5)] dark:bg-[rgba(var(--brand-500-rgb),0.16)]'
+                        : 'border-gray-200 bg-gray-50 hover:border-[rgba(var(--brand-300-rgb),0.75)] hover:bg-white dark:border-gray-700 dark:bg-white/5 dark:hover:bg-white/10'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-[rgba(var(--brand-700-rgb),1)] shadow-sm dark:bg-white/10 dark:text-[rgba(var(--brand-100-rgb),1)]"><DollarOutlined /></span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-xs font-bold text-gray-800 dark:text-gray-100">دستمزد</span>
+                        <span className="mt-0.5 block truncate text-[10px] text-gray-500 dark:text-gray-400">
+                          {hasCompensationDetails ? 'دستمزد یا وزن ثبت شده' : 'تنظیم نشده'}
+                        </span>
+                      </span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-expanded={activeDetailsBubble === 'timing'}
+                    onClick={() => setActiveDetailsBubble((current) => current === 'timing' ? null : 'timing')}
+                    className={`group min-w-0 rounded-xl border px-3 py-2.5 text-right transition ${
+                      activeDetailsBubble === 'timing'
+                        ? 'border-[rgba(var(--brand-400-rgb),0.8)] bg-[rgba(var(--brand-50-rgb),0.9)] shadow-[0_7px_16px_rgba(var(--brand-700-rgb),0.12)] dark:border-[rgba(var(--brand-300-rgb),0.5)] dark:bg-[rgba(var(--brand-500-rgb),0.16)]'
+                        : 'border-gray-200 bg-gray-50 hover:border-[rgba(var(--brand-300-rgb),0.75)] hover:bg-white dark:border-gray-700 dark:bg-white/5 dark:hover:bg-white/10'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-[rgba(var(--brand-700-rgb),1)] shadow-sm dark:bg-white/10 dark:text-[rgba(var(--brand-100-rgb),1)]"><ClockCircleOutlined /></span>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-1 text-xs font-bold text-gray-800 dark:text-gray-100">
+                          زمان‌بندی
+                          {timingIsEmpty ? <Tooltip title="زمان شروع و موعد انجام هنوز تنظیم نشده‌اند."><WarningOutlined className="text-[11px] text-amber-500" /></Tooltip> : null}
+                        </span>
+                        <span className="mt-0.5 block truncate text-[10px] text-gray-500 dark:text-gray-400">
+                          {timingIsEmpty ? 'نیازمند زمان‌بندی' : 'زمان‌بندی ثبت شده'}
+                        </span>
+                      </span>
+                    </span>
+                  </button>
                 </div>
-              ) : null}
+
+                {activeDetailsBubble === 'compensation' ? (
+                  <div className="grid grid-cols-1 gap-2 rounded-xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-gray-50/80 p-2 dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-white/5 sm:grid-cols-2">
+                    <InlineEditableField
+                      label="دستمزد"
+                      value={wageValue}
+                      onSave={isDraftActivityCreationMode ? setWageValue : (value) => { void saveTaskWage(value); }}
+                      onDraftChange={(value) => writeModalFieldDraftPatch({ wageValue: value })}
+                      fieldType={FieldType.NUMBER}
+                      forceEditMode={isDraftActivityCreationMode}
+                    />
+                    <InlineEditableField
+                      label="وزن"
+                      value={weightValue}
+                      onSave={isDraftActivityCreationMode ? setWeightValue : (value) => { void saveTaskWeight(value); }}
+                      onDraftChange={(value) => writeModalFieldDraftPatch({ weightValue: value })}
+                      fieldType={FieldType.NUMBER}
+                      forceEditMode={isDraftActivityCreationMode}
+                    />
+                  </div>
+                ) : null}
+
+                {activeDetailsBubble === 'timing' ? (
+                  <div className="grid grid-cols-1 gap-2 rounded-xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-gray-50/80 p-2 dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-white/5 sm:grid-cols-2">
+                    {renderScheduleEditor({
+                      title: 'زمان شروع',
+                      mode: startScheduleMode,
+                      onModeChange: (value) => {
+                        setStartScheduleMode(value);
+                        if (!isDraftActivityCreationMode) void saveTaskTimingSetting('start_schedule_mode', value, 'start_schedule_mode', { start_date: value === 'system' ? null : (startDateValue || null) });
+                      },
+                      manualValue: startDateValue,
+                      onManualSave: (value) => {
+                        setStartDateValue(value);
+                        if (!isDraftActivityCreationMode) void saveTaskTimingSetting('start_date', value, 'start_date', { start_date: value || null });
+                      },
+                      durationFrom: startDurationFromValue,
+                      onDurationFromSave: (value) => {
+                        setStartDurationFromValue(value);
+                        if (!isDraftActivityCreationMode) void saveTaskTimingSetting('start_duration_from', value, 'start_duration_from');
+                      },
+                      durationValue: startDurationValue,
+                      onDurationValueSave: (value) => {
+                        setStartDurationValue(value);
+                        if (!isDraftActivityCreationMode) void saveTaskTimingSetting('start_duration_value', value, 'start_duration_value');
+                      },
+                      durationUnit: startDurationUnitValue,
+                      onDurationUnitSave: (value) => {
+                        setStartDurationUnitValue(value);
+                        if (!isDraftActivityCreationMode) void saveTaskTimingSetting('start_duration_unit', value, 'start_duration_unit');
+                      },
+                      anchorStage: startAnchorStageValue,
+                      onAnchorStageSave: (value) => {
+                        setStartAnchorStageValue(value);
+                        if (!isDraftActivityCreationMode) void saveTaskTimingSetting('start_anchor_stage_node_key', value, 'start_anchor_stage_node_key');
+                      },
+                    })}
+                    {renderScheduleEditor({
+                      title: 'موعد انجام',
+                      mode: dueScheduleMode,
+                      onModeChange: (value) => {
+                        setDueScheduleMode(value);
+                        if (!isDraftActivityCreationMode) void saveTaskTimingSetting('due_schedule_mode', value, 'due_schedule_mode', { due_date: value === 'system' ? null : (dueDateValue || null) });
+                      },
+                      manualValue: dueDateValue,
+                      onManualSave: (value) => {
+                        setDueDateValue(value);
+                        if (!isDraftActivityCreationMode) void saveTaskTimingSetting('due_date', value, 'due_date', { due_date: value || null });
+                      },
+                      durationFrom: dueDurationFromValue,
+                      onDurationFromSave: (value) => {
+                        setDueDurationFromValue(value);
+                        if (!isDraftActivityCreationMode) void saveTaskTimingSetting('duration_from', value, 'duration_from');
+                      },
+                      durationValue: dueDurationValue,
+                      onDurationValueSave: (value) => {
+                        setDueDurationValue(value);
+                        if (!isDraftActivityCreationMode) void saveTaskTimingSetting('duration_value', value, 'duration_value');
+                      },
+                      durationUnit: dueDurationUnitValue,
+                      onDurationUnitSave: (value) => {
+                        setDueDurationUnitValue(value);
+                        if (!isDraftActivityCreationMode) void saveTaskTimingSetting('duration_unit', value, 'duration_unit');
+                      },
+                      anchorStage: dueAnchorStageValue,
+                      onAnchorStageSave: (value) => {
+                        setDueAnchorStageValue(value);
+                        if (!isDraftActivityCreationMode) void saveTaskTimingSetting('due_anchor_stage_node_key', value, 'due_anchor_stage_node_key');
+                      },
+                    })}
+                  </div>
+                ) : null}
+              </div>
 
               {customFields.length > 0 ? (
                 <div className="space-y-2">
@@ -3388,8 +3514,8 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                   </div>
                   <div className="space-y-2 rounded-lg border border-gray-200 bg-gray-50/80 p-2 dark:border-gray-700 dark:bg-white/5">
                     {customFields.map((field) => (
-                      <div key={field.key}>
                         <InlineEditableField
+                          key={field.key}
                           label={field.label}
                           value={field.value}
                           field={field.field}
@@ -3422,12 +3548,11 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                             }
                             void saveCustomFieldValue(field.key, nextValue);
                           }}
-                        />
-                        {customFieldAssigneeReferences[field.key] ? (() => {
+                          footer={customFieldAssigneeReferences[field.key] ? (() => {
                           const assignee = getCustomFieldAssigneeDisplay(customFieldAssigneeReferences[field.key]);
                           const isEditingAssignee = editingCustomFieldAssigneeKey === field.key;
                           return (
-                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pr-2 text-[11px] text-gray-500 dark:text-gray-400">
+                            <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500 dark:text-gray-400">
                               <span>مسئول:</span>
                               <AssigneeAvatarDisplay
                                 source={{
@@ -3451,6 +3576,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                                   icon={<EditOutlined />}
                                   onClick={() => setEditingCustomFieldAssigneeKey(isEditingAssignee ? null : field.key)}
                                   aria-label={`تغییر مسئول ${field.label}`}
+                                  className="!text-gray-300 hover:!text-gray-500 dark:!text-gray-500 dark:hover:!text-gray-300"
                                 />
                               </Tooltip>
                               {isEditingAssignee ? (
@@ -3466,7 +3592,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                             </div>
                           );
                         })() : null}
-                      </div>
+                        />
                     ))}
                   </div>
                 </div>
