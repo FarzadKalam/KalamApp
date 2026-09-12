@@ -42,7 +42,7 @@ const TREE_POSITIONS: TreePosition[] = [
   { x: 80, y: 14, start: 0.18, mid: 0.31 },
   { x: 9, y: 50, start: 0.27, mid: 0.4 },
   { x: 91, y: 50, start: 0.35, mid: 0.48 },
-  { x: 50, y: 88, start: 0.44, mid: 0.57 },
+  { x: 50, y: 93, start: 0.44, mid: 0.57 },
 ];
 
 const TreeBranch: React.FC<{
@@ -124,7 +124,7 @@ const ProductCore: React.FC<{ label: string; media?: string; activeNode?: TreeNo
   const items = context.previewItems?.slice(0, 3) ?? [context.text ?? 'کارهای در جریان', 'گزارش و پیگیری', 'اقدام بعدی آماده است'];
 
   return (
-    <div className="relative isolate aspect-[1.25/1] overflow-hidden rounded-[1.65rem] border border-white/90 bg-white shadow-[0_30px_90px_rgba(24,24,27,0.24)]">
+    <div className="relative isolate aspect-[1.45/1] overflow-hidden rounded-[1.65rem] border border-white/90 bg-white shadow-[0_24px_64px_rgba(24,24,27,0.2)]">
       {media && <img src={media} alt="نمایی از محیط تازه سیستم" className="absolute inset-0 h-full w-full object-cover opacity-[0.13]" />}
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_100%_0%,rgb(var(--brand-100-rgb)),transparent_42%),linear-gradient(145deg,#fff_0%,#f7f8fb_100%)]" />
       <motion.div key={context.title} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.22 }} className="relative h-full p-3">
