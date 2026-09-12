@@ -1,9 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Checkbox, Empty, Input, InputNumber, Space, Switch } from 'antd';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, App, Button, Checkbox, Empty, Input, InputNumber, Space, Switch } from 'antd';
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
+  CopyOutlined,
   DeleteOutlined,
+  EnterOutlined,
   PlusOutlined,
   SnippetsOutlined,
 } from '@ant-design/icons';
@@ -443,6 +445,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   hideReorderControls = false,
   customerClubReminderTiming = false,
 }) => {
+  const { message } = App.useApp();
   const safeValue = Array.isArray(value) ? value : [];
   const visibleActionIdSet = Array.isArray(visibleActionIds)
     ? new Set(visibleActionIds.map((id) => String(id)))
@@ -451,6 +454,8 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     ? safeValue.filter((action) => visibleActionIdSet.has(String(action.id)))
     : safeValue;
   const [templateModalTarget, setTemplateModalTarget] = useState<{ actionId: string; fieldKey: string; title: string } | null>(null);
+  const textSelectionRef = useRef<Record<string, { start: number; end: number }>>({});
+  const [activeTextTargetByAction, setActiveTextTargetByAction] = useState<Record<string, string>>({});
   const [instagramShowcaseOptions, setInstagramShowcaseOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [formulaModalTarget, setFormulaModalTarget] = useState<
     | { mode: 'action'; actionId: string; fieldKey: string }
@@ -465,6 +470,20 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     (node?: HTMLElement | null) => resolveModalPopupContainer(node),
     []
   );
+  const textSelectionKey = useCallback((actionId: string, fieldKey: string) => `${actionId}:${fieldKey}`, []);
+  const rememberTextSelection = useCallback((actionId: string, fieldKey: string, element: HTMLInputElement | HTMLTextAreaElement) => {
+    textSelectionRef.current[textSelectionKey(actionId, fieldKey)] = {
+      start: Number.isFinite(element.selectionStart) ? Number(element.selectionStart) : String(element.value || '').length,
+      end: Number.isFinite(element.selectionEnd) ? Number(element.selectionEnd) : String(element.value || '').length,
+    };
+    setActiveTextTargetByAction((current) => current[actionId] === fieldKey ? current : { ...current, [actionId]: fieldKey });
+  }, [textSelectionKey]);
+  const textCaretProps = useCallback((actionId: string, fieldKey: string) => ({
+    onFocus: (event: any) => rememberTextSelection(actionId, fieldKey, event.currentTarget),
+    onSelect: (event: any) => rememberTextSelection(actionId, fieldKey, event.currentTarget),
+    onKeyUp: (event: any) => rememberTextSelection(actionId, fieldKey, event.currentTarget),
+    onClick: (event: any) => rememberTextSelection(actionId, fieldKey, event.currentTarget),
+  }), [rememberTextSelection]);
   useEffect(() => {
     let active = true;
     void supabase.from('instagram_product_showcases').select('id,name').eq('is_active', true).order('name').limit(100)
@@ -1302,13 +1321,17 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       const token = `{{${variableField}}}`;
       const config = action.config || {};
       const currentText = String(config[targetFieldKey] || '');
-      if (currentText.includes(token)) {
-        return;
-      }
-      const nextText = currentText ? `${currentText} ${token}` : token;
+      const selection = textSelectionRef.current[textSelectionKey(action.id, targetFieldKey)];
+      const start = Math.max(0, Math.min(selection?.start ?? currentText.length, currentText.length));
+      const end = Math.max(start, Math.min(selection?.end ?? start, currentText.length));
+      const nextText = `${currentText.slice(0, start)}${token}${currentText.slice(end)}`;
+      textSelectionRef.current[textSelectionKey(action.id, targetFieldKey)] = {
+        start: start + token.length,
+        end: start + token.length,
+      };
       updateActionConfig(action.id, { [targetFieldKey]: nextText, variable_field: variableField });
     },
-    [updateActionConfig]
+    [textSelectionKey, updateActionConfig]
   );
 
   const renderVariableTools = (
@@ -1316,8 +1339,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     targets: Array<{ key: string; label: string }>
   ) => {
     const config = action.config || {};
+    const focusedTarget = activeTextTargetByAction[action.id];
     const selectedTarget =
-      String(config.variable_target || '') || (targets[0]?.key || '');
+      (targets.some((target) => target.key === focusedTarget) ? focusedTarget : '')
+      || String(config.variable_target || '') || (targets[0]?.key || '');
+    const variableToken = config.variable_field ? `{{${String(config.variable_field)}}}` : '';
     return (
       <div className="rounded-lg border border-dashed border-gray-300 dark:border-gray-700 p-2">
         <div className="text-xs text-gray-500 mb-2">انتخاب فیلد برای متغیر</div>
@@ -1333,11 +1359,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 updateActionConfig(action.id, { variable_field: '' });
                 return;
               }
-              insertVariableToken(
-                action,
-                selectedTarget || targets[0].key,
-                nextVariableField
-              );
+              updateActionConfig(action.id, { variable_field: nextVariableField });
             }}
             placeholder="فیلد متغیر"
             pickerTitle="فیلد متغیر"
@@ -1348,12 +1370,39 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               value={selectedTarget}
               options={targets.map((item) => ({ label: item.label, value: item.key }))}
               disabled={disabled}
-              onChange={(nextVal) => updateActionConfig(action.id, { variable_target: nextVal })}
+              onChange={(nextVal) => {
+                const target = String(nextVal || '');
+                setActiveTextTargetByAction((current) => ({ ...current, [action.id]: target }));
+                updateActionConfig(action.id, { variable_target: target });
+              }}
               placeholder="محل درج متغیر"
               pickerTitle="محل درج متغیر"
             />
           ) : null}
         </div>
+        {variableToken ? (
+          <div className="mt-2 flex min-w-0 items-center gap-1 rounded-md bg-gray-50 px-2 py-1.5 dark:bg-white/5">
+            <code className="min-w-0 flex-1 truncate text-xs text-gray-700 dark:text-gray-200" dir="ltr">{variableToken}</code>
+            <Button
+              size="small"
+              type="text"
+              icon={<CopyOutlined />}
+              title="کپی متغیر"
+              disabled={disabled}
+              onClick={() => void navigator.clipboard?.writeText(variableToken).then(() => message.success('متغیر کپی شد')).catch(() => message.error('کپی متغیر ناموفق بود'))}
+            />
+            <Button
+              size="small"
+              type="primary"
+              icon={<EnterOutlined />}
+              title="درج در محل نشانگر متن"
+              disabled={disabled || !selectedTarget}
+              onClick={() => insertVariableToken(action, selectedTarget, String(config.variable_field))}
+            >
+              درج
+            </Button>
+          </div>
+        ) : null}
       </div>
     );
   };
@@ -1631,6 +1680,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           renderMessageTemplateButton={(fieldKey, title) => renderMessageTemplateButton(action.id, fieldKey, title)}
           renderVariableTools={(targets) => renderVariableTools(action, targets)}
           onInsertVariable={(fieldKey, variableKey) => insertVariableToken(action, fieldKey, variableKey)}
+          onMessageTextSelection={(fieldKey, element) => rememberTextSelection(action.id, fieldKey, element)}
           webFormOptions={webFormOptions}
           webFormRelationModuleOptions={webFormRelationModuleOptions}
         />
@@ -1677,6 +1727,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             value={config.note_text}
             disabled={disabled}
             onChange={(e) => updateActionConfig(action.id, { note_text: e.target.value })}
+            {...textCaretProps(action.id, 'note_text')}
             placeholder="متن یادداشت"
           />
           {renderVariableTools(action, [{ key: 'note_text', label: 'متن یادداشت' }])}
@@ -2296,6 +2347,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             value={config.message}
             disabled={disabled}
             onChange={(e) => updateActionConfig(action.id, { message: e.target.value })}
+            {...textCaretProps(action.id, 'message')}
             placeholder="متن پیامک"
           />
           {renderVariableTools(action, [{ key: 'message', label: 'متن پیامک' }])}
@@ -2311,7 +2363,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             </div>
             <Select {...commonSelectProps} value={config.showcase_id || undefined} disabled={disabled} options={instagramShowcaseOptions} onChange={(value) => updateActionConfig(action.id, { showcase_id: value })} placeholder="ویترین محصولات (اختیاری)" />
             <div className="flex justify-end">{renderMessageTemplateButton(action.id, 'message', 'پیام‌های آماده اینستاگرام')}</div>
-            <Input.TextArea rows={4} value={config.message} disabled={disabled} onChange={(event) => updateActionConfig(action.id, { message: event.target.value })} placeholder="متن پیام اینستاگرام" />
+            <Input.TextArea rows={4} value={config.message} disabled={disabled} onChange={(event) => updateActionConfig(action.id, { message: event.target.value })} {...textCaretProps(action.id, 'message')} placeholder="متن پیام اینستاگرام" />
             {renderVariableTools(action, [{ key: 'message', label: 'متن پیام اینستاگرام' }])}
           </div>
         );
@@ -2331,7 +2383,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           </div>
           {config.recipient_source === 'related_record' ? <Select {...commonSelectProps} value={config.showcase_id || undefined} disabled={disabled} options={instagramShowcaseOptions} onChange={(value) => updateActionConfig(action.id, { showcase_id: value })} placeholder="ویترین محصولات (اختیاری)" /> : null}
           <div className="flex justify-end">{renderMessageTemplateButton(action.id, 'message', 'پیام‌های آماده اینستاگرام')}</div>
-          <Input.TextArea rows={4} value={config.message} disabled={disabled} onChange={(event) => updateActionConfig(action.id, { message: event.target.value })} placeholder="متن پیام اینستاگرام" />
+          <Input.TextArea rows={4} value={config.message} disabled={disabled} onChange={(event) => updateActionConfig(action.id, { message: event.target.value })} {...textCaretProps(action.id, 'message')} placeholder="متن پیام اینستاگرام" />
           {renderVariableTools(action, [{ key: 'message', label: 'متن پیام اینستاگرام' }])}
         </div>
       );
@@ -2343,7 +2395,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             این اقدام فقط در گردش‌کاری اجرا می‌شود که رویداد «کامنت جدید» را دریافت کرده باشد؛ پاسخ به همان کامنت ثبت‌شده ارسال می‌شود.
           </div>
           <div className="flex justify-end">{renderMessageTemplateButton(action.id, 'message', 'پیام‌های آماده اینستاگرام')}</div>
-          <Input.TextArea rows={4} value={config.message} disabled={disabled} onChange={(event) => updateActionConfig(action.id, { message: event.target.value })} placeholder="متن پاسخ به کامنت" />
+          <Input.TextArea rows={4} value={config.message} disabled={disabled} onChange={(event) => updateActionConfig(action.id, { message: event.target.value })} {...textCaretProps(action.id, 'message')} placeholder="متن پاسخ به کامنت" />
           {renderVariableTools(action, [{ key: 'message', label: 'متن پاسخ به کامنت' }])}
         </div>
       );
@@ -2375,6 +2427,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             value={config.subject}
             disabled={disabled}
             onChange={(e) => updateActionConfig(action.id, { subject: e.target.value })}
+            {...textCaretProps(action.id, 'subject')}
             placeholder="موضوع ایمیل"
           />
           <div className="flex justify-end">
@@ -2385,6 +2438,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             value={config.body}
             disabled={disabled}
             onChange={(e) => updateActionConfig(action.id, { body: e.target.value })}
+            {...textCaretProps(action.id, 'body')}
             placeholder="متن ایمیل"
           />
           {renderVariableTools(action, [
@@ -2422,6 +2476,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             value={config.title}
             disabled={disabled}
             onChange={(e) => updateActionConfig(action.id, { title: e.target.value })}
+            {...textCaretProps(action.id, 'title')}
             placeholder="عنوان پیام (اختیاری)"
           />
           <div className="flex justify-end">
@@ -2432,6 +2487,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             value={config.message}
             disabled={disabled}
             onChange={(e) => updateActionConfig(action.id, { message: e.target.value })}
+            {...textCaretProps(action.id, 'message')}
             placeholder="متن پیام"
           />
           <div className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">

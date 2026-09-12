@@ -42,6 +42,7 @@ type Props = {
   renderMessageTemplateButton: (fieldKey: string, title: string) => React.ReactNode;
   renderVariableTools: (targets: Array<{ key: string; label: string }>) => React.ReactNode;
   onInsertVariable: (fieldKey: string, variableKey: string) => void;
+  onMessageTextSelection: (fieldKey: string, element: HTMLTextAreaElement) => void;
   webFormOptions: Array<{ label: string; value: string }>;
   webFormRelationModuleOptions: Array<{ label: string; value: string }>;
 };
@@ -57,6 +58,7 @@ const WorkflowMessageActionFields: React.FC<Props> = ({
   renderMessageTemplateButton,
   renderVariableTools,
   onInsertVariable,
+  onMessageTextSelection,
   webFormOptions,
   webFormRelationModuleOptions,
 }) => {
@@ -235,6 +237,10 @@ const WorkflowMessageActionFields: React.FC<Props> = ({
               value={String(config[fieldKey] || '')}
               disabled={disabled}
               onChange={(event) => onConfigPatch({ [fieldKey]: event.target.value })}
+              onFocus={(event) => onMessageTextSelection(fieldKey, event.currentTarget)}
+              onSelect={(event) => onMessageTextSelection(fieldKey, event.currentTarget)}
+              onKeyUp={(event) => onMessageTextSelection(fieldKey, event.currentTarget)}
+              onClick={(event) => onMessageTextSelection(fieldKey, event.currentTarget)}
               placeholder={`متن ${label}`}
             />
             {renderVariableTools([{ key: fieldKey, label: `متن ${label}` }])}
