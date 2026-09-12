@@ -180,6 +180,16 @@ describe('print template store grouping', () => {
     expect(template?.contentHtml).toContain('{{record.employee_military_service_status}}');
     expect(template?.contentHtml).toContain('{{record.employee_children_count}}');
     expect(template?.contentHtml).toContain('{{record.employee_insurance_number}}');
+    expect(template?.contentHtml).toContain('>حقوق پایه<');
+    expect(template?.contentHtml).toContain('{{record.base_salary}}');
+    expect(template?.contentHtml).toContain('{{record.bonus_total}}');
+    expect(template?.contentHtml).toContain('{{record.earnings_total}}');
+    expect(template?.contentHtml).toContain('{{record.deduction_total}}');
+    expect(template?.contentHtml).toContain('>ناخالص<');
+    expect(template?.contentHtml).toContain('>خالص پرداختی<');
+    expect(template?.contentHtml).toContain('{{record.gross_amount}}');
+    expect(template?.contentHtml).not.toContain('{{record.net_amount}}');
+    expect(template?.contentHtml).not.toContain('{{company.currency_label}}');
     expect(variables.find((item) => item.value === 'employee.insurance_number')?.group).toBe('اطلاعات کارمند');
     expect(templates).toEqual(expect.arrayContaining([
       expect.objectContaining({

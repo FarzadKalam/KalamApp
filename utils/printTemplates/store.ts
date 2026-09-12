@@ -1779,10 +1779,26 @@ const buildPayrollSlipPrintTemplate = (
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.employee_insurance_number}}</td>
       </tr>
       <tr>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">حقوق پایه</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.base_salary}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">کارکرد</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.task_wage_total}}</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">مزایا</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.bonus_total}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">جمع حقوق و مزایا</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.earnings_total}}</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">جمع کسورات</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.deduction_total}}</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">ناخالص</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.gross_amount}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">خالص پرداختی</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.net_amount}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.earnings_total}}</td>
+      </tr>
+      <tr>
+        <td colspan="2" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">خالص پرداختی</td>
+        <td colspan="2" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:800;">{{record.gross_amount}}</td>
       </tr>
     </tbody>
   </table>
