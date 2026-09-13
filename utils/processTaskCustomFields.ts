@@ -151,6 +151,10 @@ export const normalizeProcessTaskCustomField = (value: any): ModuleField | null 
     'required_on_create',
     'requiredOnCreate',
   ]);
+  const showInContentCalendar = hasTruthyFlag(flagContainers, [
+    'show_in_content_calendar',
+    'showInContentCalendar',
+  ]);
   const requiredForStatus = normalizeRequiredForStatus(
     value?.required_for_status
     || value?.requiredForStatus
@@ -210,6 +214,10 @@ export const normalizeProcessTaskCustomField = (value: any): ModuleField | null 
     ...(requiredForStatus ? {
       requiredForStatus,
       required_for_status: requiredForStatus,
+    } : {}),
+    ...(showInContentCalendar ? {
+      showInContentCalendar: true,
+      show_in_content_calendar: true,
     } : {}),
     ...(defaultAssigneeCombo ? {
       default_assignee_combo: defaultAssigneeCombo,

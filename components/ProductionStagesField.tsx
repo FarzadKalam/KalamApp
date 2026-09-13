@@ -1403,6 +1403,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const draftCustomFieldType = Form.useWatch('type', draftCustomFieldForm) || FieldType.TEXT;
   const draftCustomFieldRelationTargetModule = Form.useWatch('relationTargetModule', draftCustomFieldForm);
   const draftCustomFieldDefaultAssigneeCombo = Form.useWatch('default_assignee_combo', draftCustomFieldForm);
+  const canShowCustomFieldInContentCalendar = stageAutomationScopeModuleIds.includes('content_calendars');
   const draftStageTaskType = String(draftStageTaskTypeValue || '').trim();
   const baseTaskStatusOptions = useMemo(() => getBaseTaskStatusOptions(), []);
   const draftStageStatusValueSet = useMemo(
@@ -7818,6 +7819,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       relationLinkedToProcess: (nextField?.relationConfig as any)?.[PROCESS_TASK_RELATION_PROCESS_LINK_FLAG] === true
         || (nextField?.relationConfig as any)?.link_to_process_related_record === true,
       dynamicCategory: nextField?.dynamicOptionsCategory || undefined,
+      show_in_content_calendar: (nextField as any)?.showInContentCalendar === true || (nextField as any)?.show_in_content_calendar === true,
     });
     setIsDraftCustomFieldModalOpen(true);
   }, [draftCustomFieldForm]);
@@ -7876,6 +7878,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         order: previousField?.order,
         required_for_status: String(values?.required_for_status || '').trim() || undefined,
         default_assignee_combo: String(values?.default_assignee_combo || '').trim() || undefined,
+        show_in_content_calendar: canShowCustomFieldInContentCalendar && values?.show_in_content_calendar === true,
       }])[0];
 
       if (!normalizedField) {
@@ -7897,7 +7900,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     } catch {
       // Ant validation handles this case.
     }
-  }, [closeDraftCustomFieldModal, draftCustomFieldForm, draftCustomFields, editingDraftCustomFieldKey]);
+  }, [canShowCustomFieldInContentCalendar, closeDraftCustomFieldModal, draftCustomFieldForm, draftCustomFields, editingDraftCustomFieldKey]);
 
   const removeDraftCustomField = useCallback((fieldKey: string) => {
     setDraftCustomFields((prev) => assignProcessTaskCustomFieldOrder(
@@ -12482,6 +12485,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               ]}
             />
           </Form.Item>
+          {canShowCustomFieldInContentCalendar ? (
+            <Form.Item name="show_in_content_calendar" valuePropName="checked" className="mb-3">
+              <Checkbox>نمایش در تقویم محتوایی</Checkbox>
+            </Form.Item>
+          ) : null}
           <Form.Item name="default_assignee_combo" hidden><Input /></Form.Item>
           <Form.Item label="مسئول پیش‌فرض این فیلد">
             <div className="space-y-2">
