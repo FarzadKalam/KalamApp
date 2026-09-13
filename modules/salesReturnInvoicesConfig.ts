@@ -61,13 +61,6 @@ const BLOCKS = {
       },
       { key: 'quantity', title: 'تعداد/مقدار', type: FieldType.NUMBER, width: 120 },
       {
-        key: 'package_id',
-        title: 'پکیج',
-        type: FieldType.RELATION,
-        width: 260,
-        relationConfig: { targetModule: 'product_bundles', targetField: 'name' },
-      },
-      {
         key: 'price_list_id',
         title: 'لیست قیمت',
         type: FieldType.RELATION,
@@ -101,19 +94,8 @@ const BLOCKS = {
       },
       { key: 'unit_price', title: 'قیمت واحد', type: FieldType.PRICE, width: 150 },
       { key: 'discount', title: 'تخفیف', type: FieldType.PERCENTAGE_OR_AMOUNT, width: 130, showTotal: true },
-      { key: 'discount_percent', title: 'درصد تخفیف آیتم', type: FieldType.PERCENTAGE, width: 130 },
       { key: 'vat', title: 'ارزش افزوده', type: FieldType.PERCENTAGE_OR_AMOUNT, width: 130, showTotal: true },
       { key: 'total_price', title: 'جمع کل', type: FieldType.PRICE, width: 160, showTotal: true, readonly: true },
-      {
-        key: 'source_shelf_id',
-        title: 'محل بازگشت',
-        type: FieldType.RELATION,
-        width: 150,
-        relationConfig: { targetModule: 'shelves', targetField: 'name' },
-      },
-      { key: 'description', title: 'توضیحات', type: FieldType.LONG_TEXT, width: 170 },
-      { key: 'length', title: 'طول', type: FieldType.NUMBER, width: 108 },
-      { key: 'width', title: 'عرض', type: FieldType.NUMBER, width: 108 },
     ],
   },
 

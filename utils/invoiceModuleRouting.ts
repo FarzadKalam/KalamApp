@@ -13,6 +13,21 @@ export const isReturnInvoiceModuleId = (moduleId: string | null | undefined) => 
   return normalized === 'sales_return_invoices' || normalized === 'purchase_return_invoices';
 };
 
+/**
+ * فاکتورهای برگشتی ماژول‌های نمایشی هستند و رکوردشان در جدول اصلی فاکتور
+ * نگهداری می‌شود. این نگاشت را مستقل از تنظیمات قابل ویرایش ماژول نگه می‌داریم
+ * تا هیچ مسیر ثبت/ویرایشی به‌اشتباه نام ماژول را به PostgREST ارسال نکند.
+ */
+export const resolveInvoiceStorageTable = (
+  moduleId: string | null | undefined,
+  fallbackTable?: string | null,
+) => {
+  const normalized = String(moduleId || '').trim();
+  if (normalized === 'sales_return_invoices') return 'invoices';
+  if (normalized === 'purchase_return_invoices') return 'purchase_invoices';
+  return String(fallbackTable || normalized).trim();
+};
+
 export const getTaxpayerInvoicePatternForModule = (
   moduleId: string | null | undefined,
   fallback = DEFAULT_TAXPAYER_INVOICE_PATTERN,

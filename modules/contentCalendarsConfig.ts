@@ -33,6 +33,8 @@ export const contentCalendarsConfig: ModuleDefinition = {
     { key: 'start_date', labels: { fa: 'تاریخ شروع', en: 'Start date' }, type: FieldType.DATE, location: FieldLocation.BLOCK, blockId: 'schedule', order: 1, isTableColumn: true, nature: FieldNature.STANDARD },
     { key: 'end_date', labels: { fa: 'تاریخ پایان', en: 'End date' }, type: FieldType.DATE, location: FieldLocation.BLOCK, blockId: 'schedule', order: 2, isTableColumn: true, nature: FieldNature.STANDARD },
     { key: 'description', labels: { fa: 'توضیحات', en: 'Description' }, type: FieldType.LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'context', order: 3, nature: FieldNature.STANDARD },
+    { key: 'is_public', labels: { fa: 'نمایش آنلاین تقویم', en: 'Public calendar' }, type: FieldType.CHECKBOX, location: FieldLocation.BLOCK, blockId: 'context', order: 3.1, nature: FieldNature.STANDARD },
+    { key: 'public_link', labels: { fa: 'لینک تقویم آنلاین', en: 'Online calendar link' }, type: FieldType.LINK, location: FieldLocation.BLOCK, blockId: 'context', order: 3.2, readonly: true, nature: FieldNature.STANDARD, hideInCreateForm: true },
     { key: 'created_by', labels: { fa: 'ایجادکننده', en: 'Created by' }, type: FieldType.USER, location: FieldLocation.SYSTEM_FOOTER, order: 89, readonly: true, nature: FieldNature.SYSTEM },
     { key: 'created_at', labels: { fa: 'زمان ایجاد', en: 'Created at' }, type: FieldType.DATETIME, location: FieldLocation.SYSTEM_FOOTER, order: 90, readonly: true, nature: FieldNature.SYSTEM },
     { key: 'updated_by', labels: { fa: 'آخرین ویرایش‌کننده', en: 'Last editor' }, type: FieldType.USER, location: FieldLocation.SYSTEM_FOOTER, order: 91, readonly: true, nature: FieldNature.SYSTEM },

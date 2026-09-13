@@ -19,7 +19,7 @@ import { normalizeOperationalDocumentTotals } from "../utils/operationalDocument
 import { shouldAutoSyncInvoiceAccounting } from "../utils/invoiceAccountingPolicy";
 import { buildInstructionModuleConfig, buildInstructionModuleOptions, INSTRUCTIONS_MODULE_ID } from "../utils/instructionSupport";
 import { syncProcessTemplateStages as syncProcessTemplateStagesShared } from "../utils/processTemplateStages";
-import { getTaxpayerInvoicePatternForModule, getTaxpayerInvoiceSubjectForModule, isReturnInvoiceModuleId } from "../utils/invoiceModuleRouting";
+import { getTaxpayerInvoicePatternForModule, getTaxpayerInvoiceSubjectForModule, isReturnInvoiceModuleId, resolveInvoiceStorageTable } from "../utils/invoiceModuleRouting";
 import { fetchAssigneeDirectory } from "../utils/referenceData";
 import { applyInvoicePaymentAllocation } from "../utils/invoicePaymentAllocationRuntime";
 import { runWriteWithCompatiblePayload } from "../utils/writeCompat";
@@ -234,14 +234,15 @@ export const ModuleCreate = () => {
                 cacheKey: `module-create:${moduleConfig.table}`,
                 payload: recordPayload,
                 execute: async (candidatePayload) => {
+                  const storageTable = resolveInvoiceStorageTable(moduleId, moduleConfig.table);
                   let result = await supabase
-                    .from(moduleConfig.table)
+                    .from(storageTable)
                     .insert(withCreateAuditFields(candidatePayload))
                     .select(selectColumns)
                     .single();
                   if (result.error && isMissingAuditColumnError(result.error)) {
                     result = await supabase
-                      .from(moduleConfig.table)
+                      .from(storageTable)
                       .insert(candidatePayload)
                       .select(selectColumns)
                       .single();

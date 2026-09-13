@@ -6,6 +6,7 @@ import {
   normalizeTaxpayerInvoicePattern,
   normalizeTaxpayerInvoiceSubject,
   resolveInvoiceModuleIdForRecord,
+  resolveInvoiceStorageTable,
 } from './invoiceModuleRouting';
 
 describe('invoiceModuleRouting', () => {
@@ -48,5 +49,11 @@ describe('invoiceModuleRouting', () => {
 
   it('preserves explicit return module ids', () => {
     expect(resolveInvoiceModuleIdForRecord('sales_return_invoices', { taxpayer_invoice_pattern: '1' })).toBe('sales_return_invoices');
+  });
+
+  it('writes return invoice modules to their shared storage tables', () => {
+    expect(resolveInvoiceStorageTable('sales_return_invoices', 'sales_return_invoices')).toBe('invoices');
+    expect(resolveInvoiceStorageTable('purchase_return_invoices', 'purchase_return_invoices')).toBe('purchase_invoices');
+    expect(resolveInvoiceStorageTable('invoices', 'invoices')).toBe('invoices');
   });
 });

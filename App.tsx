@@ -122,6 +122,7 @@ const loadInvoicePublicPage = () => import("./pages/InvoicePublicPage");
 const loadDeliveryPublicPage = () => import("./pages/DeliveryPublicPage");
 const loadOnlineCatalogPublicPage = () => import("./pages/OnlineCatalogPublicPage");
 const loadOnlineAccountCardPublicPage = () => import("./pages/OnlineAccountCardPublicPage");
+const loadOnlineContentCalendarPublicPage = () => import("./pages/OnlineContentCalendarPublicPage");
 const loadPaymentCallbackPage = () => import("./pages/PaymentCallbackPage");
 const loadGlobalSearchPage = () => import("./pages/GlobalSearchPage");
 const loadOrgKnowledgePage = () => import("./pages/OrgKnowledgePage");
@@ -181,6 +182,7 @@ const InvoicePublicPage = lazy(loadInvoicePublicPage);
 const DeliveryPublicPage = lazy(loadDeliveryPublicPage);
 const OnlineCatalogPublicPage = lazy(loadOnlineCatalogPublicPage);
 const OnlineAccountCardPublicPage = lazy(loadOnlineAccountCardPublicPage);
+const OnlineContentCalendarPublicPage = lazy(loadOnlineContentCalendarPublicPage);
 const PaymentCallbackPage = lazy(loadPaymentCallbackPage);
 const GlobalSearchPage = lazy(loadGlobalSearchPage);
 const OrgKnowledgePage = lazy(loadOrgKnowledgePage);
@@ -791,6 +793,7 @@ function App() {
           <Route path="/d/:code" element={<PublicLazyRouteBoundary><DeliveryPublicPage /></PublicLazyRouteBoundary>} />
           <Route path="/c/:token" element={<PublicLazyRouteBoundary><OnlineCatalogPublicPage /></PublicLazyRouteBoundary>} />
           <Route path="/account/:token" element={<PublicLazyRouteBoundary><OnlineAccountCardPublicPage /></PublicLazyRouteBoundary>} />
+          <Route path="/calendar/:token" element={<PublicLazyRouteBoundary><OnlineContentCalendarPublicPage /></PublicLazyRouteBoundary>} />
           <Route path="/payment/callback" element={<PublicLazyRouteBoundary><PaymentCallbackPage /></PublicLazyRouteBoundary>} />
           <Route path="/f/:code" element={<LazyRouteBoundary><FileShortLinkRedirectPage /></LazyRouteBoundary>} />
           <Route path="/r/:code" element={<LazyRouteBoundary><FileShortLinkRedirectPage /></LazyRouteBoundary>} />

@@ -71,6 +71,7 @@ import { applyInvoicePaymentAllocation } from '../utils/invoicePaymentAllocation
 import { isCustomerPurchaseStatus, normalizeCustomerClubCode, resolveCustomerClubAmount } from '../utils/customerClub';
 import { evaluateWorkflowConditions } from '../utils/workflowRuntime';
 import { useCurrencyConfig } from '../utils/currency';
+import { resolveInvoiceStorageTable } from '../utils/invoiceModuleRouting';
 
 const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
 const SAAS_ANNOUNCEMENT_CONDITION_FIELD_KEYS = new Set(['conditions_all', 'conditions_any']);
@@ -1079,7 +1080,11 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const fetchRecord = async (withLoading = true) => {
     if (withLoading) setLoading(true);
     try {
-      const { data, error } = await supabase.from(module.table).select('*').eq('id', recordId).single();
+      const { data, error } = await supabase
+        .from(resolveInvoiceStorageTable(module.id, module.table))
+        .select('*')
+        .eq('id', recordId)
+        .single();
       if (error) throw error;
           if (data) {
         let nextValues: any = normalizeModuleFormValues(module.id, data);
@@ -1931,15 +1936,16 @@ const SmartForm: React.FC<SmartFormProps> = ({
             : { ...payload, updated_by: userId };
         };
         const persistWithAuditFallback = async (mode: 'create' | 'update', payload: Record<string, any>, targetRecordId?: string) => {
+          const storageTable = resolveInvoiceStorageTable(module.id, module.table);
           if (mode === 'create' && supportsSystemCode(module.id) && !payload.system_code) {
-            payload.system_code = await buildClientFallbackSystemCode(supabase, module.id, module.table);
+            payload.system_code = await buildClientFallbackSystemCode(supabase, module.id, storageTable);
           }
           let writablePayload = { ...payload };
           let auditedPayload = withAuditFields(writablePayload, mode);
           if (mode === 'update' && targetRecordId) {
-            let result = await supabase.from(module.table).update(auditedPayload).eq('id', targetRecordId);
+            let result = await supabase.from(storageTable).update(auditedPayload).eq('id', targetRecordId);
             if (result.error && isMissingAuditColumnError(result.error)) {
-              result = await supabase.from(module.table).update(writablePayload).eq('id', targetRecordId);
+              result = await supabase.from(storageTable).update(writablePayload).eq('id', targetRecordId);
             }
             while (result.error && isMissingColumnLikeError(result.error)) {
               const missingColumn = extractMissingColumnName(result.error);
@@ -1947,22 +1953,22 @@ const SmartForm: React.FC<SmartFormProps> = ({
               if (nextPayload === writablePayload) break;
               writablePayload = nextPayload;
               auditedPayload = withAuditFields(writablePayload, mode);
-              result = await supabase.from(module.table).update(auditedPayload).eq('id', targetRecordId);
+              result = await supabase.from(storageTable).update(auditedPayload).eq('id', targetRecordId);
               if (result.error && isMissingAuditColumnError(result.error)) {
-                result = await supabase.from(module.table).update(writablePayload).eq('id', targetRecordId);
+                result = await supabase.from(storageTable).update(writablePayload).eq('id', targetRecordId);
               }
             }
             return result;
           }
 
           let insertResult = await supabase
-            .from(module.table)
+            .from(storageTable)
             .insert(auditedPayload)
             .select('id')
             .single();
           if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
             insertResult = await supabase
-              .from(module.table)
+              .from(storageTable)
               .insert(writablePayload)
               .select('id')
               .single();
@@ -1974,13 +1980,13 @@ const SmartForm: React.FC<SmartFormProps> = ({
             writablePayload = nextPayload;
             auditedPayload = withAuditFields(writablePayload, mode);
             insertResult = await supabase
-              .from(module.table)
+              .from(storageTable)
               .insert(auditedPayload)
               .select('id')
               .single();
             if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
               insertResult = await supabase
-                .from(module.table)
+                .from(storageTable)
                 .insert(writablePayload)
                 .select('id')
                 .single();
@@ -1994,19 +2000,19 @@ const SmartForm: React.FC<SmartFormProps> = ({
             && attempt < 3;
             attempt += 1
           ) {
-            const fallbackSystemCode = await buildClientFallbackSystemCode(supabase, module.id, module.table);
+            const fallbackSystemCode = await buildClientFallbackSystemCode(supabase, module.id, storageTable);
             const payloadWithSystemCode = { ...writablePayload, system_code: fallbackSystemCode };
             const auditedPayloadWithSystemCode = withAuditFields(payloadWithSystemCode, mode);
 
             insertResult = await supabase
-              .from(module.table)
+              .from(storageTable)
               .insert(auditedPayloadWithSystemCode)
               .select('id')
               .single();
 
             if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
               insertResult = await supabase
-                .from(module.table)
+                .from(storageTable)
                 .insert(payloadWithSystemCode)
                 .select('id')
                 .single();
@@ -2476,6 +2482,48 @@ const SmartForm: React.FC<SmartFormProps> = ({
         });
       }
       allValues = { ...allValues, ...resetPatch };
+    }
+    if (
+      module.id === 'sales_return_invoices'
+      && !recordId
+      && Object.prototype.hasOwnProperty.call(changedValues || {}, 'source_invoice_id')
+    ) {
+      const sourceInvoiceId = String(changedValues?.source_invoice_id || '').trim();
+      if (!sourceInvoiceId) {
+        const resetPatch = { customer_id: null, invoiceItems: [] };
+        form.setFieldsValue(resetPatch);
+        allValues = { ...allValues, ...resetPatch };
+      } else {
+        // RLS تضمین می‌کند فقط فاکتور همان سازمان قابل خواندن است. تمام داده‌های
+        // ردیف (از جمله توضیح، ابعاد و تاریخ‌ها) کپی می‌شوند تا در آیکون‌های ردیف
+        // برگشت نیز بدون از دست رفتن اطلاعات دیده شوند.
+        void supabase
+          .from('invoices')
+          .select('customer_id, invoiceItems')
+          .eq('id', sourceInvoiceId)
+          .neq('taxpayer_invoice_subject', '4')
+          .maybeSingle()
+          .then(({ data, error }) => {
+            if (error) throw error;
+            if (!data) {
+              messageApi.error('فاکتور فروش اصلی یافت نشد یا قابل استفاده نیست.');
+              return;
+            }
+            const copiedItems = (Array.isArray(data.invoiceItems) ? data.invoiceItems : []).map((item: any) => ({
+              ...item,
+              row_key: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+                ? crypto.randomUUID()
+                : `return-row-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+            }));
+            const sourcePatch = { customer_id: data.customer_id || null, invoiceItems: copiedItems };
+            form.setFieldsValue(sourcePatch);
+            setFormData((previous: any) => ({ ...previous, ...sourcePatch }));
+          })
+          .catch((error) => {
+            console.warn('Could not load the source sales invoice for return', error);
+            messageApi.error(toFaErrorMessage(error, 'بارگذاری اقلام فاکتور فروش اصلی ناموفق بود.'));
+          });
+      }
     }
     if (module.id === 'process_templates' && Object.prototype.hasOwnProperty.call(changedValues || {}, 'module_ids')) {
       const syncedValues = syncProcessTemplateTargetModules(allValues || {});

@@ -1,11 +1,11 @@
 {
   "name": "tazesystem",
   "private": true,
-  "version": "2.74.0.1.11",
+  "version": "2.74.0.1.14",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build",
+    "build": "node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build && node ./scripts/stamp-service-worker-version.mjs",
     "test": "vitest run",
     "test:critical-ui": "vitest run components/moduleShow/PrintSection.test.tsx components/SmartForm.test.tsx utils/notificationViewModels.test.ts utils/webForms.test.ts utils/printTemplates/printPerformance.test.ts",
     "test:module-show": "vitest run components/moduleShow/PrintSection.test.tsx",

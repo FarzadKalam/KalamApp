@@ -217,10 +217,12 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const isShelfInventory = moduleId === 'shelves' && block?.id === 'shelf_inventory';
   const isProductionOrder = moduleId === 'production_orders';
   const isBomItemBlock = ['items_leather', 'items_lining', 'items_fitting', 'items_accessory'].includes(block?.id);
-  const isInvoiceItems = moduleId === 'invoices' && block?.id === 'invoiceItems';
+  // برگشت از فروش در همان جدول invoices ذخیره می‌شود و باید دقیقاً همان
+  // رفتار ردیف‌های فروش (کالا، پکیج، تبلیغات محیطی، آیکون‌ها و تخفیف) را داشته باشد.
+  const isInvoiceItems = (moduleId === 'invoices' || moduleId === 'sales_return_invoices') && block?.id === 'invoiceItems';
   const isPurchaseInvoiceItems = moduleId === 'purchase_invoices' && block?.id === 'invoiceItems';
   const isAnyInvoiceItems = isInvoiceItems || isPurchaseInvoiceItems;
-  const isInvoicePayments = moduleId === 'invoices' && block?.id === 'payments';
+  const isInvoicePayments = (moduleId === 'invoices' || moduleId === 'sales_return_invoices') && block?.id === 'payments';
   const isPurchaseInvoicePayments = moduleId === 'purchase_invoices' && block?.id === 'payments';
   const isExpenseItems = moduleId === 'expense_documents' && block?.id === 'items';
   const isExpensePayments = moduleId === 'expense_documents' && block?.id === 'payments';
