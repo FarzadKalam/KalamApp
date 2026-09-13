@@ -413,7 +413,7 @@ const ContentCalendarRuntime: React.FC<{
         mode: "run",
         id: context.processRunId,
         title: processTitle,
-        templateId: sourceTemplateId || undefined,
+        templateId: sourceTemplateId || '',
         templateTitle: templateTitle || processTitle,
         relatedRecordLabel: getRecordTitle(calendar, MODULES.content_calendars, { fallback: "تقویم محتوایی" }),
         statusLabel: "draft",
@@ -601,8 +601,8 @@ const ContentCalendarRuntime: React.FC<{
       allUsers: directory.users,
       allRoles: directory.roles,
     });
-    const projectProcesses = !isTask
-      ? Array.from(
+    const projectProcesses: Array<{ title: string; tasks: any[] }> = !isTask
+      ? Array.from<{ title: string; tasks: any[] }>(
           tasks
             .filter((task) => String(task?.project_id || "") === String(record?.id || ""))
             .reduce((groups, task) => {

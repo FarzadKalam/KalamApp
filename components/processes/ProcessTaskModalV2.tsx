@@ -468,7 +468,12 @@ const buildCustomFields = (stage: ProcessV2Stage | null): MockCustomField[] => {
     sourceStageMetadata?.process_links,
     sourceStageMetadata?.process_link_map,
     sourceStageRecurrence?.process_links,
-  ].reduce<Record<string, string>>((links, value) => ({ ...links, ...parseProcessLinkMap(value) }), {});
+  ].reduce<Record<string, string>>((links, value) => {
+    Object.entries(parseProcessLinkMap(value)).forEach(([moduleId, recordId]) => {
+      if (recordId) links[moduleId] = recordId;
+    });
+    return links;
+  }, {});
   const values = applyProcessLinkedRelationValues(fields, mergeProcessTaskCustomFieldValues(fields, {
     ...rawValues,
     ...fallbackValues,
@@ -835,6 +840,11 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
           ضروری برای ایجاد
         </Tag>
       ) : null}
+      {requiredForCompletion ? (
+        <Tag className="!m-0 !rounded-full !border-blue-200 !bg-blue-50 !px-1.5 !py-0 !text-[10px] !font-bold !text-blue-700 dark:!border-blue-500/30 dark:!bg-blue-500/10 dark:!text-blue-200">
+          ضروری برای تکمیل
+        </Tag>
+      ) : null}
       {requiredForStatusLabel ? (
         <Tag className="!m-0 !rounded-full !border-amber-200 !bg-amber-50 !px-1.5 !py-0 !text-[10px] !font-bold !text-amber-700 dark:!border-amber-500/30 dark:!bg-amber-500/10 dark:!text-amber-200">
           ضروری برای وضعیت «{requiredForStatusLabel}»
@@ -851,6 +861,11 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
           {requiredForCreation ? (
             <Tag className="!m-0 !rounded-full !border-red-200 !bg-red-50 !px-1.5 !py-0 !text-[10px] !font-bold !text-red-700 dark:!border-red-500/30 dark:!bg-red-500/10 dark:!text-red-200">
               ضروری برای ایجاد
+            </Tag>
+          ) : null}
+          {requiredForCompletion ? (
+            <Tag className="!m-0 !rounded-full !border-blue-200 !bg-blue-50 !px-1.5 !py-0 !text-[10px] !font-bold !text-blue-700 dark:!border-blue-500/30 dark:!bg-blue-500/10 dark:!text-blue-200">
+              ضروری برای تکمیل
             </Tag>
           ) : null}
           {requiredForStatusLabel ? (

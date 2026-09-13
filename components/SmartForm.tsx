@@ -2497,12 +2497,12 @@ const SmartForm: React.FC<SmartFormProps> = ({
         // RLS تضمین می‌کند فقط فاکتور همان سازمان قابل خواندن است. تمام داده‌های
         // ردیف (از جمله توضیح، ابعاد و تاریخ‌ها) کپی می‌شوند تا در آیکون‌های ردیف
         // برگشت نیز بدون از دست رفتن اطلاعات دیده شوند.
-        void supabase
+        void Promise.resolve(supabase
           .from('invoices')
           .select('customer_id, invoiceItems')
           .eq('id', sourceInvoiceId)
           .neq('taxpayer_invoice_subject', '4')
-          .maybeSingle()
+          .maybeSingle())
           .then(({ data, error }) => {
             if (error) throw error;
             if (!data) {
@@ -2519,7 +2519,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
             form.setFieldsValue(sourcePatch);
             setFormData((previous: any) => ({ ...previous, ...sourcePatch }));
           })
-          .catch((error) => {
+          .catch((error: unknown) => {
             console.warn('Could not load the source sales invoice for return', error);
             messageApi.error(toFaErrorMessage(error, 'بارگذاری اقلام فاکتور فروش اصلی ناموفق بود.'));
           });
@@ -2583,6 +2583,20 @@ const SmartForm: React.FC<SmartFormProps> = ({
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [draftKey, form, formData, initialValuesSignature, visible]);
+
+  useEffect(() => {
+    if (!visible || typeof window === 'undefined') return;
+    const keyboardCapable = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+    if (!keyboardCapable) return;
+    const handleShortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key === 'Enter') {
+        event.preventDefault();
+        form.submit();
+      }
+    };
+    window.addEventListener('keydown', handleShortcut);
+    return () => window.removeEventListener('keydown', handleShortcut);
+  }, [form, visible]);
 
   const canEditModule = modulePermissions.edit !== false;
   const visibleSystemFieldKeys = new Set(
@@ -3462,6 +3476,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
           <Button size="middle" onClick={onCancel} className="rounded-xl">انصراف</Button>
           <Button size="middle" type="primary" onClick={() => form.submit()} loading={loading} disabled={!canEditModule} icon={<SaveOutlined />} className="rounded-xl bg-leather-600 hover:!bg-leather-500 shadow-lg shadow-leather-500/20">
             {recordId ? 'ذخیره تغییرات' : 'ثبت نهایی'}
+            <kbd className="keyboard-shortcut-hint mr-1 text-[9px] opacity-70">Ctrl+Enter</kbd>
           </Button>
         </div>
 

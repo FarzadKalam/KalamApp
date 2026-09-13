@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Button, Tooltip } from 'antd';
 import type { ButtonProps } from 'antd';
 import { useNavigate } from 'react-router-dom';
@@ -24,6 +24,17 @@ const AiAssistantLauncher: React.FC<AiAssistantLauncherProps> = ({
     navigate('/ai');
   };
 
+  useEffect(() => {
+    if (disabled || typeof window === 'undefined' || !window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
+    const onShortcut = (event: KeyboardEvent) => {
+      if (!event.altKey || event.shiftKey || event.ctrlKey || event.metaKey || event.key.toLowerCase() !== 'a') return;
+      event.preventDefault();
+      navigate('/ai');
+    };
+    window.addEventListener('keydown', onShortcut);
+    return () => window.removeEventListener('keydown', onShortcut);
+  }, [disabled, navigate]);
+
   const button = (
     <Button
       type="text"
@@ -38,7 +49,7 @@ const AiAssistantLauncher: React.FC<AiAssistantLauncherProps> = ({
   );
 
   return tooltipTitle ? (
-    <Tooltip title={tooltipTitle} placement="bottom">
+    <Tooltip title={<span>{tooltipTitle} <kbd className="keyboard-shortcut-hint mr-1 text-[9px] opacity-70">Alt+A</kbd></span>} placement="bottom">
       {button}
     </Tooltip>
   ) : button;

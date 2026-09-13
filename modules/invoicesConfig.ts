@@ -254,7 +254,7 @@ export const invoicesConfig: ModuleDefinition = {
     },
   },
   actionButtons: [
-    { id: 'retail_invoice_settings', label: 'تنظیمات فاکتور فروشگاهی', placement: 'header', variant: 'default' },
+    { id: 'retail_invoice_settings', label: 'تنظیمات فاکتور فروشگاهی', placement: 'list', variant: 'default' },
   ],
   calendar: { summaryFieldKeys: ['total_invoice_amount'] },
   relationDisplay: {
@@ -303,6 +303,17 @@ export const invoicesConfig: ModuleDefinition = {
       nature: FieldNature.STANDARD,
       isTableColumn: true,
       defaultValue: true,
+    },
+    {
+      key: 'reservation_id',
+      labels: { fa: 'رزرو مرتبط', en: 'Related reservation' },
+      type: FieldType.RELATION,
+      location: FieldLocation.BLOCK,
+      blockId: 'baseInfo',
+      order: 5.1,
+      relationConfig: { targetModule: 'reservations', targetField: 'name' },
+      nature: FieldNature.STANDARD,
+      readonly: true,
     },
     protectAdvertisingCampaignSourceField({
       key: 'sale_source',

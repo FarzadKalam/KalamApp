@@ -1410,3 +1410,9 @@ html:not(.dark) .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-danger
   border-color: rgba(var(--brand-300-rgb), 0.25);
 }
 
+@media (hover: none), (pointer: coarse), (max-width: 767px) {
+  .keyboard-shortcut-hint {
+    display: none !important;
+  }
+}
+

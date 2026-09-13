@@ -1,5 +1,5 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+﻿import React, { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   App,
   Checkbox,
@@ -19,7 +19,7 @@ import {
   Tooltip,
   Typography,
   Upload,
-} from 'antd';
+} from "antd";
 import {
   CopyOutlined,
   DeleteOutlined,
@@ -29,10 +29,10 @@ import {
   PlusOutlined,
   SaveOutlined,
   UpOutlined,
-} from '@ant-design/icons';
-import { MODULES } from '../../moduleRegistry';
-import PrintTemplateToolbar from '../../components/moduleShow/PrintTemplateToolbar';
-import { toFaErrorMessage } from '../../utils/errorMessageFa';
+} from "@ant-design/icons";
+import { MODULES } from "../../moduleRegistry";
+import PrintTemplateToolbar from "../../components/moduleShow/PrintTemplateToolbar";
+import { toFaErrorMessage } from "../../utils/errorMessageFa";
 import {
   buildDefaultTemplatesForModule,
   buildDefaultFooterTemplateForModule,
@@ -48,25 +48,42 @@ import {
   savePrintTemplatesStore,
   getModuleTitle,
   type PrintTemplateVariableOption,
+  type PrintPaperSize,
   type StoredPrintTemplate,
-} from '../../utils/printTemplates/store';
-import { buildListPrintableFields } from '../../utils/listPrintExport';
-import { supabase } from '../../supabaseClient';
-import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploadFileWithProgress';
-import { fileStorageClient, FILE_STORAGE_BUCKET } from '../../utils/storageClient';
-import ResilientImage from '../../components/common/ResilientImage';
+} from "../../utils/printTemplates/store";
+import { buildListPrintableFields } from "../../utils/listPrintExport";
+import { supabase } from "../../supabaseClient";
+import {
+  isUploadCanceledError,
+  uploadFileWithProgress,
+} from "../../utils/uploadFileWithProgress";
+import {
+  fileStorageClient,
+  FILE_STORAGE_BUCKET,
+} from "../../utils/storageClient";
+import ResilientImage from "../../components/common/ResilientImage";
 
-const PrintTemplateEditor = React.lazy(() => import('../../components/moduleShow/PrintTemplateEditor'));
-import { fetchCurrentUserRolePermissions, isSaasAdminModuleId } from '../../utils/permissions';
+const PrintTemplateEditor = React.lazy(
+  () => import("../../components/moduleShow/PrintTemplateEditor"),
+);
+import {
+  fetchCurrentUserRolePermissions,
+  isSaasAdminModuleId,
+} from "../../utils/permissions";
 import {
   filterPrintTemplateVariableOptions,
   filterSystemTemplateFieldOptions,
   sanitizeSelectedPrintFieldKeys,
-} from '../../utils/printTemplates/fieldAccess';
+} from "../../utils/printTemplates/fieldAccess";
 
 const createTemplateId = () => `tpl_${Math.random().toString(36).slice(2, 10)}`;
 const nowIso = () => new Date().toISOString();
-const DEFAULT_PAGE_MARGINS = { top: 12, right: 10, bottom: 12, left: 10 } as const;
+const DEFAULT_PAGE_MARGINS = {
+  top: 12,
+  right: 10,
+  bottom: 12,
+  left: 10,
+} as const;
 const HEADER_HEIGHT_FALLBACK = 96;
 const FOOTER_HEIGHT_FALLBACK = 76;
 const HEADER_HEIGHT_MIN = 52;
@@ -74,80 +91,123 @@ const HEADER_HEIGHT_MAX = 220;
 const FOOTER_HEIGHT_MIN = 36;
 const FOOTER_HEIGHT_MAX = 160;
 const MM_TO_PX = 96 / 25.4;
-const pxToMm = (value: number) => Math.round((Number(value || 0) / MM_TO_PX) * 10) / 10;
+const pxToMm = (value: number) =>
+  Math.round((Number(value || 0) / MM_TO_PX) * 10) / 10;
 const mmToPx = (value: number) => Math.round(Number(value || 0) * MM_TO_PX);
 
-const getPageFrame = (paperSize: 'A4' | 'A5' | 'A6' = 'A4', orientation: 'portrait' | 'landscape' = 'portrait') => {
+const getPageFrame = (
+  paperSize: PrintPaperSize = "A4",
+  orientation: "portrait" | "landscape" = "portrait",
+) => {
   const base =
-    paperSize === 'A6'
-      ? { w: 105, h: 148 }
-      : paperSize === 'A5'
-        ? { w: 148, h: 210 }
-        : { w: 210, h: 297 };
-  const width = orientation === 'landscape' ? base.h : base.w;
-  const height = orientation === 'landscape' ? base.w : base.h;
+    paperSize === "ROLL80"
+      ? { w: 80, h: 297 }
+      : paperSize === "A7"
+        ? { w: 74, h: 105 }
+        : paperSize === "A6"
+          ? { w: 105, h: 148 }
+          : paperSize === "A5"
+            ? { w: 148, h: 210 }
+            : { w: 210, h: 297 };
+  const width = orientation === "landscape" ? base.h : base.w;
+  const height = orientation === "landscape" ? base.w : base.h;
   return {
     widthMm: width,
     heightMm: height,
     width: `${width}mm`,
     minHeight: `${height}mm`,
-    label: `${paperSize} - ${orientation === 'landscape' ? 'افقی' : 'عمودی'}`,
+    label: `${paperSize} - ${orientation === "landscape" ? "افقی" : "عمودی"}`,
   };
 };
 
 const getPersistedEditorHtml = (editorInstance: any): string | null => {
   const editorRoot = editorInstance?.view?.dom as HTMLElement | undefined;
-  if (!editorRoot || typeof window === 'undefined') {
-    return String(editorInstance?.getHTML?.() || '').trim() || null;
+  if (!editorRoot || typeof window === "undefined") {
+    return String(editorInstance?.getHTML?.() || "").trim() || null;
   }
 
   const clone = editorRoot.cloneNode(true) as HTMLElement;
 
-  clone.querySelectorAll('.print-editor-image-handle').forEach((node) => node.remove());
-  clone.querySelectorAll('br.ProseMirror-trailingBreak').forEach((node) => node.remove());
   clone
-    .querySelectorAll('.ProseMirror-widget,.column-resize-handle,.grip-column,.grip-row,.grip-table,.grip-cell,.tableGripColumn,.tableGripRow,.tableGripTable,.column-grip,.row-grip,.table-grip')
+    .querySelectorAll(".print-editor-image-handle")
+    .forEach((node) => node.remove());
+  clone
+    .querySelectorAll("br.ProseMirror-trailingBreak")
+    .forEach((node) => node.remove());
+  clone
+    .querySelectorAll(
+      ".ProseMirror-widget,.column-resize-handle,.grip-column,.grip-row,.grip-table,.grip-cell,.tableGripColumn,.tableGripRow,.tableGripTable,.column-grip,.row-grip,.table-grip",
+    )
     .forEach((node) => node.remove());
 
-  clone.querySelectorAll<HTMLElement>('.print-editor-image-node').forEach((node) => {
-    const image = document.createElement('img');
-    const innerImage = node.querySelector('img');
-    const width = node.style.width || innerImage?.style.width || '';
-    const height = node.style.height || innerImage?.style.height || '';
-    const variableToken = String(node.getAttribute('data-variable-token') || '').trim();
+  clone
+    .querySelectorAll<HTMLElement>(".print-editor-image-node")
+    .forEach((node) => {
+      const image = document.createElement("img");
+      const innerImage = node.querySelector("img");
+      const width = node.style.width || innerImage?.style.width || "";
+      const height = node.style.height || innerImage?.style.height || "";
+      const variableToken = String(
+        node.getAttribute("data-variable-token") || "",
+      ).trim();
 
-    image.setAttribute('src', variableToken ? `{{${variableToken}}}` : String(innerImage?.getAttribute('src') || '').trim());
-    image.setAttribute('alt', String(innerImage?.getAttribute('alt') || (variableToken ? variableToken : 'image')));
+      image.setAttribute(
+        "src",
+        variableToken
+          ? `{{${variableToken}}}`
+          : String(innerImage?.getAttribute("src") || "").trim(),
+      );
+      image.setAttribute(
+        "alt",
+        String(
+          innerImage?.getAttribute("alt") ||
+            (variableToken ? variableToken : "image"),
+        ),
+      );
 
-    const title = String(innerImage?.getAttribute('title') || '').trim();
-    if (title) image.setAttribute('title', title);
+      const title = String(innerImage?.getAttribute("title") || "").trim();
+      if (title) image.setAttribute("title", title);
 
-    const styleParts = [
-      'display:block',
-      width ? `width:${width}` : '',
-      width ? `max-width:${width}` : 'max-width:100%',
-      height && height !== 'auto' ? `height:${height}` : 'height:auto',
-      height && height !== 'auto' ? `max-height:${height}` : '',
-      innerImage?.style.objectFit ? `object-fit:${innerImage.style.objectFit}` : 'object-fit:contain',
-      innerImage?.style.borderRadius ? `border-radius:${innerImage.style.borderRadius}` : 'border-radius:10px',
-    ].filter(Boolean);
+      const styleParts = [
+        "display:block",
+        width ? `width:${width}` : "",
+        width ? `max-width:${width}` : "max-width:100%",
+        height && height !== "auto" ? `height:${height}` : "height:auto",
+        height && height !== "auto" ? `max-height:${height}` : "",
+        innerImage?.style.objectFit
+          ? `object-fit:${innerImage.style.objectFit}`
+          : "object-fit:contain",
+        innerImage?.style.borderRadius
+          ? `border-radius:${innerImage.style.borderRadius}`
+          : "border-radius:10px",
+      ].filter(Boolean);
 
-    image.setAttribute('style', styleParts.join(';'));
-    if (width.endsWith('px')) image.setAttribute('width', width.replace(/px$/i, '').trim());
-    if (height.endsWith('px')) image.setAttribute('height', height.replace(/px$/i, '').trim());
-    if (width.endsWith('px')) image.setAttribute('data-width', width.replace(/px$/i, '').trim());
-    if (height.endsWith('px')) image.setAttribute('data-height', height.replace(/px$/i, '').trim());
+      image.setAttribute("style", styleParts.join(";"));
+      if (width.endsWith("px"))
+        image.setAttribute("width", width.replace(/px$/i, "").trim());
+      if (height.endsWith("px"))
+        image.setAttribute("height", height.replace(/px$/i, "").trim());
+      if (width.endsWith("px"))
+        image.setAttribute("data-width", width.replace(/px$/i, "").trim());
+      if (height.endsWith("px"))
+        image.setAttribute("data-height", height.replace(/px$/i, "").trim());
 
-    node.replaceWith(image);
-  });
+      node.replaceWith(image);
+    });
 
-  clone.querySelectorAll<HTMLElement>('*').forEach((node) => {
-    node.classList.remove('ProseMirror-selectednode', 'selected', 'resize-cursor', 'column-resize-cursor', 'row-resize-cursor');
-    if (!node.className) node.removeAttribute('class');
-    node.removeAttribute('contenteditable');
-    node.removeAttribute('draggable');
-    node.removeAttribute('data-node-view-wrapper');
-    node.removeAttribute('data-node-view-content');
+  clone.querySelectorAll<HTMLElement>("*").forEach((node) => {
+    node.classList.remove(
+      "ProseMirror-selectednode",
+      "selected",
+      "resize-cursor",
+      "column-resize-cursor",
+      "row-resize-cursor",
+    );
+    if (!node.className) node.removeAttribute("class");
+    node.removeAttribute("contenteditable");
+    node.removeAttribute("draggable");
+    node.removeAttribute("data-node-view-wrapper");
+    node.removeAttribute("data-node-view-content");
   });
 
   return clone.innerHTML.trim() || null;
@@ -159,42 +219,59 @@ const PrintTemplatesTab: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [settingsRowId, setSettingsRowId] = useState<string | null>(null);
-  const [provider, setProvider] = useState('tiptap');
-  const [templatesByModule, setTemplatesByModule] = useState<Record<string, StoredPrintTemplate[]>>({});
-  const [selectedModuleId, setSelectedModuleId] = useState<string>('invoices');
+  const [provider, setProvider] = useState("tiptap");
+  const [templatesByModule, setTemplatesByModule] = useState<
+    Record<string, StoredPrintTemplate[]>
+  >({});
+  const [selectedModuleId, setSelectedModuleId] = useState<string>("invoices");
   const [editorOpen, setEditorOpen] = useState(false);
-  const [editingTemplate, setEditingTemplate] = useState<StoredPrintTemplate | null>(null);
+  const [editingTemplate, setEditingTemplate] =
+    useState<StoredPrintTemplate | null>(null);
   const [systemFieldsModalOpen, setSystemFieldsModalOpen] = useState(false);
-  const [systemFieldsEditingTemplate, setSystemFieldsEditingTemplate] = useState<StoredPrintTemplate | null>(null);
-  const [systemFieldsSearch, setSystemFieldsSearch] = useState('');
-  const [systemFieldKeysDraft, setSystemFieldKeysDraft] = useState<string[]>([]);
-  const [activeSection, setActiveSection] = useState<'header' | 'body' | 'footer'>('body');
+  const [systemFieldsEditingTemplate, setSystemFieldsEditingTemplate] =
+    useState<StoredPrintTemplate | null>(null);
+  const [systemFieldsSearch, setSystemFieldsSearch] = useState("");
+  const [systemFieldKeysDraft, setSystemFieldKeysDraft] = useState<string[]>(
+    [],
+  );
+  const [activeSection, setActiveSection] = useState<
+    "header" | "body" | "footer"
+  >("body");
   const [headerEditor, setHeaderEditor] = useState<any | null>(null);
   const [bodyEditor, setBodyEditor] = useState<any | null>(null);
   const [footerEditor, setFooterEditor] = useState<any | null>(null);
   const [toolbarVisible, setToolbarVisible] = useState(true);
-  const [rolePermissions, setRolePermissions] = useState<Record<string, any> | null>(null);
+  const [rolePermissions, setRolePermissions] = useState<Record<
+    string,
+    any
+  > | null>(null);
   const [loadingRolePermissions, setLoadingRolePermissions] = useState(true);
   const openedExternalTemplateRef = React.useRef<string | null>(null);
-  const requestedModuleId = String(searchParams.get('moduleId') || '').trim();
-  const requestedTemplateId = String(searchParams.get('templateId') || '').trim();
+  const requestedModuleId = String(searchParams.get("moduleId") || "").trim();
+  const requestedTemplateId = String(
+    searchParams.get("templateId") || "",
+  ).trim();
 
   const moduleOptions = useMemo(
     () =>
-      Object.values(MODULES).filter((module) => !isSaasAdminModuleId(module.id)).map((module) => ({
-        value: module.id,
-        label: module.titles.fa,
-      })),
-    []
+      Object.values(MODULES)
+        .filter((module) => !isSaasAdminModuleId(module.id))
+        .map((module) => ({
+          value: module.id,
+          label: module.titles.fa,
+        })),
+    [],
   );
 
   const selectedTemplates = useMemo(
-    () => (templatesByModule[selectedModuleId] || []).filter((template) =>
-      isPrintTemplateAvailableForModule(selectedModuleId, template)
-    ),
-    [selectedModuleId, templatesByModule]
+    () =>
+      (templatesByModule[selectedModuleId] || []).filter((template) =>
+        isPrintTemplateAvailableForModule(selectedModuleId, template),
+      ),
+    [selectedModuleId, templatesByModule],
   );
-  const currentScope = systemFieldsEditingTemplate?.scope || editingTemplate?.scope || 'record';
+  const currentScope =
+    systemFieldsEditingTemplate?.scope || editingTemplate?.scope || "record";
   const canViewSelectedModuleField = (fieldKey: string) => {
     if (loadingRolePermissions || rolePermissions === null) return false;
     const modulePermission = rolePermissions?.[selectedModuleId] || {};
@@ -211,38 +288,47 @@ const PrintTemplatesTab: React.FC = () => {
         ? []
         : filterPrintTemplateVariableOptions(
             getPrintTemplateVariables(selectedModuleId).filter((item) => {
-              const scopes = Array.isArray(item?.scopes) && item.scopes.length > 0 ? item.scopes : ['record', 'list'];
+              const scopes =
+                Array.isArray(item?.scopes) && item.scopes.length > 0
+                  ? item.scopes
+                  : ["record", "list"];
               return scopes.includes(currentScope);
             }),
-            canViewSelectedModuleField
+            canViewSelectedModuleField,
           ),
-    [currentScope, loadingRolePermissions, rolePermissions, selectedModuleId]
+    [currentScope, loadingRolePermissions, rolePermissions, selectedModuleId],
   );
   const systemFieldOptions = useMemo(
     () =>
       loadingRolePermissions
         ? []
-        : currentScope === 'list'
-        ? (MODULES[selectedModuleId]
-          ? buildListPrintableFields(MODULES[selectedModuleId], canViewSelectedModuleField)
-          : [])
-            .map((field) => ({
+        : currentScope === "list"
+          ? (MODULES[selectedModuleId]
+              ? buildListPrintableFields(
+                  MODULES[selectedModuleId],
+                  canViewSelectedModuleField,
+                )
+              : []
+            ).map((field) => ({
               key: field.key,
               label: field.label,
-              group: 'ستون‌های لیست',
-              kind: 'record' as const,
+              group: "ستون‌های لیست",
+              kind: "record" as const,
             }))
-        : filterSystemTemplateFieldOptions(
-            getSystemTemplateFieldOptions(selectedModuleId),
-            canViewSelectedModuleField
-          ),
-    [currentScope, loadingRolePermissions, rolePermissions, selectedModuleId]
+          : filterSystemTemplateFieldOptions(
+              getSystemTemplateFieldOptions(selectedModuleId),
+              canViewSelectedModuleField,
+            ),
+    [currentScope, loadingRolePermissions, rolePermissions, selectedModuleId],
   );
   const filteredSystemFieldOptions = useMemo(() => {
     const q = systemFieldsSearch.trim().toLowerCase();
     if (!q) return systemFieldOptions;
     return systemFieldOptions.filter(
-      (item) => item.label.toLowerCase().includes(q) || item.group.toLowerCase().includes(q) || item.key.toLowerCase().includes(q)
+      (item) =>
+        item.label.toLowerCase().includes(q) ||
+        item.group.toLowerCase().includes(q) ||
+        item.key.toLowerCase().includes(q),
     );
   }, [systemFieldOptions, systemFieldsSearch]);
   const groupedSystemFieldOptions = useMemo(() => {
@@ -253,64 +339,111 @@ const PrintTemplatesTab: React.FC = () => {
     return Array.from(groups.entries());
   }, [filteredSystemFieldOptions]);
   const editingPageFrame = useMemo(
-    () => getPageFrame(editingTemplate?.paperSize || 'A4', editingTemplate?.orientation || 'portrait'),
-    [editingTemplate?.orientation, editingTemplate?.paperSize]
+    () =>
+      getPageFrame(
+        editingTemplate?.paperSize || "A4",
+        editingTemplate?.orientation || "portrait",
+      ),
+    [editingTemplate?.orientation, editingTemplate?.paperSize],
   );
   const sectionHeightLimitsMm = useMemo(() => {
     const pageHeight = editingPageFrame.heightMm;
     return {
       headerMin: pxToMm(HEADER_HEIGHT_MIN),
-      headerMax: Math.max(pxToMm(HEADER_HEIGHT_MIN), Math.min(pxToMm(HEADER_HEIGHT_MAX), pageHeight * 0.32)),
+      headerMax: Math.max(
+        pxToMm(HEADER_HEIGHT_MIN),
+        Math.min(pxToMm(HEADER_HEIGHT_MAX), pageHeight * 0.32),
+      ),
       footerMin: pxToMm(FOOTER_HEIGHT_MIN),
-      footerMax: Math.max(pxToMm(FOOTER_HEIGHT_MIN), Math.min(pxToMm(FOOTER_HEIGHT_MAX), pageHeight * 0.28)),
+      footerMax: Math.max(
+        pxToMm(FOOTER_HEIGHT_MIN),
+        Math.min(pxToMm(FOOTER_HEIGHT_MAX), pageHeight * 0.28),
+      ),
     };
   }, [editingPageFrame.heightMm]);
-  const updateSectionHeightMm = (section: 'header' | 'footer', value: number | null) => {
+  const updateSectionHeightMm = (
+    section: "header" | "footer",
+    value: number | null,
+  ) => {
     const rawValue = Number(value);
     if (!Number.isFinite(rawValue)) return;
-    const min = section === 'header' ? sectionHeightLimitsMm.headerMin : sectionHeightLimitsMm.footerMin;
-    const max = section === 'header' ? sectionHeightLimitsMm.headerMax : sectionHeightLimitsMm.footerMax;
+    const min =
+      section === "header"
+        ? sectionHeightLimitsMm.headerMin
+        : sectionHeightLimitsMm.footerMin;
+    const max =
+      section === "header"
+        ? sectionHeightLimitsMm.headerMax
+        : sectionHeightLimitsMm.footerMax;
     const nextHeight = mmToPx(Math.min(max, Math.max(min, rawValue)));
     setEditingTemplate((prev) =>
       !prev
         ? prev
-        : section === 'header'
+        : section === "header"
           ? { ...prev, headerHeight: nextHeight }
-          : { ...prev, footerHeight: nextHeight }
+          : { ...prev, footerHeight: nextHeight },
     );
   };
 
   const activeEditor = useMemo(() => {
-    if (activeSection === 'header' && editingTemplate?.showHeader !== false && headerEditor) return headerEditor;
-    if (activeSection === 'footer' && editingTemplate?.showFooter !== false && footerEditor) return footerEditor;
+    if (
+      activeSection === "header" &&
+      editingTemplate?.showHeader !== false &&
+      headerEditor
+    )
+      return headerEditor;
+    if (
+      activeSection === "footer" &&
+      editingTemplate?.showFooter !== false &&
+      footerEditor
+    )
+      return footerEditor;
     return bodyEditor || headerEditor || footerEditor || null;
-  }, [activeSection, bodyEditor, editingTemplate?.showFooter, editingTemplate?.showHeader, footerEditor, headerEditor]);
+  }, [
+    activeSection,
+    bodyEditor,
+    editingTemplate?.showFooter,
+    editingTemplate?.showHeader,
+    footerEditor,
+    headerEditor,
+  ]);
 
   const activeSectionLabel = useMemo(() => {
-    if (activeSection === 'header' && editingTemplate?.showHeader !== false) return 'سربرگ';
-    if (activeSection === 'footer' && editingTemplate?.showFooter !== false) return 'پاورقی';
-    return 'بدنه';
+    if (activeSection === "header" && editingTemplate?.showHeader !== false)
+      return "سربرگ";
+    if (activeSection === "footer" && editingTemplate?.showFooter !== false)
+      return "پاورقی";
+    return "بدنه";
   }, [activeSection, editingTemplate?.showFooter, editingTemplate?.showHeader]);
 
-  const startSectionResize = (section: 'header' | 'footer', event: React.PointerEvent<HTMLButtonElement>) => {
+  const startSectionResize = (
+    section: "header" | "footer",
+    event: React.PointerEvent<HTMLButtonElement>,
+  ) => {
     event.preventDefault();
     event.stopPropagation();
     const startY = event.clientY;
     const startHeight =
-      section === 'header'
+      section === "header"
         ? Number(editingTemplate?.headerHeight || HEADER_HEIGHT_FALLBACK)
         : Number(editingTemplate?.footerHeight || FOOTER_HEIGHT_FALLBACK);
 
     const applyNextHeight = (clientY: number) => {
       const delta = clientY - startY;
       const nextHeight =
-        section === 'header'
-          ? Math.min(HEADER_HEIGHT_MAX, Math.max(HEADER_HEIGHT_MIN, startHeight + delta))
-          : Math.min(FOOTER_HEIGHT_MAX, Math.max(FOOTER_HEIGHT_MIN, startHeight - delta));
+        section === "header"
+          ? Math.min(
+              HEADER_HEIGHT_MAX,
+              Math.max(HEADER_HEIGHT_MIN, startHeight + delta),
+            )
+          : Math.min(
+              FOOTER_HEIGHT_MAX,
+              Math.max(FOOTER_HEIGHT_MIN, startHeight - delta),
+            );
 
       setEditingTemplate((prev) => {
         if (!prev) return prev;
-        return section === 'header'
+        return section === "header"
           ? { ...prev, headerHeight: nextHeight }
           : { ...prev, footerHeight: nextHeight };
       });
@@ -319,22 +452,22 @@ const PrintTemplatesTab: React.FC = () => {
     const handleMove = (moveEvent: PointerEvent) => {
       moveEvent.preventDefault();
       applyNextHeight(moveEvent.clientY);
-      document.body.style.cursor = 'ns-resize';
-      document.body.style.userSelect = 'none';
+      document.body.style.cursor = "ns-resize";
+      document.body.style.userSelect = "none";
     };
 
     const handleUp = (upEvent: PointerEvent) => {
       applyNextHeight(upEvent.clientY);
-      document.removeEventListener('pointermove', handleMove);
-      document.removeEventListener('pointerup', handleUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
+      document.removeEventListener("pointermove", handleMove);
+      document.removeEventListener("pointerup", handleUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
     };
 
-    document.addEventListener('pointermove', handleMove);
-    document.addEventListener('pointerup', handleUp, { once: true });
-    document.body.style.cursor = 'ns-resize';
-    document.body.style.userSelect = 'none';
+    document.addEventListener("pointermove", handleMove);
+    document.addEventListener("pointerup", handleUp, { once: true });
+    document.body.style.cursor = "ns-resize";
+    document.body.style.userSelect = "none";
   };
 
   const fetchData = async () => {
@@ -345,12 +478,17 @@ const PrintTemplatesTab: React.FC = () => {
       setProvider(loaded.provider);
 
       const next = { ...loaded.templatesByModule };
-      Object.keys(MODULES).filter((moduleId) => !isSaasAdminModuleId(moduleId)).forEach((moduleId) => {
-        next[moduleId] = mergeTemplatesWithDefaults(moduleId, next[moduleId] || []);
-      });
+      Object.keys(MODULES)
+        .filter((moduleId) => !isSaasAdminModuleId(moduleId))
+        .forEach((moduleId) => {
+          next[moduleId] = mergeTemplatesWithDefaults(
+            moduleId,
+            next[moduleId] || [],
+          );
+        });
       setTemplatesByModule(next);
     } catch (err: any) {
-      message.error(toFaErrorMessage(err, 'خواندن قالب‌های چاپ ناموفق بود.'));
+      message.error(toFaErrorMessage(err, "خواندن قالب‌های چاپ ناموفق بود."));
     } finally {
       setLoading(false);
     }
@@ -377,7 +515,9 @@ const PrintTemplatesTab: React.FC = () => {
     }
   }, [requestedModuleId]);
 
-  const persistTemplates = async (nextState: Record<string, StoredPrintTemplate[]>) => {
+  const persistTemplates = async (
+    nextState: Record<string, StoredPrintTemplate[]>,
+  ) => {
     setSaving(true);
     try {
       const saveResult = await savePrintTemplatesStore({
@@ -388,24 +528,32 @@ const PrintTemplatesTab: React.FC = () => {
       setSettingsRowId(saveResult.rowId || settingsRowId);
       setTemplatesByModule(nextState);
 
-      if (saveResult.storage === 'local') {
-        const normalizedError = String(saveResult.errorMessage || '').toLowerCase();
+      if (saveResult.storage === "local") {
+        const normalizedError = String(
+          saveResult.errorMessage || "",
+        ).toLowerCase();
         const requiresMigration =
-          saveResult.errorCode === '23514' ||
-          normalizedError.includes('integration_settings_connection_type_check') ||
-          normalizedError.includes('print_templates');
+          saveResult.errorCode === "23514" ||
+          normalizedError.includes(
+            "integration_settings_connection_type_check",
+          ) ||
+          normalizedError.includes("print_templates");
 
         if (requiresMigration) {
-          message.error('ذخیره دیتابیسی قالب چاپ هنوز فعال نیست. ابتدا SQL مربوط به `print_templates` را در Supabase اجرا کنید.');
+          message.error(
+            "ذخیره دیتابیسی قالب چاپ هنوز فعال نیست. ابتدا SQL مربوط به `print_templates` را در Supabase اجرا کنید.",
+          );
         } else {
-          message.warning(`ذخیره دیتابیسی انجام نشد و قالب فعلا محلی ذخیره شد.${saveResult.errorMessage ? ` دلیل: ${saveResult.errorMessage}` : ''}`);
+          message.warning(
+            `ذخیره دیتابیسی انجام نشد و قالب فعلا محلی ذخیره شد.${saveResult.errorMessage ? ` دلیل: ${saveResult.errorMessage}` : ""}`,
+          );
         }
       } else {
-        message.success('قالب چاپ ذخیره شد.');
+        message.success("قالب چاپ ذخیره شد.");
       }
       return true;
     } catch (err: any) {
-      message.error(toFaErrorMessage(err, 'ذخیره قالب چاپ ناموفق بود.'));
+      message.error(toFaErrorMessage(err, "ذخیره قالب چاپ ناموفق بود."));
       return false;
     } finally {
       setSaving(false);
@@ -414,14 +562,17 @@ const PrintTemplatesTab: React.FC = () => {
 
   const openNewTemplate = () => {
     const now = nowIso();
-    const singularTitle = getModuleTitle(selectedModuleId, 'singular') || getModuleTitle(selectedModuleId) || '';
+    const singularTitle =
+      getModuleTitle(selectedModuleId, "singular") ||
+      getModuleTitle(selectedModuleId) ||
+      "";
 
     setEditingTemplate({
       id: createTemplateId(),
       moduleId: selectedModuleId,
-      scope: 'record',
+      scope: "record",
       title: `قالب جدید ${singularTitle}`.trim(),
-      description: '',
+      description: "",
       headerHtml: buildDefaultHeaderTemplateForModule(selectedModuleId),
       contentHtml: buildDefaultTemplateForModule(selectedModuleId),
       footerHtml: buildDefaultFooterTemplateForModule(selectedModuleId),
@@ -434,13 +585,13 @@ const PrintTemplatesTab: React.FC = () => {
       pageMarginRight: DEFAULT_PAGE_MARGINS.right,
       pageMarginBottom: DEFAULT_PAGE_MARGINS.bottom,
       pageMarginLeft: DEFAULT_PAGE_MARGINS.left,
-      paperSize: selectedModuleId === 'products' ? 'A6' : 'A4',
-      orientation: 'portrait',
+      paperSize: selectedModuleId === "products" ? "A6" : "A4",
+      orientation: "portrait",
       isSystem: false,
       createdAt: now,
       updatedAt: now,
     });
-    setActiveSection('body');
+    setActiveSection("body");
     setEditorOpen(true);
   };
 
@@ -448,26 +599,38 @@ const PrintTemplatesTab: React.FC = () => {
     setEditingTemplate({
       ...template,
       moduleId: selectedModuleId,
-      headerHtml: template.headerHtml || buildDefaultHeaderTemplateForModule(selectedModuleId),
-      footerHtml: template.footerHtml || buildDefaultFooterTemplateForModule(selectedModuleId),
+      headerHtml:
+        template.headerHtml ||
+        buildDefaultHeaderTemplateForModule(selectedModuleId),
+      footerHtml:
+        template.footerHtml ||
+        buildDefaultFooterTemplateForModule(selectedModuleId),
       showHeader: template.showHeader !== false,
       showFooter: template.showFooter !== false,
       headerHeight: template.headerHeight || HEADER_HEIGHT_FALLBACK,
       footerHeight: template.footerHeight || FOOTER_HEIGHT_FALLBACK,
       pageMarginTop: template.pageMarginTop ?? DEFAULT_PAGE_MARGINS.top,
       pageMarginRight: template.pageMarginRight ?? DEFAULT_PAGE_MARGINS.right,
-      pageMarginBottom: template.pageMarginBottom ?? DEFAULT_PAGE_MARGINS.bottom,
+      pageMarginBottom:
+        template.pageMarginBottom ?? DEFAULT_PAGE_MARGINS.bottom,
       pageMarginLeft: template.pageMarginLeft ?? DEFAULT_PAGE_MARGINS.left,
-      orientation: template.orientation || 'portrait',
+      orientation: template.orientation || "portrait",
     });
-    setActiveSection('body');
+    setActiveSection("body");
     setEditorOpen(true);
   };
 
   useEffect(() => {
-    if (loading || !requestedTemplateId || !requestedModuleId || openedExternalTemplateRef.current) return;
+    if (
+      loading ||
+      !requestedTemplateId ||
+      !requestedModuleId ||
+      openedExternalTemplateRef.current
+    )
+      return;
     const template = (templatesByModule[requestedModuleId] || []).find(
-      (item) => String(item.id || '') === requestedTemplateId && item.isSystem !== true,
+      (item) =>
+        String(item.id || "") === requestedTemplateId && item.isSystem !== true,
     );
     if (!template) return;
     openedExternalTemplateRef.current = `${requestedModuleId}:${requestedTemplateId}`;
@@ -478,12 +641,13 @@ const PrintTemplatesTab: React.FC = () => {
   const openSystemFieldsEditor = (template: StoredPrintTemplate) => {
     const allKeys = systemFieldOptions.map((item) => item.key);
     const selectedKeys =
-      Array.isArray(template.selectedFieldKeys) && template.selectedFieldKeys.length > 0
+      Array.isArray(template.selectedFieldKeys) &&
+      template.selectedFieldKeys.length > 0
         ? sanitizeSelectedPrintFieldKeys(template.selectedFieldKeys, allKeys)
         : allKeys;
     setSystemFieldsEditingTemplate(template);
     setSystemFieldKeysDraft(selectedKeys);
-    setSystemFieldsSearch('');
+    setSystemFieldsSearch("");
     setSystemFieldsModalOpen(true);
   };
 
@@ -495,10 +659,13 @@ const PrintTemplatesTab: React.FC = () => {
       template.id === systemFieldsEditingTemplate.id
         ? {
             ...template,
-            selectedFieldKeys: sanitizeSelectedPrintFieldKeys(systemFieldKeysDraft, allowedKeys),
+            selectedFieldKeys: sanitizeSelectedPrintFieldKeys(
+              systemFieldKeysDraft,
+              allowedKeys,
+            ),
             updatedAt: nowIso(),
           }
-        : template
+        : template,
     );
     const nextState = {
       ...templatesByModule,
@@ -508,7 +675,7 @@ const PrintTemplatesTab: React.FC = () => {
     if (ok) {
       setSystemFieldsModalOpen(false);
       setSystemFieldsEditingTemplate(null);
-      setSystemFieldsSearch('');
+      setSystemFieldsSearch("");
       setSystemFieldKeysDraft([]);
     }
   };
@@ -524,7 +691,9 @@ const PrintTemplatesTab: React.FC = () => {
 
   const handleDeleteTemplate = async (templateId: string) => {
     const current = templatesByModule[selectedModuleId] || [];
-    const nextModuleTemplates = current.filter((template) => template.id !== templateId);
+    const nextModuleTemplates = current.filter(
+      (template) => template.id !== templateId,
+    );
     const nextState = {
       ...templatesByModule,
       [selectedModuleId]: nextModuleTemplates,
@@ -536,21 +705,31 @@ const PrintTemplatesTab: React.FC = () => {
     const current = templatesByModule[selectedModuleId] || [];
     const systemDefault =
       template.isSystem === true
-        ? buildDefaultTemplatesForModule(selectedModuleId).find((item) => item.id === template.id) || null
+        ? buildDefaultTemplatesForModule(selectedModuleId).find(
+            (item) => item.id === template.id,
+          ) || null
         : null;
-    const sourceTemplate = template.isSystem === true
-      ? materializeSystemTemplateForCopy(selectedModuleId, systemDefault || template)
-      : template;
-    const normalizeTitle = (value: string) => value.trim().replace(/\s+/g, ' ');
+    const sourceTemplate =
+      template.isSystem === true
+        ? materializeSystemTemplateForCopy(
+            selectedModuleId,
+            systemDefault || template,
+          )
+        : template;
+    const normalizeTitle = (value: string) => value.trim().replace(/\s+/g, " ");
     const baseTitle = normalizeTitle(`${sourceTemplate.title} (کپی)`);
     let nextTitle = baseTitle;
     let counter = 2;
     while (
       current.some(
         (item) =>
-          normalizeTitle(String(item.title || '')).localeCompare(nextTitle, 'fa', {
-            sensitivity: 'base',
-          }) === 0
+          normalizeTitle(String(item.title || "")).localeCompare(
+            nextTitle,
+            "fa",
+            {
+              sensitivity: "base",
+            },
+          ) === 0,
       )
     ) {
       nextTitle = `${baseTitle} ${counter}`;
@@ -582,19 +761,19 @@ const PrintTemplatesTab: React.FC = () => {
     const liveFooterHtml = getPersistedEditorHtml(footerEditor);
 
     const current = templatesByModule[selectedModuleId] || [];
-    const normalizedTitle = String(editingTemplate.title || '')
+    const normalizedTitle = String(editingTemplate.title || "")
       .trim()
-      .replace(/\s+/g, ' ');
+      .replace(/\s+/g, " ");
     const hasDuplicateTitle = current.some(
       (item) =>
         item.id !== editingTemplate.id &&
-        String(item.title || '')
+        String(item.title || "")
           .trim()
-          .replace(/\s+/g, ' ')
-          .localeCompare(normalizedTitle, 'fa', { sensitivity: 'base' }) === 0
+          .replace(/\s+/g, " ")
+          .localeCompare(normalizedTitle, "fa", { sensitivity: "base" }) === 0,
     );
     if (hasDuplicateTitle) {
-      message.error('یک قالب دیگر با همین نام در این ماژول ثبت شده است.');
+      message.error("یک قالب دیگر با همین نام در این ماژول ثبت شده است.");
       return;
     }
 
@@ -604,38 +783,52 @@ const PrintTemplatesTab: React.FC = () => {
       moduleId: selectedModuleId,
       updatedAt: nowIso(),
       createdAt: editingTemplate.createdAt || nowIso(),
-      title: normalizedTitle || 'قالب بدون عنوان',
+      title: normalizedTitle || "قالب بدون عنوان",
       headerHtml:
         normalizeDynamicBlockTablesHtml(
           selectedModuleId,
-          String(liveHeaderHtml ?? editingTemplate.headerHtml ?? '').trim()
+          String(liveHeaderHtml ?? editingTemplate.headerHtml ?? "").trim(),
         ) || buildDefaultHeaderTemplateForModule(selectedModuleId),
       contentHtml:
         normalizeDynamicBlockTablesHtml(
           selectedModuleId,
-          String(liveBodyHtml ?? editingTemplate.contentHtml ?? '').trim()
+          String(liveBodyHtml ?? editingTemplate.contentHtml ?? "").trim(),
         ) || buildDefaultTemplateForModule(selectedModuleId),
       footerHtml:
         normalizeDynamicBlockTablesHtml(
           selectedModuleId,
-          String(liveFooterHtml ?? editingTemplate.footerHtml ?? '').trim()
+          String(liveFooterHtml ?? editingTemplate.footerHtml ?? "").trim(),
         ) || buildDefaultFooterTemplateForModule(selectedModuleId),
-      orientation: editingTemplate.orientation || 'portrait',
+      orientation: editingTemplate.orientation || "portrait",
       isSystem: editingTemplate.isSystem === true,
       showHeader: editingTemplate.showHeader !== false,
       showFooter: editingTemplate.showFooter !== false,
-      headerHeight: Number(editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK),
-      footerHeight: Number(editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK),
-      pageMarginTop: Number(editingTemplate.pageMarginTop ?? DEFAULT_PAGE_MARGINS.top),
-      pageMarginRight: Number(editingTemplate.pageMarginRight ?? DEFAULT_PAGE_MARGINS.right),
-      pageMarginBottom: Number(editingTemplate.pageMarginBottom ?? DEFAULT_PAGE_MARGINS.bottom),
-      pageMarginLeft: Number(editingTemplate.pageMarginLeft ?? DEFAULT_PAGE_MARGINS.left),
+      headerHeight: Number(
+        editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK,
+      ),
+      footerHeight: Number(
+        editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK,
+      ),
+      pageMarginTop: Number(
+        editingTemplate.pageMarginTop ?? DEFAULT_PAGE_MARGINS.top,
+      ),
+      pageMarginRight: Number(
+        editingTemplate.pageMarginRight ?? DEFAULT_PAGE_MARGINS.right,
+      ),
+      pageMarginBottom: Number(
+        editingTemplate.pageMarginBottom ?? DEFAULT_PAGE_MARGINS.bottom,
+      ),
+      pageMarginLeft: Number(
+        editingTemplate.pageMarginLeft ?? DEFAULT_PAGE_MARGINS.left,
+      ),
       backgroundImageUrl: editingTemplate.backgroundImageUrl || null,
-      backgroundSizing: editingTemplate.backgroundImageUrl ? 'fit' : undefined,
+      backgroundSizing: editingTemplate.backgroundImageUrl ? "fit" : undefined,
     };
 
     const nextModuleTemplates = exists
-      ? current.map((item) => (item.id === updatedTemplate.id ? updatedTemplate : item))
+      ? current.map((item) =>
+          item.id === updatedTemplate.id ? updatedTemplate : item,
+        )
       : [updatedTemplate, ...current];
 
     const nextState = {
@@ -653,30 +846,33 @@ const PrintTemplatesTab: React.FC = () => {
   const handleTemplateBackgroundUpload = async (file: File) => {
     if (!editingTemplate || editingTemplate.isSystem) return false;
     try {
-      const fileName = `print-template-bg-${editingTemplate.id}-${Date.now()}.${file.name.split('.').pop()}`;
+      const fileName = `print-template-bg-${editingTemplate.id}-${Date.now()}.${file.name.split(".").pop()}`;
       await uploadFileWithProgress({
         client: fileStorageClient,
         bucket: FILE_STORAGE_BUCKET,
         path: fileName,
         file,
         upsert: true,
-        label: file.name || editingTemplate.title || 'print-template-background',
-        detail: 'پس‌زمینه قالب چاپ',
+        label:
+          file.name || editingTemplate.title || "print-template-background",
+        detail: "پس‌زمینه قالب چاپ",
       });
-      const { data } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(fileName);
+      const { data } = fileStorageClient.storage
+        .from(FILE_STORAGE_BUCKET)
+        .getPublicUrl(fileName);
       setEditingTemplate((prev) =>
         prev
           ? {
               ...prev,
               backgroundImageUrl: data.publicUrl,
-              backgroundSizing: 'fit',
+              backgroundSizing: "fit",
             }
           : prev,
       );
-      message.success('پس‌زمینه قالب آماده شد');
+      message.success("پس‌زمینه قالب آماده شد");
     } catch (error) {
       if (isUploadCanceledError(error)) return false;
-      message.error('آپلود پس‌زمینه انجام نشد');
+      message.error("آپلود پس‌زمینه انجام نشد");
     }
     return false;
   };
@@ -691,7 +887,7 @@ const PrintTemplatesTab: React.FC = () => {
         >
           <List
             dataSource={moduleOptions}
-            locale={{ emptyText: 'ماژولی یافت نشد' }}
+            locale={{ emptyText: "ماژولی یافت نشد" }}
             renderItem={(item) => {
               const isActive = selectedModuleId === item.value;
               const count = (templatesByModule[item.value] || []).length;
@@ -700,22 +896,32 @@ const PrintTemplatesTab: React.FC = () => {
                   onClick={() => setSelectedModuleId(item.value)}
                   className={`border rounded-2xl transition-colors ${
                     isActive
-                      ? 'shadow-sm'
-                      : 'border-slate-200 dark:border-slate-800 hover:border-leather-300 dark:hover:border-leather-700'
+                      ? "shadow-sm"
+                      : "border-slate-200 dark:border-slate-800 hover:border-leather-300 dark:hover:border-leather-700"
                   }`}
                   style={{
-                    cursor: 'pointer',
-                    padding: '12px 14px',
+                    cursor: "pointer",
+                    padding: "12px 14px",
                     marginBottom: 8,
-                    background: isActive ? 'rgba(var(--brand-500-rgb), 0.10)' : undefined,
-                    borderColor: isActive ? 'rgba(var(--brand-500-rgb), 0.6)' : undefined,
+                    background: isActive
+                      ? "rgba(var(--brand-500-rgb), 0.10)"
+                      : undefined,
+                    borderColor: isActive
+                      ? "rgba(var(--brand-500-rgb), 0.6)"
+                      : undefined,
                   }}
                 >
                   <div className="w-full flex items-center justify-between gap-2">
-                    <span className={isActive ? 'font-semibold text-leather-700 dark:text-leather-300' : 'dark:text-slate-200'}>
+                    <span
+                      className={
+                        isActive
+                          ? "font-semibold text-leather-700 dark:text-leather-300"
+                          : "dark:text-slate-200"
+                      }
+                    >
                       {item.label}
                     </span>
-                    <Tag color={isActive ? 'gold' : 'default'}>{count}</Tag>
+                    <Tag color={isActive ? "gold" : "default"}>{count}</Tag>
                   </div>
                 </List.Item>
               );
@@ -729,12 +935,19 @@ const PrintTemplatesTab: React.FC = () => {
           title={
             <div className="flex items-center gap-2">
               <FileTextOutlined />
-              <span>قالب‌های چاپ {MODULES[selectedModuleId]?.titles?.fa || ''}</span>
+              <span>
+                قالب‌های چاپ {MODULES[selectedModuleId]?.titles?.fa || ""}
+              </span>
             </div>
           }
           extra={
             <Space>
-              <Button icon={<PlusOutlined />} type="primary" onClick={openNewTemplate} className="bg-leather-600">
+              <Button
+                icon={<PlusOutlined />}
+                type="primary"
+                onClick={openNewTemplate}
+                className="bg-leather-600"
+              >
                 قالب جدید
               </Button>
             </Space>
@@ -753,15 +966,29 @@ const PrintTemplatesTab: React.FC = () => {
                 <List.Item
                   className="rounded-2xl border border-slate-200 dark:border-slate-800 px-4 py-3 mb-2"
                   actions={[
-                    <Tooltip key="copy" title={String(item?.id || '').includes('_catalog_a4_portrait') ? 'کپی برای این قالب سیستمی غیرفعال است' : 'کپی قالب'}>
+                    <Tooltip
+                      key="copy"
+                      title={
+                        String(item?.id || "").includes("_catalog_a4_portrait")
+                          ? "کپی برای این قالب سیستمی غیرفعال است"
+                          : "کپی قالب"
+                      }
+                    >
                       <Button
                         size="small"
                         type="text"
                         icon={<CopyOutlined />}
-                        disabled={String(item?.id || '').includes('_catalog_a4_portrait')}
+                        disabled={String(item?.id || "").includes(
+                          "_catalog_a4_portrait",
+                        )}
                         onClick={(event) => {
                           event.stopPropagation();
-                          if (String(item?.id || '').includes('_catalog_a4_portrait')) return;
+                          if (
+                            String(item?.id || "").includes(
+                              "_catalog_a4_portrait",
+                            )
+                          )
+                            return;
                           handleCopyTemplate(item);
                         }}
                       />
@@ -781,7 +1008,12 @@ const PrintTemplatesTab: React.FC = () => {
                         }}
                       />
                     </Tooltip>,
-                    <Tooltip key="delete" title={item.isSystem ? 'حذف قالب سیستمی غیرفعال است' : 'حذف'}>
+                    <Tooltip
+                      key="delete"
+                      title={
+                        item.isSystem ? "حذف قالب سیستمی غیرفعال است" : "حذف"
+                      }
+                    >
                       <Button
                         size="small"
                         type="text"
@@ -799,22 +1031,48 @@ const PrintTemplatesTab: React.FC = () => {
                 >
                   <div
                     className="w-full cursor-pointer"
-                    onClick={() => (item.isSystem ? openSystemFieldsEditor(item) : openEditTemplate(item))}
+                    onClick={() =>
+                      item.isSystem
+                        ? openSystemFieldsEditor(item)
+                        : openEditTemplate(item)
+                    }
                   >
                     <div className="flex items-center gap-2 flex-wrap">
                       <Typography.Text strong>{item.title}</Typography.Text>
-                      {item.isSystem ? <Tag color="processing">سیستمی</Tag> : null}
-                      <Tag color={(item.scope || 'record') === 'list' ? 'gold' : 'cyan'}>
-                        {(item.scope || 'record') === 'list' ? 'جدولی' : 'رکوردی'}
+                      {item.isSystem ? (
+                        <Tag color="processing">سیستمی</Tag>
+                      ) : null}
+                      <Tag
+                        color={
+                          (item.scope || "record") === "list" ? "gold" : "cyan"
+                        }
+                      >
+                        {(item.scope || "record") === "list"
+                          ? "جدولی"
+                          : "رکوردی"}
                       </Tag>
-                      <Tag color={item.isActive ? 'green' : 'default'}>{item.isActive ? 'فعال' : 'غیرفعال'}</Tag>
-                      <Tag>{item.paperSize || 'A4'}</Tag>
-                      <Tag>{item.orientation === 'landscape' ? 'افقی' : 'عمودی'}</Tag>
-                      <Tag color={item.showHeader === false ? 'default' : 'blue'}>{item.showHeader === false ? 'بدون سربرگ' : 'با سربرگ'}</Tag>
-                      <Tag color={item.showFooter === false ? 'default' : 'purple'}>{item.showFooter === false ? 'بدون پاورقی' : 'با پاورقی'}</Tag>
+                      <Tag color={item.isActive ? "green" : "default"}>
+                        {item.isActive ? "فعال" : "غیرفعال"}
+                      </Tag>
+                      <Tag>{item.paperSize || "A4"}</Tag>
+                      <Tag>
+                        {item.orientation === "landscape" ? "افقی" : "عمودی"}
+                      </Tag>
+                      <Tag
+                        color={item.showHeader === false ? "default" : "blue"}
+                      >
+                        {item.showHeader === false ? "بدون سربرگ" : "با سربرگ"}
+                      </Tag>
+                      <Tag
+                        color={item.showFooter === false ? "default" : "purple"}
+                      >
+                        {item.showFooter === false
+                          ? "بدون پاورقی"
+                          : "با پاورقی"}
+                      </Tag>
                     </div>
                     <Typography.Text type="secondary" className="text-xs">
-                      {item.description || 'بدون توضیح'}
+                      {item.description || "بدون توضیح"}
                     </Typography.Text>
                   </div>
                 </List.Item>
@@ -834,7 +1092,13 @@ const PrintTemplatesTab: React.FC = () => {
         extra={
           <Space>
             <Button onClick={() => setEditorOpen(false)}>بستن</Button>
-            <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={saveEditorChanges} className="bg-leather-600">
+            <Button
+              type="primary"
+              icon={<SaveOutlined />}
+              loading={saving}
+              onClick={saveEditorChanges}
+              className="bg-leather-600"
+            >
               ذخیره قالب
             </Button>
           </Space>
@@ -845,54 +1109,87 @@ const PrintTemplatesTab: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3 mb-4">
               <Input
                 value={editingTemplate.title}
-                onChange={(e) => setEditingTemplate((prev) => (prev ? { ...prev, title: e.target.value } : prev))}
+                onChange={(e) =>
+                  setEditingTemplate((prev) =>
+                    prev ? { ...prev, title: e.target.value } : prev,
+                  )
+                }
                 placeholder="عنوان قالب"
               />
               <Select
-                value={editingTemplate.paperSize || 'A4'}
+                value={editingTemplate.paperSize || "A4"}
                 options={[
-                  { label: 'A4', value: 'A4' },
-                  { label: 'A5', value: 'A5' },
-                  { label: 'A6', value: 'A6' },
+                  { label: "A4", value: "A4" },
+                  { label: "A5", value: "A5" },
+                  { label: "A6", value: "A6" },
+                  { label: "A7", value: "A7" },
+                  { label: "رول حرارتی ۸۰ میلی‌متری", value: "ROLL80" },
                 ]}
                 onChange={(value) =>
-                  setEditingTemplate((prev) => (prev ? { ...prev, paperSize: value as 'A4' | 'A5' | 'A6' } : prev))
+                  setEditingTemplate((prev) =>
+                    prev
+                      ? { ...prev, paperSize: value as PrintPaperSize }
+                      : prev,
+                  )
                 }
               />
               <Select
-                value={editingTemplate.orientation || 'portrait'}
+                value={editingTemplate.orientation || "portrait"}
                 options={[
-                  { label: 'عمودی', value: 'portrait' },
-                  { label: 'افقی', value: 'landscape' },
+                  { label: "عمودی", value: "portrait" },
+                  { label: "افقی", value: "landscape" },
                 ]}
                 onChange={(value) =>
-                  setEditingTemplate((prev) => (prev ? { ...prev, orientation: value as 'portrait' | 'landscape' } : prev))
+                  setEditingTemplate((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          orientation: value as "portrait" | "landscape",
+                        }
+                      : prev,
+                  )
                 }
               />
               <div className="flex items-center justify-between rounded-2xl border border-slate-200 dark:border-slate-700 px-3 py-2 bg-white/60 dark:bg-white/[0.03]">
-                <span className="text-sm text-slate-500 dark:text-slate-300">فعال</span>
+                <span className="text-sm text-slate-500 dark:text-slate-300">
+                  فعال
+                </span>
                 <Switch
                   checked={editingTemplate.isActive}
-                  onChange={(checked) => setEditingTemplate((prev) => (prev ? { ...prev, isActive: checked } : prev))}
+                  onChange={(checked) =>
+                    setEditingTemplate((prev) =>
+                      prev ? { ...prev, isActive: checked } : prev,
+                    )
+                  }
                 />
               </div>
               <div className="flex items-center justify-between rounded-2xl border border-slate-200 dark:border-slate-700 px-3 py-2 bg-white/60 dark:bg-white/[0.03]">
-                <span className="text-sm text-slate-500 dark:text-slate-300">سربرگ</span>
+                <span className="text-sm text-slate-500 dark:text-slate-300">
+                  سربرگ
+                </span>
                 <Switch
                   checked={editingTemplate.showHeader !== false}
                   onChange={(checked) => {
-                    setEditingTemplate((prev) => (prev ? { ...prev, showHeader: checked } : prev));
-                    if (!checked && activeSection === 'header') setActiveSection('body');
+                    setEditingTemplate((prev) =>
+                      prev ? { ...prev, showHeader: checked } : prev,
+                    );
+                    if (!checked && activeSection === "header")
+                      setActiveSection("body");
                   }}
                 />
               </div>
               <div className="flex items-center justify-between rounded-2xl border border-slate-200 dark:border-slate-700 px-3 py-2 bg-white/60 dark:bg-white/[0.03]">
-                <span className="text-sm text-slate-500 dark:text-slate-300">پاورقی</span>
+                <span className="text-sm text-slate-500 dark:text-slate-300">
+                  پاورقی
+                </span>
                 <Switch
                   checked={editingTemplate.showFooter !== false}
                   onChange={(checked) => {
-                    setEditingTemplate((prev) => (prev ? { ...prev, showFooter: checked } : prev));
-                    if (!checked && activeSection === 'footer') setActiveSection('body');
+                    setEditingTemplate((prev) =>
+                      prev ? { ...prev, showFooter: checked } : prev,
+                    );
+                    if (!checked && activeSection === "footer")
+                      setActiveSection("body");
                   }}
                 />
               </div>
@@ -901,7 +1198,9 @@ const PrintTemplatesTab: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
               <div className="rounded-2xl border border-slate-200 dark:border-slate-700 px-3 py-2 bg-white/60 dark:bg-white/[0.03]">
                 <div className="mb-1 flex items-center justify-between gap-2">
-                  <span className="text-sm text-slate-500 dark:text-slate-300">ارتفاع سربرگ</span>
+                  <span className="text-sm text-slate-500 dark:text-slate-300">
+                    ارتفاع سربرگ
+                  </span>
                   <Typography.Text type="secondary" className="text-[11px]">
                     میلی‌متر
                   </Typography.Text>
@@ -913,14 +1212,20 @@ const PrintTemplatesTab: React.FC = () => {
                   step={1}
                   precision={1}
                   disabled={editingTemplate.showHeader === false}
-                  value={pxToMm(Number(editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK))}
-                  onChange={(value) => updateSectionHeightMm('header', value)}
+                  value={pxToMm(
+                    Number(
+                      editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK,
+                    ),
+                  )}
+                  onChange={(value) => updateSectionHeightMm("header", value)}
                   addonAfter="mm"
                 />
               </div>
               <div className="rounded-2xl border border-slate-200 dark:border-slate-700 px-3 py-2 bg-white/60 dark:bg-white/[0.03]">
                 <div className="mb-1 flex items-center justify-between gap-2">
-                  <span className="text-sm text-slate-500 dark:text-slate-300">ارتفاع پاورقی</span>
+                  <span className="text-sm text-slate-500 dark:text-slate-300">
+                    ارتفاع پاورقی
+                  </span>
                   <Typography.Text type="secondary" className="text-[11px]">
                     میلی‌متر
                   </Typography.Text>
@@ -932,8 +1237,12 @@ const PrintTemplatesTab: React.FC = () => {
                   step={1}
                   precision={1}
                   disabled={editingTemplate.showFooter === false}
-                  value={pxToMm(Number(editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK))}
-                  onChange={(value) => updateSectionHeightMm('footer', value)}
+                  value={pxToMm(
+                    Number(
+                      editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK,
+                    ),
+                  )}
+                  onChange={(value) => updateSectionHeightMm("footer", value)}
                   addonAfter="mm"
                 />
               </div>
@@ -941,39 +1250,73 @@ const PrintTemplatesTab: React.FC = () => {
 
             <Input
               className="mb-4"
-              value={editingTemplate.description || ''}
-              onChange={(e) => setEditingTemplate((prev) => (prev ? { ...prev, description: e.target.value } : prev))}
+              value={editingTemplate.description || ""}
+              onChange={(e) =>
+                setEditingTemplate((prev) =>
+                  prev ? { ...prev, description: e.target.value } : prev,
+                )
+              }
               placeholder="توضیح کوتاه قالب"
             />
 
             <div className="mb-4 rounded-2xl border border-slate-200 dark:border-slate-700 px-4 py-3 bg-white/60 dark:bg-white/[0.03]">
               <div className="mb-3 flex items-start justify-between gap-3">
                 <div>
-                  <div className="text-sm font-bold text-slate-700 dark:text-slate-200">تغییر پس‌زمینه</div>
+                  <div className="text-sm font-bold text-slate-700 dark:text-slate-200">
+                    تغییر پس‌زمینه
+                  </div>
                   <Typography.Text type="secondary" className="text-xs">
-                    این تصویر فقط برای قالب‌های سفارشی روی کل برگه فیت می‌شود و از منطق سربرگ سازمانی جدا است.
+                    این تصویر فقط برای قالب‌های سفارشی روی کل برگه فیت می‌شود و
+                    از منطق سربرگ سازمانی جدا است.
                   </Typography.Text>
                 </div>
                 {editingTemplate.backgroundImageUrl ? (
                   <div className="w-16 h-16 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-white">
-                    <ResilientImage src={editingTemplate.backgroundImageUrl} preset="gallery" alt="Background" className="w-full h-full object-cover" loading="lazy" decoding="async" />
+                    <ResilientImage
+                      src={editingTemplate.backgroundImageUrl}
+                      preset="gallery"
+                      alt="Background"
+                      className="w-full h-full object-cover"
+                      loading="lazy"
+                      decoding="async"
+                    />
                   </div>
                 ) : null}
               </div>
               <div className="flex flex-wrap gap-2">
-                <Upload showUploadList={false} beforeUpload={handleTemplateBackgroundUpload} disabled={editingTemplate.isSystem === true}>
-                  <Button disabled={editingTemplate.isSystem === true}>انتخاب تصویر پس‌زمینه</Button>
+                <Upload
+                  showUploadList={false}
+                  beforeUpload={handleTemplateBackgroundUpload}
+                  disabled={editingTemplate.isSystem === true}
+                >
+                  <Button disabled={editingTemplate.isSystem === true}>
+                    انتخاب تصویر پس‌زمینه
+                  </Button>
                 </Upload>
                 <Button
                   disabled={!editingTemplate.backgroundImageUrl}
-                  onClick={() => setEditingTemplate((prev) => (prev ? { ...prev, backgroundImageUrl: null, backgroundSizing: undefined } : prev))}
+                  onClick={() =>
+                    setEditingTemplate((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            backgroundImageUrl: null,
+                            backgroundSizing: undefined,
+                          }
+                        : prev,
+                    )
+                  }
                 >
                   حذف پس‌زمینه
                 </Button>
               </div>
               {editingTemplate.isSystem === true ? (
-                <Typography.Text type="secondary" className="mt-2 block text-[11px]">
-                  برای استفاده از پس‌زمینه صفحه، ابتدا از قالب سیستمی یک کپی بگیرید و همان نسخه را ویرایش کنید.
+                <Typography.Text
+                  type="secondary"
+                  className="mt-2 block text-[11px]"
+                >
+                  برای استفاده از پس‌زمینه صفحه، ابتدا از قالب سیستمی یک کپی
+                  بگیرید و همان نسخه را ویرایش کنید.
                 </Typography.Text>
               ) : null}
             </div>
@@ -985,7 +1328,9 @@ const PrintTemplatesTab: React.FC = () => {
                   icon={toolbarVisible ? <UpOutlined /> : <DownOutlined />}
                   onClick={() => setToolbarVisible((prev) => !prev)}
                 >
-                  {toolbarVisible ? 'مخفی کردن نوار ویرایش' : 'نمایش نوار ویرایش'}
+                  {toolbarVisible
+                    ? "مخفی کردن نوار ویرایش"
+                    : "نمایش نوار ویرایش"}
                 </Button>
               </div>
               {toolbarVisible ? (
@@ -994,10 +1339,21 @@ const PrintTemplatesTab: React.FC = () => {
                   variableOptions={variableOptions}
                   activeSectionLabel={activeSectionLabel}
                   pageMargins={{
-                    top: Number(editingTemplate.pageMarginTop ?? DEFAULT_PAGE_MARGINS.top),
-                    right: Number(editingTemplate.pageMarginRight ?? DEFAULT_PAGE_MARGINS.right),
-                    bottom: Number(editingTemplate.pageMarginBottom ?? DEFAULT_PAGE_MARGINS.bottom),
-                    left: Number(editingTemplate.pageMarginLeft ?? DEFAULT_PAGE_MARGINS.left),
+                    top: Number(
+                      editingTemplate.pageMarginTop ?? DEFAULT_PAGE_MARGINS.top,
+                    ),
+                    right: Number(
+                      editingTemplate.pageMarginRight ??
+                        DEFAULT_PAGE_MARGINS.right,
+                    ),
+                    bottom: Number(
+                      editingTemplate.pageMarginBottom ??
+                        DEFAULT_PAGE_MARGINS.bottom,
+                    ),
+                    left: Number(
+                      editingTemplate.pageMarginLeft ??
+                        DEFAULT_PAGE_MARGINS.left,
+                    ),
                   }}
                   onChangePageMargins={(nextMargins) =>
                     setEditingTemplate((prev) =>
@@ -1009,7 +1365,7 @@ const PrintTemplatesTab: React.FC = () => {
                             pageMarginBottom: nextMargins.bottom,
                             pageMarginLeft: nextMargins.left,
                           }
-                        : prev
+                        : prev,
                     )
                   }
                 />
@@ -1017,28 +1373,36 @@ const PrintTemplatesTab: React.FC = () => {
             </div>
 
             <div className="rounded-[28px] border border-slate-200/80 dark:border-slate-800 bg-gradient-to-b from-[#faf7f2] via-[#f8fafc] to-[#f1f5f9] dark:from-[#0b1120] dark:via-[#111827] dark:to-[#0f172a] p-4">
-              <div className="text-xs text-slate-500 dark:text-slate-400 mb-3">{editingPageFrame.label}</div>
+              <div className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+                {editingPageFrame.label}
+              </div>
               <div
                 className="mx-auto rounded-[24px] border border-slate-300/70 dark:border-slate-700 bg-white overflow-visible shadow-[0_24px_60px_rgba(15,23,42,0.18)] flex flex-col"
                 style={{
                   width: `min(100%, ${editingPageFrame.width})`,
                   minHeight: editingPageFrame.minHeight,
-                  boxSizing: 'border-box',
+                  boxSizing: "border-box",
                   paddingTop: `${Number(editingTemplate.pageMarginTop ?? DEFAULT_PAGE_MARGINS.top)}mm`,
                   paddingRight: `${Number(editingTemplate.pageMarginRight ?? DEFAULT_PAGE_MARGINS.right)}mm`,
                   paddingBottom: `${Number(editingTemplate.pageMarginBottom ?? DEFAULT_PAGE_MARGINS.bottom)}mm`,
                   paddingLeft: `${Number(editingTemplate.pageMarginLeft ?? DEFAULT_PAGE_MARGINS.left)}mm`,
-                  backgroundImage: editingTemplate.backgroundImageUrl ? `url(${editingTemplate.backgroundImageUrl})` : undefined,
-                  backgroundPosition: 'center',
-                  backgroundRepeat: 'no-repeat',
-                  backgroundSize: editingTemplate.backgroundImageUrl ? 'contain' : undefined,
+                  backgroundImage: editingTemplate.backgroundImageUrl
+                    ? `url(${editingTemplate.backgroundImageUrl})`
+                    : undefined,
+                  backgroundPosition: "center",
+                  backgroundRepeat: "no-repeat",
+                  backgroundSize: editingTemplate.backgroundImageUrl
+                    ? "contain"
+                    : undefined,
                 }}
               >
                 {editingTemplate.showHeader !== false ? (
                   <section
-                    className={`relative flex-none border-b border-dashed border-slate-300/80 ${activeSection === 'header' ? 'ring-1 ring-[rgba(var(--brand-500-rgb),0.32)]' : ''}`}
-                    onClick={() => setActiveSection('header')}
-                    style={{ minHeight: `${pxToMm(Number(editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK))}mm` }}
+                    className={`relative flex-none border-b border-dashed border-slate-300/80 ${activeSection === "header" ? "ring-1 ring-[rgba(var(--brand-500-rgb),0.32)]" : ""}`}
+                    onClick={() => setActiveSection("header")}
+                    style={{
+                      minHeight: `${pxToMm(Number(editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK))}mm`,
+                    }}
                   >
                     <div className="pointer-events-none absolute top-2 right-4 z-10 rounded-full bg-white/90 px-2 py-1 text-[11px] font-semibold text-slate-500 shadow-sm">
                       سربرگ
@@ -1046,21 +1410,30 @@ const PrintTemplatesTab: React.FC = () => {
                     <React.Suspense fallback={<Spin />}>
                       <PrintTemplateEditor
                         key={`${editingTemplate.id}-header`}
-                        value={editingTemplate.headerHtml || ''}
-                        onChange={(html) => setEditingTemplate((prev) => (prev ? { ...prev, headerHtml: html } : prev))}
+                        value={editingTemplate.headerHtml || ""}
+                        onChange={(html) =>
+                          setEditingTemplate((prev) =>
+                            prev ? { ...prev, headerHtml: html } : prev,
+                          )
+                        }
                         placeholder="سربرگ هر برگه را اینجا تنظیم کنید..."
-                        minHeight={Number(editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK)}
+                        minHeight={Number(
+                          editingTemplate.headerHeight ||
+                            HEADER_HEIGHT_FALLBACK,
+                        )}
                         contentPadding="2px 10px"
                         onEditorReady={setHeaderEditor}
-                        onFocusSection={() => setActiveSection('header')}
+                        onFocusSection={() => setActiveSection("header")}
                       />
                     </React.Suspense>
                     <button
                       type="button"
                       className="absolute bottom-[-9px] left-1/2 -translate-x-1/2 z-10 h-4 w-20 rounded-full border border-slate-300 bg-white shadow-sm cursor-ns-resize touch-none"
-                      onPointerDown={(event) => startSectionResize('header', event)}
+                      onPointerDown={(event) =>
+                        startSectionResize("header", event)
+                      }
                       title="تغییر ارتفاع سربرگ"
-                      style={{ touchAction: 'none', userSelect: 'none' }}
+                      style={{ touchAction: "none", userSelect: "none" }}
                     >
                       <span className="block mx-auto mt-[6px] h-[2px] w-8 rounded-full bg-slate-400" />
                     </button>
@@ -1068,8 +1441,8 @@ const PrintTemplatesTab: React.FC = () => {
                 ) : null}
 
                 <section
-                  className={`relative flex-1 min-h-0 ${activeSection === 'body' ? 'ring-1 ring-inset ring-[rgba(var(--brand-500-rgb),0.24)]' : ''}`}
-                  onClick={() => setActiveSection('body')}
+                  className={`relative flex-1 min-h-0 ${activeSection === "body" ? "ring-1 ring-inset ring-[rgba(var(--brand-500-rgb),0.24)]" : ""}`}
+                  onClick={() => setActiveSection("body")}
                 >
                   <div className="pointer-events-none absolute top-2 right-4 z-10 rounded-full bg-white/90 px-2 py-1 text-[11px] font-semibold text-slate-500 shadow-sm">
                     بدنه
@@ -1078,29 +1451,42 @@ const PrintTemplatesTab: React.FC = () => {
                     <PrintTemplateEditor
                       key={`${editingTemplate.id}-body`}
                       value={editingTemplate.contentHtml}
-                      onChange={(html) => setEditingTemplate((prev) => (prev ? { ...prev, contentHtml: html } : prev))}
+                      onChange={(html) =>
+                        setEditingTemplate((prev) =>
+                          prev ? { ...prev, contentHtml: html } : prev,
+                        )
+                      }
                       placeholder="متن و جدول‌های اصلی سند را اینجا طراحی کنید..."
-                      minHeight={editingTemplate.showHeader !== false || editingTemplate.showFooter !== false ? 460 : 640}
+                      minHeight={
+                        editingTemplate.showHeader !== false ||
+                        editingTemplate.showFooter !== false
+                          ? 460
+                          : 640
+                      }
                       fillHeight
                       contentPadding="2px 10px"
                       onEditorReady={setBodyEditor}
-                      onFocusSection={() => setActiveSection('body')}
+                      onFocusSection={() => setActiveSection("body")}
                     />
                   </React.Suspense>
                 </section>
 
                 {editingTemplate.showFooter !== false ? (
                   <section
-                    className={`relative flex-none border-t border-dashed border-slate-300/80 ${activeSection === 'footer' ? 'ring-1 ring-[rgba(var(--brand-500-rgb),0.32)]' : ''}`}
-                    onClick={() => setActiveSection('footer')}
-                    style={{ minHeight: `${pxToMm(Number(editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK))}mm` }}
+                    className={`relative flex-none border-t border-dashed border-slate-300/80 ${activeSection === "footer" ? "ring-1 ring-[rgba(var(--brand-500-rgb),0.32)]" : ""}`}
+                    onClick={() => setActiveSection("footer")}
+                    style={{
+                      minHeight: `${pxToMm(Number(editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK))}mm`,
+                    }}
                   >
                     <button
                       type="button"
                       className="absolute top-[-9px] left-1/2 -translate-x-1/2 z-10 h-4 w-20 rounded-full border border-slate-300 bg-white shadow-sm cursor-ns-resize touch-none"
-                      onPointerDown={(event) => startSectionResize('footer', event)}
+                      onPointerDown={(event) =>
+                        startSectionResize("footer", event)
+                      }
                       title="تغییر ارتفاع پاورقی"
-                      style={{ touchAction: 'none', userSelect: 'none' }}
+                      style={{ touchAction: "none", userSelect: "none" }}
                     >
                       <span className="block mx-auto mt-[6px] h-[2px] w-8 rounded-full bg-slate-400" />
                     </button>
@@ -1110,13 +1496,20 @@ const PrintTemplatesTab: React.FC = () => {
                     <React.Suspense fallback={<Spin />}>
                       <PrintTemplateEditor
                         key={`${editingTemplate.id}-footer`}
-                        value={editingTemplate.footerHtml || ''}
-                        onChange={(html) => setEditingTemplate((prev) => (prev ? { ...prev, footerHtml: html } : prev))}
+                        value={editingTemplate.footerHtml || ""}
+                        onChange={(html) =>
+                          setEditingTemplate((prev) =>
+                            prev ? { ...prev, footerHtml: html } : prev,
+                          )
+                        }
                         placeholder="پاورقی هر برگه را اینجا تنظیم کنید..."
-                        minHeight={Number(editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK)}
+                        minHeight={Number(
+                          editingTemplate.footerHeight ||
+                            FOOTER_HEIGHT_FALLBACK,
+                        )}
                         contentPadding="2px 10px"
                         onEditorReady={setFooterEditor}
-                        onFocusSection={() => setActiveSection('footer')}
+                        onFocusSection={() => setActiveSection("footer")}
                       />
                     </React.Suspense>
                   </section>
@@ -1128,12 +1521,12 @@ const PrintTemplatesTab: React.FC = () => {
       </Drawer>
 
       <Modal
-        title={`تنظیم فیلدهای قالب سیستمی${systemFieldsEditingTemplate ? ` - ${systemFieldsEditingTemplate.title}` : ''}`}
+        title={`تنظیم فیلدهای قالب سیستمی${systemFieldsEditingTemplate ? ` - ${systemFieldsEditingTemplate.title}` : ""}`}
         open={systemFieldsModalOpen}
         onCancel={() => {
           setSystemFieldsModalOpen(false);
           setSystemFieldsEditingTemplate(null);
-          setSystemFieldsSearch('');
+          setSystemFieldsSearch("");
           setSystemFieldKeysDraft([]);
         }}
         onOk={saveSystemFieldsEditor}
@@ -1152,14 +1545,19 @@ const PrintTemplatesTab: React.FC = () => {
           />
           <div className="flex items-center justify-between rounded-xl border border-slate-200 dark:border-slate-700 px-3 py-2 bg-slate-50/70 dark:bg-slate-900/40">
             <Checkbox
-              checked={systemFieldKeysDraft.length === systemFieldOptions.length && systemFieldOptions.length > 0}
+              checked={
+                systemFieldKeysDraft.length === systemFieldOptions.length &&
+                systemFieldOptions.length > 0
+              }
               indeterminate={
                 systemFieldKeysDraft.length > 0 &&
                 systemFieldKeysDraft.length < systemFieldOptions.length
               }
               onChange={(e) =>
                 setSystemFieldKeysDraft(
-                  e.target.checked ? systemFieldOptions.map((item) => item.key) : []
+                  e.target.checked
+                    ? systemFieldOptions.map((item) => item.key)
+                    : [],
                 )
               }
             >
@@ -1177,9 +1575,15 @@ const PrintTemplatesTab: React.FC = () => {
               <Space direction="vertical" size={12} className="w-full">
                 {groupedSystemFieldOptions.map(([groupName, items]) => {
                   const groupKeys = items.map((item) => item.key);
-                  const groupSelectedCount = groupKeys.filter((key) => systemFieldKeysDraft.includes(key)).length;
-                  const groupAllSelected = groupSelectedCount === groupKeys.length && groupKeys.length > 0;
-                  const groupIndeterminate = groupSelectedCount > 0 && groupSelectedCount < groupKeys.length;
+                  const groupSelectedCount = groupKeys.filter((key) =>
+                    systemFieldKeysDraft.includes(key),
+                  ).length;
+                  const groupAllSelected =
+                    groupSelectedCount === groupKeys.length &&
+                    groupKeys.length > 0;
+                  const groupIndeterminate =
+                    groupSelectedCount > 0 &&
+                    groupSelectedCount < groupKeys.length;
                   return (
                     <Card
                       key={groupName}
@@ -1214,12 +1618,17 @@ const PrintTemplatesTab: React.FC = () => {
                           <Checkbox
                             key={item.key}
                             checked={systemFieldKeysDraft.includes(item.key)}
-                            onChange={(e) => toggleSystemFieldKey(item.key, e.target.checked)}
+                            onChange={(e) =>
+                              toggleSystemFieldKey(item.key, e.target.checked)
+                            }
                           >
                             <div className="inline-flex items-center gap-2">
                               <span>{item.label}</span>
-                              <Typography.Text type="secondary" className="text-[11px]">
-                                {item.kind === 'table' ? 'جدولی' : 'رکورد'}
+                              <Typography.Text
+                                type="secondary"
+                                className="text-[11px]"
+                              >
+                                {item.kind === "table" ? "جدولی" : "رکورد"}
                               </Typography.Text>
                             </div>
                           </Checkbox>
@@ -1231,7 +1640,6 @@ const PrintTemplatesTab: React.FC = () => {
               </Space>
             )}
           </div>
-
         </div>
       </Modal>
     </div>

@@ -1,8 +1,7 @@
-import type { ReactNode } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import {
   AccountBookOutlined,
   AppstoreOutlined,
-  AuditOutlined,
   CheckCircleOutlined,
   ContainerOutlined,
   FileSearchOutlined,
@@ -19,7 +18,7 @@ import {
   UserAddOutlined,
 } from '@ant-design/icons';
 
-type ActionIcon = () => ReactNode;
+type ActionIcon = ComponentType<any>;
 
 // اکشن‌های هدر از ماژول‌های مختلف در اینجا به یک معنای بصری مشترک متصل می‌شوند.
 // در نتیجه، نام یا رنگ دکمه ممکن است متفاوت باشد، اما هر عمل مشابه همیشه آیکون یکسانی دارد.

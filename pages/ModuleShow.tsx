@@ -3606,6 +3606,62 @@ const ModuleShow: React.FC = () => {
 
     const handleHeaderAction = async (actionId: string) => {
 
+      if (actionId === 'reservation_settings' && moduleId === 'reservations') {
+        navigate('/settings?tab=reservation_settings');
+        return;
+      }
+      if (actionId === 'create_reservation_invoice' && moduleId === 'reservations') {
+        const linkedInvoiceId = String(data?.sales_invoice_id || '').trim();
+        if (linkedInvoiceId) {
+          navigate(`/invoices/${linkedInvoiceId}`);
+          return;
+        }
+        const items = (Array.isArray(data?.reservationItems) ? data.reservationItems : [])
+          .filter((item: any) => String(item?.product_id || '').trim())
+          .map((item: any) => ({
+            product_id: item.product_id,
+            quantity: Math.max(1, Number(item.quantity || 1)),
+            unit_price: Math.max(0, Number(item.unit_price || 0)),
+            total_price: Math.max(1, Number(item.quantity || 1)) * Math.max(0, Number(item.unit_price || 0)),
+            description: item.description || null,
+          }));
+        const servicesTotal = items.reduce((sum: number, item: any) => sum + Number(item.total_price || 0), 0);
+        const { data: companySettings } = await supabase
+          .from('company_settings')
+          .select('reservation_settings')
+          .limit(1)
+          .maybeSingle();
+        const settings = companySettings?.reservation_settings || {};
+        const configuredValue = Math.max(0, Number(settings.default_deposit_value || 0));
+        const configuredDeposit = settings.default_deposit_mode === 'percent'
+          ? servicesTotal * Math.min(100, configuredValue) / 100
+          : settings.default_deposit_mode === 'fixed'
+            ? configuredValue
+            : 0;
+        const depositAmount = Math.max(0, Number(data?.deposit_amount || configuredDeposit || 0));
+        const invoiceDate = new Intl.DateTimeFormat('en-CA', {
+          year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Asia/Tehran',
+        }).format(new Date());
+        if (items.length === 0) {
+          msg.warning('برای رزرو هنوز خدمت یا کالایی انتخاب نشده؛ قلم فاکتور را در فرم فاکتور اضافه کنید.');
+        }
+        navigate('/invoices/create', { state: { initialValues: {
+          name: `فاکتور ${getRecordTitle(data, moduleConfig || undefined, { fallback: 'رزرو' })}`,
+          customer_id: data?.customer_id || null,
+          reservation_id: id,
+          invoice_date: invoiceDate,
+          status: 'created',
+          invoiceItems: items,
+          payments: depositAmount > 0 ? [{
+            amount: depositAmount,
+            payment_type: settings.default_payment_type || 'cash',
+            target_account: settings.default_payment_account_id || null,
+            date: invoiceDate,
+          }] : [],
+        } } });
+        return;
+      }
+
       if (actionId === 'request_status_change' && moduleId === 'billboards') {
         if (!canEditModule) {
           msg.error('دسترسی ثبت درخواست تغییر وضعیت ندارید.');

@@ -20,6 +20,7 @@ import { advertisingCampaignsConfig } from './modules/advertisingCampaignsConfig
 import { advertisingCampaignToolsConfig } from './modules/advertisingCampaignToolsConfig';
 import { advertisingCampaignResponsesConfig } from './modules/advertisingCampaignResponsesConfig';
 import { contentCalendarsConfig } from './modules/contentCalendarsConfig';
+import { reservationResourcesConfig, reservationsConfig } from './modules/reservationsConfig';
 import { calculationFormulasModule } from './modules/calculationFormulasConfig';
 import { productionGroupOrdersModule } from './modules/productionGroupOrdersConfig';
 import { projectsModule } from './modules/projectsConfig';
@@ -181,6 +182,8 @@ export const BASE_MODULES: Record<string, ModuleDefinition> = {
   advertising_campaign_tools: advertisingCampaignToolsConfig,
   advertising_campaign_responses: advertisingCampaignResponsesConfig,
   content_calendars: contentCalendarsConfig,
+  reservation_resources: reservationResourcesConfig,
+  reservations: reservationsConfig,
   production_boms: productionBomModule,
   production_orders: productionOrderModule,
   production_group_orders: productionGroupOrdersModule,

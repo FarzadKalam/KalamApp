@@ -169,6 +169,7 @@ const FEATURE_OPTIONS = [
   { id: 'online_invoice_payment', label: 'پرداخت آنلاین فاکتورهای عمومی' },
   { id: 'online_catalog', label: 'کاتالوگ آنلاین' },
   { id: 'retail_sales_invoice', label: 'فاکتور فروشگاهی سریع' },
+  { id: 'reservations', label: 'رزرواسیون' },
   { id: 'qr_scan', label: 'اسکن QR' },
   { id: 'instagram_inbox', label: 'صندوق اینستاگرام' },
   { id: CAMPAIGN_PLAN_FEATURES.sms, label: 'کمپین پیامکی' },

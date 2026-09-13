@@ -303,14 +303,25 @@ const AiChatSurfaceV2: React.FC = () => {
     scheduleOverlayLockRelease(0);
   }, []);
 
-  const startNewConversation = () => {
+  const startNewConversation = useCallback(() => {
     // A dashboard hand-off is consumed once.  Starting a new conversation
     // must never replay that hand-off prompt or attachment.
     setInitialRouteConsumed(true);
     setActiveThreadId(null);
     setNewConversationSeed((value) => value + 1);
     closeThreadList();
-  };
+  }, [closeThreadList]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
+    const onShortcut = (event: KeyboardEvent) => {
+      if (!event.altKey || !event.shiftKey || event.ctrlKey || event.metaKey || event.key.toLowerCase() !== 'n') return;
+      event.preventDefault();
+      startNewConversation();
+    };
+    window.addEventListener('keydown', onShortcut);
+    return () => window.removeEventListener('keydown', onShortcut);
+  }, [startNewConversation]);
 
   const handleThreadDeleted = useCallback((threadId: string) => {
     const normalizedThreadId = String(threadId || '').trim();
@@ -386,7 +397,7 @@ const AiChatSurfaceV2: React.FC = () => {
               <Tooltip title="جستجوی گفتگوها">
                 <Button type="text" shape="circle" icon={<SearchOutlined />} aria-label="جستجوی گفتگوهای هوش مصنوعی" onClick={() => searchInputRef.current?.focus?.()} />
               </Tooltip>
-              <Tooltip title="گفتگوی جدید">
+              <Tooltip title={<span>گفتگوی جدید <kbd className="keyboard-shortcut-hint mr-1 text-[9px] opacity-70">Alt+Shift+N</kbd></span>}>
                 <Button type="text" shape="circle" icon={<PlusOutlined />} aria-label="گفتگوی جدید هوش مصنوعی" onClick={startNewConversation} />
               </Tooltip>
             </div>
@@ -515,7 +526,7 @@ const AiChatSurfaceV2: React.FC = () => {
       {!compact ? (
         <div className="border-t border-slate-200/60 p-2 dark:border-white/[0.07]">
           <Button block type="primary" icon={<PlusOutlined />} onClick={startNewConversation}>
-            گفتگوی جدید
+            گفتگوی جدید <kbd className="keyboard-shortcut-hint mr-1 text-[9px] opacity-70">Alt+Shift+N</kbd>
           </Button>
         </div>
       ) : null}

@@ -1,11 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { ModuleDefinition } from '../types';
-import { CONTENT_CALENDAR_MODULE_ID } from '../modules/contentCalendarsConfig';
-import { hasContentCalendarFeature } from '../utils/saasPlanFeatures';
-import { fetchCurrentUserRoleContext, SAAS_ADMIN_PERMISSION_KEY } from '../utils/permissions';
-import { supabase } from '../supabaseClient';
+import { useEffect, useMemo, useState } from "react";
+import type { ModuleDefinition } from "../types";
+import { CONTENT_CALENDAR_MODULE_ID } from "../modules/contentCalendarsConfig";
+import { hasContentCalendarFeature } from "../utils/saasPlanFeatures";
+import {
+  fetchCurrentUserRoleContext,
+  SAAS_ADMIN_PERMISSION_KEY,
+} from "../utils/permissions";
+import { supabase } from "../supabaseClient";
+import { useReservationsFeature } from "./useReservationsFeature";
 
-const CONTENT_CALENDAR_RELATION_FIELD = 'content_calendar_id';
+const CONTENT_CALENDAR_RELATION_FIELD = "content_calendar_id";
 
 export const withContentCalendarPlanSupport = (
   module: ModuleDefinition | null | undefined,
@@ -14,11 +18,16 @@ export const withContentCalendarPlanSupport = (
   if (!module) return null;
   if (module.id === CONTENT_CALENDAR_MODULE_ID) return enabled ? module : null;
   if (enabled) return module;
-  const fields = (module.fields || []).filter((field) => field.key !== CONTENT_CALENDAR_RELATION_FIELD);
-  const relatedTabs = (module.relatedTabs || []).filter((tab) => (
-    tab.targetModule !== CONTENT_CALENDAR_MODULE_ID && tab.foreignKey !== CONTENT_CALENDAR_RELATION_FIELD
-  ));
-  return fields.length === module.fields.length && relatedTabs.length === (module.relatedTabs || []).length
+  const fields = (module.fields || []).filter(
+    (field) => field.key !== CONTENT_CALENDAR_RELATION_FIELD,
+  );
+  const relatedTabs = (module.relatedTabs || []).filter(
+    (tab) =>
+      tab.targetModule !== CONTENT_CALENDAR_MODULE_ID &&
+      tab.foreignKey !== CONTENT_CALENDAR_RELATION_FIELD,
+  );
+  return fields.length === module.fields.length &&
+    relatedTabs.length === (module.relatedTabs || []).length
     ? module
     : { ...module, fields, relatedTabs };
 };
@@ -36,18 +45,45 @@ export const useContentCalendarFeature = () => {
     ])
       .then(([featureEnabled, roleContext]) => {
         const saasAdmin = roleContext.permissions?.[SAAS_ADMIN_PERMISSION_KEY];
-        const isSaasAdmin = saasAdmin?.view === true || saasAdmin?.edit === true;
+        const isSaasAdmin =
+          saasAdmin?.view === true || saasAdmin?.edit === true;
         if (active) setEnabled(featureEnabled || isSaasAdmin);
       })
-      .catch(() => { if (active) setEnabled(false); })
-      .finally(() => { if (active) setResolved(true); });
-    return () => { active = false; };
+      .catch(() => {
+        if (active) setEnabled(false);
+      })
+      .finally(() => {
+        if (active) setResolved(true);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
   return { enabled, resolved };
 };
 
-export const useContentCalendarPlanModule = (module: ModuleDefinition | null | undefined) => {
+export const useContentCalendarPlanModule = (
+  module: ModuleDefinition | null | undefined,
+) => {
   const { enabled, resolved } = useContentCalendarFeature();
-  const moduleConfig = useMemo(() => withContentCalendarPlanSupport(module, enabled), [enabled, module]);
-  return { moduleConfig, contentCalendarEnabled: enabled, resolved };
+  const { enabled: reservationsEnabled, resolved: reservationsResolved } =
+    useReservationsFeature();
+  const moduleConfig = useMemo(() => {
+    const contentSupported = withContentCalendarPlanSupport(module, enabled);
+    if (!contentSupported) return null;
+    if (
+      contentSupported.id === "reservations" ||
+      contentSupported.id === "reservation_resources"
+    )
+      return reservationsEnabled ? contentSupported : null;
+    return contentSupported;
+  }, [enabled, module, reservationsEnabled]);
+  const requiresReservationsFeature =
+    module?.id === "reservations" || module?.id === "reservation_resources";
+  return {
+    moduleConfig,
+    contentCalendarEnabled: enabled,
+    resolved:
+      resolved && (!requiresReservationsFeature || reservationsResolved),
+  };
 };

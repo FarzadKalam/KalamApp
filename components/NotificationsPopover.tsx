@@ -1164,10 +1164,6 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
 
   const tasksConfig = MODULES['tasks'];
   const statusOptions = tasksConfig?.fields?.find((f: any) => f.key === 'status')?.options || [];
-  const toNumber = (value: any) => {
-    const parsed = parseFloat(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-  };
   const communicationCacheScopeKey = `${String(profile.org_id || '').trim() || 'org'}:${String(profile.id || '').trim() || 'user'}`;
   const shouldAnimateChatEntry = useCallback((createdAt: any) => {
     const time = new Date(createdAt || '').getTime();
@@ -6796,24 +6792,6 @@ useEffect(() => {
   const handleBotMessageTextChange = useCallback((nextValue: string) => {
     setBotMessageText(nextValue);
   }, []);
-
-  const handleTaskProducedQtyChange = async (taskId: string, value: number | null) => {
-    try {
-      const nextProducedQty = Math.max(0, toNumber(value));
-      const { error } = await supabase
-        .from('tasks')
-        .update({ produced_qty: nextProducedQty })
-        .eq('id', taskId);
-      if (error) throw error;
-      setTasks((prev) => prev.map((item: any) => (
-        String(item?.id) === String(taskId)
-          ? { ...item, produced_qty: nextProducedQty }
-          : item
-      )));
-    } catch (err) {
-      console.warn('Could not save produced quantity for notification task', err);
-    }
-  };
 
   const getChatGroupPayload = useCallback((group: ChatGroupRow | null | undefined) => {
     if (!group) {

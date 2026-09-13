@@ -1,19 +1,34 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { App, Button, Checkbox, Modal, Segmented, Tabs, theme } from 'antd';
-import { DownOutlined, EditOutlined, EyeOutlined, MinusOutlined, PlusOutlined, ReloadOutlined, UpOutlined } from '@ant-design/icons';
-import { createPortal } from 'react-dom';
-import { printStyles } from '../../utils/printTemplates';
-import { fitCompactPrintCells } from '../../utils/printTemplates/fitCompactPrintCells';
-import { resolveEffectivePrintFieldKeys } from '../../utils/printTemplates/printableFields';
-import type { GeneratedPrintPdf } from '../../utils/printTemplates/printAsPdf';
-import AdaptiveSelectField from '../AdaptiveSelectField';
-import PrintSignatureConfigurator from './PrintSignatureConfigurator';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { App, Button, Checkbox, Modal, Segmented, Tabs, theme } from "antd";
+import {
+  DownOutlined,
+  EditOutlined,
+  EyeOutlined,
+  MinusOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  UpOutlined,
+} from "@ant-design/icons";
+import { createPortal } from "react-dom";
+import { printStyles } from "../../utils/printTemplates";
+import { fitCompactPrintCells } from "../../utils/printTemplates/fitCompactPrintCells";
+import { resolveEffectivePrintFieldKeys } from "../../utils/printTemplates/printableFields";
+import type { PrintPaperSize } from "../../utils/printTemplates/store";
+import type { GeneratedPrintPdf } from "../../utils/printTemplates/printAsPdf";
+import AdaptiveSelectField from "../AdaptiveSelectField";
+import PrintSignatureConfigurator from "./PrintSignatureConfigurator";
 import type {
   PrintSignatureDerivedState,
   PrintSignatureKind,
   PrintSignatureQuickAddOption,
   PrintSignatureSignerModule,
-} from '../../utils/printTemplates/signatures';
+} from "../../utils/printTemplates/signatures";
 
 const PREVIEW_REBUILD_DEBOUNCE_MS = 500;
 
@@ -25,10 +40,17 @@ interface PrintSectionProps {
   onSendInternalPdf?: (preparedPdf?: GeneratedPrintPdf) => void | Promise<void>;
   onSavePdfToRecord?: (preparedPdf?: GeneratedPrintPdf) => void | Promise<void>;
   onRefreshPreview?: () => void | Promise<void>;
-  onGenerateFinalPdfPreview?: (onProgress: (progress: { percent: number; label: string }) => void) => Promise<GeneratedPrintPdf>;
+  onGenerateFinalPdfPreview?: (
+    onProgress: (progress: { percent: number; label: string }) => void,
+  ) => Promise<GeneratedPrintPdf>;
   /** Stable version of the rendered document source, supplied by each print runtime. */
   previewContentVersion?: string;
-  printTemplates: { id: string; title: string; description: string; isSystem?: boolean }[];
+  printTemplates: {
+    id: string;
+    title: string;
+    description: string;
+    isSystem?: boolean;
+  }[];
   selectedTemplateId: string;
   onSelectTemplate: (id: string) => void;
   canEditPrintTemplates?: boolean;
@@ -39,9 +61,16 @@ interface PrintSectionProps {
   selectedPrintFields?: Record<string, string[]>;
   onTogglePrintField?: (templateId: string, fieldName: string) => void;
   onTogglePrintFieldGroup?: (templateId: string, groupName: string) => void;
-  onMovePrintField?: (templateId: string, fieldName: string, direction: 'up' | 'down') => void;
-  imageDisplayMode?: 'fit' | 'actual';
-  onChangeImageDisplayMode?: (templateId: string, mode: 'fit' | 'actual') => void;
+  onMovePrintField?: (
+    templateId: string,
+    fieldName: string,
+    direction: "up" | "down",
+  ) => void;
+  imageDisplayMode?: "fit" | "actual";
+  onChangeImageDisplayMode?: (
+    templateId: string,
+    mode: "fit" | "actual",
+  ) => void;
   onSavePrintFields?: () => void | Promise<boolean>;
   savingPrintFields?: boolean;
   allowFieldSelectionTab?: boolean;
@@ -51,38 +80,48 @@ interface PrintSectionProps {
   signatureOptionsByRow?: Record<string, any[]>;
   onAddPrintSignatureRow?: (kind: PrintSignatureKind) => void;
   onRemovePrintSignatureRow?: (rowId: string) => void;
-  onMovePrintSignatureRow?: (rowId: string, direction: 'up' | 'down') => void;
+  onMovePrintSignatureRow?: (rowId: string, direction: "up" | "down") => void;
   onTogglePrintSignatureEnabled?: (rowId: string, enabled: boolean) => void;
   onTogglePrintSignatureAutomatic?: (rowId: string, automatic: boolean) => void;
   onChangePrintSignatureName?: (rowId: string, value: string) => void;
   onChangePrintSignatureSubtitle?: (rowId: string, value: string) => void;
-  onChangePrintSignatureSignerModule?: (rowId: string, signerModule: PrintSignatureSignerModule) => void;
-  onChangePrintSignatureSignerId?: (rowId: string, signerId: string | null) => void;
+  onChangePrintSignatureSignerModule?: (
+    rowId: string,
+    signerModule: PrintSignatureSignerModule,
+  ) => void;
+  onChangePrintSignatureSignerId?: (
+    rowId: string,
+    signerId: string | null,
+  ) => void;
   onSearchPrintSignatureOptions?: (
     rowId: string,
     signerModule: PrintSignatureSignerModule,
     search?: string,
-    exactId?: string | null
+    exactId?: string | null,
   ) => Promise<void> | void;
   previewMeta?: {
-    paperSize?: 'A4' | 'A5' | 'A6';
-    orientation?: 'portrait' | 'landscape';
+    paperSize?: PrintPaperSize;
+    orientation?: "portrait" | "landscape";
   };
   modalZIndex?: number;
 }
 
 const getPaperFrame = (
-  paperSize: 'A4' | 'A5' | 'A6' = 'A4',
-  orientation: 'portrait' | 'landscape' = 'portrait'
+  paperSize: PrintPaperSize = "A4",
+  orientation: "portrait" | "landscape" = "portrait",
 ) => {
   const base =
-    paperSize === 'A6'
-      ? { width: 105, height: 148 }
-      : paperSize === 'A5'
-        ? { width: 148, height: 210 }
-        : { width: 210, height: 297 };
+    paperSize === "ROLL80"
+      ? { width: 80, height: 297 }
+      : paperSize === "A7"
+        ? { width: 74, height: 105 }
+        : paperSize === "A6"
+          ? { width: 105, height: 148 }
+          : paperSize === "A5"
+            ? { width: 148, height: 210 }
+            : { width: 210, height: 297 };
 
-  return orientation === 'landscape'
+  return orientation === "landscape"
     ? { mmWidth: base.height, mmHeight: base.width }
     : { mmWidth: base.width, mmHeight: base.height };
 };
@@ -96,7 +135,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   onSavePdfToRecord,
   onRefreshPreview,
   onGenerateFinalPdfPreview,
-  previewContentVersion = '',
+  previewContentVersion = "",
   printTemplates,
   selectedTemplateId,
   onSelectTemplate,
@@ -109,7 +148,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   onTogglePrintField = () => {},
   onTogglePrintFieldGroup = () => {},
   onMovePrintField = () => {},
-  imageDisplayMode = 'fit',
+  imageDisplayMode = "fit",
   onChangeImageDisplayMode = () => {},
   onSavePrintFields,
   savingPrintFields = false,
@@ -133,52 +172,67 @@ const PrintSection: React.FC<PrintSectionProps> = ({
 }) => {
   const { message } = App.useApp();
   const { token } = theme.useToken();
-  const [activeTab, setActiveTab] = useState('preview');
+  const [activeTab, setActiveTab] = useState("preview");
   const [refreshing, setRefreshing] = useState(false);
   const [sendingInternal, setSendingInternal] = useState(false);
   const [savingPdfToRecord, setSavingPdfToRecord] = useState(false);
   const [orderPanelOpen, setOrderPanelOpen] = useState(false);
   const [zoom, setZoom] = useState(1);
-  const [finalPdfPreviewUrl, setFinalPdfPreviewUrl] = useState<string | null>(null);
-  const [finalPdfPreviewProgress, setFinalPdfPreviewProgress] = useState<{ percent: number; label: string } | null>(null);
-  const [finalPdfPreviewError, setFinalPdfPreviewError] = useState('');
+  const [finalPdfPreviewUrl, setFinalPdfPreviewUrl] = useState<string | null>(
+    null,
+  );
+  const [finalPdfPreviewProgress, setFinalPdfPreviewProgress] = useState<{
+    percent: number;
+    label: string;
+  } | null>(null);
+  const [finalPdfPreviewError, setFinalPdfPreviewError] = useState("");
   const [finalPdfPreviewRevision, setFinalPdfPreviewRevision] = useState(0);
-  const finalPdfPreviewCacheRef = useRef(new Map<string, GeneratedPrintPdf & { url: string }>());
-  const finalPdfPreviewInFlightRef = useRef(new Map<string, Promise<GeneratedPrintPdf & { url: string }>>());
+  const finalPdfPreviewCacheRef = useRef(
+    new Map<string, GeneratedPrintPdf & { url: string }>(),
+  );
+  const finalPdfPreviewInFlightRef = useRef(
+    new Map<string, Promise<GeneratedPrintPdf & { url: string }>>(),
+  );
   // Only one renderer request may be active for a modal. Some print inputs
   // (notably asynchronously measured template data) settle in bursts; a
   // per-key map alone still lets every transient key start its own request.
-  const finalPdfPreviewActiveRequestRef = useRef<Promise<GeneratedPrintPdf & { url: string }> | null>(null);
+  const finalPdfPreviewActiveRequestRef = useRef<Promise<
+    GeneratedPrintPdf & { url: string }
+  > | null>(null);
   const finalPdfPreviewRequestRef = useRef(0);
   const finalPdfPreviewGeneratorRef = useRef(onGenerateFinalPdfPreview);
-  const finalPdfPreviewLoaderRef = useRef<(force?: boolean) => Promise<GeneratedPrintPdf | null>>(async () => null);
+  const finalPdfPreviewLoaderRef = useRef<
+    (force?: boolean) => Promise<GeneratedPrintPdf | null>
+  >(async () => null);
   const previewStageRef = useRef<HTMLDivElement | null>(null);
   const pinchDistanceRef = useRef<number | null>(null);
-  const [isMobile, setIsMobile] = useState(() => (typeof window !== 'undefined' ? window.innerWidth < 768 : false));
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth < 768 : false,
+  );
   const supportsZoom =
-    typeof CSS !== 'undefined' &&
-    typeof CSS.supports === 'function' &&
-    CSS.supports('zoom', '1');
+    typeof CSS !== "undefined" &&
+    typeof CSS.supports === "function" &&
+    CSS.supports("zoom", "1");
 
   useEffect(() => {
     if (!printMode) return;
     const handleAfterPrint = () => {
-      document.body.classList.remove('print-mode');
+      document.body.classList.remove("print-mode");
     };
-    window.addEventListener('afterprint', handleAfterPrint);
-    document.body.classList.add('print-mode');
+    window.addEventListener("afterprint", handleAfterPrint);
+    document.body.classList.add("print-mode");
     return () => {
-      window.removeEventListener('afterprint', handleAfterPrint);
-      document.body.classList.remove('print-mode');
+      window.removeEventListener("afterprint", handleAfterPrint);
+      document.body.classList.remove("print-mode");
     };
   }, [printMode]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === "undefined") return;
     const onResize = () => setIsMobile(window.innerWidth < 768);
     onResize();
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
 
   const isFieldSelectionAvailable =
@@ -187,7 +241,10 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     printableFields.length > 0;
   const isSignatureTabAvailable = Boolean(selectedTemplateId);
 
-  const hasExplicitFieldSelection = Object.prototype.hasOwnProperty.call(selectedPrintFields, selectedTemplateId);
+  const hasExplicitFieldSelection = Object.prototype.hasOwnProperty.call(
+    selectedPrintFields,
+    selectedTemplateId,
+  );
   const effectiveSelectedFieldKeys = useMemo(
     () =>
       resolveEffectivePrintFieldKeys({
@@ -195,7 +252,12 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         selectedKeys: selectedPrintFields[selectedTemplateId] || [],
         hasExplicitSelection: hasExplicitFieldSelection,
       }),
-    [hasExplicitFieldSelection, printableFields, selectedPrintFields, selectedTemplateId],
+    [
+      hasExplicitFieldSelection,
+      printableFields,
+      selectedPrintFields,
+      selectedTemplateId,
+    ],
   );
   const selectedFieldKeySet = useMemo(
     () => new Set(effectiveSelectedFieldKeys),
@@ -203,23 +265,30 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   );
   const selectedFieldCount = effectiveSelectedFieldKeys.length;
   const finalPdfPreviewCacheKey = useMemo(
-    () => JSON.stringify({
-      templateId: selectedTemplateId,
-      source: previewContentVersion,
-      fields: effectiveSelectedFieldKeys,
+    () =>
+      JSON.stringify({
+        templateId: selectedTemplateId,
+        source: previewContentVersion,
+        fields: effectiveSelectedFieldKeys,
+        imageDisplayMode,
+        signatures: printSignatureRows.map((row) => ({
+          id: row.id,
+          kind: row.kind,
+          enabled: row.enabled,
+          automatic: row.automatic,
+          signerModule: row.signerModule,
+          signerId: row.signerId,
+          nameValue: row.nameValue,
+          subtitleValue: row.subtitleValue,
+        })),
+      }),
+    [
+      effectiveSelectedFieldKeys,
       imageDisplayMode,
-      signatures: printSignatureRows.map((row) => ({
-        id: row.id,
-        kind: row.kind,
-        enabled: row.enabled,
-        automatic: row.automatic,
-        signerModule: row.signerModule,
-        signerId: row.signerId,
-        nameValue: row.nameValue,
-        subtitleValue: row.subtitleValue,
-      })),
-    }),
-    [effectiveSelectedFieldKeys, imageDisplayMode, previewContentVersion, printSignatureRows, selectedTemplateId],
+      previewContentVersion,
+      printSignatureRows,
+      selectedTemplateId,
+    ],
   );
   // `previewContentVersion` intentionally remains in the cache key so an
   // explicit refresh never reuses an obsolete file. It must not, however,
@@ -227,22 +296,28 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   // can change that version repeatedly while the rendered document is
   // identical. Automatic rebuilds are limited to choices made in this modal.
   const finalPdfPreviewRenderIdentity = useMemo(
-    () => JSON.stringify({
-      templateId: selectedTemplateId,
-      fields: effectiveSelectedFieldKeys,
+    () =>
+      JSON.stringify({
+        templateId: selectedTemplateId,
+        fields: effectiveSelectedFieldKeys,
+        imageDisplayMode,
+        signatures: printSignatureRows.map((row) => ({
+          id: row.id,
+          kind: row.kind,
+          enabled: row.enabled,
+          automatic: row.automatic,
+          signerModule: row.signerModule,
+          signerId: row.signerId,
+          nameValue: row.nameValue,
+          subtitleValue: row.subtitleValue,
+        })),
+      }),
+    [
+      effectiveSelectedFieldKeys,
       imageDisplayMode,
-      signatures: printSignatureRows.map((row) => ({
-        id: row.id,
-        kind: row.kind,
-        enabled: row.enabled,
-        automatic: row.automatic,
-        signerModule: row.signerModule,
-        signerId: row.signerId,
-        nameValue: row.nameValue,
-        subtitleValue: row.subtitleValue,
-      })),
-    }),
-    [effectiveSelectedFieldKeys, imageDisplayMode, printSignatureRows, selectedTemplateId],
+      printSignatureRows,
+      selectedTemplateId,
+    ],
   );
   const mobileTemplateOptions = useMemo(
     () =>
@@ -253,62 +328,81 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         description: template.description,
         isSystem: template.isSystem,
       })),
-    [printTemplates]
+    [printTemplates],
   );
-  const handleEditTemplate = useCallback((event: React.SyntheticEvent, templateId: string) => {
-    event.preventDefault();
-    event.stopPropagation();
-    onEditTemplate?.(templateId);
-  }, [onEditTemplate]);
-  const renderTemplateOption = useCallback((option: any) => {
-    const data = (option.data || option) as {
-      value?: string;
-      title?: string;
-      description?: string;
-      isSystem?: boolean;
-    };
-    const templateId = String(data?.value || option?.value || '').trim();
-    return (
-      <div className="print-template-option">
-        <div className="print-template-option-copy">
-          <div className="print-template-option-title">
-            <span>{data?.title}</span>
-            {data?.isSystem ? <span className="print-template-system-tag">سیستمی</span> : null}
+  const handleEditTemplate = useCallback(
+    (event: React.SyntheticEvent, templateId: string) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onEditTemplate?.(templateId);
+    },
+    [onEditTemplate],
+  );
+  const renderTemplateOption = useCallback(
+    (option: any) => {
+      const data = (option.data || option) as {
+        value?: string;
+        title?: string;
+        description?: string;
+        isSystem?: boolean;
+      };
+      const templateId = String(data?.value || option?.value || "").trim();
+      return (
+        <div className="print-template-option">
+          <div className="print-template-option-copy">
+            <div className="print-template-option-title">
+              <span>{data?.title}</span>
+              {data?.isSystem ? (
+                <span className="print-template-system-tag">سیستمی</span>
+              ) : null}
+            </div>
+            {data?.description ? (
+              <div className="print-template-option-desc">
+                {data.description}
+              </div>
+            ) : null}
           </div>
-          {data?.description ? <div className="print-template-option-desc">{data.description}</div> : null}
+          {!data?.isSystem && canEditPrintTemplates && templateId ? (
+            <Button
+              type="text"
+              size="small"
+              icon={<EditOutlined />}
+              title="ویرایش قالب در تب جدید"
+              aria-label={`ویرایش قالب ${data.title || ""}`}
+              className="print-template-option-edit"
+              onMouseDown={(event) => handleEditTemplate(event, templateId)}
+              onClick={(event) => handleEditTemplate(event, templateId)}
+            />
+          ) : null}
         </div>
-        {!data?.isSystem && canEditPrintTemplates && templateId ? (
-          <Button
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            title="ویرایش قالب در تب جدید"
-            aria-label={`ویرایش قالب ${data.title || ''}`}
-            className="print-template-option-edit"
-            onMouseDown={(event) => handleEditTemplate(event, templateId)}
-            onClick={(event) => handleEditTemplate(event, templateId)}
-          />
-        ) : null}
-      </div>
-    );
-  }, [canEditPrintTemplates, handleEditTemplate]);
+      );
+    },
+    [canEditPrintTemplates, handleEditTemplate],
+  );
   const groupedPrintableFields = useMemo(() => {
     const groups = new Map<string, any[]>();
     printableFields.forEach((field) => {
-      const groupLabel = String(field?.group || 'سایر فیلدها').trim() || 'سایر فیلدها';
+      const groupLabel =
+        String(field?.group || "سایر فیلدها").trim() || "سایر فیلدها";
       groups.set(groupLabel, [...(groups.get(groupLabel) || []), field]);
     });
-    return Array.from(groups.entries()).map(([group, fields]) => ({ group, fields }));
+    return Array.from(groups.entries()).map(([group, fields]) => ({
+      group,
+      fields,
+    }));
   }, [printableFields]);
   const orderedSelectedFields = useMemo(() => {
     const fieldMap = new Map(
-      printableFields.map((field) => [String(field?.key || '').trim(), field])
+      printableFields.map((field) => [String(field?.key || "").trim(), field]),
     );
     return effectiveSelectedFieldKeys
-      .map((key) => fieldMap.get(String(key || '').trim()))
+      .map((key) => fieldMap.get(String(key || "").trim()))
       .filter(Boolean);
   }, [effectiveSelectedFieldKeys, printableFields]);
-  const paperFrame = getPaperFrame(previewMeta?.paperSize || 'A4', previewMeta?.orientation || 'portrait');
+  const paperFrame = getPaperFrame(
+    previewMeta?.paperSize || "A4",
+    previewMeta?.orientation || "portrait",
+  );
   const paperWidthPx = (paperFrame.mmWidth * 96) / 25.4;
   const paperHeightPx = (paperFrame.mmHeight * 96) / 25.4;
 
@@ -332,103 +426,153 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     finalPdfPreviewCacheRef.current.delete(cacheKey);
   }, []);
 
-  const loadFinalPdfPreview = useCallback(async (force = false): Promise<GeneratedPrintPdf | null> => {
-    const generateFinalPdfPreview = finalPdfPreviewGeneratorRef.current;
-    if (!generateFinalPdfPreview) return null;
-    if (force) removeCachedFinalPdfPreview(finalPdfPreviewCacheKey);
-    const cachedPdf = finalPdfPreviewCacheRef.current.get(finalPdfPreviewCacheKey);
-    if (cachedPdf) {
-      setFinalPdfPreviewError('');
-      setFinalPdfPreviewProgress(null);
-      setFinalPdfPreviewUrl(cachedPdf.url);
-      return cachedPdf;
-    }
-
-    const existingRequest = finalPdfPreviewInFlightRef.current.get(finalPdfPreviewCacheKey);
-    if (existingRequest) return existingRequest;
-
-    const activeRequest = finalPdfPreviewActiveRequestRef.current;
-    if (activeRequest) {
-      let queuedRequest: Promise<GeneratedPrintPdf & { url: string }>;
-      queuedRequest = activeRequest
-        .catch(() => null)
-        .then(async () => {
-          const cachedAfterActive = finalPdfPreviewCacheRef.current.get(finalPdfPreviewCacheKey);
-          if (cachedAfterActive) return cachedAfterActive;
-          if (finalPdfPreviewInFlightRef.current.get(finalPdfPreviewCacheKey) === queuedRequest) {
-            finalPdfPreviewInFlightRef.current.delete(finalPdfPreviewCacheKey);
-          }
-          const next = await finalPdfPreviewLoaderRef.current(false);
-          if (!next) throw new Error('ساخت PDF نهایی انجام نشد.');
-          return next as GeneratedPrintPdf & { url: string };
-        })
-        .finally(() => {
-          if (finalPdfPreviewInFlightRef.current.get(finalPdfPreviewCacheKey) === queuedRequest) {
-            finalPdfPreviewInFlightRef.current.delete(finalPdfPreviewCacheKey);
-          }
-        });
-      finalPdfPreviewInFlightRef.current.set(finalPdfPreviewCacheKey, queuedRequest);
-      return queuedRequest;
-    }
-
-    const requestId = ++finalPdfPreviewRequestRef.current;
-    setFinalPdfPreviewUrl(null);
-    setFinalPdfPreviewError('');
-    setFinalPdfPreviewProgress({ percent: 5, label: 'در حال آماده‌سازی پیش‌نمایش نهایی…' });
-
-    const pendingRequest = generateFinalPdfPreview((progress) => {
-      if (requestId === finalPdfPreviewRequestRef.current) {
-        setFinalPdfPreviewProgress(progress);
+  const loadFinalPdfPreview = useCallback(
+    async (force = false): Promise<GeneratedPrintPdf | null> => {
+      const generateFinalPdfPreview = finalPdfPreviewGeneratorRef.current;
+      if (!generateFinalPdfPreview) return null;
+      if (force) removeCachedFinalPdfPreview(finalPdfPreviewCacheKey);
+      const cachedPdf = finalPdfPreviewCacheRef.current.get(
+        finalPdfPreviewCacheKey,
+      );
+      if (cachedPdf) {
+        setFinalPdfPreviewError("");
+        setFinalPdfPreviewProgress(null);
+        setFinalPdfPreviewUrl(cachedPdf.url);
+        return cachedPdf;
       }
-    })
-      .then((result) => {
-        const previewPdf = { ...result, url: URL.createObjectURL(result.blob) };
-        finalPdfPreviewCacheRef.current.set(finalPdfPreviewCacheKey, previewPdf);
-        // Keep a short LRU-like cache so switching templates does not rebuild a
-        // PDF the user has already seen, while avoiding unbounded Blob URLs.
-        while (finalPdfPreviewCacheRef.current.size > 8) {
-          const oldestKey = finalPdfPreviewCacheRef.current.keys().next().value;
-          if (!oldestKey) break;
-          removeCachedFinalPdfPreview(oldestKey);
-        }
-        if (requestId === finalPdfPreviewRequestRef.current) {
-          setFinalPdfPreviewUrl(previewPdf.url);
-          setFinalPdfPreviewProgress(null);
-        }
-        return previewPdf;
-      })
-      .catch((error) => {
-        if (requestId === finalPdfPreviewRequestRef.current) {
-          console.error('Generate final PDF preview failed', error);
-          setFinalPdfPreviewUrl(null);
-          setFinalPdfPreviewProgress(null);
-          setFinalPdfPreviewError('ساخت پیش‌نمایش نهایی PDF ناموفق بود. دوباره تلاش کنید.');
-        }
-        throw error;
-      })
-      .finally(() => {
-        if (finalPdfPreviewInFlightRef.current.get(finalPdfPreviewCacheKey) === pendingRequest) {
-          finalPdfPreviewInFlightRef.current.delete(finalPdfPreviewCacheKey);
-        }
-        if (finalPdfPreviewActiveRequestRef.current === pendingRequest) {
-          finalPdfPreviewActiveRequestRef.current = null;
-        }
+
+      const existingRequest = finalPdfPreviewInFlightRef.current.get(
+        finalPdfPreviewCacheKey,
+      );
+      if (existingRequest) return existingRequest;
+
+      const activeRequest = finalPdfPreviewActiveRequestRef.current;
+      if (activeRequest) {
+        let queuedRequest: Promise<GeneratedPrintPdf & { url: string }>;
+        queuedRequest = activeRequest
+          .catch(() => null)
+          .then(async () => {
+            const cachedAfterActive = finalPdfPreviewCacheRef.current.get(
+              finalPdfPreviewCacheKey,
+            );
+            if (cachedAfterActive) return cachedAfterActive;
+            if (
+              finalPdfPreviewInFlightRef.current.get(
+                finalPdfPreviewCacheKey,
+              ) === queuedRequest
+            ) {
+              finalPdfPreviewInFlightRef.current.delete(
+                finalPdfPreviewCacheKey,
+              );
+            }
+            const next = await finalPdfPreviewLoaderRef.current(false);
+            if (!next) throw new Error("ساخت PDF نهایی انجام نشد.");
+            return next as GeneratedPrintPdf & { url: string };
+          })
+          .finally(() => {
+            if (
+              finalPdfPreviewInFlightRef.current.get(
+                finalPdfPreviewCacheKey,
+              ) === queuedRequest
+            ) {
+              finalPdfPreviewInFlightRef.current.delete(
+                finalPdfPreviewCacheKey,
+              );
+            }
+          });
+        finalPdfPreviewInFlightRef.current.set(
+          finalPdfPreviewCacheKey,
+          queuedRequest,
+        );
+        return queuedRequest;
+      }
+
+      const requestId = ++finalPdfPreviewRequestRef.current;
+      setFinalPdfPreviewUrl(null);
+      setFinalPdfPreviewError("");
+      setFinalPdfPreviewProgress({
+        percent: 5,
+        label: "در حال آماده‌سازی پیش‌نمایش نهایی…",
       });
 
-    finalPdfPreviewInFlightRef.current.set(finalPdfPreviewCacheKey, pendingRequest);
-    finalPdfPreviewActiveRequestRef.current = pendingRequest;
-    return pendingRequest;
-  }, [finalPdfPreviewCacheKey, removeCachedFinalPdfPreview]);
+      const pendingRequest = generateFinalPdfPreview((progress) => {
+        if (requestId === finalPdfPreviewRequestRef.current) {
+          setFinalPdfPreviewProgress(progress);
+        }
+      })
+        .then((result) => {
+          const previewPdf = {
+            ...result,
+            url: URL.createObjectURL(result.blob),
+          };
+          finalPdfPreviewCacheRef.current.set(
+            finalPdfPreviewCacheKey,
+            previewPdf,
+          );
+          // Keep a short LRU-like cache so switching templates does not rebuild a
+          // PDF the user has already seen, while avoiding unbounded Blob URLs.
+          while (finalPdfPreviewCacheRef.current.size > 8) {
+            const oldestKey = finalPdfPreviewCacheRef.current
+              .keys()
+              .next().value;
+            if (!oldestKey) break;
+            removeCachedFinalPdfPreview(oldestKey);
+          }
+          if (requestId === finalPdfPreviewRequestRef.current) {
+            setFinalPdfPreviewUrl(previewPdf.url);
+            setFinalPdfPreviewProgress(null);
+          }
+          return previewPdf;
+        })
+        .catch((error) => {
+          if (requestId === finalPdfPreviewRequestRef.current) {
+            console.error("Generate final PDF preview failed", error);
+            setFinalPdfPreviewUrl(null);
+            setFinalPdfPreviewProgress(null);
+            setFinalPdfPreviewError(
+              "ساخت پیش‌نمایش نهایی PDF ناموفق بود. دوباره تلاش کنید.",
+            );
+          }
+          throw error;
+        })
+        .finally(() => {
+          if (
+            finalPdfPreviewInFlightRef.current.get(finalPdfPreviewCacheKey) ===
+            pendingRequest
+          ) {
+            finalPdfPreviewInFlightRef.current.delete(finalPdfPreviewCacheKey);
+          }
+          if (finalPdfPreviewActiveRequestRef.current === pendingRequest) {
+            finalPdfPreviewActiveRequestRef.current = null;
+          }
+        });
+
+      finalPdfPreviewInFlightRef.current.set(
+        finalPdfPreviewCacheKey,
+        pendingRequest,
+      );
+      finalPdfPreviewActiveRequestRef.current = pendingRequest;
+      return pendingRequest;
+    },
+    [finalPdfPreviewCacheKey, removeCachedFinalPdfPreview],
+  );
 
   useEffect(() => {
     finalPdfPreviewLoaderRef.current = loadFinalPdfPreview;
   }, [loadFinalPdfPreview]);
 
   useEffect(() => {
-    if (!isPrintModalOpen || activeTab !== 'preview' || !onGenerateFinalPdfPreview) return;
-    const cachedPdf = finalPdfPreviewCacheRef.current.get(finalPdfPreviewCacheKey);
+    if (
+      !isPrintModalOpen ||
+      activeTab !== "preview" ||
+      !onGenerateFinalPdfPreview
+    )
+      return;
+    const cachedPdf = finalPdfPreviewCacheRef.current.get(
+      finalPdfPreviewCacheKey,
+    );
     if (cachedPdf) {
-      setFinalPdfPreviewError('');
+      setFinalPdfPreviewError("");
       setFinalPdfPreviewProgress(null);
       setFinalPdfPreviewUrl(cachedPdf.url);
       return;
@@ -439,8 +583,11 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     // short burst into one final PDF instead of starting one request per
     // intermediate React render.
     setFinalPdfPreviewUrl(null);
-    setFinalPdfPreviewError('');
-    setFinalPdfPreviewProgress({ percent: 3, label: 'در حال همگام‌سازی اطلاعات قالب…' });
+    setFinalPdfPreviewError("");
+    setFinalPdfPreviewProgress({
+      percent: 3,
+      label: "در حال همگام‌سازی اطلاعات قالب…",
+    });
     const debounceTimer = window.setTimeout(() => {
       // Read through the ref so a short burst of asynchronous source updates
       // renders only the final settled document rather than every interim one.
@@ -450,33 +597,44 @@ const PrintSection: React.FC<PrintSectionProps> = ({
       window.clearTimeout(debounceTimer);
       finalPdfPreviewRequestRef.current += 1;
     };
-  }, [activeTab, finalPdfPreviewRenderIdentity, finalPdfPreviewRevision, isPrintModalOpen, Boolean(onGenerateFinalPdfPreview)]);
+  }, [
+    activeTab,
+    finalPdfPreviewRenderIdentity,
+    finalPdfPreviewRevision,
+    isPrintModalOpen,
+    Boolean(onGenerateFinalPdfPreview),
+  ]);
 
-  useEffect(() => () => {
-    finalPdfPreviewRequestRef.current += 1;
-    finalPdfPreviewCacheRef.current.forEach((pdf) => URL.revokeObjectURL(pdf.url));
-    finalPdfPreviewCacheRef.current.clear();
-    finalPdfPreviewInFlightRef.current.clear();
-    finalPdfPreviewActiveRequestRef.current = null;
-  }, []);
+  useEffect(
+    () => () => {
+      finalPdfPreviewRequestRef.current += 1;
+      finalPdfPreviewCacheRef.current.forEach((pdf) =>
+        URL.revokeObjectURL(pdf.url),
+      );
+      finalPdfPreviewCacheRef.current.clear();
+      finalPdfPreviewInFlightRef.current.clear();
+      finalPdfPreviewActiveRequestRef.current = null;
+    },
+    [],
+  );
 
   useEffect(() => {
-    if (!isPrintModalOpen || activeTab !== 'preview') return;
+    if (!isPrintModalOpen || activeTab !== "preview") return;
     let raf2 = 0;
     const raf1 = window.requestAnimationFrame(() => {
       raf2 = window.requestAnimationFrame(fitPreviewZoom);
     });
     const handleResize = () => fitPreviewZoom();
-    window.addEventListener('resize', handleResize);
+    window.addEventListener("resize", handleResize);
     return () => {
       window.cancelAnimationFrame(raf1);
       window.cancelAnimationFrame(raf2);
-      window.removeEventListener('resize', handleResize);
+      window.removeEventListener("resize", handleResize);
     };
   }, [activeTab, fitPreviewZoom, isPrintModalOpen, selectedTemplateId]);
 
   useEffect(() => {
-    if (!isPrintModalOpen || activeTab !== 'preview') return;
+    if (!isPrintModalOpen || activeTab !== "preview") return;
     const frame = window.requestAnimationFrame(() => {
       fitCompactPrintCells(previewStageRef.current || document);
     });
@@ -488,15 +646,17 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     setRefreshing(true);
     try {
       if (onRefreshPreview) await onRefreshPreview();
-      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      await new Promise<void>((resolve) =>
+        window.requestAnimationFrame(() => resolve()),
+      );
       if (onGenerateFinalPdfPreview) {
         removeCachedFinalPdfPreview(finalPdfPreviewCacheKey);
         setFinalPdfPreviewRevision((value) => value + 1);
       }
-      if (!silent) message.success('پیش‌نمایش چاپ به‌روز شد');
+      if (!silent) message.success("پیش‌نمایش چاپ به‌روز شد");
     } catch (error) {
-      console.error('Refresh print preview failed', error);
-      if (!silent) message.error('به‌روزرسانی پیش‌نمایش ناموفق بود');
+      console.error("Refresh print preview failed", error);
+      if (!silent) message.error("به‌روزرسانی پیش‌نمایش ناموفق بود");
     } finally {
       setRefreshing(false);
     }
@@ -506,10 +666,10 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     if (!onSavePrintFields) return;
     const result = await onSavePrintFields();
     if (result === false) {
-      message.error('ذخیره تنظیمات ناموفق بود');
+      message.error("ذخیره تنظیمات ناموفق بود");
       return;
     }
-    message.success('تنظیمات چاپی ذخیره شد');
+    message.success("تنظیمات چاپی ذخیره شد");
     await handleRefresh(true);
   };
 
@@ -542,13 +702,13 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     } catch (error) {
       // A failed preview may be retried once by the print runtime. Normal
       // successful previews never take this branch and never render twice.
-      console.error('Prepare or reuse preview PDF failed', error);
+      console.error("Prepare or reuse preview PDF failed", error);
     }
 
     onClose();
     window.setTimeout(() => {
       void Promise.resolve(onPrint(preparedPdf)).catch((error) => {
-        console.error('Print failed', error);
+        console.error("Print failed", error);
       });
     }, 0);
   };
@@ -586,7 +746,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         value={selectedTemplateId || undefined}
         onChange={(value) => {
           onSelectTemplate(value);
-          setActiveTab('preview');
+          setActiveTab("preview");
         }}
         showSearch
         allowClear={false}
@@ -601,18 +761,22 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         popupMatchSelectWidth
         overlayZIndexBase={12020}
         popupClassName="print-template-mobile-popup"
-        popupStyle={{
-          '--print-template-popup-bg': token.colorBgElevated,
-          '--print-template-popup-text': token.colorText,
-          '--print-template-popup-muted': token.colorTextSecondary,
-          '--print-template-popup-border': token.colorBorderSecondary,
-        } as React.CSSProperties}
-        optionDisplayFallback={(option) => String(option?.title || option?.label || option?.value || '')}
+        popupStyle={
+          {
+            "--print-template-popup-bg": token.colorBgElevated,
+            "--print-template-popup-text": token.colorText,
+            "--print-template-popup-muted": token.colorTextSecondary,
+            "--print-template-popup-border": token.colorBorderSecondary,
+          } as React.CSSProperties
+        }
+        optionDisplayFallback={(option) =>
+          String(option?.title || option?.label || option?.value || "")
+        }
         filterOption={(input, option) => {
           const search = input.trim().toLowerCase();
           if (!search) return true;
-          const title = String(option?.title || '').toLowerCase();
-          const description = String(option?.description || '').toLowerCase();
+          const title = String(option?.title || "").toLowerCase();
+          const description = String(option?.description || "").toLowerCase();
           return title.includes(search) || description.includes(search);
         }}
         options={mobileTemplateOptions}
@@ -631,29 +795,45 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           onCancel={handleCancel}
           onOk={handleRequestPrint}
           footer={(_, { CancelBtn, OkBtn }) => (
-            <div className={`flex ${isMobile ? 'flex-col-reverse items-stretch gap-2' : 'items-center justify-end gap-2'}`}>
+            <div
+              className={`flex ${isMobile ? "flex-col-reverse items-stretch gap-2" : "items-center justify-end gap-2"}`}
+            >
               <CancelBtn />
               {onSendInternalPdf ? (
-                <Button onClick={() => { void handleSendInternalPdf(); }} loading={sendingInternal}>
+                <Button
+                  onClick={() => {
+                    void handleSendInternalPdf();
+                  }}
+                  loading={sendingInternal}
+                >
                   ارسال مستقیم
                 </Button>
               ) : null}
               {onSavePdfToRecord ? (
-                <Button onClick={() => { void handleSavePdfToRecord(); }} loading={savingPdfToRecord}>
+                <Button
+                  onClick={() => {
+                    void handleSavePdfToRecord();
+                  }}
+                  loading={savingPdfToRecord}
+                >
                   ذخیره در نرم افزار
                 </Button>
               ) : null}
               <OkBtn />
             </div>
           )}
-          okText={isMobile && onPreparePrint ? 'باز کردن PDF نهایی' : 'چاپ'}
+          okText={isMobile && onPreparePrint ? "باز کردن PDF نهایی" : "چاپ"}
           cancelText="انصراف"
-          width={isMobile ? '100vw' : 'min(1440px, calc(100vw - 32px))'}
+          width={isMobile ? "100vw" : "min(1440px, calc(100vw - 32px))"}
           destroyOnHidden
           centered={false}
           zIndex={modalZIndex}
           rootClassName="print-select-modal"
-          style={isMobile ? { top: 0, paddingBottom: 0, maxWidth: '100vw' } : { top: 16, paddingBottom: 0 }}
+          style={
+            isMobile
+              ? { top: 0, paddingBottom: 0, maxWidth: "100vw" }
+              : { top: 16, paddingBottom: 0 }
+          }
           styles={{
             mask: { zIndex: modalZIndex },
             wrapper: { zIndex: modalZIndex + 1 },
@@ -666,13 +846,13 @@ const PrintSection: React.FC<PrintSectionProps> = ({
             content: isMobile
               ? {
                   borderRadius: 0,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  minHeight: '100dvh',
-                  maxHeight: '100dvh',
-                  height: '100dvh',
+                  display: "flex",
+                  flexDirection: "column",
+                  minHeight: "100dvh",
+                  maxHeight: "100dvh",
+                  height: "100dvh",
                   paddingBottom: 0,
-                  overflow: 'hidden',
+                  overflow: "hidden",
                   background: token.colorBgElevated,
                 }
               : { background: token.colorBgElevated },
@@ -680,341 +860,599 @@ const PrintSection: React.FC<PrintSectionProps> = ({
               padding: 0,
               ...(isMobile
                 ? {
-                    flex: '1 1 auto',
+                    flex: "1 1 auto",
                     minHeight: 0,
-                    maxHeight: 'none',
-                    overflow: 'hidden',
+                    maxHeight: "none",
+                    overflow: "hidden",
                   }
                 : {
-                  height: 'calc(100vh - 140px)',
-                  maxHeight: 'calc(100vh - 140px)',
-                    overflow: 'hidden',
+                    height: "calc(100vh - 140px)",
+                    maxHeight: "calc(100vh - 140px)",
+                    overflow: "hidden",
                   }),
             },
             footer: isMobile
               ? {
-                  flex: '0 0 auto',
-                  position: 'sticky',
+                  flex: "0 0 auto",
+                  position: "sticky",
                   bottom: 0,
                   zIndex: 2,
-                  padding: '12px 16px calc(12px + env(safe-area-inset-bottom, 0px))',
+                  padding:
+                    "12px 16px calc(12px + env(safe-area-inset-bottom, 0px))",
                   marginTop: 0,
                   borderTop: `1px solid ${token.colorBorderSecondary}`,
                   background: token.colorBgElevated,
-                  backdropFilter: 'blur(12px)',
+                  backdropFilter: "blur(12px)",
                 }
-              : { borderTop: `1px solid ${token.colorBorderSecondary}`, background: token.colorBgElevated },
+              : {
+                  borderTop: `1px solid ${token.colorBorderSecondary}`,
+                  background: token.colorBgElevated,
+                },
           }}
         >
-        <div className="print-select-shell" style={{ background: token.colorBgLayout }}>
-          <div className="print-preview-shell">
-            <div className="print-modal-controls-row">
-              {templateSelector}
-              <Button
-                type="text"
-                size="small"
-                className="print-modal-refresh"
-                icon={<ReloadOutlined />}
-                onClick={() => { void handleRefresh(); }}
-                loading={refreshing}
-                disabled={!onRefreshPreview && !onGenerateFinalPdfPreview}
-                title="به‌روزرسانی پیش‌نمایش نهایی"
-                aria-label="به‌روزرسانی پیش‌نمایش نهایی"
-              />
-            </div>
-            <Tabs
-              activeKey={activeTab}
-              onChange={(key) => {
-                setActiveTab(key);
-              }}
-              tabPosition="top"
-              destroyOnHidden
-              tabBarGutter={isMobile ? 18 : 32}
-              style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
-              tabBarStyle={{
-                margin: 0,
-                padding: isMobile ? '0 12px' : '0 16px',
-                borderBottom: `1px solid ${token.colorBorderSecondary}`,
-                direction: 'rtl',
-              }}
-              items={[
-                {
-                  key: 'preview',
-                  label: (
-                    <span className="inline-flex items-center gap-2" style={{ direction: 'rtl' }}>
-                      <EyeOutlined />
-                      {isMobile ? 'پیش‌نمایش' : 'پیش‌نمایش'}
-                    </span>
-                  ),
-                  children: (
-                    <div className="print-preview-pane">
-                      <div className="print-preview-toolbar">
-                        <div className="print-preview-meta">
-                          <span>{previewMeta?.paperSize || 'A4'}</span>
-                          <span>{(previewMeta?.orientation || 'portrait') === 'landscape' ? 'افقی' : 'عمودی'}</span>
-                          <span>{onGenerateFinalPdfPreview ? 'PDF نهایی' : `${Math.round(zoom * 100)}%`}</span>
-                        </div>
-                        <div className="print-preview-actions">
-                          {!onGenerateFinalPdfPreview ? <>
-                            <Button
-                              size="small"
-                              icon={<MinusOutlined />}
-                              onClick={() => setZoom((prev) => Math.max(0.5, Math.round((prev - 0.1) * 10) / 10))}
-                              title="کوچک‌نمایی"
-                            />
-                            <Button
-                              size="small"
-                              icon={<PlusOutlined />}
-                              onClick={() => setZoom((prev) => Math.min(1.8, Math.round((prev + 0.1) * 10) / 10))}
-                              title="بزرگ‌نمایی"
-                            />
-                          </> : null}
-                        </div>
-                      </div>
-                      <div
-                        className="print-preview-stage"
-                        ref={previewStageRef}
-                        onTouchStart={(event) => {
-                          pinchDistanceRef.current = event.touches.length >= 2 ? getTouchDistance(event.touches) : null;
-                        }}
-                        onTouchMove={(event) => {
-                          if (event.touches.length < 2) return;
-                          event.preventDefault();
-                          const nextDistance = getTouchDistance(event.touches);
-                          const prevDistance = pinchDistanceRef.current;
-                          if (!nextDistance || !prevDistance) {
-                            pinchDistanceRef.current = nextDistance;
-                            return;
-                          }
-                          const delta = (nextDistance - prevDistance) / 180;
-                          if (Math.abs(delta) < 0.015) return;
-                          setZoom((prev) => Math.max(0.35, Math.min(1.8, Math.round((prev + delta) * 100) / 100)));
-                          pinchDistanceRef.current = nextDistance;
-                        }}
-                        onTouchEnd={() => {
-                          pinchDistanceRef.current = null;
-                        }}
-                        onTouchCancel={() => {
-                          pinchDistanceRef.current = null;
-                        }}
+          <div
+            className="print-select-shell"
+            style={{ background: token.colorBgLayout }}
+          >
+            <div className="print-preview-shell">
+              <div className="print-modal-controls-row">
+                {templateSelector}
+                <Button
+                  type="text"
+                  size="small"
+                  className="print-modal-refresh"
+                  icon={<ReloadOutlined />}
+                  onClick={() => {
+                    void handleRefresh();
+                  }}
+                  loading={refreshing}
+                  disabled={!onRefreshPreview && !onGenerateFinalPdfPreview}
+                  title="به‌روزرسانی پیش‌نمایش نهایی"
+                  aria-label="به‌روزرسانی پیش‌نمایش نهایی"
+                />
+              </div>
+              <Tabs
+                activeKey={activeTab}
+                onChange={(key) => {
+                  setActiveTab(key);
+                }}
+                tabPosition="top"
+                destroyOnHidden
+                tabBarGutter={isMobile ? 18 : 32}
+                style={{
+                  height: "100%",
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+                tabBarStyle={{
+                  margin: 0,
+                  padding: isMobile ? "0 12px" : "0 16px",
+                  borderBottom: `1px solid ${token.colorBorderSecondary}`,
+                  direction: "rtl",
+                }}
+                items={[
+                  {
+                    key: "preview",
+                    label: (
+                      <span
+                        className="inline-flex items-center gap-2"
+                        style={{ direction: "rtl" }}
                       >
-                        {onGenerateFinalPdfPreview ? (
-                          <div style={{ width: '100%', height: '100%', minHeight: '100%', padding: isMobile ? 8 : 12, boxSizing: 'border-box' }} dir="rtl">
-                            {finalPdfPreviewProgress ? (
-                              <div style={{ maxWidth: 420, margin: '48px auto', textAlign: 'right' }}>
-                                <p style={{ marginBottom: 12, color: '#475569' }}>{finalPdfPreviewProgress.label}</p>
-                                <div style={{ height: 8, borderRadius: 999, overflow: 'hidden', background: '#e2e8f0' }}>
-                                  <div style={{ width: `${Math.max(0, Math.min(100, finalPdfPreviewProgress.percent))}%`, height: '100%', background: '#4f46e5', transition: 'width .25s ease' }} />
-                                </div>
-                              </div>
-                            ) : finalPdfPreviewError ? (
-                              <div style={{ maxWidth: 420, margin: '48px auto', textAlign: 'center', color: '#b91c1c' }}>
-                                <p>{finalPdfPreviewError}</p>
-                                <Button onClick={() => { void loadFinalPdfPreview(true).catch(() => undefined); }}>تلاش دوباره</Button>
-                              </div>
-                            ) : finalPdfPreviewUrl ? (
-                              isMobile ? (
-                                <div style={{ maxWidth: 440, margin: '32px auto', padding: '20px 16px', border: '1px solid #e2e8f0', borderRadius: 16, textAlign: 'center', background: '#fff' }}>
-                                  <p style={{ margin: '0 0 16px', color: '#475569', lineHeight: 1.9 }}>
-                                    پیش‌نمایش و خروجی نهایی یک فایل هستند. برای نمایش کامل، PDF را در نمایشگر خود گوشی باز کنید.
-                                  </p>
-                                  <Button type="primary" block href={finalPdfPreviewUrl} target="_blank" rel="noopener noreferrer">
-                                    نمایش تمام‌صفحه PDF نهایی
-                                  </Button>
-                                </div>
-                              ) : (
-                                <iframe src={finalPdfPreviewUrl} title="پیش‌نمایش نهایی PDF" style={{ width: '100%', height: 'calc(100vh - 275px)', minHeight: 620, border: 0, background: '#fff' }} />
-                              )
-                            ) : null}
+                        <EyeOutlined />
+                        {isMobile ? "پیش‌نمایش" : "پیش‌نمایش"}
+                      </span>
+                    ),
+                    children: (
+                      <div className="print-preview-pane">
+                        <div className="print-preview-toolbar">
+                          <div className="print-preview-meta">
+                            <span>{previewMeta?.paperSize || "A4"}</span>
+                            <span>
+                              {(previewMeta?.orientation || "portrait") ===
+                              "landscape"
+                                ? "افقی"
+                                : "عمودی"}
+                            </span>
+                            <span>
+                              {onGenerateFinalPdfPreview
+                                ? "PDF نهایی"
+                                : `${Math.round(zoom * 100)}%`}
+                            </span>
                           </div>
-                        ) : <div className="print-preview-canvas">
-                          <div
-                            className="print-preview-zoom-frame"
-                              style={{
-                                width: `${Math.round(paperWidthPx * zoom)}px`,
-                                minHeight: `${Math.round(paperHeightPx * zoom)}px`,
-                                maxWidth: 'none',
-                                overflow: 'visible',
-                              }}
-                          >
-                            <div
-                              className="print-preview-scale"
-                                style={{
-                                  width: `${paperFrame.mmWidth}mm`,
-                                  minHeight: `${paperFrame.mmHeight}mm`,
-                                  ...(supportsZoom
-                                    ? ({ zoom } as React.CSSProperties)
-                                    : { transform: `scale(${zoom})`, transformOrigin: 'top left' }),
-                                }}
-                            >
-                              {!printMode ? renderPrintCard() : null}
-                            </div>
-                          </div>
-                        </div>}
-                      </div>
-                    </div>
-                  ),
-                },
-                ...(isFieldSelectionAvailable
-                  ? [
-                      {
-                        key: 'fields',
-                         label: (
-                           <span style={{ direction: 'rtl' }}>
-                            {`فیلدهای قابل چاپ ${selectedFieldCount > 0 ? `(${selectedFieldCount})` : '(هیچ‌کدام)'}`}
-                           </span>
-                         ),
-                        children: (
-                          <div className="print-fields-pane">
-                            <div className="print-fields-toolbar">
-                               <div className="print-fields-meta">فقط گزینه‌های انتخاب‌شده در چاپ نهایی نمایش داده می‌شوند.</div>
-                              <div className="print-fields-toolbar-actions">
+                          <div className="print-preview-actions">
+                            {!onGenerateFinalPdfPreview ? (
+                              <>
                                 <Button
                                   size="small"
-                                  onClick={() => setOrderPanelOpen((prev) => !prev)}
-                                  disabled={orderedSelectedFields.length === 0}
-                                  icon={orderPanelOpen ? <UpOutlined /> : <DownOutlined />}
+                                  icon={<MinusOutlined />}
+                                  onClick={() =>
+                                    setZoom((prev) =>
+                                      Math.max(
+                                        0.5,
+                                        Math.round((prev - 0.1) * 10) / 10,
+                                      ),
+                                    )
+                                  }
+                                  title="کوچک‌نمایی"
+                                />
+                                <Button
+                                  size="small"
+                                  icon={<PlusOutlined />}
+                                  onClick={() =>
+                                    setZoom((prev) =>
+                                      Math.min(
+                                        1.8,
+                                        Math.round((prev + 0.1) * 10) / 10,
+                                      ),
+                                    )
+                                  }
+                                  title="بزرگ‌نمایی"
+                                />
+                              </>
+                            ) : null}
+                          </div>
+                        </div>
+                        <div
+                          className="print-preview-stage"
+                          ref={previewStageRef}
+                          onTouchStart={(event) => {
+                            pinchDistanceRef.current =
+                              event.touches.length >= 2
+                                ? getTouchDistance(event.touches)
+                                : null;
+                          }}
+                          onTouchMove={(event) => {
+                            if (event.touches.length < 2) return;
+                            event.preventDefault();
+                            const nextDistance = getTouchDistance(
+                              event.touches,
+                            );
+                            const prevDistance = pinchDistanceRef.current;
+                            if (!nextDistance || !prevDistance) {
+                              pinchDistanceRef.current = nextDistance;
+                              return;
+                            }
+                            const delta = (nextDistance - prevDistance) / 180;
+                            if (Math.abs(delta) < 0.015) return;
+                            setZoom((prev) =>
+                              Math.max(
+                                0.35,
+                                Math.min(
+                                  1.8,
+                                  Math.round((prev + delta) * 100) / 100,
+                                ),
+                              ),
+                            );
+                            pinchDistanceRef.current = nextDistance;
+                          }}
+                          onTouchEnd={() => {
+                            pinchDistanceRef.current = null;
+                          }}
+                          onTouchCancel={() => {
+                            pinchDistanceRef.current = null;
+                          }}
+                        >
+                          {onGenerateFinalPdfPreview ? (
+                            <div
+                              style={{
+                                width: "100%",
+                                height: "100%",
+                                minHeight: "100%",
+                                padding: isMobile ? 8 : 12,
+                                boxSizing: "border-box",
+                              }}
+                              dir="rtl"
+                            >
+                              {finalPdfPreviewProgress ? (
+                                <div
+                                  style={{
+                                    maxWidth: 420,
+                                    margin: "48px auto",
+                                    textAlign: "right",
+                                  }}
                                 >
-                                  ترتیب فیلدها
-                                </Button>
-                                <Button size="small" type="primary" onClick={handleSaveFields} loading={savingPrintFields}>
-                                   ذخیره تغییرات
-                                </Button>
+                                  <p
+                                    style={{
+                                      marginBottom: 12,
+                                      color: "#475569",
+                                    }}
+                                  >
+                                    {finalPdfPreviewProgress.label}
+                                  </p>
+                                  <div
+                                    style={{
+                                      height: 8,
+                                      borderRadius: 999,
+                                      overflow: "hidden",
+                                      background: "#e2e8f0",
+                                    }}
+                                  >
+                                    <div
+                                      style={{
+                                        width: `${Math.max(0, Math.min(100, finalPdfPreviewProgress.percent))}%`,
+                                        height: "100%",
+                                        background: "#4f46e5",
+                                        transition: "width .25s ease",
+                                      }}
+                                    />
+                                  </div>
+                                </div>
+                              ) : finalPdfPreviewError ? (
+                                <div
+                                  style={{
+                                    maxWidth: 420,
+                                    margin: "48px auto",
+                                    textAlign: "center",
+                                    color: "#b91c1c",
+                                  }}
+                                >
+                                  <p>{finalPdfPreviewError}</p>
+                                  <Button
+                                    onClick={() => {
+                                      void loadFinalPdfPreview(true).catch(
+                                        () => undefined,
+                                      );
+                                    }}
+                                  >
+                                    تلاش دوباره
+                                  </Button>
+                                </div>
+                              ) : finalPdfPreviewUrl ? (
+                                isMobile ? (
+                                  <div
+                                    style={{
+                                      maxWidth: 440,
+                                      margin: "32px auto",
+                                      padding: "20px 16px",
+                                      border: "1px solid #e2e8f0",
+                                      borderRadius: 16,
+                                      textAlign: "center",
+                                      background: "#fff",
+                                    }}
+                                  >
+                                    <p
+                                      style={{
+                                        margin: "0 0 16px",
+                                        color: "#475569",
+                                        lineHeight: 1.9,
+                                      }}
+                                    >
+                                      پیش‌نمایش و خروجی نهایی یک فایل هستند.
+                                      برای نمایش کامل، PDF را در نمایشگر خود
+                                      گوشی باز کنید.
+                                    </p>
+                                    <Button
+                                      type="primary"
+                                      block
+                                      href={finalPdfPreviewUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                    >
+                                      نمایش تمام‌صفحه PDF نهایی
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <iframe
+                                    src={finalPdfPreviewUrl}
+                                    title="پیش‌نمایش نهایی PDF"
+                                    style={{
+                                      width: "100%",
+                                      height: "calc(100vh - 275px)",
+                                      minHeight: 620,
+                                      border: 0,
+                                      background: "#fff",
+                                    }}
+                                  />
+                                )
+                              ) : null}
+                            </div>
+                          ) : (
+                            <div className="print-preview-canvas">
+                              <div
+                                className="print-preview-zoom-frame"
+                                style={{
+                                  width: `${Math.round(paperWidthPx * zoom)}px`,
+                                  minHeight: `${Math.round(paperHeightPx * zoom)}px`,
+                                  maxWidth: "none",
+                                  overflow: "visible",
+                                }}
+                              >
+                                <div
+                                  className="print-preview-scale"
+                                  style={{
+                                    width: `${paperFrame.mmWidth}mm`,
+                                    minHeight: `${paperFrame.mmHeight}mm`,
+                                    ...(supportsZoom
+                                      ? ({ zoom } as React.CSSProperties)
+                                      : {
+                                          transform: `scale(${zoom})`,
+                                          transformOrigin: "top left",
+                                        }),
+                                  }}
+                                >
+                                  {!printMode ? renderPrintCard() : null}
+                                </div>
                               </div>
                             </div>
-                            <div className="print-fields-scroll">
-                              {showImageDisplayModeControl ? (
-                                <div className="print-image-mode-panel">
-                                  <div className="print-image-mode-header">
-                                    <div className="print-image-mode-title">نوع نمایش تصویر</div>
-                                  </div>
-                                  <Segmented
-                                    block={isMobile}
-                                    size="middle"
-                                    value={imageDisplayMode}
-                                    onChange={(value) => onChangeImageDisplayMode(selectedTemplateId, value as 'fit' | 'actual')}
-                                    options={[
-                                      { label: 'فیت', value: 'fit' },
-                                      { label: 'اندازه واقعی', value: 'actual' },
-                                    ]}
-                                  />
+                          )}
+                        </div>
+                      </div>
+                    ),
+                  },
+                  ...(isFieldSelectionAvailable
+                    ? [
+                        {
+                          key: "fields",
+                          label: (
+                            <span style={{ direction: "rtl" }}>
+                              {`فیلدهای قابل چاپ ${selectedFieldCount > 0 ? `(${selectedFieldCount})` : "(هیچ‌کدام)"}`}
+                            </span>
+                          ),
+                          children: (
+                            <div className="print-fields-pane">
+                              <div className="print-fields-toolbar">
+                                <div className="print-fields-meta">
+                                  فقط گزینه‌های انتخاب‌شده در چاپ نهایی نمایش
+                                  داده می‌شوند.
                                 </div>
-                              ) : null}
-                              {orderPanelOpen && orderedSelectedFields.length > 0 ? (
-                                <div className="print-selected-fields-panel">
-                                  <div className="print-selected-fields-title">ترتیب چاپ فیلدهای انتخاب‌شده</div>
-                                  <div className="print-selected-fields-list">
-                                    {orderedSelectedFields.map((field, index) => (
-                                      <div key={`selected-${field.key}`} className="print-selected-field-row">
-                                        <span className="print-selected-field-label">{field?.labels?.fa || field?.label || field?.key}</span>
-                                        <div className="print-selected-field-actions">
-                                          <Button
-                                            size="small"
-                                            icon={<UpOutlined />}
-                                            onClick={(event) => {
-                                              event.stopPropagation();
-                                              onMovePrintField(selectedTemplateId, field.key, 'up');
-                                            }}
-                                            disabled={index === 0}
-                                          />
-                                          <Button
-                                            size="small"
-                                            icon={<DownOutlined />}
-                                            onClick={(event) => {
-                                              event.stopPropagation();
-                                              onMovePrintField(selectedTemplateId, field.key, 'down');
-                                            }}
-                                            disabled={index === orderedSelectedFields.length - 1}
-                                          />
+                                <div className="print-fields-toolbar-actions">
+                                  <Button
+                                    size="small"
+                                    onClick={() =>
+                                      setOrderPanelOpen((prev) => !prev)
+                                    }
+                                    disabled={
+                                      orderedSelectedFields.length === 0
+                                    }
+                                    icon={
+                                      orderPanelOpen ? (
+                                        <UpOutlined />
+                                      ) : (
+                                        <DownOutlined />
+                                      )
+                                    }
+                                  >
+                                    ترتیب فیلدها
+                                  </Button>
+                                  <Button
+                                    size="small"
+                                    type="primary"
+                                    onClick={handleSaveFields}
+                                    loading={savingPrintFields}
+                                  >
+                                    ذخیره تغییرات
+                                  </Button>
+                                </div>
+                              </div>
+                              <div className="print-fields-scroll">
+                                {showImageDisplayModeControl ? (
+                                  <div className="print-image-mode-panel">
+                                    <div className="print-image-mode-header">
+                                      <div className="print-image-mode-title">
+                                        نوع نمایش تصویر
+                                      </div>
+                                    </div>
+                                    <Segmented
+                                      block={isMobile}
+                                      size="middle"
+                                      value={imageDisplayMode}
+                                      onChange={(value) =>
+                                        onChangeImageDisplayMode(
+                                          selectedTemplateId,
+                                          value as "fit" | "actual",
+                                        )
+                                      }
+                                      options={[
+                                        { label: "فیت", value: "fit" },
+                                        {
+                                          label: "اندازه واقعی",
+                                          value: "actual",
+                                        },
+                                      ]}
+                                    />
+                                  </div>
+                                ) : null}
+                                {orderPanelOpen &&
+                                orderedSelectedFields.length > 0 ? (
+                                  <div className="print-selected-fields-panel">
+                                    <div className="print-selected-fields-title">
+                                      ترتیب چاپ فیلدهای انتخاب‌شده
+                                    </div>
+                                    <div className="print-selected-fields-list">
+                                      {orderedSelectedFields.map(
+                                        (field, index) => (
+                                          <div
+                                            key={`selected-${field.key}`}
+                                            className="print-selected-field-row"
+                                          >
+                                            <span className="print-selected-field-label">
+                                              {field?.labels?.fa ||
+                                                field?.label ||
+                                                field?.key}
+                                            </span>
+                                            <div className="print-selected-field-actions">
+                                              <Button
+                                                size="small"
+                                                icon={<UpOutlined />}
+                                                onClick={(event) => {
+                                                  event.stopPropagation();
+                                                  onMovePrintField(
+                                                    selectedTemplateId,
+                                                    field.key,
+                                                    "up",
+                                                  );
+                                                }}
+                                                disabled={index === 0}
+                                              />
+                                              <Button
+                                                size="small"
+                                                icon={<DownOutlined />}
+                                                onClick={(event) => {
+                                                  event.stopPropagation();
+                                                  onMovePrintField(
+                                                    selectedTemplateId,
+                                                    field.key,
+                                                    "down",
+                                                  );
+                                                }}
+                                                disabled={
+                                                  index ===
+                                                  orderedSelectedFields.length -
+                                                    1
+                                                }
+                                              />
+                                            </div>
+                                          </div>
+                                        ),
+                                      )}
+                                    </div>
+                                  </div>
+                                ) : null}
+                                <div className="print-fields-groups">
+                                  {groupedPrintableFields.map(
+                                    ({ group, fields }) => (
+                                      <div
+                                        key={group}
+                                        className="print-fields-group"
+                                      >
+                                        <div className="print-fields-group-header">
+                                          <div className="print-fields-group-title">
+                                            {group}
+                                          </div>
+                                          <Checkbox
+                                            checked={
+                                              fields.length > 0 &&
+                                              fields.every((field) =>
+                                                selectedFieldKeySet.has(
+                                                  field.key,
+                                                ),
+                                              )
+                                            }
+                                            indeterminate={
+                                              fields.some((field) =>
+                                                selectedFieldKeySet.has(
+                                                  field.key,
+                                                ),
+                                              ) &&
+                                              !fields.every((field) =>
+                                                selectedFieldKeySet.has(
+                                                  field.key,
+                                                ),
+                                              )
+                                            }
+                                            onChange={() =>
+                                              onTogglePrintFieldGroup(
+                                                selectedTemplateId,
+                                                group,
+                                              )
+                                            }
+                                          >
+                                            قابل چاپ
+                                          </Checkbox>
+                                        </div>
+                                        <div className="print-fields-grid">
+                                          {fields.map((field) => {
+                                            const isSelected =
+                                              selectedFieldKeySet.has(
+                                                field.key,
+                                              );
+                                            const isEmpty =
+                                              field?.hasValue === false;
+                                            return (
+                                              <div
+                                                key={field.key}
+                                                onClick={() =>
+                                                  onTogglePrintField(
+                                                    selectedTemplateId,
+                                                    field.key,
+                                                  )
+                                                }
+                                                className={`print-field-card ${isSelected ? "selected" : ""} ${isEmpty ? "empty" : ""}`}
+                                              >
+                                                <div className="print-field-checkbox">
+                                                  {isSelected
+                                                    ? String.fromCharCode(10003)
+                                                    : ""}
+                                                </div>
+                                                <div className="print-field-card-body">
+                                                  <span>
+                                                    {field?.labels?.fa ||
+                                                      field?.label ||
+                                                      field?.key}
+                                                  </span>
+                                                  {isEmpty ? (
+                                                    <small>بدون مقدار</small>
+                                                  ) : null}
+                                                </div>
+                                              </div>
+                                            );
+                                          })}
                                         </div>
                                       </div>
-                                    ))}
-                                  </div>
+                                    ),
+                                  )}
                                 </div>
-                              ) : null}
-                            <div className="print-fields-groups">
-                              {groupedPrintableFields.map(({ group, fields }) => (
-                                <div key={group} className="print-fields-group">
-                                  <div className="print-fields-group-header">
-                                    <div className="print-fields-group-title">{group}</div>
-                                    <Checkbox
-                                      checked={fields.length > 0 && fields.every((field) => selectedFieldKeySet.has(field.key))}
-                                      indeterminate={
-                                        fields.some((field) => selectedFieldKeySet.has(field.key)) &&
-                                        !fields.every((field) => selectedFieldKeySet.has(field.key))
-                                      }
-                                      onChange={() => onTogglePrintFieldGroup(selectedTemplateId, group)}
-                                    >
-                                      قابل چاپ
-                                    </Checkbox>
-                                  </div>
-                                  <div className="print-fields-grid">
-                                    {fields.map((field) => {
-                                      const isSelected = selectedFieldKeySet.has(field.key);
-                                      const isEmpty = field?.hasValue === false;
-                                      return (
-                                        <div
-                                          key={field.key}
-                                          onClick={() => onTogglePrintField(selectedTemplateId, field.key)}
-                                          className={`print-field-card ${isSelected ? 'selected' : ''} ${isEmpty ? 'empty' : ''}`}
-                                        >
-                                          <div className="print-field-checkbox">{isSelected ? String.fromCharCode(10003) : ''}</div>
-                                          <div className="print-field-card-body">
-                                            <span>{field?.labels?.fa || field?.label || field?.key}</span>
-                                            {isEmpty ? <small>بدون مقدار</small> : null}
-                                          </div>
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              ))}
+                              </div>
                             </div>
+                          ),
+                        },
+                      ]
+                    : []),
+                  ...(isSignatureTabAvailable
+                    ? [
+                        {
+                          key: "signatures",
+                          label: (
+                            <span style={{ direction: "rtl" }}>مهر و امضا</span>
+                          ),
+                          children: (
+                            <div className="print-fields-pane">
+                              <div className="print-fields-scroll">
+                                <PrintSignatureConfigurator
+                                  rows={printSignatureRows}
+                                  quickAddOptions={
+                                    printSignatureQuickAddOptions
+                                  }
+                                  signatureOptionsByRow={signatureOptionsByRow}
+                                  onAddRow={onAddPrintSignatureRow}
+                                  onRemoveRow={onRemovePrintSignatureRow}
+                                  onMoveRow={onMovePrintSignatureRow}
+                                  onToggleEnabled={
+                                    onTogglePrintSignatureEnabled
+                                  }
+                                  onToggleAutomatic={
+                                    onTogglePrintSignatureAutomatic
+                                  }
+                                  onChangeName={onChangePrintSignatureName}
+                                  onChangeSubtitle={
+                                    onChangePrintSignatureSubtitle
+                                  }
+                                  onChangeSignerModule={
+                                    onChangePrintSignatureSignerModule
+                                  }
+                                  onChangeSignerId={
+                                    onChangePrintSignatureSignerId
+                                  }
+                                  onSearchSignerOptions={
+                                    onSearchPrintSignatureOptions
+                                  }
+                                  onSave={handleSaveFields}
+                                  saving={savingPrintFields}
+                                />
+                              </div>
                             </div>
-                          </div>
-                        ),
-                      },
-                    ]
-                  : []),
-                ...(isSignatureTabAvailable
-                  ? [
-                      {
-                        key: 'signatures',
-                        label: <span style={{ direction: 'rtl' }}>مهر و امضا</span>,
-                        children: (
-                          <div className="print-fields-pane">
-                            <div className="print-fields-scroll">
-                              <PrintSignatureConfigurator
-                                rows={printSignatureRows}
-                                quickAddOptions={printSignatureQuickAddOptions}
-                                signatureOptionsByRow={signatureOptionsByRow}
-                                onAddRow={onAddPrintSignatureRow}
-                                onRemoveRow={onRemovePrintSignatureRow}
-                                onMoveRow={onMovePrintSignatureRow}
-                                onToggleEnabled={onTogglePrintSignatureEnabled}
-                                onToggleAutomatic={onTogglePrintSignatureAutomatic}
-                                onChangeName={onChangePrintSignatureName}
-                                onChangeSubtitle={onChangePrintSignatureSubtitle}
-                                onChangeSignerModule={onChangePrintSignatureSignerModule}
-                                onChangeSignerId={onChangePrintSignatureSignerId}
-                                onSearchSignerOptions={onSearchPrintSignatureOptions}
-                                onSave={handleSaveFields}
-                                saving={savingPrintFields}
-                              />
-                            </div>
-                          </div>
-                        ),
-                      },
-                    ]
-                  : []),
-              ]}
-            />
+                          ),
+                        },
+                      ]
+                    : []),
+                ]}
+              />
+            </div>
           </div>
-        </div>
         </Modal>
       ) : null}
 
-      {typeof document !== 'undefined'
+      {typeof document !== "undefined"
         ? createPortal(
             <div
               id="print-root"
@@ -1022,23 +1460,23 @@ const PrintSection: React.FC<PrintSectionProps> = ({
               style={
                 printMode
                   ? {
-                      display: 'block',
-                      position: 'fixed',
+                      display: "block",
+                      position: "fixed",
                       top: 0,
-                      left: '-200vw',
-                      width: 'max-content',
-                      maxWidth: 'none',
+                      left: "-200vw",
+                      width: "max-content",
+                      maxWidth: "none",
                       opacity: 0,
-                      pointerEvents: 'none',
+                      pointerEvents: "none",
                       zIndex: -1,
-                      overflow: 'hidden',
+                      overflow: "hidden",
                     }
-                  : { display: 'none' }
+                  : { display: "none" }
               }
             >
               {printMode ? renderPrintCard() : null}
             </div>,
-            document.body
+            document.body,
           )
         : null}
 

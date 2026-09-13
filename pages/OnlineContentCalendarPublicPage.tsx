@@ -38,13 +38,13 @@ export default function OnlineContentCalendarPublicPage() {
 
   useEffect(() => {
     let active = true;
-    void supabasePublic.rpc('get_public_content_calendar', { p_token: String(token || '').trim() })
+    void Promise.resolve(supabasePublic.rpc('get_public_content_calendar', { p_token: String(token || '').trim() }))
       .then(({ data, error: rpcError }) => {
         if (!active) return;
         if (rpcError || data?.error) throw rpcError || new Error('تقویم پیدا نشد یا لینک آن غیرفعال است.');
         setPayload(data);
       })
-      .catch((reason) => active && setError(String(reason?.message || 'بارگذاری تقویم ناموفق بود.')))
+      .catch((reason: any) => active && setError(String(reason?.message || 'بارگذاری تقویم ناموفق بود.')))
       .finally(() => active && setLoading(false));
     return () => { active = false; };
   }, [token]);

@@ -33,6 +33,7 @@ import {
   ReadOutlined,
   GiftOutlined,
   InstagramOutlined,
+  CalendarOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -51,7 +52,7 @@ import {
   type PermissionMap,
 } from '../utils/permissions';
 import { CUSTOMER_CLUB_FEATURE } from '../utils/customerClub';
-import { hasCurrentOrgPlanFeature } from '../utils/saasPlanFeatures';
+import { hasCurrentOrgPlanFeature, RESERVATIONS_PLAN_FEATURE } from '../utils/saasPlanFeatures';
 import { hasCurrentOrgPlanModule } from '../utils/saasPlanModules';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { RECYCLE_BIN_ROUTE } from '../utils/recycleBin';
@@ -134,6 +135,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [instagramInboxFeatureEnabled, setInstagramInboxFeatureEnabled] = useState(false);
   const [advertisingCampaignsModuleEnabled, setAdvertisingCampaignsModuleEnabled] = useState(false);
   const [contentCalendarFeatureEnabled, setContentCalendarFeatureEnabled] = useState(false);
+  const [reservationsFeatureEnabled, setReservationsFeatureEnabled] = useState(false);
   const [billboardStatusManagementFeatureEnabled, setBillboardStatusManagementFeatureEnabled] = useState(true);
   const [alertsDrawerMounted, setAlertsDrawerMounted] = useState(false);
   const [alertsDrawerOpen, setAlertsDrawerOpen] = useState(false);
@@ -260,6 +262,23 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       document.body.classList.remove('kalam-app-shell-lock');
     };
   }, []);
+  useEffect(() => {
+    const saasPermission = rolePermissions?.[SAAS_ADMIN_PERMISSION_KEY];
+    const isSaasAdmin = saasPermission?.view === true || saasPermission?.edit === true;
+    if (isSaasAdmin) {
+      setReservationsFeatureEnabled(true);
+      return;
+    }
+    if (!rolePermissionsReady || !currentUser?.id) {
+      setReservationsFeatureEnabled(false);
+      return;
+    }
+    let active = true;
+    void hasCurrentOrgPlanFeature(RESERVATIONS_PLAN_FEATURE, { defaultEnabled: false, force: true })
+      .then((enabled) => { if (active) setReservationsFeatureEnabled(enabled); })
+      .catch(() => { if (active) setReservationsFeatureEnabled(false); });
+    return () => { active = false; };
+  }, [currentUser?.id, rolePermissions, rolePermissionsReady]);
 
   const preloadRouteNow = useCallback((href: string) => {
     if (!href || !preloadRoute) return Promise.resolve();
@@ -625,6 +644,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   );
   const canViewAdvertisingCampaigns = advertisingCampaignsModuleEnabled && canViewModule(ADVERTISING_CAMPAIGNS_MODULE_ID);
   const canViewContentCalendars = contentCalendarFeatureEnabled && canViewModule('content_calendars');
+  const canViewReservations = reservationsFeatureEnabled && canViewModule('reservations');
   const canViewBillboardStatusChanges = billboardStatusManagementFeatureEnabled && canViewModule('billboard_status_changes');
   const {
     headerAnnouncements: userHeaderAnnouncements,
@@ -769,6 +789,16 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/projects', label: 'پروژه‌ها' },
           { key: '/content_calendars', label: 'تقویم‌های محتوایی', disabled: !canViewContentCalendars },
         ]
+      },
+      {
+        key: 'reservations',
+        icon: <CalendarOutlined />,
+        label: 'رزرواسیون',
+        children: [
+          { key: '/reservations', label: 'تقویم و رزروها', disabled: !canViewReservations },
+          { key: '/reservation_resources', label: 'منابع قابل رزرو', disabled: !canViewReservations },
+          { key: '/settings?tab=reservation_settings', label: 'تنظیمات رزرواسیون', disabled: !canViewReservations },
+        ],
       },
       {
         key: 'sales_and_purchase',

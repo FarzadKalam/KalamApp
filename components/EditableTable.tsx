@@ -220,10 +220,10 @@ const EditableTable: React.FC<EditableTableProps> = ({
   // برگشت از فروش در همان جدول invoices ذخیره می‌شود و باید دقیقاً همان
   // رفتار ردیف‌های فروش (کالا، پکیج، تبلیغات محیطی، آیکون‌ها و تخفیف) را داشته باشد.
   const isInvoiceItems = (moduleId === 'invoices' || moduleId === 'sales_return_invoices') && block?.id === 'invoiceItems';
-  const isPurchaseInvoiceItems = moduleId === 'purchase_invoices' && block?.id === 'invoiceItems';
+  const isPurchaseInvoiceItems = (moduleId === 'purchase_invoices' || moduleId === 'purchase_return_invoices') && block?.id === 'invoiceItems';
   const isAnyInvoiceItems = isInvoiceItems || isPurchaseInvoiceItems;
   const isInvoicePayments = (moduleId === 'invoices' || moduleId === 'sales_return_invoices') && block?.id === 'payments';
-  const isPurchaseInvoicePayments = moduleId === 'purchase_invoices' && block?.id === 'payments';
+  const isPurchaseInvoicePayments = (moduleId === 'purchase_invoices' || moduleId === 'purchase_return_invoices') && block?.id === 'payments';
   const isExpenseItems = moduleId === 'expense_documents' && block?.id === 'items';
   const isExpensePayments = moduleId === 'expense_documents' && block?.id === 'payments';
   const isEmployeeAdvancePayments = moduleId === 'employee_advances' && block?.id === 'payments';
@@ -271,6 +271,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     () => Math.max(0, toSafeNumber(invoiceGlobalDiscountValue))
   );
   const shelfAutoLoadRef = useRef<Record<string, string>>({});
+  const tableRootRef = useRef<HTMLDivElement | null>(null);
   const dataRef = useRef<any[]>(Array.isArray(initialData) ? initialData : []);
   const tempDataRef = useRef<any[]>([]);
   const [isMobileViewport, setIsMobileViewport] = useState(
@@ -5329,11 +5330,30 @@ const EditableTable: React.FC<EditableTableProps> = ({
       }
     : undefined;
 
+  useEffect(() => {
+    if (isReadOnly || typeof window === 'undefined' || !window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
+    const onShortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'Enter' && isEditing && mode !== 'local') {
+        event.preventDefault(); void handleSave(); return;
+      }
+      const focusedInsideTable = !!tableRootRef.current?.contains(document.activeElement);
+      const addRequested = (
+        (focusedInsideTable && (event.ctrlKey || event.metaKey) && event.key === 'Insert')
+        || (isPaymentsTable && event.altKey && event.key.toLowerCase() === 'p')
+      );
+      if (addRequested) {
+        event.preventDefault(); void addRowFromHeader();
+      }
+    };
+    window.addEventListener('keydown', onShortcut);
+    return () => window.removeEventListener('keydown', onShortcut);
+  }, [isEditing, isPaymentsTable, isReadOnly, mode, tempData]);
+
   if (loadingData) return <div className="p-10 text-center"><Spin /></div>;
 
   return (
     <>
-    <div className={`bg-white dark:bg-[#1a1a1a] p-6 rounded-[2rem] shadow-sm border ${isEditing ? 'border-leather-500' : 'border-gray-200 dark:border-gray-800'} transition-all font-medium`}>
+    <div ref={tableRootRef} className={`bg-white dark:bg-[#1a1a1a] p-6 rounded-[2rem] shadow-sm border ${isEditing ? 'border-leather-500' : 'border-gray-200 dark:border-gray-800'} transition-all font-medium`}>
       <div className="flex justify-between items-center mb-4 border-b border-gray-100 dark:border-gray-800 pb-4">
         <div className="flex items-center gap-2 flex-row-reverse">
           <Button
@@ -5378,6 +5398,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
           {mode === 'db' && !isEditing && !isReadOnly && isImprovedFinancialEditableTable && !hasPersistedRows && (
             <Button size="small" icon={<PlusOutlined />} onClick={() => { void addRowFromHeader(); }}>
               {directAddButtonLabel}
+              <kbd className="keyboard-shortcut-hint mr-1 text-[9px] opacity-70">{isPaymentsTable ? 'Alt+P' : 'Ctrl+Insert'}</kbd>
             </Button>
           )}
           {mode === 'db' && !isEditing && !isReadOnly && (!isImprovedFinancialEditableTable || hasPersistedRows) && (
@@ -5437,7 +5458,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
               ))
             )}
             {(isEditing || mode === 'local') && !isReadOnly && (
-              <Button type="dashed" block icon={<PlusOutlined />} onClick={() => { void addRow(); }}>افزودن ردیف جدید</Button>
+              <Button type="dashed" block icon={<PlusOutlined />} onClick={() => { void addRow(); }}>افزودن ردیف جدید <kbd className="keyboard-shortcut-hint mr-1 text-[9px] opacity-70">Ctrl+Insert</kbd></Button>
             )}
             {renderStackedSummary()}
           </div>
@@ -5473,7 +5494,10 @@ const EditableTable: React.FC<EditableTableProps> = ({
           )}
           expandable={tableExpandable as any}
           footer={(isEditing || mode === 'local') && !isReadOnly ? () => (
-            <Button type="dashed" block icon={<PlusOutlined />} onClick={() => { void addRow(); }}>افزودن ردیف جدید</Button>
+            <Button type="dashed" block icon={<PlusOutlined />} onClick={() => { void addRow(); }}>
+              افزودن ردیف جدید
+              <kbd className="keyboard-shortcut-hint mr-1 text-[9px] opacity-70">Ctrl+Insert</kbd>
+            </Button>
           ) : undefined}
           summary={(pageData) => {
             if (isProductStockMovements) {
@@ -5663,7 +5687,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       )}
       {isEditing && mode !== 'local' && !isCollapsed && (
         <div className="mt-4 flex justify-end gap-2 border-t border-gray-100 pt-4 dark:border-gray-800">
-          <Button type="primary" onClick={() => { void handleSave(); }} loading={saving} icon={<SaveOutlined />}>ذخیره</Button>
+          <Button type="primary" onClick={() => { void handleSave(); }} loading={saving} icon={<SaveOutlined />}>ذخیره <kbd className="keyboard-shortcut-hint mr-1 text-[9px] opacity-70">Ctrl+Shift+Enter</kbd></Button>
           <Button onClick={cancelEdit} disabled={saving} icon={<CloseOutlined />}>انصراف</Button>
         </div>
       )}

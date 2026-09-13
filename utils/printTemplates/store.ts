@@ -1,29 +1,44 @@
-import { MODULES } from '../../moduleRegistry';
-import { BlockType } from '../../types';
-import { supabase } from '../../supabaseClient';
-import { getCachedAuthUser } from '../sessionCache';
-import { getResolvedCurrentOrgId } from '../companySettings';
-import { loadScopedIntegrationSettings } from '../integrationSettings';
-import { attachAbortSignalIfSupported, runWithSupabaseTimeout } from '../supabaseTimeout';
-import { buildCatalogFullPageLayout } from './catalogFullPageLayout';
-import { isCompositeCatalogModule } from './compositeCatalog';
-import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, type PrintImageDisplayMode } from './imageDisplay';
-import { buildDefaultPrintFooterTemplate } from './footerLayout';
-import { getFieldLabelFa } from '../fieldLabel';
-import { getCanonicalModuleFields } from '../recordVariableCatalog';
-import { getPrintVariableProviderOptions } from './variableProviders';
-import { isPrintableModuleField } from './printableFields';
+import { MODULES } from "../../moduleRegistry";
+import { BlockType } from "../../types";
+import { supabase } from "../../supabaseClient";
+import { getCachedAuthUser } from "../sessionCache";
+import { getResolvedCurrentOrgId } from "../companySettings";
+import { loadScopedIntegrationSettings } from "../integrationSettings";
+import {
+  attachAbortSignalIfSupported,
+  runWithSupabaseTimeout,
+} from "../supabaseTimeout";
+import { buildCatalogFullPageLayout } from "./catalogFullPageLayout";
+import { isCompositeCatalogModule } from "./compositeCatalog";
+import {
+  DEFAULT_PRINT_IMAGE_DISPLAY_MODE,
+  type PrintImageDisplayMode,
+} from "./imageDisplay";
+import { buildDefaultPrintFooterTemplate } from "./footerLayout";
+import { getFieldLabelFa } from "../fieldLabel";
+import { getCanonicalModuleFields } from "../recordVariableCatalog";
+import { getPrintVariableProviderOptions } from "./variableProviders";
+import { isPrintableModuleField } from "./printableFields";
 
-export const PRINT_TEMPLATES_CONNECTION_TYPE = 'print_templates';
-const PRINT_TEMPLATES_LOCAL_KEY = 'kalamapp.print_templates.v1';
+export const PRINT_TEMPLATES_CONNECTION_TYPE = "print_templates";
+const PRINT_TEMPLATES_LOCAL_KEY = "kalamapp.print_templates.v1";
 const PRINT_TEMPLATES_SAVE_TIMEOUT_MS = 15_000;
+
+/** قطع‌های پشتیبانی‌شده در موتور چاپ. ROLL80 برای فیش حرارتی ۸۰ میلی‌متری است. */
+export type PrintPaperSize = "A4" | "A5" | "A6" | "A7" | "ROLL80";
+
+export const getPrintPaperSizeCss = (
+  paperSize?: PrintPaperSize,
+  orientation: "portrait" | "landscape" = "portrait",
+) =>
+  paperSize === "ROLL80" ? "80mm auto" : `${paperSize || "A4"} ${orientation}`;
 
 export interface StoredPrintTemplate {
   id: string;
   title: string;
   description?: string;
   moduleId: string;
-  scope?: 'record' | 'list';
+  scope?: "record" | "list";
   headerHtml?: string;
   contentHtml: string;
   footerHtml?: string;
@@ -36,13 +51,13 @@ export interface StoredPrintTemplate {
   pageMarginRight?: number;
   pageMarginBottom?: number;
   pageMarginLeft?: number;
-  paperSize?: 'A4' | 'A5' | 'A6';
-  orientation?: 'portrait' | 'landscape';
+  paperSize?: PrintPaperSize;
+  orientation?: "portrait" | "landscape";
   isSystem?: boolean;
   selectedFieldKeys?: string[];
-  renderMode?: 'standard' | 'org_letterhead';
+  renderMode?: "standard" | "org_letterhead";
   backgroundImageUrl?: string | null;
-  backgroundSizing?: 'fit';
+  backgroundSizing?: "fit";
   sourceTemplateId?: string | null;
   letterheadId?: string | null;
   isVirtual?: boolean;
@@ -53,18 +68,18 @@ export interface StoredPrintTemplate {
 export interface PrintTemplateVariableOption {
   label: string;
   value: string;
-  kind: 'field' | 'block';
+  kind: "field" | "block";
   group: string;
   description?: string;
   insertHtml?: string;
-  scopes?: Array<'record' | 'list'>;
+  scopes?: Array<"record" | "list">;
 }
 
 export interface SystemTemplateFieldOption {
   key: string;
   label: string;
   group: string;
-  kind: 'record' | 'table';
+  kind: "record" | "table";
   blockId?: string;
   columnKey?: string;
 }
@@ -80,93 +95,138 @@ const DEFAULT_PAGE_MARGINS = {
   bottom: 8,
   left: 8,
 } as const;
-const PRINT_COLUMN_IGNORE_KEYS = new Set(['id', 'key', 'created_at', 'updated_at']);
-const INVOICE_MODULE_IDS = new Set(['invoices', 'purchase_invoices']);
-const LONG_TEXT_FIELD_TYPES = new Set(['long_text', 'superlongtext']);
-const CATALOG_FULL_PAGE_MODULE_IDS = new Set(['products', 'billboards', 'price_lists', 'product_bundles']);
+const PRINT_COLUMN_IGNORE_KEYS = new Set([
+  "id",
+  "key",
+  "created_at",
+  "updated_at",
+]);
+const INVOICE_MODULE_IDS = new Set(["invoices", "purchase_invoices"]);
+const LONG_TEXT_FIELD_TYPES = new Set(["long_text", "superlongtext"]);
+const CATALOG_FULL_PAGE_MODULE_IDS = new Set([
+  "products",
+  "billboards",
+  "price_lists",
+  "product_bundles",
+]);
 
 export const isCatalogFullPageAvailableForModule = (moduleId: string) =>
-  CATALOG_FULL_PAGE_MODULE_IDS.has(String(moduleId || '').trim());
+  CATALOG_FULL_PAGE_MODULE_IDS.has(String(moduleId || "").trim());
 
-export const isCatalogFullPagePrintTemplate = (template: Pick<StoredPrintTemplate, 'id' | 'contentHtml'> | null | undefined) => {
-  const templateId = String(template?.id || '').trim();
-  const contentHtml = String(template?.contentHtml || '');
-  return /_catalog_fullpage_(list_)?landscape$/i.test(templateId) || contentHtml.includes('system.list_catalog_fullpage');
+export const isCatalogFullPagePrintTemplate = (
+  template: Pick<StoredPrintTemplate, "id" | "contentHtml"> | null | undefined,
+) => {
+  const templateId = String(template?.id || "").trim();
+  const contentHtml = String(template?.contentHtml || "");
+  return (
+    /_catalog_fullpage_(list_)?landscape$/i.test(templateId) ||
+    contentHtml.includes("system.list_catalog_fullpage")
+  );
 };
 
 export const isPrintTemplateAvailableForModule = (
   moduleId: string,
-  template: Pick<StoredPrintTemplate, 'id' | 'contentHtml'> | null | undefined,
-) => !isCatalogFullPagePrintTemplate(template) || isCatalogFullPageAvailableForModule(moduleId);
+  template: Pick<StoredPrintTemplate, "id" | "contentHtml"> | null | undefined,
+) =>
+  !isCatalogFullPagePrintTemplate(template) ||
+  isCatalogFullPageAvailableForModule(moduleId);
 
 const toRecord = (value: unknown): Record<string, any> => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value as Record<string, any>;
 };
 
 const getCompactPrintColumns = (columns: any[] = []) => {
   const filtered = columns.filter((column) => {
-    const key = String(column?.key || '').trim();
-    const title = String(column?.title || '').trim();
+    const key = String(column?.key || "").trim();
+    const title = String(column?.title || "").trim();
     if (!key || !title) return false;
     if (PRINT_COLUMN_IGNORE_KEYS.has(key)) return false;
     return true;
   });
   const selected = filtered.slice(0, 5);
-  const totalPriceColumn = filtered.find((column) => String(column?.key || '').trim() === 'total_price');
-  if (totalPriceColumn && !selected.some((column) => String(column?.key || '').trim() === 'total_price')) {
+  const totalPriceColumn = filtered.find(
+    (column) => String(column?.key || "").trim() === "total_price",
+  );
+  if (
+    totalPriceColumn &&
+    !selected.some(
+      (column) => String(column?.key || "").trim() === "total_price",
+    )
+  ) {
     selected.push(totalPriceColumn);
   }
   return selected;
 };
 
 const isInvoiceModule = (moduleId: string) => INVOICE_MODULE_IDS.has(moduleId);
-const MULTILINE_PRINT_STYLE = 'white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere;';
-const isLongTextType = (value: unknown) => LONG_TEXT_FIELD_TYPES.has(String(value || '').trim().toLowerCase());
+const MULTILINE_PRINT_STYLE =
+  "white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere;";
+const isLongTextType = (value: unknown) =>
+  LONG_TEXT_FIELD_TYPES.has(
+    String(value || "")
+      .trim()
+      .toLowerCase(),
+  );
 const getReducedPrintFontSize = (baseSize: number) => {
   const nextSize = Math.max(7, baseSize - 3);
-  return Number.isInteger(nextSize) ? `${nextSize}px` : `${nextSize.toFixed(1)}px`;
+  return Number.isInteger(nextSize)
+    ? `${nextSize}px`
+    : `${nextSize.toFixed(1)}px`;
 };
-const getLongTextPrintStyle = (baseSize: number) => `font-size:${getReducedPrintFontSize(baseSize)}; line-height:1.9; ${MULTILINE_PRINT_STYLE}`;
+const getLongTextPrintStyle = (baseSize: number) =>
+  `font-size:${getReducedPrintFontSize(baseSize)}; line-height:1.9; ${MULTILINE_PRINT_STYLE}`;
 
 const getModuleBlockTitleMap = (module: any) =>
   new Map(
     (Array.isArray(module?.blocks) ? module.blocks : [])
       .filter((block: any) => block?.id)
-      .map((block: any) => [String(block.id), String(block?.titles?.fa || block.id)])
+      .map((block: any) => [
+        String(block.id),
+        String(block?.titles?.fa || block.id),
+      ]),
   );
 
 const getFieldGroupLabel = (module: any, field: any) => {
-  const blockId = String(field?.blockId || '').trim();
-  const isBlockField = String(field?.location || '').trim().toLowerCase() === 'block' && blockId;
-  if (!isBlockField) return 'فیلدهای عمومی';
+  const blockId = String(field?.blockId || "").trim();
+  const isBlockField =
+    String(field?.location || "")
+      .trim()
+      .toLowerCase() === "block" && blockId;
+  if (!isBlockField) return "فیلدهای عمومی";
   const blockTitle = getModuleBlockTitleMap(module).get(blockId) || blockId;
   return `بخش: ${blockTitle}`;
 };
 
-const shouldIncludeSystemField = (selectedFieldKeys: string[] = [], fieldKey: string) => {
+const shouldIncludeSystemField = (
+  selectedFieldKeys: string[] = [],
+  fieldKey: string,
+) => {
   if (!selectedFieldKeys.length) return true;
   return selectedFieldKeys.includes(fieldKey);
 };
 
-const buildCompactFieldsTemplateForCopy = (moduleId: string, selectedFieldKeys: string[] = []) => {
+const buildCompactFieldsTemplateForCopy = (
+  moduleId: string,
+  selectedFieldKeys: string[] = [],
+) => {
   const module = MODULES[moduleId];
-  if (!module) return '';
+  if (!module) return "";
 
   const regularRows: string[] = [];
   const longTextRows: string[] = [];
 
   (module.fields || [])
     .filter((field: any) => {
-      const key = String(field?.key || '').trim();
+      const key = String(field?.key || "").trim();
       if (!key) return false;
       if (PRINT_COLUMN_IGNORE_KEYS.has(key)) return false;
       if (!isPrintableModuleField(module, field)) return false;
       return shouldIncludeSystemField(selectedFieldKeys, `record.${key}`);
     })
     .forEach((field: any) => {
-      const key = String(field?.key || '').trim();
-      const isImageField = String(field?.type || '').toLowerCase() === 'image';
+      const key = String(field?.key || "").trim();
+      const isImageField = String(field?.type || "").toLowerCase() === "image";
       const token = isImageField
         ? `<div style="display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--table-border-color, #d1d5db);border-radius:12px;padding:4px;background:#fff;"><img src="{{record.${key}}}" alt="${field.labels?.fa || key}" style="display:block;width:64px;height:64px;max-width:64px;max-height:64px;object-fit:cover;border-radius:8px;" /></div>`
         : `{{record.${key}}}`;
@@ -180,11 +240,13 @@ const buildCompactFieldsTemplateForCopy = (moduleId: string, selectedFieldKeys: 
         return;
       }
       if (isLongTextType(field?.type)) {
-        longTextRows.push(`
+        longTextRows.push(
+          `
 <div style="margin-top:8px;">
   <div style="margin:0 0 3px 0; font-size:10px; color:#64748b;">${field.labels?.fa || key}</div>
   <div style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; background:#fff; ${getLongTextPrintStyle(11)}">${token}</div>
-</div>`.trim());
+</div>`.trim(),
+        );
         return;
       }
       regularRows.push(`
@@ -199,32 +261,43 @@ const buildCompactFieldsTemplateForCopy = (moduleId: string, selectedFieldKeys: 
     regularRows.length
       ? `
 <table style="width:100%; border-collapse:collapse; font-size:11px;">
-  <tbody>${regularRows.join('')}</tbody>
+  <tbody>${regularRows.join("")}</tbody>
 </table>`.trim()
-      : '',
-    longTextRows.join(''),
+      : "",
+    longTextRows.join(""),
   ]
     .filter(Boolean)
-    .join('\n');
+    .join("\n");
 };
 
-const buildCompactTablesBlocksTemplateForCopy = (moduleId: string, selectedFieldKeys: string[] = []) => {
+const buildCompactTablesBlocksTemplateForCopy = (
+  moduleId: string,
+  selectedFieldKeys: string[] = [],
+) => {
   const module = MODULES[moduleId];
-  if (!module) return '';
+  if (!module) return "";
   return (module.blocks || [])
     .filter((block: any) => {
-      if (!(block?.type === BlockType.TABLE || block?.type === BlockType.GRID_TABLE)) return false;
-      const blockKey = `block.${String(block?.id || '').trim()}`;
+      if (!(
+        block?.type === BlockType.TABLE || block?.type === BlockType.GRID_TABLE
+      ))
+        return false;
+      const blockKey = `block.${String(block?.id || "").trim()}`;
       if (!selectedFieldKeys.length) return true;
-      return selectedFieldKeys.includes(blockKey) || selectedFieldKeys.some((key) => key.startsWith(`${blockKey}.`));
+      return (
+        selectedFieldKeys.includes(blockKey) ||
+        selectedFieldKeys.some((key) => key.startsWith(`${blockKey}.`))
+      );
     })
-    .map((block: any) => buildBlockSnippetTemplate(moduleId, String(block.id || '').trim()))
+    .map((block: any) =>
+      buildBlockSnippetTemplate(moduleId, String(block.id || "").trim()),
+    )
     .filter(Boolean)
-    .join('\n');
+    .join("\n");
 };
 
 const buildPackageSummaryTemplateForCopy = (moduleId: string) => {
-  if (moduleId !== 'product_bundles') return '';
+  if (moduleId !== "product_bundles") return "";
   return `
 <table style="width:100%; border-collapse:collapse; margin-top:8px; font-size:11px;">
   <tbody>
@@ -243,20 +316,24 @@ const buildPackageSummaryTemplateForCopy = (moduleId: string) => {
 };
 
 const getInvoiceTemplateConfig = (moduleId: string) => {
-  const isSales = moduleId === 'invoices';
+  const isSales = moduleId === "invoices";
   return {
     isSales,
-    counterpartyRoot: isSales ? 'customer' : 'supplier',
-    counterpartyTitle: isSales ? 'خریدار' : 'فروشنده',
-    companyTitle: isSales ? 'فروشنده' : 'خریدار',
-    paymentsTitle: isSales ? 'دریافت‌ها' : 'پرداخت‌ها',
-    paymentTypeTitle: isSales ? 'نوع دریافت' : 'نوع پرداخت',
-    paymentTotalTitle: isSales ? 'جمع دریافتی‌ها' : 'جمع پرداختی‌ها',
-    remainingTitle: isSales ? 'جمع باقیمانده' : 'مانده بدهی',
-    officialTitle: isSales ? 'فاکتور فروش رسمی' : 'فاکتور خرید رسمی',
-    unofficialTitle: isSales ? 'فاکتور فروش غیررسمی' : 'فاکتور خرید غیررسمی',
-    practicalA5Title: isSales ? 'فاکتور کاربردی A5 فروش' : 'فاکتور کاربردی A5 خرید',
-    practicalA4Title: isSales ? 'فاکتور کاربردی A4 فروش' : 'فاکتور کاربردی A4 خرید',
+    counterpartyRoot: isSales ? "customer" : "supplier",
+    counterpartyTitle: isSales ? "خریدار" : "فروشنده",
+    companyTitle: isSales ? "فروشنده" : "خریدار",
+    paymentsTitle: isSales ? "دریافت‌ها" : "پرداخت‌ها",
+    paymentTypeTitle: isSales ? "نوع دریافت" : "نوع پرداخت",
+    paymentTotalTitle: isSales ? "جمع دریافتی‌ها" : "جمع پرداختی‌ها",
+    remainingTitle: isSales ? "جمع باقیمانده" : "مانده بدهی",
+    officialTitle: isSales ? "فاکتور فروش رسمی" : "فاکتور خرید رسمی",
+    unofficialTitle: isSales ? "فاکتور فروش غیررسمی" : "فاکتور خرید غیررسمی",
+    practicalA5Title: isSales
+      ? "فاکتور کاربردی A5 فروش"
+      : "فاکتور کاربردی A5 خرید",
+    practicalA4Title: isSales
+      ? "فاکتور کاربردی A4 فروش"
+      : "فاکتور کاربردی A4 خرید",
   };
 };
 
@@ -277,7 +354,10 @@ const buildInvoiceItemsSummaryRow = () => `
     </tr>
 `;
 
-const buildInvoicePaymentsSummaryRow = (paymentSummaryTitle: string, remainingSummaryTitle: string) => `
+const buildInvoicePaymentsSummaryRow = (
+  paymentSummaryTitle: string,
+  remainingSummaryTitle: string,
+) => `
     <tr>
       <td colspan="2" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 5px; font-weight:800; background:rgba(var(--brand-50-rgb),0.62);">${paymentSummaryTitle}</td>
       <td colspan="2" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 5px; font-weight:800; background:rgba(var(--brand-500-rgb),0.08); text-align:center;">{{record.total_received_amount}} <span style="font-size:8.2px; color:#64748b;">{{company.currency_label}}</span></td>
@@ -287,7 +367,7 @@ const buildInvoicePaymentsSummaryRow = (paymentSummaryTitle: string, remainingSu
 `;
 
 const readLocalStore = (): PrintTemplatesStore => {
-  if (typeof window === 'undefined') return { modules: {} };
+  if (typeof window === "undefined") return { modules: {} };
   try {
     const raw = window.localStorage.getItem(PRINT_TEMPLATES_LOCAL_KEY);
     if (!raw) return { modules: {} };
@@ -298,29 +378,38 @@ const readLocalStore = (): PrintTemplatesStore => {
   }
 };
 
-const writeLocalStore = (templatesByModule: Record<string, StoredPrintTemplate[]>) => {
-  if (typeof window === 'undefined') return;
+const writeLocalStore = (
+  templatesByModule: Record<string, StoredPrintTemplate[]>,
+) => {
+  if (typeof window === "undefined") return;
   window.localStorage.setItem(
     PRINT_TEMPLATES_LOCAL_KEY,
     JSON.stringify({
       modules: templatesByModule,
       updatedAt: nowIso(),
-    })
+    }),
   );
 };
 
-export const getModuleTitle = (moduleId: string, mode: 'plural' | 'singular' = 'plural') => {
+export const getModuleTitle = (
+  moduleId: string,
+  mode: "plural" | "singular" = "plural",
+) => {
   const module = MODULES[moduleId];
-  if (!module) return '';
-  if (mode === 'singular') {
-    return String((module.titles as any)?.faSingular || module.titles?.fa || '').trim();
+  if (!module) return "";
+  if (mode === "singular") {
+    return String(
+      (module.titles as any)?.faSingular || module.titles?.fa || "",
+    ).trim();
   }
-  return String(module.titles?.fa || '').trim();
+  return String(module.titles?.fa || "").trim();
 };
 
-const buildInvoiceFooterTemplate = () => buildDefaultFooterTemplateForModule('invoices');
+const buildInvoiceFooterTemplate = () =>
+  buildDefaultFooterTemplateForModule("invoices");
 
-const buildOfficialLetterHeaderTemplate = () => `
+const buildOfficialLetterHeaderTemplate = () =>
+  `
 <div style="width:100%; direction:rtl; color:#111827; font-size:12px; font-family:inherit;">
   <table style="width:100%; table-layout:fixed; border-collapse:collapse; direction:ltr; border-bottom:1px solid rgba(17,24,39,0.28);">
     <tbody>
@@ -346,7 +435,7 @@ const buildOfficialLetterHeaderTemplate = () => `
 `.trim();
 
 export const buildDefaultHeaderTemplateForModule = (moduleId: string) => {
-  const singularTitle = getModuleTitle(moduleId, 'singular') || 'سند';
+  const singularTitle = getModuleTitle(moduleId, "singular") || "سند";
 
   return `
 <table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
@@ -378,14 +467,14 @@ export const buildDefaultHeaderTemplateForModule = (moduleId: string) => {
 };
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-export const buildDefaultFooterTemplateForModule = (_moduleId = '') => `
+export const buildDefaultFooterTemplateForModule = (_moduleId = "") => `
 ${buildDefaultPrintFooterTemplate()}
 `;
 
 const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
   const invoiceConfig = getInvoiceTemplateConfig(moduleId);
 
-  if (blockId === 'invoiceItems') {
+  if (blockId === "invoiceItems") {
     return `
 <table data-print-block="invoiceItems" style="width:100%; max-width:100%; table-layout:fixed; border-collapse:collapse; direction:rtl; color:#111827; font-size:9.8px;">
   <thead>
@@ -420,8 +509,10 @@ const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
 `;
   }
 
-  if (blockId === 'payments') {
-    const paymentSummaryTitle = invoiceConfig.isSales ? 'جمع دریافت‌شده' : 'جمع پرداخت‌شده';
+  if (blockId === "payments") {
+    const paymentSummaryTitle = invoiceConfig.isSales
+      ? "جمع دریافت‌شده"
+      : "جمع پرداخت‌شده";
     return `
 <table data-print-block="payments" style="width:100%; max-width:100%; table-layout:fixed; border-collapse:collapse; direction:rtl; color:#111827; font-size:9.6px;">
   <thead>
@@ -451,13 +542,13 @@ const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
       <td data-print-conditional-column="cheque" style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.cheque_status}}</td>
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; word-break:break-word; overflow-wrap:anywhere; ${getLongTextPrintStyle(9.6)}">{{row.description}}</td>
     </tr>
-    ${buildInvoicePaymentsSummaryRow(paymentSummaryTitle, 'جمع باقیمانده')}
+    ${buildInvoicePaymentsSummaryRow(paymentSummaryTitle, "جمع باقیمانده")}
   </tbody>
 </table>
 `;
   }
 
-  if (moduleId === 'product_bundles' && blockId === 'products') {
+  if (moduleId === "product_bundles" && blockId === "products") {
     return `
 <table data-print-block="products" style="width:100%; max-width:100%; table-layout:fixed; border-collapse:collapse; direction:rtl; color:#111827; font-size:9.8px;">
   <thead>
@@ -489,7 +580,7 @@ const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
 `;
   }
 
-  if (moduleId === 'price_lists' && blockId === 'items') {
+  if (moduleId === "price_lists" && blockId === "items") {
     return `
 <table data-print-block="items" style="width:100%; max-width:100%; table-layout:fixed; border-collapse:collapse; direction:rtl; color:#111827; font-size:9.8px;">
   <thead>
@@ -523,20 +614,32 @@ const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
 
   const module = MODULES[moduleId];
   const block = module?.blocks?.find((item) => item.id === blockId);
-  if (!block || !Array.isArray(block.tableColumns) || block.tableColumns.length === 0) return '';
+  if (
+    !block ||
+    !Array.isArray(block.tableColumns) ||
+    block.tableColumns.length === 0
+  )
+    return "";
   const columns = getCompactPrintColumns(block.tableColumns);
-  if (columns.length === 0) return '';
+  if (columns.length === 0) return "";
   const header = columns
-    .map((column) => `<th style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; overflow-wrap:anywhere;">${column.title}</th>`)
-    .join('');
+    .map(
+      (column) =>
+        `<th style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; overflow-wrap:anywhere;">${column.title}</th>`,
+    )
+    .join("");
   const row = columns
     .map((column) => {
       const isLongTextColumn =
         isLongTextType(column?.type) ||
-        ['description', 'notes'].includes(String(column?.key || '').trim().toLowerCase());
-      return `<td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; overflow-wrap:anywhere; ${isLongTextColumn ? `vertical-align:top; ${getLongTextPrintStyle(10.5)}` : ''}">{{row.${column.key}}}</td>`;
+        ["description", "notes"].includes(
+          String(column?.key || "")
+            .trim()
+            .toLowerCase(),
+        );
+      return `<td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; overflow-wrap:anywhere; ${isLongTextColumn ? `vertical-align:top; ${getLongTextPrintStyle(10.5)}` : ""}">{{row.${column.key}}}</td>`;
     })
-    .join('');
+    .join("");
   return `
 <table data-print-block="${blockId}" style="width:100%; max-width:100%; table-layout:fixed; border-collapse:collapse; direction:rtl; color:#111827; font-size:10.5px;">
   <thead><tr>${header}</tr></thead>
@@ -545,52 +648,80 @@ const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
 `;
 };
 
-const normalizeTemplate = (raw: any, moduleId: string): StoredPrintTemplate | null => {
-  const title = String(raw?.title || '').trim();
-  const contentHtml = String(raw?.contentHtml || raw?.content_html || '').trim();
+const normalizeTemplate = (
+  raw: any,
+  moduleId: string,
+): StoredPrintTemplate | null => {
+  const title = String(raw?.title || "").trim();
+  const contentHtml = String(
+    raw?.contentHtml || raw?.content_html || "",
+  ).trim();
   if (!title || !contentHtml) return null;
 
-  const id = String(raw?.id || '').trim() || `${moduleId}_${Math.random().toString(36).slice(2, 10)}`;
+  const id =
+    String(raw?.id || "").trim() ||
+    `${moduleId}_${Math.random().toString(36).slice(2, 10)}`;
   const createdAt = String(raw?.createdAt || raw?.created_at || nowIso());
   const updatedAt = String(raw?.updatedAt || raw?.updated_at || nowIso());
-  const paperSizeRaw = String(raw?.paperSize || raw?.paper_size || 'A4').toUpperCase();
-  const paperSize = paperSizeRaw === 'A5' || paperSizeRaw === 'A6' ? paperSizeRaw : 'A4';
-  const orientationRaw = String(raw?.orientation || 'portrait').toLowerCase();
-  const orientation = orientationRaw === 'landscape' ? 'landscape' : 'portrait';
-  const scopeRaw = String(raw?.scope || raw?.templateScope || 'record').toLowerCase();
-  const scope = scopeRaw === 'list' ? 'list' : 'record';
+  const paperSizeRaw = String(
+    raw?.paperSize || raw?.paper_size || "A4",
+  ).toUpperCase();
+  const paperSize: PrintPaperSize =
+    paperSizeRaw === "A5" ||
+    paperSizeRaw === "A6" ||
+    paperSizeRaw === "A7" ||
+    paperSizeRaw === "ROLL80"
+      ? paperSizeRaw
+      : "A4";
+  const orientationRaw = String(raw?.orientation || "portrait").toLowerCase();
+  const orientation = orientationRaw === "landscape" ? "landscape" : "portrait";
+  const scopeRaw = String(
+    raw?.scope || raw?.templateScope || "record",
+  ).toLowerCase();
+  const scope = scopeRaw === "list" ? "list" : "record";
   // Absence and an explicit empty list are not the same state. In particular,
   // a copied system template starts with no print-field preference; coercing
   // that absence to [] makes its dynamic system tables look deliberately
   // unchecked after reload.
-  const selectedFieldKeys: string[] | undefined = Array.isArray(raw?.selectedFieldKeys)
+  const selectedFieldKeys: string[] | undefined = Array.isArray(
+    raw?.selectedFieldKeys,
+  )
     ? Array.from(
         new Set<string>(
           raw.selectedFieldKeys
-            .map((value: any) => String(value || '').trim())
-            .filter(Boolean)
-        )
+            .map((value: any) => String(value || "").trim())
+            .filter(Boolean),
+        ),
       )
     : undefined;
   const isSystem =
     raw?.isSystem === true ||
     raw?.is_system === true ||
-    String(id).startsWith('default_');
-  const footerHtml = String(raw?.footerHtml || raw?.footer_html || '').trim();
-  const renderMode = String(raw?.renderMode || raw?.render_mode || 'standard').trim() === 'org_letterhead'
-    ? 'org_letterhead'
-    : 'standard';
-  const backgroundImageUrl = String(raw?.backgroundImageUrl || raw?.background_image_url || '').trim() || null;
-  const sourceTemplateId = String(raw?.sourceTemplateId || raw?.source_template_id || '').trim() || null;
-  const letterheadId = String(raw?.letterheadId || raw?.letterhead_id || '').trim() || null;
+    String(id).startsWith("default_");
+  const footerHtml = String(raw?.footerHtml || raw?.footer_html || "").trim();
+  const renderMode =
+    String(raw?.renderMode || raw?.render_mode || "standard").trim() ===
+    "org_letterhead"
+      ? "org_letterhead"
+      : "standard";
+  const backgroundImageUrl =
+    String(raw?.backgroundImageUrl || raw?.background_image_url || "").trim() ||
+    null;
+  const sourceTemplateId =
+    String(raw?.sourceTemplateId || raw?.source_template_id || "").trim() ||
+    null;
+  const letterheadId =
+    String(raw?.letterheadId || raw?.letterhead_id || "").trim() || null;
 
   return {
     id,
     title,
-    description: String(raw?.description || ''),
+    description: String(raw?.description || ""),
     moduleId,
     scope,
-    headerHtml: String(raw?.headerHtml || raw?.header_html || '').trim() || buildDefaultHeaderTemplateForModule(moduleId),
+    headerHtml:
+      String(raw?.headerHtml || raw?.header_html || "").trim() ||
+      buildDefaultHeaderTemplateForModule(moduleId),
     contentHtml,
     footerHtml: footerHtml || buildDefaultFooterTemplateForModule(moduleId),
     isActive: raw?.isActive !== false,
@@ -598,17 +729,29 @@ const normalizeTemplate = (raw: any, moduleId: string): StoredPrintTemplate | nu
     showFooter: raw?.showFooter !== false,
     headerHeight: Number(raw?.headerHeight || raw?.header_height || 84),
     footerHeight: Number(raw?.footerHeight || raw?.footer_height || 62),
-    pageMarginTop: Number(raw?.pageMarginTop ?? raw?.page_margin_top ?? DEFAULT_PAGE_MARGINS.top),
-    pageMarginRight: Number(raw?.pageMarginRight ?? raw?.page_margin_right ?? DEFAULT_PAGE_MARGINS.right),
-    pageMarginBottom: Number(raw?.pageMarginBottom ?? raw?.page_margin_bottom ?? DEFAULT_PAGE_MARGINS.bottom),
-    pageMarginLeft: Number(raw?.pageMarginLeft ?? raw?.page_margin_left ?? DEFAULT_PAGE_MARGINS.left),
+    pageMarginTop: Number(
+      raw?.pageMarginTop ?? raw?.page_margin_top ?? DEFAULT_PAGE_MARGINS.top,
+    ),
+    pageMarginRight: Number(
+      raw?.pageMarginRight ??
+        raw?.page_margin_right ??
+        DEFAULT_PAGE_MARGINS.right,
+    ),
+    pageMarginBottom: Number(
+      raw?.pageMarginBottom ??
+        raw?.page_margin_bottom ??
+        DEFAULT_PAGE_MARGINS.bottom,
+    ),
+    pageMarginLeft: Number(
+      raw?.pageMarginLeft ?? raw?.page_margin_left ?? DEFAULT_PAGE_MARGINS.left,
+    ),
     paperSize,
     orientation,
     isSystem,
     selectedFieldKeys,
     renderMode,
     backgroundImageUrl,
-    backgroundSizing: backgroundImageUrl ? 'fit' : undefined,
+    backgroundSizing: backgroundImageUrl ? "fit" : undefined,
     sourceTemplateId,
     letterheadId,
     isVirtual: raw?.isVirtual === true,
@@ -617,7 +760,9 @@ const normalizeTemplate = (raw: any, moduleId: string): StoredPrintTemplate | nu
   };
 };
 
-const normalizeStore = (settings: any): Record<string, StoredPrintTemplate[]> => {
+const normalizeStore = (
+  settings: any,
+): Record<string, StoredPrintTemplate[]> => {
   const store = toRecord(settings) as PrintTemplatesStore;
   const modules = toRecord(store.modules);
   const result: Record<string, StoredPrintTemplate[]> = {};
@@ -638,13 +783,15 @@ const normalizeStore = (settings: any): Record<string, StoredPrintTemplate[]> =>
  * برای هر ماژول، اندازهٔ ردیف تنظیمات را بی‌دلیل بزرگ می‌کرد و باعث کندی ذخیره می‌شد.
  */
 export const getPersistedPrintTemplatesByModule = (
-  templatesByModule: Record<string, StoredPrintTemplate[]>
+  templatesByModule: Record<string, StoredPrintTemplate[]>,
 ): Record<string, StoredPrintTemplate[]> => {
   const result: Record<string, StoredPrintTemplate[]> = {};
 
   Object.entries(templatesByModule || {}).forEach(([moduleId, templates]) => {
     if (!Array.isArray(templates)) return;
-    const customTemplates = templates.filter((template) => template?.isSystem !== true);
+    const customTemplates = templates.filter(
+      (template) => template?.isSystem !== true,
+    );
     if (customTemplates.length > 0) {
       result[moduleId] = customTemplates;
     }
@@ -655,16 +802,20 @@ export const getPersistedPrintTemplatesByModule = (
 
 export const loadPrintTemplatesStore = async () => {
   try {
-    const { data, error, scope } = await loadScopedIntegrationSettings(supabase as any, {
-      connectionType: PRINT_TEMPLATES_CONNECTION_TYPE,
-      columns: 'id, provider, settings',
-    });
+    const { data, error, scope } = await loadScopedIntegrationSettings(
+      supabase as any,
+      {
+        connectionType: PRINT_TEMPLATES_CONNECTION_TYPE,
+        columns: "id, provider, settings",
+      },
+    );
     const row = data as Record<string, any> | null | undefined;
 
     if (error) {
-      const code = String((error as any)?.code || '').toUpperCase();
-      const messageText = String((error as any)?.message || '').toLowerCase();
-      const isMissingRow = code === 'PGRST116' || messageText.includes('0 rows');
+      const code = String((error as any)?.code || "").toUpperCase();
+      const messageText = String((error as any)?.message || "").toLowerCase();
+      const isMissingRow =
+        code === "PGRST116" || messageText.includes("0 rows");
       if (!isMissingRow) throw error;
     }
 
@@ -676,18 +827,21 @@ export const loadPrintTemplatesStore = async () => {
     return {
       // ردیف fallback عمومی، متعلق به سازمان فعال نیست و نباید در upsert سازمانی
       // به‌عنوان کلید اصلی ارسال شود.
-      rowId: scope === 'org' && row?.id ? String(row.id) : null,
-      provider: String(row?.provider || 'tiptap'),
-      templatesByModule: Object.keys(templatesByModule).length > 0 ? templatesByModule : normalizeStore(readLocalStore()),
-      storage: Object.keys(templatesByModule).length > 0 ? 'remote' : 'local',
+      rowId: scope === "org" && row?.id ? String(row.id) : null,
+      provider: String(row?.provider || "tiptap"),
+      templatesByModule:
+        Object.keys(templatesByModule).length > 0
+          ? templatesByModule
+          : normalizeStore(readLocalStore()),
+      storage: Object.keys(templatesByModule).length > 0 ? "remote" : "local",
     };
   } catch {
     const localStore = normalizeStore(readLocalStore());
     return {
       rowId: null,
-      provider: 'tiptap',
+      provider: "tiptap",
       templatesByModule: localStore,
-      storage: 'local',
+      storage: "local",
     };
   }
 };
@@ -697,7 +851,9 @@ export const savePrintTemplatesStore = async (params: {
   provider?: string;
   templatesByModule: Record<string, StoredPrintTemplate[]>;
 }) => {
-  const persistedTemplatesByModule = getPersistedPrintTemplatesByModule(params.templatesByModule);
+  const persistedTemplatesByModule = getPersistedPrintTemplatesByModule(
+    params.templatesByModule,
+  );
   writeLocalStore(persistedTemplatesByModule);
   const authUser = await getCachedAuthUser(supabase);
   const userId = authUser?.id || null;
@@ -706,16 +862,16 @@ export const savePrintTemplatesStore = async (params: {
   if (!currentOrgId) {
     return {
       rowId: null,
-      storage: 'local' as const,
-      errorCode: 'ORG_CONTEXT_MISSING',
-      errorMessage: 'سازمان فعال برای ذخیره قالب چاپ مشخص نیست.',
+      storage: "local" as const,
+      errorCode: "ORG_CONTEXT_MISSING",
+      errorMessage: "سازمان فعال برای ذخیره قالب چاپ مشخص نیست.",
     };
   }
 
   const payload: Record<string, any> = {
     org_id: currentOrgId,
     connection_type: PRINT_TEMPLATES_CONNECTION_TYPE,
-    provider: params.provider || 'tiptap',
+    provider: params.provider || "tiptap",
     is_active: true,
     updated_by: userId,
     settings: {
@@ -725,9 +881,9 @@ export const savePrintTemplatesStore = async (params: {
 
   try {
     const query = supabase
-      .from('integration_settings')
-      .upsert(payload, { onConflict: 'org_id,connection_type' })
-      .select('id')
+      .from("integration_settings")
+      .upsert(payload, { onConflict: "org_id,connection_type" })
+      .select("id")
       .single();
     const { data, error } = await runWithSupabaseTimeout(
       (signal) => attachAbortSignalIfSupported(query, signal),
@@ -735,26 +891,35 @@ export const savePrintTemplatesStore = async (params: {
     );
 
     if (error) throw error;
-    return { rowId: data?.id ? String(data.id) : null, storage: 'remote' as const };
+    return {
+      rowId: data?.id ? String(data.id) : null,
+      storage: "remote" as const,
+    };
   } catch (error) {
-    const errorCode = String((error as any)?.code || '');
-    console.error('Print template remote save failed; local fallback kept.', error);
+    const errorCode = String((error as any)?.code || "");
+    console.error(
+      "Print template remote save failed; local fallback kept.",
+      error,
+    );
     return {
       rowId: params.rowId || null,
-      storage: 'local' as const,
+      storage: "local" as const,
       errorCode,
-      errorMessage: String((error as any)?.message || error || 'unknown'),
+      errorMessage: String((error as any)?.message || error || "unknown"),
     };
   }
 };
 
-export const buildPrintTemplateVariablesForModule = (module: any): PrintTemplateVariableOption[] => {
+export const buildPrintTemplateVariablesForModule = (
+  module: any,
+): PrintTemplateVariableOption[] => {
   if (!module) return [];
 
   const seen = new Set<string>();
-  const sourceFields = module?.id && MODULES[module.id]
-    ? getCanonicalModuleFields(module.id)
-    : (module.fields || []);
+  const sourceFields =
+    module?.id && MODULES[module.id]
+      ? getCanonicalModuleFields(module.id)
+      : module.fields || [];
   return sourceFields
     .filter((field: any) => {
       if (!field?.key) return false;
@@ -765,15 +930,20 @@ export const buildPrintTemplateVariablesForModule = (module: any): PrintTemplate
       return true;
     })
     .map((field: any) => ({
-      label: getFieldLabelFa(field, { moduleId: module?.id, fallback: field.key }),
+      label: getFieldLabelFa(field, {
+        moduleId: module?.id,
+        fallback: field.key,
+      }),
       value: `record.${field.key}`,
-      kind: 'field' as const,
+      kind: "field" as const,
       group: getFieldGroupLabel(module, field),
       description: `فیلد ${field.labels?.fa || field.key}`,
     }));
 };
 
-const buildUniqueFieldOptions = (moduleId: string): PrintTemplateVariableOption[] => {
+const buildUniqueFieldOptions = (
+  moduleId: string,
+): PrintTemplateVariableOption[] => {
   return buildPrintTemplateVariablesForModule(MODULES[moduleId]);
 };
 
@@ -782,89 +952,387 @@ const buildBlockOptions = (moduleId: string): PrintTemplateVariableOption[] => {
   if (!module) return [];
 
   return module.blocks
-    .filter((block) => block.type === BlockType.TABLE || block.type === BlockType.GRID_TABLE)
+    .filter(
+      (block) =>
+        block.type === BlockType.TABLE || block.type === BlockType.GRID_TABLE,
+    )
     .map((block) => ({
       label: block.titles?.fa || block.id,
       value: `block.${block.id}`,
-      kind: 'block' as const,
-      group: 'بلاک‌ها',
+      kind: "block" as const,
+      group: "بلاک‌ها",
       description: `بلاک کامل ${block.titles?.fa || block.id}`,
       insertHtml: buildBlockSnippetTemplate(moduleId, block.id),
-      scopes: ['record'],
+      scopes: ["record"],
     }));
 };
 
 const isOperationalFinancialOverviewModule = (moduleId: string) =>
-  /^operational_financial_overview_(customer|supplier|employee)$/i.test(String(moduleId || '').trim());
+  /^operational_financial_overview_(customer|supplier|employee)$/i.test(
+    String(moduleId || "").trim(),
+  );
 
-export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariableOption[] => {
+export const getPrintTemplateVariables = (
+  moduleId: string,
+): PrintTemplateVariableOption[] => {
   const commonFields: PrintTemplateVariableOption[] = [
-    { label: 'عنوان مفرد ماژول', value: 'module.title', kind: 'field', group: 'سیستم' },
-    { label: 'عنوان جمع ماژول', value: 'module.title_plural', kind: 'field', group: 'سیستم' },
-    { label: 'عنوان رکورد', value: 'record.name', kind: 'field', group: 'فیلدهای عمومی' },
-    { label: 'کد سیستمی', value: 'record.system_code', kind: 'field', group: 'فیلدهای عمومی' },
-    { label: 'تعداد پیوست‌های رکورد', value: 'record.attachment_count', kind: 'field', group: 'فیلدهای عمومی' },
-    { label: 'تاریخ ایجاد', value: 'record.created_at', kind: 'field', group: 'فیلدهای عمومی' },
-    { label: 'تاریخ آخرین ویرایش', value: 'record.updated_at', kind: 'field', group: 'فیلدهای عمومی' },
-    { label: 'ایجادکننده', value: 'record.created_by', kind: 'field', group: 'فیلدهای عمومی' },
-    { label: 'آخرین ویرایشگر', value: 'record.updated_by', kind: 'field', group: 'فیلدهای عمومی' },
-    { label: 'نام کامل سازمان', value: 'company.company_full_name', kind: 'field', group: 'اطلاعات سازمان' },
-    { label: 'نام سازمان', value: 'company.company_name', kind: 'field', group: 'اطلاعات سازمان' },
-    { label: 'نام تجاری سازمان', value: 'company.trade_name', kind: 'field', group: 'اطلاعات سازمان' },
-    { label: 'لوگوی سازمان', value: 'company.logo_url', kind: 'field', group: 'اطلاعات سازمان' },
-    { label: 'شناسه ملی سازمان', value: 'company.national_id', kind: 'field', group: 'اطلاعات سازمان' },
-    { label: 'شماره ثبت سازمان', value: 'company.registration_number', kind: 'field', group: 'اطلاعات سازمان' },
-    { label: 'کد اقتصادی سازمان', value: 'company.economic_code', kind: 'field', group: 'اطلاعات سازمان' },
-    { label: 'واحد پول سازمان', value: 'company.currency_label', kind: 'field', group: 'اطلاعات سازمان' },
-    { label: 'کد پستی سازمان', value: 'company.postal_code', kind: 'field', group: 'اطلاعات سازمان' },
-    { label: 'تلفن سازمان', value: 'company.phone', kind: 'field', group: 'اطلاعات سازمان' },
-    { label: 'آدرس سازمان', value: 'company.address', kind: 'field', group: 'اطلاعات سازمان' },
-    { label: 'وب‌سایت سازمان', value: 'company.website', kind: 'field', group: 'اطلاعات سازمان' },
-    { label: 'نام مسئول', value: 'responsible.name', kind: 'field', group: 'سیستم' },
-    { label: 'تاریخ امروز', value: 'system.today_date', kind: 'field', group: 'سیستم' },
-    { label: 'تاریخ و زمان امروز', value: 'system.today_datetime', kind: 'field', group: 'سیستم' },
-    { label: 'تاریخ و زمان چاپ', value: 'system.print_date', kind: 'field', group: 'سیستم', scopes: ['record', 'list'] },
-    { label: 'جدول فیلدهای دارای مقدار', value: 'system.compact_fields_table', kind: 'field', group: 'سیستم' },
-    { label: 'فیلدها بصورت خطی (کاتالوگ)', value: 'system.compact_fields_inline', kind: 'field', group: 'سیستم', scopes: ['record'] },
-    { label: 'URL تصویر رکورد', value: 'system.record_image_url', kind: 'field', group: 'سیستم', scopes: ['record'] },
-    { label: 'جدول‌های دارای مقدار', value: 'system.compact_tables_blocks', kind: 'field', group: 'سیستم' },
-    { label: 'تصویر رکورد', value: 'system.record_image', kind: 'field', group: 'سیستم' },
-    { label: 'کد QR رکورد', value: 'system.record_qr', kind: 'field', group: 'سیستم' },
-    { label: 'QR کاتالوگ (سایدبار)', value: 'system.catalog_qr_section', kind: 'field', group: 'سیستم', scopes: ['record'] },
-    { label: 'نقشه کاتالوگ (سایدبار)', value: 'system.catalog_map_section', kind: 'field', group: 'سیستم', scopes: ['record'] },
-    { label: 'فیلدهای سایدبار کاتالوگ', value: 'system.compact_fields_sidebar', kind: 'field', group: 'سیستم', scopes: ['record'] },
-    { label: 'فیلدهای کد (روی تصویر)', value: 'system.catalog_code_fields', kind: 'field', group: 'سیستم', scopes: ['record'] },
-    { label: 'اقلام کاتالوگ شبکه‌ای رکورد', value: 'system.record_catalog_grid', kind: 'field', group: 'سیستم', scopes: ['record'] },
-    { label: 'اقلام کاتالوگ تمام‌صفحه رکورد', value: 'system.record_catalog_fullpage', kind: 'field', group: 'سیستم', scopes: ['record'] },
-    { label: 'شعار سازمان', value: 'company.slogan', kind: 'field', group: 'اطلاعات سازمان' },
+    {
+      label: "عنوان مفرد ماژول",
+      value: "module.title",
+      kind: "field",
+      group: "سیستم",
+    },
+    {
+      label: "عنوان جمع ماژول",
+      value: "module.title_plural",
+      kind: "field",
+      group: "سیستم",
+    },
+    {
+      label: "عنوان رکورد",
+      value: "record.name",
+      kind: "field",
+      group: "فیلدهای عمومی",
+    },
+    {
+      label: "کد سیستمی",
+      value: "record.system_code",
+      kind: "field",
+      group: "فیلدهای عمومی",
+    },
+    {
+      label: "تعداد پیوست‌های رکورد",
+      value: "record.attachment_count",
+      kind: "field",
+      group: "فیلدهای عمومی",
+    },
+    {
+      label: "تاریخ ایجاد",
+      value: "record.created_at",
+      kind: "field",
+      group: "فیلدهای عمومی",
+    },
+    {
+      label: "تاریخ آخرین ویرایش",
+      value: "record.updated_at",
+      kind: "field",
+      group: "فیلدهای عمومی",
+    },
+    {
+      label: "ایجادکننده",
+      value: "record.created_by",
+      kind: "field",
+      group: "فیلدهای عمومی",
+    },
+    {
+      label: "آخرین ویرایشگر",
+      value: "record.updated_by",
+      kind: "field",
+      group: "فیلدهای عمومی",
+    },
+    {
+      label: "نام کامل سازمان",
+      value: "company.company_full_name",
+      kind: "field",
+      group: "اطلاعات سازمان",
+    },
+    {
+      label: "نام سازمان",
+      value: "company.company_name",
+      kind: "field",
+      group: "اطلاعات سازمان",
+    },
+    {
+      label: "نام تجاری سازمان",
+      value: "company.trade_name",
+      kind: "field",
+      group: "اطلاعات سازمان",
+    },
+    {
+      label: "لوگوی سازمان",
+      value: "company.logo_url",
+      kind: "field",
+      group: "اطلاعات سازمان",
+    },
+    {
+      label: "شناسه ملی سازمان",
+      value: "company.national_id",
+      kind: "field",
+      group: "اطلاعات سازمان",
+    },
+    {
+      label: "شماره ثبت سازمان",
+      value: "company.registration_number",
+      kind: "field",
+      group: "اطلاعات سازمان",
+    },
+    {
+      label: "کد اقتصادی سازمان",
+      value: "company.economic_code",
+      kind: "field",
+      group: "اطلاعات سازمان",
+    },
+    {
+      label: "واحد پول سازمان",
+      value: "company.currency_label",
+      kind: "field",
+      group: "اطلاعات سازمان",
+    },
+    {
+      label: "کد پستی سازمان",
+      value: "company.postal_code",
+      kind: "field",
+      group: "اطلاعات سازمان",
+    },
+    {
+      label: "تلفن سازمان",
+      value: "company.phone",
+      kind: "field",
+      group: "اطلاعات سازمان",
+    },
+    {
+      label: "آدرس سازمان",
+      value: "company.address",
+      kind: "field",
+      group: "اطلاعات سازمان",
+    },
+    {
+      label: "وب‌سایت سازمان",
+      value: "company.website",
+      kind: "field",
+      group: "اطلاعات سازمان",
+    },
+    {
+      label: "نام مسئول",
+      value: "responsible.name",
+      kind: "field",
+      group: "سیستم",
+    },
+    {
+      label: "تاریخ امروز",
+      value: "system.today_date",
+      kind: "field",
+      group: "سیستم",
+    },
+    {
+      label: "تاریخ و زمان امروز",
+      value: "system.today_datetime",
+      kind: "field",
+      group: "سیستم",
+    },
+    {
+      label: "تاریخ و زمان چاپ",
+      value: "system.print_date",
+      kind: "field",
+      group: "سیستم",
+      scopes: ["record", "list"],
+    },
+    {
+      label: "جدول فیلدهای دارای مقدار",
+      value: "system.compact_fields_table",
+      kind: "field",
+      group: "سیستم",
+    },
+    {
+      label: "فیلدها بصورت خطی (کاتالوگ)",
+      value: "system.compact_fields_inline",
+      kind: "field",
+      group: "سیستم",
+      scopes: ["record"],
+    },
+    {
+      label: "URL تصویر رکورد",
+      value: "system.record_image_url",
+      kind: "field",
+      group: "سیستم",
+      scopes: ["record"],
+    },
+    {
+      label: "جدول‌های دارای مقدار",
+      value: "system.compact_tables_blocks",
+      kind: "field",
+      group: "سیستم",
+    },
+    {
+      label: "تصویر رکورد",
+      value: "system.record_image",
+      kind: "field",
+      group: "سیستم",
+    },
+    {
+      label: "کد QR رکورد",
+      value: "system.record_qr",
+      kind: "field",
+      group: "سیستم",
+    },
+    {
+      label: "QR کاتالوگ (سایدبار)",
+      value: "system.catalog_qr_section",
+      kind: "field",
+      group: "سیستم",
+      scopes: ["record"],
+    },
+    {
+      label: "نقشه کاتالوگ (سایدبار)",
+      value: "system.catalog_map_section",
+      kind: "field",
+      group: "سیستم",
+      scopes: ["record"],
+    },
+    {
+      label: "فیلدهای سایدبار کاتالوگ",
+      value: "system.compact_fields_sidebar",
+      kind: "field",
+      group: "سیستم",
+      scopes: ["record"],
+    },
+    {
+      label: "فیلدهای کد (روی تصویر)",
+      value: "system.catalog_code_fields",
+      kind: "field",
+      group: "سیستم",
+      scopes: ["record"],
+    },
+    {
+      label: "اقلام کاتالوگ شبکه‌ای رکورد",
+      value: "system.record_catalog_grid",
+      kind: "field",
+      group: "سیستم",
+      scopes: ["record"],
+    },
+    {
+      label: "اقلام کاتالوگ تمام‌صفحه رکورد",
+      value: "system.record_catalog_fullpage",
+      kind: "field",
+      group: "سیستم",
+      scopes: ["record"],
+    },
+    {
+      label: "شعار سازمان",
+      value: "company.slogan",
+      kind: "field",
+      group: "اطلاعات سازمان",
+    },
   ];
   const commonListFields: PrintTemplateVariableOption[] = [
-    { label: 'عنوان لیست', value: 'system.list_title', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
-    { label: 'تعداد رکوردهای انتخاب‌شده', value: 'system.selected_count', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
-    { label: 'تاریخ چاپ لیست', value: 'system.print_date', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
-    { label: 'شماره صفحه', value: 'system.page_index', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
-    { label: 'تعداد صفحات', value: 'system.page_count', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
-    { label: 'جدول لیست', value: 'system.list_table', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
-    { label: 'کاتالوگ لیست', value: 'system.list_catalog_a4', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
-    { label: 'کاتالوگ تمام‌صفحه لیست', value: 'system.list_catalog_fullpage', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
-    { label: 'جدول جمع‌بندی لیست', value: 'system.list_summary_table', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
+    {
+      label: "عنوان لیست",
+      value: "system.list_title",
+      kind: "field",
+      group: "لیست چاپی",
+      scopes: ["list"],
+    },
+    {
+      label: "تعداد رکوردهای انتخاب‌شده",
+      value: "system.selected_count",
+      kind: "field",
+      group: "لیست چاپی",
+      scopes: ["list"],
+    },
+    {
+      label: "تاریخ چاپ لیست",
+      value: "system.print_date",
+      kind: "field",
+      group: "لیست چاپی",
+      scopes: ["list"],
+    },
+    {
+      label: "شماره صفحه",
+      value: "system.page_index",
+      kind: "field",
+      group: "لیست چاپی",
+      scopes: ["list"],
+    },
+    {
+      label: "تعداد صفحات",
+      value: "system.page_count",
+      kind: "field",
+      group: "لیست چاپی",
+      scopes: ["list"],
+    },
+    {
+      label: "جدول لیست",
+      value: "system.list_table",
+      kind: "field",
+      group: "لیست چاپی",
+      scopes: ["list"],
+    },
+    {
+      label: "کاتالوگ لیست",
+      value: "system.list_catalog_a4",
+      kind: "field",
+      group: "لیست چاپی",
+      scopes: ["list"],
+    },
+    {
+      label: "کاتالوگ تمام‌صفحه لیست",
+      value: "system.list_catalog_fullpage",
+      kind: "field",
+      group: "لیست چاپی",
+      scopes: ["list"],
+    },
+    {
+      label: "جدول جمع‌بندی لیست",
+      value: "system.list_summary_table",
+      kind: "field",
+      group: "لیست چاپی",
+      scopes: ["list"],
+    },
   ];
-  const operationalFinancialSummaryFields: PrintTemplateVariableOption[] = isOperationalFinancialOverviewModule(moduleId)
-    ? [
-        { label: 'جمع بدهکار', value: 'summary.totalDebit', kind: 'field', group: 'جمع‌بندی وضعیت مالی', scopes: ['list'] },
-        { label: 'جمع بستانکار', value: 'summary.totalCredit', kind: 'field', group: 'جمع‌بندی وضعیت مالی', scopes: ['list'] },
-        { label: 'مانده نهایی', value: 'summary.finalBalance', kind: 'field', group: 'جمع‌بندی وضعیت مالی', scopes: ['list'] },
-        { label: 'مقدار مطلق مانده نهایی', value: 'summary.finalBalanceAmount', kind: 'field', group: 'جمع‌بندی وضعیت مالی', scopes: ['list'] },
-        { label: 'ماهیت مانده نهایی', value: 'summary.finalBalanceSide', kind: 'field', group: 'جمع‌بندی وضعیت مالی', scopes: ['list'] },
-      ]
-    : [];
+  const operationalFinancialSummaryFields: PrintTemplateVariableOption[] =
+    isOperationalFinancialOverviewModule(moduleId)
+      ? [
+          {
+            label: "جمع بدهکار",
+            value: "summary.totalDebit",
+            kind: "field",
+            group: "جمع‌بندی وضعیت مالی",
+            scopes: ["list"],
+          },
+          {
+            label: "جمع بستانکار",
+            value: "summary.totalCredit",
+            kind: "field",
+            group: "جمع‌بندی وضعیت مالی",
+            scopes: ["list"],
+          },
+          {
+            label: "مانده نهایی",
+            value: "summary.finalBalance",
+            kind: "field",
+            group: "جمع‌بندی وضعیت مالی",
+            scopes: ["list"],
+          },
+          {
+            label: "مقدار مطلق مانده نهایی",
+            value: "summary.finalBalanceAmount",
+            kind: "field",
+            group: "جمع‌بندی وضعیت مالی",
+            scopes: ["list"],
+          },
+          {
+            label: "ماهیت مانده نهایی",
+            value: "summary.finalBalanceSide",
+            kind: "field",
+            group: "جمع‌بندی وضعیت مالی",
+            scopes: ["list"],
+          },
+        ]
+      : [];
 
   const moduleFields = buildUniqueFieldOptions(moduleId);
   const moduleBlocks = buildBlockOptions(moduleId);
 
   const moduleSpecificExtras = getPrintVariableProviderOptions(moduleId);
 
-  const merged = [...commonFields, ...commonListFields, ...moduleFields, ...moduleBlocks, ...moduleSpecificExtras, ...operationalFinancialSummaryFields];
+  const merged = [
+    ...commonFields,
+    ...commonListFields,
+    ...moduleFields,
+    ...moduleBlocks,
+    ...moduleSpecificExtras,
+    ...operationalFinancialSummaryFields,
+  ];
   const seen = new Set<string>();
   return merged.filter((item) => {
     if (seen.has(item.value)) return false;
@@ -873,12 +1341,16 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
   });
 };
 
-export const getSystemTemplateFieldOptions = (moduleId: string): SystemTemplateFieldOption[] => {
+export const getSystemTemplateFieldOptions = (
+  moduleId: string,
+): SystemTemplateFieldOption[] => {
   const module = MODULES[moduleId];
   return buildSystemTemplateFieldOptionsForModule(module);
 };
 
-export const buildSystemTemplateFieldOptionsForModule = (module: any): SystemTemplateFieldOption[] => {
+export const buildSystemTemplateFieldOptionsForModule = (
+  module: any,
+): SystemTemplateFieldOption[] => {
   if (!module) return [];
 
   const recordFields: SystemTemplateFieldOption[] = (module.fields || [])
@@ -888,11 +1360,15 @@ export const buildSystemTemplateFieldOptionsForModule = (module: any): SystemTem
       key: `record.${field.key}`,
       label: field.labels?.fa || field.key,
       group: getFieldGroupLabel(module, field),
-      kind: 'record' as const,
+      kind: "record" as const,
     }));
 
   const tableColumns: SystemTemplateFieldOption[] = (module.blocks || [])
-    .filter((block: any) => block?.id && (block.type === BlockType.TABLE || block.type === BlockType.GRID_TABLE))
+    .filter(
+      (block: any) =>
+        block?.id &&
+        (block.type === BlockType.TABLE || block.type === BlockType.GRID_TABLE),
+    )
     .flatMap((block: any) => {
       const blockTitle = block.titles?.fa || block.id;
       const group = `جدول: ${blockTitle}`;
@@ -900,7 +1376,7 @@ export const buildSystemTemplateFieldOptionsForModule = (module: any): SystemTem
         key: `block.${block.id}`,
         label: blockTitle,
         group,
-        kind: 'table' as const,
+        kind: "table" as const,
         blockId: block.id,
       };
       const columns = (block.tableColumns || [])
@@ -909,7 +1385,7 @@ export const buildSystemTemplateFieldOptionsForModule = (module: any): SystemTem
           key: `block.${block.id}.${column.key}`,
           label: `${column.title || column.key}`,
           group,
-          kind: 'table' as const,
+          kind: "table" as const,
           blockId: block.id,
           columnKey: column.key,
         }));
@@ -926,12 +1402,15 @@ export const buildSystemTemplateFieldOptionsForModule = (module: any): SystemTem
 };
 
 export const buildDefaultTemplateForModule = (moduleId: string): string => {
-  const singularTitle = getModuleTitle(moduleId, 'singular') || 'قالب چاپ';
+  const singularTitle = getModuleTitle(moduleId, "singular") || "قالب چاپ";
 
   if (isInvoiceModule(moduleId)) {
     const invoiceConfig = getInvoiceTemplateConfig(moduleId);
-    const invoiceItemsBlock = buildBlockSnippetTemplate(moduleId, 'invoiceItems');
-    const paymentsBlock = buildBlockSnippetTemplate(moduleId, 'payments');
+    const invoiceItemsBlock = buildBlockSnippetTemplate(
+      moduleId,
+      "invoiceItems",
+    );
+    const paymentsBlock = buildBlockSnippetTemplate(moduleId, "payments");
     return `
 <div style="padding:0; box-sizing:border-box; direction:rtl; font-family:inherit; color:#111827; line-height:1.9;">
   <h2 style="margin:0 0 8px 0; font-size:18px; color:rgb(var(--brand-500-rgb));">${singularTitle}</h2>
@@ -973,16 +1452,20 @@ export const buildDefaultTemplateForModule = (moduleId: string): string => {
 `;
 };
 
-const buildCompactA6DefaultTemplate = (moduleId: string, now: string): StoredPrintTemplate => {
-  const singularTitle = getModuleTitle(moduleId, 'singular') || getModuleTitle(moduleId) || 'سند';
+const buildCompactA6DefaultTemplate = (
+  moduleId: string,
+  now: string,
+): StoredPrintTemplate => {
+  const singularTitle =
+    getModuleTitle(moduleId, "singular") || getModuleTitle(moduleId) || "سند";
   return {
     id: `default_${moduleId}_compact_a6`,
     moduleId,
-    scope: 'record',
+    scope: "record",
     title: `${singularTitle} - خلاصه A6`,
-    description: 'قالب خلاصه برای نمایش فیلدهای دارای مقدار',
-    paperSize: 'A6',
-    orientation: 'portrait',
+    description: "قالب خلاصه برای نمایش فیلدهای دارای مقدار",
+    paperSize: "A6",
+    orientation: "portrait",
     isActive: true,
     isSystem: true,
     showHeader: true,
@@ -1021,22 +1504,26 @@ const buildCompactA6DefaultTemplate = (moduleId: string, now: string): StoredPri
   {{system.package_summary_table}}
 </div>
 `,
-    footerHtml: '',
+    footerHtml: "",
     createdAt: now,
     updatedAt: now,
   };
 };
 
-const buildCompactA5DefaultTemplate = (moduleId: string, now: string): StoredPrintTemplate => {
-  const singularTitle = getModuleTitle(moduleId, 'singular') || getModuleTitle(moduleId) || 'سند';
+const buildCompactA5DefaultTemplate = (
+  moduleId: string,
+  now: string,
+): StoredPrintTemplate => {
+  const singularTitle =
+    getModuleTitle(moduleId, "singular") || getModuleTitle(moduleId) || "سند";
   return {
     id: `default_${moduleId}_compact_a5`,
     moduleId,
-    scope: 'record',
+    scope: "record",
     title: `${singularTitle} - خلاصه A5`,
-    description: 'قالب خلاصه A5 برای نمایش فیلدها و جدول‌های دارای مقدار',
-    paperSize: 'A5',
-    orientation: 'portrait',
+    description: "قالب خلاصه A5 برای نمایش فیلدها و جدول‌های دارای مقدار",
+    paperSize: "A5",
+    orientation: "portrait",
     isActive: true,
     isSystem: true,
     showHeader: true,
@@ -1075,22 +1562,26 @@ const buildCompactA5DefaultTemplate = (moduleId: string, now: string): StoredPri
   {{system.package_summary_table}}
 </div>
 `,
-    footerHtml: '',
+    footerHtml: "",
     createdAt: now,
     updatedAt: now,
   };
 };
 
-const buildCompactA4DefaultTemplate = (moduleId: string, now: string): StoredPrintTemplate => {
-  const singularTitle = getModuleTitle(moduleId, 'singular') || getModuleTitle(moduleId) || 'سند';
+const buildCompactA4DefaultTemplate = (
+  moduleId: string,
+  now: string,
+): StoredPrintTemplate => {
+  const singularTitle =
+    getModuleTitle(moduleId, "singular") || getModuleTitle(moduleId) || "سند";
   return {
     id: `default_${moduleId}_compact_a4`,
     moduleId,
-    scope: 'record',
+    scope: "record",
     title: `${singularTitle} - خلاصه A4`,
-    description: 'قالب خلاصه A4 برای نمایش فیلدها و جدول‌های دارای مقدار',
-    paperSize: 'A4',
-    orientation: 'portrait',
+    description: "قالب خلاصه A4 برای نمایش فیلدها و جدول‌های دارای مقدار",
+    paperSize: "A4",
+    orientation: "portrait",
     isActive: true,
     isSystem: true,
     showHeader: true,
@@ -1129,7 +1620,7 @@ const buildCompactA4DefaultTemplate = (moduleId: string, now: string): StoredPri
   {{system.package_summary_table}}
 </div>
 `,
-    footerHtml: '',
+    footerHtml: "",
     createdAt: now,
     updatedAt: now,
   };
@@ -1138,18 +1629,18 @@ const buildCompactA4DefaultTemplate = (moduleId: string, now: string): StoredPri
 const buildListA4DefaultTemplate = (
   moduleId: string,
   now: string,
-  orientation: 'portrait' | 'landscape'
+  orientation: "portrait" | "landscape",
 ): StoredPrintTemplate => {
-  const moduleTitle = getModuleTitle(moduleId) || 'فهرست';
-  const orientationTitle = orientation === 'landscape' ? 'افقی' : 'عمودی';
+  const moduleTitle = getModuleTitle(moduleId) || "فهرست";
+  const orientationTitle = orientation === "landscape" ? "افقی" : "عمودی";
 
   return {
     id: `default_${moduleId}_list_a4_${orientation}`,
     moduleId,
-    scope: 'list',
+    scope: "list",
     title: `قالب پرینت جدول A4 ${orientationTitle}`,
     description: `قالب سیستمی جدول ${moduleTitle} در قطع A4 ${orientationTitle}`,
-    paperSize: 'A4',
+    paperSize: "A4",
     orientation,
     isActive: true,
     isSystem: true,
@@ -1200,13 +1691,19 @@ const buildListA4DefaultTemplate = (
   };
 };
 
-export const normalizeDynamicBlockTablesHtml = (moduleId: string, html?: string) => {
-  const rawHtml = String(html || '').trim();
-  if (typeof window === 'undefined' || !rawHtml || !/<table/i.test(rawHtml)) return rawHtml;
+export const normalizeDynamicBlockTablesHtml = (
+  moduleId: string,
+  html?: string,
+) => {
+  const rawHtml = String(html || "").trim();
+  if (typeof window === "undefined" || !rawHtml || !/<table/i.test(rawHtml))
+    return rawHtml;
 
   try {
     const detectDynamicBlockId = (table: HTMLTableElement): string => {
-      const explicit = String(table.getAttribute('data-print-block') || '').trim();
+      const explicit = String(
+        table.getAttribute("data-print-block") || "",
+      ).trim();
       if (explicit) return explicit;
 
       // A system invoice puts the payments table inside a wider parent table
@@ -1214,56 +1711,67 @@ export const normalizeDynamicBlockTablesHtml = (moduleId: string, html?: string)
       // that parent look like the payments table and replaced it wholesale,
       // silently deleting the invoice description. Auto-detection is only for
       // a legacy block table itself, never for a table that contains one.
-      if (table.querySelector('table')) return '';
+      if (table.querySelector("table")) return "";
 
-      const tableHtml = String(table.innerHTML || '');
+      const tableHtml = String(table.innerHTML || "");
       const hasInvoiceItemsShape =
-        tableHtml.includes('{{row.__row_index__}}') &&
-        tableHtml.includes('{{row.product_id}}') &&
-        tableHtml.includes('{{row.quantity}}') &&
-        tableHtml.includes('{{row.main_unit}}') &&
-        tableHtml.includes('{{row.unit_price}}') &&
-        tableHtml.includes('{{row.total_price}}');
-      if (hasInvoiceItemsShape) return 'invoiceItems';
+        tableHtml.includes("{{row.__row_index__}}") &&
+        tableHtml.includes("{{row.product_id}}") &&
+        tableHtml.includes("{{row.quantity}}") &&
+        tableHtml.includes("{{row.main_unit}}") &&
+        tableHtml.includes("{{row.unit_price}}") &&
+        tableHtml.includes("{{row.total_price}}");
+      if (hasInvoiceItemsShape) return "invoiceItems";
 
       const hasPaymentsShape =
-        tableHtml.includes('{{row.__row_index__}}') &&
-        tableHtml.includes('{{row.payment_type}}') &&
-        tableHtml.includes('{{row.amount}}') &&
-        (tableHtml.includes('{{row.status}}') || tableHtml.includes('{{row.cheque_status}}'));
-      if (hasPaymentsShape) return 'payments';
+        tableHtml.includes("{{row.__row_index__}}") &&
+        tableHtml.includes("{{row.payment_type}}") &&
+        tableHtml.includes("{{row.amount}}") &&
+        (tableHtml.includes("{{row.status}}") ||
+          tableHtml.includes("{{row.cheque_status}}"));
+      if (hasPaymentsShape) return "payments";
 
-      return '';
+      return "";
     };
 
     const parser = new window.DOMParser();
-    const doc = parser.parseFromString(`<div id="print-block-normalize-root">${rawHtml}</div>`, 'text/html');
-    const root = doc.getElementById('print-block-normalize-root');
+    const doc = parser.parseFromString(
+      `<div id="print-block-normalize-root">${rawHtml}</div>`,
+      "text/html",
+    );
+    const root = doc.getElementById("print-block-normalize-root");
     if (!root) return rawHtml;
 
-    root.querySelectorAll<HTMLTableElement>('table').forEach((table) => {
+    root.querySelectorAll<HTMLTableElement>("table").forEach((table) => {
       const blockId = detectDynamicBlockId(table);
       if (!blockId) return;
 
       const canonicalHtml = buildBlockSnippetTemplate(moduleId, blockId);
       if (!canonicalHtml) return;
 
-      const canonicalDoc = parser.parseFromString(`<div id="print-block-canonical-root">${canonicalHtml}</div>`, 'text/html');
-      const canonicalTable = canonicalDoc.querySelector('table[data-print-block]') as HTMLTableElement | null;
+      const canonicalDoc = parser.parseFromString(
+        `<div id="print-block-canonical-root">${canonicalHtml}</div>`,
+        "text/html",
+      );
+      const canonicalTable = canonicalDoc.querySelector(
+        "table[data-print-block]",
+      ) as HTMLTableElement | null;
       if (!canonicalTable) return;
 
       const borderColor =
-        table.getAttribute('data-border-color') ||
-        table.style.getPropertyValue('--table-border-color') ||
+        table.getAttribute("data-border-color") ||
+        table.style.getPropertyValue("--table-border-color") ||
         table.style.borderColor ||
-        '';
+        "";
 
       if (borderColor) {
-        canonicalTable.setAttribute('data-border-color', borderColor);
-        const baseStyle = String(canonicalTable.getAttribute('style') || '').trim();
+        canonicalTable.setAttribute("data-border-color", borderColor);
+        const baseStyle = String(
+          canonicalTable.getAttribute("style") || "",
+        ).trim();
         canonicalTable.setAttribute(
-          'style',
-          `${baseStyle}${baseStyle ? ';' : ''}--table-border-color:${borderColor};border-color:${borderColor};`
+          "style",
+          `${baseStyle}${baseStyle ? ";" : ""}--table-border-color:${borderColor};border-color:${borderColor};`,
         );
       }
 
@@ -1280,38 +1788,43 @@ export const buildCatalogFullPageContentHtml = (
   moduleId: string,
   imageDisplayMode: PrintImageDisplayMode = DEFAULT_PRINT_IMAGE_DISPLAY_MODE,
 ): string => {
-  if (isCompositeCatalogModule(moduleId)) return '{{system.record_catalog_fullpage}}';
-  const isBillboard = moduleId === 'billboards';
-  const primaryTitle = isBillboard ? '{{record.address}}' : '{{record.name}}';
+  if (isCompositeCatalogModule(moduleId))
+    return "{{system.record_catalog_fullpage}}";
+  const isBillboard = moduleId === "billboards";
+  const primaryTitle = isBillboard ? "{{record.address}}" : "{{record.name}}";
   return buildCatalogFullPageLayout({
-    imageUrl: '{{system.record_image_url}}',
+    imageUrl: "{{system.record_image_url}}",
     primaryTitle,
-    codeFieldsHtml: '{{system.catalog_code_fields}}',
-    watermarkText: '{{company.company_name_en}}',
-    sidebarFieldsHtml: '{{system.compact_fields_sidebar}}',
-    logoUrl: '{{company.logo_url}}',
-    companyName: '{{company.company_full_name}}',
-    slogan: '{{company.slogan}}',
-    phone: '{{company.phone}}',
-    email: '{{company.email}}',
-    website: '{{company.website}}',
-    companyAddress: '{{company.address}}',
-    todayDate: '{{system.print_date}}',
-    qrSectionHtml: '{{system.catalog_qr_section}}',
-    mapSectionHtml: isBillboard ? '{{system.catalog_map_section}}' : '',
+    codeFieldsHtml: "{{system.catalog_code_fields}}",
+    watermarkText: "{{company.company_name_en}}",
+    sidebarFieldsHtml: "{{system.compact_fields_sidebar}}",
+    logoUrl: "{{company.logo_url}}",
+    companyName: "{{company.company_full_name}}",
+    slogan: "{{company.slogan}}",
+    phone: "{{company.phone}}",
+    email: "{{company.email}}",
+    website: "{{company.website}}",
+    companyAddress: "{{company.address}}",
+    todayDate: "{{system.print_date}}",
+    qrSectionHtml: "{{system.catalog_qr_section}}",
+    mapSectionHtml: isBillboard ? "{{system.catalog_map_section}}" : "",
     imageDisplayMode,
     isFirstPage: true,
   });
 };
 
-const buildCatalogFullPageRecordTemplate = (moduleId: string, now: string): StoredPrintTemplate => ({
+const buildCatalogFullPageRecordTemplate = (
+  moduleId: string,
+  now: string,
+): StoredPrintTemplate => ({
   id: `default_${moduleId}_catalog_fullpage_landscape`,
   moduleId,
-  scope: 'record',
-  title: 'کاتالوگ تمام صفحه',
-  description: 'قالب کاتالوگی تک‌برگه A4 افقی با تصویر بزرگ — مناسب ارسال به مشتریان',
-  paperSize: 'A4',
-  orientation: 'landscape',
+  scope: "record",
+  title: "کاتالوگ تمام صفحه",
+  description:
+    "قالب کاتالوگی تک‌برگه A4 افقی با تصویر بزرگ — مناسب ارسال به مشتریان",
+  paperSize: "A4",
+  orientation: "landscape",
   isActive: true,
   isSystem: true,
   showHeader: false,
@@ -1320,21 +1833,25 @@ const buildCatalogFullPageRecordTemplate = (moduleId: string, now: string): Stor
   pageMarginRight: 0,
   pageMarginBottom: 0,
   pageMarginLeft: 0,
-  headerHtml: '',
-  footerHtml: '',
+  headerHtml: "",
+  footerHtml: "",
   contentHtml: buildCatalogFullPageContentHtml(moduleId),
   createdAt: now,
   updatedAt: now,
 });
 
-const buildCatalogGridRecordTemplate = (moduleId: string, now: string): StoredPrintTemplate => ({
+const buildCatalogGridRecordTemplate = (
+  moduleId: string,
+  now: string,
+): StoredPrintTemplate => ({
   id: `default_${moduleId}_catalog_grid`,
   moduleId,
-  scope: 'record',
-  title: 'کاتالوگ شبکه‌ای',
-  description: 'قالب کارت شبکه‌ای برای چاپ یک رکورد با تصویر و فیلدهای انتخاب‌شده',
-  paperSize: 'A4',
-  orientation: 'portrait',
+  scope: "record",
+  title: "کاتالوگ شبکه‌ای",
+  description:
+    "قالب کارت شبکه‌ای برای چاپ یک رکورد با تصویر و فیلدهای انتخاب‌شده",
+  paperSize: "A4",
+  orientation: "portrait",
   isActive: true,
   isSystem: true,
   showHeader: true,
@@ -1343,9 +1860,13 @@ const buildCatalogGridRecordTemplate = (moduleId: string, now: string): StoredPr
   pageMarginRight: 10,
   pageMarginBottom: 10,
   pageMarginLeft: 10,
-  headerHtml: '<div style="direction:rtl;text-align:right;font-size:15px;font-weight:800;color:rgb(var(--brand-500-rgb));">{{company.company_full_name}}</div>',
-  footerHtml: '<div style="direction:rtl;text-align:center;color:#64748b;font-size:9px;">{{company.phone}} · {{company.website}}</div>',
-  contentHtml: isCompositeCatalogModule(moduleId) ? '{{system.record_catalog_grid}}' : `<div style="direction:rtl;border:1px solid rgba(148,163,184,.45);border-radius:18px;padding:18px;background:linear-gradient(135deg,rgba(var(--brand-50-rgb),.8),#fff);font-family:inherit;">
+  headerHtml:
+    '<div style="direction:rtl;text-align:right;font-size:15px;font-weight:800;color:rgb(var(--brand-500-rgb));">{{company.company_full_name}}</div>',
+  footerHtml:
+    '<div style="direction:rtl;text-align:center;color:#64748b;font-size:9px;">{{company.phone}} · {{company.website}}</div>',
+  contentHtml: isCompositeCatalogModule(moduleId)
+    ? "{{system.record_catalog_grid}}"
+    : `<div style="direction:rtl;border:1px solid rgba(148,163,184,.45);border-radius:18px;padding:18px;background:linear-gradient(135deg,rgba(var(--brand-50-rgb),.8),#fff);font-family:inherit;">
   <div style="display:flex;gap:16px;align-items:flex-start;">
     <div style="width:42%;min-height:180px;border-radius:14px;background:rgba(255,255,255,.9);display:flex;align-items:center;justify-content:center;overflow:hidden;"><img src="{{system.record_image_url}}" alt="تصویر رکورد" style="max-width:100%;max-height:240px;object-fit:contain;" /></div>
     <div style="flex:1;"><h1 style="margin:0 0 8px;font-size:23px;color:rgb(var(--brand-500-rgb));">{{record.name}}</h1><div style="font-size:11px;color:#64748b;line-height:1.9;">{{system.compact_fields_inline}}</div></div>
@@ -1356,14 +1877,18 @@ const buildCatalogGridRecordTemplate = (moduleId: string, now: string): StoredPr
   updatedAt: now,
 });
 
-const buildCatalogFullPageListTemplate = (moduleId: string, now: string): StoredPrintTemplate => ({
+const buildCatalogFullPageListTemplate = (
+  moduleId: string,
+  now: string,
+): StoredPrintTemplate => ({
   id: `default_${moduleId}_catalog_fullpage_list_landscape`,
   moduleId,
-  scope: 'list',
-  title: 'کاتالوگ تمام صفحه — لیست',
-  description: 'هر رکورد یک صفحه کامل A4 افقی کاتالوگی — مناسب ارسال فهرست محصولات/تابلوها به مشتریان',
-  paperSize: 'A4',
-  orientation: 'landscape',
+  scope: "list",
+  title: "کاتالوگ تمام صفحه — لیست",
+  description:
+    "هر رکورد یک صفحه کامل A4 افقی کاتالوگی — مناسب ارسال فهرست محصولات/تابلوها به مشتریان",
+  paperSize: "A4",
+  orientation: "landscape",
   isActive: true,
   isSystem: true,
   showHeader: false,
@@ -1372,9 +1897,9 @@ const buildCatalogFullPageListTemplate = (moduleId: string, now: string): Stored
   pageMarginRight: 0,
   pageMarginBottom: 0,
   pageMarginLeft: 0,
-  headerHtml: '',
-  footerHtml: '',
-  contentHtml: '{{system.list_catalog_fullpage}}',
+  headerHtml: "",
+  footerHtml: "",
+  contentHtml: "{{system.list_catalog_fullpage}}",
   createdAt: now,
   updatedAt: now,
 });
@@ -1383,16 +1908,16 @@ const buildListCatalogA4PortraitDefaultTemplate = (
   moduleId: string,
   now: string,
 ): StoredPrintTemplate => {
-  const moduleTitle = getModuleTitle(moduleId) || 'فهرست';
+  const moduleTitle = getModuleTitle(moduleId) || "فهرست";
 
   return {
     id: `default_${moduleId}_catalog_a4_portrait`,
     moduleId,
-    scope: 'list',
-    title: 'کاتالوگ A4 عمودی',
+    scope: "list",
+    title: "کاتالوگ A4 عمودی",
     description: `قالب سیستمی کاتالوگی ${moduleTitle} در قطع A4 عمودی با ۶ کارت در هر صفحه`,
-    paperSize: 'A4',
-    orientation: 'portrait',
+    paperSize: "A4",
+    orientation: "portrait",
     isActive: true,
     isSystem: true,
     showHeader: true,
@@ -1442,14 +1967,16 @@ const buildListCatalogA4PortraitDefaultTemplate = (
   };
 };
 
-const buildSecretariatOfficialTemplate = (now: string): StoredPrintTemplate => ({
-  id: 'default_secretariat_official_letter_a4',
-  moduleId: 'secretariat_documents',
-  scope: 'record',
-  title: 'نامه رسمی اداری A4',
-  description: 'سربرگ رسمی دبیرخانه با تاریخ، شماره و پیوست',
-  paperSize: 'A4',
-  orientation: 'portrait',
+const buildSecretariatOfficialTemplate = (
+  now: string,
+): StoredPrintTemplate => ({
+  id: "default_secretariat_official_letter_a4",
+  moduleId: "secretariat_documents",
+  scope: "record",
+  title: "نامه رسمی اداری A4",
+  description: "سربرگ رسمی دبیرخانه با تاریخ، شماره و پیوست",
+  paperSize: "A4",
+  orientation: "portrait",
   isActive: true,
   isSystem: true,
   showHeader: true,
@@ -1485,13 +2012,13 @@ const buildSecretariatOfficialTemplate = (now: string): StoredPrintTemplate => (
 });
 
 const buildDeliveryFormPrintTemplate = (now: string): StoredPrintTemplate => ({
-  id: 'default_delivery_form_operational_a4',
-  moduleId: 'delivery_forms',
-  scope: 'record',
-  title: 'فرم تحویل عملیاتی A4',
-  description: 'قالب چاپ رسمی برای فرم‌های تحویل با امضا و اقلام',
-  paperSize: 'A4',
-  orientation: 'portrait',
+  id: "default_delivery_form_operational_a4",
+  moduleId: "delivery_forms",
+  scope: "record",
+  title: "فرم تحویل عملیاتی A4",
+  description: "قالب چاپ رسمی برای فرم‌های تحویل با امضا و اقلام",
+  paperSize: "A4",
+  orientation: "portrait",
   isActive: true,
   isSystem: true,
   showHeader: true,
@@ -1544,26 +2071,29 @@ const buildDeliveryFormPrintTemplate = (now: string): StoredPrintTemplate => ({
       </tr>
     </tbody>
   </table>
-  ${buildBlockSnippetTemplate('delivery_forms', 'items')}
+  ${buildBlockSnippetTemplate("delivery_forms", "items")}
   <div style="margin-top:8px; border:1px solid var(--table-border-color, #d1d5db); background:rgba(var(--brand-50-rgb),0.12); padding:8px;">
     <div style="font-weight:800; color:rgb(var(--brand-500-rgb)); margin-bottom:4px;">یادداشت‌ها و شرایط تحویل</div>
     <div style="${getLongTextPrintStyle(11)}">{{record.notes}}</div>
   </div>
 </div>
 `.trim(),
-  footerHtml: buildDefaultFooterTemplateForModule('stock_transfers').trim(),
+  footerHtml: buildDefaultFooterTemplateForModule("stock_transfers").trim(),
   createdAt: now,
   updatedAt: now,
 });
 
-const buildStockTransferVoucherPrintTemplate = (now: string): StoredPrintTemplate => ({
-  id: 'default_stock_transfer_voucher_a4',
-  moduleId: 'stock_transfers',
-  scope: 'record',
-  title: 'حواله انبار A4',
-  description: 'قالب چاپ عملیاتی حواله و تردد کالا با تمرکز روی ورود/خروج و مسئولیت تحویل',
-  paperSize: 'A4',
-  orientation: 'portrait',
+const buildStockTransferVoucherPrintTemplate = (
+  now: string,
+): StoredPrintTemplate => ({
+  id: "default_stock_transfer_voucher_a4",
+  moduleId: "stock_transfers",
+  scope: "record",
+  title: "حواله انبار A4",
+  description:
+    "قالب چاپ عملیاتی حواله و تردد کالا با تمرکز روی ورود/خروج و مسئولیت تحویل",
+  paperSize: "A4",
+  orientation: "portrait",
   isActive: true,
   isSystem: true,
   showHeader: true,
@@ -1630,19 +2160,21 @@ const buildStockTransferVoucherPrintTemplate = (now: string): StoredPrintTemplat
   </div>
 </div>
 `.trim(),
-  footerHtml: buildDefaultFooterTemplateForModule('stock_transfers').trim(),
+  footerHtml: buildDefaultFooterTemplateForModule("stock_transfers").trim(),
   createdAt: now,
   updatedAt: now,
 });
 
-const buildEmployeeContractPrintTemplate = (now: string): StoredPrintTemplate => ({
-  id: 'default_employee_contract_formal_a4',
-  moduleId: 'employee_contracts',
-  scope: 'record',
-  title: 'قرارداد کارمند A4',
-  description: 'قالب رسمی قرارداد کارکنان با مشخصات طرفین',
-  paperSize: 'A4',
-  orientation: 'portrait',
+const buildEmployeeContractPrintTemplate = (
+  now: string,
+): StoredPrintTemplate => ({
+  id: "default_employee_contract_formal_a4",
+  moduleId: "employee_contracts",
+  scope: "record",
+  title: "قرارداد کارمند A4",
+  description: "قالب رسمی قرارداد کارکنان با مشخصات طرفین",
+  paperSize: "A4",
+  orientation: "portrait",
   isActive: true,
   isSystem: true,
   showHeader: true,
@@ -1700,36 +2232,41 @@ const buildEmployeeContractPrintTemplate = (now: string): StoredPrintTemplate =>
   <div style="min-height:430px; padding:8px 4px; ${getLongTextPrintStyle(12)}">{{record.body}}</div>
 </div>
 `.trim(),
-  footerHtml: buildDefaultFooterTemplateForModule('employee_contracts').trim(),
+  footerHtml: buildDefaultFooterTemplateForModule("employee_contracts").trim(),
   createdAt: now,
   updatedAt: now,
 });
 
 const buildPayrollSlipPrintTemplate = (
   now: string,
-  orientation: 'portrait' | 'landscape' = 'portrait'
+  orientation: "portrait" | "landscape" = "portrait",
 ): StoredPrintTemplate => ({
-  id: orientation === 'landscape'
-    ? 'default_payroll_slip_formal_a4_landscape'
-    : 'default_payroll_slip_formal_a4',
-  moduleId: 'payroll_slips',
-  scope: 'record',
-  title: orientation === 'landscape' ? 'فیش حقوقی رسمی A4 افقی' : 'فیش حقوقی رسمی A4',
-  description: orientation === 'landscape'
-    ? 'قالب رسمی افقی فیش حقوقی با فضای بیشتر برای ردیف‌ها و پرداخت‌ها'
-    : 'قالب رسمی فیش حقوقی با ردیف‌ها و پرداخت‌ها',
-  paperSize: 'A4',
+  id:
+    orientation === "landscape"
+      ? "default_payroll_slip_formal_a4_landscape"
+      : "default_payroll_slip_formal_a4",
+  moduleId: "payroll_slips",
+  scope: "record",
+  title:
+    orientation === "landscape"
+      ? "فیش حقوقی رسمی A4 افقی"
+      : "فیش حقوقی رسمی A4",
+  description:
+    orientation === "landscape"
+      ? "قالب رسمی افقی فیش حقوقی با فضای بیشتر برای ردیف‌ها و پرداخت‌ها"
+      : "قالب رسمی فیش حقوقی با ردیف‌ها و پرداخت‌ها",
+  paperSize: "A4",
   orientation,
   isActive: true,
   isSystem: true,
   showHeader: true,
   showFooter: true,
-  headerHeight: orientation === 'landscape' ? 72 : 84,
-  footerHeight: orientation === 'landscape' ? 72 : 84,
-  pageMarginTop: orientation === 'landscape' ? 8 : 10,
-  pageMarginRight: orientation === 'landscape' ? 8 : 10,
-  pageMarginBottom: orientation === 'landscape' ? 8 : 10,
-  pageMarginLeft: orientation === 'landscape' ? 8 : 10,
+  headerHeight: orientation === "landscape" ? 72 : 84,
+  footerHeight: orientation === "landscape" ? 72 : 84,
+  pageMarginTop: orientation === "landscape" ? 8 : 10,
+  pageMarginRight: orientation === "landscape" ? 8 : 10,
+  pageMarginBottom: orientation === "landscape" ? 8 : 10,
+  pageMarginLeft: orientation === "landscape" ? 8 : 10,
   headerHtml: `
 <table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
   <tbody>
@@ -1802,30 +2339,41 @@ const buildPayrollSlipPrintTemplate = (
       </tr>
     </tbody>
   </table>
-  ${buildBlockSnippetTemplate('payroll_slips', 'lines')}
-  <div style="margin-top:8px;">${buildBlockSnippetTemplate('payroll_slips', 'payments')}</div>
+  ${buildBlockSnippetTemplate("payroll_slips", "lines")}
+  <div style="margin-top:8px;">${buildBlockSnippetTemplate("payroll_slips", "payments")}</div>
   <div style="margin-top:8px; border:1px solid var(--table-border-color, #d1d5db); background:rgba(var(--brand-50-rgb),0.12); padding:8px;">
     <div style="font-weight:800; color:rgb(var(--brand-500-rgb)); margin-bottom:4px;">توضیحات</div>
     <div style="${getLongTextPrintStyle(11)}">{{record.notes}}</div>
   </div>
 </div>
 `.trim(),
-  footerHtml: buildDefaultFooterTemplateForModule('payroll_slips').trim(),
+  footerHtml: buildDefaultFooterTemplateForModule("payroll_slips").trim(),
   createdAt: now,
   updatedAt: now,
 });
 
 export const buildDefaultTemplatesForModule = (
   moduleId: string,
-  scope: 'all' | 'record' | 'list' = 'all'
+  scope: "all" | "record" | "list" = "all",
 ): StoredPrintTemplate[] => {
   const now = nowIso();
   const compactA4Template = buildCompactA4DefaultTemplate(moduleId, now);
   const compactA5Template = buildCompactA5DefaultTemplate(moduleId, now);
   const compactA6Template = buildCompactA6DefaultTemplate(moduleId, now);
-  const listPortraitTemplate = buildListA4DefaultTemplate(moduleId, now, 'portrait');
-  const listLandscapeTemplate = buildListA4DefaultTemplate(moduleId, now, 'landscape');
-  const listCatalogPortraitTemplate = buildListCatalogA4PortraitDefaultTemplate(moduleId, now);
+  const listPortraitTemplate = buildListA4DefaultTemplate(
+    moduleId,
+    now,
+    "portrait",
+  );
+  const listLandscapeTemplate = buildListA4DefaultTemplate(
+    moduleId,
+    now,
+    "landscape",
+  );
+  const listCatalogPortraitTemplate = buildListCatalogA4PortraitDefaultTemplate(
+    moduleId,
+    now,
+  );
   const catalogFullPageDefaults = isCatalogFullPageAvailableForModule(moduleId)
     ? [
         buildCatalogGridRecordTemplate(moduleId, now),
@@ -1833,41 +2381,180 @@ export const buildDefaultTemplatesForModule = (
         buildCatalogFullPageListTemplate(moduleId, now),
       ]
     : [];
-  const domainSpecificDefaults: StoredPrintTemplate[] = (
-    moduleId === 'secretariat_documents'
+  const domainSpecificDefaults: StoredPrintTemplate[] =
+    moduleId === "secretariat_documents"
       ? [buildSecretariatOfficialTemplate(now)]
-      : moduleId === 'delivery_forms'
+      : moduleId === "delivery_forms"
         ? [buildDeliveryFormPrintTemplate(now)]
-        : moduleId === 'stock_transfers'
+        : moduleId === "stock_transfers"
           ? [buildStockTransferVoucherPrintTemplate(now)]
-          : moduleId === 'employee_contracts'
+          : moduleId === "employee_contracts"
             ? [buildEmployeeContractPrintTemplate(now)]
-            : moduleId === 'payroll_slips'
-              ? [buildPayrollSlipPrintTemplate(now), buildPayrollSlipPrintTemplate(now, 'landscape')]
-              : []
-  );
+            : moduleId === "payroll_slips"
+              ? [
+                  buildPayrollSlipPrintTemplate(now),
+                  buildPayrollSlipPrintTemplate(now, "landscape"),
+                ]
+              : [];
+
+  const productLabelDefaults: StoredPrintTemplate[] =
+    moduleId === "products"
+      ? (["A6", "A7"] as const).map((paperSize) => ({
+          id: `default_product_label_${paperSize.toLowerCase()}`,
+          moduleId,
+          scope: "record" as const,
+          title: `لیبل محصول ${paperSize}`,
+          description: `لیبل آمادهٔ محصول در قطع استاندارد ${paperSize} با تصویر و QR قابل انتخاب`,
+          paperSize,
+          orientation: "portrait" as const,
+          isActive: true,
+          isSystem: true,
+          showHeader: false,
+          showFooter: false,
+          headerHeight: 0,
+          footerHeight: 0,
+          pageMarginTop: paperSize === "A7" ? 4 : 6,
+          pageMarginRight: paperSize === "A7" ? 4 : 6,
+          pageMarginBottom: paperSize === "A7" ? 4 : 6,
+          pageMarginLeft: paperSize === "A7" ? 4 : 6,
+          headerHtml: "",
+          contentHtml: `<div style="direction:rtl;box-sizing:border-box;min-height:${paperSize === "A7" ? "92" : "136"}mm;border:1.2px solid #0f172a;border-radius:10px;padding:${paperSize === "A7" ? "5" : "7"}mm;background:#fff;color:#111827;display:flex;flex-direction:column;justify-content:space-between;font-family:inherit;">
+  <div>
+    <div data-print-optional-field="record.name" style="font-size:${paperSize === "A7" ? "14" : "18"}px;line-height:1.55;font-weight:900;word-break:break-word;">{{record.name}}</div>
+    <div data-print-optional-field="record.system_code" style="margin-top:2px;font-size:${paperSize === "A7" ? "9" : "11"}px;color:#475569;direction:ltr;text-align:right;">{{record.system_code}}</div>
+  </div>
+  <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:6px;margin-top:5px;">
+    <div data-print-optional-field="system.record_image" style="max-width:52%;line-height:0;overflow:hidden;border-radius:7px;">{{system.record_image}}</div>
+    <div data-print-optional-field="system.record_qr" style="line-height:0;">{{system.record_qr}}</div>
+  </div>
+</div>`,
+          footerHtml: "",
+          createdAt: now,
+          updatedAt: now,
+        }))
+      : [];
 
   if (!isInvoiceModule(moduleId)) {
-    const defaults: StoredPrintTemplate[] = [...domainSpecificDefaults, ...catalogFullPageDefaults, compactA4Template, compactA5Template, compactA6Template, listPortraitTemplate, listLandscapeTemplate, listCatalogPortraitTemplate];
-    return scope === 'all' ? defaults : defaults.filter((item) => item.scope === scope);
+    const defaults: StoredPrintTemplate[] = [
+      ...domainSpecificDefaults,
+      ...productLabelDefaults,
+      ...catalogFullPageDefaults,
+      compactA4Template,
+      compactA5Template,
+      compactA6Template,
+      listPortraitTemplate,
+      listLandscapeTemplate,
+      listCatalogPortraitTemplate,
+    ];
+    return scope === "all"
+      ? defaults
+      : defaults.filter((item) => item.scope === scope);
   }
 
-  const invoiceItemsBlock = buildBlockSnippetTemplate(moduleId, 'invoiceItems');
-  const paymentsBlock = buildBlockSnippetTemplate(moduleId, 'payments');
-  const counterpartyRoot = moduleId === 'purchase_invoices' ? 'supplier' : 'customer';
-  const counterpartyTitle = moduleId === 'purchase_invoices' ? 'فروشنده' : 'خریدار';
-  const companyPartyTitle = moduleId === 'purchase_invoices' ? 'خریدار' : 'فروشنده';
-  const paymentsPanelTitle = moduleId === 'purchase_invoices' ? 'پرداخت‌ها' : 'دریافت‌ها';
+  const invoiceItemsBlock = buildBlockSnippetTemplate(moduleId, "invoiceItems");
+  const paymentsBlock = buildBlockSnippetTemplate(moduleId, "payments");
+  const counterpartyRoot =
+    moduleId === "purchase_invoices" ? "supplier" : "customer";
+  const counterpartyTitle =
+    moduleId === "purchase_invoices" ? "فروشنده" : "خریدار";
+  const companyPartyTitle =
+    moduleId === "purchase_invoices" ? "خریدار" : "فروشنده";
+  const paymentsPanelTitle =
+    moduleId === "purchase_invoices" ? "پرداخت‌ها" : "دریافت‌ها";
+  const retailInvoiceDefaults: StoredPrintTemplate[] =
+    moduleId === "invoices"
+      ? [
+          {
+            id: "default_retail_invoice_a5",
+            moduleId,
+            scope: "record",
+            title: "فاکتور فروشگاهی A5",
+            description:
+              "قالب جمع‌وجور فروشگاهی برای چاپ A5 با اقلام، جمع و دریافت‌ها",
+            paperSize: "A5",
+            orientation: "portrait",
+            isActive: true,
+            isSystem: true,
+            showHeader: false,
+            showFooter: false,
+            headerHeight: 0,
+            footerHeight: 0,
+            pageMarginTop: 7,
+            pageMarginRight: 7,
+            pageMarginBottom: 7,
+            pageMarginLeft: 7,
+            headerHtml: "",
+            contentHtml: `<div style="direction:rtl;color:#111827;font-family:inherit;font-size:10px;line-height:1.7;">
+  <div style="text-align:center;border-bottom:2px solid rgb(var(--brand-500-rgb));padding-bottom:5px;">
+    <div style="font-size:16px;font-weight:900;color:rgb(var(--brand-600-rgb));">{{company.company_full_name}}</div>
+    <div style="margin-top:2px;font-size:13px;font-weight:800;">فاکتور فروش</div>
+    <div style="font-size:9px;color:#64748b;">{{record.system_code}} · {{record.issue_date}}</div>
+  </div>
+  <div style="display:flex;justify-content:space-between;gap:8px;margin:6px 0;">
+    <span data-print-optional-field="record.customer_id">مشتری: {{customer.full_name}}</span>
+    <span data-print-optional-field="record.customer_id">{{customer.mobile_1}}</span>
+  </div>
+  <div data-print-optional-field="block.invoiceItems">${invoiceItemsBlock}</div>
+  <div data-print-optional-field="block.payments" style="margin-top:6px;">${paymentsBlock}</div>
+  <div data-print-optional-field="record.description" style="margin-top:6px;padding:5px;border:1px solid var(--table-border-color,#d1d5db);border-radius:6px;">{{record.description}}</div>
+  <div style="margin-top:8px;text-align:center;font-size:9px;color:#64748b;">{{company.phone}} {{company.address}}</div>
+</div>`,
+            footerHtml: "",
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: "default_retail_invoice_roll80",
+            moduleId,
+            scope: "record",
+            title: "فاکتور فروشگاهی رول ۸۰ میلی‌متری",
+            description:
+              "قالب فیش حرارتی استاندارد برای چاپگرهای فروشگاهی ۸۰ میلی‌متری",
+            paperSize: "ROLL80",
+            orientation: "portrait",
+            isActive: true,
+            isSystem: true,
+            showHeader: false,
+            showFooter: false,
+            headerHeight: 0,
+            footerHeight: 0,
+            pageMarginTop: 3,
+            pageMarginRight: 3,
+            pageMarginBottom: 3,
+            pageMarginLeft: 3,
+            headerHtml: "",
+            contentHtml: `<div style="direction:rtl;color:#111827;font-family:inherit;font-size:9px;line-height:1.65;width:74mm;box-sizing:border-box;">
+  <div style="text-align:center;border-bottom:1px dashed #475569;padding-bottom:4px;">
+    <div style="font-size:13px;font-weight:900;">{{company.company_full_name}}</div>
+    <div style="font-weight:800;">فاکتور فروش</div>
+    <div style="font-size:8px;">{{record.system_code}} · {{record.issue_date}}</div>
+  </div>
+  <div data-print-optional-field="record.customer_id" style="padding:4px 0;border-bottom:1px dashed #94a3b8;">مشتری: {{customer.full_name}} {{customer.mobile_1}}</div>
+  <div data-print-optional-field="block.invoiceItems" style="margin-top:4px;">${invoiceItemsBlock}</div>
+  <div data-print-optional-field="block.payments" style="margin-top:4px;border-top:1px dashed #94a3b8;padding-top:4px;">${paymentsBlock}</div>
+  <div data-print-optional-field="record.description" style="margin-top:4px;font-size:8px;">{{record.description}}</div>
+  <div style="margin-top:6px;border-top:1px dashed #475569;padding-top:4px;text-align:center;font-size:8px;">{{company.phone}}<br/>سپاس از خرید شما</div>
+</div>`,
+            footerHtml: "",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ]
+      : [];
 
   const defaults: StoredPrintTemplate[] = [
+    ...retailInvoiceDefaults,
     {
-      id: 'default_invoice_unofficial',
+      id: "default_invoice_unofficial",
       moduleId,
-      scope: 'record',
-      title: moduleId === 'purchase_invoices' ? 'فاکتور خرید غیررسمی' : 'فاکتور فروش غیررسمی',
-      description: 'نسخه پیش‌فرض A4 افقی برای چاپ غیررسمی',
-      paperSize: 'A4',
-      orientation: 'landscape',
+      scope: "record",
+      title:
+        moduleId === "purchase_invoices"
+          ? "فاکتور خرید غیررسمی"
+          : "فاکتور فروش غیررسمی",
+      description: "نسخه پیش‌فرض A4 افقی برای چاپ غیررسمی",
+      paperSize: "A4",
+      orientation: "landscape",
       isActive: true,
       isSystem: true,
       showHeader: true,
@@ -1879,7 +2566,8 @@ export const buildDefaultTemplatesForModule = (
       pageMarginBottom: 8,
       pageMarginLeft: 8,
       headerHtml: buildDefaultHeaderTemplateForModule(moduleId).trim(),
-      contentHtml: `<div style="direction:rtl; color:#111827; font-family:inherit;">
+      contentHtml:
+        `<div style="direction:rtl; color:#111827; font-family:inherit;">
   <table style="width:100%; border-collapse:collapse; font-size:11px; line-height:1.8;">
     <tbody>
       <tr>
@@ -1943,13 +2631,16 @@ export const buildDefaultTemplatesForModule = (
       updatedAt: now,
     },
     {
-      id: 'default_invoice_official',
+      id: "default_invoice_official",
       moduleId,
-      scope: 'record',
-      title: moduleId === 'purchase_invoices' ? 'فاکتور خرید رسمی' : 'فاکتور فروش رسمی',
-      description: 'نسخه پیش‌فرض A4 افقی با فیلدهای رسمی فروشنده و خریدار',
-      paperSize: 'A4',
-      orientation: 'landscape',
+      scope: "record",
+      title:
+        moduleId === "purchase_invoices"
+          ? "فاکتور خرید رسمی"
+          : "فاکتور فروش رسمی",
+      description: "نسخه پیش‌فرض A4 افقی با فیلدهای رسمی فروشنده و خریدار",
+      paperSize: "A4",
+      orientation: "landscape",
       isActive: true,
       isSystem: true,
       showHeader: true,
@@ -1961,7 +2652,8 @@ export const buildDefaultTemplatesForModule = (
       pageMarginBottom: 8,
       pageMarginLeft: 8,
       headerHtml: buildDefaultHeaderTemplateForModule(moduleId).trim(),
-      contentHtml: `<div style="direction:rtl; color:#111827; font-family:inherit;">
+      contentHtml:
+        `<div style="direction:rtl; color:#111827; font-family:inherit;">
   <table style="width:100%; border-collapse:collapse; font-size:11px; line-height:1.8;">
     <tbody>
       <tr>
@@ -2053,13 +2745,16 @@ export const buildDefaultTemplatesForModule = (
       updatedAt: now,
     },
     {
-      id: 'default_invoice_practical_a5',
+      id: "default_invoice_practical_a5",
       moduleId,
-      scope: 'record',
-      title: moduleId === 'purchase_invoices' ? 'فاکتور کاربردی A5 خرید' : 'فاکتور کاربردی A5 فروش',
-      description: 'نسخه فشرده A5 عمودی برای جا دادن اقلام بیشتر',
-      paperSize: 'A5',
-      orientation: 'portrait',
+      scope: "record",
+      title:
+        moduleId === "purchase_invoices"
+          ? "فاکتور کاربردی A5 خرید"
+          : "فاکتور کاربردی A5 فروش",
+      description: "نسخه فشرده A5 عمودی برای جا دادن اقلام بیشتر",
+      paperSize: "A5",
+      orientation: "portrait",
       isActive: true,
       isSystem: true,
       showHeader: true,
@@ -2071,7 +2766,8 @@ export const buildDefaultTemplatesForModule = (
       pageMarginBottom: 7,
       pageMarginLeft: 7,
       headerHtml: buildDefaultHeaderTemplateForModule(moduleId).trim(),
-      contentHtml: `<div style="direction:rtl; color:#111827; font-family:inherit; font-size:11px; line-height:1.75;">
+      contentHtml:
+        `<div style="direction:rtl; color:#111827; font-family:inherit; font-size:11px; line-height:1.75;">
   <table style="width:100%; border-collapse:collapse; font-size:10px;">
     <tbody>
       <tr>
@@ -2107,13 +2803,16 @@ export const buildDefaultTemplatesForModule = (
       updatedAt: now,
     },
     {
-      id: 'default_invoice_practical_a4',
+      id: "default_invoice_practical_a4",
       moduleId,
-      scope: 'record',
-      title: moduleId === 'purchase_invoices' ? 'فاکتور کاربردی A4 خرید' : 'فاکتور کاربردی A4 فروش',
-      description: 'نسخه کاربردی A4 با چیدمان فشرده',
-      paperSize: 'A4',
-      orientation: 'portrait',
+      scope: "record",
+      title:
+        moduleId === "purchase_invoices"
+          ? "فاکتور کاربردی A4 خرید"
+          : "فاکتور کاربردی A4 فروش",
+      description: "نسخه کاربردی A4 با چیدمان فشرده",
+      paperSize: "A4",
+      orientation: "portrait",
       isActive: true,
       isSystem: true,
       showHeader: true,
@@ -2125,7 +2824,8 @@ export const buildDefaultTemplatesForModule = (
       pageMarginBottom: 7,
       pageMarginLeft: 7,
       headerHtml: buildDefaultHeaderTemplateForModule(moduleId).trim(),
-      contentHtml: `<div style="direction:rtl; color:#111827; font-family:inherit; font-size:11px; line-height:1.75;">
+      contentHtml:
+        `<div style="direction:rtl; color:#111827; font-family:inherit; font-size:11px; line-height:1.75;">
   <table style="width:100%; border-collapse:collapse; font-size:10px;">
     <tbody>
       <tr>
@@ -2167,12 +2867,14 @@ export const buildDefaultTemplatesForModule = (
     listCatalogPortraitTemplate,
   ];
 
-  return scope === 'all' ? defaults : defaults.filter((item) => item.scope === scope);
+  return scope === "all"
+    ? defaults
+    : defaults.filter((item) => item.scope === scope);
 };
 
 export const mergeTemplatesWithDefaults = (
   moduleId: string,
-  storedTemplates: StoredPrintTemplate[] = []
+  storedTemplates: StoredPrintTemplate[] = [],
 ): StoredPrintTemplate[] => {
   const defaults = buildDefaultTemplatesForModule(moduleId);
   if (defaults.length === 0) return storedTemplates;
@@ -2189,18 +2891,23 @@ export const mergeTemplatesWithDefaults = (
     }
 
     const existing = next[existingIndex];
-    const isDefaultTemplate = String(existing.id || '').startsWith('default_');
+    const isDefaultTemplate = String(existing.id || "").startsWith("default_");
 
     if (isDefaultTemplate) {
       next[existingIndex] = {
         ...defaultTemplate,
         isActive: existing.isActive,
         selectedFieldKeys:
-          Array.isArray(existing.selectedFieldKeys) && existing.selectedFieldKeys.length > 0
+          Array.isArray(existing.selectedFieldKeys) &&
+          existing.selectedFieldKeys.length > 0
             ? existing.selectedFieldKeys
             : defaultTemplate.selectedFieldKeys,
-        backgroundImageUrl: existing.backgroundImageUrl || defaultTemplate.backgroundImageUrl || null,
-        backgroundSizing: existing.backgroundSizing || defaultTemplate.backgroundSizing,
+        backgroundImageUrl:
+          existing.backgroundImageUrl ||
+          defaultTemplate.backgroundImageUrl ||
+          null,
+        backgroundSizing:
+          existing.backgroundSizing || defaultTemplate.backgroundSizing,
         isSystem: true,
         createdAt: existing.createdAt || defaultTemplate.createdAt,
         updatedAt: existing.updatedAt || defaultTemplate.updatedAt,
@@ -2213,19 +2920,30 @@ export const mergeTemplatesWithDefaults = (
 
 export const materializeSystemTemplateForCopy = (
   moduleId: string,
-  template: StoredPrintTemplate
+  template: StoredPrintTemplate,
 ): StoredPrintTemplate => {
   if (!template?.isSystem) return template;
 
   const selectedFieldKeys = Array.isArray(template.selectedFieldKeys)
-    ? template.selectedFieldKeys.map((value) => String(value || '').trim()).filter(Boolean)
+    ? template.selectedFieldKeys
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
     : [];
 
   const replaceSystemPlaceholders = (html?: string) =>
-    String(html || '')
-      .replace(/{{\s*system\.compact_fields_table\s*}}/g, buildCompactFieldsTemplateForCopy(moduleId, selectedFieldKeys))
-      .replace(/{{\s*system\.compact_tables_blocks\s*}}/g, buildCompactTablesBlocksTemplateForCopy(moduleId, selectedFieldKeys))
-      .replace(/{{\s*system\.package_summary_table\s*}}/g, buildPackageSummaryTemplateForCopy(moduleId));
+    String(html || "")
+      .replace(
+        /{{\s*system\.compact_fields_table\s*}}/g,
+        buildCompactFieldsTemplateForCopy(moduleId, selectedFieldKeys),
+      )
+      .replace(
+        /{{\s*system\.compact_tables_blocks\s*}}/g,
+        buildCompactTablesBlocksTemplateForCopy(moduleId, selectedFieldKeys),
+      )
+      .replace(
+        /{{\s*system\.package_summary_table\s*}}/g,
+        buildPackageSummaryTemplateForCopy(moduleId),
+      );
 
   return {
     ...template,

@@ -642,6 +642,17 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({
         }
     };
 
+    useEffect(() => {
+        if (typeof window === 'undefined' || !window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
+        const onShortcut = (event: KeyboardEvent) => {
+            if (!event.altKey || !event.shiftKey || event.ctrlKey || event.metaKey || event.key.toLowerCase() !== 'a') return;
+            event.preventDefault();
+            void toggleTab('ai_assistant');
+        };
+        window.addEventListener('keydown', onShortcut);
+        return () => window.removeEventListener('keydown', onShortcut);
+    }, [activeKey, processGuideBundle]);
+
   return (
     <>
         <div
@@ -651,7 +662,7 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({
             {allTabs.map(tab => {
                 const isActive = activeKey === tab.key;
                 return (
-                    <Tooltip key={tab.key} title={tab.label} placement="right" mouseEnterDelay={0.15} align={{ offset: [10, 0] }}>
+                    <Tooltip key={tab.key} title={tab.key === 'ai_assistant' ? <span>{tab.label} <kbd className="keyboard-shortcut-hint mr-1 text-[9px] opacity-70">Alt+Shift+A</kbd></span> : tab.label} placement="right" mouseEnterDelay={0.15} align={{ offset: [10, 0] }}>
                         <div 
                             onClick={() => toggleTab(tab.key)}
                             className={`
@@ -756,7 +767,7 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({
                     activeKey === tab.key && (
                         <RelatedRecordsPanel
                           key={tab.key}
-                          tab={tab as RelatedTabConfig}
+                          tab={tab as unknown as RelatedTabConfig}
                           currentRecordId={recordId}
                           currentModuleId={moduleConfig.id}
                           currentRecord={currentRecord}

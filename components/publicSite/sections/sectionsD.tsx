@@ -5,7 +5,6 @@ import {
   ExclamationCircleFilled, SyncOutlined,
 } from '@ant-design/icons';
 import { motion, useMotionValue, useReducedMotion, useScroll, useSpring, useTransform, type MotionValue } from 'framer-motion';
-import AiSparkleIcon from '../../ai/AiSparkleIcon';
 import { BrandButton, Reveal, SectionHeading, SectionShell } from '../primitives';
 import { renderIcon } from '../iconMap';
 import type { IconItem } from '../types';

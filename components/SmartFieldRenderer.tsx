@@ -2742,7 +2742,9 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         }
         if (canShowFilesGallery) {
           const isEditable = !!forceEditMode && !isReadonly;
-          const acceptedFileTypes = field.fileTypes?.length ? field.fileTypes : ['image'];
+          const acceptedFileTypes: Array<'image' | 'video' | 'file'> = field.fileTypes?.length
+            ? field.fileTypes
+            : ['image'];
           const allowsNonImageFiles = acceptedFileTypes.some((fileType) => fileType !== 'image');
           const selectedValueIsImage = isImageFileUrl(value);
           const useCompactFileButtons = !!compactMode;

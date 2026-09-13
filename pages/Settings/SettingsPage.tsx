@@ -13,12 +13,15 @@ import WorkflowsManager from '../../components/workflows/WorkflowsManager';
 import ModuleSettingsTab from './ModuleSettingsTab';
 import PrintTemplatesTab from './PrintTemplatesTab';
 import AiSettingsTab from './AiSettingsTab';
+import ReservationSettingsTab from './ReservationSettingsTab';
 import { useSearchParams } from 'react-router-dom';
+import { useReservationsFeature } from '../../hooks/useReservationsFeature';
 
 const SettingsPage: React.FC = () => {
   const [loadingPermissions, setLoadingPermissions] = useState(true);
   const [tabPermissions, setTabPermissions] = useState<Record<string, boolean>>({});
   const [searchParams, setSearchParams] = useSearchParams();
+  const { enabled: reservationsEnabled, resolved: reservationsResolved } = useReservationsFeature();
 
   useEffect(() => {
     let active = true;
@@ -51,6 +54,7 @@ const SettingsPage: React.FC = () => {
               ai: false,
               workflows: false,
               print_templates: false,
+              reservation_settings: false,
             });
           } else {
             setTabPermissions({
@@ -62,6 +66,7 @@ const SettingsPage: React.FC = () => {
               connections: fields.connections !== false,
               ai: fields.ai !== false && fields.ai_settings !== false,
               print_templates: fields.print_templates !== false,
+              reservation_settings: fields.reservation_settings !== false,
               workflows:
                 fields.workflows !== false &&
                 workflowsPerms.view !== false &&
@@ -89,6 +94,11 @@ const SettingsPage: React.FC = () => {
 
   const baseItems = useMemo(
     () => [
+      {
+        key: 'reservation_settings',
+        label: <span className="flex items-center gap-2 text-base"><SettingOutlined /> تنظیمات رزرواسیون</span>,
+        children: <ReservationSettingsTab />,
+      },
       {
         key: 'company',
         label: <span className="flex items-center gap-2 text-base"><BankOutlined /> مشخصات شرکت</span>,
@@ -139,9 +149,10 @@ const SettingsPage: React.FC = () => {
   );
 
   const items = useMemo(() => {
-    if (Object.keys(tabPermissions).length === 0) return baseItems;
-    return baseItems.filter((item) => tabPermissions[item.key] !== false);
-  }, [baseItems, tabPermissions]);
+    const featureFilteredItems = baseItems.filter((item) => item.key !== 'reservation_settings' || reservationsEnabled);
+    if (Object.keys(tabPermissions).length === 0) return featureFilteredItems;
+    return featureFilteredItems.filter((item) => tabPermissions[item.key] !== false);
+  }, [baseItems, reservationsEnabled, tabPermissions]);
 
   const activeTabKey = useMemo(() => {
     if (items.length === 0) return undefined;
@@ -163,7 +174,7 @@ const SettingsPage: React.FC = () => {
   return (
     <div className="p-4 md:p-8 max-w-[1600px] mx-auto animate-fadeIn">
       <div className="bg-white dark:bg-[#1a1a1a] rounded-[2rem] shadow-sm border border-gray-200 dark:border-gray-800 p-6 min-h-[70vh] transition-colors">
-        {loadingPermissions ? (
+        {loadingPermissions || !reservationsResolved ? (
           <div className="h-[55vh] flex items-center justify-center">
             <Spin size="large" />
           </div>

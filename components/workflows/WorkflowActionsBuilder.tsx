@@ -2038,7 +2038,6 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       const renderAiChannelVariablePicker = (
         channelKey: 'sms' | 'email' | 'bot' | 'note' | 'instagram',
         targetKey: string,
-        targetLabel: string,
       ) => (
         <div>
           <AdaptiveSelectField
@@ -2194,7 +2193,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                   onChange={(checked) => updateChannelConfig('note', { include_starred_attachments: checked })}
                 />
               </div>
-              {renderAiChannelVariablePicker('note', 'note_text', 'متن یادداشت')}
+              {renderAiChannelVariablePicker('note', 'note_text')}
             </div>
           ) : null}
 
@@ -2218,7 +2217,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 onChange={(e) => updateChannelConfig('sms', { message: e.target.value })}
                 placeholder="متن پیامک؛ از {{ai_answer}} استفاده کنید"
               />
-              {renderAiChannelVariablePicker('sms', 'message', 'متن پیامک')}
+              {renderAiChannelVariablePicker('sms', 'message')}
             </div>
           ) : null}
 
@@ -2248,7 +2247,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 onChange={(e) => updateChannelConfig('email', { body: e.target.value })}
                 placeholder="متن ایمیل؛ از {{ai_answer}} استفاده کنید"
               />
-              {renderAiChannelVariablePicker('email', 'body', 'متن ایمیل')}
+              {renderAiChannelVariablePicker('email', 'body')}
             </div>
           ) : null}
 
@@ -2287,7 +2286,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                   onChange={(checked) => updateChannelConfig('bot', { include_starred_attachments: checked })}
                 />
               </div>
-              {renderAiChannelVariablePicker('bot', 'message', 'متن پیام بات')}
+              {renderAiChannelVariablePicker('bot', 'message')}
             </div>
           ) : null}
           {selectedChannels.includes('instagram') && currentModuleId === 'instagram_interaction_events' ? (
@@ -2301,7 +2300,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 onChange={(e) => updateChannelConfig('instagram', { message: e.target.value })}
                 placeholder="متن دایرکت؛ از {{ai_answer}} استفاده کنید"
               />
-              {renderAiChannelVariablePicker('instagram', 'message', 'متن دایرکت')}
+              {renderAiChannelVariablePicker('instagram', 'message')}
             </div>
           ) : selectedChannels.includes('instagram') ? (
             <Alert type="warning" showIcon message="ارسال دایرکتِ پاسخ AI فقط برای گردش‌کاری فعال است که منبع آن «رویدادهای اینستاگرام» باشد." />

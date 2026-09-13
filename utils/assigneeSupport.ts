@@ -3,6 +3,8 @@ import { ADVERTISING_CAMPAIGNS_MODULE_ID } from './advertisingCampaigns';
 const GLOBAL_ASSIGNEE_MODULE_IDS = [
   ADVERTISING_CAMPAIGNS_MODULE_ID,
   'content_calendars',
+  'reservations',
+  'reservation_resources',
   'billboards',
   'products',
   'product_bundles',
@@ -78,6 +80,8 @@ const GLOBAL_ASSIGNEE_MODULE_IDS = [
 const GLOBAL_ROLE_ASSIGNEE_MODULE_IDS = [
   ADVERTISING_CAMPAIGNS_MODULE_ID,
   'content_calendars',
+  'reservations',
+  'reservation_resources',
   'billboards',
   'products',
   'product_bundles',
