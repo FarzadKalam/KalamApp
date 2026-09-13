@@ -4,12 +4,20 @@ import { fetchSessionBootstrap } from './sessionCache';
 
 export const MULTI_LANE_PROCESSES_FEATURE = 'multi_lane_processes';
 export const CONTENT_CALENDAR_PLAN_FEATURE = 'content_calendar';
+export const RETAIL_SALES_INVOICE_PLAN_FEATURE = 'retail_sales_invoice';
+export const QR_SCAN_PLAN_FEATURE = 'qr_scan';
 
 export const hasContentCalendarFeature = (options?: { force?: boolean }) =>
   hasCurrentOrgPlanFeature(CONTENT_CALENDAR_PLAN_FEATURE, {
     ...options,
     defaultEnabled: false,
   });
+
+export const hasRetailSalesInvoiceFeature = (options?: { force?: boolean }) =>
+  hasCurrentOrgPlanFeature(RETAIL_SALES_INVOICE_PLAN_FEATURE, { ...options, defaultEnabled: false });
+
+export const hasQrScanFeature = (options?: { force?: boolean }) =>
+  hasCurrentOrgPlanFeature(QR_SCAN_PLAN_FEATURE, { ...options, defaultEnabled: false });
 
 export const hasCurrentOrgPlanFeature = async (
   featureKey: string,

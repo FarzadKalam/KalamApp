@@ -253,6 +253,9 @@ export const invoicesConfig: ModuleDefinition = {
       title: 'جمع مبلغ فاکتورهای من',
     },
   },
+  actionButtons: [
+    { id: 'retail_invoice_settings', label: 'تنظیمات فاکتور فروشگاهی', placement: 'header', variant: 'default' },
+  ],
   calendar: { summaryFieldKeys: ['total_invoice_amount'] },
   relationDisplay: {
     labelTemplate: '{{name}} - {{total_invoice_amount}}',

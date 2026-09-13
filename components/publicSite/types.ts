@@ -2,6 +2,7 @@
 export type SectionType =
   | 'hero'
   | 'hero_tree'
+  | 'cloud_access'
   | 'logos'
   | 'stats'
   | 'features'

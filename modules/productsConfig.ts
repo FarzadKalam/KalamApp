@@ -223,6 +223,8 @@ const fieldsArray: any[] = [
   { key: 'taxpayer_measure_unit_code', labels: { fa: 'کد واحد اندازه‌گیری مودیان', en: 'Taxpayer Measure Unit Code' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 7.75, nature: FieldNature.STANDARD, isTableColumn: true },
   { key: 'commission_percentage', labels: { fa: 'پورسانت', en: 'Commission (%)' }, type: FieldType.PERCENTAGE, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 7.8, nature: FieldNature.STANDARD },
   { key: 'auto_name_enabled', labels: { fa: 'نامگذاری خودکار', en: 'Auto Name' }, type: FieldType.CHECKBOX, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 8, nature: FieldNature.PREDEFINED, defaultValue: false },
+  { key: 'retail_quick_add_enabled', labels: { fa: 'نمایش در افزودن سریع', en: 'Show in Quick Add' }, type: FieldType.CHECKBOX, location: FieldLocation.BLOCK, blockId: 'retail_invoice', order: 1, nature: FieldNature.STANDARD, defaultValue: false },
+  { key: 'retail_display_order', labels: { fa: 'ترتیب نمایش', en: 'Display Order' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'retail_invoice', order: 2, nature: FieldNature.STANDARD },
 
   { key: 'total_sold_amount', labels: { fa: 'جمع مبلغ فروخته شده', en: 'Total Sold Amount' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'sales_info', order: 1, nature: FieldNature.SYSTEM, readonly: true, isTableColumn: false },
   { key: 'total_sold_quantity', labels: { fa: 'جمع واحد فروخته شده', en: 'Total Sold Quantity' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'sales_info', order: 2, nature: FieldNature.SYSTEM, readonly: true, isTableColumn: false },
@@ -261,6 +263,7 @@ const BLOCKS = {
     order: 3,
     type: BlockType.FIELD_GROUP,
   },
+  retail_invoice: { id: 'retail_invoice', titles: { fa: 'تنظیمات فاکتور فروشگاهی', en: 'Retail Invoice Settings' }, icon: 'ShoppingCartOutlined', order: 3.5, type: BlockType.FIELD_GROUP },
   product_stock_movements: {
     id: 'product_stock_movements',
     titles: { fa: 'ورود و خروج کالا', en: 'Inventory Movements' },
@@ -292,7 +295,7 @@ export const productsConfig: ModuleDefinition = {
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
   fields: fieldsArray,
-  blocks: [BLOCKS.baseInfo, BLOCKS.product_inventory, BLOCKS.sales_info, BLOCKS.product_stock_movements],
+  blocks: [BLOCKS.baseInfo, BLOCKS.product_inventory, BLOCKS.sales_info, BLOCKS.retail_invoice, BLOCKS.product_stock_movements],
   relatedTabs: [
     {
       id: 'product_customers',

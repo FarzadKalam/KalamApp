@@ -28,6 +28,17 @@ export const DEFAULT_HOME_SECTIONS: LandingSection[] = [
     },
   },
   {
+    id: 'cloud_access',
+    type: 'cloud_access',
+    enabled: true,
+    props: {
+      eyebrow: 'همیشه در دسترس',
+      title: 'کار شما در هر دستگاهی همراهتان است',
+      text: 'تازه سیستم ابری، سریع و بهینه برای موبایل است؛ از فروشگاه و دفتر تا خانه، اطلاعات سازمان همیشه همگام و در دسترس می‌ماند.',
+      highlights: ['داده‌های همگام در همه دستگاه‌ها', 'رابط لمسی و موبایل‌محور', 'دسترسی امن از هرجا'],
+    },
+  },
+  {
     id: 'stats',
     type: 'stats',
     enabled: true,

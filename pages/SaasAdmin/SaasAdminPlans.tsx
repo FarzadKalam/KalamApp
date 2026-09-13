@@ -168,6 +168,8 @@ const FEATURE_OPTIONS = [
   { id: 'own_payment_gateway', label: 'درگاه پرداخت اختصاصی سازمان' },
   { id: 'online_invoice_payment', label: 'پرداخت آنلاین فاکتورهای عمومی' },
   { id: 'online_catalog', label: 'کاتالوگ آنلاین' },
+  { id: 'retail_sales_invoice', label: 'فاکتور فروشگاهی سریع' },
+  { id: 'qr_scan', label: 'اسکن QR' },
   { id: 'instagram_inbox', label: 'صندوق اینستاگرام' },
   { id: CAMPAIGN_PLAN_FEATURES.sms, label: 'کمپین پیامکی' },
   { id: CAMPAIGN_PLAN_FEATURES.email, label: 'کمپین ایمیلی' },

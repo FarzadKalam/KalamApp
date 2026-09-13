@@ -25,6 +25,9 @@ import { applyInvoicePaymentAllocation } from "../utils/invoicePaymentAllocation
 import { runWriteWithCompatiblePayload } from "../utils/writeCompat";
 import { useContentCalendarPlanModule } from '../hooks/useContentCalendarFeature';
 import { CONTENT_CALENDAR_MODULE_ID } from '../modules/contentCalendarsConfig';
+import { useRetailSalesInvoiceFeature } from '../hooks/useRetailSalesInvoiceFeature';
+import RetailInvoiceWorkspace from '../components/invoices/RetailInvoiceWorkspace';
+import { Switch } from 'antd';
 
 const isStatementTimeoutError = (error: any) =>
   String(error?.code || "").trim() === "57014"
@@ -46,6 +49,8 @@ export const ModuleCreate = () => {
   const { message: messageApi } = App.useApp();
   const baseModuleConfig = moduleId ? MODULES[moduleId] : null;
   const { moduleConfig: planBaseModuleConfig } = useContentCalendarPlanModule(baseModuleConfig);
+  const { enabled: retailSalesInvoiceEnabled } = useRetailSalesInvoiceFeature();
+  const [retailMode, setRetailMode] = useState(false);
   const [permissionLoading, setPermissionLoading] = useState(true);
   const [canCreate, setCanCreate] = useState(true);
   const [instructionUsers, setInstructionUsers] = useState<any[]>([]);
@@ -126,6 +131,17 @@ export const ModuleCreate = () => {
   }, [moduleId]);
 
   useEffect(() => {
+    if (moduleId !== 'invoices' || !retailSalesInvoiceEnabled) return;
+    let active = true;
+    void supabase.from('company_settings').select('retail_invoice_settings').limit(1).maybeSingle()
+      .then(({ data }) => {
+        if (!active) return;
+        setRetailMode(data?.retail_invoice_settings?.default_create_mode === true);
+      });
+    return () => { active = false; };
+  }, [moduleId, retailSalesInvoiceEnabled]);
+
+  useEffect(() => {
     if (moduleId !== INSTRUCTIONS_MODULE_ID) return;
     let active = true;
     const loadInstructionActors = async () => {
@@ -184,8 +200,19 @@ export const ModuleCreate = () => {
     );
   }
 
+  if (moduleId === 'invoices' && retailSalesInvoiceEnabled && retailMode) {
+    return <RetailInvoiceWorkspace onClose={() => setRetailMode(false)} />;
+  }
+
   return (
     <div className="p-4 md:p-6 max-w-[1560px] mx-auto animate-fadeIn">
+
+        {moduleId === 'invoices' && retailSalesInvoiceEnabled ? (
+          <div className="mb-4 flex items-center justify-between rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 dark:border-blue-900 dark:bg-blue-950/30">
+            <div><div className="font-black">فاکتور فروشگاهی سریع</div><div className="text-xs text-slate-500">برای فروش لمسی و سریع، با سبدهای هم‌زمان</div></div>
+            <Switch checked={retailMode} onChange={setRetailMode} checkedChildren="فعال" unCheckedChildren="عادی" />
+          </div>
+        ) : null}
 
         <SmartForm
           module={moduleConfig}

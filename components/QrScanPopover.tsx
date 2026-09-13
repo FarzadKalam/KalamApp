@@ -5,6 +5,7 @@ import { QrcodeOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { BRANDING_UPDATED_EVENT } from '../theme/brandTheme';
 import { loadScopedCompanySettings } from '../utils/companySettings';
+import { hasQrScanFeature } from '../utils/saasPlanFeatures';
 
 interface QrScanResult {
   raw: string;
@@ -35,7 +36,7 @@ const loadQrScanEnabled = async (): Promise<boolean> => {
           cachedQrScanEnabled = false;
           return false;
         }
-        cachedQrScanEnabled = Boolean(data?.qr_scan_enabled);
+        cachedQrScanEnabled = Boolean(data?.qr_scan_enabled) && await hasQrScanFeature({ force: true });
         return cachedQrScanEnabled;
       } finally {
         qrScanEnabledPromise = null;

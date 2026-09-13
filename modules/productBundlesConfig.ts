@@ -74,6 +74,7 @@ const BLOCKS = {
       },
     ],
   },
+  retailInvoice: { id: 'retailInvoice', titles: { fa: 'تنظیمات فاکتور فروشگاهی', en: 'Retail Invoice Settings' }, icon: 'ShoppingCartOutlined', order: 1.5, type: BlockType.FIELD_GROUP },
 };
 
 export const productBundlesConfig: ModuleDefinition = {
@@ -120,6 +121,8 @@ export const productBundlesConfig: ModuleDefinition = {
     },
     
     { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 2.1, nature: FieldNature.STANDARD, isTableColumn: true },
+    { key: 'retail_quick_add_enabled', labels: { fa: 'نمایش در افزودن سریع', en: 'Show in Quick Add' }, type: FieldType.CHECKBOX, location: FieldLocation.BLOCK, blockId: 'retailInvoice', order: 1, nature: FieldNature.STANDARD, defaultValue: false },
+    { key: 'retail_display_order', labels: { fa: 'ترتیب نمایش', en: 'Display Order' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'retailInvoice', order: 2, nature: FieldNature.STANDARD },
     {
       key: 'notes',
       labels: { fa: 'توضیحات', en: 'Description' },
@@ -140,5 +143,5 @@ export const productBundlesConfig: ModuleDefinition = {
       nature: FieldNature.SYSTEM,
     },
   ],
-  blocks: [BLOCKS.baseInfo, BLOCKS.products],
+  blocks: [BLOCKS.baseInfo, BLOCKS.retailInvoice, BLOCKS.products],
 };

@@ -9,6 +9,7 @@ import {
   FeatureSliderSection,
 } from './sections/sectionsC';
 import { HeroTreeSection, HrSection, AccountingSection, ProcessShowcaseSection } from './sections/sectionsD';
+import CloudAccessSection from './sections/CloudAccessSection';
 import PricingSection from './shared/PricingSection';
 
 // ──────────────────────────────────────────────────
@@ -44,6 +45,10 @@ const iconItemFields: EditorField[] = [
 ];
 
 export const SECTION_REGISTRY: Record<SectionType, SectionDef> = {
+  cloud_access: {
+    type: 'cloud_access', labelFa: 'دسترسی ابری در همه دستگاه‌ها', description: 'نمایش تجربهٔ یکپارچهٔ گوشی، تبلت و رایانه.', Component: CloudAccessSection,
+    editor: [...baseHeadingFields, { key: 'highlights', label: 'مزیت‌ها', type: 'string-list', itemLabel: 'مزیت' }],
+  },
   hero_tree: {
     type: 'hero_tree',
     labelFa: 'هیرو اکوسیستم محصول (تعاملی)',

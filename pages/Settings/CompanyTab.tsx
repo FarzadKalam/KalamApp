@@ -13,6 +13,7 @@ import {
 } from '../../utils/companySettings';
 import ResilientImage from '../../components/common/ResilientImage';
 import PrintLetterheadDesignerModal from '../../components/settings/PrintLetterheadDesignerModal';
+import { hasQrScanFeature } from '../../utils/saasPlanFeatures';
 import {
   getPrintLetterheadBySlotId,
   getPrintLetterheadSlotLabel,
@@ -30,12 +31,14 @@ const CompanyTab: React.FC = () => {
   const [iconUrl, setIconUrl] = useState<string | null>(null);
   const [signatureUrl, setSignatureUrl] = useState<string | null>(null);
   const [stampUrl, setStampUrl] = useState<string | null>(null);
+  const [qrScanFeatureEnabled, setQrScanFeatureEnabled] = useState(false);
   const [printLetterheads, setPrintLetterheads] = useState<PrintLetterheadConfig[]>(normalizePrintLetterheads([]));
   const [editingLetterheadSlotId, setEditingLetterheadSlotId] = useState<PrintLetterheadSlotId | null>(null);
   const managerTitle = String(Form.useWatch('manager_title', form) || '').trim() || DEFAULT_MANAGER_TITLE;
 
   useEffect(() => {
     fetchData();
+    void hasQrScanFeature({ force: true }).then(setQrScanFeatureEnabled).catch(() => setQrScanFeatureEnabled(false));
   }, []);
 
   const activeLetterhead = useMemo(
@@ -360,9 +363,9 @@ const CompanyTab: React.FC = () => {
         <Form.Item label={<span className="dark:text-gray-300">واحد پولی</span>} name="currency_code" rules={[{ required: true }]}>
           <Select className="dark:bg-white/5 dark:border-gray-700 dark:text-white" options={CURRENCY_OPTIONS} />
         </Form.Item>
-        <Form.Item name="qr_scan_enabled" valuePropName="checked" className="md:col-span-2">
-          <Checkbox className="dark:text-gray-300">اسکن qr فعال باشد</Checkbox>
-        </Form.Item>
+        {qrScanFeatureEnabled ? <Form.Item name="qr_scan_enabled" valuePropName="checked" className="md:col-span-2">
+          <Checkbox className="dark:text-gray-300">اسکن QR فعال باشد</Checkbox>
+        </Form.Item> : null}
 
         <Form.Item
           label={<span className="dark:text-gray-300">عنوان مدیر</span>}
