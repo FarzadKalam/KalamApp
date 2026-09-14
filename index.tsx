@@ -55,6 +55,41 @@ const persistInstalledPwaStorage = () => {
   void navigator.storage.persist().catch(() => undefined);
 };
 
+const DYNAMIC_IMPORT_FAILURE_PATTERN = /failed to fetch dynamically imported module|error loading dynamically imported module|importing a module script failed/i;
+
+const isDynamicImportFailure = (reason: unknown) => {
+  const message = reason instanceof Error ? reason.message : String(reason || "");
+  return DYNAMIC_IMPORT_FAILURE_PATTERN.test(message);
+};
+
+const recoverFromDynamicImportFailure = () => {
+  // هنگام جابه‌جایی build یا قطع گذرای شبکه، ممکن است فایل chunk موردنیازِ
+  // صفحه در همان لحظه دریافت نشود. یک بازخوانی کنترل‌شده شِل تازه را می‌گیرد؛
+  // marker از حلقهٔ بازخوانی در اتصال واقعاً خراب جلوگیری می‌کند.
+  const reloadMarker = `tazesystem:dynamic-import-reload:${__TAZESYSTEM_APP_VERSION__}`;
+  try {
+    if (window.sessionStorage.getItem(reloadMarker)) return;
+    window.sessionStorage.setItem(reloadMarker, "1");
+  } catch {
+    // اگر Session Storage در دسترس نباشد، مرورگر باز هم یک تلاش بازیابی دارد.
+  }
+  window.location.reload();
+};
+
+if (import.meta.env.PROD) {
+  window.addEventListener("vite:preloadError", (event) => {
+    if (!isDynamicImportFailure(event.payload)) return;
+    event.preventDefault();
+    recoverFromDynamicImportFailure();
+  });
+
+  window.addEventListener("unhandledrejection", (event) => {
+    if (!isDynamicImportFailure(event.reason)) return;
+    event.preventDefault();
+    recoverFromDynamicImportFailure();
+  });
+}
+
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     const serviceWorkerUrl = `${import.meta.env.BASE_URL}sw.js?v=${encodeURIComponent(__TAZESYSTEM_APP_VERSION__)}`;

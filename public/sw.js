@@ -127,6 +127,10 @@ const buildStaticAssetFallbackResponse = (status = 504) =>
     },
   });
 
+const waitForRetry = (milliseconds) => new Promise((resolve) => {
+  setTimeout(resolve, milliseconds);
+});
+
 const limitCacheEntries = async (cacheName, maxEntries) => {
   const cache = await caches.open(cacheName);
   const keys = await cache.keys();
@@ -191,9 +195,25 @@ const handleStaticAssetRequest = async (request) => {
     return cached;
   }
 
-  const networkPromise = fetch(request)
-    .then((response) => putInCache(ASSET_CACHE, request, response, MAX_ASSET_ENTRIES))
-    .catch(() => undefined);
+  const fetchFromNetwork = async () => {
+    // درخواست chunkهای برنامه در اتصال‌های ناپایدار گاهی بدون پاسخ قطع می‌شود.
+    // یک تلاش کوتاهِ دوم، بدون تأخیر برای پاسخ‌های معتبر یا استفاده از cache،
+    // جلوی خطای «dynamic import» را می‌گیرد.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const response = await fetch(request);
+        if (response.ok || response.status < 500 || attempt === 1) {
+          return putInCache(ASSET_CACHE, request, response, MAX_ASSET_ENTRIES);
+        }
+      } catch {
+        // تلاش دوم فقط برای شکست‌های گذرای شبکه انجام می‌شود.
+      }
+      await waitForRetry(300);
+    }
+    return undefined;
+  };
+
+  const networkPromise = fetchFromNetwork();
 
   if (cached) {
     void networkPromise;

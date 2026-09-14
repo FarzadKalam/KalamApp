@@ -189,8 +189,12 @@ if timeout "$COMMAND_TIMEOUT_SECONDS" docker logs --since "$LOG_WINDOW" supabase
   alert_once 'postgrest-statement-timeout' "در ${LOG_WINDOW} اخیر، query دیتابیس از سقف زمان PostgREST عبور کرده است."
 fi
 
-if timeout "$COMMAND_TIMEOUT_SECONDS" docker logs --since "$LOG_WINDOW" supabase-storage 2>&1 | grep -Eq '"statusCode":500|ECONNREFUSED|S3Error'; then
-  alert_once 'storage-backend-unreachable' "در ${LOG_WINDOW} اخیر، Storage به فضای ذخیره‌سازی پشت‌صحنه متصل نشده یا پاسخ ۵xx داده است."
+if timeout "$COMMAND_TIMEOUT_SECONDS" docker logs --since "$LOG_WINDOW" supabase-storage 2>&1 | grep -Eq '"name":"AccessDenied"|"Code":"AccessDenied"|Access Denied'; then
+  alert_once 'storage-backend-access-denied' "در ${LOG_WINDOW} اخیر، Storage برای نوشتن در فضای ذخیره‌سازی مجوز نگرفته است؛ دسترسی S3 را بررسی کنید."
+elif timeout "$COMMAND_TIMEOUT_SECONDS" docker logs --since "$LOG_WINDOW" supabase-storage 2>&1 | grep -Eq 'ECONNREFUSED|S3Error|ENOTFOUND|EAI_AGAIN|ETIMEDOUT'; then
+  alert_once 'storage-backend-unreachable' "در ${LOG_WINDOW} اخیر، Storage به فضای ذخیره‌سازی پشت‌صحنه متصل نشده است."
+elif timeout "$COMMAND_TIMEOUT_SECONDS" docker logs --since "$LOG_WINDOW" supabase-storage 2>&1 | grep -Eq '"statusCode":500'; then
+  alert_once 'storage-server-error' "در ${LOG_WINDOW} اخیر، Storage پاسخ خطای ۵xx داده است؛ لاگ Storage را بررسی کنید."
 fi
 
 IFS=',' read -r -a ssl_hosts <<< "$SSL_HOSTS"
