@@ -15,15 +15,32 @@ const hasVisibleBlockingOverlay = () => {
 
 export const releaseTransientOverlayLocks = () => {
   if (typeof document === 'undefined') return;
+  // Never change document-level interaction state while a visible overlay owns
+  // it. Releasing it early lets a closing/opening Drawer leave the document in
+  // an inconsistent state on mobile browsers.
+  if (hasVisibleBlockingOverlay()) return;
+
+  // Ant Design may keep a faded mask mounted until an animation completes.
+  // A transparent mask can still absorb every tap and looks exactly like a
+  // frozen page, so make only non-visible remnants inert.
+  document.querySelectorAll<HTMLElement>('.ant-drawer-mask, .ant-modal-mask').forEach((mask) => {
+    if (!isElementVisible(mask) && mask.style.pointerEvents !== 'none') {
+      mask.style.pointerEvents = 'none';
+    }
+  });
   document.documentElement.style.pointerEvents = '';
   document.body.style.pointerEvents = '';
   document.body.style.touchAction = '';
   document.body.style.userSelect = '';
 
-  if (hasVisibleBlockingOverlay()) return;
   document.body.classList.remove('ant-scrolling-effect');
   document.body.style.overflow = '';
+  document.body.style.overflowX = '';
+  document.body.style.overflowY = '';
+  document.body.style.position = '';
   document.body.style.width = '';
+  document.body.style.paddingRight = '';
+  document.body.style.paddingLeft = '';
 };
 
 export const scheduleOverlayLockRelease = (delay = 180) => {

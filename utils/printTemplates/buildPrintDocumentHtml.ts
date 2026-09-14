@@ -3,6 +3,7 @@ import { getCompactPrintCellsFitScript } from './fitCompactPrintCells';
 import { getStaticCustomPrintPaginationScript } from './staticPrintPagination';
 import { getNativeTablePaginationScript } from './nativeTablePagination';
 import { NATIVE_PRINT_BASE_HREF_TOKEN, NATIVE_PRINT_FONT_CSS_TOKEN } from './nativePrintFlow';
+import { toImageTransformUrl } from '../imagePreview';
 import peydaExtraLightUrl from '../../font/peyada/PeydaWeb-ExtraLight.woff2?url';
 import peydaRegularUrl from '../../font/peyada/PeydaWeb-Regular.woff2?url';
 import peydaSemiBoldUrl from '../../font/peyada/PeydaWeb-SemiBold.woff2?url';
@@ -36,7 +37,11 @@ const THEME_VARIABLE_FALLBACKS: Record<string, string> = {
 };
 
 const NATIVE_PRINT_MARGIN_TEMPLATE_IDS = ['kalamapp-gotenberg-header', 'kalamapp-gotenberg-footer'];
-const PRINT_IMAGE_MAX_BYTES = 12 * 1024 * 1024;
+const PRINT_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+// Images are encoded as data URLs before crossing the Edge Function boundary.
+// Keep the aggregate binary payload comfortably below its practical request
+// limit: base64 adds roughly one third, and the document also includes fonts.
+const PRINT_IMAGE_TOTAL_MAX_BYTES = 10 * 1024 * 1024;
 const PRINT_IMAGE_FETCH_TIMEOUT_MS = 8_000;
 
 let embeddedFontCssPromise: Promise<string> | null = null;
@@ -189,28 +194,40 @@ const replaceInlineStyleImageSources = (html: string, dataUrlBySource: Map<strin
     return `style=${quote}${nextStyle}${quote}`;
   });
 
-const fetchPrintImageDataUrl = async (url: string) => {
+const getPdfOptimizedImageUrl = (url: string) => toImageTransformUrl(url, 'printHero') || url;
+
+const fetchPrintImageDataUrl = async (url: string, remainingByteBudget = PRINT_IMAGE_MAX_BYTES) => {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), PRINT_IMAGE_FETCH_TIMEOUT_MS);
+  const optimizedUrl = getPdfOptimizedImageUrl(url);
 
   try {
     // The PDF renderer runs in a different network context. Resolve an image
     // in the user's browser first, where signed URLs and local blob URLs are
     // valid, then send an inline copy to Chromium.
-    const response = await fetch(url, { credentials: 'same-origin', signal: controller.signal });
-    if (!response.ok) return url;
+    let response = await fetch(optimizedUrl, { credentials: 'same-origin', signal: controller.signal });
+    // Some installations deliberately leave image transformations disabled.
+    // A public original is still preferable to dropping the image entirely.
+    if (!response.ok && optimizedUrl !== url) {
+      response = await fetch(url, { credentials: 'same-origin', signal: controller.signal });
+    }
+    if (!response.ok) return optimizedUrl;
 
     const contentType = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-    if (!contentType.startsWith('image/')) return url;
+    if (!contentType.startsWith('image/')) return optimizedUrl;
 
     const bytes = await response.arrayBuffer();
-    if (bytes.byteLength === 0 || bytes.byteLength > PRINT_IMAGE_MAX_BYTES) return url;
+    if (
+      bytes.byteLength === 0 ||
+      bytes.byteLength > PRINT_IMAGE_MAX_BYTES ||
+      bytes.byteLength > remainingByteBudget
+    ) return optimizedUrl;
 
     return `data:${contentType};base64,${arrayBufferToBase64(bytes)}`;
   } catch {
     // Public images that do not allow CORS are still left for the renderer to
     // load directly. This fallback keeps custom external templates working.
-    return url;
+    return optimizedUrl;
   } finally {
     window.clearTimeout(timeout);
   }
@@ -229,9 +246,19 @@ export const materializePrintImageAssets = async (sourceHtml: string, origin: st
     .map((source) => resolveAssetUrl(source, origin))));
   if (sourceUrls.length === 0) return sourceHtml;
 
-  const dataUrlBySource = new Map(await Promise.all(
-    sourceUrls.map(async (source) => [source, await fetchPrintImageDataUrl(source)] as const),
-  ));
+  let remainingByteBudget = PRINT_IMAGE_TOTAL_MAX_BYTES;
+  const dataUrlBySource = new Map<string, string>();
+  // Process sequentially so every catalog image shares one document budget.
+  // This avoids a large catalog turning several individually valid images into
+  // an Edge Function request that cannot be accepted.
+  for (const source of sourceUrls) {
+    const materialized = await fetchPrintImageDataUrl(source, remainingByteBudget);
+    dataUrlBySource.set(source, materialized);
+    if (materialized.startsWith('data:')) {
+      const base64 = materialized.slice(materialized.indexOf(',') + 1);
+      remainingByteBudget -= Math.floor((base64.length * 3) / 4);
+    }
+  }
   return replaceInlineStyleImageSources(
     replaceImageSources(sourceHtml, dataUrlBySource, origin),
     dataUrlBySource,

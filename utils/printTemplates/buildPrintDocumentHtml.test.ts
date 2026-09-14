@@ -54,4 +54,25 @@ describe('materializePrintImageAssets', () => {
     expect(result).toContain('background-image:url(data:image/png;base64,iVBORw==)');
     expect(result).not.toContain('src="https://assets.example.test/catalog.png"');
   });
+
+  it('uses the shared print-sized image variant before embedding a public storage asset', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(new Uint8Array([137, 80, 78, 71]), {
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await materializePrintImageAssets(
+      '<img src="https://api.example.test/storage/v1/object/public/images/catalog.png" alt="تصویر کاتالوگ" />',
+      'https://app.example.test',
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.example.test/storage/v1/render/image/public/images/catalog.png?width=1400&quality=68&resize=cover',
+      expect.objectContaining({ credentials: 'same-origin' }),
+    );
+    expect(result).toContain('src="data:image/png;base64,iVBORw=="');
+  });
 });

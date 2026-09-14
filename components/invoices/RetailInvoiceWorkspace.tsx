@@ -34,6 +34,7 @@ import {
   getCachedAuthUser,
   fetchSessionBootstrap,
 } from "../../utils/sessionCache";
+import { scheduleOverlayLockRelease } from "../../utils/overlayLocks";
 
 type Item = {
   key: string;
@@ -100,6 +101,10 @@ export default function RetailInvoiceWorkspace({
   const [saving, setSaving] = useState(false);
   const [ready, setReady] = useState(false);
   const [retailSettings, setRetailSettings] = useState<Record<string, any>>({});
+  const [customerLookupState, setCustomerLookupState] = useState<
+    "idle" | "looking" | "found" | "new" | "ambiguous"
+  >("idle");
+  const customerLookupRequestRef = useRef(0);
   const cart = carts.find((item) => item.id === activeId) || carts[0];
   const update = (patch: Partial<Cart>) =>
     setCarts((all) =>
@@ -393,19 +398,43 @@ export default function RetailInvoiceWorkspace({
     setQuery(data.name);
     setCatalog([{ ...data, source }]);
   };
-  const findCustomer = async () => {
-    const value = String(cart.mobile || "").replace(/\D/g, "");
-    if (value.length < 8) return;
+  const findCustomer = async (mobile: string) => {
+    const value = String(mobile || "").replace(/\D/g, "");
+    const requestId = ++customerLookupRequestRef.current;
+    // Iranian mobile numbers are normally entered as 09xxxxxxxxx. Do not run
+    // a broad partial search while someone is still typing.
+    if (value.length !== 11 || !value.startsWith("09")) {
+      setCustomerLookupState("idle");
+      return;
+    }
+    setCustomerLookupState("looking");
+    const normalizedInternational = `+98${value.slice(1)}`;
+    const compactInternational = `98${value.slice(1)}`;
     const { data } = await supabase
       .from("customers")
-      .select("id,full_name,mobile_1")
-      .ilike("mobile_1", `%${value}%`)
-      .limit(3);
+      .select("id,full_name,prefix,first_name,last_name,mobile_1")
+      .in("mobile_1", [value, normalizedInternational, compactInternational])
+      .limit(2);
+    if (requestId !== customerLookupRequestRef.current) return;
     if (data?.length === 1) {
-      update({ customer_id: data[0].id });
-      message.success(`مشتری «${data[0].full_name}» انتخاب شد.`);
+      const customer = data[0];
+      update({
+        customer_id: customer.id,
+        prefix: customer.prefix || undefined,
+        first_name: customer.first_name || undefined,
+        last_name: customer.last_name || undefined,
+      });
+      setCustomerLookupState("found");
+      return;
     }
+    setCustomerLookupState(data?.length ? "ambiguous" : "new");
   };
+  useEffect(() => {
+    if (cart?.general) return;
+    const mobile = String(cart?.mobile || "");
+    const timer = window.setTimeout(() => void findCustomer(mobile), 350);
+    return () => window.clearTimeout(timer);
+  }, [cart?.general, cart?.id, cart?.mobile]);
   const save = async () => {
     if (!cart.items.length) {
       message.warning("حداقل یک قلم انتخاب کنید.");
@@ -632,11 +661,14 @@ export default function RetailInvoiceWorkspace({
               <Input
                 placeholder="شماره تماس مشتری"
                 value={cart.mobile}
-                onBlur={() => void findCustomer()}
                 onChange={(event) =>
                   update({ mobile: event.target.value, customer_id: undefined })
                 }
               />
+              {customerLookupState === "looking" ? <span className="text-xs text-slate-500">در حال بررسی مشتری…</span> : null}
+              {customerLookupState === "found" ? <span className="text-xs text-emerald-600">مشتری موجود انتخاب شد.</span> : null}
+              {customerLookupState === "new" ? <span className="text-xs text-amber-600">این شماره در سیستم ثبت نیست؛ با تکمیل نام، مشتری جدید ساخته می‌شود.</span> : null}
+              {customerLookupState === "ambiguous" ? <span className="text-xs text-amber-600">بیش از یک مشتری با این شماره پیدا شد؛ لطفاً مشتری را بررسی کنید.</span> : null}
               <SmartFieldRenderer
                 field={customerField("prefix")}
                 value={cart.prefix}
@@ -787,6 +819,10 @@ export default function RetailInvoiceWorkspace({
         height="75vh"
         open={detailsOpen}
         onClose={() => setDetailsOpen(false)}
+        destroyOnHidden
+        afterOpenChange={(nextOpen) => {
+          if (!nextOpen) scheduleOverlayLockRelease();
+        }}
       >
         {lineSummary}
       </Drawer>
