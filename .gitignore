@@ -17,6 +17,11 @@ dist-ssr
 .env.deploy
 public/version.json
 
+# One-off client deliverables generated locally; they are not KalamApp source files.
+/deliverables/
+/create-proposal-docx.js
+/create-proposal-pdf.js
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
