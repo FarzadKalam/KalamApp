@@ -197,6 +197,27 @@ const rpc = async (
   return data;
 };
 
+const rpcAsAuthenticatedUser = async (
+  req: Request,
+  urlBase: string,
+  key: string,
+  name: string,
+  body: Record<string, any>,
+) => {
+  const token = String(req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
+  if (!token) throw new Error("نشست کاربر معتبر نیست.");
+  const res = await fetch(`${trimSlashEnd(urlBase)}/rest/v1/rpc/${name}`, {
+    method: "POST",
+    headers: { ...h(key), Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let data: any = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!res.ok) throw new Error(typeof data?.message === "string" ? data.message : text || `RPC ${res.status}`);
+  return data;
+};
+
 const getInvoiceByPublicCode = async (
   urlBase: string,
   key: string,
@@ -450,6 +471,15 @@ const buildAiTopupReturnUrl = (tx: any, status: string) => {
   return `${path}${suffix}tab=ai&ai_credit=${enc(status)}`;
 };
 
+const buildSaasAccountOrderReturnUrl = (tx: any, status: string) => {
+  const origin = trimSlashEnd(String(tx?.metadata?.return_origin || Deno.env.get("APP_ORIGIN") || "").trim());
+  const safeOrigin = normalizeSafeReturnOrigin(origin);
+  const base = safeOrigin || "/settings";
+  const path = base.startsWith("http") ? `${base}/settings` : base;
+  const suffix = path.includes("?") ? "&" : "?";
+  return `${path}${suffix}tab=account&purchase=${enc(status)}`;
+};
+
 const buildAccountCardReturnUrl = (tx: any, status: string) => {
   const origin = trimSlashEnd(
     String(
@@ -466,6 +496,8 @@ const buildAccountCardReturnUrl = (tx: any, status: string) => {
 const buildPaymentReturnUrl = (tx: any, status: string) =>
   String(tx?.purpose || "") === "ai_topup"
     ? buildAiTopupReturnUrl(tx, status)
+    : String(tx?.purpose || "") === "saas_account_order"
+      ? buildSaasAccountOrderReturnUrl(tx, status)
     : String(tx?.purpose || "") === "online_account_card"
       ? buildAccountCardReturnUrl(tx, status)
       : buildInvoiceReturnUrl(tx, status);
@@ -809,6 +841,97 @@ const createAiCreditTopup = async (
         error_message: String(err?.message || err),
       }),
     }).catch(() => null);
+    throw err;
+  }
+};
+
+const createSaasAccountOrderPayment = async (
+  req: Request,
+  urlBase: string,
+  key: string,
+  centralMerchantId: string,
+  body: any,
+) => {
+  const { profile } = await getAuthenticatedProfile(req, urlBase, key);
+  if (!centralMerchantId) throw new Error("Merchant ID درگاه مرکزی تازه سیستم تنظیم نشده است.");
+  const order = await rpcAsAuthenticatedUser(req, urlBase, key, "create_current_saas_order", {
+    p_items: Array.isArray(body?.items) ? body.items : [],
+  });
+  const orderId = String(order?.order_id || "").trim();
+  const amountIrt = Math.round(Number(order?.total_irt || 0));
+  if (!orderId || !Number.isFinite(amountIrt) || amountIrt <= 0) throw new Error("سبد خرید معتبر نیست.");
+  const mode = String(Deno.env.get("ZARINPAL_MODE") || "production") === "sandbox" ? "sandbox" : "production";
+  const paymentDomain = trimSlashEnd(String(Deno.env.get("PAYMENT_PUBLIC_URL") || Deno.env.get("PUBLIC_FUNCTIONS_URL") || "").trim());
+  if (!paymentDomain) throw new Error("دامنه callback درگاه مرکزی تنظیم نشده است.");
+  const callbackPath = normalizeCallbackPath(Deno.env.get("PAYMENT_CALLBACK_PATH") || "/payment/callback");
+  const returnOrigin = (await getTenantPublicOrigin(urlBase, key, String(profile.org_id || ""), true)) || normalizeSafeReturnOrigin(body?.return_origin);
+  const [tx] = await rest(urlBase, key, "payment_transactions", {
+    method: "POST",
+    body: JSON.stringify([{
+      org_id: profile.org_id, created_by: profile.id, gateway_scope: "system", provider: "zarinpal",
+      purpose: "saas_account_order", module_id: null, record_id: null, amount: amountIrt, currency: "IRT", status: "pending", callback_url: "",
+      description: `خرید حساب تازه سیستم ${amountIrt.toLocaleString("fa-IR")} تومان`,
+      metadata: { saas_order_id: orderId, return_origin: returnOrigin, mode, source: "saas_account_center" },
+    }]),
+  });
+  const callbackUrl = `${paymentDomain}${callbackPath}?tx=${enc(tx.id)}`;
+  try {
+    const zp = await zarinpalRequest(centralMerchantId, mode, {
+      amount: amountIrt, currency: "IRT", callback_url: callbackUrl, description: tx.description,
+      metadata: { order_id: tx.id, purpose: "saas_account_order" },
+    });
+    const authority = String(zp?.data?.authority || "").trim();
+    if (Number(zp?.data?.code) !== 100 || !authority) throw new Error(zp?.errors?.message || "درگاه مرکزی درخواست پرداخت را نپذیرفت.");
+    const paymentUrl = `${zarinpalBase(mode)}/pg/StartPay/${authority}`;
+    await rest(urlBase, key, `payment_transactions?id=eq.${enc(tx.id)}`, { method: "PATCH", body: JSON.stringify({ status: "redirected", authority, callback_url: callbackUrl, start_url: paymentUrl, request_payload: zp }) });
+    return json(200, { success: true, payment_url: paymentUrl, transaction_id: tx.id, order_id: orderId });
+  } catch (err: any) {
+    await rest(urlBase, key, `payment_transactions?id=eq.${enc(tx.id)}`, { method: "PATCH", body: JSON.stringify({ status: "failed", callback_url: callbackUrl, error_message: String(err?.message || err) }) }).catch(() => null);
+    throw err;
+  }
+};
+
+const createSaasBillingWalletTopup = async (
+  req: Request,
+  urlBase: string,
+  key: string,
+  centralMerchantId: string,
+  body: any,
+) => {
+  const { profile } = await getAuthenticatedProfile(req, urlBase, key);
+  if (!centralMerchantId) throw new Error("Merchant ID درگاه مرکزی تازه سیستم تنظیم نشده است.");
+  const prepared = await rpcAsAuthenticatedUser(req, urlBase, key, "prepare_current_saas_billing_wallet_topup", {
+    p_amount_irt: Math.round(Number(body?.amount_irt ?? body?.amountToman ?? body?.amount ?? 0)),
+  });
+  const amountIrt = Math.round(Number(prepared?.amount_irt || 0));
+  if (!Number.isFinite(amountIrt) || amountIrt <= 0) throw new Error("مبلغ شارژ کیف پول معتبر نیست.");
+  const mode = String(Deno.env.get("ZARINPAL_MODE") || "production") === "sandbox" ? "sandbox" : "production";
+  const paymentDomain = trimSlashEnd(String(Deno.env.get("PAYMENT_PUBLIC_URL") || Deno.env.get("PUBLIC_FUNCTIONS_URL") || "").trim());
+  if (!paymentDomain) throw new Error("دامنه callback درگاه مرکزی تنظیم نشده است.");
+  const callbackPath = normalizeCallbackPath(Deno.env.get("PAYMENT_CALLBACK_PATH") || "/payment/callback");
+  const returnOrigin = (await getTenantPublicOrigin(urlBase, key, String(profile.org_id || ""), true)) || normalizeSafeReturnOrigin(body?.return_origin);
+  const [tx] = await rest(urlBase, key, "payment_transactions", {
+    method: "POST",
+    body: JSON.stringify([{
+      org_id: profile.org_id, created_by: profile.id, gateway_scope: "system", provider: "zarinpal",
+      purpose: "saas_billing_wallet_topup", module_id: null, record_id: null, amount: amountIrt, currency: "IRT", status: "pending", callback_url: "",
+      description: `شارژ کیف پول سازمان ${amountIrt.toLocaleString("fa-IR")} تومان`,
+      metadata: { wallet_amount_irt: amountIrt, return_origin: returnOrigin, mode, source: "saas_account_center" },
+    }]),
+  });
+  const callbackUrl = `${paymentDomain}${callbackPath}?tx=${enc(tx.id)}`;
+  try {
+    const zp = await zarinpalRequest(centralMerchantId, mode, {
+      amount: amountIrt, currency: "IRT", callback_url: callbackUrl, description: tx.description,
+      metadata: { order_id: tx.id, purpose: "saas_billing_wallet_topup" },
+    });
+    const authority = String(zp?.data?.authority || "").trim();
+    if (Number(zp?.data?.code) !== 100 || !authority) throw new Error(zp?.errors?.message || "درگاه مرکزی درخواست شارژ را نپذیرفت.");
+    const paymentUrl = `${zarinpalBase(mode)}/pg/StartPay/${authority}`;
+    await rest(urlBase, key, `payment_transactions?id=eq.${enc(tx.id)}`, { method: "PATCH", body: JSON.stringify({ status: "redirected", authority, callback_url: callbackUrl, start_url: paymentUrl, request_payload: zp }) });
+    return json(200, { success: true, payment_url: paymentUrl, transaction_id: tx.id });
+  } catch (err: any) {
+    await rest(urlBase, key, `payment_transactions?id=eq.${enc(tx.id)}`, { method: "PATCH", body: JSON.stringify({ status: "failed", callback_url: callbackUrl, error_message: String(err?.message || err) }) }).catch(() => null);
     throw err;
   }
 };
@@ -1291,6 +1414,14 @@ const handleCallback = async (
         authority: authority || tx.authority,
         ref_id: data?.ref_id ? String(data.ref_id) : tx.ref_id,
       });
+    } else if (String(tx?.purpose || "") === "saas_billing_wallet_topup") {
+      await rpc(urlBase, key, "apply_saas_billing_wallet_topup_payment_transaction", {
+        p_transaction_id: tx.id,
+      });
+    } else if (String(tx?.purpose || "") === "saas_account_order") {
+      await rpc(urlBase, key, "apply_saas_order_payment_transaction", {
+        p_transaction_id: tx.id,
+      });
     } else if (String(tx?.purpose || "") === "online_account_card") {
       await rpc(urlBase, key, "apply_online_account_card_payment_transaction", {
         p_transaction_id: tx.id,
@@ -1465,6 +1596,14 @@ const verifyCallbackPayload = async (
         authority: authority || tx.authority,
         ref_id: data?.ref_id ? String(data.ref_id) : tx.ref_id,
       });
+    } else if (String(tx?.purpose || "") === "saas_billing_wallet_topup") {
+      await rpc(urlBase, key, "apply_saas_billing_wallet_topup_payment_transaction", {
+        p_transaction_id: tx.id,
+      });
+    } else if (String(tx?.purpose || "") === "saas_account_order") {
+      await rpc(urlBase, key, "apply_saas_order_payment_transaction", {
+        p_transaction_id: tx.id,
+      });
     } else if (String(tx?.purpose || "") === "online_account_card") {
       await rpc(urlBase, key, "apply_online_account_card_payment_transaction", {
         p_transaction_id: tx.id,
@@ -1572,6 +1711,24 @@ Deno.serve(async (req: Request) => {
     }
     if (action === "create_ai_credit_topup") {
       return await createAiCreditTopup(
+        req,
+        urlBase,
+        serviceKey,
+        merchantId,
+        body,
+      );
+    }
+    if (action === "create_saas_account_order") {
+      return await createSaasAccountOrderPayment(
+        req,
+        urlBase,
+        serviceKey,
+        merchantId,
+        body,
+      );
+    }
+    if (action === "create_saas_billing_wallet_topup") {
+      return await createSaasBillingWalletTopup(
         req,
         urlBase,
         serviceKey,

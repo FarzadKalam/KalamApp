@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { Tabs, Empty, Spin } from 'antd';
-import { BankOutlined, UsergroupAddOutlined, ClusterOutlined, FunctionOutlined, ApartmentOutlined, LinkOutlined, SettingOutlined, FileTextOutlined } from '@ant-design/icons';
+import { BankOutlined, UsergroupAddOutlined, ClusterOutlined, FunctionOutlined, ApartmentOutlined, LinkOutlined, SettingOutlined, FileTextOutlined, CreditCardOutlined } from '@ant-design/icons';
 import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
 import CompanyTab from './CompanyTab';
 import UsersTab from './UsersTab';
@@ -14,6 +14,7 @@ import ModuleSettingsTab from './ModuleSettingsTab';
 import PrintTemplatesTab from './PrintTemplatesTab';
 import AiSettingsTab from './AiSettingsTab';
 import ReservationSettingsTab from './ReservationSettingsTab';
+import AccountStatusTab from './AccountStatusTab';
 import { useSearchParams } from 'react-router-dom';
 import { useReservationsFeature } from '../../hooks/useReservationsFeature';
 
@@ -55,6 +56,7 @@ const SettingsPage: React.FC = () => {
               workflows: false,
               print_templates: false,
               reservation_settings: false,
+              account: false,
             });
           } else {
             setTabPermissions({
@@ -67,6 +69,7 @@ const SettingsPage: React.FC = () => {
               ai: fields.ai !== false && fields.ai_settings !== false,
               print_templates: fields.print_templates !== false,
               reservation_settings: fields.reservation_settings !== false,
+              account: fields.account !== false,
               workflows:
                 fields.workflows !== false &&
                 workflowsPerms.view !== false &&
@@ -98,6 +101,11 @@ const SettingsPage: React.FC = () => {
         key: 'reservation_settings',
         label: <span className="flex items-center gap-2 text-base"><SettingOutlined /> تنظیمات رزرواسیون</span>,
         children: <ReservationSettingsTab />,
+      },
+      {
+        key: 'account',
+        label: <span className="flex items-center gap-2 text-base"><CreditCardOutlined /> وضعیت حساب</span>,
+        children: <AccountStatusTab />,
       },
       {
         key: 'company',

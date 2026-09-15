@@ -23,6 +23,9 @@ export const saasDemoRequestsConfig: ModuleDefinition = {
   nature: ModuleNature.CRM,
   table: 'saas_onboarding_requests',
   systemManaged: true,
+  // درخواست دمو دادهٔ tenant نیست؛ جزئیات آن در Drawer مدیریتی SaaS باز می‌شود.
+  disableDetailView: true,
+  listDetailSurface: 'saas_org_drawer',
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
   // ویرایش inline از طریق __saas_admin.edit_requests کنترل می‌شود (ModuleShow.tsx)

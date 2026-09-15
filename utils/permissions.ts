@@ -85,6 +85,7 @@ export const READY_TEXTS_PERMISSION_FIELDS = [
 ] as const;
 
 export const SETTINGS_TAB_PERMISSIONS = [
+  { key: 'account', label: 'وضعیت حساب و اشتراک' },
   { key: 'company', label: 'مشخصات شرکت' },
   { key: 'users', label: 'مدیریت کاربران' },
   { key: 'roles', label: 'چارت سازمانی' },

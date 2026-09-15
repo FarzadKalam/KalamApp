@@ -209,6 +209,9 @@ const SaasUserAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged
           <Descriptions.Item label="حساب ورود">{record.auth_exists ? 'موجود' : 'وجود ندارد'}</Descriptions.Item>
           <Descriptions.Item label="پروفایل">{record.profile_exists ? 'موجود' : 'نیاز به ایجاد'}</Descriptions.Item>
           <Descriptions.Item label="نوع سازمان">{record.is_demo ? 'نسخه دمو' : 'عادی'}</Descriptions.Item>
+          <Descriptions.Item label="ورود پیامکی">
+            <Tag color={record.phone_confirmed ? 'green' : 'default'}>{record.phone_confirmed ? 'تایید شده' : 'تایید نشده'}</Tag>
+          </Descriptions.Item>
         </Descriptions>
         {!record.profile_exists && record.auth_exists ? (
           <Alert

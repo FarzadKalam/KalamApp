@@ -5,7 +5,7 @@ import { supabase } from '../supabaseClient';
 import { BRANDING_APPLIED_EVENT, DEFAULT_BRANDING } from '../theme/brandTheme';
 import { readRuntimeBranding } from '../utils/brandingRuntime';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
-import { getDefaultAuthenticatedAppPath, isSaasAppHost } from '../utils/hostRouting';
+import { getDefaultAuthenticatedAppPath, isInternalRootHost, isSaasAppHost } from '../utils/hostRouting';
 import { getOtpErrorMessage, normalizeOtpPhone, normalizeOtpToken, OTP_RESEND_SECONDS, requestSmsOtp, verifySmsOtp } from '../utils/otpAuth';
 import { assertLoginOtpRequestAllowed, consumePhoneSignupInvite, lookupPhoneLoginCandidate, lookupPhoneSignupInvite, requestExistingProfilePhoneOtp } from '../utils/phoneAuth';
 import { normalizeIranMobile } from '../utils/phoneNumber';
@@ -436,6 +436,22 @@ const Login = () => {
     if (tenantOrganization) {
       await activateOrganizationAndRedirect(tenantOrganization);
       return;
+    }
+
+    // در کلام، وجود عضویت در panel یا tenant دیگر نباید ورود به سازمان داخلی را
+    // مسدود کند. سازمان داخلی عضویتی است که میزبان اختصاصی ندارد.
+    if (isInternalRootHost(currentHost)) {
+      const internalOrganizations = organizations.filter(
+        (item) => !String(item.resolved_host || '').trim(),
+      );
+      if (internalOrganizations.length === 1) {
+        await activateOrganizationAndRedirect(internalOrganizations[0]);
+        return;
+      }
+      if (internalOrganizations.length > 1) {
+        setOrganizationChoices(internalOrganizations);
+        return;
+      }
     }
 
     if (!isSaasAppHost() && organizations.some((item) => String(item.resolved_host || '').trim())) {

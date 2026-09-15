@@ -147,6 +147,7 @@ import { backfillOperationalCashBankOperations } from "../utils/cashBankBackfill
 import { fetchMissingCashBankFallbackRows } from "../utils/cashBankFallbackRows";
 import { CASH_BANK_LEGACY_ACCOUNT_KEYS } from "../utils/cashBankLegacyAccountKeys";
 import { isOnlineCatalogModule } from "../utils/onlineCatalog";
+import { hasCurrentOrgPlanFeature } from "../utils/saasPlanFeatures";
 import type { SaasAdminUserRow } from "../utils/saasUserAdmin";
 import {
   buildModuleListSearchFieldKeys,
@@ -1077,6 +1078,7 @@ export const ModuleListRefine: React.FC<{
   const [viewMode, setViewMode] = useState<ViewMode>(
     persistedState?.viewMode || moduleConfig?.defaultViewMode || ViewMode.LIST,
   );
+  const [mapViewPlanEnabled, setMapViewPlanEnabled] = useState(true);
   const [searchTerm, setSearchTerm] = useState(
     persistedState?.searchTerm || "",
   );
@@ -3871,12 +3873,25 @@ export const ModuleListRefine: React.FC<{
     );
   }, [canViewField, moduleConfig]);
 
+  useEffect(() => {
+    let mounted = true;
+    void hasCurrentOrgPlanFeature('map_view', { defaultEnabled: true })
+      .then((enabled) => {
+        if (mounted) setMapViewPlanEnabled(enabled === true);
+      })
+      .catch(() => {
+        // سازمان‌های قدیمی که هنوز پروفایل SaaS ندارند، رفتار پیشین را حفظ می‌کنند.
+        if (mounted) setMapViewPlanEnabled(true);
+      });
+    return () => { mounted = false; };
+  }, []);
+
   const mapEnabled = useMemo(() => {
     if (!moduleConfig) return false;
-    return moduleConfig.fields.some(
+    return mapViewPlanEnabled && moduleConfig.fields.some(
       (field) => field.type === FieldType.LOCATION || field.key === "location",
     );
-  }, [moduleConfig]);
+  }, [mapViewPlanEnabled, moduleConfig]);
 
   const kanbanGroupOptions = useMemo(
     () =>

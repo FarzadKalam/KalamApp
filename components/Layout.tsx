@@ -903,6 +903,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/saas_demo_requests', label: 'درخواست‌های دمو' },
           { key: '/saas_user_announcements', label: 'اعلانات کاربران' },
           { key: '/taze-system/plans', label: 'پلن‌ها' },
+          { key: '/taze-system/catalog', label: 'افزونه‌های فروشگاه' },
           { key: '/taze-system/api-docs', label: 'مستندات API' },
           { key: '/taze-system/ai-settings', label: 'تنظیمات هوش مصنوعی' },
           { key: '/taze-system/seniority-rates', label: 'نرخ سنوات' },
@@ -965,6 +966,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         case '/saas_demo_requests':
         case '/saas_user_announcements':
         case '/taze-system/plans':
+        case '/taze-system/catalog':
         case '/taze-system/api-docs':
         case '/taze-system/ai-settings':
         case '/taze-system/seniority-rates':

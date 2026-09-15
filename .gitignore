@@ -21,6 +21,7 @@ public/version.json
 /deliverables/
 /create-proposal-docx.js
 /create-proposal-pdf.js
+/create-redesign-proposal.js
 
 # Editor directories and files
 .vscode/*

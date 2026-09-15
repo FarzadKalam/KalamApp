@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Col, Row, Statistic, Table, Tag, Typography, Spin, Alert } from 'antd';
+import { Card, Col, Row, Statistic, Table, Tag, Typography, Spin, Alert, App, Button, Space } from 'antd';
 import {
   CloudServerOutlined,
   TeamOutlined,
@@ -41,10 +41,26 @@ const statusColor: Record<string, string> = {
 };
 
 const SaasAdminDashboard: React.FC = () => {
+  const { message } = App.useApp();
   const [stats, setStats] = useState<Stats | null>(null);
   const [recentOrgs, setRecentOrgs] = useState<RecentOrg[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [providerLoading, setProviderLoading] = useState(false);
+
+  const bootstrapProviderOrg = async () => {
+    setProviderLoading(true);
+    try {
+      const { data, error: rpcError } = await supabase.rpc('admin_bootstrap_taze_system_provider_org');
+      if (rpcError) throw rpcError;
+      if (!data?.success) throw new Error(String(data?.message || 'راه‌اندازی پنل فروشنده ناموفق بود.'));
+      message.success('سازمان فروشنده تازه سیستم آماده شد. با همین حساب از panel.tazesystem.ir وارد شوید.');
+    } catch (err: any) {
+      message.error(err?.message || 'راه‌اندازی سازمان فروشنده ناموفق بود.');
+    } finally {
+      setProviderLoading(false);
+    }
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -135,6 +151,13 @@ const SaasAdminDashboard: React.FC = () => {
           <Text type="secondary" className="text-xs">مدیریت SaaS — فقط برای تیم داخلی</Text>
         </div>
       </div>
+
+      <Alert
+        type="info"
+        showIcon
+        message="مرکز فروش و صورتحساب تازه سیستم"
+        description={<Space wrap><span>برای ثبت مشتریان و فاکتورهای اشتراک در سازمانی مستقل، پنل فروشنده را با همان حساب مدیریتی خود راه‌اندازی کنید.</span><Button size="small" type="primary" loading={providerLoading} onClick={() => void bootstrapProviderOrg()}>راه‌اندازی panel.tazesystem.ir</Button></Space>}
+      />
 
       {/* کارت‌های آماری */}
       <Row gutter={[16, 16]}>
