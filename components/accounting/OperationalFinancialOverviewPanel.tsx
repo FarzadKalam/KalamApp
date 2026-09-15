@@ -33,6 +33,7 @@ import {
   getOrCreateOnlineAccountCard,
   type OnlineAccountCard,
 } from '../../utils/onlineAccountCard';
+import { subscribeOperationalFinancialRefresh } from '../../utils/operationalFinancialRefresh';
 
 type OperationalFinancialOverviewPanelProps = {
   entityType: OperationalFinancialEntityType;
@@ -189,6 +190,10 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  useEffect(() => subscribeOperationalFinancialRefresh(() => {
+    void loadData();
+  }), [loadData]);
 
   useEffect(() => {
     setFilteredRows(rows);

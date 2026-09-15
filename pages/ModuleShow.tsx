@@ -123,6 +123,7 @@ import {
   INSTRUCTIONS_MODULE_ID,
 } from '../utils/instructionSupport';
 import { syncProcessTemplateStages as syncProcessTemplateStagesShared } from '../utils/processTemplateStages';
+import { notifyOperationalFinancialRefresh } from '../utils/operationalFinancialRefresh';
 import type { ProcessRuntimeSnapshot } from '../utils/processRuntimeSnapshot';
 import { buildSurveyRuntimeModule, mergeSurveyTemplateValuesIntoRecord, supportsWebFormTemplateRuntime } from '../utils/surveyTemplates';
 import RecordLockControl from '../components/recordLocks/RecordLockControl';
@@ -4811,6 +4812,7 @@ const ModuleShow: React.FC = () => {
         oldValue: data?.[key],
         newValue,
       });
+      notifyOperationalFinancialRefresh(moduleId);
       msg.success('ذخیره شد');
       setTimeout(() => setEditingFields(prev => ({ ...prev, [key]: false })), 100);
     } catch (error: any) {
@@ -4992,6 +4994,7 @@ const ModuleShow: React.FC = () => {
         await logFieldChange(key, previous[key], values[key]);
       }
 
+      notifyOperationalFinancialRefresh(moduleId);
       msg.success('ذخیره شد');
       setIsEditDrawerOpen(false);
       void fetchRecord(true);

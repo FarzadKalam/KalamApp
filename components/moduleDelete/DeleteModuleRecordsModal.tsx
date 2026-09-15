@@ -14,6 +14,7 @@ import {
   normalizeDeleteModuleRecordsOptions,
 } from '../../utils/moduleDelete';
 import { fetchRecordLockMap } from '../../utils/recordLockRuntime';
+import { isOperationalFinancialSourceModule, notifyOperationalFinancialRefresh } from '../../utils/operationalFinancialRefresh';
 
 const { Text } = Typography;
 
@@ -152,6 +153,9 @@ const DeleteModuleRecordsModal: React.FC<DeleteModuleRecordsModalProps> = ({
         recordIds: normalizedIds,
         options: effectiveOptions,
       });
+      if (isOperationalFinancialSourceModule(moduleId)) {
+        notifyOperationalFinancialRefresh(moduleId);
+      }
       await onDeleted?.({
         preview,
         options: effectiveOptions,
@@ -222,13 +226,21 @@ const DeleteModuleRecordsModal: React.FC<DeleteModuleRecordsModalProps> = ({
           ) : null}
 
           <Space direction="vertical" size={12} className="w-full">
-            <Checkbox
-              checked={effectiveOptions.deletePayments}
-              onChange={(event) => setOptions((prev) => ({ ...prev, deletePayments: event.target.checked }))}
-              disabled={!preview.hasPayments}
-            >
-              حذف جدول دریافت / پرداخت
-            </Checkbox>
+            {isOperationalFinancialSourceModule(moduleId) ? (
+              <Alert
+                type="info"
+                showIcon
+                message="دریافت‌ها و پرداخت‌های وابسته نیز همراه سند حذف می‌شوند."
+              />
+            ) : (
+              <Checkbox
+                checked={effectiveOptions.deletePayments}
+                onChange={(event) => setOptions((prev) => ({ ...prev, deletePayments: event.target.checked }))}
+                disabled={!preview.hasPayments}
+              >
+                حذف جدول دریافت / پرداخت
+              </Checkbox>
+            )}
 
             <div className="space-y-2">
               <div className="text-xs text-gray-500 dark:text-gray-400">رفتار فرآیندها</div>

@@ -53,6 +53,7 @@ import { applyInvoicePaymentAllocation } from '../utils/invoicePaymentAllocation
 import { buildBillboardInvoiceItemTitle } from '../utils/invoicePresentation';
 import { getFinancialStatusLabelFa } from '../utils/financialValueLabels';
 import { calculatePayrollSlipLineBreakdown } from '../utils/payrollSlipTotals';
+import { notifyOperationalFinancialRefresh } from '../utils/operationalFinancialRefresh';
 
 const { Text } = Typography;
 
@@ -3908,6 +3909,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       await insertChangelog(supabase, moduleId, recordId, block, oldValue, dataToSave);
 
       msg.success('ذخیره شد');
+      if (isOperationalPayments) notifyOperationalFinancialRefresh(moduleId);
       const normalizedSavedRows = normalizePaymentRows(dataToSave);
       setData(normalizedSavedRows);
       setPendingInvoicePaymentAllocation(null);
