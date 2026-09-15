@@ -35,6 +35,10 @@ export const saasOrgsConfig: ModuleDefinition = {
   nature: ModuleNature.CRM,
   table: 'saas_admin_org_candidates_view',
   systemManaged: true,
+  // این منبع یک view مدیریتی است؛ جزئیات باید در سطح SaaS و داخل Drawer باز شود
+  // و نباید به ModuleShow عمومی با scope سازمان tenant هدایت شود.
+  disableDetailView: true,
+  listDetailSurface: 'saas_org_drawer',
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
   // ویرایش inline از طریق __saas_admin.edit_orgs کنترل می‌شود (ModuleShow.tsx)

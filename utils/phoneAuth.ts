@@ -103,6 +103,42 @@ export const getPhoneOtpStatusMeta = (
   return { color: 'processing', text: 'نیازمند تایید اولیه' };
 };
 
+/**
+ * برای کاربر قدیمی که پروفایل سازمانی دارد اما phone identity او در Auth ساخته
+ * نشده است، کد را به همان حساب اصلی متصل می‌کند. این مسیر نباید با
+ * signInWithOtp یک حساب phone مستقل بسازد.
+ */
+export const requestExistingProfilePhoneOtp = async (phoneNumber: string) => {
+  const { data, error } = await supabase.functions.invoke('user-admin', {
+    body: {
+      action: 'request_existing_profile_phone_otp',
+      phone: phoneNumber,
+    },
+  });
+
+  if (error) {
+    let message = String(error?.message || 'ارسال کد تایید ناموفق بود.');
+    const context = (error as any)?.context;
+    if (context && typeof context.clone === 'function') {
+      try {
+        const payload = await context.clone().json();
+        message = String(payload?.message || message);
+      } catch {
+        // پیام استاندارد خطا برای نمایش به کاربر کافی است.
+      }
+    }
+    throw new Error(message);
+  }
+
+  if (data?.success === false) {
+    const nextError: any = new Error(String(data?.message || 'ارسال کد تایید ناموفق بود.'));
+    if (data?.reason_code) nextError.code = String(data.reason_code);
+    throw nextError;
+  }
+
+  return data;
+};
+
 const createOtpFlowError = (code: string) => {
   const error = new Error(code);
   (error as any).code = code;

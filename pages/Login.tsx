@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, App, Button, Card, Input, Tabs, theme } from 'antd';
+import { Alert, App, Button, Card, Input, Modal, Tabs, theme } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { BRANDING_APPLIED_EVENT, DEFAULT_BRANDING } from '../theme/brandTheme';
@@ -7,7 +7,7 @@ import { readRuntimeBranding } from '../utils/brandingRuntime';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { getDefaultAuthenticatedAppPath, isSaasAppHost } from '../utils/hostRouting';
 import { getOtpErrorMessage, normalizeOtpPhone, normalizeOtpToken, OTP_RESEND_SECONDS, requestSmsOtp, verifySmsOtp } from '../utils/otpAuth';
-import { assertLoginOtpRequestAllowed, consumePhoneSignupInvite, lookupPhoneLoginCandidate, lookupPhoneSignupInvite } from '../utils/phoneAuth';
+import { assertLoginOtpRequestAllowed, consumePhoneSignupInvite, lookupPhoneLoginCandidate, lookupPhoneSignupInvite, requestExistingProfilePhoneOtp } from '../utils/phoneAuth';
 import { normalizeIranMobile } from '../utils/phoneNumber';
 import { trackSuccessfulLogin } from '../utils/userLoginTracking';
 import { signOutLocalSession } from '../utils/authSession';
@@ -25,6 +25,15 @@ const OTP_PHONE_STORAGE_KEY = 'kalam_login_otp_phone';
 const OTP_REQUESTED_FOR_STORAGE_KEY = 'kalam_login_otp_requested_for';
 const OTP_CODE_STORAGE_KEY = 'kalam_login_otp_code';
 const OTP_COOLDOWN_UNTIL_STORAGE_KEY = 'kalam_login_otp_cooldown_until';
+
+type OrganizationAccess = {
+  org_id: string;
+  org_name: string;
+  role_name: string;
+  is_owner: boolean;
+  slug?: string | null;
+  resolved_host?: string | null;
+};
 
 const readRuntimeBrandSnapshot = () => {
   const branding = readRuntimeBranding();
@@ -53,6 +62,8 @@ const Login = () => {
   const [otpLoading, setOtpLoading] = useState(false);
   const [brandTitle, setBrandTitle] = useState(() => readRuntimeBrandSnapshot().title);
   const [brandLogoUrl, setBrandLogoUrl] = useState<string | null>(() => readRuntimeBrandSnapshot().logoUrl);
+  const [organizationChoices, setOrganizationChoices] = useState<OrganizationAccess[]>([]);
+  const [organizationSelecting, setOrganizationSelecting] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const { token } = theme.useToken();
@@ -380,6 +391,65 @@ const Login = () => {
     }
   };
 
+  const activateOrganizationAndRedirect = async (organization: OrganizationAccess) => {
+    setOrganizationSelecting(true);
+    try {
+      const { error } = await supabase.rpc('activate_current_user_organization', { p_org_id: organization.org_id });
+      if (error) throw error;
+      clearSessionBootstrapCache();
+      setOrganizationChoices([]);
+      const host = String(organization.resolved_host || '').trim().toLowerCase();
+      if (host) {
+        window.location.href = `https://${host}${postLoginRedirect}`;
+        return;
+      }
+      navigate(postLoginRedirect, { replace: true });
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ورود به سازمان انتخاب‌شده ناموفق بود.'));
+    } finally {
+      setOrganizationSelecting(false);
+    }
+  };
+
+  const resolveOrganizationAfterLogin = async () => {
+    const { data, error } = await supabase.rpc('get_current_user_organization_accesses');
+    if (error) {
+      // سازگاری با محیطی که هنوز migration عضویت‌ها را دریافت نکرده است.
+      const tenantUrl = await resolveTenantRedirect();
+      if (tenantUrl) window.location.href = `${tenantUrl}${postLoginRedirect}`;
+      else navigate(postLoginRedirect, { replace: true });
+      return;
+    }
+
+    const organizations = Array.isArray(data)
+      ? data.filter((item): item is OrganizationAccess => !!item?.org_id && !!item?.org_name)
+      : [];
+    if (organizations.length === 0) {
+      navigate(postLoginRedirect, { replace: true });
+      return;
+    }
+
+    const currentHost = typeof window === 'undefined' ? '' : window.location.hostname.toLowerCase();
+    const tenantOrganization = organizations.find(
+      (item) => String(item.resolved_host || '').trim().toLowerCase() === currentHost,
+    );
+    if (tenantOrganization) {
+      await activateOrganizationAndRedirect(tenantOrganization);
+      return;
+    }
+
+    if (!isSaasAppHost() && organizations.some((item) => String(item.resolved_host || '').trim())) {
+      await signOutLocalSession();
+      throw new Error('این شماره به سازمان این آدرس دسترسی ندارد.');
+    }
+
+    if (organizations.length === 1) {
+      await activateOrganizationAndRedirect(organizations[0]);
+      return;
+    }
+    setOrganizationChoices(organizations);
+  };
+
   const ensureInvitedOrExistingProfile = async (phoneNumber: string) => {
     const { data: userData, error: userError } = await supabase.auth.getUser();
     if (userError || !userData?.user?.id) {
@@ -474,12 +544,7 @@ const Login = () => {
       await trackSuccessfulLogin('password');
 
       message.success('خوش آمدید! در حال ورود...');
-      const tenantUrl = await resolveTenantRedirect();
-      if (tenantUrl) {
-        window.location.href = `${tenantUrl}${postLoginRedirect}`;
-      } else {
-        navigate(postLoginRedirect, { replace: true });
-      }
+      await resolveOrganizationAfterLogin();
     } catch (error: any) {
       const raw = String(error?.message || '');
       if (raw.includes('__otp_user_inactive__')) {
@@ -502,9 +567,21 @@ const Login = () => {
     try {
       const candidate = await lookupPhoneLoginCandidate(normalizedPhone);
       const invite = await lookupPhoneSignupInvite(normalizedPhone);
-      assertLoginOtpRequestAllowed(candidate, invite);
+      const profileNeedsPhoneIdentity =
+        candidate?.exists_in_profiles === true
+        && candidate?.is_active !== false
+        && candidate?.has_phone_identity !== true;
 
-      const requestedPhone = await requestSmsOtp(supabase.auth, normalizedPhone, { shouldCreateUser: false });
+      if (profileNeedsPhoneIdentity) {
+        // این شماره روی پروفایل اصلی وجود دارد. ارسال مستقیم OTP در این حالت
+        // ممکن است Auth را وادار به ساخت حساب phone دوم کند.
+        await requestExistingProfilePhoneOtp(normalizedPhone);
+      } else {
+        assertLoginOtpRequestAllowed(candidate, invite);
+        await requestSmsOtp(supabase.auth, normalizedPhone, { shouldCreateUser: false });
+      }
+
+      const requestedPhone = normalizedPhone;
       setOtpRequestedFor(requestedPhone);
       setOtpCode('');
       setOtpCooldown(OTP_RESEND_SECONDS);
@@ -542,12 +619,7 @@ const Login = () => {
       setOtpCooldown(0);
 
       message.success('ورود با موفقیت انجام شد.');
-      const tenantUrlOtp = await resolveTenantRedirect();
-      if (tenantUrlOtp) {
-        window.location.href = `${tenantUrlOtp}${postLoginRedirect}`;
-      } else {
-        navigate(postLoginRedirect, { replace: true });
-      }
+      await resolveOrganizationAfterLogin();
     } catch (error: any) {
       const raw = String(error?.message || '');
       // اگر OTP موفق بود اما مرحله بعدی خطا داد، sign out کن
@@ -806,6 +878,34 @@ const Login = () => {
             />
           )}
         </Card>
+
+        <Modal
+          open={organizationChoices.length > 0}
+          closable={false}
+          footer={null}
+          title="انتخاب سازمان"
+          centered
+        >
+          <p className="mb-4 text-sm text-gray-600">حساب شما به چند سازمان دسترسی دارد. سازمانی را که می‌خواهید وارد شوید انتخاب کنید.</p>
+          <div className="flex flex-col gap-2">
+            {organizationChoices.map((organization) => (
+              <Button
+                key={organization.org_id}
+                block
+                size="large"
+                loading={organizationSelecting}
+                disabled={organizationSelecting}
+                onClick={() => void activateOrganizationAndRedirect(organization)}
+                className="!h-auto !min-h-14 !text-right"
+              >
+                <span className="flex flex-col items-start py-1">
+                  <span className="font-bold">{organization.org_name}</span>
+                  <span className="text-xs text-gray-500">{organization.is_owner ? 'صاحب حساب' : organization.role_name || 'کاربر سازمان'}</span>
+                </span>
+              </Button>
+            ))}
+          </div>
+        </Modal>
 
         <div className="mt-4 text-center text-[11px]" style={{ color: token.colorTextTertiary }}>
           نسخه آزمایشی {import.meta.env.VITE_APP_VERSION || '1.0.2'}

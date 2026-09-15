@@ -221,6 +221,9 @@ const MessageComposerModal = React.lazy(
 const SaasUserAdminDrawer = React.lazy(
   () => import("../components/saas/SaasUserAdminDrawer"),
 );
+const SaasOrgAdminDrawer = React.lazy(
+  () => import("../components/saas/SaasOrgAdminDrawer"),
+);
 const RelatedRecordPopover = React.lazy(
   () => import("../components/RelatedRecordPopover"),
 );
@@ -1223,6 +1226,9 @@ export const ModuleListRefine: React.FC<{
   const [previewRecordId, setPreviewRecordId] = useState<string | null>(null);
   const [saasUserDrawerRecord, setSaasUserDrawerRecord] =
     useState<SaasAdminUserRow | null>(null);
+  const [saasOrgDrawerRecord, setSaasOrgDrawerRecord] = useState<any | null>(
+    null,
+  );
   const [taskRelationOptionsByField, setTaskRelationOptionsByField] = useState<
     Record<string, any[]>
   >({});
@@ -2351,6 +2357,7 @@ export const ModuleListRefine: React.FC<{
     setBulkBuildTarget(null);
     setPreviewRecordId(null);
     setSaasUserDrawerRecord(null);
+    setSaasOrgDrawerRecord(null);
     setTaskRelationOptionsByField({});
     setHasListInitialPaintCompleted(false);
     searchSyncInitializedRef.current = false;
@@ -2834,6 +2841,8 @@ export const ModuleListRefine: React.FC<{
   const detailDisabled = moduleConfig?.disableDetailView === true;
   const useSaasUserDrawer =
     moduleConfig?.listDetailSurface === "saas_user_drawer";
+  const useSaasOrgDrawer =
+    moduleConfig?.listDetailSurface === "saas_org_drawer";
   const useQuickPreviewModal =
     moduleConfig?.listPreviewMode === "modal" || detailDisabled;
   const canCreateModule = canEditModule && !createDisabled;
@@ -4333,13 +4342,17 @@ export const ModuleListRefine: React.FC<{
         setSaasUserDrawerRecord(record as SaasAdminUserRow);
         return;
       }
+      if (useSaasOrgDrawer) {
+        setSaasOrgDrawerRecord(record);
+        return;
+      }
       if (useQuickPreviewModal) {
         setPreviewRecordId(recordId);
         return;
       }
       navigate(`/${resolvedModuleId}/${recordId}`);
     },
-    [navigate, resolvedModuleId, useQuickPreviewModal, useSaasUserDrawer],
+    [navigate, resolvedModuleId, useQuickPreviewModal, useSaasOrgDrawer, useSaasUserDrawer],
   );
 
   const getRecordListHref = useCallback(
@@ -4419,6 +4432,21 @@ export const ModuleListRefine: React.FC<{
           }
         }
       }
+      if (useSaasOrgDrawer && resolvedModuleId) {
+        const moduleRecordPrefix = `/${resolvedModuleId}/`;
+        if (normalizedPath.startsWith(moduleRecordPrefix)) {
+          const recordId = normalizedPath
+            .slice(moduleRecordPrefix.length)
+            .split("/")[0];
+          const record = enrichedData.find(
+            (item: any) => String(item?.id || "") === recordId,
+          );
+          if (record) {
+            setSaasOrgDrawerRecord(record);
+            return;
+          }
+        }
+      }
       if (useQuickPreviewModal && resolvedModuleId) {
         const moduleRecordPrefix = `/${resolvedModuleId}/`;
         if (normalizedPath.startsWith(moduleRecordPrefix)) {
@@ -4438,6 +4466,7 @@ export const ModuleListRefine: React.FC<{
       navigate,
       resolvedModuleId,
       useQuickPreviewModal,
+      useSaasOrgDrawer,
       useSaasUserDrawer,
     ],
   );
@@ -7540,6 +7569,19 @@ export const ModuleListRefine: React.FC<{
             onClose={() => setSaasUserDrawerRecord(null)}
             onChanged={() => {
               setSaasUserDrawerRecord(null);
+              void tableQueryResult.refetch();
+            }}
+          />
+        </React.Suspense>
+      ) : null}
+      {saasOrgDrawerRecord && useSaasOrgDrawer ? (
+        <React.Suspense fallback={null}>
+          <SaasOrgAdminDrawer
+            open
+            record={saasOrgDrawerRecord}
+            onClose={() => setSaasOrgDrawerRecord(null)}
+            onChanged={() => {
+              setSaasOrgDrawerRecord(null);
               void tableQueryResult.refetch();
             }}
           />

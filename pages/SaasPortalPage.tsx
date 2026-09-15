@@ -12,7 +12,7 @@ import { seedCurrentOrgDemoData } from '../utils/demoDataAdmin';
 import { getOtpErrorMessage, normalizeOtpPhone, normalizeOtpToken, OTP_RESEND_SECONDS, requestSmsOtp, verifySmsOtp } from '../utils/otpAuth';
 import { signOutLocalSession } from '../utils/authSession';
 import { getInternalAppUrl } from '../utils/hostRouting';
-import { assertDemoOtpRequestAllowed, lookupPhoneLoginCandidate, lookupPhoneSignupInvite } from '../utils/phoneAuth';
+import { assertDemoOtpRequestAllowed, lookupPhoneLoginCandidate, lookupPhoneSignupInvite, requestExistingProfilePhoneOtp } from '../utils/phoneAuth';
 import {
   getDemoProvisionErrorMessage,
   getOwnerSetupErrorMessage,
@@ -26,7 +26,7 @@ import {
 } from '../utils/saasOnboarding';
 
 // ─── Types ───────────────────────────────────────────
-type WizardStep = 'phone' | 'info' | 'otp' | 'provisioning' | 'done' | 'error';
+type WizardStep = 'phone' | 'organizations' | 'info' | 'otp' | 'provisioning' | 'done' | 'error';
 
 type SlugState = 'idle' | 'checking' | 'available' | 'taken' | 'invalid';
 
@@ -44,6 +44,14 @@ type WizardAuthenticatedProfile = {
   role_id?: string | null;
   role?: string | null;
   is_active?: boolean | null;
+};
+
+type OrganizationAccess = {
+  org_id: string;
+  org_name: string;
+  role_name?: string | null;
+  is_owner?: boolean | null;
+  resolved_host?: string | null;
 };
 
 // ─── Constants ───────────────────────────────────────
@@ -142,6 +150,8 @@ const SaasPortalPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [isExistingPhoneUser, setIsExistingPhoneUser] = useState(false);
+  const [organizationChoices, setOrganizationChoices] = useState<OrganizationAccess[]>([]);
+  const [isExistingMemberCreatingDemo, setIsExistingMemberCreatingDemo] = useState(false);
 
   // Org info
   const [fullName, setFullName] = useState('');
@@ -210,7 +220,7 @@ const SaasPortalPage: React.FC = () => {
         return;
       }
       const { data } = await supabase.auth.getSession();
-      if (data?.session?.user?.id) {
+      if (data?.session?.user?.id && savedStep !== 'organizations') {
         setStep(savedStep);
       } else {
         setStep('phone');
@@ -332,6 +342,8 @@ const SaasPortalPage: React.FC = () => {
       return;
     }
     setError('');
+    setOrganizationChoices([]);
+    setIsExistingMemberCreatingDemo(false);
     setLoading(true);
     try {
       const [candidate, invite] = await Promise.all([
@@ -344,19 +356,26 @@ const SaasPortalPage: React.FC = () => {
       } catch (assertErr: any) {
         const assertCode = String(assertErr?.code || assertErr?.message || '');
         if (
-          assertCode.includes('__demo_phone_belongs_to_existing_org__') ||
-          assertCode.includes('__demo_phone_existing_auth_user__')
+          assertCode.includes('__demo_phone_belongs_to_existing_org__')
         ) {
-          // کاربر قبلاً دمو ساخته — مستقیم OTP می‌فرستیم و هدایت می‌کنیم
+          // مالک یک سازمان نمی‌تواند از همین مسیر سازمان دوم بسازد؛ ابتدا
+          // همان حساب اصلی او را وارد می‌کنیم تا به سازمان درست هدایت شود.
           isExisting = true;
+        } else if (assertCode.includes('__demo_phone_existing_auth_user__')) {
+          // حساب Auth یتیم ممکن است اثر تلاش نیمه‌تمام قبلی باشد. چون هنوز
+          // پروفایل سازمانی ندارد، اجازه می‌دهیم پس از OTP اطلاعات دمو کامل شود.
+          isExisting = false;
         } else {
           throw assertErr;
         }
       }
       setIsExistingPhoneUser(isExisting);
       if (isExisting) {
-        // کاربر موجود: همین‌جا OTP می‌فرستیم
-        await requestSmsOtp(supabase.auth, normalizedPhone);
+        if (candidate?.has_phone_identity === true) {
+          await requestSmsOtp(supabase.auth, normalizedPhone, { shouldCreateUser: false });
+        } else {
+          await requestExistingProfilePhoneOtp(normalizedPhone);
+        }
         setStep('otp');
         setOtpCooldown(OTP_RESEND_SECONDS);
       } else {
@@ -384,6 +403,10 @@ const SaasPortalPage: React.FC = () => {
     setError('');
     setLoading(true);
     try {
+      if (isExistingMemberCreatingDemo) {
+        await runProvision();
+        return;
+      }
       await requestSmsOtp(supabase.auth, normalizedPhone);
       setStep('otp');
       setOtpCooldown(OTP_RESEND_SECONDS);
@@ -421,6 +444,42 @@ const SaasPortalPage: React.FC = () => {
     };
   }, []);
 
+  const loadOrganizationChoices = useCallback(async (): Promise<OrganizationAccess[]> => {
+    const { data, error: organizationError } = await supabase.rpc('get_current_user_organization_accesses');
+    if (organizationError) throw organizationError;
+    return Array.isArray(data)
+      ? data.filter((item): item is OrganizationAccess => Boolean(item && typeof item.org_id === 'string' && item.org_id))
+      : [];
+  }, []);
+
+  const handleChooseOrganization = async (organization: OrganizationAccess) => {
+    setError('');
+    setLoading(true);
+    try {
+      const { data, error: activateError } = await supabase.rpc('activate_current_user_organization', {
+        p_org_id: organization.org_id,
+      });
+      if (activateError || !(data as any)?.success) throw activateError || new Error('organization_access_denied');
+      clearWizardState();
+      const host = String((data as any)?.resolved_host || organization.resolved_host || '').trim();
+      window.location.href = host ? `https://${host}` : getInternalAppUrl();
+    } catch (err: any) {
+      setError(getOtpErrorMessage(err, 'ورود به سازمان انتخاب‌شده ناموفق بود.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateNewBusiness = () => {
+    if (organizationChoices.some((organization) => organization.is_owner)) {
+      setError('صاحب یک سازمان فقط می‌تواند همان سازمان را مدیریت کند.');
+      return;
+    }
+    setError('');
+    setIsExistingMemberCreatingDemo(true);
+    setStep('info');
+  };
+
   const handleVerifyOtp = async () => {
     const token = normalizeOtpToken(otpCode);
     if (token.length < 4) { setError('کد تایید را وارد کنید.'); return; }
@@ -431,6 +490,22 @@ const SaasPortalPage: React.FC = () => {
       await verifySmsOtp(supabase.auth, normalizedPhone as string, token);
       otpVerified = true;
       const { profile, saasContext } = await resolveAuthenticatedDemoSessionState();
+      let organizations: OrganizationAccess[] = [];
+      try {
+        organizations = await loadOrganizationChoices();
+      } catch {
+        // در انتشار مرحله‌ای، تا زمانی که migration عضویت‌ها فعال نشده،
+        // رفتار امن و قدیمیِ هدایت به سازمان اصلی حفظ می‌شود.
+        organizations = [];
+      }
+
+      // شماره‌ای که قبلاً عضو سازمانی بوده است، همیشه ابتدا انتخاب سازمان را می‌بیند.
+      // فقط عضو غیرمالک می‌تواند از همین صفحه یک کسب‌وکار مستقل تازه بسازد.
+      if (organizations.length > 0) {
+        setOrganizationChoices(organizations);
+        setStep('organizations');
+        return;
+      }
 
       // کاربر موجود با سازمان — هدایت به پنل
       if (saasContext?.org_id && saasContext?.slug) {
@@ -504,7 +579,11 @@ const SaasPortalPage: React.FC = () => {
       setStep('provisioning');
       setProvisionMsgIdx(0);
 
-      const { data, error: rpcErr } = await supabase.rpc('provision_self_service_demo', {
+      const { data, error: rpcErr } = await supabase.rpc(
+        isExistingMemberCreatingDemo
+          ? 'provision_self_service_demo_for_existing_member'
+          : 'provision_self_service_demo',
+        {
         p_full_name: fullName.trim(),
         p_mobile: normalizedPhone,
         p_business_name: orgName.trim(),
@@ -514,7 +593,8 @@ const SaasPortalPage: React.FC = () => {
         p_owner_email: normalizedEmail,
         p_industry: industry || null,
         p_brand_palette_key: brandPaletteKey,
-      });
+        },
+      );
 
       if (rpcErr) throw rpcErr;
 
@@ -592,7 +672,7 @@ const SaasPortalPage: React.FC = () => {
       }
       setProvisionError(userMsg);
     }
-  }, [brandPaletteKey, discoverySource, fullName, industry, normalizedPhone, orgName, ownerEmail, ownerPassword, ownerPasswordConfirm, slug, slugState, userCount]);
+  }, [brandPaletteKey, discoverySource, fullName, industry, isExistingMemberCreatingDemo, normalizedPhone, orgName, ownerEmail, ownerPassword, ownerPasswordConfirm, slug, slugState, userCount]);
 
   // ── Render ──
   return (
@@ -677,6 +757,49 @@ const SaasPortalPage: React.FC = () => {
           </div>
         )}
 
+        {/* ─ Step: Existing organization selection ─ */}
+        {step === 'organizations' && (
+          <div>
+            <StepIndicator step="phone" />
+            <h1 className="text-2xl font-black text-slate-900 mb-2">انتخاب سازمان</h1>
+            <p className="text-slate-500 text-sm mb-6 leading-7">
+              این شماره پیش‌تر به سازمان‌های زیر دسترسی داشته است. برای ورود، سازمان موردنظر را انتخاب کنید.
+            </p>
+            {error && <Alert type="error" message={error} className="mb-4 rounded-xl" showIcon />}
+            <div className="space-y-3">
+              {organizationChoices.map((organization) => (
+                <Button
+                  key={organization.org_id}
+                  block
+                  size="large"
+                  loading={loading}
+                  onClick={() => void handleChooseOrganization(organization)}
+                  className="!h-auto !min-h-14 !rounded-xl !border-slate-200 !text-right hover:!border-slate-900"
+                >
+                  <span className="flex flex-col items-start gap-1 py-1">
+                    <span className="font-black text-slate-900">{organization.org_name}</span>
+                    <span className="text-xs font-normal text-slate-500">
+                      {organization.is_owner ? 'صاحب حساب' : (organization.role_name || 'کاربر سازمان')}
+                    </span>
+                  </span>
+                </Button>
+              ))}
+              {!organizationChoices.some((organization) => organization.is_owner) && (
+                <Button
+                  type="primary"
+                  block
+                  size="large"
+                  disabled={loading}
+                  onClick={handleCreateNewBusiness}
+                  className="!mt-5 !rounded-xl !h-12 !font-black !bg-slate-900 !border-none hover:!bg-slate-700"
+                >
+                  ادامه و ایجاد کسب‌وکار جدید <ArrowLeftOutlined />
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* ─ Step: OTP ─ */}
         {step === 'otp' && (
           <div>
@@ -738,7 +861,9 @@ const SaasPortalPage: React.FC = () => {
             <StepIndicator step="info" />
             <h1 className="text-2xl font-black text-slate-900 mb-2">اطلاعات سازمان</h1>
             <p className="text-slate-500 text-sm mb-8 leading-7">
-              اطلاعات زیر برای راه‌اندازی فضای اختصاصی شما استفاده می‌شود.
+              {isExistingMemberCreatingDemo
+                ? 'حساب شما تایید شده است؛ اطلاعات زیر برای راه‌اندازی کسب‌وکار جدیدتان استفاده می‌شود.'
+                : 'اطلاعات زیر برای راه‌اندازی فضای اختصاصی شما استفاده می‌شود.'}
             </p>
             {error && <Alert type="error" message={error} className="mb-4 rounded-xl" showIcon />}
             <Alert
@@ -913,7 +1038,7 @@ const SaasPortalPage: React.FC = () => {
                 }
                 className="!mt-2 !rounded-xl !h-12 !font-black !bg-slate-900 !border-none hover:!bg-slate-700"
               >
-                ارسال کد تایید <ArrowLeftOutlined />
+                {isExistingMemberCreatingDemo ? 'راه‌اندازی کسب‌وکار جدید' : <>ارسال کد تایید <ArrowLeftOutlined /></>}
               </Button>
             </div>
           </div>

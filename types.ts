@@ -410,7 +410,7 @@ export interface ModuleDefinition {
   disableInlineFieldEditing?: boolean;
   hideFullRecordAction?: boolean;
   listPreviewMode?: "modal";
-  listDetailSurface?: "saas_user_drawer";
+  listDetailSurface?: "saas_user_drawer" | "saas_org_drawer";
   quickPreview?: {
     fieldKeys?: string[];
     editableFields?: string[];

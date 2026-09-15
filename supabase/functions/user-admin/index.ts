@@ -7,6 +7,7 @@ type UserAdminAction =
   | 'delete_user'
   | 'send_phone_otp'
   | 'verify_phone_otp'
+  | 'request_existing_profile_phone_otp'
   | 'repair_legacy_phone_login'
   | 'setup_owner_credentials'
   | 'saas_upsert_user'
@@ -518,6 +519,63 @@ const findAuthUsersByPhone = async (
   return matches;
 };
 
+/**
+ * مسیر عمومی و محدودِ بازیابی ورود پیامکی برای حسابی است که پروفایل معتبر دارد
+ * اما identity شماره آن در GoTrue ثبت نشده است. در این حالت signInWithOtp می‌تواند
+ * یک auth user مستقل بسازد؛ این تابع شماره را فقط به همان auth user پروفایل وصل
+ * و کد را با /resend صادر می‌کند.
+ */
+const requestExistingProfilePhoneOtp = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  phone: string,
+) => {
+  const normalizedPhone = normalizeIranMobileE164(phone);
+  if (!normalizedPhone) {
+    throw createReasonedError('شماره موبایل معتبر نیست.', 'invalid_phone', 400);
+  }
+
+  const targetProfile = await fetchProfileByPhoneOrEmail(supabaseUrl, serviceRoleKey, { phone: normalizedPhone });
+  if (!targetProfile?.id || targetProfile.is_active === false) {
+    throw createReasonedError('برای این شماره حساب سازمانی فعال پیدا نشد.', 'phone_profile_not_found', 404);
+  }
+
+  const targetUserId = String(targetProfile.id);
+  const targetAuthUser = await fetchAuthUserById(supabaseUrl, serviceRoleKey, targetUserId).catch(() => null);
+  if (!targetAuthUser?.id) {
+    throw createReasonedError('حساب ورود این کاربر کامل نیست. لطفاً با پشتیبانی تماس بگیرید.', 'phone_identity_missing_auth_user', 409);
+  }
+
+  // فقط accountهای بدون پروفایلِ همین شماره قابل حذف‌اند. وجود پروفایل دوم
+  // یک تعارض داده است و نباید با حدس خودکار رفع شود.
+  const conflicts = (await findAuthUsersByPhone(supabaseUrl, serviceRoleKey, normalizedPhone))
+    .filter((user: any) => String(user?.id || '') !== targetUserId);
+  for (const conflict of conflicts) {
+    const conflictId = String(conflict?.id || '');
+    const conflictProfile = conflictId
+      ? await fetchProfile(supabaseUrl, serviceRoleKey, conflictId)
+      : null;
+    if (conflictProfile?.id) {
+      throw createReasonedError('برای این شماره بیش از یک حساب سازمانی وجود دارد و نیاز به بررسی مدیر دارد.', 'phone_profile_conflict', 409);
+    }
+  }
+  for (const conflict of conflicts) {
+    const conflictId = String(conflict?.id || '');
+    if (conflictId) await deleteAuthUser(supabaseUrl, serviceRoleKey, conflictId);
+  }
+
+  await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, {
+    phone: toGoTruePhone(normalizedPhone),
+    phone_confirm: false,
+  });
+  await upsertProfile(supabaseUrl, serviceRoleKey, {
+    id: targetUserId,
+    mobile_1: toLocalIranMobile(normalizedPhone),
+  });
+  const otpResult = await resendOtp(supabaseUrl, serviceRoleKey, normalizedPhone, 'sms');
+  return { messageId: otpResult?.message_id || null };
+};
+
 const deleteAuthUser = async (
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -916,12 +974,17 @@ Deno.serve(async (request) => {
     if (!supabaseUrl || !serviceRoleKey) {
       return json(500, { success: false, message: 'تنظیمات سرور ناقص است.' });
     }
+    const body = (await request.json().catch(() => ({}))) as UserAdminBody;
+    const action = String(body?.action || '').trim() as UserAdminAction;
+    if (action === 'request_existing_profile_phone_otp') {
+      const result = await requestExistingProfilePhoneOtp(supabaseUrl, serviceRoleKey, String(body?.phone || ''));
+      return json(200, { success: true, ...result });
+    }
+
     if (!userToken) {
       return json(401, { success: false, message: 'درخواست احراز هویت نشده است.' });
     }
 
-    const body = (await request.json().catch(() => ({}))) as UserAdminBody;
-    const action = String(body?.action || '').trim() as UserAdminAction;
     const caller = await verifyUserToken(supabaseUrl, serviceRoleKey, userToken);
     const callerProfile = await fetchProfile(supabaseUrl, serviceRoleKey, String(caller.id));
     if (action === 'repair_legacy_phone_login') {
