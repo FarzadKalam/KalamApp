@@ -183,6 +183,7 @@ const AiChatSurfaceV2: React.FC = () => {
   const searchInputRef = useRef<any>(null);
   const routeState = (location.state && typeof location.state === 'object' ? location.state : {}) as Record<string, any>;
   const initialFile = routeState.aiInitialFile && typeof routeState.aiInitialFile === 'object' ? routeState.aiInitialFile : null;
+  const initialVoipCallLogId = String(routeState.aiInitialVoipCallLogId || '').trim() || null;
   const initialFiles = useMemo(() => (
     Array.isArray(routeState.aiInitialFiles)
       ? routeState.aiInitialFiles.filter((item: any) => item && typeof item === 'object')
@@ -218,11 +219,12 @@ const AiChatSurfaceV2: React.FC = () => {
     recordCreationTarget: routeState.aiInitialRecordCreationTargetModuleId || null,
     fileCount: effectiveInitialFiles.length,
     fileName: effectiveInitialFile?.fileName || null,
+    voipCallLogId: initialVoipCallLogId,
     mediaSettings: initialMediaSettings || {},
     mediaSourceImageCount: initialMediaSourceImages.length,
     forceNewThread,
     locationKey: location.key || '',
-  }), [effectiveInitialFile?.fileName, effectiveInitialFiles.length, forceNewThread, initialCapabilities, initialMediaSettings, initialMediaSourceImages.length, initialPrompt, location.key, routeState.aiInitialInputKind, routeState.aiInitialRecordCreationTargetModuleId]);
+  }), [effectiveInitialFile?.fileName, effectiveInitialFiles.length, forceNewThread, initialCapabilities, initialMediaSettings, initialMediaSourceImages.length, initialPrompt, initialVoipCallLogId, location.key, routeState.aiInitialInputKind, routeState.aiInitialRecordCreationTargetModuleId]);
 
   const loadThreads = useCallback(async (preferredThreadId?: string | null) => {
     setLoadingThreads(true);
@@ -563,6 +565,7 @@ const AiChatSurfaceV2: React.FC = () => {
             initialMediaSourceImages={initialMediaSourceImages as any}
             initialFiles={effectiveInitialFiles as any}
             initialFile={effectiveInitialFile as any}
+            initialVoipCallLogId={initialVoipCallLogId}
             autoSubmitInitialPrompt={autoSubmitInitial}
             onThreadDeleted={handleThreadDeleted}
             onThreadRenamed={handleThreadRenamed}

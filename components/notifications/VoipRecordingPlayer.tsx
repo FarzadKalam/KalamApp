@@ -9,7 +9,7 @@ import {
   PlayCircleOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import { buildAiUploadedFilePrompt } from '../../utils/aiUploadedFilePrompt';
+import { buildAiUploadedFilePromptFromUrl } from '../../utils/aiUploadedFilePrompt';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { useNavigate } from 'react-router-dom';
 import type { NoteAttachment } from '../../utils/noteContent';
@@ -120,16 +120,25 @@ const VoipRecordingPlayer: React.FC<VoipRecordingPlayerProps> = ({ call, compact
   const analyzeRecording = async () => {
     setAnalyzing(true);
     try {
-      const blob = await loadVoipRecordingBlob(call);
-      const file = new File([blob], getVoipRecordingFileName(call), { type: blob.type || 'audio/mpeg' });
-      const prepared = await buildAiUploadedFilePrompt(file);
+      // Persist first: the chat must retain a playable audio attachment after
+      // the initial local preview is replaced with the server conversation.
+      const attachment = await persistVoipRecordingAttachment(call);
+      const prepared = await buildAiUploadedFilePromptFromUrl({
+        url: attachment.url,
+        name: attachment.name || getVoipRecordingFileName(call),
+        mimeType: attachment.mimeType || 'audio/mpeg',
+        moduleId: 'voip_call_reports',
+        recordId: String(call.id || '').trim() || null,
+      });
+      const callLogId = String(call.id || '').trim() || null;
       navigate('/ai', {
         state: {
           forceNewThread: true,
-          aiAutoSubmitInitial: false,
+          aiAutoSubmitInitial: true,
           aiInitialInputKind: 'task_bundle',
           aiInitialCapabilities: ['voice_input'],
-          aiInitialFiles: [prepared],
+          aiInitialFile: prepared,
+          aiInitialVoipCallLogId: callLogId,
           aiInitialPrompt: 'فایل صوتی این تماس پیوست شده است. ابتدا اگر امکان تبدیل مستقیم صوت به متن داری، متن مکالمه را استخراج کن؛ در غیر این صورت از عملگر تحلیل صدا استفاده کن. سپس خلاصه، موضوعات مهم، تعهدها، احساس کلی و اقدام‌های پیشنهادی را به فارسی آماده کن. اگر برای نتیجه‌ی دقیق به اطلاعات بیشتری نیاز داری، پیش از حدس‌زدن سوال کوتاه بپرس.',
         },
       });

@@ -198,6 +198,7 @@ interface AssistantPanelProps {
   initialMediaSourceImages?: AiMediaSourceImage[] | null;
   initialFiles?: Array<(AiUploadedFilePrompt & { message?: string | null })> | null;
   initialFile?: (AiUploadedFilePrompt & { message?: string | null }) | null;
+  initialVoipCallLogId?: string | null;
   autoSubmitInitialPrompt?: boolean;
   openCreateActivityFromMessage?: (input: any) => void | Promise<void>;
   onForwardMessage?: (input: any) => void | Promise<void>;
@@ -471,6 +472,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   initialMediaSourceImages,
   initialFiles,
   initialFile,
+  initialVoipCallLogId,
   autoSubmitInitialPrompt = false,
   openCreateActivityFromMessage,
   onForwardMessage,
@@ -1086,6 +1088,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           mimeType: item.file.mimeType || 'audio/mpeg',
           durationMs: 0,
           filename: item.file.fileName || item.label || 'audio.mp3',
+          url: item.file.url || null,
+          assetId: item.file.assetId || null,
+          entryId: item.file.entryId || null,
+          moduleId: item.file.moduleId || null,
+          recordId: item.file.recordId || null,
         },
       };
     }
@@ -2458,6 +2465,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           userMessageText: assistantPrompt,
           inputKind: 'task_bundle',
           bundle: { inputs },
+          voipCallLogId: String(initialVoipCallLogId || '').trim() || null,
           threadId,
           context: contextWithSelection,
           modelOverride: modelOverrideRef.current,
@@ -2587,7 +2595,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     } finally {
       setSubmitting(false);
     }
-  }, [activeRecordCreationSchema, buildBundleInputPayloads, bundleInputs, callAssistant, contextWithSelection, executeAutoRoute, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, submitting, threadId]);
+  }, [activeRecordCreationSchema, buildBundleInputPayloads, bundleInputs, callAssistant, contextWithSelection, executeAutoRoute, initialVoipCallLogId, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, submitting, threadId]);
 
   useEffect(() => {
     if (!active || !autoSubmitInitialPrompt || !initialFile || submitting || loadingThread || bundleInputs.length === 0) return;

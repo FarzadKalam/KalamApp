@@ -8012,6 +8012,124 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
   });
 };
 
+const compactVoipContextRecord = (record: any, maxLength = 1100) => {
+  const compact: Record<string, any> = {};
+  Object.entries(record && typeof record === 'object' ? record : {}).forEach(([key, value]) => {
+    if (['id', 'org_id', 'created_at', 'updated_at', 'metadata'].includes(key)) return;
+    if (value === null || value === undefined || value === '') return;
+    if (typeof value === 'string') compact[key] = value.length > 420 ? `${value.slice(0, 420)}…` : value;
+    else if (typeof value === 'number' || typeof value === 'boolean') compact[key] = value;
+    else if (Array.isArray(value)) compact[key] = value.slice(0, 4);
+  });
+  const serialized = JSON.stringify(compact);
+  return serialized.length > maxLength ? `${serialized.slice(0, maxLength)}…` : serialized;
+};
+
+// A VoIP recording may be analysed from the standalone AI page. Resolve its
+// context server-side so the assistant receives only records the caller can
+// access, without trusting client-provided customer or employee data.
+const buildVoipAnalysisContext = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  callLogId: any,
+) => {
+  const normalizedCallLogId = normalizeId(callLogId);
+  if (!isUuid(normalizedCallLogId)) return '';
+
+  const callPermission = getModulePermission(authContext?.permissions, 'voip_call_reports');
+  if (!canViewModule(callPermission)) return '';
+  const calls = await safeRestSelect(supabaseUrl, serviceRoleKey, 'voip_call_logs', {
+    id: `eq.${normalizedCallLogId}`,
+    org_id: `eq.${authContext.orgId}`,
+    select: 'id,direction,status,talk_seconds,module_id,record_id,related_module_id,related_record_id,assignee_id,target_extension,target_endpoint_name',
+    limit: 1,
+  });
+  const call = calls[0] || null;
+  if (!call || !canAccessAssignedRecord(call, authContext, getRecordScope(callPermission))) return '';
+
+  const candidates = [
+    { moduleId: String(call.module_id || '').trim(), recordId: normalizeId(call.record_id), label: 'مخاطب تماس' },
+    { moduleId: String(call.related_module_id || '').trim(), recordId: normalizeId(call.related_record_id), label: 'رکورد مرتبط تماس' },
+    { moduleId: 'profiles', recordId: normalizeId(call.assignee_id), label: 'کاربر داخلیِ درگیر در تماس' },
+  ].filter((item) => item.moduleId && isUuid(item.recordId) && (isRegisteredAiModule(item.moduleId) || item.moduleId === 'profiles'));
+
+  const seen = new Set<string>();
+  const parts = [
+    [
+      `نوع تماس: ${String(call.direction || 'نامشخص')}`,
+      `وضعیت: ${String(call.status || 'نامشخص')}`,
+      call.target_extension ? `داخلی مقصد: ${String(call.target_extension)}` : '',
+      call.target_endpoint_name ? `نام مقصد داخلی: ${String(call.target_endpoint_name)}` : '',
+    ].filter(Boolean).join(' | '),
+  ].filter(Boolean);
+
+  const addContext = async (moduleId: string, recordId: string, label: string) => {
+    const key = `${moduleId}:${recordId}`;
+    if (seen.has(key)) return null;
+    seen.add(key);
+    let pageContext: any;
+    let record: any = null;
+    if (moduleId === 'profiles') {
+      const profilePermission = getModulePermission(authContext?.permissions, 'profiles');
+      if (!canViewModule(profilePermission)) return null;
+      const profiles = await safeRestSelect(supabaseUrl, serviceRoleKey, 'profiles', {
+        id: `eq.${recordId}`,
+        org_id: `eq.${authContext.orgId}`,
+        select: 'id,org_id,full_name,role,role_id,job_title,position,team,is_active',
+        limit: 1,
+      });
+      const profile = profiles[0] || null;
+      if (!profile || !canAccessAssignedRecord(profile, authContext, getRecordScope(profilePermission))) return null;
+      record = sanitizeRecord(profile, profilePermission);
+      pageContext = { permitted: true, relatedContexts: [] };
+    } else {
+      pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, {
+        route: '/ai', mode: 'record', moduleId, recordId,
+      });
+      record = pageContext?.permitted ? pageContext.records?.[0] : null;
+    }
+    if (!record) return null;
+    parts.push(`${label} (${moduleId}): ${compactVoipContextRecord(record)}`);
+    return { record, pageContext };
+  };
+
+  for (const candidate of candidates.slice(0, 3)) {
+    const resolved = await addContext(candidate.moduleId, candidate.recordId, candidate.label);
+    if (!resolved || candidate.moduleId !== 'profiles') continue;
+
+    const employeeLinks = await safeRestSelect(supabaseUrl, serviceRoleKey, 'employees', {
+      org_id: `eq.${authContext.orgId}`,
+      related_profile_id: `eq.${candidate.recordId}`,
+      select: 'id',
+      limit: 1,
+    });
+    const employeeId = normalizeId(employeeLinks[0]?.id);
+    if (isUuid(employeeId)) {
+      const employee = await addContext('employees', employeeId, 'پروندهٔ شغلی کاربر داخلی');
+      const jobContext = employee?.pageContext?.relatedContexts?.find((item: any) => item?.moduleId === 'job_descriptions');
+      const jobRecord = jobContext?.records?.[0];
+      if (jobRecord) parts.push(`شرح شغل مرتبط: ${compactVoipContextRecord(jobRecord, 1500)}`);
+    }
+
+    const roleId = normalizeId(resolved.record?.role_id);
+    if (isUuid(roleId)) {
+      const roles = await safeRestSelect(supabaseUrl, serviceRoleKey, 'org_roles', {
+        id: `eq.${roleId}`,
+        org_id: `eq.${authContext.orgId}`,
+        select: 'title',
+        limit: 1,
+      });
+      const roleTitle = String(roles[0]?.title || '').trim();
+      if (roleTitle) parts.push(`نقش سازمانی کاربر داخلی: ${roleTitle}`);
+    }
+  }
+
+  // Keep the voice-analysis prompt focused; organization instructions and the
+  // business plan are already injected through the normal AI context pipeline.
+  return parts.join('\n').slice(0, 5200);
+};
+
 const normalizeTaskBundleInputs = (body: any) => {
   const bundle = body?.bundle && typeof body.bundle === 'object' ? body.bundle : {};
   const rawInputs = [
@@ -8046,6 +8164,11 @@ const normalizeTaskBundleInputs = (body: any) => {
           mimeType: input?.audio?.mimeType || input?.audio?.mime_type || input?.mimeType || 'audio/webm',
           durationMs: numberFrom(input?.audio?.durationMs || input?.audio?.duration_ms || input?.durationMs, 0),
           filename: String(input?.audio?.filename || input?.filename || 'voice.webm').trim() || 'voice.webm',
+          url: input?.audio?.url || input?.audio?.file_url || input?.url || input?.file_url || null,
+          assetId: input?.audio?.assetId || input?.audio?.asset_id || input?.assetId || input?.asset_id || null,
+          entryId: input?.audio?.entryId || input?.audio?.entry_id || input?.entryId || input?.entry_id || null,
+          moduleId: input?.audio?.moduleId || input?.audio?.module_id || input?.moduleId || input?.module_id || null,
+          recordId: input?.audio?.recordId || input?.audio?.record_id || input?.recordId || input?.record_id || null,
         } : null,
       };
     })
@@ -8121,7 +8244,13 @@ const transcribeTaskBundleVoices = async (
   return transcripts;
 };
 
-const buildTaskBundlePrompt = (body: any, inputs: any[], transcripts: any[], previousContext: any = null) => {
+const buildTaskBundlePrompt = (
+  body: any,
+  inputs: any[],
+  transcripts: any[],
+  previousContext: any = null,
+  voipContext = '',
+) => {
   const baseMessage = String(body?.message || body?.prompt || body?.bundle?.message || '').trim();
   const previousSummary = String(previousContext?.summary || previousContext?.analysis || previousContext?.text || '').trim();
   const textParts = inputs
@@ -8140,6 +8269,7 @@ const buildTaskBundlePrompt = (body: any, inputs: any[], transcripts: any[], pre
     });
   return [
     baseMessage || 'این ورودی‌ها را بررسی کن و مطابق عملگرهای انتخاب‌شده اقدام پیشنهادی بده.',
+    voipContext ? `زمینهٔ محدود و مجاز تماس:\n${voipContext}` : '',
     previousSummary ? `زمینه ذخیره‌شده از مرحله قبل همین گفتگو:\n${previousSummary}` : '',
     transcripts.length ? 'ابتدا متن فایل صوتی را با عنوان «متن فایل صوتی» بنویس و سپس پاسخ یا اقدام موردنیاز را ارائه کن.' : '',
     '',
@@ -8543,7 +8673,13 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     inputs,
     decisionProviderConfig,
   );
-  const prompt = buildTaskBundlePrompt(body, inputs, transcripts, previousTaskContext);
+  const voipAnalysisContext = await buildVoipAnalysisContext(
+    supabaseUrl,
+    serviceRoleKey,
+    authContext,
+    body?.voipCallLogId || body?.voip_call_log_id,
+  );
+  const prompt = buildTaskBundlePrompt(body, inputs, transcripts, previousTaskContext, voipAnalysisContext);
   const files = inputs.map((input) => input.file).filter(Boolean);
   const firstFile = files[0] || null;
   const bundleMeta = {
@@ -8598,6 +8734,12 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
         label: input?.label || null,
         filename: input?.file?.filename || input?.audio?.filename || null,
         mime_type: input?.file?.mimeType || input?.audio?.mimeType || null,
+        url: input?.file?.url || input?.audio?.url || null,
+        file_type: input?.audio ? 'audio' : input?.type === 'image' ? 'image' : 'file',
+        asset_id: input?.file?.assetId || input?.audio?.assetId || null,
+        entry_id: input?.file?.entryId || input?.audio?.entryId || null,
+        module_id: input?.file?.moduleId || input?.audio?.moduleId || null,
+        record_id: input?.file?.recordId || input?.audio?.recordId || null,
       })),
     },
   });

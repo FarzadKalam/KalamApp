@@ -2,7 +2,7 @@
 
 import { parseTehranProviderDateTimeToUtcIso } from '../_shared/tehran-datetime.ts';
 
-const FUNCTION_BUILD = 'telefonchy-smartcall-2026-07-22-recording-state';
+const FUNCTION_BUILD = 'telefonchy-smartcall-2026-09-16-call-outcome-and-target';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -291,22 +291,37 @@ const mapDirection = (value: any) => {
 
 const mapStatus = (value: any, talkSeconds: number | null) => {
   const raw = String(value || '').trim().toLowerCase();
-  if (talkSeconds && talkSeconds > 0) return raw.includes('answer') ? 'answered' : 'completed';
-  if (raw.includes('miss') || raw.includes('noanswer') || raw.includes('no_answer') || raw.includes('not answered')) return 'missed';
+  const compact = raw.replace(/[\s_-]+/g, '');
+
+  // Telefonchy sends values such as "NO ANSWER". A zero-second call was not
+  // answered even when the provider status contains the word "answer".
+  if (talkSeconds !== null && talkSeconds <= 0) return 'missed';
+  if (talkSeconds && talkSeconds > 0) return compact.includes('answer') ? 'answered' : 'completed';
+  if (raw.includes('miss') || compact.includes('noanswer') || compact.includes('notanswered')) return 'missed';
   if (raw.includes('fail') || raw.includes('busy') || raw.includes('cancel') || raw.includes('reject')) return 'failed';
   if (raw.includes('ring')) return 'ringing';
-  if (raw.includes('answer')) return 'answered';
+  if (compact.includes('answer')) return 'answered';
   if (raw.includes('complete') || raw.includes('end') || raw.includes('ok') || raw.includes('success')) return 'completed';
   return 'unknown';
 };
 
 const hasTelefonchyRecording = (_item: Record<string, any>, callId: string, fileId: string) => Boolean(callId && fileId);
 
+const telefonchyEndpoint = (item: Record<string, any>, side: 'source' | 'destination') => {
+  const contact = item?.contact && typeof item.contact === 'object' && !Array.isArray(item.contact) ? item.contact : {};
+  const value = side === 'source' ? contact?.call_source : contact?.call_dest;
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+};
+
+const isTelefonchyExtensionEndpoint = (endpoint: Record<string, any>) =>
+  String(endpoint?.type || '').trim().toLowerCase() === 'exten';
+
 const resolveTelefonchyOperator = (item: Record<string, any>, direction: string) => {
   const exten = item?.exten && typeof item.exten === 'object' && !Array.isArray(item.exten) ? item.exten : {};
-  const contact = item?.contact && typeof item.contact === 'object' && !Array.isArray(item.contact) ? item.contact : {};
-  const endpoint = direction === 'incoming' ? contact?.call_dest : contact?.call_source;
-  const operatorContact = endpoint && typeof endpoint === 'object' && String(endpoint?.type || '').trim().toLowerCase() === 'exten'
+  const endpoint = direction === 'incoming'
+    ? telefonchyEndpoint(item, 'destination')
+    : telefonchyEndpoint(item, 'source');
+  const operatorContact = isTelefonchyExtensionEndpoint(endpoint)
     ? endpoint
     : {};
   return {
@@ -413,9 +428,31 @@ const normalizeProviderCallRow = (
   item: Record<string, any>
 ) => {
   const talkSeconds = toIntegerOrNull(firstValue(item.time_talk, item.talk_seconds, item.duration, item.billsec));
-  const direction = mapDirection(firstValue(item.type, item.direction, item.call_type));
+  const sourceEndpoint = telefonchyEndpoint(item, 'source');
+  const destinationEndpoint = telefonchyEndpoint(item, 'destination');
+  const providerDirection = mapDirection(firstValue(item.type, item.direction, item.call_type));
+  const direction = isTelefonchyExtensionEndpoint(sourceEndpoint) && isTelefonchyExtensionEndpoint(destinationEndpoint)
+    ? 'internal'
+    : providerDirection;
   const sourceNumber = normalizePhone(firstValue(item.call_source, item.source_number, item.source, item.from, item.caller));
-  const destinationNumber = normalizePhone(firstValue(item.call_dest, item.destination_number, item.destination, item.to, item.callee));
+  const rawDestinationNumber = normalizePhone(firstValue(item.call_dest, item.destination_number, item.destination, item.to, item.callee));
+  // An extension is an endpoint, not the recipient's telephone number. This
+  // prevents an operator/extension identifier from being shown as a destination phone.
+  const destinationNumber = direction === 'outgoing' && isTelefonchyExtensionEndpoint(destinationEndpoint)
+    ? ''
+    : rawDestinationNumber;
+  const exten = item?.exten && typeof item.exten === 'object' && !Array.isArray(item.exten) ? item.exten : {};
+  const targetExtension = firstValue(
+    item.target_extension,
+    item.target_exten,
+    item.destination_extension,
+    item.destination_exten,
+    destinationEndpoint?.extension,
+    destinationEndpoint?.number,
+    direction === 'incoming' ? exten.number : '',
+    isTelefonchyExtensionEndpoint(destinationEndpoint) ? rawDestinationNumber : ''
+  );
+  const targetEndpointName = firstValue(destinationEndpoint?.name, item.destination_name, item.target_name);
   const operator = resolveTelefonchyOperator(item, direction);
   const counterpartyPhone = direction === 'incoming' ? sourceNumber : destinationNumber;
   const callId = firstValue(item.call_id, item.callId, item.cuid, item.unique_id);
@@ -433,6 +470,8 @@ const normalizeProviderCallRow = (
     source_number: sourceNumber || null,
     destination_number: destinationNumber || null,
     extension: operator.extension || null,
+    target_extension: targetExtension || null,
+    target_endpoint_name: targetEndpointName || null,
     operator_code: operator.operatorCode || null,
     trunk: firstValue(item.trunk, item.trunk_number) || null,
     started_at: parseTehranProviderDateTimeToUtcIso(firstValue(item.started_at, item.start_at, item.start_time, item.created_at)),
@@ -450,6 +489,8 @@ const normalizeProviderCallRow = (
       recording_file: recordingAvailable ? firstValue(item.file_record, item.fileRecord, item.recording_file, item.recordingFile) : null,
       provider_operator_name: operator.displayName || null,
       provider_operator_id: operator.providerOperatorId || null,
+      provider_source_endpoint_type: firstValue(sourceEndpoint?.type) || null,
+      provider_destination_endpoint_type: firstValue(destinationEndpoint?.type) || null,
       provider_row: item,
     },
   };

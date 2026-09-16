@@ -279,6 +279,8 @@ const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
                   const counterpartyPhone = direction === 'outgoing'
                     ? String(row?.destination_number || activeThread?.phone || '').trim()
                     : String(row?.source_number || activeThread?.phone || '').trim();
+                  const targetExtension = String(row?.target_extension || (direction === 'incoming' ? row?.extension : '') || '').trim();
+                  const targetEndpointName = String(row?.target_endpoint_name || '').trim();
                   return (
                     <div
                       key={String(row?.id || '')}
@@ -304,7 +306,8 @@ const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
                             >
                               {counterpartyPhone || '-'}
                             </button>
-                            {String(row?.extension || '').trim() ? ` → ${String(row.extension).trim()}` : ''}
+                            {targetExtension ? ` → داخلی ${targetExtension}` : ''}
+                            {!targetExtension && targetEndpointName ? ` → ${targetEndpointName}` : ''}
                           </div>
                         </div>
                         <div className="text-[11px] text-gray-400">{safeJalaliFormat(startedAt, 'YYYY/MM/DD HH:mm')}</div>
