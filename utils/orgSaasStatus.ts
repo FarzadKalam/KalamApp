@@ -7,9 +7,16 @@ export type OrgSaasStatus = {
   status: string | null;
   is_demo: boolean;
   is_readonly: boolean;
+  billing_readonly?: boolean;
   trial_ends_at: string | null;
   plan_code: string | null;
   slug: string | null;
+  next_billing_invoice?: {
+    due_at: string;
+    grace_ends_at: string;
+    total_irt: number;
+    status: 'issued' | 'overdue';
+  } | null;
 };
 
 export const getOrgSaasStatus = async (): Promise<OrgSaasStatus | null> => {

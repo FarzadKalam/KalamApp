@@ -108,6 +108,32 @@ const AccountStatusTab: React.FC = () => {
     }
   };
 
+  const paySubscriptionInvoice = async (invoice: any, method: 'wallet' | 'online') => {
+    const invoiceId = String(invoice?.id || '').trim();
+    if (!invoiceId) return;
+    setCheckoutLoading(true);
+    try {
+      if (method === 'wallet') {
+        const { data, error } = await supabase.rpc('pay_current_saas_subscription_invoice_from_billing_wallet', { p_invoice_id: invoiceId });
+        if (error) throw error;
+        if (data?.success === false) throw new Error(data?.reason === 'billing_wallet_insufficient' ? 'موجودی کیف پول برای پرداخت این صورت‌حساب کافی نیست.' : 'پرداخت صورت‌حساب ناموفق بود.');
+        message.success('صورت‌حساب اشتراک از کیف پول پرداخت و دوره تمدید شد.');
+        await load();
+        return;
+      }
+      const { data, error } = await supabase.functions.invoke('payment-gateway', {
+        body: { action: 'create_saas_subscription_invoice_payment', invoice_id: invoiceId, return_origin: window.location.origin },
+      });
+      if (error) throw error;
+      if (!data?.success || !data?.payment_url) throw new Error(String(data?.message || 'ساخت پرداخت ناموفق بود.'));
+      window.location.href = data.payment_url;
+    } catch (error) {
+      message.error(toFaErrorMessage(error as any, 'پرداخت صورت‌حساب اشتراک ناموفق بود.'));
+    } finally {
+      setCheckoutLoading(false);
+    }
+  };
+
   const submitWalletAction = async () => {
     const amountIrt = Math.round(Number(walletAmount || 0));
     if (!walletAction || !Number.isFinite(amountIrt) || amountIrt < 10000) {
@@ -154,6 +180,8 @@ const AccountStatusTab: React.FC = () => {
   const hasFullPlanAccess = access.full_access === true;
   const aiWallet = overview.ai_wallet || {};
   const billingWallet = overview.billing_wallet || {};
+  const subscriptionInvoices = Array.isArray(overview.subscription_invoices) ? overview.subscription_invoices : [];
+  const payableInvoices = subscriptionInvoices.filter((invoice: any) => ['issued', 'overdue'].includes(String(invoice?.status || '')));
   const aiRemaining = Math.max(0, Number(aiWallet.balance_irt || 0) + Number(aiWallet.included_quota_irt || 0) - Number(aiWallet.reserved_irt || 0));
 
   return (
@@ -184,6 +212,16 @@ const AccountStatusTab: React.FC = () => {
         <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="کیف پول سازمان" value={Number(billingWallet.balance_irt || 0)} formatter={(value) => `${Number(value).toLocaleString('fa-IR')} تومان`} prefix={<CreditCardOutlined className="text-emerald-600" />} /><Button className="mt-2" size="small" type="link" onClick={() => { setWalletAmount(null); setWalletAction('topup'); }}>شارژ دلخواه</Button></Card></Col>
         <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="حساب اینستاگرام" value={Number(quotas.instagram_accounts_used || 0)} suffix={`/ ${Number(quotas.instagram_accounts || 0) || '—'}`} prefix={<InstagramOutlined className="text-pink-600" />} /><Text type="secondary" className="text-xs">سقف اتصال از بسته و خریدهای شما محاسبه می‌شود.</Text></Card></Col>
       </Row>
+
+      {payableInvoices.length > 0 && <Card className="rounded-2xl border-amber-300" title="تمدیدهای در انتظار پرداخت">
+        <Alert className="mb-4" type={payableInvoices.some((invoice: any) => invoice.status === 'overdue') ? 'error' : 'warning'} showIcon message={payableInvoices.some((invoice: any) => invoice.status === 'overdue') ? 'مهلت تمدید پایان یافته است؛ برای بازگشت کامل دسترسی، صورت‌حساب را پرداخت کنید.' : 'برای تمدید خودکار ابتدا از کیف پول سازمان استفاده می‌شود؛ در صورت کمبود موجودی، از اینجا پرداخت کنید.'} />
+        <div className="space-y-3">
+          {payableInvoices.map((invoice: any) => <div key={String(invoice.id)} className="flex flex-col gap-3 rounded-xl border border-slate-200 p-4 md:flex-row md:items-center md:justify-between dark:border-slate-700">
+            <div><Space wrap><Text strong>صورت‌حساب تمدید</Text><Tag color={invoice.status === 'overdue' ? 'red' : 'gold'}>{invoice.status === 'overdue' ? 'مهلت پایان یافته' : 'در انتظار پرداخت'}</Tag></Space><div className="mt-1 text-xs text-slate-500">سررسید: {invoice.due_at ? new Date(invoice.due_at).toLocaleDateString('fa-IR') : '—'} {invoice.grace_ends_at ? ` · پایان مهلت: ${new Date(invoice.grace_ends_at).toLocaleDateString('fa-IR')}` : ''}</div><div className="mt-1 text-lg font-black">{formatIrt(invoice.total_irt)}</div></div>
+            <Space wrap><Button loading={checkoutLoading} disabled={Number(billingWallet.balance_irt || 0) < Number(invoice.total_irt || 0)} onClick={() => void paySubscriptionInvoice(invoice, 'wallet')}>پرداخت از کیف پول</Button><Button type="primary" loading={checkoutLoading} icon={<CreditCardOutlined />} onClick={() => void paySubscriptionInvoice(invoice, 'online')}>پرداخت آنلاین</Button></Space>
+          </div>)}
+        </div>
+      </Card>}
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={15}>

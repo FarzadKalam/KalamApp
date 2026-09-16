@@ -86,7 +86,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'ai-assistant-2026-07-26-02';
+const FUNCTION_BUILD = 'ai-assistant-2026-09-16-content-project-drafts';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 const DEFAULT_AI_MODEL = '';
@@ -9203,28 +9203,41 @@ const executeAiProcessOperation = async (
       title: buildAiRecordTitle(project, projectName),
     };
     if (!templateId) return baseResult;
-    try {
-      const processResult = await executeAiProcessOperation(
-        supabaseUrl,
-        serviceRoleKey,
-        authContext,
-        { ...pageContext, moduleId: 'projects', recordId: String(project.id), records: [project] },
-        {
-          type: 'materialize_template_to_tasks',
-          template_id: templateId,
-          process_name: String(operation?.process_name || template.name || projectName).trim(),
-        },
-        processContext,
-        orgPeopleContext,
-      );
-      return { ...baseResult, process: processResult };
-    } catch (error) {
-      await restDelete(supabaseUrl, serviceRoleKey, 'projects', {
-        id: `eq.${project.id}`,
-        org_id: `eq.${authContext.orgId}`,
-      }).catch(() => []);
-      throw error;
-    }
+    // پروژهٔ تقویمی ابتدا ظرف برنامه‌ریزی است. مرحله‌های الگو به شکل پیش‌نویس
+    // ذخیره می‌شوند تا کاربر یا هوش مصنوعی هرکدام را جداگانه ارجاع کند؛ ساخت
+    // بی‌اجازهٔ همهٔ فعالیت‌های واقعی، تقویم را شلوغ و تکراری می‌کرد.
+    const groupId = `ai_project_${String(project.id).slice(0, 8)}_${Date.now()}`;
+    const draftStages = (template.stages || []).map((stage: any, index: number) => ({
+      id: `ai_project_draft_${String(project.id).slice(0, 8)}_${index + 1}`,
+      template_stage_id: stage.id || null,
+      name: String(stage.stage_name || `مرحله ${index + 1}`).trim(),
+      stage_name: String(stage.stage_name || `مرحله ${index + 1}`).trim(),
+      status: 'draft',
+      is_draft: true,
+      task_type: String(stage?.metadata?.task_type || 'فعالیت سازمانی').trim() || 'فعالیت سازمانی',
+      sort_order: Number(stage.sort_order || ((index + 1) * 10)),
+      default_assignee_id: stage.default_assignee_id || null,
+      default_assignee_role_id: stage.default_assignee_role_id || null,
+      wage: numberFrom(stage.wage, 0),
+      process_group_id: groupId,
+      process_group_name: String(template.name || projectName).trim(),
+      process_node_key: `${groupId}__${index + 1}`,
+      process_lane_key: `${groupId}__calendar_lane`,
+      process_lane_name: 'فعالیت‌های پروژه',
+      process_target_module_ids: ['projects'],
+      process_link_map: { projects: String(project.id), content_calendars: recordId },
+      metadata: { ...(stage.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}), source: 'ai_content_project_draft', content_calendar_id: recordId, project_id: String(project.id) },
+    }));
+    await restPatch(supabaseUrl, serviceRoleKey, 'projects', {
+      id: `eq.${project.id}`,
+      org_id: `eq.${authContext.orgId}`,
+    }, {
+      process_template_id: templateId,
+      execution_process_draft: draftStages,
+      updated_at: new Date().toISOString(),
+      updated_by: authContext.userId || null,
+    });
+    return { ...baseResult, template_id: templateId, draft_stage_count: draftStages.length };
   }
 
   if (type === 'materialize_template_to_tasks') {

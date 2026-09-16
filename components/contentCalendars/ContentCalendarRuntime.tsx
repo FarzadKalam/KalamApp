@@ -12,11 +12,22 @@ import {
 } from "antd";
 import {
   CalendarOutlined,
+  CopyOutlined,
+  HolderOutlined,
   LeftOutlined,
   PlusOutlined,
   ProjectOutlined,
   RightOutlined,
 } from "@ant-design/icons";
+import {
+  DndContext,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
 import { useNavigate } from "react-router-dom";
 import DateObject from "react-date-object";
 import gregorian from "react-date-object/calendars/gregorian";
@@ -56,12 +67,18 @@ import type { ProcessV2CardData, ProcessV2Stage } from "../processes/ProcessCard
 
 type RuntimeItem = {
   id: string;
-  kind: "task" | "project";
+  kind: "task" | "project" | "project_draft";
   record: any;
   date: Date;
   inherited?: boolean;
+  project?: any;
+  draftStage?: any;
 };
 type CreateMode = "choice" | "raw" | "template";
+type CalendarClipboard = {
+  kind: "task" | "project";
+  record: any;
+};
 const CONTENT_TYPES = [
   { value: "post", label: "پست" },
   { value: "story", label: "استوری" },
@@ -111,6 +128,20 @@ const makePersianDate = (year: number, month: number, day: number) =>
     calendar: persian,
     locale: persian_fa,
   });
+
+const CalendarDragHandle: React.FC<{ item: RuntimeItem; disabled?: boolean }> = ({ item, disabled = false }) => {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `calendar-item:${item.kind}:${item.id}`,
+    disabled,
+    data: { item },
+  });
+  return <span ref={setNodeRef} {...attributes} {...listeners} aria-label="جابجایی به روز دیگر" title="جابجایی به روز دیگر" onClick={(event) => event.stopPropagation()} className={`inline-flex h-6 w-6 shrink-0 touch-none items-center justify-center rounded text-gray-400 ${disabled ? 'cursor-not-allowed opacity-40' : 'cursor-grab active:cursor-grabbing hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/10'}`} style={{ opacity: isDragging ? 0.35 : 1 }}><HolderOutlined /></span>;
+};
+
+const CalendarDayDropTarget: React.FC<{ dayKey: string; children: React.ReactNode }> = ({ dayKey, children }) => {
+  const { setNodeRef, isOver } = useDroppable({ id: `calendar-day:${dayKey}` });
+  return <div ref={setNodeRef} className={isOver ? 'rounded-xl ring-2 ring-[rgba(var(--brand-500-rgb),0.65)]' : undefined}>{children}</div>;
+};
 const formatTime = (value: any) => {
   const date = asDate(value);
   return date ? toPersian(date).format("HH:mm") : "";
@@ -147,6 +178,14 @@ type TemplateProjectPrefill = {
   customerId?: string | null;
   sourceInvoiceId?: string | null;
   dateKey: string;
+  copyProject?: {
+    name?: string | null;
+    customerId?: string | null;
+    processTemplateId?: string | null;
+    projectAlignment?: any[];
+    description?: string | null;
+  };
+  stayOnOrigin?: boolean;
 };
 
 const ContentCalendarRuntime: React.FC<{
@@ -182,6 +221,9 @@ const ContentCalendarRuntime: React.FC<{
   const [templateId, setTemplateId] = useState<string>();
   const [templateStages, setTemplateStages] = useState<any[]>([]);
   const [templateStageId, setTemplateStageId] = useState<string>();
+  const [clipboard, setClipboard] = useState<CalendarClipboard | null>(null);
+  const [copiedTask, setCopiedTask] = useState<any | null>(null);
+  const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 7, delay: 180, tolerance: 5 } }));
   const taskColumns =
     "id,name,status,priority,start_date,due_date,completed_at,project_id,content_calendar_id,content_type,related_to_module,updated_at,assignee_id,assignee_role_id,assignee_type,recurrence_info,task_type";
   const load = async () => {
@@ -192,7 +234,7 @@ const ContentCalendarRuntime: React.FC<{
         supabase
           .from("projects")
           .select(
-            "id,name,status,priority,start_date,due_date,completed_at,customer_id,content_calendar_id,updated_at,assignee_id,assignee_role_id,assignee_type",
+            "id,name,status,priority,start_date,due_date,completed_at,customer_id,content_calendar_id,updated_at,assignee_id,assignee_role_id,assignee_type,process_template_id,execution_process_draft,project_alignment,description",
           )
           .eq("content_calendar_id", calendarId)
           .order("due_date", { ascending: true })
@@ -248,6 +290,14 @@ const ContentCalendarRuntime: React.FC<{
   useEffect(() => {
     void load();
   }, [calendarId]);
+  useEffect(() => {
+    const onProjectCreated = (event: Event) => {
+      const createdCalendarId = String((event as CustomEvent)?.detail?.calendarId || "").trim();
+      if (createdCalendarId && createdCalendarId === calendarId) void load();
+    };
+    window.addEventListener("content-calendar-project-created", onProjectCreated);
+    return () => window.removeEventListener("content-calendar-project-created", onProjectCreated);
+  }, [calendarId]);
   const days = useMemo(() => buildDays(anchor), [anchor]);
   useEffect(() => {
     let active = true;
@@ -265,7 +315,9 @@ const ContentCalendarRuntime: React.FC<{
   }, [days]);
   const events = useMemo(() => {
     const entries: RuntimeItem[] = [];
-    if (mode !== "projects")
+    // پروژه در نمای روزانه ظرفِ فعالیت‌هاست، نه یک رویداد تکراری. فقط در
+    // نمای «پروژه‌ها» خودِ کارت پروژه را نشان می‌دهیم.
+    if (mode === "projects")
       projects.forEach((record) => {
         const date = asDate(record?.[projectDateField]);
         if (date)
@@ -276,7 +328,7 @@ const ContentCalendarRuntime: React.FC<{
             date,
           });
       });
-    if (mode !== "tasks")
+    if (mode !== "projects")
       tasks.forEach((record) => {
         const date = asDate(record?.[taskDateField]);
         if (date)
@@ -287,6 +339,29 @@ const ContentCalendarRuntime: React.FC<{
             date,
             inherited: record.__contentCalendarInherited === true,
           });
+      });
+    if (mode !== "projects")
+      projects.forEach((project) => {
+        const drafts = Array.isArray(project?.execution_process_draft)
+          ? project.execution_process_draft
+          : [];
+        drafts.forEach((draftStage: any, index: number) => {
+          const date = asDate(
+            draftStage?.start_date ||
+              draftStage?.due_date ||
+              project?.start_date ||
+              project?.due_date,
+          );
+          if (!date) return;
+          entries.push({
+            id: `${String(project.id)}:${String(draftStage?.process_node_key || draftStage?.id || index)}`,
+            kind: "project_draft",
+            record: draftStage,
+            project,
+            draftStage,
+            date,
+          });
+        });
       });
     return entries.reduce((map, item) => {
       const key = toKey(item.date);
@@ -320,6 +395,7 @@ const ContentCalendarRuntime: React.FC<{
     setTemplateId(undefined);
     setTemplateStages([]);
     setTemplateStageId(undefined);
+    setCopiedTask(null);
   };
   const openDraftActivity = async ({
     draftStages,
@@ -493,7 +569,9 @@ const ContentCalendarRuntime: React.FC<{
       return;
     }
     const groupId = createProcessGroupId();
+    const sourceTask = copiedTask || {};
     const draftStage = {
+      ...sourceTask,
       id: `content_calendar_draft_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       name: rawName.trim(),
       stage_name: rawName.trim(),
@@ -508,6 +586,7 @@ const ContentCalendarRuntime: React.FC<{
       process_node_key: `${groupId}__activity_1`,
       process_lane_key: `${groupId}__content_calendar_lane`,
       metadata: {
+        ...asObject(sourceTask?.metadata),
         task_type: "فعالیت سازمانی",
         content_calendar_id: calendarId,
       },
@@ -515,7 +594,7 @@ const ContentCalendarRuntime: React.FC<{
     await openDraftActivity({
       draftStages: [draftStage],
       targetStage: draftStage,
-      processTitle: "فعالیت‌های تقویم محتوایی",
+      processTitle: copiedTask ? "کپی فعالیت تقویم محتوایی" : "فعالیت‌های تقویم محتوایی",
       contentType: rawContentType || null,
     });
   };
@@ -582,119 +661,168 @@ const ContentCalendarRuntime: React.FC<{
       );
     }
   };
+  const openProjectDraftActivity = async (item: RuntimeItem) => {
+    const project = item.project;
+    const selectedDraft = item.draftStage;
+    if (!project?.id || !selectedDraft?.id || !calendarId) return;
+    setCreating(true);
+    try {
+      const sourceStages = Array.isArray(project.execution_process_draft) ? project.execution_process_draft : [];
+      const context = await ensureProcessRunForDraftStageGroup({
+        supabaseClient: supabase,
+        moduleId: "projects",
+        recordId: String(project.id),
+        stages: sourceStages,
+        targetStage: selectedDraft,
+      });
+      if (!context.processRunId || !context.processRunStageId) throw new Error("آماده‌سازی مرحلهٔ پروژه ناموفق بود.");
+      const dateKey = toKey(item.date);
+      const defaultSchedule = { start_date: `${dateKey}T09:00:00`, due_date: `${dateKey}T17:00:00` };
+      const stages = sourceStages.map((stage: any) => {
+        const isSelected = String(stage?.id) === String(selectedDraft.id);
+        const runStageId = resolveProcessRunStageId(context.stageMap, stage);
+        return {
+          ...stage,
+          ...(isSelected ? defaultSchedule : {}),
+          project_id: String(project.id),
+          process_run_id: context.processRunId,
+          process_run_stage_id: runStageId || null,
+          process_link_map: { ...asObject(stage?.process_link_map), projects: String(project.id), content_calendars: calendarId },
+          metadata: { ...asObject(stage?.metadata), project_id: String(project.id), content_calendar_id: calendarId, process_run_id: context.processRunId, process_run_stage_id: runStageId || null, ...(isSelected ? defaultSchedule : {}) },
+        };
+      });
+      const selected = stages.find((stage: any) => String(stage.id) === String(selectedDraft.id));
+      if (!selected) throw new Error("مرحلهٔ پیش‌نویس پیدا نشد.");
+      const modalStage: ProcessV2Stage = {
+        id: String(selected.process_run_stage_id || selected.id), title: String(selected.stage_name || selected.name || "فعالیت"), kind: "draft", status: "draft", layoutSlot: Number(selected.sort_order || 10), assigneeLabel: String(selected.assignee_label || "مسئول پیش‌فرض"), activityTypeLabel: String(selected.task_type || selected?.metadata?.task_type || "فعالیت سازمانی"), dueLabel: String(selected.due_date || ""), actionCount: Array.isArray(selected.automation_rules) ? selected.automation_rules.length : 0, source: selected,
+      };
+      const modalProcess: ProcessV2CardData = {
+        mode: "run", id: context.processRunId, title: getRecordTitle(project, MODULES.projects, { fallback: "پروژه" }), templateId: String(project.process_template_id || ""), templateTitle: String(selected.process_group_name || "فعالیت‌های پروژه"), relatedRecordLabel: getRecordTitle(calendar, MODULES.content_calendars, { fallback: "تقویم محتوایی" }), statusLabel: "draft", lanes: [{ id: String(selected.process_lane_key || "project_calendar_lane"), title: String(selected.process_lane_name || "فعالیت‌های پروژه"), stages: [modalStage] }],
+      };
+      openTaskProcessModal({
+        draftModal: {
+          process: modalProcess,
+          stage: modalStage,
+          laneTitle: String(selected.process_lane_name || "فعالیت‌های پروژه"),
+          onSaveDraftActivity: async (overrides) => {
+            const patch = asObject(overrides);
+            await saveProcessV2DraftStage({ supabaseClient: supabase, stageId: selected.process_run_stage_id, stageName: patch.stage_name || patch.name || selected.stage_name || selected.name, assigneeUserId: patch.assignee_id || patch.default_assignee_id || selected.assignee_id || selected.default_assignee_id, assigneeRoleId: patch.assignee_role_id || patch.default_assignee_role_id || selected.assignee_role_id || selected.default_assignee_role_id, wage: patch.wage || selected.wage, plannedStartAt: patch.start_date || selected.start_date, plannedDueAt: patch.due_date || selected.due_date, metadata: { ...asObject(selected.metadata), ...asObject(patch.metadata) } });
+          },
+          onCreateDraftActivity: async (overrides) => {
+            const patch = asObject(overrides);
+            const result = await autoAssignProcessV2DraftStages({ supabaseClient: supabase, moduleId: "projects", recordId: String(project.id), recordData: project, draftStages: stages.map((stage: any) => String(stage.id) === String(selected.id) ? { ...stage, ...patch, metadata: { ...asObject(stage.metadata), ...asObject(patch.metadata) } } : stage), targetGroupId: selected.process_group_id, targetStageId: selected.process_node_key || selected.id });
+            const ids = (result.createdTasks || []).map((task: any) => String(task?.id || "")).filter(Boolean);
+            if (ids.length) {
+              const { error } = await supabase.from("tasks").update({ project_id: String(project.id), content_calendar_id: calendarId, start_date: patch.start_date || selected.start_date || defaultSchedule.start_date, due_date: patch.due_date || selected.due_date || defaultSchedule.due_date }).in("id", ids);
+              if (error) throw error;
+              await load();
+            }
+            if (!ids.length && result.missingAssigneeCount) throw new Error("برای ارجاع فعالیت، مسئول مرحله را تعیین کنید.");
+            return result;
+          },
+        },
+      });
+    } catch (error: any) {
+      message.error(`باز کردن پیش‌نویس پروژه ناموفق بود: ${String(error?.message || "خطای نامشخص")}`);
+    } finally {
+      setCreating(false);
+    }
+  };
   const renderEvent = (item: RuntimeItem, large = false) => {
     const isTask = item.kind === "task";
+    const isDraft = item.kind === "project_draft";
     const record = item.record;
-    const statusOptions =
-      MODULES.tasks.fields.find((field) => field.key === "status")?.options ||
-      [];
-    const label = isTask
-      ? getTaskStatusLabel(record.status, record, statusOptions)
-      : String(record.status || "");
-    const color = isTask
-      ? STATUS_COLORS[
-          getTaskStatusColor(record.status, record, statusOptions)
-        ] || STATUS_COLORS.default
-      : "#8b5cf6";
-    const assignee = resolveAssigneePresentation({
-      source: record,
-      allUsers: directory.users,
-      allRoles: directory.roles,
-    });
-    const projectProcesses: Array<{ title: string; tasks: any[] }> = !isTask
-      ? Array.from<{ title: string; tasks: any[] }>(
-          tasks
-            .filter((task) => String(task?.project_id || "") === String(record?.id || ""))
-            .reduce((groups, task) => {
-              const recurrence = asObject(task?.recurrence_info);
-              const processGroup = asObject(recurrence?.process_group);
-              const key = String(processGroup?.id || task?.process_group_id || "project_tasks");
-              const title = String(
-                processGroup?.name || task?.process_group_name || processGroup?.template_name || "فعالیت‌های پروژه",
-              );
-              const current = groups.get(key) || { title, tasks: [] as any[] };
-              current.tasks.push(task);
-              groups.set(key, current);
-              return groups;
-            }, new Map<string, { title: string; tasks: any[] }>())
-            .values(),
-        ).slice(0, 3)
-      : [];
-    return (
-      <button
-        type="button"
-        key={`${item.kind}:${item.id}`}
-        onClick={() =>
-          isTask
-            ? openTaskProcessModal({ taskId: item.id, task: record })
-            : navigate(`/projects/${item.id}`)
-        }
-        className={`w-full rounded-lg border border-gray-200 bg-white/90 text-right shadow-sm transition hover:border-[rgba(var(--brand-400-rgb),0.9)] dark:border-white/10 dark:bg-[#1d1d1d] ${large ? "px-3 py-2 text-xs" : "px-2 py-1 text-[10px]"}`}
-        style={{ borderRight: `3px solid ${color}` }}
-      >
-        <span className="flex min-w-0 items-start gap-1.5">
-          <span
-            className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-full border bg-white dark:bg-[#1d1d1d]"
-            style={{ borderColor: color }}
-          >
-            {assignee.assigneeId ? (
-              <IdentityAvatar
-                size={18}
-                option={{
-                  kind: assignee.kind === "role" ? "role" : "user",
-                  id: assignee.assigneeId,
-                  label: assignee.label || "مسئول",
-                  avatarUrl: assignee.avatarUrl || undefined,
-                  iconKey: normalizeRoleIconKey(assignee.role?.icon_key),
-                }}
-              />
-            ) : (
-              <span
-                className="h-full w-full"
-                style={{ backgroundColor: color }}
-              />
-            )}
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block line-clamp-2 font-bold text-gray-700 dark:text-gray-100">
-              {getRecordTitle(record, MODULES[isTask ? "tasks" : "projects"], {
-                fallback: "بدون عنوان",
-              })}
-            </span>
-            {assignee.label ? (
-              <span className="block truncate text-[9px] text-gray-500 dark:text-gray-400">
-                مسئول: {assignee.label}
-              </span>
-            ) : null}
-          </span>
+    const statusOptions = MODULES.tasks.fields.find((field) => field.key === "status")?.options || [];
+    const label = isDraft ? "پیش‌نویس" : isTask ? getTaskStatusLabel(record.status, record, statusOptions) : String(record.status || "");
+    const color = isDraft ? "#a855f7" : isTask ? STATUS_COLORS[getTaskStatusColor(record.status, record, statusOptions)] || STATUS_COLORS.default : "#8b5cf6";
+    const assignee = resolveAssigneePresentation({ source: record, allUsers: directory.users, allRoles: directory.roles });
+    const linkedProject = isTask && record?.project_id
+      ? projects.find((project) => String(project?.id || "") === String(record.project_id)) || null
+      : null;
+    const title = isDraft
+      ? String(record?.stage_name || record?.name || "فعالیت پیش‌نویس")
+      : getRecordTitle(record, MODULES[isTask ? "tasks" : "projects"], { fallback: "بدون عنوان" });
+    const open = () => {
+      if (isTask) openTaskProcessModal({ taskId: item.id, task: record });
+      else if (isDraft) void openProjectDraftActivity(item);
+      else navigate(`/projects/${item.id}`);
+    };
+    const copySource = isTask ? { kind: "task" as const, record } : !isDraft ? { kind: "project" as const, record } : null;
+    return <div key={`${item.kind}:${item.id}`} onClick={(event) => { event.stopPropagation(); open(); }} className={`w-full cursor-pointer rounded-lg border text-right shadow-sm transition hover:border-[rgba(var(--brand-400-rgb),0.9)] ${isDraft ? "border-dashed border-purple-400 bg-purple-50/80 dark:border-purple-400/70 dark:bg-purple-950/20" : "border-gray-200 bg-white/90 dark:border-white/10 dark:bg-[#1d1d1d]"} ${large ? "px-3 py-2 text-xs" : "px-2 py-1 text-[10px]"}`} style={{ borderRight: `3px ${isDraft ? "dashed" : "solid"} ${color}` }}>
+      <div className="flex min-w-0 items-start gap-1.5">
+        <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-full border bg-white dark:bg-[#1d1d1d]" style={{ borderColor: color }}>
+          {assignee.assigneeId ? <IdentityAvatar size={18} option={{ kind: assignee.kind === "role" ? "role" : "user", id: assignee.assigneeId, label: assignee.label || "مسئول", avatarUrl: assignee.avatarUrl || undefined, iconKey: normalizeRoleIconKey(assignee.role?.icon_key) }} /> : <span className="h-full w-full" style={{ backgroundColor: color }} />}
         </span>
-        <span className="mt-1 flex flex-wrap gap-x-2 text-[9px] text-gray-500 dark:text-gray-400">
-          {isTask && formatContentType(record.content_type) ? (
-            <span>نوع محتوا: {formatContentType(record.content_type)}</span>
-          ) : null}
-          {formatTime(record.due_date) ? (
-            <span>موعد: {formatTime(record.due_date)}</span>
-          ) : null}
-          {label ? <span style={{ color }}>{label}</span> : null}
-          {item.inherited ? <span>پروژه</span> : null}
-        </span>
-        {!isTask && projectProcesses.length ? (
-          <span className="mt-1.5 block space-y-1 border-t border-dashed border-gray-200 pt-1.5 dark:border-white/10">
-            {projectProcesses.map((process, processIndex) => (
-              <span key={`${process.title}-${processIndex}`} className="block min-w-0">
-                <span className="block truncate text-[9px] font-bold text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-200-rgb))]">
-                  فرآیند: {process.title}
-                </span>
-                <span className="block truncate text-[9px] text-gray-500 dark:text-gray-400">
-                  {process.tasks.slice(0, 3).map((task) => getRecordTitle(task, MODULES.tasks, { fallback: "فعالیت" })).join("، ")}
-                  {process.tasks.length > 3 ? ` و ${process.tasks.length - 3} فعالیت دیگر` : ""}
-                </span>
-              </span>
-            ))}
-          </span>
-        ) : null}
-      </button>
-    );
+        <span className="min-w-0 flex-1"><span className="block line-clamp-2 font-bold text-gray-700 dark:text-gray-100">{title}</span>{isDraft ? <span className="block truncate text-[9px] text-purple-700 dark:text-purple-300">پروژه: {getRecordTitle(item.project, MODULES.projects, { fallback: "پروژه" })}</span> : assignee.label ? <span className="block truncate text-[9px] text-gray-500 dark:text-gray-400">مسئول: {assignee.label}</span> : null}</span>
+        {canEdit && copySource ? <Button type="text" size="small" icon={<CopyOutlined />} aria-label={`کپی ${isTask ? "فعالیت" : "پروژه"}`} title={`کپی ${isTask ? "فعالیت" : "پروژه"}`} className="!h-6 !w-6 !min-w-6 !p-0" onClick={(event) => { event.stopPropagation(); setClipboard(copySource); }} /> : null}
+        {canEdit && isTask ? <CalendarDragHandle item={item} /> : null}
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-2 text-[9px] text-gray-500 dark:text-gray-400">
+        {isTask && formatContentType(record.content_type) ? <span>نوع محتوا: {formatContentType(record.content_type)}</span> : null}
+        {formatTime(record.due_date) ? <span>موعد: {formatTime(record.due_date)}</span> : null}
+        {label ? <span style={{ color }}>{label}</span> : null}
+        {linkedProject ? <button type="button" onClick={(event) => { event.stopPropagation(); navigate(`/projects/${linkedProject.id}`); }} className="font-bold text-[rgb(var(--brand-700-rgb))] underline decoration-dotted underline-offset-2 dark:text-[rgb(var(--brand-200-rgb))]">پروژه: {getRecordTitle(linkedProject, MODULES.projects, { fallback: "پروژه" })}</button> : null}
+      </div>
+    </div>;
+  };
+  const placeClipboardOnDay = (day: ReturnType<typeof buildDays>[number]) => {
+    if (!clipboard) return false;
+    if (clipboard.kind === "project") {
+      void onOpenTemplateProject?.({
+        contentCalendarId: calendarId,
+        customerId: clipboard.record?.customer_id || calendar?.customer_id || null,
+        dateKey: toKey(day.date),
+        stayOnOrigin: true,
+        copyProject: {
+          name: String(clipboard.record?.name || "").trim(),
+          customerId: clipboard.record?.customer_id || null,
+          processTemplateId: clipboard.record?.process_template_id || null,
+          projectAlignment: Array.isArray(clipboard.record?.project_alignment) ? clipboard.record.project_alignment : [],
+          description: clipboard.record?.description || null,
+        },
+      });
+    } else {
+      setCopiedTask(clipboard.record);
+      setRawName(String(clipboard.record?.name || "").trim());
+      setRawContentType(clipboard.record?.content_type || undefined);
+      setCreateDate(day.date);
+      setCreateMode("raw");
+    }
+    setClipboard(null);
+    return true;
+  };
+  const handleCalendarDragEnd = async (event: DragEndEvent) => {
+    const source = event.active.data.current?.item as RuntimeItem | undefined;
+    const targetId = String(event.over?.id || "");
+    const dayKey = targetId.startsWith("calendar-day:") ? targetId.slice("calendar-day:".length) : "";
+    if (!source || source.kind !== "task" || !dayKey || !canEdit) return;
+    const targetDate = new Date(`${dayKey}T12:00:00`);
+    const previousDate = source.date;
+    const deltaDays = Math.round((targetDate.getTime() - previousDate.getTime()) / 86_400_000);
+    if (!deltaDays) return;
+    const shiftDate = (value: any) => {
+      const date = asDate(value);
+      return date ? new Date(date.getTime() + deltaDays * 86_400_000).toISOString() : null;
+    };
+    try {
+      const patch: Record<string, any> = {};
+      if (taskDateField === "start_date") {
+        patch.start_date = shiftDate(source.record?.start_date) || `${dayKey}T09:00:00`;
+        patch.due_date = shiftDate(source.record?.due_date);
+      } else if (taskDateField === "completed_at") {
+        patch.completed_at = `${dayKey}T12:00:00`;
+      } else {
+        patch.due_date = shiftDate(source.record?.due_date) || `${dayKey}T17:00:00`;
+        patch.start_date = shiftDate(source.record?.start_date);
+      }
+      Object.keys(patch).forEach((key) => patch[key] === null && delete patch[key]);
+      const { error } = await supabase.from("tasks").update(patch).eq("id", source.record.id);
+      if (error) throw error;
+      message.success("زمان فعالیت جابه‌جا شد.");
+      await load();
+    } catch (error: any) {
+      message.error(`جابجایی فعالیت ناموفق بود: ${String(error?.message || "خطای نامشخص")}`);
+    }
   };
   const renderDay = (
     day: ReturnType<typeof buildDays>[number],
@@ -705,8 +833,10 @@ const ContentCalendarRuntime: React.FC<{
     const isHoliday = !!holiday?.isOfficialHoliday || day.date.getDay() === 5;
     const hasOfficialOccasion = holiday?.isOfficialHoliday === true;
     return (
+      <CalendarDayDropTarget dayKey={day.key}>
       <div
         key={day.key}
+        onClick={() => { if (clipboard) placeClipboardOnDay(day); }}
         className={`min-w-0 overflow-hidden rounded-xl border border-gray-100 p-1.5 dark:border-white/10 ${list ? "p-3" : "min-h-[120px] sm:min-h-[145px]"} ${isHoliday ? "bg-rose-50/80 dark:bg-rose-950/20" : "bg-white dark:bg-[#151515]"} ${day.inMonth || list ? "" : "opacity-50"} ${day.isToday ? "ring-1 ring-[rgba(var(--brand-500-rgb),0.7)]" : ""}`}
       >
         <div className="mb-1 flex items-start justify-between">
@@ -771,6 +901,7 @@ const ContentCalendarRuntime: React.FC<{
           ) : null}
         </div>
       </div>
+      </CalendarDayDropTarget>
     );
   };
   const mobileDays = useMemo(() => days.filter((day) => day.inMonth), [days]);
@@ -846,12 +977,18 @@ const ContentCalendarRuntime: React.FC<{
           />
         </div>
       </div>
+      {clipboard ? (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-dashed border-indigo-400 bg-indigo-50 px-3 py-2 text-xs text-indigo-900 dark:bg-indigo-950/30 dark:text-indigo-100">
+          <span>در حال کپی {clipboard.kind === "project" ? "پروژه" : "فعالیت"}: <strong>{getRecordTitle(clipboard.record, MODULES[clipboard.kind === "project" ? "projects" : "tasks"], { fallback: "بدون عنوان" })}</strong> — روز مقصد را انتخاب کنید.</span>
+          <Button size="small" type="text" onClick={() => setClipboard(null)}>لغو</Button>
+        </div>
+      ) : null}
       {loading ? (
         <div className="py-12 text-center">
           <Spin />
         </div>
       ) : (
-        <>
+        <DndContext sensors={dragSensors} onDragEnd={(event) => void handleCalendarDragEnd(event)}>
           <div className="hidden grid-cols-7 gap-1 text-center text-xs text-gray-500 sm:grid">
             {[
               "شنبه",
@@ -880,7 +1017,7 @@ const ContentCalendarRuntime: React.FC<{
               description="هنوز پروژه یا فعالیتی به این تقویم متصل نشده است."
             />
           ) : null}
-        </>
+        </DndContext>
       )}
       {legends.length ? (
         <div className="mt-4 border-t border-gray-100 pt-2 dark:border-gray-800">

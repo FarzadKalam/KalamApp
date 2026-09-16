@@ -48,7 +48,7 @@ import {
   isFridayAtTehranDate,
 } from '../_shared/persian-calendar-resolver.ts';
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-08-27-persian-variable-resolution';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-09-16-saas-billing-cycle';
 const MAX_WORKFLOWS = 30;
 const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
@@ -1379,6 +1379,11 @@ const releaseWorkflowRunnerLease = async (url: string, key: string, token: strin
   if (!token) return;
   await callRpc(url, key, 'release_workflow_runner_lease', { p_lease_token: token });
 };
+
+// وصول دوره‌ای کاملاً در PostgreSQL انجام می‌شود؛ runner فقط هر tick یک فراخوانی
+// محدود دارد و هیچ subscription یا پردازش Realtime تازه‌ای به کلاینت اضافه نمی‌کند.
+const runSaasBillingCycle = async (url: string, key: string) =>
+  callRpc(url, key, 'run_saas_billing_cycle', { p_limit: 100 });
 
 // ── Workflow DB operations ─────────────────────────────────────────────────────
 
@@ -7517,13 +7522,15 @@ Deno.serve(async (req) => {
       .catch((error) => ({ error: String(error?.message || error || 'Event queue failed') }));
     const customerClubNotificationStats = await runCustomerClubNotificationQueue(supabaseUrl, serviceRoleKey)
       .catch((error) => ({ error: String(error?.message || error || 'Customer club notification queue failed') }));
+    const saasBillingStats = await runSaasBillingCycle(supabaseUrl, serviceRoleKey)
+      .catch((error) => ({ error: String(error?.message || error || 'SaaS billing cycle failed') }));
     const processAutomationStats = await runServerProcessAutomationIntervalTick(
       supabaseUrl,
       serviceRoleKey,
       new Date(),
     ).catch((error) => ({ failed: true, error: String(error?.message || error) }));
-    console.log(`[workflow-runner] build=${FUNCTION_BUILD} enqueueStats=${JSON.stringify(enqueueStats)} intervalQueueStats=${JSON.stringify(intervalQueueStats)} scheduledReportStats=${JSON.stringify(scheduledReportStats)} scheduledWorkScheduleStats=${JSON.stringify(scheduledWorkScheduleStats)} eventQueueStats=${JSON.stringify(eventQueueStats)} customerClubNotificationStats=${JSON.stringify(customerClubNotificationStats)} processAutomationStats=${JSON.stringify(processAutomationStats)}`);
-    return json(200, { ok: true, stats: enqueueStats, intervalQueueStats, scheduledReportStats, scheduledWorkScheduleStats, eventQueueStats, customerClubNotificationStats, processAutomationStats });
+    console.log(`[workflow-runner] build=${FUNCTION_BUILD} enqueueStats=${JSON.stringify(enqueueStats)} intervalQueueStats=${JSON.stringify(intervalQueueStats)} scheduledReportStats=${JSON.stringify(scheduledReportStats)} scheduledWorkScheduleStats=${JSON.stringify(scheduledWorkScheduleStats)} eventQueueStats=${JSON.stringify(eventQueueStats)} customerClubNotificationStats=${JSON.stringify(customerClubNotificationStats)} saasBillingStats=${JSON.stringify(saasBillingStats)} processAutomationStats=${JSON.stringify(processAutomationStats)}`);
+    return json(200, { ok: true, stats: enqueueStats, intervalQueueStats, scheduledReportStats, scheduledWorkScheduleStats, eventQueueStats, customerClubNotificationStats, saasBillingStats, processAutomationStats });
     } finally {
       if (leaseToken) {
         await releaseWorkflowRunnerLease(supabaseUrl, serviceRoleKey, leaseToken).catch((error) => {

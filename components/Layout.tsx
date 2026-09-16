@@ -128,6 +128,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [orgTrialDaysLeft, setOrgTrialDaysLeft] = useState<number | null>(null);
   const [orgIsReadonly, setOrgIsReadonly] = useState(false);
   const [orgTrialEndsAt, setOrgTrialEndsAt] = useState<string | null>(null);
+  const [orgBillingReadonly, setOrgBillingReadonly] = useState(false);
+  const [orgNextBillingInvoice, setOrgNextBillingInvoice] = useState<{ total_irt: number; due_at: string; status: string } | null>(null);
   const [renewalRequesting, setRenewalRequesting] = useState(false);
   const [rolePermissions, setRolePermissions] = useState<PermissionMap>({});
   const [rolePermissionsReady, setRolePermissionsReady] = useState(false);
@@ -552,6 +554,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       setOrgTrialDaysLeft(null);
       setOrgIsReadonly(false);
       setOrgTrialEndsAt(null);
+      setOrgBillingReadonly(false);
+      setOrgNextBillingInvoice(null);
       return;
     }
     let cancelled = false;
@@ -565,8 +569,20 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       setHasDemoBatch(false);
       if (saasRes) {
         setOrgIsReadonly(Boolean(saasRes.is_readonly));
+        setOrgBillingReadonly(Boolean(saasRes.billing_readonly));
+        setOrgNextBillingInvoice(saasRes.next_billing_invoice ? {
+          total_irt: Number(saasRes.next_billing_invoice.total_irt || 0),
+          due_at: saasRes.next_billing_invoice.due_at,
+          status: saasRes.next_billing_invoice.status,
+        } : null);
         setOrgTrialEndsAt(saasRes.trial_ends_at ?? null);
         setOrgTrialDaysLeft(resolveTrialDaysLeft(saasRes.trial_ends_at ?? null));
+      } else {
+        setOrgIsReadonly(false);
+        setOrgBillingReadonly(false);
+        setOrgNextBillingInvoice(null);
+        setOrgTrialEndsAt(null);
+        setOrgTrialDaysLeft(null);
       }
 
       if (!nextIsDemoOrg) return;
@@ -577,6 +593,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     })();
     return () => { cancelled = true; };
   }, [currentUserProfile?.org_id]);
+
+  const isAccountStatusRoute = location.pathname === '/settings' && new URLSearchParams(location.search).get('tab') === 'account';
+  const shouldShowReadonlyOverlay = orgIsReadonly && !isAccountStatusRoute;
 
   const handleClearDemoData = useCallback(async () => {
     if (!isDemoOrg) {
@@ -1749,6 +1768,20 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           </div>
         )}
 
+        {!isDemoOrg && orgBillingReadonly && !isAccountStatusRoute && (
+          <div className="sticky top-16 z-[950] flex items-center justify-between gap-3 bg-red-500 px-4 py-2 text-xs font-semibold text-white">
+            <span>اشتراک نیاز به تمدید دارد؛ تا زمان پرداخت، حساب در حالت فقط‌خواندنی است.</span>
+            <Button size="small" type="text" onClick={() => navigate('/settings?tab=account')} className="border border-white text-white hover:bg-red-400">مشاهده و پرداخت</Button>
+          </div>
+        )}
+
+        {!isDemoOrg && !orgBillingReadonly && orgNextBillingInvoice && !isAccountStatusRoute && (
+          <div className="sticky top-16 z-[950] flex items-center justify-between gap-3 bg-amber-400 px-4 py-2 text-xs font-semibold text-amber-950">
+            <span>صورت‌حساب تمدید {orgNextBillingInvoice.total_irt.toLocaleString('fa-IR')} تومان آماده است؛ سررسید: {orgNextBillingInvoice.due_at ? new Date(orgNextBillingInvoice.due_at).toLocaleDateString('fa-IR') : '—'}.</span>
+            <Button size="small" type="text" onClick={() => navigate('/settings?tab=account')} className="border border-amber-800 text-amber-950 hover:bg-amber-300">مشاهده و پرداخت</Button>
+          </div>
+        )}
+
         {breadcrumb && breadcrumb.moduleTitle && (
           <div className="sticky top-16 z-[900] bg-white/90 dark:bg-dark-surface/90 backdrop-blur border-b border-gray-200 dark:border-dark-border px-2 md:px-4 py-2 mb-3">
             <div className="flex items-center gap-1 text-xs md:text-sm text-gray-500 whitespace-nowrap overflow-x-auto no-scrollbar">
@@ -1781,15 +1814,15 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         </Content>
 
         {/* ── Expired trial blocking overlay ── */}
-        {orgIsReadonly && isDemoOrg && (
+        {shouldShowReadonlyOverlay && (
           <div className="fixed inset-0 z-[2000] flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm p-6">
             <div className="max-w-sm w-full rounded-3xl bg-white dark:bg-dark-surface shadow-2xl p-8 text-center space-y-5">
-              <div className="text-5xl">⏰</div>
-              <h2 className="text-xl font-black text-gray-800 dark:text-gray-100">دوره آزمایشی پایان یافت</h2>
+              <div className="text-5xl">{isDemoOrg ? '⏰' : '💳'}</div>
+              <h2 className="text-xl font-black text-gray-800 dark:text-gray-100">{isDemoOrg ? 'دوره آزمایشی پایان یافت' : 'اشتراک نیاز به تمدید دارد'}</h2>
               <p className="text-sm text-gray-500 dark:text-gray-400">
-                دوره آزمایشی رایگان شما به پایان رسیده است. برای ادامه استفاده، درخواست تمدید ارسال کنید تا تیم ما با شما تماس بگیرد.
+                {isDemoOrg ? 'دوره آزمایشی رایگان شما به پایان رسیده است. برای ادامه استفاده، درخواست تمدید ارسال کنید تا تیم ما با شما تماس بگیرد.' : 'مهلت تمدید به پایان رسیده است. داده‌های شما محفوظ است؛ با پرداخت صورت‌حساب از کیف پول یا درگاه، دسترسی کامل بازمی‌گردد.'}
               </p>
-              {orgTrialEndsAt && (
+              {isDemoOrg && orgTrialEndsAt && (
                 <p className="text-xs text-gray-400">
                   پایان آزمایشی: {new Date(orgTrialEndsAt).toLocaleDateString('fa-IR')}
                 </p>
@@ -1799,10 +1832,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                 size="large"
                 block
                 loading={renewalRequesting}
-                onClick={handleRequestRenewal}
+                onClick={isDemoOrg ? handleRequestRenewal : () => navigate('/settings?tab=account')}
                 className="bg-leather-600 border-leather-600 h-12 text-base font-bold rounded-2xl"
               >
-                درخواست تمدید اشتراک
+                {isDemoOrg ? 'درخواست تمدید اشتراک' : 'مشاهده و پرداخت صورت‌حساب'}
               </Button>
               <p className="text-[11px] text-gray-400">
                 داده‌های شما محفوظ است. بعد از تمدید به همه چیز دسترسی خواهید داشت.

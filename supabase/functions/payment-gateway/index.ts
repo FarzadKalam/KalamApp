@@ -496,7 +496,7 @@ const buildAccountCardReturnUrl = (tx: any, status: string) => {
 const buildPaymentReturnUrl = (tx: any, status: string) =>
   String(tx?.purpose || "") === "ai_topup"
     ? buildAiTopupReturnUrl(tx, status)
-    : String(tx?.purpose || "") === "saas_account_order"
+    : ["saas_account_order", "saas_subscription_invoice"].includes(String(tx?.purpose || ""))
       ? buildSaasAccountOrderReturnUrl(tx, status)
     : String(tx?.purpose || "") === "online_account_card"
       ? buildAccountCardReturnUrl(tx, status)
@@ -930,6 +930,52 @@ const createSaasBillingWalletTopup = async (
     const paymentUrl = `${zarinpalBase(mode)}/pg/StartPay/${authority}`;
     await rest(urlBase, key, `payment_transactions?id=eq.${enc(tx.id)}`, { method: "PATCH", body: JSON.stringify({ status: "redirected", authority, callback_url: callbackUrl, start_url: paymentUrl, request_payload: zp }) });
     return json(200, { success: true, payment_url: paymentUrl, transaction_id: tx.id });
+  } catch (err: any) {
+    await rest(urlBase, key, `payment_transactions?id=eq.${enc(tx.id)}`, { method: "PATCH", body: JSON.stringify({ status: "failed", callback_url: callbackUrl, error_message: String(err?.message || err) }) }).catch(() => null);
+    throw err;
+  }
+};
+
+const createSaasSubscriptionInvoicePayment = async (
+  req: Request,
+  urlBase: string,
+  key: string,
+  centralMerchantId: string,
+  body: any,
+) => {
+  const { profile } = await getAuthenticatedProfile(req, urlBase, key);
+  if (!centralMerchantId) throw new Error("Merchant ID درگاه مرکزی تازه سیستم تنظیم نشده است.");
+  const prepared = await rpcAsAuthenticatedUser(req, urlBase, key, "prepare_current_saas_subscription_invoice_payment", {
+    p_invoice_id: String(body?.invoice_id || "").trim(),
+  });
+  const invoiceId = String(prepared?.invoice_id || "").trim();
+  const amountIrt = Math.round(Number(prepared?.amount_irt || 0));
+  if (!invoiceId || !Number.isFinite(amountIrt) || amountIrt <= 0) throw new Error("صورت‌حساب اشتراک معتبر نیست.");
+  const mode = String(Deno.env.get("ZARINPAL_MODE") || "production") === "sandbox" ? "sandbox" : "production";
+  const paymentDomain = trimSlashEnd(String(Deno.env.get("PAYMENT_PUBLIC_URL") || Deno.env.get("PUBLIC_FUNCTIONS_URL") || "").trim());
+  if (!paymentDomain) throw new Error("دامنه callback درگاه مرکزی تنظیم نشده است.");
+  const callbackPath = normalizeCallbackPath(Deno.env.get("PAYMENT_CALLBACK_PATH") || "/payment/callback");
+  const returnOrigin = (await getTenantPublicOrigin(urlBase, key, String(profile.org_id || ""), true)) || normalizeSafeReturnOrigin(body?.return_origin);
+  const [tx] = await rest(urlBase, key, "payment_transactions", {
+    method: "POST",
+    body: JSON.stringify([{
+      org_id: profile.org_id, created_by: profile.id, gateway_scope: "system", provider: "zarinpal",
+      purpose: "saas_subscription_invoice", module_id: null, record_id: null, amount: amountIrt, currency: "IRT", status: "pending", callback_url: "",
+      description: `تمدید اشتراک تازه سیستم ${amountIrt.toLocaleString("fa-IR")} تومان`,
+      metadata: { saas_subscription_invoice_id: invoiceId, return_origin: returnOrigin, mode, source: "saas_account_center" },
+    }]),
+  });
+  const callbackUrl = `${paymentDomain}${callbackPath}?tx=${enc(tx.id)}`;
+  try {
+    const zp = await zarinpalRequest(centralMerchantId, mode, {
+      amount: amountIrt, currency: "IRT", callback_url: callbackUrl, description: tx.description,
+      metadata: { order_id: tx.id, purpose: "saas_subscription_invoice" },
+    });
+    const authority = String(zp?.data?.authority || "").trim();
+    if (Number(zp?.data?.code) !== 100 || !authority) throw new Error(zp?.errors?.message || "درگاه مرکزی درخواست پرداخت را نپذیرفت.");
+    const paymentUrl = `${zarinpalBase(mode)}/pg/StartPay/${authority}`;
+    await rest(urlBase, key, `payment_transactions?id=eq.${enc(tx.id)}`, { method: "PATCH", body: JSON.stringify({ status: "redirected", authority, callback_url: callbackUrl, start_url: paymentUrl, request_payload: zp }) });
+    return json(200, { success: true, payment_url: paymentUrl, transaction_id: tx.id, invoice_id: invoiceId });
   } catch (err: any) {
     await rest(urlBase, key, `payment_transactions?id=eq.${enc(tx.id)}`, { method: "PATCH", body: JSON.stringify({ status: "failed", callback_url: callbackUrl, error_message: String(err?.message || err) }) }).catch(() => null);
     throw err;
@@ -1422,6 +1468,10 @@ const handleCallback = async (
       await rpc(urlBase, key, "apply_saas_order_payment_transaction", {
         p_transaction_id: tx.id,
       });
+    } else if (String(tx?.purpose || "") === "saas_subscription_invoice") {
+      await rpc(urlBase, key, "apply_saas_subscription_invoice_payment_transaction", {
+        p_transaction_id: tx.id,
+      });
     } else if (String(tx?.purpose || "") === "online_account_card") {
       await rpc(urlBase, key, "apply_online_account_card_payment_transaction", {
         p_transaction_id: tx.id,
@@ -1604,6 +1654,10 @@ const verifyCallbackPayload = async (
       await rpc(urlBase, key, "apply_saas_order_payment_transaction", {
         p_transaction_id: tx.id,
       });
+    } else if (String(tx?.purpose || "") === "saas_subscription_invoice") {
+      await rpc(urlBase, key, "apply_saas_subscription_invoice_payment_transaction", {
+        p_transaction_id: tx.id,
+      });
     } else if (String(tx?.purpose || "") === "online_account_card") {
       await rpc(urlBase, key, "apply_online_account_card_payment_transaction", {
         p_transaction_id: tx.id,
@@ -1729,6 +1783,15 @@ Deno.serve(async (req: Request) => {
     }
     if (action === "create_saas_billing_wallet_topup") {
       return await createSaasBillingWalletTopup(
+        req,
+        urlBase,
+        serviceKey,
+        merchantId,
+        body,
+      );
+    }
+    if (action === "create_saas_subscription_invoice_payment") {
+      return await createSaasSubscriptionInvoicePayment(
         req,
         urlBase,
         serviceKey,

@@ -3304,24 +3304,33 @@ const ModuleShow: React.FC = () => {
     customerId?: string | null;
     sourceInvoiceId?: string | null;
     dateKey?: string | null;
+    stayOnOrigin?: boolean;
+    copyProject?: {
+      name?: string | null;
+      customerId?: string | null;
+      processTemplateId?: string | null;
+      projectAlignment?: any[];
+      description?: string | null;
+    };
   }) => {
-    const baseTitle = String(getRecordTitle(data, moduleConfig || undefined, { fallback: '' }) || data?.name || data?.title || data?.system_code || 'جدید').trim();
-    const suggestedName = `پروژه "${baseTitle || 'جدید'}"`;
-    const suggestedCustomerId = prefill?.customerId || (moduleId === 'invoices'
+    const copiedProject = prefill?.copyProject;
+    const baseTitle = String(copiedProject?.name || getRecordTitle(data, moduleConfig || undefined, { fallback: '' }) || data?.name || data?.title || data?.system_code || 'جدید').trim();
+    const suggestedName = copiedProject ? `کپی ${baseTitle || 'پروژه'}` : `پروژه "${baseTitle || 'جدید'}"`;
+    const suggestedCustomerId = copiedProject?.customerId || prefill?.customerId || (moduleId === 'invoices'
       ? (data?.customer_id || null)
       : (moduleId === 'tasks' ? (data?.related_customer || null) : null));
     const { templateOptions } = await loadQuickProjectModalOptions({
       customerId: suggestedCustomerId,
-      templateId: data?.process_template_id || null,
+      templateId: copiedProject?.processTemplateId || data?.process_template_id || null,
     });
-    const currentTemplateId = String(data?.process_template_id || '').trim();
+    const currentTemplateId = String(copiedProject?.processTemplateId || data?.process_template_id || '').trim();
     const suggestedTemplateId = currentTemplateId && templateOptions.some((option: any) => String(option?.value || '') === currentTemplateId)
       ? currentTemplateId
       : undefined;
     quickProjectForm.setFieldsValue({
       name: suggestedName,
       customer_id: suggestedCustomerId,
-      project_alignment: [],
+      project_alignment: Array.isArray(copiedProject?.projectAlignment) ? copiedProject.projectAlignment : [],
       process_template_id: suggestedTemplateId,
     });
     setQuickProjectTargetModuleIds([]);
@@ -3334,6 +3343,8 @@ const ModuleShow: React.FC = () => {
       source_invoice_id: prefill?.sourceInvoiceId || null,
       start_date: prefill?.dateKey || null,
       due_date: prefill?.dateKey || null,
+      description: copiedProject?.description || null,
+      __stay_on_origin: prefill?.stayOnOrigin === true,
     });
     setIsQuickProjectModalOpen(true);
   }, [data, loadQuickProjectModalOptions, moduleConfig, moduleId, quickProjectForm]);
@@ -3465,6 +3476,7 @@ const ModuleShow: React.FC = () => {
         source_purchase_invoice_id: moduleId === 'purchase_invoices' ? id : (quickProjectLinkedRecords.purchase_invoices || null),
         created_by: userId,
       };
+      delete payload.__stay_on_origin;
       if (!payload.name) {
         msg.error('نام پروژه الزامی است');
         return;
@@ -3538,7 +3550,12 @@ const ModuleShow: React.FC = () => {
       setQuickProjectInitialValues({});
       quickProjectForm.resetFields();
       msg.success('پروژه ایجاد شد');
-      navigate(`/projects/${projectId}`);
+      if (quickProjectInitialValues.content_calendar_id && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('content-calendar-project-created', {
+          detail: { calendarId: quickProjectInitialValues.content_calendar_id },
+        }));
+      }
+      if (quickProjectInitialValues.__stay_on_origin !== true) navigate(`/projects/${projectId}`);
     } catch (error: any) {
       msg.error(`ایجاد پروژه ناموفق بود: ${error?.message || error}`);
     } finally {
