@@ -63,6 +63,8 @@ import {
 import { autoAssignProcessV2DraftStages } from "../../utils/processV2AutoAssign";
 import { doesProcessTemplateSupportModule } from "../../utils/processTargets";
 import { saveProcessV2DraftStage } from "../../utils/processV2DraftStagePersistence";
+import { loadProcessTaskModalContext } from "../../utils/processTaskModalContext";
+import { buildContentCalendarTaskCopyDraft } from "../../utils/contentCalendarCopy";
 import type { ProcessV2CardData, ProcessV2Stage } from "../processes/ProcessCardsV2";
 
 type RuntimeItem = {
@@ -569,28 +571,24 @@ const ContentCalendarRuntime: React.FC<{
       return;
     }
     const groupId = createProcessGroupId();
-    const sourceTask = copiedTask || {};
-    const draftStage = {
-      ...sourceTask,
-      id: `content_calendar_draft_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      name: rawName.trim(),
-      stage_name: rawName.trim(),
-      status: "draft",
-      is_draft: true,
-      task_type: "فعالیت سازمانی",
-      sort_order: 10,
-      process_group_id: groupId,
-      process_group_name: "فعالیت‌های تقویم محتوایی",
-      process_target_module_ids: ["content_calendars"],
-      process_link_map: { content_calendars: calendarId },
-      process_node_key: `${groupId}__activity_1`,
-      process_lane_key: `${groupId}__content_calendar_lane`,
-      metadata: {
-        ...asObject(sourceTask?.metadata),
+    const draftStage = copiedTask
+      ? buildContentCalendarTaskCopyDraft({ sourceTask: copiedTask, calendarId, groupId, name: rawName.trim() })
+      : {
+        id: `content_calendar_draft_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        name: rawName.trim(),
+        stage_name: rawName.trim(),
+        status: "draft",
+        is_draft: true,
         task_type: "فعالیت سازمانی",
-        content_calendar_id: calendarId,
-      },
-    };
+        sort_order: 10,
+        process_group_id: groupId,
+        process_group_name: "فعالیت‌های تقویم محتوایی",
+        process_target_module_ids: ["content_calendars"],
+        process_link_map: { content_calendars: calendarId },
+        process_node_key: `${groupId}__activity_1`,
+        process_lane_key: `${groupId}__content_calendar_lane`,
+        metadata: { task_type: "فعالیت سازمانی", content_calendar_id: calendarId },
+      };
     await openDraftActivity({
       draftStages: [draftStage],
       targetStage: draftStage,
@@ -765,7 +763,7 @@ const ContentCalendarRuntime: React.FC<{
       </div>
     </div>;
   };
-  const placeClipboardOnDay = (day: ReturnType<typeof buildDays>[number]) => {
+  const placeClipboardOnDay = async (day: ReturnType<typeof buildDays>[number]) => {
     if (!clipboard) return false;
     if (clipboard.kind === "project") {
       void onOpenTemplateProject?.({
@@ -782,9 +780,19 @@ const ContentCalendarRuntime: React.FC<{
         },
       });
     } else {
-      setCopiedTask(clipboard.record);
-      setRawName(String(clipboard.record?.name || "").trim());
-      setRawContentType(clipboard.record?.content_type || undefined);
+      try {
+        // کارت تقویم سبک است؛ تعریف فیلدها ممکن است فقط در stage اجرایی باشد.
+        const sourceTask = await loadProcessTaskModalContext(supabase, clipboard.record, {
+          taskId: String(clipboard.record?.id || "").trim() || null,
+          processRunStageId: String(clipboard.record?.process_run_stage_id || "").trim() || null,
+        });
+        setCopiedTask(sourceTask);
+        setRawName(String(sourceTask?.name || clipboard.record?.name || "").trim());
+        setRawContentType(sourceTask?.content_type || clipboard.record?.content_type || undefined);
+      } catch (error: any) {
+        message.error(`آماده‌سازی کپی فعالیت ناموفق بود: ${String(error?.message || "خطای نامشخص")}`);
+        return false;
+      }
       setCreateDate(day.date);
       setCreateMode("raw");
     }
@@ -836,7 +844,7 @@ const ContentCalendarRuntime: React.FC<{
       <CalendarDayDropTarget dayKey={day.key}>
       <div
         key={day.key}
-        onClick={() => { if (clipboard) placeClipboardOnDay(day); }}
+        onClick={() => { if (clipboard) void placeClipboardOnDay(day); }}
         className={`min-w-0 overflow-hidden rounded-xl border border-gray-100 p-1.5 dark:border-white/10 ${list ? "p-3" : "min-h-[120px] sm:min-h-[145px]"} ${isHoliday ? "bg-rose-50/80 dark:bg-rose-950/20" : "bg-white dark:bg-[#151515]"} ${day.inMonth || list ? "" : "opacity-50"} ${day.isToday ? "ring-1 ring-[rgba(var(--brand-500-rgb),0.7)]" : ""}`}
       >
         <div className="mb-1 flex items-start justify-between">
@@ -1114,14 +1122,14 @@ const ContentCalendarRuntime: React.FC<{
               onChange={(event) => setRawName(event.target.value)}
               placeholder="عنوان فعالیت"
             />
-            <Select
+            {!copiedTask ? <Select
               allowClear
               className="w-full"
               value={rawContentType}
               onChange={setRawContentType}
               options={CONTENT_TYPES}
               placeholder="نوع محتوا"
-            />
+            /> : null}
             <Button
               block
               type="primary"
