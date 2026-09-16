@@ -17,11 +17,29 @@ type InstagramConversation = {
   id: string; account_id: string; contact_id: string; status: string; priority: string; tags: string[];
   last_message_preview?: string | null; last_message_at?: string | null; contacts?: { username?: string | null; display_name?: string | null; profile_photo_url?: string | null } | null;
 };
-type InstagramMessage = { id: string; direction: 'inbound' | 'outbound'; content_text?: string | null; created_at: string; message_type: string; provider_payload?: { automated?: boolean } | null; sender?: { full_name?: string | null; avatar_url?: string | null } | null };
+type InstagramMessage = { id: string; direction: 'inbound' | 'outbound'; content_text?: string | null; created_at: string; message_type: string; attachment_url?: string | null; attachment_thumbnail_url?: string | null; shared_permalink?: string | null; shared_media_type?: 'post' | 'reel' | 'story' | null; provider_payload?: { automated?: boolean } | null; sender?: { full_name?: string | null; avatar_url?: string | null } | null };
 type ShowcaseOption = { id: string; name: string; account_id?: string | null };
 
 const formatTime = (value?: string | null) => value ? new Intl.DateTimeFormat('fa-IR', { hour: '2-digit', minute: '2-digit' }).format(new Date(value)) : '';
 const formatDateTime = (value?: string | null) => value ? new Intl.DateTimeFormat('fa-IR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) : '';
+const isVideoUrl = (value?: string | null) => /\.(mp4|mov|m4v|webm)(?:$|[?#])/i.test(String(value || ''));
+const isInstagramPermalink = (value?: string | null) => /^https?:\/\/(?:www\.)?instagram\.com\/(?:p|reel|reels|stories)\//i.test(String(value || '').trim());
+const mediaLabel = (message: InstagramMessage, sharedType?: string | null) => ({ image: 'تصویر', video: 'ویدیو', audio: 'پیام صوتی', file: 'فایل', share: (sharedType || message.shared_media_type) === 'story' ? 'استوری به‌اشتراک‌گذاشته‌شده' : (sharedType || message.shared_media_type) === 'reel' ? 'ریل به‌اشتراک‌گذاشته‌شده' : 'پست به‌اشتراک‌گذاشته‌شده' }[message.message_type] || (sharedType === 'story' ? 'استوری به‌اشتراک‌گذاشته‌شده' : sharedType === 'reel' ? 'ریل به‌اشتراک‌گذاشته‌شده' : sharedType === 'post' ? 'پست به‌اشتراک‌گذاشته‌شده' : 'پیام غیرمتنی'));
+const messageMedia = (message: InstagramMessage) => {
+  const payload: any = message.provider_payload || {};
+  const rawMessage = payload.message || {};
+  const attachment = (Array.isArray(rawMessage.attachments) ? rawMessage.attachments : Array.isArray(payload.attachments) ? payload.attachments : [rawMessage.attachment, payload.attachment]).find(Boolean) || {};
+  const attachmentPayload = attachment.payload || attachment.data || {};
+  const rawUrl = String(message.attachment_url || attachmentPayload.image_url || attachmentPayload.video_url || attachmentPayload.url || attachment.url || rawMessage.image?.url || rawMessage.video?.url || payload.image?.url || payload.video?.url || '').trim();
+  const permalink = String(message.shared_permalink || rawMessage.share?.permalink || rawMessage.share?.url || payload.share?.permalink || payload.share?.url || attachmentPayload.permalink || attachmentPayload.url || '').trim();
+  const sharedType = message.shared_media_type || (attachmentPayload.reel_video_id ? 'reel' : /\/stories\//i.test(permalink) ? 'story' : /\/reels?\//i.test(permalink) ? 'reel' : isInstagramPermalink(permalink) ? 'post' : null);
+  return {
+    url: isInstagramPermalink(rawUrl) ? '' : rawUrl,
+    thumbnailUrl: String(message.attachment_thumbnail_url || attachmentPayload.thumbnail_url || attachmentPayload.thumbnail || attachment.thumbnail_url || rawMessage.image?.url || payload.image?.url || '').trim(),
+    permalink: isInstagramPermalink(permalink) ? permalink : '',
+    sharedType,
+  };
+};
 
 const InstagramInboxPage: React.FC = () => {
   const { message } = App.useApp();
@@ -40,6 +58,7 @@ const InstagramInboxPage: React.FC = () => {
   const [selectedShowcaseId, setSelectedShowcaseId] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [syncingProfiles, setSyncingProfiles] = useState(false);
   const [showcaseSettingsOpen, setShowcaseSettingsOpen] = useState(false);
   const [readyTextOpen, setReadyTextOpen] = useState(false);
   const [suggestingReply, setSuggestingReply] = useState(false);
@@ -74,7 +93,7 @@ const InstagramInboxPage: React.FC = () => {
     if (!activeConversationId) { setMessages([]); setHasMoreMessages(false); return; }
     const { data, error } = await supabase
       .from('instagram_messages')
-      .select('id,direction,content_text,created_at,message_type,provider_payload,sender:sent_by(full_name,avatar_url)')
+      .select('id,direction,content_text,created_at,message_type,attachment_url,attachment_thumbnail_url,shared_permalink,shared_media_type,provider_payload,sender:sent_by(full_name,avatar_url)')
       .eq('conversation_id', activeConversationId)
       .order('created_at', { ascending: false })
       .limit(51);
@@ -91,7 +110,7 @@ const InstagramInboxPage: React.FC = () => {
     try {
       const { data, error } = await supabase
         .from('instagram_messages')
-        .select('id,direction,content_text,created_at,message_type,provider_payload,sender:sent_by(full_name,avatar_url)')
+        .select('id,direction,content_text,created_at,message_type,attachment_url,attachment_thumbnail_url,shared_permalink,shared_media_type,provider_payload,sender:sent_by(full_name,avatar_url)')
         .eq('conversation_id', activeConversationId)
         .lt('created_at', oldest.created_at)
         .order('created_at', { ascending: false })
@@ -136,6 +155,7 @@ const InstagramInboxPage: React.FC = () => {
     };
     const channel = supabase.channel(`instagram-inbox-events-${orgId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'instagram_conversations', filter: `org_id=eq.${orgId}` }, queueInboxReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'instagram_contacts', filter: `org_id=eq.${orgId}` }, queueInboxReload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'instagram_messages', filter: `org_id=eq.${orgId}` }, () => { queueMessageReload(); queueInboxReload(); })
       .subscribe();
     return () => {
@@ -157,6 +177,16 @@ const InstagramInboxPage: React.FC = () => {
       await Promise.all([loadMessages(), loadInbox()]);
     } catch (error: any) { message.error(error?.message || 'ارسال پیام انجام نشد.'); }
     finally { setSending(false); }
+  };
+  const syncContactProfiles = async () => {
+    setSyncingProfiles(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('instagram-boxapi', { body: { action: 'sync_contact_profiles' } });
+      if (error || data?.success === false) throw new Error(data?.message || error?.message || 'درخواست دریافت نام‌های کاربری ناموفق بود.');
+      const queuedCount = Number(data?.queuedCount || 0);
+      message.info(queuedCount ? `دریافت نام کاربری ${queuedCount.toLocaleString('fa-IR')} مخاطب درخواست شد؛ نتیجه از طریق وب‌هوک به‌روز می‌شود.` : 'مخاطب بدون نام کاربری برای دریافت وجود ندارد.');
+    } catch (error: any) { message.error(error?.message || 'دریافت نام‌های کاربری ناموفق بود.'); }
+    finally { setSyncingProfiles(false); }
   };
 
   const requestReplySuggestion = async (instruction: string) => {
@@ -183,7 +213,7 @@ const InstagramInboxPage: React.FC = () => {
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200/70 bg-slate-100 text-slate-800 shadow-sm dark:border-white/[0.07] dark:bg-[#101113] dark:text-slate-100" dir="rtl">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/70 bg-white/90 px-4 py-3 backdrop-blur dark:border-white/[0.07] dark:bg-[#17191c]/95">
         <div className="flex items-center gap-3"><span className="flex h-10 w-10 items-center justify-center rounded-full bg-[rgba(var(--brand-500-rgb),0.10)] text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--brand-300-rgb),0.12)] dark:text-[rgb(var(--brand-200-rgb))]"><InstagramOutlined /></span><div><div className="font-semibold">صندوق اینستاگرام</div><div className="text-[11px] text-slate-400">دایرکت، کامنت و پیام‌های دکمه‌دار پیج‌های متصل</div></div></div>
-        <div className="flex flex-wrap items-center gap-1"><Button className={surface === 'direct' ? '!border-[rgba(var(--brand-500-rgb),0.24)] !bg-[rgba(var(--brand-500-rgb),0.10)] !text-[rgb(var(--brand-800-rgb))] dark:!border-[rgba(var(--brand-300-rgb),0.22)] dark:!bg-[rgba(var(--brand-300-rgb),0.12)] dark:!text-[rgb(var(--brand-200-rgb))]' : ''} size="small" type={surface === 'direct' ? 'text' : 'default'} onClick={() => setSurface('direct')}>دایرکت‌ها</Button><Button className={surface === 'comments' ? '!border-[rgba(var(--brand-500-rgb),0.24)] !bg-[rgba(var(--brand-500-rgb),0.10)] !text-[rgb(var(--brand-800-rgb))] dark:!border-[rgba(var(--brand-300-rgb),0.22)] dark:!bg-[rgba(var(--brand-300-rgb),0.12)] dark:!text-[rgb(var(--brand-200-rgb))]' : ''} size="small" type={surface === 'comments' ? 'text' : 'default'} onClick={() => setSurface('comments')}>کامنت‌ها</Button><Tooltip title="به‌روزرسانی گفتگوها"><Button size="small" type="text" shape="circle" icon={<ReloadOutlined />} onClick={() => void loadInbox()} loading={loading} /></Tooltip><Tooltip title="تنظیمات پیام‌های دکمه‌دار"><Button size="small" type="text" shape="circle" icon={<SettingOutlined />} onClick={() => setShowcaseSettingsOpen(true)} /></Tooltip></div>
+        <div className="flex flex-wrap items-center gap-1"><Button className={surface === 'direct' ? '!border-[rgba(var(--brand-500-rgb),0.24)] !bg-[rgba(var(--brand-500-rgb),0.10)] !text-[rgb(var(--brand-800-rgb))] dark:!border-[rgba(var(--brand-300-rgb),0.22)] dark:!bg-[rgba(var(--brand-300-rgb),0.12)] dark:!text-[rgb(var(--brand-200-rgb))]' : ''} size="small" type={surface === 'direct' ? 'text' : 'default'} onClick={() => setSurface('direct')}>دایرکت‌ها</Button><Button className={surface === 'comments' ? '!border-[rgba(var(--brand-500-rgb),0.24)] !bg-[rgba(var(--brand-500-rgb),0.10)] !text-[rgb(var(--brand-800-rgb))] dark:!border-[rgba(var(--brand-300-rgb),0.22)] dark:!bg-[rgba(var(--brand-300-rgb),0.12)] dark:!text-[rgb(var(--brand-200-rgb))]' : ''} size="small" type={surface === 'comments' ? 'text' : 'default'} onClick={() => setSurface('comments')}>کامنت‌ها</Button>{surface === 'direct' ? <Tooltip title="دریافت نام‌های کاربری مخاطبانِ بدون نام"><Button size="small" type="text" onClick={() => void syncContactProfiles()} loading={syncingProfiles}>نام‌های کاربری</Button></Tooltip> : null}<Tooltip title="به‌روزرسانی گفتگوها"><Button size="small" type="text" shape="circle" icon={<ReloadOutlined />} onClick={() => void loadInbox()} loading={loading} /></Tooltip><Tooltip title="تنظیمات پیام‌های دکمه‌دار"><Button size="small" type="text" shape="circle" icon={<SettingOutlined />} onClick={() => setShowcaseSettingsOpen(true)} /></Tooltip></div>
       </div>
       {surface === 'comments' ? <InstagramCommentsPanel orgId={orgId} accounts={accounts} activeAccountId={activeAccountId} onAccountChange={setActiveAccountId} /> : <>
       <Tabs className="px-3" activeKey={activeAccountId} onChange={setActiveAccountId} items={[
@@ -193,17 +223,18 @@ const InstagramInboxPage: React.FC = () => {
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[330px_minmax(0,1fr)]">
         <div className={`${mobileConversationListVisible ? 'block' : 'hidden'} min-h-0 overflow-y-auto border-l border-slate-200/70 bg-slate-50/90 dark:border-white/[0.07] dark:bg-[#131518] lg:block`}>
           <List loading={loading} locale={{ emptyText: 'گفتگویی برای این حساب‌ها ثبت نشده است.' }} dataSource={visibleConversations} renderItem={(item) => {
-            const name = item.contacts?.display_name || item.contacts?.username || 'کاربر اینستاگرام';
+            const username = String(item.contacts?.username || '').replace(/^@+/, '');
+            const name = username ? `@${username}` : item.contacts?.display_name || 'کاربر اینستاگرام';
             const account = accounts.find((entry) => entry.id === item.account_id);
-            return <List.Item className={`cursor-pointer border-b-0 px-3 py-3 transition ${item.id === activeConversationId ? 'bg-[rgba(var(--brand-500-rgb),0.10)] dark:bg-[rgba(var(--brand-300-rgb),0.12)]' : 'hover:bg-white/80 dark:hover:bg-white/[0.045]'}`} onClick={() => { setActiveConversationId(item.id); setMobileConversationListVisible(false); }}>
-              <List.Item.Meta avatar={<Avatar src={item.contacts?.profile_photo_url}>{name[0]}</Avatar>} title={<div className="flex items-center justify-between gap-2"><span className="truncate font-medium">{name}</span><span className="text-[10px] text-slate-400">{formatTime(item.last_message_at)}</span></div>} description={<div><div className="truncate">{item.last_message_preview || 'بدون پیام متنی'}</div><div className="mt-1 flex gap-1">{account ? <Tag className="m-0 !rounded-full !border-[rgba(var(--brand-500-rgb),0.24)] !bg-[rgba(var(--brand-500-rgb),0.10)] !text-[rgb(var(--brand-800-rgb))] dark:!border-[rgba(var(--brand-300-rgb),0.22)] dark:!bg-[rgba(var(--brand-300-rgb),0.12)] dark:!text-[rgb(var(--brand-200-rgb))]">@{account.username}</Tag> : null}{(item.tags || []).slice(0, 2).map((tag) => <Tag key={tag} className="m-0 !rounded-full">{tag}</Tag>)}</div></div>} />
+            return <List.Item className={`mx-2 my-1 cursor-pointer rounded-2xl border-b-0 px-4 py-3.5 transition ${item.id === activeConversationId ? 'bg-[rgba(var(--brand-500-rgb),0.10)] shadow-sm dark:bg-[rgba(var(--brand-300-rgb),0.12)]' : 'hover:bg-white/80 dark:hover:bg-white/[0.045]'}`} onClick={() => { setActiveConversationId(item.id); setMobileConversationListVisible(false); }}>
+              <List.Item.Meta className="!items-center" avatar={<Avatar size={44} src={item.contacts?.profile_photo_url}>{name[0]}</Avatar>} title={<div className="flex items-center justify-between gap-3"><span className="truncate font-medium">{name}</span><span className="shrink-0 text-[10px] text-slate-400">{formatTime(item.last_message_at)}</span></div>} description={<div className="pt-0.5"><div className="truncate">{item.last_message_preview || 'بدون پیام متنی'}</div><div className="mt-1.5 flex gap-1">{account ? <Tag className="m-0 !rounded-full !border-[rgba(var(--brand-500-rgb),0.24)] !bg-[rgba(var(--brand-500-rgb),0.10)] !text-[rgb(var(--brand-800-rgb))] dark:!border-[rgba(var(--brand-300-rgb),0.22)] dark:!bg-[rgba(var(--brand-300-rgb),0.12)] dark:!text-[rgb(var(--brand-200-rgb))]">@{account.username}</Tag> : null}{(item.tags || []).slice(0, 2).map((tag) => <Tag key={tag} className="m-0 !rounded-full">{tag}</Tag>)}</div></div>} />
             </List.Item>;
           }} />
         </div>
         <div className={`${mobileConversationListVisible ? 'hidden' : 'flex'} min-h-0 flex-col lg:flex`}>
           {selectedConversation ? <>
-            <div className="flex items-center justify-between border-b border-slate-200/65 bg-white/90 px-4 py-3 dark:border-white/[0.07] dark:bg-[#17191c]/95"><div className="flex items-center gap-2"><Button className="lg:hidden" type="text" size="small" shape="circle" icon={<ArrowRightOutlined />} onClick={() => setMobileConversationListVisible(true)} /><Avatar src={selectedConversation.contacts?.profile_photo_url}>{(selectedConversation.contacts?.display_name || selectedConversation.contacts?.username || 'ا')[0]}</Avatar><div><div className="font-medium">{selectedConversation.contacts?.display_name || (selectedConversation.contacts?.username ? `@${selectedConversation.contacts.username}` : 'کاربر اینستاگرام')}</div><div className="text-xs text-slate-400">گفتگوی اینستاگرام</div></div></div><div className="flex gap-1"><Tooltip title="گردش‌کارها و پاسخ‌گویی خودکار"><Button size="small" type="text" shape="circle" icon={<ThunderboltOutlined />} onClick={() => navigate('/settings?tab=workflows')} /></Tooltip><Tooltip title="ویرایش اتصال مخاطب"><Button size="small" type="text" shape="circle" icon={<EditOutlined />} onClick={() => setConversationLinkOpen(true)} /></Tooltip>{(selectedConversation.tags || []).map((tag) => <Tag key={tag} className="!rounded-full">{tag}</Tag>)}</div></div>
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-[linear-gradient(180deg,rgba(248,250,252,0.94),rgba(241,245,249,0.82))] p-4 dark:bg-none dark:bg-[#101113]">{hasMoreMessages ? <div className="flex justify-center"><Button size="small" icon={<HistoryOutlined />} loading={loadingOlderMessages} onClick={() => void loadOlderMessages()}>مشاهده پیام‌های بیشتر</Button></div> : null}{messages.length ? messages.map((item) => { const outbound = item.direction === 'outbound'; const authorName = outbound ? (item.provider_payload?.automated ? 'سیستم' : item.sender?.full_name || 'کاربر سازمان') : (selectedConversation.contacts?.display_name || (selectedConversation.contacts?.username ? `@${selectedConversation.contacts.username}` : 'کاربر اینستاگرام')); const authorAvatar = outbound ? item.sender?.avatar_url : selectedConversation.contacts?.profile_photo_url; return <div key={item.id} className={`flex items-end gap-2 ${outbound ? 'justify-start' : 'justify-end'}`}><div className={`max-w-[78%] rounded-3xl px-3 py-2.5 text-sm shadow-sm ${outbound ? 'bg-[rgb(var(--brand-800-rgb))] text-white shadow-[0_18px_42px_rgba(var(--brand-800-rgb),0.34)]' : 'bg-white/85 dark:bg-white/[0.055]'}`}><div className="mb-1 flex items-center gap-1 text-[10px] opacity-80"><span>{authorName}</span>{item.provider_payload?.automated ? <Tag className="m-0 !border-white/25 !bg-white/15 !text-[10px] !text-white">پیام خودکار</Tag> : null}</div><div className="whitespace-pre-wrap">{item.content_text || 'پیام غیرمتنی'}</div><div className="mt-1 text-[10px] opacity-70">{formatDateTime(item.created_at)}</div></div><Avatar size={28} src={authorAvatar}>{authorName[0]}</Avatar></div>; }) : <Empty description="پیامی برای این گفتگو نیست." />}</div>
+            <div className="flex items-center justify-between border-b border-slate-200/65 bg-white/90 px-4 py-3 dark:border-white/[0.07] dark:bg-[#17191c]/95"><div className="flex items-center gap-2"><Button className="lg:hidden" type="text" size="small" shape="circle" icon={<ArrowRightOutlined />} onClick={() => setMobileConversationListVisible(true)} /><Avatar src={selectedConversation.contacts?.profile_photo_url}>{(selectedConversation.contacts?.username || selectedConversation.contacts?.display_name || 'ا')[0]}</Avatar><div><div className="font-medium">{selectedConversation.contacts?.username ? `@${selectedConversation.contacts.username}` : selectedConversation.contacts?.display_name || 'کاربر اینستاگرام'}</div><div className="text-xs text-slate-400">گفتگوی اینستاگرام</div></div></div><div className="flex gap-1"><Tooltip title="گردش‌کارها و پاسخ‌گویی خودکار"><Button size="small" type="text" shape="circle" icon={<ThunderboltOutlined />} onClick={() => navigate('/settings?tab=workflows')} /></Tooltip><Tooltip title="ویرایش اتصال مخاطب"><Button size="small" type="text" shape="circle" icon={<EditOutlined />} onClick={() => setConversationLinkOpen(true)} /></Tooltip>{(selectedConversation.tags || []).map((tag) => <Tag key={tag} className="!rounded-full">{tag}</Tag>)}</div></div>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-[linear-gradient(180deg,rgba(248,250,252,0.94),rgba(241,245,249,0.82))] p-4 dark:bg-none dark:bg-[#101113]">{hasMoreMessages ? <div className="flex justify-center"><Button size="small" icon={<HistoryOutlined />} loading={loadingOlderMessages} onClick={() => void loadOlderMessages()}>مشاهده پیام‌های بیشتر</Button></div> : null}{messages.length ? messages.map((item) => { const outbound = item.direction === 'outbound'; const authorName = outbound ? (item.provider_payload?.automated ? 'سیستم' : item.sender?.full_name || 'کاربر سازمان') : (selectedConversation.contacts?.username ? `@${selectedConversation.contacts.username}` : selectedConversation.contacts?.display_name || 'کاربر اینستاگرام'); const authorAvatar = outbound ? item.sender?.avatar_url : selectedConversation.contacts?.profile_photo_url; const media = messageMedia(item); return <div key={item.id} className={`flex items-end gap-2 ${outbound ? 'justify-start' : 'justify-end'}`}><div className={`max-w-[78%] rounded-3xl px-3 py-2.5 text-sm shadow-sm ${outbound ? 'bg-[rgb(var(--brand-800-rgb))] text-white shadow-[0_18px_42px_rgba(var(--brand-800-rgb),0.34)]' : 'bg-white/85 dark:bg-white/[0.055]'}`}><div className="mb-1 flex items-center gap-1 text-[10px] opacity-80"><span>{authorName}</span>{item.provider_payload?.automated ? <Tag className="m-0 !border-white/25 !bg-white/15 !text-[10px] !text-white">پیام خودکار</Tag> : null}</div>{item.content_text ? <div className="whitespace-pre-wrap">{item.content_text}</div> : null}{media.url ? (isVideoUrl(media.url) ? <video className="mt-2 max-h-64 w-full rounded-2xl object-cover" controls preload="metadata" src={media.url} /> : <img className="mt-2 max-h-64 w-full rounded-2xl object-cover" src={media.thumbnailUrl || media.url} alt={mediaLabel(item, media.sharedType)} loading="lazy" />) : null}{media.permalink ? <a className="mt-2 inline-flex rounded-xl border border-current/20 px-2.5 py-1 text-xs underline-offset-2 hover:underline" href={media.permalink} target="_blank" rel="noreferrer">{mediaLabel(item, media.sharedType)}</a> : !item.content_text ? <div className="text-sm">{mediaLabel(item, media.sharedType)}</div> : null}<div className="mt-1 text-[10px] opacity-70">{formatDateTime(item.created_at)}</div></div><Avatar size={28} src={authorAvatar}>{authorName[0]}</Avatar></div>; }) : <Empty description="پیامی برای این گفتگو نیست." />}</div>
             <div className="border-t border-slate-200/55 bg-[rgba(248,250,252,0.78)] px-3 py-2.5 backdrop-blur-xl dark:border-white/[0.06] dark:!bg-[rgba(21,23,26,0.96)]">
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <Select

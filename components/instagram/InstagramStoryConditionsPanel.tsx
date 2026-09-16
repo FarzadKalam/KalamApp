@@ -1,14 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { App, Avatar, Button, Input, List, Modal, Space, Spin, Tag } from 'antd';
-import { EditOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { App, Avatar, Button, List, Modal, Space, Spin, Tag, Tooltip } from 'antd';
+import { EditOutlined, LinkOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 
 type StoryWorkflow = { id: string; name: string; is_active?: boolean; conditions_all?: Array<{ field?: string; value?: unknown }> | null };
-type StoryReply = { id: string; media_permalink?: string | null; message_text?: string | null; occurred_at?: string | null; conversation_id?: string | null };
+type StoryReply = { id: string; media_permalink?: string | null; media_thumbnail_url?: string | null; media_expires_at?: string | null; message_text?: string | null; occurred_at?: string | null; conversation_id?: string | null };
 type WorkflowQueue = { record_id: string; status: string; last_error?: string | null };
 type WorkflowLog = { record_id: string; workflow_id?: string | null; status: string; message?: string | null };
 type StoryCondition = StoryWorkflow & { permalink: string };
+type StoryCard = { permalink: string; thumbnailUrl?: string | null; expiresAt?: string | null; workflow?: StoryCondition; reply?: StoryReply };
 
 const dateText = (value?: string | null) => value ? new Intl.DateTimeFormat('fa-IR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) : '—';
 const storyPermalink = (workflow: StoryWorkflow) => String((workflow.conditions_all || []).find((condition) => condition?.field === 'media_permalink')?.value || '').trim();
@@ -23,8 +24,6 @@ const InstagramStoryConditionsPanel: React.FC<{ orgId: string }> = ({ orgId }) =
   const [logs, setLogs] = useState<WorkflowLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<StoryCondition | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [storyLink, setStoryLink] = useState('');
 
   const load = useCallback(async () => {
     if (!orgId) return;
@@ -32,7 +31,7 @@ const InstagramStoryConditionsPanel: React.FC<{ orgId: string }> = ({ orgId }) =
     try {
       const [workflowResult, replyResult] = await Promise.all([
         supabase.from('workflows').select('id,name,is_active,conditions_all').eq('module_id', 'instagram_interaction_events').eq('is_active', true).order('updated_at', { ascending: false }).limit(100),
-        supabase.from('instagram_interaction_events').select('id,media_permalink,message_text,occurred_at,conversation_id').eq('event_type', 'direct_received').eq('media_type', 'story').order('occurred_at', { ascending: false }).limit(300),
+        supabase.from('instagram_interaction_events').select('id,media_permalink,media_thumbnail_url,media_expires_at,message_text,occurred_at,conversation_id').eq('event_type', 'direct_received').eq('media_type', 'story').order('occurred_at', { ascending: false }).limit(300),
       ]);
       if (workflowResult.error) throw workflowResult.error;
       if (replyResult.error) throw replyResult.error;
@@ -73,14 +72,24 @@ const InstagramStoryConditionsPanel: React.FC<{ orgId: string }> = ({ orgId }) =
     const params = new URLSearchParams({ tab: 'workflows', instagramMediaPermalink: condition.permalink, instagramMediaType: 'story', instagramMediaLabel: condition.name });
     navigate(`/settings?${params.toString()}`);
   };
-  const createCondition = () => {
-    const permalink = storyLink.trim();
-    if (!/^https?:\/\//i.test(permalink)) { message.warning('لینک معتبر استوری را وارد کنید.'); return; }
-    setCreateOpen(false); setStoryLink('');
-    const params = new URLSearchParams({ tab: 'workflows', instagramMediaPermalink: permalink, instagramMediaType: 'story', instagramMediaLabel: 'استوری' });
+  const createWorkflowForStory = (card: StoryCard) => {
+    const expiresAt = Date.parse(String(card.expiresAt || ''));
+    if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) { message.warning('مهلت ۲۴ ساعتهٔ این استوری تمام شده است؛ برای ساخت شرط، به یک استوری فعال ریپلای کنید.'); return; }
+    const params = new URLSearchParams({ tab: 'workflows', instagramMediaPermalink: card.permalink, instagramMediaType: 'story', instagramMediaLabel: 'استوری' });
     navigate(`/settings?${params.toString()}`);
   };
   const selectedReplies = useMemo(() => selected ? replies.filter((reply) => reply.media_permalink === selected.permalink) : [], [replies, selected]);
+  const storyCards = useMemo<StoryCard[]>(() => {
+    const workflowByPermalink = new Map(workflows.map((workflow) => [workflow.permalink, workflow]));
+    const cards = new Map<string, StoryCard>();
+    for (const reply of replies) {
+      const permalink = String(reply.media_permalink || '').trim();
+      if (!permalink || cards.has(permalink)) continue;
+      cards.set(permalink, { permalink, thumbnailUrl: reply.media_thumbnail_url, expiresAt: reply.media_expires_at || (reply.occurred_at ? new Date(Date.parse(reply.occurred_at) + 24 * 60 * 60 * 1000).toISOString() : null), workflow: workflowByPermalink.get(permalink), reply });
+    }
+    for (const workflow of workflows) if (!cards.has(workflow.permalink)) cards.set(workflow.permalink, { permalink: workflow.permalink, workflow });
+    return Array.from(cards.values());
+  }, [replies, workflows]);
   const replyStatus = (reply: StoryReply) => {
     const matchedLog = logs.find((log) => log.record_id === reply.id && (!selected || log.workflow_id === selected.id));
     if (matchedLog) return { label: matchedLog.status === 'success' ? 'شرط اجرا شد' : matchedLog.status === 'failed' ? 'خطای اجرا' : 'شرط ثبت شد', color: matchedLog.status === 'failed' ? 'error' : 'success' };
@@ -91,17 +100,15 @@ const InstagramStoryConditionsPanel: React.FC<{ orgId: string }> = ({ orgId }) =
   };
 
   return <div className="mb-5">
-    <div className="mb-2 flex items-center justify-between"><div className="text-sm font-medium">شرط‌های استوری</div><Button size="small" type="text" onClick={() => void load()}>به‌روزرسانی</Button></div>
+    <div className="mb-2 flex items-center justify-between gap-3"><div><div className="text-sm font-medium">استوری‌های قابل شرط‌گذاری</div><div className="mt-0.5 text-[11px] text-slate-400">پس از ریپلای مخاطب، لینک استوری تا پایان مهلت ۲۴ ساعته اینجا دیده می‌شود.</div></div><Button size="small" type="text" onClick={() => void load()}>به‌روزرسانی</Button></div>
     {loading ? <div className="py-3 text-center"><Spin size="small" /></div> : <div className="flex gap-3 overflow-x-auto pb-2">
-      <button type="button" onClick={() => setCreateOpen(true)} className="shrink-0 text-center text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-200-rgb))]"><Avatar size={62} icon={<PlusOutlined />} className="ring-2 ring-dashed ring-[rgb(var(--brand-500-rgb))] ring-offset-2 dark:ring-[rgb(var(--brand-300-rgb))]" /><div className="mt-1 w-16 truncate text-[11px]">شرط جدید</div></button>
-      {workflows.map((condition) => <button key={condition.id} type="button" onClick={() => setSelected(condition)} className="shrink-0 text-center"><Avatar size={62} icon={<ThunderboltOutlined />} className="bg-[rgba(var(--brand-500-rgb),0.12)] text-[rgb(var(--brand-700-rgb))] ring-2 ring-[rgb(var(--brand-500-rgb))] ring-offset-2 dark:bg-[rgba(var(--brand-300-rgb),0.12)] dark:text-[rgb(var(--brand-200-rgb))] dark:ring-[rgb(var(--brand-300-rgb))]" /><div className="mt-1 w-16 truncate text-[11px]">{condition.name}</div></button>)}
-      {!workflows.length ? <span className="self-center text-xs text-slate-400">شرطی برای استوری ساخته نشده است.</span> : null}
+      {storyCards.map((card) => { const expiresAt = Date.parse(String(card.expiresAt || '')); const expired = Number.isFinite(expiresAt) && expiresAt <= Date.now(); const label = card.workflow?.name || (expired ? 'استوری منقضی' : 'ساخت شرط'); return <Tooltip key={card.permalink} title={expired ? 'مهلت این استوری تمام شده است.' : card.workflow ? 'نمایش نتیجه و ویرایش شرط' : 'ساخت شرط برای همین استوری'}><button type="button" onClick={() => card.workflow ? setSelected(card.workflow) : createWorkflowForStory(card)} className={`shrink-0 text-center ${expired ? 'opacity-45' : ''}`}><Avatar size={62} src={card.thumbnailUrl || undefined} icon={card.workflow ? <ThunderboltOutlined /> : <LinkOutlined />} className={card.thumbnailUrl ? 'ring-2 ring-[rgb(var(--brand-500-rgb))] ring-offset-2 dark:ring-[rgb(var(--brand-300-rgb))]' : 'bg-[rgba(var(--brand-500-rgb),0.12)] text-[rgb(var(--brand-700-rgb))] ring-2 ring-[rgb(var(--brand-500-rgb))] ring-offset-2 dark:bg-[rgba(var(--brand-300-rgb),0.12)] dark:text-[rgb(var(--brand-200-rgb))] dark:ring-[rgb(var(--brand-300-rgb))]'} /><div className="mt-1 w-16 truncate text-[11px]">{label}</div></button></Tooltip>; })}
+      {!storyCards.length ? <span className="self-center text-xs text-slate-400">هنوز ریپلایی برای استوری نرسیده است.</span> : null}
     </div>}
     <Modal open={Boolean(selected)} title={selected?.name || 'شرط استوری'} onCancel={() => setSelected(null)} footer={<Space><Button icon={<EditOutlined />} onClick={() => selected && openWorkflow(selected)}>ویرایش شرط</Button><Button type="primary" onClick={() => setSelected(null)}>بستن</Button></Space>}>
       <div className="mb-3 text-xs text-slate-500" dir="ltr">{selected?.permalink}</div>
       <List locale={{ emptyText: 'هنوز پاسخ استوری ثبت نشده است.' }} dataSource={selectedReplies} renderItem={(reply) => { const status = replyStatus(reply); return <List.Item><div className="min-w-0 flex-1"><div className="text-sm">{reply.message_text || 'پاسخ بدون متن'}</div><div className="mt-1 flex flex-wrap items-center gap-2"><span className="text-xs text-slate-400">{dateText(reply.occurred_at)}</span><Tag color={status.color}>{status.label}</Tag></div></div></List.Item>; }} />
     </Modal>
-    <Modal open={createOpen} title="شرط جدید برای استوری" okText="ادامه و تنظیم شرط" cancelText="انصراف" onCancel={() => setCreateOpen(false)} onOk={createCondition} destroyOnHidden><div className="mb-2 text-sm text-slate-600 dark:text-slate-300">لینک استوری را وارد کنید تا همان گردش‌کار مرکزی با شرط «ریپلای این استوری» باز شود.</div><Input dir="ltr" value={storyLink} onChange={(event) => setStoryLink(event.target.value)} placeholder="https://www.instagram.com/stories/..." /></Modal>
   </div>;
 };
 

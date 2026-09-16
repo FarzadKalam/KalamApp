@@ -126,7 +126,7 @@ const requireInstagramInboxEdit = (context: any) => {
   if (saasAdmin.view === true || saasAdmin.edit === true || instagram.edit === true) return;
   requireConnectionManagement(context);
 };
-const providerRequest = async (provider: any, operationKey: 'sync_accounts' | 'list_posts' | 'send_message' | 'reply_comment' | 'get_connect_url', body?: Record<string, any>) => {
+const providerRequest = async (provider: any, operationKey: 'sync_accounts' | 'list_posts' | 'send_message' | 'reply_comment' | 'get_connect_url' | 'show_profile', body?: Record<string, any>) => {
   const adapter = getInstagramProvider(text(provider?.provider_key));
   if (!adapter) throw new Error('سرویس‌دهندهٔ این اتصال در سامانه پشتیبانی نمی‌شود.');
   const operation = adapter.operations[operationKey];
@@ -250,6 +250,79 @@ const resolveWebhookAccount = async (provider: any, envelope: any, url: string, 
 const firstArray = (...candidates: any[]) => candidates.find((candidate) => Array.isArray(candidate)) || [];
 const isCachedInstagramCover = (value: string) => value.includes('/storage/v1/object/public/images/instagram_media/');
 const isLikelyVideoUrl = (value: string) => /\.(mp4|mov|m4v|webm)(?:$|[?#])/i.test(value);
+const isInstagramPermalink = (value: string) => /^https?:\/\/(?:www\.)?instagram\.com\/(?:p|reel|reels|stories)\//i.test(text(value));
+const toTimestamp = (value: unknown) => {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return new Date(numeric < 10_000_000_000 ? numeric * 1000 : numeric).toISOString();
+  const parsed = Date.parse(text(value));
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : now();
+};
+const toOptionalTimestamp = (value: unknown) => {
+  const candidate = text(value);
+  if (!candidate) return null;
+  const numeric = Number(candidate);
+  if (Number.isFinite(numeric) && numeric > 0) return new Date(numeric < 10_000_000_000 ? numeric * 1000 : numeric).toISOString();
+  const parsed = Date.parse(candidate);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+};
+const messageProfile = (entry: any, message: any) => {
+  const profiles = [entry?.sender, entry?.from, entry?.user, entry?.contact, entry?.profile, message?.sender, message?.from, message?.user, message?.contact, message?.profile];
+  return {
+    username: text(profiles.map((profile) => profile?.username || profile?.handle || profile?.user_name).find(Boolean)),
+    displayName: text(profiles.map((profile) => profile?.name || profile?.full_name || profile?.display_name).find(Boolean)),
+    profilePhotoUrl: text(profiles.map((profile) => profile?.profile_photo_url || profile?.profile_photo || profile?.avatar_url || profile?.picture).find(Boolean)),
+  };
+};
+const sharedMediaType = (value: unknown, permalink: string) => {
+  const type = text(value).toLowerCase();
+  if (type.includes('story') || /\/stories\//i.test(permalink)) return 'story';
+  if (type.includes('reel') || /\/reels?\//i.test(permalink)) return 'reel';
+  return isInstagramPermalink(permalink) ? 'post' : '';
+};
+const extractMessageMedia = (entry: any, message: any) => {
+  const attachments = firstArray(message?.attachments, entry?.attachments, message?.attachment, entry?.attachment);
+  const attachment = attachments[0] || {};
+  const payload = attachment?.payload || attachment?.data || {};
+  const story = entry?.story || entry?.reply_to || message?.story || message?.reply_to || payload?.story || payload?.reply_to || {};
+  const share = entry?.share || message?.share || payload?.share || {};
+  const permalink = text(story?.permalink || story?.url || share?.permalink || share?.url || entry?.permalink || message?.permalink || payload?.permalink || payload?.url);
+  const attachmentUrl = text(payload?.image_url || payload?.video_url || payload?.url || attachment?.url || message?.image?.url || message?.video?.url || entry?.image?.url || entry?.video?.url);
+  const attachmentThumbnailUrl = text(payload?.thumbnail_url || payload?.thumbnail || payload?.image?.url || attachment?.thumbnail_url || attachment?.thumbnail || message?.image?.url || entry?.image?.url);
+  const mediaType = sharedMediaType(payload?.reel_video_id ? 'reel' : story?.media_type || share?.media_type || payload?.media_type || attachment?.type || entry?.media_type || message?.media_type, permalink);
+  const attachmentType = text(attachment?.type || payload?.type || entry?.type || message?.type).toLowerCase();
+  const messageType = mediaType ? 'share'
+    : attachmentType.includes('image') || Boolean(text(message?.image?.url || entry?.image?.url)) ? 'image'
+      : attachmentType.includes('video') || Boolean(text(message?.video?.url || entry?.video?.url)) ? 'video'
+        : attachmentType.includes('audio') ? 'audio'
+          : attachmentType.includes('file') ? 'file'
+            : attachmentUrl ? 'other' : 'text';
+  const title = text(share?.title || story?.title || payload?.title || attachment?.title || message?.title);
+  const caption = text(share?.caption || story?.caption || payload?.caption || attachment?.caption || message?.caption);
+  const expiresAt = toOptionalTimestamp(story?.expires_at || story?.expiration_time || story?.expires || payload?.expires_at || payload?.expiration_time);
+  return {
+    attachmentUrl: attachmentUrl && !isInstagramPermalink(attachmentUrl) ? attachmentUrl : '',
+    attachmentThumbnailUrl: attachmentThumbnailUrl && !isInstagramPermalink(attachmentThumbnailUrl) ? attachmentThumbnailUrl : '',
+    sharedPermalink: isInstagramPermalink(permalink) ? permalink : '',
+    sharedMediaType: mediaType || null,
+    messageType,
+    title,
+    caption,
+    expiresAt,
+  };
+};
+const shouldRequestContactProfile = (contact: any) => {
+  if (text(contact?.username)) return false;
+  const requestedAt = Date.parse(text(contact?.profile_lookup_requested_at));
+  return !Number.isFinite(requestedAt) || Date.now() - requestedAt >= 6 * 60 * 60 * 1000;
+};
+const requestContactProfile = async (provider: any, account: any, contact: any, url: string, serviceKey: string) => {
+  if (!provider || !account?.provider_account_id || !contact?.id || !text(contact?.instagram_scoped_id) || !shouldRequestContactProfile(contact)) return false;
+  await rest(url, serviceKey, `instagram_contacts?id=eq.${encodeURIComponent(contact.id)}&org_id=eq.${encodeURIComponent(provider.org_id)}`, {
+    method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ profile_lookup_requested_at: now(), updated_at: now() }),
+  });
+  await providerRequest(provider, 'show_profile', { account_id: account.provider_account_id, sender_id: contact.instagram_scoped_id });
+  return true;
+};
 const coverExtension = (contentType: string, sourceUrl: string) => {
   if (/image\/avif/i.test(contentType)) return 'avif';
   if (/image\/webp/i.test(contentType)) return 'webp';
@@ -366,6 +439,25 @@ const processCommentWebhook = async (provider: any, envelope: any, url: string, 
   return persisted ? { persisted } : { persisted: 0, reason: 'در callback کامنت، شناسهٔ کامنت یا رسانهٔ قابل ثبت پیدا نشد.' };
 };
 
+const processProfileWebhook = async (provider: any, envelope: any, url: string, serviceKey: string) => {
+  if (text(envelope?.event_type) !== 'show_profile') return null;
+  const account = await resolveWebhookAccount(provider, envelope, url, serviceKey);
+  if (!account) return { persisted: 0, reason: 'شناسهٔ پیج callback پروفایل با هیچ پیج متصل این سازمان تطبیق نداشت.' };
+  const payload = envelope?.data || {};
+  const profile = [payload?.profile, payload?.result, payload?.data, payload].find((candidate) => candidate && typeof candidate === 'object') || {};
+  const senderId = text(profile?.sender_id || profile?.instagram_scoped_id || profile?.user_id || profile?.id || payload?.sender_id || payload?.user_id);
+  const username = text(profile?.username || profile?.user_name);
+  if (!senderId || !username) return { persisted: 0, reason: 'در callback پروفایل، شناسه یا نام کاربری قابل ثبت نبود.' };
+  const contacts = await rest(url, serviceKey, `instagram_contacts?org_id=eq.${encodeURIComponent(provider.org_id)}&account_id=eq.${encodeURIComponent(account.id)}&instagram_scoped_id=eq.${encodeURIComponent(senderId)}&select=id&limit=1`);
+  const contact = contacts?.[0];
+  if (!contact?.id) return { persisted: 0, reason: 'مخاطب متناظر callback پروفایل در سازمان پیدا نشد.' };
+  await rest(url, serviceKey, `instagram_contacts?id=eq.${encodeURIComponent(contact.id)}&org_id=eq.${encodeURIComponent(provider.org_id)}`, {
+    method: 'PATCH', headers: { Prefer: 'return=minimal' },
+    body: JSON.stringify({ username, display_name: text(profile?.name || profile?.display_name) || null, profile_photo_url: text(profile?.profile_pic || profile?.profile_photo || profile?.profile_photo_url) || null, profile_lookup_requested_at: now(), updated_at: now() }),
+  });
+  return { persisted: 1 };
+};
+
 const processMessagingWebhook = async (provider: any, envelope: any, url: string, serviceKey: string) => {
   if (text(envelope?.event_type) !== 'messaging') return null;
   const account = await resolveWebhookAccount(provider, envelope, url, serviceKey);
@@ -382,45 +474,67 @@ const processMessagingWebhook = async (provider: any, envelope: any, url: string
     const isInbound = Boolean(senderId && senderId !== text(account.instagram_user_id));
     const contactScopedId = isInbound ? senderId : recipientId;
     if (!contactScopedId) continue;
+    const profile = messageProfile(entry, entry?.message || {});
     const contactRows = await rest(url, serviceKey, 'instagram_contacts?on_conflict=account_id,instagram_scoped_id', {
       method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
-      body: JSON.stringify({ org_id: provider.org_id, account_id: account.id, instagram_scoped_id: contactScopedId, updated_at: now() }),
+      body: JSON.stringify({
+        org_id: provider.org_id, account_id: account.id, instagram_scoped_id: contactScopedId,
+        ...(profile.username ? { username: profile.username } : {}),
+        ...(profile.displayName ? { display_name: profile.displayName } : {}),
+        ...(profile.profilePhotoUrl ? { profile_photo_url: profile.profilePhotoUrl } : {}),
+        updated_at: now(),
+      }),
     });
     const contact = contactRows?.[0];
     if (!contact?.id) continue;
     const conversationRows = await rest(url, serviceKey, 'instagram_conversations?on_conflict=provider_id,account_id,provider_thread_id', {
       method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
-      body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, account_id: account.id, contact_id: contact.id, provider_thread_id: contactScopedId, last_message_at: new Date(Number(entry?.timestamp || Date.now())).toISOString(), last_inbound_at: isInbound ? new Date(Number(entry?.timestamp || Date.now())).toISOString() : null, updated_at: now() }),
+      body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, account_id: account.id, contact_id: contact.id, provider_thread_id: contactScopedId, last_message_at: toTimestamp(entry?.timestamp), last_inbound_at: isInbound ? toTimestamp(entry?.timestamp) : null, updated_at: now() }),
     });
     const conversation = conversationRows?.[0];
     if (!conversation?.id) continue;
     const message = entry?.message || {};
     const postback = entry?.postback || {};
     const providerMessageId = text(message?.mid || entry?.id);
-    const content = text(message?.text || postback?.title || postback?.payload);
-    // BoxAPI در مستند عمومی ساختار ریپلای استوری را تضمین نکرده است؛ با این حال
-    // اگر permalink در هر یک از شکل‌های رایج callback باشد، آن را بدون حدس‌زدن
-    // ثبت می‌کنیم تا شرط اختصاصی همان استوری در موتور مرکزی قابل ارزیابی باشد.
-    const storyPermalink = text(
-      entry?.story?.permalink || entry?.reply_to?.permalink || message?.story?.permalink || message?.reply_to?.permalink,
-    );
-    const storyCaption = text(entry?.story?.caption || entry?.reply_to?.caption || message?.story?.caption || message?.reply_to?.caption);
+    const media = extractMessageMedia(entry, message);
+    const content = text(message?.text || postback?.title || postback?.payload || media.title || media.caption);
+    const lastMessagePreview = content || (media.sharedMediaType === 'story' ? 'اشتراک‌گذاری استوری' : media.sharedMediaType === 'reel' ? 'اشتراک‌گذاری ریل' : media.sharedMediaType === 'post' ? 'اشتراک‌گذاری پست' : media.messageType === 'image' ? 'تصویر' : media.messageType === 'video' ? 'ویدیو' : media.messageType === 'audio' ? 'پیام صوتی' : media.messageType === 'file' ? 'فایل' : 'پیام جدید');
     await rest(url, serviceKey, 'instagram_messages?on_conflict=conversation_id,provider_message_id', {
       method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' },
-      body: JSON.stringify({ org_id: provider.org_id, conversation_id: conversation.id, provider_message_id: providerMessageId || `webhook:${crypto.randomUUID()}`, direction: isInbound ? 'inbound' : 'outbound', message_type: 'text', content_text: content || null, delivery_status: isInbound ? 'received' : 'sent', provider_payload: entry }),
+      body: JSON.stringify({
+        org_id: provider.org_id, conversation_id: conversation.id, provider_message_id: providerMessageId || `webhook:${crypto.randomUUID()}`,
+        direction: isInbound ? 'inbound' : 'outbound', message_type: media.messageType, content_text: content || null,
+        attachment_url: media.attachmentUrl || null, attachment_thumbnail_url: media.attachmentThumbnailUrl || null,
+        shared_permalink: media.sharedPermalink || null, shared_media_type: media.sharedMediaType || null,
+        delivery_status: isInbound ? 'received' : 'sent', provider_payload: entry,
+      }),
     });
     await rest(url, serviceKey, `instagram_conversations?id=eq.${encodeURIComponent(conversation.id)}&org_id=eq.${encodeURIComponent(provider.org_id)}`, {
       method: 'PATCH', headers: { Prefer: 'return=minimal' },
-      body: JSON.stringify({ last_message_preview: content || 'پیام جدید', last_message_at: new Date(Number(entry?.timestamp || Date.now())).toISOString(), ...(isInbound ? { last_inbound_at: new Date(Number(entry?.timestamp || Date.now())).toISOString() } : {}), updated_at: now() }),
+      body: JSON.stringify({ last_message_preview: lastMessagePreview, last_message_at: toTimestamp(entry?.timestamp), ...(isInbound ? { last_inbound_at: toTimestamp(entry?.timestamp) } : {}), updated_at: now() }),
     });
+    if (isInbound) {
+      try { await requestContactProfile(provider, account, contact, url, serviceKey); }
+      catch (error) { console.warn('instagram contact profile lookup skipped', error); }
+    }
     persisted += 1;
-    if (isInbound) await rest(url, serviceKey, 'instagram_interaction_events', { method: 'POST', body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, account_id: account.id, account_username: account.username || null, conversation_id: conversation.id, event_type: 'direct_received', message_text: content || null, media_type: storyPermalink ? 'story' : null, media_caption: storyCaption || null, media_permalink: storyPermalink || null, tags: conversation.tags || [], payload: entry, occurred_at: new Date(Number(entry?.timestamp || Date.now())).toISOString() }) });
+    if (isInbound) await rest(url, serviceKey, 'instagram_interaction_events?on_conflict=org_id,event_type,source_message_id', {
+      method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' },
+      body: JSON.stringify({
+        org_id: provider.org_id, provider_id: provider.id, account_id: account.id, account_username: account.username || null,
+        conversation_id: conversation.id, event_type: 'direct_received', source_message_id: providerMessageId || null,
+        message_text: content || null, media_type: media.sharedMediaType || null, media_caption: media.caption || media.title || null,
+        media_permalink: media.sharedPermalink || null, media_thumbnail_url: media.attachmentThumbnailUrl || null,
+        media_expires_at: media.sharedMediaType === 'story' ? (media.expiresAt || new Date(Date.parse(toTimestamp(entry?.timestamp)) + 24 * 60 * 60 * 1000).toISOString()) : null,
+        tags: conversation.tags || [], payload: entry, occurred_at: toTimestamp(entry?.timestamp),
+      }),
+    });
     const postbackPayload = text(postback?.payload);
     if (postbackPayload) {
       let decoded: any = {};
       try { decoded = JSON.parse(postbackPayload); } catch { decoded = { key: postbackPayload }; }
-      await rest(url, serviceKey, 'instagram_interaction_events', {
-        method: 'POST',
+      await rest(url, serviceKey, 'instagram_interaction_events?on_conflict=org_id,event_type,source_message_id', {
+        method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' },
         body: JSON.stringify({
           org_id: provider.org_id,
           provider_id: provider.id,
@@ -430,11 +544,12 @@ const processMessagingWebhook = async (provider: any, envelope: any, url: string
           showcase_id: text(decoded?.showcase_id) || null,
           showcase_item_id: text(decoded?.showcase_item_id) || null,
           event_type: 'showcase_button_clicked',
+          source_message_id: providerMessageId || null,
           button_key: text(decoded?.button_key || decoded?.key || postbackPayload),
           message_text: content || null,
           tags: conversation.tags || [],
           payload: { postback: postbackPayload, entry, decoded },
-          occurred_at: new Date(Number(entry?.timestamp || Date.now())).toISOString(),
+          occurred_at: toTimestamp(entry?.timestamp),
         }),
       });
     }
@@ -464,12 +579,13 @@ const handleWebhook = async (req: Request, url: string, serviceKey: string) => {
       body: JSON.stringify({ org_id: provider.org_id, provider_id: provider.id, provider_event_id: eventId, event_type: eventType, payload: envelope }),
     });
     const messagingResult = await processMessagingWebhook(provider, processingEnvelope, url, serviceKey);
+    const profileResult = await processProfileWebhook(provider, processingEnvelope, url, serviceKey);
     await processListPostsWebhook(provider, processingEnvelope, url, serviceKey);
     const commentResult = await processCommentWebhook(provider, processingEnvelope, url, serviceKey);
-    const processingReason = text(messagingResult?.reason || commentResult?.reason);
+    const processingReason = text(messagingResult?.reason || profileResult?.reason || commentResult?.reason);
     await rest(url, serviceKey, eventPath, {
       method: 'PATCH', headers: { Prefer: 'return=minimal' },
-      body: JSON.stringify({ processing_status: processingReason ? 'ignored' : ['messaging', 'list_posts', 'comment', 'comments', 'comment_created'].includes(normalizedEventType) ? 'processed' : 'ignored', processed_at: now(), error_message: processingReason || null }),
+      body: JSON.stringify({ processing_status: processingReason ? 'ignored' : ['messaging', 'show_profile', 'list_posts', 'comment', 'comments', 'comment_created'].includes(normalizedEventType) ? 'processed' : 'ignored', processed_at: now(), error_message: processingReason || null }),
     });
   } catch (error) {
     const errorMessage = text(error).slice(0, 1000) || 'خطای نامشخص در پردازش وب‌هوک';
@@ -690,6 +806,26 @@ Deno.serve(async (req: Request) => {
       const media = comment.media_id ? (await rest(url, serviceKey, `instagram_social_media?id=eq.${encodeURIComponent(comment.media_id)}&org_id=eq.${encodeURIComponent(context.orgId)}&select=media_type,caption,permalink`))?.[0] : null;
       await rest(url, serviceKey, 'instagram_interaction_events', { method: 'POST', body: JSON.stringify({ org_id: context.orgId, provider_id: provider.id, account_id: comment.account_id, account_username: account.username || null, comment_id: comment.id, event_type: 'comment_replied', message_text: reply, media_type: media?.media_type || null, media_caption: media?.caption || null, media_permalink: media?.permalink || null, payload: { message: reply, provider_result: result }, occurred_at: now() }) });
       return json(200, { success: true });
+    }
+    if (action === 'sync_contact_profiles') {
+      requireInstagramInboxView(context);
+      const contacts = await rest(url, serviceKey, `instagram_contacts?org_id=eq.${encodeURIComponent(context.orgId)}&username=is.null&select=id,account_id,instagram_scoped_id,profile_lookup_requested_at&order=updated_at.desc&limit=50`);
+      if (!contacts.length) return json(200, { success: true, queuedCount: 0 });
+      const accountIds = Array.from(new Set(contacts.map((contact: any) => text(contact.account_id)).filter(Boolean)));
+      const accounts = accountIds.length ? await rest(url, serviceKey, `instagram_accounts?org_id=eq.${encodeURIComponent(context.orgId)}&is_active=eq.true&id=in.(${accountIds.map(encodeURIComponent).join(',')})&select=id,provider_id,provider_account_id`) : [];
+      const providerIds = Array.from(new Set(accounts.map((account: any) => text(account.provider_id)).filter(Boolean)));
+      const providers = providerIds.length ? await rest(url, serviceKey, `instagram_providers?org_id=eq.${encodeURIComponent(context.orgId)}&is_active=eq.true&id=in.(${providerIds.map(encodeURIComponent).join(',')})&select=*`) : [];
+      const accountById = new Map(accounts.map((account: any) => [account.id, account]));
+      const providerById = new Map(providers.map((provider: any) => [provider.id, provider]));
+      let queuedCount = 0;
+      for (let index = 0; index < contacts.length; index += 10) {
+        const result = await Promise.all(contacts.slice(index, index + 10).map(async (contact: any) => {
+          try { return await requestContactProfile(providerById.get(text(accountById.get(contact.account_id)?.provider_id)), accountById.get(contact.account_id), contact, url, serviceKey); }
+          catch (error) { console.warn('instagram bulk contact profile lookup skipped', error); return false; }
+        }));
+        queuedCount += result.filter(Boolean).length;
+      }
+      return json(200, { success: true, queuedCount });
     }
     const provider = (await rest(url, serviceKey, `instagram_providers?id=eq.${encodeURIComponent(providerId)}&org_id=eq.${encodeURIComponent(context.orgId)}&select=*`))?.[0];
     if (!provider) throw new Error('اتصال سرویس‌دهندهٔ اینستاگرام پیدا نشد.');

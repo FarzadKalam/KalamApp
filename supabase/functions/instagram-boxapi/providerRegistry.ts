@@ -11,7 +11,7 @@ export type InstagramProviderDefinition = {
   apiBaseUrlPlaceholder: string;
   apiKeyHeader: string;
   apiKeyLabel: string;
-  operations: Record<'sync_accounts' | 'list_posts' | 'send_message' | 'reply_comment' | 'get_connect_url', InstagramProviderOperation>;
+  operations: Record<'sync_accounts' | 'list_posts' | 'send_message' | 'reply_comment' | 'get_connect_url' | 'show_profile', InstagramProviderOperation>;
 };
 
 // هر سرویس‌دهندهٔ جدید فقط با یک adapter مستقل به این رجیستری افزوده می‌شود؛
@@ -31,6 +31,7 @@ export const instagramProviderRegistry: Record<string, InstagramProviderDefiniti
       send_message: { method: 'POST', path: '/service/actions/send_message' },
       reply_comment: { method: 'POST', path: '/service/actions/reply_comment' },
       get_connect_url: { method: 'GET', path: '/service/info' },
+      show_profile: { method: 'POST', path: '/service/actions/show_profile' },
     },
   },
 };
