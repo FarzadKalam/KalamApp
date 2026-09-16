@@ -23,6 +23,12 @@ export const isSaasAppHost = (hostname = getCurrentHostname()) => {
   return normalizeHostname(hostname) === "app.tazesystem.ir";
 };
 
+// پنل فروشندهٔ تازه سیستم، فضای عملیاتی خود محصول است؛ نه زیردامنهٔ یک مشتری.
+// تفکیک آن از tenant مانع از بارگذاری برند یا سازمان مشتری روی این آدرس می‌شود.
+export const isSaasAdminPanelHost = (hostname = getCurrentHostname()) => {
+  return normalizeHostname(hostname) === "panel.tazesystem.ir";
+};
+
 export const isLocalHost = (hostname = getCurrentHostname()) => {
   const normalized = normalizeHostname(hostname);
   return normalized === "localhost" || normalized === "127.0.0.1";
@@ -31,14 +37,20 @@ export const isLocalHost = (hostname = getCurrentHostname()) => {
 export const isTenantHost = (hostname = getCurrentHostname()) => {
   const normalized = normalizeHostname(hostname);
   if (!normalized.endsWith(".tazesystem.ir")) return false;
-  return !["tazesystem.ir", "www.tazesystem.ir", "app.tazesystem.ir", "kalam.tazesystem.ir"].includes(normalized);
+  return ![
+    "tazesystem.ir",
+    "www.tazesystem.ir",
+    "app.tazesystem.ir",
+    "panel.tazesystem.ir",
+    "kalam.tazesystem.ir",
+  ].includes(normalized);
 };
 
 export const isTazeSystemFamilyHost = (hostname = getCurrentHostname()) =>
-  isMarketingHost(hostname) || isSaasAppHost(hostname) || isTenantHost(hostname);
+  isMarketingHost(hostname) || isSaasAppHost(hostname) || isSaasAdminPanelHost(hostname) || isTenantHost(hostname);
 
 export const isSharedAppHost = (hostname = getCurrentHostname()) =>
-  isInternalRootHost(hostname) || isMarketingHost(hostname) || isSaasAppHost(hostname);
+  isInternalRootHost(hostname) || isMarketingHost(hostname) || isSaasAppHost(hostname) || isSaasAdminPanelHost(hostname);
 
 export const getMarketingSiteBasePath = (hostname = getCurrentHostname()) =>
   isMarketingHost(hostname) ? "" : "/tazesystem";
@@ -50,6 +62,6 @@ export const getInternalAppUrl = () => "https://kalam.tazesystem.ir";
 export const getInternalLoginUrl = () => `${getInternalAppUrl()}/login`;
 
 export const getDefaultAuthenticatedAppPath = (hostname = getCurrentHostname()) => {
-  if (isSaasAppHost(hostname) || isTenantHost(hostname)) return "/dashboard";
+  if (isSaasAppHost(hostname) || isSaasAdminPanelHost(hostname) || isTenantHost(hostname)) return "/dashboard";
   return "/";
 };

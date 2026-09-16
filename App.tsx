@@ -49,7 +49,8 @@ import {
   MODULE_SETTINGS_UPDATED_EVENT,
 } from "./utils/moduleSettingsRuntime";
 import { resolveOverlayPopupContainer } from "./utils/popupContainer";
-import { isMarketingHost, isSaasAppHost } from "./utils/hostRouting";
+import { isMarketingHost, isSaasAdminPanelHost, isSaasAppHost } from "./utils/hostRouting";
+import { activateSaasAdminPanelContext } from "./utils/saasAdminPanel";
 import { signOutLocalSession } from "./utils/authSession";
 import { readCachedLoadingBrandIdentity, type LoadingBrandIdentity } from './utils/loadingBrand';
 import { PublicThemeBoundary } from './components/public/PublicThemeBoundary';
@@ -403,6 +404,7 @@ const MarketingSiteHostApp: React.FC = () => {
 function App() {
   const marketingHost = isMarketingHost();
   const saasAppHost = isSaasAppHost();
+  const saasAdminPanelHost = isSaasAdminPanelHost();
 
   if (marketingHost) {
     return <MarketingSiteHostApp />;
@@ -471,6 +473,29 @@ function App() {
       window.removeEventListener(BRANDING_UPDATED_EVENT, handleBrandingUpdated as EventListener);
     };
   }, [loadBranding]);
+
+  // حتی اگر نشست کاربر از قبل فعال باشد، ورود مستقیم به panel باید سازمان
+  // جاری را به سازمان مستقل تازه سیستم تغییر دهد؛ بدون وابستگی به خروج/ورود دوباره.
+  useEffect(() => {
+    if (!saasAdminPanelHost) return;
+    let active = true;
+
+    const resolvePanelContext = async () => {
+      const { data } = await supabase.auth.getSession();
+      if (!data.session?.user?.id) return;
+      const result = await activateSaasAdminPanelContext(supabase);
+      if (!active || !result.activated) return;
+      clearCurrentUserRoleContextCache();
+      clearReferenceDataCache();
+      await primeSessionBootstrap(supabase, { force: true });
+      if (!active) return;
+      void loadBranding(true);
+      void loadModuleSettings();
+    };
+
+    void resolvePanelContext();
+    return () => { active = false; };
+  }, [loadBranding, loadModuleSettings, saasAdminPanelHost]);
 
   useEffect(() => {
     let isMounted = true;

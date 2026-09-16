@@ -5,7 +5,8 @@ import { supabase } from '../supabaseClient';
 import { BRANDING_APPLIED_EVENT, DEFAULT_BRANDING } from '../theme/brandTheme';
 import { readRuntimeBranding } from '../utils/brandingRuntime';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
-import { getDefaultAuthenticatedAppPath, isInternalRootHost, isSaasAppHost } from '../utils/hostRouting';
+import { getDefaultAuthenticatedAppPath, isInternalRootHost, isSaasAdminPanelHost, isSaasAppHost } from '../utils/hostRouting';
+import { activateSaasAdminPanelContext } from '../utils/saasAdminPanel';
 import { getOtpErrorMessage, normalizeOtpPhone, normalizeOtpToken, OTP_RESEND_SECONDS, requestSmsOtp, verifySmsOtp } from '../utils/otpAuth';
 import { assertLoginOtpRequestAllowed, consumePhoneSignupInvite, lookupPhoneLoginCandidate, lookupPhoneSignupInvite, requestExistingProfilePhoneOtp } from '../utils/phoneAuth';
 import { normalizeIranMobile } from '../utils/phoneNumber';
@@ -412,6 +413,16 @@ const Login = () => {
   };
 
   const resolveOrganizationAfterLogin = async () => {
+    // panel.tazesystem.ir یک tenant نیست. مدیر SaaS پیش از خواندن فهرست
+    // سازمان‌ها در سمت سرور به سازمان مستقل ارائه‌دهنده منتقل می‌شود.
+    if (isSaasAdminPanelHost()) {
+      const panelContext = await activateSaasAdminPanelContext(supabase);
+      if (!panelContext.activated) {
+        await signOutLocalSession();
+        throw new Error('دسترسی به پنل مدیریت تازه سیستم برای این حساب فعال نیست.');
+      }
+    }
+
     const { data, error } = await supabase.rpc('get_current_user_organization_accesses');
     if (error) {
       // سازگاری با محیطی که هنوز migration عضویت‌ها را دریافت نکرده است.
@@ -436,6 +447,11 @@ const Login = () => {
     if (tenantOrganization) {
       await activateOrganizationAndRedirect(tenantOrganization);
       return;
+    }
+
+    if (isSaasAdminPanelHost(currentHost)) {
+      await signOutLocalSession();
+      throw new Error('سازمان مدیریت تازه سیستم برای این حساب پیدا نشد.');
     }
 
     // در کلام، وجود عضویت در panel یا tenant دیگر نباید ورود به سازمان داخلی را
