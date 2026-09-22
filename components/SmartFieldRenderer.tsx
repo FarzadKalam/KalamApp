@@ -2577,14 +2577,6 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     if (match) onChange(match.value);
                   }}
                 />
-                {canQuickCreate && (
-                  <Button
-                    icon={<PlusOutlined />}
-                    className="shrink-0"
-                    onClick={openRelationCreate}
-                    disabled={!forceEditMode || isReadonly}
-                  />
-                )}
               </div>
               {value && resolvedRelationTargetModuleId && (
                 <RelatedRecordPopover

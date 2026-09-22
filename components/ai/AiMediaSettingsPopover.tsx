@@ -31,6 +31,7 @@ export type AiMediaSettings = {
   responseFormat?: string;
   language?: string;
   voiceStyle?: string;
+  voiceInstructions?: string;
   musicMode?: 'off' | 'instrumental' | 'song';
   lyrics?: string;
   referenceVoiceData?: string;
@@ -324,6 +325,20 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
                 options={VOICE_STYLE_OPTIONS}
                 onChange={(value) => update({ voiceStyle: String(value) })}
               />
+            </div>
+          </div>
+          <div>
+            <div className="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">توضیحات نحوهٔ خواندن</div>
+            <Input.TextArea
+              size="small"
+              value={settings.voiceInstructions || ''}
+              onChange={(event) => update({ voiceInstructions: event.target.value })}
+              maxLength={1000}
+              autoSize={{ minRows: 2, maxRows: 4 }}
+              placeholder="مثلاً: شمرده، دوستانه و با مکث کوتاه بین جمله‌ها بخوان."
+            />
+            <div className="mt-1 text-[10px] leading-4 text-gray-400">
+              برای موتورهای پشتیبانی‌شده، از جمله Gemini TTS، به‌عنوان راهنمای نحوهٔ خواندن ارسال می‌شود.
             </div>
           </div>
           <div>

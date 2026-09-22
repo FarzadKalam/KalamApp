@@ -89,6 +89,17 @@ export const PricingSection: React.FC<{
             ))}
           </div>
         ) : (
+          plans.length === 0 ? (
+            <div className="rounded-3xl border border-dashed border-zinc-300 bg-zinc-50 px-6 py-12 text-center">
+              <h3 className="text-xl font-black text-zinc-900">تعرفه‌ها به‌زودی اعلام می‌شوند</h3>
+              <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-zinc-600">
+                برای دریافت قیمت متناسب با اندازه و نیاز سازمانتان، درخواست دمو ثبت کنید.
+              </p>
+              <a href={DEMO_URL} className="mt-6 inline-flex rounded-xl bg-zinc-950 px-5 py-3 text-sm font-black text-white hover:bg-zinc-800">
+                درخواست دمو و مشاوره
+              </a>
+            </div>
+          ) : (
           <div className={`grid gap-5 ${plans.length === 2 ? 'lg:grid-cols-2' : 'lg:grid-cols-3'}`}>
             {plans.map((plan) => {
               const highlighted = !!plan.highlight_tag;
@@ -167,6 +178,7 @@ export const PricingSection: React.FC<{
               );
             })}
           </div>
+          )
         )}
 
         <div className="mt-5 rounded-2xl border border-zinc-200 bg-zinc-50 p-6 lg:flex lg:items-center lg:justify-between">

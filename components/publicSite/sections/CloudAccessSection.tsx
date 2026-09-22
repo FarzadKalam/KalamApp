@@ -24,7 +24,7 @@ export const CloudAccessSection: React.FC<{ props: any }> = ({ props }) => (
         <p className="mt-5 max-w-xl text-base leading-8 text-slate-600">{props.text || 'تازه سیستم ابری، سریع و بهینه برای موبایل است؛ از فروشگاه و دفتر تا خانه، اطلاعات سازمان همیشه همگام و در دسترس می‌ماند.'}</p>
         <div className="mt-7 grid gap-3 sm:grid-cols-2">{(props.highlights || ['داده‌های همگام در همه دستگاه‌ها', 'رابط لمسی و موبایل‌محور', 'دسترسی امن از هرجا']).map((item: string) => <div key={item} className="flex items-center gap-2 text-sm font-bold text-slate-700"><CheckCircleFilled className="text-blue-600" />{item}</div>)}</div>
       </div>
-      <div className="flex min-h-[330px] items-center justify-center gap-5 pt-6 sm:gap-8" aria-label="نمایش تازه سیستم روی گوشی، تبلت و رایانه">
+      <div className="flex min-h-0 flex-col items-center justify-center gap-14 py-4 sm:min-h-[330px] sm:flex-row sm:gap-8 sm:pt-6" aria-label="نمایش تازه سیستم روی گوشی، تبلت و رایانه">
         <Device kind="phone" label="گوشی" /><Device kind="tablet" label="تبلت" /><Device kind="desktop" label="رایانه" />
       </div>
     </div>

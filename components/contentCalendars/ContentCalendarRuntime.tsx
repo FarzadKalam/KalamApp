@@ -15,6 +15,7 @@ import {
   CopyOutlined,
   HolderOutlined,
   LeftOutlined,
+  PlayCircleOutlined,
   PlusOutlined,
   ProjectOutlined,
   RightOutlined,
@@ -60,16 +61,21 @@ import {
   mapProcessTemplateStagesToDraft,
   resolveProcessRunStageId,
 } from "../../utils/processRunRuntime";
-import { autoAssignProcessV2DraftStages } from "../../utils/processV2AutoAssign";
+import {
+  autoAssignProcessV2DraftStages,
+  renderProcessV2TemplateValueFromRecord,
+} from "../../utils/processV2AutoAssign";
+import { assignProcessTemplateModuleAliases } from "../../utils/processTemplateContext";
 import { doesProcessTemplateSupportModule } from "../../utils/processTargets";
 import { saveProcessV2DraftStage } from "../../utils/processV2DraftStagePersistence";
 import { loadProcessTaskModalContext } from "../../utils/processTaskModalContext";
 import { buildContentCalendarTaskCopyDraft } from "../../utils/contentCalendarCopy";
+import { copyContentCalendarToNextMonth } from "../../utils/contentCalendarCopy";
 import type { ProcessV2CardData, ProcessV2Stage } from "../processes/ProcessCardsV2";
 
 type RuntimeItem = {
   id: string;
-  kind: "task" | "project" | "project_draft";
+  kind: "task" | "project" | "project_draft" | "calendar_draft";
   record: any;
   date: Date;
   inherited?: boolean;
@@ -153,6 +159,14 @@ const formatContentType = (value: any) =>
   String(value || "").trim();
 const asObject = (value: any): Record<string, any> =>
   value && typeof value === "object" && !Array.isArray(value) ? value : {};
+const renderProjectDraftTitle = (stage: any, project: any) => {
+  const rawTitle = String(stage?.stage_name || stage?.name || stage?.title || "فعالیت پیش‌نویس").trim();
+  if (!rawTitle || !project || typeof project !== "object") return rawTitle || "فعالیت پیش‌نویس";
+  const context = { ...project };
+  assignProcessTemplateModuleAliases(context, "projects", project);
+  const rendered = renderProcessV2TemplateValueFromRecord(rawTitle, context);
+  return String(rendered ?? rawTitle).trim() || rawTitle;
+};
 const buildDays = (anchor: Date) => {
   const source = toPersian(anchor);
   const start = toGregorian(
@@ -204,6 +218,7 @@ const ContentCalendarRuntime: React.FC<{
   const [creating, setCreating] = useState(false);
   const [projects, setProjects] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
+  const [calendarDraftStages, setCalendarDraftStages] = useState<any[]>([]);
   const [directory, setDirectory] = useState<{ users: any[]; roles: any[] }>({
     users: [],
     roles: [],
@@ -225,14 +240,20 @@ const ContentCalendarRuntime: React.FC<{
   const [templateStageId, setTemplateStageId] = useState<string>();
   const [clipboard, setClipboard] = useState<CalendarClipboard | null>(null);
   const [copiedTask, setCopiedTask] = useState<any | null>(null);
+  const [bulkAssigning, setBulkAssigning] = useState(false);
+  const [copyingNextMonth, setCopyingNextMonth] = useState(false);
   const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 7, delay: 180, tolerance: 5 } }));
+  const projectIdsKey = useMemo(
+    () => projects.map((project) => String(project?.id || "").trim()).filter(Boolean).join(","),
+    [projects],
+  );
   const taskColumns =
     "id,name,status,priority,start_date,due_date,completed_at,project_id,content_calendar_id,content_type,related_to_module,updated_at,assignee_id,assignee_role_id,assignee_type,recurrence_info,task_type";
   const load = async () => {
     if (!calendarId) return;
     setLoading(true);
     try {
-      const [projectResult, directResult, assigneeResult] = await Promise.all([
+      const [projectResult, directResult, assigneeResult, calendarResult] = await Promise.all([
         supabase
           .from("projects")
           .select(
@@ -248,9 +269,15 @@ const ContentCalendarRuntime: React.FC<{
           .order("due_date", { ascending: true })
           .limit(1000),
         fetchAssigneeDirectory(supabase),
+        supabase
+          .from("content_calendars")
+          .select("execution_process_draft")
+          .eq("id", calendarId)
+          .maybeSingle(),
       ]);
       if (projectResult.error) throw projectResult.error;
       if (directResult.error) throw directResult.error;
+      if (calendarResult.error) throw calendarResult.error;
       const projectRows = projectResult.data || [];
       const ids = projectRows.map((row: any) => String(row.id)).filter(Boolean);
       const inherited = ids.length
@@ -277,6 +304,7 @@ const ContentCalendarRuntime: React.FC<{
       });
       setProjects(projectRows);
       setTasks(Array.from(taskMap.values()));
+      setCalendarDraftStages(Array.isArray(calendarResult.data?.execution_process_draft) ? calendarResult.data.execution_process_draft : []);
       setDirectory({
         users: assigneeResult.users || [],
         roles: assigneeResult.roles || [],
@@ -300,6 +328,39 @@ const ContentCalendarRuntime: React.FC<{
     window.addEventListener("content-calendar-project-created", onProjectCreated);
     return () => window.removeEventListener("content-calendar-project-created", onProjectCreated);
   }, [calendarId]);
+  useEffect(() => {
+    if (!calendarId) return undefined;
+    const channel = supabase.channel(`content-calendar-live-${calendarId}`);
+    const refreshCalendar = () => {
+      void load();
+    };
+    channel.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "projects", filter: `content_calendar_id=eq.${calendarId}` },
+      refreshCalendar,
+    );
+    channel.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "content_calendars", filter: `id=eq.${calendarId}` },
+      refreshCalendar,
+    );
+    channel.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "tasks", filter: `content_calendar_id=eq.${calendarId}` },
+      refreshCalendar,
+    );
+    projectIdsKey.split(",").filter(Boolean).forEach((projectId) => {
+      channel.on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "tasks", filter: `project_id=eq.${projectId}` },
+        refreshCalendar,
+      );
+    });
+    channel.subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [calendarId, projectIdsKey]);
   const days = useMemo(() => buildDays(anchor), [anchor]);
   useEffect(() => {
     let active = true;
@@ -317,9 +378,9 @@ const ContentCalendarRuntime: React.FC<{
   }, [days]);
   const events = useMemo(() => {
     const entries: RuntimeItem[] = [];
-    // پروژه در نمای روزانه ظرفِ فعالیت‌هاست، نه یک رویداد تکراری. فقط در
-    // نمای «پروژه‌ها» خودِ کارت پروژه را نشان می‌دهیم.
-    if (mode === "projects")
+    // در نمای «همه»، پروژه فقط یک‌بار در روز خودش دیده می‌شود؛ در نمای
+    // «فعالیت‌ها» فقط فعالیت‌ها و در نمای «پروژه‌ها» فقط پروژه‌ها نمایش داده می‌شوند.
+    if (mode !== "tasks")
       projects.forEach((record) => {
         const date = asDate(record?.[projectDateField]);
         if (date)
@@ -341,6 +402,23 @@ const ContentCalendarRuntime: React.FC<{
             date,
             inherited: record.__contentCalendarInherited === true,
           });
+      });
+    if (mode !== "projects")
+      calendarDraftStages.forEach((draftStage: any, index: number) => {
+        const date = asDate(
+          draftStage?.start_date
+            || draftStage?.due_date
+            || calendar?.start_date
+            || calendar?.end_date,
+        );
+        if (!date) return;
+        entries.push({
+          id: `calendar:${String(draftStage?.process_node_key || draftStage?.id || index)}`,
+          kind: "calendar_draft",
+          record: draftStage,
+          draftStage,
+          date,
+        });
       });
     if (mode !== "projects")
       projects.forEach((project) => {
@@ -370,7 +448,7 @@ const ContentCalendarRuntime: React.FC<{
       map.set(key, [...(map.get(key) || []), item]);
       return map;
     }, new Map<string, RuntimeItem[]>());
-  }, [mode, projectDateField, projects, taskDateField, tasks]);
+  }, [calendar, calendarDraftStages, mode, projectDateField, projects, taskDateField, tasks]);
   const legends = useMemo(
     () =>
       Array.from(
@@ -399,6 +477,43 @@ const ContentCalendarRuntime: React.FC<{
     setTemplateStageId(undefined);
     setCopiedTask(null);
   };
+  const draftIdentityKeys = (stage: any) => [
+    stage?.id,
+    stage?.process_node_key,
+    stage?.template_stage_id,
+    stage?.process_run_stage_id,
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+  const removeDraftFromOwner = async (table: "content_calendars" | "projects", ownerId: string, selectedStage: any) => {
+    const { data, error } = await supabase
+      .from(table)
+      .select("execution_process_draft")
+      .eq("id", ownerId)
+      .maybeSingle();
+    if (error) throw error;
+    const selectedKeys = new Set(draftIdentityKeys(selectedStage));
+    const current = Array.isArray(data?.execution_process_draft) ? data.execution_process_draft : [];
+    const next = current.filter((stage: any) => !draftIdentityKeys(stage).some((key) => selectedKeys.has(key)));
+    if (next.length === current.length) return;
+    const { error: updateError } = await supabase.from(table).update({ execution_process_draft: next }).eq("id", ownerId);
+    if (updateError) throw updateError;
+  };
+  const updateDraftInOwner = async (table: "content_calendars" | "projects", ownerId: string, selectedStage: any, patch: Record<string, any>) => {
+    const { data, error } = await supabase.from(table).select("execution_process_draft").eq("id", ownerId).maybeSingle();
+    if (error) throw error;
+    const selectedKeys = new Set(draftIdentityKeys(selectedStage));
+    const current = Array.isArray(data?.execution_process_draft) ? data.execution_process_draft : [];
+    const next = current.map((stage: any) => {
+      if (!draftIdentityKeys(stage).some((key) => selectedKeys.has(key))) return stage;
+      return {
+        ...stage,
+        ...patch,
+        metadata: { ...asObject(stage?.metadata), ...asObject(patch?.metadata) },
+        recurrence_info: { ...asObject(stage?.recurrence_info), ...asObject(patch?.recurrence_info) },
+      };
+    });
+    const { error: updateError } = await supabase.from(table).update({ execution_process_draft: next }).eq("id", ownerId);
+    if (updateError) throw updateError;
+  };
   const openDraftActivity = async ({
     draftStages,
     targetStage,
@@ -406,6 +521,9 @@ const ContentCalendarRuntime: React.FC<{
     templateId: sourceTemplateId = null,
     templateTitle = null,
     contentType = null,
+    scheduleDate = null,
+    onDraftCreated,
+    onDraftSaved,
   }: {
     draftStages: any[];
     targetStage: any;
@@ -413,11 +531,15 @@ const ContentCalendarRuntime: React.FC<{
     templateId?: string | null;
     templateTitle?: string | null;
     contentType?: string | null;
+    scheduleDate?: Date | null;
+    onDraftCreated?: (createdTaskIds: string[]) => Promise<void> | void;
+    onDraftSaved?: (overrides: Record<string, any>) => Promise<void> | void;
   }) => {
-    if (!createDate || !calendarId) return;
+    const effectiveCreateDate = scheduleDate || createDate;
+    if (!effectiveCreateDate || !calendarId) return;
     setCreating(true);
     try {
-      const dateKey = toKey(createDate);
+      const dateKey = toKey(effectiveCreateDate);
       const defaultSchedule = {
         start_date: `${dateKey}T09:00:00`,
         due_date: `${dateKey}T17:00:00`,
@@ -525,6 +647,7 @@ const ContentCalendarRuntime: React.FC<{
               plannedDueAt: savedStage?.due_date,
               metadata: asObject(savedStage?.metadata),
             });
+            await onDraftSaved?.(asObject(overrides));
           },
           onCreateDraftActivity: async (overrides) => {
             const result = await autoAssignProcessV2DraftStages({
@@ -549,6 +672,7 @@ const ContentCalendarRuntime: React.FC<{
                 })
                 .in("id", ids);
               if (error) throw error;
+              await onDraftCreated?.(ids);
               await load();
             }
             if (!ids.length && result.missingAssigneeCount) {
@@ -659,6 +783,22 @@ const ContentCalendarRuntime: React.FC<{
       );
     }
   };
+  const openCalendarDraftActivity = async (item: RuntimeItem) => {
+    const selectedDraft = item.draftStage;
+    if (!selectedDraft?.id || !calendarId) return;
+    await openDraftActivity({
+      draftStages: calendarDraftStages,
+      targetStage: selectedDraft,
+      processTitle: "فعالیت‌های تقویم محتوایی",
+      scheduleDate: item.date,
+      onDraftSaved: async (overrides) => {
+        await updateDraftInOwner("content_calendars", calendarId, selectedDraft, overrides);
+      },
+      onDraftCreated: async () => {
+        await removeDraftFromOwner("content_calendars", calendarId, selectedDraft);
+      },
+    });
+  };
   const openProjectDraftActivity = async (item: RuntimeItem) => {
     const project = item.project;
     const selectedDraft = item.draftStage;
@@ -692,7 +832,7 @@ const ContentCalendarRuntime: React.FC<{
       const selected = stages.find((stage: any) => String(stage.id) === String(selectedDraft.id));
       if (!selected) throw new Error("مرحلهٔ پیش‌نویس پیدا نشد.");
       const modalStage: ProcessV2Stage = {
-        id: String(selected.process_run_stage_id || selected.id), title: String(selected.stage_name || selected.name || "فعالیت"), kind: "draft", status: "draft", layoutSlot: Number(selected.sort_order || 10), assigneeLabel: String(selected.assignee_label || "مسئول پیش‌فرض"), activityTypeLabel: String(selected.task_type || selected?.metadata?.task_type || "فعالیت سازمانی"), dueLabel: String(selected.due_date || ""), actionCount: Array.isArray(selected.automation_rules) ? selected.automation_rules.length : 0, source: selected,
+        id: String(selected.process_run_stage_id || selected.id), title: renderProjectDraftTitle(selected, project), kind: "draft", status: "draft", layoutSlot: Number(selected.sort_order || 10), assigneeLabel: String(selected.assignee_label || "مسئول پیش‌فرض"), activityTypeLabel: String(selected.task_type || selected?.metadata?.task_type || "فعالیت سازمانی"), dueLabel: String(selected.due_date || ""), actionCount: Array.isArray(selected.automation_rules) ? selected.automation_rules.length : 0, source: selected,
       };
       const modalProcess: ProcessV2CardData = {
         mode: "run", id: context.processRunId, title: getRecordTitle(project, MODULES.projects, { fallback: "پروژه" }), templateId: String(project.process_template_id || ""), templateTitle: String(selected.process_group_name || "فعالیت‌های پروژه"), relatedRecordLabel: getRecordTitle(calendar, MODULES.content_calendars, { fallback: "تقویم محتوایی" }), statusLabel: "draft", lanes: [{ id: String(selected.process_lane_key || "project_calendar_lane"), title: String(selected.process_lane_name || "فعالیت‌های پروژه"), stages: [modalStage] }],
@@ -705,6 +845,7 @@ const ContentCalendarRuntime: React.FC<{
           onSaveDraftActivity: async (overrides) => {
             const patch = asObject(overrides);
             await saveProcessV2DraftStage({ supabaseClient: supabase, stageId: selected.process_run_stage_id, stageName: patch.stage_name || patch.name || selected.stage_name || selected.name, assigneeUserId: patch.assignee_id || patch.default_assignee_id || selected.assignee_id || selected.default_assignee_id, assigneeRoleId: patch.assignee_role_id || patch.default_assignee_role_id || selected.assignee_role_id || selected.default_assignee_role_id, wage: patch.wage || selected.wage, plannedStartAt: patch.start_date || selected.start_date, plannedDueAt: patch.due_date || selected.due_date, metadata: { ...asObject(selected.metadata), ...asObject(patch.metadata) } });
+            await updateDraftInOwner("projects", String(project.id), selected, patch);
           },
           onCreateDraftActivity: async (overrides) => {
             const patch = asObject(overrides);
@@ -713,6 +854,7 @@ const ContentCalendarRuntime: React.FC<{
             if (ids.length) {
               const { error } = await supabase.from("tasks").update({ project_id: String(project.id), content_calendar_id: calendarId, start_date: patch.start_date || selected.start_date || defaultSchedule.start_date, due_date: patch.due_date || selected.due_date || defaultSchedule.due_date }).in("id", ids);
               if (error) throw error;
+              await removeDraftFromOwner("projects", String(project.id), selected);
               await load();
             }
             if (!ids.length && result.missingAssigneeCount) throw new Error("برای ارجاع فعالیت، مسئول مرحله را تعیین کنید.");
@@ -726,33 +868,101 @@ const ContentCalendarRuntime: React.FC<{
       setCreating(false);
     }
   };
+  const autoAssignDraftItem = async (item: RuntimeItem) => {
+    const selected = item.draftStage;
+    const isProjectDraft = item.kind === "project_draft";
+    const ownerId = isProjectDraft ? String(item.project?.id || "") : calendarId;
+    const sourceStages = isProjectDraft
+      ? (Array.isArray(item.project?.execution_process_draft) ? item.project.execution_process_draft : [])
+      : calendarDraftStages;
+    if (!selected?.id || !ownerId || sourceStages.length === 0) return false;
+    setCreating(true);
+    try {
+      const result = await autoAssignProcessV2DraftStages({
+        supabaseClient: supabase,
+        moduleId: isProjectDraft ? "projects" : "content_calendars",
+        recordId: ownerId,
+        recordData: isProjectDraft ? item.project : calendar,
+        draftStages: sourceStages,
+        targetGroupId: selected.process_group_id,
+        targetStageId: selected.process_node_key || selected.id,
+      });
+      const ids = (result.createdTasks || []).map((task: any) => String(task?.id || "")).filter(Boolean);
+      if (ids.length) {
+        const dateKey = toKey(item.date);
+        const { error } = await supabase.from("tasks").update({
+          project_id: isProjectDraft ? ownerId : null,
+          content_calendar_id: calendarId,
+          start_date: selected.start_date || `${dateKey}T09:00:00`,
+          due_date: selected.due_date || `${dateKey}T17:00:00`,
+        }).in("id", ids);
+        if (error) throw error;
+        await removeDraftFromOwner(isProjectDraft ? "projects" : "content_calendars", ownerId, selected);
+        await load();
+        message.success("فعالیت پیش‌نویس ارجاع شد.");
+        return true;
+      }
+      if (result.missingAssigneeCount) throw new Error("برای ارجاع فعالیت، مسئول مرحله را تعیین کنید.");
+      message.warning("این پیش‌نویس فعالیت قابل ارجاع نبود.");
+      return false;
+    } catch (error: any) {
+      message.error(`ارجاع فعالیت ناموفق بود: ${String(error?.message || "خطای نامشخص")}`);
+      return false;
+    } finally {
+      setCreating(false);
+    }
+  };
+  const autoAssignAllDraftsForMonth = async () => {
+    if (bulkAssigning) return;
+    const monthDrafts = days
+      .filter((day) => day.inMonth)
+      .flatMap((day) => events.get(day.key) || [])
+      .filter((item) => item.kind === "project_draft" || item.kind === "calendar_draft");
+    if (monthDrafts.length === 0) {
+      message.info("در این ماه پیش‌نویسی برای ارجاع وجود ندارد.");
+      return;
+    }
+    setBulkAssigning(true);
+    let assignedCount = 0;
+    try {
+      for (const item of monthDrafts) {
+        if (await autoAssignDraftItem(item)) assignedCount += 1;
+      }
+      if (assignedCount > 0) message.success(`${assignedCount} پیش‌نویس فعالیت ارجاع شد.`);
+    } finally {
+      setBulkAssigning(false);
+    }
+  };
   const renderEvent = (item: RuntimeItem, large = false) => {
     const isTask = item.kind === "task";
-    const isDraft = item.kind === "project_draft";
+    const isDraft = item.kind === "project_draft" || item.kind === "calendar_draft";
+    const isProjectDraft = item.kind === "project_draft";
     const record = item.record;
     const statusOptions = MODULES.tasks.fields.find((field) => field.key === "status")?.options || [];
     const label = isDraft ? "پیش‌نویس" : isTask ? getTaskStatusLabel(record.status, record, statusOptions) : String(record.status || "");
-    const color = isDraft ? "#a855f7" : isTask ? STATUS_COLORS[getTaskStatusColor(record.status, record, statusOptions)] || STATUS_COLORS.default : "#8b5cf6";
+    const color = isDraft ? "#64748b" : isTask ? STATUS_COLORS[getTaskStatusColor(record.status, record, statusOptions)] || STATUS_COLORS.default : "#8b5cf6";
     const assignee = resolveAssigneePresentation({ source: record, allUsers: directory.users, allRoles: directory.roles });
     const linkedProject = isTask && record?.project_id
       ? projects.find((project) => String(project?.id || "") === String(record.project_id)) || null
       : null;
     const title = isDraft
-      ? String(record?.stage_name || record?.name || "فعالیت پیش‌نویس")
+      ? renderProjectDraftTitle(record, item.project)
       : getRecordTitle(record, MODULES[isTask ? "tasks" : "projects"], { fallback: "بدون عنوان" });
     const open = () => {
       if (isTask) openTaskProcessModal({ taskId: item.id, task: record });
-      else if (isDraft) void openProjectDraftActivity(item);
+      else if (item.kind === "project_draft") void openProjectDraftActivity(item);
+      else if (item.kind === "calendar_draft") void openCalendarDraftActivity(item);
       else navigate(`/projects/${item.id}`);
     };
     const copySource = isTask ? { kind: "task" as const, record } : !isDraft ? { kind: "project" as const, record } : null;
-    return <div key={`${item.kind}:${item.id}`} onClick={(event) => { event.stopPropagation(); open(); }} className={`w-full cursor-pointer rounded-lg border text-right shadow-sm transition hover:border-[rgba(var(--brand-400-rgb),0.9)] ${isDraft ? "border-dashed border-purple-400 bg-purple-50/80 dark:border-purple-400/70 dark:bg-purple-950/20" : "border-gray-200 bg-white/90 dark:border-white/10 dark:bg-[#1d1d1d]"} ${large ? "px-3 py-2 text-xs" : "px-2 py-1 text-[10px]"}`} style={{ borderRight: `3px ${isDraft ? "dashed" : "solid"} ${color}` }}>
+    return <div key={`${item.kind}:${item.id}`} onClick={(event) => { event.stopPropagation(); open(); }} className={`w-full cursor-pointer rounded-lg border text-right shadow-sm transition hover:border-[rgba(var(--brand-400-rgb),0.9)] ${isDraft ? "border-dashed border-slate-300 bg-slate-100/80 dark:border-slate-600 dark:bg-white/[0.06]" : "border-gray-200 bg-white/90 dark:border-white/10 dark:bg-[#1d1d1d]"} ${large ? "px-3 py-2 text-xs" : "px-2 py-1 text-[10px]"}`} style={{ borderRight: `3px ${isDraft ? "dashed" : "solid"} ${color}` }}>
       <div className="flex min-w-0 items-start gap-1.5">
         <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-full border bg-white dark:bg-[#1d1d1d]" style={{ borderColor: color }}>
           {assignee.assigneeId ? <IdentityAvatar size={18} option={{ kind: assignee.kind === "role" ? "role" : "user", id: assignee.assigneeId, label: assignee.label || "مسئول", avatarUrl: assignee.avatarUrl || undefined, iconKey: normalizeRoleIconKey(assignee.role?.icon_key) }} /> : <span className="h-full w-full" style={{ backgroundColor: color }} />}
         </span>
-        <span className="min-w-0 flex-1"><span className="block line-clamp-2 font-bold text-gray-700 dark:text-gray-100">{title}</span>{isDraft ? <span className="block truncate text-[9px] text-purple-700 dark:text-purple-300">پروژه: {getRecordTitle(item.project, MODULES.projects, { fallback: "پروژه" })}</span> : assignee.label ? <span className="block truncate text-[9px] text-gray-500 dark:text-gray-400">مسئول: {assignee.label}</span> : null}</span>
+        <span className="min-w-0 flex-1"><span className="block line-clamp-2 font-bold text-gray-700 dark:text-gray-100">{title}</span>{isDraft && isProjectDraft ? <span className="block truncate text-[9px] text-slate-600 dark:text-slate-300">پروژه: {getRecordTitle(item.project, MODULES.projects, { fallback: "پروژه" })}</span> : assignee.label ? <span className="block truncate text-[9px] text-gray-500 dark:text-gray-400">مسئول: {assignee.label}</span> : null}</span>
         {canEdit && copySource ? <Button type="text" size="small" icon={<CopyOutlined />} aria-label={`کپی ${isTask ? "فعالیت" : "پروژه"}`} title={`کپی ${isTask ? "فعالیت" : "پروژه"}`} className="!h-6 !w-6 !min-w-6 !p-0" onClick={(event) => { event.stopPropagation(); setClipboard(copySource); }} /> : null}
+        {canEdit && isDraft ? <Button type="text" size="small" icon={<PlayCircleOutlined />} aria-label="ارجاع خودکار پیش‌نویس" title="ارجاع خودکار پیش‌نویس" className="!h-6 !w-6 !min-w-6 !p-0 !text-slate-500" loading={creating} onClick={(event) => { event.stopPropagation(); void autoAssignDraftItem(item); }} /> : null}
         {canEdit && isTask ? <CalendarDragHandle item={item} /> : null}
       </div>
       <div className="mt-1 flex flex-wrap gap-x-2 text-[9px] text-gray-500 dark:text-gray-400">
@@ -923,9 +1133,23 @@ const ContentCalendarRuntime: React.FC<{
         </span>
       }
       extra={
-        <Button size="small" onClick={() => void load()}>
-          به‌روزرسانی
-        </Button>
+        <div className="flex flex-wrap items-center justify-end gap-1">
+          {canEdit ? <Button size="small" icon={<CopyOutlined />} loading={copyingNextMonth} onClick={async () => {
+            setCopyingNextMonth(true);
+            try {
+              const targetId = await copyContentCalendarToNextMonth({ supabaseClient: supabase, sourceCalendar: { ...calendar, id: calendarId } });
+              message.success("کپی تقویم برای ماه بعد ساخته شد.");
+              navigate(`/content_calendars/${targetId}`);
+            } catch (error: any) {
+              message.error(`کپی تقویم ناموفق بود: ${String(error?.message || "خطای نامشخص")}`);
+            } finally {
+              setCopyingNextMonth(false);
+            }
+          }}>کپی به ماه بعد</Button> : null}
+          {canEdit ? <Button size="small" icon={<PlayCircleOutlined />} loading={bulkAssigning} onClick={() => void autoAssignAllDraftsForMonth()}>ارجاع خودکار</Button> : null}
+          {canEdit ? <Button size="small" type="primary" icon={<PlayCircleOutlined />} loading={bulkAssigning} onClick={() => void autoAssignAllDraftsForMonth()}>ارجاع همه پیش‌نویس‌های این ماه</Button> : null}
+          <Button size="small" onClick={() => void load()}>به‌روزرسانی</Button>
+        </div>
       }
     >
       <div className="mb-4 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
@@ -1019,7 +1243,7 @@ const ContentCalendarRuntime: React.FC<{
               : days.filter((day) => day.inMonth)
             ).map((day) => renderDay(day, true))}
           </div>
-          {projects.length + tasks.length === 0 ? (
+          {projects.length + tasks.length + calendarDraftStages.length === 0 ? (
             <Empty
               className="mt-5"
               description="هنوز پروژه یا فعالیتی به این تقویم متصل نشده است."
@@ -1053,25 +1277,14 @@ const ContentCalendarRuntime: React.FC<{
         destroyOnClose
       >
         {createMode === "choice" ? (
-          <div className="grid gap-2">
-            <Button
-              block
-              icon={<PlusOutlined />}
-              onClick={() => setCreateMode("raw")}
-            >
-              ایجاد پیش‌نویس فعالیت خام
-            </Button>
-            <Button
-              block
-              icon={<CalendarOutlined />}
-              onClick={() => void openTemplate()}
-            >
-              ایجاد فعالیت از الگو
-            </Button>
-            <Button
-              block
-              icon={<ProjectOutlined />}
-              onClick={() => {
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Card hoverable size="small" className="!rounded-xl !border-slate-200" onClick={() => setCreateMode("raw")}>
+              <div className="flex items-start gap-3"><PlusOutlined className="mt-1 text-lg text-slate-500" /><div><div className="font-black">ایجاد پیش‌نویس فعالیت خام</div><div className="mt-1 text-xs text-slate-500">فعالیت را وارد کنید و پیش از ارجاع بررسی کنید.</div></div></div>
+            </Card>
+            <Card hoverable size="small" className="!rounded-xl !border-blue-300 !bg-blue-50/60 dark:!border-blue-700 dark:!bg-blue-950/20" onClick={() => void openTemplate()}>
+              <div className="flex items-start gap-3"><CalendarOutlined className="mt-1 text-lg text-blue-600" /><div><div className="font-black text-blue-800 dark:text-blue-200">ایجاد فعالیت از الگو</div><div className="mt-1 text-xs text-blue-700/80 dark:text-blue-300/80">یک مرحلهٔ فرآیند را به‌صورت پیش‌نویس آماده کنید.</div></div></div>
+            </Card>
+            <Card hoverable size="small" className="!rounded-xl !border-slate-200" onClick={() => {
                 const date = createDate;
                 resetCreate();
                 if (date)
@@ -1086,15 +1299,10 @@ const ContentCalendarRuntime: React.FC<{
                       },
                     },
                   });
-              }}
-            >
-              ایجاد پروژه خام
-            </Button>
-            <Button
-              block
-              icon={<ProjectOutlined />}
-              type="primary"
-              onClick={() => {
+              }}>
+              <div className="flex items-start gap-3"><ProjectOutlined className="mt-1 text-lg text-slate-500" /><div><div className="font-black">ایجاد پروژه خام</div><div className="mt-1 text-xs text-slate-500">پروژه را بدون الگو و با وضعیت پیش‌نویس بسازید.</div></div></div>
+            </Card>
+            <Card hoverable size="small" className="!rounded-xl !border-emerald-300 !bg-emerald-50/70 dark:!border-emerald-700 dark:!bg-emerald-950/20" onClick={() => {
                 const date = createDate;
                 resetCreate();
                 if (date)
@@ -1104,10 +1312,9 @@ const ContentCalendarRuntime: React.FC<{
                     sourceInvoiceId: calendar?.source_invoice_id || null,
                     dateKey: toKey(date),
                   });
-              }}
-            >
-              ایجاد پروژه از الگوی فرآیند
-            </Button>
+              }}>
+              <div className="flex items-start gap-3"><ProjectOutlined className="mt-1 text-lg text-emerald-600" /><div><div className="font-black text-emerald-800 dark:text-emerald-200">ایجاد پروژه از الگوی فرآیند</div><div className="mt-1 text-xs text-emerald-700/80 dark:text-emerald-300/80">پروژه و مرحله‌های پیش‌نویس آن را یک‌جا آماده کنید.</div></div></div>
+            </Card>
             <div className="pt-2 text-center text-xs text-gray-500">
               برای استفاده بهینه از تقویم محتوایی، ابتدا فعالیت‌ها و فرآیندهای
               تکرارشونده را در قسمت الگوهای فرآیند تکمیل کنید.

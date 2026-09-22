@@ -15,6 +15,7 @@ import { getCachedAuthUser } from "../utils/sessionCache";
 import { buildClientFallbackSystemCode, supportsSystemCode } from "../utils/systemCode";
 import { syncRecordTags } from "../utils/recordTags";
 import { copyProcessTemplateStagesRelations, copyProductionOrderRelations } from "../utils/recordCopy";
+import { copyContentCalendarRelations } from "../utils/contentCalendarCopy";
 import { normalizeOperationalDocumentTotals } from "../utils/operationalDocumentTotals";
 import { shouldAutoSyncInvoiceAccounting } from "../utils/invoiceAccountingPolicy";
 import { buildInstructionModuleConfig, buildInstructionModuleOptions, INSTRUCTIONS_MODULE_ID } from "../utils/instructionSupport";
@@ -68,6 +69,14 @@ export const ModuleCreate = () => {
     }
     if (moduleId === "process_templates" && copySource?.copyRelations && copySource?.sourceRecordId) {
       await copyProcessTemplateStagesRelations(supabase, String(copySource.sourceRecordId), String(insertedId));
+      return;
+    }
+    if (moduleId === "content_calendars" && copySource?.copyRelations && copySource?.sourceRecordId) {
+      await copyContentCalendarRelations({
+        supabaseClient: supabase,
+        sourceCalendarId: String(copySource.sourceRecordId),
+        targetCalendarId: String(insertedId),
+      });
     }
   };
 

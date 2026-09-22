@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Alert, App, Badge, Button, Card, Col, Empty, InputNumber, List, Modal, Progress, Row, Skeleton,
+  Alert, App, Badge, Button, Card, Col, Empty, InputNumber, Modal, Progress, Row, Skeleton,
   Space, Statistic, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import {

@@ -4,6 +4,7 @@ import {
   App,
   Button,
   Checkbox,
+  Collapse,
   Descriptions,
   Divider,
   Drawer,
@@ -104,10 +105,6 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
     if (!plan) return;
     setSelectedModules(Object.entries(plan.enabled_modules || {}).filter(([, enabled]) => enabled === true).map(([key]) => key));
     setSelectedFeatures(Object.entries(plan.enabled_features || {}).filter(([, enabled]) => !!enabled).map(([key]) => key));
-  };
-
-  const toggleSelection = (setter: React.Dispatch<React.SetStateAction<string[]>>, id: string) => {
-    setter((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   };
 
   const saveAccount = async () => {

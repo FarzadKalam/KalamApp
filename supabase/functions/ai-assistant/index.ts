@@ -86,7 +86,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'ai-assistant-2026-09-16-content-project-drafts';
+const FUNCTION_BUILD = 'ai-assistant-2026-09-23-native-gemini-tts';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 const DEFAULT_AI_MODEL = '';
@@ -4899,22 +4899,46 @@ const callDecisionEngineAudioTranscription = async (
 const AUDIO_SPEECH_VOICES_BY_PROVIDER: Record<string, string[]> = {
   openai: ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'onyx', 'nova', 'sage', 'shimmer', 'verse'],
   gemini: ['Aoede', 'Charon', 'Fenrir', 'Kore', 'Puck', 'Zephyr'],
-  elevenlabs: ['Rachel', 'Domi', 'Bella', 'Antoni', 'Elli', 'Josh', 'Arnold', 'Adam', 'Sam'],
+  // AvalAI exposes ElevenLabs through its OpenAI-compatible voice names.
+  elevenlabs: ['alloy', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'],
+};
+const ELEVENLABS_VOICE_ALIASES: Record<string, string> = {
+  rachel: '21m00Tcm4TlvDq8ikWAM',
+  domi: 'AZnzlk1XvdvUeBnXmlld',
+  bella: 'EXAVITQu4vr4xnSDxMaL',
+  antoni: 'ErXwobaYiN019PkySvjV',
+  elli: 'MF3mGyEYCl7XYWbV9V6O',
+  josh: 'TxGEqnHWrfWFTfGW9XjX',
+  arnold: 'VR6AewLTigWG4xSOukaG',
+  adam: 'pNInz6obpgDQGcFmaJgB',
+  sam: 'yoZ06aMxZJJ28mfd3POQ',
 };
 const AUDIO_SPEECH_FORMATS = new Set(['mp3', 'opus', 'aac', 'flac', 'wav', 'pcm']);
 const AUDIO_SPEECH_LANGUAGES = new Set(['fa-IR', 'en-US', 'ar', 'tr', 'auto']);
 const AUDIO_SPEECH_STYLES = new Set(['neutral', 'formal', 'warm', 'energetic', 'calm']);
 const AUDIO_SPEECH_MUSIC_MODES = new Set(['off', 'instrumental', 'song']);
+const VOICE_STYLE_INSTRUCTIONS: Record<string, string> = {
+  formal: 'با لحن رسمی، روشن و شمرده بخوان.',
+  warm: 'با لحن گرم، دوستانه و صمیمی بخوان.',
+  energetic: 'با لحن پرانرژی و پویا بخوان.',
+  calm: 'با لحن آرام و ملایم بخوان.',
+};
 
 const getVoiceOptionsForModel = (providerConfig: any) => {
+  const provider = String(providerConfig?.modelProvider || providerConfig?.provider || '').trim().toLowerCase();
+  const normalizeVoice = (value: any) => {
+    const normalized = String(value || '').trim();
+    return provider === 'elevenlabs'
+      ? ELEVENLABS_VOICE_ALIASES[normalized.toLowerCase()] || normalized
+      : normalized;
+  };
   const configured = Array.isArray(providerConfig?.modelMetadata?.voice_options)
     ? providerConfig.modelMetadata.voice_options
       .map((item: any) => typeof item === 'string' ? item : item?.value)
-      .map((item: any) => String(item || '').trim())
+      .map(normalizeVoice)
       .filter(Boolean)
     : [];
   if (configured.length) return Array.from(new Set(configured));
-  const provider = String(providerConfig?.modelProvider || providerConfig?.provider || '').trim().toLowerCase();
   return AUDIO_SPEECH_VOICES_BY_PROVIDER[provider] || AUDIO_SPEECH_VOICES_BY_PROVIDER.openai;
 };
 
@@ -4923,18 +4947,24 @@ const sanitizeVoiceOutputSettings = (options: any = {}, providerConfig: any = nu
   const requestedFormat = String(options?.responseFormat || options?.format || '').trim().toLowerCase();
   const requestedLanguage = String(options?.language || '').trim();
   const requestedStyle = String(options?.voiceStyle || '').trim();
+  const requestedInstructions = String(options?.voiceInstructions || options?.instructions || '').trim();
   const requestedMusicMode = String(options?.musicMode || '').trim();
   const speed = Number.isFinite(Number(options?.speed))
     ? Math.min(4, Math.max(0.25, Number(options.speed)))
     : undefined;
   const voices = getVoiceOptionsForModel(providerConfig);
-  const voice = voices.find((item) => item.toLowerCase() === requestedVoice.toLowerCase()) || voices[0] || 'alloy';
+  const provider = String(providerConfig?.modelProvider || providerConfig?.provider || '').trim().toLowerCase();
+  const normalizedRequestedVoice = provider === 'elevenlabs'
+    ? ELEVENLABS_VOICE_ALIASES[requestedVoice.toLowerCase()] || requestedVoice
+    : requestedVoice;
+  const voice = voices.find((item) => item.toLowerCase() === normalizedRequestedVoice.toLowerCase()) || voices[0] || 'alloy';
   return {
     voice,
     responseFormat: AUDIO_SPEECH_FORMATS.has(requestedFormat) ? requestedFormat : 'mp3',
     ...(speed !== undefined ? { speed } : {}),
     language: AUDIO_SPEECH_LANGUAGES.has(requestedLanguage) ? requestedLanguage : 'fa-IR',
     voiceStyle: AUDIO_SPEECH_STYLES.has(requestedStyle) ? requestedStyle : 'neutral',
+    voiceInstructions: requestedInstructions.slice(0, 1000) || null,
     musicMode: AUDIO_SPEECH_MUSIC_MODES.has(requestedMusicMode) ? requestedMusicMode : 'off',
     lyrics: String(options?.lyrics || '').trim().slice(0, 4000) || null,
     referenceVoice: options?.referenceVoiceData ? {
@@ -4943,6 +4973,47 @@ const sanitizeVoiceOutputSettings = (options: any = {}, providerConfig: any = nu
       hasData: true,
     } : null,
   };
+};
+
+const isGeminiTtsModel = (providerConfig: any) => {
+  const provider = String(providerConfig?.modelProvider || providerConfig?.provider || '').trim().toLowerCase();
+  const model = String(providerConfig?.model || '').trim().toLowerCase();
+  return provider === 'gemini' || /^gemini[\w.-]*tts$/.test(model);
+};
+
+const buildVoiceInstructions = (settings: any) => {
+  const custom = String(settings?.voiceInstructions || '').trim();
+  const style = VOICE_STYLE_INSTRUCTIONS[String(settings?.voiceStyle || '').trim()] || '';
+  return [custom, style].filter(Boolean).join('\n').slice(0, 1000);
+};
+
+const requestVoiceSynthesis = async (providerConfig: any, path: string, body: Record<string, any>) => {
+  let lastError: any = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const result = await requestAvalaiWithFallback(providerConfig, path, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${providerConfig.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(LONG_MEDIA_PROVIDER_TIMEOUT_MS),
+      });
+      if (result.response.ok || attempt === 2) return result;
+      const raw = await result.response.clone().text();
+      const parsed = parseJsonSafe(raw);
+      const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || parsed?.message || raw);
+      if (!isRetriableProviderFailure(result.response.status, message)) return result;
+      lastError = new Error(String(message || `HTTP ${result.response.status}`));
+    } catch (error) {
+      lastError = error;
+      const message = String(error?.message || error || '');
+      if (attempt === 2 || !/timeout|timed out|زمان مناسب پاسخ نداد|temporar|gateway|cancelled/i.test(message)) throw error;
+    }
+    await sleep(800);
+  }
+  throw lastError || new Error('تولید صدا ناموفق بود.');
 };
 
 const callAudioSpeech = async (
@@ -4957,35 +5028,49 @@ const callAudioSpeech = async (
   const voice = normalized.voice;
   const responseFormat = normalized.responseFormat;
   const speed = normalized.speed;
-  const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/audio/speech', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${providerConfig.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
+  const instructions = buildVoiceInstructions(normalized);
+  const isGemini = isGeminiTtsModel(providerConfig);
+  const request = isGemini
+    ? await requestVoiceSynthesis(providerConfig, '/text:synthesize', {
+      input: { text, ...(instructions ? { prompt: instructions } : {}) },
+      voice: {
+        languageCode: normalized.language === 'auto' ? 'fa-IR' : normalized.language,
+        name: voice,
+        model_name: model,
+      },
+      audioConfig: {
+        audioEncoding: responseFormat === 'wav' || responseFormat === 'pcm' ? 'LINEAR16' : 'MP3',
+      },
+    })
+    : await requestVoiceSynthesis(providerConfig, '/audio/speech', {
       model,
       input: text,
       voice,
       response_format: responseFormat,
       ...(speed !== undefined ? { speed } : {}),
-    }),
-    signal: AbortSignal.timeout(LONG_MEDIA_PROVIDER_TIMEOUT_MS),
-  }, { disableFallback: true });
+      ...(instructions && String(providerConfig?.modelProvider || providerConfig?.provider || '').trim().toLowerCase() !== 'elevenlabs'
+        ? { instructions }
+        : {}),
+    });
+  const { response, baseUrl } = request;
   const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
-  const contentType = response.headers.get('content-type') || 'audio/mpeg';
+  const contentType = isGemini
+    ? (responseFormat === 'wav' || responseFormat === 'pcm' ? 'audio/wav' : 'audio/mpeg')
+    : (response.headers.get('content-type') || 'audio/mpeg');
   if (!response.ok) {
     const raw = await response.text();
     const parsed = parseJsonSafe(raw);
     const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || parsed?.message || raw || 'تولید صدا ناموفق بود.');
     throw new Error(`تولید صدا ناموفق بود: ${shortenProviderError(message)}`);
   }
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = isGemini
+    ? base64ToUint8Array(String((await response.json())?.audioContent || ''))
+    : new Uint8Array(await response.arrayBuffer());
   if (!bytes.length) throw new Error('خروجی صوتی معتبر نیست.');
   return {
     bytes,
     contentType,
-    format: responseFormat,
+    format: responseFormat === 'pcm' ? 'wav' : responseFormat,
     provider: providerConfig.provider,
     model,
     requestId,
@@ -8484,6 +8569,7 @@ const createAssistantVoiceOutputMessage = async (
     responseFormat: voiceOptions.responseFormat || voiceOptions.format || body?.responseFormat,
     language: voiceOptions.language,
     voiceStyle: voiceOptions.voiceStyle,
+    voiceInstructions: voiceOptions.voiceInstructions || voiceOptions.instructions || body?.voiceInstructions || body?.instructions,
     musicMode: voiceOptions.musicMode,
     lyrics: voiceOptions.lyrics,
     referenceVoiceData: voiceOptions.referenceVoiceData,
@@ -10011,6 +10097,7 @@ const handleGenerateVoiceOutput = async (supabaseUrl: string, serviceRoleKey: st
     responseFormat: voiceOptions.responseFormat || voiceOptions.format || body?.responseFormat,
     language: voiceOptions.language,
     voiceStyle: voiceOptions.voiceStyle,
+    voiceInstructions: voiceOptions.voiceInstructions || voiceOptions.instructions || body?.voiceInstructions || body?.instructions,
     musicMode: voiceOptions.musicMode,
     lyrics: voiceOptions.lyrics,
     referenceVoiceData: voiceOptions.referenceVoiceData,

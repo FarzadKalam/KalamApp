@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, App, Button, Card, Form, Input, InputNumber, Select, Slider, Space, Typography, Upload } from "antd";
-import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, LockOutlined, LoginOutlined } from "@ant-design/icons";
+import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, LockOutlined, LoginOutlined, ReloadOutlined, SafetyCertificateOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import "../App.css";
 import { MODULES } from "../moduleRegistry";
@@ -89,6 +89,11 @@ type PublicChoiceOption = {
   label: string;
   value: string;
   special?: "other" | "none";
+};
+
+type PublicFormSubmissionSuccess = {
+  message: string;
+  redirectUrl: string;
 };
 
 const LEGACY_PREFIX_OPTIONS = [
@@ -481,6 +486,7 @@ const InquiryForm = () => {
   const { message } = App.useApp();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [submissionSuccess, setSubmissionSuccess] = useState<PublicFormSubmissionSuccess | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [publicForm, setPublicForm] = useState<PublicWebFormState | null>(null);
   const [branding, setBranding] = useState(() => readRuntimeBranding() || DEFAULT_BRANDING);
@@ -844,6 +850,15 @@ const InquiryForm = () => {
       ? `linear-gradient(155deg, ${palette.darkBg} 0%, ${palette.darkSurface} 45%, ${palette.secondary} 100%)`
       : `linear-gradient(155deg, ${palette.primary}18 0%, #ffffff 36%, ${palette.secondary}12 100%)`,
   } as const;
+
+  useEffect(() => {
+    const redirectUrl = String(submissionSuccess?.redirectUrl || "").trim();
+    if (!redirectUrl) return;
+    const timer = window.setTimeout(() => {
+      window.location.assign(redirectUrl);
+    }, 2500);
+    return () => window.clearTimeout(timer);
+  }, [submissionSuccess?.redirectUrl]);
 
   const buildPublicUploadPath = (field: WebFormFieldRecord, file: File) => {
     const finalName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${sanitizeStorageFileName(file.name || "file")}`;
@@ -1649,9 +1664,10 @@ const InquiryForm = () => {
     try {
       if (publicForm.mode === "legacy") {
         await submitLegacyInquiry(completeValues);
-        message.success(publicForm.config.success_message || "درخواست شما ثبت شد.");
-        form.resetFields();
-        form.setFieldsValue(initialFieldValues);
+        setSubmissionSuccess({
+          message: publicForm.config.success_message || "درخواست شما ثبت شد.",
+          redirectUrl: String(publicForm.config.success_redirect_url || "").trim(),
+        });
         return;
       }
 
@@ -1687,16 +1703,10 @@ const InquiryForm = () => {
         }
       }
 
-      message.success(String(result.success_message || publicForm.config.success_message || "درخواست شما ثبت شد."));
-      form.resetFields();
-      form.setFieldsValue(initialFieldValues);
-
-      const redirectUrl = String(publicForm.config.success_redirect_url || "").trim();
-      if (redirectUrl) {
-        window.setTimeout(() => {
-          window.location.assign(redirectUrl);
-        }, 1000);
-      }
+      setSubmissionSuccess({
+        message: String(result.success_message || publicForm.config.success_message || "درخواست شما ثبت شد."),
+        redirectUrl: String(publicForm.config.success_redirect_url || "").trim(),
+      });
     } catch (error: any) {
       if (String(error?.message || "").includes("WEB_FORM_AUTH_REQUIRED")) {
         navigate(loginRedirectUrl);
@@ -1757,6 +1767,13 @@ const InquiryForm = () => {
     }, 140);
   };
 
+  const startNewSubmission = () => {
+    setSubmissionSuccess(null);
+    form.resetFields();
+    form.setFieldsValue(initialFieldValues);
+    setCurrentSlideIndex(0);
+  };
+
   if (loading) {
     return <BrandLoadingScreen branding={branding} message="در حال بارگذاری وب‌فرم…" />;
   }
@@ -1770,6 +1787,72 @@ const InquiryForm = () => {
   }
 
   const requiresLogin = publicForm.accessScope === "internal" && !authUser;
+
+  if (submissionSuccess) {
+    return (
+      <main
+        dir="rtl"
+        className="flex min-h-screen items-center justify-center px-4 py-10"
+        style={pageStyle}
+      >
+        <section
+          className="w-full max-w-lg overflow-hidden rounded-[32px] border text-center shadow-[0_24px_80px_rgba(15,23,42,0.16)]"
+          style={surfaceStyle}
+        >
+          <div
+            className="relative overflow-hidden px-6 py-10 md:px-10"
+            style={{ background: `linear-gradient(145deg, ${palette.secondary} 0%, ${palette.primary} 100%)` }}
+          >
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_20%,rgba(255,255,255,0.2),transparent_32%),radial-gradient(circle_at_85%_0%,rgba(255,255,255,0.16),transparent_28%)]" />
+            <div className="relative mx-auto flex h-24 w-24 items-center justify-center rounded-full bg-white/15 text-6xl text-white shadow-lg backdrop-blur">
+              <CheckCircleOutlined />
+            </div>
+          </div>
+          <div className="px-6 py-9 md:px-10">
+            {companySettings.logo_url ? (
+              <ResilientImage
+                src={companySettings.logo_url}
+                preset="thumb"
+                alt={appTitle}
+                className="mx-auto -mt-16 mb-5 h-16 w-16 rounded-2xl bg-white object-contain p-2 shadow-lg"
+                loading="lazy"
+                decoding="async"
+              />
+            ) : null}
+            <h1 className="text-2xl font-black" style={{ color: surfaceStyle.color }}>
+              فرم با موفقیت ثبت شد
+            </h1>
+            <p className="mx-auto mt-3 max-w-md text-base leading-8" style={{ color: isDarkMode ? "rgba(255,255,255,0.74)" : "#4b5563" }}>
+              {submissionSuccess.message}
+            </p>
+            <div
+              className="mx-auto mt-6 inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold"
+              style={{ backgroundColor: isDarkMode ? "rgba(52,211,153,0.14)" : "#ecfdf5", color: isDarkMode ? "#6ee7b7" : "#047857" }}
+            >
+              <SafetyCertificateOutlined />
+              ثبت شما دریافت شد و نیازی به ارسال دوباره نیست.
+            </div>
+            {submissionSuccess.redirectUrl ? (
+              <p className="mt-5 text-sm" style={{ color: isDarkMode ? "rgba(255,255,255,0.6)" : "#6b7280" }}>
+                تا چند لحظه دیگر به صفحهٔ بعد منتقل می‌شوید.
+              </p>
+            ) : (
+              <Button
+                className="!mt-7 min-w-52"
+                type="primary"
+                size="large"
+                icon={<ReloadOutlined />}
+                onClick={startNewSubmission}
+                style={{ backgroundColor: palette.primary }}
+              >
+                ثبت فرم جدید
+              </Button>
+            )}
+          </div>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <div className="min-h-screen px-4 py-6 md:px-6 md:py-10" style={pageStyle}>

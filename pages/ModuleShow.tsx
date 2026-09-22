@@ -2851,6 +2851,13 @@ const ModuleShow: React.FC = () => {
         try {
           const nameField = detectCopyNameField(moduleConfig);
           const payload = buildCopyPayload(data, { nameField, moduleId });
+          if (moduleId === 'content_calendars') {
+            payload.status = 'draft';
+            payload.is_public = false;
+            payload.public_slug = null;
+            payload.public_link = null;
+            payload.execution_process_draft = [];
+          }
           writeModuleOptionSnapshot(moduleId, {
             dynamicOptions,
             relationOptions,
@@ -2862,7 +2869,7 @@ const ModuleShow: React.FC = () => {
               initialValues: payload,
               copySource: {
                 sourceRecordId: String(id),
-                copyRelations: moduleId === 'production_orders' || moduleId === 'process_templates',
+                copyRelations: moduleId === 'production_orders' || moduleId === 'process_templates' || moduleId === 'content_calendars',
               },
             },
           });
