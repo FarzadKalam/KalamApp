@@ -48,6 +48,7 @@ type AssistantAction =
   | 'transcribe_voice'
   | 'generate_voice_output'
   | 'generate_image'
+  | 'process_ai_image_jobs'
   | 'get_image_status'
   | 'generate_video'
   | 'get_video_status'
@@ -86,7 +87,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'ai-assistant-2026-09-23-native-gemini-tts';
+const FUNCTION_BUILD = 'ai-assistant-2026-09-23-durable-image-jobs';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 const DEFAULT_AI_MODEL = '';
@@ -5461,6 +5462,49 @@ const uploadGeneratedBinaryAsset = async (
   };
 };
 
+const uploadAiImageJobInput = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  bytes: Uint8Array,
+  contentType: string,
+  index: number,
+) => {
+  const orgId = normalizeId(authContext?.orgId);
+  if (!orgId || !bytes?.length) throw new Error('ورودی تصویر برای صف تولید معتبر نیست.');
+  const mime = String(contentType || 'image/png').split(';')[0].trim() || 'image/png';
+  const extension = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : mime.includes('webp') ? 'webp' : 'png';
+  const objectPath = `ai_job_inputs/${orgId}/${Date.now()}_${Math.max(0, index)}_${crypto.randomUUID()}.${extension}`;
+  const response = await fetch(`${supabaseUrl.replace(/\/+$/, '')}/storage/v1/object/images/${objectPath}`, {
+    method: 'POST',
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      'Content-Type': mime,
+      'x-upsert': 'true',
+    },
+    body: bytes,
+  });
+  const parsed = parseJsonSafe(await response.text());
+  if (!response.ok) throw new Error(typeof parsed === 'string' ? parsed : parsed?.message || 'ذخیره ورودی تصویر ناموفق بود.');
+  return { bucket: 'images', path: objectPath, mimeType: mime };
+};
+
+const downloadAiImageJobInput = async (supabaseUrl: string, serviceRoleKey: string, input: any) => {
+  const bucket = String(input?.bucket || 'images').trim();
+  const path = String(input?.path || '').trim();
+  if (!path || !/^[A-Za-z0-9._/-]+$/.test(path)) throw new Error('مسیر ورودی تصویر در صف معتبر نیست.');
+  const response = await fetch(`${supabaseUrl.replace(/\/+$/, '')}/storage/v1/object/${encodeURIComponent(bucket)}/${path}`, {
+    headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}` },
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!response.ok) throw new Error('دریافت ورودی تصویر از صف ناموفق بود.');
+  return {
+    data: uint8ToBase64(new Uint8Array(await response.arrayBuffer())),
+    mimeType: String(input?.mimeType || response.headers.get('content-type') || 'image/png'),
+  };
+};
+
 const detectTableExists = async (supabaseUrl: string, serviceRoleKey: string, table: string) => {
   try {
     await restSelect(supabaseUrl, serviceRoleKey, table, { select: 'id', limit: 1 });
@@ -10216,6 +10260,10 @@ const handleGenerateVoiceOutput = async (supabaseUrl: string, serviceRoleKey: st
 const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const prompt = String(body?.prompt || body?.message || '').trim();
   if (!prompt) return json(400, { success: false, message: 'متن درخواست تصویر خالی است.' });
+  const internalImageJob = body?.__internalImageJob && typeof body.__internalImageJob === 'object'
+    ? body.__internalImageJob
+    : null;
+  const runInline = body?.__runInline === true && Boolean(internalImageJob?.jobId);
   const rawContext = normalizeContext(body?.context || {});
   const contextKey = buildContextKey(rawContext);
   const imageSettings = (body?.settings && typeof body.settings === 'object') ? body.settings : {};
@@ -10236,7 +10284,9 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
     modelMetadata: modelCatalogRow?.metadata && typeof modelCatalogRow.metadata === 'object' ? modelCatalogRow.metadata : {},
     supportedEndpoints: Array.isArray(modelCatalogRow?.metadata?.supported_endpoints) ? modelCatalogRow.metadata.supported_endpoints : undefined,
   };
-  const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
+  const pageContext = internalImageJob?.pageContext && typeof internalImageJob.pageContext === 'object'
+    ? internalImageJob.pageContext
+    : await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const useOrganizationContext = imageSettings.useOrganizationContext === true;
   const canUseKnowledge = useOrganizationContext && isAiCapabilityPlanAvailable(planContext, 'document_analysis');
   const requiresAuthoritativeProcessContext = rawContext.intent === 'process_guide'
@@ -10250,7 +10300,9 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
     captureAutomaticAiUserMemory(supabaseUrl, serviceRoleKey, authContext, prompt)
       .then(() => listAiUserMemories(supabaseUrl, serviceRoleKey, authContext, AI_USER_MEMORY_CONTEXT_ITEMS, true)),
   ]);
-  const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
+  const thread = internalImageJob?.threadId
+    ? { id: String(internalImageJob.threadId), metadata: {} }
+    : await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
     threadId: body?.threadId || null,
     title: prompt.slice(0, 90),
     pageContext,
@@ -10259,7 +10311,9 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
     model: providerConfig.model,
     forceNew: body?.forceNewThread === true,
   });
-  const userMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+  const userMessage = internalImageJob?.userMessageId
+    ? { id: String(internalImageJob.userMessageId) }
+    : await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: thread.id,
     role: 'user',
     content: prompt,
@@ -10273,7 +10327,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
       capability: 'image_generation',
     },
   });
-  const providerPrompt = appendProcessContextToImagePrompt(
+  const computedProviderPrompt = appendProcessContextToImagePrompt(
     appendImageContextToPrompt(
       buildImagePromptWithSettings(prompt, imageSettings),
       { companyContext, pageSummary: pageContext.summary || null, knowledgeChunks },
@@ -10283,7 +10337,9 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
       authoritativeProcessContext,
     },
   );
-  const providerPromptWithUserMemory = [providerPrompt, buildAiUserMemoryPrompt(userMemories)].filter(Boolean).join('\n\n');
+  const providerPrompt = String(internalImageJob?.providerPrompt || '').trim() || computedProviderPrompt;
+  const providerPromptWithUserMemory = String(internalImageJob?.providerPrompt || '').trim()
+    || [providerPrompt, buildAiUserMemoryPrompt(userMemories)].filter(Boolean).join('\n\n');
   const rawSources = Array.isArray(body?.sourceImages) ? body.sourceImages
     : Array.isArray(imageSettings.sourceImages) ? imageSettings.sourceImages
     : [];
@@ -10313,6 +10369,16 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
       console.warn('Could not fetch source image url for editing', error);
     }
   }
+  const sourceImageRefs = runInline
+    ? []
+    : await Promise.all(sourceImages.map(async (source: any, index: number) => uploadAiImageJobInput(
+      supabaseUrl,
+      serviceRoleKey,
+      authContext,
+      base64ToUint8Array(source.data),
+      source.mimeType,
+      index,
+    )));
   const requestedImageExtraBody = imageSettings.extraBody || imageSettings.extra_body;
   const imageCallOptions = {
     sourceImages,
@@ -10362,14 +10428,52 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
       hasSourceImages: sourceImages.length > 0,
     },
   };
-  const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
-    thread_id: thread.id,
-    role: 'assistant',
-    content: 'در حال ساخت تصویر...',
-    provider: providerConfig.provider,
-    model: providerConfig.model,
-    metadata: pendingImageMetadata,
-  });
+  const assistantMessage = internalImageJob?.assistantMessageId
+    ? { id: String(internalImageJob.assistantMessageId), created_at: internalImageJob.assistantCreatedAt || new Date().toISOString() }
+    : await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+      thread_id: thread.id,
+      role: 'assistant',
+      content: 'در حال ساخت تصویر...',
+      provider: providerConfig.provider,
+      model: providerConfig.model,
+      metadata: pendingImageMetadata,
+    });
+  const imageJob = !runInline
+    ? (await restInsert(supabaseUrl, serviceRoleKey, 'ai_image_generation_jobs', [{
+      org_id: authContext.orgId,
+      user_id: authContext.userId,
+      thread_id: thread.id,
+      user_message_id: userMessage?.id || null,
+      assistant_message_id: assistantMessage?.id,
+      payload: {
+        prompt,
+        context: rawContext,
+        contextKey,
+        pageContext,
+        providerPrompt: providerPromptWithUserMemory,
+        settings: { ...imageSettings, sourceImages: undefined, sourceImageUrls: undefined },
+        size: imageCallOptions.size || null,
+        quality: imageCallOptions.quality || null,
+        outputFormat: imageCallOptions.outputFormat || null,
+        n: imageCallOptions.n || null,
+        extraBody: imageCallOptions.extraBody || null,
+        sourceImageRefs,
+        modelOverride: body?.modelOverride || null,
+      },
+      status: 'pending',
+      available_at: new Date().toISOString(),
+    }]))[0] || null
+    : null;
+  const jobId = String(imageJob?.id || internalImageJob?.jobId || '').trim() || null;
+  if (jobId) {
+    pendingImageMetadata.background_task.job_id = jobId;
+    if (!runInline) {
+      await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', {
+        id: `eq.${assistantMessage.id}`,
+        org_id: `eq.${authContext.orgId}`,
+      }, { metadata: pendingImageMetadata }).catch(() => []);
+    }
+  }
   await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
     updated_at: new Date().toISOString(),
     provider: providerConfig.provider,
@@ -10393,7 +10497,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
     },
   }).catch(() => []);
 
-  runBackgroundTask((async () => {
+  const imageTask = runInline ? (async () => {
     try {
       const backgroundStartedAt = new Date().toISOString();
       await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', {
@@ -10549,19 +10653,105 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
         },
       }).catch(() => []);
     }
-  })());
+  })() : null;
+  if (runInline) {
+    await imageTask;
+  }
 
   return json(200, {
     success: true,
-    pending: true,
+    pending: !runInline,
     threadId: thread.id,
     userMessageId: userMessage?.id || null,
     messageId: assistantMessage?.id || null,
-    answer: 'درخواست ساخت تصویر ثبت شد.',
+    answer: runInline ? 'تصویر آماده شد.' : 'درخواست ساخت تصویر در صف پایدار ثبت شد.',
     provider: providerConfig.provider,
     model: providerConfig.model,
     messages: [userMessage, assistantMessage].filter(Boolean),
   });
+};
+
+const handleProcessAiImageJobs = async (supabaseUrl: string, serviceRoleKey: string) => {
+  const claimedRaw = await restRpc(supabaseUrl, serviceRoleKey, 'claim_ai_image_generation_job', { p_lease_seconds: 240 });
+  const job = Array.isArray(claimedRaw) ? claimedRaw[0] : claimedRaw;
+  if (!job?.id) return json(200, { success: true, processed: 0, reason: 'no_pending_jobs' });
+
+  const payload = job.payload && typeof job.payload === 'object' ? job.payload : {};
+  const authContext: any = {
+    userId: String(job.user_id || '').trim(),
+    orgId: String(job.org_id || '').trim(),
+    roleId: null,
+    profile: { id: String(job.user_id || '').trim(), org_id: String(job.org_id || '').trim() },
+    permissions: {},
+  };
+  const sourceImages = await Promise.all(
+    (Array.isArray(payload.sourceImageRefs) ? payload.sourceImageRefs : [])
+      .map((input: any) => downloadAiImageJobInput(supabaseUrl, serviceRoleKey, input)),
+  );
+  const imageBody = {
+    prompt: payload.prompt,
+    context: payload.context || {},
+    settings: payload.settings || {},
+    size: payload.size,
+    quality: payload.quality,
+    outputFormat: payload.outputFormat,
+    n: payload.n,
+    modelOverride: payload.modelOverride || undefined,
+    sourceImages,
+    __runInline: true,
+    __internalImageJob: {
+      jobId: job.id,
+      threadId: job.thread_id,
+      userMessageId: job.user_message_id,
+      assistantMessageId: job.assistant_message_id,
+      pageContext: payload.pageContext || {},
+      providerPrompt: payload.providerPrompt || '',
+    },
+  };
+
+  try {
+    await handleGenerateImage(supabaseUrl, serviceRoleKey, authContext, imageBody);
+    const messageRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_messages', {
+      id: `eq.${job.assistant_message_id}`,
+      org_id: `eq.${job.org_id}`,
+      select: 'metadata',
+      limit: 1,
+    });
+    const metadata = messageRows[0]?.metadata || {};
+    const completed = metadata?.status === 'completed' && metadata?.pending_status === false;
+    const attempts = Number(job.attempts || 1);
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_image_generation_jobs', {
+      id: `eq.${job.id}`,
+      status: 'eq.running',
+    }, completed ? {
+      status: 'completed',
+      completed_at: new Date().toISOString(),
+      locked_at: null,
+      updated_at: new Date().toISOString(),
+      last_error: null,
+    } : {
+      status: attempts >= 6 ? 'failed' : 'pending',
+      available_at: new Date(Date.now() + Math.min(900, 30 * (2 ** Math.min(attempts, 4))) * 1000).toISOString(),
+      locked_at: null,
+      updated_at: new Date().toISOString(),
+      last_error: String(metadata?.error || metadata?.failed_note || 'پردازش تصویر کامل نشد.').slice(0, 1000),
+    });
+    return json(200, { success: true, processed: 1, status: completed ? 'completed' : attempts >= 6 ? 'failed' : 'requeued', jobId: job.id });
+  } catch (error: any) {
+    const attempts = Number(job.attempts || 1);
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_image_generation_jobs', {
+      id: `eq.${job.id}`,
+      status: 'eq.running',
+    }, {
+      status: attempts >= 6 ? 'failed' : 'pending',
+      available_at: new Date(Date.now() + Math.min(900, 30 * (2 ** Math.min(attempts, 4))) * 1000).toISOString(),
+      locked_at: null,
+      updated_at: new Date().toISOString(),
+      last_error: String(error?.message || error || 'پردازش تصویر ناموفق بود.').slice(0, 1000),
+    }).catch(() => []);
+    console.error('ai image job failed', job.id, error);
+    return json(200, { success: false, processed: 1, status: attempts >= 6 ? 'failed' : 'requeued', jobId: job.id });
+  }
 };
 
 const handleGetImageStatus = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
@@ -13395,14 +13585,18 @@ Deno.serve(async (req: Request) => {
       return json(500, { success: false, message: 'تنظیمات سرور کامل نیست. متغیرهای Supabase Function را بررسی کنید.' });
     }
 
+    const body = await readJsonBody(req);
+    const action: AssistantAction = String(body?.action || 'chat') as AssistantAction;
     const authHeader = req.headers.get('authorization') || '';
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+    const isInternalImageWorker = action === 'process_ai_image_jobs'
+      && token === serviceRoleKey
+      && req.headers.get('x-kalam-internal') === 'workflow-interval-runner';
+    if (isInternalImageWorker) return await handleProcessAiImageJobs(supabaseUrl, serviceRoleKey);
     if (!token) return json(401, { success: false, message: 'نشست شما معتبر نیست. دوباره وارد حساب کاربری شوید.' });
 
     const user = await verifyUserToken(supabaseUrl, serviceRoleKey, token);
     const authContext = await loadUserContext(supabaseUrl, serviceRoleKey, user);
-    const body = await readJsonBody(req);
-    const action: AssistantAction = String(body?.action || 'chat') as AssistantAction;
 
     if (action === 'get_ai_settings') return await handleGetAiSettings(supabaseUrl, serviceRoleKey, authContext);
     if (action === 'save_ai_settings') return await handleSaveAiSettings(supabaseUrl, serviceRoleKey, authContext, body);
