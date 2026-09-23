@@ -94,6 +94,7 @@ function Assert-PwaReleaseBundle {
   $packagePath = Join-Path $RepoRoot 'package.json'
   $serviceWorkerPath = Join-Path $DistPath 'sw.js'
   $versionManifestPath = Join-Path $DistPath 'version.json'
+  $indexPath = Join-Path $DistPath 'index.html'
   $expectedToken = '__TAZESYSTEM_CACHE_VERSION__'
   $package = Get-Content -LiteralPath $packagePath -Raw | ConvertFrom-Json
   $version = [string]$package.version
@@ -105,6 +106,9 @@ function Assert-PwaReleaseBundle {
   }
   if (-not (Test-Path -LiteralPath $versionManifestPath -PathType Leaf)) {
     throw "PWA release check failed: version.json is missing from $DistPath."
+  }
+  if (-not (Test-Path -LiteralPath $indexPath -PathType Leaf)) {
+    throw "PWA release check failed: index.html is missing from $DistPath."
   }
 
   $serviceWorker = Get-Content -LiteralPath $serviceWorkerPath -Raw
