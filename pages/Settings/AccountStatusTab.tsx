@@ -27,6 +27,7 @@ const AccountStatusTab: React.FC = () => {
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [walletAction, setWalletAction] = useState<'topup' | 'sms_topup' | 'ai_transfer' | 'sms_transfer' | null>(null);
   const [smsWallet, setSmsWallet] = useState<any>({});
+  const [storageUsage, setStorageUsage] = useState<any>({});
   const [walletAmount, setWalletAmount] = useState<number | null>(null);
   const [walletActionLoading, setWalletActionLoading] = useState(false);
   const [accessDrawer, setAccessDrawer] = useState<'modules' | 'features' | null>(null);
@@ -35,11 +36,12 @@ const AccountStatusTab: React.FC = () => {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [accountResult, catalogResult, pendingOrdersResult, smsWalletResult] = await Promise.all([
+      const [accountResult, catalogResult, pendingOrdersResult, smsWalletResult, storageResult] = await Promise.all([
         supabase.rpc('get_current_saas_account_overview'),
         supabase.rpc('get_current_saas_store_catalog'),
         supabase.rpc('get_current_saas_pending_orders'),
         supabase.from('org_sms_wallets').select('balance_irt,included_quota_irt,reserved_irt,status').maybeSingle(),
+        supabase.rpc('get_current_saas_storage_usage'),
       ]);
       if (accountResult.error) throw accountResult.error;
       if (catalogResult.error) throw catalogResult.error;
@@ -48,6 +50,7 @@ const AccountStatusTab: React.FC = () => {
       setCatalog(Array.isArray(catalogResult.data) ? catalogResult.data : []);
       setPendingOrders(Array.isArray(pendingOrdersResult.data) ? pendingOrdersResult.data : []);
       setSmsWallet(smsWalletResult.data || {});
+      setStorageUsage(storageResult.error ? {} : (storageResult.data || {}));
     } catch (error) {
       message.error(toFaErrorMessage(error as any, 'دریافت وضعیت حساب ناموفق بود.'));
     } finally {
@@ -219,6 +222,9 @@ const AccountStatusTab: React.FC = () => {
   const aiWalletTarget = Math.max(aiRemaining, Number(aiWallet.included_quota_irt || 0), 100000);
   const smsWalletTarget = Math.max(smsRemaining, Number(smsWallet.included_quota_irt || 0), 100000);
   const walletPercent = (remaining: number, target: number) => Math.min(100, Math.max(0, Math.round((remaining / Math.max(target, 1)) * 100)));
+  const storageLimitGb = Math.max(0, Number(quotas.storage_gb || 0));
+  const storageUsedGb = Math.max(0, Number(storageUsage.gb || 0));
+  const storagePercent = storageLimitGb > 0 ? Math.min(100, Math.round((storageUsedGb / storageLimitGb) * 100)) : 0;
 
   return (
     <div className="space-y-6 pb-8">
@@ -244,7 +250,7 @@ const AccountStatusTab: React.FC = () => {
 
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="کاربران فعال" value={Number(quotas.users_used || 0)} suffix={`/ ${usersAllowed || '—'}`} prefix={<TeamOutlined className="text-indigo-600" />} /><Progress className="mt-3" percent={userPercent} showInfo={false} /></Card></Col>
-        <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="فضای تخصیص‌یافته" value={Number(quotas.storage_gb || 0)} suffix="GB" prefix={<CloudOutlined className="text-sky-600" />} /><Text type="secondary" className="text-xs">مصرف فضای فایل به‌زودی به همین کارت افزوده می‌شود.</Text></Card></Col>
+        <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="فضای ذخیره‌سازی" value={storageUsedGb} precision={3} suffix={`/ ${storageLimitGb} GB`} prefix={<CloudOutlined className="text-sky-600" />} /><Progress className="mt-2" percent={storagePercent} status={storagePercent >= 90 ? 'exception' : storagePercent >= 75 ? 'active' : 'normal'} showInfo={false} /><Text type="secondary" className="text-xs">{Number(storageUsage.files || 0).toLocaleString('fa-IR')} فایل · {Math.max(0, storageLimitGb - storageUsedGb).toFixed(3)} GB باقی‌مانده</Text></Card></Col>
         <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="اعتبار هوش مصنوعی" value={aiRemaining} formatter={(value) => `${Number(value).toLocaleString('fa-IR')} تومان`} prefix={<BulbOutlined className="text-violet-600" />} /><Progress className="mt-2" percent={walletPercent(aiRemaining, aiWalletTarget)} strokeColor="#7c3aed" showInfo={false} /><div className="mt-2 flex items-center justify-between"><Tag color={aiWallet.status === 'active' || !aiWallet.status ? 'green' : 'red'}>{aiWallet.status === 'blocked' ? 'مسدود' : 'فعال'}</Tag><Button size="small" type="link" onClick={() => { setWalletAmount(null); setWalletAction('ai_transfer'); }}>از کیف پول</Button></div></Card></Col>
         <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="کیف پول پیامک" value={smsRemaining} formatter={(value) => `${Number(value).toLocaleString('fa-IR')} تومان`} prefix={<DatabaseOutlined className="text-cyan-600" />} /><Progress className="mt-2" percent={walletPercent(smsRemaining, smsWalletTarget)} strokeColor="#0891b2" showInfo={false} /><div className="mt-2 flex items-center justify-between"><Tag color={smsRemaining <= 100000 ? 'gold' : 'green'}>{smsRemaining <= 100000 ? 'نیازمند شارژ' : 'فعال'}</Tag><Space size={0}><Button size="small" type="link" onClick={() => { setWalletAmount(null); setWalletAction('sms_transfer'); }}>از کیف پول</Button><Button size="small" type="link" onClick={() => { setWalletAmount(null); setWalletAction('sms_topup'); }}>شارژ مستقیم</Button></Space></div></Card></Col>
         <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="زمان‌بندی خودکار" value={Number(quotas.scheduled_runs || 0)} suffix="فعال" prefix={<RocketOutlined className="text-orange-600" />} /><Text type="secondary" className="mt-2 block text-xs">گردش‌کار زمان‌دار، ارسال برنامه حضور و گزارش‌ها؛ بدون محدودیت مصنوعیِ فاصلهٔ اجرا.</Text></Card></Col>
