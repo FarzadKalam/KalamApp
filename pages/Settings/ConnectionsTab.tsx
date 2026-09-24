@@ -2382,7 +2382,7 @@ const ConnectionsTab: React.FC = () => {
           </Button>
         </div>
       </Form>
-      <ApiIntegrationSection />
+      <ApiIntegrationSection orgId={currentOrgId} />
     </div>
   );
 };

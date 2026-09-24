@@ -115,7 +115,11 @@ const CopyButton: React.FC<{ text: string; label?: string }> = ({ text, label })
 
 // ─── API Tokens Sub-Section ──────────────────────────────────────────────────
 
-const ApiTokensSection: React.FC = () => {
+type ApiTokensSectionProps = {
+  orgId: string | null;
+};
+
+const ApiTokensSection: React.FC<ApiTokensSectionProps> = ({ orgId }) => {
   const { message, modal } = AntdApp.useApp();
   const [tokens, setTokens] = useState<ApiToken[]>([]);
   const [loading, setLoading] = useState(false);
@@ -123,11 +127,17 @@ const ApiTokensSection: React.FC = () => {
   const [newTokenName, setNewTokenName] = useState('');
 
   const load = useCallback(async () => {
+    if (!orgId) {
+      setTokens([]);
+      return;
+    }
+
     setLoading(true);
     try {
       const { data, error } = await supabase
         .from('org_api_tokens')
         .select('*')
+        .eq('org_id', orgId)
         .order('created_at', { ascending: false });
       if (error) throw error;
       setTokens(data ?? []);
@@ -136,17 +146,22 @@ const ApiTokensSection: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [message]);
+  }, [message, orgId]);
 
   useEffect(() => { load(); }, [load]);
 
   const handleCreate = async () => {
+    if (!orgId) {
+      message.error('سازمان جاری برای ایجاد توکن API مشخص نیست.');
+      return;
+    }
+
     setCreating(true);
     try {
       const token = generateToken();
       const { data, error } = await supabase
         .from('org_api_tokens')
-        .insert({ token, name: newTokenName || null })
+        .insert({ org_id: orgId, token, name: newTokenName || null })
         .select()
         .single();
       if (error) throw error;
@@ -178,11 +193,14 @@ const ApiTokensSection: React.FC = () => {
   };
 
   const handleDeactivate = async (id: string) => {
+    if (!orgId) return;
+
     try {
       const { error } = await supabase
         .from('org_api_tokens')
         .update({ is_active: false })
-        .eq('id', id);
+        .eq('id', id)
+        .eq('org_id', orgId);
       if (error) throw error;
       setTokens(prev => prev.map(t => t.id === id ? { ...t, is_active: false } : t));
       message.success('توکن غیرفعال شد');
@@ -192,11 +210,14 @@ const ApiTokensSection: React.FC = () => {
   };
 
   const handleDelete = async (id: string) => {
+    if (!orgId) return;
+
     try {
       const { error } = await supabase
         .from('org_api_tokens')
         .delete()
-        .eq('id', id);
+        .eq('id', id)
+        .eq('org_id', orgId);
       if (error) throw error;
       setTokens(prev => prev.filter(t => t.id !== id));
       message.success('توکن حذف شد');
@@ -589,7 +610,11 @@ const WebhooksSection: React.FC = () => {
 
 // ─── Main Export ─────────────────────────────────────────────────────────────
 
-const ApiIntegrationSection: React.FC = () => (
+type ApiIntegrationSectionProps = {
+  orgId: string | null;
+};
+
+const ApiIntegrationSection: React.FC<ApiIntegrationSectionProps> = ({ orgId }) => (
   <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
     <div className="flex items-center gap-2 mb-1">
       <ApiOutlined style={{ fontSize: 18, color: '#1677ff' }} />
@@ -600,7 +625,7 @@ const ApiIntegrationSection: React.FC = () => (
       {' '}<a href="/tazesystem/developers" target="_blank" rel="noopener noreferrer">مستندات API ↗</a>
     </Text>
 
-    <ApiTokensSection />
+    <ApiTokensSection orgId={orgId} />
     <Divider />
     <WebhooksSection />
   </div>
