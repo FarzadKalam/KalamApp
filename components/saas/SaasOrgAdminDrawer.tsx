@@ -63,6 +63,7 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
   const [accountLoading, setAccountLoading] = useState(false);
   const [accountSaving, setAccountSaving] = useState(false);
   const [account, setAccount] = useState<any | null>(null);
+  const [smsWallet, setSmsWallet] = useState<any | null>(null);
   const [plans, setPlans] = useState<any[]>([]);
   const [catalog, setCatalog] = useState<any[]>([]);
   const [orders, setOrders] = useState<any[]>([]);
@@ -82,11 +83,12 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
     if (!orgId || sourceKind !== 'org') return;
     setAccountLoading(true);
     try {
-      const [accountResult, planResult, catalogResult, ordersResult] = await Promise.all([
+      const [accountResult, planResult, catalogResult, ordersResult, smsWalletResult] = await Promise.all([
         supabase.rpc('admin_get_saas_org_account', { p_org_id: orgId }),
         supabase.from('saas_plans').select('code,title,price_monthly,short_description,enabled_modules,enabled_features').eq('is_active', true).order('sort_order'),
         supabase.rpc('admin_get_saas_catalog_items'),
         supabase.rpc('admin_list_saas_org_orders', { p_org_id: orgId }),
+        supabase.rpc('admin_get_saas_org_sms_wallet', { p_org_id: orgId }),
       ]);
       if (accountResult.error) throw accountResult.error;
       const next = accountResult.data || null;
@@ -96,6 +98,7 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
       setPlans(fetchedPlans.length ? fetchedPlans : accountPlan);
       setCatalog(catalogResult.error || !Array.isArray(catalogResult.data) ? [] : catalogResult.data);
       setOrders(ordersResult.error || !Array.isArray(ordersResult.data) ? [] : ordersResult.data);
+      setSmsWallet(smsWalletResult.error ? null : (smsWalletResult.data || null));
       setCart({});
       setEditingOrderId(null);
       setSelectedPlan(next?.management?.plan_code || next?.plan?.code || null);
@@ -300,7 +303,7 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
             <div className="space-y-4">
               {account ? <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 {[
-                  ['اعتبار پیامک', Number(account?.quotas?.sms_credit || 0).toLocaleString('fa-IR')],
+                  ['کیف پول پیامک', `${Math.max(0, Number(smsWallet?.balance_irt || 0) + Number(smsWallet?.included_quota_irt || 0) - Number(smsWallet?.reserved_irt || 0)).toLocaleString('fa-IR')} تومان`],
                   ['اعتبار AI', `${Number(account?.ai_wallet?.balance_irt || 0).toLocaleString('fa-IR')} تومان`],
                   ['کیف پول', `${Number(account?.billing_wallet?.balance_irt || 0).toLocaleString('fa-IR')} تومان`],
                   ['سوابق', `${Array.isArray(account?.history) ? account.history.length : 0} مورد`],

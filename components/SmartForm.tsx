@@ -93,6 +93,11 @@ const SAAS_ANNOUNCEMENT_CONDITION_FIELDS: ModuleDefinition['fields'] = [
   { key: 'role_id', type: FieldType.TEXT, labels: { fa: 'شناسه نقش', en: 'Role ID' } } as any,
   { key: 'is_demo_user', type: FieldType.CHECKBOX, labels: { fa: 'کاربر دمو باشد', en: 'Is Demo User' } } as any,
   { key: 'is_authenticated', type: FieldType.CHECKBOX, labels: { fa: 'کاربر لاگین باشد', en: 'Is Authenticated' } } as any,
+  { key: 'trial_days_remaining', type: FieldType.NUMBER, labels: { fa: 'روزهای باقی‌مانده دوره', en: 'Trial Days Remaining' } } as any,
+  { key: 'ai_wallet_remaining_irt', type: FieldType.NUMBER, labels: { fa: 'اعتبار باقی‌مانده هوش مصنوعی', en: 'AI Wallet Remaining' } } as any,
+  { key: 'sms_wallet_remaining_irt', type: FieldType.NUMBER, labels: { fa: 'اعتبار باقی‌مانده پیامک', en: 'SMS Wallet Remaining' } } as any,
+  { key: 'can_view_account_settings', type: FieldType.CHECKBOX, labels: { fa: 'دسترسی تنظیمات حساب داشته باشد', en: 'Can View Account Settings' } } as any,
+  { key: 'is_saas_admin_org', type: FieldType.CHECKBOX, labels: { fa: 'سازمان ادمین تازه سیستم باشد', en: 'Is SaaS Admin Organization' } } as any,
 ];
 
 export interface SmartFormSaveMeta {

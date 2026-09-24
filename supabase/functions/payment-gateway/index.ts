@@ -922,7 +922,7 @@ const createSaasBillingWalletTopup = async (
       org_id: profile.org_id, created_by: profile.id, gateway_scope: "system", provider: "zarinpal",
       purpose: "saas_billing_wallet_topup", module_id: null, record_id: null, amount: amountIrt, currency: "IRT", status: "pending", callback_url: "",
       description: `شارژ کیف پول سازمان ${amountIrt.toLocaleString("fa-IR")} تومان`,
-      metadata: { wallet_amount_irt: amountIrt, return_origin: returnOrigin, mode, source: "saas_account_center" },
+      metadata: { wallet_amount_irt: amountIrt, wallet_target: String(body?.wallet_target || "billing"), return_origin: returnOrigin, mode, source: "saas_account_center" },
     }]),
   });
   const callbackUrl = `${paymentDomain}${callbackPath}?tx=${enc(tx.id)}`;

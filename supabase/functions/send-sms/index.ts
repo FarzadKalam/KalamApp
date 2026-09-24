@@ -1433,6 +1433,7 @@ Deno.serve(async (req) => {
       sender_number?: string;
       org_id?: string;
       overrideSettings?: SmsSettings;
+      metadata?: Record<string, any>;
     } & AuthHookPayload);
 
     const authHeader = req.headers.get('Authorization') || '';
@@ -1561,9 +1562,31 @@ Deno.serve(async (req) => {
       return json(400, { success: false, message: 'to و text الزامی است.' });
     }
 
+    const centralSender = String(Deno.env.get('MELIPAYAMAK_SENDER_NUMBER') || '').trim();
+    const isCentralSender = Boolean(centralSender && String(settings.sender_number || '').trim() === centralSender);
+    const balanceBefore = isCentralSender ? Number((await getSmsCreditWithProvider(settings)).balance) : null;
+    if (isCentralSender && (!Number.isFinite(balanceBefore as number) || (balanceBefore as number) < 0)) {
+      throw new Error('اعتبار سامانهٔ پیامک مرکزی قابل خواندن نیست.');
+    }
     const sentResult = await sendSmsWithProviderFallback(to, text, settings);
+    let billing: any = null;
+    if (isCentralSender && requestOrgId) {
+      const balanceAfter = Number((await getSmsCreditWithProvider(settings)).balance);
+      if (!Number.isFinite(balanceAfter) || balanceAfter < 0) {
+        console.warn('[send-sms] provider balance after send is unavailable; SMS was sent without wallet charge');
+      } else {
+      const margin = Number(Deno.env.get('SMS_MARGIN_PERCENT') || 30);
+      const billingResponse = await fetch(`${supabaseUrl}/rest/v1/rpc/charge_org_sms_wallet_usage`, { method: 'POST', headers: getServiceHeaders(serviceRoleKey), body: JSON.stringify({ p_org_id: requestOrgId, p_provider_before: balanceBefore, p_provider_after: balanceAfter, p_margin_percent: margin, p_message_count: Number(sentResult.sent || to.length), p_metadata: body.metadata || {} }) });
+      if (!billingResponse.ok) {
+        console.error('[send-sms] wallet charge failed after successful provider send', await billingResponse.text());
+        billing = { success: false, error: 'wallet_charge_failed' };
+      } else {
+        billing = await billingResponse.json();
+      }
+      }
+    }
 
-    return json(200, { success: true, ...sentResult, sender_number: settings.sender_number });
+    return json(200, { success: true, ...sentResult, sender_number: settings.sender_number, billing });
   } catch (error: any) {
     console.error('[send-sms] error', String(error?.message || error));
     return json(400, {

@@ -1767,7 +1767,7 @@ const ConnectionsTab: React.FC = () => {
                     />
                   </div>
 
-                  <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-700 p-3 mb-3 bg-gray-50/70 dark:bg-white/5">
+                  {isSaasAdminOrg ? <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-700 p-3 mb-3 bg-gray-50/70 dark:bg-white/5">
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <div className="font-semibold">اعتبار پیامک</div>
@@ -1787,7 +1787,7 @@ const ConnectionsTab: React.FC = () => {
                       <span className="text-gray-500">مانده فعلی: </span>
                       <span className="font-semibold">{smsBalance || 'هنوز دریافت نشده'}</span>
                     </div>
-                  </div>
+                  </div> : <Alert className="mb-3" type="info" showIcon message="مانده اعتبار سامانهٔ مرکزی فقط در سازمان‌های ادمین تازه سیستم نمایش داده می‌شود." />}
 
                   <div className="rounded-xl border border-dashed border-leather-300 dark:border-leather-700 p-3 bg-leather-50/30 dark:bg-white/5">
                     <div className="font-semibold mb-2">ارسال پیامک تست</div>

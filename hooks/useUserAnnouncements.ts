@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
-import { getOrgSaasStatus } from '../utils/orgSaasStatus';
+import { getOrgSaasStatus, resolveTrialDaysLeft } from '../utils/orgSaasStatus';
 import {
   type ActiveUserAnnouncement,
   type AnnouncementDismissIdentity,
@@ -45,11 +45,33 @@ export const useUserAnnouncements = ({ surface, path, host }: UseUserAnnouncemen
       const dismissIdentity = { userId, orgId };
       viewerIdentityRef.current = dismissIdentity;
       let isDemoUser = false;
+      let trialDaysRemaining: number | null = null;
+      let aiWalletRemaining = 0;
+      let smsWalletRemaining = 0;
+      const canViewAccountSettings = Boolean(
+        bootstrap.permissions
+        && orgId
+        && bootstrap.permissions?.__settings_tabs?.view !== false
+        && !bootstrap.permissions?.__saas_admin?.view
+        && !bootstrap.permissions?.__saas_admin?.edit,
+      );
+      let isSaasAdminOrg = Boolean(bootstrap.permissions?.__saas_admin?.view || bootstrap.permissions?.__saas_admin?.edit);
 
       if (orgId) {
         try {
           const status = await getOrgSaasStatus();
           isDemoUser = Boolean(status?.is_demo);
+          trialDaysRemaining = resolveTrialDaysLeft(status?.trial_ends_at || null);
+          const { data: saasAdminData } = await supabase.rpc('current_user_is_saas_admin_org');
+          isSaasAdminOrg = Boolean(saasAdminData) || isSaasAdminOrg;
+          const [aiResult, smsResult] = await Promise.all([
+            supabase.from('org_ai_wallets').select('balance_irt,included_quota_irt,reserved_irt').maybeSingle(),
+            supabase.from('org_sms_wallets').select('balance_irt,included_quota_irt,reserved_irt').maybeSingle(),
+          ]);
+          const ai = aiResult.data || {};
+          const sms = smsResult.data || {};
+          aiWalletRemaining = Math.max(0, Number(ai.balance_irt || 0) + Number(ai.included_quota_irt || 0) - Number(ai.reserved_irt || 0));
+          smsWalletRemaining = Math.max(0, Number(sms.balance_irt || 0) + Number(sms.included_quota_irt || 0) - Number(sms.reserved_irt || 0));
         } catch {
           isDemoUser = false;
         }
@@ -64,6 +86,11 @@ export const useUserAnnouncements = ({ surface, path, host }: UseUserAnnouncemen
         user_id: userId,
         is_demo_user: isDemoUser,
         is_authenticated: Boolean(userId),
+        trial_days_remaining: trialDaysRemaining,
+        ai_wallet_remaining_irt: aiWalletRemaining,
+        sms_wallet_remaining_irt: smsWalletRemaining,
+        can_view_account_settings: canViewAccountSettings,
+        is_saas_admin_org: isSaasAdminOrg,
       });
 
       setAnnouncements(filterAnnouncementsByLocalDismissals(surface, rows, dismissIdentity));

@@ -379,6 +379,7 @@ const invokeSmsFunction = async (
   if (overrideSettings && Object.keys(overrideSettings).length > 0) {
     payload.overrideSettings = overrideSettings;
   }
+  if (metadata && Object.keys(metadata).length > 0) payload.metadata = metadata;
 
   let lastError: unknown = null;
   const maxAttempts = 2;

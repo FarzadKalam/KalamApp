@@ -41,6 +41,11 @@ export type AnnouncementRuntimeContext = {
   role_id?: string | null;
   is_demo_user?: boolean;
   is_authenticated?: boolean;
+  trial_days_remaining?: number | null;
+  ai_wallet_remaining_irt?: number | null;
+  sms_wallet_remaining_irt?: number | null;
+  can_view_account_settings?: boolean;
+  is_saas_admin_org?: boolean;
 };
 
 export type AnnouncementDismissIdentity = {
@@ -143,6 +148,18 @@ const evaluateCondition = (condition: AnnouncementCondition, runtime: Announceme
       }
       return !expected.includes(currentValue);
     }
+    case 'lt':
+    case 'lte':
+    case 'gt':
+    case 'gte': {
+      const current = Number(rawCurrentValue);
+      const expected = Number(expectedValue);
+      if (!Number.isFinite(current) || !Number.isFinite(expected)) return false;
+      if (operator === 'lt') return current < expected;
+      if (operator === 'lte') return current <= expected;
+      if (operator === 'gt') return current > expected;
+      return current >= expected;
+    }
     case 'is_true':
       return normalizeBool(rawCurrentValue);
     case 'is_false':
@@ -217,6 +234,11 @@ export const loadActiveUserAnnouncements = async (
     normalizeText(runtime.role_id || 'guest-role'),
     runtime.is_demo_user ? 'demo' : 'normal',
     runtime.is_authenticated ? 'auth' : 'guest',
+    runtime.trial_days_remaining ?? 'trial-unknown',
+    runtime.ai_wallet_remaining_irt ?? 'ai-unknown',
+    runtime.sms_wallet_remaining_irt ?? 'sms-unknown',
+    runtime.can_view_account_settings ? 'settings' : 'no-settings',
+    runtime.is_saas_admin_org ? 'saas-admin' : 'tenant',
   ].join(':');
 
   return getAppRuntimeCached({
@@ -254,7 +276,8 @@ const getAnnouncementDismissStorageKey = (
   const normalizedAnnouncementId = normalizeText(announcementId);
   const normalizedUserId = normalizeIdentityPart(identity?.userId, 'guest');
   const normalizedOrgId = normalizeIdentityPart(identity?.orgId, 'guest-org');
-  return `kalam.user_announcement.dismissed.v2.${surface}.${normalizedOrgId}.${normalizedUserId}.${normalizedAnnouncementId}`;
+  const day = new Date().toISOString().slice(0, 10);
+  return `kalam.user_announcement.dismissed.v3.${day}.${surface}.${normalizedOrgId}.${normalizedUserId}.${normalizedAnnouncementId}`;
 };
 
 export const isAnnouncementDismissedLocally = (
