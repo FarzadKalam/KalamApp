@@ -2313,29 +2313,9 @@ async function sendSmsViaProvider(settings: any, to: string[], text: string, url
   if (recipients.length === 0) return [];
 
   if (url && key) {
-    try {
-      return await sendSmsViaGatewayFunction(url, key, settings, recipients, text, String(settings.org_id || ''));
-    } catch (gatewayError: any) {
-      console.warn('[workflow-runner] send-sms gateway failed, falling back to direct SOAP:', String(gatewayError?.message || gatewayError));
-    }
+    return await sendSmsViaGatewayFunction(url, key, settings, recipients, text, String(settings.org_id || ''));
   }
-
-  const sentRecipients: string[] = [];
-  for (const phone of recipients) {
-    const form = new URLSearchParams({
-      UserName: username, PassWord: password || apiKey,
-      To: phone, From: senderNumber, Text: text, IsFlash: 'false',
-    });
-    const r = await fetch('https://api.payamak-panel.com/post/send.asmx/SendSimpleSMS2', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-      body: form.toString(),
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!r.ok) throw new Error(`پاسخ پیامک خطا: ${r.status}`);
-    sentRecipients.push(phone);
-  }
-  return sentRecipients;
+  throw new Error('درگاه مرکزی پیامک برای ثبت مصرف و ارسال امن در دسترس نیست.');
 }
 
 // ── Bot sending ────────────────────────────────────────────────────────────────

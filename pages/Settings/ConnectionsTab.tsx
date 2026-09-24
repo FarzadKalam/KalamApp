@@ -1229,7 +1229,6 @@ const ConnectionsTab: React.FC = () => {
         to: [formatIranMobileForInput(testMobile.trim())],
         text: testText.trim(),
         overrideSettings: buildSmsOverrideSettings(smsValues),
-        allowDirectFallback: true,
         title: 'پیامک تست',
         metadata: {
           source_type: 'settings_test_sms',

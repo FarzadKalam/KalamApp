@@ -251,7 +251,6 @@ export const sendInvoiceReplySmsToCustomer = async ({
   await sendSmsViaGateway({
     to: [phone],
     text,
-    allowDirectFallback: true,
     moduleId,
     recordId,
     title: 'پاسخ به پیام فاکتور',
@@ -313,7 +312,6 @@ export const sendNoteSmsNotifications = async ({
   await sendSmsViaGateway({
     to: recipients,
     text: buildNoteSmsPreviewText(authorName, noteText),
-    allowDirectFallback: true,
     moduleId: moduleId ? String(moduleId) : undefined,
     recordId: recordId ? String(recordId) : undefined,
     title: title || 'اطلاع‌رسانی پیام جدید',

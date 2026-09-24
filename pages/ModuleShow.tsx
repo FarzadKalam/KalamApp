@@ -4446,7 +4446,6 @@ const ModuleShow: React.FC = () => {
         await sendSmsViaGateway({
           to: Array.from(smsRecipients),
           text: externalText || 'PDF ارسال شد.',
-          allowDirectFallback: true,
           moduleId,
           recordId: id,
           title: 'ارسال مستقیم PDF',

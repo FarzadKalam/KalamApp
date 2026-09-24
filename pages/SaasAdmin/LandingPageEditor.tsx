@@ -511,9 +511,6 @@ export default function LandingPageEditor() {
         open={!!editingSection}
         onClose={() => setEditingId(null)}
         destroyOnHidden
-        afterOpenChange={(open) => {
-          if (!open) document.querySelectorAll<HTMLElement>('.ant-drawer-mask').forEach((mask) => { mask.style.pointerEvents = 'none'; });
-        }}
         title={editingSection ? `ویرایش: ${SECTION_REGISTRY[editingSection.type].labelFa}` : ''}
         width={520}
         styles={{ body: { direction: 'rtl' } }}

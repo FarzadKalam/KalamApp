@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Alert, App, Badge, Button, Card, Col, Empty, InputNumber, Modal, Progress, Row, Skeleton,
+  Alert, App, Badge, Button, Card, Col, Empty, InputNumber, Modal, Progress, Row, Skeleton, Drawer,
   Space, Statistic, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import {
@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { SAAS_FEATURE_LABELS, SAAS_MODULE_LABELS } from '../../utils/saasOfferingCatalog';
 
 const { Text, Title } = Typography;
 
@@ -21,23 +22,29 @@ const AccountStatusTab: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState<any | null>(null);
   const [catalog, setCatalog] = useState<any[]>([]);
+  const [pendingOrders, setPendingOrders] = useState<any[]>([]);
   const [cart, setCart] = useState<Record<string, number>>({});
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [walletAction, setWalletAction] = useState<'topup' | 'ai_transfer' | null>(null);
   const [walletAmount, setWalletAmount] = useState<number | null>(null);
   const [walletActionLoading, setWalletActionLoading] = useState(false);
+  const [accessDrawer, setAccessDrawer] = useState<'modules' | 'features' | null>(null);
+  const [, setClock] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [accountResult, catalogResult] = await Promise.all([
+      const [accountResult, catalogResult, pendingOrdersResult] = await Promise.all([
         supabase.rpc('get_current_saas_account_overview'),
         supabase.rpc('get_current_saas_store_catalog'),
+        supabase.rpc('get_current_saas_pending_orders'),
       ]);
       if (accountResult.error) throw accountResult.error;
       if (catalogResult.error) throw catalogResult.error;
+      if (pendingOrdersResult.error) throw pendingOrdersResult.error;
       setOverview(accountResult.data || null);
       setCatalog(Array.isArray(catalogResult.data) ? catalogResult.data : []);
+      setPendingOrders(Array.isArray(pendingOrdersResult.data) ? pendingOrdersResult.data : []);
     } catch (error) {
       message.error(toFaErrorMessage(error as any, 'دریافت وضعیت حساب ناموفق بود.'));
     } finally {
@@ -46,6 +53,10 @@ const AccountStatusTab: React.FC = () => {
   }, [message]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock((value) => value + 1), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const cartItems = useMemo(
     () => catalog.filter((item) => cart[item.code]).map((item) => ({ ...item, quantity: cart[item.code] })),
@@ -103,6 +114,23 @@ const AccountStatusTab: React.FC = () => {
       await load();
     } catch (error) {
       message.error(toFaErrorMessage(error as any, 'پرداخت از کیف پول ناموفق بود.'));
+    } finally {
+      setCheckoutLoading(false);
+    }
+  };
+
+  const checkoutPendingOrder = async (orderId: string) => {
+    if (!orderId) return;
+    setCheckoutLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('payment-gateway', {
+        body: { action: 'create_saas_account_order', order_id: orderId, return_origin: window.location.origin },
+      });
+      if (error) throw error;
+      if (!data?.success || !data?.payment_url) throw new Error(String(data?.message || 'ساخت پرداخت ناموفق بود.'));
+      window.location.href = data.payment_url;
+    } catch (error) {
+      message.error(toFaErrorMessage(error as any, 'پرداخت سفارش آماده ناموفق بود.'));
     } finally {
       setCheckoutLoading(false);
     }
@@ -175,6 +203,7 @@ const AccountStatusTab: React.FC = () => {
   const usersAllowed = Number(quotas.users_included || 0) + Number(quotas.users_extra || 0);
   const userPercent = usersAllowed ? Math.min(100, Math.round((Number(quotas.users_used || 0) / usersAllowed) * 100)) : 0;
   const trialEndsAt = overview.organization?.trial_ends_at ? new Date(overview.organization.trial_ends_at).toLocaleDateString('fa-IR') : null;
+  const trialRemainingDays = overview.organization?.trial_ends_at ? Math.max(0, Math.ceil((new Date(overview.organization.trial_ends_at).getTime() - Date.now()) / 86400000)) : null;
   const enabledModules = Object.values(access.modules || {}).filter(Boolean).length;
   const enabledFeatures = Object.values(access.features || {}).filter(Boolean).length;
   const hasFullPlanAccess = access.full_access === true;
@@ -196,10 +225,12 @@ const AccountStatusTab: React.FC = () => {
             </Space>
             <Title level={3} className="!mb-1 !mt-4 !text-white">{plan.title || 'پلن انتخاب‌نشده'}</Title>
             <Text className="!text-slate-300">مدیریت متمرکز دسترسی‌ها، اعتبارها و خریدهای سازمان</Text>
+            {plan.short_description || plan.description ? <div className="mt-2 max-w-2xl text-sm text-slate-300">{plan.short_description || plan.description}</div> : null}
           </div>
           <div className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-right backdrop-blur">
             <div className="text-xs text-slate-300">{trialEndsAt ? 'پایان دوره آزمایشی' : 'هزینه ماهانه پلن'}</div>
             <div className="mt-1 text-lg font-black">{trialEndsAt || formatIrt(plan.price_monthly)}</div>
+            {trialEndsAt ? <div className="mt-1 text-xs text-slate-300">{trialRemainingDays ? `${trialRemainingDays} روز باقی‌مانده` : 'دوره آزمایشی به پایان رسیده است'}</div> : null}
           </div>
         </div>
       </div>
@@ -223,12 +254,21 @@ const AccountStatusTab: React.FC = () => {
         </div>
       </Card>}
 
+      {pendingOrders.length > 0 && <Card className="rounded-2xl border-indigo-300" title="سفارش‌های آماده پرداخت">
+        <div className="space-y-3">
+          {pendingOrders.map((order: any) => <div key={String(order.id)} className="flex flex-col gap-3 rounded-xl border border-slate-200 p-4 md:flex-row md:items-center md:justify-between dark:border-slate-700">
+            <div><Text strong>سفارش مدیریت حساب</Text><div className="mt-1 text-xs text-slate-500">{order.created_at ? new Date(order.created_at).toLocaleDateString('fa-IR') : '—'} · {formatIrt(order.total_irt)}</div></div>
+            <Button type="primary" icon={<CreditCardOutlined />} loading={checkoutLoading} onClick={() => void checkoutPendingOrder(String(order.id))}>پرداخت و فعال‌سازی</Button>
+          </div>)}
+        </div>
+      </Card>}
+
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={15}>
           <Card title={<Space><AppstoreOutlined /> دسترسی‌های فعال</Space>} className="rounded-2xl h-full" extra={hasFullPlanAccess ? <Tag color="gold">دسترسی کامل</Tag> : <Badge count={enabledModules + enabledFeatures} showZero color="#4f46e5" />}>
             <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-xl bg-indigo-50 p-4 dark:bg-slate-800"><div className="text-sm text-slate-500">ماژول‌های فعال</div><div className="mt-1 text-2xl font-black text-indigo-700 dark:text-indigo-300">{hasFullPlanAccess ? 'همه' : enabledModules}</div></div>
-              <div className="rounded-xl bg-violet-50 p-4 dark:bg-slate-800"><div className="text-sm text-slate-500">امکانات فعال</div><div className="mt-1 text-2xl font-black text-violet-700 dark:text-violet-300">{hasFullPlanAccess ? 'همه' : enabledFeatures}</div></div>
+              <Button type="text" className="!h-auto !p-0 !text-right" onClick={() => setAccessDrawer('modules')}><div className="rounded-xl bg-indigo-50 p-4 text-right dark:bg-slate-800"><div className="text-sm text-slate-500">ماژول‌های فعال</div><div className="mt-1 text-2xl font-black text-indigo-700 dark:text-indigo-300">{hasFullPlanAccess ? 'همه' : enabledModules}</div><div className="mt-1 text-xs text-indigo-600">برای مشاهده و خرید کلیک کنید</div></div></Button>
+              <Button type="text" className="!h-auto !p-0 !text-right" onClick={() => setAccessDrawer('features')}><div className="rounded-xl bg-violet-50 p-4 text-right dark:bg-slate-800"><div className="text-sm text-slate-500">امکانات فعال</div><div className="mt-1 text-2xl font-black text-violet-700 dark:text-violet-300">{hasFullPlanAccess ? 'همه' : enabledFeatures}</div><div className="mt-1 text-xs text-violet-600">برای مشاهده و خرید کلیک کنید</div></div></Button>
             </div>
             <Alert className="mt-4" type="info" showIcon message="دسترسی نهایی از پلن، خریدهای موفق و تنظیمات سازمان محاسبه می‌شود." />
           </Card>
@@ -241,6 +281,16 @@ const AccountStatusTab: React.FC = () => {
         </Col>
       </Row>
 
+      <Drawer open={!!accessDrawer} onClose={() => setAccessDrawer(null)} title={accessDrawer === 'modules' ? 'ماژول‌های فعال سازمان' : 'امکانات فعال سازمان'} placement="left" width="min(480px, 100vw)">
+        <div className="space-y-3">
+          {Object.entries(accessDrawer === 'modules' ? (access.modules || {}) : (access.features || {})).filter(([, value]) => value === true || hasFullPlanAccess).map(([code]) => {
+            const purchasable = catalog.find((item) => item.entitlement_code === code);
+            const label = accessDrawer === 'modules' ? (SAAS_MODULE_LABELS[code] || code) : (SAAS_FEATURE_LABELS[code] || code);
+            return <div key={code} className="flex items-center justify-between gap-3 rounded-xl border p-3"><Text>{label}</Text>{purchasable ? <Button size="small" onClick={() => changeCart(purchasable.code, 1)}>افزودن به سبد</Button> : <Tag color="green">فعال</Tag>}</div>;
+          })}
+        </div>
+      </Drawer>
+
       <Card className="rounded-2xl" title={<Space><ShoppingCartOutlined /> فروشگاه حساب</Space>} extra={<Tooltip title="فقط اقلامی که مدیر تازه سیستم قیمت‌گذاری و فعال کرده است نمایش داده می‌شوند."><Text type="secondary" className="text-xs">پرداخت امن آنلاین</Text></Tooltip>}>
         {catalog.length === 0 ? <Empty description="در حال حاضر آیتم قابل خریدی برای این حساب فعال نشده است." /> : (
           <Row gutter={[14, 14]}>
@@ -248,7 +298,7 @@ const AccountStatusTab: React.FC = () => {
               const count = Number(cart[item.code] || 0);
               return <Col xs={24} md={12} xl={8} key={item.code}><Card size="small" className="h-full rounded-xl border-slate-200" title={item.title} extra={<Tag color="blue">{formatIrt(item.price_irt)}</Tag>}>
                 <Text type="secondary" className="block min-h-10 text-xs">{item.description || 'افزودن به حساب سازمان'}</Text>
-                <div className="mt-4 flex items-center justify-between gap-2"><Tag>{item.item_kind === 'plan' ? 'ارتقای پلن' : item.item_kind === 'quota' ? 'سهمیه' : 'دسترسی'}</Tag><Space size={4}>{count ? <Button size="small" onClick={() => changeCart(item.code, -1)}>−</Button> : null}{count ? <Text strong>{count}</Text> : null}<Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => changeCart(item.code, 1)}>{count ? '' : 'افزودن'}</Button></Space></div>
+                <div className="mt-4 flex items-center justify-between gap-2"><Tag>{item.item_kind === 'plan' ? 'ارتقای پلن' : item.item_kind === 'bundle' ? 'بسته کاربردی' : item.item_kind === 'quota' ? 'سهمیه' : 'دسترسی'}</Tag><Space size={4}>{count ? <Button size="small" onClick={() => changeCart(item.code, -1)}>−</Button> : null}{count ? <Text strong>{count}</Text> : null}<Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => changeCart(item.code, 1)}>{count ? '' : 'افزودن'}</Button></Space></div>
               </Card></Col>;
             })}
           </Row>

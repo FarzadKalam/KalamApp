@@ -116,6 +116,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [currentUserProfile, setCurrentUserProfile] = useState<any>(null);
   const [resolvedOrgId, setResolvedOrgId] = useState<string | null | undefined>(undefined);
+  const [saasAdminOrgVerified, setSaasAdminOrgVerified] = useState(false);
   const [breadcrumb, setBreadcrumb] = useState<{ moduleTitle?: string; moduleId?: string; recordName?: string } | null>(null);
   const [globalSearch, setGlobalSearch] = useState('');
   const [searchLoading, setSearchLoading] = useState(false);
@@ -188,6 +189,18 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       setRolePermissionsReady(true);
     }
   }, [applySessionBootstrapSnapshot]);
+
+  // مجوز نمایش بخش «تازه سیستم» فقط با permission نقش تعیین نمی‌شود؛
+  // سازمان جاری نیز باید یکی از سازمان‌های واقعی مدیر SaaS باشد.
+  useEffect(() => {
+    let active = true;
+    setSaasAdminOrgVerified(false);
+    if (!currentUser?.id || !resolvedOrgId) return () => { active = false; };
+    void supabase.rpc('current_user_is_saas_admin_org').then(({ data, error }) => {
+      if (active) setSaasAdminOrgVerified(!error && data === true);
+    });
+    return () => { active = false; };
+  }, [currentUser?.id, resolvedOrgId]);
 
   useEffect(() => {
     if (!rolePermissionsReady || !currentUser?.id) {
@@ -634,12 +647,14 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const saasAdminPermissions = rolePermissions?.[SAAS_ADMIN_PERMISSION_KEY] || {};
   const saasAdminPermissionFields = saasAdminPermissions.fields || {};
   const canViewSaasAdmin = Boolean(
-    saasAdminPermissions.view
-    || saasAdminPermissions.edit
-    || saasAdminPermissionFields.edit_orgs
-    || saasAdminPermissionFields.edit_requests
-    || saasAdminPermissionFields.edit_user_announcements
-    || saasAdminPermissionFields.demo_override
+    saasAdminOrgVerified && (
+      saasAdminPermissions.view
+      || saasAdminPermissions.edit
+      || saasAdminPermissionFields.edit_orgs
+      || saasAdminPermissionFields.edit_requests
+      || saasAdminPermissionFields.edit_user_announcements
+      || saasAdminPermissionFields.demo_override
+    )
   );
   const canViewAccountingDashboard = rolePermissions?.[ACCOUNTING_PERMISSION_KEY]?.view !== false;
   const canViewCashBank =

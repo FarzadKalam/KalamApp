@@ -16,7 +16,7 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { DeleteOutlined, RocketOutlined, SaveOutlined, ShoppingOutlined } from '@ant-design/icons';
+import { DeleteOutlined, RocketOutlined, SaveOutlined, ShoppingOutlined, WalletOutlined } from '@ant-design/icons';
 import { executeSaasModuleAction } from '../../utils/saasAdminModules';
 import { supabase } from '../../supabaseClient';
 import { SAAS_FEATURE_OPTIONS, SAAS_MODULE_GROUPS } from '../../utils/saasOfferingCatalog';
@@ -64,10 +64,16 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
   const [accountSaving, setAccountSaving] = useState(false);
   const [account, setAccount] = useState<any | null>(null);
   const [plans, setPlans] = useState<any[]>([]);
+  const [catalog, setCatalog] = useState<any[]>([]);
+  const [orders, setOrders] = useState<any[]>([]);
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
+  const [cart, setCart] = useState<Record<string, number>>({});
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
   const [selectedModules, setSelectedModules] = useState<string[]>([]);
   const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
   const [quotas, setQuotas] = useState<Record<string, number>>({});
+  const [creditDeltas, setCreditDeltas] = useState({ sms: 0, ai: 0, wallet: 0 });
+  const [creditReason, setCreditReason] = useState('');
   const sourceKind = String(record?.source_kind || 'org').trim();
   const isDemoOrg = sourceKind === 'org' && record?.is_demo === true;
 
@@ -76,16 +82,23 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
     if (!orgId || sourceKind !== 'org') return;
     setAccountLoading(true);
     try {
-      const [accountResult, planResult] = await Promise.all([
+      const [accountResult, planResult, catalogResult, ordersResult] = await Promise.all([
         supabase.rpc('admin_get_saas_org_account', { p_org_id: orgId }),
-        supabase.from('saas_plans').select('code,title,enabled_modules,enabled_features').eq('is_active', true).order('sort_order'),
+        supabase.from('saas_plans').select('code,title,price_monthly,short_description,enabled_modules,enabled_features').eq('is_active', true).order('sort_order'),
+        supabase.rpc('admin_get_saas_catalog_items'),
+        supabase.rpc('admin_list_saas_org_orders', { p_org_id: orgId }),
       ]);
       if (accountResult.error) throw accountResult.error;
-      if (planResult.error) throw planResult.error;
       const next = accountResult.data || null;
       setAccount(next);
-      setPlans(planResult.data || []);
-      setSelectedPlan(next?.management?.plan_code || null);
+      const fetchedPlans = planResult.error ? [] : (planResult.data || []);
+      const accountPlan = next?.plan?.code ? [{ code: next.plan.code, title: next.plan.title, enabled_modules: next.plan.enabled_modules || {}, enabled_features: next.plan.enabled_features || {} }] : [];
+      setPlans(fetchedPlans.length ? fetchedPlans : accountPlan);
+      setCatalog(catalogResult.error || !Array.isArray(catalogResult.data) ? [] : catalogResult.data);
+      setOrders(ordersResult.error || !Array.isArray(ordersResult.data) ? [] : ordersResult.data);
+      setCart({});
+      setEditingOrderId(null);
+      setSelectedPlan(next?.management?.plan_code || next?.plan?.code || null);
       setSelectedModules(Object.entries(next?.access?.modules || {}).filter(([, enabled]) => enabled === true).map(([key]) => key));
       setSelectedFeatures(Object.entries(next?.access?.features || {}).filter(([, enabled]) => enabled === true).map(([key]) => key));
       const rawQuotas = next?.management?.quota_adjustments || {};
@@ -107,17 +120,52 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
     setSelectedFeatures(Object.entries(plan.enabled_features || {}).filter(([, enabled]) => !!enabled).map(([key]) => key));
   };
 
+  const cartItems = useMemo(() => {
+    const all = [
+      ...plans.map((plan) => ({ code: `plan:${plan.code}`, title: plan.title, price_irt: plan.price_monthly, item_kind: 'plan' })),
+      ...catalog,
+    ];
+    return all.filter((item) => Number(cart[item.code] || 0) > 0).map((item) => ({ ...item, quantity: Number(cart[item.code]) }));
+  }, [catalog, cart, plans]);
+  const cartTotal = useMemo(() => cartItems.reduce((sum, item) => sum + Number(item.price_irt || 0) * Number(item.quantity || 1), 0), [cartItems]);
+  const addToCart = (code: string, delta = 1) => setCart((current) => {
+    const next = Math.max(0, Math.min(100, Number(current[code] || 0) + delta));
+    if (!next) { const { [code]: _removed, ...rest } = current; return rest; }
+    return { ...current, [code]: next };
+  });
+  const submitCart = async () => {
+    const orgId = String(record?.org_id || record?.source_id || '').trim();
+    if (!orgId || !cartItems.length) return;
+    setAccountSaving(true);
+    try {
+      const orderItems = cartItems.map((item) => ({ code: item.code, quantity: item.quantity }));
+      const { data, error } = editingOrderId
+        ? await supabase.rpc('admin_update_saas_order', { p_order_id: editingOrderId, p_items: orderItems })
+        : await supabase.rpc('admin_create_saas_order', { p_org_id: orgId, p_items: orderItems });
+      if (error) throw error;
+      const savedOrder = { id: data?.order_id, status: data?.status || 'pending_payment', total_irt: data?.total_irt || cartTotal, items: data?.items || cartItems, created_at: new Date().toISOString() };
+      setOrders((current) => [savedOrder, ...current.filter((item) => item.id !== editingOrderId)]);
+      setCart({});
+      message.success(editingOrderId ? 'سبد خرید در سفارش قبلی به‌روزرسانی شد.' : 'سبد خرید برای سازمان ثبت شد و برای پرداخت در حساب آن قرار گرفت.');
+      onChanged();
+    } catch (error: any) { message.error(error?.message || 'ثبت سبد خرید سازمان ناموفق بود.'); }
+    finally { setAccountSaving(false); }
+  };
+
   const saveAccount = async () => {
     const orgId = String(record?.org_id || record?.source_id || '').trim();
     if (!orgId) return;
     setAccountSaving(true);
     try {
-      const toMap = (items: string[]) => Object.fromEntries(items.map((item) => [item, true]));
+      const moduleIds = SAAS_MODULE_GROUPS.flatMap((group) => group.modules.map((item) => item.id));
+      const featureIds = SAAS_FEATURE_OPTIONS.map((item) => item.id);
+      // مقدار false هم باید ارسال شود؛ حذف گزینه از payload باعث می‌شد true پلن دوباره غالب شود.
+      const toMap = (all: string[], selected: string[]) => Object.fromEntries(all.map((item) => [item, selected.includes(item)]));
       const { data, error } = await supabase.rpc('admin_update_saas_org_account', {
         p_org_id: orgId,
         p_plan_code: selectedPlan,
-        p_module_overrides: toMap(selectedModules),
-        p_feature_overrides: toMap(selectedFeatures),
+        p_module_overrides: toMap(moduleIds, selectedModules),
+        p_feature_overrides: toMap(featureIds, selectedFeatures),
         p_quota_adjustments: quotas,
       });
       if (error) throw error;
@@ -129,6 +177,24 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
     } finally {
       setAccountSaving(false);
     }
+  };
+
+  const adjustCredits = async () => {
+    const { sms, ai, wallet } = creditDeltas;
+    if (!sms && !ai && !wallet) { message.warning('حداقل یک مقدار شارژ یا کسر وارد کنید.'); return; }
+    try {
+      setAccountSaving(true);
+      const orgId = String(record?.org_id || record?.source_id || '').trim();
+      const { data, error } = await supabase.rpc('admin_adjust_saas_org_account', {
+        p_org_id: orgId, p_sms_delta: sms, p_ai_delta_irt: ai, p_billing_wallet_delta_irt: wallet, p_reason: creditReason,
+      });
+      if (error) throw error;
+      setAccount(data || null);
+      setCreditDeltas({ sms: 0, ai: 0, wallet: 0 });
+      message.success('اعتبارها و کیف پول سازمان به‌روزرسانی شد.');
+      onChanged();
+    } catch (error: any) { message.error(error?.message || 'تغییر اعتبار سازمان ناموفق بود.'); }
+    finally { setAccountSaving(false); }
   };
 
   const accountSummary = useMemo(() => {
@@ -154,9 +220,10 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
       title={record?.org_name || 'جزئیات سازمان'}
       open={open}
       onClose={onClose}
-      width="min(520px, 100vw)"
+      width="min(620px, 100vw)"
       placement="left"
       destroyOnHidden
+      footer={cartItems.length ? <div className="flex flex-col gap-2"><div className="flex items-center justify-between"><Text type="secondary">{cartItems.length} قلم در سبد</Text><Text strong className="text-lg">{Number(cartTotal).toLocaleString('fa-IR')} تومان</Text></div><Button type="primary" size="large" block icon={<ShoppingOutlined />} loading={accountSaving} onClick={() => void submitCart()}>ثبت سبد خرید برای سازمان</Button></div> : null}
     >
       <Space direction="vertical" size={16} className="w-full">
         {sourceKind === 'request' ? (
@@ -231,9 +298,23 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
               {accountLoading ? <Spin size="small" /> : <Text type="secondary" className="text-xs">{accountSummary}</Text>}
             </div>
             <div className="space-y-4">
+              {account ? <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {[
+                  ['اعتبار پیامک', Number(account?.quotas?.sms_credit || 0).toLocaleString('fa-IR')],
+                  ['اعتبار AI', `${Number(account?.ai_wallet?.balance_irt || 0).toLocaleString('fa-IR')} تومان`],
+                  ['کیف پول', `${Number(account?.billing_wallet?.balance_irt || 0).toLocaleString('fa-IR')} تومان`],
+                  ['سوابق', `${Array.isArray(account?.history) ? account.history.length : 0} مورد`],
+                ].map(([label, value]) => <div key={label} className="rounded-xl bg-white/70 p-2 text-center dark:bg-slate-700"><Text type="secondary" className="block text-[11px]">{label}</Text><Text strong>{value}</Text></div>)}
+              </div> : null}
               <div>
                 <Text type="secondary" className="mb-1 block text-xs">پلن پایه</Text>
-                <Select className="w-full" allowClear placeholder="پلن را انتخاب کنید" value={selectedPlan || undefined} onChange={choosePlan} options={plans.map((plan) => ({ value: plan.code, label: plan.title || plan.code }))} />
+                <Select className="w-full" allowClear placeholder="پلن را انتخاب کنید" value={selectedPlan || undefined} onChange={choosePlan} options={plans.map((plan) => ({ value: plan.code, label: `${plan.title || plan.code} · ${Number(plan.price_monthly || 0).toLocaleString('fa-IR')} تومان` }))} />
+              </div>
+              <div className="rounded-xl border border-indigo-200 bg-white/70 p-3 dark:bg-slate-700">
+                <div className="mb-2 flex items-center justify-between"><Text strong>اقلام قابل خرید و قیمت</Text><Text type="secondary" className="text-xs">سبد تا زمان ثبت قابل ویرایش است.</Text></div>
+                <div className="mb-2 flex flex-wrap gap-2">{plans.filter((plan) => Number(plan.price_monthly || 0) > 0).map((plan) => <Button key={plan.code} size="small" type={cart[`plan:${plan.code}`] ? 'primary' : 'default'} onClick={() => addToCart(`plan:${plan.code}`, cart[`plan:${plan.code}`] ? -1 : 1)}>{plan.title} · {Number(plan.price_monthly).toLocaleString('fa-IR')}</Button>)}</div>
+                {catalog.length ? <Select className="w-full" mode="multiple" placeholder="ماژول، امکان یا سهمیه را انتخاب کنید" value={catalog.filter((item) => cart[item.code]).map((item) => item.code)} onChange={(values) => { const next: Record<string, number> = {}; values.forEach((value) => { next[String(value)] = 1; }); setCart((current) => Object.fromEntries(Object.keys(current).filter((key) => key.startsWith('plan:')).map((key) => [key, current[key]]).concat(Object.entries(next)))); }} options={catalog.filter((item) => item.is_active !== false && Number(item.price_irt || 0) > 0).map((item) => ({ value: item.code, label: `${item.title} · ${Number(item.price_irt).toLocaleString('fa-IR')} تومان` }))} /> : <Alert type="info" showIcon message="هنوز افزونه‌ای در کاتالوگ قیمت‌گذاری و فعال نشده است." />}
+                {cartItems.length ? <div className="mt-3 space-y-1">{cartItems.map((item) => <div key={item.code} className="flex items-center justify-between text-xs"><Text>{item.title}</Text><Space size={4}><Button size="small" onClick={() => addToCart(item.code, -1)}>−</Button><Text>{item.quantity}</Text><Button size="small" onClick={() => addToCart(item.code, 1)}>+</Button></Space></div>)}</div> : null}
               </div>
               <Collapse ghost items={[
                 {
@@ -252,6 +333,19 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
                 },
               ]} />
               <Button block type="primary" icon={<SaveOutlined />} loading={accountSaving} onClick={() => void saveAccount()}>ذخیره وضعیت حساب</Button>
+              <Divider orientation="right" plain><WalletOutlined /> شارژ دستی</Divider>
+              <Text type="secondary" className="text-xs">مقدار مثبت شارژ و مقدار منفی کسر می‌کند. همهٔ تغییرها در سوابق حساب ثبت می‌شوند.</Text>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                {([['sms','پیامک'],['ai','اعتبار AI (تومان)'],['wallet','کیف پول (تومان)']] as const).map(([key, label]) => <div key={key}><Text type="secondary" className="mb-1 block text-xs">{label}</Text><InputNumber className="w-full" value={creditDeltas[key]} onChange={(value) => setCreditDeltas((current) => ({ ...current, [key]: Number(value || 0) }))} /></div>)}
+              </div>
+              <Input placeholder="دلیل تغییر (اختیاری)" value={creditReason} onChange={(event) => setCreditReason(event.target.value)} />
+              <Button block icon={<WalletOutlined />} loading={accountSaving} onClick={() => void adjustCredits()}>ثبت شارژ و تغییر دستی</Button>
+              <Collapse ghost items={[{
+                key: 'history',
+                label: `سوابق حساب (${Array.isArray(account?.history) ? account.history.length : 0})`,
+                children: <div className="space-y-2">{(Array.isArray(account?.history) ? account.history : []).slice(0, 30).map((item: any, index: number) => <div key={`${String(item?.created_at || '')}-${index}`} className="flex items-center justify-between gap-3 rounded-lg bg-white/70 p-2 text-xs dark:bg-slate-700"><div><Text strong>{String(item?.title || 'تغییر حساب')}</Text><div className="text-slate-500">{item?.created_at ? new Date(item.created_at).toLocaleDateString('fa-IR') : '—'}</div></div><Text>{item?.amount_irt ? `${Number(item.amount_irt).toLocaleString('fa-IR')} تومان` : '—'}</Text></div>)}</div>,
+              }]} />
+              <Collapse ghost items={[{ key: 'orders', label: `سفارش‌های این سازمان (${orders.length})`, children: <div className="space-y-2">{orders.slice(0, 20).map((order: any) => <div key={String(order.id)} className="flex items-center justify-between gap-2 rounded-lg bg-white/70 p-2 text-xs dark:bg-slate-700"><Text>{order.status === 'paid' ? 'پرداخت‌شده' : 'در انتظار پرداخت'} · {Number(order.total_irt || 0).toLocaleString('fa-IR')} تومان</Text>{order.status === 'pending_payment' && Array.isArray(order.items) ? <Button size="small" onClick={() => { const next: Record<string, number> = {}; order.items.forEach((item: any) => { if (item?.code) next[String(item.code)] = Number(item.purchase_quantity || item.quantity || 1); }); setCart(next); setEditingOrderId(String(order.id)); }}>ویرایش سبد</Button> : null}</div>)}</div> }]} />
             </div>
           </div>
         ) : null}

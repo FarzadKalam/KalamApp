@@ -5,7 +5,7 @@ import { supabase } from '../supabaseClient';
 import { BRANDING_APPLIED_EVENT, DEFAULT_BRANDING } from '../theme/brandTheme';
 import { readRuntimeBranding } from '../utils/brandingRuntime';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
-import { getDefaultAuthenticatedAppPath, isInternalRootHost, isSaasAdminPanelHost, isSaasAppHost } from '../utils/hostRouting';
+import { getDefaultAuthenticatedAppPath, isInternalRootHost, isSaasAdminPanelHost, isSaasAppHost, isTenantHost } from '../utils/hostRouting';
 import { activateSaasAdminPanelContext } from '../utils/saasAdminPanel';
 import { getOtpErrorMessage, normalizeOtpPhone, normalizeOtpToken, OTP_RESEND_SECONDS, requestSmsOtp, verifySmsOtp } from '../utils/otpAuth';
 import { assertLoginOtpRequestAllowed, consumePhoneSignupInvite, lookupPhoneLoginCandidate, lookupPhoneSignupInvite, requestExistingProfilePhoneOtp } from '../utils/phoneAuth';
@@ -444,7 +444,14 @@ const Login = () => {
     const tenantOrganization = organizations.find(
       (item) => String(item.resolved_host || '').trim().toLowerCase() === currentHost,
     );
-    if (tenantOrganization) {
+
+    // زیردامنهٔ tenant فقط برای همان سازمان معتبر است. حتی اگر حساب به یک
+    // سازمان داخلی با host خالی دسترسی داشته باشد، نباید زیر برند tenant باز شود.
+    if (isTenantHost(currentHost)) {
+      if (!tenantOrganization) {
+        await signOutLocalSession();
+        throw new Error('این حساب به سازمان این آدرس دسترسی ندارد.');
+      }
       await activateOrganizationAndRedirect(tenantOrganization);
       return;
     }

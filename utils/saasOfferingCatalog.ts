@@ -51,8 +51,9 @@ export const SAAS_FEATURE_OPTIONS: SaasOfferingOption[] = [
   { id: 'online_catalog', label: 'کاتالوگ آنلاین' }, { id: 'retail_sales_invoice', label: 'فاکتور فروشگاهی سریع' },
   { id: 'reservations', label: 'رزرواسیون' }, { id: 'qr_scan', label: 'اسکن QR' }, { id: 'instagram_inbox', label: 'صندوق اینستاگرام' },
   { id: 'campaign_sms', label: 'کمپین پیامکی' }, { id: 'campaign_email', label: 'کمپین ایمیلی' }, { id: 'campaign_instagram_post', label: 'کمپین اینستاگرام' },
-  { id: 'saas_account_billing', label: 'مدیریت حساب و اشتراک' }, { id: 'ai_credit_topup', label: 'شارژ اعتبار هوش مصنوعی' },
-  { id: 'sms_credit_topup', label: 'شارژ اعتبار پیامک' }, { id: 'extra_users_purchase', label: 'خرید کاربر اضافه' },
+  { id: 'saas_account_billing', label: 'مدیریت حساب و اشتراک' }, { id: 'ai_credit_topup', label: 'کیف پول مصرف AI' },
+  { id: 'sms_credit_topup', label: 'کیف پول مصرف پیامک' }, { id: 'extra_users_purchase', label: 'خرید کاربر اضافه' },
+  { id: 'business_model_canvas', label: 'بوم کسب‌وکار' }, { id: 'bale_bot', label: 'بات بله' }, { id: 'rubika_bot', label: 'بات روبیکا' },
 ];
 
 export const SAAS_QUOTA_OPTIONS: SaasOfferingOption[] = [

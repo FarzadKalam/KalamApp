@@ -18,11 +18,16 @@ const DrawerInteractionRecovery = () => {
         cancelScheduledRecovery = scheduleOverlayLockRelease();
       }, 80);
     };
+    // Observe only portal mount/unmounts. Observing the whole application
+    // subtree caused a feedback loop: the recovery changed body/mask styles,
+    // which triggered another recovery while large SaaS pages were rendering.
     const observer = new MutationObserver(recover);
-    observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'style'], childList: true, subtree: true });
+    observer.observe(document.body, { childList: true });
+    document.addEventListener('transitionend', recover, true);
     recover();
     return () => {
       observer.disconnect();
+      document.removeEventListener('transitionend', recover, true);
       window.clearTimeout(timer);
       cancelScheduledRecovery?.();
     };

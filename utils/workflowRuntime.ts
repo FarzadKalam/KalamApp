@@ -958,121 +958,6 @@ export const resolveWorkflowFieldValue = async ({
   return resolveConditionFieldValue(fieldKey, currentRecord, moduleId, resolvedContext);
 };
 
-const resolveSmsRequestUrl = (url: string) => {
-  if (!url) return url;
-  try {
-    const parsed = new URL(url);
-    if (import.meta.env.DEV && /(^|\.)rest\.payamak-panel\.com$/i.test(parsed.hostname)) {
-      return `/api/melipayamak-rest${parsed.pathname}${parsed.search || ''}`;
-    }
-    if (import.meta.env.DEV && /(^|\.)api\.payamak-panel\.com$/i.test(parsed.hostname)) {
-      return `/api/melipayamak-soap${parsed.pathname}${parsed.search || ''}`;
-    }
-    return url;
-  } catch {
-    return url;
-  }
-};
-
-const normalizeSmsUrl = (url: string, mode: 'rest' | 'soap') => {
-  if (!url) return url;
-  try {
-    const parsed = new URL(url);
-    const path = parsed.pathname.replace(/\/+$/, '');
-    if (mode === 'rest' && /(^|\.)rest\.payamak-panel\.com$/i.test(parsed.hostname)) {
-      if (/\/api\/SendSMS$/i.test(path)) parsed.pathname = `${path}/SendSMS`;
-    }
-    if (mode === 'soap' && /(^|\.)api\.payamak-panel\.com$/i.test(parsed.hostname)) {
-      if (/\/post\/send\.asmx$/i.test(path)) parsed.pathname = `${path}/SendSimpleSMS2`;
-    }
-    return parsed.toString();
-  } catch {
-    return url;
-  }
-};
-
-const sendSmsDirectLegacy = async (to: string[], text: string) => {
-  const { data: smsRow, error: smsErr } = await loadScopedIntegrationSettings(supabase as any, {
-    connectionType: 'sms',
-    isActive: true,
-  });
-  if (smsErr) throw smsErr;
-  const smsSettingsRow = smsRow as Record<string, any> | null | undefined;
-  if (!smsSettingsRow) throw new Error('تنظیمات سامانه پیامک فعال نیست.');
-
-  const settings = (smsSettingsRow.settings || {}) as Record<string, any>;
-  const mode = String(settings.mode || 'rest') as 'rest' | 'soap';
-  const baseUrl = normalizeSmsUrl(
-    String(
-      settings.base_url ||
-        (mode === 'soap'
-          ? 'https://api.payamak-panel.com/post/send.asmx/SendSimpleSMS2'
-          : 'https://rest.payamak-panel.com/api/SendSMS/SendSMS')
-    ),
-    mode
-  );
-  const username = String(settings.username || '').trim();
-  const password = String(settings.password || '').trim();
-  const apiKey = String(settings.api_key || '').trim();
-  const senderNumber = String(settings.sender_number || '').trim();
-  const bodyId = String(settings.body_id || '').trim();
-  const isFlash = !!settings.is_flash;
-
-  if (!baseUrl || !senderNumber) throw new Error('تنظیمات ارسال پیامک ناقص است.');
-  if (!apiKey && (!username || !password)) {
-    throw new Error('نام کاربری/رمز عبور یا API Key برای پیامک کامل نیست.');
-  }
-
-  const url = resolveSmsRequestUrl(baseUrl);
-  const useSoapRequest = mode === 'soap' || /\/post\/send\.asmx(\/SendSimpleSMS2)?$/i.test(baseUrl);
-
-  for (const recipient of to) {
-    let response: Response;
-    if (useSoapRequest) {
-      const body = new URLSearchParams({
-        username,
-        password,
-        to: recipient,
-        from: senderNumber,
-        text,
-        isflash: isFlash ? 'true' : 'false',
-      });
-      if (bodyId) body.set('bodyId', bodyId);
-      response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        },
-        body: body.toString(),
-      });
-    } else {
-      const payload: Record<string, any> = {
-        to: recipient,
-        from: senderNumber,
-        text,
-        isFlash,
-      };
-      if (bodyId) payload.bodyId = bodyId;
-      if (apiKey) {
-        payload.apiKey = apiKey;
-      } else {
-        payload.username = username;
-        payload.password = password;
-      }
-      response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-    }
-
-    const raw = await response.text();
-    if (!response.ok) {
-      throw new Error(raw || `HTTP ${response.status}`);
-    }
-  }
-};
-
 type WorkflowSmsSendArgs = {
   to: string[];
   text: string;
@@ -1094,23 +979,16 @@ const sendSms = async ({
   metadata,
   senderNumber,
 }: WorkflowSmsSendArgs) => {
-  try {
-    await sendSmsViaGateway({
-      to,
-      text,
-      allowDirectFallback: true,
-      moduleId,
-      recordId,
-      customerId,
-      title,
-      metadata,
-      senderNumber,
-    });
-  } catch (error) {
-    const useLegacyFallback = String(import.meta.env.VITE_SMS_LEGACY_FALLBACK || '').trim() === 'true';
-    if (!useLegacyFallback) throw error;
-    await sendSmsDirectLegacy(to, text);
-  }
+  await sendSmsViaGateway({
+    to,
+    text,
+    moduleId,
+    recordId,
+    customerId,
+    title,
+    metadata,
+    senderNumber,
+  });
 };
 
 type CommunicationChannel = 'sms' | 'email' | 'telegram' | 'bale' | 'rubika';

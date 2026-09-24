@@ -52,6 +52,7 @@ import { resolveOverlayPopupContainer } from "./utils/popupContainer";
 import { isMarketingHost, isSaasAdminPanelHost, isSaasAppHost } from "./utils/hostRouting";
 import { activateSaasAdminPanelContext } from "./utils/saasAdminPanel";
 import { signOutLocalSession } from "./utils/authSession";
+import TenantHostSessionBoundary from './components/auth/TenantHostSessionBoundary';
 import { readCachedLoadingBrandIdentity, type LoadingBrandIdentity } from './utils/loadingBrand';
 import { PublicThemeBoundary } from './components/public/PublicThemeBoundary';
 import { hasCurrentOrgPlanModule } from './utils/saasPlanModules';
@@ -831,19 +832,21 @@ function App() {
                 key="authenticated-inner"
                 fallback={<CatchAllNavigate to="/login" />}
               >
-                <LazyRouteBoundary>
-                  <NotificationRuntimeProvider>
-                    <OrganizationAvatarPreloader />
-                    <Layout
-                      isDarkMode={isDarkMode}
-                      toggleTheme={handleToggleTheme}
-                      brandShortName={branding.shortName}
-                      preloadRoute={preloadAuthenticatedRouteChunk}
-                    >
-                      <AuthenticatedOutletBoundary />
-                    </Layout>
-                  </NotificationRuntimeProvider>
-                </LazyRouteBoundary>
+                <TenantHostSessionBoundary>
+                  <LazyRouteBoundary>
+                    <NotificationRuntimeProvider>
+                      <OrganizationAvatarPreloader />
+                      <Layout
+                        isDarkMode={isDarkMode}
+                        toggleTheme={handleToggleTheme}
+                        brandShortName={branding.shortName}
+                        preloadRoute={preloadAuthenticatedRouteChunk}
+                      >
+                        <AuthenticatedOutletBoundary />
+                      </Layout>
+                    </NotificationRuntimeProvider>
+                  </LazyRouteBoundary>
+                </TenantHostSessionBoundary>
               </Authenticated>
             }
           >

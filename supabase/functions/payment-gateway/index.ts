@@ -854,9 +854,15 @@ const createSaasAccountOrderPayment = async (
 ) => {
   const { profile } = await getAuthenticatedProfile(req, urlBase, key);
   if (!centralMerchantId) throw new Error("Merchant ID درگاه مرکزی تازه سیستم تنظیم نشده است.");
-  const order = await rpcAsAuthenticatedUser(req, urlBase, key, "create_current_saas_order", {
-    p_items: Array.isArray(body?.items) ? body.items : [],
-  });
+  // A tenant may either start a new checkout from its own cart or pay a
+  // pending order prepared by the SaaS administrator.  In both cases the
+  // database recalculates/validates the amount; the browser never supplies it.
+  const requestedOrderId = String(body?.order_id || "").trim();
+  const order = requestedOrderId
+    ? await rpcAsAuthenticatedUser(req, urlBase, key, "prepare_current_saas_order_payment", { p_order_id: requestedOrderId })
+    : await rpcAsAuthenticatedUser(req, urlBase, key, "create_current_saas_order", {
+      p_items: Array.isArray(body?.items) ? body.items : [],
+    });
   const orderId = String(order?.order_id || "").trim();
   const amountIrt = Math.round(Number(order?.total_irt || 0));
   if (!orderId || !Number.isFinite(amountIrt) || amountIrt <= 0) throw new Error("سبد خرید معتبر نیست.");
