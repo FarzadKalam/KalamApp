@@ -349,6 +349,11 @@ const sendSmsDirect = async (
   };
 };
 
+// این مسیرهای قدیمی فعلاً برای سازگاری نگه داشته شده‌اند؛ مسیر فعال ارسال از Edge Function استفاده می‌کند.
+void withSelectedSmsSender;
+void getActiveSmsSettings;
+void sendSmsDirect;
+
 const isRetryableSmsInvokeError = (value: unknown) => {
   const text = String(value || '').toLowerCase();
   return (
@@ -373,6 +378,7 @@ const invokeSmsFunction = async (
   text: string,
   overrideSettings?: SmsSettings,
   senderNumber?: string,
+  metadata?: Record<string, any>,
 ): Promise<SmsGatewaySendResult> => {
   const payload: Record<string, any> = { action: 'send', to, text };
   if (normalizeSenderNumber(senderNumber)) payload.sender_number = normalizeSenderNumber(senderNumber);
@@ -471,7 +477,7 @@ export const sendSmsViaGateway = async ({
   try {
     let sendResult: SmsGatewaySendResult;
     try {
-      sendResult = await invokeSmsFunction(recipients, messageText, overrideSettings, senderNumber);
+      sendResult = await invokeSmsFunction(recipients, messageText, overrideSettings, senderNumber, metadata);
     } catch (edgeError: any) {
       throw edgeError;
     }

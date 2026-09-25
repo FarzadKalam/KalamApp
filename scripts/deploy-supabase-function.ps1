@@ -278,6 +278,7 @@ try {
       $runtimeDepsRoot = Join-Path $archiveStagingRoot "$functionName/_runtime-deps"
       New-Item -ItemType Directory -Path $runtimeDepsRoot -Force | Out-Null
       Copy-Item -LiteralPath (Join-Path $repoRoot 'shared/recordRuntime.ts') -Destination (Join-Path $runtimeDepsRoot 'recordRuntime.ts') -Force
+      Copy-Item -LiteralPath (Join-Path $repoRoot 'shared/taskRuntimeCatalog.ts') -Destination (Join-Path $runtimeDepsRoot 'taskRuntimeCatalog.ts') -Force
       if ($functionName -ne 'activity-performance') {
         Copy-Item -LiteralPath (Join-Path $repoRoot 'shared/workflowConditionRuntime.ts') -Destination (Join-Path $runtimeDepsRoot 'workflowConditionRuntime.ts') -Force
       }

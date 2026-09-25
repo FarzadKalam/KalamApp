@@ -9,6 +9,7 @@ import {
   LogicOperator,
 } from '../types';
 import { createProductStockMovementsTableColumns, createShelfItemsTableColumns } from './productsConfig';
+import { TASK_TYPE_OPTIONS } from '../shared/taskRuntimeCatalog';
 
 const createTaskShelfStockMovementsTableColumns = () => ([
   {
@@ -97,13 +98,7 @@ export const tasksModule: ModuleDefinition = {
       location: FieldLocation.HEADER,
       order: 6.5,
       dynamicOptionsCategory: 'task_type',
-      options: [
-        { label: 'تماس خروجی', value: 'تماس خروجی' },
-        { label: 'تماس ورودی', value: 'تماس ورودی' },
-        { label: 'جلسه داخلی', value: 'جلسه داخلی' },
-        { label: 'جلسه خارجی', value: 'جلسه خارجی' },
-        { label: 'فعالیت سازمانی', value: 'فعالیت سازمانی' },
-      ],
+      options: [...TASK_TYPE_OPTIONS],
       validation: { required: true },
       nature: FieldNature.STANDARD,
       isTableColumn: true,

@@ -72,6 +72,22 @@ describe('record runtime shared contract', () => {
     expect(evaluateCoreConditionOperator({ operator: 'unsupported_operator', currentValue: 'x', now })).toBe(false);
   });
 
+  it('evaluates calendar operators in Tehran rather than the host timezone', () => {
+    const now = new Date('2026-09-24T20:45:00.000Z');
+    // این مقدار در UTC روز قبل است، اما در تهران ابتدای روز ۲۵ شهریور/سپتامبر است.
+    const justAfterMidnightTehran = '2026-09-24T20:35:00.000Z';
+    const previousTehranDay = '2026-09-24T19:59:59.000Z';
+
+    expect(evaluateCoreConditionOperator({ operator: 'is_today', currentValue: justAfterMidnightTehran, now })).toBe(true);
+    expect(evaluateCoreConditionOperator({ operator: 'is_yesterday', currentValue: previousTehranDay, now })).toBe(true);
+    expect(evaluateCoreConditionOperator({
+      operator: 'date_between',
+      currentValue: justAfterMidnightTehran,
+      expectedValue: { from: '2026-09-25', to: '2026-09-25' },
+      now,
+    })).toBe(true);
+  });
+
   it('uses the shared workflow condition contract for resolved server fields', async () => {
     const values = { tags: ['فروش', 'ویژه'], score: 3 };
     const evaluate = (condition: { field?: unknown; operator?: unknown; value?: unknown }) =>

@@ -179,15 +179,58 @@ const normalizeList = (value: any): string[] => {
     .filter(Boolean);
 };
 
+export const WORKFLOW_RUNTIME_TIME_ZONE = 'Asia/Tehran';
+
 const parseDate = (value: unknown): Date | null => {
   if (!value) return null;
   const date = value instanceof Date ? value : new Date(String(value));
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
+type CalendarDateParts = { year: number; month: number; day: number; weekday: number };
+
+const getCalendarDateParts = (
+  value: unknown,
+  timeZone = WORKFLOW_RUNTIME_TIME_ZONE,
+): CalendarDateParts | null => {
+  const date = value instanceof Date ? value : parseDate(value);
+  if (!date) return null;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      calendar: 'gregory',
+      numberingSystem: 'latn',
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      weekday: 'short',
+    }).formatToParts(date);
+    const read = (type: string) => parts.find((part) => part.type === type)?.value || '';
+    const weekdayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    const result = {
+      year: Number(read('year')),
+      month: Number(read('month')),
+      day: Number(read('day')),
+      weekday: weekdayMap[read('weekday')],
+    };
+    return Number.isFinite(result.year) && Number.isFinite(result.month) && Number.isFinite(result.day)
+      && Number.isFinite(result.weekday)
+      ? result
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+const calendarDayNumber = (parts: CalendarDateParts | null) =>
+  parts ? Date.UTC(parts.year, parts.month - 1, parts.day) / 86_400_000 : null;
+
 const getJalaliMonthNumber = (date: Date): number | null => {
   try {
-    const raw = new Intl.DateTimeFormat('en-u-ca-persian', { month: 'numeric' }).formatToParts(date).find((item) => item.type === 'month')?.value;
+    const raw = new Intl.DateTimeFormat('en-u-ca-persian', {
+      timeZone: WORKFLOW_RUNTIME_TIME_ZONE,
+      month: 'numeric',
+    }).formatToParts(date).find((item) => item.type === 'month')?.value;
     const month = Number(raw);
     return Number.isFinite(month) ? month : null;
   } catch { return null; }
@@ -199,22 +242,35 @@ const compareTimeValue = (value: unknown): number | null => {
   return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3] || 0);
 };
 
-const sameDate = (left: Date, right: Date) =>
-  left.getFullYear() === right.getFullYear()
-  && left.getMonth() === right.getMonth()
-  && left.getDate() === right.getDate();
+const sameDate = (left: Date, right: Date) => {
+  const leftParts = getCalendarDateParts(left);
+  const rightParts = getCalendarDateParts(right);
+  return !!leftParts && !!rightParts
+    && leftParts.year === rightParts.year
+    && leftParts.month === rightParts.month
+    && leftParts.day === rightParts.day;
+};
 
 const daysFromNow = (value: unknown, now: Date): number | null => {
-  const date = parseDate(value);
-  if (!date) return null;
-  const dateStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const nowStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  return (nowStart.getTime() - dateStart.getTime()) / 86_400_000;
+  const dateStart = calendarDayNumber(getCalendarDateParts(value));
+  const nowStart = calendarDayNumber(getCalendarDateParts(now));
+  return dateStart === null || nowStart === null ? null : nowStart - dateStart;
 };
 
 const hoursFromNow = (value: unknown, now: Date): number | null => {
   const date = parseDate(value);
   return date ? (now.getTime() - date.getTime()) / 3_600_000 : null;
+};
+
+const monthKey = (parts: CalendarDateParts | null) =>
+  parts ? parts.year * 12 + parts.month - 1 : null;
+
+const dateRangeForWeek = (now: Date, offsetWeeks = 0) => {
+  const parts = getCalendarDateParts(now);
+  const currentDay = calendarDayNumber(parts);
+  if (currentDay === null || !parts) return null;
+  const start = currentDay - parts.weekday + (offsetWeeks * 7);
+  return { start, end: start + 6 };
 };
 
 export const CORE_ASYNC_CONDITION_OPERATORS = new Set([
@@ -282,21 +338,32 @@ export const evaluateCoreConditionOperator = ({
     case 'changed_from': return JSON.stringify(previous ?? null) === JSON.stringify(expected ?? null) && JSON.stringify(current ?? null) !== JSON.stringify(previous ?? null);
     case 'changed_to': return JSON.stringify(current ?? null) === JSON.stringify(expected ?? null) && JSON.stringify(current ?? null) !== JSON.stringify(previous ?? null);
     case 'is_today': return !!date && sameDate(date, now);
-    case 'is_yesterday': { const target = new Date(now); target.setDate(target.getDate() - 1); return !!date && sameDate(date, target); }
-    case 'is_tomorrow': { const target = new Date(now); target.setDate(target.getDate() + 1); return !!date && sameDate(date, target); }
-    case 'is_this_week': { if (!date) return false; const start = new Date(now); start.setDate(now.getDate() - now.getDay()); start.setHours(0, 0, 0, 0); const end = new Date(start); end.setDate(start.getDate() + 6); end.setHours(23, 59, 59, 999); return date >= start && date <= end; }
-    case 'is_last_week': { if (!date) return false; const startThis = new Date(now); startThis.setDate(now.getDate() - now.getDay()); startThis.setHours(0, 0, 0, 0); const start = new Date(startThis); start.setDate(start.getDate() - 7); const end = new Date(startThis); end.setMilliseconds(-1); return date >= start && date <= end; }
-    case 'is_this_month': return !!date && date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
-    case 'is_last_month': { const last = new Date(now.getFullYear(), now.getMonth() - 1, 1); return !!date && date.getFullYear() === last.getFullYear() && date.getMonth() === last.getMonth(); }
+    case 'is_yesterday': { const currentDay = calendarDayNumber(getCalendarDateParts(currentValue)); const nowDay = calendarDayNumber(getCalendarDateParts(now)); return currentDay !== null && nowDay !== null && currentDay === nowDay - 1; }
+    case 'is_tomorrow': { const currentDay = calendarDayNumber(getCalendarDateParts(currentValue)); const nowDay = calendarDayNumber(getCalendarDateParts(now)); return currentDay !== null && nowDay !== null && currentDay === nowDay + 1; }
+    case 'is_this_week': { const range = dateRangeForWeek(now); const currentDay = calendarDayNumber(getCalendarDateParts(currentValue)); return range !== null && currentDay !== null && currentDay >= range.start && currentDay <= range.end; }
+    case 'is_last_week': { const range = dateRangeForWeek(now, -1); const currentDay = calendarDayNumber(getCalendarDateParts(currentValue)); return range !== null && currentDay !== null && currentDay >= range.start && currentDay <= range.end; }
+    case 'is_this_month': { const currentMonth = monthKey(getCalendarDateParts(currentValue)); const nowMonth = monthKey(getCalendarDateParts(now)); return currentMonth !== null && currentMonth === nowMonth; }
+    case 'is_last_month': { const currentMonth = monthKey(getCalendarDateParts(currentValue)); const nowMonth = monthKey(getCalendarDateParts(now)); return currentMonth !== null && nowMonth !== null && currentMonth === nowMonth - 1; }
     case 'jalali_month_in': { const month = date ? getJalaliMonthNumber(date) : null; return month !== null && normalizeList(expectedValue).includes(String(month)); }
     case 'jalali_month_not_in': return !evaluateCoreConditionOperator({ operator: 'jalali_month_in', currentValue, expectedValue, now });
-    case 'date_between':
-    case 'datetime_between': { const range = expectedValue && typeof expectedValue === 'object' ? expectedValue as any : {}; const from = parseDate(range.from); const to = parseDate(range.to); return !!date && !!from && !!to && date >= from && date <= to; }
+    case 'date_between': {
+      const range = expectedValue && typeof expectedValue === 'object' ? expectedValue as any : {};
+      const currentDay = calendarDayNumber(getCalendarDateParts(currentValue));
+      const fromDay = calendarDayNumber(getCalendarDateParts(range.from));
+      const toDay = calendarDayNumber(getCalendarDateParts(range.to));
+      return currentDay !== null && fromDay !== null && toDay !== null && currentDay >= fromDay && currentDay <= toDay;
+    }
+    case 'datetime_between': {
+      const range = expectedValue && typeof expectedValue === 'object' ? expectedValue as any : {};
+      const from = parseDate(range.from);
+      const to = parseDate(range.to);
+      return !!date && !!from && !!to && date >= from && date <= to;
+    }
     case 'time_between': { const range = expectedValue && typeof expectedValue === 'object' ? expectedValue as any : {}; const currentTime = compareTimeValue(currentValue); const from = compareTimeValue(range.from); const to = compareTimeValue(range.to); return currentTime !== null && from !== null && to !== null && currentTime >= from && currentTime <= to; }
-    case 'day_of_month_eq': return !!date && date.getDate() === Number(expectedValue ?? 0);
-    case 'day_of_month_neq': return !!date && date.getDate() !== Number(expectedValue ?? 0);
-    case 'day_of_week_eq': return !!date && date.getDay() === Number(expectedValue ?? 0);
-    case 'day_of_week_neq': return !!date && date.getDay() !== Number(expectedValue ?? 0);
+    case 'day_of_month_eq': return !!getCalendarDateParts(currentValue) && getCalendarDateParts(currentValue)!.day === Number(expectedValue ?? 0);
+    case 'day_of_month_neq': return !!getCalendarDateParts(currentValue) && getCalendarDateParts(currentValue)!.day !== Number(expectedValue ?? 0);
+    case 'day_of_week_eq': return !!getCalendarDateParts(currentValue) && getCalendarDateParts(currentValue)!.weekday === Number(expectedValue ?? 0);
+    case 'day_of_week_neq': return !!getCalendarDateParts(currentValue) && getCalendarDateParts(currentValue)!.weekday !== Number(expectedValue ?? 0);
     case 'days_passed_eq': { const diff = dayDiff(); return diff !== null && Math.floor(diff) === Number(expectedValue ?? 0); }
     case 'days_passed_gt': { const diff = dayDiff(); return diff !== null && diff > Number(expectedValue ?? 0); }
     case 'days_passed_lt': { const diff = dayDiff(); return diff !== null && diff < Number(expectedValue ?? 0); }

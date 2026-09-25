@@ -6,6 +6,7 @@ import {
   evaluateWorkflowConditionCollectionWithResolver,
   evaluateWorkflowConditionWithResolver,
 } from "./_runtime-deps/workflowConditionRuntime.ts";
+import { TASK_TYPE_FIELD_RUNTIME_CONFIG } from "./_runtime-deps/taskRuntimeCatalog.ts";
 import {
   getOfficialCalendarEventsForDate,
   isFridayAtTehranDate,
@@ -204,13 +205,15 @@ const getIdentityLabel = async (
     identityLabelCache.set(cacheKey, (async () => {
       const table = kind === "user" ? "profiles" : "org_roles";
       const query = new URL(`${url}/rest/v1/${table}`);
-      query.searchParams.set("select", kind === "user" ? "full_name,display_name" : "title,name");
+      // فقط ستون‌های واقعی identity directory را بخوان؛ درخواست ستون‌های
+      // قدیمیِ display_name/name باعث 400 و برگشت برچسب عمومی می‌شد.
+      query.searchParams.set("select", kind === "user" ? "full_name" : "title");
       query.searchParams.set("org_id", `eq.${orgId}`);
       query.searchParams.set("id", `eq.${id}`);
       query.searchParams.set("limit", "1");
       const response = await fetch(query, { headers });
       const row = response.ok ? (await response.json())?.[0] : null;
-      return String(row?.display_name || row?.full_name || row?.title || row?.name || "").trim() || null;
+      return String(row?.full_name || row?.title || "").trim() || null;
     })());
   }
   return identityLabelCache.get(cacheKey)!;
@@ -508,6 +511,25 @@ const getConditionResolver = ({ url, headers, orgId, moduleId }: any) => {
       ? configs.tableFields.get(`${String(tableMatch[0] || "").trim()}::${String(tableMatch[1] || "").trim()}`) || configs.fields.get(configFieldKey) || null
       : configs.fields.get(configFieldKey) || null;
   };
+  const getResolvedRuntimeFieldConfig = async (fieldKey: string, record: any) => {
+    const configured = await getRuntimeFieldConfig(fieldKey, record);
+    if (moduleId !== "tasks" || fieldKey !== "task_type") return configured;
+    const configuredOptions = Array.isArray(configured?.options) ? configured.options : [];
+    const optionsByValue = new Map(configuredOptions.map((option: any) => [String(option?.value ?? '').trim(), option]));
+    const mergedOptions = [
+      ...TASK_TYPE_FIELD_RUNTIME_CONFIG.options.map((option) => optionsByValue.get(option.value) || option),
+      ...configuredOptions.filter((option: any) => {
+        const value = String(option?.value ?? '').trim();
+        return value && !TASK_TYPE_FIELD_RUNTIME_CONFIG.options.some((base) => base.value === value);
+      }),
+    ];
+    return {
+      ...TASK_TYPE_FIELD_RUNTIME_CONFIG,
+      ...(configured || {}),
+      options: mergedOptions,
+      dynamicOptionsCategory: String(configured?.dynamicOptionsCategory || configured?.dynamic_options_category || 'task_type').trim() || 'task_type',
+    };
+  };
   const resolveDisplayValue = async (fieldKey: string, record: any, value: any) => {
     if (value === null || value === undefined || value === "") return "";
     if (Array.isArray(value)) {
@@ -521,7 +543,7 @@ const getConditionResolver = ({ url, headers, orgId, moduleId }: any) => {
         || String(record?.status_label || record?.task_status_label || "").trim();
       if (taskLabel) return taskLabel;
     }
-    const field = await getRuntimeFieldConfig(fieldKey, record);
+    const field = await getResolvedRuntimeFieldConfig(fieldKey, record);
     if (String(field?.type || "").toLowerCase() === "user") {
       return await getIdentityLabel(url, internalHeaders, orgId, `user:${String(value || "").trim()}`) || "کاربر انتخاب‌شده";
     }
@@ -539,7 +561,7 @@ const getConditionResolver = ({ url, headers, orgId, moduleId }: any) => {
     const statusNormalized = normalizeTaskStatusConditionForRecord(condition, record);
     const fieldKey = String(statusNormalized?.field || "").trim();
     if (!fieldKey || !Object.prototype.hasOwnProperty.call(statusNormalized || {}, "value")) return statusNormalized;
-    const field = await getRuntimeFieldConfig(fieldKey, record);
+    const field = await getResolvedRuntimeFieldConfig(fieldKey, record);
     if (!field) return statusNormalized;
     const resolveOptionValue = async (candidate: any) => {
       const raw = String(candidate ?? "").trim();

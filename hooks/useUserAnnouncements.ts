@@ -25,6 +25,12 @@ type UseUserAnnouncementsParams = {
   host?: string | null;
 };
 
+type WalletBalanceRow = {
+  balance_irt?: number | string | null;
+  included_quota_irt?: number | string | null;
+  reserved_irt?: number | string | null;
+};
+
 export const useUserAnnouncements = ({ surface, path, host }: UseUserAnnouncementsParams) => {
   const normalizedPath = useMemo(() => normalizePath(path), [path]);
   const normalizedHost = useMemo(
@@ -68,8 +74,8 @@ export const useUserAnnouncements = ({ surface, path, host }: UseUserAnnouncemen
             supabase.from('org_ai_wallets').select('balance_irt,included_quota_irt,reserved_irt').maybeSingle(),
             supabase.from('org_sms_wallets').select('balance_irt,included_quota_irt,reserved_irt').maybeSingle(),
           ]);
-          const ai = aiResult.data || {};
-          const sms = smsResult.data || {};
+          const ai = (aiResult.data || {}) as WalletBalanceRow;
+          const sms = (smsResult.data || {}) as WalletBalanceRow;
           aiWalletRemaining = Math.max(0, Number(ai.balance_irt || 0) + Number(ai.included_quota_irt || 0) - Number(ai.reserved_irt || 0));
           smsWalletRemaining = Math.max(0, Number(sms.balance_irt || 0) + Number(sms.included_quota_irt || 0) - Number(sms.reserved_irt || 0));
         } catch {
