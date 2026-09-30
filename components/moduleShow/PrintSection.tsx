@@ -19,6 +19,7 @@ import { createPortal } from "react-dom";
 import { printStyles } from "../../utils/printTemplates";
 import { fitCompactPrintCells } from "../../utils/printTemplates/fitCompactPrintCells";
 import { resolveEffectivePrintFieldKeys } from "../../utils/printTemplates/printableFields";
+import { expandLegacyTableSelection } from "../../utils/printTemplates/printFieldCatalog";
 import type { PrintPaperSize } from "../../utils/printTemplates/store";
 import type { GeneratedPrintPdf } from "../../utils/printTemplates/printAsPdf";
 import AdaptiveSelectField from "../AdaptiveSelectField";
@@ -246,12 +247,16 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     selectedTemplateId,
   );
   const effectiveSelectedFieldKeys = useMemo(
-    () =>
-      resolveEffectivePrintFieldKeys({
+    () => {
+      const resolved = resolveEffectivePrintFieldKeys({
         fields: printableFields,
         selectedKeys: selectedPrintFields[selectedTemplateId] || [],
         hasExplicitSelection: hasExplicitFieldSelection,
-      }),
+      });
+      return hasExplicitFieldSelection
+        ? expandLegacyTableSelection(resolved, printableFields)
+        : resolved;
+    },
     [
       hasExplicitFieldSelection,
       printableFields,

@@ -48,7 +48,7 @@ import {
   isFridayAtTehranDate,
 } from '../_shared/persian-calendar-resolver.ts';
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-09-23-ai-image-jobs';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-09-30-separate-image-worker';
 const MAX_WORKFLOWS = 30;
 const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
@@ -69,27 +69,6 @@ const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 const UUID_LIKE_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const WORKFLOW_BOT_CHANNEL_PRIORITY = ['rubika', 'telegram', 'bale'] as const;
-
-const drainAiImageGenerationJobs = async (supabaseUrl: string, serviceRoleKey: string) => {
-  try {
-    const response = await fetch(`${supabaseUrl.replace(/\/+$/, '')}/functions/v1/ai-assistant`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${serviceRoleKey}`,
-        'x-kalam-internal': 'workflow-interval-runner',
-      },
-      body: JSON.stringify({ action: 'process_ai_image_jobs' }),
-      signal: AbortSignal.timeout(135000),
-    });
-    const raw = await response.text();
-    if (!response.ok) throw new Error(`AI image worker HTTP ${response.status}: ${raw.slice(0, 300)}`);
-    return JSON.parse(raw || '{}');
-  } catch (error: any) {
-    console.error('[workflow-runner] AI image job worker failed:', error?.message || error);
-    return { success: false, processed: 0, error: String(error?.message || error || 'ai image worker failed') };
-  }
-};
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -7530,9 +7509,8 @@ Deno.serve(async (req) => {
       serviceRoleKey,
       new Date(),
     ).catch((error) => ({ failed: true, error: String(error?.message || error) }));
-    const aiImageJobStats = await drainAiImageGenerationJobs(supabaseUrl, serviceRoleKey);
-    console.log(`[workflow-runner] build=${FUNCTION_BUILD} enqueueStats=${JSON.stringify(enqueueStats)} intervalQueueStats=${JSON.stringify(intervalQueueStats)} scheduledReportStats=${JSON.stringify(scheduledReportStats)} scheduledWorkScheduleStats=${JSON.stringify(scheduledWorkScheduleStats)} eventQueueStats=${JSON.stringify(eventQueueStats)} customerClubNotificationStats=${JSON.stringify(customerClubNotificationStats)} saasBillingStats=${JSON.stringify(saasBillingStats)} processAutomationStats=${JSON.stringify(processAutomationStats)} aiImageJobStats=${JSON.stringify(aiImageJobStats)}`);
-    return json(200, { ok: true, stats: enqueueStats, intervalQueueStats, scheduledReportStats, scheduledWorkScheduleStats, eventQueueStats, customerClubNotificationStats, saasBillingStats, processAutomationStats, aiImageJobStats });
+    console.log(`[workflow-runner] build=${FUNCTION_BUILD} enqueueStats=${JSON.stringify(enqueueStats)} intervalQueueStats=${JSON.stringify(intervalQueueStats)} scheduledReportStats=${JSON.stringify(scheduledReportStats)} scheduledWorkScheduleStats=${JSON.stringify(scheduledWorkScheduleStats)} eventQueueStats=${JSON.stringify(eventQueueStats)} customerClubNotificationStats=${JSON.stringify(customerClubNotificationStats)} saasBillingStats=${JSON.stringify(saasBillingStats)} processAutomationStats=${JSON.stringify(processAutomationStats)}`);
+    return json(200, { ok: true, stats: enqueueStats, intervalQueueStats, scheduledReportStats, scheduledWorkScheduleStats, eventQueueStats, customerClubNotificationStats, saasBillingStats, processAutomationStats });
     } finally {
       if (leaseToken) {
         await releaseWorkflowRunnerLease(supabaseUrl, serviceRoleKey, leaseToken).catch((error) => {

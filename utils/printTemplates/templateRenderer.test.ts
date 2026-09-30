@@ -21,7 +21,7 @@ describe('system invoice template rendering', () => {
       expect(rendered).toContain('شرط دوم فاکتور');
       expect(rendered).toContain('<br>');
       expect(rendered).toContain('data-print-optional-field="record.description"');
-    }
+    },
   );
 
   it('keeps safe rich-text formatting in an invoice description', () => {
@@ -83,5 +83,16 @@ describe('system invoice template rendering', () => {
     const official = merged.find((item) => item.id === 'default_invoice_official');
 
     expect(official?.contentHtml).toContain('data-print-optional-field="record.description"');
+  });
+});
+
+describe('renderPrintTemplateHtml image fallbacks', () => {
+  it('does not emit a broken empty logo source', () => {
+    const html = renderPrintTemplateHtml({
+      templateHtml: '<p><img src="{{company.logo_url}}" alt="لوگوی سازمان"></p>',
+      resolveVariableValue: () => '',
+    });
+    expect(html).not.toContain('src=""');
+    expect(html).toContain('data:image/gif;base64');
   });
 });

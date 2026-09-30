@@ -3,6 +3,7 @@ import {
   buildCashBankOperationPayloadFromPaymentRow,
   buildSourceOperationKey,
   collectPaymentAccountIds,
+  doesOperationalSourceMatchRecord,
   fetchTreasuryAccountModuleMap,
   getOperationalPaymentRowKeyCandidates,
   normalizeOperationalText,
@@ -31,9 +32,10 @@ export const syncInvoicePaymentOperations = async (args: {
     .in('id', invoiceIds);
   if (recordsError) throw recordsError;
 
+  const sourceRecords = (records || []).filter((record) => doesOperationalSourceMatchRecord(source, record));
   const accountModuleById = await fetchTreasuryAccountModuleMap(
     args.supabase as any,
-    collectPaymentAccountIds(records || [], source.accountField)
+    collectPaymentAccountIds(sourceRecords, source.accountField)
   );
   const { data: existingOperations, error: operationsError } = await args.supabase
     .from('cash_bank_operations')
@@ -53,7 +55,7 @@ export const syncInvoicePaymentOperations = async (args: {
   });
 
   const nowIso = new Date().toISOString();
-  for (const record of records || []) {
+  for (const record of sourceRecords) {
     const recordId = normalizeOperationalText((record as any)?.id);
     const payments = parseOperationalPayments((record as any)?.payments).map((row) => ({ ...row }));
     let paymentsChanged = false;

@@ -9,6 +9,7 @@ import { resolvePrintActorLabel, resolvePrintAssigneeComboLabel, resolvePrintAss
 import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, type PrintImageDisplayMode, getPrintFramedImageStyle, sanitizePrintImageDisplayMode } from './printTemplates/imageDisplay';
 import { buildImagePreviewUrl, buildPrintImageUrl } from './imagePreview';
 import { isPrintableModuleField } from './printTemplates/printableFields';
+import { getFieldLabelFa } from './fieldLabel';
 import { normalizeRichTextHtmlForPrint } from './richText';
 import { getSafePrintText } from './printTemplates/safePrintValue';
 
@@ -20,7 +21,7 @@ export interface ListFieldDefinition {
   group?: string;
   defaultSelected?: boolean;
   hasValue?: boolean;
-  printSection?: 'table' | 'context';
+  printSection?: 'table' | 'context' | 'system';
 }
 
 export interface ListPrintSummaryDefinition {
@@ -167,7 +168,7 @@ export const buildListPrintableFields = (
     })
     .map((field: any) => ({
       key: String(field.key),
-      label: String(field?.labels?.fa || field.key),
+      label: getFieldLabelFa(field, { moduleId: moduleConfig?.id, fallback: field.key }),
       type: field?.type,
       group:
         String(field?.location || '').trim().toLowerCase() === 'block' && String(field?.blockId || '').trim()

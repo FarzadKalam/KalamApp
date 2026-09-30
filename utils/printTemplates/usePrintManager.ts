@@ -36,6 +36,7 @@ import {
   buildSystemTemplateFieldOptionsForModule,
   buildDefaultTemplatesForModule,
   buildCatalogFullPageContentHtml,
+  getPrintTemplateVariables,
   getModuleTitle,
   getSystemTemplateFieldOptions,
   getPrintPaperSizeCss,
@@ -93,8 +94,14 @@ import {
   resolveEffectivePrintFieldKeys,
 } from "./printableFields";
 import {
+  expandLegacyTableSelection,
+  getSelectedPrintTableColumns,
+} from './printFieldCatalog';
+import {
   loadPrintFieldPreference,
+  loadPrintFieldPreferenceFromServer,
   savePrintFieldPreference,
+  savePrintFieldPreferenceToServer,
 } from "./fieldPreferences";
 import { hasRenderablePrintFooterHtml } from "./footerLayout";
 import { buildNativeCustomPrintFlowHtml } from "./nativePrintFlow";
@@ -1176,6 +1183,17 @@ export const usePrintManager = ({
       if (!normalizedKey) return false;
       if (normalizedKey.startsWith("record.")) {
         const recordPath = normalizedKey.replace(/^record\./, "");
+        if (moduleId === 'product_bundles' && recordPath.startsWith('package_')) {
+          const items = Array.isArray(data?.products) ? data.products : [];
+          return items.length > 0;
+        }
+        if ((moduleId === 'invoices' || moduleId === 'purchase_invoices') &&
+            recordPath.startsWith('global_discount_')) {
+          return hasMeaningfulPrintValue(
+            data?.global_discount_value ?? data?.invoice_discount_amount ?? data?.invoice_discount_percent,
+            recordPath,
+          );
+        }
         const employeeSourceField =
           PAYROLL_EMPLOYEE_PRINT_FIELD_SOURCES[recordPath];
         const value =
@@ -1224,7 +1242,23 @@ export const usePrintManager = ({
       hasValue: resolveSystemFieldHasValue(item.key),
       group: item.group,
       kind: item.kind,
+      parentKey: item.parentKey,
     }));
+
+    const providerOptions = getPrintTemplateVariables(moduleId)
+      .filter((item) => !item.scopes || item.scopes.includes('record'))
+      .filter((item) => !String(item.value || '').startsWith('row.'))
+      .map((item) => ({
+        key: String(item.value || '').trim(),
+        labels: { fa: String(item.label || item.value || '') },
+        value: true,
+        hasValue: resolveSystemFieldHasValue(String(item.value || '')),
+        group: String(item.group || 'سیستم'),
+        kind: item.kind === 'block' || String(item.value || '').startsWith('block.')
+          ? 'table' as const
+          : 'record' as const,
+      }))
+      .filter((item) => item.key);
 
     const invoiceComputedSystemOptions =
       moduleId === "invoices" || moduleId === "purchase_invoices"
@@ -1352,12 +1386,20 @@ export const usePrintManager = ({
         : []),
     ];
 
-    return [
+    const merged = [
       ...baseOptions,
+      ...providerOptions,
       ...invoiceComputedSystemOptions,
       ...commonSystemOptions,
       ...mediaOptions,
     ];
+    const seen = new Set<string>();
+    const unique = merged.filter((item) => {
+      if (seen.has(item.key)) return false;
+      seen.add(item.key);
+      return true;
+    });
+    return filterSystemTemplateFieldOptions(unique as any, canViewField) as any;
   }, [
     canViewField,
     data,
@@ -1374,8 +1416,21 @@ export const usePrintManager = ({
       !isSystemRecordTemplate &&
       !templateUsesSystemBlocks &&
       !templateUsesSystemFieldCollections
-    )
-      return printableFields;
+    ) {
+      // Manual templates may still contain company/system placeholders. Keep
+      // those fields visible in the same modal and selection contract instead
+      // of allowing them to bypass the user's explicit choices.
+      const moduleKeys = new Set(
+        (printableFields || []).map((field: any) => String(field?.key || '').trim()),
+      );
+      const extras = (systemTemplateFieldOptions || []).filter((field: any) => {
+        const key = String(field?.key || '').trim();
+        if (!key || moduleKeys.has(key)) return false;
+        if (key.startsWith('record.')) return !moduleKeys.has(key.replace(/^record\./, ''));
+        return !key.startsWith('block.');
+      });
+      return [...printableFields, ...extras];
+    }
     return systemTemplateFieldOptions;
   }, [
     isSystemRecordTemplate,
@@ -1393,12 +1448,16 @@ export const usePrintManager = ({
     [selectedPrintFields, selectedTemplateId],
   );
   const effectiveTemplateSelectedKeys = useMemo(
-    () =>
-      resolveEffectivePrintFieldKeys({
+    () => {
+      const resolved = resolveEffectivePrintFieldKeys({
         fields: printableFieldsForTemplate || [],
         selectedKeys: selectedPrintFields[selectedTemplateId] || [],
         hasExplicitSelection: hasTemplateSelectionState,
-      }),
+      });
+      return hasTemplateSelectionState
+        ? expandLegacyTableSelection(resolved, printableFieldsForTemplate || [])
+        : resolved;
+    },
     [
       hasTemplateSelectionState,
       printableFieldsForTemplate,
@@ -1424,14 +1483,26 @@ export const usePrintManager = ({
   );
   const isSystemFieldVisible = useCallback(
     (fieldPath: string, forceSelection = false) => {
+      const normalizedPath = String(fieldPath || '').trim();
       // A selection is a template-level visibility contract. It must apply to
       // direct placeholders in manual templates as well as system blocks,
       // otherwise the "printable fields" tab would save a setting that has no
       // effect on a large class of real templates.
       const controlsThisPath =
         forceSelection ||
-        String(fieldPath || "").startsWith("record.") ||
-        String(fieldPath || "").startsWith("block.");
+        knownTemplateFieldKeys.has(normalizedPath) ||
+        (normalizedPath.startsWith('record.') &&
+          knownTemplateFieldKeys.has(normalizedPath.replace(/^record\./, '')));
+      // A stale manual token must not bring back a field which was removed or
+      // disabled in the tenant's effective module schema. System-only values
+      // are explicitly catalogued separately and therefore remain supported.
+      const isKnownPath = knownTemplateFieldKeys.has(normalizedPath)
+        || (normalizedPath.startsWith('record.')
+          && knownTemplateFieldKeys.has(normalizedPath.replace(/^record\./, '')));
+      if (
+        (normalizedPath.startsWith('record.') || normalizedPath.startsWith('block.'))
+        && !isKnownPath
+      ) return false;
       return isPrintTemplateFieldVisible({
         fieldPath,
         canView: canViewPrintFieldPath(fieldPath),
@@ -1997,6 +2068,38 @@ export const usePrintManager = ({
     userPreferencesReady,
   ]);
 
+  useEffect(() => {
+    if (!selectedTemplateId || !userPreferencesReady || !currentOrgId || !printableFieldsForTemplate.length) return;
+    let active = true;
+    void loadPrintFieldPreferenceFromServer({
+      orgId: currentOrgId,
+      moduleId,
+      templateId: selectedStoredTemplate?.id || selectedTemplateId,
+      scope: 'record',
+    }).then((serverKeys) => {
+      if (!active || !Array.isArray(serverKeys)) return;
+      setSelectedPrintFields((prev) => ({
+        ...prev,
+        [selectedTemplateId]: expandLegacyTableSelection(
+          resolveEffectivePrintFieldKeys({
+            fields: printableFieldsForTemplate,
+            selectedKeys: serverKeys,
+            hasExplicitSelection: true,
+          }),
+          printableFieldsForTemplate,
+        ),
+      }));
+    });
+    return () => { active = false; };
+  }, [
+    currentOrgId,
+    moduleId,
+    printableFieldsForTemplate,
+    selectedStoredTemplate?.id,
+    selectedTemplateId,
+    userPreferencesReady,
+  ]);
+
   const canUseCeoSignature = useMemo(
     () =>
       currentUserPermissions?.[SETTINGS_PERMISSION_KEY]?.fields
@@ -2445,14 +2548,14 @@ export const usePrintManager = ({
           .filter(Boolean),
       );
       const selectedKeys = sanitizeSelectedPrintFieldKeys(
-        resolveEffectivePrintFieldKeys({
+        expandLegacyTableSelection(resolveEffectivePrintFieldKeys({
           fields: printableFieldsForTemplate,
           selectedKeys: selectedPrintFields[selectedTemplateId] || [],
           hasExplicitSelection: Object.prototype.hasOwnProperty.call(
             selectedPrintFields,
             selectedTemplateId,
           ),
-        }),
+        }), printableFieldsForTemplate),
         allowedKeySet,
       );
       savePrintFieldPreference({
@@ -2461,6 +2564,13 @@ export const usePrintManager = ({
         moduleId,
         templateId: selectedStoredTemplate?.id || selectedTemplateId,
         scope: "record",
+        selectedFieldKeys: selectedKeys,
+      });
+      await savePrintFieldPreferenceToServer({
+        orgId: preferenceIdentity.orgId,
+        moduleId,
+        templateId: selectedStoredTemplate?.id || selectedTemplateId,
+        scope: 'record',
         selectedFieldKeys: selectedKeys,
       });
       return savePrintRenderPreference({
@@ -3270,8 +3380,15 @@ export const usePrintManager = ({
           const blockId = table.getAttribute("data-print-block") || "";
           const tbody = table.querySelector("tbody");
           if (!tbody || !blockId) return;
+          // جدول‌های renderer مرکزی پیشاپیش با دادهٔ واقعی پر می‌شوند. همچنین
+          // هر جدول بلاکی که دیگر توکن row ندارد، خروجی نهایی است نه الگوی
+          // تکرار؛ بنابراین نباید به‌خاطر نبود توکن، به جدول خالی تبدیل شود.
+          const hasRowTemplateTokens = /{{\s*row\.[a-zA-Z0-9_]+\s*}}/.test(String(table.innerHTML || ""));
           if (!isSystemFieldVisible(`block.${blockId}`)) {
             table.remove();
+            return;
+          }
+          if (table.getAttribute("data-print-preserve-rows") === "true" || !hasRowTemplateTokens) {
             return;
           }
 
@@ -3594,7 +3711,18 @@ export const usePrintManager = ({
         return "";
       }
 
-      let columns = getCompactPrintColumns(block.tableColumns);
+      const hasExplicitSelection = Object.prototype.hasOwnProperty.call(
+        selectedPrintFields,
+        selectedTemplateId,
+      );
+      let columns = hasExplicitSelection
+        ? getSelectedPrintTableColumns({
+            block,
+            blockId,
+            selectedFieldKeys: templateSelectedKeySet,
+            hasExplicitSelection,
+          })
+        : getCompactPrintColumns(block.tableColumns);
       if (moduleId === "price_lists" && blockId === "items") {
         columns = columns.map((column: any) =>
           String(column?.key || "").trim() === "price"
@@ -3623,7 +3751,7 @@ export const usePrintManager = ({
       const header = columns
         .map(
           (column: any) =>
-            `<th style="border:1px solid var(--table-border-color, #d1d5db);padding:4px 5px;overflow-wrap:anywhere;">${column.title || column.key}</th>`,
+            `<th style="border:1px solid var(--table-border-color, #d1d5db);padding:4px 5px;overflow-wrap:anywhere;">${getFieldLabelFa({ ...column, labels: column?.labels || { fa: column?.title || column?.key } }, { moduleId, fallback: column?.key })}</th>`,
         )
         .join("");
 
@@ -3674,6 +3802,9 @@ export const usePrintManager = ({
       isSystemFieldVisible,
       moduleConfig?.blocks,
       moduleId,
+      selectedPrintFields,
+      selectedTemplateId,
+      templateSelectedKeySet,
     ],
   );
 
@@ -3807,6 +3938,16 @@ export const usePrintManager = ({
       // below; without this shared gate, unchecked fields could still appear
       // in system and manually authored templates.
       if (path.startsWith("record.") && !isSystemFieldVisible(path)) {
+        return "";
+      }
+      // Company, system, relation and computed variables are also catalogued
+      // printable fields. Once a user saves an explicit selection, no known
+      // placeholder may bypass that selection merely because it is not a
+      // `record.*` token.
+      if (
+        knownTemplateFieldKeys.has(path) &&
+        !isSystemFieldVisible(path)
+      ) {
         return "";
       }
       if (path === "system.today_date")
@@ -4316,6 +4457,7 @@ export const usePrintManager = ({
       supplierInfo,
       canViewPrintFieldPath,
       isSystemFieldVisible,
+      knownTemplateFieldKeys,
       orderedSidebarFieldDefs,
       orderedCodeFieldDefs,
     ],

@@ -4,6 +4,7 @@ import { MODULES } from '../moduleRegistry';
 import { SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE } from '../pages/Settings/moduleSettingsTypes';
 import { fetchSessionBootstrap } from './sessionCache';
 import { generateNextJournalEntryNo } from './journalEntryNumbering';
+import { resolveInvoiceStorageTable } from './invoiceModuleRouting';
 
 type SupportedInvoiceModule = 'invoices' | 'purchase_invoices' | 'sales_return_invoices' | 'purchase_return_invoices';
 
@@ -326,7 +327,7 @@ const fetchInvoiceRow = async (
   recordId: string
 ): Promise<InvoiceRow | null> => {
   const { data, error } = await supabase
-    .from(moduleId)
+    .from(resolveInvoiceStorageTable(moduleId, MODULES[moduleId]?.table || moduleId))
     .select('*')
     .eq('id', recordId)
     .maybeSingle();

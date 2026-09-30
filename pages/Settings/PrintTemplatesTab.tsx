@@ -299,11 +299,10 @@ const PrintTemplatesTab: React.FC = () => {
     [currentScope, loadingRolePermissions, rolePermissions, selectedModuleId],
   );
   const systemFieldOptions = useMemo(
-    () =>
-      loadingRolePermissions
-        ? []
-        : currentScope === "list"
-          ? (MODULES[selectedModuleId]
+    () => {
+      if (loadingRolePermissions) return [];
+      const moduleOptions = currentScope === "list"
+        ? (MODULES[selectedModuleId]
               ? buildListPrintableFields(
                   MODULES[selectedModuleId],
                   canViewSelectedModuleField,
@@ -315,10 +314,29 @@ const PrintTemplatesTab: React.FC = () => {
               group: "ستون‌های لیست",
               kind: "record" as const,
             }))
-          : filterSystemTemplateFieldOptions(
+        : filterSystemTemplateFieldOptions(
               getSystemTemplateFieldOptions(selectedModuleId),
               canViewSelectedModuleField,
-            ),
+            );
+      const variableOptions = filterPrintTemplateVariableOptions(
+        getPrintTemplateVariables(selectedModuleId).filter((item) => {
+          const scopes = item.scopes?.length ? item.scopes : ["record", "list"];
+          return scopes.includes(currentScope);
+        }),
+        canViewSelectedModuleField,
+      ).map((item) => ({
+        key: item.value,
+        label: item.label,
+        group: item.group,
+        kind: item.kind === 'block' ? 'table' as const : 'record' as const,
+      }));
+      const seen = new Set<string>();
+      return [...moduleOptions, ...variableOptions].filter((item) => {
+        if (seen.has(item.key)) return false;
+        seen.add(item.key);
+        return true;
+      });
+    },
     [currentScope, loadingRolePermissions, rolePermissions, selectedModuleId],
   );
   const filteredSystemFieldOptions = useMemo(() => {

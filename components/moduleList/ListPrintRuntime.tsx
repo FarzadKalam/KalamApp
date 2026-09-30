@@ -39,6 +39,7 @@ const ListPrintRuntime: React.FC<ListPrintRuntimeProps> = ({
     rows,
     printableFields,
     relationOptions,
+    canViewField,
   });
   const generateFinalPdfPreview = useCallback(
     (onProgress: (progress: { percent: number; label: string }) => void) =>

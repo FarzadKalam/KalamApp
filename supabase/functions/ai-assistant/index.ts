@@ -87,7 +87,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'ai-assistant-2026-09-23-durable-image-jobs';
+const FUNCTION_BUILD = 'ai-assistant-2026-09-30-reliable-image-worker';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 const DEFAULT_AI_MODEL = '';
@@ -98,7 +98,12 @@ const PROVIDER_REQUEST_TIMEOUT_MS = 45000;
 // normal request timeout; only abort when the provider stays silent.
 const STREAM_PROVIDER_INACTIVITY_TIMEOUT_MS = 90000;
 const STREAM_HEARTBEAT_INTERVAL_MS = 15000;
-const IMAGE_PROVIDER_TIMEOUT_MS = 120000;
+// Image generation is handled by the dedicated durable worker. Keep enough
+// time for slower providers, while leaving a buffer for storage and finalizing
+// the job before the worker's own deadline.
+const IMAGE_PROVIDER_TIMEOUT_MS = 10 * 60 * 1000;
+const AI_IMAGE_JOB_LEASE_SECONDS = 15 * 60;
+const MAX_AI_IMAGE_JOB_ATTEMPTS = 12;
 const LONG_MEDIA_PROVIDER_TIMEOUT_MS = 45000;
 const IMAGE_STATUS_STALE_MS = 180000;
 const IMAGE_STATUS_HARD_TIMEOUT_MS = 1800000;
@@ -10671,8 +10676,26 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
   });
 };
 
-const handleProcessAiImageJobs = async (supabaseUrl: string, serviceRoleKey: string) => {
-  const claimedRaw = await restRpc(supabaseUrl, serviceRoleKey, 'claim_ai_image_generation_job', { p_lease_seconds: 240 });
+const isNonRetryableImageFailure = (metadata: any) => {
+  const status = Number(metadata?.provider_status || 0);
+  if ([400, 401, 403, 404, 422].includes(status)) return true;
+  const detail = String(metadata?.error || metadata?.failed_note || '').toLowerCase();
+  return detail.includes('insufficient credit')
+    || detail.includes('remaining balance')
+    || detail.includes('کلید مرکزی ai')
+    || detail.includes('مدل فعال در تنظیمات سازمان پیدا نشد')
+    || detail.includes('endpoint تولید تصویر avalai را پشتیبانی نمی‌کند');
+};
+
+const getAiImageRetryDelayMs = (attempts: number) => {
+  const boundedAttempts = Math.max(1, Math.min(attempts, 6));
+  return Math.min(30 * 60 * 1000, 30_000 * (2 ** (boundedAttempts - 1)));
+};
+
+const handleClaimedAiImageJob = async (supabaseUrl: string, serviceRoleKey: string) => {
+  const claimedRaw = await restRpc(supabaseUrl, serviceRoleKey, 'claim_ai_image_generation_job', {
+    p_lease_seconds: AI_IMAGE_JOB_LEASE_SECONDS,
+  });
   const job = Array.isArray(claimedRaw) ? claimedRaw[0] : claimedRaw;
   if (!job?.id) return json(200, { success: true, processed: 0, reason: 'no_pending_jobs' });
 
@@ -10720,37 +10743,133 @@ const handleProcessAiImageJobs = async (supabaseUrl: string, serviceRoleKey: str
     const metadata = messageRows[0]?.metadata || {};
     const completed = metadata?.status === 'completed' && metadata?.pending_status === false;
     const attempts = Number(job.attempts || 1);
-    await restPatch(supabaseUrl, serviceRoleKey, 'ai_image_generation_jobs', {
-      id: `eq.${job.id}`,
-      status: 'eq.running',
-    }, completed ? {
-      status: 'completed',
-      completed_at: new Date().toISOString(),
-      locked_at: null,
-      updated_at: new Date().toISOString(),
-      last_error: null,
-    } : {
-      status: attempts >= 6 ? 'failed' : 'pending',
-      available_at: new Date(Date.now() + Math.min(900, 30 * (2 ** Math.min(attempts, 4))) * 1000).toISOString(),
-      locked_at: null,
-      updated_at: new Date().toISOString(),
-      last_error: String(metadata?.error || metadata?.failed_note || 'پردازش تصویر کامل نشد.').slice(0, 1000),
-    });
-    return json(200, { success: true, processed: 1, status: completed ? 'completed' : attempts >= 6 ? 'failed' : 'requeued', jobId: job.id });
+    if (completed) {
+      await restPatch(supabaseUrl, serviceRoleKey, 'ai_image_generation_jobs', {
+        id: `eq.${job.id}`,
+        status: 'eq.running',
+      }, {
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        locked_at: null,
+        updated_at: new Date().toISOString(),
+        last_error: null,
+      });
+      return json(200, { success: true, processed: 1, status: 'completed', jobId: job.id });
+    }
+
+    const failureDetail = String(metadata?.error || metadata?.failed_note || 'پردازش تصویر کامل نشد.').slice(0, 1000);
+    const nonRetryable = isNonRetryableImageFailure(metadata);
+    const shouldFail = attempts >= MAX_AI_IMAGE_JOB_ATTEMPTS || nonRetryable;
+    if (shouldFail) {
+      const failureMessage = nonRetryable
+        ? 'ساخت تصویر انجام نشد؛ سرویس تصویر این درخواست را قابل اجرا ندانست. جزئیات در همین پیام ثبت شده است.'
+        : 'ساخت تصویر پس از چند تلاش پایدار کامل نشد. درخواست حذف نشده و می‌توانید آن را دوباره ارسال کنید.';
+      const failedMetadata = {
+        ...metadata,
+        pending_status: false,
+        status: 'failed',
+        failed: true,
+        manual_recheck_only: false,
+        error: metadata?.error || 'image_generation_attempts_exhausted',
+        failed_note: metadata?.failed_note || failureMessage,
+        background_task: {
+          ...(metadata?.background_task || {}),
+          status: 'failed',
+          failed_at: new Date().toISOString(),
+          attempts,
+        },
+      };
+      await Promise.all([
+        restPatch(supabaseUrl, serviceRoleKey, 'ai_image_generation_jobs', {
+          id: `eq.${job.id}`,
+          status: 'eq.running',
+        }, {
+          status: 'failed',
+          completed_at: new Date().toISOString(),
+          locked_at: null,
+          updated_at: new Date().toISOString(),
+          last_error: failureDetail,
+        }),
+        restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', {
+          id: `eq.${job.assistant_message_id}`,
+          org_id: `eq.${job.org_id}`,
+        }, {
+          content: metadata?.failed_note || failureMessage,
+          metadata: failedMetadata,
+        }),
+      ]);
+      return json(200, { success: false, processed: 1, status: 'failed', jobId: job.id });
+    }
+
+    const retryAt = new Date(Date.now() + getAiImageRetryDelayMs(attempts)).toISOString();
+    const retryMessage = 'ساخت تصویر در حال تلاش مجدد است؛ درخواست شما محفوظ مانده و پس از دریافت نتیجه، همین پیام به خروجی نهایی تبدیل می‌شود.';
+    const retryMetadata = {
+      ...metadata,
+      pending_status: true,
+      status: 'processing',
+      failed: false,
+      delayed: false,
+      manual_recheck_only: false,
+      error: null,
+      retry_error: failureDetail,
+      background_task: {
+        ...(metadata?.background_task || {}),
+        status: 'queued',
+        retry_at: retryAt,
+        attempts,
+      },
+    };
+    await Promise.all([
+      restPatch(supabaseUrl, serviceRoleKey, 'ai_image_generation_jobs', {
+        id: `eq.${job.id}`,
+        status: 'eq.running',
+      }, {
+        status: 'pending',
+        available_at: retryAt,
+        locked_at: null,
+        updated_at: new Date().toISOString(),
+        last_error: failureDetail,
+      }),
+      restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', {
+        id: `eq.${job.assistant_message_id}`,
+        org_id: `eq.${job.org_id}`,
+      }, {
+        content: retryMessage,
+        metadata: retryMetadata,
+      }),
+    ]);
+    return json(200, { success: true, processed: 1, status: 'requeued', jobId: job.id });
   } catch (error: any) {
     const attempts = Number(job.attempts || 1);
+    const shouldFail = attempts >= MAX_AI_IMAGE_JOB_ATTEMPTS;
     await restPatch(supabaseUrl, serviceRoleKey, 'ai_image_generation_jobs', {
       id: `eq.${job.id}`,
       status: 'eq.running',
     }, {
-      status: attempts >= 6 ? 'failed' : 'pending',
-      available_at: new Date(Date.now() + Math.min(900, 30 * (2 ** Math.min(attempts, 4))) * 1000).toISOString(),
+      status: shouldFail ? 'failed' : 'pending',
+      ...(shouldFail ? { completed_at: new Date().toISOString() } : { available_at: new Date(Date.now() + getAiImageRetryDelayMs(attempts)).toISOString() }),
       locked_at: null,
       updated_at: new Date().toISOString(),
       last_error: String(error?.message || error || 'پردازش تصویر ناموفق بود.').slice(0, 1000),
     }).catch(() => []);
     console.error('ai image job failed', job.id, error);
-    return json(200, { success: false, processed: 1, status: attempts >= 6 ? 'failed' : 'requeued', jobId: job.id });
+    return json(200, { success: false, processed: 1, status: shouldFail ? 'failed' : 'requeued', jobId: job.id });
+  }
+};
+
+const handleProcessAiImageJobs = async (supabaseUrl: string, serviceRoleKey: string) => {
+  const leaseRaw = await restRpc(supabaseUrl, serviceRoleKey, 'acquire_ai_image_worker_lease', {
+    p_lease_seconds: 17 * 60,
+  });
+  const leaseToken = typeof leaseRaw === 'string' ? leaseRaw : null;
+  if (!leaseToken) return json(200, { success: true, processed: 0, reason: 'image_worker_already_active' });
+
+  try {
+    return await handleClaimedAiImageJob(supabaseUrl, serviceRoleKey);
+  } finally {
+    await restRpc(supabaseUrl, serviceRoleKey, 'release_ai_image_worker_lease', {
+      p_lease_token: leaseToken,
+    }).catch((error) => console.error('Could not release AI image worker lease', error));
   }
 };
 
@@ -13591,7 +13710,7 @@ Deno.serve(async (req: Request) => {
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();
     const isInternalImageWorker = action === 'process_ai_image_jobs'
       && token === serviceRoleKey
-      && req.headers.get('x-kalam-internal') === 'workflow-interval-runner';
+      && ['ai-image-worker', 'workflow-interval-runner'].includes(String(req.headers.get('x-kalam-internal') || ''));
     if (isInternalImageWorker) return await handleProcessAiImageJobs(supabaseUrl, serviceRoleKey);
     if (!token) return json(401, { success: false, message: 'نشست شما معتبر نیست. دوباره وارد حساب کاربری شوید.' });
 

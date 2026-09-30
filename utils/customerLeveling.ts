@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getResolvedCurrentOrgId, loadScopedCompanySettings } from './companySettings';
 import { loadScopedIntegrationSettings } from './integrationSettings';
+import { resolveInvoiceModuleIdForRecord } from './invoiceModuleRouting';
 
 type CustomerRank = 'normal' | 'silver' | 'gold' | 'vip';
 
@@ -502,7 +503,7 @@ const syncCustomerLevelsBatch = async ({
 
   const { data: invoices, error: invoicesError } = await supabase
     .from('invoices')
-    .select('customer_id, status, total_invoice_amount, invoice_date, created_at, payments, invoiceItems')
+    .select('customer_id, status, total_invoice_amount, invoice_date, created_at, payments, invoiceItems, taxpayer_invoice_subject, taxpayer_invoice_pattern, source_invoice_id')
     .in('customer_id', ids);
 
   if (invoicesError) throw invoicesError;
@@ -511,6 +512,9 @@ const syncCustomerLevelsBatch = async ({
   ids.forEach((id) => byCustomer.set(id, []));
 
   (invoices || []).forEach((row: any) => {
+    // برگشت فروش خرید جدید برای رتبه‌بندی مشتری نیست؛ این رکوردها در همان
+    // جدول فاکتور قرار دارند و باید پیش از محاسبهٔ آمار مشتری تفکیک شوند.
+    if (resolveInvoiceModuleIdForRecord('invoices', row) !== 'invoices') return;
     const id = String(row?.customer_id || '');
     if (!id || !byCustomer.has(id)) return;
     byCustomer.get(id)!.push(row);

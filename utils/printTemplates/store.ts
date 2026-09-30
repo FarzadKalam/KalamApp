@@ -19,6 +19,7 @@ import { getFieldLabelFa } from "../fieldLabel";
 import { getCanonicalModuleFields } from "../recordVariableCatalog";
 import { getPrintVariableProviderOptions } from "./variableProviders";
 import { isPrintableModuleField } from "./printableFields";
+import { buildModulePrintFieldCatalog, isPrintableTableBlock } from './printFieldCatalog';
 
 export const PRINT_TEMPLATES_CONNECTION_TYPE = "print_templates";
 const PRINT_TEMPLATES_LOCAL_KEY = "kalamapp.print_templates.v1";
@@ -81,6 +82,8 @@ export interface SystemTemplateFieldOption {
   group: string;
   kind: "record" | "table";
   blockId?: string;
+  /** Parent table key for a table column; retained for legacy selection migration. */
+  parentKey?: string;
   columnKey?: string;
 }
 
@@ -408,6 +411,16 @@ export const getModuleTitle = (
 const buildInvoiceFooterTemplate = () =>
   buildDefaultFooterTemplateForModule("invoices");
 
+const getPrintBlockColumnLabel = (moduleId: string, blockId: string, key: string, fallback: string) => {
+  const module = MODULES[moduleId];
+  const block = module?.blocks?.find((item: any) => String(item?.id || '') === String(blockId || ''));
+  const column = block?.tableColumns?.find((item: any) => String(item?.key || '') === String(key || ''));
+  return getFieldLabelFa(
+    { ...column, key, labels: column?.labels || { fa: column?.title || fallback } },
+    { moduleId, fallback },
+  );
+};
+
 const buildOfficialLetterHeaderTemplate = () =>
   `
 <div style="width:100%; direction:rtl; color:#111827; font-size:12px; font-family:inherit;">
@@ -625,7 +638,7 @@ const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
   const header = columns
     .map(
       (column) =>
-        `<th style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; overflow-wrap:anywhere;">${column.title}</th>`,
+        `<th style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; overflow-wrap:anywhere;">${getPrintBlockColumnLabel(moduleId, blockId, column.key, column.title)}</th>`,
     )
     .join("");
   const row = columns
@@ -952,10 +965,7 @@ const buildBlockOptions = (moduleId: string): PrintTemplateVariableOption[] => {
   if (!module) return [];
 
   return module.blocks
-    .filter(
-      (block) =>
-        block.type === BlockType.TABLE || block.type === BlockType.GRID_TABLE,
-    )
+    .filter(isPrintableTableBlock)
     .map((block) => ({
       label: block.titles?.fa || block.id,
       value: `block.${block.id}`,
@@ -1352,47 +1362,15 @@ export const buildSystemTemplateFieldOptionsForModule = (
   module: any,
 ): SystemTemplateFieldOption[] => {
   if (!module) return [];
-
-  const recordFields: SystemTemplateFieldOption[] = (module.fields || [])
-    .filter((field: any) => field?.key)
-    .filter((field: any) => isPrintableModuleField(module, field))
-    .map((field: any) => ({
-      key: `record.${field.key}`,
-      label: field.labels?.fa || field.key,
-      group: getFieldGroupLabel(module, field),
-      kind: "record" as const,
-    }));
-
-  const tableColumns: SystemTemplateFieldOption[] = (module.blocks || [])
-    .filter(
-      (block: any) =>
-        block?.id &&
-        (block.type === BlockType.TABLE || block.type === BlockType.GRID_TABLE),
-    )
-    .flatMap((block: any) => {
-      const blockTitle = block.titles?.fa || block.id;
-      const group = `جدول: ${blockTitle}`;
-      const baseOption: SystemTemplateFieldOption = {
-        key: `block.${block.id}`,
-        label: blockTitle,
-        group,
-        kind: "table" as const,
-        blockId: block.id,
-      };
-      const columns = (block.tableColumns || [])
-        .filter((column: any) => column?.key)
-        .map((column: any) => ({
-          key: `block.${block.id}.${column.key}`,
-          label: `${column.title || column.key}`,
-          group,
-          kind: "table" as const,
-          blockId: block.id,
-          columnKey: column.key,
-        }));
-      return [baseOption, ...columns];
-    });
-
-  const merged = [...recordFields, ...tableColumns];
+  const merged = buildModulePrintFieldCatalog({ moduleConfig: module }).map((field) => ({
+    key: field.key,
+    label: field.label,
+    group: field.group,
+    kind: field.kind === 'table' ? 'table' as const : 'record' as const,
+    blockId: field.blockId,
+    parentKey: field.parentKey,
+    columnKey: field.parentKey ? field.key.split('.').slice(2).join('.') : undefined,
+  }));
   const seen = new Set<string>();
   return merged.filter((item) => {
     if (seen.has(item.key)) return false;
@@ -1757,6 +1735,26 @@ export const normalizeDynamicBlockTablesHtml = (
         "table[data-print-block]",
       ) as HTMLTableElement | null;
       if (!canonicalTable) return;
+
+      // Canonical templates intentionally keep the layout, while labels come
+      // from the effective tenant module schema. This keeps renamed fields and
+      // column labels consistent in every system/manual template.
+      const canonicalBlock = MODULES[moduleId]?.blocks?.find(
+        (candidate: any) => String(candidate?.id || '') === blockId,
+      );
+      const canonicalHeader = canonicalTable.tHead?.rows?.[0];
+      if (canonicalHeader && Array.isArray(canonicalBlock?.tableColumns)) {
+        Array.from(canonicalHeader.cells || []).forEach((cell, index) => {
+          const column = canonicalBlock.tableColumns[index - 1];
+          if (index <= 0 || !column) return;
+          cell.textContent = getPrintBlockColumnLabel(
+            moduleId,
+            blockId,
+            String(column?.key || ''),
+            String(column?.title || column?.key || ''),
+          );
+        });
+      }
 
       const borderColor =
         table.getAttribute("data-border-color") ||

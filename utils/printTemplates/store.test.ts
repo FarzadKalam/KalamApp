@@ -10,6 +10,7 @@ import {
   normalizeDynamicBlockTablesHtml,
 } from './store';
 import { BlockType, FieldLocation, FieldType } from '../../types';
+import { expandLegacyTableSelection } from './printFieldCatalog';
 
 describe('print template store grouping', () => {
   it('groups billboard record fields by general and module sections', () => {
@@ -60,6 +61,33 @@ describe('print template store grouping', () => {
     };
 
     expect(buildSystemTemplateFieldOptionsForModule(runtimeModule).map((item) => item.key)).toEqual(['record.name']);
+  });
+
+  it('migrates a parent-only package table selection to its visible columns', () => {
+    const runtimeModule = {
+      id: 'bundle_print_test',
+      fields: [],
+      blocks: [{
+        id: 'products',
+        titles: { fa: 'اقلام پکیج' },
+        type: BlockType.TABLE,
+        tableColumns: [
+          { key: 'product_id', title: 'کالا / خدمت', type: FieldType.RELATION },
+          { key: 'quantity', title: 'تعداد', type: FieldType.NUMBER },
+          { key: 'total_price', title: 'مبلغ نهایی', type: FieldType.PRICE },
+        ],
+      }],
+    };
+
+    const fields = buildSystemTemplateFieldOptionsForModule(runtimeModule);
+    expect(fields.find((field) => field.key === 'block.products.quantity')?.parentKey)
+      .toBe('block.products');
+    expect(expandLegacyTableSelection(['block.products'], fields)).toEqual([
+      'block.products',
+      'block.products.product_id',
+      'block.products.quantity',
+      'block.products.total_price',
+    ]);
   });
 
   it('exposes list and operational summary variables for operational financial overview templates', () => {

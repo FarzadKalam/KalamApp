@@ -1,3 +1,5 @@
+import { supabase } from '../../supabaseClient';
+
 const PRINT_FIELD_PREFERENCES_KEY = 'kalamapp.print_field_preferences.v2';
 const LEGACY_PRINT_FIELD_PREFERENCES_KEY = 'kalamapp.print_field_preferences.v1';
 
@@ -109,4 +111,67 @@ export const savePrintFieldPreference = ({
   const store = readStore(PRINT_FIELD_PREFERENCES_KEY);
   store[key] = normalizeKeys(selectedFieldKeys);
   writeStore(store);
+};
+
+export const loadPrintFieldPreferenceFromServer = async ({
+  orgId,
+  moduleId,
+  templateId,
+  scope,
+}: {
+  orgId?: string | null;
+  moduleId: string;
+  templateId: string;
+  scope: PrintFieldScope;
+}): Promise<string[] | null> => {
+  const normalizedOrgId = String(orgId || '').trim();
+  if (!normalizedOrgId) return null;
+  const { data, error } = await supabase
+    .from('print_field_preferences')
+    .select('selected_field_keys')
+    .eq('org_id', normalizedOrgId)
+    .eq('module_id', moduleId)
+    .eq('template_id', templateId)
+    .eq('scope', scope)
+    .maybeSingle();
+  if (error) {
+    // Keep compatibility with installations before the migration. The caller
+    // still has the scoped browser fallback while the server is upgraded.
+    console.warn('Load server print field preference failed', error);
+    return null;
+  }
+  return Array.isArray(data?.selected_field_keys)
+    ? normalizeKeys(data.selected_field_keys)
+    : null;
+};
+
+export const savePrintFieldPreferenceToServer = async ({
+  orgId,
+  moduleId,
+  templateId,
+  scope,
+  selectedFieldKeys,
+}: {
+  orgId?: string | null;
+  moduleId: string;
+  templateId: string;
+  scope: PrintFieldScope;
+  selectedFieldKeys: string[];
+}) => {
+  const normalizedOrgId = String(orgId || '').trim();
+  if (!normalizedOrgId) return false;
+  const { error } = await supabase
+    .from('print_field_preferences')
+    .upsert({
+      org_id: normalizedOrgId,
+      module_id: String(moduleId || '').trim(),
+      template_id: String(templateId || '').trim(),
+      scope,
+      selected_field_keys: normalizeKeys(selectedFieldKeys),
+    }, { onConflict: 'org_id,module_id,template_id,scope' });
+  if (error) {
+    console.warn('Save server print field preference failed', error);
+    return false;
+  }
+  return true;
 };

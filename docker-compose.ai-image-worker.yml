@@ -1,0 +1,29 @@
+# همراه docker-compose.yml اصلی اجرا می‌شود. این worker مستقیم با Edge Runtime
+# اجرا می‌شود تا محدودیت ۶۰ ثانیه‌ای gateway عمومی روی ساخت تصویر اعمال نشود.
+services:
+  ai-image-worker:
+    container_name: kalamapp-ai-image-worker
+    image: supabase/edge-runtime:v1.70.3
+    restart: unless-stopped
+    volumes:
+      - ./volumes/functions:/home/deno/functions:Z
+      - deno-cache:/root/.cache/deno
+    depends_on:
+      analytics:
+        condition: service_healthy
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      SUPABASE_URL: http://kong:8000
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      AVALAI_API_KEY: ${AVALAI_API_KEY:-}
+      AVALAI_BASE_URL: ${AVALAI_BASE_URL:-https://api.avalai.ir/v1}
+      AVALAI_FALLBACK_BASE_URLS: ${AVALAI_FALLBACK_BASE_URLS:-https://api.avalapis.ir/v1}
+      AI_MODEL: ${AI_MODEL:-gpt-4o-mini}
+      VERIFY_JWT: "${FUNCTIONS_VERIFY_JWT}"
+    command:
+      [
+        "start",
+        "--main-service",
+        "/home/deno/functions/ai-assistant"
+      ]

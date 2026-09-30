@@ -8,6 +8,7 @@ const PRINT_TEMPLATE_ALLOWED_ATTRIBUTES = [
 ];
 
 const IMAGE_VARIABLE_PATHS = new Set(['company.logo_url']);
+const EMPTY_PRINT_IMAGE_DATA_URL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
 
 const escapeHtmlAttribute = (value: string) => value
   .replace(/&/g, '&amp;')
@@ -62,7 +63,9 @@ export const renderPrintTemplateHtml = ({
     // Inside an authored <img src="{{...}}"> we only insert the URL.
     if (IMAGE_VARIABLE_PATHS.has(key)) {
       if (isImageSourceAttribute(templateHtml, offset)) {
-        return escapeHtmlAttribute(resolvedValue);
+        // Never leave src="" behind: browsers render the alt text and a
+        // broken-image glyph, which is especially visible in generated PDFs.
+        return escapeHtmlAttribute(resolvedValue || EMPTY_PRINT_IMAGE_DATA_URL);
       }
       return renderVariableImage(key, resolvedValue);
     }

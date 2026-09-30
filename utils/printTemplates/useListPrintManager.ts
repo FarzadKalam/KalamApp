@@ -20,6 +20,7 @@ import {
 } from "../listPrintExport";
 import {
   buildDefaultTemplatesForModule,
+  getPrintTemplateVariables,
   getPrintPaperSizeCss,
   getModuleTitle,
   isPrintTemplateAvailableForModule,
@@ -43,6 +44,7 @@ import {
   type PdfGenerationProgress,
 } from "./printAsPdf";
 import { normalizeRenderedImages } from "./normalizeRenderedImages";
+import { renderPrintTemplateHtml } from './templateRenderer';
 import { printInIframe } from "./printInIframe";
 import { sanitizeSelectedPrintFieldKeys } from "./fieldAccess";
 import {
@@ -52,7 +54,9 @@ import {
 } from "./printableFields";
 import {
   loadPrintFieldPreference,
+  loadPrintFieldPreferenceFromServer,
   savePrintFieldPreference,
+  savePrintFieldPreferenceToServer,
 } from "./fieldPreferences";
 import { hasRenderablePrintFooterHtml } from "./footerLayout";
 import { buildNativeCustomPrintFlowHtml } from "./nativePrintFlow";
@@ -132,6 +136,7 @@ interface UseListPrintManagerProps {
   extraSystemValues?: Record<string, any>;
   contextTitle?: string;
   contextValues?: Record<string, any>;
+  canViewField?: (fieldKey: string) => boolean;
 }
 
 export const useListPrintManager = ({
@@ -144,6 +149,7 @@ export const useListPrintManager = ({
   extraSystemValues = {},
   contextTitle = "",
   contextValues = {},
+  canViewField,
 }: UseListPrintManagerProps) => {
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
@@ -378,16 +384,31 @@ export const useListPrintManager = ({
     [companyInfo?.print_letterheads, selectedStoredTemplate?.letterheadId],
   );
 
-  const printableFieldsForTemplate = useMemo(
-    () =>
-      (printableFields || []).map((field) => ({
+  const printableFieldsForTemplate = useMemo(() => {
+    const moduleFields = (printableFields || []).map((field) => ({
         ...field,
         hasValue: (rows || []).some((row: any) =>
           hasMeaningfulPrintValue(row?.[field.key], field.key),
         ),
-      })),
-    [printableFields, rows],
-  );
+      }));
+    const moduleKeys = new Set(moduleFields.map((field) => String(field.key || '').trim()));
+    const systemFields = getPrintTemplateVariables(moduleId)
+      .filter((item) => !item.scopes || item.scopes.includes('list'))
+      .filter((item) => String(item.value || '').startsWith('company.') || String(item.value || '').startsWith('system.'))
+      .filter((item) => canViewField?.(String(item.value || '').replace(/^company\./, '')) !== false)
+      .map((item) => ({
+        key: String(item.value || '').trim(),
+        label: String(item.label || item.value || ''),
+        type: 'text',
+        group: String(item.group || 'سیستم'),
+        printSection: 'system' as const,
+        defaultSelected: true,
+        hasValue: true,
+        options: [],
+      }))
+      .filter((field) => field.key && !moduleKeys.has(field.key));
+    return [...moduleFields, ...systemFields];
+  }, [canViewField, moduleId, printableFields, rows]);
   const isCatalogTemplate = useMemo(
     () =>
       String(selectedStoredTemplate?.id || "").includes("_catalog_a4_portrait"),
@@ -486,6 +507,35 @@ export const useListPrintManager = ({
     printableFieldsForTemplate,
     selectedStoredTemplate?.id,
     selectedStoredTemplate?.selectedFieldKeys,
+    selectedTemplateId,
+    userPreferencesReady,
+  ]);
+
+  useEffect(() => {
+    if (!selectedTemplateId || !userPreferencesReady || !currentOrgId || !printableFieldsForTemplate.length) return;
+    let active = true;
+    void loadPrintFieldPreferenceFromServer({
+      orgId: currentOrgId,
+      moduleId,
+      templateId: selectedStoredTemplate?.id || selectedTemplateId,
+      scope: 'list',
+    }).then((serverKeys) => {
+      if (!active || !Array.isArray(serverKeys)) return;
+      setSelectedPrintFields((prev) => ({
+        ...prev,
+        [selectedTemplateId]: resolveEffectivePrintFieldKeys({
+          fields: printableFieldsForTemplate,
+          selectedKeys: serverKeys,
+          hasExplicitSelection: true,
+        }),
+      }));
+    });
+    return () => { active = false; };
+  }, [
+    currentOrgId,
+    moduleId,
+    printableFieldsForTemplate,
+    selectedStoredTemplate?.id,
     selectedTemplateId,
     userPreferencesReady,
   ]);
@@ -840,7 +890,7 @@ export const useListPrintManager = ({
 
   const selectedColumns = useMemo(() => {
     const resolved = selectedFields.filter(
-      (field) => field.printSection !== "context",
+      (field) => field.printSection !== "context" && field.printSection !== "system",
     );
     if (!isCatalogTemplate) return resolved;
 
@@ -919,6 +969,18 @@ export const useListPrintManager = ({
       pageRows: any[],
       rowOffset: number,
     ) => {
+      const normalizedPath = String(path || '').trim();
+      const hasExplicitSelection = Object.prototype.hasOwnProperty.call(
+        selectedPrintFields,
+        selectedTemplateId,
+      );
+      if (
+        hasExplicitSelection &&
+        printableFieldsForTemplate.some((field) => field.key === normalizedPath) &&
+        !selectedFields.some((field) => field.key === normalizedPath)
+      ) {
+        return '';
+      }
       if (path === "system.list_title")
         return moduleConfig?.titles?.fa || moduleId;
       if (path === "system.selected_count") return toPersianNumber(rows.length);
@@ -992,6 +1054,12 @@ export const useListPrintManager = ({
               "",
           );
         }
+        if (key === 'logo_url') {
+          return buildPrintImageUrl(
+            companyInfo?.logo_url || companyInfo?.logo || companyInfo?.icon_url || '',
+            'printLogo',
+          );
+        }
         return String(companyInfo?.[key] || "");
       }
       return "";
@@ -1008,7 +1076,11 @@ export const useListPrintManager = ({
       renderedSummaryTable,
       rows.length,
       selectedColumns,
+      selectedFields,
+      selectedPrintFields,
+      selectedTemplateId,
       summary?.values,
+      printableFieldsForTemplate,
     ],
   );
 
@@ -1028,12 +1100,11 @@ export const useListPrintManager = ({
               "{{system.list_context_table}}$1",
             )
           : rawHtml;
-      const filled = htmlWithContext.replace(
-        /{{\s*([a-zA-Z0-9_.]+)\s*}}/g,
-        (_match, key: string) => {
-          return resolveValue(key, pageIndex, pageCount, pageRows, rowOffset);
-        },
-      );
+      const filled = renderPrintTemplateHtml({
+        templateHtml: htmlWithContext,
+        resolveVariableValue: (key) =>
+          resolveValue(key, pageIndex, pageCount, pageRows, rowOffset),
+      });
       return normalizeRenderedImages(
         DOMPurify.sanitize(filled, {
           ADD_TAGS: ["colgroup", "col"],
@@ -1226,6 +1297,13 @@ export const useListPrintManager = ({
         moduleId,
         templateId: selectedStoredTemplate?.id || selectedTemplateId,
         scope: "list",
+        selectedFieldKeys: selectedKeys,
+      });
+      await savePrintFieldPreferenceToServer({
+        orgId: preferenceIdentity.orgId,
+        moduleId,
+        templateId: selectedStoredTemplate?.id || selectedTemplateId,
+        scope: 'list',
         selectedFieldKeys: selectedKeys,
       });
       return savePrintRenderPreference({

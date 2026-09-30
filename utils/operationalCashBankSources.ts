@@ -1,11 +1,12 @@
 import { supabase as sharedSupabase } from '../supabaseClient';
 import { resolveOperationalCashBankPaymentType } from './cashBankPaymentType';
 import { transformModulePayloadForSave } from './moduleFormRuntime';
+import { resolveInvoiceModuleIdForRecord } from './invoiceModuleRouting';
 
 export type OperationalCashBankSupabaseClient = typeof sharedSupabase;
 
 export type OperationalCashBankSourceModule = {
-  moduleId: 'invoices' | 'purchase_invoices' | 'expense_documents' | 'employee_advances' | 'payroll_slips';
+  moduleId: 'invoices' | 'purchase_invoices' | 'sales_return_invoices' | 'purchase_return_invoices' | 'expense_documents' | 'employee_advances' | 'payroll_slips';
   table: string;
   operationType: 'receipt' | 'payment';
   dateField: string;
@@ -24,7 +25,18 @@ export const OPERATIONAL_CASH_BANK_SOURCE_MODULES: OperationalCashBankSourceModu
     dateField: 'invoice_date',
     accountField: 'target_account',
     sourceLinkField: 'sales_invoice_id',
-    selectFields: ['id', 'invoice_date', 'customer_id', 'assignee_id', 'payments'],
+    selectFields: ['id', 'invoice_date', 'customer_id', 'assignee_id', 'payments', 'taxpayer_invoice_subject', 'taxpayer_invoice_pattern', 'source_invoice_id'],
+  },
+  {
+    // فاکتور برگشت فروش در همان جدول invoices نگهداری می‌شود، اما از منظر
+    // خزانه یک پرداخت به مشتری است؛ هویت ماژول در metadata حفظ می‌شود.
+    moduleId: 'sales_return_invoices',
+    table: 'invoices',
+    operationType: 'payment',
+    dateField: 'invoice_date',
+    accountField: 'target_account',
+    sourceLinkField: 'sales_invoice_id',
+    selectFields: ['id', 'invoice_date', 'customer_id', 'assignee_id', 'payments', 'taxpayer_invoice_subject', 'taxpayer_invoice_pattern', 'source_invoice_id'],
   },
   {
     moduleId: 'purchase_invoices',
@@ -33,7 +45,18 @@ export const OPERATIONAL_CASH_BANK_SOURCE_MODULES: OperationalCashBankSourceModu
     dateField: 'invoice_date',
     accountField: 'source_account',
     sourceLinkField: 'purchase_invoice_id',
-    selectFields: ['id', 'invoice_date', 'supplier_id', 'assignee_id', 'payments'],
+    selectFields: ['id', 'invoice_date', 'supplier_id', 'assignee_id', 'payments', 'taxpayer_invoice_subject', 'taxpayer_invoice_pattern', 'source_invoice_id'],
+  },
+  {
+    // فاکتور برگشت خرید در همان جدول purchase_invoices نگهداری می‌شود و
+    // دریافت وجه از تأمین‌کننده محسوب می‌شود.
+    moduleId: 'purchase_return_invoices',
+    table: 'purchase_invoices',
+    operationType: 'receipt',
+    dateField: 'invoice_date',
+    accountField: 'source_account',
+    sourceLinkField: 'purchase_invoice_id',
+    selectFields: ['id', 'invoice_date', 'supplier_id', 'assignee_id', 'payments', 'taxpayer_invoice_subject', 'taxpayer_invoice_pattern', 'source_invoice_id'],
   },
   {
     moduleId: 'expense_documents',
@@ -63,6 +86,21 @@ export const OPERATIONAL_CASH_BANK_SOURCE_MODULES: OperationalCashBankSourceModu
     selectFields: ['id', 'period_end', 'employee_id', 'employee:employee_id(related_profile_id)', 'assignee_id', 'payments'],
   },
 ];
+
+/**
+ * ماژول‌های برگشتی با فاکتورهای عادی جدول ذخیره‌سازی مشترک دارند. این فیلتر
+ * مانع از آن می‌شود که بازسازی یا نمایش نقد و بانک، یک پرداخت را دو بار و با
+ * جهت‌های متضاد ثبت کند.
+ */
+export const doesOperationalSourceMatchRecord = (
+  source: OperationalCashBankSourceModule,
+  record: any,
+) => {
+  if (!['invoices', 'purchase_invoices', 'sales_return_invoices', 'purchase_return_invoices'].includes(source.moduleId)) {
+    return true;
+  }
+  return resolveInvoiceModuleIdForRecord(source.table, record) === source.moduleId;
+};
 
 export const OPERATIONAL_CASH_BANK_BATCH_SIZE = 200;
 

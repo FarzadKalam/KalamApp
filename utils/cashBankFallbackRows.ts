@@ -4,6 +4,7 @@ import {
   buildCashBankOperationPayloadFromPaymentRow,
   buildSourceOperationKey,
   collectPaymentAccountIds,
+  doesOperationalSourceMatchRecord,
   fetchAllOperationalRows,
   fetchTreasuryAccountModuleMap,
   getOperationalPaymentRowKeyCandidates,
@@ -42,6 +43,7 @@ export const fetchMissingCashBankFallbackRows = async (
     );
 
     for (const record of records) {
+      if (!doesOperationalSourceMatchRecord(source, record)) continue;
       const recordId = normalizeOperationalText(record?.id);
       if (!recordId) continue;
       const payments = parseOperationalPayments(record?.payments);

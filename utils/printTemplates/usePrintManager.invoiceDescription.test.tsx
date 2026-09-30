@@ -3,6 +3,7 @@ import { act, render, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FieldType } from '../../types';
 import { invoicesConfig } from '../../modules/invoicesConfig';
+import { productBundlesConfig } from '../../modules/productBundlesConfig';
 import { buildDefaultTemplatesForModule, materializeSystemTemplateForCopy } from './store';
 
 const mocks = vi.hoisted(() => ({
@@ -51,6 +52,21 @@ const invoiceRecord = {
 const invoiceRecordWithPayment = {
   ...invoiceRecord,
   payments: [{ date: '2026-07-28', payment_type: 'transfer', amount: 500 }],
+};
+
+const productBundleRecord = {
+  id: 'bundle-test-1',
+  name: 'پکیج آزمایشی',
+  products: [{
+    product_id: 'product-test-1',
+    product_name: 'خدمت آزمایشی',
+    quantity: 2,
+    main_unit: 'عدد',
+    unit_price: 150000,
+    discount: 0,
+    discount_type: 'amount',
+    total_price: 300000,
+  }],
 };
 
 describe('official and unofficial sales invoice descriptions', () => {
@@ -165,6 +181,30 @@ describe('official and unofficial sales invoice descriptions', () => {
       expect(view.container.textContent).toContain('ردیف');
       expect(view.container.textContent).toContain('دریافت‌ها');
       expect(view.container.textContent).toContain('۵۰۰');
+    });
+    view.unmount();
+  }, 15_000);
+
+  it('keeps populated package items in the compact system template after the complete renderer pipeline', async () => {
+    const { result } = renderHook(() => usePrintManager({
+      moduleId: 'product_bundles',
+      data: productBundleRecord,
+      moduleConfig: productBundlesConfig,
+      printableFields: [],
+      formatPrintValue: (_field, value) => String(value ?? ''),
+      canViewField: () => true,
+    }));
+
+    act(() => result.current.openPrintModal());
+    await waitFor(() => expect(result.current.printTemplates.length).toBeGreaterThan(0));
+    act(() => result.current.setSelectedTemplateId('custom:default_product_bundles_compact_a4'));
+    await waitFor(() => expect(result.current.selectedTemplateId).toBe('custom:default_product_bundles_compact_a4'));
+
+    const view = render(<>{result.current.renderPrintCard()}</>);
+    await waitFor(() => {
+      expect(view.container.querySelector('table[data-print-block="products"]')).not.toBeNull();
+      expect(view.container.textContent).toContain('خدمت آزمایشی');
+      expect(view.container.textContent).toContain('۳۰۰٬۰۰۰');
     });
     view.unmount();
   }, 15_000);

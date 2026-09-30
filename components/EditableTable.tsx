@@ -54,6 +54,7 @@ import { buildBillboardInvoiceItemTitle } from '../utils/invoicePresentation';
 import { getFinancialStatusLabelFa } from '../utils/financialValueLabels';
 import { calculatePayrollSlipLineBreakdown } from '../utils/payrollSlipTotals';
 import { notifyOperationalFinancialRefresh } from '../utils/operationalFinancialRefresh';
+import { isReturnInvoiceModuleId, resolveInvoiceStorageTable } from '../utils/invoiceModuleRouting';
 
 const { Text } = Typography;
 
@@ -225,19 +226,27 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const isAnyInvoiceItems = isInvoiceItems || isPurchaseInvoiceItems;
   const isInvoicePayments = (moduleId === 'invoices' || moduleId === 'sales_return_invoices') && block?.id === 'payments';
   const isPurchaseInvoicePayments = (moduleId === 'purchase_invoices' || moduleId === 'purchase_return_invoices') && block?.id === 'payments';
+  const isSalesReturnInvoicePayments = moduleId === 'sales_return_invoices' && block?.id === 'payments';
+  const isPurchaseReturnInvoicePayments = moduleId === 'purchase_return_invoices' && block?.id === 'payments';
   const isExpenseItems = moduleId === 'expense_documents' && block?.id === 'items';
   const isExpensePayments = moduleId === 'expense_documents' && block?.id === 'payments';
   const isEmployeeAdvancePayments = moduleId === 'employee_advances' && block?.id === 'payments';
   const isPayrollLines = moduleId === 'payroll_slips' && block?.id === 'lines';
   const isPayrollPayments = moduleId === 'payroll_slips' && block?.id === 'payments';
   const isAnyInvoicePayments = isInvoicePayments || isPurchaseInvoicePayments;
+  // جهت مالی فاکتورهای برگشتی عکس فاکتورهای عادی است، در حالی که نام کلید
+  // حساب برای سازگاری با داده‌های پیشین حفظ شده است.
+  const isIncomingInvoicePayment = (moduleId === 'invoices' || moduleId === 'purchase_return_invoices') && block?.id === 'payments';
+  const isOutgoingInvoicePayment = (moduleId === 'purchase_invoices' || moduleId === 'sales_return_invoices') && block?.id === 'payments';
+  const invoiceStorageTable = resolveInvoiceStorageTable(moduleId, moduleId);
+  const supportsInvoicePaymentAllocation = isAnyInvoicePayments && !isReturnInvoiceModuleId(moduleId);
   const isAnyDocumentPayments = isAnyInvoicePayments || isExpensePayments;
   const isOperationalPayments = isAnyDocumentPayments || isEmployeeAdvancePayments || isPayrollPayments;
   const isImprovedFinancialEditableTable = isAnyInvoiceItems
     || isOperationalPayments
     || isExpenseItems
     || isPayrollLines;
-  const supportsReceivedChequeSpending = isPurchaseInvoicePayments || isExpensePayments || isEmployeeAdvancePayments || isPayrollPayments;
+  const supportsReceivedChequeSpending = isOutgoingInvoicePayment || isExpensePayments || isEmployeeAdvancePayments || isPayrollPayments;
   const useStackedInvoiceRows = isAnyInvoicePayments;
   const isShelfInventoryBlock = block?.id === 'product_inventory' || block?.id === 'shelf_inventory';
   const isPriceListItems = moduleId === 'price_lists' && block?.id === 'items';
@@ -365,7 +374,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     return generatedKey;
   };
   const shouldDisableInvoicePaymentAccount = (row: any) => {
-    if (!isInvoicePayments) return false;
+    if (!isIncomingInvoicePayment) return false;
     const paymentType = normalizeCashBankPaymentType(row?.payment_type) || '';
     return paymentType === 'barter' || paymentType === 'credit';
   };
@@ -1089,7 +1098,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       if (key === 'spent_cheque_id' && (paymentType !== 'cheque' || !row?.use_existing_received_cheque)) return false;
       if (key === 'use_existing_received_cheque' && paymentType !== 'cheque') return false;
       if ((key === 'cheque_id' || key === 'cheque_status') && paymentType !== 'cheque') return false;
-      if (key === 'barter_id' && (paymentType !== 'barter' || isInvoicePayments)) return false;
+      if (key === 'barter_id' && (paymentType !== 'barter' || isIncomingInvoicePayment)) return false;
     }
     return true;
   };
@@ -2078,7 +2087,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   };
 
   const syncInvoiceCustomerStats = async () => {
-    if (!moduleId || moduleId !== 'invoices' || !recordId) return;
+    if (!moduleId || !['invoices', 'sales_return_invoices'].includes(moduleId) || !recordId) return;
     if (!(block?.id === 'payments' || block?.id === 'invoiceItems')) return;
     const { data: invoiceRow, error } = await supabase
       .from('invoices')
@@ -2171,9 +2180,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
         : sum
     ), 0);
 
-    if (moduleId === 'invoices' || moduleId === 'purchase_invoices') {
+    if (isAnyInvoicePayments) {
       const { data: row, error } = await supabase
-        .from(moduleId)
+        .from(invoiceStorageTable)
         .select('total_invoice_amount')
         .eq('id', recordId)
         .maybeSingle();
@@ -2231,7 +2240,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     const normalizedRows = normalizePaymentRows(rows);
     const normalizedPreviousRows = normalizePaymentRows(previousRows);
     const accountField = isInvoicePayments ? 'target_account' : 'source_account';
-    const operationType = isInvoicePayments ? 'receipt' : 'payment';
+    const operationType = isIncomingInvoicePayment ? 'receipt' : 'payment';
     const sourceDateField =
       moduleId === 'expense_documents' ? 'expense_date'
       : moduleId === 'employee_advances' ? 'request_date'
@@ -2239,7 +2248,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       : 'invoice_date';
 
     const { data: sourceHeader, error: sourceError } = await supabase
-      .from(moduleId)
+      .from(invoiceStorageTable)
       .select('*')
       .eq('id', recordId)
       .maybeSingle();
@@ -2800,7 +2809,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         }
       };
 
-      if (isPurchaseInvoicePayments && paymentType !== 'barter' && syncedBarterId && syncedBarterAmount > 0) {
+      if (isOutgoingInvoicePayment && paymentType !== 'barter' && syncedBarterId && syncedBarterAmount > 0) {
         await applyBarterDelta(syncedBarterId, -syncedBarterAmount, {
           last_spend_source_table: moduleId,
           last_spend_source_record_id: recordId,
@@ -2814,7 +2823,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
             barterId: syncedBarterId,
             allocationKey,
             active: false,
-            operationType: isInvoicePayments ? 'receipt' : 'payment',
+            operationType,
             amount,
             rowStatus,
             rowDate: issueDate || sourceHeaderRecord?.invoice_date || null,
@@ -2844,11 +2853,11 @@ const EditableTable: React.FC<EditableTableProps> = ({
         nextRow._auto_cheque = false;
 
         let selectedBarterId = String(row?.barter_id || syncedBarterId || '').trim();
-        const shouldCreateReceivedBarter = isInvoicePayments && rowStatus === 'received' && amount > 0;
-        const shouldApplyPurchaseSpend = isPurchaseInvoicePayments && rowStatus === 'received' && amount > 0;
+        const shouldCreateReceivedBarter = isIncomingInvoicePayment && rowStatus === 'received' && amount > 0;
+        const shouldApplyPurchaseSpend = isOutgoingInvoicePayment && rowStatus === 'received' && amount > 0;
         nextRow._barter_allocation_key = allocationKey;
 
-        if (isInvoicePayments && !shouldCreateReceivedBarter) {
+        if (isIncomingInvoicePayment && !shouldCreateReceivedBarter) {
           if (selectedBarterId) {
             await syncBarterAllocation({
               barterId: selectedBarterId,
@@ -2889,7 +2898,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
           continue;
         }
 
-        if (isInvoicePayments && shouldCreateReceivedBarter && !selectedBarterId) {
+        if (isIncomingInvoicePayment && shouldCreateReceivedBarter && !selectedBarterId) {
           const sourceName = String(sourceHeaderRecord?.name || sourceHeaderRecord?.system_code || '').trim();
           const businessLabel = String(partyBusinessName || '').trim();
           const autoName = businessLabel
@@ -2930,7 +2939,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
           nextRow._auto_barter = true;
         }
 
-        if (isInvoicePayments) {
+        if (isIncomingInvoicePayment) {
           if (!selectedBarterId) {
             throw new Error('برای ثبت دریافت تهاتر، شناسه تهاتر معتبر یافت نشد.');
           }
@@ -3013,7 +3022,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
           continue;
         }
 
-        if (isPurchaseInvoicePayments) {
+        if (isOutgoingInvoicePayment) {
           const previousBarterId = String(row?._barter_synced_id || '').trim();
           const previousSpentAmount = Math.abs(toSafeNumber(row?._barter_synced_amount || 0));
 
@@ -3313,7 +3322,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
       const shouldMarkChequeSpent = operationType === 'payment' && rowStatus !== 'pending';
       const chequePayload = {
-        cheque_type: isInvoicePayments ? 'received' : 'issued',
+        cheque_type: isIncomingInvoicePayment ? 'received' : 'issued',
         status: resolveChequeStatusForPayment({
           operationType,
           paymentStatus: rowStatus,
@@ -3711,18 +3720,18 @@ const EditableTable: React.FC<EditableTableProps> = ({
       const updatePayload: any = { [block.id]: dataToSave };
       let currentInvoiceRow: Record<string, any> | null = null;
       if (
-        (moduleId === 'invoices' || moduleId === 'purchase_invoices') &&
+        (isAnyInvoiceItems || isAnyInvoicePayments) &&
         (block?.id === 'payments' || block?.id === 'invoiceItems')
       ) {
         const { data: fetchedInvoiceRow, error: summarySourceError } = await supabase
-          .from(moduleId)
+          .from(invoiceStorageTable)
           .select('*')
           .eq('id', recordId)
           .maybeSingle();
         if (summarySourceError) throw summarySourceError;
         currentInvoiceRow = fetchedInvoiceRow as Record<string, any> | null;
 
-        if (block?.id === 'payments' && isAnyInvoicePayments && !confirmedAllocations) {
+        if (block?.id === 'payments' && supportsInvoicePaymentAllocation && !confirmedAllocations) {
           const allocationGroupKey = createLocalRowKey();
           const overflowPlan = buildInvoicePaymentOverflowPlan({
             totalAmount: toSafeNumber(currentInvoiceRow?.total_invoice_amount),
@@ -3810,7 +3819,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       let allocatedInvoiceIds: string[] = [];
       if (
         block?.id === 'payments'
-        && isAnyInvoicePayments
+        && supportsInvoicePaymentAllocation
         && pendingInvoicePaymentAllocation
         && confirmedAllocations
         && recordId
@@ -3849,7 +3858,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
           .map((row: any) => String(row?.invoice_id || '').trim())
           .filter(Boolean);
       } else {
-        const { error } = await supabase.from(moduleId).update(updatePayload).eq('id', recordId);
+        const { error } = await supabase.from(invoiceStorageTable).update(updatePayload).eq('id', recordId);
         if (error) throw error;
       }
 
@@ -3867,7 +3876,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       }
 
       if (
-        (moduleId === 'invoices' || moduleId === 'purchase_invoices') &&
+        (isAnyInvoiceItems || isAnyInvoicePayments) &&
         (block?.id === 'payments' || block?.id === 'invoiceItems')
       ) {
         const previousInvoiceRecord = {
@@ -4504,7 +4513,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       || (isAnyInvoiceItems && col.key === 'sub_quantity' && !isManualSubUnit(record?.sub_unit))
       || (isAnyInvoicePayments
         && (
-          ((isInvoicePayments && col.key === 'target_account' && shouldDisableInvoicePaymentAccount(record))
+          ((isIncomingInvoicePayment && col.key === 'target_account' && shouldDisableInvoicePaymentAccount(record))
             || (((isPurchaseInvoicePayments || isExpensePayments) && col.key === 'source_account')
               && normalizeCashBankPaymentType((record as any)?.payment_type) === 'barter'))
         ));
@@ -4629,6 +4638,15 @@ const EditableTable: React.FC<EditableTableProps> = ({
     const deliveryTimeValue = String(record?.delivery_time || '');
     const showInvoiceNote = (isAnyInvoiceItems || isSalesPackageItems || isPriceListItems) && col.key === 'product_id';
     const showDeliveryTime = (isAnyInvoiceItems || isSalesPackageItems || isPriceListItems) && col.key === 'product_id';
+    const showInlineProductMeta = (isSalesPackageItems || isPriceListItems) && col.key === 'product_id';
+    const inlineProductMeta = [
+      (!canViewField || canViewField('description')) && noteValue.trim()
+        ? noteValue.trim()
+        : '',
+      (!canViewField || canViewField('delivery_time')) && deliveryTimeValue.trim()
+        ? `زمان تحویل: ${deliveryTimeValue.trim()}`
+        : '',
+    ].filter(Boolean);
     const sourceShelfColumn = visibleColumns.find((c: any) => c.key === 'source_shelf_id');
     const showInvoiceShelf = isAnyInvoiceItems && !!sourceShelfColumn && col.key === 'product_id';
     const shelfOptions = sourceShelfColumn ? getColumnOptions(sourceShelfColumn, noteRowKey, record) : [];
@@ -4689,6 +4707,13 @@ const EditableTable: React.FC<EditableTableProps> = ({
             recordId={recordId}
             allValues={record}
           />
+          {showInlineProductMeta && inlineProductMeta.length > 0 ? (
+            <div className="mt-1 text-[11px] leading-5 text-gray-500 dark:text-gray-300 whitespace-pre-line">
+              {inlineProductMeta.map((meta, metaIndex) => (
+                <div key={`${noteRowKey}_product_meta_${metaIndex}`}>{meta}</div>
+              ))}
+            </div>
+          ) : null}
         </div>
         {showBulkPriceUnit && (
           <div className="shrink-0 text-[10px] text-gray-400 dark:text-gray-500 whitespace-nowrap">
@@ -5056,7 +5081,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     return col?.title;
   };
   const isPaymentsTable = block?.id === 'payments' && isOperationalPayments;
-  const paymentsActionNounFa = isInvoicePayments ? 'دریافت' : 'پرداخت';
+  const paymentsActionNounFa = isIncomingInvoicePayment ? 'دریافت' : 'پرداخت';
   const isGatewayLockedPaymentRow = (row: any) =>
     isPaymentsTable
     && (
@@ -5552,6 +5577,12 @@ const EditableTable: React.FC<EditableTableProps> = ({
             const payrollLineTotals = isPayrollLines
               ? calculatePayrollSlipLineBreakdown(pageData)
               : null;
+            const salesPackageTotals = isSalesPackageItems
+              ? {
+                  gross: calculateSalesPackageGrossTotal(sourceRows),
+                  discount: calculateSalesPackageDiscountTotal(sourceRows),
+                }
+              : null;
 
             if (isProductionOrder && isBomItemBlock) {
               cells.push(<Table.Summary.Cell index={cellIndex} key="expand-spacer" />);
@@ -5666,6 +5697,22 @@ const EditableTable: React.FC<EditableTableProps> = ({
                     </Table.Summary.Cell>
                   </Table.Summary.Row>
                 ) : null}
+              {salesPackageTotals ? (
+                <Table.Summary.Row className="bg-[rgba(var(--brand-50-rgb),0.25)] dark:bg-[rgba(var(--brand-900-rgb),0.15)]">
+                  <Table.Summary.Cell index={0} colSpan={columns.length}>
+                    <div className="flex flex-wrap gap-x-5 gap-y-1 py-1 text-xs">
+                      <span>
+                        مجموع پکیج قبل از تخفیف:{' '}
+                        <b className="persian-number">{formatPersianPrice(salesPackageTotals.gross)} {currencyLabel}</b>
+                      </span>
+                      <span>
+                        جمع تخفیف:{' '}
+                        <b className="persian-number text-red-600 dark:text-red-300">{formatPersianPrice(salesPackageTotals.discount)} {currencyLabel}</b>
+                      </span>
+                    </div>
+                  </Table.Summary.Cell>
+                </Table.Summary.Row>
+              ) : null}
               <Table.Summary.Row className="font-bold bg-[rgba(var(--brand-50-rgb),0.65)] dark:bg-[rgba(var(--brand-900-rgb),0.45)]">
                   {cells}
                 </Table.Summary.Row>
@@ -5843,7 +5890,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         }
       `}</style>
     </div>
-    {pendingInvoicePaymentAllocation && isAnyInvoicePayments ? (
+    {pendingInvoicePaymentAllocation && supportsInvoicePaymentAllocation ? (
       <InvoicePaymentAllocationModal
         open
         moduleId={moduleId as 'invoices' | 'purchase_invoices'}
