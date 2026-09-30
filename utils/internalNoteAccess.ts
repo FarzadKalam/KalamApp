@@ -21,7 +21,14 @@ export const isInternalSystemNoteRow = (note: any) => {
   return (
     sourceType === 'system'
     || sourceType === 'ai'
-    || Boolean(metadata?.workflow_id || metadata?.automation_rule_id || metadata?.process_automation_rule_id)
+    || sourceType === 'assistant'
+    || Boolean(
+      metadata?.workflow_id
+      || metadata?.automation_rule_id
+      || metadata?.process_automation_rule_id
+      || metadata?.workflow_action_type
+      || metadata?.scheduled_report_id
+    )
   );
 };
 

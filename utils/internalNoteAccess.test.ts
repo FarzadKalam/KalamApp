@@ -39,6 +39,18 @@ describe('internal system note access', () => {
     expect(canCurrentUserAccessInternalSystemNote({ source_type: 'user' }, 'user-1', null)).toBe(true);
   });
 
+  it('keeps every server-classified automation source inside the recipient-only system scope', () => {
+    const note = {
+      source_type: 'assistant',
+      mention_user_ids: ['user-recipient'],
+      metadata: { scheduled_report_id: 'report-1' },
+    };
+
+    expect(isInternalSystemNoteRow(note)).toBe(true);
+    expect(canCurrentUserAccessInternalSystemNote(note, 'user-recipient', null)).toBe(true);
+    expect(canCurrentUserAccessInternalSystemNote(note, 'user-other', null)).toBe(false);
+  });
+
   it('normalizes PostgreSQL array strings used by fallback responses', () => {
     expect(normalizeInternalNoteRecipientIds('{"user-1","user-2"}')).toEqual(['user-1', 'user-2']);
   });

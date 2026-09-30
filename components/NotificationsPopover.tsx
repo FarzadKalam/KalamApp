@@ -24,7 +24,7 @@ import { attachTaskCompletionIfNeeded } from '../utils/taskCompletion';
 import { NOTES_UPDATED_EVENT } from '../utils/aiAssistantEvents';
 import { getTaskStatusLabel } from '../utils/processTaskStatusOptions';
 import { setUiNotificationOverlayItems, setUiNotificationOverlaySuppressed } from '../utils/uiNotificationOverlayStore';
-import { insertNotesWithFallback, sendNoteSmsNotifications } from '../utils/noteDispatch';
+import { sendInternalMessageV2, sendNoteSmsNotifications } from '../utils/noteDispatch';
 import { getActiveChannelSettings } from '../utils/channelSettings';
 import { sendBotMessageViaGateway } from '../utils/botGateway';
 import { renderRecordTemplate } from '../utils/recordMessaging';
@@ -6916,7 +6916,9 @@ useEffect(() => {
       setSelectedConversationNotes((prev) => mergeRowsByIdCreatedAsc(prev, [optimisticRow]));
       optimisticInserted = true;
 
-      const insertedNotes = await insertNotesWithFallback([payload]);
+      // پیام‌رسان داخلی و یادداشت‌های دارای منشن باید از یک مسیر اتمیک عبور
+      // کنند تا هم یادداشت رکورد و هم گفت‌وگوی مرکزی هم‌زمان به‌روز بمانند.
+      const insertedNotes = await sendInternalMessageV2(payload);
       if (Array.isArray(insertedNotes) && insertedNotes.length > 0) {
         const nextRows = insertedNotes as any[];
         setNotes((prev) => {
