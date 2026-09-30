@@ -62,7 +62,11 @@ const ListPrintRuntime: React.FC<ListPrintRuntimeProps> = ({
       }}
       onPreparePrint={printManager.preparePrint}
       onPrint={printManager.handlePrint}
-      onGenerateFinalPdfPreview={generateFinalPdfPreview}
+      onGenerateFinalPdfPreview={
+        printManager.isFinalPdfPreviewReady
+          ? generateFinalPdfPreview
+          : undefined
+      }
       previewContentVersion={printManager.printPreviewSourceVersion}
       printTemplates={printManager.printTemplates}
       selectedTemplateId={printManager.selectedTemplateId}

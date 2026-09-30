@@ -195,8 +195,16 @@ export const useListPrintManager = ({
   const [savingPrintFields, setSavingPrintFields] = useState(false);
   const [previewRevision, setPreviewRevision] = useState(0);
   const [companyInfo, setCompanyInfo] = useState<any>(null);
+  const [printDependenciesReady, setPrintDependenciesReady] = useState(false);
   const templatesLoadedRef = useRef(false);
-  const companyLoadedRef = useRef(false);
+  const printDependenciesRequestRef = useRef<Promise<{
+    companyResult: any;
+    assigneeDirectory: any;
+  }> | null>(null);
+  const printDependenciesSnapshotRef = useRef<{
+    companyResult: any;
+    assigneeDirectory: any;
+  } | null>(null);
   const renderPrintCardRef = useRef<() => React.ReactNode>(() => null);
   const buildNativeListPrintFlowRef = useRef<() => string | null>(() => null);
   const reservedPrintWindowRef = useRef<Window | null>(null);
@@ -257,6 +265,40 @@ export const useListPrintManager = ({
     };
   }, []);
 
+  // A final-PDF preview is a static snapshot. Fetch every value that can
+  // alter that snapshot before allowing it to render, otherwise the first
+  // preview can be missing a logo/signature and the Print button has to build
+  // a second PDF after React receives the late data.
+  const loadPrintDependencies = useCallback(() => {
+    if (printDependenciesSnapshotRef.current) {
+      return Promise.resolve(printDependenciesSnapshotRef.current);
+    }
+    if (!printDependenciesRequestRef.current) {
+      printDependenciesRequestRef.current = Promise.all([
+        loadScopedCompanySettings(supabase).catch((error) => ({
+          data: null,
+          error,
+        })),
+        fetchAssigneeDirectory(supabase).catch(() => null),
+      ])
+        .then(([companyResult, directory]) => {
+          const snapshot = {
+            companyResult,
+            assigneeDirectory: directory,
+          };
+          printDependenciesSnapshotRef.current = snapshot;
+          setCompanyInfo(companyResult?.data || null);
+          if (directory) setAssigneeDirectory(directory);
+          setPrintDependenciesReady(true);
+          return snapshot;
+        })
+        .finally(() => {
+          printDependenciesRequestRef.current = null;
+        });
+    }
+    return printDependenciesRequestRef.current;
+  }, []);
+
   const loadTemplates = useCallback(
     async (mounted = true) => {
       try {
@@ -299,28 +341,10 @@ export const useListPrintManager = ({
 
   useEffect(() => {
     if (!isPrintModalOpen && !printMode) return;
-    if (companyLoadedRef.current) return;
-    let mounted = true;
-    const loadCompany = async () => {
-      try {
-        const [{ data }, directory] = await Promise.all([
-          loadScopedCompanySettings(supabase),
-          fetchAssigneeDirectory(supabase).catch(() => null),
-        ]);
-        if (mounted) {
-          setCompanyInfo(data || null);
-          if (directory) setAssigneeDirectory(directory);
-          companyLoadedRef.current = true;
-        }
-      } catch (error) {
-        console.error("Load company settings for list print failed", error);
-      }
-    };
-    loadCompany();
-    return () => {
-      mounted = false;
-    };
-  }, [isPrintModalOpen, printMode]);
+    void loadPrintDependencies().catch((error) => {
+      console.error("Load list print dependencies failed", error);
+    });
+  }, [isPrintModalOpen, loadPrintDependencies, printMode]);
 
   const availableTemplates = useMemo(() => {
     const merged = mergeTemplatesWithDefaults(
@@ -1367,8 +1391,8 @@ export const useListPrintManager = ({
       }
       const printTitle = getPrintOutputName();
       let printAbortedByPrerequisite = false;
-      const latestAssigneeDirectory = await waitForPrintPrerequisite(
-        fetchAssigneeDirectory(supabase),
+      const dependencies = await waitForPrintPrerequisite(
+        loadPrintDependencies(),
       ).catch((error) => {
         const targetWindow = reservedPrintWindowRef.current;
         reservedPrintWindowRef.current = null;
@@ -1378,8 +1402,7 @@ export const useListPrintManager = ({
         return null;
       });
       if (printAbortedByPrerequisite) return;
-      if (latestAssigneeDirectory) {
-        setAssigneeDirectory(latestAssigneeDirectory);
+      if (dependencies) {
         await waitForPrintRenderCommit();
       }
       const pageSize = getPrintPaperSizeCss(
@@ -1424,7 +1447,7 @@ export const useListPrintManager = ({
         console.error("Print dialog failed to open", error);
       });
     },
-    [getPrintOutputName, selectedStoredTemplate, selectedTemplateId],
+    [getPrintOutputName, loadPrintDependencies, selectedStoredTemplate, selectedTemplateId],
   );
 
   const generateCurrentPdfBlob = useCallback(
@@ -1435,13 +1458,11 @@ export const useListPrintManager = ({
         throw new Error("print_template_missing");
       }
 
-      const latestAssigneeDirectory = await waitForPrintPrerequisite(
-        fetchAssigneeDirectory(supabase),
-      ).catch(() => null);
-      if (latestAssigneeDirectory) {
-        setAssigneeDirectory(latestAssigneeDirectory);
-        await waitForPrintRenderCommit();
-      }
+      await waitForPrintPrerequisite(loadPrintDependencies());
+      // The dependency loader has just set company/signature state. Serialize
+      // only after React commits it, so the generated source and its cache key
+      // describe the same document.
+      await waitForPrintRenderCommit();
 
       const printTitle = getPrintOutputName();
       const pageSize = getPrintPaperSizeCss(
@@ -1473,7 +1494,7 @@ export const useListPrintManager = ({
         title: printTitle,
       };
     },
-    [getPrintOutputName, selectedStoredTemplate, selectedTemplateId],
+    [getPrintOutputName, loadPrintDependencies, selectedStoredTemplate, selectedTemplateId],
   );
 
   useEffect(() => {
@@ -1970,6 +1991,7 @@ export const useListPrintManager = ({
     renderPrintCard,
     previewMeta,
     printPreviewSourceVersion,
+    isFinalPdfPreviewReady: printDependenciesReady && Boolean(selectedTemplateId),
     canEditPrintTemplates,
     allowFieldSelectionTab: true,
     showImageDisplayModeControl,

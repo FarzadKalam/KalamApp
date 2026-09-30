@@ -1,6 +1,6 @@
 import { normalizePublicAssetUrl } from './assetUrl';
 
-export type ImagePreviewPreset = 'avatar' | 'thumb' | 'card' | 'hero' | 'gallery' | 'printLogo' | 'printMap' | 'printHero';
+export type ImagePreviewPreset = 'avatar' | 'thumb' | 'card' | 'hero' | 'gallery' | 'printLogo' | 'printMap' | 'printHero' | 'printPdf';
 
 type PreviewPresetConfig = {
   width: number;
@@ -17,6 +17,10 @@ const PRESET_CONFIG: Record<ImagePreviewPreset, PreviewPresetConfig> = {
   printLogo: { width: 240, quality: 72, resize: 'contain' },
   printMap: { width: 720, quality: 64, resize: 'cover' },
   printHero: { width: 1400, quality: 68, resize: 'cover' },
+  // Chromium expands images while writing a PDF. A 1,400px source on every
+  // catalogue page can turn a few MB of JPEGs into a 30+ MB file. This shared
+  // renderer profile remains sharp for a catalogue panel and bounded in size.
+  printPdf: { width: 840, quality: 58, resize: 'cover' },
 };
 
 const IMAGE_TRANSFORM_PREVIEW_ENABLED = String(import.meta.env.VITE_ENABLE_IMAGE_TRANSFORM_PREVIEW || '').trim() === 'true';
@@ -106,6 +110,34 @@ export const toImageTransformUrl = (rawUrl: string | null | undefined, preset: I
     parsed.searchParams.set('resize', config.resize);
   }
 
+  return parsed.toString();
+};
+
+/**
+ * Canonical compact variant for the server-side PDF renderer. Older print
+ * markup may already have width/quality parameters, so this intentionally
+ * replaces them instead of inheriting an oversized browser-preview variant.
+ */
+export const toPrintPdfImageUrl = (
+  rawUrl: string | null | undefined,
+  preset: Extract<ImagePreviewPreset, 'printPdf' | 'printLogo' | 'printMap'> = 'printPdf',
+): string => {
+  const normalized = normalizePublicAssetUrl(rawUrl);
+  if (!normalized || normalized.startsWith('data:') || normalized.startsWith('blob:')) return normalized;
+  const parsed = resolveUrl(normalized);
+  if (!parsed) return normalized;
+
+  const extension = getPathExtension(parsed.pathname);
+  if (SKIP_TRANSFORM_EXTENSIONS.has(extension)) return normalized;
+
+  const renderPath = toRenderPath(parsed.pathname);
+  if (!renderPath) return normalized;
+
+  const config = PRESET_CONFIG[preset];
+  parsed.pathname = renderPath;
+  parsed.searchParams.set('width', String(config.width));
+  parsed.searchParams.set('quality', String(config.quality));
+  parsed.searchParams.set('resize', config.resize);
   return parsed.toString();
 };
 

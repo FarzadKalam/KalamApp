@@ -6,6 +6,7 @@ import {
   getImagePreviewCandidates,
   reportImageTransformFailure,
   resetImageTransformFailureCacheForTest,
+  toPrintPdfImageUrl,
   toImageTransformUrl,
 } from './imagePreview';
 
@@ -55,6 +56,9 @@ describe('getImagePreviewCandidates', () => {
     );
     expect(buildImagePreviewUrl(url, 'thumb', { forceTransform: true })).toBe(
       'https://example.com/storage/v1/render/image/public/images/record_files/tasks/1/photo.jpg?width=260&quality=68&resize=cover'
+    );
+    expect(toPrintPdfImageUrl(`${url}?width=1400&quality=68&resize=cover`)).toBe(
+      'https://example.com/storage/v1/render/image/public/images/record_files/tasks/1/photo.jpg?width=840&quality=58&resize=cover'
     );
   });
 

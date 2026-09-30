@@ -3,7 +3,7 @@ import { getCompactPrintCellsFitScript } from './fitCompactPrintCells';
 import { getStaticCustomPrintPaginationScript } from './staticPrintPagination';
 import { getNativeTablePaginationScript } from './nativeTablePagination';
 import { NATIVE_PRINT_BASE_HREF_TOKEN, NATIVE_PRINT_FONT_CSS_TOKEN } from './nativePrintFlow';
-import { toImageTransformUrl } from '../imagePreview';
+import { toPrintPdfImageUrl } from '../imagePreview';
 import peydaExtraLightUrl from '../../font/peyada/PeydaWeb-ExtraLight.woff2?url';
 import peydaRegularUrl from '../../font/peyada/PeydaWeb-Regular.woff2?url';
 import peydaSemiBoldUrl from '../../font/peyada/PeydaWeb-SemiBold.woff2?url';
@@ -193,7 +193,7 @@ const replaceInlineStyleImageSources = (html: string, dataUrlBySource: Map<strin
     return `style=${quote}${nextStyle}${quote}`;
   });
 
-const getPdfOptimizedImageUrl = (url: string) => toImageTransformUrl(url, 'printHero') || url;
+const getPdfOptimizedImageUrl = (url: string) => toPrintPdfImageUrl(url, 'printPdf') || url;
 
 const isBrowserLocalPrintImage = (url: string) => /^blob:/i.test(String(url || '').trim());
 

@@ -65,6 +65,6 @@ describe('materializePrintImageAssets', () => {
     );
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(result).toContain('src="https://api.example.test/storage/v1/render/image/public/images/catalog.png?width=1400&amp;quality=68&amp;resize=cover"');
+    expect(result).toContain('src="https://api.example.test/storage/v1/render/image/public/images/catalog.png?width=840&amp;quality=58&amp;resize=cover"');
   });
 });

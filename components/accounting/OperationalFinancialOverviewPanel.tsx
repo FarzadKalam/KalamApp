@@ -493,7 +493,11 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
         onClose={() => listPrintManager.setIsPrintModalOpen(false)}
         onPreparePrint={listPrintManager.preparePrint}
         onPrint={listPrintManager.handlePrint}
-        onGenerateFinalPdfPreview={generateOperationalFinalPdfPreview}
+        onGenerateFinalPdfPreview={
+          listPrintManager.isFinalPdfPreviewReady
+            ? generateOperationalFinalPdfPreview
+            : undefined
+        }
         previewContentVersion={listPrintManager.printPreviewSourceVersion}
         printTemplates={listPrintManager.printTemplates}
         selectedTemplateId={listPrintManager.selectedTemplateId}
