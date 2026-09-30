@@ -37,11 +37,10 @@ const THEME_VARIABLE_FALLBACKS: Record<string, string> = {
 };
 
 const NATIVE_PRINT_MARGIN_TEMPLATE_IDS = ['kalamapp-gotenberg-header', 'kalamapp-gotenberg-footer'];
-const PRINT_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
-// Images are encoded as data URLs before crossing the Edge Function boundary.
-// Keep the aggregate binary payload comfortably below its practical request
-// limit: base64 adds roughly one third, and the document also includes fonts.
-const PRINT_IMAGE_TOTAL_MAX_BYTES = 10 * 1024 * 1024;
+const PRINT_INLINE_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
+// Public storage URLs are now loaded by Chromium directly. Only browser-local
+// blob URLs need to cross the boundary as data URLs, and those must stay small.
+const PRINT_INLINE_IMAGE_TOTAL_MAX_BYTES = 4 * 1024 * 1024;
 const PRINT_IMAGE_FETCH_TIMEOUT_MS = 8_000;
 
 let embeddedFontCssPromise: Promise<string> | null = null;
@@ -196,21 +195,18 @@ const replaceInlineStyleImageSources = (html: string, dataUrlBySource: Map<strin
 
 const getPdfOptimizedImageUrl = (url: string) => toImageTransformUrl(url, 'printHero') || url;
 
-const fetchPrintImageDataUrl = async (url: string, remainingByteBudget = PRINT_IMAGE_MAX_BYTES) => {
+const isBrowserLocalPrintImage = (url: string) => /^blob:/i.test(String(url || '').trim());
+
+const materializeBrowserLocalPrintImage = async (
+  url: string,
+  remainingByteBudget = PRINT_INLINE_IMAGE_MAX_BYTES,
+) => {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), PRINT_IMAGE_FETCH_TIMEOUT_MS);
   const optimizedUrl = getPdfOptimizedImageUrl(url);
 
   try {
-    // The PDF renderer runs in a different network context. Resolve an image
-    // in the user's browser first, where signed URLs and local blob URLs are
-    // valid, then send an inline copy to Chromium.
-    let response = await fetch(optimizedUrl, { credentials: 'same-origin', signal: controller.signal });
-    // Some installations deliberately leave image transformations disabled.
-    // A public original is still preferable to dropping the image entirely.
-    if (!response.ok && optimizedUrl !== url) {
-      response = await fetch(url, { credentials: 'same-origin', signal: controller.signal });
-    }
+    const response = await fetch(optimizedUrl, { credentials: 'same-origin', signal: controller.signal });
     if (!response.ok) return optimizedUrl;
 
     const contentType = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
@@ -219,7 +215,7 @@ const fetchPrintImageDataUrl = async (url: string, remainingByteBudget = PRINT_I
     const bytes = await response.arrayBuffer();
     if (
       bytes.byteLength === 0 ||
-      bytes.byteLength > PRINT_IMAGE_MAX_BYTES ||
+      bytes.byteLength > PRINT_INLINE_IMAGE_MAX_BYTES ||
       bytes.byteLength > remainingByteBudget
     ) return optimizedUrl;
 
@@ -234,10 +230,10 @@ const fetchPrintImageDataUrl = async (url: string, remainingByteBudget = PRINT_I
 };
 
 /**
- * Makes body images self-contained before the document crosses from the
- * browser to Gotenberg. This covers catalog artwork as well as user-authored
- * template images; previously only images in native header/footer templates
- * were embedded.
+ * Canonical public storage image variants are directly reachable by the PDF
+ * renderer and stay as URLs. This avoids serial browser downloads and large
+ * base64 documents. Only browser-local blob URLs are inlined because Chromium
+ * in Gotenberg cannot resolve them.
  */
 export const materializePrintImageAssets = async (sourceHtml: string, origin: string) => {
   if (typeof window === 'undefined' || !sourceHtml) return sourceHtml;
@@ -246,13 +242,12 @@ export const materializePrintImageAssets = async (sourceHtml: string, origin: st
     .map((source) => resolveAssetUrl(source, origin))));
   if (sourceUrls.length === 0) return sourceHtml;
 
-  let remainingByteBudget = PRINT_IMAGE_TOTAL_MAX_BYTES;
+  let remainingByteBudget = PRINT_INLINE_IMAGE_TOTAL_MAX_BYTES;
   const dataUrlBySource = new Map<string, string>();
-  // Process sequentially so every catalog image shares one document budget.
-  // This avoids a large catalog turning several individually valid images into
-  // an Edge Function request that cannot be accepted.
   for (const source of sourceUrls) {
-    const materialized = await fetchPrintImageDataUrl(source, remainingByteBudget);
+    const materialized = isBrowserLocalPrintImage(source)
+      ? await materializeBrowserLocalPrintImage(source, remainingByteBudget)
+      : getPdfOptimizedImageUrl(source);
     dataUrlBySource.set(source, materialized);
     if (materialized.startsWith('data:')) {
       const base64 = materialized.slice(materialized.indexOf(',') + 1);
@@ -267,9 +262,8 @@ export const materializePrintImageAssets = async (sourceHtml: string, origin: st
 };
 
 /**
- * Gotenberg receives the header and footer as independent documents. Embed
- * their public images before upload so a logo cannot disappear because that
- * secondary document has not finished its own network request yet.
+ * Gotenberg receives the header and footer as independent documents. Normalize
+ * their public image URLs to the same compact canonical variant as body assets.
  */
 export const materializeNativePrintMarginImages = async (sourceHtml: string, origin: string) => {
   if (typeof window === 'undefined' || !sourceHtml) return sourceHtml;
@@ -289,7 +283,12 @@ export const materializeNativePrintMarginImages = async (sourceHtml: string, ori
     .map((source) => resolveAssetUrl(source, origin))));
   if (sourceUrls.length === 0) return sourceHtml;
 
-  const dataUrlBySource = new Map(await Promise.all(sourceUrls.map(async (source) => [source, await fetchPrintImageDataUrl(source)] as const)));
+  const dataUrlBySource = new Map(await Promise.all(sourceUrls.map(async (source) => [
+    source,
+    isBrowserLocalPrintImage(source)
+      ? await materializeBrowserLocalPrintImage(source)
+      : getPdfOptimizedImageUrl(source),
+  ] as const)));
   return NATIVE_PRINT_MARGIN_TEMPLATE_IDS.reduce(
     (html, id) => html.replace(getNativePrintMarginTemplatePattern(id), (_match, openingTag, content, closingTag) =>
       `${openingTag}${replaceImageSources(String(content || ''), dataUrlBySource, origin)}${closingTag}`),

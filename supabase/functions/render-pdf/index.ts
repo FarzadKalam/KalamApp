@@ -8,9 +8,10 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'render-pdf-2026-08-15-02';
+const FUNCTION_BUILD = 'render-pdf-2026-09-30-01';
 const DEFAULT_GOTENBERG_URL = 'http://gotenberg:3000';
 const GOTENBERG_TIMEOUT_MS = 120000;
+const MAX_PDF_REQUEST_BYTES = 12 * 1024 * 1024;
 
 const json = (status: number, payload: Record<string, unknown>) =>
   new Response(JSON.stringify({ build: FUNCTION_BUILD, ...payload }), {
@@ -128,6 +129,11 @@ Deno.serve(async (request) => {
 
   if (request.method !== 'POST') {
     return json(405, { error: 'method_not_allowed' });
+  }
+
+  const contentLength = Number(request.headers.get('content-length') || 0);
+  if (Number.isFinite(contentLength) && contentLength > MAX_PDF_REQUEST_BYTES) {
+    return htmlError(413, 'فایل چاپ بیش از حد بزرگ است', 'حجم تصاویر یا محتوای چاپ برای ساخت PDF بیش از حد مجاز است.');
   }
 
   let payload: Record<string, unknown>;

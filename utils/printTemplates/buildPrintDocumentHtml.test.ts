@@ -6,7 +6,7 @@ describe('materializeNativePrintMarginImages', () => {
     vi.unstubAllGlobals();
   });
 
-  it('embeds public images used by the isolated header and footer documents', async () => {
+  it('keeps public images in the isolated header and footer documents as URLs', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(new Uint8Array([137, 80, 78, 71]), {
         status: 200,
@@ -20,10 +20,9 @@ describe('materializeNativePrintMarginImages', () => {
       <template id="kalamapp-gotenberg-footer"><!doctype html><html lang="fa"><head><meta charset="utf-8" /></head><body><img src="https://assets.example.test/company-logo.png" alt="لوگو" /></body></html></template>
     `, 'https://app.example.test');
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(result).toContain('<!doctype html><html lang="fa"><head>');
-    expect(result).toContain('src="data:image/png;base64,iVBORw=="');
-    expect(result).not.toContain('src="https://assets.example.test/company-logo.png"');
+    expect(result).toContain('src="https://assets.example.test/company-logo.png"');
   });
 });
 
@@ -32,7 +31,7 @@ describe('materializePrintImageAssets', () => {
     vi.unstubAllGlobals();
   });
 
-  it('embeds catalog artwork before the document is sent to the PDF renderer', async () => {
+  it('keeps public catalog artwork as a URL for the PDF renderer', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(new Uint8Array([137, 80, 78, 71]), {
         status: 200,
@@ -46,16 +45,12 @@ describe('materializePrintImageAssets', () => {
       'https://app.example.test',
     );
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://assets.example.test/catalog.png',
-      expect.objectContaining({ credentials: 'same-origin' }),
-    );
-    expect(result).toContain('src="data:image/png;base64,iVBORw=="');
-    expect(result).toContain('background-image:url(data:image/png;base64,iVBORw==)');
-    expect(result).not.toContain('src="https://assets.example.test/catalog.png"');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toContain('src="https://assets.example.test/catalog.png"');
+    expect(result).toContain('background-image:url(https://assets.example.test/catalog.png)');
   });
 
-  it('uses the shared print-sized image variant before embedding a public storage asset', async () => {
+  it('uses the shared print-sized URL for a public storage asset without embedding it', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(new Uint8Array([137, 80, 78, 71]), {
         status: 200,
@@ -69,10 +64,7 @@ describe('materializePrintImageAssets', () => {
       'https://app.example.test',
     );
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://api.example.test/storage/v1/render/image/public/images/catalog.png?width=1400&quality=68&resize=cover',
-      expect.objectContaining({ credentials: 'same-origin' }),
-    );
-    expect(result).toContain('src="data:image/png;base64,iVBORw=="');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toContain('src="https://api.example.test/storage/v1/render/image/public/images/catalog.png?width=1400&amp;quality=68&amp;resize=cover"');
   });
 });

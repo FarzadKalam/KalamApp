@@ -29,6 +29,9 @@ const FUNCTION_PATH = '/functions/v1/render-pdf';
 const PREPARED_WINDOW_NAME_PREFIX = 'kalamapp-pdf-target';
 const PDF_REQUEST_TIMEOUT_MS = 135_000;
 const PRINT_PREREQUISITE_TIMEOUT_MS = 15_000;
+const MAX_PRINT_DOCUMENT_BYTES = 10 * 1024 * 1024;
+
+const getUtf8ByteLength = (value: string) => new TextEncoder().encode(value).byteLength;
 
 const escapeHtml = (value: string) =>
   String(value || '')
@@ -165,6 +168,8 @@ const writeErrorState = (targetWindow: Window | null | undefined, title?: string
       ? 'ساخت PDF بیش از زمان مجاز طول کشید. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.'
       : errorCode === 'print_prerequisite_timeout'
         ? 'اطلاعات لازم برای چاپ به‌موقع دریافت نشد. لطفاً اتصال اینترنت را بررسی و دوباره تلاش کنید.'
+        : errorCode === 'print_document_too_large'
+          ? 'حجم تصاویر یا محتوای این چاپ بیش از حد مجاز است. تعداد رکوردها را کمتر کنید یا تصاویر کوچک‌تر را انتخاب کنید.'
         : 'لطفاً دوباره تلاش کنید.';
     targetWindow.document.open();
     targetWindow.document.write(`<!doctype html>
@@ -472,6 +477,11 @@ export const generatePdfBlob = async (options: {
         sourceHtml,
         title: options.title,
       });
+  const documentHtmlBytes = getUtf8ByteLength(documentHtml);
+  options.tracker?.addMetadata({ documentHtmlBytes });
+  if (documentHtmlBytes > MAX_PRINT_DOCUMENT_BYTES) {
+    throw new Error('print_document_too_large');
+  }
   options.onProgress?.({ percent: 40, label: 'قالب آماده شد؛ در حال ساخت PDF…' });
 
   const blob = options.tracker

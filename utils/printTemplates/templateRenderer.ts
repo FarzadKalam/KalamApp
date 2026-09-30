@@ -10,6 +10,32 @@ const PRINT_TEMPLATE_ALLOWED_ATTRIBUTES = [
 const IMAGE_VARIABLE_PATHS = new Set(['company.logo_url']);
 const EMPTY_PRINT_IMAGE_DATA_URL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
 
+// These placeholders are rendered by the application itself, not entered as
+// free-form field text. They may legitimately contain URLs with UUID path
+// segments (for example a storage object under a record id). Applying the
+// outbound-text UUID mask to their complete HTML used to corrupt those URLs.
+// Final DOMPurify sanitization below remains the single safety boundary.
+const GENERATED_HTML_VARIABLE_PATHS = new Set([
+  'system.compact_fields_table',
+  'system.compact_fields_inline',
+  'system.compact_tables_blocks',
+  'system.package_summary_table',
+  'system.record_catalog_grid',
+  'system.record_catalog_fullpage',
+  'system.record_image',
+  'system.record_qr',
+  'system.catalog_qr_section',
+  'system.catalog_map_section',
+  'system.compact_fields_sidebar',
+  'system.catalog_code_fields',
+  'system.list_table',
+  'system.list_catalog_a4',
+  'system.list_catalog_fullpage',
+  'system.list_summary_table',
+  'system.list_context_table',
+  'system.extra.summary_html',
+]);
+
 const escapeHtmlAttribute = (value: string) => value
   .replace(/&/g, '&amp;')
   .replace(/"/g, '&quot;')
@@ -54,9 +80,10 @@ export const renderPrintTemplateHtml = ({
   if (!templateHtml) return '';
   const filled = templateHtml.replace(/{{\s*([a-zA-Z0-9_.]+)\s*}}/g, (match: string, key: string, offset: number) => {
     if (key.startsWith('row.') || key.startsWith('summary.')) return match;
-    // This is generated image markup, not user-supplied text. Keep the
-    // existing image path untouched so an identifier in its URL is not masked.
-    if (key === 'system.record_image') return resolveVariableValue(key);
+    // Generated layouts can contain image URLs with record ids in their path.
+    // Keep their HTML intact; DOMPurify sanitizes the assembled document once
+    // all variables have been expanded.
+    if (GENERATED_HTML_VARIABLE_PATHS.has(key)) return resolveVariableValue(key);
     const resolvedValue = resolveVariableValue(key);
     // A logo token entered as normal editor text must become an image instead
     // of a long URL that wraps repeatedly and expands the containing cell.

@@ -41,7 +41,18 @@ describe('system invoice template rendering', () => {
       resolveVariableValue: () => `<img src="${imageUrl}" alt="تصویر">`,
     });
 
-    expect(rendered).toContain(imageUrl);
+    expect(rendered).toContain(imageUrl.replace(/&/g, '&amp;'));
+  });
+
+  it('preserves UUID image paths inside generated list catalog HTML', () => {
+    const imageUrl = 'https://api.tazesystem.ir/storage/v1/render/image/public/images/record_files/billboards/11111111-1111-4111-8111-111111111111/catalog.jpg?width=1400&quality=68&resize=cover';
+    const rendered = renderPrintTemplateHtml({
+      templateHtml: '<main>{{system.list_catalog_fullpage}}</main>',
+      resolveVariableValue: () => `<section><img src="${imageUrl}" alt="تصویر کاتالوگ"></section>`,
+    });
+
+    expect(rendered).toContain(imageUrl.replace(/&/g, '&amp;'));
+    expect(rendered).not.toContain('[رکورد مرتبط]');
   });
 
   it('renders a bare organization-logo variable as a bounded image', () => {
