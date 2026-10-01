@@ -53,8 +53,8 @@ import {
   shouldInitializePrintFieldSelection,
 } from "./printableFields";
 import {
-  loadPrintFieldPreference,
   loadPrintFieldPreferenceFromServer,
+  getTemplateStoredPrintFieldSelection,
   savePrintFieldPreference,
   savePrintFieldPreferenceToServer,
 } from "./fieldPreferences";
@@ -458,22 +458,12 @@ export const useListPrintManager = ({
   useEffect(() => {
     if (!selectedTemplateId || !userPreferencesReady) return;
     if (!printableFieldsForTemplate.length) return;
-    const preferenceKeys = loadPrintFieldPreference({
-      orgId: currentOrgId,
-      userId: currentUserId,
-      moduleId,
-      templateId: selectedStoredTemplate?.id || selectedTemplateId,
-      scope: "list",
-      // System templates deliberately discard the old unscoped browser state:
-      // historic empty selections could hide every list column on first load.
-      allowLegacy: !selectedStoredTemplate?.isSystem,
-    });
-    const persistedKeys = Array.isArray(preferenceKeys)
-      ? preferenceKeys
-      : !selectedStoredTemplate?.isSystem &&
-          Array.isArray(selectedStoredTemplate?.selectedFieldKeys)
-        ? selectedStoredTemplate.selectedFieldKeys
-        : null;
+    // A scoped server preference is loaded below and is the only runtime
+    // authority for a user's field selection. Do not let an old browser
+    // snapshot suppress variables introduced later in a manual template.
+    const persistedKeys = getTemplateStoredPrintFieldSelection(
+      selectedStoredTemplate?.selectedFieldKeys,
+    );
     const rawDefaultKeys = resolveEffectivePrintFieldKeys({
       fields: printableFieldsForTemplate,
       selectedKeys: persistedKeys || [],
@@ -526,6 +516,7 @@ export const useListPrintManager = ({
   }, [
     currentOrgId,
     currentUserId,
+    getTemplateStoredPrintFieldSelection,
     isCatalogTemplate,
     moduleId,
     printableFieldsForTemplate,

@@ -98,8 +98,8 @@ import {
   getSelectedPrintTableColumns,
 } from './printFieldCatalog';
 import {
-  loadPrintFieldPreference,
   loadPrintFieldPreferenceFromServer,
+  getTemplateStoredPrintFieldSelection,
   savePrintFieldPreference,
   savePrintFieldPreferenceToServer,
 } from "./fieldPreferences";
@@ -2154,28 +2154,16 @@ export const usePrintManager = ({
     // Do not persist an empty selection while templates or runtime fields are
     // still loading. Otherwise that transient state hides every system block.
     if (!printableFieldsForTemplate.length) return;
-    const preferenceKeys = loadPrintFieldPreference({
-      orgId: currentOrgId,
-      userId: currentUserId,
-      moduleId,
-      templateId: selectedStoredTemplate?.id || selectedTemplateId,
-      scope: "record",
-      // System defaults are rebuilt from the current module definition. The
-      // old browser store is intentionally ignored to recover from the
-      // historic empty selections that hid whole invoice sections.
-      allowLegacy: !isSelectedTemplateSystem,
-    });
-    const persistedKeys = Array.isArray(preferenceKeys)
-      ? preferenceKeys
-      : // Empty arrays on manually copied system templates were historically
-        // generated as a serialization default, not a user decision. Their
-        // actual per-user choice lives in the scoped print-field preference.
-        // Only a non-empty legacy template selection may be adopted here.
-        !isSelectedTemplateSystem &&
-          Array.isArray(selectedStoredTemplate?.selectedFieldKeys) &&
-          selectedStoredTemplate.selectedFieldKeys.length > 0
-        ? selectedStoredTemplate.selectedFieldKeys
-        : null;
+    // `print_field_preferences` is the authoritative selection contract. A
+    // browser-only selection can predate the current variable catalog, so it
+    // must never hide a later-added manual placeholder (for example a
+    // customer or print-date token) before the server preference is read.
+    // Template-owned non-empty selections are retained for the dedicated
+    // system-template editor; an empty legacy array still means "use current
+    // defaults", not "hide every field".
+    const persistedKeys = getTemplateStoredPrintFieldSelection(
+      selectedStoredTemplate?.selectedFieldKeys,
+    );
     setSelectedPrintFields((prev) => {
       if (Object.prototype.hasOwnProperty.call(prev, selectedTemplateId))
         return prev;
@@ -2194,14 +2182,11 @@ export const usePrintManager = ({
       };
     });
   }, [
-    isSelectedTemplateSystem,
-    currentOrgId,
-    currentUserId,
     printableFieldsForTemplate,
+    getTemplateStoredPrintFieldSelection,
     selectedStoredTemplate?.selectedFieldKeys,
     selectedStoredTemplate?.id,
     selectedTemplateId,
-    moduleId,
     userPreferencesReady,
   ]);
 

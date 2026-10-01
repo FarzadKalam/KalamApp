@@ -138,6 +138,61 @@ describe('official and unofficial sales invoice descriptions', () => {
     }
   , 15_000);
 
+  it('does not let a stale browser selection hide a manually authored print-date variable', async () => {
+    const manualTemplate = {
+      id: 'manual-date-variable',
+      moduleId: 'invoices',
+      scope: 'record' as const,
+      title: 'قالب متغیر تاریخ',
+      contentHtml: '<p>تاریخ چاپ: {{system.today_date}}</p><p>کد: {{record.system_code}}</p>',
+      headerHtml: '',
+      footerHtml: '',
+      isSystem: false,
+      isActive: true,
+      createdAt: '2026-10-01T00:00:00.000Z',
+      updatedAt: '2026-10-01T00:00:00.000Z',
+    };
+    // This is the old per-browser value that contained only the code field.
+    // A missing server preference must fall back to the current catalog, not
+    // silently blank a variable added later through the template editor.
+    window.localStorage.setItem(
+      'kalamapp.print_field_preferences.v2',
+      JSON.stringify({
+        'org-test::user-test::invoices::manual-date-variable::record': [
+          'record.system_code',
+        ],
+      }),
+    );
+    mocks.loadPrintTemplatesStore.mockResolvedValue({
+      rowId: null,
+      provider: 'tiptap',
+      templatesByModule: { invoices: [manualTemplate] },
+      storage: 'remote',
+    });
+
+    const { result } = renderHook(() => usePrintManager({
+      moduleId: 'invoices',
+      data: invoiceRecord,
+      moduleConfig: invoicesConfig,
+      printableFields: [],
+      formatPrintValue: (_field, value) => String(value ?? ''),
+      canViewField: () => true,
+    }));
+
+    act(() => result.current.openPrintModal());
+    await waitFor(() => expect(result.current.printTemplates.some(
+      (template) => template.id === 'custom:manual-date-variable',
+    )).toBe(true));
+    act(() => result.current.setSelectedTemplateId('custom:manual-date-variable'));
+
+    const view = render(<>{result.current.renderPrintCard()}</>);
+    await waitFor(() => {
+      expect(view.container.textContent).toMatch(/تاریخ چاپ:\s*۱۴۰[۰-۹]\/[۰-۹]{2}\/[۰-۹]{2}/);
+      expect(view.container.textContent).toContain('FA-۱');
+    });
+    view.unmount();
+  }, 15_000);
+
   it('keeps dynamic invoice item and payment tables after copying a system template for manual editing', async () => {
     const source = buildDefaultTemplatesForModule('invoices')
       .find((template) => template.id === 'default_invoice_unofficial');

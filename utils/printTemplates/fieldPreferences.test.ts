@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadPrintFieldPreference, savePrintFieldPreference } from './fieldPreferences';
+import {
+  getTemplateStoredPrintFieldSelection,
+  loadPrintFieldPreference,
+  savePrintFieldPreference,
+} from './fieldPreferences';
 
 const preference = {
   userId: 'user-1',
@@ -26,5 +30,12 @@ describe('print field preferences', () => {
 
     expect(loadPrintFieldPreference({ ...preference, orgId: 'org-a', allowLegacy: false })).toBeNull();
     expect(loadPrintFieldPreference({ ...preference, orgId: 'org-a', allowLegacy: true })).toEqual(['record.description']);
+  });
+
+  it('treats an empty template-owned selection as absent rather than hiding new variables', () => {
+    expect(getTemplateStoredPrintFieldSelection([])).toBeNull();
+    expect(getTemplateStoredPrintFieldSelection(['', ' system.today_date '])).toEqual([
+      'system.today_date',
+    ]);
   });
 });

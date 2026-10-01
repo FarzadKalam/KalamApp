@@ -11,6 +11,19 @@ const normalizeKeys = (values: unknown): string[] =>
     ? values.map((value) => String(value || '').trim()).filter(Boolean)
     : [];
 
+/**
+ * A template-owned selection is structural (used by the template editor),
+ * unlike the former browser cache which was per device and could be stale.
+ * Empty legacy arrays represented an omitted selection, not an instruction
+ * to hide every newly added variable.
+ */
+export const getTemplateStoredPrintFieldSelection = (
+  selectedFieldKeys: unknown,
+): string[] | null => {
+  const keys = normalizeKeys(selectedFieldKeys);
+  return keys.length > 0 ? keys : null;
+};
+
 const readStore = (storageKey: string): PrintFieldPreferencesStore => {
   if (typeof window === 'undefined') return {};
   try {
