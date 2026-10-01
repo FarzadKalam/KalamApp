@@ -142,6 +142,7 @@ import {
 } from "./compositeCatalog";
 import { getSafePrintText, hasUnsafeObjectPrintText } from "./safePrintValue";
 import { renderPrintTemplateHtml } from "./templateRenderer";
+import { getPrintRowColumnHeaderLabel } from "./tableHeaderLabels";
 import {
   buildDefaultPrintSignatureConfigs,
   buildPrintSignatureBandHtml,
@@ -3552,6 +3553,56 @@ export const usePrintManager = ({
 
           const rowTemplate = templateRow.outerHTML;
           const templateCells = Array.from(templateRow.cells || []);
+
+          // A saved template may have been created while the table's compact
+          // column set was different (notably old invoice templates that kept
+          // package/sub-unit headers but later used the compact invoice row).
+          // Header cells must describe the tokens in their matching body cell,
+          // not the historical position in a module block.  Resolving them
+          // here also makes renamed integration fields immediately visible in
+          // every template without mutating the author's layout.
+          const templateColumnKeys = templateCells.map((cell) => {
+            const match = String(cell.innerHTML || "").match(
+              /{{\s*row\.([a-zA-Z0-9_]+)\s*}}/,
+            );
+            return String(match?.[1] || "").trim();
+          });
+          const hasCompleteColumnBinding =
+            templateColumnKeys.length > 0 && templateColumnKeys.every(Boolean);
+          if (hasCompleteColumnBinding) {
+            const block = Array.isArray(moduleConfig?.blocks)
+              ? moduleConfig.blocks.find((item: any) => item.id === blockId)
+              : null;
+            Array.from(table.tHead?.rows || []).forEach((headerRow) => {
+              const headerCells = Array.from(headerRow.cells || []);
+              // Multi-row headings and intentionally authored headers may use
+              // colspans. They have no safe one-to-one mapping and are left
+              // intact. `data-print-manual-label` is an explicit escape hatch
+              // for a deliberately custom heading.
+              if (
+                headerCells.length !== templateColumnKeys.length ||
+                headerCells.some((cell) => Number(cell.colSpan || 1) !== 1)
+              ) {
+                return;
+              }
+              headerCells.forEach((headerCell, index) => {
+                if (
+                  String(
+                    headerCell.getAttribute("data-print-manual-label") || "",
+                  ).toLowerCase() === "true"
+                ) {
+                  return;
+                }
+                const label = getPrintRowColumnHeaderLabel({
+                  moduleId,
+                  block,
+                  rowKey: templateColumnKeys[index],
+                });
+                if (label) headerCell.textContent = label;
+              });
+            });
+          }
+
           const hiddenColumnIndexes: number[] = [];
           templateCells.forEach((cell, index) => {
             const match = String(cell.innerHTML || "").match(
@@ -3823,6 +3874,7 @@ export const usePrintManager = ({
       data,
       formatCellValue,
       isSystemFieldVisible,
+      moduleId,
       moduleConfig?.blocks,
       pruneEmptyPrintContainers,
       pruneEmptyTableCells,
