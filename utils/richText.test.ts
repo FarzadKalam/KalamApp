@@ -18,11 +18,13 @@ describe('rich text print normalization', () => {
       .toBe('سطر اول\nسطر دوم\nسطر سوم\n');
   });
 
-  it('prints text with the default color in black while retaining an explicitly selected color', () => {
-    const printed = normalizeRichTextHtmlForPrint('<p>متن پیش‌فرض <span style="color:#dc2626">متن قرمز</span></p>');
+  it('inherits print typography while retaining semantic marks and selected colour', () => {
+    const printed = normalizeRichTextHtmlForPrint('<p style="font-size:22px; text-align:center"><strong>متن مهم</strong> <span style="color:#dc2626; font-family:serif">متن قرمز</span></p>');
 
-    expect(printed).toContain('style="color:#000000; font-size:calc(1em + 2px);"');
+    expect(printed).toContain('style="font-family:inherit; font-size:inherit; line-height:inherit; direction:inherit; text-align:inherit;"');
     expect(printed).toContain('color:#dc2626');
+    expect(printed).toContain('<strong>متن مهم</strong>');
+    expect(printed).not.toMatch(/font-size:22px|text-align:center|font-family:serif/);
   });
 
   it('leaves a new paragraph after every inserted ready text', () => {

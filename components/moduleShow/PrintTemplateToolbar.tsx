@@ -72,6 +72,25 @@ const getBrandPalette = () => {
   return Array.from(new Set(colors.length ? colors : fallback));
 };
 
+const getEditorFontSize = (editor: any): number => {
+  const markSize = Number.parseFloat(
+    String(editor?.getAttributes?.('textStyle')?.fontSize || ''),
+  );
+  if (Number.isFinite(markSize)) return Math.round(markSize);
+
+  if (typeof window !== 'undefined') {
+    const selection = window.getSelection();
+    const node = selection?.anchorNode;
+    const element = node instanceof Element ? node : node?.parentElement;
+    const computedSize = Number.parseFloat(
+      String(element ? window.getComputedStyle(element).fontSize : ''),
+    );
+    if (Number.isFinite(computedSize)) return Math.round(computedSize);
+  }
+
+  return 14;
+};
+
 const PrintTemplateToolbar: React.FC<PrintTemplateToolbarProps> = ({
   editor,
   variableOptions = [],
@@ -82,9 +101,10 @@ const PrintTemplateToolbar: React.FC<PrintTemplateToolbarProps> = ({
   const [variableSearch, setVariableSearch] = useState('');
   const [textColor, setTextColor] = useState('#111827');
   const [highlightColor, setHighlightColor] = useState('#fde68a');
+  const [fontSizeValue, setFontSizeValue] = useState(14);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const brandPalette = useMemo(() => getBrandPalette(), []);
-  const currentFontSize = String(editor?.getAttributes?.('textStyle')?.fontSize || '14px');
+  const currentFontSize = `${fontSizeValue}px`;
   const currentLineHeight = String(
     editor?.getAttributes?.('paragraph')?.lineHeight || editor?.getAttributes?.('heading')?.lineHeight || '1.9'
   );
@@ -119,6 +139,7 @@ const PrintTemplateToolbar: React.FC<PrintTemplateToolbarProps> = ({
       const markHighlight = String(editor.getAttributes('highlight')?.color || '').trim();
       if (markTextColor) setTextColor(markTextColor);
       if (markHighlight) setHighlightColor(markHighlight);
+      setFontSizeValue(getEditorFontSize(editor));
     };
     syncColors();
     editor.on('selectionUpdate', syncColors);
@@ -201,9 +222,16 @@ const PrintTemplateToolbar: React.FC<PrintTemplateToolbarProps> = ({
 
   const stepFontSize = (delta: number) => {
     if (!editor) return;
-    const current = String(editor.getAttributes('textStyle')?.fontSize || '14px');
-    const parsed = Number.parseInt(current, 10);
-    const next = Math.min(40, Math.max(10, (Number.isFinite(parsed) ? parsed : 14) + delta));
+    const next = Math.min(96, Math.max(8, getEditorFontSize(editor) + delta));
+    setFontSizeValue(next);
+    editor.chain().focus().setFontSize(`${next}px`).run();
+  };
+
+  const setFontSize = (value: number | null) => {
+    if (!editor || value === null || value === undefined) return;
+    const next = Math.min(96, Math.max(8, Math.round(Number(value))));
+    if (!Number.isFinite(next)) return;
+    setFontSizeValue(next);
     editor.chain().focus().setFontSize(`${next}px`).run();
   };
 
@@ -259,6 +287,20 @@ const PrintTemplateToolbar: React.FC<PrintTemplateToolbarProps> = ({
         {iconBtn('زیرخط', <UnderlineOutlined />, () => editor?.chain().focus().toggleUnderline().run(), !editor, editor?.isActive('underline'))}
         {iconBtn('تیتر', <FontSizeOutlined />, () => editor?.chain().focus().toggleHeading({ level: 2 }).run(), !editor, editor?.isActive('heading', { level: 2 }))}
         {iconBtn(`کوچک‌تر کردن فونت (فعلی: ${currentFontSize})`, <MinusOutlined />, () => stepFontSize(-1), !editor)}
+        <Tooltip title="اندازه فونت انتخاب‌شده (پیکسل)">
+          <InputNumber
+            className="print-template-font-size-input"
+            size="small"
+            min={8}
+            max={96}
+            precision={0}
+            controls={false}
+            value={fontSizeValue}
+            onChange={setFontSize}
+            disabled={!editor}
+            aria-label="اندازه فونت"
+          />
+        </Tooltip>
         {iconBtn(`بزرگ‌تر کردن فونت (فعلی: ${currentFontSize})`, <PlusOutlined />, () => stepFontSize(1), !editor)}
         {iconBtn(`کاهش فاصله خطوط (فعلی: ${currentLineHeight})`, <MinusOutlined rotate={90} />, () => stepLineHeight(-0.1), !editor)}
         {iconBtn(`افزایش فاصله خطوط (فعلی: ${currentLineHeight})`, <PlusOutlined rotate={90} />, () => stepLineHeight(0.1), !editor)}
@@ -439,6 +481,9 @@ const PrintTemplateToolbar: React.FC<PrintTemplateToolbarProps> = ({
           align-items: center;
           flex-wrap: wrap;
           gap: 8px;
+        }
+        .print-template-font-size-input {
+          width: 58px;
         }
         .toolbar-color-box {
           display: inline-flex;

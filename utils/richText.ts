@@ -10,6 +10,40 @@ const escapeHtml = (value: string) => value
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#39;');
 
+// Rich-text values are frequently pasted from office tools or copied from
+// another record. Those sources carry layout rules (font family/size,
+// direction, paragraph spacing, …) which must not override the place where a
+// value is shown. Keep semantic marks such as <strong>/<em>/<u> and colours
+// selected in the editor, but make typography and layout inherit from the
+// surrounding screen or print template.
+const INHERITED_RICH_TEXT_STYLE_PROPERTIES = new Set([
+  'font',
+  'font-family',
+  'font-size',
+  'line-height',
+  'direction',
+  'text-align',
+  'letter-spacing',
+  'word-spacing',
+  'white-space',
+  'text-indent',
+]);
+
+const removeInheritedRichTextStyles = (html: string): string => html.replace(
+  /\sstyle=(['"])([\s\S]*?)\1/gi,
+  (attribute, quote: string, styleText: string) => {
+    const retained = String(styleText || '')
+      .split(';')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .filter((part) => {
+        const property = part.slice(0, part.indexOf(':')).trim().toLowerCase();
+        return property && !INHERITED_RICH_TEXT_STYLE_PROPERTIES.has(property);
+      });
+    return retained.length ? ` style=${quote}${retained.join('; ')}${quote}` : '';
+  },
+);
+
 /** محتوای قدیمیِ ساده را بدون از دست‌دادن خط‌های جدید به HTML امن تبدیل می‌کند. */
 export const normalizeRichTextHtml = (value: unknown): string => {
   const source = String(value ?? '');
@@ -18,23 +52,22 @@ export const normalizeRichTextHtml = (value: unknown): string => {
     ? source
     : escapeHtml(source).replace(/\r?\n/g, '<br>');
 
-  return DOMPurify.sanitize(html, {
+  const sanitized = DOMPurify.sanitize(html, {
     ALLOWED_TAGS: ['p', 'h2', 'h3', 'h4', 'strong', 'b', 'em', 'i', 'u', 'ul', 'ol', 'li', 'span', 'br'],
     ALLOWED_ATTR: ['style'],
   });
+  return removeInheritedRichTextStyles(sanitized);
 };
 
 /**
- * خروجی امن متن غنی برای چاپ. رنگ پایه را صریحاً مشکی می‌کنیم تا متن‌های
- * بدون رنگ انتخاب‌شده، تحت‌تأثیر رنگ روشن حالت شب قرار نگیرند؛ رنگ‌های
- * انتخاب‌شدهٔ کاربر در عناصر داخلی همچنان بر این رنگ غلبه می‌کنند.
+ * خروجی امن متن غنی برای چاپ. متن به‌صورت پیش‌فرض از تایپوگرافی محل درج
+ * ارث می‌برد؛ تنها تأکیدها و رنگ‌هایی که کاربر انتخاب کرده حفظ می‌شوند.
  */
 export const normalizeRichTextHtmlForPrint = (value: unknown): string => {
   const html = normalizeRichTextHtml(value);
-  // Long-text field values use this shared print wrapper in every print path.
-  // Increase only the inherited default by two pixels, while preserving any
-  // explicit font size the user applied inside the rich-text editor.
-  return html ? `<div class="rich-text-print" style="color:#000000; font-size:calc(1em + 2px);">${html}</div>` : '';
+  return html
+    ? `<div class="rich-text-print" style="font-family:inherit; font-size:inherit; line-height:inherit; direction:inherit; text-align:inherit;">${html}</div>`
+    : '';
 };
 
 export const richTextToPlainText = (value: unknown): string => {

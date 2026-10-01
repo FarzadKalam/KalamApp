@@ -127,6 +127,7 @@ import {
 } from "../invoicePresentation";
 import {
   isUuidLike,
+  richTextMarkupToPlainText,
   sanitizeOutboundDisplay,
 } from "../../shared/recordRuntime";
 import {
@@ -531,6 +532,21 @@ const normalizePrintableNumber = (value: any) => {
 };
 const toPersianPlain = (value: any) =>
   toPersianNumber(normalizePrintableNumber(value));
+// Values inserted into a `{{...}}` token live inside the template author's
+// markup. Relation fields such as addresses may themselves be persisted by a
+// rich-text editor, so inserting them as HTML would split the surrounding
+// paragraph and import their former font size into the print document.
+const toInlinePrintText = (value: unknown): string => {
+  const raw = getSafePrintText(value, "").trim();
+  if (!raw) return "";
+  const plain = richTextMarkupToPlainText(raw)
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!plain) return "";
+  const localized = localizePlainText(plain);
+  return localized === "-" ? "" : localized;
+};
 const getRelationRecordId = (value: any): string => {
   if (value && typeof value === "object") {
     return String(value.id || value.value || "").trim();
@@ -549,10 +565,10 @@ const getAddressDisplay = (source: any) => {
   const address = String(source?.address || "").trim();
   const parts = [
     province
-      ? `\u0627\u0633\u062A\u0627\u0646 ${localizePlainText(province)}`
+      ? `\u0627\u0633\u062A\u0627\u0646 ${toInlinePrintText(province)}`
       : "",
-    city ? `\u0634\u0647\u0631 ${localizePlainText(city)}` : "",
-    address ? localizePlainText(address) : "",
+    city ? `\u0634\u0647\u0631 ${toInlinePrintText(city)}` : "",
+    address ? toInlinePrintText(address) : "",
   ].filter(Boolean);
   return parts.join("، ");
 };
@@ -4428,8 +4444,8 @@ export const usePrintManager = ({
         nestedPath === "full_name"
       ) {
         const fullName = String(source?.full_name || "").trim();
-        if (fullName) return localizePlainText(fullName);
-        return localizePlainText(
+        if (fullName) return toInlinePrintText(fullName);
+        return toInlinePrintText(
           [source?.prefix, source?.first_name, source?.last_name]
             .map((part) => String(part || "").trim())
             .filter(Boolean)
@@ -4504,13 +4520,13 @@ export const usePrintManager = ({
       }
       if (root === "customer" || root === "supplier") {
         if (nestedPath === "national_code") {
-          return localizePlainText(resolveCounterpartyNationalCode(source));
+          return toInlinePrintText(resolveCounterpartyNationalCode(source));
         }
         if (nestedPath === "national_id") {
-          return localizePlainText(resolveCounterpartyNationalId(source));
+          return toInlinePrintText(resolveCounterpartyNationalId(source));
         }
         if (nestedPath === "national_identifier") {
-          return localizePlainText(
+          return toInlinePrintText(
             resolveCounterpartyNationalIdentifier(source),
           );
         }
@@ -4544,7 +4560,7 @@ export const usePrintManager = ({
           return formatPersianPrice(raw);
         }
       }
-      return localizePlainText(raw);
+      return toInlinePrintText(raw);
     },
     [
       buildBlockTableHtml,
