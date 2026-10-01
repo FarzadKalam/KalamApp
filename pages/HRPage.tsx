@@ -9751,7 +9751,11 @@ const HRPage: React.FC = () => {
         onClose={() => commissionListPrintManager.setIsPrintModalOpen(false)}
         onPreparePrint={commissionListPrintManager.preparePrint}
         onPrint={commissionListPrintManager.handlePrint}
-        onGenerateFinalPdfPreview={generateCommissionFinalPdfPreview}
+        onGenerateFinalPdfPreview={
+          commissionListPrintManager.isFinalPdfPreviewReady
+            ? generateCommissionFinalPdfPreview
+            : undefined
+        }
         previewContentVersion={commissionListPrintManager.printPreviewSourceVersion}
         printTemplates={commissionListPrintManager.printTemplates}
         selectedTemplateId={commissionListPrintManager.selectedTemplateId}

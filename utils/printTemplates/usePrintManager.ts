@@ -779,6 +779,8 @@ export const usePrintManager = ({
   });
   const [savingPrintFields, setSavingPrintFields] = useState(false);
   const [previewRevision, setPreviewRevision] = useState(0);
+  const [printDependenciesReady, setPrintDependenciesReady] = useState(false);
+  const [resolvedPrintDependencyKey, setResolvedPrintDependencyKey] = useState("");
   const [measuredSectionHeights, setMeasuredSectionHeights] = useState({
     header: 0,
     footer: 0,
@@ -807,6 +809,16 @@ export const usePrintManager = ({
   const printSignatureSectionHeightPxRef = useRef(0);
   const templatesLoadedRef = useRef(false);
   const dependenciesLoadedKeyRef = useRef<string | null>(null);
+  const printDependenciesRequestRef = useRef<{
+    key: string;
+    promise: Promise<{
+      companyResult: any;
+      assigneeDirectory: any;
+      customerResult: any;
+      supplierResult: any;
+      employeeResult: any;
+    }>;
+  } | null>(null);
   const [renderedPageCount, setRenderedPageCount] = useState(1);
   const renderedPageRangesRef = useRef<PrintPageRange[]>([
     { start: 0, end: 1 },
@@ -822,6 +834,7 @@ export const usePrintManager = ({
     number | null
   >(null);
   const payrollEmployeeId = getRelationRecordId(data?.employee_id);
+  const printDependencyKey = `${moduleId}:${String(data?.id || "")}:${String(data?.customer_id || "")}:${String(data?.supplier_id || "")}:${payrollEmployeeId}`;
   const printRelationOptions = useMemo(
     () => withPrintIdentityRelationOptions(relationOptions, assigneeDirectory),
     [assigneeDirectory, relationOptions],
@@ -1584,6 +1597,140 @@ export const usePrintManager = ({
     return companySettingsRequestRef.current;
   }, []);
 
+  // A PDF is serialized static HTML. Resolve every tenant and related-record
+  // value that can appear in a template before that snapshot is allowed to be
+  // generated; otherwise a fast preview can permanently cache empty customer,
+  // supplier or employee placeholders.
+  const loadPrintDependencies = useCallback(() => {
+    const dependencyKey = printDependencyKey;
+    const pending = printDependenciesRequestRef.current;
+    if (pending?.key === dependencyKey) return pending.promise;
+    if (dependenciesLoadedKeyRef.current === dependencyKey) {
+      setPrintDependenciesReady(true);
+      setResolvedPrintDependencyKey(dependencyKey);
+      return Promise.resolve({
+        companyResult: { data: sellerInfo, error: null },
+        assigneeDirectory,
+        customerResult: { data: customerInfo, error: null },
+        supplierResult: { data: supplierInfo, error: null },
+        employeeResult: { data: employeeInfo, error: null },
+      });
+    }
+
+    setPrintDependenciesReady(false);
+    const companyRequest = loadPrintCompanySettings();
+    const assigneeDirectoryRequest = fetchAssigneeDirectory(supabase).catch(
+      () => null,
+    );
+    const filesCountRequest =
+      moduleId && data?.id
+        ? (async () => {
+            const tableExists = await detectRecordFilesTable(supabase).catch(
+              () => true,
+            );
+            if (!tableExists) return { count: null, error: null };
+            return supabase
+              .from("record_files")
+              .select("id", { count: "exact", head: true })
+              .eq("module_id", moduleId)
+              .eq("record_id", data.id);
+          })()
+        : Promise.resolve({ count: null, error: null });
+    const customerRequest =
+      moduleId === "invoices" && data?.customer_id
+        ? supabase
+            .from("customers")
+            .select("*")
+            .eq("id", data.customer_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null });
+    const supplierRequest =
+      moduleId === "purchase_invoices" && data?.supplier_id
+        ? supabase
+            .from("suppliers")
+            .select("*")
+            .eq("id", data.supplier_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null });
+    const employeeRequest =
+      moduleId === "payroll_slips" && payrollEmployeeId
+        ? supabase
+            .from("employees")
+            .select(
+              "national_code, father_name, marital_status, military_service_status, children_count, insurance_number",
+            )
+            .eq("id", payrollEmployeeId)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null });
+
+    const promise = Promise.all([
+      companyRequest,
+      assigneeDirectoryRequest,
+      filesCountRequest,
+      customerRequest,
+      supplierRequest,
+      employeeRequest,
+    ])
+      .then(([
+        companyResult,
+        nextAssigneeDirectory,
+        filesCountResult,
+        customerResult,
+        supplierResult,
+        employeeResult,
+      ]) => {
+        if (nextAssigneeDirectory) setAssigneeDirectory(nextAssigneeDirectory);
+        if (!filesCountResult.error) {
+          const count = filesCountResult.count;
+          setLinkedAttachmentCount(Number.isFinite(count) ? Number(count) : 0);
+        }
+        setCustomerInfo(customerResult.error ? null : customerResult.data || null);
+        setSupplierInfo(supplierResult.error ? null : supplierResult.data || null);
+        setEmployeeInfo(employeeResult.error ? null : employeeResult.data || null);
+        dependenciesLoadedKeyRef.current = dependencyKey;
+        setPrintDependenciesReady(true);
+        setResolvedPrintDependencyKey(dependencyKey);
+        return {
+          companyResult,
+          assigneeDirectory: nextAssigneeDirectory,
+          customerResult,
+          supplierResult,
+          employeeResult,
+        };
+      })
+      .catch((error) => {
+        setPrintDependenciesReady(true);
+        setResolvedPrintDependencyKey(dependencyKey);
+        return {
+          companyResult: { data: null, error },
+          assigneeDirectory: null,
+          customerResult: { data: null, error },
+          supplierResult: { data: null, error },
+          employeeResult: { data: null, error },
+        };
+      })
+      .finally(() => {
+        if (printDependenciesRequestRef.current?.key === dependencyKey) {
+          printDependenciesRequestRef.current = null;
+        }
+      });
+    printDependenciesRequestRef.current = { key: dependencyKey, promise };
+    return promise;
+  }, [
+    assigneeDirectory,
+    customerInfo,
+    data?.customer_id,
+    data?.id,
+    data?.supplier_id,
+    employeeInfo,
+    loadPrintCompanySettings,
+    moduleId,
+    payrollEmployeeId,
+    printDependencyKey,
+    sellerInfo,
+    supplierInfo,
+  ]);
+
   const getActivePrintBodyMeasurement = useCallback(() => {
     const visibleBody = previewPrintRootRef.current?.querySelector<HTMLElement>(
       ".print-template-page .print-template-body-inner",
@@ -1711,8 +1858,8 @@ export const usePrintManager = ({
 
   const preparePrint = useCallback(() => {
     measureCurrentCustomTemplatePages();
-    void loadPrintCompanySettings().catch((error) => {
-      console.error("Load company settings before print failed", error);
+    void loadPrintDependencies().catch((error) => {
+      console.error("Load print dependencies before print failed", error);
     });
     const isCatalogFullPageTemplate =
       selectedTemplateId.startsWith("custom:") &&
@@ -1734,7 +1881,7 @@ export const usePrintManager = ({
     });
   }, [
     getPrintOutputName,
-    loadPrintCompanySettings,
+    loadPrintDependencies,
     measureCurrentCustomTemplatePages,
     selectedTemplateId,
   ]);
@@ -1753,19 +1900,11 @@ export const usePrintManager = ({
         return;
       }
       const printTitle = getPrintOutputName();
-      let companySettingsResult: Awaited<
-        ReturnType<typeof loadPrintCompanySettings>
-      >;
-      let latestAssigneeDirectory: Awaited<
-        ReturnType<typeof fetchAssigneeDirectory>
-      > | null;
+      let dependencies: Awaited<ReturnType<typeof loadPrintDependencies>>;
       try {
-        [companySettingsResult, latestAssigneeDirectory] = await Promise.all([
-          waitForPrintPrerequisite(loadPrintCompanySettings()),
-          waitForPrintPrerequisite(fetchAssigneeDirectory(supabase)).catch(
-            () => null,
-          ),
-        ]);
+        dependencies = await waitForPrintPrerequisite(
+          loadPrintDependencies(),
+        );
       } catch (error) {
         const targetWindow = reservedPrintWindowRef.current;
         reservedPrintWindowRef.current = null;
@@ -1773,21 +1912,19 @@ export const usePrintManager = ({
         console.error("Print prerequisites could not be loaded", error);
         return;
       }
-      if (latestAssigneeDirectory)
-        setAssigneeDirectory(latestAssigneeDirectory);
       const requiresCompanySettings =
         moduleId === "invoices" || moduleId === "purchase_invoices";
-      if (requiresCompanySettings && companySettingsResult?.error) {
+      if (requiresCompanySettings && dependencies.companyResult?.error) {
         console.error(
           "Invoice print skipped because company settings could not be loaded",
-          companySettingsResult.error,
+          dependencies.companyResult.error,
         );
         const targetWindow = reservedPrintWindowRef.current;
         reservedPrintWindowRef.current = null;
         showPreparedPdfErrorState(
           targetWindow,
           printTitle,
-          companySettingsResult.error,
+          dependencies.companyResult.error,
         );
         return;
       }
@@ -1883,7 +2020,7 @@ export const usePrintManager = ({
     [
       availableTemplates,
       getPrintOutputName,
-      loadPrintCompanySettings,
+      loadPrintDependencies,
       measureCurrentCustomTemplatePages,
       moduleId,
       renderedPageCount,
@@ -1900,13 +2037,13 @@ export const usePrintManager = ({
       if (!selectedTemplateId) {
         throw new Error("print_template_missing");
       }
-      const companySettingsResult = await waitForPrintPrerequisite(
-        loadPrintCompanySettings(),
+      const dependencies = await waitForPrintPrerequisite(
+        loadPrintDependencies(),
       );
       const requiresCompanySettings =
         moduleId === "invoices" || moduleId === "purchase_invoices";
-      if (requiresCompanySettings && companySettingsResult?.error) {
-        throw companySettingsResult.error;
+      if (requiresCompanySettings && dependencies.companyResult?.error) {
+        throw dependencies.companyResult.error;
       }
       await waitForPrintRenderCommit();
       // The export/save path can run without the interactive print button.
@@ -1991,7 +2128,7 @@ export const usePrintManager = ({
     [
       availableTemplates,
       getPrintOutputName,
-      loadPrintCompanySettings,
+      loadPrintDependencies,
       measureCurrentCustomTemplatePages,
       moduleId,
       renderedPageCount,
@@ -5949,122 +6086,12 @@ export const usePrintManager = ({
   buildPrintCardRef.current = buildPrintCard;
   buildNativeCustomPrintFlowRef.current = buildNativeCustomPrintFlow;
 
-  // اطلاعات هویتی فیش باید قبل از باز شدن پنجرهٔ چاپ آماده باشد؛ وابسته‌کردن
-  // این درخواست به خود مودال باعث می‌شد پیش‌نمایش اولیه با خانه‌های خالی دیده شود.
-  useEffect(() => {
-    if (moduleId !== "payroll_slips" || !payrollEmployeeId) {
-      setEmployeeInfo(null);
-      return;
-    }
-
-    let isMounted = true;
-    supabase
-      .from("employees")
-      .select(
-        "national_code, father_name, marital_status, military_service_status, children_count, insurance_number",
-      )
-      .eq("id", payrollEmployeeId)
-      .maybeSingle()
-      .then(({ data: employeeData, error: employeeError }) => {
-        if (!isMounted) return;
-        if (employeeError) {
-          console.error(
-            "Load payroll employee print fields failed",
-            employeeError,
-          );
-          setEmployeeInfo(null);
-          return;
-        }
-        setEmployeeInfo(employeeData || null);
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [moduleId, payrollEmployeeId]);
-
   useEffect(() => {
     if (!isPrintModalOpen && !printMode) return;
-    const dependencyKey = `${moduleId}:${String(data?.id || "")}:${String(data?.customer_id || "")}:${String(data?.supplier_id || "")}:${payrollEmployeeId}`;
-    if (dependenciesLoadedKeyRef.current === dependencyKey) return;
-    let isMounted = true;
-    const loadDependencies = async () => {
-      try {
-        const companyReq = loadPrintCompanySettings();
-        const assigneeDirectoryReq = fetchAssigneeDirectory(supabase).catch(
-          () => null,
-        );
-        const filesCountReq =
-          moduleId && data?.id
-            ? (async () => {
-                const tableExists = await detectRecordFilesTable(
-                  supabase,
-                ).catch(() => true);
-                if (!tableExists) return { count: null, error: null };
-                return supabase
-                  .from("record_files")
-                  .select("id", { count: "exact", head: true })
-                  .eq("module_id", moduleId)
-                  .eq("record_id", data.id);
-              })()
-            : Promise.resolve({ count: null, error: null });
-        const customerReq =
-          moduleId === "invoices" && data?.customer_id
-            ? supabase
-                .from("customers")
-                .select("*")
-                .eq("id", data.customer_id)
-                .maybeSingle()
-            : Promise.resolve({ data: null, error: null });
-        const supplierReq =
-          moduleId === "purchase_invoices" && data?.supplier_id
-            ? supabase
-                .from("suppliers")
-                .select("*")
-                .eq("id", data.supplier_id)
-                .maybeSingle()
-            : Promise.resolve({ data: null, error: null });
-        const [
-          { error: companyError },
-          assigneeDirectoryData,
-          { count: filesCount, error: filesCountError },
-          { data: customerData, error: customerError },
-          { data: supplierData, error: supplierError },
-        ] = await Promise.all([
-          companyReq as any,
-          assigneeDirectoryReq as any,
-          filesCountReq as any,
-          customerReq as any,
-          supplierReq as any,
-        ]);
-        if (!isMounted) return;
-        if (assigneeDirectoryData) setAssigneeDirectory(assigneeDirectoryData);
-        if (!filesCountError)
-          setLinkedAttachmentCount(
-            Number.isFinite(filesCount) ? Number(filesCount) : 0,
-          );
-        if (!customerError) setCustomerInfo(customerData || null);
-        if (!supplierError) setSupplierInfo(supplierData || null);
-        if (!companyError && !customerError && !supplierError) {
-          dependenciesLoadedKeyRef.current = dependencyKey;
-        }
-      } catch (err) {
-        console.error("Load print dependencies failed", err);
-      }
-    };
-
-    loadDependencies();
-    return () => {
-      isMounted = false;
-    };
+    void loadPrintDependencies();
   }, [
-    data?.customer_id,
-    data?.id,
-    data?.supplier_id,
     isPrintModalOpen,
-    loadPrintCompanySettings,
-    moduleId,
-    payrollEmployeeId,
+    loadPrintDependencies,
     printMode,
   ]);
 
@@ -6147,6 +6174,10 @@ export const usePrintManager = ({
     refreshTemplates,
     previewMeta,
     printPreviewSourceVersion,
+    isFinalPdfPreviewReady:
+      printDependenciesReady &&
+      resolvedPrintDependencyKey === printDependencyKey &&
+      Boolean(selectedTemplateId),
     canEditPrintTemplates,
     printableFieldsForTemplate,
     isSelectedTemplateSystem,
