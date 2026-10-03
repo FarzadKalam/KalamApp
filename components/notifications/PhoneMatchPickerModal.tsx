@@ -1,6 +1,6 @@
 import React from 'react';
 import { Alert, Input, Modal, Radio, Space, Tag } from 'antd';
-import type { PhoneBindTargetModuleId } from '../../utils/phoneIdentityBindings';
+import { PHONE_BIND_TARGET_OPTIONS, type PhoneBindTargetModuleId } from '../../utils/phoneIdentityBindings';
 import AdaptiveSelectField from '../AdaptiveSelectField';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 
@@ -28,11 +28,6 @@ type Props = {
   onSave: () => void | Promise<void>;
 };
 
-const MODULE_OPTIONS: Array<{ label: string; value: PhoneBindTargetModuleId }> = [
-  { label: 'مشتری', value: 'customers' },
-  { label: 'تأمین‌کننده', value: 'suppliers' },
-  { label: 'کارمند', value: 'employees' },
-];
 const PHONE_BIND_MODAL_Z_INDEX = 15220;
 const PHONE_BIND_SELECT_Z_INDEX = 15320;
 
@@ -119,7 +114,7 @@ const PhoneMatchPickerModal: React.FC<Props> = ({
             onChange={(event) => onChangeTargetModuleId(event.target.value)}
             optionType="button"
             buttonStyle="solid"
-            options={MODULE_OPTIONS}
+            options={PHONE_BIND_TARGET_OPTIONS}
           />
         </div>
 

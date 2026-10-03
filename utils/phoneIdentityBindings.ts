@@ -1,9 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { normalizePhoneDigits } from './phoneNumber';
 
-export type PhoneBindTargetModuleId = 'customers' | 'suppliers' | 'employees';
+export type PhoneBindTargetModuleId = 'customers' | 'suppliers' | 'employees' | 'marketing_leads';
 
-export const PHONE_BIND_TARGET_MODULES: PhoneBindTargetModuleId[] = ['customers', 'suppliers', 'employees'];
+export const PHONE_BIND_TARGET_MODULES: PhoneBindTargetModuleId[] = ['customers', 'suppliers', 'employees', 'marketing_leads'];
+export const PHONE_BIND_TARGET_OPTIONS: Array<{ label: string; value: PhoneBindTargetModuleId }> = [
+  { label: 'مشتری', value: 'customers' },
+  { label: 'تأمین‌کننده', value: 'suppliers' },
+  { label: 'کارمند', value: 'employees' },
+  { label: 'لید', value: 'marketing_leads' },
+];
 export const MANUAL_PHONE_BINDING_SOURCE_TABLE = 'manual_phone_binding';
 export const MANUAL_PHONE_BINDING_SOURCE_FIELD = 'identity';
 
@@ -17,7 +23,11 @@ const TARGET_SELECT_BY_MODULE: Record<PhoneBindTargetModuleId, string> = {
   customers: 'id, org_id, full_name, business_name, legal_name, system_code, first_name, last_name',
   suppliers: 'id, org_id, business_name, first_name, last_name, system_code',
   employees: 'id, org_id, full_name, first_name, last_name, system_code, legacy_system_code',
+  marketing_leads: 'id, org_id, name, business_name, first_name, last_name, sarnakh_code',
 };
+
+export const getPhoneBindingTargetSelect = (moduleId: PhoneBindTargetModuleId) =>
+  TARGET_SELECT_BY_MODULE[moduleId];
 
 const buildLookupKey = (value: unknown) => {
   let digits = normalizePhoneDigits(value);
@@ -56,6 +66,15 @@ export const buildPhoneTargetDisplayName = (
       || ''
     ).trim();
   }
+  if (moduleId === 'marketing_leads') {
+    return String(
+      row.business_name
+      || row.name
+      || [row.first_name, row.last_name].filter(Boolean).join(' ')
+      || row.sarnakh_code
+      || ''
+    ).trim();
+  }
   return String(
     row.full_name
     || [row.first_name, row.last_name].filter(Boolean).join(' ')
@@ -75,6 +94,9 @@ const buildPhoneTargetMeta = (
   }
   if (moduleId === 'suppliers') {
     return String(row.system_code || row.business_name || '').trim();
+  }
+  if (moduleId === 'marketing_leads') {
+    return String(row.sarnakh_code || row.business_name || '').trim();
   }
   return String(row.system_code || row.legacy_system_code || '').trim();
 };
@@ -100,6 +122,15 @@ const buildSearchOrFilter = (moduleId: PhoneBindTargetModuleId, search: string) 
       `first_name.ilike.${like}`,
       `last_name.ilike.${like}`,
       `system_code.ilike.${like}`,
+    ].join(',');
+  }
+  if (moduleId === 'marketing_leads') {
+    return [
+      `name.ilike.${like}`,
+      `business_name.ilike.${like}`,
+      `first_name.ilike.${like}`,
+      `last_name.ilike.${like}`,
+      `sarnakh_code.ilike.${like}`,
     ].join(',');
   }
   return [

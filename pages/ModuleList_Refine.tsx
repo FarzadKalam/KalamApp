@@ -7,6 +7,18 @@
 } from "react";
 import { mapAntdSorterToCrudSorting, useTable } from "@refinedev/antd";
 import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragOverEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import {
   CrudFilter,
   CrudFilters,
   CrudSort,
@@ -26,7 +38,7 @@ import {
 } from "../types";
 import { supportsModuleAssignee } from "../utils/assigneeSupport";
 import { buildRecordScopeCrudFilters } from "../utils/recordScopeFilters";
-import { App, Badge, Button, Drawer, Dropdown, Empty, Skeleton } from "antd";
+import { App, Avatar, Badge, Button, Drawer, Dropdown, Empty, Skeleton } from "antd";
 import type { MenuProps } from "antd";
 import type { FilterValue } from "antd/es/table/interface";
 import {
@@ -182,6 +194,8 @@ import {
   setRecordLocksState,
   type RecordLockState,
 } from "../utils/recordLockRuntime";
+import { getRecordTitle } from "../utils/recordTitle";
+import type { RenderCardItemProps } from "../components/moduleList/RenderCardItem";
 
 const MapView = React.lazy(() => import("../components/moduleList/MapView"));
 const SmartForm = React.lazy(() => import("../components/SmartForm"));
@@ -378,7 +392,6 @@ const getTagViewFilterMeta = (
     tagIds,
   };
 };
-const getKanbanLoadStep = () => 15;
 type ColumnFiltersState = Record<string, FilterValue | null>;
 type BulkBuildTarget = "product_bundles" | "price_lists" | null;
 type BulkBuildSourceModule = "products" | "billboards";
@@ -951,6 +964,102 @@ const ModuleListContentSkeleton: React.FC<{ viewMode: ViewMode }> = ({
   );
 };
 
+type KanbanDraggableCardProps = Omit<
+  RenderCardItemProps,
+  "item" | "isDragActive" | "dragHandleProps" | "kanbanCompact"
+> & {
+  item: any;
+  columnKey: string;
+};
+
+const KanbanDraggableCard: React.FC<KanbanDraggableCardProps> = ({
+  item,
+  columnKey,
+  ...cardProps
+}) => {
+  const recordId = String(item?.id || "").trim();
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `kanban-card:${recordId}`,
+    disabled: !recordId,
+    data: { item, sourceColumnKey: columnKey },
+  });
+
+  return (
+    <div ref={setNodeRef} className="min-w-0">
+      <RenderCardItem
+        {...cardProps}
+        item={item}
+        kanbanCompact
+        isDragActive={isDragging}
+        dragHandleProps={{
+          ...(attributes as React.ButtonHTMLAttributes<HTMLButtonElement>),
+          ...(listeners as React.ButtonHTMLAttributes<HTMLButtonElement>),
+        }}
+      />
+    </div>
+  );
+};
+
+const KanbanDropColumn: React.FC<{
+  columnKey: string;
+  isActiveTarget?: boolean;
+  children: React.ReactNode;
+}> = ({ columnKey, isActiveTarget = false, children }) => {
+  const { setNodeRef, isOver } = useDroppable({
+    id: `kanban-column:${columnKey}`,
+    data: { columnKey },
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      data-kanban-column-key={columnKey}
+      className={`min-w-[282px] w-[282px] sm:min-w-[304px] sm:w-[304px] flex flex-col bg-gray-100/55 dark:bg-white/5 rounded-[1.6rem] p-3 border shadow-sm h-full transition-[box-shadow,border-color,background-color] duration-150 ${
+        isOver || isActiveTarget
+          ? "border-[rgba(var(--brand-500-rgb),0.8)] bg-[rgba(var(--brand-50-rgb),0.78)] ring-2 ring-[rgba(var(--brand-500-rgb),0.42)] dark:bg-[rgba(var(--brand-900-rgb),0.24)]"
+          : "border-gray-200 dark:border-gray-800"
+      }`}
+    >
+      {children}
+    </div>
+  );
+};
+
+const KanbanDragPreview: React.FC<{
+  item: any;
+  moduleConfig?: ModuleDefinition | null;
+  imageField?: string;
+}> = ({ item, moduleConfig, imageField }) => {
+  const title = getRecordTitle(item, moduleConfig || undefined, {
+    fallback: "بدون عنوان",
+  });
+  const imageUrl = imageField ? item?.[imageField] : null;
+  return (
+    <div className="flex w-[240px] items-center gap-2.5 rounded-2xl border border-[rgba(var(--brand-400-rgb),0.65)] bg-white/95 p-2.5 shadow-[0_18px_45px_rgba(15,23,42,0.24)] backdrop-blur dark:bg-[#202020]/95">
+      <Avatar
+        shape="square"
+        size={36}
+        src={imageUrl || undefined}
+        className="shrink-0 rounded-xl bg-gray-100 dark:bg-white/10"
+      />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-xs font-extrabold text-gray-800 dark:text-white">
+          {title}
+        </div>
+        <div className="mt-0.5 text-[10px] font-semibold text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-200-rgb))]">
+          در حال جابه‌جایی
+        </div>
+      </div>
+    </div>
+  );
+};
+
+type KanbanColumnData = {
+  rows: any[];
+  total: number;
+  loading: boolean;
+};
+
 export const ModuleListRefine: React.FC<{
   moduleIdOverride?: string;
   initialViewFiltersOverride?: CrudFilters;
@@ -1140,12 +1249,13 @@ export const ModuleListRefine: React.FC<{
   const [gridPageSize, setGridPageSize] = useState<number>(() =>
     getDefaultGridPageSize(),
   ); // ✅ Grid pagination
-  const [kanbanVisibleCounts, setKanbanVisibleCounts] = useState<
-    Record<string, number>
+  const [kanbanColumns, setKanbanColumns] = useState<
+    Record<string, KanbanColumnData>
   >({});
-  const [kanbanDraggingRecordId, setKanbanDraggingRecordId] = useState<
-    string | null
-  >(null);
+  const [kanbanLoading, setKanbanLoading] = useState(false);
+  const [kanbanReady, setKanbanReady] = useState(false);
+  const [kanbanRefreshSeed, setKanbanRefreshSeed] = useState(0);
+  const [kanbanDragItem, setKanbanDragItem] = useState<any | null>(null);
   const [kanbanDragOverColumn, setKanbanDragOverColumn] = useState<
     string | null
   >(null);
@@ -1322,11 +1432,6 @@ export const ModuleListRefine: React.FC<{
   const lastRequestedPageSizeRef = useRef<number | null>(null);
   const lastAppliedFiltersSignatureRef = useRef<string | null>(null);
   const utilitySlotRef = useRef<HTMLDivElement | null>(null);
-  const kanbanDragRef = useRef<{
-    record: any;
-    sourceColumnKey: string;
-    fieldKey: string;
-  } | null>(null);
   const tagViewFilterIdsCacheRef = useRef<{
     signature: string;
     ids: string[];
@@ -1363,6 +1468,7 @@ export const ModuleListRefine: React.FC<{
     [viewMode],
   );
   const isListView = viewMode === ViewMode.LIST;
+  const isKanbanView = viewMode === ViewMode.KANBAN;
 
   const {
     tableProps,
@@ -1387,7 +1493,9 @@ export const ModuleListRefine: React.FC<{
     sorters: { initial: ensureStableCrudSorters(defaultSorters) },
     pagination: { pageSize: DEFAULT_LIST_PAGE_SIZE },
     queryOptions: {
-      enabled: !!dataResource,
+      // Kanban has its own per-column paginator. Keeping this list query active
+      // used to download a redundant first page beside the full Kanban payload.
+      enabled: !!dataResource && isListView,
       staleTime: 60_000,
       refetchOnMount: false,
       refetchOnWindowFocus: false,
@@ -1407,6 +1515,10 @@ export const ModuleListRefine: React.FC<{
   const baseAllData = tableQueryResult.data?.data || EMPTY_ROWS;
   const baseHasQueryResult =
     !!tableQueryResult.data || !!tableQueryResult.error;
+  const kanbanRows = useMemo(
+    () => Object.values(kanbanColumns).flatMap((column) => column.rows || []),
+    [kanbanColumns],
+  );
   const stableSorters = useMemo(
     () =>
       ensureStableCrudSorters(
@@ -1450,7 +1562,9 @@ export const ModuleListRefine: React.FC<{
         : hasActiveTagViewFilters
           ? tagViewFilterLoading
           : baseLoading
-      : nonListLoading);
+      : isKanbanView
+        ? kanbanLoading
+        : nonListLoading);
   const queryPending =
     permissionConditionLoading ||
     (isListView
@@ -1459,14 +1573,18 @@ export const ModuleListRefine: React.FC<{
         : hasActiveTagViewFilters
           ? tagViewFilterLoading
           : baseQueryPending
-      : nonListLoading);
+      : isKanbanView
+        ? kanbanLoading
+        : nonListLoading);
   const allData = isListView
     ? clientPermissionPaginationActive
       ? clientPermissionPageRows
       : hasActiveTagViewFilters
         ? tagViewFilterRows
         : baseAllData
-    : nonListRows;
+    : isKanbanView
+      ? kanbanRows
+      : nonListRows;
   const effectiveBaseAllData = useMemo(() => {
     if (
       resolvedModuleId !== "cash_bank_operations" ||
@@ -1553,7 +1671,9 @@ export const ModuleListRefine: React.FC<{
       : hasActiveTagViewFilters
         ? !tagViewFilterLoading || tagViewFilterRows.length > 0
         : baseHasQueryResult
-    : nonListReady;
+    : isKanbanView
+      ? kanbanReady
+      : nonListReady;
   const selectedRows = useMemo(
     () =>
       selectedRowKeys
@@ -1612,6 +1732,12 @@ export const ModuleListRefine: React.FC<{
     ) {
       return effectiveAllData.length;
     }
+    if (isKanbanView) {
+      return Object.values(kanbanColumns).reduce(
+        (total, column) => total + Number(column?.total || 0),
+        0,
+      );
+    }
     if (!isListView) {
       return Number(nonListTotal || effectiveAllData.length || 0);
     }
@@ -1631,7 +1757,9 @@ export const ModuleListRefine: React.FC<{
     clientPermissionTotal,
     effectiveAllData.length,
     hasActiveTagViewFilters,
+    isKanbanView,
     isListView,
+    kanbanColumns,
     nonListTotal,
     resolvedModuleId,
     tableProps?.pagination,
@@ -1784,6 +1912,56 @@ export const ModuleListRefine: React.FC<{
       return {
         rows,
         total: resolvedTotal || rows.length,
+      };
+    },
+    [
+      calendarDateField,
+      dataResource,
+      refineProvider,
+      kanbanGroupBy,
+      moduleConfig,
+      resolvedModuleId,
+      stableSorters,
+      viewMode,
+      visibleColumns,
+    ],
+  );
+
+  const fetchKanbanColumnPage = useCallback(
+    async (
+      columnValue: unknown,
+      serverFilters: CrudFilters,
+      page = 1,
+    ) => {
+      if (!resolvedModuleId || !dataResource || !kanbanGroupBy) {
+        return { rows: [] as any[], total: 0 };
+      }
+      const response = await refineProvider.getList({
+        resource: dataResource,
+        pagination: { current: page, pageSize: getDefaultKanbanPageSize() },
+        sorters: stableSorters,
+        filters: [
+          ...serverFilters,
+          {
+            field: kanbanGroupBy,
+            operator: "eq",
+            value: columnValue,
+          } as CrudFilter,
+        ],
+        meta: {
+          count: "exact",
+          select: buildModuleListRowSelect(moduleConfig, visibleColumns, {
+            viewMode,
+            kanbanGroupBy,
+            calendarDateField,
+            filters: serverFilters,
+            sorters: stableSorters,
+          }),
+        },
+      });
+      return {
+        rows: Array.isArray(response?.data) ? response.data : [],
+        total: Number(response?.total || 0),
       };
     },
     [
@@ -2219,7 +2397,7 @@ export const ModuleListRefine: React.FC<{
   }, [setSorters, sorters, stableSorters]);
 
   useEffect(() => {
-    if (isListView || !resolvedModuleId || !dataResource) {
+    if (isListView || isKanbanView || !resolvedModuleId || !dataResource) {
       setNonListRows((prev) => (prev.length > 0 ? [] : prev));
       setNonListTotal((prev) => (prev !== 0 ? 0 : prev));
       setNonListLoading(false);
@@ -2282,10 +2460,136 @@ export const ModuleListRefine: React.FC<{
     fetchRowsByIdsPreservingOrder,
     hasActiveTagViewFilters,
     isListView,
+    isKanbanView,
     resolvedModuleId,
     resolveOrderedTagFilteredIds,
     searchTerm,
     tagViewFilterRefreshSeed,
+    viewFiltersState,
+  ]);
+
+  useEffect(() => {
+    if (!isKanbanView || !resolvedModuleId || !dataResource || !kanbanGroupBy) {
+      setKanbanColumns((prev) => (Object.keys(prev).length > 0 ? {} : prev));
+      setKanbanLoading(false);
+      setKanbanReady(false);
+      return;
+    }
+
+    const groupField = moduleConfig?.fields.find(
+      (field) => field.key === kanbanGroupBy,
+    );
+    const columns = Array.isArray(groupField?.options)
+      ? groupField.options.filter((option: any) => option?.value !== undefined)
+      : [];
+    if (columns.length === 0) {
+      setKanbanColumns({});
+      setKanbanLoading(false);
+      setKanbanReady(true);
+      return;
+    }
+
+    let isActive = true;
+    const serverFilters = buildMergedFilters(
+      viewFiltersState,
+      searchTerm,
+      columnFilters,
+    );
+    setKanbanLoading(true);
+    setKanbanReady(false);
+    setKanbanColumns(
+      Object.fromEntries(
+        columns.map((column: any) => [
+          String(column.value),
+          { rows: [], total: 0, loading: true } satisfies KanbanColumnData,
+        ]),
+      ),
+    );
+
+    const loadKanbanColumns = async () => {
+      try {
+        if (hasActiveTagViewFilters) {
+          const orderedIds = await resolveOrderedTagFilteredIds(serverFilters);
+          const rows = orderedIds.length
+            ? await fetchRowsByIdsPreservingOrder(orderedIds, serverFilters)
+            : [];
+          if (!isActive) return;
+          setKanbanColumns(
+            Object.fromEntries(
+              columns.map((column: any) => {
+                const value = String(column.value);
+                const columnRows = rows.filter(
+                  (row: any) => String(row?.[kanbanGroupBy] ?? "") === value,
+                );
+                return [
+                  value,
+                  {
+                    rows: columnRows.slice(0, getDefaultKanbanPageSize()),
+                    total: columnRows.length,
+                    loading: false,
+                  } satisfies KanbanColumnData,
+                ];
+              }),
+            ),
+          );
+          return;
+        }
+
+        const responses = await Promise.all(
+          columns.map(async (column: any) => ({
+            key: String(column.value),
+            ...(await fetchKanbanColumnPage(column.value, serverFilters)),
+          })),
+        );
+        if (!isActive) return;
+        setKanbanColumns(
+          Object.fromEntries(
+            responses.map((response) => [
+              response.key,
+              {
+                rows: response.rows,
+                total: response.total,
+                loading: false,
+              } satisfies KanbanColumnData,
+            ]),
+          ),
+        );
+      } catch (error) {
+        if (!isActive) return;
+        console.error("Error while loading Kanban columns:", error);
+        setKanbanColumns(
+          Object.fromEntries(
+            columns.map((column: any) => [
+              String(column.value),
+              { rows: [], total: 0, loading: false } satisfies KanbanColumnData,
+            ]),
+          ),
+        );
+      } finally {
+        if (isActive) {
+          setKanbanLoading(false);
+          setKanbanReady(true);
+        }
+      }
+    };
+
+    void loadKanbanColumns();
+    return () => {
+      isActive = false;
+    };
+  }, [
+    columnFilters,
+    dataResource,
+    fetchKanbanColumnPage,
+    fetchRowsByIdsPreservingOrder,
+    hasActiveTagViewFilters,
+    isKanbanView,
+    kanbanGroupBy,
+    kanbanRefreshSeed,
+    moduleConfig,
+    resolveOrderedTagFilteredIds,
+    resolvedModuleId,
+    searchTerm,
     viewFiltersState,
   ]);
 
@@ -2329,8 +2633,10 @@ export const ModuleListRefine: React.FC<{
       ),
     );
     setGridPageSize(getDefaultGridPageSize());
-    setKanbanVisibleCounts({});
-    setKanbanDraggingRecordId(null);
+    setKanbanColumns({});
+    setKanbanLoading(false);
+    setKanbanReady(false);
+    setKanbanDragItem(null);
     setKanbanDragOverColumn(null);
     setKanbanGroupBy("");
     setCalendarDateField("");
@@ -2579,6 +2885,7 @@ export const ModuleListRefine: React.FC<{
       try {
         tagViewFilterIdsCacheRef.current = null;
         setTagViewFilterRefreshSeed((prev) => prev + 1);
+        setKanbanRefreshSeed((prev) => prev + 1);
         await tableQueryResult.refetch();
         const markerStamp = getModuleListLiveMarkerStamp(marker);
         writeModuleListLiveObservedAt(markerStamp || Date.now());
@@ -2679,16 +2986,16 @@ export const ModuleListRefine: React.FC<{
   ]);
 
   useEffect(() => {
-    if (
-      isListView ||
-      !moduleListLiveWatermarkKey ||
-      !nonListReady ||
-      nonListLoading
-    )
+    const isReady = isKanbanView ? kanbanReady : nonListReady;
+    const isLoading = isKanbanView ? kanbanLoading : nonListLoading;
+    if (isListView || !moduleListLiveWatermarkKey || !isReady || isLoading)
       return;
     writeModuleListLiveObservedAt(Date.now());
   }, [
     isListView,
+    isKanbanView,
+    kanbanLoading,
+    kanbanReady,
     moduleListLiveWatermarkKey,
     nonListLoading,
     nonListReady,
@@ -4281,7 +4588,8 @@ export const ModuleListRefine: React.FC<{
   }, [viewMode, calendarDateField, availableCalendarFields]);
 
   useEffect(() => {
-    setKanbanVisibleCounts({});
+    setKanbanColumns({});
+    setKanbanReady(false);
   }, [kanbanGroupBy, resolvedModuleId, viewMode]);
 
   useEffect(() => {
@@ -4299,6 +4607,7 @@ export const ModuleListRefine: React.FC<{
   const handleRefresh = useCallback(() => {
     tagViewFilterIdsCacheRef.current = null;
     setTagViewFilterRefreshSeed((prev) => prev + 1);
+    setKanbanRefreshSeed((prev) => prev + 1);
     void tableQueryResult.refetch();
   }, [tableQueryResult]);
 
@@ -5209,7 +5518,8 @@ export const ModuleListRefine: React.FC<{
       } else if (nextMode === ViewMode.GRID) {
         setGridPageSize(getDefaultGridPageSize());
       } else if (nextMode === ViewMode.KANBAN) {
-        setKanbanVisibleCounts({});
+        setKanbanColumns({});
+        setKanbanReady(false);
       }
 
       // فیلترهای جدول منبع مشترک همه نماها هستند؛ قبل از تغییر نما دوباره اعمال می‌شوند.
@@ -6330,6 +6640,40 @@ export const ModuleListRefine: React.FC<{
           ? attachTaskCompletionIfNeeded(changes)
           : changes;
       const hide = showListMessage("loading", "در حال جابجایی کارت...", 0);
+      const sourceColumnKey = String(record?.[kanbanGroupBy] ?? "");
+      const movedRecord = { ...record, ...normalizedChanges };
+
+      // The move is optimistic: the user sees the card land immediately and we
+      // only reload the small affected columns if persistence fails.
+      setKanbanColumns((previous) => {
+        if (!previous[sourceColumnKey] || !previous[targetColumnKey]) {
+          return previous;
+        }
+        const source = previous[sourceColumnKey];
+        const target = previous[targetColumnKey];
+        const sourceRows = source.rows.filter(
+          (row: any) => String(row?.id || "") !== String(record?.id || ""),
+        );
+        const targetRows = [
+          movedRecord,
+          ...target.rows.filter(
+            (row: any) => String(row?.id || "") !== String(record?.id || ""),
+          ),
+        ];
+        return {
+          ...previous,
+          [sourceColumnKey]: {
+            ...source,
+            rows: sourceRows,
+            total: Math.max(0, Number(source.total || 0) - 1),
+          },
+          [targetColumnKey]: {
+            ...target,
+            rows: targetRows,
+            total: Number(target.total || 0) + 1,
+          },
+        };
+      });
 
       try {
         const { error } = await supabase
@@ -6339,8 +6683,8 @@ export const ModuleListRefine: React.FC<{
         if (error) throw error;
 
         showListMessage("success", "کارت جابجا شد.");
-        void tableQueryResult.refetch();
       } catch (error: any) {
+        setKanbanRefreshSeed((seed) => seed + 1);
         showListMessage(
           "error",
           toFaErrorMessage(error, "جابجایی کارت ناموفق بود."),
@@ -6357,113 +6701,112 @@ export const ModuleListRefine: React.FC<{
       moduleConfig,
       resolvedModuleId,
       showListMessage,
-      tableQueryResult,
     ],
   );
 
-  const handleKanbanDragHandlePointerDown = useCallback(
-    (
-      record: any,
-      sourceColumnKey: string,
-      event: React.PointerEvent<HTMLButtonElement>,
-    ) => {
-      event.preventDefault();
-      event.stopPropagation();
-
+  const handleKanbanLoadMore = useCallback(
+    async (columnKey: string) => {
+      const column = kanbanColumns[columnKey];
+      if (!column || column.loading || column.rows.length >= column.total) return;
       const groupField = moduleConfig?.fields.find(
         (field) => field.key === kanbanGroupBy,
       );
-      if (!moduleConfig?.table || !kanbanGroupBy || !groupField || !record?.id)
-        return;
+      const option = groupField?.options?.find(
+        (item: any) => String(item?.value ?? "") === columnKey,
+      );
+      if (!option) return;
 
-      if (
-        !canEditModule ||
-        groupField.readonly ||
-        (canViewField ? canViewField(kanbanGroupBy) === false : false)
-      ) {
-        showListMessage("warning", "شما دسترسی ویرایش این کارت را ندارید.");
-        return;
-      }
-      if (isRecordIdLocked(String(record?.id || ""), record)) {
-        showListMessage("warning", "این کارت قفل شده و قابل جابجایی نیست.");
-        return;
-      }
-
-      event.currentTarget.setPointerCapture?.(event.pointerId);
-      kanbanDragRef.current = {
-        record,
-        sourceColumnKey,
-        fieldKey: kanbanGroupBy,
-      };
-      setKanbanDraggingRecordId(String(record.id));
-      setKanbanDragOverColumn(sourceColumnKey);
-
-      const previousCursor = document.body.style.cursor;
-      document.body.style.cursor = "grabbing";
-
-      const getColumnKeyFromPoint = (pointerEvent: PointerEvent) => {
-        const element = document.elementFromPoint(
-          pointerEvent.clientX,
-          pointerEvent.clientY,
-        ) as HTMLElement | null;
-        return (
-          element?.closest<HTMLElement>("[data-kanban-column-key]")?.dataset
-            .kanbanColumnKey || null
+      const serverFilters = buildMergedFilters(
+        viewFiltersState,
+        searchTerm,
+        columnFilters,
+      );
+      setKanbanColumns((previous) => ({
+        ...previous,
+        [columnKey]: { ...previous[columnKey], loading: true },
+      }));
+      try {
+        const nextPage = Math.floor(column.rows.length / getDefaultKanbanPageSize()) + 1;
+        const response = await fetchKanbanColumnPage(
+          option.value,
+          serverFilters,
+          nextPage,
         );
-      };
-
-      let cleaned = false;
-      function cleanup() {
-        if (cleaned) return;
-        cleaned = true;
-        window.removeEventListener("pointermove", handlePointerMove);
-        window.removeEventListener("pointerup", handlePointerUp);
-        window.removeEventListener("pointercancel", handlePointerCancel);
-        document.body.style.cursor = previousCursor;
-        kanbanDragRef.current = null;
-        setKanbanDraggingRecordId(null);
-        setKanbanDragOverColumn(null);
+        setKanbanColumns((previous) => {
+          const current = previous[columnKey];
+          if (!current) return previous;
+          const existingIds = new Set(
+            current.rows.map((row: any) => String(row?.id || "")),
+          );
+          return {
+            ...previous,
+            [columnKey]: {
+              rows: [
+                ...current.rows,
+                ...response.rows.filter(
+                  (row: any) => !existingIds.has(String(row?.id || "")),
+                ),
+              ],
+              total: response.total || current.total,
+              loading: false,
+            },
+          };
+        });
+      } catch (error) {
+        console.error("Error while loading more Kanban cards:", error);
+        setKanbanColumns((previous) => ({
+          ...previous,
+          [columnKey]: previous[columnKey]
+            ? { ...previous[columnKey], loading: false }
+            : previous[columnKey],
+        }));
       }
-
-      function handlePointerMove(pointerEvent: PointerEvent) {
-        setKanbanDragOverColumn(getColumnKeyFromPoint(pointerEvent));
-      }
-
-      function handlePointerUp(pointerEvent: PointerEvent) {
-        const targetColumnKey = getColumnKeyFromPoint(pointerEvent);
-        const dragState = kanbanDragRef.current;
-        cleanup();
-
-        if (
-          !dragState ||
-          dragState.fieldKey !== kanbanGroupBy ||
-          !targetColumnKey
-        )
-          return;
-        if (targetColumnKey === dragState.sourceColumnKey) return;
-        void handleKanbanRecordMove(dragState.record, targetColumnKey);
-      }
-
-      function handlePointerCancel() {
-        cleanup();
-      }
-
-      window.addEventListener("pointermove", handlePointerMove);
-      window.addEventListener("pointerup", handlePointerUp, { once: true });
-      window.addEventListener("pointercancel", handlePointerCancel, {
-        once: true,
-      });
     },
     [
-      canEditModule,
-      canViewField,
-      handleKanbanRecordMove,
-      isRecordIdLocked,
+      columnFilters,
+      fetchKanbanColumnPage,
+      kanbanColumns,
       kanbanGroupBy,
       moduleConfig,
-      showListMessage,
+      searchTerm,
+      viewFiltersState,
     ],
   );
+
+  const kanbanSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 },
+    }),
+  );
+  const handleKanbanDragStart = useCallback((event: DragStartEvent) => {
+    const item = event.active.data.current?.item;
+    setKanbanDragItem(item || null);
+    setKanbanDragOverColumn(
+      String(event.active.data.current?.sourceColumnKey || "") || null,
+    );
+  }, []);
+  const handleKanbanDragOver = useCallback((event: DragOverEvent) => {
+    const columnKey = String(event.over?.data.current?.columnKey || "");
+    setKanbanDragOverColumn(columnKey || null);
+  }, []);
+  const handleKanbanDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const record = event.active.data.current?.item;
+      const sourceColumnKey = String(
+        event.active.data.current?.sourceColumnKey || "",
+      );
+      const targetColumnKey = String(event.over?.data.current?.columnKey || "");
+      setKanbanDragItem(null);
+      setKanbanDragOverColumn(null);
+      if (!record || !targetColumnKey || sourceColumnKey === targetColumnKey) return;
+      void handleKanbanRecordMove(record, targetColumnKey);
+    },
+    [handleKanbanRecordMove],
+  );
+  const handleKanbanDragCancel = useCallback(() => {
+    setKanbanDragItem(null);
+    setKanbanDragOverColumn(null);
+  }, []);
 
   const handleExport = handleExportExcel;
 
@@ -7235,129 +7578,123 @@ export const ModuleListRefine: React.FC<{
                   </div>
                 )}
               {viewMode === ViewMode.KANBAN && (
-                <div className="flex items-start gap-4 md:gap-5 h-full overflow-x-auto pb-2 px-1">
-                  <React.Suspense
-                    fallback={<ModuleListContentSkeleton viewMode={viewMode} />}
-                  >
-                    {moduleConfig.fields
-                      .find((f) => f.key === kanbanGroupBy)
-                      ?.options?.map((col: any) => {
-                        const columnKey = String(col?.value ?? "");
-                        const columnItems = enrichedData.filter(
-                          (d: any) => d[kanbanGroupBy] === col.value,
-                        );
-                        const visibleCount =
-                          kanbanVisibleCounts[columnKey] ??
-                          getDefaultKanbanPageSize();
-                        const visibleItems = columnItems.slice(0, visibleCount);
-                        const canLoadMore = columnItems.length > visibleCount;
-                        return (
-                          <div
-                            key={columnKey}
-                            data-kanban-column-key={columnKey}
-                            className={`min-w-[292px] w-[292px] flex flex-col bg-gray-100/55 dark:bg-white/5 rounded-[1.6rem] p-3 border border-gray-200 dark:border-gray-800 shadow-sm h-full transition ${kanbanDragOverColumn === columnKey ? "ring-2 ring-[rgba(var(--brand-500-rgb),0.45)]" : ""}`}
-                          >
-                            <div className="flex items-center justify-between p-2 mb-2">
-                              <div className="flex items-center gap-2">
-                                <span
-                                  className="w-2 h-2 rounded-full"
-                                  style={{
-                                    backgroundColor: col.color || "#ccc",
-                                  }}
-                                ></span>
-                                <span className="font-bold text-gray-700 dark:text-gray-300 text-sm">
-                                  {col.label}
+                <DndContext
+                  sensors={kanbanSensors}
+                  onDragStart={handleKanbanDragStart}
+                  onDragOver={handleKanbanDragOver}
+                  onDragEnd={handleKanbanDragEnd}
+                  onDragCancel={handleKanbanDragCancel}
+                >
+                  <div className="flex items-start gap-4 md:gap-5 h-full overflow-x-auto pb-2 px-1">
+                    <React.Suspense
+                      fallback={<ModuleListContentSkeleton viewMode={viewMode} />}
+                    >
+                      {moduleConfig.fields
+                        .find((f) => f.key === kanbanGroupBy)
+                        ?.options?.map((col: any) => {
+                          const columnKey = String(col?.value ?? "");
+                          const column = kanbanColumns[columnKey] || {
+                            rows: [],
+                            total: 0,
+                            loading: true,
+                          };
+                          const canLoadMore = column.rows.length < column.total;
+                          return (
+                            <KanbanDropColumn
+                              key={columnKey}
+                              columnKey={columnKey}
+                              isActiveTarget={kanbanDragOverColumn === columnKey}
+                            >
+                              <div className="flex items-center justify-between p-2 mb-2">
+                                <div className="flex min-w-0 items-center gap-2">
+                                  <span
+                                    className="h-2 w-2 shrink-0 rounded-full"
+                                    style={{ backgroundColor: col.color || "#ccc" }}
+                                  />
+                                  <span className="truncate font-bold text-gray-700 dark:text-gray-300 text-sm">
+                                    {col.label}
+                                  </span>
+                                </div>
+                                <span className="shrink-0 rounded-full bg-white/80 px-2 py-0.5 text-xs text-gray-500 dark:bg-white/10">
+                                  {toPersianNumber(column.total)}
                                 </span>
                               </div>
-                              <span className="bg-white/80 dark:bg-white/10 px-2 py-0.5 rounded-full text-xs text-gray-500">
-                                {columnItems.length}
-                              </span>
-                            </div>
-                            <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-4 custom-scrollbar py-1 pb-3">
-                              {visibleItems.map((item: any) => (
-                                <RenderCardItem
-                                  key={item.id}
-                                  item={item}
-                                  moduleId={resolvedModuleId}
-                                  moduleConfig={moduleConfig}
-                                  imageField={imageField}
-                                  tagsField={tagsField}
-                                  statusField={statusField}
-                                  categoryField={categoryField}
-                                  selectedRowKeys={selectedRowKeys}
-                                  setSelectedRowKeys={setSelectedRowKeys}
-                                  navigate={moduleListNavigate}
-                                  minimal={true}
-                                  canViewField={canViewField}
-                                  allUsers={allUsers}
-                                  allRoles={allRoles}
-                                  relationOptions={effectiveRelationOptions}
-                                  showDragHandle={
-                                    canEditModule &&
-                                    !!kanbanGroupBy &&
-                                    !getRecordLockStateFromRecord(item).isLocked
-                                  }
-                                  isDragActive={
-                                    kanbanDraggingRecordId ===
-                                    String(item?.id || "")
-                                  }
-                                  dragHandleTitle="جابجایی کارت"
-                                  onDragHandlePointerDown={(cardItem, event) =>
-                                    handleKanbanDragHandlePointerDown(
-                                      cardItem,
-                                      columnKey,
-                                      event,
-                                    )
-                                  }
-                                  canLockRecord={canLockRecords}
-                                  canUnlockRecord={canUnlockRecords}
-                                />
-                              ))}
-                            </div>
-                            {canLoadMore ? (
-                              <Button
-                                block
-                                className="mt-2 rounded-2xl border-[rgba(var(--brand-300-rgb),0.65)] bg-white/88 text-[11px] font-semibold text-[rgb(var(--brand-700-rgb))] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--app-dark-surface-rgb),0.92)] dark:text-[rgba(var(--brand-100-rgb),0.96)]"
-                                onClick={() => {
-                                  setKanbanVisibleCounts((prev) => ({
-                                    ...prev,
-                                    [columnKey]: Math.min(
-                                      (prev[columnKey] ??
-                                        getDefaultKanbanPageSize()) +
-                                        getKanbanLoadStep(),
-                                      columnItems.length,
-                                    ),
-                                  }));
-                                }}
-                              >
-                                نمایش بیشتر ({visibleItems.length} از{" "}
-                                {columnItems.length})
-                              </Button>
-                            ) : null}
-                            {canCreateModule ? (
-                              <Button
-                                type="dashed"
-                                block
-                                icon={<PlusOutlined />}
-                                className="mt-2 text-xs rounded-2xl text-gray-500 hover:text-leather-600 hover:border-leather-400"
-                                onClick={() => {
-                                  navigate(`/${resolvedModuleId}/create`, {
-                                    state: {
-                                      initialValues: {
-                                        [kanbanGroupBy]: col.value,
+                              <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-2.5 custom-scrollbar py-1 pb-3">
+                                {column.loading && column.rows.length === 0 ? (
+                                  <Skeleton active title={{ width: "58%" }} paragraph={{ rows: 3 }} />
+                                ) : null}
+                                {column.rows.map((item: any) => (
+                                  <KanbanDraggableCard
+                                    key={item.id}
+                                    item={item}
+                                    columnKey={columnKey}
+                                    moduleId={resolvedModuleId}
+                                    moduleConfig={moduleConfig}
+                                    imageField={imageField}
+                                    tagsField={tagsField}
+                                    statusField={statusField}
+                                    categoryField={categoryField}
+                                    selectedRowKeys={selectedRowKeys}
+                                    setSelectedRowKeys={setSelectedRowKeys}
+                                    navigate={moduleListNavigate}
+                                    minimal
+                                    canViewField={canViewField}
+                                    allUsers={allUsers}
+                                    allRoles={allRoles}
+                                    relationOptions={effectiveRelationOptions}
+                                    showDragHandle={
+                                      canEditModule &&
+                                      !!kanbanGroupBy &&
+                                      !getRecordLockStateFromRecord(item).isLocked
+                                    }
+                                    dragHandleTitle="جابجایی کارت"
+                                    canLockRecord={canLockRecords}
+                                    canUnlockRecord={canUnlockRecords}
+                                  />
+                                ))}
+                              </div>
+                              {canLoadMore ? (
+                                <Button
+                                  block
+                                  loading={column.loading}
+                                  className="mt-2 rounded-2xl border-[rgba(var(--brand-300-rgb),0.65)] bg-white/88 text-[11px] font-semibold text-[rgb(var(--brand-700-rgb))] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--app-dark-surface-rgb),0.92)] dark:text-[rgba(var(--brand-100-rgb),0.96)]"
+                                  onClick={() => void handleKanbanLoadMore(columnKey)}
+                                >
+                                  نمایش بیشتر ({toPersianNumber(column.rows.length)} از {toPersianNumber(column.total)})
+                                </Button>
+                              ) : null}
+                              {canCreateModule ? (
+                                <Button
+                                  type="dashed"
+                                  block
+                                  icon={<PlusOutlined />}
+                                  className="mt-2 text-xs rounded-2xl text-gray-500 hover:text-leather-600 hover:border-leather-400"
+                                  onClick={() => {
+                                    navigate(`/${resolvedModuleId}/create`, {
+                                      state: {
+                                        initialValues: { [kanbanGroupBy]: col.value },
                                       },
-                                    },
-                                  });
-                                }}
-                              >
-                                افزودن به {col.label}
-                              </Button>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                  </React.Suspense>
-                </div>
+                                    });
+                                  }}
+                                >
+                                  افزودن به {col.label}
+                                </Button>
+                              ) : null}
+                            </KanbanDropColumn>
+                          );
+                        })}
+                    </React.Suspense>
+                  </div>
+                  <DragOverlay dropAnimation={{ duration: 160, easing: "ease-out" }}>
+                    {kanbanDragItem ? (
+                      <KanbanDragPreview
+                        item={kanbanDragItem}
+                        moduleConfig={moduleConfig}
+                        imageField={imageField}
+                      />
+                    ) : null}
+                  </DragOverlay>
+                </DndContext>
               )}
             </>
           )}

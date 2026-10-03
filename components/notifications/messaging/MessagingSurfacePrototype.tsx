@@ -39,6 +39,7 @@ import VoipRecordingPlayer from '../VoipRecordingPlayer';
 import { supabase } from '../../../supabaseClient';
 import {
   buildPhoneTargetDisplayName,
+  getPhoneBindingTargetSelect,
   MANUAL_PHONE_BINDING_SOURCE_FIELD,
   MANUAL_PHONE_BINDING_SOURCE_TABLE,
   PHONE_BIND_TARGET_MODULES,
@@ -3700,11 +3701,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
       if (existingTargetModuleId && existingTargetRecordId && !existingBindingLabel) {
         const { data: targetRow } = await supabase
           .from(existingTargetModuleId)
-          .select(existingTargetModuleId === 'customers'
-            ? 'id, full_name, business_name, legal_name, system_code, first_name, last_name'
-            : existingTargetModuleId === 'suppliers'
-              ? 'id, business_name, first_name, last_name, system_code'
-              : 'id, full_name, first_name, last_name, system_code, legacy_system_code')
+          .select(getPhoneBindingTargetSelect(existingTargetModuleId))
           .eq('id', existingTargetRecordId)
           .maybeSingle();
         existingBindingLabel = buildPhoneTargetDisplayName(existingTargetModuleId, targetRow) || existingBindingLabel;

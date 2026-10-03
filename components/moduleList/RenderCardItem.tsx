@@ -1,6 +1,6 @@
 import React from "react";
 import { Avatar, Checkbox, Popover, Tag } from "antd";
-import { AppstoreOutlined, DragOutlined, LockOutlined } from "@ant-design/icons";
+import { AppstoreOutlined, DownOutlined, DragOutlined, LockOutlined, UpOutlined } from "@ant-design/icons";
 import { FieldType } from "../../types";
 import { formatPersianPrice, toPersianNumber, safeJalaliFormat, parseDateValue } from "../../utils/persianNumberFormatter";
 import { getRecordTitle } from "../../utils/recordTitle";
@@ -23,6 +23,7 @@ import { supabase } from "../../supabaseClient";
 import { hasProcessTaskTitleTokens, resolveProcessTaskTitle } from "../../utils/processTaskTitle";
 import TaskRelatedProcessBar from "../tasks/TaskRelatedProcessBar";
 import { isEmptyRelationValue } from "../../utils/optionHelpers";
+import PhoneActionsPopover from "../PhoneActionsPopover";
 
 const ProductionStagesField = React.lazy(() => import("../ProductionStagesField"));
 
@@ -47,6 +48,8 @@ export interface RenderCardItemProps {
   isDragActive?: boolean;
   dragHandleTitle?: string;
   onDragHandlePointerDown?: (item: any, event: React.PointerEvent<HTMLButtonElement>) => void;
+  dragHandleProps?: React.ButtonHTMLAttributes<HTMLButtonElement>;
+  kanbanCompact?: boolean;
   moduleBadgeLabel?: string | null;
   canLockRecord?: boolean;
   canUnlockRecord?: boolean;
@@ -86,6 +89,8 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   isDragActive = false,
   dragHandleTitle = "جابجایی کارت",
   onDragHandlePointerDown,
+  dragHandleProps,
+  kanbanCompact = false,
   moduleBadgeLabel,
   canLockRecord = false,
   canUnlockRecord = false,
@@ -93,11 +98,13 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   const [taskPatch, setTaskPatch] = React.useState<Record<string, any>>({});
   const [recordPatch, setRecordPatch] = React.useState<Record<string, any>>({});
   const [resolvedTaskTitle, setResolvedTaskTitle] = React.useState("");
+  const [isKanbanDetailsOpen, setIsKanbanDetailsOpen] = React.useState(false);
   const isSelected = selectedRowKeys.includes(item.id);
   const isTasks = moduleId === 'tasks';
   React.useEffect(() => {
     setTaskPatch({});
     setRecordPatch({});
+    setIsKanbanDetailsOpen(false);
   }, [item?.id, item?.updated_at]);
   const cardItem = isTasks ? { ...item, ...taskPatch, ...recordPatch } : { ...item, ...recordPatch };
   const lockState = getRecordLockStateFromRecord(cardItem);
@@ -272,7 +279,32 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     'sell_price',
     'related_to_module',
   ].filter(Boolean) as string[];
-  const summaryFields = getRecordCardSummaryFields(cardItem, moduleConfig, summaryExcludedKeys, minimal ? 2 : 3);
+  const summaryFieldLimit = kanbanCompact && isKanbanDetailsOpen
+    ? 6
+    : (minimal ? 2 : 3);
+  const summaryFields = getRecordCardSummaryFields(
+    cardItem,
+    moduleConfig,
+    summaryExcludedKeys,
+    summaryFieldLimit,
+  );
+  const phoneSummaryFields = (moduleConfig?.fields || []).filter(
+    (field: any) => (
+      field?.type === FieldType.PHONE
+      && isCardFieldVisible(field)
+      && cardItem?.[field.key] !== undefined
+      && cardItem?.[field.key] !== null
+      && cardItem?.[field.key] !== ''
+    ),
+  );
+  const detailSummaryFields = Array.from(
+    new Map(
+      [...phoneSummaryFields, ...summaryFields].map((field: any) => [field.key, field]),
+    ).values(),
+  ).slice(0, kanbanCompact && isKanbanDetailsOpen ? 7 : summaryFieldLimit);
+  const visibleSummaryFields = kanbanCompact && !isKanbanDetailsOpen
+    ? []
+    : detailSummaryFields;
   const bottomStatusMeta = isTasks ? cardStatusMeta : null;
   const taskModuleMetaLabel = relatedModuleTitle || categoryLabel || moduleConfig?.titles?.fa || 'فعالیت';
 
@@ -313,13 +345,14 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   };
   const hasSelectionControl = !hideSelection;
   const hasLockControl = shouldShowLockControl;
-  const hasDragControl = !isLocked && showDragHandle && !!onDragHandlePointerDown;
+  const hasDragControl = !isLocked && showDragHandle && (!!onDragHandlePointerDown || !!dragHandleProps);
   const hasFooterControls = hasSelectionControl || hasLockControl || hasDragControl;
   const cardSurfaceClassName = `
-    group relative flex cursor-pointer flex-col rounded-2xl border border-white/70 bg-[linear-gradient(145deg,#ffffff,#f3f6fb)] shadow-[0_16px_34px_rgba(15,23,42,0.10),inset_0_2px_5px_rgba(255,255,255,0.86),inset_0_-10px_22px_rgba(148,163,184,0.14)] transition-all
-    hover:-translate-y-0.5 hover:border-[rgba(var(--brand-200-rgb),0.78)] hover:shadow-[0_20px_42px_rgba(15,23,42,0.14),inset_0_2px_6px_rgba(255,255,255,0.92),inset_0_-10px_24px_rgba(148,163,184,0.16)]
-    dark:border-white/[0.09] dark:bg-[linear-gradient(145deg,rgba(38,38,38,0.98),rgba(24,24,24,0.98))] dark:shadow-[0_16px_36px_rgba(0,0,0,0.38),inset_0_1px_3px_rgba(255,255,255,0.06),inset_0_-12px_24px_rgba(0,0,0,0.20)]
-    dark:hover:border-[rgba(var(--brand-300-rgb),0.24)] dark:hover:shadow-[0_20px_44px_rgba(0,0,0,0.48),inset_0_1px_4px_rgba(255,255,255,0.08),inset_0_-12px_24px_rgba(0,0,0,0.24)]
+    group relative flex cursor-pointer flex-col transition-all
+    ${kanbanCompact
+      ? "rounded-xl border border-slate-200/90 bg-white shadow-[0_5px_14px_rgba(15,23,42,0.07)] hover:-translate-y-px hover:border-[rgba(var(--brand-300-rgb),0.9)] hover:shadow-[0_10px_22px_rgba(15,23,42,0.10)] dark:border-white/[0.10] dark:bg-[#202020] dark:shadow-[0_5px_14px_rgba(0,0,0,0.24)]"
+      : "rounded-2xl border border-white/70 bg-[linear-gradient(145deg,#ffffff,#f3f6fb)] shadow-[0_16px_34px_rgba(15,23,42,0.10),inset_0_2px_5px_rgba(255,255,255,0.86),inset_0_-10px_22px_rgba(148,163,184,0.14)] hover:-translate-y-0.5 hover:border-[rgba(var(--brand-200-rgb),0.78)] hover:shadow-[0_20px_42px_rgba(15,23,42,0.14),inset_0_2px_6px_rgba(255,255,255,0.92),inset_0_-10px_24px_rgba(148,163,184,0.16)] dark:border-white/[0.09] dark:bg-[linear-gradient(145deg,rgba(38,38,38,0.98),rgba(24,24,24,0.98))] dark:shadow-[0_16px_36px_rgba(0,0,0,0.38),inset_0_1px_3px_rgba(255,255,255,0.06),inset_0_-12px_24px_rgba(0,0,0,0.20)] dark:hover:border-[rgba(var(--brand-300-rgb),0.24)] dark:hover:shadow-[0_20px_44px_rgba(0,0,0,0.48),inset_0_1px_4px_rgba(255,255,255,0.08),inset_0_-12px_24px_rgba(0,0,0,0.24)]"
+    }
     ${isSelected ? "ring-2 ring-[rgba(var(--brand-500-rgb),0.36)]" : ""}
     ${minimal ? "" : "h-full"}
     ${minimal ? "p-3" : "p-3"}
@@ -338,8 +371,18 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
         aria-label={dragHandleTitle}
         className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/90 text-gray-500 shadow-sm transition hover:text-[rgb(var(--brand-700-rgb))] active:cursor-grabbing dark:bg-white/10 dark:text-gray-300"
         style={{ touchAction: 'none', userSelect: 'none' }}
-        onClick={(event) => event.stopPropagation()}
-        onPointerDown={(event) => onDragHandlePointerDown(item, event)}
+        {...dragHandleProps}
+        onClick={(event) => {
+          event.stopPropagation();
+          dragHandleProps?.onClick?.(event);
+        }}
+        onPointerDown={(event) => {
+          if (dragHandleProps?.onPointerDown) {
+            dragHandleProps.onPointerDown(event);
+            return;
+          }
+          onDragHandlePointerDown?.(item, event);
+        }}
       >
         <DragOutlined />
       </button>
@@ -363,6 +406,20 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           </div>
         ) : null}
         {renderDragHandle()}
+        {kanbanCompact ? (
+          <button
+            type="button"
+            title={isKanbanDetailsOpen ? "بستن جزئیات" : "نمایش جزئیات"}
+            aria-label={isKanbanDetailsOpen ? "بستن جزئیات" : "نمایش جزئیات"}
+            className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/90 text-gray-500 shadow-sm transition hover:text-[rgb(var(--brand-700-rgb))] dark:bg-white/10 dark:text-gray-300"
+            onClick={(event) => {
+              event.stopPropagation();
+              setIsKanbanDetailsOpen((open) => !open);
+            }}
+          >
+            {isKanbanDetailsOpen ? <UpOutlined /> : <DownOutlined />}
+          </button>
+        ) : null}
       </div>
     );
   };
@@ -439,7 +496,15 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
       }
 
       if (field?.type === FieldType.PHONE) {
-        return <span className="min-w-0 break-all text-left text-gray-700 dark:text-gray-200 dir-ltr">{formatRecordDisplayValue(value, field)}</span>;
+        return (
+          <PhoneActionsPopover
+            value={value}
+            moduleId={moduleId}
+            record={cardItem}
+            size="sm"
+            className="min-w-0 max-w-full"
+          />
+        );
       }
 
       return <span className="min-w-0 break-words text-gray-700 dark:text-gray-200">{formatRecordFieldValue(cardItem, field)}</span>;
@@ -505,9 +570,9 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
               </div>
             </div>
 
-            {summaryFields.length > 0 ? (
+            {visibleSummaryFields.length > 0 ? (
               <div className="mt-2 grid grid-cols-1 gap-1.5 text-xs">
-                {summaryFields.map((field: any) => {
+                {visibleSummaryFields.map((field: any) => {
                   const value = cardItem?.[field.key];
                   if (value === undefined || value === null || value === '') return null;
                   return (
