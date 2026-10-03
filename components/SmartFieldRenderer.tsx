@@ -2534,7 +2534,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     popupRender={(menu) => (
                         <>
                           {menu}
-                          {!compactMode && canQuickCreate && (
+                          {canQuickCreate && (
                               <>
                                   <div className="h-[1px] bg-gray-100 my-1"></div>
                                   <div 
@@ -2552,7 +2552,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                       ? `ماژول: ${MODULES[resolvedRelationTargetModuleId]?.titles?.fa || resolvedRelationTargetModuleId}`
                       : undefined}
                     mobileSearchPlaceholder="جستجوی رکورد مرتبط..."
-                    sheetToolbar={!compactMode && canQuickCreate ? (
+                    sheetToolbar={canQuickCreate ? (
                       <Button
                         icon={<PlusOutlined />}
                         onClick={openRelationCreate}

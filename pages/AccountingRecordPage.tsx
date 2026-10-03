@@ -863,14 +863,6 @@ const AccountingRecordPage: React.FC = () => {
       }
 
       if (isChequeModule) {
-        const issueDate =
-          values.issue_date ??
-          payload.issue_date ??
-          formData.issue_date ??
-          null;
-
-        payload.due_date = issueDate || null;
-
         const chequeType = String(
           values.cheque_type ??
             payload.cheque_type ??

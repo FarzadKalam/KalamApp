@@ -23,6 +23,10 @@ public/version.json
 /create-proposal-pdf.js
 /create-redesign-proposal.js
 
+# Local generated catalogues and browser profiles; never part of application source.
+/output/
+/tmp/catalogue-chrome-profile/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
