@@ -363,7 +363,10 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     relative z-30 mt-0.5 -mx-1 flex min-w-0 items-center justify-center gap-2 overflow-visible px-1 py-2
   `;
   const renderDragHandle = () => {
-    if (!hasDragControl || !onDragHandlePointerDown) return null;
+    // Kanban uses dnd-kit listeners through dragHandleProps. A local pointer
+    // callback is only used by legacy consumers, so neither must hide the
+    // visible handle when the other is present.
+    if (!hasDragControl) return null;
     return (
       <button
         type="button"
