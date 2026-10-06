@@ -33,6 +33,7 @@ import {
   type ReportDefinitionRecord,
 } from '../utils/reporting';
 import { runSelectWithCompatibleColumns } from '../utils/selectCompat';
+import { applySafeReportConditionPrefilters } from '../utils/reportQueryPrefilters';
 import { getSurveyTemplateScopedIdFromConditions, loadSurveyTemplateDefinition, normalizeSurveyTemplateSnapshot } from '../utils/surveyTemplates';
 import { loadWorkflowConditionEditorOptions } from '../utils/workflowConditionOptions';
 import { escapeCsvCell, formatListCellValue } from '../utils/listPrintExport';
@@ -748,11 +749,22 @@ const ReportViewerPage: React.FC = () => {
       const baseResult = await runSelectWithCompatibleColumns<any[]>({
         cacheKey: `report-viewer:${moduleId}`,
         columns: baseColumns,
-        execute: (selectExpr) =>
-          supabase
+        execute: (selectExpr) => {
+          const query = supabase
             .from(moduleConfig.table || moduleId)
             .select(selectExpr)
-            .limit(config.row_limit),
+          return applySafeReportConditionPrefilters(
+            query,
+            moduleConfig,
+            {
+              conditionsAll: config.conditions_all,
+              conditionsAny: config.conditions_any,
+              // وضعیت فعالیت ممکن است از وضعیت اختصاصی فرآیند آمده باشد؛
+              // تا زمان تبدیل آن برای همان ردیف، پیش‌فیلتر سراسری امن نیست.
+              excludedFieldKeys: moduleId === 'tasks' ? ['status'] : [],
+            },
+          ).limit(config.row_limit);
+        },
       });
       if (baseResult.error) throw baseResult.error;
 
