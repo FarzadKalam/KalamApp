@@ -130,6 +130,7 @@ import {
   PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY,
   withProcessTaskCustomFieldValues,
 } from '../utils/processTaskCustomFields';
+import { buildSystemFieldKey } from '../utils/systemFieldKeys';
 import {
   getTaskStatusColor,
   getTaskStatusLabel,
@@ -7802,7 +7803,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const nextField = field || null;
     setEditingDraftCustomFieldKey(nextField?.key ? String(nextField.key) : null);
     draftCustomFieldForm.setFieldsValue({
-      key: nextField?.key || undefined,
       labelFa: nextField?.labels?.fa || '',
       type: nextField?.type || FieldType.TEXT,
       required_for_status: (nextField as any)?.requiredForStatus
@@ -7828,11 +7828,18 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const saveDraftCustomField = useCallback(async () => {
     try {
       const values = await draftCustomFieldForm.validateFields();
-      const normalizedKey = normalizeProcessTaskCustomFieldKey(values?.key);
-      if (!normalizedKey) {
-        message.error('کلید فیلد معتبر نیست.');
-        return;
-      }
+      const fieldLabel = String(values?.labelFa || '').trim();
+      const previousField = draftCustomFields.find((field) => String(field?.key || '') === String(editingDraftCustomFieldKey || '')) || null;
+      // کلید فقط شناسهٔ داخلی است. در ایجاد جدید، سیستم آن را از عنوان فارسی
+      // می‌سازد و در ویرایش، کلید قبلی برای سازگاری شرط‌ها و داده‌ها حفظ می‌شود.
+      const normalizedKey = normalizeProcessTaskCustomFieldKey(previousField?.key) || buildSystemFieldKey({
+        namespace: 'task_field',
+        label: fieldLabel,
+        existingKeys: draftCustomFields
+          .filter((field) => String(field?.key || '') !== String(editingDraftCustomFieldKey || ''))
+          .map((field) => field?.key),
+        fallbackIndex: draftCustomFields.length,
+      });
       if (isReservedProcessTaskCustomFieldKey(normalizedKey)) {
         message.error('این کلید برای فیلدهای عمومی فعالیت رزرو شده است.');
         return;
@@ -7851,11 +7858,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         return;
       }
 
-      const previousField = draftCustomFields.find((field) => String(field?.key || '') === String(editingDraftCustomFieldKey || '')) || null;
       const normalizedField = normalizeProcessTaskCustomFields([{
         key: normalizedKey,
         type: fieldType,
-        labels: { fa: String(values?.labelFa || normalizedKey).trim() || normalizedKey, en: normalizedKey },
+        labels: { fa: fieldLabel || normalizedKey, en: normalizedKey },
         validation: { required: !!values?.required },
         relationConfig: fieldType === FieldType.RELATION
           ? {
@@ -12433,12 +12439,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           layout="vertical"
           initialValues={{ type: FieldType.TEXT, required: false }}
         >
-          <Form.Item label="کلید فیلد" name="key" rules={[{ required: true, message: 'کلید فیلد لازم است.' }]}>
-            <Input
-              placeholder="مثال: meeting_link"
-              disabled={!!editingDraftCustomFieldKey}
-            />
-          </Form.Item>
           <Form.Item label="عنوان فارسی" name="labelFa" rules={[{ required: true, message: 'عنوان فارسی لازم است.' }]}>
             <Input placeholder="مثال: لینک جلسه" />
           </Form.Item>

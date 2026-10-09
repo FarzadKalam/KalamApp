@@ -56,6 +56,7 @@ import {
 import { fetchRelationOptionsForField } from "../utils/relationOptions";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
 import { supportsWebFormTemplateRuntime } from "../utils/surveyTemplates";
+import { buildSystemFieldKey } from "../utils/systemFieldKeys";
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -144,14 +145,23 @@ const isSurveyTargetModule = (moduleId?: string | null) => String(moduleId || ""
 const supportsTemplateFieldBindingsForModule = (moduleId?: string | null) =>
   supportsWebFormTemplateRuntime(MODULES[String(moduleId || "").trim()] || null);
 
-const normalizeTemplateFieldKey = (value: string, index: number) =>
-  String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "_")
-    .replace(/[^\p{L}\p{N}_-]+/gu, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "") || `template_field_${index + 1}`;
+const assignSystemTemplateFieldKeys = (fields: BuilderFieldValue[]) => {
+  const usedKeys = new Set<string>();
+  return fields.map((field, index) => {
+    if (String(field?.binding_type || "record_field").trim() !== "template_field") return field;
+    const currentKey = String(field?.field_key || "").trim();
+    const fieldKey = currentKey && !usedKeys.has(currentKey)
+      ? currentKey
+      : buildSystemFieldKey({
+          namespace: "web_form_field",
+          label: field?.label,
+          existingKeys: usedKeys,
+          fallbackIndex: index,
+        });
+    usedKeys.add(fieldKey);
+    return { ...field, field_key: fieldKey };
+  });
+};
 
 const isMissingSetupError = (error: any) => {
   const text = String(error?.message || error?.details || error || "").toLowerCase();
@@ -916,9 +926,10 @@ const WebFormBuilderPage: React.FC = () => {
 
       if (!webFormId) throw new Error("WEB_FORM_SAVE_NO_ID");
 
-      const mergedFields = mergeManagedFields(values.fields || [], values.target_module_id, values.access_scope, cleanedDuplicateMatchField);
+      const mergedFields = assignSystemTemplateFieldKeys(
+        mergeManagedFields(values.fields || [], values.target_module_id, values.access_scope, cleanedDuplicateMatchField),
+      );
       const recordBoundFields = mergedFields.filter((field) => String(field?.binding_type || "record_field").trim() !== "template_field");
-      const templateFields = mergedFields.filter((field) => String(field?.binding_type || "record_field").trim() === "template_field");
       const duplicateTargetKeys = findDuplicateWebFormTargetKeys(recordBoundFields as any);
       if (duplicateTargetKeys.length > 0) {
         const duplicateLabels = duplicateTargetKeys
@@ -931,19 +942,6 @@ const WebFormBuilderPage: React.FC = () => {
         message.error("فیلد تطبیق تکراری باید داخل لیست فیلدهای فرم حضور داشته باشد.");
         return;
       }
-      const templateFieldKeyCounts = templateFields.reduce<Map<string, number>>((acc, field, index) => {
-        const key = normalizeTemplateFieldKey(String(field?.field_key || field?.label || ""), index);
-        acc.set(key, (acc.get(key) || 0) + 1);
-        return acc;
-      }, new Map());
-      const duplicateTemplateKeys = Array.from(templateFieldKeyCounts.entries())
-        .filter(([, count]) => count > 1)
-        .map(([key]) => key);
-      if (duplicateTemplateKeys.length > 0) {
-        message.error(`کلید بعضی فیلدهای قالبی تکراری است: ${duplicateTemplateKeys.join("، ")}`);
-        return;
-      }
-
       const cleanedFields = mergedFields
         .map((item, index) => {
           const bindingType = String(item?.binding_type || "record_field").trim();
@@ -951,7 +949,11 @@ const WebFormBuilderPage: React.FC = () => {
             const templateFieldType = (SURVEY_TEMPLATE_FIELD_TYPE_OPTIONS.some((option) => option.value === item?.field_type)
               ? item?.field_type
               : "text") as WebFormFieldType;
-            const normalizedFieldKey = normalizeTemplateFieldKey(String(item?.field_key || item?.label || ""), index);
+            const normalizedFieldKey = String(item?.field_key || "").trim() || buildSystemFieldKey({
+              namespace: "web_form_field",
+              label: item?.label,
+              fallbackIndex: index,
+            });
             const templateLabel = String(item?.label || normalizedFieldKey).trim() || normalizedFieldKey;
             return {
               web_form_id: webFormId,
@@ -1362,6 +1364,7 @@ const WebFormBuilderPage: React.FC = () => {
                                             ? {
                                                 ...item,
                                                 binding_type: "template_field",
+                                                field_key: undefined,
                                                 target_field_key: undefined,
                                                 default_to_current_employee: false,
                                                 field_type: item?.field_type || "text",
@@ -1388,9 +1391,9 @@ const WebFormBuilderPage: React.FC = () => {
                             ) : null}
 
                             {bindingType === "template_field" ? (
-                              <Form.Item label="کلید فیلد قالب" name={[field.name, "field_key"]} rules={[{ required: true, message: "کلید فیلد را وارد کنید." }]}>
-                                <Input placeholder="مثال: satisfaction_reason" />
-                              </Form.Item>
+                              <div className="rounded-2xl border border-dashed border-blue-200 bg-blue-50/60 px-4 py-3 text-sm text-blue-800 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-200">
+                                شناسهٔ داخلی این فیلد به‌صورت خودکار ساخته می‌شود و نیازی به واردکردن نام انگلیسی نیست.
+                              </div>
                             ) : (
                               <Form.Item label="فیلد مقصد" name={[field.name, "target_field_key"]} rules={[{ required: true, message: "فیلد مقصد را انتخاب کنید." }]}>
                                 <Select

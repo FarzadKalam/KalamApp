@@ -8,6 +8,7 @@ import { normalizeProcessTaskStatusOptions } from './processTaskStatusOptions';
 import { PROCESS_NODE_KEY } from './processGraph';
 import { getProcessTargetModuleFields, normalizeProcessTargetModuleIds } from './processTargets';
 import { getSyntheticWorkflowAssigneeField, getWorkflowConditionFields } from './workflowHelpers';
+import { getResolvedCurrentOrgId } from './companySettings';
 
 export const REPORT_TASK_PROCESS_FIELD_PREFIX = '__report_task_process_field__';
 
@@ -25,6 +26,18 @@ export type TaskReportProcessRuntimeCatalog = {
   linkedFields: ModuleField[];
   statusOptions: Array<{ label: string; value: string; color?: string; icon?: string }>;
 };
+
+type CatalogCacheEntry = {
+  expiresAt: number;
+  catalog?: TaskReportProcessRuntimeCatalog;
+  pending?: Promise<TaskReportProcessRuntimeCatalog>;
+};
+
+// کاتالوگ تنها تعریف الگوهاست، نه مقدار فعالیت‌ها. با این حال cache حتماً با
+// org_id کلید می‌خورد تا در جابه‌جایی سازمان، تعریف یک tenant به tenant دیگر
+// نرسد. عمر کوتاه، تغییرهای تازهٔ الگو را نیز سریع در گزارش‌ساز نشان می‌دهد.
+const RUNTIME_CATALOG_CACHE_TTL_MS = 60_000;
+const runtimeCatalogCacheByOrg = new Map<string, CatalogCacheEntry>();
 
 const text = (value: unknown) => String(value || '').trim();
 
@@ -76,7 +89,7 @@ export const buildTaskReportProcessFields = (sources: TaskReportProcessFieldSour
   });
 };
 
-export const loadTaskReportProcessRuntimeCatalog = async (supabaseClient: any): Promise<TaskReportProcessRuntimeCatalog> => {
+const fetchTaskReportProcessRuntimeCatalog = async (supabaseClient: any): Promise<TaskReportProcessRuntimeCatalog> => {
   const { data: templates, error: templatesError } = await supabaseClient
     .from('process_templates')
     .select('id, name, module_id, module_ids')
@@ -84,22 +97,38 @@ export const loadTaskReportProcessRuntimeCatalog = async (supabaseClient: any): 
     .order('name');
   if (templatesError) throw templatesError;
 
-  const results = await Promise.all((templates || []).map(async (template: any) => {
-    const templateId = text(template?.id);
-    if (!templateId) return { fieldSources: [] as TaskReportProcessFieldSource[], statusOptions: [] as TaskReportProcessRuntimeCatalog['statusOptions'], linkedModuleIds: [] as string[] };
+  const templatesById = new Map((templates || [])
+    .map((template: any) => [text(template?.id), template] as const)
+    .filter(([templateId]) => Boolean(templateId)));
+  const stagesByTemplateId = new Map<string, any[]>();
+  const templateIds = Array.from(templatesById.keys());
+  // پیش از این برای هر الگو یک درخواست زده می‌شد. در سازمانی با فرآیندهای زیاد،
+  // تنها بازکردن شرط‌ساز گزارش ده‌ها درخواست هم‌زمان می‌ساخت.
+  for (let offset = 0; offset < templateIds.length; offset += 100) {
     const { data: stages, error } = await supabaseClient
       .from('process_template_stages')
-      .select('id, stage_name, sort_order, process_node_key, metadata')
-      .eq('template_id', templateId)
+      .select('id, template_id, stage_name, sort_order, process_node_key, metadata')
+      .in('template_id', templateIds.slice(offset, offset + 100))
       .order('sort_order');
     if (error) throw error;
+    (stages || []).forEach((stage: any) => {
+      const templateId = text(stage?.template_id);
+      if (!templateId) return;
+      const entries = stagesByTemplateId.get(templateId) || [];
+      entries.push(stage);
+      stagesByTemplateId.set(templateId, entries);
+    });
+  }
+
+  const results = Array.from(templatesById.entries()).map(([templateId, template]) => {
+    const stages = stagesByTemplateId.get(templateId) || [];
     const fieldSources: TaskReportProcessFieldSource[] = [];
     const statusOptions: TaskReportProcessRuntimeCatalog['statusOptions'] = [];
     const linkedModuleIds = normalizeProcessTargetModuleIds([
       template?.module_id,
       ...(Array.isArray(template?.module_ids) ? template.module_ids : []),
     ]);
-    (stages || []).forEach((stage: any) => {
+    stages.forEach((stage: any) => {
       const metadata = parseObject(stage?.metadata);
       linkedModuleIds.push(...normalizeProcessTargetModuleIds([
         ...(Array.isArray(metadata?.process_target_module_ids) ? metadata.process_target_module_ids : []),
@@ -121,7 +150,7 @@ export const loadTaskReportProcessRuntimeCatalog = async (supabaseClient: any): 
       });
     });
     return { fieldSources, statusOptions, linkedModuleIds: normalizeProcessTargetModuleIds(linkedModuleIds) };
-  }));
+  });
 
   const statusOptionMap = new Map<string, TaskReportProcessRuntimeCatalog['statusOptions'][number]>();
   results.flatMap((result) => result.statusOptions).forEach((option) => {
@@ -136,6 +165,39 @@ export const loadTaskReportProcessRuntimeCatalog = async (supabaseClient: any): 
     ),
     statusOptions: Array.from(statusOptionMap.values()),
   };
+};
+
+export const invalidateTaskReportProcessRuntimeCatalog = (orgId?: string | null) => {
+  const normalizedOrgId = text(orgId);
+  if (normalizedOrgId) runtimeCatalogCacheByOrg.delete(normalizedOrgId);
+  else runtimeCatalogCacheByOrg.clear();
+};
+
+export const loadTaskReportProcessRuntimeCatalog = async (supabaseClient: any): Promise<TaskReportProcessRuntimeCatalog> => {
+  const orgId = await getResolvedCurrentOrgId(supabaseClient);
+  // در نشست ناقص هرگز از cache مشترک استفاده نمی‌کنیم؛ fail-closed بودن دادهٔ
+  // سازمانی از صرفه‌جویی چند درخواست مهم‌تر است.
+  if (!orgId) return fetchTaskReportProcessRuntimeCatalog(supabaseClient);
+
+  const now = Date.now();
+  const cached = runtimeCatalogCacheByOrg.get(orgId);
+  if (cached?.catalog && cached.expiresAt > now) return cached.catalog;
+  if (cached?.pending) return cached.pending;
+
+  const pending = fetchTaskReportProcessRuntimeCatalog(supabaseClient)
+    .then((catalog) => {
+      runtimeCatalogCacheByOrg.set(orgId, {
+        catalog,
+        expiresAt: Date.now() + RUNTIME_CATALOG_CACHE_TTL_MS,
+      });
+      return catalog;
+    })
+    .catch((error) => {
+      runtimeCatalogCacheByOrg.delete(orgId);
+      throw error;
+    });
+  runtimeCatalogCacheByOrg.set(orgId, { expiresAt: now + RUNTIME_CATALOG_CACHE_TTL_MS, pending });
+  return pending;
 };
 
 export const loadTaskReportProcessFields = async (supabaseClient: any): Promise<ModuleField[]> =>
