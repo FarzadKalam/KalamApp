@@ -117,6 +117,7 @@ export const WORKFLOWS_PERMISSION_FIELDS = [
 ];
 
 export const GOALS_PERMISSION_FIELDS = [
+  { key: 'hub_page', label: 'نمایش صفحه اهداف در ابزارها' },
   { key: 'module_list_button', label: 'نمایش مدیریت هدف‌ها در لیست ماژول' },
   { key: 'module_list_cards', label: 'نمایش کارت‌های هدف در لیست ماژول' },
   { key: 'dashboard_widget', label: 'نمایش کارت‌های هدف در داشبورد' },
@@ -826,6 +827,7 @@ export const resolveGoalsAccessPermissions = (permissions: PermissionMap | null 
   const canDeleteRoot = perm.delete !== false;
 
   return {
+    canViewHub: canViewRoot && fields.hub_page !== false,
     canViewManager: canViewRoot && fields.module_list_button !== false,
     canViewModuleCards: canViewRoot && fields.module_list_cards !== false,
     canViewDashboardWidget: canViewRoot && fields.dashboard_widget !== false,

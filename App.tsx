@@ -110,6 +110,7 @@ const loadFilesGalleryPage = () => import("./pages/FilesGalleryPage");
 const loadWebFormsHubPage = () => import("./pages/WebFormsHubPage");
 const loadWebFormBuilderPage = () => import("./pages/WebFormBuilderPage");
 const loadReportsHubPage = () => import("./pages/ReportsHubPage");
+const loadGoalsHubPage = () => import("./pages/GoalsHubPage");
 const loadReportBuilderPage = () => import("./pages/ReportBuilderPage");
 const loadReportViewerPage = () => import("./pages/ReportViewerPage");
 const loadCustomerClubPage = () => import("./pages/CustomerClubPage");
@@ -171,6 +172,7 @@ const FilesGalleryPage = lazy(loadFilesGalleryPage);
 const WebFormsHubPage = lazy(loadWebFormsHubPage);
 const WebFormBuilderPage = lazy(loadWebFormBuilderPage);
 const ReportsHubPage = lazy(loadReportsHubPage);
+const GoalsHubPage = lazy(loadGoalsHubPage);
 const ReportBuilderPage = lazy(loadReportBuilderPage);
 const ReportViewerPage = lazy(loadReportViewerPage);
 const CustomerClubPage = lazy(loadCustomerClubPage);
@@ -251,6 +253,8 @@ const preloadAuthenticatedRouteChunk = (targetPath?: string): Promise<unknown> =
     preloader = detail ? loadWebFormBuilderPage : loadWebFormsHubPage;
   } else if (section === "reports") {
     preloader = detail === "create" ? loadReportBuilderPage : detail ? loadReportViewerPage : loadReportsHubPage;
+  } else if (section === "goals") {
+    preloader = loadGoalsHubPage;
   } else if (section === "customer-club") {
     preloader = loadCustomerClubPage;
   } else if (section === "accounting") {
@@ -879,6 +883,7 @@ function App() {
             <Route path="/reports/create" element={<ReportBuilderPage />} />
             <Route path="/reports/:reportId" element={<ReportViewerPage />} />
             <Route path="/reports/:reportId/edit" element={<ReportBuilderPage />} />
+            <Route path="/goals" element={<GoalsHubPage />} />
             <Route path="/customer-club" element={<CustomerClubPage />} />
             <Route path="/accounting" element={<AccountingPage />} />
             <Route path="/accounting/reports" element={<AccountingReportsPage />} />

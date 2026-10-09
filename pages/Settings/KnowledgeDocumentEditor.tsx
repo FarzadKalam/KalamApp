@@ -371,7 +371,7 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
       className="flex flex-col bg-white dark:bg-gray-950"
       style={{ position: 'fixed', inset: 0, zIndex: 1500 }}
     >
-      <div className={`relative flex-shrink-0 ${editorChromeCollapsed ? 'h-0 overflow-visible' : ''}`}>
+      <div className={`relative flex-shrink-0 ${editorChromeCollapsed ? 'z-[100] h-0 overflow-visible' : 'z-[90]'}`}>
         {!editorChromeCollapsed && <>
         {/* Header */}
         <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">

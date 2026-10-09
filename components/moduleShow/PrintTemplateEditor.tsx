@@ -834,7 +834,7 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
   const getCellResizeIntent = (cell: HTMLElement | null, event: MouseEvent) => {
     if (!cell) return null;
     const rect = cell.getBoundingClientRect();
-    const edgeThreshold = 5;
+    const edgeThreshold = 8;
     const leftDistance = Math.abs(event.clientX - rect.left);
     const rightDistance = Math.abs(event.clientX - rect.right);
     const topDistance = Math.abs(event.clientY - rect.top);
@@ -870,7 +870,13 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
     return !isTextSelectionTarget(target, cell);
   };
 
-  const applyColumnWidth = (view: any, cellPos: number, column: number, nextWidth: number) => {
+  const applyColumnWidth = (
+    view: any,
+    cellPos: number,
+    column: number,
+    nextWidth: number,
+    tableElement?: HTMLTableElement | null,
+  ) => {
     const safeWidth = Math.max(25, Math.round(nextWidth));
     try {
       const $cell = view.state.doc.resolve(cellPos);
@@ -901,6 +907,15 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
         changed = true;
       }
       if (changed) view.dispatch(tr);
+
+      // The TableView owns the persisted colwidth attributes. Updating the
+      // matching DOM column as well makes the feedback immediate even when a
+      // browser keeps a fixed-width RTL table's previous column calculation.
+      const visibleColumn = tableElement?.querySelectorAll('colgroup > col')?.[column] as HTMLElement | undefined;
+      if (visibleColumn) {
+        visibleColumn.style.width = `${safeWidth}px`;
+        visibleColumn.style.minWidth = `${safeWidth}px`;
+      }
     } catch {
       // A concurrent table transformation invalidated the pointer target.
     }
@@ -1192,8 +1207,8 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
             const cellPos = resolveCellPos(view, cell);
             if (cellPos === null) return false;
             const $cell = view.state.doc.resolve(cellPos);
-            const table = $cell.node(-1);
-            const map = TableMap.get(table);
+            const documentTable = $cell.node(-1);
+            const map = TableMap.get(documentTable);
             const baseColumn = map.colCount(cellPos - $cell.start(-1));
             const column = resizeIntent === 'column-right'
               ? baseColumn + Math.max(1, Number($cell.nodeAfter?.attrs?.colspan || 1)) - 1
@@ -1222,7 +1237,13 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
               if (!resizeState) return;
               const delta = moveEvent.clientX - resizeState.startX;
               const direction = resizeState.edge === 'right' ? 1 : -1;
-              applyColumnWidth(view, resizeState.cellPos, resizeState.column, resizeState.startWidth + (delta * direction));
+              applyColumnWidth(
+                view,
+                resizeState.cellPos,
+                resizeState.column,
+                resizeState.startWidth + (delta * direction),
+                table,
+              );
             };
             const handleUp = () => {
               columnResizeStateRef.current = null;
@@ -1782,6 +1803,10 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
         .print-template-editor-content .column-grip,
         .print-template-editor-content .row-grip,
         .print-template-editor-content .table-grip {
+          display: none !important;
+          pointer-events: none !important;
+        }
+        .print-template-editor-content .column-resize-handle {
           display: none !important;
           pointer-events: none !important;
         }

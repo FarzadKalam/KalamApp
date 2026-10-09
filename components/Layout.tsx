@@ -48,6 +48,7 @@ import {
   SAAS_ADMIN_PERMISSION_KEY,
   resolveCommunicationsPermissions,
   resolveFilesAccessPermissions,
+  resolveGoalsAccessPermissions,
   resolvePreferredRoleModuleIds,
   type PermissionMap,
 } from '../utils/permissions';
@@ -666,6 +667,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const canViewReportsHub =
     rolePermissions?.[REPORTS_PERMISSION_KEY]?.view !== false &&
     rolePermissions?.[REPORTS_PERMISSION_KEY]?.fields?.hub_page !== false;
+  const canViewGoalsHub = resolveGoalsAccessPermissions(rolePermissions).canViewHub;
   const canViewCustomerClub =
     customerClubFeatureEnabled &&
     rolePermissions?.[CUSTOMER_CLUB_PERMISSION_KEY]?.view !== false;
@@ -919,6 +921,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/web_forms', label: 'وب فرم‌ها', disabled: !canViewModule('web_forms') },
           { key: '/surveys', label: 'نظرسنجی‌ها', disabled: !canViewModule('surveys') },
           { key: '/instructions', label: 'دستورالعمل‌ها', disabled: !canViewModule('instructions') },
+          { key: '/goals', label: 'اهداف', disabled: !canViewGoalsHub },
           { key: '/org-knowledge', icon: <AiSparkleIcon className="h-4 w-4" />, label: 'دانش سازمان', disabled: !canViewOrgKnowledge },
           { key: '/production_orders', label: 'سفارشات تولید' },
           { key: '/gallery', label: 'مدیریت فایل‌ها' },
@@ -958,7 +961,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       }] : []),
       { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
     ];
-  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewAdvertisingCampaigns, canViewContentCalendars, canViewCustomerClub, canViewInstagramInbox, canViewOrgKnowledge, canViewReportsHub, canViewSaasAdmin, communicationsAccess.canUseWorkspace, rolePermissions]);
+  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewAdvertisingCampaigns, canViewContentCalendars, canViewCustomerClub, canViewGoalsHub, canViewInstagramInbox, canViewOrgKnowledge, canViewReportsHub, canViewSaasAdmin, communicationsAccess.canUseWorkspace, rolePermissions]);
 
   const visibleRawMenuItems = useMemo<NonNullable<MenuProps['items']>>(() => {
     const canShowMenuKey = (key?: string) => {
@@ -993,6 +996,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           return canViewSettingsRoot;
         case '/org-knowledge':
           return canViewOrgKnowledge;
+        case '/goals':
+          return canViewGoalsHub;
         case '/taze-system':
         case '/saas_users':
         case '/saas_orgs':
@@ -1043,6 +1048,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     canViewAdvertisingCampaigns,
     canViewCashBank,
     canViewCustomerClub,
+    canViewGoalsHub,
     canViewReportsHub,
     canViewSettingsRoot,
     canViewOrgKnowledge,

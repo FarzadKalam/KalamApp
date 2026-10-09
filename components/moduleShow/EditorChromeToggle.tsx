@@ -22,7 +22,7 @@ const EditorChromeToggle: React.FC<EditorChromeToggleProps> = ({
       icon={collapsed ? <DownOutlined /> : <UpOutlined />}
       onClick={onToggle}
       aria-label={collapsed ? 'نمایش نوار ویرایش' : 'جمع‌کردن نوار ویرایش'}
-      className={`shadow-md ${className}`.trim()}
+      className={`pointer-events-auto shadow-md ${className}`.trim()}
     />
   </Tooltip>
 );
