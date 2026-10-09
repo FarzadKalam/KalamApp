@@ -1103,10 +1103,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const watchedDraftStageStatusOptions = Form.useWatch('stage_status_options_editor', { form: draftForm, preserve: true });
   const watchedDraftStageSortOrder = Form.useWatch('sort_order', { form: draftForm, preserve: true });
   const watchedDraftStageName = Form.useWatch('name', { form: draftForm, preserve: true });
-  const draftModalBaseTitle = editingDraft
-    ? 'ویرایش مرحله پیش‌نویس'
-    : (isProcessModule ? 'افزودن مرحله پیش‌نویس فرآیند' : 'افزودن مرحله پیش‌نویس');
-  const draftModalTitle = `${draftModalBaseTitle}${String(watchedDraftStageName || '').trim() ? ` — ${String(watchedDraftStageName).trim()}` : ''}`;
   const setDraftAutomationRules = useCallback((nextValue: ProcessAutomationRule[] | ((previous: ProcessAutomationRule[]) => ProcessAutomationRule[])) => {
     const next = typeof nextValue === 'function'
       ? nextValue(draftAutomationRulesRef.current)
@@ -1632,6 +1628,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   );
   const isProcessPreviewModule = moduleId === 'process_templates' || moduleId === 'process_runs';
   const isProcessModule = isProcessRecordModule || isProcessPreviewModule;
+  const draftModalBaseTitle = editingDraft
+    ? 'ویرایش مرحله پیش‌نویس'
+    : (isProcessModule ? 'افزودن مرحله پیش‌نویس فرآیند' : 'افزودن مرحله پیش‌نویس');
+  const draftModalTitle = `${draftModalBaseTitle}${String(watchedDraftStageName || '').trim() ? ` — ${String(watchedDraftStageName).trim()}` : ''}`;
   const isProductionOrder = moduleId === 'production_orders';
   const supportsHandover = isProductionOrder;
   const canManageProcessGraph = (
