@@ -170,6 +170,7 @@ import {
 } from '../utils/processTemplateContext';
 import {
   findProcessAssigneeFieldReference,
+  normalizeProcessStageDefaultAssignee,
   resolveProcessAssigneeReference,
 } from '../utils/processAssigneeReference';
 import { renderTypedTemplateValue, sanitizeOutboundDisplay } from '../shared/recordRuntime';
@@ -1544,16 +1545,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
     const instructionIds = getInstructionIdsFromStage(stage);
 
-    const defaultAssigneeField = findProcessAssigneeFieldReference(
-      stage?.default_assignee_field,
-      metadata?.default_assignee_field,
-      stage?.default_assignee_combo,
-      metadata?.default_assignee_combo,
-      stage?.default_assignee_id,
-      metadata?.default_assignee_id,
-      stage?.default_assignee_role_id,
-      metadata?.default_assignee_role_id,
-    );
+    const defaultAssignee = normalizeProcessStageDefaultAssignee(stage);
 
     return {
       ...(stage || {}),
@@ -1569,8 +1561,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       sort_order: sortOrder,
       wage: readNumber(stage?.wage, 0),
       weight,
-      default_assignee_id: defaultAssigneeField || (stage?.default_assignee_id ?? stage?.assignee_id ?? metadata?.default_assignee_id ?? null),
-      default_assignee_role_id: stage?.default_assignee_role_id ?? stage?.assignee_role_id ?? metadata?.default_assignee_role_id ?? null,
+      default_assignee_id: defaultAssignee.defaultAssigneeField || defaultAssignee.defaultAssigneeId || null,
+      default_assignee_role_id: defaultAssignee.defaultAssigneeRoleId || null,
       start_duration_value: startDurationValue,
       start_duration_unit: startDurationUnit,
       start_duration_from: startDurationFrom,
@@ -1600,7 +1592,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         duration_from: durationFrom,
         due_anchor_type: dueAnchor.type,
         due_anchor_stage_node_key: dueAnchor.stageNodeKey,
-        default_assignee_field: defaultAssigneeField || null,
+        default_assignee_field: defaultAssignee.defaultAssigneeField || null,
         [PROCESS_NODE_KEY]: processNodeKey,
         [PROCESS_LANE_KEY]: processLaneKey,
         [PROCESS_STAGE_INSTRUCTION_IDS_KEY]: instructionIds,
@@ -4760,7 +4752,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           moduleId,
           recordId,
           stages: Array.isArray(draftLocalRef.current) ? draftLocalRef.current : [],
-          stageScope: 'target',
+          // اجرای یک مرحله نیز باید context تمام مراحل همان فرآیند را بسازد؛
+          // در غیر این صورت مرحلهٔ انتخابی به اجرای موازی وصل می‌شد.
+          stageScope: 'group',
           targetStage: {
             ...draftToCreate,
             process_group_id: effectiveProcessGroupMeta.id,
@@ -5322,8 +5316,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   ), []);
 
   const getDraftAssigneeLabel = useCallback((stage: any) => {
-    const roleId = stage?.default_assignee_role_id ? String(stage.default_assignee_role_id) : null;
-    const userId = stage?.default_assignee_id ? String(stage.default_assignee_id) : null;
+    const normalized = normalizeProcessStageDefaultAssignee(stage);
+    const roleId = normalized.defaultAssigneeRoleId;
+    const userId = normalized.defaultAssigneeId;
     if (roleId) {
       const role = assignees.roles.find((item: any) => String(item?.id) === roleId);
       return role?.title || 'تعیین نشده';

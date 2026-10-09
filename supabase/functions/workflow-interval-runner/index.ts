@@ -3690,6 +3690,41 @@ async function activateAllProcessRunNodes(
   return { ...result, process_node_keys: nodeKeys };
 }
 
+const getSelectedProcessRunNodeKeys = (config: Record<string, any>, stages: any[]) => {
+  if (String(config?.process_execution_mode || '').trim() !== 'selected_stages') return [];
+  const requested = new Set(
+    (Array.isArray(config?.selected_stage_node_keys) ? config.selected_stage_node_keys : [])
+      .map((value: any) => String(value || '').trim())
+      .filter(Boolean),
+  );
+  if (requested.size === 0) return [];
+  return Array.from(new Set((Array.isArray(stages) ? stages : [])
+    .map((stage: any) => String(stage?.process_node_key || stage?.metadata?.process_node_key || '').trim())
+    .filter((nodeKey: string) => requested.has(nodeKey))));
+};
+
+async function activateSelectedProcessRunNodes(
+  url: string,
+  key: string,
+  orgId: string,
+  processRunId: string,
+  actorUserId: string | null,
+  config: Record<string, any>,
+) {
+  const stages = await dbGet(url, key,
+    `process_run_stages?process_run_id=eq.${encodeURIComponent(processRunId)}&select=id,process_node_key,metadata&order=sort_order.asc&limit=500`,
+  ).catch(() => []);
+  const nodeKeys = getSelectedProcessRunNodeKeys(config, stages);
+  if (nodeKeys.length === 0) return { process_node_keys: [], created_task_ids: [], existing_task_ids: [] };
+  const result = await callRpc(url, key, 'activate_process_run_nodes', {
+    p_org_id: orgId,
+    p_process_run_id: processRunId,
+    p_node_keys: nodeKeys,
+    p_actor_user_id: actorUserId || null,
+  });
+  return { ...result, process_node_keys: nodeKeys };
+}
+
 // ── Action execution ───────────────────────────────────────────────────────────
 
 function actionResult(
@@ -4830,7 +4865,9 @@ async function executeAction(
       await prepareProcessRunForAutomaticExecution(url, key, orgId, processRunId, record);
     }
     const activation = processRunId
-      ? await activateAllProcessRunNodes(url, key, orgId, processRunId, actorUserId)
+      ? (String(config?.process_execution_mode || '').trim() === 'selected_stages'
+        ? await activateSelectedProcessRunNodes(url, key, orgId, processRunId, actorUserId, config)
+        : await activateAllProcessRunNodes(url, key, orgId, processRunId, actorUserId))
       : null;
     return actionResult(action, 'success', undefined, {
       affected_count: Math.max(1, Array.isArray(activation?.created_task_ids) ? activation.created_task_ids.length : 0),

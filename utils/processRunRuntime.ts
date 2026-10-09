@@ -1,6 +1,5 @@
 import { MODULES } from '../moduleRegistry';
-import { parseAssigneeValue } from './assigneeValue';
-import { findProcessAssigneeFieldReference } from './processAssigneeReference';
+import { normalizeProcessStageDefaultAssignee } from './processAssigneeReference';
 import {
   PROCESS_GRAPH_METADATA_KEY,
   PROCESS_LANE_KEY,
@@ -64,51 +63,25 @@ const toUuidOrNull = (value: unknown) => {
 };
 
 const normalizeStageAssigneeFields = (stage: Record<string, any>) => {
-  const metadata = parseObject(stage?.metadata);
-  const roleValue = parseAssigneeValue(stage?.default_assignee_role_id || stage?.assignee_role_id, 'role');
-  if (roleValue.assigneeType === 'role' && toUuidOrNull(roleValue.assigneeId)) {
+  const normalized = normalizeProcessStageDefaultAssignee(stage);
+  if (toUuidOrNull(normalized.defaultAssigneeRoleId)) {
     return {
       defaultAssigneeId: null,
-      defaultAssigneeRoleId: toUuidOrNull(roleValue.assigneeId),
+      defaultAssigneeRoleId: toUuidOrNull(normalized.defaultAssigneeRoleId),
       defaultAssigneeField: null,
     };
   }
-
-  const userValue = parseAssigneeValue(stage?.default_assignee_id || stage?.assignee_id, 'user');
-  if (userValue.assigneeType === 'role' && toUuidOrNull(userValue.assigneeId)) {
+  if (toUuidOrNull(normalized.defaultAssigneeId)) {
     return {
-      defaultAssigneeId: null,
-      defaultAssigneeRoleId: toUuidOrNull(userValue.assigneeId),
-      defaultAssigneeField: null,
-    };
-  }
-  if (userValue.assigneeType === 'user' && toUuidOrNull(userValue.assigneeId)) {
-    return {
-      defaultAssigneeId: toUuidOrNull(userValue.assigneeId),
+      defaultAssigneeId: toUuidOrNull(normalized.defaultAssigneeId),
       defaultAssigneeRoleId: null,
       defaultAssigneeField: null,
     };
   }
-
-  const defaultAssigneeField = findProcessAssigneeFieldReference(
-    stage?.default_assignee_field,
-    metadata?.default_assignee_field,
-    stage?.default_assignee_combo,
-    metadata?.default_assignee_combo,
-    stage?.default_assignee_id,
-    stage?.assignee_id,
-    stage?.default_assignee_role_id,
-    stage?.assignee_role_id,
-    metadata?.default_assignee_id,
-    metadata?.assignee_id,
-    metadata?.default_assignee_role_id,
-    metadata?.assignee_role_id,
-  );
-
   return {
     defaultAssigneeId: null,
     defaultAssigneeRoleId: null,
-    defaultAssigneeField: defaultAssigneeField || null,
+    defaultAssigneeField: normalized.defaultAssigneeField || null,
   };
 };
 

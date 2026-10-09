@@ -1235,6 +1235,70 @@ const mergeRuntimeDraftStageForAutoAssign = (
   };
 };
 
+const attachExistingRunContextToDraftStage = (
+  candidate: any,
+  run: any,
+  fallback: {
+    processGroupId?: string | null;
+    processName?: string | null;
+    templateId?: string | null;
+    templateName?: string | null;
+  } = {},
+) => {
+  const processRunId = normalizeDbUuid(run?.id);
+  if (!processRunId) return candidate;
+  const metadata = parseObject(candidate?.metadata);
+  const recurrence = parseObject(candidate?.recurrence_info);
+  const runMetadata = parseObject(run?.metadata);
+  const processGroupId = normalizeText(
+    fallback.processGroupId
+    || run?.process_group_id
+    || runMetadata?.process_group_id
+    || candidate?.process_group_id
+    || metadata?.process_group_id,
+  );
+  const processName = normalizeText(
+    candidate?.process_group_name
+    || metadata?.process_group_name
+    || fallback.processName
+    || run?.process_name,
+  ) || 'فرآیند';
+  const templateId = normalizeText(
+    candidate?.source_template_id
+    || metadata?.source_template_id
+    || fallback.templateId
+    || run?.template_id
+    || runMetadata?.source_template_id,
+  );
+  const templateName = normalizeText(
+    candidate?.source_template_name
+    || metadata?.source_template_name
+    || fallback.templateName
+    || run?.template_name
+    || runMetadata?.source_template_name,
+  );
+  return {
+    ...candidate,
+    ...(processGroupId ? { process_group_id: processGroupId } : {}),
+    process_group_name: processName,
+    ...(templateId ? { source_template_id: templateId } : {}),
+    ...(templateName ? { source_template_name: templateName } : {}),
+    process_run_id: processRunId,
+    metadata: {
+      ...metadata,
+      ...(processGroupId ? { process_group_id: processGroupId } : {}),
+      process_group_name: processName,
+      process_run_id: processRunId,
+      ...(templateId ? { source_template_id: templateId } : {}),
+      ...(templateName ? { source_template_name: templateName } : {}),
+    },
+    recurrence_info: {
+      ...recurrence,
+      process_run_id: processRunId,
+    },
+  };
+};
+
 const collectProcessGroupIdentityKeys = (value: any) => {
   return collectProcessInstanceIdentityKeys(value);
 };
@@ -4330,7 +4394,13 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     const runtimeRun = itemRunId
       ? (runtimeRef.current.runs || []).find((row: any) => normalizeDbUuid(row?.id) === itemRunId)
       : null;
-    const sourceDraftStages = resolveRawDraftStagesForV2Stages(itemDraftStages, targetGroupId);
+    const sourceDraftStages = resolveRawDraftStagesForV2Stages(itemDraftStages, targetGroupId)
+      .map((stage) => attachExistingRunContextToDraftStage(stage, runtimeRun, {
+        processGroupId: targetGroupId,
+        processName: item.title,
+        templateId: item.templateId,
+        templateName: item.templateTitle,
+      }));
     const executionOwners = sourceDraftStages.map((stage) => resolveProcessDraftExecutionOwner({
       stage,
       currentModuleId: normalizedModuleId,
@@ -4358,6 +4428,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         recordData: executionOwner.isLinkedOwner ? null : recordData,
         draftStages: sourceDraftStages,
         targetGroupId,
+        existingProcessRunId: itemRunId || null,
       });
       if (result.createdCount > 0) {
         const createdStageIdentityKeys = new Set(
@@ -4429,35 +4500,12 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       ? normalizeText(item.id).replace(/^draft:/, '')
       : normalizeText(runGroupId || sourceStage?.process_group_id || sourceMeta?.process_group_id || sourceMeta?.process_group?.id);
     const itemDraftStages = item.lanes.flatMap((lane) => lane.stages.filter((candidate) => candidate.kind === 'draft'));
-    const applyExistingRunContext = (candidate: any) => {
-      if (!runRow) return candidate;
-      const candidateMetadata = parseObject(candidate?.metadata);
-      const candidateRecurrence = parseObject(candidate?.recurrence_info);
-      const processGroupId = targetGroupId || runGroupId || normalizeText(candidate?.process_group_id || candidateMetadata?.process_group_id);
-      const processGroupName = normalizeText(candidate?.process_group_name || candidateMetadata?.process_group_name || runRow?.process_name || item.title) || 'فرآیند';
-      const sourceTemplateId = normalizeText(candidate?.source_template_id || candidateMetadata?.source_template_id || item.templateId || runRow?.template_id || runMetadata?.source_template_id);
-      const sourceTemplateName = normalizeText(candidate?.source_template_name || candidateMetadata?.source_template_name || item.templateTitle || runRow?.template_name || runMetadata?.source_template_name);
-      return {
-        ...candidate,
-        process_group_id: processGroupId || candidate?.process_group_id || null,
-        process_group_name: processGroupName,
-        source_template_id: sourceTemplateId || null,
-        source_template_name: sourceTemplateName || null,
-        process_run_id: itemRunId || candidate?.process_run_id || null,
-        metadata: {
-          ...candidateMetadata,
-          ...(processGroupId ? { process_group_id: processGroupId } : {}),
-          process_group_name: processGroupName,
-          process_run_id: itemRunId || candidateMetadata?.process_run_id || null,
-          source_template_id: sourceTemplateId || candidateMetadata?.source_template_id || null,
-          source_template_name: sourceTemplateName || candidateMetadata?.source_template_name || null,
-        },
-        recurrence_info: {
-          ...candidateRecurrence,
-          process_run_id: itemRunId || candidateRecurrence?.process_run_id || null,
-        },
-      };
-    };
+    const applyExistingRunContext = (candidate: any) => attachExistingRunContextToDraftStage(candidate, runRow, {
+      processGroupId: targetGroupId || runGroupId,
+      processName: item.title,
+      templateId: item.templateId,
+      templateName: item.templateTitle,
+    });
     const sourceDraftStagesBase = resolveRawDraftStagesForV2Stages(itemDraftStages, targetGroupId).map(applyExistingRunContext);
     const targetDraftStagesBase = resolveRawDraftStagesForV2Stages([stage], targetGroupId).map(applyExistingRunContext);
     const targetRawStage = targetDraftStagesBase[0] || sourceStage;
@@ -4512,6 +4560,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         draftStages: sourceDraftStages,
         targetGroupId,
         targetStageId,
+        existingProcessRunId: itemRunId || null,
       });
       if (result.createdCount > 0) {
         // ارجاع تک‌مرحله‌ای باید همان پیش‌نویس را به فعالیت تبدیل کند، نه اینکه

@@ -72,6 +72,8 @@ type AutoAssignArgs = {
   draftStages: Record<string, any>[];
   targetGroupId?: string | null;
   targetStageId?: string | null;
+  /** اجرای موجودی که پیش‌نویس‌های نمای فعلی به آن تعلق دارند. */
+  existingProcessRunId?: string | null;
 };
 
 type AutoAssignResult = {
@@ -561,6 +563,7 @@ export const autoAssignProcessV2DraftStages = async ({
   draftStages,
   targetGroupId,
   targetStageId,
+  existingProcessRunId,
 }: AutoAssignArgs): Promise<AutoAssignResult> => {
   const normalizedModuleId = normalizeText(moduleId);
   const normalizedRecordId = normalizeDbUuid(recordId);
@@ -717,6 +720,10 @@ export const autoAssignProcessV2DraftStages = async ({
         recordId: normalizedRecordId,
         stages: resolvedGraphStages,
         targetStage: resolvedFirstStage,
+        // حتی در ارجاع یک مرحله، کل گروه باید با همان اجرای موجود reconcile شود.
+        // ساختن runtime با خودِ یک مرحله باعث ایجاد نوار فرآیند موازی می‌شد.
+        stageScope: 'group',
+        existingProcessRunId,
         currentUserId,
       });
     }

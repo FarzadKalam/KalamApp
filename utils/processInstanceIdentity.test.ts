@@ -5,6 +5,7 @@ import {
   isDraftProcessInstanceMaterialized,
   isProcessInstanceMutationScopeCompatible,
 } from './processInstanceIdentity';
+import { normalizeProcessStageDefaultAssignee } from './processAssigneeReference';
 
 describe('process instance identity', () => {
   it('does not use template id as process instance identity', () => {
@@ -95,5 +96,17 @@ describe('process instance identity', () => {
       process_group_id: 'group-b',
       source_template_id: 'template-1',
     })).toBe(false);
+  });
+
+  it('keeps an explicit role when a legacy field-based assignee is also present', () => {
+    expect(normalizeProcessStageDefaultAssignee({
+      default_assignee_id: 'field:__linked__job_applicants__assignee_id',
+      default_assignee_role_id: 'role:44444444-4444-4444-8444-444444444444',
+      metadata: { default_assignee_field: 'field:__linked__job_applicants__assignee_id' },
+    })).toEqual({
+      defaultAssigneeId: null,
+      defaultAssigneeRoleId: '44444444-4444-4444-8444-444444444444',
+      defaultAssigneeField: '',
+    });
   });
 });

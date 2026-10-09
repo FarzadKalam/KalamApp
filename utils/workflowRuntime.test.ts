@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   sendBotMessageViaGateway: vi.fn(),
   sendCounterpartyBotGroupMessage: vi.fn(),
   activateInitialProcessRunNodes: vi.fn(),
+  activateProcessRunNodes: vi.fn(),
   activateProcessStageAction: vi.fn(),
   authUser: null as any,
 }));
@@ -48,6 +49,7 @@ vi.mock('./botGateway', () => ({
 
 vi.mock('./processStageActivation', () => ({
   activateInitialProcessRunNodes: mocks.activateInitialProcessRunNodes,
+  activateProcessRunNodes: mocks.activateProcessRunNodes,
   activateProcessStageAction: mocks.activateProcessStageAction,
 }));
 
@@ -190,6 +192,7 @@ describe('workflow action recipients', () => {
     mocks.sendBotMessageViaGateway.mockResolvedValue({ ok: true });
     mocks.sendCounterpartyBotGroupMessage.mockResolvedValue({ ok: true });
     mocks.activateInitialProcessRunNodes.mockResolvedValue({ createdTaskIds: [], existingTaskIds: [] });
+    mocks.activateProcessRunNodes.mockResolvedValue({ createdTaskIds: [], existingTaskIds: [] });
     mocks.activateProcessStageAction.mockResolvedValue({ createdTaskIds: [], existingTaskIds: [] });
     mocks.authUser = null;
     vi.clearAllMocks();
@@ -1156,6 +1159,30 @@ describe('workflow process actions', () => {
     expect(mocks.activateInitialProcessRunNodes).toHaveBeenCalledWith({
       processRunId: 'process-run-2',
     });
+  });
+
+  it('executes only configured draft stages when the activator is limited to selected stages', async () => {
+    mocks.rpc.mockResolvedValueOnce({ data: 'process-run-selected', error: null });
+
+    await executeWorkflowAction(
+      {
+        id: 'action-execute-selected-process',
+        type: 'execute_process',
+        config: {
+          template_id: 'template-2',
+          process_execution_mode: 'selected_stages',
+          selected_stage_node_keys: ['review', 'publish'],
+        },
+      },
+      'projects',
+      { id: 'record-2', org_id: 'org-2' },
+    );
+
+    expect(mocks.activateProcessRunNodes).toHaveBeenCalledWith({
+      processRunId: 'process-run-selected',
+      nodeKeys: ['review', 'publish'],
+    });
+    expect(mocks.activateInitialProcessRunNodes).not.toHaveBeenCalled();
   });
 
   it('delegates single-stage activation actions to the process stage runtime', async () => {

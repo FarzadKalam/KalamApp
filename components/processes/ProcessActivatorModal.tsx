@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   App,
+  Checkbox,
   Form,
   Input,
   Modal,
@@ -21,6 +22,8 @@ import {
 } from '../../utils/workflowTypes';
 import WorkflowConditionsGroup from '../workflows/WorkflowConditionsGroup';
 import WorkflowIntervalScheduleFields from '../workflows/WorkflowIntervalScheduleFields';
+import { loadProcessTemplateStages } from '../../utils/processTemplateStages';
+import { getProcessStageNodeKey } from '../../utils/processGraph';
 
 type OptionList = Array<{ label: string; value: string }>;
 
@@ -45,7 +48,8 @@ type FormValues = {
   name: string;
   description?: string;
   trigger_type: 'on_create' | 'on_upsert' | 'interval';
-  process_execution_action?: 'copy_process_template' | 'execute_process';
+  process_execution_action?: 'copy_process_template' | 'execute_process' | 'execute_selected_process_stages';
+  selected_process_stage_node_keys?: string[];
   execution_mode: 'first_match' | 'every_match';
   interval_value?: number | null;
   interval_unit?: 'hour' | 'day' | 'week' | 'month' | null;
@@ -86,8 +90,10 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
   const [conditionsAny, setConditionsAny] = useState<WorkflowCondition[]>([]);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [templateStages, setTemplateStages] = useState<any[]>([]);
   const triggerType = Form.useWatch('trigger_type', form);
   const isActive = Form.useWatch('is_active', form);
+  const processExecutionAction = Form.useWatch('process_execution_action', form);
 
   const editableConditionsAll = useMemo(
     () => conditionsAll.filter((condition) => condition.id !== SOURCE_NODE_CONDITION_ID),
@@ -117,6 +123,13 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
           action?.type === 'copy_process_template' || action?.type === 'execute_process'
         ));
         const hasLegacyStageActivationAction = recordActions.some((action: any) => action?.type === 'activate_specific_process_stage');
+        const selectedNodeKeys = Array.isArray(processAction?.config?.selected_stage_node_keys)
+          ? processAction.config.selected_stage_node_keys.map((value: any) => String(value || '').trim()).filter(Boolean)
+          : (Array.isArray(processAction?.config?.stage_node_keys)
+            ? processAction.config.stage_node_keys.map((value: any) => String(value || '').trim()).filter(Boolean)
+            : []);
+        const isSelectedStageExecution = processAction?.type === 'execute_process'
+          && (String(processAction?.config?.process_execution_mode || '').trim() === 'selected_stages' || selectedNodeKeys.length > 0);
         setRecord(nextRecord);
         form.setFieldsValue({
           name: nextRecord?.name || defaultName || 'فعال‌کننده فرآیند',
@@ -135,9 +148,13 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
           interval_days_after_holiday: nextRecord?.interval_days_after_holiday ?? null,
           batch_size: nextRecord?.batch_size || null,
           is_active: nextRecord?.is_active !== false,
-          process_execution_action: processAction?.type === 'execute_process'
-            ? 'execute_process'
+          process_execution_action: isSelectedStageExecution
+            ? 'execute_selected_process_stages'
+            : (processAction?.type === 'execute_process'
+              ? 'execute_process'
             : (hasLegacyStageActivationAction ? 'execute_process' : 'copy_process_template'),
+            ),
+          selected_process_stage_node_keys: selectedNodeKeys,
         });
         setConditionsAll(Array.isArray(nextRecord?.conditions_all) ? nextRecord.conditions_all : []);
         setConditionsAny(Array.isArray(nextRecord?.conditions_any) ? nextRecord.conditions_any : []);
@@ -156,6 +173,35 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
     };
   }, [defaultName, form, message, open, templateId, triggerKey, workflowId]);
 
+  useEffect(() => {
+    if (!open || !templateId) return;
+    let cancelled = false;
+    void loadProcessTemplateStages(supabase, templateId)
+      .then((stages) => {
+        if (!cancelled) setTemplateStages(Array.isArray(stages) ? stages : []);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setTemplateStages([]);
+          message.error(toFaErrorMessage(error, 'بارگذاری مرحله‌های پیش‌نویس ناموفق بود'));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [message, open, templateId]);
+
+  const templateStageOptions = useMemo(() => templateStages
+    .map((stage, index) => {
+      const nodeKey = String(getProcessStageNodeKey(stage, index) || '').trim();
+      if (!nodeKey) return null;
+      return {
+        label: String(stage?.stage_name || stage?.name || `مرحله ${index + 1}`).trim(),
+        value: nodeKey,
+      };
+    })
+    .filter((option): option is { label: string; value: string } => Boolean(option)), [templateStages]);
+
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
@@ -171,7 +217,19 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
             value: sourceNodeKey,
           }]
         : [];
-      const selectedProcessActionType = values.process_execution_action === 'execute_process'
+      const isSelectedStageExecution = values.process_execution_action === 'execute_selected_process_stages';
+      const selectedStageNodeKeys = Array.from(new Set(
+        (Array.isArray(values.selected_process_stage_node_keys) ? values.selected_process_stage_node_keys : [])
+          .map((value) => String(value || '').trim())
+          .filter(Boolean),
+      ));
+      if (isSelectedStageExecution && selectedStageNodeKeys.length === 0) {
+        form.setFields([{ name: 'selected_process_stage_node_keys', errors: ['حداقل یک فعالیت پیش‌نویس را انتخاب کنید.'] }]);
+        return;
+      }
+      const selectedProcessActionType = (
+        values.process_execution_action === 'execute_process' || isSelectedStageExecution
+      )
         ? 'execute_process'
         : 'copy_process_template';
       const existingActivationAction = record?.actions?.find((action) => (
@@ -187,6 +245,10 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
           template_id: templateId,
           process_trigger_key: triggerKey,
           target_lane_keys: targetLaneKeys,
+          ...(selectedProcessActionType === 'execute_process' ? {
+            process_execution_mode: isSelectedStageExecution ? 'selected_stages' : 'all_stages',
+            selected_stage_node_keys: isSelectedStageExecution ? selectedStageNodeKeys : [],
+          } : {}),
         },
       };
       const payload: Record<string, any> = {
@@ -278,10 +340,21 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
               options={[
                 { label: 'کپی کردن الگوی فرآیند', value: 'copy_process_template' },
                 { label: 'اجرای فرآیند و ارجاع خودکار مراحل', value: 'execute_process' },
+                { label: 'اجرای فرآیند و ارجاع خودکار مراحل خاص', value: 'execute_selected_process_stages' },
               ]}
               optionType="button"
               buttonStyle="solid"
             />
+          </Form.Item>
+        ) : null}
+        {isActive !== false && processExecutionAction === 'execute_selected_process_stages' ? (
+          <Form.Item
+            name="selected_process_stage_node_keys"
+            label="فعالیت‌های پیش‌نویس برای ارجاع خودکار"
+            rules={[{ required: true, type: 'array', min: 1, message: 'حداقل یک فعالیت پیش‌نویس را انتخاب کنید.' }]}
+            extra="پس از کپی‌شدن فرآیند در رکورد مقصد، فقط فعالیت‌های انتخاب‌شده ساخته و ارجاع می‌شوند."
+          >
+            <Checkbox.Group className="grid grid-cols-1 gap-2 sm:grid-cols-2" options={templateStageOptions} />
           </Form.Item>
         ) : null}
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">

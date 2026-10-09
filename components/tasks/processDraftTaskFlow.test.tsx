@@ -150,7 +150,7 @@ const buildTaskPayloadFromDraftStage = async ({
     moduleId: 'projects',
     recordId: PROJECT_ID,
     stages: draftStages,
-    stageScope: 'target',
+    stageScope: 'group',
     targetStage,
   });
 
@@ -228,7 +228,7 @@ describe('process draft task flow', () => {
     expect(supabaseClient.rpc).toHaveBeenCalledTimes(3);
     expect(supabaseClient.rpc.mock.calls[0][1].p_org_id).toBe(ORG_ID);
     expect(supabaseClient.rpc.mock.calls.map(([, args]) => args.p_stages)).toSatisfy(
-      (calls: any[]) => calls.every((stages: any[]) => Array.isArray(stages) && stages.length === 1)
+      (calls: any[]) => calls.every((stages: any[]) => Array.isArray(stages) && stages.length === 3)
     );
   });
 

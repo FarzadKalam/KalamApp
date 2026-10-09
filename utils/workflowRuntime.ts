@@ -44,7 +44,7 @@ import {
 import { evaluateFormulaExpression } from './formulaRuntime';
 import { getRecordTitle } from './recordTitle';
 import { mapProcessTemplateStagesToDraft } from './processRunRuntime';
-import { activateInitialProcessRunNodes, activateProcessStageAction } from './processStageActivation';
+import { activateInitialProcessRunNodes, activateProcessRunNodes, activateProcessStageAction } from './processStageActivation';
 import { loadProcessTemplateStages as loadProcessTemplateStagesShared } from './processTemplateStages';
 import { parseSurveyTemplateFieldKey } from './surveyTemplates';
 import { resolveSystemWorkflowStoryPublisher } from './workflowStoryPublisher';
@@ -3001,7 +3001,18 @@ export const executeWorkflowAction = async (
     if (error) throw error;
     const normalizedProcessRunId = String(processRunId || '').trim();
     if (normalizedProcessRunId) {
-      await activateInitialProcessRunNodes({ processRunId: normalizedProcessRunId });
+      const selectedNodeKeys = Array.from(new Set(
+        (Array.isArray(config?.selected_stage_node_keys) ? config.selected_stage_node_keys : [])
+          .map((value: any) => String(value || '').trim())
+          .filter(Boolean),
+      ));
+      if (String(config?.process_execution_mode || '').trim() === 'selected_stages') {
+        if (selectedNodeKeys.length > 0) {
+          await activateProcessRunNodes({ processRunId: normalizedProcessRunId, nodeKeys: selectedNodeKeys });
+        }
+      } else {
+        await activateInitialProcessRunNodes({ processRunId: normalizedProcessRunId });
+      }
     }
   }
 };
