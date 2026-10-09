@@ -13,6 +13,7 @@ import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { htmlToPlainText } from '../../utils/htmlToPlainText';
 import PrintTemplateToolbar from '../../components/moduleShow/PrintTemplateToolbar';
+import EditorChromeToggle from '../../components/moduleShow/EditorChromeToggle';
 import RecordFilesManager from '../../components/RecordFilesManager';
 import {
   AI_INSTRUCTIONS_DOCUMENT_TYPE,
@@ -103,6 +104,7 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
     document.body_html || plainTextToHtml(document.body || '')
   );
   const [editorInstance, setEditorInstance] = useState<any>(null);
+  const [editorChromeCollapsed, setEditorChromeCollapsed] = useState(false);
   const handleEditorReady = useCallback((editor: any) => setEditorInstance(editor), []);
   const [status, setStatus] = useState<'active' | 'draft' | 'archived'>(document.status || 'active');
   const [docType, setDocType] = useState<string>(document.document_type || 'general');
@@ -369,8 +371,10 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
       className="flex flex-col bg-white dark:bg-gray-950"
       style={{ position: 'fixed', inset: 0, zIndex: 1500 }}
     >
-      {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 flex-shrink-0">
+      <div className={`relative flex-shrink-0 ${editorChromeCollapsed ? 'h-0 overflow-visible' : ''}`}>
+        {!editorChromeCollapsed && <>
+        {/* Header */}
+        <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
         <Button
           icon={<ArrowRightOutlined />}
           onClick={onClose}
@@ -520,8 +524,15 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
       </div>
 
       {/* Toolbar */}
-      <div className="px-4 py-2 border-b border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 flex-shrink-0 overflow-x-auto">
-        <PrintTemplateToolbar editor={editorInstance} />
+        <div className="px-4 py-2 border-b border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 flex-shrink-0 overflow-x-auto">
+          <PrintTemplateToolbar editor={editorInstance} />
+        </div>
+        </>}
+        <EditorChromeToggle
+          collapsed={editorChromeCollapsed}
+          onToggle={() => setEditorChromeCollapsed((current) => !current)}
+          className={`absolute left-1/2 z-20 -translate-x-1/2 ${editorChromeCollapsed ? 'top-2' : '-bottom-3'}`}
+        />
       </div>
 
       {/* Editor body */}

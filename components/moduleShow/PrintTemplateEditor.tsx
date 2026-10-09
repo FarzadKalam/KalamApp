@@ -16,7 +16,7 @@ import {
 import { Button, Divider, Tooltip } from 'antd';
 import { Extension } from '@tiptap/core';
 import { NodeSelection, TextSelection } from '@tiptap/pm/state';
-import { CellSelection } from '@tiptap/pm/tables';
+import { CellSelection, TableMap } from '@tiptap/pm/tables';
 import { EditorContent, NodeViewWrapper, ReactNodeViewRenderer, useEditor } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import StarterKit from '@tiptap/starter-kit';
@@ -738,32 +738,51 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
     startY: number;
     startHeight: number;
   }>(null);
+  const columnResizeStateRef = useRef<null | {
+    cellPos: number;
+    column: number;
+    startX: number;
+    startWidth: number;
+    edge: 'left' | 'right';
+  }>(null);
 
   const resolveCellPos = (view: any, cell: HTMLElement) => {
     const docSize = Math.max(0, view.state.doc.content.size);
+    const rect = cell.getBoundingClientRect();
+    const center = view.posAtCoords({
+      left: rect.left + Math.max(2, rect.width / 2),
+      top: rect.top + Math.max(2, rect.height / 2),
+    })?.pos;
     const candidatePositions = [
+      center,
       view.posAtDOM(cell, 0),
       Math.max(0, view.posAtDOM(cell, 0) - 1),
       Math.max(0, view.posAtDOM(cell, 0) + 1),
     ];
     const isCellNodeName = (name: string) => name === 'tableCell' || name === 'tableHeader';
 
-    for (const candidate of candidatePositions) {
+    let fallbackCellPos: number | null = null;
+    for (const candidate of candidatePositions.filter((value): value is number => Number.isFinite(value))) {
       const safePos = Math.max(0, Math.min(candidate, docSize));
       const $pos = view.state.doc.resolve(safePos);
       for (let depth = $pos.depth; depth > 0; depth -= 1) {
         const node = $pos.node(depth);
         if (isCellNodeName(String(node?.type?.name || ''))) {
-          return $pos.before(depth);
+          const resolved = $pos.before(depth);
+          // Near a table border, posAtDOM may resolve to the neighbour. The
+          // centre-point probe above lets us retain the exact DOM cell.
+          const domCell = view.nodeDOM?.(resolved);
+          if (domCell === cell) return resolved;
+          if (!domCell && fallbackCellPos === null) fallbackCellPos = resolved;
         }
       }
       const nextNodeName = String($pos.nodeAfter?.type?.name || '');
-      if (isCellNodeName(nextNodeName)) {
+      if (isCellNodeName(nextNodeName) && view.nodeDOM?.(safePos) === cell) {
         return safePos;
       }
     }
 
-    return null;
+    return fallbackCellPos;
   };
 
   const createCellRangeSelection = (view: any, anchorCell: HTMLElement, headCell?: HTMLElement) => {
@@ -822,9 +841,20 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
     const bottomDistance = Math.abs(event.clientY - rect.bottom);
     const horizontalDistance = Math.min(leftDistance, rightDistance);
     const verticalDistance = Math.min(topDistance, bottomDistance);
-    if (horizontalDistance <= edgeThreshold && horizontalDistance <= verticalDistance) return 'column';
+    if (horizontalDistance <= edgeThreshold && horizontalDistance <= verticalDistance) {
+      return leftDistance <= rightDistance ? 'column-left' : 'column-right';
+    }
     if (verticalDistance <= edgeThreshold) return 'row';
     return null;
+  };
+
+  const isCellRangeDragHandle = (cell: HTMLElement, event: MouseEvent) => {
+    const rect = cell.getBoundingClientRect();
+    const direction = window.getComputedStyle(cell).direction;
+    const inlineStart = direction === 'rtl' ? rect.right : rect.left;
+    return Math.abs(event.clientX - inlineStart) <= 26
+      && event.clientY >= rect.top + 4
+      && event.clientY <= rect.bottom - 4;
   };
 
   const isTextSelectionTarget = (target: HTMLElement | null, cell: HTMLElement) => {
@@ -836,8 +866,44 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
   };
 
   const shouldStartCellRangeDrag = (target: HTMLElement | null, cell: HTMLElement, event: MouseEvent) => {
-    if (event.shiftKey || target === cell) return true;
+    if (event.shiftKey || target === cell || isCellRangeDragHandle(cell, event)) return true;
     return !isTextSelectionTarget(target, cell);
+  };
+
+  const applyColumnWidth = (view: any, cellPos: number, column: number, nextWidth: number) => {
+    const safeWidth = Math.max(25, Math.round(nextWidth));
+    try {
+      const $cell = view.state.doc.resolve(cellPos);
+      const table = $cell.node(-1);
+      const tableStart = $cell.start(-1);
+      const map = TableMap.get(table);
+      if (column < 0 || column >= map.width) return;
+      let tr = view.state.tr;
+      let changed = false;
+
+      for (let rowIndex = 0; rowIndex < map.height; rowIndex += 1) {
+        const mapIndex = rowIndex * map.width + column;
+        if (rowIndex > 0 && map.map[mapIndex] === map.map[mapIndex - map.width]) continue;
+        const relativePos = map.map[mapIndex];
+        const cellNode = table.nodeAt(relativePos);
+        if (!cellNode) continue;
+        const cellColumn = map.colCount(relativePos);
+        const widthIndex = cellNode.attrs.colspan === 1 ? 0 : column - cellColumn;
+        const colwidth = Array.isArray(cellNode.attrs.colwidth)
+          ? [...cellNode.attrs.colwidth]
+          : Array.from({ length: cellNode.attrs.colspan || 1 }, () => 0);
+        if (colwidth[widthIndex] === safeWidth) continue;
+        colwidth[widthIndex] = safeWidth;
+        tr = tr.setNodeMarkup(tableStart + relativePos, cellNode.type, {
+          ...cellNode.attrs,
+          colwidth,
+        });
+        changed = true;
+      }
+      if (changed) view.dispatch(tr);
+    } catch {
+      // A concurrent table transformation invalidated the pointer target.
+    }
   };
 
   const applyRowHeight = (view: any, row: HTMLTableRowElement, nextHeight: number) => {
@@ -1046,7 +1112,9 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
       Link.configure({ openOnClick: false }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       Placeholder.configure({ placeholder }),
-      CustomTable.configure({ resizable: true, allowTableNodeSelection: true }),
+      // The upstream column-resize plugin assumes LTR edge ownership. We use
+      // explicit physical edges below so RTL tables resize the clicked column.
+      CustomTable.configure({ resizable: false, allowTableNodeSelection: true }),
       CustomTableRow,
       CustomTableHeader,
       CustomTableCell,
@@ -1098,12 +1166,6 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
             view.focus();
             return true;
           }
-          if (target?.closest?.('.column-resize-handle')) {
-            cellDragSelectionRef.current = null;
-            rowResizeStateRef.current = null;
-            setEditorResizeCursor(view, 'column');
-            return false;
-          }
           const cell = target?.closest?.('td,th') as HTMLElement | null;
           const table = target?.closest?.('table') as HTMLTableElement | null;
           if (!cell || !table) {
@@ -1124,17 +1186,52 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
             return true;
           }
           const resizeIntent = getCellResizeIntent(cell, mouseEvent);
-          if (resizeIntent === 'column') {
+          if (resizeIntent === 'column-left' || resizeIntent === 'column-right') {
             cellDragSelectionRef.current = null;
             rowResizeStateRef.current = null;
-            if (mouseEvent.detail < 2) {
-              setEditorResizeCursor(view, 'column');
-              return false;
-            }
-            const selection = createAxisSelection(view, cell, 'column');
-            if (!selection) return false;
+            const cellPos = resolveCellPos(view, cell);
+            if (cellPos === null) return false;
+            const $cell = view.state.doc.resolve(cellPos);
+            const table = $cell.node(-1);
+            const map = TableMap.get(table);
+            const baseColumn = map.colCount(cellPos - $cell.start(-1));
+            const column = resizeIntent === 'column-right'
+              ? baseColumn + Math.max(1, Number($cell.nodeAfter?.attrs?.colspan || 1)) - 1
+              : baseColumn;
+            const selection = CellSelection.create(view.state.doc, cellPos);
+            mouseEvent.preventDefault();
             view.dispatch(view.state.tr.setSelection(selection));
             view.focus();
+            columnResizeStateRef.current = {
+              cellPos,
+              column,
+              startX: mouseEvent.clientX,
+              startWidth: Math.max(
+                25,
+                Number($cell.nodeAfter?.attrs?.colwidth?.[
+                  resizeIntent === 'column-right'
+                    ? Math.max(1, Number($cell.nodeAfter?.attrs?.colspan || 1)) - 1
+                    : 0
+                ]) || Math.round(cell.getBoundingClientRect().width / Math.max(1, Number($cell.nodeAfter?.attrs?.colspan || 1))),
+              ),
+              edge: resizeIntent === 'column-right' ? 'right' : 'left',
+            };
+            setEditorResizeCursor(view, 'column');
+            const handleMove = (moveEvent: MouseEvent) => {
+              const resizeState = columnResizeStateRef.current;
+              if (!resizeState) return;
+              const delta = moveEvent.clientX - resizeState.startX;
+              const direction = resizeState.edge === 'right' ? 1 : -1;
+              applyColumnWidth(view, resizeState.cellPos, resizeState.column, resizeState.startWidth + (delta * direction));
+            };
+            const handleUp = () => {
+              columnResizeStateRef.current = null;
+              setEditorResizeCursor(view, null);
+              window.removeEventListener('mousemove', handleMove);
+              window.removeEventListener('mouseup', handleUp);
+            };
+            window.addEventListener('mousemove', handleMove);
+            window.addEventListener('mouseup', handleUp, { once: true });
             return true;
           }
           if (resizeIntent === 'row') {
@@ -1200,7 +1297,10 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
           const target = mouseEvent.target as HTMLElement | null;
           const hoverCell = target?.closest?.('td,th') as HTMLElement | null;
           const hoverIntent = getCellResizeIntent(hoverCell, mouseEvent);
-          setEditorResizeCursor(view, hoverIntent);
+          setEditorResizeCursor(
+            view,
+            hoverIntent === 'row' ? 'row' : hoverIntent ? 'column' : null,
+          );
           if (hoverIntent && !cellDragSelectionRef.current) return false;
           const dragState = cellDragSelectionRef.current;
           if (!dragState) return false;
@@ -1223,11 +1323,13 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
         mouseup: () => {
           cellDragSelectionRef.current = null;
           rowResizeStateRef.current = null;
+          columnResizeStateRef.current = null;
           return false;
         },
         mouseleave: (view: any) => {
           cellDragSelectionRef.current = null;
           rowResizeStateRef.current = null;
+          columnResizeStateRef.current = null;
           setEditorResizeCursor(view, null);
           return false;
         },
@@ -1656,17 +1758,6 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
         .print-template-editor-content th:hover,
         .print-template-editor-content td:hover {
           background: rgba(var(--brand-500-rgb), 0.04);
-        }
-        .print-template-editor-content .column-resize-handle {
-          position: absolute;
-          top: 0;
-          bottom: -1px;
-          inset-inline-end: -2px;
-          width: 5px;
-          background: rgba(var(--brand-500-rgb), 0.55);
-          z-index: 3;
-          cursor: col-resize;
-          touch-action: none;
         }
         .print-template-editor-content.resize-cursor {
           cursor: col-resize;

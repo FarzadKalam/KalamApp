@@ -23,15 +23,14 @@ import {
 import {
   CopyOutlined,
   DeleteOutlined,
-  DownOutlined,
   EditOutlined,
   FileTextOutlined,
   PlusOutlined,
   SaveOutlined,
-  UpOutlined,
 } from "@ant-design/icons";
 import { MODULES } from "../../moduleRegistry";
 import PrintTemplateToolbar from "../../components/moduleShow/PrintTemplateToolbar";
+import EditorChromeToggle from "../../components/moduleShow/EditorChromeToggle";
 import { toFaErrorMessage } from "../../utils/errorMessageFa";
 import {
   buildDefaultTemplatesForModule,
@@ -1339,18 +1338,7 @@ const PrintTemplatesTab: React.FC = () => {
               ) : null}
             </div>
 
-            <div className="sticky top-0 z-[90] mb-4 pb-2">
-              <div className="mb-2 flex justify-end">
-                <Button
-                  size="small"
-                  icon={toolbarVisible ? <UpOutlined /> : <DownOutlined />}
-                  onClick={() => setToolbarVisible((prev) => !prev)}
-                >
-                  {toolbarVisible
-                    ? "مخفی کردن نوار ویرایش"
-                    : "نمایش نوار ویرایش"}
-                </Button>
-              </div>
+            <div className={`sticky top-0 z-[90] mb-4 ${toolbarVisible ? 'pb-2' : 'h-5'}`}>
               {toolbarVisible ? (
                 <PrintTemplateToolbar
                   editor={activeEditor}
@@ -1388,6 +1376,11 @@ const PrintTemplatesTab: React.FC = () => {
                   }
                 />
               ) : null}
+              <EditorChromeToggle
+                collapsed={!toolbarVisible}
+                onToggle={() => setToolbarVisible((prev) => !prev)}
+                className="absolute bottom-0 left-1/2 z-20 -translate-x-1/2 translate-y-1/2"
+              />
             </div>
 
             <div className="rounded-[28px] border border-slate-200/80 dark:border-slate-800 bg-gradient-to-b from-[#faf7f2] via-[#f8fafc] to-[#f1f5f9] dark:from-[#0b1120] dark:via-[#111827] dark:to-[#0f172a] p-4">
