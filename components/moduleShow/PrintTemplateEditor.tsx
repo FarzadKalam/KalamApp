@@ -1112,9 +1112,9 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
       Link.configure({ openOnClick: false }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       Placeholder.configure({ placeholder }),
-      // The upstream column-resize plugin assumes LTR edge ownership. We use
-      // explicit physical edges below so RTL tables resize the clicked column.
-      CustomTable.configure({ resizable: false, allowTableNodeSelection: true }),
+      // Keep the table view that renders colwidth attributes, while the DOM
+      // handlers below take ownership of pointer interaction for RTL tables.
+      CustomTable.configure({ resizable: true, allowTableNodeSelection: true }),
       CustomTableRow,
       CustomTableHeader,
       CustomTableCell,
@@ -1301,7 +1301,9 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
             view,
             hoverIntent === 'row' ? 'row' : hoverIntent ? 'column' : null,
           );
-          if (hoverIntent && !cellDragSelectionRef.current) return false;
+          // Do not let the upstream LTR resize plugin claim this edge. Its
+          // display view remains enabled so colwidth changes repaint at once.
+          if (hoverIntent && !cellDragSelectionRef.current) return true;
           const dragState = cellDragSelectionRef.current;
           if (!dragState) return false;
           if ((mouseEvent.buttons & 1) !== 1) {
