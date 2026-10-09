@@ -150,10 +150,9 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
           is_active: nextRecord?.is_active !== false,
           process_execution_action: isSelectedStageExecution
             ? 'execute_selected_process_stages'
-            : (processAction?.type === 'execute_process'
+            : processAction?.type === 'execute_process'
               ? 'execute_process'
-            : (hasLegacyStageActivationAction ? 'execute_process' : 'copy_process_template'),
-            ),
+              : (hasLegacyStageActivationAction ? 'execute_process' : 'copy_process_template'),
           selected_process_stage_node_keys: selectedNodeKeys,
         });
         setConditionsAll(Array.isArray(nextRecord?.conditions_all) ? nextRecord.conditions_all : []);
