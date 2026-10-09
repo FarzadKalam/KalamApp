@@ -124,6 +124,17 @@ const isTableRuntimeField = (value: unknown) =>
   !!parseTableField(value) ||
   !!parseTableRelationField(value) ||
   !!parseTableBlockMetric(value);
+// A scalar parent field must be counted once per source record, even when the
+// source report also exposes one of its internal tables.  Table fields, on the
+// other hand, deliberately contribute once for every expanded table row.
+const metricSourceKey = (metricKey: unknown, row: any) => {
+  const key = String(metricKey || "").trim();
+  const runtimeKey = String(row?.__report_runtime_key || row?.id || "").trim();
+  if (parseTableBlockMetric(key) || parseTableField(key) || parseTableRelationField(key)) {
+    return runtimeKey;
+  }
+  return String(row?.id || runtimeKey.split(":")[0] || runtimeKey).trim();
+};
 const uniqueMetrics = (metrics: any[]) => {
   const seen = new Set<string>();
   return metrics.filter((metric) => {
@@ -325,20 +336,23 @@ const expandTableRows = async (
 
   const output: any[] = [];
   for (const parent of parentRows) {
-    const tableRows = tableBlockIds.flatMap((blockId) =>
-      normalizeNestedRows(parent?.[blockId])
-        .filter((row) => !isDeletedNestedRow(row))
-        .map((row, index) => ({ blockId, row, index })),
-    );
+    const tableSources = tableBlockIds.map((blockId) => ({
+      blockId,
+      rows: normalizeNestedRows(parent?.[blockId])
+        .filter((row) => !isDeletedNestedRow(row)),
+    }));
     const combinations =
       tableBlockIds.length === 0
         ? [{ rowsByBlockId: {}, key: "" }]
-        : tableRows.length > 0
-          ? tableRows.map((item) => ({
-              rowsByBlockId: { [item.blockId]: item.row },
-              key: `${item.blockId}:${item.index}`,
-            }))
-          : [{ rowsByBlockId: {}, key: "" }];
+        : tableSources.reduce<any[]>((current, source) => {
+            // A missing optional table must not hide values from another
+            // selected internal table of the same parent record.
+            if (source.rows.length === 0) return current;
+            return current.flatMap((combination) => source.rows.map((row, index) => ({
+              rowsByBlockId: { ...combination.rowsByBlockId, [source.blockId]: row },
+              key: [combination.key, `${source.blockId}:${index}`].filter(Boolean).join(":"),
+            })));
+          }, [{ rowsByBlockId: {}, key: "" }]);
     for (const combination of combinations) {
       const candidate = {
         ...parent,
@@ -877,6 +891,7 @@ Deno.serve(async (request) => {
             metrics: {},
             metric_counts: {},
             metric_modes: {},
+            metric_source_keys: {},
           };
           bucket.row_count += 1;
           for (const metric of selected) {
@@ -890,6 +905,13 @@ Deno.serve(async (request) => {
               metric_key: String(metric.metric_key || ""),
             };
             const resultMetricKey = mode === "normal" ? String(metric.metric_key) : id;
+            const sourceKeys = bucket.metric_source_keys || {};
+            const sourceKey = metricSourceKey(metric.metric_key, row);
+            const seenSourceKeys = sourceKeys[resultMetricKey] || new Set<string>();
+            if (seenSourceKeys.has(sourceKey)) continue;
+            seenSourceKeys.add(sourceKey);
+            sourceKeys[resultMetricKey] = seenSourceKeys;
+            bucket.metric_source_keys = sourceKeys;
             bucket.metrics[resultMetricKey] = Number(bucket.metrics[resultMetricKey] || 0) + value;
             bucket.metric_counts[resultMetricKey] = Number(bucket.metric_counts[resultMetricKey] || 0) + 1;
             if (mode === "normal") bucket.metric_modes[resultMetricKey] = String(sourceConfig.metric_type || "count");
@@ -904,6 +926,7 @@ Deno.serve(async (request) => {
     }
     const allGroups = Array.from(buckets.values())
       .map((bucket: any) => {
+        delete bucket.metric_source_keys;
         Object.keys(bucket.metrics || {}).forEach((key) => {
           if (bucket.metric_modes?.[key] === "avg")
             bucket.metrics[key] =

@@ -273,6 +273,15 @@ const dateRangeForWeek = (now: Date, offsetWeeks = 0) => {
   return { start, end: start + 6 };
 };
 
+const compareCalendarDates = (left: unknown, right: unknown) => {
+  const looksLikeDate = (value: unknown) => value instanceof Date
+    || /^\d{4}-\d{2}-\d{2}(?:[T\s].*)?$/.test(String(value ?? '').trim());
+  if (!looksLikeDate(left) || !looksLikeDate(right)) return null;
+  const leftDay = calendarDayNumber(getCalendarDateParts(left));
+  const rightDay = calendarDayNumber(getCalendarDateParts(right));
+  return leftDay === null || rightDay === null ? null : leftDay - rightDay;
+};
+
 export const CORE_ASYNC_CONDITION_OPERATORS = new Set([
   'is_friday',
   'is_official_holiday',
@@ -322,10 +331,29 @@ export const evaluateCoreConditionOperator = ({
     case 'not_contains': return !evaluateCoreConditionOperator({ operator: 'contains', currentValue, expectedValue, now });
     case 'starts_with': return String(current ?? '').toLocaleLowerCase('fa').startsWith(String(expected ?? '').toLocaleLowerCase('fa'));
     case 'ends_with': return String(current ?? '').toLocaleLowerCase('fa').endsWith(String(expected ?? '').toLocaleLowerCase('fa'));
-    case 'gt': return Number(current) > Number(expected);
-    case 'gte': return Number(current) >= Number(expected);
-    case 'lt': return Number(current) < Number(expected);
-    case 'lte': return Number(current) <= Number(expected);
+    // شروط ذخیره‌شدهٔ قدیمی برای تاریخ از همین عملگرهای عمومی استفاده می‌کردند.
+    // برای حفظ رفتارشان، اگر هر دو مقدار تاریخ باشند مقایسه را بر مبنای روز تهران
+    // انجام می‌دهیم؛ مقایسهٔ عددی برای همهٔ فیلدهای غیرتاریخی بدون تغییر باقی می‌ماند.
+    case 'gt': {
+      const comparison = compareCalendarDates(currentValue, expectedValue);
+      return comparison === null ? Number(current) > Number(expected) : comparison > 0;
+    }
+    case 'gte': {
+      const comparison = compareCalendarDates(currentValue, expectedValue);
+      return comparison === null ? Number(current) >= Number(expected) : comparison >= 0;
+    }
+    case 'lt': {
+      const comparison = compareCalendarDates(currentValue, expectedValue);
+      return comparison === null ? Number(current) < Number(expected) : comparison < 0;
+    }
+    case 'lte': {
+      const comparison = compareCalendarDates(currentValue, expectedValue);
+      return comparison === null ? Number(current) <= Number(expected) : comparison <= 0;
+    }
+    // مقایسه‌های تاریخ بر اساس «روز تقویمی تهران» انجام می‌شوند؛
+    // بنابراین ساعتِ ذخیره‌شده در تاریخ/تاریخ‌وساعت روی نتیجه اثر ندارد.
+    case 'after_date': { const comparison = compareCalendarDates(currentValue, expectedValue); return comparison !== null && comparison > 0; }
+    case 'before_date': { const comparison = compareCalendarDates(currentValue, expectedValue); return comparison !== null && comparison < 0; }
     case 'in': return currentList.length > 0 ? currentList.some((item) => expectedList.includes(item)) : expectedList.includes(String(current ?? ''));
     case 'not_in': return currentList.length > 0 ? !currentList.some((item) => expectedList.includes(item)) : !expectedList.includes(String(current ?? ''));
     case 'is_true': return currentValue === true || currentValue === 'true' || currentValue === 1;

@@ -731,7 +731,7 @@ const RolesTab: React.FC = () => {
                     fields={condFields}
                     dynamicOptions={condOpts?.dynamicOptions || {}}
                     relationOptions={condOpts?.relationOptions || {}}
-                    getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte','multi_count_gt','multi_count_lt'].includes(String(opt.value || '')))}
+                    getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte','after_date','before_date','multi_count_gt','multi_count_lt'].includes(String(opt.value || '')))}
                     getDefaultOperator={getDefaultWorkflowOperator}
                     overlayZIndexBase={2000}
                     disabled={disabled}
@@ -745,7 +745,7 @@ const RolesTab: React.FC = () => {
                     fields={condFields}
                     dynamicOptions={condOpts?.dynamicOptions || {}}
                     relationOptions={condOpts?.relationOptions || {}}
-                    getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte','multi_count_gt','multi_count_lt'].includes(String(opt.value || '')))}
+                    getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte','after_date','before_date','multi_count_gt','multi_count_lt'].includes(String(opt.value || '')))}
                     getDefaultOperator={getDefaultWorkflowOperator}
                     overlayZIndexBase={2000}
                     disabled={disabled}
@@ -820,7 +820,7 @@ const RolesTab: React.FC = () => {
                           fields={condFields}
                           dynamicOptions={condOpts?.dynamicOptions || {}}
                           relationOptions={condOpts?.relationOptions || {}}
-                          getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte'].includes(String(opt.value || '')))}
+                          getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte','after_date','before_date'].includes(String(opt.value || '')))}
                           getDefaultOperator={getDefaultWorkflowOperator}
                           overlayZIndexBase={2000}
                           disabled={disabled}
@@ -834,7 +834,7 @@ const RolesTab: React.FC = () => {
                           fields={condFields}
                           dynamicOptions={condOpts?.dynamicOptions || {}}
                           relationOptions={condOpts?.relationOptions || {}}
-                          getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte'].includes(String(opt.value || '')))}
+                          getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte','after_date','before_date'].includes(String(opt.value || '')))}
                           getDefaultOperator={getDefaultWorkflowOperator}
                           overlayZIndexBase={2000}
                           disabled={disabled}
@@ -1036,7 +1036,7 @@ const RolesTab: React.FC = () => {
                                         fields={condFields}
                                         dynamicOptions={condOpts?.dynamicOptions || {}}
                                         relationOptions={condOpts?.relationOptions || {}}
-                                        getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte'].includes(String(opt.value || '')))}
+                                        getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte','after_date','before_date'].includes(String(opt.value || '')))}
                                         getDefaultOperator={getDefaultWorkflowOperator}
                                         overlayZIndexBase={2000}
                                         disabled={disabled}
@@ -1050,7 +1050,7 @@ const RolesTab: React.FC = () => {
                                         fields={condFields}
                                         dynamicOptions={condOpts?.dynamicOptions || {}}
                                         relationOptions={condOpts?.relationOptions || {}}
-                                        getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte'].includes(String(opt.value || '')))}
+                                        getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte','after_date','before_date'].includes(String(opt.value || '')))}
                                         getDefaultOperator={getDefaultWorkflowOperator}
                                         overlayZIndexBase={2000}
                                         disabled={disabled}

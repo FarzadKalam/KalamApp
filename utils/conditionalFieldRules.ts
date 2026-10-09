@@ -1,4 +1,5 @@
 import { FieldType, LogicOperator, ModuleField } from '../types';
+import { evaluateCoreConditionOperator } from '../shared/recordRuntime';
 import { WorkflowCondition } from './workflowTypes';
 
 export type ConditionalFieldRuleSource = 'system' | 'user';
@@ -183,6 +184,21 @@ const evaluateWorkflowCondition = (
   const currentValue = normalizeConditionValue(field, values?.[fieldKey]);
   const expectedValue = normalizeConditionValue(field, condition?.value);
   const operator = normalizeConditionalOperator(condition?.operator);
+
+  // تاریخ و تاریخ‌وساعت با معنای روز تقویمی مقایسه می‌شوند، نه با
+  // تبدیل عددی رشتهٔ تاریخ. این همان قرارداد runtime گردش‌کارهاست.
+  const isDateField = field?.type === FieldType.DATE || field?.type === FieldType.DATETIME;
+  if (
+    operator === 'after_date'
+    || operator === 'before_date'
+    || (isDateField && ['gt', 'gte', 'lt', 'lte'].includes(operator))
+  ) {
+    return evaluateCoreConditionOperator({
+      operator,
+      currentValue,
+      expectedValue,
+    }) === true;
+  }
 
   switch (operator) {
     case 'eq':

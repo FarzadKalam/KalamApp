@@ -159,6 +159,8 @@ const ViewManager: React.FC<ViewManagerProps> = ({
         'gte',
         'lt',
         'lte',
+        'after_date',
+        'before_date',
         'in',
         'not_in',
         'is_true',

@@ -22,6 +22,7 @@ import {
 } from '../utils/workflowRuntime';
 import {
   buildReportBaseSelectColumns,
+  buildReportTableRowCombinations,
   getReportConditionFields,
   getReportTableBlock,
   getReportableFields,
@@ -934,15 +935,12 @@ const ReportViewerPage: React.FC = () => {
             : [],
         }));
 
-        const rawTableCombos = tableSources.flatMap((source) =>
-          source.rows.map((tableRow: any, tableIndex: number) => ({
-            rowsByBlockId: { [source.block.id]: tableRow },
-            keyParts: [`${source.block.id}:${tableIndex}`],
-          }))
+        const tableCombos = buildReportTableRowCombinations(
+          tableSources.map((source) => ({
+            blockId: String(source.block?.id || ''),
+            rows: source.rows,
+          })),
         );
-        const tableCombos = tableSources.length === 0 || rawTableCombos.length > 0
-          ? (tableSources.length === 0 ? [{ rowsByBlockId: {}, keyParts: [] as string[] }] : rawTableCombos)
-          : [{ rowsByBlockId: {}, keyParts: [] as string[] }];
 
         for (const tableCombo of tableCombos) {
           const candidateRow: ReportRow = {

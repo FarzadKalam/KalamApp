@@ -67,6 +67,14 @@ describe('record runtime shared contract', () => {
     expect(evaluateCoreConditionOperator({ operator: 'is_today', currentValue: date, now })).toBe(true);
     expect(evaluateCoreConditionOperator({ operator: 'day_of_month_eq', currentValue: date, expectedValue: 18, now })).toBe(true);
     expect(evaluateCoreConditionOperator({ operator: 'is_this_month', currentValue: date, now })).toBe(true);
+    expect(evaluateCoreConditionOperator({ operator: 'after_date', currentValue: '2026-07-19T00:00:00.000Z', expectedValue: '2026-07-18', now })).toBe(true);
+    expect(evaluateCoreConditionOperator({ operator: 'before_date', currentValue: '2026-07-17T12:00:00.000Z', expectedValue: '2026-07-18', now })).toBe(true);
+    expect(evaluateCoreConditionOperator({ operator: 'after_date', currentValue: '2026-07-18T12:00:00.000Z', expectedValue: '2026-07-18', now })).toBe(false);
+    expect(evaluateCoreConditionOperator({ operator: 'gt', currentValue: '2026-07-19T00:00:00.000Z', expectedValue: '2026-07-18', now })).toBe(true);
+    expect(evaluateCoreConditionOperator({ operator: 'gte', currentValue: '2026-07-18T12:00:00.000Z', expectedValue: '2026-07-18', now })).toBe(true);
+    expect(evaluateCoreConditionOperator({ operator: 'lt', currentValue: '2026-07-17T12:00:00.000Z', expectedValue: '2026-07-18', now })).toBe(true);
+    expect(evaluateCoreConditionOperator({ operator: 'lte', currentValue: '2026-07-18T12:00:00.000Z', expectedValue: '2026-07-18', now })).toBe(true);
+    expect(evaluateCoreConditionOperator({ operator: 'gt', currentValue: 3, expectedValue: 2, now })).toBe(true);
     expect(evaluateCoreConditionOperator({ operator: 'contains', currentValue: ['فروش', 'ویژه'], expectedValue: 'ویژ', now })).toBe(true);
     expect(evaluateCoreConditionOperator({ operator: 'not_contains', currentValue: ['فروش'], expectedValue: 'لغوشده', now })).toBe(true);
     expect(evaluateCoreConditionOperator({ operator: 'unsupported_operator', currentValue: 'x', now })).toBe(false);

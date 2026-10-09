@@ -141,6 +141,33 @@ export const parseReportTableRelationFieldKey = (value?: string | null) => {
 
 export const isReportTableRelationFieldKey = (value?: string | null) => !!parseReportTableRelationFieldKey(value);
 
+export type ReportTableRowCombination = {
+  rowsByBlockId: Record<string, Record<string, any>>;
+  keyParts: string[];
+};
+
+/**
+ * Produces the cartesian product of selected internal tables for one parent
+ * record. This keeps values from every selected table on the same report row
+ * instead of producing separate, incomplete rows per table.
+ */
+export const buildReportTableRowCombinations = (
+  sources: ReadonlyArray<{ blockId: string; rows: ReadonlyArray<Record<string, any>> }>,
+): ReportTableRowCombination[] => {
+  if (sources.length === 0) return [{ rowsByBlockId: {}, keyParts: [] }];
+
+  return sources.reduce<ReportTableRowCombination[]>((combinations, source) => {
+    const blockId = String(source?.blockId || '').trim();
+    const rows = Array.isArray(source?.rows) ? source.rows : [];
+    if (!blockId || rows.length === 0) return combinations;
+
+    return combinations.flatMap((combination) => rows.map((row, rowIndex) => ({
+      rowsByBlockId: { ...combination.rowsByBlockId, [blockId]: row },
+      keyParts: [...combination.keyParts, `${blockId}:${rowIndex}`],
+    })));
+  }, [{ rowsByBlockId: {}, keyParts: [] }]);
+};
+
 export const REPORT_BASE_SELECT_COLUMNS = [
   'id',
   'org_id',

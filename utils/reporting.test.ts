@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BlockType, FieldType } from '../types';
 import {
   buildReportBaseSelectColumns,
+  buildReportTableRowCombinations,
   buildReportTableFieldKey,
   buildReportTableRelationFieldKey,
   getMainReportableFields,
@@ -123,6 +124,40 @@ describe('buildReportBaseSelectColumns', () => {
     );
 
     expect(columns).toEqual(expect.arrayContaining(['name', 'is_deleted']));
+  });
+});
+
+describe('buildReportTableRowCombinations', () => {
+  it('keeps values from every selected internal table on the same report row', () => {
+    const combinations = buildReportTableRowCombinations([
+      { blockId: 'invoiceItems', rows: [{ product_id: 'product-1' }, { product_id: 'product-2' }] },
+      { blockId: 'payments', rows: [{ amount: 100 }, { amount: 200 }] },
+    ]);
+
+    expect(combinations).toHaveLength(4);
+    expect(combinations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        rowsByBlockId: {
+          invoiceItems: { product_id: 'product-1' },
+          payments: { amount: 100 },
+        },
+      }),
+      expect.objectContaining({
+        rowsByBlockId: {
+          invoiceItems: { product_id: 'product-2' },
+          payments: { amount: 200 },
+        },
+      }),
+    ]));
+  });
+
+  it('retains populated tables when another selected table has no rows', () => {
+    const combinations = buildReportTableRowCombinations([
+      { blockId: 'invoiceItems', rows: [{ quantity: 2 }] },
+      { blockId: 'payments', rows: [] },
+    ]);
+
+    expect(combinations).toEqual([{ rowsByBlockId: { invoiceItems: { quantity: 2 } }, keyParts: ['invoiceItems:0'] }]);
   });
 });
 

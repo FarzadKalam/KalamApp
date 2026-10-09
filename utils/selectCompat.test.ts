@@ -57,6 +57,21 @@ describe('runSelectWithCompatibleColumns', () => {
     expect(attempted).toEqual(['id,name,total_invoice_amount,system_code']);
   });
 
+  it('quotes camelCase internal-table columns for PostgREST projections', async () => {
+    const attempted: string[] = [];
+    const result = await runSelectWithCompatibleColumns({
+      cacheKey: `report-viewer:purchase_invoices:${Date.now()}`,
+      columns: ['id', 'invoiceItems', 'payments'],
+      execute: async (selectExpr) => {
+        attempted.push(selectExpr);
+        return { data: [{ id: 'invoice-1' }], error: null };
+      },
+    });
+
+    expect(result.error).toBeNull();
+    expect(attempted).toEqual(['id,"invoiceItems",payments']);
+  });
+
   it('removes a reported missing column and remembers only that incompatibility', async () => {
     const cacheKey = `module-show:invoices:${Date.now()}`;
     const firstAttempts: string[] = [];

@@ -19,6 +19,55 @@ const getField = (key: string) => {
 };
 
 describe('conditionalFieldRules', () => {
+  it('evaluates after/before day operators using calendar-day semantics', () => {
+    const fields: ModuleField[] = [
+      { key: 'event_date', type: FieldType.DATE, labels: { fa: 'تاریخ رویداد' } } as ModuleField,
+      { key: 'details', type: FieldType.TEXT, labels: { fa: 'جزئیات' } } as ModuleField,
+    ];
+    const settings = normalizeConditionalFieldSettings({
+      rules: [{
+        id: 'after-date',
+        targetFieldKey: 'details',
+        source: 'user',
+        enabled: true,
+        priority: 1,
+        conditions_all: [{ id: 'date', field: 'event_date', operator: 'after_date', value: '2026-07-18' }],
+        effect: { showField: false },
+      }],
+    });
+
+    expect(resolveConditionalFieldState(
+      fields[1],
+      { event_date: '2026-07-19T00:00:00.000Z' },
+      settings,
+      fields,
+    ).visible).toBe(false);
+    expect(resolveConditionalFieldState(
+      fields[1],
+      { event_date: '2026-07-18T12:00:00.000Z' },
+      settings,
+      fields,
+    ).visible).toBe(true);
+
+    const legacySettings = normalizeConditionalFieldSettings({
+      rules: [{
+        id: 'legacy-after-date',
+        targetFieldKey: 'details',
+        source: 'user',
+        enabled: true,
+        priority: 1,
+        conditions_all: [{ id: 'date', field: 'event_date', operator: 'gt', value: '2026-07-18' }],
+        effect: { showField: false },
+      }],
+    });
+    expect(resolveConditionalFieldState(
+      fields[1],
+      { event_date: '2026-07-19T00:00:00.000Z' },
+      legacySettings,
+      fields,
+    ).visible).toBe(false);
+  });
+
   it('keeps receipt account visible and required for receipts', () => {
     const settings = buildResolvedConditionalFieldSettings(cashBankOperationsConfig);
     const state = resolveConditionalFieldState(

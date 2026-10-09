@@ -106,4 +106,34 @@ describe('applySafeReportConditionPrefilters', () => {
     expect(calls[0]?.args[0]).toBe('due_date');
     expect(calls[0]?.args[1]).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
+
+  it('translates after/before day conditions for DATE fields', () => {
+    const { query, calls } = makeQuery();
+    applySafeReportConditionPrefilters(query, taskModule, {
+      conditionsAll: [
+        { field: 'due_date', operator: 'after_date', value: '2026-07-18' },
+      ],
+    });
+
+    expect(calls).toEqual([{ method: 'gt', args: ['due_date', '2026-07-18'] }]);
+  });
+
+  it('uses Tehran day boundaries for after/before conditions on DATETIME fields', () => {
+    const { query, calls } = makeQuery();
+    applySafeReportConditionPrefilters(query, taskModule, {
+      conditionsAll: [
+        { field: 'start_date', operator: 'after_date', value: '2026-07-18' },
+        { field: 'completed_at', operator: 'before_date', value: '2026-07-18' },
+      ],
+    });
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.method).toBe('gte');
+    expect(calls[0]?.args[0]).toBe('start_date');
+    expect(String(calls[0]?.args[1])).toMatch(/T20:30:00\.000Z$/);
+    expect(calls[1]).toEqual({
+      method: 'lt',
+      args: ['completed_at', '2026-07-17T20:30:00.000Z'],
+    });
+  });
 });

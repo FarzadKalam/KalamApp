@@ -98,6 +98,37 @@ const getRelativeDateBounds = (operator: string) => {
   return null;
 };
 
+const getTehranCalendarDayBoundsForValue = (value: unknown) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  // مقدار روز را با timezone تهران تفسیر می‌کنیم تا نیمه‌شب UTC روز را جابه‌جا نکند.
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+    ? new Date(`${raw}T00:00:00+03:30`)
+    : new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+  const dateKey = formatTehranCalendarDate(date);
+  const start = new Date(`${dateKey}T00:00:00+03:30`);
+  if (Number.isNaN(start.getTime())) return null;
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { date: dateKey, start: start.toISOString(), end: end.toISOString() };
+};
+
+const getDateComparisonTerm = (
+  condition: ReportCondition,
+  field: { key: string; type: string },
+) => {
+  const operator = String(condition?.operator || '').trim();
+  if (!DATE_FIELD_TYPES.has(field.type) || (operator !== 'after_date' && operator !== 'before_date')) return null;
+  const bounds = getTehranCalendarDayBoundsForValue(condition?.value);
+  if (!bounds) return null;
+  if (field.type === FieldType.DATE) {
+    return `${field.key}.${operator === 'after_date' ? 'gt' : 'lt'}.${bounds.date}`;
+  }
+  return operator === 'after_date'
+    ? `and(${field.key}.gte.${bounds.end})`
+    : `and(${field.key}.lt.${bounds.start})`;
+};
+
 const toPostgrestInOperand = (values: unknown[]) => `(${values
   .map((value) => `"${String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`)
   .join(',')})`;
@@ -119,9 +150,12 @@ const getSafeAnyTerm = (
   const field = getDirectField(condition, moduleConfig, excludedFieldKeys);
   const operator = String(condition?.operator || 'eq').trim();
   const bounds = getRelativeDateBounds(operator);
-  if (!field || !bounds || !DATE_FIELD_TYPES.has(field.type)) return null;
-  if (field.type === FieldType.DATE) return `${field.key}.eq.${bounds.date}`;
-  return `and(${field.key}.gte.${bounds.start},${field.key}.lt.${bounds.end})`;
+  if (field && bounds && DATE_FIELD_TYPES.has(field.type)) {
+    if (field.type === FieldType.DATE) return `${field.key}.eq.${bounds.date}`;
+    return `and(${field.key}.gte.${bounds.start},${field.key}.lt.${bounds.end})`;
+  }
+  if (!field || !DATE_FIELD_TYPES.has(field.type)) return null;
+  return getDateComparisonTerm(condition, field);
 };
 
 /**
@@ -164,6 +198,21 @@ export const applySafeReportConditionPrefilters = <T extends FilterQuery>(
       nextQuery = field.type === FieldType.DATE
         ? nextQuery.eq(field.key, bounds.date)
         : nextQuery.gte(field.key, bounds.start).lt(field.key, bounds.end);
+      return;
+    }
+    const dateComparisonTerm = getDateComparisonTerm(condition, field);
+    if (dateComparisonTerm) {
+      const comparisonBounds = getTehranCalendarDayBoundsForValue(condition?.value);
+      if (!comparisonBounds) return;
+      if (field.type === FieldType.DATE) {
+        nextQuery = operator === 'after_date'
+          ? nextQuery.gt(field.key, comparisonBounds.date)
+          : nextQuery.lt(field.key, comparisonBounds.date);
+      } else {
+        nextQuery = operator === 'after_date'
+          ? nextQuery.gte(field.key, comparisonBounds.end)
+          : nextQuery.lt(field.key, comparisonBounds.start);
+      }
       return;
     }
     const value = condition?.value;

@@ -78,6 +78,23 @@ const normalizeColumns = (columns: readonly string[]) =>
     )
   );
 
+/**
+ * PostgREST identifiers are folded to lowercase unless they are quoted. Some
+ * internal-table JSON columns intentionally use camelCase (for example
+ * `invoiceItems`), so requesting them without quotes silently takes the
+ * compatibility fallback path and removes the actual report data.
+ */
+const toPostgrestSelectColumn = (column: string) => {
+  const normalized = String(column || '').trim();
+  if (!normalized || normalized === '*') return normalized;
+  return /^[a-z_][a-z0-9_]*$/.test(normalized)
+    ? normalized
+    : `"${normalized.replace(/"/g, '""')}"`;
+};
+
+const buildPostgrestSelectExpression = (columns: readonly string[]) =>
+  columns.map(toPostgrestSelectColumn).join(',');
+
 const applyCacheKeyColumnExclusions = (cacheKey: string, columns: string[]) => {
   const excluded = new Set<string>();
   CACHE_KEY_COLUMN_EXCLUSIONS.forEach((rule) => {
@@ -409,7 +426,7 @@ export const runSelectWithCompatibleColumns = async <T>({
       activeColumns = ['id'];
     }
 
-    const signature = activeColumns.join(',');
+    const signature = buildPostgrestSelectExpression(activeColumns);
     if (attempted.has(signature)) continue;
     attempted.add(signature);
     lastSelectedColumns = activeColumns;
