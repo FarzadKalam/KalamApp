@@ -12,6 +12,7 @@ type ReportField = {
 };
 
 type ReportModuleConfig = {
+  id?: string;
   fields?: ReportField[];
 };
 
@@ -39,6 +40,8 @@ const COLLECTION_FIELD_TYPES = new Set<string>([
   FieldType.LOCATION,
 ]);
 const DATE_FIELD_TYPES = new Set<string>([FieldType.DATE, FieldType.DATETIME]);
+const WORKFLOW_ASSIGNEE_FIELD_KEY = '__workflow_assignee';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const normalizeConditions = (conditions: ReportCondition[] | undefined) =>
   Array.isArray(conditions) ? conditions : [];
@@ -95,6 +98,19 @@ const getRelativeDateBounds = (operator: string) => {
   return null;
 };
 
+const toPostgrestInOperand = (values: unknown[]) => `(${values
+  .map((value) => `"${String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`)
+  .join(',')})`;
+
+const getTaskAssigneePrefilter = (condition: ReportCondition, moduleConfig: ReportModuleConfig) => {
+  if (String(moduleConfig?.id || '').trim() !== 'tasks') return null;
+  if (String(condition?.field || '').trim() !== WORKFLOW_ASSIGNEE_FIELD_KEY) return null;
+  if (String(condition?.operator || 'eq').trim() !== 'eq') return null;
+  const [kind, id] = String(condition?.value || '').trim().split(':', 2);
+  if (!UUID_PATTERN.test(String(id || ''))) return null;
+  return kind === 'user' || kind === 'role' ? { kind, id } : null;
+};
+
 const getSafeAnyTerm = (
   condition: ReportCondition,
   moduleConfig: ReportModuleConfig,
@@ -130,6 +146,16 @@ export const applySafeReportConditionPrefilters = <T extends FilterQuery>(
   const excluded = new Set(excludedFieldKeys.map((key) => String(key || '').trim()).filter(Boolean));
 
   normalizeConditions(conditionsAll).forEach((condition) => {
+    // گزارش فعالیت یک کارمند معمولاً با فیلد synthetic ساخته می‌شود. ترجمهٔ
+    // دقیق آن به ستون‌های واقعی tasks باعث می‌شود پیش از row_limit فقط
+    // فعالیت‌های همان فرد خوانده شوند؛ evaluator نهایی همچنان اجرا می‌شود.
+    const taskAssignee = getTaskAssigneePrefilter(condition, moduleConfig);
+    if (taskAssignee) {
+      nextQuery = taskAssignee.kind === 'user'
+        ? nextQuery.eq('assignee_id', taskAssignee.id)
+        : nextQuery.eq('assignee_type', 'role').eq('assignee_role_id', taskAssignee.id);
+      return;
+    }
     const field = getDirectField(condition, moduleConfig, excluded);
     if (!field) return;
     const operator = String(condition?.operator || 'eq').trim();
@@ -142,7 +168,12 @@ export const applySafeReportConditionPrefilters = <T extends FilterQuery>(
     }
     const value = condition?.value;
     if (operator === 'eq' && !Array.isArray(value) && value !== undefined && value !== null) nextQuery = nextQuery.eq(field.key, value);
+    if (operator === 'neq' && !Array.isArray(value) && value !== undefined && value !== null) nextQuery = nextQuery.neq(field.key, value);
     if (operator === 'in' && Array.isArray(value) && value.length > 0) nextQuery = nextQuery.in(field.key, value);
+    if (operator === 'not_in' && Array.isArray(value) && value.length > 0) {
+      nextQuery = nextQuery.not(field.key, 'in', toPostgrestInOperand(value));
+    }
+    if (operator === 'not_null') nextQuery = nextQuery.not(field.key, 'is', null);
     if (field.type === FieldType.CHECKBOX && operator === 'is_true') nextQuery = nextQuery.eq(field.key, true);
     if (field.type === FieldType.CHECKBOX && operator === 'is_false') nextQuery = nextQuery.eq(field.key, false);
   });

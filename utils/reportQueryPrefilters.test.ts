@@ -15,6 +15,7 @@ const makeQuery = () => {
 };
 
 const taskModule = {
+  id: 'tasks',
   fields: [
     { key: 'task_type', type: FieldType.SELECT },
     { key: 'start_date', type: FieldType.DATETIME },
@@ -68,6 +69,30 @@ describe('applySafeReportConditionPrefilters', () => {
     });
 
     expect(calls).toEqual([{ method: 'eq', args: ['priority', 3] }]);
+  });
+
+  it('pushes a scalar not-in condition to PostgREST without changing runtime-only filters', () => {
+    const { query, calls } = makeQuery();
+    applySafeReportConditionPrefilters(query, taskModule, {
+      conditionsAll: [{ field: 'task_type', operator: 'not_in', value: ['تماس خروجی', 'جلسه داخلی'] }],
+    });
+
+    expect(calls).toEqual([{
+      method: 'not',
+      args: ['task_type', 'in', '("تماس خروجی","جلسه داخلی")'],
+    }]);
+  });
+
+  it('translates a task assignee workflow condition before applying the row limit', () => {
+    const { query, calls } = makeQuery();
+    applySafeReportConditionPrefilters(query, taskModule, {
+      conditionsAll: [{ field: '__workflow_assignee', operator: 'eq', value: 'user:29fcb9d2-2059-4c89-a17e-58abc0dbbeb4' }],
+    });
+
+    expect(calls).toEqual([{
+      method: 'eq',
+      args: ['assignee_id', '29fcb9d2-2059-4c89-a17e-58abc0dbbeb4'],
+    }]);
   });
 
   it('compares DATE fields by Tehran calendar date instead of a UTC timestamp', () => {

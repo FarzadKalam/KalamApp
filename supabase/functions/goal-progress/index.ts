@@ -50,6 +50,46 @@ const safeColumns = (value: unknown) =>
     .map((column) => column.trim())
     .filter((column) => /^[a-z][a-z0-9_]*$/.test(column));
 
+// «نوع فعالیت» ستونی واقعی و scalar در جدول tasks است. آن را تنها برای
+// شرطِ ALL به PostgREST می‌سپاریم؛ شرط‌های مجازی/رابطه‌ای همچنان با همان
+// evaluator مشترک بررسی می‌شوند تا نتیجهٔ اهداف و گزارش‌ها از هم جدا نشود.
+// بیش از یک شرط را عمداً به SQL تبدیل نمی‌کنیم، چون تفسیر تقاطعِ گزینه‌های
+// پویا باید دقیقاً در runtime واحد باقی بماند.
+const getSafeTaskTypePrefilter = (moduleId: unknown, conditions: unknown) => {
+  if (String(moduleId || "").trim() !== "tasks" || !Array.isArray(conditions)) return [];
+  const matching = conditions.filter((condition: any) =>
+    String(condition?.field || "").trim() === "task_type"
+    && ["eq", "in"].includes(String(condition?.operator || "eq").trim()),
+  );
+  if (matching.length !== 1) return [];
+  const condition = matching[0] || {};
+  const rawValues = String(condition?.operator || "eq").trim() === "in"
+    ? condition?.value
+    : [condition?.value];
+  if (!Array.isArray(rawValues)) return [];
+  const values = Array.from(new Set(rawValues
+    .map((value) => String(value ?? "").trim())
+    .filter((value) => value.length > 0 && value.length <= 160)))
+    .slice(0, 25);
+  return values;
+};
+
+const getSafeTaskAssigneePrefilter = (moduleId: unknown, conditions: unknown) => {
+  if (String(moduleId || "").trim() !== "tasks" || !Array.isArray(conditions)) return null;
+  const matching = conditions.filter((condition: any) =>
+    String(condition?.field || "").trim() === "__workflow_assignee"
+    && String(condition?.operator || "eq").trim() === "eq",
+  );
+  if (matching.length !== 1) return null;
+  const [kind, id] = String(matching[0]?.value || "").trim().split(":", 2);
+  return (kind === "user" || kind === "role") && safeRecordId(id)
+    ? { kind, id }
+    : null;
+};
+
+const toPostgrestInFilter = (values: string[]) =>
+  `in.(${values.map((value) => `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`).join(",")})`;
+
 const toEnglishDigits = (value: unknown) =>
   String(value ?? "")
     .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)))
@@ -715,6 +755,8 @@ const fetchRows = async ({
   dateField,
   startIso,
   endIso,
+  taskTypeValues = [],
+  taskAssignee = null,
   cacheKey,
 }: any) => {
   const cached = rowCache.get(cacheKey);
@@ -729,6 +771,16 @@ const fetchRows = async ({
       query.searchParams.set("org_id", `eq.${orgId}`);
       query.searchParams.set(dateField, `gte.${startIso}`);
       query.searchParams.append(dateField, `lte.${endIso}`);
+      if (Array.isArray(taskTypeValues) && taskTypeValues.length > 0) {
+        query.searchParams.set("task_type", toPostgrestInFilter(taskTypeValues));
+      }
+      if (taskAssignee?.kind === "user" && safeRecordId(taskAssignee?.id)) {
+        query.searchParams.set("assignee_id", `eq.${taskAssignee.id}`);
+      }
+      if (taskAssignee?.kind === "role" && safeRecordId(taskAssignee?.id)) {
+        query.searchParams.set("assignee_type", "eq.role");
+        query.searchParams.set("assignee_role_id", `eq.${taskAssignee.id}`);
+      }
       query.searchParams.set("offset", String(offset));
       query.searchParams.set("limit", String(PAGE_SIZE));
       const response = await fetch(query, { headers });
@@ -945,6 +997,8 @@ Deno.serve(async (request) => {
           const dateOnly = item?.dateOnly === true;
           const rangeStart = dateOnly ? startIso.slice(0, 10) : startIso;
           const rangeEnd = dateOnly ? endIso.slice(0, 10) : endIso;
+          const taskTypeValues = getSafeTaskTypePrefilter(moduleId, conditionsAll);
+          const taskAssignee = getSafeTaskAssigneePrefilter(moduleId, conditionsAll);
           // نتیجهٔ خام به تعریف یک هدف وابسته نیست؛ اشتراک آن بین هدف‌های هم‌ماژول
           // فشار N×M را حذف می‌کند. کلید شامل کاربر و سازمان است تا پاسخ RLS هرگز
           // میان دو کاربر یا tenant مشترک نشود.
@@ -956,6 +1010,8 @@ Deno.serve(async (request) => {
             columns.join(","),
             rangeStart,
             rangeEnd,
+            taskTypeValues.join(","),
+            `${taskAssignee?.kind || ""}:${taskAssignee?.id || ""}`,
           ].join("::");
           const rows = await fetchRows({
             url: supabaseUrl,
@@ -966,6 +1022,8 @@ Deno.serve(async (request) => {
             dateField,
             startIso: rangeStart,
             endIso: rangeEnd,
+            taskTypeValues,
+            taskAssignee,
             cacheKey,
           });
           const fieldResolver = getConditionResolver({

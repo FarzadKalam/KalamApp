@@ -668,18 +668,32 @@ const ReportViewerPage: React.FC = () => {
       const nextSurveyTemplateSnapshot = nextScopedSurveyTemplateId
         ? normalizeSurveyTemplateSnapshot((await loadSurveyTemplateDefinition(supabase, nextScopedSurveyTemplateId))?.snapshot || {})
         : normalizeSurveyTemplateSnapshot({});
-      const optionFields = [
-        ...getReportConditionFields(nextModuleId, normalizedConfig.secondary_module_ids, nextSurveyTemplateSnapshot, taskProcessFields),
-        ...getReportableFields(nextModuleId, normalizedConfig.secondary_module_ids, nextSurveyTemplateSnapshot, taskProcessFields),
-      ];
-      const loadedOptions = await loadWorkflowConditionEditorOptions(nextModuleId, optionFields);
 
-      setRelationOptions(loadedOptions.relationOptions);
-      setDynamicOptions(loadedOptions.dynamicOptions);
+      // اجرای گزارش نباید منتظر واکشی همهٔ گزینه‌های فرم شرط بماند. در گزارش‌های
+      // بزرگ، lookupهای رابطه/برچسب می‌توانند چند ثانیه طول بکشند؛ تعریف گزارش را
+      // ابتدا آماده می‌کنیم و گزینه‌های صرفاً رابط کاربری را در پس‌زمینه می‌گیریم.
+      setRelationOptions({});
+      setDynamicOptions({});
       setSurveyTemplateSnapshot(nextSurveyTemplateSnapshot);
       setReport(nextReport);
       setCanViewPage(true);
       setSetupMissing(false);
+
+      const optionFields = [
+        ...getReportConditionFields(nextModuleId, normalizedConfig.secondary_module_ids, nextSurveyTemplateSnapshot, taskProcessFields),
+        ...getReportableFields(nextModuleId, normalizedConfig.secondary_module_ids, nextSurveyTemplateSnapshot, taskProcessFields),
+      ];
+      void loadWorkflowConditionEditorOptions(nextModuleId, optionFields)
+        .then((loadedOptions) => {
+          // اگر کاربر پیش از تکمیل گزینه‌ها به گزارش دیگری رفت، پاسخ قدیمی
+          // نباید تنظیمات گزارش جدید را بازنویسی کند.
+          if (String(reportId || '') !== String(nextReport.id || '')) return;
+          setRelationOptions(loadedOptions.relationOptions);
+          setDynamicOptions(loadedOptions.dynamicOptions);
+        })
+        .catch(() => {
+          // نبودن یک گزینهٔ کمکی نباید اجرای خود گزارش را متوقف کند.
+        });
     } catch (error) {
       if (isMissingReportsTableError(error)) {
         setSetupMissing(true);
