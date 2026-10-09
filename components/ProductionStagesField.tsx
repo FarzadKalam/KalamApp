@@ -1102,6 +1102,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const handoverEditorHistoryRef = useRef<string | null>(null);
   const watchedDraftStageStatusOptions = Form.useWatch('stage_status_options_editor', { form: draftForm, preserve: true });
   const watchedDraftStageSortOrder = Form.useWatch('sort_order', { form: draftForm, preserve: true });
+  const watchedDraftStageName = Form.useWatch('name', { form: draftForm, preserve: true });
+  const draftModalBaseTitle = editingDraft
+    ? 'ویرایش مرحله پیش‌نویس'
+    : (isProcessModule ? 'افزودن مرحله پیش‌نویس فرآیند' : 'افزودن مرحله پیش‌نویس');
+  const draftModalTitle = `${draftModalBaseTitle}${String(watchedDraftStageName || '').trim() ? ` — ${String(watchedDraftStageName).trim()}` : ''}`;
   const setDraftAutomationRules = useCallback((nextValue: ProcessAutomationRule[] | ((previous: ProcessAutomationRule[]) => ProcessAutomationRule[])) => {
     const next = typeof nextValue === 'function'
       ? nextValue(draftAutomationRulesRef.current)
@@ -11191,7 +11196,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       </Modal>
 
       <Modal
-        title={<div className="flex items-center gap-2 text-[rgba(var(--brand-800-rgb),1)]"><div className="rounded bg-[rgba(var(--brand-50-rgb),1)] p-1 text-[rgba(var(--brand-600-rgb),1)]"><PlusOutlined /></div> {editingDraft ? 'ویرایش مرحله پیش‌نویس' : (isProcessModule ? 'افزودن مرحله پیش‌نویس فرآیند' : 'افزودن مرحله پیش‌نویس')}</div>}
+        title={<div className="flex min-w-0 items-center gap-2 text-[rgba(var(--brand-800-rgb),1)]"><div className="rounded bg-[rgba(var(--brand-50-rgb),1)] p-1 text-[rgba(var(--brand-600-rgb),1)]"><PlusOutlined /></div><span className="truncate">{draftModalTitle}</span></div>}
         rootClassName={isMobileProcessViewport ? 'process-stage-modal-root' : undefined}
         className={isMobileProcessViewport ? 'process-stage-modal' : undefined}
         open={isDraftModalOpen}
