@@ -446,7 +446,7 @@ const buildLegacyPaymentRows = (args: {
         paymentType,
         status: normalizePaymentRowStatus(paymentRow?.status),
         chequeStatus: String(paymentRow?.cheque_status || ''),
-        date: resolvePaymentRowDate(paymentRow, sourceRecord, sourceTable === 'employee_advances' ? 'request_date' : sourceTable === 'payroll_slips' ? 'period_end' : sourceTable === 'expense_documents' ? 'expense_date' : 'invoice_date'),
+        date: resolvePaymentRowDate(paymentRow),
         debit,
         credit,
         invoiceLabel: String(sourceRecord?.name || sourceRecord?.system_code || sourceRecord?.id || '-'),

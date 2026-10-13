@@ -233,8 +233,26 @@ export const resolvePaymentRowAssigneeId = (row: any, record: any) =>
     || record?.assignee_id
   ) || null;
 
-export const resolvePaymentRowDate = (row: any, record: any, dateField: string) =>
-  normalizeOperationalText(row?.date || row?.operation_date || row?.receipt_date || row?.payment_date || record?.[dateField]) || null;
+/**
+ * تاریخ هر ردیف دریافت/پرداخت فقط از خودِ رویداد مالی خوانده می‌شود.
+ * تاریخ فاکتور، هزینه، مساعده یا فیش، تاریخ سند مبناست و نباید به‌اشتباه
+ * به‌عنوان تاریخ انتقال وجه در گردش مالی نمایش داده شود.
+ */
+export const resolvePaymentRowDate = (row: any) =>
+  normalizeOperationalText(
+    row?.payment_date
+    || row?.receipt_date
+    || row?.operation_date
+    || row?.paid_at
+    || row?.received_at
+    || row?.settled_at
+    || row?.date,
+  ) || null;
+
+const getOperationRegistrationDate = (nowIso?: string) => {
+  const candidate = normalizeOperationalText(nowIso) || new Date().toISOString();
+  return candidate.slice(0, 10);
+};
 
 export const normalizePaymentRowStatus = (value: any) => {
   const statusRaw = normalizeOperationalText(value).toLowerCase();
@@ -342,7 +360,9 @@ export const buildCashBankOperationPayloadFromPaymentRow = (args: {
       operation_type: source.operationType,
       payment_type: paymentType,
       status: normalizePaymentRowStatus(row?.status),
-      operation_date: resolvePaymentRowDate(row, record, source.dateField),
+      // جدول عملیات نقد و بانک تاریخ null نمی‌پذیرد. نبود تاریخ روی ردیف
+      // پرداخت یعنی همان روز ثبت پرداخت، نه تاریخ سند پایه.
+      operation_date: resolvePaymentRowDate(row) || getOperationRegistrationDate(nowIso),
       amount: Math.abs(toOperationalSafeNumber(row?.amount)),
       transfer_fee: source.operationType === 'payment'
         ? Math.max(0, toOperationalSafeNumber(row?.transfer_fee))

@@ -3,6 +3,7 @@ import {
   OPERATIONAL_CASH_BANK_SOURCE_MODULES,
   buildCashBankOperationPayloadFromPaymentRow,
   doesOperationalSourceMatchRecord,
+  resolvePaymentRowDate,
   resolveOperationalPaymentRowKey,
   toOperationalSafeNumber,
 } from './operationalCashBankSources';
@@ -51,6 +52,23 @@ describe('operationalCashBankSources', () => {
   it('uses legacy numeric key when row_key is missing', () => {
     expect(resolveOperationalPaymentRowKey({ key: 1776804382545 }, 0)).toBe('key_1776804382545');
     expect(resolveOperationalPaymentRowKey({}, 3)).toBe('legacy_3');
+  });
+
+  it('uses the receipt/payment date and never falls back to the source document date', () => {
+    expect(resolvePaymentRowDate({ payment_date: '2026-06-18', date: '2026-06-01' })).toBe('2026-06-18');
+    expect(resolvePaymentRowDate({ receipt_date: '2026-06-19' })).toBe('2026-06-19');
+    expect(resolvePaymentRowDate({})).toBeNull();
+
+    const source = OPERATIONAL_CASH_BANK_SOURCE_MODULES.find((item) => item.moduleId === 'purchase_invoices');
+    if (!source) throw new Error('purchase source not found');
+    const { payload } = buildCashBankOperationPayloadFromPaymentRow({
+      source,
+      record: { id: 'purchase-1', invoice_date: '2026-01-01', supplier_id: 'supplier-1' },
+      row: { payment_type: 'cash', status: 'paid', amount: 1000 },
+      rowKey: 'payment-without-date',
+      nowIso: '2026-06-20T12:00:00.000Z',
+    });
+    expect(payload.operation_date).toBe('2026-06-20');
   });
 
   it('maps employee party to related_profile_id instead of assignee_id for payroll and advance sources', () => {
