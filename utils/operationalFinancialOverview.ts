@@ -155,6 +155,16 @@ export const OPERATIONAL_FINANCIAL_STATUS_LABEL: Record<string, string> = {
   rejected: 'رد شده',
 };
 
+// کد و عنوان باید همیشه کنار هم بمانند؛ شناسهٔ فنی هرگز مرجع قابل نمایش نیست.
+export const formatOperationalFinancialDocumentReference = (record: {
+  system_code?: unknown;
+  name?: unknown;
+} | null | undefined) => {
+  const systemCode = normalizeOperationalText(record?.system_code);
+  const title = normalizeOperationalText(record?.name);
+  return [systemCode, title].filter(Boolean).join(' — ') || 'بدون عنوان';
+};
+
 export const OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL: Record<OperationalFinancialRowType, string> = {
   opening: 'اول دوره',
   invoice: 'فاکتور',
@@ -449,7 +459,7 @@ const buildLegacyPaymentRows = (args: {
         date: resolvePaymentRowDate(paymentRow),
         debit,
         credit,
-        invoiceLabel: String(sourceRecord?.name || sourceRecord?.system_code || sourceRecord?.id || '-'),
+        invoiceLabel: formatOperationalFinancialDocumentReference(sourceRecord),
         bankLabel: account?.label || String(accountId || '-'),
         description: String(paymentRow?.description || ''),
         createdAt: sourceRecord?.created_at || null,
@@ -657,7 +667,7 @@ export const fetchSingleOperationalFinancialOverview = async ({
   [...primaryRows, ...secondaryRows, ...expenseRows].forEach((row: any) => {
     const rowId = normalizeOperationalText(row?.id);
     if (!rowId) return;
-    const label = String(row?.name || row?.system_code || rowId || '-');
+    const label = formatOperationalFinancialDocumentReference(row);
     if (row?.payments !== undefined || row?.total_invoice_amount !== undefined) {
       if (row?.invoice_date !== undefined) {
         const moduleId = entityType === 'supplier' ? 'purchase_invoices' : 'invoices';
@@ -706,7 +716,7 @@ export const fetchSingleOperationalFinancialOverview = async ({
         date: invoice?.invoice_date || null,
         debit: totalAmount,
         credit: 0,
-        invoiceLabel: String(invoice?.name || invoice?.system_code || invoice?.id || '-'),
+        invoiceLabel: formatOperationalFinancialDocumentReference(invoice),
         bankLabel: '-',
         description: `فاکتور فروش${invoice?.remaining_balance ? ` | مانده: ${String(invoice.remaining_balance)}` : ''}`,
         createdAt: invoice?.created_at || null,
@@ -740,7 +750,7 @@ export const fetchSingleOperationalFinancialOverview = async ({
         date: invoice?.invoice_date || null,
         debit: 0,
         credit: totalAmount,
-        invoiceLabel: String(invoice?.name || invoice?.system_code || invoice?.id || '-'),
+        invoiceLabel: formatOperationalFinancialDocumentReference(invoice),
         bankLabel: '-',
         description: `فاکتور خرید${invoice?.remaining_balance ? ` | مانده: ${String(invoice.remaining_balance)}` : ''}`,
         createdAt: invoice?.created_at || null,
@@ -772,7 +782,7 @@ export const fetchSingleOperationalFinancialOverview = async ({
         date: slip?.period_end || null,
         debit: 0,
         credit: amount,
-        invoiceLabel: String(slip?.name || slip?.system_code || slip?.id || '-'),
+        invoiceLabel: formatOperationalFinancialDocumentReference(slip),
         bankLabel: '-',
         description: 'تعهد پرداخت حقوق',
         createdAt: slip?.created_at || null,
@@ -808,7 +818,7 @@ export const fetchSingleOperationalFinancialOverview = async ({
         date: advance?.request_date || null,
         debit: 0,
         credit: amount,
-        invoiceLabel: String(advance?.name || advance?.system_code || advance?.id || '-'),
+        invoiceLabel: formatOperationalFinancialDocumentReference(advance),
         bankLabel: '-',
         description: `مساعده${advance?.remaining_amount ? ` | مانده: ${String(advance.remaining_amount)}` : ''}`,
         createdAt: advance?.created_at || null,
@@ -842,7 +852,7 @@ export const fetchSingleOperationalFinancialOverview = async ({
       date: expense?.expense_date || null,
       debit: 0,
       credit: amount,
-      invoiceLabel: String(expense?.name || expense?.system_code || expense?.id || '-'),
+      invoiceLabel: formatOperationalFinancialDocumentReference(expense),
       bankLabel: '-',
       description: `هزینه${expense?.remaining_amount ? ` | مانده: ${String(expense.remaining_amount)}` : ''}`,
       createdAt: expense?.created_at || null,
@@ -911,7 +921,7 @@ export const fetchSingleOperationalFinancialOverview = async ({
         debit,
         credit,
         invoiceLabel: sourceRecordId && sourceModuleId !== 'cash_bank_operations'
-          ? String(sourceRecordLabelByKey.get(`${sourceModuleId}:${String(sourceRecordId)}`) || sourceRecordId)
+          ? String(sourceRecordLabelByKey.get(`${sourceModuleId}:${String(sourceRecordId)}`) || 'بدون عنوان')
           : '-',
         bankLabel: accountInfo.label,
         description: String(operation?.description || ''),
@@ -941,7 +951,7 @@ export const fetchSingleOperationalFinancialOverview = async ({
         date: barter?.barter_date || null,
         debit: barterType === 'outgoing' ? amount : 0,
         credit: barterType === 'incoming' ? amount : 0,
-        invoiceLabel: String(barter?.name || barter?.system_code || barter?.id || '-'),
+        invoiceLabel: formatOperationalFinancialDocumentReference(barter),
         bankLabel: '-',
         description: String(barter?.notes || ''),
         createdAt: barter?.created_at || null,

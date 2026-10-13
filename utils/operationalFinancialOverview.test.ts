@@ -9,6 +9,7 @@ import {
   OPERATIONAL_FINANCIAL_PRINT_SUMMARY_FIELDS,
   OPERATIONAL_FINANCIAL_ROW_TYPE_COLOR,
   computeOperationalFinancialTotals,
+  formatOperationalFinancialDocumentReference,
   formatOperationalFinancialDescription,
 } from './operationalFinancialOverview';
 import { buildListSummaryTableHtml } from './listPrintExport';
@@ -59,6 +60,15 @@ describe('operationalFinancialOverview', () => {
     expect(formatOperationalFinancialDescription('لحاظ شده بابت واریز مبلغ 1250000.5؛ مانده: 2500000')).toBe(
       'لحاظ شده بابت واریز مبلغ ۱٬۲۵۰٬۰۰۰٫۵؛ مانده: ۲٬۵۰۰٬۰۰۰',
     );
+  });
+
+  it('shows both document code and title without exposing a technical identifier', () => {
+    expect(formatOperationalFinancialDocumentReference({
+      system_code: 'I122',
+      name: 'محیطی رستوران حمید',
+    })).toBe('I122 — محیطی رستوران حمید');
+    expect(formatOperationalFinancialDocumentReference({ name: 'فقط عنوان' })).toBe('فقط عنوان');
+    expect(formatOperationalFinancialDocumentReference({})).toBe('بدون عنوان');
   });
 
   it('keeps every operation linked to an employee in the shared financial overview', () => {

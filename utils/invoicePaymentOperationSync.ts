@@ -40,7 +40,8 @@ export const syncInvoicePaymentOperations = async (args: {
   const { data: existingOperations, error: operationsError } = await args.supabase
     .from('cash_bank_operations')
     .select('id,status,metadata')
-    .in(source.sourceLinkField, invoiceIds);
+    .in(source.sourceLinkField, invoiceIds)
+    .neq('status', 'canceled');
   if (operationsError) throw operationsError;
 
   const existingBySourceKey = new Map<string, any>();
@@ -109,8 +110,35 @@ export const syncInvoicePaymentOperations = async (args: {
         execute: (compatiblePayload) =>
           args.supabase.from('cash_bank_operations').insert(compatiblePayload).select('id').single(),
       });
-      if (result.error) throw result.error;
-      const insertedId = normalizeOperationalText(result.data?.id);
+      let insertedId = normalizeOperationalText(result.data?.id);
+      if (result.error) {
+        // ایندکس یکتا، اجرای هم‌زمان دو همگام‌سازی را به یک عملیات تبدیل می‌کند.
+        // در این حالت رکورد برنده را دوباره می‌خوانیم تا ردیف پرداخت به همان متصل شود.
+        if (result.error.code !== '23505') throw result.error;
+        const { data: concurrentOperations, error: concurrentOperationsError } = await args.supabase
+          .from('cash_bank_operations')
+          .select('id,status,metadata')
+          .eq(source.sourceLinkField, recordId)
+          .neq('status', 'canceled');
+        if (concurrentOperationsError) throw concurrentOperationsError;
+        const concurrentOperation = (concurrentOperations || []).find((operation: any) => {
+          const metadata = parseCashBankMetadata(operation?.metadata);
+          return sourceKeys.includes(buildSourceOperationKey(
+            normalizeOperationalText(metadata?.source_table),
+            normalizeOperationalText(metadata?.source_record_id),
+            normalizeOperationalText(metadata?.source_row_key),
+          ));
+        });
+        insertedId = normalizeOperationalText(concurrentOperation?.id);
+        if (!insertedId) throw result.error;
+        const updateResult = await runWriteWithCompatiblePayload<null>({
+          cacheKey: 'invoice-payment-allocation:operation-race-update',
+          payload,
+          execute: (compatiblePayload) =>
+            args.supabase.from('cash_bank_operations').update(compatiblePayload).eq('id', insertedId),
+        });
+        if (updateResult.error) throw updateResult.error;
+      }
       if (insertedId) {
         row._cash_bank_operation_id = insertedId;
         paymentsChanged = true;

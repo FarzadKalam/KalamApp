@@ -2682,9 +2682,37 @@ const EditableTable: React.FC<EditableTableProps> = ({
             .select('id')
             .single(),
       });
-      if (insertOperationResult.error) throw insertOperationResult.error;
-      const insertedOperation = insertOperationResult.data;
-      const insertedOperationId = String(insertedOperation?.id || '').trim() || null;
+      let insertedOperationId = String(insertOperationResult.data?.id || '').trim() || null;
+      if (insertOperationResult.error) {
+        // یک ذخیرهٔ هم‌زمان ممکن است پیش از برگرداندن پاسخ، عملیات خودکار همین
+        // ردیف را ایجاد کرده باشد. قید یکتا از تکرار جلوگیری می‌کند و اینجا
+        // ردیف پرداخت را به همان عملیات موجود وصل می‌کنیم.
+        if (insertOperationResult.error.code !== '23505') throw insertOperationResult.error;
+        const { data: concurrentOperations, error: concurrentOperationsError } = await supabase
+          .from('cash_bank_operations')
+          .select('id,metadata')
+          .contains('metadata', {
+            source_table: moduleId,
+            source_record_id: recordId,
+            source_row_key: rowKey,
+            is_auto_generated: true,
+          })
+          .neq('status', 'canceled')
+          .limit(1);
+        if (concurrentOperationsError) throw concurrentOperationsError;
+        insertedOperationId = String(concurrentOperations?.[0]?.id || '').trim() || null;
+        if (!insertedOperationId) throw insertOperationResult.error;
+        const updateOperationResult = await runWriteWithCompatiblePayload<null>({
+          cacheKey: 'cash-bank-operations:race-update:auto',
+          payload: operationPayload,
+          execute: (compatiblePayload) =>
+            supabase
+              .from('cash_bank_operations')
+              .update(compatiblePayload)
+              .eq('id', insertedOperationId),
+        });
+        if (updateOperationResult.error) throw updateOperationResult.error;
+      }
       nextRow._cash_bank_operation_id = insertedOperationId;
       if (insertedOperationId) {
         await syncRecordTags(supabase, 'cash_bank_operations', insertedOperationId, rowTags);
@@ -2801,9 +2829,35 @@ const EditableTable: React.FC<EditableTableProps> = ({
               .select('id')
               .single(),
         });
-        if (insertOperationResult.error) throw insertOperationResult.error;
-        const insertedOperation = insertOperationResult.data;
-        nextRow._cash_bank_operation_id = String(insertedOperation?.id || '').trim() || null;
+        let insertedOperationId = String(insertOperationResult.data?.id || '').trim() || null;
+        if (insertOperationResult.error) {
+          if (insertOperationResult.error.code !== '23505') throw insertOperationResult.error;
+          const { data: concurrentOperations, error: concurrentOperationsError } = await supabase
+            .from('cash_bank_operations')
+            .select('id')
+            .contains('metadata', {
+              source_table: moduleId,
+              source_record_id: recordId,
+              source_row_key: rowKey,
+              is_auto_generated: true,
+            })
+            .neq('status', 'canceled')
+            .limit(1);
+          if (concurrentOperationsError) throw concurrentOperationsError;
+          insertedOperationId = String(concurrentOperations?.[0]?.id || '').trim() || null;
+          if (!insertedOperationId) throw insertOperationResult.error;
+          const updateOperationResult = await runWriteWithCompatiblePayload<null>({
+            cacheKey: 'cash-bank-operations:race-update:barter',
+            payload: operationPayload,
+            execute: (compatiblePayload) =>
+              supabase
+                .from('cash_bank_operations')
+                .update(compatiblePayload)
+                .eq('id', insertedOperationId),
+          });
+          if (updateOperationResult.error) throw updateOperationResult.error;
+        }
+        nextRow._cash_bank_operation_id = insertedOperationId;
         if (nextRow._cash_bank_operation_id) {
           await syncRecordTags(supabase, 'cash_bank_operations', nextRow._cash_bank_operation_id, normalizeRowTags(nextRow?.tags ?? row?.tags));
         }
