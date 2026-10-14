@@ -3725,10 +3725,18 @@ const REASONING_MODEL_PATTERNS = [
 const isReasoningModel = (model: string) =>
   REASONING_MODEL_PATTERNS.some((p) => p.test(String(model || '').trim()));
 
+const isProviderSafetyRejection = (raw: unknown) => {
+  const text = String(raw || '').trim();
+  return /rejected by (?:the )?safety system|safety (?:system|filter|policy)|content[_\s-]?filter|content policy|responsible ai|violat(?:es|ion).*?(?:policy|safety)|policy.*?(?:violation|safety)|قوانین ایمنی|سیاست(?:‌|\s)?محتوا/i.test(text);
+};
+
 // AvalAI gateway errors sometimes arrive as a full HTML error page (e.g. a 504
 // Cloudflare page). Turn that into a short, readable Persian message.
 const shortenProviderError = (raw: any) => {
   const text = String(raw || '').trim();
+  if (isProviderSafetyRejection(text)) {
+    return 'این درخواست با قوانین ایمنی سرویس تصویر هماهنگ نیست. متن درخواست را بازنویسی کنید یا تصویر مرجع دیگری بفرستید.';
+  }
   if (/credit has been exhausted|don't have enough credit|not enough credit|top up your account|ava\.al\/billing/i.test(text)) {
     return 'اعتبار حساب Avalai تمام شده یا برای این درخواست کافی نیست. اعتبار پنل Avalai را شارژ کنید و دوباره تلاش کنید.';
   }
@@ -10603,9 +10611,16 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
         },
       }).catch(() => []);
     } catch (error: any) {
+      const rawError = error?.providerRawResponse || error?.providerRaw || error?.raw || null;
+      const isSafetyRejection = isProviderSafetyRejection(error?.message) || isProviderSafetyRejection(rawError);
       const rawFailure = shortenProviderError(String(error?.message || error || 'image_generation_failed'));
-      const providerRawFailure = compactProviderRaw(error?.providerRawResponse || error?.providerRaw || error?.raw || null);
-      const failureMessage = `ساخت تصویر ناموفق بود. سرویس هوش مصنوعی در زمان مناسب پاسخ نداد یا خطا داد. چند لحظه بعد دوباره تلاش کنید.${rawFailure ? `\nجزئیات: ${rawFailure}` : ''}`;
+      // A provider policy response is final, not transient. Keep raw provider
+      // text out of the member-facing message, while retaining ordinary errors
+      // for support diagnostics.
+      const providerRawFailure = isSafetyRejection ? null : compactProviderRaw(rawError);
+      const failureMessage = isSafetyRejection
+        ? `ساخت یا ویرایش تصویر انجام نشد.\n${rawFailure}`
+        : `ساخت تصویر ناموفق بود. سرویس هوش مصنوعی در زمان مناسب پاسخ نداد یا خطا داد. چند لحظه بعد دوباره تلاش کنید.${rawFailure ? `\nجزئیات: ${rawFailure}` : ''}`;
       await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', {
         id: `eq.${assistantMessage?.id}`,
         org_id: `eq.${authContext.orgId}`,
@@ -10679,12 +10694,14 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
 const isNonRetryableImageFailure = (metadata: any) => {
   const status = Number(metadata?.provider_status || 0);
   if ([400, 401, 403, 404, 422].includes(status)) return true;
-  const detail = String(metadata?.error || metadata?.failed_note || '').toLowerCase();
-  return detail.includes('insufficient credit')
-    || detail.includes('remaining balance')
-    || detail.includes('کلید مرکزی ai')
-    || detail.includes('مدل فعال در تنظیمات سازمان پیدا نشد')
-    || detail.includes('endpoint تولید تصویر avalai را پشتیبانی نمی‌کند');
+  const detail = String(metadata?.error || metadata?.failed_note || '');
+  if (isProviderSafetyRejection(detail)) return true;
+  const normalizedDetail = detail.toLowerCase();
+  return normalizedDetail.includes('insufficient credit')
+    || normalizedDetail.includes('remaining balance')
+    || normalizedDetail.includes('کلید مرکزی ai')
+    || normalizedDetail.includes('مدل فعال در تنظیمات سازمان پیدا نشد')
+    || normalizedDetail.includes('endpoint تولید تصویر avalai را پشتیبانی نمی‌کند');
 };
 
 const getAiImageRetryDelayMs = (attempts: number) => {
