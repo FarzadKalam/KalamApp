@@ -30,6 +30,7 @@ type GoalsManagerProps = {
 type GoalAccessState = ReturnType<typeof resolveGoalsAccessPermissions>;
 
 const defaultAccess: GoalAccessState = {
+  canViewHub: true,
   canViewManager: true,
   canViewModuleCards: true,
   canViewDashboardWidget: true,

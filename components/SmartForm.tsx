@@ -4,6 +4,8 @@ import { SaveOutlined, CloseOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import SmartFieldRenderer from './SmartFieldRenderer';
+import ContextualTutorialButton from './cms/ContextualTutorialButton';
+import { getFormTutorialContexts } from '../utils/tutorialContexts';
 import EditableTable from './EditableTable.tsx';
 import GridTable from './GridTable';
 import SmartTableRenderer from './SmartTableRenderer';
@@ -2939,6 +2941,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
               <span className="w-2 h-7 md:h-8 bg-leather-500 rounded-full inline-block"></span>
               {title || (recordId ? `ویرایش ${module.titles.faSingular || module.titles.fa}` : `افزودن ${module.titles.faSingular || module.titles.fa} جدید`)}
             </h2>
+            <ContextualTutorialButton contexts={getFormTutorialContexts(module.id)} zIndex={(overlayZIndex || 1300) + 100} />
             {formActionButtons.length > 0 && (
               <div className="flex items-center gap-2 flex-wrap">
                 {formActionButtons.map(btn => (

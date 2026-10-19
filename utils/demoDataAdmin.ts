@@ -25,7 +25,14 @@ const invokeDemoDataAdmin = async <T = DemoDataAdminStatus>(
       org_id: options?.orgId || null,
     },
   });
-  if (error) throw error;
+  if (error) {
+    const payload = await (error as any)?.context?.json?.().catch(() => null);
+    const detail = String(payload?.message || '');
+    // Keep useful Persian server messages (for example dependency conflicts),
+    // without exposing SQL identifiers or raw response objects to the user.
+    if (/[\u0600-\u06ff]/.test(detail)) throw new Error(detail);
+    throw error;
+  }
   if (data?.success === false) {
     throw new Error(String(data?.message || "اجرای سرویس داده دمو ناموفق بود."));
   }

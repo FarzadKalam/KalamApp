@@ -1,3 +1,4 @@
+import { normalizeEmail } from '../utils/email';
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, App, Button, Card, Input, Modal, Tabs, theme } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -574,7 +575,7 @@ const Login = () => {
     setLoading(true);
     try {
       const { error } = await supabase.auth.signInWithPassword({
-        email,
+        email: normalizeEmail(email),
         password,
       });
       if (error) throw error;
@@ -686,7 +687,7 @@ const Login = () => {
       return;
     }
 
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    const { error } = await supabase.auth.resetPasswordForEmail(normalizeEmail(email), {
       redirectTo: `${window.location.origin}/login`,
     });
 

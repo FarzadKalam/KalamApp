@@ -22,14 +22,14 @@ function getEmbedUrl(platform: string, embedId: string): string {
 function ParagraphBlock({ content }: { content: string }) {
   return (
     <div
-      className="prose prose-zinc max-w-none leading-8 text-zinc-800"
+      className="prose prose-zinc max-w-none leading-8 text-zinc-800 dark:prose-invert dark:text-zinc-200"
       dangerouslySetInnerHTML={{ __html: safe(content) }}
     />
   );
 }
 
 function HeadingBlock({ level, content }: { level: number; content: string }) {
-  const cls = 'font-bold text-zinc-950 mt-8 mb-3';
+  const cls = 'font-bold text-zinc-950 dark:text-zinc-100 mt-8 mb-3';
   const sizeMap: Record<number, string> = {
     1: 'text-4xl', 2: 'text-3xl', 3: 'text-2xl',
     4: 'text-xl', 5: 'text-lg', 6: 'text-base',
@@ -48,7 +48,7 @@ function ImageBlock({ url, alt, caption }: { url: string; alt: string; caption?:
         className="w-full rounded-2xl object-cover shadow-sm"
       />
       {caption && (
-        <figcaption className="text-center text-sm text-zinc-400 mt-2">{caption}</figcaption>
+        <figcaption className="text-center text-sm text-zinc-500 dark:text-zinc-400 mt-2">{caption}</figcaption>
       )}
     </figure>
   );
@@ -118,7 +118,7 @@ function VideoFileBlock({ url, title }: { url: string; title?: string }) {
         className="w-full rounded-2xl shadow-md"
         preload="metadata"
       />
-      {title && <figcaption className="text-center text-sm text-zinc-400 mt-2">{title}</figcaption>}
+      {title && <figcaption className="text-center text-sm text-zinc-500 dark:text-zinc-400 mt-2">{title}</figcaption>}
     </figure>
   );
 }
@@ -129,10 +129,10 @@ function ChecklistBlock({ items }: { items: { text: string; checked: boolean }[]
       {items.map((item, i) => (
         <li key={i} className="flex items-start gap-3">
           <span className={`mt-0.5 flex-shrink-0 w-5 h-5 rounded-md border-2 flex items-center justify-center text-xs
-            ${item.checked ? 'bg-teal-500 border-teal-500 text-white' : 'border-zinc-300'}`}>
+            ${item.checked ? 'bg-teal-500 border-teal-500 text-white' : 'border-zinc-300 dark:border-zinc-600'}`}>
             {item.checked && '✓'}
           </span>
-          <span className={item.checked ? 'line-through text-zinc-400' : 'text-zinc-700'}>{item.text}</span>
+          <span className={item.checked ? 'line-through text-zinc-400 dark:text-zinc-500' : 'text-zinc-700 dark:text-zinc-200'}>{item.text}</span>
         </li>
       ))}
     </ul>
@@ -143,12 +143,12 @@ function QuoteBlock({ content, author, source }: { content: string; author?: str
   return (
     <blockquote className="my-6 border-r-4 border-teal-400 pr-6 py-2">
       <div
-        className="text-lg text-zinc-700 leading-8 italic"
+        className="text-lg text-zinc-700 dark:text-zinc-200 leading-8 italic"
         dangerouslySetInnerHTML={{ __html: safe(content) }}
       />
       {(author || source) && (
-        <footer className="mt-3 text-sm text-zinc-400">
-          {author && <span className="font-medium text-zinc-600">{author}</span>}
+        <footer className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
+          {author && <span className="font-medium text-zinc-600 dark:text-zinc-300">{author}</span>}
           {author && source && <span className="mx-1">—</span>}
           {source && <cite>{source}</cite>}
         </footer>
@@ -158,10 +158,10 @@ function QuoteBlock({ content, author, source }: { content: string; author?: str
 }
 
 const alertStyles: Record<string, { bg: string; border: string; icon: string; text: string }> = {
-  info:    { bg: 'bg-blue-50',   border: 'border-blue-300',  icon: '💡', text: 'text-blue-800' },
-  warning: { bg: 'bg-amber-50',  border: 'border-amber-300', icon: '⚠️', text: 'text-amber-900' },
-  danger:  { bg: 'bg-red-50',    border: 'border-red-300',   icon: '🚫', text: 'text-red-800' },
-  success: { bg: 'bg-emerald-50',border: 'border-emerald-300',icon: '✅', text: 'text-emerald-800' },
+  info:    { bg: 'bg-blue-50 dark:bg-blue-950/40',   border: 'border-blue-300 dark:border-blue-800',  icon: '💡', text: 'text-blue-800 dark:text-blue-200' },
+  warning: { bg: 'bg-amber-50 dark:bg-amber-950/40',  border: 'border-amber-300 dark:border-amber-800', icon: '⚠️', text: 'text-amber-900 dark:text-amber-200' },
+  danger:  { bg: 'bg-red-50 dark:bg-red-950/40',    border: 'border-red-300 dark:border-red-800',   icon: '🚫', text: 'text-red-800 dark:text-red-200' },
+  success: { bg: 'bg-emerald-50 dark:bg-emerald-950/40', border: 'border-emerald-300 dark:border-emerald-800', icon: '✅', text: 'text-emerald-800 dark:text-emerald-200' },
 };
 
 function AlertBlock({ variant, title, content }: { variant: string; title?: string; content: string }) {
@@ -190,7 +190,7 @@ function CodeBlock({ language, content }: { language: string; content: string })
   };
 
   return (
-    <div className="my-4 rounded-xl overflow-hidden border border-zinc-200 shadow-sm">
+    <div className="my-4 rounded-xl overflow-hidden border border-zinc-200 dark:border-zinc-700 shadow-sm">
       <div className="flex items-center justify-between bg-zinc-900 px-4 py-2">
         <span className="text-xs text-zinc-400 font-mono">{language}</span>
         <button
@@ -209,7 +209,7 @@ function CodeBlock({ language, content }: { language: string; content: string })
 }
 
 function DividerBlock() {
-  return <hr className="my-8 border-zinc-200" />;
+  return <hr className="my-8 border-zinc-200 dark:border-zinc-700" />;
 }
 
 // ──────────────────────────────────────────────────

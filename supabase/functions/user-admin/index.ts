@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { normalizeEmail } from './normalizeEmail.ts';
 
 type UserAdminAction =
   | 'set_user_password'
@@ -83,9 +84,6 @@ const toGoTruePhone = (value?: string | null) => {
   const normalized = normalizeIranMobileE164(value);
   return normalized ? normalized.replace(/^\+/, '') : null;
 };
-
-const normalizeEmail = (value?: string | null) =>
-  String(value || '').trim().toLowerCase();
 
 const isValidEmail = (value?: string | null) =>
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmail(value));
@@ -322,7 +320,7 @@ const fetchProfileByPhoneOrEmail = async (
   options: { phone?: string | null; email?: string | null; excludeUserId?: string | null },
 ) => {
   const normalizedPhone = toLocalIranMobile(options.phone);
-  const normalizedEmail = String(options.email || '').trim().toLowerCase();
+  const normalizedEmail = normalizeEmail(options.email);
   const excludeUserId = String(options.excludeUserId || '').trim();
 
   if (normalizedPhone) {
@@ -1323,7 +1321,7 @@ Deno.serve(async (request) => {
     if (action === 'create_user') {
       const password = String(body?.password || '').trim();
       const fullName = String(body?.fullName || '').trim();
-      const email = String(body?.email || '').trim() || null;
+      const email = normalizeEmail(body?.email) || null;
       const roleId = String(body?.roleId || '').trim() || null;
       const softwareRole = String(body?.role || '').trim() || 'viewer';
       const avatarUrl = String(body?.avatarUrl || '').trim() || null;
@@ -1492,7 +1490,7 @@ Deno.serve(async (request) => {
 
       const password = String(body?.password || '').trim();
       const fullName = String(body?.fullName || targetProfile.full_name || '').trim();
-      const email = String(body?.email || '').trim() || null;
+      const email = normalizeEmail(body?.email) || null;
       const roleId = String(body?.roleId || targetProfile.role_id || '').trim() || null;
       const softwareRole = String(body?.role || targetProfile.role || '').trim() || 'viewer';
       const avatarUrl = String(body?.avatarUrl || '').trim() || null;

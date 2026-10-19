@@ -2607,7 +2607,7 @@ export const usePrintManager = ({
               hasExplicitSelection: false,
             });
         const currentSet = new Set(current);
-        const groupKeys = (printableFieldsForTemplate || [])
+        const groupKeys: string[] = (printableFieldsForTemplate || [])
           .filter(
             (field: any) =>
               String(field?.group || "").trim() ===
@@ -2681,7 +2681,7 @@ export const usePrintManager = ({
       ) {
         setCurrentUserId(preferenceIdentity.userId);
       }
-      const allowedKeySet = new Set(
+      const allowedKeySet = new Set<string>(
         (printableFieldsForTemplate || [])
           .map((field: any) => String(field?.key || "").trim())
           .filter(Boolean),

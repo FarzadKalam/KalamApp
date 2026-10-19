@@ -247,7 +247,7 @@ try {
   $deployUser = Get-RequiredEnv -Name "DEPLOY_USER"
   $deployPath = Get-RequiredEnv -Name "DEPLOY_PATH"
   $sshKeyPath = Resolve-SshKeyPath -ConfiguredPath (Get-OptionalEnv -Name 'DEPLOY_SSH_KEY_PATH') -RepoRoot $repoRoot
-  $keepReleases = Get-OptionalEnv -Name "DEPLOY_KEEP_RELEASES" -DefaultValue "5"
+  $keepReleases = Get-OptionalEnv -Name "DEPLOY_KEEP_RELEASES" -DefaultValue "2"
   $buildCommand = Get-OptionalEnv -Name "DEPLOY_BUILD_COMMAND" -DefaultValue "npm run build"
   $archiveName = Get-OptionalEnv -Name "DEPLOY_ARCHIVE_NAME" -DefaultValue "kalamapp-dist.tar.gz"
   $useSharedSsh = ConvertTo-Bool -Value (Get-OptionalEnv -Name 'DEPLOY_USE_SHARED_SSH') -DefaultValue $false

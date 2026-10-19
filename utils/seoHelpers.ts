@@ -1,6 +1,6 @@
 const SITE_NAME = 'تازه سیستم';
 const SITE_URL = 'https://tazesystem.ir';
-const SITE_DESCRIPTION = 'نرم‌افزار مدیریت سازمانی B2B ایرانی — حسابداری، CRM، HR، انبار، پروژه و هوش مصنوعی';
+const SITE_DESCRIPTION = 'تازه سیستم؛ CRM ایرانی دارای هوش مصنوعی، دایرکت هوشمند اینستاگرام و نرم‌افزار یکپارچه فروش، حسابداری، پروژه، فرآیند و منابع انسانی برای کسب‌وکارها';
 const DEFAULT_OG_IMAGE = `${SITE_URL}/og-default.png`;
 const TWITTER_HANDLE = '@tazesystem';
 
@@ -266,7 +266,7 @@ export function buildTutorialPostSeo(tutorial: {
 
 export function buildHomeSeo(): SeoProps {
   return {
-    title: `${SITE_NAME} | نرم‌افزار مدیریت سازمانی`,
+    title: `${SITE_NAME} | CRM ایرانی هوشمند و نرم‌افزار یکپارچه کسب‌وکار`,
     description: SITE_DESCRIPTION,
     canonical: SITE_URL,
     ogImage: DEFAULT_OG_IMAGE,

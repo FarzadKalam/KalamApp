@@ -204,6 +204,8 @@ function Build-RemotePsqlCommand {
     'exec',
     '-i',
     (Quote-ForShell -Value $DbContainer),
+    'env',
+    (Quote-ForShell -Value 'PGOPTIONS=-c client_min_messages=warning'),
     'psql',
     '-U',
     (Quote-ForShell -Value $DbUser),
@@ -231,6 +233,8 @@ function Build-RemotePsqlFileCommand {
     'exec',
     '-i',
     (Quote-ForShell -Value $DbContainer),
+    'env',
+    (Quote-ForShell -Value 'PGOPTIONS=-c client_min_messages=warning'),
     'psql',
     '-U',
     (Quote-ForShell -Value $DbUser),
@@ -384,7 +388,11 @@ try {
     }
   }
 
+  # PostgreSQL emits a NOTICE when this existing table is checked.  PowerShell
+  # can surface stderr from ssh as an error record, so silence notices before
+  # issuing the idempotent statement.
   $ensureHistorySql = @"
+set client_min_messages = warning;
 create table if not exists $historyTable (
   filename text primary key,
   file_hash text,

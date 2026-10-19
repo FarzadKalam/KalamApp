@@ -1,4 +1,4 @@
-import { BlockType } from '../../types';
+import { BlockType, type BlockDefinition } from '../../types';
 import { getFieldLabelFa } from '../fieldLabel';
 import { hasMeaningfulPrintValue, isPrintableModuleField } from './printableFields';
 
@@ -46,7 +46,7 @@ export const buildModulePrintFieldCatalog = ({
 }): PrintCatalogField[] => {
   const fields = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields : [];
   const blocks = Array.isArray(moduleConfig?.blocks) ? moduleConfig.blocks : [];
-  const blockById = new Map(
+  const blockById = new Map<string, BlockDefinition>(
     blocks.map((block: any) => [normalizeText(block?.id), block] as const),
   );
   const result: PrintCatalogField[] = [];

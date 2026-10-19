@@ -9,8 +9,17 @@ const isElementVisible = (element: Element) => {
 
 const hasVisibleBlockingOverlay = () => {
   if (typeof document === 'undefined') return false;
+  // Opacity is zero for part of Ant Design's enter animation. Treat an open
+  // Drawer/Modal as active during that transition so the recovery timer cannot
+  // clear its body lock or disable its mask before the overlay finishes opening.
   return Array.from(document.querySelectorAll('.ant-drawer-open, .ant-modal-wrap'))
-    .some(isElementVisible);
+    .some((element) => {
+      const node = element as HTMLElement;
+      const style = window.getComputedStyle(node);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+      const rect = node.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
 };
 
 export const releaseTransientOverlayLocks = () => {

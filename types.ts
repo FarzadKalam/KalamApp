@@ -256,6 +256,7 @@ export interface BlockDefinition {
   tableColumns?: {
     key: string;
     title: string;
+    labels?: { fa: string; en?: string };
     type: FieldType;
     width?: number;
     defaultValue?: any;

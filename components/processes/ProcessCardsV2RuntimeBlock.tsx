@@ -4398,8 +4398,8 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       .map((stage) => attachExistingRunContextToDraftStage(stage, runtimeRun, {
         processGroupId: targetGroupId,
         processName: item.title,
-        templateId: item.templateId,
-        templateName: item.templateTitle,
+        templateId: item.mode === 'run' ? item.templateId : runtimeRun?.template_id,
+        templateName: item.mode === 'run' ? item.templateTitle : item.title,
       }));
     const executionOwners = sourceDraftStages.map((stage) => resolveProcessDraftExecutionOwner({
       stage,

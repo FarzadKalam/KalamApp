@@ -6614,16 +6614,31 @@ async function runEventTick(
     throw new Error('رکورد مقصد گردش کار پیدا نشد.');
   }
 
+  // Return invoices share the physical invoices tables with regular invoices.
+  // Workflow scope is a product-module boundary, so resolve that boundary from
+  // the persisted invoice fields before selecting workflows or building context.
+  const sourceModuleId = moduleId;
+  const invoiceSubject = String(record?.taxpayer_invoice_subject || '').trim();
+  const isLegacyReturnInvoice = String(record?.taxpayer_invoice_pattern || '').trim() === '2'
+    && !!String(record?.source_invoice_id || '').trim();
+  const isReturnInvoice = invoiceSubject === '4' || isLegacyReturnInvoice;
+  const resolvedInvoiceModuleId = sourceModuleId === 'invoices'
+    ? (isReturnInvoice ? 'sales_return_invoices' : 'invoices')
+    : sourceModuleId === 'purchase_invoices'
+    ? (isReturnInvoice ? 'purchase_return_invoices' : 'purchase_invoices')
+    : sourceModuleId;
+  const workflowScopeModuleId = resolvedInvoiceModuleId;
+
   const orgId = String(record?.org_id || providedRecord?.org_id || previousRecord?.org_id || '').trim();
   if (!orgId) {
     throw new Error('شناسه سازمان رکورد مقصد گردش کار مشخص نیست.');
   }
-  record = (await hydrateBotWorkflowVirtualFields(url, key, moduleId, record, orgId)) || record;
-  const hydratedPreviousRecord = await hydrateBotWorkflowVirtualFields(url, key, moduleId, previousRecord, orgId);
+  record = (await hydrateBotWorkflowVirtualFields(url, key, workflowScopeModuleId, record, orgId)) || record;
+  const hydratedPreviousRecord = await hydrateBotWorkflowVirtualFields(url, key, workflowScopeModuleId, previousRecord, orgId);
 
   const stats = {
     event,
-    moduleId,
+    moduleId: workflowScopeModuleId,
     recordId: String(record.id),
     checkedWorkflows: 0,
     matchedWorkflows: 0,
@@ -6637,7 +6652,7 @@ async function runEventTick(
     return stats;
   }
 
-  if (moduleId === 'advertising_campaign_responses') {
+  if (workflowScopeModuleId === 'advertising_campaign_responses') {
     const configuredActions = await runCampaignInboundConfiguredActions(
       url,
       key,
@@ -6649,7 +6664,10 @@ async function runEventTick(
     stats.executedActions += Number(configuredActions?.executedActions || 0);
   }
 
-  const workflows = await fetchEventWorkflows(url, key, orgId, moduleId, event);
+  const sourceTableWorkflows = await fetchEventWorkflows(url, key, orgId, sourceModuleId, event);
+  const workflows = sourceModuleId === 'invoices' || sourceModuleId === 'purchase_invoices'
+    ? sourceTableWorkflows.filter((workflow) => workflowTargetsModule(workflow, workflowScopeModuleId))
+    : sourceTableWorkflows;
   stats.checkedWorkflows = workflows.length;
 
   for (const workflow of workflows) {
@@ -6663,7 +6681,9 @@ async function runEventTick(
     const recordIdForLog = String(record?.id || '').trim();
     // Keep the module id used in logs and action context compatible with the
     // configured module id (some modules use a camelCase id and snake_case table).
-    const workflowModuleId = resolveWorkflowModuleIdForSourceTable(workflow, moduleId);
+    const workflowModuleId = sourceModuleId === 'invoices' || sourceModuleId === 'purchase_invoices'
+      ? workflowScopeModuleId
+      : resolveWorkflowModuleIdForSourceTable(workflow, sourceModuleId);
     let firstMatchClaimed = false;
     try {
       const matched = await evaluateConditions(

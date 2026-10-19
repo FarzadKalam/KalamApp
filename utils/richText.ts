@@ -31,7 +31,7 @@ const INHERITED_RICH_TEXT_STYLE_PROPERTIES = new Set([
 
 const removeInheritedRichTextStyles = (html: string): string => html.replace(
   /\sstyle=(['"])([\s\S]*?)\1/gi,
-  (attribute, quote: string, styleText: string) => {
+  (_attribute, quote: string, styleText: string) => {
     const retained = String(styleText || '')
       .split(';')
       .map((part) => part.trim())

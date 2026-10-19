@@ -744,6 +744,8 @@ function App() {
 
   const ModuleCreateRouteResolver: React.FC = () => {
     const { moduleId: routeModuleId } = useParams();
+    if (routeModuleId === 'cms_tutorial_posts') return <Navigate to="/taze-system/tutorials/new" replace />;
+    if (routeModuleId === 'cms_blog_posts') return <Navigate to="/taze-system/blog/new" replace />;
     if (routeModuleId === ADVERTISING_CAMPAIGNS_MODULE_ID) {
       return <AdvertisingCampaignModuleGate><CampaignWizardPage /></AdvertisingCampaignModuleGate>;
     }

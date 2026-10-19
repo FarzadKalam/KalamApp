@@ -435,8 +435,18 @@ echo "Deployed functions: ${FUNCTION_NAMES[*]}"
 
   Write-Step 'Copying functions on server'
   $remoteScriptLf = $remoteScript -replace "`r", ''
-  $remoteScriptLf | & ssh @sshCommonArgs @sshArgs
-  if ($LASTEXITCODE -ne 0) {
+  # Docker Compose writes non-fatal warnings (such as an existing orphan
+  # container) to stderr.  Keep those visible, but use ssh's exit code as the
+  # deploy result so PowerShell does not stop before the check below.
+  $previousErrorAction = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    $remoteScriptLf | & ssh @sshCommonArgs @sshArgs
+    $remoteExitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorAction
+  }
+  if ($remoteExitCode -ne 0) {
     throw 'Remote function deploy failed.'
   }
 

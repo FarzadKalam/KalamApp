@@ -170,7 +170,6 @@ import {
   resolveProcessTemplateTokenValue,
 } from '../utils/processTemplateContext';
 import {
-  findProcessAssigneeFieldReference,
   normalizeProcessStageDefaultAssignee,
   resolveProcessAssigneeReference,
 } from '../utils/processAssigneeReference';

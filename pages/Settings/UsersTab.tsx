@@ -1,3 +1,4 @@
+import { normalizeEmail } from '../../utils/email';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
@@ -497,7 +498,7 @@ const UsersTab: React.FC = () => {
           userId: editingUser.id,
           orgId: editingUser.org_id || currentOrgId,
           fullName: values.full_name,
-          email: values.email || null,
+          email: normalizeEmail(values.email) || null,
           phone: normalizedPhone,
           roleId: values.role_id || null,
           role: values.role || 'viewer',
@@ -535,7 +536,7 @@ const UsersTab: React.FC = () => {
           action: 'create_user',
           orgId: seedInvite?.org_id || currentOrgId,
           fullName: values.full_name,
-          email: values.email || null,
+          email: normalizeEmail(values.email) || null,
           phone: normalizedPhone,
           roleId: values.role_id || null,
           role: values.role || 'viewer',
@@ -820,7 +821,7 @@ const UsersTab: React.FC = () => {
           <Form.Item label="نام و نام خانوادگی" name="full_name" rules={[{ required: true, message: 'نام کاربر الزامی است' }]}>
             <Input />
           </Form.Item>
-          <Form.Item label="ایمیل" name="email" rules={[{ type: 'email', message: 'ایمیل معتبر نیست' }]}>
+          <Form.Item label="ایمیل" name="email" normalize={normalizeEmail} rules={[{ type: 'email', message: 'ایمیل معتبر نیست' }]}>
             <Input />
           </Form.Item>
           <Form.Item label="شماره موبایل" name="mobile" normalize={formatIranMobileForInput} rules={[{ required: true, message: 'شماره موبایل الزامی است' }]}>

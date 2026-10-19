@@ -48,7 +48,7 @@ const GoalsHubPage: React.FC = () => {
     window.dispatchEvent(new CustomEvent('erp:breadcrumb', {
       detail: { moduleTitle: 'ابزارها', moduleId: 'goals', recordName: 'اهداف' },
     }));
-    return () => window.dispatchEvent(new CustomEvent('erp:breadcrumb', { detail: null }));
+    return () => { window.dispatchEvent(new CustomEvent('erp:breadcrumb', { detail: null })); };
   }, []);
 
   const access = useMemo(() => resolveGoalsAccessPermissions(permissions), [permissions]);

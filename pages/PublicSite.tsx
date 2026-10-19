@@ -20,7 +20,7 @@ import DemoForm from '../components/publicSite/shared/DemoForm';
 import { PANEL_URL, DEMO_URL, sitePath } from '../components/publicSite/siteLinks';
 import { DEFAULT_ENAMAD_TRUST_HTML } from '../utils/publicSiteTrustSeals';
 
-type PublicPage = 'home' | 'features' | 'pricing' | 'blog' | 'blog-post' | 'learn' | 'learn-post' | 'updates' | 'about' | 'contact' | 'demo' | 'privacy' | 'terms' | 'rules' | 'sla';
+type PublicPage = 'home' | 'features' | 'pricing' | 'blog' | 'blog-post' | 'learn' | 'learn-post' | 'updates' | 'about' | 'contact' | 'demo' | 'privacy' | 'terms' | 'rules' | 'sla' | 'solution';
 
 type FooterConfig = {
   tagline?: string;
@@ -40,6 +40,13 @@ const nav = [
   ['بلاگ', sitePath('/blog')],
   ['تازه‌ها', sitePath('/updates')],
   ['مستندات API', '/tazesystem/developers'],
+] as const;
+
+const solutionLinks = [
+  ['CRM ایرانی دارای هوش مصنوعی', sitePath('/solutions/ai-crm')],
+  ['CRM با دایرکت هوشمند اینستاگرام', sitePath('/solutions/instagram-crm')],
+  ['دایرکت هوشمند اینستاگرام', sitePath('/solutions/smart-instagram-direct')],
+  ['هوش مصنوعی اقتصادی برای کسب‌وکار', sitePath('/solutions/affordable-business-ai')],
 ] as const;
 
 const SectionTitle = ({ eyebrow, title, text }: { eyebrow: string; title: string; text: string }) => (
@@ -135,7 +142,7 @@ const Footer = () => {
             )}
           </div>
         </div>
-        <FooterColumn title="محصول" items={[['امکانات', sitePath('/features')], ['تعرفه‌ها', sitePath('/pricing')], ['شروع رایگان', DEMO_URL], ['ورود به پنل', PANEL_URL]]} />
+        <FooterColumn title="راهکارها" items={solutionLinks} />
         <FooterColumn title="منابع" items={[['بلاگ', sitePath('/blog')], ['آموزش‌ها', sitePath('/learn')], ['تازه‌های محصول', sitePath('/updates')], ['مستندات API', '/tazesystem/developers'], ['درباره ما', sitePath('/about')]]} />
         <div>
           <h3 className="text-sm font-bold text-zinc-950">ارتباط</h3>
@@ -163,8 +170,96 @@ const HomePage = () => (
   <>
     <SeoHead {...buildHomeSeo()} />
     <LandingRenderer slug="home" />
+    <ProductScreenshotsSection />
+    <SolutionsOverview />
   </>
 );
+
+const productScreenshots = [
+  { src: '/assets/tutorials/customers-list.png', alt: 'نمای فهرست مشتریان در CRM ایرانی تازه سیستم', title: 'CRM و مدیریت مشتریان', text: 'اطلاعات مشتری، مسئول پیگیری و سابقه ارتباطات در یک نمای منظم.' },
+  { src: '/assets/tutorials/reports-form.png', alt: 'نمای گزارش‌ساز مدیریتی تازه سیستم', title: 'گزارش‌ساز مدیریتی', text: 'گزارش‌های قابل تنظیم برای بررسی فروش، عملیات و عملکرد تیم.' },
+  { src: '/assets/tutorials/invoices-form.png', alt: 'فرم فاکتور فروش در نرم‌افزار تازه سیستم', title: 'فروش و فاکتور یکپارچه', text: 'ثبت فاکتور و اقلام فروش در کنار اطلاعات مشتری و گردش مالی.' },
+  { src: '/assets/tutorials/projects-list.png', alt: 'نمای مدیریت پروژه‌ها و وظایف در تازه سیستم', title: 'پروژه و پیگیری کارها', text: 'مشاهده پروژه‌ها، وضعیت اجرا و مسئول هر بخش در یک فضای مشترک.' },
+] as const;
+
+const ProductScreenshotsSection = () => (
+  <section className="bg-zinc-50 px-5 py-20" aria-labelledby="product-screenshots-title">
+    <div className="mx-auto max-w-7xl">
+      <SectionTitle eyebrow="نمای واقعی محصول" title="تازه سیستم را قبل از شروع ببینید" text="چند نمای عمومی از بخش‌های پرکاربرد سامانه؛ اطلاعات این تصاویر نمونه و آموزشی است." />
+      <div className="grid gap-6 md:grid-cols-2">
+        {productScreenshots.map((item) => (
+          <figure key={item.src} className="overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-sm">
+            <img src={item.src} alt={item.alt} loading="lazy" width="1536" height="1024" className="aspect-[3/2] w-full object-cover object-top" />
+            <figcaption className="p-5"><h3 className="text-lg font-black text-zinc-950">{item.title}</h3><p className="mt-2 text-sm leading-7 text-zinc-600">{item.text}</p></figcaption>
+          </figure>
+        ))}
+      </div>
+    </div>
+  </section>
+);
+
+const SolutionsOverview = () => (
+  <section className="px-5 py-20">
+    <div className="mx-auto max-w-7xl">
+      <SectionTitle eyebrow="راهکارهای هوشمند" title="CRM، اینستاگرام و هوش مصنوعی در یک مسیر کاری" text="برای هر نیاز، راهنمای دقیق امکانات، کاربردها و معیار انتخاب را بخوانید." />
+      <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">
+        {solutionLinks.map(([label, href]) => <Link key={href} to={href} className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-md"><h3 className="font-black leading-7 text-zinc-950">{label}</h3><span className="mt-5 inline-block text-sm font-bold" style={{ color: 'rgb(var(--brand-600-rgb))' }}>مشاهده راهکار ←</span></Link>)}
+      </div>
+    </div>
+  </section>
+);
+
+type SolutionDefinition = {
+  title: string; eyebrow: string; description: string; canonical: string; intro: string;
+  benefits: string[]; useCases: string[]; screenshot: string; screenshotAlt: string;
+  faq: Array<{ question: string; answer: string }>;
+};
+
+const solutions: Record<string, SolutionDefinition> = {
+  '/solutions/ai-crm': {
+    title: 'CRM ایرانی دارای هوش مصنوعی | تازه سیستم', eyebrow: 'CRM هوشمند ایرانی', canonical: 'https://tazesystem.ir/solutions/ai-crm',
+    description: 'CRM ایرانی دارای هوش مصنوعی برای مدیریت مشتریان، سرنخ‌ها، پیگیری فروش، پیشنهاد پاسخ، تحلیل اطلاعات و ساخت گردش‌کار در یک سامانه یکپارچه.',
+    intro: 'تازه سیستم اطلاعات مشتری، سرنخ، فروش و ارتباطات را کنار دستیار هوشمند سازمانی قرار می‌دهد تا تیم فروش سریع‌تر پیگیری کند و مدیر دید روشن‌تری از روند تبدیل داشته باشد.',
+    benefits: ['ثبت و پیگیری مشتریان و لیدها در یک CRM فارسی', 'پیشنهاد پاسخ و خلاصه‌سازی گفتگو با هوش مصنوعی', 'تحلیل اطلاعات مجاز همان سازمان با حفظ تفکیک داده‌ها', 'اتصال فرآیند فروش به فعالیت، یادآوری، فاکتور و گزارش'],
+    useCases: ['اولویت‌بندی سرنخ‌های بازاریابی', 'آماده‌سازی پاسخ پیشنهادی برای مشتری', 'ساخت گزارش مدیریتی از وضعیت فروش', 'ثبت رکورد از متن، فایل، تصویر یا صوت پس از تأیید کاربر'],
+    screenshot: '/assets/tutorials/customers-list.png', screenshotAlt: 'نمای CRM ایرانی دارای هوش مصنوعی و فهرست مشتریان تازه سیستم',
+    faq: [{ question: 'CRM هوشمند چه تفاوتی با CRM معمولی دارد؟', answer: 'علاوه بر ثبت اطلاعات و پیگیری فروش، در تحلیل داده، پیشنهاد پاسخ و انجام کارهای تکراری به تیم کمک می‌کند.' }, { question: 'آیا داده هر سازمان جدا نگهداری می‌شود؟', answer: 'بله، ساختار تازه سیستم چندسازمانی است و دسترسی‌ها و داده‌ها در سطح همان سازمان کنترل می‌شوند.' }],
+  },
+  '/solutions/instagram-crm': {
+    title: 'CRM با دایرکت هوشمند اینستاگرام | تازه سیستم', eyebrow: 'CRM متصل به اینستاگرام', canonical: 'https://tazesystem.ir/solutions/instagram-crm',
+    description: 'CRM با دایرکت هوشمند اینستاگرام برای مدیریت دایرکت و کامنت، شناسایی لید، پاسخ‌گویی خودکار و ادامه پیگیری مشتری در فرآیند فروش.',
+    intro: 'گفتگوهای اینستاگرام می‌توانند از یک پیام پراکنده به لید قابل پیگیری تبدیل شوند. تیم پاسخ‌گویی، اطلاعات مخاطب و ادامه مسیر فروش را در همان فضای CRM می‌بیند.',
+    benefits: ['صندوق یکپارچه دایرکت و کامنت اینستاگرام', 'ثبت لید از گفتگو همراه با فایل و رسانه', 'پاسخ پیشنهادی و گردش‌کار خودکار بر اساس شرط', 'ادامه پیگیری در CRM، فعالیت‌ها و کمپین‌ها'],
+    useCases: ['فروش از طریق دایرکت', 'پشتیبانی مشتریان شبکه‌های اجتماعی', 'تبدیل کامنت یا پاسخ استوری به سرنخ', 'ارجاع گفتگو به عضو مناسب تیم'],
+    screenshot: '/assets/tutorials/marketing_leads-list.png', screenshotAlt: 'نمای لیدهای بازاریابی در CRM متصل به دایرکت اینستاگرام',
+    faq: [{ question: 'آیا پیام اینستاگرام می‌تواند به لید تبدیل شود؟', answer: 'بله، گفتگو و اطلاعات لازم می‌تواند وارد مسیر پیگیری لید شود تا ادامه فروش از بین نرود.' }, { question: 'پاسخ‌گویی خودکار قابل کنترل است؟', answer: 'بله، شرط‌ها و گردش‌کارها مشخص می‌کنند چه زمانی پاسخ یا اقدام خودکار اجرا شود.' }],
+  },
+  '/solutions/smart-instagram-direct': {
+    title: 'دایرکت هوشمند اینستاگرام؛ حرفه‌ای و اقتصادی | تازه سیستم', eyebrow: 'دایرکت هوشمند', canonical: 'https://tazesystem.ir/solutions/smart-instagram-direct',
+    description: 'دایرکت هوشمند اینستاگرام برای پاسخ سریع و حرفه‌ای، مدیریت کامنت و استوری، ارجاع گفتگو، ثبت لید و کاهش کار تکراری تیم فروش و پشتیبانی.',
+    intro: 'دایرکت هوشمند زمانی ارزش دارد که فقط جواب آماده نفرستد؛ باید مخاطب را بشناسد، گفتگو را به همکار مناسب برساند و نتیجه را برای پیگیری بعدی ثبت کند.',
+    benefits: ['مدیریت متمرکز دایرکت، کامنت و رسانه', 'پیشنهاد پاسخ متناسب با گفتگو', 'ارجاع گفتگو و حفظ سابقه پیگیری', 'هزینه قابل‌کنترل با انتخاب امکانات موردنیاز'],
+    useCases: ['پاسخ به پرسش‌های پرتکرار', 'پیگیری درخواست قیمت و خرید', 'تشخیص پیام‌های نیازمند اپراتور', 'ثبت مخاطب و ادامه ارتباط خارج از اینستاگرام'],
+    screenshot: '/assets/tutorials/marketing_leads-form.png', screenshotAlt: 'فرم ثبت لید حاصل از دایرکت هوشمند اینستاگرام',
+    faq: [{ question: 'دایرکت هوشمند ارزان یعنی چه؟', answer: 'یعنی هزینه بر اساس نیاز واقعی و امکانات مورد استفاده کنترل شود، بدون حذف ابزارهای لازم برای پیگیری حرفه‌ای.' }, { question: 'آیا اپراتور انسانی همچنان می‌تواند پاسخ دهد؟', answer: 'بله، گفتگوهای مهم می‌توانند به اپراتور ارجاع شوند و سابقه پیام‌ها برای ادامه پاسخ در دسترس می‌ماند.' }],
+  },
+  '/solutions/affordable-business-ai': {
+    title: 'هوش مصنوعی اقتصادی برای کسب‌وکارها | تازه سیستم', eyebrow: 'هوش مصنوعی سازمانی', canonical: 'https://tazesystem.ir/solutions/affordable-business-ai',
+    description: 'هوش مصنوعی اقتصادی و کاربردی برای کسب‌وکارها؛ گفتگو، تحلیل فایل و صوت، گزارش مدیریتی، پیشنهاد پاسخ و ساخت رکورد با کنترل مصرف و تأیید کاربر.',
+    intro: 'هوش مصنوعی کسب‌وکار باید به داده و کار روزانه متصل باشد. تازه سیستم مصرف را قابل مشاهده می‌کند و اجرای اقدام‌های حساس را پس از بررسی و تأیید کاربر انجام می‌دهد.',
+    benefits: ['مدیریت اعتبار و مشاهده مصرف هوش مصنوعی', 'انتخاب مدل متناسب با نوع کار', 'تحلیل متن، فایل، تصویر و صوت', 'ساخت پیش‌نویس رکورد و اقدام پس از تأیید'],
+    useCases: ['خلاصه‌سازی مکالمه و اسناد', 'پیشنهاد پاسخ فروش و پشتیبانی', 'تحلیل گزارش‌های مدیریتی', 'آماده‌سازی مشتری، لید، فعالیت یا فاکتور از ورودی کاربر'],
+    screenshot: '/assets/tutorials/ai-list.png', screenshotAlt: 'نمای هوش مصنوعی اقتصادی برای کسب‌وکارها در تازه سیستم',
+    faq: [{ question: 'چطور هزینه هوش مصنوعی کنترل می‌شود؟', answer: 'اعتبار و مصرف قابل مشاهده است و می‌توان مدل و قابلیت‌های در دسترس هر سازمان را مدیریت کرد.' }, { question: 'آیا هوش مصنوعی بدون تأیید کاربر رکورد می‌سازد؟', answer: 'برای اقدام‌های حساس ابتدا پیش‌نویس نمایش داده می‌شود و ثبت نهایی پس از تأیید انجام می‌گیرد.' }],
+  },
+};
+
+const SolutionPage = () => {
+  const location = useLocation();
+  const solution = solutions[location.pathname.replace(/^\/tazesystem/, '')] || solutions['/solutions/ai-crm'];
+  const faqJsonLd = { '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: solution.faq.map((item) => ({ '@type': 'Question', name: item.question, acceptedAnswer: { '@type': 'Answer', text: item.answer } })) };
+  return <main dir="rtl"><SeoHead title={solution.title} description={solution.description} canonical={solution.canonical} ogImage={`https://tazesystem.ir${solution.screenshot}`} jsonLd={faqJsonLd} /><section className="px-5 py-20"><div className="mx-auto grid max-w-7xl items-center gap-12 lg:grid-cols-2"><div><div className="text-sm font-black" style={{ color: 'rgb(var(--brand-600-rgb))' }}>{solution.eyebrow}</div><h1 className="mt-4 text-4xl font-black leading-tight text-zinc-950 md:text-5xl">{solution.title.replace(' | تازه سیستم', '')}</h1><p className="mt-6 text-lg leading-9 text-zinc-600">{solution.intro}</p><a href={DEMO_URL} className="mt-8 inline-flex rounded-xl px-6 py-3 font-black text-white" style={{ background: 'rgb(var(--brand-600-rgb))' }}>شروع رایگان</a></div><img src={solution.screenshot} alt={solution.screenshotAlt} width="1536" height="1024" className="w-full rounded-3xl border border-zinc-200 bg-white shadow-xl" /></div></section><section className="bg-zinc-50 px-5 py-20"><div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-2"><div><h2 className="text-3xl font-black text-zinc-950">امکانات و مزایا</h2><ul className="mt-6 grid gap-4">{solution.benefits.map((item) => <li key={item} className="rounded-xl bg-white p-4 leading-7 text-zinc-700"><CheckCircleOutlined className="ml-2 text-emerald-600" />{item}</li>)}</ul></div><div><h2 className="text-3xl font-black text-zinc-950">کاربردهای واقعی</h2><ul className="mt-6 grid gap-4">{solution.useCases.map((item) => <li key={item} className="rounded-xl bg-white p-4 leading-7 text-zinc-700"><CheckCircleOutlined className="ml-2 text-emerald-600" />{item}</li>)}</ul></div></div></section><section className="px-5 py-20"><div className="mx-auto max-w-4xl"><h2 className="text-center text-3xl font-black text-zinc-950">پرسش‌های پرتکرار</h2><div className="mt-8 grid gap-4">{solution.faq.map((item) => <article key={item.question} className="rounded-2xl border border-zinc-200 p-6"><h3 className="font-black text-zinc-950">{item.question}</h3><p className="mt-3 leading-8 text-zinc-600">{item.answer}</p></article>)}</div></div></section><SolutionsOverview /></main>;
+};
 
 const FeaturesPage = () => {
   const items = ['مدیریت مشتریان و سرنخ‌های بازاریابی', 'کمپین‌های تبلیغاتی چندکاناله با مخاطب، زمان‌بندی و داشبورد نتیجه', 'پروژه‌ها، وظایف، مسئول و زمان پیگیری', 'فرآیندها، الگوهای فرآیند و گزارش اجرا', 'چت داخلی، گروه‌ها و پیام روی رکوردها', 'فایل‌ها، پیوست‌ها و گالری اسناد', 'بات‌های تلگرام، بله و روبیکا', 'دایرکت و کامنت اینستاگرام با پاسخ‌گویی و گردش‌کار خودکار', 'پیامک، VoIP و گزارش ارتباطات', 'فاکتور، هزینه، نقد و بانک و حسابداری', 'منابع انسانی، حضور، مرخصی و ماموریت', 'داشبورد، گزارش‌ساز و خروجی مدیریتی', 'نقش‌ها، دسترسی رکورد و دسترسی فیلد', 'وب‌فرم‌ها، فرم درخواست و مسیرهای عمومی'];
@@ -179,6 +274,43 @@ type ProductUpdate = {
 };
 
 const recentProductUpdates: ProductUpdate[] = [
+  {
+    version: '2.97.0.0.0',
+    title: 'راهکارهای هوشمند و نمای واقعی محصول',
+    summary: 'صفحه اصلی با اسکرین‌شات‌های کاربردی کامل‌تر شد و راهکارهای CRM، اینستاگرام و هوش مصنوعی صفحه اختصاصی دارند.',
+    details: [
+      'نماهای عمومی CRM، گزارش‌ساز، فاکتور فروش و پروژه‌ها در صفحه اصلی دیده می‌شوند.',
+      'صفحه‌های مستقل برای CRM ایرانی هوشمند، CRM اینستاگرام، دایرکت هوشمند و هوش مصنوعی اقتصادی اضافه شدند.',
+    ],
+  },
+  {
+    version: '2.96.0.0.0',
+    title: 'آمادگی بیشتر سایت عمومی برای جستجوی گوگل',
+    summary: 'صفحه‌های اصلی سایت با اطلاعات روشن‌تر و نقشه سایت معتبر در اختیار موتورهای جستجو قرار می‌گیرند.',
+    details: [
+      'عنوان، توضیح و نشانی اصلی هر صفحه عمومی از همان پاسخ اولیه سایت قابل تشخیص است.',
+      'نقشه سایت منتشرشده، صفحه‌ها و محتوای عمومی را برای کشف و بررسی در اختیار موتورهای جستجو می‌گذارد.',
+    ],
+  },
+  {
+    version: '2.95.0.0.0',
+    title: 'آموزش‌های پیشنهادی در داشبورد',
+    summary: 'راهنماهای عمومی و تصویری از همان ابتدای ورود به برنامه در دسترس‌اند.',
+    details: [
+      'کارت‌های آموزش عمومی با تصویر و توضیح کوتاه در داشبورد نمایش داده می‌شوند.',
+      'همان مجموعه از آیکون آموزش سربرگ داشبورد باز می‌شود و محتوای هر دو مسیر از بخش آموزش‌های تازه سیستم قابل مدیریت است.',
+    ],
+  },
+  {
+    version: '2.94.0.0.0',
+    title: 'آموزش در کنار کار و داده‌های نمونهٔ کاربردی',
+    summary: 'از آیکون آموزش هر بخش، راهنمای همان صفحه را بخوانید و با نمونه‌های مرتبط، مسیر کار در برنامه را تجربه کنید.',
+    details: [
+      'راهنماهای متنی و تصویری در مرکز آموزش عمومی و داخل صفحه‌ها و فرم‌ها در دسترس‌اند.',
+      'آموزش‌های هر بخش می‌توانند در چند تب دسته‌بندی شوند و در آینده ویدیو هم داشته باشند.',
+      'از تنظیمات حساب، داده‌های نمونه را اضافه یا حذف کنید؛ نمونه‌های ویرایش‌شده هم قابل حذف‌اند.',
+    ],
+  },
   {
     version: '2.93.1.0.3',
     title: 'نمایش نام فعالیت در ویرایش مرحله',
@@ -1987,6 +2119,7 @@ const PublicSite: React.FC<{ page?: PublicPage }> = ({ page = 'home' }) => {
     if (path.startsWith('/blog/')) return 'blog-post';
     if (path === '/learn') return 'learn';
     if (path.startsWith('/learn/')) return 'learn-post';
+    if (path.startsWith('/solutions/')) return 'solution';
     if (path === '/updates') return 'updates';
     if (path === '/about') return 'about';
     if (path === '/contact') return 'contact';
@@ -2020,6 +2153,7 @@ const PublicSite: React.FC<{ page?: PublicPage }> = ({ page = 'home' }) => {
       {resolvedPage === 'blog-post' && <BlogPostPage />}
       {resolvedPage === 'learn' && <TutorialIndexPage />}
       {resolvedPage === 'learn-post' && <TutorialPostPage />}
+      {resolvedPage === 'solution' && <SolutionPage />}
       {resolvedPage === 'updates' && <ResourcesPage kind="updates" />}
       {resolvedPage === 'about' && <CmsStaticPage slug="about" fallbackTitle="دربارهٔ ما" />}
       {resolvedPage === 'privacy' && <CmsStaticPage slug="privacy" fallbackTitle="حریم خصوصی" />}

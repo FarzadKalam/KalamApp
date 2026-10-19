@@ -1,3 +1,4 @@
+import { normalizeEmail } from './email';
 import { supabase } from '../supabaseClient';
 
 const readFunctionErrorPayload = async (error: any) => {
@@ -18,7 +19,7 @@ export const invokeUserAdminFunction = async (body: Record<string, unknown>) => 
   }
 
   const { data, error } = await supabase.functions.invoke('user-admin', {
-    body,
+    body: { ...body, ...(body.email !== undefined ? { email: normalizeEmail(body.email) || null } : {}) },
     headers: {
       Authorization: `Bearer ${accessToken}`,
     },

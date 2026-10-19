@@ -796,19 +796,6 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
     }
   };
 
-  const createAxisSelection = (view: any, cell: HTMLElement, axis: 'row' | 'column') => {
-    try {
-      const anchorPos = resolveCellPos(view, cell);
-      if (anchorPos === null) return null;
-      const $anchorCell = view.state.doc.resolve(anchorPos);
-      return axis === 'row'
-        ? CellSelection.rowSelection($anchorCell)
-        : CellSelection.colSelection($anchorCell);
-    } catch (_error) {
-      return null;
-    }
-  };
-
   const getActiveCellPos = () => {
     if (!editor) return null;
     const $from = editor.state.selection.$from;

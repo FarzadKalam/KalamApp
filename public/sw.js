@@ -9,7 +9,6 @@ const ALL_CACHES = [SHELL_CACHE, PAGE_CACHE, ASSET_CACHE, DATA_CACHE];
 const VERSION_MANIFEST_PATH = '/version.json';
 
 const APP_SHELL = [
-  '/',
   '/index.html',
   '/manifest.webmanifest',
   '/apple-touch-icon.png',

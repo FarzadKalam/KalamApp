@@ -6,7 +6,7 @@ import { formatPersianPrice, toPersianNumber, safeJalaliFormat, parseDateValue }
 import { getRecordTitle } from "../../utils/recordTitle";
 import { getRecordDisplayLabel } from "../../utils/recordLabel";
 import { getAssigneeLabel } from "../../utils/assigneeLabel";
-import { formatRecordDisplayValue, formatRecordFieldValue } from "../../utils/recordDisplayFormatter";
+import { formatRecordFieldValue } from "../../utils/recordDisplayFormatter";
 import { getRecordCardSummaryFields, getRecordCardTags, resolveCardStatusMeta } from "../../utils/recordCardHelpers";
 import { getTaskRelationFieldKey, resolveTaskSourceLink } from "../../utils/taskMeta";
 import { MODULES } from "../../moduleRegistry";

@@ -11,6 +11,10 @@ const STATIC_PAGES = [
   { url: '/updates', priority: '0.7', changefreq: 'weekly' },
   { url: '/about', priority: '0.6', changefreq: 'monthly' },
   { url: '/contact', priority: '0.5', changefreq: 'monthly' },
+  { url: '/solutions/ai-crm', priority: '0.9', changefreq: 'monthly' },
+  { url: '/solutions/instagram-crm', priority: '0.9', changefreq: 'monthly' },
+  { url: '/solutions/smart-instagram-direct', priority: '0.9', changefreq: 'monthly' },
+  { url: '/solutions/affordable-business-ai', priority: '0.9', changefreq: 'monthly' },
 ];
 
 Deno.serve(async (req: Request) => {

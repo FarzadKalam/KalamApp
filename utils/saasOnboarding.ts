@@ -1,3 +1,4 @@
+import { normalizeEmail } from './email';
 import { BRAND_PALETTE_PRESETS, type BrandingPaletteKey } from "../theme/brandTheme";
 import { toFaErrorMessage } from "./errorMessageFa";
 
@@ -17,7 +18,7 @@ export const normalizeSaasSlug = (value: string) =>
     .replace(/^-+|-+$/g, "");
 
 export const normalizeOwnerEmail = (value: string) =>
-  String(value || "").trim().toLowerCase();
+  normalizeEmail(value);
 
 export const isValidOwnerEmail = (value: string) =>
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeOwnerEmail(value));

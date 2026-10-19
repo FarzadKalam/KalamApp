@@ -11,6 +11,7 @@ import {
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { SAAS_FEATURE_LABELS, SAAS_MODULE_LABELS } from '../../utils/saasOfferingCatalog';
+import DemoDataCard from '../../components/saas/DemoDataCard';
 
 const { Text, Title } = Typography;
 
@@ -228,6 +229,7 @@ const AccountStatusTab: React.FC = () => {
 
   return (
     <div className="space-y-6 pb-8">
+      <DemoDataCard />
       <div className="rounded-3xl bg-gradient-to-l from-slate-950 via-slate-800 to-indigo-900 p-5 text-white shadow-lg md:p-7">
         <div className="flex flex-col justify-between gap-5 md:flex-row md:items-start">
           <div>

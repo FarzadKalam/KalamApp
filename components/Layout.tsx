@@ -40,6 +40,8 @@ import { supabase } from '../supabaseClient';
 import { signOutLocalSession } from '../utils/authSession';
 import { MODULES } from '../moduleRegistry';
 import AppVersionUpdateBanner from './AppVersionUpdateBanner';
+import ContextualTutorialButton from './cms/ContextualTutorialButton';
+import { getTutorialContexts } from '../utils/tutorialContexts';
 import {
   ACCOUNTING_PERMISSION_KEY,
   CUSTOMER_CLUB_PERMISSION_KEY,
@@ -621,6 +623,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       await clearCurrentOrgDemoData();
       setHasDemoBatch(false);
       messageApi.success('داده‌های دمو با موفقیت حذف شد.');
+      window.location.reload();
     } catch (err) {
       messageApi.error(getDemoDataAdminErrorMessage(err, 'حذف داده‌های دمو ناموفق بود.'));
     } finally {
@@ -1666,6 +1669,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               className={headerActionButtonClassName}
               title={isDarkMode ? 'حالت روشن' : 'حالت شب'}
             />
+            <ContextualTutorialButton contexts={getTutorialContexts(location.pathname, Object.keys(MODULES))} />
             {isDemoOrg && hasDemoBatch && (
               <Popconfirm
                 title="حذف داده‌های دمو"

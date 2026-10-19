@@ -226,8 +226,6 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const isAnyInvoiceItems = isInvoiceItems || isPurchaseInvoiceItems;
   const isInvoicePayments = (moduleId === 'invoices' || moduleId === 'sales_return_invoices') && block?.id === 'payments';
   const isPurchaseInvoicePayments = (moduleId === 'purchase_invoices' || moduleId === 'purchase_return_invoices') && block?.id === 'payments';
-  const isSalesReturnInvoicePayments = moduleId === 'sales_return_invoices' && block?.id === 'payments';
-  const isPurchaseReturnInvoicePayments = moduleId === 'purchase_return_invoices' && block?.id === 'payments';
   const isExpenseItems = moduleId === 'expense_documents' && block?.id === 'items';
   const isExpensePayments = moduleId === 'expense_documents' && block?.id === 'payments';
   const isEmployeeAdvancePayments = moduleId === 'employee_advances' && block?.id === 'payments';

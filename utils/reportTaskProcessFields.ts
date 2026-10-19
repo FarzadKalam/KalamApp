@@ -97,8 +97,10 @@ const fetchTaskReportProcessRuntimeCatalog = async (supabaseClient: any): Promis
     .order('name');
   if (templatesError) throw templatesError;
 
-  const templatesById = new Map((templates || [])
-    .map((template: any) => [text(template?.id), template] as const)
+  type TemplateRow = { id: string; name?: string; module_id?: string; module_ids?: string[] };
+  const templateRows: TemplateRow[] = Array.isArray(templates) ? templates : [];
+  const templatesById = new Map<string, TemplateRow>(templateRows
+    .map((template) => [text(template?.id), template] as const)
     .filter(([templateId]) => Boolean(templateId)));
   const stagesByTemplateId = new Map<string, any[]>();
   const templateIds = Array.from(templatesById.keys());

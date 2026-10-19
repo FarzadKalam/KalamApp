@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   Button, Form, Input, Select, Switch, DatePicker, message,
   Spin, Space, Tag, Row, Col, Card, Breadcrumb,
@@ -13,6 +13,8 @@ import { supabase } from '../../supabaseClient';
 import BlockEditor, { type Block } from '../../components/cms/BlockEditor';
 import SeoEditor, { type SeoData } from '../../components/cms/SeoEditor';
 import { calculateReadingTime, generateSlug } from '../../utils/seoHelpers';
+import { MODULES } from '../../moduleRegistry';
+import { TUTORIAL_PAGES, TUTORIAL_SURFACES } from '../../utils/tutorialContexts';
 
 type PostType = 'blog' | 'tutorial';
 
@@ -33,6 +35,9 @@ interface CmsPost {
   duration_minutes?: number;
   series_id?: string | null;
   series_order?: number | null;
+  help_contexts?: string[];
+  help_group?: string;
+  help_order?: number;
   // seo
   seo_title: string;
   seo_description: string;
@@ -53,8 +58,8 @@ const emptyPost: CmsPost = {
 // ──────────────────────────────────────────────────
 export default function CmsPostEditor() {
   const { id } = useParams<{ id: string }>();
-  const [searchParams] = useSearchParams();
-  const postType: PostType = (searchParams.get('type') as PostType) ?? 'blog';
+  const location = useLocation();
+  const postType: PostType = location.pathname.startsWith('/taze-system/tutorials') ? 'tutorial' : 'blog';
   const navigate = useNavigate();
 
   const [post, setPost] = useState<CmsPost>(emptyPost);
@@ -66,10 +71,21 @@ export default function CmsPostEditor() {
   const tableName = postType === 'blog' ? 'cms_blog_posts' : 'cms_tutorial_posts';
   const typeLabel = postType === 'blog' ? 'پست بلاگ' : 'آموزش';
   const listPath = postType === 'blog' ? '/cms_blog_posts' : '/cms_tutorial_posts';
+  const helpContextOptions = useMemo(() => [
+    ...TUTORIAL_PAGES,
+    ...TUTORIAL_SURFACES.map(surface => ({ value: `surface:${surface.value}`, label: `همه ماژول‌ها — ${surface.label}` })),
+    ...Object.values(MODULES).filter(module => !module.id.startsWith('cms_') && !module.id.startsWith('saas_')).flatMap(module => [
+      { value: `module:${module.id}`, label: `${module.titles.fa} — همه صفحات` },
+      ...TUTORIAL_SURFACES.map(surface => ({ value: `module:${module.id}:${surface.value}`, label: `${module.titles.fa} — ${surface.label}` })),
+    ]),
+  ], []);
 
   // load existing post
   useEffect(() => {
-    if (!id || id === 'new') return;
+    if (!id || id === 'new') {
+      setPost(emptyPost); setSlugEdited(false); setLoading(false);
+      return;
+    }
     let cancelled = false;
     const load = async () => {
       setLoading(true);
@@ -160,6 +176,9 @@ export default function CmsPostEditor() {
       };
 
       if (postType === 'tutorial') {
+        payload.help_contexts = post.help_contexts || [];
+        payload.help_group = post.help_group?.trim() || 'راهنما';
+        payload.help_order = post.help_order || 0;
         payload.difficulty_level = post.difficulty_level || null;
         payload.duration_minutes = post.duration_minutes || null;
         payload.series_id = post.series_id || null;
@@ -386,6 +405,15 @@ export default function CmsPostEditor() {
                   title={<span className="font-medium">تنظیمات آموزش</span>}
                 >
                   <Form layout="vertical" size="middle">
+                    <Form.Item label="نمایش آموزش در بخش‌های برنامه" extra="یک آموزش می‌تواند در چند صفحه یا فرم نمایش داده شود.">
+                      <Select mode="multiple" showSearch optionFilterProp="label" options={helpContextOptions} value={post.help_contexts || []} onChange={value => setPost(p => ({ ...p, help_contexts: value }))} placeholder="انتخاب صفحه یا ماژول" />
+                    </Form.Item>
+                    <Form.Item label="عنوان تب آموزش" extra="آموزش‌های هم‌گروه در یک تب نمایش داده می‌شوند.">
+                      <Input value={post.help_group || ''} placeholder="مثلاً شروع کار یا امکانات پیشرفته" onChange={e => setPost(p => ({ ...p, help_group: e.target.value }))} />
+                    </Form.Item>
+                    <Form.Item label="ترتیب نمایش">
+                      <Input type="number" value={post.help_order || 0} onChange={e => setPost(p => ({ ...p, help_order: Number(e.target.value) || 0 }))} />
+                    </Form.Item>
                     <Form.Item label="سطح دشواری">
                       <Select
                         value={post.difficulty_level}

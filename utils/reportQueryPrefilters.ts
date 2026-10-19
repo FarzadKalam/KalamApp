@@ -25,7 +25,7 @@ type FilterQuery = {
   lte: (field: string, value: unknown) => FilterQuery;
   in: (field: string, values: unknown[]) => FilterQuery;
   is: (field: string, value: null) => FilterQuery;
-  not: (field: string, operator: string, value: null) => FilterQuery;
+  not: (field: string, operator: string, value: string | null) => FilterQuery;
   or: (filters: string) => FilterQuery;
 };
 

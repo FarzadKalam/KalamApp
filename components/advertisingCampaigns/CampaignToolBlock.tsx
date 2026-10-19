@@ -162,17 +162,6 @@ const CampaignToolBlock: React.FC<Props> = ({ tool, onChange, disabled, initiall
               <Alert type="info" showIcon className="mt-3" message="اجرای واقعی، پیش‌نویس و حالت ترکیبی فرآیند V2 از زمینه همین ابزار استفاده می‌کنند و در داشبورد/مودال ابزار مدیریت می‌شوند." />
             </Card>
 
-            <Card size="small" title="نتیجه واقعی ابزار" className="!rounded-xl">
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                <CampaignField fieldKey="actual_start_at" label="شروع واقعی" type={FieldType.DATETIME} value={tool.actual_start_at} onChange={(actual_start_at) => onChange({ actual_start_at })} readonly={disabled} moduleId={ADVERTISING_CAMPAIGN_TOOLS_MODULE_ID} recordId={persistedToolId} />
-                <CampaignField fieldKey="actual_end_at" label="پایان واقعی" type={FieldType.DATETIME} value={tool.actual_end_at} onChange={(actual_end_at) => onChange({ actual_end_at })} readonly={disabled} moduleId={ADVERTISING_CAMPAIGN_TOOLS_MODULE_ID} recordId={persistedToolId} />
-                <CampaignField fieldKey="actual_cost" label="هزینه واقعی" type={FieldType.PRICE} value={tool.actual_cost} onChange={(actual_cost) => onChange({ actual_cost })} readonly={disabled} moduleId={ADVERTISING_CAMPAIGN_TOOLS_MODULE_ID} recordId={persistedToolId} />
-                <CampaignField fieldKey="actual_leads" label="لید منتسب‌شده" type={FieldType.NUMBER} value={tool.actual_leads} onChange={() => undefined} readonly moduleId={ADVERTISING_CAMPAIGN_TOOLS_MODULE_ID} recordId={persistedToolId} />
-                <CampaignField fieldKey="actual_customers" label="مشتری منتسب‌شده" type={FieldType.NUMBER} value={tool.actual_customers} onChange={() => undefined} readonly moduleId={ADVERTISING_CAMPAIGN_TOOLS_MODULE_ID} recordId={persistedToolId} />
-                <div className="md:col-span-2 xl:col-span-3"><CampaignField fieldKey="result_summary" label="خلاصه نتیجه اجرا" type={FieldType.LONG_TEXT} value={tool.result_summary} onChange={(result_summary) => onChange({ result_summary })} readonly={disabled} moduleId={ADVERTISING_CAMPAIGN_TOOLS_MODULE_ID} recordId={persistedToolId} /></div>
-              </div>
-            </Card>
-
             <Card size="small" title="تنظیمات اختصاصی ابزار" className="!rounded-xl">{channelEditor}</Card>
 
             <Card size="small" title="توضیحات تکمیلی ابزار" className="!rounded-xl">

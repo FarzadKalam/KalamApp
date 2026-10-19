@@ -1,3 +1,4 @@
+import { normalizeEmail } from './utils/email';
 import { AuthBindings } from "@refinedev/core";
 import { supabase } from "./supabaseClient";
 import { signOutLocalSession } from "./utils/authSession";
@@ -75,7 +76,7 @@ export const authProvider: AuthBindings = {
   login: async ({ email, password }) => {
     clearCachedUser();
     const { error } = await supabase.auth.signInWithPassword({
-      email,
+      email: normalizeEmail(email),
       password,
     });
 

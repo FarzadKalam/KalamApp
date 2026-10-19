@@ -535,12 +535,16 @@ describe('Login OTP and password flows', () => {
     authState.getUser.mockResolvedValue({ data: { user: { id: 'user-2', email: 'inactive@test.local', phone: '+989120000000' } }, error: null });
 
     renderLogin();
-    fireEvent.change(screen.getByPlaceholderText('admin@example.com'), { target: { value: 'inactive@test.local' } });
+    fireEvent.change(screen.getByPlaceholderText('admin@example.com'), { target: { value: 'inactive۱۲٣@test.local' } });
     const passwordInputs = document.body.querySelectorAll('input[type="password"]');
     fireEvent.change(passwordInputs[0] as HTMLInputElement, { target: { value: 'secret123' } });
     fireEvent.click(screen.getByText('ورود'));
 
     await waitFor(() => {
+      expect(authState.signInWithPassword).toHaveBeenCalledWith({
+        email: 'inactive123@test.local',
+        password: 'secret123',
+      });
       expect(authState.signOut).toHaveBeenCalled();
     });
     expect(document.body.textContent || '').toContain('حساب کاربری شما غیرفعال است');

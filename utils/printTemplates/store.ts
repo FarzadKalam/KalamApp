@@ -1743,9 +1743,10 @@ export const normalizeDynamicBlockTablesHtml = (
         (candidate: any) => String(candidate?.id || '') === blockId,
       );
       const canonicalHeader = canonicalTable.tHead?.rows?.[0];
-      if (canonicalHeader && Array.isArray(canonicalBlock?.tableColumns)) {
+      const canonicalColumns = canonicalBlock?.tableColumns;
+      if (canonicalHeader && Array.isArray(canonicalColumns)) {
         Array.from(canonicalHeader.cells || []).forEach((cell, index) => {
-          const column = canonicalBlock.tableColumns[index - 1];
+          const column = canonicalColumns[index - 1];
           if (index <= 0 || !column) return;
           cell.textContent = getPrintBlockColumnLabel(
             moduleId,
