@@ -109,18 +109,31 @@ const requireCallerOrgAccess = async (client: any, callerUserId: string, request
     throw new Error('داده‌های دمو فقط برای سازمان‌های دمو قابل مدیریت است.');
   }
 
-  const { data: company } = await client
+  const { data: company, error: companyError } = await client
     .from('company_settings')
-    .select('company_full_name, trade_name, email, mobile, brand_palette_key, industry')
+    .select('company_full_name, trade_name, email, mobile, brand_palette_key')
     .eq('org_id', profile.org_id)
     .order('created_at', { ascending: true })
     .limit(1)
     .maybeSingle();
+  if (companyError) throw companyError;
+
+  // Industry belongs to the SaaS onboarding request, not company_settings.
+  // Scope it to this organization so a user's other demos cannot affect the pack.
+  const { data: onboarding, error: onboardingError } = await client
+    .from('saas_onboarding_requests')
+    .select('industry')
+    .eq('org_id', profile.org_id)
+    .eq('status', 'provisioned')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (onboardingError) throw onboardingError;
 
   return {
     profile,
     saasSettings,
-    company: company || null,
+    company: company ? { ...company, industry: onboarding?.industry || null } : { industry: onboarding?.industry || null },
   };
 };
 
