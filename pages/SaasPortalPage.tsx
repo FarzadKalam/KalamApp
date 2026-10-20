@@ -210,6 +210,23 @@ const SaasPortalPage: React.FC = () => {
 
     const restoreStep = async () => {
       if (!savedStep || savedStep === 'phone') return;
+      if (savedStep === 'provisioning' || savedStep === 'done') {
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (sessionData?.session?.user?.id) {
+          const { data: organizations } = await supabase.rpc('get_current_user_organization_accesses');
+          const owned = Array.isArray(organizations)
+            ? organizations.find((item: OrganizationAccess) => item?.is_owner && item?.resolved_host)
+            : null;
+          if (owned?.resolved_host) {
+            clearWizardState();
+            window.location.replace(`https://${owned.resolved_host}`);
+            return;
+          }
+        }
+        setStep('info');
+        setError('راه‌اندازی کامل نشد. اطلاعات را بررسی کنید و دوباره ادامه دهید.');
+        return;
+      }
       // info مرحله قبل از OTP است — نیازی به session ندارد
       if (savedStep === 'info') {
         setStep('info');
@@ -481,6 +498,7 @@ const SaasPortalPage: React.FC = () => {
   };
 
   const handleVerifyOtp = async () => {
+    if (loading) return;
     const token = normalizeOtpToken(otpCode);
     if (token.length < 4) { setError('کد تایید را وارد کنید.'); return; }
     setError('');
@@ -542,6 +560,8 @@ const SaasPortalPage: React.FC = () => {
   const runProvision = useCallback(async () => {
     const normalizedSlug = normalizeSaasSlug(slug);
     setProvisionWarning('');
+    setStep('provisioning');
+    setProvisionMsgIdx(0);
 
     try {
       const normalizedEmail = normalizeOwnerEmail(ownerEmail);
@@ -576,9 +596,6 @@ const SaasPortalPage: React.FC = () => {
         throw new Error(ownerSetupReason ? `${ownerSetupReason}: ${ownerSetupMessage}` : ownerSetupMessage);
       }
 
-      setStep('provisioning');
-      setProvisionMsgIdx(0);
-
       const { data, error: rpcErr } = await supabase.rpc(
         isExistingMemberCreatingDemo
           ? 'provision_self_service_demo_for_existing_member'
@@ -609,6 +626,9 @@ const SaasPortalPage: React.FC = () => {
 
       setProvisionResult(result);
       clearWizardState();
+      // The organization already exists. Show its address and login action even
+      // if optional sample data takes longer or fails.
+      setStep('done');
 
       try {
         const seedResult = await seedCurrentOrgDemoData({ orgId: result.org_id || null });
@@ -618,10 +638,6 @@ const SaasPortalPage: React.FC = () => {
       } catch {
         setProvisionWarning('فضای شما ساخته شد، اما بخشی از داده‌های نمونه اولیه کامل نشد و می‌توانید بعداً دوباره تلاش کنید.');
       }
-
-      // کمی صبر تا کاربر progress رو ببینه
-      await new Promise((r) => setTimeout(r, 1800));
-      setStep('done');
 
       // ریدایرکت خودکار بعد از ۳ ثانیه
       setTimeout(() => {

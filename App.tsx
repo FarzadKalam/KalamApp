@@ -410,6 +410,26 @@ const MarketingSiteHostApp: React.FC = () => {
   );
 };
 
+// Keep the onboarding route outside the authenticated Refine tree. Signing in
+// changes App branding/session state; an inline Refine child would remount the
+// wizard while its provisioning request is still running.
+const SaasOnboardingHostApp: React.FC = () => (
+  <HelmetProvider>
+    <BrowserRouter>
+      <ConfigProvider direction="rtl" locale={faIR} theme={{ token: { fontFamily: "Peyda, Tahoma, Arial, sans-serif" } }}>
+        <AntdApp message={{ top: 72, duration: 3.5, maxCount: 4 }} notification={{ placement: "topLeft", duration: 4.5, maxCount: 4 }}>
+          <LazyRouteBoundary>
+            <Routes>
+              <Route path="/" element={<SaasPortalPage />} />
+              <Route path="/demo" element={<SaasPortalPage />} />
+            </Routes>
+          </LazyRouteBoundary>
+        </AntdApp>
+      </ConfigProvider>
+    </BrowserRouter>
+  </HelmetProvider>
+);
+
 function App() {
   const marketingHost = isMarketingHost();
   const saasAppHost = isSaasAppHost();
@@ -417,6 +437,9 @@ function App() {
 
   if (marketingHost) {
     return <MarketingSiteHostApp />;
+  }
+  if (isSaasOnboardingPath(window.location.pathname, saasAppHost)) {
+    return <SaasOnboardingHostApp />;
   }
 
   const [isDarkMode, setIsDarkMode] = useState<boolean>(getInitialDarkMode);

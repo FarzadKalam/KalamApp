@@ -46,7 +46,6 @@ import OccasionsWidget from '../components/dashboard/OccasionsWidget';
 import TaskCalendarWidget from '../components/dashboard/TaskCalendarWidget';
 import ReportsSliderWidget from '../components/dashboard/ReportsSliderWidget';
 import OurProcessesWidget from '../components/dashboard/OurProcessesWidget';
-import DashboardTutorialsWidget from '../components/dashboard/DashboardTutorialsWidget';
 import StoryBar from '../components/stories/StoryBar';
 import StoryViewerModal from '../components/stories/StoryViewerModal';
 import StoryEditorModal from '../components/stories/StoryEditorModal';
@@ -1563,12 +1562,6 @@ const Dashboard: React.FC = () => {
               ))}
             </div>
           </Card>
-        </div>
-      )}
-
-      {canShowWidget('tutorials') && (
-        <div className="mb-6">
-          <DashboardTutorialsWidget />
         </div>
       )}
 

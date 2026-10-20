@@ -164,6 +164,33 @@ describe('SaasPortalPage OTP flow', () => {
     });
   });
 
+  it('shows a provisioning state immediately after OTP while the organization request is pending', async () => {
+    mockDemoRpc();
+    rpcState.mockImplementation(async (fn: string, payload: any) => {
+      if (fn === 'provision_self_service_demo') return new Promise(() => undefined);
+      if (fn === 'check_phone_login_candidate') return { data: { exists_in_profiles: false, exists_in_auth: false }, error: null };
+      if (fn === 'lookup_phone_signup_invite') return { data: { exists: false }, error: null };
+      if (fn === 'check_saas_slug_availability') return { data: { available: true, normalized_slug: payload?.p_slug || 'testco' }, error: null };
+      return { data: null, error: null };
+    });
+    await goToInfoStep();
+    await fillInfoForm();
+    await sendOtpFromInfo();
+    await verifyOtp();
+    expect(await screen.findByText('در حال آماده‌سازی تازه سیستم')).toBeTruthy();
+  });
+
+  it('shows the ready page when optional demo data is still loading', async () => {
+    functionState.invoke.mockImplementation((name: string) => name === 'demo-data-admin'
+      ? new Promise(() => undefined)
+      : Promise.resolve({ data: { success: true }, error: null }));
+    await goToInfoStep();
+    await fillInfoForm();
+    await sendOtpFromInfo();
+    await verifyOtp();
+    expect(await screen.findByText('آماده است!')).toBeTruthy();
+  });
+
   it('shows owner email conflict inline on setup_owner_credentials conflict', async () => {
     functionState.invoke.mockResolvedValue({
       data: {
