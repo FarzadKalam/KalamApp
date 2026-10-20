@@ -52,6 +52,8 @@ import {
   STORIES_PERMISSION_FIELDS,
   SAAS_ADMIN_PERMISSION_KEY,
   SAAS_ADMIN_PERMISSION_FIELDS,
+  SUPPORT_TICKETS_PERMISSION_KEY,
+  SUPPORT_TICKETS_PERMISSION_FIELDS,
   isSaasAdminModuleId,
   MOBILE_FOOTER_PERMISSION_KEY,
   DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES,
@@ -670,7 +672,9 @@ const RolesTab: React.FC = () => {
                 <div key={field.key} className="flex items-center gap-2 text-sm bg-gray-50 dark:bg-white/5 p-2 rounded border border-transparent dark:border-gray-800">
                   <Switch
                     size="small"
-                    checked={modPerms.fields?.[field.key] !== false}
+                    checked={moduleId === SUPPORT_TICKETS_PERMISSION_KEY && (field.key === 'view_all' || field.key === 'reply_all')
+                      ? modPerms.fields?.[field.key] === true
+                      : modPerms.fields?.[field.key] !== false}
                     onChange={(checked) => handlePermissionChange(moduleId, 'field', field.key, checked)}
                     disabled={disabled}
                     className="bg-gray-300"
@@ -1222,6 +1226,21 @@ const RolesTab: React.FC = () => {
                   <div className="pl-6 pt-2">
                     <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">دسترسی‌های انتشار و مدیریت</Divider>
                     {renderFieldSwitches(STORIES_PERMISSION_KEY, STORIES_PERMISSION_FIELDS, getModulePerms(STORIES_PERMISSION_KEY).view === false)}
+                  </div>
+                </Panel>
+
+                <Panel key={SUPPORT_TICKETS_PERMISSION_KEY} className="dark:border-gray-800" header={
+                  <div className="flex items-center justify-between w-full dark:text-gray-200">
+                    <span className="font-bold">تیکت‌های پشتیبانی تازه سیستم</span>
+                    <Checkbox className="dark:text-gray-400" checked={getModulePerms(SUPPORT_TICKETS_PERMISSION_KEY).view !== false}
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={(event) => handlePermissionChange(SUPPORT_TICKETS_PERMISSION_KEY, 'view', undefined, event.target.checked)}>دسترسی</Checkbox>
+                  </div>
+                }>
+                  <div className="pl-6 pt-2">
+                    {renderFieldSwitches(SUPPORT_TICKETS_PERMISSION_KEY, SUPPORT_TICKETS_PERMISSION_FIELDS,
+                      getModulePerms(SUPPORT_TICKETS_PERMISSION_KEY).view === false)}
+                    <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">در حالت پیش‌فرض اعضا تیکت‌های خود و مدیر سازمان همهٔ تیکت‌ها را می‌بیند.</p>
                   </div>
                 </Panel>
 

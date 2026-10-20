@@ -57,7 +57,7 @@ export const SAAS_ADMIN_PERMISSION_KEY = '__saas_admin';
 export const COMMUNICATIONS_PERMISSION_KEY = '__communications';
 export const BOT_GROUP_ACCESS_PERMISSION_KEY = 'bot_group_access';
 export { CUSTOMER_CLUB_PERMISSION_KEY };
-export const SAAS_ADMIN_MODULE_IDS = ['saas_orgs', 'saas_demo_requests', 'saas_users', 'saas_user_announcements'] as const;
+export const SAAS_ADMIN_MODULE_IDS = ['saas_orgs', 'saas_demo_requests', 'saas_users', 'saas_user_announcements', 'saas_support_tickets'] as const;
 const SAAS_ADMIN_MODULE_ID_SET = new Set<string>(SAAS_ADMIN_MODULE_IDS);
 export const isSaasAdminModuleId = (moduleId?: string | null) =>
   SAAS_ADMIN_MODULE_ID_SET.has(String(moduleId || '').trim());
@@ -70,6 +70,10 @@ export const RECORD_LOCK_PERMISSION_FIELDS = [
   { key: RECORD_LOCK_PERMISSION_KEYS.unlock, label: 'باز کردن رکورد' },
 ] as const;
 export const SAAS_ADMIN_PERMISSION_FIELDS = [
+  { key: 'support_view', label: 'تیکت‌ها: مشاهده' },
+  { key: 'support_reply', label: 'تیکت‌ها: پاسخ و ارجاع' },
+  { key: 'support_manage', label: 'تیکت‌ها: مسئول و وضعیت' },
+  { key: 'support_workflows', label: 'تیکت‌ها: تنظیم گردش‌کار' },
   { key: 'demo_override', label: 'override حد دمو برای شماره‌ها' },
   { key: 'edit_orgs', label: 'ویرایش سازمان‌ها' },
   { key: 'edit_requests', label: 'ویرایش درخواست‌های دمو' },
@@ -77,6 +81,14 @@ export const SAAS_ADMIN_PERMISSION_FIELDS = [
   { key: 'publish_saas_story', label: 'انتشار استوری برای همه سازمان‌ها' },
   { key: 'publish_saas_admin_story', label: 'انتشار استوری برای مدیران سازمان‌ها' },
 ];
+export const SUPPORT_TICKETS_PERMISSION_KEY = '__support_tickets';
+export const SUPPORT_TICKETS_PERMISSION_FIELDS = [
+  { key: 'create', label: 'ثبت تیکت' },
+  { key: 'view_own', label: 'مشاهده تیکت‌های خود' },
+  { key: 'reply_own', label: 'پاسخ به تیکت‌های خود' },
+  { key: 'view_all', label: 'مشاهده همه تیکت‌های سازمان' },
+  { key: 'reply_all', label: 'پاسخ به همه تیکت‌های سازمان' },
+] as const;
 export const READY_TEXTS_PERMISSION_FIELDS = [
   { key: '__ready_texts_view', label: 'متن‌های آماده: مشاهده' },
   { key: '__ready_texts_add', label: 'متن‌های آماده: افزودن' },
@@ -496,7 +508,15 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
     edit: false,
     delete: false,
     record_scope: 'all',
-    fields: createFieldsMap(SAAS_ADMIN_PERMISSION_FIELDS),
+    fields: { ...createFieldsMap(SAAS_ADMIN_PERMISSION_FIELDS), support_view: false, support_reply: false, support_manage: false, support_workflows: false },
+  };
+
+  defaults[SUPPORT_TICKETS_PERMISSION_KEY] = {
+    view: true,
+    edit: true,
+    delete: false,
+    record_scope: 'own',
+    fields: { create: true, view_own: true, reply_own: true },
   };
 
   return defaults;

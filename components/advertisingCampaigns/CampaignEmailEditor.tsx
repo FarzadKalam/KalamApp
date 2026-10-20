@@ -1,25 +1,17 @@
 import React, { useMemo } from 'react';
 import { Alert, Button, Card, Typography } from 'antd';
-import { DownloadOutlined } from '@ant-design/icons';
-import AdaptiveSelectField from '../AdaptiveSelectField';
 import { FieldType } from '../../types';
-import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import { formatPersianPrice } from '../../utils/persianNumberFormatter';
 import { useCurrencyConfig } from '../../utils/currency';
 import type { CampaignEmailConfig, CampaignToolRecord } from './types';
 import CampaignAttachmentsField from './CampaignAttachmentsField';
-import CampaignField, { useCampaignFieldSurface } from './CampaignField';
+import CampaignField from './CampaignField';
 import { getPersistedCampaignToolId } from './campaignUtils';
-import CampaignImportProgress from './CampaignImportProgress';
-import { downloadCampaignAudienceSample } from './campaignImportSample';
 import CampaignMessageVariablePicker, { appendCampaignMessageVariable } from './CampaignMessageVariables';
 
 type Props = { tool: CampaignToolRecord; onChange: (patch: Partial<CampaignToolRecord>) => void; disabled?: boolean };
 
 const CampaignEmailEditor: React.FC<Props> = ({ tool, onChange, disabled }) => {
-  const fieldSurface = useCampaignFieldSurface();
-  const campaignPopupContainer = fieldSurface.popupContainer || resolveOverlayPopupContainer;
-  const campaignOverlayZIndexBase = fieldSurface.overlayZIndexBase || 13200;
   const { label: currencyLabel } = useCurrencyConfig();
   const config: CampaignEmailConfig = { audience_sources: ['internal'], vat_percent: 10, unsubscribe_footer_enabled: true, attachments: [], ...tool.config, kind: 'email' } as CampaignEmailConfig;
   const persistedToolId = getPersistedCampaignToolId(tool.id);
@@ -37,17 +29,6 @@ const CampaignEmailEditor: React.FC<Props> = ({ tool, onChange, disabled }) => {
         <CampaignField fieldKey="email_estimated_audience" label="تعداد تخمینی مخاطبان ایمیل" type={FieldType.NUMBER} value={config.estimated_audience} onChange={(estimated_audience) => patch({ estimated_audience })} readonly={disabled} />
         <CampaignField fieldKey="email_scheduled_at" label="زمان شروع ارسال" type={FieldType.DATETIME} value={config.scheduled_at} onChange={(scheduled_at) => patch({ scheduled_at })} readonly={disabled} />
       </div>
-      <div>
-        <div className="mb-1.5 text-xs font-medium text-slate-500">مخاطبان ارسال</div>
-        <AdaptiveSelectField mode="multiple" value={config.audience_sources || []} onChange={(audience_sources) => patch({ audience_sources })} options={[{ label: 'از داخل نرم‌افزار', value: 'internal' }, { label: 'افزودن از اکسل', value: 'excel' }]} disabled={disabled} pickerTitle="منبع مخاطبان ایمیل" getPopupContainer={campaignPopupContainer as any} modalContainer={campaignPopupContainer} preferLocalPopupContainer overlayZIndexBase={campaignOverlayZIndexBase} />
-      </div>
-      {config.audience_sources?.includes('excel') ? (
-        <div className="space-y-3">
-          <Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadCampaignAudienceSample()}>دانلود فایل نمونه</Button>
-          <CampaignAttachmentsField moduleId="advertising_campaign_tools" recordId={persistedToolId} title="فایل‌های مخاطبان ایمیل" fileTypes={['file']} value={config.import_attachments} onChange={(import_attachments) => patch({ import_attachments })} disabled={disabled} />
-          {persistedToolId ? <CampaignImportProgress campaignId={tool.campaign_id} toolId={persistedToolId} channel="email" attachments={config.import_attachments || []} disabled={disabled} /> : null}
-        </div>
-      ) : null}
       <CampaignField fieldKey="email_subject" label="موضوع ایمیل" value={config.subject} onChange={(subject) => patch({ subject })} readonly={disabled} required />
       <CampaignField fieldKey="email_preheader" label="پیش‌نمایش کوتاه (Preheader)" value={config.preheader} onChange={(preheader) => patch({ preheader })} readonly={disabled} />
       <div className="space-y-2">

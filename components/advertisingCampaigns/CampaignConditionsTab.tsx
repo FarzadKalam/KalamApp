@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Card, Collapse, Empty, Typography } from 'antd';
+import { Alert, Button, Card, Collapse, Empty, Typography } from 'antd';
+import { DownloadOutlined } from '@ant-design/icons';
+import AdaptiveSelectField from '../AdaptiveSelectField';
 import WorkflowConditionsGroup from '../workflows/WorkflowConditionsGroup';
 import { getWorkflowConditionFields } from '../../utils/workflowHelpers';
 import { loadWorkflowConditionEditorOptions } from '../../utils/workflowConditionOptions';
@@ -10,6 +12,10 @@ import CampaignField from './CampaignField';
 import { FieldType } from '../../types';
 import CampaignAudiencePreview from './CampaignAudiencePreview';
 import { invalidateCampaignAudienceSummaryConfig } from './campaignUtils';
+import { getPersistedCampaignToolId } from './campaignUtils';
+import CampaignAttachmentsField from './CampaignAttachmentsField';
+import CampaignImportProgress from './CampaignImportProgress';
+import { downloadCampaignAudienceSample } from './campaignImportSample';
 
 type OptionState = {
   dynamicOptions: Record<string, Array<{ label: string; value: string }>>;
@@ -39,6 +45,8 @@ const CampaignConditionsTab: React.FC<Props> = ({ campaignId, campaignName, tool
       && Array.isArray(sources)
       && sources.includes('internal');
   }), [tools]);
+  const audienceTools = useMemo(() => tools.filter((tool) => tool.enabled !== false && ['sms', 'email'].includes(tool.tool_type)), [tools]);
+  const hasInternalAudience = applicableTools.length > 0;
 
   const updateRule = (targetModule: CampaignTargetModule, patch: Partial<CampaignAudienceRule>) => {
     onRuleChange(targetModule, patch);
@@ -68,12 +76,20 @@ const CampaignConditionsTab: React.FC<Props> = ({ campaignId, campaignName, tool
     return () => { active = false; };
   }, [activeKeys, optionsByModule]);
 
-  if (applicableTools.length === 0) {
-    return <Empty description="هیچ ابزار انتخاب‌شده‌ای مخاطب داخل نرم‌افزار ندارد؛ در تنظیمات پیامک، ایمیل یا پی‌وی بات گزینه «از داخل نرم‌افزار» را فعال کنید." />;
-  }
-
   return (
     <div className="space-y-4 pb-4">
+      {audienceTools.map((tool) => {
+        const config = tool.config as any;
+        const sources: string[] = Array.isArray(config?.audience_sources) ? config.audience_sources : ['internal'];
+        const persistedToolId = getPersistedCampaignToolId(tool.id);
+        return <Card key={tool.id} size="small" title={`مخاطبان ${getCampaignToolLabel(tool.tool_type)}`} className="!rounded-xl">
+          <div className="space-y-3">
+            <div><div className="mb-1 text-xs font-medium">نوع ارسال و منبع مخاطبان</div><AdaptiveSelectField mode="multiple" value={sources} onChange={(audience_sources) => onToolChange(tool.id, { config: { ...invalidateCampaignAudienceSummaryConfig(tool.tool_type, tool.config), audience_sources } as any })} options={[{ label: 'از داخل نرم‌افزار', value: 'internal' }, { label: 'از فایل اکسل', value: 'excel' }]} disabled={disabled} pickerTitle="منبع مخاطبان" getPopupContainer={resolveOverlayPopupContainer as any} modalContainer={resolveOverlayPopupContainer} /></div>
+            {sources.includes('excel') ? <><Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadCampaignAudienceSample()}>دانلود فایل نمونه</Button><CampaignAttachmentsField moduleId="advertising_campaign_tools" recordId={persistedToolId} title="فایل‌های مخاطبان" fileTypes={['file']} value={config?.import_attachments || []} onChange={(import_attachments) => onToolChange(tool.id, { config: { ...invalidateCampaignAudienceSummaryConfig(tool.tool_type, tool.config), import_attachments } as any })} disabled={disabled} /></> : null}
+          </div>
+        </Card>;
+      })}
+      {!hasInternalAudience ? <Empty description="ارسال از داخل نرم‌افزار خاموش است؛ فایل مخاطبان را بالا انتخاب و پردازش کنید." /> : <>
       <Alert
         type="info"
         showIcon
@@ -144,6 +160,11 @@ const CampaignConditionsTab: React.FC<Props> = ({ campaignId, campaignName, tool
         onBeforeSearch={onBeforeAudienceSearch}
         criteriaSignature={JSON.stringify(rules)}
       />
+      </>}
+      {audienceTools.filter((tool) => (tool.config as any)?.audience_sources?.includes('excel')).map((tool) => {
+        const persistedToolId = getPersistedCampaignToolId(tool.id);
+        return persistedToolId ? <CampaignImportProgress key={tool.id} campaignId={campaignId} toolId={persistedToolId} channel={tool.tool_type as 'sms' | 'email'} attachments={(tool.config as any)?.import_attachments || []} disabled={disabled} /> : null;
+      })}
     </div>
   );
 };

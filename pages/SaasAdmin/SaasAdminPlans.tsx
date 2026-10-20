@@ -147,6 +147,7 @@ const MODULE_GROUPS: { label: string; modules: { id: string; label: string }[] }
 const FEATURE_OPTIONS = [
   { id: 'ai_chat', label: 'گفتگو با هوش مصنوعی' },
   { id: 'ai_knowledge', label: 'دانش سازمانی AI' },
+  { id: 'support_tickets', label: 'تیکت پشتیبانی تازه سیستم' },
   { id: 'ai_knowledge_limited', label: 'دانش سازمانی AI (محدود)' },
   { id: 'ai_document_analysis', label: 'تحلیل اسناد با AI' },
   { id: 'ai_web_search', label: 'جستجوی وب AI' },

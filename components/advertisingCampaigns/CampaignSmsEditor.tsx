@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Divider, Space, Tag, Typography } from 'antd';
-import { CalculatorOutlined, DownloadOutlined } from '@ant-design/icons';
+import { Button, Card, Divider, Space, Tag, Typography } from 'antd';
+import { CalculatorOutlined } from '@ant-design/icons';
 import AdaptiveSelectField from '../AdaptiveSelectField';
 import WorkflowActionsBuilder from '../workflows/WorkflowActionsBuilder';
 import { FieldType } from '../../types';
@@ -19,10 +19,7 @@ import {
   getPersistedCampaignToolId,
 } from './campaignUtils';
 import type { CampaignSmsConfig, CampaignToolRecord } from './types';
-import CampaignAttachmentsField from './CampaignAttachmentsField';
 import CampaignField, { useCampaignFieldSurface } from './CampaignField';
-import CampaignImportProgress from './CampaignImportProgress';
-import { downloadCampaignAudienceSample } from './campaignImportSample';
 import CampaignMessageVariablePicker, { appendCampaignMessageVariable } from './CampaignMessageVariables';
 
 type CampaignSmsEditorProps = {
@@ -108,29 +105,9 @@ const CampaignSmsEditor: React.FC<CampaignSmsEditorProps> = ({ tool, onChange, d
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 dark:border-white/10 dark:bg-white/5">
-          <div className="mb-1 text-xs font-medium text-slate-500">مخاطبان ارسال</div>
-          <AdaptiveSelectField mode="multiple" value={config.audience_sources || []} onChange={(audience_sources) => patchConfig({ audience_sources })} options={[{ label: 'از داخل نرم‌افزار', value: 'internal' }, { label: 'افزودن از اکسل', value: 'excel' }]} disabled={disabled} pickerTitle="منبع مخاطبان پیامک" getPopupContainer={campaignPopupContainer as any} modalContainer={campaignPopupContainer} preferLocalPopupContainer overlayZIndexBase={campaignOverlayZIndexBase} />
-        </div>
-        <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 dark:border-white/10 dark:bg-white/5">
           <CampaignField fieldKey="sms_scheduled_at" label="زمان برنامه‌ریزی شروع ارسال" type={FieldType.DATETIME} value={config.scheduled_at} onChange={(scheduled_at) => patchConfig({ scheduled_at })} readonly={disabled} />
         </div>
       </div>
-      {config.audience_sources?.includes('excel') ? (
-        <div className="space-y-2">
-          <Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadCampaignAudienceSample()}>دانلود فایل نمونه</Button>
-          <CampaignAttachmentsField
-            moduleId="advertising_campaign_tools"
-            recordId={persistedToolId}
-            title="فایل‌های مخاطبان پیامک"
-            fileTypes={['file']}
-            value={config.import_attachments}
-            onChange={(import_attachments) => patchConfig({ import_attachments })}
-            disabled={disabled}
-          />
-          <Alert type="info" showIcon message="فایل‌ها پس از ذخیره، به‌صورت امن و سروری پردازش می‌شوند؛ ارقام فارسی، UTF-8، رکوردهای تکراری و شماره‌های نامعتبر در گزارش import مشخص خواهند شد." />
-          {persistedToolId ? <CampaignImportProgress campaignId={tool.campaign_id} toolId={persistedToolId} channel="sms" attachments={config.import_attachments || []} disabled={disabled} /> : null}
-        </div>
-      ) : null}
 
       <Divider />
       <div className="flex items-center justify-between gap-3">

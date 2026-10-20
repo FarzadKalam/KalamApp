@@ -140,6 +140,8 @@ const loadLandingPageEditor = () => import("./pages/SaasAdmin/LandingPageEditor"
 const loadCmsPageEditor = () => import("./pages/SaasAdmin/CmsPageEditor");
 const loadApiDocsPage = () => import("./pages/ApiDocsPage");
 const loadMessagesPage = () => import("./pages/MessagesPage");
+const loadSupportTicketsPage = () => import("./pages/SupportTicketsPage");
+const loadSupportWorkflowsPage = () => import("./pages/SupportTicketsPage").then((page) => ({ default: page.SupportWorkflowsPage }));
 const loadInstagramInboxPage = () => import("./pages/InstagramInboxPage");
 const loadCampaignWizardPage = () => import("./pages/CampaignWizardPage");
 const loadLayout = () => import("./components/Layout");
@@ -202,6 +204,8 @@ const LandingPageEditor = lazy(loadLandingPageEditor);
 const CmsPageEditor = lazy(loadCmsPageEditor);
 const ApiDocsPage = lazy(loadApiDocsPage);
 const MessagesPage = lazy(loadMessagesPage);
+const SupportTicketsPage = lazy(loadSupportTicketsPage);
+const SupportWorkflowsPage = lazy(loadSupportWorkflowsPage);
 const InstagramInboxPage = lazy(loadInstagramInboxPage);
 const CampaignWizardPage = lazy(loadCampaignWizardPage);
 const Layout = lazy(loadLayout);
@@ -870,6 +874,8 @@ function App() {
             <Route path="/attendance/daily/:scheduleId" element={<AttendanceDailySchedulePage />} />
             <Route path="/mbti_assessments/:id/report" element={<MbtiAssessmentReportPage />} />
             <Route path="/messages" element={<MessagesPage />} />
+            <Route path="/support/tickets" element={<SupportTicketsPage />} />
+            <Route path="/support/tickets/:ticketId" element={<SupportTicketsPage />} />
             <Route path="/instagram" element={<InstagramInboxPage />} />
             <Route path="/gallery" element={<FilesGalleryPage />} />
             <Route path="/org-knowledge" element={<OrgKnowledgePage />} />
@@ -907,6 +913,9 @@ function App() {
 
             {/* SaaS Admin — فقط برای کاربران با permission __saas_admin */}
             <Route path="/taze-system" element={<SaasAdminDashboard />} />
+            <Route path="/taze-system/tickets" element={<SupportTicketsPage admin />} />
+            <Route path="/taze-system/tickets/workflows" element={<SupportWorkflowsPage />} />
+            <Route path="/taze-system/tickets/:ticketId" element={<SupportTicketsPage admin />} />
             <Route path="/taze-system/orgs" element={<Navigate to="/saas_orgs" replace />} />
             <Route path="/taze-system/requests" element={<Navigate to="/saas_demo_requests" replace />} />
             <Route path="/taze-system/announcements" element={<Navigate to="/saas_user_announcements" replace />} />

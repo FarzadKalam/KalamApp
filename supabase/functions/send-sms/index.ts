@@ -42,7 +42,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'send-sms-2026-08-27-01';
+const FUNCTION_BUILD = 'send-sms-2026-10-20-01';
 
 const json = (status: number, payload: Record<string, any>) =>
   new Response(JSON.stringify({ build: FUNCTION_BUILD, ...payload }), {
@@ -1196,7 +1196,7 @@ const sendOtpViaConsoleAdvanced = async (phone: string, otp: string, settings: S
     phone: maskPhoneForLog(phone),
     timeout_ms: timeoutMs,
     provider_mode: 'console_advanced',
-    endpoint,
+    endpoint_host: new URL(endpoint).hostname,
   });
   const timeout = createTimeoutSignal(timeoutMs);
   let response: Response;
@@ -1275,7 +1275,7 @@ const sendOtpViaConsoleShared = async (phone: string, otp: string, settings: Sms
     phone: maskPhoneForLog(phone),
     timeout_ms: timeoutMs,
     provider_mode: 'console_shared',
-    endpoint,
+    endpoint_host: new URL(endpoint).hostname,
     body_id: bodyId,
   });
   const timeout = createTimeoutSignal(timeoutMs);
@@ -1499,6 +1499,13 @@ Deno.serve(async (req) => {
           error: message.slice(0, 300),
         });
         console.error('[send-sms] otp delivery error', message);
+        // The provider can accept the SMS and time out before acknowledging it.
+        // GoTrue treats any hook error as an OTP failure, even when the code arrives.
+        // Keep the generated code usable; the user can request another if no SMS arrives.
+        if (/^(?:timeout:|TimeoutError|AbortError)/i.test(message)) {
+          console.warn('[send-sms] otp delivery acknowledgment timed out; allowing verification or resend');
+          return authHookSuccess();
+        }
         return authHookError(400, message);
       }
     }

@@ -220,17 +220,36 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
   const [conditionsAll, setConditionsAll] = useState<WorkflowCondition[]>([]);
   const [conditionsAny, setConditionsAny] = useState<WorkflowCondition[]>([]);
   const [actions, setActions] = useState<WorkflowAction[]>([]);
+  const [supportCategoryOptions, setSupportCategoryOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [viewMode, setViewMode] = useState<WorkflowEditorViewMode>(() => readStoredWorkflowViewMode());
   const [flowSelection, setFlowSelection] = useState<FlowSelection | null>(null);
 
+  useEffect(() => {
+    if (!open || moduleId !== 'saas_support_tickets') return;
+    let active = true;
+    void supabase.rpc('support_list_categories').then(({ data, error }) => {
+      if (active && !error && Array.isArray(data)) {
+        setSupportCategoryOptions(data.map((category: { code: string; title: string }) => ({
+          value: category.code, label: category.title,
+        })));
+      }
+    });
+    return () => { active = false; };
+  }, [open, moduleId]);
+
+  const withSupportCategories = (fields: ModuleField[]): ModuleField[] =>
+    moduleId === 'saas_support_tickets' && supportCategoryOptions.length
+      ? fields.map((field) => field.key === 'category_code' ? { ...field, options: supportCategoryOptions } : field)
+      : fields;
+
   const selectedModuleFields: ModuleField[] = useMemo(
-    () => MODULES[moduleId]?.fields || [],
-    [moduleId]
+    () => withSupportCategories(MODULES[moduleId]?.fields || []),
+    [moduleId, supportCategoryOptions]
   );
 
   const conditionFields: ModuleField[] = useMemo(
-    () => getWorkflowConditionFields(moduleId),
-    [moduleId]
+    () => withSupportCategories(getWorkflowConditionFields(moduleId)),
+    [moduleId, supportCategoryOptions]
   );
   const conditionFieldKeySet = useMemo(
     () =>

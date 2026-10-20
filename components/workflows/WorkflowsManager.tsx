@@ -16,6 +16,7 @@ type WorkflowsManagerProps = {
   onClose?: () => void;
   defaultModuleId?: string | null;
   context?: 'settings' | 'module_list';
+  supportOnly?: boolean;
 };
 
 type WorkflowsPermission = {
@@ -47,6 +48,7 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
   onClose,
   defaultModuleId,
   context = 'module_list',
+  supportOnly = false,
 }) => {
   const { message } = App.useApp();
   const [loading, setLoading] = useState(false);
@@ -55,7 +57,9 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<WorkflowRecord | null>(null);
   const [isCreatingFromMediaDraft, setIsCreatingFromMediaDraft] = useState(false);
-  const [permissions, setPermissions] = useState<WorkflowsPermission>(defaultPerms);
+  const [permissions, setPermissions] = useState<WorkflowsPermission>(supportOnly
+    ? { ...defaultPerms, view: false, edit: false, delete: false }
+    : defaultPerms);
   const [searchParams] = useSearchParams();
   const [openedDraftKey, setOpenedDraftKey] = useState('');
 
@@ -84,10 +88,12 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
   const moduleOptions = useMemo(
     () =>
       Object.values(MODULES)
-        .filter((module) => !isSaasAdminModuleId(module.id) && module.registryVisibility?.workflows !== false)
+        .filter((module) => supportOnly
+          ? module.id === 'saas_support_tickets'
+          : !isSaasAdminModuleId(module.id) && module.registryVisibility?.workflows !== false)
         .map((module) => ({ label: module.titles.fa, value: module.id }))
         .sort((a, b) => a.label.localeCompare(b.label, 'fa')),
-    []
+    [supportOnly]
   );
 
   const canView = permissions.view !== false;
@@ -106,6 +112,12 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
 
   const fetchPermissions = useCallback(async () => {
     try {
+      if (supportOnly) {
+        const { data, error } = await supabase.rpc('support_is_operator', { p_permission: 'support_workflows' });
+        if (error) throw error;
+        setPermissions({ view: data === true, edit: data === true, delete: data === true, fields: { settings_tab: true, module_list_button: true } });
+        return;
+      }
       const { data: authData } = await supabase.auth.getUser();
       const user = authData?.user;
       if (!user) return;
@@ -135,17 +147,16 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
         },
       });
     } catch {
-      setPermissions(defaultPerms);
+      setPermissions(supportOnly ? { ...defaultPerms, view: false, edit: false, delete: false } : defaultPerms);
     }
-  }, []);
+  }, [supportOnly]);
 
   const fetchRecords = useCallback(async () => {
     setLoading(true);
     try {
       let query = supabase.from('workflows').select('*').order('created_at', { ascending: false });
-      if (moduleFilter !== 'all') {
-        query = query.or(`module_id.eq.${moduleFilter},module_ids.cs.{${moduleFilter}}`);
-      }
+      if (supportOnly) query = query.eq('module_id', 'saas_support_tickets');
+      else if (moduleFilter !== 'all') query = query.or(`module_id.eq.${moduleFilter},module_ids.cs.{${moduleFilter}}`);
       const { data, error } = await query;
       if (error) throw error;
       setRecords((data || []) as WorkflowRecord[]);
@@ -154,7 +165,7 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [moduleFilter]);
+  }, [moduleFilter, supportOnly]);
 
   useEffect(() => {
     fetchPermissions();
@@ -327,7 +338,8 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
           <Select
             value={moduleFilter}
             onChange={(val) => setModuleFilter(String(val))}
-            options={[{ label: 'همه ماژول‌ها', value: 'all' }, ...moduleOptions]}
+            options={supportOnly ? moduleOptions : [{ label: 'همه ماژول‌ها', value: 'all' }, ...moduleOptions]}
+            disabled={supportOnly}
             className="min-w-[220px]"
             showSearch
             optionFilterProp="label"

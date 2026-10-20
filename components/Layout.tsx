@@ -48,6 +48,7 @@ import {
   REPORTS_PERMISSION_KEY,
   SETTINGS_PERMISSION_KEY,
   SAAS_ADMIN_PERMISSION_KEY,
+  SUPPORT_TICKETS_PERMISSION_KEY,
   resolveCommunicationsPermissions,
   resolveFilesAccessPermissions,
   resolveGoalsAccessPermissions,
@@ -137,6 +138,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [renewalRequesting, setRenewalRequesting] = useState(false);
   const [rolePermissions, setRolePermissions] = useState<PermissionMap>({});
   const [rolePermissionsReady, setRolePermissionsReady] = useState(false);
+  const [supportAdminAccess, setSupportAdminAccess] = useState(false);
+  const [supportWorkflowAccess, setSupportWorkflowAccess] = useState(false);
   const [customerClubFeatureEnabled, setCustomerClubFeatureEnabled] = useState(true);
   const [instagramInboxFeatureEnabled, setInstagramInboxFeatureEnabled] = useState(false);
   const [advertisingCampaignsModuleEnabled, setAdvertisingCampaignsModuleEnabled] = useState(false);
@@ -198,9 +201,17 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   useEffect(() => {
     let active = true;
     setSaasAdminOrgVerified(false);
+    setSupportAdminAccess(false);
+    setSupportWorkflowAccess(false);
     if (!currentUser?.id || !resolvedOrgId) return () => { active = false; };
     void supabase.rpc('current_user_is_saas_admin_org').then(({ data, error }) => {
       if (active) setSaasAdminOrgVerified(!error && data === true);
+    });
+    void supabase.rpc('support_is_operator', { p_permission: 'support_view' }).then(({ data, error }) => {
+      if (active) setSupportAdminAccess(!error && data === true);
+    });
+    void supabase.rpc('support_is_operator', { p_permission: 'support_workflows' }).then(({ data, error }) => {
+      if (active) setSupportWorkflowAccess(!error && data === true);
     });
     return () => { active = false; };
   }, [currentUser?.id, resolvedOrgId]);
@@ -660,6 +671,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       || saasAdminPermissionFields.demo_override
     )
   );
+  const canViewSupportCustomer = !saasAdminOrgVerified && rolePermissions?.[SUPPORT_TICKETS_PERMISSION_KEY]?.view !== false;
   const canViewAccountingDashboard = rolePermissions?.[ACCOUNTING_PERMISSION_KEY]?.view !== false;
   const canViewCashBank =
     canViewAccountingDashboard &&
@@ -790,6 +802,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         label: 'ارتباطات',
         children: [
           { key: '/messages', icon: <MessageOutlined />, label: 'پیام‌رسانی', disabled: !communicationsAccess.canUseWorkspace },
+          ...(canViewSupportCustomer ? [{ key: '/support/tickets', label: 'تیکت‌های پشتیبانی' }] : []),
           { key: '/instagram', icon: <InstagramOutlined />, label: 'صندوق اینستاگرام', disabled: !canViewInstagramInbox },
           { key: '/ai', icon: <AiSparkleIcon className="h-4 w-4" />, label: 'دستیار هوشمند سازمان', disabled: !communicationsAccess.canUseWorkspace },
           { key: '/secretariat_documents', label: 'نامه‌ها و مکاتبات', disabled: !canViewModule('secretariat_documents') },
@@ -940,6 +953,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/saas_users', label: 'همه کاربران' },
           { key: '/saas_orgs', label: 'سازمان‌ها' },
           { key: '/saas_demo_requests', label: 'درخواست‌های دمو' },
+          ...(supportAdminAccess ? [{ key: '/taze-system/tickets', label: 'تیکت‌ها' }] : []),
+          ...(supportAdminAccess && supportWorkflowAccess ? [{ key: '/taze-system/tickets/workflows', label: 'گردش‌کار تیکت‌ها' }] : []),
           { key: '/saas_user_announcements', label: 'اعلانات کاربران' },
           { key: '/taze-system/plans', label: 'پلن‌ها' },
           { key: '/taze-system/catalog', label: 'افزونه‌های فروشگاه' },
@@ -964,7 +979,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       }] : []),
       { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
     ];
-  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewAdvertisingCampaigns, canViewContentCalendars, canViewCustomerClub, canViewGoalsHub, canViewInstagramInbox, canViewOrgKnowledge, canViewReportsHub, canViewSaasAdmin, communicationsAccess.canUseWorkspace, rolePermissions]);
+  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewAdvertisingCampaigns, canViewContentCalendars, canViewCustomerClub, canViewGoalsHub, canViewInstagramInbox, canViewOrgKnowledge, canViewReportsHub, canViewSaasAdmin, canViewSupportCustomer, supportAdminAccess, supportWorkflowAccess, communicationsAccess.canUseWorkspace, rolePermissions]);
 
   const visibleRawMenuItems = useMemo<NonNullable<MenuProps['items']>>(() => {
     const canShowMenuKey = (key?: string) => {
@@ -1002,6 +1017,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         case '/goals':
           return canViewGoalsHub;
         case '/taze-system':
+        case '/taze-system/tickets':
+          return key === '/taze-system/tickets' ? supportAdminAccess : canViewSaasAdmin;
+        case '/taze-system/tickets/workflows':
+          return supportAdminAccess && supportWorkflowAccess;
         case '/saas_users':
         case '/saas_orgs':
         case '/saas_demo_requests':
@@ -1017,6 +1036,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         case '/cms_categories':
         case '/cms_tags':
           return canViewSaasAdmin;
+        case '/support/tickets':
+          return canViewSupportCustomer;
         case '/accounting/account-review':
           return canViewModule('journal_entries') && canViewModule('chart_of_accounts');
         default: {
@@ -1056,6 +1077,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     canViewSettingsRoot,
     canViewOrgKnowledge,
     canViewSaasAdmin,
+    canViewSupportCustomer,
+    supportAdminAccess,
+    supportWorkflowAccess,
     filesAccess.canViewGallery,
     filesAccess.canViewRecycleBin,
     communicationsAccess.canUseWorkspace,

@@ -585,6 +585,11 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
   }, [identity.orgId, identity.userId, refreshSummary]);
 
   const openOverlayRow = useCallback((row: OverlayFeedRow) => {
+    if (row.module_id === 'saas_support_tickets' && row.record_id) {
+      const isCustomerNotice = row.source_type === 'support_ticket' || row.source_type === 'support_ticket_status';
+      navigate(`${isCustomerNotice ? '/support/tickets' : '/taze-system/tickets'}/${row.record_id}`);
+      return;
+    }
     if (row.section === 'notes') {
       const key = String(row.conversation_key || row.payload?.conversation_key || '').trim();
       navigate(key ? `/messages?tab=notes&conversation=${encodeURIComponent(key)}` : '/messages?tab=notes');

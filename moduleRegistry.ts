@@ -1,4 +1,5 @@
 import { FieldLocation, FieldNature, FieldType, ModuleDefinition } from './types';
+import { saasSupportTicketsConfig } from './modules/saasSupportTicketsConfig';
 import { productsConfig } from './modules/productsConfig';
 import { billboardConfig } from './modules/billboardsConfig';
 import { billboardStatusChangesConfig } from './modules/billboardStatusChangesConfig';
@@ -242,6 +243,7 @@ export const BASE_MODULES: Record<string, ModuleDefinition> = {
   saas_demo_requests: saasDemoRequestsConfig,
   saas_users: saasUsersConfig,
   saas_user_announcements: saasUserAnnouncementsConfig,
+  saas_support_tickets: saasSupportTicketsConfig,
 };
 
 export const MODULES: Record<string, ModuleDefinition> = {
