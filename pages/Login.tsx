@@ -1,4 +1,5 @@
 import { normalizeEmail } from '../utils/email';
+import { CURRENT_APP_VERSION } from '../utils/appVersionUpdate';
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, App, Button, Card, Input, Modal, Tabs, theme } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -948,7 +949,7 @@ const Login = () => {
         </Modal>
 
         <div className="mt-4 text-center text-[11px]" style={{ color: token.colorTextTertiary }}>
-          نسخه آزمایشی {import.meta.env.VITE_APP_VERSION || '1.0.2'}
+          نسخه {CURRENT_APP_VERSION}
         </div>
       </div>
       <UserAnnouncementsPopupHost

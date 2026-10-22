@@ -1434,6 +1434,7 @@ Deno.serve(async (req) => {
       org_id?: string;
       overrideSettings?: SmsSettings;
       metadata?: Record<string, any>;
+      system_message?: boolean;
     } & AuthHookPayload);
 
     const authHeader = req.headers.get('Authorization') || '';
@@ -1549,13 +1550,16 @@ Deno.serve(async (req) => {
       }
     }
 
-    const rawSettings = await getSmsSettings(
-      supabaseUrl,
-      serviceRoleKey,
-      requestOrgId,
-      body?.overrideSettings,
-      allowSettingsOverride,
-    );
+    const systemMessage = isInternalServiceRequest && body?.system_message === true;
+    const rawSettings = systemMessage
+      ? getHookSmsSettings(null)
+      : await getSmsSettings(
+        supabaseUrl,
+        serviceRoleKey,
+        requestOrgId,
+        body?.overrideSettings,
+        allowSettingsOverride,
+      );
     const settings = selectConfiguredSender(rawSettings, body?.sender_number);
 
     if (action === 'get_balance') {
@@ -1570,7 +1574,7 @@ Deno.serve(async (req) => {
     }
 
     const centralSender = String(Deno.env.get('MELIPAYAMAK_SENDER_NUMBER') || '').trim();
-    const isCentralSender = Boolean(centralSender && String(settings.sender_number || '').trim() === centralSender);
+    const isCentralSender = !systemMessage && Boolean(centralSender && String(settings.sender_number || '').trim() === centralSender);
     const balanceBefore = isCentralSender ? Number((await getSmsCreditWithProvider(settings)).balance) : null;
     if (isCentralSender && (!Number.isFinite(balanceBefore as number) || (balanceBefore as number) < 0)) {
       throw new Error('اعتبار سامانهٔ پیامک مرکزی قابل خواندن نیست.');

@@ -17,10 +17,10 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { DeleteOutlined, RocketOutlined, SaveOutlined, ShoppingOutlined, WalletOutlined } from '@ant-design/icons';
+import { ClockCircleOutlined, DeleteOutlined, RocketOutlined, SaveOutlined, ShoppingOutlined, WalletOutlined } from '@ant-design/icons';
 import { executeSaasModuleAction } from '../../utils/saasAdminModules';
 import { supabase } from '../../supabaseClient';
-import { SAAS_FEATURE_OPTIONS, SAAS_MODULE_GROUPS } from '../../utils/saasOfferingCatalog';
+import { SAAS_FEATURE_GROUPS, SAAS_FEATURE_OPTIONS, SAAS_MODULE_GROUPS } from '../../utils/saasOfferingCatalog';
 
 const { Text } = Typography;
 
@@ -64,6 +64,9 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
   const [accountLoading, setAccountLoading] = useState(false);
   const [accountSaving, setAccountSaving] = useState(false);
   const [account, setAccount] = useState<any | null>(null);
+  const [accountError, setAccountError] = useState('');
+  const [owner, setOwner] = useState<any | null>(null);
+  const [extendDays, setExtendDays] = useState(30);
   const [smsWallet, setSmsWallet] = useState<any | null>(null);
   const [plans, setPlans] = useState<any[]>([]);
   const [catalog, setCatalog] = useState<any[]>([]);
@@ -78,41 +81,51 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
   const [creditReason, setCreditReason] = useState('');
   const sourceKind = String(record?.source_kind || 'org').trim();
   const isDemoOrg = sourceKind === 'org' && record?.is_demo === true;
+  const orgId = String(record?.org_id || record?.source_id || record?.id || '').trim();
+  const allModuleIds = useMemo(() => SAAS_MODULE_GROUPS.flatMap((group) => group.modules.map((item) => item.id)), []);
+  const allFeatureIds = useMemo(() => SAAS_FEATURE_OPTIONS.map((item) => item.id), []);
+  const setGroupSelection = (current: string[], groupIds: string[], enabled: boolean) =>
+    enabled ? Array.from(new Set([...current, ...groupIds])) : current.filter((id) => !groupIds.includes(id));
 
   const loadAccount = useCallback(async () => {
-    const orgId = String(record?.org_id || record?.source_id || '').trim();
     if (!orgId || sourceKind !== 'org') return;
     setAccountLoading(true);
+    setAccount(null);
+    setAccountError('');
+    setOwner(null);
+    setPlans([]);
     try {
-      const [accountResult, planResult, catalogResult, ordersResult, smsWalletResult] = await Promise.all([
+      const [accountResult, planResult, catalogResult, ordersResult, smsWalletResult, ownerResult] = await Promise.all([
         supabase.rpc('admin_get_saas_org_account', { p_org_id: orgId }),
         supabase.from('saas_plans').select('code,title,price_monthly,short_description,enabled_modules,enabled_features').eq('is_active', true).order('sort_order'),
         supabase.rpc('admin_get_saas_catalog_items'),
         supabase.rpc('admin_list_saas_org_orders', { p_org_id: orgId }),
         supabase.rpc('admin_get_saas_org_sms_wallet', { p_org_id: orgId }),
+        supabase.rpc('admin_get_saas_org_owner', { p_org_id: orgId }),
       ]);
-      if (accountResult.error) throw accountResult.error;
+      if (!ownerResult.error) setOwner(ownerResult.data || null);
       const next = accountResult.data || null;
-      setAccount(next);
       const fetchedPlans = planResult.error ? [] : (planResult.data || []);
       const accountPlan = next?.plan?.code ? [{ code: next.plan.code, title: next.plan.title, enabled_modules: next.plan.enabled_modules || {}, enabled_features: next.plan.enabled_features || {} }] : [];
       setPlans(fetchedPlans.length ? fetchedPlans : accountPlan);
+      if (accountResult.error) throw accountResult.error;
+      setAccount(next);
       setCatalog(catalogResult.error || !Array.isArray(catalogResult.data) ? [] : catalogResult.data);
       setOrders(ordersResult.error || !Array.isArray(ordersResult.data) ? [] : ordersResult.data);
       setSmsWallet(smsWalletResult.error ? null : (smsWalletResult.data || null));
       setCart({});
       setEditingOrderId(null);
-      setSelectedPlan(next?.management?.plan_code || next?.plan?.code || null);
+      setSelectedPlan(next?.management?.plan_code || next?.plan?.code || record?.plan_code || null);
       setSelectedModules(Object.entries(next?.access?.modules || {}).filter(([, enabled]) => enabled === true).map(([key]) => key));
       setSelectedFeatures(Object.entries(next?.access?.features || {}).filter(([, enabled]) => enabled === true).map(([key]) => key));
       const rawQuotas = next?.management?.quota_adjustments || {};
       setQuotas({ users: Number(rawQuotas.users || 0), storage_gb: Number(rawQuotas.storage_gb || 0), scheduled_runs: Number(rawQuotas.scheduled_runs || 0), active_workflows: Number(rawQuotas.active_workflows || 0), sms_credit: Number(rawQuotas.sms_credit || 0), instagram_accounts: Number(rawQuotas.instagram_accounts || 0) });
     } catch (error: any) {
-      message.error(error?.message || 'دریافت وضعیت حساب سازمان ناموفق بود.');
+      setAccountError(error?.message || 'دریافت وضعیت حساب سازمان ناموفق بود.');
     } finally {
       setAccountLoading(false);
     }
-  }, [message, record?.org_id, record?.source_id, sourceKind]);
+  }, [orgId, record?.plan_code, sourceKind]);
 
   useEffect(() => { void loadAccount(); }, [loadAccount]);
 
@@ -157,19 +170,16 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
   };
 
   const saveAccount = async () => {
-    const orgId = String(record?.org_id || record?.source_id || '').trim();
-    if (!orgId) return;
+    if (!orgId || !account) return;
     setAccountSaving(true);
     try {
-      const moduleIds = SAAS_MODULE_GROUPS.flatMap((group) => group.modules.map((item) => item.id));
-      const featureIds = SAAS_FEATURE_OPTIONS.map((item) => item.id);
       // مقدار false هم باید ارسال شود؛ حذف گزینه از payload باعث می‌شد true پلن دوباره غالب شود.
       const toMap = (all: string[], selected: string[]) => Object.fromEntries(all.map((item) => [item, selected.includes(item)]));
       const { data, error } = await supabase.rpc('admin_update_saas_org_account', {
         p_org_id: orgId,
         p_plan_code: selectedPlan,
-        p_module_overrides: toMap(moduleIds, selectedModules),
-        p_feature_overrides: toMap(featureIds, selectedFeatures),
+        p_module_overrides: toMap(allModuleIds, selectedModules),
+        p_feature_overrides: toMap(allFeatureIds, selectedFeatures),
         p_quota_adjustments: quotas,
       });
       if (error) throw error;
@@ -199,6 +209,28 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
       onChanged();
     } catch (error: any) { message.error(error?.message || 'تغییر اعتبار سازمان ناموفق بود.'); }
     finally { setAccountSaving(false); }
+  };
+
+  const extendAccess = async () => {
+    if (!orgId || !Number.isInteger(extendDays) || extendDays < 1 || extendDays > 365) return;
+    setActionLoading('extend_access');
+    try {
+      const { data, error } = await supabase.rpc('admin_saas_extend_org_access', { p_org_id: orgId, p_days: extendDays });
+      if (error) throw error;
+      if (data?.success !== true) throw new Error(String(data?.message || 'افزودن روز ناموفق بود.'));
+      message.success(`${extendDays.toLocaleString('fa-IR')} روز به زمان دسترسی سازمان افزوده شد.`);
+      await loadAccount();
+      onChanged();
+    } catch (error: any) {
+      const detail = String(error?.message || '');
+      message.error(detail.includes('subscription_invoice_pending')
+        ? 'برای این اشتراک فاکتور باز وجود دارد؛ ابتدا وضعیت فاکتور را مشخص کنید.'
+        : detail.includes('active_subscription_not_found')
+          ? 'اشتراک پرداختی فعالی برای این سازمان پیدا نشد.'
+          : detail.includes('permission denied')
+            ? 'اجازهٔ تغییر زمان دسترسی این سازمان را ندارید.'
+            : 'افزودن روز به زمان دسترسی ناموفق بود.');
+    } finally { setActionLoading(null); }
   };
 
   const accountSummary = useMemo(() => {
@@ -258,9 +290,9 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
 
         <Divider orientation="right" plain>مالک و اطلاعات تماس</Divider>
         <Descriptions bordered size="small" column={1}>
-          <Descriptions.Item label="نام مالک / متقاضی">{record?.owner_name || '—'}</Descriptions.Item>
-          <Descriptions.Item label="ایمیل">{record?.owner_email || '—'}</Descriptions.Item>
-          <Descriptions.Item label="موبایل">{record?.primary_contact_mobile || '—'}</Descriptions.Item>
+          <Descriptions.Item label="نام مالک / متقاضی">{owner?.owner_name || record?.owner_name || '—'}</Descriptions.Item>
+          <Descriptions.Item label="ایمیل">{owner?.owner_email || record?.owner_email || '—'}</Descriptions.Item>
+          <Descriptions.Item label="موبایل">{owner?.primary_contact_mobile || record?.primary_contact_mobile || '—'}</Descriptions.Item>
           <Descriptions.Item label="زمان ثبت">{displayDate(record?.provisioned_at)}</Descriptions.Item>
         </Descriptions>
 
@@ -301,6 +333,7 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
               <Space><ShoppingOutlined className="text-indigo-600" /><Text strong>حساب، پلن و دسترسی‌ها</Text></Space>
               {accountLoading ? <Spin size="small" /> : <Text type="secondary" className="text-xs">{accountSummary}</Text>}
             </div>
+            {accountError && <Alert type="error" showIcon message="دریافت پلن و امکانات سازمان ناموفق بود" description={accountError} action={<Button size="small" onClick={() => void loadAccount()}>تلاش دوباره</Button>} />}
             <div className="space-y-4">
               {account ? <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 {[
@@ -312,8 +345,17 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
               </div> : null}
               <div>
                 <Text type="secondary" className="mb-1 block text-xs">پلن پایه</Text>
-                <Select className="w-full" allowClear placeholder="پلن را انتخاب کنید" value={selectedPlan || undefined} onChange={choosePlan} options={plans.map((plan) => ({ value: plan.code, label: `${plan.title || plan.code} · ${Number(plan.price_monthly || 0).toLocaleString('fa-IR')} تومان` }))} />
+                <Select className="w-full" allowClear placeholder={plans.length ? 'پلن را انتخاب کنید' : 'فهرست پلن‌ها در دسترس نیست'} value={selectedPlan || record?.plan_code || undefined} onChange={choosePlan} disabled={!account || plans.length === 0} options={plans.map((plan) => ({ value: plan.code, label: `${plan.title || plan.code} · ${Number(plan.price_monthly || 0).toLocaleString('fa-IR')} تومان` }))} />
+                {account && <Text type="secondary" className="mt-1 block text-xs">امکانات انتخاب‌شده، دسترسی مؤثر پلن و تغییرات اختصاصی این سازمان را نشان می‌دهند.</Text>}
               </div>
+              {account && <div className="rounded-xl border border-indigo-200 bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-700">
+                <Text strong className="block mb-1">افزودن دستی به زمان دسترسی</Text>
+                <Text type="secondary" className="block text-xs mb-2">پایان فعلی: {displayDate(owner?.access_ends_at || record?.trial_ends_at)}</Text>
+                <Space.Compact className="w-full">
+                  <InputNumber className="w-full" min={1} max={365} value={extendDays} onChange={(value) => setExtendDays(Number(value || 0))} addonAfter="روز" />
+                  <Button icon={<ClockCircleOutlined />} loading={actionLoading === 'extend_access'} onClick={() => void extendAccess()}>افزودن</Button>
+                </Space.Compact>
+              </div>}
               <div className="rounded-xl border border-indigo-200 bg-white/70 p-3 dark:bg-slate-700">
                 <div className="mb-2 flex items-center justify-between"><Text strong>اقلام قابل خرید و قیمت</Text><Text type="secondary" className="text-xs">سبد تا زمان ثبت قابل ویرایش است.</Text></div>
                 <div className="mb-2 flex flex-wrap gap-2">{plans.filter((plan) => Number(plan.price_monthly || 0) > 0).map((plan) => <Button key={plan.code} size="small" type={cart[`plan:${plan.code}`] ? 'primary' : 'default'} onClick={() => addToCart(`plan:${plan.code}`, cart[`plan:${plan.code}`] ? -1 : 1)}>{plan.title} · {Number(plan.price_monthly).toLocaleString('fa-IR')}</Button>)}</div>
@@ -322,13 +364,20 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
               </div>
               <Collapse ghost items={[
                 {
-                  key: 'modules', label: `ماژول‌ها (${selectedModules.length})`, children: <div className="space-y-3">{SAAS_MODULE_GROUPS.map((group) => <div key={group.label}><Text strong className="text-xs">{group.label}</Text><Checkbox.Group className="mt-1 grid grid-cols-1 gap-1 sm:grid-cols-2" value={selectedModules} options={group.modules.map((item) => ({ value: item.id, label: item.label }))} onChange={(values) => {
+                  key: 'modules', label: `ماژول‌ها (${selectedModules.length})`, children: <div className="space-y-3">
+                    <Space size={4}><Button type="link" size="small" onClick={() => setSelectedModules(allModuleIds)}>انتخاب همه</Button><Button type="link" size="small" onClick={() => setSelectedModules([])}>عدم انتخاب همه</Button></Space>
+                    {SAAS_MODULE_GROUPS.map((group) => <div key={group.label}><div className="flex flex-wrap items-center justify-between gap-1"><Text strong className="text-xs">{group.label}</Text><Space size={0}><Button type="link" size="small" onClick={() => setSelectedModules((current) => setGroupSelection(current, group.modules.map((item) => item.id), true))}>انتخاب همه</Button><Button type="link" size="small" onClick={() => setSelectedModules((current) => setGroupSelection(current, group.modules.map((item) => item.id), false))}>عدم انتخاب همه</Button></Space></div><Checkbox.Group className="mt-1 grid grid-cols-1 gap-1 sm:grid-cols-2" value={selectedModules} options={group.modules.map((item) => ({ value: item.id, label: item.label }))} onChange={(values) => {
                     const groupIds = new Set(group.modules.map((item) => item.id));
                     setSelectedModules((current) => [...current.filter((item) => !groupIds.has(item)), ...values.map(String)]);
                   }} /></div>)}</div>,
                 },
                 {
-                  key: 'features', label: `امکانات (${selectedFeatures.length})`, children: <Checkbox.Group className="grid grid-cols-1 gap-1 sm:grid-cols-2" value={selectedFeatures} options={SAAS_FEATURE_OPTIONS.map((item) => ({ value: item.id, label: item.label }))} onChange={(values) => setSelectedFeatures(values.map(String))} />,
+                  key: 'features', label: `امکانات (${selectedFeatures.length})`, children: <div className="space-y-3">
+                    <Space size={4}><Button type="link" size="small" onClick={() => setSelectedFeatures(allFeatureIds)}>انتخاب همه</Button><Button type="link" size="small" onClick={() => setSelectedFeatures([])}>عدم انتخاب همه</Button></Space>
+                    {SAAS_FEATURE_GROUPS.map((group) => <div key={group.label}><div className="flex flex-wrap items-center justify-between gap-1"><Text strong className="text-xs">{group.label}</Text><Space size={0}><Button type="link" size="small" onClick={() => setSelectedFeatures((current) => setGroupSelection(current, group.features.map((item) => item.id), true))}>انتخاب همه</Button><Button type="link" size="small" onClick={() => setSelectedFeatures((current) => setGroupSelection(current, group.features.map((item) => item.id), false))}>عدم انتخاب همه</Button></Space></div><Checkbox.Group className="mt-1 grid grid-cols-1 gap-1 sm:grid-cols-2" value={selectedFeatures} options={group.features.map((item) => ({ value: item.id, label: item.label }))} onChange={(values) => {
+                      const groupIds = new Set(group.features.map((item) => item.id));
+                      setSelectedFeatures((current) => [...current.filter((item) => !groupIds.has(item)), ...values.map(String)]);
+                    }} /></div>)}</div>,
                 },
                 {
                   key: 'quotas', label: 'سهمیه‌های دستی', children: <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">{[
@@ -336,7 +385,7 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
                   ].map(([key, label]) => <div key={key}><Text type="secondary" className="mb-1 block text-xs">{label}</Text><InputNumber className="w-full" min={0} value={quotas[key] || 0} onChange={(value) => setQuotas((current) => ({ ...current, [key]: Number(value || 0) }))} /></div>)}</div>,
                 },
               ]} />
-              <Button block type="primary" icon={<SaveOutlined />} loading={accountSaving} onClick={() => void saveAccount()}>ذخیره وضعیت حساب</Button>
+              <Button block type="primary" icon={<SaveOutlined />} loading={accountSaving} disabled={!account} onClick={() => void saveAccount()}>ذخیره وضعیت حساب</Button>
               <Divider orientation="right" plain><WalletOutlined /> شارژ دستی</Divider>
               <Text type="secondary" className="text-xs">مقدار مثبت شارژ و مقدار منفی کسر می‌کند. همهٔ تغییرها در سوابق حساب ثبت می‌شوند.</Text>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

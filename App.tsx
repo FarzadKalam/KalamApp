@@ -142,6 +142,7 @@ const loadApiDocsPage = () => import("./pages/ApiDocsPage");
 const loadMessagesPage = () => import("./pages/MessagesPage");
 const loadSupportTicketsPage = () => import("./pages/SupportTicketsPage");
 const loadSupportWorkflowsPage = () => import("./pages/SupportTicketsPage").then((page) => ({ default: page.SupportWorkflowsPage }));
+const loadSaasLifecycleWorkflowsPage = () => import("./pages/SupportTicketsPage").then((page) => ({ default: page.SaasLifecycleWorkflowsPage }));
 const loadInstagramInboxPage = () => import("./pages/InstagramInboxPage");
 const loadCampaignWizardPage = () => import("./pages/CampaignWizardPage");
 const loadLayout = () => import("./components/Layout");
@@ -206,6 +207,7 @@ const ApiDocsPage = lazy(loadApiDocsPage);
 const MessagesPage = lazy(loadMessagesPage);
 const SupportTicketsPage = lazy(loadSupportTicketsPage);
 const SupportWorkflowsPage = lazy(loadSupportWorkflowsPage);
+const SaasLifecycleWorkflowsPage = lazy(loadSaasLifecycleWorkflowsPage);
 const InstagramInboxPage = lazy(loadInstagramInboxPage);
 const CampaignWizardPage = lazy(loadCampaignWizardPage);
 const Layout = lazy(loadLayout);
@@ -938,6 +940,7 @@ function App() {
             <Route path="/taze-system" element={<SaasAdminDashboard />} />
             <Route path="/taze-system/tickets" element={<SupportTicketsPage admin />} />
             <Route path="/taze-system/tickets/workflows" element={<SupportWorkflowsPage />} />
+            <Route path="/taze-system/workflows" element={<SaasLifecycleWorkflowsPage />} />
             <Route path="/taze-system/tickets/:ticketId" element={<SupportTicketsPage admin />} />
             <Route path="/taze-system/orgs" element={<Navigate to="/saas_orgs" replace />} />
             <Route path="/taze-system/requests" element={<Navigate to="/saas_demo_requests" replace />} />

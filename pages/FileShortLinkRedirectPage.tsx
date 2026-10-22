@@ -3,13 +3,6 @@ import { App, Result, Spin } from 'antd';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 
-const isExpired = (value?: string | null) => {
-  const raw = String(value || '').trim();
-  if (!raw) return false;
-  const time = Date.parse(raw);
-  return Number.isFinite(time) && time <= Date.now();
-};
-
 const FileShortLinkRedirectPage: React.FC = () => {
   const { message } = App.useApp();
   const navigate = useNavigate();
@@ -17,7 +10,7 @@ const FileShortLinkRedirectPage: React.FC = () => {
   const params = useParams();
   const code = String(params.code || '').trim();
   const isRecordLink = location.pathname.startsWith('/r/');
-  const [state, setState] = useState<'loading' | 'not_found' | 'expired' | 'error'>('loading');
+  const [state, setState] = useState<'loading' | 'not_found' | 'error'>('loading');
 
   useEffect(() => {
     let cancelled = false;
@@ -29,27 +22,16 @@ const FileShortLinkRedirectPage: React.FC = () => {
       }
 
       try {
-        const { data, error } = await supabase
-          .from('short_links')
-          .select('link_type, target_url, is_active, expires_at, metadata, file_assets(target_url), file_entries(asset_id, file_assets(target_url))')
-          .eq('code', code)
-          .maybeSingle();
+        const { data, error } = await supabase.rpc('resolve_shared_short_link', { p_code: code });
 
         if (error) throw error;
 
-        const nestedAssetUrl = String((data as any)?.file_assets?.target_url || '').trim();
-        const nestedEntryAssetUrl = String((data as any)?.file_entries?.file_assets?.target_url || '').trim();
-        const targetUrl = String(data?.target_url || nestedAssetUrl || nestedEntryAssetUrl || '').trim();
+        const targetUrl = String(data?.target_url || '').trim();
         const linkTypeMatches = isRecordLink
           ? data?.link_type === 'generic' && ['record', 'online_catalog', 'scheduled_report', 'scheduled_work_schedule'].includes(String((data as any)?.metadata?.kind || ''))
           : data?.link_type === 'file';
-        const isActive = data?.is_active !== false;
-        if (!targetUrl || !isActive || !linkTypeMatches) {
+        if (!targetUrl || !linkTypeMatches) {
           if (!cancelled) setState('not_found');
-          return;
-        }
-        if (isExpired(data?.expires_at)) {
-          if (!cancelled) setState('expired');
           return;
         }
 
@@ -84,8 +66,8 @@ const FileShortLinkRedirectPage: React.FC = () => {
     <div className="min-h-screen flex items-center justify-center px-4">
       <Result
         status={state === 'error' ? 'error' : '404'}
-        title={state === 'expired' ? 'لینک منقضی شده است' : (isRecordLink ? 'لینک رکورد پیدا نشد' : 'لینک فایل پیدا نشد')}
-        subTitle={state === 'expired' ? 'اعتبار این لینک کوتاه تمام شده است.' : 'ممکن است لینک حذف شده باشد یا کد آن اشتباه باشد.'}
+        title={isRecordLink ? 'لینک رکورد پیدا نشد' : 'لینک فایل پیدا نشد'}
+        subTitle="ممکن است لینک حذف شده، منقضی شده یا کد آن اشتباه باشد."
         extra={[
           <a
             key="home"

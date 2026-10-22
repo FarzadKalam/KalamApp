@@ -296,6 +296,7 @@ export const resolveWebFormFieldType = (
   if (String(targetFieldKey || "").trim() === WEB_FORM_RECORD_IMAGE_TARGET_KEY) return "image";
   if (String(targetFieldKey || "").trim() === WEB_FORM_RECORD_FILE_TARGET_KEY) return "file";
   const targetField = getWebFormTargetField(moduleId, targetFieldKey);
+  if (targetField?.key === 'image_url' && fallbackType === 'file') return 'file';
   if (targetField) return inferWebFormFieldType(targetField);
   return (["text", "long_text", "number", "percentage", "phone", "date", "time", "datetime", "image", "file", "multi_select", "location", "checkbox", "select", "relation"].includes(String(fallbackType || ""))
     ? String(fallbackType)

@@ -57,6 +57,18 @@ export const SAAS_FEATURE_OPTIONS: SaasOfferingOption[] = [
   { id: 'business_model_canvas', label: 'بوم کسب‌وکار' }, { id: 'bale_bot', label: 'بات بله' }, { id: 'rubika_bot', label: 'بات روبیکا' },
 ];
 
+const featureGroupIds: Array<{ label: string; ids: string[] }> = [
+  { label: 'هوش مصنوعی', ids: ['ai_chat','ai_knowledge','ai_document_analysis','ai_web_search','ai_voice_input','ai_voice_output','ai_image_generation','ai_video_generation','ai_deep_reasoning','ai_credit_topup'] },
+  { label: 'ارتباطات و کمپین', ids: ['internal_realtime_notifications','support_tickets','instagram_inbox','campaign_sms','campaign_email','campaign_instagram_post','bale_bot','rubika_bot'] },
+  { label: 'مدیریت و گزارش', ids: ['api_access','advanced_reports','map_view','multi_lane_processes','content_calendar','white_label','custom_domain','reservations','qr_scan','business_model_canvas','online_catalog'] },
+  { label: 'فروش و پرداخت', ids: ['taxpayer_system','own_payment_gateway','online_invoice_payment','retail_sales_invoice','saas_account_billing','sms_credit_topup','extra_users_purchase'] },
+];
+const groupedFeatureIds = new Set(featureGroupIds.flatMap((group) => group.ids));
+export const SAAS_FEATURE_GROUPS = [
+  ...featureGroupIds.map((group) => ({ label: group.label, features: SAAS_FEATURE_OPTIONS.filter((feature) => group.ids.includes(feature.id)) })),
+  { label: 'سایر امکانات', features: SAAS_FEATURE_OPTIONS.filter((feature) => !groupedFeatureIds.has(feature.id)) },
+].filter((group) => group.features.length > 0);
+
 export const SAAS_QUOTA_OPTIONS: SaasOfferingOption[] = [
   { id: 'users', label: 'کاربر اضافه' },
   { id: 'storage_gb', label: 'فضای ذخیره‌سازی اضافه (گیگابایت)' },

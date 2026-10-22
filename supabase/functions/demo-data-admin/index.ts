@@ -68,27 +68,34 @@ const requireCallerOrgAccess = async (client: any, callerUserId: string, request
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
     profile = await loadCallerProfile(client, callerUserId);
-    const profileOrgId = String(profile?.org_id || '').trim() || null;
-    if (profile?.id && profileOrgId && (!normalizedRequestedOrgId || profileOrgId === normalizedRequestedOrgId)) {
-      break;
-    }
+    if (profile?.id && (normalizedRequestedOrgId || profile?.org_id)) break;
     if (attempt < 3) {
       await sleep(350);
     }
   }
 
-  if (!profile?.id || !profile?.org_id || profile.is_active === false) {
+  if (!profile?.id || profile.is_active === false) {
     throw new Error('پروفایل کاربر یا سازمان جاری پیدا نشد.');
   }
-  if (normalizedRequestedOrgId && String(profile.org_id) !== normalizedRequestedOrgId) {
-    throw new Error('سازمان جاری کاربر با سازمان درخواستی هم‌خوانی ندارد.');
+  const targetOrgId = normalizedRequestedOrgId || String(profile.org_id || '').trim();
+  if (!targetOrgId) throw new Error('سازمان جاری کاربر پیدا نشد.');
+  const { data: membership, error: membershipError } = await client
+    .from('user_organization_memberships')
+    .select('org_id, role_id, software_role, is_owner, is_active')
+    .eq('user_id', callerUserId).eq('org_id', targetOrgId).eq('is_active', true).maybeSingle();
+  if (membershipError) throw membershipError;
+  if (!membership) {
+    throw new Error('عضویت فعال در سازمان درخواستی پیدا نشد.');
   }
-  if (!ALLOWED_DEMO_ROLES.has(normalizeRole(profile.role))) {
+  const isProfileOrg = String(profile.org_id || '') === targetOrgId;
+  const effectiveRole = String(membership.software_role || (isProfileOrg ? profile.role : '') || '').trim();
+  const effectiveRoleId = membership.role_id || (isProfileOrg ? profile.role_id : null);
+  if (!ALLOWED_DEMO_ROLES.has(normalizeRole(effectiveRole)) && membership?.is_owner !== true) {
     throw new Error('دسترسی کافی برای مدیریت داده‌های دمو ندارید.');
   }
-  if (profile.role_id) {
+  if (effectiveRoleId) {
     const { data: role, error: roleError } = await client.from('org_roles')
-      .select('permissions').eq('id', profile.role_id).eq('org_id', profile.org_id).maybeSingle();
+      .select('permissions').eq('id', effectiveRoleId).eq('org_id', targetOrgId).maybeSingle();
     if (roleError || !role) throw new Error('نقش سازمانی کاربر معتبر نیست.');
     const permission = role.permissions?.__settings_tabs || {};
     if (permission.view === false || permission.fields?.account === false
@@ -100,7 +107,7 @@ const requireCallerOrgAccess = async (client: any, callerUserId: string, request
   const { data: saasSettings, error: saasError } = await client
     .from('saas_org_settings')
     .select('org_id, slug, is_demo')
-    .eq('org_id', profile.org_id)
+    .eq('org_id', targetOrgId)
     .maybeSingle();
   if (saasError || !saasSettings?.org_id) {
     throw new Error('تنظیمات SaaS سازمان پیدا نشد.');
@@ -112,7 +119,7 @@ const requireCallerOrgAccess = async (client: any, callerUserId: string, request
   const { data: company, error: companyError } = await client
     .from('company_settings')
     .select('company_full_name, trade_name, email, mobile, brand_palette_key')
-    .eq('org_id', profile.org_id)
+    .eq('org_id', targetOrgId)
     .order('created_at', { ascending: true })
     .limit(1)
     .maybeSingle();
@@ -123,7 +130,7 @@ const requireCallerOrgAccess = async (client: any, callerUserId: string, request
   const { data: onboarding, error: onboardingError } = await client
     .from('saas_onboarding_requests')
     .select('industry')
-    .eq('org_id', profile.org_id)
+    .eq('org_id', targetOrgId)
     .eq('status', 'provisioned')
     .order('created_at', { ascending: false })
     .limit(1)
@@ -131,7 +138,7 @@ const requireCallerOrgAccess = async (client: any, callerUserId: string, request
   if (onboardingError) throw onboardingError;
 
   return {
-    profile,
+    profile: { ...profile, org_id: targetOrgId, role: effectiveRole, role_id: effectiveRoleId },
     saasSettings,
     company: company ? { ...company, industry: onboarding?.industry || null } : { industry: onboarding?.industry || null },
   };

@@ -4272,6 +4272,38 @@ async function executeAction(
     const manuals = (config.manual_numbers || []).map(normalizePhone).filter(isValidIranMobile);
     const allRecipients = Array.from(new Set([...recipients, ...manuals]));
     if (allRecipients.length === 0) return actionResult(action, 'skipped', 'گیرنده معتبر برای پیامک پیدا نشد.', { recipient_count: 0 });
+    const saasLifecycleModules = new Set(['saas_orgs', 'saas_users', 'saas_demo_requests']);
+    if (saasLifecycleModules.has(moduleId)) {
+      const providerOrgId = String(await callRpc(url, key, 'support_provider_org_id', {}).catch(() => '') || '').trim();
+      if (!providerOrgId || providerOrgId !== orgId) {
+        return actionResult(action, 'failed', 'گردش‌کار SaaS متعلق به سازمان مرجع نیست.', { recipient_count: 0 });
+      }
+      try {
+        const response = await fetch(`${url.replace(/\/+$/, '')}/functions/v1/send-sms`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${key}`,
+            'x-kalam-internal': 'workflow-interval-runner',
+          },
+          body: JSON.stringify({ action: 'send', org_id: orgId, to: allRecipients, text, system_message: true,
+            metadata: { source: 'saas_lifecycle_workflow', module_id: moduleId, record_id: recordId } }),
+          signal: AbortSignal.timeout(30000),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload?.success !== true) throw new Error(String(payload?.message || 'ارسال پیامک سیستمی ناموفق بود.'));
+        await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: allRecipients, text,
+          title: String(config.title || '').trim() || null, status: 'provider_accepted',
+          metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
+        return actionResult(action, 'success', undefined, { recipient_count: Number(payload?.sent || allRecipients.length) });
+      } catch (error: any) {
+        const message = String(error?.message || error);
+        await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: allRecipients, text,
+          title: String(config.title || '').trim() || null, status: 'failed', errorMessage: message,
+          metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
+        throw error;
+      }
+    }
     const rawSmsSettings = await getOrgSmsSettings(url, key, orgId);
     const smsSettings = rawSmsSettings ? { ...selectOrgSmsSender(rawSmsSettings, config.sender_number), org_id: orgId } : null;
     if (!smsSettings) {

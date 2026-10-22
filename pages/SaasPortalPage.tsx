@@ -3,6 +3,7 @@ import { Alert, Button, ConfigProvider, Input, Select, theme as antdTheme } from
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
+  CopyOutlined,
   LoadingOutlined,
   MobileOutlined,
   RocketOutlined,
@@ -172,6 +173,8 @@ const SaasPortalPage: React.FC = () => {
   const [provisionResult, setProvisionResult] = useState<ProvisionResult | null>(null);
   const [provisionError, setProvisionError] = useState('');
   const [provisionWarning, setProvisionWarning] = useState('');
+  const [copyNotice, setCopyNotice] = useState('');
+  const [retryingDemoData, setRetryingDemoData] = useState(false);
 
   const normalizedPhone = normalizeOtpPhone(phone);
   const cooldownTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -218,8 +221,13 @@ const SaasPortalPage: React.FC = () => {
             ? organizations.find((item: OrganizationAccess) => item?.is_owner && item?.resolved_host)
             : null;
           if (owned?.resolved_host) {
-            clearWizardState();
-            window.location.replace(`https://${owned.resolved_host}`);
+            setProvisionResult({
+              success: true,
+              slug: String(owned.resolved_host).split('.')[0],
+              redirect_host: owned.resolved_host,
+              trial_days: 0,
+            });
+            setStep('done');
             return;
           }
         }
@@ -560,6 +568,7 @@ const SaasPortalPage: React.FC = () => {
   const runProvision = useCallback(async () => {
     const normalizedSlug = normalizeSaasSlug(slug);
     setProvisionWarning('');
+    setCopyNotice('');
     setStep('provisioning');
     setProvisionMsgIdx(0);
 
@@ -625,7 +634,6 @@ const SaasPortalPage: React.FC = () => {
       }
 
       setProvisionResult(result);
-      clearWizardState();
       // The organization already exists. Show its address and login action even
       // if optional sample data takes longer or fails.
       setStep('done');
@@ -638,12 +646,6 @@ const SaasPortalPage: React.FC = () => {
       } catch {
         setProvisionWarning('فضای شما ساخته شد، اما بخشی از داده‌های نمونه اولیه کامل نشد و می‌توانید بعداً دوباره تلاش کنید.');
       }
-
-      // ریدایرکت خودکار بعد از ۳ ثانیه
-      setTimeout(() => {
-        const host = result.redirect_host || `${normalizedSlug}${TAZE_SUFFIX}`;
-        window.location.href = `https://${host}`;
-      }, 3000);
 
     } catch (err: any) {
       const msg = String(err?.message || '');
@@ -1087,34 +1089,59 @@ const SaasPortalPage: React.FC = () => {
                 <CheckCircleOutlined className="text-white text-3xl" />
               </div>
             </div>
-            <h2 className="text-2xl font-black text-slate-900 mb-3">آماده است!</h2>
+            <h2 className="text-2xl font-black text-slate-900 mb-3">فضای اختصاصی شما فعال شد!</h2>
             <p className="text-slate-500 text-sm mb-6 leading-7">
-              فضای اختصاصی شما با موفقیت راه‌اندازی شد.{' '}
+              از این به بعد با لینک زیر وارد فضای اختصاصی سازمان خود شوید. لینک را ذخیره کنید.{' '}
               {provisionResult.trial_days > 0 && (
                 <span className="font-bold text-emerald-600">{provisionResult.trial_days} روز رایگان</span>
               )}{' '}
               فرصت دارید.
             </p>
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 mb-6 font-mono text-sm text-emerald-800 ltr-text">
-              {provisionResult.slug}{TAZE_SUFFIX}
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 mb-3 font-mono text-sm text-emerald-800 ltr-text break-all" dir="ltr">
+              {`https://${provisionResult.redirect_host || `${provisionResult.slug}${TAZE_SUFFIX}`}`}
             </div>
+            <Button
+              icon={<CopyOutlined />}
+              className="!mb-6 !rounded-xl"
+              onClick={async () => {
+                const url = `https://${provisionResult.redirect_host || `${provisionResult.slug}${TAZE_SUFFIX}`}`;
+                try {
+                  await navigator.clipboard.writeText(url);
+                  setCopyNotice('لینک اختصاصی کپی شد.');
+                } catch {
+                  setCopyNotice('کپی خودکار ممکن نشد؛ لینک را از کادر بالا انتخاب و کپی کنید.');
+                }
+              }}
+            >
+              کپی لینک اختصاصی
+            </Button>
+            {copyNotice && <p className="mb-4 text-xs text-slate-600" role="status">{copyNotice}</p>}
             <p className="text-xs text-slate-500 mb-2">
               برای ورود مدیر اصلی از ایمیل <span className="font-bold ltr-text">{normalizeOwnerEmail(ownerEmail)}</span> استفاده کنید.
             </p>
             {provisionWarning && (
-              <Alert
-                type="warning"
-                showIcon
-                className="mb-4 rounded-xl text-right"
+              <Alert type="warning" showIcon className="mb-4 rounded-xl text-right"
                 message={provisionWarning}
+                action={<Button size="small" loading={retryingDemoData} onClick={async () => {
+                  setRetryingDemoData(true);
+                  try {
+                    const result = await seedCurrentOrgDemoData({ orgId: provisionResult.org_id || null });
+                    setProvisionWarning(String(result.warning || '').trim());
+                  } catch (error) {
+                    setProvisionWarning(getDemoProvisionErrorMessage(error, 'افزودن داده‌های نمونه هنوز کامل نشد. از تنظیمات حساب دوباره تلاش کنید.'));
+                  } finally {
+                    setRetryingDemoData(false);
+                  }
+                }}>تلاش دوباره</Button>}
               />
             )}
-            <p className="text-xs text-slate-400 mb-4">در حال هدایت به پنل شما...</p>
+            <p className="text-xs text-slate-400 mb-4">برای ورود، دکمهٔ زیر را انتخاب کنید.</p>
             <Button
               type="primary"
               size="large"
               className="!rounded-xl !h-12 !font-black !bg-slate-900 !border-none hover:!bg-slate-700"
               onClick={() => {
+                clearWizardState();
                 const host = provisionResult.redirect_host || `${provisionResult.slug}${TAZE_SUFFIX}`;
                 window.location.href = `https://${host}`;
               }}

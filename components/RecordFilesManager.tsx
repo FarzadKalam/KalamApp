@@ -3,6 +3,7 @@ import { App, Button, Checkbox, Input, Modal, Select, Typography, Upload } from 
 import { PaperClipOutlined, UploadOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import {
   detectRecordFilesTable,
@@ -225,6 +226,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
   const [loadedScopeKey, setLoadedScopeKey] = useState('');
   const [recordFilesEnabled, setRecordFilesEnabled] = useState<boolean>(recordFilesTableExistsCache !== false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [batchUploading, setBatchUploading] = useState(false);
   const [pendingFileName, setPendingFileName] = useState('');
   const [pendingFileExtension, setPendingFileExtension] = useState('');
   const [pendingTags, setPendingTags] = useState<Array<{ id: string; title: string; color?: string | null }>>([]);
@@ -1337,7 +1339,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     }
   };
 
-  const uploadFile = async (file: File, desiredName: string): Promise<UploadedFileResult | null> => {
+  const uploadFile = async (file: File, desiredName: string, updateMain = true): Promise<UploadedFileResult | null> => {
     if (!recordId) {
       msg.warning('ابتدا رکورد را ذخیره کنید');
       return null;
@@ -1384,7 +1386,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
             created_at: data.created_at ? String(data.created_at) : undefined,
           },
         ]);
-        if (!mainImage && onMainImageChange) onMainImageChange(url);
+        if (updateMain && !mainImage && onMainImageChange) await onMainImageChange(url);
         await logAndTouchRecord({
           supabase,
           moduleId,
@@ -1447,7 +1449,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
         };
         appendOptimisticItem(optimisticItem, browserFolderKey);
         void loadVisibleTree({ keepItems: true, folderKey: browserFolderKey });
-        if (!mainImage && onMainImageChange) onMainImageChange(url);
+        if (updateMain && !mainImage && onMainImageChange) await onMainImageChange(url);
         await logAndTouchRecord({
           supabase,
           moduleId,
@@ -1513,7 +1515,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       }, browserFolderKey);
       void loadVisibleTree({ keepItems: true, folderKey: browserFolderKey });
 
-      if (!mainImage && onMainImageChange) onMainImageChange(url);
+      if (updateMain && !mainImage && onMainImageChange) await onMainImageChange(url);
       await logAndTouchRecord({
         supabase,
         moduleId,
@@ -1556,7 +1558,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     return null;
   };
 
-  const handleBeforeUpload = (file: File) => {
+  const handleBeforeUpload = (file: File, files: File[]) => {
     if (!recordId) {
       msg.warning('ابتدا رکورد را ذخیره کنید');
       return false;
@@ -1564,6 +1566,27 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     const fileSizeError = getUploadFileSizeError(file);
     if (fileSizeError) {
       msg.error(fileSizeError);
+      return false;
+    }
+    if (files.length > 1) {
+      if (file !== files[0] || batchUploading) return false;
+      setBatchUploading(true);
+      void (async () => {
+        try {
+          let mainSelected = Boolean(mainImage);
+          for (const item of files) {
+            const sizeError = getUploadFileSizeError(item);
+            if (sizeError) { msg.error(sizeError); continue; }
+            const uploaded = await uploadFile(item, item.name, false);
+            if (uploaded && !mainSelected) {
+              await onMainImageChange?.(uploaded.url);
+              mainSelected = true;
+            }
+          }
+        } catch (error) {
+          msg.error(toFaErrorMessage(error, 'ثبت پیوست‌ها کامل نشد.'));
+        } finally { setBatchUploading(false); }
+      })();
       return false;
     }
     const fileName = String(file.name || '').trim();
@@ -2272,7 +2295,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       </div>
 
       <div className="mt-4 flex items-center justify-between">
-        <Upload showUploadList={false} beforeUpload={handleBeforeUpload} disabled={!recordId || !canUploadFiles} fileList={[]}>
+        <Upload multiple showUploadList={false} beforeUpload={handleBeforeUpload} disabled={!recordId || !canUploadFiles || batchUploading} fileList={[]}>
           <Button icon={<UploadOutlined />}>افزودن فایل (تا {MAX_UPLOAD_FILE_SIZE_LABEL_FA})</Button>
         </Upload>
         <div className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500">

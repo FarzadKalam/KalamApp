@@ -1,4 +1,9 @@
 import { describe, expect, it } from 'vitest';
+
+it('supports file inputs bound to the standard delivery main-file field', () => {
+  expect(resolveWebFormFieldType('delivery_forms', 'image_url', 'file')).toBe('file');
+  expect(getWebFormTargetFields('delivery_forms').some((field) => field.value === 'image_url')).toBe(true);
+});
 import {
   buildWebFormPublicPath,
   findDuplicateWebFormTargetKeys,

@@ -14,6 +14,7 @@ export default function DemoDataCard() {
   const [confirm, setConfirm] = useState(false);
   const [allowed, setAllowed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [activeOrgId, setActiveOrgId] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
     setLoading(true); setError(''); setStatus(undefined); setAllowed(false);
@@ -24,9 +25,10 @@ export default function DemoDataCard() {
         const canManage = ['super_admin', 'admin', 'manager'].includes(String(context.profile?.role || '').toLowerCase())
           && accountPermission.view !== false && accountPermission.edit !== false && accountPermission.fields?.account !== false;
         if (!active) return;
+        setActiveOrgId(context.orgId);
         setAllowed(canManage);
         if (!canManage) return;
-        const result = await getCurrentOrgDemoSeedStatus();
+        const result = await getCurrentOrgDemoSeedStatus({ orgId: context.orgId });
         if (active) setStatus(result);
       } catch (err) {
         if (active) setError(getDemoDataAdminErrorMessage(err, 'دریافت وضعیت داده‌های نمونه ناموفق بود.'));
@@ -38,7 +40,8 @@ export default function DemoDataCard() {
   const run = async (clear: boolean) => {
     setBusy(true);
     try {
-      const result = clear ? await clearCurrentOrgDemoData() : await seedCurrentOrgDemoData();
+      const options = { orgId: activeOrgId };
+      const result = clear ? await clearCurrentOrgDemoData(options) : await seedCurrentOrgDemoData(options);
       if (result.status === 'seed_failed' || result.status === 'failed') throw new Error(result.warning || 'ساخت داده‌های نمونه کامل نشد.');
       if (result.warning) message.warning(result.warning);
       message.success(clear ? 'داده‌های نمونه حذف شد.' : 'داده‌های نمونه آماده شد.');

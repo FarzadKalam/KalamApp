@@ -140,6 +140,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [rolePermissionsReady, setRolePermissionsReady] = useState(false);
   const [supportAdminAccess, setSupportAdminAccess] = useState(false);
   const [supportWorkflowAccess, setSupportWorkflowAccess] = useState(false);
+  const [saasWorkflowAccess, setSaasWorkflowAccess] = useState(false);
   const [customerClubFeatureEnabled, setCustomerClubFeatureEnabled] = useState(true);
   const [instagramInboxFeatureEnabled, setInstagramInboxFeatureEnabled] = useState(false);
   const [advertisingCampaignsModuleEnabled, setAdvertisingCampaignsModuleEnabled] = useState(false);
@@ -203,6 +204,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     setSaasAdminOrgVerified(false);
     setSupportAdminAccess(false);
     setSupportWorkflowAccess(false);
+    setSaasWorkflowAccess(false);
     if (!currentUser?.id || !resolvedOrgId) return () => { active = false; };
     void supabase.rpc('current_user_is_saas_admin_org').then(({ data, error }) => {
       if (active) setSaasAdminOrgVerified(!error && data === true);
@@ -212,6 +214,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     });
     void supabase.rpc('support_is_operator', { p_permission: 'support_workflows' }).then(({ data, error }) => {
       if (active) setSupportWorkflowAccess(!error && data === true);
+    });
+    void supabase.rpc('saas_lifecycle_workflows_allowed').then(({ data, error }) => {
+      if (active) setSaasWorkflowAccess(!error && data === true);
     });
     return () => { active = false; };
   }, [currentUser?.id, resolvedOrgId]);
@@ -614,12 +619,12 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
       if (!nextIsDemoOrg) return;
 
-      const seedRes = await getCurrentOrgDemoSeedStatus().catch(() => null);
+      const seedRes = await getCurrentOrgDemoSeedStatus({ orgId: resolvedOrgId }).catch(() => null);
       if (cancelled) return;
       setHasDemoBatch(Boolean(seedRes?.has_seeded_batch));
     })();
     return () => { cancelled = true; };
-  }, [currentUserProfile?.org_id]);
+  }, [currentUserProfile?.org_id, resolvedOrgId]);
 
   const isAccountStatusRoute = location.pathname === '/settings' && new URLSearchParams(location.search).get('tab') === 'account';
   const shouldShowReadonlyOverlay = orgIsReadonly && !isAccountStatusRoute;
@@ -631,7 +636,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     }
     setClearingDemoData(true);
     try {
-      await clearCurrentOrgDemoData();
+      await clearCurrentOrgDemoData({ orgId: resolvedOrgId });
       setHasDemoBatch(false);
       messageApi.success('داده‌های دمو با موفقیت حذف شد.');
       window.location.reload();
@@ -953,6 +958,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/saas_users', label: 'همه کاربران' },
           { key: '/saas_orgs', label: 'سازمان‌ها' },
           { key: '/saas_demo_requests', label: 'درخواست‌های دمو' },
+          ...(saasWorkflowAccess ? [{ key: '/taze-system/workflows', label: 'گردش‌کار سازمان‌ها، کاربران و دموها' }] : []),
           ...(supportAdminAccess ? [{ key: '/taze-system/tickets', label: 'تیکت‌ها' }] : []),
           ...(supportAdminAccess && supportWorkflowAccess ? [{ key: '/taze-system/tickets/workflows', label: 'گردش‌کار تیکت‌ها' }] : []),
           { key: '/saas_user_announcements', label: 'اعلانات کاربران' },
@@ -979,7 +985,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       }] : []),
       { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
     ];
-  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewAdvertisingCampaigns, canViewContentCalendars, canViewCustomerClub, canViewGoalsHub, canViewInstagramInbox, canViewOrgKnowledge, canViewReportsHub, canViewSaasAdmin, canViewSupportCustomer, supportAdminAccess, supportWorkflowAccess, communicationsAccess.canUseWorkspace, rolePermissions]);
+  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewAdvertisingCampaigns, canViewContentCalendars, canViewCustomerClub, canViewGoalsHub, canViewInstagramInbox, canViewOrgKnowledge, canViewReportsHub, canViewSaasAdmin, canViewSupportCustomer, supportAdminAccess, supportWorkflowAccess, saasWorkflowAccess, communicationsAccess.canUseWorkspace, rolePermissions]);
 
   const visibleRawMenuItems = useMemo<NonNullable<MenuProps['items']>>(() => {
     const canShowMenuKey = (key?: string) => {
@@ -1021,6 +1027,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           return key === '/taze-system/tickets' ? supportAdminAccess : canViewSaasAdmin;
         case '/taze-system/tickets/workflows':
           return supportAdminAccess && supportWorkflowAccess;
+        case '/taze-system/workflows':
+          return canViewSaasAdmin && saasWorkflowAccess;
         case '/saas_users':
         case '/saas_orgs':
         case '/saas_demo_requests':

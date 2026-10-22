@@ -333,4 +333,14 @@ export const SupportWorkflowsPage: React.FC = () => {
   </div>;
 };
 
+export const SaasLifecycleWorkflowsPage: React.FC = () => {
+  const navigate = useNavigate();
+  return <div dir="rtl" className="p-4">
+    <Button className="mb-4" onClick={() => navigate('/taze-system')}>بازگشت به تازه سیستم</Button>
+    <h1 className="mb-2 text-xl font-bold">گردش‌کار سازمان‌ها، کاربران و دموها</h1>
+    <p className="mb-4 text-sm text-gray-500 dark:text-gray-400">برای ایجاد یا تغییر رکوردها شرط و اقدام‌هایی مانند اعلان و پیامک تعریف کنید.</p>
+    <WorkflowsManager inline saasOnly context="settings" />
+  </div>;
+};
+
 export default SupportTicketsPage;

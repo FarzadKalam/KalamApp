@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Empty } from 'antd';
+import { Button, Empty } from 'antd';
 import maplibregl from 'maplibre-gl';
 import { FieldType, ModuleDefinition } from '../../types';
 import { getRecordTitle } from '../../utils/recordTitle';
@@ -31,6 +31,8 @@ const MapView: React.FC<MapViewProps> = ({ data, moduleId, moduleConfig, navigat
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<maplibregl.Marker[]>([]);
   const mapMaxZoom = Math.max(MAP_MAX_ZOOM, 18);
+  const [mapUnavailable, setMapUnavailable] = useState(false);
+  const [mapAttempt, setMapAttempt] = useState(0);
   const [previewRecordId, setPreviewRecordId] = useState<string | null>(null);
 
   const locationFieldKeys = useMemo(() => {
@@ -109,6 +111,8 @@ const MapView: React.FC<MapViewProps> = ({ data, moduleId, moduleConfig, navigat
       .filter(Boolean) as PointRecord[];
   }, [data, locationFieldKeys, moduleConfig, statusColorLookup, optionLabelLookup]);
 
+  const hasPoints = points.length > 0;
+
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
 
@@ -119,21 +123,30 @@ const MapView: React.FC<MapViewProps> = ({ data, moduleId, moduleConfig, navigat
 
     ensureMapLibreRTLTextPlugin();
 
-    const map = new maplibregl.Map({
-      container: mapContainerRef.current,
-      style: (useRemoteStyle ? rasterFallbackStyle : buildMapStyle()) as any,
-      transformRequest: buildMapTransformRequest() as any,
-      center: [IRAN_CENTER[1], IRAN_CENTER[0]],
-      zoom: 5,
-      minZoom: 4,
-      maxZoom: mapMaxZoom,
-      maxBounds: [
-        [minLng, minLat],
-        [maxLng, maxLat],
-      ],
-      attributionControl: {},
-    });
+    let map: maplibregl.Map;
+    try {
+      map = new maplibregl.Map({
+        container: mapContainerRef.current,
+        style: (useRemoteStyle ? rasterFallbackStyle : buildMapStyle()) as any,
+        transformRequest: buildMapTransformRequest() as any,
+        center: [IRAN_CENTER[1], IRAN_CENTER[0]],
+        zoom: 5,
+        minZoom: 4,
+        maxZoom: mapMaxZoom,
+        maxBounds: [
+          [minLng, minLat],
+          [maxLng, maxLat],
+        ],
+        attributionControl: {},
+      });
+    } catch {
+      // Context creation can fail even when the browser advertises WebGL support.
+      mapContainerRef.current.replaceChildren();
+      setMapUnavailable(true);
+      return;
+    }
 
+    setMapUnavailable(false);
     mapRef.current = map;
     map.on('load', () => map.resize());
     attachMissingMapImageFallback(map);
@@ -174,7 +187,7 @@ const MapView: React.FC<MapViewProps> = ({ data, moduleId, moduleConfig, navigat
       map.remove();
       mapRef.current = null;
     };
-  }, [mapMaxZoom]);
+  }, [mapMaxZoom, hasPoints, mapAttempt]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -218,7 +231,7 @@ const MapView: React.FC<MapViewProps> = ({ data, moduleId, moduleConfig, navigat
       maxZoom: Math.min(mapMaxZoom, 16),
       duration: 500,
     });
-  }, [mapMaxZoom, points]);
+  }, [mapMaxZoom, points, mapAttempt]);
 
   if (!locationFieldKeys.length) {
     return (
@@ -240,7 +253,17 @@ const MapView: React.FC<MapViewProps> = ({ data, moduleId, moduleConfig, navigat
 
   return (
     <div className="kalam-map-root relative h-full min-h-[420px] rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800">
-      {!hasConfiguredTiles && (
+      {mapUnavailable && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-white dark:bg-[#171717] p-4" role="status">
+          <Empty description="نقشه در این مرورگر قابل نمایش نیست. شتاب‌دهی گرافیکی مرورگر را فعال کنید یا از مرورگر دیگری استفاده کنید.">
+            <Button onClick={() => {
+              setMapUnavailable(false);
+              setMapAttempt((attempt) => attempt + 1);
+            }}>تلاش مجدد</Button>
+          </Empty>
+        </div>
+      )}
+      {!mapUnavailable && !hasConfiguredTiles && (
         <div className="absolute top-3 right-3 z-[1000] text-[11px] px-2 py-1 rounded bg-yellow-100 text-yellow-900 border border-yellow-300">
           لطفا `VITE_MAP_STYLE_URL` را روی style.json سرور نقشه تنظیم کنید
         </div>

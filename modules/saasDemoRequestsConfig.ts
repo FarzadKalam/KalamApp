@@ -74,6 +74,16 @@ export const saasDemoRequestsConfig: ModuleDefinition = {
       nature: FieldNature.STANDARD,
     },
     {
+      key: 'demo_url',
+      labels: { fa: 'لینک اختصاصی دمو', en: 'Demo URL' },
+      type: FieldType.TEXT,
+      location: FieldLocation.BLOCK,
+      blockId: 'status_info',
+      order: 10,
+      readonly: true,
+      nature: FieldNature.SYSTEM,
+    },
+    {
       key: 'status',
       labels: { fa: 'وضعیت', en: 'Status' },
       type: FieldType.SELECT,

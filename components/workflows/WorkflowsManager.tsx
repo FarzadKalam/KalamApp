@@ -17,6 +17,7 @@ type WorkflowsManagerProps = {
   defaultModuleId?: string | null;
   context?: 'settings' | 'module_list';
   supportOnly?: boolean;
+  saasOnly?: boolean;
 };
 
 type WorkflowsPermission = {
@@ -49,6 +50,7 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
   defaultModuleId,
   context = 'module_list',
   supportOnly = false,
+  saasOnly = false,
 }) => {
   const { message } = App.useApp();
   const [loading, setLoading] = useState(false);
@@ -57,7 +59,7 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<WorkflowRecord | null>(null);
   const [isCreatingFromMediaDraft, setIsCreatingFromMediaDraft] = useState(false);
-  const [permissions, setPermissions] = useState<WorkflowsPermission>(supportOnly
+  const [permissions, setPermissions] = useState<WorkflowsPermission>(supportOnly || saasOnly
     ? { ...defaultPerms, view: false, edit: false, delete: false }
     : defaultPerms);
   const [searchParams] = useSearchParams();
@@ -90,10 +92,12 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
       Object.values(MODULES)
         .filter((module) => supportOnly
           ? module.id === 'saas_support_tickets'
-          : !isSaasAdminModuleId(module.id) && module.registryVisibility?.workflows !== false)
+          : saasOnly
+            ? ['saas_orgs', 'saas_users', 'saas_demo_requests'].includes(module.id)
+            : !isSaasAdminModuleId(module.id) && module.registryVisibility?.workflows !== false)
         .map((module) => ({ label: module.titles.fa, value: module.id }))
         .sort((a, b) => a.label.localeCompare(b.label, 'fa')),
-    [supportOnly]
+    [supportOnly, saasOnly]
   );
 
   const canView = permissions.view !== false;
@@ -114,6 +118,12 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
     try {
       if (supportOnly) {
         const { data, error } = await supabase.rpc('support_is_operator', { p_permission: 'support_workflows' });
+        if (error) throw error;
+        setPermissions({ view: data === true, edit: data === true, delete: data === true, fields: { settings_tab: true, module_list_button: true } });
+        return;
+      }
+      if (saasOnly) {
+        const { data, error } = await supabase.rpc('saas_lifecycle_workflows_allowed');
         if (error) throw error;
         setPermissions({ view: data === true, edit: data === true, delete: data === true, fields: { settings_tab: true, module_list_button: true } });
         return;
@@ -147,25 +157,26 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
         },
       });
     } catch {
-      setPermissions(supportOnly ? { ...defaultPerms, view: false, edit: false, delete: false } : defaultPerms);
+      setPermissions(supportOnly || saasOnly ? { ...defaultPerms, view: false, edit: false, delete: false } : defaultPerms);
     }
-  }, [supportOnly]);
+  }, [supportOnly, saasOnly]);
 
   const fetchRecords = useCallback(async () => {
     setLoading(true);
     try {
       let query = supabase.from('workflows').select('*').order('created_at', { ascending: false });
       if (supportOnly) query = query.eq('module_id', 'saas_support_tickets');
+      else if (saasOnly) query = query.in('module_id', ['saas_orgs', 'saas_users', 'saas_demo_requests']);
       else if (moduleFilter !== 'all') query = query.or(`module_id.eq.${moduleFilter},module_ids.cs.{${moduleFilter}}`);
       const { data, error } = await query;
       if (error) throw error;
-      setRecords((data || []) as WorkflowRecord[]);
+      setRecords((data || []).filter((row: any) => !saasOnly || moduleFilter === 'all' || row.module_id === moduleFilter) as WorkflowRecord[]);
     } catch (err: any) {
       message.error(toFaErrorMessage(err, 'خطا در دریافت گردش کارها'));
     } finally {
       setLoading(false);
     }
-  }, [moduleFilter, supportOnly]);
+  }, [moduleFilter, supportOnly, saasOnly]);
 
   useEffect(() => {
     fetchPermissions();
@@ -185,13 +196,13 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
   }, [defaultModuleId, moduleFilter]);
 
   useEffect(() => {
-    if (!instagramMediaDraft || openedDraftKey === instagramMediaDraft.key || !canEdit || !canRenderByContext) return;
+    if (supportOnly || saasOnly || !instagramMediaDraft || openedDraftKey === instagramMediaDraft.key || !canEdit || !canRenderByContext) return;
     setEditingRecord(null);
     setIsCreatingFromMediaDraft(true);
     setModuleFilter('instagram_interaction_events');
     setEditorOpen(true);
     setOpenedDraftKey(instagramMediaDraft.key);
-  }, [canEdit, canRenderByContext, instagramMediaDraft, openedDraftKey]);
+  }, [canEdit, canRenderByContext, instagramMediaDraft, openedDraftKey, supportOnly, saasOnly]);
 
   const toggleActive = async (record: WorkflowRecord, checked: boolean) => {
     if (!canEdit) return;

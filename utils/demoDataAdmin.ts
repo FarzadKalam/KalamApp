@@ -42,9 +42,11 @@ const invokeDemoDataAdmin = async <T = DemoDataAdminStatus>(
 export const seedCurrentOrgDemoData = async (options?: { orgId?: string | null }) =>
   invokeDemoDataAdmin<DemoDataAdminStatus>("seed_org_demo_data", options);
 
-export const clearCurrentOrgDemoData = async () => invokeDemoDataAdmin<DemoDataAdminStatus>("clear_org_demo_data");
+export const clearCurrentOrgDemoData = async (options?: { orgId?: string | null }) =>
+  invokeDemoDataAdmin<DemoDataAdminStatus>("clear_org_demo_data", options);
 
-export const getCurrentOrgDemoSeedStatus = async () => invokeDemoDataAdmin<DemoDataAdminStatus>("get_demo_seed_status");
+export const getCurrentOrgDemoSeedStatus = async (options?: { orgId?: string | null }) =>
+  invokeDemoDataAdmin<DemoDataAdminStatus>("get_demo_seed_status", options);
 
 export const getDemoDataAdminErrorMessage = (error: unknown, fallback: string) =>
   toFaErrorMessage(error as any, fallback);

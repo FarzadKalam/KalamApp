@@ -74,6 +74,7 @@ import { isCustomerPurchaseStatus, normalizeCustomerClubCode, resolveCustomerClu
 import { evaluateWorkflowConditions } from '../utils/workflowRuntime';
 import { useCurrencyConfig } from '../utils/currency';
 import { resolveInvoiceStorageTable } from '../utils/invoiceModuleRouting';
+import { persistStagedMainRecordFiles, waitForMainFileUploads } from '../utils/mainRecordFiles';
 
 const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
 const SAAS_ANNOUNCEMENT_CONDITION_FIELD_KEYS = new Set(['conditions_all', 'conditions_any']);
@@ -1466,6 +1467,10 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const handleFinish = async (values: any) => {
     setLoading(true);
     try {
+      await waitForMainFileUploads(supabase, module.id);
+      if (module.fields.some((field) => field.key === 'image_url')) {
+        values = { ...values, image_url: form.getFieldValue('image_url') ?? values.image_url };
+      }
       if (isBulkEdit) {
         values = { ...formData, ...values };
       }
@@ -1872,6 +1877,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
           selectedTags,
           invoicePaymentAllocation: confirmedInvoicePaymentAllocationRef.current || undefined,
         });
+        await persistStagedMainRecordFiles(supabase, module.id, resolveInvoiceStorageTable(module.id, module.table), String(values.image_url || ''), recordId);
         confirmedInvoicePaymentAllocationRef.current = null;
         clearSmartFormDraft(draftKey);
         formDirtyRef.current = false;
@@ -2373,6 +2379,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
           if (error) throw error;
 
           if (inserted?.id) {
+            await persistStagedMainRecordFiles(supabase, module.id, resolveInvoiceStorageTable(module.id, module.table), String(values.image_url || ''), String(inserted.id));
             await synchronizeCustomerClubCredit(String(inserted.id));
             if (hasInlineTagsDraft) {
               await syncRecordTags(supabase, module.id, String(inserted.id), selectedTags);

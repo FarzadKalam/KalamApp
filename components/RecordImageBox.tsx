@@ -169,7 +169,12 @@ const RecordImageBox: React.FC<RecordImageBoxProps> = ({
         </>
       ) : null}
       {!canOpenFilesGallery && canEdit && onImageUpdate ? (
-        <Upload showUploadList={false} beforeUpload={onImageUpdate}>
+        <Upload multiple showUploadList={false} beforeUpload={(file, files) => {
+          if (file === files[0]) void (async () => {
+            for (const item of files) await onImageUpdate(item);
+          })();
+          return false;
+        }}>
           <Button type="primary" icon={<UploadOutlined />} className="border-none bg-leather-500">
             {'\u0622\u067E\u0644\u0648\u062F \u0641\u0627\u06CC\u0644'}
           </Button>

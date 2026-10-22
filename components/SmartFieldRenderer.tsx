@@ -28,6 +28,7 @@ import PersianDatePicker from './PersianDatePicker';
 import RelatedRecordPopover from './RelatedRecordPopover';
 import QrScanPopover from './QrScanPopover';
 import FileManagerPickerModal from './files/FileManagerPickerModal';
+import { stageMainRecordFiles, trackMainFileUpload, type MainRecordFile } from '../utils/mainRecordFiles';
 import PhoneFieldInput from './PhoneFieldInput';
 import PhoneActionsPopover from './PhoneActionsPopover';
 import DateObject from 'react-date-object';
@@ -1170,7 +1171,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     }
   };
 
-  const handleImageUpload = async (file: File) => {
+  const handleImageUpload = async (file: File, updateValue = true) => {
     try {
       setUploading(true);
       const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}_${sanitizeStorageFileName(file.name || 'image')}`;
@@ -1197,7 +1198,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             await createFileManagerOriginForUpload({
               moduleId,
               recordId,
-              recordTitle: String(recordId),
+              recordTitle: 'رکورد',
               fileUrl: publicUrl,
               fileName: file.name || null,
               mimeType: file.type || null,
@@ -1205,7 +1206,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
               sortOrder: 0,
             });
           } catch (fileManagerError) {
-            console.warn('Could not append file entry after image upload into file manager tables', fileManagerError);
+            throw fileManagerError;
           }
         } else {
           const { error: fileInsertError } = await supabase
@@ -1221,13 +1222,18 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
               },
             ]);
           if (fileInsertError) {
-            console.warn('Could not append file entry after image upload', fileInsertError);
+            throw fileInsertError;
           }
         }
       }
 
+      if (updateValue && !recordId && moduleId && field.key === 'image_url') {
+        await stageMainRecordFiles(supabase, moduleId, String(value || ''), publicUrl, [{
+          file_url: publicUrl, file_name: file.name || null, mime_type: file.type || null, file_type: uploadedFileType,
+        }]);
+      }
       msg.success(uploadedFileType === 'image' ? 'تصویر با موفقیت آپلود شد' : 'فایل با موفقیت آپلود شد');
-      onChange(publicUrl);
+      if (updateValue) onChange(publicUrl);
       return publicUrl;
     } catch (error: any) {
       if (isUploadCanceledError(error)) return null;
@@ -1239,11 +1245,25 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     }
   };
 
-  const handleImagePickerUpload = (files: File[]) => {
-    const nextFile = files[0];
-    if (!nextFile || uploading || !forceEditMode || isReadonly) return;
+  const handleImagePickerUpload = async (files: File[]) => {
+    if (!files.length || uploading || !forceEditMode || isReadonly) return;
     setIsImagePickerOpen(false);
-    void handleImageUpload(nextFile);
+    let mainUrl: string | null = null;
+    const uploadedFiles: MainRecordFile[] = [];
+    for (const file of (field.key === 'image_url' ? files : files.slice(0, 1))) {
+      const url = await handleImageUpload(file, false);
+      if (url && !mainUrl) mainUrl = url;
+      if (url) uploadedFiles.push({ file_url: url, file_name: file.name || null, mime_type: file.type || null, file_type: file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : 'file' });
+    }
+    if (mainUrl && !recordId && moduleId && field.key === 'image_url') {
+      try {
+        await stageMainRecordFiles(supabase, moduleId, String(value || ''), mainUrl, uploadedFiles);
+      } catch (error) {
+        msg.error(toFaErrorMessage(error, 'نگهداری پیوست‌های فرم ناموفق بود.'));
+        return;
+      }
+    }
+    if (mainUrl) onChange(mainUrl);
   };
 
   const loadGlobalImageGallery = async () => {
@@ -2736,7 +2756,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
           const isEditable = !!forceEditMode && !isReadonly;
           const acceptedFileTypes: Array<'image' | 'video' | 'file'> = field.fileTypes?.length
             ? field.fileTypes
-            : ['image'];
+            : field.key === 'image_url' ? ['image', 'video', 'file'] : ['image'];
           const allowsNonImageFiles = acceptedFileTypes.some((fileType) => fileType !== 'image');
           const selectedValueIsImage = isImageFileUrl(value);
           const useCompactFileButtons = !!compactMode;
@@ -2782,16 +2802,16 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 </Button>
               )}
 
-              {/* Picker modal: select a single image from existing files */}
+              {/* The main field selects a cover and keeps all selected files in the record gallery. */}
               <FileManagerPickerModal
                 open={isImagePickerOpen}
                 onClose={() => setIsImagePickerOpen(false)}
                 moduleId={String(moduleId || '')}
                 recordId={recordId}
                 title={allowsNonImageFiles ? 'انتخاب تصویر یا فایل برای فیلد' : 'انتخاب تصویر برای فیلد'}
-                multiple={false}
+                multiple={field.key === 'image_url'}
                 fileTypes={acceptedFileTypes}
-                onUploadFiles={handleImagePickerUpload}
+                onUploadFiles={(files) => trackMainFileUpload(supabase, String(moduleId || ''), handleImagePickerUpload(files))}
                 onSelect={(attachments) => {
                   const url = String(attachments[0]?.url || '').trim();
                   if (url) onChange(url);
@@ -2807,14 +2827,20 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
               <Upload 
                   listType="picture-card" 
                   showUploadList={false} 
-                  beforeUpload={(file) => { handleImageUpload(file); return false; }}
+                  multiple={field.key === 'image_url'}
+                  beforeUpload={(file, files) => {
+                    if (file === files[0]) trackMainFileUpload(supabase, String(moduleId || ''), handleImagePickerUpload(files));
+                    return false;
+                  }}
                   disabled={uploading || !forceEditMode || isReadonly}
                   fileList={[]}
               >
                   {uploading ? (
                     <div><LoadingOutlined /><div style={{ marginTop: 8 }}>...</div></div>
                   ) : value ? (
-                    <ResilientImage src={String(value)} preset="thumb" alt="avatar" style={{ width: '100%', borderRadius: 8 }} />
+                    field.key === 'image_url' && !isImageFileUrl(value)
+                      ? <FileExtensionTile url={String(value)} className="h-full w-full rounded-lg" />
+                      : <ResilientImage src={String(value)} preset="thumb" alt="تصویر" style={{ width: '100%', borderRadius: 8 }} />
                   ) : (
                     <div><UploadOutlined /><div style={{ marginTop: 8 }}>آپلود</div></div>
                   )}
