@@ -1,3 +1,13 @@
+/* The app shell uses fixed-height roots. Marketing pages need document scroll,
+   otherwise window scrolling and viewport-triggered animations target the wrong surface. */
+html.taze-public-document,
+html.taze-public-document body,
+html.taze-public-document #root {
+  height: auto;
+  min-height: 100%;
+  overflow-x: clip;
+  overflow-y: visible;
+}
 .public-site {
   --site-ink: #202329;
   --site-muted: #626773;
@@ -117,4 +127,52 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .public-site *, .public-site *::before, .public-site *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+
+.symbol-hero { padding-block: 76px 84px; background: linear-gradient(130deg, #fff 45%, #fcf8fa); }
+.symbol-hero h1 { font-size: clamp(32px, 3.2vw, 48px); font-weight: 800; line-height: 1.65; }
+.symbol-hero .product-hero__description { max-width: 710px; margin-top: 28px; line-height: 2.15; font-size: 18px; }
+.symbol-hero__finale { margin-top: 18px; font-size: 24px; font-weight: 800; color: rgb(var(--brand-700-rgb)); }
+.symbol-hero__visual { min-width: 0; }
+.brand-symbol { position: relative; width: 100%; max-width: 440px; aspect-ratio: 1; margin-inline: auto; perspective: 1000px; isolation: isolate; }
+.brand-symbol__object { position: absolute; inset: 0; transform-style: preserve-3d; }
+.brand-symbol__core, .brand-symbol__layer { position: absolute; width: 50%; height: 50%; inset: 25%; border-radius: 28%; }
+.brand-symbol__core { display: flex; align-items: center; justify-content: center; background: #fff; border: 1px solid #f1dce6; box-shadow: inset 0 2px 0 #fff, 0 28px 50px -30px rgb(124 15 63 / 28%); overflow: hidden; transform: translateZ(48px); }
+.brand-symbol__core img { width: 96%; height: 96%; object-fit: contain; pointer-events: none; user-select: none; }
+.brand-symbol__layer--back { transform: translate3d(-12px, 22px, 0) rotate(-12deg); background: rgb(var(--brand-100-rgb)); border: 1px solid rgb(var(--brand-200-rgb)); }
+.brand-symbol__layer--middle { transform: translate3d(-5px, 10px, 20px) rotate(-6deg); background: rgb(var(--brand-50-rgb)); border: 1px solid rgb(var(--brand-100-rgb)); }
+.brand-symbol__orbit { position: absolute; inset: 14% 5%; border: 1px solid #e8dce3; border-radius: 50%; }
+.brand-symbol__orbit--outer { transform: rotate(-32deg) translateZ(-16px); }
+.brand-symbol__orbit--inner { inset: 4% 18%; border-color: rgb(var(--brand-200-rgb)); transform: rotate(32deg) translateZ(-28px); }
+.brand-symbol__shadow { position: absolute; inset: auto 20% 8%; height: 9%; background: radial-gradient(ellipse, rgb(90 40 60 / 12%), transparent 70%); filter: blur(8px); }
+.brand-symbol__light { position: absolute; left: 50%; top: 50%; width: 75%; height: 75%; border-radius: 50%; background: radial-gradient(circle, rgb(255 255 255 / 65%), transparent 68%); pointer-events: none; mix-blend-mode: screen; }
+.brand-symbol__word { position: absolute; padding: 5px 10px; background: #fff; color: #6e5b66; font-size: 12px; font-weight: 600; white-space: nowrap; transform: translateZ(28px); }
+.brand-symbol__word--one { top: 9%; right: 16%; }
+.brand-symbol__word--two { top: 33%; left: 0; }
+.brand-symbol__word--three { bottom: 16%; right: 1%; }
+.brand-symbol__word--four { top: 42%; right: -1%; }
+.brand-symbol__word--five { bottom: 9%; left: 12%; }
+.brand-symbol__signature { position: absolute; bottom: -28px; inset-inline: 0; color: var(--site-muted); text-align: center; font-size: 12px; }
+.site-counter { display: inline-flex; width: 100%; flex-direction: column; align-items: center; font-variant-numeric: tabular-nums; }
+.site-counter__track { position: relative; display: block; width: 72px; height: 3px; margin-top: 20px; border-radius: 3px; background: rgb(var(--brand-100-rgb)); overflow: hidden; }
+.site-counter__track > span { position: absolute; inset: 0; background: rgb(var(--brand-600-rgb)); transform-origin: right; }
+.product-shot-figure { min-width: 0; margin: 0; }
+.product-shot-button { display: block; position: relative; width: 100%; padding: 0; border: 0; border-radius: 16px; background: #f4f5f7; overflow: hidden; text-align: inherit; }
+.product-shot { position: relative; overflow: hidden; border-radius: 12px; background: #f4f5f7; }
+.product-shot img { display: block; width: 100%; height: auto; }
+.product-shot--process { aspect-ratio: 1.65; background: #161719; }
+.product-shot--process img { position: absolute; width: 250%; max-width: none; height: auto; left: -40%; top: -52%; }
+.product-shot--bot { aspect-ratio: 3; background: #161719; }
+.product-shot--bot img { position: absolute; width: 200%; max-width: none; left: -45%; top: -160%; }
+.product-shot-expand { position: absolute; bottom: 12px; left: 12px; display: flex; align-items: center; gap: 7px; padding: 9px 12px; border: 1px solid rgb(255 255 255 / 20%); border-radius: 9px; background: rgb(20 22 28 / 85%); color: #fff; font-size: 12px; opacity: 0; transition: opacity 180ms ease; }
+.product-shot-button:hover .product-shot-expand, .product-shot-button:focus-visible .product-shot-expand { opacity: 1; }
+.public-site .site-feature-media { padding: 8px; }
+@media (min-width: 1024px) { .symbol-hero .product-hero__layout { grid-template-columns: 1.45fr 1fr; gap: 64px; } }
+@media (max-width: 1023px) { .symbol-hero { padding-block: 40px 64px; } .brand-symbol { max-width: 340px; } }
+@media (max-width: 639px) {
+  .symbol-hero .product-hero__description { font-size: 16px; line-height: 2.1; }
+  .symbol-hero__finale { font-size: 22px; }
+  .brand-symbol { width: 90%; max-width: 310px; }
+  .brand-symbol__word { font-size: 11px; }
+  .product-shot-expand { opacity: 1; font-size: 11px; padding: 6px 9px; bottom: 6px; left: 6px; }
 }

@@ -4,6 +4,7 @@ import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, CloseCircle
 import { Reveal, SectionHeading, SectionShell } from '../primitives';
 import DemoForm from '../shared/DemoForm';
 import { DEFAULT_HOME_SECTIONS } from '../defaultLandingConfig';
+import ProductScreenshot from '../shared/ProductScreenshot';
 
 // ──────────────────────────────────────────────────
 // Calendar — نمای تقویم
@@ -100,7 +101,7 @@ export const ScreenshotsSection: React.FC<{ props: any }> = ({ props }) => {
               {images.map((img, i) => (
                 <div key={i} className="min-w-0 flex-[0_0_85%] px-2 md:flex-[0_0_70%]">
                   <div className={`overflow-hidden rounded-2xl border ${invert ? 'border-white/10' : 'border-zinc-200'} shadow-2xl`}>
-                    <img src={img.url} alt={img.caption ?? ''} className="w-full object-cover" />
+                    <ProductScreenshot src={img.url} alt={img.caption} />
                   </div>
                   {img.caption && <div className={`mt-3 text-center text-sm font-bold ${invert ? 'text-zinc-300' : 'text-zinc-600'}`}>{img.caption}</div>}
                 </div>
@@ -256,7 +257,7 @@ const SlideMedia: React.FC<{ url?: string; title?: string; invert?: boolean }> =
   if (isVideoUrl(url)) {
     return <video src={url} autoPlay muted loop playsInline className="aspect-video w-full rounded-2xl object-cover shadow-lg" />;
   }
-  return <img src={url} alt={title ?? ''} className="aspect-video w-full rounded-2xl object-cover shadow-lg" />;
+  return <ProductScreenshot src={url} alt={title} />;
 };
 
 export const FeatureSliderSection: React.FC<{ props: any }> = ({ props }) => {

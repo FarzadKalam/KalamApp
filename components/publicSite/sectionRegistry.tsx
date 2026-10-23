@@ -60,6 +60,7 @@ export const SECTION_REGISTRY: Record<SectionType, SectionDef> = {
       { key: 'highlight', label: 'واژه رنگی', type: 'text' },
       { key: 'titleAfter', label: 'عنوان — بعد از واژه رنگی', type: 'textarea' },
       { key: 'subtitle', label: 'زیرعنوان', type: 'textarea' },
+      { key: 'finale', label: 'متن تأکیدی پایانی', type: 'text' },
       { key: 'hubLabel', label: 'متن هستهٔ مرکزی', type: 'text' },
       { key: 'media', label: 'تصویر واقعی محیط محصول (اختیاری)', type: 'image' },
       { key: 'caption', label: 'زیرنویس پایانی', type: 'text' },

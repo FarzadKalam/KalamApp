@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { motion, useInView, useMotionValue, useReducedMotion, useSpring, useTransform } from 'framer-motion';
+import { animate, motion, useInView, useMotionValue, useReducedMotion, useTransform } from 'framer-motion';
 
 // ──────────────────────────────────────────────────
 // Reveal: ظاهر شدن نرم هنگام اسکرول
@@ -42,30 +42,36 @@ export const Counter: React.FC<{
   prefix?: string;
   duration?: number;
   decimals?: number;
-}> = ({ to, suffix = '', prefix = '', decimals = 0 }) => {
+  showProgress?: boolean;
+}> = ({ to, suffix = '', prefix = '', duration = 1600, decimals = 0, showProgress = false }) => {
   const ref = useRef<HTMLSpanElement>(null);
-  const inView = useInView(ref, { once: true, margin: '-60px' });
+  const inView = useInView(ref, { once: true, amount: .6 });
   const motionValue = useMotionValue(0);
-  const spring = useSpring(motionValue, { duration: 1600, bounce: 0 });
   const reduceMotion = useReducedMotion();
   const [display, setDisplay] = useState('۰');
 
   const target = Number(to) || 0;
+  const progress = useTransform(motionValue, value => target ? Math.min(1, Math.max(0, value / target)) : 1);
   useEffect(() => {
-    if (inView) motionValue.set(target);
-  }, [inView, target, motionValue]);
+    if (!inView) return;
+    if (reduceMotion) { motionValue.set(target); return; }
+    const animation = animate(motionValue, target, { duration: duration / 1000, ease: [0.22, 1, 0.36, 1] });
+    return () => animation.stop();
+  }, [inView, target, duration, reduceMotion, motionValue]);
 
   useEffect(() => {
-    const unsub = spring.on('change', (v) => {
+    const unsub = motionValue.on('change', (v) => {
       const val = decimals > 0 ? Number(v.toFixed(decimals)) : Math.round(v);
       setDisplay(toFa(val));
     });
     return () => unsub();
-  }, [spring, decimals]);
+  }, [motionValue, decimals]);
 
   return (
-    <span ref={ref}>
-      {prefix}{reduceMotion ? toFa(target) : display}{suffix}
+    <span ref={ref} className="site-counter" data-counter-target={target} aria-label={`${prefix}${toFa(target)}${suffix}`}>
+      <span className="sr-only">{prefix}{toFa(target)}{suffix}</span>
+      <span aria-hidden="true" className="site-counter__value">{prefix}{reduceMotion ? toFa(target) : display}{suffix}</span>
+      {showProgress && <span className="site-counter__track" aria-hidden="true"><motion.span style={{ scaleX: reduceMotion ? 1 : progress }} /></span>}
     </span>
   );
 };

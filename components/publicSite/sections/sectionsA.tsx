@@ -240,7 +240,7 @@ export const StatsSection: React.FC<{ props: any }> = ({ props }) => {
         {(props.title || props.eyebrow) && <SectionHeading eyebrow={props.eyebrow} title={props.title ?? ''} text={props.text} />}
         <div className="grid grid-cols-2 lg:grid-cols-4">
           {items.map((item, index) => <Reveal key={item.label} delay={index * .04} className="site-stat text-center">
-            <div className="text-4xl font-bold text-zinc-900 md:text-5xl"><Counter to={item.value} suffix={item.suffix} /></div>
+            <div className="text-4xl font-bold text-zinc-900 md:text-5xl"><Counter to={item.value} suffix={item.suffix} duration={1600} showProgress /></div>
             <p className="mt-3 text-sm text-zinc-600">{item.label}</p>
           </Reveal>)}
         </div>

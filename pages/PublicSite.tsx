@@ -2141,9 +2141,13 @@ const ContactPage = () => <main className="px-5 py-20"><div className="mx-auto g
 const PublicSiteScrollRestoration = () => {
   const { key, hash } = useLocation();
   useLayoutEffect(() => {
+    document.documentElement.classList.add('taze-public-document');
     const previous = window.history.scrollRestoration;
     window.history.scrollRestoration = 'manual';
-    return () => { window.history.scrollRestoration = previous; };
+    return () => {
+      document.documentElement.classList.remove('taze-public-document');
+      window.history.scrollRestoration = previous;
+    };
   }, []);
   useLayoutEffect(() => {
     document.querySelectorAll<HTMLDetailsElement>('.site-mobile-nav[open]').forEach(menu => { menu.open = false; });
