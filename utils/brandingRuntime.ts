@@ -10,14 +10,14 @@ import {
 } from "../theme/brandTheme";
 import { normalizeCurrencyConfig, persistCurrencyConfig, type CurrencyConfig } from "./currency";
 import { normalizePublicAssetUrl } from "./assetUrl";
-import { isLocalHost, isSharedAppHost, isTenantHost, isTazeSystemFamilyHost } from "./hostRouting";
+import { isInternalRootHost, isLocalHost, isMarketingHost, isSaasAdminPanelHost, isSaasAppHost, isSharedAppHost, isTenantHost, isTazeSystemFamilyHost } from "./hostRouting";
 import {
   persistLoadingBrandIdentity,
   resolveLoadingBrandIdentity,
   type LoadingBrandIdentity,
 } from './loadingBrand';
 
-export const BRANDING_CACHE_KEY = "erp:branding-cache";
+export const BRANDING_CACHE_KEY = "erp:branding-cache:v2";
 
 const BRAND_TITLE_ATTRIBUTE = "data-brand-title";
 const BRAND_LOGO_ATTRIBUTE = "data-brand-logo";
@@ -39,7 +39,7 @@ const getCurrentHostname = () =>
 const shouldUseCachedBranding = (hostname = getCurrentHostname()) =>
   Boolean(
     hostname && (
-      isTenantHost(hostname)
+      isTenantHost(hostname) || isInternalRootHost(hostname)
       || (!isLocalHost(hostname) && !isTazeSystemFamilyHost(hostname))
     )
   );
@@ -48,6 +48,7 @@ const getBrandingCacheStorageKey = (hostname = getCurrentHostname()) =>
   `${BRANDING_CACHE_KEY}:${hostname || "unknown-host"}`;
 
 let runtimeBrandingPromise: Promise<RuntimeBrandingResult> | null = null;
+let brandingGeneration = 0;
 let runtimeBrandingCache: {
   data: RuntimeBrandingResult | null;
   expiresAt: number;
@@ -126,6 +127,21 @@ export const readCachedBranding = (): BrandingConfig | null => {
   }
 };
 
+export const getSafeInitialBranding = (): BrandingConfig => {
+  const cached = readCachedBranding();
+  if (cached) return cached;
+  const host = getCurrentHostname();
+  if (isLocalHost(host) || isMarketingHost(host) || isSaasAppHost(host) || isSaasAdminPanelHost(host)) return DEFAULT_BRANDING;
+  return {
+    ...DEFAULT_BRANDING,
+    brandName: 'در حال بارگذاری سازمان',
+    appTitle: 'در حال بارگذاری سازمان',
+    shortName: 'سازمان',
+    logoUrl: null,
+    iconUrl: null,
+  };
+};
+
 const setRuntimeAttribute = (name: string, value?: string | null) => {
   if (typeof document === "undefined") return;
   if (value && value.trim()) {
@@ -172,7 +188,7 @@ const applyFavicon = (iconUrl?: string | null) => {
 };
 
 export const readRuntimeBranding = (): BrandingConfig => {
-  const cached = readCachedBranding() || DEFAULT_BRANDING;
+  const cached = getSafeInitialBranding();
   if (typeof document === "undefined") return cached;
 
   const runtimeTitle = document.documentElement.getAttribute(BRAND_TITLE_ATTRIBUTE);
@@ -194,10 +210,6 @@ export const applyBrandingRuntime = (branding: BrandingConfig) => {
   setRuntimeAttribute(BRAND_LOGO_ATTRIBUTE, branding.logoUrl);
   setRuntimeAttribute(BRAND_ICON_ATTRIBUTE, branding.iconUrl);
   applyFavicon(branding.iconUrl);
-  const hostname = getCurrentHostname();
-  if (shouldUseCachedBranding(hostname)) {
-    window.localStorage.setItem(getBrandingCacheStorageKey(hostname), JSON.stringify(branding));
-  }
 };
 
 const loadPublicBranding = async (): Promise<RuntimeBrandingResult> => {
@@ -213,6 +225,9 @@ const loadPublicBranding = async (): Promise<RuntimeBrandingResult> => {
   if (error) throw error;
 
   const row = toObjectRecord(Array.isArray(data) ? data[0] : data);
+  if (!isMarketingHost(hostname) && !isSaasAppHost(hostname) && !row.org_id) {
+    throw new Error('سازمان این آدرس پیدا نشد.');
+  }
   return buildRuntimeBranding(row.company_settings, row.branding_settings);
 };
 
@@ -236,6 +251,7 @@ const loadAuthenticatedBranding = async (): Promise<RuntimeBrandingResult> => {
 };
 
 export const clearRuntimeBrandingCache = () => {
+  brandingGeneration += 1;
   runtimeBrandingPromise = null;
   runtimeBrandingCache = {
     data: null,
@@ -254,40 +270,32 @@ export const loadRuntimeBranding = async (
     return runtimeBrandingPromise;
   }
 
+  const generation = brandingGeneration;
   const pending = (async () => {
     const { supabase } = await import("../supabaseClient");
     const hostname = getCurrentHostname();
     const authUser = await supabase.auth.getSession()
       .then(({ data }) => data?.session?.user || null)
       .catch(() => null);
-    const sharedHost = isSharedAppHost(hostname);
     const allowPublicBranding =
-      !isLocalHost(hostname) && (sharedHost || isTenantHost(hostname) || !isTazeSystemFamilyHost(hostname));
+      !isLocalHost(hostname) && (isSharedAppHost(hostname) || isTenantHost(hostname) || !isTazeSystemFamilyHost(hostname));
 
-    if (authUser?.id && !sharedHost) {
-      return await loadAuthenticatedBranding();
-    }
-
-    try {
-      if (allowPublicBranding) {
-        return await loadPublicBranding();
-      }
-      return buildRuntimeBranding();
-    } catch (publicError) {
-      if (authUser?.id) {
-        return await loadAuthenticatedBranding();
-      }
-      throw publicError;
-    }
+    // On a named host, the hostname is authoritative. A profile may currently
+    // point at a different organization while a user switches organizations.
+    if (allowPublicBranding) return await loadPublicBranding();
+    if (authUser?.id) return await loadAuthenticatedBranding();
+    return buildRuntimeBranding();
   })();
 
   runtimeBrandingPromise = pending;
   try {
     const result = await pending;
-    runtimeBrandingCache = {
-      data: result,
-      expiresAt: Date.now() + RUNTIME_BRANDING_TTL_MS,
-    };
+    if (generation === brandingGeneration) {
+      runtimeBrandingCache = {
+        data: result,
+        expiresAt: Date.now() + RUNTIME_BRANDING_TTL_MS,
+      };
+    }
     return result;
   } finally {
     if (runtimeBrandingPromise === pending) {
@@ -300,4 +308,8 @@ export const persistRuntimeBranding = (result: RuntimeBrandingResult) => {
   persistCurrencyConfig(result.currency);
   applyBrandingRuntime(result.branding);
   persistLoadingBrandIdentity(result.loadingIdentity);
+  const hostname = getCurrentHostname();
+  if (shouldUseCachedBranding(hostname)) {
+    window.localStorage.setItem(getBrandingCacheStorageKey(hostname), JSON.stringify(result.branding));
+  }
 };

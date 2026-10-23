@@ -251,6 +251,7 @@ describe('Login OTP and password flows', () => {
   beforeEach(() => {
     cleanup();
     vi.clearAllMocks();
+    functionState.invoke.mockReset();
     mockNavigate.mockReset();
     mockTrackSuccessfulLogin.mockReset();
     localStorage.clear();
@@ -308,7 +309,7 @@ describe('Login OTP and password flows', () => {
     expect(document.body.textContent || '').toContain('ارسال مجدد تا 90 ثانیه دیگر');
   });
 
-  it('shows sync-required error when profile exists but auth phone identity is not ready', async () => {
+  it('requests an OTP for the existing profile when its auth phone identity is not ready', async () => {
     rpcState.mockImplementation(async (fn: string) => {
       if (fn === 'check_phone_login_candidate') {
         return {
@@ -326,6 +327,7 @@ describe('Login OTP and password flows', () => {
       }
       return { data: null, error: null };
     });
+    functionState.invoke.mockResolvedValue({ data: { success: true }, error: null });
 
     renderLogin();
     await switchToOtpTab();
@@ -333,8 +335,11 @@ describe('Login OTP and password flows', () => {
     clickRequestOtp();
 
     await waitFor(() => {
-      expect(document.body.textContent || '').toContain('شماره این کاربر برای ورود پیامکی آماده نیست');
+      expect(functionState.invoke).toHaveBeenCalledWith('user-admin', {
+        body: { action: 'request_existing_profile_phone_otp', phone: '+989121234567' },
+      });
     });
+    expect(await screen.findByText('ورود با کد')).toBeInTheDocument();
     expect(authState.signInWithOtp).not.toHaveBeenCalled();
   });
 

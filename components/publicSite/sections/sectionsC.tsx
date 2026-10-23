@@ -3,6 +3,7 @@ import useEmblaCarousel from 'embla-carousel-react';
 import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
 import { Reveal, SectionHeading, SectionShell } from '../primitives';
 import DemoForm from '../shared/DemoForm';
+import { DEFAULT_HOME_SECTIONS } from '../defaultLandingConfig';
 
 // ──────────────────────────────────────────────────
 // Calendar — نمای تقویم
@@ -84,6 +85,7 @@ export const ScreenshotsSection: React.FC<{ props: any }> = ({ props }) => {
   const tone = props.tone ?? 'dark';
   const invert = tone === 'dark' || tone === 'brand';
 
+  if (images.length === 0) return null;
   return (
     <SectionShell tone={tone} aurora={invert}>
       <SectionHeading eyebrow={props.eyebrow} title={props.title} text={props.text} invert={invert} />
@@ -106,15 +108,15 @@ export const ScreenshotsSection: React.FC<{ props: any }> = ({ props }) => {
             </div>
           </div>
           <div className="mt-6 flex items-center justify-center gap-3">
-            <button onClick={() => emblaApi?.scrollPrev()} className={`flex h-10 w-10 items-center justify-center rounded-full border ${invert ? 'border-white/20 text-white hover:bg-white/10' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-100'}`}>
+            <button aria-label="تصویر قبلی" onClick={() => emblaApi?.scrollPrev()} className={`flex h-11 w-11 items-center justify-center rounded-full border ${invert ? 'border-white/20 text-white hover:bg-white/10' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-100'}`}>
               <ArrowRightOutlined />
             </button>
             <div className="flex gap-1.5">
               {images.map((_, i) => (
-                <button key={i} onClick={() => emblaApi?.scrollTo(i)} className="h-2 rounded-full transition-all" style={{ width: i === selected ? 24 : 8, background: i === selected ? 'rgb(var(--brand-500-rgb))' : invert ? 'rgba(255,255,255,.3)' : '#d4d4d8' }} />
+                <button key={i} aria-label={`نمایش تصویر ${(i + 1).toLocaleString('fa-IR')}`} aria-pressed={i === selected} onClick={() => emblaApi?.scrollTo(i)} className="flex h-11 w-11 items-center justify-center"><span className="h-2 rounded-full" style={{ width: i === selected ? 24 : 8, background: i === selected ? 'rgb(var(--brand-600-rgb))' : invert ? 'rgba(255,255,255,.3)' : '#d4d4d8' }} /></button>
               ))}
             </div>
-            <button onClick={() => emblaApi?.scrollNext()} className={`flex h-10 w-10 items-center justify-center rounded-full border ${invert ? 'border-white/20 text-white hover:bg-white/10' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-100'}`}>
+            <button aria-label="تصویر بعدی" onClick={() => emblaApi?.scrollNext()} className={`flex h-11 w-11 items-center justify-center rounded-full border ${invert ? 'border-white/20 text-white hover:bg-white/10' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-100'}`}>
               <ArrowLeftOutlined />
             </button>
           </div>
@@ -209,7 +211,7 @@ export const FaqSection: React.FC<{ props: any }> = ({ props }) => {
         </div>
         <div className="grid gap-3">
           {items.map(({ q, a }) => (
-            <details key={q} className="group rounded-2xl border border-zinc-200 bg-zinc-50 p-5 transition open:bg-white open:shadow-sm">
+            <details key={q} className="site-faq group">
               <summary className="cursor-pointer list-none text-sm font-black text-zinc-950">{q}</summary>
               <p className="mt-3 text-sm leading-8 text-zinc-600">{a}</p>
             </details>
@@ -281,7 +283,7 @@ export const FeatureSliderSection: React.FC<{ props: any }> = ({ props }) => {
         <div className="flex">
           {slides.map((slide, i) => (
             <div key={i} className="min-w-0 flex-[0_0_100%] px-1.5">
-              <div className={`grid items-center gap-6 rounded-3xl border p-5 md:grid-cols-2 md:p-8 ${invert ? 'border-white/10 bg-white/[0.04]' : 'border-zinc-200 bg-white shadow-sm'}`}>
+              <div className={`grid items-center gap-8 py-4 md:grid-cols-2 md:gap-12 ${invert ? 'text-white' : 'text-zinc-950'}`}>
                 <div className="order-2 md:order-1">
                   {slide.title && <h3 className={`text-2xl font-black ${invert ? 'text-white' : 'text-zinc-950'}`}>{slide.title}</h3>}
                   {slide.text && <p className={`mt-3 text-sm leading-8 ${invert ? 'text-zinc-300' : 'text-zinc-600'}`}>{slide.text}</p>}
@@ -295,8 +297,8 @@ export const FeatureSliderSection: React.FC<{ props: any }> = ({ props }) => {
                     </ul>
                   )}
                 </div>
-                <div className="order-1 md:order-2">
-                  <SlideMedia url={slide.media} title={slide.title} invert={invert} />
+                <div className="site-feature-media order-1 md:order-2">
+                  <SlideMedia url={slide.media || DEFAULT_HOME_SECTIONS.find(section => section.type === 'feature_slider')?.props.slides?.find((item: { title?: string }) => item.title === slide.title)?.media} title={slide.title} invert={invert} />
                 </div>
               </div>
             </div>
@@ -305,15 +307,15 @@ export const FeatureSliderSection: React.FC<{ props: any }> = ({ props }) => {
       </div>
       {slides.length > 1 && (
         <div className="mt-6 flex items-center justify-center gap-3">
-          <button onClick={() => emblaApi?.scrollPrev()} className={`flex h-10 w-10 items-center justify-center rounded-full border ${invert ? 'border-white/20 text-white hover:bg-white/10' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-100'}`}>
+          <button aria-label="قابلیت قبلی" onClick={() => emblaApi?.scrollPrev()} className={`flex h-11 w-11 items-center justify-center rounded-full border ${invert ? 'border-white/20 text-white hover:bg-white/10' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-100'}`}>
             <ArrowRightOutlined />
           </button>
           <div className="flex gap-1.5">
             {slides.map((_, i) => (
-              <button key={i} onClick={() => emblaApi?.scrollTo(i)} className="h-2 rounded-full transition-all" style={{ width: i === selected ? 24 : 8, background: i === selected ? 'rgb(var(--brand-500-rgb))' : invert ? 'rgba(255,255,255,.3)' : '#d4d4d8' }} />
+              <button key={i} aria-label={slides[i].title || `قابلیت ${(i + 1).toLocaleString('fa-IR')}`} aria-pressed={i === selected} onClick={() => emblaApi?.scrollTo(i)} className="flex h-11 w-11 items-center justify-center"><span className="h-2 rounded-full" style={{ width: i === selected ? 24 : 8, background: i === selected ? 'rgb(var(--brand-600-rgb))' : invert ? 'rgba(255,255,255,.3)' : '#d4d4d8' }} /></button>
             ))}
           </div>
-          <button onClick={() => emblaApi?.scrollNext()} className={`flex h-10 w-10 items-center justify-center rounded-full border ${invert ? 'border-white/20 text-white hover:bg-white/10' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-100'}`}>
+          <button aria-label="قابلیت بعدی" onClick={() => emblaApi?.scrollNext()} className={`flex h-11 w-11 items-center justify-center rounded-full border ${invert ? 'border-white/20 text-white hover:bg-white/10' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-100'}`}>
             <ArrowLeftOutlined />
           </button>
         </div>

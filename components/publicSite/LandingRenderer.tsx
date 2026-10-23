@@ -11,7 +11,8 @@ const LandingRenderer: React.FC<{
   slug?: string;
   previewSections?: LandingSection[];
   previewTheme?: LandingTheme | null;
-}> = ({ slug = 'home', previewSections, previewTheme }) => {
+  themeOverride?: LandingTheme;
+}> = ({ slug = 'home', previewSections, previewTheme, themeOverride }) => {
   const [sections, setSections] = useState<LandingSection[]>(
     previewSections ?? DEFAULT_HOME_SECTIONS,
   );
@@ -43,7 +44,7 @@ const LandingRenderer: React.FC<{
   }, [slug, previewSections, previewTheme]);
 
   return (
-    <BrandScope theme={theme}>
+    <BrandScope theme={themeOverride ?? theme}>
       {sections
         .filter((s) => s.enabled)
         .map((section) => {

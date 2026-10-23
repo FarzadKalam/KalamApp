@@ -22,6 +22,7 @@ import UserAnnouncementsPopupHost from '../components/announcements/UserAnnounce
 import ResilientImage from '../components/common/ResilientImage';
 import OtpCodeInput from '../components/common/OtpCodeInput';
 import { formatIranMobileForInput } from '../utils/phoneNumber';
+import { handoffSessionToTenant } from '../utils/tenantSessionHandoff';
 
 const LOGIN_MODE_STORAGE_KEY = 'kalam_login_mode';
 const OTP_PHONE_STORAGE_KEY = 'kalam_login_otp_phone';
@@ -400,14 +401,24 @@ const Login = () => {
       const { error } = await supabase.rpc('activate_current_user_organization', { p_org_id: organization.org_id });
       if (error) throw error;
       clearSessionBootstrapCache();
-      setOrganizationChoices([]);
       const host = String(organization.resolved_host || '').trim().toLowerCase();
       if (host) {
+        if (isSaasAppHost() && host !== window.location.hostname) {
+          if (host.endsWith('.tazesystem.ir')) {
+            await handoffSessionToTenant(host, organization.org_id);
+          } else {
+            window.location.href = `https://${host}/login`;
+            return;
+          }
+        }
+        setOrganizationChoices([]);
         window.location.href = `https://${host}${postLoginRedirect}`;
         return;
       }
+      setOrganizationChoices([]);
       navigate(postLoginRedirect, { replace: true });
     } catch (error: any) {
+      if (isSaasAppHost()) setOrganizationChoices((current) => current.length ? current : [organization]);
       message.error(toFaErrorMessage(error, 'ورود به سازمان انتخاب‌شده ناموفق بود.'));
     } finally {
       setOrganizationSelecting(false);
@@ -427,6 +438,7 @@ const Login = () => {
 
     const { data, error } = await supabase.rpc('get_current_user_organization_accesses');
     if (error) {
+      if (isSaasAppHost()) throw new Error('فهرست سازمان‌های شما دریافت نشد. دوباره تلاش کنید.');
       // سازگاری با محیطی که هنوز migration عضویت‌ها را دریافت نکرده است.
       const tenantUrl = await resolveTenantRedirect();
       if (tenantUrl) window.location.href = `${tenantUrl}${postLoginRedirect}`;
@@ -438,6 +450,8 @@ const Login = () => {
       ? data.filter((item): item is OrganizationAccess => !!item?.org_id && !!item?.org_name)
       : [];
     if (organizations.length === 0) {
+      if (isSaasAppHost()) throw new Error('برای این حساب، سازمان فعالی پیدا نشد.');
+      if (isSaasAdminPanelHost()) throw new Error('عضویت فعال در سازمان مدیریت تازه سیستم پیدا نشد.');
       navigate(postLoginRedirect, { replace: true });
       return;
     }
@@ -459,8 +473,9 @@ const Login = () => {
     }
 
     if (isSaasAdminPanelHost(currentHost)) {
-      await signOutLocalSession();
-      throw new Error('سازمان مدیریت تازه سیستم برای این حساب پیدا نشد.');
+      if (!tenantOrganization) throw new Error('عضویت فعال در سازمان مدیریت تازه سیستم پیدا نشد.');
+      navigate(postLoginRedirect, { replace: true });
+      return;
     }
 
     // در کلام، وجود عضویت در panel یا tenant دیگر نباید ورود به سازمان داخلی را
@@ -482,6 +497,20 @@ const Login = () => {
     if (!isSaasAppHost() && organizations.some((item) => String(item.resolved_host || '').trim())) {
       await signOutLocalSession();
       throw new Error('این شماره به سازمان این آدرس دسترسی ندارد.');
+    }
+
+    if (isSaasAppHost()) {
+      const tenantOrganizations = organizations.filter((item) => {
+        const host = String(item.resolved_host || '').trim().toLowerCase();
+        return host && !isSaasAppHost(host) && !isInternalRootHost(host);
+      });
+      if (tenantOrganizations.length === 0) throw new Error('برای این حساب، آدرس اختصاصی سازمان پیدا نشد.');
+      if (tenantOrganizations.length === 1) {
+        await activateOrganizationAndRedirect(tenantOrganizations[0]);
+        return;
+      }
+      setOrganizationChoices(tenantOrganizations);
+      return;
     }
 
     if (organizations.length === 1) {
@@ -647,11 +676,13 @@ const Login = () => {
 
     setOtpLoading(true);
     let otpVerified = false;
+    let profileReady = false;
     try {
       await verifySmsOtp(supabase.auth, otpRequestedFor, normalizedOtpToken);
       otpVerified = true;
       await ensureInvitedOrExistingProfile(otpRequestedFor);
       await ensureActiveSessionUser();
+      profileReady = true;
       await refreshAuthenticatedSessionBootstrap();
       await trackSuccessfulLogin('otp');
       clearOtpSessionState();
@@ -665,7 +696,7 @@ const Login = () => {
       const raw = String(error?.message || '');
       // اگر OTP موفق بود اما مرحله بعدی خطا داد، sign out کن
       // تا OTP مصرف‌شده دیگر block نکند و کاربر بتواند کد جدید بگیرد
-      if (otpVerified && !raw.includes('__otp_phone_repaired_retry__')) {
+      if (otpVerified && !profileReady && !raw.includes('__otp_phone_repaired_retry__')) {
         await signOutLocalSession().catch(() => null);
         clearOtpSessionState();
         setOtpRequestedFor(null);
@@ -862,7 +893,9 @@ const Login = () => {
                         type="info"
                         showIcon
                         message="ورود با کد یکبارمصرف"
-                        description={`برای ورود با شماره، باید کاربری شما در سازمان "${brandTitle}" تعریف شده باشد و شماره شما تایید شده باشد.`}
+                        description={isSaasAppHost()
+                          ? 'برای ورود با شماره، باید شماره شما در یکی از سازمان‌ها ثبت و تأیید شده باشد.'
+                          : `برای ورود با شماره، باید کاربری شما در سازمان "${brandTitle}" تعریف شده باشد و شماره شما تایید شده باشد.`}
                       />
                       <div>
                         <label className="block text-sm font-medium mb-1">شماره موبایل</label>

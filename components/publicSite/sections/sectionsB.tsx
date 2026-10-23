@@ -50,8 +50,8 @@ export const AutomationSection: React.FC<{ props: any }> = ({ props }) => {
     <SectionShell tone={props.tone ?? 'soft'}>
       <SectionHeading eyebrow={props.eyebrow} title={props.title} text={props.text} />
       <div className="grid gap-4 lg:grid-cols-2">
-        <Reveal className="rounded-2xl border border-rose-200 bg-rose-50/60 p-7">
-          <div className="mb-5 inline-flex items-center gap-2 rounded-lg bg-rose-100 px-3 py-1.5 text-sm font-black text-rose-700">{props.beforeLabel ?? 'بدون اتومات‌سازی'}</div>
+        <Reveal className="site-card site-automation-before p-7 md:p-9">
+          <div className="mb-6 text-base font-bold text-zinc-600">{props.beforeLabel ?? 'بدون اتومات‌سازی'}</div>
           <ul className="space-y-3">
             {before.map((item) => (
               <li key={item} className="flex items-start gap-3 text-sm leading-7 text-zinc-700">
@@ -61,8 +61,8 @@ export const AutomationSection: React.FC<{ props: any }> = ({ props }) => {
             ))}
           </ul>
         </Reveal>
-        <Reveal delay={0.12} className="rounded-2xl border p-7" style={{ borderColor: 'rgb(var(--brand-200-rgb))', background: 'rgb(var(--brand-50-rgb) / 0.6)' }}>
-          <div className="mb-5 inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-black text-white" style={{ background: 'rgb(var(--brand-600-rgb))' }}>{props.afterLabel ?? 'با اتومات‌سازی تازه سیستم'}</div>
+        <Reveal delay={0.12} className="site-card site-automation-after p-7 md:p-9">
+          <div className="mb-6 text-base font-bold" style={{ color: 'rgb(var(--brand-700-rgb))' }}>{props.afterLabel ?? 'با اتومات‌سازی تازه سیستم'}</div>
           <ul className="space-y-3">
             {after.map((item) => (
               <li key={item} className="flex items-start gap-3 text-sm leading-7 text-zinc-800">
@@ -85,9 +85,9 @@ export const CommunicationsSection: React.FC<{ props: any }> = ({ props }) => {
   return (
     <SectionShell tone={props.tone ?? 'light'}>
       <SectionHeading eyebrow={props.eyebrow} title={props.title} text={props.text} />
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-x-10 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
         {channels.map((ch, i) => (
-          <Reveal key={ch.title} delay={i * 0.05} className="flex items-start gap-4 rounded-2xl border border-zinc-200 bg-white p-5 transition hover:-translate-y-1 hover:shadow-lg">
+          <Reveal key={ch.title} delay={i * 0.04} className="flex items-start gap-4 border-b border-zinc-200 py-7">
             <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-xl" style={{ background: 'rgb(var(--brand-50-rgb))', color: 'rgb(var(--brand-600-rgb))' }}>
               {renderIcon(ch.icon)}
             </div>
@@ -112,7 +112,7 @@ export const IntegrationsSection: React.FC<{ props: any }> = ({ props }) => {
       <SectionHeading eyebrow={props.eyebrow} title={props.title} text={props.text} />
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {items.map((item, i) => (
-          <Reveal key={item.title} delay={i * 0.05} className="rounded-2xl border border-zinc-200 bg-white p-6">
+          <Reveal key={item.title} delay={i * 0.04} className="site-card p-6 md:p-8">
             <div className="mb-4 inline-flex h-11 w-11 items-center justify-center rounded-xl text-lg" style={{ background: 'rgb(var(--brand-50-rgb))', color: 'rgb(var(--brand-600-rgb))' }}>
               {renderIcon(item.icon)}
             </div>
@@ -147,7 +147,7 @@ export const AiSection: React.FC<{ props: any }> = ({ props }) => {
         </Reveal>
         <div className="grid gap-3 sm:grid-cols-2">
           {capabilities.map((cap, i) => (
-            <Reveal key={cap.title} delay={i * 0.05} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 transition hover:bg-white/[0.08]">
+            <Reveal key={cap.title} delay={i * 0.04} className="site-card site-card--dark p-5">
               <div className="flex items-center gap-3">
                 <span className="flex h-9 w-9 items-center justify-center rounded-lg text-white" style={{ background: 'rgb(var(--brand-accent-pink-rgb) / 0.25)' }}>{renderIcon(cap.icon, <AiSparkleIcon className="h-4 w-4" />)}</span>
                 <span className="text-sm font-black text-white">{cap.title}</span>

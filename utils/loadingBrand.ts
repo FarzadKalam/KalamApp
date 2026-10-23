@@ -6,7 +6,7 @@ export type LoadingBrandIdentity = {
   slogan?: string;
 };
 
-const CACHE_PREFIX = 'erp:loading-brand';
+const CACHE_PREFIX = 'erp:loading-brand:v2';
 
 const normalizeText = (value: unknown) => String(value || '').trim();
 

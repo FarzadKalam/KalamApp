@@ -1,11 +1,13 @@
 import React from 'react';
-import { Badge, Button, Empty } from 'antd';
+import { App, Badge, Button, Empty } from 'antd';
 import { EditOutlined, EyeOutlined, UserAddOutlined } from '@ant-design/icons';
 import { safeJalaliFormat } from '../../utils/persianNumberFormatter';
 import type { NoteAttachment } from '../../utils/noteContent';
 import UnreadCountBadge from './UnreadCountBadge';
 import VoipRecordingPlayer from './VoipRecordingPlayer';
 import AssigneeAvatarDisplay from '../common/AssigneeAvatarDisplay';
+import { hasVoipRecording, persistVoipRecordingAttachment } from '../../utils/voipRecording';
+import { toFaErrorMessage } from '../../utils/errorMessageFa';
 
 export type VoipThreadItem = {
   id: string;
@@ -63,6 +65,7 @@ const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
   openCreateActivityFromMessage,
   onForwardRecording,
 }) => {
+  const { message } = App.useApp();
   const isDesktop = layout === 'desktop';
   const activeThread = selectedVoipThread;
   const calls = displayedVoipCalls;
@@ -85,6 +88,40 @@ const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
     if (!onOpenPhoneMatchPicker) return;
     if (!String(input.phone || '').trim()) return;
     onOpenPhoneMatchPicker(input);
+  };
+
+  const createActivityFromCall = async (row: any, input: {
+    counterpartyPhone: string;
+    directionLabel: string;
+    statusLabel: string;
+    startedAt: string | null;
+    relatedModuleId: string | null;
+    relatedRecordId: string | null;
+  }) => {
+    try {
+      const attachment = hasVoipRecording(row) ? await persistVoipRecordingAttachment(row) : null;
+      const endedAt = String(row?.ended_at || '').trim() || input.startedAt || null;
+      openCreateActivityFromMessage({
+        channel: 'voip',
+        actorName: input.counterpartyPhone || 'شماره تماس',
+        createdAt: input.startedAt,
+        createdAtLabel: safeJalaliFormat(input.startedAt, 'YYYY/MM/DD HH:mm'),
+        content: [
+          `تماس ${input.directionLabel} با ${input.counterpartyPhone || 'شماره نامشخص'}`,
+          String(row?.extension || '').trim() ? `داخلی: ${String(row.extension).trim()}` : '',
+          input.statusLabel ? `وضعیت: ${input.statusLabel}` : '',
+        ].filter(Boolean).join(' | '),
+        attachments: attachment ? [attachment] : [],
+        relatedModuleId: input.relatedModuleId,
+        relatedRecordId: input.relatedRecordId,
+        taskType: `تماس ${input.directionLabel}`,
+        activityTitle: `پیگیری تماس ${input.directionLabel} ${input.counterpartyPhone || ''}`.trim(),
+        activityStartAt: input.startedAt,
+        activityCompletedAt: endedAt,
+      });
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'آماده‌سازی فایل صوتی تماس برای فعالیت ناموفق بود.'));
+    }
   };
 
   return (
@@ -372,20 +409,13 @@ const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
                           size="small"
                           className="!px-0"
                           icon={<UserAddOutlined />}
-                          onClick={() => openCreateActivityFromMessage({
-                            channel: 'voip',
-                            actorName: counterpartyPhone || 'شماره تماس',
-                            createdAt: startedAt,
-                            createdAtLabel: safeJalaliFormat(startedAt, 'YYYY/MM/DD HH:mm'),
-                            content: [
-                              `تماس ${directionLabel} با ${counterpartyPhone || 'شماره نامشخص'}`,
-                              String(row?.extension || '').trim() ? `داخلی: ${String(row.extension).trim()}` : '',
-                              statusLabel ? `وضعیت: ${statusLabel}` : '',
-                            ].filter(Boolean).join(' | '),
-                            attachments: [],
+                          onClick={() => void createActivityFromCall(row, {
+                            counterpartyPhone,
+                            directionLabel,
+                            statusLabel,
+                            startedAt,
                             relatedModuleId: row?.module_id || row?.related_module_id || activeThread?.moduleId || null,
                             relatedRecordId: row?.record_id || row?.related_record_id || activeThread?.recordId || null,
-                            taskType: `تماس ${directionLabel}`,
                           })}
                         >
                           ایجاد فعالیت

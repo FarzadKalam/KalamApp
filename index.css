@@ -374,8 +374,15 @@ html:not(.dark) .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-danger
   will-change: auto;
 }
 
+/* نوار افقی جدول‌های ماژول باید همیشه قابل مشاهده و قابل گرفتن باشد.
+   پنهان‌کردن آن باعث می‌شد ستون‌های بیرون از عرض صفحه، به‌ویژه در موبایل،
+   عملاً در دسترس نباشند. */
+.smarttable-shell .ant-table-body {
+  scrollbar-width: auto;
+}
+
 .smarttable-shell .ant-table-body::-webkit-scrollbar:horizontal {
-  height: 0 !important;
+  height: 12px;
 }
 
 .smarttable-shell .ant-table-pagination.ant-pagination {

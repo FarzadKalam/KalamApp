@@ -28,7 +28,8 @@ const InstagramConversationLinkModal: React.FC<{
   contactName?: string | null;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
-}> = ({ open, conversationId, contactName, onClose, onSaved }) => {
+  onCreateCustomer?: () => void;
+}> = ({ open, conversationId, contactName, onClose, onSaved, onCreateCustomer }) => {
   const { message } = App.useApp();
   const [targets, setTargets] = useState<LinkTarget[]>([]);
   const [loading, setLoading] = useState(false);
@@ -91,7 +92,7 @@ const InstagramConversationLinkModal: React.FC<{
         <div className="mb-3 flex items-center justify-between gap-2"><Radio.Group value={target.target_module_id} optionType="button" buttonStyle="solid" options={targetModules} onChange={(event) => updateTarget(index, { target_module_id: event.target.value, target_record_id: null })} /><Button type="text" danger icon={<DeleteOutlined />} aria-label="حذف اتصال" onClick={() => setTargets((current) => current.filter((_, itemIndex) => itemIndex !== index))} /></div>
         <SmartFieldRenderer field={relationField(target.target_module_id)} value={target.target_record_id || undefined} onChange={(value: any) => updateTarget(index, { target_record_id: String(value || '').trim() || null })} forceEditMode compactMode overlayZIndexBase={15320} popupContainer={resolveModalPopupContainer} preferLocalPopupContainer />
       </div>)}
-      {!loading ? <Button type="dashed" block icon={<PlusOutlined />} onClick={() => setTargets((current) => [...current, { target_module_id: 'customers', target_record_id: null }])}>افزودن اتصال مخاطب</Button> : null}
+      {!loading ? <div className="grid grid-cols-1 gap-2 sm:grid-cols-2"><Button type="dashed" icon={<PlusOutlined />} onClick={() => setTargets((current) => [...current, { target_module_id: 'customers', target_record_id: null }])}>افزودن اتصال مخاطب</Button><Button type="default" disabled={!onCreateCustomer} onClick={onCreateCustomer}>ثبت مشتری جدید</Button></div> : null}
     </div>
   </Modal>;
 };

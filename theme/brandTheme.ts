@@ -31,6 +31,17 @@ export const resolveSmartThemeMode = (date = new Date()): 'light' | 'dark' => {
 };
 
 export const BRAND_PALETTE_PRESETS = {
+  taze_rose: {
+    label: 'سرخابی تازه سیستم',
+    palette: {
+      primary: '#F82377',
+      secondary: '#8E1646',
+      accentPink: '#FF5B91',
+      darkBg: '#190B12',
+      darkSurface: '#2A101D',
+      darkBorder: '#542039',
+    },
+  },
   executive_indigo: {
     label: 'ایندیگو مدیریتی',
     palette: {

@@ -1,5 +1,4 @@
 import React, { useRef } from 'react';
-import { Link } from 'react-router-dom';
 import { ThunderboltOutlined } from '@ant-design/icons';
 import { motion, useScroll, useTransform } from 'framer-motion';
 import AiSparkleIcon from '../../ai/AiSparkleIcon';
@@ -13,9 +12,7 @@ const Cta: React.FC<{ cta?: { label: string; href: string }; variant?: any }> = 
   if (!cta?.label) return null;
   if (isInternal(cta.href)) {
     return (
-      <Link to={cta.href}>
         <BrandButton href={cta.href} variant={variant}>{cta.label}</BrandButton>
-      </Link>
     );
   }
   return <BrandButton href={cta.href} variant={variant}>{cta.label}</BrandButton>;
@@ -237,42 +234,15 @@ export const LogosSection: React.FC<{ props: any }> = ({ props }) => {
 // ──────────────────────────────────────────────────
 export const StatsSection: React.FC<{ props: any }> = ({ props }) => {
   const items: StatItem[] = props.items ?? [];
-  const ref = useRef<HTMLElement>(null);
-  const { scrollYProgress } = useScroll({ target: ref, offset: ['start end', 'end start'] });
-  const glowX = useTransform(scrollYProgress, [0, 1], ['10%', '90%']);
-
   return (
-    <section
-      ref={ref}
-      className="relative overflow-hidden px-5 py-24 text-white"
-      style={{ background: 'linear-gradient(135deg, rgb(var(--brand-800-rgb)), #0a0a0b 70%)' }}
-    >
-      <motion.div
-        aria-hidden
-        className="pointer-events-none absolute top-0 h-[420px] w-[420px] -translate-y-1/3 rounded-full blur-[140px]"
-        style={{ left: glowX, background: 'rgb(var(--brand-500-rgb) / 0.45)' }}
-      />
-      <div className="relative mx-auto max-w-7xl">
-        {(props.title || props.eyebrow) && (
-          <SectionHeading eyebrow={props.eyebrow} title={props.title ?? ''} text={props.text} invert />
-        )}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {items.map((s, i) => (
-            <Reveal
-              key={i}
-              delay={i * 0.1}
-              className="group relative overflow-hidden rounded-3xl border border-white/10 bg-white/[0.04] p-7 text-center transition hover:bg-white/[0.08]"
-            >
-              <div
-                className="absolute inset-x-0 -top-px mx-auto h-px w-2/3 opacity-60"
-                style={{ background: 'linear-gradient(90deg, transparent, rgb(var(--brand-400-rgb)), transparent)' }}
-              />
-              <div className="text-5xl font-black tracking-tight md:text-6xl" style={{ color: 'rgb(var(--brand-300-rgb))' }}>
-                <Counter to={s.value} suffix={s.suffix} />
-              </div>
-              <div className="mt-3 text-sm font-bold text-zinc-300">{s.label}</div>
-            </Reveal>
-          ))}
+    <section className="site-stats px-5 py-14 md:py-16">
+      <div className="mx-auto max-w-7xl">
+        {(props.title || props.eyebrow) && <SectionHeading eyebrow={props.eyebrow} title={props.title ?? ''} text={props.text} />}
+        <div className="grid grid-cols-2 lg:grid-cols-4">
+          {items.map((item, index) => <Reveal key={item.label} delay={index * .04} className="site-stat text-center">
+            <div className="text-4xl font-bold text-zinc-900 md:text-5xl"><Counter to={item.value} suffix={item.suffix} /></div>
+            <p className="mt-3 text-sm text-zinc-600">{item.label}</p>
+          </Reveal>)}
         </div>
       </div>
     </section>

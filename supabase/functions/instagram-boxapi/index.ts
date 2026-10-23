@@ -126,7 +126,7 @@ const requireInstagramInboxEdit = (context: any) => {
   if (saasAdmin.view === true || saasAdmin.edit === true || instagram.edit === true) return;
   requireConnectionManagement(context);
 };
-const providerRequest = async (provider: any, operationKey: 'sync_accounts' | 'list_posts' | 'send_message' | 'reply_comment' | 'get_connect_url' | 'show_profile', body?: Record<string, any>) => {
+const providerRequest = async (provider: any, operationKey: 'sync_accounts' | 'list_posts' | 'send_message' | 'send_generic_template' | 'reply_comment' | 'get_connect_url' | 'show_profile', body?: Record<string, any>) => {
   const adapter = getInstagramProvider(text(provider?.provider_key));
   if (!adapter) throw new Error('سرویس‌دهندهٔ این اتصال در سامانه پشتیبانی نمی‌شود.');
   const operation = adapter.operations[operationKey];
@@ -671,7 +671,9 @@ Deno.serve(async (req: Request) => {
       const buttonTemplates = Array.isArray(body?.buttonTemplates) ? body.buttonTemplates
         .map((button: any, index: number) => ({ key: text(button?.key) || `button_${index + 1}`, title: text(button?.title).slice(0, 80), action_type: text(button?.action_type || 'open_url'), payload: button?.payload && typeof button.payload === 'object' ? button.payload : {} }))
         .filter((button: any) => button.title && ['open_url', 'send_message', 'trigger_workflow', 'field_value', 'request_human'].includes(button.action_type)).slice(0, 3) : [];
-      const payload = { org_id: context.orgId, account_id: accountId, name, description: text(body?.description) || null, source_kind: sourceKind, source_id: sourceId, presentation: { layout: 'carousel', max_items: Math.min(10, Math.max(1, Number(body?.maxItems || 10))) }, button_templates: buttonTemplates, is_active: body?.isActive !== false, updated_at: now(), ...(showcaseId ? {} : { created_by: context.userId }) };
+      const imageUrl = text(body?.imageUrl);
+      if (imageUrl && !/^https:\/\//i.test(imageUrl)) throw new Error('نشانی تصویر باید با https شروع شود.');
+      const payload = { org_id: context.orgId, account_id: accountId, name, description: text(body?.description) || null, source_kind: sourceKind, source_id: sourceId, presentation: { layout: 'carousel', max_items: Math.min(10, Math.max(1, Number(body?.maxItems || 10))), image_url: imageUrl || null }, button_templates: buttonTemplates, is_active: body?.isActive !== false, updated_at: now(), ...(showcaseId ? {} : { created_by: context.userId }) };
       const saved = await rest(url, serviceKey, showcaseId ? `instagram_product_showcases?id=eq.${encodeURIComponent(showcaseId)}&org_id=eq.${encodeURIComponent(context.orgId)}` : 'instagram_product_showcases', { method: showcaseId ? 'PATCH' : 'POST', body: JSON.stringify(payload) });
       const showcase = Array.isArray(saved) ? saved[0] : saved;
       if (!showcase?.id) throw new Error('ذخیره ویترین انجام نشد.');
@@ -725,7 +727,7 @@ Deno.serve(async (req: Request) => {
       const showcaseId = text(body?.showcaseId);
       let showcaseButtons: any[] = [];
       if (showcaseId) {
-        const showcase = (await rest(url, serviceKey, `instagram_product_showcases?id=eq.${encodeURIComponent(showcaseId)}&org_id=eq.${encodeURIComponent(context.orgId)}&is_active=eq.true&select=id,name,description,button_templates,source_kind,source_id`))?.[0];
+        const showcase = (await rest(url, serviceKey, `instagram_product_showcases?id=eq.${encodeURIComponent(showcaseId)}&org_id=eq.${encodeURIComponent(context.orgId)}&is_active=eq.true&select=id,name,description,presentation,button_templates,source_kind,source_id`))?.[0];
         if (!showcase) throw new Error('ویترین محصولات انتخاب‌شده معتبر نیست.');
         const showcaseItems = await resolveShowcaseItems(showcase, url, serviceKey, context.orgId);
         const itemLines = showcaseItems.map((item: any) => {
@@ -754,9 +756,28 @@ Deno.serve(async (req: Request) => {
           : text(button?.payload || button?.key || `button_${index + 1}`);
         return { type: 'postback', title, payload: rawPayload };
       }).filter((button: any) => button.title && ((button.type === 'web_url' && button.url) || (button.type === 'postback' && button.payload))).slice(0, 3) : [];
-      const result = await providerRequest(providerForMessage, 'send_message', { account_id: accountForMessage.provider_account_id, recipient_id: contactForMessage.instagram_scoped_id, message, ...(buttons.length ? { buttons } : {}) });
+      const showcasePresentation = showcaseId
+        ? (await rest(url, serviceKey, `instagram_product_showcases?id=eq.${encodeURIComponent(showcaseId)}&org_id=eq.${encodeURIComponent(context.orgId)}&select=id,name,description,presentation,source_kind,source_id`))?.[0]
+        : null;
+      const genericItems = showcasePresentation
+        ? await resolveShowcaseItems(showcasePresentation, url, serviceKey, context.orgId)
+        : [];
+      const showcaseImageUrl = text(showcasePresentation?.presentation?.image_url);
+      const hasGenericImage = Boolean(showcaseImageUrl || genericItems.some((item: any) => text(item?.image_url)));
+      const genericElements = hasGenericImage && showcasePresentation ? (genericItems.length ? genericItems : [{ title: showcasePresentation.name, description: showcasePresentation.description, image_url: showcaseImageUrl }])
+        .slice(0, 10)
+        .map((item: any) => {
+          const snapshot = item?.snapshot || item || {};
+          const title = text(snapshot.title) || text(showcasePresentation.name) || 'پیام اینستاگرام';
+          const subtitle = text(snapshot.description) || text(showcasePresentation.description) || undefined;
+          const imageUrl = text(snapshot.image_url) || showcaseImageUrl || undefined;
+          return { title, ...(subtitle ? { subtitle } : {}), ...(imageUrl ? { image_url: imageUrl } : {}), ...(buttons.length ? { buttons } : {}) };
+        }) : [];
+      const result = genericElements.length
+        ? await providerRequest(providerForMessage, 'send_generic_template', { account_id: accountForMessage.provider_account_id, recipient_id: contactForMessage.instagram_scoped_id, elements: genericElements })
+        : await providerRequest(providerForMessage, 'send_message', { account_id: accountForMessage.provider_account_id, recipient_id: contactForMessage.instagram_scoped_id, message, ...(buttons.length ? { buttons } : {}) });
       const providerMessageId = text(result?.data?.message_id || result?.message_id);
-      await rest(url, serviceKey, 'instagram_messages', { method: 'POST', body: JSON.stringify({ org_id: context.orgId, conversation_id: conversation.id, provider_message_id: providerMessageId || `outbound:${crypto.randomUUID()}`, direction: 'outbound', message_type: buttons.length ? 'button' : 'text', content_text: message, buttons, delivery_status: 'sent', provider_payload: { ...result, automated: body?.automated === true }, sent_by: context.userId || null }) });
+      await rest(url, serviceKey, 'instagram_messages', { method: 'POST', body: JSON.stringify({ org_id: context.orgId, conversation_id: conversation.id, provider_message_id: providerMessageId || `outbound:${crypto.randomUUID()}`, direction: 'outbound', message_type: buttons.length || genericElements.length ? 'button' : 'text', content_text: message, buttons, delivery_status: 'sent', provider_payload: { ...result, generic_template: genericElements.length ? { elements: genericElements } : undefined, automated: body?.automated === true }, sent_by: context.userId || null }) });
       await rest(url, serviceKey, `instagram_conversations?id=eq.${encodeURIComponent(conversation.id)}&org_id=eq.${encodeURIComponent(context.orgId)}`, { method: 'PATCH', body: JSON.stringify({ last_message_preview: message, last_message_at: now(), last_outbound_at: now(), updated_at: now() }) });
       return json(200, { success: true });
     }

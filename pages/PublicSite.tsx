@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { CheckCircleOutlined, EnvironmentOutlined, MailOutlined, PhoneOutlined } from '@ant-design/icons';
 import { Link, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -19,6 +19,9 @@ import PricingSection from '../components/publicSite/shared/PricingSection';
 import DemoForm from '../components/publicSite/shared/DemoForm';
 import { PANEL_URL, DEMO_URL, sitePath } from '../components/publicSite/siteLinks';
 import { DEFAULT_ENAMAD_TRUST_HTML } from '../utils/publicSiteTrustSeals';
+import { PUBLIC_SITE_CSS_VARS, PUBLIC_SITE_THEME } from '../components/publicSite/publicSiteTheme';
+import { MotionConfig } from 'framer-motion';
+import '../components/publicSite/publicSite.css';
 
 type PublicPage = 'home' | 'features' | 'pricing' | 'blog' | 'blog-post' | 'learn' | 'learn-post' | 'updates' | 'about' | 'contact' | 'demo' | 'privacy' | 'terms' | 'rules' | 'sla' | 'solution';
 
@@ -58,23 +61,28 @@ const SectionTitle = ({ eyebrow, title, text }: { eyebrow: string; title: string
 );
 
 const Header = () => (
-  <header className="sticky top-0 z-40 border-b border-zinc-200 bg-white/90 backdrop-blur-xl">
+  <header className="sticky top-0 z-40 border-b border-zinc-200/80 bg-white/95 shadow-[0_1px_0_rgba(24,24,27,0.03)] backdrop-blur-xl">
+    <a href="#public-page-content" className="sr-only focus:not-sr-only focus:absolute focus:bg-white focus:p-3">رفتن به محتوای صفحه</a>
     <div className="mx-auto flex h-20 max-w-7xl items-center justify-between px-5">
       <Link to={sitePath('/')} className="flex items-center gap-3 text-zinc-950">
         <img src="/tazesystem_logo.png" alt="لوگوی تازه سیستم" className="h-11 w-11 rounded-xl object-contain" />
         <div className="leading-tight">
           <div className="text-lg font-black">تازه سیستم</div>
-          <div className="text-xs font-medium text-zinc-500">تازه سیستم</div>
+          <div className="text-xs font-medium text-zinc-500">نرم‌افزار یکپارچه کسب‌وکار</div>
         </div>
       </Link>
       <nav className="hidden items-center gap-7 text-sm font-semibold text-zinc-700 lg:flex">
-        {nav.map(([label, href]) => <Link key={href} to={href} className="hover:text-zinc-950">{label}</Link>)}
+        {nav.map(([label, href]) => <Link key={href} to={href} className="rounded-lg px-1.5 py-2 transition hover:bg-zinc-100 hover:text-zinc-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--brand-500-rgb))]">{label}</Link>)}
       </nav>
       <div className="flex items-center gap-2">
         <a href={PANEL_URL} className="hidden rounded-xl px-4 py-2 text-sm font-bold text-zinc-700 hover:bg-zinc-100 sm:inline-flex">ورود به پنل</a>
-        <a href={DEMO_URL} className="rounded-xl px-4 py-2.5 text-sm font-black text-white shadow-sm transition hover:opacity-90" style={{ background: 'rgb(var(--brand-600-rgb))' }}>شروع رایگان</a>
+        <a href={DEMO_URL} className="rounded-xl px-4 py-2.5 text-sm font-black text-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2" style={{ background: 'rgb(var(--brand-600-rgb))', outlineColor: 'rgb(var(--brand-500-rgb))' }}>شروع رایگان</a>
       </div>
     </div>
+    <details className="site-mobile-nav">
+      <summary>فهرست سایت</summary>
+      <nav aria-label="فهرست موبایل">{nav.map(([label, href]) => <Link key={href} to={href}>{label}</Link>)}<a href={PANEL_URL}>ورود به پنل</a></nav>
+    </details>
   </header>
 );
 
@@ -117,7 +125,7 @@ const Footer = () => {
   ];
 
   return (
-    <footer className="border-t border-zinc-200 bg-white">
+    <footer className="site-footer border-t border-zinc-200 bg-white">
       <div className="mx-auto grid max-w-7xl gap-10 px-5 py-12 md:grid-cols-[1.4fr_1fr_1fr_1.1fr]">
         <div>
           <Link to={sitePath('/')} className="inline-flex items-center gap-3 text-zinc-950">
@@ -137,9 +145,7 @@ const Footer = () => {
                 aria-label="نشان زرین‌پال"
                 dangerouslySetInnerHTML={{ __html: zarinpalTrustHtml }}
               />
-            ) : (
-              <span className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">نشان زرین‌پال از تنظیمات صفحهٔ اصلی قابل افزودن است</span>
-            )}
+            ) : null}
           </div>
         </div>
         <FooterColumn title="راهکارها" items={solutionLinks} />
@@ -169,33 +175,9 @@ const Footer = () => {
 const HomePage = () => (
   <>
     <SeoHead {...buildHomeSeo()} />
-    <LandingRenderer slug="home" />
-    <ProductScreenshotsSection />
+    <LandingRenderer slug="home" themeOverride={PUBLIC_SITE_THEME} />
     <SolutionsOverview />
   </>
-);
-
-const productScreenshots = [
-  { src: '/assets/tutorials/customers-list.png', alt: 'نمای فهرست مشتریان در CRM ایرانی تازه سیستم', title: 'CRM و مدیریت مشتریان', text: 'اطلاعات مشتری، مسئول پیگیری و سابقه ارتباطات در یک نمای منظم.' },
-  { src: '/assets/tutorials/reports-form.png', alt: 'نمای گزارش‌ساز مدیریتی تازه سیستم', title: 'گزارش‌ساز مدیریتی', text: 'گزارش‌های قابل تنظیم برای بررسی فروش، عملیات و عملکرد تیم.' },
-  { src: '/assets/tutorials/invoices-form.png', alt: 'فرم فاکتور فروش در نرم‌افزار تازه سیستم', title: 'فروش و فاکتور یکپارچه', text: 'ثبت فاکتور و اقلام فروش در کنار اطلاعات مشتری و گردش مالی.' },
-  { src: '/assets/tutorials/projects-list.png', alt: 'نمای مدیریت پروژه‌ها و وظایف در تازه سیستم', title: 'پروژه و پیگیری کارها', text: 'مشاهده پروژه‌ها، وضعیت اجرا و مسئول هر بخش در یک فضای مشترک.' },
-] as const;
-
-const ProductScreenshotsSection = () => (
-  <section className="bg-zinc-50 px-5 py-20" aria-labelledby="product-screenshots-title">
-    <div className="mx-auto max-w-7xl">
-      <SectionTitle eyebrow="نمای واقعی محصول" title="تازه سیستم را قبل از شروع ببینید" text="چند نمای عمومی از بخش‌های پرکاربرد سامانه؛ اطلاعات این تصاویر نمونه و آموزشی است." />
-      <div className="grid gap-6 md:grid-cols-2">
-        {productScreenshots.map((item) => (
-          <figure key={item.src} className="overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-sm">
-            <img src={item.src} alt={item.alt} loading="lazy" width="1536" height="1024" className="aspect-[3/2] w-full object-cover object-top" />
-            <figcaption className="p-5"><h3 className="text-lg font-black text-zinc-950">{item.title}</h3><p className="mt-2 text-sm leading-7 text-zinc-600">{item.text}</p></figcaption>
-          </figure>
-        ))}
-      </div>
-    </div>
-  </section>
 );
 
 const SolutionsOverview = () => (
@@ -274,6 +256,26 @@ type ProductUpdate = {
 };
 
 const recentProductUpdates: ProductUpdate[] = [
+  {
+    version: '2.103.0.0.0',
+    title: 'تایپ با صدا و پیگیری بهتر تماس‌ها',
+    summary: 'با صحبت کردن متن بنویسید و از فایل صوتی تماس، متن گفتگو و فعالیت پیگیری بسازید.',
+    details: [
+      'در فیلدهای متنی بلند می‌توانید از میکروفون برای افزودن متن استفاده کنید.',
+      'متن تماس‌های ضبط‌شده را ببینید، کپی کنید و برای بررسی بیشتر به دستیار هوشمند بدهید.',
+      'از کنار تماس، فعالیتی با مخاطب، زمان و فایل صوتی همان تماس بسازید.',
+    ],
+  },
+  {
+    version: '2.102.0.0.0',
+    title: 'گردش‌کار و پیام‌های هوشمند اینستاگرام',
+    summary: 'برای دایرکت‌ها، کامنت‌ها، استوری‌ها و پست‌های اینستاگرام می‌توانید پاسخ و پیگیری خودکار دقیق‌تری تعریف کنید.',
+    details: [
+      'گردش‌کارهای دایرکت و کامنت در یک بخش اختصاصی قرار دارند و برای هر استوری یا پست می‌توان شرط جداگانه ساخت.',
+      'پیام‌های دکمه‌دار با پیش‌نمایش، تصویر و کارت‌های محصول آماده می‌شوند تا قبل از ارسال دقیق‌تر دیده شوند.',
+      'از کنار گفتگوی اینستاگرام، ثبت لید، مشتری، فاکتور و فعالیت سریع‌تر در دسترس است.',
+    ],
+  },
   {
     version: '2.101.0.0.0',
     title: 'گردش‌کارهای مدیریتی تازه سیستم',
@@ -2136,6 +2138,37 @@ const CmsStaticPage = ({ slug, fallbackTitle }: { slug: string; fallbackTitle: s
 
 const ContactPage = () => <main className="px-5 py-20"><div className="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[.8fr_1.2fr]"><div><div className="text-sm font-black" style={{ color: 'rgb(var(--brand-600-rgb))' }}>تماس با ما</div><h1 className="mt-3 text-4xl font-black text-zinc-950">برای دمو، همکاری یا پشتیبانی پیام بدهید</h1><div className="mt-8 grid gap-3 text-sm text-zinc-600"><a className="flex items-center gap-3" href="tel:+982100000000"><PhoneOutlined /> ۰۲۱-۰۰۰۰۰۰۰۰</a><a className="flex items-center gap-3" href="mailto:hello@tazesystem.ir"><MailOutlined /> hello@tazesystem.ir</a></div></div><DemoForm /></div></main>;
 
+const PublicSiteScrollRestoration = () => {
+  const { key, hash } = useLocation();
+  useLayoutEffect(() => {
+    const previous = window.history.scrollRestoration;
+    window.history.scrollRestoration = 'manual';
+    return () => { window.history.scrollRestoration = previous; };
+  }, []);
+  useLayoutEffect(() => {
+    document.querySelectorAll<HTMLDetailsElement>('.site-mobile-nav[open]').forEach(menu => { menu.open = false; });
+    if (!hash) {
+      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+      document.getElementById('public-page-content')?.focus({ preventScroll: true });
+      return;
+    }
+    let targetId: string;
+    try { targetId = decodeURIComponent(hash.slice(1)); } catch { return; }
+    const scrollToAnchor = () => {
+      const target = document.getElementById(targetId);
+      if (!target) return false;
+      target.scrollIntoView({ behavior: 'instant', block: 'start' });
+      return true;
+    };
+    if (scrollToAnchor()) return;
+    const observer = new MutationObserver(() => { if (scrollToAnchor()) observer.disconnect(); });
+    observer.observe(document.getElementById('public-page-content') ?? document.body, { childList: true, subtree: true });
+    const timeout = window.setTimeout(() => observer.disconnect(), 5000);
+    return () => { observer.disconnect(); window.clearTimeout(timeout); };
+  }, [key, hash]);
+  return null;
+};
+
 const PublicSite: React.FC<{ page?: PublicPage }> = ({ page = 'home' }) => {
   const location = useLocation();
   const resolvedPage = useMemo<PublicPage>(() => {
@@ -2168,12 +2201,15 @@ const PublicSite: React.FC<{ page?: PublicPage }> = ({ page = 'home' }) => {
   });
 
   return (
-    <div className="min-h-screen bg-zinc-50 text-zinc-950">
+    <MotionConfig reducedMotion="user">
+    <div className="public-site min-h-screen bg-zinc-50 text-zinc-950" style={PUBLIC_SITE_CSS_VARS as React.CSSProperties} dir="rtl">
+      <PublicSiteScrollRestoration />
       <UserAnnouncementsBanner
         items={headerAnnouncements}
         onDismiss={dismissAnnouncement}
       />
       <Header />
+      <div id="public-page-content" tabIndex={-1}>
       {resolvedPage === 'home' && <HomePage />}
       {resolvedPage === 'features' && <FeaturesPage />}
       {resolvedPage === 'pricing' && <PricingSection detailed />}
@@ -2189,12 +2225,14 @@ const PublicSite: React.FC<{ page?: PublicPage }> = ({ page = 'home' }) => {
       {resolvedPage === 'rules' && <CmsStaticPage slug="rules" fallbackTitle="قوانین و مقررات" />}
       {resolvedPage === 'sla' && <CmsStaticPage slug="sla" fallbackTitle="توافق‌نامهٔ سطح خدمات (SLA)" />}
       {(resolvedPage === 'contact' || resolvedPage === 'demo') && <ContactPage />}
+      </div>
       <Footer />
       <UserAnnouncementsPopupHost
         items={popupAnnouncements}
         onDismiss={dismissAnnouncement}
       />
     </div>
+    </MotionConfig>
   );
 };
 

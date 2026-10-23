@@ -69,6 +69,7 @@ import { shouldRenderInGeneralModuleUi } from '../utils/moduleFieldVisibility';
 import { createFileManagerOriginForUpload, detectFileManagerTables } from '../utils/fileManagerService';
 import RichTextEditor from './RichTextEditor';
 import RichTextContent from './RichTextContent';
+import VoiceToTextButton from './ai/VoiceToTextButton';
 import { appendReadyTextToRichText, normalizeRichTextHtml, richTextToPlainText } from '../utils/richText';
 import {
   buildStandardSelectPopupRootStyle,
@@ -2262,6 +2263,12 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 className="mt-1 shrink-0 text-gray-500"
               />
             )}
+            <VoiceToTextButton
+              size="small"
+              disabled={!forceEditMode || isReadonly}
+              className="mt-1 shrink-0 text-gray-500"
+              onTranscript={(transcript) => onChange(appendReadyTextToRichText(value, transcript))}
+            />
             </div>
             {shouldShowLongTextToggle && !compactMode && (
               <Button

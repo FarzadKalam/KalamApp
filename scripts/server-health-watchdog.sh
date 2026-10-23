@@ -107,11 +107,14 @@ alert_reminder_once() {
 
 check_ssl_certificate() {
   local host="$1"
-  local certificate serial end_date expiry_timestamp now seconds_remaining days_remaining attempt
+  local certificate serial end_date expiry_timestamp now seconds_remaining days_remaining attempt resolved_once=0
   certificate=''
   for ((attempt = 1; attempt <= NETWORK_RETRY_ATTEMPTS; attempt++)); do
-    if certificate="$(timeout 20 openssl s_client -connect "${host}:443" -servername "$host" </dev/null 2>/dev/null | openssl x509 2>/dev/null)"; then
-      break
+    if timeout "$COMMAND_TIMEOUT_SECONDS" getent ahosts "$host" >/dev/null 2>&1; then
+      resolved_once=1
+      if certificate="$(timeout 20 openssl s_client -connect "${host}:443" -servername "$host" -verify_hostname "$host" -verify_return_error </dev/null 2>/dev/null | openssl x509 2>/dev/null)"; then
+        break
+      fi
     fi
     certificate=''
     if (( attempt < NETWORK_RETRY_ATTEMPTS )); then
@@ -119,7 +122,11 @@ check_ssl_certificate() {
     fi
   done
   [[ -n "$certificate" ]] || {
-    alert_once "ssl-${host}-unreadable" "گواهی SSL دامنه ${host} خوانده نشد؛ اتصال امن یا تنظیمات Nginx را بررسی کنید."
+    if (( resolved_once == 0 )); then
+      alert_once "dns-${host}-unresolved" "نام دامنه ${host} از روی سرور قابل تبدیل به IP نیست؛ تنظیمات DNS سرور را بررسی کنید."
+    else
+      alert_once "ssl-${host}-unreadable" "اتصال امن دامنه ${host} برقرار نشد یا گواهی آن معتبر نیست؛ اتصال شبکه و تنظیمات گواهی را بررسی کنید."
+    fi
     return
   }
 

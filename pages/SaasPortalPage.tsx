@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { Alert, Button, ConfigProvider, Input, Select, theme as antdTheme } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -13,6 +14,7 @@ import { seedCurrentOrgDemoData } from '../utils/demoDataAdmin';
 import { getOtpErrorMessage, normalizeOtpPhone, normalizeOtpToken, OTP_RESEND_SECONDS, requestSmsOtp, verifySmsOtp } from '../utils/otpAuth';
 import { signOutLocalSession } from '../utils/authSession';
 import { getInternalAppUrl } from '../utils/hostRouting';
+import { handoffSessionToTenant } from '../utils/tenantSessionHandoff';
 import { assertDemoOtpRequestAllowed, lookupPhoneLoginCandidate, lookupPhoneSignupInvite, requestExistingProfilePhoneOtp } from '../utils/phoneAuth';
 import {
   getDemoProvisionErrorMessage,
@@ -223,6 +225,7 @@ const SaasPortalPage: React.FC = () => {
           if (owned?.resolved_host) {
             setProvisionResult({
               success: true,
+              org_id: owned.org_id,
               slug: String(owned.resolved_host).split('.')[0],
               redirect_host: owned.resolved_host,
               trial_days: 0,
@@ -487,6 +490,7 @@ const SaasPortalPage: React.FC = () => {
       if (activateError || !(data as any)?.success) throw activateError || new Error('organization_access_denied');
       clearWizardState();
       const host = String((data as any)?.resolved_host || organization.resolved_host || '').trim();
+      if (host?.endsWith('.tazesystem.ir')) await handoffSessionToTenant(host, organization.org_id);
       window.location.href = host ? `https://${host}` : getInternalAppUrl();
     } catch (err: any) {
       setError(getOtpErrorMessage(err, 'ورود به سازمان انتخاب‌شده ناموفق بود.'));
@@ -633,10 +637,12 @@ const SaasPortalPage: React.FC = () => {
         throw new Error(errorParts.join(': '));
       }
 
-      setProvisionResult(result);
       // The organization already exists. Show its address and login action even
       // if optional sample data takes longer or fails.
-      setStep('done');
+      flushSync(() => {
+        setProvisionResult(result);
+        setStep('done');
+      });
 
       try {
         const seedResult = await seedCurrentOrgDemoData({ orgId: result.org_id || null });
@@ -771,6 +777,12 @@ const SaasPortalPage: React.FC = () => {
             </div>
             <p className="mt-6 text-center text-xs text-slate-400">
               با ادامه، شرایط استفاده تازه سیستم را می‌پذیرید.
+            </p>
+            <p className="mt-5 text-center text-sm text-slate-600">
+              ثبت‌نام کرده‌اید؟{' '}
+              <a href="/login" className="font-bold text-slate-900 underline underline-offset-4 hover:text-slate-700">
+                وارد شوید
+              </a>
             </p>
           </div>
         )}
@@ -1140,10 +1152,16 @@ const SaasPortalPage: React.FC = () => {
               type="primary"
               size="large"
               className="!rounded-xl !h-12 !font-black !bg-slate-900 !border-none hover:!bg-slate-700"
-              onClick={() => {
-                clearWizardState();
+              onClick={async () => {
                 const host = provisionResult.redirect_host || `${provisionResult.slug}${TAZE_SUFFIX}`;
-                window.location.href = `https://${host}`;
+                try {
+                  if (!provisionResult.org_id) throw new Error('شناسه سازمان برای ورود پیدا نشد. صفحه را تازه کنید.');
+                  await handoffSessionToTenant(host, provisionResult.org_id);
+                  clearWizardState();
+                  window.location.href = `https://${host}`;
+                } catch (err: any) {
+                  setProvisionWarning(getDemoProvisionErrorMessage(err, 'ورود مستقیم انجام نشد. دوباره تلاش کنید.'));
+                }
               }}
             >
               ورود به پنل من <ArrowLeftOutlined />

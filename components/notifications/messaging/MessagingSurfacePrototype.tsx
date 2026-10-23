@@ -4773,28 +4773,47 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
     setForwardMessageText('');
   }, [initialForwardMessage]);
 
-  const openCreateActivityFromMessage = (item: TimelineEvent) => {
-    const relatedModuleId = String(item.sourceRow?.module_id || item.sourceRow?.related_module_id || activeConversation.relatedModuleId || '').trim();
-    const relatedRecordId = String(item.sourceRow?.record_id || item.sourceRow?.related_record_id || activeConversation.relatedRecordId || '').trim();
+  const openCreateActivityFromMessage = (item: (TimelineEvent | Record<string, any>) & {
+    createdAt?: string | null;
+    activityTitle?: string;
+    actorName?: string;
+    activityCompletedAt?: string | null;
+    taskType?: string;
+    activityStartAt?: string | null;
+    createdAtLabel?: string;
+    content?: string;
+  }) => {
+    const sourceRow = item.sourceRow || item;
+    const relatedModuleId = String(sourceRow?.module_id || sourceRow?.related_module_id || item.relatedModuleId || activeConversation.relatedModuleId || '').trim();
+    const relatedRecordId = String(sourceRow?.record_id || sourceRow?.related_record_id || item.relatedRecordId || activeConversation.relatedRecordId || '').trim();
+    const isVoipCall = item.kind === 'call' && Boolean(sourceRow?.id);
+    const callDirection = String(sourceRow?.direction || item.callDirection || '').trim().toLowerCase();
+    const derivedTaskType = callDirection === 'outgoing' ? 'تماس خروجی' : 'تماس ورودی';
+    const callStartedAt = String(sourceRow?.started_at || sourceRow?.created_at || item.createdAt || '').trim() || null;
+    const callCompletedAt = String(sourceRow?.ended_at || '').trim() || callStartedAt;
     const relationInitialValues = relatedModuleId && relatedRecordId
       ? buildTaskSourceInitialValues(relatedModuleId, relatedRecordId)
       : {};
     const attachments = filterUsableMessageAttachments(
-      item.sourceRow?.content
-        ? parseNoteContent(item.sourceRow.content).attachments
-        : timelineAttachmentsToNoteAttachments(item),
+      Array.isArray(item.attachments) && item.attachments.length
+        ? item.attachments
+        : sourceRow?.content
+          ? parseNoteContent(sourceRow.content).attachments
+          : timelineAttachmentsToNoteAttachments(item as TimelineEvent),
     );
     setMessageActivityDraft({
       initialValues: {
         ...relationInitialValues,
-        name: buildMessageActivityTitle({ actorName: item.author, sourceLabel: channelMeta[activeConversation.channel].label }),
-        status: 'todo',
+        name: String(item.activityTitle || '').trim() || buildMessageActivityTitle({ actorName: item.actorName || item.author, sourceLabel: channelMeta[activeConversation.channel].label }),
+        status: item.activityCompletedAt || isVoipCall ? 'done' : 'todo',
         priority: 'medium',
-        task_type: 'فعالیت سازمانی',
+        task_type: String(item.taskType || '').trim() || (isVoipCall ? derivedTaskType : 'فعالیت سازمانی'),
+        ...((item.activityStartAt || callStartedAt) ? { start_date: item.activityStartAt || callStartedAt, actual_start_at: item.activityStartAt || callStartedAt } : {}),
+        ...((item.activityCompletedAt || (isVoipCall ? callCompletedAt : null)) ? { due_date: item.activityCompletedAt || callCompletedAt, completed_at: item.activityCompletedAt || callCompletedAt, actual_end_at: item.activityCompletedAt || callCompletedAt } : {}),
         description: buildMessageActivityDescription({
-          actorName: item.author,
-          createdAtLabel: item.time,
-          content: item.text,
+          actorName: item.actorName || item.author,
+          createdAtLabel: item.createdAtLabel || item.time,
+          content: item.content || item.text,
           attachments,
           sourceLabel: channelMeta[activeConversation.channel].label,
         }),
@@ -4802,7 +4821,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
       attachments,
       relatedModuleId: relatedModuleId || null,
       relatedRecordId: relatedRecordId || null,
-      sourceLabel: item.author || channelMeta[activeConversation.channel].label,
+      sourceLabel: item.actorName || item.author || channelMeta[activeConversation.channel].label,
     });
   };
 

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { motion, useInView, useMotionValue, useSpring, useTransform } from 'framer-motion';
+import { Link } from 'react-router-dom';
+import { motion, useInView, useMotionValue, useReducedMotion, useSpring, useTransform } from 'framer-motion';
 
 // ──────────────────────────────────────────────────
 // Reveal: ظاهر شدن نرم هنگام اسکرول
@@ -14,15 +15,16 @@ export const Reveal: React.FC<{
 }> = ({ children, className, delay = 0, y = 24, as = 'div', style }) => {
   const ref = useRef<HTMLDivElement>(null);
   const inView = useInView(ref, { once: true, margin: '-80px' });
+  const reduceMotion = useReducedMotion();
   const MotionTag = (motion as any)[as] as typeof motion.div;
   return (
     <MotionTag
       ref={ref as any}
       className={className}
       style={style}
-      initial={{ opacity: 0, y }}
-      animate={inView ? { opacity: 1, y: 0 } : {}}
-      transition={{ duration: 0.6, delay, ease: [0.22, 1, 0.36, 1] }}
+      initial={reduceMotion ? false : { opacity: 0, y }}
+      animate={inView && !reduceMotion ? { opacity: 1, y: 0 } : {}}
+      transition={{ duration: 0.52, delay, ease: [0.22, 1, 0.36, 1] }}
     >
       {children}
     </MotionTag>
@@ -45,6 +47,7 @@ export const Counter: React.FC<{
   const inView = useInView(ref, { once: true, margin: '-60px' });
   const motionValue = useMotionValue(0);
   const spring = useSpring(motionValue, { duration: 1600, bounce: 0 });
+  const reduceMotion = useReducedMotion();
   const [display, setDisplay] = useState('۰');
 
   const target = Number(to) || 0;
@@ -62,7 +65,7 @@ export const Counter: React.FC<{
 
   return (
     <span ref={ref}>
-      {prefix}{display}{suffix}
+      {prefix}{reduceMotion ? toFa(target) : display}{suffix}
     </span>
   );
 };
@@ -109,10 +112,10 @@ export const SectionShell: React.FC<{
 }> = ({ children, tone = 'light', aurora = false, className = '', id }) => (
   <section
     id={id}
-    className={`relative px-5 py-20 md:py-24 ${toneClasses[tone]} ${className}`}
+    className={`site-section site-section--${tone} relative px-5 py-16 md:py-24 ${toneClasses[tone]} ${className}`}
     style={tone === 'brand' ? { background: 'linear-gradient(135deg, rgb(var(--brand-700-rgb)), rgb(var(--brand-900-rgb)))' } : undefined}
   >
-    {aurora && <AuroraBg tone={tone === 'dark' || tone === 'brand' ? 'dark' : 'light'} />}
+    {aurora && <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-px" style={{ background: 'rgb(var(--brand-400-rgb) / .3)' }} />}
     <div className="relative mx-auto max-w-7xl">{children}</div>
   </section>
 );
@@ -128,7 +131,7 @@ export const SectionHeading: React.FC<{
   align?: 'center' | 'start';
 }> = ({ eyebrow, title, text, invert = false, align = 'center' }) => (
   <Reveal
-    className={`mb-12 max-w-3xl ${align === 'center' ? 'mx-auto text-center' : 'text-right'}`}
+    className={`site-heading site-heading--${align} mb-12 max-w-3xl ${align === 'center' ? 'mx-auto text-center' : 'text-right'}`}
   >
     {eyebrow && (
       <div
@@ -138,7 +141,7 @@ export const SectionHeading: React.FC<{
         {eyebrow}
       </div>
     )}
-    <h2 className={`mt-3 text-3xl font-black leading-tight md:text-4xl ${invert ? 'text-white' : 'text-zinc-950'}`}>
+    <h2 className={`mt-3 text-3xl font-black leading-[1.35] tracking-[-0.025em] md:text-4xl ${invert ? 'text-white' : 'text-zinc-950'}`}>
       {title}
     </h2>
     {text && <p className={`mt-4 text-base leading-8 ${invert ? 'text-zinc-300' : 'text-zinc-600'}`}>{text}</p>}
@@ -154,7 +157,7 @@ export const BrandButton: React.FC<{
   variant?: 'solid' | 'outline' | 'ghost' | 'invert';
   className?: string;
 }> = ({ href, children, variant = 'solid', className = '' }) => {
-  const base = 'inline-flex items-center justify-center gap-2 rounded-xl px-6 py-3.5 text-sm font-black transition';
+  const base = 'inline-flex items-center justify-center gap-2 rounded-xl px-6 py-3.5 text-sm font-black transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2';
   const styles: Record<string, React.CSSProperties> = {
     solid: { background: 'rgb(var(--brand-600-rgb))', color: '#fff' },
     invert: { background: '#fff', color: 'rgb(var(--brand-700-rgb))' },
@@ -166,7 +169,10 @@ export const BrandButton: React.FC<{
       ? 'border border-zinc-300 bg-white text-zinc-950 hover:border-zinc-950'
       : variant === 'ghost'
       ? 'text-zinc-700 hover:bg-zinc-100'
-      : 'shadow-sm hover:opacity-90';
+      : 'shadow-sm hover:-translate-y-0.5 hover:shadow-md';
+  if (href.startsWith('/') && !href.startsWith('//')) return (
+    <Link to={href} className={`${base} ${variantCls} ${className}`} style={styles[variant]}>{children}</Link>
+  );
   return (
     <a href={href} className={`${base} ${variantCls} ${className}`} style={styles[variant]}>
       {children}

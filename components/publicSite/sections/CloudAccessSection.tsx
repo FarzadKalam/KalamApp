@@ -1,34 +1,31 @@
 import React from 'react';
-import { CloudOutlined, MobileOutlined, TabletOutlined, DesktopOutlined, CheckCircleFilled } from '@ant-design/icons';
-
-const Device: React.FC<{ kind: 'phone' | 'tablet' | 'desktop'; label: string }> = ({ kind, label }) => {
-  const Icon = kind === 'phone' ? MobileOutlined : kind === 'tablet' ? TabletOutlined : DesktopOutlined;
-  const shell = kind === 'phone' ? 'h-52 w-28 rounded-[1.7rem]' : kind === 'tablet' ? 'h-44 w-56 rounded-2xl' : 'h-40 w-64 rounded-xl';
-  return <div className={`relative border-[7px] border-slate-800 bg-slate-900 p-2 shadow-2xl ${shell}`}>
-    <div className="h-full rounded-lg bg-gradient-to-bl from-sky-100 via-white to-blue-50 p-2 text-slate-700">
-      <div className="flex items-center justify-between text-[8px] font-black"><span>تازه سیستم</span><Icon /></div>
-      <div className="mt-3 rounded bg-blue-600 p-2 text-[8px] font-bold text-white">کارهای امروز</div>
-      <div className="mt-2 space-y-1">{[1, 2, 3].map((item) => <div key={item} className="h-3 rounded bg-slate-200" />)}</div>
-    </div>
-    {kind === 'desktop' ? <div className="absolute -bottom-7 left-1/2 h-7 w-16 -translate-x-1/2 rounded-b bg-slate-800" /> : null}
-    <span className="absolute -bottom-11 right-1/2 translate-x-1/2 whitespace-nowrap text-xs font-black text-slate-600">{label}</span>
-  </div>;
-};
+import { CheckCircleOutlined, DesktopOutlined, MobileOutlined } from '@ant-design/icons';
+import { Reveal, SectionHeading, SectionShell } from '../primitives';
 
 export const CloudAccessSection: React.FC<{ props: any }> = ({ props }) => (
-  <section className="overflow-hidden bg-gradient-to-bl from-sky-50 via-white to-indigo-50 px-5 py-20" dir="rtl">
-    <div className="mx-auto grid max-w-7xl items-center gap-14 lg:grid-cols-2">
+  <SectionShell tone="soft">
+    <div className="grid items-center gap-10 lg:grid-cols-[.85fr_1.15fr] lg:gap-16">
       <div>
-        <div className="inline-flex items-center gap-2 rounded-full bg-blue-100 px-3 py-1 text-sm font-black text-blue-700"><CloudOutlined />{props.eyebrow || 'همیشه در دسترس'}</div>
-        <h2 className="mt-5 text-3xl font-black leading-tight text-slate-950 md:text-5xl">{props.title || 'کار شما در هر دستگاهی همراهتان است'}</h2>
-        <p className="mt-5 max-w-xl text-base leading-8 text-slate-600">{props.text || 'تازه سیستم ابری، سریع و بهینه برای موبایل است؛ از فروشگاه و دفتر تا خانه، اطلاعات سازمان همیشه همگام و در دسترس می‌ماند.'}</p>
-        <div className="mt-7 grid gap-3 sm:grid-cols-2">{(props.highlights || ['داده‌های همگام در همه دستگاه‌ها', 'رابط لمسی و موبایل‌محور', 'دسترسی امن از هرجا']).map((item: string) => <div key={item} className="flex items-center gap-2 text-sm font-bold text-slate-700"><CheckCircleFilled className="text-blue-600" />{item}</div>)}</div>
+        <SectionHeading align="start" eyebrow={props.eyebrow || 'همیشه در دسترس'} title={props.title || 'کار شما در هر دستگاهی همراهتان است'} text={props.text} />
+        <ul className="grid gap-4">
+          {(props.highlights || ['داده‌های همگام در همه دستگاه‌ها', 'رابط لمسی و موبایل‌محور', 'دسترسی امن از هرجا']).map((text: string) => <li key={text} className="flex items-center gap-3 text-sm leading-7 text-zinc-700"><CheckCircleOutlined style={{ color: 'rgb(var(--brand-700-rgb))' }} aria-hidden="true" />{text}</li>)}
+        </ul>
       </div>
-      <div className="flex min-h-0 flex-col items-center justify-center gap-14 py-4 sm:min-h-[330px] sm:flex-row sm:gap-8 sm:pt-6" aria-label="نمایش تازه سیستم روی گوشی، تبلت و رایانه">
-        <Device kind="phone" label="گوشی" /><Device kind="tablet" label="تبلت" /><Device kind="desktop" label="رایانه" />
-      </div>
+      <Reveal className="relative min-w-0 pb-8 pl-8" delay={.08}>
+        <div className="site-card overflow-hidden p-3">
+          <div className="mb-3 flex items-center gap-2 px-2 py-2 text-xs font-bold text-zinc-600"><DesktopOutlined aria-hidden="true" />فضای کار روی رایانه</div>
+          <img src="/assets/tutorials/projects-list.png" width="1536" height="1024" loading="lazy" alt="نمای نمونهٔ پروژه‌ها در نسخهٔ رایانهٔ تازه سیستم" className="aspect-[1.6] w-full rounded-xl object-cover object-top" />
+        </div>
+        <div className="site-card absolute bottom-0 left-0 w-[30%] min-w-[100px] max-w-[150px] overflow-hidden border-[5px] border-zinc-800 p-1.5">
+          <div className="flex items-center gap-1 py-2 text-[10px] font-bold text-zinc-700"><MobileOutlined aria-hidden="true" />همراه تیم شما</div>
+          <div className="space-y-2 rounded-lg bg-zinc-50 p-3">
+            <p className="text-xs font-bold" style={{ color: 'rgb(var(--brand-700-rgb))' }}>کارهای امروز</p>
+            {['پیگیری مشتری', 'جلسهٔ پروژه', 'تحویل گزارش'].map(text => <p key={text} className="border-t border-zinc-200 pt-2 text-[10px] leading-5 text-zinc-600">{text}</p>)}
+          </div>
+        </div>
+      </Reveal>
     </div>
-  </section>
+  </SectionShell>
 );
 
 export default CloudAccessSection;

@@ -47,6 +47,7 @@ export const supabasePublic = globalStore.__kalam_supabase_public_client__;
 export const supabaseSignUpClient = globalStore.__kalam_supabase_signup_client__;
 export const SUPABASE_URL = supabaseUrl;
 export const SUPABASE_ANON_KEY = supabaseAnonKey;
+export const SUPABASE_AUTH_STORAGE_KEY = `sb-${new URL(supabaseUrl).hostname.split('.')[0]}-auth-token`;
 
 if (import.meta.env.DEV && typeof window !== 'undefined') {
   (window as any).__kalamSupabase = supabase;

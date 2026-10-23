@@ -1,6 +1,6 @@
 import "./index.css";
-import { DEFAULT_BRANDING, resolveSmartThemeMode, THEME_STORAGE_KEY } from "./theme/brandTheme";
-import { applyBrandingRuntime, loadRuntimeBranding, persistRuntimeBranding, readCachedBranding } from "./utils/brandingRuntime";
+import { resolveSmartThemeMode, THEME_STORAGE_KEY } from "./theme/brandTheme";
+import { applyBrandingRuntime, getSafeInitialBranding, loadRuntimeBranding, persistRuntimeBranding } from "./utils/brandingRuntime";
 
 const container = document.getElementById("root");
 
@@ -36,8 +36,7 @@ const bootstrapAndRender = async () => {
   }
 };
 
-const cached = readCachedBranding();
-applyBrandingRuntime(cached || DEFAULT_BRANDING);
+applyBrandingRuntime(getSafeInitialBranding());
 
 const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
 const initialDarkMode = savedTheme === "dark" || (savedTheme !== "light" && resolveSmartThemeMode() === "dark");

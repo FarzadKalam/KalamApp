@@ -51,8 +51,8 @@ export const SECTION_REGISTRY: Record<SectionType, SectionDef> = {
   },
   hero_tree: {
     type: 'hero_tree',
-    labelFa: 'هیرو اکوسیستم محصول (تعاملی)',
-    description: 'هیرو با هستهٔ محصول، جریان‌های متصل و واکنش به اسکرول و نشانگر ماوس.',
+    labelFa: 'هیرو محصول و فضای کار (تعاملی)',
+    description: 'معرفی محصول، دکمهٔ شروع و انتخاب نمای بخش‌های مختلف نرم‌افزار.',
     Component: HeroTreeSection,
     editor: [
       { key: 'eyebrow', label: 'برچسب بالا', type: 'text' },
@@ -70,6 +70,7 @@ export const SECTION_REGISTRY: Record<SectionType, SectionDef> = {
         { key: 'title', label: 'عنوان', type: 'text' },
         { key: 'text', label: 'توضیح کوتاه', type: 'text' },
         { key: 'previewTitle', label: 'عنوان نمای مرکزی', type: 'text' },
+        { key: 'previewMedia', label: 'تصویر نمای این بخش', type: 'image' },
         { key: 'previewValue', label: 'عدد یا وضعیت اصلی', type: 'text' },
         { key: 'previewLabel', label: 'توضیح عدد یا وضعیت', type: 'text' },
         { key: 'previewItems', label: 'ردیف‌های نمای مرکزی', type: 'string-list', itemLabel: 'ردیف' },

@@ -2094,7 +2094,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     const expectedRecordTarget = String(initialRecordCreationTargetModuleId || '').trim() || null;
     const recordTargetReady = String(recordCreationTargetModuleId || '') === String(expectedRecordTarget || '');
     if (!capabilitiesReady || !recordTargetReady) return;
-    const signature = `${normalizedInitialThreadId || 'new'}:${normalizedInitialInputKind}:${prompt}`;
+    // A routed initial prompt must run only once. The active thread changes
+    // when the user browses conversations, which is not a new analysis.
+    const signature = `${normalizedInitialInputKind}:${prompt}:${String(initialVoipCallLogId || '').trim()}`;
     if (autoSubmittedInitialPromptRef.current === signature) return;
     autoSubmittedInitialPromptRef.current = signature;
     setInput('');
@@ -2600,7 +2602,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   useEffect(() => {
     if (!active || !autoSubmitInitialPrompt || !initialFile || submitting || loadingThread || bundleInputs.length === 0) return;
     const fileName = String(initialFile.fileName || '').trim();
-    const signature = `${normalizedInitialThreadId || 'new'}:${fileName}:${String(initialFile.message || initialPrompt || '').trim()}`;
+    // The initial request belongs to the route, not the selected conversation.
+    // Including the active thread here retriggered VoIP analysis whenever the
+    // user switched conversations while this page remained mounted.
+    const signature = `${fileName}:${String(initialFile.message || initialPrompt || '').trim()}:${String(initialVoipCallLogId || '').trim()}`;
     if (!fileName || autoSubmittedInitialBundleRef.current === signature) return;
     autoSubmittedInitialBundleRef.current = signature;
     void submitTaskBundle();

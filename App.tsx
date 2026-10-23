@@ -38,7 +38,7 @@ import {
   clearRuntimeBrandingCache,
   persistRuntimeBranding,
   loadRuntimeBranding,
-  readCachedBranding,
+  getSafeInitialBranding,
 } from "./utils/brandingRuntime";
 import { clearCurrentUserRoleContextCache } from "./utils/permissions";
 import { clearReferenceDataCache, primeReferenceData } from "./utils/referenceData";
@@ -53,6 +53,7 @@ import { isMarketingHost, isSaasAdminPanelHost, isSaasAppHost } from "./utils/ho
 import { activateSaasAdminPanelContext } from "./utils/saasAdminPanel";
 import { signOutLocalSession } from "./utils/authSession";
 import TenantHostSessionBoundary from './components/auth/TenantHostSessionBoundary';
+import TenantSessionHandoffPage from './pages/TenantSessionHandoffPage';
 import { readCachedLoadingBrandIdentity, type LoadingBrandIdentity } from './utils/loadingBrand';
 import { PublicThemeBoundary } from './components/public/PublicThemeBoundary';
 import { hasCurrentOrgPlanModule } from './utils/saasPlanModules';
@@ -305,7 +306,7 @@ const getInitialDarkMode = () => {
 
 const getInitialBranding = (): BrandingConfig => {
   if (typeof window === "undefined") return DEFAULT_BRANDING;
-  return readCachedBranding() || DEFAULT_BRANDING;
+  return getSafeInitialBranding();
 };
 
 const SilentRouteFallback = () => null;
@@ -440,6 +441,9 @@ function App() {
   if (marketingHost) {
     return <MarketingSiteHostApp />;
   }
+  if (window.location.pathname === '/auth/handoff') {
+    return <TenantSessionHandoffPage />;
+  }
   if (isSaasOnboardingPath(window.location.pathname, saasAppHost)) {
     return <SaasOnboardingHostApp />;
   }
@@ -453,6 +457,7 @@ function App() {
     initialized: false,
     userId: null,
   });
+  const brandingRequestIdRef = useRef(0);
 
   useEffect(() => {
     document.body.style.fontFamily = "var(--font-family-app)";
@@ -471,15 +476,18 @@ function App() {
   }, []);
 
   const loadBranding = useCallback(async (force = false) => {
+    const requestId = ++brandingRequestIdRef.current;
     try {
       if (force) {
         clearRuntimeBrandingCache();
       }
       const runtimeBranding = await loadRuntimeBranding({ force });
+      if (requestId !== brandingRequestIdRef.current) return;
       persistRuntimeBranding(runtimeBranding);
       setBranding(runtimeBranding.branding);
       setLoadingBrandIdentity(runtimeBranding.loadingIdentity);
     } catch (error) {
+      if (requestId !== brandingRequestIdRef.current) return;
       console.warn("Could not load branding settings", error);
     }
   }, []);

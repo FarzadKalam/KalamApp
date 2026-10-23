@@ -73,6 +73,14 @@ type WorkflowEditorModalProps = {
     conditionsAll?: WorkflowCondition[];
     actions?: WorkflowAction[];
   } | null;
+  /** برای سطح‌های تخصصی (مانند صندوق اینستاگرام)، ماژول منبع ثابت می‌ماند. */
+  lockModuleSelection?: boolean;
+  /** فقط شرط‌های مجاز این سطح در سازندهٔ شرط نمایش داده شوند. */
+  allowedConditionFieldKeys?: string[];
+  /** شرط‌هایی که از context صفحه می‌آیند و هنگام ذخیره قابل حذف یا تغییر نیستند. */
+  fixedConditionsAll?: WorkflowCondition[];
+  /** trigger تخصصی که کاربر نباید در UI تغییر دهد. */
+  lockedTriggerType?: WorkflowTriggerType;
 };
 
 type FormValues = {
@@ -205,6 +213,10 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
   canEdit = true,
   moduleOptions,
   initialDraft,
+  lockModuleSelection = false,
+  allowedConditionFieldKeys,
+  fixedConditionsAll = [],
+  lockedTriggerType,
 }) => {
   const overlayZIndexBase = 13080;
   const { message } = App.useApp();
@@ -247,10 +259,12 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
     [moduleId, supportCategoryOptions]
   );
 
-  const conditionFields: ModuleField[] = useMemo(
-    () => withSupportCategories(getWorkflowConditionFields(moduleId)),
-    [moduleId, supportCategoryOptions]
-  );
+  const conditionFields: ModuleField[] = useMemo(() => {
+    const fields = withSupportCategories(getWorkflowConditionFields(moduleId));
+    if (!allowedConditionFieldKeys?.length) return fields;
+    const allowedKeys = new Set(allowedConditionFieldKeys.map((key) => String(key || '').trim()));
+    return fields.filter((field) => allowedKeys.has(String(field?.key || '').trim()));
+  }, [moduleId, supportCategoryOptions, allowedConditionFieldKeys]);
   const conditionFieldKeySet = useMemo(
     () =>
       new Set(
@@ -350,7 +364,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
       module_id: nextModuleId,
       name: record?.name || initialDraft?.name || '',
       description: record?.description || initialDraft?.description || '',
-      trigger_type: (record?.trigger_type as any) || initialDraft?.triggerType || 'on_create',
+      trigger_type: lockedTriggerType || (record?.trigger_type as any) || initialDraft?.triggerType || 'on_create',
       execution_mode: (record?.execution_mode as any) || 'first_match',
       interval_value: record?.interval_value || undefined,
       interval_unit: (record?.interval_unit as any) || 'day',
@@ -369,7 +383,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
     setConditionsAny(Array.isArray(record?.conditions_any) ? (record.conditions_any as any) : []);
     setActions(Array.isArray(record?.actions) ? (record.actions as any) : (initialDraft?.actions || []));
     setFlowSelection(null);
-  }, [open, record, initialModuleId, initialDraft, form]);
+  }, [open, record, initialModuleId, initialDraft, form, lockedTriggerType]);
 
   useEffect(() => {
     if (!open || !moduleId) return;
@@ -430,12 +444,18 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
       const { data: authData } = await supabase.auth.getUser();
       const userId = authData?.user?.id || null;
 
-      const isInterval = values.trigger_type === 'interval';
+      const effectiveTriggerType = lockedTriggerType || values.trigger_type;
+      const fixedFieldKeys = new Set(fixedConditionsAll.map((condition) => String(condition?.field || '').trim()).filter(Boolean));
+      const persistedConditionsAll = [
+        ...fixedConditionsAll,
+        ...conditionsAll.filter((condition) => !fixedFieldKeys.has(String(condition?.field || '').trim())),
+      ];
+      const isInterval = effectiveTriggerType === 'interval';
       const payload: Record<string, any> = {
         module_id: values.module_id,
         name: values.name?.trim(),
         description: values.description?.trim() || null,
-        trigger_type: values.trigger_type,
+        trigger_type: effectiveTriggerType,
         execution_mode: values.execution_mode || 'first_match',
         interval_value: isInterval ? values.interval_value || null : null,
         interval_unit: isInterval ? values.interval_unit || null : null,
@@ -448,7 +468,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
         interval_day_condition: isInterval ? values.interval_day_condition || null : null,
         interval_days_after_holiday: isInterval ? values.interval_days_after_holiday ?? null : null,
         batch_size: isInterval ? values.batch_size || null : null,
-        conditions_all: conditionsAll,
+        conditions_all: persistedConditionsAll,
         conditions_any: conditionsAny,
         actions: attachWorkflowTemplateFieldCatalog(actions, values.module_id, conditionFields),
         is_active: values.is_active !== false,
@@ -495,6 +515,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
                 getPopupContainer={resolveOverlayPopupContainer}
                 modalContainer={resolveOverlayPopupContainer}
                 overlayZIndexBase={overlayZIndexBase}
+                disabled={lockModuleSelection}
                 onChange={(nextVal) => setModuleId(String(nextVal || ''))}
                 placeholder="انتخاب ماژول"
               />
@@ -520,7 +541,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
         <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 mb-4">
           <h4 className="font-bold mb-3">شرایط اجرا</h4>
           <Form.Item name="trigger_type" initialValue="on_create">
-            <Radio.Group options={triggerTypeOptions} optionType="button" buttonStyle="solid" />
+            <Radio.Group options={lockedTriggerType ? triggerTypeOptions.filter((option) => option.value === lockedTriggerType) : triggerTypeOptions} optionType="button" buttonStyle="solid" disabled={Boolean(lockedTriggerType)} />
           </Form.Item>
           <Form.Item label="زمان اجرا" name="execution_mode" initialValue="first_match">
             <Radio.Group options={workflowExecutionModeOptions} />

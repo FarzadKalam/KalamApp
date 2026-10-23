@@ -55,6 +55,8 @@ export const voipCallReportsConfig: ModuleDefinition = {
       'operator_report',
       'related_task_id',
       'recording_url',
+      'transcript',
+      'transcript_status',
       'tags',
     ],
     editableFields: ['tags', 'operator_report', 'module_id', 'record_id', 'assignee_id', 'related_task_id'],
@@ -136,6 +138,8 @@ export const voipCallReportsConfig: ModuleDefinition = {
     { key: 'object_id', labels: { fa: 'شناسه آبجکت', en: 'Object ID' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'details', order: 8, nature: FieldNature.SYSTEM },
     { key: 'file_id', labels: { fa: 'شناسه فایل صوت', en: 'File ID' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'details', order: 9, nature: FieldNature.SYSTEM },
     { key: 'recording_url', labels: { fa: 'فایل صوت تماس', en: 'Recording' }, type: FieldType.LINK, location: FieldLocation.BLOCK, blockId: 'details', order: 10, nature: FieldNature.SYSTEM },
+    { key: 'transcript', labels: { fa: 'متن مکالمه', en: 'Transcript' }, type: FieldType.SUPER_LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'details', order: 10.2, readonly: true, nature: FieldNature.SYSTEM },
+    { key: 'transcript_status', labels: { fa: 'وضعیت تبدیل صوت', en: 'Transcript Status' }, type: FieldType.STATUS, location: FieldLocation.BLOCK, blockId: 'details', order: 10.3, readonly: true, nature: FieldNature.SYSTEM, options: [{ label: 'درخواست نشده', value: 'not_requested', color: 'default' }, { label: 'در حال تبدیل', value: 'processing', color: 'blue' }, { label: 'آماده', value: 'ready', color: 'green' }, { label: 'ناموفق', value: 'failed', color: 'red' }] },
     {
       key: 'module_id',
       labels: { fa: 'ماژول مخاطب', en: 'Related Module' },

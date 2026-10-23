@@ -188,7 +188,7 @@ describe('SaasPortalPage OTP flow', () => {
     await fillInfoForm();
     await sendOtpFromInfo();
     await verifyOtp();
-    expect(await screen.findByText('آماده است!')).toBeTruthy();
+    expect(await screen.findByText('فضای اختصاصی شما فعال شد!')).toBeTruthy();
   });
 
   it('shows owner email conflict inline on setup_owner_credentials conflict', async () => {
