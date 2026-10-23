@@ -27,6 +27,7 @@ try {
   await page.waitForTimeout(800);
   assert.equal(await page.locator('.public-site').evaluate(el => getComputedStyle(el).getPropertyValue('--brand-500-rgb').trim()), '248 35 119');
   assert.equal(await page.locator('h1').count(), 1);
+  assert.equal(await page.locator('#public-page-content').evaluate(el => getComputedStyle(el).outlineStyle), 'none');
   const flowButtons = page.locator('.product-preview__flows button');
   await flowButtons.nth(1).click();
   assert.equal(await flowButtons.nth(1).getAttribute('aria-pressed'), 'true');

@@ -192,11 +192,10 @@ try {
   )
   $sshArgs = @('-p', $deployPort) + $identityArgs + $networkTimeoutArgs
   $scpArgs = @('-P', $deployPort) + $identityArgs + $networkTimeoutArgs
-  if ($useSudo) {
-    $sshArgs += '-tt'
-  } else {
-    $sshArgs += '-T'
-  }
+  # This script is streamed to bash over stdin. A PTY can echo/buffer the input
+  # and keep the remote shell open after installation. Deployment uses the
+  # deploy key and non-interactive sudo, so a terminal is not required.
+  $sshArgs += '-T'
   $uploadedScript = '/tmp/kalamapp-health-watchdog.deploy.sh'
 
   Write-Step ("Remote privilege mode: " + $(if ($useSudo) { 'sudo' } else { 'root' }))
@@ -223,7 +222,7 @@ SKIP_REMOTE_CHECK="$(decode_argument "$7")"
 
 run_privileged() {
   if [ "$USE_SUDO" = '1' ]; then
-    sudo "$@"
+    sudo -n "$@"
   else
     "$@"
   fi
@@ -273,7 +272,7 @@ fi
 
 run_privileged bash -n "$REMOTE_SCRIPT"
 
-if [ ! -r "$REMOTE_CONFIG" ]; then
+if ! run_privileged test -r "$REMOTE_CONFIG"; then
   echo "Watchdog installed, but its secret config is missing: $REMOTE_CONFIG" >&2
   echo 'Create it once from ops/monitor.env.example; deploy never overwrites this file.' >&2
   exit 2
