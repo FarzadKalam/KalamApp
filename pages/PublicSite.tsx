@@ -2127,7 +2127,7 @@ const CmsStaticPage = ({ slug, fallbackTitle }: { slug: string; fallbackTitle: s
       <div className="mx-auto max-w-3xl">
         <h1 className="mb-8 text-3xl font-black leading-tight text-zinc-950 md:text-4xl">{page?.title || fallbackTitle}</h1>
         {blocks.length > 0 ? (
-          <BlockRenderer blocks={blocks} className="text-zinc-700" />
+          <BlockRenderer colorScheme="light" blocks={blocks} className="text-zinc-700" />
         ) : (
           <p className="text-base leading-8 text-zinc-500">{loaded ? 'محتوای این صفحه به‌زودی از پنل مدیریت تکمیل می‌شود.' : 'در حال بارگذاری...'}</p>
         )}

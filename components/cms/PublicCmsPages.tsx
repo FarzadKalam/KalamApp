@@ -191,9 +191,9 @@ function PostCard({ post, basePath }: { post: PostCard; basePath: string }) {
           {post.title}
         </h3>
         {post.excerpt && (
-          <p className="text-zinc-500 text-sm leading-6 line-clamp-2 mb-3">{post.excerpt}</p>
+          <p className="text-zinc-600 text-sm leading-6 line-clamp-2 mb-3">{post.excerpt}</p>
         )}
-        <div className="flex items-center gap-3 text-zinc-400 text-xs">
+        <div className="flex items-center gap-3 text-zinc-600 text-xs">
           {post.author_name && (
             <span className="flex items-center gap-1"><UserOutlined />{post.author_name}</span>
           )}
@@ -275,7 +275,7 @@ export function BlogIndexPage() {
       <div className="mb-8">
         <p className="text-teal-600 text-sm font-bold mb-1">بلاگ تازه سیستم</p>
         <h1 className="text-3xl md:text-4xl font-black text-zinc-950 mb-3">مقالات و راهنماها</h1>
-        <p className="text-zinc-500 text-base max-w-xl">
+        <p className="text-zinc-600 text-base max-w-xl">
           مطالب تخصصی درباره مدیریت کسب‌وکار، فناوری و نرم‌افزار سازمانی
         </p>
       </div>
@@ -392,7 +392,7 @@ export function BlogPostPage() {
       <SeoHead {...seo} />
 
       {/* Breadcrumb */}
-      <nav className="text-sm text-zinc-400 mb-8 flex items-center gap-2">
+      <nav className="text-sm text-zinc-600 mb-8 flex items-center gap-2">
         <Link to="/" className="hover:text-teal-600 transition-colors">خانه</Link>
         <span>/</span>
         <Link to="/blog" className="hover:text-teal-600 transition-colors">بلاگ</Link>
@@ -421,7 +421,7 @@ export function BlogPostPage() {
       <h1 className="text-3xl md:text-4xl font-black text-zinc-950 leading-tight mb-4">
         {post.title}
       </h1>
-      <div className="flex flex-wrap items-center gap-4 text-zinc-400 text-sm mb-8 pb-8 border-b border-zinc-200">
+      <div className="flex flex-wrap items-center gap-4 text-zinc-600 text-sm mb-8 pb-8 border-b border-zinc-200">
         {post.author_name && (
           <span className="flex items-center gap-1.5 text-zinc-600">
             {post.author_avatar ? (
@@ -452,7 +452,7 @@ export function BlogPostPage() {
       </div>
 
       {/* Content */}
-      <BlockRenderer blocks={post.content_blocks ?? []} className="text-zinc-800" />
+      <BlockRenderer colorScheme="light" blocks={post.content_blocks ?? []} className="text-zinc-800" />
 
       {/* Related posts */}
       {related.length > 0 && (
@@ -514,7 +514,7 @@ export function TutorialIndexPage() {
       <div className="mb-8">
         <p className="text-teal-600 text-sm font-bold mb-1">آموزش‌های تازه سیستم</p>
         <h1 className="text-3xl md:text-4xl font-black text-zinc-950 mb-3">آموزش‌ها و راهنماها</h1>
-        <p className="text-zinc-500 text-base max-w-xl">
+        <p className="text-zinc-600 text-base max-w-xl">
           از صفر تا پیشرفته — هر چیزی که نیاز دارید یاد بگیرید
         </p>
       </div>
@@ -543,7 +543,7 @@ export function TutorialIndexPage() {
                 )}
                 <div>
                   <h3 className="font-bold text-zinc-900 text-sm group-hover:text-teal-700 transition-colors">{s.title}</h3>
-                  {s.description && <p className="text-zinc-400 text-xs mt-1 line-clamp-2">{s.description}</p>}
+                  {s.description && <p className="text-zinc-600 text-xs mt-1 line-clamp-2">{s.description}</p>}
                 </div>
               </Link>
             ))}
@@ -650,7 +650,7 @@ export function TutorialPostPage() {
         {/* Main content */}
         <article className="flex-1 min-w-0">
           {/* Breadcrumb */}
-          <nav className="text-sm text-zinc-400 mb-8 flex items-center gap-2">
+          <nav className="text-sm text-zinc-600 mb-8 flex items-center gap-2">
             <Link to="/" className="hover:text-teal-600 transition-colors">خانه</Link>
             <span>/</span>
             <Link to="/learn" className="hover:text-teal-600 transition-colors">آموزش‌ها</Link>
@@ -680,7 +680,7 @@ export function TutorialPostPage() {
           </div>
           <h1 className="text-3xl font-black text-zinc-950 leading-tight mb-4">{post.title}</h1>
 
-          <div className="flex flex-wrap items-center gap-4 text-zinc-400 text-sm mb-8 pb-8 border-b border-zinc-200">
+          <div className="flex flex-wrap items-center gap-4 text-zinc-600 text-sm mb-8 pb-8 border-b border-zinc-200">
             {post.author_name && (
               <span className="flex items-center gap-1.5 text-zinc-600">
                 <UserOutlined />{post.author_name}
@@ -698,7 +698,7 @@ export function TutorialPostPage() {
             )}
           </div>
 
-          <BlockRenderer blocks={post.content_blocks ?? []} />
+          <BlockRenderer colorScheme="light" blocks={post.content_blocks ?? []} />
 
           {/* Prev/Next navigation */}
           {(prevPost || nextPost) && (
@@ -708,7 +708,7 @@ export function TutorialPostPage() {
                   to={`/learn/${prevPost.slug}`}
                   className="flex-1 p-4 border border-zinc-200 rounded-2xl hover:border-teal-300 transition-colors group"
                 >
-                  <p className="text-xs text-zinc-400 mb-1 flex items-center gap-1"><RightOutlined />قبلی</p>
+                  <p className="text-xs text-zinc-600 mb-1 flex items-center gap-1"><RightOutlined />قبلی</p>
                   <p className="font-medium text-zinc-700 group-hover:text-teal-700 line-clamp-2 transition-colors">{prevPost.title}</p>
                 </Link>
               )}
@@ -717,7 +717,7 @@ export function TutorialPostPage() {
                   to={`/learn/${nextPost.slug}`}
                   className="flex-1 p-4 border border-zinc-200 rounded-2xl hover:border-teal-300 transition-colors text-left group"
                 >
-                  <p className="text-xs text-zinc-400 mb-1 flex items-center gap-1 justify-end"><LeftOutlined />بعدی</p>
+                  <p className="text-xs text-zinc-600 mb-1 flex items-center gap-1 justify-end"><LeftOutlined />بعدی</p>
                   <p className="font-medium text-zinc-700 group-hover:text-teal-700 line-clamp-2 transition-colors text-right">{nextPost.title}</p>
                 </Link>
               )}
@@ -739,7 +739,7 @@ export function TutorialPostPage() {
                       to={`/learn/${p.slug}`}
                       className={`flex items-center gap-3 px-3 py-2 rounded-xl text-sm transition-colors ${p.slug === slug ? 'bg-teal-50 text-teal-700 font-medium' : 'text-zinc-600 hover:bg-zinc-50'}`}
                     >
-                      <span className={`w-6 h-6 flex-shrink-0 rounded-full text-xs font-bold flex items-center justify-center ${p.slug === slug ? 'bg-teal-500 text-white' : 'bg-zinc-100 text-zinc-500'}`}>
+                      <span className={`w-6 h-6 flex-shrink-0 rounded-full text-xs font-bold flex items-center justify-center ${p.slug === slug ? 'bg-teal-500 text-white' : 'bg-zinc-100 text-zinc-600'}`}>
                         {i + 1}
                       </span>
                       <span className="line-clamp-2">{p.title}</span>
