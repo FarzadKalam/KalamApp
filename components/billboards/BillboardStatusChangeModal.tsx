@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { App, Alert, Form, Input, Modal, Select, Spin } from 'antd';
+import { App, Alert, Form, Input, Modal, Radio, Select, Spin } from 'antd';
 import PersianDatePicker from '../PersianDatePicker';
 import SmartFieldRenderer from '../SmartFieldRenderer';
 import { supabase } from '../../supabaseClient';
@@ -8,7 +8,9 @@ import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import {
   BILLBOARD_STATUS_OPTIONS,
-  isBillboardOccupancyStatus,
+  BILLBOARD_STATUS_CHANGE_APPLICATION_OPTIONS,
+  isBillboardOpeningStatus,
+  isBillboardTaggableStatus,
 } from '../../utils/billboardStatusChanges';
 import { doesProcessTemplateSupportModule } from '../../utils/processTargets';
 
@@ -54,6 +56,7 @@ const BillboardStatusChangeModal: React.FC<BillboardStatusChangeModalProps> = ({
   const [billboards, setBillboards] = useState<Option[]>([]);
   const [templates, setTemplates] = useState<Option[]>([]);
   const targetStatus = Form.useWatch('target_status', form);
+  const applicationMode = Form.useWatch('application_mode', form);
   const customerId = Form.useWatch('customer_id', form);
   const invoiceId = Form.useWatch('invoice_id', form);
   const marketingLeadId = Form.useWatch('marketing_lead_id', form);
@@ -63,7 +66,8 @@ const BillboardStatusChangeModal: React.FC<BillboardStatusChangeModalProps> = ({
     marketing_lead_id: marketingLeadId,
   }), [customerId, invoiceId, marketingLeadId]);
   const isBulk = billboardIds.length > 1;
-  const occupancyRequired = isBillboardOccupancyStatus(targetStatus);
+  const canAddTag = isBillboardTaggableStatus(targetStatus);
+  const openingDatesRequired = isBillboardOpeningStatus(targetStatus);
   const blocked = String(targetStatus || '') === 'blocked';
 
   useEffect(() => {
@@ -89,6 +93,14 @@ const BillboardStatusChangeModal: React.FC<BillboardStatusChangeModalProps> = ({
     }).finally(() => { if (active) setOptionsLoading(false); });
     return () => { active = false; };
   }, [billboardIds, form, message, open]);
+
+  useEffect(() => {
+    if (!targetStatus || !canAddTag) {
+      if (applicationMode !== 'main_status') form.setFieldValue('application_mode', 'main_status');
+      return;
+    }
+    if (!applicationMode) form.setFieldValue('application_mode', 'main_status');
+  }, [applicationMode, canAddTag, form, targetStatus]);
 
   const initialNotice = useMemo(() => {
     if (!isBulk) return null;
@@ -144,10 +156,15 @@ const BillboardStatusChangeModal: React.FC<BillboardStatusChangeModalProps> = ({
           <Form.Item name="target_status" label="وضعیت مقصد" rules={[{ required: true, message: 'وضعیت مقصد را انتخاب کنید.' }]}>
             <Select options={[...BILLBOARD_STATUS_OPTIONS]} placeholder="انتخاب وضعیت" getPopupContainer={resolveOverlayPopupContainer} />
           </Form.Item>
-          {occupancyRequired ? <Alert className="mb-4" type="info" showIcon message="برای این وضعیت، مشتری و بازه اکران الزامی است." /> : null}
+          {canAddTag ? (
+            <Form.Item name="application_mode" label="نحوه اعمال">
+              <Radio.Group options={[...BILLBOARD_STATUS_CHANGE_APPLICATION_OPTIONS]} optionType="button" buttonStyle="solid" />
+            </Form.Item>
+          ) : null}
+          {openingDatesRequired ? <Alert className="mb-4" type="info" showIcon message="برای وضعیت «در حال اکران»، تاریخ شروع و پایان اکران الزامی است." /> : null}
           <div className="grid grid-cols-1 gap-x-3 md:grid-cols-2">
-            <Form.Item label="نام مشتری" required={occupancyRequired}>
-              <Form.Item name="customer_id" rules={[{ required: occupancyRequired, message: 'مشتری را انتخاب کنید.' }]} noStyle><Input type="hidden" /></Form.Item>
+            <Form.Item label="نام مشتری">
+              <Form.Item name="customer_id" noStyle><Input type="hidden" /></Form.Item>
               <SmartFieldRenderer field={statusChangeRelationFields.customer} value={customerId} onChange={(value) => form.setFieldValue('customer_id', value)} allValues={relationFormValues} moduleId="billboard_status_changes" forceEditMode standalone popupContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={BILLBOARD_STATUS_PICKER_Z_INDEX} />
             </Form.Item>
             <Form.Item label="فاکتور مرتبط">
@@ -158,10 +175,10 @@ const BillboardStatusChangeModal: React.FC<BillboardStatusChangeModalProps> = ({
               <Form.Item name="marketing_lead_id" noStyle><Input type="hidden" /></Form.Item>
               <SmartFieldRenderer field={statusChangeRelationFields.marketingLead} value={marketingLeadId} onChange={(value) => form.setFieldValue('marketing_lead_id', value)} allValues={relationFormValues} moduleId="billboard_status_changes" forceEditMode standalone popupContainer={resolveOverlayPopupContainer} preferLocalPopupContainer overlayZIndexBase={BILLBOARD_STATUS_PICKER_Z_INDEX} />
             </Form.Item>
-            <Form.Item name="start_date" label="شروع اکران" rules={[{ required: occupancyRequired, message: 'تاریخ شروع را وارد کنید.' }]}>
+            <Form.Item name="start_date" label="شروع اکران" rules={[{ required: openingDatesRequired, message: 'تاریخ شروع را وارد کنید.' }]}>
               <PersianDatePicker type="DATE" className="w-full" modalContainer={resolveOverlayPopupContainer} overlayZIndexBase={BILLBOARD_STATUS_PICKER_Z_INDEX} />
             </Form.Item>
-            <Form.Item name="end_date" label="پایان اکران" rules={[{ required: occupancyRequired, message: 'تاریخ پایان را وارد کنید.' }]}>
+            <Form.Item name="end_date" label="پایان اکران" rules={[{ required: openingDatesRequired, message: 'تاریخ پایان را وارد کنید.' }]}>
               <PersianDatePicker type="DATE" className="w-full" modalContainer={resolveOverlayPopupContainer} overlayZIndexBase={BILLBOARD_STATUS_PICKER_Z_INDEX} />
             </Form.Item>
           </div>

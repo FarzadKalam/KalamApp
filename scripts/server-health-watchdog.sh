@@ -15,7 +15,7 @@ fi
 STATE_DIR="${MONITOR_STATE_DIR:-/var/lib/kalamapp-monitor}"
 ALERT_COOLDOWN_SECONDS="${MONITOR_ALERT_COOLDOWN_SECONDS:-900}"
 DISK_PATH="${MONITOR_DISK_PATH:-/var/lib/docker}"
-DISK_WARNING_PERCENT="${MONITOR_DISK_WARNING_PERCENT:-80}"
+DISK_WARNING_PERCENT="${MONITOR_DISK_WARNING_PERCENT:-0}"
 DISK_CRITICAL_PERCENT="${MONITOR_DISK_CRITICAL_PERCENT:-90}"
 LOG_WINDOW="${MONITOR_LOG_WINDOW:-5m}"
 REQUIRED_CONTAINERS="${MONITOR_REQUIRED_CONTAINERS:-supabase-db,supabase-rest,supabase-auth,supabase-kong,supabase-edge-functions,supabase-storage,kalamapp-gotenberg}"
@@ -162,7 +162,7 @@ disk_percent="$(timeout "$COMMAND_TIMEOUT_SECONDS" df -P "$DISK_PATH" 2>/dev/nul
 if [[ "$disk_percent" =~ ^[0-9]+$ ]]; then
   if (( disk_percent >= DISK_CRITICAL_PERCENT )); then
     alert_once 'disk-critical' "فضای دیسک ${DISK_PATH} به ${disk_percent}% رسیده است."
-  elif (( disk_percent >= DISK_WARNING_PERCENT )); then
+  elif (( DISK_WARNING_PERCENT > 0 && disk_percent >= DISK_WARNING_PERCENT )); then
     alert_once 'disk-warning' "فضای دیسک ${DISK_PATH} به ${disk_percent}% رسیده است."
   fi
 else

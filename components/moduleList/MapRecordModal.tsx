@@ -52,6 +52,26 @@ const sortFields = (fields: any[]) => (
   [...(fields || [])].sort((a: any, b: any) => Number(a?.order || 0) - Number(b?.order || 0))
 );
 
+const PROCESS_PREVIEW_FIELD_KEYS = new Set(['process_template_id', 'execution_process_draft', 'marketing_process_draft', 'process_run_id']);
+
+const getProcessDraftSummary = (value: any) => {
+  const draft = typeof value === 'string' ? (() => {
+    try { return JSON.parse(value); } catch { return null; }
+  })() : value;
+  if (!draft || typeof draft !== 'object') return null;
+  const template = Array.isArray(draft) ? draft[0] : draft;
+  const templateName = [
+    template?.template?.name,
+    template?.template_name,
+    template?.templateName,
+    template?.process_template?.name,
+    template?.name,
+  ].find((item) => typeof item === 'string' && item.trim());
+  const stages = Array.isArray(template?.stages) ? template.stages.length : null;
+  if (!templateName && !stages) return null;
+  return { name: String(templateName || 'فرآیند انتخاب‌شده'), stages };
+};
+
 const MapRecordModal: React.FC<MapRecordModalProps> = ({
   moduleId,
   recordId,
@@ -205,7 +225,7 @@ const MapRecordModal: React.FC<MapRecordModalProps> = ({
   }, [moduleConfig]);
 
   const excludedTopKeys = useMemo(
-    () => new Set(['id', 'status', 'assignee_id', 'assignee_role_id', 'assignee_type', 'image_url', 'avatar_url', 'logo_url', 'tags', recordTitleFieldKey].filter(Boolean)),
+    () => new Set(['id', 'status', 'assignee_id', 'assignee_role_id', 'assignee_type', 'image_url', 'avatar_url', 'logo_url', 'tags', ...PROCESS_PREVIEW_FIELD_KEYS, recordTitleFieldKey].filter(Boolean)),
     [recordTitleFieldKey],
   );
 
@@ -215,6 +235,20 @@ const MapRecordModal: React.FC<MapRecordModalProps> = ({
     if (!record) return '-';
     return formatRecordFieldValue(record, resolveFieldForDisplay(field), relationValueMap, '-');
   };
+
+  const processSummary = useMemo(() => {
+    if (!record) return null;
+    const templateField = fields.find((field: any) => field?.key === 'process_template_id');
+    const templateLabel = templateField && !isEmptyValue(record?.process_template_id)
+      ? formatRecordFieldValue(record, resolveFieldForDisplay(templateField), relationValueMap, '')
+      : '';
+    const draftSummary = getProcessDraftSummary(record?.execution_process_draft ?? record?.marketing_process_draft);
+    if (!templateLabel && !draftSummary) return null;
+    return {
+      name: templateLabel || draftSummary?.name || 'فرآیند انتخاب‌شده',
+      stages: draftSummary?.stages,
+    };
+  }, [fields, record, relationValueMap]);
 
   const headerFields = useMemo(() => (
     fields.filter((field: any) => (
@@ -249,6 +283,7 @@ const MapRecordModal: React.FC<MapRecordModalProps> = ({
         const blockFields = fields.filter((field: any) => (
           String(field?.blockId || '') === String(block?.id || '')
           && hasValue(field)
+          && !PROCESS_PREVIEW_FIELD_KEYS.has(String(field?.key || ''))
           && (
             field?.isTableColumn
             || recentFieldKeys.has(String(field?.key || ''))
@@ -268,7 +303,7 @@ const MapRecordModal: React.FC<MapRecordModalProps> = ({
   const fullDetailFields = useMemo(() => (
     fields.filter((field: any) => (
       hasValue(field)
-      && !['id', 'assignee_role_id', 'assignee_type'].includes(String(field?.key || ''))
+      && !['id', 'assignee_role_id', 'assignee_type', ...PROCESS_PREVIEW_FIELD_KEYS].includes(String(field?.key || ''))
     ))
   ), [fields, record]);
 
@@ -409,6 +444,19 @@ const MapRecordModal: React.FC<MapRecordModalProps> = ({
                             </div>
                           </div>
                         ))}
+                      </div>
+                    </section>
+                  ) : null}
+
+                  {processSummary ? (
+                    <section className="rounded-[1.5rem] border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-[#0f172a]">
+                      <div className="mb-3 text-sm font-black text-gray-800 dark:text-gray-100">فرآیند اجرا</div>
+                      <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.45)] bg-[rgba(var(--brand-50-rgb),0.55)] p-3 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-[#111827]">
+                        <div className="text-[11px] font-semibold text-gray-500 dark:text-gray-400">الگوی فرآیند</div>
+                        <div className="mt-1 break-words text-sm font-bold text-gray-800 dark:text-gray-100">{processSummary.name}</div>
+                        {typeof processSummary.stages === 'number' ? (
+                          <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">{processSummary.stages} مرحله تعریف شده</div>
+                        ) : null}
                       </div>
                     </section>
                   ) : null}

@@ -1,5 +1,5 @@
 import { BlockType, FieldLocation, FieldNature, FieldType, ModuleDefinition, ModuleNature, ViewMode } from '../types';
-import { BILLBOARD_STATUS_APPROVAL_ACTION, BILLBOARD_STATUS_CHANGE_REQUEST_OPTIONS, BILLBOARD_STATUS_CHANGES_MODULE_ID, BILLBOARD_STATUS_OPTIONS } from '../utils/billboardStatusChanges';
+import { BILLBOARD_STATUS_APPROVAL_ACTION, BILLBOARD_STATUS_CHANGE_APPLICATION_OPTIONS, BILLBOARD_STATUS_CHANGE_REQUEST_OPTIONS, BILLBOARD_STATUS_CHANGES_MODULE_ID, BILLBOARD_STATUS_OPTIONS } from '../utils/billboardStatusChanges';
 
 export const billboardStatusChangesConfig: ModuleDefinition = {
   id: BILLBOARD_STATUS_CHANGES_MODULE_ID,
@@ -20,7 +20,9 @@ export const billboardStatusChangesConfig: ModuleDefinition = {
     { key: 'system_code', labels: { fa: 'کد سیستمی', en: 'Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, readonly: true, isTableColumn: true, nature: FieldNature.SYSTEM },
     { key: 'billboard_id', labels: { fa: 'تابلو', en: 'Billboard' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 3, validation: { required: true }, relationConfig: { targetModule: 'billboards', targetField: 'name' }, isTableColumn: true },
     { key: 'target_status', labels: { fa: 'وضعیت مقصد', en: 'Target status' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 4, options: [...BILLBOARD_STATUS_OPTIONS], validation: { required: true }, isTableColumn: true },
+    { key: 'application_mode', labels: { fa: 'نحوه اعمال', en: 'Application mode' }, type: FieldType.SELECT, location: FieldLocation.HEADER, order: 4.5, options: [...BILLBOARD_STATUS_CHANGE_APPLICATION_OPTIONS], validation: { required: true }, isTableColumn: true },
     { key: 'request_status', labels: { fa: 'وضعیت درخواست', en: 'Request status' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 5, options: [...BILLBOARD_STATUS_CHANGE_REQUEST_OPTIONS], readonly: true, isTableColumn: true, nature: FieldNature.SYSTEM },
+    { key: 'execution_source', labels: { fa: 'شیوه ثبت', en: 'Execution source' }, type: FieldType.SELECT, location: FieldLocation.HEADER, order: 5.5, options: [{ label: 'دستی', value: 'manual' }, { label: 'خودکار از گردش‌کار', value: 'workflow' }], readonly: true, isTableColumn: true, nature: FieldNature.SYSTEM },
     { key: 'assignee_id', labels: { fa: 'مسئول', en: 'Assignee' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 6, readonly: true, isTableColumn: true, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.SYSTEM },
     { key: 'source_status', labels: { fa: 'وضعیت پیشین', en: 'Previous status' }, type: FieldType.STATUS, location: FieldLocation.BLOCK, blockId: 'review', order: 1, options: [...BILLBOARD_STATUS_OPTIONS], readonly: true, nature: FieldNature.SYSTEM },
     { key: 'customer_id', labels: { fa: 'نام مشتری', en: 'Customer' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'reservation', order: 1, relationConfig: { targetModule: 'customers', targetField: 'business_name' } },
@@ -34,6 +36,7 @@ export const billboardStatusChangesConfig: ModuleDefinition = {
     { key: 'approved_at', labels: { fa: 'زمان تصمیم', en: 'Decision time' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'review', order: 4, readonly: true, nature: FieldNature.SYSTEM },
     { key: 'approved_by', labels: { fa: 'تأییدکننده', en: 'Approver' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'review', order: 5, readonly: true, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.SYSTEM },
     { key: 'approval_note', labels: { fa: 'یادداشت تأیید یا رد', en: 'Decision note' }, type: FieldType.LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'review', order: 6, readonly: true, nature: FieldNature.SYSTEM },
+    { key: 'applied_tag_id', labels: { fa: 'برچسب افزوده‌شده', en: 'Applied tag' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'review', order: 7, readonly: true, relationConfig: { targetModule: 'tags', targetField: 'title' }, nature: FieldNature.SYSTEM },
     { key: 'process_run_id', labels: { fa: 'فرآیند اجراشده', en: 'Process run' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'process', order: 3, readonly: true, relationConfig: { targetModule: 'process_runs', targetField: 'name' }, nature: FieldNature.SYSTEM },
   ],
   blocks: [

@@ -3,9 +3,10 @@ import { billboardConfig } from '../modules/billboardsConfig';
 import { billboardStatusChangesConfig } from '../modules/billboardStatusChangesConfig';
 import { withProcessModuleSupport } from './processModuleSupport';
 import {
-  BILLBOARD_OCCUPANCY_STATUS_VALUES,
+  BILLBOARD_TAGGABLE_STATUS_VALUES,
   BILLBOARD_STATUS_OPTIONS,
-  isBillboardOccupancyStatus,
+  isBillboardOpeningStatus,
+  isBillboardTaggableStatus,
 } from './billboardStatusChanges';
 
 describe('قرارداد تغییر وضعیت تبلیغات محیطی', () => {
@@ -17,12 +18,14 @@ describe('قرارداد تغییر وضعیت تبلیغات محیطی', () =>
     expect(BILLBOARD_STATUS_OPTIONS.every((item) => item.label.trim().length > 0)).toBe(true);
   });
 
-  it('اطلاعات رزرو را فقط برای وضعیت‌های دارای اشغال اجباری می‌داند', () => {
-    expect(isBillboardOccupancyStatus('opening')).toBe(true);
-    expect(isBillboardOccupancyStatus('pickup_queue')).toBe(true);
-    expect(isBillboardOccupancyStatus('free')).toBe(false);
-    expect(isBillboardOccupancyStatus('blocked')).toBe(false);
-    expect(BILLBOARD_OCCUPANCY_STATUS_VALUES.has('final_reserve')).toBe(true);
+  it('فقط اکران را نیازمند بازه زمانی و وضعیت‌های رزرو را قابل‌ثبت به‌صورت برچسب می‌داند', () => {
+    expect(isBillboardOpeningStatus('opening')).toBe(true);
+    expect(isBillboardOpeningStatus('final_reserve')).toBe(false);
+    expect(isBillboardTaggableStatus('oral_reserve')).toBe(true);
+    expect(isBillboardTaggableStatus('final_reserve')).toBe(true);
+    expect(isBillboardTaggableStatus('in_line')).toBe(true);
+    expect(isBillboardTaggableStatus('pickup_queue')).toBe(false);
+    expect(BILLBOARD_TAGGABLE_STATUS_VALUES.has('final_reserve')).toBe(true);
   });
 
   it('تابلو را به مسیر درخواست تغییر وضعیت و خود درخواست را به فرآیند V2 متصل می‌کند', () => {

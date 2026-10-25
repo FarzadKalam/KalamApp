@@ -3,7 +3,7 @@ import { getCompactPrintCellsFitScript } from './fitCompactPrintCells';
 import { getStaticCustomPrintPaginationScript } from './staticPrintPagination';
 import { getNativeTablePaginationScript } from './nativeTablePagination';
 import { NATIVE_PRINT_BASE_HREF_TOKEN, NATIVE_PRINT_FONT_CSS_TOKEN } from './nativePrintFlow';
-import { toPrintPdfImageUrl } from '../imagePreview';
+import { buildPrintImageUrl } from '../imagePreview';
 import peydaExtraLightUrl from '../../font/peyada/PeydaWeb-ExtraLight.woff2?url';
 import peydaRegularUrl from '../../font/peyada/PeydaWeb-Regular.woff2?url';
 import peydaSemiBoldUrl from '../../font/peyada/PeydaWeb-SemiBold.woff2?url';
@@ -193,7 +193,11 @@ const replaceInlineStyleImageSources = (html: string, dataUrlBySource: Map<strin
     return `style=${quote}${nextStyle}${quote}`;
   });
 
-const getPdfOptimizedImageUrl = (url: string) => toPrintPdfImageUrl(url, 'printPdf') || url;
+// Gotenberg renders the document from the server, not from the user's browser.
+// The Storage image-transform route is browser-friendly but is not reliably
+// reachable by that renderer. Keep public Storage objects on their direct URL;
+// buildPrintImageUrl also converts legacy transformed URLs back to that source.
+const getPdfReliableImageUrl = (url: string) => buildPrintImageUrl(url, 'printHero') || url;
 
 const isBrowserLocalPrintImage = (url: string) => /^blob:/i.test(String(url || '').trim());
 
@@ -203,27 +207,27 @@ const materializeBrowserLocalPrintImage = async (
 ) => {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), PRINT_IMAGE_FETCH_TIMEOUT_MS);
-  const optimizedUrl = getPdfOptimizedImageUrl(url);
+  const reliableUrl = getPdfReliableImageUrl(url);
 
   try {
-    const response = await fetch(optimizedUrl, { credentials: 'same-origin', signal: controller.signal });
-    if (!response.ok) return optimizedUrl;
+    const response = await fetch(reliableUrl, { credentials: 'same-origin', signal: controller.signal });
+    if (!response.ok) return reliableUrl;
 
     const contentType = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-    if (!contentType.startsWith('image/')) return optimizedUrl;
+    if (!contentType.startsWith('image/')) return reliableUrl;
 
     const bytes = await response.arrayBuffer();
     if (
       bytes.byteLength === 0 ||
       bytes.byteLength > PRINT_INLINE_IMAGE_MAX_BYTES ||
       bytes.byteLength > remainingByteBudget
-    ) return optimizedUrl;
+    ) return reliableUrl;
 
     return `data:${contentType};base64,${arrayBufferToBase64(bytes)}`;
   } catch {
     // Public images that do not allow CORS are still left for the renderer to
     // load directly. This fallback keeps custom external templates working.
-    return optimizedUrl;
+    return reliableUrl;
   } finally {
     window.clearTimeout(timeout);
   }
@@ -247,7 +251,7 @@ export const materializePrintImageAssets = async (sourceHtml: string, origin: st
   for (const source of sourceUrls) {
     const materialized = isBrowserLocalPrintImage(source)
       ? await materializeBrowserLocalPrintImage(source, remainingByteBudget)
-      : getPdfOptimizedImageUrl(source);
+      : getPdfReliableImageUrl(source);
     dataUrlBySource.set(source, materialized);
     if (materialized.startsWith('data:')) {
       const base64 = materialized.slice(materialized.indexOf(',') + 1);
@@ -287,7 +291,7 @@ export const materializeNativePrintMarginImages = async (sourceHtml: string, ori
     source,
     isBrowserLocalPrintImage(source)
       ? await materializeBrowserLocalPrintImage(source)
-      : getPdfOptimizedImageUrl(source),
+      : getPdfReliableImageUrl(source),
   ] as const)));
   return NATIVE_PRINT_MARGIN_TEMPLATE_IDS.reduce(
     (html, id) => html.replace(getNativePrintMarginTemplatePattern(id), (_match, openingTag, content, closingTag) =>

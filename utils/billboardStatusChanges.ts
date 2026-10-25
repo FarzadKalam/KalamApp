@@ -22,9 +22,17 @@ export const BILLBOARD_STATUS_CHANGE_REQUEST_OPTIONS = [
   { label: 'نیازمند بازبینی', value: 'needs_review', color: 'orange' },
 ] as const;
 
-export const BILLBOARD_OCCUPANCY_STATUS_VALUES = new Set<string>([
-  'oral_reserve', 'final_reserve', 'in_line', 'opening', 'near_finish', 'opening_deadline_ended', 'pickup_queue',
+export const BILLBOARD_TAGGABLE_STATUS_VALUES = new Set<string>([
+  'oral_reserve', 'final_reserve', 'in_line',
 ]);
 
-export const isBillboardOccupancyStatus = (value: unknown) =>
-  BILLBOARD_OCCUPANCY_STATUS_VALUES.has(String(value || '').trim());
+export const BILLBOARD_STATUS_CHANGE_APPLICATION_OPTIONS = [
+  { label: 'تغییر وضعیت اصلی تابلو', value: 'main_status' },
+  { label: 'افزودن برچسب', value: 'add_tag' },
+] as const;
+
+export const isBillboardTaggableStatus = (value: unknown) =>
+  BILLBOARD_TAGGABLE_STATUS_VALUES.has(String(value || '').trim());
+
+export const isBillboardOpeningStatus = (value: unknown) =>
+  String(value || '').trim() === 'opening';

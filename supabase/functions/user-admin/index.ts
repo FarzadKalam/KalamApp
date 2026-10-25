@@ -857,6 +857,33 @@ const resendOtp = async (
   return parsed || null;
 };
 
+// برای شماره‌ای که قبلاً تأیید شده، /resend در GoTrue عمداً پاسخ موفقِ خالی
+// می‌دهد و پیامکی ارسال نمی‌کند. /otp با create_user=false فقط برای همان
+// حساب موجود کد ورود می‌سازد و Send SMS Hook مشترک با صفحهٔ ورود را اجرا می‌کند.
+const requestExistingUserOtp = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  phone: string,
+) => {
+  const response = await fetch(authUrl(supabaseUrl, '/otp'), {
+    method: 'POST',
+    headers: getServiceHeaders(serviceRoleKey),
+    body: JSON.stringify({
+      phone,
+      create_user: false,
+    }),
+  });
+  const parsed = await readJsonSafe(response);
+  if (!response.ok) {
+    throw createReasonedError(
+      extractAuthMessage(parsed, 'ارسال کد تایید ناموفق بود'),
+      inferOtpReasonCode(parsed, response.status, 'otp_request_failed'),
+      response.status,
+    );
+  }
+  return parsed || null;
+};
+
 const verifyPhoneOtp = async (
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -1274,10 +1301,9 @@ Deno.serve(async (request) => {
             });
           }
           await upsertProfile(supabaseUrl, serviceRoleKey, { id: targetUserId, mobile_1: toLocalIranMobile(normalizedPhone) });
-          // /otp در GoTrue خودمیزبان با ثبت‌نام غیرفعال، حتی برای شمارهٔ تأییدشده
-          // ممکن است مسیر ثبت‌نام را انتخاب کند. /resend فقط برای حساب موجود، کد
-          // تازه صادر می‌کند و وضعیت تایید شماره را تغییر نمی‌دهد.
-          const otpResult = await resendOtp(supabaseUrl, serviceRoleKey, normalizedPhone, 'sms');
+          const otpResult = phoneAlreadyConfirmed
+            ? await requestExistingUserOtp(supabaseUrl, serviceRoleKey, normalizedPhone)
+            : await resendOtp(supabaseUrl, serviceRoleKey, normalizedPhone, 'sms');
           return json(200, { success: true, messageId: otpResult?.message_id || null, otpType: 'sms' });
         }
         const token = normalizeDigitsToEnglish(body?.token).replace(/\D+/g, '');
@@ -1691,10 +1717,9 @@ Deno.serve(async (request) => {
         id: targetUserId,
         mobile_1: toLocalIranMobile(normalizedPhone),
       });
-      // /otp در GoTrue خودمیزبان با ثبت‌نام غیرفعال، حتی برای شمارهٔ تأییدشده
-      // ممکن است مسیر ثبت‌نام را انتخاب کند. /resend فقط برای حساب موجود، کد
-      // تازه صادر می‌کند و وضعیت تایید شماره را تغییر نمی‌دهد.
-      const otpResult = await resendOtp(supabaseUrl, serviceRoleKey, normalizedPhone, 'sms');
+      const otpResult = phoneAlreadyConfirmed
+        ? await requestExistingUserOtp(supabaseUrl, serviceRoleKey, normalizedPhone)
+        : await resendOtp(supabaseUrl, serviceRoleKey, normalizedPhone, 'sms');
       return json(200, {
         success: true,
         messageId: otpResult?.message_id || null,

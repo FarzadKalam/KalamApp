@@ -33,7 +33,7 @@ const BillboardStatusHistoryTable: React.FC<BillboardStatusHistoryTableProps> = 
     setError('');
     void supabase
       .from('billboard_status_changes')
-      .select('id,source_status,target_status,request_status,start_date,end_date,requested_at,approved_at,description,process_run_id')
+      .select('id,source_status,target_status,application_mode,execution_source,request_status,start_date,end_date,requested_at,approved_at,description,process_run_id')
       .eq('billboard_id', billboardId)
       .order('requested_at', { ascending: false })
       .limit(100)
@@ -74,8 +74,13 @@ const BillboardStatusHistoryTable: React.FC<BillboardStatusHistoryTableProps> = 
           title: 'تغییر وضعیت',
           key: 'status',
           render: (_: unknown, row: any) => (
-            <span>{optionLabel(BILLBOARD_STATUS_OPTIONS, row.source_status)} ← {optionLabel(BILLBOARD_STATUS_OPTIONS, row.target_status)}</span>
+            <span>{row.application_mode === 'add_tag' ? 'افزودن برچسب: ' : `${optionLabel(BILLBOARD_STATUS_OPTIONS, row.source_status)} ← `}{optionLabel(BILLBOARD_STATUS_OPTIONS, row.target_status)}</span>
           ),
+        },
+        {
+          title: 'شیوه ثبت',
+          dataIndex: 'execution_source',
+          render: (value: string) => value === 'workflow' ? <Tag color="blue">خودکار</Tag> : <Tag>دستی</Tag>,
         },
         {
           title: 'وضعیت درخواست',

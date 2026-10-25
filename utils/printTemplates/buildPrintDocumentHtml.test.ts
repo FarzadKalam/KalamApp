@@ -50,7 +50,7 @@ describe('materializePrintImageAssets', () => {
     expect(result).toContain('background-image:url(https://assets.example.test/catalog.png)');
   });
 
-  it('uses the shared print-sized URL for a public storage asset without embedding it', async () => {
+  it('keeps a public storage asset on its direct URL for the server-side renderer', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(new Uint8Array([137, 80, 78, 71]), {
         status: 200,
@@ -65,6 +65,16 @@ describe('materializePrintImageAssets', () => {
     );
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(result).toContain('src="https://api.example.test/storage/v1/render/image/public/images/catalog.png?width=840&amp;quality=58&amp;resize=cover"');
+    expect(result).toContain('src="https://api.example.test/storage/v1/object/public/images/catalog.png"');
+  });
+
+  it('restores a legacy transformed storage URL to its direct public object URL', async () => {
+    const result = await materializePrintImageAssets(
+      '<img src="https://api.example.test/storage/v1/render/image/public/images/company-logo.png?width=840&amp;quality=58&amp;resize=cover" alt="لوگو" />',
+      'https://app.example.test',
+    );
+
+    expect(result).toContain('src="https://api.example.test/storage/v1/object/public/images/company-logo.png"');
+    expect(result).not.toContain('/storage/v1/render/image/public/');
   });
 });

@@ -98,19 +98,19 @@ const SettingsPage: React.FC = () => {
   const baseItems = useMemo(
     () => [
       {
-        key: 'reservation_settings',
-        label: <span className="flex items-center gap-2 text-base"><SettingOutlined /> تنظیمات رزرواسیون</span>,
-        children: <ReservationSettingsTab />,
-      },
-      {
         key: 'account',
-        label: <span className="flex items-center gap-2 text-base"><CreditCardOutlined /> وضعیت حساب</span>,
+        label: <span className="flex items-center gap-2 text-base"><CreditCardOutlined /> تنظیمات حساب</span>,
         children: <AccountStatusTab />,
       },
       {
         key: 'company',
-        label: <span className="flex items-center gap-2 text-base"><BankOutlined /> مشخصات شرکت</span>,
+        label: <span className="flex items-center gap-2 text-base"><BankOutlined /> تنظیمات شرکت</span>,
         children: <CompanyTab />,
+      },
+      {
+        key: 'reservation_settings',
+        label: <span className="flex items-center gap-2 text-base"><SettingOutlined /> تنظیمات رزرواسیون</span>,
+        children: <ReservationSettingsTab />,
       },
       {
         key: 'users',

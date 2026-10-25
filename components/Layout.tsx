@@ -144,6 +144,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [customerClubFeatureEnabled, setCustomerClubFeatureEnabled] = useState(true);
   const [instagramInboxFeatureEnabled, setInstagramInboxFeatureEnabled] = useState(false);
   const [advertisingCampaignsModuleEnabled, setAdvertisingCampaignsModuleEnabled] = useState(false);
+  const [billboardsModuleEnabled, setBillboardsModuleEnabled] = useState(false);
   const [contentCalendarFeatureEnabled, setContentCalendarFeatureEnabled] = useState(false);
   const [reservationsFeatureEnabled, setReservationsFeatureEnabled] = useState(false);
   const [billboardStatusManagementFeatureEnabled, setBillboardStatusManagementFeatureEnabled] = useState(true);
@@ -237,6 +238,18 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     return () => {
       active = false;
     };
+  }, [currentUser?.id, rolePermissionsReady]);
+
+  useEffect(() => {
+    if (!rolePermissionsReady || !currentUser?.id) {
+      setBillboardsModuleEnabled(false);
+      return;
+    }
+    let active = true;
+    void hasCurrentOrgPlanModule('billboards', { defaultEnabled: false })
+      .then((enabled) => { if (active) setBillboardsModuleEnabled(enabled); })
+      .catch(() => { if (active) setBillboardsModuleEnabled(false); });
+    return () => { active = false; };
   }, [currentUser?.id, rolePermissionsReady]);
 
   useEffect(() => {
@@ -699,9 +712,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     || rolePermissions?.instagram_conversations?.view === true
   );
   const canViewAdvertisingCampaigns = advertisingCampaignsModuleEnabled && canViewModule(ADVERTISING_CAMPAIGNS_MODULE_ID);
+  const canViewBillboards = billboardsModuleEnabled && canViewModule('billboards');
   const canViewContentCalendars = contentCalendarFeatureEnabled && canViewModule('content_calendars');
   const canViewReservations = reservationsFeatureEnabled && canViewModule('reservations');
-  const canViewBillboardStatusChanges = billboardStatusManagementFeatureEnabled && canViewModule('billboard_status_changes');
+  const canViewBillboardStatusChanges = billboardsModuleEnabled && billboardStatusManagementFeatureEnabled && canViewModule('billboard_status_changes');
   const {
     headerAnnouncements: userHeaderAnnouncements,
     popupAnnouncements: userPopupAnnouncements,
@@ -831,7 +845,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
             key: 'billboards',
             label: 'تبلیغات محیطی',
             children: [
-              { key: '/billboards', label: 'تابلوها', disabled: !canViewModule('billboards') },
+              { key: '/billboards', label: 'تابلوها', disabled: !canViewBillboards },
               { key: '/billboard_status_changes', label: 'تغییر وضعیت تبلیغات محیطی', disabled: !canViewBillboardStatusChanges },
             ],
           },

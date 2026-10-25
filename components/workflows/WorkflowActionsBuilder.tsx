@@ -2887,7 +2887,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               <Alert
                 type="info"
                 showIcon
-                message="برای ثبت درخواست تغییر وضعیت، «تابلو» و «وضعیت مقصد» را نگاشت کنید. برای وضعیت‌های رزرو و اکران، مشتری و تاریخ شروع و پایان نیز الزامی‌اند."
+                message="برای ثبت خودکار تغییر وضعیت، «تابلو» و «وضعیت مقصد» را نگاشت کنید. این تغییر بلافاصله اعمال و با عنوان خودکار در سوابق ثبت می‌شود؛ تاریخ شروع و پایان فقط برای «در حال اکران» الزامی‌اند."
               />
             ) : null}
             <div className="flex items-center justify-between">
@@ -3165,7 +3165,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               <Alert
                 type="info"
                 showIcon
-                message="این اقدام درخواست تغییر وضعیت را از روی تابلوی مرتبط ایجاد می‌کند. وضعیت مقصد و، در صورت رزرو یا اکران، مشتری و تاریخ‌ها را نگاشت کنید."
+                message="این اقدام درخواست تغییر وضعیت را از روی تابلوی مرتبط ایجاد می‌کند. تاریخ شروع و پایان فقط برای وضعیت «در حال اکران» الزامی‌اند."
               />
             ) : null}
             <div className="flex items-center justify-between">

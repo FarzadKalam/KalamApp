@@ -95,12 +95,15 @@ export const buildRelationValueMap = async (
 
   const entries = await Promise.all(
     relationFields.map(async (field) => {
-      const fieldKey = String(field.key);
-      const ids = Array.from(new Set(
-        rows.flatMap((row) => collectRelationIds(row?.[fieldKey])),
-      )).filter(Boolean);
+      // خطای یک رابطه (مثلاً رابطهٔ حذف‌شده یا بدون دسترسی) نباید برچسب
+      // رابطه‌های سالم دیگر را در پیش‌نمایش نقشه پنهان کند.
+      try {
+        const fieldKey = String(field.key);
+        const ids = Array.from(new Set(
+          rows.flatMap((row) => collectRelationIds(row?.[fieldKey])),
+        )).filter(Boolean);
 
-      if (!ids.length) return [fieldKey, {}] as const;
+        if (!ids.length) return [fieldKey, {}] as const;
 
       const isUserField = normalizeFieldType(field) === String(FieldType.USER).toLowerCase();
       const isMultiRelationField = normalizeFieldType(field) === String(FieldType.MULTI_RELATION).toLowerCase();
@@ -172,7 +175,10 @@ export const buildRelationValueMap = async (
         if (label) nextMap[String(row.id)] = label;
       }
 
-      return [fieldKey, nextMap] as const;
+        return [fieldKey, nextMap] as const;
+      } catch {
+        return [String(field?.key || ''), {}] as const;
+      }
     }),
   );
 
