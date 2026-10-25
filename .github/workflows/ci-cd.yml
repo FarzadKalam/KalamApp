@@ -105,7 +105,9 @@ jobs:
           SERVER_PORT: ${{ secrets.SERVER_PORT }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
         run: |
-          timeout 120 scp \
+          # سرور مقصد SFTP subsystem پایدار ندارد؛ اجبار SCP قدیمی جلوی
+          # معطل‌شدن انتقال artifact روی runner گیت‌هاب را می‌گیرد.
+          timeout 120 scp -O \
             -o BatchMode=yes \
             -o ConnectTimeout=20 \
             -o ServerAliveInterval=15 \
