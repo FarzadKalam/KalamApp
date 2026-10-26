@@ -17,9 +17,18 @@
   --brand-900-rgb: 15 23 42;
   --brand-accent-pink-rgb: 219 39 119;
   --brand-text-rgb: 166 163 220;
-  --app-dark-bg-rgb: 18 22 29;
-  --app-dark-surface-rgb: 29 35 45;
-  --app-dark-border-rgb: 55 65 81;
+  --brand-on-primary-rgb: 255 255 255;
+  --brand-on-primary-hover-rgb: 16 17 20;
+  --app-dark-bg-rgb: 20 20 20;
+  --app-dark-surface-rgb: 28 28 31;
+  --app-dark-elevated-rgb: 34 34 37;
+  --app-dark-hover-rgb: 39 39 42;
+  --app-dark-border-rgb: 53 53 57;
+  --app-dark-text-rgb: 244 244 245;
+  --app-dark-text-secondary-rgb: 183 183 190;
+  --app-dark-info-rgb: 134 221 242;
+  --app-dark-violet-rgb: 198 174 255;
+  --app-dark-danger-rgb: 255 154 159;
 }
 
 /* =========================================
@@ -57,11 +66,12 @@
 }
 html.dark .kalam-btn-brand {
   background: rgba(var(--brand-500-rgb), 1) !important;
+  color: rgb(var(--brand-on-primary-rgb)) !important;
 }
 html.dark .kalam-btn-brand:hover,
 html.dark .kalam-btn-brand:focus {
   background: rgba(var(--brand-400-rgb), 1) !important;
-  color: #fff !important;
+  color: rgb(var(--brand-on-primary-hover-rgb)) !important;
 }
 
 html.kalam-app-shell-lock,
@@ -170,6 +180,17 @@ html.dark .ant-typography a {
   color: rgb(var(--brand-text-rgb)) !important;
 }
 
+/* Dark mode separates readable foregrounds from brand-filled controls. */
+html.dark .ant-btn-primary:not(.ant-btn-dangerous):not(.ant-btn-background-ghost),
+html.dark .ant-pagination-item-active a {
+  color: rgb(var(--brand-on-primary-rgb)) !important;
+}
+
+html.dark .ant-btn-primary:not(.ant-btn-dangerous):not(.ant-btn-background-ghost):hover,
+html.dark .ant-btn-primary:not(.ant-btn-dangerous):not(.ant-btn-background-ghost):focus-visible {
+  color: rgb(var(--brand-on-primary-hover-rgb)) !important;
+}
+
 html.dark [class~="text-brand-500"]:not([class*="dark:text-"]),
 html.dark [class~="text-brand-600"]:not([class*="dark:text-"]),
 html.dark [class~="text-brand-700"]:not([class*="dark:text-"]),
@@ -180,6 +201,20 @@ html.dark [class~="!text-[rgb(var(--brand-500-rgb))]"]:not([class*="dark:!text-"
 html.dark [class~="!text-[rgb(var(--brand-600-rgb))]"]:not([class*="dark:!text-"]),
 html.dark [class~="!text-[rgb(var(--brand-700-rgb))]"]:not([class*="dark:!text-"]) {
   color: rgb(var(--brand-text-rgb)) !important;
+}
+
+/* Legacy semantic text classes without a dark variant need lighter foregrounds.
+   Elements with their own tinted background keep their component-specific pairing. */
+html.dark .layout-main-scroll :is([class~="text-blue-600"], [class~="text-blue-700"], [class~="text-blue-800"], [class~="text-blue-900"]):not([class*="dark:text-"]):not([class*="bg-"]) {
+  color: rgb(var(--app-dark-info-rgb));
+}
+
+html.dark .layout-main-scroll :is([class~="text-indigo-600"], [class~="text-indigo-700"], [class~="text-purple-600"], [class~="text-purple-700"], [class~="text-violet-600"], [class~="text-violet-700"]):not([class*="dark:text-"]):not([class*="bg-"]) {
+  color: rgb(var(--app-dark-violet-rgb));
+}
+
+html.dark .layout-main-scroll :is([class~="text-red-500"], [class~="text-red-600"], [class~="text-red-700"], [class~="text-red-800"], [class~="text-red-900"], [class~="text-rose-600"], [class~="text-rose-700"], [class~="text-rose-800"]):not([class*="dark:text-"]):not([class*="bg-"]) {
+  color: rgb(var(--app-dark-danger-rgb));
 }
 
 .app-main-sider .sidebar-menu-label,

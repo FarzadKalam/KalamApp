@@ -25,10 +25,13 @@ import OfflineOverlay from "./components/OfflineOverlay";
 import BrandLoadingScreen from './components/common/BrandLoadingScreen';
 import "./App.css";
 import {
+  APP_DARK_COLORS,
   BRANDING_APPLIED_EVENT,
   BRANDING_UPDATED_EVENT,
   DEFAULT_BRANDING,
   getAccessibleDarkBrandTextColor,
+  getDarkBrandHoverColor,
+  getReadableBrandButtonTextColor,
   THEME_STORAGE_KEY,
   resolveSmartThemeMode,
   type BrandingConfig,
@@ -1013,6 +1016,19 @@ function App() {
           token: {
             colorPrimary: branding.palette.primary,
             colorLink: isDarkMode ? getAccessibleDarkBrandTextColor(branding.palette) : branding.palette.primary,
+            ...(isDarkMode ? {
+              colorPrimaryHover: getDarkBrandHoverColor(branding.palette.primary),
+              colorTextLightSolid: getReadableBrandButtonTextColor(branding.palette.primary),
+              colorBgBase: APP_DARK_COLORS.background,
+              colorBgLayout: APP_DARK_COLORS.background,
+              colorBgContainer: APP_DARK_COLORS.surface,
+              colorBgElevated: APP_DARK_COLORS.elevated,
+              colorBorder: APP_DARK_COLORS.border,
+              colorText: APP_DARK_COLORS.text,
+              colorTextSecondary: APP_DARK_COLORS.textSecondary,
+              colorErrorText: APP_DARK_COLORS.danger,
+              colorInfoText: APP_DARK_COLORS.info,
+            } : {}),
             fontFamily: "Peyda, Tahoma, Arial, sans-serif",
             zIndexPopupBase: 13000,
           },

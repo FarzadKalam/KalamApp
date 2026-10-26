@@ -27,7 +27,6 @@ jobs:
 
       - name: Typecheck
         run: npx tsc --noEmit
-        continue-on-error: true
 
       - name: Build
         env:
@@ -35,6 +34,9 @@ jobs:
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_MAP_STYLE_URL: ${{ secrets.VITE_MAP_STYLE_URL }}
         run: npm run build
+
+      - name: Verify PWA release
+        run: node scripts/verify-pwa-release.mjs
 
       - uses: actions/upload-artifact@v4
         with:
@@ -105,14 +107,29 @@ jobs:
           SERVER_PORT: ${{ secrets.SERVER_PORT }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
         run: |
-          # سرور مقصد SFTP subsystem پایدار ندارد؛ اجبار SCP قدیمی جلوی
-          # معطل‌شدن انتقال artifact روی runner گیت‌هاب را می‌گیرد.
-          timeout 120 scp -O \
-            -o BatchMode=yes \
-            -o ConnectTimeout=20 \
-            -o ServerAliveInterval=15 \
-            -o ServerAliveCountMax=2 \
-            -P "$SERVER_PORT" dist.tar.gz "$SERVER_USER@$SERVER_HOST:/tmp/kalamapp-dist.tar.gz"
+          set -euo pipefail
+          # اتصال از runner کند است؛ rsync انتقال نیمه‌کاره را ادامه می‌دهد.
+          export RSYNC_RSH="ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -p $SERVER_PORT"
+          ARCHIVE="/tmp/kalamapp-dist-${GITHUB_SHA}.tar.gz"
+          for attempt in 1 2; do
+            if timeout 480 rsync --append-verify --partial --timeout=90 \
+              dist.tar.gz "$SERVER_USER@$SERVER_HOST:$ARCHIVE"; then
+              break
+            fi
+            if [ "$attempt" -eq 2 ]; then
+              echo "::error::Artifact transfer failed twice."
+              exit 1
+            fi
+            sleep 5
+          done
+
+          LOCAL_SHA="$(sha256sum dist.tar.gz | cut -d ' ' -f 1)"
+          REMOTE_SHA="$(ssh -o BatchMode=yes -p "$SERVER_PORT" \
+            "$SERVER_USER@$SERVER_HOST" "sha256sum '$ARCHIVE'" | cut -d ' ' -f 1)"
+          if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
+            echo "::error::Uploaded artifact checksum mismatch."
+            exit 1
+          fi
 
       - name: Activate release
         env:
@@ -127,11 +144,11 @@ jobs:
             -o ConnectTimeout=20 \
             -o ServerAliveInterval=15 \
             -o ServerAliveCountMax=2 \
-            -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "DEPLOY_PATH='$DEPLOY_PATH' bash -s" << 'EOF'
+            -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "DEPLOY_PATH='$DEPLOY_PATH' GITHUB_SHA='$GITHUB_SHA' bash -s" << 'EOF'
           set -euo pipefail
 
           DEPLOY_PATH="${DEPLOY_PATH:-/var/www/kalamapp}"
-          ARCHIVE="/tmp/kalamapp-dist.tar.gz"
+          ARCHIVE="/tmp/kalamapp-dist-${GITHUB_SHA}.tar.gz"
           TS="$(date +%Y%m%d%H%M%S)"
 
           mkdir -p "$DEPLOY_PATH/releases"

@@ -5,6 +5,18 @@ export const BRANDING_INTEGRATION_CONNECTION_TYPE = 'ui_theme';
 export const BRANDING_INTEGRATION_PROVIDER = 'branding';
 export const AUTO_THEME_LIGHT_START_HOUR = 6;
 export const AUTO_THEME_DARK_START_HOUR = 18;
+export const APP_DARK_COLORS = {
+  background: '#141414',
+  surface: '#1C1C1F',
+  elevated: '#222225',
+  hover: '#27272A',
+  border: '#353539',
+  text: '#F4F4F5',
+  textSecondary: '#B7B7BE',
+  info: '#86DDF2',
+  violet: '#C6AEFF',
+  danger: '#FF9A9F',
+} as const;
 
 export interface BrandingPalette {
   primary: string;
@@ -37,9 +49,9 @@ export const BRAND_PALETTE_PRESETS = {
       primary: '#F82377',
       secondary: '#8E1646',
       accentPink: '#FF5B91',
-      darkBg: '#190B12',
-      darkSurface: '#2A101D',
-      darkBorder: '#542039',
+      darkBg: APP_DARK_COLORS.background,
+      darkSurface: APP_DARK_COLORS.surface,
+      darkBorder: APP_DARK_COLORS.border,
     },
   },
   executive_indigo: {
@@ -48,9 +60,9 @@ export const BRAND_PALETTE_PRESETS = {
       primary: '#3730A3',
       secondary: '#1E1B4B',
       accentPink: '#DB2777',
-      darkBg: '#12161D',
-      darkSurface: '#1D232D',
-      darkBorder: '#374151',
+      darkBg: APP_DARK_COLORS.background,
+      darkSurface: APP_DARK_COLORS.surface,
+      darkBorder: APP_DARK_COLORS.border,
     },
   },
   corporate_blue: {
@@ -59,9 +71,9 @@ export const BRAND_PALETTE_PRESETS = {
       primary: '#2563EB',
       secondary: '#0F172A',
       accentPink: '#EC4899',
-      darkBg: '#12161D',
-      darkSurface: '#1D232D',
-      darkBorder: '#374151',
+      darkBg: APP_DARK_COLORS.background,
+      darkSurface: APP_DARK_COLORS.surface,
+      darkBorder: APP_DARK_COLORS.border,
     },
   },
   deep_ocean: {
@@ -70,9 +82,9 @@ export const BRAND_PALETTE_PRESETS = {
       primary: '#1D4ED8',
       secondary: '#111827',
       accentPink: '#F472B6',
-      darkBg: '#111820',
-      darkSurface: '#1B2430',
-      darkBorder: '#334155',
+      darkBg: APP_DARK_COLORS.background,
+      darkSurface: APP_DARK_COLORS.surface,
+      darkBorder: APP_DARK_COLORS.border,
     },
   },
   ruby_red: {
@@ -81,20 +93,20 @@ export const BRAND_PALETTE_PRESETS = {
       primary: '#DC2626',
       secondary: '#7F1D1D',
       accentPink: '#FB7185',
-      darkBg: '#131619',
-      darkSurface: '#1D2127',
-      darkBorder: '#3A4048',
+      darkBg: APP_DARK_COLORS.background,
+      darkSurface: APP_DARK_COLORS.surface,
+      darkBorder: APP_DARK_COLORS.border,
     },
   },
   amber_navy: {
-    label: 'زرد و سورمه‌ای',
+    label: 'کهربایی گرافیتی',
     palette: {
       primary: '#F59E0B',
       secondary: '#0F172A',
       accentPink: '#EC4899',
-      darkBg: '#12161B',
-      darkSurface: '#1E232A',
-      darkBorder: '#3A414A',
+      darkBg: APP_DARK_COLORS.background,
+      darkSurface: APP_DARK_COLORS.surface,
+      darkBorder: APP_DARK_COLORS.border,
     },
   },
   kalam_sky: {
@@ -103,9 +115,9 @@ export const BRAND_PALETTE_PRESETS = {
       primary: '#1AABDC',
       secondary: '#0B3B5E',
       accentPink: '#CB0F70',
-      darkBg: '#0C1C2A',
-      darkSurface: '#122434',
-      darkBorder: '#1D3550',
+      darkBg: APP_DARK_COLORS.background,
+      darkSurface: APP_DARK_COLORS.surface,
+      darkBorder: APP_DARK_COLORS.border,
     },
   },
 } as const;
@@ -144,6 +156,8 @@ const mixColors = (from: string, to: string, ratio: number) => {
   return rgbToHex({ r, g, b: bb });
 };
 
+export const getDarkBrandHoverColor = (primary: string) => mixColors(primary, '#FFFFFF', 0.35);
+
 const toRgbChannels = (hex: string) => {
   const { r, g, b } = hexToRgb(hex);
   return `${r} ${g} ${b}`;
@@ -168,13 +182,16 @@ const contrastRatio = (first: string, second: string) => {
 // رنگ متنی برند در تم شب باید روی هر دو سطح تیرهٔ برند حداقل کنتراست AA داشته باشد.
 // لینک‌ها و متن‌های تأکیدی از همین رنگ استفاده می‌کنند.
 export const getAccessibleDarkBrandTextColor = (palette: BrandingPalette) => {
-  const backgrounds = [palette.darkBg, palette.darkSurface];
+  const backgrounds = [palette.darkBg, palette.darkSurface, APP_DARK_COLORS.hover];
   for (let ratio = 0; ratio <= 1; ratio += 0.02) {
     const candidate = mixColors(palette.primary, '#FFFFFF', ratio);
     if (backgrounds.every((background) => contrastRatio(candidate, background) >= 4.5)) return candidate;
   }
   return '#FFFFFF';
 };
+
+export const getReadableBrandButtonTextColor = (background: string) =>
+  contrastRatio('#101114', background) >= contrastRatio('#FFFFFF', background) ? '#101114' : '#FFFFFF';
 
 export const DEFAULT_BRANDING: BrandingConfig = {
   brandName: 'اتوماسیون هوشمند تازه سیستم',
@@ -245,7 +262,7 @@ export const buildBrandCssVars = (palette: BrandingPalette): Record<string, stri
     100: mixColors(palette.primary, '#FFFFFF', 0.84),
     200: mixColors(palette.primary, '#FFFFFF', 0.72),
     300: mixColors(palette.primary, '#FFFFFF', 0.58),
-    400: mixColors(palette.primary, '#FFFFFF', 0.35),
+    400: getDarkBrandHoverColor(palette.primary),
     500: palette.primary,
     600: mixColors(palette.primary, '#000000', 0.12),
     700: palette.secondary,
@@ -266,9 +283,18 @@ export const buildBrandCssVars = (palette: BrandingPalette): Record<string, stri
     '--brand-900-rgb': toRgbChannels(shades[900]),
     '--brand-accent-pink-rgb': toRgbChannels(palette.accentPink),
     '--brand-text-rgb': toRgbChannels(getAccessibleDarkBrandTextColor(palette)),
+    '--brand-on-primary-rgb': toRgbChannels(getReadableBrandButtonTextColor(shades[500])),
+    '--brand-on-primary-hover-rgb': toRgbChannels(getReadableBrandButtonTextColor(shades[400])),
     '--app-dark-bg-rgb': toRgbChannels(palette.darkBg),
     '--app-dark-surface-rgb': toRgbChannels(palette.darkSurface),
     '--app-dark-border-rgb': toRgbChannels(palette.darkBorder),
+    '--app-dark-elevated-rgb': toRgbChannels(APP_DARK_COLORS.elevated),
+    '--app-dark-hover-rgb': toRgbChannels(APP_DARK_COLORS.hover),
+    '--app-dark-text-rgb': toRgbChannels(APP_DARK_COLORS.text),
+    '--app-dark-text-secondary-rgb': toRgbChannels(APP_DARK_COLORS.textSecondary),
+    '--app-dark-info-rgb': toRgbChannels(APP_DARK_COLORS.info),
+    '--app-dark-violet-rgb': toRgbChannels(APP_DARK_COLORS.violet),
+    '--app-dark-danger-rgb': toRgbChannels(APP_DARK_COLORS.danger),
   };
 };
 

@@ -1033,7 +1033,7 @@ html.dark .webform-slide-date-trigger .kalam-adaptive-picker__trigger {
 
 .public-web-form--dark .public-web-form-progress-slider .ant-slider-dot {
   border-color: rgba(226, 232, 240, 0.42);
-  background-color: #0f172a;
+  background-color: rgb(var(--app-dark-elevated-rgb));
 }
 
 .public-web-form--dark .public-web-form-progress-slider .ant-slider-dot-active {
@@ -1094,6 +1094,11 @@ html.dark .webform-slide-date-trigger .kalam-adaptive-picker__trigger {
   box-shadow: 0 12px 24px rgba(var(--brand-500-rgb), 0.22);
 }
 
+html.dark .kalam-adaptive-picker__action.is-primary {
+  background: rgb(var(--brand-500-rgb));
+  color: rgb(var(--brand-on-primary-rgb));
+}
+
 html.dark .kalam-adaptive-picker {
   border-color: #303030;
   background: #141414;
@@ -1117,8 +1122,8 @@ html.dark .kalam-adaptive-picker__steps,
 html.dark .kalam-adaptive-picker__chip,
 html.dark .kalam-adaptive-picker__holiday,
 html.dark .kalam-adaptive-picker__summary-card {
-  background: #1f1f1f;
-  border-color: #303030;
+  background: rgb(var(--app-dark-surface-rgb));
+  border-color: rgb(var(--app-dark-border-rgb));
 }
 
 html.dark .kalam-adaptive-picker__chip {
@@ -1127,7 +1132,7 @@ html.dark .kalam-adaptive-picker__chip {
 }
 
 html.dark .kalam-adaptive-picker__chip:hover {
-  background: #303030;
+  background: rgb(var(--app-dark-hover-rgb));
 }
 
 html.dark .kalam-adaptive-picker__step.is-active {
@@ -1163,7 +1168,7 @@ html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-year-picker {
 
 html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-month-picker .rmdp-ym > div,
 html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-year-picker .rmdp-ym > div {
-  background: rgba(11, 16, 32, 0.78);
+  background: rgba(var(--app-dark-elevated-rgb), 0.78);
   border-color: rgba(var(--brand-300-rgb), 0.16);
   color: rgba(255, 255, 255, 0.9);
 }

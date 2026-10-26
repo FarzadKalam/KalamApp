@@ -84,6 +84,7 @@ const HR_STATS_FETCH_LIMIT = 1500;
 const HR_ATTENDANCE_QUERY_PAGE_SIZE = 500;
 const COMMISSION_QUERY_PAGE_SIZE = 250;
 const COMMISSION_QUERY_ID_CHUNK_SIZE = 200;
+const COMMISSION_OPERATION_QUERY_ID_CHUNK_SIZE = 40;
 const COMMISSION_INVOICE_SELECT =
   'id, name, status, invoice_date, approved_at, settled_at, completed_at, updated_at, total_invoice_amount, total_received_amount, remaining_balance, assignee_id, invoiceItems, payments, tags';
 // این انتخاب حداقلی فقط تا زمان اعمال migrationهای موردنیاز در محیط‌های قدیمی
@@ -119,10 +120,10 @@ const fetchAllHrPages = async <T,>(
   }
 };
 
-const chunkCommissionQueryIds = <T,>(items: T[]) => {
+const chunkCommissionQueryIds = <T,>(items: T[], chunkSize = COMMISSION_QUERY_ID_CHUNK_SIZE) => {
   const chunks: T[][] = [];
-  for (let index = 0; index < items.length; index += COMMISSION_QUERY_ID_CHUNK_SIZE) {
-    chunks.push(items.slice(index, index + COMMISSION_QUERY_ID_CHUNK_SIZE));
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
   }
   return chunks;
 };
@@ -4858,7 +4859,7 @@ const HRPage: React.FC = () => {
       const operationPaymentsByInvoiceId = new Map<string, any[]>();
       if (invoiceIds.length > 0) {
         const operationRows: any[] = [];
-        for (const invoiceIdChunk of chunkCommissionQueryIds(invoiceIds)) {
+        for (const invoiceIdChunk of chunkCommissionQueryIds(invoiceIds, COMMISSION_OPERATION_QUERY_ID_CHUNK_SIZE)) {
           const operationResult = await fetchAllCommissionPages<any>((from, to) => supabase
             .from('cash_bank_operations')
             .select('id, sales_invoice_id, operation_type, operation_date, payment_type, status, cheque_id, amount, created_at')
