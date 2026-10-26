@@ -75,7 +75,7 @@ export const buildModuleListColumnCrudFilters = (
     }
     if (field.type === FieldType.TAGS || field.type === FieldType.PROGRESS_STAGES) return;
 
-    if (field.type === FieldType.TEXT || field.key.includes('name') || field.key.includes('code') || field.key.includes('title')) {
+    if ([FieldType.TEXT, FieldType.PHONE, FieldType.LONG_TEXT, FieldType.SUPER_LONG_TEXT].includes(field.type)) {
       const searchValue = String(values[0] ?? '').trim();
       if (searchValue) filters.push({ field: fieldKey, operator: 'contains', value: searchValue });
       return;

@@ -195,16 +195,20 @@ export const getFieldOptions = (
   dynamicOptions: Record<string, any[]> = {},
   relationOptions: Record<string, any[]> = {}
 ): any[] => {
-  // اگر field.options موجود است (static options)
-  if (field.options) {
-    return field.options;
-  }
-
-  // اگر dynamicOptionsCategory موجود است
+  // Static protected choices can coexist with tenant-defined dynamic choices.
   if ((field as any).dynamicOptionsCategory) {
     const category = (field as any).dynamicOptionsCategory;
-    return dynamicOptions[category] || [];
+    const choices = [...(field.options || []), ...(dynamicOptions[category] || [])];
+    const seen = new Set<string>();
+    return choices.filter((option: any) => {
+      const key = normalizeOptionValue(option?.value);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
+
+  if (field.options) return field.options;
 
   // اگر relation است، گزینه‌های field-scoped بر target-scoped اولویت دارند.
   if (['relation', 'multi_relation', 'user'].includes(String(field?.type || ''))) {

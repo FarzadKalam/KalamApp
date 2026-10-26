@@ -1,4 +1,7 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors } from '@dnd-kit/core';
+import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { Table, Tag, Avatar, Input, InputNumber, Button, Space, Popover, Tooltip, Skeleton } from 'antd';
 import { AppstoreOutlined, SearchOutlined, ArrowUpOutlined, ArrowDownOutlined, TagOutlined, LockOutlined } from '@ant-design/icons';
 import { ModuleDefinition, FieldType } from '../types';
@@ -29,6 +32,13 @@ import AssigneeAvatarDisplay from './common/AssigneeAvatarDisplay';
 import FileExtensionTile from './files/FileExtensionTile';
 import { isImageFileLike } from '../utils/imagePreview';
 import RichTextContent from './RichTextContent';
+import { estimateTableColumnWidth } from '../utils/tableColumnLayout';
+import { useTableColumnLayout } from '../hooks/useTableColumnLayout';
+import { useTableDragAutoScroll } from '../hooks/useTableDragAutoScroll';
+import { InteractiveTableHeader } from './table/InteractiveTableHeader';
+const TableChoiceFilter = React.lazy(() => import('./table/TableChoiceFilter'));
+
+const INTERACTIVE_TABLE_COMPONENTS = { header: { cell: InteractiveTableHeader } };
 
 const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
 const ProcessCardsV2RuntimeBlock = React.lazy(() => import('./processes/ProcessCardsV2RuntimeBlock'));
@@ -50,6 +60,7 @@ interface SmartTableRendererProps {
   tableLayout?: 'auto' | 'fixed';
   disableScroll?: boolean;
   singleScrollContainer?: boolean;
+  columnPreferencesKey?: string;
   tagsMap?: Record<string, any[]>;
   dynamicOptions?: Record<string, any[]>;  // ✅ گزینه‌های dynamic برای نمایش برچسب‌های فارسی
   relationOptions?: Record<string, any[]>;  // ✅ گزینه‌های relation برای نمایش برچسب‌های فارسی
@@ -122,29 +133,11 @@ const OverflowTooltipText: React.FC<{ label: string; className: string }> = ({ l
   const textRef = useRef<HTMLSpanElement>(null);
   const [isOverflowing, setIsOverflowing] = useState(false);
 
-  useEffect(() => {
+  const measureOverflow = () => {
     const node = textRef.current;
     if (!node) return;
-
-    const measure = () => {
-      setIsOverflowing((node.scrollWidth - node.clientWidth) > 1 || (node.scrollHeight - node.clientHeight) > 1);
-    };
-
-    measure();
-
-    const resizeObserver =
-      typeof ResizeObserver !== 'undefined'
-        ? new ResizeObserver(() => measure())
-        : null;
-
-    resizeObserver?.observe(node);
-    window.addEventListener('resize', measure);
-
-    return () => {
-      resizeObserver?.disconnect();
-      window.removeEventListener('resize', measure);
-    };
-  }, [label]);
+    setIsOverflowing((node.scrollWidth - node.clientWidth) > 1 || (node.scrollHeight - node.clientHeight) > 1);
+  };
 
   return (
     <Tooltip
@@ -163,7 +156,7 @@ const OverflowTooltipText: React.FC<{ label: string; className: string }> = ({ l
         },
       }}
     >
-      <span ref={textRef} className={`${className} inline-block align-top`}>
+      <span ref={textRef} onPointerEnter={measureOverflow} onTouchStart={measureOverflow} onFocus={measureOverflow} className={`${className} inline-block align-top`}>
         {label}
       </span>
     </Tooltip>
@@ -187,6 +180,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   tableLayout,
   disableScroll,
   singleScrollContainer = false,
+  columnPreferencesKey,
   tagsMap = {},
   dynamicOptions = {},  // ✅ اضافه شد
   relationOptions = {},   // ✅ اضافه شد
@@ -203,7 +197,10 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   showFilterBar = true,
 }) => {
   const searchInput = useRef<InputRef>(null);
+  const [draggedColumn, setDraggedColumn] = useState<string | null>(null);
+  const columnSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 7 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
   const rootRef = useRef<HTMLDivElement>(null);
+  const columnAutoScroll = useTableDragAutoScroll(rootRef);
   const filterBarRef = useRef<HTMLDivElement>(null);
   const tagFilterTriggerRef = useRef<HTMLButtonElement>(null);
   const tagFilterPopoverRef = useRef<HTMLDivElement>(null);
@@ -690,21 +687,6 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       : [],
     [tagsField, activeColumnFilters]
   );
-  const keyFieldMobileWidth = useMemo(() => {
-    if (!isMobileViewport || !primaryTitleField) return null;
-    return Math.min(
-      280,
-      Math.max(
-        156,
-        (data.reduce((maxLength: number, record: any) => {
-          const rawValue = record?.[primaryTitleField.key];
-          const normalized = rawValue === null || rawValue === undefined || rawValue === '' ? '-' : String(rawValue).trim();
-          return Math.max(maxLength, normalized.length);
-        }, 0) * 9) + 52
-      )
-    );
-  }, [isMobileViewport, primaryTitleField, data]);
-
   const updateTagFilters = (nextValues: string[]) => {
     if (!tagsField) return;
     updateColumnFilters({
@@ -840,17 +822,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       || (moduleConfig?.id === 'process_runs' && field.key === 'module_id')
     ) {
       options = getProcessTemplateModuleOptions().map((o: any) => ({ text: o.label, value: o.value }));
-    } else if (field.options) {
-      options = field.options.map((o: any) => ({ text: o.label, value: o.value }));
-    } else if ((field as any).dynamicOptionsCategory) {
-      const category = (field as any).dynamicOptionsCategory;
-      const dynopts = dynamicOptions[category] || [];
-      options = dynopts.map((o: any) => ({ text: o.label, value: o.value }));
-    } else if (
-      field.type === FieldType.RELATION
-      || field.type === FieldType.MULTI_RELATION
-      || field.type === FieldType.USER
-    ) {
+    } else {
       const relopts = getFieldOptions(field, dynamicOptions, relationOptions);
       options = relopts.map((o: any) => ({ text: o.label, value: o.value }));
     }
@@ -861,7 +833,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     const cols: ColumnsType<any> = tableFields.map(field => {
     const isKeyLikeField = isNameOrTitleField(field);
     const isPrimaryTitleColumn = isKeyLikeField && primaryTitleField?.key === field.key;
-    const isSearchable = field.type === FieldType.TEXT || field.type === FieldType.PHONE || field.key.includes('name') || field.key.includes('code') || field.key.includes('title');
+    const isSearchable = field.type === FieldType.TEXT || field.type === FieldType.PHONE;
     const isTagField = field.type === FieldType.TAGS;
     const isProcessStagesColumn = (
       field.type === FieldType.PROGRESS_STAGES
@@ -965,25 +937,18 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       ),
       dataIndex: field.key,
       key: field.key,
+      columnLabel: fieldLabel,
       align: field.type === FieldType.IMAGE ? 'center' : undefined,
       onCell: field.type === FieldType.IMAGE ? () => ({ className: 'smarttable-image-cell' }) : undefined,
       onHeaderCell: field.type === FieldType.IMAGE ? () => ({ className: 'smarttable-image-cell' }) : undefined,
-      width:
-        field.key === 'id'
-          ? 60
-          : isProcessStagesColumn
-            ? 460
-          : field.type === FieldType.IMAGE
-            ? 62
-          : isKeyLikeField
-            ? (isMobileViewport && keyFieldMobileWidth ? keyFieldMobileWidth : (moduleConfig?.id === 'products' ? 380 : 340))
-            : isTagField
-              ? 120
-              : field.type === FieldType.RELATION || field.type === FieldType.MULTI_RELATION || field.type === FieldType.USER
-                ? 180
-                : field.type === FieldType.SELECT || field.type === FieldType.MULTI_SELECT
-                  ? 150
-                  : undefined,
+      width: estimateTableColumnWidth({
+        field, label: fieldLabel, primary: isPrimaryTitleColumn, mobile: isMobileViewport,
+        samples: data.slice(0, 16).map((row) => {
+          const raw = row[field.key];
+          return hasChoiceFilter ? getSingleOptionLabel(field, raw, dynamicOptions, relationOptions)
+            : raw && typeof raw === 'object' ? '' : formatDisplayText(raw, '');
+        }),
+      }),
       ellipsis:
         isKeyLikeField ||
         field.type === FieldType.RELATION ||
@@ -1016,6 +981,9 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       ...(field.type === FieldType.DATETIME ? getRangeFilterProps(field.key, fieldLabel, 'DATETIME') : {}),
 
       filters: (tagFilterProps as any)?.filters ?? (hasChoiceFilter ? choiceOptions : undefined),
+      ...(hasChoiceFilter ? {
+        filterDropdown: (props: any) => <React.Suspense fallback={<div className="p-3 text-xs">در حال آماده‌سازی فیلتر…</div>}><TableChoiceFilter {...props} field={field} moduleId={moduleConfig.id} options={(choiceOptions || []).map((option) => ({ value: option.value, label: option.text }))} /></React.Suspense>,
+      } : {}),
 
       render: (value: any, record: any) => {
         const effectiveField = (
@@ -1492,7 +1460,6 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     tagsField,
     activeColumnFilters,
     isMobileViewport,
-    keyFieldMobileWidth,
     moduleConfig?.id,
     sorters,
     deferredDataLoading,
@@ -1645,9 +1612,8 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     const parentHeight = root.parentElement?.clientHeight || 0;
     const mobileFooterReserve = nextIsMobileViewport ? 96 : 0;
     const viewportAvailableHeight = Math.max(0, viewportHeight - rootRect.top - mobileFooterReserve);
-    const containerHeight = singleScrollContainer
-      ? Math.max(parentHeight, viewportAvailableHeight, root.clientHeight)
-      : (root.clientHeight || parentHeight || viewportAvailableHeight);
+    const availableContainerHeight = root.clientHeight || parentHeight || viewportAvailableHeight;
+    const containerHeight = viewportAvailableHeight > 0 ? Math.min(availableContainerHeight, viewportAvailableHeight) : availableContainerHeight;
     if (!containerHeight) return;
 
     const filterBarHeight = filterBarRef.current?.offsetHeight || 0;
@@ -1661,7 +1627,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     const nextHeight = singleScrollContainer
       ? Math.max(
           minBodyHeight,
-          containerHeight - filterBarHeight - safetyOffset
+          containerHeight - filterBarHeight - paginationHeight - safetyOffset
         )
       : Math.max(
           minBodyHeight,
@@ -1716,11 +1682,13 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   }, [disableScroll, updateScrollHeight]);
 
   const tablePagination = buildSmartTablePagination(pagination, isMobileViewport);
+  const columnLayout = useTableColumnLayout({ columns, scopeKey: columnPreferencesKey, rootRef, selectionWidth: rowSelection ? 56 : 0, flexColumnKey: primaryTitleField?.key });
+  const draggedLabel = draggedColumn === 'assignee_id' ? assigneeLabel : (columns.find((column) => String(column.key) === draggedColumn) as any)?.columnLabel;
   const tableScroll = disableScroll
     ? undefined
     : singleScrollContainer
-      ? { x: scrollX ?? 'max-content', scrollToFirstRowOnChange: false }
-      : { x: scrollX ?? 'max-content', y: scrollHeight, scrollToFirstRowOnChange: false };
+      ? { x: columnPreferencesKey ? 'var(--smarttable-total-width)' : scrollX ?? 'max-content', scrollToFirstRowOnChange: false }
+      : { x: columnPreferencesKey ? 'var(--smarttable-total-width)' : scrollX ?? 'max-content', y: scrollHeight, scrollToFirstRowOnChange: false };
 
   return (
     <div
@@ -1729,6 +1697,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         "custom-erp-table",
         "smarttable-shell relative h-full min-h-0 flex flex-col overflow-hidden",
         singleScrollContainer ? "smarttable-single-scroll" : "",
+        columnPreferencesKey ? "smarttable-with-column-layout" : "",
         containerClassName,
       ].filter(Boolean).join(' ')}
       style={{ ['--smarttable-body-height' as any]: `${scrollHeight}px` }}
@@ -1766,16 +1735,27 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         </div>
       ) : null}
       <div className="smarttable-table-host flex h-full min-h-0 flex-1 flex-col">
+        <DndContext sensors={columnSensors} collisionDetection={closestCenter} autoScroll={false}
+          onDragStart={({ active }) => setDraggedColumn(String(active.id))}
+          onDragMove={columnAutoScroll.move}
+          onDragCancel={() => { columnAutoScroll.stop(); setDraggedColumn(null); }}
+          onDragEnd={({ active, over }) => { columnAutoScroll.stop(); if (over) columnLayout.moveColumn(String(active.id), String(over.id)); setDraggedColumn(null); }}
+          accessibility={{ screenReaderInstructions: { draggable: 'برای جابه‌جایی ستون فاصله را بزنید، با کلیدهای جهت محل را انتخاب کنید و دوباره فاصله بزنید. با Escape لغو کنید.' }, announcements: {
+            onDragStart: () => 'ستون برداشته شد.', onDragOver: ({ over }) => over ? 'محل قرارگیری ستون تغییر کرد.' : 'ستون را روی یک سرستون ببرید.',
+            onDragEnd: () => 'ستون در محل جدید قرار گرفت.', onDragCancel: () => 'جابه‌جایی لغو شد.',
+          } }}>
+        <SortableContext items={columnLayout.order} strategy={horizontalListSortingStrategy}>
         <Table 
           className="smarttable-table h-full min-h-0"
-          columns={columns} 
+          columns={columnLayout.columns}
+          components={columnPreferencesKey ? INTERACTIVE_TABLE_COMPONENTS : undefined}
           dataSource={data} 
           rowKey="id" 
           loading={loading} 
           size="small" 
           style={{ height: '100%' }}
           tableLayout={tableLayout}
-          sticky={disableScroll ? false : { offsetHeader: 0 }}
+          sticky={disableScroll || singleScrollContainer ? false : { offsetHeader: 0 }}
           pagination={tablePagination} 
           onChange={handleTableChange}
           scroll={tableScroll}
@@ -1787,6 +1767,9 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         } : undefined}
         onRow={onRow}
       />
+        </SortableContext>
+        {columnPreferencesKey && typeof document !== 'undefined' ? createPortal(<DragOverlay dropAnimation={null}>{draggedColumn ? <div className="smarttable-column-overlay">{draggedLabel || 'ستون'}<span>برای جابه‌جایی رها کنید</span></div> : null}</DragOverlay>, document.body) : null}
+        </DndContext>
       </div>
     </div>
   );

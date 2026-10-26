@@ -15,6 +15,10 @@ const moduleConfig: ModuleDefinition = {
 };
 
 describe('module-list header filters', () => {
+  it('does not treat a choice or relation as text merely because its key includes name', () => {
+    const module = { ...moduleConfig, fields: [...moduleConfig.fields, { key: 'source_name', type: FieldType.SELECT, labels: { fa: 'منبع' } }] } as ModuleDefinition;
+    expect(buildModuleListColumnCrudFilters(module, { source_name: ['campaign'] })).toEqual([{ field: 'source_name', operator: 'eq', value: 'campaign' }]);
+  });
   it('applies scalar relation selections as server filters', () => {
     expect(buildModuleListColumnCrudFilters(moduleConfig, {
       customer_id: ['11111111-1111-4111-8111-111111111111'],

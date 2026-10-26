@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { FieldType } from '../types';
-import { findRelationOption, getSingleOptionLabel, isEmptyRelationValue } from './optionHelpers';
+import { findRelationOption, getFieldOptions, getSingleOptionLabel, isEmptyRelationValue } from './optionHelpers';
+
+describe('dynamic choices with protected static values', () => {
+  it('includes all lead sources, retaining the protected campaign choice exactly once', () => {
+    const campaign = { label: 'کمپین تبلیغاتی', value: 'campaign' };
+    expect(getFieldOptions({ type: FieldType.SELECT, options: [campaign], dynamicOptionsCategory: 'lead_source' }, {
+      lead_source: [campaign, { label: 'وب‌سایت', value: 'website' }, { label: 'تماس', value: 'call' }],
+    })).toEqual([campaign, { label: 'وب‌سایت', value: 'website' }, { label: 'تماس', value: 'call' }]);
+  });
+});
 
 const relationField = {
   key: 'customer_id',

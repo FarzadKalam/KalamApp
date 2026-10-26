@@ -1583,8 +1583,7 @@ html.dark .kalam-multi-value-more {
 }
 
 .smarttable-shell.smarttable-single-scroll .ant-table-content {
-  overflow-x: auto !important;
-  overflow-y: hidden !important;
+  overflow: visible !important;
   touch-action: auto;
 }
 
@@ -2034,6 +2033,88 @@ html.dark .smarttable-shell .ant-table-tbody > tr:nth-child(even) > td {
 .dark .rich-text-editor__content .ProseMirror { color: #f4f4f5; }
 
 /* Sidebar navigation: short compositor-friendly motions keep nested menus responsive. */
+/* A single native scrollport keeps header and rows on the same horizontal axis. */
+.smarttable-single-scroll .ant-table-container { min-width: 100%; }
+.smarttable-with-column-layout .ant-table-content > table { min-width: 0 !important; }
+.smarttable-shell .smarttable-interactive-header {
+  position: relative;
+  padding-inline-start: 28px !important;
+  padding-inline-end: 12px !important;
+}
+.smarttable-column-grip {
+  position: absolute;
+  inset-inline-start: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #73737c;
+  cursor: grab;
+  touch-action: none;
+}
+.smarttable-column-grip:hover, .smarttable-column-grip:focus-visible {
+  color: rgb(var(--brand-text-rgb));
+  background: rgba(var(--brand-500-rgb), 0.1);
+}
+.smarttable-column-resize {
+  position: absolute;
+  inset-inline-end: -6px;
+  top: 0;
+  bottom: 0;
+  width: 14px;
+  cursor: col-resize;
+  z-index: 12;
+  touch-action: none;
+}
+.smarttable-column-resize::after {
+  content: '';
+  position: absolute;
+  top: 20%; bottom: 20%; left: 6px;
+  width: 2px;
+  background: rgba(128,128,140,0.25);
+}
+.smarttable-column-resize:hover::after, .smarttable-column-resize:focus-visible::after {
+  background: rgb(var(--brand-500-rgb));
+}
+.smarttable-shell .is-column-dragging { opacity: 0.4; }
+.smarttable-shell .is-column-drop-target { background: rgba(var(--brand-500-rgb),0.14) !important; }
+.smarttable-column-drop-marker { position: absolute; top: 0; bottom: 0; width: 3px; background: rgb(var(--brand-500-rgb)); pointer-events: none; }
+.smarttable-column-drop-marker.is-before { inset-inline-start: 0; }
+.smarttable-column-drop-marker.is-after { inset-inline-end: 0; }
+.smarttable-column-overlay {
+  min-width: 140px; max-width: 300px;
+  padding: 12px 18px;
+  border: 2px solid rgb(var(--brand-500-rgb));
+  border-radius: 12px;
+  background: #fff;
+  color: #27272a;
+  box-shadow: 0 12px 36px rgba(0,0,0,0.25);
+  direction: rtl;
+  font-weight: 700;
+  cursor: grabbing;
+}
+.smarttable-column-overlay span { display: block; margin-top: 4px; font-size: 11px; font-weight: 400; }
+html.dark .smarttable-column-overlay { background: rgb(var(--app-dark-elevated-rgb)); color: rgb(var(--app-dark-text-rgb)); }
+.smarttable-choice-filter { width: min(320px, calc(100vw - 40px)); padding: 12px; }
+.module-list-page .module-list-heading { padding: 6px 4px 10px; gap: 10px; }
+.module-list-page .module-list-heading > div:first-child { align-items: center; gap: 12px; }
+.module-list-page .module-list-heading h1 { line-height: 1.5; }
+@media (pointer: coarse) {
+  .smarttable-column-grip { width: 28px; height: 36px; }
+  .smarttable-shell .smarttable-interactive-header { padding-inline-start: 32px !important; }
+  .smarttable-column-resize { width: 24px; inset-inline-end: -12px; }
+  .smarttable-column-resize::after { left: 11px; }
+}
+@media (max-width: 767px) {
+  .module-list-page .module-list-heading { padding: 4px 4px 8px; gap: 8px; }
+  .module-list-page .module-list-heading h1 { font-size: 19px; }
+}
+
 .app-main-sider .ant-menu-submenu > .ant-menu-sub,
 .app-main-sider .ant-motion-collapse,
 .app-main-sider .ant-motion-collapse-active {

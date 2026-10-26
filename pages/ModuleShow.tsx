@@ -2598,13 +2598,15 @@ const ModuleShow: React.FC = () => {
 
   const markCurrentModuleListChanged = useCallback((patch?: Record<string, any> | null) => {
     markModuleListChanged({
-      org_id: patch?.org_id || data?.org_id || null,
+      org_id: patch?.org_id || data?.org_id || currentOrgId || null,
+      user_id: currentUserId,
       module_id: moduleId,
       record_id: id,
       action: 'update',
       updated_at: new Date().toISOString(),
+      record_patch: patch || null,
     });
-  }, [data?.org_id, id, moduleId]);
+  }, [currentOrgId, currentUserId, data?.org_id, id, moduleId]);
 
     const handleAssigneeChange = useCallback(async (value: string) => {
       if (!supportsAssignee) {
@@ -2666,6 +2668,8 @@ const ModuleShow: React.FC = () => {
           assignee_type: type,
         }));
 
+        markCurrentModuleListChanged(payload);
+
         const authUser = await getCachedAuthUser(supabase);
         await insertRecordActivity({
           supabase,
@@ -2682,7 +2686,7 @@ const ModuleShow: React.FC = () => {
 
         msg.success(`${assigneeLabel} رکورد تغییر کرد`);
       } catch (e: any) { msg.error(toFaErrorMessage(e, 'ذخیره جدول ناموفق بود.')); }
-    }, [assigneeLabel, data?.assignee_id, data?.assignee_type, data, id, moduleConfig, moduleConfig?.table, moduleId, msg, supportsAssignee, supportsRoleAssignee]);
+    }, [assigneeLabel, data?.assignee_id, data?.assignee_type, data, id, markCurrentModuleListChanged, moduleConfig, moduleConfig?.table, moduleId, msg, supportsAssignee, supportsRoleAssignee]);
 
   // تابع برای کپی اقلام BOM به جداول مواد اولیه (با تایید کاربر)
     const handleRelatedBomChange = useCallback(async (bomId: string) => {

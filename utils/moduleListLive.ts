@@ -1,5 +1,6 @@
 import type { RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
 import { ViewMode } from '../types';
+import { rememberModuleListLocalChange } from './moduleListLocalRows';
 
 export const MODULE_LIST_INVALIDATION_EVENT = 'module_list_invalidation';
 export const MODULE_LIST_LOCAL_INVALIDATION_EVENT = 'kalam:module-list-local-invalidation';
@@ -22,6 +23,7 @@ export const MODULE_LIST_LIVE_SUPPORTED_VIEWS = new Set<ViewMode>([
 
 export type ModuleListLiveInvalidationPayload = {
   org_id?: string | null;
+  user_id?: string | null;
   module_id?: string | null;
   record_id?: string | null;
   action?: 'insert' | 'update' | 'delete' | string | null;
@@ -101,12 +103,15 @@ export const markModuleListChanged = (payload: ModuleListLiveInvalidationPayload
     received_at: now.toISOString(),
     sequence: now.getTime(),
   };
+  rememberModuleListLocalChange(marker);
   const keys = [
     buildModuleListMarkerKey(orgId || null, moduleId),
     orgId ? null : buildModuleListMarkerKey('*', moduleId),
   ].filter(Boolean) as string[];
   try {
-    const serialized = JSON.stringify(marker);
+    // Only invalidation metadata crosses tabs; record data remains in memory.
+    const { record_patch: _patch, ...storedMarker } = marker;
+    const serialized = JSON.stringify(storedMarker);
     keys.forEach((key) => window.localStorage.setItem(key, serialized));
   } catch {
     // localStorage can be unavailable in private contexts; the same-tab event is still enough.

@@ -186,6 +186,8 @@ import {
 import { fetchDeferredModuleListFields } from "../utils/moduleListDeferredData";
 import { isWorkflowVirtualField } from "../utils/moduleFieldVisibility";
 import { createSchemaCompatibleDataProvider } from "../utils/selectCompat";
+import { applyModuleListLocalChanges, hasModuleListLocalChange } from '../utils/moduleListLocalRows';
+import { isModuleListCreateShortcut, MODULE_LIST_CREATE_SHORTCUT } from '../utils/moduleListShortcut';
 import { buildViewDateBoundaryValue } from "../utils/viewDateFilters";
 import {
   fetchRecordLockMap,
@@ -1291,6 +1293,7 @@ export const ModuleListRefine: React.FC<{
     null,
   );
   const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
+  const [localListRevision, setLocalListRevision] = useState(0);
   const [currentPermissionMap, setCurrentPermissionMap] =
     useState<PermissionMap | null>(null);
   const [currentSoftwareRole, setCurrentSoftwareRole] = useState<string | null>(
@@ -1576,7 +1579,7 @@ export const ModuleListRefine: React.FC<{
       : isKanbanView
         ? kanbanLoading
         : nonListLoading);
-  const allData = isListView
+  const sourceAllData = isListView
     ? clientPermissionPaginationActive
       ? clientPermissionPageRows
       : hasActiveTagViewFilters
@@ -1585,6 +1588,8 @@ export const ModuleListRefine: React.FC<{
     : isKanbanView
       ? kanbanRows
       : nonListRows;
+  const allData = useMemo(() => applyModuleListLocalChanges(sourceAllData, currentOrgId, resolvedModuleId, isListView ? Number(tableQueryResult.dataUpdatedAt || 0) : 0, currentUserId),
+    [sourceAllData, currentOrgId, currentUserId, resolvedModuleId, isListView, tableQueryResult.dataUpdatedAt, localListRevision]);
   const effectiveBaseAllData = useMemo(() => {
     if (
       resolvedModuleId !== "cash_bank_operations" ||
@@ -2919,6 +2924,11 @@ export const ModuleListRefine: React.FC<{
 
   const scheduleModuleListLiveRefresh = useCallback(
     (marker?: ModuleListLocalInvalidationMarker | null) => {
+      if (marker?.org_id === currentOrgId && marker?.user_id === currentUserId && hasModuleListLocalChange(marker)) {
+        setLocalListRevision((previous) => previous + 1);
+        writeModuleListLiveObservedAt(getModuleListLiveMarkerStamp(marker));
+        return;
+      }
       if (typeof window === "undefined") {
         void refreshModuleListFromLiveInvalidation(marker);
         return;
@@ -2931,12 +2941,11 @@ export const ModuleListRefine: React.FC<{
         void refreshModuleListFromLiveInvalidation(marker);
       }, 250);
     },
-    [refreshModuleListFromLiveInvalidation],
+    [currentOrgId, currentUserId, refreshModuleListFromLiveInvalidation, writeModuleListLiveObservedAt],
   );
 
   const refreshModuleListIfLocalMarkerIsStale = useCallback(() => {
     if (
-      !moduleListLiveInvalidationEnabled ||
       !moduleListLiveInvalidationSupportedView ||
       !resolvedModuleId
     )
@@ -3038,13 +3047,7 @@ export const ModuleListRefine: React.FC<{
   ]);
 
   useEffect(() => {
-    if (
-      !moduleListLiveInvalidationEnabled ||
-      !moduleListLiveInvalidationSupportedView ||
-      !resolvedModuleId
-    ) {
-      return;
-    }
+    if (!moduleListLiveInvalidationSupportedView || !resolvedModuleId || !currentOrgId) return;
     return subscribeToLocalModuleListInvalidation({
       orgId: currentOrgId,
       moduleId: resolvedModuleId,
@@ -3059,13 +3062,7 @@ export const ModuleListRefine: React.FC<{
   ]);
 
   useEffect(() => {
-    if (
-      !moduleListLiveInvalidationEnabled ||
-      !moduleListLiveInvalidationSupportedView ||
-      !resolvedModuleId
-    ) {
-      return;
-    }
+    if (!moduleListLiveInvalidationSupportedView || !resolvedModuleId || !currentOrgId) return;
     refreshModuleListIfLocalMarkerIsStale();
     if (typeof window === "undefined" || typeof document === "undefined")
       return;
@@ -3155,26 +3152,26 @@ export const ModuleListRefine: React.FC<{
   const useQuickPreviewModal =
     moduleConfig?.listPreviewMode === "modal" || detailDisabled;
   const canCreateModule = canEditModule && !createDisabled;
+  const openModuleCreate = useCallback(() => {
+    if (!canCreateModule) return;
+    if (resolvedModuleId === 'billboard_status_changes') setIsBillboardStatusChangeOpen(true);
+    else navigate(`/${resolvedModuleId}/create`);
+  }, [canCreateModule, navigate, resolvedModuleId]);
   useEffect(() => {
     if (
       !canCreateModule ||
-      typeof window === "undefined" ||
-      !window.matchMedia("(hover: hover) and (pointer: fine)").matches
+      typeof window === "undefined"
     )
       return;
     const onShortcut = (event: KeyboardEvent) => {
-      if (
-        (event.ctrlKey || event.metaKey) &&
-        !event.shiftKey &&
-        event.key.toLowerCase() === "n"
-      ) {
+      if (isModuleListCreateShortcut(event)) {
         event.preventDefault();
-        navigate(`/${resolvedModuleId}/create`);
+        openModuleCreate();
       }
     };
     window.addEventListener("keydown", onShortcut);
     return () => window.removeEventListener("keydown", onShortcut);
-  }, [canCreateModule, navigate, resolvedModuleId]);
+  }, [canCreateModule, openModuleCreate]);
   const normalizedPermissionViewConditions = useMemo(
     () => normalizeViewConditionGroup(permissionViewConditions),
     [permissionViewConditions],
@@ -6996,7 +6993,7 @@ export const ModuleListRefine: React.FC<{
 
   return (
     <div className="module-list-page box-border p-3 md:p-5 max-w-[1800px] mx-auto pb-20 md:pb-5 h-full min-h-0 flex flex-col overflow-hidden">
-      <div className="flex flex-col gap-0 mb-0.5 md:mb-1 shrink-0">
+      <div className="module-list-heading flex flex-col mb-1 shrink-0">
         {/* ردیف ۱: عنوان + شمارنده + دکمه افزودن */}
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0 shrink-0">
@@ -7215,19 +7212,14 @@ export const ModuleListRefine: React.FC<{
                 <Button
                   type="primary"
                   icon={<PlusOutlined />}
-                  onClick={() => {
-                    if (resolvedModuleId === "billboard_status_changes") {
-                      setIsBillboardStatusChangeOpen(true);
-                      return;
-                    }
-                    navigate(`/${resolvedModuleId}/create`);
-                  }}
+                  onClick={openModuleCreate}
+                  aria-keyshortcuts="Alt+Shift+N"
                   aria-label={`افزودن ${getModuleTitleFa(moduleConfig, { singular: true })}`}
                   className="rounded-xl bg-leather-600 hover:!bg-leather-500 shadow-lg shadow-leather-500/30 shrink-0"
                 >
                   افزودن
                   <kbd className="keyboard-shortcut-hint mr-1 text-[9px] opacity-70">
-                    Ctrl+N
+                    {MODULE_LIST_CREATE_SHORTCUT}
                   </kbd>
                 </Button>
               )}
@@ -7455,6 +7447,8 @@ export const ModuleListRefine: React.FC<{
                     deferredDataLoading={deferredListDataLoading}
                     relationLabelsLoading={relationLabelsLoading}
                     tableLayout="fixed"
+                    singleScrollContainer
+                    columnPreferencesKey={currentOrgId && currentUserId ? `kalam:table-columns:${currentOrgId}:${currentUserId}:${resolvedModuleId}:${currentView?.id || storageKeySuffix || 'default'}` : undefined}
                     visibleColumns={
                       visibleColumns.length > 0 ? visibleColumns : undefined
                     }

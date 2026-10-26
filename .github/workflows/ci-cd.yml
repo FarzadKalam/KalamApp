@@ -28,6 +28,17 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      - name: Module list regression checks
+        timeout-minutes: 8
+        run: >-
+          npx vitest run
+          utils/tableColumnLayout.test.ts utils/moduleListLocalRows.test.ts
+          utils/moduleListShortcut.test.ts utils/moduleListColumnFilters.test.ts
+          utils/optionHelpers.test.ts utils/moduleListLive.test.ts
+          hooks/useTableColumnLayout.test.tsx components/table/TableChoiceFilter.test.tsx
+          components/SmartTableRenderer.test.tsx
+          --maxWorkers=1 --no-file-parallelism
+
       - name: Build
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}

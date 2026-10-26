@@ -149,6 +149,30 @@ describe('SmartTableRenderer', () => {
 
     expect(container.querySelector('.smarttable-single-scroll')).not.toBeNull();
     expect(container.querySelector('.ant-pagination')).not.toBeNull();
+    expect(container.querySelector('.ant-table-header')).toBeNull();
+    expect(container.querySelector('thead')?.closest('table')).toBe(container.querySelector('tbody')?.closest('table'));
+  });
+
+  it('supports column menu reordering and keyboard width changes on mobile', async () => {
+    const previousWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390, writable: true });
+    localStorage.removeItem('mobile-table-layout');
+    const user = userEvent.setup();
+    try {
+      const { container } = render(<SmartTableRenderer moduleConfig={testModule} data={rows.slice(0, 2)} loading={false} pagination={false} singleScrollContainer columnPreferencesKey="mobile-table-layout" />);
+      expect(container.querySelector('.ant-table-header')).toBeNull();
+      const resize = screen.getByRole('separator', { name: 'تغییر عرض ستون نام' });
+      const previous = Number(resize.getAttribute('aria-valuenow'));
+      fireEvent.keyDown(resize, { key: 'ArrowLeft' });
+      expect(JSON.parse(localStorage.getItem('mobile-table-layout') || '{}').widths.name).toBe(previous + 16);
+      await user.click(screen.getByRole('button', { name: 'جابه‌جایی ستون نام' }));
+      await user.click(await screen.findByText('انتقال ستون به چپ'));
+      await waitFor(() => expect(container.querySelector('th[data-column-key]')?.getAttribute('data-column-key')).toBe('assignee_id'));
+      expect(container.querySelectorAll('tbody > tr.ant-table-row')).toHaveLength(2);
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: previousWidth, writable: true });
+      localStorage.removeItem('mobile-table-layout');
+    }
   });
 
   it('renders tags under any name or title text column using tagsMap data', () => {
