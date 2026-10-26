@@ -4,6 +4,7 @@ import {
   BRAND_PALETTE_PRESETS,
   buildBrandCssVars,
   getAccessibleDarkBrandTextColor,
+  getAccessibleDarkMenuSelectedBg,
   getDarkBrandHoverColor,
   getReadableBrandButtonTextColor,
 } from './brandTheme';
@@ -31,6 +32,14 @@ describe('getAccessibleDarkBrandTextColor', () => {
 });
 
 describe('dark palette contrast', () => {
+  it('keeps selected sidebar labels readable for every brand palette', () => {
+    Object.values(BRAND_PALETTE_PRESETS).forEach(({ palette }) => {
+      const selectedBg = getAccessibleDarkMenuSelectedBg(palette.primary);
+      expect(contrastRatio('#FFFFFF', selectedBg)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(APP_DARK_COLORS.textSecondary, APP_DARK_COLORS.surface)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(APP_DARK_COLORS.text, APP_DARK_COLORS.elevated)).toBeGreaterThanOrEqual(4.5);
+    });
+  });
   it('uses neutral graphite surfaces for every preset', () => {
     Object.values(BRAND_PALETTE_PRESETS).forEach(({ palette }) => {
       expect(palette.darkBg).toBe(APP_DARK_COLORS.background);

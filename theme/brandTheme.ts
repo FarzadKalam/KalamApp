@@ -193,6 +193,15 @@ export const getAccessibleDarkBrandTextColor = (palette: BrandingPalette) => {
 export const getReadableBrandButtonTextColor = (background: string) =>
   contrastRatio('#101114', background) >= contrastRatio('#FFFFFF', background) ? '#101114' : '#FFFFFF';
 
+// Menu selection keeps light text even when the tenant brand is a bright color.
+export const getAccessibleDarkMenuSelectedBg = (primary: string) => {
+  for (let ratio = 0; ratio <= 1; ratio += 0.02) {
+    const candidate = mixColors(primary, APP_DARK_COLORS.surface, ratio);
+    if (contrastRatio('#FFFFFF', candidate) >= 4.5) return candidate;
+  }
+  return APP_DARK_COLORS.surface;
+};
+
 export const DEFAULT_BRANDING: BrandingConfig = {
   brandName: 'اتوماسیون هوشمند تازه سیستم',
   shortName: 'تازه سیستم',

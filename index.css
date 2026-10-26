@@ -182,13 +182,21 @@ html.dark .ant-typography a {
 
 /* Dark mode separates readable foregrounds from brand-filled controls. */
 html.dark .ant-btn-primary:not(.ant-btn-dangerous):not(.ant-btn-background-ghost),
-html.dark .ant-pagination-item-active a {
+html.dark .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-dangerous):not(.ant-btn-background-ghost) {
   color: rgb(var(--brand-on-primary-rgb)) !important;
 }
 
 html.dark .ant-btn-primary:not(.ant-btn-dangerous):not(.ant-btn-background-ghost):hover,
-html.dark .ant-btn-primary:not(.ant-btn-dangerous):not(.ant-btn-background-ghost):focus-visible {
+html.dark .ant-btn-primary:not(.ant-btn-dangerous):not(.ant-btn-background-ghost):focus-visible,
+html.dark .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-dangerous):not(.ant-btn-background-ghost):hover,
+html.dark .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-dangerous):not(.ant-btn-background-ghost):focus-visible {
   color: rgb(var(--brand-on-primary-hover-rgb)) !important;
+}
+
+/* Active pagination is brand-filled, so it shares the button foreground. */
+html.dark .ant-pagination-item-active a,
+html.dark .ant-pagination-item-active:hover a {
+  color: rgb(var(--brand-on-primary-rgb)) !important;
 }
 
 html.dark [class~="text-brand-500"]:not([class*="dark:text-"]),

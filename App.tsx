@@ -30,8 +30,8 @@ import {
   BRANDING_UPDATED_EVENT,
   DEFAULT_BRANDING,
   getAccessibleDarkBrandTextColor,
+  getAccessibleDarkMenuSelectedBg,
   getDarkBrandHoverColor,
-  getReadableBrandButtonTextColor,
   THEME_STORAGE_KEY,
   resolveSmartThemeMode,
   type BrandingConfig,
@@ -1018,7 +1018,6 @@ function App() {
             colorLink: isDarkMode ? getAccessibleDarkBrandTextColor(branding.palette) : branding.palette.primary,
             ...(isDarkMode ? {
               colorPrimaryHover: getDarkBrandHoverColor(branding.palette.primary),
-              colorTextLightSolid: getReadableBrandButtonTextColor(branding.palette.primary),
               colorBgBase: APP_DARK_COLORS.background,
               colorBgLayout: APP_DARK_COLORS.background,
               colorBgContainer: APP_DARK_COLORS.surface,
@@ -1032,6 +1031,19 @@ function App() {
             fontFamily: "Peyda, Tahoma, Arial, sans-serif",
             zIndexPopupBase: 13000,
           },
+          components: isDarkMode ? {
+            Menu: {
+              darkItemBg: APP_DARK_COLORS.surface,
+              darkPopupBg: APP_DARK_COLORS.surface,
+              darkSubMenuItemBg: APP_DARK_COLORS.elevated,
+              darkItemColor: APP_DARK_COLORS.textSecondary,
+              darkItemHoverColor: APP_DARK_COLORS.text,
+              darkItemHoverBg: APP_DARK_COLORS.hover,
+              darkItemSelectedBg: getAccessibleDarkMenuSelectedBg(branding.palette.primary),
+              darkItemSelectedColor: '#FFFFFF',
+              darkGroupTitleColor: APP_DARK_COLORS.textSecondary,
+            },
+          } : undefined,
         }}
       >
         <JalaliLocaleListener />
