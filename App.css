@@ -2036,6 +2036,7 @@ html.dark .smarttable-shell .ant-table-tbody > tr:nth-child(even) > td {
 /* A single native scrollport keeps header and rows on the same horizontal axis. */
 .smarttable-single-scroll .ant-table-container { min-width: 100%; }
 .smarttable-with-column-layout .ant-table-content > table { min-width: 0 !important; }
+.smarttable-single-scroll.smarttable-with-column-layout .ant-table-content > table { width: var(--smarttable-total-width) !important; table-layout: fixed; }
 .smarttable-shell .smarttable-interactive-header {
   position: relative;
   padding-inline-start: 28px !important;

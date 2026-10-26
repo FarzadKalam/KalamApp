@@ -1684,7 +1684,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   const tablePagination = buildSmartTablePagination(pagination, isMobileViewport);
   const columnLayout = useTableColumnLayout({ columns, scopeKey: columnPreferencesKey, rootRef, selectionWidth: rowSelection ? 56 : 0, flexColumnKey: primaryTitleField?.key });
   const draggedLabel = draggedColumn === 'assignee_id' ? assigneeLabel : (columns.find((column) => String(column.key) === draggedColumn) as any)?.columnLabel;
-  const tableScroll = disableScroll
+  const tableScroll = disableScroll || (singleScrollContainer && columnPreferencesKey)
     ? undefined
     : singleScrollContainer
       ? { x: columnPreferencesKey ? 'var(--smarttable-total-width)' : scrollX ?? 'max-content', scrollToFirstRowOnChange: false }

@@ -165,6 +165,7 @@ describe('SmartTableRenderer', () => {
     try {
       const { container } = render(<SmartTableRenderer moduleConfig={testModule} data={rows.slice(0, 2)} loading={false} pagination={false} singleScrollContainer columnPreferencesKey="mobile-table-layout" />);
       expect(container.querySelector('.ant-table-header')).toBeNull();
+      expect(container.querySelector('.ant-table-measure-row')).toBeNull();
       const resize = screen.getByRole('separator', { name: 'تغییر عرض ستون نام' });
       const previous = Number(resize.getAttribute('aria-valuenow'));
       fireEvent.keyDown(resize, { key: 'ArrowLeft' });
