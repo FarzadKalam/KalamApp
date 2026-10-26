@@ -10,6 +10,7 @@ vi.mock('./RelatedRecordPopover', () => ({ default: ({ children }: any) => <>{ch
 vi.mock('./PhoneActionsPopover', () => ({ default: ({ value }: any) => <span>{value}</span> }));
 vi.mock('./PersianDatePicker', () => ({ default: () => null }));
 vi.mock('../utils/currency', () => ({ useCurrencyConfig: () => ({ label: 'ریال' }) }));
+vi.mock('../supabaseClient', () => ({ supabase: {}, supabasePublic: {} }));
 
 const testModule: ModuleDefinition = {
   id: 'test_module',
