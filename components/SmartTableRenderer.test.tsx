@@ -10,7 +10,10 @@ vi.mock('./RelatedRecordPopover', () => ({ default: ({ children }: any) => <>{ch
 vi.mock('./PhoneActionsPopover', () => ({ default: ({ value }: any) => <span>{value}</span> }));
 vi.mock('./PersianDatePicker', () => ({ default: () => null }));
 vi.mock('../utils/currency', () => ({ useCurrencyConfig: () => ({ label: 'ریال' }) }));
-vi.mock('../supabaseClient', () => ({ supabase: {}, supabasePublic: {} }));
+vi.mock('../supabaseClient', () => ({
+  supabase: {}, supabasePublic: {}, supabaseSignUpClient: {},
+  SUPABASE_URL: 'https://example.test', SUPABASE_ANON_KEY: 'test-anon-key', SUPABASE_AUTH_STORAGE_KEY: 'sb-test-auth-token',
+}));
 
 const testModule: ModuleDefinition = {
   id: 'test_module',
