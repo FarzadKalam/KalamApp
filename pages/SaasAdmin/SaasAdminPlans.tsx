@@ -471,7 +471,7 @@ const SaasAdminPlans: React.FC = () => {
             <>
               <div className="font-bold text-slate-800">{formatPrice(row.price_per_user_monthly || row.price_monthly)} <span className="text-xs font-normal text-slate-400">تومان / کاربر</span></div>
               {(row.price_per_user_yearly || row.price_yearly) && (
-                <div className="text-xs text-slate-400">{formatPrice(row.price_per_user_yearly || row.price_yearly)} / کاربر / سال</div>
+                <div className="text-xs text-slate-400">{formatPrice(Number(row.price_per_user_yearly || row.price_yearly || 0))} / کاربر / سال</div>
               )}
             </>
           )}
