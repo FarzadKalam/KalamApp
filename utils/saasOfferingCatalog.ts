@@ -20,6 +20,7 @@ export const SAAS_MODULE_GROUPS: Array<{ label: string; modules: SaasOfferingOpt
   { label: 'پروژه و فرآیند', modules: [
     { id: 'projects', label: 'پروژه‌ها' }, { id: 'tasks', label: 'فعالیت‌ها' }, { id: 'content_calendars', label: 'تقویم‌های محتوایی' },
     { id: 'process_templates', label: 'الگوهای فرآیند' }, { id: 'process_runs', label: 'اجرای فرآیند' },
+    { id: 'goals', label: 'اهداف' },
   ] },
   { label: 'منابع انسانی', modules: [
     { id: 'employees', label: 'کارکنان' }, { id: 'attendance_logs', label: 'تردد و حضور' }, { id: 'work_schedules', label: 'برنامه کاری' },
@@ -34,6 +35,7 @@ export const SAAS_MODULE_GROUPS: Array<{ label: string; modules: SaasOfferingOpt
   { label: 'ارتباطات و گزارش‌ها', modules: [
     { id: 'secretariat_documents', label: 'نامه‌ها و مکاتبات' }, { id: 'advertising_campaigns', label: 'کمپین‌های تبلیغاتی' },
     { id: 'web_forms', label: 'وب‌فرم‌ها' }, { id: 'surveys', label: 'نظرسنجی‌ها' }, { id: 'calculation_formulas', label: 'فرمول‌های محاسباتی' }, { id: 'delivery_forms', label: 'فرم‌های تحویل' },
+    { id: 'chat_groups', label: 'بستر چت داخلی' }, { id: 'organization_chart', label: 'چارت سازمانی' },
   ] },
 ];
 
@@ -55,6 +57,9 @@ export const SAAS_FEATURE_OPTIONS: SaasOfferingOption[] = [
   { id: 'saas_account_billing', label: 'مدیریت حساب و اشتراک' }, { id: 'ai_credit_topup', label: 'کیف پول مصرف AI' },
   { id: 'sms_credit_topup', label: 'کیف پول مصرف پیامک' }, { id: 'extra_users_purchase', label: 'خرید کاربر اضافه' },
   { id: 'business_model_canvas', label: 'بوم کسب‌وکار' }, { id: 'bale_bot', label: 'بات بله' }, { id: 'rubika_bot', label: 'بات روبیکا' },
+  { id: 'internal_chat', label: 'بستر چت داخلی' }, { id: 'organization_chart', label: 'چارت سازمانی' },
+  { id: 'advanced_commission', label: 'محاسبه پورسانت پیشرفته' }, { id: 'performance_payroll_kpi', label: 'حقوق مبتنی بر عملکرد (KPI)' },
+  { id: 'goals', label: 'اهداف' },
 ];
 
 const featureGroupIds: Array<{ label: string; ids: string[] }> = [

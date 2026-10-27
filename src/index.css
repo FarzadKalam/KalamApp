@@ -3,9 +3,14 @@
 @tailwind utilities;
 
 body {
+  background-color: #f8fafc;
+  color: #18181b;
+  font-family: var(--font-family-app);
+}
+
+html.dark body {
   background-color: #141414;
   color: #e5e5e5;
-  font-family: var(--font-family-app);
 }
 
 /* Custom Scrollbar */

@@ -207,13 +207,15 @@ const AccountStatusTab: React.FC = () => {
   const plan = overview.plan || {};
   const quotas = overview.quotas || {};
   const access = overview.access || {};
-  const usersAllowed = Number(quotas.users_included || 0) + Number(quotas.users_extra || 0);
+  const hasFullPlanAccess = access.full_access === true;
+  const minimumUsers = Math.max(3, Number(plan.minimum_users || quotas.users_included || 3));
+  const usersAllowed = hasFullPlanAccess ? null : Math.max(minimumUsers, Number(quotas.users_included || 0) + Number(quotas.users_extra || 0));
+  const monthlyTotal = Number(quotas.monthly_total_irt || 0);
   const userPercent = usersAllowed ? Math.min(100, Math.round((Number(quotas.users_used || 0) / usersAllowed) * 100)) : 0;
   const trialEndsAt = overview.organization?.trial_ends_at ? new Date(overview.organization.trial_ends_at).toLocaleDateString('fa-IR') : null;
   const trialRemainingDays = overview.organization?.trial_ends_at ? Math.max(0, Math.ceil((new Date(overview.organization.trial_ends_at).getTime() - Date.now()) / 86400000)) : null;
   const enabledModules = Object.values(access.modules || {}).filter(Boolean).length;
   const enabledFeatures = Object.values(access.features || {}).filter(Boolean).length;
-  const hasFullPlanAccess = access.full_access === true;
   const aiWallet = overview.ai_wallet || {};
   const billingWallet = overview.billing_wallet || {};
   const subscriptionInvoices = Array.isArray(overview.subscription_invoices) ? overview.subscription_invoices : [];
@@ -244,15 +246,16 @@ const AccountStatusTab: React.FC = () => {
           </div>
           <div className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-right backdrop-blur">
             <div className="text-xs text-slate-300">{trialEndsAt ? 'پایان دوره آزمایشی' : 'هزینه ماهانه پلن'}</div>
-            <div className="mt-1 text-lg font-black">{trialEndsAt || formatIrt(plan.price_monthly)}</div>
+            <div className="mt-1 text-lg font-black">{trialEndsAt || (hasFullPlanAccess ? 'نامحدود' : formatIrt(monthlyTotal || Number(plan.price_per_user_monthly || plan.price_monthly || 0)))}</div>
             {trialEndsAt ? <div className="mt-1 text-xs text-slate-300">{trialRemainingDays ? `${trialRemainingDays} روز باقی‌مانده` : 'دوره آزمایشی به پایان رسیده است'}</div> : null}
+            {!trialEndsAt && !hasFullPlanAccess ? <div className="mt-1 text-xs text-slate-300">{formatIrt(Number(plan.price_per_user_monthly || plan.price_monthly || 0))} به‌ازای هر کاربر · حداقل {minimumUsers} کاربر</div> : null}
           </div>
         </div>
       </div>
 
       <Row gutter={[16, 16]}>
-        <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="کاربران فعال" value={Number(quotas.users_used || 0)} suffix={`/ ${usersAllowed || '—'}`} prefix={<TeamOutlined className="text-indigo-600" />} /><Progress className="mt-3" percent={userPercent} showInfo={false} /></Card></Col>
-        <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="فضای ذخیره‌سازی" value={storageUsedGb} precision={3} suffix={`/ ${storageLimitGb} GB`} prefix={<CloudOutlined className="text-sky-600" />} /><Progress className="mt-2" percent={storagePercent} status={storagePercent >= 90 ? 'exception' : storagePercent >= 75 ? 'active' : 'normal'} showInfo={false} /><Text type="secondary" className="text-xs">{Number(storageUsage.files || 0).toLocaleString('fa-IR')} فایل · {Math.max(0, storageLimitGb - storageUsedGb).toFixed(3)} GB باقی‌مانده</Text></Card></Col>
+        <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="کاربران فعال" value={Number(quotas.users_used || 0)} suffix={hasFullPlanAccess ? ' / نامحدود' : ` / ${usersAllowed}`} prefix={<TeamOutlined className="text-indigo-600" />} /><Progress className="mt-3" percent={hasFullPlanAccess ? 0 : userPercent} showInfo={false} /></Card></Col>
+        <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="فضای ذخیره‌سازی" value={hasFullPlanAccess ? 'نامحدود' : storageUsedGb} precision={hasFullPlanAccess ? undefined : 3} suffix={hasFullPlanAccess ? '' : `/ ${storageLimitGb} GB`} prefix={<CloudOutlined className="text-sky-600" />} /><Progress className="mt-2" percent={hasFullPlanAccess ? 0 : storagePercent} status={storagePercent >= 90 ? 'exception' : storagePercent >= 75 ? 'active' : 'normal'} showInfo={false} /><Text type="secondary" className="text-xs">{hasFullPlanAccess ? 'بدون سقف تخصیص' : `${Number(storageUsage.files || 0).toLocaleString('fa-IR')} فایل · ${Math.max(0, storageLimitGb - storageUsedGb).toFixed(3)} GB باقی‌مانده`}</Text></Card></Col>
         <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="اعتبار هوش مصنوعی" value={aiRemaining} formatter={(value) => `${Number(value).toLocaleString('fa-IR')} تومان`} prefix={<BulbOutlined className="text-violet-600" />} /><Progress className="mt-2" percent={walletPercent(aiRemaining, aiWalletTarget)} strokeColor="#7c3aed" showInfo={false} /><div className="mt-2 flex items-center justify-between"><Tag color={aiWallet.status === 'active' || !aiWallet.status ? 'green' : 'red'}>{aiWallet.status === 'blocked' ? 'مسدود' : 'فعال'}</Tag><Button size="small" type="link" onClick={() => { setWalletAmount(null); setWalletAction('ai_transfer'); }}>از کیف پول</Button></div></Card></Col>
         <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="کیف پول پیامک" value={smsRemaining} formatter={(value) => `${Number(value).toLocaleString('fa-IR')} تومان`} prefix={<DatabaseOutlined className="text-cyan-600" />} /><Progress className="mt-2" percent={walletPercent(smsRemaining, smsWalletTarget)} strokeColor="#0891b2" showInfo={false} /><div className="mt-2 flex items-center justify-between"><Tag color={smsRemaining <= 100000 ? 'gold' : 'green'}>{smsRemaining <= 100000 ? 'نیازمند شارژ' : 'فعال'}</Tag><Space size={0}><Button size="small" type="link" onClick={() => { setWalletAmount(null); setWalletAction('sms_transfer'); }}>از کیف پول</Button><Button size="small" type="link" onClick={() => { setWalletAmount(null); setWalletAction('sms_topup'); }}>شارژ مستقیم</Button></Space></div></Card></Col>
         <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="زمان‌بندی خودکار" value={Number(quotas.scheduled_runs || 0)} suffix="فعال" prefix={<RocketOutlined className="text-orange-600" />} /><Text type="secondary" className="mt-2 block text-xs">گردش‌کار زمان‌دار، ارسال برنامه حضور و گزارش‌ها؛ بدون محدودیت مصنوعیِ فاصلهٔ اجرا.</Text></Card></Col>
@@ -299,7 +302,8 @@ const AccountStatusTab: React.FC = () => {
 
       <Drawer open={!!accessDrawer} onClose={() => setAccessDrawer(null)} title={accessDrawer === 'modules' ? 'ماژول‌های فعال سازمان' : 'امکانات فعال سازمان'} placement="left" width="min(480px, 100vw)">
         <div className="space-y-3">
-          {Object.entries(accessDrawer === 'modules' ? (access.modules || {}) : (access.features || {})).filter(([, value]) => value === true || hasFullPlanAccess).map(([code]) => {
+          {hasFullPlanAccess ? <Alert type="success" showIcon message={accessDrawer === 'modules' ? 'همهٔ ماژول‌ها بدون سقف فعال هستند.' : 'همهٔ امکانات بدون سقف فعال هستند.'} /> : null}
+          {Object.entries(accessDrawer === 'modules' ? (access.modules || {}) : (access.features || {})).filter(([, value]) => value === true).map(([code]) => {
             const purchasable = catalog.find((item) => item.entitlement_code === code);
             const label = accessDrawer === 'modules' ? (SAAS_MODULE_LABELS[code] || code) : (SAAS_FEATURE_LABELS[code] || code);
             return <div key={code} className="flex items-center justify-between gap-3 rounded-xl border p-3"><Text>{label}</Text>{purchasable ? <Button size="small" onClick={() => changeCart(purchasable.code, 1)}>افزودن به سبد</Button> : <Tag color="green">فعال</Tag>}</div>;

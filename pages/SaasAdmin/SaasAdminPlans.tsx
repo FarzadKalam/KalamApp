@@ -198,6 +198,9 @@ type PlanRow = {
   sort_order: number;
   price_monthly: number;
   price_yearly: number | null;
+  price_per_user_monthly: number;
+  price_per_user_yearly: number | null;
+  minimum_users: number;
   included_users: number;
   extra_user_price: number;
   max_users: number | null;
@@ -290,6 +293,9 @@ const SaasAdminPlans: React.FC = () => {
       included_users: 5,
       extra_user_price: 0,
       price_monthly: 0,
+      price_per_user_monthly: 0,
+      price_per_user_yearly: 0,
+      minimum_users: 3,
     });
     setDrawerOpen(true);
   };
@@ -312,6 +318,9 @@ const SaasAdminPlans: React.FC = () => {
       sort_order: plan.sort_order,
       price_monthly: plan.price_monthly,
       price_yearly: plan.price_yearly,
+      price_per_user_monthly: plan.price_per_user_monthly || plan.price_monthly,
+      price_per_user_yearly: plan.price_per_user_yearly || plan.price_yearly,
+      minimum_users: plan.minimum_users || 3,
       included_users: plan.included_users,
       extra_user_price: plan.extra_user_price,
       max_users: plan.max_users,
@@ -460,9 +469,9 @@ const SaasAdminPlans: React.FC = () => {
             <Tag color="geekblue">{row.custom_price_label}</Tag>
           ) : (
             <>
-              <div className="font-bold text-slate-800">{formatPrice(row.price_monthly)} <span className="text-xs font-normal text-slate-400">تومان</span></div>
-              {row.price_yearly && (
-                <div className="text-xs text-slate-400">{formatPrice(row.price_yearly)} / سال</div>
+              <div className="font-bold text-slate-800">{formatPrice(row.price_per_user_monthly || row.price_monthly)} <span className="text-xs font-normal text-slate-400">تومان / کاربر</span></div>
+              {(row.price_per_user_yearly || row.price_yearly) && (
+                <div className="text-xs text-slate-400">{formatPrice(row.price_per_user_yearly || row.price_yearly)} / کاربر / سال</div>
               )}
             </>
           )}
@@ -474,10 +483,7 @@ const SaasAdminPlans: React.FC = () => {
       key: 'users',
       render: (_: any, row: PlanRow) => (
         <div className="text-sm">
-          <div>{row.included_users} کاربر پایه</div>
-          {row.extra_user_price > 0 && (
-            <div className="text-xs text-slate-400">+ {formatPrice(row.extra_user_price)} / کاربر</div>
-          )}
+          <div>حداقل {row.minimum_users || row.included_users || 3} کاربر</div>
           {row.max_users && (
             <div className="text-xs text-slate-400">سقف: {row.max_users}</div>
           )}
@@ -583,7 +589,7 @@ const SaasAdminPlans: React.FC = () => {
               <Row gutter={12}>
                 <Col span={12}>
                   <Form.Item name="title" label="عنوان پلن" rules={[{ required: true, message: 'الزامی' }]}>
-                    <Input placeholder="مثال: ابری رشد" />
+                    <Input placeholder="مثال: رشد" />
                   </Form.Item>
                 </Col>
                 <Col span={12}>
@@ -635,40 +641,40 @@ const SaasAdminPlans: React.FC = () => {
                 type="info"
                 showIcon
                 className="mb-4 text-xs"
-                message="قیمت‌ها به تومان وارد شوند. برای custom plan از «برچسب قیمت» استفاده کنید."
+                message="قیمت‌ها به تومان و به‌ازای هر کاربر وارد شوند. حداقل خرید برای همهٔ پلن‌ها ۳ کاربر است."
               />
               <Row gutter={12}>
                 <Col span={12}>
-                  <Form.Item name="price_monthly" label="قیمت ماهانه (تومان)">
+                  <Form.Item name="price_per_user_monthly" label="قیمت هر کاربر در ماه (تومان)">
                     <InputNumber
                       min={0}
                       className="w-full"
                       formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
-                      placeholder="2900000"
+                      placeholder="780000"
                     />
                   </Form.Item>
                 </Col>
                 <Col span={12}>
-                  <Form.Item name="price_yearly" label="قیمت سالانه (تومان)">
+                  <Form.Item name="price_per_user_yearly" label="قیمت هر کاربر در سال (تومان)">
                     <InputNumber
                       min={0}
                       className="w-full"
                       formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
-                      placeholder="29000000"
+                      placeholder="7800000"
                     />
                   </Form.Item>
                 </Col>
               </Row>
               <Row gutter={12}>
                 <Col span={8}>
-                  <Form.Item name="included_users" label="کاربر پایه">
-                    <InputNumber min={1} className="w-full" />
+                  <Form.Item name="minimum_users" label="حداقل کاربر">
+                    <InputNumber min={3} className="w-full" />
                   </Form.Item>
                 </Col>
                 <Col span={8}>
-                  <Form.Item name="extra_user_price" label="هزینه کاربر اضافه">
+                  <Form.Item name="included_users" label="کاربر پایه قدیمی">
                     <InputNumber
-                      min={0}
+                      min={3}
                       className="w-full"
                       formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
                     />

@@ -4,6 +4,7 @@ import { ArrowLeftOutlined, CheckCircleOutlined, DownOutlined, UpOutlined } from
 import { supabase } from '../../../supabaseClient';
 import { sitePath, DEMO_URL } from '../siteLinks';
 import { SectionHeading } from '../primitives';
+import { SAAS_FEATURE_LABELS, SAAS_MODULE_LABELS } from '../../../utils/saasOfferingCatalog';
 
 type PublicPlan = {
   id: string;
@@ -13,12 +14,15 @@ type PublicPlan = {
   price_monthly: number;
   price_yearly: number | null;
   included_users: number;
+  minimum_users: number;
   extra_user_price: number;
   max_users: number | null;
   storage_gb: number | null;
   highlight_tag: string | null;
   custom_price_label: string | null;
   display_features: Array<string | { text: string; featured?: boolean | null }>;
+  enabled_modules?: Record<string, boolean>;
+  enabled_features?: Record<string, boolean | string>;
   trial_days: number;
 };
 
@@ -32,6 +36,27 @@ const parsePublicPlanFeatures = (raw: PublicPlan['display_features']): PublicPla
       return { text: String(item?.text ?? '').trim(), featured: Boolean(item?.featured) };
     })
     .filter((item) => item.text);
+};
+
+const getPlanFeatureLabels = (plan: PublicPlan): PublicPlanFeature[] => {
+  const capabilityFeatures = [
+    ...Object.entries(plan.enabled_modules || {})
+      .filter(([, enabled]) => enabled)
+      .map(([code]) => SAAS_MODULE_LABELS[code])
+      .filter(Boolean),
+    ...Object.entries(plan.enabled_features || {})
+      .filter(([code, enabled]) => Boolean(SAAS_FEATURE_LABELS[code]) && (enabled === true || enabled === 'limited'))
+      .map(([code, enabled]) => `${SAAS_FEATURE_LABELS[code]}${enabled === 'limited' ? ' محدود' : ''}`),
+  ];
+  const displayLabels = (plan.display_features || []).map((item) => typeof item === 'string' ? item : item?.text);
+  const merged = [...(plan.display_features || []), ...capabilityFeatures.filter((label) => !displayLabels.includes(label))];
+  const seen = new Set<string>();
+  return parsePublicPlanFeatures(merged).filter((item) => {
+    if (item.text.includes('کاربر')) return false;
+    if (seen.has(item.text)) return false;
+    seen.add(item.text);
+    return true;
+  });
 };
 
 const usePricingPlans = () => {
@@ -63,7 +88,7 @@ export const PricingSection: React.FC<{
   detailed = false,
   eyebrow = 'تعرفه‌ها',
   title = 'پلنی انتخاب کنید که با تیم شما رشد کند',
-  text = 'مدل قیمت‌گذاری تازه سیستم ترکیبی از هزینه پایه پکیج و کاربر اضافه است تا رشد تیم قابل پیش‌بینی بماند.',
+  text = 'تعرفه بر اساس تعداد کاربران فعال محاسبه می‌شود؛ پس از دورهٔ آزمایشی، حداقل ۳ کاربر لازم است.',
 }) => {
   const { plans, loaded } = usePricingPlans();
   const [expandedPlanIds, setExpandedPlanIds] = useState<Set<string>>(() => new Set());
@@ -101,9 +126,17 @@ export const PricingSection: React.FC<{
             </div>
           ) : (
           <div className={`grid gap-5 ${plans.length === 2 ? 'lg:grid-cols-2' : 'lg:grid-cols-3'}`}>
-            {plans.map((plan) => {
+            {plans.map((plan, planIndex) => {
               const highlighted = !!plan.highlight_tag;
-              const normalizedFeatures = parsePublicPlanFeatures(plan.display_features);
+              const inheritedFeatures = new Set(
+                plans.slice(0, planIndex).flatMap((parentPlan) => getPlanFeatureLabels(parentPlan).map((item) => item.text)),
+              );
+              const normalizedFeatures = getPlanFeatureLabels(plan).filter((item) => {
+                // A higher plan advertises the inheritance in one summary line;
+                // repeating every lower-plan item makes the card unreadable.
+                if (/^همه امکانات/.test(item.text)) return true;
+                return !inheritedFeatures.has(item.text);
+              });
               const primaryFeatures = normalizedFeatures.filter((item) => item.featured);
               const extraFeatures = normalizedFeatures.filter((item) => !item.featured);
               const expanded = expandedPlanIds.has(plan.id);
@@ -129,15 +162,11 @@ export const PricingSection: React.FC<{
                     ) : (
                       <>
                         <span className="text-4xl font-black">{formatPriceFA(plan.price_monthly)}</span>
-                        <span className={`mr-2 text-sm ${highlighted ? 'text-zinc-300' : 'text-zinc-500'}`}>تومان / ماه</span>
+                        <span className={`mr-2 text-sm ${highlighted ? 'text-zinc-300' : 'text-zinc-500'}`}>تومان به ازای هر کاربر در ماه</span>
                       </>
                     )}
                   </div>
 
-                  <div className={`mt-3 text-sm font-bold ${highlighted ? 'text-zinc-200' : 'text-zinc-700'}`}>{plan.included_users} کاربر شامل</div>
-                  {plan.extra_user_price > 0 && (
-                    <div className={`mt-1 text-xs ${highlighted ? 'text-zinc-300' : 'text-zinc-500'}`}>کاربر اضافه: {formatPriceFA(plan.extra_user_price)} تومان</div>
-                  )}
                   {plan.storage_gb && (
                     <div className={`mt-1 text-xs ${highlighted ? 'text-zinc-300' : 'text-zinc-500'}`}>{plan.storage_gb}GB فضای ذخیره‌سازی</div>
                   )}

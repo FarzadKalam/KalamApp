@@ -97,7 +97,7 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
     try {
       const [accountResult, planResult, catalogResult, ordersResult, smsWalletResult, ownerResult] = await Promise.all([
         supabase.rpc('admin_get_saas_org_account', { p_org_id: orgId }),
-        supabase.from('saas_plans').select('code,title,price_monthly,short_description,enabled_modules,enabled_features').eq('is_active', true).order('sort_order'),
+        supabase.from('saas_plans').select('code,title,price_monthly,price_per_user_monthly,minimum_users,short_description,enabled_modules,enabled_features').eq('is_active', true).order('sort_order'),
         supabase.rpc('admin_get_saas_catalog_items'),
         supabase.rpc('admin_list_saas_org_orders', { p_org_id: orgId }),
         supabase.rpc('admin_get_saas_org_sms_wallet', { p_org_id: orgId }),
@@ -139,7 +139,7 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
 
   const cartItems = useMemo(() => {
     const all = [
-      ...plans.map((plan) => ({ code: `plan:${plan.code}`, title: plan.title, price_irt: plan.price_monthly, item_kind: 'plan' })),
+      ...plans.map((plan) => ({ code: `plan:${plan.code}`, title: plan.title, price_irt: plan.price_per_user_monthly || plan.price_monthly, item_kind: 'plan' })),
       ...catalog,
     ];
     return all.filter((item) => Number(cart[item.code] || 0) > 0).map((item) => ({ ...item, quantity: Number(cart[item.code]) }));
@@ -345,7 +345,7 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
               </div> : null}
               <div>
                 <Text type="secondary" className="mb-1 block text-xs">پلن پایه</Text>
-                <Select className="w-full" allowClear placeholder={plans.length ? 'پلن را انتخاب کنید' : 'فهرست پلن‌ها در دسترس نیست'} value={selectedPlan || record?.plan_code || undefined} onChange={choosePlan} disabled={!account || plans.length === 0} options={plans.map((plan) => ({ value: plan.code, label: `${plan.title || plan.code} · ${Number(plan.price_monthly || 0).toLocaleString('fa-IR')} تومان` }))} />
+                <Select className="w-full" allowClear placeholder={plans.length ? 'پلن را انتخاب کنید' : 'فهرست پلن‌ها در دسترس نیست'} value={selectedPlan || record?.plan_code || undefined} onChange={choosePlan} disabled={!account || plans.length === 0} options={plans.map((plan) => ({ value: plan.code, label: `${plan.title || plan.code} · ${Number(plan.price_per_user_monthly || plan.price_monthly || 0).toLocaleString('fa-IR')} تومان / کاربر` }))} />
                 {account && <Text type="secondary" className="mt-1 block text-xs">امکانات انتخاب‌شده، دسترسی مؤثر پلن و تغییرات اختصاصی این سازمان را نشان می‌دهند.</Text>}
               </div>
               {account && <div className="rounded-xl border border-indigo-200 bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-700">
@@ -358,7 +358,7 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
               </div>}
               <div className="rounded-xl border border-indigo-200 bg-white/70 p-3 dark:bg-slate-700">
                 <div className="mb-2 flex items-center justify-between"><Text strong>اقلام قابل خرید و قیمت</Text><Text type="secondary" className="text-xs">سبد تا زمان ثبت قابل ویرایش است.</Text></div>
-                <div className="mb-2 flex flex-wrap gap-2">{plans.filter((plan) => Number(plan.price_monthly || 0) > 0).map((plan) => <Button key={plan.code} size="small" type={cart[`plan:${plan.code}`] ? 'primary' : 'default'} onClick={() => addToCart(`plan:${plan.code}`, cart[`plan:${plan.code}`] ? -1 : 1)}>{plan.title} · {Number(plan.price_monthly).toLocaleString('fa-IR')}</Button>)}</div>
+                <div className="mb-2 flex flex-wrap gap-2">{plans.filter((plan) => Number(plan.price_per_user_monthly || plan.price_monthly || 0) > 0).map((plan) => <Button key={plan.code} size="small" type={cart[`plan:${plan.code}`] ? 'primary' : 'default'} onClick={() => addToCart(`plan:${plan.code}`, cart[`plan:${plan.code}`] ? -1 : 1)}>{plan.title} · {Number(plan.price_per_user_monthly || plan.price_monthly).toLocaleString('fa-IR')} / کاربر</Button>)}</div>
                 {catalog.length ? <Select className="w-full" mode="multiple" placeholder="ماژول، امکان یا سهمیه را انتخاب کنید" value={catalog.filter((item) => cart[item.code]).map((item) => item.code)} onChange={(values) => { const next: Record<string, number> = {}; values.forEach((value) => { next[String(value)] = 1; }); setCart((current) => Object.fromEntries(Object.keys(current).filter((key) => key.startsWith('plan:')).map((key) => [key, current[key]]).concat(Object.entries(next)))); }} options={catalog.filter((item) => item.is_active !== false && Number(item.price_irt || 0) > 0).map((item) => ({ value: item.code, label: `${item.title} · ${Number(item.price_irt).toLocaleString('fa-IR')} تومان` }))} /> : <Alert type="info" showIcon message="هنوز افزونه‌ای در کاتالوگ قیمت‌گذاری و فعال نشده است." />}
                 {cartItems.length ? <div className="mt-3 space-y-1">{cartItems.map((item) => <div key={item.code} className="flex items-center justify-between text-xs"><Text>{item.title}</Text><Space size={4}><Button size="small" onClick={() => addToCart(item.code, -1)}>−</Button><Text>{item.quantity}</Text><Button size="small" onClick={() => addToCart(item.code, 1)}>+</Button></Space></div>)}</div> : null}
               </div>

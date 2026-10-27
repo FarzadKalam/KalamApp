@@ -31,6 +31,11 @@ const bootstrapAndRender = async () => {
     ? bootstrapModule.mountPublicRouteApp
     : bootstrapModule.mountApp;
   mount(container!);
+  // Keep the server-rendered SEO fallback visible until React has mounted.
+  // Hiding it in index.html made a slow first chunk look like a black screen.
+  window.requestAnimationFrame(() => {
+    document.documentElement.classList.add("js");
+  });
   if (!useStandalonePublicBootstrap) {
     await runtimeBrandingPromise;
   }
@@ -40,7 +45,8 @@ applyBrandingRuntime(getSafeInitialBranding());
 
 const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
 const initialDarkMode = savedTheme === "dark" || (savedTheme !== "light" && resolveSmartThemeMode() === "dark");
-document.documentElement.classList.toggle("dark", initialDarkMode);
+const isMarketingHost = /^(www\.)?tazesystem\.ir$/i.test(window.location.hostname);
+document.documentElement.classList.toggle("dark", !isMarketingHost && initialDarkMode);
 
 const isStandalonePwa = () => {
   const byMedia = window.matchMedia?.("(display-mode: standalone)")?.matches;

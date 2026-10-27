@@ -1,0 +1,126 @@
+-- =====================================================
+-- KalamApp - Phase 557: synchronize complete plan capabilities
+-- Additive / idempotent. The three public plans use one explicit source
+-- of truth for real access maps and the complete public capability list.
+-- =====================================================
+
+begin;
+
+update public.saas_plans
+set
+  enabled_modules = case lower(coalesce(code, ''))
+    when 'cloud_starter' then jsonb_build_object(
+      'customers', true, 'marketing_leads', true, 'invoices', true,
+      'purchase_invoices', true, 'products', true, 'warehouses', true,
+      'projects', true, 'tasks', true, 'expense_documents', true,
+      'web_forms', true, 'assets', true
+    )
+    when 'cloud_growth' then jsonb_build_object(
+      'customers', true, 'marketing_leads', true, 'invoices', true,
+      'purchase_invoices', true, 'products', true, 'warehouses', true,
+      'shelves', true, 'stock_transfers', true, 'product_bundles', true,
+      'projects', true, 'tasks', true, 'process_templates', true,
+      'process_runs', true, 'expense_documents', true, 'employees', true,
+      'attendance_logs', true, 'leave_requests', true, 'web_forms', true,
+      'surveys', true, 'automation_execution_reports', true,
+      'sms_delivery_reports', true, 'voip_call_reports', true,
+      'counterparty_bot_groups', true, 'price_lists', true, 'billboards', true,
+      'assets', true, 'mbti_assessments', true
+    )
+    when 'cloud_enterprise' then jsonb_build_object(
+      'customers', true, 'marketing_leads', true, 'invoices', true,
+      'purchase_invoices', true, 'products', true, 'warehouses', true,
+      'shelves', true, 'stock_transfers', true, 'product_bundles', true,
+      'production_boms', true, 'production_orders', true, 'projects', true,
+      'tasks', true, 'process_templates', true, 'process_runs', true,
+      'expense_documents', true, 'employees', true, 'attendance_logs', true,
+      'work_schedules', true, 'leave_requests', true, 'overtime_requests', true,
+      'mission_requests', true, 'payroll_slips', true, 'employee_contracts', true,
+      'employee_advances', true, 'recruitment_applicants', true,
+      'secretariat_documents', true, 'delivery_forms', true,
+      'chart_of_accounts', true, 'journal_entries', true, 'cash_boxes', true,
+      'bank_accounts', true, 'petty_funds', true, 'cheques', true,
+      'barters', true, 'cash_bank_operations', true, 'accounting_event_rules', true,
+      'cost_centers', true, 'fiscal_years', true, 'web_forms', true,
+      'surveys', true, 'calculation_formulas', true,
+      'automation_execution_reports', true, 'sms_delivery_reports', true,
+      'voip_call_reports', true, 'counterparty_bot_groups', true,
+      'price_lists', true, 'billboards', true, 'assets', true,
+      'mbti_assessments', true
+    )
+    else enabled_modules
+  end,
+  enabled_features = case lower(coalesce(code, ''))
+    when 'cloud_starter' then jsonb_build_object(
+      'multi_lane_processes', true,
+      'internal_realtime_notifications', true,
+      'ai', true
+    )
+    when 'cloud_growth' then jsonb_build_object(
+      'multi_lane_processes', true,
+      'internal_realtime_notifications', true,
+      'ai', true, 'ai_chat', true, 'ai_knowledge', 'limited',
+      'ai_document_analysis', true, 'map_view', true,
+      'advanced_reports', true, 'mbti_ai_analysis', true
+    )
+    when 'cloud_enterprise' then jsonb_build_object(
+      'multi_lane_processes', true,
+      'internal_realtime_notifications', true,
+      'ai', true, 'ai_chat', true, 'ai_knowledge', true,
+      'ai_document_analysis', true, 'ai_web_search', true,
+      'ai_voice_input', true, 'ai_voice_output', true,
+      'ai_image_generation', true, 'ai_video_generation', true,
+      'taxpayer_system', true, 'map_view', true,
+      'advanced_reports', true, 'mbti_ai_analysis', true
+    )
+    else enabled_features
+  end,
+  display_features = case lower(coalesce(code, ''))
+    when 'cloud_starter' then jsonb_build_array(
+      'مشتریان', 'سرنخ‌ها و بازاریابی', 'فاکتور فروش', 'فاکتور خرید',
+      'کالاها و خدمات', 'انبارها', 'پروژه‌ها', 'فعالیت‌ها', 'هزینه‌ها',
+      'وب‌فرم‌ها', 'اموال', 'فرآیندهای چندردیفه',
+      'اعلان لحظه‌ای داخل سامانه', 'دسترسی پایه هوش مصنوعی',
+      '۵GB فضای ذخیره‌سازی', 'حداقل ۳ کاربر'
+    )
+    when 'cloud_growth' then jsonb_build_array(
+      'همه امکانات شروع', 'مشتریان', 'سرنخ‌ها و بازاریابی', 'فاکتور فروش',
+      'فاکتور خرید', 'کالاها و خدمات', 'انبارها', 'قفسه‌ها',
+      'تردد و حواله', 'پکیج‌ها', 'پروژه‌ها', 'فعالیت‌ها',
+      'الگوهای فرآیند', 'اجرای فرآیند', 'هزینه‌ها', 'کارکنان',
+      'تردد و حضور', 'مرخصی‌ها', 'وب‌فرم‌ها', 'نظرسنجی‌ها',
+      'گزارش اجرای خودکار', 'گزارش ارسال پیامک', 'گزارش تماس VoIP',
+      'گروه‌های بات مخاطبان', 'لیست قیمت‌ها', 'تبلیغات محیطی', 'اموال',
+      'آزمون MBTI', 'فرآیندهای چندردیفه', 'اعلان لحظه‌ای داخل سامانه',
+      'گفتگو با هوش مصنوعی', 'دانش سازمانی هوش مصنوعی محدود',
+      'تحلیل اسناد با هوش مصنوعی', 'نمای نقشه', 'گزارش‌ساز پیشرفته',
+      'تحلیل هوشمند MBTI', '۲۰GB فضای ذخیره‌سازی', 'حداقل ۳ کاربر'
+    )
+    when 'cloud_enterprise' then jsonb_build_array(
+      'همه امکانات رشد', 'مشتریان', 'سرنخ‌ها و بازاریابی', 'فاکتور فروش',
+      'فاکتور خرید', 'کالاها و خدمات', 'انبارها', 'قفسه‌ها',
+      'تردد و حواله', 'پکیج‌ها', 'BOM تولید', 'سفارشات تولید',
+      'پروژه‌ها', 'فعالیت‌ها', 'الگوهای فرآیند', 'اجرای فرآیند',
+      'هزینه‌ها', 'کارکنان', 'تردد و حضور', 'برنامه کاری', 'مرخصی‌ها',
+      'اضافه‌کاری', 'ماموریت‌ها', 'فیش حقوقی', 'قراردادها', 'مساعده',
+      'استخدام', 'نامه‌ها و مکاتبات', 'فرم‌های تحویل', 'جدول حساب‌ها',
+      'اسناد حسابداری', 'صندوق نقدی', 'حساب‌های بانکی', 'تنخواه', 'چک‌ها',
+      'تهاترها', 'نقد و بانک', 'قوانین حسابداری خودکار', 'مراکز هزینه',
+      'سال مالی', 'وب‌فرم‌ها', 'نظرسنجی‌ها', 'فرمول‌های محاسباتی',
+      'گزارش اجرای خودکار', 'گزارش ارسال پیامک', 'گزارش تماس VoIP',
+      'گروه‌های بات مخاطبان', 'لیست قیمت‌ها', 'تبلیغات محیطی', 'اموال',
+      'آزمون MBTI', 'فرآیندهای چندردیفه', 'اعلان لحظه‌ای داخل سامانه',
+      'گفتگو با هوش مصنوعی', 'دانش سازمانی هوش مصنوعی',
+      'تحلیل اسناد با هوش مصنوعی', 'جستجوی وب هوش مصنوعی',
+      'ورودی صوتی هوش مصنوعی', 'خروجی صوتی هوش مصنوعی',
+      'تولید تصویر هوش مصنوعی', 'تولید ویدیو هوش مصنوعی',
+      'سامانه مودیان', 'نمای نقشه', 'گزارش‌ساز پیشرفته',
+      'تحلیل هوشمند MBTI', '۵۰GB فضای ذخیره‌سازی', 'حداقل ۳ کاربر'
+    )
+    else display_features
+  end,
+  updated_at = now()
+where lower(coalesce(code, '')) in ('cloud_starter', 'cloud_growth', 'cloud_enterprise');
+
+notify pgrst, 'reload schema';
+commit;
