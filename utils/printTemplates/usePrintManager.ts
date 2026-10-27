@@ -71,6 +71,7 @@ import {
   type PrintPageRange,
 } from "./printPagination";
 import {
+  getFinalContentBodyHeightPx,
   getPrintBodySegmentTranslationPx,
   getPrintBodyViewportHeightPx,
   getTemplatePageBodyStepPx,
@@ -5762,12 +5763,26 @@ export const usePrintManager = ({
               pageBodyStepPx,
               Math.max(1, pageRange.end - pageRange.start),
             );
+            const isFinalPage = pageIndex === effectivePageCount - 1;
+            const flowFinalSignatureFooter = hasSignatureBand && isFinalPage;
             const bodyViewportHeightPx = getPrintBodyViewportHeightPx(
               pageBodyHeightPx,
               effectiveBodyStepPx,
             );
-            const bodyRenderHeightCss = toCssMm(pageBodyHeightPx);
-            const bodyViewportHeightCss = toCssMm(bodyViewportHeightPx);
+            const measuredBodyHeightPx = measuredBodyContentHeightRef.current?.templateId === selectedTemplateId
+              ? measuredBodyContentHeightRef.current.height
+              : null;
+            const bodyRenderHeightPx = flowFinalSignatureFooter
+              ? getFinalContentBodyHeightPx({
+                  pageBodyHeightPx,
+                  pageStartOffset,
+                  contentHeightPx: measuredBodyHeightPx,
+                })
+              : pageBodyHeightPx;
+            const bodyRenderHeightCss = toCssMm(bodyRenderHeightPx);
+            const bodyViewportHeightCss = toCssMm(
+              Math.min(bodyRenderHeightPx, bodyViewportHeightPx),
+            );
 
             return React.createElement(
               "div",
@@ -5812,7 +5827,7 @@ export const usePrintManager = ({
                   "--print-native-page-height": `${metrics.heightMm}mm`,
                 } as unknown as React.CSSProperties,
                 "data-print-layout-mode": "standard",
-                "data-print-body-capacity-px": Math.floor(pageBodyHeightPx),
+                "data-print-body-capacity-px": Math.floor(bodyRenderHeightPx),
                 "data-print-configured-header-height-px":
                   configuredHeaderHeight,
                 "data-print-configured-footer-height-px":
@@ -5945,7 +5960,7 @@ export const usePrintManager = ({
                         // Every page, including the last one, uses the same
                         // physical footer lane. The final print pass measures
                         // this lane again in its own DOM before paginating.
-                        marginTop: "auto",
+                        marginTop: flowFinalSignatureFooter ? 0 : "auto",
                         overflow: "hidden",
                         padding: 0,
                         display: "flex",

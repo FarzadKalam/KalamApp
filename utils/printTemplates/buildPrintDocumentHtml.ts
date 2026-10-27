@@ -169,6 +169,8 @@ const getImageSources = (html: string) => Array.from(html.matchAll(IMAGE_TAG_PAT
   })
   .filter(isEmbeddablePrintImageUrl);
 
+const isPrintLogoSource = (url: string) => /(?:logo|لوگو|brand)/i.test(String(url || ''));
+
 const getInlineStyleImageSources = (html: string) => Array.from(html.matchAll(STYLE_ATTRIBUTE_PATTERN))
   .flatMap((match) => Array.from(String(match[2] || '').matchAll(STYLE_IMAGE_URL_PATTERN)))
   .map((match) => decodeHtmlAttribute(String(match[2] || '')).trim())
@@ -249,7 +251,7 @@ export const materializePrintImageAssets = async (sourceHtml: string, origin: st
   let remainingByteBudget = PRINT_INLINE_IMAGE_TOTAL_MAX_BYTES;
   const dataUrlBySource = new Map<string, string>();
   for (const source of sourceUrls) {
-    const materialized = isBrowserLocalPrintImage(source)
+    const materialized = isBrowserLocalPrintImage(source) || isPrintLogoSource(source)
       ? await materializeBrowserLocalPrintImage(source, remainingByteBudget)
       : getPdfReliableImageUrl(source);
     dataUrlBySource.set(source, materialized);

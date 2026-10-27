@@ -125,6 +125,11 @@ const synchronizeStaticPageLayout = (page: HTMLElement, body: HTMLElement) => {
   return bodyHeight;
 };
 
+const getFinalStaticBodyHeight = (bodyHeightPx: number, pageStartPx: number, contentHeightPx: number) => {
+  const remaining = Math.ceil(contentHeightPx - Math.max(0, pageStartPx));
+  return Math.max(1, Math.min(bodyHeightPx, Number.isFinite(remaining) ? remaining : bodyHeightPx));
+};
+
 const getStaticBodyHeight = (page: HTMLElement, body: HTMLElement) => {
   const declaredCapacity = readPositiveNumber(page, BODY_CAPACITY_ATTR);
   if (declaredCapacity > 0) return declaredCapacity;
@@ -707,6 +712,7 @@ export const repaginateStaticCustomPrintDocument = (root: ParentNode = document)
           ? buildSmartPrintPageRanges({ totalHeight, pageBodyStepPx, anchors })
           : [{ start: 0, end: Math.min(totalHeight, pageBodyStepPx) }];
       })();
+  const measuredContentHeightPx = Math.max(firstInner.scrollHeight, firstInner.offsetHeight, firstInner.clientHeight, 1);
   // Rebuild from the synchronized first page. The existing DOM can contain
   // stale preview page counts or dimensions, which must never seed final output.
   existingPages.forEach((page) => page.remove());
@@ -715,11 +721,13 @@ export const repaginateStaticCustomPrintDocument = (root: ParentNode = document)
     materializedFragments.forEach((fragmentUnits, pageIndex) => {
       const page = pageTemplate.cloneNode(true) as HTMLElement;
       const footer = page.querySelector<HTMLElement>(FOOTER_SELECTOR);
+      const signatures = page.querySelector<HTMLElement>('.print-template-signatures');
       const counter = page.querySelector<HTMLElement>(PAGE_COUNTER_SELECTOR);
       const fragment = buildPrintFragment(page.ownerDocument, fragmentUnits);
 
       if (!applyMaterializedBodyFragment({ page, fragment, bodyHeightPx })) return;
       if (footer) footer.style.marginTop = 'auto';
+      if (signatures && pageIndex < materializedFragments.length - 1) signatures.style.display = 'none';
       if (counter) {
         counter.textContent = `صفحه ${toPersianNumber(pageIndex + 1)} از ${toPersianNumber(materializedFragments.length)}`;
       }
@@ -736,14 +744,19 @@ export const repaginateStaticCustomPrintDocument = (root: ParentNode = document)
     const viewport = page.querySelector<HTMLElement>(BODY_VIEWPORT_SELECTOR);
     const segment = page.querySelector<HTMLElement>(BODY_SEGMENT_SELECTOR);
     const footer = page.querySelector<HTMLElement>('.print-template-footer');
+    const signatures = page.querySelector<HTMLElement>('.print-template-signatures');
     const counter = page.querySelector<HTMLElement>(PAGE_COUNTER_SELECTOR);
     const viewportHeightPx = getPrintBodyViewportHeightPx(
       bodyHeightPx,
       Math.max(1, Math.ceil(range.end - range.start)),
     );
+    const isFinalPage = pageIndex === pageRanges.length - 1;
+    const renderedBodyHeightPx = isFinalPage
+      ? getFinalStaticBodyHeight(bodyHeightPx, range.start, measuredContentHeightPx)
+      : bodyHeightPx;
 
     if (viewport) {
-      const viewportHeight = `${viewportHeightPx}px`;
+      const viewportHeight = `${Math.min(viewportHeightPx, renderedBodyHeightPx)}px`;
       viewport.style.flex = `0 0 ${viewportHeight}`;
       viewport.style.height = viewportHeight;
       viewport.style.minHeight = '0';
@@ -758,6 +771,7 @@ export const repaginateStaticCustomPrintDocument = (root: ParentNode = document)
       // area is measured above, so this cannot erase a final text line.
       footer.style.marginTop = 'auto';
     }
+    if (signatures && !isFinalPage) signatures.style.display = 'none';
     if (counter) {
       counter.textContent = `صفحه ${toPersianNumber(pageIndex + 1)} از ${toPersianNumber(pageRanges.length)}`;
     }
