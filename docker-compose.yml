@@ -382,6 +382,7 @@ services:
       PUBLIC_SITE_URL: ${PUBLIC_SITE_URL}
       # Secrets used by provider adapters are encrypted before persistence.
       INSTAGRAM_SECRET_ENCRYPTION_KEY: ${INSTAGRAM_SECRET_ENCRYPTION_KEY}
+      INTEGRATION_SECRET_ENCRYPTION_KEY: ${INTEGRATION_SECRET_ENCRYPTION_KEY:-}
       # Must be the externally reachable API origin, never the internal functions:9000 host.
       INSTAGRAM_WEBHOOK_PUBLIC_BASE_URL: ${INSTAGRAM_WEBHOOK_PUBLIC_BASE_URL}
       ZARINPAL_MERCHANT_ID: ${ZARINPAL_MERCHANT_ID}

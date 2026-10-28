@@ -331,7 +331,7 @@ const ApiTokensSection: React.FC<ApiTokensSectionProps> = ({ orgId }) => {
 
 // ─── Webhooks Sub-Section ────────────────────────────────────────────────────
 
-const WebhooksSection: React.FC = () => {
+const WebhooksSection: React.FC<{ orgId: string | null }> = ({ orgId }) => {
   const { message } = AntdApp.useApp();
   const [webhooks, setWebhooks] = useState<OrgWebhook[]>([]);
   const [loading, setLoading] = useState(false);
@@ -341,11 +341,13 @@ const WebhooksSection: React.FC = () => {
   const [form] = Form.useForm();
 
   const load = useCallback(async () => {
+    if (!orgId) { setWebhooks([]); return; }
     setLoading(true);
     try {
       const { data, error } = await supabase
         .from('org_webhooks')
         .select('*')
+        .eq('org_id', orgId)
         .order('created_at', { ascending: false });
       if (error) throw error;
       setWebhooks(data ?? []);
@@ -354,7 +356,7 @@ const WebhooksSection: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [message]);
+  }, [message, orgId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -365,10 +367,12 @@ const WebhooksSection: React.FC = () => {
   };
 
   const handleSave = async () => {
+    if (!orgId) { message.error('سازمان جاری مشخص نیست.'); return; }
     try {
       const values = await form.validateFields();
       setSaving(true);
       const { error } = await supabase.from('org_webhooks').insert({
+        org_id: orgId,
         url: values.url,
         name: values.name || null,
         secret: values.secret,
@@ -393,7 +397,8 @@ const WebhooksSection: React.FC = () => {
       const { error } = await supabase
         .from('org_webhooks')
         .update({ is_active: !current })
-        .eq('id', id);
+        .eq('id', id)
+        .eq('org_id', orgId);
       if (error) throw error;
       setWebhooks(prev => prev.map(w => w.id === id ? { ...w, is_active: !current } : w));
     } catch (err: any) {
@@ -406,7 +411,8 @@ const WebhooksSection: React.FC = () => {
       const { error } = await supabase
         .from('org_webhooks')
         .delete()
-        .eq('id', id);
+        .eq('id', id)
+        .eq('org_id', orgId);
       if (error) throw error;
       setWebhooks(prev => prev.filter(w => w.id !== id));
       message.success('Webhook حذف شد');
@@ -627,7 +633,7 @@ const ApiIntegrationSection: React.FC<ApiIntegrationSectionProps> = ({ orgId }) 
 
     <ApiTokensSection orgId={orgId} />
     <Divider />
-    <WebhooksSection />
+    <WebhooksSection orgId={orgId} />
   </div>
 );
 

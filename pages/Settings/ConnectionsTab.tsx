@@ -27,6 +27,7 @@ import {
 } from '../../utils/taxpayerSystem';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import ApiIntegrationSection from '../../components/ApiIntegrationSection';
+import WooCommerceConnectionsSection from '../../components/settings/WooCommerceConnectionsSection';
 import InstagramProviderConnectionsSection from '../../components/settings/InstagramProviderConnectionsSection';
 import { SAAS_ADMIN_PERMISSION_KEY } from '../../utils/permissions';
 import { loadScopedCompanySettings } from '../../utils/companySettings';
@@ -2383,6 +2384,7 @@ const ConnectionsTab: React.FC = () => {
         </div>
       </Form>
       <ApiIntegrationSection orgId={currentOrgId} />
+      <WooCommerceConnectionsSection orgId={currentOrgId} />
     </div>
   );
 };
