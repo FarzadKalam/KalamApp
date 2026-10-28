@@ -4,7 +4,6 @@ import { ArrowLeftOutlined, CheckCircleOutlined, DownOutlined, UpOutlined } from
 import { supabase } from '../../../supabaseClient';
 import { sitePath, DEMO_URL } from '../siteLinks';
 import { SectionHeading } from '../primitives';
-import { SAAS_FEATURE_LABELS, SAAS_MODULE_LABELS } from '../../../utils/saasOfferingCatalog';
 
 type PublicPlan = {
   id: string;
@@ -21,8 +20,6 @@ type PublicPlan = {
   highlight_tag: string | null;
   custom_price_label: string | null;
   display_features: Array<string | { text: string; featured?: boolean | null }>;
-  enabled_modules?: Record<string, boolean>;
-  enabled_features?: Record<string, boolean | string>;
   trial_days: number;
 };
 
@@ -36,27 +33,6 @@ const parsePublicPlanFeatures = (raw: PublicPlan['display_features']): PublicPla
       return { text: String(item?.text ?? '').trim(), featured: Boolean(item?.featured) };
     })
     .filter((item) => item.text);
-};
-
-const getPlanFeatureLabels = (plan: PublicPlan): PublicPlanFeature[] => {
-  const capabilityFeatures = [
-    ...Object.entries(plan.enabled_modules || {})
-      .filter(([, enabled]) => enabled)
-      .map(([code]) => SAAS_MODULE_LABELS[code])
-      .filter(Boolean),
-    ...Object.entries(plan.enabled_features || {})
-      .filter(([code, enabled]) => Boolean(SAAS_FEATURE_LABELS[code]) && (enabled === true || enabled === 'limited'))
-      .map(([code, enabled]) => `${SAAS_FEATURE_LABELS[code]}${enabled === 'limited' ? ' محدود' : ''}`),
-  ];
-  const displayLabels = (plan.display_features || []).map((item) => typeof item === 'string' ? item : item?.text);
-  const merged = [...(plan.display_features || []), ...capabilityFeatures.filter((label) => !displayLabels.includes(label))];
-  const seen = new Set<string>();
-  return parsePublicPlanFeatures(merged).filter((item) => {
-    if (item.text.includes('کاربر')) return false;
-    if (seen.has(item.text)) return false;
-    seen.add(item.text);
-    return true;
-  });
 };
 
 const usePricingPlans = () => {
@@ -126,21 +102,13 @@ export const PricingSection: React.FC<{
             </div>
           ) : (
           <div className={`grid gap-5 ${plans.length === 2 ? 'lg:grid-cols-2' : 'lg:grid-cols-3'}`}>
-            {plans.map((plan, planIndex) => {
+            {plans.map((plan) => {
               const highlighted = !!plan.highlight_tag;
-              const inheritedFeatures = new Set(
-                plans.slice(0, planIndex).flatMap((parentPlan) => getPlanFeatureLabels(parentPlan).map((item) => item.text)),
-              );
-              const normalizedFeatures = getPlanFeatureLabels(plan).filter((item) => {
-                // A higher plan advertises the inheritance in one summary line;
-                // repeating every lower-plan item makes the card unreadable.
-                if (/^همه امکانات/.test(item.text)) return true;
-                return !inheritedFeatures.has(item.text);
-              });
+              const normalizedFeatures = parsePublicPlanFeatures(plan.display_features);
               const primaryFeatures = normalizedFeatures.filter((item) => item.featured);
               const extraFeatures = normalizedFeatures.filter((item) => !item.featured);
               const expanded = expandedPlanIds.has(plan.id);
-              const features = expanded ? [...primaryFeatures, ...extraFeatures] : primaryFeatures;
+              const features = expanded ? normalizedFeatures : primaryFeatures;
               return (
                 <div
                   key={plan.id}

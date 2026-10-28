@@ -719,6 +719,9 @@ const SaasAdminPlans: React.FC = () => {
                   </span>
                 }
               >
+                <div className="mb-2 text-xs text-slate-500">
+                  فقط همین متن‌ها در کارت‌های تعرفهٔ سایت نمایش داده می‌شوند؛ ماژول‌ها و ویژگی‌های فعال، دسترسی واقعی پلن را جداگانه تعیین می‌کنند.
+                </div>
                 <div className="space-y-1.5">
                   {displayFeatures.map((f, idx) => (
                     <div
