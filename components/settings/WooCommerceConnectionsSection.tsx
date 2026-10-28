@@ -3,7 +3,6 @@ import { Alert, App, Button, Card, Form, Input, Modal, Space, Switch, Table, Tag
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
-import { hasCurrentOrgPlanFeature, WORDPRESS_CONNECTION_PLAN_FEATURE } from '../../utils/saasPlanFeatures';
 import WooCommerceSyncModal from './WooCommerceSyncModal';
 
 type WooConnection = {
@@ -32,6 +31,7 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
   const [selected, setSelected] = useState<WooConnection | null>(null);
   const [syncConnection, setSyncConnection] = useState<WooConnection | null>(null);
   const [featureAllowed, setFeatureAllowed] = useState<boolean | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState<WooConnection | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -42,7 +42,13 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
     const { data, error } = await supabase.functions.invoke('external-connectors', {
       body: { ...body, orgId },
     });
-    if (error) throw error;
+    if (error) {
+      let payload: { error?: string; message?: string } | null = null;
+      try { payload = await error.context?.json(); } catch { /* پاسخ غیر JSON */ }
+      const requestError = new Error(payload?.message || 'ارتباط با سرویس اتصال ناموفق بود.') as Error & { code?: string };
+      requestError.code = payload?.error;
+      throw requestError;
+    }
     if (data?.error) throw new Error(String(data.message || 'عملیات اتصال ناموفق بود.'));
     return data;
   }, [orgId]);
@@ -53,22 +59,27 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
     try {
       const data = await call({ action: 'list' });
       setConnections(data.connections || []);
+      setFeatureAllowed(true);
+      setLoadError(null);
     } catch (error) {
-      message.error(toFaErrorMessage(error, 'بارگذاری اتصال‌های فروشگاه ناموفق بود.'));
+      if ((error as { code?: string })?.code === 'plan_feature_disabled') {
+        setFeatureAllowed(false);
+        setLoadError(null);
+      } else {
+        setFeatureAllowed(null);
+        setLoadError(toFaErrorMessage(error, 'بارگذاری اتصال‌های فروشگاه ناموفق بود.'));
+      }
     } finally {
       setLoading(false);
     }
-  }, [call, message, orgId]);
+  }, [call, orgId]);
 
   useEffect(() => {
-    let active = true;
-    if (!orgId) { setFeatureAllowed(false); return; }
-    void hasCurrentOrgPlanFeature(WORDPRESS_CONNECTION_PLAN_FEATURE).then((allowed) => {
-      if (active) setFeatureAllowed(allowed);
-    });
-    return () => { active = false; };
-  }, [orgId]);
-  useEffect(() => { if (featureAllowed) void load(); }, [load, featureAllowed]);
+    setFeatureAllowed(null);
+    setLoadError(null);
+    setConnections([]);
+    if (orgId) void load();
+  }, [load, orgId]);
 
   const openForm = (connection: WooConnection | null) => {
     setEditing(connection);
@@ -150,12 +161,17 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
 
   if (featureAllowed === false) return <Alert className="mt-6" type="info" showIcon
     message="اتصال به وردپرس و ووکامرس در پلن این سازمان فعال نیست."
-    description="این ویژگی از پلن رشد در دسترس است و مدیر سازمان می‌تواند آن را از صفحه حساب بررسی کند." />;
+    description="این ویژگی از پلن رشد در دسترس است و مدیر سازمان می‌تواند آن را از صفحه حساب بررسی کند."
+    action={<Button size="small" onClick={() => void load()}>بررسی دوباره</Button>} />;
 
-  return <Card className="mt-6" loading={featureAllowed === null} title="اتصال فروشگاه‌های ووکامرس" extra={
+  if (loadError) return <Alert className="mt-6" type="error" showIcon
+    message="وضعیت اتصال فروشگاه بارگذاری نشد" description={loadError}
+    action={<Button size="small" onClick={() => void load()}>تلاش دوباره</Button>} />;
+
+  return <Card className="mt-6" loading={loading || (featureAllowed === null && !!orgId)} title="اتصال فروشگاه‌های ووکامرس" extra={
     <Space>
       <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}>بازخوانی</Button>
-      <Button type="primary" icon={<PlusOutlined />} onClick={() => openForm(null)} disabled={!orgId}>افزودن فروشگاه</Button>
+      <Button type="primary" icon={<PlusOutlined />} onClick={() => openForm(null)} disabled={!orgId || featureAllowed !== true}>افزودن فروشگاه</Button>
     </Space>
   }>
     <Alert showIcon type="info" className="mb-4" message="همگام‌سازی فروشگاه"

@@ -13,6 +13,7 @@ const trim = (value: unknown) => String(value ?? '').trim();
 const supabaseUrl = trim(Deno.env.get('SUPABASE_URL')).replace(/\/+$/, '');
 const serviceKey = trim(Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'));
 const client = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+const planFeatureDisabledMessage = 'اتصال به وردپرس در پلن این سازمان فعال نیست.';
 
 const cipherKey = async () => {
   const secret = trim(Deno.env.get('INTEGRATION_SECRET_ENCRYPTION_KEY')) || trim(Deno.env.get('INSTAGRAM_SECRET_ENCRYPTION_KEY'));
@@ -60,7 +61,8 @@ const requireUserOrg = async (req: Request, orgId: string, write: boolean) => {
   const { data: featureAllowed, error: featureError } = await client.rpc('org_has_plan_feature', {
     p_org_id: orgId, p_feature_key: 'wordpress_connection', p_default_enabled: false,
   });
-  if (featureError || featureAllowed !== true) throw new Error('اتصال به وردپرس در پلن این سازمان فعال نیست.');
+  if (featureError) throw featureError;
+  if (featureAllowed !== true) throw new Error(planFeatureDisabledMessage);
   if (write) {
     const { data: settings, error: settingsError } = await client.from('saas_org_settings')
       .select('is_readonly').eq('org_id', orgId).maybeSingle();
@@ -669,6 +671,8 @@ Deno.serve(async (req: Request) => {
     return reply(400, { error: 'unknown_action' });
   } catch (error) {
     console.error('external-connectors:', error instanceof Error ? error.message : 'unknown');
-    return reply(400, { error: 'request_failed', message: error instanceof Error ? error.message : 'درخواست ناموفق بود.' });
+    const message = error instanceof Error ? error.message : 'درخواست ناموفق بود.';
+    if (message === planFeatureDisabledMessage) return reply(403, { error: 'plan_feature_disabled', message });
+    return reply(400, { error: 'request_failed', message });
   }
 });
