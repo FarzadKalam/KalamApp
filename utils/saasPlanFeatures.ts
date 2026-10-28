@@ -7,6 +7,7 @@ export const CONTENT_CALENDAR_PLAN_FEATURE = 'content_calendar';
 export const RETAIL_SALES_INVOICE_PLAN_FEATURE = 'retail_sales_invoice';
 export const QR_SCAN_PLAN_FEATURE = 'qr_scan';
 export const RESERVATIONS_PLAN_FEATURE = 'reservations';
+export const WORDPRESS_CONNECTION_PLAN_FEATURE = 'wordpress_connection';
 
 export const hasContentCalendarFeature = (options?: { force?: boolean }) =>
   hasCurrentOrgPlanFeature(CONTENT_CALENDAR_PLAN_FEATURE, {

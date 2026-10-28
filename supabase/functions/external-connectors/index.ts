@@ -57,6 +57,16 @@ const requireUserOrg = async (req: Request, orgId: string, write: boolean) => {
     .select('role_id, software_role, is_owner')
     .eq('org_id', orgId).eq('user_id', auth.user.id).eq('is_active', true).maybeSingle();
   if (membershipError || !membership) throw new Error('دسترسی به سازمان وجود ندارد.');
+  const { data: featureAllowed, error: featureError } = await client.rpc('org_has_plan_feature', {
+    p_org_id: orgId, p_feature_key: 'wordpress_connection', p_default_enabled: false,
+  });
+  if (featureError || featureAllowed !== true) throw new Error('اتصال به وردپرس در پلن این سازمان فعال نیست.');
+  if (write) {
+    const { data: settings, error: settingsError } = await client.from('saas_org_settings')
+      .select('is_readonly').eq('org_id', orgId).maybeSingle();
+    if (settingsError) throw settingsError;
+    if (settings?.is_readonly === true) throw new Error('حساب سازمان در حالت فقط‌خواندنی است.');
+  }
   if (membership.is_owner === true) return orgId;
   const roleName = trim(membership.software_role).toLowerCase();
   if (!['super_admin', 'admin', 'manager'].includes(roleName)) throw new Error('اجازهٔ مدیریت اتصال‌ها را ندارید.');
@@ -76,6 +86,7 @@ const safeConnection = (row: any) => ({
   id: row.id, name: row.name, base_url: row.base_url, provider: row.provider,
   is_active: row.is_active, webhook_key: row.webhook_key,
   last_checked_at: row.last_checked_at, last_check_status: row.last_check_status,
+  sync_policy: row.sync_policy || { products: 'manual', customers: 'manual', invoices: 'manual' },
 });
 
 const getConnection = async (orgId: string, id: string) => {
@@ -102,6 +113,333 @@ const wooGet = async (connection: any, path: string) => {
   return data;
 };
 
+type SyncModule = 'products' | 'customers' | 'invoices';
+const syncModules: Record<SyncModule, { woo: string; local: string; fields: string }> = {
+  products: { woo: 'products', local: 'products', fields: 'id,name,system_code,manual_code,product_type,updated_at' },
+  customers: { woo: 'customers', local: 'customers', fields: 'id,full_name,email,mobile_1,system_code,updated_at' },
+  invoices: { woo: 'orders', local: 'invoices', fields: 'id,name,system_code,sale_source,updated_at' },
+};
+const parseModule = (value: unknown): SyncModule => {
+  if (value === 'products' || value === 'customers' || value === 'invoices') return value;
+  throw new Error('نوع اطلاعات برای همگام‌سازی معتبر نیست.');
+};
+const syncPolicy = (value: unknown) => {
+  const source = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const result: Record<SyncModule, string> = { products: 'manual', customers: 'manual', invoices: 'manual' };
+  for (const module of Object.keys(result) as SyncModule[]) {
+    const policy = trim(source[module]);
+    if (!['manual', 'taze', 'woocommerce'].includes(policy)) throw new Error('مرجع همگام‌سازی معتبر نیست.');
+    result[module] = policy;
+  }
+  return result;
+};
+const wooRequest = async (connection: any, method: 'GET' | 'POST' | 'PUT', path: string, payload?: unknown) => {
+  const credentials = JSON.parse(await decrypt(connection.credentials_encrypted));
+  const response = await fetch(`${connection.base_url}/wp-json/wc/v3/${path}`, {
+    method, headers: { Authorization: `Basic ${btoa(`${credentials.consumerKey}:${credentials.consumerSecret}`)}`,
+      Accept: 'application/json', ...(payload ? { 'Content-Type': 'application/json' } : {}) },
+    body: payload ? JSON.stringify(payload) : undefined, redirect: 'error', signal: AbortSignal.timeout(20000),
+  });
+  if (!response.ok) throw new Error(`فروشگاه درخواست همگام‌سازی را نپذیرفت (وضعیت ${response.status}).`);
+  return response.json();
+};
+const previewRecords = async (connection: any, module: SyncModule, scope: 'site' | 'system', page: number) => {
+  const config = syncModules[module];
+  const limit = 25;
+  if (scope === 'site') {
+    const remote = await wooGet(connection, `${config.woo}?per_page=${limit}&page=${page}&orderby=modified&order=desc`);
+    const externalIds = remote.map((item: any) => trim(item.id));
+    const { data: links, error: linksError } = await client.from('external_record_links')
+      .select('local_id,external_id').eq('org_id', connection.org_id).eq('connection_id', connection.id)
+      .eq('module_key', module).in('external_id', externalIds.length ? externalIds : ['-1']);
+    if (linksError) throw linksError;
+    const localIds = (links || []).map((item: any) => item.local_id);
+    const { data: local, error: localError } = await client.from(config.local).select(config.fields)
+      .eq('org_id', connection.org_id).in('id', localIds.length ? localIds : ['00000000-0000-0000-0000-000000000000']);
+    if (localError) throw localError;
+    const linkByExternal = new Map((links || []).map((item: any) => [item.external_id, item.local_id]));
+    const localById = new Map((local || []).map((item: any) => [item.id, item]));
+    const codes = remote.map((item: any) => trim(module === 'products' ? item.sku : item.email))
+      .filter(Boolean).slice(0, limit);
+    let candidates: any[] = [];
+    if (codes.length && module === 'products') {
+      const [byManual, bySystem] = await Promise.all([
+        client.from('products').select('id,name,manual_code,system_code').eq('org_id', connection.org_id).in('manual_code', codes),
+        client.from('products').select('id,name,manual_code,system_code').eq('org_id', connection.org_id).in('system_code', codes),
+      ]);
+      if (byManual.error || bySystem.error) throw byManual.error || bySystem.error;
+      candidates = [...(byManual.data || []), ...(bySystem.data || [])];
+    } else if (codes.length && module === 'customers') {
+      const result = await client.from('customers').select('id,full_name,email').eq('org_id', connection.org_id).in('email', codes);
+      if (result.error) throw result.error;
+      candidates = result.data || [];
+    }
+    return remote.map((item: any) => {
+      const externalId = trim(item.id);
+      const linked = localById.get(linkByExternal.get(externalId));
+      const code = trim(module === 'products' ? item.sku : item.email).toLowerCase();
+      const matching = candidates.filter((candidate) => module === 'products'
+        ? [candidate.manual_code, candidate.system_code].some((value) => trim(value).toLowerCase() === code)
+        : trim(candidate.email).toLowerCase() === code);
+      const candidate = !linked && code && matching.length === 1 ? matching[0] : null;
+      return { key: `site:${externalId}`, externalId, localId: linked?.id || null,
+        candidateId: candidate?.id || null, candidateName: candidate ? trim(candidate.name || candidate.full_name) : null,
+        siteName: trim(item.name || item.number || [item.first_name, item.last_name].filter(Boolean).join(' ')) || `شماره ${externalId}`,
+        systemName: linked ? trim(linked.name || linked.full_name || linked.system_code) : null,
+        siteCode: trim(item.sku || item.number || item.email || ''),
+        status: linked ? 'linked' : candidate ? 'candidate' : 'site_only', remoteType: trim(item.type || ''),
+        siteUpdatedAt: trim(item.date_modified_gmt || ''), systemUpdatedAt: linked?.updated_at || null,
+      };
+    });
+  }
+  const from = (page - 1) * limit;
+  const { data: local, error: localError } = await client.from(config.local).select(config.fields)
+    .eq('org_id', connection.org_id).order('updated_at', { ascending: false }).range(from, from + limit - 1);
+  if (localError) throw localError;
+  const localIds = (local || []).map((item: any) => item.id);
+  const { data: links, error: linksError } = await client.from('external_record_links')
+    .select('local_id,external_id').eq('org_id', connection.org_id).eq('connection_id', connection.id)
+    .eq('module_key', module).in('local_id', localIds.length ? localIds : ['00000000-0000-0000-0000-000000000000']);
+  if (linksError) throw linksError;
+  const linkByLocal = new Map((links || []).map((item: any) => [item.local_id, item.external_id]));
+  return (local || []).map((item: any) => ({ key: `system:${item.id}`, localId: item.id,
+    externalId: linkByLocal.get(item.id) || null,
+    systemName: trim(item.name || item.full_name || item.system_code) || 'بدون عنوان',
+    siteName: null, siteCode: trim(item.manual_code || item.system_code || item.email || ''),
+    status: linkByLocal.has(item.id) ? 'linked' : 'system_only',
+    systemUpdatedAt: item.updated_at || null,
+  }));
+};
+
+const moneyFactor = async (connection: any) => {
+  const { data: company, error } = await client.from('company_settings').select('currency_code')
+    .eq('org_id', connection.org_id).maybeSingle();
+  if (error) throw error;
+  const settings = await wooGet(connection, 'settings/general');
+  const wooCurrency = trim(settings.find((entry: any) => entry.id === 'woocommerce_currency')?.value).toUpperCase();
+  const localCurrency = trim(company?.currency_code || 'IRT').toUpperCase();
+  if (!['IRR', 'IRT'].includes(wooCurrency) || !['IRR', 'IRT'].includes(localCurrency)) {
+    throw new Error('واحد پول فروشگاه و سازمان باید ریال یا تومان باشد.');
+  }
+  return wooCurrency === localCurrency ? 1 : wooCurrency === 'IRR' ? 0.1 : 10;
+};
+const persistLink = async (connection: any, module: SyncModule, localId: string, externalId: string) => {
+  const { error } = await client.from('external_record_links').insert({
+    org_id: connection.org_id, connection_id: connection.id, module_key: module,
+    local_id: localId, external_id: externalId, synced_at: new Date().toISOString(),
+  });
+  if (error) {
+    if (error.code !== '23505') throw error;
+    const { data: existing, error: lookupError } = await client.from('external_record_links')
+      .select('local_id,external_id').eq('connection_id', connection.id).eq('org_id', connection.org_id)
+      .eq('module_key', module).eq('external_id', externalId).maybeSingle();
+    if (lookupError || existing?.local_id !== localId) throw new Error('این رکورد قبلاً به رکورد دیگری متصل شده است.');
+  }
+};
+const linkMatchingRecord = async (connection: any, module: SyncModule, localId: string, externalId: string) => {
+  if (module === 'invoices' || !/^[0-9a-f-]{36}$/i.test(localId) || !/^\d+$/.test(externalId)) {
+    throw new Error('رکوردهای انتخاب‌شده معتبر نیستند.');
+  }
+  const remote = await wooRequest(connection, 'GET', `${syncModules[module].woo}/${externalId}`);
+  const { data: local, error } = await client.from(syncModules[module].local).select('*')
+    .eq('org_id', connection.org_id).eq('id', localId).maybeSingle();
+  if (error || !local) throw new Error('رکورد تازه سیستم پیدا نشد.');
+  const same = module === 'products'
+    ? Boolean(trim(remote.sku)) && [local.manual_code, local.system_code].some((code) => trim(code).toLowerCase() === trim(remote.sku).toLowerCase())
+    : Boolean(trim(remote.email)) && trim(remote.email).toLowerCase() === trim(local.email).toLowerCase();
+  if (!same) throw new Error('کد کالا یا ایمیل مشتری در دو طرف یکسان نیست.');
+  await persistLink(connection, module, localId, externalId);
+};
+const exportInvoice = async (connection: any, localId: string) => {
+  if (!/^[0-9a-f-]{36}$/i.test(localId)) throw new Error('فاکتور مشخص نیست.');
+  const { data: invoice, error } = await client.from('invoices')
+    .select('id,name,status,system_code,customer_id,invoiceItems,total_invoice_amount,total_received_amount,shipping_amount,invoice_discount_amount')
+    .eq('org_id', connection.org_id).eq('id', localId).maybeSingle();
+  if (error || !invoice) throw new Error('فاکتور در این سازمان پیدا نشد.');
+  const { data: existing, error: existingError } = await client.from('external_record_links')
+    .select('external_id').eq('org_id', connection.org_id).eq('connection_id', connection.id)
+    .eq('module_key', 'invoices').eq('local_id', localId).maybeSingle();
+  if (existingError) throw existingError;
+  if (existing) throw new Error('این فاکتور قبلاً به سفارش فروشگاه متصل شده است.');
+  if (!trim(invoice.system_code)) throw new Error('برای ارسال امن فاکتور، کد سیستمی آن باید ثبت شده باشد.');
+  const recentOrders = await wooGet(connection, 'orders?per_page=50&orderby=date&order=desc');
+  const matchingOrder = recentOrders.find((order: any) => Array.isArray(order.meta_data)
+    && order.meta_data.some((entry: any) => entry.key === '_tazesystem_invoice_code'
+      && trim(entry.value) === trim(invoice.system_code)));
+  if (matchingOrder) {
+    await persistLink(connection, 'invoices', localId, trim(matchingOrder.id));
+    return { localId, externalId: trim(matchingOrder.id), warning: null };
+  }
+  if (['canceled', 'settled', 'completed'].includes(trim(invoice.status)) || Number(invoice.total_received_amount || 0) > 0) {
+    throw new Error('فاکتور لغوشده یا دارای دریافت مالی برای ایجاد سفارش تازه مناسب نیست.');
+  }
+  if (Number(invoice.invoice_discount_amount || 0) !== 0) {
+    throw new Error('برای ارسال این فاکتور، تخفیف کلی باید ابتدا در فروشگاه نگاشت شود.');
+  }
+  const items = Array.isArray(invoice.invoiceItems) ? invoice.invoiceItems : [];
+  if (!items.length) throw new Error('فاکتور قلمی برای ارسال ندارد.');
+  const factor = await moneyFactor(connection);
+  const productIds = [...new Set(items.map((item: any) => trim(item.product_id)).filter(Boolean))];
+  if (!productIds.length) throw new Error('ابتدا کالاهای فاکتور را به فروشگاه متصل کنید.');
+  const { data: productLinks, error: linksError } = await client.from('external_record_links')
+    .select('local_id,external_id').eq('org_id', connection.org_id).eq('connection_id', connection.id)
+    .eq('module_key', 'products').in('local_id', productIds);
+  if (linksError) throw linksError;
+  const productMap = new Map((productLinks || []).map((item: any) => [item.local_id, item.external_id]));
+  let expected = Number(invoice.shipping_amount || 0);
+  const lineItems = items.map((item: any) => {
+    const productId = trim(productMap.get(trim(item.product_id)));
+    const quantity = Number(item.quantity);
+    const total = Number(item.total_price || 0);
+    if (!/^\d+$/.test(productId)) throw new Error('ابتدا همهٔ کالاهای فاکتور را به فروشگاه متصل کنید.');
+    if (!Number.isInteger(quantity) || quantity <= 0) throw new Error('تعداد اقلام باید عدد صحیح مثبت باشد.');
+    if (!Number.isFinite(total) || total < 0 || Number(item.vat || 0) !== 0) {
+      throw new Error('فاکتور دارای مالیات یا مبلغ نامعتبر است؛ ارسال آن نیاز به نگاشت مالیاتی دارد.');
+    }
+    expected += total;
+    return { product_id: Number(productId), quantity,
+      subtotal: String(Math.round(total / factor * 100) / 100), total: String(Math.round(total / factor * 100) / 100) };
+  });
+  if (Math.abs(expected - Number(invoice.total_invoice_amount || 0)) > 1) {
+    throw new Error('جمع اقلام و هزینهٔ ارسال با مبلغ فاکتور برابر نیست.');
+  }
+  let customer: any = null;
+  let customerExternal = '';
+  if (invoice.customer_id) {
+    const [customerResult, customerLinkResult] = await Promise.all([
+      client.from('customers').select('full_name,first_name,last_name,email,mobile_1,address,city,postal_code')
+        .eq('org_id', connection.org_id).eq('id', invoice.customer_id).maybeSingle(),
+      client.from('external_record_links').select('external_id').eq('org_id', connection.org_id)
+        .eq('connection_id', connection.id).eq('module_key', 'customers').eq('local_id', invoice.customer_id).maybeSingle(),
+    ]);
+    if (customerResult.error || customerLinkResult.error) throw customerResult.error || customerLinkResult.error;
+    customer = customerResult.data;
+    customerExternal = trim(customerLinkResult.data?.external_id);
+  }
+  const payload = { status: 'pending', set_paid: false,
+    ...(customerExternal ? { customer_id: Number(customerExternal) } : {}),
+    billing: { first_name: trim(customer?.first_name || customer?.full_name), last_name: trim(customer?.last_name),
+      email: trim(customer?.email), phone: trim(customer?.mobile_1), address_1: trim(customer?.address),
+      city: trim(customer?.city), postcode: trim(customer?.postal_code) },
+    line_items: lineItems,
+    ...(Number(invoice.shipping_amount || 0) > 0 ? { shipping_lines: [{ method_title: 'ارسال', method_id: 'flat_rate',
+      total: String(Math.round(Number(invoice.shipping_amount) / factor * 100) / 100) }] } : {}),
+    meta_data: [{ key: '_tazesystem_invoice_code', value: trim(invoice.system_code) }],
+  };
+  const remote = await wooRequest(connection, 'POST', 'orders', payload);
+  const externalId = trim(remote.id);
+  if (!/^\d+$/.test(externalId)) throw new Error('سفارش ساخته شد ولی شناسهٔ معتبری از فروشگاه دریافت نشد.');
+  await persistLink(connection, 'invoices', localId, externalId);
+  const remoteTotal = Number(remote.total || 0) * factor;
+  return { externalId, localId, warning: Math.abs(remoteTotal - Number(invoice.total_invoice_amount || 0)) > 1
+    ? 'مبلغ سفارش ساخته‌شده با فاکتور برابر نیست؛ آن را در فروشگاه بررسی کنید.' : null };
+};
+const syncRecord = async (connection: any, module: SyncModule, direction: 'from_site' | 'to_site', localId: string, externalId: string) => {
+  if (module === 'invoices') {
+    if (direction !== 'to_site') throw new Error('دریافت فاکتور از مسیر سفارش‌های فروشگاه انجام می‌شود.');
+    return exportInvoice(connection, localId);
+  }
+  if (direction === 'from_site') {
+    if (!/^\d+$/.test(externalId)) throw new Error('شناسهٔ رکورد فروشگاه معتبر نیست.');
+    const remote = await wooRequest(connection, 'GET', `${syncModules[module].woo}/${externalId}`);
+    const { data: link, error: linkError } = await client.from('external_record_links').select('local_id')
+      .eq('connection_id', connection.id).eq('org_id', connection.org_id)
+      .eq('module_key', module).eq('external_id', externalId).maybeSingle();
+    if (linkError) throw linkError;
+    let targetId = trim(link?.local_id);
+    if (targetId && connection.sync_policy?.[module] === 'taze') {
+      throw new Error('مرجع این بخش تازه سیستم است؛ ابتدا مرجع اتصال را تغییر دهید.');
+    }
+    if (targetId) {
+      const { data: target, error } = await client.from(syncModules[module].local).select('id')
+        .eq('org_id', connection.org_id).eq('id', targetId).maybeSingle();
+      if (error || !target) throw new Error('رکورد مقصد در این سازمان پیدا نشد.');
+    } else if (module === 'products' && trim(remote.sku)) {
+      const [manual, system] = await Promise.all([
+        client.from('products').select('id').eq('org_id', connection.org_id).eq('manual_code', trim(remote.sku)).limit(1),
+        client.from('products').select('id').eq('org_id', connection.org_id).eq('system_code', trim(remote.sku)).limit(1),
+      ]);
+      if (manual.error || system.error) throw manual.error || system.error;
+      if (manual.data?.length || system.data?.length) throw new Error('کالایی با همین کد وجود دارد؛ ابتدا آن را به فروشگاه متصل کنید.');
+    } else if (module === 'customers' && trim(remote.email)) {
+      const { data, error } = await client.from('customers').select('id')
+        .eq('org_id', connection.org_id).ilike('email', trim(remote.email)).limit(1);
+      if (error) throw error;
+      if (data?.length) throw new Error('مشتری با همین ایمیل وجود دارد؛ ابتدا آن را به فروشگاه متصل کنید.');
+    }
+    if (module === 'products') {
+      if (remote.type !== 'simple') throw new Error('فعلاً تنها کالای سادهٔ ووکامرس قابل دریافت است.');
+      const factor = await moneyFactor(connection);
+      const values = { org_id: connection.org_id, name: trim(remote.name),
+        manual_code: trim(remote.sku) || null, product_type: remote.virtual === true ? 'service' : 'goods',
+        sell_price: Number(remote.price || remote.regular_price || 0) * factor,
+        description: trim(remote.description || remote.short_description) || null,
+        image_url: trim(remote.images?.[0]?.src) || null,
+        status: remote.status === 'publish' ? 'active' : 'inactive',
+      };
+      if (targetId) {
+        const { error } = await client.from('products').update(values).eq('id', targetId).eq('org_id', connection.org_id);
+        if (error) throw error;
+      } else {
+        const { data, error } = await client.from('products').insert(values).select('id').single();
+        if (error) throw error;
+        targetId = data.id;
+      }
+    } else {
+      const fullName = [trim(remote.first_name), trim(remote.last_name)].filter(Boolean).join(' ') || trim(remote.billing?.company) || 'مشتری فروشگاه';
+      const values = { org_id: connection.org_id, full_name: fullName,
+        first_name: trim(remote.first_name) || null, last_name: trim(remote.last_name) || null,
+        email: trim(remote.email) || null, mobile_1: trim(remote.billing?.phone) || null,
+        address: trim(remote.billing?.address_1) || null, city: trim(remote.billing?.city) || null,
+      };
+      if (targetId) {
+        const { error } = await client.from('customers').update(values).eq('id', targetId).eq('org_id', connection.org_id);
+        if (error) throw error;
+      } else {
+        const { data, error } = await client.from('customers').insert(values).select('id').single();
+        if (error) throw error;
+        targetId = data.id;
+      }
+    }
+    await persistLink(connection, module, targetId, externalId);
+    return { localId: targetId, externalId };
+  }
+  if (!/^[0-9a-f-]{36}$/i.test(localId)) throw new Error('رکورد تازه سیستم مشخص نیست.');
+  const { data: local, error: localError } = await client.from(syncModules[module].local).select('*')
+    .eq('org_id', connection.org_id).eq('id', localId).maybeSingle();
+  if (localError || !local) throw new Error('رکورد تازه سیستم پیدا نشد.');
+  const { data: link, error: linkError } = await client.from('external_record_links').select('external_id')
+    .eq('connection_id', connection.id).eq('org_id', connection.org_id)
+    .eq('module_key', module).eq('local_id', localId).maybeSingle();
+  if (linkError) throw linkError;
+  const targetExternal = trim(link?.external_id);
+  if (targetExternal && connection.sync_policy?.[module] === 'woocommerce') {
+    throw new Error('مرجع این بخش فروشگاه است؛ ابتدا مرجع اتصال را تغییر دهید.');
+  }
+  let payload: Record<string, unknown>;
+  if (module === 'products') {
+    const factor = await moneyFactor(connection);
+    payload = { name: trim(local.name), sku: trim(local.manual_code || local.system_code),
+      type: 'simple', virtual: local.product_type === 'service',
+      regular_price: String(Math.round(Number(local.sell_price || 0) / factor * 100) / 100),
+      description: trim(local.description), status: local.status === 'active' ? 'publish' : 'draft',
+      ...(local.product_type === 'service' ? {} : { manage_stock: true, stock_quantity: Math.max(0, Math.floor(Number(local.stock || 0))) }),
+      ...(trim(local.image_url) ? { images: [{ src: trim(local.image_url) }] } : {}),
+    };
+  } else {
+    if (!trim(local.email)) throw new Error('برای ارسال مشتری به ووکامرس، ایمیل او لازم است.');
+    payload = { email: trim(local.email), first_name: trim(local.first_name) || trim(local.full_name),
+      last_name: trim(local.last_name), billing: { phone: trim(local.mobile_1),
+        address_1: trim(local.address), city: trim(local.city) } };
+  }
+  const remote = await wooRequest(connection, targetExternal ? 'PUT' : 'POST',
+    `${syncModules[module].woo}${targetExternal ? `/${targetExternal}` : ''}`, payload);
+  const nextExternal = trim(remote.id);
+  if (!/^\d+$/.test(nextExternal)) throw new Error('پاسخ فروشگاه شناسهٔ معتبر ندارد.');
+  await persistLink(connection, module, localId, nextExternal);
+  return { localId, externalId: nextExternal };
+};
+
 const storeOrder = async (connection: any, order: any) => {
   const externalId = trim(order?.id);
   if (!/^\d+$/.test(externalId)) throw new Error('شناسهٔ سفارش ووکامرس معتبر نیست.');
@@ -115,6 +453,14 @@ const storeOrder = async (connection: any, order: any) => {
     p_payload: order,
   });
   if (error) throw error;
+  const { error: importError } = await client.rpc('import_woocommerce_order', {
+    p_connection_id: connection.id, p_external_id: externalId,
+  });
+  if (importError) {
+    await client.from('external_order_inbox').update({ processing_status: 'error' })
+      .eq('connection_id', connection.id).eq('org_id', connection.org_id).eq('external_id', externalId);
+    throw new Error(`سفارش ${externalId} دریافت شد ولی تبدیل آن به فاکتور ناموفق بود: ${importError.message}`);
+  }
 };
 
 const verifyWooSignature = async (body: string, secret: string, received: string) => {
@@ -143,6 +489,13 @@ Deno.serve(async (req: Request) => {
       const { data: connection, error } = await client.from('external_connections').select('*')
         .eq('webhook_key', webhookKey).eq('provider', 'woocommerce').eq('is_active', true).maybeSingle();
       if (error || !connection) return reply(404, { error: 'connection_not_found' });
+      const { data: webhookAllowed } = await client.rpc('org_has_plan_feature', {
+        p_org_id: connection.org_id, p_feature_key: 'wordpress_connection', p_default_enabled: false,
+      });
+      if (webhookAllowed !== true) return reply(403, { error: 'plan_feature_disabled' });
+      const { data: webhookSettings } = await client.from('saas_org_settings').select('is_readonly')
+        .eq('org_id', connection.org_id).maybeSingle();
+      if (webhookSettings?.is_readonly === true) return reply(403, { error: 'org_readonly' });
       const signature = trim(req.headers.get('x-wc-webhook-signature'));
       if (!await verifyWooSignature(raw, await decrypt(connection.webhook_secret_encrypted), signature)) {
         return reply(401, { error: 'invalid_signature' });
@@ -157,7 +510,7 @@ Deno.serve(async (req: Request) => {
     const action = trim(body?.action);
     const orgId = trim(body?.orgId);
     if (!/^[0-9a-f-]{36}$/i.test(orgId)) return reply(400, { error: 'invalid_org' });
-    await requireUserOrg(req, orgId, !['list', 'list_orders'].includes(action));
+    await requireUserOrg(req, orgId, !['list', 'list_orders', 'preview_sync'].includes(action));
 
     if (action === 'list') {
       const { data, error } = await client.from('external_connections')
@@ -176,6 +529,7 @@ Deno.serve(async (req: Request) => {
         throw new Error('برای تغییر دسترسی، کلید و رمز ووکامرس را با هم وارد کنید.');
       }
       const webhookSecret = existing ? null : randomSecret();
+      const policy = existing?.sync_policy || { products: 'manual', customers: 'manual', invoices: 'manual' };
       const payload = {
         org_id: orgId, provider: 'woocommerce', name, base_url: baseUrl,
         credentials_encrypted: consumerKey && consumerSecret
@@ -184,13 +538,60 @@ Deno.serve(async (req: Request) => {
         webhook_secret_encrypted: webhookSecret
           ? await encrypt(webhookSecret) : existing.webhook_secret_encrypted,
         is_active: body.isActive === true,
+        sync_policy: policy,
         updated_at: new Date().toISOString(),
       };
       const { data, error } = existing
         ? await client.from('external_connections').update(payload).eq('id', existing.id).eq('org_id', orgId).select('*').single()
         : await client.from('external_connections').insert(payload).select('*').single();
       if (error) throw error;
+      const { error: optionError } = await client.from('dynamic_options').upsert({
+        org_id: orgId, category: 'sales_source', value: 'woocommerce',
+        label: 'فروشگاه وردپرسی', display_order: 100, is_active: true,
+      }, { onConflict: 'org_id,category,value' });
+      if (optionError) throw optionError;
       return reply(200, { connection: safeConnection(data), webhookSecret });
+    }
+    if (action === 'save_sync_policy') {
+      const connection = await getConnection(orgId, trim(body.id));
+      const policy = syncPolicy(body.policy);
+      const { data, error } = await client.from('external_connections')
+        .update({ sync_policy: policy, updated_at: new Date().toISOString() })
+        .eq('id', connection.id).eq('org_id', orgId).select('*').single();
+      if (error) throw error;
+      return reply(200, { connection: safeConnection(data) });
+    }
+    if (action === 'preview_sync') {
+      const connection = await getConnection(orgId, trim(body.id));
+      if (!connection.is_active) throw new Error('ابتدا اتصال را فعال کنید.');
+      const module = parseModule(body.module);
+      const scope = body.scope === 'system' ? 'system' : 'site';
+      const page = Math.max(1, Math.min(1000, Math.floor(Number(body.page) || 1)));
+      return reply(200, { rows: await previewRecords(connection, module, scope, page), page, scope, module });
+    }
+    if (action === 'sync_record') {
+      const connection = await getConnection(orgId, trim(body.id));
+      if (!connection.is_active) throw new Error('ابتدا اتصال را فعال کنید.');
+      const module = parseModule(body.module);
+      const direction = body.direction === 'from_site' ? 'from_site' : body.direction === 'to_site' ? 'to_site' : null;
+      if (!direction) throw new Error('جهت همگام‌سازی معتبر نیست.');
+      return reply(200, { result: await syncRecord(connection, module, direction, trim(body.localId), trim(body.externalId)) });
+    }
+    if (action === 'link_matching_record') {
+      const connection = await getConnection(orgId, trim(body.id));
+      if (!connection.is_active) throw new Error('ابتدا اتصال را فعال کنید.');
+      await linkMatchingRecord(connection, parseModule(body.module), trim(body.localId), trim(body.externalId));
+      return reply(200, { ok: true });
+    }
+    if (action === 'unlink_record') {
+      const connection = await getConnection(orgId, trim(body.id));
+      const module = parseModule(body.module);
+      if (module === 'invoices') throw new Error('اتصال فاکتور به سفارش برای جلوگیری از ثبت تکراری قابل حذف نیست.');
+      const { error } = await client.from('external_record_links').delete()
+        .eq('org_id', orgId).eq('connection_id', connection.id).eq('module_key', module)
+        .eq('local_id', trim(body.localId)).eq('external_id', trim(body.externalId));
+      if (error) throw error;
+      return reply(200, { ok: true });
     }
     if (action === 'rotate_webhook_secret') {
       const connection = await getConnection(orgId, trim(body.id));
@@ -212,9 +613,14 @@ Deno.serve(async (req: Request) => {
         return reply(200, { ok: true });
       }
       const page = Math.max(1, Math.min(1000, Math.floor(Number(body.page) || 1)));
-      const orders = await wooGet(connection, `orders?per_page=50&page=${page}&orderby=modified&order=desc`);
-      for (const order of orders) await storeOrder(connection, order);
-      return reply(200, { ok: true, received: orders.length, page });
+      const orders = await wooGet(connection, `orders?per_page=25&page=${page}&orderby=modified&order=desc`);
+      let imported = 0;
+      const failed: string[] = [];
+      for (const order of orders) {
+        try { await storeOrder(connection, order); imported += 1; }
+        catch (error) { failed.push(`سفارش ${trim(order?.number || order?.id)}: ${error instanceof Error ? error.message : 'خطای نامشخص'}`); }
+      }
+      return reply(200, { ok: failed.length === 0, received: orders.length, imported, failed, page });
     }
     if (action === 'list_orders') {
       const connection = await getConnection(orgId, trim(body.id));

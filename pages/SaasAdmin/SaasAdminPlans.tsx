@@ -160,6 +160,7 @@ const FEATURE_OPTIONS = [
   { id: 'ai_voip_auto_reply', label: 'پاسخگویی خودکار VOIP با AI' },
   { id: 'taxpayer_system', label: 'سامانه مودیان' },
   { id: 'api_access', label: 'دسترسی API' },
+  { id: 'wordpress_connection', label: 'اتصال به وردپرس و ووکامرس' },
   { id: 'advanced_reports', label: 'گزارش‌ساز پیشرفته' },
   { id: 'multi_lane_processes', label: 'فرآیندهای چندردیفه و فعال‌کننده‌ها' },
   { id: CONTENT_CALENDAR_PLAN_FEATURE, label: 'تقویم محتوایی' },

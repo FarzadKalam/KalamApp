@@ -3,6 +3,8 @@ import { Alert, App, Button, Card, Form, Input, Modal, Space, Switch, Table, Tag
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { hasCurrentOrgPlanFeature, WORDPRESS_CONNECTION_PLAN_FEATURE } from '../../utils/saasPlanFeatures';
+import WooCommerceSyncModal from './WooCommerceSyncModal';
 
 type WooConnection = {
   id: string;
@@ -12,6 +14,7 @@ type WooConnection = {
   webhook_key: string;
   last_checked_at: string | null;
   last_check_status: string | null;
+  sync_policy?: { products: string; customers: string; invoices: string };
 };
 type InboxOrder = {
   external_id: string;
@@ -27,6 +30,8 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
   const [connections, setConnections] = useState<WooConnection[]>([]);
   const [orders, setOrders] = useState<InboxOrder[]>([]);
   const [selected, setSelected] = useState<WooConnection | null>(null);
+  const [syncConnection, setSyncConnection] = useState<WooConnection | null>(null);
+  const [featureAllowed, setFeatureAllowed] = useState<boolean | null>(null);
   const [editing, setEditing] = useState<WooConnection | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -55,7 +60,15 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
     }
   }, [call, message, orgId]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    let active = true;
+    if (!orgId) { setFeatureAllowed(false); return; }
+    void hasCurrentOrgPlanFeature(WORDPRESS_CONNECTION_PLAN_FEATURE).then((allowed) => {
+      if (active) setFeatureAllowed(allowed);
+    });
+    return () => { active = false; };
+  }, [orgId]);
+  useEffect(() => { if (featureAllowed) void load(); }, [load, featureAllowed]);
 
   const openForm = (connection: WooConnection | null) => {
     setEditing(connection);
@@ -119,7 +132,10 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
     try {
       const data = await call({ action, id: connection.id });
       if (action === 'test') message.success('اتصال به سفارش‌های ووکامرس برقرار است.');
-      if (action === 'sync_orders') message.success(`${data.received} سفارش در صندوق ورودی دریافت شد.`);
+      if (action === 'sync_orders') {
+        if (data.failed?.length) message.warning(`${data.imported} سفارش به فاکتور تبدیل شد؛ ${data.failed.length} سفارش نیاز به بررسی دارد.`);
+        else message.success(`${data.imported} سفارش بررسی و در فاکتورها ثبت شد.`);
+      }
       if (action === 'list_orders') {
         setSelected(connection);
         setOrders(data.orders || []);
@@ -132,14 +148,18 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
     }
   };
 
-  return <Card className="mt-6" title="اتصال فروشگاه‌های ووکامرس" extra={
+  if (featureAllowed === false) return <Alert className="mt-6" type="info" showIcon
+    message="اتصال به وردپرس و ووکامرس در پلن این سازمان فعال نیست."
+    description="این ویژگی از پلن رشد در دسترس است و مدیر سازمان می‌تواند آن را از صفحه حساب بررسی کند." />;
+
+  return <Card className="mt-6" loading={featureAllowed === null} title="اتصال فروشگاه‌های ووکامرس" extra={
     <Space>
       <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}>بازخوانی</Button>
       <Button type="primary" icon={<PlusOutlined />} onClick={() => openForm(null)} disabled={!orgId}>افزودن فروشگاه</Button>
     </Space>
   }>
-    <Alert showIcon type="info" className="mb-4" message="مرحلهٔ اول اتصال"
-      description="سفارش‌ها در صندوق ورودی امن دریافت می‌شوند. تبدیل آن‌ها به فاکتور و تغییر موجودی تا تعیین نگاشت و مرجع داده انجام نمی‌شود." />
+    <Alert showIcon type="info" className="mb-4" message="همگام‌سازی فروشگاه"
+      description="کالاها و مشتریان را در پنجره همگام‌سازی بررسی کنید. سفارش‌های دریافتی به فاکتور با منبع فروش فروشگاه وردپرسی تبدیل می‌شوند؛ سفارش نامعتبر در صندوق ورودی برای بررسی باقی می‌ماند." />
     <Table<WooConnection> rowKey="id" dataSource={connections} loading={loading} pagination={false} scroll={{ x: 760 }}
       columns={[
         { title: 'فروشگاه', dataIndex: 'name' },
@@ -150,7 +170,7 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
           <Button size="small" onClick={() => showWebhookInstructions(row)}>آدرس وب‌هوک</Button>
           <Button size="small" disabled={busy} onClick={() => void rotateWebhook(row)}>ساخت رمز تازه</Button>
           <Button size="small" disabled={!row.is_active || busy} onClick={() => void run(row, 'test')}>آزمون اتصال</Button>
-          <Button size="small" disabled={!row.is_active || busy} onClick={() => void run(row, 'sync_orders')}>دریافت ۵۰ سفارش تازه</Button>
+          <Button size="small" type="primary" disabled={!row.is_active || busy} onClick={() => setSyncConnection(row)}>همگام‌سازی</Button>
           <Button size="small" onClick={() => void run(row, 'list_orders')}>صندوق ورودی</Button>
         </Space> },
       ]} />
@@ -171,14 +191,20 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
       </Form>
     </Modal>
     <Modal title={`صندوق ورودی ${selected?.name || ''}`} open={!!selected} onCancel={() => setSelected(null)} footer={null} width={700}>
-      <Alert className="mb-3" type="info" message="این سفارش‌ها هنوز به فاکتور تبدیل نشده‌اند." />
+      <Alert className="mb-3" type="info" message="وضعیت پردازش سفارش‌های دریافتی" />
       <Table<InboxOrder> rowKey="external_id" dataSource={orders} size="small" pagination={{ pageSize: 10 }}
         columns={[
           { title: 'شماره سفارش فروشگاه', dataIndex: 'external_id' },
           { title: 'وضعیت فروشگاه', dataIndex: 'external_status' },
+          { title: 'پردازش', dataIndex: 'processing_status', render: (value: string) => value === 'processed' ? 'ثبت‌شده در فاکتورها' : value === 'error' ? 'نیازمند بررسی' : 'در انتظار' },
           { title: 'دریافت', dataIndex: 'received_at', render: (value: string) => new Date(value).toLocaleString('fa-IR') },
         ]} />
     </Modal>
+    <WooCommerceSyncModal connection={syncConnection} onClose={() => setSyncConnection(null)} call={call}
+      onPolicySaved={(connection) => {
+        setSyncConnection((current) => current ? { ...current, ...connection } : null);
+        setConnections((current) => current.map((item) => item.id === connection.id ? { ...item, ...connection } : item));
+      }} />
   </Card>;
 };
 
