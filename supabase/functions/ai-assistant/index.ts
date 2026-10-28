@@ -241,6 +241,26 @@ const isAutomaticStructuredActionCapability = (capability: string) =>
   || capability === 'record_creation'
   || capability === 'process_operation';
 
+const inferAutoStructuredMutation = (prompt: string, pageContext: any) => {
+  const normalized = String(prompt || '')
+    .replace(/[يى]/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .replace(/[\u200c\u200d]/g, '')
+    .trim();
+  const mentionsActivity = /(?:فعالیت|وظیفه|تسک|کار سازمانی)/.test(normalized);
+  const asksToCreate = /(?:بساز|ایجاد کن|ثبت کن|تعریف کن|اضافه کن|درج کن|برنامه ریزی کن)/.test(normalized);
+  const asksToUpdate = /(?:ویرایش کن|اصلاح کن|تغییر بده|به روز کن|تکمیل کن|لغو کن)/.test(normalized);
+  const currentModule = String(pageContext?.context?.moduleId || pageContext?.moduleId || '').trim();
+  if (!mentionsActivity || (!asksToCreate && !asksToUpdate)) return null;
+  if (asksToUpdate && currentModule === 'tasks') {
+    return { capabilities: ['record_creation'], target_module_id: 'tasks', mutation_mode: 'update' as const };
+  }
+  if (asksToCreate) {
+    return { capabilities: ['record_creation'], target_module_id: 'tasks', mutation_mode: 'create' as const };
+  }
+  return null;
+};
+
 const MODULE_TABLE_MAP: Record<string, string> = {
   productBundles: 'product_bundles',
   purchaseInvoices: 'purchase_invoices',
@@ -4403,6 +4423,18 @@ const buildAiRecordTitle = (record: any, fallback: string) => {
   return value || fallback || 'رکورد جدید';
 };
 
+const TASK_RELATION_FIELD_BY_MODULE: Record<string, string> = {
+  customers: 'related_customer',
+  suppliers: 'related_supplier',
+  products: 'related_product',
+  production_orders: 'related_production_order',
+  invoices: 'related_invoice',
+  purchase_invoices: 'purchase_invoice_id',
+  projects: 'project_id',
+  content_calendars: 'content_calendar_id',
+  marketing_leads: 'marketing_lead_id',
+};
+
 const normalizeAiClarificationQuestions = (value: any) =>
   (Array.isArray(value) ? value : [])
     .map((item: any) => String(item || '').trim())
@@ -7848,11 +7880,20 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
   const rawRecordDrafts = Array.isArray(parsed?.records) && parsed.records.length
     ? parsed.records
     : [parsed?.record || parsed];
-  const relationFieldKey = String(schema?.relationFieldKey || schema?.relation_field_key || body?.relationFieldKey || body?.relation_field_key || '').trim();
+  let relationFieldKey = String(schema?.relationFieldKey || schema?.relation_field_key || body?.relationFieldKey || body?.relation_field_key || '').trim();
+  if (!relationFieldKey && !isUpdate && targetModuleId === 'tasks' && pageContext?.recordId) {
+    const sourceModuleId = String(pageContext?.context?.moduleId || pageContext?.moduleId || '').trim();
+    relationFieldKey = TASK_RELATION_FIELD_BY_MODULE[sourceModuleId] || '';
+  }
   const recordDrafts = rawRecordDrafts
     .slice(0, 20)
     .map((recordDraft: any, index: number) => {
       const fieldsPayload = sanitizeAiRecordPayload(recordDraft, effectiveSchema);
+      if (targetModuleId === 'tasks') {
+        if (!fieldsPayload.status) fieldsPayload.status = 'todo';
+        if (!fieldsPayload.priority) fieldsPayload.priority = 'medium';
+        if (!fieldsPayload.task_type) fieldsPayload.task_type = 'فعالیت سازمانی';
+      }
       if (relationFieldKey && pageContext?.recordId && !isUpdate) fieldsPayload[relationFieldKey] = pageContext.recordId;
       const requestedRecordId = String(
         recordDraft?.record_id
@@ -8480,7 +8521,7 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
     'اگر کاربر خواسته از روی ورودی‌ها یک یا چند رکورد ساخته یا یک یا چند رکورد موجود ویرایش شود، record_creation را انتخاب کن و اگر نوع رکورد روشن است target_module_id را هم بده. این شامل ثبت هزینه، پرداخت، دریافت، فاکتور خرید/فروش، مساعده و تهاتر در وضعیت پیش‌نویس یا ایجادشده است.',
     'برای درخواست ایجاد یا ویرایش رکورد مجاز، هرگز نگویید دستیار دسترسی مستقیم ندارد یا کاربر باید خودش در CRM ثبت کند. وظیفه شما ساخت پیش‌نویس قابل‌ویرایش و ارسال آن به مودال تایید کاربر است؛ اجرای نهایی فقط پس از تایید کاربر انجام می‌شود.',
     'برای ساخت رکورد mutation_mode=create و برای ویرایش رکورد موجود mutation_mode=update برگردان.',
-    'اگر کاربر خواسته مرحله، فعالیت یا فرآیند اجرا/تغییر/ارجاع شود، process_operation را انتخاب کن.',
+    'اگر کاربر فقط خواسته یک فعالیت/وظیفه جدید بسازی یا اطلاعات فعالیت موجود در ماژول فعالیت‌ها را ویرایش کنی، record_creation را با target_module_id=tasks انتخاب کن تا پیش‌نویس فرم فعالیت ساخته شود. process_operation فقط برای اجرای یک فرآیند موجود، کپی الگوی فرآیند، افزودن مرحله به اجرای جاری یا تغییر مرحله‌ای است که در context فرآیند شناسایی شده باشد.',
     'اگر صفحهٔ فعلی تقویم محتوایی است و کاربر می‌خواهد چند محتوای واقعی، فعالیت‌های تولید محتوا یا پروژه‌های تقویمی برنامه‌ریزی و ثبت شوند، process_operation را انتخاب کن تا پیش‌نویس‌های جداگانه برای تایید کاربر ساخته شود.',
     'اگر کاربر ساخت یا اصلاح تصویر می‌خواهد، image_generation را انتخاب کن؛ مخصوصاً وقتی تصویر مبنا هم فرستاده شده است.',
     'اگر کاربر فقط پرامپت، متن، توضیح یا دستور برای تولید تصویر می‌خواهد، image_generation را انتخاب نکن؛ این یک گفتگوی متنی عادی است مگر اینکه صریحاً بخواهد خود تصویر همین حالا ساخته شود.',
@@ -8516,13 +8557,17 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
       responseFormat: { type: 'json_object' },
     });
     const parsed = extractJsonObjectFromText(routeResult.content) || {};
-    const agentPlan = normalizeAgentPlan(parsed, {
+    const inferredMutation = inferAutoStructuredMutation(prompt, pageContext);
+    const routingDecision = inferredMutation && availableCapabilities.includes('record_creation')
+      ? { ...parsed, ...inferredMutation }
+      : parsed;
+    const agentPlan = normalizeAgentPlan(routingDecision, {
       policy: 'interactive_chat' as AgentExecutionPolicy,
       allowedCapabilities: availableCapabilities,
       isKnownModule: (moduleId) => {
         if (!isRegisteredAiModule(moduleId)) return false;
         const perm = getModulePermission(authContext.permissions, moduleId);
-        return agentPlanMutationAllowed(perm, String(parsed?.mutation_mode) === 'update');
+        return agentPlanMutationAllowed(perm, String(routingDecision?.mutation_mode) === 'update');
       },
     });
     const automaticAgentPlan = {

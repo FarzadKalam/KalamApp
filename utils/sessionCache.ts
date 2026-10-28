@@ -101,9 +101,9 @@ const isTransientBootstrapError = (error: any) => {
     || text.includes('err_failed');
 };
 
-const getReusableBootstrapSnapshot = (userId: string): SessionBootstrapSnapshot | null => {
+const getReusableBootstrapSnapshot = (cacheKey: string, userId: string): SessionBootstrapSnapshot | null => {
   if (
-    sessionBootstrapCache.cacheKey === userId &&
+    sessionBootstrapCache.cacheKey === cacheKey &&
     sessionBootstrapCache.snapshot &&
     sessionBootstrapCache.snapshot.user?.id === userId &&
     sessionBootstrapCache.snapshot.orgId
@@ -111,6 +111,36 @@ const getReusableBootstrapSnapshot = (userId: string): SessionBootstrapSnapshot 
     return sessionBootstrapCache.snapshot;
   }
   return null;
+};
+
+const RESERVED_TAZE_HOSTS = new Set([
+  'tazesystem.ir',
+  'www.tazesystem.ir',
+  'app.tazesystem.ir',
+  'panel.tazesystem.ir',
+  'kalam.tazesystem.ir',
+]);
+
+/**
+ * The active organization is a request/host concern. A user can keep two
+ * tenant subdomains open at once, while the profile row still has one legacy
+ * active org. Resolve the tenant org from the current host before caching the
+ * bootstrap snapshot so one tab cannot reuse another tenant's identity.
+ */
+const resolveTenantHostContext = async (supabaseClient: any) => {
+  if (typeof window === 'undefined') return { hostname: '', orgId: null as string | null };
+  const hostname = String(window.location.hostname || '').trim().toLowerCase();
+  if (!hostname.endsWith('.tazesystem.ir') || RESERVED_TAZE_HOSTS.has(hostname)) {
+    return { hostname, orgId: null as string | null };
+  }
+  try {
+    const { data, error } = await supabaseClient.rpc('get_public_branding', { p_hostname: hostname });
+    if (error) return { hostname, orgId: null as string | null, error };
+    const row = Array.isArray(data) ? data[0] : data;
+    return { hostname, orgId: String(row?.org_id || '').trim() || null };
+  } catch (error) {
+    return { hostname, orgId: null as string | null, error };
+  }
 };
 
 export const clearSessionBootstrapCache = () => {
@@ -174,7 +204,8 @@ export const fetchSessionBootstrap = async (
       return EMPTY_SNAPSHOT;
     }
 
-    const cacheKey = String(user.id);
+    const hostContext = await resolveTenantHostContext(supabaseClient);
+    const cacheKey = `${String(user.id)}:${hostContext.hostname || 'shared'}:${hostContext.orgId || 'profile'}`;
     if (
       !options?.force &&
       sessionBootstrapCache.cacheKey === cacheKey &&
@@ -210,7 +241,7 @@ export const fetchSessionBootstrap = async (
 
       if (profileResult.error) {
         const reusable = isTransientBootstrapError(profileResult.error)
-          ? getReusableBootstrapSnapshot(cacheKey)
+          ? getReusableBootstrapSnapshot(cacheKey, String(user.id))
           : null;
         if (reusable) {
           sessionBootstrapCache.expiresAt = Date.now() + SESSION_BOOTSTRAP_TTL_MS;
@@ -235,8 +266,40 @@ export const fetchSessionBootstrap = async (
         : null;
 
       let permissions: Record<string, any> | null = null;
-      let resolvedOrgId: string | null = profile?.org_id ? String(profile.org_id) : null;
-      if (profile?.role_id) {
+      let resolvedOrgId: string | null = hostContext.orgId || (profile?.org_id ? String(profile.org_id) : null);
+      let resolvedRoleId: string | null = profile?.role_id ? String(profile.role_id) : null;
+      let resolvedSoftwareRole: string | null = profile?.role ? String(profile.role) : null;
+
+      if (hostContext.orgId) {
+        const membershipResult = await runWithSupabaseTimeout<any>(
+          (signal) => attachAbortSignalIfSupported(
+            supabaseClient
+              .from('user_organization_memberships')
+              .select('org_id,role_id,software_role,is_active')
+              .eq('user_id', user.id)
+              .eq('org_id', hostContext.orgId)
+              .eq('is_active', true)
+              .maybeSingle(),
+            signal,
+          ),
+          SESSION_BOOTSTRAP_REQUEST_TIMEOUT_MS,
+        );
+        if (membershipResult.error || !membershipResult.data) {
+          return {
+            user,
+            profile: null,
+            roleId: null,
+            orgId: null,
+            permissions: null,
+            loadedAt: Date.now(),
+            bootstrapError: membershipResult.error || new Error('tenant_membership_not_found'),
+          };
+        }
+        resolvedRoleId = membershipResult.data.role_id ? String(membershipResult.data.role_id) : null;
+        resolvedSoftwareRole = membershipResult.data.software_role ? String(membershipResult.data.software_role) : resolvedSoftwareRole;
+      }
+
+      if (resolvedRoleId) {
         const roleResult = await runSelectWithCompatibleColumns<any | null>({
           cacheKey: 'session-bootstrap:role',
           columns: SESSION_ROLE_COLUMNS,
@@ -249,7 +312,7 @@ export const fetchSessionBootstrap = async (
                     .select(selectExpr),
                   signal,
                 )
-                  .eq('id', profile.role_id)
+                  .eq('id', resolvedRoleId)
                   .maybeSingle(),
               SESSION_BOOTSTRAP_REQUEST_TIMEOUT_MS,
             ),
@@ -257,7 +320,7 @@ export const fetchSessionBootstrap = async (
 
         if (roleResult.error) {
           const reusable = isTransientBootstrapError(roleResult.error)
-            ? getReusableBootstrapSnapshot(cacheKey)
+            ? getReusableBootstrapSnapshot(cacheKey, String(user.id))
             : null;
           if (reusable) {
             sessionBootstrapCache.expiresAt = Date.now() + SESSION_BOOTSTRAP_TTL_MS;
@@ -266,7 +329,7 @@ export const fetchSessionBootstrap = async (
           const snapshot: SessionBootstrapSnapshot = {
             user,
             profile: profile || null,
-            roleId: profile?.role_id ? String(profile.role_id) : null,
+            roleId: resolvedRoleId,
             orgId: resolvedOrgId,
             permissions: null,
             loadedAt: Date.now(),
@@ -287,8 +350,10 @@ export const fetchSessionBootstrap = async (
 
       const snapshot: SessionBootstrapSnapshot = {
         user,
-        profile: profile || null,
-        roleId: profile?.role_id ? String(profile.role_id) : null,
+        profile: profile
+          ? { ...profile, org_id: resolvedOrgId, role_id: resolvedRoleId, role: resolvedSoftwareRole }
+          : null,
+        roleId: resolvedRoleId,
         orgId: resolvedOrgId,
         permissions,
         loadedAt: Date.now(),
