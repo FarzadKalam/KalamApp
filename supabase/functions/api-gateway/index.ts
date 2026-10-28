@@ -20,48 +20,7 @@ const json = (status: number, payload: Record<string, any>) =>
 
 // ── Plan-based module access ─────────────────────────────────────────────────
 
-const PLAN_MODULES: Record<string, string[]> = {
-  basic: [
-    'customers', 'suppliers', 'products', 'product_bundles',
-    'invoices', 'purchase_invoices', 'sales_return_invoices', 'purchase_return_invoices',
-    'price_lists', 'delivery_forms', 'warehouses', 'shelves', 'stock_transfers',
-    'marketing_leads', 'personas', 'tasks', 'instructions',
-  ],
-  professional: [
-    // همه ماژول‌های basic +
-    'customers', 'suppliers', 'products', 'product_bundles',
-    'invoices', 'purchase_invoices', 'sales_return_invoices', 'purchase_return_invoices',
-    'price_lists', 'delivery_forms', 'warehouses', 'shelves', 'stock_transfers',
-    'marketing_leads', 'personas', 'tasks', 'instructions',
-    // حسابداری
-    'fiscal_years', 'chart_of_accounts', 'journal_entries', 'accounting_event_rules',
-    'cost_centers', 'cash_boxes', 'bank_accounts', 'petty_funds', 'cheques',
-    'cash_bank_operations', 'barters', 'expense_documents', 'assets',
-    // HR
-    'employees', 'attendance_logs', 'work_schedules', 'leave_requests',
-    'overtime_requests', 'mission_requests', 'employee_advances',
-    'employee_bonus_requests', 'employee_penalty_requests',
-    'employee_contracts', 'job_descriptions', 'payroll_slips', 'recruitment_applicants',
-  ],
-  enterprise: [
-    // همه ماژول‌های professional +
-    'customers', 'suppliers', 'products', 'product_bundles',
-    'invoices', 'purchase_invoices', 'sales_return_invoices', 'purchase_return_invoices',
-    'price_lists', 'delivery_forms', 'warehouses', 'shelves', 'stock_transfers',
-    'marketing_leads', 'personas', 'tasks', 'instructions',
-    'fiscal_years', 'chart_of_accounts', 'journal_entries', 'accounting_event_rules',
-    'cost_centers', 'cash_boxes', 'bank_accounts', 'petty_funds', 'cheques',
-    'cash_bank_operations', 'barters', 'expense_documents', 'assets',
-    'employees', 'attendance_logs', 'work_schedules', 'leave_requests',
-    'overtime_requests', 'mission_requests', 'employee_advances',
-    'employee_bonus_requests', 'employee_penalty_requests',
-    'employee_contracts', 'job_descriptions', 'payroll_slips', 'recruitment_applicants',
-    // فرآیند و تولید
-    'projects', 'process_templates', 'process_runs', 'web_forms', 'surveys',
-    'secretariat_documents', 'production_orders', 'production_boms',
-    'production_group_orders',
-  ],
-};
+type EnabledModules = Record<string, unknown>;
 
 // جداول سیستمی که هرگز از طریق API قابل دسترسی نیستند
 const BLOCKED_TABLES = new Set([
@@ -117,7 +76,7 @@ const serviceDelete = async (url: string) => {
 
 // ── Token verification ───────────────────────────────────────────────────────
 
-type TokenInfo = { org_id: string; plan_code: string | null };
+type TokenInfo = { org_id: string; enabled_modules: EnabledModules; is_readonly: boolean };
 
 const verifyToken = async (token: string): Promise<TokenInfo | null> => {
   try {
@@ -128,16 +87,44 @@ const verifyToken = async (token: string): Promise<TokenInfo | null> => {
     if (!Array.isArray(tokenRows) || tokenRows.length === 0) return null;
     const { id: tokenId, org_id } = tokenRows[0];
 
-    // 2. پلن org را از saas_org_settings بگیر
-    let plan_code: string | null = null;
-    try {
-      const orgRows = await serviceGet(
-        `${SUPABASE_URL}/rest/v1/saas_org_settings?org_id=eq.${org_id}&select=plan_code&limit=1`
+    // 2. همان نقشهٔ ماژول‌های پلن و استثناهای سازمان را بخوان؛ پلن ناشناخته fail-closed است.
+    const orgRows = await serviceGet(
+      `${SUPABASE_URL}/rest/v1/saas_org_settings?org_id=eq.${encodeURIComponent(org_id)}&select=plan_code,module_overrides,is_readonly,trial_ends_at&limit=1`
+    );
+    if (!Array.isArray(orgRows) || !orgRows[0]) return null;
+    const orgSettings = orgRows[0];
+    const planCode = String(orgSettings.plan_code || '').trim();
+    const plans = planCode ? await serviceGet(
+      `${SUPABASE_URL}/rest/v1/saas_plans?code=eq.${encodeURIComponent(planCode)}&select=enabled_modules&limit=1`
+    ) : [];
+    const planModules = Array.isArray(plans) && plans[0]?.enabled_modules && typeof plans[0].enabled_modules === 'object'
+      ? plans[0].enabled_modules : {};
+    const overrides = orgSettings.module_overrides && typeof orgSettings.module_overrides === 'object'
+      ? orgSettings.module_overrides : {};
+    let enabled_modules = { ...planModules, ...overrides };
+    if (!planCode) {
+      // سازمان داخلی SaaS پلن بسته‌ای ندارد؛ دسترسی API آن از اجتماع ماژول‌های پلن‌های فعال می‌آید.
+      const roleRows = await serviceGet(
+        `${SUPABASE_URL}/rest/v1/org_roles?org_id=eq.${encodeURIComponent(org_id)}&select=permissions`
       );
-      if (Array.isArray(orgRows) && orgRows.length > 0) {
-        plan_code = orgRows[0]?.plan_code ?? null;
+      const isSaasAdminOrg = Array.isArray(roleRows) && roleRows.some((role: any) =>
+        role?.permissions?.__saas_admin?.view === true || role?.permissions?.__saas_admin?.edit === true
+      );
+      if (isSaasAdminOrg) {
+        const activePlans = await serviceGet(
+          `${SUPABASE_URL}/rest/v1/saas_plans?is_active=eq.true&select=enabled_modules`
+        );
+        const allModules: EnabledModules = {};
+        for (const plan of Array.isArray(activePlans) ? activePlans : []) {
+          for (const [moduleKey, value] of Object.entries(plan.enabled_modules || {})) {
+            if (value === true || value === 'enabled') allModules[moduleKey] = true;
+          }
+        }
+        enabled_modules = { ...allModules, ...overrides };
       }
-    } catch { /* اگر جدول وجود ندارد، پلن را null می‌گذاریم */ }
+    }
+    const is_readonly = orgSettings.is_readonly === true ||
+      Boolean(orgSettings.trial_ends_at && new Date(orgSettings.trial_ends_at).getTime() < Date.now());
 
     // 3. last_used_at را به‌روز کن (fire-and-forget)
     fetch(`${SUPABASE_URL}/rest/v1/org_api_tokens?id=eq.${tokenId}`, {
@@ -146,7 +133,7 @@ const verifyToken = async (token: string): Promise<TokenInfo | null> => {
       body: JSON.stringify({ last_used_at: new Date().toISOString() }),
     }).catch(() => {});
 
-    return { org_id, plan_code };
+    return { org_id, enabled_modules, is_readonly };
   } catch {
     return null;
   }
@@ -154,13 +141,9 @@ const verifyToken = async (token: string): Promise<TokenInfo | null> => {
 
 // ── Access check ─────────────────────────────────────────────────────────────
 
-const isTableAllowed = (table: string, plan_code: string | null): boolean => {
+const isTableAllowed = (table: string, enabledModules: EnabledModules): boolean => {
   if (BLOCKED_TABLES.has(table)) return false;
-  if (!plan_code || !(plan_code in PLAN_MODULES)) {
-    // اگر پلن مشخص نیست → همه business modules مجاز
-    return !BLOCKED_TABLES.has(table);
-  }
-  return PLAN_MODULES[plan_code].includes(table);
+  return enabledModules[table] === true || enabledModules[table] === 'enabled';
 };
 
 // ── Filter builder ───────────────────────────────────────────────────────────
@@ -222,7 +205,7 @@ const LEAD_STANDARD_FIELDS = [
   { key: 'image_url', label: 'تصویر / فایل لید', type: 'image' },
 ] as const;
 
-const leadBridgeAllowed = (planCode: string | null) => isTableAllowed('marketing_leads', planCode);
+const leadBridgeAllowed = (enabledModules: EnabledModules) => isTableAllowed('marketing_leads', enabledModules);
 
 const safeLeadField = (field: any) => {
   const key = String(field?.key || '').trim().toLowerCase();
@@ -398,8 +381,11 @@ Deno.serve(async (req: Request) => {
   // generally accessible through the REST gateway.
   const normalizedAction = String(action || '').trim().toLowerCase();
   if (normalizedAction) {
-    if (!leadBridgeAllowed(tokenInfo.plan_code)) {
+    if (!leadBridgeAllowed(tokenInfo.enabled_modules)) {
       return json(403, { error: 'lead_bridge_not_allowed', message: 'دسترسی به لیدهای بازاریابی در پلن فعلی سازمان مجاز نیست.' });
+    }
+    if (tokenInfo.is_readonly && normalizedAction !== 'lead_catalog') {
+      return json(403, { error: 'subscription_readonly', message: 'اشتراک سازمان فقط امکان مشاهده دارد.' });
     }
     try {
       if (normalizedAction === 'lead_catalog') {
@@ -428,7 +414,7 @@ Deno.serve(async (req: Request) => {
   const tableName = table.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
   if (!tableName) return json(400, { error: 'invalid_table' });
 
-  if (!isTableAllowed(tableName, tokenInfo.plan_code)) {
+  if (!isTableAllowed(tableName, tokenInfo.enabled_modules)) {
     return json(403, {
       error: 'table_not_allowed',
       message: `دسترسی به جدول "${tableName}" در پلن فعلی سازمان شما مجاز نیست.`,
@@ -437,6 +423,9 @@ Deno.serve(async (req: Request) => {
 
   const { org_id } = tokenInfo;
   const normalizedMethod = String(method).toUpperCase();
+  if (tokenInfo.is_readonly && normalizedMethod !== 'GET') {
+    return json(403, { error: 'subscription_readonly', message: 'اشتراک سازمان فقط امکان مشاهده دارد.' });
+  }
 
   try {
     // ۴. ساخت پارامترهای کوئری
@@ -445,6 +434,9 @@ Deno.serve(async (req: Request) => {
     // ساخت URL پایه
     let url = `${SUPABASE_URL}/rest/v1/${tableName}?${filterStr}`;
 
+    if (select && (typeof select !== 'string' || !/^[a-z0-9_,*\s]+$/i.test(select) || select.length > 500)) {
+      return json(400, { error: 'invalid_select', message: 'فقط ستون‌های همین ماژول قابل انتخاب هستند.' });
+    }
     if (select && typeof select === 'string') {
       url += `&select=${encodeURIComponent(select)}`;
     }
