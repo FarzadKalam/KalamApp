@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Button, Card, Col, InputNumber, Row, Space, Tag, Typography } from 'antd';
+import { Button, Card, Col, InputNumber, Row, Select, Space, Tag, Typography } from 'antd';
 import { CheckCircleOutlined, DownOutlined, UpOutlined } from '@ant-design/icons';
 import { parseSaasPlanDisplayFeatures } from '../../utils/saasPlanDisplayFeatures';
+import { CheckoutDiscounts, TERM_OPTIONS, planCheckoutTotal, termDiscountPercent, userDiscountPercent } from '../../utils/saasCheckoutPricing';
 
 type StorePlan = {
   code: string;
@@ -9,6 +10,7 @@ type StorePlan = {
   description?: string | null;
   entitlement_code?: string | null;
   price_irt: number;
+  price_yearly?: number;
   metadata?: { minimum_users?: number };
 };
 
@@ -17,6 +19,7 @@ type PublicPlan = {
   short_description?: string | null;
   highlight_tag?: string | null;
   display_features?: unknown;
+  price_yearly?: number;
 };
 
 type Props = {
@@ -24,12 +27,15 @@ type Props = {
   publicPlans: PublicPlan[];
   cart: Record<string, number>;
   usersUsed: number;
+  termMonths: number;
+  discounts: CheckoutDiscounts;
   onSelect: (code: string, minimum: number) => void;
   onRemove: (code: string) => void;
   onQuantityChange: (code: string, quantity: number) => void;
+  onTermChange: (months: number) => void;
 };
 
-const AccountPlanCards: React.FC<Props> = ({ plans, publicPlans, cart, usersUsed, onSelect, onRemove, onQuantityChange }) => {
+const AccountPlanCards: React.FC<Props> = ({ plans, publicPlans, cart, usersUsed, termMonths, discounts, onSelect, onRemove, onQuantityChange, onTermChange }) => {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const publicPlanByCode = new Map(publicPlans.map((plan) => [plan.code, plan]));
 
@@ -43,6 +49,9 @@ const AccountPlanCards: React.FC<Props> = ({ plans, publicPlans, cart, usersUsed
       const count = Number(cart[item.code] || 0);
       const minimum = Math.max(3, usersUsed, Number(item.metadata?.minimum_users || 0));
       const highlighted = Boolean(plan?.highlight_tag);
+      const yearlyPrice = Number(plan?.price_yearly || 0);
+      const usersDiscount = userDiscountPercent(count || minimum, discounts);
+      const termDiscount = termDiscountPercent(termMonths, Number(item.price_irt || 0), yearlyPrice, discounts);
 
       return <Col xs={24} md={12} xl={8} key={item.code}>
         <Card className={`h-full rounded-2xl ${highlighted ? 'border-indigo-400 bg-indigo-50/40 dark:bg-indigo-950/20' : ''}`}>
@@ -55,6 +64,8 @@ const AccountPlanCards: React.FC<Props> = ({ plans, publicPlans, cart, usersUsed
             <span className="text-2xl font-black text-slate-900 dark:text-white">{Math.round(Number(item.price_irt || 0)).toLocaleString('fa-IR')}</span>
             <Typography.Text type="secondary" className="text-xs">تومان به ازای هر کاربر در ماه</Typography.Text>
           </div>
+          <div className="mt-2 text-xs text-emerald-700 dark:text-emerald-300">از ۶ کاربر به بالا، تخفیف پلکانی تعداد کاربران اعمال می‌شود.</div>
+          {discounts.users.length > 0 ? <div className="mt-2 flex flex-wrap gap-1">{discounts.users.map((rule) => <Tag key={rule.minimum} color="green">{Number(rule.minimum).toLocaleString('fa-IR')}+ کاربر: {Number(rule.percent).toLocaleString('fa-IR')}٪</Tag>)}</div> : null}
           {features.length > 0 ? <ul className="mt-5 space-y-3">
             {(isExpanded ? features : primary).map((feature) => <li key={feature.text} className="flex items-start gap-2 text-sm leading-6">
               <CheckCircleOutlined className="mt-1 text-indigo-600" />
@@ -78,6 +89,12 @@ const AccountPlanCards: React.FC<Props> = ({ plans, publicPlans, cart, usersUsed
               {!count ? <Button size="small" type="primary" onClick={() => onSelect(item.code, minimum)}>انتخاب پلن</Button> : null}
             </Space>
           </div>
+          {count > 0 ? <div className="mt-4 space-y-2 rounded-xl bg-slate-50 p-3 dark:bg-slate-800">
+            <Typography.Text className="block text-xs">دوره پرداخت</Typography.Text>
+            <Select className="w-full" value={termMonths} options={TERM_OPTIONS} onChange={onTermChange} aria-label={`دوره پرداخت ${item.title}`} />
+            <div className="flex flex-wrap gap-1">{usersDiscount > 0 ? <Tag color="green">تخفیف تعداد: {usersDiscount.toLocaleString('fa-IR')}٪</Tag> : null}{termDiscount > 0 ? <Tag color="blue">تخفیف دوره: {termDiscount.toLocaleString('fa-IR')}٪</Tag> : null}</div>
+            <Typography.Text strong className="block">مبلغ این دوره: {planCheckoutTotal(count, termMonths, Number(item.price_irt || 0), yearlyPrice, discounts).toLocaleString('fa-IR')} تومان</Typography.Text>
+          </div> : null}
         </Card>
       </Col>;
     })}

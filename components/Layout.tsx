@@ -140,6 +140,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [rolePermissionsReady, setRolePermissionsReady] = useState(false);
   const [supportAdminAccess, setSupportAdminAccess] = useState(false);
   const [supportWorkflowAccess, setSupportWorkflowAccess] = useState(false);
+  const [supportUnread, setSupportUnread] = useState(0);
   const [saasWorkflowAccess, setSaasWorkflowAccess] = useState(false);
   const [customerClubFeatureEnabled, setCustomerClubFeatureEnabled] = useState(true);
   const [instagramInboxFeatureEnabled, setInstagramInboxFeatureEnabled] = useState(false);
@@ -220,6 +221,19 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       if (active) setSaasWorkflowAccess(!error && data === true);
     });
     return () => { active = false; };
+  }, [currentUser?.id, resolvedOrgId]);
+
+  useEffect(() => {
+    if (!currentUser?.id || !resolvedOrgId) { setSupportUnread(0); return; }
+    let active = true;
+    const refresh = () => { void supabase.rpc('support_unread_total').then(({ data, error }) => {
+      if (active) setSupportUnread(error ? 0 : Math.max(0, Number(data || 0)));
+    }); };
+    refresh();
+    const timer = window.setInterval(refresh, 15000);
+    const channel = supabase.channel(`org:${resolvedOrgId}:notifications`, { config: { private: true } } as any)
+      .on('broadcast', { event: 'support_tickets_changed' }, refresh).subscribe();
+    return () => { active = false; window.clearInterval(timer); void supabase.removeChannel(channel); };
   }, [currentUser?.id, resolvedOrgId]);
 
   useEffect(() => {
@@ -817,7 +831,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         label: 'ارتباطات',
         children: [
           { key: '/messages', icon: <MessageOutlined />, label: 'پیام‌رسانی', disabled: !communicationsAccess.canUseWorkspace },
-          ...(canViewSupportCustomer ? [{ key: '/support/tickets', label: 'تیکت‌های پشتیبانی' }] : []),
+          ...(canViewSupportCustomer ? [{ key: '/support/tickets', icon: <Badge count={supportUnread} size="small" overflowCount={99}><MessageOutlined /></Badge>, label: 'تیکت‌های پشتیبانی' }] : []),
           { key: '/instagram', icon: <InstagramOutlined />, label: 'صندوق اینستاگرام', disabled: !canViewInstagramInbox },
           { key: '/ai', icon: <AiSparkleIcon className="h-4 w-4" />, label: 'دستیار هوشمند سازمان', disabled: !communicationsAccess.canUseWorkspace },
           { key: '/secretariat_documents', label: 'نامه‌ها و مکاتبات', disabled: !canViewModule('secretariat_documents') },
@@ -969,7 +983,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/saas_orgs', label: 'سازمان‌ها' },
           { key: '/saas_demo_requests', label: 'درخواست‌های دمو' },
           ...(saasWorkflowAccess ? [{ key: '/taze-system/workflows', label: 'گردش‌کار سازمان‌ها، کاربران و دموها' }] : []),
-          ...(supportAdminAccess ? [{ key: '/taze-system/tickets', label: 'تیکت‌ها' }] : []),
+          ...(supportAdminAccess ? [{ key: '/taze-system/tickets', icon: <Badge count={supportUnread} size="small" overflowCount={99}><MessageOutlined /></Badge>, label: 'تیکت‌ها' }] : []),
           ...(supportAdminAccess && supportWorkflowAccess ? [{ key: '/taze-system/tickets/workflows', label: 'گردش‌کار تیکت‌ها' }] : []),
           { key: '/saas_user_announcements', label: 'اعلانات کاربران' },
           { key: '/taze-system/plans', label: 'پلن‌ها' },
@@ -995,7 +1009,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       }] : []),
       { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
     ];
-  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewAdvertisingCampaigns, canViewContentCalendars, canViewCustomerClub, canViewGoalsHub, canViewInstagramInbox, canViewOrgKnowledge, canViewReportsHub, canViewSaasAdmin, canViewSupportCustomer, supportAdminAccess, supportWorkflowAccess, saasWorkflowAccess, communicationsAccess.canUseWorkspace, rolePermissions]);
+  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewAdvertisingCampaigns, canViewContentCalendars, canViewCustomerClub, canViewGoalsHub, canViewInstagramInbox, canViewOrgKnowledge, canViewReportsHub, canViewSaasAdmin, canViewSupportCustomer, supportAdminAccess, supportWorkflowAccess, supportUnread, saasWorkflowAccess, communicationsAccess.canUseWorkspace, rolePermissions]);
 
   const visibleRawMenuItems = useMemo<NonNullable<MenuProps['items']>>(() => {
     const canShowMenuKey = (key?: string) => {
