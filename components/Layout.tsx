@@ -93,6 +93,7 @@ import { resolveMobileKeyboardViewport } from '../utils/mobileKeyboardViewport';
 import { ADVERTISING_CAMPAIGNS_MODULE_ID } from '../utils/advertisingCampaigns';
 import { renderModuleIcon } from '../utils/moduleIcons';
 import { CONTENT_CALENDAR_PLAN_FEATURE } from '../modules/contentCalendarsConfig';
+import { SaasReadonlyContext } from './saas/SaasReadonlyContext';
 import { BILLBOARD_STATUS_MANAGEMENT_PLAN_FEATURE } from '../utils/billboardStatusChanges';
 
 const { Header, Sider, Content } = AntLayout;
@@ -132,7 +133,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [clearingDemoData, setClearingDemoData] = useState(false);
   const [orgTrialDaysLeft, setOrgTrialDaysLeft] = useState<number | null>(null);
   const [orgIsReadonly, setOrgIsReadonly] = useState(false);
-  const [orgTrialEndsAt, setOrgTrialEndsAt] = useState<string | null>(null);
   const [orgBillingReadonly, setOrgBillingReadonly] = useState(false);
   const [orgNextBillingInvoice, setOrgNextBillingInvoice] = useState<{ total_irt: number; due_at: string; status: string } | null>(null);
   const [renewalRequesting, setRenewalRequesting] = useState(false);
@@ -598,7 +598,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       setHasDemoBatch(false);
       setOrgTrialDaysLeft(null);
       setOrgIsReadonly(false);
-      setOrgTrialEndsAt(null);
       setOrgBillingReadonly(false);
       setOrgNextBillingInvoice(null);
       return;
@@ -620,13 +619,11 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           due_at: saasRes.next_billing_invoice.due_at,
           status: saasRes.next_billing_invoice.status,
         } : null);
-        setOrgTrialEndsAt(saasRes.trial_ends_at ?? null);
         setOrgTrialDaysLeft(resolveTrialDaysLeft(saasRes.trial_ends_at ?? null));
       } else {
         setOrgIsReadonly(false);
         setOrgBillingReadonly(false);
         setOrgNextBillingInvoice(null);
-        setOrgTrialEndsAt(null);
         setOrgTrialDaysLeft(null);
       }
 
@@ -640,7 +637,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   }, [currentUserProfile?.org_id, resolvedOrgId]);
 
   const isAccountStatusRoute = location.pathname === '/settings' && new URLSearchParams(location.search).get('tab') === 'account';
-  const shouldShowReadonlyOverlay = orgIsReadonly && !isAccountStatusRoute;
 
   const handleClearDemoData = useCallback(async () => {
     if (!isDemoOrg) {
@@ -1829,11 +1825,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
             <Button
               size="small"
               type="text"
-              loading={renewalRequesting}
-              onClick={handleRequestRenewal}
+              onClick={() => navigate('/settings?tab=account')}
               className={`font-bold border ${orgTrialDaysLeft <= 2 ? 'border-white text-white hover:bg-red-400' : 'border-amber-700 text-amber-900 hover:bg-amber-500'}`}
             >
-              درخواست تمدید
+              انتخاب پلن و خرید
             </Button>
           </div>
         )}
@@ -1880,36 +1875,17 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           className="layout-main-scroll relative flex-1 overflow-y-auto overflow-x-hidden"
           style={isMobile && !isKeyboardVisible ? { paddingBottom: 'calc(var(--app-mobile-footer-height, 64px) + 32px + env(safe-area-inset-bottom, 0px))' } : undefined}
         >
-          {children}
+          <SaasReadonlyContext.Provider value={orgIsReadonly}>
+            {children}
+          </SaasReadonlyContext.Provider>
         </Content>
 
-        {/* ── Expired trial blocking overlay ── */}
-        {shouldShowReadonlyOverlay && (
-          <div className="fixed inset-0 z-[2000] flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm p-6">
-            <div className="max-w-sm w-full rounded-3xl bg-white dark:bg-dark-surface shadow-2xl p-8 text-center space-y-5">
-              <div className="text-5xl">{isDemoOrg ? '⏰' : '💳'}</div>
-              <h2 className="text-xl font-black text-gray-800 dark:text-gray-100">{isDemoOrg ? 'دوره آزمایشی پایان یافت' : 'اشتراک نیاز به تمدید دارد'}</h2>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                {isDemoOrg ? 'دوره آزمایشی رایگان شما به پایان رسیده است. برای ادامه استفاده، درخواست تمدید ارسال کنید تا تیم ما با شما تماس بگیرد.' : 'مهلت تمدید به پایان رسیده است. داده‌های شما محفوظ است؛ با پرداخت صورت‌حساب از کیف پول یا درگاه، دسترسی کامل بازمی‌گردد.'}
-              </p>
-              {isDemoOrg && orgTrialEndsAt && (
-                <p className="text-xs text-gray-400">
-                  پایان آزمایشی: {new Date(orgTrialEndsAt).toLocaleDateString('fa-IR')}
-                </p>
-              )}
-              <Button
-                type="primary"
-                size="large"
-                block
-                loading={renewalRequesting}
-                onClick={isDemoOrg ? handleRequestRenewal : () => navigate('/settings?tab=account')}
-                className="bg-leather-600 border-leather-600 h-12 text-base font-bold rounded-2xl"
-              >
-                {isDemoOrg ? 'درخواست تمدید اشتراک' : 'مشاهده و پرداخت صورت‌حساب'}
-              </Button>
-              <p className="text-[11px] text-gray-400">
-                داده‌های شما محفوظ است. بعد از تمدید به همه چیز دسترسی خواهید داشت.
-              </p>
+        {orgIsReadonly && !isAccountStatusRoute && (
+          <div className="sticky bottom-0 z-[950] flex flex-wrap items-center justify-between gap-2 border-t border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-950">
+            <span>{isDemoOrg ? 'دوره آزمایشی پایان یافته است.' : 'اشتراک نیاز به تمدید دارد.'} اطلاعات سازمان برای مشاهده در دسترس است؛ برای ثبت تغییرات، اشتراک را فعال کنید.</span>
+            <div className="flex gap-2">
+              {isDemoOrg && <Button size="small" loading={renewalRequesting} onClick={handleRequestRenewal}>درخواست تمدید آزمایشی</Button>}
+              <Button size="small" type="primary" onClick={() => navigate('/settings?tab=account')}>انتخاب پلن و پرداخت</Button>
             </div>
           </div>
         )}

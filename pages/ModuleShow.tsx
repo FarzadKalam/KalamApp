@@ -4,6 +4,7 @@ import { Button, App, Checkbox, Modal, Progress, Select, Form, Input, Skeleton }
 import { EditOutlined, CheckOutlined, CloseOutlined, CopyOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
+import { useSaasReadonly } from '../components/saas/SaasReadonlyContext';
 import { FieldType, BlockType, FieldLocation, FieldNature, type ModuleDefinition } from '../types';
 import RelatedSidebar from '../components/Sidebar/RelatedSidebar';
 import SmartFieldRenderer from '../components/SmartFieldRenderer';
@@ -457,6 +458,7 @@ const _msIsMissingColumnError = (error: any, columnName: string) => {
 };
 
 const ModuleShow: React.FC = () => {
+  const saasReadonly = useSaasReadonly();
   const { moduleId = 'products', id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -2129,8 +2131,8 @@ const ModuleShow: React.FC = () => {
     [fieldPermissions]
   );
 
-  const baseCanEditModule = modulePermissions.edit !== false;
-  const baseCanDeleteModule = modulePermissions.delete !== false && moduleConfig?.disableDelete !== true;
+  const baseCanEditModule = !saasReadonly && modulePermissions.edit !== false;
+  const baseCanDeleteModule = !saasReadonly && modulePermissions.delete !== false && moduleConfig?.disableDelete !== true;
   const canLockCurrentRecord = canUseRecordLockPermission(currentPermissionMap, moduleId, 'lock', currentSoftwareRole);
   const canUnlockCurrentRecord = canUseRecordLockPermission(currentPermissionMap, moduleId, 'unlock', currentSoftwareRole);
   const canEditModule = baseCanEditModule && !isRecordLocked;

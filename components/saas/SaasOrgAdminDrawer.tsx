@@ -151,7 +151,6 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
     return { ...current, [code]: next };
   });
   const submitCart = async () => {
-    const orgId = String(record?.org_id || record?.source_id || '').trim();
     if (!orgId || !cartItems.length) return;
     setAccountSaving(true);
     try {
@@ -196,9 +195,9 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
   const adjustCredits = async () => {
     const { sms, ai, wallet } = creditDeltas;
     if (!sms && !ai && !wallet) { message.warning('حداقل یک مقدار شارژ یا کسر وارد کنید.'); return; }
+    if (!orgId) { message.error('شناسه سازمان مشخص نیست. حساب سازمان را دوباره باز کنید.'); return; }
     try {
       setAccountSaving(true);
-      const orgId = String(record?.org_id || record?.source_id || '').trim();
       const { data, error } = await supabase.rpc('admin_adjust_saas_org_account', {
         p_org_id: orgId, p_sms_delta: sms, p_ai_delta_irt: ai, p_billing_wallet_delta_irt: wallet, p_reason: creditReason,
       });

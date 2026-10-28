@@ -27,6 +27,7 @@ import {
 import { dataProvider as refineSupabaseDataProvider } from "@refinedev/supabase";
 import { useNavigate, useParams } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
+import { useSaasReadonly } from "../components/saas/SaasReadonlyContext";
 import { renderModuleIcon } from "../utils/moduleIcons";
 import SmartTableRenderer from "../components/SmartTableRenderer";
 import {
@@ -1067,6 +1068,7 @@ export const ModuleListRefine: React.FC<{
   initialViewFiltersOverride?: CrudFilters;
   storageKeySuffix?: string;
 }> = ({ moduleIdOverride, initialViewFiltersOverride, storageKeySuffix }) => {
+  const saasReadonly = useSaasReadonly();
   const { moduleId } = useParams();
   const resolvedModuleId = moduleIdOverride || moduleId;
   const navigate = useNavigate();
@@ -3120,9 +3122,9 @@ export const ModuleListRefine: React.FC<{
     (modulePermissions.view === false ? "own" : "all");
   const canViewModule =
     modulePermissions.view !== false || recordScope !== "all";
-  const canEditModule = modulePermissions.edit !== false;
+  const canEditModule = !saasReadonly && modulePermissions.edit !== false;
   const canDeleteModule =
-    modulePermissions.delete !== false && moduleConfig?.disableDelete !== true;
+    !saasReadonly && modulePermissions.delete !== false && moduleConfig?.disableDelete !== true;
   const canLockRecords = canUseRecordLockPermission(
     currentPermissionMap,
     resolvedModuleId,

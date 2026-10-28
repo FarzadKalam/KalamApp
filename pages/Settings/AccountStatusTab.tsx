@@ -76,12 +76,17 @@ const AccountStatusTab: React.FC = () => {
 
   const changeCart = (code: string, delta: number) => {
     setCart((current) => {
-      const next = Math.max(0, Math.min(100, Number(current[code] || 0) + delta));
-      if (!next) {
+      const minimum = code.startsWith('plan:') ? Math.max(3, Number(overview?.quotas?.users_used || 0)) : 1;
+      const next = Math.max(0, Math.min(1000, Number(current[code] || 0) + delta));
+      const quantity = next > 0 ? Math.max(minimum, next) : 0;
+      if (!quantity) {
         const { [code]: _removed, ...rest } = current;
         return rest;
       }
-      return { ...current, [code]: next };
+      const otherItems = code.startsWith('plan:')
+        ? Object.fromEntries(Object.entries(current).filter(([itemCode]) => !itemCode.startsWith('plan:')))
+        : current;
+      return { ...otherItems, [code]: quantity };
     });
   };
 
@@ -316,9 +321,18 @@ const AccountStatusTab: React.FC = () => {
           <Row gutter={[14, 14]}>
             {catalog.map((item) => {
               const count = Number(cart[item.code] || 0);
-              return <Col xs={24} md={12} xl={8} key={item.code}><Card size="small" className="h-full rounded-xl border-slate-200" title={item.title} extra={<Tag color="blue">{formatIrt(item.price_irt)}</Tag>}>
+              return <Col xs={24} md={12} xl={8} key={item.code}><Card size="small" className="h-full rounded-xl border-slate-200" title={item.title} extra={<Tag color="blue">{formatIrt(item.price_irt)}{item.item_kind === 'plan' ? ' به‌ازای هر کاربر در ماه' : ''}</Tag>}>
                 <Text type="secondary" className="block min-h-10 text-xs">{item.description || 'افزودن به حساب سازمان'}</Text>
-                <div className="mt-4 flex items-center justify-between gap-2"><Tag>{item.item_kind === 'plan' ? 'ارتقای پلن' : item.item_kind === 'bundle' ? 'بسته کاربردی' : item.item_kind === 'quota' ? 'سهمیه' : 'دسترسی'}</Tag><Space size={4}>{count ? <Button size="small" onClick={() => changeCart(item.code, -1)}>−</Button> : null}{count ? <Text strong>{count}</Text> : null}<Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => changeCart(item.code, 1)}>{count ? '' : 'افزودن'}</Button></Space></div>
+                {item.item_kind === 'plan' ? (
+                  <div className="mt-4 flex items-center justify-between gap-2">
+                    <Text type="secondary" className="text-xs">تعداد کاربران · حداقل {Math.max(3, Number(quotas.users_used || 0)).toLocaleString('fa-IR')}</Text>
+                    <Space size={4}>
+                      {count ? <Button size="small" onClick={() => setCart((current) => { const next = { ...current }; delete next[item.code]; return next; })}>حذف</Button> : null}
+                      {count ? <InputNumber size="small" min={Math.max(3, Number(quotas.users_used || 0))} max={1000} value={count} onChange={(value) => setCart((current) => ({ ...current, [item.code]: Math.max(3, Number(quotas.users_used || 0), Math.floor(Number(value || 3))) }))} aria-label="تعداد کاربران پلن" /> : null}
+                      {!count ? <Button size="small" type="primary" onClick={() => changeCart(item.code, Math.max(3, Number(quotas.users_used || 0)))}>انتخاب پلن</Button> : null}
+                    </Space>
+                  </div>
+                ) : <div className="mt-4 flex items-center justify-between gap-2"><Tag>{item.item_kind === 'bundle' ? 'بسته کاربردی' : item.item_kind === 'quota' ? 'سهمیه' : 'دسترسی'}</Tag><Space size={4}>{count ? <Button size="small" onClick={() => changeCart(item.code, -1)}>−</Button> : null}{count ? <Text strong>{count}</Text> : null}<Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => changeCart(item.code, 1)}>{count ? '' : 'افزودن'}</Button></Space></div>}
               </Card></Col>;
             })}
           </Row>

@@ -27,6 +27,10 @@ export const toFaErrorMessage = (error: unknown, fallback = 'خطا در انج�
 
   if (!raw) return fallback;
 
+  if (contains(normalized, 'saas_readonly_subscription_required')) {
+    return 'اشتراک این سازمان پایان یافته است. اطلاعات قابل مشاهده‌اند؛ برای ثبت تغییرات، اشتراک را از صفحه حساب تمدید کنید.';
+  }
+
   if (hasPersianText(raw) && !contains(raw, '???')) return raw;
 
   if (
