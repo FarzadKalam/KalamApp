@@ -2140,14 +2140,16 @@ async function getOrgSmsSettings(url: string, key: string, orgId: string): Promi
   ).catch(() => []);
   if (rows.length === 0) return null;
   const settings = rows[0]?.settings || {};
+  const provider = String(settings.provider || rows[0]?.provider || 'meli_payamak').trim();
   // Merge env vars (env takes priority)
   return {
     ...settings,
-    username: Deno.env.get('MELIPAYAMAK_USERNAME') || settings.username || '',
-    password: Deno.env.get('MELIPAYAMAK_PASSWORD') || settings.password || '',
-    api_key: Deno.env.get('MELIPAYAMAK_API_KEY') || settings.api_key || '',
+    provider,
+    username: provider === 'kavenegar' ? (settings.username || '') : (Deno.env.get('MELIPAYAMAK_USERNAME') || settings.username || ''),
+    password: provider === 'kavenegar' ? (settings.password || '') : (Deno.env.get('MELIPAYAMAK_PASSWORD') || settings.password || ''),
+    api_key: provider === 'kavenegar' ? (settings.api_key || '') : (Deno.env.get('MELIPAYAMAK_API_KEY') || settings.api_key || ''),
     sender_numbers: Array.isArray(settings.sender_numbers) ? settings.sender_numbers : [],
-    sender_number: Deno.env.get('MELIPAYAMAK_SENDER_NUMBER') || settings.sender_number || '',
+    sender_number: provider === 'kavenegar' ? (settings.sender_number || '') : (Deno.env.get('MELIPAYAMAK_SENDER_NUMBER') || settings.sender_number || ''),
   };
 }
 
@@ -2185,7 +2187,7 @@ async function insertSmsAudit(url: string, key: string, payload: {
     org_id: payload.orgId,
     channel_type: 'sms',
     direction: 'outbound',
-    provider: 'meli_payamak',
+    provider: String(payload.metadata?.provider || 'meli_payamak'),
     related_module_id: payload.moduleId || null,
     related_record_id: payload.recordId || null,
     customer_id: null,
@@ -2212,6 +2214,7 @@ async function auditSmsBatch(url: string, key: string, payload: {
   title?: string | null;
   status: 'provider_accepted' | 'failed' | 'skipped';
   errorMessage?: string | null;
+  provider?: string | null;
   metadata?: Record<string, any>;
 }): Promise<void> {
   for (const recipient of payload.recipients) {
@@ -2224,7 +2227,7 @@ async function auditSmsBatch(url: string, key: string, payload: {
       title: payload.title,
       status: payload.status,
       errorMessage: payload.errorMessage,
-      metadata: payload.metadata,
+      metadata: { ...(payload.metadata || {}), ...(payload.provider ? { provider: payload.provider } : {}) },
     });
   }
 }
@@ -4312,10 +4315,10 @@ async function executeAction(
     }
     try {
       const sentRecipients = await sendSmsViaProvider(smsSettings, allRecipients, text, url, key);
-      await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: sentRecipients, text, title: String(config.title || '').trim() || null, status: 'provider_accepted', metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
+      await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: sentRecipients, text, title: String(config.title || '').trim() || null, status: 'provider_accepted', provider: smsSettings.provider, metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
       return actionResult(action, sentRecipients.length > 0 ? 'success' : 'skipped', sentRecipients.length > 0 ? undefined : 'هیچ شماره معتبری ارسال نشد.', { recipient_count: sentRecipients.length });
     } catch (e: any) {
-      await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: allRecipients, text, title: String(config.title || '').trim() || null, status: 'failed', errorMessage: String(e?.message || e), metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
+      await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: allRecipients, text, title: String(config.title || '').trim() || null, status: 'failed', errorMessage: String(e?.message || e), provider: smsSettings.provider, metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
       throw e;
     }
   }
@@ -5412,6 +5415,7 @@ async function deliverScheduledReport(
           recipients: sentRecipients,
           text: message,
           status: 'provider_accepted',
+          provider: smsSettings.provider,
           metadata: {
             source_type: 'scheduled_report',
             scheduled_report_id: report.id,
@@ -5428,6 +5432,7 @@ async function deliverScheduledReport(
           text: message,
           status: 'failed',
           errorMessage: String(error?.message || error),
+          provider: smsSettings.provider,
           metadata: { source_type: 'scheduled_report', scheduled_report_id: report.id },
         });
         throw error;
@@ -5663,9 +5668,9 @@ async function deliverWorkScheduleNotification(
       try {
         const sentRecipients = await sendSmsViaProvider(smsSettings, phones, message, url, key);
         deliveredCount += sentRecipients.length;
-        await auditSmsBatch(url, key, { orgId: schedule.org_id, moduleId: 'work_schedules', recordId: schedule.id, recipients: sentRecipients, text: message, status: 'provider_accepted', metadata: { source_type: 'scheduled_work_schedule', work_schedule_id: schedule.id } });
+        await auditSmsBatch(url, key, { orgId: schedule.org_id, moduleId: 'work_schedules', recordId: schedule.id, recipients: sentRecipients, text: message, status: 'provider_accepted', provider: smsSettings.provider, metadata: { source_type: 'scheduled_work_schedule', work_schedule_id: schedule.id } });
       } catch (error: any) {
-        await auditSmsBatch(url, key, { orgId: schedule.org_id, moduleId: 'work_schedules', recordId: schedule.id, recipients: phones, text: message, status: 'failed', errorMessage: String(error?.message || error), metadata: { source_type: 'scheduled_work_schedule', work_schedule_id: schedule.id } });
+        await auditSmsBatch(url, key, { orgId: schedule.org_id, moduleId: 'work_schedules', recordId: schedule.id, recipients: phones, text: message, status: 'failed', errorMessage: String(error?.message || error), provider: smsSettings.provider, metadata: { source_type: 'scheduled_work_schedule', work_schedule_id: schedule.id } });
         throw error;
       }
     }

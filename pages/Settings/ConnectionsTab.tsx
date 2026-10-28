@@ -83,6 +83,7 @@ const RUBIKA_OFFICIAL_API_BASE_URL = OFFICIAL_BOT_API_BASE_URL.rubika;
 type FormValues = {
   sms: {
     provider?: string;
+    base_url?: string;
     username?: string;
     password?: string;
     api_key?: string;
@@ -211,7 +212,7 @@ const CANONICAL_CONNECTION_TYPES: ConnectionType[] = [
 ];
 
 const CONNECTION_PANEL_SEARCH_TEXT: Record<string, string> = {
-  sms: 'پیامک ملی پیامک otp احراز پیام',
+  sms: 'پیامک ملی پیامک کاوه نگار kavenegar otp احراز پیام',
   email: 'ایمیل smtp mail',
   site: 'سایت api webhook',
   voip: 'تلفن voip تلفنچی telefonchy تماس داخلی اپراتور smartcall',
@@ -253,6 +254,7 @@ const normalizeSmsSenderNumbers = (value: unknown, legacyValue?: unknown) => {
 const DEFAULT_VALUES: FormValues = {
   sms: {
     provider: 'meli_payamak',
+    base_url: 'https://api.kavenegar.com/v1',
     username: '',
     password: '',
     api_key: '',
@@ -510,7 +512,10 @@ const ConnectionsTab: React.FC = () => {
   };
 
   const smsProviderOptions = useMemo(
-    () => [{ label: 'ملی پیامک', value: 'meli_payamak' }],
+    () => [
+      { label: 'ملی پیامک', value: 'meli_payamak' },
+      { label: 'کاوه‌نگار', value: 'kavenegar' },
+    ],
     []
   );
 
@@ -605,9 +610,13 @@ const ConnectionsTab: React.FC = () => {
 
   const buildSmsOverrideSettings = (smsValues: FormValues['sms']) => {
     const senderNumbers = normalizeSmsSenderNumbers(smsValues?.sender_numbers, smsValues?.sender_number);
+    const provider = String(smsValues?.provider || 'meli_payamak').trim();
     return ({
-    mode: 'soap' as const,
-    base_url: 'https://api.payamak-panel.com/post/send.asmx/SendSimpleSMS2',
+    provider,
+    mode: provider === 'kavenegar' ? 'rest' as const : 'soap' as const,
+    base_url: provider === 'kavenegar'
+      ? String(smsValues?.base_url || 'https://api.kavenegar.com/v1').trim()
+      : 'https://api.payamak-panel.com/post/send.asmx/SendSimpleSMS2',
     username: String(smsValues?.username || '').trim(),
     password: String(smsValues?.password || '').trim(),
     api_key: String(smsValues?.api_key || '').trim(),
@@ -1200,15 +1209,19 @@ const ConnectionsTab: React.FC = () => {
       const apiKey = String(smsValues?.api_key || '').trim();
       const senderNumber = normalizeSmsSenderNumbers(smsValues?.sender_numbers, smsValues?.sender_number)[0] || '';
 
-      if (provider !== 'meli_payamak') {
-        message.error('در حال حاضر فقط ارسال تست برای ملی پیامک فعال است.');
+      if (!['meli_payamak', 'kavenegar'].includes(provider)) {
+        message.error('ارائه‌دهنده پیامک را انتخاب کنید.');
         return;
       }
-      if (!username && !apiKey) {
+      if (provider === 'kavenegar' && !apiKey) {
+        message.error('API Key کاوه‌نگار را وارد کنید.');
+        return;
+      }
+      if (provider === 'meli_payamak' && !username && !apiKey) {
         message.error('حداقل نام کاربری یا API Key را وارد کنید.');
         return;
       }
-      if (!password && !apiKey) {
+      if (provider === 'meli_payamak' && !password && !apiKey) {
         message.error('برای حالت نام کاربری، رمز عبور الزامی است.');
         return;
       }
@@ -1680,14 +1693,18 @@ const ConnectionsTab: React.FC = () => {
                     <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
                   </Form.Item>
 
-                  <Form.Item label="نام کاربری ملی پیامک" name={['sms', 'username']}>
+                  <Form.Item label="نام کاربری (ملی پیامک)" name={['sms', 'username']}>
                     <Input placeholder="معمولا شماره موبایل پنل" />
                   </Form.Item>
                   <Form.Item label="API Key" name={['sms', 'api_key']}>
-                    <Input placeholder="کلید API ملی پیامک" />
+                    <Input placeholder="برای کاوه‌نگار و حالت API ملی پیامک" />
                   </Form.Item>
-                  <Form.Item label="رمز عبور یا API Key" name={['sms', 'password']}>
+                  <Form.Item label="رمز عبور (ملی پیامک)" name={['sms', 'password']}>
                     <Input.Password placeholder="طبق مستندات ملی‌پیامک می‌توانید API Key را اینجا قرار دهید" />
+                  </Form.Item>
+
+                  <Form.Item label="آدرس API کاوه‌نگار" name={['sms', 'base_url']}>
+                    <Input dir="ltr" placeholder="https://api.kavenegar.com/v1" />
                   </Form.Item>
 
                   <Form.Item

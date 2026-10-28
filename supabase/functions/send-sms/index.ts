@@ -3,6 +3,7 @@
 type SmsMode = 'rest' | 'soap';
 
 type SmsSettings = {
+  provider?: 'meli_payamak' | 'kavenegar' | string;
   username?: string;
   password?: string;
   api_key?: string;
@@ -42,7 +43,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'send-sms-2026-10-20-01';
+const FUNCTION_BUILD = 'send-sms-2026-10-29-01';
 
 const json = (status: number, payload: Record<string, any>) =>
   new Response(JSON.stringify({ build: FUNCTION_BUILD, ...payload }), {
@@ -91,6 +92,70 @@ const DEFAULT_SMS_SEND_URL = 'https://api.payamak-panel.com/post/send.asmx/SendS
 const DEFAULT_SMS_CREDIT_URL = 'https://api.payamak-panel.com/post/send.asmx/GetCredit';
 const DEFAULT_SMS_OTP_URL = 'https://rest.payamak-panel.com/api/SendSMS/SendOtp';
 const DEFAULT_SMS_OTP_SOAP_URL = 'https://api.payamak-panel.com/post/Send.asmx/SendOtp';
+const DEFAULT_KAVENEGAR_BASE_URL = 'https://api.kavenegar.com/v1';
+
+const isKavenegarProvider = (settings: SmsSettings | null | undefined) =>
+  String(settings?.provider || '').trim().toLowerCase() === 'kavenegar';
+
+const kavenegarApiUrl = (settings: SmsSettings, method: string) => {
+  const apiKey = String(settings.api_key || '').trim();
+  const base = String(settings.base_url || DEFAULT_KAVENEGAR_BASE_URL).trim().replace(/\/+$/, '');
+  if (!apiKey) throw new Error('API Key کاوه‌نگار وارد نشده است.');
+  return `${base}/${encodeURIComponent(apiKey)}/${method.replace(/^\/+/, '')}.json`;
+};
+
+const callKavenegar = async (settings: SmsSettings, method: string, params: Record<string, string>, timeoutMs = 9000) => {
+  const requestUrl = new URL(kavenegarApiUrl(settings, method));
+  Object.entries(params).forEach(([key, value]) => requestUrl.searchParams.set(key, value));
+  const timeout = createTimeoutSignal(timeoutMs);
+  let response: Response;
+  try {
+    response = await fetch(requestUrl, { method: 'GET', signal: timeout.signal });
+  } finally { timeout.cleanup(); }
+  const raw = await response.text();
+  if (!response.ok) throw new Error(raw || `HTTP ${response.status}`);
+  const parsed = parseJsonSafe(raw);
+  const status = Number(parsed?.return?.status ?? parsed?.return?.Status ?? 0);
+  const message = String(parsed?.return?.message || '').trim();
+  if (!parsed || (Number.isFinite(status) && status !== 200)) {
+    throw new Error(`کاوه‌نگار: ${message || 'پاسخ سرویس معتبر نبود.'}`);
+  }
+  return { parsed, raw };
+};
+
+const sendSmsWithKavenegar = async (to: string[], text: string, settings: SmsSettings) => {
+  const sender = String(settings.sender_number || '').trim();
+  const recipients = Array.from(new Set((to || []).map((value) => normalizeRecipientPhone(String(value || '').trim())).filter(Boolean)));
+  const messageText = normalizeSmsMessageText(text);
+  if (!sender) throw new Error('خط ارسال کاوه‌نگار وارد نشده است.');
+  if (!messageText) throw new Error('متن پیامک خالی است.');
+  if (!recipients.length) throw new Error('گیرنده پیامک مشخص نشده است.');
+  const providerResults: any[] = [];
+  for (const recipient of recipients) {
+    const { parsed, raw } = await callKavenegar(settings, 'sms/send', { receptor: recipient, sender, message: messageText });
+    const result = parsed?.entries?.[0] || {};
+    providerResults.push({
+      recipient,
+      raw,
+      result: String(result.messageid || result.messageId || result.status || 'accepted'),
+      method: 'kavenegar_sms_send',
+      provider_status: String(result.status || parsed?.return?.status || ''),
+      provider_status_text: String(result.statustext || parsed?.return?.message || ''),
+      delivery: null,
+    });
+  }
+  return { provider_method: 'kavenegar_sms_send', sent: recipients.length, provider_results: providerResults };
+};
+
+const getKavenegarCredit = async (settings: SmsSettings) => {
+  const { parsed, raw } = await callKavenegar(settings, 'account/info', {});
+  const info = parsed?.entries?.[0] || {};
+  const balance = info.remaincredit ?? info.remainCredit ?? info.balance ?? null;
+  if (balance === null || balance === undefined || Number.isNaN(Number(balance))) {
+    throw new Error('اعتبار حساب کاوه‌نگار در پاسخ سرویس پیدا نشد.');
+  }
+  return { balance: String(balance), raw };
+};
 
 const mergeEnvPreferredSmsSettings = (settings: SmsSettings | null | undefined): SmsSettings => ({
   ...(settings || {}),
@@ -107,15 +172,21 @@ const mergeEnvPreferredSmsSettings = (settings: SmsSettings | null | undefined):
 
 const mergeEnvFallbackSmsSettings = (settings: SmsSettings | null | undefined): SmsSettings => ({
   ...(settings || {}),
-  username: String(settings?.username || Deno.env.get('MELIPAYAMAK_USERNAME') || '').trim(),
-  password: String(settings?.password || Deno.env.get('MELIPAYAMAK_PASSWORD') || '').trim(),
-  api_key: String(settings?.api_key || Deno.env.get('MELIPAYAMAK_API_KEY') || '').trim(),
-  sender_number: String(settings?.sender_number || Deno.env.get('MELIPAYAMAK_SENDER_NUMBER') || '').trim(),
-  console_advanced_url: String(settings?.console_advanced_url || Deno.env.get('MELIPAYAMAK_CONSOLE_ADVANCED_URL') || '').trim(),
-  console_shared_url: String(settings?.console_shared_url || Deno.env.get('MELIPAYAMAK_CONSOLE_SHARED_URL') || '').trim(),
-  otp_text_template: String(settings?.otp_text_template || Deno.env.get('MELIPAYAMAK_OTP_TEXT_TEMPLATE') || '').trim(),
-  otp_soap_url: String(settings?.otp_soap_url || Deno.env.get('MELIPAYAMAK_OTP_SOAP_URL') || '').trim(),
-  otp_shared_body_id: String(settings?.otp_shared_body_id || settings?.body_id || Deno.env.get('MELIPAYAMAK_OTP_SHARED_BODY_ID') || '').trim(),
+  ...(isKavenegarProvider(settings) ? {
+    provider: 'kavenegar',
+    api_key: String(settings?.api_key || '').trim(),
+    sender_number: String(settings?.sender_number || '').trim(),
+  } : {
+    username: String(settings?.username || Deno.env.get('MELIPAYAMAK_USERNAME') || '').trim(),
+    password: String(settings?.password || Deno.env.get('MELIPAYAMAK_PASSWORD') || '').trim(),
+    api_key: String(settings?.api_key || Deno.env.get('MELIPAYAMAK_API_KEY') || '').trim(),
+    sender_number: String(settings?.sender_number || Deno.env.get('MELIPAYAMAK_SENDER_NUMBER') || '').trim(),
+    console_advanced_url: String(settings?.console_advanced_url || Deno.env.get('MELIPAYAMAK_CONSOLE_ADVANCED_URL') || '').trim(),
+    console_shared_url: String(settings?.console_shared_url || Deno.env.get('MELIPAYAMAK_CONSOLE_SHARED_URL') || '').trim(),
+    otp_text_template: String(settings?.otp_text_template || Deno.env.get('MELIPAYAMAK_OTP_TEXT_TEMPLATE') || '').trim(),
+    otp_soap_url: String(settings?.otp_soap_url || Deno.env.get('MELIPAYAMAK_OTP_SOAP_URL') || '').trim(),
+    otp_shared_body_id: String(settings?.otp_shared_body_id || settings?.body_id || Deno.env.get('MELIPAYAMAK_OTP_SHARED_BODY_ID') || '').trim(),
+  }),
 });
 
 const getServiceHeaders = (serviceRoleKey: string) => ({
@@ -808,6 +879,7 @@ const querySmsDeliveryStatus = async (
 };
 
 const sendSmsWithProviderFallback = async (to: string[], text: string, settings: SmsSettings) => {
+  if (isKavenegarProvider(settings)) return await sendSmsWithKavenegar(to, text, settings);
   const recipients = Array.from(new Set((to || []).map((value) => normalizeRecipientPhone(String(value || '').trim())).filter(Boolean)));
   const messageText = normalizeSmsMessageText(text);
   const username = String(settings.username || '').trim();
@@ -978,6 +1050,7 @@ const sendSmsWithProviderFallback = async (to: string[], text: string, settings:
 };
 
 const getSmsCreditWithProvider = async (settings: SmsSettings) => {
+  if (isKavenegarProvider(settings)) return await getKavenegarCredit(settings);
   const username = String(settings.username || '').trim();
   const password = String(settings.password || settings.api_key || '').trim();
   const creditUrl = String(Deno.env.get('MELIPAYAMAK_SMS_CREDIT_URL') || settings.credit_url || DEFAULT_SMS_CREDIT_URL).trim();
