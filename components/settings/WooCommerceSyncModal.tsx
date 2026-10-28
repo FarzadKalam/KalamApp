@@ -12,7 +12,7 @@ type SyncRow = {
   systemName: string | null;
   siteName: string | null;
   siteCode: string;
-  status: 'linked' | 'candidate' | 'site_only' | 'system_only';
+  status: 'linked' | 'candidate' | 'site_only' | 'system_only' | 'missing_site' | 'unverified';
   candidateId?: string | null;
   candidateName?: string | null;
   remoteType?: string;
@@ -161,8 +161,10 @@ const WooCommerceSyncModal: React.FC<Props> = ({ connection, onClose, onPolicySa
             ? <Typography.Text type="warning">احتمالاً: {row.candidateName}</Typography.Text>
             : <Typography.Text type="secondary">—</Typography.Text>) },
           { title: 'کد/ایمیل', dataIndex: 'siteCode', render: (value: string) => value || '—' },
-          { title: 'وضعیت نگاشت', render: (_, row) => <Tag color={row.status === 'linked' ? 'green' : 'gold'}>
-            {row.status === 'linked' ? 'متصل' : row.candidateId ? 'هم‌کد؛ تأیید لازم' : 'هنوز متصل نشده'}</Tag> },
+          { title: 'وضعیت', render: (_, row) => <Tag color={row.status === 'linked' ? 'green' : row.status === 'missing_site' ? 'red' : 'gold'}>
+            {row.status === 'linked' ? 'در هر دو طرف' : row.status === 'missing_site' ? 'در سایت پیدا نشد'
+              : row.candidateId ? 'هم‌کد؛ تأیید لازم' : row.status === 'system_only' ? 'با این کد در سایت نیست'
+                : row.status === 'site_only' ? 'در تازه سیستم نیست' : 'نگاشت نشده؛ وجود نامشخص'}</Tag> },
           { title: 'عملیات', render: (_, row) => module === 'invoices' ? <Space wrap>
             {row.localId && !row.externalId && <Button size="small" disabled={busy}
               onClick={() => void sync(row, 'to_site')}>ایجاد سفارش در سایت</Button>}
@@ -170,7 +172,7 @@ const WooCommerceSyncModal: React.FC<Props> = ({ connection, onClose, onPolicySa
             {row.candidateId && <Button size="small" disabled={busy} onClick={() => void link(row)}>اتصال هم‌کدها</Button>}
             {row.externalId && !row.candidateId && <Button size="small" disabled={busy || row.remoteType === 'variable'}
               onClick={() => void sync(row, 'from_site')}>دریافت از سایت</Button>}
-            {row.localId && <Button size="small" disabled={busy}
+            {row.localId && !row.candidateId && row.status !== 'missing_site' && <Button size="small" disabled={busy}
               onClick={() => void sync(row, 'to_site')}>ارسال به سایت</Button>}
             {row.localId && row.externalId && <Popconfirm title="اتصال این دو رکورد جدا شود؟"
               description="اطلاعات در هیچ‌یک از دو طرف حذف نمی‌شود." okText="بله، جدا شود" cancelText="انصراف"

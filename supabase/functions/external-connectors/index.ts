@@ -202,13 +202,48 @@ const previewRecords = async (connection: any, module: SyncModule, scope: 'site'
     .eq('module_key', module).in('local_id', localIds.length ? localIds : ['00000000-0000-0000-0000-000000000000']);
   if (linksError) throw linksError;
   const linkByLocal = new Map((links || []).map((item: any) => [item.local_id, item.external_id]));
-  return (local || []).map((item: any) => ({ key: `system:${item.id}`, localId: item.id,
-    externalId: linkByLocal.get(item.id) || null,
-    systemName: trim(item.name || item.full_name || item.system_code) || 'بدون عنوان',
-    siteName: null, siteCode: trim(item.manual_code || item.system_code || item.email || ''),
-    status: linkByLocal.has(item.id) ? 'linked' : 'system_only',
-    systemUpdatedAt: item.updated_at || null,
-  }));
+  const linkedIds = [...new Set([...linkByLocal.values()].map((id) => trim(id)).filter((id) => /^\d+$/.test(id)))];
+  const linkedRemote = linkedIds.length
+    ? await wooGet(connection, `${config.woo}?include=${linkedIds.join(',')}&per_page=100`)
+    : [];
+  const remoteById = new Map(linkedRemote.map((item: any) => [trim(item.id), item]));
+  const unlinked = (local || []).filter((item: any) => !linkByLocal.has(item.id));
+  const matchesByCode = new Map<string, any[]>();
+  if (module === 'products') {
+    const codes = [...new Set(unlinked.map((item: any) => trim(item.manual_code || item.system_code)).filter(Boolean))];
+    if (codes.length) {
+      const possible = await wooGet(connection, `products?sku=${encodeURIComponent(codes.join(','))}&per_page=100`);
+      for (const item of possible) {
+        const code = trim(item.sku).toLowerCase();
+        matchesByCode.set(code, [...(matchesByCode.get(code) || []), item]);
+      }
+    }
+  } else if (module === 'customers') {
+    const emails = [...new Set(unlinked.map((item: any) => trim(item.email)).filter(Boolean))];
+    for (let offset = 0; offset < emails.length; offset += 5) {
+      const group = emails.slice(offset, offset + 5);
+      const batches = await Promise.all(group.map((email) =>
+        wooGet(connection, `customers?email=${encodeURIComponent(email)}&per_page=10`)));
+      batches.forEach((matches, index) => matchesByCode.set(group[index].toLowerCase(), matches
+        .filter((item: any) => trim(item.email).toLowerCase() === group[index].toLowerCase())));
+    }
+  }
+  return (local || []).map((item: any) => {
+    const linkedId = trim(linkByLocal.get(item.id));
+    const code = trim(item.manual_code || item.system_code || item.email).toLowerCase();
+    const candidates = !linkedId ? matchesByCode.get(code) || [] : [];
+    const candidate = candidates.length === 1 ? candidates[0] : null;
+    const remote = linkedId ? remoteById.get(linkedId) : candidate;
+    return { key: `system:${item.id}`, localId: item.id,
+      externalId: linkedId || (candidate ? trim(candidate.id) : null),
+      candidateId: candidate ? item.id : null,
+      systemName: trim(item.name || item.full_name || item.system_code) || 'بدون عنوان',
+      siteName: remote ? trim(remote.name || remote.number || [remote.first_name, remote.last_name].filter(Boolean).join(' ')) : null,
+      siteCode: trim(item.manual_code || item.system_code || item.email || ''),
+      status: linkedId ? remote ? 'linked' : 'missing_site' : candidate ? 'candidate' : module === 'invoices' ? 'unverified' : 'system_only',
+      remoteType: trim(remote?.type || ''), systemUpdatedAt: item.updated_at || null,
+    };
+  });
 };
 
 const moneyFactor = async (connection: any) => {
