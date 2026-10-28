@@ -35,6 +35,7 @@ jobs:
           utils/tableColumnLayout.test.ts utils/moduleListLocalRows.test.ts
           utils/moduleListShortcut.test.ts utils/moduleListColumnFilters.test.ts
           utils/optionHelpers.test.ts utils/moduleListLive.test.ts
+          utils/saasPlanDisplayFeatures.test.ts
           hooks/useTableColumnLayout.test.tsx components/table/TableChoiceFilter.test.tsx
           components/SmartTableRenderer.test.tsx
           --maxWorkers=1 --no-file-parallelism

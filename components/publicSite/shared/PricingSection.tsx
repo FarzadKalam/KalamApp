@@ -4,6 +4,7 @@ import { ArrowLeftOutlined, CheckCircleOutlined, DownOutlined, UpOutlined } from
 import { supabase } from '../../../supabaseClient';
 import { sitePath, DEMO_URL } from '../siteLinks';
 import { SectionHeading } from '../primitives';
+import { parseSaasPlanDisplayFeatures } from '../../../utils/saasPlanDisplayFeatures';
 
 type PublicPlan = {
   id: string;
@@ -21,18 +22,6 @@ type PublicPlan = {
   custom_price_label: string | null;
   display_features: Array<string | { text: string; featured?: boolean | null }>;
   trial_days: number;
-};
-
-type PublicPlanFeature = { text: string; featured: boolean };
-
-const parsePublicPlanFeatures = (raw: PublicPlan['display_features']): PublicPlanFeature[] => {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((item, index) => {
-      if (typeof item === 'string') return { text: item.trim(), featured: index < 6 };
-      return { text: String(item?.text ?? '').trim(), featured: Boolean(item?.featured) };
-    })
-    .filter((item) => item.text);
 };
 
 const usePricingPlans = () => {
@@ -104,7 +93,7 @@ export const PricingSection: React.FC<{
           <div className={`grid gap-5 ${plans.length === 2 ? 'lg:grid-cols-2' : 'lg:grid-cols-3'}`}>
             {plans.map((plan) => {
               const highlighted = !!plan.highlight_tag;
-              const normalizedFeatures = parsePublicPlanFeatures(plan.display_features);
+              const normalizedFeatures = parseSaasPlanDisplayFeatures(plan.display_features);
               const primaryFeatures = normalizedFeatures.filter((item) => item.featured);
               const extraFeatures = normalizedFeatures.filter((item) => !item.featured);
               const expanded = expandedPlanIds.has(plan.id);

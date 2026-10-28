@@ -8,7 +8,7 @@ const corsHeaders = {
 };
 
 const FUNCTION_BUILD =
-  "payment-gateway-2026-08-24-online-invoice-receipt-reliability";
+  "payment-gateway-2026-10-29-central-callback-fallback";
 
 const json = (status: number, payload: Record<string, any>) =>
   new Response(JSON.stringify({ build: FUNCTION_BUILD, ...payload }), {
@@ -50,6 +50,17 @@ const normalizeCallbackPath = (value: any) => {
   const raw =
     String(value || "/payment/callback").trim() || "/payment/callback";
   return raw.startsWith("/") ? raw : `/${raw}`;
+};
+const centralPaymentCallbackUrl = () => {
+  const origin = trimSlashEnd(String(
+    Deno.env.get("PAYMENT_PUBLIC_URL") ||
+    Deno.env.get("PUBLIC_FUNCTIONS_URL") ||
+    Deno.env.get("PUBLIC_SITE_URL") ||
+    "",
+  ).trim());
+  if (!origin) throw new Error("دامنه callback درگاه مرکزی تنظیم نشده است.");
+  const path = normalizeCallbackPath(Deno.env.get("PAYMENT_CALLBACK_PATH") || "/payment/callback");
+  return `${origin}${path}`;
 };
 const normalizeSafeReturnOrigin = (value: any) => {
   const raw = trimSlashEnd(String(value || "").trim());
@@ -758,21 +769,7 @@ const createAiCreditTopup = async (
     String(Deno.env.get("ZARINPAL_MODE") || "production") === "sandbox"
       ? "sandbox"
       : "production";
-  const paymentDomain = trimSlashEnd(
-    String(
-      Deno.env.get("PAYMENT_PUBLIC_URL") ||
-        Deno.env.get("PUBLIC_FUNCTIONS_URL") ||
-        "",
-    ).trim(),
-  );
-  const callbackPath = normalizeCallbackPath(
-    Deno.env.get("PAYMENT_CALLBACK_PATH") || "/payment/callback",
-  );
-  if (!paymentDomain)
-    return json(500, {
-      success: false,
-      message: "دامنه callback درگاه مرکزی تنظیم نشده است.",
-    });
+  const callbackBaseUrl = centralPaymentCallbackUrl();
   const returnOrigin =
     (await getTenantPublicOrigin(urlBase, key, String(profile.org_id || ""))) ||
     normalizeSafeReturnOrigin(body?.return_origin);
@@ -801,7 +798,7 @@ const createAiCreditTopup = async (
       },
     ]),
   });
-  const callbackUrl = `${paymentDomain}${callbackPath}?tx=${enc(tx.id)}`;
+  const callbackUrl = `${callbackBaseUrl}?tx=${enc(tx.id)}`;
   try {
     const zp = await zarinpalRequest(centralMerchantId, mode, {
       amount: amountIrt,
@@ -854,6 +851,7 @@ const createSaasAccountOrderPayment = async (
 ) => {
   const { profile } = await getAuthenticatedProfile(req, urlBase, key);
   if (!centralMerchantId) throw new Error("Merchant ID درگاه مرکزی تازه سیستم تنظیم نشده است.");
+  const callbackBaseUrl = centralPaymentCallbackUrl();
   // A tenant may either start a new checkout from its own cart or pay a
   // pending order prepared by the SaaS administrator.  In both cases the
   // database recalculates/validates the amount; the browser never supplies it.
@@ -867,9 +865,6 @@ const createSaasAccountOrderPayment = async (
   const amountIrt = Math.round(Number(order?.total_irt || 0));
   if (!orderId || !Number.isFinite(amountIrt) || amountIrt <= 0) throw new Error("سبد خرید معتبر نیست.");
   const mode = String(Deno.env.get("ZARINPAL_MODE") || "production") === "sandbox" ? "sandbox" : "production";
-  const paymentDomain = trimSlashEnd(String(Deno.env.get("PAYMENT_PUBLIC_URL") || Deno.env.get("PUBLIC_FUNCTIONS_URL") || "").trim());
-  if (!paymentDomain) throw new Error("دامنه callback درگاه مرکزی تنظیم نشده است.");
-  const callbackPath = normalizeCallbackPath(Deno.env.get("PAYMENT_CALLBACK_PATH") || "/payment/callback");
   const returnOrigin = (await getTenantPublicOrigin(urlBase, key, String(profile.org_id || ""), true)) || normalizeSafeReturnOrigin(body?.return_origin);
   const [tx] = await rest(urlBase, key, "payment_transactions", {
     method: "POST",
@@ -880,7 +875,7 @@ const createSaasAccountOrderPayment = async (
       metadata: { saas_order_id: orderId, return_origin: returnOrigin, mode, source: "saas_account_center" },
     }]),
   });
-  const callbackUrl = `${paymentDomain}${callbackPath}?tx=${enc(tx.id)}`;
+  const callbackUrl = `${callbackBaseUrl}?tx=${enc(tx.id)}`;
   try {
     const zp = await zarinpalRequest(centralMerchantId, mode, {
       amount: amountIrt, currency: "IRT", callback_url: callbackUrl, description: tx.description,
@@ -906,15 +901,13 @@ const createSaasBillingWalletTopup = async (
 ) => {
   const { profile } = await getAuthenticatedProfile(req, urlBase, key);
   if (!centralMerchantId) throw new Error("Merchant ID درگاه مرکزی تازه سیستم تنظیم نشده است.");
+  const callbackBaseUrl = centralPaymentCallbackUrl();
   const prepared = await rpcAsAuthenticatedUser(req, urlBase, key, "prepare_current_saas_billing_wallet_topup", {
     p_amount_irt: Math.round(Number(body?.amount_irt ?? body?.amountToman ?? body?.amount ?? 0)),
   });
   const amountIrt = Math.round(Number(prepared?.amount_irt || 0));
   if (!Number.isFinite(amountIrt) || amountIrt <= 0) throw new Error("مبلغ شارژ کیف پول معتبر نیست.");
   const mode = String(Deno.env.get("ZARINPAL_MODE") || "production") === "sandbox" ? "sandbox" : "production";
-  const paymentDomain = trimSlashEnd(String(Deno.env.get("PAYMENT_PUBLIC_URL") || Deno.env.get("PUBLIC_FUNCTIONS_URL") || "").trim());
-  if (!paymentDomain) throw new Error("دامنه callback درگاه مرکزی تنظیم نشده است.");
-  const callbackPath = normalizeCallbackPath(Deno.env.get("PAYMENT_CALLBACK_PATH") || "/payment/callback");
   const returnOrigin = (await getTenantPublicOrigin(urlBase, key, String(profile.org_id || ""), true)) || normalizeSafeReturnOrigin(body?.return_origin);
   const [tx] = await rest(urlBase, key, "payment_transactions", {
     method: "POST",
@@ -925,7 +918,7 @@ const createSaasBillingWalletTopup = async (
       metadata: { wallet_amount_irt: amountIrt, wallet_target: String(body?.wallet_target || "billing"), return_origin: returnOrigin, mode, source: "saas_account_center" },
     }]),
   });
-  const callbackUrl = `${paymentDomain}${callbackPath}?tx=${enc(tx.id)}`;
+  const callbackUrl = `${callbackBaseUrl}?tx=${enc(tx.id)}`;
   try {
     const zp = await zarinpalRequest(centralMerchantId, mode, {
       amount: amountIrt, currency: "IRT", callback_url: callbackUrl, description: tx.description,
@@ -951,6 +944,7 @@ const createSaasSubscriptionInvoicePayment = async (
 ) => {
   const { profile } = await getAuthenticatedProfile(req, urlBase, key);
   if (!centralMerchantId) throw new Error("Merchant ID درگاه مرکزی تازه سیستم تنظیم نشده است.");
+  const callbackBaseUrl = centralPaymentCallbackUrl();
   const prepared = await rpcAsAuthenticatedUser(req, urlBase, key, "prepare_current_saas_subscription_invoice_payment", {
     p_invoice_id: String(body?.invoice_id || "").trim(),
   });
@@ -958,9 +952,6 @@ const createSaasSubscriptionInvoicePayment = async (
   const amountIrt = Math.round(Number(prepared?.amount_irt || 0));
   if (!invoiceId || !Number.isFinite(amountIrt) || amountIrt <= 0) throw new Error("صورت‌حساب اشتراک معتبر نیست.");
   const mode = String(Deno.env.get("ZARINPAL_MODE") || "production") === "sandbox" ? "sandbox" : "production";
-  const paymentDomain = trimSlashEnd(String(Deno.env.get("PAYMENT_PUBLIC_URL") || Deno.env.get("PUBLIC_FUNCTIONS_URL") || "").trim());
-  if (!paymentDomain) throw new Error("دامنه callback درگاه مرکزی تنظیم نشده است.");
-  const callbackPath = normalizeCallbackPath(Deno.env.get("PAYMENT_CALLBACK_PATH") || "/payment/callback");
   const returnOrigin = (await getTenantPublicOrigin(urlBase, key, String(profile.org_id || ""), true)) || normalizeSafeReturnOrigin(body?.return_origin);
   const [tx] = await rest(urlBase, key, "payment_transactions", {
     method: "POST",
@@ -971,7 +962,7 @@ const createSaasSubscriptionInvoicePayment = async (
       metadata: { saas_subscription_invoice_id: invoiceId, return_origin: returnOrigin, mode, source: "saas_account_center" },
     }]),
   });
-  const callbackUrl = `${paymentDomain}${callbackPath}?tx=${enc(tx.id)}`;
+  const callbackUrl = `${callbackBaseUrl}?tx=${enc(tx.id)}`;
   try {
     const zp = await zarinpalRequest(centralMerchantId, mode, {
       amount: amountIrt, currency: "IRT", callback_url: callbackUrl, description: tx.description,

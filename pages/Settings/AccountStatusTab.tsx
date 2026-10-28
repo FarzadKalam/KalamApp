@@ -12,17 +12,29 @@ import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { SAAS_FEATURE_LABELS, SAAS_MODULE_LABELS } from '../../utils/saasOfferingCatalog';
 import DemoDataCard from '../../components/saas/DemoDataCard';
+import AccountPlanCards from '../../components/saas/AccountPlanCards';
 
 const { Text, Title } = Typography;
 
 const formatIrt = (value: unknown) => `${Math.round(Number(value || 0)).toLocaleString('fa-IR')} تومان`;
 const titleForHistory = (item: any) => item?.title || 'تغییر حساب';
+const invokeSaasPayment = async (body: Record<string, unknown>) => {
+  const { data, error } = await supabase.functions.invoke('payment-gateway', { body });
+  if (error) {
+    let payload: { message?: string } | null = null;
+    try { payload = await error.context?.json(); } catch { /* پاسخ غیر JSON */ }
+    throw new Error(payload?.message || toFaErrorMessage(error, 'اتصال به درگاه پرداخت ناموفق بود.'));
+  }
+  return data;
+};
 
 const AccountStatusTab: React.FC = () => {
   const { message } = App.useApp();
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState<any | null>(null);
   const [catalog, setCatalog] = useState<any[]>([]);
+  const [publicPlans, setPublicPlans] = useState<any[]>([]);
+  const [planFeaturesError, setPlanFeaturesError] = useState(false);
   const [pendingOrders, setPendingOrders] = useState<any[]>([]);
   const [cart, setCart] = useState<Record<string, number>>({});
   const [checkoutLoading, setCheckoutLoading] = useState(false);
@@ -37,9 +49,10 @@ const AccountStatusTab: React.FC = () => {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [accountResult, catalogResult, pendingOrdersResult, smsWalletResult, storageResult] = await Promise.all([
+      const [accountResult, catalogResult, publicPlansResult, pendingOrdersResult, smsWalletResult, storageResult] = await Promise.all([
         supabase.rpc('get_current_saas_account_overview'),
         supabase.rpc('get_current_saas_store_catalog'),
+        supabase.rpc('get_public_plans'),
         supabase.rpc('get_current_saas_pending_orders'),
         supabase.from('org_sms_wallets').select('balance_irt,included_quota_irt,reserved_irt,status').maybeSingle(),
         supabase.rpc('get_current_saas_storage_usage'),
@@ -49,6 +62,8 @@ const AccountStatusTab: React.FC = () => {
       if (pendingOrdersResult.error) throw pendingOrdersResult.error;
       setOverview(accountResult.data || null);
       setCatalog(Array.isArray(catalogResult.data) ? catalogResult.data : []);
+      setPublicPlans(publicPlansResult.error ? [] : (Array.isArray(publicPlansResult.data) ? publicPlansResult.data : []));
+      setPlanFeaturesError(Boolean(publicPlansResult.error));
       setPendingOrders(Array.isArray(pendingOrdersResult.data) ? pendingOrdersResult.data : []);
       setSmsWallet(smsWalletResult.data || {});
       setStorageUsage(storageResult.error ? {} : (storageResult.data || {}));
@@ -69,6 +84,8 @@ const AccountStatusTab: React.FC = () => {
     () => catalog.filter((item) => cart[item.code]).map((item) => ({ ...item, quantity: cart[item.code] })),
     [cart, catalog],
   );
+  const planItems = useMemo(() => catalog.filter((item) => item.item_kind === 'plan'), [catalog]);
+  const extraItems = useMemo(() => catalog.filter((item) => item.item_kind !== 'plan'), [catalog]);
   const cartTotal = useMemo(
     () => cartItems.reduce((sum, item) => sum + Number(item.price_irt || 0) * Number(item.quantity || 1), 0),
     [cartItems],
@@ -94,14 +111,11 @@ const AccountStatusTab: React.FC = () => {
     if (!cartItems.length) return;
     setCheckoutLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke('payment-gateway', {
-        body: {
-          action: 'create_saas_account_order',
-          items: cartItems.map((item) => ({ code: item.code, quantity: item.quantity })),
-          return_origin: window.location.origin,
-        },
+      const data = await invokeSaasPayment({
+        action: 'create_saas_account_order',
+        items: cartItems.map((item) => ({ code: item.code, quantity: item.quantity })),
+        return_origin: window.location.origin,
       });
-      if (error) throw error;
       if (!data?.success || !data?.payment_url) throw new Error(String(data?.message || 'ساخت پرداخت ناموفق بود.'));
       window.location.href = data.payment_url;
     } catch (error) {
@@ -135,10 +149,7 @@ const AccountStatusTab: React.FC = () => {
     if (!orderId) return;
     setCheckoutLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke('payment-gateway', {
-        body: { action: 'create_saas_account_order', order_id: orderId, return_origin: window.location.origin },
-      });
-      if (error) throw error;
+      const data = await invokeSaasPayment({ action: 'create_saas_account_order', order_id: orderId, return_origin: window.location.origin });
       if (!data?.success || !data?.payment_url) throw new Error(String(data?.message || 'ساخت پرداخت ناموفق بود.'));
       window.location.href = data.payment_url;
     } catch (error) {
@@ -161,10 +172,7 @@ const AccountStatusTab: React.FC = () => {
         await load();
         return;
       }
-      const { data, error } = await supabase.functions.invoke('payment-gateway', {
-        body: { action: 'create_saas_subscription_invoice_payment', invoice_id: invoiceId, return_origin: window.location.origin },
-      });
-      if (error) throw error;
+      const data = await invokeSaasPayment({ action: 'create_saas_subscription_invoice_payment', invoice_id: invoiceId, return_origin: window.location.origin });
       if (!data?.success || !data?.payment_url) throw new Error(String(data?.message || 'ساخت پرداخت ناموفق بود.'));
       window.location.href = data.payment_url;
     } catch (error) {
@@ -183,10 +191,7 @@ const AccountStatusTab: React.FC = () => {
     setWalletActionLoading(true);
     try {
       if (walletAction === 'topup' || walletAction === 'sms_topup') {
-        const { data, error } = await supabase.functions.invoke('payment-gateway', {
-          body: { action: 'create_saas_billing_wallet_topup', amount_irt: amountIrt, wallet_target: walletAction === 'sms_topup' ? 'sms' : 'billing', return_origin: window.location.origin },
-        });
-        if (error) throw error;
+        const data = await invokeSaasPayment({ action: 'create_saas_billing_wallet_topup', amount_irt: amountIrt, wallet_target: walletAction === 'sms_topup' ? 'sms' : 'billing', return_origin: window.location.origin });
         if (!data?.success || !data?.payment_url) throw new Error(String(data?.message || 'ساخت پرداخت ناموفق بود.'));
         window.location.href = data.payment_url;
         return;
@@ -316,29 +321,30 @@ const AccountStatusTab: React.FC = () => {
         </div>
       </Drawer>
 
-      <Card className="rounded-2xl" title={<Space><ShoppingCartOutlined /> فروشگاه حساب</Space>} extra={<Tooltip title="فقط اقلامی که مدیر تازه سیستم قیمت‌گذاری و فعال کرده است نمایش داده می‌شوند."><Text type="secondary" className="text-xs">پرداخت امن آنلاین</Text></Tooltip>}>
-        {catalog.length === 0 ? <Empty description="در حال حاضر آیتم قابل خریدی برای این حساب فعال نشده است." /> : (
+      <Card className="rounded-2xl" title="پلن‌های اشتراک">
+        {planFeaturesError ? <Alert className="mb-4" type="warning" showIcon message="فهرست امکانات پلن‌ها بارگذاری نشد." action={<Button size="small" onClick={() => void load()}>تلاش دوباره</Button>} /> : null}
+        {planItems.length === 0 ? <Empty description="در حال حاضر پلنی برای خرید فعال نیست." /> : <AccountPlanCards
+          plans={planItems} publicPlans={publicPlans} cart={cart} usersUsed={Number(quotas.users_used || 0)}
+          onSelect={(code, minimum) => changeCart(code, minimum)}
+          onRemove={(code) => setCart((current) => { const next = { ...current }; delete next[code]; return next; })}
+          onQuantityChange={(code, quantity) => setCart((current) => ({ ...current, [code]: quantity }))}
+        />}
+      </Card>
+
+      <Card className="rounded-2xl" title={<Space><ShoppingCartOutlined /> امکانات و سهمیه‌های افزوده</Space>} extra={<Tooltip title="فقط اقلامی که مدیر تازه سیستم قیمت‌گذاری و فعال کرده است نمایش داده می‌شوند."><Text type="secondary" className="text-xs">پرداخت امن آنلاین</Text></Tooltip>}>
+        {extraItems.length === 0 ? <Empty description="در حال حاضر امکان یا سهمیهٔ افزوده‌ای برای خرید فعال نیست." /> : (
           <Row gutter={[14, 14]}>
-            {catalog.map((item) => {
+            {extraItems.map((item) => {
               const count = Number(cart[item.code] || 0);
-              return <Col xs={24} md={12} xl={8} key={item.code}><Card size="small" className="h-full rounded-xl border-slate-200" title={item.title} extra={<Tag color="blue">{formatIrt(item.price_irt)}{item.item_kind === 'plan' ? ' به‌ازای هر کاربر در ماه' : ''}</Tag>}>
+              return <Col xs={24} md={12} xl={8} key={item.code}><Card size="small" className="h-full rounded-xl border-slate-200" title={item.title} extra={<Tag color="blue">{formatIrt(item.price_irt)}</Tag>}>
                 <Text type="secondary" className="block min-h-10 text-xs">{item.description || 'افزودن به حساب سازمان'}</Text>
-                {item.item_kind === 'plan' ? (
-                  <div className="mt-4 flex items-center justify-between gap-2">
-                    <Text type="secondary" className="text-xs">تعداد کاربران · حداقل {Math.max(3, Number(quotas.users_used || 0)).toLocaleString('fa-IR')}</Text>
-                    <Space size={4}>
-                      {count ? <Button size="small" onClick={() => setCart((current) => { const next = { ...current }; delete next[item.code]; return next; })}>حذف</Button> : null}
-                      {count ? <InputNumber size="small" min={Math.max(3, Number(quotas.users_used || 0))} max={1000} value={count} onChange={(value) => setCart((current) => ({ ...current, [item.code]: Math.max(3, Number(quotas.users_used || 0), Math.floor(Number(value || 3))) }))} aria-label="تعداد کاربران پلن" /> : null}
-                      {!count ? <Button size="small" type="primary" onClick={() => changeCart(item.code, Math.max(3, Number(quotas.users_used || 0)))}>انتخاب پلن</Button> : null}
-                    </Space>
-                  </div>
-                ) : <div className="mt-4 flex items-center justify-between gap-2"><Tag>{item.item_kind === 'bundle' ? 'بسته کاربردی' : item.item_kind === 'quota' ? 'سهمیه' : 'دسترسی'}</Tag><Space size={4}>{count ? <Button size="small" onClick={() => changeCart(item.code, -1)}>−</Button> : null}{count ? <Text strong>{count}</Text> : null}<Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => changeCart(item.code, 1)}>{count ? '' : 'افزودن'}</Button></Space></div>}
+                <div className="mt-4 flex items-center justify-between gap-2"><Tag>{item.item_kind === 'bundle' ? 'بسته کاربردی' : item.item_kind === 'quota' ? 'سهمیه' : 'دسترسی'}</Tag><Space size={4}>{count ? <Button size="small" onClick={() => changeCart(item.code, -1)}>−</Button> : null}{count ? <Text strong>{count}</Text> : null}<Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => changeCart(item.code, 1)}>{count ? '' : 'افزودن'}</Button></Space></div>
               </Card></Col>;
             })}
           </Row>
         )}
-        {cartItems.length ? <div className="sticky bottom-3 mt-5 flex flex-col gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-4 md:flex-row md:items-center md:justify-between dark:bg-slate-800"><div><Text type="secondary">{cartItems.length} قلم در سبد</Text><div className="text-xl font-black">{formatIrt(cartTotal)}</div></div><Space wrap><Button size="large" loading={checkoutLoading} disabled={Number(billingWallet.balance_irt || 0) < cartTotal} onClick={() => void checkoutWithWallet()}>پرداخت از کیف پول</Button><Button type="primary" size="large" icon={<CreditCardOutlined />} loading={checkoutLoading} onClick={() => void checkout()}>پرداخت آنلاین</Button></Space></div> : null}
       </Card>
+      {cartItems.length ? <div className="sticky bottom-3 z-10 flex flex-col gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-4 shadow-lg md:flex-row md:items-center md:justify-between dark:bg-slate-800"><div><Text type="secondary">{cartItems.length} قلم در سبد</Text><div className="text-xl font-black">{formatIrt(cartTotal)}</div></div><Space wrap><Button size="large" loading={checkoutLoading} disabled={Number(billingWallet.balance_irt || 0) < cartTotal} onClick={() => void checkoutWithWallet()}>پرداخت از کیف پول</Button><Button type="primary" size="large" icon={<CreditCardOutlined />} loading={checkoutLoading} onClick={() => void checkout()}>پرداخت آنلاین</Button></Space></div> : null}
 
       <Modal
         open={walletAction !== null}
