@@ -8,7 +8,7 @@ const corsHeaders = {
 };
 
 const FUNCTION_BUILD =
-  "payment-gateway-2026-10-29-central-callback-fallback";
+  "payment-gateway-2026-10-29-saas-wallet-return";
 
 const json = (status: number, payload: Record<string, any>) =>
   new Response(JSON.stringify({ build: FUNCTION_BUILD, ...payload }), {
@@ -447,7 +447,7 @@ const redirectHtml = (url: string, title: string) =>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title></head>
 <body style="font-family:sans-serif;padding:24px;text-align:center">
   <p>${title}</p>
-  <p><a href="${url}">بازگشت به فاکتور</a></p>
+  <p><a href="${url}">بازگشت به سامانه</a></p>
   <script>window.location.replace(${JSON.stringify(url)});</script>
 </body>
 </html>`,
@@ -479,7 +479,9 @@ const buildAiTopupReturnUrl = (tx: any, status: string) => {
   const base = safeOrigin || "/settings";
   const path = base.startsWith("http") ? `${base}/settings` : base;
   const suffix = path.includes("?") ? "&" : "?";
-  return `${path}${suffix}tab=ai&ai_credit=${enc(status)}`;
+  return tx?.metadata?.return_to_account === true
+    ? `${path}${suffix}tab=account&topup=${enc(status)}`
+    : `${path}${suffix}tab=ai&ai_credit=${enc(status)}`;
 };
 
 const buildSaasAccountOrderReturnUrl = (tx: any, status: string) => {
@@ -507,7 +509,7 @@ const buildAccountCardReturnUrl = (tx: any, status: string) => {
 const buildPaymentReturnUrl = (tx: any, status: string) =>
   String(tx?.purpose || "") === "ai_topup"
     ? buildAiTopupReturnUrl(tx, status)
-    : ["saas_account_order", "saas_subscription_invoice"].includes(String(tx?.purpose || ""))
+    : ["saas_account_order", "saas_subscription_invoice", "saas_billing_wallet_topup"].includes(String(tx?.purpose || ""))
       ? buildSaasAccountOrderReturnUrl(tx, status)
     : String(tx?.purpose || "") === "online_account_card"
       ? buildAccountCardReturnUrl(tx, status)
@@ -793,7 +795,8 @@ const createAiCreditTopup = async (
           return_origin: returnOrigin,
           wallet_amount_irt: amountIrt,
           mode,
-          source: "org_ai_settings",
+          source: body?.return_to_account === true ? "saas_account_center" : "org_ai_settings",
+          return_to_account: body?.return_to_account === true,
         },
       },
     ]),

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Alert, App, Badge, Button, Card, Col, Empty, InputNumber, Modal, Progress, Row, Skeleton, Drawer,
+  Alert, App, Badge, Button, Card, Col, Empty, Modal, Progress, Row, Skeleton, Drawer,
   Space, Statistic, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import {
@@ -13,6 +13,7 @@ import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { SAAS_FEATURE_LABELS, SAAS_MODULE_LABELS } from '../../utils/saasOfferingCatalog';
 import DemoDataCard from '../../components/saas/DemoDataCard';
 import AccountPlanCards from '../../components/saas/AccountPlanCards';
+import PriceAmountInput from '../../components/PriceAmountInput';
 
 const { Text, Title } = Typography;
 
@@ -38,7 +39,7 @@ const AccountStatusTab: React.FC = () => {
   const [pendingOrders, setPendingOrders] = useState<any[]>([]);
   const [cart, setCart] = useState<Record<string, number>>({});
   const [checkoutLoading, setCheckoutLoading] = useState(false);
-  const [walletAction, setWalletAction] = useState<'topup' | 'sms_topup' | 'ai_transfer' | 'sms_transfer' | null>(null);
+  const [walletAction, setWalletAction] = useState<'topup' | 'sms_topup' | 'ai_topup' | 'ai_transfer' | 'sms_transfer' | null>(null);
   const [smsWallet, setSmsWallet] = useState<any>({});
   const [storageUsage, setStorageUsage] = useState<any>({});
   const [walletAmount, setWalletAmount] = useState<number | null>(null);
@@ -190,8 +191,10 @@ const AccountStatusTab: React.FC = () => {
     }
     setWalletActionLoading(true);
     try {
-      if (walletAction === 'topup' || walletAction === 'sms_topup') {
-        const data = await invokeSaasPayment({ action: 'create_saas_billing_wallet_topup', amount_irt: amountIrt, wallet_target: walletAction === 'sms_topup' ? 'sms' : 'billing', return_origin: window.location.origin });
+      if (walletAction === 'topup' || walletAction === 'sms_topup' || walletAction === 'ai_topup') {
+        const data = await invokeSaasPayment(walletAction === 'ai_topup'
+          ? { action: 'create_ai_credit_topup', amount_irt: amountIrt, return_origin: window.location.origin, return_to_account: true }
+          : { action: 'create_saas_billing_wallet_topup', amount_irt: amountIrt, wallet_target: walletAction === 'sms_topup' ? 'sms' : 'billing', return_origin: window.location.origin });
         if (!data?.success || !data?.payment_url) throw new Error(String(data?.message || 'ساخت پرداخت ناموفق بود.'));
         window.location.href = data.payment_url;
         return;
@@ -203,7 +206,7 @@ const AccountStatusTab: React.FC = () => {
       setWalletAmount(null);
       await load();
     } catch (error) {
-      message.error(toFaErrorMessage(error as any, walletAction === 'topup' ? 'شارژ کیف پول ناموفق بود.' : 'انتقال اعتبار ناموفق بود.'));
+      message.error(toFaErrorMessage(error as any, walletAction === 'ai_topup' ? 'شارژ مستقیم هوش مصنوعی ناموفق بود.' : walletAction === 'topup' || walletAction === 'sms_topup' ? 'شارژ کیف پول ناموفق بود.' : 'انتقال اعتبار ناموفق بود.'));
     } finally {
       setWalletActionLoading(false);
     }
@@ -266,7 +269,7 @@ const AccountStatusTab: React.FC = () => {
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="کاربران فعال" value={Number(quotas.users_used || 0)} suffix={hasFullPlanAccess ? ' / نامحدود' : ` / ${usersAllowed}`} prefix={<TeamOutlined className="text-indigo-600" />} /><Progress className="mt-3" percent={hasFullPlanAccess ? 0 : userPercent} showInfo={false} /></Card></Col>
         <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="فضای ذخیره‌سازی" value={hasFullPlanAccess ? 'نامحدود' : storageUsedGb} precision={hasFullPlanAccess ? undefined : 3} suffix={hasFullPlanAccess ? '' : `/ ${storageLimitGb} GB`} prefix={<CloudOutlined className="text-sky-600" />} /><Progress className="mt-2" percent={hasFullPlanAccess ? 0 : storagePercent} status={storagePercent >= 90 ? 'exception' : storagePercent >= 75 ? 'active' : 'normal'} showInfo={false} /><Text type="secondary" className="text-xs">{hasFullPlanAccess ? 'بدون سقف تخصیص' : `${Number(storageUsage.files || 0).toLocaleString('fa-IR')} فایل · ${Math.max(0, storageLimitGb - storageUsedGb).toFixed(3)} GB باقی‌مانده`}</Text></Card></Col>
-        <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="اعتبار هوش مصنوعی" value={aiRemaining} formatter={(value) => `${Number(value).toLocaleString('fa-IR')} تومان`} prefix={<BulbOutlined className="text-violet-600" />} /><Progress className="mt-2" percent={walletPercent(aiRemaining, aiWalletTarget)} strokeColor="#7c3aed" showInfo={false} /><div className="mt-2 flex items-center justify-between"><Tag color={aiWallet.status === 'active' || !aiWallet.status ? 'green' : 'red'}>{aiWallet.status === 'blocked' ? 'مسدود' : 'فعال'}</Tag><Button size="small" type="link" onClick={() => { setWalletAmount(null); setWalletAction('ai_transfer'); }}>از کیف پول</Button></div></Card></Col>
+        <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="اعتبار هوش مصنوعی" value={aiRemaining} formatter={(value) => `${Number(value).toLocaleString('fa-IR')} تومان`} prefix={<BulbOutlined className="text-violet-600" />} /><Progress className="mt-2" percent={walletPercent(aiRemaining, aiWalletTarget)} strokeColor="#7c3aed" showInfo={false} /><div className="mt-2 flex flex-wrap items-center justify-between gap-2"><Tag color={aiWallet.status === 'active' || !aiWallet.status ? 'green' : 'red'}>{aiWallet.status === 'blocked' ? 'مسدود' : 'فعال'}</Tag><Space size={0} wrap><Button size="small" type="link" onClick={() => { setWalletAmount(null); setWalletAction('ai_transfer'); }}>از کیف پول</Button><Button size="small" type="link" onClick={() => { setWalletAmount(null); setWalletAction('ai_topup'); }}>شارژ مستقیم</Button></Space></div></Card></Col>
         <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="کیف پول پیامک" value={smsRemaining} formatter={(value) => `${Number(value).toLocaleString('fa-IR')} تومان`} prefix={<DatabaseOutlined className="text-cyan-600" />} /><Progress className="mt-2" percent={walletPercent(smsRemaining, smsWalletTarget)} strokeColor="#0891b2" showInfo={false} /><div className="mt-2 flex items-center justify-between"><Tag color={smsRemaining <= 100000 ? 'gold' : 'green'}>{smsRemaining <= 100000 ? 'نیازمند شارژ' : 'فعال'}</Tag><Space size={0}><Button size="small" type="link" onClick={() => { setWalletAmount(null); setWalletAction('sms_transfer'); }}>از کیف پول</Button><Button size="small" type="link" onClick={() => { setWalletAmount(null); setWalletAction('sms_topup'); }}>شارژ مستقیم</Button></Space></div></Card></Col>
         <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="زمان‌بندی خودکار" value={Number(quotas.scheduled_runs || 0)} suffix="فعال" prefix={<RocketOutlined className="text-orange-600" />} /><Text type="secondary" className="mt-2 block text-xs">گردش‌کار زمان‌دار، ارسال برنامه حضور و گزارش‌ها؛ بدون محدودیت مصنوعیِ فاصلهٔ اجرا.</Text></Card></Col>
         <Col xs={24} sm={12} lg={6}><Card className="h-full rounded-2xl"><Statistic title="کیف پول سازمان" value={Number(billingWallet.balance_irt || 0)} formatter={(value) => `${Number(value).toLocaleString('fa-IR')} تومان`} prefix={<CreditCardOutlined className="text-emerald-600" />} /><Button className="mt-2" size="small" type="link" onClick={() => { setWalletAmount(null); setWalletAction('topup'); }}>شارژ دلخواه</Button></Card></Col>
@@ -348,8 +351,8 @@ const AccountStatusTab: React.FC = () => {
 
       <Modal
         open={walletAction !== null}
-        title={walletAction === 'topup' ? 'شارژ کیف پول سازمان' : walletAction === 'sms_topup' ? 'شارژ مستقیم کیف پول پیامک' : walletAction === 'sms_transfer' ? 'انتقال به کیف پول پیامک' : 'انتقال به اعتبار هوش مصنوعی'}
-        okText={walletAction === 'topup' || walletAction === 'sms_topup' ? 'ادامه و پرداخت' : 'انتقال اعتبار'}
+        title={walletAction === 'topup' ? 'شارژ کیف پول سازمان' : walletAction === 'sms_topup' ? 'شارژ مستقیم کیف پول پیامک' : walletAction === 'ai_topup' ? 'شارژ مستقیم اعتبار هوش مصنوعی' : walletAction === 'sms_transfer' ? 'انتقال به کیف پول پیامک' : 'انتقال به اعتبار هوش مصنوعی'}
+        okText={walletAction === 'topup' || walletAction === 'sms_topup' || walletAction === 'ai_topup' ? 'ادامه و پرداخت' : 'انتقال اعتبار'}
         cancelText="انصراف"
         confirmLoading={walletActionLoading}
         onOk={() => void submitWalletAction()}
@@ -363,15 +366,16 @@ const AccountStatusTab: React.FC = () => {
           {walletAction === 'topup'
             ? 'مبلغ دلخواه را وارد کنید. اعتبار کیف پول برای تمدید پلن، خرید امکانات و شارژها قابل استفاده است.'
             : walletAction === 'sms_topup' ? 'مبلغ پرداختی با ۱۰٪ ارزش افزوده محاسبه می‌شود و مبلغ خالص پس از کسر ارزش افزوده به کیف پول پیامک اضافه خواهد شد.'
+            : walletAction === 'ai_topup' ? 'مبلغ از درگاه پرداخت می‌شود و مستقیم به اعتبار هوش مصنوعی همین سازمان افزوده خواهد شد.'
             : walletAction === 'sms_transfer' ? 'این مبلغ از کیف پول سازمان کم و فقط برای ارسال پیامک با سرشماره تازه سیستم قابل استفاده می‌شود.' : 'این مبلغ از کیف پول سازمان کم و فقط برای مصرف هوش مصنوعی قابل استفاده می‌شود.'}
         </Text>
-        <InputNumber
-          className="w-full"
+        <PriceAmountInput
           min={10000}
           max={100000000}
           step={10000}
           value={walletAmount ?? undefined}
-          onChange={(value) => setWalletAmount(typeof value === 'number' ? value : null)}
+          onChange={(value) => setWalletAmount(value === null ? null : Number(value))}
+          currencyLabel="تومان"
           placeholder="مبلغ به تومان؛ مثلاً ۵۰۰٬۰۰۰"
         />
         <Text type="secondary" className="mt-2 block text-xs">حداقل مبلغ شارژ ۱۰٬۰۰۰ تومان است.</Text>

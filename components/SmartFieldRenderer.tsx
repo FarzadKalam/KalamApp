@@ -70,6 +70,7 @@ import { createFileManagerOriginForUpload, detectFileManagerTables } from '../ut
 import RichTextEditor from './RichTextEditor';
 import RichTextContent from './RichTextContent';
 import VoiceToTextButton from './ai/VoiceToTextButton';
+import PriceAmountInput from './PriceAmountInput';
 import { appendReadyTextToRichText, normalizeRichTextHtml, richTextToPlainText } from '../utils/richText';
 import {
   buildStandardSelectPopupRootStyle,
@@ -246,14 +247,6 @@ const formatNumericForInput = (raw: any, withGrouping = false): string => {
   const grouped = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   const output = decimalPart !== undefined ? `${sign}${grouped}.${decimalPart}` : `${sign}${grouped}`;
   return toPersianNumber(output);
-};
-
-const normalizePriceString = (raw: any): string => {
-  const normalized = normalizeNumericString(raw);
-  if (!normalized || normalized === '-' || normalized === '.' || normalized === '-.') return normalized;
-  const parsed = Number(normalized);
-  if (!Number.isFinite(parsed)) return normalized;
-  return String(Math.round(parsed));
 };
 
 const getPreviousSystemBalanceHint = (moduleId: string | undefined, fieldKey: string, rawValue: any): string | null => {
@@ -2322,13 +2315,18 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
           const previousSystemBalanceHint = getPreviousSystemBalanceHint(moduleId, fieldKey, value);
         return (
           <div className="w-full">
-            <InputNumber 
+            {fieldType === FieldType.PRICE ? <PriceAmountInput
+                {...commonProps}
+                currencyLabel={currencyLabel}
+                allowNegative={field.allowNegative}
+                onKeyDown={preventNonNumericKeyDown}
+                onPaste={preventNonNumericPaste}
+            /> : <InputNumber
                 {...commonProps}
                 className="w-full persian-number" 
                 controls={false}
                 stringMode
-                inputMode={field.allowNegative ? 'text' : fieldType === FieldType.PRICE ? 'numeric' : 'decimal'}
-                suffix={fieldType === FieldType.PRICE && currencyLabel ? currencyLabel : undefined}
+                inputMode={field.allowNegative ? 'text' : 'decimal'}
                 formatter={(val, info) => {
                   // هنگام تایپ، متن خود کاربر را نگه می‌داریم؛ اما پس از تغییر
                   // برنامه‌ای (مثل انتخاب کالا یا لیست قیمت)، value کنترل‌شده
@@ -2336,17 +2334,12 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                   const formatterValue = info?.userTyping
                     ? resolveFormatterSourceValue(info?.input, val)
                     : val;
-                  return formatNumericForInput(
-                    fieldType === FieldType.PRICE
-                      ? normalizePriceString(formatterValue)
-                      : formatterValue,
-                    true,
-                  );
+                  return formatNumericForInput(formatterValue, true);
                 }}
-                parser={(val) => fieldType === FieldType.PRICE ? normalizePriceString(val) : normalizeNumericString(val)}
+                parser={(val) => normalizeNumericString(val)}
                 onKeyDown={preventNonNumericKeyDown}
                 onPaste={preventNonNumericPaste}
-            />
+            />}
             {previousSystemBalanceHint ? (
               <div className="mt-1 text-xs text-gray-500">
                 {previousSystemBalanceHint}

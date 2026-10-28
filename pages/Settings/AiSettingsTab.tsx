@@ -21,6 +21,7 @@ import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import AiKnowledgeTab from './AiKnowledgeTab';
 import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
+import PriceAmountInput from '../../components/PriceAmountInput';
 
 type AiCapabilityKey =
   | 'dashboard_chat'
@@ -649,14 +650,12 @@ const AiSettingsTab: React.FC = () => {
           />
           <div>
             <div className="mb-1 text-xs text-gray-500">مبلغ شارژ (تومان)</div>
-            <InputNumber
+            <PriceAmountInput
               min={10000}
               step={100000}
-              className="w-full"
               value={topupAmount}
-              formatter={(value) => `${value || ''}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
-              parser={(value) => Number(String(value || '').replace(/,/g, ''))}
               onChange={(value) => setTopupAmount(Number(value || 0))}
+              currencyLabel="تومان"
             />
           </div>
           <Input.TextArea
