@@ -53,7 +53,7 @@ const RelatedActivityIndicators: React.FC<Props> = ({ moduleId, recordId, module
     setLoading(true);
     const { data, error } = await supabase
       .from('tasks')
-      .select('id,name,title,description,status,due_date,priority')
+      .select('id,name,description,status,due_date,priority')
       .eq(relation.foreignKey, recordId)
       .order('due_date', { ascending: true, nullsFirst: false })
       .limit(100);
@@ -81,8 +81,7 @@ const RelatedActivityIndicators: React.FC<Props> = ({ moduleId, recordId, module
 
   return (
     <>
-      <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1 border-t border-slate-100 pt-1.5 dark:border-white/10" onClick={(event) => event.stopPropagation()}>
-        <span className="text-[9px] text-slate-400">فعالیت</span>
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-1" onClick={(event) => event.stopPropagation()}>
         {indicators.map((item: any) => (
           <button key={item.key} type="button" className={`inline-flex min-h-6 items-center gap-1 rounded-full bg-slate-50 px-1.5 text-[10px] transition hover:bg-slate-100 dark:bg-white/5 dark:hover:bg-white/10 ${item.className}`} onClick={() => setOpen(true)} title={item.label}>
             {item.icon}{item.count ? <span className="font-bold">{toPersianNumber(item.count)}</span> : null}

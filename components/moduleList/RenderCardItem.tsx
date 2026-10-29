@@ -381,7 +381,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
         type="button"
         title={dragHandleTitle}
         aria-label={dragHandleTitle}
-        className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/90 text-gray-500 shadow-sm transition hover:text-[rgb(var(--brand-700-rgb))] active:cursor-grabbing dark:bg-white/10 dark:text-gray-300"
+        className="flex h-7 w-7 items-center justify-center rounded-lg bg-transparent text-gray-500 transition hover:bg-gray-100/70 hover:text-[rgb(var(--brand-700-rgb))] active:cursor-grabbing dark:bg-transparent dark:text-gray-300 dark:hover:bg-white/10"
         style={{ touchAction: 'none', userSelect: 'none' }}
         {...dragHandleProps}
         onClick={(event) => {
@@ -406,14 +406,14 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
       <div className="absolute bottom-2 left-2 z-30 flex items-center gap-1.5" onClick={(event) => event.stopPropagation()}>
         {hasSelectionControl ? (
           <label
-            className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/90 shadow-sm dark:bg-white/10"
+            className="flex h-7 w-7 items-center justify-center rounded-lg bg-transparent dark:bg-transparent"
             title="انتخاب کارت"
           >
             <Checkbox checked={isSelected} onChange={toggleSelect} />
           </label>
         ) : null}
         {hasLockControl ? (
-          <div className="flex h-7 min-w-7 items-center justify-center rounded-lg bg-white/90 px-1 shadow-sm dark:bg-white/10">
+          <div className="flex h-7 min-w-7 items-center justify-center rounded-lg bg-transparent px-1 dark:bg-transparent">
             {lockControl}
           </div>
         ) : null}
@@ -423,7 +423,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
             type="button"
             title={isKanbanDetailsOpen ? "بستن جزئیات" : "نمایش جزئیات"}
             aria-label={isKanbanDetailsOpen ? "بستن جزئیات" : "نمایش جزئیات"}
-            className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/90 text-gray-500 shadow-sm transition hover:text-[rgb(var(--brand-700-rgb))] dark:bg-white/10 dark:text-gray-300"
+            className="flex h-7 w-7 items-center justify-center rounded-lg bg-transparent text-gray-500 transition hover:bg-gray-100/70 hover:text-[rgb(var(--brand-700-rgb))] dark:bg-transparent dark:text-gray-300 dark:hover:bg-white/10"
             onClick={(event) => {
               event.stopPropagation();
               setIsKanbanDetailsOpen((open) => !open);
@@ -640,7 +640,6 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
                 ) : null}
               </div>
             ) : null}
-            <RelatedActivityIndicators moduleId={moduleId} recordId={String(cardItem?.id || '')} moduleConfig={moduleConfig} summary={relatedActivitySummary} />
           </div>
         </div>
 
@@ -652,7 +651,8 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
             </div>
           ) : <span />}
 
-          <div className="flex items-end justify-end gap-3">
+          <div className="flex min-w-0 items-center justify-end gap-3">
+            <RelatedActivityIndicators moduleId={moduleId} recordId={String(cardItem?.id || '')} moduleConfig={moduleConfig} summary={relatedActivitySummary} />
             {moduleId === 'marketing_leads' && Number(cardItem?.lead_value || 0) > 0 ? (
               <div className="flex min-w-0 flex-col items-end gap-0">
                 <span className="text-[8px] text-gray-500 dark:text-gray-400">ارزش لید</span>
