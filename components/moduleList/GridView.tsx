@@ -1,6 +1,7 @@
 import React from "react";
 import { Empty } from "antd";
 import RenderCardItem from "./RenderCardItem";
+import type { RelatedActivitySummary } from './RelatedActivityIndicators';
 
 interface GridViewProps {
   data: any[];
@@ -19,6 +20,7 @@ interface GridViewProps {
   relationOptions?: Record<string, any[]>;
   canLockRecord?: boolean;
   canUnlockRecord?: boolean;
+  relatedActivitySummaries?: Record<string, RelatedActivitySummary>;
 }
 
 const GridView: React.FC<GridViewProps> = ({
@@ -38,6 +40,7 @@ const GridView: React.FC<GridViewProps> = ({
   relationOptions,
   canLockRecord,
   canUnlockRecord,
+  relatedActivitySummaries = {},
 }) => {
   if (!data?.length) {
     return <Empty description="داده‌ای یافت نشد" className="py-10" />;
@@ -64,6 +67,7 @@ const GridView: React.FC<GridViewProps> = ({
           relationOptions={relationOptions}
           canLockRecord={canLockRecord}
           canUnlockRecord={canUnlockRecord}
+          relatedActivitySummary={relatedActivitySummaries[String(item?.id || '')]}
         />
       ))}
     </div>

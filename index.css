@@ -1466,3 +1466,13 @@ html:not(.dark) .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-danger
   }
 }
 
+@keyframes kanban-card-settled {
+  0% { transform: translateY(-4px) scale(1.01); opacity: 0.72; }
+  55% { transform: translateY(1px) scale(1.005); opacity: 1; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.kanban-card-settled {
+  animation: kanban-card-settled 520ms cubic-bezier(.22,.8,.32,1);
+}
+

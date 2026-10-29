@@ -24,6 +24,7 @@ import { hasProcessTaskTitleTokens, resolveProcessTaskTitle } from "../../utils/
 import TaskRelatedProcessBar from "../tasks/TaskRelatedProcessBar";
 import { isEmptyRelationValue } from "../../utils/optionHelpers";
 import PhoneActionsPopover from "../PhoneActionsPopover";
+import RelatedActivityIndicators, { type RelatedActivitySummary } from './RelatedActivityIndicators';
 
 const ProductionStagesField = React.lazy(() => import("../ProductionStagesField"));
 
@@ -53,6 +54,7 @@ export interface RenderCardItemProps {
   moduleBadgeLabel?: string | null;
   canLockRecord?: boolean;
   canUnlockRecord?: boolean;
+  relatedActivitySummary?: RelatedActivitySummary;
 }
 
 const getAdaptiveCardTitleClassName = (value: unknown, minimal = false) => {
@@ -94,6 +96,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   moduleBadgeLabel,
   canLockRecord = false,
   canUnlockRecord = false,
+  relatedActivitySummary,
 }) => {
   const [taskPatch, setTaskPatch] = React.useState<Record<string, any>>({});
   const [recordPatch, setRecordPatch] = React.useState<Record<string, any>>({});
@@ -299,7 +302,13 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   );
   const detailSummaryFields = Array.from(
     new Map(
-      [...phoneSummaryFields, ...summaryFields].map((field: any) => [field.key, field]),
+      [
+        ...(moduleId === 'marketing_leads'
+          ? (moduleConfig?.fields || []).filter((field: any) => field?.key === 'customer_interests' && isCardFieldVisible(field))
+          : []),
+        ...phoneSummaryFields,
+        ...summaryFields,
+      ].map((field: any) => [field.key, field]),
     ).values(),
   ).slice(0, kanbanCompact && isKanbanDetailsOpen ? 7 : summaryFieldLimit);
   const visibleSummaryFields = kanbanCompact && !isKanbanDetailsOpen
@@ -350,7 +359,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   const cardSurfaceClassName = `
     group relative flex cursor-pointer flex-col transition-all
     ${kanbanCompact
-      ? "rounded-xl border border-slate-200/90 bg-white shadow-[0_5px_14px_rgba(15,23,42,0.07)] hover:-translate-y-px hover:border-[rgba(var(--brand-300-rgb),0.9)] hover:shadow-[0_10px_22px_rgba(15,23,42,0.10)] dark:border-white/[0.10] dark:bg-[#202020] dark:shadow-[0_5px_14px_rgba(0,0,0,0.24)]"
+      ? "rounded-xl border border-slate-200/75 bg-white shadow-sm hover:-translate-y-px hover:border-[rgba(var(--brand-300-rgb),0.75)] hover:shadow-md dark:border-white/[0.10] dark:bg-[#202020] dark:shadow-none"
       : "rounded-2xl border border-white/70 bg-[linear-gradient(145deg,#ffffff,#f3f6fb)] shadow-[0_16px_34px_rgba(15,23,42,0.10),inset_0_2px_5px_rgba(255,255,255,0.86),inset_0_-10px_22px_rgba(148,163,184,0.14)] hover:-translate-y-0.5 hover:border-[rgba(var(--brand-200-rgb),0.78)] hover:shadow-[0_20px_42px_rgba(15,23,42,0.14),inset_0_2px_6px_rgba(255,255,255,0.92),inset_0_-10px_24px_rgba(148,163,184,0.16)] dark:border-white/[0.09] dark:bg-[linear-gradient(145deg,rgba(38,38,38,0.98),rgba(24,24,24,0.98))] dark:shadow-[0_16px_36px_rgba(0,0,0,0.38),inset_0_1px_3px_rgba(255,255,255,0.06),inset_0_-12px_24px_rgba(0,0,0,0.20)] dark:hover:border-[rgba(var(--brand-300-rgb),0.24)] dark:hover:shadow-[0_20px_44px_rgba(0,0,0,0.48),inset_0_1px_4px_rgba(255,255,255,0.08),inset_0_-12px_24px_rgba(0,0,0,0.24)]"
     }
     ${isSelected ? "ring-2 ring-[rgba(var(--brand-500-rgb),0.36)]" : ""}
@@ -527,13 +536,15 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
         ) : null}
 
         <div className={`flex items-start gap-3 ${moduleBadgeLabel ? 'pt-5' : ''}`}>
-          <Avatar
-            shape="square"
-            size={minimal ? 36 : 52}
-            src={imageUrl ? <ResilientImage src={String(imageUrl)} preset="avatar" alt={displayTitle} className="h-full w-full object-cover" /> : undefined}
-            icon={<AppstoreOutlined />}
-            className="rounded-xl bg-gray-50 border border-gray-100 dark:bg-gray-800 dark:border-gray-700 shrink-0 object-cover"
-          />
+          {!(kanbanCompact && isKanbanDetailsOpen && !imageUrl) ? (
+            <Avatar
+              shape="square"
+              size={minimal ? 36 : 52}
+              src={imageUrl ? <ResilientImage src={String(imageUrl)} preset="avatar" alt={displayTitle} className="h-full w-full object-cover" /> : undefined}
+              icon={<AppstoreOutlined />}
+              className="rounded-xl bg-gray-50 border border-gray-100 dark:bg-gray-800 dark:border-gray-700 shrink-0 object-cover"
+            />
+          ) : null}
 
           <div className="min-w-0 flex-1">
             <div className="min-w-0">
@@ -581,9 +592,11 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
                   return (
                     <div
                       key={field.key}
-                      className="grid grid-cols-[82px_minmax(0,1fr)] items-start gap-2 rounded-lg bg-gray-50/75 px-2 py-1.5 dark:bg-white/5"
+                      className={`grid items-start gap-2 rounded-lg bg-gray-50/75 px-2 py-1.5 dark:bg-white/5 ${field.type === FieldType.PHONE ? 'grid-cols-1' : 'grid-cols-[82px_minmax(0,1fr)]'}`}
                     >
-                      <span className="truncate text-[10px] font-semibold text-gray-400 dark:text-gray-500">{field.labels?.fa || field.title || field.key}</span>
+                      {field.type !== FieldType.PHONE ? (
+                        <span className="truncate text-[10px] font-semibold text-gray-400 dark:text-gray-500">{field.labels?.fa || field.title || field.key}</span>
+                      ) : null}
                       {renderFieldValue(field, value)}
                     </div>
                   );
@@ -627,18 +640,27 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
                 ) : null}
               </div>
             ) : null}
+            <RelatedActivityIndicators moduleId={moduleId} recordId={String(cardItem?.id || '')} moduleConfig={moduleConfig} summary={relatedActivitySummary} />
           </div>
         </div>
 
-        <div className="mt-auto flex items-start justify-between gap-3 border-t border-gray-100 pt-2 text-xs dark:border-gray-700">
+        <div className={`mt-auto items-start gap-3 border-t border-gray-100 pt-2 text-xs dark:border-gray-700 ${moduleId === 'marketing_leads' ? 'grid grid-cols-2' : 'flex justify-between'}`}>
           {assigneeAllowed ? (
             <div className="flex min-w-0 flex-col gap-0.5">
-              <span className="text-gray-500 dark:text-gray-400 text-[8px]">{assigneeLabel}</span>
+              {moduleId !== 'marketing_leads' ? <span className="text-gray-500 dark:text-gray-400 text-[8px]">{assigneeLabel}</span> : null}
               {renderAssignee()}
             </div>
           ) : <span />}
 
-          <div className="flex items-end gap-3">
+          <div className="flex items-end justify-end gap-3">
+            {moduleId === 'marketing_leads' && Number(cardItem?.lead_value || 0) > 0 ? (
+              <div className="flex min-w-0 flex-col items-end gap-0">
+                <span className="text-[8px] text-gray-500 dark:text-gray-400">ارزش لید</span>
+                <span className="max-w-full truncate font-bold text-[11px] text-[rgb(var(--brand-700-rgb))] persian-number">
+                  {formatPersianPrice(cardItem.lead_value, true)}
+                </span>
+              </div>
+            ) : null}
             {cardItem.buy_price && (canViewField ? canViewField('buy_price') !== false : true) && isCardFieldVisible('buy_price') ? (
               <div className="flex flex-col gap-0">
                 <span className="text-gray-500 dark:text-gray-400 text-[8px]">خرید</span>

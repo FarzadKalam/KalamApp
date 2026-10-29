@@ -199,6 +199,7 @@ import {
 } from "../utils/recordLockRuntime";
 import { getRecordTitle } from "../utils/recordTitle";
 import type { RenderCardItemProps } from "../components/moduleList/RenderCardItem";
+import type { RelatedActivitySummary } from "../components/moduleList/RelatedActivityIndicators";
 
 const MapView = React.lazy(() => import("../components/moduleList/MapView"));
 const SmartForm = React.lazy(() => import("../components/SmartForm"));
@@ -973,11 +974,13 @@ type KanbanDraggableCardProps = Omit<
 > & {
   item: any;
   columnKey: string;
+  settling?: boolean;
 };
 
 const KanbanDraggableCard: React.FC<KanbanDraggableCardProps> = ({
   item,
   columnKey,
+  settling = false,
   ...cardProps
 }) => {
   const recordId = String(item?.id || "").trim();
@@ -988,7 +991,7 @@ const KanbanDraggableCard: React.FC<KanbanDraggableCardProps> = ({
   });
 
   return (
-    <div ref={setNodeRef} className="min-w-0">
+    <div ref={setNodeRef} className={`min-w-0 transition-all duration-300 ${settling ? 'kanban-card-settled' : ''}`}>
       <RenderCardItem
         {...cardProps}
         item={item}
@@ -1017,7 +1020,7 @@ const KanbanDropColumn: React.FC<{
     <div
       ref={setNodeRef}
       data-kanban-column-key={columnKey}
-      className={`min-w-[282px] w-[282px] sm:min-w-[304px] sm:w-[304px] flex flex-col bg-gray-100/55 dark:bg-white/5 rounded-[1.6rem] p-3 border shadow-sm h-full transition-[box-shadow,border-color,background-color] duration-150 ${
+      className={`min-w-[282px] w-[282px] sm:min-w-[304px] sm:w-[304px] flex flex-col bg-gray-100/55 dark:bg-white/5 rounded-[1.6rem] p-3 border shadow-none h-full transition-[box-shadow,border-color,background-color] duration-150 ${
         isOver || isActiveTarget
           ? "border-[rgba(var(--brand-500-rgb),0.8)] bg-[rgba(var(--brand-50-rgb),0.78)] ring-2 ring-[rgba(var(--brand-500-rgb),0.42)] dark:bg-[rgba(var(--brand-900-rgb),0.24)]"
           : "border-gray-200 dark:border-gray-800"
@@ -1263,6 +1266,8 @@ export const ModuleListRefine: React.FC<{
   const [kanbanDragOverColumn, setKanbanDragOverColumn] = useState<
     string | null
   >(null);
+  const [relatedActivitySummaries, setRelatedActivitySummaries] = useState<Record<string, RelatedActivitySummary>>({});
+  const [kanbanSettlingRecordId, setKanbanSettlingRecordId] = useState<string | null>(null);
   const [allUsers, setAllUsers] = useState<any[]>(
     () => cachedOptionSnapshot?.allUsers || [],
   );
@@ -1672,6 +1677,41 @@ export const ModuleListRefine: React.FC<{
       }),
     [deferredModuleRowsById, effectiveBaseAllData],
   );
+
+  useEffect(() => {
+    const activityTab = (moduleConfig?.relatedTabs || []).find((tab: any) => String(tab?.targetModule || '') === 'tasks' && tab?.foreignKey);
+    if (!activityTab || !effectiveAllData.length) {
+      setRelatedActivitySummaries((current) => Object.keys(current).length ? {} : current);
+      return;
+    }
+    const foreignKey = String(activityTab.foreignKey);
+    const recordIds = effectiveAllData.map((row: any) => String(row?.id || '').trim()).filter(Boolean).slice(0, 200);
+    if (!recordIds.length) return;
+    let cancelled = false;
+    void supabase.from('tasks').select(`id,${foreignKey},status,due_date`).in(foreignKey, recordIds).limit(2000).then(({ data, error }) => {
+      if (cancelled || error) return;
+      const next: Record<string, RelatedActivitySummary> = {};
+      recordIds.forEach((id) => { next[id] = { total: 0, completed: 0, overdue: 0, upcoming: 0, open: 0 }; });
+      (Array.isArray(data) ? data : []).forEach((row: any) => {
+        const id = String(row?.[foreignKey] || '').trim();
+        if (!id) return;
+        const summary = next[id] || { total: 0, completed: 0, overdue: 0, upcoming: 0, open: 0 };
+        summary.total += 1;
+        const status = String(row?.status || '').toLowerCase();
+        const done = ['done', 'completed', 'complete', 'closed', 'finished'].includes(status);
+        if (done) summary.completed += 1;
+        else {
+          const due = row?.due_date ? new Date(row.due_date).getTime() : NaN;
+          if (Number.isFinite(due) && due < Date.now()) summary.overdue += 1;
+          else if (Number.isFinite(due) && due - Date.now() <= 7 * 86400000) summary.upcoming += 1;
+          else summary.open += 1;
+        }
+        next[id] = summary;
+      });
+      setRelatedActivitySummaries(next);
+    });
+    return () => { cancelled = true; };
+  }, [effectiveAllData, moduleConfig?.relatedTabs]);
   const hasQueryResult = isListView
     ? clientPermissionPaginationActive
       ? !permissionConditionLoading || clientPermissionPageRows.length > 0
@@ -6641,6 +6681,9 @@ export const ModuleListRefine: React.FC<{
       const hide = showListMessage("loading", "در حال جابجایی کارت...", 0);
       const sourceColumnKey = String(record?.[kanbanGroupBy] ?? "");
       const movedRecord = { ...record, ...normalizedChanges };
+      const movedRecordId = String(record?.id || '');
+      setKanbanSettlingRecordId(movedRecordId || null);
+      window.setTimeout(() => setKanbanSettlingRecordId((current) => current === movedRecordId ? null : current), 520);
 
       // The move is optimistic: the user sees the card land immediately and we
       // only reload the small affected columns if persistence fails.
@@ -7501,6 +7544,7 @@ export const ModuleListRefine: React.FC<{
                       relationOptions={effectiveRelationOptions}
                       canLockRecord={canLockRecords}
                       canUnlockRecord={canUnlockRecords}
+                      relatedActivitySummaries={relatedActivitySummaries}
                     />
                   </React.Suspense>
 
@@ -7646,6 +7690,8 @@ export const ModuleListRefine: React.FC<{
                                     dragHandleTitle="جابجایی کارت"
                                     canLockRecord={canLockRecords}
                                     canUnlockRecord={canUnlockRecords}
+                                    relatedActivitySummary={relatedActivitySummaries[String(item?.id || '')]}
+                                    settling={kanbanSettlingRecordId === String(item?.id || '')}
                                   />
                                 ))}
                               </div>

@@ -113,6 +113,16 @@ export const marketingLeadsModule: ModuleDefinition = {
       isTableColumn: true,
       nature: FieldNature.STANDARD,
     },
+    {
+      key: 'lead_value',
+      labels: { fa: 'ارزش لید', en: 'Lead Value' },
+      type: FieldType.PRICE,
+      location: FieldLocation.HEADER,
+      order: 5.1,
+      defaultValue: 0,
+      isTableColumn: true,
+      nature: FieldNature.STANDARD,
+    },
     protectAdvertisingCampaignSourceField({
       key: 'source',
       labels: { fa: 'منبع سرنخ', en: 'Lead Source' },

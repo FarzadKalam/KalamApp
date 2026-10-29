@@ -86,6 +86,12 @@ export const getRecordTitle = (
     if (fullName) return fullName;
   }
 
+  // لید بازاریابی عنوان مستقل «نام لید» دارد؛ نام شخص فقط یکی از جزئیات کارت است.
+  if (moduleConfig?.id === 'marketing_leads') {
+    const leadTitle = normalize(record.name);
+    if (leadTitle) return leadTitle;
+  }
+
   const firstName = normalize(record.first_name);
   const lastName = normalize(record.last_name);
   if (firstName || lastName) {
