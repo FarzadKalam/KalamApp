@@ -44,8 +44,8 @@ const QuickRecordFormModal: React.FC<Props> = ({
       onCancel={onCancel}
       onOk={onConfirm}
       destroyOnHidden
-      width={typeof window !== 'undefined' && window.innerWidth < 768 ? 'calc(100vw - 0.75rem)' : 680}
-      styles={{ body: { maxHeight: '70dvh', overflowY: 'auto' } }}
+      width={typeof window !== 'undefined' && window.innerWidth < 768 ? 'calc(100vw - 0.75rem)' : 'min(96vw, 1080px)'}
+      styles={{ body: { maxHeight: '76dvh', overflowY: 'auto', paddingInline: 12 } }}
     >
       <p className="mb-3 text-xs leading-6 text-slate-500">
         همه فیلدهای قابل ویرایش این بخش در دسترس‌اند. در چند مورد، با فلش‌ها بین پیش‌نویس‌ها جابه‌جا شوید و هر مورد را جداگانه برای {verb} انتخاب کنید؛ اجرای نهایی فقط برای موارد انتخاب‌شده و پس از تایید انجام می‌شود.

@@ -87,7 +87,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'ai-assistant-2026-09-30-reliable-image-worker';
+const FUNCTION_BUILD = 'ai-assistant-2026-10-29-voice-record-tables';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 const DEFAULT_AI_MODEL = '';
@@ -4409,6 +4409,94 @@ const sanitizeAiRecordPayload = (rawPayload: any, schema: any) => {
   return payload;
 };
 
+const sanitizeAiRecordTables = (rawPayload: any, schema: any) => {
+  const tableSchemas = Array.isArray(schema?.tables) ? schema.tables : [];
+  const rawTables = rawPayload?.tables && typeof rawPayload.tables === 'object' ? rawPayload.tables : {};
+  const result: Record<string, any[]> = {};
+  for (const tableSchema of tableSchemas) {
+    const tableKey = String(tableSchema?.key || '').trim();
+    if (!tableKey || !Array.isArray(rawTables[tableKey])) continue;
+    const rows = rawTables[tableKey].slice(0, 200)
+      .map((row: any) => sanitizeAiRecordPayload({ fields: row }, { fields: tableSchema?.columns || [] }))
+      .filter((row: any) => Object.keys(row || {}).length > 0);
+    if (rows.length > 0) result[tableKey] = rows;
+  }
+  return result;
+};
+
+const AI_RELATION_SEARCH_FIELDS = ['system_code', 'name', 'title', 'full_name', 'business_name', 'sku', 'invoice_number'];
+
+const resolveAiRelationValue = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  orgId: string,
+  field: any,
+  value: any,
+  cache?: Map<string, string | null>,
+) => {
+  const raw = String(value ?? '').trim();
+  if (!raw || isUuid(raw)) return raw || null;
+  const targetModuleId = String(field?.relationTargetModule || field?.relation_target_module || '').trim();
+  const targetTable = getModuleTable(targetModuleId);
+  if (!targetModuleId || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(targetTable)) return null;
+  const cacheKey = `${targetTable}:${raw}`;
+  if (cache?.has(cacheKey)) return cache.get(cacheKey) || null;
+  for (const searchField of AI_RELATION_SEARCH_FIELDS) {
+    const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, targetTable, {
+      org_id: `eq.${orgId}`,
+      [searchField]: `eq.${raw}`,
+      select: 'id',
+      limit: 2,
+    });
+    if (rows.length === 1 && rows[0]?.id) {
+      cache?.set(cacheKey, rows[0].id);
+      return rows[0].id;
+    }
+  }
+  cache?.set(cacheKey, null);
+  return null;
+};
+
+const resolveAiMutationRelations = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  orgId: string,
+  drafts: any[],
+  schema: any,
+) => {
+  const relationCache = new Map<string, string | null>();
+  const fieldSpecs = new Map<string, any>(
+    (Array.isArray(schema?.fields) ? schema.fields : [])
+      .map((field: any) => [String(field?.key || '').trim(), field] as const)
+      .filter(([key, field]) => key && field?.relationTargetModule),
+  );
+  const tableSpecs = new Map<string, Map<string, any>>(
+    (Array.isArray(schema?.tables) ? schema.tables : []).map((table: any) => [
+      String(table?.key || '').trim(),
+      new Map((Array.isArray(table?.columns) ? table.columns : [])
+        .map((field: any) => [String(field?.key || '').trim(), field] as const)
+        .filter(([key, field]) => key && field?.relationTargetModule)),
+    ]),
+  );
+  return Promise.all((drafts || []).map(async (draft: any) => {
+    const fields = { ...(draft.fields || {}) };
+    for (const [key, spec] of fieldSpecs) {
+      if (Object.prototype.hasOwnProperty.call(fields, key)) fields[key] = await resolveAiRelationValue(supabaseUrl, serviceRoleKey, orgId, spec, fields[key], relationCache);
+    }
+    const tables: Record<string, any[]> = {};
+    for (const [tableKey, columns] of tableSpecs) {
+      tables[tableKey] = await Promise.all((Array.isArray(draft.tables?.[tableKey]) ? draft.tables[tableKey] : []).map(async (row: any) => {
+        const next = { ...(row || {}) };
+        for (const [key, spec] of columns) {
+          if (Object.prototype.hasOwnProperty.call(next, key)) next[key] = await resolveAiRelationValue(supabaseUrl, serviceRoleKey, orgId, spec, next[key], relationCache);
+        }
+        return next;
+      }));
+    }
+    return { ...draft, fields, tables };
+  }));
+};
+
 const buildAiRecordTitle = (record: any, fallback: string) => {
   const candidates = [
     record?.system_code,
@@ -7740,8 +7828,20 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     const fieldKey = String(field?.key || '').trim();
     return fieldKey && permissionFields[fieldKey] !== false;
   });
-  if (fields.length === 0) return json(400, { success: false, message: `فیلدهای مجاز برای ${mutationVerb} رکورد مشخص نیست.` });
-  const effectiveSchema = { ...schema, fields };
+  const tables = (Array.isArray(schema?.tables) ? schema.tables : [])
+    .map((table: any) => {
+      const tableKey = String(table?.key || '').trim();
+      if (!tableKey) return null;
+      if (permissionFields[tableKey] === false) return null;
+      const columns = (Array.isArray(table?.columns) ? table.columns : []).filter((column: any) => {
+        const fieldKey = String(column?.key || '').trim();
+        return fieldKey && permissionFields[`${tableKey}.${fieldKey}`] !== false && permissionFields[fieldKey] !== false;
+      });
+      return columns.length > 0 ? { ...table, key: tableKey, columns } : null;
+    })
+    .filter(Boolean);
+  if (fields.length === 0 && tables.length === 0) return json(400, { success: false, message: `فیلدها یا جدول‌های مجاز برای ${mutationVerb} رکورد مشخص نیست.` });
+  const effectiveSchema = { ...schema, fields, tables };
 
   const rawContext = normalizeContext(body?.context || {});
   const capability = String(body?.capability || 'workflow_ai_prompt').trim() || 'workflow_ai_prompt';
@@ -7772,6 +7872,16 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     return `- ${field.key}: ${field.label || field.key} (${field.type || 'text'}${field.required ? '، ضروری' : ''})${options}`;
   }).join('\n');
 
+  const tableLines = tables.map((table: any) => {
+    const columnLines = (table.columns || []).map((column: any) => {
+      const options = Array.isArray(column?.options) && column.options.length
+        ? ` options: ${column.options.slice(0, 30).map((option: any) => `${option?.label || option?.value}=${option?.value}`).join(', ')}`
+        : '';
+      return `  - ${column.key}: ${column.label || column.key} (${column.type || 'text'}${column.readonly ? ', readonly' : ''})${options}`;
+    }).join('\n');
+    return `- ${table.key}: ${table.label || table.key}\n${columnLines}`;
+  }).join('\n');
+
   const systemPrompt = [
     `شما دستیار ${mutationVerb} رکورد در یک نرم‌افزار SaaS سازمانی هستید.`,
     'فقط از اطلاعاتی که کاربر داده استفاده کن.',
@@ -7789,6 +7899,10 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     `ماژول مقصد: ${moduleLabel}`,
     'فیلدهای مجاز:',
     fieldLines,
+    tables.length > 0 ? 'جدول‌های مجاز و ستون‌های آن‌ها را در صورت نیاز داخل tables برگردان.' : '',
+    tableLines,
+    'برای فاکتور، invoiceItems جدول اقلام و payments جدول دریافت و پرداخت است. ردیف‌ها را جداگانه و کامل برگردان؛ مقدارهای readonly و محاسباتی را فقط در صورت اطمینان بنویس.',
+    'قالب هر رکورد: {"fields":{},"tables":{"invoiceItems":[],"payments":[]}}. برای ویرایش، record_id را حفظ کن و فقط تغییرات معتبر را اعمال کن.',
     '',
     'قالب خروجی:',
     isUpdate
@@ -7889,6 +8003,21 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     .slice(0, 20)
     .map((recordDraft: any, index: number) => {
       const fieldsPayload = sanitizeAiRecordPayload(recordDraft, effectiveSchema);
+      const currentRecord = isUpdate
+        ? permittedUpdateRecords.find((record: any) => String(record?.id || '') === String(
+          recordDraft?.record_id || recordDraft?.recordId || recordDraft?.target_record_id
+          || (permittedUpdateRecords.length === 1 ? permittedUpdateRecords[0]?.id : ''),
+        ).trim())
+        : null;
+      const tablePayload = sanitizeAiRecordTables(recordDraft, effectiveSchema);
+      if (isUpdate && currentRecord) {
+        for (const tableSchema of tables) {
+          const tableKey = String(tableSchema?.key || '').trim();
+          if (tableKey && !Object.prototype.hasOwnProperty.call(tablePayload, tableKey) && Array.isArray(currentRecord?.[tableKey])) {
+            tablePayload[tableKey] = currentRecord[tableKey];
+          }
+        }
+      }
       if (targetModuleId === 'tasks') {
         if (!fieldsPayload.status) fieldsPayload.status = 'todo';
         if (!fieldsPayload.priority) fieldsPayload.priority = 'medium';
@@ -7902,16 +8031,14 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
         || (permittedUpdateRecords.length === 1 ? permittedUpdateRecords[0]?.id : ''),
       ).trim();
       if (isUpdate && (!requestedRecordId || !permittedUpdateRecordIds.has(requestedRecordId))) return null;
-      const currentRecord = isUpdate
-        ? permittedUpdateRecords.find((record: any) => String(record?.id || '') === requestedRecordId)
-        : null;
       return {
         record_id: isUpdate ? requestedRecordId : null,
         record_title: isUpdate ? buildAiRecordTitle(currentRecord, `${moduleLabel} ${index + 1}`) : `${moduleLabel} ${index + 1}`,
         fields: fieldsPayload,
+        tables: tablePayload,
       };
     })
-    .filter((draft: any) => draft && Object.keys(draft.fields || {}).length > 0);
+    .filter((draft: any) => draft && (Object.keys(draft.fields || {}).length > 0 || Object.keys(draft.tables || {}).length > 0));
   const payload = recordDrafts[0]?.fields || {};
   const generatedReply = String(parsed?.reply || '').trim();
   const previewOnly = (
@@ -8053,15 +8180,17 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
 
   const createdRecords: any[] = [];
   const updatedRecords: any[] = [];
-  if (recordDrafts.length > 0) {
+  const executableRecordDrafts = await resolveAiMutationRelations(supabaseUrl, serviceRoleKey, authContext.orgId, recordDrafts, effectiveSchema);
+  if (executableRecordDrafts.length > 0) {
     if (isUpdate) {
-      for (const draft of recordDrafts) {
+      for (const draft of executableRecordDrafts) {
         const currentRecord = permittedUpdateRecords.find((record: any) => String(record?.id || '') === String(draft.record_id || '')) || {};
       await restPatch(supabaseUrl, serviceRoleKey, targetTable, {
           id: `eq.${draft.record_id}`,
         org_id: `eq.${authContext.orgId}`,
       }, {
           ...draft.fields,
+          ...draft.tables,
         updated_by: authContext.userId || null,
         updated_at: new Date().toISOString(),
       });
@@ -8073,9 +8202,10 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
       });
       }
     } else {
-      const rows = await restInsert(supabaseUrl, serviceRoleKey, targetTable, recordDrafts.map((draft: any) => ({
+      const rows = await restInsert(supabaseUrl, serviceRoleKey, targetTable, executableRecordDrafts.map((draft: any) => ({
         org_id: authContext.orgId,
         ...draft.fields,
+        ...draft.tables,
       })));
       rows.forEach((created: any) => {
         if (!created) return;
@@ -13509,10 +13639,13 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
       .map((draft: any) => ({
         record_id: String(draft?.record_id || draft?.recordId || '').trim() || null,
         fields: sanitizeAiRecordPayload({ fields: draft?.fields || draft?.payload || {} }, schema),
+        tables: sanitizeAiRecordTables({ tables: draft?.tables || {} }, schema),
       }))
-      .filter((draft: any) => Object.keys(draft.fields).length > 0);
+      .filter((draft: any) => Object.keys(draft.fields).length > 0 || Object.keys(draft.tables).length > 0);
     if (mutationDrafts.length === 0) return json(400, { success: false, message: `اطلاعات کافی برای ${mutationVerb} رکورد وجود ندارد.` });
 
+    const resolvedMutationDrafts = await resolveAiMutationRelations(supabaseUrl, serviceRoleKey, authContext.orgId, mutationDrafts, schema);
+    mutationDrafts.splice(0, mutationDrafts.length, ...resolvedMutationDrafts);
     const moduleLabel = String(proposed.module_label || schema?.moduleLabel || targetModuleId).trim() || targetModuleId;
     const createdRecords: any[] = [];
     const updatedRecords: any[] = [];
@@ -13546,6 +13679,7 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
           org_id: `eq.${authContext.orgId}`,
         }, {
           ...draft.fields,
+          ...draft.tables,
           updated_by: authContext.userId || null,
           updated_at: new Date().toISOString(),
         });
@@ -13562,6 +13696,7 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
       const rows = await restInsert(supabaseUrl, serviceRoleKey, targetTable, mutationDrafts.map((draft: any) => ({
         org_id: authContext.orgId,
         ...draft.fields,
+        ...draft.tables,
       })));
       rows.forEach((created: any) => {
         if (!created) return;

@@ -5,6 +5,7 @@ import { MODULES } from '../../moduleRegistry';
 import type { ModuleField } from '../../types';
 import { getFieldLabelFa } from '../../utils/fieldLabel';
 import SmartFieldRenderer from '../SmartFieldRenderer';
+import EditableTable from '../EditableTable';
 
 export type AiRecordMutationDraft = {
   record_id?: string | null;
@@ -12,6 +13,7 @@ export type AiRecordMutationDraft = {
   /** هر پیش‌نویس در مودال افزودن سریع جداگانه انتخاب و تایید می‌شود. */
   selected?: boolean;
   fields: Record<string, any>;
+  tables?: Record<string, any[]>;
 };
 
 type Props = {
@@ -33,6 +35,15 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
   const [activeIndex, setActiveIndex] = useState(0);
   const [showOtherFields, setShowOtherFields] = useState<Record<number, boolean>>({});
   const moduleConfig = MODULES[moduleId];
+  const tableSpecs = useMemo(() => (
+    (Array.isArray(schema?.tables) ? schema.tables : [])
+      .map((table: any) => ({
+        ...table,
+        key: String(table?.key || '').trim(),
+        columns: Array.isArray(table?.columns) ? table.columns : [],
+      }))
+      .filter((table: any) => table.key && table.columns.length > 0)
+  ), [schema]);
 
   const editableFields = useMemo(() => {
     const schemaKeys = new Set(
@@ -140,6 +151,40 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
                   </div>
                 ))}
               </div>
+              {tableSpecs.length > 0 ? (
+                <div className="mt-3 space-y-3 border-t border-amber-100/80 pt-3 dark:border-white/10">
+                  {tableSpecs.map((table: any) => {
+                    const block = (moduleConfig?.blocks || []).find((item: any) => String(item?.id || '') === table.key);
+                    if (!block) return null;
+                    const allowedColumns = new Set(table.columns.map((column: any) => String(column?.key || '').trim()).filter(Boolean));
+                    return (
+                      <section key={table.key} className="rounded-xl border border-amber-100/80 bg-white/60 p-2 dark:border-white/10 dark:bg-black/15">
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <div className="font-semibold text-amber-900 dark:text-amber-100">{table.label}</div>
+                          <span className="text-[11px] text-amber-700/80 dark:text-amber-200/70">
+                            {(Array.isArray(record.tables?.[table.key]) ? record.tables[table.key] : []).length.toLocaleString('fa-IR')} ردیف
+                          </span>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <EditableTable
+                            block={block as any}
+                            initialData={Array.isArray(record.tables?.[table.key]) ? record.tables[table.key] : []}
+                            mode="local"
+                            moduleId={moduleId}
+                            parentValues={record.fields || {}}
+                            relationOptions={{}}
+                            canEditModule
+                            canViewField={(fieldKey: string) => allowedColumns.has(String(fieldKey || '').trim())}
+                            onChange={(nextRows: any[]) => onChange(records.map((item, index) => index === recordIndex
+                              ? { ...item, tables: { ...(item.tables || {}), [table.key]: nextRows } }
+                              : item))}
+                          />
+                        </div>
+                      </section>
+                    );
+                  })}
+                </div>
+              ) : null}
               {otherFields.length > 0 ? (
                 <div className="mt-1 flex items-center justify-between gap-3 border-t border-amber-100/80 pt-2 dark:border-white/10">
                   <span className="font-semibold text-amber-900 dark:text-amber-100">مشاهده دیگر فیلدها</span>

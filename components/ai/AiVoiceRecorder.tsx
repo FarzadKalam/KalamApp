@@ -11,6 +11,18 @@ type RecordedVoice = {
   durationMs: number;
   filename: string;
   previewUrl?: string;
+  transcript?: string;
+};
+
+type SpeechRecognitionLike = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: ((event: any) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
 };
 
 type AiVoiceRecorderProps = {
@@ -35,10 +47,13 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
   const chunksRef = useRef<BlobPart[]>([]);
   const startedAtRef = useRef<number>(0);
   const timerRef = useRef<number | null>(null);
+  const speechRef = useRef<SpeechRecognitionLike | null>(null);
   const [recording, setRecording] = useState(false);
   const [durationMs, setDurationMs] = useState(0);
   const [recorded, setRecorded] = useState<RecordedVoice | null>(null);
   const [recordedUrl, setRecordedUrl] = useState<string | null>(null);
+  const [liveTranscript, setLiveTranscript] = useState('');
+  const liveTranscriptRef = useRef('');
 
   const cleanupStream = () => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -52,9 +67,15 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
     }
   };
 
+  const stopSpeechRecognition = () => {
+    try { speechRef.current?.stop(); } catch { /* already stopped */ }
+    speechRef.current = null;
+  };
+
   useEffect(() => () => {
     clearTimer();
     cleanupStream();
+    stopSpeechRecognition();
     if (recordedUrl) URL.revokeObjectURL(recordedUrl);
   }, [recordedUrl]);
 
@@ -78,11 +99,37 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
       if (recordedUrl) URL.revokeObjectURL(recordedUrl);
       setRecordedUrl(null);
       setDurationMs(0);
+      setLiveTranscript('');
+      liveTranscriptRef.current = '';
+      const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognitionCtor) {
+        const speech = new SpeechRecognitionCtor() as SpeechRecognitionLike;
+        speech.lang = 'fa-IR';
+        speech.continuous = true;
+        speech.interimResults = true;
+        speech.onresult = (event) => {
+          let transcript = '';
+          for (let index = 0; index < event.results.length; index += 1) {
+            transcript += `${event.results[index][0]?.transcript || ''} `;
+          }
+          liveTranscriptRef.current = transcript.trim();
+          setLiveTranscript(liveTranscriptRef.current);
+        };
+        speech.onerror = () => undefined;
+        speech.onend = () => {
+          if (recording && recorderRef.current?.state === 'recording') {
+            try { speech.start(); } catch { /* browser may reject a restart */ }
+          }
+        };
+        speechRef.current = speech;
+        try { speech.start(); } catch { speechRef.current = null; }
+      }
       recorder.ondataavailable = (event) => {
         if (event.data?.size) chunksRef.current.push(event.data);
       };
       recorder.onstop = () => {
         clearTimer();
+        stopSpeechRecognition();
         const finalDuration = Date.now() - startedAtRef.current;
         const blob = new Blob(chunksRef.current, { type: mimeType });
         setRecording(false);
@@ -95,6 +142,7 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
             durationMs: finalDuration,
             filename: `فایل صوتی-${Date.now()}.webm`,
             previewUrl,
+              transcript: liveTranscriptRef.current || undefined,
           });
           setRecordedUrl(previewUrl);
         }
@@ -117,10 +165,13 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
   };
 
   const discard = () => {
+    stopSpeechRecognition();
     setRecorded(null);
     if (recordedUrl) URL.revokeObjectURL(recordedUrl);
     setRecordedUrl(null);
     setDurationMs(0);
+    setLiveTranscript('');
+    liveTranscriptRef.current = '';
   };
 
   const send = async () => {
@@ -143,6 +194,35 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
           <Button size="small" type="primary" icon={<SendOutlined />} loading={loading} onClick={() => void send()} />
         </Tooltip>
       </Space>
+    );
+  }
+
+  if (recording) {
+    return (
+      <div className={[className, 'flex min-h-11 w-full min-w-[220px] items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 dark:border-red-900/60 dark:bg-red-950/30'].filter(Boolean).join(' ')}>
+        <Button
+          danger
+          type="primary"
+          shape="circle"
+          icon={<StopOutlined />}
+          onClick={stopRecording}
+          aria-label="توقف ضبط صدا"
+        />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className="flex items-center gap-2 text-xs text-red-700 dark:text-red-300">
+            <span className="font-medium">در حال دریافت صدا</span>
+            <span className="tabular-nums">{formatSeconds(durationMs)}</span>
+            <span className="flex h-5 items-center gap-0.5 overflow-hidden" aria-hidden="true">
+              {Array.from({ length: 24 }, (_, index) => (
+                <span key={index} className="w-1 rounded-full bg-red-400 animate-pulse" style={{ height: `${6 + ((index * 7) % 13)}px`, animationDelay: `${index * 35}ms` }} />
+              ))}
+            </span>
+          </div>
+          <div className="min-h-5 truncate text-sm text-slate-700 dark:text-slate-200">
+            {liveTranscript || 'صحبت کنید؛ متن تشخیص‌داده‌شده همین‌جا نمایش داده می‌شود…'}
+          </div>
+        </div>
+      </div>
     );
   }
 

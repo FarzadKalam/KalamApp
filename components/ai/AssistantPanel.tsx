@@ -2605,10 +2605,20 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     // The initial request belongs to the route, not the selected conversation.
     // Including the active thread here retriggered VoIP analysis whenever the
     // user switched conversations while this page remained mounted.
-    const signature = `${fileName}:${String(initialFile.message || initialPrompt || '').trim()}:${String(initialVoipCallLogId || '').trim()}`;
+    const fileIdentity = String((initialFile as any).assetId || (initialFile as any).entryId || (initialFile as any).url || fileName).trim();
+    const signature = `${fileIdentity}:${String(initialFile.message || initialPrompt || '').trim()}:${String(initialVoipCallLogId || '').trim()}`;
     if (!fileName || autoSubmittedInitialBundleRef.current === signature) return;
+    const storageKey = `taze-ai-initial-audio:${window.location.pathname}:${signature}`;
+    try {
+      if (window.sessionStorage.getItem(storageKey) === 'submitted') {
+        autoSubmittedInitialBundleRef.current = signature;
+        return;
+      }
+    } catch { /* storage can be unavailable in privacy mode */ }
     autoSubmittedInitialBundleRef.current = signature;
-    void submitTaskBundle();
+    void submitTaskBundle().then(() => {
+      try { window.sessionStorage.setItem(storageKey, 'submitted'); } catch { /* ignore storage failures */ }
+    });
   }, [active, autoSubmitInitialPrompt, bundleInputs.length, initialFile, initialPrompt, loadingThread, normalizedInitialThreadId, submitTaskBundle, submitting]);
 
   const confirmPendingAiAction = useCallback(async () => {
@@ -3014,6 +3024,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         record_title: String(record?.record_title || '').trim() || null,
         selected: record?.selected !== false,
         fields: record?.fields && typeof record.fields === 'object' ? record.fields : {},
+        tables: record?.tables && typeof record.tables === 'object' ? record.tables : {},
       }));
     }
     return proposedPayload?.payload && typeof proposedPayload.payload === 'object'

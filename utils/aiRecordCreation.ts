@@ -13,11 +13,18 @@ export type AiRecordFieldSpec = {
   aiWritable?: boolean;
 };
 
+export type AiRecordTableSpec = {
+  key: string;
+  label: string;
+  columns: AiRecordFieldSpec[];
+};
+
 export type AiRecordCreationSchema = {
   moduleId: string;
   moduleLabel: string;
   table: string;
   fields: AiRecordFieldSpec[];
+  tables?: AiRecordTableSpec[];
   /** All configured fields are supplied as context; only `fields` is writable. */
   contextFields?: AiRecordFieldSpec[];
 };
@@ -72,6 +79,20 @@ const toFieldSpec = (field: ModuleField, moduleId: string, aiWritable: boolean):
   relationTargetModule: String((field as any)?.relationConfig?.targetModule || '').trim() || null,
 });
 
+const toTableSpec = (block: any, moduleId: string): AiRecordTableSpec | null => {
+  const key = String(block?.id || '').trim();
+  const columns = Array.isArray(block?.tableColumns) ? block.tableColumns : [];
+  if (!key || columns.length === 0) return null;
+  return {
+    key,
+    label: String(block?.titles?.fa || key).trim() || key,
+    columns: columns
+      .filter((column: any) => Boolean(column?.key))
+      .map((column: any) => toFieldSpec({ ...column, labels: { fa: column.title, en: column.key } } as any, moduleId, !column.readonly))
+      .filter((column: AiRecordFieldSpec) => Boolean(column.key)),
+  };
+};
+
 export const buildAiRecordCreationSchema = (
   moduleId: string,
   allowedFieldKeys?: string[] | null,
@@ -94,12 +115,17 @@ export const buildAiRecordCreationSchema = (
     .filter(isAiWritableModuleField)
     .filter((field) => !hasExplicitAllowedFields || allowed.has(String(field.key)))
     .map((field) => toFieldSpec(field, normalizedModuleId, true));
+  const tables = (moduleConfig.blocks || [])
+    .filter((block: any) => Array.isArray(block?.tableColumns) && block.tableColumns.length > 0)
+    .map((block: any) => toTableSpec(block, normalizedModuleId))
+    .filter(Boolean) as AiRecordTableSpec[];
 
   return {
     moduleId: normalizedModuleId,
     moduleLabel: moduleConfig.titles?.fa || normalizedModuleId,
     table: moduleConfig.table || normalizedModuleId,
     fields,
+    tables,
     contextFields,
   };
 };
