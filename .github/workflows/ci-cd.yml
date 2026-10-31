@@ -70,6 +70,11 @@ jobs:
         run: >-
           npx vitest run pages/CashBankPage.test.tsx utils/cashBankLedger.test.ts
           utils/printTemplates/store.test.ts utils/listPrintExport.test.ts
+          utils/printTemplates/nativePrintFlow.test.ts utils/printTemplates/nativeTablePagination.test.ts
+          utils/printTemplates/buildPrintDocumentHtml.test.ts utils/printTemplates/templateRenderer.test.ts
+          utils/printTemplates/staticPrintPagination.test.ts utils/printTemplates/fragmentPacking.test.ts
+          utils/printTemplates/letterheadSignatureFlow.test.ts utils/printTemplates/tableRowSlices.test.ts
+          utils/printTemplates/splitPrintTextBlock.test.ts
           --maxWorkers=1 --no-file-parallelism
 
       - name: HR filters and picker regression checks

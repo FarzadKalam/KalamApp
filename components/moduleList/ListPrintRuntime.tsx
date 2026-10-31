@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo } from "react";
 import PrintSection from "../moduleShow/PrintSection";
 import type { ModuleDefinition } from "../../types";
-import { buildListPrintableFields } from "../../utils/listPrintExport";
+import { buildListPrintableFields, type ListPrintSummaryDefinition } from "../../utils/listPrintExport";
 import { useListPrintManager } from "../../utils/printTemplates/useListPrintManager";
 import { openPrintTemplateEditor } from "../../utils/printTemplates/openTemplateEditor";
 
@@ -10,6 +10,7 @@ type ListPrintRuntimeProps = {
   moduleId: string;
   moduleConfig: ModuleDefinition;
   rows: any[];
+  summary?: ListPrintSummaryDefinition | null;
   canViewField: (fieldKey: string) => boolean;
   visibleColumns: string[];
   dynamicOptions: Record<string, any[]>;
@@ -22,6 +23,7 @@ const ListPrintRuntime: React.FC<ListPrintRuntimeProps> = ({
   moduleId,
   moduleConfig,
   rows,
+  summary,
   canViewField,
   visibleColumns,
   dynamicOptions,
@@ -38,6 +40,7 @@ const ListPrintRuntime: React.FC<ListPrintRuntimeProps> = ({
     moduleConfig,
     rows,
     printableFields,
+    summary,
     relationOptions,
     canViewField,
   });

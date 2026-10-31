@@ -19,6 +19,7 @@ export interface NativeCustomPrintFlowOptions {
   headerHtml?: string | null;
   footerHtml?: string | null;
   signatureHtml?: string | null;
+  signaturePlacement?: 'footer' | 'each-page';
   headerHeightPx?: number;
   footerHeightPx?: number;
   showHeader?: boolean;
@@ -98,8 +99,8 @@ const buildMarginDocument = ({
 
 /**
  * Builds the one flowing body that Gotenberg/Chromium paginates natively.
- * Header, footer and signature stay in Gotenberg's dedicated page margins so
- * they cannot overlap a long table row or a final paragraph.
+ * Header/footer use dedicated page margins. The central page paginator keeps
+ * signatures at the bottom of intermediate pages and after the final content.
  */
 export const buildNativeCustomPrintFlowHtml = ({
   widthMm,
@@ -110,6 +111,7 @@ export const buildNativeCustomPrintFlowHtml = ({
   headerHtml,
   footerHtml,
   signatureHtml,
+  signaturePlacement = 'footer',
   headerHeightPx = 0,
   footerHeightPx = 0,
   showHeader = false,
@@ -118,7 +120,8 @@ export const buildNativeCustomPrintFlowHtml = ({
   fixedOverlayHtml,
 }: NativeCustomPrintFlowOptions) => {
   const headerContent = String(headerHtml || '').trim();
-  const footerContent = [String(signatureHtml || '').trim(), String(footerHtml || '').trim()]
+  const flowingSignature = signaturePlacement !== 'footer' ? String(signatureHtml || '').trim() : '';
+  const footerContent = [signaturePlacement === 'footer' ? String(signatureHtml || '').trim() : '', String(footerHtml || '').trim()]
     .filter(Boolean)
     .join('');
   const includeHeader = Boolean(showHeader && headerContent);
@@ -143,6 +146,26 @@ export const buildNativeCustomPrintFlowHtml = ({
     : '';
   const safeBackgroundUrl = String(backgroundImageUrl || '').trim().replace(/["'<>]/g, '');
   const overlayContent = String(fixedOverlayHtml || '').trim();
+  const printableWidth = toAttributeNumber(widthMm - pageMargins.left - pageMargins.right);
+  const pageBodyHeight = Math.max(1, Math.floor((heightMm - marginTopMm - marginBottomMm) * PX_PER_MM) - 1);
+  // Use the existing central fragment paginator for repeated signatures. Each
+  // page owns real content nodes; no fixed footer copy needs to be erased on
+  // the last page, and the last signature can follow the final text naturally.
+  const paginatedSignature = signaturePlacement === 'each-page' && Boolean(flowingSignature);
+  const bodyHtml = paginatedSignature
+    ? `<div class="invoice-custom-print-shell" style="width:${printableWidth}mm;">
+        <section class="print-template-page" data-print-layout-mode="native-flow" style="width:${printableWidth}mm;height:${pageBodyHeight}px;padding:${sectionPadding};display:flex;flex-direction:column;box-sizing:border-box;">
+          <div class="print-template-body" style="position:relative;min-height:0;">
+            <div class="print-template-body-viewport" style="position:relative;overflow:hidden;">
+              <div class="print-template-body-segment"><div class="print-template-body-inner">${String(contentHtml || '')}</div></div>
+            </div>
+          </div>
+          <div class="print-template-footer" style="flex-shrink:0;margin-top:auto;">
+            <div class="print-template-footer-stack"><div class="print-template-signatures" style="padding-top:8px;">${flowingSignature}</div></div>
+          </div>
+        </section>
+      </div>`
+    : String(contentHtml || '');
 
   return `<div
   class="kalamapp-native-print-flow"
@@ -153,13 +176,25 @@ export const buildNativeCustomPrintFlowHtml = ({
   data-kalamapp-margin-right-mm="${toAttributeNumber(pageMargins.right)}"
   data-kalamapp-margin-bottom-mm="${toAttributeNumber(marginBottomMm)}"
   data-kalamapp-margin-left-mm="${toAttributeNumber(pageMargins.left)}"
+  style="width:${printableWidth}mm;max-width:none;box-sizing:border-box;"
 >
   ${headerDocument ? `<template id="kalamapp-gotenberg-header">${headerDocument}</template>` : ''}
   ${footerDocument ? `<template id="kalamapp-gotenberg-footer">${footerDocument}</template>` : ''}
   ${safeBackgroundUrl ? `<div class="kalamapp-native-print-flow-background" style="background-image:url('${safeBackgroundUrl}')"></div>` : ''}
   ${overlayContent ? `<div class="kalamapp-native-print-flow-overlay">${overlayContent}</div>` : ''}
-  <main class="kalamapp-native-print-flow-body" style="padding:${sectionPadding}; box-sizing:border-box;">
-    ${String(contentHtml || '')}
+  <main class="kalamapp-native-print-flow-body" style="padding:${paginatedSignature ? '0' : sectionPadding}; box-sizing:border-box;">
+    ${bodyHtml}
   </main>
 </div>`;
 };
+
+/** Chromium resolves these counters in the separate page-margin documents. */
+export const prepareNativePageCounterTokens = (html: string | undefined): string =>
+  String(html || '')
+    .replace(/{{\s*system\.page_index\s*}}/g, '<span class="pageNumber"></span>')
+    .replace(/{{\s*system\.page_count\s*}}/g, '<span class="totalPages"></span>');
+
+export const appendNativePageCounter = (footerHtml: string, headerHtml = ''): string =>
+  /class\s*=\s*["'][^"']*\bpageNumber\b/.test(`${headerHtml}${footerHtml}`)
+    ? footerHtml
+    : `${footerHtml}<div class="print-template-page-counter" style="margin-top:4px;font-size:10px;color:#64748b;direction:rtl;text-align:left;">صفحه <span class="pageNumber"></span> از <span class="totalPages"></span></div>`;

@@ -51,6 +51,8 @@ export const getNativeTablePaginationScript = (): string => `
   var flow = document.querySelector('.kalamapp-native-print-flow[data-kalamapp-native-print-flow="true"]');
   var body = flow && flow.querySelector('.kalamapp-native-print-flow-body');
   if (!flow || !body || flow.getAttribute('data-kalamapp-native-tables-materialized') === 'true') return;
+  // Signature pages are materialized by the shared custom-page paginator.
+  if (body.querySelector('[data-print-layout-mode="native-flow"]')) return;
 
   var pxPerMm = 96 / 25.4;
   var paperHeight = Number(flow.getAttribute('data-kalamapp-paper-height-mm') || 0);

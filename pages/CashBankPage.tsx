@@ -13,7 +13,8 @@ import { useCurrencyConfig } from '../utils/currency';
 import { createChoiceFilter, createDateRangeFilter, createNumberRangeFilter, createTextFilter } from '../components/accounting/tableColumnFilters';
 import { ACCOUNTING_PERMISSION_KEY, fetchCurrentUserRoleContext } from '../utils/permissions';
 import ManagedDataTable from '../components/table/ManagedDataTable';
-import { buildCashBankLedgerFilters as buildLedgerFilters, CASH_BANK_LEDGER_COLUMNS, CASH_BANK_LEDGER_PRINT_ID, cashBankLedgerPrintModule, fetchCashBankLedgerPrintRows, formatCashBankLedgerTotal } from '../utils/cashBankLedger';
+import { buildCashBankLedgerFilters as buildLedgerFilters, buildCashBankLedgerPrintSummary, CASH_BANK_LEDGER_COLUMNS, CASH_BANK_LEDGER_PRINT_ID, cashBankLedgerPrintModule, fetchCashBankLedgerPrintRows, formatCashBankLedgerTotal } from '../utils/cashBankLedger';
+import type { ListPrintSummaryDefinition } from '../utils/listPrintExport';
 
 const ListPrintRuntime = React.lazy(() => import('../components/moduleList/ListPrintRuntime'));
 const EMPTY_PRINT_OPTIONS: Record<string, any[]> = {};
@@ -97,6 +98,7 @@ const CashBankPage: React.FC = () => {
   const [printLoading, setPrintLoading] = useState(false);
   const [printOpen, setPrintOpen] = useState(false);
   const [printRows, setPrintRows] = useState<any[]>([]);
+  const [printSummary, setPrintSummary] = useState<ListPrintSummaryDefinition | null>(null);
   const [columnOrder, setColumnOrder] = useState<string[]>(CASH_BANK_LEDGER_COLUMNS.map((field) => field.key));
   const ledgerRequest = useRef(0);
   const totalsRequest = useRef(0);
@@ -145,7 +147,8 @@ const CashBankPage: React.FC = () => {
   useEffect(() => {
     totalsRequest.current += 1; printRequest.current += 1;
     setTotals(null); setTotalsLoading(false); setPrintLoading(false);
-  }, [filters, identity?.orgId]);
+    setPrintOpen(false); setPrintRows([]); setPrintSummary(null);
+  }, [filters, identity?.orgId, identity?.userId]);
   useEffect(() => () => { ledgerRequest.current += 1; totalsRequest.current += 1; printRequest.current += 1; }, []);
 
   const calculateTotals = async () => {
@@ -170,6 +173,7 @@ const CashBankPage: React.FC = () => {
       }) : rows;
       if (!source || request !== printRequest.current) return;
       const mapped = all ? source.map(mapLedgerRow) : source as RowItem[];
+      setPrintSummary(buildCashBankLedgerPrintSummary(totals, currencyLabel));
       setPrintRows(mapped.map((row) => ({ ...row, rowType: rowTag(row.rowType).label,
         paymentType: PAYMENT_TYPE_LABEL[row.paymentType] || getFinancialPaymentTypeLabelFa(row.paymentType),
         status: STATUS_LABEL[row.status] || getFinancialStatusLabelFa(row.status),
@@ -256,7 +260,7 @@ const CashBankPage: React.FC = () => {
       </div>
     </Card>
     {printOpen ? <React.Suspense fallback={<Spin />}><ListPrintRuntime open moduleId={CASH_BANK_LEDGER_PRINT_ID}
-      moduleConfig={cashBankLedgerPrintModule} rows={printRows} canViewField={canViewPrintField}
+      moduleConfig={cashBankLedgerPrintModule} rows={printRows} summary={printSummary} canViewField={canViewPrintField}
       visibleColumns={columnOrder} dynamicOptions={EMPTY_PRINT_OPTIONS} relationOptions={EMPTY_PRINT_OPTIONS} onClose={() => setPrintOpen(false)} /></React.Suspense> : null}
   </div></div>;
 };

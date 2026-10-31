@@ -59,7 +59,8 @@ import {
   savePrintFieldPreferenceToServer,
 } from "./fieldPreferences";
 import { hasRenderablePrintFooterHtml } from "./footerLayout";
-import { buildNativeCustomPrintFlowHtml } from "./nativePrintFlow";
+import { appendNativePageCounter, buildNativeCustomPrintFlowHtml, prepareNativePageCounterTokens } from "./nativePrintFlow";
+import { buildLetterheadSignatureFlow } from './letterheadSignatureFlow';
 import {
   DEFAULT_PRINT_IMAGE_DISPLAY_MODE,
   sanitizePrintImageDisplayMode,
@@ -89,7 +90,6 @@ import {
   buildPrintSignatureBandHtml,
   createPrintSignatureRowId,
   getPrintSignatureQuickAddOptions,
-  getPrintSignatureSectionHeightPx,
   getSignerModuleLabel,
   materializePrintSignatureStates,
   sanitizePrintSignatureConfigs,
@@ -1713,7 +1713,7 @@ export const useListPrintManager = ({
                 dangerouslySetInnerHTML: { __html: headerHtml },
               }),
           React.createElement("div", {
-            style: { flex: "1 1 auto" },
+            style: { flex: pageIndex === pagedRows.length - 1 ? "0 0 auto" : "1 1 auto" },
             dangerouslySetInnerHTML: { __html: contentHtml },
           }),
           printSignatureBandHtml
@@ -1776,25 +1776,17 @@ export const useListPrintManager = ({
           qrValue: "",
         },
       );
-      const signatureOverlay =
-        signaturesItem && printSignatureBandHtml
-          ? `<div style="position:absolute;left:${signaturesItem.x}%;top:${signaturesItem.y}%;width:${signaturesItem.width}%;height:${signaturesItem.height}%;z-index:${signaturesItem.zIndex};display:flex;align-items:flex-end;justify-content:center;overflow:hidden;">${printSignatureBandHtml}</div>`
-          : "";
+      const signatureFlow = buildLetterheadSignatureFlow({
+        widthMm: metrics.widthMm, heightMm: metrics.heightMm,
+        body: bodyItem, signatures: signaturesItem, signatureHtml: printSignatureBandHtml,
+      });
 
       return buildNativeCustomPrintFlowHtml({
         widthMm: metrics.widthMm,
         heightMm: metrics.heightMm,
-        pageMargins: {
-          top: (metrics.heightMm * bodyItem.y) / 100,
-          right:
-            (metrics.widthMm * Math.max(0, 100 - bodyItem.x - bodyItem.width)) /
-            100,
-          bottom:
-            (metrics.heightMm *
-              Math.max(0, 100 - bodyItem.y - bodyItem.height)) /
-            100,
-          left: (metrics.widthMm * bodyItem.x) / 100,
-        },
+        pageMargins: signatureFlow.pageMargins,
+        signatureHtml: signatureFlow.signatureHtml,
+        signaturePlacement: 'each-page',
         sectionPadding: "0",
         contentHtml: renderTemplateSection(
           selectedStoredTemplate.contentHtml,
@@ -1807,7 +1799,7 @@ export const useListPrintManager = ({
           selectedOrgLetterhead.imageUrl,
           "printHero",
         ),
-        fixedOverlayHtml: `${overlayHtml}${signatureOverlay}`,
+        fixedOverlayHtml: overlayHtml,
       });
     }
     const metrics = getPaperMetrics(
@@ -1826,7 +1818,7 @@ export const useListPrintManager = ({
     };
     const allRows = Array.isArray(rows) ? rows : [];
     const headerHtml = renderTemplateSection(
-      selectedStoredTemplate.headerHtml,
+      prepareNativePageCounterTokens(selectedStoredTemplate.headerHtml),
       0,
       1,
       allRows,
@@ -1840,7 +1832,7 @@ export const useListPrintManager = ({
       0,
     );
     const footerHtml = renderTemplateSection(
-      selectedStoredTemplate.footerHtml,
+      prepareNativePageCounterTokens(selectedStoredTemplate.footerHtml),
       0,
       1,
       allRows,
@@ -1851,11 +1843,8 @@ export const useListPrintManager = ({
       selectedStoredTemplate.showFooter !== false &&
       (hasRenderablePrintFooterHtml(footerHtml) ||
         Boolean(printSignatureBandHtml));
-    const signatureHeightPx = printSignatureBandHtml
-      ? getPrintSignatureSectionHeightPx(printSignatureStates)
-      : 0;
     const footerWithPageCounter = showFooter
-      ? `${printSignatureBandHtml || ""}${footerHtml}<div class="print-template-page-counter" style="margin-top:4px;font-size:10px;color:#64748b;direction:rtl;text-align:left;">صفحه <span class="pageNumber"></span> از <span class="totalPages"></span></div>`
+      ? appendNativePageCounter(footerHtml, headerHtml)
       : "";
 
     return buildNativeCustomPrintFlowHtml({
@@ -1866,13 +1855,13 @@ export const useListPrintManager = ({
       contentHtml,
       headerHtml,
       footerHtml: footerWithPageCounter,
+      signatureHtml: printSignatureBandHtml,
+      signaturePlacement: 'each-page',
       headerHeightPx: showHeader
         ? Number(selectedStoredTemplate.headerHeight || 84)
         : 0,
       footerHeightPx: showFooter
-        ? Number(selectedStoredTemplate.footerHeight || 62) +
-          signatureHeightPx +
-          18
+        ? Number(selectedStoredTemplate.footerHeight || 62) + 18
         : 0,
       showHeader,
       showFooter,

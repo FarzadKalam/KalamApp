@@ -1,5 +1,6 @@
 import { FieldLocation, FieldNature, FieldType, ModuleNature, ViewMode, type ModuleDefinition } from '../types';
 import { toPersianNumber } from './persianNumberFormatter';
+import type { ListPrintSummaryDefinition } from './listPrintExport';
 
 export const CASH_BANK_LEDGER_PRINT_ID = 'cash_bank_ledger';
 export const CASH_BANK_LEDGER_COLUMNS = [
@@ -38,6 +39,23 @@ export const formatCashBankLedgerTotal = (raw: string) => {
   const decimal = (match[3] || '').replace(/0+$/, '');
   return toPersianNumber(`${match[1]}${integer}${decimal ? `٫${decimal}` : ''}`);
 };
+
+/** Reuse the central summary block and its printable-field visibility control. */
+export const buildCashBankLedgerPrintSummary = (
+  totals: { receiptTotal: string; paymentTotal: string } | null,
+  currencyLabel: string,
+): ListPrintSummaryDefinition | null => totals ? {
+  title: 'جمع فیلتر جاری — همهٔ صفحات',
+  fields: [
+    { key: 'receiptTotal', label: `جمع دریافت‌ها (${currencyLabel})`, type: FieldType.TEXT },
+    { key: 'paymentTotal', label: `جمع پرداخت‌ها (${currencyLabel})`, type: FieldType.TEXT },
+  ],
+  // Keep exact PostgreSQL numeric precision, including values beyond Number's range.
+  values: {
+    receiptTotal: formatCashBankLedgerTotal(totals.receiptTotal),
+    paymentTotal: formatCashBankLedgerTotal(totals.paymentTotal),
+  },
+} : null;
 
 const first = (filters: Record<string, any>, key: string) => String(filters?.[key]?.[0] ?? '').trim();
 const json = (value: string) => { try { return JSON.parse(value); } catch { return null; } };

@@ -58,5 +58,20 @@ describe('cash and bank report', () => {
     expect(mock.print.moduleId).toBe('cash_bank_ledger');
     expect(mock.print.rows[0].rowType).toBe('دریافت');
     expect(mock.print.visibleColumns).toContain('amount');
+    expect(mock.print.summary).toBeNull();
+  });
+
+  it('prints the calculated filter totals and clears both print and totals after filters change', async () => {
+    await ready(); await filter();
+    fireEvent.click(screen.getByRole('button', { name: 'محاسبه جمع' }));
+    await screen.findByRole('status', { name: 'جمع نتایج فیلترشده' });
+    fireEvent.click(screen.getByRole('button', { name: 'چاپ نقد و بانک' }));
+    fireEvent.click(await screen.findByText('چاپ صفحهٔ فعلی'));
+    await screen.findByTestId('print');
+    expect(mock.print.summary.values).toEqual({ receiptTotal: '۳٬۰۰۰', paymentTotal: '۲٬۰۰۰' });
+    expect(mock.print.summary.title).toContain('همهٔ صفحات');
+    await filter();
+    expect(screen.queryByTestId('print')).toBeNull();
+    expect(screen.queryByRole('status', { name: 'جمع نتایج فیلترشده' })).toBeNull();
   });
 });

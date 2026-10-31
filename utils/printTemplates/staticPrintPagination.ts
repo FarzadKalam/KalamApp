@@ -9,6 +9,9 @@ import {
   getTemplatePageBodyStepPx,
   PRINT_BODY_EDGE_GUARD_PX,
 } from './pageLayout';
+import { packPrintFragments } from './fragmentPacking';
+import { getSafeTableRowSlices } from './tableRowSlices';
+import { splitPrintTextBlock } from './splitPrintTextBlock';
 
 const CUSTOM_PRINT_PAGE_SELECTOR = '.invoice-custom-print-shell .print-template-page';
 const BODY_SELECTOR = '.print-template-body';
@@ -30,6 +33,33 @@ const PAGE_COUNTER_HEIGHT_ATTR = 'data-print-page-counter-height-px';
 // addition to the physical body-edge lane and deliberately favors a short
 // page over a leaked line in the next physical sheet.
 const MATERIALIZED_FRAGMENT_LAYOUT_RESERVE_PX = 96;
+
+/** Shared by the preview and the standalone PDF document. */
+export const positionPrintPageFooter = (page: HTMLElement, isFinalPage: boolean, materialized = false) => {
+  const footer = page.querySelector<HTMLElement>('.print-template-footer');
+  const signatures = page.querySelector<HTMLElement>('.print-template-signatures');
+  if (signatures) signatures.style.display = '';
+  if (!footer) return;
+  footer.style.marginTop = isFinalPage ? '0px' : 'auto';
+  if (!isFinalPage) return;
+  const body = page.querySelector<HTMLElement>('.print-template-body');
+  const viewport = page.querySelector<HTMLElement>('.print-template-body-viewport');
+  const segment = page.querySelector<HTMLElement>('.print-template-body-segment');
+  if (!body || !viewport) return;
+  const currentHeight = Number.parseFloat(viewport.style.height || '') || viewport.clientHeight;
+  const contentHeight = materialized && segment
+    ? Math.ceil(Math.max(segment.scrollHeight, segment.getBoundingClientRect().height))
+    : currentHeight;
+  if (contentHeight <= 0) return;
+  const height = Math.max(1, Math.min(currentHeight || contentHeight, contentHeight));
+  if (!height || !Number.isFinite(height)) return;
+  [body, viewport].forEach((element) => {
+    element.style.flex = `0 0 ${height}px`;
+    element.style.height = `${height}px`;
+    element.style.minHeight = '0';
+    element.style.maxHeight = `${height}px`;
+  });
+};
 
 const toPersianNumber = (value: number) =>
   String(value).replace(/\d/g, (digit) => '۰۱۲۳۴۵۶۷۸۹'[Number(digit)] || digit);
@@ -126,7 +156,7 @@ const synchronizeStaticPageLayout = (page: HTMLElement, body: HTMLElement) => {
 };
 
 const getFinalStaticBodyHeight = (bodyHeightPx: number, pageStartPx: number, contentHeightPx: number) => {
-  const remaining = Math.ceil(contentHeightPx - Math.max(0, pageStartPx));
+  const remaining = Math.ceil(contentHeightPx - Math.max(0, pageStartPx)) + PRINT_BODY_EDGE_GUARD_PX * 2;
   return Math.max(1, Math.min(bodyHeightPx, Number.isFinite(remaining) ? remaining : bodyHeightPx));
 };
 
@@ -216,9 +246,7 @@ const splitOversizedTableRowAtBlocks = ({
   // only block boundaries are safe places to divide user-authored markup.
   if (blocks.length < 2) return null;
 
-  const rowBounds = getRelativeElementBounds(row, rootRect);
-  const tableTop = getRelativeElementBounds(table, rootRect).top;
-  const tableRowOffsetPx = Math.max(0, rowBounds.top - tableTop);
+  const tableRowOffsetPx = getTableHeaderHeight(table, rootRect);
   // Keep a deliberately conservative slice. The source table can acquire
   // larger line metrics in the detached print document (font fallback,
   // collapsed borders and cell padding), and a smaller real row part is much
@@ -297,12 +325,11 @@ const collectPrintFragmentUnits = (root: HTMLElement, contentCapacityPx: number)
     if (element instanceof HTMLTableElement && bottom - top > contentCapacityPx) {
       const rows = getDirectTableRows(element);
       if (rows.length) {
-        const tableTop = top;
         rows.forEach((row) => {
           const rowBounds = getRelativeElementBounds(row, rootRect);
           if (rowBounds.bottom > rowBounds.top) {
             const rowHeight = rowBounds.bottom - rowBounds.top;
-            const tableRowOffsetPx = Math.max(0, rowBounds.top - tableTop);
+            const tableRowOffsetPx = getTableHeaderHeight(element, rootRect);
             // A table row may itself be taller than a whole page (for example
             // a long description inside one cell). It cannot be left as an
             // atomic unit: that is exactly how its tail gets clipped under a
@@ -320,8 +347,9 @@ const collectPrintFragmentUnits = (root: HTMLElement, contentCapacityPx: number)
                 units.push(...blockParts);
                 return;
               }
-              for (let sliceStartPx = 0; sliceStartPx < rowHeight; sliceStartPx += rowSliceCapacityPx) {
-                const sliceHeightPx = Math.min(rowSliceCapacityPx, rowHeight - sliceStartPx);
+              for (const slice of getSafeTableRowSlices(row, rowSliceCapacityPx)) {
+                const sliceStartPx = slice.start;
+                const sliceHeightPx = slice.height;
                 units.push({
                   top: rowBounds.top + sliceStartPx,
                   bottom: rowBounds.top + sliceStartPx + sliceHeightPx,
@@ -342,6 +370,10 @@ const collectPrintFragmentUnits = (root: HTMLElement, contentCapacityPx: number)
       }
     }
 
+    if (bottom - top > contentCapacityPx || element.matches('p,li,blockquote,pre')) {
+      const parts = splitPrintTextBlock(element, contentCapacityPx, rootRect.top);
+      if (parts && parts.length > 1) { units.push(...parts.map((part) => ({ ...part, kind: 'node' as const }))); return; }
+    }
     units.push({ top, bottom, kind: 'node', node: element });
   });
 
@@ -640,17 +672,10 @@ const fitMaterializedPrintFragments = ({
     return actualHeight <= Math.ceil(bodyHeightPx) + 1;
   };
 
-  const splitUntilFit = (units: PrintFragmentUnit[]): PrintFragmentUnit[][] | null => {
-    if (fits(units)) return [units];
-    if (units.length < 2) return null;
-    const middle = Math.ceil(units.length / 2);
-    const first = splitUntilFit(units.slice(0, middle));
-    const second = splitUntilFit(units.slice(middle));
-    return first && second ? [...first, ...second] : null;
-  };
-
+  const packed = packPrintFragments(fragments.flat(), fits);
+  if (packed) return packed;
   const fitted = fragments.flatMap((fragment) => {
-    const fittedFragment = splitUntilFit(fragment);
+    const fittedFragment = packPrintFragments(fragment, fits);
     if (fittedFragment) return fittedFragment;
     // A semantic row part was already divided at actual user-authored block
     // boundaries with an intentionally conservative capacity. Its detached
@@ -720,20 +745,17 @@ export const repaginateStaticCustomPrintDocument = (root: ParentNode = document)
   if (materializedFragments) {
     materializedFragments.forEach((fragmentUnits, pageIndex) => {
       const page = pageTemplate.cloneNode(true) as HTMLElement;
-      const footer = page.querySelector<HTMLElement>(FOOTER_SELECTOR);
-      const signatures = page.querySelector<HTMLElement>('.print-template-signatures');
       const counter = page.querySelector<HTMLElement>(PAGE_COUNTER_SELECTOR);
       const fragment = buildPrintFragment(page.ownerDocument, fragmentUnits);
 
       if (!applyMaterializedBodyFragment({ page, fragment, bodyHeightPx })) return;
-      if (footer) footer.style.marginTop = 'auto';
-      if (signatures && pageIndex < materializedFragments.length - 1) signatures.style.display = 'none';
       if (counter) {
         counter.textContent = `صفحه ${toPersianNumber(pageIndex + 1)} از ${toPersianNumber(materializedFragments.length)}`;
       }
       page.style.pageBreakAfter = pageIndex < materializedFragments.length - 1 ? 'always' : 'auto';
       page.style.breakAfter = pageIndex < materializedFragments.length - 1 ? 'page' : 'auto';
       shell.appendChild(page);
+      positionPrintPageFooter(page, pageIndex === materializedFragments.length - 1, true);
     });
 
     return materializedFragments.length;
@@ -743,8 +765,6 @@ export const repaginateStaticCustomPrintDocument = (root: ParentNode = document)
     const page = pageTemplate.cloneNode(true) as HTMLElement;
     const viewport = page.querySelector<HTMLElement>(BODY_VIEWPORT_SELECTOR);
     const segment = page.querySelector<HTMLElement>(BODY_SEGMENT_SELECTOR);
-    const footer = page.querySelector<HTMLElement>('.print-template-footer');
-    const signatures = page.querySelector<HTMLElement>('.print-template-signatures');
     const counter = page.querySelector<HTMLElement>(PAGE_COUNTER_SELECTOR);
     const viewportHeightPx = getPrintBodyViewportHeightPx(
       bodyHeightPx,
@@ -766,18 +786,13 @@ export const repaginateStaticCustomPrintDocument = (root: ParentNode = document)
       isolateBodySegment(segment);
       segment.style.transform = `translateY(${getPrintBodySegmentTranslationPx(range.start)}px)`;
     }
-    if (footer) {
-      // Keep the signature/footer at the physical bottom. The available body
-      // area is measured above, so this cannot erase a final text line.
-      footer.style.marginTop = 'auto';
-    }
-    if (signatures && !isFinalPage) signatures.style.display = 'none';
     if (counter) {
       counter.textContent = `صفحه ${toPersianNumber(pageIndex + 1)} از ${toPersianNumber(pageRanges.length)}`;
     }
     page.style.pageBreakAfter = pageIndex < pageRanges.length - 1 ? 'always' : 'auto';
     page.style.breakAfter = pageIndex < pageRanges.length - 1 ? 'page' : 'auto';
     shell.appendChild(page);
+    positionPrintPageFooter(page, isFinalPage);
   });
 
   return pageRanges.length;
@@ -799,6 +814,25 @@ export const getStaticCustomPrintPaginationScript = () => `
     var body = firstPage.querySelector('${BODY_SELECTOR}');
     var inner = firstPage.querySelector('${BODY_INNER_SELECTOR}');
     if (!shell || !body || !inner) return;
+    var positionPageFooter = ${positionPrintPageFooter.toString()};
+    var packFragments = ${packPrintFragments.toString()};
+    var rowSlices = ${getSafeTableRowSlices.toString()};
+    var splitTextBlock = ${splitPrintTextBlock.toString()};
+    var isNativeFlow = firstPage.getAttribute('data-print-layout-mode') === 'native-flow';
+    if (isNativeFlow) {
+      // Default list templates have a presentation-only outer wrapper. Move
+      // its styles to the measuring root so table rows can be materialized,
+      // rather than treating the whole report as one indivisible block.
+      while (inner.children.length === 1) {
+        var wrapper = inner.firstElementChild;
+        if (!wrapper || !/^(DIV|SECTION|MAIN|ARTICLE)$/.test(wrapper.tagName) || wrapper.id) break;
+        if (Array.prototype.some.call(wrapper.style, function (property) {
+          return !/^(direction|color|font-family|font-size|line-height|text-align|width)$/.test(property);
+        })) break;
+        inner.style.cssText += ';' + wrapper.style.cssText;
+        wrapper.replaceWith.apply(wrapper, Array.prototype.slice.call(wrapper.childNodes));
+      }
+    }
 
     var hasVisibleText = function (value) {
       return String(value || '').replace(/[\\s\\u00a0\\u200b-\\u200d\\u2060\\ufeff]+/g, '').length > 0;
@@ -853,7 +887,7 @@ export const getStaticCustomPrintPaginationScript = () => `
       element.style.minHeight = cssHeight;
       element.style.maxHeight = cssHeight;
     };
-    var edgeGuard = ${PRINT_BODY_EDGE_GUARD_PX};
+    var edgeGuard = isNativeFlow ? 4 : ${PRINT_BODY_EDGE_GUARD_PX};
     var isolateSegment = function (element) {
       if (!element) return;
       element.style.position = 'absolute';
@@ -890,7 +924,7 @@ export const getStaticCustomPrintPaginationScript = () => `
       ? declaredBodyHeight
       : Math.max(body.clientHeight || 0, body.offsetHeight || 0, Math.ceil(bodyRect.height || 0));
     var step = Math.max(1, Math.floor(bodyHeight) - edgeGuard * 2);
-    var materializedStep = Math.max(80, step - ${MATERIALIZED_FRAGMENT_LAYOUT_RESERVE_PX});
+    var materializedStep = Math.max(80, step - (isNativeFlow ? 10 : ${MATERIALIZED_FRAGMENT_LAYOUT_RESERVE_PX}));
 
     var relativeBounds = function (element, baseRect) {
       var rect = element.getBoundingClientRect();
@@ -918,7 +952,8 @@ export const getStaticCustomPrintPaginationScript = () => `
               var rowBounds = relativeBounds(row, sourceRect);
               if (rowBounds.bottom > rowBounds.top) {
                 var rowHeight = rowBounds.bottom - rowBounds.top;
-                var rowOffset = Math.max(0, rowBounds.top - tableTop);
+                var firstBodyRow = rows[0];
+                var rowOffset = firstBodyRow ? Math.max(0, relativeBounds(firstBodyRow, sourceRect).top - tableTop) : 0;
                 var rowSliceCapacity = Math.max(48, materializedStep - rowOffset - 8);
                 if (rowHeight > rowSliceCapacity) {
                   var cells = Array.prototype.slice.call(row.children).filter(function (cell) {
@@ -991,8 +1026,9 @@ export const getStaticCustomPrintPaginationScript = () => `
                     });
                     return;
                   }
-                  for (var sliceStart = 0; sliceStart < rowHeight; sliceStart += rowSliceCapacity) {
-                    var sliceHeight = Math.min(rowSliceCapacity, rowHeight - sliceStart);
+                  rowSlices(row, rowSliceCapacity).forEach(function (slice) {
+                    var sliceStart = slice.start;
+                    var sliceHeight = slice.height;
                     units.push({
                       top: rowBounds.top + sliceStart,
                       bottom: rowBounds.top + sliceStart + sliceHeight,
@@ -1003,12 +1039,19 @@ export const getStaticCustomPrintPaginationScript = () => `
                       sliceStart: sliceStart,
                       sliceHeight: sliceHeight
                     });
-                  }
+                  });
                   return;
                 }
                 units.push({ top: rowBounds.top, bottom: rowBounds.bottom, kind: 'table-row', node: row, table: element });
               }
             });
+            return;
+          }
+        }
+        if (bounds.bottom - bounds.top > materializedStep || element.matches('p,li,blockquote,pre')) {
+          var textParts = splitTextBlock(element, materializedStep, sourceRect.top);
+          if (textParts && textParts.length > 1) {
+            textParts.forEach(function (part) { units.push({ top: part.top, bottom: part.bottom, kind: 'node', node: part.node }); });
             return;
           }
         }
@@ -1221,16 +1264,9 @@ export const getStaticCustomPrintPaginationScript = () => `
           candidate.remove();
           return actualHeight <= Math.ceil(bodyHeight) + 1;
         };
-        var splitUntilFit = function (fragmentUnits) {
-          if (fragmentFits(fragmentUnits)) return [fragmentUnits];
-          if (fragmentUnits.length < 2) return null;
-          var middle = Math.ceil(fragmentUnits.length / 2);
-          var first = splitUntilFit(fragmentUnits.slice(0, middle));
-          var second = splitUntilFit(fragmentUnits.slice(middle));
-          return first && second ? first.concat(second) : null;
-        };
-        var fitted = materialized.reduce(function (all, fragment) {
-          var fittedFragment = splitUntilFit(fragment);
+        var packed = packFragments(materialized.flat(), fragmentFits);
+        var fitted = packed || materialized.reduce(function (all, fragment) {
+          var fittedFragment = packFragments(fragment, fragmentFits);
           if (fittedFragment) return all.concat(fittedFragment);
           if (fragment.length === 1 && fragment[0].kind === 'table-row-part') return all.concat([fragment]);
           return all.concat(fragment.map(function (unit) { return [unit]; }));
@@ -1248,11 +1284,11 @@ export const getStaticCustomPrintPaginationScript = () => `
           var footer = page.querySelector('.print-template-footer');
           var counter = page.querySelector('${PAGE_COUNTER_SELECTOR}');
           if (!renderMaterializedFragment(page, fragmentUnits)) return;
-          if (footer) footer.style.marginTop = 'auto';
           if (counter) counter.textContent = 'صفحه ' + toFaForFragments(index + 1) + ' از ' + toFaForFragments(materialized.length);
           page.style.pageBreakAfter = index < materialized.length - 1 ? 'always' : 'auto';
           page.style.breakAfter = index < materialized.length - 1 ? 'page' : 'auto';
           shell.appendChild(page);
+          positionPageFooter(page, index === materialized.length - 1, true);
         });
         return;
       }
@@ -1347,11 +1383,11 @@ export const getStaticCustomPrintPaginationScript = () => `
         isolateSegment(segment);
         segment.style.transform = 'translateY(' + (edgeGuard - Math.max(0, item.start)) + 'px)';
       }
-      if (footer) footer.style.marginTop = 'auto';
       if (counter) counter.textContent = 'صفحه ' + fa(index + 1) + ' از ' + fa(ranges.length);
       page.style.pageBreakAfter = index < ranges.length - 1 ? 'always' : 'auto';
       page.style.breakAfter = index < ranges.length - 1 ? 'page' : 'auto';
       shell.appendChild(page);
+      positionPageFooter(page, index === ranges.length - 1);
     });
   })();
 `;

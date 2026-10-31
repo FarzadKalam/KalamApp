@@ -106,6 +106,7 @@ import {
 } from "./fieldPreferences";
 import { hasRenderablePrintFooterHtml } from "./footerLayout";
 import { buildNativeCustomPrintFlowHtml } from "./nativePrintFlow";
+import { buildLetterheadSignatureFlow } from './letterheadSignatureFlow';
 import {
   DEFAULT_PRINT_IMAGE_DISPLAY_MODE,
   sanitizePrintImageDisplayMode,
@@ -5050,32 +5051,24 @@ export const usePrintManager = ({
           qrValue: printQrValue,
         },
       );
-      const signatureOverlay =
-        signaturesItem && printSignatureBandHtml
-          ? `<div style="position:absolute;left:${signaturesItem.x}%;top:${signaturesItem.y}%;width:${signaturesItem.width}%;height:${signaturesItem.height}%;z-index:${signaturesItem.zIndex};display:flex;align-items:flex-end;justify-content:center;overflow:hidden;">${printSignatureBandHtml}</div>`
-          : "";
-      const pageMargins = {
-        top: (metrics.heightMm * bodyItem.y) / 100,
-        right:
-          (metrics.widthMm * Math.max(0, 100 - bodyItem.x - bodyItem.width)) /
-          100,
-        bottom:
-          (metrics.heightMm * Math.max(0, 100 - bodyItem.y - bodyItem.height)) /
-          100,
-        left: (metrics.widthMm * bodyItem.x) / 100,
-      };
+      const signatureFlow = buildLetterheadSignatureFlow({
+        widthMm: metrics.widthMm, heightMm: metrics.heightMm,
+        body: bodyItem, signatures: signaturesItem, signatureHtml: printSignatureBandHtml,
+      });
 
       return buildNativeCustomPrintFlowHtml({
         widthMm: metrics.widthMm,
         heightMm: metrics.heightMm,
-        pageMargins,
+        pageMargins: signatureFlow.pageMargins,
+        signatureHtml: signatureFlow.signatureHtml,
+        signaturePlacement: 'each-page',
         sectionPadding: PRINT_SECTION_CONTENT_PADDING,
         contentHtml: renderedCustomTemplate?.contentHtml || "",
         backgroundImageUrl: buildPrintImageUrl(
           selectedOrgLetterhead.imageUrl,
           "printHero",
         ),
-        fixedOverlayHtml: `${overlayHtml}${signatureOverlay}`,
+        fixedOverlayHtml: overlayHtml,
       });
     }
     if (isCatalogFullPageTemplateId(selectedStoredTemplate.id || "")) {
@@ -5116,14 +5109,11 @@ export const usePrintManager = ({
       measuredNode: footerMeasureRef.current,
       fallbackHeightPx: measuredSectionHeights.footer,
     });
-    const signatureHeightPx = hasSignatureBand
-      ? printSignatureSectionHeightPx
-      : 0;
     const footerHeight = showFooter
-      ? measuredFooterHeight + signatureHeightPx + PRINT_PAGE_COUNTER_HEIGHT_PX
+      ? measuredFooterHeight + PRINT_PAGE_COUNTER_HEIGHT_PX
       : 0;
     const footerWithPageCounter = showFooter
-      ? `<div class="print-template-footer-stack">${printSignatureBandHtml || ""}${rawFooterHtml}<div class="print-template-page-counter" style="margin-top:4px;font-size:10px;color:#64748b;direction:rtl;text-align:left;">صفحه <span class="pageNumber"></span> از <span class="totalPages"></span></div></div>`
+      ? `<div class="print-template-footer-stack">${rawFooterHtml}<div class="print-template-page-counter" style="margin-top:4px;font-size:10px;color:#64748b;direction:rtl;text-align:left;">صفحه <span class="pageNumber"></span> از <span class="totalPages"></span></div></div>`
       : "";
 
     return buildNativeCustomPrintFlowHtml({
@@ -5134,6 +5124,8 @@ export const usePrintManager = ({
       contentHtml: renderedCustomTemplate?.contentHtml || "",
       headerHtml: renderedCustomTemplate?.headerHtml || "",
       footerHtml: footerWithPageCounter,
+      signatureHtml: printSignatureBandHtml,
+      signaturePlacement: 'each-page',
       headerHeightPx: headerHeight,
       footerHeightPx: footerHeight,
       showHeader,

@@ -1,7 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildCashBankLedgerFilters, fetchCashBankLedgerPrintRows, formatCashBankLedgerTotal } from './cashBankLedger';
+import { buildCashBankLedgerFilters, buildCashBankLedgerPrintSummary, fetchCashBankLedgerPrintRows, formatCashBankLedgerTotal } from './cashBankLedger';
+import { buildListSummaryTableHtml } from './listPrintExport';
 
 describe('cash bank ledger request contracts', () => {
+  it('omits uncalculated totals and prints calculated totals without losing monetary precision', () => {
+    expect(buildCashBankLedgerPrintSummary(null, 'تومان')).toBeNull();
+    const summary = buildCashBankLedgerPrintSummary({ receiptTotal: '9007199254740993.17', paymentTotal: '0.00' }, 'تومان');
+    const html = buildListSummaryTableHtml(summary, {}, 'تومان');
+    expect(html).toContain('جمع فیلتر جاری — همهٔ صفحات');
+    expect(html).toContain('جمع دریافت‌ها (تومان)');
+    expect(html).toContain('جمع پرداخت‌ها (تومان)');
+    expect(html).toContain('۹٬۰۰۷٬۱۹۹٬۲۵۴٬۷۴۰٬۹۹۳٫۱۷');
+    expect(html).not.toContain('9007199254740992');
+  });
+
   it('uses identical categorical, date, numeric and text filter values for all report operations', () => {
     expect(buildCashBankLedgerFilters({
       rowType: ['["receipt","payment"]'], paymentType: ['["cash"]'], status: ['["received"]'],

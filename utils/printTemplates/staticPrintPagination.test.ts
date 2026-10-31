@@ -11,7 +11,7 @@ vi.mock('./printPagination', () => ({
   trimTrailingPrintSpacerNodes: vi.fn(),
 }));
 
-import { repaginateStaticCustomPrintDocument } from './staticPrintPagination';
+import { positionPrintPageFooter, repaginateStaticCustomPrintDocument } from './staticPrintPagination';
 
 const createPage = () => {
   const page = document.createElement('div');
@@ -39,6 +39,22 @@ const createPage = () => {
 };
 
 describe('static custom print pagination', () => {
+  it('shows signatures on every page and shrinks only the last body to its measured content', () => {
+    const page = createPage();
+    page.querySelector('.print-template-footer')!.innerHTML = '<div class="print-template-signatures" style="display:none">امضا</div>';
+    const viewport = page.querySelector<HTMLElement>('.print-template-body-viewport')!;
+    const segment = page.querySelector<HTMLElement>('.print-template-body-segment')!;
+    viewport.style.height = '600px';
+    segment.getBoundingClientRect = () => ({ height: 120 } as DOMRect);
+    positionPrintPageFooter(page, false, true);
+    expect(page.querySelector<HTMLElement>('.print-template-signatures')?.style.display).toBe('');
+    expect(page.querySelector<HTMLElement>('.print-template-footer')?.style.marginTop).toBe('auto');
+    expect(viewport.style.height).toBe('600px');
+    positionPrintPageFooter(page, true, true);
+    expect(page.querySelector<HTMLElement>('.print-template-footer')?.style.marginTop).toBe('0px');
+    expect(page.querySelector<HTMLElement>('.print-template-body')?.style.height).toBe('120px');
+    expect(viewport.style.height).toBe('120px');
+  });
   beforeEach(() => {
     document.body.replaceChildren();
     buildSmartPrintPageRanges.mockReset();
@@ -70,7 +86,8 @@ describe('static custom print pagination', () => {
     expect(pages[2].querySelector<HTMLElement>('.print-template-body-segment')?.style.transform).toBe('translateY(-1190px)');
     expect(pages[2].querySelector<HTMLElement>('.print-template-body-segment')?.style.position).toBe('absolute');
     expect(pages[2].querySelector<HTMLElement>('.print-template-body-viewport')?.style.height).toBe('614px');
-    expect(pages[2].querySelector<HTMLElement>('.print-template-footer')?.style.marginTop).toBe('auto');
+    expect(pages[0].querySelector<HTMLElement>('.print-template-footer')?.style.marginTop).toBe('auto');
+    expect(pages[2].querySelector<HTMLElement>('.print-template-footer')?.style.marginTop).toBe('0px');
     expect(pages[2].querySelector<HTMLElement>('.print-template-page-counter')?.textContent).toBe('صفحه ۳ از ۳');
   });
 

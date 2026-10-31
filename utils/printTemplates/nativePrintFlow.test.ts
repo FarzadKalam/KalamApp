@@ -2,11 +2,47 @@ import { describe, expect, it } from 'vitest';
 import { materializeNativePrintAssets } from './buildPrintDocumentHtml';
 import {
   buildNativeCustomPrintFlowHtml,
+  appendNativePageCounter,
+  prepareNativePageCounterTokens,
   NATIVE_PRINT_BASE_HREF_TOKEN,
   NATIVE_PRINT_FONT_CSS_TOKEN,
 } from './nativePrintFlow';
 
 describe('buildNativeCustomPrintFlowHtml', () => {
+  it('measures at the printable paper width and delegates repeated signatures to the central paginator', () => {
+    const html = buildNativeCustomPrintFlowHtml({
+      widthMm: 297, heightMm: 210,
+      pageMargins: { top: 8, right: 8, bottom: 8, left: 8 },
+      sectionPadding: '0', contentHtml: '<p>LAST-TABLE-ROW</p>',
+      signatureHtml: '<p>SIGNATURE-ONCE</p>', signaturePlacement: 'each-page',
+      footerHtml: '<p>CONTACT-FOOTER</p>', footerHeightPx: 44, showFooter: true,
+    });
+    const root = document.createElement('div');
+    root.innerHTML = html;
+    const flow = root.querySelector<HTMLElement>('.kalamapp-native-print-flow')!;
+    const body = flow.querySelector('main')!;
+    const footer = flow.querySelector<HTMLTemplateElement>('#kalamapp-gotenberg-footer')!;
+    expect(flow.style.width).toBe('281mm');
+    expect(flow.style.maxWidth).toBe('none');
+    expect(body.textContent).toContain('LAST-TABLE-ROW');
+    expect(body.querySelector('[data-print-layout-mode="native-flow"]')).not.toBeNull();
+    expect(body.querySelector('.print-template-signatures')?.textContent).toBe('SIGNATURE-ONCE');
+    expect(footer.innerHTML).not.toContain('SIGNATURE-ONCE');
+    expect(footer.innerHTML).toContain('CONTACT-FOOTER');
+    expect(html.match(/SIGNATURE-ONCE/g)).toHaveLength(1);
+    expect(Number(flow.dataset.kalamappMarginBottomMm)).toBeCloseTo(21.642, 3);
+  });
+
+  it('uses actual PDF page counters without adding a duplicate counter', () => {
+    const footer = prepareNativePageCounterTokens('<p>{{system.page_index}} از {{ system.page_count }}</p>');
+    expect(footer).not.toContain('{{');
+    expect(footer).toContain('class="pageNumber"');
+    expect(footer).toContain('class="totalPages"');
+    expect(appendNativePageCounter(footer)).toBe(footer);
+    expect(appendNativePageCounter('<p>نشانی</p>', footer)).toBe('<p>نشانی</p>');
+    expect(appendNativePageCounter('<p>نشانی</p>').match(/class="pageNumber"/g)).toHaveLength(1);
+  });
+
   it('keeps one uncut body while reserving dedicated Gotenberg lanes for header and footer', () => {
     const html = buildNativeCustomPrintFlowHtml({
       widthMm: 297,
