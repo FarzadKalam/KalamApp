@@ -97,6 +97,7 @@ describe('buildNativeCustomPrintFlowHtml', () => {
       contentHtml: '<p>LETTERHEAD-BODY</p>',
       backgroundImageUrl: 'https://example.test/letterhead.png',
       fixedOverlayHtml: '<div>LETTERHEAD-SIGNATURE</div>',
+      artworkHeightMm: 130,
     });
 
     expect(html).toContain('kalamapp-native-print-flow-background');
@@ -104,6 +105,7 @@ describe('buildNativeCustomPrintFlowHtml', () => {
     expect(html).toContain('kalamapp-native-print-flow-overlay');
     expect(html).toContain('LETTERHEAD-SIGNATURE');
     expect(html).toContain('LETTERHEAD-BODY');
+    expect(html).toContain('height:130.000mm;bottom:auto;');
   });
 
   it('gives the separate header and footer documents the project font and asset base URL', () => {

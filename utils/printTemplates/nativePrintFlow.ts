@@ -26,6 +26,7 @@ export interface NativeCustomPrintFlowOptions {
   showFooter?: boolean;
   backgroundImageUrl?: string | null;
   fixedOverlayHtml?: string | null;
+  artworkHeightMm?: number;
 }
 
 const pxToMm = (value: number | null | undefined) =>
@@ -118,6 +119,7 @@ export const buildNativeCustomPrintFlowHtml = ({
   showFooter = false,
   backgroundImageUrl,
   fixedOverlayHtml,
+  artworkHeightMm,
 }: NativeCustomPrintFlowOptions) => {
   const headerContent = String(headerHtml || '').trim();
   const flowingSignature = signaturePlacement !== 'footer' ? String(signatureHtml || '').trim() : '';
@@ -146,6 +148,9 @@ export const buildNativeCustomPrintFlowHtml = ({
     : '';
   const safeBackgroundUrl = String(backgroundImageUrl || '').trim().replace(/["'<>]/g, '');
   const overlayContent = String(fixedOverlayHtml || '').trim();
+  const artworkStyle = artworkHeightMm && artworkHeightMm > 0
+    ? `height:${toAttributeNumber(artworkHeightMm)}mm;bottom:auto;`
+    : '';
   const printableWidth = toAttributeNumber(widthMm - pageMargins.left - pageMargins.right);
   const pageBodyHeight = Math.max(1, Math.floor((heightMm - marginTopMm - marginBottomMm) * PX_PER_MM) - 1);
   // Use the existing central fragment paginator for repeated signatures. Each
@@ -180,8 +185,8 @@ export const buildNativeCustomPrintFlowHtml = ({
 >
   ${headerDocument ? `<template id="kalamapp-gotenberg-header">${headerDocument}</template>` : ''}
   ${footerDocument ? `<template id="kalamapp-gotenberg-footer">${footerDocument}</template>` : ''}
-  ${safeBackgroundUrl ? `<div class="kalamapp-native-print-flow-background" style="background-image:url('${safeBackgroundUrl}')"></div>` : ''}
-  ${overlayContent ? `<div class="kalamapp-native-print-flow-overlay">${overlayContent}</div>` : ''}
+  ${safeBackgroundUrl ? `<div class="kalamapp-native-print-flow-background" style="background-image:url('${safeBackgroundUrl}');${artworkStyle}"></div>` : ''}
+  ${overlayContent ? `<div class="kalamapp-native-print-flow-overlay" style="${artworkStyle}">${overlayContent}</div>` : ''}
   <main class="kalamapp-native-print-flow-body" style="padding:${paginatedSignature ? '0' : sectionPadding}; box-sizing:border-box;">
     ${bodyHtml}
   </main>

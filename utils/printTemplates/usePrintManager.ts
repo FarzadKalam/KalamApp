@@ -5060,6 +5060,7 @@ export const usePrintManager = ({
         widthMm: metrics.widthMm,
         heightMm: metrics.heightMm,
         pageMargins: signatureFlow.pageMargins,
+        artworkHeightMm: signatureFlow.artworkHeightMm,
         signatureHtml: signatureFlow.signatureHtml,
         signaturePlacement: 'each-page',
         sectionPadding: PRINT_SECTION_CONTENT_PADDING,

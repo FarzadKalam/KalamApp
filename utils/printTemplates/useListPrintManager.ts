@@ -1785,6 +1785,7 @@ export const useListPrintManager = ({
         widthMm: metrics.widthMm,
         heightMm: metrics.heightMm,
         pageMargins: signatureFlow.pageMargins,
+        artworkHeightMm: signatureFlow.artworkHeightMm,
         signatureHtml: signatureFlow.signatureHtml,
         signaturePlacement: 'each-page',
         sectionPadding: "0",

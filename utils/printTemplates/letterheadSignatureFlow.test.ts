@@ -12,6 +12,7 @@ describe('letterhead signature flow', () => {
     const result = buildLetterheadSignatureFlow({ ...layout, signatures: { x: 10, y: 82, width: 80, height: 10 }, signatureHtml: '<p>امضا</p>' });
     expect(result.pageMargins.bottom).toBeCloseTo(23.76);
     expect(result.pageMargins.top).toBe(59.4);
+    expect(result.artworkHeightMm).toBe(178.2);
     expect(result.signatureHtml).toContain('flex:0 0 100%');
     expect(result.signatureHtml).toContain('margin-left:0%');
     expect(result.signatureHtml).toContain('<p>امضا</p>');
