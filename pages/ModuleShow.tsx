@@ -8,6 +8,7 @@ import { useSaasReadonly } from '../components/saas/SaasReadonlyContext';
 import { FieldType, BlockType, FieldLocation, FieldNature, type ModuleDefinition } from '../types';
 import RelatedSidebar from '../components/Sidebar/RelatedSidebar';
 import SmartFieldRenderer from '../components/SmartFieldRenderer';
+import { resolveRelationPopulatePatch } from '../utils/relationPopulate';
 import DateObject from 'react-date-object';
 import persian from 'react-date-object/calendars/persian';
 import persian_fa from 'react-date-object/locales/persian_fa';
@@ -1417,6 +1418,16 @@ const ModuleShow: React.FC = () => {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserRoleId, setCurrentUserRoleId] = useState<string | null>(null);
   const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
+  const relationPopulateScopeRef = useRef({ key: '' });
+  const relationPopulateScopeKey = `${moduleId}:${id}:${currentOrgId}`;
+  if (relationPopulateScopeRef.current.key !== relationPopulateScopeKey) {
+    relationPopulateScopeRef.current = { key: relationPopulateScopeKey };
+  }
+  const relationPopulateMountedRef = useRef(true);
+  useEffect(() => {
+    relationPopulateMountedRef.current = true;
+    return () => { relationPopulateMountedRef.current = false; };
+  }, []);
   const [allowedRoleIds, setAllowedRoleIds] = useState<string[]>([]);
   const [allowedUserIds, setAllowedUserIds] = useState<string[]>([]);
   const [accessDenied, setAccessDenied] = useState(false);
@@ -4606,6 +4617,7 @@ const ModuleShow: React.FC = () => {
   }, [msg, navigate]);
 
   const saveEdit = async (key: string) => {
+    const editScope = relationPopulateScopeRef.current;
     if (!canEditModule) return;
     // A field save can dispatch asynchronous automation. Guard the entry point so
     // repeated taps on the confirmation icon never submit the same edit twice.
@@ -4716,6 +4728,30 @@ const ModuleShow: React.FC = () => {
       let updatePayload = moduleId === 'tasks' && taskSourceEditKeys.has(key)
         ? buildTaskSourcePatch({ ...(data || {}), ...tempValues, [key]: newValue })
         : { [key]: newValue };
+      if (fieldDef?.relationConfig?.populateConfirmation || fieldDef?.multiRelationConfig?.populateConfirmation) {
+        const populatePatch = await resolveRelationPopulatePatch({
+          supabaseClient: supabase,
+          module: moduleConfig!,
+          field: fieldDef,
+          value: newValue,
+          previousValue: data?.[key],
+          isCurrent: () => relationPopulateMountedRef.current && relationPopulateScopeRef.current === editScope,
+          confirm: (options) => new Promise<boolean>((resolve) => {
+            modal.confirm({
+              title: options.title,
+              content: options.description,
+              okText: options.okText || 'به‌روزرسانی',
+              cancelText: options.cancelText || 'حفظ اطلاعات فعلی',
+              autoFocusButton: 'cancel',
+              onOk: () => { resolve(true); },
+              onCancel: () => { resolve(false); },
+              afterClose: () => { resolve(false); },
+            });
+          }),
+        });
+        updatePayload = { ...updatePayload, ...populatePatch };
+        if (!relationPopulateMountedRef.current || relationPopulateScopeRef.current !== editScope) return;
+      }
       if (isCashBankAccountEdit) {
         const nextCashBankValues = normalizeModuleFormValues(moduleId, {
           ...(data || {}),
@@ -4826,13 +4862,7 @@ const ModuleShow: React.FC = () => {
         } as Record<string, any>,
         previousRecord: (data || null) as Record<string, any> | null,
       });
-      setData((prev: any) => (
-        isCashBankAccountEdit
-          ? { ...(prev || {}), ...updatePayload }
-          : moduleId === 'tasks' && taskSourceEditKeys.has(key)
-          ? { ...(prev || {}), ...updatePayload }
-          : { ...(prev || {}), [key]: newValue }
-      ));
+      setData((prev: any) => ({ ...(prev || {}), ...updatePayload }));
       markCurrentModuleListChanged(updatePayload);
       await insertChangelog({
         action: 'update',
@@ -4841,6 +4871,12 @@ const ModuleShow: React.FC = () => {
         oldValue: data?.[key],
         newValue,
       });
+      if (fieldDef?.relationConfig?.populateConfirmation || fieldDef?.multiRelationConfig?.populateConfirmation) {
+        for (const [copiedKey, copiedValue] of Object.entries(updatePayload)) {
+          if (copiedKey === key || copiedValue === data?.[copiedKey]) continue;
+          await logFieldChange(copiedKey, data?.[copiedKey], copiedValue);
+        }
+      }
       notifyOperationalFinancialRefresh(moduleId);
       msg.success('ذخیره شد');
       setTimeout(() => setEditingFields(prev => ({ ...prev, [key]: false })), 100);

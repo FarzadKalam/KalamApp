@@ -75,6 +75,7 @@ import { evaluateWorkflowConditions } from '../utils/workflowRuntime';
 import { useCurrencyConfig } from '../utils/currency';
 import { resolveInvoiceStorageTable } from '../utils/invoiceModuleRouting';
 import { persistStagedMainRecordFiles, waitForMainFileUploads } from '../utils/mainRecordFiles';
+import { resolveRelationPopulatePatch } from '../utils/relationPopulate';
 
 const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
 const SAAS_ANNOUNCEMENT_CONDITION_FIELD_KEYS = new Set(['conditions_all', 'conditions_any']);
@@ -359,7 +360,19 @@ const SmartForm: React.FC<SmartFormProps> = ({
     [isBulkEdit, module.id, recordId]
   );
   const requireInventoryShelf = initialValuesProp?.__requireInventoryShelf === true;
-  const { message: messageApi } = App.useApp();
+  const { message: messageApi, modal: modalApi } = App.useApp();
+  const [relationPopulatePending, setRelationPopulatePending] = useState(0);
+  const relationPopulateSequence = useRef<Record<string, number>>({});
+  const relationPopulateScope = useRef({ key: '', revision: 0 });
+  const relationPopulateScopeKey = `${module.id}:${recordId || 'new'}:${visible}`;
+  if (relationPopulateScope.current.key !== relationPopulateScopeKey) {
+    relationPopulateScope.current = { key: relationPopulateScopeKey, revision: relationPopulateScope.current.revision + 1 };
+  }
+  const relationPopulateMounted = useRef(true);
+  useEffect(() => {
+    relationPopulateMounted.current = true;
+    return () => { relationPopulateMounted.current = false; };
+  }, []);
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState<any>({});
@@ -939,54 +952,51 @@ const SmartForm: React.FC<SmartFormProps> = ({
     return formatOptionLabel(value);
   };
 
-  const applyRelationPopulateFields = useCallback(async (field: any, nextValue: any) => {
-    const relationConfig = field?.type === FieldType.MULTI_RELATION
-      ? field?.multiRelationConfig
-      : field?.relationConfig;
-    const populateFields = relationConfig?.populateFields;
-    if (!populateFields || typeof populateFields !== 'object' || Array.isArray(populateFields)) return;
-
-    const mappingEntries = Object.entries(populateFields)
-      .map(([targetFieldKey, sourceFieldKey]) => ({
-        targetFieldKey: String(targetFieldKey || '').trim(),
-        sourceFieldKey: String(sourceFieldKey || '').trim(),
-      }))
-      .filter((entry) => entry.targetFieldKey && entry.sourceFieldKey);
-    if (mappingEntries.length === 0) return;
-
-    const targetModuleId = String(relationConfig?.targetModule || '').trim();
-    const targetTable = MODULES[targetModuleId]?.table || targetModuleId;
-    if (!targetModuleId || !targetTable) return;
-
-    const selectedId = String(Array.isArray(nextValue) ? nextValue[0] : (nextValue || '')).trim();
-    if (!selectedId) {
-      const clearPatch = Object.fromEntries(mappingEntries.map((entry) => [entry.targetFieldKey, null]));
-      form.setFieldsValue(clearPatch);
-      setFormData((prev: any) => ({ ...prev, ...clearPatch }));
-      return;
-    }
-
+  const applyRelationPopulateFields = useCallback(async (field: any, nextValue: any, previousValue: any) => {
+    if (!(field?.relationConfig?.populateFields || field?.multiRelationConfig?.populateFields)) return;
+    const scope = relationPopulateScope.current;
+    const sequence = (relationPopulateSequence.current[field.key] || 0) + 1;
+    relationPopulateSequence.current[field.key] = sequence;
+    const isCurrent = () => relationPopulateMounted.current && relationPopulateScope.current === scope
+      && relationPopulateSequence.current[field.key] === sequence
+      && String(form.getFieldValue(field.key) || '') === String(nextValue || '');
+    setRelationPopulatePending((count) => count + 1);
     try {
-      const sourceColumns = Array.from(new Set(mappingEntries.map((entry) => entry.sourceFieldKey)));
-      const { data, error } = await supabase
-        .from(targetTable)
-        .select(sourceColumns.join(', '))
-        .eq('id', selectedId)
-        .maybeSingle();
-      if (error) throw error;
-      const sourceRecord = (data || {}) as Record<string, any>;
-
-      const patch = mappingEntries.reduce<Record<string, any>>((acc, entry) => {
-        acc[entry.targetFieldKey] = sourceRecord[entry.sourceFieldKey] ?? null;
-        return acc;
-      }, {});
+      const patch = await resolveRelationPopulatePatch({
+        supabaseClient: supabase,
+        module: effectiveModule,
+        field,
+        value: nextValue,
+        previousValue,
+        isCurrent,
+        confirm: (options) => new Promise<boolean>((resolve) => {
+          modalApi.confirm({
+            title: options.title,
+            content: options.description,
+            okText: options.okText || 'به‌روزرسانی',
+            cancelText: options.cancelText || 'حفظ اطلاعات فعلی',
+            zIndex: fieldPopupZIndexBase + 100,
+            autoFocusButton: 'cancel',
+            onOk: () => { resolve(true); },
+            onCancel: () => { resolve(false); },
+            afterClose: () => { resolve(false); },
+          });
+        }),
+      });
+      if (!isCurrent() || !Object.keys(patch).length) return;
       form.setFieldsValue(patch);
       setFormData((prev: any) => ({ ...prev, ...patch }));
+      formDirtyRef.current = true;
+      if (field?.relationConfig?.populateConfirmation || field?.multiRelationConfig?.populateConfirmation) {
+        messageApi.success('فیلدهای مرتبط در فرم به‌روز شدند؛ برای ثبت نهایی، فرم را ذخیره کنید.');
+      }
     } catch (error) {
       console.warn('Could not populate relation fields', error);
-      messageApi.warning('پر کردن خودکار فیلدهای مرتبط ناموفق بود.');
+      if (isCurrent()) messageApi.warning(toFaErrorMessage(error, 'پر کردن خودکار فیلدهای مرتبط ناموفق بود.'));
+    } finally {
+      setRelationPopulatePending((count) => Math.max(0, count - 1));
     }
-  }, [form, messageApi]);
+  }, [effectiveModule, fieldPopupZIndexBase, form, messageApi, modalApi]);
 
   const buildAutoProductName = (values: any) => {
     const parts: string[] = [];
@@ -1465,6 +1475,10 @@ const SmartForm: React.FC<SmartFormProps> = ({
 
   // --- ذخیره نهایی ---
   const handleFinish = async (values: any) => {
+    if (relationPopulatePending > 0) {
+      messageApi.info('ابتدا به‌روزرسانی فیلدهای مرتبط را تأیید یا رد کنید.');
+      return;
+    }
     setLoading(true);
     try {
       await waitForMainFileUploads(supabase, module.id);
@@ -3120,7 +3134,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                  ...prev,
                                  [preparedField.key]: val,
                                }));
-                               void applyRelationPopulateFields(preparedField, val);
+                               void applyRelationPopulateFields(preparedField, val, currentValues?.[preparedField.key]);
                              }}
                             forceEditMode={true}
                             options={options}
@@ -3272,7 +3286,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                           ...prev,
                                           [preparedField.key]: val,
                                         }));
-                                        void applyRelationPopulateFields(preparedField, val);
+                                        void applyRelationPopulateFields(preparedField, val, fieldValue);
                                       }
                                    }}
                                     forceEditMode={true} options={options}
@@ -3489,7 +3503,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
 
         <div className="p-3 md:p-4 border-t border-gray-100 dark:border-gray-800 bg-white dark:bg-[#1e1e1e] flex justify-end gap-2">
           <Button size="middle" onClick={onCancel} className="rounded-xl">انصراف</Button>
-          <Button size="middle" type="primary" onClick={() => form.submit()} loading={loading} disabled={!canEditModule} icon={<SaveOutlined />} className="rounded-xl bg-leather-600 hover:!bg-leather-500 shadow-lg shadow-leather-500/20">
+          <Button size="middle" type="primary" onClick={() => form.submit()} loading={loading} disabled={!canEditModule || relationPopulatePending > 0} icon={<SaveOutlined />} className="rounded-xl bg-leather-600 hover:!bg-leather-500 shadow-lg shadow-leather-500/20">
             {recordId ? 'ذخیره تغییرات' : 'ثبت نهایی'}
             <kbd className="keyboard-shortcut-hint mr-1 text-[9px] opacity-70">Ctrl+Enter</kbd>
           </Button>

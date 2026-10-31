@@ -410,6 +410,12 @@ export const employeesModule: ModuleDefinition = {
         targetModule: 'job_descriptions',
         targetField: 'name',
         populateFields: JOB_DESCRIPTION_POPULATE_FIELDS,
+        populateConfirmation: {
+          title: 'آیا فیلدهای شرح شغل در رکورد کارمند به‌روز شوند؟',
+          description: 'با تأیید، محتوای فعلی فیلدهای شرح شغل کارمند با اطلاعات شرح شغل انتخاب‌شده جایگزین می‌شود. با انتخاب «فقط اتصال»، متن‌های فعلی حفظ می‌شوند.',
+          okText: 'به‌روزرسانی فیلدها',
+          cancelText: 'فقط اتصال',
+        },
       },
       nature: FieldNature.STANDARD,
       isTableColumn: true,

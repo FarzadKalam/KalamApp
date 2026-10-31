@@ -211,6 +211,12 @@ export interface ModuleField {
     quickCreateFieldKeys?: string[];
     quickCreateDefaults?: Record<string, any>;
     populateFields?: Record<string, string>;
+    populateConfirmation?: {
+      title: string;
+      description?: string;
+      okText?: string;
+      cancelText?: string;
+    };
   };
   multiRelationConfig?: {
     targetModule: string;
@@ -235,6 +241,12 @@ export interface ModuleField {
     quickCreateDefaults?: Record<string, any>;
     targetPhoneFields?: string[];
     populateFields?: Record<string, string>;
+    populateConfirmation?: {
+      title: string;
+      description?: string;
+      okText?: string;
+      cancelText?: string;
+    };
   };
   defaultValue?: any;
 }

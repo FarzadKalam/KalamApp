@@ -3,6 +3,8 @@ import { App, ConfigProvider } from 'antd';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BlockType, FieldLocation, FieldType } from '../types';
+import { supabase } from '../supabaseClient';
+import { fetchCurrentUserRoleContext } from '../utils/permissions';
 
 const makeSupabaseQuery = (result: any = { data: [], error: null }) => {
   const query: any = {};
@@ -271,5 +273,59 @@ describe('SmartForm critical render', () => {
         expect.any(Object)
       );
     });
+  });
+});
+
+describe('employee job description confirmation', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    vi.mocked(fetchCurrentUserRoleContext).mockResolvedValue({
+      userId: 'current-user', orgId: 'test-org', roleId: 'admin', permissions: {},
+    });
+    vi.mocked(supabase.from).mockImplementation((table: string) => makeSupabaseQuery(
+      table === 'job_descriptions'
+        ? { data: { job_goal: 'هدف شرح شغل جدید' }, error: null }
+        : { data: [], error: null }
+    ));
+  });
+  afterEach(cleanup);
+
+  const renderEmployee = () => render(
+    <ConfigProvider direction="rtl"><App><SmartForm
+      module={{
+        id: 'employees', table: 'employees', titles: { fa: 'کارکنان' },
+        fields: [
+          {
+            key: 'job_description_id', type: FieldType.RELATION, labels: { fa: 'شرح شغل مرتبط' }, blockId: 'job',
+            relationConfig: {
+              targetModule: 'job_descriptions', populateFields: { job_goal: 'job_goal' },
+              populateConfirmation: { title: 'فیلدهای شرح شغل به‌روز شوند؟', okText: 'به‌روزرسانی فیلدها', cancelText: 'فقط اتصال' },
+            },
+          },
+          { key: 'job_goal', type: FieldType.LONG_TEXT, labels: { fa: 'هدف کارمند' }, blockId: 'job' },
+        ],
+        blocks: [{ id: 'job', titles: { fa: 'اطلاعات شرح شغل' }, type: BlockType.FIELD_GROUP }],
+      } as any}
+      visible displayMode="embedded" onCancel={vi.fn()} onSave={vi.fn()}
+      initialValues={{ job_description_id: 'old-description', job_goal: 'متن اختصاصی کارمند' }}
+    /></App></ConfigProvider>
+  );
+
+  it('keeps the employee text until the user confirms replacing it', async () => {
+    renderEmployee();
+    fireEvent.change(await screen.findByLabelText('شرح شغل مرتبط'), { target: { value: 'new-description' } });
+    await screen.findAllByText('فیلدهای شرح شغل به‌روز شوند؟');
+    expect(screen.getByLabelText('هدف کارمند')).toHaveValue('متن اختصاصی کارمند');
+    fireEvent.click(screen.getByRole('button', { name: 'به‌روزرسانی فیلدها' }));
+    await waitFor(() => expect(screen.getByLabelText('هدف کارمند')).toHaveValue('هدف شرح شغل جدید'));
+  });
+
+  it('keeps the chosen relation and existing text when only linking is selected', async () => {
+    renderEmployee();
+    fireEvent.change(await screen.findByLabelText('شرح شغل مرتبط'), { target: { value: 'new-description' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'فقط اتصال' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /ثبت نهایی/ })).toBeEnabled());
+    expect(screen.getByLabelText('شرح شغل مرتبط')).toHaveValue('new-description');
+    expect(screen.getByLabelText('هدف کارمند')).toHaveValue('متن اختصاصی کارمند');
   });
 });
