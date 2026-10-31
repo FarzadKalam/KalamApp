@@ -8,7 +8,7 @@ import { localizeFinancialValue } from './financialValueLabels';
 import { safeJalaliFormat, toPersianNumber } from './persianNumberFormatter';
 
 type DisplayContext = {
-  moduleId: string;
+  moduleId?: string;
   fields: any[];
   dynamicOptions?: Record<string, any[]>;
   relationOptions?: Record<string, any[]>;
