@@ -79,7 +79,7 @@ export const toFaErrorMessage = (error: unknown, fallback = 'خطا در انج�
   }
 
   if (contains(normalized, 'tuple to be updated was already modified by an operation triggered by the current command')) {
-    return 'به دلیل هم‌زمانی تغییرات روی سند، عملیات کامل نشد. صفحه را بروزرسانی کنید و دوباره تلاش کنید.';
+    return 'تغییرات به دلیل خطای همگام‌سازی داخلی رکورد ذخیره نشد. لطفاً موضوع را به پشتیبانی اطلاع دهید.';
   }
 
   if (contains(normalized, 'commission_calculation_delete_not_allowed')) {
