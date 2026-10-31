@@ -270,4 +270,5 @@ grant execute on function public.cash_bank_unified_ledger_filtered(jsonb) to aut
 grant execute on function public.get_cash_bank_unified_ledger_page(integer, integer, text, text, jsonb) to authenticated;
 grant execute on function public.get_cash_bank_unified_ledger_totals(jsonb) to authenticated;
 
+notify pgrst, 'reload schema';
 commit;
