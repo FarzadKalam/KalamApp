@@ -107,7 +107,7 @@ import {
 } from "../utils/referenceData";
 import { getFieldLabelFa } from "../utils/fieldLabel";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
-import { getSingleOptionLabel } from "../utils/optionHelpers";
+import { getModuleListFilterLabel, getModuleListFilterValueLabel } from "../utils/moduleListFilterDisplay";
 import { getCachedAuthUser } from "../utils/sessionCache";
 import { syncRecordTags } from "../utils/recordTags";
 import {
@@ -403,21 +403,6 @@ type ColumnFiltersState = Record<string, FilterValue | null>;
 type BulkBuildTarget = "product_bundles" | "price_lists" | null;
 type BulkBuildSourceModule = "products" | "billboards";
 const EMPTY_ROWS: any[] = [];
-
-const parseColumnRangeFilter = (
-  raw: unknown,
-): { from?: string | number; to?: string | number } => {
-  if (raw === undefined || raw === null || raw === "") return {};
-  try {
-    const parsed = JSON.parse(String(raw));
-    if (parsed && typeof parsed === "object") {
-      return parsed as { from?: string | number; to?: string | number };
-    }
-  } catch {
-    return {};
-  }
-  return {};
-};
 
 interface PersistedModuleListState {
   viewMode?: ViewMode;
@@ -4306,16 +4291,6 @@ export const ModuleListRefine: React.FC<{
       });
     });
 
-    const operatorLabels: Record<string, string> = {
-      contains: "شامل",
-      eq: "برابر",
-      ne: "نابرابر",
-      gt: "بزرگ‌تر از",
-      gte: "بزرگ‌تر یا مساوی",
-      lt: "کوچک‌تر از",
-      lte: "کوچک‌تر یا مساوی",
-    };
-
     const bubbles = viewFiltersState
       .map((filter, index) => {
         const simpleFilter = filter as CrudFilter & {
@@ -4329,99 +4304,17 @@ export const ModuleListRefine: React.FC<{
         const fieldKey = String(
           simpleFilter?._displayField || simpleFilter?.field || "",
         );
-        if (!fieldKey) return null;
-        const field = moduleConfig.fields.find((item) => item.key === fieldKey);
-        const fieldLabel =
-          fieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY
-            ? getAssigneeLabel(resolvedModuleId)
-            : getFieldLabelFa(field, {
-                moduleId: resolvedModuleId,
-                fallback: fieldKey,
-              });
-        const rawValue = simpleFilter?._displayValue ?? simpleFilter?.value;
-        const valueLabel =
-          fieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY
-            ? (Array.isArray(rawValue) ? rawValue : [rawValue])
-                .map((item) => {
-                  const normalized = String(item ?? "").trim();
-                  if (!normalized) return "";
-                  if (normalized.startsWith("user_")) {
-                    const userId = normalized.slice(5);
-                    const user = allUsers.find(
-                      (entry: any) => String(entry?.id || "").trim() === userId,
-                    );
-                    return user?.display_name || user?.full_name || userId;
-                  }
-                  if (normalized.startsWith("role_")) {
-                    const roleId = normalized.slice(5);
-                    const role = allRoles.find(
-                      (entry: any) => String(entry?.id || "").trim() === roleId,
-                    );
-                    return role?.title
-                      ? `نقش: ${role.title}`
-                      : `نقش: ${roleId}`;
-                  }
-                  const user = allUsers.find(
-                    (entry: any) =>
-                      String(entry?.id || "").trim() === normalized,
-                  );
-                  if (user)
-                    return user?.display_name || user?.full_name || normalized;
-                  const role = allRoles.find(
-                    (entry: any) =>
-                      String(entry?.id || "").trim() === normalized,
-                  );
-                  if (role) return `نقش: ${role.title || normalized}`;
-                  return normalized;
-                })
-                .filter(Boolean)
-                .join("، ")
-            : field
-              ? field.type === FieldType.TAGS
-                ? Array.isArray(rawValue)
-                  ? rawValue
-                      .map((item) => {
-                        const normalized = String(item ?? "").trim();
-                        return (
-                          tagLabelById.get(normalized) ||
-                          getSingleOptionLabel(
-                            field,
-                            normalized,
-                            dynamicOptions,
-                            relationOptions,
-                          )
-                        );
-                      })
-                      .filter(Boolean)
-                      .join("، ")
-                  : String(
-                      tagLabelById.get(String(rawValue ?? "").trim()) ||
-                        getSingleOptionLabel(
-                          field,
-                          rawValue,
-                          dynamicOptions,
-                          relationOptions,
-                        ),
-                    )
-                : getSingleOptionLabel(
-                    field,
-                    rawValue,
-                    dynamicOptions,
-                    relationOptions,
-                  )
-              : String(rawValue ?? "");
-        const operatorLabel =
-          operatorLabels[
-            String(
-              simpleFilter?._displayOperator || simpleFilter?.operator || "eq",
-            )
-          ] ||
-          String(
-            simpleFilter?._displayOperator || simpleFilter?.operator || "eq",
-          );
+        const rawValue = Object.prototype.hasOwnProperty.call(simpleFilter, "_displayValue")
+          ? simpleFilter._displayValue : simpleFilter.value;
+        const label = getModuleListFilterLabel(simpleFilter, {
+          moduleId: resolvedModuleId, fields: moduleConfig.fields,
+          dynamicOptions, relationOptions: effectiveRelationOptions,
+          users: allUsers, roles: allRoles, tagLabels: tagLabelById,
+        });
+        if (!label) return null;
         return {
           id: `view:${fieldKey}:${index}:${JSON.stringify(rawValue ?? null)}`,
-          label: `${fieldLabel}: ${operatorLabel} ${valueLabel}`,
+          label,
           onRemove: () => {
             setViewFiltersState((prev) => {
               const nextFilters = prev.filter(
@@ -4458,7 +4351,7 @@ export const ModuleListRefine: React.FC<{
     currentView?.config?.filters,
     dynamicOptions,
     moduleConfig,
-    relationOptions,
+    effectiveRelationOptions,
     resolvedModuleId,
     searchTerm,
     tagsMap,
@@ -4476,17 +4369,13 @@ export const ModuleListRefine: React.FC<{
           .map((raw) => String(raw ?? "").trim())
           .filter(Boolean)
           .map((rawValue) => {
-            const user = allUsers.find(
-              (item: any) => String(item?.id || "") === rawValue,
-            );
-            const role = allRoles.find(
-              (item: any) => String(item?.id || "") === rawValue,
-            );
-            const label =
-              user?.display_name || user?.full_name || role?.title || rawValue;
+            const label = getModuleListFilterValueLabel(fieldKey, rawValue, {
+              moduleId: resolvedModuleId, fields: moduleConfig.fields, dynamicOptions,
+              relationOptions: effectiveRelationOptions, users: allUsers, roles: allRoles,
+            });
             return {
               id: `column:${fieldKey}:${rawValue}`,
-              label: `مسئول: ${label}`,
+              label: `${getAssigneeLabel(resolvedModuleId)}: ${label}`,
               onRemove: () => {
                 const nextFilters = { ...columnFilters };
                 const current = Array.isArray(nextFilters[fieldKey])
@@ -4529,35 +4418,11 @@ export const ModuleListRefine: React.FC<{
         .map((raw) => String(raw ?? "").trim())
         .filter(Boolean)
         .map((rawValue) => {
-          let valueLabel = rawValue;
-          if (
-            field.type === FieldType.PRICE ||
-            field.type === FieldType.DATE ||
-            field.type === FieldType.TIME ||
-            field.type === FieldType.DATETIME
-          ) {
-            const range = parseColumnRangeFilter(rawValue);
-            const from =
-              range.from !== undefined && range.from !== ""
-                ? String(range.from)
-                : "...";
-            const to =
-              range.to !== undefined && range.to !== ""
-                ? String(range.to)
-                : "...";
-            valueLabel = `${from} تا ${to}`;
-          } else if (field.type === FieldType.TAGS) {
-            valueLabel = tagLabelById.get(rawValue) || rawValue;
-          } else {
-            valueLabel = String(
-              getSingleOptionLabel(
-                field,
-                rawValue,
-                dynamicOptions,
-                effectiveRelationOptions,
-              ) || rawValue,
-            );
-          }
+          const valueLabel = getModuleListFilterValueLabel(fieldKey, rawValue, {
+            moduleId: resolvedModuleId, fields: moduleConfig.fields, dynamicOptions,
+            relationOptions: effectiveRelationOptions, users: allUsers, roles: allRoles,
+            tagLabels: tagLabelById,
+          });
           return {
             id: `column:${fieldKey}:${rawValue}`,
             label: `${fieldLabel}: ${valueLabel}`,
@@ -4583,6 +4448,7 @@ export const ModuleListRefine: React.FC<{
     dynamicOptions,
     effectiveRelationOptions,
     moduleConfig,
+    resolvedModuleId,
     searchTerm,
     tagsMap,
     viewFiltersState,
