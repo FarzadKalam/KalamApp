@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { FieldLocation, FieldType } from '../types';
 import { buildListCatalogHtml, buildListPrintableFields, buildListTableHtml, formatListCellValue } from './listPrintExport';
 
-vi.mock('../supabaseClient', () => ({ supabase: {} }));
+vi.mock('../supabaseClient', () => ({ supabase: {}, supabasePublic: {}, supabaseSignUpClient: {}, SUPABASE_URL: 'https://api.example.test', SUPABASE_ANON_KEY: 'test', SUPABASE_AUTH_STORAGE_KEY: 'test-auth' }));
 
 describe('formatListCellValue assignee display', () => {
   it('renders relation fields as labels instead of UUIDs', () => {

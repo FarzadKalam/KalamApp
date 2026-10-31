@@ -11,7 +11,7 @@ import {
 } from './moduleListOptions';
 import { fetchRecordReferenceLabels } from './recordReference';
 
-vi.mock('../supabaseClient', () => ({ supabase: {} }));
+vi.mock('../supabaseClient', () => ({ supabase: {}, supabasePublic: {}, supabaseSignUpClient: {}, SUPABASE_URL: 'https://api.example.test', SUPABASE_ANON_KEY: 'test', SUPABASE_AUTH_STORAGE_KEY: 'test-auth' }));
 vi.mock('./recordReference', () => ({
   buildRecordReferenceKey: (moduleId?: string, recordId?: string) => `${String(moduleId || '').trim()}:${String(recordId || '').trim()}`,
   fetchRecordReferenceLabels: vi.fn(),

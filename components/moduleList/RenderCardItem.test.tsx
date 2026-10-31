@@ -5,7 +5,7 @@ import RenderCardItem from './RenderCardItem';
 import { FieldType } from '../../types';
 
 vi.mock('../../moduleRegistry', () => ({ MODULES: {} }));
-vi.mock('../../supabaseClient', () => ({ supabase: {} }));
+vi.mock('../../supabaseClient', () => ({ supabase: {}, supabasePublic: {}, supabaseSignUpClient: {}, SUPABASE_URL: 'https://api.example.test', SUPABASE_ANON_KEY: 'test', SUPABASE_AUTH_STORAGE_KEY: 'test-auth' }));
 vi.mock('../common/AssigneeAvatarDisplay', () => ({ default: () => null }));
 vi.mock('../recordLocks/RecordLockControl', () => ({ default: () => null }));
 vi.mock('./RelatedActivityIndicators', () => ({ default: () => null }));

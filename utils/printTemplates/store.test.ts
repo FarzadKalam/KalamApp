@@ -12,7 +12,7 @@ import {
 import { BlockType, FieldLocation, FieldType } from '../../types';
 import { expandLegacyTableSelection } from './printFieldCatalog';
 
-vi.mock('../../supabaseClient', () => ({ supabase: {} }));
+vi.mock('../../supabaseClient', () => ({ supabase: {}, supabasePublic: {}, supabaseSignUpClient: {}, SUPABASE_URL: 'https://api.example.test', SUPABASE_ANON_KEY: 'test', SUPABASE_AUTH_STORAGE_KEY: 'test-auth' }));
 
 describe('print template store grouping', () => {
   it('exposes the cash and bank report fields and both table orientations', () => {
