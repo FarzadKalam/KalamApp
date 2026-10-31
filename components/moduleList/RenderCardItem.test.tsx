@@ -5,6 +5,7 @@ import RenderCardItem from './RenderCardItem';
 import { FieldType } from '../../types';
 
 vi.mock('../../moduleRegistry', () => ({ MODULES: {} }));
+vi.mock('../../supabaseClient', () => ({ supabase: {} }));
 vi.mock('../common/AssigneeAvatarDisplay', () => ({ default: () => null }));
 vi.mock('../recordLocks/RecordLockControl', () => ({ default: () => null }));
 vi.mock('./RelatedActivityIndicators', () => ({ default: () => null }));

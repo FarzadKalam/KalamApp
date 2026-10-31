@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { FieldLocation, FieldType } from '../types';
 import { buildListCatalogHtml, buildListPrintableFields, buildListTableHtml, formatListCellValue } from './listPrintExport';
+
+vi.mock('../supabaseClient', () => ({ supabase: {} }));
 
 describe('formatListCellValue assignee display', () => {
   it('renders relation fields as labels instead of UUIDs', () => {

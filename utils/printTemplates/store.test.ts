@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildDefaultTemplatesForModule,
   buildSystemTemplateFieldOptionsForModule,
@@ -11,6 +11,8 @@ import {
 } from './store';
 import { BlockType, FieldLocation, FieldType } from '../../types';
 import { expandLegacyTableSelection } from './printFieldCatalog';
+
+vi.mock('../../supabaseClient', () => ({ supabase: {} }));
 
 describe('print template store grouping', () => {
   it('exposes the cash and bank report fields and both table orientations', () => {

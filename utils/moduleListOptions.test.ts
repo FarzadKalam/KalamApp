@@ -11,6 +11,7 @@ import {
 } from './moduleListOptions';
 import { fetchRecordReferenceLabels } from './recordReference';
 
+vi.mock('../supabaseClient', () => ({ supabase: {} }));
 vi.mock('./recordReference', () => ({
   buildRecordReferenceKey: (moduleId?: string, recordId?: string) => `${String(moduleId || '').trim()}:${String(recordId || '').trim()}`,
   fetchRecordReferenceLabels: vi.fn(),
