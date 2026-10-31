@@ -167,6 +167,16 @@ export const isSameHrEmployeeFilter = (left: string[], right: string[]) => {
   return leftIds.length === rightIds.length && leftIds.every((id, index) => id === rightIds[index]);
 };
 
+/** Empty selection means all records, including requests without an employee. */
+export const filterHrRowsByEmployees = <T extends { employeeId: string | null }>(
+  rows: T[],
+  selectedEmployeeIds: string[],
+): T[] => {
+  if (!selectedEmployeeIds.length) return rows;
+  const selectedIds = new Set(selectedEmployeeIds);
+  return rows.filter((row) => !!row.employeeId && selectedIds.has(row.employeeId));
+};
+
 export const buildHrFilterQuery = (range: [Dayjs, Dayjs], employeeIds: string[]) => {
   const params = new URLSearchParams();
   params.set('from', toNativeGregorianDateString(range[0].startOf('day')) || '');

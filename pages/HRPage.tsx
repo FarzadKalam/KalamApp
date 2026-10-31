@@ -67,6 +67,7 @@ import { resolveWorkScheduleDayPlan } from '../utils/workSchedulePlan';
 import {
   HR_QUERY_KEY_EMPLOYEES,
   buildHrFilterQuery,
+  filterHrRowsByEmployees,
   getInitialHrRangeFromQuery,
   isSameHrEmployeeFilter,
   isSameHrRange,
@@ -2266,7 +2267,9 @@ const HRPage: React.FC = () => {
             id: String(row?.id),
             moduleId: 'leave_requests' as const,
             typeLabel: 'مرخصی',
-            employeeId: row?.employee_id ? String(row.employee_id) : null,
+            employeeId: row?.employee_id
+              ? employeeIdByAnyId[String(row.employee_id)] || String(row.employee_id)
+              : null,
             status: row?.status || null,
             dateFrom: row?.start_date || null,
             dateTo: row?.end_date || null,
@@ -3780,18 +3783,22 @@ const HRPage: React.FC = () => {
   }, [scheduleRows, selectedEmployeeIdSet]);
 
   const visibleRequestRows = useMemo(() => {
-    return requestRows.filter((row) =>
-      ['leave_requests', 'overtime_requests', 'mission_requests'].includes(String(row.moduleId || ''))
-      && (!row.employeeId || selectedEmployeeIdSet.has(String(row.employeeId)))
+    return filterHrRowsByEmployees(
+      requestRows.filter((row) =>
+        ['leave_requests', 'overtime_requests', 'mission_requests'].includes(String(row.moduleId || ''))
+      ),
+      selectedEmployeeIds,
     );
-  }, [requestRows, selectedEmployeeIdSet]);
+  }, [requestRows, selectedEmployeeIds]);
 
   const visibleCompensationRows = useMemo(() => {
-    return requestRows.filter((row) =>
-      ['employee_bonus_requests', 'employee_penalty_requests'].includes(String(row.moduleId || ''))
-      && (!row.employeeId || selectedEmployeeIdSet.has(String(row.employeeId)))
+    return filterHrRowsByEmployees(
+      requestRows.filter((row) =>
+        ['employee_bonus_requests', 'employee_penalty_requests'].includes(String(row.moduleId || ''))
+      ),
+      selectedEmployeeIds,
     );
-  }, [requestRows, selectedEmployeeIdSet]);
+  }, [requestRows, selectedEmployeeIds]);
 
   const visibleRequestStats = useMemo(() => {
     return visibleRequestRows.reduce((acc, row) => {
@@ -9930,9 +9937,13 @@ const HRPage: React.FC = () => {
                   label="زمان ثبت"
                   rules={[{ required: true, message: 'زمان ثبت الزامی است' }]}
                 >
-                  <div>
-                    <PersianDatePicker type="DATETIME" disabled={attendanceModalMode === 'view'} placeholder="زمان ثبت" />
-                  </div>
+                  <PersianDatePicker
+                    type="DATETIME"
+                    disabled={attendanceModalMode === 'view'}
+                    placeholder="زمان ثبت"
+                    modalContainer={resolveOverlayPopupContainer}
+                    overlayZIndexBase={ATTENDANCE_SELECT_OVERLAY_Z_INDEX}
+                  />
                 </Form.Item>
 
                 <Form.Item name="location_text" label="موقعیت / آدرس">

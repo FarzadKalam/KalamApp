@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import dayjs from 'dayjs';
 import {
   buildHrFilterQuery,
+  filterHrRowsByEmployees,
   persistHrEmployees,
   persistHrRange,
   readHrRangeFromSearch,
@@ -12,6 +13,28 @@ import {
 } from './hrFilters';
 
 describe('hrFilters', () => {
+  const requests = [
+    { id: 'leave-1', employeeId: 'employee-1' },
+    { id: 'unassigned', employeeId: null },
+    { id: 'leave-2', employeeId: 'employee-2' },
+    { id: 'old-link', employeeId: 'unresolved-employee' },
+    { id: 'empty-link', employeeId: '' },
+  ];
+
+  it('در حالت همه کارکنان، درخواست‌های بدون کارمند یا با ارتباط نامشخص را هم نشان می‌دهد', () => {
+    expect(filterHrRowsByEmployees(requests, []).map((row) => row.id))
+      .toEqual(['leave-1', 'unassigned', 'leave-2', 'old-link', 'empty-link']);
+  });
+
+  it.each([
+    [['employee-1'], ['leave-1']],
+    [['employee-1', 'employee-2'], ['leave-1', 'leave-2']],
+    [['employee-with-no-requests'], []],
+  ])('با فیلتر کارکنان %j فقط درخواست‌های همان افراد را نشان می‌دهد', (selectedIds, expectedIds) => {
+    expect(filterHrRowsByEmployees(requests, selectedIds).map((row) => row.id)).toEqual(expectedIds);
+    expect(requests).toHaveLength(5);
+  });
+
   beforeEach(() => {
     window.localStorage.clear();
     window.sessionStorage.clear();

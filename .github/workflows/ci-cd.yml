@@ -40,6 +40,14 @@ jobs:
           components/SmartTableRenderer.test.tsx
           --maxWorkers=1 --no-file-parallelism
 
+      - name: HR filters and picker regression checks
+        timeout-minutes: 5
+        run: >-
+          npx vitest run
+          utils/hrFilters.test.ts utils/popupContainer.test.ts
+          components/AdaptiveSelectField.test.tsx components/PersianDateRangePicker.test.tsx
+          --maxWorkers=1 --no-file-parallelism
+
       - name: Build
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
