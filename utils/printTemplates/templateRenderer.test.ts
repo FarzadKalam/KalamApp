@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { normalizeRichTextHtml } from '../richText';
 import { buildDefaultTemplatesForModule, mergeTemplatesWithDefaults } from './store';
 import { renderPrintTemplateHtml } from './templateRenderer';
+
+vi.mock('../../supabaseClient', () => ({
+  supabase: {}, supabasePublic: {}, supabaseSignUpClient: {},
+  SUPABASE_URL: 'https://api.example.test', SUPABASE_ANON_KEY: 'test', SUPABASE_AUTH_STORAGE_KEY: 'test-auth',
+}));
 
 describe('system invoice template rendering', () => {
   it.each(['default_invoice_official', 'default_invoice_unofficial'])(
