@@ -57,7 +57,7 @@ export const getModuleListFilterValueLabel = (fieldKey: string, raw: any, contex
     }
     if ([FieldType.NUMBER, FieldType.PRICE, FieldType.PERCENTAGE, FieldType.STOCK, FieldType.TIME].includes(field?.type)) return toPersianNumber(token);
     if (context.tagLabels?.has(token)) return context.tagLabels.get(token)!;
-    if (!field) return isUuidLikeValue(token) ? 'مورد انتخاب‌شده' : toPersianNumber(token);
+    if (!field) return isUserField ? 'کاربر یا نقش انتخاب‌شده' : isUuidLikeValue(token) ? 'مورد انتخاب‌شده' : toPersianNumber(token);
     const option = getFieldOptions(field, context.dynamicOptions, context.relationOptions).find((entry) => String(entry.value) === token);
     if (!option && (field.type === FieldType.STATUS || fieldKey.includes('status')) && !/[\u0600-\u06ff]/.test(token)) {
       return localizeFinancialValue(token, 'status') || 'وضعیت انتخاب‌شده';

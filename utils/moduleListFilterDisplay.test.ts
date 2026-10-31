@@ -35,6 +35,7 @@ describe('shared module list filter display', () => {
   it('does not show raw user or relation identifiers while titles are unavailable', () => {
     const empty = { ...context, users: [], roles: [], relationOptions: {} };
     expect(getModuleListFilterValueLabel('assignee_id', `user_${id}`, empty)).toBe('کاربر انتخاب‌شده');
+    expect(getModuleListFilterValueLabel(WORKFLOW_ASSIGNEE_FIELD_KEY, 'ocurrent_user', empty)).toBe('کاربر یا نقش انتخاب‌شده');
     expect(getModuleListFilterValueLabel('customer', id, empty)).toBe('رکورد مرتبط');
     expect(getModuleListFilterValueLabel('customer', id, context)).toBe('مشتری نمونه');
   });
