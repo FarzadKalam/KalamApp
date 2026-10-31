@@ -44,7 +44,9 @@ export const resolveRelationPopulatePatch = async ({
   };
   const mappings = Object.entries(config.populateFields).filter(([target, source]) => {
     const destination = permittedField(module, target, destinationPermission);
-    return destination && !destination.readonly
+    // Existing automatic snapshots (for example payroll identity) populate
+    // configured readonly fields. Confirmed user-driven copies stay editable.
+    return destination && (!destination.readonly || !config.populateConfirmation)
       && permittedField(sourceModule, source, sourcePermission);
   });
   if (!mappings.length) return {};

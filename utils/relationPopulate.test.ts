@@ -99,4 +99,18 @@ describe('confirmed relation population', () => {
     expect(confirm).not.toHaveBeenCalled();
     expect(supabaseClient.from).not.toHaveBeenCalled();
   });
+
+  it('preserves configured automatic readonly snapshots without a confirmation prompt', async () => {
+    const { request, confirm } = setup();
+    const automaticField = {
+      ...field,
+      relationConfig: { ...field.relationConfig!, populateConfirmation: undefined },
+    };
+    const readonlyModule = {
+      ...module, fields: module.fields.map((definition) => ({ ...definition, readonly: true })),
+    };
+    expect(await resolveRelationPopulatePatch({ ...request, field: automaticField, module: readonlyModule }))
+      .toEqual({ job_goal: 'هدف جدید', job_duties: null });
+    expect(confirm).not.toHaveBeenCalled();
+  });
 });
