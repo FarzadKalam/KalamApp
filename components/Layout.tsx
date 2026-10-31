@@ -18,10 +18,8 @@ import {
   FileTextOutlined,
   CheckSquareOutlined,
   ExclamationCircleOutlined,
-  MoonOutlined,
   ProjectOutlined,
   NodeIndexOutlined,
-  SunOutlined,
   DeleteOutlined,
   DollarOutlined,
   ToolOutlined,
@@ -29,7 +27,6 @@ import {
   ArrowLeftOutlined,
   CloudServerOutlined,
   MessageOutlined,
-  BellOutlined,
   ReadOutlined,
   GiftOutlined,
   InstagramOutlined,
@@ -88,6 +85,7 @@ import DrawerInteractionRecovery from './DrawerInteractionRecovery';
 import AiAssistantLauncher from './communications/AiAssistantLauncher';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
 import AiSparkleIcon from './ai/AiSparkleIcon';
+import ActionIcon from './common/ActionIcon';
 import { useNotificationRuntime } from './notifications/NotificationRuntimeProvider';
 import { resolveMobileKeyboardViewport } from '../utils/mobileKeyboardViewport';
 import { ADVERTISING_CAMPAIGNS_MODULE_ID } from '../utils/advertisingCampaigns';
@@ -1375,9 +1373,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     const firstSegment = location.pathname.split('/').filter(Boolean)[0] || '';
     return firstSegment && MODULES[firstSegment] ? firstSegment : null;
   }, [location.pathname]);
-  const headerActionButtonClassName = isMobile
-    ? 'text-gray-500 dark:text-gray-300 hover:text-leather-500 !h-8 !w-8 !min-w-0 !p-0'
-    : 'text-gray-500 dark:text-gray-300 hover:text-leather-500';
+  const headerActionButtonClassName = 'app-header-action';
 
   const openGlobalSearchPage = useCallback(() => {
     const term = globalSearch.trim();
@@ -1577,7 +1573,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         >
           <div className="relative flex min-w-0 flex-1 items-center" ref={searchBoxRef}>
             <div className="flex h-9 w-full min-w-0 max-w-[360px] items-center rounded-2xl border border-gray-200 bg-white/80 px-2.5 shadow-sm transition-all focus-within:border-leather-400 focus-within:bg-white focus-within:shadow-md sm:h-10 sm:px-3 dark:border-dark-border dark:bg-dark-surface/85 dark:focus-within:border-leather-400">
-              <SearchOutlined className="text-gray-400 dark:text-gray-500" />
+              <ActionIcon name="search" className="h-[18px] w-[18px] shrink-0 text-gray-400 dark:text-gray-500" />
               <Input
                 ref={searchRef}
                 value={globalSearch}
@@ -1706,26 +1702,29 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               </React.Suspense>
             </div>
           ) : null}
-          <div className="flex shrink-0 items-center gap-1 sm:gap-2 md:gap-4">
+          <div className="app-header-actions">
             <Button
               type="text"
               size={isMobile ? 'small' : 'middle'}
               shape="circle"
-              icon={<ReloadOutlined spin={refreshingPage} />}
+              icon={<ActionIcon name="refresh" className={refreshingPage ? 'app-action-icon-spinning' : undefined} />}
               onClick={handlePageRefresh}
               className={headerActionButtonClassName}
               title="رفرش صفحه"
+              aria-label="رفرش صفحه"
             />
             <Button
               type="text"
               size={isMobile ? 'small' : 'middle'}
               shape="circle"
-              icon={isDarkMode ? <SunOutlined /> : <MoonOutlined />}
+              icon={<ActionIcon name={isDarkMode ? 'sun' : 'moon'} />}
               onClick={toggleTheme}
               className={headerActionButtonClassName}
               title={isDarkMode ? 'حالت روشن' : 'حالت شب'}
+              aria-label={isDarkMode ? 'حالت روشن' : 'حالت شب'}
             />
-            <ContextualTutorialButton contexts={getTutorialContexts(location.pathname, Object.keys(MODULES))} />
+            <ContextualTutorialButton contexts={getTutorialContexts(location.pathname, Object.keys(MODULES))}
+              buttonClassName={headerActionButtonClassName} buttonIcon={<ActionIcon name="book" />} />
             {isDemoOrg && hasDemoBatch && (
               <Popconfirm
                 title="حذف داده‌های دمو"
@@ -1761,7 +1760,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                     type="text"
                     size={isMobile ? 'small' : 'middle'}
                     shape="circle"
-                    icon={<MessageOutlined className="text-gray-500 dark:text-gray-400" />}
+                    icon={<ActionIcon name="message" />}
                     onPointerEnter={(event) => {
                       if (event.pointerType !== 'touch') scheduleRoutePreload('/messages');
                     }}
@@ -1777,6 +1776,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               <AiAssistantLauncher
                 buttonSize={isMobile ? 'small' : 'middle'}
                 buttonClassName={headerActionButtonClassName}
+                buttonIcon={<ActionIcon name="ai" />}
               />
             ) : null}
             <Tooltip title="اعلان‌ها" placement="bottom">
@@ -1789,7 +1789,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                   type="text"
                   size={isMobile ? 'small' : 'middle'}
                   shape="circle"
-                  icon={<BellOutlined className="text-gray-500 dark:text-gray-400" />}
+                  icon={<ActionIcon name="bell" />}
                   onClick={() => {
                     setAlertsDrawerMounted(true);
                     setAlertsDrawerOpen(true);

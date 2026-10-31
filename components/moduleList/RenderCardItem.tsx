@@ -128,7 +128,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
       onChanged={handleLockChanged}
     />
   );
-  const lockMeta = isLocked ? (
+  const lockMeta = isLocked && (!kanbanCompact || isKanbanDetailsOpen) ? (
     <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-500">
       <LockOutlined />
       <span>قفل شده</span>
@@ -355,9 +355,9 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     setSelectedRowKeys(newSelected);
   };
   const hasSelectionControl = !hideSelection;
-  const hasLockControl = shouldShowLockControl;
+  const hasLockControl = shouldShowLockControl && (!kanbanCompact || isKanbanDetailsOpen);
   const hasDragControl = !isLocked && showDragHandle && (!!onDragHandlePointerDown || !!dragHandleProps);
-  const hasFooterControls = hasSelectionControl || hasLockControl || hasDragControl;
+  const hasFooterControls = hasSelectionControl || hasLockControl || hasDragControl || kanbanCompact;
   const hasRelatedActivities = !isTasks && moduleConfig?.relatedTabs?.some((tab: any) => tab.targetModule === 'tasks');
   const cardSurfaceClassName = `
     group relative flex cursor-pointer flex-col transition-all
@@ -541,7 +541,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           </div>
         ) : null}
 
-        <div className={`flex items-start gap-3 ${moduleBadgeLabel ? 'pt-5' : ''}`}>
+        <div className={`flex items-start gap-3 pb-2 ${moduleBadgeLabel ? 'pt-5' : ''}`}>
           {!(kanbanCompact && !imageUrl) ? (
             <Avatar
               shape="square"

@@ -9,6 +9,7 @@ type AiAssistantLauncherProps = {
   buttonSize?: ButtonProps['size'];
   disabled?: boolean;
   tooltipTitle?: React.ReactNode;
+  buttonIcon?: React.ReactNode;
 };
 
 const AiAssistantLauncher: React.FC<AiAssistantLauncherProps> = ({
@@ -16,6 +17,7 @@ const AiAssistantLauncher: React.FC<AiAssistantLauncherProps> = ({
   buttonSize = 'middle',
   disabled = false,
   tooltipTitle = 'باز کردن دستیار هوشمند سازمان',
+  buttonIcon,
 }) => {
   const navigate = useNavigate();
 
@@ -40,7 +42,7 @@ const AiAssistantLauncher: React.FC<AiAssistantLauncherProps> = ({
       type="text"
       shape="circle"
       size={buttonSize}
-      icon={<AiSparkleIcon className="h-4 w-4 text-gray-500 dark:text-gray-400" />}
+      icon={buttonIcon ?? <AiSparkleIcon className="h-4 w-4 text-gray-500 dark:text-gray-400" />}
       onClick={openAssistant}
       aria-label="چت هوش مصنوعی"
       className={buttonClassName}

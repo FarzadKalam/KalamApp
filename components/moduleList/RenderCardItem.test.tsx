@@ -1,5 +1,5 @@
 import React from 'react';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import RenderCardItem from './RenderCardItem';
 import { FieldType } from '../../types';
@@ -7,7 +7,7 @@ import { FieldType } from '../../types';
 vi.mock('../../moduleRegistry', () => ({ MODULES: {} }));
 vi.mock('../../supabaseClient', () => ({ supabase: {}, supabasePublic: {}, supabaseSignUpClient: {}, SUPABASE_URL: 'https://api.example.test', SUPABASE_ANON_KEY: 'test', SUPABASE_AUTH_STORAGE_KEY: 'test-auth' }));
 vi.mock('../common/AssigneeAvatarDisplay', () => ({ default: () => null }));
-vi.mock('../recordLocks/RecordLockControl', () => ({ default: () => null }));
+vi.mock('../recordLocks/RecordLockControl', () => ({ default: () => <button aria-label="کنترل قفل">قفل</button> }));
 vi.mock('./RelatedActivityIndicators', () => ({ default: () => null }));
 
 afterEach(cleanup);
@@ -17,6 +17,17 @@ const config = { id: 'marketing_leads', titles: { fa: 'لیدها' }, relatedTab
 ] };
 
 describe('card status badge', () => {
+  it('keeps the lock control inside expanded kanban details, including locked cards without selection or drag controls', () => {
+    render(<RenderCardItem item={{ id: 'locked-lead', name: 'سرنخ قفل‌شده', status: 'new', is_locked: true }}
+      moduleId="marketing_leads" moduleConfig={config} kanbanCompact minimal hideSelection canUnlockRecord
+      selectedRowKeys={[]} setSelectedRowKeys={vi.fn()} navigate={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'کنترل قفل' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'نمایش جزئیات' }));
+    expect(screen.getByRole('button', { name: 'کنترل قفل' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'بستن جزئیات' }));
+    expect(screen.queryByRole('button', { name: 'کنترل قفل' })).toBeNull();
+  });
+
   it('omits the redundant badge in status-grouped kanban while preserving it in other views', () => {
     const props = { item: { id: 'lead', name: 'سرنخ آزمایشی', status: 'new' }, moduleId: 'marketing_leads', moduleConfig: config,
       statusField: 'status', minimal: true, kanbanCompact: true, selectedRowKeys: [], setSelectedRowKeys: vi.fn(), navigate: vi.fn() };

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Alert, Button, Drawer, Empty, Spin, Tabs, Tooltip } from 'antd';
 import { ReadOutlined } from '@ant-design/icons';
 import { supabasePublic } from '../../supabaseClient';
@@ -16,7 +17,7 @@ type TutorialSummary = {
   content_blocks: Block[];
 };
 
-export default function ContextualTutorialButton({ contexts, zIndex = 1600 }: { contexts: string[]; zIndex?: number }) {
+export default function ContextualTutorialButton({ contexts, zIndex = 1600, buttonClassName, buttonIcon }: { contexts: string[]; zIndex?: number; buttonClassName?: string; buttonIcon?: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<TutorialSummary[]>([]);
   const [selected, setSelected] = useState<string>();
@@ -56,7 +57,7 @@ export default function ContextualTutorialButton({ contexts, zIndex = 1600 }: { 
   const current = items.find(item => item.id === selected);
   const groups = [...new Set(items.map(item => item.help_group || 'راهنما'))];
   return <>
-    <Tooltip title="آموزش این بخش"><Button type="text" aria-label="آموزش این بخش" icon={<ReadOutlined />} onClick={() => setOpen(true)} /></Tooltip>
+    <Tooltip title="آموزش این بخش"><Button type="text" aria-label="آموزش این بخش" className={buttonClassName} icon={buttonIcon ?? <ReadOutlined />} onClick={() => setOpen(true)} /></Tooltip>
     <Drawer title="آموزش این بخش" open={open} onClose={() => setOpen(false)} width="min(860px, 100vw)" zIndex={zIndex} destroyOnClose>
       <div dir="rtl">
         {error && <Alert type="error" showIcon message={error} action={<Button onClick={() => setAttempt(value => value + 1)}>تلاش دوباره</Button>} />}
