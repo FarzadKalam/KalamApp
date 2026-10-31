@@ -10,7 +10,7 @@ const db = vi.hoisted(() => ({ from: vi.fn() }));
 vi.mock('../../supabaseClient', () => ({ supabase: db }));
 vi.mock('../../utils/permissions', () => ({ fetchCurrentUserRoleContext: vi.fn() }));
 vi.mock('../../utils/taskProcessModalEvents', () => ({ openTaskProcessModal: vi.fn() }));
-vi.mock('../SmartFieldRenderer', () => ({ RelationQuickCreateHost: (props: any) => props.open ? <div role="dialog" aria-label="افزودن فعالیت مرتبط">
+vi.mock('../SmartFieldRenderer', () => ({ RelationQuickCreateHost: (props: any) => props.open ? <div role="dialog" aria-label="افزودن فعالیت مرتبط" data-overlay-z-index={props.overlayZIndexBase}>
   <span>{props.initialValues.source_module_id}</span><span>{props.initialValues.source_record_id}</span>
   <button onClick={() => props.onCreated({ id: 'created-task', values: { name: 'فعالیت جدید' } })}>ثبت فعالیت مرتبط</button>
 </div> : null }));
@@ -44,7 +44,7 @@ afterEach(cleanup);
 
 const mount = () => {
   const onCardClick = vi.fn();
-  const result = render(<ConfigProvider theme={{ token: { motion: false } }}><div onClick={onCardClick}>
+  const result = render(<ConfigProvider theme={{ token: { motion: false, zIndexPopupBase: 13000 } }}><div onClick={onCardClick}>
     <RelatedActivityIndicators moduleId="marketing_leads" recordId="lead-a" summary={{ total: 0, completed: 0, overdue: 0, upcoming: 0, open: 0 }} />
   </div></ConfigProvider>);
   return { ...result, onCardClick };
@@ -61,12 +61,29 @@ describe('related activity modal interactions', () => {
     await openList();
     fireEvent.click(screen.getByRole('button', { name: 'ایجاد فعالیت' }));
     const createDialog = await screen.findByRole('dialog', { name: 'افزودن فعالیت مرتبط' });
+    const listWrap = screen.getByRole('button', { name: 'ایجاد فعالیت' }).closest('.ant-modal-wrap') as HTMLElement;
+    expect(Number(createDialog.getAttribute('data-overlay-z-index'))).toBeGreaterThan(Number(listWrap.style.zIndex));
     expect(within(createDialog).getByText('marketing_leads')).toBeInTheDocument();
     expect(within(createDialog).getByText('lead-a')).toBeInTheDocument();
     fireEvent.click(within(createDialog).getByRole('button', { name: 'ثبت فعالیت مرتبط' }));
     await waitFor(() => expect(query.limit).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole('dialog', { name: 'افزودن فعالیت مرتبط' })).not.toBeInTheDocument();
     expect(onCardClick).not.toHaveBeenCalled();
+  });
+
+  it('keeps both activity overlays above an existing record modal instead of relying on fixed global levels', async () => {
+    render(<ConfigProvider theme={{ token: { motion: false, zIndexPopupBase: 13000 } }}>
+      <div className="ant-modal-wrap" style={{ zIndex: 31000 }}>
+        <RelatedActivityIndicators moduleId="marketing_leads" recordId="lead-a" />
+      </div>
+    </ConfigProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'فعالیت‌ها' }));
+    const createButton = await screen.findByRole('button', { name: 'ایجاد فعالیت' });
+    const listWrap = createButton.closest('.ant-modal-wrap') as HTMLElement;
+    expect(Number(listWrap.style.zIndex)).toBeGreaterThan(31000);
+    fireEvent.click(createButton);
+    const createDialog = await screen.findByRole('dialog', { name: 'افزودن فعالیت مرتبط' });
+    expect(Number(createDialog.getAttribute('data-overlay-z-index'))).toBeGreaterThan(Number(listWrap.style.zIndex));
   });
 
   it('hides creation when the user has view access without edit access', async () => {

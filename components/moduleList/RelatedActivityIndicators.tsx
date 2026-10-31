@@ -11,6 +11,7 @@ import { getFieldLabelFa } from '../../utils/fieldLabel';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { buildTaskSourceInitialValues } from '../../utils/taskMeta';
 import { markModuleListChanged } from '../../utils/moduleListLive';
+import { resolveParentOverlayZIndex } from '../../utils/popupContainer';
 
 const ActivityQuickCreate = React.lazy(() => import('../SmartFieldRenderer').then((module) => ({ default: module.RelationQuickCreateHost })));
 
@@ -68,6 +69,8 @@ const RelatedActivityIndicators: React.FC<Props> = ({ moduleId, recordId, module
   const [reload, setReload] = React.useState(0);
   const [expandedIds, setExpandedIds] = React.useState<Set<string>>(new Set());
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [listZIndex, setListZIndex] = React.useState(token.zIndexPopupBase + 100);
+  const [createZIndex, setCreateZIndex] = React.useState(token.zIndexPopupBase + 200);
   const [createAccess, setCreateAccess] = React.useState<{ orgId: string; allowed: boolean } | null>(null);
   const createInitialValues = React.useMemo(() => buildTaskSourceInitialValues(moduleId, recordId), [moduleId, recordId]);
   React.useEffect(() => { setCreateOpen(false); }, [moduleId, recordId]);
@@ -138,15 +141,21 @@ const RelatedActivityIndicators: React.FC<Props> = ({ moduleId, recordId, module
     <div className="min-w-0" onClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
       <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
         {indicators.map((item: any) => (
-          <button key={item.key} type="button" className={`inline-flex min-h-8 min-w-8 items-center justify-center gap-1 rounded-full px-1.5 text-xs transition hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 dark:hover:bg-white/10 max-sm:min-h-11 max-sm:min-w-11 ${item.className}`} onClick={() => setOpen(true)} title={item.label} aria-label={item.key === 'empty' || item.key === 'all' ? item.label : `${item.label}: ${toPersianNumber(item.count)}`}>
+          <button key={item.key} type="button" className={`inline-flex min-h-8 min-w-8 items-center justify-center gap-1 rounded-full px-1.5 text-xs transition hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 dark:hover:bg-white/10 max-sm:min-h-11 max-sm:min-w-11 ${item.className}`} onClick={(event) => {
+            setListZIndex(resolveParentOverlayZIndex(event.currentTarget, token.zIndexPopupBase) + 100);
+            setOpen(true);
+          }} title={item.label} aria-label={item.key === 'empty' || item.key === 'all' ? item.label : `${item.label}: ${toPersianNumber(item.count)}`}>
             {item.icon}{item.key !== 'all' && item.key !== 'empty' ? <span className="text-[11px] font-semibold">{toPersianNumber(item.count)}</span> : null}
           </button>
         ))}
       </div>
       <Modal open={open} title={<div className="flex items-center justify-between gap-2 pl-7">
         <span>{relation.label}</span>
-        {createAccess?.allowed ? <Button type="primary" aria-label="ایجاد فعالیت" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>ایجاد فعالیت</Button> : null}
-      </div>} footer={null} onCancel={(event) => { event.stopPropagation(); setOpen(false); }} destroyOnHidden>
+        {createAccess?.allowed ? <Button type="primary" aria-label="ایجاد فعالیت" icon={<PlusOutlined />} onClick={(event) => {
+          setCreateZIndex(resolveParentOverlayZIndex(event.currentTarget, listZIndex) + 100);
+          setCreateOpen(true);
+        }}>ایجاد فعالیت</Button> : null}
+      </div>} zIndex={listZIndex} footer={null} onCancel={(event) => { event.stopPropagation(); setOpen(false); }} destroyOnHidden>
         <div className="max-h-[65vh] overflow-y-auto" dir="rtl">
           <div role="note" aria-label="راهنمای وضعیت فعالیت‌ها" style={{ backgroundColor: token.colorBgElevated }} className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-slate-100 py-2 text-[11px] dark:border-white/10">
             {Object.entries(ACTIVITY_STATES).map(([key, state]) => (
@@ -193,7 +202,7 @@ const RelatedActivityIndicators: React.FC<Props> = ({ moduleId, recordId, module
         </div>
       </Modal>
       {createOpen ? <React.Suspense fallback={<Spin />}>
-        <ActivityQuickCreate open targetModuleId="tasks" label="فعالیت" forceInline
+        <ActivityQuickCreate open targetModuleId="tasks" label="فعالیت" forceInline overlayZIndexBase={createZIndex}
           initialValues={createInitialValues} onCancel={() => setCreateOpen(false)}
           onCreated={({ id, values }) => {
             setCreateOpen(false);
