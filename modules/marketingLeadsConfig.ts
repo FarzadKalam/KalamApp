@@ -146,7 +146,8 @@ export const marketingLeadsModule: ModuleDefinition = {
       location: FieldLocation.HEADER,
       order: 6.5,
       nature: FieldNature.STANDARD,
-      isTableColumn: true,
+      isTableColumn: false,
+      hideInTable: true,
       relationConfig: {
         targetModule: 'web_forms',
         filter: {

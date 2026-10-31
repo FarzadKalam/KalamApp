@@ -8,6 +8,12 @@ import { fetchRelationOptionsForField } from './relationOptions';
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from './recordReference';
 import { isWorkflowVirtualField, shouldRenderInGeneralModuleUi } from './moduleFieldVisibility';
 import { isEmptyRelationValue, isUuidLikeValue } from './optionHelpers';
+import { mergeSelectOptions } from './selectOptions';
+
+export const getModuleListGroupOptions = (
+  field: { options?: any[]; dynamicOptionsCategory?: string } | null | undefined,
+  dynamicOptions: Record<string, any[]> = {},
+) => mergeSelectOptions(field?.options, field?.dynamicOptionsCategory ? dynamicOptions[field.dynamicOptionsCategory] : []);
 
 type RelationConfigLike = {
   targetModule?: string;
@@ -63,6 +69,7 @@ export const getModuleListSelectableFields = (
   if (!moduleConfig) return [];
 
   const explicitFields = (moduleConfig.fields || [])
+    .filter((field) => !field.hideInTable)
     .filter((field) => !isWorkflowVirtualField(field))
     .filter((field) => shouldRenderInGeneralModuleUi(field))
     .filter((field) => !shouldSkipModuleListField(moduleConfig.id, String(field?.key || '').trim()))
@@ -121,6 +128,7 @@ const buildRelationTargetCacheKey = (
 
 const getDefaultListFields = (moduleConfig: ModuleDefinition): ModuleFieldLike[] => {
   const tableFields = (moduleConfig.fields || [])
+    .filter((field) => !field.hideInTable)
     .filter((field) => !isWorkflowVirtualField(field))
     .filter((field) => shouldRenderInGeneralModuleUi(field))
     .filter((field) => !shouldSkipModuleListField(moduleConfig.id, String(field?.key || '').trim()))
@@ -274,7 +282,8 @@ const isCheapImmediateRelationField = (field: ModuleFieldLike) => {
 
 export const buildModuleListOptionPlan = (
   moduleConfig: ModuleDefinition | null | undefined,
-  visibleColumns?: string[]
+  visibleColumns?: string[],
+  additionalFieldKeys: string[] = [],
 ): ModuleListOptionPlan => {
   if (!moduleConfig) {
     return {
@@ -287,7 +296,7 @@ export const buildModuleListOptionPlan = (
 
   const visibleFields = getModuleListVisibleFields(moduleConfig, visibleColumns);
   const hasExplicitVisibleColumns = Array.isArray(visibleColumns) && visibleColumns.length > 0;
-  const immediateDynamicFields = visibleFields.filter(
+  const immediateDynamicFields = [...visibleFields, ...moduleConfig.fields.filter((field) => additionalFieldKeys.includes(field.key))].filter(
     (field) =>
       (field.type === FieldType.SELECT || field.type === FieldType.MULTI_SELECT || field.type === FieldType.STATUS) &&
       field.dynamicOptionsCategory

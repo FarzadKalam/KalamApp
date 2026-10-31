@@ -223,7 +223,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
       .join('\n');
   };
 
-  const buildTaskInitialValues = () => buildTaskSourceInitialValues(moduleId, recordId);
+  const taskInitialValues = React.useMemo(() => buildTaskSourceInitialValues(moduleId, recordId), [moduleId, recordId]);
 
   useEffect(() => {
     void fetchData();
@@ -1093,7 +1093,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
           targetModuleId="tasks"
           label="فعالیت"
           forceInline
-          initialValues={buildTaskInitialValues()}
+          initialValues={taskInitialValues}
           onCancel={() => setQuickTaskOpen(false)}
           onCreated={async ({ values }) => {
             await logAndTouchRecord({

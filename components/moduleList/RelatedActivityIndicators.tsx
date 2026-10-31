@@ -1,6 +1,6 @@
 import React from 'react';
 import { Alert, Button, Modal, Spin, Tag, theme } from 'antd';
-import { CheckCircleFilled, ClockCircleFilled, DownOutlined, MinusCircleOutlined, UnorderedListOutlined, WarningFilled } from '@ant-design/icons';
+import { CheckCircleFilled, ClockCircleFilled, DownOutlined, MinusCircleOutlined, PlusOutlined, UnorderedListOutlined, WarningFilled } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import { getRecordTitle } from '../../utils/recordTitle';
@@ -9,6 +9,10 @@ import { openTaskProcessModal } from '../../utils/taskProcessModalEvents';
 import { fetchCurrentUserRoleContext } from '../../utils/permissions';
 import { getFieldLabelFa } from '../../utils/fieldLabel';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { buildTaskSourceInitialValues } from '../../utils/taskMeta';
+import { markModuleListChanged } from '../../utils/moduleListLive';
+
+const ActivityQuickCreate = React.lazy(() => import('../SmartFieldRenderer').then((module) => ({ default: module.RelationQuickCreateHost })));
 
 export type RelatedActivitySummary = {
   total: number;
@@ -63,6 +67,10 @@ const RelatedActivityIndicators: React.FC<Props> = ({ moduleId, recordId, module
   const [error, setError] = React.useState<string | null>(null);
   const [reload, setReload] = React.useState(0);
   const [expandedIds, setExpandedIds] = React.useState<Set<string>>(new Set());
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const [createAccess, setCreateAccess] = React.useState<{ orgId: string; allowed: boolean } | null>(null);
+  const createInitialValues = React.useMemo(() => buildTaskSourceInitialValues(moduleId, recordId), [moduleId, recordId]);
+  React.useEffect(() => { setCreateOpen(false); }, [moduleId, recordId]);
   const effectiveSummary = summary || EMPTY_SUMMARY;
   const toggleDetails = (id: string) => {
     setExpandedIds((current) => {
@@ -79,6 +87,7 @@ const RelatedActivityIndicators: React.FC<Props> = ({ moduleId, recordId, module
     setLoading(true);
     setRows([]);
     setError(null);
+    setCreateAccess(null);
     setExpandedIds(new Set());
     void (async () => {
       try {
@@ -87,6 +96,7 @@ const RelatedActivityIndicators: React.FC<Props> = ({ moduleId, recordId, module
         if (!context.orgId || context.permissions?.tasks?.view === false) {
           throw new Error('دسترسی به فعالیت‌های این سازمان وجود ندارد.');
         }
+        setCreateAccess({ orgId: context.orgId, allowed: context.permissions?.tasks?.edit !== false && MODULES.tasks?.disableCreate !== true && MODULES.tasks?.systemManaged !== true });
         const fields = context.permissions?.tasks?.fields;
         const columns = ['name', 'description', 'task_report', 'status', 'due_date', 'priority', 'start_date', 'completed_at']
           .filter((key) => {
@@ -129,11 +139,14 @@ const RelatedActivityIndicators: React.FC<Props> = ({ moduleId, recordId, module
       <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
         {indicators.map((item: any) => (
           <button key={item.key} type="button" className={`inline-flex min-h-8 min-w-8 items-center justify-center gap-1 rounded-full px-1.5 text-xs transition hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 dark:hover:bg-white/10 max-sm:min-h-11 max-sm:min-w-11 ${item.className}`} onClick={() => setOpen(true)} title={item.label} aria-label={item.key === 'empty' || item.key === 'all' ? item.label : `${item.label}: ${toPersianNumber(item.count)}`}>
-            {item.icon}{item.key !== 'all' ? <span className="text-[11px] font-semibold">{item.key === 'empty' ? item.label : toPersianNumber(item.count)}</span> : null}
+            {item.icon}{item.key !== 'all' && item.key !== 'empty' ? <span className="text-[11px] font-semibold">{toPersianNumber(item.count)}</span> : null}
           </button>
         ))}
       </div>
-      <Modal open={open} title={relation.label} footer={null} onCancel={(event) => { event.stopPropagation(); setOpen(false); }} destroyOnHidden>
+      <Modal open={open} title={<div className="flex items-center justify-between gap-2 pl-7">
+        <span>{relation.label}</span>
+        {createAccess?.allowed ? <Button type="primary" aria-label="ایجاد فعالیت" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>ایجاد فعالیت</Button> : null}
+      </div>} footer={null} onCancel={(event) => { event.stopPropagation(); setOpen(false); }} destroyOnHidden>
         <div className="max-h-[65vh] overflow-y-auto" dir="rtl">
           <div role="note" aria-label="راهنمای وضعیت فعالیت‌ها" style={{ backgroundColor: token.colorBgElevated }} className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-slate-100 py-2 text-[11px] dark:border-white/10">
             {Object.entries(ACTIVITY_STATES).map(([key, state]) => (
@@ -179,6 +192,17 @@ const RelatedActivityIndicators: React.FC<Props> = ({ moduleId, recordId, module
         )}
         </div>
       </Modal>
+      {createOpen ? <React.Suspense fallback={<Spin />}>
+        <ActivityQuickCreate open targetModuleId="tasks" label="فعالیت" forceInline
+          initialValues={createInitialValues} onCancel={() => setCreateOpen(false)}
+          onCreated={({ id, values }) => {
+            setCreateOpen(false);
+            setReload((value) => value + 1);
+            if (!createAccess?.orgId) return;
+            markModuleListChanged({ org_id: createAccess.orgId, module_id: 'tasks', record_id: String(id || ''), action: 'insert', record_patch: values });
+            markModuleListChanged({ org_id: createAccess.orgId, module_id: moduleId, record_id: recordId, action: 'update' });
+          }} />
+      </React.Suspense> : null}
     </div>
   );
 };

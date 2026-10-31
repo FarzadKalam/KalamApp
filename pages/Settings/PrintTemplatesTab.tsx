@@ -28,7 +28,7 @@ import {
   PlusOutlined,
   SaveOutlined,
 } from "@ant-design/icons";
-import { MODULES } from "../../moduleRegistry";
+import { PRINT_MODULES as MODULES } from '../../utils/printTemplates/printModules';
 import PrintTemplateToolbar from "../../components/moduleShow/PrintTemplateToolbar";
 import EditorChromeToggle from "../../components/moduleShow/EditorChromeToggle";
 import { toFaErrorMessage } from "../../utils/errorMessageFa";

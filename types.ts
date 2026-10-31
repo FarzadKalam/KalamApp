@@ -165,6 +165,7 @@ export interface ModuleField {
   labels: { fa: string; en?: string };
   isActive?: boolean;
   isTableColumn?: boolean;
+  hideInTable?: boolean;
   hideInCreateForm?: boolean;
   botSettingsOnly?: boolean;
   virtualBotField?: boolean;

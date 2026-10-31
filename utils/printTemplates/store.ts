@@ -1,4 +1,4 @@
-import { MODULES } from "../../moduleRegistry";
+import { PRINT_MODULES as MODULES, PRINT_ONLY_MODULES } from './printModules';
 import { BlockType } from "../../types";
 import { supabase } from "../../supabaseClient";
 import { getCachedAuthUser } from "../sessionCache";
@@ -930,7 +930,7 @@ export const buildPrintTemplateVariablesForModule = (
 
   const seen = new Set<string>();
   const sourceFields =
-    module?.id && MODULES[module.id]
+    module?.id && MODULES[module.id] && !PRINT_ONLY_MODULES[module.id]
       ? getCanonicalModuleFields(module.id)
       : module.fields || [];
   return sourceFields

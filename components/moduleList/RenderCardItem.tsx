@@ -51,6 +51,7 @@ export interface RenderCardItemProps {
   onDragHandlePointerDown?: (item: any, event: React.PointerEvent<HTMLButtonElement>) => void;
   dragHandleProps?: React.ButtonHTMLAttributes<HTMLButtonElement>;
   kanbanCompact?: boolean;
+  hideStatusBadge?: boolean;
   moduleBadgeLabel?: string | null;
   canLockRecord?: boolean;
   canUnlockRecord?: boolean;
@@ -93,6 +94,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   onDragHandlePointerDown,
   dragHandleProps,
   kanbanCompact = false,
+  hideStatusBadge = false,
   moduleBadgeLabel,
   canLockRecord = false,
   canUnlockRecord = false,
@@ -314,7 +316,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   const visibleSummaryFields = kanbanCompact && !isKanbanDetailsOpen
     ? []
     : detailSummaryFields;
-  const bottomStatusMeta = isTasks ? cardStatusMeta : null;
+  const bottomStatusMeta = isTasks && !hideStatusBadge ? cardStatusMeta : null;
   const taskModuleMetaLabel = relatedModuleTitle || categoryLabel || moduleConfig?.titles?.fa || 'فعالیت';
 
   const renderAssignee = () => {
@@ -356,6 +358,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   const hasLockControl = shouldShowLockControl;
   const hasDragControl = !isLocked && showDragHandle && (!!onDragHandlePointerDown || !!dragHandleProps);
   const hasFooterControls = hasSelectionControl || hasLockControl || hasDragControl;
+  const hasRelatedActivities = !isTasks && moduleConfig?.relatedTabs?.some((tab: any) => tab.targetModule === 'tasks');
   const cardSurfaceClassName = `
     group relative flex cursor-pointer flex-col transition-all
     ${kanbanCompact
@@ -364,8 +367,8 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     }
     ${isSelected ? "ring-2 ring-[rgba(var(--brand-500-rgb),0.36)]" : ""}
     ${minimal ? "" : "h-full"}
-    ${minimal ? "p-3" : "p-3"}
-    ${hasFooterControls || bottomStatusMeta ? "pb-11" : ""}
+    ${kanbanCompact ? "p-2.5" : "p-3"}
+    ${hasFooterControls || bottomStatusMeta || hasRelatedActivities ? (kanbanCompact ? "pb-10 max-sm:pb-14" : "pb-11 max-sm:pb-14") : ""}
     ${isDragActive ? "opacity-75 ring-2 ring-[rgba(var(--brand-500-rgb),0.45)]" : ""}
   `;
   const actionRailClassName = `
@@ -529,6 +532,9 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     >
       {renderFooterControls()}
       {renderBottomStatus()}
+      {hasRelatedActivities ? <div className="absolute bottom-1.5 right-2 z-30 max-w-[48%]">
+        <RelatedActivityIndicators moduleId={moduleId} recordId={String(cardItem?.id || '')} moduleConfig={moduleConfig} summary={relatedActivitySummary} />
+      </div> : null}
       {moduleBadgeLabel ? (
           <div className="absolute left-3 top-3 z-10 max-w-[45%] truncate rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-600 dark:bg-white/10 dark:text-gray-200">
             {moduleBadgeLabel}
@@ -536,10 +542,10 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
         ) : null}
 
         <div className={`flex items-start gap-3 ${moduleBadgeLabel ? 'pt-5' : ''}`}>
-          {!(kanbanCompact && isKanbanDetailsOpen && !imageUrl) ? (
+          {!(kanbanCompact && !imageUrl) ? (
             <Avatar
               shape="square"
-              size={minimal ? 36 : 52}
+              size={kanbanCompact ? 32 : minimal ? 36 : 52}
               src={imageUrl ? <ResilientImage src={String(imageUrl)} preset="avatar" alt={displayTitle} className="h-full w-full object-cover" /> : undefined}
               icon={<AppstoreOutlined />}
               className="rounded-xl bg-gray-50 border border-gray-100 dark:bg-gray-800 dark:border-gray-700 shrink-0 object-cover"
@@ -564,7 +570,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
                   ) : null}
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-1">
-                  {cardStatusMeta ? (
+                  {cardStatusMeta && !hideStatusBadge ? (
                     <Tag
                       color={cardStatusMeta.color || "default"}
                       className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[10px] !font-semibold"
@@ -652,11 +658,10 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           ) : <span />}
 
           <div className="flex min-w-0 items-center justify-end gap-3">
-            <RelatedActivityIndicators moduleId={moduleId} recordId={String(cardItem?.id || '')} moduleConfig={moduleConfig} summary={relatedActivitySummary} />
-            {moduleId === 'marketing_leads' && Number(cardItem?.lead_value || 0) > 0 ? (
+            {moduleId === 'marketing_leads' && canViewField?.('lead_value') !== false && isCardFieldVisible('lead_value') && Number(cardItem?.lead_value || 0) > 0 ? (
               <div className="flex min-w-0 flex-col items-end gap-0">
                 <span className="text-[8px] text-gray-500 dark:text-gray-400">ارزش لید</span>
-                <span className="max-w-full truncate font-bold text-[11px] text-[rgb(var(--brand-700-rgb))] persian-number">
+                <span className="max-w-full break-words text-left font-bold text-[11px] text-[rgb(var(--brand-700-rgb))] persian-number">
                   {formatPersianPrice(cardItem.lead_value, true)}
                 </span>
               </div>
@@ -762,7 +767,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
         <>
           <div className="flex justify-between gap-2 mb-2 px-0">
             <div className="flex items-center gap-2 flex-wrap flex-1">
-              {!isTasks && statusOption && (canViewField ? canViewField(statusFieldConfig?.key || 'status') !== false : true) && isCardFieldVisible(statusFieldConfig?.key || statusField || 'status') && (
+              {!isTasks && !hideStatusBadge && statusOption && (canViewField ? canViewField(statusFieldConfig?.key || 'status') !== false : true) && isCardFieldVisible(statusFieldConfig?.key || statusField || 'status') && (
                 <Tag color={statusOption.color || "default"} style={{ fontSize: "10px", lineHeight: "16px", margin: 0 }}>
                   {statusOption.label}
                 </Tag>

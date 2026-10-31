@@ -14,6 +14,16 @@ concurrency:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ledger_test
+          POSTGRES_PASSWORD: isolated_test_only
+          POSTGRES_DB: ledger_test
+        options: >-
+          --health-cmd "pg_isready -U ledger_test -d ledger_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -29,7 +39,7 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Module list regression checks
-        timeout-minutes: 8
+        timeout-minutes: 12
         run: >-
           npx vitest run
           utils/tableColumnLayout.test.ts utils/moduleListLocalRows.test.ts
@@ -39,7 +49,28 @@ jobs:
           hooks/useTableColumnLayout.test.tsx components/table/TableChoiceFilter.test.tsx
           components/SmartTableRenderer.test.tsx
           components/moduleList/RelatedActivityIndicators.test.tsx
+          components/moduleList/Toolbar.ai.test.tsx components/moduleList/RenderCardItem.test.tsx
+          components/RelationQuickCreate.test.tsx utils/moduleListOptions.test.ts
           --maxWorkers=1 --no-file-parallelism
+
+      - name: Cash and bank report regression checks
+        timeout-minutes: 8
+        run: >-
+          npx vitest run pages/CashBankPage.test.tsx utils/cashBankLedger.test.ts
+          utils/printTemplates/store.test.ts utils/listPrintExport.test.ts
+          --maxWorkers=1 --no-file-parallelism
+
+      - name: Isolated ledger SQL regression checks
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          for file in tests/sql/cash_bank_ledger_fixture.sql \
+            database_v1_phase568_cash_bank_filtered_totals_and_print.sql \
+            database_v1_phase568_cash_bank_filtered_totals_and_print.sql \
+            tests/sql/cash_bank_ledger_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d ledger_test -v ON_ERROR_STOP=1 < "$file"
+          done
 
       - name: HR filters and picker regression checks
         timeout-minutes: 5

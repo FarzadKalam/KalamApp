@@ -64,6 +64,8 @@ import {
 } from "@ant-design/icons";
 import AdaptivePickerSurface from "../components/AdaptivePickerSurface";
 import ViewManager from "../components/ViewManager";
+import ModuleListSearchControl from '../components/moduleList/ModuleListSearchControl';
+import { resolveMapStatusColor } from '../utils/mapStatusColor';
 import { supabase } from "../supabaseClient";
 import Toolbar from "../components/moduleList/Toolbar";
 import AssistantPanel from "../components/ai/AssistantPanel";
@@ -118,6 +120,7 @@ import {
   fetchModuleListRelationOptions,
   getModuleListSelectableFields,
   getModuleListVisibleFields,
+  getModuleListGroupOptions,
   hydrateModuleListRelationOptionsForRows,
 } from "../utils/moduleListOptions";
 import { resolveModuleListBulkEditOpenState } from "../utils/moduleListBulkEdit";
@@ -1020,7 +1023,7 @@ const KanbanDropColumn: React.FC<{
     <div
       ref={setNodeRef}
       data-kanban-column-key={columnKey}
-      className={`min-w-[282px] w-[282px] sm:min-w-[304px] sm:w-[304px] flex flex-col bg-gray-100/55 dark:bg-white/5 rounded-[1.6rem] p-3 border shadow-none h-full transition-[box-shadow,border-color,background-color] duration-150 ${
+      className={`module-list-kanban-column flex flex-col bg-gray-100/55 dark:bg-white/5 rounded-2xl p-2 border shadow-none h-full transition-[box-shadow,border-color,background-color] duration-150 ${
         isOver || isActiveTarget
           ? "border-[rgba(var(--brand-500-rgb),0.8)] bg-[rgba(var(--brand-50-rgb),0.78)] ring-2 ring-[rgba(var(--brand-500-rgb),0.42)] dark:bg-[rgba(var(--brand-900-rgb),0.24)]"
           : "border-gray-200 dark:border-gray-800"
@@ -1321,7 +1324,6 @@ export const ModuleListRefine: React.FC<{
     useState(false);
   const [isBulkSmsComposerOpen, setIsBulkSmsComposerOpen] = useState(false);
   const [isListAiDrawerOpen, setIsListAiDrawerOpen] = useState(false);
-  const [isListAiModeEnabled, setIsListAiModeEnabled] = useState(false);
   const [listAiInitialPrompt, setListAiInitialPrompt] = useState("");
   const [voipCallSyncing, setVoipCallSyncing] = useState(false);
   const [bulkSmsRecipients, setBulkSmsRecipients] = useState<string[]>([]);
@@ -1680,7 +1682,7 @@ export const ModuleListRefine: React.FC<{
 
   useEffect(() => {
     const activityTab = (moduleConfig?.relatedTabs || []).find((tab: any) => String(tab?.targetModule || '') === 'tasks' && tab?.foreignKey);
-    if (!activityTab || !effectiveAllData.length) {
+    if (!activityTab || !effectiveAllData.length || !currentOrgId) {
       setRelatedActivitySummaries((current) => Object.keys(current).length ? {} : current);
       return;
     }
@@ -1688,7 +1690,7 @@ export const ModuleListRefine: React.FC<{
     const recordIds = effectiveAllData.map((row: any) => String(row?.id || '').trim()).filter(Boolean).slice(0, 200);
     if (!recordIds.length) return;
     let cancelled = false;
-    void supabase.from('tasks').select(`id,${foreignKey},status,due_date`).in(foreignKey, recordIds).limit(2000).then(({ data, error }) => {
+    void supabase.from('tasks').select(`id,${foreignKey},status,due_date`).eq('org_id', currentOrgId).in(foreignKey, recordIds).limit(2000).then(({ data, error }) => {
       if (cancelled || error) return;
       const next: Record<string, RelatedActivitySummary> = {};
       recordIds.forEach((id) => { next[id] = { total: 0, completed: 0, overdue: 0, upcoming: 0, open: 0 }; });
@@ -1711,7 +1713,7 @@ export const ModuleListRefine: React.FC<{
       setRelatedActivitySummaries(next);
     });
     return () => { cancelled = true; };
-  }, [effectiveAllData, moduleConfig?.relatedTabs]);
+  }, [effectiveAllData, moduleConfig?.relatedTabs, currentOrgId, kanbanRefreshSeed]);
   const hasQueryResult = isListView
     ? clientPermissionPaginationActive
       ? !permissionConditionLoading || clientPermissionPageRows.length > 0
@@ -2515,6 +2517,11 @@ export const ModuleListRefine: React.FC<{
     viewFiltersState,
   ]);
 
+  const kanbanColumnOptions = useMemo(() => getModuleListGroupOptions(
+    moduleConfig?.fields.find((field) => field.key === kanbanGroupBy),
+    dynamicOptions,
+  ), [moduleConfig, kanbanGroupBy, dynamicOptions]);
+
   useEffect(() => {
     if (!isKanbanView || !resolvedModuleId || !dataResource || !kanbanGroupBy) {
       setKanbanColumns((prev) => (Object.keys(prev).length > 0 ? {} : prev));
@@ -2523,12 +2530,7 @@ export const ModuleListRefine: React.FC<{
       return;
     }
 
-    const groupField = moduleConfig?.fields.find(
-      (field) => field.key === kanbanGroupBy,
-    );
-    const columns = Array.isArray(groupField?.options)
-      ? groupField.options.filter((option: any) => option?.value !== undefined)
-      : [];
+    const columns = kanbanColumnOptions;
     if (columns.length === 0) {
       setKanbanColumns({});
       setKanbanLoading(false);
@@ -2582,25 +2584,24 @@ export const ModuleListRefine: React.FC<{
           return;
         }
 
-        const responses = await Promise.all(
-          columns.map(async (column: any) => ({
-            key: String(column.value),
-            ...(await fetchKanbanColumnPage(column.value, serverFilters)),
-          })),
-        );
-        if (!isActive) return;
-        setKanbanColumns(
-          Object.fromEntries(
-            responses.map((response) => [
-              response.key,
-              {
-                rows: response.rows,
-                total: response.total,
-                loading: false,
-              } satisfies KanbanColumnData,
-            ]),
-          ),
-        );
+        // Dynamic option lists can contain dozens of columns. Load a bounded
+        // batch at a time and show completed columns without flooding the API.
+        for (let offset = 0; offset < columns.length; offset += 4) {
+          if (!isActive) return;
+          const responses = await Promise.all(
+            columns.slice(offset, offset + 4).map(async (column: any) => ({
+              key: String(column.value),
+              ...(await fetchKanbanColumnPage(column.value, serverFilters)),
+            })),
+          );
+          if (!isActive) return;
+          setKanbanColumns((previous) => ({
+            ...previous,
+            ...Object.fromEntries(responses.map((response) => [response.key, {
+              rows: response.rows, total: response.total, loading: false,
+            } satisfies KanbanColumnData])),
+          }));
+        }
       } catch (error) {
         if (!isActive) return;
         console.error("Error while loading Kanban columns:", error);
@@ -2633,6 +2634,7 @@ export const ModuleListRefine: React.FC<{
     isKanbanView,
     kanbanGroupBy,
     kanbanRefreshSeed,
+    kanbanColumnOptions,
     moduleConfig,
     resolveOrderedTagFilteredIds,
     resolvedModuleId,
@@ -4016,7 +4018,7 @@ export const ModuleListRefine: React.FC<{
     if (!moduleConfig || !resolvedModuleId) return;
 
     let isActive = true;
-    const optionPlan = buildModuleListOptionPlan(moduleConfig, visibleColumns);
+    const optionPlan = buildModuleListOptionPlan(moduleConfig, visibleColumns, isKanbanView ? [kanbanGroupBy] : []);
 
     const applySnapshotToState = (
       snapshot: ReturnType<typeof readModuleOptionSnapshot>,
@@ -4144,7 +4146,7 @@ export const ModuleListRefine: React.FC<{
     return () => {
       isActive = false;
     };
-  }, [moduleConfig, resolvedModuleId, visibleColumns]);
+  }, [moduleConfig, resolvedModuleId, visibleColumns, isKanbanView, kanbanGroupBy]);
   useEffect(() => {
     if (
       !tagsField ||
@@ -4202,11 +4204,11 @@ export const ModuleListRefine: React.FC<{
       moduleConfig?.fields.filter(
         (f) =>
           (f.type === FieldType.STATUS || f.type === FieldType.SELECT) &&
-          f.options &&
-          f.options.length > 0,
+          (Boolean(f.dynamicOptionsCategory) || (f.options?.length || 0) > 0) &&
+          (canViewField ? canViewField(f.key) !== false : true),
       ) || []
     );
-  }, [moduleConfig]);
+  }, [moduleConfig, canViewField]);
 
   const availableCalendarFields = useMemo(() => {
     return (
@@ -6666,7 +6668,7 @@ export const ModuleListRefine: React.FC<{
         return;
       }
 
-      const targetOption = groupField.options?.find(
+      const targetOption = kanbanColumnOptions.find(
         (option) => String(option?.value ?? "") === String(targetColumnKey),
       );
       const nextValue = targetOption?.value ?? targetColumnKey;
@@ -6741,6 +6743,7 @@ export const ModuleListRefine: React.FC<{
       isRecordIdLocked,
       kanbanGroupBy,
       moduleConfig,
+      kanbanColumnOptions,
       resolvedModuleId,
       showListMessage,
     ],
@@ -6750,10 +6753,7 @@ export const ModuleListRefine: React.FC<{
     async (columnKey: string) => {
       const column = kanbanColumns[columnKey];
       if (!column || column.loading || column.rows.length >= column.total) return;
-      const groupField = moduleConfig?.fields.find(
-        (field) => field.key === kanbanGroupBy,
-      );
-      const option = groupField?.options?.find(
+      const option = kanbanColumnOptions.find(
         (item: any) => String(item?.value ?? "") === columnKey,
       );
       if (!option) return;
@@ -6808,6 +6808,7 @@ export const ModuleListRefine: React.FC<{
       columnFilters,
       fetchKanbanColumnPage,
       kanbanColumns,
+      kanbanColumnOptions,
       kanbanGroupBy,
       moduleConfig,
       searchTerm,
@@ -7037,12 +7038,13 @@ export const ModuleListRefine: React.FC<{
   }
 
   return (
-    <div className="module-list-page box-border p-3 md:p-5 max-w-[1800px] mx-auto pb-20 md:pb-5 h-full min-h-0 flex flex-col overflow-hidden">
+    <div className="module-list-page box-border p-2.5 md:p-3 w-full mx-auto pb-20 md:pb-3 h-full min-h-0 flex flex-col overflow-hidden">
       <div className="module-list-heading flex flex-col mb-1 shrink-0">
         {/* ردیف ۱: عنوان + شمارنده + دکمه افزودن */}
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0 shrink-0">
-            <h1 className="text-2xl font-black text-gray-800 dark:text-white m-0 flex items-center gap-2 min-w-0">
+        <div className="module-list-main-header">
+          <ModuleListSearchControl key={`${currentOrgId}:${resolvedModuleId}`} moduleTitle={getModuleTitleFa(moduleConfig)}
+            searchTerm={searchTerm} onSearchChange={setSearchTerm} onAiSubmit={(question) => openListAiDrawer(question)}>
+            <h1 className="text-lg md:text-xl font-black text-gray-800 dark:text-white m-0 flex items-center gap-2 min-w-0">
               <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-leather-50 text-leather-600 dark:bg-leather-900/30 dark:text-leather-300">
                 {renderModuleIcon(moduleConfig, { className: "text-lg" })}
               </span>
@@ -7058,7 +7060,7 @@ export const ModuleListRefine: React.FC<{
               style={{ backgroundColor: "transparent", boxShadow: "none" }}
               className="module-list-header-count"
             />
-          </div>
+          </ModuleListSearchControl>
 
           {selectedRowKeys.length > 0 ||
           (isMobileViewport && canShowGoalCards && !isSystemManagedModule) ? (
@@ -7240,7 +7242,11 @@ export const ModuleListRefine: React.FC<{
           ) : null}
 
           {selectedRowKeys.length === 0 && (
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="module-list-header-actions">
+              <Toolbar viewMode={viewMode} setViewMode={handleViewModeChange}
+                kanbanEnabled={availableGroupFields.length > 0} calendarEnabled={availableCalendarFields.length > 0} mapEnabled={mapEnabled}
+                kanbanGroupBy={kanbanGroupBy} kanbanGroupOptions={kanbanGroupOptions} onKanbanGroupChange={setKanbanGroupBy}
+                calendarDateField={calendarDateField} calendarDateFieldOptions={calendarDateFieldOptions} onCalendarDateFieldChange={setCalendarDateField} />
               {resolvedModuleId === "voip_call_reports" && (
                 <Button
                   icon={<ReloadOutlined />}
@@ -7260,10 +7266,10 @@ export const ModuleListRefine: React.FC<{
                   onClick={openModuleCreate}
                   aria-keyshortcuts="Alt+Shift+N"
                   aria-label={`افزودن ${getModuleTitleFa(moduleConfig, { singular: true })}`}
-                  className="rounded-xl bg-leather-600 hover:!bg-leather-500 shadow-lg shadow-leather-500/30 shrink-0"
+                  className="module-list-create-button rounded-lg bg-leather-600 hover:!bg-leather-500 shrink-0"
                 >
                   افزودن
-                  <kbd className="keyboard-shortcut-hint mr-1 text-[9px] opacity-70">
+                  <kbd className="keyboard-shortcut-hint hidden xl:inline-flex mr-1 text-[9px] opacity-70">
                     {MODULE_LIST_CREATE_SHORTCUT}
                   </kbd>
                 </Button>
@@ -7284,38 +7290,6 @@ export const ModuleListRefine: React.FC<{
           )}
         </div>
 
-        <Toolbar
-          renderMode={isMobileViewport ? "mobile-compact" : "desktop"}
-          viewMode={viewMode}
-          setViewMode={handleViewModeChange}
-          searchTerm={searchTerm}
-          onSearchChange={setSearchTerm}
-          onRefresh={handleRefresh}
-          kanbanEnabled={availableGroupFields.length > 0}
-          calendarEnabled={availableCalendarFields.length > 0}
-          mapEnabled={mapEnabled}
-          kanbanGroupBy={kanbanGroupBy}
-          kanbanGroupOptions={kanbanGroupOptions}
-          onKanbanGroupChange={setKanbanGroupBy}
-          calendarDateField={calendarDateField}
-          calendarDateFieldOptions={calendarDateFieldOptions}
-          onCalendarDateFieldChange={setCalendarDateField}
-          onViewModeLauncherClick={() => setIsMobileViewModeSheetOpen(true)}
-          aiModeEnabled={isListAiModeEnabled}
-          onAiModeToggle={setIsListAiModeEnabled}
-          onAiSubmit={(question) => openListAiDrawer(question)}
-          mobileTrailingContent={
-            isMobileViewport ? (
-              <ViewManager
-                moduleId={resolvedModuleId}
-                currentView={currentView}
-                onViewChange={handleViewChange}
-                onRefresh={handleRefresh}
-                renderMode="mobile-sheet"
-              />
-            ) : null
-          }
-        />
 
         <AdaptivePickerSurface
           open={isMobileViewModeSheetOpen}
@@ -7461,17 +7435,15 @@ export const ModuleListRefine: React.FC<{
         ) : null}
       </div>
 
-      {!isMobileViewport ? (
-        <div className="mb-1 shrink-0">
+      <div className="module-list-saved-views mb-1 shrink-0">
           <ViewManager
             moduleId={resolvedModuleId}
             currentView={currentView}
             onViewChange={handleViewChange}
             onRefresh={handleRefresh}
-            renderMode="inline"
+            renderMode={isMobileViewport ? 'mobile-sheet' : 'inline'}
           />
-        </div>
-      ) : null}
+      </div>
 
       <ViewWrapper isFullscreen={false}>
         <div className="flex-1 min-h-0 overflow-hidden relative rounded-[1.5rem]">
@@ -7625,13 +7597,11 @@ export const ModuleListRefine: React.FC<{
                   onDragEnd={handleKanbanDragEnd}
                   onDragCancel={handleKanbanDragCancel}
                 >
-                  <div className="flex items-start gap-4 md:gap-5 h-full overflow-x-auto pb-2 px-1">
+                  <div className="flex items-start gap-2.5 h-full overflow-x-auto pb-1 px-0.5">
                     <React.Suspense
                       fallback={<ModuleListContentSkeleton viewMode={viewMode} />}
                     >
-                      {moduleConfig.fields
-                        .find((f) => f.key === kanbanGroupBy)
-                        ?.options?.map((col: any) => {
+                      {kanbanColumnOptions.map((col: any) => {
                           const columnKey = String(col?.value ?? "");
                           const column = kanbanColumns[columnKey] || {
                             rows: [],
@@ -7645,21 +7615,21 @@ export const ModuleListRefine: React.FC<{
                               columnKey={columnKey}
                               isActiveTarget={kanbanDragOverColumn === columnKey}
                             >
-                              <div className="flex items-center justify-between p-2 mb-2">
+                              <div className="module-list-kanban-header" style={{ '--kanban-color': resolveMapStatusColor(col.color) || 'rgb(var(--brand-600-rgb))' } as React.CSSProperties}>
                                 <div className="flex min-w-0 items-center gap-2">
                                   <span
                                     className="h-2 w-2 shrink-0 rounded-full"
-                                    style={{ backgroundColor: col.color || "#ccc" }}
+                                    style={{ backgroundColor: 'var(--kanban-color)' }}
                                   />
                                   <span className="truncate font-bold text-gray-700 dark:text-gray-300 text-sm">
                                     {col.label}
                                   </span>
                                 </div>
-                                <span className="shrink-0 rounded-full bg-white/80 px-2 py-0.5 text-xs text-gray-500 dark:bg-white/10">
+                                <span className="module-list-kanban-count">
                                   {toPersianNumber(column.total)}
                                 </span>
                               </div>
-                              <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-2.5 custom-scrollbar py-1 pb-3">
+                              <div className="flex-1 overflow-y-auto pr-0.5 flex flex-col gap-2 custom-scrollbar py-0.5 pb-1">
                                 {column.loading && column.rows.length === 0 ? (
                                   <Skeleton active title={{ width: "58%" }} paragraph={{ rows: 3 }} />
                                 ) : null}
@@ -7673,6 +7643,7 @@ export const ModuleListRefine: React.FC<{
                                     imageField={imageField}
                                     tagsField={tagsField}
                                     statusField={statusField}
+                                    hideStatusBadge={kanbanGroupBy === statusField}
                                     categoryField={categoryField}
                                     selectedRowKeys={selectedRowKeys}
                                     setSelectedRowKeys={setSelectedRowKeys}
@@ -7699,7 +7670,8 @@ export const ModuleListRefine: React.FC<{
                                 <Button
                                   block
                                   loading={column.loading}
-                                  className="mt-2 rounded-2xl border-[rgba(var(--brand-300-rgb),0.65)] bg-white/88 text-[11px] font-semibold text-[rgb(var(--brand-700-rgb))] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--app-dark-surface-rgb),0.92)] dark:text-[rgba(var(--brand-100-rgb),0.96)]"
+                                  type="text"
+                                  className="mt-1 !h-8 !rounded-lg text-xs font-semibold text-leather-700 dark:text-leather-200"
                                   onClick={() => void handleKanbanLoadMore(columnKey)}
                                 >
                                   نمایش بیشتر ({toPersianNumber(column.rows.length)} از {toPersianNumber(column.total)})
@@ -7707,10 +7679,10 @@ export const ModuleListRefine: React.FC<{
                               ) : null}
                               {canCreateModule ? (
                                 <Button
-                                  type="dashed"
+                                  type="text"
                                   block
                                   icon={<PlusOutlined />}
-                                  className="mt-2 text-xs rounded-2xl text-gray-500 hover:text-leather-600 hover:border-leather-400"
+                                  className="mt-1 !h-8 text-xs !rounded-lg text-gray-500 hover:text-leather-600"
                                   onClick={() => {
                                     navigate(`/${resolvedModuleId}/create`, {
                                       state: {

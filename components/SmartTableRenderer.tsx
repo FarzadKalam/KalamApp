@@ -619,6 +619,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   // --- ساخت ستون‌ها ---
   const { tableFields, primaryTitleField, tagsField } = useMemo(() => {
     let fields: any[] = moduleConfig.fields
+      .filter((f: any) => !f.hideInTable)
       .filter((f: any) => f.isTableColumn)
       .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
       .filter((f: any) => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String(f?.key || '').trim()))
@@ -900,7 +901,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     const shouldDeferFieldValue = deferredDataLoading && field.type === FieldType.TAGS;
 
     return {
-      title: isPrimaryTitleColumn && keyFieldTagFilterContent ? (
+      title: field.type === FieldType.IMAGE ? <span className="sr-only">{fieldLabel}</span> : isPrimaryTitleColumn && keyFieldTagFilterContent ? (
         <span className="inline-flex items-center gap-1">
           <span className="text-[10px] md:text-[11px] text-gray-500">{fieldLabel}</span>
           <Popover

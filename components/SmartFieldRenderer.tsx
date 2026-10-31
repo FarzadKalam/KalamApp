@@ -83,6 +83,8 @@ const SmartFormLazy = React.lazy(() => import('./SmartForm'));
 const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
 const LocationPickerMap = React.lazy(() => import('./location/LocationPickerMap'));
 const GLOBAL_MODAL_OVERLAY_Z_INDEX = 30000;
+const EMPTY_QUICK_CREATE_DEFAULTS: Record<string, any> = {};
+const EMPTY_QUICK_CREATE_FIELD_KEYS: string[] = [];
 
 const normalizeDigitsToEnglish = (raw: any): string => {
   if (raw === null || raw === undefined) return '';
@@ -387,6 +389,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const [uploading, setUploading] = useState(false);
   const [quickCreateForm] = Form.useForm();
   const [quickCreateOpen, setQuickCreateOpen] = useState(false);
+  const appliedQuickCreateDefaultsRef = useRef<string | null>(null);
   const [quickCreateLoading, setQuickCreateLoading] = useState(false);
   const [quickCreateRelationOptions, setQuickCreateRelationOptions] = useState<Record<string, any[]>>({});
   const [quickCreateDynamicOptions, setQuickCreateDynamicOptions] = useState<Record<string, any[]>>({});
@@ -1550,7 +1553,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   };
 
   useEffect(() => {
-    if (!quickCreateOpen) return;
+    if (!quickCreateOpen) { appliedQuickCreateDefaultsRef.current = null; return; }
     const defaults: Record<string, any> = {};
     Object.entries(configuredQuickCreateDefaults).forEach(([key, val]) => {
       defaults[key] = resolveConfiguredDefaultValue(val);
@@ -1564,8 +1567,11 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         false
       );
     }
+    const defaultsKey = JSON.stringify([quickCreateTargetModuleId, defaults]);
+    if (appliedQuickCreateDefaultsRef.current === defaultsKey) return;
     const frameId = window.requestAnimationFrame(() => {
       quickCreateForm.setFieldsValue(defaults);
+      appliedQuickCreateDefaultsRef.current = defaultsKey;
     });
     return () => window.cancelAnimationFrame(frameId);
   }, [
@@ -3511,6 +3517,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
         moduleId={moduleId}
         allValues={watchedQuickCreateValues}
         disableRequired
+        standalone
         overlayZIndexBase={childOverlayZIndexBase}
         popupContainer={quickCreatePopupContainer}
       />
@@ -3608,14 +3615,8 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
         )}
         {visibleFields.map((field) => (
           <div key={field.key}>
-            <Form.Item
-              name={field.key}
-              hidden
-              rules={field.validation?.required ? [{ required: true, message: 'الزامی است' }] : undefined}
-            >
-              <Input />
-            </Form.Item>
-            <Form.Item label={renderQuickFieldLabel(field)} className="!mb-4">
+            <Form.Item name={field.key} label={renderQuickFieldLabel(field)} className="!mb-4"
+              rules={field.validation?.required ? [{ required: true, message: 'الزامی است' }] : undefined}>
               {renderQuickField(field)}
             </Form.Item>
           </div>
@@ -3653,9 +3654,9 @@ export const RelationQuickCreateHost: React.FC<RelationQuickCreateHostProps> = (
   open,
   targetModuleId,
   label,
-  initialValues = {},
+  initialValues = EMPTY_QUICK_CREATE_DEFAULTS,
   targetField,
-  quickCreateFieldKeys = [],
+  quickCreateFieldKeys = EMPTY_QUICK_CREATE_FIELD_KEYS,
   forceInline = false,
   onCancel,
   onCreated,
@@ -3664,6 +3665,7 @@ export const RelationQuickCreateHost: React.FC<RelationQuickCreateHostProps> = (
 }) => {
   const { message: msg } = App.useApp();
   const [quickCreateForm] = Form.useForm();
+  const appliedQuickCreateDefaultsRef = useRef<string | null>(null);
   const [quickCreateLoading, setQuickCreateLoading] = useState(false);
   const [quickCreateRelationOptions, setQuickCreateRelationOptions] = useState<Record<string, any[]>>({});
   const [quickCreateDynamicOptions, setQuickCreateDynamicOptions] = useState<Record<string, any[]>>({});
@@ -3933,7 +3935,8 @@ export const RelationQuickCreateHost: React.FC<RelationQuickCreateHostProps> = (
   };
 
   useEffect(() => {
-    if (!open || relationTargetNeedsFullCreate) return;
+    if (!open) { appliedQuickCreateDefaultsRef.current = null; return; }
+    if (relationTargetNeedsFullCreate) return;
     const defaults: Record<string, any> = {};
     quickCreateFields.forEach((f: any) => {
       if (f?.defaultValue !== undefined) defaults[f.key] = resolveConfiguredDefaultValue(f.defaultValue);
@@ -3948,8 +3951,11 @@ export const RelationQuickCreateHost: React.FC<RelationQuickCreateHostProps> = (
     ) {
       defaults[quickCreateAutoNameToggleField.key] = normalizeAutoNameEnabled(false, false);
     }
+    const defaultsKey = JSON.stringify([quickCreateTargetModuleId, defaults]);
+    if (appliedQuickCreateDefaultsRef.current === defaultsKey) return;
     const frameId = window.requestAnimationFrame(() => {
       quickCreateForm.setFieldsValue(defaults);
+      appliedQuickCreateDefaultsRef.current = defaultsKey;
     });
     return () => window.cancelAnimationFrame(frameId);
   }, [

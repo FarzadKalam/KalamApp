@@ -10,6 +10,11 @@ const db = vi.hoisted(() => ({ from: vi.fn() }));
 vi.mock('../../supabaseClient', () => ({ supabase: db }));
 vi.mock('../../utils/permissions', () => ({ fetchCurrentUserRoleContext: vi.fn() }));
 vi.mock('../../utils/taskProcessModalEvents', () => ({ openTaskProcessModal: vi.fn() }));
+vi.mock('../SmartFieldRenderer', () => ({ RelationQuickCreateHost: (props: any) => props.open ? <div role="dialog" aria-label="افزودن فعالیت مرتبط">
+  <span>{props.initialValues.source_module_id}</span><span>{props.initialValues.source_record_id}</span>
+  <button onClick={() => props.onCreated({ id: 'created-task', values: { name: 'فعالیت جدید' } })}>ثبت فعالیت مرتبط</button>
+</div> : null }));
+vi.mock('../../utils/moduleListLive', () => ({ markModuleListChanged: vi.fn() }));
 vi.mock('../../moduleRegistry', () => ({ MODULES: { tasks: {
   id: 'tasks', fields: [
     { key: 'name', isKey: true },
@@ -51,6 +56,25 @@ const openList = async () => {
 };
 
 describe('related activity modal interactions', () => {
+  it('uses the shared related activity form with the current source and reloads the list after creation', async () => {
+    const { onCardClick } = mount();
+    await openList();
+    fireEvent.click(screen.getByRole('button', { name: 'ایجاد فعالیت' }));
+    const createDialog = await screen.findByRole('dialog', { name: 'افزودن فعالیت مرتبط' });
+    expect(within(createDialog).getByText('marketing_leads')).toBeInTheDocument();
+    expect(within(createDialog).getByText('lead-a')).toBeInTheDocument();
+    fireEvent.click(within(createDialog).getByRole('button', { name: 'ثبت فعالیت مرتبط' }));
+    await waitFor(() => expect(query.limit).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('dialog', { name: 'افزودن فعالیت مرتبط' })).not.toBeInTheDocument();
+    expect(onCardClick).not.toHaveBeenCalled();
+  });
+
+  it('hides creation when the user has view access without edit access', async () => {
+    vi.mocked(fetchCurrentUserRoleContext).mockResolvedValue({ userId: 'user', roleId: 'role', orgId: 'org-a', permissions: { tasks: { edit: false } } });
+    mount();
+    await openList();
+    expect(screen.queryByRole('button', { name: 'ایجاد فعالیت' })).not.toBeInTheDocument();
+  });
   it('closes using the cross without opening the parent lead, including portal clicks', async () => {
     const { onCardClick } = mount();
     await openList();

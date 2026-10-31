@@ -69,6 +69,12 @@ const StatefulTable = () => {
 };
 
 describe('SmartTableRenderer', () => {
+  it('keeps image column names accessible without rendering a visible media heading', () => {
+    render(<SmartTableRenderer moduleConfig={{ ...testModule, fields: [...testModule.fields,
+      { key: 'image_url', labels: { fa: 'تصویر / فایل' }, type: FieldType.IMAGE, isTableColumn: true },
+    ] }} data={[]} loading={false} pagination={false} />);
+    screen.getAllByText('تصویر / فایل').forEach((label) => expect(label).toHaveClass('sr-only'));
+  });
   it('preserves the provided page size in table pagination config', () => {
     const pagination = buildSmartTablePagination({ current: 1, pageSize: 20, total: 200 }) as any;
 

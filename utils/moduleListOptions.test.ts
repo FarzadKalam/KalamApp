@@ -4,6 +4,7 @@ import { cashBankOperationsConfig } from '../modules/cashBankOperationsConfig';
 import { FieldNature, FieldType, type ModuleDefinition } from '../types';
 import {
   buildModuleListOptionPlan,
+  getModuleListGroupOptions,
   getModuleListSelectableFields,
   getModuleListVisibleFields,
   hydrateModuleListRelationOptionsForRows,
@@ -16,6 +17,30 @@ vi.mock('./recordReference', () => ({
 }));
 
 describe('buildModuleListOptionPlan', () => {
+  it('omits the lead web form template from available columns and old saved table views', () => {
+    const module = { ...customerModule, fields: [...customerModule.fields,
+      { key: 'survey_template_id', labels: { fa: 'قالب وب‌فرم' }, type: FieldType.RELATION, isTableColumn: false, hideInTable: true },
+    ] };
+    expect(getModuleListSelectableFields(module).some((field) => field.key === 'survey_template_id')).toBe(false);
+    expect(getModuleListVisibleFields(module, ['full_name', 'survey_template_id']).some((field) => field.key === 'survey_template_id')).toBe(false);
+    expect(module.fields.some((field) => field.key === 'survey_template_id')).toBe(true);
+  });
+  it('loads the selected Kanban category even when it is absent from the visible table columns', () => {
+    const plan = buildModuleListOptionPlan(customerModule, ['full_name'], ['industry']);
+    expect(plan.immediateDynamicCategories).toContain('customer_industry');
+  });
+
+  it('uses every dynamic grouping option, preserves numeric values and merges protected static options', () => {
+    const dynamic = Array.from({ length: 24 }, (_, index) => ({ value: index, label: `منبع ${index}` }));
+    const field = { options: [{ value: 'campaign', label: 'کمپین' }], dynamicOptionsCategory: 'lead_source' };
+    const options = getModuleListGroupOptions(field, { lead_source: [...dynamic, dynamic[0]] });
+    expect(options).toHaveLength(25);
+    expect(options[0].value).toBe('campaign');
+    expect(options[1].value).toBe(0);
+    expect(options[24].value).toBe(23);
+    expect(getModuleListGroupOptions(field, {})).toHaveLength(1);
+    expect(getModuleListGroupOptions({ dynamicOptionsCategory: 'lead_source' }, { lead_source: dynamic })).toHaveLength(24);
+  });
   beforeEach(() => {
     vi.mocked(fetchRecordReferenceLabels).mockReset();
   });

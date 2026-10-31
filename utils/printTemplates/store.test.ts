@@ -13,6 +13,15 @@ import { BlockType, FieldLocation, FieldType } from '../../types';
 import { expandLegacyTableSelection } from './printFieldCatalog';
 
 describe('print template store grouping', () => {
+  it('exposes the cash and bank report fields and both table orientations', () => {
+    const variables = getPrintTemplateVariables('cash_bank_ledger');
+    expect(variables.find((field) => field.value === 'record.amount')?.label).toBe('مبلغ');
+    expect(variables.some((field) => field.value === 'record.description')).toBe(true);
+    const templates = buildDefaultTemplatesForModule('cash_bank_ledger', 'list');
+    expect(templates.some((template) => template.orientation === 'portrait')).toBe(true);
+    expect(templates.some((template) => template.orientation === 'landscape')).toBe(true);
+  });
+
   it('groups billboard record fields by general and module sections', () => {
     const variableOptions = getPrintTemplateVariables('billboards');
     const systemFieldOptions = getSystemTemplateFieldOptions('billboards');
@@ -217,7 +226,11 @@ describe('print template store grouping', () => {
     expect(template?.contentHtml).toContain('>خالص پرداختی<');
     expect(template?.contentHtml).toContain('{{record.gross_amount}}');
     expect(template?.contentHtml).not.toContain('{{record.net_amount}}');
-    expect(template?.contentHtml).not.toContain('{{company.currency_label}}');
+    // Summary amounts are already formatted; payment rows keep the currency
+    // variable used by the shared payment table.
+    const summaryHtml = template?.contentHtml.split('data-print-block="lines"')[0];
+    expect(summaryHtml).not.toContain('{{company.currency_label}}');
+    expect(template?.contentHtml).toContain('data-print-block="payments"');
     expect(variables.find((item) => item.value === 'employee.insurance_number')?.group).toBe('اطلاعات کارمند');
     expect(templates).toEqual(expect.arrayContaining([
       expect.objectContaining({

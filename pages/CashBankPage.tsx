@@ -1,8 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { App, Button, Card, Col, Grid, Row, Spin, Statistic, Table, Tag, Typography } from 'antd';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { App, Button, Card, Dropdown, Grid, Spin, Statistic, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { SortOrder } from 'antd/es/table/interface';
-import { ApartmentOutlined, BankOutlined, CreditCardOutlined, PlusOutlined, WalletOutlined } from '@ant-design/icons';
+import { ApartmentOutlined, BankOutlined, CalculatorOutlined, CreditCardOutlined, PlusOutlined, PrinterOutlined, WalletOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import RelatedRecordPopover from '../components/RelatedRecordPopover';
@@ -12,6 +12,11 @@ import { getFinancialPaymentTypeLabelFa, getFinancialStatusLabelFa } from '../ut
 import { useCurrencyConfig } from '../utils/currency';
 import { createChoiceFilter, createDateRangeFilter, createNumberRangeFilter, createTextFilter } from '../components/accounting/tableColumnFilters';
 import { ACCOUNTING_PERMISSION_KEY, fetchCurrentUserRoleContext } from '../utils/permissions';
+import ManagedDataTable from '../components/table/ManagedDataTable';
+import { buildCashBankLedgerFilters as buildLedgerFilters, CASH_BANK_LEDGER_COLUMNS, CASH_BANK_LEDGER_PRINT_ID, cashBankLedgerPrintModule, fetchCashBankLedgerPrintRows, formatCashBankLedgerTotal } from '../utils/cashBankLedger';
+
+const ListPrintRuntime = React.lazy(() => import('../components/moduleList/ListPrintRuntime'));
+const EMPTY_PRINT_OPTIONS: Record<string, any[]> = {};
 
 const { Title, Text } = Typography;
 
@@ -52,35 +57,6 @@ const statusColor = (status?: string) => ['received', 'cleared'].includes(String
 const rowTag = (type: RowItem['rowType']) => type === 'opening' ? { color: 'gold', label: 'اول دوره' } : type === 'receipt' ? { color: 'green', label: 'دریافت' } : type === 'payment' ? { color: 'red', label: 'پرداخت' } : type === 'transfer' ? { color: 'blue', label: 'انتقال' } : type === 'barter' ? { color: 'purple', label: 'تهاتر' } : { color: 'blue', label: 'چک' };
 const today = () => new Date().toISOString().slice(0, 10);
 
-const readFirstFilter = (filters: Record<string, any>, key: string) => String(filters?.[key]?.[0] || '').trim();
-const readArrayFilter = (filters: Record<string, any>, key: string) => {
-  try {
-    const value = JSON.parse(readFirstFilter(filters, key));
-    return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
-  } catch { return []; }
-};
-const readRangeFilter = (filters: Record<string, any>, key: string) => {
-  try {
-    const value = JSON.parse(readFirstFilter(filters, key));
-    return value && typeof value === 'object' ? value : {};
-  } catch { return {}; }
-};
-const buildLedgerFilters = (filters: Record<string, any>) => {
-  const date = readRangeFilter(filters, 'date');
-  const amount = readRangeFilter(filters, 'amount');
-  return {
-    row_types: readArrayFilter(filters, 'rowType'),
-    payment_types: readArrayFilter(filters, 'paymentType'),
-    statuses: readArrayFilter(filters, 'status'),
-    source_query: readFirstFilter(filters, 'sourceLabel'),
-    date_from: date.from || '', date_to: date.to || '',
-    amount_from: amount.from ?? '', amount_to: amount.to ?? '',
-    invoice_query: readFirstFilter(filters, 'invoiceLabel'), person_query: readFirstFilter(filters, 'personLabel'),
-    bank_query: readFirstFilter(filters, 'bankLabel'), cheque_query: readFirstFilter(filters, 'chequeLabel'),
-    description_query: readFirstFilter(filters, 'description'),
-  };
-};
-
 const toRelation = (moduleId: any, recordId: any, label?: any): RelatedRecord | null => {
   const normalizedModuleId = String(moduleId || '').trim();
   const normalizedRecordId = String(recordId || '').trim();
@@ -108,12 +84,23 @@ const CashBankPage: React.FC = () => {
   const [tableLoading, setTableLoading] = useState(false);
   const [accessResolved, setAccessResolved] = useState(false);
   const [canViewPage, setCanViewPage] = useState(true);
+  const canViewPrintField = useCallback(() => canViewPage, [canViewPage]);
   const [rows, setRows] = useState<RowItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(isMobile ? 10 : 20);
   const [filters, setFilters] = useState<Record<string, any>>({});
   const [sort, setSort] = useState<{ field: LedgerSortField; order: 'asc' | 'desc' }>({ field: 'date', order: 'desc' });
+  const [identity, setIdentity] = useState<{ orgId: string; userId: string } | null>(null);
+  const [totals, setTotals] = useState<{ receiptTotal: string; paymentTotal: string } | null>(null);
+  const [totalsLoading, setTotalsLoading] = useState(false);
+  const [printLoading, setPrintLoading] = useState(false);
+  const [printOpen, setPrintOpen] = useState(false);
+  const [printRows, setPrintRows] = useState<any[]>([]);
+  const [columnOrder, setColumnOrder] = useState<string[]>(CASH_BANK_LEDGER_COLUMNS.map((field) => field.key));
+  const ledgerRequest = useRef(0);
+  const totalsRequest = useRef(0);
+  const printRequest = useRef(0);
   const [stats, setStats] = useState({ bankAccounts: 0, cashBoxes: 0, pettyFunds: 0, openCheques: 0, chequesAmount: 0, openBarters: 0, bartersAmount: 0 });
 
   useEffect(() => { setPageSize(isMobile ? 10 : 20); setPage(1); }, [isMobile]);
@@ -123,7 +110,8 @@ const CashBankPage: React.FC = () => {
     try {
       const context = await fetchCurrentUserRoleContext(supabase);
       const accountingPerms = context.permissions?.[ACCOUNTING_PERMISSION_KEY] || {};
-      const allowed = accountingPerms.view !== false && accountingPerms.fields?.cash_bank_page !== false;
+      const allowed = !!context.orgId && !!context.userId && accountingPerms.view !== false && accountingPerms.fields?.cash_bank_page !== false;
+      setIdentity(context.orgId && context.userId ? { orgId: context.orgId, userId: context.userId } : null);
       setCanViewPage(allowed);
       if (!allowed) { setRows([]); setTotal(0); return; }
       const { data, error } = await supabase.rpc('get_cash_bank_dashboard_stats');
@@ -139,19 +127,57 @@ const CashBankPage: React.FC = () => {
   const loadLedger = useCallback(async () => {
     if (!accessResolved || !canViewPage) return;
     setTableLoading(true);
+    const request = ++ledgerRequest.current;
     try {
       const { data, error } = await supabase.rpc('get_cash_bank_unified_ledger_page', {
         p_page: page, p_page_size: pageSize, p_sort_field: sort.field, p_sort_order: sort.order, p_filters: buildLedgerFilters(filters),
       });
       if (error) throw error;
+      if (request !== ledgerRequest.current) return;
       setRows(Array.isArray(data?.rows) ? data.rows.map(mapLedgerRow) : []);
       setTotal(Number(data?.total || 0));
-    } catch (error) { message.error(toFaErrorMessage(error as any, 'خطا در دریافت عملیات نقد و بانک')); setRows([]); setTotal(0); }
-    finally { setTableLoading(false); }
+    } catch (error) { if (request === ledgerRequest.current) { message.error(toFaErrorMessage(error as any, 'خطا در دریافت عملیات نقد و بانک')); } }
+    finally { if (request === ledgerRequest.current) setTableLoading(false); }
   }, [accessResolved, canViewPage, filters, message, page, pageSize, sort]);
 
   useEffect(() => { void loadDashboard(); }, [loadDashboard]);
   useEffect(() => { void loadLedger(); }, [loadLedger]);
+  useEffect(() => {
+    totalsRequest.current += 1; printRequest.current += 1;
+    setTotals(null); setTotalsLoading(false); setPrintLoading(false);
+  }, [filters, identity?.orgId]);
+  useEffect(() => () => { ledgerRequest.current += 1; totalsRequest.current += 1; printRequest.current += 1; }, []);
+
+  const calculateTotals = async () => {
+    if (!canViewPage || !identity) return;
+    const request = ++totalsRequest.current;
+    setTotalsLoading(true);
+    try {
+      const { data, error } = await supabase.rpc('get_cash_bank_unified_ledger_totals', { p_filters: buildLedgerFilters(filters) });
+      if (error) throw error;
+      if (request === totalsRequest.current) setTotals({ receiptTotal: String(data?.receiptTotal ?? 0), paymentTotal: String(data?.paymentTotal ?? 0) });
+    } catch (error) { if (request === totalsRequest.current) message.error(toFaErrorMessage(error, 'محاسبه جمع انجام نشد.')); }
+    finally { if (request === totalsRequest.current) setTotalsLoading(false); }
+  };
+
+  const preparePrint = async (all: boolean) => {
+    if (!canViewPage || !identity) return;
+    const request = ++printRequest.current;
+    setPrintLoading(true);
+    try {
+      const source = all ? await fetchCashBankLedgerPrintRows(supabase, {
+        filters, sortField: sort.field, sortOrder: sort.order, isCurrent: () => request === printRequest.current,
+      }) : rows;
+      if (!source || request !== printRequest.current) return;
+      const mapped = all ? source.map(mapLedgerRow) : source as RowItem[];
+      setPrintRows(mapped.map((row) => ({ ...row, rowType: rowTag(row.rowType).label,
+        paymentType: PAYMENT_TYPE_LABEL[row.paymentType] || getFinancialPaymentTypeLabelFa(row.paymentType),
+        status: STATUS_LABEL[row.status] || getFinancialStatusLabelFa(row.status),
+      })));
+      setPrintOpen(true);
+    } catch (error) { if (request === printRequest.current) message.error(toFaErrorMessage(error, 'آماده‌سازی چاپ انجام نشد.')); }
+    finally { if (request === printRequest.current) setPrintLoading(false); }
+  };
 
   const goCreateOperation = useCallback((operationType: 'receipt' | 'payment' | 'transfer') => navigate('/cash_bank_operations/create', { state: { initialValues: { operation_type: operationType, payment_type: operationType === 'transfer' ? 'transfer' : 'cash', status: 'received', operation_date: today(), amount: 0 } } }), [navigate]);
   const openRow = useCallback((row: RowItem) => { const target = row.kind === 'cheque' ? 'cheques' : row.kind === 'sales_payment' ? 'invoices' : row.kind === 'purchase_payment' ? 'purchase_invoices' : row.kind === 'barter' ? 'barters' : row.kind === 'bank_account_opening' ? 'bank_accounts' : row.kind === 'cash_box_opening' ? 'cash_boxes' : row.kind === 'petty_fund_opening' ? 'petty_funds' : row.kind === 'customer_opening' ? 'customers' : row.kind === 'supplier_opening' ? 'suppliers' : row.kind === 'employee_opening' ? 'employees' : 'cash_bank_operations'; navigate(row.sourceRecordId ? `/${target}/${row.sourceRecordId}` : '/cash_bank_operations'); }, [navigate]);
@@ -175,6 +201,11 @@ const CashBankPage: React.FC = () => {
     { title: 'توضیحات', dataIndex: 'description', key: 'description', width: 240, ...columnControl('description'), ...createTextFilter('جستجو در توضیحات', (record) => record.description || ''), render: (value: string) => value || '-' },
   ], [columnControl, currencyLabel]);
 
+  const serverColumns = useMemo(() => columns.map((column) => {
+    const { onFilter: _localFilter, ...serverColumn } = column as any;
+    return { ...serverColumn, columnLabel: String(column.title || '') };
+  }), [columns]);
+
   const handleTableChange = useCallback((pagination: any, nextFilters: Record<string, any>, sorter: any, extra: any) => {
     if (extra?.action === 'filter') { setFilters(nextFilters || {}); setPage(1); return; }
     if (extra?.action === 'sort') {
@@ -190,24 +221,43 @@ const CashBankPage: React.FC = () => {
 
   return <div className="mx-auto max-w-[1700px] animate-fadeIn p-4 md:p-8"><div className="min-h-[70vh] rounded-[2rem] border border-gray-200 bg-white p-4 shadow-sm transition-colors dark:border-gray-800 dark:bg-[#1a1a1a] md:p-6">
     <div className="mb-6"><Title level={3} className="!mb-1">نقد و بانک</Title><Text className="text-gray-500">نمای یکپارچه دریافت‌ها، پرداخت‌ها و چک‌ها</Text></div>
-    <Row gutter={[12, 12]} className="mb-6">
-      <Col xs={12} lg={4}><Card><Statistic title="حساب‌های بانکی فعال" value={toPersianNumber(stats.bankAccounts)} prefix={<BankOutlined />} /></Card></Col>
-      <Col xs={12} lg={4}><Card><Statistic title="صندوق‌ها" value={toPersianNumber(stats.cashBoxes)} prefix={<WalletOutlined />} /></Card></Col>
-      <Col xs={12} lg={4}><Card><Statistic title="تنخواه‌ها" value={toPersianNumber(stats.pettyFunds)} prefix={<WalletOutlined />} /></Card></Col>
-      <Col xs={12} lg={4}><Card><Statistic title="چک‌های باز" value={toPersianNumber(stats.openCheques)} prefix={<CreditCardOutlined />} /></Card></Col>
-      <Col xs={12} lg={4}><Card><Statistic title="مبلغ چک‌های باز" value={formatPersianPrice(stats.chequesAmount)} suffix={currencyLabel} /></Card></Col>
-      <Col xs={12} lg={4}><Card><Statistic title="تهاترهای باز" value={toPersianNumber(stats.openBarters)} prefix={<ApartmentOutlined />} /></Card></Col>
-      <Col xs={12} lg={4}><Card><Statistic title="مانده تهاترهای باز" value={formatPersianPrice(stats.bartersAmount)} suffix={currencyLabel} /></Card></Col>
-    </Row>
-    <Card title="عملیات"><Row gutter={[8, 8]} className="mb-3">
-      <Col xs={24} md={6}><Button type="primary" block icon={<PlusOutlined />} onClick={() => goCreateOperation('receipt')}>ثبت دریافت جدید</Button></Col>
-      <Col xs={24} md={6}><Button block icon={<PlusOutlined />} onClick={() => goCreateOperation('payment')}>ثبت پرداخت جدید</Button></Col>
-      <Col xs={24} md={6}><Button block icon={<PlusOutlined />} onClick={() => goCreateOperation('transfer')}>ثبت انتقال جدید</Button></Col>
-      <Col xs={24} md={6}><Button block icon={<PlusOutlined />} onClick={() => navigate('/cheques/create')}>ثبت چک جدید</Button></Col>
-      <Col xs={24} md={6}><Button block icon={<PlusOutlined />} onClick={() => navigate('/barters/create')}>افزودن تهاتر جدید</Button></Col>
-    </Row>
-      <Table<RowItem> className="custom-erp-table" loading={tableLoading} dataSource={rows} columns={columns} rowKey="key" size={isMobile ? 'small' : 'middle'} pagination={{ current: page, pageSize, total, showSizeChanger: true, showTotal: (count) => `${toPersianNumber(count)} رکورد` }} scroll={{ x: isMobile ? 1450 : 1800 }} onChange={handleTableChange} onRow={(record) => ({ onClick: () => openRow(record), style: { cursor: 'pointer' } })} />
+    <div className="cash-bank-stats mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <Card size="small"><Statistic title="حساب‌های بانکی فعال" value={toPersianNumber(stats.bankAccounts)} prefix={<BankOutlined />} /></Card>
+      <Card size="small"><Statistic title="صندوق‌ها" value={toPersianNumber(stats.cashBoxes)} prefix={<WalletOutlined />} /></Card>
+      <Card size="small"><Statistic title="تنخواه‌ها" value={toPersianNumber(stats.pettyFunds)} prefix={<WalletOutlined />} /></Card>
+      <Card size="small"><Statistic title="چک‌های باز" value={toPersianNumber(stats.openCheques)} prefix={<CreditCardOutlined />} /></Card>
+      <Card size="small"><Statistic title="مبلغ چک‌های باز" value={formatPersianPrice(stats.chequesAmount)} suffix={currencyLabel} /></Card>
+      <Card size="small"><Statistic title="تهاترهای باز" value={toPersianNumber(stats.openBarters)} prefix={<ApartmentOutlined />} /></Card>
+    </div>
+    <Card title="عملیات" extra={<Dropdown menu={{ items: [
+      { key: 'page', label: 'چاپ صفحهٔ فعلی' }, { key: 'all', label: 'چاپ همهٔ نتایج فیلترشده' },
+    ], onClick: ({ key }) => { void preparePrint(key === 'all'); } }} trigger={['click']}>
+      <Button icon={<PrinterOutlined />} aria-label="چاپ نقد و بانک" loading={printLoading} disabled={!rows.length}>چاپ</Button>
+    </Dropdown>}>
+      <div className="mb-3 grid grid-cols-2 gap-2 lg:grid-cols-5">
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => goCreateOperation('receipt')}>ثبت دریافت جدید</Button>
+        <Button icon={<PlusOutlined />} onClick={() => goCreateOperation('payment')}>ثبت پرداخت جدید</Button>
+        <Button icon={<PlusOutlined />} onClick={() => goCreateOperation('transfer')}>ثبت انتقال جدید</Button>
+        <Button icon={<PlusOutlined />} onClick={() => navigate('/cheques/create')}>ثبت چک جدید</Button>
+        <Button icon={<PlusOutlined />} onClick={() => navigate('/barters/create')}>افزودن تهاتر جدید</Button>
+      </div>
+      <ManagedDataTable<RowItem> loading={tableLoading} dataSource={rows} columns={serverColumns} rowKey="key"
+        scopeKey={identity ? `kalam:table-columns:${identity.orgId}:${identity.userId}:cash_bank_ledger:default` : undefined}
+        onColumnOrderChange={setColumnOrder} size="small"
+        pagination={{ current: page, pageSize, total, showSizeChanger: true, showTotal: (count) => `${toPersianNumber(count)} رکورد` }}
+        onChange={handleTableChange} onRow={(record) => ({ onClick: () => openRow(record), style: { cursor: 'pointer' } })} />
+      <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-gray-100 pt-3 dark:border-white/10">
+        <Button icon={<CalculatorOutlined />} aria-label="محاسبه جمع" onClick={() => { void calculateTotals(); }} loading={totalsLoading}>محاسبه جمع</Button>
+        {totals ? <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm" role="status" aria-label="جمع نتایج فیلترشده">
+          <span>جمع دریافت‌ها: <bdi className="persian-number font-bold text-emerald-700 dark:text-emerald-400">{formatCashBankLedgerTotal(totals.receiptTotal)}</bdi> {currencyLabel}</span>
+          <span>جمع پرداخت‌ها: <bdi className="persian-number font-bold text-red-700 dark:text-red-400">{formatCashBankLedgerTotal(totals.paymentTotal)}</bdi> {currencyLabel}</span>
+          <span className="text-xs text-gray-500">مطابق فیلترهای فعلی، در همهٔ صفحات</span>
+        </div> : null}
+      </div>
     </Card>
+    {printOpen ? <React.Suspense fallback={<Spin />}><ListPrintRuntime open moduleId={CASH_BANK_LEDGER_PRINT_ID}
+      moduleConfig={cashBankLedgerPrintModule} rows={printRows} canViewField={canViewPrintField}
+      visibleColumns={columnOrder} dynamicOptions={EMPTY_PRINT_OPTIONS} relationOptions={EMPTY_PRINT_OPTIONS} onClose={() => setPrintOpen(false)} /></React.Suspense> : null}
   </div></div>;
 };
 
