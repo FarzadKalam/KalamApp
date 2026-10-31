@@ -38,6 +38,7 @@ jobs:
           utils/saasPlanDisplayFeatures.test.ts
           hooks/useTableColumnLayout.test.tsx components/table/TableChoiceFilter.test.tsx
           components/SmartTableRenderer.test.tsx
+          components/moduleList/RelatedActivityIndicators.test.tsx
           --maxWorkers=1 --no-file-parallelism
 
       - name: HR filters and picker regression checks
