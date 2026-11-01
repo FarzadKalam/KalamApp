@@ -3,7 +3,7 @@ create table public.chat_groups(id uuid primary key, org_id uuid, user_ids uuid[
 alter table public.notification_inbox_items add column is_org_wide boolean default false;
 create unique index fixture_inbox_source on public.notification_inbox_items(org_id,source_type,source_id);
 create function public.kalam_distinct_uuid_array(uuid[]) returns uuid[] language sql immutable as $$ select coalesce(array_agg(distinct x) filter(where x is not null),'{}'::uuid[]) from unnest($1) x $$;
-create function public.kalam_jsonb_uuid_array(jsonb) returns uuid[] language sql immutable as $$ select coalesce(array_agg(value::uuid),'{}'::uuid[]) from jsonb_array_elements_text(coalesce($1,'[]'::jsonb)) $$;
+create function public.kalam_jsonb_uuid_array(jsonb) returns uuid[] language sql immutable as $$ select coalesce(array_agg(value::uuid),'{}'::uuid[]) from jsonb_array_elements_text(case when jsonb_typeof($1)='array' then $1 else '[]'::jsonb end) $$;
 create function public.kalam_direct_conversation_key(uuid,uuid) returns text language sql immutable as $$ select 'direct:' || $1::text || ':' || $2::text $$;
 create function public.kalam_upsert_notification_item(uuid,text,text,text,text,text,text,text,text,text,uuid[],uuid[],boolean,jsonb,timestamptz)
 returns uuid language plpgsql security definer set search_path=public as $$
