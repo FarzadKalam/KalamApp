@@ -33,6 +33,7 @@ import AiSparkleIcon from './ai/AiSparkleIcon';
 import { cancelUploadTask, retryUploadTask, useUploadTasks } from '../utils/uploadProgressStore';
 import {
   dismissUiNotificationOverlayItem,
+  closeUiNotificationOverlay,
   removeUiNotificationOverlayItem,
   snoozeUiNotificationOverlayItem,
   useUiNotificationOverlayPagination,
@@ -143,10 +144,10 @@ const usePresenceList = <T,>(items: T[], getId: (item: T) => string) => {
 
 const getPresenceClassName = (phase: PresencePhase) => (
   phase === 'exit'
-    ? 'max-h-0 translate-y-2 scale-[0.98] opacity-0'
+    ? 'pointer-events-none translate-y-2 opacity-0'
     : phase === 'enter'
-      ? 'max-h-64 translate-y-2 scale-[0.98] opacity-0'
-      : 'max-h-64 translate-y-0 scale-100 opacity-100'
+      ? 'translate-y-2 opacity-0'
+      : 'translate-y-0 opacity-100'
 );
 
 type OverlayFilterTab = 'all' | 'internal' | 'activities' | 'responsibilities' | 'system' | 'bot' | 'sms' | 'voip' | 'uploads';
@@ -342,10 +343,9 @@ const UploadProgressOverlay: React.FC = () => {
   ] as Array<{ key: OverlayFilterTab; label: string; icon: React.ReactNode; count: number }>), [tabCounts]);
   const displaySignature = useMemo(
     () => [
-      notifications.map((item) => `n:${item.id}`).join(','),
       tasks.map((task) => `u:${task.id}:${task.status}`).join(','),
     ].join('|'),
-    [notifications, tasks],
+    [tasks],
   );
   const overlayTitle = hasDisplayedUploads && hasDisplayedNotifications
     ? 'آپلودها و اعلان‌ها'
@@ -383,7 +383,7 @@ const UploadProgressOverlay: React.FC = () => {
   }, [displaySignature, hiddenSignature]);
 
   if (isPublicExperience || (!hasDisplayedUploads && !hasDisplayedNotifications)) return null;
-  if (hiddenSignature && hiddenSignature === displaySignature) return null;
+  if (hiddenSignature && hiddenSignature === displaySignature && !hasNotifications) return null;
 
   // در موبایل، footer ثابت بخشی از viewport مفید را می‌پوشاند. موقعیت هر دو
   // حالت باز و کوچک‌شده بر اساس همان footer محاسبه می‌شود تا قابل لمس بمانند.
@@ -447,7 +447,7 @@ const UploadProgressOverlay: React.FC = () => {
       }}
     >
       <div
-        className="pointer-events-auto overflow-hidden rounded-[20px] border shadow-2xl backdrop-blur md:rounded-[22px]"
+        className="pointer-events-auto overflow-hidden rounded-[20px] border shadow-lg md:rounded-[22px]"
         style={{
           background: token.colorBgElevated,
           borderColor: token.colorBorder,
@@ -478,7 +478,10 @@ const UploadProgressOverlay: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={() => setHiddenSignature(displaySignature)}
+              onClick={() => {
+                closeUiNotificationOverlay();
+                setHiddenSignature(displaySignature);
+              }}
               className="flex h-7 w-7 items-center justify-center rounded-full transition-opacity hover:opacity-80"
               style={{ color: token.colorTextTertiary }}
               aria-label="بستن پنجره"
@@ -575,7 +578,7 @@ const UploadProgressOverlay: React.FC = () => {
               return (
                 <div
                   key={entry.id}
-                  className={`transform-gpu overflow-hidden transition-[max-height,opacity,transform,margin] duration-200 ease-out will-change-transform ${getPresenceClassName(entry.phase)}`}
+                  className={`transform-gpu overflow-hidden overlay-presence-item transition-[opacity,transform] duration-180 ease-out motion-reduce:transition-none ${getPresenceClassName(entry.phase)}`}
                 >
                   <div
                     className="rounded-[18px] border px-3 py-3"
@@ -723,7 +726,7 @@ const UploadProgressOverlay: React.FC = () => {
               return (
                 <div
                   key={entry.id}
-                  className={`transform-gpu overflow-hidden transition-[max-height,opacity,transform,margin] duration-200 ease-out will-change-transform ${getPresenceClassName(entry.phase)}`}
+                  className={`transform-gpu overflow-hidden overlay-presence-item transition-[opacity,transform] duration-180 ease-out motion-reduce:transition-none ${getPresenceClassName(entry.phase)}`}
                 >
                   <div
                     className="rounded-[18px] border px-3 py-3"

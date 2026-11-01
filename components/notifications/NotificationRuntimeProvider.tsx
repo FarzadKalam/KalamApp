@@ -3,6 +3,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -28,6 +29,7 @@ import {
 } from '../../utils/notificationUnreadSummary';
 import {
   setUiNotificationOverlayItems,
+  setUiNotificationOverlayViewer,
   setUiNotificationOverlayPagination,
 } from '../../utils/uiNotificationOverlayStore';
 import {
@@ -402,6 +404,8 @@ const buildRealtimeInternalOverlayRow = (
 export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
   const [identity, setIdentity] = useState({ userId: '', roleId: '', orgId: '', fullName: '' });
+  const viewerRef = useRef(identity);
+  viewerRef.current = identity;
   const [ready, setReady] = useState(false);
   const [summary, setSummary] = useState<NotificationUnreadSummaryMap>(EMPTY_NOTIFICATION_UNREAD_SUMMARY);
   const [revisions, setRevisions] = useState<RuntimeRevisions>(EMPTY_REVISIONS);
@@ -413,6 +417,10 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
   const overlayRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const [overlayLoadingMore, setOverlayLoadingMore] = useState(false);
   const loadOverlayPageRef = useRef<(beforeCursor: string | null, append: boolean) => Promise<void>>(async () => {});
+
+  useLayoutEffect(() => {
+    setUiNotificationOverlayViewer(identity.orgId, identity.userId);
+  }, [identity.orgId, identity.userId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -963,6 +971,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
       failed = true;
       break;
     }
+    if (viewerRef.current.orgId !== identity.orgId || viewerRef.current.userId !== identity.userId) return;
     if (failed && append) return;
     const rows = Array.isArray(data) ? data as OverlayFeedRow[] : [];
     const mergedSourceRows = rows;

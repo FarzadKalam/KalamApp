@@ -44,10 +44,10 @@ const BrandLoadingScreen: FC<BrandLoadingScreenProps> = ({
       aria-label={message}
     >
       <div className="pointer-events-none absolute inset-0 opacity-40" style={{ background: 'radial-gradient(circle at 15% 20%, rgba(255,255,255,.28), transparent 32%), radial-gradient(circle at 85% 80%, rgba(255,255,255,.16), transparent 30%)' }} />
-      <section className="relative w-full max-w-md rounded-[2rem] border border-white/15 bg-slate-950/10 px-7 py-10 shadow-[0_28px_90px_rgba(2,6,23,.28)] backdrop-blur-sm sm:px-12">
+      <section className="relative w-full max-w-md rounded-[2rem] border border-white/15 bg-slate-950/10 px-7 py-10 shadow-[0_28px_90px_rgba(2,6,23,.28)] sm:px-12">
         <div className="relative mx-auto mb-7 flex h-16 w-16 items-center justify-center" aria-hidden="true">
-          <span className="absolute inset-0 rounded-[1.35rem] border-2 border-white/30 animate-ping motion-reduce:animate-none" />
-          <span className="absolute inset-1 rounded-[1.05rem] border border-white/70 rotate-45 animate-spin motion-reduce:animate-none" style={{ animationDuration: '3.2s' }} />
+          <span className="absolute inset-0 rounded-[1.35rem] border-2 border-white/30 animate-ping motion-reduce:animate-none" style={{ willChange: 'transform, opacity' }} />
+          <span className="absolute inset-1 rounded-[1.05rem] border border-white/70 rotate-45 animate-spin motion-reduce:animate-none" style={{ animationDuration: '3.2s', willChange: 'transform' }} />
           <span className="h-5 w-5 rounded-full bg-white shadow-[0_0_28px_rgba(255,255,255,.95)]" />
         </div>
         {englishName ? <div className="mb-2 text-[11px] font-semibold tracking-[0.22em] text-white/65" dir="ltr">{englishName}</div> : null}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Layout as AntLayout, Menu, Button, Dropdown, App, Input, Spin, Popconfirm, Tooltip, Badge } from 'antd';
+import { Layout as AntLayout, Button, Dropdown, App, Input, Spin, Popconfirm, Tooltip, Badge } from 'antd';
 import type { InputRef, MenuProps } from 'antd';
 import { 
   AppstoreOutlined,
@@ -83,10 +83,10 @@ import UserAnnouncementsBanner from './announcements/UserAnnouncementsBanner';
 import UserAnnouncementsPopupHost from './announcements/UserAnnouncementsPopupHost';
 import DrawerInteractionRecovery from './DrawerInteractionRecovery';
 import AiAssistantLauncher from './communications/AiAssistantLauncher';
-import { toPersianNumber } from '../utils/persianNumberFormatter';
 import AiSparkleIcon from './ai/AiSparkleIcon';
 import ActionIcon from './common/ActionIcon';
-import { useNotificationRuntime } from './notifications/NotificationRuntimeProvider';
+import NotificationUnreadBadge from './notifications/NotificationUnreadBadge';
+import SidebarMenu from './layout/SidebarMenu';
 import { resolveMobileKeyboardViewport } from '../utils/mobileKeyboardViewport';
 import { ADVERTISING_CAMPAIGNS_MODULE_ID } from '../utils/advertisingCampaigns';
 import { renderModuleIcon } from '../utils/moduleIcons';
@@ -108,7 +108,6 @@ interface LayoutProps {
 }
 
 const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, brandShortName, preloadRoute }) => {
-  const notificationRuntime = useNotificationRuntime();
   const { message: messageApi, modal } = App.useApp();
   const navigate = useNavigate();
   const location = useLocation();
@@ -150,7 +149,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [alertsDrawerMounted, setAlertsDrawerMounted] = useState(false);
   const [alertsDrawerOpen, setAlertsDrawerOpen] = useState(false);
   const [sessionBootstrapError, setSessionBootstrapError] = useState<any>(null);
-  const [openMenuKeys, setOpenMenuKeys] = useState<string[]>([]);
   const searchRef = useRef<InputRef>(null);
   const searchBoxRef = useRef<HTMLDivElement>(null);
   const searchRequestRef = useRef(0);
@@ -360,7 +358,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     window.setTimeout(() => { void preloadRouteNow(resolvedHref); }, 80);
   }, [preloadRoute, preloadRouteNow, resolveSidebarHref]);
 
-  const handleSidebarNavigate = useCallback(async (href: string) => {
+  const handleSidebarNavigate = useCallback((href: string) => {
     const resolvedHref = resolveSidebarHref(href);
     if (!resolvedHref) return;
     const latestNavigationState = latestNavigationStateRef.current;
@@ -378,20 +376,13 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     if (sidebarNavigationRef.current === resolvedHref) return;
     sidebarNavigationRef.current = resolvedHref;
     if (latestNavigationState.isMobile) setCollapsed(true);
-    if (latestNavigationState.isMobile && preloadRoute) {
-      await Promise.race([
-        preloadRouteNow(resolvedHref),
-        new Promise((resolve) => window.setTimeout(resolve, 700)),
-      ]);
-      if (sidebarNavigationRef.current !== resolvedHref) return;
-    }
     navigate(resolvedHref);
     window.setTimeout(() => {
       if (sidebarNavigationRef.current === resolvedHref) {
         sidebarNavigationRef.current = '';
       }
     }, 350);
-  }, [navigate, preloadRoute, preloadRouteNow, resolveSidebarHref]);
+  }, [navigate, resolveSidebarHref]);
 
   const handleSidebarLinkClick = (
     event: React.MouseEvent<HTMLAnchorElement>,
@@ -1139,16 +1130,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     [searchableGlobalSearchModules]
   );
 
-  useEffect(() => {
-    const matchedPath = findMenuPath(rawMenuItems, selectedSidebarKey);
-    const parentKeys = matchedPath.slice(0, -1);
-    setOpenMenuKeys((prev) => {
-      if (prev.length === parentKeys.length && prev.every((key, index) => key === parentKeys[index])) {
-        return prev;
-      }
-      return parentKeys;
-    });
-  }, [findMenuPath, rawMenuItems, selectedSidebarKey]);
+  const sidebarAncestorKeys = useMemo(
+    () => findMenuPath(rawMenuItems, selectedSidebarKey).slice(0, -1),
+    [findMenuPath, rawMenuItems, selectedSidebarKey],
+  );
 
   useEffect(() => {
     document.documentElement.style.setProperty(
@@ -1485,19 +1470,20 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       
       {isMobile && !collapsed && (
         <div 
-          className="fixed inset-y-0 left-0 z-[1180] bg-black/50 backdrop-blur-sm transition-opacity duration-300"
+          className="fixed inset-y-0 left-0 z-[1180] bg-black/40 transition-opacity duration-180"
           style={{ right: 260 }}
           onClick={() => setCollapsed(true)}
         />
       )}
 
       <Sider 
+        data-collapsed={!isMobile && collapsed}
         trigger={null} 
         collapsible 
         collapsed={isMobile ? false : collapsed}
         collapsedWidth={isMobile ? 0 : 80}
         zeroWidthTriggerStyle={{ display: 'none' }}
-        className={`app-main-sider border-l border-gray-200 dark:border-dark-border shadow-2xl transition-[width,transform] duration-200 ease-out z-[1200] overflow-visible ${isMobile && collapsed ? 'translate-x-full pointer-events-none' : ''}`}
+        className={`app-main-sider border-l border-gray-200 dark:border-dark-border shadow-sm transition-transform duration-180 ease-out z-[1200] overflow-visible ${isMobile && collapsed ? 'translate-x-full pointer-events-none' : ''}`}
         style={{ 
           height: 'var(--app-viewport-height, 100dvh)',
           position: 'fixed', 
@@ -1532,28 +1518,20 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         )}
 
         <div className="h-[calc(var(--app-viewport-height,100dvh)-64px)] overflow-y-auto">
-            <Menu
-            theme={isDarkMode ? 'dark' : 'light'}
-            mode="inline"
-            direction="rtl"
-            inlineCollapsed={!isMobile && collapsed}
-            selectedKeys={[selectedSidebarKey]}
-            openKeys={collapsed && !isMobile ? undefined : openMenuKeys}
-            onOpenChange={(keys) => setOpenMenuKeys(keys as string[])}
-            triggerSubMenuAction="click"
-            items={menuItems}
-            onClick={({ key }) => { 
-                if (typeof key === 'string' && key.startsWith('/')) {
-                  handleSidebarNavigate(key);
-                }
-            }} 
-            className="mt-4 border-none bg-transparent font-medium"
+            <SidebarMenu
+              items={menuItems}
+              selectedKey={selectedSidebarKey}
+              ancestorKeys={sidebarAncestorKeys}
+              collapsed={collapsed}
+              isMobile={isMobile}
+              isDarkMode={isDarkMode}
+              onNavigate={handleSidebarNavigate}
             />
         </div>
       </Sider>
 
       <AntLayout 
-        className="bg-gray-100 dark:bg-dark-bg transition-[padding] duration-200 ease-out overflow-hidden flex flex-col"
+        className="app-workspace-content bg-gray-100 dark:bg-dark-bg overflow-hidden flex flex-col"
         style={{ 
           paddingRight: isMobile ? 0 : (collapsed ? 80 : 260), 
           width: '100%',
@@ -1567,7 +1545,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         <Header 
           className="sticky top-0 z-[1000] flex h-16 w-full items-center justify-between gap-2 border-b border-gray-200 px-2 sm:px-4 dark:border-dark-border transition-colors duration-300"
           style={{ 
-            backdropFilter: 'blur(20px)', 
             backgroundColor: isDarkMode ? 'rgba(23, 28, 48, 0.82)' : 'rgba(255, 255, 255, 0.82)',
           }}
         >
@@ -1751,11 +1728,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
             <div className="mx-1 hidden h-6 w-[1px] bg-gray-300 dark:bg-gray-700 sm:block"></div>
             {communicationsAccess.canUseWorkspace ? (
               <Tooltip title="پیام‌رسانی" placement="bottom">
-                <Badge
-                  count={notificationRuntime.communicationUnread > 0 ? toPersianNumber(String(notificationRuntime.communicationUnread)) : 0}
-                  size="small"
-                  color="#c0392b"
-                >
+                <NotificationUnreadBadge kind="communication">
                   <Button
                     type="text"
                     size={isMobile ? 'small' : 'middle'}
@@ -1769,7 +1742,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                     aria-label="پیام‌رسانی"
                     className={headerActionButtonClassName}
                   />
-                </Badge>
+                </NotificationUnreadBadge>
               </Tooltip>
             ) : null}
             {communicationsAccess.canUseWorkspace ? (
@@ -1780,11 +1753,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               />
             ) : null}
             <Tooltip title="اعلان‌ها" placement="bottom">
-              <Badge
-                count={notificationRuntime.alertsUnread > 0 ? toPersianNumber(String(notificationRuntime.alertsUnread)) : 0}
-                size="small"
-                color="#c0392b"
-              >
+              <NotificationUnreadBadge kind="alerts">
                 <Button
                   type="text"
                   size={isMobile ? 'small' : 'middle'}
@@ -1797,7 +1766,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                   aria-label="اعلان‌ها"
                   className={headerActionButtonClassName}
                 />
-              </Badge>
+              </NotificationUnreadBadge>
             </Tooltip>
             {alertsDrawerMounted ? (
               <React.Suspense fallback={null}>

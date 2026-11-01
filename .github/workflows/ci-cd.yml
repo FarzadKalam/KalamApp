@@ -78,6 +78,13 @@ jobs:
           components/common/AttachmentSourceButton.test.tsx
           --maxWorkers=1 --no-file-parallelism
 
+      - name: Notification dismissal and sidebar regression checks
+        timeout-minutes: 5
+        run: >-
+          npx vitest run utils/uiNotificationOverlayStore.test.ts
+          components/UploadProgressOverlay.test.tsx components/layout/SidebarMenu.test.tsx
+          --maxWorkers=1 --no-file-parallelism
+
       - name: Module list regression checks
         timeout-minutes: 12
         run: >-
