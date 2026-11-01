@@ -2,6 +2,7 @@ do $$
 declare actor uuid := '10000000-0000-0000-0000-000000000001'; recipient uuid := '10000000-0000-0000-0000-000000000002'; scope uuid := '20000000-0000-0000-0000-000000000001';
  item public.notification_inbox_items%rowtype;
 begin
+ if (select total from public.fixture_broadcast_count) <> 0 then raise exception 'Repair replayed old notifications'; end if;
  select * into item from public.notification_inbox_items where source_id='40000000-0000-0000-0000-000000000004';
  if item.target_user_ids <> array[recipient] or item.is_org_wide then raise exception 'Existing implicit sender was not repaired'; end if;
  insert into public.notes(id,org_id,source_type,author_id,mention_user_ids,metadata)
@@ -11,6 +12,7 @@ begin
  update public.notes set content='ویرایش یادآوری' where id='40000000-0000-0000-0000-000000000008';
  select * into item from public.notification_inbox_items where source_id='40000000-0000-0000-0000-000000000008';
  if actor=any(item.target_user_ids) then raise exception 'Editing reintroduced the sender'; end if;
+ if (select total from public.fixture_broadcast_count) <> 1 then raise exception 'Normal broadcasts were not restored after repair'; end if;
  insert into public.notes(id,org_id,source_type,author_id,mention_user_ids)
  values('40000000-0000-0000-0000-000000000009',scope,'user',actor,array[recipient]);
  select * into item from public.notification_inbox_items where source_id='40000000-0000-0000-0000-000000000009';

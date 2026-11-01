@@ -107,6 +107,17 @@ for each row execute function public.kalam_notes_notification_trigger();
 
 -- Remove only the implicit sender. Keep genuine user/role/group recipients,
 -- message content, timestamps, read states and independently targeted users.
+-- This repairs delivery metadata, not a new message. Suppress only the inbox
+-- broadcast trigger during the repair to avoid replaying thousands of alerts.
+do $$
+declare prior_state text;
+begin
+ select tgenabled::text into prior_state from pg_trigger
+ where tgrelid='public.notification_inbox_items'::regclass and tgname='trg_notification_inbox_items_broadcast' and not tgisinternal;
+ perform set_config('kalam.migration571_broadcast_state',coalesce(prior_state,''),true);
+ if prior_state in ('O','A','R') then alter table public.notification_inbox_items disable trigger trg_notification_inbox_items_broadcast; end if;
+end $$;
+
 with repairs as (
   select inbox.id,
     case when note.author_id is not null
@@ -128,6 +139,16 @@ update public.notification_inbox_items inbox
 set target_user_ids = repairs.recipients, is_org_wide = false
 from repairs where repairs.id = inbox.id
   and (inbox.target_user_ids is distinct from repairs.recipients or inbox.is_org_wide);
+
+do $$
+begin
+ case current_setting('kalam.migration571_broadcast_state',true)
+ when 'O' then alter table public.notification_inbox_items enable trigger trg_notification_inbox_items_broadcast;
+ when 'A' then alter table public.notification_inbox_items enable always trigger trg_notification_inbox_items_broadcast;
+ when 'R' then alter table public.notification_inbox_items enable replica trigger trg_notification_inbox_items_broadcast;
+ else null;
+ end case;
+end $$;
 
 notify pgrst, 'reload schema';
 commit;

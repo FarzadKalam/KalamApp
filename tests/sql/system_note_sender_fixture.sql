@@ -20,3 +20,9 @@ update public.notes set author_id='10000000-0000-0000-0000-000000000001'
  where id='40000000-0000-0000-0000-000000000004';
 update public.notification_inbox_items set target_user_ids=array_append(target_user_ids,'10000000-0000-0000-0000-000000000001'::uuid),is_org_wide=true
  where source_id='40000000-0000-0000-0000-000000000004';
+create table public.fixture_broadcast_count(total integer);
+insert into public.fixture_broadcast_count values(0);
+create function public.fixture_count_broadcast() returns trigger language plpgsql as $$
+begin update public.fixture_broadcast_count set total=total+1; return new; end $$;
+create trigger trg_notification_inbox_items_broadcast after update on public.notification_inbox_items
+for each row execute function public.fixture_count_broadcast();
