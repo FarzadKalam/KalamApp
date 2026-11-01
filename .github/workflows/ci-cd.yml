@@ -225,7 +225,7 @@ jobs:
         run: |
           set -euo pipefail
           # اتصال از runner کند است؛ rsync انتقال نیمه‌کاره را ادامه می‌دهد.
-          export RSYNC_RSH="ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -p $SERVER_PORT"
+          export RSYNC_RSH="ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o ControlMaster=auto -o ControlPath=$HOME/.ssh/deploy-%C -o ControlPersist=600 -p $SERVER_PORT"
           ARCHIVE="/tmp/kalamapp-dist-${GITHUB_SHA}.tar.gz"
           for attempt in 1 2; do
             if timeout 480 rsync --append-verify --partial --timeout=90 \
@@ -240,8 +240,20 @@ jobs:
           done
 
           LOCAL_SHA="$(sha256sum dist.tar.gz | cut -d ' ' -f 1)"
-          REMOTE_SHA="$(ssh -o BatchMode=yes -p "$SERVER_PORT" \
-            "$SERVER_USER@$SERVER_HOST" "sha256sum '$ARCHIVE'" | cut -d ' ' -f 1)"
+          REMOTE_SHA=""
+          for attempt in 1 2 3; do
+            if REMOTE_SHA="$(timeout 45 ssh -o BatchMode=yes -o ConnectTimeout=15 \
+              -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
+              -o ControlMaster=auto -o "ControlPath=$HOME/.ssh/deploy-%C" -o ControlPersist=600 \
+              -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "sha256sum '$ARCHIVE'" | cut -d ' ' -f 1)"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Could not verify uploaded artifact after three connection attempts."
+              exit 1
+            fi
+            sleep 3
+          done
           if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
             echo "::error::Uploaded artifact checksum mismatch."
             exit 1
@@ -260,6 +272,9 @@ jobs:
             -o ConnectTimeout=20 \
             -o ServerAliveInterval=15 \
             -o ServerAliveCountMax=2 \
+            -o ControlMaster=auto \
+            -o "ControlPath=$HOME/.ssh/deploy-%C" \
+            -o ControlPersist=600 \
             -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "DEPLOY_PATH='$DEPLOY_PATH' GITHUB_SHA='$GITHUB_SHA' bash -s" << 'EOF'
           set -euo pipefail
 
