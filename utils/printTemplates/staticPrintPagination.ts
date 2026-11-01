@@ -12,6 +12,7 @@ import {
 import { packPrintFragments } from './fragmentPacking';
 import { getSafeTableRowSlices } from './tableRowSlices';
 import { splitPrintTextBlock } from './splitPrintTextBlock';
+import { collectPrintFlowLeaves, createPrintFragmentAppender } from './printFlowStructure';
 
 const CUSTOM_PRINT_PAGE_SELECTOR = '.invoice-custom-print-shell .print-template-page';
 const BODY_SELECTOR = '.print-template-body';
@@ -168,6 +169,8 @@ const getStaticBodyHeight = (page: HTMLElement, body: HTMLElement) => {
 };
 
 type PrintFragmentUnit = {
+  flowRoot?: HTMLElement;
+  sourceElement?: HTMLElement;
   top: number;
   bottom: number;
   kind: 'node' | 'table-row' | 'table-row-part' | 'table-row-slice';
@@ -317,12 +320,12 @@ const collectPrintFragmentUnits = (root: HTMLElement, contentCapacityPx: number)
   const rootRect = root.getBoundingClientRect();
   const units: PrintFragmentUnit[] = [];
 
-  Array.from(root.children).forEach((child) => {
+  collectPrintFlowLeaves(root).forEach((child) => {
     const element = child as HTMLElement;
     const { top, bottom } = getRelativeElementBounds(element, rootRect);
     if (bottom <= top) return;
 
-    if (element instanceof HTMLTableElement && bottom - top > contentCapacityPx) {
+    if (element instanceof HTMLTableElement) {
       const rows = getDirectTableRows(element);
       if (rows.length) {
         rows.forEach((row) => {
@@ -336,6 +339,15 @@ const collectPrintFragmentUnits = (root: HTMLElement, contentCapacityPx: number)
             // footer. Represent it as visual row slices, each with a repeated
             // table header, so every word has a physical page to live on.
             const rowSliceCapacityPx = Math.max(48, contentCapacityPx - tableRowOffsetPx - 8);
+            const lineSlices = !row.querySelector('table,img,svg,canvas,iframe,video') ? getSafeTableRowSlices(row, rowSliceCapacityPx, true) : [];
+            if (lineSlices.length > 1) {
+              lineSlices.forEach((slice) => units.push({
+                top: rowBounds.top + slice.start, bottom: rowBounds.top + slice.start + slice.height,
+                kind: 'table-row-slice', node: row, table: element, tableRowOffsetPx,
+                sliceStartPx: slice.start, sliceHeightPx: slice.height,
+              }));
+              return;
+            }
             if (rowHeight > rowSliceCapacityPx) {
               const blockParts = splitOversizedTableRowAtBlocks({
                 row,
@@ -370,14 +382,15 @@ const collectPrintFragmentUnits = (root: HTMLElement, contentCapacityPx: number)
       }
     }
 
-    if (bottom - top > contentCapacityPx || element.matches('p,li,blockquote,pre')) {
+    if (!element.matches('[data-print-preserve-space],[data-print-keep-together]') && (bottom - top > contentCapacityPx || element.matches('p,li,blockquote,pre,div,span'))) {
       const parts = splitPrintTextBlock(element, contentCapacityPx, rootRect.top);
-      if (parts && parts.length > 1) { units.push(...parts.map((part) => ({ ...part, kind: 'node' as const }))); return; }
+      if (parts && parts.length > 1) { units.push(...parts.map((part) => ({ ...part, sourceElement: element, kind: 'node' as const }))); return; }
     }
     units.push({ top, bottom, kind: 'node', node: element });
   });
 
-  return units.sort((left, right) => left.top - right.top || left.bottom - right.bottom);
+  units.forEach((unit) => { unit.flowRoot = root; });
+  return units;
 };
 
 const groupPrintFragmentUnits = (
@@ -435,7 +448,7 @@ const groupPrintFragmentUnits = (
   return groups;
 };
 
-const cloneTableRows = (table: HTMLTableElement, rows: HTMLTableRowElement[]) => {
+export const cloneTableRows = (table: HTMLTableElement, rows: HTMLTableRowElement[]) => {
   const clone = table.cloneNode(true) as HTMLTableElement;
   const selectedRows = new Set(rows);
   const originalRows = Array.from(table.querySelectorAll<HTMLTableRowElement>('tr'));
@@ -443,7 +456,7 @@ const cloneTableRows = (table: HTMLTableElement, rows: HTMLTableRowElement[]) =>
 
   cloneRows.forEach((row, index) => {
     const originalRow = originalRows[index];
-    if (!originalRow || originalRow.closest('thead') || selectedRows.has(originalRow)) return;
+    if (!originalRow || originalRow.closest('table') !== table || originalRow.closest('thead') || selectedRows.has(originalRow)) return;
     row.remove();
   });
   return clone;
@@ -538,25 +551,30 @@ const buildTableRowSlice = (documentRef: Document, unit: PrintFragmentUnit) => {
 
 const buildPrintFragment = (documentRef: Document, units: PrintFragmentUnit[]) => {
   const fragment = documentRef.createDocumentFragment();
+  const append = createPrintFragmentAppender(documentRef, units[0]?.flowRoot || null, fragment);
   let index = 0;
   while (index < units.length) {
     const unit = units[index];
     if (unit.kind === 'node') {
-      fragment.append(unit.node.cloneNode(true));
+      append(unit.sourceElement || unit.node, unit.node.cloneNode(true));
       index += 1;
       continue;
     }
 
     if (unit.kind === 'table-row-slice') {
-      const slice = buildTableRowSlice(documentRef, unit);
-      if (slice) fragment.append(slice);
+      const combined = { ...unit };
       index += 1;
+      while (index < units.length && units[index].kind === 'table-row-slice' && units[index].node === unit.node && units[index].table === unit.table && Math.abs((combined.sliceStartPx || 0) + (combined.sliceHeightPx || 0) - (units[index].sliceStartPx || 0)) < 1) {
+        combined.sliceHeightPx = (combined.sliceHeightPx || 0) + (units[index].sliceHeightPx || 0); index += 1;
+      }
+      const slice = buildTableRowSlice(documentRef, combined);
+      if (slice && unit.table) append(unit.table, slice);
       continue;
     }
 
     if (unit.kind === 'table-row-part') {
       const tablePart = unit.table ? cloneTableRowPart(unit.table, unit) : null;
-      if (tablePart) fragment.append(tablePart);
+      if (tablePart && unit.table) append(unit.table, tablePart);
       index += 1;
       continue;
     }
@@ -571,7 +589,7 @@ const buildPrintFragment = (documentRef: Document, units: PrintFragmentUnit[]) =
       rows.push(units[index].node as HTMLTableRowElement);
       index += 1;
     }
-    fragment.append(cloneTableRows(table, rows));
+    append(table, cloneTableRows(table, rows));
   }
   return fragment;
 };
@@ -818,6 +836,8 @@ export const getStaticCustomPrintPaginationScript = () => `
     var packFragments = ${packPrintFragments.toString()};
     var rowSlices = ${getSafeTableRowSlices.toString()};
     var splitTextBlock = ${splitPrintTextBlock.toString()};
+    var flowLeaves = ${collectPrintFlowLeaves.toString()};
+    var fragmentAppender = ${createPrintFragmentAppender.toString()};
     var isNativeFlow = firstPage.getAttribute('data-print-layout-mode') === 'native-flow';
     if (isNativeFlow) {
       // Default list templates have a presentation-only outer wrapper. Move
@@ -941,10 +961,10 @@ export const getStaticCustomPrintPaginationScript = () => `
     var buildMaterializedFragments = function () {
       var sourceRect = inner.getBoundingClientRect();
       var units = [];
-      Array.prototype.slice.call(inner.children).forEach(function (element) {
+      flowLeaves(inner).forEach(function (element) {
         var bounds = relativeBounds(element, sourceRect);
         if (bounds.bottom <= bounds.top) return;
-        if (String(element.tagName || '').toLowerCase() === 'table' && bounds.bottom - bounds.top > materializedStep) {
+        if (String(element.tagName || '').toLowerCase() === 'table') {
           var rows = tableRows(element);
           if (rows.length) {
             var tableTop = bounds.top;
@@ -955,6 +975,15 @@ export const getStaticCustomPrintPaginationScript = () => `
                 var firstBodyRow = rows[0];
                 var rowOffset = firstBodyRow ? Math.max(0, relativeBounds(firstBodyRow, sourceRect).top - tableTop) : 0;
                 var rowSliceCapacity = Math.max(48, materializedStep - rowOffset - 8);
+                var lineSlices = !row.querySelector('table,img,svg,canvas,iframe,video') ? rowSlices(row, rowSliceCapacity, true) : [];
+                if (lineSlices.length > 1) {
+                  lineSlices.forEach(function (slice) {
+                    units.push({ top: rowBounds.top + slice.start, bottom: rowBounds.top + slice.start + slice.height,
+                      kind: 'table-row-slice', node: row, table: element, tableRowOffset: rowOffset,
+                      sliceStart: slice.start, sliceHeight: slice.height });
+                  });
+                  return;
+                }
                 if (rowHeight > rowSliceCapacity) {
                   var cells = Array.prototype.slice.call(row.children).filter(function (cell) {
                     var tag = String(cell.tagName || '').toLowerCase();
@@ -1048,16 +1077,15 @@ export const getStaticCustomPrintPaginationScript = () => `
             return;
           }
         }
-        if (bounds.bottom - bounds.top > materializedStep || element.matches('p,li,blockquote,pre')) {
+        if (!element.matches('[data-print-preserve-space],[data-print-keep-together]') && (bounds.bottom - bounds.top > materializedStep || element.matches('p,li,blockquote,pre,div,span'))) {
           var textParts = splitTextBlock(element, materializedStep, sourceRect.top);
           if (textParts && textParts.length > 1) {
-            textParts.forEach(function (part) { units.push({ top: part.top, bottom: part.bottom, kind: 'node', node: part.node }); });
+            textParts.forEach(function (part) { units.push({ top: part.top, bottom: part.bottom, kind: 'node', node: part.node, sourceElement: element }); });
             return;
           }
         }
         units.push({ top: bounds.top, bottom: bounds.bottom, kind: 'node', node: element });
       });
-      units.sort(function (left, right) { return left.top - right.top || left.bottom - right.bottom; });
       if (!units.length || units.some(function (unit) { return unit.bottom - unit.top > materializedStep; })) return null;
 
       var initialInset = Math.max(0, units[0].top);
@@ -1109,7 +1137,7 @@ export const getStaticCustomPrintPaginationScript = () => `
         var originalRows = Array.prototype.slice.call(table.querySelectorAll('tr'));
         Array.prototype.slice.call(clone.querySelectorAll('tr')).forEach(function (row, index) {
           var original = originalRows[index];
-          if (!original || original.closest('thead') || selected.has(original)) return;
+          if (!original || original.closest('table') !== table || original.closest('thead') || selected.has(original)) return;
           row.remove();
         });
         return clone;
@@ -1181,23 +1209,28 @@ export const getStaticCustomPrintPaginationScript = () => `
       };
       var buildFragment = function (fragmentUnits) {
         var fragment = document.createDocumentFragment();
+        var append = fragmentAppender(document, inner, fragment);
         var index = 0;
         while (index < fragmentUnits.length) {
           var unit = fragmentUnits[index];
           if (unit.kind === 'node') {
-            fragment.append(unit.node.cloneNode(true));
+            append(unit.sourceElement || unit.node, unit.node.cloneNode(true));
             index += 1;
             continue;
           }
           if (unit.kind === 'table-row-slice') {
-            var slice = buildTableRowSlice(unit);
-            if (slice) fragment.append(slice);
+            var combined = Object.assign({}, unit);
             index += 1;
+            while (index < fragmentUnits.length && fragmentUnits[index].kind === 'table-row-slice' && fragmentUnits[index].node === unit.node && fragmentUnits[index].table === unit.table && Math.abs(combined.sliceStart + combined.sliceHeight - fragmentUnits[index].sliceStart) < 1) {
+              combined.sliceHeight += fragmentUnits[index].sliceHeight; index += 1;
+            }
+            var slice = buildTableRowSlice(combined);
+            if (slice) append(unit.table, slice);
             continue;
           }
           if (unit.kind === 'table-row-part') {
             var tablePart = unit.table ? cloneTableRowPart(unit.table, unit) : null;
-            if (tablePart) fragment.append(tablePart);
+            if (tablePart) append(unit.table, tablePart);
             index += 1;
             continue;
           }
@@ -1207,7 +1240,7 @@ export const getStaticCustomPrintPaginationScript = () => `
             selectedRows.push(fragmentUnits[index].node);
             index += 1;
           }
-          if (table) fragment.append(cloneTableRows(table, selectedRows));
+          if (table) append(table, cloneTableRows(table, selectedRows));
         }
         return fragment;
       };

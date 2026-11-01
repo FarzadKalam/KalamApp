@@ -11,7 +11,7 @@ vi.mock('./printPagination', () => ({
   trimTrailingPrintSpacerNodes: vi.fn(),
 }));
 
-import { positionPrintPageFooter, repaginateStaticCustomPrintDocument } from './staticPrintPagination';
+import { cloneTableRows, positionPrintPageFooter, repaginateStaticCustomPrintDocument } from './staticPrintPagination';
 
 const createPage = () => {
   const page = document.createElement('div');
@@ -39,6 +39,15 @@ const createPage = () => {
 };
 
 describe('static custom print pagination', () => {
+  it('retains nested party details and the header while selecting only this page’s invoice rows', () => {
+    const table = document.createElement('table');
+    table.innerHTML = '<thead><tr><th>عنوان</th></tr></thead><tbody><tr><td><table><tbody><tr><td>فروشنده</td></tr><tr><td>خریدار</td></tr></tbody></table></td></tr><tr><td>قلم صفحه بعد</td></tr></tbody>';
+    const first = table.tBodies[0].rows[0];
+    const clone = cloneTableRows(table, [first]);
+    expect(clone.textContent).toBe('عنوانفروشندهخریدار');
+    expect(clone.querySelector('td table')!.querySelectorAll('tr')).toHaveLength(2);
+    expect(table.textContent).toContain('قلم صفحه بعد');
+  });
   it('shows signatures on every page and shrinks only the last body to its measured content', () => {
     const page = createPage();
     page.querySelector('.print-template-footer')!.innerHTML = '<div class="print-template-signatures" style="display:none">امضا</div>';
