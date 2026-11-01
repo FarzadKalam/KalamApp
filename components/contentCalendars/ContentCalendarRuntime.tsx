@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   App,
   Button,
   Card,
   Empty,
   Input,
+  Grid,
   Modal,
   Segmented,
   Select,
@@ -23,6 +24,10 @@ import {
 import {
   DndContext,
   PointerSensor,
+  KeyboardSensor,
+  DragOverlay,
+  pointerWithin,
+  closestCenter,
   useDraggable,
   useDroppable,
   useSensor,
@@ -50,10 +55,6 @@ import {
 import { resolveAssigneePresentation } from "../../utils/assigneePresentation";
 import IdentityAvatar from "../common/IdentityAvatar";
 import { normalizeRoleIconKey } from "../../utils/roleIconCatalog";
-import {
-  getTaskStatusColor,
-  getTaskStatusLabel,
-} from "../../utils/processTaskStatusOptions";
 import { loadProcessTemplateStages } from "../../utils/processTemplateStages";
 import {
   createProcessGroupId,
@@ -72,6 +73,13 @@ import { loadProcessTaskModalContext } from "../../utils/processTaskModalContext
 import { buildContentCalendarTaskCopyDraft } from "../../utils/contentCalendarCopy";
 import { copyContentCalendarToNextMonth } from "../../utils/contentCalendarCopy";
 import type { ProcessV2CardData, ProcessV2Stage } from "../processes/ProcessCardsV2";
+
+import CalendarDayEvents from './CalendarDayEvents';
+import CalendarTodayBadge from './CalendarTodayBadge';
+import { getContentCalendarStatus, getContentCalendarLegend } from '../../utils/contentCalendarPresentation';
+import { moveContentCalendarRecord } from '../../utils/contentCalendarMovement';
+import { fetchSessionBootstrap } from '../../utils/sessionCache';
+import { toFaErrorMessage } from '../../utils/errorMessageFa';
 
 type RuntimeItem = {
   id: string;
@@ -95,17 +103,6 @@ const CONTENT_TYPES = [
   { value: "newsletter", label: "خبرنامه" },
   { value: "other", label: "سایر" },
 ];
-const STATUS_COLORS: Record<string, string> = {
-  red: "#ef4444",
-  blue: "#3b82f6",
-  green: "#10b981",
-  orange: "#f97316",
-  gold: "#f59e0b",
-  purple: "#8b5cf6",
-  pink: "#ec4899",
-  gray: "#6b7280",
-  default: "#9ca3af",
-};
 const asDate = (value: any) => {
   const date = value ? new Date(value) : null;
   return date && !Number.isNaN(date.getTime()) ? date : null;
@@ -143,7 +140,7 @@ const CalendarDragHandle: React.FC<{ item: RuntimeItem; disabled?: boolean }> = 
     disabled,
     data: { item },
   });
-  return <span ref={setNodeRef} {...attributes} {...listeners} aria-label="جابجایی به روز دیگر" title="جابجایی به روز دیگر" onClick={(event) => event.stopPropagation()} className={`inline-flex h-6 w-6 shrink-0 touch-none items-center justify-center rounded text-gray-400 ${disabled ? 'cursor-not-allowed opacity-40' : 'cursor-grab active:cursor-grabbing hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/10'}`} style={{ opacity: isDragging ? 0.35 : 1 }}><HolderOutlined /></span>;
+  return <button type="button" ref={setNodeRef} {...attributes} {...listeners} disabled={disabled} aria-label="جابجایی به روز دیگر" title="جابجایی به روز دیگر" onClick={(event) => event.stopPropagation()} className={`inline-flex h-11 w-11 shrink-0 touch-none items-center justify-center rounded text-gray-400 sm:h-8 sm:w-8 ${disabled ? 'cursor-not-allowed opacity-40' : 'cursor-grab active:cursor-grabbing hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/10'}`} style={{ opacity: isDragging ? 0.35 : 1 }}><HolderOutlined /></button>;
 };
 
 const CalendarDayDropTarget: React.FC<{ dayKey: string; children: React.ReactNode }> = ({ dayKey, children }) => {
@@ -212,8 +209,15 @@ const ContentCalendarRuntime: React.FC<{
   ) => void | Promise<void>;
 }> = ({ calendar, canEdit = false, onOpenTemplateProject }) => {
   const navigate = useNavigate();
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.sm;
+  const [draggedItem, setDraggedItem] = useState<RuntimeItem | null>(null);
+  const [moving, setMoving] = useState(false);
   const { message } = App.useApp();
   const calendarId = String(calendar?.id || "").trim();
+  const calendarIdRef = useRef(calendarId);
+  calendarIdRef.current = calendarId;
+  const loadRequestRef = useRef(0);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [projects, setProjects] = useState<any[]>([]);
@@ -242,16 +246,17 @@ const ContentCalendarRuntime: React.FC<{
   const [copiedTask, setCopiedTask] = useState<any | null>(null);
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [copyingNextMonth, setCopyingNextMonth] = useState(false);
-  const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 7, delay: 180, tolerance: 5 } }));
+  const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 7 } }), useSensor(KeyboardSensor));
   const projectIdsKey = useMemo(
     () => projects.map((project) => String(project?.id || "").trim()).filter(Boolean).join(","),
     [projects],
   );
   const taskColumns =
     "id,name,status,priority,start_date,due_date,completed_at,project_id,content_calendar_id,content_type,related_to_module,updated_at,assignee_id,assignee_role_id,assignee_type,recurrence_info,task_type";
-  const load = async () => {
+  const load = async (silent = false) => {
     if (!calendarId) return;
-    setLoading(true);
+    const request = ++loadRequestRef.current;
+    if (!silent) setLoading(true);
     try {
       const [projectResult, directResult, assigneeResult, calendarResult] = await Promise.all([
         supabase
@@ -289,6 +294,7 @@ const ContentCalendarRuntime: React.FC<{
             .limit(2000)
         : ({ data: [], error: null } as any);
       if (inherited.error) throw inherited.error;
+      if (request !== loadRequestRef.current || calendarIdRef.current !== calendarId) return;
       const taskMap = new Map(
         (directResult.data || []).map((row: any) => [
           String(row.id),
@@ -310,11 +316,12 @@ const ContentCalendarRuntime: React.FC<{
         roles: assigneeResult.roles || [],
       });
     } catch (error: any) {
+      if (request !== loadRequestRef.current || calendarIdRef.current !== calendarId) return;
       message.error(
         `بارگذاری تقویم ناموفق بود: ${String(error?.message || "خطای نامشخص")}`,
       );
     } finally {
-      setLoading(false);
+      if (request === loadRequestRef.current && calendarIdRef.current === calendarId) setLoading(false);
     }
   };
   useEffect(() => {
@@ -332,7 +339,7 @@ const ContentCalendarRuntime: React.FC<{
     if (!calendarId) return undefined;
     const channel = supabase.channel(`content-calendar-live-${calendarId}`);
     const refreshCalendar = () => {
-      void load();
+      void load(true);
     };
     channel.on(
       "postgres_changes",
@@ -449,24 +456,10 @@ const ContentCalendarRuntime: React.FC<{
       return map;
     }, new Map<string, RuntimeItem[]>());
   }, [calendar, calendarDraftStages, mode, projectDateField, projects, taskDateField, tasks]);
-  const legends = useMemo(
-    () =>
-      Array.from(
-        new Map(
-          tasks.map((task) => {
-            const options =
-              MODULES.tasks.fields.find((field) => field.key === "status")
-                ?.options || [];
-            const label = getTaskStatusLabel(task.status, task, options);
-            const color =
-              STATUS_COLORS[getTaskStatusColor(task.status, task, options)] ||
-              STATUS_COLORS.default;
-            return [`${label}:${color}`, { label, color }];
-          }),
-        ).values(),
-      ),
-    [tasks],
-  );
+  const legends = useMemo(() => getContentCalendarLegend(
+    days.filter((day) => day.inMonth).flatMap((day) => events.get(day.key) || [])
+      .map((item) => getContentCalendarStatus(item.record, item.kind === 'task' ? 'task' : item.kind === 'project' ? 'project' : 'draft')),
+  ), [days, events]);
   const resetCreate = () => {
     setCreateDate(null);
     setCreateMode("choice");
@@ -938,9 +931,7 @@ const ContentCalendarRuntime: React.FC<{
     const isDraft = item.kind === "project_draft" || item.kind === "calendar_draft";
     const isProjectDraft = item.kind === "project_draft";
     const record = item.record;
-    const statusOptions = MODULES.tasks.fields.find((field) => field.key === "status")?.options || [];
-    const label = isDraft ? "پیش‌نویس" : isTask ? getTaskStatusLabel(record.status, record, statusOptions) : String(record.status || "");
-    const color = isDraft ? "#64748b" : isTask ? STATUS_COLORS[getTaskStatusColor(record.status, record, statusOptions)] || STATUS_COLORS.default : "#8b5cf6";
+    const { label, color } = getContentCalendarStatus(record, isDraft ? 'draft' : isTask ? 'task' : 'project');
     const assignee = resolveAssigneePresentation({ source: record, allUsers: directory.users, allRoles: directory.roles });
     const linkedProject = isTask && record?.project_id
       ? projects.find((project) => String(project?.id || "") === String(record.project_id)) || null
@@ -963,7 +954,7 @@ const ContentCalendarRuntime: React.FC<{
         <span className="min-w-0 flex-1"><span className="block line-clamp-2 font-bold text-gray-700 dark:text-gray-100">{title}</span>{isDraft && isProjectDraft ? <span className="block truncate text-[9px] text-slate-600 dark:text-slate-300">پروژه: {getRecordTitle(item.project, MODULES.projects, { fallback: "پروژه" })}</span> : assignee.label ? <span className="block truncate text-[9px] text-gray-500 dark:text-gray-400">مسئول: {assignee.label}</span> : null}</span>
         {canEdit && copySource ? <Button type="text" size="small" icon={<CopyOutlined />} aria-label={`کپی ${isTask ? "فعالیت" : "پروژه"}`} title={`کپی ${isTask ? "فعالیت" : "پروژه"}`} className="!h-6 !w-6 !min-w-6 !p-0" onClick={(event) => { event.stopPropagation(); setClipboard(copySource); }} /> : null}
         {canEdit && isDraft ? <Button type="text" size="small" icon={<PlayCircleOutlined />} aria-label="ارجاع خودکار پیش‌نویس" title="ارجاع خودکار پیش‌نویس" className="!h-6 !w-6 !min-w-6 !p-0 !text-slate-500" loading={creating} onClick={(event) => { event.stopPropagation(); void autoAssignDraftItem(item); }} /> : null}
-        {canEdit && isTask ? <CalendarDragHandle item={item} /> : null}
+        {canEdit && !isDraft ? <CalendarDragHandle item={item} disabled={moving} /> : null}
       </div>
       <div className="mt-1 flex flex-wrap gap-x-2 text-[9px] text-gray-500 dark:text-gray-400">
         {isTask && formatContentType(record.content_type) ? <span>نوع محتوا: {formatContentType(record.content_type)}</span> : null}
@@ -1010,36 +1001,28 @@ const ContentCalendarRuntime: React.FC<{
     return true;
   };
   const handleCalendarDragEnd = async (event: DragEndEvent) => {
+    setDraggedItem(null);
     const source = event.active.data.current?.item as RuntimeItem | undefined;
-    const targetId = String(event.over?.id || "");
-    const dayKey = targetId.startsWith("calendar-day:") ? targetId.slice("calendar-day:".length) : "";
-    if (!source || source.kind !== "task" || !dayKey || !canEdit) return;
-    const targetDate = new Date(`${dayKey}T12:00:00`);
-    const previousDate = source.date;
-    const deltaDays = Math.round((targetDate.getTime() - previousDate.getTime()) / 86_400_000);
-    if (!deltaDays) return;
-    const shiftDate = (value: any) => {
-      const date = asDate(value);
-      return date ? new Date(date.getTime() + deltaDays * 86_400_000).toISOString() : null;
-    };
+    const targetId = String(event.over?.id || '');
+    const dayKey = targetId.startsWith('calendar-day:') ? targetId.slice('calendar-day:'.length) : '';
+    if (!source || !['task', 'project'].includes(source.kind) || !dayKey || !canEdit || moving) return;
+    setMoving(true);
     try {
-      const patch: Record<string, any> = {};
-      if (taskDateField === "start_date") {
-        patch.start_date = shiftDate(source.record?.start_date) || `${dayKey}T09:00:00`;
-        patch.due_date = shiftDate(source.record?.due_date);
-      } else if (taskDateField === "completed_at") {
-        patch.completed_at = `${dayKey}T12:00:00`;
-      } else {
-        patch.due_date = shiftDate(source.record?.due_date) || `${dayKey}T17:00:00`;
-        patch.start_date = shiftDate(source.record?.start_date);
-      }
-      Object.keys(patch).forEach((key) => patch[key] === null && delete patch[key]);
-      const { error } = await supabase.from("tasks").update(patch).eq("id", source.record.id);
-      if (error) throw error;
-      message.success("زمان فعالیت جابه‌جا شد.");
-      await load();
+      const snapshot = await fetchSessionBootstrap(supabase);
+      const result = await moveContentCalendarRecord(supabase, {
+        kind: source.kind as 'task' | 'project', record: source.record,
+        field: source.kind === 'task' ? taskDateField : projectDateField,
+        targetDay: dayKey, orgId: String(snapshot.orgId || snapshot.profile?.org_id || ''),
+      });
+      if (!result) return;
+      if (calendarIdRef.current !== calendarId) return;
+      const updateRows = source.kind === 'task' ? setTasks : setProjects;
+      updateRows((rows) => rows.map((row) => String(row.id) === String(source.record.id) ? { ...row, ...result } : row));
+      message.success(source.kind === 'task' ? 'زمان فعالیت جابه‌جا شد.' : 'زمان پروژه جابه‌جا شد.');
     } catch (error: any) {
-      message.error(`جابجایی فعالیت ناموفق بود: ${String(error?.message || "خطای نامشخص")}`);
+      message.error(toFaErrorMessage(error));
+    } finally {
+      setMoving(false);
     }
   };
   const renderDay = (
@@ -1051,9 +1034,10 @@ const ContentCalendarRuntime: React.FC<{
     const isHoliday = !!holiday?.isOfficialHoliday || day.date.getDay() === 5;
     const hasOfficialOccasion = holiday?.isOfficialHoliday === true;
     return (
-      <CalendarDayDropTarget dayKey={day.key}>
+      <CalendarDayDropTarget key={day.key} dayKey={day.key}>
       <div
         key={day.key}
+        data-calendar-day={day.key}
         onClick={() => { if (clipboard) void placeClipboardOnDay(day); }}
         className={`min-w-0 overflow-hidden rounded-xl border border-gray-100 p-1.5 dark:border-white/10 ${list ? "p-3" : "min-h-[120px] sm:min-h-[145px]"} ${isHoliday ? "bg-rose-50/80 dark:bg-rose-950/20" : "bg-white dark:bg-[#151515]"} ${day.inMonth || list ? "" : "opacity-50"} ${day.isToday ? "ring-1 ring-[rgba(var(--brand-500-rgb),0.7)]" : ""}`}
       >
@@ -1070,9 +1054,7 @@ const ContentCalendarRuntime: React.FC<{
           </div>
           <div className="flex items-center gap-1">
             {day.isToday ? (
-              <span className="rounded bg-[rgba(var(--brand-100-rgb),0.9)] px-1 text-[9px] font-bold text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--brand-500-rgb),0.2)] dark:text-[rgb(var(--brand-200-rgb))]">
-                امروز
-              </span>
+              <CalendarTodayBadge />
             ) : null}
             {isHoliday ? (
               <span
@@ -1104,19 +1086,7 @@ const ContentCalendarRuntime: React.FC<{
           </div>
         ) : null}
         <div className={list ? "space-y-2" : "space-y-1"}>
-          {rows
-            .slice(0, list ? undefined : 3)
-            .map((item) => renderEvent(item, list))}
-          {!list && rows.length > 3 ? (
-            <span className="text-[10px] text-gray-500">
-              +{rows.length - 3} مورد دیگر
-            </span>
-          ) : null}
-          {list && !rows.length ? (
-            <span className="text-xs text-gray-400">
-              رکوردی در این روز ثبت نشده است.
-            </span>
-          ) : null}
+          <CalendarDayEvents key={`${calendarId}:${day.key}`} items={rows} renderItem={(item) => renderEvent(item, list)} className={list ? 'space-y-2' : 'space-y-1'} />
         </div>
       </div>
       </CalendarDayDropTarget>
@@ -1220,7 +1190,18 @@ const ContentCalendarRuntime: React.FC<{
           <Spin />
         </div>
       ) : (
-        <DndContext sensors={dragSensors} onDragEnd={(event) => void handleCalendarDragEnd(event)}>
+        <DndContext sensors={dragSensors} collisionDetection={(args) => args.pointerCoordinates ? pointerWithin(args) : closestCenter(args)}
+          accessibility={{
+            screenReaderInstructions: { draggable: 'برای جابه‌جایی کلید فاصله را بزنید، با کلیدهای جهت روز مقصد را انتخاب کنید و دوباره فاصله را بزنید. برای لغو کلید گریز را بزنید.' },
+            announcements: {
+              onDragStart: () => 'جابه‌جایی آغاز شد.',
+              onDragOver: ({ over }) => over ? 'روز مقصد انتخاب شد.' : 'روز مقصد را انتخاب کنید.',
+              onDragEnd: ({ over }) => over ? 'در روز مقصد رها شد؛ در حال بررسی ذخیره.' : 'جابه‌جایی لغو شد.',
+              onDragCancel: () => 'جابه‌جایی لغو شد.',
+            },
+          }}
+          onDragStart={(event) => setDraggedItem(event.active.data.current?.item || null)}
+          onDragCancel={() => setDraggedItem(null)} onDragEnd={(event) => void handleCalendarDragEnd(event)}>
           <div className="hidden grid-cols-7 gap-1 text-center text-xs text-gray-500 sm:grid">
             {[
               "شنبه",
@@ -1234,15 +1215,12 @@ const ContentCalendarRuntime: React.FC<{
               <div key={name}>{name}</div>
             ))}
           </div>
-          <div className="mt-1 hidden grid-cols-7 gap-1 sm:grid">
-            {days.map((day) => renderDay(day))}
+          <div className={isMobile ? 'mt-1 space-y-2' : 'mt-1 grid grid-cols-7 gap-1'}>
+            {(isMobile ? mobileDays : days).map((day) => renderDay(day, isMobile))}
           </div>
-          <div className="space-y-2 sm:hidden">
-            {(mobileDays.length
-              ? mobileDays
-              : days.filter((day) => day.inMonth)
-            ).map((day) => renderDay(day, true))}
-          </div>
+          <DragOverlay dropAnimation={{ duration: 160, easing: 'ease-out' }}>
+            {draggedItem ? <div className="max-w-64 rounded-lg border border-blue-300 bg-white px-3 py-2 text-xs font-bold text-slate-800 shadow-lg dark:bg-slate-800 dark:text-white">{getRecordTitle(draggedItem.record, MODULES[draggedItem.kind === 'project' ? 'projects' : 'tasks'])}</div> : null}
+          </DragOverlay>
           {projects.length + tasks.length + calendarDraftStages.length === 0 ? (
             <Empty
               className="mt-5"
@@ -1256,14 +1234,14 @@ const ContentCalendarRuntime: React.FC<{
           <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-[10px] text-gray-500 dark:text-gray-400">
             {legends.map((item: any) => (
               <span
-                key={`${item.label}:${item.color}`}
+                key={`${item.kind}:${item.label}:${item.color}`}
                 className="inline-flex items-center gap-1"
               >
                 <i
                   className="h-2 w-2 rounded-full"
                   style={{ backgroundColor: item.color }}
                 />
-                {item.label}
+                {item.kind === 'project' ? 'پروژه: ' : item.kind === 'task' ? 'فعالیت: ' : ''}{item.label}
               </span>
             ))}
           </div>
@@ -1274,7 +1252,7 @@ const ContentCalendarRuntime: React.FC<{
         title={`افزودن در ${createDate ? toPersian(createDate).format("YYYY/MM/DD") : ""}`}
         footer={null}
         onCancel={resetCreate}
-        destroyOnClose
+        destroyOnHidden
       >
         {createMode === "choice" ? (
           <div className="grid gap-3 sm:grid-cols-2">

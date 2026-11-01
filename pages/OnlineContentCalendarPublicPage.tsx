@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, ConfigProvider, Descriptions, Modal, Spin, Tag, theme as antdTheme } from 'antd';
-import { CalendarOutlined, CheckCircleOutlined, ProjectOutlined } from '@ant-design/icons';
+import { CalendarOutlined, CheckCircleOutlined, ProjectOutlined, AlignLeftOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import DateObject from 'react-date-object';
 import persian from 'react-date-object/calendars/persian';
@@ -10,6 +10,9 @@ import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { supabasePublic } from '../supabaseClient';
 import { usePublicTimeTheme } from '../components/public/PublicThemeBoundary';
 import { getHolidaySummaryForDate, type HolidayDaySummary } from '../utils/holidayCalendar';
+import CalendarDayEvents from '../components/contentCalendars/CalendarDayEvents';
+import CalendarTodayBadge from '../components/contentCalendars/CalendarTodayBadge';
+import { getContentCalendarLegend, getContentCalendarStatus, getContentCalendarContentTypeLabel } from '../utils/contentCalendarPresentation';
 
 const dateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 const toPersian = (date: Date) => new DateObject({ date, calendar: gregorian, locale: gregorian_en }).convert(persian, persian_fa);
@@ -35,9 +38,14 @@ export default function OnlineContentCalendarPublicPage() {
   const [anchor, setAnchor] = useState(new Date());
   const [holidays, setHolidays] = useState<Record<string, HolidayDaySummary | null>>({});
   const [selectedTask, setSelectedTask] = useState<any>(null);
+  const [fullText, setFullText] = useState(false);
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
+    setPayload(null);
+    setError('');
+    setSelectedTask(null);
     void Promise.resolve(supabasePublic.rpc('get_public_content_calendar', { p_token: String(token || '').trim() }))
       .then(({ data, error: rpcError }) => {
         if (!active) return;
@@ -70,6 +78,9 @@ export default function OnlineContentCalendarPublicPage() {
     return map;
   }, [payload]);
 
+  const legend = useMemo(() => getContentCalendarLegend(days.filter((day) => day.inMonth)
+    .flatMap((day) => events.get(day.key) || []).map((row) => getContentCalendarStatus(row, row.kind))), [days, events]);
+
   useEffect(() => {
     let active = true;
     void Promise.all(days.map(async (day) => [day.key, await getHolidaySummaryForDate(day.date)] as const))
@@ -94,31 +105,38 @@ export default function OnlineContentCalendarPublicPage() {
           {calendar.description ? <p className="mt-3 max-w-3xl text-sm text-white/90">{calendar.description}</p> : null}
         </header>
         <div className="p-3 sm:p-6">
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <button className="rounded-lg px-3 py-1 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => setAnchor(toGregorian(toPersian(anchor).add(-1, 'month')))}>ماه قبل</button>
             <div className="font-black">{toPersian(anchor).format('MMMM YYYY')}</div>
+            <button type="button" aria-label={fullText ? 'نمایش فشرده' : 'نمایش متن کامل'} aria-pressed={fullText}
+              title={fullText ? 'نمایش فشرده' : 'نمایش متن کامل'} onClick={() => setFullText((value) => !value)}
+              className={`inline-flex h-10 w-10 items-center justify-center rounded-xl border transition-colors ${fullText ? 'border-blue-300 bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-200' : 'border-slate-200 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300'}`}><AlignLeftOutlined /></button>
             <button className="rounded-lg px-3 py-1 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => setAnchor(toGregorian(toPersian(anchor).add(1, 'month')))}>ماه بعد</button>
           </div>
-          <div className="grid grid-cols-7 gap-1 text-center text-xs text-slate-500">{['شنبه', 'یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه'].map((weekday) => <div key={weekday}>{weekday}</div>)}</div>
-          <div className="mt-1 grid grid-cols-7 gap-1">
+          <div className="hidden grid-cols-7 gap-1 text-center text-xs text-slate-500 sm:grid">{['شنبه', 'یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه'].map((weekday) => <div key={weekday}>{weekday}</div>)}</div>
+          <div className="mt-1 grid grid-cols-1 gap-2 sm:grid-cols-7 sm:gap-1">
             {days.map((day) => {
               const holiday = holidays[day.key];
               const isOfficialHoliday = holiday?.isOfficialHoliday === true;
               const isFriday = day.date.getDay() === 5;
-              return <div key={day.key} className={`min-h-[104px] rounded-xl border p-1.5 text-right ${day.inMonth ? 'bg-white dark:bg-slate-800' : 'opacity-35'} ${isOfficialHoliday ? 'border-rose-300 bg-rose-50 text-rose-800 dark:bg-rose-950/30 dark:text-rose-200' : isFriday ? 'border-rose-200 bg-rose-50/50 text-rose-700 dark:bg-rose-950/20' : 'border-slate-100 dark:border-slate-700'} ${day.today ? 'ring-2 ring-blue-500 ring-offset-1 dark:ring-offset-slate-900' : ''}`}>
-                <div className="flex justify-between"><b>{day.day}</b>{day.today ? <span className="rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-black text-white shadow-lg ring-2 ring-white/70">امروز</span> : null}</div>
-                {holiday?.occasions?.[0] ? <div className={`mt-1 truncate text-[9px] font-bold ${isOfficialHoliday ? 'text-rose-700 dark:text-rose-200' : 'text-amber-700 dark:text-amber-300'}`} title={holiday.occasions.map((occasion) => occasion.title).join('، ')}>{holiday.occasions[0].title}</div> : null}
+              return <div key={day.key} data-calendar-day={day.key} className={`min-w-0 min-h-16 rounded-xl border p-3 text-right sm:min-h-[104px] sm:p-1.5 ${day.inMonth ? 'bg-white dark:bg-slate-800' : 'hidden opacity-35 sm:block'} ${isOfficialHoliday ? 'border-rose-300 bg-rose-50 text-rose-800 dark:bg-rose-950/30 dark:text-rose-200' : isFriday ? 'border-rose-200 bg-rose-50/50 text-rose-700 dark:bg-rose-950/20' : 'border-slate-100 dark:border-slate-700'} ${day.today ? 'ring-2 ring-blue-500 ring-offset-1 dark:ring-offset-slate-900' : ''}`}>
+                <div className="flex flex-wrap items-center justify-between gap-1"><b>{day.day}<span className="mr-2 text-[11px] font-medium sm:hidden">{toPersian(day.date).format('dddd')}</span></b>{day.today ? <CalendarTodayBadge /> : null}</div>
+                {holiday?.occasions?.[0] ? <div className={`mt-1 ${fullText ? 'whitespace-normal break-words [overflow-wrap:anywhere]' : 'truncate'} text-[10px] font-bold ${isOfficialHoliday ? 'text-rose-700 dark:text-rose-200' : 'text-amber-700 dark:text-amber-300'}`} title={holiday.occasions.map((occasion) => occasion.title).join('، ')}>{(fullText ? holiday.occasions : holiday.occasions.slice(0, 1)).map((occasion) => occasion.title).join('، ')}</div> : null}
                 <div className="mt-1 space-y-1">
-                  {(events.get(day.key) || []).slice(0, 3).map((row: any, index: number) => {
-                    const content = <><div className="truncate font-bold">{row.kind === 'task' ? <CheckCircleOutlined className="ml-1" /> : <ProjectOutlined className="ml-1" />}{row.name || 'بدون عنوان'}</div>{row.kind === 'task' && row.content_type ? <Tag className="!m-0 !mt-1" color="blue">{row.content_type}</Tag> : null}</>;
+                  <CalendarDayEvents key={`${token}:${day.key}`} items={events.get(day.key) || []} renderItem={(row: any) => {
+                    const status = getContentCalendarStatus(row, row.kind);
+                    const content = <><div className={`${fullText ? 'whitespace-normal break-words [overflow-wrap:anywhere]' : 'truncate'} font-bold`}>{row.kind === 'task' ? <CheckCircleOutlined className="ml-1" /> : <ProjectOutlined className="ml-1" />}{row.name || 'بدون عنوان'}</div>{row.kind === 'task' && row.content_type ? <Tag className="!m-0 !mt-1 !whitespace-normal !break-words" color="blue">{getContentCalendarContentTypeLabel(row.content_type)}</Tag> : null}<div className="mt-1 text-[10px]" style={{ color: status.color }}>{status.label}</div></>;
                     return row.kind === 'task'
-                      ? <button type="button" key={`${row.kind}-${row.id}-${index}`} className="block w-full rounded-md border-r-4 border-blue-500 bg-slate-50 p-1 text-right text-[10px] transition hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-400 dark:bg-slate-700 dark:hover:bg-slate-600" onClick={() => setSelectedTask(row)}>{content}</button>
-                      : <div key={`${row.kind}-${row.id}-${index}`} className="rounded-md border-r-4 border-emerald-500 bg-slate-50 p-1 text-[10px] dark:bg-slate-700">{content}</div>;
-                  })}
+                      ? <button type="button" key={`${row.kind}-${row.id}`} style={{ borderInlineStart: `2px solid ${status.color}` }} className="block w-full min-w-0 rounded-md bg-slate-50 p-1 text-right text-[11px] transition hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-400 dark:bg-slate-700 dark:hover:bg-slate-600" onClick={() => setSelectedTask(row)}>{content}</button>
+                      : <div key={`${row.kind}-${row.id}`} style={{ borderInlineStart: `2px solid ${status.color}` }} className="min-w-0 rounded-md bg-slate-50 p-1 text-[11px] dark:bg-slate-700">{content}</div>;
+                  }} />
                 </div>
               </div>;
             })}
           </div>
+          {legend.length ? <aside aria-label="راهنمای وضعیت‌های این ماه" className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-slate-100 pt-3 text-xs dark:border-slate-700">
+            {legend.map((status) => <span key={`${status.kind}:${status.label}:${status.color}`} className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: status.color }} />{status.kind === 'project' ? 'پروژه' : 'فعالیت'}: {status.label}</span>)}
+          </aside> : null}
         </div>
       </section>
     </main>

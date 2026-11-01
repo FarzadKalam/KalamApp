@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Button, Empty, Segmented, Select, Tag } from "antd";
+import { Button, Empty, Segmented, Select } from "antd";
 import {
   CalendarOutlined,
   LeftOutlined,
@@ -22,6 +22,7 @@ import { getCalendarSummaryFields } from "../../utils/calendarPresentation";
 import { resolveAssigneePresentation } from "../../utils/assigneePresentation";
 import IdentityAvatar from "../common/IdentityAvatar";
 import { supabase } from "../../supabaseClient";
+import CalendarTodayBadge from '../contentCalendars/CalendarTodayBadge';
 import { normalizeRoleIconKey } from "../../utils/roleIconCatalog";
 
 export type ModuleCalendarMode = "month" | "week";
@@ -480,7 +481,7 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
             ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            {day.isToday ? <Tag color="blue" className="!m-0 !px-1 !text-[9px]">امروز</Tag> : null}
+            {day.isToday ? <CalendarTodayBadge /> : null}
             {isHoliday ? <span className="h-2 w-2 rounded-full bg-rose-500" title={summary?.jalaliLabel || "تعطیل"} /> : null}
           </div>
         </div>
@@ -494,7 +495,7 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
         <div className={isListLayout ? "space-y-2" : "space-y-1"}>
           {visibleEvents.length > 0 ? visibleEvents.map((event) => renderEvent(event, isListLayout ? "comfortable" : calendarMode === "month" ? "compact" : "comfortable")) : (
             isListLayout ? (
-              <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-400 dark:border-white/10 dark:bg-white/5 dark:text-gray-500">
+              <div className="hidden rounded-xl border border-dashed border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-400 sm:block dark:border-white/10 dark:bg-white/5 dark:text-gray-500">
                 رکوردی در این روز ثبت نشده است.
               </div>
             ) : null

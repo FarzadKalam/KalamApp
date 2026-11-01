@@ -39,6 +39,19 @@ jobs:
             docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d ledger_test -v ON_ERROR_STOP=1 < "$file"
           done
 
+      - name: Isolated public content calendar regression checks
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test content_calendar_test
+          for file in tests/sql/content_calendar_public_fixture.sql \
+            database_v1_phase572_public_content_calendar_status_presentation.sql \
+            database_v1_phase572_public_content_calendar_status_presentation.sql \
+            tests/sql/content_calendar_public_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d content_calendar_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -83,6 +96,14 @@ jobs:
         run: >-
           npx vitest run utils/uiNotificationOverlayStore.test.ts
           components/UploadProgressOverlay.test.tsx components/layout/SidebarMenu.test.tsx
+          --maxWorkers=1 --no-file-parallelism
+
+      - name: Content calendar regression checks
+        timeout-minutes: 8
+        run: >-
+          npx vitest run utils/contentCalendarMovement.test.ts utils/contentCalendarPresentation.test.ts
+          utils/contentCalendarCopy.test.ts components/contentCalendars/CalendarDayEvents.test.tsx
+          components/contentCalendars/ContentCalendarRuntime.test.tsx pages/OnlineContentCalendarPublicPage.test.tsx
           --maxWorkers=1 --no-file-parallelism
 
       - name: Module list regression checks
