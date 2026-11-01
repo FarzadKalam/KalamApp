@@ -98,6 +98,7 @@ import AiReplySuggestionAction from './AiReplySuggestionAction';
 import { buildRecentReplySuggestionMessages } from '../../../utils/replySuggestion';
 import {
   canCurrentUserAccessInternalSystemNote,
+  isCurrentUserInternalNoteRecipient,
   isInternalSystemNoteRow,
 } from '../../../utils/internalNoteAccess';
 import type { MessageActivityDraft } from './MessageActivityModalRuntime';
@@ -166,7 +167,7 @@ type TimelineEvent = {
   text: string;
   time: string;
   status?: string;
-  attachments?: Array<{ name: string; kind: AttachmentKind; url?: string | null; mimeType?: string | null }>;
+  attachments?: Array<{ name: string; kind: AttachmentKind; url?: string | null; mimeType?: string | null; thumbnailUrl?: string | null; sizeBytes?: number | null }>;
   mentionUsers?: string[];
   mentionRoles?: string[];
   avatarUrl?: string | null;
@@ -185,7 +186,7 @@ type TimelineEvent = {
   replyTo?: string | null;
   replyPreviewAuthor?: string | null;
   replyPreviewText?: string | null;
-  replyPreviewAttachments?: Array<{ name: string; kind: AttachmentKind; url?: string | null; mimeType?: string | null }>;
+  replyPreviewAttachments?: Array<{ name: string; kind: AttachmentKind; url?: string | null; mimeType?: string | null; thumbnailUrl?: string | null; sizeBytes?: number | null }>;
   relatedRecordLabel?: string;
   callDirection?: 'incoming' | 'outgoing';
   caller?: string;
@@ -420,7 +421,7 @@ const buildBotTimelineAttachments = (row: any): TimelineEvent['attachments'] => 
         mimeType,
         name,
       }) as AttachmentKind;
-      return { name, kind, url: url || null, mimeType };
+      return { name, kind, url: url || null, mimeType, thumbnailUrl: attachment.thumbnailUrl || attachment.thumbnail_url || null, sizeBytes: Number(attachment.sizeBytes || attachment.file_size_bytes || attachment.size) || null };
     })
     .filter((attachment: any) => attachment.url || attachment.name);
   const directUrl = normalizeRenderableAttachmentUrl(row?.file_url || '');
@@ -428,6 +429,8 @@ const buildBotTimelineAttachments = (row: any): TimelineEvent['attachments'] => 
     const mimeType = String(row?.mime_type || '').trim() || null;
     attachments.unshift({
       name: String(row?.file_name || 'فایل').trim() || 'فایل',
+      thumbnailUrl: row?.thumbnail_url || payload?.thumbnail_url || null,
+      sizeBytes: Number(row?.file_size_bytes || payload?.file_size_bytes) || null,
       kind: resolveNoteAttachmentFileType({
         fileType: row?.message_type,
         mimeType,
@@ -1381,6 +1384,7 @@ const MediaAttachmentPreview: React.FC<{ attachments: TimelineEvent['attachments
   <MessageAttachmentGallery
     call={call}
     attachments={(attachments || []).map((attachment) => ({
+      ...attachment,
       name: attachment.name,
       url: attachment.url || '',
       mimeType: attachment.mimeType || null,
@@ -2627,7 +2631,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
       window.clearTimeout(timer);
     };
   }, [liveData.profile.id]);
-  const cacheScopeKey = liveData.profile.orgId || liveData.profile.id || 'messaging-v2';
+  const cacheScopeKey = [liveData.profile.orgId, liveData.profile.id, liveData.profile.roleId].map((value) => String(value || '').trim()).join(':');
   const internalConversations = useNotificationConversationList({
     supabase,
     section: 'notes',
@@ -3085,7 +3089,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
     if (!selectedInternalSourceKey) return [];
     const activeConversationKey = getLiveInternalConversationKey(selectedInternalSourceKey);
     const currentUserId = String(liveData.profile.id || '').trim();
-    return (internalTimeline.items || []).map((row: any) => {
+    return (internalTimeline.items || []).filter((row: any) => selectedInternalSourceKey !== 'system' || isCurrentUserInternalNoteRecipient(row, currentUserId, liveData.profile.roleId)).map((row: any) => {
       const parsed = parseNoteContent(row?.content ?? row?.body ?? row?.message_text ?? '');
       const mentionUsers = normalizeIdArray(row?.mention_user_ids)
         .map((id) => directoryUserMap[id]?.display_name || '')
@@ -3126,6 +3130,8 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
           kind: getNoteAttachmentKind(attachment),
           url: attachment.url || null,
           mimeType: attachment.mimeType || null,
+          thumbnailUrl: attachment.thumbnailUrl,
+          sizeBytes: attachment.sizeBytes,
         })),
         mentionUsers,
         mentionRoles,
@@ -3141,6 +3147,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
     internalRecordTitleMap,
     internalTimeline.items,
     liveData.profile.id,
+    liveData.profile.roleId,
     moduleLabelsRevision,
     roleLookup,
     selectedInternalSourceKey,

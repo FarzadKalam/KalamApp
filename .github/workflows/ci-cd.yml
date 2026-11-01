@@ -44,11 +44,33 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Isolated system message access regression checks
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          for file in tests/sql/system_note_guard_fixture.sql \
+            database_v1_phase569_system_note_recipient_guard.sql \
+            database_v1_phase569_system_note_recipient_guard.sql \
+            tests/sql/system_note_guard_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d ledger_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
       - name: Install
         run: npm ci
 
       - name: Typecheck
         run: npx tsc --noEmit
+
+      - name: Messaging attachment and viewer isolation regression checks
+        timeout-minutes: 8
+        run: >-
+          npx vitest run utils/messageAttachmentPreview.test.ts utils/messageAttachments.test.ts
+          utils/internalNoteAccess.test.ts hooks/useInternalConversationTimeline.test.tsx
+          hooks/useNotificationConversationList.test.tsx
+          components/messaging/MessageAttachmentGallery.test.tsx components/common/ComposerDropZone.test.tsx
+          components/common/AttachmentSourceButton.test.tsx
+          --maxWorkers=1 --no-file-parallelism
 
       - name: Module list regression checks
         timeout-minutes: 12

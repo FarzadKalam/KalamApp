@@ -90,6 +90,7 @@ export const uploadNoteAttachments = async (
     uploaded.push({
       name: fileName,
       url: fileUrl,
+      sizeBytes: file.size,
       mimeType: file.type || null,
       fileType,
     });

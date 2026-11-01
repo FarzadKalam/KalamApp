@@ -20,7 +20,7 @@ import { isImageFileLike } from '../../utils/imagePreview';
 import { parseNoteTemplateTextSegments } from '../../utils/noteTemplateText';
 import AiSparkleIcon from '../ai/AiSparkleIcon';
 import ProfileAvatar from '../common/ProfileAvatar';
-import ResilientImage from '../common/ResilientImage';
+import MessageAttachmentImage from '../messaging/MessageAttachmentImage';
 import FileExtensionTile from '../files/FileExtensionTile';
 import MessageAttachmentGallery from '../messaging/MessageAttachmentGallery';
 
@@ -393,13 +393,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
         title={label}
         onClick={() => setPreviewAttachment(attachment)}
       >
-        <ResilientImage
-          src={attachment.url}
-          preset="thumb"
-          alt={label}
-          loading="lazy"
-          className="h-full w-full object-cover"
-        />
+        <MessageAttachmentImage attachment={attachment} className="h-full w-full object-cover" />
         <span className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-1.5 py-1 text-[9px] text-white">
           {label}
         </span>
@@ -419,7 +413,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
           className="inline-flex h-9 w-9 overflow-hidden rounded-md border opacity-95"
           style={{ borderColor: token.colorBorderSecondary }}
         >
-          <ResilientImage src={attachment.url} preset="thumb" alt={label} className="h-full w-full object-cover" />
+          <MessageAttachmentImage attachment={attachment} className="h-full w-full object-cover" />
         </span>
       );
     }
@@ -648,12 +642,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   >
     {previewAttachment ? (
       <div className="flex max-h-[72vh] items-center justify-center overflow-auto rounded-md bg-gray-50 p-2 dark:bg-black/20">
-        <ResilientImage
-          src={previewAttachment.url}
-          preset="gallery"
-          alt={getAttachmentLabel(previewAttachment)}
-          className="max-h-[68vh] max-w-full object-contain"
-        />
+        <MessageAttachmentImage attachment={previewAttachment} expanded className="max-h-[68vh] max-w-full object-contain" />
       </div>
     ) : null}
   </Modal>

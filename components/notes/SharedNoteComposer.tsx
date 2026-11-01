@@ -6,11 +6,12 @@ import {
   CloseOutlined,
   DeleteOutlined,
   EnterOutlined,
-  PaperClipOutlined,
   SendOutlined,
   StopOutlined,
 } from '@ant-design/icons';
 import type { NoteAttachment } from '../../utils/noteContent';
+import AttachmentSourceButton from '../common/AttachmentSourceButton';
+import ComposerDropZone from '../common/ComposerDropZone';
 import FileManagerPickerModal from '../files/FileManagerPickerModal';
 import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 import { getUploadFileSizeError, MAX_UPLOAD_FILE_SIZE_LABEL_FA } from '../../utils/uploadFileWithProgress';
@@ -128,7 +129,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
   smsNotificationEnabled = false,
   onSmsNotificationChange,
   extraActions,
-  enableImagePasteAndDrop = false,
+  enableImagePasteAndDrop = true,
   surfaceVariant = 'default',
 }) => {
   const { message } = App.useApp();
@@ -428,7 +429,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
       <div className={shellClassName}>
         {header ? <div className="mb-1.5">{header}</div> : null}
 
-        <div className={panelClassName}>
+        <ComposerDropZone className={panelClassName} disabled={!enableImagePasteAndDrop || !allowAttachments} onFiles={handleFilesPicked}>
           <Input.TextArea
             placeholder={placeholder}
             value={draftValue}
@@ -440,19 +441,6 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
             onPaste={(event) => {
               if (!enableImagePasteAndDrop || !allowAttachments) return;
               const files = collectFilesFromDataTransfer(event.clipboardData);
-              if (!files.length) return;
-              event.preventDefault();
-              handleFilesPicked(files);
-            }}
-            onDragOver={(event) => {
-              if (!enableImagePasteAndDrop || !allowAttachments) return;
-              const files = collectFilesFromDataTransfer(event.dataTransfer);
-              if (!files.length) return;
-              event.preventDefault();
-            }}
-            onDrop={(event) => {
-              if (!enableImagePasteAndDrop || !allowAttachments) return;
-              const files = collectFilesFromDataTransfer(event.dataTransfer);
               if (!files.length) return;
               event.preventDefault();
               handleFilesPicked(files);
@@ -605,16 +593,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
                 />
               ) : null}
               {allowAttachments ? (
-                <Button
-                  type={attachmentLabel.length > 0 ? 'primary' : 'text'}
-                  size="small"
-                  shape={isOmniSurface ? 'circle' : undefined}
-                  icon={<PaperClipOutlined />}
-                  onClick={() => setFilePickerOpen(true)}
-                  aria-label="افزودن پیوست"
-                  title={`افزودن پیوست تا ${MAX_UPLOAD_FILE_SIZE_LABEL_FA}`}
-                  className={iconButtonClassName}
-                />
+                <AttachmentSourceButton active={attachmentLabel.length > 0} round={isOmniSurface} className={iconButtonClassName} onFilesSelected={handleFilesPicked} onChooseExisting={() => setFilePickerOpen(true)} />
               ) : null}
               {allowAttachments ? (
                 <Button
@@ -655,7 +634,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
               {submitText}
             </Button>
           </div>
-        </div>
+        </ComposerDropZone>
       </div>
 
       <Modal

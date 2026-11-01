@@ -1165,7 +1165,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
 
   const tasksConfig = MODULES['tasks'];
   const statusOptions = tasksConfig?.fields?.find((f: any) => f.key === 'status')?.options || [];
-  const communicationCacheScopeKey = `${String(profile.org_id || '').trim() || 'org'}:${String(profile.id || '').trim() || 'user'}`;
+  const communicationCacheScopeKey = `${String(profile.org_id || '').trim() || 'org'}:${String(profile.id || '').trim() || 'user'}:${String(profile.role_id || '').trim() || 'role'}`;
   const shouldAnimateChatEntry = useCallback((createdAt: any) => {
     const time = new Date(createdAt || '').getTime();
     if (!Number.isFinite(time)) return false;

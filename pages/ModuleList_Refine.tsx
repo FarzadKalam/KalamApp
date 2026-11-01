@@ -1325,6 +1325,7 @@ export const ModuleListRefine: React.FC<{
   const [canOpenWorkflows, setCanOpenWorkflows] = useState(true);
   const [canOpenGoals, setCanOpenGoals] = useState(true);
   const [canShowGoalCards, setCanShowGoalCards] = useState(true);
+  const [hasMobileGoalCard, setHasMobileGoalCard] = useState(false);
   const [isListPrintModalOpen, setIsListPrintModalOpen] = useState(false);
   const [isOnlineCatalogManagerOpen, setIsOnlineCatalogManagerOpen] =
     useState(false);
@@ -2691,6 +2692,7 @@ export const ModuleListRefine: React.FC<{
     setIsBulkProductsModalOpen(false);
     setIsWorkflowsModalOpen(false);
     setIsGoalsModalOpen(false);
+    setHasMobileGoalCard(false);
     setIsExcelImportModalOpen(false);
     setCanOpenWorkflows(true);
     setCanOpenGoals(true);
@@ -6930,7 +6932,7 @@ export const ModuleListRefine: React.FC<{
 
           {selectedRowKeys.length > 0 ||
           (isMobileViewport && canShowGoalCards && !isSystemManagedModule) ? (
-            <div className="order-last basis-full pt-0 min-w-0 md:order-none md:mt-0 md:basis-auto md:pt-0 md:flex md:flex-[0_1_420px] md:items-center md:justify-start md:self-center xl:flex-[0_1_460px]">
+            <div style={isMobileViewport && selectedRowKeys.length === 0 && !hasMobileGoalCard ? { display: "none" } : undefined} className="order-last basis-full pt-0 min-w-0 md:order-none md:mt-0 md:basis-auto md:pt-0 md:flex md:flex-[0_1_420px] md:items-center md:justify-start md:self-center xl:flex-[0_1_460px]">
               <div
                 ref={
                   canShowGoalCards && selectedRowKeys.length === 0
@@ -7098,8 +7100,11 @@ export const ModuleListRefine: React.FC<{
                 ) : isMobileViewport && !isSystemManagedModule ? (
                   <React.Suspense fallback={null}>
                     <GoalProgressSlider
+                      key={`${currentOrgId}:${currentUserId}:${resolvedModuleId}`}
                       moduleId={resolvedModuleId}
                       placement="module_list"
+                      hideWhenEmpty
+                      onActiveCardChange={(card) => setHasMobileGoalCard(Boolean(card))}
                     />
                   </React.Suspense>
                 ) : null}
@@ -7109,10 +7114,19 @@ export const ModuleListRefine: React.FC<{
 
           {selectedRowKeys.length === 0 && (
             <div className="module-list-header-actions">
+              {isMobileViewport ? <>
+                <Button className="!h-10 !rounded-lg !px-2 text-xs" aria-label="تغییر حالت نمایش" aria-expanded={isMobileViewModeSheetOpen}
+                  icon={mobileViewModeOptions.find((option) => option.value === viewMode)?.icon}
+                  onClick={() => setIsMobileViewModeSheetOpen(true)}>
+                  {mobileViewModeOptions.find((option) => option.value === viewMode)?.label}
+                </Button>
+                <ViewManager moduleId={resolvedModuleId} currentView={currentView} onViewChange={handleViewChange} onRefresh={handleRefresh} renderMode="mobile-sheet" />
+              </> : (
               <Toolbar viewMode={viewMode} setViewMode={handleViewModeChange}
                 kanbanEnabled={availableGroupFields.length > 0} calendarEnabled={availableCalendarFields.length > 0} mapEnabled={mapEnabled}
                 kanbanGroupBy={kanbanGroupBy} kanbanGroupOptions={kanbanGroupOptions} onKanbanGroupChange={setKanbanGroupBy}
                 calendarDateField={calendarDateField} calendarDateFieldOptions={calendarDateFieldOptions} onCalendarDateFieldChange={setCalendarDateField} />
+              )}
               {resolvedModuleId === "voip_call_reports" && (
                 <Button
                   icon={<ReloadOutlined />}
@@ -7301,15 +7315,15 @@ export const ModuleListRefine: React.FC<{
         ) : null}
       </div>
 
-      <div className="module-list-saved-views mb-1 shrink-0">
+      {!isMobileViewport ? <div className="module-list-saved-views mb-1 shrink-0">
           <ViewManager
             moduleId={resolvedModuleId}
             currentView={currentView}
             onViewChange={handleViewChange}
             onRefresh={handleRefresh}
-            renderMode={isMobileViewport ? 'mobile-sheet' : 'inline'}
+            renderMode="inline"
           />
-      </div>
+      </div> : null}
 
       <ViewWrapper isFullscreen={false}>
         <div className="flex-1 min-h-0 overflow-hidden relative rounded-[1.5rem]">

@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AudioOutlined } from '@ant-design/icons';
 import { Button, Spin } from 'antd';
-import ResilientImage from './ResilientImage';
+import MessageAttachmentImage from '../messaging/MessageAttachmentImage';
+import { canPreviewLocalMessageImage } from '../../utils/messageAttachmentPreview';
 import FileExtensionTile from '../files/FileExtensionTile';
 import { resolveNoteAttachmentFileType } from '../../utils/noteContent';
 
@@ -14,6 +15,8 @@ export type ComposerAttachmentChipItem = {
   url?: string | null;
   subtitle?: string | null;
   sizeText?: string | null;
+  sizeBytes?: number | null;
+  thumbnailUrl?: string | null;
   loading?: boolean;
   onRemove?: (() => void) | null;
   removeDisabled?: boolean;
@@ -24,7 +27,7 @@ const ComposerAttachmentChipAvatar: React.FC<{ item: ComposerAttachmentChipItem 
 
   useEffect(() => {
     const nextFile = item.file;
-    if (!nextFile || item.url || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+    if (!nextFile || !canPreviewLocalMessageImage(nextFile, item.name) || item.url || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
       setObjectUrl(null);
       return undefined;
     }
@@ -35,7 +38,7 @@ const ComposerAttachmentChipAvatar: React.FC<{ item: ComposerAttachmentChipItem 
         URL.revokeObjectURL(nextObjectUrl);
       }
     };
-  }, [item.file, item.url]);
+  }, [item.file, item.url, item.name]);
 
   const previewUrl = String(item.url || objectUrl || '').trim();
   const resolvedType = useMemo(() => resolveNoteAttachmentFileType({
@@ -48,7 +51,7 @@ const ComposerAttachmentChipAvatar: React.FC<{ item: ComposerAttachmentChipItem 
   if (resolvedType === 'image' && previewUrl) {
     return (
       <div className="h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-slate-200/70 bg-slate-100 dark:border-white/[0.08] dark:bg-white/[0.05]">
-        <ResilientImage src={previewUrl} preset="thumb" alt={item.name} className="h-full w-full object-cover" />
+        <MessageAttachmentImage attachment={{ name: item.name, url: previewUrl, mimeType: item.mimeType, thumbnailUrl: item.thumbnailUrl, sizeBytes: item.sizeBytes || item.file?.size }} className="h-full w-full object-cover" />
       </div>
     );
   }

@@ -32,12 +32,11 @@ export const isInternalSystemNoteRow = (note: any) => {
   );
 };
 
-export const canCurrentUserAccessInternalSystemNote = (
+export const isCurrentUserInternalNoteRecipient = (
   note: any,
   currentUserId: unknown,
   currentRoleId?: unknown,
 ) => {
-  if (!isInternalSystemNoteRow(note)) return true;
   const userId = normalizeId(currentUserId);
   const roleId = normalizeId(currentRoleId);
   if (!userId) return false;
@@ -60,3 +59,6 @@ export const canCurrentUserAccessInternalSystemNote = (
   ]);
   return targetRoleIds.has(roleId);
 };
+
+export const canCurrentUserAccessInternalSystemNote = (note: any, currentUserId: unknown, currentRoleId?: unknown) =>
+  !isInternalSystemNoteRow(note) || isCurrentUserInternalNoteRecipient(note, currentUserId, currentRoleId);

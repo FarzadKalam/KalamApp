@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   type NotificationConversationSection,
@@ -57,6 +57,8 @@ export const useNotificationConversationList = ({
   mergeFallbackInitial = false,
 }: UseNotificationConversationListOptions) => {
   const cacheKey = buildCacheKey(cacheScopeKey, section);
+  const activeCacheKeyRef = useRef(cacheKey);
+  activeCacheKeyRef.current = cacheKey;
   // Initialize from module-level cache so first render shows data immediately
   const [items, setItemsState] = useState<NotificationConversationSummary[] | null>(
     () => readCache(cacheKey),
@@ -67,10 +69,13 @@ export const useNotificationConversationList = ({
   // Deduplicate concurrent refresh() calls — only one in-flight at a time.
   const refreshInFlightRef = useRef(false);
 
-  useEffect(() => {
-    setItemsState(readCache(cacheKey));
+  useLayoutEffect(() => {
+    const cached = enabled ? readCache(cacheKey) : null;
+    setItemsState(cached);
+    itemsRef.current = cached;
     refreshInFlightRef.current = false;
-  }, [cacheKey]);
+    setLoading(false); setAvailable(true); setV2Available(true);
+  }, [cacheKey, enabled]);
 
   // Recovery: when enabled cycles false→true, reset available so RPC is retried
   useEffect(() => {
@@ -95,6 +100,7 @@ export const useNotificationConversationList = ({
             prev: NotificationConversationSummary[] | null,
           ) => NotificationConversationSummary[] | null),
     ) => {
+      if (activeCacheKeyRef.current !== cacheKey) return;
       setItemsState((prev) => {
         const next =
           typeof updater === 'function'
@@ -134,6 +140,7 @@ export const useNotificationConversationList = ({
           p_before_cursor: null,
           p_limit: 80,
         }));
+        if (activeCacheKeyRef.current !== cacheKey) return null;
         if (error) {
           if (isMissingRpcError(error)) {
             setAvailable(false);
@@ -148,6 +155,7 @@ export const useNotificationConversationList = ({
           p_before_cursor: null,
           p_limit: 80,
         }));
+        if (activeCacheKeyRef.current !== cacheKey) return null;
         if (error && isMissingRpcError(error)) {
           setV2Available(false);
           data = null;
@@ -160,6 +168,7 @@ export const useNotificationConversationList = ({
         ({ data, error } = await supabase.rpc('get_notification_conversations', {
           p_section: section,
         }));
+        if (activeCacheKeyRef.current !== cacheKey) return null;
       }
       if (error) {
         if (isMissingRpcError(error)) {
@@ -179,6 +188,7 @@ export const useNotificationConversationList = ({
         setItemsState(nextItems);
         _convListCache.set(cacheKey, { items: nextItems, fetchedAt: Date.now() });
         const fallbackItems = await fallbackLoadInitial();
+        if (activeCacheKeyRef.current !== cacheKey) return null;
         if (fallbackItems.length > 0) {
           const merged = new Map<string, NotificationConversationSummary>();
           nextItems.forEach((item) => {
@@ -217,8 +227,7 @@ export const useNotificationConversationList = ({
       _convListCache.set(cacheKey, { items: nextItems, fetchedAt: Date.now() });
       return nextItems;
     } finally {
-      setLoading(false);
-      refreshInFlightRef.current = false;
+      if (activeCacheKeyRef.current === cacheKey) { setLoading(false); refreshInFlightRef.current = false; }
     }
   }, [available, cacheKey, enabled, fallbackLoadInitial, mergeFallbackInitial, section, supabase, v2Available]);
 

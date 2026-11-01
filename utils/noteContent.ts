@@ -1,6 +1,8 @@
 export type NoteAttachment = {
   name: string;
   url: string;
+  thumbnailUrl?: string | null;
+  sizeBytes?: number | null;
   mimeType?: string | null;
   assetId?: string | null;
   entryId?: string | null;
@@ -17,7 +19,7 @@ export type ParsedNoteContent = {
 const isObject = (value: unknown): value is Record<string, any> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
-const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif)$/i;
+const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif|tiff?)$/i;
 const VIDEO_EXTENSIONS = /\.(mp4|mkv|mov|avi|webm|3gp|m4v)$/i;
 const AUDIO_EXTENSIONS = /\.(mp3|wav|ogg|oga|aac|m4a|flac|opus|weba|webm)$/i;
 
@@ -85,6 +87,8 @@ const normalizeAttachment = (value: any): NoteAttachment | null => {
     name,
     url,
     mimeType,
+    thumbnailUrl: String(value?.thumbnailUrl || value?.thumbnail_url || '').trim() || null,
+    sizeBytes: Number(value?.sizeBytes || value?.file_size_bytes || value?.size) || null,
     assetId: String(value?.assetId || value?.asset_id || '').trim() || null,
     entryId: String(value?.entryId || value?.entry_id || '').trim() || null,
     moduleId: String(value?.moduleId || value?.module_id || '').trim() || null,

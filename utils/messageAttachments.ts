@@ -32,6 +32,8 @@ const normalizeAttachment = (value: any): NoteAttachment | null => {
     name: normalizeText(value?.name || value?.file_name || value?.fileName || value?.filename || value?.original_name || value?.title) || fallbackName,
     url,
     mimeType: normalizeText(value?.mimeType || value?.mime_type) || null,
+    thumbnailUrl: normalizeRenderableUrl(value?.thumbnailUrl || value?.thumbnail_url) || null,
+    sizeBytes: Number(value?.sizeBytes || value?.file_size_bytes || value?.size) || null,
     fileType: resolveNoteAttachmentFileType({
       ...value,
       fileType: value?.fileType || value?.file_type || value?.media_type || value?.kind || value?.type,
@@ -213,6 +215,8 @@ export const dedupeAttachments = (items: Array<NoteAttachment | null | undefined
       ...normalized,
       name: normalized.name || existing.name,
       mimeType: normalized.mimeType || existing.mimeType || null,
+      thumbnailUrl: normalized.thumbnailUrl || existing.thumbnailUrl || null,
+      sizeBytes: normalized.sizeBytes || existing.sizeBytes || null,
       fileType: normalized.fileType || existing.fileType || null,
       assetId: normalized.assetId || existing.assetId || null,
       entryId: normalized.entryId || existing.entryId || null,

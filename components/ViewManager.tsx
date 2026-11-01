@@ -703,11 +703,12 @@ const ViewManager: React.FC<ViewManagerProps> = ({
       <Button
         type="text"
         icon={<FilterOutlined />}
-        className="module-list-toolbar__compact-icon !h-9 !w-9 !min-w-9 !rounded-full !border-0 !bg-transparent !p-0 !shadow-none !text-gray-500 hover:!bg-black/5 hover:!text-leather-600 dark:!text-gray-300 dark:hover:!bg-white/10"
-        aria-label="لیست‌های نمایش"
-        title="لیست‌های نمایش"
+        className="!h-10 !rounded-lg !px-2 !text-xs !text-gray-600 hover:!bg-black/5 hover:!text-leather-600 dark:!text-gray-300 dark:hover:!bg-white/10"
+        aria-label="فیلتر و نماهای ذخیره‌شده"
+        aria-expanded={isMobileSheetOpen}
+        title="فیلتر و نماهای ذخیره‌شده"
         onClick={() => setIsMobileSheetOpen(true)}
-      />
+      >فیلتر</Button>
       <AdaptivePickerSurface
         open={isMobileSheetOpen}
         title="لیست‌های نمایش"

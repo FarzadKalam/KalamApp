@@ -67,9 +67,9 @@ export const prefetchInternalConversationTimeline = async <TItem,>({
     !normalizedConversationKey
     || normalizedConversationKey === 'system'
     || readCache<TItem>(cacheKey)
-    || _internalTimelinePrefetchInFlight.has(normalizedConversationKey)
+    || _internalTimelinePrefetchInFlight.has(cacheKey)
   ) return;
-  _internalTimelinePrefetchInFlight.add(normalizedConversationKey);
+  _internalTimelinePrefetchInFlight.add(cacheKey);
   try {
     const { data, error } = await supabase.rpc('get_internal_communication_timeline_v3', {
       p_conversation_key: normalizedConversationKey,
@@ -83,7 +83,7 @@ export const prefetchInternalConversationTimeline = async <TItem,>({
       fetchedAt: Date.now(),
     });
   } finally {
-    _internalTimelinePrefetchInFlight.delete(normalizedConversationKey);
+    _internalTimelinePrefetchInFlight.delete(cacheKey);
   }
 };
 
@@ -107,9 +107,9 @@ export const useInternalConversationTimeline = <TItem,>({
   const [readModel, setReadModel] = useState<NotificationReadModel>('item');
   const itemsRef = useRef<TItem[]>([]);
   const normalizedConversationKey = String(conversationKey || '').trim();
-  const activeConversationKeyRef = useRef(normalizedConversationKey);
-  activeConversationKeyRef.current = normalizedConversationKey;
   const timelineCacheKey = normalizedConversationKey ? buildCacheKey(cacheScopeKey, normalizedConversationKey) : '';
+  const activeConversationKeyRef = useRef(timelineCacheKey);
+  activeConversationKeyRef.current = timelineCacheKey;
 
   // True when the current view was already populated from cache.
   // refresh() uses this to skip the loading skeleton for the background fetch.
@@ -162,10 +162,12 @@ export const useInternalConversationTimeline = <TItem,>({
   useLayoutEffect(() => {
     if (!enabled || !conversationKey) {
       loadingInitialKeyRef.current = null;
+      itemsRef.current = []; setItemsState([]); setLoadingOlder(false);
       return;
     }
-    if (loadingInitialKeyRef.current === conversationKey) return;
-    loadingInitialKeyRef.current = conversationKey;
+    if (loadingInitialKeyRef.current === timelineCacheKey) return;
+    loadingInitialKeyRef.current = timelineCacheKey;
+    setLoadingOlder(false);
     // Cache hit → render instantly, background refresh will run without skeleton
     const cached = readCache<TItem>(timelineCacheKey);
     if (cached) {
@@ -203,7 +205,7 @@ export const useInternalConversationTimeline = <TItem,>({
       applyPayload(EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>);
       return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
     }
-    const requestConversationKey = String(conversationKey || '').trim();
+    const requestConversationKey = timelineCacheKey;
 
     if (!options?.force && timelineCacheKey && isCacheFresh(timelineCacheKey)) {
       const cached = readCache<TItem>(timelineCacheKey);
@@ -246,23 +248,22 @@ export const useInternalConversationTimeline = <TItem,>({
       // switches must replace the old timeline so messages never bleed across
       // direct/system/mine views.
       const applied = applyPayload(payload, {
-        preserveExistingItemsOnEmpty: true,
-        mergeWithExisting: Boolean(options?.force),
+        preserveExistingItemsOnEmpty: normalizedConversationKey !== 'system',
+        mergeWithExisting: normalizedConversationKey !== 'system' && Boolean(options?.force),
       });
       if (applied) {
         _internalTimelineCache.set(timelineCacheKey, { payload: { ...payload, items: itemsRef.current }, fetchedAt: Date.now() });
       }
       return payload;
     } finally {
-      setLoadingInitial(false);
-      cacheAppliedRef.current = false;
+      if (activeConversationKeyRef.current === requestConversationKey) { setLoadingInitial(false); cacheAppliedRef.current = false; }
       refreshInFlightKeysRef.current.delete(requestConversationKey);
     }
   }, [applyPayload, available, conversationKey, enabled, fetchTimelinePage, timelineCacheKey]);
 
   const loadOlder = useCallback(async () => {
     if (!enabled || !conversationKey || !cursor || !available || loadingOlder) return;
-    const requestConversationKey = String(conversationKey || '').trim();
+    const requestConversationKey = timelineCacheKey;
     setLoadingOlder(true);
     try {
       const payload = await fetchTimelinePage(cursor);
@@ -298,7 +299,7 @@ export const useInternalConversationTimeline = <TItem,>({
       setHasMore(Boolean(payload.has_more_before));
       setCursor(payload.next_before_cursor || null);
     } finally {
-      setLoadingOlder(false);
+      if (activeConversationKeyRef.current === requestConversationKey) setLoadingOlder(false);
     }
   }, [available, conversationKey, cursor, enabled, fetchTimelinePage, loadingOlder, timelineCacheKey]);
 
