@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildContentCalendarTaskCopyDraft } from './contentCalendarCopy';
+
+vi.mock('../supabaseClient', () => ({ supabase: {}, SUPABASE_URL: 'https://example.test', SUPABASE_ANON_KEY: 'test' }));
 
 describe('content calendar task copy', () => {
   it('keeps custom-field labels, values, and custom statuses in the new draft', () => {
