@@ -4,6 +4,8 @@ create or replace function auth.uid() returns uuid language sql stable as $$
   select nullif(current_setting('test.viewer', true), '')::uuid;
 $$;
 grant usage on schema auth to authenticated;
+create function public.kalam_try_uuid(value text) returns uuid language plpgsql immutable as $$
+begin return value::uuid; exception when invalid_text_representation then return null; end $$;
 alter table public.profiles add column role_id uuid;
 create table public.notes (
   id uuid primary key, org_id uuid not null, source_type text, metadata jsonb,
@@ -40,6 +42,8 @@ returns boolean language sql immutable as $$
     or coalesce($2, '{}'::jsonb) ?| array['workflow_id','automation_rule_id','process_automation_rule_id','workflow_action_type','scheduled_report_id'];
 $$;
 grant select on public.notes to authenticated;
+grant select on public.notification_inbox_items to authenticated;
+create policy fixture_inbox_org_select on public.notification_inbox_items for select to authenticated using (org_id = public.current_org_id());
 -- Deliberately broad within the organization: the restrictive guard must win.
 create policy fixture_org_select on public.notes for select to authenticated using (org_id = public.current_org_id());
 insert into public.profiles(id, org_id, role_id) values
@@ -54,4 +58,6 @@ insert into public.notes(id, org_id, source_type, mention_user_ids, mention_role
  ('40000000-0000-0000-0000-000000000006','20000000-0000-0000-0000-000000000001','user',null,null),
  ('40000000-0000-0000-0000-000000000007','20000000-0000-0000-0000-000000000001','system',null,null);
 insert into public.notification_inbox_items(id, org_id, section, source_type, source_id, category, target_user_ids) values
- ('50000000-0000-0000-0000-000000000001','20000000-0000-0000-0000-000000000001','notes','note','40000000-0000-0000-0000-000000000007','system','{10000000-0000-0000-0000-000000000001}');
+ ('50000000-0000-0000-0000-000000000001','20000000-0000-0000-0000-000000000001','notes','note','40000000-0000-0000-0000-000000000007','system','{10000000-0000-0000-0000-000000000001}'),
+ ('50000000-0000-0000-0000-000000000002','20000000-0000-0000-0000-000000000001','notes','note','40000000-0000-0000-0000-000000000004','system','{10000000-0000-0000-0000-000000000002}'),
+ ('50000000-0000-0000-0000-000000000003','20000000-0000-0000-0000-000000000001','notes','note','40000000-0000-0000-0000-000000000003','system',null);
