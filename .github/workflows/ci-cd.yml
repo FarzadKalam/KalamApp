@@ -54,7 +54,11 @@ jobs:
             database_v1_phase569_system_note_recipient_guard.sql \
             database_v1_phase570_system_inbox_recipient_guard.sql \
             database_v1_phase570_system_inbox_recipient_guard.sql \
-            tests/sql/system_note_guard_assertions.sql; do
+            tests/sql/system_note_guard_assertions.sql \
+            tests/sql/system_note_sender_fixture.sql \
+            database_v1_phase571_system_note_sender_is_not_recipient.sql \
+            database_v1_phase571_system_note_sender_is_not_recipient.sql \
+            tests/sql/system_note_sender_assertions.sql; do
             docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d ledger_test -v ON_ERROR_STOP=1 < "$file"
           done
 
