@@ -169,6 +169,7 @@ for (const page of pages) {
 }
 
 let dynamicCount = 0;
+let dynamicComplete = false;
 const env = readBuildEnv();
 const supabaseUrl = env.VITE_SUPABASE_URL;
 const anonKey = env.VITE_SUPABASE_ANON_KEY;
@@ -197,9 +198,12 @@ if (supabaseUrl && anonKey) {
         dynamicCount += 1;
       }
     }
+    dynamicComplete = true;
   } catch (error) {
     console.warn(`Dynamic SEO pages were skipped: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
+
+fs.writeFileSync(path.join(distDir, 'seo-generation.json'), JSON.stringify({ dynamicComplete, dynamicCount }), 'utf8');
 
 console.log(`Generated ${pages.length} static and ${dynamicCount} dynamic crawlable HTML pages in dist/seo-pages.`);

@@ -81,6 +81,9 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      - name: Public SEO recovery checks
+        run: node --test scripts/preserve-public-seo.test.mjs
+
       - name: Messaging attachment and viewer isolation regression checks
         timeout-minutes: 8
         run: >-
@@ -164,13 +167,12 @@ jobs:
     needs: ci
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist
-
-      - name: Pack dist
-        run: tar -czf dist.tar.gz -C dist .
 
       - name: Start ssh-agent
         uses: webfactory/ssh-agent@v0.9.0
@@ -216,6 +218,39 @@ jobs:
 
           echo "::error::Could not fetch SSH host key from $HOST:$PORT. Check SERVER_HOST/SERVER_PORT and firewall/public reachability from GitHub Actions."
           exit 1
+
+      - name: Preserve published SEO pages during CMS outage
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          if node -e 'process.exit(JSON.parse(require("fs").readFileSync("dist/seo-generation.json", "utf8")).dynamicComplete ? 0 : 1)'; then
+            exit 0
+          fi
+          PREVIOUS_SEO="$RUNNER_TEMP/previous-public-seo"
+          mkdir -p "$PREVIOUS_SEO"
+          DEPLOY_PATH="${DEPLOY_PATH:-/var/www/kalamapp}"
+          for attempt in 1 2 3; do
+            if timeout 60 ssh -o BatchMode=yes -o ConnectTimeout=15 \
+              -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
+              -o ControlMaster=auto -o "ControlPath=$HOME/.ssh/deploy-%C" -o ControlPersist=600 \
+              -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+              "tar -C '$DEPLOY_PATH/current' -cf - seo-pages" | tar -xf - -C "$PREVIOUS_SEO"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::CMS unavailable and previous public SEO pages could not be retrieved."
+              exit 1
+            fi
+            sleep 3
+          done
+          node scripts/preserve-public-seo.mjs "$PREVIOUS_SEO/seo-pages" dist
+
+      - name: Pack dist
+        run: tar -czf dist.tar.gz -C dist .
 
       - name: Upload bundle
         env:
