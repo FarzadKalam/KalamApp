@@ -952,9 +952,6 @@ const ContentCalendarRuntime: React.FC<{
           {assignee.assigneeId ? <IdentityAvatar size={18} option={{ kind: assignee.kind === "role" ? "role" : "user", id: assignee.assigneeId, label: assignee.label || "مسئول", avatarUrl: assignee.avatarUrl || undefined, iconKey: normalizeRoleIconKey(assignee.role?.icon_key) }} /> : <span className="h-full w-full" style={{ backgroundColor: color }} />}
         </span>
         <span className="min-w-0 flex-1"><span className="block line-clamp-2 font-bold text-gray-700 dark:text-gray-100">{title}</span>{isDraft && isProjectDraft ? <span className="block truncate text-[9px] text-slate-600 dark:text-slate-300">پروژه: {getRecordTitle(item.project, MODULES.projects, { fallback: "پروژه" })}</span> : assignee.label ? <span className="block truncate text-[9px] text-gray-500 dark:text-gray-400">مسئول: {assignee.label}</span> : null}</span>
-        {canEdit && copySource ? <Button type="text" size="small" icon={<CopyOutlined />} aria-label={`کپی ${isTask ? "فعالیت" : "پروژه"}`} title={`کپی ${isTask ? "فعالیت" : "پروژه"}`} className="!h-6 !w-6 !min-w-6 !p-0" onClick={(event) => { event.stopPropagation(); setClipboard(copySource); }} /> : null}
-        {canEdit && isDraft ? <Button type="text" size="small" icon={<PlayCircleOutlined />} aria-label="ارجاع خودکار پیش‌نویس" title="ارجاع خودکار پیش‌نویس" className="!h-6 !w-6 !min-w-6 !p-0 !text-slate-500" loading={creating} onClick={(event) => { event.stopPropagation(); void autoAssignDraftItem(item); }} /> : null}
-        {canEdit && !isDraft ? <CalendarDragHandle item={item} disabled={moving} /> : null}
       </div>
       <div className="mt-1 flex flex-wrap gap-x-2 text-[9px] text-gray-500 dark:text-gray-400">
         {isTask && formatContentType(record.content_type) ? <span>نوع محتوا: {formatContentType(record.content_type)}</span> : null}
@@ -962,6 +959,10 @@ const ContentCalendarRuntime: React.FC<{
         {label ? <span style={{ color }}>{label}</span> : null}
         {linkedProject ? <button type="button" onClick={(event) => { event.stopPropagation(); navigate(`/projects/${linkedProject.id}`); }} className="font-bold text-[rgb(var(--brand-700-rgb))] underline decoration-dotted underline-offset-2 dark:text-[rgb(var(--brand-200-rgb))]">پروژه: {getRecordTitle(linkedProject, MODULES.projects, { fallback: "پروژه" })}</button> : null}
       </div>
+      {canEdit ? <div className="mt-1 flex items-center justify-end gap-1">
+        {copySource ? <Button type="text" size="small" icon={<CopyOutlined />} aria-label={`کپی ${isTask ? "فعالیت" : "پروژه"}`} title={`کپی ${isTask ? "فعالیت" : "پروژه"}`} className="!h-6 !w-6 !min-w-6 !p-0" onClick={(event) => { event.stopPropagation(); setClipboard(copySource); }} /> : null}
+        {isDraft ? <Button type="text" size="small" icon={<PlayCircleOutlined />} aria-label="ارجاع خودکار پیش‌نویس" title="ارجاع خودکار پیش‌نویس" className="!h-6 !w-6 !min-w-6 !p-0 !text-slate-500" loading={creating} onClick={(event) => { event.stopPropagation(); void autoAssignDraftItem(item); }} /> : <CalendarDragHandle item={item} disabled={moving} />}
+      </div> : null}
     </div>;
   };
   const placeClipboardOnDay = async (day: ReturnType<typeof buildDays>[number]) => {
