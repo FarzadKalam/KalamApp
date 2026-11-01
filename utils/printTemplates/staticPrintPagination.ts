@@ -13,6 +13,7 @@ import { packPrintFragments } from './fragmentPacking';
 import { getSafeTableRowSlices } from './tableRowSlices';
 import { splitPrintTextBlock } from './splitPrintTextBlock';
 import { collectPrintFlowLeaves, createPrintFragmentAppender } from './printFlowStructure';
+import { getTableCellContinuations, buildTableCellContinuation, type PrintCellSlice } from './tableCellContinuations';
 
 const CUSTOM_PRINT_PAGE_SELECTOR = '.invoice-custom-print-shell .print-template-page';
 const BODY_SELECTOR = '.print-template-body';
@@ -169,6 +170,7 @@ const getStaticBodyHeight = (page: HTMLElement, body: HTMLElement) => {
 };
 
 type PrintFragmentUnit = {
+  cellSlices?: PrintCellSlice[];
   flowRoot?: HTMLElement;
   sourceElement?: HTMLElement;
   top: number;
@@ -339,7 +341,19 @@ const collectPrintFragmentUnits = (root: HTMLElement, contentCapacityPx: number)
             // footer. Represent it as visual row slices, each with a repeated
             // table header, so every word has a physical page to live on.
             const rowSliceCapacityPx = Math.max(48, contentCapacityPx - tableRowOffsetPx - 8);
-            const lineSlices = !row.querySelector('table,img,svg,canvas,iframe,video') ? getSafeTableRowSlices(row, rowSliceCapacityPx, true) : [];
+            const cellParts = row.querySelector('table') ? getTableCellContinuations(row, rowSliceCapacityPx, getSafeTableRowSlices) : null;
+            if (cellParts) {
+              let offset = 0;
+              cellParts.forEach((cellSlices) => {
+                const height = Math.max(...cellSlices.map((slice) => slice.height));
+                units.push({ top: rowBounds.top + offset, bottom: rowBounds.top + offset + height,
+                  kind: 'table-row-slice', node: row, table: element, tableRowOffsetPx,
+                  sliceStartPx: offset, sliceHeightPx: height, cellSlices });
+                offset += height;
+              });
+              return;
+            }
+            const lineSlices = !row.querySelector('img,svg,canvas,iframe,video') ? getSafeTableRowSlices(row, rowSliceCapacityPx, true) : [];
             if (lineSlices.length > 1) {
               lineSlices.forEach((slice) => units.push({
                 top: rowBounds.top + slice.start, bottom: rowBounds.top + slice.start + slice.height,
@@ -562,12 +576,15 @@ const buildPrintFragment = (documentRef: Document, units: PrintFragmentUnit[]) =
     }
 
     if (unit.kind === 'table-row-slice') {
-      const combined = { ...unit };
+      const combined = { ...unit, cellSlices: unit.cellSlices?.map((slice) => ({ ...slice })) };
       index += 1;
       while (index < units.length && units[index].kind === 'table-row-slice' && units[index].node === unit.node && units[index].table === unit.table && Math.abs((combined.sliceStartPx || 0) + (combined.sliceHeightPx || 0) - (units[index].sliceStartPx || 0)) < 1) {
+        combined.cellSlices?.forEach((slice, cellIndex) => { slice.height += units[index].cellSlices?.[cellIndex].height || 0; });
         combined.sliceHeightPx = (combined.sliceHeightPx || 0) + (units[index].sliceHeightPx || 0); index += 1;
       }
-      const slice = buildTableRowSlice(documentRef, combined);
+      const slice = combined.cellSlices && unit.table
+        ? buildTableCellContinuation(unit.node, cloneTableRows(unit.table, [unit.node as HTMLTableRowElement]), combined.cellSlices)
+        : buildTableRowSlice(documentRef, combined);
       if (slice && unit.table) append(unit.table, slice);
       continue;
     }
@@ -838,6 +855,8 @@ export const getStaticCustomPrintPaginationScript = () => `
     var splitTextBlock = ${splitPrintTextBlock.toString()};
     var flowLeaves = ${collectPrintFlowLeaves.toString()};
     var fragmentAppender = ${createPrintFragmentAppender.toString()};
+    var cellContinuations = ${getTableCellContinuations.toString()};
+    var renderCellContinuation = ${buildTableCellContinuation.toString()};
     var isNativeFlow = firstPage.getAttribute('data-print-layout-mode') === 'native-flow';
     if (isNativeFlow) {
       // Default list templates have a presentation-only outer wrapper. Move
@@ -975,7 +994,19 @@ export const getStaticCustomPrintPaginationScript = () => `
                 var firstBodyRow = rows[0];
                 var rowOffset = firstBodyRow ? Math.max(0, relativeBounds(firstBodyRow, sourceRect).top - tableTop) : 0;
                 var rowSliceCapacity = Math.max(48, materializedStep - rowOffset - 8);
-                var lineSlices = !row.querySelector('table,img,svg,canvas,iframe,video') ? rowSlices(row, rowSliceCapacity, true) : [];
+                var cellParts = row.querySelector('table') ? cellContinuations(row, rowSliceCapacity, rowSlices) : null;
+                if (cellParts) {
+                  var cellOffset = 0;
+                  cellParts.forEach(function (cellSlices) {
+                    var height = Math.max.apply(null, cellSlices.map(function (slice) { return slice.height; }));
+                    units.push({ top: rowBounds.top + cellOffset, bottom: rowBounds.top + cellOffset + height,
+                      kind: 'table-row-slice', node: row, table: element, tableRowOffset: rowOffset,
+                      sliceStart: cellOffset, sliceHeight: height, cellSlices: cellSlices });
+                    cellOffset += height;
+                  });
+                  return;
+                }
+                var lineSlices = !row.querySelector('img,svg,canvas,iframe,video') ? rowSlices(row, rowSliceCapacity, true) : [];
                 if (lineSlices.length > 1) {
                   lineSlices.forEach(function (slice) {
                     units.push({ top: rowBounds.top + slice.start, bottom: rowBounds.top + slice.start + slice.height,
@@ -1220,11 +1251,13 @@ export const getStaticCustomPrintPaginationScript = () => `
           }
           if (unit.kind === 'table-row-slice') {
             var combined = Object.assign({}, unit);
+            if (unit.cellSlices) combined.cellSlices = unit.cellSlices.map(function (slice) { return Object.assign({}, slice); });
             index += 1;
             while (index < fragmentUnits.length && fragmentUnits[index].kind === 'table-row-slice' && fragmentUnits[index].node === unit.node && fragmentUnits[index].table === unit.table && Math.abs(combined.sliceStart + combined.sliceHeight - fragmentUnits[index].sliceStart) < 1) {
+              if (combined.cellSlices) combined.cellSlices.forEach(function (slice, cellIndex) { slice.height += fragmentUnits[index].cellSlices[cellIndex].height; });
               combined.sliceHeight += fragmentUnits[index].sliceHeight; index += 1;
             }
-            var slice = buildTableRowSlice(combined);
+            var slice = combined.cellSlices ? renderCellContinuation(unit.node, cloneTableRows(unit.table, [unit.node]), combined.cellSlices) : buildTableRowSlice(combined);
             if (slice) append(unit.table, slice);
             continue;
           }

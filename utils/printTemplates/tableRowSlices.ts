@@ -1,8 +1,14 @@
 /** Choose row continuation cuts in the gaps between real rendered text lines. */
-export const getSafeTableRowSlices = (row: HTMLElement, capacity: number, preferLines = false) => {
+export const getSafeTableRowSlices = (row: HTMLElement, capacity: number, preferLines = false, minimumLines = 4) => {
   const rowRect = row.getBoundingClientRect();
   const height = Math.max(1, Math.ceil(rowRect.height));
   const bands: Array<{ top: number; bottom: number }> = [];
+  // A layout cell can contain a receipt table alongside invoice notes. Its
+  // rows must remain whole while both columns continue at a shared safe cut.
+  Array.from(row.querySelectorAll('table tr')).forEach((nestedRow) => {
+    const rect = nestedRow.getBoundingClientRect();
+    if (rect.height > 1) bands.push({ top: rect.top - rowRect.top, bottom: rect.bottom - rowRect.top });
+  });
   const walker = row.ownerDocument.createTreeWalker(row, NodeFilter.SHOW_TEXT);
   let node = walker.nextNode();
   while (node) {
@@ -22,7 +28,7 @@ export const getSafeTableRowSlices = (row: HTMLElement, capacity: number, prefer
     if (previous && band.top < previous.bottom) previous.bottom = Math.max(previous.bottom, band.bottom);
     else merged.push({ ...band });
   });
-  if (preferLines && merged.length >= 4) {
+  if (preferLines && merged.length >= minimumLines) {
     const boundaries = [0];
     for (let index = 1; index < merged.length; index += 1) {
       const cut = Math.floor((merged[index - 1].bottom + merged[index].top) / 2);

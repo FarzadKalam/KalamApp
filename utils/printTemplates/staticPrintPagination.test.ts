@@ -39,6 +39,25 @@ const createPage = () => {
 };
 
 describe('static custom print pagination', () => {
+  it('starts a short table in the remaining space instead of moving the entire table to the next page', () => {
+    const root = document.createElement('div');
+    const shell = document.createElement('div'); shell.className = 'invoice-custom-print-shell';
+    const page = createPage();
+    const inner = page.querySelector<HTMLElement>('.print-template-body-inner')!;
+    inner.innerHTML = '<section><p>مشخصات طرف حساب</p><table><thead><tr><th>اقلام</th></tr></thead><tbody>' + Array.from({ length: 10 }, (_, i) => `<tr data-item="${i}"><td>قلم ${i}</td></tr>`).join('') + '</tbody></table></section>';
+    const bounds = (top: number, height: number) => () => ({ top, bottom: top + height, height } as DOMRect);
+    inner.getBoundingClientRect = bounds(0, 680);
+    inner.querySelector('p')!.getBoundingClientRect = bounds(0, 360);
+    inner.querySelector('table')!.getBoundingClientRect = bounds(360, 320);
+    inner.querySelector('thead tr')!.getBoundingClientRect = bounds(360, 20);
+    inner.querySelectorAll('tbody tr').forEach((row, index) => { row.getBoundingClientRect = bounds(380 + index * 30, 30); });
+    shell.append(page); root.append(shell); document.body.append(root);
+    expect(repaginateStaticCustomPrintDocument(root)).toBe(2);
+    const firstRows = shell.querySelector('.print-template-page')!.querySelectorAll('[data-item]');
+    expect(firstRows.length).toBeGreaterThan(0);
+    expect(firstRows.length).toBeLessThan(10);
+    expect(Array.from(shell.querySelectorAll('[data-item]'), (row) => row.getAttribute('data-item'))).toEqual(Array.from({ length: 10 }, (_, i) => String(i)));
+  });
   it('retains nested party details and the header while selecting only this page’s invoice rows', () => {
     const table = document.createElement('table');
     table.innerHTML = '<thead><tr><th>عنوان</th></tr></thead><tbody><tr><td><table><tbody><tr><td>فروشنده</td></tr><tr><td>خریدار</td></tr></tbody></table></td></tr><tr><td>قلم صفحه بعد</td></tr></tbody>';
