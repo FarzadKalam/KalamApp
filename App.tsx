@@ -1,3 +1,4 @@
+import { TAZE_SYSTEM_BRAND_ASSETS } from './utils/tazeSystemBrandAssets';
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { HelmetProvider } from "react-helmet-async";
 import { createRoot } from "react-dom/client";
@@ -355,7 +356,7 @@ const MarketingSiteHostApp: React.FC = () => {
     const link: HTMLLinkElement = existing || document.createElement("link");
     link.rel = "icon";
     link.type = "image/png";
-    link.href = "/tazesystem_logo.png";
+    link.href = TAZE_SYSTEM_BRAND_ASSETS.favicon;
     if (!existing) document.head.appendChild(link);
   }, []);
 

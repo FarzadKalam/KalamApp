@@ -1,4 +1,4 @@
-import tazeSystemLogo from "../src/tazesystem_logo.png";
+import { TAZE_SYSTEM_BRAND_ASSETS } from "./tazeSystemBrandAssets";
 import {
   BRANDING_INTEGRATION_CONNECTION_TYPE,
   BRANDING_INTEGRATION_PROVIDER,
@@ -161,7 +161,7 @@ const upsertFaviconLink = () => {
   return next;
 };
 
-const DEFAULT_FAVICON_PATH = tazeSystemLogo;
+const DEFAULT_FAVICON_PATH = TAZE_SYSTEM_BRAND_ASSETS.favicon;
 
 const resolveSafeFaviconHref = (iconUrl?: string | null) => {
   const rawValue = String(iconUrl || "").trim();

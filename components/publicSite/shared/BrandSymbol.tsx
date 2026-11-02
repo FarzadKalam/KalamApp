@@ -1,3 +1,4 @@
+import { TAZE_SYSTEM_BRAND_ASSETS } from '../../../utils/tazeSystemBrandAssets';
 import React, { useEffect, useRef } from 'react';
 import { motion, useMotionValue, useReducedMotion, useSpring, useTransform } from 'framer-motion';
 
@@ -47,7 +48,7 @@ const BrandSymbol: React.FC = () => {
         <div className="brand-symbol__layer brand-symbol__layer--back" aria-hidden="true" />
         <div className="brand-symbol__layer brand-symbol__layer--middle" aria-hidden="true" />
         <div className="brand-symbol__core">
-          <img src="/tazesystem_logo.png" width="210" height="210" alt="تازه سیستم" draggable={false} />
+          <img src={TAZE_SYSTEM_BRAND_ASSETS.hero} width="210" height="210" alt="تازه سیستم" draggable={false} />
           <motion.div className="brand-symbol__light" style={{ x: reduceMotion ? '-50%' : lightX, y: reduceMotion ? '-50%' : lightY }} aria-hidden="true" />
         </div>
         <span className="brand-symbol__word brand-symbol__word--one">مشتریان</span>

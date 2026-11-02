@@ -28,8 +28,6 @@ export default function SeoHead({
       <meta property="og:type" content={ogType} />
       {canonical && <meta property="og:url" content={canonical} />}
       {ogImage && <meta property="og:image" content={ogImage} />}
-      {ogImage && <meta property="og:image:width" content="1200" />}
-      {ogImage && <meta property="og:image:height" content="630" />}
       <meta property="og:site_name" content={SITE_NAME} />
       <meta property="og:locale" content="fa_IR" />
 

@@ -1,4 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="16" fill="#0f766e"/>
-  <path d="M18 16h10v32H18zM32 16h10v14l10-14h10L48 34l14 14H50L42 40v8H32z" fill="#f8fafc"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256"><title>Taze System</title><g transform="translate(-23.29 -23.44) scale(1.182)"><g fill="#F82377"><path transform="rotate(0 128 128)" d="M135.25 24.25A104 104 0 0 1 226.91 160.14C218 173 198 164 178 148L146.82 130C166 134 185 140 192 126C194 98 165 65 132.74 60.17Z"/><path transform="rotate(120 128 128)" d="M135.25 24.25A104 104 0 0 1 226.91 160.14C218 173 198 164 178 148L146.82 130C166 134 185 140 192 126C194 98 165 65 132.74 60.17Z"/><path transform="rotate(240 128 128)" d="M135.25 24.25A104 104 0 0 1 226.91 160.14C218 173 198 164 178 148L146.82 130C166 134 185 140 192 126C194 98 165 65 132.74 60.17Z"/></g></g></svg>

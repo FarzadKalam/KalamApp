@@ -82,7 +82,7 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Public SEO recovery checks
-        run: node --test scripts/preserve-public-seo.test.mjs
+        run: node --test scripts/preserve-public-seo.test.mjs scripts/public-brand-seo.test.mjs
 
       - name: Messaging attachment and viewer isolation regression checks
         timeout-minutes: 8

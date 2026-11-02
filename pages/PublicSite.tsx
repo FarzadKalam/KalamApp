@@ -1,3 +1,4 @@
+import { TAZE_SYSTEM_BRAND_ASSETS } from '../utils/tazeSystemBrandAssets';
 import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { CheckCircleOutlined, EnvironmentOutlined, MailOutlined, PhoneOutlined } from '@ant-design/icons';
 import { Link, useLocation } from 'react-router-dom';
@@ -65,7 +66,7 @@ const Header = () => (
     <a href="#public-page-content" className="sr-only focus:not-sr-only focus:absolute focus:bg-white focus:p-3">رفتن به محتوای صفحه</a>
     <div className="mx-auto flex h-20 max-w-7xl items-center justify-between px-5">
       <Link to={sitePath('/')} className="flex items-center gap-3 text-zinc-950">
-        <img src="/tazesystem_logo.png" alt="لوگوی تازه سیستم" className="h-11 w-11 rounded-xl object-contain" />
+        <img src={TAZE_SYSTEM_BRAND_ASSETS.logo} alt="لوگوی تازه سیستم" className="h-11 w-11 rounded-xl object-contain" />
         <div className="leading-tight">
           <div className="text-lg font-black">تازه سیستم</div>
           <div className="text-xs font-medium text-zinc-500">نرم‌افزار یکپارچه کسب‌وکار</div>
@@ -129,7 +130,7 @@ const Footer = () => {
       <div className="mx-auto grid max-w-7xl gap-10 px-5 py-12 md:grid-cols-[1.4fr_1fr_1fr_1.1fr]">
         <div>
           <Link to={sitePath('/')} className="inline-flex items-center gap-3 text-zinc-950">
-            <img src="/tazesystem_logo.png" alt="تازه سیستم" className="h-10 w-10 rounded-xl object-contain" />
+            <img src={TAZE_SYSTEM_BRAND_ASSETS.logo} alt="تازه سیستم" className="h-10 w-10 rounded-xl object-contain" />
             <span className="text-lg font-black">تازه سیستم</span>
           </Link>
           <p className="mt-4 max-w-sm text-sm leading-7 text-zinc-600">{tagline}</p>

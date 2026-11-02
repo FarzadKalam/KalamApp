@@ -87,6 +87,7 @@ import AiSparkleIcon from './ai/AiSparkleIcon';
 import ActionIcon from './common/ActionIcon';
 import NotificationUnreadBadge from './notifications/NotificationUnreadBadge';
 import SidebarMenu from './layout/SidebarMenu';
+import TazeSystemAttribution from './common/TazeSystemAttribution';
 import { resolveMobileKeyboardViewport } from '../utils/mobileKeyboardViewport';
 import { ADVERTISING_CAMPAIGNS_MODULE_ID } from '../utils/advertisingCampaigns';
 import { renderModuleIcon } from '../utils/moduleIcons';
@@ -1499,7 +1500,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         theme={isDarkMode ? 'dark' : 'light'}
         width={260}
       >
-        <div className="h-16 flex items-center justify-center border-b border-gray-200 dark:border-dark-border overflow-hidden px-4 sticky top-0 bg-inherit z-10">
+        <div className="flex h-full min-h-0 flex-col">
+        <div className="h-16 shrink-0 flex items-center justify-center border-b border-gray-200 dark:border-dark-border overflow-hidden px-4 sticky top-0 bg-inherit z-10">
           <div className={`transition-all duration-300 font-black text-lg text-leather-500 tracking-tighter whitespace-nowrap ${collapsed ? 'opacity-0 w-0 hidden' : 'opacity-100'}`}>
             {brandShortName}
           </div>
@@ -1517,7 +1519,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           />
         )}
 
-        <div className="h-[calc(var(--app-viewport-height,100dvh)-64px)] overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto">
             <SidebarMenu
               items={menuItems}
               selectedKey={selectedSidebarKey}
@@ -1527,6 +1529,13 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               isDarkMode={isDarkMode}
               onNavigate={handleSidebarNavigate}
             />
+        </div>
+        <div
+          className="flex shrink-0 items-center justify-center border-t border-gray-100 px-3 pt-1 dark:border-dark-border"
+          style={{ paddingBottom: 'max(4px, env(safe-area-inset-bottom))' }}
+        >
+          <TazeSystemAttribution collapsed={collapsed && !isMobile} />
+        </div>
         </div>
       </Sider>
 

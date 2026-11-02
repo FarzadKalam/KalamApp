@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "تازه سیستم",
   "short_name": "تازه سیستم",
   "lang": "fa-IR",
@@ -34,17 +34,17 @@
   },
   "icons": [
     {
-      "src": "/pwa-192x192.png",
+      "src": "/pwa-192x192.png?v=f01",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": "/pwa-512x512.png",
+      "src": "/pwa-512x512.png?v=f01",
       "sizes": "512x512",
       "type": "image/png"
     },
     {
-      "src": "/maskable-512x512.png",
+      "src": "/maskable-512x512.png?v=f01",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

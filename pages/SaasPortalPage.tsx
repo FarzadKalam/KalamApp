@@ -1,3 +1,4 @@
+import { TAZE_SYSTEM_BRAND_ASSETS } from '../utils/tazeSystemBrandAssets';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { Alert, Button, ConfigProvider, Input, Select, theme as antdTheme } from 'antd';
@@ -114,7 +115,7 @@ const SAAS_WIZARD_FORM_STORAGE_KEY = 'kalam_saas_wizard_form';
 
 const Logo = () => (
   <div className="flex items-center gap-3 mb-10">
-    <img src="/tazesystem_logo.png" alt="تازه سیستم" className="h-10 w-10 rounded-xl object-contain" />
+    <img src={TAZE_SYSTEM_BRAND_ASSETS.logo} alt="تازه سیستم" className="h-10 w-10 rounded-xl object-contain" />
     <span className="text-lg font-black text-slate-900">تازه سیستم</span>
   </div>
 );

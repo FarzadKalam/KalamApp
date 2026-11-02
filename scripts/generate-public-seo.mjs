@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { PUBLIC_SITE_URL, publicOrganizationSchema, publicWebsiteSchema } from '../shared/publicBrandSeo.mjs';
 
 const root = process.cwd();
 const distDir = path.join(root, 'dist');
 const templatePath = path.join(distDir, 'index.html');
 const outputDir = path.join(distDir, 'seo-pages');
-const siteUrl = 'https://tazesystem.ir';
+const siteUrl = PUBLIC_SITE_URL;
 
 const pages = [
   {
@@ -14,6 +15,7 @@ const pages = [
     description: 'تازه سیستم؛ CRM ایرانی دارای هوش مصنوعی، دایرکت هوشمند اینستاگرام و نرم‌افزار یکپارچه فروش، حسابداری، پروژه، فرآیند و منابع انسانی.',
     heading: 'CRM ایرانی هوشمند و نرم‌افزار یکپارچه کسب‌وکار',
     body: 'مشتریان، فروش، دایرکت اینستاگرام، حسابداری، پروژه‌ها، فرآیندها، منابع انسانی و هوش مصنوعی کسب‌وکار را در یک فضای ابری مدیریت کنید.',
+    image: `${siteUrl}/logo.png`,
   },
   {
     path: '/features', file: 'features.html',
@@ -133,8 +135,12 @@ const writeSeoPage = ({ file, title, description, canonical, heading, bodyHtml, 
   const jsonLd = JSON.stringify({
     '@context': 'https://schema.org', '@type': schemaType, name: title, headline: heading,
     description, url: canonical, image: image || undefined,
-    isPartOf: { '@type': 'WebSite', name: 'تازه سیستم', url: siteUrl }, inLanguage: 'fa-IR',
+    isPartOf: file === 'home.html' ? { '@id': `${siteUrl}/#website` } : { '@type': 'WebSite', name: 'تازه سیستم', url: siteUrl }, inLanguage: 'fa-IR',
   }).replaceAll('<', '\\u003c');
+  const brandJsonLd = file === 'home.html'
+    ? [publicOrganizationSchema(), publicWebsiteSchema()].map((schema) =>
+      `<script data-rh="true" type="application/ld+json">${JSON.stringify(schema).replaceAll('<', '\\u003c')}</script>`)
+    : [];
   const head = [
     `<title data-rh="true">${escapeHtml(title)}</title>`,
     `<meta data-rh="true" name="description" content="${escapeHtml(description)}" />`,
@@ -148,8 +154,9 @@ const writeSeoPage = ({ file, title, description, canonical, heading, bodyHtml, 
     '<meta data-rh="true" property="og:site_name" content="تازه سیستم" />',
     image ? `<meta data-rh="true" property="og:image" content="${escapeHtml(image)}" />` : '',
     `<script data-rh="true" type="application/ld+json">${jsonLd}</script>`,
+    ...brandJsonLd,
   ].filter(Boolean).join('\n    ');
-  const fallback = `<main data-seo-fallback="true" dir="rtl"><article><h1>${escapeHtml(heading)}</h1>${bodyHtml}</article><nav aria-label="پیوندهای اصلی"><a href="/features">امکانات</a> <a href="/pricing">تعرفه‌ها</a> <a href="/learn">آموزش‌ها</a> <a href="/blog">بلاگ</a></nav></main>`;
+  const fallback = `<main data-seo-fallback="true" dir="rtl"><article><h1>${escapeHtml(heading)}</h1>${bodyHtml}</article><nav aria-label="پیوندهای اصلی"><a href="/features">امکانات</a> <a href="/pricing">تعرفه‌ها</a> <a href="/learn">آموزش‌ها</a> <a href="/blog">بلاگ</a> <a href="/updates">تازه‌های محصول</a> <a href="/about">درباره تازه سیستم</a> <a href="/contact">تماس با ما</a></nav></main>`;
   const html = template.replace(/<title>.*?<\/title>/s, head).replace('<div id="root"></div>', `<div id="root">${fallback}</div>`);
   const outputPath = path.join(outputDir, file);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });

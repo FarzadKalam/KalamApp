@@ -1,7 +1,9 @@
-const SITE_NAME = 'تازه سیستم';
-const SITE_URL = 'https://tazesystem.ir';
+import { PUBLIC_SITE_NAME, PUBLIC_SITE_URL, publicOrganizationSchema, publicWebsiteSchema } from '../shared/publicBrandSeo.mjs';
+
+const SITE_NAME = PUBLIC_SITE_NAME;
+const SITE_URL = PUBLIC_SITE_URL;
 const SITE_DESCRIPTION = 'تازه سیستم؛ CRM ایرانی دارای هوش مصنوعی، دایرکت هوشمند اینستاگرام و نرم‌افزار یکپارچه فروش، حسابداری، پروژه، فرآیند و منابع انسانی برای کسب‌وکارها';
-const DEFAULT_OG_IMAGE = `${SITE_URL}/og-default.png`;
+const DEFAULT_OG_IMAGE = `${SITE_URL}/logo.png`;
 const TWITTER_HANDLE = '@tazesystem';
 
 export type JsonLdObject = Record<string, unknown>;
@@ -55,35 +57,11 @@ export function calculateReadingTime(blocks: Block[]): number {
 // JSON-LD generators
 // ──────────────────────────────────────────────────
 export function generateOrganizationJsonLd(): JsonLdObject {
-  return {
-    '@context': 'https://schema.org',
-    '@type': 'Organization',
-    name: SITE_NAME,
-    url: SITE_URL,
-    logo: `${SITE_URL}/logo.png`,
-    sameAs: [],
-    contactPoint: {
-      '@type': 'ContactPoint',
-      contactType: 'customer service',
-      availableLanguage: 'Persian',
-    },
-  };
+  return publicOrganizationSchema();
 }
 
 export function generateWebSiteJsonLd(): JsonLdObject {
-  return {
-    '@context': 'https://schema.org',
-    '@type': 'WebSite',
-    name: SITE_NAME,
-    url: SITE_URL,
-    description: SITE_DESCRIPTION,
-    inLanguage: 'fa-IR',
-    potentialAction: {
-      '@type': 'SearchAction',
-      target: { '@type': 'EntryPoint', urlTemplate: `${SITE_URL}/search?q={search_term_string}` },
-      'query-input': 'required name=search_term_string',
-    },
-  };
+  return publicWebsiteSchema();
 }
 
 export function generateBreadcrumbJsonLd(

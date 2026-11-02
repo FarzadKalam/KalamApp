@@ -16,6 +16,14 @@ const APP_SHELL = [
   '/pwa-512x512.png',
   '/maskable-512x512.png',
   '/favicon.svg',
+  '/favicon.png?v=f01',
+  '/manifest.webmanifest?v=f01',
+  '/apple-touch-icon.png?v=f01',
+  '/pwa-192x192.png?v=f01',
+  '/pwa-512x512.png?v=f01',
+  '/maskable-512x512.png?v=f01',
+  '/brand/taze-system-logo-f01.webp',
+  '/brand/taze-system-hero-f01.webp',
 ];
 
 const MAX_PAGE_ENTRIES = 20;

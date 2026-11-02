@@ -1,3 +1,4 @@
+import { TAZE_SYSTEM_BRAND_ASSETS } from '../../utils/tazeSystemBrandAssets';
 import React from 'react';
 import { PlusOutlined, PushpinFilled } from '@ant-design/icons';
 import { Tooltip } from 'antd';
@@ -205,7 +206,7 @@ export const StoryRing: React.FC<StoryRingProps> = ({ story, size = 60, onClick 
             }}
           >
             <img
-              src="/pwa-192.png"
+              src={TAZE_SYSTEM_BRAND_ASSETS.logo}
               alt="تازه‌سیستم"
               style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }}
               onError={(e) => {
