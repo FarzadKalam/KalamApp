@@ -14,17 +14,19 @@ describe('otpAuth helpers', () => {
     expect(getOtpErrorMessage({ message: 'Token is invalid' }, 'fallback')).toBe('کد تایید واردشده معتبر نیست.');
   });
 
-  it('retries an existing phone login through resend when GoTrue rejects the otp route as signup', async () => {
+  it('rejects a missing login account without treating an empty resend success as delivery', async () => {
+    let resendCalled = false;
     const authClient = {
       signInWithOtp: async () => ({ error: { message: 'Signups not allowed for otp' } }),
-      resend: async (payload: unknown) => {
-        expect(payload).toEqual({ phone: '+989121234567', type: 'sms' });
+      resend: async () => {
+        resendCalled = true;
         return { error: null };
       },
     };
 
     await expect(requestSmsOtp(authClient, '۰۹۱۲۱۲۳۴۵۶۷', { shouldCreateUser: false }))
-      .resolves.toBe('+989121234567');
+      .rejects.toThrow('ارسال کد برای این حساب انجام نشد');
+    expect(resendCalled).toBe(false);
   });
 
   it('does not use resend while a new account is being created', async () => {
@@ -37,7 +39,7 @@ describe('otpAuth helpers', () => {
       },
     };
 
-    await expect(requestSmsOtp(authClient, '۰۹۱۲۱۲۳۴۵۶۷')).rejects.toThrow('ارسال کد تایید ناموفق بود.');
+    await expect(requestSmsOtp(authClient, '۰۹۱۲۱۲۳۴۵۶۷')).rejects.toThrow('ارسال کد برای این حساب انجام نشد');
     expect(resendCalled).toBe(false);
   });
 });
