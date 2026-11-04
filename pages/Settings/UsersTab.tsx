@@ -529,6 +529,7 @@ const UsersTab: React.FC = () => {
         await fetchData();
         resetDrawerState();
       } else {
+        if (!normalizedPhone) throw new Error('شماره موبایل معتبر نیست.');
         const candidate = await lookupPhoneLoginCandidate(normalizedPhone);
         const invite = await lookupPhoneSignupInvite(normalizedPhone);
         assertPhoneAvailableForOrg(candidate, invite, seedInvite?.org_id || currentOrgId, { allowSameOrgPendingInvite: true });
