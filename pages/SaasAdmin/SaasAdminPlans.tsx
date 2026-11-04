@@ -158,6 +158,7 @@ const FEATURE_OPTIONS = [
   { id: 'ai_legal_assistant', label: 'دستیار حقوقی AI' },
   { id: 'ai_voip_auto_reply', label: 'پاسخگویی خودکار VOIP با AI' },
   { id: 'taxpayer_system', label: 'سامانه مودیان' },
+  { id: 'organization_email', label: 'ایمیل سازمانی؛ ارسال، دریافت و گزارش‌ها' },
   { id: 'api_access', label: 'دسترسی API' },
   { id: 'wordpress_connection', label: 'اتصال به وردپرس و ووکامرس' },
   { id: 'advanced_reports', label: 'گزارش‌ساز پیشرفته' },

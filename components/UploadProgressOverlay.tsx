@@ -16,6 +16,7 @@ import ClockCircleOutlined from '@ant-design/icons/ClockCircleOutlined';
 import DownOutlined from '@ant-design/icons/DownOutlined';
 import LoadingOutlined from '@ant-design/icons/LoadingOutlined';
 import MessageOutlined from '@ant-design/icons/MessageOutlined';
+import MailOutlined from '@ant-design/icons/MailOutlined';
 import MinusOutlined from '@ant-design/icons/MinusOutlined';
 import PhoneOutlined from '@ant-design/icons/PhoneOutlined';
 import ReloadOutlined from '@ant-design/icons/ReloadOutlined';
@@ -150,7 +151,7 @@ const getPresenceClassName = (phase: PresencePhase) => (
       : 'translate-y-0 opacity-100'
 );
 
-type OverlayFilterTab = 'all' | 'internal' | 'activities' | 'responsibilities' | 'system' | 'bot' | 'sms' | 'voip' | 'uploads';
+type OverlayFilterTab = 'all' | 'internal' | 'activities' | 'responsibilities' | 'system' | 'bot' | 'sms' | 'voip' | 'uploads' | 'email';
 
 const resolveNotificationTab = (item: UiNotificationOverlayItem): Exclude<OverlayFilterTab, 'uploads' | 'all'> => {
   const channel = String(item.channel || '').trim() as OverlayNotificationChannel;
@@ -158,6 +159,7 @@ const resolveNotificationTab = (item: UiNotificationOverlayItem): Exclude<Overla
   if (item.kind === 'responsibility') return 'responsibilities';
   if (channel === 'internal' || channel === 'system' || channel === 'bot' || channel === 'sms') return channel;
   if (channel === 'voip') return 'voip';
+  if (channel === 'email' || item.kind === 'email') return 'email';
   if (item.kind === 'bot') return 'bot';
   if (item.kind === 'sms') return 'sms';
   if (item.kind === 'voip_call') return 'voip';
@@ -302,6 +304,7 @@ const UploadProgressOverlay: React.FC = () => {
       system: 0,
       bot: 0,
       sms: 0,
+      email: 0,
       voip: 0,
       uploads: tasks.length,
     };
@@ -338,6 +341,7 @@ const UploadProgressOverlay: React.FC = () => {
     { key: 'system', label: 'سیستم', icon: <BellOutlined />, count: tabCounts.system },
     { key: 'bot', label: 'بات', icon: <RobotOutlined />, count: tabCounts.bot },
     { key: 'sms', label: 'پیامک', icon: <MessageOutlined />, count: tabCounts.sms },
+    { key: 'email', label: 'ایمیل', icon: <MailOutlined />, count: tabCounts.email },
     { key: 'voip', label: 'تماس', icon: <PhoneOutlined />, count: tabCounts.voip },
     { key: 'uploads', label: 'آپلود', icon: <CloudUploadOutlined />, count: tabCounts.uploads },
   ] as Array<{ key: OverlayFilterTab; label: string; icon: React.ReactNode; count: number }>), [tabCounts]);

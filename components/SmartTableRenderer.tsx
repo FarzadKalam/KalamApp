@@ -1,3 +1,5 @@
+import { EmailActions } from './email/EmailActions';
+import { isEmailField } from '../utils/organizationEmail';
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors } from '@dnd-kit/core';
@@ -1335,6 +1337,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
              const persianPercent = toPersianNumber(Number(value).toFixed(1)) + '%';
              return renderRowLink(record, <span className="text-xs text-gray-600 dark:text-gray-300 persian-number">{persianPercent}</span>);
          }
+        if (isEmailField(field)) return <EmailActions value={value} moduleId={moduleConfig?.id} recordId={record.id} />;
         if (field.type === FieldType.PHONE) {
              return (
                <PhoneActionsPopover

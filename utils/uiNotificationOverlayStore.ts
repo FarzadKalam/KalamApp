@@ -1,8 +1,8 @@
 import { useSyncExternalStore } from 'react';
 import type { NoteAttachment } from './noteContent';
 
-export type OverlayNotificationKind = 'note' | 'task' | 'responsibility' | 'bot' | 'assistant' | 'voip_call' | 'sms';
-export type OverlayNotificationChannel = 'internal' | 'system' | 'bot' | 'sms' | 'voip' | 'generic';
+export type OverlayNotificationKind = 'note' | 'task' | 'responsibility' | 'bot' | 'assistant' | 'voip_call' | 'sms' | 'email';
+export type OverlayNotificationChannel = 'internal' | 'system' | 'bot' | 'sms' | 'voip' | 'generic' | 'email';
 
 export interface UiNotificationOverlayItem {
   id: string;

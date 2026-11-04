@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-vi.mock('../supabaseClient', () => ({ supabase: {} }));
+vi.mock('../supabaseClient', () => ({ supabase: {}, SUPABASE_URL: 'https://example.test', SUPABASE_ANON_KEY: 'test' }));
 import { clearSessionBootstrapCache, fetchSessionBootstrap } from './sessionCache';
 
 const createProfileQuery = (selectExpr: string) => ({
