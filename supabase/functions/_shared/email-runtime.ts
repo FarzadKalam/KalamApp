@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { fetchOrganizationRequestContext } from './organization-request-context.ts';
 export const emailCors = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -47,7 +48,7 @@ export const authorizeEmail = async (request: Request, body: any, action: 'view'
     return { ...service, orgId: String(body.org_id), userId: null, system: body.source === 'system', token };
   }
   const [ctx, allowed] = await Promise.all([
-    service.rpc('get_current_organization_context', {}, token, request),
+    fetchOrganizationRequestContext(service.url, service.key, token, request),
     service.rpc('email_can_access', { p_action: action }, token, request),
   ]);
   if (!ctx?.org_id || !allowed || body.org_id && body.org_id !== ctx.org_id) throw new Error('دسترسی به ایمیل این سازمان مجاز نیست.');

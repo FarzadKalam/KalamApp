@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { fetchOrganizationRequestContext } from '../_shared/organization-request-context.ts';
 
 type SmsMode = 'rest' | 'soap';
 
@@ -540,31 +541,10 @@ const verifyUserToken = async (supabaseUrl: string, serviceRoleKey: string, user
   return user;
 };
 
-const getUserSmsContext = async (supabaseUrl: string, serviceRoleKey: string, userId: string) => {
-  const profilesUrl = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/profiles`);
-  profilesUrl.searchParams.set('id', `eq.${userId}`);
-  profilesUrl.searchParams.set('select', 'org_id,role_id');
-  profilesUrl.searchParams.set('limit', '1');
-  const profileResponse = await fetch(profilesUrl.toString(), { headers: getServiceHeaders(serviceRoleKey) });
-  const profileRows = profileResponse.ok ? await profileResponse.json() : [];
-  const profile = Array.isArray(profileRows) ? profileRows[0] : null;
-  const orgId = String(profile?.org_id || '').trim();
-  if (!orgId) throw new Error('سازمان کاربر برای ارسال پیامک مشخص نیست.');
-
-  let canManageSettings = false;
-  const roleId = String(profile?.role_id || '').trim();
-  if (roleId) {
-    const rolesUrl = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/org_roles`);
-    rolesUrl.searchParams.set('id', `eq.${roleId}`);
-    rolesUrl.searchParams.set('org_id', `eq.${orgId}`);
-    rolesUrl.searchParams.set('select', 'permissions');
-    rolesUrl.searchParams.set('limit', '1');
-    const roleResponse = await fetch(rolesUrl.toString(), { headers: getServiceHeaders(serviceRoleKey) });
-    const roleRows = roleResponse.ok ? await roleResponse.json() : [];
-    const permissions = Array.isArray(roleRows) ? roleRows[0]?.permissions || {} : {};
-    canManageSettings = permissions?.__settings_tabs?.view !== false && permissions?.__settings_tabs?.edit !== false;
-  }
-  return { orgId, canManageSettings };
+const getUserSmsContext = async (supabaseUrl: string, serviceRoleKey: string, token: string, request: Request) => {
+  const context = await fetchOrganizationRequestContext(supabaseUrl, serviceRoleKey, token, request);
+  const settings = context.permissions?.__settings_tabs || {};
+  return { orgId: context.org_id, canManageSettings: Boolean(context.role_id) && settings.view !== false && settings.edit !== false };
 };
 
 type HookLeafEntry = { path: string; value: string };
@@ -1614,8 +1594,8 @@ Deno.serve(async (req) => {
     let allowSettingsOverride = isInternalServiceRequest;
     if (!isInternalServiceRequest) {
       try {
-        const user = await verifyUserToken(supabaseUrl, serviceRoleKey, token);
-        const context = await getUserSmsContext(supabaseUrl, serviceRoleKey, String(user.id));
+        await verifyUserToken(supabaseUrl, serviceRoleKey, token);
+        const context = await getUserSmsContext(supabaseUrl, serviceRoleKey, token, req);
         requestOrgId = context.orgId;
         allowSettingsOverride = context.canManageSettings;
       } catch {
