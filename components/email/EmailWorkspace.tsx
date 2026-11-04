@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Button, Empty, Select, Spin, Tag, message } from 'antd';
 import { MailOutlined, ReloadOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
@@ -11,19 +11,23 @@ export default function EmailWorkspace({ onBack, initialMessageId }: { onBack?: 
   const [folder, setFolder] = useState('inbox');
   const [selected, setSelected] = useState<EmailMessage | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const selectionRequest = useRef(0);
   const { identity, canSend, rows, accounts, error, busy, hasMore, more, refresh: load } = useOrganizationEmail(folder);
   const open = useEmailComposerStore(s => s.open);
   const select = useCallback(async (mail: EmailMessage) => {
     if (!identity || mail.org_id !== identity.org) return;
+    const request = ++selectionRequest.current;
     try {
       const { data, error } = await supabase.from('email_messages').select('id,org_id,account_id,thread_id,direction,source,from_address,from_name,to_addresses,cc_addresses,subject,body_text,status,error_message,message_at,attachments').eq('id', mail.id).eq('org_id', identity.org).single();
       if (error || !data) throw new Error('متن این ایمیل دریافت نشد. دوباره تلاش کنید.');
+      if (request !== selectionRequest.current) return;
       setSelected(data as EmailMessage);
       const { error: readError } = await supabase.rpc('email_mark_read', { p_message_id: mail.id });
       if (readError) message.warning('ایمیل باز شد، اما ثبت خوانده‌شدن انجام نشد.');
       window.dispatchEvent(new Event('organization-email-changed'));
     } catch (e: any) { message.error(e.message || 'دریافت ایمیل انجام نشد.'); }
   }, [identity]);
+  useEffect(() => { selectionRequest.current++; setSelected(null); return () => { selectionRequest.current++; }; }, [identity]);
   useEffect(() => {
     if (!initialMessageId || !identity) return; let alive = true;
     if (alive) void select({ id: initialMessageId, org_id: identity.org } as EmailMessage);

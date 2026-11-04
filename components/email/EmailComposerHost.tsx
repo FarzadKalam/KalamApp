@@ -14,6 +14,7 @@ export default function EmailComposerHost() {
   const [loading, setLoading] = useState(false); const [error, setError] = useState(''); const [uncertain, setUncertain] = useState(false);
   const [canSend, setCanSend] = useState(false);
   const requestKey = useRef(''); const orgId = useRef('');
+  const sending = useRef(false);
   useEffect(() => {
     if (!seed) return; let active = true;
     requestKey.current = crypto.randomUUID(); setFiles([]); setAccounts([]); setCanSend(false); setError(''); setUncertain(false); form.resetFields(); form.setFieldsValue(seed); setLoading(true);
@@ -31,7 +32,8 @@ export default function EmailComposerHost() {
     else close();
   };
   const send = async () => {
-    if (busy || uncertain || !canSend) return;
+    if (sending.current || busy || uncertain || !canSend) return;
+    sending.current = true;
     try {
       const values = await form.validateFields(); setBusy(true); setError('');
       const context = await fetchSessionBootstrap(supabase, { force: true });
@@ -42,7 +44,7 @@ export default function EmailComposerHost() {
       const result = await invokeEmail('send-email', { to: values.to, cc: values.cc || [], bcc: values.bcc || [], subject: values.subject, body: values.body, account_id: values.accountId, reply_to_id: seed?.replyToId, module_id: seed?.moduleId, record_id: seed?.recordId, attachments, request_key: requestKey.current });
       message.success(result.message || 'ایمیل برای ارسال پذیرفته شد.'); window.dispatchEvent(new Event('organization-email-changed')); close();
     } catch (e: any) { if (e.errorFields) return; setError(e.message || 'ارسال انجام نشد.'); if (e.transportAccepted) setUncertain(true); else if (e.retrySafe) requestKey.current = crypto.randomUUID(); }
-    finally { setBusy(false); }
+    finally { sending.current = false; setBusy(false); }
   };
   const recipientRules = [{ validator: async (_: unknown, values: string[]) => { if ((values || []).some(v => !isEmailAddress(v))) throw new Error('آدرس ایمیل را کامل و معتبر وارد کنید.'); } }];
   return <Modal open={Boolean(seed)} title={seed?.replyToId ? 'پاسخ ایمیل' : 'نوشتن ایمیل'} width={820} onCancel={dismiss} maskClosable={false} footer={<><Button disabled={busy} onClick={dismiss}>بستن</Button><Button type="primary" icon={<SendOutlined />} loading={busy} disabled={loading || !accounts.length || uncertain || !canSend} onClick={() => void send()}>ارسال ایمیل</Button></>}>

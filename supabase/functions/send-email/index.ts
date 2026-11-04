@@ -77,7 +77,7 @@ export const createSendEmailHandler = (send = sendSmtpEmail) => async (request: 
     return emailJson(200,{success:true,message_id:id,sent:result.accepted.length,status,message:warning || 'سرور ایمیل پیام را پذیرفت؛ تحویل هنوز تأیید نشده است.'});
   } catch (error) {
     const raw=String(error?.message || '');
-    const uncertain=accepted || attempted && ![500,501,502,503,504,530,535,550,551,552,553,554].includes(Number(error?.responseCode));
+    const uncertain=error?.code==='23505' || accepted || attempted && ![500,501,502,503,504,530,535,550,551,552,553,554].includes(Number(error?.responseCode));
     const detail=uncertain?'نتیجهٔ ارسال قطعی نیست؛ برای جلوگیری از ارسال تکراری، گزارش ایمیل و صندوق اصلی را بررسی کنید.':
       /[آ-ی]/.test(raw)?raw:'ارسال ایمیل انجام نشد. اتصال یا اطلاعات فرستنده را بررسی کنید.';
     if (ctx && message?.id) {

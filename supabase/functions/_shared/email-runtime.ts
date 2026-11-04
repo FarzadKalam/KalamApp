@@ -18,7 +18,11 @@ export const emailService = () => {
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(20000),
     });
     const result = await response.json().catch(() => null);
-    if (!response.ok) throw new Error('ذخیره یا دریافت اطلاعات ایمیل ناموفق بود.');
+    if (!response.ok) {
+      const error: any = new Error('ذخیره یا دریافت اطلاعات ایمیل ناموفق بود.');
+      error.code = result?.code;
+      throw error;
+    }
     return result;
   };
   const rpc = async (name: string, body = {}, token = key, request?: Request) => {

@@ -64,7 +64,7 @@ export const signedEmailAttachments = async (ctx: any,message: any) => {
     });
     const data = await response.json().catch(()=>null);
     if (!response.ok || !data?.signedURL) throw new Error('دریافت پیوست ایمیل مجاز نشد.');
-    result.push({...file,url:`${ctx.url}/storage/v1${data.signedURL}`});
+    result.push({...file,url:`${ctx.url}/storage/v1${data.signedURL}&download=${encodeURIComponent(file.name)}`});
   }
   return result;
 };
