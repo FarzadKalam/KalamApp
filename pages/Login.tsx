@@ -518,7 +518,7 @@ const Login = () => {
         redirectTo: `${window.location.origin}/login`,
       });
       if (error) throw error;
-      message.success('اگر این ایمیل حساب داشته باشد، لینک بازیابی برای آن ارسال می‌شود.');
+      message.success('اگر این ایمیل حساب داشته باشد، لینک بازیابی برای آن ارسال می‌شود. اگر نامه را ندیدید، پوشهٔ Spam / Junk / هرزنامه را هم بررسی کنید.', 8);
     } catch (error) { message.error(toFaErrorMessage(error, 'ارسال ایمیل ناموفق بود.')); }
     finally { setLoading(false); }
   };

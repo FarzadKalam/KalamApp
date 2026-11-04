@@ -42,7 +42,7 @@ export default function EmailComposerHost() {
         const reader = new FileReader(); reader.onload = () => resolve({ name: file.name, mime_type: file.type, content_base64: String(reader.result).split(',')[1] }); reader.onerror = reject; reader.readAsDataURL(file.originFileObj!);
       })));
       const result = await invokeEmail('send-email', { to: values.to, cc: values.cc || [], bcc: values.bcc || [], subject: values.subject, body: values.body, account_id: values.accountId, reply_to_id: seed?.replyToId, module_id: seed?.moduleId, record_id: seed?.recordId, attachments, request_key: requestKey.current });
-      message.success(result.message || 'ایمیل برای ارسال پذیرفته شد.'); window.dispatchEvent(new Event('organization-email-changed')); close();
+      message.success(`${result.message || 'ایمیل برای ارسال پذیرفته شد.'} اگر گیرنده نامه را ندید، پوشهٔ Spam / Junk / هرزنامه را هم بررسی کند.`, 8); window.dispatchEvent(new Event('organization-email-changed')); close();
     } catch (e: any) { if (e.errorFields) return; setError(e.message || 'ارسال انجام نشد.'); if (e.transportAccepted) setUncertain(true); else if (e.retrySafe) requestKey.current = crypto.randomUUID(); }
     finally { sending.current = false; setBusy(false); }
   };

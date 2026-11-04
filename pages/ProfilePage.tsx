@@ -400,7 +400,7 @@ const ProfilePage: React.FC = () => {
         if (error) {
             message.error(toFaErrorMessage(error, 'ارسال ایمیل ناموفق بود.'));
         } else {
-            message.success('لینک بازیابی رمز به ایمیل ارسال شد');
+            message.success('لینک بازیابی رمز به ایمیل ارسال شد. اگر نامه را ندیدید، پوشهٔ Spam / Junk / هرزنامه را هم بررسی کنید.', 8);
         }
     };
 
