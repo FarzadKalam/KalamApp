@@ -81,6 +81,10 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      - name: Organization membership and login regression checks
+        timeout-minutes: 10
+        run: npm run test:organization-memberships
+
       - name: Public SEO recovery checks
         run: node --test scripts/preserve-public-seo.test.mjs scripts/public-brand-seo.test.mjs
 

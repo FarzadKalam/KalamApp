@@ -4,7 +4,7 @@ import {
   Alert,
   App,
   Button,
-  Drawer,
+  Modal,
   Form,
   Input,
   Popconfirm,
@@ -56,6 +56,7 @@ type UserRow = {
   voip_dial_mode?: 'telefonchy_smartcall' | 'sip_link' | 'tel_link' | null;
   created_at?: string | null;
   org_roles?: any;
+  can_edit_identity?: boolean;
   _rowType: 'profile' | 'invite';
   _inviteId?: string | null;
   _isPending?: boolean;
@@ -108,6 +109,8 @@ const UsersTab: React.FC = () => {
   const [currentUserRoleId, setCurrentUserRoleId] = useState<string | null>(null);
   const [currentUserRoleTitle, setCurrentUserRoleTitle] = useState<string | null>(null);
   const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
+  const [currentOrgName, setCurrentOrgName] = useState('سازمان');
+  const [pendingMemberId, setPendingMemberId] = useState<string | null>(null);
   const [seedInvite, setSeedInvite] = useState<UserRow | null>(null);
   const [phoneAuthState, setPhoneAuthState] = useState<any | null>(null);
   const [phoneOtpLoading, setPhoneOtpLoading] = useState(false);
@@ -126,6 +129,7 @@ const UsersTab: React.FC = () => {
     || normalizeRoleToken(effectiveCurrentRoleTitle) === 'مدیراشد';
   const canManageUsers = canManageUsersByRoleContext(currentUserRole, effectiveCurrentRoleTitle);
   const isEditingRealUser = editingUser?._rowType === 'profile';
+  const canEditIdentity = !isEditingRealUser || editingUser?.can_edit_identity !== false;
   const drawerTitle = isEditingRealUser
     ? 'ویرایش کاربر'
     : seedInvite
@@ -168,6 +172,11 @@ const UsersTab: React.FC = () => {
 
   const loadCurrentUser = async () => {
     const snapshot = await fetchSessionBootstrap(supabase, { force: true });
+    if (snapshot.bootstrapError || !snapshot.orgId) {
+      setCurrentOrgId(null);
+      message.error('دسترسی به سازمان تأیید نشد. دوباره وارد شوید.');
+      return;
+    }
     const snapshotUserId = snapshot.user?.id || null;
     let nextUserId = snapshotUserId;
     let nextSoftwareRole = snapshot.profile?.role || null;
@@ -200,6 +209,7 @@ const UsersTab: React.FC = () => {
     setCurrentUserRoleId(nextRoleId);
     setCurrentUserRoleTitle(nextRoleTitle);
     setCurrentOrgId(nextOrgId);
+    setCurrentOrgName(snapshot.profile?.org_name || 'سازمان');
   };
 
   const fetchData = async () => {
@@ -275,16 +285,22 @@ const UsersTab: React.FC = () => {
 
   const handleRoleChange = async (record: UserRow, roleId: string) => {
     if (record._rowType !== 'profile') return;
-    const { error } = await supabase.from('profiles').update({ role_id: roleId }).eq('id', record.id);
-    if (error) {
-      message.error(toFaErrorMessage(error as any, 'تغییر جایگاه سازمانی ناموفق بود'));
-      return;
-    }
-    if (record.id === currentUserId) {
+    await updateMember(record, { role_id: roleId }, `جایگاه کاربر در ${currentOrgName} تغییر کرد.`);
+  };
+
+  const updateMember = async (record: UserRow, patch: Record<string, unknown>, successText: string) => {
+    setPendingMemberId(record.id);
+    try {
+      const { error } = await supabase.rpc('manage_organization_member', { p_user_id: record.id, p_patch: patch });
+      if (error) throw error;
       clearSessionBootstrapCache();
-    }
-    message.success('جایگاه سازمانی کاربر تغییر کرد');
-    fetchData();
+      clearReferenceDataCache();
+      clearIdentityDirectoryCache(currentOrgId);
+      await fetchData();
+      message.success(successText);
+    } catch (error) {
+      message.error(toFaErrorMessage(error as any, 'تغییر عضویت ذخیره نشد؛ وضعیت قبلی حفظ شده است.'));
+    } finally { setPendingMemberId(null); }
   };
 
   const handleStatusChange = async (record: UserRow, isActive: boolean) => {
@@ -302,18 +318,7 @@ const UsersTab: React.FC = () => {
       return;
     }
 
-    const { error } = await supabase.from('profiles').update({ is_active: isActive }).eq('id', record.id);
-    if (error) {
-      message.error(toFaErrorMessage(error as any, 'بروزرسانی وضعیت ناموفق بود'));
-      return;
-    }
-    if (record.id === currentUserId) {
-      clearSessionBootstrapCache();
-    }
-    clearReferenceDataCache();
-    clearIdentityDirectoryCache(currentOrgId);
-    message.success('وضعیت کاربر بروزرسانی شد');
-    fetchData();
+    await updateMember(record, { is_active: isActive }, `عضویت کاربر در ${currentOrgName} ${isActive ? 'فعال' : 'غیرفعال'} شد.`);
   };
 
   const handleDeleteRecord = async (record: UserRow) => {
@@ -335,11 +340,11 @@ const UsersTab: React.FC = () => {
         return;
       }
 
-      await invokeUserAdmin({
-        action: 'delete_user',
-        userId: record.id,
-      });
-      message.success('کاربر حذف شد');
+      const { error } = await supabase.rpc('manage_organization_member', { p_user_id: record.id, p_remove: true });
+      if (error) throw error;
+      clearReferenceDataCache();
+      clearIdentityDirectoryCache(currentOrgId);
+      message.success(`عضویت کاربر در ${currentOrgName} حذف شد؛ حساب شخصی او حفظ شده است.`);
       await fetchData();
     } catch (error) {
       message.error(toFaErrorMessage(error as any, 'حذف کاربر ناموفق بود'));
@@ -456,7 +461,7 @@ const UsersTab: React.FC = () => {
   };
 
   const invokeUserAdmin = async (body: Record<string, any>) => {
-    return invokeUserAdminFunction(body);
+    return invokeUserAdminFunction({ orgId: currentOrgId, ...body });
   };
 
   const buildVoipProfilePatch = (values: any) => ({
@@ -474,7 +479,7 @@ const UsersTab: React.FC = () => {
     }
 
     const normalizedPhone = normalizeIranMobile(values.mobile);
-    if (!normalizedPhone) {
+    if (!normalizedPhone && canEditIdentity) {
       message.error('شماره موبایل معتبر نیست.');
       return;
     }
@@ -497,21 +502,18 @@ const UsersTab: React.FC = () => {
           action: 'update_user',
           userId: editingUser.id,
           orgId: editingUser.org_id || currentOrgId,
-          fullName: values.full_name,
-          email: normalizeEmail(values.email) || null,
-          phone: normalizedPhone,
+          ...(canEditIdentity ? {
+            fullName: values.full_name,
+            email: normalizeEmail(values.email) || null,
+            phone: normalizedPhone,
+            avatarUrl: avatarUrl ?? editingUser.avatar_url ?? null,
+            password: values.password || undefined,
+          } : {}),
           roleId: values.role_id || null,
           role: values.role || 'viewer',
-          avatarUrl: avatarUrl ?? editingUser.avatar_url ?? null,
           isActive: values.is_active !== false,
-          password: values.password || undefined,
+          settings: buildVoipProfilePatch(values),
         });
-
-        const { error: voipUpdateError } = await supabase
-          .from('profiles')
-          .update(buildVoipProfilePatch(values))
-          .eq('id', editingUser.id);
-        if (voipUpdateError) throw voipUpdateError;
 
         if (editingUser.id === currentUserId) {
           clearSessionBootstrapCache();
@@ -523,10 +525,9 @@ const UsersTab: React.FC = () => {
         }
         clearReferenceDataCache();
         clearIdentityDirectoryCache(currentOrgId);
-        message.success('اطلاعات کاربر بروزرسانی شد');
+        message.success(`اطلاعات و عضویت کاربر در ${currentOrgName} ذخیره شد.`);
         await fetchData();
-        const updatedRecord = rows.find((row) => row._rowType === 'profile' && row.id === editingUser.id) || editingUser;
-        setEditingUser(updatedRecord);
+        resetDrawerState();
       } else {
         const candidate = await lookupPhoneLoginCandidate(normalizedPhone);
         const invite = await lookupPhoneSignupInvite(normalizedPhone);
@@ -551,12 +552,15 @@ const UsersTab: React.FC = () => {
         await fetchData();
         const createdId = String(created?.profile?.id || created?.user?.id || '').trim();
         if (createdId) {
-          const { data: createdProfile } = await supabase
-            .from('profiles')
-            .update(buildVoipProfilePatch(values))
-            .eq('id', createdId)
-            .select('id, org_id, role, role_id, full_name, email, mobile_1, avatar_url, is_active, voip_enabled, voip_operator_code, voip_extension, voip_service_id, voip_dial_mode, created_at, org_roles(title)')
-            .maybeSingle();
+          const { error: settingsError } = await supabase.rpc('manage_organization_member', {
+            p_user_id: createdId, p_patch: { settings: buildVoipProfilePatch(values) },
+          });
+          if (settingsError) throw settingsError;
+          const { data: createdMembers, error: createdMemberError } = await supabase.rpc('list_organization_members', {
+            p_org_id: currentOrgId, p_user_id: createdId, p_limit: 1,
+          });
+          if (createdMemberError) throw createdMemberError;
+          const createdProfile = createdMembers?.[0];
           if (createdProfile) {
             setEditingUser({
               ...createdProfile,
@@ -726,17 +730,18 @@ const UsersTab: React.FC = () => {
         ),
     },
     {
-      title: 'وضعیت',
+      title: 'وضعیت عضویت',
       key: 'status',
       width: 120,
       render: (_: any, record: UserRow) => (
         <Switch
           checked={record.is_active !== false}
+          loading={pendingMemberId === record.id}
           checkedChildren="فعال"
           unCheckedChildren="غیرفعال"
           onChange={(checked) => handleStatusChange(record, checked)}
           className="bg-gray-300"
-          disabled={!canEditRecord(record)}
+          disabled={!canEditRecord(record) || record.id === currentUserId}
         />
       ),
     },
@@ -750,11 +755,11 @@ const UsersTab: React.FC = () => {
             {record._rowType === 'invite' ? 'تکمیل ایجاد' : 'ویرایش'}
           </Button>
           <Popconfirm
-            title={record._rowType === 'invite' ? 'حذف دعوت کاربر' : 'حذف کاربر'}
+            title={record._rowType === 'invite' ? 'حذف دعوت کاربر' : `حذف عضویت در ${currentOrgName}`}
             description={
               record._rowType === 'invite'
                 ? 'این دعوت حذف شود؟'
-                : 'این کاربر از سیستم حذف شود؟'
+                : 'فقط عضویت در این سازمان حذف می‌شود. حساب شخصی و عضویت در سازمان‌های دیگر حفظ می‌شود.'
             }
             okText="حذف"
             cancelText="انصراف"
@@ -762,7 +767,7 @@ const UsersTab: React.FC = () => {
             disabled={!canDeleteRecord(record)}
           >
             <Button size="small" danger icon={<DeleteOutlined />} disabled={!canDeleteRecord(record)}>
-              حذف
+              {record._rowType === 'invite' ? 'حذف دعوت' : 'حذف از سازمان'}
             </Button>
           </Popconfirm>
         </Space>
@@ -772,6 +777,9 @@ const UsersTab: React.FC = () => {
 
   return (
     <div className="py-4">
+      <h2 className="text-lg font-bold mb-2">اعضای سازمان {currentOrgName}</h2>
+      <Alert className="mb-4" type="info" showIcon message="نقش و وضعیت هر عضو فقط مربوط به این سازمان است."
+        description="ورود به سازمان دیگر، فرد را از این فهرست حذف نمی‌کند. برای توقف دسترسی، عضویت را غیرفعال کنید." />
       <div className="flex justify-end mb-4">
         <Button
           type="primary"
@@ -796,22 +804,33 @@ const UsersTab: React.FC = () => {
         />
       </div>
 
-      <Drawer
-        title={drawerTitle}
+      <Modal
+        title={`${drawerTitle} — ${currentOrgName}`}
         width={560}
-        onClose={resetDrawerState}
+        onCancel={resetDrawerState}
+        closable={!submitting}
+        maskClosable={!submitting}
+        keyboard={!submitting}
+        footer={[
+          <Button key="cancel" disabled={submitting} onClick={resetDrawerState}>انصراف</Button>,
+          <Button key="save" type="primary" onClick={() => form.submit()} loading={submitting} icon={<SaveOutlined />}>
+            {isEditingRealUser ? 'ذخیره تغییرات' : 'ثبت کاربر'}
+          </Button>,
+        ]}
         open={isDrawerOpen}
         zIndex={1600}
         getContainer={typeof document === 'undefined' ? undefined : () => document.body}
-        styles={{ body: { paddingBottom: 96 } }}
+        styles={{ body: { maxHeight: '65dvh', overflowY: 'auto', paddingBottom: 16 } }}
         className="dark:bg-[#141414]"
       >
         <Form form={form} layout="vertical" onFinish={handleAddOrEditUser}>
+          <Alert className="mb-4" type="info" showIcon message="اطلاعات شخصی مشترک است؛ عضویت برای همین سازمان است."
+            description={canEditIdentity ? 'تغییر نام، تصویر، شماره، ایمیل یا رمز عبور در همه سازمان‌های این شخص اثر دارد.' : 'ویرایش اطلاعات شخصی مشترک توسط خود شخص انجام می‌شود. شما می‌توانید نقش و عضویت او را در این سازمان مدیریت کنید.'} />
           <div className="flex justify-center mb-6">
             <div className="text-center">
               <ProfileAvatar size={80} src={avatarUrl} icon={<UserOutlined />} className="mb-2 bg-gray-100" name={form.getFieldValue('full_name')} />
-              <Upload showUploadList={false} beforeUpload={handleAvatarUpload}>
-                <Button size="small" icon={<UploadOutlined />}>
+              <Upload disabled={!canEditIdentity} showUploadList={false} beforeUpload={handleAvatarUpload}>
+                <Button disabled={!canEditIdentity} size="small" icon={<UploadOutlined />}>
                   آپلود عکس
                 </Button>
               </Upload>
@@ -819,15 +838,15 @@ const UsersTab: React.FC = () => {
           </div>
 
           <Form.Item label="نام و نام خانوادگی" name="full_name" rules={[{ required: true, message: 'نام کاربر الزامی است' }]}>
-            <Input />
+            <Input disabled={!canEditIdentity} />
           </Form.Item>
           <Form.Item label="ایمیل" name="email" normalize={normalizeEmail} rules={[{ type: 'email', message: 'ایمیل معتبر نیست' }]}>
-            <Input />
+            <Input disabled={!canEditIdentity} />
           </Form.Item>
           <Form.Item label="شماره موبایل" name="mobile" normalize={formatIranMobileForInput} rules={[{ required: true, message: 'شماره موبایل الزامی است' }]}>
-            <Input dir="ltr" placeholder="0912..." />
+            <Input disabled={!canEditIdentity} dir="ltr" placeholder="شماره موبایل" />
           </Form.Item>
-          <Form.Item label="جایگاه سازمانی" name="role_id" rules={[{ required: true, message: 'جایگاه سازمانی الزامی است' }]}>
+          <Form.Item label={`جایگاه سازمانی در ${currentOrgName}`} name="role_id" rules={[{ required: true, message: 'جایگاه سازمانی الزامی است' }]}>
             <AdaptiveIdentityPicker placeholder="انتخاب کنید" pickerTitle="انتخاب جایگاه سازمانی" scopes={['role']} valueMode="raw" />
           </Form.Item>
           <Form.Item label="نقش سیستمی" name="role" rules={[{ required: true, message: 'نقش سیستمی الزامی است' }]}>
@@ -859,11 +878,12 @@ const UsersTab: React.FC = () => {
             </>
           ) : (
             <Form.Item label="رمز عبور جدید" name="password">
-              <Input.Password placeholder="در صورت نیاز تغییر دهید" />
+              <Input.Password disabled={!canEditIdentity} placeholder="در صورت نیاز تغییر دهید" />
             </Form.Item>
           )}
-          <Form.Item label="وضعیت" name="is_active" valuePropName="checked" initialValue>
-            <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
+          <Form.Item label={`وضعیت عضویت در ${currentOrgName}`} name="is_active" valuePropName="checked" initialValue
+            extra="غیرفعال‌سازی فقط دسترسی به همین سازمان را متوقف می‌کند.">
+            <Switch disabled={editingUser?.id === currentUserId} checkedChildren="فعال" unCheckedChildren="غیرفعال" />
           </Form.Item>
 
           <div className="mt-6 rounded-2xl border border-gray-200 dark:border-gray-800 p-4">
@@ -910,18 +930,18 @@ const UsersTab: React.FC = () => {
                   message={`وضعیت ورود پیامکی: ${phoneStatusMeta.text}`}
                   description={
                     normalizedFormPhone
-                      ? 'اگر شماره را تغییر داده‌اید، ابتدا ذخیره کنید و بعد کد تایید را بفرستید.'
+                      ? (canEditIdentity ? 'اگر شماره را تغییر داده‌اید، ابتدا ذخیره کنید و بعد کد تایید را بفرستید.' : 'تأیید شمارهٔ حساب مشترک را صاحب حساب از پروفایل خود انجام می‌دهد.')
                       : 'برای این کاربر هنوز شماره موبایل معتبری ثبت نشده است.'
                   }
                 />
                 <div className="flex flex-wrap gap-2">
-                  <Button type="primary" className="bg-leather-600" loading={phoneOtpLoading && !phoneOtpRequested} onClick={handleSendPhoneOtp}>
+                  <Button disabled={!canEditIdentity} type="primary" className="bg-leather-600" loading={phoneOtpLoading && !phoneOtpRequested} onClick={handleSendPhoneOtp}>
                     ارسال کد تایید
                   </Button>
                 </div>
                 <div className="flex flex-col sm:flex-row gap-2">
                   <OtpCodeInput value={phoneOtpCode} onChange={setPhoneOtpCode} />
-                  <Button type="primary" loading={phoneOtpLoading && phoneOtpRequested} onClick={handleVerifyPhoneOtp}>
+                  <Button disabled={!canEditIdentity} type="primary" loading={phoneOtpLoading && phoneOtpRequested} onClick={handleVerifyPhoneOtp}>
                     تایید شماره
                   </Button>
                 </div>
@@ -929,14 +949,8 @@ const UsersTab: React.FC = () => {
             )}
           </div>
 
-          <div className="absolute bottom-0 left-0 right-0 p-4 bg-white dark:bg-[#1a1a1a] border-t border-gray-200 dark:border-gray-800 flex justify-end gap-2">
-            <Button onClick={resetDrawerState}>انصراف</Button>
-            <Button type="primary" htmlType="submit" loading={submitting} icon={<SaveOutlined />} className="bg-leather-600 border-none">
-              {isEditingRealUser ? 'ذخیره تغییرات' : 'ثبت کاربر'}
-            </Button>
-          </div>
         </Form>
-      </Drawer>
+      </Modal>
 
       <style>{`
         .custom-erp-table .ant-table-thead > tr > th { background: #f9fafb !important; color: #6b7280 !important; font-size: 12px !important; }

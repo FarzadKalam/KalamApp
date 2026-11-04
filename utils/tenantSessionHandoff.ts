@@ -1,7 +1,9 @@
 import { supabase, SUPABASE_AUTH_STORAGE_KEY } from '../supabaseClient';
+import { clearOrganizationContext, selectOrganizationContext } from './organizationContext';
 
 const HANDOFF_CHANNEL = 'tazesystem-tenant-session-v1';
 const APP_ORIGIN = 'https://app.tazesystem.ir';
+const SIGN_IN_ORIGINS = new Set([APP_ORIGIN, 'https://tazesystem.ir', 'https://www.tazesystem.ir']);
 
 export const getTenantHandoffOrigin = (host: string): string => {
   const normalized = String(host || '').trim().toLowerCase();
@@ -18,9 +20,9 @@ export const getTenantHandoffOrigin = (host: string): string => {
 
 /** Session tokens are sent to the selected origin in memory, never in a URL. */
 export const handoffSessionToTenant = async (host: string, orgId: string): Promise<void> => {
-  if (window.location.origin !== APP_ORIGIN) throw new Error('ورود مستقیم فقط از صفحه ورود تازه سیستم انجام می‌شود.');
+  if (!SIGN_IN_ORIGINS.has(window.location.origin)) throw new Error('ورود مستقیم فقط از صفحه ورود تازه سیستم انجام می‌شود.');
   const origin = getTenantHandoffOrigin(host);
-  if (origin === APP_ORIGIN || origin === 'https://kalam.tazesystem.ir') {
+  if (origin === APP_ORIGIN) {
     throw new Error('آدرس سازمان معتبر نیست.');
   }
   const { data, error } = await supabase.auth.getSession();
@@ -79,7 +81,7 @@ export const receiveTenantSessionHandoff = (): (() => void) => {
   if (window.parent === window || window.location.origin === APP_ORIGIN) return () => undefined;
   let busy = false;
   const onMessage = async (event: MessageEvent) => {
-    if (event.origin !== APP_ORIGIN || event.source !== window.parent) return;
+    if (!SIGN_IN_ORIGINS.has(event.origin) || event.source !== window.parent) return;
     const message = event.data;
     if (busy || message?.channel !== HANDOFF_CHANNEL || message.type !== 'session') return;
     busy = true;
@@ -93,12 +95,15 @@ export const receiveTenantSessionHandoff = (): (() => void) => {
       if (accessError || !Array.isArray(accesses) || !accesses.some((item) =>
         item.org_id === message.orgId && String(item.resolved_host || '').toLowerCase() === window.location.hostname.toLowerCase()
       )) throw accessError || new Error('دسترسی به این سازمان تایید نشد.');
-      window.parent.postMessage({ channel: HANDOFF_CHANNEL, type: 'complete' }, APP_ORIGIN);
+      selectOrganizationContext(message.orgId);
+      window.parent.postMessage({ channel: HANDOFF_CHANNEL, type: 'complete' }, event.origin);
     } catch {
-      window.parent.postMessage({ channel: HANDOFF_CHANNEL, type: 'failed' }, APP_ORIGIN);
+      clearOrganizationContext();
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
+      window.parent.postMessage({ channel: HANDOFF_CHANNEL, type: 'failed' }, event.origin);
     }
   };
   window.addEventListener('message', onMessage);
-  window.parent.postMessage({ channel: HANDOFF_CHANNEL, type: 'ready' }, APP_ORIGIN);
+  SIGN_IN_ORIGINS.forEach(origin => window.parent.postMessage({ channel: HANDOFF_CHANNEL, type: 'ready' }, origin));
   return () => window.removeEventListener('message', onMessage);
 };

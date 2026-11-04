@@ -37,6 +37,9 @@ const { authState, functionState, rpcState, profileState, supabaseMock } = vi.ho
 
 vi.mock('../supabaseClient', () => ({
   supabase: supabaseMock,
+  SUPABASE_URL: 'https://example.supabase.co',
+  SUPABASE_ANON_KEY: 'test-anon-key',
+  SUPABASE_AUTH_STORAGE_KEY: 'test-auth-token',
 }));
 
 const renderPage = () => render(<SaasPortalPage />);

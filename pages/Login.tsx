@@ -14,7 +14,6 @@ import { assertLoginOtpRequestAllowed, consumePhoneSignupInvite, lookupPhoneLogi
 import { normalizeIranMobile } from '../utils/phoneNumber';
 import { trackSuccessfulLogin } from '../utils/userLoginTracking';
 import { signOutLocalSession } from '../utils/authSession';
-import { invokeUserAdminFunction } from '../utils/userAdminInvoke';
 import { clearSessionBootstrapCache, fetchSessionBootstrap } from '../utils/sessionCache';
 import useUserAnnouncements from '../hooks/useUserAnnouncements';
 import UserAnnouncementsBanner from '../components/announcements/UserAnnouncementsBanner';
@@ -23,6 +22,7 @@ import ResilientImage from '../components/common/ResilientImage';
 import OtpCodeInput from '../components/common/OtpCodeInput';
 import { formatIranMobileForInput } from '../utils/phoneNumber';
 import { handoffSessionToTenant } from '../utils/tenantSessionHandoff';
+import { selectOrganizationContext } from '../utils/organizationContext';
 
 const LOGIN_MODE_STORAGE_KEY = 'kalam_login_mode';
 const OTP_PHONE_STORAGE_KEY = 'kalam_login_otp_phone';
@@ -62,6 +62,7 @@ const Login = () => {
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [recoveryMode, setRecoveryMode] = useState(false);
+  const [phoneRecovery, setPhoneRecovery] = useState(false);
   const [loading, setLoading] = useState(false);
   const [otpLoading, setOtpLoading] = useState(false);
   const [brandTitle, setBrandTitle] = useState(() => readRuntimeBrandSnapshot().title);
@@ -189,164 +190,9 @@ const Login = () => {
     }
   }, [loginMode, otpCooldown]);
 
-  const resolveOrganizationAccess = async (
-    preferredRoleName?: string | null,
-    preferredOrgId?: string | null,
-    preferredRoleId?: string | null
-  ) => {
-    let orgId = preferredOrgId || null;
-    if (!orgId && !preferredRoleId) {
-      return {
-        orgId: null,
-        roleId: null,
-        roleName: String(preferredRoleName || '').trim().toLowerCase() || null,
-      };
-    }
-
-    const normalizedRoleName = String(preferredRoleName || '').trim().toLowerCase();
-    const preferredRoleNames = [normalizedRoleName, 'viewer'].filter(Boolean);
-
-    const { data: roles } = await supabase
-      .from('org_roles')
-      .select('id, title, org_id')
-      .order('created_at', { ascending: true })
-      .limit(200);
-
-    const exactRole = preferredRoleId
-      ? (roles || []).find((role: any) => String(role?.id || '') === String(preferredRoleId))
-      : null;
-    if (!orgId && exactRole?.org_id) {
-      orgId = String(exactRole.org_id);
-    }
-
-    const matchingRole = (roles || []).find((role: any) => {
-      const roleTitle = String(role?.title || '').trim().toLowerCase();
-      const sameOrg = !orgId || !role?.org_id || String(role.org_id) === String(orgId);
-      return sameOrg && preferredRoleNames.includes(roleTitle);
-    });
-
-    const fallbackRole = (roles || []).find((role: any) => !orgId || !role?.org_id || String(role.org_id) === String(orgId));
-
-    return {
-      orgId,
-      roleId: exactRole?.id || matchingRole?.id || fallbackRole?.id || null,
-      roleName:
-        normalizedRoleName ||
-        String(exactRole?.title || matchingRole?.title || fallbackRole?.title || 'viewer').trim().toLowerCase() ||
-        'viewer',
-    };
-  };
-
-  const repairProfileOrganizationAccess = async (profile: any, phoneNumber: string, userEmail?: string | null) => {
-    const normalizedPhone = normalizeIranMobile(phoneNumber);
-    const updates: Record<string, any> = {};
-
-    let preferredOrgId = profile?.org_id || null;
-    let preferredRoleId = profile?.role_id || null;
-    let preferredRoleName = profile?.role || null;
-
-    const invite = normalizedPhone ? await lookupPhoneSignupInvite(normalizedPhone) : null;
-    if (invite?.exists) {
-      preferredOrgId = preferredOrgId || invite.org_id || null;
-      preferredRoleId = preferredRoleId || invite.role_id || null;
-      preferredRoleName = preferredRoleName || invite.role || null;
-      if (!String(profile?.full_name || '').trim() && String(invite?.full_name || '').trim()) {
-        updates.full_name = String(invite.full_name).trim();
-      }
-      if (!String(profile?.email || '').trim() && String(invite?.email || '').trim()) {
-        updates.email = String(invite.email).trim();
-      }
-    }
-
-    if (!preferredOrgId || !preferredRoleId) {
-      const resolved = await resolveOrganizationAccess(preferredRoleName, preferredOrgId, preferredRoleId);
-      preferredOrgId = preferredOrgId || resolved.orgId;
-      preferredRoleId = preferredRoleId || resolved.roleId;
-      preferredRoleName = preferredRoleName || resolved.roleName;
-    }
-
-    if (!profile?.org_id && preferredOrgId) updates.org_id = preferredOrgId;
-    if (!profile?.role_id && preferredRoleId) updates.role_id = preferredRoleId;
-    if (!String(profile?.role || '').trim() && preferredRoleName) updates.role = preferredRoleName;
-    if (!String(profile?.mobile_1 || '').trim() && normalizedPhone) {
-      updates.mobile_1 = normalizedPhone.replace(/^\+98/, '0');
-    }
-    if (!String(profile?.email || '').trim() && String(userEmail || '').trim()) {
-      updates.email = String(userEmail).trim();
-    }
-
-    if (Object.keys(updates).length === 0) {
-      return {
-        orgId: profile?.org_id || null,
-        roleId: profile?.role_id || null,
-      };
-    }
-
-    if ((!profile?.org_id && !updates.org_id) || (!profile?.role_id && !updates.role_id)) {
-      throw new Error('__otp_profile_org_access_incomplete__');
-    }
-
-    const { error } = await supabase.from('profiles').update(updates).eq('id', profile.id);
-    if (error) throw error;
-
-    return {
-      orgId: updates.org_id ?? profile?.org_id ?? null,
-      roleId: updates.role_id ?? profile?.role_id ?? null,
-    };
-  };
-
-  const findExistingProfileConflict = async (phoneNumber: string, userEmail?: string | null, excludeUserId?: string | null) => {
-    const normalizedPhoneLocal = normalizeIranMobile(phoneNumber)?.replace(/^\+98/, '0') || '';
-    const normalizedEmail = String(userEmail || '').trim().toLowerCase();
-    const excludedId = String(excludeUserId || '').trim();
-
-    if (normalizedPhoneLocal) {
-      let phoneQuery = supabase
-        .from('profiles')
-        .select('id, org_id, role_id, role, mobile_1, email, full_name, is_active')
-        .eq('mobile_1', normalizedPhoneLocal)
-        .limit(1);
-      if (excludedId) {
-        phoneQuery = phoneQuery.neq('id', excludedId);
-      }
-      const { data: phoneRows } = await phoneQuery;
-      const phoneProfile = Array.isArray(phoneRows) ? phoneRows[0] : null;
-      if (phoneProfile?.id) return phoneProfile;
-    }
-
-    if (normalizedEmail) {
-      let emailQuery = supabase
-        .from('profiles')
-        .select('id, org_id, role_id, role, mobile_1, email, full_name, is_active')
-        .eq('email', normalizedEmail)
-        .limit(1);
-      if (excludedId) {
-        emailQuery = emailQuery.neq('id', excludedId);
-      }
-      const { data: emailRows } = await emailQuery;
-      const emailProfile = Array.isArray(emailRows) ? emailRows[0] : null;
-      if (emailProfile?.id) return emailProfile;
-    }
-
-    return null;
-  };
-
-  const repairLegacyPhoneLoginConflict = async (phoneNumber: string) => {
-    const data = await invokeUserAdminFunction({
-      action: 'repair_legacy_phone_login',
-      phone: phoneNumber,
-    });
-
-    if (!data?.success) {
-      throw new Error(String(data?.message || '__otp_phone_profile_conflict__'));
-    }
-
-    return data;
-  };
-
   const ensureActiveSessionUser = async () => {
     const { data: userData, error: userError } = await supabase.auth.getUser();
-    if (userError || !userData?.user?.id) return;
+    if (userError || !userData?.user?.id) throw new Error('نشست ورود معتبر نیست. دوباره وارد شوید.');
 
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
@@ -355,14 +201,7 @@ const Login = () => {
       .maybeSingle();
 
     if (profileError) throw profileError;
-    if (profile?.is_active === false) {
-      await signOutLocalSession();
-      throw new Error('__otp_user_inactive__');
-    }
-
-    if (profile?.id) {
-      await repairProfileOrganizationAccess(profile, userData.user.phone || profile.mobile_1 || '', userData.user.email || null);
-    }
+    if (!profile?.id) throw new Error('اطلاعات حساب کامل نیست. با پشتیبانی تماس بگیرید.');
   };
 
   const refreshAuthenticatedSessionBootstrap = async () => {
@@ -370,37 +209,15 @@ const Login = () => {
     await fetchSessionBootstrap(supabase, { force: true });
   };
 
-  // اگر روی app.tazesystem.ir هستیم و tenant resolved_host داره، به subdomain خودش ریدایرکت می‌کنیم
-  const resolveTenantRedirect = async (): Promise<string | null> => {
-    if (!isSaasAppHost()) return null;
-    try {
-      const { data: userData } = await supabase.auth.getUser();
-      if (!userData?.user?.id) return null;
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('org_id')
-        .eq('id', userData.user.id)
-        .maybeSingle();
-      if (!profile?.org_id) return null;
-      const { data: settings } = await supabase
-        .from('saas_org_settings')
-        .select('resolved_host, status')
-        .eq('org_id', profile.org_id)
-        .maybeSingle();
-      const host = String(settings?.resolved_host || '').trim().toLowerCase();
-      if (!host || host === 'app.tazesystem.ir') return null;
-      return `https://${host}`;
-    } catch {
-      return null;
-    }
-  };
-
   const activateOrganizationAndRedirect = async (organization: OrganizationAccess) => {
     setOrganizationSelecting(true);
     try {
-      const { error } = await supabase.rpc('activate_current_user_organization', { p_org_id: organization.org_id });
-      if (error) throw error;
+      const { data, error } = await supabase.rpc('activate_current_user_organization', { p_org_id: organization.org_id });
+      if (error || !data?.success) throw error || new Error('دسترسی شما به این سازمان فعال نیست.');
+      selectOrganizationContext(organization.org_id);
       clearSessionBootstrapCache();
+      await refreshAuthenticatedSessionBootstrap();
+      await trackSuccessfulLogin(loginMode);
       const host = String(organization.resolved_host || '').trim().toLowerCase();
       if (host) {
         if (isSaasAppHost() && host !== window.location.hostname) {
@@ -437,23 +254,14 @@ const Login = () => {
     }
 
     const { data, error } = await supabase.rpc('get_current_user_organization_accesses');
-    if (error) {
-      if (isSaasAppHost()) throw new Error('فهرست سازمان‌های شما دریافت نشد. دوباره تلاش کنید.');
-      // سازگاری با محیطی که هنوز migration عضویت‌ها را دریافت نکرده است.
-      const tenantUrl = await resolveTenantRedirect();
-      if (tenantUrl) window.location.href = `${tenantUrl}${postLoginRedirect}`;
-      else navigate(postLoginRedirect, { replace: true });
-      return;
-    }
+    if (error) throw new Error('فهرست سازمان‌های شما دریافت نشد. دوباره تلاش کنید.');
 
     const organizations = Array.isArray(data)
       ? data.filter((item): item is OrganizationAccess => !!item?.org_id && !!item?.org_name)
       : [];
     if (organizations.length === 0) {
-      if (isSaasAppHost()) throw new Error('برای این حساب، سازمان فعالی پیدا نشد.');
-      if (isSaasAdminPanelHost()) throw new Error('عضویت فعال در سازمان مدیریت تازه سیستم پیدا نشد.');
-      navigate(postLoginRedirect, { replace: true });
-      return;
+      await signOutLocalSession();
+      throw new Error('عضویت فعالی برای این حساب پیدا نشد. با مدیر سازمان تماس بگیرید.');
     }
 
     const currentHost = typeof window === 'undefined' ? '' : window.location.hostname.toLowerCase();
@@ -474,24 +282,22 @@ const Login = () => {
 
     if (isSaasAdminPanelHost(currentHost)) {
       if (!tenantOrganization) throw new Error('عضویت فعال در سازمان مدیریت تازه سیستم پیدا نشد.');
-      navigate(postLoginRedirect, { replace: true });
+      await activateOrganizationAndRedirect(tenantOrganization);
       return;
     }
 
-    // در کلام، وجود عضویت در panel یا tenant دیگر نباید ورود به سازمان داخلی را
-    // مسدود کند. سازمان داخلی عضویتی است که میزبان اختصاصی ندارد.
+    // Resolve the exact organization bound to this host; never guess from an empty hostname.
     if (isInternalRootHost(currentHost)) {
-      const internalOrganizations = organizations.filter(
-        (item) => !String(item.resolved_host || '').trim(),
-      );
-      if (internalOrganizations.length === 1) {
-        await activateOrganizationAndRedirect(internalOrganizations[0]);
-        return;
+      const { data: branding, error: brandingError } = await supabase.rpc('get_public_branding', { p_hostname: currentHost });
+      if (brandingError) throw new Error('سازمان این آدرس مشخص نشد. دوباره تلاش کنید.');
+      const boundOrgId = (Array.isArray(branding) ? branding[0] : branding)?.org_id;
+      const internalOrganization = organizations.find(item => item.org_id === boundOrgId);
+      if (!internalOrganization) {
+        await signOutLocalSession();
+        throw new Error('عضویت شما در سازمان این آدرس فعال نیست. از ورود عمومی سازمان دیگری انتخاب کنید.');
       }
-      if (internalOrganizations.length > 1) {
-        setOrganizationChoices(internalOrganizations);
-        return;
-      }
+      await activateOrganizationAndRedirect(internalOrganization);
+      return;
     }
 
     if (!isSaasAppHost() && organizations.some((item) => String(item.resolved_host || '').trim())) {
@@ -502,7 +308,7 @@ const Login = () => {
     if (isSaasAppHost()) {
       const tenantOrganizations = organizations.filter((item) => {
         const host = String(item.resolved_host || '').trim().toLowerCase();
-        return host && !isSaasAppHost(host) && !isInternalRootHost(host);
+        return host && !isSaasAppHost(host);
       });
       if (tenantOrganizations.length === 0) throw new Error('برای این حساب، آدرس اختصاصی سازمان پیدا نشد.');
       if (tenantOrganizations.length === 1) {
@@ -537,7 +343,6 @@ const Login = () => {
 
     if (profileError) throw profileError;
     if (existingProfile?.id) {
-      await repairProfileOrganizationAccess(existingProfile, phoneNumber, userEmail);
       return;
     }
 
@@ -557,41 +362,14 @@ const Login = () => {
     }
 
     const candidate = await lookupPhoneLoginCandidate(phoneNumber);
-    if ((candidate?.exists_in_profiles || candidate?.exists_in_auth) && candidate?.is_active !== false) {
-      if (candidate?.org_id && candidate?.role_id) {
-        try {
-          const repairResult = await repairLegacyPhoneLoginConflict(phoneNumber);
-          if (repairResult?.repaired) {
-            return;
-          }
-        } catch (repairError: any) {
-          const rawRepairError = String(repairError?.message || '');
-          if (rawRepairError.includes('__otp_phone_repaired_retry__')) {
-            throw repairError;
-          }
-        }
-      }
-
-      const conflictProfile = await findExistingProfileConflict(phoneNumber, userEmail, userId);
-      if (conflictProfile?.id) {
-        try {
-          const repairResult = await repairLegacyPhoneLoginConflict(phoneNumber);
-          if (repairResult?.repaired) {
-            return;
-          }
-        } catch (repairError: any) {
-          const rawRepairError = String(repairError?.message || '');
-          if (rawRepairError.includes('__otp_phone_repaired_retry__')) {
-            throw repairError;
-          }
-        }
-
-        await signOutLocalSession();
-        throw new Error('__otp_phone_profile_conflict__');
-      }
-
+    if (candidate?.exists_in_profiles && candidate?.is_active !== false) {
+      // Re-authenticate the original identity. Never copy a profile or memberships to an OTP orphan.
       await signOutLocalSession();
-      throw new Error('__otp_profile_org_access_incomplete__');
+      await requestExistingProfilePhoneOtp(phoneNumber);
+      setOtpRequestedFor(phoneNumber);
+      setOtpCode('');
+      setOtpCooldown(OTP_RESEND_SECONDS);
+      throw new Error('__otp_phone_repaired_retry__');
     }
 
     await signOutLocalSession();
@@ -602,16 +380,20 @@ const Login = () => {
   };
 
   const handleLogin = async () => {
+    if (loading) return;
+    const loginPhone = normalizeIranMobile(email);
+    if ((!loginPhone && !normalizeEmail(email)) || !password) {
+      message.error('شماره موبایل یا ایمیل و رمز عبور را وارد کنید.');
+      return;
+    }
     setLoading(true);
     try {
       const { error } = await supabase.auth.signInWithPassword({
-        email: normalizeEmail(email),
+        ...(loginPhone ? { phone: loginPhone } : { email: normalizeEmail(email) }),
         password,
       });
       if (error) throw error;
       await ensureActiveSessionUser();
-      await refreshAuthenticatedSessionBootstrap();
-      await trackSuccessfulLogin('password');
 
       message.success('خوش آمدید! در حال ورود...');
       await resolveOrganizationAfterLogin();
@@ -628,6 +410,7 @@ const Login = () => {
   };
 
   const handleRequestOtp = async () => {
+    if (otpLoading || otpCooldown > 0) return;
     if (!normalizedPhone) {
       message.error('شماره موبایل معتبر وارد کنید. مثال: 0912...');
       return;
@@ -636,6 +419,9 @@ const Login = () => {
     setOtpLoading(true);
     try {
       const candidate = await lookupPhoneLoginCandidate(normalizedPhone);
+      if (phoneRecovery && candidate?.exists_in_profiles !== true) {
+        throw new Error('برای بازیابی رمز، شمارهٔ حساب موجود خود را وارد کنید.');
+      }
       const invite = await lookupPhoneSignupInvite(normalizedPhone);
       const profileNeedsPhoneIdentity =
         candidate?.exists_in_profiles === true
@@ -664,6 +450,7 @@ const Login = () => {
   };
 
   const handleVerifyOtp = async () => {
+    if (otpLoading) return;
     const normalizedOtpToken = normalizeOtpToken(otpCode);
     if (!otpRequestedFor) {
       message.error('ابتدا درخواست کد بدهید.');
@@ -683,8 +470,13 @@ const Login = () => {
       await ensureInvitedOrExistingProfile(otpRequestedFor);
       await ensureActiveSessionUser();
       profileReady = true;
-      await refreshAuthenticatedSessionBootstrap();
-      await trackSuccessfulLogin('otp');
+      if (phoneRecovery) {
+        clearOtpSessionState();
+        setOtpRequestedFor(null);
+        setOtpCode('');
+        setRecoveryMode(true);
+        return;
+      }
       clearOtpSessionState();
       setOtpRequestedFor(null);
       setOtpCode('');
@@ -714,23 +506,25 @@ const Login = () => {
   };
 
   const handleResetPassword = async () => {
-    if (!email) {
-      message.error('لطفا ایمیل را وارد کنید');
+    if (loading) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmail(email))) {
+      message.error('برای دریافت لینک بازیابی، ایمیل حساب خود را وارد کنید.');
       return;
     }
 
-    const { error } = await supabase.auth.resetPasswordForEmail(normalizeEmail(email), {
-      redirectTo: `${window.location.origin}/login`,
-    });
-
-    if (error) {
-      message.error(toFaErrorMessage(error, 'ارسال ایمیل ناموفق بود.'));
-    } else {
-      message.success('لینک بازیابی رمز عبور ارسال شد');
-    }
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(normalizeEmail(email), {
+        redirectTo: `${window.location.origin}/login`,
+      });
+      if (error) throw error;
+      message.success('اگر این ایمیل حساب داشته باشد، لینک بازیابی برای آن ارسال می‌شود.');
+    } catch (error) { message.error(toFaErrorMessage(error, 'ارسال ایمیل ناموفق بود.')); }
+    finally { setLoading(false); }
   };
 
   const handleSetNewPassword = async () => {
+    if (loading) return;
     if (!newPassword || newPassword.length < 6) {
       message.error('رمز عبور جدید باید حداقل ۶ کاراکتر باشد');
       return;
@@ -747,10 +541,11 @@ const Login = () => {
 
       message.success('رمز عبور با موفقیت تغییر کرد');
       setRecoveryMode(false);
+      setPhoneRecovery(false);
       setNewPassword('');
       setConfirmNewPassword('');
       window.history.replaceState({}, document.title, '/login');
-        navigate(postLoginRedirect, { replace: true });
+      await resolveOrganizationAfterLogin();
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'تغییر رمز عبور ناموفق بود.'));
     } finally {
@@ -822,6 +617,8 @@ const Login = () => {
         >
           {recoveryMode ? (
             <div className="flex flex-col gap-4">
+              <Alert type="info" showIcon message="رمز جدید حساب شخصی"
+                description="این رمز برای ورود به همهٔ سازمان‌های شما استفاده می‌شود. عضویت و نقش‌ها تغییر نمی‌کنند." />
               <div>
                 <label className="block text-sm font-medium mb-1">رمز عبور جدید</label>
                 <Input.Password
@@ -850,6 +647,10 @@ const Login = () => {
                 type="link"
                 onClick={() => {
                   setRecoveryMode(false);
+                  setPhoneRecovery(false);
+                  setNewPassword('');
+                  setConfirmNewPassword('');
+                  void signOutLocalSession();
                   window.history.replaceState({}, document.title, '/login');
                 }}
                 className="text-xs"
@@ -860,7 +661,7 @@ const Login = () => {
           ) : (
             <Tabs
               activeKey={loginMode}
-              onChange={(key) => setLoginMode(key as 'password' | 'otp')}
+              onChange={(key) => { setLoginMode(key as 'password' | 'otp'); setPhoneRecovery(false); }}
               items={[
                 {
                   key: 'password',
@@ -868,8 +669,8 @@ const Login = () => {
                   children: (
                     <div className="flex flex-col gap-4">
                       <div>
-                        <label className="block text-sm font-medium mb-1">ایمیل</label>
-                        <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="admin@example.com" />
+                        <label className="block text-sm font-medium mb-1">شماره موبایل یا ایمیل</label>
+                        <Input autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="شماره موبایل یا ایمیل حساب" />
                       </div>
                       <div>
                         <label className="block text-sm font-medium mb-1">رمز عبور</label>
@@ -878,8 +679,11 @@ const Login = () => {
                       <Button type="primary" onClick={handleLogin} loading={loading} className="w-full bg-leather-600 h-10 text-lg">
                         ورود
                       </Button>
-                      <Button type="link" onClick={handleResetPassword} className="text-xs">
+                      <Button type="link" onClick={() => { setPhoneRecovery(true); setLoginMode('otp'); setOtpCode(''); setOtpRequestedFor(null); }} className="text-xs">
                         فراموشی رمز عبور
+                      </Button>
+                      <Button type="link" loading={loading} onClick={handleResetPassword} className="text-xs">
+                        دریافت لینک بازیابی از طریق ایمیل
                       </Button>
                     </div>
                   ),
@@ -889,6 +693,8 @@ const Login = () => {
                   label: 'کد یکبارمصرف',
                   children: (
                     <div className="flex flex-col gap-4">
+                      {phoneRecovery && <Alert type="info" showIcon message="بازیابی رمز عبور با شماره موبایل"
+                        description="شمارهٔ حساب خود را تأیید کنید؛ سپس رمز جدیدی برای ورود به همهٔ سازمان‌ها تعیین کنید." />}
                       <Alert
                         type="info"
                         showIcon
@@ -915,10 +721,11 @@ const Login = () => {
                       <Button
                         type="primary"
                         loading={otpLoading && !canVerifyOtp}
+                        disabled={otpCooldown > 0}
                         onClick={handleRequestOtp}
                         className="w-full bg-leather-600 h-10 text-lg"
                       >
-                        دریافت کد
+                        {otpRequestedFor && otpCooldown > 0 ? `ارسال مجدد تا ${otpCooldown} ثانیه دیگر` : 'دریافت کد'}
                       </Button>
 
                       {otpRequestedFor ? (
@@ -933,7 +740,7 @@ const Login = () => {
                             onClick={handleVerifyOtp}
                             className="w-full bg-leather-600 h-10 text-lg"
                           >
-                            ورود با کد
+                            {phoneRecovery ? 'تأیید شماره و تعیین رمز جدید' : 'ورود با کد'}
                           </Button>
                           <Button
                             type="link"

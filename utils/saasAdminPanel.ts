@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { isSaasAdminPanelHost } from './hostRouting';
 import { clearSessionBootstrapCache } from './sessionCache';
+import { selectOrganizationContext } from './organizationContext';
 
 /**
  * پنل فروشنده باید همیشه با سازمان مستقل «تازه سیستم» باز شود. RPC سمت سرور
@@ -14,6 +15,7 @@ export const activateSaasAdminPanelContext = async (client: SupabaseClient) => {
     return { activated: false, reason: 'access_denied' as const, error };
   }
 
+  if (data?.org_id) selectOrganizationContext(data.org_id);
   clearSessionBootstrapCache();
   return { activated: true, reason: 'activated' as const };
 };

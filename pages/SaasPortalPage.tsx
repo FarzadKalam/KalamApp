@@ -16,6 +16,7 @@ import { getOtpErrorMessage, normalizeOtpPhone, normalizeOtpToken, OTP_RESEND_SE
 import { signOutLocalSession } from '../utils/authSession';
 import { getInternalAppUrl } from '../utils/hostRouting';
 import { handoffSessionToTenant } from '../utils/tenantSessionHandoff';
+import { selectOrganizationContext } from '../utils/organizationContext';
 import { assertDemoOtpRequestAllowed, lookupPhoneLoginCandidate, lookupPhoneSignupInvite, requestExistingProfilePhoneOtp } from '../utils/phoneAuth';
 import {
   getDemoProvisionErrorMessage,
@@ -466,16 +467,8 @@ const SaasPortalPage: React.FC = () => {
 
     if (profileError) throw profileError;
     const currentProfile = (profile || null) as WizardAuthenticatedProfile | null;
-    if (currentProfile?.is_active === false) {
-      throw new Error('__otp_user_inactive__');
-    }
-
-    const { data: ctx, error: ctxError } = await supabase.rpc('get_current_saas_context');
-    if (ctxError) throw ctxError;
-
     return {
       profile: currentProfile,
-      saasContext: ctx as any,
     };
   }, []);
 
@@ -495,6 +488,7 @@ const SaasPortalPage: React.FC = () => {
         p_org_id: organization.org_id,
       });
       if (activateError || !(data as any)?.success) throw activateError || new Error('organization_access_denied');
+      selectOrganizationContext(organization.org_id);
       clearWizardState();
       const host = String((data as any)?.resolved_host || organization.resolved_host || '').trim();
       if (host?.endsWith('.tazesystem.ir')) await handoffSessionToTenant(host, organization.org_id);
@@ -526,15 +520,8 @@ const SaasPortalPage: React.FC = () => {
     try {
       await verifySmsOtp(supabase.auth, normalizedPhone as string, token);
       otpVerified = true;
-      const { profile, saasContext } = await resolveAuthenticatedDemoSessionState();
-      let organizations: OrganizationAccess[] = [];
-      try {
-        organizations = await loadOrganizationChoices();
-      } catch {
-        // در انتشار مرحله‌ای، تا زمانی که migration عضویت‌ها فعال نشده،
-        // رفتار امن و قدیمیِ هدایت به سازمان اصلی حفظ می‌شود.
-        organizations = [];
-      }
+      const { profile } = await resolveAuthenticatedDemoSessionState();
+      const organizations = await loadOrganizationChoices();
 
       // شماره‌ای که قبلاً عضو سازمانی بوده است، همیشه ابتدا انتخاب سازمان را می‌بیند.
       // فقط عضو غیرمالک می‌تواند از همین صفحه یک کسب‌وکار مستقل تازه بسازد.
@@ -544,17 +531,7 @@ const SaasPortalPage: React.FC = () => {
         return;
       }
 
-      // کاربر موجود با سازمان — هدایت به پنل
-      if (saasContext?.org_id && saasContext?.slug) {
-        clearWizardState();
-        window.location.href = `https://${saasContext.slug}${TAZE_SUFFIX}`;
-        return;
-      }
-      if (profile?.org_id) {
-        clearWizardState();
-        window.location.href = getInternalAppUrl();
-        return;
-      }
+      if (profile?.org_id) throw new Error('عضویت فعالی برای این حساب پیدا نشد. برای بررسی دسترسی با مدیر سازمان تماس بگیرید.');
 
       // کاربر جدید — اطلاعات قبلاً پر شده، مستقیم provisioning
       // اگر از مسیر existing user آمده، اطلاعات پر نشده — باید info را پر کند
@@ -650,6 +627,7 @@ const SaasPortalPage: React.FC = () => {
         setProvisionResult(result);
         setStep('done');
       });
+      if (result.org_id) selectOrganizationContext(result.org_id);
 
       try {
         const seedResult = await seedCurrentOrgDemoData({ orgId: result.org_id || null });
