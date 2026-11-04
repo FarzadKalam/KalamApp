@@ -2,6 +2,7 @@
 import { authorizeEmail, decryptEmailSecret, emailCors, emailJson, encryptEmailSecret, isEmailAddress, loadEmailCredentials } from '../_shared/email-runtime.ts';
 import { persistInboundEmail, signedEmailAttachments } from '../_shared/email-messages.ts';
 import { readImapEmailBatch, verifyEmailSmtp, verifyEmailImap } from '../_shared/email-transport.ts';
+import { managedEmailAddress, requireManagedEmailFeature } from '../_shared/managed-email.ts';
 
 const accountQuery = (ctx: any,id?: string) => new URLSearchParams({org_id:`eq.${ctx.orgId}`,...(id?{id:`eq.${id}`}:{})}).toString();
 const publicConnection = (config: any) => ({smtp:{host:config.smtp?.host,port:config.smtp?.port,username:config.smtp?.username},
@@ -69,13 +70,12 @@ export const handleEmailAdmin = async (request: Request) => {
       return emailJson(200,{success:true,account_id:id,requires_verification:true});
     }
     if (action==='request_managed') {
+      await requireManagedEmailFeature(ctx,ctx.orgId);
       const provider=(await ctx.rest('saas_org_settings','is_billing_provider=eq.true&select=org_id&limit=1'))?.[0];
       const settings=provider?(await ctx.rest('email_platform_settings',`org_id=eq.${provider.org_id}`))?.[0]:null;
       if (!settings?.managed_domain || !settings.managed_enabled) throw new Error('ایمیل ابری هنوز توسط مدیر سامانه راه‌اندازی نشده است.');
       const org=(await ctx.rest('organizations',`id=eq.${ctx.orgId}&select=slug,name`))?.[0];
-      const alias=String(body.alias || org?.slug || '').trim().toLowerCase();
-      if (!/^[a-z0-9][a-z0-9._-]{1,48}$/.test(alias)) throw new Error('نام لاتین آدرس ایمیل را با حروف، عدد، نقطه یا خط تیره وارد کنید.');
-      const address=`${alias}@${settings.managed_domain}`;
+      const address=managedEmailAddress(org?.slug,body.alias,settings.managed_domain);
       const existing=(await ctx.rest('email_accounts',new URLSearchParams({org_id:`eq.${ctx.orgId}`,address:`eq.${address}`,select:'id,status'}).toString()))?.[0];
       if (existing && existing.status!=='pending') return emailJson(200,{success:true,account_id:existing.id,status:existing.status});
       const account=existing || (await ctx.rest('email_accounts','','POST',{org_id:ctx.orgId,label:String(body.label || 'ایمیل ابری سازمان'),address,mode:'managed',created_by:ctx.userId}))?.[0];

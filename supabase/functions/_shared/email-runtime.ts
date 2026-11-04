@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { fetchOrganizationRequestContext } from './organization-request-context.ts';
+import { requireManagedEmailFeature } from './managed-email.ts';
 export const emailCors = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -77,6 +78,7 @@ export const decryptEmailSecret = async (value: string) => {
   return JSON.parse(new TextDecoder().decode(data));
 };
 export const loadEmailCredentials = async (service: ReturnType<typeof emailService>, account: any) => {
+  if (account.mode === 'managed') await requireManagedEmailFeature(service, account.org_id);
   const rows = await service.rest('email_account_secrets', `account_id=eq.${account.id}&org_id=eq.${account.org_id}&select=encrypted_credentials,legacy_credentials`);
   if (rows?.[0]?.encrypted_credentials) return decryptEmailSecret(rows[0].encrypted_credentials);
   if (rows?.[0]?.legacy_credentials) {

@@ -47,6 +47,7 @@ export const SAAS_FEATURE_OPTIONS: SaasOfferingOption[] = [
   { id: 'ai_deep_reasoning', label: 'تفکر عمیق هوش مصنوعی' }, { id: 'taxpayer_system', label: 'سامانه مودیان' },
   { id: 'internal_realtime_notifications', label: 'اعلان لحظه‌ای داخل سامانه' },
   { id: 'organization_email', label: 'ایمیل سازمانی؛ ارسال، دریافت و گزارش‌ها' },
+  { id: 'managed_organization_email', label: 'صندوق میزبانی‌شده با نام سازمان روی دامنه تازه سیستم (هزینه‌دار)' },
   { id: 'api_access', label: 'دسترسی API' }, { id: 'wordpress_connection', label: 'اتصال به وردپرس و ووکامرس' }, { id: 'advanced_reports', label: 'گزارش‌ساز پیشرفته' }, { id: 'map_view', label: 'نمای نقشه' },
   { id: 'multi_lane_processes', label: 'فرآیندهای چندردیفه' }, { id: 'content_calendar', label: 'تقویم محتوایی' },
   { id: 'white_label', label: 'حذف برند تازه سیستم' }, { id: 'custom_domain', label: 'دامنه اختصاصی' },

@@ -1,7 +1,7 @@
 {
   "name": "tazesystem",
   "private": true,
-  "version": "2.119.0.0.0",
+  "version": "2.120.0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -29,7 +29,7 @@
     "deploy:function:all": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-supabase-function.ps1 -All",
     "deploy:function:list": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-supabase-function.ps1 -List",
     "deploy:monitor": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-server-monitor.ps1",
-    "test:organization-email": "vitest run test/organizationEmail.test.ts utils/organizationEmail.test.ts components/email/EmailComposerHost.test.tsx --maxWorkers=1"
+    "test:organization-email": "vitest run utils/managedEmail.test.ts test/organizationEmail.test.ts utils/organizationEmail.test.ts components/email/EmailComposerHost.test.tsx --maxWorkers=1"
   },
   "dependencies": {
     "@ant-design/icons": "^5.6.1",
