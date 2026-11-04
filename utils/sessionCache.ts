@@ -1,6 +1,7 @@
 import { runSelectWithCompatibleColumns } from './selectCompat';
 import { normalizePublicAssetUrl } from './assetUrl';
 import { attachAbortSignalIfSupported, runWithSupabaseTimeout } from './supabaseTimeout';
+import { getSelectedOrganizationId } from './organizationContext';
 
 type SessionBootstrapSnapshot = {
   user: any | null;
@@ -205,7 +206,7 @@ export const fetchSessionBootstrap = async (
     }
 
     const hostContext = await resolveTenantHostContext(supabaseClient);
-    const cacheKey = `${String(user.id)}:${hostContext.hostname || 'shared'}:${hostContext.orgId || 'profile'}`;
+    const cacheKey = `${String(user.id)}:${hostContext.hostname || 'shared'}:${getSelectedOrganizationId() || hostContext.orgId || 'profile'}`;
     if (
       !options?.force &&
       sessionBootstrapCache.cacheKey === cacheKey &&
@@ -264,6 +265,36 @@ export const fetchSessionBootstrap = async (
             avatar_url: normalizePublicAssetUrl(profileResult.data.avatar_url) || null,
           }
         : null;
+
+      // Server validates host + active membership. Never borrow another organization's profile role.
+      if (typeof supabaseClient.rpc === 'function') {
+        const contextResult = await runWithSupabaseTimeout<any>(
+          () => supabaseClient.rpc('get_current_organization_context'),
+          SESSION_BOOTSTRAP_REQUEST_TIMEOUT_MS,
+        );
+        if (!contextResult.error && contextResult.data?.org_id) {
+          const context = contextResult.data;
+          const snapshot: SessionBootstrapSnapshot = {
+            user,
+            profile: profile ? { ...profile, ...context.settings, ...context } : null,
+            roleId: context.role_id || null,
+            orgId: context.org_id,
+            permissions: context.permissions || {},
+            loadedAt: Date.now(),
+          };
+          sessionBootstrapCache.snapshot = snapshot;
+          sessionBootstrapCache.expiresAt = Date.now() + SESSION_BOOTSTRAP_TTL_MS;
+          return snapshot;
+        }
+        // Only an explicitly missing RPC allows rolling-deployment compatibility.
+        if (!['PGRST202', '42883'].includes(String(contextResult.error?.code || ''))) {
+          const denied = { ...EMPTY_SNAPSHOT, user, loadedAt: Date.now(),
+            bootstrapError: contextResult.error || new Error('دسترسی شما به این سازمان فعال نیست. از صفحه ورود، سازمان دیگری انتخاب کنید.') };
+          sessionBootstrapCache.snapshot = denied;
+          sessionBootstrapCache.expiresAt = 0;
+          return denied;
+        }
+      }
 
       let permissions: Record<string, any> | null = null;
       let resolvedOrgId: string | null = hostContext.orgId || (profile?.org_id ? String(profile.org_id) : null);

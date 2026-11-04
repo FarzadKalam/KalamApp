@@ -81,8 +81,30 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      - name: Organization membership and login regression checks
+        timeout-minutes: 10
+        run: npm run test:organization-memberships
+
       - name: Public SEO recovery checks
+        # No production credentials or real SMTP traffic are used by email regressions.
         run: node --test scripts/preserve-public-seo.test.mjs scripts/public-brand-seo.test.mjs
+
+      - name: Organization email UI and SQL regression checks
+        timeout-minutes: 8
+        run: npm run test:organization-email
+
+      - name: Organization SMS context regression checks
+        run: npx vitest run utils/smsGateway.senderNumbers.test.ts --maxWorkers=1
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+
+      - name: Organization email backend regression checks
+        run: deno test --node-modules-dir=none --allow-env --allow-read --allow-sys supabase/functions/_shared/email-runtime.deno.ts supabase/functions/send-email/send-email.deno.ts
+
+      - name: Email function dependency checks
+        run: deno check --node-modules-dir=none supabase/functions/email-admin/index.ts supabase/functions/send-email/index.ts supabase/functions/email-provider-events/index.ts supabase/functions/email-sync-worker/index.ts supabase/functions/send-sms/index.ts
 
       - name: Messaging attachment and viewer isolation regression checks
         timeout-minutes: 8

@@ -88,6 +88,7 @@ import ActionIcon from './common/ActionIcon';
 import NotificationUnreadBadge from './notifications/NotificationUnreadBadge';
 import SidebarMenu from './layout/SidebarMenu';
 import TazeSystemAttribution from './common/TazeSystemAttribution';
+import OrganizationAccessModal from './OrganizationAccessModal';
 import { resolveMobileKeyboardViewport } from '../utils/mobileKeyboardViewport';
 import { ADVERTISING_CAMPAIGNS_MODULE_ID } from '../utils/advertisingCampaigns';
 import { renderModuleIcon } from '../utils/moduleIcons';
@@ -97,6 +98,7 @@ import { BILLBOARD_STATUS_MANAGEMENT_PLAN_FEATURE } from '../utils/billboardStat
 
 const { Header, Sider, Content } = AntLayout;
 const NotificationsPopover = React.lazy(() => import('./NotificationsPopover'));
+const EmailComposerHost = React.lazy(() => import('./email/EmailComposerHost'));
 const GlobalTaskProcessModalHost = React.lazy(() => import('./tasks/GlobalTaskProcessModalHost'));
 const GoalProgressSlider = React.lazy(() => import('./goals/GoalProgressSlider'));
 
@@ -150,6 +152,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [alertsDrawerMounted, setAlertsDrawerMounted] = useState(false);
   const [alertsDrawerOpen, setAlertsDrawerOpen] = useState(false);
   const [sessionBootstrapError, setSessionBootstrapError] = useState<any>(null);
+  const [organizationModalOpen, setOrganizationModalOpen] = useState(false);
   const searchRef = useRef<InputRef>(null);
   const searchBoxRef = useRef<HTMLDivElement>(null);
   const searchRequestRef = useRef(0);
@@ -195,6 +198,17 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       setRolePermissionsReady(true);
     }
   }, [applySessionBootstrapSnapshot]);
+
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return;
+      void fetchSessionBootstrap(supabase, { force: true }).then(snapshot => applySessionBootstrapSnapshot(snapshot));
+    };
+    window.addEventListener('focus', refresh);
+    const interval = window.setInterval(refresh, 60_000);
+    return () => { window.removeEventListener('focus', refresh); window.clearInterval(interval); };
+  }, [currentUser?.id, applySessionBootstrapSnapshot]);
 
   // مجوز نمایش بخش «تازه سیستم» فقط با permission نقش تعیین نمی‌شود؛
   // سازمان جاری نیز باید یکی از سازمان‌های واقعی مدیر SaaS باشد.
@@ -935,6 +949,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/reports', label: 'گزارش‌ساز', disabled: !canViewReportsHub },
           { key: '/automation_execution_reports', label: 'گزارشات فرآیند و اتوماسیون', disabled: !canViewModule('automation_execution_reports') },
           { key: '/sms_delivery_reports', label: 'گزارشات ارسال پیامک', disabled: !canViewModule('sms_delivery_reports') },
+          { key: '/email_delivery_reports', label: 'گزارش‌های ایمیل', disabled: !canViewModule('email_delivery_reports') },
           { key: '/voip_call_reports', label: 'گزارش تماس‌های VoIP', disabled: !canViewModule('voip_call_reports') },
           { key: '/counterparty_bot_groups', label: 'گروه‌های بات', disabled: !canViewModule('counterparty_bot_groups') },
         ],
@@ -1237,6 +1252,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const userMenu = {
     items: [
       {
+        key: 'organizations', label: 'سازمان‌های من', icon: <BankOutlined />,
+        onClick: () => setOrganizationModalOpen(true),
+      },
+      {
         key: 'profile',
         label: 'پروفایل کاربری',
         icon: <UserOutlined />,
@@ -1409,9 +1428,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         }}
       >
         <ReloadOutlined style={{ fontSize: 48, color: '#1677ff' }} spin={!rolePermissionsReady} />
-        <div style={{ fontSize: 18, fontWeight: 600 }}>اتصال به اطلاعات سازمان کامل نشد</div>
+        <div style={{ fontSize: 18, fontWeight: 600 }}>دسترسی به سازمان تأیید نشد</div>
         <div style={{ color: '#666', maxWidth: 380 }}>
-          اتصال شبکه یا پاسخ سرور کامل نبود. پس از برقراری اینترنت دوباره تلاش کنید.
+          ممکن است اتصال برقرار نباشد یا عضویت شما در این سازمان غیرفعال شده باشد. دوباره تلاش کنید یا از صفحه ورود، سازمان مجاز دیگری انتخاب کنید.
         </div>
         <Button
           type="primary"
@@ -1421,6 +1440,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         >
           تلاش مجدد
         </Button>
+        <Button onClick={async () => { await signOutLocalSession(); window.location.href = 'https://app.tazesystem.ir/login'; }}>ورود به سازمان دیگر</Button>
       </div>
     );
   }
@@ -1791,7 +1811,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               </React.Suspense>
             ) : null}
             <Dropdown menu={userMenu} placement="bottomLeft" trigger={['click']}>
-                <div className="cursor-pointer transition-transform hover:scale-105">
+                <Button type="text" className="!h-auto min-h-11 !px-2" aria-label="حساب کاربری و سازمان‌های من">
+                   <span className="max-w-[120px] md:max-w-[200px] truncate text-sm" title={currentUserProfile?.org_name}>
+                     {currentUserProfile?.org_name || 'سازمان من'}
+                   </span>
                    <ProfileAvatar
                      size="small"
                      src={resolvedAvatarSrc}
@@ -1799,12 +1822,13 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                      className="border border-leather-500 shadow-lg"
                      name={currentUserProfile?.full_name || currentUser?.user_metadata?.full_name || currentUser?.email}
                    />
-                </div>
+                </Button>
             </Dropdown>
           </div>
         </Header>
 
         <AppVersionUpdateBanner />
+        <OrganizationAccessModal open={organizationModalOpen} onClose={() => setOrganizationModalOpen(false)} currentOrgId={resolvedOrgId} />
 
         {/* ── Trial countdown banner ── */}
         {isDemoOrg && !orgIsReadonly && orgTrialDaysLeft !== null && orgTrialDaysLeft <= 7 && (
@@ -1914,6 +1938,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         )}
         <React.Suspense fallback={null}>
           <GlobalTaskProcessModalHost />
+          <EmailComposerHost />
         </React.Suspense>
         <DrawerInteractionRecovery />
         <UserAnnouncementsPopupHost

@@ -1,3 +1,5 @@
+import { EmailActions, EmailComposeButton } from './email/EmailActions';
+import { isEmailField } from '../utils/organizationEmail';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Form, Input, InputNumber, Select, Switch, Upload, Modal, App, Tag, Button, Tooltip } from 'antd';
 import {
@@ -2067,6 +2069,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             </span>
           );
         }
+        if (isEmailField(field)) return <EmailActions value={value} moduleId={moduleId} recordId={allValues?.id} />;
         if (fieldType === FieldType.PHONE) {
           return (
             <PhoneActionsPopover
@@ -2220,6 +2223,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
           <Input
             {...commonProps}
             value={formatTextForInput(value)}
+            suffix={isEmailField(field) ? <EmailComposeButton value={value} moduleId={moduleId} recordId={allValues?.id} /> : undefined}
             onChange={e => onChange(normalizeDigitsToEnglish(e.target.value))}
             allowClear
           />

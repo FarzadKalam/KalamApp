@@ -51,6 +51,15 @@ export const loadProfilesWithCompat = async (
     };
   }
   const limit = Math.max(1, Number(options?.limit || 300));
+  if (normalizedOrgId && typeof supabaseClient.rpc === 'function') {
+    const result = await supabaseClient.rpc('list_organization_members', {
+      p_org_id: normalizedOrgId, p_limit: limit, p_offset: 0,
+      p_active_only: options?.activeOnly === true,
+    });
+    if (!['PGRST202', '42883'].includes(String(result.error?.code || ''))) {
+      return { ...result, data: (result.data || []).map(normalizeProfileDirectoryRow) };
+    }
+  }
   const result = await runSelectWithCompatibleColumns<any[]>({
     cacheKey: options?.cacheKey || (normalizedOrgId ? 'profiles:directory:org' : 'profiles:directory:global'),
     columns: PROFILE_DIRECTORY_SAFE_COLUMNS,

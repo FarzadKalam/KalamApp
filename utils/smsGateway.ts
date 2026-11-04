@@ -1,6 +1,9 @@
 ﻿import { supabase } from '../supabaseClient';
 import { getActiveChannelSettings } from './channelSettings';
+import { getSelectedOrganizationId } from './organizationContext';
 import { createOutboundMessageLog, updateOutboundMessageStatus } from './outboundMessages';
+
+const organizationHeaders = () => getSelectedOrganizationId() ? { 'x-client-info': `kalamapp; org=${getSelectedOrganizationId()}` } : undefined;
 
 type SmsMode = 'rest' | 'soap';
 
@@ -390,7 +393,7 @@ const invokeSmsFunction = async (
   let lastError: unknown = null;
   const maxAttempts = 2;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const { data, error } = await supabase.functions.invoke('send-sms', { body: payload });
+    const { data, error } = await supabase.functions.invoke('send-sms', { body: payload, headers: organizationHeaders() });
     if (error) {
       const message = await getInvokeErrorMessage(error, 'خطا در فراخوانی سرویس پیامک.');
       lastError = new Error(message);
@@ -423,7 +426,7 @@ export const getSmsBalanceViaGateway = async (overrideSettings?: SmsSettings) =>
     payload.overrideSettings = overrideSettings;
   }
 
-  const { data, error } = await supabase.functions.invoke('send-sms', { body: payload });
+  const { data, error } = await supabase.functions.invoke('send-sms', { body: payload, headers: organizationHeaders() });
   if (error) throw new Error(await getInvokeErrorMessage(error, 'ط®ط·ط§ ط¯ط± ط¯ط±غŒط§ظپطھ ط§ط¹طھط¨ط§ط± ظ¾غŒط§ظ…ع©.'));
   if (data && data.success === false) {
     throw new Error(getErrorMessage(data, 'ط¯ط±غŒط§ظپطھ ط§ط¹طھط¨ط§ط± ظ¾غŒط§ظ…ع© ظ†ط§ظ…ظˆظپظ‚ ط¨ظˆط¯.'));

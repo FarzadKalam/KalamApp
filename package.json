@@ -1,12 +1,13 @@
 {
   "name": "tazesystem",
   "private": true,
-  "version": "2.117.0.0.3",
+  "version": "2.120.0.0.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build && node ./scripts/generate-public-seo.mjs && node ./scripts/stamp-service-worker-version.mjs",
     "test": "vitest run",
+    "test:organization-memberships": "vitest run test/organizationMemberships.test.ts supabase/functions/user-admin/membership.test.ts utils/organizationContext.test.ts utils/sessionCache.test.ts utils/identityDirectory.test.ts pages/Login.test.tsx pages/SaasPortalPage.test.tsx --maxWorkers=1",
     "test:critical-ui": "vitest run components/moduleShow/PrintSection.test.tsx components/SmartForm.test.tsx utils/notificationViewModels.test.ts utils/webForms.test.ts utils/printTemplates/printPerformance.test.ts",
     "test:module-show": "vitest run components/moduleShow/PrintSection.test.tsx",
     "test:notifications": "vitest run utils/notification utils/messageReceipts.test.ts utils/uiNotificationOverlayStore.test.ts hooks/useCommunicationTimeline.test.tsx components/notifications/SnoozeScheduleModal.test.ts",
@@ -27,7 +28,8 @@
     "deploy:function": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-supabase-function.ps1",
     "deploy:function:all": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-supabase-function.ps1 -All",
     "deploy:function:list": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-supabase-function.ps1 -List",
-    "deploy:monitor": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-server-monitor.ps1"
+    "deploy:monitor": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-server-monitor.ps1",
+    "test:organization-email": "vitest run utils/managedEmail.test.ts test/organizationEmail.test.ts utils/organizationEmail.test.ts components/email/EmailComposerHost.test.tsx --maxWorkers=1"
   },
   "dependencies": {
     "@ant-design/icons": "^5.6.1",
@@ -77,9 +79,11 @@
     "react-multi-date-picker": "^4.5.2",
     "react-router-dom": "6.22.3",
     "web-vitals": "^5.3.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "@tanstack/react-query": "^4.42.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.15",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",

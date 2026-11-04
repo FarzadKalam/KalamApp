@@ -1,4 +1,4 @@
-﻿import { BlockType, type ModuleDefinition } from '../types';
+import { BlockType, type ModuleDefinition } from '../types';
 import { getResolvedAssigneeId } from './assigneeValue';
 import { CUSTOMER_CLUB_PERMISSION_KEY } from './customerClub';
 import { fetchAssigneeDirectory } from './referenceData';
@@ -178,6 +178,8 @@ export const COMMUNICATIONS_PERMISSION_FIELDS = [
   { key: 'manage_groups', label: 'مدیریت گروه‌های گفتگو' },
   { key: 'use_bot_channels', label: 'کانال‌های بات' },
   { key: 'use_sms', label: 'پیامک' },
+  { key: 'use_email', label: 'مشاهده صندوق ایمیل' },
+  { key: 'send_email', label: 'ارسال ایمیل' },
   { key: 'use_voip', label: 'تماس VoIP' },
   { key: 'view_system_feed', label: 'فید سیستم و اتوماسیون' },
   { key: 'audit_all_conversations', label: 'ممیزی همه گفتگوها' },
@@ -913,6 +915,8 @@ export const resolveCommunicationsPermissions = (permissions: PermissionMap | nu
     canManageGroups: canViewRoot && perm.edit !== false && fields.manage_groups !== false,
     canUseBotChannels: canViewRoot && fields.use_bot_channels !== false,
     canUseSms: canViewRoot && fields.use_sms !== false,
+    canUseEmail: canViewRoot && fields.use_email !== false,
+    canSendEmail: canViewRoot && perm.edit !== false && fields.use_email !== false && fields.send_email !== false,
     canUseVoip: canViewRoot && fields.use_voip !== false,
     canViewSystemFeed: canViewRoot && fields.view_system_feed !== false,
     canAuditAllConversations: canViewRoot && fields.audit_all_conversations === true,

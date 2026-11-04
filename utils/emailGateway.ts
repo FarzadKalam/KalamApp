@@ -1,4 +1,4 @@
-import { supabase } from '../supabaseClient';
+import { invokeEmail } from './organizationEmail';
 
 export type EmailGatewaySendResult = {
   success: boolean;
@@ -19,15 +19,12 @@ export const sendEmailViaGateway = async ({
   to,
   subject,
   body,
+  moduleId,
+  recordId,
 }: SendEmailViaGatewayArgs): Promise<EmailGatewaySendResult> => {
   const recipients = to.map((v) => String(v || '').trim()).filter((v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v));
   if (recipients.length === 0) throw new Error('آدرس ایمیل گیرنده معتبر نیست');
   if (!subject.trim() && !body.trim()) throw new Error('موضوع یا متن ایمیل الزامی است');
 
-  const { data, error } = await supabase.functions.invoke('send-email', {
-    body: { to: recipients, subject, body },
-  });
-  if (error) throw error;
-  if (!data?.success) throw new Error(data?.message || 'خطا در ارسال ایمیل');
-  return data as EmailGatewaySendResult;
+  return invokeEmail('send-email', { to: recipients, subject, body, module_id: moduleId, record_id: recordId, request_key: crypto.randomUUID() });
 };

@@ -52,7 +52,7 @@ export const MODULE_ICON_KEYS: Record<string, string> = {
   cheques: 'credit_card', barters: 'swap', cash_bank_operations: 'dollar', profiles: 'solution', employees: 'team',
   job_descriptions: 'read', mbti_assessments: 'file_search', attendance_logs: 'check_square', work_schedules: 'calendar',
   leave_requests: 'calendar', overtime_requests: 'calendar', mission_requests: 'environment', price_lists: 'tags',
-  web_forms: 'form', automation_execution_reports: 'audit', sms_delivery_reports: 'file_done', voip_call_reports: 'file_search',
+  web_forms: 'form', automation_execution_reports: 'audit', sms_delivery_reports: 'file_done', email_delivery_reports: 'send', voip_call_reports: 'file_search',
   counterparty_bot_groups: 'robot', instagram_conversations: 'instagram', instagram_interaction_events: 'instagram', expense_documents: 'wallet',
   assets: 'container', employee_advances: 'dollar', employee_bonus_requests: 'dollar', employee_penalty_requests: 'audit',
   payroll_slips: 'file_done', employee_contracts: 'file_done', recruitment_applicants: 'user_switch', surveys: 'form',

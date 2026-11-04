@@ -9,6 +9,7 @@ import {
     CloseCircleOutlined, IdcardOutlined, SafetyCertificateOutlined, EditOutlined, UploadOutlined, RobotOutlined
 } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
+import { invokeUserAdminFunction } from '../utils/userAdminInvoke';
 import { getModuleFaTitle, sanitizeActivityText } from '../utils/recordActivity';
 import { getRecordActivityPresentation } from '../utils/recordActivityPresentation';
 import DateObject from 'react-date-object';
@@ -218,15 +219,18 @@ const ProfilePage: React.FC = () => {
     }
 
     if (userId) {
-        // 2. دریافت اطلاعات از جدول پروفایل + سازمان
-        const { data, error } = await supabase
-            .from(profilesModule.table)
-            .select(`
-                *,
-                organizations!profiles_org_id_fkey (name)
-            `)
-            .eq('id', userId)
-            .single();
+        const snapshot = await fetchSessionBootstrap(supabase);
+        const { data: members, error } = await supabase.rpc('list_organization_members', {
+            p_org_id: snapshot.orgId, p_user_id: userId, p_limit: 1,
+        });
+        const member = Array.isArray(members) ? members[0] : null;
+        let data = member;
+        if (member && userId === snapshot.user?.id) {
+            const { data: ownProfile } = await supabase.from(profilesModule.table).select('*').eq('id', userId).single();
+            data = { ...ownProfile, ...member };
+        }
+        if (!data) { setRecord(null); setLoading(false); message.error('عضویت کاربر در این سازمان پیدا نشد.'); return; }
+        data.organizations = { name: snapshot.profile?.org_name || 'سازمان' };
 
         if (error) {
             console.error('Error fetching profile:', error);
@@ -287,6 +291,10 @@ const ProfilePage: React.FC = () => {
     const handleOpenEdit = () => {
         if (!record || !canEditRecord(record)) {
             message.error('دسترسی کافی ندارید');
+            return;
+        }
+        if (record.can_edit_identity === false) {
+            message.info('نقش و عضویت این کاربر را از تنظیمات اعضای سازمان مدیریت کنید؛ اطلاعات شخصی را خود شخص ویرایش می‌کند.');
             return;
         }
         setDrawerMode('edit');
@@ -360,10 +368,7 @@ const ProfilePage: React.FC = () => {
                 throw new Error('لینک تصویر پروفایل تولید نشد.');
             }
 
-            const { error } = await supabase
-                .from('profiles')
-                .update({ avatar_url: nextAvatarUrl })
-                .eq('id', record.id);
+            const { error } = await supabase.rpc('update_own_profile_avatar', { p_avatar_url: nextAvatarUrl });
             if (error) throw error;
 
             setRecord((prev: any) => ({ ...(prev || {}), avatar_url: nextAvatarUrl }));
@@ -395,7 +400,7 @@ const ProfilePage: React.FC = () => {
         if (error) {
             message.error(toFaErrorMessage(error, 'ارسال ایمیل ناموفق بود.'));
         } else {
-            message.success('لینک بازیابی رمز به ایمیل ارسال شد');
+            message.success('لینک بازیابی رمز به ایمیل ارسال شد. اگر نامه را ندیدید، پوشهٔ Spam / Junk / هرزنامه را هم بررسی کنید.', 8);
         }
     };
 
@@ -410,7 +415,7 @@ const ProfilePage: React.FC = () => {
         }
         setActiveToggleLoading(true);
         try {
-            const { error } = await supabase.from('profiles').update({ is_active: checked }).eq('id', record.id);
+            const { error } = await supabase.rpc('manage_organization_member', { p_user_id: record.id, p_patch: { is_active: checked } });
             if (error) throw error;
             clearReferenceDataCache();
             clearIdentityDirectoryCache(currentOrgId || record.org_id || null);
@@ -420,8 +425,8 @@ const ProfilePage: React.FC = () => {
             setRecord((prev: any) => ({ ...(prev || {}), is_active: checked }));
             message.success(
                 checked
-                    ? 'کاربر فعال شد.'
-                    : 'دسترسی کاربر غیرفعال شد؛ سوابق، فعالیت‌ها، ترددها و ارتباط رکوردهای او حفظ می‌شوند.'
+                    ? 'عضویت کاربر در این سازمان فعال شد.'
+                    : 'عضویت کاربر در این سازمان غیرفعال شد؛ سوابق، فعالیت‌ها، ترددها و ارتباط رکوردهای او حفظ می‌شوند.'
             );
         } catch (error: any) {
             message.error(toFaErrorMessage(error, 'بروزرسانی وضعیت ناموفق بود.'));
@@ -488,31 +493,17 @@ const ProfilePage: React.FC = () => {
         setSubmitting(true);
         try {
             if (drawerMode === 'edit' && record) {
-                const { error } = await supabase.from('profiles').update({
-                    org_id: record.org_id || currentOrgId,
-                    full_name: values.full_name,
-                    email: values.email,
-                    mobile_1: values.mobile,
-                    role_id: values.role_id,
-                    role: values.role,
-                    avatar_url: avatarUrl ?? record.avatar_url,
-                    is_active: values.is_active,
-                }).eq('id', record.id);
-                if (error) throw error;
+                await invokeUserAdminFunction({ action: 'update_user', orgId: currentOrgId,
+                    userId: record.id, fullName: values.full_name, email: values.email,
+                    phone: values.mobile, roleId: values.role_id, role: values.role,
+                    avatarUrl: avatarUrl ?? record.avatar_url, isActive: values.is_active,
+                    password: values.password || undefined });
                 clearReferenceDataCache();
                 clearIdentityDirectoryCache(currentOrgId || record.org_id || null);
                 if (String(record.id) === String(currentUserId || '')) {
                     clearSessionBootstrapCache();
                 }
 
-                if (values.password) {
-                    const authUser = await getCachedAuthUser(supabase);
-                    const currentUserId = authUser?.id || null;
-                    if (currentUserId && currentUserId === record.id) {
-                        const { error: passError } = await supabase.auth.updateUser({ password: values.password });
-                        if (passError) throw passError;
-                    }
-                }
                 message.success('پروفایل بروزرسانی شد');
                 await fetchProfile();
             }

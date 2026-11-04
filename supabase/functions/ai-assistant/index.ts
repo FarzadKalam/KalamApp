@@ -7,6 +7,7 @@ import {
 } from '../_shared/ai-agent-contract.ts';
 import { resolvePersianCalendarContext } from '../_shared/persian-calendar-resolver.ts';
 import { PEYDA_REGULAR_WOFF2_BASE64 } from './peyda-font.ts';
+import { GEMINI_PREBUILT_VOICES, resolveSpeechModelProvider } from '../_shared/speech-model-provider.ts';
 
 type AssistantAction =
   | 'chat'
@@ -5032,7 +5033,7 @@ const callDecisionEngineAudioTranscription = async (
 // of truth and these lists keep existing deployments usable before its migration.
 const AUDIO_SPEECH_VOICES_BY_PROVIDER: Record<string, string[]> = {
   openai: ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'onyx', 'nova', 'sage', 'shimmer', 'verse'],
-  gemini: ['Aoede', 'Charon', 'Fenrir', 'Kore', 'Puck', 'Zephyr'],
+  gemini: [...GEMINI_PREBUILT_VOICES],
   // AvalAI exposes ElevenLabs through its OpenAI-compatible voice names.
   elevenlabs: ['alloy', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'],
 };
@@ -5059,7 +5060,7 @@ const VOICE_STYLE_INSTRUCTIONS: Record<string, string> = {
 };
 
 const getVoiceOptionsForModel = (providerConfig: any) => {
-  const provider = String(providerConfig?.modelProvider || providerConfig?.provider || '').trim().toLowerCase();
+  const provider = resolveSpeechModelProvider(providerConfig);
   const normalizeVoice = (value: any) => {
     const normalized = String(value || '').trim();
     return provider === 'elevenlabs'
@@ -5110,9 +5111,7 @@ const sanitizeVoiceOutputSettings = (options: any = {}, providerConfig: any = nu
 };
 
 const isGeminiTtsModel = (providerConfig: any) => {
-  const provider = String(providerConfig?.modelProvider || providerConfig?.provider || '').trim().toLowerCase();
-  const model = String(providerConfig?.model || '').trim().toLowerCase();
-  return provider === 'gemini' || /^gemini[\w.-]*tts$/.test(model);
+  return resolveSpeechModelProvider(providerConfig) === 'gemini';
 };
 
 const buildVoiceInstructions = (settings: any) => {

@@ -37,6 +37,9 @@ const { authState, functionState, rpcState, profileState, supabaseMock } = vi.ho
 
 vi.mock('../supabaseClient', () => ({
   supabase: supabaseMock,
+  SUPABASE_URL: 'https://example.supabase.co',
+  SUPABASE_ANON_KEY: 'test-anon-key',
+  SUPABASE_AUTH_STORAGE_KEY: 'test-auth-token',
 }));
 
 const renderPage = () => render(<SaasPortalPage />);
@@ -128,6 +131,58 @@ describe('SaasPortalPage OTP flow', () => {
     await goToInfoStep();
     await fillInfoForm();
     await sendOtpFromInfo();
+  });
+
+  const mockExistingAccount = () => {
+    rpcState.mockImplementation(async (fn: string) => {
+      if (fn === 'check_phone_login_candidate') return { data: {
+        exists_in_profiles: true, exists_in_auth: true, has_phone_identity: true, is_active: true,
+      }, error: null };
+      if (fn === 'lookup_phone_signup_invite') return { data: { exists: false }, error: null };
+      if (fn === 'get_current_user_organization_accesses') return { data: [{
+        org_id: 'existing-org', org_name: 'سازمان نمونه', resolved_host: 'sample.tazesystem.ir', is_owner: true,
+      }], error: null };
+      return { data: null, error: null };
+    });
+  };
+
+  const enterExistingPhone = async () => {
+    renderPage();
+    fireEvent.change(screen.getByPlaceholderText('۰۹۱۲...'), { target: { value: '09121234567' } });
+    fireEvent.click(screen.getByText('ادامه'));
+  };
+
+  it('explains existing-account login and reveals organization name and address only after verification', async () => {
+    mockExistingAccount();
+    await enterExistingPhone();
+    await screen.findByText('ورود به حساب شما');
+    expect(screen.queryByText('اطلاعات سازمان')).toBeNull();
+    expect(screen.queryByText('سازمان نمونه')).toBeNull();
+    expect(screen.queryByText('sample.tazesystem.ir')).toBeNull();
+    expect(rpcState).not.toHaveBeenCalledWith('get_current_user_organization_accesses');
+    expect(authState.signInWithOtp).toHaveBeenCalledWith({ phone: '+989121234567', options: { shouldCreateUser: false } });
+    await verifyOtp();
+    await screen.findByText('سازمان نمونه');
+    expect(screen.getByText('sample.tazesystem.ir')).toBeTruthy();
+    expect(rpcState).not.toHaveBeenCalledWith('provision_self_service_demo', expect.anything());
+  });
+
+  it('keeps failed existing-account OTP requests on the phone page with a recovery message', async () => {
+    mockExistingAccount();
+    authState.signInWithOtp.mockResolvedValue({ error: { code: 'otp_disabled', message: 'Signups not allowed for otp' } });
+    await enterExistingPhone();
+    await screen.findByText(/ارسال کد برای این حساب انجام نشد/, {}, { timeout: 10_000 });
+    expect(screen.queryByPlaceholderText('کد تایید')).toBeNull();
+    expect(sessionStorage.getItem('kalam_saas_wizard_step')).toBe('phone');
+  });
+
+  it('preserves existing-account login copy when the OTP page is reloaded', async () => {
+    sessionStorage.setItem('kalam_saas_wizard_step', 'otp');
+    sessionStorage.setItem('kalam_saas_wizard_phone', '09121234567');
+    sessionStorage.setItem('kalam_saas_wizard_existing_phone', '+989121234567');
+    renderPage();
+    await screen.findByText('ورود به حساب شما');
+    expect(screen.queryByText('اطلاعات سازمان')).toBeNull();
   });
 
   it('provisions successfully when the authenticated demo profile exists without org access', async () => {
