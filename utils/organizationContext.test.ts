@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('../supabaseClient', () => ({ supabase: {} }));
 import { clearOrganizationContext, getSelectedOrganizationId, organizationContextFetch, selectOrganizationContext } from './organizationContext';
 import { clearSessionBootstrapCache, fetchSessionBootstrap } from './sessionCache';
 
