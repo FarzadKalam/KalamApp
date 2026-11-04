@@ -12,13 +12,15 @@ export default function EmailComposerHost() {
   const [form] = Form.useForm(); const [accounts, setAccounts] = useState<EmailAccount[]>([]);
   const [files, setFiles] = useState<UploadFile[]>([]); const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false); const [error, setError] = useState(''); const [uncertain, setUncertain] = useState(false);
+  const [canSend, setCanSend] = useState(false);
   const requestKey = useRef(''); const orgId = useRef('');
   useEffect(() => {
     if (!seed) return; let active = true;
-    requestKey.current = crypto.randomUUID(); setFiles([]); setError(''); setUncertain(false); form.resetFields(); form.setFieldsValue(seed); setLoading(true);
+    requestKey.current = crypto.randomUUID(); setFiles([]); setAccounts([]); setCanSend(false); setError(''); setUncertain(false); form.resetFields(); form.setFieldsValue(seed); setLoading(true);
     void fetchSessionBootstrap(supabase).then(async ctx => {
       orgId.current = ctx.orgId || ''; const result = await invokeEmail('email-admin', { action: 'accounts' });
-      if (!active) return; const choices = result.accounts.filter((a: EmailAccount) => a.is_active); setAccounts(choices);
+      const permission = await supabase.rpc('email_can_access', { p_action: 'send' });
+      if (!active) return; setCanSend(!permission.error && permission.data === true); const choices = result.accounts.filter((a: EmailAccount) => a.is_active); setAccounts(choices);
       form.setFieldValue('accountId', seed.accountId || choices[0]?.id);
     }).catch(e => active && setError(e.message)).finally(() => active && setLoading(false));
     return () => { active = false; };
@@ -29,7 +31,7 @@ export default function EmailComposerHost() {
     else close();
   };
   const send = async () => {
-    if (busy || uncertain) return;
+    if (busy || uncertain || !canSend) return;
     try {
       const values = await form.validateFields(); setBusy(true); setError('');
       const context = await fetchSessionBootstrap(supabase, { force: true });
@@ -43,8 +45,9 @@ export default function EmailComposerHost() {
     finally { setBusy(false); }
   };
   const recipientRules = [{ validator: async (_: unknown, values: string[]) => { if ((values || []).some(v => !isEmailAddress(v))) throw new Error('آدرس ایمیل را کامل و معتبر وارد کنید.'); } }];
-  return <Modal open={Boolean(seed)} title={seed?.replyToId ? 'پاسخ ایمیل' : 'نوشتن ایمیل'} width={820} onCancel={dismiss} maskClosable={false} footer={<><Button disabled={busy} onClick={dismiss}>بستن</Button><Button type="primary" icon={<SendOutlined />} loading={busy} disabled={loading || !accounts.length || uncertain} onClick={() => void send()}>ارسال ایمیل</Button></>}>
+  return <Modal open={Boolean(seed)} title={seed?.replyToId ? 'پاسخ ایمیل' : 'نوشتن ایمیل'} width={820} onCancel={dismiss} maskClosable={false} footer={<><Button disabled={busy} onClick={dismiss}>بستن</Button><Button type="primary" icon={<SendOutlined />} loading={busy} disabled={loading || !accounts.length || uncertain || !canSend} onClick={() => void send()}>ارسال ایمیل</Button></>}>
     {error && <Alert type="error" showIcon message={error} className="mb-3" />}
+    {!loading && !canSend && <Alert type="info" message="مجوز ارسال ایمیل برای حساب شما فعال نیست. برای تغییر دسترسی با مدیر سازمان تماس بگیرید." className="mb-3" />}
     {!loading && !accounts.length && <Alert type="info" message="برای ارسال، ابتدا حساب ایمیل سازمان را در تنظیمات اتصال‌ها فعال کنید." className="mb-3" />}
     <Form form={form} layout="vertical" disabled={busy}>
       <Form.Item name="accountId" label="فرستنده" rules={[{ required: true, message: 'فرستنده را انتخاب کنید.' }]}><Select loading={loading} options={accounts.map(a => ({ value: a.id, label: `${a.label} — ${a.address}` }))} disabled={Boolean(seed?.replyToId)} /></Form.Item>

@@ -20,7 +20,7 @@ export default function EmailSettings() {
   const run = async (action: string, body: Record<string, unknown> = {}) => { setBusy(true); setError(''); try { const result = await invokeEmail('email-admin', { action, ...body }); message.success(result.message || 'عملیات انجام شد.'); await load(); return true; } catch (e: any) { setError(e.message); return false; } finally { setBusy(false); } };
   const edit = (account: EmailAccount | 'new') => { setEditing(account); form.resetFields(); form.setFieldsValue(account === 'new' ? { smtp: { port: 587 }, imap: { port: 993 } } : { ...account, account_id: account.id, ...account.connection_config }); };
   return <div dir="rtl" className="space-y-3">
-    <Alert type="info" showIcon message="هر حساب ایمیل متعلق به همین سازمان است. رمز اتصال در سرور نگهداری می‌شود. پس از ذخیره، اتصال را آزمایش و فعال کنید." />
+    <Alert type="info" showIcon message="این صندوق مشترک سازمان است؛ افراد دارای مجوز مشاهده ایمیل سازمان به نامه‌های آن دسترسی دارند. رمز اتصال در سرور نگهداری می‌شود. پس از ذخیره، اتصال را آزمایش و فعال کنید." />
     {error && <Alert type="error" showIcon message={error} />}
     <Space wrap><Button disabled={!canManage} onClick={() => edit('new')}>اتصال ایمیل خودمان</Button><Button disabled={!canManage} onClick={() => setManaged(true)}>درخواست ایمیل ابری</Button><Button onClick={() => void load()}>تازه‌سازی</Button></Space>
     <Table<EmailAccount> rowKey="id" dataSource={rows} pagination={{ pageSize: 10 }} scroll={{ x: 650 }} columns={[

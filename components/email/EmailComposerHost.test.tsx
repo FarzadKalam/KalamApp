@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ invoke: vi.fn(), bootstrap: vi.fn() }));
-vi.mock('../../supabaseClient', () => ({ supabase: {} }));
+vi.mock('../../supabaseClient', () => ({ supabase: { rpc: async () => ({ data: true, error: null }) } }));
 vi.mock('../../utils/sessionCache', () => ({ fetchSessionBootstrap: mocks.bootstrap }));
 vi.mock('../../utils/organizationEmail', () => ({ invokeEmail: mocks.invoke, isEmailAddress: (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) }));
 import EmailComposerHost from './EmailComposerHost';

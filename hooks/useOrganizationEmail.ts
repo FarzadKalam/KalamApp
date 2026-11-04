@@ -17,6 +17,8 @@ export function useOrganizationEmail(folder: string) {
     queryFn: ({ pageParam }) => listEmailMessages(folder, pageParam), getNextPageParam: page => page.length === 40 ? page[page.length - 1] : undefined });
   const accounts = useQuery<EmailAccount[]>({ queryKey: [...key, 'accounts'], enabled: Boolean(identity), cacheTime: 0, staleTime: 15000,
     queryFn: async () => (await invokeEmail('email-admin', { action: 'accounts' })).accounts });
+  const sendAccess = useQuery({ queryKey: [...key, 'send-access'], enabled: Boolean(identity), cacheTime: 0, staleTime: 15000,
+    queryFn: async () => { const { data, error } = await supabase.rpc('email_can_access', { p_action: 'send' }); return !error && data === true; } });
   useEffect(() => {
     if (!identity) return;
     const refresh = () => { void client.invalidateQueries({ queryKey: ['organization-email', identity.org, identity.user] }); };
@@ -24,7 +26,7 @@ export function useOrganizationEmail(folder: string) {
     window.addEventListener('organization-email-changed', refresh);
     return () => { window.removeEventListener('organization-email-changed', refresh); void supabase.removeChannel(channel); };
   }, [client, identity]);
-  return { identity, rows: mails.data?.pages.flat() || [], accounts: accounts.data || [], error: mails.error || accounts.error,
+  return { identity, canSend: sendAccess.data === true, rows: mails.data?.pages.flat() || [], accounts: accounts.data || [], error: mails.error || accounts.error,
     busy: mails.isFetching || accounts.isFetching, hasMore: mails.hasNextPage, more: mails.fetchNextPage,
     refresh: async () => { await Promise.all([mails.refetch(), accounts.refetch()]); } };
 }
