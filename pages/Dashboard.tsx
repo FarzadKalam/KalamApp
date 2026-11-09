@@ -1,24 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Card, Col, Empty, Grid, Input, Row, Spin, Statistic, Table, Tag, message } from 'antd';
+import { Alert, Button, Card, Checkbox, Empty, Grid, Input, Modal, Popover, Spin, Statistic, Table, message } from 'antd';
 import {
-  AppstoreOutlined,
-  BankOutlined,
+  DownOutlined,
+  SettingOutlined,
   CalendarOutlined,
-  CheckSquareOutlined,
-  FileTextOutlined,
-  NodeIndexOutlined,
   PlusOutlined,
-  ProjectOutlined,
   SendOutlined,
-  SkinOutlined,
-  TeamOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import DateObject from 'react-date-object';
-import persian from 'react-date-object/calendars/persian';
-import persian_fa from 'react-date-object/locales/persian_fa';
-import gregorian from 'react-date-object/calendars/gregorian';
-import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import { FieldType, type ModuleDefinition } from '../types';
@@ -29,17 +18,29 @@ import {
   isSaasAdminModuleId,
   resolvePreferredRoleModuleIds,
   resolveStoriesPermissions,
+  resolveCommunicationsPermissions,
   resolveSaasAdminFieldPermission,
   type CurrentUserRecordAccessContext,
   type PermissionMap,
 } from '../utils/permissions';
-import { toPersianNumber, formatPersianPrice } from '../utils/persianNumberFormatter';
+import { toPersianNumber, formatPersianPrice, safeJalaliFormat } from '../utils/persianNumberFormatter';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
-import { readCurrencyConfig, useCurrencyConfig } from '../utils/currency';
+import { useCurrencyConfig } from '../utils/currency';
 import { BRANDING_APPLIED_EVENT, DEFAULT_BRANDING } from '../theme/brandTheme';
 import { readRuntimeBranding } from '../utils/brandingRuntime';
 import { fetchModuleListRelationOptions, hydrateModuleListRelationOptionsForRows } from '../utils/moduleListOptions';
 import { getOptionLabel } from '../utils/optionHelpers';
+import { formatRecordDisplayValue } from '../utils/recordDisplayFormatter';
+import { getFieldLabelFa } from '../utils/fieldLabel';
+import { fetchDynamicOptionsMap } from '../utils/referenceData';
+import { getModuleListGroupOptions } from '../utils/moduleListOptions';
+import { renderModuleIcon } from '../utils/moduleIcons';
+import { readDashboardPreferences, useDashboardPreferences, updateDashboardPreferences } from '../utils/dashboardPreferences';
+import { hasCurrentOrgPlanModule } from '../utils/saasPlanModules';
+import DashboardWidgetFrame, { DashboardModuleSelection, DashboardWidgetScope } from '../components/dashboard/DashboardWidgetFrame';
+import CommunicationsWidget from '../components/dashboard/CommunicationsWidget';
+import MyTasksWidget from '../components/dashboard/MyTasksWidget';
+import '../components/dashboard/Dashboard.css';
 import PhoneDisplay from '../components/PhoneDisplay';
 import GoalProgressSlider from '../components/goals/GoalProgressSlider';
 import OccasionsWidget from '../components/dashboard/OccasionsWidget';
@@ -49,7 +50,6 @@ import OurProcessesWidget from '../components/dashboard/OurProcessesWidget';
 import StoryBar from '../components/stories/StoryBar';
 import StoryViewerModal from '../components/stories/StoryViewerModal';
 import StoryEditorModal from '../components/stories/StoryEditorModal';
-import ResilientImage from '../components/common/ResilientImage';
 import type { RecordedVoice } from '../components/ai/AiVoiceRecorder';
 import type { AiUploadedFilePrompt } from '../components/ai/AiFileUploadButton';
 import AiCapabilityComposerActions, { normalizeAiComposerCapabilities, type AiComposerCapability } from '../components/ai/AiCapabilityComposerActions';
@@ -89,6 +89,7 @@ type DashboardRecentSection = {
 };
 
 type DashboardBootstrapResult = {
+  moduleIds: string[];
   widgetPermissions: Record<string, boolean>;
   quickActions: DashboardQuickAction[];
   cards: DashboardCardItem[];
@@ -163,73 +164,8 @@ const mapWithConcurrency = async <TItem, TResult>(
   return results;
 };
 
-const getTodayPersianDate = () => {
-  try {
-    const today = new Date();
-    const dateObj = new DateObject({
-      date: today,
-      calendar: gregorian,
-      locale: gregorian_en,
-    }).convert(persian, persian_fa);
-    const gregorianDate = new DateObject({
-      date: today,
-      calendar: gregorian,
-      locale: gregorian_en,
-    }).format('YYYY/MM/DD');
-    return `${dateObj.format('dddd، DD MMMM YYYY')} | میلادی: ${toPersianNumber(gregorianDate)}`;
-  } catch {
-    return 'تاریخ امروز';
-  }
-};
-
-const formatPersianDate = (val: any, format: string) => {
-  if (!val) return '-';
-  try {
-    let dateObj: DateObject;
-    if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(val)) {
-      dateObj = new DateObject({
-        date: val,
-        format: 'YYYY-MM-DD',
-        calendar: gregorian,
-        locale: gregorian_en,
-      });
-    } else {
-      const jsDate = new Date(val);
-      if (Number.isNaN(jsDate.getTime())) return '-';
-      dateObj = new DateObject({
-        date: jsDate,
-        calendar: gregorian,
-        locale: gregorian_en,
-      });
-    }
-    return dateObj.convert(persian, persian_fa).format(format);
-  } catch {
-    return '-';
-  }
-};
-
-const getModuleIcon = (moduleId: string) => {
-  const iconMap: Record<string, React.ReactNode> = {
-    products: <SkinOutlined />,
-    product_bundles: <AppstoreOutlined />,
-    price_lists: <AppstoreOutlined />,
-    production_orders: <CheckSquareOutlined />,
-    invoices: <FileTextOutlined />,
-    purchase_invoices: <FileTextOutlined />,
-    customers: <TeamOutlined />,
-    suppliers: <TeamOutlined />,
-    employees: <TeamOutlined />,
-    tasks: <CheckSquareOutlined />,
-    projects: <ProjectOutlined />,
-    warehouses: <BankOutlined />,
-    billboards: <AppstoreOutlined />,
-    marketing_leads: <FileTextOutlined />,
-    attendance_logs: <CheckSquareOutlined />,
-    process_runs: <NodeIndexOutlined />,
-    process_templates: <NodeIndexOutlined />,
-  };
-  return iconMap[moduleId] || <AppstoreOutlined />;
-};
+const getTodayPersianDate = () => safeJalaliFormat(new Date(), 'dddd، D MMMM YYYY');
+const getModuleIcon = (moduleId: string) => renderModuleIcon(MODULES[moduleId] || moduleId);
 
 const getModuleTitle = (moduleId: string) => {
   return MODULES[moduleId]?.titles?.faSingular || MODULES[moduleId]?.titles?.fa || moduleId;
@@ -265,7 +201,7 @@ const getFieldMeta = (module: ModuleDefinition, fieldKey: string) => {
   return (
     module.fields.find((field: any) => String(field.key) === String(fieldKey)) || {
       key: fieldKey,
-      labels: { fa: SYNTHETIC_FIELD_META[fieldKey]?.label || fieldKey },
+      labels: { fa: SYNTHETIC_FIELD_META[fieldKey]?.label || 'فیلد' },
       type: SYNTHETIC_FIELD_META[fieldKey]?.type || FieldType.TEXT,
       options: [],
     }
@@ -282,39 +218,17 @@ const renderFieldValue = (
 
   if (value === null || value === undefined || value === '') return '-';
 
-  switch (field.type) {
-    case FieldType.STATUS:
-    case FieldType.SELECT: {
-      const option = (field.options || []).find((item: any) => String(item.value) === String(value));
-      const text = option?.label || String(value);
-      return field.type === FieldType.STATUS ? <Tag color={option?.color || 'default'}>{text}</Tag> : text;
-    }
-    case FieldType.RELATION:
-    case FieldType.USER:
-      return getOptionLabel({ ...field, type: FieldType.RELATION }, value, {}, relationOptions);
-    case FieldType.PRICE:
-      return `${formatPersianPrice(Number(value || 0), true)} ${readCurrencyConfig().label}`;
-    case FieldType.NUMBER:
-      return toPersianNumber(value);
-    case FieldType.PHONE:
-      return <PhoneDisplay value={value} size="sm" />;
-    case FieldType.DATE:
-      return formatPersianDate(value, 'YYYY/MM/DD');
-    case FieldType.DATETIME:
-      return formatPersianDate(value, 'YYYY/MM/DD HH:mm');
-    case FieldType.TIME:
-      return toPersianNumber(String(value));
-    case FieldType.CHECKBOX:
-      return value ? 'بله' : 'خیر';
-    default:
-      return String(value);
-  }
+  if (field.type === FieldType.RELATION || field.type === FieldType.USER) return getOptionLabel(field, value, {}, relationOptions);
+  if (field.type === FieldType.PHONE) return <PhoneDisplay value={value} size="sm" />;
+  return formatRecordDisplayValue(value, field);
+
 };
 
 const countRows = async (table: string, apply?: (query: any) => any) => {
   let query = supabase.from(table).select('id', { count: 'exact', head: true });
   if (apply) query = apply(query);
-  const { count } = await query;
+  const { count, error } = await query;
+  if (error) throw error;
   return Number(count || 0);
 };
 
@@ -363,12 +277,14 @@ const safeSelectRows = async (
   columns: string[],
   options?: {
     limit?: number;
+    offset?: number;
     orderBy?: Array<{ field: string; ascending: boolean; nullsFirst?: boolean }>;
   }
 ) => {
   const normalizedTable = String(table || '').trim();
+  const projectionKey = `${normalizedTable}:${normalizeColumnList(columns).sort().join(',')}:${(options?.orderBy || []).map(entry => entry.field).join(',')}`;
   let activeColumns = normalizeColumnList(columns);
-  const cachedColumns = dashboardSelectableColumnsCache.get(normalizedTable);
+  const cachedColumns = dashboardSelectableColumnsCache.get(projectionKey);
   if (cachedColumns?.length) {
     const filtered = activeColumns.filter((column) => cachedColumns.includes(column));
     if (filtered.length) activeColumns = filtered;
@@ -379,7 +295,7 @@ const safeSelectRows = async (
     ascending: Boolean(entry.ascending),
     nullsFirst: entry.nullsFirst,
   }));
-  const cachedOrderFields = dashboardOrderableColumnsCache.get(normalizedTable);
+  const cachedOrderFields = dashboardOrderableColumnsCache.get(projectionKey);
   if (cachedOrderFields?.length) {
     const filtered = activeOrderBy.filter((entry) => cachedOrderFields.includes(entry.field));
     if (filtered.length) activeOrderBy = filtered;
@@ -390,14 +306,16 @@ const safeSelectRows = async (
     activeOrderBy.forEach((entry) => {
       query = query.order(entry.field, { ascending: entry.ascending, nullsFirst: entry.nullsFirst });
     });
-    if (options?.limit) {
+    if (options?.offset !== undefined) {
+      query = query.range(options.offset, options.offset + (options.limit || 250) - 1);
+    } else if (options?.limit) {
       query = query.limit(options.limit);
     }
 
     const { data, error } = await query;
     if (!error) {
-      dashboardSelectableColumnsCache.set(normalizedTable, [...activeColumns]);
-      dashboardOrderableColumnsCache.set(normalizedTable, activeOrderBy.map((entry) => entry.field));
+      dashboardSelectableColumnsCache.set(projectionKey, [...activeColumns]);
+      dashboardOrderableColumnsCache.set(projectionKey, activeOrderBy.map((entry) => entry.field));
       return { data: data || [], error: null };
     }
 
@@ -421,13 +339,15 @@ const runOrderedDashboardSelect = async (
   columns: string[],
   options?: {
     limit?: number;
+    offset?: number;
     orderBy?: Array<{ field: string; ascending: boolean; nullsFirst?: boolean }>;
   },
   apply?: (query: any) => any,
 ) => {
   const normalizedTable = String(table || '').trim();
+  const projectionKey = `${normalizedTable}:${normalizeColumnList(columns).sort().join(',')}:${(options?.orderBy || []).map(entry => entry.field).join(',')}`;
   let activeColumns = normalizeColumnList(columns);
-  const cachedColumns = dashboardSelectableColumnsCache.get(normalizedTable);
+  const cachedColumns = dashboardSelectableColumnsCache.get(projectionKey);
   if (cachedColumns?.length) {
     const filtered = activeColumns.filter((column) => cachedColumns.includes(column));
     if (filtered.length) activeColumns = filtered;
@@ -438,7 +358,7 @@ const runOrderedDashboardSelect = async (
     ascending: Boolean(entry.ascending),
     nullsFirst: entry.nullsFirst,
   }));
-  const cachedOrderFields = dashboardOrderableColumnsCache.get(normalizedTable);
+  const cachedOrderFields = dashboardOrderableColumnsCache.get(projectionKey);
   if (cachedOrderFields?.length) {
     const filtered = activeOrderBy.filter((entry) => cachedOrderFields.includes(entry.field));
     if (filtered.length) activeOrderBy = filtered;
@@ -452,14 +372,16 @@ const runOrderedDashboardSelect = async (
     activeOrderBy.forEach((entry) => {
       query = query.order(entry.field, { ascending: entry.ascending, nullsFirst: entry.nullsFirst });
     });
-    if (options?.limit) {
+    if (options?.offset !== undefined) {
+      query = query.range(options.offset, options.offset + (options.limit || 250) - 1);
+    } else if (options?.limit) {
       query = query.limit(options.limit);
     }
 
     const { data, error } = await query;
     if (!error) {
-      dashboardSelectableColumnsCache.set(normalizedTable, [...activeColumns]);
-      dashboardOrderableColumnsCache.set(normalizedTable, activeOrderBy.map((entry) => entry.field));
+      dashboardSelectableColumnsCache.set(projectionKey, [...activeColumns]);
+      dashboardOrderableColumnsCache.set(projectionKey, activeOrderBy.map((entry) => entry.field));
       return { data: data || [], error: null };
     }
 
@@ -501,13 +423,14 @@ const filterRowsByRecordScope = (
   );
 };
 
-const fetchScopedDashboardRows = async (
+const fetchScopedDashboardRowsResult = async (
   table: string,
   moduleId: string,
   columns: string[],
   recordAccess: CurrentUserRecordAccessContext,
   options?: {
     limit?: number;
+    offset?: number;
     orderBy?: Array<{ field: string; ascending: boolean; nullsFirst?: boolean }>;
   }
 ) => {
@@ -560,6 +483,12 @@ const fetchScopedDashboardRows = async (
   );
 };
 
+const fetchScopedDashboardRows = async (...args: Parameters<typeof fetchScopedDashboardRowsResult>) => {
+  const result = await fetchScopedDashboardRowsResult(...args);
+  if (result.error) throw result.error;
+  return result;
+};
+
 const TASK_SHARED_COLUMNS = [
   'id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type',
   'status', 'name', 'priority', 'task_type', 'start_date', 'due_date',
@@ -577,14 +506,16 @@ const fetchDashboardTasksShared = async (
   recordAccess: CurrentUserRecordAccessContext
 ): Promise<any[]> => {
   const now = Date.now();
+  const viewerKey = getDashboardCardCacheKey('tasks', recordAccess);
   if (
     _dashboardTasksCache.data !== null &&
     _dashboardTasksCache.expiresAt > now &&
-    _dashboardTasksCache.userId === String(recordAccess.userId || '')
+    _dashboardTasksCache.userId === viewerKey
   ) {
     return _dashboardTasksCache.data;
   }
-  if (_dashboardTasksCache.promise) return _dashboardTasksCache.promise;
+  if (_dashboardTasksCache.promise && _dashboardTasksCache.userId === viewerKey) return _dashboardTasksCache.promise;
+  _dashboardTasksCache.userId = viewerKey;
 
   _dashboardTasksCache.promise = fetchScopedDashboardRows(
     'tasks', 'tasks', TASK_SHARED_COLUMNS, recordAccess, { limit: 500 }
@@ -593,7 +524,7 @@ const fetchDashboardTasksShared = async (
     _dashboardTasksCache = {
       data: rows,
       expiresAt: Date.now() + DASHBOARD_BOOTSTRAP_TTL_MS,
-      userId: String(recordAccess.userId || ''),
+      userId: viewerKey,
       promise: null,
     };
     return rows;
@@ -610,6 +541,8 @@ const getDashboardCardCacheKey = (
   recordAccess: CurrentUserRecordAccessContext
 ) =>
   [
+    recordAccess.orgId || 'no-org',
+    JSON.stringify(recordAccess.permissions?.[moduleId] || {}),
     moduleId,
     recordAccess.userId || 'no-user',
     recordAccess.roleId || 'no-role',
@@ -618,15 +551,7 @@ const getDashboardCardCacheKey = (
     [...(recordAccess.allowedUserIds || [])].sort().join(',') || 'no-users',
   ].join(':');
 
-const getDashboardRecentSectionCacheKey = (moduleId: string, recordAccess: CurrentUserRecordAccessContext) =>
-  [
-    moduleId,
-    recordAccess.userId || 'no-user',
-    recordAccess.roleId || 'no-role',
-    getModuleRecordScope(recordAccess.permissions, moduleId),
-    [...(recordAccess.allowedRoleIds || [])].sort().join(',') || 'no-roles',
-    [...(recordAccess.allowedUserIds || [])].sort().join(',') || 'no-users',
-  ].join(':');
+const getDashboardRecentSectionCacheKey = getDashboardCardCacheKey;
 
 const resolveDashboardModuleIds = (
   permissions: PermissionMap | null | undefined,
@@ -681,6 +606,13 @@ const loadCardForModule = async (
 
   switch (preset) {
     case 'tasks_pending_mine': {
+      if (canUseDashboardServerCounts(moduleId, recordAccess)) {
+        const [pendingCount, totalCount] = await Promise.all([
+          countRows('tasks', query => query.not('status', 'in', '(done,completed,canceled,cancelled)')),
+          countRows('tasks'),
+        ]);
+        return { moduleId, title, value: pendingCount, kind: 'number', subtitle: 'از کل ' + toPersianNumber(totalCount) + ' فعالیت' };
+      }
       const data = await fetchDashboardTasksShared(recordAccess);
       const scopedRows = filterRowsByRecordScope(data, moduleId, recordAccess);
       const pendingCount = scopedRows.filter((row: any) =>
@@ -697,10 +629,20 @@ const loadCardForModule = async (
     }
 
     case 'invoices_total_amount_mine': {
-      const { data } = await fetchScopedDashboardRows('invoices', moduleId, ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'total_invoice_amount'], recordAccess);
-      const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
-      const totalAmount = scopedRows.reduce((sum: number, row: any) => sum + Number(row?.total_invoice_amount || 0), 0);
-      const count = scopedRows.length;
+      // A bounded page of amounts is not a total. Stream only the required columns;
+      // use stable primary-key pagination and keep a constant-size accumulator.
+      let totalAmount = 0, count = 0, offset = 0;
+      const pageSize = 250;
+      while (true) {
+        const { data } = await fetchScopedDashboardRows('invoices', moduleId, ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'total_invoice_amount'], recordAccess, {
+          limit: pageSize, offset, orderBy: [{ field: 'id', ascending: true }],
+        });
+        const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
+        totalAmount += scopedRows.reduce((sum: number, row: any) => sum + Number(row?.total_invoice_amount || 0), 0);
+        count += scopedRows.length;
+        if (data.length < pageSize) break;
+        offset += pageSize;
+      }
       return {
         moduleId,
         title,
@@ -873,7 +815,7 @@ const loadRecentSection = async (
   const module = MODULES[moduleId];
   if (!module) return null;
 
-  const recentFieldKeys = getRecentFieldKeys(module);
+  const recentFieldKeys = getRecentFieldKeys(module).filter(key => recordAccess.permissions?.[moduleId]?.fields?.[key] !== false);
   const fieldKeys = Array.from(new Set(['id', ...recentFieldKeys]));
   const selectKeys = Array.from(new Set([...fieldKeys, 'created_at', 'updated_at']));
 
@@ -900,12 +842,17 @@ const loadRecentSection = async (
       }
     : {};
 
+  const dynamicOptions = await fetchDynamicOptionsMap(supabase, recentFields.map((field: any) => field.dynamicOptionsCategory).filter(Boolean));
   const columns = recentFieldKeys.map((fieldKey) => ({
-    title: getFieldMeta(module, fieldKey)?.labels?.fa || fieldKey,
+    title: getFieldLabelFa(getFieldMeta(module, fieldKey), { moduleId, fallback: 'فیلد' }),
     dataIndex: fieldKey,
     key: fieldKey,
     ellipsis: true,
-    render: (value: any) => renderFieldValue(module, fieldKey, value, relationOptions),
+    render: (value: any) => {
+      const field = getFieldMeta(module, fieldKey);
+      const mergedField = { ...field, options: getModuleListGroupOptions(field, dynamicOptions) };
+      return field.type === FieldType.RELATION || field.type === FieldType.USER || field.type === FieldType.PHONE ? renderFieldValue(module, fieldKey, value, relationOptions) : formatRecordDisplayValue(value, mergedField);
+    },
   }));
 
   return {
@@ -943,6 +890,7 @@ const buildDashboardBootstrap = async (): Promise<DashboardBootstrapResult> => {
 
   if (!userId) {
     return {
+      moduleIds: [],
       widgetPermissions: {},
       quickActions: [],
       cards: [],
@@ -952,6 +900,7 @@ const buildDashboardBootstrap = async (): Promise<DashboardBootstrapResult> => {
 
   if (dashboardPermissions.view === false) {
     return {
+      moduleIds: [],
       widgetPermissions: { __all: false },
       quickActions: [],
       cards: [],
@@ -959,9 +908,14 @@ const buildDashboardBootstrap = async (): Promise<DashboardBootstrapResult> => {
     };
   }
 
-  const preferredModuleIds = resolvePreferredRoleModuleIds(permissions, MODULES, 8);
-  const dashboardModuleIds = resolveDashboardModuleIds(permissions, preferredModuleIds).slice(0, DASHBOARD_MAX_MODULES);
+  const preferences = readDashboardPreferences(snapshot.orgId, userId);
+  const preferredModuleIds = preferences.moduleIds ?? resolvePreferredRoleModuleIds(permissions, MODULES, 8);
+  const candidates = (preferences.moduleIds ? preferredModuleIds.filter(id => MODULES[id] && !isSaasAdminModuleId(id) && permissions[id]?.view !== false) : resolveDashboardModuleIds(permissions, preferredModuleIds)).slice(0, DASHBOARD_MAX_MODULES);
+  const availability = await mapWithConcurrency(candidates, 3, id => hasCurrentOrgPlanModule(id, { defaultEnabled: true }));
+  const dashboardModuleIds = candidates.filter((_, index) => availability[index]);
   const cacheKey = [
+    snapshot.orgId || 'no-org',
+    JSON.stringify(permissions),
     userId,
     roleId || 'no-role',
     preferredModuleIds.join(','),
@@ -984,7 +938,7 @@ const buildDashboardBootstrap = async (): Promise<DashboardBootstrapResult> => {
 
   dashboardBootstrapPromiseKey = cacheKey;
   dashboardBootstrapPromise = (async () => {
-    const quickActions = preferredModuleIds.slice(0, DASHBOARD_MAX_MODULES).map((moduleId) => ({
+    const quickActions = dashboardModuleIds.filter(id => permissions[id]?.create !== false).map((moduleId) => ({
       moduleId,
       title: MODULES[moduleId]?.dashboard?.quickCreateLabel || `ایجاد ${getModuleTitle(moduleId)}`,
       description: getModuleTitle(moduleId),
@@ -1000,6 +954,7 @@ const buildDashboardBootstrap = async (): Promise<DashboardBootstrapResult> => {
     ]);
 
     const result: DashboardBootstrapResult = {
+      moduleIds: dashboardModuleIds,
       widgetPermissions: (dashboardPermissions.fields || {}) as Record<string, boolean>,
       quickActions,
       cards: cards.filter(Boolean) as DashboardCardItem[],
@@ -1046,12 +1001,15 @@ const Dashboard: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [dashboardReady, setDashboardReady] = useState(false);
   const [brandTitle, setBrandTitle] = useState(() => readRuntimeBranding().appTitle || DEFAULT_BRANDING.brandName);
-  const [brandLogoUrl, setBrandLogoUrl] = useState<string | null>(() => readRuntimeBranding().logoUrl || null);
   const [widgetPermissions, setWidgetPermissions] = useState<Record<string, boolean>>({});
   const [quickActions, setQuickActions] = useState<DashboardQuickAction[]>([]);
   const [cards, setCards] = useState<DashboardCardItem[]>([]);
   const [recentSections, setRecentSections] = useState<DashboardRecentSection[]>([]);
-  const [prefetchedTasks, setPrefetchedTasks] = useState<any[]>([]);
+  const [selectedModuleIds, setSelectedModuleIds] = useState<string[]>([]);
+  const [dashboardPermissions, setDashboardPermissions] = useState<PermissionMap>({});
+  const [dashboardError, setDashboardError] = useState('');
+  const [personalizeOpen, setPersonalizeOpen] = useState(false);
+  const [refreshRevision, setRefreshRevision] = useState(0);
   const [dashboardAiQuestion, setDashboardAiQuestion] = useState('');
   const [dashboardVoiceSending, setDashboardVoiceSending] = useState(false);
   const [dashboardFileSending, setDashboardFileSending] = useState(false);
@@ -1078,13 +1036,21 @@ const Dashboard: React.FC = () => {
   const [editingStory, setEditingStory] = useState<OrgStory | null>(null);
   const [storyRefreshKey, setStoryRefreshKey] = useState(0);
   const [initialStories, setInitialStories] = useState<OrgStoryWithMeta[]>([]);
-  const quickActionDesktopColumns = useMemo(() => {
-    const count = quickActions.length;
-    if (count <= 0) return 1;
-    if (count <= 4) return count;
-    if (count <= 6) return 3;
-    return 4;
-  }, [quickActions.length]);
+  const preferences = useDashboardPreferences(orgId, currentUserId);
+  const modulePreferenceKey = preferences.moduleIds?.join('|') ?? '__default__';
+  const communicationsAccess = resolveCommunicationsPermissions(dashboardPermissions);
+  const refreshDashboard = useCallback(() => {
+    dashboardBootstrapCache.expiresAt = 0;dashboardCardCache.clear();dashboardRecentSectionCache.clear();_dashboardTasksCache.expiresAt = 0;
+    setRefreshRevision(value => value + 1);
+  }, []);
+  const widgetScope = useMemo(() => ({ orgId, userId: currentUserId, onRefresh: refreshDashboard }), [orgId, currentUserId, refreshDashboard]);
+  const moduleSelection = <DashboardModuleSelection orgId={orgId} userId={currentUserId} selected={preferences.moduleIds ?? selectedModuleIds}
+    options={Object.keys(MODULES).filter(id => !isSaasAdminModuleId(id) && dashboardPermissions[id]?.view !== false).map(id => ({ value: id, label: MODULES[id].titles.fa }))} />;
+  const widgetChoices = [
+    { id: 'stories', label: 'استوری‌ها' },{ id: 'ai', label: 'دستیار هوشمند' },{ id: 'my_tasks', label: 'کارهای من' },{ id: 'reports_slider', label: 'گزارش‌های منتخب' },
+    { id: 'activity_calendar', label: 'تقویم فعالیت‌ها' },{ id: 'our_processes', label: 'فرآیندهای ما' },{ id: 'communications', label: 'ارتباطات' },{ id: 'goals', label: 'اهداف و موفقیت‌ها' },{ id: 'quick_add', label: 'افزودن سریع' },
+    ...cards.map(card => ({ id: 'summary:' + card.moduleId, label: card.title })),...recentSections.map(section => ({ id: 'recent:' + section.moduleId, label: section.title })),
+  ];
   const dashboardRecordCreationModuleOptions = useMemo(() => buildAiRecordModuleOptions(), []);
   const dashboardImageMode = dashboardAiCapabilities.includes('image_generation');
   const dashboardVoiceOutputMode = dashboardAiCapabilities.includes('voice_output');
@@ -1114,7 +1080,6 @@ const Dashboard: React.FC = () => {
     const syncBranding = () => {
       const branding = readRuntimeBranding();
       setBrandTitle(branding.appTitle || DEFAULT_BRANDING.brandName);
-      setBrandLogoUrl(branding.logoUrl || null);
     };
     syncBranding();
     window.addEventListener(BRANDING_APPLIED_EVENT, syncBranding as EventListener);
@@ -1128,6 +1093,7 @@ const Dashboard: React.FC = () => {
 
     const loadDashboard = async () => {
       setLoading(true);
+      setDashboardError('');
       try {
         // مرحله ۱: session سریع است (معمولاً کش شده)
         const snapshot = await fetchSessionBootstrap(supabase);
@@ -1146,10 +1112,10 @@ const Dashboard: React.FC = () => {
         setWidgetPermissions(result.widgetPermissions || {});
         setQuickActions(result.quickActions || []);
         setCards(result.cards || []);
+        setSelectedModuleIds(result.moduleIds || []);
+        setDashboardPermissions(snapshot.permissions || {});
         setRecentSections(result.recentSections || []);
-        if (_dashboardTasksCache.data) {
-          setPrefetchedTasks(_dashboardTasksCache.data);
-        }
+
 
         if (userId) {
           setCurrentUserId(userId);
@@ -1168,10 +1134,8 @@ const Dashboard: React.FC = () => {
       } catch (error) {
         console.error('Error loading dashboard:', error);
         if (!isMounted) return;
-        setWidgetPermissions({});
-        setQuickActions([]);
-        setCards([]);
-        setRecentSections([]);
+        setDashboardError(toFaErrorMessage(error as any, 'دریافت داشبورد انجام نشد.'));
+        if (!currentUserId) setWidgetPermissions({ __all: false });
       } finally {
         if (!isMounted) return;
         setLoading(false);
@@ -1184,7 +1148,7 @@ const Dashboard: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [modulePreferenceKey, refreshRevision]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1209,7 +1173,7 @@ const Dashboard: React.FC = () => {
   const canShowWidget = (key: string) => {
     if (!dashboardReady) return false;
     if (widgetPermissions.__all === false) return false;
-    return widgetPermissions[key] !== false;
+    return widgetPermissions[key] !== false && !preferences.hiddenWidgets.includes(key);
   };
 
   const showReportsWidget = canShowWidget('reports_slider');
@@ -1393,56 +1357,25 @@ const Dashboard: React.FC = () => {
   }, [currentUserId, orgId, storyViewerList]);
 
   return (
-    <>
-    <div className="min-h-screen bg-gray-50 dark:bg-dark-bg p-4 md:p-6">
-
-      {/* ─── باکس استوری‌ها — جداگانه بالای کارت سازمان ─── */}
-      {orgId && currentUserId && storiesPermissions?.canView && (
-        <div className="mb-3">
-          <StoryBar
-            key={storyRefreshKey}
-            orgId={orgId}
-            currentUserId={currentUserId}
-            canPublish={storiesPermissions.canPublish}
-            onAddStory={() => { setEditingStory(null); setStoryEditorOpen(true); }}
-            onOpenStory={handleOpenStory}
-            initialStories={storyRefreshKey === 0 ? initialStories : undefined}
-          />
+    <DashboardWidgetScope.Provider value={widgetScope}>
+    <div className="dashboard-shell" dir="rtl">
+      <header className="dashboard-page-heading">
+        <div><h1>{currentUserName ? `سلام ${currentUserName.split(' ')[0]}، روزت بخیر` : brandTitle}</h1>
+          <div className="dashboard-date-line"><CalendarOutlined /><span>{getTodayPersianDate()}</span>
+            <Popover trigger="click" placement="bottomRight" content={<div className="dashboard-occasion-popover"><OccasionsWidget /></div>}><Button type="text" size="small">مناسبت‌ها <DownOutlined /></Button></Popover>
+          </div>
         </div>
-      )}
-
-      <div className="mb-6">
-        <div className="bg-white dark:bg-dark-surface rounded-lg shadow-sm p-6 border border-gray-200 dark:border-dark-border">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-stretch xl:justify-between">
-            <div className="flex-1">
-              <div className="mb-2 flex items-center gap-3">
-                {brandLogoUrl ? (
-                  <ResilientImage
-                    src={brandLogoUrl}
-                    preset="gallery"
-                    alt={brandTitle}
-                    className="h-12 w-12 rounded-xl object-contain ring-1 ring-gray-200 dark:ring-dark-border"
-                    loading="lazy"
-                    decoding="async"
-                  />
-                ) : null}
-                <h1 className="text-3xl font-black text-leather-500">{brandTitle}</h1>
-              </div>
-              <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-                <CalendarOutlined />
-                <span className="text-sm">{getTodayPersianDate()}</span>
-              </div>
-              <OccasionsWidget />
-              <div
-                className="mt-4 rounded-lg p-[2px]"
-                style={{
-                  background: 'linear-gradient(120deg, #14b8a6, #6366f1, #ec4899, #f59e0b)',
-                  boxShadow: '0 0 22px rgba(99, 102, 241, 0.28), 0 0 28px rgba(20, 184, 166, 0.18)',
-                }}
-              >
-                <div className="rounded-lg bg-white p-2 dark:bg-dark-surface">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <AiSparkleIcon className="h-5 w-5 shrink-0 text-leather-500" />
+        <Button className="dashboard-personalize-trigger" icon={<SettingOutlined />} onClick={() => setPersonalizeOpen(true)} aria-label="شخصی‌سازی داشبورد"><span className="dashboard-personalize-label">شخصی‌سازی</span></Button>
+      </header>
+      {dashboardError && <Alert type="error" showIcon message={dashboardError} action={<Button onClick={refreshDashboard}>تلاش دوباره</Button>} />}
+      <div className="dashboard-overview-row">
+        {orgId && currentUserId && storiesPermissions?.canView && <DashboardWidgetFrame widgetId="stories" title="استوری‌ها" defaultOrder={0} className="dashboard-stories-frame" onRefresh={() => setStoryRefreshKey(value => value + 1)}>
+          <StoryBar key={storyRefreshKey} orgId={orgId} currentUserId={currentUserId} canPublish={storiesPermissions.canPublish}
+            onAddStory={() => { setEditingStory(null); setStoryEditorOpen(true); }} onOpenStory={handleOpenStory} initialStories={storyRefreshKey === 0 ? initialStories : undefined} />
+        </DashboardWidgetFrame>}
+        {dashboardReady && communicationsAccess.canUseWorkspace && <DashboardWidgetFrame widgetId="ai" title="دستیار هوشمند سازمان" defaultOrder={1} className="dashboard-ai-frame">
+          <Card className="dashboard-content-card" title={<span className="flex items-center gap-2"><AiSparkleIcon className="h-5 w-5" />دستیار هوشمند سازمان</span>}>
+                              <div className="flex min-w-0 items-center gap-2">
                     <Input.TextArea
                       variant="borderless"
                       value={dashboardAiQuestion}
@@ -1506,165 +1439,44 @@ const Dashboard: React.FC = () => {
                       }}
                     />
                   </div>
-                </div>
-              </div>
-            </div>
-            <div className="w-full xl:max-w-[430px]">
-              <GoalProgressSlider placement="dashboard" hideWhenEmpty={isMobile} />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {loading && !dashboardReady && (
-        <div className="mb-6 rounded-lg border border-gray-200 bg-white p-8 text-center shadow-sm dark:border-dark-border dark:bg-dark-surface">
-          <Spin size="large" />
-        </div>
-      )}
-
-      {!loading && dashboardReady && widgetPermissions.__all === false && (
-        <Card className="mb-6 shadow-sm">
-          <Empty description="دسترسی مشاهده داشبورد برای این نقش غیرفعال است." />
-        </Card>
-      )}
-
-      {canShowWidget('quick_add') && quickActions.length > 0 && (
-        <div className="mb-6">
-          <Card className="shadow-sm">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <div className="text-lg font-bold">افزودن سریع</div>
-              <div className="text-xs text-gray-500 dark:text-gray-400">بر اساس ماژول های پر استفاده و انتخاب های سریع این نقش</div>
-            </div>
-            <div
-              className="grid gap-4"
-              style={{
-                gridTemplateColumns: isMobile
-                  ? 'minmax(0, 1fr)'
-                  : `repeat(${quickActionDesktopColumns}, minmax(0, 1fr))`,
-              }}
-            >
-              {quickActions.map((action, index) => (
-                <div key={action.moduleId}>
-                  <Button
-                    type={index === 0 ? 'primary' : 'default'}
-                    icon={getModuleIcon(action.moduleId)}
-                    size="large"
-                    block
-                    onClick={() => navigate(`/${action.moduleId}/create`)}
-                    className="h-auto py-4"
-                  >
-                    <div className="text-center">
-                      <div className="font-bold">{action.title}</div>
-                      <div className="mt-1 text-xs opacity-75">{action.description}</div>
-                    </div>
-                  </Button>
-                </div>
-              ))}
-            </div>
           </Card>
-        </div>
-      )}
-
-      {canShowWidget('summary_cards') && cards.length > 0 && (
-        <Row gutter={[16, 16]} className="mb-6">
-          {cards.map((card) => (
-            <Col xs={24} sm={12} lg={6} key={card.moduleId}>
-              <Card
-                className="shadow-sm hover:shadow-md transition-shadow cursor-pointer"
-                onClick={() => navigate(`/${card.moduleId}`)}
-              >
-                <div className="mb-3 flex items-center justify-between">
-                  <div className="text-sm font-medium text-gray-500 dark:text-gray-400">{getModuleTitle(card.moduleId)}</div>
-                  <div className="text-leather-500">{getModuleIcon(card.moduleId)}</div>
-                </div>
-                <Statistic
-                  title={card.title}
-                  value={card.value}
-                  formatter={(value) =>
-                    card.kind === 'price'
-                      ? formatPersianPrice(Number(value || 0), true)
-                      : toPersianNumber(Number(value || 0))
-                  }
-                  suffix={card.kind === 'price' ? currency.label : undefined}
-                  valueStyle={{ color: 'rgb(var(--brand-500-rgb))', fontSize: '1.5rem', fontWeight: 'bold' }}
-                />
-                <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">{card.subtitle}</div>
-              </Card>
-            </Col>
-          ))}
-        </Row>
-      )}
-
-      {(showReportsWidget || showOurProcessesWidget) && (
-        <Row gutter={[16, 16]} className="mb-6">
-          {showReportsWidget && (
-            <Col xs={24} lg={showOurProcessesWidget ? 12 : 24}>
-              <ReportsSliderWidget />
-            </Col>
-          )}
-          {showOurProcessesWidget && (
-            <Col xs={24} lg={showReportsWidget ? 12 : 24}>
-              <OurProcessesWidget />
-            </Col>
-          )}
-        </Row>
-      )}
-
-      {showActivityCalendarWidget && (
-        <Row gutter={[16, 16]} className="mb-6">
-          <Col xs={24}>
-            <TaskCalendarWidget prefetchedTasks={prefetchedTasks.length > 0 ? prefetchedTasks : undefined} />
-          </Col>
-        </Row>
-      )}
-
-      {canShowWidget('recent_lists') && recentSections.length > 0 && (
-        <Row gutter={[16, 16]}>
-          {recentSections.map((section) => (
-            <Col xs={24} lg={12} key={section.moduleId}>
-              <Card
-                className="shadow-sm hover:shadow-md transition-shadow"
-                title={
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <span className="text-leather-500">{getModuleIcon(section.moduleId)}</span>
-                      <span className="text-lg font-bold">{section.title}</span>
-                    </div>
-                    <Button
-                      type="link"
-                      icon={<PlusOutlined />}
-                      onClick={() => navigate(`/${section.moduleId}/create`)}
-                    >
-                      ایجاد
-                    </Button>
-                  </div>
-                }
-                extra={
-                  <Button type="link" onClick={() => navigate(`/${section.moduleId}`)}>
-                    مشاهده همه
-                  </Button>
-                }
-              >
-                <Table
-                  dataSource={section.rows}
-                  columns={section.columns}
-                  size="small"
-                  pagination={false}
-                  locale={{ emptyText: 'رکوردی ثبت نشده است' }}
-                  rowKey="id"
-                  scroll={{ x: true }}
-                  onRow={(record) => ({
-                    onClick: () => navigate(`/${section.moduleId}/${record.id}`),
-                    className: 'cursor-pointer hover:bg-gray-50 dark:hover:bg-dark-border',
-                  })}
-                />
-              </Card>
-            </Col>
-          ))}
-        </Row>
-      )}
+        </DashboardWidgetFrame>}
+      </div>
+      {loading && !dashboardReady && <div className="dashboard-widget-loading"><Spin size="large" /></div>}
+      {!loading && dashboardReady && widgetPermissions.__all === false && !dashboardError && <Card><Empty description="دسترسی مشاهدهٔ داشبورد برای این نقش غیرفعال است." /></Card>}
+      {canShowWidget('summary_cards') && cards.length > 0 && <div className="dashboard-summary-grid">{cards.map(card => <DashboardWidgetFrame key={card.moduleId} widgetId={`summary:${card.moduleId}`} title={card.title} settings={moduleSelection}>
+        <Card className="dashboard-summary-card" onClick={() => navigate(`/${card.moduleId}`)}>
+          <div className="dashboard-stat-label">{getModuleIcon(card.moduleId)}<span>{getModuleTitle(card.moduleId)}</span></div>
+          <Statistic title={card.title} value={card.value} formatter={value => card.kind === 'price' ? formatPersianPrice(Number(value || 0), true) : toPersianNumber(Number(value || 0))} suffix={card.kind === 'price' ? currency.label : undefined} />
+          <p className="dashboard-stat-description">{card.subtitle}</p>
+        </Card>
+      </DashboardWidgetFrame>)}</div>}
+      <div className="dashboard-widget-grid">
+        {showReportsWidget && <ReportsSliderWidget key={`reports:${orgId}:${currentUserId}`} selectedModuleIds={selectedModuleIds} selectedReportIds={preferences.reportIds} onReportSelectionChange={reportIds => updateDashboardPreferences(orgId, currentUserId, { reportIds })} />}
+        {canShowWidget('my_tasks') && orgId && <MyTasksWidget key={`tasks:${orgId}:${currentUserId}`} orgId={orgId} />}
+        {showActivityCalendarWidget && <TaskCalendarWidget key={`calendar:${orgId}:${currentUserId}`} />}
+        {showOurProcessesWidget && <OurProcessesWidget key={`${orgId}:${currentUserId}`} />}
+        {canShowWidget('communications') && orgId && <CommunicationsWidget key={orgId} orgId={orgId} permissions={dashboardPermissions} />}
+        {canShowWidget('goals') && <DashboardWidgetFrame widgetId="goals" title="اهداف و موفقیت‌ها" defaultOrder={8} className="dashboard-goals-frame">
+          <GoalProgressSlider key={refreshRevision} placement="dashboard" hideWhenEmpty={isMobile} />
+        </DashboardWidgetFrame>}
+        {canShowWidget('quick_add') && quickActions.length > 0 && <DashboardWidgetFrame widgetId="quick_add" title="افزودن سریع" defaultOrder={9} className="dashboard-wide-widget" settings={moduleSelection}>
+          <Card title="افزودن سریع" className="dashboard-content-card"><div className="dashboard-quick-actions">{quickActions.map(action => <Button key={action.moduleId} icon={getModuleIcon(action.moduleId)} onClick={() => navigate(`/${action.moduleId}/create`)}>{action.title}</Button>)}</div></Card>
+        </DashboardWidgetFrame>}
+        {canShowWidget('recent_lists') && recentSections.map(section => <DashboardWidgetFrame key={section.moduleId} widgetId={`recent:${section.moduleId}`} title={section.title} defaultOrder={10} settings={moduleSelection}>
+          <Card className="dashboard-content-card" title={<div className="flex items-center gap-2">{getModuleIcon(section.moduleId)}<span>{section.title}</span></div>}>
+            <div className="mb-3 flex flex-wrap items-center gap-2"><Button icon={<PlusOutlined />} onClick={() => navigate(`/${section.moduleId}/create`)}>ایجاد</Button><Button type="link" onClick={() => navigate(`/${section.moduleId}`)}>مشاهدهٔ همه</Button></div>
+            <Table dataSource={section.rows} columns={section.columns} size="small" pagination={false} locale={{ emptyText: 'رکوردی ثبت نشده است' }} rowKey="id" scroll={{ x: true }}
+              onRow={record => ({ onClick: () => navigate(`/${section.moduleId}/${record.id}`), className: 'cursor-pointer' })} />
+          </Card>
+        </DashboardWidgetFrame>)}
+      </div>
+      <Modal title="داشبورد من" open={personalizeOpen} onCancel={() => setPersonalizeOpen(false)} footer={<Button onClick={() => setPersonalizeOpen(false)}>بستن</Button>} destroyOnClose>
+        {moduleSelection}
+        <div className="mt-5"><h3 className="mb-3 font-bold">نمایش ویجت‌ها</h3><div className="flex flex-col gap-3">{widgetChoices.map(widget => <Checkbox key={widget.id} checked={!preferences.hiddenWidgets.includes(widget.id)} onChange={event => updateDashboardPreferences(orgId, currentUserId, { hiddenWidgets: event.target.checked ? preferences.hiddenWidgets.filter(id => id !== widget.id) : [...new Set([...preferences.hiddenWidgets, widget.id])] })}>{widget.label}</Checkbox>)}</div></div>
+        <Button className="mt-5" onClick={() => updateDashboardPreferences(orgId, currentUserId, { hiddenWidgets: [], widgetOrder: [] })}>بازگرداندن نمایش و ترتیب پیش‌فرض</Button>
+      </Modal>
     </div>
-
       {/* ─── Story Modals ─── */}
       {/* ─── StoryViewerModal ─── */}
       {storyViewerOpen && storyViewerList.length > 0 && currentUserId && (
@@ -1708,7 +1520,7 @@ const Dashboard: React.FC = () => {
           }}
         />
       )}
-    </>
+    </DashboardWidgetScope.Provider>
   );
 };
 

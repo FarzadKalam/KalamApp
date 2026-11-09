@@ -1,7 +1,7 @@
 import React from 'react';
 import AiSparkleIcon from '../ai/AiSparkleIcon';
 
-type ActionIconName = 'search' | 'ai' | 'refresh' | 'moon' | 'sun' | 'book' | 'message' | 'bell';
+type ActionIconName = 'search' | 'close' | 'ai' | 'refresh' | 'moon' | 'sun' | 'book' | 'message' | 'bell';
 type Props = React.SVGProps<SVGSVGElement> & { name: ActionIconName };
 
 /** Shared optical size and rounded stroke for workspace actions. */
@@ -9,6 +9,7 @@ const ActionIcon: React.FC<Props> = ({ name, ...props }) => {
   if (name === 'ai') return <AiSparkleIcon outline {...props} />;
   const shapes: Record<Exclude<ActionIconName, 'ai'>, React.ReactNode> = {
     search: <><circle cx="10.75" cy="10.75" r="6.75" /><path d="m16 16 4.5 4.5" /></>,
+    close: <path d="m6 6 12 12M18 6 6 18" />,
     refresh: <><path d="M20 10a8 8 0 1 0-1.6 7M20 4v6h-6" /></>,
     moon: <path d="M20.2 14.4A8.6 8.6 0 0 1 9.6 3.8a8.6 8.6 0 1 0 10.6 10.6Z" />,
     sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2.5v2m0 15v2m9.5-9.5h-2m-15 0h-2m16.2-6.7-1.4 1.4M6.7 17.3l-1.4 1.4m13.4 0-1.4-1.4M6.7 6.7 5.3 5.3" /></>,

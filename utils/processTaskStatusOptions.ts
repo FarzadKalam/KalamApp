@@ -1,5 +1,6 @@
 import { MODULES } from '../moduleRegistry';
 import { SelectOption } from '../types';
+import { getChoiceLabelFallbackFa } from './optionHelpers';
 
 export const PROCESS_TASK_STATUS_OPTIONS_KEY = 'process_task_status_options';
 export const PROCESS_TASK_STATUS_START_ANCHOR = '__start__';
@@ -90,7 +91,7 @@ const getTaskStoredStatusLabel = (task?: any): string => {
 
 const normalizeTaskStatusOption = (value: any): SelectOption | null => {
   const optionValue = String(value?.value ?? value?.label ?? '').trim();
-  const optionLabel = String(value?.label ?? value?.value ?? '').trim();
+  const optionLabel = String(value?.label ?? '').trim() || getChoiceLabelFallbackFa(optionValue, 'وضعیت اختصاصی');
   if (!optionValue || !optionLabel) return null;
   const insertAfter = String(value?.insertAfter ?? value?.insert_after ?? '').trim();
   return {
@@ -240,7 +241,7 @@ export const getTaskStatusLabel = (status: unknown, task?: any, baseOptions?: an
         ? getTaskStoredStatusLabel(task)
         : ''
     )
-    || status
+    || (status ? getChoiceLabelFallbackFa(status, 'وضعیت اختصاصی') : '')
     || ''
   ).trim();
 

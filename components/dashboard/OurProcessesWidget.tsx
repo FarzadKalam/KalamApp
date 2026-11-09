@@ -1,6 +1,7 @@
+import DashboardWidgetFrame from './DashboardWidgetFrame';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Button, Card, Empty, Segmented, Spin, Tag, Tooltip } from 'antd';
-import { LinkOutlined, NodeIndexOutlined, ReloadOutlined } from '@ant-design/icons';
+import { DownOutlined, LinkOutlined, NodeIndexOutlined, ReloadOutlined, UpOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
@@ -318,6 +319,7 @@ const OurProcessesWidget: React.FC = () => {
   const [canLoadMore, setCanLoadMore] = useState(false);
   const [canViewWidget, setCanViewWidget] = useState(true);
   const [statusFilter, setStatusFilter] = useState<ProcessStatusFilter>('all');
+  const [expandedProcessKeys, setExpandedProcessKeys] = useState<Set<string>>(new Set());
   const unavailableProcessModulesRef = useRef<Set<string>>(new Set());
 
   const addItem = useCallback((map: Map<string, ProcessWidgetItem>, item: ProcessWidgetItem) => {
@@ -609,14 +611,14 @@ const OurProcessesWidget: React.FC = () => {
 
   if (!canViewWidget) {
     return (
-      <Card className="h-full shadow-sm">
+      <DashboardWidgetFrame widgetId="our_processes" title="فرآیندهای ما" defaultOrder={6} onRefresh={() => { void loadProcesses(visibleLimit); }} ><Card className="h-full shadow-sm">
         <Empty description="دسترسی به ویجت فرآیندهای ما ندارید" />
-      </Card>
+      </Card></DashboardWidgetFrame>
     );
   }
 
   return (
-    <Card className="h-full shadow-sm">
+    <DashboardWidgetFrame widgetId="our_processes" title="فرآیندهای ما" defaultOrder={6} onRefresh={() => { void loadProcesses(visibleLimit); }} ><Card className="h-full shadow-sm">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-base font-bold">
@@ -695,7 +697,13 @@ const OurProcessesWidget: React.FC = () => {
                     </Tag>
                   ) : null}
                 </div>
-                <React.Suspense fallback={<Spin size="small" />}>
+                <div className="flex items-center justify-between gap-2"><Tag>{item.processStatus === 'completed' ? 'تکمیل‌شده' : item.reason === 'draft_stage' ? 'دارای پیش‌نویس' : 'در جریان'}</Tag>
+                  <Button type="text" className="!min-h-11" icon={expandedProcessKeys.has(item.key) ? <UpOutlined /> : <DownOutlined />} aria-expanded={expandedProcessKeys.has(item.key)}
+                    onClick={() => setExpandedProcessKeys(previous => { const next = new Set(previous);if (next.has(item.key)) next.delete(item.key);else next.add(item.key);return next; })}>
+                    {expandedProcessKeys.has(item.key) ? 'بستن فعالیت‌ها' : 'نمایش فعالیت‌ها'}
+                  </Button>
+                </div>
+                {expandedProcessKeys.has(item.key) && <React.Suspense fallback={<Spin size="small" />}>
                   <ProcessCardsV2RuntimeBlock
                     recordId={item.recordId}
                     moduleId={item.moduleId}
@@ -706,7 +714,7 @@ const OurProcessesWidget: React.FC = () => {
                     }}
                     variant="compact"
                   />
-                </React.Suspense>
+                </React.Suspense>}
               </div>
             ))}
           </div>
@@ -720,7 +728,7 @@ const OurProcessesWidget: React.FC = () => {
           </div>
         </div>
       )}
-    </Card>
+    </Card></DashboardWidgetFrame>
   );
 };
 

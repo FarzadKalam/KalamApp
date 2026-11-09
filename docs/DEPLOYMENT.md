@@ -205,6 +205,10 @@ location = /sw.js {
   try_files $uri =404;
 }
 
+# Install ops/nginx/assets-module-routes.conf at this path first.
+# It preserves direct links and reloads for the Assets module.
+include /etc/nginx/snippets/kalamapp-assets-routes.conf;
+
 location /assets/ {
   add_header Cache-Control "public, max-age=31536000, immutable" always;
   try_files $uri =404;
@@ -220,6 +224,12 @@ Reload:
 ```bash
 sudo nginx -t && sudo systemctl reload nginx
 ```
+
+The Assets module uses `/assets`, `/assets/create`, `/assets/:id` and
+`/assets/:id/edit`. Without the included routes, Nginx treats these as the
+static bundle directory and returns a redirect or 404. Keep the snippet in
+every application server block, including tenant hosts. Requests for bundled
+files under `/assets/` retain immutable caching and missing files return 404.
 
 ### 3) Allow HTTP access by IP (optional)
 

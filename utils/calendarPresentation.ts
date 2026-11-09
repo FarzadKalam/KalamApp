@@ -1,5 +1,14 @@
 import { FieldType, ModuleDefinition, ModuleField } from '../types';
 import { getRecordCardSummaryFields } from './recordCardHelpers';
+import DateObject from 'react-date-object';
+import persian from 'react-date-object/calendars/persian';
+import gregorian from 'react-date-object/calendars/gregorian';
+
+export const getPersianMonthRange = (anchor: Date) => {
+  const start = new DateObject({ date: anchor }).convert(persian).setDay(1);
+  const end = new DateObject(start).add(1, 'month').subtract(1, 'day');
+  return { from: new DateObject(start).convert(gregorian).toDate(), to: new DateObject(end).convert(gregorian).toDate() };
+};
 
 const CALENDAR_EXCLUDED_FIELD_KEYS = new Set([
   'name', 'title', 'full_name', 'business_name', 'system_code', 'manual_code',

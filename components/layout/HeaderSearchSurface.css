@@ -1,0 +1,62 @@
+.app-header-search { position:relative; display:flex; flex:1; min-width:0; align-items:center; }
+.app-header-search-panel { position:relative; width:100%; min-width:0; }
+.app-header-search--mobile { position:static; flex:0 0 44px; width:44px; }
+.app-header-search-trigger.ant-btn,
+.app-header-search-close.ant-btn {
+  display:inline-flex; flex:0 0 44px; align-items:center; justify-content:center;
+  width:44px; min-width:44px; height:44px; padding:0; border-radius:14px;
+}
+.app-header-search-trigger.ant-btn {
+  color:rgb(var(--brand-600-rgb)); background:rgb(var(--brand-500-rgb) / .1);
+  border:1px solid rgb(var(--brand-500-rgb) / .22); box-shadow:none;
+  transition:background-color 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+.app-header-search-trigger.ant-btn:hover { background:rgb(var(--brand-500-rgb) / .16); }
+.app-header-search-trigger svg,
+.app-header-search-close svg { display:block; width:22px; height:22px; }
+.app-header-search-close.ant-btn { color:#64748b; border:0; }
+.app-header-search-trigger.ant-btn:focus-visible,
+.app-header-search-close.ant-btn:focus-visible { outline:2px solid rgb(var(--brand-500-rgb)); outline-offset:2px; }
+html.dark .app-header-search-trigger.ant-btn { color:rgb(var(--brand-200-rgb)); }
+html.dark .app-header-search-close.ant-btn { color:#cbd5e1; }
+
+.app-header-search--mobile .app-header-search-panel {
+  position:absolute; inset:0; z-index:1250; display:flex; align-items:center; gap:8px; padding:0 8px;
+  background:#fff; opacity:0; visibility:hidden; pointer-events:none;
+  transform:translateX(10px) scaleX(.97); transform-origin:right center;
+  transition:transform 260ms cubic-bezier(.22,1,.36,1), opacity 180ms ease, visibility 0s 260ms;
+}
+html.dark .app-header-search--mobile .app-header-search-panel { background:var(--workspace-surface,#1c1c1f); }
+.app-header-search--mobile[data-open="true"] .app-header-search-panel {
+  opacity:1; visibility:visible; pointer-events:auto; transform:none; transition-delay:0s;
+}
+.app-header-search--mobile[data-open="true"] .app-header-search-trigger { visibility:hidden; }
+.app-header-search--mobile .app-header-search-field { flex:1; min-width:0; max-width:none; height:44px; }
+/* 16px prevents Safari's focus zoom. Use the visual viewport for keyboard room. */
+.app-header-search--mobile .app-header-search-field input { font-size:16px; }
+.app-header-search--mobile .app-header-search-results {
+  top:calc(100% + 4px); inset-inline:8px; width:auto !important;
+  max-height:min(440px, calc(var(--app-viewport-height, 100dvh) - 80px)) !important;
+}
+.app-header-search--mobile .app-header-search-results-body {
+  max-height:min(340px, max(80px, calc(var(--app-viewport-height, 100dvh) - 200px))) !important;
+}
+.app-main-header .app-header-actions > .ant-badge .ant-badge-count { top:4px; }
+@media (max-width:767px) {
+  .app-main-header .app-header-actions { transition:visibility 0s 260ms; }
+  .app-main-header[data-search-open="true"] .app-header-actions { visibility:hidden; pointer-events:none; transition-delay:0s; }
+  .app-header-actions .app-header-secondary-action.ant-btn { display:none; }
+  .app-header-actions .app-header-action.ant-btn { width:44px; min-width:44px; height:44px; }
+}
+@media (max-width:480px) {
+  .app-header-profile-label { display:none; }
+  .app-header-profile.ant-btn { width:44px; min-width:44px; padding:0 !important; }
+}
+@media (max-width:360px) {
+  .app-main-header[data-search-open] { column-gap:2px; padding-inline:4px; }
+  .app-main-header .app-header-actions { gap:0; }
+}
+@media (prefers-reduced-motion:reduce) {
+  .app-header-search--mobile .app-header-search-panel { transition:none; transform:none; }
+  .app-main-header .app-header-actions { transition:none; }
+}

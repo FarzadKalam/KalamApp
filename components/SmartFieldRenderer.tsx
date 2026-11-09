@@ -46,7 +46,7 @@ import { isAutoNameEnabled, normalizeAutoNameEnabled } from '../utils/autoName';
 import { useCurrencyConfig } from '../utils/currency';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { joinStoragePath, sanitizeStorageFileName } from '../utils/storagePath';
-import { getSafeOptionFallback, isEmptyRelationValue } from '../utils/optionHelpers';
+import { getChoiceLabelFallbackFa, getSafeOptionFallback, isEmptyRelationValue } from '../utils/optionHelpers';
 import { getFinancialStatusLabelFa } from '../utils/financialValueLabels';
 import { fetchCurrentUserRolePermissions, resolveReadyTextPermissions } from '../utils/permissions';
 import { fetchDynamicOptionsByCategory } from '../utils/referenceData';
@@ -2094,7 +2094,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     ? formatDisplayText(selectedOpt.label, '')
                     : fieldType === FieldType.STATUS
                       ? getFinancialStatusLabelFa(value)
-                      : getSafeOptionFallback(value));
+                      : getChoiceLabelFallbackFa(value));
                 if (fieldType === FieldType.RELATION && resolvedRelationTargetModuleId && value) {
                    const targetModule = String(selectedOpt?.module || resolvedRelationTargetModuleId || '').trim();
                    const canOpenRelation = Boolean(selectedOpt && selectedOpt?.linkable !== false && selectedOpt?.missing !== true && selectedOpt?.inaccessible !== true);
@@ -2149,7 +2149,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
              const labels = values.map((item) => {
                const selectedOpt = fieldOptions.find((o: any) => String(o?.value) === String(item));
                 if (selectedOpt?.label) return formatDisplayText(selectedOpt.label, '');
-                return getSafeOptionFallback(item);
+                return getChoiceLabelFallbackFa(item);
               });
               return <span className="text-gray-800 break-words">{labels.join('، ')}</span>;
         }

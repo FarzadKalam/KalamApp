@@ -193,6 +193,14 @@ export const getAccessibleDarkBrandTextColor = (palette: BrandingPalette) => {
 export const getReadableBrandButtonTextColor = (background: string) =>
   contrastRatio('#101114', background) >= contrastRatio('#FFFFFF', background) ? '#101114' : '#FFFFFF';
 
+export const getAccessibleBrandSolidColor = (primary: string) => {
+  for (let step = 0; step <= 100; step++) {
+    const candidate = mixColors(primary, '#000000', step / 100);
+    if (contrastRatio('#FFFFFF', candidate) >= 4.5) return candidate;
+  }
+  return '#000000';
+};
+
 // Menu selection keeps light text even when the tenant brand is a bright color.
 export const getAccessibleDarkMenuSelectedBg = (primary: string) => {
   for (let ratio = 0; ratio <= 1; ratio += 0.02) {
@@ -280,6 +288,8 @@ export const buildBrandCssVars = (palette: BrandingPalette): Record<string, stri
   };
 
   return {
+    '--workspace-solid': getAccessibleBrandSolidColor(palette.primary),
+    '--brand-text-light-rgb': toRgbChannels(getAccessibleBrandSolidColor(palette.primary)),
     '--brand-50-rgb': toRgbChannels(shades[50]),
     '--brand-100-rgb': toRgbChannels(shades[100]),
     '--brand-200-rgb': toRgbChannels(shades[200]),

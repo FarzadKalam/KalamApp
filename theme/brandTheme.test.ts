@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   APP_DARK_COLORS,
+  getAccessibleBrandSolidColor,
   BRAND_PALETTE_PRESETS,
   buildBrandCssVars,
   getAccessibleDarkBrandTextColor,
@@ -63,5 +64,14 @@ describe('dark palette contrast', () => {
     [APP_DARK_COLORS.info, APP_DARK_COLORS.violet, APP_DARK_COLORS.danger].forEach((textColor) => {
       expect(contrastRatio(textColor, APP_DARK_COLORS.surface)).toBeGreaterThanOrEqual(4.5);
     });
+  });
+});
+
+describe('workspace brand text contrast',()=>{
+  it.each(Object.entries(BRAND_PALETTE_PRESETS))('keeps white button text readable for %s',(_name,preset)=>{
+    expect(contrastRatio('#FFFFFF', getAccessibleBrandSolidColor(preset.palette.primary))).toBeGreaterThanOrEqual(4.5);
+  });
+  it('also handles a bright custom organizational primary color',()=>{
+    expect(contrastRatio('#FFFFFF', getAccessibleBrandSolidColor('#FFDC18'))).toBeGreaterThanOrEqual(4.5);
   });
 });

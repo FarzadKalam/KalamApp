@@ -1,6 +1,6 @@
 import React from 'react';
-import { InputNumber, Tag } from 'antd';
-import { AppstoreOutlined, FileOutlined, LockOutlined } from '@ant-design/icons';
+import { Button, InputNumber, Tag } from 'antd';
+import { AppstoreOutlined, DownOutlined, FileOutlined, LockOutlined, UpOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
 import { resolveTaskSourceLink } from '../../utils/taskMeta';
@@ -16,6 +16,7 @@ import { supabase } from '../../supabaseClient';
 import { hasProcessTaskTitleTokens, resolveProcessTaskTitle } from '../../utils/processTaskTitle';
 import AssigneeAvatarDisplay from '../common/AssigneeAvatarDisplay';
 import TaskRelatedProcessBar from './TaskRelatedProcessBar';
+import { getChoiceLabelFallbackFa } from '../../utils/optionHelpers';
 
 const ProductionStagesField = React.lazy(() => import('../ProductionStagesField'));
 
@@ -67,6 +68,8 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
   canUnlockRecord = false,
 }) => {
   const [lockPatch, setLockPatch] = React.useState<Record<string, any>>({});
+  const [expanded, setExpanded] = React.useState(false);
+  React.useEffect(() => { setExpanded(false); }, [task?.id]);
   const [resolvedTaskTitle, setResolvedTaskTitle] = React.useState('');
   React.useEffect(() => {
     setLockPatch({});
@@ -221,7 +224,7 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
         <div className="flex flex-wrap gap-1.5 mt-2">
           {effectiveTask.priority ? (
             <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.26)] text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
-              {resolveOptionLabel(effectiveTask.priority, priorityOptions) || effectiveTask.priority}
+              {resolveOptionLabel(effectiveTask.priority, priorityOptions) || getChoiceLabelFallbackFa(effectiveTask.priority)}
             </span>
           ) : null}
           {effectiveTask.due_date ? (
@@ -231,6 +234,10 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
           ) : null}
         </div>
 
+        <Button type="text" block icon={expanded ? <UpOutlined /> : <DownOutlined />} aria-expanded={expanded} aria-label={expanded ? 'بستن جزئیات فعالیت' : 'نمایش جزئیات فعالیت'} onClick={() => setExpanded(previous => !previous)} className="!min-h-11 !text-xs">
+          {expanded ? 'بستن جزئیات' : 'جزئیات بیشتر'}
+        </Button>
+        {expanded && <>
         <div className="mt-2 overflow-hidden rounded-xl border border-gray-100 bg-gray-100 dark:border-gray-700 dark:bg-gray-900 h-24">
           {taskMainFileUrl ? (
             isVideoUrl(taskMainFileUrl) ? (
@@ -299,6 +306,7 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
             className="mt-3"
           />
         ) : null}
+        </>}
       </div>
     </div>
   );

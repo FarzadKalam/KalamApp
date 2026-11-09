@@ -22,6 +22,13 @@ export const getSafeOptionFallback = (value: unknown, fallback = '-'): string =>
 
 const normalizeOptionValue = (value: unknown): string => String(value ?? '').trim();
 
+/** Unknown stored choice keys are not human labels. Keep Persian legacy labels usable. */
+export const getChoiceLabelFallbackFa = (value: unknown, fallback = 'گزینهٔ ثبت‌شده'): string => {
+  const text = String(value ?? '').trim();
+  if (!text) return '-';
+  return /[\u0600-\u06ff]/.test(text) && !isUuidLikeValue(text) ? text : fallback;
+};
+
 const RELATION_FIELD_TYPES = new Set(['relation', 'multi_relation', 'user']);
 
 /**
@@ -109,7 +116,7 @@ export const getOptionLabel = (
   relationOptions: Record<string, any[]> = {}
 ): string => {
   if (RELATION_FIELD_TYPES.has(String(field?.type || '')) && isEmptyRelationValue(value)) return '';
-  if (!value) return '-';
+  if (value === null || value === undefined || value === '') return '-';
 
   // برای MULTI_SELECT (آرایه)
   if (Array.isArray(value)) {
@@ -133,11 +140,11 @@ export const getSingleOptionLabel = (
   relationOptions: Record<string, any[]> = {}
 ): string => {
   if (RELATION_FIELD_TYPES.has(String(field?.type || '')) && isEmptyRelationValue(value)) return '';
-  if (!value) return '-';
+  if (value === null || value === undefined || value === '') return '-';
 
   // ابتدا از field.options جستجو کن (static options)
   if (field.options) {
-    const opt = field.options.find((o: any) => o.value === value);
+    const opt = field.options.find((o: any) => String(o.value) === String(value));
     if (opt) {
       const label = normalizeOptionValue(opt.label);
       if (label && !isUuidLikeValue(label)) return label;
@@ -148,7 +155,7 @@ export const getSingleOptionLabel = (
   if ((field as any).dynamicOptionsCategory) {
     const category = (field as any).dynamicOptionsCategory;
     const dynopts = dynamicOptions[category] || [];
-    const opt = dynopts.find((o: any) => o.value === value);
+    const opt = dynopts.find((o: any) => String(o.value) === String(value));
     if (opt) {
       const label = normalizeOptionValue(opt.label);
       if (label && !isUuidLikeValue(label)) return label;
@@ -175,6 +182,7 @@ export const getSingleOptionLabel = (
   }
 
   // اگر برچسب پیدا نشد، UUID خام را به کاربر نشان نده
+  if (['select', 'multi_select', 'status'].includes(String(field?.type || '')) || field?.dynamicOptionsCategory) return getChoiceLabelFallbackFa(value);
   return getSafeOptionFallback(value);
 };
 

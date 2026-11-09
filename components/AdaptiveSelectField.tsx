@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Input, Select, Tag } from 'antd';
 import { DownOutlined } from '@ant-design/icons';
 import AdaptivePickerSurface from './AdaptivePickerSurface';
+import { getChoiceLabelFallbackFa } from '../utils/optionHelpers';
 import {
   AdaptivePickerMode,
   buildStandardSelectPopupRootStyle,
@@ -201,11 +202,11 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
     const labels = selectedValues
       .map((item) => {
         const option = optionMap.get(item);
-        return option ? optionDisplayFallback(option) : item;
+        return option ? optionDisplayFallback(option) : mode === 'tags' ? item : getChoiceLabelFallbackFa(item);
       })
       .filter(Boolean);
     return labels.join('، ');
-  }, [optionDisplayFallback, optionMap, placeholder, selectedValues]);
+  }, [mode, optionDisplayFallback, optionMap, placeholder, selectedValues]);
   const selectedOptionRows = useMemo(
     () => selectedValues.map((item) => optionMap.get(item)).filter(Boolean) as OptionLike[],
     [optionMap, selectedValues]
@@ -305,7 +306,7 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
         popupClassName={popupClassName}
         optionRender={optionRender}
         popupRender={popupRender as any}
-        labelRender={renderTriggerValue ? (() => renderTriggerValue(selectedOptionRows)) : undefined}
+        labelRender={renderTriggerValue ? (() => renderTriggerValue(selectedOptionRows)) : label => optionMap.get(normalizeScalar(label.value))?.label ?? (mode === 'tags' ? label.label ?? label.value : getChoiceLabelFallbackFa(label.value))}
         tagRender={renderSelectedTag ? ((tagProps: any) => {
           const option = optionMap.get(normalizeScalar(tagProps?.value));
           return (

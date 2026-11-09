@@ -6,7 +6,7 @@ import { getRecordDisplayLabel } from './recordLabel';
 import { getPreferredRelationTargetField } from './relationTargetField';
 import { selectByIdsWithCompatibleColumns } from './selectCompat';
 import { supportsSystemCode } from './systemCode';
-import { isEmptyRelationValue } from './optionHelpers';
+import { getChoiceLabelFallbackFa, getOptionLabel, isEmptyRelationValue } from './optionHelpers';
 
 export type RelationValueMap = Record<string, Record<string, string>>;
 
@@ -219,6 +219,9 @@ export const formatRecordDisplayValue = (
   if (!isRelationLikeField(field) && UUID_REGEX.test(rawString)) return 'مقدار ثبت‌شده';
   const optionLabel = resolveOptionLabel(value, field);
   if (optionLabel) return optionLabel;
+  if (['select', 'multi_select', 'status'].includes(fieldType) || field?.dynamicOptionsCategory) {
+    return field?.key?.includes('status') || fieldType === 'status' ? getOptionLabel(field, value) : getChoiceLabelFallbackFa(value);
+  }
 
   if ((
     fieldType === String(FieldType.RELATION).toLowerCase()

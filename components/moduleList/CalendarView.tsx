@@ -24,6 +24,10 @@ import IdentityAvatar from "../common/IdentityAvatar";
 import { supabase } from "../../supabaseClient";
 import CalendarTodayBadge from '../contentCalendars/CalendarTodayBadge';
 import { normalizeRoleIconKey } from "../../utils/roleIconCatalog";
+import TaskNotificationListRow from '../tasks/TaskNotificationListRow';
+import { fetchCurrentUserRecordAccessContext } from '../../utils/permissions';
+import { TASK_RUNTIME_UPDATED_EVENT, type TaskRuntimeUpdatedPayload } from '../../utils/taskRuntimeEvents';
+import { getFieldLabelFa } from '../../utils/fieldLabel';
 
 export type ModuleCalendarMode = "month" | "week";
 
@@ -189,7 +193,26 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
   const [holidaySummaries, setHolidaySummaries] = useState<Record<string, HolidayDaySummary | null>>({});
   const [expandedDayKeys, setExpandedDayKeys] = useState<string[]>([]);
   const [assigneeDirectory, setAssigneeDirectory] = useState<{ users: any[]; roles: any[] }>({ users: [], roles: [] });
+  const [taskAccess, setTaskAccess] = useState<Awaited<ReturnType<typeof fetchCurrentUserRecordAccessContext>> | null>(null);
+  const [taskOverrides, setTaskOverrides] = useState<Record<string, any>>({});
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { setTaskOverrides({}); }, [data]);
+  useEffect(() => {
+    if (moduleId !== 'tasks') return;
+    let active = true;
+    void fetchCurrentUserRecordAccessContext(supabase).then(access => { if (active) setTaskAccess(access); }).catch(() => { if (active) setTaskAccess(null); });
+    return () => { active = false; };
+  }, [moduleId]);
+  useEffect(() => {
+    if (moduleId !== 'tasks' || !taskAccess?.orgId) return;
+    const update = (event: Event) => {
+      const task = (event as CustomEvent<TaskRuntimeUpdatedPayload>).detail?.task;
+      if (!task?.id || (task.org_id && task.org_id !== taskAccess.orgId)) return;
+      setTaskOverrides(previous => ({ ...previous, [task.id]: task }));
+    };
+    window.addEventListener(TASK_RUNTIME_UPDATED_EVENT, update);
+    return () => window.removeEventListener(TASK_RUNTIME_UPDATED_EVENT, update);
+  }, [moduleId, taskAccess?.orgId]);
 
   const selectedDateField = useMemo(
     () => dateFields.find((field) => field.key === dateFieldKey) || dateFields[0] || null,
@@ -248,7 +271,8 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
     const next = new Map<string, CalendarEvent[]>();
     if (!selectedDateField) return next;
 
-    data.forEach((item) => {
+    data.forEach((originalItem) => {
+      const item = moduleId === 'tasks' ? { ...originalItem, ...taskOverrides[originalItem.id] } : originalItem;
       const rawValue = item?.[selectedDateField.key];
       const parsed = parseDateValue(rawValue);
       if (!parsed) return;
@@ -268,7 +292,7 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
         canViewField,
         limit: 2,
       }).map((field) => ({
-        label: field.labels?.fa || field.key,
+        label: getFieldLabelFa(field, { moduleId, fallback: 'فیلد' }),
         value: formatRecordDisplayValue(item?.[field.key], field, fieldOptionValueMap, ""),
       })).filter((line) => Boolean(line.value));
       current.push({
@@ -289,7 +313,7 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
     });
 
     return next;
-  }, [canViewField, data, fieldOptionValueMap, moduleConfig, selectedDateField, statusField]);
+  }, [canViewField, data, fieldOptionValueMap, moduleConfig, moduleId, selectedDateField, statusField, taskOverrides]);
 
   const statusLegendItems = useMemo(() => {
     if (!statusField) return [];
@@ -373,6 +397,15 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
   };
 
   const renderEvent = (event: CalendarEvent, variant: "compact" | "comfortable") => {
+    if (moduleId === 'tasks') {
+      return <TaskNotificationListRow key={event.key} task={event.item} compact
+        statusOptions={(statusField?.options || []) as any[]}
+        priorityOptions={(moduleConfig.fields.find(field => field.key === 'priority')?.options || []) as any[]}
+        allUsers={assigneeDirectory.users} allRoles={assigneeDirectory.roles}
+        currentUser={{ id: taskAccess?.userId }} readOnly={!taskAccess?.userId || taskAccess.permissions?.tasks?.edit === false || canViewField?.('status') === false}
+        canViewField={canViewField}
+        onTaskUpdated={task => setTaskOverrides(previous => ({ ...previous, [task.id]: task }))} />;
+    }
     const accentColor = getEventAccentColor(event, selectedFieldColor);
     const assignee = resolveAssigneePresentation({
       source: event.item,
@@ -532,7 +565,7 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
               <div className="min-w-0">
                 <div className="truncate text-sm font-black text-gray-800 dark:text-white">{persianAnchorLabel}</div>
                 <div className="truncate text-[11px] text-gray-500 dark:text-gray-400">
-                  {toPersianNumber(totalEvents)} رکورد بر اساس {selectedDateField.labels?.fa || selectedDateField.key}
+                  {toPersianNumber(totalEvents)} رکورد بر اساس {getFieldLabelFa(selectedDateField, { moduleId, fallback: 'تاریخ' })}
                 </div>
               </div>
             </div>
@@ -542,7 +575,7 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
               value={selectedFieldKey}
               options={dateFields.map((field) => ({
                 value: field.key,
-                label: field.labels?.fa || field.key,
+                label: getFieldLabelFa(field, { moduleId, fallback: 'تاریخ' }),
               }))}
               onChange={onDateFieldChange}
             />

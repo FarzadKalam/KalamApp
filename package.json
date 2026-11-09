@@ -1,11 +1,11 @@
 {
   "name": "tazesystem",
   "private": true,
-  "version": "2.120.0.0.2",
+  "version": "2.122.0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build && node ./scripts/generate-public-seo.mjs && node ./scripts/stamp-service-worker-version.mjs",
+    "build": "node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build && node ./scripts/generate-public-seo.mjs && node ./scripts/stamp-service-worker-version.mjs && node ./scripts/write-central-release.mjs",
     "test": "vitest run",
     "test:organization-memberships": "vitest run test/organizationMemberships.test.ts supabase/functions/user-admin/membership.test.ts utils/organizationContext.test.ts utils/sessionCache.test.ts utils/identityDirectory.test.ts pages/Login.test.tsx pages/SaasPortalPage.test.tsx --maxWorkers=1",
     "test:critical-ui": "vitest run components/moduleShow/PrintSection.test.tsx components/SmartForm.test.tsx utils/notificationViewModels.test.ts utils/webForms.test.ts utils/printTemplates/printPerformance.test.ts",
@@ -29,7 +29,9 @@
     "deploy:function:all": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-supabase-function.ps1 -All",
     "deploy:function:list": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-supabase-function.ps1 -List",
     "deploy:monitor": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-server-monitor.ps1",
-    "test:organization-email": "vitest run utils/managedEmail.test.ts test/organizationEmail.test.ts utils/organizationEmail.test.ts components/email/EmailComposerHost.test.tsx --maxWorkers=1"
+    "test:organization-email": "vitest run utils/managedEmail.test.ts test/organizationEmail.test.ts utils/organizationEmail.test.ts components/email/EmailComposerHost.test.tsx --maxWorkers=1",
+    "test:local-installations": "vitest run test/localInstallations.test.ts test/localDeploymentRuntime.test.ts utils/localInstallations.test.ts utils/runtimeConfig.test.ts --maxWorkers=1",
+    "test:local-installer": "python -m unittest discover -s installer/local/tests -v"
   },
   "dependencies": {
     "@ant-design/icons": "^5.6.1",

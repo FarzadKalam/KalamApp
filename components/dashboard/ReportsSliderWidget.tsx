@@ -1,27 +1,48 @@
-import React, { useCallback, useState } from 'react';
-import { App, Button, Card, Empty, Spin } from 'antd';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { Alert, App, Button, Card, Empty, Select, Spin } from 'antd';
 import { LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { normalizeReportConfig, type ReportDefinitionRecord } from '../../utils/reporting';
 import ReportCompactRenderer from '../reports/ReportCompactRenderer';
+import { fetchSessionBootstrap } from '../../utils/sessionCache';
+import { toPersianNumber } from '../../utils/persianNumberFormatter';
+import DashboardWidgetFrame from './DashboardWidgetFrame';
 
-const ReportsSliderWidget: React.FC = () => {
+type Props = { selectedModuleIds?: string[]; selectedReportIds?: string[]; onReportSelectionChange?: (ids: string[]) => void };
+const ReportsSliderWidget: React.FC<Props> = ({ selectedModuleIds, selectedReportIds, onReportSelectionChange }) => {
   const navigate = useNavigate();
   const { message } = App.useApp();
   const [loading, setLoading] = useState(true);
-  const [reports, setReports] = useState<ReportDefinitionRecord[]>([]);
+  const [availableReports, setReports] = useState<ReportDefinitionRecord[]>([]);
+  const reports = useMemo(() => availableReports.filter(report => !selectedReportIds || selectedReportIds.includes(report.id)), [availableReports, selectedReportIds]);
+  const [loadError, setLoadError] = useState(false);
+  const modulesKey = selectedModuleIds?.join('|');
   const [activeIndex, setActiveIndex] = useState(0);
   const [setupMissing, setSetupMissing] = useState(false);
+  const requestGeneration = useRef(0);
 
   const loadReports = useCallback(async () => {
+    const generation = ++requestGeneration.current;
     setLoading(true);
+    setLoadError(false);
     try {
-      const { data, error } = await supabase
+      const snapshot = await fetchSessionBootstrap(supabase);
+      if (generation !== requestGeneration.current) return;
+      if (!snapshot.orgId || !snapshot.user) { setReports([]);return; }
+      let query = supabase
         .from('report_definitions')
         .select('id, name, description, module_id, report_type, config, is_active, created_at, updated_at')
         .eq('config->>show_in_members_dashboard', 'true')
-        .order('updated_at', { ascending: false });
+        .eq('org_id', snapshot.orgId)
+        .eq('is_active', true)
+        .order('updated_at', { ascending: false }).limit(100);
+      if (selectedModuleIds) {
+        if (!selectedModuleIds.length) { setReports([]);return; }
+        query = query.in('module_id', selectedModuleIds);
+      }
+      const { data, error } = await query;
+      if (generation !== requestGeneration.current) return;
 
       if (error) {
         const text = String(error?.message || error?.details || '').toLowerCase();
@@ -35,6 +56,7 @@ const ReportsSliderWidget: React.FC = () => {
 
       const allowed = ((data || []) as ReportDefinitionRecord[]).filter((report) => {
         if (report?.is_active === false) return false;
+        if (snapshot.permissions?.[report.module_id]?.view === false) return false;
         return normalizeReportConfig(report.config).show_in_members_dashboard;
       });
       setSetupMissing(false);
@@ -44,29 +66,34 @@ const ReportsSliderWidget: React.FC = () => {
         return Math.min(current, allowed.length - 1);
       });
     } catch {
+      if (generation !== requestGeneration.current) return;
       message.error('خواندن گزارش‌های داشبورد ناموفق بود.');
-      setReports([]);
+      setLoadError(true);
     } finally {
-      setLoading(false);
+      if (generation === requestGeneration.current) setLoading(false);
     }
-  }, [message]);
+  }, [message, modulesKey]);
 
   React.useEffect(() => {
     void loadReports();
+    return () => { requestGeneration.current++; };
   }, [loadReports]);
+
+  const reportSettings = <Select mode="multiple" className="w-full" aria-label="گزارش‌های منتخب داشبورد" placeholder="انتخاب گزارش‌ها" options={availableReports.map(report => ({ value: report.id, label: report.name }))} value={selectedReportIds || availableReports.map(report => report.id)} onChange={onReportSelectionChange} optionFilterProp="label" />;
 
   if (setupMissing) {
     return (
-      <Card className="h-full shadow-sm">
+      <DashboardWidgetFrame widgetId="reports_slider" title="گزارش‌های منتخب" defaultOrder={3} onRefresh={() => { void loadReports(); }} settings={reportSettings}><Card className="h-full shadow-sm">
         <Empty description="زیرساخت گزارش‌ها هنوز اعمال نشده است" />
-      </Card>
+      </Card></DashboardWidgetFrame>
     );
   }
 
-  const activeReport = reports[activeIndex] || null;
+  const activeReport = reports[activeIndex] || reports[0] || null;
+
 
   return (
-    <Card className="h-full shadow-sm">
+    <DashboardWidgetFrame widgetId="reports_slider" title="گزارش‌های منتخب" defaultOrder={3} onRefresh={() => { void loadReports(); }} settings={reportSettings}><Card className="h-full shadow-sm">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-base font-bold">گزارش‌ها</div>
@@ -89,6 +116,7 @@ const ReportsSliderWidget: React.FC = () => {
         </div>
       </div>
 
+      {loadError && <Alert type="error" showIcon message="دریافت گزارش‌ها انجام نشد." action={<Button onClick={() => void loadReports()}>تلاش دوباره</Button>} />}
       {loading ? (
         <div className="flex h-[460px] items-center justify-center"><Spin /></div>
       ) : !activeReport ? (
@@ -107,14 +135,14 @@ const ReportsSliderWidget: React.FC = () => {
             </Button>
           </div>
           <div className="mb-2 text-xs text-gray-500">
-            {reports.length > 0 ? `${activeIndex + 1} / ${reports.length}` : '0 / 0'}
+            {toPersianNumber(reports.length > 0 ? `${Math.min(activeIndex + 1, reports.length)} / ${reports.length}` : '0 / 0')}
           </div>
           <div className="min-h-0 flex-1 overflow-hidden">
             <ReportCompactRenderer report={activeReport} maxHeight={360} />
           </div>
         </div>
       )}
-    </Card>
+    </Card></DashboardWidgetFrame>
   );
 };
 

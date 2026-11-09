@@ -1,7 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import SidebarMenu from './SidebarMenu';
+import SidebarMenu, { filterSidebarItems } from './SidebarMenu';
 
 vi.mock('antd/es/menu', () => ({ default: (props: any) => <>
   <button onClick={() => props.onOpenChange(['sales'])}>باز کردن</button>
@@ -10,6 +10,12 @@ vi.mock('antd/es/menu', () => ({ default: (props: any) => <>
 </> }));
 
 describe('sidebar render isolation', () => {
+  it('finds nested Persian module labels with Arabic input and preserves icons', () => {
+    const icon = <span>نماد</span>;
+    const items = [{ key: 'resources', label: 'منابع', children: [{ key: '/customers', label: 'مشتریان', icon }, { key: '/products', label: 'کالاها' }] }];
+    expect(filterSidebarItems(items, 'مشتري')).toEqual([{ ...items[0], children: [items[0].children[0]] }]);
+    expect(filterSidebarItems(items, 'ناموجود')).toEqual([]);
+  });
   it('opens submenus locally without rendering the surrounding workspace and preserves navigation', () => {
     const pageRender = vi.fn(); const navigate = vi.fn();
     function Workspace() {
