@@ -1,7 +1,5 @@
-import React, { lazy, Suspense, useContext, useEffect, useMemo, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { AiComposerSlots } from './AiComposerSlots';
-import { Button, Checkbox, Drawer, Grid, Popover, Select, Space, Tag, Tooltip } from 'antd';
+import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { Button, Checkbox, Drawer, Grid, Popover, Select, Tag, Tooltip } from 'antd';
 import type { ButtonProps } from 'antd';
 import {
   AudioOutlined,
@@ -114,7 +112,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   disabled = false,
   loading = false,
   size,
-  compact = false,
+  compact: _compact = false,
   moduleId,
   recordId,
   onVoiceSend,
@@ -137,13 +135,11 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   const [promptModalOpen, setPromptModalOpen] = useState(false);
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
-  const slots = useContext(AiComposerSlots);
   const selectedSet = useMemo(() => new Set(selected), [selected]);
   const autoMode = selectedSet.size === 0;
   const autoSuggestedSet = useMemo(() => new Set(autoSuggested), [autoSuggested]);
   const actionSize = size || 'small';
   const iconActionClass = 'ai-composer-icon';
-  const capabilityTagClass = 'ai-composer-selection';
   const effectiveSelected = autoMode && autoSuggested.length > 0 ? autoSuggested : selected;
   const effectiveSelectedSet = useMemo(() => new Set(effectiveSelected), [effectiveSelected]);
   // Only one media-generation capability is active at a time.
@@ -221,39 +217,67 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
     </div>
   );
 
-  const selectionTags = (
-      <Space size={[4, 4]} wrap>
-        {autoMode && !slots.embedded ? (
-          <Tag className={capabilityTagClass} title="تصمیم‌گیری خودکار" icon={compact ? <ThunderboltOutlined /> : undefined}>{compact ? <span className="sr-only">تصمیم‌گیری خودکار</span> : 'تصمیم‌گیری خودکار'}</Tag>
-        ) : null}
-        {effectiveSelected
-          .filter((key) => CAPABILITY_META.some((item) => item.key === key))
-          .map((key) => {
-            const meta = CAPABILITY_META.find((item) => item.key === key);
-            if (!meta) return null;
-            return (
-              <Tag
-                key={key}
-                color={autoMode ? 'processing' : undefined}
-                closable={!autoMode}
-                closeIcon={<button type="button" aria-label={`حذف ${meta.label}`}><CloseOutlined /></button>}
-                onClose={(event) => {
-                  event.preventDefault();
-                  setCapability(key, false);
-                }}
-                className={capabilityTagClass}
-              >
-                {autoMode ? `تشخیص: ${meta.label}` : meta.label}
-              </Tag>
-            );
-          })}
-      </Space>
-  );
+  const activeOperatorMetas = useMemo(() => {
+    return effectiveSelected
+      .map((key) => CAPABILITY_META.find((item) => item.key === key))
+      .filter((meta): meta is (typeof CAPABILITY_META)[number] => Boolean(meta));
+  }, [effectiveSelected]);
 
   const triggerButton = (
-    <Tooltip title={autoMode ? 'ابزارها؛ انتخاب خودکار فعال است' : 'انتخاب عملکرد هوش مصنوعی'}>
-      <Button type="text" icon={<PlusOutlined />} disabled={disabled || loading} size={actionSize} className={iconActionClass} onClick={() => handleOpenChange(true)} aria-label="انتخاب عملکرد هوش مصنوعی" aria-expanded={open} />
-    </Tooltip>
+    <div className={`ai-composer-operator-pill ${!autoMode ? 'is-custom' : 'is-auto'}`}>
+      <Tooltip title={autoMode ? 'ابزارها؛ انتخاب خودکار فعال است' : 'انتخاب عملکرد هوش مصنوعی'}>
+        <Button
+          type="text"
+          disabled={disabled || loading}
+          size={actionSize}
+          className="ai-composer-operator-trigger"
+          onClick={() => handleOpenChange(true)}
+          aria-label="انتخاب عملکرد هوش مصنوعی"
+          aria-expanded={open}
+        >
+          <span className="ai-composer-operator-icon">
+            <PlusOutlined />
+          </span>
+          <span className="ai-composer-operator-label">
+            {autoMode ? (
+              autoSuggested.length > 0 ? (
+                <>
+                  <span className="ai-composer-operator-auto-text">تصمیم‌گیری خودکار</span>
+                  {activeOperatorMetas.map((meta) => (
+                    <span key={meta.key} className="ai-composer-operator-chip">
+                      {`تشخیص: ${meta.label}`}
+                    </span>
+                  ))}
+                </>
+              ) : (
+                <span className="ai-composer-operator-auto-text">تصمیم‌گیری خودکار</span>
+              )
+            ) : (
+              activeOperatorMetas.map((meta) => (
+                <span key={meta.key} className="ai-composer-operator-chip">
+                  <span>{meta.label}</span>
+                </span>
+              ))
+            )}
+          </span>
+        </Button>
+      </Tooltip>
+      {!autoMode && (
+        <Tooltip title="بازگشت به حالت خودکار">
+          <Button
+            type="text"
+            size="small"
+            className="ai-composer-operator-reset"
+            aria-label="بازگشت به حالت خودکار"
+            icon={<CloseOutlined />}
+            onClick={(event) => {
+              event.stopPropagation();
+              onChange([]);
+            }}
+          />
+        </Tooltip>
+      )}
+    </div>
   );
 
   return (
@@ -292,8 +316,6 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
           {triggerButton}
         </Popover>
       )}
-
-      {slots.embedded ? (slots.selections ? createPortal(selectionTags, slots.selections) : null) : selectionTags}
 
       {activeMediaCapability && onMediaSettingsChange ? (
         <AiMediaSettingsPopover
