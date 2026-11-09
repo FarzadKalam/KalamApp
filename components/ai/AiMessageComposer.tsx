@@ -26,8 +26,8 @@ export default function AiMessageComposer({ value, onChange, onSubmit, tools, mo
       placeholder={placeholder} aria-label="پیام به دستیار هوشمند" autoSize={{ minRows: 1, maxRows }}
       onPressEnter={event => { if (!shouldSubmitComposerOnEnter(event) || busy || disabled || !canSubmit) return;event.preventDefault();submit(); }} />
     <div className="ai-composer-footer">
-      <div className="ai-composer-model">{model}</div>
       <div className="ai-composer-tools">{tools}</div>
+      <div className="ai-composer-model">{model}</div>
       <Tooltip title={sendLabel}><Button type="primary" shape="circle" className="ai-composer-send" icon={<ArrowUpOutlined />} aria-label={sendLabel}
         disabled={!canSubmit || disabled} loading={busy} onClick={submit}><span className="sr-only">{sendLabel}</span></Button></Tooltip>
     </div>
