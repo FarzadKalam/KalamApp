@@ -7,6 +7,8 @@ const ASSET_CACHE = `tazesystem-assets-${CACHE_VERSION}`;
 const DATA_CACHE = `tazesystem-data-${CACHE_VERSION}`;
 const ALL_CACHES = [SHELL_CACHE, PAGE_CACHE, ASSET_CACHE, DATA_CACHE];
 const VERSION_MANIFEST_PATH = '/version.json';
+const RUNTIME_CONFIG_PATH = '/kalamapp-runtime-config.js';
+const CENTRAL_RELEASE_PATH = '/central-release.json';
 
 const APP_SHELL = [
   '/index.html',
@@ -164,7 +166,7 @@ const putInCache = async (cacheName, request, response, maxEntries) => {
 const matchShell = () => caches.match('/index.html', { ignoreSearch: true });
 
 const isStaticAssetRequest = (requestUrl, request) => {
-  if (requestUrl.pathname === VERSION_MANIFEST_PATH) return false;
+  if ([VERSION_MANIFEST_PATH, RUNTIME_CONFIG_PATH, CENTRAL_RELEASE_PATH].includes(requestUrl.pathname)) return false;
   if (requestUrl.pathname.startsWith('/assets/')) return true;
   if (requestUrl.pathname.startsWith('/font/')) return true;
   if (requestUrl.pathname.startsWith('/calendar/')) return true;
@@ -302,7 +304,7 @@ self.addEventListener('fetch', (event) => {
 
   if (!shouldHandleRequest(requestUrl, request)) return;
 
-  if (requestUrl.pathname === VERSION_MANIFEST_PATH) {
+  if ([VERSION_MANIFEST_PATH, RUNTIME_CONFIG_PATH, CENTRAL_RELEASE_PATH].includes(requestUrl.pathname)) {
     event.respondWith(handleVersionManifestRequest(request));
     return;
   }

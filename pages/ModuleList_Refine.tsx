@@ -2737,7 +2737,7 @@ export const ModuleListRefine: React.FC<{
       setAllowedUserIds(context.allowedUserIds);
 
       if (!context.roleId) {
-        setModulePermissions({});
+        setModulePermissions(resolvedModuleId === 'saas_local_installations' ? { view: false, edit: false, delete: false } : {});
         setFieldPermissions({});
         setPermissionViewConditions(null);
         setPermissionFilters([]);
@@ -2749,6 +2749,14 @@ export const ModuleListRefine: React.FC<{
       if (isSaasAdminModuleId(resolvedModuleId)) {
         const saasPerms = permissions?.[SAAS_ADMIN_PERMISSION_KEY] || {};
         const saasFields = saasPerms.fields || {};
+        if (resolvedModuleId === 'saas_local_installations') {
+          const { data: canView, error: viewError } = await supabase.rpc('local_installation_can', { p_action: 'view' });
+          const { data: canBuild, error: buildError } = await supabase.rpc('local_installation_can', { p_action: 'build' });
+          setModulePermissions({ view: !viewError && canView === true, edit: !buildError && canBuild === true, delete: false, record_scope: 'all' });
+          setFieldPermissions({}); setPermissionViewConditions(null); setPermissionFilters([]);
+          setCanOpenWorkflows(false); setCanOpenGoals(false); setCanShowGoalCards(false);
+          return;
+        }
         const editFieldKey =
           resolvedModuleId === "saas_orgs"
             ? "edit_orgs"

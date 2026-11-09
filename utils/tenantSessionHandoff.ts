@@ -1,5 +1,6 @@
 import { supabase, SUPABASE_AUTH_STORAGE_KEY } from '../supabaseClient';
 import { clearOrganizationContext, selectOrganizationContext } from './organizationContext';
+import { isSelfHostedDeployment } from './runtimeConfig';
 
 const HANDOFF_CHANNEL = 'tazesystem-tenant-session-v1';
 const APP_ORIGIN = 'https://app.tazesystem.ir';
@@ -20,6 +21,7 @@ export const getTenantHandoffOrigin = (host: string): string => {
 
 /** Session tokens are sent to the selected origin in memory, never in a URL. */
 export const handoffSessionToTenant = async (host: string, orgId: string): Promise<void> => {
+  if (isSelfHostedDeployment()) throw new Error('ورود نسخهٔ اختصاصی روی همین سرور انجام می‌شود.');
   if (!SIGN_IN_ORIGINS.has(window.location.origin)) throw new Error('ورود مستقیم فقط از صفحه ورود تازه سیستم انجام می‌شود.');
   const origin = getTenantHandoffOrigin(host);
   if (origin === APP_ORIGIN) {
@@ -77,6 +79,7 @@ export const handoffSessionToTenant = async (host: string, orgId: string): Promi
 };
 
 export const receiveTenantSessionHandoff = (): (() => void) => {
+  if (isSelfHostedDeployment()) return () => undefined;
   // This endpoint only accepts a parent on the dedicated sign-in origin.
   if (window.parent === window || window.location.origin === APP_ORIGIN) return () => undefined;
   let busy = false;

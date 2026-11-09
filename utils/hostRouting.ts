@@ -1,3 +1,4 @@
+import { isSelfHostedDeployment, publicRuntimeConfig } from './runtimeConfig';
 const normalizeHostname = (value: string) => String(value || "").trim().toLowerCase();
 
 export const getCurrentHostname = () => {
@@ -36,6 +37,7 @@ export const isLocalHost = (hostname = getCurrentHostname()) => {
 
 export const isTenantHost = (hostname = getCurrentHostname()) => {
   const normalized = normalizeHostname(hostname);
+  if (isSelfHostedDeployment()) return normalized === new URL(publicRuntimeConfig.supabaseUrl).hostname;
   if (!normalized.endsWith(".tazesystem.ir")) return false;
   return ![
     "tazesystem.ir",

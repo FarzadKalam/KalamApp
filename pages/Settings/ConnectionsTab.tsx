@@ -12,7 +12,7 @@ import {
   Switch,
 } from 'antd';
 import { CopyOutlined, LinkOutlined, ReloadOutlined, SafetyCertificateOutlined, SaveOutlined, SearchOutlined, SendOutlined } from '@ant-design/icons';
-import { supabase } from '../../supabaseClient';
+import { supabase, SUPABASE_URL } from '../../supabaseClient';
 import { getSmsBalanceViaGateway, sendSmsViaGateway } from '../../utils/smsGateway';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { OFFICIAL_BOT_API_BASE_URL, type BotChannel } from '../../utils/botGateway';
@@ -640,7 +640,7 @@ const ConnectionsTab: React.FC = () => {
     form.getFieldValue('taxpayer_system') || DEFAULT_VALUES.taxpayer_system;
 
   const smsInboundWebhookUrl = useMemo(() => {
-    const supabaseUrl = String(import.meta.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '');
+    const supabaseUrl = SUPABASE_URL.replace(/\/+$/, '');
     const secret = String(smsWebhookSecret || '').trim();
     if (!supabaseUrl || !currentOrgId || !secret) return '';
     const params = new URLSearchParams({
@@ -651,7 +651,7 @@ const ConnectionsTab: React.FC = () => {
   }, [currentOrgId, smsWebhookSecret]);
 
   const voipWebhookUrl = useMemo(() => {
-    const supabaseUrl = String(import.meta.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '');
+    const supabaseUrl = SUPABASE_URL.replace(/\/+$/, '');
     const secret = String(voipWebhookSecret || '').trim();
     if (!supabaseUrl || !currentOrgId || !secret) return '';
     const params = new URLSearchParams({

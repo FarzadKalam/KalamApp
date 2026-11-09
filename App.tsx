@@ -201,6 +201,9 @@ const GlobalSearchPage = lazy(loadGlobalSearchPage);
 const OrgKnowledgePage = lazy(loadOrgKnowledgePage);
 const OrgKnowledgeBusinessModelCanvasPage = lazy(loadOrgKnowledgeBusinessModelCanvasPage);
 const SaasAdminDashboard = lazy(loadSaasAdminDashboard);
+const LocalInstallationCreate = lazy(() => import('./pages/SaasAdmin/LocalInstallationCreate'));
+const LocalInstallationShow = lazy(() => import('./pages/SaasAdmin/LocalInstallationShow'));
+const LocalInstallationDashboard = lazy(() => import('./pages/LocalInstallationDashboard'));
 const SaasAdminPlans = lazy(loadSaasAdminPlans);
 const SaasAdminCatalogItems = lazy(loadSaasAdminCatalogItems);
 const SaasAdminAiSettings = lazy(loadSaasAdminAiSettings);
@@ -785,6 +788,7 @@ function App() {
 
   const ModuleCreateRouteResolver: React.FC = () => {
     const { moduleId: routeModuleId } = useParams();
+    if (routeModuleId === 'saas_local_installations') return <LocalInstallationCreate />;
     if (routeModuleId === 'cms_tutorial_posts') return <Navigate to="/taze-system/tutorials/new" replace />;
     if (routeModuleId === 'cms_blog_posts') return <Navigate to="/taze-system/blog/new" replace />;
     if (routeModuleId === ADVERTISING_CAMPAIGNS_MODULE_ID) {
@@ -807,6 +811,7 @@ function App() {
 
   const ModuleShowRouteResolver: React.FC = () => {
     const { moduleId: routeModuleId } = useParams();
+    if (routeModuleId === 'saas_local_installations') return <LocalInstallationShow />;
     if (routeModuleId === ADVERTISING_CAMPAIGNS_MODULE_ID) {
       return <AdvertisingCampaignModuleGate><CampaignWizardPage /></AdvertisingCampaignModuleGate>;
     }
@@ -912,6 +917,7 @@ function App() {
             <Route path="/mbti_assessments/:id/report" element={<MbtiAssessmentReportPage />} />
             <Route path="/messages" element={<MessagesPage />} />
             <Route path="/support/tickets" element={<SupportTicketsPage />} />
+            <Route path="/installation" element={<LocalInstallationDashboard />} />
             <Route path="/support/tickets/:ticketId" element={<SupportTicketsPage />} />
             <Route path="/instagram" element={<InstagramInboxPage />} />
             <Route path="/gallery" element={<FilesGalleryPage />} />

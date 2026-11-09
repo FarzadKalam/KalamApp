@@ -1,9 +1,10 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { normalizeApiBaseUrl } from './utils/urlHostNormalization';
 import { organizationContextFetch } from './utils/organizationContext';
+import { publicRuntimeConfig } from './utils/runtimeConfig';
 
-const supabaseUrl = normalizeApiBaseUrl(import.meta.env.VITE_SUPABASE_URL);
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabaseUrl = normalizeApiBaseUrl(publicRuntimeConfig.supabaseUrl);
+const supabaseAnonKey = publicRuntimeConfig.supabaseAnonKey;
 
 if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase Environment Variables');

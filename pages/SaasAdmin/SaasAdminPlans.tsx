@@ -33,9 +33,9 @@ import {
   DownOutlined,
 } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
-import { ADVERTISING_CAMPAIGNS_MODULE_ID, CAMPAIGN_PLAN_FEATURES } from '../../utils/advertisingCampaigns';
-import { CONTENT_CALENDAR_MODULE_ID, CONTENT_CALENDAR_PLAN_FEATURE } from '../../modules/contentCalendarsConfig';
-import { BILLBOARD_STATUS_MANAGEMENT_PLAN_FEATURE } from '../../utils/billboardStatusChanges';
+import { ADVERTISING_CAMPAIGNS_MODULE_ID } from '../../utils/advertisingCampaigns';
+import { CONTENT_CALENDAR_MODULE_ID } from '../../modules/contentCalendarsConfig';
+import { PLAN_FEATURE_OPTIONS as FEATURE_OPTIONS } from '../../utils/planFeatureCatalog';
 
 const { Title, Text } = Typography;
 const { Panel } = Collapse;
@@ -144,48 +144,7 @@ const MODULE_GROUPS: { label: string; modules: { id: string; label: string }[] }
   },
 ];
 
-const FEATURE_OPTIONS = [
-  { id: 'ai_chat', label: 'گفتگو با هوش مصنوعی' },
-  { id: 'ai_knowledge', label: 'دانش سازمانی AI' },
-  { id: 'ai_knowledge_limited', label: 'دانش سازمانی AI (محدود)' },
-  { id: 'ai_document_analysis', label: 'تحلیل اسناد با AI' },
-  { id: 'ai_web_search', label: 'جستجوی وب AI' },
-  { id: 'ai_voice_input', label: 'ورودی صوتی AI' },
-  { id: 'ai_voice_output', label: 'خروجی صوتی AI' },
-  { id: 'ai_image_generation', label: 'تولید تصویر AI' },
-  { id: 'ai_video_generation', label: 'تولید ویدیو AI' },
-  { id: 'ai_deep_reasoning', label: 'تفکر عمیق AI' },
-  { id: 'ai_legal_assistant', label: 'دستیار حقوقی AI' },
-  { id: 'ai_voip_auto_reply', label: 'پاسخگویی خودکار VOIP با AI' },
-  { id: 'taxpayer_system', label: 'سامانه مودیان' },
-  { id: 'organization_email', label: 'ایمیل سازمانی؛ ارسال، دریافت و گزارش‌ها' },
-  { id: 'managed_organization_email', label: 'صندوق میزبانی‌شده با نام سازمان روی دامنه تازه سیستم (هزینه‌دار)' },
-  { id: 'api_access', label: 'دسترسی API' },
-  { id: 'wordpress_connection', label: 'اتصال به وردپرس و ووکامرس' },
-  { id: 'advanced_reports', label: 'گزارش‌ساز پیشرفته' },
-  { id: 'multi_lane_processes', label: 'فرآیندهای چندردیفه و فعال‌کننده‌ها' },
-  { id: CONTENT_CALENDAR_PLAN_FEATURE, label: 'تقویم محتوایی' },
-  { id: BILLBOARD_STATUS_MANAGEMENT_PLAN_FEATURE, label: 'مدیریت تغییر وضعیت تابلوها' },
-  { id: 'white_label', label: 'White Label' },
-  { id: 'custom_domain', label: 'دامنه اختصاصی' },
-  { id: 'own_payment_gateway', label: 'درگاه پرداخت اختصاصی سازمان' },
-  { id: 'online_invoice_payment', label: 'پرداخت آنلاین فاکتورهای عمومی' },
-  { id: 'online_catalog', label: 'کاتالوگ آنلاین' },
-  { id: 'retail_sales_invoice', label: 'فاکتور فروشگاهی سریع' },
-  { id: 'reservations', label: 'رزرواسیون' },
-  { id: 'qr_scan', label: 'اسکن QR' },
-  { id: 'instagram_inbox', label: 'صندوق اینستاگرام' },
-  { id: CAMPAIGN_PLAN_FEATURES.sms, label: 'کمپین پیامکی' },
-  { id: CAMPAIGN_PLAN_FEATURES.email, label: 'کمپین ایمیلی' },
-  { id: CAMPAIGN_PLAN_FEATURES.bot_group, label: 'کمپین گروه بات' },
-  { id: CAMPAIGN_PLAN_FEATURES.bot_private, label: 'کمپین پی‌وی بات' },
-  { id: CAMPAIGN_PLAN_FEATURES.instagram_post, label: 'کمپین پست اینستاگرام' },
-  { id: CAMPAIGN_PLAN_FEATURES.voice_call, label: 'کمپین تماس صوتی (فعلاً غیرفعال)' },
-  { id: 'saas_account_billing', label: 'مدیریت حساب و اشتراک' },
-  { id: 'ai_credit_topup', label: 'شارژ اعتبار هوش مصنوعی' },
-  { id: 'sms_credit_topup', label: 'شارژ اعتبار پیامک' },
-  { id: 'extra_users_purchase', label: 'خرید کاربر اضافه' },
-];
+
 
 type PlanRow = {
   id: string;

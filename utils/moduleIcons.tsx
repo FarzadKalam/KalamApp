@@ -56,7 +56,7 @@ export const MODULE_ICON_KEYS: Record<string, string> = {
   counterparty_bot_groups: 'robot', instagram_conversations: 'instagram', instagram_interaction_events: 'instagram', expense_documents: 'wallet',
   assets: 'container', employee_advances: 'dollar', employee_bonus_requests: 'dollar', employee_penalty_requests: 'audit',
   payroll_slips: 'file_done', employee_contracts: 'file_done', recruitment_applicants: 'user_switch', surveys: 'form',
-  saas_orgs: 'cloud_server', saas_demo_requests: 'file_search', saas_users: 'team', saas_user_announcements: 'notification',
+  saas_orgs: 'cloud_server', saas_local_installations: 'cloud_server', saas_demo_requests: 'file_search', saas_users: 'team', saas_user_announcements: 'notification',
   cms_blog_posts: 'read', cms_tutorial_posts: 'read', cms_tutorial_series: 'read', cms_categories: 'folder', cms_tags: 'tags', cms_pages: 'form',
 };
 

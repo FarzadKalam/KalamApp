@@ -57,7 +57,7 @@ export const SAAS_ADMIN_PERMISSION_KEY = '__saas_admin';
 export const COMMUNICATIONS_PERMISSION_KEY = '__communications';
 export const BOT_GROUP_ACCESS_PERMISSION_KEY = 'bot_group_access';
 export { CUSTOMER_CLUB_PERMISSION_KEY };
-export const SAAS_ADMIN_MODULE_IDS = ['saas_orgs', 'saas_demo_requests', 'saas_users', 'saas_user_announcements', 'saas_support_tickets'] as const;
+export const SAAS_ADMIN_MODULE_IDS = ['saas_orgs', 'saas_demo_requests', 'saas_users', 'saas_user_announcements', 'saas_support_tickets', 'saas_local_installations'] as const;
 const SAAS_ADMIN_MODULE_ID_SET = new Set<string>(SAAS_ADMIN_MODULE_IDS);
 export const isSaasAdminModuleId = (moduleId?: string | null) =>
   SAAS_ADMIN_MODULE_ID_SET.has(String(moduleId || '').trim());
@@ -70,6 +70,10 @@ export const RECORD_LOCK_PERMISSION_FIELDS = [
   { key: RECORD_LOCK_PERMISSION_KEYS.unlock, label: 'باز کردن رکورد' },
 ] as const;
 export const SAAS_ADMIN_PERMISSION_FIELDS = [
+  { key: 'local_view', label: 'نصب اختصاصی: مشاهده و گزارش سلامت' },
+  { key: 'local_build', label: 'نصب اختصاصی: ایجاد و ساخت بسته' },
+  { key: 'local_export', label: 'نصب اختصاصی: خروجی اطلاعات مشتری' },
+  { key: 'local_cutover', label: 'نصب اختصاصی: انتقال نهایی مشتری' },
   { key: 'support_view', label: 'تیکت‌ها: مشاهده' },
   { key: 'support_reply', label: 'تیکت‌ها: پاسخ و ارجاع' },
   { key: 'support_manage', label: 'تیکت‌ها: مسئول و وضعیت' },
@@ -115,6 +119,8 @@ export const PRINT_SIGNATURE_PERMISSION_FIELDS = [
 ] as const;
 
 export const DASHBOARD_WIDGET_PERMISSIONS = [
+  { key: 'my_tasks', label: 'کارهای من' },
+  { key: 'communications', label: 'ارتباطات داشبورد' },
   { key: 'quick_add', label: 'افزودن سریع' },
   { key: 'activity_calendar', label: 'تقویم فعالیت‌ها' },
   { key: 'reports_slider', label: 'گزارش‌های اسلایدی' },
