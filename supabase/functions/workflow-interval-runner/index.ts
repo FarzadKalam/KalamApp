@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { dialPhone } from '../_shared/phone-number.ts';
 // workflow-interval-runner: Server-side interval workflow executor
 // Called by pg_cron via pg_net every 5 minutes — no browser dependency.
 // Tenant isolation: every DB operation is filtered by org_id.
@@ -1658,18 +1659,7 @@ async function resolveStoryPublisher(
   };
 }
 
-function normalizePhone(p: string): string {
-  const raw = String(p ?? '')
-    .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
-    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
-    .trim();
-  if (!raw) return '';
-  let digits = raw.replace(/\D/g, '');
-  if (digits.startsWith('0098')) digits = `0${digits.slice(4)}`;
-  else if (digits.startsWith('98') && digits.length === 12) digits = `0${digits.slice(2)}`;
-  else if (digits.length === 10 && digits.startsWith('9')) digits = `0${digits}`;
-  return digits;
-}
+const normalizePhone = dialPhone;
 
 function isValidIranMobile(p: string): boolean { return /^09\d{9}$/.test(p); }
 

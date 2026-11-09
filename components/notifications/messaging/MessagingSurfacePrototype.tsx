@@ -1,3 +1,4 @@
+import { iranMobileLocal } from '../../../supabase/functions/_shared/phone-number';
 import EmailWorkspace from '../../email/EmailWorkspace';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -1123,17 +1124,7 @@ const normalizeIdArray = (value: any): string[] => {
   return [];
 };
 
-const normalizeIranMobileForSms = (value: unknown) => {
-  let digits = String(value || '')
-    .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
-    .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
-    .replace(/\D/g, '');
-  if (!digits) return '';
-  if (digits.startsWith('0098')) digits = `0${digits.slice(4)}`;
-  else if (digits.startsWith('98')) digits = `0${digits.slice(2)}`;
-  else if (digits.length === 10 && digits.startsWith('9')) digits = `0${digits}`;
-  return /^09\d{9}$/.test(digits) ? digits : '';
-};
+const normalizeIranMobileForSms = (value: unknown) => iranMobileLocal(value) ?? '';
 
 const buildBotSmsNotificationText = (orgName: string, platformLabel: string) => {
   const safeOrgName = String(orgName || '').trim() || 'سازمان';

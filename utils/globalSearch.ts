@@ -1,3 +1,4 @@
+import { iranMobileE164 } from '../supabase/functions/_shared/phone-number';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { FieldType, type ModuleDefinition } from '../types';
 import { getFieldLabelFa } from './fieldLabel';
@@ -5,6 +6,8 @@ import { getRecordTitle } from './recordTitle';
 import { normalizePhoneDigits, normalizePhoneForStorage } from './phoneNumber';
 import { isSaasAdminModuleId, type PermissionMap, type RecordScope } from './permissions';
 import { isWorkflowVirtualField } from './moduleFieldVisibility';
+import { digitsToEnglish, normalizePersianSearchText } from './persianSearchText';
+export { digitsToEnglish, normalizePersianSearchText } from './persianSearchText';
 
 export type GlobalSearchMatchField = {
   key: string;
@@ -40,9 +43,6 @@ export type GlobalSearchModule = {
   phoneKeys: string[];
 };
 
-const ZERO_WIDTH_REGEX = /[\u200c\u200d\u200e\u200f\u202a-\u202e]/g;
-const PERSIAN_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
-const ARABIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
 const FALLBACK_SEARCH_LIMIT = 8;
 const SEARCH_CACHE_TTL_MS = 30000;
 const FALLBACK_CONCURRENCY = 6;
@@ -75,23 +75,6 @@ const ILIKE_SEARCHABLE_FIELD_TYPES = new Set<FieldType>([
 ]);
 const PHONE_LIKE_KEY_REGEX = /(phone|mobile|tel|cell|sender|recipient|source_number|destination_number|respondent_phone)/i;
 
-export const digitsToEnglish = (value: unknown): string =>
-  String(value ?? '')
-    .replace(/[۰-۹]/g, (digit) => String(PERSIAN_DIGITS.indexOf(digit)))
-    .replace(/[٠-٩]/g, (digit) => String(ARABIC_DIGITS.indexOf(digit)));
-
-export const normalizePersianSearchText = (value: unknown): string =>
-  digitsToEnglish(value)
-    .replace(ZERO_WIDTH_REGEX, ' ')
-    .replace(/[ـ]+/g, '')
-    .replace(/ك/g, 'ک')
-    .replace(/[يى]/g, 'ی')
-    .replace(/ۀ/g, 'ه')
-    .replace(/ة/g, 'ه')
-    .trim()
-    .toLocaleLowerCase('fa')
-    .replace(/\s+/g, ' ');
-
 export const normalizeGlobalSearchQuery = (value: unknown): string => normalizePersianSearchText(value);
 export const isGlobalSearchQueryReady = (value: unknown): boolean =>
   normalizeGlobalSearchQuery(value).length >= GLOBAL_SEARCH_MIN_QUERY_LENGTH;
@@ -107,6 +90,12 @@ export const buildPhoneSearchVariants = (value: unknown): string[] => {
 
   push(rawDigits);
   push(storedPhone);
+  const canonical = iranMobileE164(value);
+  if (canonical) {
+    push(canonical.slice(1));
+    push(`0${canonical.slice(3)}`);
+    push(canonical.slice(3));
+  }
   if (rawDigits.startsWith('0098')) {
     push(`+${rawDigits.slice(2)}`);
     push(`0${rawDigits.slice(4)}`);

@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { iranMobileLocal } from '../_shared/phone-number.ts';
 // invoice-otp: Send OTP SMS for invoice confirmation (public, no auth required)
 // SMS is delegated to send-sms function so it uses the same env-based settings
 // as the login OTP (MELIPAYAMAK_* env vars), not per-org integration_settings.
@@ -78,13 +79,7 @@ const sendOtpViaSendSmsFunction = async (phone: string, otpCode: string): Promis
 
 // ── Phone normalization (ASCII digits, 09XXXXXXXXX format) ──────────────────
 
-const normalizePhone = (raw: string): string => {
-  let d = String(raw || '').replace(/[^\d]/g, '');
-  if (d.startsWith('0098'))                         d = `0${d.slice(4)}`;
-  else if (d.startsWith('98') && d.length === 12)   d = `0${d.slice(2)}`;
-  else if (d.length === 10 && d.startsWith('9'))    d = `0${d}`;
-  return d;
-};
+const normalizePhone = (value: unknown): string => iranMobileLocal(value) ?? '';
 
 const getClientIp = (req: Request): string | null => {
   const candidates = [

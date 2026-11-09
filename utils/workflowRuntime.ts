@@ -1,3 +1,4 @@
+import { dialPhone } from '../supabase/functions/_shared/phone-number';
 import { MODULES } from '../moduleRegistry';
 import { FieldType, ModuleField } from '../types';
 import { supabase } from '../supabaseClient';
@@ -197,22 +198,7 @@ const toEnglishDigits = (input: string) =>
     .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
     .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
 
-const normalizePhone = (value: any): string => {
-  const raw = toEnglishDigits(String(value ?? '').trim());
-  if (!raw) return '';
-  let digits = raw.replace(/[^\d]/g, '');
-  if (!digits) return '';
-
-  if (digits.startsWith('0098')) {
-    digits = `0${digits.slice(4)}`;
-  } else if (digits.startsWith('98')) {
-    digits = `0${digits.slice(2)}`;
-  } else if (digits.length === 10 && digits.startsWith('9')) {
-    digits = `0${digits}`;
-  }
-
-  return digits;
-};
+const normalizePhone = (value: unknown): string => dialPhone(value);
 
 const isValidIranMobile = (phone: string) => /^09\d{9}$/.test(String(phone || ''));
 

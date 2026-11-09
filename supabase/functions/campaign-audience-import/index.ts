@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { iranMobileLocal } from '../_shared/phone-number.ts';
 // Secure, idempotent multi-file audience import for advertising campaigns.
 import * as XLSX from 'https://esm.sh/xlsx@0.18.5';
 
@@ -69,14 +70,7 @@ const EMAIL_HEADERS = new Set(['email', 'emailaddress', 'ایمیل', 'پستا�
 const NAME_HEADERS = new Set(['name', 'fullname', 'displayname', 'نام', 'نامونامخانوادگی', 'ناممخاطب']);
 const EXTERNAL_CODE_HEADERS = new Set(['externalcode', 'code', 'کد', 'کدخارجی', 'شناسهخارجی']);
 
-const normalizePhone = (value: unknown) => {
-  let phone = cleanText(value).replace(/[^\d+]/g, '');
-  if (phone.startsWith('0098')) phone = `0${phone.slice(4)}`;
-  else if (phone.startsWith('+98')) phone = `0${phone.slice(3)}`;
-  else if (phone.startsWith('98') && phone.length === 12) phone = `0${phone.slice(2)}`;
-  else if (phone.startsWith('9') && phone.length === 10) phone = `0${phone}`;
-  return /^09\d{9}$/.test(phone) ? phone : null;
-};
+const normalizePhone = iranMobileLocal;
 
 const normalizeEmail = (value: unknown) => {
   const email = cleanText(value).toLowerCase();

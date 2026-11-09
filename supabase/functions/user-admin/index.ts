@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { iranMobileE164, iranMobileLocal, iranMobileAuth } from '../_shared/phone-number.ts';
 import { normalizeEmail } from './normalizeEmail.ts';
 
 type UserAdminAction =
@@ -64,27 +65,11 @@ const normalizeDigitsToEnglish = (value: unknown): string =>
     .replace(/[\u06F0-\u06F9]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0))
     .replace(/[\u0660-\u0669]/g, (digit) => String(digit.charCodeAt(0) - 0x0660));
 
-const normalizeIranMobileE164 = (value?: string | null) => {
-  const raw = normalizeDigitsToEnglish(value).trim();
-  if (!raw) return null;
-  const digits = raw.replace(/\D+/g, '');
-  if (digits.length === 10 && digits.startsWith('9')) return `+98${digits}`;
-  if (digits.length === 11 && digits.startsWith('09')) return `+98${digits.slice(1)}`;
-  if (digits.length === 12 && digits.startsWith('989')) return `+${digits}`;
-  if (digits.length === 13 && digits.startsWith('0989')) return `+${digits.slice(1)}`;
-  if (raw.startsWith('+98') && /^(\+98)9\d{9}$/.test(raw.replace(/\s+/g, ''))) return raw.replace(/\s+/g, '');
-  return null;
-};
+const normalizeIranMobileE164 = iranMobileE164;
 
-const toLocalIranMobile = (value?: string | null) => {
-  const normalized = normalizeIranMobileE164(value);
-  return normalized ? normalized.replace(/^\+98/, '0') : null;
-};
+const toLocalIranMobile = iranMobileLocal;
 
-const toGoTruePhone = (value?: string | null) => {
-  const normalized = normalizeIranMobileE164(value);
-  return normalized ? normalized.replace(/^\+/, '') : null;
-};
+const toGoTruePhone = iranMobileAuth;
 
 const isValidEmail = (value?: string | null) =>
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmail(value));
@@ -326,23 +311,20 @@ const fetchProfileByPhoneOrEmail = async (
   const excludeUserId = String(options.excludeUserId || '').trim();
 
   if (normalizedPhone) {
-    const phoneUrl = restUrl(supabaseUrl, 'profiles');
-    phoneUrl.searchParams.set('mobile_1', `eq.${normalizedPhone}`);
-    phoneUrl.searchParams.set('select', 'id,org_id,role,role_id,is_active,full_name,email,mobile_1');
-    phoneUrl.searchParams.set('limit', '1');
-    if (excludeUserId) {
-      phoneUrl.searchParams.set('id', `neq.${excludeUserId}`);
-    }
-
+    const phoneUrl = restUrl(supabaseUrl, 'rpc/find_profile_by_phone_for_auth');
     const phoneResponse = await fetch(phoneUrl.toString(), {
-      method: 'GET',
+      method: 'POST',
       headers: getServiceHeaders(serviceRoleKey),
+      body: JSON.stringify({ p_phone: normalizedPhone, p_exclude_user_id: excludeUserId || null }),
     });
     if (!phoneResponse.ok) {
       const raw = await phoneResponse.text();
       throw new Error(raw || 'Phone duplicate lookup failed');
     }
     const phoneRows = await phoneResponse.json();
+    if (Array.isArray(phoneRows) && phoneRows.length > 1) {
+      throw createReasonedError('این شماره به چند حساب متصل است و نیاز به بررسی مدیر دارد.', 'phone_profile_conflict', 409);
+    }
     const phoneMatch = Array.isArray(phoneRows) ? phoneRows[0] || null : null;
     if (phoneMatch?.id) return phoneMatch;
   }

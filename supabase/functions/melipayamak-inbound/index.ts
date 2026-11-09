@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { dialPhone } from '../_shared/phone-number.ts';
 
 const FUNCTION_BUILD = 'melipayamak-inbound-2026-08-25-02';
 
@@ -34,10 +35,7 @@ const getServiceHeaders = (serviceRoleKey: string) => ({
   'Content-Type': 'application/json',
 });
 
-const normalizePhone = (value: any) =>
-  String(value || '')
-    .trim()
-    .replace(/[\u200e\u200f\s-]/g, '');
+const normalizePhone = dialPhone;
 
 const normalizeBodyText = (value: any) =>
   String(value ?? '')

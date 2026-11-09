@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { dialPhone, iranMobileE164 } from '../_shared/phone-number.ts';
 import { fetchOrganizationRequestContext } from '../_shared/organization-request-context.ts';
 
 type SmsMode = 'rest' | 'soap';
@@ -386,14 +387,7 @@ const getEffectiveOtpTimeoutMs = (
   ? Math.max(configuredTimeoutMs, MIN_CONSOLE_SHARED_OTP_TIMEOUT_MS)
   : configuredTimeoutMs;
 
-const normalizeRecipientPhone = (value: string) => {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  if (/^\+989\d{9}$/.test(raw)) return `0${raw.slice(3)}`;
-  if (/^989\d{9}$/.test(raw)) return `0${raw.slice(2)}`;
-  if (/^00989\d{9}$/.test(raw)) return `0${raw.slice(4)}`;
-  return raw;
-};
+const normalizeRecipientPhone = dialPhone;
 
 const maskPhoneForLog = (value: string) => {
   const digits = String(value || '').replace(/\D/g, '');
@@ -577,16 +571,10 @@ const collectHookLeafEntries = (
 };
 
 const normalizeIranMobileFromAny = (value: string): string => {
-  const raw = normalizeDigitsToEnglish(value).trim();
-  if (!raw) return '';
-  const digits = raw.replace(/\D/g, '');
-  if (/^00989\d{9}$/.test(digits)) return `+${digits.slice(2)}`;
-  if (/^989\d{9}$/.test(digits)) return `+${digits}`;
-  if (/^09\d{9}$/.test(digits)) return `+98${digits.slice(1)}`;
-  if (/^9\d{9}$/.test(digits)) return `+98${digits}`;
-  const embedded = raw.match(/(?:\+?98|0098|0)?9\d{9}/);
-  if (embedded?.[0]) return normalizeIranMobileFromAny(embedded[0]);
-  return '';
+  const direct = iranMobileE164(value);
+  if (direct) return direct;
+  const embedded = normalizeDigitsToEnglish(value).match(/(?:\+?98|0098|0)?9\d{9}/);
+  return embedded ? iranMobileE164(embedded[0]) ?? '' : '';
 };
 
 const extractHookOtp = (body: AuthHookPayload & Record<string, any>) => {

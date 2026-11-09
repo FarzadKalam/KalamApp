@@ -1,5 +1,5 @@
+import { phoneLookupKey } from '../supabase/functions/_shared/phone-number';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { normalizePhoneDigits } from './phoneNumber';
 
 export type PhoneBindTargetModuleId = 'customers' | 'suppliers' | 'employees' | 'marketing_leads';
 
@@ -29,19 +29,7 @@ const TARGET_SELECT_BY_MODULE: Record<PhoneBindTargetModuleId, string> = {
 export const getPhoneBindingTargetSelect = (moduleId: PhoneBindTargetModuleId) =>
   TARGET_SELECT_BY_MODULE[moduleId];
 
-const buildLookupKey = (value: unknown) => {
-  let digits = normalizePhoneDigits(value);
-  if (!digits) return '';
-  if (digits.startsWith('0098')) {
-    digits = digits.slice(4);
-  } else if (digits.startsWith('98') && digits.length >= 12) {
-    digits = digits.slice(2);
-  }
-  if (digits.length > 10 && digits.startsWith('0')) {
-    digits = digits.slice(1);
-  }
-  return digits;
-};
+const buildLookupKey = phoneLookupKey;
 
 export const buildPhoneTargetDisplayName = (
   moduleId: PhoneBindTargetModuleId,

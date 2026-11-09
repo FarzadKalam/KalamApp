@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { dialPhone } from '../_shared/phone-number.ts';
 
 import { parseTehranProviderDateTimeToUtcIso } from '../_shared/tehran-datetime.ts';
 
@@ -105,10 +106,7 @@ const normalizeTelefonchyPayload = (payload: Record<string, any>) => {
   };
 };
 
-const normalizePhone = (value: any) =>
-  String(value || '')
-    .trim()
-    .replace(/[\u200e\u200f\s().-]/g, '');
+const normalizePhone = dialPhone;
 
 const toIntegerOrNull = (value: any) => {
   const parsed = Number(String(value ?? '').trim());

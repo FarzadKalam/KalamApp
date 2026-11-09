@@ -525,7 +525,7 @@ describe('Login OTP and password flows', () => {
     await waitFor(() => {
       expect(authState.signOut).toHaveBeenCalled();
     });
-    expect(document.body.textContent || '').toContain('به یک سازمان دیگر متصل یا برای آن رزرو شده است');
+    await waitFor(() => expect(document.body.textContent || '').toContain('به یک سازمان دیگر متصل یا برای آن رزرو شده است'));
     expect(mockNavigate).not.toHaveBeenCalled();
   }, 15000);
 

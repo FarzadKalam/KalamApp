@@ -1,3 +1,4 @@
+import { dialPhone } from '../supabase/functions/_shared/phone-number';
 ﻿import { supabase } from '../supabaseClient';
 import { getActiveChannelSettings } from './channelSettings';
 import { getSelectedOrganizationId } from './organizationContext';
@@ -285,7 +286,7 @@ const sendSmsDirect = async (
 
   const requestUrl = resolveSmsRequestUrl(baseUrl);
   const useSoapRequest = mode === 'soap' || /\/post\/send\.asmx(\/SendSimpleSMS2)?$/i.test(baseUrl);
-  const recipients = Array.from(new Set((to || []).map((value) => String(value || '').trim()).filter(Boolean)));
+  const recipients = Array.from(new Set((to || []).map(dialPhone).filter(Boolean)));
 
   if (recipients.length === 0) {
     throw new Error('ع¯غŒط±ظ†ط¯ظ‡ ظ¾غŒط§ظ…ع© ظ…ط´ط®طµ ظ†ط´ط¯ظ‡ ط§ط³طھ.');
@@ -451,7 +452,7 @@ export const sendSmsViaGateway = async ({
   skipReportLog = false,
   senderNumber,
 }: SendSmsViaGatewayArgs): Promise<SmsGatewaySendResult> => {
-  const recipients = Array.from(new Set((to || []).map((value) => String(value || '').trim()).filter(Boolean)));
+  const recipients = Array.from(new Set((to || []).map(dialPhone).filter(Boolean)));
   const messageText = String(text || '').trim();
 
   if (recipients.length === 0) {
