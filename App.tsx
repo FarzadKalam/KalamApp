@@ -892,6 +892,7 @@ function App() {
                         isDarkMode={isDarkMode}
                         toggleTheme={handleToggleTheme}
                         brandShortName={branding.shortName}
+                        brandLogoUrl={branding.logoUrl || branding.iconUrl}
                         preloadRoute={preloadAuthenticatedRouteChunk}
                       >
                         <AuthenticatedOutletBoundary />

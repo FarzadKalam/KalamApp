@@ -46,6 +46,7 @@ type AiCapabilityComposerActionsProps = {
   disabled?: boolean;
   loading?: boolean;
   size?: ButtonProps['size'];
+  compact?: boolean;
   moduleId?: string | null;
   recordId?: string | null;
   onVoiceSend: (voice: RecordedVoice) => void | Promise<void>;
@@ -110,6 +111,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   disabled = false,
   loading = false,
   size,
+  compact = false,
   moduleId,
   recordId,
   onVoiceSend,
@@ -260,7 +262,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
 
       <Space size={[4, 4]} wrap>
         {autoMode ? (
-          <Tag className={capabilityTagClass}>تصمیم‌گیری خودکار</Tag>
+          <Tag className={capabilityTagClass} title="تصمیم‌گیری خودکار" icon={compact ? <ThunderboltOutlined /> : undefined}>{compact ? <span className="sr-only">تصمیم‌گیری خودکار</span> : 'تصمیم‌گیری خودکار'}</Tag>
         ) : null}
         {effectiveSelected
           .filter((key) => CAPABILITY_META.some((item) => item.key === key))

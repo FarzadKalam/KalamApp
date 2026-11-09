@@ -40,7 +40,7 @@ const groupKeys = (items: MenuProps['items']): string[] => (items || []).flatMap
 const SidebarMenu = memo(function SidebarMenu({ items, selectedKey, ancestorKeys, collapsed, isMobile, isDarkMode, onNavigate, searchEnabled = true }: SidebarMenuProps) {
   const [openKeys, setOpenKeys] = useState(ancestorKeys);
   const [search, setSearch] = useState('');
-  const filteredItems = useMemo(() => filterSidebarItems(items, search), [items, search]);
+  const filteredItems = useMemo(() => filterSidebarItems(items, search)?.map(item => item && 'children' in item && String(item.key) === selectedKey ? { ...item, className: `${item.className || ''} sidebar-selected-group` } : item), [items, search, selectedKey]);
   const searchOpenKeys = useMemo(() => groupKeys(filteredItems), [filteredItems]);
   useEffect(() => { setOpenKeys(ancestorKeys); }, [ancestorKeys]);
   const selectedKeys = useMemo(() => [selectedKey], [selectedKey]);

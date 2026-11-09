@@ -35,7 +35,6 @@ import { supabase } from '../supabaseClient';
 import { signOutLocalSession } from '../utils/authSession';
 import { MODULES } from '../moduleRegistry';
 import AppVersionUpdateBanner from './AppVersionUpdateBanner';
-import ContextualTutorialButton from './cms/ContextualTutorialButton';
 import { getTutorialContexts } from '../utils/tutorialContexts';
 import {
   ACCOUNTING_PERMISSION_KEY,
@@ -107,10 +106,11 @@ interface LayoutProps {
   isDarkMode: boolean;
   toggleTheme: () => void;
   brandShortName: string;
+  brandLogoUrl?: string | null;
   preloadRoute?: (href: string) => Promise<unknown> | void;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, brandShortName, preloadRoute }) => {
+const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, brandShortName, brandLogoUrl, preloadRoute }) => {
   const { message: messageApi, modal } = App.useApp();
   const navigate = useNavigate();
   const location = useLocation();
@@ -1513,7 +1513,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       <MainSidebar items={menuItems} railItems={visibleRawMenuItems} selectedKey={selectedSidebarKey}
         ancestorKeys={sidebarAncestorKeys} collapsed={collapsed} onCollapsedChange={setCollapsed}
         isMobile={isMobile} isDarkMode={isDarkMode} onNavigate={handleSidebarNavigate}
-        onPreload={scheduleRoutePreload} brandShortName={brandShortName}
+        onPreload={scheduleRoutePreload} brandShortName={brandShortName} brandLogoUrl={brandLogoUrl}
         contexts={getTutorialContexts(location.pathname, Object.keys(MODULES))}
         orgId={resolvedOrgId || null} userId={currentUser?.id || null} />
 
@@ -1683,7 +1683,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               shape="circle"
               icon={<ActionIcon name="refresh" className={refreshingPage ? 'app-action-icon-spinning' : undefined} />}
               onClick={handlePageRefresh}
-              className={`${headerActionButtonClassName} app-header-secondary-action`}
+              className={`${headerActionButtonClassName} app-header-refresh`}
               title="رفرش صفحه"
               aria-label="رفرش صفحه"
             />
@@ -1697,8 +1697,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               title={isDarkMode ? 'حالت روشن' : 'حالت شب'}
               aria-label={isDarkMode ? 'حالت روشن' : 'حالت شب'}
             />
-            {isMobile && <ContextualTutorialButton contexts={getTutorialContexts(location.pathname, Object.keys(MODULES))}
-              viewer={{ orgId: resolvedOrgId || null, userId: currentUser?.id || null }} buttonClassName={headerActionButtonClassName} buttonIcon={<ActionIcon name="book" />} />}
             {isDemoOrg && hasDemoBatch && (
               <Popconfirm
                 title="حذف داده‌های دمو"

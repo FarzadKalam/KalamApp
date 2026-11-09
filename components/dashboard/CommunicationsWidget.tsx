@@ -31,7 +31,7 @@ function CommunicationsWidget({ orgId, permissions }: { orgId: string; permissio
     { key: 'email_messages', label: 'ایمیل‌ها', icon: <MailOutlined />, visible: access.canUseEmail && emailEnabled },
     { key: 'instagram', label: 'اینستاگرام', icon: <InstagramOutlined />, visible: instagramAllowed },
   ].filter(item => item.visible);
-  return <DashboardWidgetFrame widgetId="communications" title="ارتباطات" defaultOrder={7} onRefresh={() => { void runtime.refreshSummary(); }}>
+  return <DashboardWidgetFrame widgetId="communications" title="ارتباطات" defaultOrder={5} onRefresh={() => { void runtime.refreshSummary(); }}>
     <Card title="ارتباطات" className="dashboard-content-card"><div className="dashboard-communication-links">
       {destinations.map(item => <Button key={item.key} className="dashboard-channel-button" onClick={() => navigate(`/messages?tab=${item.key}`)}>
         <Badge count={item.count ? toPersianNumber(item.count) : 0} size="small">{item.icon}</Badge><span>{item.label}</span>

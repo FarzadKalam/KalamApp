@@ -611,14 +611,14 @@ const OurProcessesWidget: React.FC = () => {
 
   if (!canViewWidget) {
     return (
-      <DashboardWidgetFrame widgetId="our_processes" title="فرآیندهای ما" defaultOrder={6} onRefresh={() => { void loadProcesses(visibleLimit); }} ><Card className="h-full shadow-sm">
+      <DashboardWidgetFrame widgetId="our_processes" title="فرآیندهای ما" defaultOrder={8} onRefresh={() => { void loadProcesses(visibleLimit); }} ><Card className="h-full shadow-sm">
         <Empty description="دسترسی به ویجت فرآیندهای ما ندارید" />
       </Card></DashboardWidgetFrame>
     );
   }
 
   return (
-    <DashboardWidgetFrame widgetId="our_processes" title="فرآیندهای ما" defaultOrder={6} onRefresh={() => { void loadProcesses(visibleLimit); }} ><Card className="h-full shadow-sm">
+    <DashboardWidgetFrame widgetId="our_processes" title="فرآیندهای ما" defaultOrder={8} onRefresh={() => { void loadProcesses(visibleLimit); }} ><Card className="h-full shadow-sm">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-base font-bold">

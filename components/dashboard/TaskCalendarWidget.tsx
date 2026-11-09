@@ -322,14 +322,14 @@ const TaskCalendarWidget: React.FC<TaskCalendarWidgetProps> = ({ prefetchedTasks
 
   if (!canViewWidget) {
     return (
-      <DashboardWidgetFrame widgetId="activity_calendar" title="تقویم فعالیت‌ها" defaultOrder={5} onRefresh={() => { void loadTasks(); }} ><Card className="shadow-sm">
+      <DashboardWidgetFrame widgetId="activity_calendar" title="تقویم فعالیت‌ها" defaultOrder={7} onRefresh={() => { void loadTasks(); }} ><Card className="shadow-sm">
         <Empty description="دسترسی به ویجت تقویم فعالیت‌ها ندارید" />
       </Card></DashboardWidgetFrame>
     );
   }
 
   return (
-    <DashboardWidgetFrame widgetId="activity_calendar" title="تقویم فعالیت‌ها" defaultOrder={5} onRefresh={() => { void loadTasks(); }} ><Card className="shadow-sm">
+    <DashboardWidgetFrame widgetId="activity_calendar" title="تقویم فعالیت‌ها" defaultOrder={7} onRefresh={() => { void loadTasks(); }} ><Card className="shadow-sm">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <CalendarOutlined className="text-[rgba(var(--brand-600-rgb),1)]" />

@@ -4,8 +4,9 @@
 .app-header-search-trigger.ant-btn,
 .app-header-search-close.ant-btn {
   display:inline-flex; flex:0 0 44px; align-items:center; justify-content:center;
-  width:44px; min-width:44px; height:44px; padding:0; border-radius:14px;
+  width:44px; min-width:44px; height:44px; padding:0!important; gap:0; line-height:1; border-radius:14px;
 }
+.app-header-search-trigger.ant-btn .ant-btn-icon,.app-header-search-close.ant-btn .ant-btn-icon{display:inline-flex;align-items:center;justify-content:center;margin:0!important;line-height:1}
 .app-header-search-trigger.ant-btn {
   color:rgb(var(--brand-600-rgb)); background:rgb(var(--brand-500-rgb) / .1);
   border:1px solid rgb(var(--brand-500-rgb) / .22); box-shadow:none;

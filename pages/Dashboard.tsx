@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Empty, Grid, Input, Modal, Popover, Spin, Statistic, Table, message } from 'antd';
+import { Alert, Button, Card, Checkbox, Empty, Grid, Input, Modal, Popover, Skeleton, Statistic, Table, message } from 'antd';
 import {
   DownOutlined,
   SettingOutlined,
@@ -40,16 +40,14 @@ import { hasCurrentOrgPlanModule } from '../utils/saasPlanModules';
 import DashboardWidgetFrame, { DashboardModuleSelection, DashboardWidgetScope } from '../components/dashboard/DashboardWidgetFrame';
 import CommunicationsWidget from '../components/dashboard/CommunicationsWidget';
 import MyTasksWidget from '../components/dashboard/MyTasksWidget';
+import DashboardWidgetLoading from '../components/dashboard/DashboardWidgetLoading';
+import DeferredDashboardWidget from '../components/dashboard/DeferredDashboardWidget';
+import AutoFitText from '../components/common/AutoFitText';
+import { getDashboardGreetingFa } from '../utils/dashboardGreeting';
 import '../components/dashboard/Dashboard.css';
 import PhoneDisplay from '../components/PhoneDisplay';
-import GoalProgressSlider from '../components/goals/GoalProgressSlider';
 import OccasionsWidget from '../components/dashboard/OccasionsWidget';
-import TaskCalendarWidget from '../components/dashboard/TaskCalendarWidget';
-import ReportsSliderWidget from '../components/dashboard/ReportsSliderWidget';
-import OurProcessesWidget from '../components/dashboard/OurProcessesWidget';
 import StoryBar from '../components/stories/StoryBar';
-import StoryViewerModal from '../components/stories/StoryViewerModal';
-import StoryEditorModal from '../components/stories/StoryEditorModal';
 import type { RecordedVoice } from '../components/ai/AiVoiceRecorder';
 import type { AiUploadedFilePrompt } from '../components/ai/AiFileUploadButton';
 import AiCapabilityComposerActions, { normalizeAiComposerCapabilities, type AiComposerCapability } from '../components/ai/AiCapabilityComposerActions';
@@ -57,13 +55,19 @@ import AiComposeModelBar from '../components/ai/AiComposeModelBar';
 import type { AiMediaSettings, AiMediaSourceImage } from '../components/ai/AiMediaSettingsPopover';
 import { notifyStorySms } from '../utils/storyNotification';
 import type { OrgStoryWithMeta, OrgStory } from '../components/stories/storyTypes';
-import { fetchActiveOrgStoriesWithMeta } from '../utils/orgStories';
 import { blobToBase64 } from '../utils/blobBase64';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import AiSparkleIcon from '../components/ai/AiSparkleIcon';
 import { buildAiRecordModuleOptions } from '../utils/aiRecordCreation';
 import { shouldSubmitComposerOnEnter } from '../utils/composeKeyboard';
 import { isWorkflowVirtualField } from '../utils/moduleFieldVisibility';
+
+const GoalProgressSlider = React.lazy(() => import('../components/goals/GoalProgressSlider'));
+const TaskCalendarWidget = React.lazy(() => import('../components/dashboard/TaskCalendarWidget'));
+const ReportsSliderWidget = React.lazy(() => import('../components/dashboard/ReportsSliderWidget'));
+const OurProcessesWidget = React.lazy(() => import('../components/dashboard/OurProcessesWidget'));
+const StoryViewerModal = React.lazy(() => import('../components/stories/StoryViewerModal'));
+const StoryEditorModal = React.lazy(() => import('../components/stories/StoryEditorModal'));
 
 type DashboardQuickAction = {
   moduleId: string;
@@ -92,8 +96,7 @@ type DashboardBootstrapResult = {
   moduleIds: string[];
   widgetPermissions: Record<string, boolean>;
   quickActions: DashboardQuickAction[];
-  cards: DashboardCardItem[];
-  recentSections: DashboardRecentSection[];
+  recordAccess: CurrentUserRecordAccessContext;
 };
 
 const DASHBOARD_BOOTSTRAP_TTL_MS = 5 * 60_000;
@@ -121,18 +124,6 @@ const SYNTHETIC_FIELD_META: Record<string, { label: string; type: FieldType }> =
   updated_at: { label: 'آخرین ویرایش', type: FieldType.DATETIME },
 };
 
-let dashboardBootstrapCache: {
-  key: string | null;
-  data: DashboardBootstrapResult | null;
-  expiresAt: number;
-} = {
-  key: null,
-  data: null,
-  expiresAt: 0,
-};
-
-let dashboardBootstrapPromiseKey: string | null = null;
-let dashboardBootstrapPromise: Promise<DashboardBootstrapResult> | null = null;
 const dashboardCardCache = new Map<string, { data: DashboardCardItem | null; expiresAt: number }>();
 const dashboardCardPromiseCache = new Map<string, Promise<DashboardCardItem | null>>();
 const dashboardRecentSectionCache = new Map<string, { data: DashboardRecentSection | null; expiresAt: number }>();
@@ -884,7 +875,6 @@ const buildDashboardBootstrap = async (): Promise<DashboardBootstrapResult> => {
     fetchCurrentUserRecordAccessContext(supabase),
   ]);
   const userId = snapshot.user?.id ? String(snapshot.user.id) : null;
-  const roleId = snapshot.roleId ? String(snapshot.roleId) : null;
   const permissions = snapshot.permissions || {};
   const dashboardPermissions = permissions?.[DASHBOARD_PERMISSION_KEY] || {};
 
@@ -893,8 +883,7 @@ const buildDashboardBootstrap = async (): Promise<DashboardBootstrapResult> => {
       moduleIds: [],
       widgetPermissions: {},
       quickActions: [],
-      cards: [],
-      recentSections: [],
+      recordAccess,
     };
   }
 
@@ -903,8 +892,7 @@ const buildDashboardBootstrap = async (): Promise<DashboardBootstrapResult> => {
       moduleIds: [],
       widgetPermissions: { __all: false },
       quickActions: [],
-      cards: [],
-      recentSections: [],
+      recordAccess,
     };
   }
 
@@ -913,84 +901,11 @@ const buildDashboardBootstrap = async (): Promise<DashboardBootstrapResult> => {
   const candidates = (preferences.moduleIds ? preferredModuleIds.filter(id => MODULES[id] && !isSaasAdminModuleId(id) && permissions[id]?.view !== false) : resolveDashboardModuleIds(permissions, preferredModuleIds)).slice(0, DASHBOARD_MAX_MODULES);
   const availability = await mapWithConcurrency(candidates, 3, id => hasCurrentOrgPlanModule(id, { defaultEnabled: true }));
   const dashboardModuleIds = candidates.filter((_, index) => availability[index]);
-  const cacheKey = [
-    snapshot.orgId || 'no-org',
-    JSON.stringify(permissions),
-    userId,
-    roleId || 'no-role',
-    preferredModuleIds.join(','),
-    dashboardModuleIds.join(','),
-    [...(recordAccess.allowedRoleIds || [])].sort().join(',') || 'no-roles',
-    [...(recordAccess.allowedUserIds || [])].sort().join(',') || 'no-users',
-  ].join(':');
-
-  if (
-    dashboardBootstrapCache.key === cacheKey &&
-    dashboardBootstrapCache.data &&
-    dashboardBootstrapCache.expiresAt > Date.now()
-  ) {
-    return dashboardBootstrapCache.data;
-  }
-
-  if (dashboardBootstrapPromise && dashboardBootstrapPromiseKey === cacheKey) {
-    return dashboardBootstrapPromise;
-  }
-
-  dashboardBootstrapPromiseKey = cacheKey;
-  dashboardBootstrapPromise = (async () => {
-    const quickActions = dashboardModuleIds.filter(id => permissions[id]?.create !== false).map((moduleId) => ({
-      moduleId,
-      title: MODULES[moduleId]?.dashboard?.quickCreateLabel || `ایجاد ${getModuleTitle(moduleId)}`,
-      description: getModuleTitle(moduleId),
-    }));
-
-    const [cards, recentSections] = await Promise.all([
-      mapWithConcurrency(dashboardModuleIds, DASHBOARD_CARD_CONCURRENCY, (moduleId) =>
-        loadCardForModule(moduleId, recordAccess)
-      ),
-      mapWithConcurrency(dashboardModuleIds, DASHBOARD_RECENT_CONCURRENCY, (moduleId) =>
-        loadRecentSection(moduleId, recordAccess)
-      ),
-    ]);
-
-    const result: DashboardBootstrapResult = {
-      moduleIds: dashboardModuleIds,
-      widgetPermissions: (dashboardPermissions.fields || {}) as Record<string, boolean>,
-      quickActions,
-      cards: cards.filter(Boolean) as DashboardCardItem[],
-      recentSections: recentSections.filter(Boolean) as DashboardRecentSection[],
-    };
-
-    dashboardBootstrapCache = {
-      key: cacheKey,
-      data: result,
-      expiresAt: Date.now() + DASHBOARD_BOOTSTRAP_TTL_MS,
-    };
-
-    return result;
-  })();
-
-  try {
-    return await dashboardBootstrapPromise;
-  } finally {
-    if (dashboardBootstrapPromiseKey === cacheKey) {
-      dashboardBootstrapPromise = null;
-      dashboardBootstrapPromiseKey = null;
-    }
-  }
-};
-
-// پیش‌بارگذاری استوری‌ها در موازات bootstrap داشبورد
-const fetchInitialStories = async (orgId: string, userId: string): Promise<OrgStoryWithMeta[]> => {
-  try {
-    return await fetchActiveOrgStoriesWithMeta({
-      supabaseClient: supabase,
-      orgId,
-      currentUserId: userId,
-    });
-  } catch {
-    return [];
-  }
+  const quickActions = dashboardModuleIds.filter(id => permissions[id]?.create !== false).map(moduleId => ({
+    moduleId, title: MODULES[moduleId]?.dashboard?.quickCreateLabel || `ایجاد ${getModuleTitle(moduleId)}`,
+    description: getModuleTitle(moduleId),
+  }));
+  return { moduleIds: dashboardModuleIds, widgetPermissions: (dashboardPermissions.fields || {}) as Record<string, boolean>, quickActions, recordAccess };
 };
 
 const Dashboard: React.FC = () => {
@@ -1000,6 +915,13 @@ const Dashboard: React.FC = () => {
   const isMobile = !screens.md;
   const [loading, setLoading] = useState(true);
   const [dashboardReady, setDashboardReady] = useState(false);
+  const [clock, setClock] = useState(() => new Date());
+  useEffect(() => {
+    const update = () => setClock(new Date());
+    const timer = window.setInterval(update, 60_000);
+    window.addEventListener('focus', update);
+    return () => { window.clearInterval(timer);window.removeEventListener('focus', update); };
+  }, []);
   const [brandTitle, setBrandTitle] = useState(() => readRuntimeBranding().appTitle || DEFAULT_BRANDING.brandName);
   const [widgetPermissions, setWidgetPermissions] = useState<Record<string, boolean>>({});
   const [quickActions, setQuickActions] = useState<DashboardQuickAction[]>([]);
@@ -1035,12 +957,12 @@ const Dashboard: React.FC = () => {
   const [storyEditorOpen, setStoryEditorOpen] = useState(false);
   const [editingStory, setEditingStory] = useState<OrgStory | null>(null);
   const [storyRefreshKey, setStoryRefreshKey] = useState(0);
-  const [initialStories, setInitialStories] = useState<OrgStoryWithMeta[]>([]);
   const preferences = useDashboardPreferences(orgId, currentUserId);
   const modulePreferenceKey = preferences.moduleIds?.join('|') ?? '__default__';
+  const dataVisibilityKey = preferences.hiddenWidgets.filter(id => id.startsWith('summary:') || id.startsWith('recent:') || id === 'summary_cards' || id === 'recent_lists').sort().join('|');
   const communicationsAccess = resolveCommunicationsPermissions(dashboardPermissions);
   const refreshDashboard = useCallback(() => {
-    dashboardBootstrapCache.expiresAt = 0;dashboardCardCache.clear();dashboardRecentSectionCache.clear();_dashboardTasksCache.expiresAt = 0;
+    dashboardCardCache.clear();dashboardRecentSectionCache.clear();_dashboardTasksCache.expiresAt = 0;
     setRefreshRevision(value => value + 1);
   }, []);
   const widgetScope = useMemo(() => ({ orgId, userId: currentUserId, onRefresh: refreshDashboard }), [orgId, currentUserId, refreshDashboard]);
@@ -1089,66 +1011,50 @@ const Dashboard: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    let isMounted = true;
-
+    let active = true;
     const loadDashboard = async () => {
-      setLoading(true);
-      setDashboardError('');
+      setLoading(true);setDashboardError('');
       try {
-        // مرحله ۱: session سریع است (معمولاً کش شده)
         const snapshot = await fetchSessionBootstrap(supabase);
+        if (!active) return;
         const userId = snapshot.user?.id ? String(snapshot.user.id) : null;
-        const snapshotOrgId = snapshot.orgId ? String(snapshot.orgId) : null;
-
-        // مرحله ۲: bootstrap و استوری‌ها را موازی fetch می‌کنیم
-        const [result, fetchedStories] = await Promise.all([
-          buildDashboardBootstrap(),
-          userId && snapshotOrgId
-            ? fetchInitialStories(snapshotOrgId, userId)
-            : Promise.resolve([]),
-        ]);
-
-        if (!isMounted) return;
-        setWidgetPermissions(result.widgetPermissions || {});
-        setQuickActions(result.quickActions || []);
-        setCards(result.cards || []);
-        setSelectedModuleIds(result.moduleIds || []);
+        setCurrentUserId(userId);setOrgId(snapshot.orgId || null);
         setDashboardPermissions(snapshot.permissions || {});
-        setRecentSections(result.recentSections || []);
-
-
-        if (userId) {
-          setCurrentUserId(userId);
-          setOrgId(snapshotOrgId);
-          const profile = (snapshot as any).profile;
-          setCurrentUserName(
-            String(profile?.full_name || profile?.display_name || snapshot.user?.email || '')
-          );
-          setCurrentUserAvatar(profile?.avatar_url ? String(profile.avatar_url) : null);
-          const perms = snapshot.permissions as PermissionMap | null;
-          setStoriesPermissions(resolveStoriesPermissions(perms));
-          setCanPublishSaasStory(resolveSaasAdminFieldPermission(perms, 'publish_saas_story'));
-          setCanPublishSaasAdminStory(resolveSaasAdminFieldPermission(perms, 'publish_saas_admin_story'));
-          setInitialStories(fetchedStories);
-        }
-      } catch (error) {
-        console.error('Error loading dashboard:', error);
-        if (!isMounted) return;
-        setDashboardError(toFaErrorMessage(error as any, 'دریافت داشبورد انجام نشد.'));
-        if (!currentUserId) setWidgetPermissions({ __all: false });
-      } finally {
-        if (!isMounted) return;
-        setLoading(false);
-        setDashboardReady(true);
-      }
+        const profile = snapshot.profile;
+        setCurrentUserName(String(profile?.full_name || profile?.display_name || ''));
+        setCurrentUserAvatar(profile?.avatar_url || null);
+        const perms = snapshot.permissions as PermissionMap | null;
+        setStoriesPermissions(resolveStoriesPermissions(perms));
+        setCanPublishSaasStory(resolveSaasAdminFieldPermission(perms, 'publish_saas_story'));
+        setCanPublishSaasAdminStory(resolveSaasAdminFieldPermission(perms, 'publish_saas_admin_story'));
+        const prepared = await buildDashboardBootstrap();
+        if (!active) return;
+        setWidgetPermissions(prepared.widgetPermissions);
+        setSelectedModuleIds(prepared.moduleIds);
+        setQuickActions(prepared.quickActions);
+        setCards([]);setRecentSections([]);setDashboardReady(true);
+        const preferences = readDashboardPreferences(snapshot.orgId, userId);
+        const hidden = new Set(preferences.hiddenWidgets);
+        const reportFailure = (cause: unknown) => { if (active) setDashboardError(toFaErrorMessage(cause as any, 'دریافت بخشی از داشبورد انجام نشد؛ دوباره تلاش کنید.')); };
+        await Promise.all([
+          mapWithConcurrency(prepared.moduleIds.filter(id => prepared.widgetPermissions.summary_cards !== false && !hidden.has('summary_cards') && !hidden.has('summary:' + id)), DASHBOARD_CARD_CONCURRENCY, async id => {
+            try { const card = await loadCardForModule(id, prepared.recordAccess);if (active && card) setCards(previous => [...previous.filter(item => item.moduleId !== id), card]); }
+            catch (cause) { reportFailure(cause); }
+          }),
+          mapWithConcurrency(prepared.moduleIds.filter(id => prepared.widgetPermissions.recent_lists !== false && !hidden.has('recent_lists') && !hidden.has('recent:' + id)), DASHBOARD_RECENT_CONCURRENCY, async id => {
+            try { const section = await loadRecentSection(id, prepared.recordAccess);if (active && section) setRecentSections(previous => [...previous.filter(item => item.moduleId !== id), section].sort((a,b) => prepared.moduleIds.indexOf(a.moduleId) - prepared.moduleIds.indexOf(b.moduleId))); }
+            catch (cause) { reportFailure(cause); }
+          }),
+        ]);
+      } catch (cause) {
+        if (!active) return;
+        setDashboardError(toFaErrorMessage(cause as any, 'دریافت داشبورد انجام نشد.'));
+        setWidgetPermissions({ __all: false });setDashboardReady(true);
+      } finally { if (active) setLoading(false); }
     };
-
-    loadDashboard();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [modulePreferenceKey, refreshRevision]);
+    void loadDashboard();
+    return () => { active = false; };
+  }, [modulePreferenceKey, dataVisibilityKey, refreshRevision]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1360,7 +1266,7 @@ const Dashboard: React.FC = () => {
     <DashboardWidgetScope.Provider value={widgetScope}>
     <div className="dashboard-shell" dir="rtl">
       <header className="dashboard-page-heading">
-        <div><h1>{currentUserName ? `سلام ${currentUserName.split(' ')[0]}، روزت بخیر` : brandTitle}</h1>
+        <div><h1>{currentUserName ? `سلام ${currentUserName.split(' ')[0]}، ${getDashboardGreetingFa(clock)}` : brandTitle}</h1>
           <div className="dashboard-date-line"><CalendarOutlined /><span>{getTodayPersianDate()}</span>
             <Popover trigger="click" placement="bottomRight" content={<div className="dashboard-occasion-popover"><OccasionsWidget /></div>}><Button type="text" size="small">مناسبت‌ها <DownOutlined /></Button></Popover>
           </div>
@@ -1371,7 +1277,7 @@ const Dashboard: React.FC = () => {
       <div className="dashboard-overview-row">
         {orgId && currentUserId && storiesPermissions?.canView && <DashboardWidgetFrame widgetId="stories" title="استوری‌ها" defaultOrder={0} className="dashboard-stories-frame" onRefresh={() => setStoryRefreshKey(value => value + 1)}>
           <StoryBar key={storyRefreshKey} orgId={orgId} currentUserId={currentUserId} canPublish={storiesPermissions.canPublish}
-            onAddStory={() => { setEditingStory(null); setStoryEditorOpen(true); }} onOpenStory={handleOpenStory} initialStories={storyRefreshKey === 0 ? initialStories : undefined} />
+            onAddStory={() => { setEditingStory(null); setStoryEditorOpen(true); }} onOpenStory={handleOpenStory} />
         </DashboardWidgetFrame>}
         {dashboardReady && communicationsAccess.canUseWorkspace && <DashboardWidgetFrame widgetId="ai" title="دستیار هوشمند سازمان" defaultOrder={1} className="dashboard-ai-frame">
           <Card className="dashboard-content-card" title={<span className="flex items-center gap-2"><AiSparkleIcon className="h-5 w-5" />دستیار هوشمند سازمان</span>}>
@@ -1399,8 +1305,10 @@ const Dashboard: React.FC = () => {
                       aria-label={dashboardVideoMode ? 'ساخت ویدیو با هوش مصنوعی' : dashboardVoiceOutputMode ? 'تولید صدا با هوش مصنوعی' : dashboardImageMode ? 'ساخت تصویر با هوش مصنوعی' : 'ارسال پیام به هوش مصنوعی'}
                     />
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+                  <div className="dashboard-compose-toolbar">
+                    <div className="dashboard-compose-actions">
                     <AiCapabilityComposerActions
+                      compact={isMobile}
                       selected={dashboardAiCapabilities}
                       onChange={handleDashboardCapabilitiesChange}
                       capabilityAvailability={dashboardAiCapabilityAvailability}
@@ -1421,8 +1329,9 @@ const Dashboard: React.FC = () => {
                       mediaModelId={dashboardMediaModelId}
                     />
                   </div>
-                  <div className="mt-1 px-7">
+                  <div className="dashboard-compose-model">
                     <AiComposeModelBar
+                      compact
                       selectedCapabilities={dashboardAiCapabilities}
                       fallbackCapability="dashboard_chat"
                       persistedOverrides={dashboardModelOverrides}
@@ -1439,29 +1348,30 @@ const Dashboard: React.FC = () => {
                       }}
                     />
                   </div>
+                  </div>
           </Card>
         </DashboardWidgetFrame>}
       </div>
-      {loading && !dashboardReady && <div className="dashboard-widget-loading"><Spin size="large" /></div>}
+      {loading && !dashboardReady && <div className="dashboard-initial-loading" role="status" aria-label="در حال آماده‌سازی داشبورد" aria-busy="true"><div className="dashboard-summary-grid">{Array.from({ length: 6 }, (_, index) => <Card key={index}><Skeleton active paragraph={{ rows: 2 }} /></Card>)}</div><div className="dashboard-widget-grid"><DashboardWidgetLoading widgetId="reports_slider" title="گزارش‌ها" defaultOrder={3} /><DashboardWidgetLoading widgetId="my_tasks" title="کارهای من" defaultOrder={4} /></div></div>}
       {!loading && dashboardReady && widgetPermissions.__all === false && !dashboardError && <Card><Empty description="دسترسی مشاهدهٔ داشبورد برای این نقش غیرفعال است." /></Card>}
-      {canShowWidget('summary_cards') && cards.length > 0 && <div className="dashboard-summary-grid">{cards.map(card => <DashboardWidgetFrame key={card.moduleId} widgetId={`summary:${card.moduleId}`} title={card.title} settings={moduleSelection}>
-        <Card className="dashboard-summary-card" onClick={() => navigate(`/${card.moduleId}`)}>
-          <div className="dashboard-stat-label">{getModuleIcon(card.moduleId)}<span>{getModuleTitle(card.moduleId)}</span></div>
-          <Statistic title={card.title} value={card.value} formatter={value => card.kind === 'price' ? formatPersianPrice(Number(value || 0), true) : toPersianNumber(Number(value || 0))} suffix={card.kind === 'price' ? currency.label : undefined} />
-          <p className="dashboard-stat-description">{card.subtitle}</p>
+      {canShowWidget('summary_cards') && selectedModuleIds.length > 0 && <div className="dashboard-summary-grid">{selectedModuleIds.map(moduleId => { const card = cards.find(item => item.moduleId === moduleId);if (!card && !loading) return null;return <DashboardWidgetFrame key={moduleId} widgetId={`summary:${moduleId}`} title={card?.title || getModuleTitle(moduleId)} settings={moduleSelection}>
+        <Card className="dashboard-summary-card" onClick={() => navigate(`/${moduleId}`)} tabIndex={0} role="link" onKeyDown={event => { if (event.key === 'Enter') navigate(`/${moduleId}`); }}>
+          <div className="dashboard-stat-label">{getModuleIcon(moduleId)}<span>{getModuleTitle(moduleId)}</span></div>
+          {card ? <><Statistic title={card.title} value={card.value} formatter={value => <AutoFitText>{card.kind === 'price' ? formatPersianPrice(Number(value || 0), true) : toPersianNumber(Number(value || 0))}</AutoFitText>} suffix={card.kind === 'price' ? currency.label : undefined} />
+          <p className="dashboard-stat-description">{card.subtitle}</p></> : <Skeleton active paragraph={{ rows: 2 }} title={false} />}
         </Card>
-      </DashboardWidgetFrame>)}</div>}
+      </DashboardWidgetFrame>; })}</div>}
       <div className="dashboard-widget-grid">
-        {showReportsWidget && <ReportsSliderWidget key={`reports:${orgId}:${currentUserId}`} selectedModuleIds={selectedModuleIds} selectedReportIds={preferences.reportIds} onReportSelectionChange={reportIds => updateDashboardPreferences(orgId, currentUserId, { reportIds })} />}
+        {showReportsWidget && <React.Suspense fallback={<DashboardWidgetLoading widgetId="reports_slider" title="گزارش‌ها" defaultOrder={3} />}><ReportsSliderWidget key={`reports:${orgId}:${currentUserId}`} selectedModuleIds={selectedModuleIds} selectedReportIds={preferences.reportIds} onReportSelectionChange={reportIds => updateDashboardPreferences(orgId, currentUserId, { reportIds })} /></React.Suspense>}
         {canShowWidget('my_tasks') && orgId && <MyTasksWidget key={`tasks:${orgId}:${currentUserId}`} orgId={orgId} />}
-        {showActivityCalendarWidget && <TaskCalendarWidget key={`calendar:${orgId}:${currentUserId}`} />}
-        {showOurProcessesWidget && <OurProcessesWidget key={`${orgId}:${currentUserId}`} />}
+        {showActivityCalendarWidget && <DeferredDashboardWidget widgetId="activity_calendar" title="تقویم فعالیت‌ها" defaultOrder={7} className="dashboard-wide-widget"><TaskCalendarWidget key={`calendar:${orgId}:${currentUserId}`} /></DeferredDashboardWidget>}
+        {showOurProcessesWidget && <DeferredDashboardWidget widgetId="our_processes" title="فرآیندهای ما" defaultOrder={8}><OurProcessesWidget key={`${orgId}:${currentUserId}`} /></DeferredDashboardWidget>}
         {canShowWidget('communications') && orgId && <CommunicationsWidget key={orgId} orgId={orgId} permissions={dashboardPermissions} />}
-        {canShowWidget('goals') && <DashboardWidgetFrame widgetId="goals" title="اهداف و موفقیت‌ها" defaultOrder={8} className="dashboard-goals-frame">
-          <GoalProgressSlider key={refreshRevision} placement="dashboard" hideWhenEmpty={isMobile} />
+        {canShowWidget('goals') && <DashboardWidgetFrame widgetId="goals" title="اهداف و موفقیت‌ها" defaultOrder={6} className="dashboard-goals-frame">
+          <React.Suspense fallback={<Skeleton active paragraph={{ rows: 5 }} />}><GoalProgressSlider key={refreshRevision} placement="dashboard" hideWhenEmpty={isMobile} /></React.Suspense>
         </DashboardWidgetFrame>}
         {canShowWidget('quick_add') && quickActions.length > 0 && <DashboardWidgetFrame widgetId="quick_add" title="افزودن سریع" defaultOrder={9} className="dashboard-wide-widget" settings={moduleSelection}>
-          <Card title="افزودن سریع" className="dashboard-content-card"><div className="dashboard-quick-actions">{quickActions.map(action => <Button key={action.moduleId} icon={getModuleIcon(action.moduleId)} onClick={() => navigate(`/${action.moduleId}/create`)}>{action.title}</Button>)}</div></Card>
+          <Card title="افزودن سریع" className="dashboard-content-card"><div className="dashboard-quick-actions">{quickActions.map(action => <button type="button" className="dashboard-quick-action" key={action.moduleId} onClick={() => navigate(`/${action.moduleId}/create`)}><span className="dashboard-quick-icon">{getModuleIcon(action.moduleId)}</span><span className="dashboard-quick-copy"><strong>{action.title}</strong><small>{action.description}</small></span><PlusOutlined className="dashboard-quick-plus" /></button>)}</div></Card>
         </DashboardWidgetFrame>}
         {canShowWidget('recent_lists') && recentSections.map(section => <DashboardWidgetFrame key={section.moduleId} widgetId={`recent:${section.moduleId}`} title={section.title} defaultOrder={10} settings={moduleSelection}>
           <Card className="dashboard-content-card" title={<div className="flex items-center gap-2">{getModuleIcon(section.moduleId)}<span>{section.title}</span></div>}>
@@ -1480,7 +1390,7 @@ const Dashboard: React.FC = () => {
       {/* ─── Story Modals ─── */}
       {/* ─── StoryViewerModal ─── */}
       {storyViewerOpen && storyViewerList.length > 0 && currentUserId && (
-        <StoryViewerModal
+        <React.Suspense fallback={null}><StoryViewerModal
           open={storyViewerOpen}
           stories={storyViewerList}
           initialIndex={storyViewerIndex}
@@ -1499,12 +1409,12 @@ const Dashboard: React.FC = () => {
           onTogglePin={handleTogglePin}
           onMarkViewed={handleMarkViewed}
           onReact={handleReact}
-        />
+        /></React.Suspense>
       )}
 
       {/* ─── StoryEditorModal ─── */}
       {storyEditorOpen && orgId && currentUserId && (
-        <StoryEditorModal
+        <React.Suspense fallback={null}><StoryEditorModal
           open={storyEditorOpen}
           orgId={orgId}
           currentUserId={currentUserId}
@@ -1518,7 +1428,7 @@ const Dashboard: React.FC = () => {
           onNotifySms={(storyId, text, recipientIds) => {
             notifyStorySms(storyId, text, recipientIds);
           }}
-        />
+        /></React.Suspense>
       )}
     </DashboardWidgetScope.Provider>
   );

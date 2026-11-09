@@ -16,6 +16,7 @@ type AiComposeModelBarProps = {
   fallbackCapability?: string | null;
   refreshKey?: number;
   persistedOverrides?: Record<string, string> | null;
+  compact?: boolean;
 };
 
 const resolveEffectiveCapability = (selected: Set<string>, fallbackCapability?: string | null) => {
@@ -56,6 +57,7 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
   fallbackCapability,
   refreshKey,
   persistedOverrides,
+  compact = false,
 }) => {
   const [capabilities, setCapabilities] = useState<Record<string, CapabilityModelInfo>>({});
   const [override, setOverride] = useState<string | null>(null);
@@ -115,12 +117,13 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
 
   return (
     <div className="flex items-center gap-1 text-[9px] leading-4 text-gray-400 dark:text-gray-500" dir="rtl">
-      <AiSparkleIcon className="h-2.5 w-2.5 text-[rgb(var(--brand-500-rgb))]" />
+      {!compact && <AiSparkleIcon className="h-2.5 w-2.5 text-[rgb(var(--brand-500-rgb))]" />}
       <Tooltip title={`موتور تخصصی «${effectiveCapability ? CAPABILITY_FA[effectiveCapability] || effectiveCapability : 'هوش مصنوعی'}» برای همین ارسال قابل تغییر است`}>
-        <span className="shrink-0">موتور:</span>
+        <span className={compact ? 'sr-only' : 'shrink-0'}>موتور:</span>
       </Tooltip>
       <Select
         size="small"
+        aria-label="مدل هوش مصنوعی"
         variant="borderless"
         value={value || undefined}
         options={options}

@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { Alert, App, Button, Card, Empty, Select, Spin } from 'antd';
+import { Alert, App, Button, Card, Empty, Select, Skeleton } from 'antd';
 import { LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
@@ -118,13 +118,13 @@ const ReportsSliderWidget: React.FC<Props> = ({ selectedModuleIds, selectedRepor
 
       {loadError && <Alert type="error" showIcon message="دریافت گزارش‌ها انجام نشد." action={<Button onClick={() => void loadReports()}>تلاش دوباره</Button>} />}
       {loading ? (
-        <div className="flex h-[460px] items-center justify-center"><Spin /></div>
+        <div className="dashboard-report-body" role="status" aria-label="در حال دریافت گزارش‌ها"><Skeleton active paragraph={{ rows: 6 }} /></div>
       ) : !activeReport ? (
-        <div className="flex h-[460px] items-center justify-center">
+        <div className="dashboard-report-body dashboard-widget-loading">
           <Empty description="گزارشی برای نمایش وجود ندارد" />
         </div>
       ) : (
-        <div className="flex h-[460px] flex-col">
+        <div className="dashboard-report-body">
           <div className="mb-2 flex items-start justify-between gap-2">
             <div className="min-w-0">
               <div className="truncate text-sm font-black text-gray-800 dark:text-gray-100">{activeReport.name}</div>

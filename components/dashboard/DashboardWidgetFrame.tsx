@@ -8,8 +8,9 @@ export const DashboardWidgetScope = createContext<WidgetScope>({ orgId: null, us
 type Props = React.PropsWithChildren<{
   widgetId: string; title: string; className?: string; onRefresh?: () => void;
   settings?: React.ReactNode; defaultOrder?: number;
+  containerRef?: React.RefObject<HTMLElement>;
 }>;
-export default function DashboardWidgetFrame({ widgetId, title, className = '', onRefresh, settings, defaultOrder = 0, children }: Props) {
+export default function DashboardWidgetFrame({ widgetId, title, className = '', onRefresh, settings, defaultOrder = 0, containerRef, children }: Props) {
   const scope = useContext(DashboardWidgetScope);
   const preferences = useDashboardPreferences(scope.orgId, scope.userId);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -23,7 +24,7 @@ export default function DashboardWidgetFrame({ widgetId, title, className = '', 
     [ids[index], ids[target]] = [ids[target], ids[index]];
     updateDashboardPreferences(scope.orgId, scope.userId, { widgetOrder: [...preferences.widgetOrder.filter(id => !ids.includes(id)), ...ids] });
   };
-  return <section className={`dashboard-widget-frame ${className}`} data-dashboard-widget={widgetId} aria-label={title}
+  return <section ref={containerRef} className={`dashboard-widget-frame ${className}`} data-dashboard-widget={widgetId} aria-label={title}
     hidden={preferences.hiddenWidgets.includes(widgetId)} style={{ order: order >= 0 ? order : defaultOrder + 100 }}>
     <Dropdown trigger={['click']} menu={{ items: [
       { key: 'settings', icon: <SettingOutlined />, label: 'تنظیمات ویجت', onClick: () => setSettingsOpen(true) },

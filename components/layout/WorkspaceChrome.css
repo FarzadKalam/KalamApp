@@ -3,6 +3,10 @@
 .workspace-chrome,.workspace-chrome .app-workspace-content,.workspace-chrome .layout-main-scroll{background:var(--workspace-bg)!important}
 .app-main-rail{position:fixed;inset:0 0 0 auto;width:80px;z-index:1100;display:flex;flex-direction:column;align-items:center;padding:18px 10px 12px;gap:17px;background:var(--workspace-bg);color:var(--workspace-text)}
 .app-rail-brand{display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;border:1px solid var(--workspace-line);border-radius:14px;font-size:26px;font-weight:700;line-height:1;background:var(--workspace-surface);color:rgb(var(--brand-600-rgb))}
+.app-rail-brand img{display:block;width:36px;height:36px;object-fit:contain;border-radius:9px}
+.app-drawer-brand{display:flex;align-items:center;gap:10px}
+.app-drawer-brand img{width:32px;height:32px;object-fit:contain}
+.app-module-drawer .sidebar-selected-group>.ant-menu-submenu-title{background:var(--workspace-solid)!important;color:#fff!important}
 .app-rail-links{display:flex;flex-direction:column;align-items:center;gap:4px;min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;padding:5px;background:var(--workspace-surface);border-radius:28px}
 .app-rail-item.ant-btn{width:44px!important;height:44px!important;min-width:44px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;padding:0!important;border-radius:50%;color:var(--workspace-muted);line-height:1!important}
 .app-rail-item.ant-btn .ant-btn-icon,.app-rail-item.ant-btn .anticon{margin:0!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;line-height:1!important}
