@@ -1693,7 +1693,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               shape="circle"
               icon={<ActionIcon name={isDarkMode ? 'sun' : 'moon'} />}
               onClick={toggleTheme}
-              className={`${headerActionButtonClassName} app-header-secondary-action`}
+              className={`${headerActionButtonClassName} app-header-theme-toggle`}
               title={isDarkMode ? 'حالت روشن' : 'حالت شب'}
               aria-label={isDarkMode ? 'حالت روشن' : 'حالت شب'}
             />

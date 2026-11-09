@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Empty, Grid, Modal, Popover, Skeleton, Statistic, Table, message } from 'antd';
+import { Alert, Button, Card, Checkbox, Empty, Grid, Modal, Popover, Skeleton, Statistic, Table, Typography, message } from 'antd';
 import {
   DownOutlined,
   SettingOutlined,
   CalendarOutlined,
   PlusOutlined,
+  ReadOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -12,6 +13,7 @@ import { MODULES } from '../moduleRegistry';
 import { FieldType, type ModuleDefinition } from '../types';
 import {
   DASHBOARD_PERMISSION_KEY,
+  SETTINGS_PERMISSION_KEY,
   canAccessAssignedRecord,
   fetchCurrentUserRecordAccessContext,
   isSaasAdminModuleId,
@@ -1261,6 +1263,44 @@ const Dashboard: React.FC = () => {
     }
   }, [currentUserId, orgId, storyViewerList]);
 
+  const canAccessAiPage = Boolean(communicationsAccess?.canUseWorkspace);
+  const canViewOrgKnowledge = (dashboardPermissions?.[SETTINGS_PERMISSION_KEY]?.view !== false) && (dashboardPermissions?.[SETTINGS_PERMISSION_KEY]?.fields?.ai_knowledge !== false);
+
+  const aiWidgetSettings = useMemo(() => (
+    <div className="space-y-4 py-2">
+      <Typography.Paragraph className="text-sm text-gray-600 dark:text-gray-300">
+        دسترسی‌های سریع به بخش‌های هوش مصنوعی و پایگاه دانش سازمان:
+      </Typography.Paragraph>
+      <div className="flex flex-col gap-2.5">
+        {canAccessAiPage && (
+          <Button
+            type="default"
+            icon={<AiSparkleIcon className="h-4 w-4 text-leather-600 dark:text-leather-400" />}
+            onClick={() => navigate('/ai')}
+            className="flex items-center justify-start gap-2 h-11 text-right"
+          >
+            <span>ورود به صفحهٔ گفتگوی هوش مصنوعی</span>
+          </Button>
+        )}
+        {canViewOrgKnowledge && (
+          <Button
+            type="default"
+            icon={<ReadOutlined className="text-leather-600 dark:text-leather-400" />}
+            onClick={() => navigate('/org-knowledge')}
+            className="flex items-center justify-start gap-2 h-11 text-right"
+          >
+            <span>مدیریت دانش سازمان</span>
+          </Button>
+        )}
+        {!canAccessAiPage && !canViewOrgKnowledge && (
+          <Typography.Text type="secondary" className="text-xs">
+            دسترسی به صفحات اختصاصی هوش مصنوعی یا دانش سازمان برای نقش شما فعال نیست.
+          </Typography.Text>
+        )}
+      </div>
+    </div>
+  ), [canAccessAiPage, canViewOrgKnowledge, navigate]);
+
   return (
     <DashboardWidgetScope.Provider value={widgetScope}>
     <div className="dashboard-shell" dir="rtl">
@@ -1278,8 +1318,8 @@ const Dashboard: React.FC = () => {
           <StoryBar key={storyRefreshKey} orgId={orgId} currentUserId={currentUserId} canPublish={storiesPermissions.canPublish}
             onAddStory={() => { setEditingStory(null); setStoryEditorOpen(true); }} onOpenStory={handleOpenStory} />
         </DashboardWidgetFrame>}
-        {dashboardReady && communicationsAccess.canUseWorkspace && <DashboardWidgetFrame widgetId="ai" title="دستیار هوشمند سازمان" defaultOrder={1} className="dashboard-ai-frame">
-          <Card className="dashboard-content-card" title={<span className="flex items-center gap-2"><AiSparkleIcon className="h-5 w-5" />دستیار هوشمند سازمان</span>}>
+        {dashboardReady && communicationsAccess.canUseWorkspace && <DashboardWidgetFrame widgetId="ai" title="دستیار هوشمند سازمان" defaultOrder={1} className="dashboard-ai-frame" settings={aiWidgetSettings}>
+          <Card className="dashboard-content-card">
             <AiMessageComposer value={dashboardAiQuestion} onChange={setDashboardAiQuestion} onSubmit={handleSubmitDashboardAiQuestion}
               canSubmit={!dashboardAiSendDisabled} busy={dashboardVoiceSending || dashboardFileSending} maxRows={4}
               placeholder="از دستیار هوشمند سازمان بپرسید…"
@@ -1334,15 +1374,26 @@ const Dashboard: React.FC = () => {
         </Card>
       </DashboardWidgetFrame>; })}</div>}
       <div className="dashboard-widget-grid">
-        {showReportsWidget && <React.Suspense fallback={<DashboardWidgetLoading widgetId="reports_slider" title="گزارش‌ها" defaultOrder={3} />}><ReportsSliderWidget key={`reports:${orgId}:${currentUserId}`} selectedModuleIds={selectedModuleIds} selectedReportIds={preferences.reportIds} onReportSelectionChange={reportIds => updateDashboardPreferences(orgId, currentUserId, { reportIds })} /></React.Suspense>}
+        {showReportsWidget && (
+          <React.Suspense fallback={<DashboardWidgetLoading widgetId="reports_slider" title="گزارش‌ها" defaultOrder={3} />}>
+            <ReportsSliderWidget
+              key={`reports:${orgId}:${currentUserId}`}
+              selectedModuleIds={selectedModuleIds}
+              selectedReportIds={preferences.reportIds}
+              defaultReportId={preferences.defaultReportId}
+              onReportSelectionChange={(reportIds) => updateDashboardPreferences(orgId, currentUserId, { reportIds })}
+              onDefaultReportChange={(defaultReportId) => updateDashboardPreferences(orgId, currentUserId, { defaultReportId: defaultReportId || undefined })}
+            />
+          </React.Suspense>
+        )}
         {canShowWidget('my_tasks') && orgId && <MyTasksWidget key={`tasks:${orgId}:${currentUserId}`} orgId={orgId} />}
-        {showActivityCalendarWidget && <DeferredDashboardWidget widgetId="activity_calendar" title="تقویم فعالیت‌ها" defaultOrder={7} className="dashboard-wide-widget"><TaskCalendarWidget key={`calendar:${orgId}:${currentUserId}`} /></DeferredDashboardWidget>}
-        {showOurProcessesWidget && <DeferredDashboardWidget widgetId="our_processes" title="فرآیندهای ما" defaultOrder={8}><OurProcessesWidget key={`${orgId}:${currentUserId}`} /></DeferredDashboardWidget>}
         {canShowWidget('communications') && orgId && <CommunicationsWidget key={orgId} orgId={orgId} permissions={dashboardPermissions} />}
         {canShowWidget('goals') && <DashboardWidgetFrame widgetId="goals" title="اهداف و موفقیت‌ها" defaultOrder={6} className="dashboard-goals-frame">
           <React.Suspense fallback={<Skeleton active paragraph={{ rows: 5 }} />}><GoalProgressSlider key={refreshRevision} placement="dashboard" hideWhenEmpty={isMobile} /></React.Suspense>
         </DashboardWidgetFrame>}
-        {canShowWidget('quick_add') && quickActions.length > 0 && <DashboardWidgetFrame widgetId="quick_add" title="افزودن سریع" defaultOrder={9} className="dashboard-wide-widget" settings={moduleSelection}>
+        {showActivityCalendarWidget && <DeferredDashboardWidget widgetId="activity_calendar" title="تقویم فعالیت‌ها" defaultOrder={7} className="dashboard-wide-widget"><TaskCalendarWidget key={`calendar:${orgId}:${currentUserId}`} /></DeferredDashboardWidget>}
+        {showOurProcessesWidget && <DeferredDashboardWidget widgetId="our_processes" title="فرآیندهای ما" defaultOrder={8}><OurProcessesWidget key={`${orgId}:${currentUserId}`} /></DeferredDashboardWidget>}
+        {canShowWidget('quick_add') && quickActions.length > 0 && <DashboardWidgetFrame widgetId="quick_add" title="افزودن سریع" defaultOrder={8.5} settings={moduleSelection}>
           <Card title="افزودن سریع" className="dashboard-content-card"><div className="dashboard-quick-actions">{quickActions.map(action => <button type="button" className="dashboard-quick-action" key={action.moduleId} onClick={() => navigate(`/${action.moduleId}/create`)}><span className="dashboard-quick-icon">{getModuleIcon(action.moduleId)}</span><span className="dashboard-quick-copy"><strong>{action.title}</strong><small>{action.description}</small></span><PlusOutlined className="dashboard-quick-plus" /></button>)}</div></Card>
         </DashboardWidgetFrame>}
         {canShowWidget('recent_lists') && recentSections.map(section => <DashboardWidgetFrame key={section.moduleId} widgetId={`recent:${section.moduleId}`} title={section.title} defaultOrder={10} settings={moduleSelection}>

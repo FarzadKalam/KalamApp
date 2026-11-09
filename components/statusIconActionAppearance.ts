@@ -33,8 +33,8 @@ export const getStatusIconActionStyle = ({
   position: 'relative',
   zIndex: active ? 4 : 3,
   boxShadow: active
-    ? `0 4px 12px ${color}33`
-    : (disabled ? 'none' : '0 3px 10px rgba(15, 23, 42, 0.10)'),
+    ? `0 2px 6px ${color}33`
+    : 'none',
   opacity: disabled ? 0.42 : 1,
   cursor: active ? 'default' : (disabled ? 'not-allowed' : 'pointer'),
 });

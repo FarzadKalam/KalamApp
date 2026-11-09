@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Alert, App, Button, Card, Empty, Select, Skeleton } from 'antd';
-import { LeftOutlined, RightOutlined } from '@ant-design/icons';
+import { BarChartOutlined, LeftOutlined, PlusOutlined, RightOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { normalizeReportConfig, type ReportDefinitionRecord } from '../../utils/reporting';
@@ -9,8 +9,20 @@ import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import DashboardWidgetFrame from './DashboardWidgetFrame';
 
-type Props = { selectedModuleIds?: string[]; selectedReportIds?: string[]; onReportSelectionChange?: (ids: string[]) => void };
-const ReportsSliderWidget: React.FC<Props> = ({ selectedModuleIds, selectedReportIds, onReportSelectionChange }) => {
+type Props = {
+  selectedModuleIds?: string[];
+  selectedReportIds?: string[];
+  defaultReportId?: string;
+  onReportSelectionChange?: (ids: string[]) => void;
+  onDefaultReportChange?: (id: string | null) => void;
+};
+const ReportsSliderWidget: React.FC<Props> = ({
+  selectedModuleIds,
+  selectedReportIds,
+  defaultReportId,
+  onReportSelectionChange,
+  onDefaultReportChange,
+}) => {
   const navigate = useNavigate();
   const { message } = App.useApp();
   const [loading, setLoading] = useState(true);
@@ -63,6 +75,10 @@ const ReportsSliderWidget: React.FC<Props> = ({ selectedModuleIds, selectedRepor
       setReports(allowed);
       setActiveIndex((current) => {
         if (allowed.length === 0) return 0;
+        if (defaultReportId) {
+          const match = allowed.findIndex((report) => report.id === defaultReportId);
+          if (match >= 0) return match;
+        }
         return Math.min(current, allowed.length - 1);
       });
     } catch {
@@ -79,7 +95,62 @@ const ReportsSliderWidget: React.FC<Props> = ({ selectedModuleIds, selectedRepor
     return () => { requestGeneration.current++; };
   }, [loadReports]);
 
-  const reportSettings = <Select mode="multiple" className="w-full" aria-label="گزارش‌های منتخب داشبورد" placeholder="انتخاب گزارش‌ها" options={availableReports.map(report => ({ value: report.id, label: report.name }))} value={selectedReportIds || availableReports.map(report => report.id)} onChange={onReportSelectionChange} optionFilterProp="label" />;
+  const reportSettings = (
+    <div className="space-y-4 py-2">
+      <div>
+        <div className="mb-1 text-xs font-bold text-gray-700 dark:text-gray-300">گزارش‌های فعال در اسلایدر:</div>
+        <Select
+          mode="multiple"
+          className="w-full"
+          aria-label="گزارش‌های منتخب داشبورد"
+          placeholder="انتخاب گزارش‌ها"
+          options={availableReports.map((report) => ({ value: report.id, label: report.name }))}
+          value={selectedReportIds || availableReports.map((report) => report.id)}
+          onChange={onReportSelectionChange}
+          optionFilterProp="label"
+        />
+      </div>
+
+      <div>
+        <div className="mb-1 text-xs font-bold text-gray-700 dark:text-gray-300">نمودار / گزارش پیش‌فرض:</div>
+        <Select
+          className="w-full"
+          allowClear
+          aria-label="گزارش یا نمودار پیش‌فرض"
+          placeholder="انتخاب اولین نمودار یا گزارش نمایشی"
+          options={reports.map((report) => ({ value: report.id, label: report.name }))}
+          value={defaultReportId}
+          onChange={(val) => {
+            onDefaultReportChange?.(val || null);
+            if (val) {
+              const idx = reports.findIndex((r) => r.id === val);
+              if (idx >= 0) setActiveIndex(idx);
+            }
+          }}
+          optionFilterProp="label"
+        />
+      </div>
+
+      <div className="pt-2 border-t border-gray-100 dark:border-white/10 flex flex-col gap-2">
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          onClick={() => navigate('/reports/create')}
+          className="flex items-center justify-start gap-2 h-10"
+        >
+          افزودن گزارش جدید
+        </Button>
+        <Button
+          type="default"
+          icon={<BarChartOutlined />}
+          onClick={() => navigate('/reports')}
+          className="flex items-center justify-start gap-2 h-10"
+        >
+          ورود به گزارش‌ساز و فهرست گزارش‌ها
+        </Button>
+      </div>
+    </div>
+  );
 
   if (setupMissing) {
     return (

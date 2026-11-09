@@ -3,6 +3,7 @@ import { useSyncExternalStore } from 'react';
 export type DashboardPreferences = {
   moduleIds?: string[];
   reportIds?: string[];
+  defaultReportId?: string;
   hiddenWidgets: string[];
   widgetOrder: string[];
 };
@@ -23,6 +24,7 @@ export const readDashboardPreferences = (orgId?: string | null, userId?: string 
       hiddenWidgets: strings(saved.hiddenWidgets), widgetOrder: strings(saved.widgetOrder),
       ...(Array.isArray(saved.moduleIds) ? { moduleIds: strings(saved.moduleIds).slice(0, 6) } : {}),
       ...(Array.isArray(saved.reportIds) ? { reportIds: strings(saved.reportIds) } : {}),
+      ...(typeof saved.defaultReportId === 'string' && saved.defaultReportId.length < 160 ? { defaultReportId: saved.defaultReportId } : {}),
     };
   } catch { /* Local preferences are optional; access remains authoritative. */ }
   snapshots.set(key, next);

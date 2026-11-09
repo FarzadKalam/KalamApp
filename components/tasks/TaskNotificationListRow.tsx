@@ -146,7 +146,7 @@ const TaskNotificationListRow: React.FC<TaskNotificationListRowProps> = ({
           ) : null}
         </button>
 
-        <div className={`relative z-20 flex items-center gap-0.5 ${compact ? 'col-span-2 min-w-0 max-w-full' : 'shrink-0'}`} onClick={(event) => event.stopPropagation()}>
+        <div className={`relative z-20 flex items-center gap-0.5 py-0.5 ${compact ? 'col-span-2 min-w-0 max-w-full' : 'shrink-0'}`} onClick={(event) => event.stopPropagation()}>
           <RecordLockControl
             moduleId="tasks"
             recordId={String(effectiveTask?.id || '')}

@@ -8,6 +8,7 @@ import { runSelectWithCompatibleColumns } from '../../utils/selectCompat';
 import { getTaskStatusOptions } from '../../utils/processTaskStatusOptions';
 import { TASK_RUNTIME_UPDATED_EVENT, applyTaskRuntimeUpdate, type TaskRuntimeUpdatedPayload } from '../../utils/taskRuntimeEvents';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { fetchAssigneeDirectory } from '../../utils/referenceData';
 import TaskNotificationListRow from '../tasks/TaskNotificationListRow';
 import DashboardWidgetFrame from './DashboardWidgetFrame';
 
@@ -16,6 +17,7 @@ const PAGE_SIZE = 8;
 function MyTasksWidget({ orgId }: { orgId: string }) {
   const navigate = useNavigate();
   const [rows, setRows] = useState<any[]>([]), [error, setError] = useState(''), [loading, setLoading] = useState(true);
+  const [directory, setDirectory] = useState<{ users: any[]; roles: any[] }>({ users: [], roles: [] });
   const [access, setAccess] = useState<Awaited<ReturnType<typeof fetchCurrentUserRecordAccessContext>> | null>(null);
   const [hasMore, setHasMore] = useState(false), [loadingMore, setLoadingMore] = useState(false);
   const nextOffset = useRef(0);
@@ -44,6 +46,13 @@ function MyTasksWidget({ orgId }: { orgId: string }) {
   }, [orgId]);
   useEffect(() => { void load();return () => { request.current++; }; }, [load]);
   useEffect(() => {
+    let active = true;
+    void fetchAssigneeDirectory(supabase).then((dir) => {
+      if (active) setDirectory({ users: dir.users || [], roles: dir.roles || [] });
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [orgId]);
+  useEffect(() => {
     const update = (event: Event) => { const task = (event as CustomEvent<TaskRuntimeUpdatedPayload>).detail?.task;if (!task?.id || (task.org_id && task.org_id !== orgId)) return;setRows(previous => applyTaskRuntimeUpdate(previous, task)); };
     window.addEventListener(TASK_RUNTIME_UPDATED_EVENT, update);return () => window.removeEventListener(TASK_RUNTIME_UPDATED_EVENT, update);
   }, [orgId]);
@@ -52,7 +61,11 @@ function MyTasksWidget({ orgId }: { orgId: string }) {
     <Card title="کارهای من" className="dashboard-content-card">
       {error && <Alert showIcon type="error" message={error} action={<Button onClick={() => void load()}>تلاش دوباره</Button>} />}
       {loading && !rows.length ? <div className="dashboard-widget-loading" role="status" aria-label="در حال دریافت کارهای من"><Skeleton active avatar paragraph={{ rows: 3 }} /></div> : !rows.length && !error ? <div className="dashboard-widget-loading"><Empty description="فعالیت بازی برای شما پیدا نشد." /></div> : <div className="dashboard-task-list">{rows.map(task => <TaskNotificationListRow key={task.id} task={task} compact statusOptions={getTaskStatusOptions(task)}
-        priorityOptions={MODULES.tasks?.fields.find(field => field.key === 'priority')?.options || []} currentUser={{ id: access?.userId }} readOnly={!access || access.permissions?.tasks?.edit === false}
+        priorityOptions={MODULES.tasks?.fields.find(field => field.key === 'priority')?.options || []}
+        allUsers={directory.users}
+        allRoles={directory.roles}
+        currentUser={{ id: access?.userId }}
+        readOnly={!access || access.permissions?.tasks?.edit === false}
         canViewField={key => access?.permissions?.tasks?.fields?.[key] !== false}
         onTaskUpdated={next => setRows(previous => applyTaskRuntimeUpdate(previous, next))} />)}</div>}
       <div className="dashboard-task-footer">{hasMore && <Button onClick={() => void load(true)} loading={loadingMore} disabled={loading}>مشاهده بیشتر…</Button>}<Button type="link" onClick={() => navigate('/tasks')}>مشاهدهٔ همهٔ فعالیت‌ها</Button></div>
