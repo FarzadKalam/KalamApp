@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Avatar, Button, Checkbox, Drawer, Empty, Input, Modal, Popconfirm, Popover, Progress, Space, Spin, Tag, Tooltip } from 'antd';
-import { CheckOutlined, CloseOutlined, CompressOutlined, CopyOutlined, DeleteOutlined, EditOutlined, ForwardOutlined, MenuOutlined, SendOutlined, ShareAltOutlined, UserAddOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
+import { CheckOutlined, CloseOutlined, CompressOutlined, CopyOutlined, DeleteOutlined, EditOutlined, ForwardOutlined, MenuOutlined, ShareAltOutlined, UserAddOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
@@ -25,7 +25,7 @@ import { resolveAiAttachmentUrl } from './AiMessageAttachmentPreview';
 import { blobToBase64 } from '../../utils/blobBase64';
 import { buildAiRecordCreationSchema, buildAiRecordModuleOptions } from '../../utils/aiRecordCreation';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
-import { shouldSubmitComposerOnEnter } from '../../utils/composeKeyboard';
+import AiMessageComposer from './AiMessageComposer';
 import { buildSmartAiThreadTitle } from '../../utils/aiThreadTitle';
 import { resolveModalPopupContainer } from '../../utils/popupContainer';
 import MessageAttachmentGallery from '../messaging/MessageAttachmentGallery';
@@ -3279,7 +3279,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         )}
       </div>
 
-      <div className="max-h-[48vh] shrink-0 overflow-y-auto border-t border-slate-200/65 bg-white/95 px-3 py-2.5 dark:border-white/[0.07] dark:bg-[#17191c]">
+      <div className="ai-assistant-composer-region">
         {pendingAiAction ? (
           <div className="mb-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950 shadow-sm dark:border-amber-400/20 dark:bg-[#241a0d] dark:text-amber-100">
             <div className="flex flex-wrap items-start justify-between gap-2">
@@ -3412,6 +3412,50 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             </Space>
           </div>
         ) : null}
+        <AiMessageComposer value={input} onChange={setInput}
+          onSubmit={() => void (shouldUseTaskBundle ? submitTaskBundle() : documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat())}
+          canSubmit={Boolean(input.trim() || bundleInputs.length)} busy={submitting || generatingImage || generatingVoiceOutput || generatingVideo || generatingDocument}
+          placeholder="سوال خود را بنویسید..."
+          sendLabel={shouldUseTaskBundle ? 'ارسال' : documentMode ? 'ساخت فایل' : videoMode ? 'ساخت ویدیو' : voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : activeRecordCreationSchema ? 'آماده‌سازی پیش‌نویس' : 'ارسال'}
+          tools={<AiCapabilityComposerActions
+            selected={selectedCapabilities}
+            autoSuggested={autoSuggestedCapabilities}
+            onChange={handleComposerCapabilitiesChange}
+            capabilityAvailability={capabilityAvailability}
+            loading={submitting || generatingImage || generatingVoiceOutput || generatingVideo || generatingDocument}
+            moduleId={fileRecordScope.moduleId}
+            recordId={fileRecordScope.recordId}
+            onVoiceSend={queueVoiceInput}
+            onFilePrepared={queueUploadedFile}
+            onFilesPrepared={queueUploadedFiles}
+            voiceLoading={submitting}
+            fileLoading={submitting}
+            allowMultipleFiles
+            size="small"
+            recordCreationModuleOptions={recordCreationModuleOptions}
+            recordCreationTargetModuleId={recordCreationTargetModuleId}
+            onRecordCreationTargetModuleChange={setRecordCreationTargetModuleId}
+            mediaSettings={mediaSettings}
+            onMediaSettingsChange={setMediaSettings}
+            mediaModelId={activeMediaModelId}
+            onApplyPrompt={(text) => setInput((prev) => (String(prev || '').trim() ? `${prev}\n${text}` : text))}
+          />} model={<AiComposeModelBar compact
+            selectedCapabilities={selectedCapabilities}
+            fallbackCapability={contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat'}
+            persistedOverrides={modelOverrides}
+            onModelOverrideChange={(model, capability) => {
+              modelOverrideRef.current = model;
+              const key = String(capability || '').trim();
+              if (key) {
+                setModelOverrides((prev) => {
+                  if (model) return { ...prev, [key]: model };
+                  const next = { ...prev };
+                  delete next[key];
+                  return next;
+                });
+              }
+            }}
+          />}>
         {imageEditSourceUrl ? (
           <div className="mb-2 flex items-center gap-2 rounded-lg border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.7)] p-1.5 ps-2 text-[11px] text-gray-600 dark:border-white/10 dark:bg-white/5 dark:text-gray-300">
             <img src={imageEditSourceUrl} alt="مبنای اصلاح" className="h-8 w-8 rounded object-cover" />
@@ -3436,73 +3480,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               ) : null)}
           </div>
         ) : null}
-        <Input.TextArea
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onPressEnter={(event) => {
-            if (!shouldSubmitComposerOnEnter(event)) return;
-            event.preventDefault();
-            void (shouldUseTaskBundle ? submitTaskBundle() : documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat());
-          }}
-          placeholder="سوال خود را بنویسید..."
-          autoSize={{ minRows: 1, maxRows: 8 }}
-          className="!rounded-2xl !border-slate-200/70 !bg-slate-50/85 !px-3 !py-2 !text-[12px] !leading-6 !shadow-none dark:!border-white/[0.08] dark:!bg-white/[0.045]"
-        />
-        <div className="mt-1">
-          <AiComposeModelBar
-            selectedCapabilities={selectedCapabilities}
-            fallbackCapability={contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat'}
-            persistedOverrides={modelOverrides}
-            onModelOverrideChange={(model, capability) => {
-              modelOverrideRef.current = model;
-              const key = String(capability || '').trim();
-              if (key) {
-                setModelOverrides((prev) => {
-                  if (model) return { ...prev, [key]: model };
-                  const next = { ...prev };
-                  delete next[key];
-                  return next;
-                });
-              }
-            }}
-          />
-        </div>
-        <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
-          <AiCapabilityComposerActions
-            selected={selectedCapabilities}
-            autoSuggested={autoSuggestedCapabilities}
-            onChange={handleComposerCapabilitiesChange}
-            capabilityAvailability={capabilityAvailability}
-            loading={submitting || generatingImage || generatingVoiceOutput || generatingVideo || generatingDocument}
-            moduleId={fileRecordScope.moduleId}
-            recordId={fileRecordScope.recordId}
-            onVoiceSend={queueVoiceInput}
-            onFilePrepared={queueUploadedFile}
-            onFilesPrepared={queueUploadedFiles}
-            voiceLoading={submitting}
-            fileLoading={submitting}
-            allowMultipleFiles
-            size="small"
-            recordCreationModuleOptions={recordCreationModuleOptions}
-            recordCreationTargetModuleId={recordCreationTargetModuleId}
-            onRecordCreationTargetModuleChange={setRecordCreationTargetModuleId}
-            mediaSettings={mediaSettings}
-            onMediaSettingsChange={setMediaSettings}
-            mediaModelId={activeMediaModelId}
-            onApplyPrompt={(text) => setInput((prev) => (String(prev || '').trim() ? `${prev}\n${text}` : text))}
-          />
-          <Button
-            type="primary"
-            icon={<SendOutlined />}
-            className="shrink-0"
-            loading={shouldUseTaskBundle ? submitting : documentMode ? generatingDocument : videoMode ? generatingVideo : voiceOutputMode ? generatingVoiceOutput : imageMode ? generatingImage : submitting}
-            disabled={!input.trim() && bundleInputs.length === 0}
-            onClick={() => void (shouldUseTaskBundle ? submitTaskBundle() : documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat())}
-            size="small"
-          >
-            {shouldUseTaskBundle ? 'ارسال' : documentMode ? 'ساخت فایل' : videoMode ? 'ساخت ویدیو' : voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : activeRecordCreationSchema ? 'آماده‌سازی پیش‌نویس' : 'ارسال'}
-          </Button>
-        </div>
+        </AiMessageComposer>
       </div>
       {pendingRecordMutationType && pendingAiAction ? (
         <QuickRecordFormModal

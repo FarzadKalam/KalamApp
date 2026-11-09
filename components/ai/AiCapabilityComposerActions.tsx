@@ -1,4 +1,6 @@
-import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useContext, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { AiComposerSlots } from './AiComposerSlots';
 import { Button, Checkbox, Drawer, Grid, Popover, Select, Space, Tag, Tooltip } from 'antd';
 import type { ButtonProps } from 'antd';
 import {
@@ -6,6 +8,7 @@ import {
   FileSearchOutlined,
   GlobalOutlined,
   PlusOutlined,
+  CloseOutlined,
   SafetyCertificateOutlined,
   ThunderboltOutlined,
   PictureOutlined,
@@ -134,12 +137,13 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   const [promptModalOpen, setPromptModalOpen] = useState(false);
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
+  const slots = useContext(AiComposerSlots);
   const selectedSet = useMemo(() => new Set(selected), [selected]);
   const autoMode = selectedSet.size === 0;
   const autoSuggestedSet = useMemo(() => new Set(autoSuggested), [autoSuggested]);
   const actionSize = size || 'small';
-  const iconActionClass = '!flex !h-7 !w-7 !items-center !justify-center !rounded-lg !p-0';
-  const capabilityTagClass = 'm-0 !inline-flex !h-7 !items-center !rounded-md !px-2 !text-[11px]';
+  const iconActionClass = 'ai-composer-icon';
+  const capabilityTagClass = 'ai-composer-selection';
   const effectiveSelected = autoMode && autoSuggested.length > 0 ? autoSuggested : selected;
   const effectiveSelectedSet = useMemo(() => new Set(effectiveSelected), [effectiveSelected]);
   // Only one media-generation capability is active at a time.
@@ -217,14 +221,43 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
     </div>
   );
 
+  const selectionTags = (
+      <Space size={[4, 4]} wrap>
+        {autoMode && !slots.embedded ? (
+          <Tag className={capabilityTagClass} title="تصمیم‌گیری خودکار" icon={compact ? <ThunderboltOutlined /> : undefined}>{compact ? <span className="sr-only">تصمیم‌گیری خودکار</span> : 'تصمیم‌گیری خودکار'}</Tag>
+        ) : null}
+        {effectiveSelected
+          .filter((key) => CAPABILITY_META.some((item) => item.key === key))
+          .map((key) => {
+            const meta = CAPABILITY_META.find((item) => item.key === key);
+            if (!meta) return null;
+            return (
+              <Tag
+                key={key}
+                color={autoMode ? 'processing' : undefined}
+                closable={!autoMode}
+                closeIcon={<button type="button" aria-label={`حذف ${meta.label}`}><CloseOutlined /></button>}
+                onClose={(event) => {
+                  event.preventDefault();
+                  setCapability(key, false);
+                }}
+                className={capabilityTagClass}
+              >
+                {autoMode ? `تشخیص: ${meta.label}` : meta.label}
+              </Tag>
+            );
+          })}
+      </Space>
+  );
+
   const triggerButton = (
-    <Tooltip title="انتخاب عملکرد هوش مصنوعی">
-      <Button icon={<PlusOutlined />} disabled={disabled || loading} size={actionSize} className={iconActionClass} onClick={() => handleOpenChange(true)} aria-label="انتخاب عملکرد هوش مصنوعی" />
+    <Tooltip title={autoMode ? 'ابزارها؛ انتخاب خودکار فعال است' : 'انتخاب عملکرد هوش مصنوعی'}>
+      <Button type="text" icon={<PlusOutlined />} disabled={disabled || loading} size={actionSize} className={iconActionClass} onClick={() => handleOpenChange(true)} aria-label="انتخاب عملکرد هوش مصنوعی" aria-expanded={open} />
     </Tooltip>
   );
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5" dir="rtl">
+    <div className="ai-composer-actions" dir="rtl">
       {isMobile ? (
         <>
           {triggerButton}
@@ -260,31 +293,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
         </Popover>
       )}
 
-      <Space size={[4, 4]} wrap>
-        {autoMode ? (
-          <Tag className={capabilityTagClass} title="تصمیم‌گیری خودکار" icon={compact ? <ThunderboltOutlined /> : undefined}>{compact ? <span className="sr-only">تصمیم‌گیری خودکار</span> : 'تصمیم‌گیری خودکار'}</Tag>
-        ) : null}
-        {effectiveSelected
-          .filter((key) => CAPABILITY_META.some((item) => item.key === key))
-          .map((key) => {
-            const meta = CAPABILITY_META.find((item) => item.key === key);
-            if (!meta) return null;
-            return (
-              <Tag
-                key={key}
-                color={autoMode ? 'processing' : undefined}
-                closable={!autoMode}
-                onClose={(event) => {
-                  event.preventDefault();
-                  setCapability(key, false);
-                }}
-                className={capabilityTagClass}
-              >
-                {autoMode ? `تشخیص: ${meta.label}` : meta.label}
-              </Tag>
-            );
-          })}
-      </Space>
+      {slots.embedded ? (slots.selections ? createPortal(selectionTags, slots.selections) : null) : selectionTags}
 
       {activeMediaCapability && onMediaSettingsChange ? (
         <AiMediaSettingsPopover
@@ -293,6 +302,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
           onSettingsChange={onMediaSettingsChange}
           disabled={disabled || loading}
           size={actionSize}
+          iconOnly
           modelId={mediaModelId}
         />
       ) : null}
@@ -301,7 +311,9 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
         <>
           <Tooltip title="پرامپت‌های آماده">
             <Button
+              type="text"
               icon={<SnippetsOutlined />}
+              aria-label="پرامپت‌های آماده"
               size={actionSize}
               className={iconActionClass}
               disabled={disabled || loading}
@@ -329,10 +341,11 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
       ) : null}
 
       {(selectedSet.has('voice_input') || autoMode) && isCapabilityUsable(capabilityAvailability, 'voice_input') ? (
-        <AiVoiceRecorder disabled={disabled} loading={voiceLoading} size={actionSize} className={iconActionClass} onSend={onVoiceSend} />
+        <AiVoiceRecorder buttonType="text" disabled={disabled} loading={voiceLoading} size={actionSize} className={iconActionClass} onSend={onVoiceSend} />
       ) : null}
 
       <AiFileUploadButton
+        buttonType="text"
         disabled={disabled}
         loading={fileLoading}
         onPrepared={onFilePrepared}

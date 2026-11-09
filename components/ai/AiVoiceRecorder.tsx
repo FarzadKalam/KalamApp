@@ -1,5 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { App, Button, Space, Tooltip } from 'antd';
+import React, { useContext, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { AiComposerSlots } from './AiComposerSlots';
+import { App, Button, Tooltip } from 'antd';
 import type { ButtonProps } from 'antd';
 import { AudioOutlined, CloseOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
@@ -30,6 +32,7 @@ type AiVoiceRecorderProps = {
   loading?: boolean;
   size?: ButtonProps['size'];
   className?: string;
+  buttonType?: ButtonProps['type'];
   onSend: (voice: RecordedVoice) => void | Promise<void>;
 };
 
@@ -40,7 +43,9 @@ const formatSeconds = (ms: number) => {
   return `${minutes.toLocaleString('fa-IR')}:${seconds.toString().padStart(2, '0')}`;
 };
 
-const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loading = false, size, className, onSend }) => {
+const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loading = false, size, className, buttonType, onSend }) => {
+  const slots = useContext(AiComposerSlots);
+  const renderTransient = (node: React.ReactNode) => slots.transient ? createPortal(node, slots.transient) : node;
   const { message } = App.useApp();
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -182,24 +187,24 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
   };
 
   if (recorded) {
-    return (
-      <Space size={4} className="shrink-0 rounded-lg border border-blue-100 bg-blue-50 px-2 py-1 dark:border-blue-900/50 dark:bg-blue-900/20">
-        <div className="w-[min(72vw,320px)]">
+    return renderTransient(
+      <div className="ai-voice-preview">
+        <div className="ai-voice-preview-player">
           <AiAudioPlayer src={recordedUrl} title="فایل صوتی آماده ارسال" subtitle={formatSeconds(recorded.durationMs)} downloadName={recorded.filename} compact />
         </div>
         <Tooltip title="حذف فایل صوتی">
-          <Button size="small" type="text" icon={<CloseOutlined />} onClick={discard} disabled={loading} />
+          <Button size="small" type="text" aria-label="حذف فایل صوتی" icon={<CloseOutlined />} onClick={discard} disabled={loading} />
         </Tooltip>
         <Tooltip title="ارسال فایل صوتی">
-          <Button size="small" type="primary" icon={<SendOutlined />} loading={loading} onClick={() => void send()} />
+          <Button size="small" type="primary" aria-label="ارسال فایل صوتی" icon={<SendOutlined />} loading={loading} onClick={() => void send()} />
         </Tooltip>
-      </Space>
+      </div>
     );
   }
 
   if (recording) {
-    return (
-      <div className={[className, 'flex min-h-11 w-full min-w-[220px] items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 dark:border-red-900/60 dark:bg-red-950/30'].filter(Boolean).join(' ')}>
+    return renderTransient(
+      <div className="flex min-h-11 w-full min-w-0 items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 dark:border-red-900/60 dark:bg-red-950/30">
         <Button
           danger
           type="primary"
@@ -229,6 +234,8 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
   return (
     <Tooltip title={recording ? 'توقف ضبط فایل صوتی' : 'ضبط فایل صوتی'}>
       <Button
+        type={buttonType}
+        aria-label="ضبط فایل صوتی"
         icon={recording ? <StopOutlined /> : <AudioOutlined />}
         danger={recording}
         disabled={disabled || loading}

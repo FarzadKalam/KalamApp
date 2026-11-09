@@ -54,6 +54,7 @@ type AiMediaSettingsPopoverProps = {
   onSettingsChange: (next: AiMediaSettings) => void;
   disabled?: boolean;
   size?: ButtonProps['size'];
+  iconOnly?: boolean;
   /** The selected media model. When omitted, the organization's default is used. */
   modelId?: string | null;
 };
@@ -137,6 +138,7 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
   onSettingsChange,
   disabled = false,
   size,
+  iconOnly = false,
   modelId,
 }) => {
   const screens = Grid.useBreakpoint();
@@ -476,8 +478,8 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
 
   const renderTriggerButton = (onClick?: () => void) => (
     <Tooltip title="تنظیمات تولید رسانه">
-      <Button size={size} disabled={disabled} icon={<SettingOutlined />} onClick={onClick}>
-        تنظیمات
+      <Button size={size} type={iconOnly ? 'text' : undefined} className={iconOnly ? 'ai-composer-icon' : undefined} aria-label="تنظیمات تولید رسانه" disabled={disabled} icon={<SettingOutlined />} onClick={onClick}>
+        {iconOnly ? null : 'تنظیمات'}
       </Button>
     </Tooltip>
   );

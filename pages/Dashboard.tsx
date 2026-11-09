@@ -1,11 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Empty, Grid, Input, Modal, Popover, Skeleton, Statistic, Table, message } from 'antd';
+import { Alert, Button, Card, Checkbox, Empty, Grid, Modal, Popover, Skeleton, Statistic, Table, message } from 'antd';
 import {
   DownOutlined,
   SettingOutlined,
   CalendarOutlined,
   PlusOutlined,
-  SendOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -59,7 +58,7 @@ import { blobToBase64 } from '../utils/blobBase64';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import AiSparkleIcon from '../components/ai/AiSparkleIcon';
 import { buildAiRecordModuleOptions } from '../utils/aiRecordCreation';
-import { shouldSubmitComposerOnEnter } from '../utils/composeKeyboard';
+import AiMessageComposer from '../components/ai/AiMessageComposer';
 import { isWorkflowVirtualField } from '../utils/moduleFieldVisibility';
 
 const GoalProgressSlider = React.lazy(() => import('../components/goals/GoalProgressSlider'));
@@ -1281,33 +1280,11 @@ const Dashboard: React.FC = () => {
         </DashboardWidgetFrame>}
         {dashboardReady && communicationsAccess.canUseWorkspace && <DashboardWidgetFrame widgetId="ai" title="دستیار هوشمند سازمان" defaultOrder={1} className="dashboard-ai-frame">
           <Card className="dashboard-content-card" title={<span className="flex items-center gap-2"><AiSparkleIcon className="h-5 w-5" />دستیار هوشمند سازمان</span>}>
-                              <div className="flex min-w-0 items-center gap-2">
-                    <Input.TextArea
-                      variant="borderless"
-                      value={dashboardAiQuestion}
-                      onChange={(event) => setDashboardAiQuestion(event.target.value)}
-                      onPressEnter={(event) => {
-                        if (!shouldSubmitComposerOnEnter(event, isMobile)) return;
-                        event.preventDefault();
-                        handleSubmitDashboardAiQuestion();
-                      }}
-                      placeholder="از دستیار هوشمند سازمان بپرسید..."
-                      autoSize={{ minRows: 1, maxRows: 4 }}
-                      className="min-w-0 flex-1 !leading-6"
-                    />
-                    <Button
-                      type="primary"
-                      shape="circle"
-                      icon={<SendOutlined />}
-                      size="small"
-                      disabled={dashboardAiSendDisabled}
-                      onClick={handleSubmitDashboardAiQuestion}
-                      aria-label={dashboardVideoMode ? 'ساخت ویدیو با هوش مصنوعی' : dashboardVoiceOutputMode ? 'تولید صدا با هوش مصنوعی' : dashboardImageMode ? 'ساخت تصویر با هوش مصنوعی' : 'ارسال پیام به هوش مصنوعی'}
-                    />
-                  </div>
-                  <div className="dashboard-compose-toolbar">
-                    <div className="dashboard-compose-actions">
-                    <AiCapabilityComposerActions
+            <AiMessageComposer value={dashboardAiQuestion} onChange={setDashboardAiQuestion} onSubmit={handleSubmitDashboardAiQuestion}
+              canSubmit={!dashboardAiSendDisabled} busy={dashboardVoiceSending || dashboardFileSending} maxRows={4}
+              placeholder="از دستیار هوشمند سازمان بپرسید…"
+              sendLabel={dashboardVideoMode ? 'ساخت ویدیو با هوش مصنوعی' : dashboardVoiceOutputMode ? 'تولید صدا با هوش مصنوعی' : dashboardImageMode ? 'ساخت تصویر با هوش مصنوعی' : 'ارسال پیام به هوش مصنوعی'}
+              tools={<AiCapabilityComposerActions
                       compact={isMobile}
                       selected={dashboardAiCapabilities}
                       onChange={handleDashboardCapabilitiesChange}
@@ -1327,10 +1304,7 @@ const Dashboard: React.FC = () => {
                       mediaSettings={dashboardMediaSettings}
                       onMediaSettingsChange={setDashboardMediaSettings}
                       mediaModelId={dashboardMediaModelId}
-                    />
-                  </div>
-                  <div className="dashboard-compose-model">
-                    <AiComposeModelBar
+                    />} model={<AiComposeModelBar
                       compact
                       selectedCapabilities={dashboardAiCapabilities}
                       fallbackCapability="dashboard_chat"
@@ -1346,9 +1320,7 @@ const Dashboard: React.FC = () => {
                           return next;
                         });
                       }}
-                    />
-                  </div>
-                  </div>
+                    />} />
           </Card>
         </DashboardWidgetFrame>}
       </div>
