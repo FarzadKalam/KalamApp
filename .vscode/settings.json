@@ -2,13 +2,29 @@
   "typescript.tsserver.maxTsServerMemory": 768,
   "typescript.tsserver.enableProjectDiagnostics": false,
   "typescript.disableAutomaticTypeAcquisition": true,
+  "python.analysis.exclude": [
+    "**/node_modules/**",
+    "**/tmp/**",
+    "**/dist/**",
+    "**/.git/**",
+    "**/.venv/**",
+    "**/venv/**",
+    "**/__pycache__/**",
+    "**/coverage/**",
+    "installer/output/**",
+    "installer/staging/**"
+  ],
+  "python.analysis.diagnosticMode": "openFilesOnly",
   "files.watcherExclude": {
     "**/.git/**": true,
     "**/node_modules/**": true,
     "**/dist/**": true,
     "**/coverage/**": true,
     "**/.vite/**": true,
-    "**/tmp/**": true
+    "**/tmp/**": true,
+    "**/__pycache__/**": true,
+    "**/installer/output/**": true,
+    "**/installer/staging/**": true
   },
   "search.exclude": {
     "**/node_modules": true,
