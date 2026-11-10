@@ -31,7 +31,8 @@ export type AiComposerAgentId = typeof AI_COMPOSER_AGENT_IDS[number];
 const ALIASES: Record<string, AiAgentId> = { auto_router: 'auto_decision', dashboard_chat: 'text_chat', record_chat: 'text_chat' };
 export function resolveAiAgentId(value: unknown): AiAgentId {
   const key = String(value || '').trim();
-  return Object.prototype.hasOwnProperty.call(AI_AGENTS, key) ? key as AiAgentId : ALIASES[key] || 'auto_decision';
+  return Object.prototype.hasOwnProperty.call(AI_AGENTS, key) ? key as AiAgentId
+    : Object.prototype.hasOwnProperty.call(ALIASES, key) ? ALIASES[key] : 'auto_decision';
 }
 export const getAiAgent = (id: unknown) => AI_AGENTS[resolveAiAgentId(id)];
 export const getAiAgentLabel = (id: unknown) => getAiAgent(id).label;

@@ -6,6 +6,8 @@ describe('shared AI agent contract', () => {
     expect(resolveAiAgentId('dashboard_chat')).toBe('text_chat');
     expect(resolveAiAgentId('auto_router')).toBe('auto_decision');
     expect(getAiAgentLabel('private-unknown-key')).toBe('ایجنت راهبر');
+    expect(getAiAgentLabel('constructor')).toBe('ایجنت راهبر');
+    expect(getAiAgentLabel('__proto__')).toBe('ایجنت راهبر');
     for (const agent of Object.values(AI_AGENTS)) expect(agent.label).toMatch(/^ایجنت /);
   });
   it('tracks parallel observed work without dropping another agent or accepting unknown events', () => {
