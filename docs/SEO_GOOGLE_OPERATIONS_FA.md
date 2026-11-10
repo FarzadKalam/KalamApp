@@ -13,10 +13,11 @@
 
 ### معرفی استودیوی جدید استوری در صفحه تازه‌ها — 2026-11-10
 
-- وضعیت: تغییرات نسخهٔ `2.118.0.0.0` آمادهٔ انتشار از طریق CI/CD است (build محلی به‌دلیل محدودیت حافظه سیستم اجرا نشده و تأیید دامنهٔ واقعی پس از تکمیل CI/CD انجام می‌شود).
+- وضعیت: نسخهٔ `2.118.0.0.0` از commit `51e5f6e` با [CI/CD موفق شمارهٔ 42903077002](https://github.com/FarzadKalam/KalamApp/actions/runs/42903077002) منتشر شد (`ci` و `deploy` موفق؛ build محلی اجرا نشد).
 - تغییر محتوای عمومی: معرفی قابلیت‌های نسخهٔ `2.118.0.0.0` (بازطراحی بوم تعاملی استوری، اسلاید ویدیویی و استیکر صدا، منشن همکاران با اعلان سیستم، پاک‌سازی خودکار رسانه پس از انقضا و استوری رسمی تازه سیستم) به صفحهٔ `/updates` در `pages/PublicSite.tsx` و `.version-changes.json` اضافه شد.
-- بررسی محلی بدون build: `npx tsc --noEmit` با کد خروج `0`، آزمون‌های `storyStudio.test.ts`، `internalNoteAccess.test.ts`، `workflowRuntime.test.ts` و آزمون‌های محافظ SEO (`preserve-public-seo.test.mjs` و `public-brand-seo.test.mjs`) موفق بوده‌اند.
-- اقدام بعدی: پس از اجرای کامل CI/CD، بررسی سلامت `/updates`، `index.html`، `sw.js` و `version.json` روی دامنهٔ واقعی با هدر `no-cache, no-store, must-revalidate`. وضعیت Search Console همچنان در انتظار اقدام مالک است.
+- بررسی محلی بدون build: `npx tsc --noEmit` با کد خروج `0`، آزمون‌های `storyStudio.test.ts` (۶ آزمون با mock کلاینت)، `internalNoteAccess.test.ts`، `workflowRuntime.test.ts`، `uiNotificationOverlayStore.test.ts`، `UploadProgressOverlay.test.tsx`، `SidebarMenu.test.tsx`، `AttachmentSourceButton.test.tsx` و آزمون‌های محافظ SEO (`preserve-public-seo.test.mjs` و `public-brand-seo.test.mjs`) پاس شدند.
+- شواهد دامنهٔ واقعی: در هر دو دامنهٔ `tazesystem.ir` و `kalam.tazesystem.ir` مسیرهای `index.html`، `sw.js` و `version.json` و همچنین `/updates` پاسخ HTTP 200 با `Cache-Control: no-cache, no-store, must-revalidate` دارند؛ `sw.js` دارای `const CACHE_VERSION = 'v2.118.0.0.0';` بدون token خام و `version.json` برابر `2.118.0.0.0` است.
+- اقدام بعدی: اجرای `database_v1_phase573_story_studio_and_lifecycle.sql` و استقرار Edge Function `workflow-interval-runner` پس از تأیید صریح کاربر؛ وضعیت Search Console همچنان در انتظار اقدام مالک است.
 
 ### معرفی برند در نتیجه جستجو — 2026-11-03
 
