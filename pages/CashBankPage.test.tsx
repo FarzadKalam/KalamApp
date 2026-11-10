@@ -29,7 +29,7 @@ describe('cash and bank report', () => {
     mock.rpc.mockImplementation(async (name: string) => name === 'get_cash_bank_unified_ledger_page' && failed
       ? { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }
       : { data: name === 'get_cash_bank_dashboard_stats' ? {} : { rows: [{ row_key: 'recovered', amount: 100 }], total: 1 }, error: null });
-    render(<App><CashBankPage /></App>);
+    await act(async () => { render(<App><CashBankPage /></App>); });
     await screen.findByRole('button', { name: 'تلاش دوباره' });
     expect(mock.table.dataSource).toHaveLength(0);
     failed = false;

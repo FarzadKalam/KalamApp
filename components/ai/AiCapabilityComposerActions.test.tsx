@@ -3,6 +3,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import AiCapabilityComposerActions from './AiCapabilityComposerActions';
 
+vi.mock('../../supabaseClient', () => ({ supabase: {} }));
+
 describe('AiCapabilityComposerActions', () => {
   afterEach(() => cleanup());
 
