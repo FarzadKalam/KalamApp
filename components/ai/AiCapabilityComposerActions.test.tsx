@@ -3,7 +3,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import AiCapabilityComposerActions from './AiCapabilityComposerActions';
 
-vi.mock('../../supabaseClient', () => ({ supabase: {} }));
+vi.mock('../../supabaseClient', () => ({
+  supabase: {}, supabasePublic: {}, supabaseSignUpClient: {},
+  SUPABASE_URL: 'https://supabase.invalid', SUPABASE_ANON_KEY: 'isolated-test-only',
+  SUPABASE_AUTH_STORAGE_KEY: 'isolated-ai-test',
+}));
 
 describe('AiCapabilityComposerActions', () => {
   afterEach(() => cleanup());

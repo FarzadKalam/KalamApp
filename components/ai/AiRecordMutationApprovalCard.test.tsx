@@ -3,7 +3,11 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import AiRecordMutationApprovalCard from './AiRecordMutationApprovalCard';
 
-vi.mock('../../supabaseClient', () => ({ supabase: {} }));
+vi.mock('../../supabaseClient', () => ({
+  supabase: {}, supabasePublic: {}, supabaseSignUpClient: {},
+  SUPABASE_URL: 'https://supabase.invalid', SUPABASE_ANON_KEY: 'isolated-test-only',
+  SUPABASE_AUTH_STORAGE_KEY: 'isolated-ai-test',
+}));
 
 vi.mock('../../moduleRegistry', () => ({
   MODULES: {
