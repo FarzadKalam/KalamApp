@@ -213,7 +213,7 @@ describe('AiChatSurfaceV2', () => {
     expect(invokeMock.mock.calls.some((call) => call[1]?.body?.action === 'get_thread' && call[1]?.body?.threadId === 'thread-1')).toBe(false);
   }, 15000);
 
-  it('shows observed parallel agent activity before metadata and clears it after the final answer', async () => {
+  it('shows parallel activity before metadata and retains its honest history after the answer', async () => {
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     const encoder=new TextEncoder();
     fetchMock.mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({start(value){controller=value;}}),{headers:{'Content-Type':'text/event-stream'}}));
@@ -224,15 +224,18 @@ describe('AiChatSurfaceV2', () => {
     const send=(event:string,payload:unknown)=>act(async()=>{controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`));});
     await send('agent_activity',{agentId:'organization_data',phase:'started',at:1});
     await send('agent_activity',{agentId:'organization_knowledge',phase:'started',at:2});
-    expect(await screen.findByText('در حال بررسی اطلاعات واقعی سازمان…')).toBeInTheDocument();
-    expect(await screen.findByText('در حال بررسی دانش سازمان…')).toBeInTheDocument();
+    expect(await screen.findByText(/در حال بررسی اطلاعات واقعی سازمان/)).toBeInTheDocument();
+    expect(await screen.findByText(/در حال بررسی دانش سازمان/)).toBeInTheDocument();
     await send('agent_activity',{agentId:'organization_data',phase:'completed',at:3});
-    await waitFor(()=>expect(screen.queryByText('در حال بررسی اطلاعات واقعی سازمان…')).not.toBeInTheDocument());
-    expect(screen.getByText('در حال بررسی دانش سازمان…')).toBeInTheDocument();
+    await waitFor(()=>expect(screen.queryByText(/در حال بررسی اطلاعات واقعی سازمان/)).not.toBeInTheDocument());
+    expect(screen.getByText(/در حال بررسی دانش سازمان/)).toBeInTheDocument();
     await send('done',{success:true,threadId:'new-thread',messageId:'answer-1',answer:'گزارش آماده است'});
     await act(async()=>controller.close());
     expect(await screen.findByText('گزارش آماده است')).toBeInTheDocument();
-    expect(screen.queryByText('در حال بررسی دانش سازمان…')).not.toBeInTheDocument();
+    expect(screen.queryByText(/در حال بررسی دانش سازمان/)).not.toBeInTheDocument();
+    expect(document.querySelectorAll('.ai-execution-timeline li')).toHaveLength(2);
+    expect(document.querySelectorAll('.ai-execution-timeline li[data-state="running"]')).toHaveLength(0);
+    expect(screen.getByText(/مرحله ناتمام است/)).toBeInTheDocument();
   },15000);
 
   it('does not auto-submit when a dashboard file is only queued for the new conversation', async () => {

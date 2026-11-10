@@ -2484,6 +2484,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       created_at: new Date().toISOString(),
       metadata: {
         pending_status: true,
+        live_task_bundle: true,
         capabilities: effectiveCapabilities.length > 0 ? effectiveCapabilities : ['auto_router'],
         kind: 'document_analysis',
         started_at: Date.now(),
@@ -2949,7 +2950,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         <div className={`ai-chat-message-column ${isUser ? 'is-user items-end' : 'items-start'} flex flex-col`}>
           {isUser && item.metadata?.input_kind === 'guidance' ? <span className="ai-chat-meta">هدایت پاسخ</span> : null}
           {!isUser && executionEvents.length > 0 ? <AiExecutionTimeline events={executionEvents} running={isStreaming || waitingForResponse} /> : null}
-          {pendingKind ? (
+          {pendingKind && !(pendingKind === 'document_analysis' && item.metadata?.live_task_bundle && executionEvents.length > 0) ? (
             <AiGenerationStatusCard
               kind={pendingKind}
               startedAtMs={Number(item.metadata?.started_at) || Date.now()}
