@@ -1320,7 +1320,7 @@ const Dashboard: React.FC = () => {
         </DashboardWidgetFrame>}
         {dashboardReady && communicationsAccess.canUseWorkspace && <DashboardWidgetFrame widgetId="ai" title="دستیار هوشمند سازمان" defaultOrder={1} className="dashboard-ai-frame" settings={aiWidgetSettings}>
           <Card className="dashboard-content-card">
-            <AiMessageComposer value={dashboardAiQuestion} onChange={setDashboardAiQuestion} onSubmit={handleSubmitDashboardAiQuestion}
+            <AiMessageComposer reserveMenuSpace value={dashboardAiQuestion} onChange={setDashboardAiQuestion} onSubmit={handleSubmitDashboardAiQuestion}
               canSubmit={!dashboardAiSendDisabled} busy={dashboardVoiceSending || dashboardFileSending} maxRows={4}
               placeholder="از دستیار هوشمند سازمان بپرسید…"
               sendLabel={dashboardVideoMode ? 'ساخت ویدیو با هوش مصنوعی' : dashboardVoiceOutputMode ? 'تولید صدا با هوش مصنوعی' : dashboardImageMode ? 'ساخت تصویر با هوش مصنوعی' : 'ارسال پیام به هوش مصنوعی'}

@@ -36,7 +36,7 @@ const AiProcessOperationApprovalCard: React.FC<Props> = ({ operations, selectedI
   return (
     <div className="mt-2 space-y-2">
       {operations.map((operation, index) => (
-        <label key={`${String(operation?.type || 'operation')}-${index}`} className="flex cursor-pointer items-start gap-2 rounded-xl border border-amber-100/80 bg-white/70 p-2.5 dark:border-white/10 dark:bg-white/[0.045]">
+        <label key={`${String(operation?.type || 'operation')}-${index}`} className="flex cursor-pointer items-start gap-2 rounded-xl border border-[var(--ai-chat-line,#dfe2e5)] bg-white/70 p-2.5 dark:border-white/10 dark:bg-white/[0.045]">
           <Checkbox
             checked={selected.has(index)}
             onChange={(event) => {
@@ -48,7 +48,7 @@ const AiProcessOperationApprovalCard: React.FC<Props> = ({ operations, selectedI
             aria-label={`انتخاب ${getOperationTitle(operation, index)}`}
           />
           <span className="min-w-0 flex-1">
-            <span className="block font-semibold text-amber-900 dark:text-amber-100">{getOperationTitle(operation, index)}</span>
+            <span className="block font-semibold text-[var(--ai-chat-text,#292e31)] dark:text-[var(--ai-chat-text,#f4f4f5)]">{getOperationTitle(operation, index)}</span>
             <span className="mt-0.5 block text-[11px] leading-5 text-amber-800 dark:text-amber-200/85">{getOperationDetails(operation)}</span>
           </span>
         </label>

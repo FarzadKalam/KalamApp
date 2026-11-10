@@ -90,7 +90,7 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
             disabled={activeIndex === 0}
             onClick={() => carouselRef.current?.prev()}
           />
-          <span className="font-semibold text-amber-900 dark:text-amber-100">
+          <span className="font-semibold text-[var(--ai-chat-text,#292e31)] dark:text-[var(--ai-chat-text,#f4f4f5)]">
             رکورد {(activeIndex + 1).toLocaleString('fa-IR')} از {records.length.toLocaleString('fa-IR')}
           </span>
           <Button
@@ -122,8 +122,8 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
                   {recordTitle}
                 </div>
               ) : null}
-              <div className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-amber-100/80 bg-amber-50/50 px-2 py-1.5 dark:border-white/10 dark:bg-black/15">
-                <span className="font-semibold text-amber-900 dark:text-amber-100">
+              <div className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-[var(--ai-chat-line,#dfe2e5)] bg-amber-50/50 px-2 py-1.5 dark:border-white/10 dark:bg-black/15">
+                <span className="font-semibold text-[var(--ai-chat-text,#292e31)] dark:text-[var(--ai-chat-text,#f4f4f5)]">
                   {actionType === 'update_record_from_prompt' ? 'این مورد ویرایش شود' : 'این مورد ثبت شود'}
                 </span>
                 <Switch
@@ -152,15 +152,15 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
                 ))}
               </div>
               {tableSpecs.length > 0 ? (
-                <div className="mt-3 space-y-3 border-t border-amber-100/80 pt-3 dark:border-white/10">
+                <div className="mt-3 space-y-3 border-t border-[var(--ai-chat-line,#dfe2e5)] pt-3 dark:border-white/10">
                   {tableSpecs.map((table: any) => {
                     const block = (moduleConfig?.blocks || []).find((item: any) => String(item?.id || '') === table.key);
                     if (!block) return null;
                     const allowedColumns = new Set(table.columns.map((column: any) => String(column?.key || '').trim()).filter(Boolean));
                     return (
-                      <section key={table.key} className="rounded-xl border border-amber-100/80 bg-white/60 p-2 dark:border-white/10 dark:bg-black/15">
+                      <section key={table.key} className="rounded-xl border border-[var(--ai-chat-line,#dfe2e5)] bg-white/60 p-2 dark:border-white/10 dark:bg-black/15">
                         <div className="mb-2 flex items-center justify-between gap-2">
-                          <div className="font-semibold text-amber-900 dark:text-amber-100">{table.label}</div>
+                          <div className="font-semibold text-[var(--ai-chat-text,#292e31)] dark:text-[var(--ai-chat-text,#f4f4f5)]">{table.label}</div>
                           <span className="text-[11px] text-amber-700/80 dark:text-amber-200/70">
                             {(Array.isArray(record.tables?.[table.key]) ? record.tables[table.key] : []).length.toLocaleString('fa-IR')} ردیف
                           </span>
@@ -186,8 +186,8 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
                 </div>
               ) : null}
               {otherFields.length > 0 ? (
-                <div className="mt-1 flex items-center justify-between gap-3 border-t border-amber-100/80 pt-2 dark:border-white/10">
-                  <span className="font-semibold text-amber-900 dark:text-amber-100">مشاهده دیگر فیلدها</span>
+                <div className="mt-1 flex items-center justify-between gap-3 border-t border-[var(--ai-chat-line,#dfe2e5)] pt-2 dark:border-white/10">
+                  <span className="font-semibold text-[var(--ai-chat-text,#292e31)] dark:text-[var(--ai-chat-text,#f4f4f5)]">مشاهده دیگر فیلدها</span>
                   <Switch
                     size="small"
                     checked={showOtherFields[recordIndex] === true}

@@ -1,3 +1,4 @@
+import { getAiAgentLabel } from '../../supabase/functions/_shared/ai-agents';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Select, Tooltip } from 'antd';
 import { supabase } from '../../supabaseClient';
@@ -35,21 +36,6 @@ const resolveEffectiveCapability = (selected: Set<string>, fallbackCapability?: 
   return fallbackCapability || null;
 };
 
-const CAPABILITY_FA: Record<string, string> = {
-  document_generation: 'ساخت فایل',
-  video_generation: 'ساخت ویدیو',
-  image_generation: 'ساخت تصویر',
-  voice_conversation: 'مکالمه صوتی',
-  voice_output: 'تولید صدا',
-  process_operation: 'اقدام فرآیندی',
-  dashboard_chat: 'گفتگوی آزاد',
-  record_chat: 'گفتگو روی رکورد',
-  legal_assistant: 'دستیار حقوقی',
-  deep_reasoning: 'تفکر عمیق',
-  web_search: 'جستجوی وب',
-  document_analysis: 'تحلیل سند',
-  voice_input: 'تحلیل صدا',
-};
 
 const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
   selectedCapabilities,
@@ -118,7 +104,7 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
   return (
     <div className="flex items-center gap-1 text-[9px] leading-4 text-gray-400 dark:text-gray-500" dir="rtl">
       {!compact && <AiSparkleIcon className="h-2.5 w-2.5 text-[rgb(var(--brand-500-rgb))]" />}
-      <Tooltip title={`موتور تخصصی «${effectiveCapability ? CAPABILITY_FA[effectiveCapability] || effectiveCapability : 'هوش مصنوعی'}» برای همین ارسال قابل تغییر است`}>
+      <Tooltip title={`موتور تخصصی «${effectiveCapability ? getAiAgentLabel(effectiveCapability) : 'هوش مصنوعی'}» برای همین ارسال قابل تغییر است`}>
         <span className={compact ? 'sr-only' : 'shrink-0'}>موتور:</span>
       </Tooltip>
       <Select

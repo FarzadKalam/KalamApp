@@ -20,22 +20,11 @@ import AiFileUploadButton, { type AiUploadedFilePrompt } from './AiFileUploadBut
 const MessageComposerModal = lazy(() => import('../MessageComposerModal'));
 import AiVoiceRecorder, { type RecordedVoice } from './AiVoiceRecorder';
 import AiMediaSettingsPopover, { type AiMediaSettings } from './AiMediaSettingsPopover';
+import { getAiAgent, getAiAgentLabel, type AiComposerAgentId } from '../../supabase/functions/_shared/ai-agents';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 
-export type AiComposerCapability =
-  | 'text_chat'
-  | 'free_chat'
-  | 'document_analysis'
-  | 'voice_input'
-  | 'voice_output'
-  | 'image_generation'
-  | 'video_generation'
-  | 'document_generation'
-  | 'web_search'
-  | 'deep_reasoning'
-  | 'legal_assistant'
-  | 'record_creation'
-  | 'process_operation';
+/** Compatibility alias for persisted composer preferences and existing callers. */
+export type AiComposerCapability = AiComposerAgentId;
 
 type CapabilityAvailability = Record<string, { enabled?: boolean; planAvailable?: boolean; tenantReady?: boolean; hasReadyModel?: boolean } | undefined>;
 
@@ -74,19 +63,19 @@ const CAPABILITY_META: Array<{
   icon: React.ReactNode;
   kind: 'toggle' | 'inline';
 }> = [
-  { key: 'text_chat', label: 'گفتگوی متنی', description: 'گفتگوی مستقیم بدون تصمیم‌گیری خودکار', icon: <MessageOutlined />, kind: 'toggle' },
-  { key: 'document_analysis', label: 'تحلیل اسناد', description: 'تحلیل فایل، رسید، عکس یا سند', icon: <FileSearchOutlined />, kind: 'inline' },
-  { key: 'voice_input', label: 'تحلیل صدا', description: 'ضبط و تبدیل فایل صوتی به متن', icon: <AudioOutlined />, kind: 'inline' },
-  { key: 'voice_output', label: 'تولید صدا', description: 'تبدیل متن به فایل صوتی', icon: <SoundOutlined />, kind: 'toggle' },
-  { key: 'image_generation', label: 'ساخت تصویر', description: 'ارسال متن برای تولید تصویر', icon: <PictureOutlined />, kind: 'toggle' },
-  { key: 'video_generation', label: 'ساخت ویدیو', description: 'تولید ویدیو از متن یا تصویر', icon: <VideoCameraOutlined />, kind: 'toggle' },
-  { key: 'document_generation', label: 'ساخت فایل', description: 'ساخت فایل Word، Excel، PDF یا CSV', icon: <FileWordOutlined />, kind: 'toggle' },
-  { key: 'web_search', label: 'جستجوی گوگل', description: 'استفاده از اطلاعات بروز وب', icon: <GlobalOutlined />, kind: 'toggle' },
-  { key: 'deep_reasoning', label: 'تفکر عمیق', description: 'استفاده از مدل reasoning سازمان', icon: <ThunderboltOutlined />, kind: 'toggle' },
-  { key: 'legal_assistant', label: 'دستیار حقوقی', description: 'پاسخ حقوقی با تکیه بر اسناد و وب', icon: <SafetyCertificateOutlined />, kind: 'toggle' },
-  { key: 'record_creation', label: 'ایجاد/ویرایش رکورد', description: 'پیشنهاد ایجاد یا ویرایش فاکتور، هزینه، مشتری، محصول و...', icon: <PlusOutlined />, kind: 'toggle' },
-  { key: 'process_operation', label: 'اقدام فرآیندی', description: 'پیشنهاد اجرای فرآیند یا تغییر مرحله', icon: <ThunderboltOutlined />, kind: 'toggle' },
-  { key: 'free_chat', label: 'گفتگوی آزاد', description: 'گفتگوی خام با هوش مصنوعی بدون استفاده از دانش سازمان', icon: <MessageOutlined />, kind: 'toggle' },
+  { key: 'text_chat', label: getAiAgentLabel('text_chat'), description: getAiAgent('text_chat').description, icon: <MessageOutlined />, kind: 'toggle' },
+  { key: 'document_analysis', label: getAiAgentLabel('document_analysis'), description: getAiAgent('document_analysis').description, icon: <FileSearchOutlined />, kind: 'inline' },
+  { key: 'voice_input', label: getAiAgentLabel('voice_input'), description: getAiAgent('voice_input').description, icon: <AudioOutlined />, kind: 'inline' },
+  { key: 'voice_output', label: getAiAgentLabel('voice_output'), description: getAiAgent('voice_output').description, icon: <SoundOutlined />, kind: 'toggle' },
+  { key: 'image_generation', label: getAiAgentLabel('image_generation'), description: getAiAgent('image_generation').description, icon: <PictureOutlined />, kind: 'toggle' },
+  { key: 'video_generation', label: getAiAgentLabel('video_generation'), description: getAiAgent('video_generation').description, icon: <VideoCameraOutlined />, kind: 'toggle' },
+  { key: 'document_generation', label: getAiAgentLabel('document_generation'), description: getAiAgent('document_generation').description, icon: <FileWordOutlined />, kind: 'toggle' },
+  { key: 'web_search', label: getAiAgentLabel('web_search'), description: getAiAgent('web_search').description, icon: <GlobalOutlined />, kind: 'toggle' },
+  { key: 'deep_reasoning', label: getAiAgentLabel('deep_reasoning'), description: getAiAgent('deep_reasoning').description, icon: <ThunderboltOutlined />, kind: 'toggle' },
+  { key: 'legal_assistant', label: getAiAgentLabel('legal_assistant'), description: getAiAgent('legal_assistant').description, icon: <SafetyCertificateOutlined />, kind: 'toggle' },
+  { key: 'record_creation', label: getAiAgentLabel('record_creation'), description: getAiAgent('record_creation').description, icon: <PlusOutlined />, kind: 'toggle' },
+  { key: 'process_operation', label: getAiAgentLabel('process_operation'), description: getAiAgent('process_operation').description, icon: <ThunderboltOutlined />, kind: 'toggle' },
+  { key: 'free_chat', label: getAiAgentLabel('free_chat'), description: getAiAgent('free_chat').description, icon: <MessageOutlined />, kind: 'toggle' },
 ];
 
 const isCapabilityUsable = (availability: CapabilityAvailability | undefined, key: AiComposerCapability) => {
@@ -225,14 +214,14 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
 
   const triggerButton = (
     <div className={`ai-composer-operator-pill ${!autoMode ? 'is-custom' : 'is-auto'}`}>
-      <Tooltip title={autoMode ? 'ابزارها؛ انتخاب خودکار فعال است' : 'انتخاب عملکرد هوش مصنوعی'}>
+      <Tooltip title={autoMode ? 'ایجنت راهبر؛ انتخاب خودکار ایجنت فعال است' : 'انتخاب ایجنت هوش مصنوعی'}>
         <Button
           type="text"
           disabled={disabled || loading}
           size={actionSize}
           className="ai-composer-operator-trigger"
           onClick={() => handleOpenChange(true)}
-          aria-label="انتخاب عملکرد هوش مصنوعی"
+          aria-label="انتخاب ایجنت هوش مصنوعی"
           aria-expanded={open}
         >
           <span className="ai-composer-operator-icon">
@@ -242,7 +231,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
             {autoMode ? (
               autoSuggested.length > 0 ? (
                 <>
-                  <span className="ai-composer-operator-auto-text">تصمیم‌گیری خودکار</span>
+                  <span className="ai-composer-operator-auto-text">ایجنت راهبر</span>
                   {activeOperatorMetas.map((meta) => (
                     <span key={meta.key} className="ai-composer-operator-chip">
                       {`تشخیص: ${meta.label}`}
@@ -250,7 +239,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
                   ))}
                 </>
               ) : (
-                <span className="ai-composer-operator-auto-text">تصمیم‌گیری خودکار</span>
+                <span className="ai-composer-operator-auto-text">ایجنت راهبر</span>
               )
             ) : (
               activeOperatorMetas.map((meta) => (
@@ -286,7 +275,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
         <>
           {triggerButton}
           <Drawer
-            title="عملکردهای هوش مصنوعی"
+            title="ایجنت‌های هوش مصنوعی"
             open={open}
             onClose={() => handleOpenChange(false)}
             placement="bottom"
@@ -390,6 +379,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
           options={recordCreationModuleOptions}
           optionFilterProp="label"
           placeholder="نوع رکورد برای ایجاد/ویرایش"
+          aria-label="نوع رکورد برای ایجاد یا ویرایش"
           disabled={disabled || loading}
           onChange={(value) => onRecordCreationTargetModuleChange(value ? String(value) : null)}
         />

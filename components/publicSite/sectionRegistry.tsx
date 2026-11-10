@@ -213,12 +213,12 @@ export const SECTION_REGISTRY: Record<SectionType, SectionDef> = {
   ai: {
     type: 'ai',
     labelFa: 'هوش مصنوعی',
-    description: 'بلاک ویژه هوش مصنوعی با عملگرهای مختلف.',
+    description: 'بلاک ویژه هوش مصنوعی با ایجنت‌های مختلف.',
     Component: AiSection,
     editor: [
       ...baseHeadingFields,
       { key: 'cta', label: 'دکمه', type: 'cta' },
-      { key: 'capabilities', label: 'عملگرها', type: 'item-list', itemLabel: 'عملگر', fields: iconItemFields },
+      { key: 'capabilities', label: 'ایجنت‌ها', type: 'item-list', itemLabel: 'ایجنت', fields: iconItemFields },
     ],
   },
   hr: {

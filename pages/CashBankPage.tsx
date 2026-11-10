@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { App, Button, Card, Dropdown, Grid, Spin, Statistic, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Dropdown, Grid, Spin, Statistic, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { SortOrder } from 'antd/es/table/interface';
 import { ApartmentOutlined, BankOutlined, CalculatorOutlined, CreditCardOutlined, PlusOutlined, PrinterOutlined, WalletOutlined } from '@ant-design/icons';
@@ -83,6 +83,7 @@ const CashBankPage: React.FC = () => {
   const { label: currencyLabel } = useCurrencyConfig();
   const [loading, setLoading] = useState(true);
   const [tableLoading, setTableLoading] = useState(false);
+  const [ledgerError, setLedgerError] = useState<string | null>(null);
   const [accessResolved, setAccessResolved] = useState(false);
   const [canViewPage, setCanViewPage] = useState(true);
   const canViewPrintField = useCallback(() => canViewPage, [canViewPage]);
@@ -129,6 +130,7 @@ const CashBankPage: React.FC = () => {
   const loadLedger = useCallback(async () => {
     if (!accessResolved || !canViewPage) return;
     setTableLoading(true);
+    setLedgerError(null);
     const request = ++ledgerRequest.current;
     try {
       const { data, error } = await supabase.rpc('get_cash_bank_unified_ledger_page', {
@@ -138,9 +140,9 @@ const CashBankPage: React.FC = () => {
       if (request !== ledgerRequest.current) return;
       setRows(Array.isArray(data?.rows) ? data.rows.map(mapLedgerRow) : []);
       setTotal(Number(data?.total || 0));
-    } catch (error) { if (request === ledgerRequest.current) { message.error(toFaErrorMessage(error as any, 'خطا در دریافت عملیات نقد و بانک')); } }
+    } catch (error) { if (request === ledgerRequest.current) { setLedgerError(toFaErrorMessage(error, 'دریافت عملیات نقد و بانک انجام نشد. دوباره تلاش کنید.')); } }
     finally { if (request === ledgerRequest.current) setTableLoading(false); }
-  }, [accessResolved, canViewPage, filters, message, page, pageSize, sort]);
+  }, [accessResolved, canViewPage, filters, page, pageSize, sort]);
 
   useEffect(() => { void loadDashboard(); }, [loadDashboard]);
   useEffect(() => { void loadLedger(); }, [loadLedger]);
@@ -245,6 +247,8 @@ const CashBankPage: React.FC = () => {
         <Button icon={<PlusOutlined />} onClick={() => navigate('/cheques/create')}>ثبت چک جدید</Button>
         <Button icon={<PlusOutlined />} onClick={() => navigate('/barters/create')}>افزودن تهاتر جدید</Button>
       </div>
+      {ledgerError ? <Alert className="mb-3" type="error" showIcon message={ledgerError}
+        action={<Button size="small" onClick={() => { void loadLedger(); }}>تلاش دوباره</Button>} /> : null}
       <ManagedDataTable<RowItem> loading={tableLoading} dataSource={rows} columns={serverColumns} rowKey="key"
         scopeKey={identity ? `kalam:table-columns:${identity.orgId}:${identity.userId}:cash_bank_ledger:default` : undefined}
         onColumnOrderChange={setColumnOrder} size="small"

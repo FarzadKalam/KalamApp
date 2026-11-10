@@ -7,18 +7,18 @@ import './AiMessageComposer.css';
 
 type Props = React.PropsWithChildren<{
   value: string; onChange: (value: string) => void; onSubmit: () => void;
-  tools: React.ReactNode; model: React.ReactNode;
+  tools: React.ReactNode; model: React.ReactNode; reserveMenuSpace?: boolean;
   canSubmit?: boolean; busy?: boolean; disabled?: boolean; sendLabel?: string;
   placeholder?: string; maxRows?: number;
 }>;
 
 /** One accessible composition surface for dashboard, workspace and contextual AI. */
-export default function AiMessageComposer({ value, onChange, onSubmit, tools, model, canSubmit = Boolean(value.trim()), busy = false, disabled = false, sendLabel = 'ارسال پیام', placeholder = 'پیامتان را بنویسید…', maxRows = 8, children }: Props) {
+export default function AiMessageComposer({ value, onChange, onSubmit, tools, model, reserveMenuSpace = false, canSubmit = Boolean(value.trim()), busy = false, disabled = false, sendLabel = 'ارسال پیام', placeholder = 'پیامتان را بنویسید…', maxRows = 8, children }: Props) {
   const [selections, setSelections] = useState<HTMLDivElement | null>(null);
   const [transient, setTransient] = useState<HTMLDivElement | null>(null);
   const slots = useMemo(() => ({ embedded: true, selections, transient }), [selections, transient]);
   const submit = () => { if (canSubmit && !busy && !disabled) onSubmit(); };
-  return <AiComposerSlots.Provider value={slots}><div className="ai-message-composer" dir="rtl" aria-busy={busy}>
+  return <AiComposerSlots.Provider value={slots}><div className={`ai-message-composer${reserveMenuSpace ? ' ai-message-composer-with-menu' : ''}`} dir="rtl" aria-busy={busy}>
     {children}
     <div ref={setSelections} className="ai-composer-selections" aria-label="عملکردهای انتخاب‌شده" />
     <div ref={setTransient} className="ai-composer-transient" />

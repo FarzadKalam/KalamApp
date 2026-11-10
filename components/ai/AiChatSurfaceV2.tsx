@@ -387,7 +387,7 @@ const AiChatSurfaceV2: React.FC = () => {
   const renderThreadList = (compact = false) => (
     <div className={compact ? 'flex h-full flex-col gap-1 overflow-y-auto px-1 py-1.5' : 'flex h-full min-h-0 flex-col'}>
       {!compact ? (
-        <div className="border-b border-slate-200/60 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-[#17191c]">
+        <div className="border-b border-slate-200/60 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-[#1c1c1f]">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
               <div className="truncate text-[13px] font-bold text-slate-800 dark:text-slate-100">دستیار هوشمند سازمان</div>
@@ -536,12 +536,12 @@ const AiChatSurfaceV2: React.FC = () => {
   );
 
   return (
-    <div dir="rtl" data-testid="ai-chat-v2" className="h-full min-h-0 overflow-hidden bg-slate-100 text-slate-800 dark:bg-[#101113] dark:text-slate-100">
+    <div dir="rtl" data-testid="ai-chat-v2" className="ai-chat-theme h-full min-h-0 overflow-hidden bg-slate-100 text-slate-800 dark:bg-[#141414] dark:text-slate-100">
       <div className="flex h-full min-h-0 overflow-hidden">
-        <aside className="order-last hidden h-full min-h-0 w-[292px] shrink-0 border-l border-slate-200/70 bg-slate-50/86 dark:border-white/[0.07] dark:bg-[#131518] md:block">
+        <aside className="order-last hidden h-full min-h-0 w-[292px] shrink-0 border-l border-slate-200/70 bg-slate-50/86 dark:border-white/[0.07] dark:bg-[#181818] md:block">
           {renderThreadList(false)}
         </aside>
-        <aside className="order-last h-full min-h-0 w-[76px] shrink-0 border-l border-slate-200/70 bg-slate-50/90 dark:border-white/[0.07] dark:bg-[#131518] md:hidden">
+        <aside className="order-last h-full min-h-0 w-[76px] shrink-0 border-l border-slate-200/70 bg-slate-50/90 dark:border-white/[0.07] dark:bg-[#181818] md:hidden">
           <div className="flex h-full min-h-0 flex-col">
             <div className="border-b border-slate-200/70 px-2 py-2 dark:border-white/[0.07]">
               <Button block type="text" icon={<MenuOutlined />} onClick={() => setThreadListOpen(true)} aria-label="باز کردن فهرست گفتگوهای هوش مصنوعی" />
@@ -587,7 +587,7 @@ const AiChatSurfaceV2: React.FC = () => {
         }}
       >
         <div className="flex h-full min-h-0 flex-col">
-          <div className="flex items-center justify-between border-b border-slate-200/70 bg-white px-3 py-2 dark:border-white/[0.07] dark:bg-[#17191c]">
+          <div className="flex items-center justify-between border-b border-slate-200/70 bg-white px-3 py-2 dark:border-white/[0.07] dark:bg-[#1c1c1f]">
             <div className="text-sm font-bold">گفتگوهای هوش مصنوعی</div>
             <Button type="text" shape="circle" icon={<CloseOutlined />} onClick={closeThreadList} aria-label="بستن فهرست گفتگوهای هوش مصنوعی" />
           </div>

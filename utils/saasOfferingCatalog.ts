@@ -1,3 +1,4 @@
+import { getAiAgentLabel } from '../supabase/functions/_shared/ai-agents';
 export type SaasOfferingOption = {
   id: string;
   label: string;
@@ -40,11 +41,11 @@ export const SAAS_MODULE_GROUPS: Array<{ label: string; modules: SaasOfferingOpt
 ];
 
 export const SAAS_FEATURE_OPTIONS: SaasOfferingOption[] = [
-  { id: 'ai_chat', label: 'گفتگو با هوش مصنوعی' }, { id: 'ai_knowledge', label: 'دانش سازمانی هوش مصنوعی' },
-  { id: 'ai_document_analysis', label: 'تحلیل اسناد با هوش مصنوعی' }, { id: 'ai_web_search', label: 'جستجوی وب هوش مصنوعی' },
-  { id: 'ai_voice_input', label: 'ورودی صوتی هوش مصنوعی' }, { id: 'ai_voice_output', label: 'خروجی صوتی هوش مصنوعی' },
-  { id: 'ai_image_generation', label: 'تولید تصویر هوش مصنوعی' }, { id: 'ai_video_generation', label: 'تولید ویدیو هوش مصنوعی' },
-  { id: 'ai_deep_reasoning', label: 'تفکر عمیق هوش مصنوعی' }, { id: 'taxpayer_system', label: 'سامانه مودیان' },
+  { id: 'ai_chat', label: getAiAgentLabel('text_chat') }, { id: 'ai_knowledge', label: getAiAgentLabel('organization_knowledge') },
+  { id: 'ai_document_analysis', label: getAiAgentLabel('document_analysis') }, { id: 'ai_web_search', label: getAiAgentLabel('web_search') },
+  { id: 'ai_voice_input', label: getAiAgentLabel('voice_input') }, { id: 'ai_voice_output', label: getAiAgentLabel('voice_output') },
+  { id: 'ai_image_generation', label: getAiAgentLabel('image_generation') }, { id: 'ai_video_generation', label: getAiAgentLabel('video_generation') },
+  { id: 'ai_deep_reasoning', label: getAiAgentLabel('deep_reasoning') }, { id: 'taxpayer_system', label: 'سامانه مودیان' },
   { id: 'internal_realtime_notifications', label: 'اعلان لحظه‌ای داخل سامانه' },
   { id: 'organization_email', label: 'ایمیل سازمانی؛ ارسال، دریافت و گزارش‌ها' },
   { id: 'managed_organization_email', label: 'صندوق میزبانی‌شده با نام سازمان روی دامنه تازه سیستم (هزینه‌دار)' },

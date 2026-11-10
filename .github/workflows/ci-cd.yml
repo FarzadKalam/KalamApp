@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy this tested revision, including the explicit phase 582 and ai-assistant release'
+        type: boolean
+        default: false
 
 concurrency:
   group: kalamapp-${{ github.ref }}
@@ -57,6 +62,21 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Cash and bank request context and optimized SQL checks
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test cash_bank_context_test
+          sed '/^create role /d' tests/sql/cash_bank_ledger_fixture.sql | docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d cash_bank_context_test -v ON_ERROR_STOP=1
+          for file in database_v1_phase568_cash_bank_filtered_totals_and_print.sql \
+            tests/sql/cash_bank_context_fixture.sql \
+            database_v1_phase582_cash_bank_context_performance.sql \
+            database_v1_phase582_cash_bank_context_performance.sql \
+            tests/sql/cash_bank_context_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d cash_bank_context_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
       - name: Isolated system message access regression checks
         env:
           POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
@@ -80,6 +100,16 @@ jobs:
 
       - name: Typecheck
         run: npx tsc --noEmit
+
+      - name: Shared AI agents and chat surfaces regression checks
+        timeout-minutes: 10
+        run: >-
+          npx vitest run supabase/functions/_shared/ai-agents.test.ts
+          components/ai/AiMessageComposer.test.tsx components/ai/AiGenerationStatusCard.test.tsx
+          components/ai/AiChatSurfaceV2.test.tsx components/ai/AssistantPanel.operators.test.tsx
+          components/ai/AiCapabilityComposerActions.test.tsx components/ai/AiComposeModelBar.test.tsx
+          components/ai/AiRecordMutationApprovalCard.test.tsx components/ai/AiMessageRenderer.test.tsx
+          --maxWorkers=1 --no-file-parallelism
 
       - name: Organization membership and login regression checks
         timeout-minutes: 10
@@ -105,6 +135,9 @@ jobs:
 
       - name: Email function dependency checks
         run: deno check --node-modules-dir=none supabase/functions/email-admin/index.ts supabase/functions/send-email/index.ts supabase/functions/email-provider-events/index.ts supabase/functions/email-sync-worker/index.ts supabase/functions/send-sms/index.ts
+
+      - name: AI assistant dependency checks
+        run: deno check --node-modules-dir=none supabase/functions/_shared/ai-agents.ts supabase/functions/ai-assistant/index.ts
 
       - name: Messaging attachment and viewer isolation regression checks
         timeout-minutes: 8
@@ -185,7 +218,7 @@ jobs:
           path: dist
 
   deploy:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.deploy)
     needs: ci
     runs-on: ubuntu-latest
     steps:
@@ -316,6 +349,28 @@ jobs:
             exit 1
           fi
 
+      - name: Apply the explicit cash and bank performance migration
+        shell: pwsh
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PORT: ${{ secrets.SERVER_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $migration = 'database_v1_phase582_cash_bank_context_performance.sql'
+          Get-FileHash -Algorithm SHA256 -LiteralPath $migration | Format-List
+          & ./scripts/run-server-db-migrations.ps1 -SqlFiles @($migration)
+
+      - name: Deploy the AI assistant with shared agents
+        shell: pwsh
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PORT: ${{ secrets.SERVER_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVER_USER }}
+          DEPLOY_FUNCTIONS_PATH: /opt/kalamapp/supabase/docker/volumes/functions
+          DEPLOY_FUNCTIONS_COMPOSE_DIR: /opt/kalamapp/supabase/docker
+        run: ./scripts/deploy-supabase-function.ps1 -Functions @('ai-assistant')
+
       - name: Activate release
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
@@ -358,3 +413,10 @@ jobs:
 
           echo "Deployed $RELEASE_DIR"
           EOF
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify live PWA version and cache headers
+        run: node scripts/verify-live-pwa-release.mjs

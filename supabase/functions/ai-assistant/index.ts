@@ -8,6 +8,7 @@ import {
 import { resolvePersianCalendarContext } from '../_shared/persian-calendar-resolver.ts';
 import { PEYDA_REGULAR_WOFF2_BASE64 } from './peyda-font.ts';
 import { GEMINI_PREBUILT_VOICES, resolveSpeechModelProvider } from '../_shared/speech-model-provider.ts';
+import { getAiAgentLabel, resolveAiAgentId, withAiAgentActivity, type AiAgentActivityReporter } from '../_shared/ai-agents.ts';
 
 type AssistantAction =
   | 'chat'
@@ -3228,7 +3229,7 @@ const buildPromptMessages = (
     ? ' شما در نقش طراح تقویم محتوایی این کسب‌وکار هستید. تقویم، مشتری مرتبط، پروژه‌ها، فعالیت‌ها، سازمان، نقش‌ها و الگوهای فرآیندِ موجود در current_page و authoritative_process_context منابع اصلی شما هستند. اگر این تقویم برای مشتری تعریف شده، لحن، مخاطب، پیشنهاد محتوا و اولویت‌ها را بر اساس همان مشتری و داده‌های مجاز او تنظیم کن؛ اما هیچ داده‌ای از مشتری یا سازمان دیگر حدس نزن. در گفتگوی متنی ابتدا هدف تجاری، مخاطب، کانال‌ها، بازه زمانی، تعداد یا فرمت محتوا، پیام اصلی، محدودیت‌های برند یا تاییدکننده را فقط در صورت نامشخص بودن و حداکثر در ۲ تا ۳ سوال کوتاه بپرس. پیش از پیشنهاد زمان‌بندی، تعارض با محتوای موجود و تعطیلی یا مناسبت تاییدشده را بررسی کن. برای اجرای فرآیند، فقط الگوها، مرحله‌ها، مسئول پیش‌فرض، فیلدها، وضعیت‌ها و اتوماسیون‌هایی را به‌کار ببر که واقعاً در context آمده‌اند؛ جزئیات ثبت‌نشده را نساز یا به الگو نسبت نده.'
     : '';
 
-  const systemContent = `${tenantIdentity}${conversationContinuity}${recordScopeInstruction}${processGroundingInstruction}${contentCalendarDesignerInstruction} اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. personal_memory شامل ترجیح‌های پایدار خود همین کاربر است؛ فقط در حد مرتبط آن‌ها را رعایت کنید و آن را دادهٔ سازمان یا حقیقت بیرونی فرض نکنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction}${copyableOutputInstruction}${jalaliAndReportsInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
+  const systemContent = `${tenantIdentity}${conversationContinuity}${recordScopeInstruction}${processGroundingInstruction}${contentCalendarDesignerInstruction} اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. personal_memory شامل ترجیح‌های پایدار خود همین کاربر است؛ فقط در حد مرتبط آن‌ها را رعایت کنید و آن را دادهٔ سازمان یا حقیقت بیرونی فرض نکنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction}${copyableOutputInstruction}${jalaliAndReportsInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه ایجنت «ساخت فایل» را فعال کند.`;
 
   const historyMessages = (historyRows || [])
     .filter((item) => ['user', 'assistant'].includes(String(item?.role || '')))
@@ -6735,7 +6736,7 @@ const handleCompressThreadContext = async (supabaseUrl: string, serviceRoleKey: 
   });
 };
 
-const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any, reportActivity?: AiAgentActivityReporter) => {
   const message = String(body?.message || '').trim();
   if (!message) {
     const error: any = new Error('متن سوال خالی است.');
@@ -6773,14 +6774,14 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
         recordId: null,
         relatedContexts: [],
       }
-    : await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
+    : await withAiAgentActivity('organization_data', () => buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext), reportActivity);
   const canUseKnowledge = !freeChatMode && isAiCapabilityPlanAvailable(planContext, 'document_analysis');
   const requiresAuthoritativeProcessContext = !freeChatMode && (
     rawContext.intent === 'process_guide'
     || ['process_templates', 'process_runs', 'content_calendars'].includes(String(pageContext?.moduleId || '').trim())
   );
   const [knowledgeChunks, companyContext, orgPeopleContext, calendarContext, authoritativeProcessContext] = await Promise.all([
-    canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, message, { moduleId: pageContext.moduleId }) : Promise.resolve([]),
+    canUseKnowledge ? withAiAgentActivity('organization_knowledge', () => fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, message, { moduleId: pageContext.moduleId }), reportActivity) : Promise.resolve([]),
     freeChatMode ? Promise.resolve(null) : loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
     freeChatMode ? Promise.resolve(null) : loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, message),
     freeChatMode ? Promise.resolve(null) : resolvePersianCalendarContext(message),
@@ -6789,7 +6790,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
       : Promise.resolve(null),
   ]);
   const [retrievedContexts, businessAnalytics, userMemories] = await Promise.all([
-    freeChatMode ? Promise.resolve([]) : fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, message, pageContext),
+    freeChatMode ? Promise.resolve([]) : withAiAgentActivity('organization_data', () => fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, message, pageContext), reportActivity),
     freeChatMode ? Promise.resolve(null) : fetchFinancialAnalyticsContext(supabaseUrl, serviceRoleKey, authContext, message),
     captureAutomaticAiUserMemory(supabaseUrl, serviceRoleKey, authContext, message)
       .then(() => listAiUserMemories(supabaseUrl, serviceRoleKey, authContext, AI_USER_MEMORY_CONTEXT_ITEMS, true)),
@@ -6807,7 +6808,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     ? await resolveOrgCapabilityModel(supabaseUrl, serviceRoleKey, orgAiSettings, 'web_search')
     : '';
   const webSearchResults = shouldSearchWeb && !useNativeGeminiWebSearch
-    ? await callWebSearch(providerConfig, message, webSearchModel, 5, forceWebSearch).then((r) => r.results)
+    ? await withAiAgentActivity('web_search', () => callWebSearch(providerConfig, message, webSearchModel, 5, forceWebSearch).then((r) => r.results), reportActivity)
     : [];
   const nativeTools = useNativeGeminiWebSearch ? [{ googleSearch: {} }] : [];
 
@@ -7253,7 +7254,8 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
       (async () => {
         let prepared: any = null;
         try {
-          prepared = await prepareChatRequest(supabaseUrl, serviceRoleKey, authContext, body);
+          prepared = await prepareChatRequest(supabaseUrl, serviceRoleKey, authContext, body, activity => send('agent_activity', activity));
+          const respondingAgent = resolveAiAgentId(prepared.freeChatMode ? 'free_chat' : prepared.capability);
           send('meta', {
             success: true,
             threadId: prepared.thread.id,
@@ -7261,15 +7263,18 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
             userMessageId: prepared.userMessage?.id || null,
             provider: prepared.providerConfig.provider,
             model: prepared.providerConfig.model,
+            agentId: respondingAgent,
           });
 
-          const aiResult = await callChatCompletionsStream(prepared.providerConfig, prepared.promptMessages, {
+          // A tool's availability is not evidence that the provider has called it.
+          // Native provider search remains model activity until the provider reports a tool execution.
+          const aiResult = await withAiAgentActivity(respondingAgent, () => callChatCompletionsStream(prepared.providerConfig, prepared.promptMessages, {
             safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${prepared.capability}`,
             tools: prepared.nativeTools,
             onDelta: (text) => {
               if (text) send('delta', { text });
             },
-          });
+          }), activity => send('agent_activity', activity));
 
           const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
             thread_id: prepared.thread.id,
@@ -8580,7 +8585,7 @@ const buildTaskBundlePrompt = (
       ].filter(Boolean).join('\n');
     });
   return [
-    baseMessage || 'این ورودی‌ها را بررسی کن و مطابق عملگرهای انتخاب‌شده اقدام پیشنهادی بده.',
+    baseMessage || 'این ورودی‌ها را بررسی کن و مطابق ایجنت‌های انتخاب‌شده اقدام پیشنهادی بده.',
     voipContext ? `زمینهٔ محدود و مجاز تماس:\n${voipContext}` : '',
     previousSummary ? `زمینه ذخیره‌شده از مرحله قبل همین گفتگو:\n${previousSummary}` : '',
     transcripts.length ? 'ابتدا متن فایل صوتی را با عنوان «متن فایل صوتی» بنویس و سپس پاسخ یا اقدام موردنیاز را ارائه کن.' : '',
@@ -8644,7 +8649,7 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
     'فقط از capabilityهای مجاز زیر انتخاب کن و capability جدید نساز:',
     availableCapabilities.length ? availableCapabilities.join(', ') : 'هیچ capability فعال نیست',
     'اگر کاربر فقط گفتگوی عادی می‌خواهد، capabilities را خالی برگردان.',
-    'برای تحلیل، پرسش، بررسی فایل/رسانه و بررسی اطلاعات مجاز سازمان، هیچ عملگر جداگانه‌ای انتخاب نکن؛ مدل اصلی همان گفتگو این کار را انجام می‌دهد. برای اطلاعات جاری وب فقط web_search را انتخاب کن تا ابزار جستجوی همان مدل اصلی فعال شود، نه یک عملگر مستقل. فقط وقتی واقعاً باید یک خروجی تولیدی ساخته شود یا یک اقدام ساختاریافته انجام شود، capability مناسب را انتخاب کن.',
+    'برای تحلیل، پرسش، بررسی فایل/رسانه و بررسی اطلاعات مجاز سازمان، هیچ ایجنت جداگانه‌ای انتخاب نکن؛ مدل اصلی همان گفتگو این کار را انجام می‌دهد. برای اطلاعات جاری وب فقط web_search را انتخاب کن تا ابزار جستجوی همان مدل اصلی فعال شود، نه یک ایجنت مستقل. فقط وقتی واقعاً باید یک خروجی تولیدی ساخته شود یا یک اقدام ساختاریافته انجام شود، capability مناسب را انتخاب کن.',
     'هرگز اطلاعات سازمان، قیمت، وضعیت فرآیند، نام رکورد یا فیلدهای لازم را حدس نزن. اگر داده کافی نیست، capabilityها را خالی بگذار تا مدل اصلی در ادامه گفتگو با حفظ تاریخچه پاسخ دهد.',
     'اگر کاربر از فایل، تصویر یا فایل صوتی چیزی فرستاده و می‌خواهد آن را بررسی یا از آن اطلاعات استخراج شود، capabilityها را خالی بگذار تا خود مدل اصلی ورودی را بررسی کند.',
     'اگر کاربر خواسته از روی ورودی‌ها یک یا چند رکورد ساخته یا یک یا چند رکورد موجود ویرایش شود، record_creation را انتخاب کن و اگر نوع رکورد روشن است target_module_id را هم بده. این شامل ثبت هزینه، پرداخت، دریافت، فاکتور خرید/فروش، مساعده و تهاتر در وضعیت پیش‌نویس یا ایجادشده است.',
@@ -9088,7 +9093,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
   if (shouldRunAnalysis) {
     const analysisPrompt = [
       'این مرحله تحلیل مشترک باندل است. همه ورودی‌ها و زمینه قبلی همین گفتگو را یکپارچه کن.',
-      'اگر اطلاعات برای عملگرهای بعدی مثل ساخت رکورد یا ساخت فایل کافی نیست، دقیق و کوتاه سوال تکمیلی بپرس؛ ولی داده‌های استخراج‌شده را هم در پاسخ نگه دار.',
+      'اگر اطلاعات برای ایجنت‌های بعدی مثل ساخت رکورد یا ساخت فایل کافی نیست، دقیق و کوتاه سوال تکمیلی بپرس؛ ولی داده‌های استخراج‌شده را هم در پاسخ نگه دار.',
       prompt,
     ].join('\n\n');
     const analysisParts: string[] = [];
@@ -9138,7 +9143,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
 
   const sharedPrompt = [
     prompt,
-    analysisText ? `\nتحلیل مشترک قابل استفاده برای عملگرهای بعدی:\n${analysisText}` : '',
+    analysisText ? `\nتحلیل مشترک قابل استفاده برای ایجنت‌های بعدی:\n${analysisText}` : '',
   ].filter(Boolean).join('\n\n').trim();
 
   if (selectedCapabilitySet.has('record_creation')) {
@@ -13491,12 +13496,12 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
       : [];
     const validDefaultCapabilities = new Set([PRIMARY_MODEL_DEFAULT_KEY, ...Object.keys(AI_CAPABILITY_FEATURE_KEYS)]);
     const invalidDefault = requestedDefaults.find((capability) => !validDefaultCapabilities.has(capability));
-    if (invalidDefault) return json(400, { success: false, message: `عملگر پیش‌فرض «${invalidDefault}» معتبر نیست.` });
+    if (invalidDefault) return json(400, { success: false, message: `ایجنت پیش‌فرض «${getAiAgentLabel(invalidDefault)}» معتبر نیست.` });
     const supportsDefault = (capability: string) => capability === PRIMARY_MODEL_DEFAULT_KEY
       ? capabilityTags.some((tag) => PRIMARY_MODEL_CAPABILITIES.has(tag))
       : capabilityTags.includes(capability) || (CAPABILITY_SELECTION_ALIASES[capability] || []).some((alias) => capabilityTags.includes(alias));
     const unsupportedDefault = requestedDefaults.find((capability) => !supportsDefault(capability));
-    if (unsupportedDefault) return json(400, { success: false, message: 'مدل فقط برای عملگرهایی می‌تواند پیش‌فرض شود که در ویژگی‌های آن انتخاب شده‌اند.' });
+    if (unsupportedDefault) return json(400, { success: false, message: 'مدل فقط برای ایجنت‌هایی می‌تواند پیش‌فرض شود که در ویژگی‌های آن انتخاب شده‌اند.' });
     const nextMetadata = {
       ...(existingModel?.metadata && typeof existingModel.metadata === 'object' ? existingModel.metadata : {}),
       ...(row.metadata && typeof row.metadata === 'object' ? row.metadata : {}),
