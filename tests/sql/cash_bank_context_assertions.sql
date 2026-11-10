@@ -1,4 +1,9 @@
 set test.user_id='90000000-0000-4000-8000-000000000001';
+do $$ begin
+ if to_regclass('public.idx_org_roles_internal_admin_org') is null then raise exception 'Missing role predicate index'; end if;
+ if not exists(select 1 from pg_index where indexrelid='public.idx_org_roles_internal_admin_org'::regclass and indisvalid and indpred is not null)
+ then raise exception 'Invalid or non-partial role index'; end if;
+end $$;
 set role authenticated;
 -- Host-bound context wins over a forged header, preserving page/totals filters.
 set request.headers='{"origin":"https://one.example.test","x-organization-id":"10000000-0000-4000-8000-000000000002"}';

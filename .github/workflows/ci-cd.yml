@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       deploy:
-        description: 'Deploy this tested revision, including the explicit phase 582 and ai-assistant release'
+        description: 'Deploy this tested revision, including explicit phases 582/583 and ai-assistant'
         type: boolean
         default: false
 
@@ -73,6 +73,8 @@ jobs:
             tests/sql/cash_bank_context_fixture.sql \
             database_v1_phase582_cash_bank_context_performance.sql \
             database_v1_phase582_cash_bank_context_performance.sql \
+            database_v1_phase583_internal_organization_lookup_index.sql \
+            database_v1_phase583_internal_organization_lookup_index.sql \
             tests/sql/cash_bank_context_assertions.sql; do
             docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d cash_bank_context_test -v ON_ERROR_STOP=1 < "$file"
           done
@@ -357,9 +359,9 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVER_USER }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $migration = 'database_v1_phase582_cash_bank_context_performance.sql'
-          Get-FileHash -Algorithm SHA256 -LiteralPath $migration | Format-List
-          & ./scripts/run-server-db-migrations.ps1 -SqlFiles @($migration)
+          $migrations = @('database_v1_phase582_cash_bank_context_performance.sql', 'database_v1_phase583_internal_organization_lookup_index.sql')
+          $migrations | ForEach-Object { Get-FileHash -Algorithm SHA256 -LiteralPath $_ } | Format-List
+          & ./scripts/run-server-db-migrations.ps1 -SqlFiles $migrations
 
       - name: Deploy the AI assistant with shared agents
         shell: pwsh
