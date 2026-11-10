@@ -110,6 +110,7 @@ jobs:
           utils/aiChatEnhancements.test.ts
           components/ai/AiMessageComposer.test.tsx components/ai/AiGenerationStatusCard.test.tsx
           components/ai/AiChatSurfaceV2.test.tsx components/ai/AssistantPanel.operators.test.tsx
+          components/common/TooltipDismissalBoundary.test.tsx
           components/ai/AiCapabilityComposerActions.test.tsx components/ai/AiComposeModelBar.test.tsx
           components/ai/AiRecordMutationApprovalCard.test.tsx components/ai/AiMessageRenderer.test.tsx
           --maxWorkers=1 --no-file-parallelism
