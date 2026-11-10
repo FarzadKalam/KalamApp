@@ -59,7 +59,7 @@ describe('AiChatSurfaceV2', () => {
     fireEvent.click(screen.getByLabelText('بستن فهرست گفتگوهای هوش مصنوعی'));
   }, 15000);
 
-  it('queues guidance while streaming and submits it once after the current result finishes', async () => {
+  it.each([false, true])('queues guidance once and respects cancellation (cancelled=%s)', async (cancelled) => {
     let finish!: () => void;
     const encoder = new TextEncoder();
     fetchMock.mockImplementationOnce(() => Promise.resolve(new Response(new ReadableStream({ start(controller) {
@@ -75,7 +75,14 @@ describe('AiChatSurfaceV2', () => {
     fireEvent.click(screen.getByLabelText('ثبت راهنمایی پاسخ'));
     expect(await screen.findByText(/راهنمایی در انتظار اعمال/)).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    if (cancelled) fireEvent.click(screen.getByLabelText('لغو هدایت پاسخ'));
     await act(async () => finish());
+    if (cancelled) {
+      await screen.findByText('پاسخ نخست');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText(/راهنمایی در انتظار اعمال/)).toBeNull();
+      return;
+    }
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     const guided = JSON.parse(String(fetchMock.mock.calls[1][1].body));
     expect(guided).toMatchObject({threadId:'thread-1',message:'پاسخ را کوتاه‌تر کن',inputKind:'guidance'});

@@ -1639,6 +1639,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     // allowed to initialise the composer again.
     if (initializedPanelSessionRef.current === initialPanelSessionKey) return;
     initializedPanelSessionRef.current = initialPanelSessionKey;
+    setQueuedGuidance(null);
+    setGuidanceMode(false);
     setThreadId(normalizedInitialThreadId);
     setThreadContext(null);
     setMessages([]);
