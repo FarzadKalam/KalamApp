@@ -361,6 +361,7 @@ describe('AiChatSurfaceV2', () => {
     renderSurface(['/ai']);
 
     await waitFor(() => expect(screen.getAllByText('گفتگوی واقعی فروش').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByLabelText('حذف گفتگوی هوش مصنوعی')).toBeEnabled());
     invokeMock.mockClear();
 
     fireEvent.click(screen.getByLabelText('حذف گفتگوی هوش مصنوعی'));
