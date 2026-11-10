@@ -1,7 +1,7 @@
 import React from 'react';
 import { parseAiMarkdownTable } from '../../utils/aiMarkdownTable';
 import { Button, Tooltip } from 'antd';
-import { CopyOutlined, ReloadOutlined } from '@ant-design/icons';
+import { CopyOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons';
 import AiActivityStatus from './AiActivityStatus';
 import type { AiAgentActivity } from '../../supabase/functions/_shared/ai-agents';
 
@@ -15,6 +15,7 @@ type AiMessageRendererProps = {
   onStop?: () => void;
   agentId?: string;
   activities?: AiAgentActivity[];
+  showActivityStatus?: boolean;
 };
 
 type Block =
@@ -228,12 +229,14 @@ const AiMessageRenderer: React.FC<AiMessageRendererProps> = ({
   onStop,
   agentId = 'text_chat',
   activities,
+  showActivityStatus = true,
 }) => {
   const blocks = parseBlocks(text);
   const hasText = String(text || '').trim().length > 0;
   return (
     <div className="ai-message-renderer min-w-0">
-      {streaming && <AiActivityStatus agentId={agentId} activities={activities} onStop={onStop} />}
+      {streaming && showActivityStatus && <AiActivityStatus agentId={agentId} activities={activities} onStop={onStop} />}
+      {streaming && !showActivityStatus && onStop ? <div className="flex justify-end"><Button type="text" className="ai-chat-icon" icon={<StopOutlined />} onClick={onStop} aria-label="توقف دریافت پاسخ" /></div> : null}
       {(failed || stopped) && onRetry && <div className="mb-1 flex items-center justify-end gap-1">
         {(failed || stopped) && onRetry ? (
           <Tooltip title="تلاش دوباره">

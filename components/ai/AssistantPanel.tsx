@@ -2962,12 +2962,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           <div
             className={`ai-chat-message${isUser ? ' is-user' : ''}`}
           >
-            {isUser ? messageText : waitingForResponse ? (
+            {isUser ? messageText : waitingForResponse && executionEvents.length === 0 ? (
               <AiActivityStatus agentId={respondingAgent} activities={activeAgents} onStop={isStreaming ? stopActiveStream : undefined} />
             ) : (
               <AiMessageRenderer
                 agentId={respondingAgent}
                 activities={activeAgents}
+                showActivityStatus={executionEvents.length === 0}
                 text={messageText}
                 streaming={isStreaming}
                 failed={isFailed}
