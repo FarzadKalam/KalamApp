@@ -2,9 +2,86 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Dev Server (npm run dev)",
+      "type": "npm",
+      "script": "dev",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: Story Studio",
+      "type": "shell",
+      "command": "npx vitest run components/stories/storyStudio.test.ts --maxWorkers=1 --no-file-parallelism",
+      "group": "test",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: Critical UI",
+      "type": "npm",
+      "script": "test:critical-ui",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: Notifications",
+      "type": "npm",
+      "script": "test:notifications",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: All (Low Memory)",
+      "type": "shell",
+      "command": "npx vitest run --maxWorkers=1 --no-file-parallelism",
+      "group": "test",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Typecheck (tsc --noEmit)",
+      "type": "shell",
+      "command": "npx tsc --noEmit",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": ["$tsc"]
+    },
+    {
       "label": "Deploy KalamApp",
       "type": "shell",
       "command": "npm run deploy:prod",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Deploy Supabase Function",
+      "type": "shell",
+      "command": "npm run deploy:function",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Deploy Function: workflow-interval-runner",
+      "type": "shell",
+      "command": "npm run deploy:function -- workflow-interval-runner",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run SQL File (db:sql)",
+      "type": "shell",
+      "command": "npm run db:sql",
       "options": {
         "cwd": "${workspaceFolder}"
       },

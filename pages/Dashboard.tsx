@@ -13,7 +13,7 @@ import {
   SkinOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import DateObject from 'react-date-object';
 import persian from 'react-date-object/calendars/persian';
 import persian_fa from 'react-date-object/locales/persian_fa';
@@ -57,7 +57,7 @@ import AiComposeModelBar from '../components/ai/AiComposeModelBar';
 import type { AiMediaSettings, AiMediaSourceImage } from '../components/ai/AiMediaSettingsPopover';
 import { notifyStorySms } from '../utils/storyNotification';
 import type { OrgStoryWithMeta, OrgStory } from '../components/stories/storyTypes';
-import { fetchActiveOrgStoriesWithMeta } from '../utils/orgStories';
+import { fetchActiveOrgStoriesWithMeta, invalidateOrgStoriesCache } from '../utils/orgStories';
 import { blobToBase64 } from '../utils/blobBase64';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import AiSparkleIcon from '../components/ai/AiSparkleIcon';
@@ -1040,6 +1040,8 @@ const fetchInitialStories = async (orgId: string, userId: string): Promise<OrgSt
 
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const handledStoryDeepLinkRef = useRef<string | null>(null);
   const currency = useCurrencyConfig();
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
@@ -1342,22 +1344,28 @@ const Dashboard: React.FC = () => {
     }
 
     setStoryViewerList((prev) => prev.filter((story) => story.id !== storyIdNormalized));
+    invalidateOrgStoriesCache(orgId);
     setStoryRefreshKey((k) => k + 1);
     return true;
-  }, []);
+  }, [orgId]);
 
   const handleTogglePin = useCallback(async (storyId: string, isPinned: boolean) => {
     await supabase
       .from('org_stories')
       .update({ is_pinned: !isPinned, updated_at: new Date().toISOString() })
       .eq('id', storyId);
+    invalidateOrgStoriesCache(orgId);
     setStoryRefreshKey((k) => k + 1);
-  }, []);
+  }, [orgId]);
 
   const handleMarkViewed = useCallback(async (storyId: string) => {
     if (!currentUserId) return;
     await supabase.rpc('record_story_view', { p_story_id: storyId });
-  }, [currentUserId]);
+    invalidateOrgStoriesCache(orgId);
+    setStoryViewerList((prev) =>
+      prev.map((s) => (s.id === storyId ? { ...s, isViewedByMe: true } : s)),
+    );
+  }, [currentUserId, orgId]);
 
   const handleReact = useCallback(async (storyId: string, emoji: string) => {
     if (!currentUserId) return;
@@ -1390,7 +1398,44 @@ const Dashboard: React.FC = () => {
     } else {
       await supabase.from('org_story_reactions').upsert({ story_id: storyId, user_id: currentUserId, emoji });
     }
+    invalidateOrgStoriesCache(orgId);
   }, [currentUserId, orgId, storyViewerList]);
+
+  useEffect(() => {
+    const requestedStoryId = String(searchParams.get('storyId') || '').trim();
+    if (!requestedStoryId || !orgId || !currentUserId || !storiesPermissions?.canView) return;
+    if (handledStoryDeepLinkRef.current === requestedStoryId) return;
+    handledStoryDeepLinkRef.current = requestedStoryId;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = initialStories.some((s) => s.id === requestedStoryId)
+          ? initialStories
+          : await fetchActiveOrgStoriesWithMeta({
+              supabaseClient: supabase,
+              orgId,
+              currentUserId,
+              force: true,
+            });
+        if (cancelled) return;
+        const target = list.find((s) => s.id === requestedStoryId);
+        if (target) {
+          handleOpenStory(target, list);
+        }
+      } finally {
+        if (!cancelled) {
+          const nextParams = new URLSearchParams(searchParams);
+          nextParams.delete('storyId');
+          setSearchParams(nextParams, { replace: true });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUserId, handleOpenStory, initialStories, orgId, searchParams, setSearchParams, storiesPermissions?.canView]);
 
   return (
     <>
@@ -1702,7 +1747,10 @@ const Dashboard: React.FC = () => {
           canPublishSaasStory={canPublishSaasStory}
           canPublishSaasAdminStory={canPublishSaasAdminStory}
           onClose={() => { setStoryEditorOpen(false); setEditingStory(null); }}
-          onSaved={() => setStoryRefreshKey((k) => k + 1)}
+          onSaved={() => {
+            invalidateOrgStoriesCache(orgId);
+            setStoryRefreshKey((k) => k + 1);
+          }}
           onNotifySms={(storyId, text, recipientIds) => {
             notifyStorySms(storyId, text, recipientIds);
           }}

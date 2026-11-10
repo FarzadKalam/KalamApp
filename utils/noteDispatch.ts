@@ -2,7 +2,7 @@ import { supabase } from '../supabaseClient';
 import { sendSmsViaGateway } from './smsGateway';
 import { isActiveProfileRow } from './activeProfileRecipients';
 
-const NOTE_OPTIONAL_INSERT_COLUMNS = ['author_name', 'metadata', 'reply_to', 'mention_role_ids', 'mention_user_ids'] as const;
+const NOTE_OPTIONAL_INSERT_COLUMNS = ['author_name', 'source_type', 'metadata', 'reply_to', 'mention_role_ids', 'mention_user_ids'] as const;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const omitKey = <T extends Record<string, any>>(value: T, key: string): T => {
@@ -64,12 +64,17 @@ const sanitizeNoteInsertRow = (row: Record<string, any>) => {
   return next;
 };
 
-export const insertNotesWithFallback = async (rows: Record<string, any>[]) => {
+export const insertNotesWithFallback = async (
+  rows: Record<string, any>[],
+  options?: { returning?: 'representation' | 'minimal' },
+) => {
   let payloads = rows.map((row) => sanitizeNoteInsertRow({ ...row }));
   const omittedColumns = new Set<string>();
+  const returnRepresentation = options?.returning !== 'minimal';
 
   while (true) {
-    const { data, error } = await supabase.from('notes').insert(payloads).select('*');
+    const query = supabase.from('notes').insert(payloads);
+    const { data, error } = returnRepresentation ? await query.select('*') : await query;
     if (!error) return data || [];
 
     const missingColumn = NOTE_OPTIONAL_INSERT_COLUMNS.find((column) =>

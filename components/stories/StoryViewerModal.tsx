@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  AudioMutedOutlined,
   CaretRightOutlined,
   CloseOutlined,
   DeleteOutlined,
@@ -8,24 +9,30 @@ import {
   EllipsisOutlined,
   EyeOutlined,
   LeftOutlined,
+  LinkOutlined,
   PauseOutlined,
   PushpinFilled,
   PushpinOutlined,
   RightOutlined,
   SendOutlined,
+  SoundOutlined,
 } from '@ant-design/icons';
 import { Button, Dropdown, Input, message, Modal, Popover, Space, Spin, Tooltip, Typography } from 'antd';
-import { LinkOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
-import type { OrgStoryWithMeta, StorySlide } from './storyTypes';
-import { getGradientPreset } from '../../utils/storyGradients';
-import { STORY_REACTION_EMOJIS } from '../../utils/storyGradients';
+import type { OrgStoryWithMeta, StorySlide, StoryStickerLayer } from './storyTypes';
+import { getGradientPreset, STORY_REACTION_EMOJIS } from '../../utils/storyGradients';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import ProfileAvatar from '../common/ProfileAvatar';
 import { buildImageBackgroundStyle } from '../../utils/imagePreview';
 import { sendStoryReply } from '../../utils/storyReplies';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { invalidateOrgStoriesCache, resolveStoryCreatorIdentity } from '../../utils/orgStories';
+import {
+  buildStoryTextLayerStyle,
+  computeStoryRenderScale,
+  StoryStickerVisual,
+} from './storyLayerRenderers';
 
 interface StoryViewerModalProps {
   open: boolean;
@@ -64,10 +71,10 @@ type ViewerProfileRow = {
 };
 
 const PROGRESS_INTERVAL_MS = 50;
-// ارتفاع ناحیه هدر — ناحیه‌های کلیک از پایین هدر شروع می‌شوند
 const HEADER_ZONE_PX = 88;
-// ارتفاع ناحیه فوتر
 const FOOTER_ZONE_PX = 136;
+
+const clamp = (val: number, min: number, max: number) => Math.max(min, Math.min(max, val));
 
 const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   open,
@@ -94,27 +101,68 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   const [slideIndex, setSlideIndex] = useState(0);
   const [progress, setProgress] = useState(0);
   const [paused, setPaused] = useState(false);
+  const [viewerMuted, setViewerMuted] = useState(false);
+  const [playingAudioStickerId, setPlayingAudioStickerId] = useState<string | null>(null);
+  const [audioBlockedPrompt, setAudioBlockedPrompt] = useState(false);
+  const [stageWidth, setStageWidth] = useState(380);
+
   const [viewersOpen, setViewersOpen] = useState(false);
   const [viewersList, setViewersList] = useState<ViewerEntry[]>([]);
   const [viewersLoading, setViewersLoading] = useState(false);
   const [replyText, setReplyText] = useState('');
   const [replySending, setReplySending] = useState(false);
   const [localMyReaction, setLocalMyReaction] = useState<string | null>(
-    () => stories[initialIndex]?.myReaction?.emoji ?? null
+    () => stories[initialIndex]?.myReaction?.emoji ?? null,
   );
 
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const userPausedAudioRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const progressRef = useRef(0);
+
+  useEffect(() => {
+    if (!open) return;
+    setStoryIndex(clamp(initialIndex, 0, Math.max(0, stories.length - 1)));
+    setSlideIndex(0);
+    setProgress(0);
+    progressRef.current = 0;
+    setPaused(false);
+  }, [open, initialIndex, stories.length]);
+
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el || !open) return;
+    const syncWidth = () => setStageWidth(el.clientWidth || 380);
+    syncWidth();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(syncWidth);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [open, storyIndex]);
 
   const currentStory = stories[storyIndex] ?? null;
   const currentSlide: StorySlide | null = currentStory?.slides?.[slideIndex] ?? null;
   const slideDuration = currentSlide?.duration_ms ?? 5000;
   const totalSlides = currentStory?.slides?.length ?? 0;
+
   const canReplyToCurrentStory = Boolean(
     currentStory?.creator_id
     && currentStory.creator_id !== currentUserId
     && currentStory.org_id === currentOrgId
+    && !currentStory.is_saas_wide,
   );
+
+  const renderScale = useMemo(() => computeStoryRenderScale(stageWidth), [stageWidth]);
+
+  const activeSlideAudioStickers = useMemo(
+    () => (currentSlide?.stickers || []).filter((s) => s.type === 'audio' && Boolean(s.audio_url) && !s.media_cleaned),
+    [currentSlide],
+  );
+
+  const hasVideo = Boolean(currentSlide?.type === 'video' && currentSlide.video_url && !currentSlide.media_cleaned);
+  const hasSoundTrack = hasVideo || activeSlideAudioStickers.length > 0;
 
   // reset وقتی استوری عوض می‌شود
   useEffect(() => {
@@ -138,26 +186,79 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
     }
   }, [currentStory?.id, open]);
 
-  // تایمر پیشرفت
+  // مدیریت پخش صدای ویدیوی اسلاید
   useEffect(() => {
-    if (!open || paused || !currentSlide) return;
+    const videoEl = videoRef.current;
+    if (!videoEl || !open || !hasVideo) return;
+    videoEl.muted = Boolean(currentSlide?.video_muted) || viewerMuted;
+    if (paused) {
+      videoEl.pause();
+    } else {
+      void videoEl.play().catch(() => undefined);
+    }
+  }, [open, paused, viewerMuted, hasVideo, currentSlide?.id, currentSlide?.video_muted]);
 
-    const step = (PROGRESS_INTERVAL_MS / slideDuration) * 100;
+  // بارگذاری و پخش خودکار استیکر صدا در اسلاید
+  useEffect(() => {
+    const audioEl = audioRef.current;
+    if (!audioEl) return;
 
-    timerRef.current = setInterval(() => {
-      progressRef.current += step;
-      setProgress(Math.min(progressRef.current, 100));
+    audioEl.pause();
+    audioEl.currentTime = 0;
+    userPausedAudioRef.current = false;
+    setPlayingAudioStickerId(null);
+    setAudioBlockedPrompt(false);
 
-      if (progressRef.current >= 100) {
-        clearInterval(timerRef.current!);
-        goNextSlide();
-      }
-    }, PROGRESS_INTERVAL_MS);
+    if (!open || !currentSlide) {
+      audioEl.removeAttribute('src');
+      return;
+    }
+
+    const firstAudio = activeSlideAudioStickers[0];
+    if (!firstAudio?.audio_url) {
+      audioEl.removeAttribute('src');
+      return;
+    }
+
+    audioEl.src = firstAudio.audio_url;
+    audioEl.loop = false;
+    audioEl.muted = viewerMuted;
+
+    if (firstAudio.auto_play !== false && !paused) {
+      void audioEl
+        .play()
+        .then(() => {
+          setPlayingAudioStickerId(firstAudio.id);
+          setAudioBlockedPrompt(false);
+        })
+        .catch(() => {
+          setPlayingAudioStickerId(null);
+          setAudioBlockedPrompt(true);
+        });
+    }
 
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+      audioEl.pause();
     };
-  }, [open, paused, slideIndex, storyIndex, slideDuration]);
+  }, [open, currentStory?.id, currentSlide?.id]);
+
+  // همگام‌سازی pause و mute استیکر صدا
+  useEffect(() => {
+    const audioEl = audioRef.current;
+    if (!audioEl || !audioEl.src) return;
+    audioEl.muted = viewerMuted;
+
+    if (!open || paused) {
+      if (!audioEl.paused) {
+        audioEl.pause();
+      }
+      return;
+    }
+
+    if (playingAudioStickerId && audioEl.paused && !userPausedAudioRef.current) {
+      void audioEl.play().catch(() => undefined);
+    }
+  }, [open, paused, viewerMuted, playingAudioStickerId]);
 
   const goNextSlide = useCallback(() => {
     progressRef.current = 0;
@@ -181,6 +282,27 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
     }
   }, [slideIndex, storyIndex]);
 
+  // تایمر پیشرفت اسلاید
+  useEffect(() => {
+    if (!open || paused || !currentSlide) return;
+
+    const step = (PROGRESS_INTERVAL_MS / slideDuration) * 100;
+
+    timerRef.current = setInterval(() => {
+      progressRef.current += step;
+      setProgress(Math.min(progressRef.current, 100));
+
+      if (progressRef.current >= 100) {
+        clearInterval(timerRef.current!);
+        goNextSlide();
+      }
+    }, PROGRESS_INTERVAL_MS);
+
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [open, paused, slideIndex, storyIndex, slideDuration, goNextSlide, currentSlide]);
+
   useEffect(() => {
     if (!open) return;
     const handleKey = (e: KeyboardEvent) => {
@@ -201,7 +323,6 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
     return () => window.removeEventListener('keydown', handleKey);
   }, [open, goPrevSlide, goNextSlide, onClose]);
 
-  // دریافت لیست بازدیدکنندگان با نام و زمان
   const fetchViewers = useCallback(async (storyId: string) => {
     setViewersLoading(true);
     try {
@@ -217,7 +338,7 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
       }
 
       const userIds = Array.from(
-        new Set(viewData.map((v: { user_id: string }) => String(v?.user_id || '').trim()).filter(Boolean))
+        new Set(viewData.map((v: { user_id: string }) => String(v?.user_id || '').trim()).filter(Boolean)),
       );
       const { data: profileData } = await supabase
         .from('profiles')
@@ -225,7 +346,7 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
         .in('id', userIds);
 
       const profileMap = new Map(
-        ((profileData ?? []) as ViewerProfileRow[]).map((p) => [p.id, p])
+        ((profileData ?? []) as ViewerProfileRow[]).map((p) => [p.id, p]),
       );
 
       setViewersList(
@@ -237,7 +358,7 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
             avatar_url: profile?.avatar_url ?? null,
             viewed_at: v.viewed_at,
           };
-        })
+        }),
       );
     } finally {
       setViewersLoading(false);
@@ -247,17 +368,64 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   if (!currentStory || !currentSlide) return null;
 
   const isOwnStory = currentStory.creator_id === currentUserId;
+  const { creatorName, creatorAvatar } = resolveStoryCreatorIdentity(currentStory);
 
-  const handleSlideLink = () => {
-    if (!currentSlide.link_url) return;
+  const navigateOrOpenUrl = (url: string, linkType?: 'internal' | 'external') => {
+    const trimmed = String(url || '').trim();
+    if (!trimmed) return;
     setPaused(true);
-    if (currentSlide.link_type === 'internal') {
-      navigate(currentSlide.link_url);
+    if (linkType === 'internal' || trimmed.startsWith('/')) {
+      navigate(trimmed);
       onClose();
-    } else {
-      window.open(currentSlide.link_url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    if (/^https?:\/\//i.test(trimmed)) {
+      window.open(trimmed, '_blank', 'noopener,noreferrer');
     }
   };
+
+  const handleStickerToggleAudio = (sticker: StoryStickerLayer) => {
+    const audioEl = audioRef.current;
+    if (!audioEl || !sticker.audio_url) return;
+
+    if (playingAudioStickerId === sticker.id && !audioEl.paused) {
+      audioEl.pause();
+      userPausedAudioRef.current = true;
+      setPlayingAudioStickerId(null);
+      return;
+    }
+
+    if (audioEl.src !== sticker.audio_url) {
+      audioEl.src = sticker.audio_url;
+      audioEl.currentTime = 0;
+    }
+    userPausedAudioRef.current = false;
+    setViewerMuted(false);
+    audioEl.muted = false;
+    setAudioBlockedPrompt(false);
+
+    void audioEl
+      .play()
+      .then(() => {
+        setPlayingAudioStickerId(sticker.id);
+      })
+      .catch(() => {
+        message.warning('پخش صدا در مرورگر مسدود شد؛ دوباره ضربه بزنید.');
+      });
+  };
+
+  const handleStickerClick = (sticker: StoryStickerLayer) => {
+    if (sticker.type === 'link' && sticker.url) {
+      navigateOrOpenUrl(sticker.url, sticker.link_type);
+      return;
+    }
+    if (sticker.type === 'mention' && sticker.user_id && !currentStory.is_saas_wide) {
+      setPaused(true);
+      navigate(`/profile/${sticker.user_id}`);
+      onClose();
+    }
+  };
+
   const canEdit = isOwnStory ? canEditOwn : canEditOthers;
   const canDelete = isOwnStory ? canDeleteOwn : canDeleteOthers;
 
@@ -285,10 +453,12 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
     }
   };
 
-  // پس‌زمینه اسلاید
   const slideBackground: React.CSSProperties = (() => {
-    if (currentSlide.type === 'image' && currentSlide.image_url) {
+    if (currentSlide.type === 'image' && currentSlide.image_url && !currentSlide.media_cleaned) {
       return buildImageBackgroundStyle(currentSlide.image_url, 'hero');
+    }
+    if (currentSlide.type === 'video' && currentSlide.video_url && !currentSlide.media_cleaned) {
+      return { background: '#090D16' };
     }
     const preset = getGradientPreset(currentSlide.gradient_key);
     return { background: preset.gradient };
@@ -308,7 +478,10 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
       danger: true,
       onClick: async () => {
         const deleted = await onDelete(currentStory.id);
-        if (deleted) onClose();
+        if (deleted) {
+          invalidateOrgStoriesCache(currentOrgId);
+          onClose();
+        }
       },
     },
     canPin && {
@@ -346,7 +519,7 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
             />
             <div style={{ flex: 1, overflow: 'hidden' }}>
               <div style={{ fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {v.user_name ?? 'کاربر ناشناس'}
+                {v.user_name ?? 'همکار سازمان'}
               </div>
               <div style={{ fontSize: 10, color: 'var(--kalam-text-secondary, #64748B)' }}>
                 {formatRelativeTime(v.viewed_at)}
@@ -365,27 +538,39 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
       footer={null}
       closable={false}
       centered
-      width={400}
+      width={408}
       styles={{
         content: {
           padding: 0,
-          borderRadius: 16,
+          borderRadius: 20,
           overflow: 'hidden',
           background: 'transparent',
-          boxShadow: '0 24px 64px rgba(0,0,0,0.5)',
+          boxShadow: '0 24px 64px rgba(0,0,0,0.55)',
         },
         mask: { backgroundColor: 'rgba(0,0,0,0.85)' },
       }}
     >
+      <audio
+        ref={audioRef}
+        className="hidden"
+        onEnded={() => setPlayingAudioStickerId(null)}
+        onPause={() => {
+          if (!paused) setPlayingAudioStickerId(null);
+        }}
+      />
+
+      <div style={{ position: 'relative' }}>
       <div
+        ref={stageRef}
         style={{
           position: 'relative',
           width: '100%',
           aspectRatio: '9/16',
-          maxHeight: '80vh',
-          borderRadius: 16,
+          maxHeight: '84vh',
+          borderRadius: 20,
           overflow: 'hidden',
           userSelect: 'none',
+          border: currentStory.is_saas_wide ? '2px solid rgba(56, 189, 248, 0.55)' : undefined,
           ...slideBackground,
         }}
         onMouseDown={() => setPaused(true)}
@@ -393,16 +578,48 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
         onTouchStart={() => setPaused(true)}
         onTouchEnd={() => setPaused(false)}
       >
+        {/* ─── ویدیوی واقعی اسلاید ─── */}
+        {hasVideo && (
+          <video
+            ref={videoRef}
+            src={currentSlide.video_url}
+            muted={Boolean(currentSlide.video_muted) || viewerMuted}
+            playsInline
+            autoPlay
+            loop
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+        )}
+
+        {/* اطلاع پاک‌شدن فایل پس از انقضا */}
+        {currentSlide.media_cleaned && (
+          <div className="absolute inset-0 flex items-center justify-center p-6 pointer-events-none z-[4]">
+            <div className="rounded-2xl bg-black/45 backdrop-blur-md border border-white/20 px-4 py-3 text-center text-xs text-white/90">
+              مدیای این استوری پس از پایان زمان نمایش پاکسازی شده است.
+            </div>
+          </div>
+        )}
+
+        {/* گرادیانت خوانایی هدر و فوتر */}
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0 h-24 z-[8]"
+          style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.52), transparent)' }}
+        />
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-32 z-[8]"
+          style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.56), transparent)' }}
+        />
+
         {/* ─── نوارهای پیشرفت ─── */}
         <div
           style={{
             position: 'absolute',
             top: 10,
-            left: 10,
-            right: 10,
+            left: 12,
+            right: 12,
             display: 'flex',
             gap: 4,
-            zIndex: 10,
+            zIndex: 25,
             pointerEvents: 'none',
           }}
         >
@@ -412,30 +629,29 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
               style={{
                 flex: 1,
                 height: 3,
-                borderRadius: 2,
-                backgroundColor: 'rgba(255,255,255,0.35)',
+                borderRadius: 99,
+                backgroundColor: 'rgba(255,255,255,0.34)',
                 overflow: 'hidden',
               }}
             >
               <div
                 style={{
                   height: '100%',
-                  borderRadius: 2,
+                  borderRadius: 99,
                   backgroundColor: '#fff',
                   width:
                     idx < slideIndex
                       ? '100%'
                       : idx === slideIndex
-                      ? `${progress}%`
-                      : '0%',
-                  transition: idx === slideIndex ? 'none' : undefined,
+                        ? `${progress}%`
+                        : '0%',
                 }}
               />
             </div>
           ))}
         </div>
 
-        {/* ─── هدر: آواتار + نام + زمان + منو ─── */}
+        {/* ─── هدر: آواتار + نام + دکمه صدا + منو ─── */}
         <div
           style={{
             position: 'absolute',
@@ -445,28 +661,59 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
             display: 'flex',
             alignItems: 'center',
             gap: 8,
-            zIndex: 20,
+            zIndex: 25,
           }}
+          dir="rtl"
         >
           <ProfileAvatar
             size={36}
-            src={currentStory.creator_avatar}
-            style={{ backgroundColor: 'var(--brand-primary, #3730A3)', flexShrink: 0 }}
-            name={currentStory.creator_name || '?'}
+            src={creatorAvatar || undefined}
+            style={{
+              backgroundColor: currentStory.is_saas_wide ? '#ffffff' : 'var(--brand-primary, #3730A3)',
+              border: currentStory.is_saas_wide ? '2px solid #F59E0B' : '1.5px solid rgba(255,255,255,0.65)',
+              flexShrink: 0,
+            }}
+            name={creatorName}
           />
           <div style={{ flex: 1, overflow: 'hidden' }}>
+            <div className="flex items-center gap-1.5">
+              <Typography.Text
+                strong
+                style={{ color: '#fff', fontSize: 13, textShadow: '0 1px 3px rgba(0,0,0,0.5)' }}
+                className="truncate"
+              >
+                {creatorName}
+              </Typography.Text>
+              {currentStory.is_saas_wide && (
+                <span className="inline-flex items-center rounded-full bg-amber-400/95 px-1.5 py-[1px] text-[9px] font-bold text-slate-950 shrink-0">
+                  رسمی
+                </span>
+              )}
+            </div>
             <Typography.Text
-              strong
-              style={{ color: '#fff', fontSize: 13, display: 'block', textShadow: '0 1px 3px rgba(0,0,0,0.5)' }}
-            >
-              {currentStory.creator_name}
-            </Typography.Text>
-            <Typography.Text
-              style={{ color: 'rgba(255,255,255,0.75)', fontSize: 11, textShadow: '0 1px 3px rgba(0,0,0,0.5)' }}
+              style={{ color: 'rgba(255,255,255,0.8)', fontSize: 11, textShadow: '0 1px 3px rgba(0,0,0,0.5)' }}
             >
               {formatRelativeTime(currentStory.published_at)}
             </Typography.Text>
           </div>
+
+          {hasSoundTrack && (
+            <Tooltip title={currentSlide.video_muted && activeSlideAudioStickers.length === 0 ? 'بی‌صدا توسط منتشرکننده' : (viewerMuted ? 'وصل صدا' : 'بی‌صدا')}>
+              <Button
+                type="text"
+                icon={viewerMuted || (currentSlide.video_muted && activeSlideAudioStickers.length === 0)
+                  ? <AudioMutedOutlined />
+                  : <SoundOutlined />}
+                style={{ color: '#fff', zIndex: 25 }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setViewerMuted((prev) => !prev);
+                }}
+              />
+            </Tooltip>
+          )}
 
           {menuItems.length > 0 && (
             <Dropdown
@@ -481,7 +728,7 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
               <Button
                 type="text"
                 icon={<EllipsisOutlined />}
-                style={{ color: '#fff', zIndex: 20 }}
+                style={{ color: '#fff', zIndex: 25 }}
                 onMouseDown={(e) => e.stopPropagation()}
                 onClick={(e) => e.stopPropagation()}
               />
@@ -492,7 +739,7 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
             <Button
               type="text"
               icon={paused ? <CaretRightOutlined /> : <PauseOutlined />}
-              style={{ color: '#fff', zIndex: 20 }}
+              style={{ color: '#fff', zIndex: 25 }}
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
@@ -504,12 +751,35 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
           <Button
             type="text"
             icon={<CloseOutlined />}
-            style={{ color: '#fff', zIndex: 20 }}
-            onClick={(e) => { e.stopPropagation(); onClose(); }}
+            style={{ color: '#fff', zIndex: 25 }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
           />
         </div>
 
-        {/* ─── ناحیه‌های کلیک — فقط ناحیه میانی، بیرون از هدر و فوتر ─── */}
+        {/* پیام راهنمای مرورگر در صورت نیاز به ضربه برای شروع پخش صدا */}
+        {audioBlockedPrompt && activeSlideAudioStickers[0] && (
+          <div className="absolute top-20 left-1/2 -translate-x-1/2 z-[26]">
+            <button
+              type="button"
+              onMouseDown={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleStickerToggleAudio(activeSlideAudioStickers[0]);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-full bg-slate-950/75 border border-white/25 px-3 py-1 text-[11px] font-medium text-white backdrop-blur cursor-pointer"
+            >
+              <SoundOutlined />
+              <span>برای پخش صدا ضربه بزنید</span>
+            </button>
+          </div>
+        )}
+
+        {/* ─── ناحیه‌های کلیک راست و چپ (قبلی / بعدی) ─── */}
         <div
           style={{
             position: 'absolute',
@@ -519,7 +789,10 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
             height: `calc(100% - ${HEADER_ZONE_PX + FOOTER_ZONE_PX}px)`,
             zIndex: 5,
           }}
-          onClick={(e) => { e.stopPropagation(); goPrevSlide(); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            goPrevSlide();
+          }}
         />
         <div
           style={{
@@ -530,36 +803,83 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
             height: `calc(100% - ${HEADER_ZONE_PX + FOOTER_ZONE_PX}px)`,
             zIndex: 5,
           }}
-          onClick={(e) => { e.stopPropagation(); goNextSlide(); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            goNextSlide();
+          }}
         />
 
         {/* ─── لایه‌های متن ─── */}
-        {currentSlide.text_layers.map((layer) => (
-          <div
-            key={layer.id}
-            style={{
-              position: 'absolute',
-              left: `${layer.x}%`,
-              top: `${layer.y}%`,
-              transform: 'translate(-50%, -50%)',
-              color: layer.color,
-              fontSize: layer.font_size,
-              fontWeight: layer.bold ? 'bold' : 'normal',
-              textAlign: layer.align,
-              direction: 'rtl',
-              textShadow: '0 1px 6px rgba(0,0,0,0.6)',
-              zIndex: 6,
-              pointerEvents: 'none',
-              maxWidth: '85%',
-              wordBreak: 'break-word',
-              lineHeight: 1.4,
-            }}
-          >
-            {layer.content}
-          </div>
-        ))}
+        {(currentSlide.text_layers || []).map((layer) => {
+          const widthPct = clamp(Number(layer.width_pct) || 74, 26, 92);
+          return (
+            <div
+              key={layer.id}
+              style={{
+                position: 'absolute',
+                left: `${layer.x}%`,
+                top: `${layer.y}%`,
+                transform: 'translate(-50%, -50%)',
+                width: `${widthPct}%`,
+                zIndex: 12,
+                pointerEvents: 'none',
+              }}
+            >
+              <div style={buildStoryTextLayerStyle(layer, renderScale)}>
+                {layer.content}
+              </div>
+            </div>
+          );
+        })}
 
-        {/* ─── دکمه لینک اسلاید ─── */}
+        {/* ─── لایه‌های استیکر ─── */}
+        {(currentSlide.stickers || []).map((sticker) => {
+          const interactive = sticker.type === 'link' || sticker.type === 'mention' || sticker.type === 'audio';
+          return (
+            <div
+              key={sticker.id}
+              onMouseDown={(e) => {
+                if (interactive) e.stopPropagation();
+              }}
+              onMouseUp={(e) => {
+                if (interactive) e.stopPropagation();
+              }}
+              onTouchStart={(e) => {
+                if (interactive) e.stopPropagation();
+              }}
+              onTouchEnd={(e) => {
+                if (interactive) e.stopPropagation();
+              }}
+              onClick={(e) => {
+                if (interactive) e.stopPropagation();
+              }}
+              style={{
+                position: 'absolute',
+                left: `${sticker.x}%`,
+                top: `${sticker.y}%`,
+                transform: 'translate(-50%, -50%)',
+                zIndex: 16,
+                pointerEvents: interactive ? 'auto' : 'none',
+              }}
+            >
+              <StoryStickerVisual
+                sticker={sticker}
+                renderScale={renderScale}
+                isAudioPlaying={playingAudioStickerId === sticker.id}
+                onToggleAudio={(e) => {
+                  e.stopPropagation();
+                  handleStickerToggleAudio(sticker);
+                }}
+                onClickSticker={(e) => {
+                  e.stopPropagation();
+                  handleStickerClick(sticker);
+                }}
+              />
+            </div>
+          );
+        })}
+
+        {/* ─── دکمه لینک قدیمی اسلاید (پشتیبانی سازگار) ─── */}
         {currentSlide.link_url && (
           <div
             style={{
@@ -572,12 +892,17 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
           >
             <Tooltip title={currentSlide.link_url} placement="top">
               <button
-                onClick={(e) => { e.stopPropagation(); handleSlideLink(); }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigateOrOpenUrl(currentSlide.link_url!, currentSlide.link_type);
+                }}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6,
-                  background: 'rgba(255,255,255,0.18)',
+                  background: 'rgba(255,255,255,0.2)',
                   backdropFilter: 'blur(8px)',
                   border: '1px solid rgba(255,255,255,0.45)',
                   borderRadius: 24,
@@ -598,6 +923,7 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
           </div>
         )}
 
+        {/* پاسخ سریع */}
         {canReplyToCurrentStory && (
           <div
             style={{
@@ -605,15 +931,15 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
               left: 16,
               right: 16,
               bottom: 64,
-              zIndex: 20,
+              zIndex: 25,
               display: 'flex',
               alignItems: 'center',
               gap: 8,
               padding: '6px 8px',
               borderRadius: 16,
-              background: 'rgba(0,0,0,0.3)',
+              background: 'rgba(0,0,0,0.34)',
               backdropFilter: 'blur(8px)',
-              border: '1px solid rgba(255,255,255,0.16)',
+              border: '1px solid rgba(255,255,255,0.18)',
             }}
             onMouseDown={(e) => e.stopPropagation()}
             onMouseUp={(e) => e.stopPropagation()}
@@ -653,7 +979,7 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
                 aria-label="ارسال پاسخ"
                 style={{
                   color: '#fff',
-                  background: 'rgba(255,255,255,0.12)',
+                  background: 'rgba(255,255,255,0.14)',
                   borderRadius: 12,
                   flexShrink: 0,
                 }}
@@ -677,15 +1003,15 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            zIndex: 20,
+            zIndex: 25,
           }}
         >
-          {/* ایموجی‌های واکنش */}
           <Space size={4}>
             {STORY_REACTION_EMOJIS.map((emoji) => (
               <button
                 key={emoji}
                 onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
                   const next = localMyReaction === emoji ? null : emoji;
@@ -695,9 +1021,9 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
                 style={{
                   background: localMyReaction === emoji
                     ? 'rgba(255,255,255,0.35)'
-                    : 'rgba(0,0,0,0.25)',
+                    : 'rgba(0,0,0,0.28)',
                   border: localMyReaction === emoji
-                    ? '1.5px solid rgba(255,255,255,0.7)'
+                    ? '1.5px solid rgba(255,255,255,0.75)'
                     : '1.5px solid transparent',
                   borderRadius: 20,
                   padding: '4px 8px',
@@ -713,12 +1039,12 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
             ))}
           </Space>
 
-          {/* دکمه بازدید — فقط برای صاحب استوری یا کسی که حق دیدن واکنش‌ها دارد */}
           {(isOwnStory || canViewReactions) && (
             <Popover
               open={viewersOpen}
               onOpenChange={(v) => {
                 setViewersOpen(v);
+                setPaused(v);
                 if (v) fetchViewers(currentStory.id);
               }}
               trigger="click"
@@ -730,11 +1056,12 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
                 icon={<EyeOutlined />}
                 style={{
                   color: '#fff',
-                  background: 'rgba(0,0,0,0.25)',
+                  background: 'rgba(0,0,0,0.28)',
                   backdropFilter: 'blur(4px)',
                   borderRadius: 16,
                   fontSize: 12,
                 }}
+                onMouseDown={(e) => e.stopPropagation()}
                 onClick={(e) => e.stopPropagation()}
               >
                 {toPersianNumber(currentStory.viewerCount)}
@@ -743,20 +1070,26 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
           )}
         </div>
 
-        {/* ─── دکمه‌های قبلی/بعدی استوری ─── */}
+      </div>
+
+        {/* ─── دکمه‌های قبلی/بعدی استوری بیرون از کادر برش ─── */}
         {storyIndex > 0 && (
           <Button
             type="text"
             icon={<RightOutlined />}
             style={{
               position: 'absolute',
-              right: -44,
+              right: -46,
               top: '50%',
               transform: 'translateY(-50%)',
               color: '#fff',
-              zIndex: 20,
+              zIndex: 30,
             }}
-            onClick={(e) => { e.stopPropagation(); setStoryIndex((i) => i - 1); }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              setStoryIndex((i) => i - 1);
+            }}
           />
         )}
         {storyIndex < stories.length - 1 && (
@@ -765,13 +1098,17 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
             icon={<LeftOutlined />}
             style={{
               position: 'absolute',
-              left: -44,
+              left: -46,
               top: '50%',
               transform: 'translateY(-50%)',
               color: '#fff',
-              zIndex: 20,
+              zIndex: 30,
             }}
-            onClick={(e) => { e.stopPropagation(); setStoryIndex((i) => i + 1); }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              setStoryIndex((i) => i + 1);
+            }}
           />
         )}
       </div>

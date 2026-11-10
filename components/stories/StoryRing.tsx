@@ -1,10 +1,11 @@
-import { TAZE_SYSTEM_BRAND_ASSETS } from '../../utils/tazeSystemBrandAssets';
 import React from 'react';
-import { PlusOutlined, PushpinFilled } from '@ant-design/icons';
+import { PlayCircleFilled, PlusOutlined, PushpinFilled } from '@ant-design/icons';
 import { Tooltip } from 'antd';
 import type { OrgStoryWithMeta } from './storyTypes';
+import { SAAS_STORY_AVATAR_URL, SAAS_STORY_CREATOR_NAME } from './storyTypes';
 import { getGradientPreset } from '../../utils/storyGradients';
 import { buildImageBackgroundStyle } from '../../utils/imagePreview';
+import { resolveStoryCreatorIdentity } from '../../utils/orgStories';
 import ProfileAvatar from '../common/ProfileAvatar';
 
 interface StoryRingProps {
@@ -19,70 +20,112 @@ interface AddStoryButtonProps {
 }
 
 // ─────────────────────────────────────────────
-// دایره استوری — حلقه رنگی + آواتار/اسلاید اول
+// حلقه استوری — کادر متمایز برای استوری‌های رسمی تازه‌سیستم
 // ─────────────────────────────────────────────
 export const StoryRing: React.FC<StoryRingProps> = ({ story, size = 60, onClick }) => {
   const isViewed = story.isViewedByMe;
+  const isSaasWide = Boolean(story.is_saas_wide);
   const firstSlide = story.slides?.[0];
+  const { creatorName, creatorAvatar } = resolveStoryCreatorIdentity(story);
 
   const previewStyle: React.CSSProperties = (() => {
-    if (firstSlide?.type === 'image' && firstSlide.image_url) {
+    if (firstSlide?.type === 'image' && firstSlide.image_url && !firstSlide.media_cleaned) {
       return buildImageBackgroundStyle(firstSlide.image_url, 'thumb');
+    }
+    if (firstSlide?.type === 'video' && firstSlide.video_url && !firstSlide.media_cleaned) {
+      return { background: '#0F172A' };
     }
     return { background: getGradientPreset(firstSlide?.gradient_key).gradient };
   })();
 
-  // حلقه: دیده‌شده = خاکستری، ندیده = گرادینت برند
-  const ringBackground = isViewed
-    ? 'var(--kalam-ring-seen, #94A3B8)'
-    : 'linear-gradient(135deg, var(--brand-primary, #3730A3) 0%, #DB2777 100%)';
+  // استوری‌های عمومی تازه‌سیستم: کادر سکوئیرکل دوحاشیه با طیف آبی-طلایی متمایز
+  // استوری‌های داخلی سازمان‌ها: حلقه دایره‌ای برند
+  const ringBackground = isSaasWide
+    ? (isViewed
+        ? 'linear-gradient(135deg, #94A3B8 0%, #CBD5E1 62%, #FBBF24 100%)'
+        : 'linear-gradient(135deg, #0284C7 0%, #4F46E5 50%, #F59E0B 100%)')
+    : (isViewed
+        ? 'var(--kalam-ring-seen, #94A3B8)'
+        : 'linear-gradient(135deg, rgb(var(--brand-500-rgb, 55 48 163)) 0%, #DB2777 100%)');
 
-  // رنگ جدا‌کننده سفید/تیره بسته به تم
+  const outerRadius = isSaasWide ? Math.round((size + 8) * 0.3) : '50%';
+  const innerRadius = isSaasWide ? Math.round((size + 2) * 0.27) : '50%';
+  const contentRadius = isSaasWide ? Math.round(size * 0.25) : '50%';
+
   const separatorColor = 'var(--kalam-story-sep, var(--kalam-surface, #fff))';
-
   const firstTextLayer = firstSlide?.text_layers?.[0];
   const preset = firstSlide?.gradient_key ? getGradientPreset(firstSlide.gradient_key) : null;
 
   return (
-    <Tooltip title={story.creator_name || 'استوری'} placement="bottom" mouseEnterDelay={0.6}>
+    <Tooltip
+      title={isSaasWide ? `${SAAS_STORY_CREATOR_NAME} (اطلاعیه رسمی)` : creatorName}
+      placement="bottom"
+      mouseEnterDelay={0.5}
+    >
       <div
         style={{
           width: size + 8,
           height: size + 8,
-          borderRadius: '50%',
-          padding: 3,
+          borderRadius: outerRadius,
+          padding: isSaasWide ? 3.5 : 3,
           background: ringBackground,
           cursor: 'pointer',
           position: 'relative',
           flexShrink: 0,
           transition: 'transform 0.15s ease',
+          boxShadow: isSaasWide && !isViewed
+            ? '0 4px 16px rgba(14, 165, 233, 0.28), 0 0 0 1px rgba(245, 158, 11, 0.24)'
+            : undefined,
         }}
         onClick={() => onClick(story)}
         onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.transform = 'scale(1.07)'; }}
         onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.transform = 'scale(1)'; }}
       >
-        {/* حلقه جداکننده — رنگ از CSS var تا در dark mode درست باشد */}
         <div
           style={{
             width: '100%',
             height: '100%',
-            borderRadius: '50%',
+            borderRadius: innerRadius,
             padding: 2,
             background: separatorColor,
           }}
         >
-          {/* محتوای داخل دایره */}
           <div
             style={{
               width: '100%',
               height: '100%',
-              borderRadius: '50%',
+              borderRadius: contentRadius,
               overflow: 'hidden',
               position: 'relative',
               ...previewStyle,
             }}
           >
-            {/* پیش‌نمایش متن — فقط اگر گرادینت و متن وجود دارد */}
+            {/* پیش‌نمایش فریم اول ویدیو (هرگز برای تصویر استفاده نمی‌شود) */}
+            {firstSlide?.type === 'video' && firstSlide.video_url && !firstSlide.media_cleaned && (
+              <>
+                <video
+                  src={firstSlide.video_url}
+                  muted
+                  playsInline
+                  preload="metadata"
+                  style={{ width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none' }}
+                />
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: 'rgba(15, 23, 42, 0.22)',
+                  }}
+                >
+                  <PlayCircleFilled style={{ fontSize: Math.round(size * 0.34), color: 'rgba(255,255,255,0.9)' }} />
+                </div>
+              </>
+            )}
+
+            {/* پیش‌نمایش متن روی گرادینت */}
             {firstSlide?.type === 'gradient' && firstTextLayer?.content && (
               <div
                 style={{
@@ -117,16 +160,51 @@ export const StoryRing: React.FC<StoryRingProps> = ({ story, size = 60, onClick 
           </div>
         </div>
 
-        {/* آواتار سازنده — همیشه نمایش داده می‌شود، با fallback به حروف اول نام */}
+        {/* آواتار سازنده / لوگوی رسمی تازه‌سیستم */}
         {(() => {
           const badgeSize = Math.round(size * 0.36);
-          const initial = (story.creator_name || '').trim().charAt(0).toUpperCase() || '؟';
-          if (story.creator_avatar) {
+          if (isSaasWide) {
+            return (
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: -2,
+                  right: -2,
+                  width: badgeSize + 2,
+                  height: badgeSize + 2,
+                  borderRadius: '50%',
+                  background: '#FFFFFF',
+                  border: '2px solid #F59E0B',
+                  boxShadow: '0 2px 6px rgba(15, 23, 42, 0.24)',
+                  overflow: 'hidden',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <img
+                  src={SAAS_STORY_AVATAR_URL}
+                  alt={SAAS_STORY_CREATOR_NAME}
+                  style={{ width: '100%', height: '100%', objectFit: 'contain', padding: 1 }}
+                  onError={(e) => {
+                    const target = e.currentTarget;
+                    if (!target.dataset.fallbackApplied) {
+                      target.dataset.fallbackApplied = '1';
+                      target.src = '/tazesystem_logo.png';
+                    }
+                  }}
+                />
+              </div>
+            );
+          }
+
+          const initial = creatorName.trim().charAt(0).toUpperCase() || '؟';
+          if (creatorAvatar) {
             return (
               <ProfileAvatar
                 size={badgeSize}
-                src={story.creator_avatar}
-                name={story.creator_name || ''}
+                src={creatorAvatar}
+                name={creatorName}
                 preset="avatar"
                 style={{
                   position: 'absolute',
@@ -139,27 +217,31 @@ export const StoryRing: React.FC<StoryRingProps> = ({ story, size = 60, onClick 
             );
           }
           return (
-            <div style={{
-              position: 'absolute',
-              bottom: 0,
-              right: 0,
-              width: badgeSize,
-              height: badgeSize,
-              borderRadius: '50%',
-              border: `2px solid ${separatorColor}`,
-              background: 'linear-gradient(135deg, #6B7280, #9CA3AF)',
-              overflow: 'hidden',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}>
-              <span style={{
-                color: '#fff',
-                fontSize: Math.max(7, Math.round(badgeSize * 0.45)),
-                fontWeight: 700,
-                lineHeight: 1,
-                fontFamily: 'inherit',
-              }}>
+            <div
+              style={{
+                position: 'absolute',
+                bottom: 0,
+                right: 0,
+                width: badgeSize,
+                height: badgeSize,
+                borderRadius: '50%',
+                border: `2px solid ${separatorColor}`,
+                background: 'linear-gradient(135deg, #6B7280, #9CA3AF)',
+                overflow: 'hidden',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <span
+                style={{
+                  color: '#fff',
+                  fontSize: Math.max(7, Math.round(badgeSize * 0.45)),
+                  fontWeight: 700,
+                  lineHeight: 1,
+                  fontFamily: 'inherit',
+                }}
+              >
                 {initial}
               </span>
             </div>
@@ -187,40 +269,25 @@ export const StoryRing: React.FC<StoryRingProps> = ({ story, size = 60, onClick 
           </div>
         )}
 
-        {/* نشان SaaS — لوگوی تازه‌سیستم */}
-        {story.is_saas_wide && (
+        {/* برچسب رسمی برای استوری‌های عمومی تازه‌سیستم */}
+        {isSaasWide && (
           <div
             style={{
               position: 'absolute',
-              top: 0,
-              right: 0,
-              width: Math.round(size * 0.36),
-              height: Math.round(size * 0.36),
-              borderRadius: '50%',
-              background: 'linear-gradient(135deg, #6366F1 0%, #8B5CF6 100%)',
-              border: `2px solid ${separatorColor}`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              overflow: 'hidden',
+              top: -4,
+              right: -2,
+              borderRadius: 999,
+              padding: '1px 6px',
+              background: 'linear-gradient(135deg, #0284C7 0%, #4F46E5 100%)',
+              color: '#FFFFFF',
+              fontSize: 8.5,
+              fontWeight: 800,
+              lineHeight: 1.35,
+              border: `1.5px solid ${separatorColor}`,
+              boxShadow: '0 2px 6px rgba(15, 23, 42, 0.25)',
             }}
           >
-            <img
-              src={TAZE_SYSTEM_BRAND_ASSETS.logo}
-              alt="تازه‌سیستم"
-              style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }}
-              onError={(e) => {
-                // fallback: حرف "ت" اگر لوگو لود نشد
-                (e.currentTarget as HTMLImageElement).style.display = 'none';
-                const parent = e.currentTarget.parentElement;
-                if (parent && !parent.querySelector('span')) {
-                  const span = document.createElement('span');
-                  span.textContent = 'ت';
-                  span.style.cssText = `color:#fff;font-size:${Math.max(7, Math.round(size * 0.13))}px;font-weight:bold;font-family:inherit`;
-                  parent.appendChild(span);
-                }
-              }}
-            />
+            رسمی
           </div>
         )}
       </div>
@@ -240,14 +307,14 @@ export const AddStoryButton: React.FC<AddStoryButtonProps> = ({ size = 60, onCli
           width: size + 8,
           height: size + 8,
           borderRadius: '50%',
-          border: '2px dashed var(--brand-primary, #3730A3)',
+          border: '2px dashed rgb(var(--brand-500-rgb, 55 48 163))',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           cursor: 'pointer',
           flexShrink: 0,
           transition: 'all 0.15s ease',
-          backgroundColor: 'rgba(55,48,163,0.06)',
+          backgroundColor: 'rgba(var(--brand-500-rgb, 55 48 163), 0.06)',
         }}
         onMouseEnter={(e) => {
           (e.currentTarget as HTMLDivElement).style.transform = 'scale(1.07)';
@@ -258,7 +325,7 @@ export const AddStoryButton: React.FC<AddStoryButtonProps> = ({ size = 60, onCli
           (e.currentTarget as HTMLDivElement).style.borderStyle = 'dashed';
         }}
       >
-        <PlusOutlined style={{ fontSize: Math.round(size * 0.36), color: 'var(--brand-primary, #3730A3)' }} />
+        <PlusOutlined style={{ fontSize: Math.round(size * 0.36), color: 'rgb(var(--brand-500-rgb, 55 48 163))' }} />
       </div>
     </Tooltip>
   );

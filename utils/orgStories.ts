@@ -1,24 +1,65 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { OrgStory, OrgStoryReaction, OrgStoryView, OrgStoryWithMeta } from '../components/stories/storyTypes';
+import { SAAS_STORY_AVATAR_URL, SAAS_STORY_CREATOR_NAME } from '../components/stories/storyTypes';
 import { normalizePublicAssetUrl } from './assetUrl';
-import { getAppRuntimeCached } from './appRuntimeCache';
+import { getAppRuntimeCached, clearAppRuntimeCache } from './appRuntimeCache';
+import { cleanupExpiredOwnOrgStoryMedia } from './storyMediaCleanup';
+
+export const invalidateOrgStoriesCache = (orgId?: string | null) => {
+  const normalizedOrgId = String(orgId || '').trim();
+  clearAppRuntimeCache(normalizedOrgId ? `org-stories:${normalizedOrgId}:` : 'org-stories:');
+};
+
+export const ORG_STORY_LEGACY_SELECT =
+  'id, org_id, creator_id, creator_name, creator_avatar, slides, is_org_wide, is_saas_wide, is_saas_admins_only, viewer_user_ids, viewer_role_ids, mention_user_ids, mention_role_ids, published_at, expires_at, is_pinned, is_active, view_count, created_at, updated_at';
 
 export const ORG_STORY_SELECT =
-  'id, org_id, creator_id, creator_name, creator_avatar, slides, is_org_wide, is_saas_wide, is_saas_admins_only, viewer_user_ids, viewer_role_ids, mention_user_ids, mention_role_ids, published_at, expires_at, is_pinned, is_active, view_count, created_at, updated_at';
+  `${ORG_STORY_LEGACY_SELECT}, delete_media_on_expire, media_cleaned_at, settings`;
 
 export const ORG_STORY_VIEW_SELECT = 'id, org_id, story_id, user_id, viewed_at';
 export const ORG_STORY_REACTION_SELECT = 'id, org_id, story_id, user_id, user_name, emoji, created_at';
 
-export const normalizeOrgStoryAssets = (story: OrgStory): OrgStory => ({
-  ...story,
-  creator_avatar: normalizePublicAssetUrl(story.creator_avatar) || null,
-  slides: (story.slides || []).map((slide) => ({
-    ...slide,
-    ...(slide.image_url
-      ? { image_url: normalizePublicAssetUrl(slide.image_url) || undefined }
-      : {}),
-  })),
-});
+export const resolveStoryCreatorIdentity = (
+  story: Pick<OrgStory, 'is_saas_wide' | 'creator_name' | 'creator_avatar'>,
+) => {
+  if (story.is_saas_wide) {
+    return {
+      creatorName: SAAS_STORY_CREATOR_NAME,
+      creatorAvatar: SAAS_STORY_AVATAR_URL,
+    };
+  }
+  return {
+    creatorName: String(story.creator_name || '').trim() || 'ناشناس',
+    creatorAvatar: normalizePublicAssetUrl(story.creator_avatar) || null,
+  };
+};
+
+export const normalizeOrgStoryAssets = (story: OrgStory): OrgStory => {
+  const { creatorName, creatorAvatar } = resolveStoryCreatorIdentity(story);
+  return {
+    ...story,
+    creator_name: creatorName,
+    creator_avatar: story.is_saas_wide ? creatorAvatar : (normalizePublicAssetUrl(story.creator_avatar) || null),
+    slides: (story.slides || []).map((slide) => ({
+      ...slide,
+      ...(slide.image_url
+        ? { image_url: normalizePublicAssetUrl(slide.image_url) || undefined }
+        : {}),
+      ...(slide.video_url
+        ? { video_url: normalizePublicAssetUrl(slide.video_url) || undefined }
+        : {}),
+      ...(Array.isArray(slide.stickers)
+        ? {
+            stickers: slide.stickers.map((sticker) => (
+              sticker?.type === 'audio' && sticker.audio_url
+                ? { ...sticker, audio_url: normalizePublicAssetUrl(sticker.audio_url) || sticker.audio_url }
+                : sticker
+            )),
+          }
+        : {}),
+    })),
+  };
+};
 
 export const buildOrgStoriesWithMeta = (
   rawStories: OrgStory[],
@@ -70,6 +111,12 @@ export const buildOrgStoriesWithMeta = (
     });
 };
 
+const isMissingStorySchemaColumnError = (error: any) => {
+  const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  const code = String(error?.code || '').toUpperCase();
+  return code === '42703' || code === 'PGRST204' || text.includes('delete_media_on_expire') || text.includes('media_cleaned_at') || text.includes('settings');
+};
+
 export const fetchActiveOrgStoriesWithMeta = async ({
   supabaseClient,
   orgId,
@@ -83,6 +130,9 @@ export const fetchActiveOrgStoriesWithMeta = async ({
 }): Promise<OrgStoryWithMeta[]> => {
   const normalizedOrgId = String(orgId || '').trim();
   if (!normalizedOrgId) return [];
+
+  void cleanupExpiredOwnOrgStoryMedia(normalizedOrgId);
+
   return getAppRuntimeCached({
     key: `org-stories:${normalizedOrgId}:${String(currentUserId || 'guest').trim() || 'guest'}`,
     ttlMs: 60_000,
@@ -90,10 +140,10 @@ export const fetchActiveOrgStoriesWithMeta = async ({
     loader: async () => {
       const now = new Date().toISOString();
 
-      const [orgResult, saasResult] = await Promise.all([
+      const queryStories = async (selectCols: string) => Promise.all([
         supabaseClient
           .from('org_stories')
-          .select(ORG_STORY_SELECT)
+          .select(selectCols)
           .eq('org_id', normalizedOrgId)
           .eq('is_active', true)
           .eq('is_saas_wide', false)
@@ -103,7 +153,7 @@ export const fetchActiveOrgStoriesWithMeta = async ({
           .order('published_at', { ascending: false }),
         supabaseClient
           .from('org_stories')
-          .select(ORG_STORY_SELECT)
+          .select(selectCols)
           .eq('is_saas_wide', true)
           .eq('is_active', true)
           .lte('published_at', now)
@@ -111,13 +161,21 @@ export const fetchActiveOrgStoriesWithMeta = async ({
           .order('published_at', { ascending: false }),
       ]);
 
+      let [orgResult, saasResult] = await queryStories(ORG_STORY_SELECT);
+      if (
+        (orgResult.error && isMissingStorySchemaColumnError(orgResult.error))
+        || (saasResult.error && isMissingStorySchemaColumnError(saasResult.error))
+      ) {
+        [orgResult, saasResult] = await queryStories(ORG_STORY_LEGACY_SELECT);
+      }
+
       const seenIds = new Set<string>();
       const rawStories: OrgStory[] = [];
       for (const row of [...(orgResult.data || []), ...(saasResult.data || [])]) {
         const id = String((row as any)?.id || '').trim();
         if (id && !seenIds.has(id)) {
           seenIds.add(id);
-          rawStories.push(row as OrgStory);
+          rawStories.push(row as unknown as OrgStory);
         }
       }
 

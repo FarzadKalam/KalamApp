@@ -99,6 +99,7 @@ jobs:
         run: >-
           npx vitest run utils/uiNotificationOverlayStore.test.ts
           components/UploadProgressOverlay.test.tsx components/layout/SidebarMenu.test.tsx
+          components/stories/storyStudio.test.ts
           --maxWorkers=1 --no-file-parallelism
 
       - name: Content calendar regression checks

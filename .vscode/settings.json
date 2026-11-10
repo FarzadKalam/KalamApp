@@ -2,6 +2,9 @@
   "typescript.tsserver.maxTsServerMemory": 768,
   "typescript.tsserver.enableProjectDiagnostics": false,
   "typescript.disableAutomaticTypeAcquisition": true,
+  "npm.enableScriptExplorer": true,
+  "npm.scriptExplorerAction": "run",
+  "npm.packageManager": "npm",
   "files.watcherExclude": {
     "**/.git/**": true,
     "**/node_modules/**": true,

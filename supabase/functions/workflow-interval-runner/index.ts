@@ -7514,6 +7514,128 @@ async function runCustomerClubNotificationQueue(url: string, key: string): Promi
   return stats;
 }
 
+// ── Expired Org Stories Media Cleanup ─────────────────────────────────────────
+
+const STORY_CLEANUP_BUCKET = String(Deno.env.get('FILE_STORAGE_BUCKET') || 'images').trim() || 'images';
+
+function extractDedicatedStoryStoragePath(rawUrl: unknown, bucket: string, orgId: string): string | null {
+  const value = String(rawUrl || '').trim();
+  if (!value || !orgId) return null;
+  let pathname = value;
+  try {
+    if (/^https?:\/\//i.test(value)) {
+      pathname = new URL(value).pathname;
+    }
+  } catch {
+    pathname = value;
+  }
+  const cleanPath = pathname.split('?')[0].split('#')[0];
+  const escapedBucket = bucket.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const publicMatch = cleanPath.match(new RegExp(`/storage/v1/object/(?:public|sign)/${escapedBucket}/(.+)$`));
+  const relative = decodeURIComponent((publicMatch?.[1] || cleanPath).replace(/^\/+/, ''));
+  if (!relative.startsWith(`stories/${orgId}/`)) {
+    return null;
+  }
+  return relative;
+}
+
+async function deleteStorageObjectsBatch(storageUrl: string, storageKey: string, bucket: string, paths: string[]) {
+  if (!storageUrl || !storageKey || paths.length === 0) return;
+  const baseUrl = storageUrl.replace(/\/$/, '');
+  for (const objectPath of paths) {
+    const encodedPath = objectPath.split('/').filter(Boolean).map((s) => encodeURIComponent(s)).join('/');
+    const res = await fetch(`${baseUrl}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedPath}`, {
+      method: 'DELETE',
+      headers: {
+        apikey: storageKey,
+        Authorization: `Bearer ${storageKey}`,
+      },
+    }).catch(() => null);
+    if (res && !res.ok && res.status !== 404) {
+      const errText = await res.text().catch(() => '');
+      console.warn(`[workflow-runner] Failed to delete expired story media ${objectPath}: ${res.status} ${errText}`);
+    }
+  }
+}
+
+async function cleanupExpiredOrgStoriesTick(url: string, key: string): Promise<Record<string, number>> {
+  const stats = { checked: 0, cleanedStories: 0, deletedFiles: 0 };
+  const storageUrl = String(Deno.env.get('FILE_STORAGE_URL') || url).trim();
+  const storageKey = String(Deno.env.get('FILE_STORAGE_SERVICE_ROLE_KEY') || key).trim();
+
+  let expiredStories: Array<{ id: string; org_id: string; slides: any[] }> = [];
+  try {
+    const rows = await callRpc(url, key, 'get_expired_org_stories_for_media_cleanup', { p_limit: 50 });
+    expiredStories = Array.isArray(rows) ? rows : [];
+  } catch {
+    await callRpc(url, key, 'deactivate_expired_org_stories', {}).catch(() => undefined);
+    return stats;
+  }
+
+  for (const story of expiredStories) {
+    stats.checked += 1;
+    const storyId = String(story?.id || '').trim();
+    const storyOrgId = String(story?.org_id || '').trim();
+    const rawSlides = Array.isArray(story?.slides) ? story.slides : [];
+    if (!storyId || !storyOrgId) continue;
+
+    const dedicatedPaths = new Set<string>();
+    const cleanedSlides = rawSlides.map((slide: any) => {
+      if (!slide || typeof slide !== 'object') return slide;
+      const nextSlide = { ...slide };
+      const hasSharedSlideFile = Boolean(String(slide.file_id || '').trim());
+
+      if (!hasSharedSlideFile) {
+        const imgPath = extractDedicatedStoryStoragePath(slide.image_url, STORY_CLEANUP_BUCKET, storyOrgId);
+        if (imgPath) {
+          dedicatedPaths.add(imgPath);
+          delete nextSlide.image_url;
+          nextSlide.media_cleaned = true;
+        }
+        const vidPath = extractDedicatedStoryStoragePath(slide.video_url, STORY_CLEANUP_BUCKET, storyOrgId);
+        if (vidPath) {
+          dedicatedPaths.add(vidPath);
+          delete nextSlide.video_url;
+          nextSlide.media_cleaned = true;
+        }
+      }
+
+      if (Array.isArray(slide.stickers)) {
+        nextSlide.stickers = slide.stickers.map((sticker: any) => {
+          if (!sticker || typeof sticker !== 'object') return sticker;
+          const hasSharedStickerFile = Boolean(String(sticker.file_id || '').trim());
+          if (!hasSharedStickerFile && sticker.type === 'audio' && sticker.audio_url) {
+            const audioPath = extractDedicatedStoryStoragePath(sticker.audio_url, STORY_CLEANUP_BUCKET, storyOrgId);
+            if (audioPath) {
+              dedicatedPaths.add(audioPath);
+              return { ...sticker, audio_url: '', media_cleaned: true };
+            }
+          }
+          return sticker;
+        });
+      }
+
+      return nextSlide;
+    });
+
+    const pathsList = Array.from(dedicatedPaths);
+    if (pathsList.length > 0) {
+      await deleteStorageObjectsBatch(storageUrl, storageKey, STORY_CLEANUP_BUCKET, pathsList);
+      stats.deletedFiles += pathsList.length;
+    }
+
+    await callRpc(url, key, 'mark_org_story_media_cleaned', {
+      p_story_id: storyId,
+      p_cleaned_slides: cleanedSlides,
+    }).catch((err) => {
+      console.warn('[workflow-runner] mark_org_story_media_cleaned failed:', storyId, err?.message || err);
+    });
+    stats.cleanedStories += 1;
+  }
+
+  return stats;
+}
+
 // ── Deno.serve ─────────────────────────────────────────────────────────────────
 
 const corsHeaders = {
@@ -7603,8 +7725,12 @@ Deno.serve(async (req) => {
       serviceRoleKey,
       new Date(),
     ).catch((error) => ({ failed: true, error: String(error?.message || error) }));
-    console.log(`[workflow-runner] build=${FUNCTION_BUILD} enqueueStats=${JSON.stringify(enqueueStats)} intervalQueueStats=${JSON.stringify(intervalQueueStats)} scheduledReportStats=${JSON.stringify(scheduledReportStats)} scheduledWorkScheduleStats=${JSON.stringify(scheduledWorkScheduleStats)} eventQueueStats=${JSON.stringify(eventQueueStats)} customerClubNotificationStats=${JSON.stringify(customerClubNotificationStats)} saasBillingStats=${JSON.stringify(saasBillingStats)} processAutomationStats=${JSON.stringify(processAutomationStats)}`);
-    return json(200, { ok: true, stats: enqueueStats, intervalQueueStats, scheduledReportStats, scheduledWorkScheduleStats, eventQueueStats, customerClubNotificationStats, saasBillingStats, processAutomationStats });
+    const expiredStoryCleanupStats = await cleanupExpiredOrgStoriesTick(
+      supabaseUrl,
+      serviceRoleKey,
+    ).catch((error) => ({ error: String(error?.message || error) }));
+    console.log(`[workflow-runner] build=${FUNCTION_BUILD} enqueueStats=${JSON.stringify(enqueueStats)} intervalQueueStats=${JSON.stringify(intervalQueueStats)} scheduledReportStats=${JSON.stringify(scheduledReportStats)} scheduledWorkScheduleStats=${JSON.stringify(scheduledWorkScheduleStats)} eventQueueStats=${JSON.stringify(eventQueueStats)} customerClubNotificationStats=${JSON.stringify(customerClubNotificationStats)} saasBillingStats=${JSON.stringify(saasBillingStats)} processAutomationStats=${JSON.stringify(processAutomationStats)} expiredStoryCleanupStats=${JSON.stringify(expiredStoryCleanupStats)}`);
+    return json(200, { ok: true, stats: enqueueStats, intervalQueueStats, scheduledReportStats, scheduledWorkScheduleStats, eventQueueStats, customerClubNotificationStats, saasBillingStats, processAutomationStats, expiredStoryCleanupStats });
     } finally {
       if (leaseToken) {
         await releaseWorkflowRunnerLease(supabaseUrl, serviceRoleKey, leaseToken).catch((error) => {

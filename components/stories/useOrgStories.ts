@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../../supabaseClient';
 import type { OrgStoryWithMeta } from './storyTypes';
-import { fetchActiveOrgStoriesWithMeta } from '../../utils/orgStories';
+import { fetchActiveOrgStoriesWithMeta, invalidateOrgStoriesCache } from '../../utils/orgStories';
 
 interface UseOrgStoriesOptions {
   orgId: string | null;
@@ -55,6 +55,7 @@ export const useOrgStories = ({
 
   // Realtime subscription
   useEffect(() => {
+    isMountedRef.current = true;
     if (!orgId || !enabled) return;
 
     fetchData();
@@ -102,16 +103,21 @@ export const useOrgStories = ({
   const markViewed = useCallback(
     async (storyId: string) => {
       if (!currentUserId) return;
+      if (isMountedRef.current) {
+        hasInitialDataRef.current = true;
+      }
+      if (!orgId) return;
       await supabase.rpc('record_story_view', {
         p_story_id: storyId,
       });
+      invalidateOrgStoriesCache(orgId);
       setStories((prev) =>
         prev.map((s) =>
           s.id === storyId ? { ...s, isViewedByMe: true } : s
         )
       );
     },
-    [currentUserId]
+    [currentUserId, orgId]
   );
 
   const toggleReaction = useCallback(
@@ -134,20 +140,23 @@ export const useOrgStories = ({
           emoji,
         });
       }
+      invalidateOrgStoriesCache(orgId);
     },
-    [currentUserId, stories]
+    [currentUserId, orgId, stories]
   );
 
   const deleteStory = useCallback(async (storyId: string) => {
     await supabase.from('org_stories').delete().eq('id', storyId);
-  }, []);
+    invalidateOrgStoriesCache(orgId);
+  }, [orgId]);
 
   const togglePin = useCallback(async (storyId: string, isPinned: boolean) => {
     await supabase
       .from('org_stories')
       .update({ is_pinned: !isPinned, updated_at: new Date().toISOString() })
       .eq('id', storyId);
-  }, []);
+    invalidateOrgStoriesCache(orgId);
+  }, [orgId]);
 
   return {
     stories,
