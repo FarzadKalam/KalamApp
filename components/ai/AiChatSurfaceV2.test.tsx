@@ -47,6 +47,37 @@ vi.mock('../../supabaseClient', () => ({
 }));
 
 describe('AiChatSurfaceV2', () => {
+  it('positions opened history at the last message without animating, including after switching threads', async () => {
+    const height = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function(this: HTMLElement) { return this.classList.contains('ai-chat-message-list') ? 5000 : 0; });
+    const viewport = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function(this: HTMLElement) { return this.classList.contains('ai-chat-message-list') ? 600 : 0; });
+    const scrollTo = vi.fn();
+    const previousScrollTo = HTMLElement.prototype.scrollTo;
+    HTMLElement.prototype.scrollTo = scrollTo;
+    const defaultInvoke = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async (name, options) => {
+      if (options?.body?.action === 'get_thread') {
+        const id = options.body.threadId;
+        return {data:{success:true,threadId:id,thread:{id,title:'گفتگوی آزمایشی'},messages:[{id:`answer-${id}`,role:'assistant',content:`آخرین پاسخ ${id}`}]},error:null};
+      }
+      return defaultInvoke(name, options);
+    });
+    try {
+      const {container} = renderSurface(['/ai?thread=thread-1']);
+      await screen.findByText('آخرین پاسخ thread-1');
+      const list = container.querySelector('.ai-chat-message-list') as HTMLElement;
+      expect(list.scrollTop).toBe(5000);
+      list.scrollTop = 100;
+      fireEvent.scroll(list);
+      fireEvent.click(await screen.findByRole('button', {name:/گفتگوی پشتیبانی/}));
+      await screen.findByText('آخرین پاسخ thread-2');
+      expect((container.querySelector('.ai-chat-message-list') as HTMLElement).scrollTop).toBe(5000);
+      expect(scrollTo).not.toHaveBeenCalled();
+    } finally {
+      height.mockRestore(); viewport.mockRestore();
+      HTMLElement.prototype.scrollTo = previousScrollTo;
+    }
+  }, 15000);
+
   it('has no compact mobile sidebar and opens the thread list with the highlighted menu', async () => {
     let container!: HTMLElement;
     await act(async () => { container = renderSurface(['/ai?new=1']).container; });

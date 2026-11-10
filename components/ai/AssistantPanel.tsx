@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { App, Avatar, Button, Checkbox, Drawer, Empty, Input, Modal, Popconfirm, Popover, Progress, Space, Spin, Tag, Tooltip } from 'antd';
 import { CheckOutlined, CloseOutlined, CompressOutlined, CopyOutlined, DeleteOutlined, EditOutlined, ForwardOutlined, MenuOutlined, ShareAltOutlined, UserAddOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -571,6 +571,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const renamingThreadRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
+  const historyScrollPendingRef = useRef(false);
+  const displayedHistoryThreadRef = useRef<string | null>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
   const autoSubmittedInitialPromptRef = useRef('');
   const autoSubmittedInitialBundleRef = useRef('');
@@ -1599,6 +1601,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           provider: item.provider || null,
           model: item.model || null,
         }));
+      if (displayedHistoryThreadRef.current !== requestedThreadId) {
+        displayedHistoryThreadRef.current = requestedThreadId;
+        historyScrollPendingRef.current = true;
+        shouldStickToBottomRef.current = true;
+      }
       setMessages(nextMessages);
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'خواندن تاریخچه چت ناموفق بود.'));
@@ -1639,6 +1646,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     // allowed to initialise the composer again.
     if (initializedPanelSessionRef.current === initialPanelSessionKey) return;
     initializedPanelSessionRef.current = initialPanelSessionKey;
+    displayedHistoryThreadRef.current = null;
+    historyScrollPendingRef.current = false;
+    shouldStickToBottomRef.current = true;
     setQueuedGuidance(null);
     setGuidanceMode(false);
     setThreadId(normalizedInitialThreadId);
@@ -1731,14 +1741,24 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     };
   }, [active, callAssistant]);
 
-  useEffect(() => {
-    if (!active) return;
+  useLayoutEffect(() => {
+    if (!active || messages.length === 0) return;
+    const initialNode = scrollRef.current;
+    if (historyScrollPendingRef.current && initialNode) {
+      // Restore history before paint; never animate through the whole conversation.
+      historyScrollPendingRef.current = false;
+      const previousBehavior = initialNode.style.scrollBehavior;
+      initialNode.style.scrollBehavior = 'auto';
+      initialNode.scrollTop = initialNode.scrollHeight;
+      initialNode.style.scrollBehavior = previousBehavior;
+      return;
+    }
     const frameId = window.requestAnimationFrame(() => {
       const node = scrollRef.current;
       if (!node) return;
       if (!shouldStickToBottomRef.current) return;
       if (typeof node.scrollTo === 'function') {
-        node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' });
+        node.scrollTo({ top: node.scrollHeight, behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
         return;
       }
       node.scrollTop = node.scrollHeight;
