@@ -1,13 +1,14 @@
 /** GFM-style tables; text only, with pipes inside inline code and escaped pipes preserved. */
 export const splitAiTableRow = (line: string): string[] => {
-  const cells: string[] = []; let value = ''; let code = false; let escaped = false;
-  for (const char of line.trim()) {
-    if (escaped) { value += char; escaped = false; continue; }
-    if (char === '\\') { escaped = true; continue; }
+  const cells: string[] = []; let value = ''; let code = false;
+  const trimmed = line.trim();
+  for (let index = 0; index < trimmed.length; index++) {
+    const char = trimmed[index];
+    if (char === '\\' && !code && ['|', '\\'].includes(trimmed[index + 1])) { value += trimmed[++index]; continue; }
     if (char === '`') code = !code;
     if (char === '|' && !code) { cells.push(value.trim()); value = ''; } else value += char;
   }
-  cells.push((value + (escaped ? '\\' : '')).trim());
+  cells.push(value.trim());
   if (line.trim().startsWith('|')) cells.shift();
   if (line.trim().endsWith('|') && cells.at(-1) === '') cells.pop();
   return cells;

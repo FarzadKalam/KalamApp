@@ -3478,7 +3478,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             </Space>
           </div>
         ) : null}
-        {submitting && messages.some(item => item.metadata?.streaming === true) && !guidanceMode && !queuedGuidance ? <div className="ai-guidance-toolbar"><Button type="text" icon={<ForwardOutlined />} onClick={() => setGuidanceMode(true)}>هدایت پاسخ</Button></div> : null}
+        {submitting && messages.some(item => item.metadata?.streaming === true) && !guidanceMode && !queuedGuidance ? <div className="ai-guidance-toolbar"><Button type="text" aria-label="هدایت پاسخ" icon={<ForwardOutlined />} onClick={() => setGuidanceMode(true)}>هدایت پاسخ</Button></div> : null}
         {guidanceMode || queuedGuidance ? <div className="ai-guidance-note" role="status"><span>{queuedGuidance ? `راهنمایی در انتظار اعمال: ${queuedGuidance}` : 'راهنمایی را بنویسید؛ پس از پایان پاسخ جاری اعمال می‌شود.'}</span>{queuedGuidance && !submitting ? <Button type="text" onClick={() => { const text = queuedGuidance; setQueuedGuidance(null); void submitChat(text, 'guidance'); }}>اعمال راهنمایی</Button> : null}<Button type="text" aria-label="لغو هدایت پاسخ" onClick={() => { setGuidanceMode(false); setQueuedGuidance(null); }} icon={<CloseOutlined />} /></div> : null}
         <AiMessageComposer value={input} onChange={setInput}
           onSubmit={() => {

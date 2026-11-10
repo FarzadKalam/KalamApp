@@ -7,6 +7,7 @@ import { readAiTaskResponse } from './aiEventStream';
 describe('AI chat presentation contracts', () => {
   it('parses escaped pipes and inline code without interpreting cell HTML', () => {
     expect(splitAiTableRow('| الف \\| ب | `a|b` |')).toEqual(['الف | ب', '`a|b`']);
+    expect(splitAiTableRow('| `C:\\files` | C:\\files |')).toEqual(['`C:\\files`', 'C:\\files']);
     expect(parseAiMarkdownTable(['| نام | مقدار |','| --- | ---: |','| <script>x</script> | ۱۲ |'],0)?.rows).toEqual([['<script>x</script>','۱۲']]);
     expect(parseAiMarkdownTable(['a | b','text | text'],0)).toBeNull();
   });
