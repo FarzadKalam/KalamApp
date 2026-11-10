@@ -104,7 +104,7 @@ jobs:
       - name: Shared AI agents and chat surfaces regression checks
         timeout-minutes: 10
         run: >-
-          npx vitest run supabase/functions/_shared/ai-agents.test.ts
+          npx vitest run supabase/functions/_shared/ai-agents.test.ts supabase/functions/_shared/ai-agent-contract.test.ts
           components/ai/AiMessageComposer.test.tsx components/ai/AiGenerationStatusCard.test.tsx
           components/ai/AiChatSurfaceV2.test.tsx components/ai/AssistantPanel.operators.test.tsx
           components/ai/AiCapabilityComposerActions.test.tsx components/ai/AiComposeModelBar.test.tsx

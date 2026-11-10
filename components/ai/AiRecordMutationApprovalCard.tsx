@@ -79,7 +79,7 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
   }
 
   return (
-    <div className="mt-2 rounded-xl border border-amber-200/70 bg-white/72 p-2 dark:border-amber-300/15 dark:bg-white/[0.045]">
+    <div className="mt-2 rounded-xl border border-[var(--ai-chat-line,#dfe2e5)] bg-[var(--ai-chat-surface,#fff)] p-2 dark:border-white/10 dark:bg-white/[0.045]">
       {records.length > 1 ? (
         <div className="mb-2 flex items-center justify-between gap-2">
           <Button
@@ -118,11 +118,11 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
           return (
             <div key={`${record.record_id || 'new'}-${recordIndex}`} className="px-1 pb-4">
               {recordTitle ? (
-                <div className="mb-2 rounded-lg bg-amber-50/80 px-2 py-1.5 font-semibold text-amber-900 dark:bg-black/20 dark:text-amber-50">
+                <div className="mb-2 rounded-lg bg-[var(--ai-chat-canvas,#fafafa)] px-2 py-1.5 font-semibold text-[var(--ai-chat-text,#292e31)] dark:bg-black/20 dark:text-[var(--ai-chat-text,#f4f4f5)]">
                   {recordTitle}
                 </div>
               ) : null}
-              <div className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-[var(--ai-chat-line,#dfe2e5)] bg-amber-50/50 px-2 py-1.5 dark:border-white/10 dark:bg-black/15">
+              <div className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-[var(--ai-chat-line,#dfe2e5)] bg-[var(--ai-chat-canvas,#fafafa)] px-2 py-1.5 dark:border-white/10 dark:bg-black/15">
                 <span className="font-semibold text-[var(--ai-chat-text,#292e31)] dark:text-[var(--ai-chat-text,#f4f4f5)]">
                   {actionType === 'update_record_from_prompt' ? 'این مورد ویرایش شود' : 'این مورد ثبت شود'}
                 </span>
@@ -161,7 +161,7 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
                       <section key={table.key} className="rounded-xl border border-[var(--ai-chat-line,#dfe2e5)] bg-white/60 p-2 dark:border-white/10 dark:bg-black/15">
                         <div className="mb-2 flex items-center justify-between gap-2">
                           <div className="font-semibold text-[var(--ai-chat-text,#292e31)] dark:text-[var(--ai-chat-text,#f4f4f5)]">{table.label}</div>
-                          <span className="text-[11px] text-amber-700/80 dark:text-amber-200/70">
+                          <span className="text-[11px] text-[var(--ai-chat-muted,#596168)] dark:text-[var(--ai-chat-muted,#b7b7be)]">
                             {(Array.isArray(record.tables?.[table.key]) ? record.tables[table.key] : []).length.toLocaleString('fa-IR')} ردیف
                           </span>
                         </div>

@@ -49,7 +49,7 @@ const AiProcessOperationApprovalCard: React.FC<Props> = ({ operations, selectedI
           />
           <span className="min-w-0 flex-1">
             <span className="block font-semibold text-[var(--ai-chat-text,#292e31)] dark:text-[var(--ai-chat-text,#f4f4f5)]">{getOperationTitle(operation, index)}</span>
-            <span className="mt-0.5 block text-[11px] leading-5 text-amber-800 dark:text-amber-200/85">{getOperationDetails(operation)}</span>
+            <span className="mt-0.5 block text-[11px] leading-5 text-[var(--ai-chat-muted,#596168)] dark:text-[var(--ai-chat-muted,#b7b7be)]">{getOperationDetails(operation)}</span>
           </span>
         </label>
       ))}
