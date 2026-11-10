@@ -8,7 +8,7 @@ import {
 import { resolvePersianCalendarContext } from '../_shared/persian-calendar-resolver.ts';
 import { PEYDA_REGULAR_WOFF2_BASE64 } from './peyda-font.ts';
 import { GEMINI_PREBUILT_VOICES, resolveSpeechModelProvider } from '../_shared/speech-model-provider.ts';
-import { getAiAgentLabel, resolveAiAgentId, withAiAgentActivity, type AiAgentActivityReporter } from '../_shared/ai-agents.ts';
+import { getAiAgentLabel, resolveAiAgentId, withAiAgentActivity, appendAiAgentEvent, type AiAgentActivity, type AiAgentActivityReporter } from '../_shared/ai-agents.ts';
 
 type AssistantAction =
   | 'chat'
@@ -7239,6 +7239,7 @@ const ssePayload = (event: string, payload: Record<string, any>) =>
 
 const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const encoder = new TextEncoder();
+  let activityLog: AiAgentActivity[] = [];
   return new Response(new ReadableStream({
     start(controller) {
       let streamClosed = false;
@@ -7254,7 +7255,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
       (async () => {
         let prepared: any = null;
         try {
-          prepared = await prepareChatRequest(supabaseUrl, serviceRoleKey, authContext, body, activity => send('agent_activity', activity));
+          prepared = await prepareChatRequest(supabaseUrl, serviceRoleKey, authContext, body, activity => { activityLog = appendAiAgentEvent(activityLog, activity); send('agent_activity', activity); });
           const respondingAgent = resolveAiAgentId(prepared.freeChatMode ? 'free_chat' : prepared.capability);
           send('meta', {
             success: true,
@@ -7274,7 +7275,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
             onDelta: (text) => {
               if (text) send('delta', { text });
             },
-          }), activity => send('agent_activity', activity));
+          }), activity => { activityLog = appendAiAgentEvent(activityLog, activity); send('agent_activity', activity); });
 
           const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
             thread_id: prepared.thread.id,
@@ -7283,6 +7284,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
             provider: aiResult.provider,
             model: aiResult.model,
             metadata: {
+              agent_activity_log: activityLog,
               context_summary: prepared.pageContext.summary,
               context_key: prepared.contextKey,
               company_currency_label: prepared.companyContext?.currency_label || null,
@@ -7326,6 +7328,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
           await patchChatThreadAfterAssistant(supabaseUrl, serviceRoleKey, authContext, prepared, aiResult);
 
           send('done', {
+            agentActivityLog: activityLog,
             success: true,
             threadId: prepared.thread.id,
             threadTitle: prepared.thread.title || null,
@@ -7360,7 +7363,8 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
               provider: prepared.providerConfig.provider,
               model: prepared.providerConfig.model,
               metadata: {
-                context_summary: prepared.pageContext.summary,
+                agent_activity_log: activityLog,
+              context_summary: prepared.pageContext.summary,
                 context_key: prepared.contextKey,
                 company_currency_label: prepared.companyContext?.currency_label || null,
                 knowledge_chunk_ids: prepared.knowledgeChunks.map((chunk: any) => chunk.id),
@@ -7389,6 +7393,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
               incomplete: true,
             }).catch(() => []);
             send('done', {
+              agentActivityLog: activityLog,
               success: true,
               incomplete: true,
               threadId: prepared.thread.id,
@@ -7427,7 +7432,8 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
               provider: prepared.providerConfig.provider,
               model: prepared.providerConfig.model,
               metadata: {
-                context_summary: prepared.pageContext.summary,
+                agent_activity_log: activityLog,
+              context_summary: prepared.pageContext.summary,
                 context_key: prepared.contextKey,
                 company_currency_label: prepared.companyContext?.currency_label || null,
                 knowledge_chunk_ids: prepared.knowledgeChunks.map((chunk: any) => chunk.id),
@@ -8945,7 +8951,9 @@ const handlePrimaryModelTaskBundle = async (
   });
 };
 
-const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any, reportActivity?: AiAgentActivityReporter) => {
+  let activityLog: AiAgentActivity[] = [];
+  const report: AiAgentActivityReporter = event => { activityLog = appendAiAgentEvent(activityLog, event); reportActivity?.(event); };
   const selectedCapabilities = Array.from(new Set(Array.isArray(body?.capabilities)
     ? body.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean)
     : []));
@@ -8988,13 +8996,13 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
   const previousTaskContext = existingThread?.metadata?.task_bundle_context && typeof existingThread.metadata.task_bundle_context === 'object'
     ? existingThread.metadata.task_bundle_context
     : null;
-  const transcripts = await transcribeTaskBundleVoices(
+  const transcripts = await withAiAgentActivity('voice_input', () => transcribeTaskBundleVoices(
     supabaseUrl,
     serviceRoleKey,
     authContext,
     inputs,
     decisionProviderConfig,
-  );
+  ), inputs.some(input => !!input.audio) ? report : undefined);
   const voipAnalysisContext = await buildVoipAnalysisContext(
     supabaseUrl,
     serviceRoleKey,
@@ -9023,7 +9031,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
 
   // Store exactly what the user supplied once. All following prompts are
   // private agent steps and must never replace this visible conversation turn.
-  const bundlePageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
+  const bundlePageContext = await withAiAgentActivity('organization_data', () => buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext), report);
   const publicThread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
     threadId: workingThreadId,
     title: baseMessage || 'پیوست‌های ارسالی برای هوش مصنوعی',
@@ -9066,8 +9074,13 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     },
   });
 
-  const runStep = async (stepName: string, promise: Promise<Response>) => {
-    const data = await parseAssistantJsonResponse(await promise);
+  const runStep = async (stepName: string, work: () => Promise<Response>) => {
+    const agentId = resolveAiAgentId(stepName === 'chat' ? 'text_chat' : stepName.replace(/_\d+$/, ''));
+    report({ agentId, phase: 'started', at: Date.now() });
+    let data: any;
+    try { data = await parseAssistantJsonResponse(await work()); }
+    catch (error) { report({ agentId, phase: 'failed', at: Date.now() }); throw error; }
+    report({ agentId, phase: data?.success === false ? 'failed' : 'completed', at: Date.now() });
     if (data?.threadId) workingThreadId = String(data.threadId);
     if (data?.provider) provider = data.provider;
     if (data?.model) model = data.model;
@@ -9100,7 +9113,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     if (files.length > 0) {
       for (const [fileIndex, currentFile] of files.slice(0, 6).entries()) {
         const filename = String(currentFile?.filename || `پیوست ${fileIndex + 1}`).trim();
-        const analysisData = await runStep(`document_analysis_${fileIndex + 1}`, handleChatWithFile(supabaseUrl, serviceRoleKey, authContext, {
+        const analysisData = await runStep(`document_analysis_${fileIndex + 1}`, () => handleChatWithFile(supabaseUrl, serviceRoleKey, authContext, {
           ...body,
           action: 'chat_with_file',
           capability: 'document_analysis',
@@ -9121,7 +9134,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
         if (part) analysisParts.push(`نتیجه ${filename}:\n${part}`);
       }
     } else {
-      const analysisData = await runStep('document_analysis', handleChat(supabaseUrl, serviceRoleKey, authContext, {
+      const analysisData = await runStep('document_analysis', () => handleChat(supabaseUrl, serviceRoleKey, authContext, {
         ...body,
         action: 'chat',
         capability: 'document_analysis',
@@ -9150,7 +9163,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     const recordMutationMode = String(body?.recordMutationMode || body?.record_mutation_mode || '').trim() === 'update'
       ? 'update'
       : 'create';
-    const data = await runStep('record_creation', handleRecordMutationFromPrompt(supabaseUrl, serviceRoleKey, authContext, {
+    const data = await runStep('record_creation', () => handleRecordMutationFromPrompt(supabaseUrl, serviceRoleKey, authContext, {
       ...body,
       action: recordMutationMode === 'update' ? 'update_record_from_prompt' : 'create_record_from_prompt',
       outputMode: recordMutationMode === 'update' ? 'update_record' : 'create_record',
@@ -9166,7 +9179,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
   }
 
   if (selectedCapabilitySet.has('process_operation')) {
-    const data = await runStep('process_operation', handleProcessOperationFromPrompt(supabaseUrl, serviceRoleKey, authContext, {
+    const data = await runStep('process_operation', () => handleProcessOperationFromPrompt(supabaseUrl, serviceRoleKey, authContext, {
       ...body,
       action: 'process_operation_from_prompt',
       message: sharedPrompt,
@@ -9185,7 +9198,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
       'اگر موضوع، سند پرداخت/رسید/هزینه است، جدول داده‌های استخراج‌شده، ابهام‌ها و پیشنهاد ثبت را هم بیاور.',
       sharedPrompt,
     ].join('\n\n');
-    const data = await runStep('document_generation', handleGenerateDocument(supabaseUrl, serviceRoleKey, authContext, {
+    const data = await runStep('document_generation', () => handleGenerateDocument(supabaseUrl, serviceRoleKey, authContext, {
       ...body,
       action: 'generate_document',
       message: documentPrompt,
@@ -9203,7 +9216,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     && !selectedCapabilitySet.has('process_operation')
     && !selectedCapabilitySet.has('document_generation');
   if (needsVisibleFinalAnswer) {
-    const data = await runStep('chat', handleChat(supabaseUrl, serviceRoleKey, authContext, {
+    const data = await runStep('chat', () => handleChat(supabaseUrl, serviceRoleKey, authContext, {
       ...body,
       action: 'chat',
       message: sharedPrompt || prompt,
@@ -9258,8 +9271,16 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     ? await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, workingThreadId, 200)
     : [];
 
+  const visibleMessages = filterVisibleAiMessages(threadMessages.length ? threadMessages : collectedMessages);
+  const finalMessageId = voiceOutput?.message?.id || collectedResults[collectedResults.length - 1]?.messageId;
+  const finalMessage = visibleMessages.find(item => item.role === 'assistant' && item.id === finalMessageId);
+  if (finalMessage?.id && activityLog.length) {
+    finalMessage.metadata = { ...(finalMessage.metadata || {}), agent_activity_log: activityLog };
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', { id: `eq.${finalMessage.id}`, org_id: `eq.${authContext.orgId}` }, { metadata: finalMessage.metadata });
+  }
   return json(200, {
     success: true,
+    agentActivityLog: activityLog,
     threadId: workingThreadId,
     messageId: voiceOutput?.message?.id || collectedResults[collectedResults.length - 1]?.messageId || null,
     answer: finalAnswer,
@@ -9278,7 +9299,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     } : null,
     taskBundle: bundleMeta,
     results: collectedResults,
-    messages: filterVisibleAiMessages(threadMessages.length ? threadMessages : collectedMessages),
+    messages: visibleMessages,
   });
 };
 
@@ -13941,7 +13962,25 @@ Deno.serve(async (req: Request) => {
     if (action === 'generate_video') return await handleGenerateVideo(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_video_status') return await handleGetVideoStatus(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'generate_document') return await handleGenerateDocument(supabaseUrl, serviceRoleKey, authContext, body);
-    if (action === 'run_task_bundle') return await handleRunTaskBundle(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'run_task_bundle') {
+      if (body?.stream !== true) return await handleRunTaskBundle(supabaseUrl, serviceRoleKey, authContext, body);
+      const encoder = new TextEncoder();
+      return new Response(new ReadableStream({
+        start(controller) {
+          let closed = false;
+          const send = (event: string, payload: any) => { if (!closed) { try { controller.enqueue(encoder.encode(ssePayload(event, payload))); } catch { closed = true; } } };
+          const heartbeat = setInterval(() => send('ping', { at: Date.now() }), STREAM_HEARTBEAT_INTERVAL_MS);
+          (async () => {
+            try {
+              const result = await handleRunTaskBundle(supabaseUrl, serviceRoleKey, authContext, body, event => send('agent_activity', event));
+              const payload = await result.json();
+              send(payload?.success === false ? 'error' : 'done', payload);
+            } catch (error) { send('error', { success: false, message: 'اجرای درخواست کامل نشد. دوباره تلاش کنید.' }); }
+            finally { clearInterval(heartbeat); if (!closed) { try { controller.close(); } catch { /* Disconnected client. */ } closed = true; } }
+          })();
+        },
+      }), { headers: { ...corsHeaders, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', 'X-Kalam-Function-Build': FUNCTION_BUILD } });
+    }
     if (action === 'embed_document_chunks') return await handleEmbedDocumentChunks(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'rebuild_instruction_ai_context') return await handleRebuildInstructionAiContext(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'rebuild_job_description_ai_context') return await handleRebuildJobDescriptionAiContext(supabaseUrl, serviceRoleKey, authContext, body);

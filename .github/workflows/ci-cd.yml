@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       deploy:
-        description: 'Deploy this tested revision, including explicit phases 582/583 and ai-assistant'
+        description: 'Deploy this tested frontend and AI assistant revision; no database migration'
         type: boolean
         default: false
 
@@ -107,6 +107,7 @@ jobs:
         timeout-minutes: 10
         run: >-
           npx vitest run supabase/functions/_shared/ai-agents.test.ts supabase/functions/_shared/ai-agent-contract.test.ts
+          utils/aiChatEnhancements.test.ts
           components/ai/AiMessageComposer.test.tsx components/ai/AiGenerationStatusCard.test.tsx
           components/ai/AiChatSurfaceV2.test.tsx components/ai/AssistantPanel.operators.test.tsx
           components/ai/AiCapabilityComposerActions.test.tsx components/ai/AiComposeModelBar.test.tsx
@@ -350,18 +351,6 @@ jobs:
             echo "::error::Uploaded artifact checksum mismatch."
             exit 1
           fi
-
-      - name: Apply the explicit cash and bank performance migration
-        shell: pwsh
-        env:
-          DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
-          DEPLOY_PORT: ${{ secrets.SERVER_PORT }}
-          DEPLOY_USER: ${{ secrets.SERVER_USER }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $migrations = @('database_v1_phase582_cash_bank_context_performance.sql', 'database_v1_phase583_internal_organization_lookup_index.sql')
-          $migrations | ForEach-Object { Get-FileHash -Algorithm SHA256 -LiteralPath $_ } | Format-List
-          & ./scripts/run-server-db-migrations.ps1 -SqlFiles $migrations
 
       - name: Deploy the AI assistant with shared agents
         shell: pwsh

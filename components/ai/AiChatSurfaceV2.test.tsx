@@ -47,6 +47,41 @@ vi.mock('../../supabaseClient', () => ({
 }));
 
 describe('AiChatSurfaceV2', () => {
+  it('has no compact mobile sidebar and opens the thread list with the highlighted menu', async () => {
+    let container!: HTMLElement;
+    await act(async () => { container = renderSurface(['/ai?new=1']).container; });
+    const menu = await screen.findByLabelText('فهرست گفتگوهای هوش مصنوعی');
+    expect(container.querySelectorAll('aside')).toHaveLength(1);
+    expect(menu.className).toContain('ai-thread-menu-button');
+    await act(async () => fireEvent.click(menu));
+    const drawer = await screen.findByRole('dialog');
+    expect(drawer).toHaveTextContent('گفتگوهای هوش مصنوعی');
+    fireEvent.click(screen.getByLabelText('بستن فهرست گفتگوهای هوش مصنوعی'));
+  }, 15000);
+
+  it('queues guidance while streaming and submits it once after the current result finishes', async () => {
+    let finish!: () => void;
+    const encoder = new TextEncoder();
+    fetchMock.mockImplementationOnce(() => Promise.resolve(new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(encoder.encode('event: meta\ndata: {"threadId":"thread-1","model":"model-a"}\n\nevent: delta\ndata: {"text":"پاسخ در حال اجرا"}\n\n'));
+      finish = () => { controller.enqueue(encoder.encode('event: done\ndata: {"success":true,"threadId":"thread-1","messageId":"first","answer":"پاسخ نخست","model":"model-a"}\n\n')); controller.close(); };
+    }}),{headers:{'Content-Type':'text/event-stream'}})));
+    await act(async () => { renderSurface(['/ai?new=1']); });
+    const input = await screen.findByLabelText('پیام به دستیار هوشمند');
+    await act(async () => fireEvent.change(input, { target: { value: 'درخواست نخست' } }));
+    await act(async () => fireEvent.click(screen.getByLabelText('ارسال')));
+    fireEvent.click(await screen.findByRole('button',{name:'هدایت پاسخ'}));
+    fireEvent.change(input, { target: { value: 'پاسخ را کوتاه‌تر کن' } });
+    fireEvent.click(screen.getByLabelText('ثبت راهنمایی پاسخ'));
+    expect(await screen.findByText(/راهنمایی در انتظار اعمال/)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await act(async () => finish());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const guided = JSON.parse(String(fetchMock.mock.calls[1][1].body));
+    expect(guided).toMatchObject({threadId:'thread-1',message:'پاسخ را کوتاه‌تر کن',inputKind:'guidance'});
+    await screen.findByText('پاسخ تازه');
+    expect(screen.getByRole('separator')).toHaveTextContent('model-a');
+  }, 15000);
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
