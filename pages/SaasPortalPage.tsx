@@ -17,6 +17,7 @@ import { signOutLocalSession } from '../utils/authSession';
 import { getInternalAppUrl } from '../utils/hostRouting';
 import { handoffSessionToTenant } from '../utils/tenantSessionHandoff';
 import { selectOrganizationContext } from '../utils/organizationContext';
+import { clearSessionBootstrapCache } from '../utils/sessionCache';
 import { assertDemoOtpRequestAllowed, lookupPhoneLoginCandidate, lookupPhoneSignupInvite, requestExistingProfilePhoneOtp } from '../utils/phoneAuth';
 import {
   getDemoProvisionErrorMessage,
@@ -180,6 +181,8 @@ const SaasPortalPage: React.FC = () => {
   const [provisionWarning, setProvisionWarning] = useState('');
   const [copyNotice, setCopyNotice] = useState('');
   const [retryingDemoData, setRetryingDemoData] = useState(false);
+  const [enteringOrganization, setEnteringOrganization] = useState(false);
+  const [entryError, setEntryError] = useState('');
 
   const normalizedPhone = normalizeOtpPhone(phone);
   const cooldownTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -562,6 +565,9 @@ const SaasPortalPage: React.FC = () => {
 
     try {
       const normalizedEmail = normalizeOwnerEmail(ownerEmail);
+      const { data: callerData, error: callerError } = await supabase.auth.getUser();
+      if (callerError || !callerData.user?.id) throw new Error('نشست تأیید شماره معتبر نیست؛ دوباره وارد شوید.');
+      const ownerUserId = callerData.user.id;
       const { data: ownerSetupData, error: ownerSetupError } = await supabase.functions.invoke('user-admin', {
         body: {
           action: 'setup_owner_credentials',
@@ -592,6 +598,19 @@ const SaasPortalPage: React.FC = () => {
         const ownerSetupMessage = String(ownerSetupData?.message || 'تنظیم حساب مدیر اصلی ناموفق بود.').trim();
         throw new Error(ownerSetupReason ? `${ownerSetupReason}: ${ownerSetupMessage}` : ownerSetupMessage);
       }
+
+      // Updating the password through Auth Admin revokes the OTP session.
+      // PostgREST may still accept its JWT while Auth /user rejects it, so obtain
+      // a fresh session before provisioning, seeding, or cross-domain handoff.
+      const { data: ownerLogin, error: ownerLoginError } = await supabase.auth.signInWithPassword({
+        email: normalizedEmail,
+        password: ownerPassword,
+      });
+      if (ownerLoginError || !ownerLogin.session || ownerLogin.user?.id !== ownerUserId) {
+        if (ownerLogin.user?.id && ownerLogin.user.id !== ownerUserId) await signOutLocalSession();
+        throw new Error('اطلاعات مدیر ثبت شد، اما ورود مجدد کامل نشد. با ایمیل و رمز انتخاب‌شده دوباره وارد شوید.');
+      }
+      clearSessionBootstrapCache();
 
       const { data, error: rpcErr } = await supabase.rpc(
         isExistingMemberCreatingDemo
@@ -625,6 +644,8 @@ const SaasPortalPage: React.FC = () => {
       // if optional sample data takes longer or fails.
       flushSync(() => {
         setProvisionResult(result);
+        setRetryingDemoData(true);
+        setEntryError('');
         setStep('done');
       });
       if (result.org_id) selectOrganizationContext(result.org_id);
@@ -636,6 +657,8 @@ const SaasPortalPage: React.FC = () => {
         }
       } catch {
         setProvisionWarning('فضای شما ساخته شد، اما بخشی از داده‌های نمونه اولیه کامل نشد و می‌توانید بعداً دوباره تلاش کنید.');
+      } finally {
+        setRetryingDemoData(false);
       }
 
     } catch (err: any) {
@@ -1131,6 +1154,7 @@ const SaasPortalPage: React.FC = () => {
             <p className="text-xs text-slate-500 mb-2">
               برای ورود مدیر اصلی از ایمیل <span className="font-bold ltr-text">{normalizeOwnerEmail(ownerEmail)}</span> استفاده کنید.
             </p>
+            {retryingDemoData && !provisionWarning && <p role="status" className="mb-4 text-sm text-slate-500"><LoadingOutlined /> در حال آماده‌سازی داده‌های نمونه…</p>}
             {provisionWarning && (
               <Alert type="warning" showIcon className="mb-4 rounded-xl text-right"
                 message={provisionWarning}
@@ -1148,11 +1172,16 @@ const SaasPortalPage: React.FC = () => {
               />
             )}
             <p className="text-xs text-slate-400 mb-4">برای ورود، دکمهٔ زیر را انتخاب کنید.</p>
+            {entryError && <Alert type="error" showIcon message={entryError} className="mb-4 rounded-xl text-right" />}
             <Button
               type="primary"
               size="large"
-              className="!rounded-xl !h-12 !font-black !bg-slate-900 !border-none hover:!bg-slate-700"
+              loading={enteringOrganization}
+              className="!rounded-xl !h-auto !min-h-14 !w-full !whitespace-normal !py-3 !font-black !bg-slate-900 !border-none hover:!bg-slate-700"
               onClick={async () => {
+                if (enteringOrganization) return;
+                setEnteringOrganization(true);
+                setEntryError('');
                 const host = provisionResult.redirect_host || `${provisionResult.slug}${TAZE_SUFFIX}`;
                 try {
                   if (!provisionResult.org_id) throw new Error('شناسه سازمان برای ورود پیدا نشد. صفحه را تازه کنید.');
@@ -1160,11 +1189,13 @@ const SaasPortalPage: React.FC = () => {
                   clearWizardState();
                   window.location.href = `https://${host}`;
                 } catch (err: any) {
-                  setProvisionWarning(getDemoProvisionErrorMessage(err, 'ورود مستقیم انجام نشد. دوباره تلاش کنید.'));
+                  setEntryError(getDemoProvisionErrorMessage(err, 'ورود مستقیم انجام نشد. دوباره تلاش کنید.'));
+                } finally {
+                  setEnteringOrganization(false);
                 }
               }}
             >
-              ورود به پنل من <ArrowLeftOutlined />
+              ورود به {orgName.trim() || 'کسب‌وکار شما'} <ArrowLeftOutlined />
             </Button>
           </div>
         )}
