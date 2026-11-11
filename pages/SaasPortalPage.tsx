@@ -6,6 +6,8 @@ import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
   CopyOutlined,
+  EyeInvisibleOutlined,
+  EyeOutlined,
   LoadingOutlined,
   MobileOutlined,
   RocketOutlined,
@@ -22,6 +24,7 @@ import { assertDemoOtpRequestAllowed, lookupPhoneLoginCandidate, lookupPhoneSign
 import {
   getDemoProvisionErrorMessage,
   getOwnerSetupErrorMessage,
+  getOwnerPasswordValidationError,
   isBrandPaletteKey,
   isValidOwnerEmail,
   isValidOwnerPassword,
@@ -113,6 +116,12 @@ const SAAS_WIZARD_COOLDOWN_UNTIL_STORAGE_KEY = 'kalam_saas_wizard_cooldown_until
 const SAAS_WIZARD_FORM_STORAGE_KEY = 'kalam_saas_wizard_form';
 const SAAS_WIZARD_EXISTING_PHONE_STORAGE_KEY = 'kalam_saas_wizard_existing_phone';
 
+const passwordVisibilityIcon = (visible: boolean) => (
+  <button type="button" aria-label={visible ? 'پنهان‌کردن رمز عبور' : 'نمایش رمز عبور'} className="border-0 bg-transparent p-0 text-slate-500">
+    {visible ? <EyeInvisibleOutlined aria-hidden /> : <EyeOutlined aria-hidden />}
+  </button>
+);
+
 // ─── Helpers ─────────────────────────────────────────
 // ─── Sub-components ───────────────────────────────────
 
@@ -165,6 +174,12 @@ const SaasPortalPage: React.FC = () => {
   const [ownerEmail, setOwnerEmail] = useState('');
   const [ownerPassword, setOwnerPassword] = useState('');
   const [ownerPasswordConfirm, setOwnerPasswordConfirm] = useState('');
+  const [passwordTouched, setPasswordTouched] = useState(false);
+  const [passwordConfirmTouched, setPasswordConfirmTouched] = useState(false);
+  const [capsLockOn, setCapsLockOn] = useState(false);
+  const passwordError = passwordTouched || ownerPassword.length > 0 ? getOwnerPasswordValidationError(ownerPassword) : null;
+  const passwordConfirmError = (passwordConfirmTouched || ownerPasswordConfirm.length > 0) && ownerPassword !== ownerPasswordConfirm
+    ? 'تکرار رمز عبور با رمز عبور یکسان نیست.' : null;
   const [orgName, setOrgName] = useState('');
   const [industry, setIndustry] = useState('');
   const [userCount, setUserCount] = useState('');
@@ -431,7 +446,7 @@ const SaasPortalPage: React.FC = () => {
   const handleSendOtpFromInfo = async () => {
     if (!fullName.trim()) { setError('نام و نام خانوادگی الزامی است.'); return; }
     if (!isValidOwnerEmail(ownerEmail)) { setError('ایمیل مدیر اصلی معتبر نیست.'); return; }
-    if (!isValidOwnerPassword(ownerPassword)) { setError('رمز عبور باید حداقل ۶ کاراکتر باشد.'); return; }
+    if (!isValidOwnerPassword(ownerPassword)) { setPasswordTouched(true); setError(getOwnerPasswordValidationError(ownerPassword) || 'رمز عبور معتبر نیست.'); return; }
     if (ownerPassword !== ownerPasswordConfirm) { setError('تکرار رمز عبور با رمز عبور یکسان نیست.'); return; }
     if (!orgName.trim()) { setError('نام سازمان الزامی است.'); return; }
     const normalizedSlug = normalizeSaasSlug(slug);
@@ -967,28 +982,54 @@ const SaasPortalPage: React.FC = () => {
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">رمز عبور <span className="text-red-500">*</span></label>
+                  <label htmlFor="demo-owner-password" className="block text-sm font-bold text-slate-700 mb-2">رمز عبور <span className="text-red-500">*</span></label>
                   <Input.Password
-                    placeholder="حداقل ۶ کاراکتر"
+                    id="demo-owner-password"
+                    placeholder="حداقل ۸ نویسه"
+                    iconRender={passwordVisibilityIcon}
                     value={ownerPassword}
                     onChange={(e) => setOwnerPassword(e.target.value)}
+                    onBlur={() => { setPasswordTouched(true); setCapsLockOn(false); }}
+                    onKeyUp={(e) => setCapsLockOn(e.getModifierState?.('CapsLock') || false)}
+                    status={passwordError ? 'error' : undefined}
+                    aria-invalid={Boolean(passwordError)}
+                    aria-describedby="demo-password-help demo-password-error demo-password-caps"
+                    required
+                    minLength={8}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
                     size="large"
                     className={inputClassName}
                     autoComplete="new-password"
                     dir="ltr"
                   />
+                  <p id="demo-password-help" className="mt-2 text-xs leading-6 text-slate-500">حداقل ۸ نویسه؛ فقط عدد نباشد. یک عبارت طولانی و غیرقابل‌حدس انتخاب کنید. حروف و ارقام فارسی هم پذیرفته می‌شوند.</p>
+                  <p id="demo-password-error" aria-live="polite" className="mt-1 text-xs leading-6 text-red-600">{passwordError}</p>
+                  <p id="demo-password-caps" aria-live="polite" className="mt-1 text-xs text-amber-700">{capsLockOn ? 'قفل حروف بزرگ روشن است.' : ''}</p>
                 </div>
                 <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">تکرار رمز عبور <span className="text-red-500">*</span></label>
+                  <label htmlFor="demo-owner-password-confirm" className="block text-sm font-bold text-slate-700 mb-2">تکرار رمز عبور <span className="text-red-500">*</span></label>
                   <Input.Password
+                    id="demo-owner-password-confirm"
                     placeholder="تکرار رمز عبور"
+                    iconRender={passwordVisibilityIcon}
                     value={ownerPasswordConfirm}
                     onChange={(e) => setOwnerPasswordConfirm(e.target.value)}
+                    onBlur={() => setPasswordConfirmTouched(true)}
+                    status={passwordConfirmError ? 'error' : undefined}
+                    aria-invalid={Boolean(passwordConfirmError)}
+                    aria-describedby="demo-password-confirm-error"
+                    required
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
                     size="large"
                     className={inputClassName}
                     autoComplete="new-password"
                     dir="ltr"
                   />
+                  <p id="demo-password-confirm-error" aria-live="polite" className="mt-2 text-xs leading-6 text-red-600">{passwordConfirmError}</p>
                 </div>
               </div>
 

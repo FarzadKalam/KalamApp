@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       deploy:
-        description: 'Deploy this tested frontend and AI assistant revision; no database migration'
+        description: 'Deploy tested frontend and updated application functions; no database migration'
         type: boolean
         default: false
 
@@ -108,6 +108,7 @@ jobs:
         run: >-
           npx vitest run supabase/functions/_shared/ai-agents.test.ts supabase/functions/_shared/ai-agent-contract.test.ts
           utils/aiChatEnhancements.test.ts
+          utils/ownerPasswordPolicy.test.ts
           components/ai/AiMessageComposer.test.tsx components/ai/AiGenerationStatusCard.test.tsx
           components/ai/AiChatSurfaceV2.test.tsx components/ai/AssistantPanel.operators.test.tsx
           components/common/TooltipDismissalBoundary.test.tsx
@@ -141,7 +142,7 @@ jobs:
         run: deno check --node-modules-dir=none supabase/functions/email-admin/index.ts supabase/functions/send-email/index.ts supabase/functions/email-provider-events/index.ts supabase/functions/email-sync-worker/index.ts supabase/functions/send-sms/index.ts
 
       - name: AI assistant dependency checks
-        run: deno check --node-modules-dir=none supabase/functions/_shared/ai-agents.ts supabase/functions/ai-assistant/index.ts
+        run: deno check --node-modules-dir=none supabase/functions/_shared/ai-agents.ts supabase/functions/ai-assistant/index.ts supabase/functions/user-admin/index.ts supabase/functions/_shared/owner-password-policy.ts
 
       - name: Messaging attachment and viewer isolation regression checks
         timeout-minutes: 8
@@ -353,7 +354,7 @@ jobs:
             exit 1
           fi
 
-      - name: Deploy the AI assistant with shared agents
+      - name: Deploy updated application functions
         shell: pwsh
         env:
           DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
@@ -361,7 +362,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVER_USER }}
           DEPLOY_FUNCTIONS_PATH: /opt/kalamapp/supabase/docker/volumes/functions
           DEPLOY_FUNCTIONS_COMPOSE_DIR: /opt/kalamapp/supabase/docker
-        run: ./scripts/deploy-supabase-function.ps1 -Functions @('ai-assistant')
+        run: ./scripts/deploy-supabase-function.ps1 -Functions @('ai-assistant', 'user-admin')
 
       - name: Activate release
         env:

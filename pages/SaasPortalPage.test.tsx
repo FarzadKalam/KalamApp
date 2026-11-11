@@ -82,8 +82,8 @@ const goToInfoStep = async () => {
 const fillInfoForm = async (email = 'owner@testco.ir') => {
   fireEvent.change(screen.getByPlaceholderText('علی رضایی'), { target: { value: 'علی رضایی' } });
   fireEvent.change(screen.getByPlaceholderText('owner@company.com'), { target: { value: email } });
-  fireEvent.change(screen.getByPlaceholderText('حداقل ۶ کاراکتر'), { target: { value: 'secret1' } });
-  fireEvent.change(screen.getByPlaceholderText('تکرار رمز عبور'), { target: { value: 'secret1' } });
+  fireEvent.change(screen.getByPlaceholderText('حداقل ۸ نویسه'), { target: { value: 'secret123' } });
+  fireEvent.change(screen.getByPlaceholderText('تکرار رمز عبور'), { target: { value: 'secret123' } });
   fireEvent.change(screen.getByPlaceholderText('شرکت نمونه'), { target: { value: 'تست کو' } });
   fireEvent.change(screen.getByPlaceholderText('mycompany'), { target: { value: 'testco' } });
   await waitFor(() => {
@@ -135,6 +135,27 @@ describe('SaasPortalPage OTP flow', () => {
     await goToInfoStep();
     await fillInfoForm();
     await sendOtpFromInfo();
+  });
+
+  it('explains a four-digit Persian password, mismatches, and supports showing the chosen password', async () => {
+    await goToInfoStep();
+    await fillInfoForm();
+    const password = screen.getByLabelText('رمز عبور', {exact:false, selector:'#demo-owner-password'});
+    const confirmation = screen.getByPlaceholderText('تکرار رمز عبور');
+    fireEvent.change(password, {target:{value:'۱۲۳۴'}});
+    fireEvent.change(confirmation, {target:{value:'۱۲۳۴'}});
+    expect(screen.getByText('رمز عبور باید حداقل ۸ نویسه داشته باشد.')).toBeTruthy();
+    expect(password).toHaveAttribute('aria-invalid','true');
+    expect(screen.getByRole('button',{name:/ارسال کد تایید/})).toBeDisabled();
+    fireEvent.change(password, {target:{value:'۱۲۳۴۵۶۷۸'}});
+    expect(screen.getByText(/رمز عبور نباید فقط عدد باشد/)).toBeTruthy();
+    fireEvent.change(password, {target:{value:'رمزآزمایشی۱۲۳'}});
+    expect(screen.getByText('تکرار رمز عبور با رمز عبور یکسان نیست.')).toBeTruthy();
+    fireEvent.change(confirmation, {target:{value:'رمزآزمایشی۱۲۳'}});
+    expect(screen.getByRole('button',{name:/ارسال کد تایید/})).toBeEnabled();
+    fireEvent.click(screen.getAllByRole('button',{name:'نمایش رمز عبور'})[0]);
+    expect(password).toHaveAttribute('type','text');
+    expect(password).toHaveValue('رمزآزمایشی۱۲۳');
   });
 
   const mockExistingAccount = () => {
@@ -206,7 +227,7 @@ describe('SaasPortalPage OTP flow', () => {
           action: 'setup_owner_credentials',
           fullName: 'علی رضایی',
           email: 'owner@testco.ir',
-          password: 'secret1',
+          password: 'secret123',
           phone: '+989121234567',
           skipProfileUpsert: true,
         },
@@ -259,7 +280,7 @@ describe('SaasPortalPage OTP flow', () => {
     await verifyOtp();
     await screen.findByText('فضای اختصاصی شما فعال شد!');
     await waitFor(() => expect(functionState.invoke).toHaveBeenCalledWith('demo-data-admin', expect.objectContaining({body: {action:'seed_org_demo_data',org_id:'demo-org'}})));
-    expect(authState.signInWithPassword).toHaveBeenCalledWith({email:'owner@testco.ir',password:'secret1'});
+    expect(authState.signInWithPassword).toHaveBeenCalledWith({email:'owner@testco.ir',password:'secret123'});
     const setupIndex = functionState.invoke.mock.calls.findIndex(call => call[1]?.body?.action === 'setup_owner_credentials');
     const provisionIndex = rpcState.mock.calls.findIndex(call => call[0] === 'provision_self_service_demo');
     const seedIndex = functionState.invoke.mock.calls.findIndex(call => call[0] === 'demo-data-admin');
