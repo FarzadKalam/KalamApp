@@ -109,6 +109,7 @@ jobs:
           npx vitest run supabase/functions/_shared/ai-agents.test.ts supabase/functions/_shared/ai-agent-contract.test.ts
           utils/aiChatEnhancements.test.ts
           utils/ownerPasswordPolicy.test.ts
+          utils/email.test.ts
           components/ai/AiMessageComposer.test.tsx components/ai/AiGenerationStatusCard.test.tsx
           components/ai/AiChatSurfaceV2.test.tsx components/ai/AssistantPanel.operators.test.tsx
           components/common/TooltipDismissalBoundary.test.tsx

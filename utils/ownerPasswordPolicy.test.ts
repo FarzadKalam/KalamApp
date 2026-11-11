@@ -5,7 +5,7 @@ describe('new demo owner password policy', () => {
   it.each(['۱۲۳۴', '1234', '١٢٣٤'])('explains short passwords in every digit alphabet: %s', password => {
     expect(getOwnerPasswordValidationError(password)).toContain('۸ نویسه');
   });
-  it.each(['12345678', '۱۲۳۴۵۶۷۸', '١٢٣٤٥٦٧٨', 'aaaaaaaa'])('rejects obvious numeric and repeated passwords: %s', password => {
+  it.each(['12345678', '۱۲۳۴۵۶۷۸', '١٢٣٤٥٦٧٨', '۱۲3٤۵6۷8', '۱۲۳۴ ۵۶۷۸', 'aaaaaaaa'])('rejects obvious numeric and repeated passwords: %s', password => {
     expect(getOwnerPasswordValidationError(password)).toBeTruthy();
   });
   it('supports Persian passphrases without rewriting the chosen password', () => {

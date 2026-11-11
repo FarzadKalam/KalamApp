@@ -956,16 +956,25 @@ const SaasPortalPage: React.FC = () => {
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">ایمیل مدیر اصلی <span className="text-red-500">*</span></label>
+                  <label htmlFor="demo-owner-email" className="block text-sm font-bold text-slate-700 mb-2">ایمیل مدیر اصلی <span className="text-red-500">*</span></label>
                   <Input
+                    id="demo-owner-email"
+                    type="email"
                     placeholder="owner@company.com"
                     value={ownerEmail}
                     onChange={(e) => setOwnerEmail(e.target.value)}
+                    onBlur={() => setOwnerEmail(normalizeOwnerEmail(ownerEmail))}
+                    autoComplete="username"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    aria-describedby="demo-email-help"
                     size="large"
                     className={inputClassName}
                     dir="ltr"
                     inputMode="email"
                   />
+                  <p id="demo-email-help" className="mt-2 text-xs leading-6 text-slate-500">ارقام فارسی و عربیِ ایمیل به انگلیسی تبدیل می‌شوند؛ ارقام رمز عبور عیناً حفظ می‌شوند.</p>
                 </div>
                 <div>
                   <label className="block text-sm font-bold text-slate-700 mb-2">پالت ظاهری سازمان</label>

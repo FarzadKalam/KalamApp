@@ -290,6 +290,22 @@ describe('SaasPortalPage OTP flow', () => {
     expect(signInOrder).toBeLessThan(functionState.invoke.mock.invocationCallOrder[seedIndex]);
   });
 
+  it('normalizes email digits but preserves the exact Persian password for setup and renewed sign-in', async () => {
+    await goToInfoStep();
+    await fillInfoForm('Owner۱۲٣@Example.com');
+    const email = screen.getByPlaceholderText('owner@company.com');
+    fireEvent.blur(email);
+    expect(email).toHaveValue('owner123@example.com');
+    const password = 'گذرواژه۱۲۳۴';
+    fireEvent.change(screen.getByPlaceholderText('حداقل ۸ نویسه'), {target:{value:password}});
+    fireEvent.change(screen.getByPlaceholderText('تکرار رمز عبور'), {target:{value:password}});
+    await sendOtpFromInfo();
+    await verifyOtp();
+    await screen.findByText('فضای اختصاصی شما فعال شد!');
+    expect(functionState.invoke).toHaveBeenCalledWith('user-admin',expect.objectContaining({body:expect.objectContaining({email:'owner123@example.com',password})}));
+    expect(authState.signInWithPassword).toHaveBeenCalledWith({email:'owner123@example.com',password});
+  });
+
   it('does not provision or seed when the refreshed owner identity differs', async () => {
     authState.signInWithPassword.mockResolvedValue({data:{user:{id:'another-user'},session:{access_token:'other-session'}},error:null});
     await goToInfoStep();
