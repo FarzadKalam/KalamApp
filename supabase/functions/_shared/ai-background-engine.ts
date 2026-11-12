@@ -1,4 +1,5 @@
 import { getAgentDefinition, getAgentTitleFa, type AgentKey } from './ai-agent-catalog.ts';
+import { formatAiAmountForOrg } from './ai-billing.ts';
 import {
   isPlanFeatureEnabled,
   isWithinOrgWorkSchedule,
@@ -339,10 +340,15 @@ export const runAiBackgroundAgentsTick = async (params: {
 
   for (const orgId of orgIds) {
     const orgConfigs = configsByOrg.get(orgId) || [];
-    const [orgSettingsRows, workSchedules, profiles, orgRoles, memberPerms, cooldowns, todayLedgerRows] = await Promise.all([
+    const [orgSettingsRows, companyRows, workSchedules, profiles, orgRoles, memberPerms, cooldowns, todayLedgerRows] = await Promise.all([
       sharedRestSelect(params.supabaseUrl, params.serviceRoleKey, 'saas_org_settings', {
         org_id: `eq.${orgId}`,
         select: 'org_id,plan_code,module_overrides,feature_overrides,status,is_readonly',
+        limit: 1,
+      }),
+      sharedRestSelect(params.supabaseUrl, params.serviceRoleKey, 'company_settings', {
+        org_id: `eq.${orgId}`,
+        select: 'currency_code,currency_label',
         limit: 1,
       }),
       sharedRestSelect(params.supabaseUrl, params.serviceRoleKey, 'work_schedules', {
@@ -374,10 +380,11 @@ export const runAiBackgroundAgentsTick = async (params: {
       sharedRestSelect(params.supabaseUrl, params.serviceRoleKey, 'org_ai_usage_ledger', {
         org_id: `eq.${orgId}`,
         created_at: `gte.${tehranDayStartIso}`,
-        select: 'agent_key,customer_price_irt',
+        select: 'agent_key,billed_amount_irt,status',
         limit: 500,
       }),
     ]);
+    const companyCurrency = companyRows?.[0] || { currency_code: 'IRT', currency_label: 'تومان' };
 
     const orgSettings = orgSettingsRows?.[0] || null;
     if (orgSettings?.is_readonly === true) {
@@ -435,8 +442,9 @@ export const runAiBackgroundAgentsTick = async (params: {
 
     const spentTodayByAgent = new Map<string, number>();
     for (const row of todayLedgerRows || []) {
+      if (row?.status && String(row.status) !== 'finalized') continue;
       const aKey = String(row?.agent_key || '').trim() || 'lead_orchestrator';
-      spentTodayByAgent.set(aKey, (spentTodayByAgent.get(aKey) || 0) + Number(row?.customer_price_irt || 0));
+      spentTodayByAgent.set(aKey, (spentTodayByAgent.get(aKey) || 0) + Number(row?.billed_amount_irt || 0));
     }
 
     const rolePermById = new Map<string, any>((orgRoles || []).map((r: any) => [String(r.id), r.permissions || {}]));
@@ -559,7 +567,7 @@ export const runAiBackgroundAgentsTick = async (params: {
       const dailyBudgetIrt = Number(bgConfig.daily_budget_irt ?? def.defaultBackgroundConfig.daily_budget_irt ?? 0);
       const spentTodayIrt = spentTodayByAgent.get(agentKey) || 0;
       if (dailyBudgetIrt <= 0 || spentTodayIrt >= dailyBudgetIrt) {
-        const msg = `بودجه روزانه (${dailyBudgetIrt.toLocaleString('fa-IR')} تومان) به سقف رسیده است.`;
+        const msg = `بودجه روزانه (${formatAiAmountForOrg(dailyBudgetIrt, companyCurrency)}) به سقف رسیده است.`;
         skippedReasons.push(`${orgId}/${agentKey}: ${msg}`);
         await recordCronOutcome(agentKey, 'skipped', msg);
         continue;

@@ -42,6 +42,12 @@ import { createWorkflowId, type WorkflowRecord } from '../../utils/workflowTypes
 import WorkflowEditorModal from '../workflows/WorkflowEditorModal';
 import AiAgentOnboardingWizard from './AiAgentOnboardingWizard';
 import { AiAgentAvatar } from './AiAgentIcon';
+import { useCurrencyConfig } from '../../utils/currency';
+import {
+  convertDisplayInputToIrt,
+  convertIrtToDisplayAmount,
+  getAiDisplayCurrencyMeta,
+} from '../../utils/aiCurrency';
 
 type AgentModelOption = {
   id: string;
@@ -129,6 +135,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
   compact = false,
 }) => {
   const { message } = App.useApp();
+  const orgCurrency = useCurrencyConfig();
   const [internalOverview, setInternalOverview] = useState<any | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeAgentKey, setActiveAgentKey] = useState<AgentKey>('lead_orchestrator');
@@ -162,6 +169,10 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
   const [savingPermissions, setSavingPermissions] = useState(false);
 
   const overview = externalOverview || internalOverview;
+  const budgetCurrencyMeta = useMemo(
+    () => getAiDisplayCurrencyMeta(overview?.company, orgCurrency),
+    [overview?.company, orgCurrency],
+  );
 
   const loadOverview = useCallback(async () => {
     setLoading(true);
@@ -865,18 +876,18 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
                                 />
                               </div>
                               <div>
-                                <div className="mb-1 text-[11px] text-slate-500">سقف هزینه روزانه (تومان)</div>
+                                <div className="mb-1 text-[11px] text-slate-500">سقف هزینه روزانه ({budgetCurrencyMeta.label})</div>
                                 <InputNumber
                                   min={0}
-                                  max={10000000}
-                                  step={5000}
+                                  max={10000000 * budgetCurrencyMeta.multiplierFromIrt}
+                                  step={5000 * budgetCurrencyMeta.multiplierFromIrt}
                                   className="w-full"
                                   disabled={!activeCanEdit || !planFeatures.ai_background_agents}
-                                  value={activeDraft.backgroundConfig.daily_budget_irt}
+                                  value={convertIrtToDisplayAmount(activeDraft.backgroundConfig.daily_budget_irt, overview?.company, orgCurrency)}
                                   onChange={(v) => updateActiveDraft({
                                     backgroundConfig: {
                                       ...activeDraft.backgroundConfig,
-                                      daily_budget_irt: Math.max(0, Number(v || 0)),
+                                      daily_budget_irt: Math.max(0, convertDisplayInputToIrt(v, overview?.company, orgCurrency)),
                                     },
                                   })}
                                 />

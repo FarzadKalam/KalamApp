@@ -16,11 +16,10 @@ import AccountPlanCards from '../../components/saas/AccountPlanCards';
 import TazeSystemAttribution from '../../components/common/TazeSystemAttribution';
 import PriceAmountInput from '../../components/PriceAmountInput';
 import { CheckoutDiscounts, TERM_OPTIONS, planCheckoutTotal } from '../../utils/saasCheckoutPricing';
+import { useCurrencyConfig } from '../../utils/currency';
 
 const { Text, Title } = Typography;
 
-const formatIrt = (value: unknown) => `${Math.round(Number(value || 0)).toLocaleString('fa-IR')} تومان`;
-const formatIrtCard = (value: unknown) => <span dir="ltr" className="inline-flex items-baseline gap-1"><span>{Math.round(Number(value || 0)).toLocaleString('fa-IR')}</span><span dir="rtl" className="text-sm font-normal">تومان</span></span>;
 const titleForHistory = (item: any) => item?.title || 'تغییر حساب';
 const invokeSaasPayment = async (body: Record<string, unknown>) => {
   const { data, error } = await supabase.functions.invoke('payment-gateway', { body });
@@ -34,6 +33,38 @@ const invokeSaasPayment = async (body: Record<string, unknown>) => {
 
 const AccountStatusTab: React.FC = () => {
   const { message } = App.useApp();
+  const orgCurrency = useCurrencyConfig();
+  const displayCurrency = useMemo(() => (
+    orgCurrency.code === 'IRR'
+      ? {
+          code: 'IRR' as const,
+          label: orgCurrency.label || 'ریال',
+          multiplier: 10,
+          minTopup: 100000,
+          maxTopup: 1000000000,
+          step: 100000,
+          placeholder: 'مبلغ به ریال؛ مثلاً ۵٬۰۰۰٬۰۰۰',
+          minHint: 'حداقل مبلغ شارژ ۱۰۰٬۰۰۰ ریال (۱۰٬۰۰۰ تومان) است.',
+        }
+      : {
+          code: 'IRT' as const,
+          label: 'تومان',
+          multiplier: 1,
+          minTopup: 10000,
+          maxTopup: 100000000,
+          step: 10000,
+          placeholder: 'مبلغ به تومان؛ مثلاً ۵۰۰٬۰۰۰',
+          minHint: 'حداقل مبلغ شارژ ۱۰٬۰۰۰ تومان است.',
+        }
+  ), [orgCurrency.code, orgCurrency.label]);
+  const formatIrt = (value: unknown) =>
+    `${Math.round(Number(value || 0) * displayCurrency.multiplier).toLocaleString('fa-IR')} ${displayCurrency.label}`;
+  const formatIrtCard = (value: unknown) => (
+    <span dir="ltr" className="inline-flex items-baseline gap-1">
+      <span>{Math.round(Number(value || 0) * displayCurrency.multiplier).toLocaleString('fa-IR')}</span>
+      <span dir="rtl" className="text-sm font-normal">{displayCurrency.label}</span>
+    </span>
+  );
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState<any | null>(null);
   const [catalog, setCatalog] = useState<any[]>([]);
@@ -240,11 +271,12 @@ const AccountStatusTab: React.FC = () => {
   };
 
   const submitWalletAction = async () => {
-    const amountIrt = Math.round(Number(walletAmount || 0));
-    if (!walletAction || !Number.isFinite(amountIrt) || amountIrt < 10000) {
-      message.warning('حداقل مبلغ ۱۰٬۰۰۰ تومان است.');
+    const rawAmount = Math.round(Number(walletAmount || 0));
+    if (!walletAction || !Number.isFinite(rawAmount) || rawAmount < displayCurrency.minTopup) {
+      message.warning(displayCurrency.minHint);
       return;
     }
+    const amountIrt = displayCurrency.code === 'IRR' ? Math.round(rawAmount / 10) : rawAmount;
     setWalletActionLoading(true);
     try {
       if (walletAction === 'topup' || walletAction === 'sms_topup' || walletAction === 'ai_topup') {
@@ -454,15 +486,15 @@ const AccountStatusTab: React.FC = () => {
             : walletAction === 'sms_transfer' ? 'این مبلغ از کیف پول سازمان کم و فقط برای ارسال پیامک با سرشماره تازه سیستم قابل استفاده می‌شود.' : 'این مبلغ از کیف پول سازمان کم و فقط برای مصرف هوش مصنوعی قابل استفاده می‌شود.'}
         </Text>
         <PriceAmountInput
-          min={10000}
-          max={100000000}
-          step={10000}
+          min={displayCurrency.minTopup}
+          max={displayCurrency.maxTopup}
+          step={displayCurrency.step}
           value={walletAmount ?? undefined}
           onChange={(value) => setWalletAmount(value === null ? null : Number(value))}
-          currencyLabel="تومان"
-          placeholder="مبلغ به تومان؛ مثلاً ۵۰۰٬۰۰۰"
+          currencyLabel={displayCurrency.label}
+          placeholder={displayCurrency.placeholder}
         />
-        <Text type="secondary" className="mt-2 block text-xs">حداقل مبلغ شارژ ۱۰٬۰۰۰ تومان است.</Text>
+        <Text type="secondary" className="mt-2 block text-xs">{displayCurrency.minHint}</Text>
       </Modal>
 
       <Card className="rounded-2xl" title="سوابق حساب">

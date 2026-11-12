@@ -753,13 +753,21 @@ const createAiCreditTopup = async (
   body: any,
 ) => {
   const { profile } = await getAuthenticatedProfile(req, urlBase, key);
-  const amountIrt = Math.round(
-    Number(body?.amount_irt ?? body?.amountToman ?? body?.amount ?? 0),
-  );
+  const rawCurrency = String(body?.currency || body?.currency_code || '').trim().toUpperCase();
+  const explicitIrt = Number(body?.amount_irt ?? body?.amountToman ?? NaN);
+  const explicitIrr = Number(body?.amount_irr ?? body?.amountRial ?? NaN);
+  const fallbackRawAmount = Number(body?.amount ?? 0);
+  const amountIrt = Number.isFinite(explicitIrt) && explicitIrt > 0
+    ? Math.round(explicitIrt)
+    : Number.isFinite(explicitIrr) && explicitIrr > 0
+    ? Math.round(explicitIrr / 10)
+    : rawCurrency === 'IRR'
+    ? Math.round(fallbackRawAmount / 10)
+    : Math.round(fallbackRawAmount);
   if (!Number.isFinite(amountIrt) || amountIrt < 10000) {
     return json(400, {
       success: false,
-      message: "حداقل مبلغ شارژ اعتبار هوش مصنوعی ۱۰٬۰۰۰ تومان است.",
+      message: "حداقل مبلغ شارژ اعتبار هوش مصنوعی ۱۰٬۰۰۰ تومان (۱۰۰٬۰۰۰ ریال) است.",
     });
   }
   if (!centralMerchantId)

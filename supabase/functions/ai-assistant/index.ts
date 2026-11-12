@@ -67,6 +67,12 @@ import { resolvePersianCalendarContext } from '../_shared/persian-calendar-resol
 import { PEYDA_REGULAR_WOFF2_BASE64 } from './peyda-font.ts';
 import { GEMINI_PREBUILT_VOICES, resolveSpeechModelProvider } from '../_shared/speech-model-provider.ts';
 import { getAiAgentLabel, resolveAiAgentId, withAiAgentActivity, type AiAgentActivityReporter } from '../_shared/ai-agents.ts';
+import {
+  estimateAiChargeCore,
+  extractAvalaiTransactionCostCore,
+  mergeChatCostParts,
+  normalizeAvalaiCreditPayload,
+} from '../_shared/ai-billing.ts';
 
 type AssistantAction =
   | 'chat'
@@ -160,7 +166,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'ai-assistant-2026-11-11-modular-aaas-agents';
+const FUNCTION_BUILD = 'ai-assistant-2026-11-12-avalai-live-rate-currency';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 const DEFAULT_AI_MODEL = '';
@@ -182,8 +188,9 @@ const IMAGE_STATUS_HARD_TIMEOUT_MS = 1800000;
 const IMAGE_STATUS_WARN_MS = 60000;
 const IMAGE_PROMPT_MAX_CHARS = 7000;
 const DEFAULT_AI_MARGIN_PERCENT = 30;
-const DEFAULT_AI_EXCHANGE_RATE_IRT = 115000;
 const DEFAULT_AI_DAILY_TOKEN_LIMIT = 80000;
+const AVALAI_LIVE_RATE_TTL_MS = 5 * 60 * 1000;
+const AVALAI_FALLBACK_RATE_TTL_MS = 60 * 1000;
 const AI_USAGE_WARNING_RATIO = 0.1;
 const NIL_UUID = '00000000-0000-0000-0000-000000000000';
 const AI_AUTHOR_NAME = 'دستیار هوشمند';
@@ -3450,7 +3457,7 @@ const extractUsageMetadata = (parsed: any, providerConfig: any) => {
   const cost: Record<string, any> = {};
   if (billing && typeof billing === 'object') Object.assign(cost, billing);
   if (typeof billing === 'number') cost.amount = billing;
-  ['cost', 'cost_usd', 'usd', 'amount', 'amount_usd', 'rial', 'rials', 'toman', 'tomans', 'amount_rial', 'amount_toman', 'currency'].forEach((key) => {
+  ['cost', 'cost_usd', 'usd', 'amount', 'amount_usd', 'irt', 'unit', 'rial', 'rials', 'toman', 'tomans', 'amount_irt', 'amount_rial', 'amount_toman', 'exchange_rate', 'exchange_rate_irt', 'exchange_rate_rial', 'exchange_rate_currency', 'currency'].forEach((key) => {
     if (parsed && Object.prototype.hasOwnProperty.call(parsed, key)) cost[key] = parsed[key];
   });
 
@@ -3715,61 +3722,130 @@ const assertAiUsageAllowed = async (supabaseUrl: string, serviceRoleKey: string,
   return summary;
 };
 
-const estimateAiCharge = (usageMetadata: any, pricing: any, fallbackMargin = DEFAULT_AI_MARGIN_PERCENT) => {
-  const usage = usageMetadata?.usage || {};
-  const cost = usageMetadata?.cost || {};
-  const promptTokens = numberFrom(usage.prompt_tokens ?? usage.prompt ?? usage.input_tokens ?? usage.input, 0);
-  const completionTokens = numberFrom(usage.completion_tokens ?? usage.completion ?? usage.output_tokens ?? usage.output, 0);
-  const rawUnitFromProvider = numberFrom(cost.unit ?? cost.usd ?? cost.cost_usd ?? cost.amount_usd, NaN);
-  const rawIrtFromProvider = numberFrom(cost.irt ?? cost.rial ?? cost.rials ?? cost.amount_rial, NaN);
-  const exchangeRate = numberFrom(cost.exchange_rate ?? pricing?.exchange_rate_irt, DEFAULT_AI_EXCHANGE_RATE_IRT);
-  const marginPercent = numberFrom(pricing?.margin_percent, fallbackMargin);
-  const inputRate = numberFrom(pricing?.input_usd_per_1m, 0);
-  const outputRate = numberFrom(pricing?.output_usd_per_1m, 0);
-  const estimatedUnit = Number.isFinite(rawUnitFromProvider)
-    ? rawUnitFromProvider
-    : (promptTokens * inputRate + completionTokens * outputRate) / 1_000_000;
-  const rawCostIrt = Number.isFinite(rawIrtFromProvider)
-    ? rawIrtFromProvider
-    : estimatedUnit * exchangeRate;
-  const billedAmountIrt = Math.ceil(Math.max(0, rawCostIrt) * (1 + Math.max(0, marginPercent) / 100));
-  return {
-    rawCostUnit: Number(estimatedUnit.toFixed(10)),
-    rawCostIrt: Math.ceil(rawCostIrt),
-    billedAmountIrt,
-    marginPercent,
-    exchangeRate,
-  };
+let liveAvalaiExchangeRateCache: {
+  rate: number;
+  source: 'avalai_credit' | 'ledger_history' | 'unavailable';
+  fetchedAt: string | null;
+  expiresAt: number;
+} = {
+  rate: 0,
+  source: 'unavailable',
+  fetchedAt: null,
+  expiresAt: 0,
+};
+let liveAvalaiExchangeRateInFlight: Promise<{
+  rate: number;
+  source: 'avalai_credit' | 'ledger_history' | 'unavailable';
+  fetchedAt: string | null;
+}> | null = null;
+
+const cacheLiveAvalaiRateFromCreditPayload = (creditPayload: any) => {
+  const normalized = normalizeAvalaiCreditPayload(creditPayload);
+  const rate = Number(normalized?.exchangeRate || 0);
+  if (Number.isFinite(rate) && rate > 0) {
+    const fetchedAt = new Date().toISOString();
+    liveAvalaiExchangeRateCache = {
+      rate,
+      source: 'avalai_credit',
+      fetchedAt,
+      expiresAt: Date.now() + AVALAI_LIVE_RATE_TTL_MS,
+    };
+    return { rate, source: 'avalai_credit' as const, fetchedAt };
+  }
+  return null;
 };
 
-const extractAvalaiTransactionCost = (payload: any) => {
-  const candidates = Array.isArray(payload?.transactions)
-    ? payload.transactions
-    : Array.isArray(payload?.data)
-    ? payload.data
-    : Array.isArray(payload?.results)
-    ? payload.results
-    : [];
-  const first = candidates[0] || payload?.transaction || payload?.data || payload || {};
-  const cost = first?.cost || first?.estimated_cost || first?.billing || first?.amount || first?.charge || {};
-  const rawUnit = numberFrom(
-    cost.unit ?? cost.usd ?? cost.amount_usd ?? first.cost_unit ?? first.cost_usd ?? first.amount_usd,
-    NaN,
-  );
-  const rawIrt = numberFrom(
-    cost.irt ?? cost.rial ?? cost.rials ?? cost.amount_rial ?? cost.amount_irt ?? first.cost_irt ?? first.amount_irt ?? first.amount_rial,
-    NaN,
-  );
-  const exchangeRate = numberFrom(cost.exchange_rate ?? first.exchange_rate, DEFAULT_AI_EXCHANGE_RATE_IRT);
-  return {
-    rawCostUnit: Number.isFinite(rawUnit) ? Number(rawUnit.toFixed(10)) : null,
-    rawCostIrt: Number.isFinite(rawIrt) ? Math.ceil(rawIrt) : null,
-    exchangeRate,
-    raw: payload,
-  };
+const resolveLatestLedgerAvalaiExchangeRate = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+): Promise<number | null> => {
+  if (!supabaseUrl || !serviceRoleKey) return null;
+  const recentRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_usage_ledger', {
+    exchange_rate_irt: 'gt.0',
+    select: 'exchange_rate_irt,usage,created_at',
+    order: 'created_at.desc',
+    limit: 20,
+  }).catch(() => []);
+  for (const row of recentRows || []) {
+    const inlineRate = Number(row?.usage?.cost?.exchange_rate || row?.usage?.cost?.exchange_rate_irt || 0);
+    if (Number.isFinite(inlineRate) && inlineRate > 0) return inlineRate;
+  }
+  for (const row of recentRows || []) {
+    const rate = Number(row?.exchange_rate_irt || 0);
+    if (Number.isFinite(rate) && rate > 0 && rate !== 115000) return rate;
+  }
+  for (const row of recentRows || []) {
+    const rate = Number(row?.exchange_rate_irt || 0);
+    if (Number.isFinite(rate) && rate > 0) return rate;
+  }
+  return null;
 };
 
-const lookupAvalaiTransactionCost = async (providerConfig: any, requestId: string) => {
+const resolveLiveAvalaiExchangeRate = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  options?: { forceRefresh?: boolean },
+): Promise<{
+  rate: number;
+  source: 'avalai_credit' | 'ledger_history' | 'unavailable';
+  fetchedAt: string | null;
+}> => {
+  const now = Date.now();
+  if (!options?.forceRefresh && liveAvalaiExchangeRateCache.rate > 0 && now < liveAvalaiExchangeRateCache.expiresAt) {
+    return {
+      rate: liveAvalaiExchangeRateCache.rate,
+      source: liveAvalaiExchangeRateCache.source,
+      fetchedAt: liveAvalaiExchangeRateCache.fetchedAt,
+    };
+  }
+  if (!options?.forceRefresh && liveAvalaiExchangeRateInFlight) {
+    return await liveAvalaiExchangeRateInFlight;
+  }
+  const loader = (async () => {
+    try {
+      const creditResult = await fetchAvalaiCredit(getCentralProviderConfig()).catch(() => null);
+      if (creditResult?.available && creditResult?.credit) {
+        const cached = cacheLiveAvalaiRateFromCreditPayload(creditResult.credit);
+        if (cached) return cached;
+      }
+      const ledgerRate = await resolveLatestLedgerAvalaiExchangeRate(supabaseUrl, serviceRoleKey);
+      if (ledgerRate && ledgerRate > 0) {
+        const fetchedAt = new Date().toISOString();
+        liveAvalaiExchangeRateCache = {
+          rate: ledgerRate,
+          source: 'ledger_history',
+          fetchedAt,
+          expiresAt: Date.now() + AVALAI_FALLBACK_RATE_TTL_MS,
+        };
+        return { rate: ledgerRate, source: 'ledger_history' as const, fetchedAt };
+      }
+      return { rate: 0, source: 'unavailable' as const, fetchedAt: null };
+    } finally {
+      liveAvalaiExchangeRateInFlight = null;
+    }
+  })();
+  liveAvalaiExchangeRateInFlight = loader;
+  return await loader;
+};
+
+const estimateAiCharge = (
+  usageMetadata: any,
+  pricing: any,
+  fallbackMargin = DEFAULT_AI_MARGIN_PERCENT,
+  liveExchangeRateIrt?: number | null,
+) => estimateAiChargeCore(usageMetadata, pricing, {
+  fallbackMargin,
+  liveExchangeRateIrt,
+});
+
+const extractAvalaiTransactionCost = (payload: any, fallbackExchangeRateIrt = 0) =>
+  extractAvalaiTransactionCostCore(payload, fallbackExchangeRateIrt);
+
+const lookupAvalaiTransactionCost = async (
+  providerConfig: any,
+  requestId: string,
+  fallbackExchangeRateIrt = 0,
+) => {
   const normalizedRequestId = String(requestId || '').trim();
   if (!providerConfig?.apiKey || !normalizedRequestId) return null;
   const { response } = await requestAvalaiWithFallback(providerConfig, '/user/v1/transactions/lookup', {
@@ -3783,7 +3859,7 @@ const lookupAvalaiTransactionCost = async (providerConfig: any, requestId: strin
   }, { stripVersionForPath: true, disableFallback: true });
   const parsed = parseJsonSafe(await response.text());
   if (!response.ok) throw new Error(typeof parsed === 'string' ? parsed : parsed?.message || 'AvalAI transaction lookup failed.');
-  return extractAvalaiTransactionCost(parsed);
+  return extractAvalaiTransactionCost(parsed, fallbackExchangeRateIrt);
 };
 
 const reconcileAiUsageLedgerWithAvalai = async (
@@ -3794,8 +3870,12 @@ const reconcileAiUsageLedgerWithAvalai = async (
 ) => {
   const requestId = String(ledger?.avalai_request_id || '').trim();
   if (!ledger?.id || !requestId) return;
-  await sleep(35000);
-  const exact = await lookupAvalaiTransactionCost(providerConfig, requestId).catch((error: any) => {
+  await sleep(8000);
+  const exact = await lookupAvalaiTransactionCost(
+    providerConfig,
+    requestId,
+    numberFrom(ledger?.exchange_rate_irt, 0),
+  ).catch((error: any) => {
     console.warn('AvalAI transaction lookup skipped', error);
     return null;
   });
@@ -3809,7 +3889,7 @@ const reconcileAiUsageLedgerWithAvalai = async (
     raw_cost_unit: exact.rawCostUnit ?? ledger.raw_cost_unit ?? 0,
     raw_cost_irt: exact.rawCostIrt,
     billed_amount_irt: billedAmountIrt,
-    exchange_rate_irt: exact.exchangeRate,
+    exchange_rate_irt: exact.exchangeRate > 0 ? exact.exchangeRate : numberFrom(ledger?.exchange_rate_irt, 0),
     metadata: {
       ...(ledger?.metadata && typeof ledger.metadata === 'object' ? ledger.metadata : {}),
       avalai_reconciled: true,
@@ -3840,16 +3920,27 @@ const recordAiUsageLedger = async (
 ) => {
   if (!authContext?.orgId) return null;
   try {
-    const settings = await loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
-    const pricing = await loadModelPricing(supabaseUrl, serviceRoleKey, args.model);
+    const [settings, pricing, liveRate] = await Promise.all([
+      loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext),
+      loadModelPricing(supabaseUrl, serviceRoleKey, args.model),
+      resolveLiveAvalaiExchangeRate(supabaseUrl, serviceRoleKey),
+    ]);
     const catalogRow = args.modelCatalog || pricing;
-    const charge = estimateAiCharge(args.usageMetadata, catalogRow, numberFrom(settings?.default_margin_percent, DEFAULT_AI_MARGIN_PERCENT));
+    const charge = estimateAiCharge(
+      args.usageMetadata,
+      catalogRow,
+      numberFrom(settings?.default_margin_percent, DEFAULT_AI_MARGIN_PERCENT),
+      liveRate?.rate || null,
+    );
     const tokenCount = extractAiUsageTokens(args.usageMetadata);
     const cachedTokens = extractCachedInputTokens(args.usageMetadata);
+    const effectiveExchangeRate = charge.exchangeRate > 0
+      ? charge.exchangeRate
+      : numberFrom(liveRate?.rate, numberFrom(catalogRow?.exchange_rate_irt, 0));
     const cacheSavingsIrt = calculateCacheSavingsIrt({
       cachedTokens,
       modelCatalog: catalogRow,
-      exchangeRateIrt: numberFrom(catalogRow?.exchange_rate_irt, charge.exchangeRate),
+      exchangeRateIrt: effectiveExchangeRate,
       marginPercent: charge.marginPercent,
     });
     const rows = await restInsert(supabaseUrl, serviceRoleKey, 'org_ai_usage_ledger', [{
@@ -3870,13 +3961,14 @@ const recordAiUsageLedger = async (
       raw_cost_irt: charge.rawCostIrt,
       billed_amount_irt: charge.billedAmountIrt,
       margin_percent: charge.marginPercent,
-      exchange_rate_irt: charge.exchangeRate,
+      exchange_rate_irt: effectiveExchangeRate,
       usage: args.usageMetadata || {},
       metadata: {
         ...(args.metadata || {}),
         token_count: tokenCount,
         cached_input_tokens: cachedTokens,
         cache_savings_irt: cacheSavingsIrt,
+        exchange_rate_source: charge.exchangeRateSource,
         agent_key: args.agentKey || null,
         channel: args.channel || 'web',
       },
@@ -3905,7 +3997,7 @@ const withCustomerBilling = (usageMetadata: any, ledger: any) => {
     customer_billing: {
       amount_irt: numberFrom(ledger?.billed_amount_irt, 0),
       margin_percent: numberFrom(ledger?.margin_percent, 0),
-      exchange_rate_irt: numberFrom(ledger?.exchange_rate_irt, DEFAULT_AI_EXCHANGE_RATE_IRT),
+      exchange_rate_irt: numberFrom(ledger?.exchange_rate_irt, 0),
       ledger_id: ledger?.id || null,
     },
   };
@@ -4065,25 +4157,24 @@ const mergeChatUsageMetadata = (items: any[], providerConfig: any) => {
   const valid = (items || []).filter(Boolean);
   if (!valid.length) return null;
   const usageTotals: Record<string, number> = {};
-  const costTotals: Record<string, number> = {};
+  const costParts: Array<Record<string, any> | null> = [];
   valid.forEach((item) => {
     const usage = item?.usage && typeof item.usage === 'object' ? item.usage : {};
     Object.entries(usage).forEach(([key, value]) => {
       const numberValue = Number(value);
       if (Number.isFinite(numberValue)) usageTotals[key] = Number(usageTotals[key] || 0) + numberValue;
     });
-    const cost = item?.cost && typeof item.cost === 'object' ? item.cost : {};
-    Object.entries(cost).forEach(([key, value]) => {
-      const numberValue = Number(value);
-      if (Number.isFinite(numberValue)) costTotals[key] = Number(costTotals[key] || 0) + numberValue;
-    });
+    if (item?.cost && typeof item.cost === 'object') {
+      costParts.push(item.cost);
+    }
   });
+  const mergedCost = mergeChatCostParts(costParts);
   return {
     provider: providerConfig.provider,
     model: providerConfig.model,
     capability: providerConfig.capability || null,
     usage: Object.keys(usageTotals).length ? usageTotals : valid[valid.length - 1]?.usage || null,
-    cost: Object.keys(costTotals).length ? costTotals : valid[valid.length - 1]?.cost || null,
+    cost: mergedCost || valid[valid.length - 1]?.cost || null,
     partial_requests: valid.length,
   };
 };
@@ -6443,7 +6534,7 @@ const handleGetAiOverview = async (supabaseUrl: string, serviceRoleKey: string, 
     authContext.orgId
       ? safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_usage_ledger', {
           org_id: `eq.${authContext.orgId}`,
-          select: 'id,user_id,capability,model,agent_key,channel,status,raw_cost_irt,billed_amount_irt,cached_input_tokens,cache_savings_irt,usage,created_at',
+          select: 'id,user_id,capability,model,agent_key,channel,status,raw_cost_irt,billed_amount_irt,exchange_rate_irt,cached_input_tokens,cache_savings_irt,usage,created_at',
           order: 'created_at.desc',
           limit: 200,
         })
@@ -6484,7 +6575,10 @@ const handleGetAiOverview = async (supabaseUrl: string, serviceRoleKey: string, 
     if (agentKey) acc.by_agent[agentKey] = (acc.by_agent[agentKey] || 0) + numberFrom(row?.billed_amount_irt, 0);
     return acc;
   }, { billed_amount_irt: 0, raw_cost_irt: 0, cached_input_tokens: 0, cache_savings_irt: 0, requests: 0, by_model: {}, by_capability: {}, by_agent: {} });
-  const companyContext = await loadCompanyContext(supabaseUrl, serviceRoleKey, authContext);
+  const [companyContext, liveExchangeRate] = await Promise.all([
+    loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
+    resolveLiveAvalaiExchangeRate(supabaseUrl, serviceRoleKey),
+  ]);
   const policyBySubject = new Map((usagePolicies || []).map((row: any) => [`${row.subject_type}:${normalizeId(row.subject_id) || NIL_UUID}`, normalizeAiUsagePolicyRow(row)]));
   const defaultPolicy = policyBySubject.get(`default:${NIL_UUID}`) || normalizeAiUsagePolicyRow(null, { subjectType: 'default', subjectId: NIL_UUID });
   const usageByUser = new Map<string, { usedTokens: number; usedIrt: number; requests: number }>();
@@ -6531,6 +6625,7 @@ const handleGetAiOverview = async (supabaseUrl: string, serviceRoleKey: string, 
       totals,
       recent: ledgerRows || [],
     },
+    liveExchangeRate,
     company: companyContext,
   });
 };
@@ -13517,57 +13612,30 @@ const handleTestProvider = async (supabaseUrl: string, serviceRoleKey: string, a
   });
 };
 
-const normalizeCreditPayload = (payload: any) => {
-  const flat = payload && typeof payload === 'object' ? payload : { value: payload };
-  const data = flat?.data && typeof flat.data === 'object' ? flat.data : {};
-  const wallet = flat?.wallet && typeof flat.wallet === 'object' ? flat.wallet : {};
-  const balance = flat?.balance && typeof flat.balance === 'object' ? flat.balance : {};
-  const candidates = [
-    flat.balance,
-    flat.credit,
-    flat.credits,
-    flat.remaining,
-    flat.remaining_credit,
-    flat.total_available,
-    data.balance,
-    data.credit,
-    data.remaining,
-    wallet.balance,
-    wallet.credit,
-    balance.value,
-    balance.amount,
-  ].filter((item) => item !== null && item !== undefined && item !== '');
-  const rial = flat.rial || flat.rials || flat.amount_rial || flat.remaining_rial || data.rial || data.rials || data.amount_rial || data.remaining_rial || wallet.rial || balance.rial || null;
-  const toman = flat.toman || flat.tomans || flat.amount_toman || flat.remaining_toman || data.toman || data.tomans || data.amount_toman || data.remaining_toman || wallet.toman || balance.toman || null;
-  const token = flat.token || flat.tokens || flat.remaining_tokens || flat.credit_tokens || data.token || data.tokens || data.remaining_tokens || wallet.tokens || balance.tokens || null;
-  const unitCredit = flat.unit_credit || flat.unit || flat.credit_unit || data.unit_credit || data.unit || wallet.unit_credit || null;
-  return {
-    value: candidates[0] ?? null,
-    currency: flat.currency || data.currency || balance.currency || null,
-    rial,
-    toman,
-    token,
-    unitCredit,
-    raw: payload,
-  };
-};
+const normalizeCreditPayload = (payload: any) => normalizeAvalaiCreditPayload(payload);
 
 const handleGetCredit = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   if (!canManageAiSettings(authContext)) {
     return json(403, { success: false, message: 'دسترسی مدیریت اتصالات AI را ندارید.' });
   }
   const providerCredit = await fetchAvalaiCredit(getCentralProviderConfig());
+  const normalized = providerCredit.available ? normalizeCreditPayload(providerCredit.credit) : null;
+  if (providerCredit.available && providerCredit.credit) {
+    cacheLiveAvalaiRateFromCreditPayload(providerCredit.credit);
+  }
   return json(200, {
     success: true,
     ...providerCredit,
-    credit: providerCredit.available ? normalizeCreditPayload(providerCredit.credit) : null,
+    credit: normalized,
+    exchangeRate: normalized?.exchangeRate ?? null,
   });
 };
 
 const handleGetAiCreditSummary = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
-  const [summary, companyContext] = await Promise.all([
+  const [summary, companyContext, liveExchangeRate] = await Promise.all([
     buildAiUsageAccessSummary(supabaseUrl, serviceRoleKey, authContext),
     loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
+    resolveLiveAvalaiExchangeRate(supabaseUrl, serviceRoleKey),
   ]);
   return json(200, {
     success: true,
@@ -13584,6 +13652,7 @@ const handleGetAiCreditSummary = async (supabaseUrl: string, serviceRoleKey: str
       : summary.orgWallet
         ? { warning: summary.orgWallet.warning, exhausted: summary.orgWallet.exhausted }
         : null,
+    liveExchangeRate,
     company: companyContext,
   });
 };
@@ -14332,9 +14401,9 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
   const subAction = String(body?.sub || '').trim();
 
   if (subAction === 'overview') {
-    const [allUsage, models, providerCredit, orgRows, walletRows, grantRows, centralDefaults] = await Promise.all([
+    const [allUsage, models, providerCredit, orgRows, companyCurrencyRows, walletRows, grantRows, centralDefaults] = await Promise.all([
       safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_usage_ledger', {
-        select: 'id,org_id,capability,model,provider,status,raw_cost_irt,billed_amount_irt,margin_percent,created_at',
+        select: 'id,org_id,capability,model,provider,status,raw_cost_unit,raw_cost_irt,billed_amount_irt,exchange_rate_irt,margin_percent,created_at',
         order: 'created_at.desc',
         limit: 600,
       }),
@@ -14348,6 +14417,10 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
         select: 'id,name,slug',
         limit: 2000,
       }),
+      safeRestSelect(supabaseUrl, serviceRoleKey, 'company_settings', {
+        select: 'org_id,currency_code,currency_label',
+        limit: 2000,
+      }),
       safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_wallets', {
         select: 'org_id,balance_irt,included_quota_irt,reserved_irt,status,updated_at',
         limit: 3000,
@@ -14359,9 +14432,23 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
       }),
       loadSaasAiDefaultModels(supabaseUrl, serviceRoleKey),
     ]);
+    const normalizedProviderCredit = (providerCredit as any)?.available
+      ? normalizeCreditPayload((providerCredit as any).credit)
+      : null;
+    const cachedLiveRate = (providerCredit as any)?.available
+      ? cacheLiveAvalaiRateFromCreditPayload((providerCredit as any).credit)
+      : null;
+    const liveExchangeRate = cachedLiveRate || await resolveLiveAvalaiExchangeRate(supabaseUrl, serviceRoleKey);
     const orgNameById = new Map((orgRows || []).map((row: any) => [
       normalizeId(row?.id),
       String(row?.name || row?.slug || '').trim() || 'سازمان بدون نام',
+    ]));
+    const companyCurrencyByOrg = new Map((companyCurrencyRows || []).map((row: any) => [
+      normalizeId(row?.org_id),
+      {
+        currency_code: String(row?.currency_code || 'IRT').trim().toUpperCase(),
+        currency_label: String(row?.currency_label || '').trim() || (String(row?.currency_code || '').trim().toUpperCase() === 'IRR' ? 'ریال' : 'تومان'),
+      },
     ]));
     const walletByOrg = new Map((walletRows || []).map((row: any) => {
       const balance = numberFrom(row?.balance_irt, 0);
@@ -14400,6 +14487,8 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
     }
     const orgSummaries = Array.from(byOrg.values()).map((item) => ({
       ...item,
+      currency_code: companyCurrencyByOrg.get(item.org_id)?.currency_code || 'IRT',
+      currency_label: companyCurrencyByOrg.get(item.org_id)?.currency_label || 'تومان',
       models: Array.from(item.models),
       wallet: walletByOrg.get(item.org_id) || null,
       wallet_balance_irt: numberFrom(walletByOrg.get(item.org_id)?.balance_irt, 0),
@@ -14433,12 +14522,15 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
       allUsage: allUsage.slice(0, 200).map((row: any) => ({
         ...row,
         org_name: orgNameById.get(normalizeId(row?.org_id)) || 'سازمان بدون نام',
+        currency_code: companyCurrencyByOrg.get(normalizeId(row?.org_id))?.currency_code || 'IRT',
+        currency_label: companyCurrencyByOrg.get(normalizeId(row?.org_id))?.currency_label || 'تومان',
       })),
       orgSummaries,
       totals,
+      liveExchangeRate,
       providerCredit: {
         ...providerCredit,
-        credit: (providerCredit as any).available ? normalizeCreditPayload((providerCredit as any).credit) : null,
+        credit: normalizedProviderCredit,
       },
     });
   }
@@ -14553,7 +14645,9 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
       specific_cost_usd: row.specific_cost_usd !== undefined ? numberFrom(row.specific_cost_usd, 0) : null,
       specific_cost_unit: row.specific_cost_unit ? String(row.specific_cost_unit) : null,
       margin_percent: numberFrom(row.margin_percent, 30),
-      exchange_rate_irt: numberFrom(row.exchange_rate_irt, DEFAULT_AI_EXCHANGE_RATE_IRT),
+      exchange_rate_irt: row?.metadata?.override_exchange_rate === true && numberFrom(row.exchange_rate_irt, 0) > 0
+        ? numberFrom(row.exchange_rate_irt, 0)
+        : 0,
       is_active: row.is_active !== false,
       is_coming_soon: row.is_coming_soon === true,
       pricing_source: String(row.pricing_source || 'manual').trim(),
@@ -15824,7 +15918,7 @@ const handleGetAgentsWorkspaceOverview = async (supabaseUrl: string, serviceRole
     }),
     safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_usage_ledger', {
       org_id: `eq.${authContext.orgId}`,
-      select: 'agent_key,cached_input_tokens,cache_savings_irt,total_tokens,customer_price_irt,created_at',
+      select: 'agent_key,cached_input_tokens,cache_savings_irt,billed_amount_irt,status,usage,created_at',
       order: 'created_at.desc',
       limit: 300,
     }),
@@ -15895,14 +15989,15 @@ const handleGetAgentsWorkspaceOverview = async (supabaseUrl: string, serviceRole
   });
   const todayTehran = tehranDateFormatter.format(new Date(nowMs));
   for (const row of usageRows || []) {
+    if (row?.status && String(row.status) !== 'finalized') continue;
     const key = String(row?.agent_key || '').trim() || 'lead_orchestrator';
     const current = usageByAgent[key] || { runs: 0, totalTokens: 0, cachedTokens: 0, savingsIrt: 0, todaySpentIrt: 0 };
     current.runs += 1;
-    current.totalTokens += Number(row?.total_tokens || 0);
+    current.totalTokens += extractAiUsageTokens(row?.usage);
     current.cachedTokens += Number(row?.cached_input_tokens || 0);
     current.savingsIrt += Number(row?.cache_savings_irt || 0);
     if (row?.created_at && tehranDateFormatter.format(new Date(row.created_at)) === todayTehran) {
-      current.todaySpentIrt += Number(row?.customer_price_irt || 0);
+      current.todaySpentIrt += Number(row?.billed_amount_irt || 0);
     }
     usageByAgent[key] = current;
   }
@@ -15980,10 +16075,16 @@ const handleGetAgentsWorkspaceOverview = async (supabaseUrl: string, serviceRole
       };
     });
 
+  const [companyContext, liveExchangeRate] = await Promise.all([
+    loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
+    resolveLiveAvalaiExchangeRate(supabaseUrl, serviceRoleKey),
+  ]);
   return json(200, {
     success: true,
     canManage,
     saasDefaults,
+    company: companyContext,
+    liveExchangeRate,
     planFeatures: {
       ...(planContext?.features && typeof planContext.features === 'object' ? planContext.features : {}),
       ai_staff_bot: isPlanFeatureEnabled(planContext, 'ai_staff_bot'),
