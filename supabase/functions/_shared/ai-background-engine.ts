@@ -1,3 +1,5 @@
+// @ts-nocheck
+import { loadOrgPlanAccess } from './org-plan-access.ts';
 import { getAgentDefinition, getAgentTitleFa, type AgentKey } from './ai-agent-catalog.ts';
 import {
   isPlanFeatureEnabled,
@@ -385,48 +387,7 @@ export const runAiBackgroundAgentsTick = async (params: {
       continue;
     }
 
-    const isSaasAdminOrg = (orgRoles || []).some((roleRow: any) => {
-      const saasPerm = roleRow?.permissions?.__saas_admin || {};
-      return saasPerm?.view === true
-        || saasPerm?.edit === true
-        || Object.values(saasPerm?.fields || {}).some((v) => v === true);
-    });
-
-    const planCode = String(orgSettings?.plan_code || '').trim();
-    const planRows = planCode
-      ? await sharedRestSelect(params.supabaseUrl, params.serviceRoleKey, 'saas_plans', {
-          code: `eq.${planCode}`,
-          select: 'code,enabled_modules,enabled_features,is_active',
-          limit: 1,
-        })
-      : [];
-    const planRow = planRows?.[0] || null;
-    const planContext = isSaasAdminOrg
-      ? {
-          available: true,
-          reason: 'saas_admin_organization',
-          features: { ai_background_agents: true, ai_staff_bot: true, instagram_inbox: true },
-          enabledModules: {},
-          moduleOverrides: {},
-        }
-      : !orgSettings
-      ? {
-          available: true,
-          reason: 'missing_saas_org_settings_fallback',
-          features: { ai_background_agents: true, ai_staff_bot: true, instagram_inbox: true },
-          enabledModules: {},
-          moduleOverrides: {},
-        }
-      : {
-          available: Boolean(planRow?.is_active !== false),
-          reason: planRow ? null : 'missing_plan',
-          features: {
-            ...(planRow?.enabled_features && typeof planRow.enabled_features === 'object' ? planRow.enabled_features : {}),
-            ...(orgSettings?.feature_overrides && typeof orgSettings.feature_overrides === 'object' ? orgSettings.feature_overrides : {}),
-          },
-          enabledModules: planRow?.enabled_modules && typeof planRow.enabled_modules === 'object' ? planRow.enabled_modules : {},
-          moduleOverrides: orgSettings?.module_overrides && typeof orgSettings.module_overrides === 'object' ? orgSettings.module_overrides : {},
-        };
+    const planContext = await loadOrgPlanAccess(params.supabaseUrl, params.serviceRoleKey, orgId);
 
     if (!isPlanFeatureEnabled(planContext, 'ai_background_agents')) {
       skippedReasons.push(`${orgId}: ویژگی ایجنت‌های پس‌زمینه در پلن سازمان فعال نیست.`);

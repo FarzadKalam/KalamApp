@@ -4584,7 +4584,18 @@ export const ModuleListRefine: React.FC<{
         return;
       }
       if (useSaasOrgDrawer) {
-        setSaasOrgDrawerRecord(record);
+        setSaasOrgDrawerRecord(resolvedModuleId === 'saas_demo_requests' ? {
+          ...record,
+          source_kind: record.org_id ? 'org' : 'request',
+          source_id: record.org_id || record.id,
+          request_id: record.id,
+          org_name: record.organization_name || record.business_name || record.full_name,
+          owner_name: record.full_name,
+          owner_email: record.email,
+          primary_contact_mobile: record.mobile,
+          is_demo: record.is_demo_request !== false,
+          provision_state: record.org_id ? 'provisioned' : 'request_pending',
+        } : record);
         return;
       }
       if (useQuickPreviewModal) {
@@ -4683,7 +4694,18 @@ export const ModuleListRefine: React.FC<{
             (item: any) => String(item?.id || "") === recordId,
           );
           if (record) {
-            setSaasOrgDrawerRecord(record);
+            setSaasOrgDrawerRecord(resolvedModuleId === 'saas_demo_requests' ? {
+          ...record,
+          source_kind: record.org_id ? 'org' : 'request',
+          source_id: record.org_id || record.id,
+          request_id: record.id,
+          org_name: record.organization_name || record.business_name || record.full_name,
+          owner_name: record.full_name,
+          owner_email: record.email,
+          primary_contact_mobile: record.mobile,
+          is_demo: record.is_demo_request !== false,
+          provision_state: record.org_id ? 'provisioned' : 'request_pending',
+        } : record);
             return;
           }
         }

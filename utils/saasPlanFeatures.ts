@@ -38,7 +38,7 @@ export const hasCurrentOrgPlanFeature = async (
   const defaultEnabled = options?.defaultEnabled === true;
 
   return getAppRuntimeCached({
-    key: `org-plan-feature:${orgId}:${normalizedFeatureKey}`,
+    key: `org-plan-feature:${orgId}:${normalizedFeatureKey}:${defaultEnabled}`,
     ttlMs: 60_000,
     force: options?.force,
     loader: async () => {
@@ -46,7 +46,7 @@ export const hasCurrentOrgPlanFeature = async (
         p_feature_key: normalizedFeatureKey,
         p_default_enabled: defaultEnabled,
       });
-      if (error) return defaultEnabled;
+      if (error) return false;
       return data === true;
     },
   });

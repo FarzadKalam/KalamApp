@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
+  Spin,
   Button,
   Checkbox,
   Divider,
@@ -27,6 +28,7 @@ import {
 } from '@ant-design/icons';
 import { App as AntdApp } from 'antd';
 import { supabase } from '../supabaseClient';
+import { hasCurrentOrgPlanFeature } from '../utils/saasPlanFeatures';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import type { ColumnsType } from 'antd/es/table';
 
@@ -620,21 +622,30 @@ type ApiIntegrationSectionProps = {
   orgId: string | null;
 };
 
-const ApiIntegrationSection: React.FC<ApiIntegrationSectionProps> = ({ orgId }) => (
-  <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
+const ApiIntegrationSection: React.FC<ApiIntegrationSectionProps> = ({ orgId }) => {
+  const [access, setAccess] = useState<{ api: boolean; webhooks: boolean } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setAccess(null);
+    if (!orgId) { setAccess({ api: false, webhooks: false }); return; }
+    void Promise.all([
+      hasCurrentOrgPlanFeature('api_access', { force: true }),
+      hasCurrentOrgPlanFeature('webhooks', { force: true }),
+    ]).then(([api, webhooks]) => { if (!cancelled) setAccess({ api, webhooks }); })
+      .catch(() => { if (!cancelled) setAccess({ api: false, webhooks: false }); });
+    return () => { cancelled = true; };
+  }, [orgId]);
+  return <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
     <div className="flex items-center gap-2 mb-1">
-      <ApiOutlined style={{ fontSize: 18, color: '#1677ff' }} />
-      <Title level={4} className="!mb-0">یکپارچه‌سازی API</Title>
+      <ApiOutlined />
+      <Title level={4} className="!mb-0">اتصال به نرم‌افزارهای دیگر</Title>
     </div>
-    <Text type="secondary" className="block mb-6 text-sm">
-      با استفاده از توکن API و Webhooks می‌توانید ارتباط دوطرفه بین تازه سیستم و سایر نرم‌افزارها برقرار کنید.
-      {' '}<a href="/tazesystem/developers" target="_blank" rel="noopener noreferrer">مستندات API ↗</a>
-    </Text>
-
-    <ApiTokensSection orgId={orgId} />
-    <Divider />
-    <WebhooksSection orgId={orgId} />
-  </div>
-);
+    {!access ? <Spin /> : <>
+      {access.api ? <ApiTokensSection orgId={orgId} /> : <Alert type="info" showIcon message="دسترسی API در پلن سازمان فعال نیست." />}
+      <Divider />
+      {access.webhooks ? <WebhooksSection orgId={orgId} /> : <Alert type="info" showIcon message="وب‌هوک در پلن سازمان فعال نیست." />}
+    </>}
+  </div>;
+};
 
 export default ApiIntegrationSection;

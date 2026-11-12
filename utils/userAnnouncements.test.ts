@@ -11,6 +11,7 @@ vi.mock('../supabaseClient', () => ({
 }));
 
 import {
+  evaluateAnnouncementConditions,
   dismissAnnouncementLocally,
   filterAnnouncementsByLocalDismissals,
   isAnnouncementDismissedLocally,
@@ -84,5 +85,18 @@ describe('user announcements local dismiss cache', () => {
     await expect(loadActiveUserAnnouncements(runtime)).resolves.toEqual([]);
     await expect(loadActiveUserAnnouncements(runtime)).resolves.toEqual([]);
     expect(rpcMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('wallet warning boundaries', () => {
+  it.each(['ai_wallet_remaining_irt', 'sms_wallet_remaining_irt'] as const)('warns strictly below 50000 only with a known %s', (field) => {
+    const notice = { ...announcement('credit'), conditions_all: [{ field, operator: 'lt', value: 50000 }] };
+    const context = { surface: 'user_panel' as const, path: '/', host: 'org.example' };
+    for (const value of [undefined, null, 50000, 100000]) {
+      expect(evaluateAnnouncementConditions(notice, { ...context, [field]: value })).toBe(false);
+    }
+    for (const value of [0, 49999]) {
+      expect(evaluateAnnouncementConditions(notice, { ...context, [field]: value })).toBe(true);
+    }
   });
 });

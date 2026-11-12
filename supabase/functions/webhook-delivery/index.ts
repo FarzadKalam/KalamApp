@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { loadOrgPlanAccess } from '../_shared/org-plan-access.ts';
 // webhook-delivery: Delivers org webhook events to external URLs
 // Called by Supabase Database Webhooks on INSERT/UPDATE/DELETE on business tables.
 // Payload is signed with HMAC-SHA256 using the webhook's secret.
@@ -115,6 +116,11 @@ Deno.serve(async (req: Request) => {
   if (!orgId) {
     // جدول org_id ندارد — نادیده بگیر
     return json(200, { ok: true, delivered: 0 });
+  }
+
+  const access = await loadOrgPlanAccess(SUPABASE_URL, SUPABASE_SERVICE_KEY, orgId);
+  if (!access.available || access.features?.webhooks !== true || access.isReadonly) {
+    return json(200, { ok: true, delivered: 0, reason: 'plan_feature_disabled' });
   }
 
   // webhooks فعال این org که این جدول را subscribe کرده‌اند

@@ -57,6 +57,19 @@ jobs:
             docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d content_calendar_test -v ON_ERROR_STOP=1 < "$file"
           done
 
+      - name: Plan entitlements and full demo SQL regression checks
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test plan_entitlements_test
+          sed '/^create role /d' tests/sql/plan_entitlements_fixture.sql | docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d plan_entitlements_test -v ON_ERROR_STOP=1
+          for file in database_v1_phase585_plan_entitlements_and_full_demo.sql \
+            database_v1_phase585_plan_entitlements_and_full_demo.sql \
+            tests/sql/plan_entitlements_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d plan_entitlements_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -139,7 +152,7 @@ jobs:
         run: deno check --node-modules-dir=none supabase/functions/email-admin/index.ts supabase/functions/send-email/index.ts supabase/functions/email-provider-events/index.ts supabase/functions/email-sync-worker/index.ts supabase/functions/send-sms/index.ts
 
       - name: AI assistant dependency checks
-        run: deno check --node-modules-dir=none supabase/functions/_shared/ai-agents.ts supabase/functions/ai-assistant/index.ts
+        run: deno check --node-modules-dir=none supabase/functions/_shared/ai-agents.ts supabase/functions/ai-assistant/index.ts supabase/functions/api-gateway/index.ts supabase/functions/webhook-delivery/index.ts
 
       - name: Messaging attachment and viewer isolation regression checks
         timeout-minutes: 8
@@ -175,7 +188,8 @@ jobs:
           utils/moduleListShortcut.test.ts utils/moduleListColumnFilters.test.ts
           utils/moduleListFilterDisplay.test.ts
           utils/optionHelpers.test.ts utils/moduleListLive.test.ts
-          utils/saasPlanDisplayFeatures.test.ts
+          utils/saasPlanDisplayFeatures.test.ts utils/saasOfferingCatalog.test.ts utils/userAnnouncements.test.ts
+          supabase/functions/_shared/org-plan-access.test.ts
           hooks/useTableColumnLayout.test.tsx components/table/TableChoiceFilter.test.tsx
           components/SmartTableRenderer.test.tsx
           components/moduleList/RelatedActivityIndicators.test.tsx

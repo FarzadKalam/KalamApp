@@ -33,123 +33,15 @@ import {
   DownOutlined,
 } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
-import { ADVERTISING_CAMPAIGNS_MODULE_ID } from '../../utils/advertisingCampaigns';
-import { CONTENT_CALENDAR_MODULE_ID } from '../../modules/contentCalendarsConfig';
 import { PLAN_FEATURE_OPTIONS as FEATURE_OPTIONS } from '../../utils/planFeatureCatalog';
 import {
   deriveLegacyEnabledAiAgentFeatureKeys,
   hasExplicitAiAgentPlanFlags,
 } from '../../utils/aiAgentCatalog';
-import { AI_AGENT_PLAN_FEATURES } from '../../utils/saasOfferingCatalog';
+import { SAAS_MODULE_GROUPS as MODULE_GROUPS, AI_AGENT_PLAN_FEATURES } from '../../utils/saasOfferingCatalog';
 
 const { Title, Text } = Typography;
 const { Panel } = Collapse;
-
-// گروه‌بندی ماژول‌ها برای نمایش حرفه‌ای
-const MODULE_GROUPS: { label: string; modules: { id: string; label: string }[] }[] = [
-  {
-    label: 'فروش و بازاریابی',
-    modules: [
-      { id: 'customers', label: 'مشتریان' },
-      { id: 'marketing_leads', label: 'سرنخ‌ها و بازاریابی' },
-      { id: 'invoices', label: 'فاکتور فروش' },
-      { id: 'price_lists', label: 'لیست قیمت‌ها' },
-      { id: 'billboards', label: 'تبلیغات محیطی' },
-    ],
-  },
-  {
-    label: 'خرید و تامین',
-    modules: [
-      { id: 'suppliers', label: 'تامین‌کنندگان' },
-      { id: 'purchase_invoices', label: 'فاکتور خرید' },
-      { id: 'expense_documents', label: 'هزینه‌ها' },
-      { id: 'assets', label: 'اموال' },
-    ],
-  },
-  {
-    label: 'انبار و تولید',
-    modules: [
-      { id: 'products', label: 'کالاها و خدمات' },
-      { id: 'warehouses', label: 'انبارها' },
-      { id: 'shelves', label: 'قفسه‌ها' },
-      { id: 'stock_transfers', label: 'تردد و حواله' },
-      { id: 'product_bundles', label: 'پکیج‌ها' },
-      { id: 'production_boms', label: 'BOM تولید' },
-      { id: 'production_orders', label: 'سفارشات تولید' },
-    ],
-  },
-  {
-    label: 'پروژه و فرآیند',
-    modules: [
-      { id: 'projects', label: 'پروژه‌ها' },
-      { id: 'tasks', label: 'فعالیت‌ها' },
-      { id: CONTENT_CALENDAR_MODULE_ID, label: 'تقویم‌های محتوایی' },
-      { id: 'process_templates', label: 'الگوهای فرآیند' },
-      { id: 'process_runs', label: 'اجرای فرآیند' },
-    ],
-  },
-  {
-    label: 'منابع انسانی',
-    modules: [
-      { id: 'employees', label: 'کارکنان' },
-      { id: 'job_descriptions', label: 'شرح شغل‌ها' },
-      { id: 'attendance_logs', label: 'تردد و حضور' },
-      { id: 'work_schedules', label: 'برنامه کاری' },
-      { id: 'leave_requests', label: 'مرخصی‌ها' },
-      { id: 'overtime_requests', label: 'اضافه‌کاری' },
-      { id: 'mission_requests', label: 'ماموریت‌ها' },
-      { id: 'employee_advances', label: 'مساعده' },
-      { id: 'employee_bonus_requests', label: 'پاداش' },
-      { id: 'employee_penalty_requests', label: 'جریمه' },
-      { id: 'payroll_slips', label: 'فیش حقوقی' },
-      { id: 'employee_contracts', label: 'قراردادها' },
-      { id: 'recruitment_applicants', label: 'استخدام' },
-    ],
-  },
-  {
-    label: 'مالی و حسابداری',
-    modules: [
-      { id: 'chart_of_accounts', label: 'جدول حساب‌ها' },
-      { id: 'journal_entries', label: 'اسناد حسابداری' },
-      { id: 'cash_boxes', label: 'صندوق نقدی' },
-      { id: 'bank_accounts', label: 'حساب‌های بانکی' },
-      { id: 'petty_funds', label: 'تنخواه' },
-      { id: 'cheques', label: 'چک‌ها' },
-      { id: 'barters', label: 'تهاترها' },
-      { id: 'cash_bank_operations', label: 'نقد و بانک' },
-      { id: 'accounting_event_rules', label: 'قوانین حسابداری خودکار' },
-      { id: 'cost_centers', label: 'مراکز هزینه' },
-      { id: 'fiscal_years', label: 'سال مالی' },
-    ],
-  },
-  {
-    label: 'ارتباطات',
-    modules: [
-      { id: 'secretariat_documents', label: 'نامه‌ها و مکاتبات' },
-      { id: ADVERTISING_CAMPAIGNS_MODULE_ID, label: 'کمپین‌های تبلیغاتی' },
-    ],
-  },
-  {
-    label: 'منابع',
-    modules: [
-      { id: 'delivery_forms', label: 'فرم‌های تحویل' },
-    ],
-  },
-  {
-    label: 'ابزارها و گزارشات',
-    modules: [
-      { id: 'web_forms', label: 'وب فرم‌ها' },
-      { id: 'surveys', label: 'نظرسنجی‌ها' },
-      { id: 'calculation_formulas', label: 'فرمول‌های محاسباتی' },
-      { id: 'automation_execution_reports', label: 'گزارشات اتوماسیون' },
-      { id: 'sms_delivery_reports', label: 'گزارشات پیامک' },
-      { id: 'voip_call_reports', label: 'گزارشات VoIP' },
-      { id: 'counterparty_bot_groups', label: 'گروه‌های بات' },
-    ],
-  },
-];
-
-
 
 const AI_AGENT_FEATURE_OPTIONS = AI_AGENT_PLAN_FEATURES.map((item) => ({
   id: item.id,
@@ -193,10 +85,12 @@ const arrayToModules = (ids: string[]): Record<string, boolean> =>
   Object.fromEntries(ids.map((id) => [id, true]));
 
 const featuresToArray = (obj: Record<string, any>): string[] =>
-  Object.entries(obj || {}).filter(([, v]) => !!v).map(([k]) => k);
+  Object.entries(obj || {}).filter(([, v]) => v === true).map(([k]) => k);
 
-const arrayToFeatures = (ids: string[]): Record<string, any> =>
-  Object.fromEntries(ids.map((id) => [id, true]));
+const arrayToFeatures = (ids: string[], original: Record<string, any> = {}): Record<string, any> => ({
+  ...original,
+  ...Object.fromEntries(FEATURE_OPTIONS.map(({ id }) => [id, ids.includes(id)])),
+});
 
 const formatPrice = (n: number) =>
   n ? Math.round(n).toLocaleString('fa-IR', { maximumFractionDigits: 0 }) : '—';
@@ -350,7 +244,7 @@ const SaasAdminPlans: React.FC = () => {
       const payload = {
         ...values,
         enabled_modules: arrayToModules(selectedModules),
-        enabled_features: arrayToFeatures(selectedFeatures),
+        enabled_features: arrayToFeatures(selectedFeatures, editing?.enabled_features),
         display_features: displayFeatures,
         updated_at: new Date().toISOString(),
       };
@@ -833,7 +727,7 @@ const SaasAdminPlans: React.FC = () => {
               key="features"
             >
               <div className="grid grid-cols-2 gap-2">
-                {FEATURE_OPTIONS.map((feat) => (
+                {FEATURE_OPTIONS.filter((feat) => !feat.id.startsWith('ai_agent:')).map((feat) => (
                   <div
                     key={feat.id}
                     className={`flex items-center gap-2 rounded-xl border px-3 py-2.5 cursor-pointer transition-colors text-sm ${

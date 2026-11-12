@@ -52,8 +52,8 @@ export const useUserAnnouncements = ({ surface, path, host }: UseUserAnnouncemen
       viewerIdentityRef.current = dismissIdentity;
       let isDemoUser = false;
       let trialDaysRemaining: number | null = null;
-      let aiWalletRemaining = 0;
-      let smsWalletRemaining = 0;
+      let aiWalletRemaining: number | null = null;
+      let smsWalletRemaining: number | null = null;
       const canViewAccountSettings = Boolean(
         bootstrap.permissions
         && orgId
@@ -71,13 +71,13 @@ export const useUserAnnouncements = ({ surface, path, host }: UseUserAnnouncemen
           const { data: saasAdminData } = await supabase.rpc('current_user_is_saas_admin_org');
           isSaasAdminOrg = Boolean(saasAdminData) || isSaasAdminOrg;
           const [aiResult, smsResult] = await Promise.all([
-            supabase.from('org_ai_wallets').select('balance_irt,included_quota_irt,reserved_irt').maybeSingle(),
-            supabase.from('org_sms_wallets').select('balance_irt,included_quota_irt,reserved_irt').maybeSingle(),
+            supabase.from('org_ai_wallets').select('balance_irt,included_quota_irt,reserved_irt').eq('org_id', orgId).maybeSingle(),
+            supabase.from('org_sms_wallets').select('balance_irt,included_quota_irt,reserved_irt').eq('org_id', orgId).maybeSingle(),
           ]);
           const ai = (aiResult.data || {}) as WalletBalanceRow;
           const sms = (smsResult.data || {}) as WalletBalanceRow;
-          aiWalletRemaining = Math.max(0, Number(ai.balance_irt || 0) + Number(ai.included_quota_irt || 0) - Number(ai.reserved_irt || 0));
-          smsWalletRemaining = Math.max(0, Number(sms.balance_irt || 0) + Number(sms.included_quota_irt || 0) - Number(sms.reserved_irt || 0));
+          aiWalletRemaining = aiResult.error ? null : Math.max(0, Number(ai.balance_irt || 0) + Number(ai.included_quota_irt || 0) - Number(ai.reserved_irt || 0));
+          smsWalletRemaining = smsResult.error ? null : Math.max(0, Number(sms.balance_irt || 0) + Number(sms.included_quota_irt || 0) - Number(sms.reserved_irt || 0));
         } catch {
           isDemoUser = false;
         }

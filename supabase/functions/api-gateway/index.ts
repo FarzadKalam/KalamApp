@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { loadOrgPlanAccess } from '../_shared/org-plan-access.ts';
 // api-gateway: REST API gateway for TazeSystem external integrations
 // Accepts org API tokens and proxies queries to Supabase with org isolation.
 
@@ -87,44 +88,10 @@ const verifyToken = async (token: string): Promise<TokenInfo | null> => {
     if (!Array.isArray(tokenRows) || tokenRows.length === 0) return null;
     const { id: tokenId, org_id } = tokenRows[0];
 
-    // 2. همان نقشهٔ ماژول‌های پلن و استثناهای سازمان را بخوان؛ پلن ناشناخته fail-closed است.
-    const orgRows = await serviceGet(
-      `${SUPABASE_URL}/rest/v1/saas_org_settings?org_id=eq.${encodeURIComponent(org_id)}&select=plan_code,module_overrides,is_readonly,trial_ends_at&limit=1`
-    );
-    if (!Array.isArray(orgRows) || !orgRows[0]) return null;
-    const orgSettings = orgRows[0];
-    const planCode = String(orgSettings.plan_code || '').trim();
-    const plans = planCode ? await serviceGet(
-      `${SUPABASE_URL}/rest/v1/saas_plans?code=eq.${encodeURIComponent(planCode)}&select=enabled_modules&limit=1`
-    ) : [];
-    const planModules = Array.isArray(plans) && plans[0]?.enabled_modules && typeof plans[0].enabled_modules === 'object'
-      ? plans[0].enabled_modules : {};
-    const overrides = orgSettings.module_overrides && typeof orgSettings.module_overrides === 'object'
-      ? orgSettings.module_overrides : {};
-    let enabled_modules = { ...planModules, ...overrides };
-    if (!planCode) {
-      // سازمان داخلی SaaS پلن بسته‌ای ندارد؛ دسترسی API آن از اجتماع ماژول‌های پلن‌های فعال می‌آید.
-      const roleRows = await serviceGet(
-        `${SUPABASE_URL}/rest/v1/org_roles?org_id=eq.${encodeURIComponent(org_id)}&select=permissions`
-      );
-      const isSaasAdminOrg = Array.isArray(roleRows) && roleRows.some((role: any) =>
-        role?.permissions?.__saas_admin?.view === true || role?.permissions?.__saas_admin?.edit === true
-      );
-      if (isSaasAdminOrg) {
-        const activePlans = await serviceGet(
-          `${SUPABASE_URL}/rest/v1/saas_plans?is_active=eq.true&select=enabled_modules`
-        );
-        const allModules: EnabledModules = {};
-        for (const plan of Array.isArray(activePlans) ? activePlans : []) {
-          for (const [moduleKey, value] of Object.entries(plan.enabled_modules || {})) {
-            if (value === true || value === 'enabled') allModules[moduleKey] = true;
-          }
-        }
-        enabled_modules = { ...allModules, ...overrides };
-      }
-    }
-    const is_readonly = orgSettings.is_readonly === true ||
-      Boolean(orgSettings.trial_ends_at && new Date(orgSettings.trial_ends_at).getTime() < Date.now());
+    const access = await loadOrgPlanAccess(SUPABASE_URL, SUPABASE_SERVICE_KEY, org_id);
+    if (!access.available || access.features?.api_access !== true) return null;
+    const enabled_modules = access.enabledModules;
+    const is_readonly = access.isReadonly === true;
 
     // 3. last_used_at را به‌روز کن (fire-and-forget)
     fetch(`${SUPABASE_URL}/rest/v1/org_api_tokens?id=eq.${tokenId}`, {

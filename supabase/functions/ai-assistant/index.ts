@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { loadOrgPlanAccess } from '../_shared/org-plan-access.ts';
 
 import {
   normalizeAgentPlan,
@@ -1253,85 +1254,8 @@ const truthyPlanFeature = (value: any) => {
   return false;
 };
 
-const loadTenantAiPlanContext = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
-  if (!authContext?.orgId) {
-    return {
-      available: false,
-      planCode: null,
-      features: {},
-      enabledModules: {},
-      moduleOverrides: {},
-      reason: 'missing_org',
-    };
-  }
-  const [orgRows, isSaasAdminOrg] = await Promise.all([
-    safeRestSelect(supabaseUrl, serviceRoleKey, 'saas_org_settings', {
-      org_id: `eq.${authContext.orgId}`,
-      select: 'org_id,plan_code,module_overrides,feature_overrides,status,is_readonly',
-      limit: 1,
-    }),
-    isSaasAdminOrganization(supabaseUrl, serviceRoleKey, authContext.orgId),
-  ]);
-  const orgSettings = orgRows[0] || null;
-  if (isSaasAdminOrg) {
-    return {
-      available: true,
-      planCode: String(orgSettings?.plan_code || '').trim() || null,
-      features: {
-        ...Object.fromEntries(Object.values(AI_CAPABILITY_FEATURE_KEYS).map((key) => [key, true])),
-        ...Object.fromEntries(AI_AGENT_KEYS.map((key) => [getAiAgentPlanFeatureKey(key), true])),
-        mbti_ai_analysis: true,
-        ai_staff_bot: true,
-        ai_background_agents: true,
-        instagram_inbox: true,
-      },
-      enabledModules: {},
-      moduleOverrides: {},
-      status: orgSettings?.status || null,
-      isReadonly: orgSettings?.is_readonly === true,
-      reason: 'saas_admin_organization',
-    };
-  }
-  if (!orgSettings) {
-    return {
-      available: true,
-      planCode: null,
-      features: {
-        ...Object.fromEntries(Object.values(AI_CAPABILITY_FEATURE_KEYS).map((key) => [key, true])),
-        ...Object.fromEntries(AI_AGENT_KEYS.map((key) => [getAiAgentPlanFeatureKey(key), true])),
-        ai_staff_bot: true,
-        ai_background_agents: true,
-        instagram_inbox: true,
-      },
-      enabledModules: {},
-      moduleOverrides: {},
-      reason: 'missing_saas_org_settings_fallback',
-    };
-  }
-  const planCode = String(orgSettings?.plan_code || '').trim();
-  const planRows = planCode
-    ? await safeRestSelect(supabaseUrl, serviceRoleKey, 'saas_plans', {
-        code: `eq.${planCode}`,
-        select: 'code,enabled_modules,enabled_features,is_active',
-        limit: 1,
-      })
-    : [];
-  const plan = planRows[0] || null;
-  const merged = {
-    ...(plan?.enabled_features && typeof plan.enabled_features === 'object' ? plan.enabled_features : {}),
-    ...(orgSettings?.feature_overrides && typeof orgSettings.feature_overrides === 'object' ? orgSettings.feature_overrides : {}),
-  };
-  return {
-    available: Boolean(plan?.is_active !== false),
-    planCode,
-    features: merged,
-    enabledModules: plan?.enabled_modules && typeof plan.enabled_modules === 'object' ? plan.enabled_modules : {},
-    moduleOverrides: orgSettings?.module_overrides && typeof orgSettings.module_overrides === 'object' ? orgSettings.module_overrides : {},
-    status: orgSettings?.status || null,
-    isReadonly: orgSettings?.is_readonly === true,
-    reason: plan ? null : 'missing_plan',
-  };
-};
+const loadTenantAiPlanContext = (supabaseUrl: string, serviceRoleKey: string, authContext: any) =>
+  loadOrgPlanAccess(supabaseUrl, serviceRoleKey, authContext?.orgId || '');
 
 const isAiCapabilityPlanAvailable = (planContext: any, capability: string) => {
   const normalized = String(capability || '').trim();

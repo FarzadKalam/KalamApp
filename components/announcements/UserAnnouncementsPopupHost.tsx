@@ -63,7 +63,7 @@ const renderMediaItem = (item: AnnouncementMediaItem, index: number) => {
     if (videoUrl) {
       return (
         <div key={`video-link-${index}`} className="rounded-xl border border-gray-200 dark:border-gray-700 px-3 py-2 text-xs">
-          <a href={videoUrl} target="_blank" rel="noreferrer" className="text-leather-600 dark:text-leather-300 underline break-all">
+          <a href={videoUrl} target="_blank" rel="noreferrer" className="text-[rgb(var(--brand-600-rgb))] dark:text-[rgb(var(--brand-300-rgb))] underline break-all">
             {caption || 'مشاهده ویدیو'}
           </a>
         </div>
@@ -127,7 +127,7 @@ const UserAnnouncementsPopupHost: React.FC<UserAnnouncementsPopupHostProps> = ({
           className={`!rounded-xl ${isMobileViewport ? '!w-full !h-9 !px-3' : '!h-10 !px-5'}`}
           onClick={() => void onDismiss(current)}
         >
-          {current.allow_dismiss ? 'متوجه شدم، دیگر نشان نده' : 'بستن'}
+          {current.allow_dismiss ? 'متوجه شدم، امروز نشان نده' : 'بستن'}
         </Button>,
       ]}
       width={isMobileViewport ? 'min(340px, calc(100vw - 52px))' : 680}

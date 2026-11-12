@@ -31,7 +31,7 @@ export const SAAS_MODULE_GROUPS: Array<{ label: string; modules: SaasOfferingOpt
     { id: 'goals', label: 'اهداف' },
   ] },
   { label: 'منابع انسانی', modules: [
-    { id: 'employees', label: 'کارکنان' }, { id: 'attendance_logs', label: 'تردد و حضور' }, { id: 'work_schedules', label: 'برنامه کاری' },
+    { id: 'employees', label: 'کارکنان' }, { id: 'job_descriptions', label: 'شرح شغل‌ها' }, { id: 'employee_bonus_requests', label: 'پاداش' }, { id: 'employee_penalty_requests', label: 'جریمه' }, { id: 'attendance_logs', label: 'تردد و حضور' }, { id: 'work_schedules', label: 'برنامه کاری' },
     { id: 'leave_requests', label: 'مرخصی‌ها' }, { id: 'overtime_requests', label: 'اضافه‌کاری' }, { id: 'mission_requests', label: 'ماموریت‌ها' },
     { id: 'employee_advances', label: 'مساعده' }, { id: 'payroll_slips', label: 'فیش حقوقی' }, { id: 'employee_contracts', label: 'قراردادها' }, { id: 'recruitment_applicants', label: 'استخدام' },
   ] },
@@ -43,6 +43,7 @@ export const SAAS_MODULE_GROUPS: Array<{ label: string; modules: SaasOfferingOpt
   { label: 'ارتباطات و گزارش‌ها', modules: [
     { id: 'secretariat_documents', label: 'نامه‌ها و مکاتبات' }, { id: 'advertising_campaigns', label: 'کمپین‌های تبلیغاتی' },
     { id: 'web_forms', label: 'وب‌فرم‌ها' }, { id: 'surveys', label: 'نظرسنجی‌ها' }, { id: 'calculation_formulas', label: 'فرمول‌های محاسباتی' }, { id: 'delivery_forms', label: 'فرم‌های تحویل' },
+    { id: 'automation_execution_reports', label: 'گزارش اتوماسیون' }, { id: 'sms_delivery_reports', label: 'گزارش پیامک' }, { id: 'voip_call_reports', label: 'گزارش تماس' }, { id: 'counterparty_bot_groups', label: 'گروه‌های بات' },
     { id: 'chat_groups', label: 'بستر چت داخلی' }, { id: 'organization_chart', label: 'چارت سازمانی' },
   ] },
 ];
@@ -63,6 +64,7 @@ export const SAAS_FEATURE_OPTIONS: SaasOfferingOption[] = [
   { id: 'internal_realtime_notifications', label: 'اعلان لحظه‌ای داخل سامانه' },
   { id: 'organization_email', label: 'ایمیل سازمانی؛ ارسال، دریافت و گزارش‌ها' },
   { id: 'managed_organization_email', label: 'صندوق میزبانی‌شده با نام سازمان روی دامنه تازه سیستم (هزینه‌دار)' },
+  { id: 'webhooks', label: 'وب‌هوک و ارسال خودکار رویدادها' }, { id: 'mbti_ai_analysis', label: 'تحلیل هوشمند ارزیابی شخصیت' }, { id: 'support_tickets', label: 'درخواست پشتیبانی' },
   { id: 'api_access', label: 'دسترسی API' }, { id: 'wordpress_connection', label: 'اتصال به وردپرس و ووکامرس' }, { id: 'advanced_reports', label: 'گزارش‌ساز پیشرفته' }, { id: 'map_view', label: 'نمای نقشه' },
   { id: 'multi_lane_processes', label: 'فرآیندهای چندردیفه' }, { id: 'content_calendar', label: 'تقویم محتوایی' },
   { id: 'billboard_status_management', label: 'مدیریت تغییر وضعیت تابلوها' },
@@ -83,10 +85,10 @@ export const SAAS_FEATURE_OPTIONS: SaasOfferingOption[] = [
 ];
 
 const featureGroupIds: Array<{ label: string; ids: string[] }> = [
-  { label: 'هوش مصنوعی', ids: ['ai_chat','ai_knowledge','ai_knowledge_limited','ai_document_analysis','ai_web_search','ai_voice_input','ai_voice_output','ai_image_generation','ai_video_generation','ai_deep_reasoning','ai_legal_assistant','ai_voip_auto_reply','ai_staff_bot','ai_background_agents','ai_credit_topup'] },
+  { label: 'هوش مصنوعی', ids: ['ai_chat','ai_knowledge','ai_knowledge_limited','ai_document_analysis','ai_web_search','ai_voice_input','ai_voice_output','ai_image_generation','ai_video_generation','ai_deep_reasoning','ai_legal_assistant','ai_voip_auto_reply','ai_staff_bot','ai_background_agents','ai_credit_topup','mbti_ai_analysis'] },
   { label: 'ایجنت‌های هوشمند', ids: AI_AGENT_PLAN_FEATURES.map((item) => item.id) },
   { label: 'ارتباطات و کمپین', ids: ['internal_realtime_notifications','instagram_inbox','campaign_sms','campaign_email','campaign_bot_group','campaign_bot_private','campaign_instagram_post','campaign_voice_call','bale_bot','rubika_bot'] },
-  { label: 'مدیریت و گزارش', ids: ['api_access','advanced_reports','map_view','multi_lane_processes','content_calendar','billboard_status_management','white_label','custom_domain','reservations','qr_scan','business_model_canvas','online_catalog'] },
+  { label: 'مدیریت و گزارش', ids: ['webhooks','support_tickets','api_access','advanced_reports','map_view','multi_lane_processes','content_calendar','billboard_status_management','white_label','custom_domain','reservations','qr_scan','business_model_canvas','online_catalog'] },
   { label: 'فروش و پرداخت', ids: ['wordpress_connection','taxpayer_system','own_payment_gateway','online_invoice_payment','retail_sales_invoice','saas_account_billing','sms_credit_topup','extra_users_purchase'] },
 ];
 const groupedFeatureIds = new Set(featureGroupIds.flatMap((group) => group.ids));

@@ -152,6 +152,7 @@ const evaluateCondition = (condition: AnnouncementCondition, runtime: Announceme
     case 'lte':
     case 'gt':
     case 'gte': {
+      if (rawCurrentValue == null || normalizeText(rawCurrentValue) === '') return false;
       const current = Number(rawCurrentValue);
       const expected = Number(expectedValue);
       if (!Number.isFinite(current) || !Number.isFinite(expected)) return false;
