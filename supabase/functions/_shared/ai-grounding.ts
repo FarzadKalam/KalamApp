@@ -487,7 +487,7 @@ export const loadCentralAiGrounding = async (params: {
     }),
     params.includeCalendar === false
       ? Promise.resolve(null)
-      : resolvePersianCalendarContext(params.message),
+      : resolvePersianCalendarContext(String(params.message || '')),
   ]);
 
   const company = companyRows[0] || null;

@@ -99,8 +99,8 @@ export const recommendComplementaryProducts = (params: {
       : Array.isArray(bundle?.products)
       ? bundle.products
       : [];
-    const ids = bundleItems.map((it: any) => String(it?.product_id || it?.id || '').trim()).filter(Boolean);
-    const overlaps = ids.some((id) => selected.has(id));
+    const ids: string[] = bundleItems.map((it: any) => String(it?.product_id || it?.id || '').trim()).filter(Boolean);
+    const overlaps = ids.some((id: string) => selected.has(id));
     if (!overlaps) continue;
     for (const id of ids) {
       if (selected.has(id)) continue;
@@ -114,8 +114,8 @@ export const recommendComplementaryProducts = (params: {
 
   for (const inv of params.recentInvoices || []) {
     const invItems = Array.isArray(inv?.invoiceItems) ? inv.invoiceItems : [];
-    const ids = invItems.map((it: any) => String(it?.product_id || '').trim()).filter(Boolean);
-    if (!ids.some((id) => selected.has(id))) continue;
+    const ids: string[] = invItems.map((it: any) => String(it?.product_id || '').trim()).filter(Boolean);
+    if (!ids.some((id: string) => selected.has(id))) continue;
     for (const id of ids) {
       if (selected.has(id)) continue;
       const prev = scoreMap.get(id) || { score: 0, reasonFa: '' };
