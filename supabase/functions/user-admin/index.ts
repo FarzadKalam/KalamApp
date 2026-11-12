@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { iranMobileE164, iranMobileLocal, iranMobileAuth } from '../_shared/phone-number.ts';
 import { normalizeEmail } from './normalizeEmail.ts';
+import { getOwnerPasswordValidationError } from '../_shared/owner-password-policy.ts';
 
 type UserAdminAction =
   | 'set_user_password'
@@ -884,7 +885,7 @@ Deno.serve(async (request) => {
       const targetUserId = String(caller?.id || '').trim();
       const fullName = String(body?.fullName || '').trim();
       const email = normalizeEmail(body?.email);
-      const password = String(body?.password || '').trim();
+      const password = String(body?.password || '');
       const skipProfileUpsert = body?.skipProfileUpsert === true;
       const normalizedOwnerPhone = normalizeIranMobileE164(body?.phone || caller?.phone || '');
 
@@ -897,9 +898,8 @@ Deno.serve(async (request) => {
       if (!isValidEmail(email)) {
         return json(400, { success: false, message: 'ایمیل مدیر اصلی معتبر نیست.' });
       }
-      if (password.length < 6) {
-        return json(400, { success: false, message: 'رمز عبور باید حداقل ۶ کاراکتر باشد.' });
-      }
+      const passwordError = getOwnerPasswordValidationError(password);
+      if (passwordError) return json(400, { success: false, message: passwordError });
 
       const duplicateProfile = await fetchProfileByPhoneOrEmail(supabaseUrl, serviceRoleKey, {
         email,

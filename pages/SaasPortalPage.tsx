@@ -6,6 +6,8 @@ import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
   CopyOutlined,
+  EyeInvisibleOutlined,
+  EyeOutlined,
   LoadingOutlined,
   MobileOutlined,
   RocketOutlined,
@@ -17,10 +19,12 @@ import { signOutLocalSession } from '../utils/authSession';
 import { getInternalAppUrl } from '../utils/hostRouting';
 import { handoffSessionToTenant } from '../utils/tenantSessionHandoff';
 import { selectOrganizationContext } from '../utils/organizationContext';
+import { clearSessionBootstrapCache } from '../utils/sessionCache';
 import { assertDemoOtpRequestAllowed, lookupPhoneLoginCandidate, lookupPhoneSignupInvite, requestExistingProfilePhoneOtp } from '../utils/phoneAuth';
 import {
   getDemoProvisionErrorMessage,
   getOwnerSetupErrorMessage,
+  getOwnerPasswordValidationError,
   isBrandPaletteKey,
   isValidOwnerEmail,
   isValidOwnerPassword,
@@ -112,6 +116,12 @@ const SAAS_WIZARD_COOLDOWN_UNTIL_STORAGE_KEY = 'kalam_saas_wizard_cooldown_until
 const SAAS_WIZARD_FORM_STORAGE_KEY = 'kalam_saas_wizard_form';
 const SAAS_WIZARD_EXISTING_PHONE_STORAGE_KEY = 'kalam_saas_wizard_existing_phone';
 
+const passwordVisibilityIcon = (visible: boolean) => (
+  <button type="button" aria-label={visible ? 'پنهان‌کردن رمز عبور' : 'نمایش رمز عبور'} className="border-0 bg-transparent p-0 text-slate-500">
+    {visible ? <EyeInvisibleOutlined aria-hidden /> : <EyeOutlined aria-hidden />}
+  </button>
+);
+
 // ─── Helpers ─────────────────────────────────────────
 // ─── Sub-components ───────────────────────────────────
 
@@ -164,6 +174,12 @@ const SaasPortalPage: React.FC = () => {
   const [ownerEmail, setOwnerEmail] = useState('');
   const [ownerPassword, setOwnerPassword] = useState('');
   const [ownerPasswordConfirm, setOwnerPasswordConfirm] = useState('');
+  const [passwordTouched, setPasswordTouched] = useState(false);
+  const [passwordConfirmTouched, setPasswordConfirmTouched] = useState(false);
+  const [capsLockOn, setCapsLockOn] = useState(false);
+  const passwordError = passwordTouched || ownerPassword.length > 0 ? getOwnerPasswordValidationError(ownerPassword) : null;
+  const passwordConfirmError = (passwordConfirmTouched || ownerPasswordConfirm.length > 0) && ownerPassword !== ownerPasswordConfirm
+    ? 'تکرار رمز عبور با رمز عبور یکسان نیست.' : null;
   const [orgName, setOrgName] = useState('');
   const [industry, setIndustry] = useState('');
   const [userCount, setUserCount] = useState('');
@@ -180,6 +196,8 @@ const SaasPortalPage: React.FC = () => {
   const [provisionWarning, setProvisionWarning] = useState('');
   const [copyNotice, setCopyNotice] = useState('');
   const [retryingDemoData, setRetryingDemoData] = useState(false);
+  const [enteringOrganization, setEnteringOrganization] = useState(false);
+  const [entryError, setEntryError] = useState('');
 
   const normalizedPhone = normalizeOtpPhone(phone);
   const cooldownTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -428,7 +446,7 @@ const SaasPortalPage: React.FC = () => {
   const handleSendOtpFromInfo = async () => {
     if (!fullName.trim()) { setError('نام و نام خانوادگی الزامی است.'); return; }
     if (!isValidOwnerEmail(ownerEmail)) { setError('ایمیل مدیر اصلی معتبر نیست.'); return; }
-    if (!isValidOwnerPassword(ownerPassword)) { setError('رمز عبور باید حداقل ۶ کاراکتر باشد.'); return; }
+    if (!isValidOwnerPassword(ownerPassword)) { setPasswordTouched(true); setError(getOwnerPasswordValidationError(ownerPassword) || 'رمز عبور معتبر نیست.'); return; }
     if (ownerPassword !== ownerPasswordConfirm) { setError('تکرار رمز عبور با رمز عبور یکسان نیست.'); return; }
     if (!orgName.trim()) { setError('نام سازمان الزامی است.'); return; }
     const normalizedSlug = normalizeSaasSlug(slug);
@@ -562,6 +580,9 @@ const SaasPortalPage: React.FC = () => {
 
     try {
       const normalizedEmail = normalizeOwnerEmail(ownerEmail);
+      const { data: callerData, error: callerError } = await supabase.auth.getUser();
+      if (callerError || !callerData.user?.id) throw new Error('نشست تأیید شماره معتبر نیست؛ دوباره وارد شوید.');
+      const ownerUserId = callerData.user.id;
       const { data: ownerSetupData, error: ownerSetupError } = await supabase.functions.invoke('user-admin', {
         body: {
           action: 'setup_owner_credentials',
@@ -592,6 +613,19 @@ const SaasPortalPage: React.FC = () => {
         const ownerSetupMessage = String(ownerSetupData?.message || 'تنظیم حساب مدیر اصلی ناموفق بود.').trim();
         throw new Error(ownerSetupReason ? `${ownerSetupReason}: ${ownerSetupMessage}` : ownerSetupMessage);
       }
+
+      // Updating the password through Auth Admin revokes the OTP session.
+      // PostgREST may still accept its JWT while Auth /user rejects it, so obtain
+      // a fresh session before provisioning, seeding, or cross-domain handoff.
+      const { data: ownerLogin, error: ownerLoginError } = await supabase.auth.signInWithPassword({
+        email: normalizedEmail,
+        password: ownerPassword,
+      });
+      if (ownerLoginError || !ownerLogin.session || ownerLogin.user?.id !== ownerUserId) {
+        if (ownerLogin.user?.id && ownerLogin.user.id !== ownerUserId) await signOutLocalSession();
+        throw new Error('اطلاعات مدیر ثبت شد، اما ورود مجدد کامل نشد. با ایمیل و رمز انتخاب‌شده دوباره وارد شوید.');
+      }
+      clearSessionBootstrapCache();
 
       const { data, error: rpcErr } = await supabase.rpc(
         isExistingMemberCreatingDemo
@@ -625,6 +659,8 @@ const SaasPortalPage: React.FC = () => {
       // if optional sample data takes longer or fails.
       flushSync(() => {
         setProvisionResult(result);
+        setRetryingDemoData(true);
+        setEntryError('');
         setStep('done');
       });
       if (result.org_id) selectOrganizationContext(result.org_id);
@@ -636,6 +672,8 @@ const SaasPortalPage: React.FC = () => {
         }
       } catch {
         setProvisionWarning('فضای شما ساخته شد، اما بخشی از داده‌های نمونه اولیه کامل نشد و می‌توانید بعداً دوباره تلاش کنید.');
+      } finally {
+        setRetryingDemoData(false);
       }
 
     } catch (err: any) {
@@ -918,16 +956,25 @@ const SaasPortalPage: React.FC = () => {
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">ایمیل مدیر اصلی <span className="text-red-500">*</span></label>
+                  <label htmlFor="demo-owner-email" className="block text-sm font-bold text-slate-700 mb-2">ایمیل مدیر اصلی <span className="text-red-500">*</span></label>
                   <Input
+                    id="demo-owner-email"
+                    type="email"
                     placeholder="owner@company.com"
                     value={ownerEmail}
                     onChange={(e) => setOwnerEmail(e.target.value)}
+                    onBlur={() => setOwnerEmail(normalizeOwnerEmail(ownerEmail))}
+                    autoComplete="username"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    aria-describedby="demo-email-help"
                     size="large"
                     className={inputClassName}
                     dir="ltr"
                     inputMode="email"
                   />
+                  <p id="demo-email-help" className="mt-2 text-xs leading-6 text-slate-500">ارقام فارسی و عربیِ ایمیل به انگلیسی تبدیل می‌شوند؛ ارقام رمز عبور عیناً حفظ می‌شوند.</p>
                 </div>
                 <div>
                   <label className="block text-sm font-bold text-slate-700 mb-2">پالت ظاهری سازمان</label>
@@ -944,28 +991,54 @@ const SaasPortalPage: React.FC = () => {
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">رمز عبور <span className="text-red-500">*</span></label>
+                  <label htmlFor="demo-owner-password" className="block text-sm font-bold text-slate-700 mb-2">رمز عبور <span className="text-red-500">*</span></label>
                   <Input.Password
-                    placeholder="حداقل ۶ کاراکتر"
+                    id="demo-owner-password"
+                    placeholder="حداقل ۸ نویسه"
+                    iconRender={passwordVisibilityIcon}
                     value={ownerPassword}
                     onChange={(e) => setOwnerPassword(e.target.value)}
+                    onBlur={() => { setPasswordTouched(true); setCapsLockOn(false); }}
+                    onKeyUp={(e) => setCapsLockOn(e.getModifierState?.('CapsLock') || false)}
+                    status={passwordError ? 'error' : undefined}
+                    aria-invalid={Boolean(passwordError)}
+                    aria-describedby="demo-password-help demo-password-error demo-password-caps"
+                    required
+                    minLength={8}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
                     size="large"
                     className={inputClassName}
                     autoComplete="new-password"
                     dir="ltr"
                   />
+                  <p id="demo-password-help" className="mt-2 text-xs leading-6 text-slate-500">حداقل ۸ نویسه؛ فقط عدد نباشد. یک عبارت طولانی و غیرقابل‌حدس انتخاب کنید. حروف و ارقام فارسی هم پذیرفته می‌شوند.</p>
+                  <p id="demo-password-error" aria-live="polite" className="mt-1 text-xs leading-6 text-red-600">{passwordError}</p>
+                  <p id="demo-password-caps" aria-live="polite" className="mt-1 text-xs text-amber-700">{capsLockOn ? 'قفل حروف بزرگ روشن است.' : ''}</p>
                 </div>
                 <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">تکرار رمز عبور <span className="text-red-500">*</span></label>
+                  <label htmlFor="demo-owner-password-confirm" className="block text-sm font-bold text-slate-700 mb-2">تکرار رمز عبور <span className="text-red-500">*</span></label>
                   <Input.Password
+                    id="demo-owner-password-confirm"
                     placeholder="تکرار رمز عبور"
+                    iconRender={passwordVisibilityIcon}
                     value={ownerPasswordConfirm}
                     onChange={(e) => setOwnerPasswordConfirm(e.target.value)}
+                    onBlur={() => setPasswordConfirmTouched(true)}
+                    status={passwordConfirmError ? 'error' : undefined}
+                    aria-invalid={Boolean(passwordConfirmError)}
+                    aria-describedby="demo-password-confirm-error"
+                    required
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
                     size="large"
                     className={inputClassName}
                     autoComplete="new-password"
                     dir="ltr"
                   />
+                  <p id="demo-password-confirm-error" aria-live="polite" className="mt-2 text-xs leading-6 text-red-600">{passwordConfirmError}</p>
                 </div>
               </div>
 
@@ -1131,6 +1204,7 @@ const SaasPortalPage: React.FC = () => {
             <p className="text-xs text-slate-500 mb-2">
               برای ورود مدیر اصلی از ایمیل <span className="font-bold ltr-text">{normalizeOwnerEmail(ownerEmail)}</span> استفاده کنید.
             </p>
+            {retryingDemoData && !provisionWarning && <p role="status" className="mb-4 text-sm text-slate-500"><LoadingOutlined /> در حال آماده‌سازی داده‌های نمونه…</p>}
             {provisionWarning && (
               <Alert type="warning" showIcon className="mb-4 rounded-xl text-right"
                 message={provisionWarning}
@@ -1148,11 +1222,16 @@ const SaasPortalPage: React.FC = () => {
               />
             )}
             <p className="text-xs text-slate-400 mb-4">برای ورود، دکمهٔ زیر را انتخاب کنید.</p>
+            {entryError && <Alert type="error" showIcon message={entryError} className="mb-4 rounded-xl text-right" />}
             <Button
               type="primary"
               size="large"
-              className="!rounded-xl !h-12 !font-black !bg-slate-900 !border-none hover:!bg-slate-700"
+              loading={enteringOrganization}
+              className="!rounded-xl !h-auto !min-h-14 !w-full !whitespace-normal !py-3 !font-black !bg-slate-900 !border-none hover:!bg-slate-700"
               onClick={async () => {
+                if (enteringOrganization) return;
+                setEnteringOrganization(true);
+                setEntryError('');
                 const host = provisionResult.redirect_host || `${provisionResult.slug}${TAZE_SUFFIX}`;
                 try {
                   if (!provisionResult.org_id) throw new Error('شناسه سازمان برای ورود پیدا نشد. صفحه را تازه کنید.');
@@ -1160,11 +1239,13 @@ const SaasPortalPage: React.FC = () => {
                   clearWizardState();
                   window.location.href = `https://${host}`;
                 } catch (err: any) {
-                  setProvisionWarning(getDemoProvisionErrorMessage(err, 'ورود مستقیم انجام نشد. دوباره تلاش کنید.'));
+                  setEntryError(getDemoProvisionErrorMessage(err, 'ورود مستقیم انجام نشد. دوباره تلاش کنید.'));
+                } finally {
+                  setEnteringOrganization(false);
                 }
               }}
             >
-              ورود به پنل من <ArrowLeftOutlined />
+              ورود به {orgName.trim() || 'کسب‌وکار شما'} <ArrowLeftOutlined />
             </Button>
           </div>
         )}

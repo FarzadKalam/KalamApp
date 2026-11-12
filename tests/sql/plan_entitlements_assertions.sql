@@ -44,6 +44,7 @@ begin
  if (select count(*) from saas_user_announcements where conditions_all->0->>'operator'='lt' and conditions_all->0->>'value'='50000')<>2 then raise exception 'Notice threshold wrong'; end if;
 end $$;
 -- Real policy execution with a tenant identity, then disabled and missing-org contexts.
+select set_config('test.uid','00000000-0000-0000-0000-000000000003',false);
 select set_config('test.org','00000000-0000-0000-0000-000000000001',false);
 set role authenticated;
 do $$ begin if (select count(*) from org_api_tokens)<>1 then raise exception 'Allowed tenant token inaccessible'; end if; end $$;
