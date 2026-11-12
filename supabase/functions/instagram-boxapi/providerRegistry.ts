@@ -11,7 +11,7 @@ export type InstagramProviderDefinition = {
   apiBaseUrlPlaceholder: string;
   apiKeyHeader: string;
   apiKeyLabel: string;
-  operations: Record<'sync_accounts' | 'list_posts' | 'send_message' | 'send_generic_template' | 'reply_comment' | 'get_connect_url' | 'show_profile', InstagramProviderOperation>;
+  operations: Record<'sync_accounts' | 'list_posts' | 'send_message' | 'send_generic_template' | 'reply_comment' | 'get_connect_url' | 'show_profile' | 'follow_status', InstagramProviderOperation>;
 };
 
 // هر سرویس‌دهندهٔ جدید فقط با یک adapter مستقل به این رجیستری افزوده می‌شود؛
@@ -19,12 +19,12 @@ export type InstagramProviderDefinition = {
 export const instagramProviderRegistry: Record<string, InstagramProviderDefinition> = {
   boxapi: {
     key: 'boxapi',
-    label: 'BoxAPI',
+    label: 'اتصال رسمی اینستاگرام',
     defaultBaseUrl: 'https://api.sendbox.chat/api/v1',
     apiBaseUrlRequired: true,
     apiBaseUrlPlaceholder: 'https://api.sendbox.chat/api/v1',
     apiKeyHeader: 'X-Api-Key',
-    apiKeyLabel: 'کلید API BoxAPI',
+    apiKeyLabel: 'کلید API اتصال اینستاگرام',
     operations: {
       sync_accounts: { method: 'GET', path: '/service/accounts' },
       list_posts: { method: 'POST', path: '/service/actions/list_posts' },
@@ -33,6 +33,7 @@ export const instagramProviderRegistry: Record<string, InstagramProviderDefiniti
       reply_comment: { method: 'POST', path: '/service/actions/reply_comment' },
       get_connect_url: { method: 'GET', path: '/service/info' },
       show_profile: { method: 'POST', path: '/service/actions/show_profile' },
+      follow_status: { method: 'POST', path: '/service/actions/follow_status' },
     },
   },
 };

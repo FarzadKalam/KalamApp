@@ -151,10 +151,11 @@ const getPresenceClassName = (phase: PresencePhase) => (
       : 'translate-y-0 opacity-100'
 );
 
-type OverlayFilterTab = 'all' | 'internal' | 'activities' | 'responsibilities' | 'system' | 'bot' | 'sms' | 'voip' | 'uploads' | 'email';
+type OverlayFilterTab = 'all' | 'agent' | 'internal' | 'activities' | 'responsibilities' | 'system' | 'bot' | 'sms' | 'voip' | 'uploads' | 'email';
 
 const resolveNotificationTab = (item: UiNotificationOverlayItem): Exclude<OverlayFilterTab, 'uploads' | 'all'> => {
   const channel = String(item.channel || '').trim() as OverlayNotificationChannel;
+  if (item.kind === 'agent' || channel === 'agent') return 'agent';
   if (item.kind === 'task') return 'activities';
   if (item.kind === 'responsibility') return 'responsibilities';
   if (channel === 'internal' || channel === 'system' || channel === 'bot' || channel === 'sms') return channel;
@@ -298,6 +299,7 @@ const UploadProgressOverlay: React.FC = () => {
   const tabCounts = useMemo(() => {
     const counts: Record<OverlayFilterTab, number> = {
       all: tasks.length,
+      agent: 0,
       internal: 0,
       activities: 0,
       responsibilities: 0,
@@ -335,6 +337,7 @@ const UploadProgressOverlay: React.FC = () => {
   const hasDisplayedNotifications = hasNotifications || hasRenderedNotifications;
   const tabOptions = useMemo(() => ([
     { key: 'all', label: 'همه', icon: <NotificationOutlined />, count: tabCounts.all },
+    { key: 'agent', label: 'ایجنت‌ها', icon: <AiSparkleIcon className="h-3.5 w-3.5" />, count: tabCounts.agent },
     { key: 'internal', label: 'داخلی', icon: <TeamOutlined />, count: tabCounts.internal },
     { key: 'activities', label: 'فعالیت', icon: <SoundOutlined />, count: tabCounts.activities },
     { key: 'responsibilities', label: 'مسئولیت', icon: <BellOutlined />, count: tabCounts.responsibilities },
@@ -558,7 +561,7 @@ const UploadProgressOverlay: React.FC = () => {
                   ? <CheckOutlined />
                   : item.kind === 'bot'
                     ? <RobotOutlined />
-                    : item.kind === 'assistant'
+                    : item.kind === 'agent' || item.kind === 'assistant'
                       ? <AiSparkleIcon className="h-4 w-4" />
                       : item.kind === 'sms'
                         ? <MessageOutlined />
@@ -571,13 +574,15 @@ const UploadProgressOverlay: React.FC = () => {
                   ? token.colorSuccess
                   : item.kind === 'bot'
                     ? '#2563eb'
-                    : item.kind === 'assistant'
-                      ? '#be185d'
-                      : item.kind === 'sms'
-                        ? '#d97706'
-                        : item.kind === 'voip_call'
-                          ? '#0f766e'
-                          : '#d97706';
+                    : item.kind === 'agent'
+                      ? '#7c3aed'
+                      : item.kind === 'assistant'
+                        ? '#be185d'
+                        : item.kind === 'sms'
+                          ? '#d97706'
+                          : item.kind === 'voip_call'
+                            ? '#0f766e'
+                            : '#d97706';
 
               return (
                 <div
@@ -608,7 +613,7 @@ const UploadProgressOverlay: React.FC = () => {
                       <div className="min-w-0 flex-1 text-right">
                         <button type="button" onClick={item.onOpen} className="w-full text-right">
                           <div className="flex flex-wrap items-center gap-2 text-[11px]" style={{ color: token.colorTextSecondary }}>
-                            <span>{item.kindLabel || (item.kind === 'note' ? 'پیام' : item.kind === 'task' ? 'فعالیت' : item.kind === 'bot' ? 'پیام بات' : item.kind === 'assistant' ? 'هوش مصنوعی' : item.kind === 'sms' ? 'پیامک' : item.kind === 'voip_call' ? 'تماس ورودی' : 'مسئولیت')}</span>
+                            <span>{item.kindLabel || (item.kind === 'note' ? 'پیام' : item.kind === 'task' ? 'فعالیت' : item.kind === 'bot' ? 'پیام بات' : item.kind === 'agent' ? 'ایجنت هوشمند' : item.kind === 'assistant' ? 'هوش مصنوعی' : item.kind === 'sms' ? 'پیامک' : item.kind === 'voip_call' ? 'تماس ورودی' : 'مسئولیت')}</span>
                             <span>{safeJalaliFormat(item.createdAt, 'YYYY/MM/DD HH:mm')}</span>
                           </div>
                           <div className="mt-1 line-clamp-2 break-words text-sm font-medium leading-5" style={{ color: token.colorTextHeading }}>

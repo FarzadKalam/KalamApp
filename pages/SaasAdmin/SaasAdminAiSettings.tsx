@@ -25,8 +25,12 @@ import {
   GiftOutlined,
   PlusOutlined,
   ReloadOutlined,
+  RobotOutlined,
+  SaveOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { getAiAgentLabel } from '../../supabase/functions/_shared/ai-agents';
+import { AI_AGENT_CATALOG } from '../../utils/aiAgentCatalog';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
@@ -52,6 +56,8 @@ const ALL_CAPABILITIES = [
   { key: 'embedding', label: getAiAgentLabel('embedding') },
   { key: 'document_generation', label: getAiAgentLabel('document_generation') },
   { key: 'customer_auto_reply', label: getAiAgentLabel('customer_auto_reply') },
+  { key: 'agent_fast', label: 'مدل سریع ایجنت‌ها (رله)' },
+  { key: 'context_compression', label: 'فشرده‌سازی زمینه گفتگو' },
 ];
 
 const MODEL_TABS = [
@@ -65,8 +71,22 @@ const MODEL_TABS = [
 ];
 
 const PRIMARY_MODEL_DEFAULT_KEY = '__primary_model';
+const CENTRAL_AGENT_DEFAULT_SLOTS = [
+  { key: PRIMARY_MODEL_DEFAULT_KEY, label: 'مدل اصلی پیش‌فرض سازمان‌ها', hint: 'برای گفتگوهای عمومی و تحلیل‌هایی که مدل اختصاصی ندارند' },
+  { key: 'agent_fast', label: 'مدل سریع رله و پایش', hint: 'برای روتر/رله داخلی، تصمیم‌های سریع و بررسی‌های دوره‌ای کم‌هزینه' },
+  { key: 'context_compression', label: 'فشرده‌سازی زمینه گفتگو', hint: 'برای خلاصه‌سازی تاریخچه گفتگوهای طولانی و کاهش مصرف توکن' },
+  ...AI_AGENT_CATALOG.map((agent) => ({
+    key: `agent:${agent.key}`,
+    label: agent.titleFa,
+    hint: agent.subtitleFa,
+  })),
+];
 const DEFAULT_CAPABILITY_OPTIONS = [
   { key: PRIMARY_MODEL_DEFAULT_KEY, label: 'مدل اصلی سازمان' },
+  ...AI_AGENT_CATALOG.map((agent) => ({
+    key: `agent:${agent.key}`,
+    label: `ایجنت: ${agent.titleFa}`,
+  })),
   ...ALL_CAPABILITIES,
 ];
 
@@ -142,6 +162,9 @@ const SaasAdminAiSettings: React.FC = () => {
   const [giftAmount, setGiftAmount] = useState<number | null>(250000);
   const [giftReason, setGiftReason] = useState('اعتبار هدیه هوش مصنوعی');
   const [giftSaving, setGiftSaving] = useState(false);
+  const [centralDefaultsDraft, setCentralDefaultsDraft] = useState<Record<string, string | null>>({});
+  const [centralDefaultsSaving, setCentralDefaultsSaving] = useState(false);
+  const [centralDefaultsRecommending, setCentralDefaultsRecommending] = useState(false);
   const [form] = Form.useForm<ModelFormValues>();
   const defaultCapabilityTags = Form.useWatch(['metadata', 'default_capability_tags'], form) || [];
   const isDefaultModel = Form.useWatch(['metadata', 'is_default_model'], form) === true;
@@ -151,6 +174,13 @@ const SaasAdminAiSettings: React.FC = () => {
     try {
       const data = await callAi({ action: 'saas_ai', sub: 'overview' });
       setOverview(data);
+      const nextDefaults: Record<string, string | null> = {};
+      if (data?.centralDefaults && typeof data.centralDefaults === 'object') {
+        for (const [k, v] of Object.entries(data.centralDefaults)) {
+          nextDefaults[String(k)] = v ? String(v) : null;
+        }
+      }
+      setCentralDefaultsDraft(nextDefaults);
     } catch (err: any) {
       message.error(toFaErrorMessage(err, 'دریافت اطلاعات هوش مصنوعی ناموفق بود.'));
     } finally {
@@ -161,6 +191,53 @@ const SaasAdminAiSettings: React.FC = () => {
   useEffect(() => { void loadOverview(); }, [loadOverview]);
 
   const models = useMemo<AiModel[]>(() => (overview?.models || []) as AiModel[], [overview]);
+  const activeDefaultModelOptions = useMemo(() => (
+    models
+      .filter((model) => model.is_active !== false && model.is_coming_soon !== true)
+      .map((model) => ({
+        value: model.id,
+        label: `${model.display_name_fa || model.id} (${model.id})`,
+      }))
+  ), [models]);
+
+  const handleSaveCentralDefaults = async () => {
+    setCentralDefaultsSaving(true);
+    try {
+      const data = await callAi({
+        action: 'saas_ai',
+        sub: 'save_central_defaults',
+        defaults: centralDefaultsDraft,
+      });
+      if (data?.centralDefaults && typeof data.centralDefaults === 'object') {
+        setCentralDefaultsDraft(data.centralDefaults);
+      }
+      message.success(String(data?.message || 'پیش‌فرض‌های مرکزی مدل‌ها ذخیره شد.'));
+      await loadOverview();
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'ذخیره پیش‌فرض‌های مرکزی ناموفق بود.'));
+    } finally {
+      setCentralDefaultsSaving(false);
+    }
+  };
+
+  const handleApplyRecommendedDefaults = async () => {
+    setCentralDefaultsRecommending(true);
+    try {
+      const data = await callAi({
+        action: 'saas_ai',
+        sub: 'apply_recommended_defaults',
+      });
+      if (data?.centralDefaults && typeof data.centralDefaults === 'object') {
+        setCentralDefaultsDraft(data.centralDefaults);
+      }
+      message.success(String(data?.message || 'چیدمان اقتصادی و موثر برای همه ایجنت‌ها و رله اعمال شد.'));
+      await loadOverview();
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'اعمال پیشنهاد پیش‌فرض ناموفق بود.'));
+    } finally {
+      setCentralDefaultsRecommending(false);
+    }
+  };
   const providerModelRows = useMemo(() => {
     const term = providerModelSearch.trim().toLowerCase();
     return providerModels.filter((model) => {
@@ -501,8 +578,79 @@ const SaasAdminAiSettings: React.FC = () => {
       ) : null}
 
       <Collapse
-        defaultActiveKey={['models', 'usage_all']}
+        defaultActiveKey={['central_defaults', 'models', 'usage_all']}
         items={[
+          {
+            key: 'central_defaults',
+            label: (
+              <span className="inline-flex items-center gap-2">
+                <RobotOutlined /> پیش‌فرض‌های مرکزی مدل هر ایجنت و رله (قابل تغییر توسط سازمان‌ها)
+              </span>
+            ),
+            children: (
+              <div className="space-y-3">
+                <Alert
+                  type="info"
+                  showIcon
+                  className="text-xs"
+                  message="موتور پیش‌فرض هر ایجنت و رله در اینجا تعیین می‌شود و همه سازمان‌ها بدون نیاز به تنظیم دستی، از همین انتخاب استفاده می‌کنند. هر سازمان در تنظیمات اختصاصی خود امکان تغییر یا شخصی‌سازی مدل هر ایجنت را دارد."
+                />
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <Space wrap>
+                    <Button
+                      icon={<ThunderboltOutlined />}
+                      loading={centralDefaultsRecommending}
+                      onClick={() => void handleApplyRecommendedDefaults()}
+                    >
+                      پیشنهاد خودکار اقتصادی و موثر
+                    </Button>
+                    <Button
+                      type="primary"
+                      icon={<SaveOutlined />}
+                      loading={centralDefaultsSaving}
+                      onClick={() => void handleSaveCentralDefaults()}
+                    >
+                      ذخیره پیش‌فرض‌های مرکزی
+                    </Button>
+                  </Space>
+                  <Text type="secondary" className="text-xs">
+                    تغییر این فهرست، انتخاب‌های صریح سازمان‌ها را بازنویسی نمی‌کند و فقط پیش‌فرض پایه را به‌روز می‌کند.
+                  </Text>
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+                  {CENTRAL_AGENT_DEFAULT_SLOTS.map((slot) => (
+                    <div
+                      key={slot.key}
+                      className="rounded-xl border border-gray-200/80 bg-white p-3 dark:border-white/10 dark:bg-white/[0.03]"
+                    >
+                      <div className="text-xs font-bold text-gray-800 dark:text-gray-100">
+                        {slot.label}
+                      </div>
+                      <div className="mt-0.5 mb-2 line-clamp-1 text-[11px] text-gray-500">
+                        {slot.hint}
+                      </div>
+                      <Select
+                        allowClear
+                        showSearch
+                        optionFilterProp="label"
+                        className="w-full"
+                        size="small"
+                        value={centralDefaultsDraft[slot.key] || undefined}
+                        options={activeDefaultModelOptions}
+                        placeholder="انتخاب از مدل‌های فعال"
+                        onChange={(val) =>
+                          setCentralDefaultsDraft((prev) => ({
+                            ...prev,
+                            [slot.key]: val ? String(val) : null,
+                          }))
+                        }
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ),
+          },
           {
             key: 'models',
             label: (

@@ -42,6 +42,13 @@ import {
 import { dedupeAttachments, extractBotMessageAttachments } from '../../utils/messageAttachments';
 import { parseNoteContent, type NoteAttachment } from '../../utils/noteContent';
 import { canCurrentUserAccessInternalSystemNote, isInternalSystemNoteRow } from '../../utils/internalNoteAccess';
+import {
+  AGENT_CONVERSATION_PREFIX,
+  extractAgentKeyFromRow,
+  getAgentTitleFa,
+  isAgentConversationKey,
+  isAgentNoteRow,
+} from '../../utils/aiAgentCatalog';
 
 type RuntimeSection = NotificationUnreadSection | 'bot_direct_messages';
 type RuntimeRevisions = Record<RuntimeSection, number>;
@@ -73,6 +80,7 @@ type OverlayFeedRow = {
   record_id: string | null;
   conversation_key: string | null;
   payload: Record<string, any> | null;
+  priority?: number | null;
   last_event_at?: string | null;
   feed_cursor?: string | null;
   has_more?: boolean | null;
@@ -191,7 +199,8 @@ const mapRealtimeSection = (table: string, row: Record<string, any>): RuntimeSec
 
 const getOverlayKind = (row: OverlayFeedRow) => {
   if (row.section === 'notes') {
-    const category = String(row.payload?.category || '').trim();
+    const category = String(row.payload?.category || '').trim().toLowerCase();
+    if (category === 'agent' || isAgentNoteRow(row)) return 'agent';
     return category === 'assistant' ? 'assistant' : 'note';
   }
   if (isBotOverlaySection(row.section)) return 'bot';
@@ -204,6 +213,7 @@ const getOverlayKind = (row: OverlayFeedRow) => {
 const getOverlayChannel = (row: OverlayFeedRow) => {
   if (row.section === 'notes') {
     const category = String(row.payload?.category || '').trim().toLowerCase();
+    if (category === 'agent' || isAgentNoteRow(row)) return 'agent';
     return category === 'system' || category === 'assistant' ? 'system' : 'internal';
   }
   if (isBotOverlaySection(row.section)) return 'bot';
@@ -238,7 +248,10 @@ const resolveOverlayAttachments = (row: OverlayFeedRow): NoteAttachment[] => {
   const previewItems = Array.isArray((payload as any).attachment_previews)
     ? (payload as any).attachment_previews
     : [];
-  const directItems = previewItems.map(normalizeOverlayAttachment);
+  const metaAttachments = Array.isArray((payload as any).attachments)
+    ? (payload as any).attachments
+    : [];
+  const directItems = [...previewItems, ...metaAttachments].map(normalizeOverlayAttachment);
   if (isBotOverlaySection(row.section)) {
     const botItems = extractBotMessageAttachments({
       file_url: (payload as any).file_url || null,
@@ -268,6 +281,9 @@ const resolveResponsibilityOverlayBody = (row: OverlayFeedRow) => {
 
 const resolveInternalOverlayKindLabel = (row: OverlayFeedRow) => {
   const category = String(row.payload?.category || '').trim().toLowerCase();
+  if (category === 'agent' || isAgentNoteRow(row)) {
+    return row.payload?.waiting_approval_id ? 'در انتظار تأیید ایجنت' : 'پیام ایجنت هوشمند';
+  }
   if (category === 'assistant') return 'هوش مصنوعی';
   if (category === 'system') return 'پیام سیستم';
   return 'پیام داخلی';
@@ -276,6 +292,10 @@ const resolveInternalOverlayKindLabel = (row: OverlayFeedRow) => {
 const resolveInternalOverlayConversationTitle = (row: OverlayFeedRow) => {
   const payload = row.payload || {};
   const category = String(payload.category || '').trim().toLowerCase();
+  if (category === 'agent' || isAgentNoteRow(row)) {
+    const agentKey = extractAgentKeyFromRow(row);
+    return agentKey ? getAgentTitleFa(agentKey) : (String(row.title || '').trim() || 'ایجنت هوشمند');
+  }
   if (category === 'system' || category === 'assistant') {
     return String(row.title || '').trim() || 'پیام سیستم';
   }
@@ -361,6 +381,8 @@ const buildRealtimeInternalOverlayRow = (
   const authorId = String(row?.author_id || row?.metadata?.author_id || '').trim();
   const mentionedUsers = normalizeRealtimeIdArray(row?.mention_user_ids);
   const mentionedRoles = normalizeRealtimeIdArray(row?.mention_role_ids);
+  const isAgent = isAgentNoteRow(row);
+  if (isAgent && authorId === userId) return null;
   const isSystem = isInternalSystemNoteRow(row);
   const allowed = isSystem
     ? canCurrentUserAccessInternalSystemNote(row, userId, identity.roleId)
@@ -371,33 +393,52 @@ const buildRealtimeInternalOverlayRow = (
   if (!allowed) return null;
 
   const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+  const agentKey = isAgent ? extractAgentKeyFromRow(row) : null;
   const groupId = String(metadata?.chat_group_id || '').trim();
   const directConversationKey = authorId && mentionedUsers.includes(userId)
     ? `direct:${[authorId, userId].sort().join(':')}`
     : '';
-  const conversationKey = isSystem
-    ? 'system'
-    : String(metadata?.conversation_key || '').trim() || (groupId ? `group:${groupId}` : directConversationKey);
+  const conversationKey = isAgent
+    ? (String(metadata?.conversation_key || '').trim() || `${AGENT_CONVERSATION_PREFIX}${agentKey || 'lead_orchestrator'}`)
+    : isSystem
+      ? 'system'
+      : String(metadata?.conversation_key || '').trim() || (groupId ? `group:${groupId}` : directConversationKey);
   const parsed = parseNoteContent(String(row?.content || ''));
-  const category = isSystem
-    ? (String(row?.source_type || metadata?.source_type || '').trim().toLowerCase() === 'ai' ? 'assistant' : 'system')
-    : (groupId ? 'group' : 'internal');
+  const metaAttachments = (Array.isArray(metadata?.attachments) ? metadata.attachments : [])
+    .map(normalizeOverlayAttachment)
+    .filter((item: NoteAttachment | null): item is NoteAttachment => Boolean(item));
+  const combinedAttachments = dedupeAttachments([...parsed.attachments, ...metaAttachments]);
+  const category = isAgent
+    ? 'agent'
+    : isSystem
+      ? (String(row?.source_type || metadata?.source_type || '').trim().toLowerCase() === 'ai' ? 'assistant' : 'system')
+      : (groupId ? 'group' : 'internal');
+  const resolvedPriority = isAgent
+    ? Math.max(Number(metadata?.priority || 0), metadata?.waiting_approval_id ? 15 : 10)
+    : Number(metadata?.priority || 0);
   return {
     section: 'notes',
     source_type: 'note',
     source_id: String(row?.id || '').trim(),
-    title: isSystem ? 'پیام سیستم' : (String(row?.author_name || metadata?.author_name || '').trim() || 'پیام داخلی'),
-    body: parsed.text || (parsed.attachments.length > 0 ? 'فایل ارسال شد.' : 'پیام جدید'),
+    title: isAgent
+      ? getAgentTitleFa(agentKey)
+      : isSystem
+        ? 'پیام سیستم'
+        : (String(row?.author_name || metadata?.author_name || '').trim() || 'پیام داخلی'),
+    body: parsed.text || (combinedAttachments.length > 0 ? 'فایل ارسال شد.' : 'پیام جدید'),
     created_at: String(row?.created_at || row?.updated_at || '').trim() || null,
     module_id: String(row?.module_id || '').trim() || null,
     record_id: String(row?.record_id || '').trim() || null,
     conversation_key: conversationKey || null,
+    priority: resolvedPriority,
     payload: {
       ...metadata,
       category,
+      agent_key: agentKey || metadata?.agent_key || null,
       conversation_key: conversationKey || null,
-      author_name: String(row?.author_name || metadata?.author_name || '').trim() || null,
-      attachment_previews: parsed.attachments,
+      priority: resolvedPriority,
+      author_name: String(row?.author_name || metadata?.author_name || '').trim() || (isAgent ? getAgentTitleFa(agentKey) : null),
+      attachment_previews: combinedAttachments,
     },
   };
 };
@@ -601,6 +642,14 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
     }
     if (row.section === 'notes') {
       const key = String(row.conversation_key || row.payload?.conversation_key || '').trim();
+      const agentKey = extractAgentKeyFromRow(row);
+      if (isAgentConversationKey(key) || isAgentNoteRow(row) || agentKey) {
+        const targetKey = isAgentConversationKey(key)
+          ? key
+          : `${AGENT_CONVERSATION_PREFIX}${agentKey || 'lead_orchestrator'}`;
+        navigate(`/messages?tab=agent&conversation=${encodeURIComponent(targetKey)}`);
+        return;
+      }
       navigate(key ? `/messages?tab=notes&conversation=${encodeURIComponent(key)}` : '/messages?tab=notes');
       return;
     }
@@ -742,6 +791,30 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
 
     if (row.section === 'notes') {
       const conversationKey = String(row.conversation_key || row.payload?.conversation_key || '').trim();
+      const agentKey = extractAgentKeyFromRow(row);
+      if (isAgentConversationKey(conversationKey) || isAgentNoteRow(row)) {
+        const targetAgentKey = agentKey || conversationKey.slice(AGENT_CONVERSATION_PREFIX.length).trim() || 'lead_orchestrator';
+        const targetConversationKey = isAgentConversationKey(conversationKey)
+          ? conversationKey
+          : `${AGENT_CONVERSATION_PREFIX}${targetAgentKey}`;
+        const { data: replyData, error: replyError } = await supabase.functions.invoke('ai-assistant', {
+          body: {
+            action: 'reply_agent_message',
+            agentKey: targetAgentKey,
+            conversationKey: targetConversationKey,
+            content: replyText,
+            message: replyText,
+            replyToId: row.source_id,
+            moduleId: row.module_id || null,
+            recordId: row.record_id || null,
+            triggerAgentReply: true,
+          },
+        });
+        if (replyError) throw replyError;
+        if (replyData?.error) throw new Error(String(replyData.error));
+        await markOverlayCommunicationRead('internal', targetConversationKey, row);
+        return;
+      }
       if (!conversationKey.startsWith('direct:') && !conversationKey.startsWith('group:')) {
         throw new Error('این پیام امکان پاسخ سریع ندارد.');
       }
@@ -884,9 +957,14 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
       const kind = getOverlayKind(row);
       const conversationKey = String(row.conversation_key || row.payload?.conversation_key || '').trim();
       const attachments = resolveOverlayAttachments(row);
+      const priority = Number(
+        row.priority
+        ?? row.payload?.priority
+        ?? (kind === 'agent' ? (row.payload?.waiting_approval_id ? 15 : 10) : 0),
+      ) || 0;
       const canQuickReply = canQuickReplyNotification({
         section: row.section,
-        category: String(row.payload?.category || ''),
+        category: String(row.payload?.category || (kind === 'agent' ? 'agent' : '')),
         conversationKey,
       });
       return {
@@ -894,6 +972,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
         kind,
         channel: getOverlayChannel(row),
         kindLabel: row.section === 'notes' ? resolveInternalOverlayKindLabel(row) : undefined,
+        priority,
         title: resolveOverlayTitle(row),
         subtitle: isBotOverlaySection(row.section) ? resolveBotOverlaySenderName(row) : undefined,
         body: resolveOverlayBody(row),
@@ -930,10 +1009,16 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       let response: { data: unknown; error: any };
       try {
-        response = await supabase.rpc('get_notification_overlay_feed_v5', {
+        response = await supabase.rpc('get_notification_overlay_feed_v6', {
           p_before_cursor: beforeCursor,
           p_limit: 20,
         });
+        if (isMissingRpcError(response.error)) {
+          response = await supabase.rpc('get_notification_overlay_feed_v5', {
+            p_before_cursor: beforeCursor,
+            p_limit: 20,
+          });
+        }
         if (isMissingRpcError(response.error)) {
           response = await supabase.rpc('get_notification_overlay_feed_v4', {
             p_before_cursor: beforeCursor,

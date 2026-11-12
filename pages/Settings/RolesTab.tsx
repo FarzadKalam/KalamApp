@@ -54,6 +54,10 @@ import {
   SAAS_ADMIN_PERMISSION_FIELDS,
   SUPPORT_TICKETS_PERMISSION_KEY,
   SUPPORT_TICKETS_PERMISSION_FIELDS,
+  AI_AGENTS_PERMISSION_KEY,
+  AI_AGENTS_STAFF_BOT_PERMISSION_KEY,
+  getAiAgentPermissionFieldKey,
+  type AiAgentPermissionAction,
   isSaasAdminModuleId,
   MOBILE_FOOTER_PERMISSION_KEY,
   DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES,
@@ -64,6 +68,8 @@ import {
   type RecordScope,
   type ViewConditionGroup,
 } from '../../utils/permissions';
+import { AI_AGENT_CATALOG, type AgentKey } from '../../utils/aiAgentCatalog';
+import { AiAgentAvatar } from '../../components/ai/AiAgentIcon';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { MODULE_SETTINGS_APPLIED_EVENT } from '../../utils/moduleSettingsRuntime';
@@ -468,6 +474,52 @@ const RolesTab: React.FC = () => {
       }
       next[moduleId] = target;
       return next;
+    });
+  };
+
+  const handleAiAgentPermissionToggle = (
+    agentKey: AgentKey,
+    action: AiAgentPermissionAction,
+    checked: boolean,
+  ) => {
+    setPermissions((prev) => {
+      const merged = mergePermissionsWithDefaults(prev, defaultPermissions);
+      const current = merged[AI_AGENTS_PERMISSION_KEY] || { view: true, edit: false, delete: false, fields: {} };
+      const nextFields: Record<string, any> = { ...(current.fields || {}) };
+      const fieldKey = getAiAgentPermissionFieldKey(agentKey, action);
+      nextFields[fieldKey] = checked;
+
+      if (action === 'view' && !checked) {
+        nextFields[getAiAgentPermissionFieldKey(agentKey, 'chat')] = false;
+        nextFields[getAiAgentPermissionFieldKey(agentKey, 'toggle')] = false;
+        nextFields[getAiAgentPermissionFieldKey(agentKey, 'edit')] = false;
+      }
+      if ((action === 'chat' || action === 'toggle' || action === 'edit') && checked) {
+        nextFields[getAiAgentPermissionFieldKey(agentKey, 'view')] = true;
+      }
+      if (action === 'edit' && checked) {
+        nextFields[getAiAgentPermissionFieldKey(agentKey, 'toggle')] = true;
+      }
+      if (action === 'toggle' && !checked) {
+        nextFields[getAiAgentPermissionFieldKey(agentKey, 'edit')] = false;
+      }
+
+      const anyAgentVisible = AI_AGENT_CATALOG.some(
+        (item) => nextFields[getAiAgentPermissionFieldKey(item.key, 'view')] !== false,
+      );
+      const anyAgentEditable = AI_AGENT_CATALOG.some(
+        (item) => nextFields[getAiAgentPermissionFieldKey(item.key, 'edit')] === true,
+      );
+
+      return {
+        ...merged,
+        [AI_AGENTS_PERMISSION_KEY]: {
+          ...current,
+          view: anyAgentVisible ? current.view !== false : current.view,
+          edit: anyAgentEditable ? current.edit === true : current.edit,
+          fields: nextFields,
+        },
+      };
     });
   };
 
@@ -1074,6 +1126,118 @@ const RolesTab: React.FC = () => {
                     </Panel>
                   );
                 })}
+
+                <Panel key={AI_AGENTS_PERMISSION_KEY} className="dark:border-gray-800" header={
+                  <div className="flex items-center justify-between w-full dark:text-gray-200">
+                    <span className="font-bold">ایجنت‌های هوشمند و بات همکار</span>
+                    <div className="flex gap-4 text-xs" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        className="dark:text-gray-400"
+                        checked={getModulePerms(AI_AGENTS_PERMISSION_KEY).view !== false}
+                        onChange={(e) => handlePermissionChange(AI_AGENTS_PERMISSION_KEY, 'view', undefined, e.target.checked)}
+                      >
+                        مشاهده بخش ایجنت‌ها
+                      </Checkbox>
+                      <Checkbox
+                        className="dark:text-gray-400"
+                        checked={getModulePerms(AI_AGENTS_PERMISSION_KEY).edit === true}
+                        disabled={getModulePerms(AI_AGENTS_PERMISSION_KEY).view === false}
+                        onChange={(e) => handlePermissionChange(AI_AGENTS_PERMISSION_KEY, 'edit', undefined, e.target.checked)}
+                      >
+                        مدیریت و تنظیمات کامل
+                      </Checkbox>
+                    </div>
+                  </div>
+                }>
+                  <div className="pl-6 pt-2 space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-800/40 px-3 py-2">
+                      <div>
+                        <div className="text-xs font-bold text-gray-800 dark:text-gray-200">دسترسی بات هوشمند همکار (تلگرام / بله / روبیکا)</div>
+                        <div className="text-[11px] text-gray-500 dark:text-gray-400">
+                          اجازه اتصال حساب همکار این نقش به بات پیام‌رسان سازمان و ارسال دستور در چت
+                        </div>
+                      </div>
+                      <Switch
+                        size="small"
+                        disabled={getModulePerms(AI_AGENTS_PERMISSION_KEY).view === false}
+                        checked={getModulePerms(AI_AGENTS_PERMISSION_KEY).fields?.[AI_AGENTS_STAFF_BOT_PERMISSION_KEY] === true}
+                        checkedChildren="مجاز"
+                        unCheckedChildren="غیرمجاز"
+                        onChange={(checked) => handlePermissionChange(AI_AGENTS_PERMISSION_KEY, 'field', AI_AGENTS_STAFF_BOT_PERMISSION_KEY, checked)}
+                      />
+                    </div>
+
+                    <Divider orientation="left" className="text-xs text-gray-400 m-0 border-gray-200 dark:border-gray-700">
+                      ماتریس دسترسی هر ایجنت (اگر «مشاهده» خاموش باشد، ایجنت برای کاربر کاملاً پنهان می‌شود)
+                    </Divider>
+
+                    <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+                      <table className="w-full text-right text-xs">
+                        <thead className="bg-gray-50 dark:bg-gray-800/70 text-gray-600 dark:text-gray-300">
+                          <tr>
+                            <th className="px-3 py-2 font-bold">ایجنت</th>
+                            <th className="px-2 py-2 text-center font-bold">مشاهده</th>
+                            <th className="px-2 py-2 text-center font-bold">گفتگو</th>
+                            <th className="px-2 py-2 text-center font-bold">روشن/خاموش</th>
+                            <th className="px-2 py-2 text-center font-bold">ویرایش و زمان‌بندی</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                          {AI_AGENT_CATALOG.map((agent) => {
+                            const agentFields = getModulePerms(AI_AGENTS_PERMISSION_KEY).fields || {};
+                            const sectionViewEnabled = getModulePerms(AI_AGENTS_PERMISSION_KEY).view !== false;
+                            const sectionEditEnabled = getModulePerms(AI_AGENTS_PERMISSION_KEY).edit === true;
+                            const canView = sectionViewEnabled && agentFields[getAiAgentPermissionFieldKey(agent.key, 'view')] !== false;
+                            const canChat = canView && agentFields[getAiAgentPermissionFieldKey(agent.key, 'chat')] !== false;
+                            const canToggle = canView && (sectionEditEnabled || agentFields[getAiAgentPermissionFieldKey(agent.key, 'toggle')] === true);
+                            const canEdit = canView && (sectionEditEnabled || agentFields[getAiAgentPermissionFieldKey(agent.key, 'edit')] === true);
+                            return (
+                              <tr key={agent.key} className="bg-white dark:bg-gray-900/40">
+                                <td className="px-3 py-2">
+                                  <div className="flex items-center gap-2">
+                                    <AiAgentAvatar agentKey={agent.key} color={agent.badgeColor} size={24} />
+                                    <div className="min-w-0">
+                                      <div className="font-bold text-gray-800 dark:text-gray-100">{agent.titleFa}</div>
+                                      <div className="text-[10.5px] text-gray-400 truncate max-w-[260px]">{agent.subtitleFa}</div>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-2 py-2 text-center">
+                                  <Checkbox
+                                    disabled={!sectionViewEnabled}
+                                    checked={canView}
+                                    onChange={(e) => handleAiAgentPermissionToggle(agent.key, 'view', e.target.checked)}
+                                  />
+                                </td>
+                                <td className="px-2 py-2 text-center">
+                                  <Checkbox
+                                    disabled={!sectionViewEnabled || !canView}
+                                    checked={canChat}
+                                    onChange={(e) => handleAiAgentPermissionToggle(agent.key, 'chat', e.target.checked)}
+                                  />
+                                </td>
+                                <td className="px-2 py-2 text-center">
+                                  <Checkbox
+                                    disabled={!sectionViewEnabled || !canView || sectionEditEnabled}
+                                    checked={canToggle}
+                                    onChange={(e) => handleAiAgentPermissionToggle(agent.key, 'toggle', e.target.checked)}
+                                  />
+                                </td>
+                                <td className="px-2 py-2 text-center">
+                                  <Checkbox
+                                    disabled={!sectionViewEnabled || !canView || sectionEditEnabled}
+                                    checked={canEdit}
+                                    onChange={(e) => handleAiAgentPermissionToggle(agent.key, 'edit', e.target.checked)}
+                                  />
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </Panel>
 
                 <Panel key={SETTINGS_PERMISSION_KEY} className="dark:border-gray-800" header={
                   <div className="flex items-center justify-between w-full dark:text-gray-200">

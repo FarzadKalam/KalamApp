@@ -95,6 +95,7 @@ const loadModuleCreate = () => import("./pages/ModuleCreate").then((module) => (
 const loadLogin = () => import("./pages/Login");
 const loadDashboard = () => import("./pages/Dashboard");
 const loadAiChatPage = () => import("./pages/AiChatPage");
+const loadAiAgentsWorkspacePage = () => import("./pages/AiAgentsWorkspacePage");
 const loadProcessCardsV2Lab = () => import("./pages/ProcessCardsV2Lab");
 const loadAccountingPage = () => import("./pages/AccountingPage");
 const loadAccountingAccountReviewPage = () => import("./pages/AccountingAccountReviewPage");
@@ -160,6 +161,7 @@ const ModuleCreate = lazy(loadModuleCreate);
 const Login = lazy(loadLogin);
 const Dashboard = lazy(loadDashboard);
 const AiChatPage = lazy(loadAiChatPage);
+const AiAgentsWorkspacePage = lazy(loadAiAgentsWorkspacePage);
 const ProcessCardsV2Lab = lazy(loadProcessCardsV2Lab);
 const AccountingPage = lazy(loadAccountingPage);
 const AccountingAccountReviewPage = lazy(loadAccountingAccountReviewPage);
@@ -247,7 +249,7 @@ const preloadAuthenticatedRouteChunk = (targetPath?: string): Promise<unknown> =
   let preloader: (() => Promise<unknown>) | null = null;
 
   if (!section || section === "dashboard") preloader = loadDashboard;
-  else if (section === "ai") preloader = loadAiChatPage;
+  else if (section === "ai") preloader = detail === "agents" ? loadAiAgentsWorkspacePage : loadAiChatPage;
   else if (section === "process-v2-lab") preloader = loadProcessCardsV2Lab;
   else if (section === "profile") preloader = loadProfilePage;
   else if (section === "settings") preloader = loadSettingsPage;
@@ -709,6 +711,8 @@ function App() {
     if (/^\/web_forms\/[^/]+$/.test(pathname)) return "ویرایش وب فرم";
     if (/^\/web_forms\/[^/]+\/edit$/.test(pathname)) return "ویرایش وب فرم";
     if (pathname.startsWith("/process-v2-lab")) return "نمونه کارت های فرآیند";
+    if (pathname.startsWith("/ai/agents")) return "میز کار ایجنت‌ها";
+    if (pathname === "/ai") return "دستیار هوشمند سازمان";
     if (pathname.startsWith("/settings")) return "تنظیمات";
     if (pathname.startsWith("/customer-club")) return "باشگاه مشتریان";
     if (pathname.startsWith("/org-knowledge")) return "دانش سازمان";
@@ -906,6 +910,7 @@ function App() {
             <Route index element={<Dashboard />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/ai" element={<AiChatPage />} />
+            <Route path="/ai/agents" element={<AiAgentsWorkspacePage />} />
             <Route path="/process-v2-lab" element={<ProcessCardsV2Lab />} />
             <Route path="/profile" element={<ProfilePage />} />
             <Route path="/profile/:id" element={<ProfilePage />} />

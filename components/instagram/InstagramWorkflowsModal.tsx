@@ -24,6 +24,7 @@ type InstagramMedia = {
 const INSTAGRAM_CONDITION_FIELDS = [
   'event_type', 'account_username', 'media_type', 'media_permalink',
   'button_key', 'message_text', 'tags', 'occurred_at',
+  'follow_status',
 ];
 
 const hasCondition = (workflow: WorkflowRecord, field: string, value: string) =>

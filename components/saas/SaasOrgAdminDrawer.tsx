@@ -21,6 +21,10 @@ import { ClockCircleOutlined, DeleteOutlined, RocketOutlined, SaveOutlined, Shop
 import { executeSaasModuleAction } from '../../utils/saasAdminModules';
 import { supabase } from '../../supabaseClient';
 import { SAAS_FEATURE_GROUPS, SAAS_FEATURE_OPTIONS, SAAS_MODULE_GROUPS } from '../../utils/saasOfferingCatalog';
+import {
+  deriveLegacyEnabledAiAgentFeatureKeys,
+  hasExplicitAiAgentPlanFlags,
+} from '../../utils/aiAgentCatalog';
 
 const { Text } = Typography;
 
@@ -116,8 +120,15 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
       setCart({});
       setEditingOrderId(null);
       setSelectedPlan(next?.management?.plan_code || next?.plan?.code || record?.plan_code || null);
-      setSelectedModules(Object.entries(next?.access?.modules || {}).filter(([, enabled]) => enabled === true).map(([key]) => key));
-      setSelectedFeatures(Object.entries(next?.access?.features || {}).filter(([, enabled]) => enabled === true).map(([key]) => key));
+      const nextModulesMap = next?.access?.modules || {};
+      const nextFeaturesMap = next?.access?.features || {};
+      const baseFeatures = Object.entries(nextFeaturesMap).filter(([, enabled]) => enabled === true).map(([key]) => key);
+      setSelectedModules(Object.entries(nextModulesMap).filter(([, enabled]) => enabled === true).map(([key]) => key));
+      setSelectedFeatures(
+        hasExplicitAiAgentPlanFlags(nextFeaturesMap)
+          ? baseFeatures
+          : Array.from(new Set([...baseFeatures, ...deriveLegacyEnabledAiAgentFeatureKeys(nextModulesMap, nextFeaturesMap)])),
+      );
       const rawQuotas = next?.management?.quota_adjustments || {};
       setQuotas({ users: Number(rawQuotas.users || 0), storage_gb: Number(rawQuotas.storage_gb || 0), scheduled_runs: Number(rawQuotas.scheduled_runs || 0), active_workflows: Number(rawQuotas.active_workflows || 0), sms_credit: Number(rawQuotas.sms_credit || 0), instagram_accounts: Number(rawQuotas.instagram_accounts || 0) });
     } catch (error: any) {
@@ -133,8 +144,15 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
     const plan = plans.find((item) => item.code === code);
     setSelectedPlan(code || null);
     if (!plan) return;
-    setSelectedModules(Object.entries(plan.enabled_modules || {}).filter(([, enabled]) => enabled === true).map(([key]) => key));
-    setSelectedFeatures(Object.entries(plan.enabled_features || {}).filter(([, enabled]) => !!enabled).map(([key]) => key));
+    const planMods = plan.enabled_modules || {};
+    const planFeats = plan.enabled_features || {};
+    const baseFeatures = Object.entries(planFeats).filter(([, enabled]) => !!enabled).map(([key]) => key);
+    setSelectedModules(Object.entries(planMods).filter(([, enabled]) => enabled === true).map(([key]) => key));
+    setSelectedFeatures(
+      hasExplicitAiAgentPlanFlags(planFeats)
+        ? baseFeatures
+        : Array.from(new Set([...baseFeatures, ...deriveLegacyEnabledAiAgentFeatureKeys(planMods, planFeats)])),
+    );
   };
 
   const cartItems = useMemo(() => {

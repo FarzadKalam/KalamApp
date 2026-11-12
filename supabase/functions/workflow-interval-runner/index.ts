@@ -48,6 +48,8 @@ import {
   getOfficialCalendarEventsForDate,
   isFridayAtTehranDate,
 } from '../_shared/persian-calendar-resolver.ts';
+import { getAgentDefinition } from '../_shared/ai-agent-catalog.ts';
+import { tryResolveModelSlot } from '../_shared/ai-gateway.ts';
 
 const FUNCTION_BUILD = 'workflow-interval-runner-2026-09-30-separate-image-worker';
 const MAX_WORKFLOWS = 30;
@@ -2825,25 +2827,32 @@ async function createWorkflowAiThread(
   return { thread, assistantMessage };
 }
 
-async function loadWorkflowAiModel(url: string, key: string, orgId: string): Promise<string> {
-  const rows = await dbGet(url, key, `org_ai_settings?org_id=eq.${orgId}&select=selected_models&limit=1`).catch(() => []);
-  const selected = rows?.[0]?.selected_models && typeof rows[0].selected_models === 'object'
-    ? rows[0].selected_models
-    : {};
-  const requested = String(selected.workflow_ai_prompt || '').trim();
-  const catalogRows = await dbGet(url, key, 'ai_model_catalog?select=id,provider,capability_tags,is_active,is_coming_soon&limit=500').catch(() => []);
-  const allowed = (catalogRows || []).filter((model: any) => {
-    const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
-    return model?.is_active !== false
-      && model?.is_coming_soon !== true
-      && tags.includes('workflow_ai_prompt')
-      && String(model?.id || '').trim();
+async function loadWorkflowAiModel(url: string, key: string, orgId: string, agentKey?: string | null): Promise<string> {
+  const normalizedAgent = String(agentKey || '').trim().toLowerCase() || null;
+  const [settingsRows, catalogRows, saasDefaultRows, agentConfigRows] = await Promise.all([
+    dbGet(url, key, `org_ai_settings?org_id=eq.${orgId}&select=selected_models&limit=1`).catch(() => []),
+    dbGet(url, key, 'ai_model_catalog?select=id,provider,capability_tags,is_active,is_coming_soon,input_usd_per_1m,output_usd_per_1m,metadata&limit=500').catch(() => []),
+    dbGet(url, key, 'saas_ai_default_models?select=slot_key,model_id&limit=200').catch(() => []),
+    normalizedAgent
+      ? dbGet(url, key, `org_ai_agent_configs?org_id=eq.${orgId}&agent_key=eq.${encodeURIComponent(normalizedAgent)}&select=agent_key,model_override,fast_model_override&limit=1`).catch(() => [])
+      : Promise.resolve([]),
+  ]);
+  const orgAiSettings = settingsRows?.[0] || null;
+  const saasDefaultModels = Object.fromEntries(
+    (saasDefaultRows || [])
+      .filter((r: any) => String(r?.slot_key || '').trim())
+      .map((r: any) => [String(r.slot_key).trim(), String(r?.model_id || '').trim() || null]),
+  );
+  const agentConfig = agentConfigRows?.[0] || (normalizedAgent ? { agent_key: normalizedAgent } : null);
+  const resolved = tryResolveModelSlot({
+    slot: 'workflow_ai_prompt',
+    catalogRows: catalogRows || [],
+    orgAiSettings,
+    saasDefaultModels,
+    agentConfig,
   });
-  if (allowed.length === 0) {
-    throw new Error('برای اجرای پرامپت گردش کار، مدل فعال در تنظیمات هوش مصنوعی سازمان پیدا نشد.');
-  }
-  const allowedIds = new Set(allowed.map((model: any) => String(model?.id || '').trim()));
-  return allowedIds.has(requested) ? requested : String(allowed[0]?.id || '').trim();
+  if (resolved?.model) return resolved.model;
+  throw new Error('برای اجرای پرامپت گردش کار، مدل فعال در تنظیمات هوش مصنوعی سازمان پیدا نشد.');
 }
 
 const truthyPlanFeature = (value: any) => {
@@ -3330,9 +3339,11 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
     || Deno.env.get('OPENAI_API_KEY')
     || ''
   ).trim();
-  if (!apiKey) throw new Error('کلید مرکزی AI برای workflow interval تنظیم نشده است.');
+  if (!apiKey) throw new Error('کلید مرکزی AI برای اجرای گردش‌کار خودکار تنظیم نشده است.');
   await assertWorkflowAiEnabled(url, key, orgId);
-  const model = await loadWorkflowAiModel(url, key, orgId);
+  const agentKey = String(options?.agentKey || '').trim().toLowerCase() || null;
+  const agentDef = agentKey ? getAgentDefinition(agentKey) : null;
+  const model = await loadWorkflowAiModel(url, key, orgId, agentKey);
   const isReasoningModel = [/^o\d/i, /\bo[34][-_]/i, /^gpt-5/i, /deepseek-r\d/i, /\bqwq\b/i, /\breasonin/i].some((p) => p.test(model));
   const schema = options?.recordCreationSchema && typeof options.recordCreationSchema === 'object'
     ? options.recordCreationSchema
@@ -3347,12 +3358,15 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
   const userPrompt = processOperationContext
     ? buildWorkflowProcessPrompt(prompt, processOperationContext)
     : prompt;
+  const agentHeader = agentDef
+    ? `نقش و تخصص مسئول این اجرا: ${agentDef.titleFa} (${agentDef.roleFocusFa})\n`
+    : '';
   const requestBody: Record<string, any> = {
     model,
     messages: [
       {
         role: 'system',
-        content: processOperationContext
+        content: agentHeader + (processOperationContext
           ? 'شما دستیار اجرای خودکار فرآیند سازمان فعلی هستید. خروجی فقط JSON معتبر باشد و عملیات واقعی را فقط از context مجاز بساز.'
           : schema
           ? [
@@ -3367,7 +3381,7 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
               fieldLines,
               'قالب خروجی: {"reply":"پیام کوتاه فارسی","record":{"fields":{}}}',
             ].join('\n')
-          : 'شما دستیار هوشمند سازمان فعلی برای اجرای خودکار گردش کار هستید. پاسخ را کوتاه، دقیق و قابل ارسال به کاربر بنویس.',
+          : 'شما دستیار هوشمند سازمان فعلی برای اجرای خودکار گردش کار هستید. پاسخ را کوتاه، دقیق و قابل ارسال به کاربر بنویس.'),
       },
       { role: 'user', content: userPrompt },
     ],
@@ -3905,10 +3919,12 @@ async function executeAction(
     const processOperationContext = outputMode === 'process_operation'
       ? await loadWorkflowProcessContext(url, key, orgId, moduleId, recordId)
       : null;
+    const activeAgentKey = String(config.agent_key || config.__workflow_agent_key || '').trim() || null;
     const aiResult = await callWorkflowAiPrompt(url, key, orgId, prompt, {
       recordCreationSchema,
       processOperationContext,
       mutationMode: outputMode,
+      agentKey: activeAgentKey,
     });
     if (!aiResult.answer) return actionResult(action, 'skipped', 'پاسخ هوش مصنوعی خالی بود.');
     let answer = aiResult.answer;
@@ -4027,11 +4043,15 @@ async function executeAction(
       message_id: threadResult?.assistantMessage?.id || null,
       module_id: moduleId,
       record_id: recordId,
+      agent_key: activeAgentKey,
       action_type: 'workflow_ai_prompt',
       status: 'executed',
       proposed_payload: {
         prompt,
         answer,
+        agent_key: activeAgentKey,
+        workflow_id: config.__workflow_id || null,
+        workflow_name: config.__workflow_name || null,
         workflow_action_id: action.id || null,
         require_human_approval: false,
         output_mode: outputMode,
@@ -5992,6 +6012,9 @@ async function processWorkflowActionJob(url: string, key: string, job: WorkflowI
     ...rawAction,
     config: {
       ...(rawAction.config || {}),
+      __workflow_id: workflow.id,
+      __workflow_name: workflow.name || null,
+      __workflow_agent_key: String((workflow as any)?.agent_key || '').trim() || null,
       __workflow_origin_execution_key: appendWorkflowOriginExecutionKey(
         rawAction.config?.__workflow_origin_execution_key,
         `workflow:${workflow.id}`,
@@ -6759,6 +6782,9 @@ async function runEventTick(
             ...action as WorkflowAction,
             config: {
               ...((action as WorkflowAction)?.config || {}),
+              __workflow_id: workflow.id,
+              __workflow_name: workflow.name || null,
+              __workflow_agent_key: String((workflow as any)?.agent_key || '').trim() || null,
               __workflow_origin_execution_key: appendWorkflowOriginExecutionKey(
                 originExecutionKey,
                 `workflow:${workflow.id}`,
@@ -7626,6 +7652,32 @@ async function cleanupExpiredOrgStoriesTick(url: string, key: string): Promise<R
   return stats;
 }
 
+const runAiBackgroundAgentsRunnerTick = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+) => {
+  const response = await fetch(`${supabaseUrl.replace(/\/+$/, '')}/functions/v1/ai-assistant`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: serviceRoleKey,
+      'x-kalam-internal': 'workflow-interval-runner',
+    },
+    body: JSON.stringify({ action: 'run_background_agents', maxOrgs: 15 }),
+    signal: AbortSignal.timeout(25000),
+  });
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(raw || `HTTP ${response.status}`);
+  }
+  try {
+    return raw ? JSON.parse(raw) : { ok: true };
+  } catch {
+    return { raw };
+  }
+};
+
 // ── Deno.serve ─────────────────────────────────────────────────────────────────
 
 const corsHeaders = {
@@ -7719,8 +7771,12 @@ Deno.serve(async (req) => {
       supabaseUrl,
       serviceRoleKey,
     ).catch((error) => ({ error: String(error?.message || error) }));
-    console.log(`[workflow-runner] build=${FUNCTION_BUILD} enqueueStats=${JSON.stringify(enqueueStats)} intervalQueueStats=${JSON.stringify(intervalQueueStats)} scheduledReportStats=${JSON.stringify(scheduledReportStats)} scheduledWorkScheduleStats=${JSON.stringify(scheduledWorkScheduleStats)} eventQueueStats=${JSON.stringify(eventQueueStats)} customerClubNotificationStats=${JSON.stringify(customerClubNotificationStats)} saasBillingStats=${JSON.stringify(saasBillingStats)} processAutomationStats=${JSON.stringify(processAutomationStats)} expiredStoryCleanupStats=${JSON.stringify(expiredStoryCleanupStats)}`);
-    return json(200, { ok: true, stats: enqueueStats, intervalQueueStats, scheduledReportStats, scheduledWorkScheduleStats, eventQueueStats, customerClubNotificationStats, saasBillingStats, processAutomationStats, expiredStoryCleanupStats });
+    const aiBackgroundAgentsStats = await runAiBackgroundAgentsRunnerTick(
+      supabaseUrl,
+      serviceRoleKey,
+    ).catch((error) => ({ error: String(error?.message || error) }));
+    console.log(`[workflow-runner] build=${FUNCTION_BUILD} enqueueStats=${JSON.stringify(enqueueStats)} intervalQueueStats=${JSON.stringify(intervalQueueStats)} scheduledReportStats=${JSON.stringify(scheduledReportStats)} scheduledWorkScheduleStats=${JSON.stringify(scheduledWorkScheduleStats)} eventQueueStats=${JSON.stringify(eventQueueStats)} customerClubNotificationStats=${JSON.stringify(customerClubNotificationStats)} saasBillingStats=${JSON.stringify(saasBillingStats)} processAutomationStats=${JSON.stringify(processAutomationStats)} expiredStoryCleanupStats=${JSON.stringify(expiredStoryCleanupStats)} aiBackgroundAgentsStats=${JSON.stringify(aiBackgroundAgentsStats)}`);
+    return json(200, { ok: true, stats: enqueueStats, intervalQueueStats, scheduledReportStats, scheduledWorkScheduleStats, eventQueueStats, customerClubNotificationStats, saasBillingStats, processAutomationStats, expiredStoryCleanupStats, aiBackgroundAgentsStats });
     } finally {
       if (leaseToken) {
         await releaseWorkflowRunnerLease(supabaseUrl, serviceRoleKey, leaseToken).catch((error) => {

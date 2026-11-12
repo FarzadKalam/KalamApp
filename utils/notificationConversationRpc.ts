@@ -3,7 +3,7 @@ export type NotificationConversationSection = 'notes' | 'bot_messages';
 export type NotificationConversationSummary = {
   section: NotificationConversationSection;
   conversation_key: string;
-  kind: 'system' | 'direct' | 'group' | 'bot' | string;
+  kind: 'system' | 'direct' | 'group' | 'bot' | 'agent' | string;
   title: string | null;
   subtitle: string | null;
   avatar_url: string | null;

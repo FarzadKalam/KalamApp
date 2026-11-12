@@ -5,6 +5,64 @@ import {
   shouldEscalateCustomerAutoReply,
   type AgentExecutionPolicy,
 } from '../_shared/ai-agent-contract.ts';
+import {
+  AI_AGENT_CATALOG,
+  AI_AGENT_KEYS,
+  AGENT_TONE_STYLES,
+  getAiAgentPlanFeatureKey,
+  getAgentDefinition,
+  getAgentTitleFa,
+  getAgentToneGuidanceFa,
+  normalizeSelectedAgents,
+  type AgentKey,
+  type AgentToneStyle,
+} from '../_shared/ai-agent-catalog.ts';
+import {
+  assembleMultiSkillContext,
+  resolveRunnableAgentsForActor,
+} from '../_shared/ai-skill-registry.ts';
+import {
+  buildAgentsOverviewForActor,
+  compileOnboardingQaPolicy,
+  createWaitingApprovalRun,
+  heuristicSelectAgentsAndCapabilities,
+} from '../_shared/ai-agent-kernel.ts';
+import {
+  loadCentralAiGrounding,
+  canViewModuleWithPlan,
+  isPlanFeatureEnabled,
+  isPlanModuleEnabled,
+  sharedRestSelect,
+  type CentralAiGrounding,
+} from '../_shared/ai-grounding.ts';
+import {
+  applyExplicitCacheControlIfSupported,
+  compileLayeredAgentPrompt,
+  estimateMessagesTokens,
+} from '../_shared/ai-prompt-compiler.ts';
+import {
+  buildAvalaiCacheOptions,
+  calculateCacheSavingsIrt,
+  extractCachedInputTokens,
+  pickPreferredCatalogModelForSlot,
+  resolveModelSlot,
+  tryResolveModelSlot,
+} from '../_shared/ai-gateway.ts';
+import {
+  compactThreadConversation,
+  shouldAutoCompactContext,
+} from '../_shared/ai-context-compressor.ts';
+import { relayAgentMessageToStaff } from '../_shared/ai-staff-relay.ts';
+import { runAiBackgroundAgentsTick } from '../_shared/ai-background-engine.ts';
+import {
+  applyPriceAdjustment,
+  recalculateInvoiceFinancialSummary,
+} from '../_shared/ai-skills/pricing-adjustment.ts';
+import { normalizeProcessTemplateBlueprint } from '../_shared/ai-skills/project-process.ts';
+import {
+  buildInstagramShowcaseCardDraft,
+  buildInstagramWorkflowRuleDraft,
+} from '../_shared/ai-skills/instagrammer.ts';
 import { resolvePersianCalendarContext } from '../_shared/persian-calendar-resolver.ts';
 import { PEYDA_REGULAR_WOFF2_BASE64 } from './peyda-font.ts';
 import { GEMINI_PREBUILT_VOICES, resolveSpeechModelProvider } from '../_shared/speech-model-provider.ts';
@@ -60,6 +118,19 @@ type AssistantAction =
   | 'rebuild_instruction_ai_context'
   | 'rebuild_job_description_ai_context'
   | 'analyze_mbti_assessment'
+  | 'get_agents_workspace_overview'
+  | 'save_org_agent_config'
+  | 'save_agent_member_permissions'
+  | 'list_waiting_approvals'
+  | 'resolve_waiting_approval'
+  | 'start_agent_onboarding_qa'
+  | 'submit_agent_onboarding_qa'
+  | 'create_staff_bot_bind_token'
+  | 'verify_staff_bot_otp'
+  | 'list_agent_messages'
+  | 'reply_agent_message'
+  | 'staff_bot_agent_turn'
+  | 'run_background_agents'
   | 'saas_ai';
 
 type RequestContext = {
@@ -89,11 +160,10 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'ai-assistant-2026-10-29-voice-record-tables';
+const FUNCTION_BUILD = 'ai-assistant-2026-11-11-modular-aaas-agents';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 const DEFAULT_AI_MODEL = '';
-const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
 const PROVIDER_REQUEST_TIMEOUT_MS = 45000;
 // A streamed reply can legitimately take longer than a normal request.  Do
 // not abort a healthy stream merely because its total duration passes the
@@ -154,6 +224,9 @@ const AI_CAPABILITY_FEATURE_KEYS: Record<string, string> = {
   document_generation: 'ai_document_analysis',
   record_creation: 'ai_chat',
   process_operation: 'ai_chat',
+  pricing_adjustment: 'ai_chat',
+  agent_fast: 'ai_chat',
+  context_compression: 'ai_chat',
   voip_auto_reply: 'ai_voip_auto_reply',
   auto_decision: 'ai_deep_reasoning',
   customer_auto_reply: 'ai_chat',
@@ -177,6 +250,9 @@ const TENANT_READY_AI_CAPABILITIES = new Set([
   'document_generation',
   'record_creation',
   'process_operation',
+  'pricing_adjustment',
+  'agent_fast',
+  'context_compression',
   'auto_decision',
   'customer_auto_reply',
 ]);
@@ -190,6 +266,9 @@ const CAPABILITY_SELECTION_ALIASES: Record<string, string[]> = {
   customer_auto_reply: ['customer_reply_suggestion'],
   image_generation: ['image_edit'],
   image_edit: ['image_generation'],
+  agent_fast: ['context_compression', 'dashboard_chat'],
+  context_compression: ['agent_fast', 'dashboard_chat'],
+  pricing_adjustment: ['dashboard_chat', 'record_chat', 'auto_decision'],
 };
 
 // A few runtime capabilities are implementation details of an admin-visible
@@ -200,6 +279,9 @@ const TENANT_FEATURE_FLAG_CAPABILITY_ALIASES: Record<string, string> = {
   image_edit: 'image_generation',
   record_creation: 'auto_decision',
   process_operation: 'auto_decision',
+  pricing_adjustment: 'auto_decision',
+  agent_fast: 'dashboard_chat',
+  context_compression: 'dashboard_chat',
 };
 
 const getTenantFeatureFlagCapability = (capability: string) => {
@@ -222,6 +304,7 @@ const AUTO_ROUTER_CAPABILITIES = [
   'legal_assistant',
   'record_creation',
   'process_operation',
+  'pricing_adjustment',
 ];
 
 // Automatic mode is deliberately model-led: it may use the selected primary
@@ -241,7 +324,8 @@ const isAutomaticStructuredActionCapability = (capability: string) =>
   // its native/compatible search tool; it does not invoke a separate operator.
   || capability === 'web_search'
   || capability === 'record_creation'
-  || capability === 'process_operation';
+  || capability === 'process_operation'
+  || capability === 'pricing_adjustment';
 
 const inferAutoStructuredMutation = (prompt: string, pageContext: any) => {
   const normalized = String(prompt || '')
@@ -315,7 +399,18 @@ const MODULE_TABLE_MAP: Record<string, string> = {
   overtime_requests: 'overtime_requests',
   mission_requests: 'mission_requests',
   process_runs: 'process_runs',
+  process_templates: 'process_templates',
+  price_lists: 'price_lists',
   content_calendars: 'content_calendars',
+  sales_return_invoices: 'sales_return_invoices',
+  salesReturnInvoices: 'sales_return_invoices',
+  purchase_return_invoices: 'purchase_return_invoices',
+  purchaseReturnInvoices: 'purchase_return_invoices',
+  reservations: 'reservations',
+  reservation_resources: 'reservation_resources',
+  reservationResources: 'reservation_resources',
+  instagram_conversations: 'instagram_conversations',
+  workflows: 'workflows',
 };
 
 // This is data registry, not a decision rule. It is the backend-safe projection
@@ -1160,12 +1255,19 @@ const truthyPlanFeature = (value: any) => {
 
 const loadTenantAiPlanContext = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
   if (!authContext?.orgId) {
-    return { available: false, planCode: null, features: {}, reason: 'missing_org' };
+    return {
+      available: false,
+      planCode: null,
+      features: {},
+      enabledModules: {},
+      moduleOverrides: {},
+      reason: 'missing_org',
+    };
   }
   const [orgRows, isSaasAdminOrg] = await Promise.all([
     safeRestSelect(supabaseUrl, serviceRoleKey, 'saas_org_settings', {
       org_id: `eq.${authContext.orgId}`,
-      select: 'org_id,plan_code,feature_overrides,status,is_readonly',
+      select: 'org_id,plan_code,module_overrides,feature_overrides,status,is_readonly',
       limit: 1,
     }),
     isSaasAdminOrganization(supabaseUrl, serviceRoleKey, authContext.orgId),
@@ -1177,8 +1279,14 @@ const loadTenantAiPlanContext = async (supabaseUrl: string, serviceRoleKey: stri
       planCode: String(orgSettings?.plan_code || '').trim() || null,
       features: {
         ...Object.fromEntries(Object.values(AI_CAPABILITY_FEATURE_KEYS).map((key) => [key, true])),
+        ...Object.fromEntries(AI_AGENT_KEYS.map((key) => [getAiAgentPlanFeatureKey(key), true])),
         mbti_ai_analysis: true,
+        ai_staff_bot: true,
+        ai_background_agents: true,
+        instagram_inbox: true,
       },
+      enabledModules: {},
+      moduleOverrides: {},
       status: orgSettings?.status || null,
       isReadonly: orgSettings?.is_readonly === true,
       reason: 'saas_admin_organization',
@@ -1188,7 +1296,15 @@ const loadTenantAiPlanContext = async (supabaseUrl: string, serviceRoleKey: stri
     return {
       available: true,
       planCode: null,
-      features: Object.fromEntries(Object.values(AI_CAPABILITY_FEATURE_KEYS).map((key) => [key, true])),
+      features: {
+        ...Object.fromEntries(Object.values(AI_CAPABILITY_FEATURE_KEYS).map((key) => [key, true])),
+        ...Object.fromEntries(AI_AGENT_KEYS.map((key) => [getAiAgentPlanFeatureKey(key), true])),
+        ai_staff_bot: true,
+        ai_background_agents: true,
+        instagram_inbox: true,
+      },
+      enabledModules: {},
+      moduleOverrides: {},
       reason: 'missing_saas_org_settings_fallback',
     };
   }
@@ -1196,7 +1312,7 @@ const loadTenantAiPlanContext = async (supabaseUrl: string, serviceRoleKey: stri
   const planRows = planCode
     ? await safeRestSelect(supabaseUrl, serviceRoleKey, 'saas_plans', {
         code: `eq.${planCode}`,
-        select: 'code,enabled_features,is_active',
+        select: 'code,enabled_modules,enabled_features,is_active',
         limit: 1,
       })
     : [];
@@ -1209,6 +1325,8 @@ const loadTenantAiPlanContext = async (supabaseUrl: string, serviceRoleKey: stri
     available: Boolean(plan?.is_active !== false),
     planCode,
     features: merged,
+    enabledModules: plan?.enabled_modules && typeof plan.enabled_modules === 'object' ? plan.enabled_modules : {},
+    moduleOverrides: orgSettings?.module_overrides && typeof orgSettings.module_overrides === 'object' ? orgSettings.module_overrides : {},
     status: orgSettings?.status || null,
     isReadonly: orgSettings?.is_readonly === true,
     reason: plan ? null : 'missing_plan',
@@ -1220,7 +1338,7 @@ const isAiCapabilityPlanAvailable = (planContext: any, capability: string) => {
   const featureKey = AI_CAPABILITY_FEATURE_KEYS[normalized];
   if (!featureKey) return true;
   if (!planContext?.available) return false;
-  if (normalized === 'dashboard_chat' || normalized === 'record_chat' || normalized === 'workflow_ai_prompt' || normalized === 'customer_reply_suggestion') {
+  if (normalized === 'dashboard_chat' || normalized === 'record_chat' || normalized === 'workflow_ai_prompt' || normalized === 'customer_reply_suggestion' || normalized === 'pricing_adjustment' || normalized === 'agent_fast' || normalized === 'context_compression') {
     return truthyPlanFeature(planContext?.features?.[featureKey]) || truthyPlanFeature(planContext?.features?.ai_knowledge);
   }
   if (normalized === 'document_analysis' || normalized === 'embedding') {
@@ -1247,15 +1365,21 @@ const buildAiCapabilityAvailability = (planContext: any, settings: any, catalogR
       && model?.is_coming_soon !== true
       && (tags.includes('dashboard_chat') || tags.includes('record_chat') || tags.includes('workflow_ai_prompt'));
   });
+  const hasEmbeddingModel = tryResolveModelSlot({
+    slot: 'embedding',
+    catalogRows,
+    orgAiSettings: settings,
+  }) !== null;
   Object.keys(AI_CAPABILITY_FEATURE_KEYS).forEach((capability) => {
     const planAvailable = isAiCapabilityPlanAvailable(planContext, capability);
-    const isPrimaryAgentCapability = capability === 'record_creation' || capability === 'process_operation';
+    const isPrimaryAgentCapability = capability === 'record_creation' || capability === 'process_operation' || capability === 'pricing_adjustment';
     const hasReadyModel = capability === 'embedding'
-      ? true
+      ? hasEmbeddingModel
       : isPrimaryAgentCapability
         ? hasPrimaryAgentModel
-        : (catalogByCapability.get(capability) || [])
-          .some((model: any) => model?.is_active !== false && model?.is_coming_soon !== true);
+        : tryResolveModelSlot({ slot: capability, catalogRows, orgAiSettings: settings }) !== null
+          || (catalogByCapability.get(capability) || [])
+            .some((model: any) => model?.is_active !== false && model?.is_coming_soon !== true);
     const tenantReady = TENANT_READY_AI_CAPABILITIES.has(capability);
     const orgEnabled = isTenantCapabilityEnabled(selected, capability);
     result[capability] = {
@@ -1329,7 +1453,11 @@ const pickPreferredPrimaryAiModel = (models: any[]) => {
   return scored[0]?.id || '';
 };
 
-const sanitizeTenantSelectedModels = (models: any[], selectedModels: Record<string, any>) => {
+const sanitizeTenantSelectedModels = (
+  models: any[],
+  selectedModels: Record<string, any>,
+  saasDefaults: Record<string, string | null> = {},
+) => {
   const next: Record<string, string> = {};
   const primaryCandidates = (models || []).filter((model: any) => {
     const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
@@ -1339,22 +1467,22 @@ const sanitizeTenantSelectedModels = (models: any[], selectedModels: Record<stri
   });
   const requestedPrimary = String(selectedModels?.[PRIMARY_AI_MODEL_KEY] || '').trim();
   const primaryIds = new Set(primaryCandidates.map((model: any) => String(model?.id || '').trim()).filter(Boolean));
+  const saasPrimary = String(saasDefaults?.[PRIMARY_AI_MODEL_KEY] || '').trim();
   const primaryModel = primaryIds.has(requestedPrimary)
     ? requestedPrimary
-    : pickPreferredPrimaryAiModel(primaryCandidates);
+    : primaryIds.has(saasPrimary)
+      ? saasPrimary
+      : pickPreferredPrimaryAiModel(primaryCandidates);
   if (primaryModel) next[PRIMARY_AI_MODEL_KEY] = primaryModel;
   Object.keys(AI_CAPABILITY_FEATURE_KEYS).forEach((capability) => {
     if (capability === 'embedding') return;
     const requested = String(selectedModels?.[capability] || '').trim();
+    if (!requested) return;
     const allowed = filterSelectableAiModels(models, capability);
     const allowedIds = new Set(allowed.map((model: any) => String(model?.id || '').trim()).filter(Boolean));
-    const configuredDefault = allowed.find((model: any) => isCatalogDefaultFor(model, capability));
-    const resolved = allowedIds.has(requested)
-      ? requested
-      : PRIMARY_MODEL_CAPABILITIES.has(capability) && primaryModel && allowedIds.has(primaryModel)
-        ? primaryModel
-        : String(configuredDefault?.id || allowed[0]?.id || requested || '').trim();
-    if (resolved) next[capability] = resolved;
+    if (allowedIds.has(requested)) {
+      next[capability] = requested;
+    }
   });
   return next;
 };
@@ -1379,6 +1507,25 @@ const sanitizeTenantFeatureFlags = (availability: Record<string, any>, incoming:
   return result;
 };
 
+const loadSaasAiDefaultModels = async (supabaseUrl: string, serviceRoleKey: string): Promise<Record<string, string | null>> => {
+  try {
+    const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'saas_ai_default_models', {
+      select: 'slot_key,model_id',
+      limit: 200,
+    });
+    const out: Record<string, string | null> = {};
+    for (const row of rows || []) {
+      const slotKey = String(row?.slot_key || '').trim();
+      const modelId = String(row?.model_id || '').trim() || null;
+      if (slotKey) out[slotKey] = modelId;
+    }
+    return out;
+  } catch (error) {
+    if (isMissingRelationError(error)) return {};
+    return {};
+  }
+};
+
 const loadOrgAiSettings = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
   if (!authContext?.orgId) return null;
   try {
@@ -1397,7 +1544,7 @@ const loadOrgAiSettings = async (supabaseUrl: string, serviceRoleKey: string, au
 const listActiveAiModels = async (supabaseUrl: string, serviceRoleKey: string) =>
   safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_model_catalog', {
     is_active: 'eq.true',
-    select: 'id,capability_tags,is_coming_soon,metadata',
+    select: 'id,provider,display_name_fa,capability_tags,input_usd_per_1m,cached_input_usd_per_1m,output_usd_per_1m,margin_percent,is_active,is_coming_soon,metadata',
     order: 'id.asc',
     limit: 500,
   }).catch(() => []);
@@ -1407,21 +1554,21 @@ const pickCapabilityModelFromCatalog = (
   capability: string,
   catalogRows: any[],
   requestedOverride?: string | null,
+  agentConfig?: any,
+  saasDefaultModels: Record<string, string | null> = {},
 ) => {
-  const selected = settings?.selected_models && typeof settings.selected_models === 'object'
-    ? settings.selected_models
-    : {};
+  const effectiveCapability = capability === 'pricing_adjustment' ? 'primary' : capability;
+  const slotResolved = tryResolveModelSlot({
+    slot: effectiveCapability,
+    catalogRows,
+    orgAiSettings: settings,
+    saasDefaultModels,
+    agentConfig: agentConfig || null,
+    requestedOverride,
+    preferFastAgentModel: capability === 'agent_fast',
+  });
+  if (slotResolved?.model) return slotResolved.model;
   const allowed = filterSelectableAiModels(catalogRows, capability);
-  const allowedIds = new Set(allowed.map((model: any) => String(model?.id || '').trim()).filter(Boolean));
-  const primaryModel = String(selected?.[PRIMARY_AI_MODEL_KEY] || '').trim();
-  const selectedAlias = (CAPABILITY_SELECTION_ALIASES[capability] || [])
-    .map((alias) => selected?.[alias])
-    .find((modelId) => String(modelId || '').trim());
-  const configuredDefault = allowed.find((model: any) => isCatalogDefaultFor(model, capability));
-  // The organization primary model serves every operation explicitly tagged for it.
-  // A per-message override still wins; specialized models remain the fallback.
-  const requested = String(requestedOverride || (allowedIds.has(primaryModel) ? primaryModel : selected?.[capability] || selectedAlias || configuredDefault?.id) || '').trim();
-  if (requested && allowedIds.has(requested)) return requested;
   return String(allowed[0]?.id || '').trim();
 };
 
@@ -1431,11 +1578,40 @@ const resolveOrgCapabilityModel = async (
   settings: any,
   capability: string,
   requestedOverride?: string | null,
+  agentConfig?: any,
 ) => {
-  const catalogRows = await listActiveAiModels(supabaseUrl, serviceRoleKey);
-  const model = pickCapabilityModelFromCatalog(settings, capability, catalogRows, requestedOverride);
+  const [catalogRows, saasDefaults] = await Promise.all([
+    listActiveAiModels(supabaseUrl, serviceRoleKey),
+    loadSaasAiDefaultModels(supabaseUrl, serviceRoleKey),
+  ]);
+  const model = pickCapabilityModelFromCatalog(settings, capability, catalogRows, requestedOverride, agentConfig, saasDefaults);
   if (model) return model;
   throw new Error('برای این قابلیت هوش مصنوعی، مدل فعال و قابل استفاده در تنظیمات سازمان پیدا نشد.');
+};
+
+const resolveEmbeddingRuntime = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  settings: any = null,
+) => {
+  const [catalogRows, saasDefaults] = await Promise.all([
+    listActiveAiModels(supabaseUrl, serviceRoleKey),
+    loadSaasAiDefaultModels(supabaseUrl, serviceRoleKey),
+  ]);
+  const resolved = tryResolveModelSlot({
+    slot: 'embedding',
+    catalogRows,
+    orgAiSettings: settings,
+    saasDefaultModels: saasDefaults,
+  });
+  if (!resolved?.model) return null;
+  const dimRaw = Number(resolved.catalogRow?.metadata?.embedding_dimension || resolved.catalogRow?.metadata?.dimension || 1536);
+  return {
+    model: resolved.model,
+    provider: resolved.provider,
+    dimensions: Number.isFinite(dimRaw) && dimRaw >= 128 ? Math.floor(dimRaw) : 1536,
+    catalogRow: resolved.catalogRow,
+  };
 };
 
 const getCentralProviderConfig = () => {
@@ -1457,18 +1633,25 @@ const resolveProviderConfig = async (
   serviceRoleKey: string,
   authContext: any,
   capability = 'dashboard_chat',
-  options: { modelOverride?: string | null } = {},
+  options: { modelOverride?: string | null; agentConfig?: any } = {},
 ) => {
   const centralConfig = getCentralProviderConfig();
-  const settings = await loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
-  const model = await resolveOrgCapabilityModel(
-    supabaseUrl,
-    serviceRoleKey,
+  const [settings, catalogRows, saasDefaults] = await Promise.all([
+    loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext),
+    listActiveAiModels(supabaseUrl, serviceRoleKey),
+    loadSaasAiDefaultModels(supabaseUrl, serviceRoleKey),
+  ]);
+  const model = pickCapabilityModelFromCatalog(
     settings,
     capability,
+    catalogRows,
     options?.modelOverride,
+    options?.agentConfig,
+    saasDefaults,
   );
-  const catalogRows = await listActiveAiModels(supabaseUrl, serviceRoleKey);
+  if (!model) {
+    throw new Error('برای این قابلیت هوش مصنوعی، مدل فعال و قابل استفاده در تنظیمات سازمان پیدا نشد.');
+  }
   const modelCatalog = catalogRows.find((row: any) => String(row?.id || '').trim() === model) || null;
   return {
     ...centralConfig,
@@ -1476,6 +1659,7 @@ const resolveProviderConfig = async (
     capability,
     serviceTier: String(settings?.metadata?.service_tier || centralConfig.serviceTier || 'default').trim() || 'default',
     orgAiSettings: settings,
+    modelCatalog,
     modelMetadata: modelCatalog?.metadata && typeof modelCatalog.metadata === 'object' ? modelCatalog.metadata : {},
     modelProvider: String(modelCatalog?.provider || '').trim() || null,
     modelCapabilities: Array.isArray(modelCatalog?.capability_tags) ? modelCatalog.capability_tags : [],
@@ -2661,8 +2845,10 @@ const fetchKnowledgeChunks = async (
   if (queryText) {
     try {
       const providerConfig = getCentralProviderConfig();
-      if (providerConfig.apiKey) {
-        const embeddingResult = await callEmbeddings(providerConfig, queryText.slice(0, 8000), DEFAULT_EMBEDDING_MODEL);
+      const orgSettings = await loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
+      const embeddingRuntime = await resolveEmbeddingRuntime(supabaseUrl, serviceRoleKey, orgSettings);
+      if (providerConfig.apiKey && embeddingRuntime?.model) {
+        const embeddingResult = await callEmbeddings(providerConfig, queryText.slice(0, 8000), embeddingRuntime.model);
         let vectorRows: any[] = [];
         try {
           vectorRows = await restRpc(supabaseUrl, serviceRoleKey, 'match_ai_document_chunks_hybrid', {
@@ -2696,8 +2882,9 @@ const fetchKnowledgeChunks = async (
         if (filteredVectorRows.length > 0) {
           await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
             capability: 'embedding',
-            provider: providerConfig.provider,
-            model: DEFAULT_EMBEDDING_MODEL,
+            provider: embeddingRuntime.provider || providerConfig.provider,
+            model: embeddingRuntime.model,
+            modelCatalog: embeddingRuntime.catalogRow,
             requestId: embeddingResult.requestId,
             usageMetadata: embeddingResult.usageMetadata,
             status: 'finalized',
@@ -3645,6 +3832,9 @@ const recordAiUsageLedger = async (
     model: string;
     usageMetadata: any;
     status?: string;
+    agentKey?: string | null;
+    channel?: string | null;
+    modelCatalog?: any;
     metadata?: Record<string, any>;
   },
 ) => {
@@ -3652,8 +3842,16 @@ const recordAiUsageLedger = async (
   try {
     const settings = await loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
     const pricing = await loadModelPricing(supabaseUrl, serviceRoleKey, args.model);
-    const charge = estimateAiCharge(args.usageMetadata, pricing, numberFrom(settings?.default_margin_percent, DEFAULT_AI_MARGIN_PERCENT));
+    const catalogRow = args.modelCatalog || pricing;
+    const charge = estimateAiCharge(args.usageMetadata, catalogRow, numberFrom(settings?.default_margin_percent, DEFAULT_AI_MARGIN_PERCENT));
     const tokenCount = extractAiUsageTokens(args.usageMetadata);
+    const cachedTokens = extractCachedInputTokens(args.usageMetadata);
+    const cacheSavingsIrt = calculateCacheSavingsIrt({
+      cachedTokens,
+      modelCatalog: catalogRow,
+      exchangeRateIrt: numberFrom(catalogRow?.exchange_rate_irt, charge.exchangeRate),
+      marginPercent: charge.marginPercent,
+    });
     const rows = await restInsert(supabaseUrl, serviceRoleKey, 'org_ai_usage_ledger', [{
       org_id: authContext.orgId,
       user_id: authContext.userId || null,
@@ -3663,6 +3861,10 @@ const recordAiUsageLedger = async (
       capability: args.capability || 'dashboard_chat',
       provider: args.provider || 'avalai',
       model: args.model || '',
+      agent_key: args.agentKey || null,
+      channel: args.channel || 'web',
+      cached_input_tokens: cachedTokens,
+      cache_savings_irt: cacheSavingsIrt,
       status: args.status || 'finalized',
       raw_cost_unit: charge.rawCostUnit,
       raw_cost_irt: charge.rawCostIrt,
@@ -3670,7 +3872,14 @@ const recordAiUsageLedger = async (
       margin_percent: charge.marginPercent,
       exchange_rate_irt: charge.exchangeRate,
       usage: args.usageMetadata || {},
-      metadata: { ...(args.metadata || {}), token_count: tokenCount },
+      metadata: {
+        ...(args.metadata || {}),
+        token_count: tokenCount,
+        cached_input_tokens: cachedTokens,
+        cache_savings_irt: cacheSavingsIrt,
+        agent_key: args.agentKey || null,
+        channel: args.channel || 'web',
+      },
       finalized_at: new Date().toISOString(),
     }]);
     await applyOrgAiWalletCharge(supabaseUrl, serviceRoleKey, authContext.orgId, charge.billedAmountIrt);
@@ -3890,6 +4099,8 @@ const callChatCompletions = async (
     timeoutMs?: number;
     responseFormat?: Record<string, any> | null;
     tools?: any[];
+    promptCacheKey?: string | null;
+    supportsExplicitCacheControl?: boolean;
   }
 ) => {
   if (providerConfig?.isActive === false) {
@@ -3902,12 +4113,14 @@ const callChatCompletions = async (
   const primaryModel = String(providerConfig.model || '').trim();
   if (!primaryModel) throw new Error('برای این قابلیت هوش مصنوعی، مدل فعال در تنظیمات سازمان پیدا نشد.');
   const modelsToTry = [primaryModel];
+  const promptCacheKey = String(options?.promptCacheKey || '').trim();
+  const supportsExplicitCacheControl = options?.supportsExplicitCacheControl === true;
 
   let lastErrorMessage = '';
   for (let attempt = 0; attempt < modelsToTry.length; attempt += 1) {
     const model = modelsToTry[attempt];
     const reasoning = isReasoningModel(model);
-    let currentMessages = messages;
+    let currentMessages = applyExplicitCacheControlIfSupported(messages, supportsExplicitCacheControl);
     let accumulatedContent = '';
     let accumulatedAttachments: any[] = [];
     let finalParsed: any = null;
@@ -3922,6 +4135,7 @@ const callChatCompletions = async (
         messages: currentMessages,
         safety_identifier: options?.safetyIdentifier || undefined,
       };
+      if (promptCacheKey) requestBody.prompt_cache_key = promptCacheKey;
       const serviceTier = String(providerConfig?.serviceTier || '').trim();
       if (serviceTier === 'default' || serviceTier === 'flex') requestBody.service_tier = serviceTier;
       if (options?.responseFormat && typeof options.responseFormat === 'object') {
@@ -3940,7 +4154,7 @@ const callChatCompletions = async (
       let response: Response;
       let baseUrl: string;
       try {
-        const result = await requestAvalaiWithFallback(providerConfig, '/chat/completions', {
+        let result = await requestAvalaiWithFallback(providerConfig, '/chat/completions', {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${providerConfig.apiKey}`,
@@ -3949,6 +4163,22 @@ const callChatCompletions = async (
           body: JSON.stringify(requestBody),
           signal: AbortSignal.timeout(options?.timeoutMs ?? CHAT_COMPLETIONS_TIMEOUT_MS),
         }, { disableFallback: true });
+        if (!result.response.ok && result.response.status === 400 && (requestBody.prompt_cache_key || supportsExplicitCacheControl)) {
+          const rawCacheError = await result.response.clone().text();
+          if (/prompt_cache_key|cache_control|unsupported.*cache/i.test(rawCacheError)) {
+            const fallbackBody = { ...requestBody, messages: messages };
+            delete fallbackBody.prompt_cache_key;
+            result = await requestAvalaiWithFallback(providerConfig, '/chat/completions', {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${providerConfig.apiKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(fallbackBody),
+              signal: AbortSignal.timeout(options?.timeoutMs ?? CHAT_COMPLETIONS_TIMEOUT_MS),
+            }, { disableFallback: true });
+          }
+        }
         response = result.response;
         baseUrl = result.baseUrl;
       } catch (error: any) {
@@ -4068,6 +4298,8 @@ const callChatCompletionsStream = async (
     safetyIdentifier?: string;
     timeoutMs?: number;
     tools?: any[];
+    promptCacheKey?: string | null;
+    supportsExplicitCacheControl?: boolean;
     onDelta?: (text: string) => void | Promise<void>;
   } = {},
 ) => {
@@ -4081,11 +4313,13 @@ const callChatCompletionsStream = async (
   const model = String(providerConfig.model || '').trim();
   if (!model) throw new Error('برای این قابلیت هوش مصنوعی، مدل فعال در تنظیمات سازمان پیدا نشد.');
   const reasoning = isReasoningModel(model);
+  const promptCacheKey = String(options?.promptCacheKey || '').trim();
+  const supportsExplicitCacheControl = options?.supportsExplicitCacheControl === true;
   let finalParsed: any = null;
   let finishReason = '';
   let content = '';
   let baseUrl = '';
-  let currentMessages = messages;
+  let currentMessages = applyExplicitCacheControlIfSupported(messages, supportsExplicitCacheControl);
   const requestIds: string[] = [];
   const usageParts: any[] = [];
 
@@ -4097,6 +4331,7 @@ const callChatCompletionsStream = async (
       stream_options: { include_usage: true },
       safety_identifier: options?.safetyIdentifier || undefined,
     };
+    if (promptCacheKey) requestBody.prompt_cache_key = promptCacheKey;
     const serviceTier = String(providerConfig?.serviceTier || '').trim();
     if (serviceTier === 'default' || serviceTier === 'flex') requestBody.service_tier = serviceTier;
     if (Array.isArray(options?.tools) && options.tools.length > 0) requestBody.tools = options.tools;
@@ -4145,13 +4380,19 @@ const callChatCompletionsStream = async (
       }
       throw error;
     }
-    // stream_options is OpenAI-compatible, but some AvalAI-backed models do
-    // not expose usage chunks. Keep streaming available for those models.
+    // stream_options and cache hints are OpenAI/Anthropic extensions; fall back
+    // cleanly if a particular gateway rejects either parameter with HTTP 400.
     if (!result.response.ok && result.response.status === 400) {
       const rawError = await result.response.clone().text();
-      if (/stream_options|include_usage|unsupported.*stream/i.test(rawError)) {
+      const rejectStreamOptions = /stream_options|include_usage|unsupported.*stream/i.test(rawError);
+      const rejectCacheHints = /prompt_cache_key|cache_control|unsupported.*cache/i.test(rawError);
+      if (rejectStreamOptions || rejectCacheHints) {
         const fallbackBody = { ...requestBody };
-        delete fallbackBody.stream_options;
+        if (rejectStreamOptions) delete fallbackBody.stream_options;
+        if (rejectCacheHints) {
+          delete fallbackBody.prompt_cache_key;
+          fallbackBody.messages = messages;
+        }
         try {
           result = await requestStream(fallbackBody);
         } catch (error) {
@@ -4544,8 +4785,10 @@ const buildAiClarificationReply = (reply: string, questions: string[]) => {
   ].join('\n');
 };
 
-const callEmbeddings = async (providerConfig: any, input: string, model = DEFAULT_EMBEDDING_MODEL) => {
+const callEmbeddings = async (providerConfig: any, input: string, model: string) => {
   if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
+  const embeddingModel = String(model || '').trim();
+  if (!embeddingModel) throw new Error('مدل بردارسازی (Embedding) فعال در کاتالوگ مدل‌های هوش مصنوعی پیدا نشد.');
   const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/embeddings', {
     method: 'POST',
     headers: {
@@ -4553,7 +4796,7 @@ const callEmbeddings = async (providerConfig: any, input: string, model = DEFAUL
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model,
+      model: embeddingModel,
       input,
       encoding_format: 'float',
     }),
@@ -4571,7 +4814,7 @@ const callEmbeddings = async (providerConfig: any, input: string, model = DEFAUL
     embedding,
     requestId,
     baseUrl,
-    usageMetadata: extractUsageMetadata(parsed, { ...providerConfig, model, capability: 'embedding' }),
+    usageMetadata: extractUsageMetadata(parsed, { ...providerConfig, model: embeddingModel, capability: 'embedding' }),
   };
 };
 
@@ -5938,7 +6181,20 @@ const ensureThread = async (
   supabaseUrl: string,
   serviceRoleKey: string,
   authContext: any,
-  payload: { threadId?: string | null; title?: string; pageContext?: any; contextKey?: string; provider?: string; model?: string; forceNew?: boolean; continueByContext?: boolean; metadata?: Record<string, any> },
+  payload: {
+    threadId?: string | null;
+    title?: string;
+    pageContext?: any;
+    contextKey?: string;
+    provider?: string;
+    model?: string;
+    agentKey?: string | null;
+    selectedAgents?: string[];
+    channel?: string | null;
+    forceNew?: boolean;
+    continueByContext?: boolean;
+    metadata?: Record<string, any>;
+  },
 ) => {
   const requestedThreadId = normalizeId(payload.threadId);
   if (requestedThreadId && isUuid(requestedThreadId)) {
@@ -5955,6 +6211,11 @@ const ensureThread = async (
   }
 
   const threadTitle = buildThreadTitle(payload.title || '', payload.pageContext);
+  const selectedAgents = Array.isArray(payload.selectedAgents) && payload.selectedAgents.length
+    ? normalizeSelectedAgents(payload.selectedAgents)
+    : (payload.agentKey ? normalizeSelectedAgents([payload.agentKey]) : ['lead_orchestrator']);
+  const primaryAgentKey = String(payload.agentKey || selectedAgents[0] || 'lead_orchestrator').trim() || 'lead_orchestrator';
+  const channel = String(payload.channel || 'web').trim() || 'web';
   const inserted = await restInsert(supabaseUrl, serviceRoleKey, 'ai_threads', [{
     org_id: authContext.orgId,
     user_id: authContext.userId,
@@ -5965,7 +6226,10 @@ const ensureThread = async (
     module_id: payload.pageContext?.moduleId || null,
     record_id: payload.pageContext?.recordId || null,
     provider: payload.provider || getEnvProviderConfig().provider,
-    model: payload.model || getEnvProviderConfig().model,
+    model: payload.model || '',
+    agent_key: primaryAgentKey,
+    selected_agents: selectedAgents,
+    channel,
     metadata: {
       route: payload.pageContext?.context?.route || null,
       summary: payload.pageContext?.summary || null,
@@ -5978,6 +6242,9 @@ const ensureThread = async (
       intent: payload.pageContext?.intent || payload.pageContext?.context?.intent || null,
       process_field_key: payload.pageContext?.processFieldKey || payload.pageContext?.context?.processFieldKey || null,
       selected_process_id: payload.pageContext?.selectedProcessId || payload.pageContext?.context?.selectedProcessId || payload.pageContext?.context?.selectedProcessGroupId || null,
+      agent_key: primaryAgentKey,
+      selected_agents: selectedAgents,
+      channel,
       last_activity_kind: 'created',
       ...(payload.metadata || {}),
     },
@@ -6021,8 +6288,11 @@ const runBackgroundTask = (task: Promise<any>) => {
 const ensureOrgAiSettings = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
   const existing = await loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
   if (existing) return existing;
-  const catalogRows = await listActiveAiModels(supabaseUrl, serviceRoleKey);
-  const selectedModels = sanitizeTenantSelectedModels(catalogRows, {});
+  const [catalogRows, saasDefaults] = await Promise.all([
+    listActiveAiModels(supabaseUrl, serviceRoleKey),
+    loadSaasAiDefaultModels(supabaseUrl, serviceRoleKey),
+  ]);
+  const selectedModels = sanitizeTenantSelectedModels(catalogRows, {}, saasDefaults);
   const rows = await restInsert(supabaseUrl, serviceRoleKey, 'org_ai_settings', [{
     org_id: authContext.orgId,
     selected_models: selectedModels,
@@ -6097,7 +6367,8 @@ const handleSaveAiSettings = async (supabaseUrl: string, serviceRoleKey: string,
     : incoming.featureFlags && typeof incoming.featureFlags === 'object'
     ? incoming.featureFlags
     : existing?.feature_flags || {};
-  const sanitizedModels = sanitizeTenantSelectedModels(catalogRows, selectedModels);
+  const saasDefaults = await loadSaasAiDefaultModels(supabaseUrl, serviceRoleKey);
+  const sanitizedModels = sanitizeTenantSelectedModels(catalogRows, selectedModels, saasDefaults);
   const sanitizedFlags = sanitizeTenantFeatureFlags(baseAvailability, featureFlags);
   const rows = await restUpsert(supabaseUrl, serviceRoleKey, 'org_ai_settings', [{
     org_id: authContext.orgId,
@@ -6153,7 +6424,7 @@ const handleGetAiOverview = async (supabaseUrl: string, serviceRoleKey: string, 
   if (!canManageAiSettings(authContext)) {
     return json(403, { success: false, message: 'دسترسی مشاهده تنظیمات هوش مصنوعی را ندارید.' });
   }
-  const [settings, rawModels, wallets, ledgerRows, usagePolicies, users, roles] = await Promise.all([
+  const [settings, rawModels, saasDefaults, wallets, ledgerRows, usagePolicies, users, roles] = await Promise.all([
     ensureOrgAiSettings(supabaseUrl, serviceRoleKey, authContext),
     safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_model_catalog', {
       is_active: 'eq.true',
@@ -6161,6 +6432,7 @@ const handleGetAiOverview = async (supabaseUrl: string, serviceRoleKey: string, 
       order: 'id.asc',
       limit: 200,
     }),
+    loadSaasAiDefaultModels(supabaseUrl, serviceRoleKey),
     authContext.orgId
       ? safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_wallets', {
           org_id: `eq.${authContext.orgId}`,
@@ -6171,7 +6443,7 @@ const handleGetAiOverview = async (supabaseUrl: string, serviceRoleKey: string, 
     authContext.orgId
       ? safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_usage_ledger', {
           org_id: `eq.${authContext.orgId}`,
-          select: 'id,user_id,capability,model,status,raw_cost_irt,billed_amount_irt,usage,created_at',
+          select: 'id,user_id,capability,model,agent_key,channel,status,raw_cost_irt,billed_amount_irt,cached_input_tokens,cache_savings_irt,usage,created_at',
           order: 'created_at.desc',
           limit: 200,
         })
@@ -6201,13 +6473,17 @@ const handleGetAiOverview = async (supabaseUrl: string, serviceRoleKey: string, 
     if (String(row?.status || '') !== 'finalized') return acc;
     acc.billed_amount_irt += numberFrom(row?.billed_amount_irt, 0);
     acc.raw_cost_irt += numberFrom(row?.raw_cost_irt, 0);
+    acc.cached_input_tokens += numberFrom(row?.cached_input_tokens, 0);
+    acc.cache_savings_irt += numberFrom(row?.cache_savings_irt, 0);
     acc.requests += 1;
     const model = String(row?.model || 'unknown');
     acc.by_model[model] = (acc.by_model[model] || 0) + numberFrom(row?.billed_amount_irt, 0);
     const capability = String(row?.capability || 'unknown');
     acc.by_capability[capability] = (acc.by_capability[capability] || 0) + numberFrom(row?.billed_amount_irt, 0);
+    const agentKey = String(row?.agent_key || '').trim();
+    if (agentKey) acc.by_agent[agentKey] = (acc.by_agent[agentKey] || 0) + numberFrom(row?.billed_amount_irt, 0);
     return acc;
-  }, { billed_amount_irt: 0, raw_cost_irt: 0, requests: 0, by_model: {}, by_capability: {} });
+  }, { billed_amount_irt: 0, raw_cost_irt: 0, cached_input_tokens: 0, cache_savings_irt: 0, requests: 0, by_model: {}, by_capability: {}, by_agent: {} });
   const companyContext = await loadCompanyContext(supabaseUrl, serviceRoleKey, authContext);
   const policyBySubject = new Map((usagePolicies || []).map((row: any) => [`${row.subject_type}:${normalizeId(row.subject_id) || NIL_UUID}`, normalizeAiUsagePolicyRow(row)]));
   const defaultPolicy = policyBySubject.get(`default:${NIL_UUID}`) || normalizeAiUsagePolicyRow(null, { subjectType: 'default', subjectId: NIL_UUID });
@@ -6225,6 +6501,7 @@ const handleGetAiOverview = async (supabaseUrl: string, serviceRoleKey: string, 
   return json(200, {
     success: true,
     settings,
+    saasDefaults,
     models,
     plan: {
       code: planContext?.planCode || null,
@@ -6262,7 +6539,7 @@ const handleGetAiOverview = async (supabaseUrl: string, serviceRoleKey: string, 
 // use in the compose box, and the selectable models — read from the ORG's
 // available model list (active catalog) + the org's per-capability selection.
 const handleGetComposeModels = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
-  const [settings, rawModels] = await Promise.all([
+  const [settings, rawModels, saasDefaults] = await Promise.all([
     loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext),
     safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_model_catalog', {
       is_active: 'eq.true',
@@ -6270,6 +6547,7 @@ const handleGetComposeModels = async (supabaseUrl: string, serviceRoleKey: strin
       order: 'id.asc',
       limit: 200,
     }),
+    loadSaasAiDefaultModels(supabaseUrl, serviceRoleKey),
   ]);
   const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
   const availability = buildAiCapabilityAvailability(planContext, settings, rawModels);
@@ -6281,21 +6559,27 @@ const handleGetComposeModels = async (supabaseUrl: string, serviceRoleKey: strin
   const capabilities: Record<string, any> = {};
   Object.keys(AI_CAPABILITY_FEATURE_KEYS).forEach((capability) => {
     if (capability === 'embedding') return;
-    const isPrimaryAgentCapability = capability === 'record_creation' || capability === 'process_operation';
+    const isPrimaryAgentCapability = capability === 'record_creation' || capability === 'process_operation' || capability === 'pricing_adjustment';
+    const isFastSlotCapability = capability === 'agent_fast' || capability === 'context_compression';
     const sourceModels = isPrimaryAgentCapability
       ? models.filter((model: any) => {
         const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
         return tags.includes('dashboard_chat') || tags.includes('record_chat') || tags.includes('workflow_ai_prompt');
+      })
+      : isFastSlotCapability
+      ? models.filter((model: any) => {
+        const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
+        return tags.includes(capability) || tags.includes('dashboard_chat');
       })
       : filterSelectableAiModels(models, capability);
     const selectable = sourceModels
       .map((m: any) => ({ value: String(m?.id || ''), label: labelOf(String(m?.id || '')) }))
       .filter((opt: any) => opt.value);
     const resolved = isPrimaryAgentCapability
-      ? (pickCapabilityModelFromCatalog(settings, 'record_chat', models)
-        || pickCapabilityModelFromCatalog(settings, 'dashboard_chat', models)
-        || pickCapabilityModelFromCatalog(settings, 'workflow_ai_prompt', models))
-      : pickCapabilityModelFromCatalog(settings, capability, models);
+      ? (pickCapabilityModelFromCatalog(settings, 'record_chat', models, null, null, saasDefaults)
+        || pickCapabilityModelFromCatalog(settings, 'dashboard_chat', models, null, null, saasDefaults)
+        || pickCapabilityModelFromCatalog(settings, 'workflow_ai_prompt', models, null, null, saasDefaults))
+      : pickCapabilityModelFromCatalog(settings, capability, models, null, null, saasDefaults);
     capabilities[capability] = {
       model: resolved,
       modelLabel: resolved ? labelOf(resolved) : 'مدل فعال ندارد',
@@ -6330,8 +6614,8 @@ const handleGetComposeModels = async (supabaseUrl: string, serviceRoleKey: strin
     })
     .map((m: any) => ({ value: String(m?.id || ''), label: labelOf(String(m?.id || '')) }))
     .filter((opt: any) => opt.value);
-  const resolvedVoiceConversationModel = pickCapabilityModelFromCatalog(settings, 'document_analysis', models)
-    || pickCapabilityModelFromCatalog(settings, 'dashboard_chat', models);
+  const resolvedVoiceConversationModel = pickCapabilityModelFromCatalog(settings, 'document_analysis', models, null, null, saasDefaults)
+    || pickCapabilityModelFromCatalog(settings, 'dashboard_chat', models, null, null, saasDefaults);
   capabilities.voice_conversation = {
     model: resolvedVoiceConversationModel,
     modelLabel: resolvedVoiceConversationModel ? labelOf(resolvedVoiceConversationModel) : 'مدل فعال ندارد',
@@ -6475,7 +6759,7 @@ const handleListThreads = async (supabaseUrl: string, serviceRoleKey: string, au
   const requestedModuleId = String(body?.moduleId || body?.module_id || '').trim();
   const requestedRecordId = normalizeId(body?.recordId || body?.record_id);
   const hasRecordScope = Boolean(requestedModuleId && isUuid(requestedRecordId));
-  const baseSelect = 'id,org_id,title,context_type,context_key,module_id,record_id,provider,model,metadata,created_at,updated_at,pinned_at,is_shared,shared_user_ids,shared_role_ids,user_id';
+  const baseSelect = 'id,org_id,title,context_type,context_key,module_id,record_id,provider,model,agent_key,selected_agents,channel,compaction_summary,cached_prefix_hash,metadata,created_at,updated_at,pinned_at,is_shared,shared_user_ids,shared_role_ids,user_id';
   const limit = Math.max(10, Math.min(100, Number(body?.limit || 50)));
   const ownParams: Record<string, any> = {
     org_id: `eq.${authContext.orgId}`,
@@ -6677,63 +6961,124 @@ const handleCompressThreadContext = async (supabaseUrl: string, serviceRoleKey: 
   const thread = await fetchThreadForRead(supabaseUrl, serviceRoleKey, authContext, threadId);
   if (!thread) return json(404, { success: false, message: 'گفتگو پیدا نشد.' });
   const messages = await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, thread.id, 120);
-  const source = buildThreadCompressionSource(messages);
-  if (!source.trim()) return json(400, { success: false, message: 'متنی برای فشرده‌سازی زمینه گفتگو وجود ندارد.' });
-  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, thread.module_id ? 'record_chat' : 'dashboard_chat', {
-    modelOverride: body?.modelOverride || thread?.metadata?.composer_preferences?.currentModelOverride || null,
-  });
-  const promptMessages = [
-    {
-      role: 'system',
-      content: [
-        'گفتگوی زیر را برای ادامه همان گفتگو فشرده کن.',
-        'خلاصه باید فارسی، کوتاه، دقیق و عملیاتی باشد.',
-        'تصمیم‌ها، داده‌های قطعی، محدودیت‌ها، نام رکوردها/ماژول‌ها، خواسته‌های باز و ترجیحات کاربر را نگه دار.',
-        'جزئیات کم‌ارزش، تعارف‌ها و تکرارها را حذف کن.',
-      ].join('\n'),
+  if (!messages.some((m: any) => ['user', 'assistant'].includes(String(m?.role || '')))) {
+    return json(400, { success: false, message: 'متنی برای فشرده‌سازی زمینه گفتگو وجود ندارد.' });
+  }
+  const [catalogRows, orgAiSettings] = await Promise.all([
+    listActiveAiModels(supabaseUrl, serviceRoleKey),
+    loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext),
+  ]);
+  const centralConfig = getCentralProviderConfig();
+  const compactResult = await compactThreadConversation({
+    threadId: thread.id,
+    orgId: authContext.orgId,
+    existingSummary: thread?.compaction_summary || thread?.metadata?.compressed_context?.summary || null,
+    existingWorkingState: thread?.working_state || null,
+    messages,
+    keepRecentCount: Number(body?.keepRecentCount || 4),
+    catalogRows,
+    orgAiSettings,
+    requestedModelOverride: body?.modelOverride || null,
+    runCompressionLlm: async (resolvedModel, promptMessages) => {
+      const result = await callChatCompletions({
+        ...centralConfig,
+        provider: resolvedModel.provider,
+        model: resolvedModel.model,
+        modelCatalog: resolvedModel.catalogRow,
+        orgAiSettings,
+      }, promptMessages, {
+        maxTokens: 1400,
+        temperature: 0.15,
+        safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_thread_${thread.id}_compress`,
+      });
+      return {
+        content: result.content,
+        usageMetadata: result.usageMetadata,
+        requestId: result.requestId,
+      };
     },
-    { role: 'user', content: source },
-  ];
-  const result = await callChatCompletions(providerConfig, promptMessages, {
-    maxTokens: 1400,
-    safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_thread_${thread.id}_compress`,
   });
-  const summary = String(result.content || '').trim();
+  const summary = String(compactResult.summary || '').trim();
+  if (!summary) {
+    return json(400, { success: false, message: 'تعداد پیام‌های قابل فشرده‌سازی کافی نیست یا خلاصه‌سازی انجام نشد.' });
+  }
   const metadata = {
     ...(thread.metadata || {}),
     compressed_context: {
       summary,
       compressed_at: new Date().toISOString(),
       message_count: messages.length,
-      model: result.model,
-      provider: result.provider,
+      model: compactResult.modelUsed,
+      provider: compactResult.providerUsed,
     },
   };
   const patched = await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', {
     id: `eq.${thread.id}`,
     org_id: `eq.${authContext.orgId}`,
   }, {
+    compaction_summary: summary,
+    compaction_cursor_message_id: compactResult.cursorMessageId,
+    working_state: compactResult.workingState,
     metadata,
     updated_at: new Date().toISOString(),
   });
-  const ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
-    threadId: thread.id,
-    requestId: result.requestId,
-    capability: 'dashboard_chat',
-    provider: result.provider,
-    model: result.model,
-    usageMetadata: result.usageMetadata,
-    metadata: { source: 'thread_context_compression', message_count: messages.length },
-  });
+  const ledger = compactResult.usageMetadata
+    ? await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+        threadId: thread.id,
+        requestId: compactResult.requestId,
+        capability: 'context_compression',
+        provider: compactResult.providerUsed || centralConfig.provider,
+        model: compactResult.modelUsed || '',
+        agentKey: thread?.agent_key || null,
+        channel: thread?.channel || 'web',
+        usageMetadata: compactResult.usageMetadata,
+        metadata: { source: 'thread_context_compression', message_count: messages.length },
+      })
+    : null;
   return json(200, {
     success: true,
-    thread: patched[0] || { ...thread, metadata },
+    thread: patched[0] || { ...thread, compaction_summary: summary, working_state: compactResult.workingState, metadata },
     summary,
-    provider: result.provider,
-    model: result.model,
-    usage: withCustomerBilling(result.usageMetadata, ledger),
+    workingState: compactResult.workingState,
+    provider: compactResult.providerUsed,
+    model: compactResult.modelUsed,
+    usage: withCustomerBilling(compactResult.usageMetadata, ledger),
     ledger,
   });
+};
+
+const extractProposedActionFromAiText = (text: string) => {
+  const parsed = extractJsonObjectFromText(text);
+  if (!parsed || typeof parsed !== 'object') return null;
+  if (parsed?.needs_clarification === true || parsed?.needsClarification === true) return null;
+  const candidate = parsed?.proposed_action && typeof parsed.proposed_action === 'object'
+    ? parsed.proposed_action
+    : parsed;
+  const actionType = String(candidate?.action_type || candidate?.actionType || '').trim();
+  const supportedTypes = new Set([
+    'apply_price_adjustment',
+    'create_instagram_workflow_rule',
+    'create_instagram_showcase',
+    'send_instagram_message',
+    'reply_instagram_comment',
+    'create_process_template',
+    'settle_invoice_payment',
+    'relay_to_staff',
+  ]);
+  if (!supportedTypes.has(actionType)) return null;
+  const payload = candidate?.payload && typeof candidate.payload === 'object'
+    ? candidate.payload
+    : candidate;
+  const summaryFa = String(candidate?.summary_fa || candidate?.summaryFa || 'عملیات پیشنهادی آماده تأیید شما است.').trim();
+  const moduleId = candidate?.module_id ? String(candidate.module_id).trim() : null;
+  const recordId = candidate?.record_id ? String(candidate.record_id).trim() : null;
+  return {
+    actionType,
+    summaryFa,
+    moduleId,
+    recordId,
+    actionPayload: payload,
+  };
 };
 
 const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any, reportActivity?: AiAgentActivityReporter) => {
@@ -6751,16 +7096,78 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     : [];
   const selectedCapabilitySet = new Set(selectedCapabilities);
   const freeChatMode = selectedCapabilitySet.has('free_chat');
+  const channel = String(body?.channel || 'web').trim() || 'web';
   const capability = requestedCapability
+    || (selectedCapabilitySet.has('pricing_adjustment') ? 'pricing_adjustment' : '')
     || (selectedCapabilitySet.has('legal_assistant') ? 'legal_assistant' : '')
     || (selectedCapabilitySet.has('deep_reasoning') ? 'deep_reasoning' : '')
     || (rawContext.mode === 'record' ? 'record_chat' : 'dashboard_chat');
   const contextKey = freeChatMode ? 'free_chat' : buildContextKey(rawContext);
-  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, capability, { modelOverride: body?.modelOverride });
-  const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, capability);
+
+  const [preliminaryPlanContext, initialOrgAiSettings] = await Promise.all([
+    loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext),
+    loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext),
+  ]);
+  const grounding = await loadCentralAiGrounding({
+    supabaseUrl,
+    serviceRoleKey,
+    authContext,
+    planContext: preliminaryPlanContext,
+    message,
+    freeChatMode,
+    includeCalendar: !freeChatMode,
+  });
+
+  const explicitAgentsInput = body?.agents ?? (body?.agentKey ? [body.agentKey] : (body?.agent_key ? [body.agent_key] : undefined));
+  const normalizedExplicitAgents = normalizeSelectedAgents(explicitAgentsInput);
+  const allowedAgentsForActor = Object.values(grounding.agentStates || {})
+    .filter((s: any) => s.canUse)
+    .map((s: any) => s.agentKey as AgentKey);
+  const heuristic = heuristicSelectAgentsAndCapabilities({
+    message,
+    explicitAgents: explicitAgentsInput,
+    explicitCapabilities: selectedCapabilities,
+    pageContext: rawContext,
+    ...(normalizedExplicitAgents.length === 0 ? { allowedAgents: allowedAgentsForActor } : {}),
+  });
+  const runnableAgents = freeChatMode
+    ? resolveRunnableAgentsForActor({
+        requestedAgents: normalizedExplicitAgents.length ? normalizedExplicitAgents : (['lead_orchestrator'] as AgentKey[]),
+        grounding,
+      })
+    : resolveRunnableAgentsForActor({
+        requestedAgents: heuristic.agents,
+        grounding,
+      });
+  if (
+    (!freeChatMode && runnableAgents.permittedAgents.length === 0)
+    || (freeChatMode && normalizedExplicitAgents.length > 0 && runnableAgents.permittedAgents.length === 0)
+  ) {
+    const err = new Error(runnableAgents.blockedAgents[0]?.reasonFa || 'شما دسترسی استفاده از این ایجنت را ندارید.') as any;
+    err.status = 403;
+    throw err;
+  }
+  const selectedAgents: AgentKey[] = runnableAgents.permittedAgents.length
+    ? runnableAgents.permittedAgents
+    : (['lead_orchestrator'] as AgentKey[]);
+  const primaryAgent: AgentKey = selectedAgents[0] || 'lead_orchestrator';
+  const primaryAgentConfig = grounding.agentConfigs.find((c: any) => String(c?.agent_key || '') === primaryAgent) || null;
+  const mergedCapabilities = Array.from(new Set([...selectedCapabilities, ...heuristic.capabilities]));
+  const requestedTone = String(body?.toneStyle || body?.tone_style || '').trim();
+  const preferredToneStyle: AgentToneStyle = (['formal', 'friendly_warm', 'concise', 'coaching', 'custom'] as const)
+    .includes(requestedTone as AgentToneStyle)
+    ? (requestedTone as AgentToneStyle)
+    : (grounding.agentStates?.[primaryAgent]?.toneStyle || 'friendly_warm');
+
+  const providerSlot = body?.preferFastAgentModel === true ? 'agent_fast' : capability;
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, providerSlot, {
+    modelOverride: body?.modelOverride,
+    agentConfig: primaryAgentConfig,
+  });
+  const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings || initialOrgAiSettings, capability);
   for (const selectedCapability of selectedCapabilities) {
     if (AI_CAPABILITY_FEATURE_KEYS[selectedCapability]) {
-      await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, selectedCapability);
+      await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings || initialOrgAiSettings, selectedCapability);
     }
   }
   const aiUsageAccess = await assertAiUsageAllowed(supabaseUrl, serviceRoleKey, authContext);
@@ -6775,6 +7182,24 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
         relatedContexts: [],
       }
     : await withAiAgentActivity('organization_data', () => buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext), reportActivity);
+
+  const skillAssembly = freeChatMode
+    ? { skillContractsPrompt: '', domainContextByAgent: {}, instagramMediaCards: [], blockedAgents: [] }
+    : await assembleMultiSkillContext({
+        supabaseUrl,
+        serviceRoleKey,
+        authContext,
+        grounding,
+        userMessage: message,
+        selectedAgents,
+        selectedCapabilities: mergedCapabilities,
+        pageContext,
+      });
+
+  const mergedBlockedAgents = Array.from(new Map(
+    [...(runnableAgents.blockedAgents || []), ...(skillAssembly.blockedAgents || [])]
+      .map((item) => [item.agentKey, item]),
+  ).values());
   const canUseKnowledge = !freeChatMode && isAiCapabilityPlanAvailable(planContext, 'document_analysis');
   const requiresAuthoritativeProcessContext = !freeChatMode && (
     rawContext.intent === 'process_guide'
@@ -6782,9 +7207,9 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
   );
   const [knowledgeChunks, companyContext, orgPeopleContext, calendarContext, authoritativeProcessContext] = await Promise.all([
     canUseKnowledge ? withAiAgentActivity('organization_knowledge', () => fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, message, { moduleId: pageContext.moduleId }), reportActivity) : Promise.resolve([]),
-    freeChatMode ? Promise.resolve(null) : loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
+    freeChatMode ? Promise.resolve(null) : (grounding.company ? Promise.resolve(grounding.company) : loadCompanyContext(supabaseUrl, serviceRoleKey, authContext)),
     freeChatMode ? Promise.resolve(null) : loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, message),
-    freeChatMode ? Promise.resolve(null) : resolvePersianCalendarContext(message),
+    freeChatMode ? Promise.resolve(null) : (grounding.calendarContext ? Promise.resolve(grounding.calendarContext) : resolvePersianCalendarContext(message)),
     requiresAuthoritativeProcessContext
       ? loadAiProcessContext(supabaseUrl, serviceRoleKey, authContext, pageContext)
       : Promise.resolve(null),
@@ -6796,7 +7221,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
       .then(() => listAiUserMemories(supabaseUrl, serviceRoleKey, authContext, AI_USER_MEMORY_CONTEXT_ITEMS, true)),
   ]);
 
-  const orgAiSettings = providerConfig.orgAiSettings;
+  const orgAiSettings = providerConfig.orgAiSettings || initialOrgAiSettings;
   const webSearchEnabled = orgAiSettings?.feature_flags?.web_search === true
     && isAiCapabilityPlanAvailable(planContext, 'web_search');
   const forceWebSearch = selectedCapabilitySet.has('web_search') || selectedCapabilitySet.has('legal_assistant');
@@ -6819,8 +7244,11 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     contextKey,
     provider: providerConfig.provider,
     model: providerConfig.model,
+    agentKey: primaryAgent,
+    selectedAgents,
+    channel,
     forceNew: body?.forceNewThread === true,
-    metadata: { free_chat: freeChatMode },
+    metadata: { free_chat: freeChatMode, tone_style: preferredToneStyle },
   });
   const existingThreadIsFreeChat = thread?.metadata?.free_chat === true;
   if (thread && existingThreadIsFreeChat !== freeChatMode) {
@@ -6831,14 +7259,19 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
       contextKey,
       provider: providerConfig.provider,
       model: providerConfig.model,
+      agentKey: primaryAgent,
+      selectedAgents,
+      channel,
       forceNew: true,
-      metadata: { free_chat: freeChatMode },
+      metadata: { free_chat: freeChatMode, tone_style: preferredToneStyle },
     });
   }
   const previousMessages = await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, thread.id, 30);
   const compressedContext = thread?.metadata?.compressed_context && typeof thread.metadata.compressed_context === 'object'
     ? thread.metadata.compressed_context
     : null;
+  let activeCompactionSummary = String(thread?.compaction_summary || compressedContext?.summary || '').trim() || null;
+  let activeWorkingState = thread?.working_state && typeof thread.working_state === 'object' ? thread.working_state : null;
 
   const userMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: thread.id,
@@ -6852,7 +7285,11 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
       context_summary: pageContext.summary,
       input_kind: String(body?.inputKind || body?.input_kind || 'text').trim() || 'text',
       internal_agent_step: body?.metadata?.internal_agent_step === true || body?.metadata?.internal_agent_input === true,
-      capabilities: selectedCapabilities,
+      capabilities: mergedCapabilities,
+      selected_agents: selectedAgents,
+      agent_key: primaryAgent,
+      tone_style: preferredToneStyle,
+      channel,
       free_chat: freeChatMode,
       file: body?.file ? {
         filename: body.file?.filename || body.file?.fileName || body.file?.name || null,
@@ -6867,7 +7304,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     },
   });
 
-  const promptMessages = buildPromptMessages(
+  const legacyPromptMessages = buildPromptMessages(
     message,
     pageContext,
     knowledgeChunks,
@@ -6880,7 +7317,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     {
       legalMode: selectedCapabilitySet.has('legal_assistant'),
       deepReasoning: selectedCapabilitySet.has('deep_reasoning') || capability === 'deep_reasoning',
-      selectedCapabilities,
+      selectedCapabilities: mergedCapabilities,
       businessAnalytics,
       compressedContext,
       calendarContext,
@@ -6890,11 +7327,166 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     },
   );
 
+  let promptMessages = legacyPromptMessages;
+  let cachedPrefixHash: string | null = null;
+  let cacheOptions: { promptCacheKey?: string; supportsExplicitCacheControl?: boolean } = {};
+
+  if (freeChatMode) {
+    if (requestedTone && promptMessages[0]?.role === 'system') {
+      promptMessages[0].content = `${promptMessages[0].content}\nلحن درخواستی کاربر: ${getAgentToneGuidanceFa(preferredToneStyle)}`;
+    }
+  } else {
+    const legacySystemContent = [
+      String(legacyPromptMessages[0]?.content || '').trim(),
+      'وقتی برای اجرای عملیاتی حساس (مثل `apply_price_adjustment`، `create_instagram_workflow_rule`، `create_instagram_showcase`، `send_instagram_message`، `reply_instagram_comment`، `create_process_template`، `settle_invoice_payment` یا `relay_to_staff`) همه ابهام‌ها رفع و ساختار نهایی آماده تأیید شد، علاوه بر توضیح کوتاه فارسی، دقیقاً یک بلوک JSON شامل `{ "proposed_action": { "action_type": "...", "summary_fa": "...", "module_id": "...", "record_id": "...", "payload": {...} } }` تولید کن.',
+    ].filter(Boolean).join('\n\n');
+
+    const volatileContextPayload = {
+      current_page: {
+        summary: pageContext.summary,
+        moduleId: pageContext.moduleId,
+        recordId: pageContext.recordId,
+        records: pageContext.records,
+        related_contexts: pageContext.relatedContexts || [],
+      },
+      current_user: buildUserPromptContext(authContext),
+      domain_contexts: skillAssembly.domainContextByAgent,
+      blocked_agents: mergedBlockedAgents,
+      authoritative_process_context: authoritativeProcessContext || null,
+      retrieved_permitted_contexts: retrievedContexts,
+      business_analytics: businessAnalytics || null,
+      web_search_results: webSearchResults.length ? webSearchResults : undefined,
+      knowledge_chunks: (knowledgeChunks || []).slice(0, 12).map((chunk: any) => ({
+        title: chunk?.metadata?.document_title || null,
+        category: chunk?.metadata?.category || null,
+        content: String(chunk?.content || '').slice(0, 1000),
+      })),
+      personal_memory: (userMemories || []).map((m: any) => normalizeAiUserMemoryContent(m?.content)).filter(Boolean),
+    };
+
+    let compiled = await compileLayeredAgentPrompt({
+      userMessage: message,
+      selectedAgents,
+      selectedCapabilities: mergedCapabilities,
+      skillContractsPrompt: skillAssembly.skillContractsPrompt,
+      grounding,
+      pageContextSummary: pageContext.summary,
+      contextPayload: volatileContextPayload,
+      historyMessages: previousMessages,
+      compactionSummary: activeCompactionSummary,
+      workingState: activeWorkingState,
+      preferredToneStyle,
+      legacySystemPrompt: legacySystemContent,
+    });
+
+    const compactCheck = shouldAutoCompactContext({
+      promptMessages: compiled.messages,
+      rawMessageCount: previousMessages.length,
+      modelCatalog: providerConfig.modelCatalog,
+    });
+    if (compactCheck.shouldCompact) {
+      try {
+        const catalogRows = await listActiveAiModels(supabaseUrl, serviceRoleKey);
+        const centralConfig = getCentralProviderConfig();
+        const compacted = await compactThreadConversation({
+          threadId: thread.id,
+          orgId: authContext.orgId,
+          existingSummary: activeCompactionSummary,
+          existingWorkingState: activeWorkingState,
+          messages: previousMessages,
+          keepRecentCount: 6,
+          catalogRows,
+          orgAiSettings,
+          runCompressionLlm: async (resolvedModel, compPrompt) => {
+            const compResult = await callChatCompletions({
+              ...centralConfig,
+              provider: resolvedModel.provider,
+              model: resolvedModel.model,
+              modelCatalog: resolvedModel.catalogRow,
+              orgAiSettings,
+            }, compPrompt, {
+              maxTokens: 1200,
+              temperature: 0.15,
+              safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_thread_${thread.id}_autocompact`,
+            });
+            return {
+              content: compResult.content,
+              usageMetadata: compResult.usageMetadata,
+              requestId: compResult.requestId,
+            };
+          },
+        });
+        if (compacted.compacted && compacted.summary) {
+          activeCompactionSummary = compacted.summary;
+          activeWorkingState = compacted.workingState;
+          await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', {
+            id: `eq.${thread.id}`,
+            org_id: `eq.${authContext.orgId}`,
+          }, {
+            compaction_summary: compacted.summary,
+            compaction_cursor_message_id: compacted.cursorMessageId,
+            working_state: compacted.workingState,
+            updated_at: new Date().toISOString(),
+          }).catch(() => []);
+          if (compacted.usageMetadata) {
+            await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+              threadId: thread.id,
+              requestId: compacted.requestId,
+              capability: 'context_compression',
+              provider: compacted.providerUsed || centralConfig.provider,
+              model: compacted.modelUsed || '',
+              agentKey: primaryAgent,
+              channel,
+              usageMetadata: compacted.usageMetadata,
+              metadata: { source: 'auto_compaction', ratio: compactCheck.ratio },
+            }).catch(() => null);
+          }
+          compiled = await compileLayeredAgentPrompt({
+            userMessage: message,
+            selectedAgents,
+            selectedCapabilities: mergedCapabilities,
+            skillContractsPrompt: skillAssembly.skillContractsPrompt,
+            grounding,
+            pageContextSummary: pageContext.summary,
+            contextPayload: volatileContextPayload,
+            historyMessages: previousMessages.slice(-6),
+            compactionSummary: activeCompactionSummary,
+            workingState: activeWorkingState,
+            preferredToneStyle,
+            legacySystemPrompt: legacySystemContent,
+            maxHistoryMessages: 6,
+          });
+        }
+      } catch (autoCompactErr) {
+        console.warn('Auto context compaction skipped', autoCompactErr);
+      }
+    }
+
+    promptMessages = compiled.messages;
+    cachedPrefixHash = compiled.cachedPrefixHash;
+    cacheOptions = buildAvalaiCacheOptions({
+      orgId: authContext.orgId,
+      agentKey: primaryAgent,
+      prefixHash: cachedPrefixHash,
+      modelCatalog: providerConfig.modelCatalog,
+      modelId: providerConfig.model,
+    });
+  }
+
   return {
     message,
     body,
-    selectedCapabilities,
-    selectedCapabilitySet,
+    selectedCapabilities: mergedCapabilities,
+    explicitCapabilities: selectedCapabilities,
+    selectedCapabilitySet: new Set(mergedCapabilities),
+    selectedAgents,
+    primaryAgent,
+    blockedAgents: mergedBlockedAgents,
+    instagramMediaCards: skillAssembly.instagramMediaCards || [],
+    preferredToneStyle,
+    channel,
+    cachedPrefixHash,
+    cacheOptions,
     capability,
     contextKey,
     providerConfig,
@@ -6903,7 +7495,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     companyContext,
     retrievedContexts,
     businessAnalytics,
-    calendarContext,
+    calendarContext: grounding.calendarContext || calendarContext,
     authoritativeProcessContext,
     webSearchResults,
     forceWebSearch,
@@ -6941,6 +7533,12 @@ const buildThreadComposerPreferences = (body: any, thread: any = null) => {
     : Array.isArray(body?.capabilities)
     ? Array.from(new Set(body.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean))).slice(0, 12)
     : existing.selectedCapabilities || [];
+  const selectedAgents = Array.isArray(incoming.selectedAgents)
+    ? normalizeSelectedAgents(incoming.selectedAgents)
+    : Array.isArray(body?.agents)
+    ? normalizeSelectedAgents(body.agents)
+    : existing.selectedAgents || (thread?.selected_agents || []);
+  const toneStyle = String(incoming.toneStyle || body?.toneStyle || body?.tone_style || existing.toneStyle || 'friendly_warm').trim() || 'friendly_warm';
   const mediaSettings = incoming.mediaSettings && typeof incoming.mediaSettings === 'object'
     ? incoming.mediaSettings
     : body?.settings && typeof body.settings === 'object'
@@ -6962,6 +7560,8 @@ const buildThreadComposerPreferences = (body: any, thread: any = null) => {
     : String(body?.modelOverride || existing.currentModelOverride || '').trim() || null;
   return {
     selectedCapabilities,
+    selectedAgents,
+    toneStyle,
     mediaSettings,
     recordCreationTargetModuleId,
     processOperationMode: Object.prototype.hasOwnProperty.call(incoming, 'processOperationMode')
@@ -6991,6 +7591,12 @@ const patchChatThreadAfterAssistant = async (
     context_type: getContextKind(prepared.pageContext.context || {}),
     module_id: prepared.pageContext.moduleId || null,
     record_id: prepared.pageContext.recordId || null,
+    agent_key: prepared.primaryAgent || prepared.thread?.agent_key || 'lead_orchestrator',
+    selected_agents: Array.isArray(prepared.selectedAgents) && prepared.selectedAgents.length
+      ? prepared.selectedAgents
+      : (prepared.thread?.selected_agents || ['lead_orchestrator']),
+    channel: prepared.channel || prepared.thread?.channel || 'web',
+    ...(prepared.cachedPrefixHash ? { cached_prefix_hash: prepared.cachedPrefixHash } : {}),
     metadata: {
       ...(prepared.thread?.metadata || {}),
       route: prepared.pageContext.context?.route || null,
@@ -7002,6 +7608,10 @@ const patchChatThreadAfterAssistant = async (
       record_id: prepared.pageContext.recordId || null,
       intent: prepared.pageContext.intent || prepared.pageContext.context?.intent || null,
       free_chat: prepared.freeChatMode === true,
+      agent_key: prepared.primaryAgent || 'lead_orchestrator',
+      selected_agents: prepared.selectedAgents || ['lead_orchestrator'],
+      tone_style: prepared.preferredToneStyle || 'friendly_warm',
+      channel: prepared.channel || 'web',
       selected_process_id: prepared.pageContext.selectedProcessId || prepared.pageContext.context?.selectedProcessId || prepared.pageContext.context?.selectedProcessGroupId || null,
       model_overrides: buildThreadModelOverrides(prepared.thread, prepared.capability, aiResult?.model || prepared.providerConfig.model, prepared.body?.modelOverride),
       composer_preferences: buildThreadComposerPreferences(prepared.body, prepared.thread),
@@ -7016,6 +7626,14 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
   const {
     message,
     selectedCapabilities,
+    selectedAgents,
+    primaryAgent,
+    blockedAgents,
+    instagramMediaCards,
+    preferredToneStyle,
+    channel,
+    cachedPrefixHash,
+    cacheOptions,
     capability,
     contextKey,
     providerConfig,
@@ -7036,6 +7654,8 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     aiResult = await callChatCompletions(providerConfig, promptMessages, {
       safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}`,
       tools: nativeTools,
+      promptCacheKey: cacheOptions?.promptCacheKey,
+      supportsExplicitCacheControl: cacheOptions?.supportsExplicitCacheControl === true,
     });
   } catch (error: any) {
     const partialContent = getRecoverablePartialAiContent(error);
@@ -7175,6 +7795,12 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
       retrieved_context_modules: retrievedContexts.map((ctx) => ctx.moduleId),
       web_search_used: webSearchResults.length > 0,
       capabilities: selectedCapabilities,
+      selected_agents: selectedAgents,
+      agent_key: primaryAgent,
+      tone_style: preferredToneStyle,
+      channel,
+      cached_prefix_hash: cachedPrefixHash,
+      instagram_media_cards: Array.isArray(instagramMediaCards) ? instagramMediaCards : [],
       attachments: Array.isArray(aiResult.attachments) ? aiResult.attachments : [],
       usage: aiResult.usageMetadata,
       avalai_request_id: aiResult.requestId || null,
@@ -7190,6 +7816,45 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     },
   });
 
+  let proposedAction: any = null;
+  if (prepared.body?.metadata?.internal_agent_step !== true) {
+    const extractedAction = extractProposedActionFromAiText(aiResult.content);
+    if (extractedAction) {
+      try {
+        const approvalRun = await createWaitingApprovalRun({
+          supabaseUrl,
+          serviceRoleKey,
+          orgId: authContext.orgId,
+          userId: authContext.userId,
+          agentKey: primaryAgent,
+          selectedAgents,
+          channel,
+          summaryFa: extractedAction.summaryFa,
+          actionType: extractedAction.actionType,
+          actionPayload: extractedAction.actionPayload,
+          moduleId: extractedAction.moduleId || pageContext.moduleId || null,
+          recordId: extractedAction.recordId || pageContext.recordId || null,
+        });
+        if (approvalRun?.actionLogId) {
+          proposedAction = {
+            id: approvalRun.actionLogId,
+            runId: approvalRun.runId,
+            actionType: extractedAction.actionType,
+            summaryFa: extractedAction.summaryFa,
+            moduleId: extractedAction.moduleId || pageContext.moduleId || null,
+            recordId: extractedAction.recordId || pageContext.recordId || null,
+            callbackToken: approvalRun.callbackToken,
+            payload: extractedAction.actionPayload,
+            status: 'proposed',
+            approvalStatus: 'pending',
+          };
+        }
+      } catch (approvalErr) {
+        console.warn('Waiting approval creation skipped in handleChat', approvalErr);
+      }
+    }
+  }
+
   const ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
     threadId: thread.id,
     messageId: assistantMessage?.id || null,
@@ -7197,12 +7862,17 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     capability,
     provider: aiResult.provider,
     model: aiResult.model,
+    agentKey: primaryAgent,
+    channel,
+    modelCatalog: providerConfig.modelCatalog,
     usageMetadata: aiResult.usageMetadata,
     metadata: {
       source: 'chat',
       context_key: contextKey,
       knowledge_chunk_ids: knowledgeChunks.map((chunk) => chunk.id),
       capabilities: selectedCapabilities,
+      selected_agents: selectedAgents,
+      agent_key: primaryAgent,
       web_search_forced: forceWebSearch,
     },
   });
@@ -7217,6 +7887,13 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     userMessageId: userMessage?.id || null,
     messageId: assistantMessage?.id || null,
     answer: aiResult.content,
+    proposedAction,
+    selectedAgents,
+    primaryAgent,
+    blockedAgents,
+    instagramMediaCards,
+    toneStyle: preferredToneStyle,
+    cachedPrefixHash,
     attachments: Array.isArray(aiResult.attachments) ? aiResult.attachments : [],
     provider: aiResult.provider,
     model: aiResult.model,
@@ -7264,6 +7941,12 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
             provider: prepared.providerConfig.provider,
             model: prepared.providerConfig.model,
             agentId: respondingAgent,
+            selectedAgents: prepared.selectedAgents,
+            primaryAgent: prepared.primaryAgent,
+            blockedAgents: prepared.blockedAgents,
+            instagramMediaCards: prepared.instagramMediaCards,
+            toneStyle: prepared.preferredToneStyle,
+            cachedPrefixHash: prepared.cachedPrefixHash,
           });
 
           // A tool's availability is not evidence that the provider has called it.
@@ -7271,6 +7954,8 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
           const aiResult = await withAiAgentActivity(respondingAgent, () => callChatCompletionsStream(prepared.providerConfig, prepared.promptMessages, {
             safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${prepared.capability}`,
             tools: prepared.nativeTools,
+            promptCacheKey: prepared.cacheOptions?.promptCacheKey,
+            supportsExplicitCacheControl: prepared.cacheOptions?.supportsExplicitCacheControl === true,
             onDelta: (text) => {
               if (text) send('delta', { text });
             },
@@ -7290,6 +7975,12 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
               retrieved_context_modules: prepared.retrievedContexts.map((ctx: any) => ctx.moduleId),
               web_search_used: prepared.webSearchResults.length > 0,
               capabilities: prepared.selectedCapabilities,
+              selected_agents: prepared.selectedAgents,
+              agent_key: prepared.primaryAgent,
+              tone_style: prepared.preferredToneStyle,
+              channel: prepared.channel,
+              cached_prefix_hash: prepared.cachedPrefixHash,
+              instagram_media_cards: Array.isArray(prepared.instagramMediaCards) ? prepared.instagramMediaCards : [],
               attachments: Array.isArray(aiResult.attachments) ? aiResult.attachments : [],
               usage: aiResult.usageMetadata,
               avalai_request_id: aiResult.requestId || null,
@@ -7306,6 +7997,45 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
             },
           });
 
+          let proposedAction: any = null;
+          if (prepared.body?.metadata?.internal_agent_step !== true) {
+            const extractedAction = extractProposedActionFromAiText(aiResult.content);
+            if (extractedAction) {
+              try {
+                const approvalRun = await createWaitingApprovalRun({
+                  supabaseUrl,
+                  serviceRoleKey,
+                  orgId: authContext.orgId,
+                  userId: authContext.userId,
+                  agentKey: prepared.primaryAgent,
+                  selectedAgents: prepared.selectedAgents,
+                  channel: prepared.channel,
+                  summaryFa: extractedAction.summaryFa,
+                  actionType: extractedAction.actionType,
+                  actionPayload: extractedAction.actionPayload,
+                  moduleId: extractedAction.moduleId || prepared.pageContext.moduleId || null,
+                  recordId: extractedAction.recordId || prepared.pageContext.recordId || null,
+                });
+                if (approvalRun?.actionLogId) {
+                  proposedAction = {
+                    id: approvalRun.actionLogId,
+                    runId: approvalRun.runId,
+                    actionType: extractedAction.actionType,
+                    summaryFa: extractedAction.summaryFa,
+                    moduleId: extractedAction.moduleId || prepared.pageContext.moduleId || null,
+                    recordId: extractedAction.recordId || prepared.pageContext.recordId || null,
+                    callbackToken: approvalRun.callbackToken,
+                    payload: extractedAction.actionPayload,
+                    status: 'proposed',
+                    approvalStatus: 'pending',
+                  };
+                }
+              } catch (approvalErr) {
+                console.warn('Waiting approval creation skipped in handleChatStream', approvalErr);
+              }
+            }
+          }
+
           const ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
             threadId: prepared.thread.id,
             messageId: assistantMessage?.id || null,
@@ -7313,12 +8043,17 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
             capability: prepared.capability,
             provider: aiResult.provider,
             model: aiResult.model,
+            agentKey: prepared.primaryAgent,
+            channel: prepared.channel,
+            modelCatalog: prepared.providerConfig.modelCatalog,
             usageMetadata: aiResult.usageMetadata,
             metadata: {
               source: 'chat_stream',
               context_key: prepared.contextKey,
               knowledge_chunk_ids: prepared.knowledgeChunks.map((chunk: any) => chunk.id),
               capabilities: prepared.selectedCapabilities,
+              selected_agents: prepared.selectedAgents,
+              agent_key: prepared.primaryAgent,
               web_search_forced: prepared.forceWebSearch,
             },
           });
@@ -7332,6 +8067,13 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
             userMessageId: prepared.userMessage?.id || null,
             messageId: assistantMessage?.id || null,
             answer: aiResult.content,
+            proposedAction,
+            selectedAgents: prepared.selectedAgents,
+            primaryAgent: prepared.primaryAgent,
+            blockedAgents: prepared.blockedAgents,
+            instagramMediaCards: prepared.instagramMediaCards,
+            toneStyle: prepared.preferredToneStyle,
+            cachedPrefixHash: prepared.cachedPrefixHash,
             incomplete: aiResult.incomplete === true,
             finishReason: aiResult.finishReason || null,
             attachments: Array.isArray(aiResult.attachments) ? aiResult.attachments : [],
@@ -7538,19 +8280,113 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
   const rawContext = normalizeContext(body?.context || {});
   const capability = body?.primaryModelOnly === true ? primaryCapability : 'document_analysis';
   const contextKey = buildContextKey(rawContext);
-  // Give the organization's primary model the first opportunity to understand
+  const channel = String(body?.channel || 'web').trim() || 'web';
+  const freeChatMode = selectedCapabilitySet.has('free_chat');
+  const [preliminaryPlanContext, initialOrgAiSettings] = await Promise.all([
+    loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext),
+    loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext),
+  ]);
+  const grounding = await loadCentralAiGrounding({
+    supabaseUrl,
+    serviceRoleKey,
+    authContext,
+    planContext: preliminaryPlanContext,
+    message: prompt,
+    freeChatMode,
+    includeCalendar: !freeChatMode,
+  });
+  const explicitAgentsInput = body?.agents ?? (body?.agentKey ? [body.agentKey] : (body?.agent_key ? [body.agent_key] : undefined));
+  const normalizedExplicitAgents = normalizeSelectedAgents(explicitAgentsInput);
+  const allowedAgentsForActor = Object.values(grounding.agentStates || {})
+    .filter((s: any) => s.canUse)
+    .map((s: any) => s.agentKey as AgentKey);
+  const heuristic = heuristicSelectAgentsAndCapabilities({
+    message: prompt,
+    explicitAgents: explicitAgentsInput,
+    explicitCapabilities: selectedCapabilities,
+    pageContext: rawContext,
+    ...(normalizedExplicitAgents.length === 0 ? { allowedAgents: allowedAgentsForActor } : {}),
+  });
+  const runnableAgents = freeChatMode
+    ? resolveRunnableAgentsForActor({
+        requestedAgents: normalizedExplicitAgents.length ? normalizedExplicitAgents : (['lead_orchestrator'] as AgentKey[]),
+        grounding,
+      })
+    : resolveRunnableAgentsForActor({
+        requestedAgents: heuristic.agents,
+        grounding,
+      });
+  if (
+    (!freeChatMode && runnableAgents.permittedAgents.length === 0)
+    || (freeChatMode && normalizedExplicitAgents.length > 0 && runnableAgents.permittedAgents.length === 0)
+  ) {
+    return json(403, {
+      success: false,
+      message: runnableAgents.blockedAgents[0]?.reasonFa || 'شما دسترسی استفاده از این ایجنت را ندارید.',
+    });
+  }
+  const selectedAgents: AgentKey[] = runnableAgents.permittedAgents.length
+    ? runnableAgents.permittedAgents
+    : (['lead_orchestrator'] as AgentKey[]);
+  const primaryAgent: AgentKey = selectedAgents[0] || 'lead_orchestrator';
+  const primaryAgentConfig = grounding.agentConfigs.find((c: any) => String(c?.agent_key || '') === primaryAgent) || null;
+  const mergedCapabilities = Array.from(new Set([...selectedCapabilities, ...heuristic.capabilities, 'document_analysis']));
+  const requestedTone = String(body?.toneStyle || body?.tone_style || '').trim();
+  const preferredToneStyle: AgentToneStyle = (['formal', 'friendly_warm', 'concise', 'coaching', 'custom'] as const)
+    .includes(requestedTone as AgentToneStyle)
+    ? (requestedTone as AgentToneStyle)
+    : (grounding.agentStates?.[primaryAgent]?.toneStyle || 'friendly_warm');
+
+  // Give the organization's primary/agent model the first opportunity to understand
   // multimodal input. A dedicated document model is only a fallback.
-  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, primaryCapability, { modelOverride: body?.modelOverride });
-  const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, capability);
-  const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
-  const canUseKnowledge = isAiCapabilityPlanAvailable(planContext, 'document_analysis');
+  const providerSlot = body?.preferFastAgentModel === true ? 'agent_fast' : primaryCapability;
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, providerSlot, {
+    modelOverride: body?.modelOverride,
+    agentConfig: primaryAgentConfig,
+  });
+  const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings || initialOrgAiSettings, capability);
+  for (const selectedCap of selectedCapabilities) {
+    if (AI_CAPABILITY_FEATURE_KEYS[selectedCap]) {
+      await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings || initialOrgAiSettings, selectedCap);
+    }
+  }
+  const pageContext = freeChatMode
+    ? {
+        context: { route: '/ai', mode: 'page', moduleId: null, recordId: null },
+        permitted: false,
+        summary: 'تحلیل فایل در گفتگوی آزاد.',
+        records: [],
+        moduleId: null,
+        recordId: null,
+        relatedContexts: [],
+      }
+    : await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
+  const skillAssembly = freeChatMode
+    ? { skillContractsPrompt: '', domainContextByAgent: {}, instagramMediaCards: [], blockedAgents: [] }
+    : await assembleMultiSkillContext({
+        supabaseUrl,
+        serviceRoleKey,
+        authContext,
+        grounding,
+        userMessage: prompt,
+        selectedAgents,
+        selectedCapabilities: mergedCapabilities,
+        pageContext,
+      });
+  const mergedBlockedAgents = Array.from(new Map(
+    [...(runnableAgents.blockedAgents || []), ...(skillAssembly.blockedAgents || [])]
+      .map((item) => [item.agentKey, item]),
+  ).values());
+  const canUseKnowledge = !freeChatMode && isAiCapabilityPlanAvailable(planContext, 'document_analysis');
   const [knowledgeChunks, companyContext, orgPeopleContext, calendarContext] = await Promise.all([
     canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, prompt, { moduleId: pageContext.moduleId }) : Promise.resolve([]),
-    loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
-    loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, prompt),
-    resolvePersianCalendarContext(prompt),
+    freeChatMode ? Promise.resolve(null) : (grounding.company ? Promise.resolve(grounding.company) : loadCompanyContext(supabaseUrl, serviceRoleKey, authContext)),
+    freeChatMode ? Promise.resolve(null) : loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, prompt),
+    freeChatMode ? Promise.resolve(null) : (grounding.calendarContext ? Promise.resolve(grounding.calendarContext) : resolvePersianCalendarContext(prompt)),
   ]);
-  const retrievedContexts = await fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, prompt, pageContext);
+  const retrievedContexts = freeChatMode
+    ? []
+    : await fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, prompt, pageContext);
 
   const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
     threadId: body?.threadId || null,
@@ -7559,12 +8395,18 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     contextKey,
     provider: providerConfig.provider,
     model: providerConfig.model,
+    agentKey: primaryAgent,
+    selectedAgents,
+    channel,
     forceNew: body?.forceNewThread === true,
+    metadata: { free_chat: freeChatMode, tone_style: preferredToneStyle },
   });
   const previousMessages = await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, thread.id, 30);
   const compressedContext = thread?.metadata?.compressed_context && typeof thread.metadata.compressed_context === 'object'
     ? thread.metadata.compressed_context
     : null;
+  const activeCompactionSummary = String(thread?.compaction_summary || compressedContext?.summary || '').trim() || null;
+  const activeWorkingState = thread?.working_state && typeof thread.working_state === 'object' ? thread.working_state : null;
 
   const userContentForDb = [
     prompt,
@@ -7584,6 +8426,11 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       context_summary: pageContext.summary,
       input_kind: String(body?.inputKind || body?.input_kind || 'file').trim() || 'file',
       internal_agent_step: internalAgentStep,
+      capabilities: mergedCapabilities,
+      selected_agents: selectedAgents,
+      agent_key: primaryAgent,
+      tone_style: preferredToneStyle,
+      channel,
       file: {
         filename,
         mime_type: mimeType,
@@ -7597,7 +8444,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     },
   });
 
-  const promptMessages = buildPromptMessages(
+  const legacyPromptMessages = buildPromptMessages(
     prompt,
     pageContext,
     knowledgeChunks,
@@ -7610,11 +8457,53 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     {
       legalMode: selectedCapabilitySet.has('legal_assistant'),
       deepReasoning: selectedCapabilitySet.has('deep_reasoning'),
-      selectedCapabilities,
+      selectedCapabilities: mergedCapabilities,
       compressedContext,
       calendarContext,
+      freeChatMode,
     },
   );
+  let promptMessages = legacyPromptMessages;
+  let cachedPrefixHash: string | null = null;
+  let cacheOptions: { promptCacheKey?: string; supportsExplicitCacheControl?: boolean } = {};
+  if (!freeChatMode) {
+    const compiled = await compileLayeredAgentPrompt({
+      userMessage: prompt,
+      selectedAgents,
+      selectedCapabilities: mergedCapabilities,
+      skillContractsPrompt: skillAssembly.skillContractsPrompt,
+      grounding,
+      pageContextSummary: pageContext.summary,
+      contextPayload: {
+        current_page: { summary: pageContext.summary, moduleId: pageContext.moduleId, recordId: pageContext.recordId, records: pageContext.records },
+        current_user: buildUserPromptContext(authContext),
+        domain_contexts: skillAssembly.domainContextByAgent,
+        blocked_agents: mergedBlockedAgents,
+        retrieved_permitted_contexts: retrievedContexts,
+        knowledge_chunks: (knowledgeChunks || []).slice(0, 10).map((chunk: any) => ({
+          title: chunk?.metadata?.document_title || null,
+          content: String(chunk?.content || '').slice(0, 900),
+        })),
+      },
+      historyMessages: previousMessages,
+      compactionSummary: activeCompactionSummary,
+      workingState: activeWorkingState,
+      preferredToneStyle,
+      legacySystemPrompt: [
+        String(legacyPromptMessages[0]?.content || '').trim(),
+        'وقتی برای اجرای عملیاتی حساس (مثل `apply_price_adjustment`، `create_instagram_workflow_rule`، `create_instagram_showcase`، `create_process_template` یا `settle_invoice_payment`) اطلاعات تصویر/فایل کامل و آماده تأیید بود، علاوه بر توضیح فارسی، بلوک JSON `{ "proposed_action": { "action_type": "...", "summary_fa": "...", "module_id": "...", "record_id": "...", "payload": {...} } }` را برگردان.',
+      ].filter(Boolean).join('\n\n'),
+    });
+    promptMessages = compiled.messages;
+    cachedPrefixHash = compiled.cachedPrefixHash;
+    cacheOptions = buildAvalaiCacheOptions({
+      orgId: authContext.orgId,
+      agentKey: primaryAgent,
+      prefixHash: cachedPrefixHash,
+      modelCatalog: providerConfig.modelCatalog,
+      modelId: providerConfig.model,
+    });
+  }
   const lastUserIndex = promptMessages.map((item) => item.role).lastIndexOf('user');
   if (lastUserIndex >= 0) {
     promptMessages[lastUserIndex] = {
@@ -7632,6 +8521,8 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
   try {
     aiResult = await callChatCompletions(providerConfig, promptMessages, {
       safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}`,
+      promptCacheKey: cacheOptions?.promptCacheKey,
+      supportsExplicitCacheControl: cacheOptions?.supportsExplicitCacheControl === true,
     });
   } catch (error: any) {
     primaryAnalysisError = String(error?.message || error || '').trim();
@@ -7645,6 +8536,8 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
         );
         aiResult = await callChatCompletions(specializedProviderConfig, promptMessages, {
           safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_document_analysis_fallback`,
+          promptCacheKey: cacheOptions?.promptCacheKey,
+          supportsExplicitCacheControl: false,
         });
         aiResult.analysisFallback = {
           used: true,
@@ -7734,6 +8627,12 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       usage: aiResult.usageMetadata,
       avalai_request_id: aiResult.requestId || null,
       capability,
+      selected_agents: selectedAgents,
+      agent_key: primaryAgent,
+      tone_style: preferredToneStyle,
+      channel,
+      cached_prefix_hash: cachedPrefixHash,
+      instagram_media_cards: Array.isArray(skillAssembly.instagramMediaCards) ? skillAssembly.instagramMediaCards : [],
       file: {
         filename,
         mime_type: mimeType,
@@ -7743,6 +8642,45 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     },
   });
 
+  let proposedAction: any = null;
+  if (!internalAgentStep) {
+    const extractedAction = extractProposedActionFromAiText(aiResult.content);
+    if (extractedAction) {
+      try {
+        const approvalRun = await createWaitingApprovalRun({
+          supabaseUrl,
+          serviceRoleKey,
+          orgId: authContext.orgId,
+          userId: authContext.userId,
+          agentKey: primaryAgent,
+          selectedAgents,
+          channel,
+          summaryFa: extractedAction.summaryFa,
+          actionType: extractedAction.actionType,
+          actionPayload: extractedAction.actionPayload,
+          moduleId: extractedAction.moduleId || pageContext.moduleId || null,
+          recordId: extractedAction.recordId || pageContext.recordId || null,
+        });
+        if (approvalRun?.actionLogId) {
+          proposedAction = {
+            id: approvalRun.actionLogId,
+            runId: approvalRun.runId,
+            actionType: extractedAction.actionType,
+            summaryFa: extractedAction.summaryFa,
+            moduleId: extractedAction.moduleId || pageContext.moduleId || null,
+            recordId: extractedAction.recordId || pageContext.recordId || null,
+            callbackToken: approvalRun.callbackToken,
+            payload: extractedAction.actionPayload,
+            status: 'proposed',
+            approvalStatus: 'pending',
+          };
+        }
+      } catch (approvalErr) {
+        console.warn('Waiting approval creation skipped in handleChatWithFile', approvalErr);
+      }
+    }
+  }
+
   const ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
     threadId: thread.id,
     messageId: assistantMessage?.id || null,
@@ -7750,11 +8688,16 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     capability,
     provider: aiResult.provider,
     model: aiResult.model,
+    agentKey: primaryAgent,
+    channel,
+    modelCatalog: providerConfig.modelCatalog,
     usageMetadata: aiResult.usageMetadata,
     metadata: {
       source: internalAgentStep ? 'internal_task_bundle_file_analysis' : 'chat_with_file',
       context_key: contextKey,
       filename,
+      selected_agents: selectedAgents,
+      agent_key: primaryAgent,
       analysis_fallback: aiResult?.analysisFallback || null,
     },
   });
@@ -7767,6 +8710,10 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     context_type: getContextKind(pageContext.context || {}),
     module_id: pageContext.moduleId || null,
     record_id: pageContext.recordId || null,
+    agent_key: primaryAgent,
+    selected_agents: selectedAgents,
+    channel,
+    ...(cachedPrefixHash ? { cached_prefix_hash: cachedPrefixHash } : {}),
     metadata: {
       ...(thread?.metadata || {}),
       route: pageContext.context?.route || null,
@@ -7776,6 +8723,10 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       context: pageContext.context || null,
       module_id: pageContext.moduleId || null,
       record_id: pageContext.recordId || null,
+      agent_key: primaryAgent,
+      selected_agents: selectedAgents,
+      tone_style: preferredToneStyle,
+      channel,
       last_activity_kind: 'file',
       last_file_name: filename,
       last_message_preview: prompt.slice(0, 300),
@@ -7788,6 +8739,13 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     userMessageId: userMessage?.id || null,
     messageId: assistantMessage?.id || null,
     answer: aiResult.content,
+    proposedAction,
+    selectedAgents,
+    primaryAgent,
+    blockedAgents: mergedBlockedAgents,
+    instagramMediaCards: skillAssembly.instagramMediaCards || [],
+    toneStyle: preferredToneStyle,
+    cachedPrefixHash,
     provider: aiResult.provider,
     model: aiResult.model,
     usage: withCustomerBilling(aiResult.usageMetadata, ledger),
@@ -9233,6 +10191,31 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     }
   }
 
+  const aggregatedSelectedAgents = Array.from(new Set([
+    ...normalizeSelectedAgents(body?.agents),
+    ...collectedResults.flatMap((res: any) => Array.isArray(res?.selectedAgents) ? res.selectedAgents : []),
+  ]));
+  const aggregatedPrimaryAgent = collectedResults.find((res: any) => res?.primaryAgent)?.primaryAgent
+    || aggregatedSelectedAgents[0]
+    || 'lead_orchestrator';
+  const aggregatedBlockedAgents = Array.from(new Map(
+    collectedResults
+      .flatMap((res: any) => Array.isArray(res?.blockedAgents) ? res.blockedAgents : [])
+      .filter((item: any) => item?.agentKey)
+      .map((item: any) => [item.agentKey, item]),
+  ).values());
+  const aggregatedInstagramMediaCards = Array.from(new Map(
+    collectedResults
+      .flatMap((res: any) => Array.isArray(res?.instagramMediaCards) ? res.instagramMediaCards : [])
+      .filter((card: any) => card?.id || card?.permalink)
+      .map((card: any) => [String(card.id || card.permalink), card]),
+  ).values());
+  const aggregatedToneStyle = collectedResults.find((res: any) => res?.toneStyle)?.toneStyle
+    || String(body?.toneStyle || body?.tone_style || '').trim()
+    || 'friendly_warm';
+  const aggregatedCachedPrefixHash = collectedResults.find((res: any) => res?.cachedPrefixHash)?.cachedPrefixHash || null;
+  const bundleChannel = String(body?.channel || 'web').trim() || 'web';
+
   if (workingThreadId) {
     const threadForPatch = await fetchThreadForRead(supabaseUrl, serviceRoleKey, authContext, workingThreadId);
     const taskContext = {
@@ -9243,9 +10226,17 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
       updated_at: new Date().toISOString(),
     };
     await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${workingThreadId}`, org_id: `eq.${authContext.orgId}` }, {
+      agent_key: aggregatedPrimaryAgent,
+      selected_agents: aggregatedSelectedAgents.length ? aggregatedSelectedAgents : ['lead_orchestrator'],
+      channel: bundleChannel,
+      ...(aggregatedCachedPrefixHash ? { cached_prefix_hash: aggregatedCachedPrefixHash } : {}),
       metadata: {
         ...(threadForPatch?.metadata || {}),
         task_bundle_context: taskContext,
+        agent_key: aggregatedPrimaryAgent,
+        selected_agents: aggregatedSelectedAgents.length ? aggregatedSelectedAgents : ['lead_orchestrator'],
+        tone_style: aggregatedToneStyle,
+        channel: bundleChannel,
         last_activity_kind: 'task_bundle',
         last_message_preview: (baseMessage || analysisText || 'باندل هوش مصنوعی').slice(0, 300),
         composer_preferences: buildThreadComposerPreferences(body, threadForPatch),
@@ -9264,6 +10255,12 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     messageId: voiceOutput?.message?.id || collectedResults[collectedResults.length - 1]?.messageId || null,
     answer: finalAnswer,
     proposedAction,
+    selectedAgents: aggregatedSelectedAgents.length ? aggregatedSelectedAgents : ['lead_orchestrator'],
+    primaryAgent: aggregatedPrimaryAgent,
+    blockedAgents: aggregatedBlockedAgents,
+    instagramMediaCards: aggregatedInstagramMediaCards,
+    toneStyle: aggregatedToneStyle,
+    cachedPrefixHash: aggregatedCachedPrefixHash,
     provider,
     model,
     usage,
@@ -12300,8 +13297,11 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
     capability: 'customer_reply_suggestion',
     provider: aiResult.provider,
     model: aiResult.model,
+    agentKey: 'customer_response',
+    channel,
+    modelCatalog: providerConfig.modelCatalog,
     usageMetadata: aiResult.usageMetadata,
-    metadata: { source: actionKind === 'bot_customer_agent_turn' ? 'bot_customer_agent_turn' : 'reply_suggestion', channel, context_key: `reply:${channel}:${contextKey}`, targeted_retrieval: retrievalMetadata },
+    metadata: { source: actionKind === 'bot_customer_agent_turn' ? 'bot_customer_agent_turn' : 'reply_suggestion', channel, agent_key: 'customer_response', context_key: `reply:${channel}:${contextKey}`, targeted_retrieval: retrievalMetadata },
   });
   await patchAiMessageCustomerBilling(supabaseUrl, serviceRoleKey, authContext, assistantMessage, aiResult.usageMetadata, ledger);
 
@@ -12608,6 +13608,10 @@ const handleEmbedDocumentChunks = async (supabaseUrl: string, serviceRoleKey: st
     return json(200, { success: true, processed: 0, failed: 0, message: 'بخشی برای embedding پیدا نشد.' });
   }
   const providerConfig = getCentralProviderConfig();
+  const embeddingRuntime = await resolveEmbeddingRuntime(supabaseUrl, serviceRoleKey, settings);
+  if (!embeddingRuntime?.model) {
+    return json(400, { success: false, message: 'مدل بردارسازی (Embedding) فعال در کاتالوگ مدل‌های هوش مصنوعی پیدا نشد.' });
+  }
   const jobRows = await restInsert(supabaseUrl, serviceRoleKey, 'ai_document_ingestion_jobs', [{
     org_id: authContext.orgId,
     document_id: documentId,
@@ -12623,19 +13627,19 @@ const handleEmbedDocumentChunks = async (supabaseUrl: string, serviceRoleKey: st
     const chunkId = normalizeId(chunk?.id);
     const content = String(chunk?.content || '').trim();
     if (!chunkId || !content) continue;
-    if (String(chunk?.embedding_status || '') === 'ready' && String(chunk?.embedding_model || '') === DEFAULT_EMBEDDING_MODEL) {
+    if (String(chunk?.embedding_status || '') === 'ready' && String(chunk?.embedding_model || '') === embeddingRuntime.model) {
       skipped += 1;
       continue;
     }
     try {
-      const embeddingResult = await callEmbeddings(providerConfig, content.slice(0, 8000), DEFAULT_EMBEDDING_MODEL);
+      const embeddingResult = await callEmbeddings(providerConfig, content.slice(0, 8000), embeddingRuntime.model);
       await restPatch(supabaseUrl, serviceRoleKey, 'document_chunks', {
         id: `eq.${chunkId}`,
         org_id: `eq.${authContext.orgId}`,
       }, {
         embedding: `[${embeddingResult.embedding.join(',')}]`,
-        embedding_model: DEFAULT_EMBEDDING_MODEL,
-        embedding_dimension: 1536,
+        embedding_model: embeddingRuntime.model,
+        embedding_dimension: embeddingRuntime.dimensions,
         embedding_status: 'ready',
         embedding_updated_at: new Date().toISOString(),
         embedding_error: null,
@@ -12643,8 +13647,9 @@ const handleEmbedDocumentChunks = async (supabaseUrl: string, serviceRoleKey: st
       processed += 1;
       await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
         capability: 'embedding',
-        provider: providerConfig.provider,
-        model: DEFAULT_EMBEDDING_MODEL,
+        provider: embeddingRuntime.provider || providerConfig.provider,
+        model: embeddingRuntime.model,
+        modelCatalog: embeddingRuntime.catalogRow,
         requestId: embeddingResult.requestId,
         usageMetadata: embeddingResult.usageMetadata,
         metadata: { source: 'document_embedding', document_id: documentId, chunk_id: chunkId },
@@ -12751,6 +13756,10 @@ const handleRebuildInstructionAiContext = async (supabaseUrl: string, serviceRol
   }
 
   const providerConfig = getCentralProviderConfig();
+  const embeddingRuntime = await resolveEmbeddingRuntime(supabaseUrl, serviceRoleKey, settings);
+  if (!embeddingRuntime?.model) {
+    return json(400, { success: false, message: 'مدل بردارسازی (Embedding) فعال در کاتالوگ مدل‌های هوش مصنوعی پیدا نشد.' });
+  }
   const chunks = splitTextIntoAiChunks(content, 1200).slice(0, 40);
   let processed = 0;
   let failed = 0;
@@ -12784,12 +13793,12 @@ const handleRebuildInstructionAiContext = async (supabaseUrl: string, serviceRol
       },
     };
     try {
-      const embeddingResult = await callEmbeddings(providerConfig, chunkContent.slice(0, 8000), DEFAULT_EMBEDDING_MODEL);
+      const embeddingResult = await callEmbeddings(providerConfig, chunkContent.slice(0, 8000), embeddingRuntime.model);
       insertRows.push({
         ...baseRow,
         embedding: `[${embeddingResult.embedding.join(',')}]`,
-        embedding_model: DEFAULT_EMBEDDING_MODEL,
-        embedding_dimension: 1536,
+        embedding_model: embeddingRuntime.model,
+        embedding_dimension: embeddingRuntime.dimensions,
         embedding_status: 'ready',
         embedding_updated_at: now,
         embedding_error: null,
@@ -12797,8 +13806,9 @@ const handleRebuildInstructionAiContext = async (supabaseUrl: string, serviceRol
       processed += 1;
       await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
         capability: 'embedding',
-        provider: providerConfig.provider,
-        model: DEFAULT_EMBEDDING_MODEL,
+        provider: embeddingRuntime.provider || providerConfig.provider,
+        model: embeddingRuntime.model,
+        modelCatalog: embeddingRuntime.catalogRow,
         requestId: embeddingResult.requestId,
         usageMetadata: embeddingResult.usageMetadata,
         metadata: { source: 'instruction_embedding', instruction_id: instructionId, chunk_index: index },
@@ -12917,6 +13927,10 @@ const handleRebuildJobDescriptionAiContext = async (supabaseUrl: string, service
   }
 
   const providerConfig = getCentralProviderConfig();
+  const embeddingRuntime = await resolveEmbeddingRuntime(supabaseUrl, serviceRoleKey, settings);
+  if (!embeddingRuntime?.model) {
+    return json(400, { success: false, message: 'مدل بردارسازی (Embedding) فعال در کاتالوگ مدل‌های هوش مصنوعی پیدا نشد.' });
+  }
   const chunks = splitTextIntoAiChunks(content, 1200).slice(0, 40);
   let processed = 0;
   let failed = 0;
@@ -12947,12 +13961,12 @@ const handleRebuildJobDescriptionAiContext = async (supabaseUrl: string, service
       },
     };
     try {
-      const embeddingResult = await callEmbeddings(providerConfig, chunkContent.slice(0, 8000), DEFAULT_EMBEDDING_MODEL);
+      const embeddingResult = await callEmbeddings(providerConfig, chunkContent.slice(0, 8000), embeddingRuntime.model);
       insertRows.push({
         ...baseRow,
         embedding: `[${embeddingResult.embedding.join(',')}]`,
-        embedding_model: DEFAULT_EMBEDDING_MODEL,
-        embedding_dimension: 1536,
+        embedding_model: embeddingRuntime.model,
+        embedding_dimension: embeddingRuntime.dimensions,
         embedding_status: 'ready',
         embedding_updated_at: now,
         embedding_error: null,
@@ -12960,8 +13974,9 @@ const handleRebuildJobDescriptionAiContext = async (supabaseUrl: string, service
       processed += 1;
       await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
         capability: 'embedding',
-        provider: providerConfig.provider,
-        model: DEFAULT_EMBEDDING_MODEL,
+        provider: embeddingRuntime.provider || providerConfig.provider,
+        model: embeddingRuntime.model,
+        modelCatalog: embeddingRuntime.catalogRow,
         requestId: embeddingResult.requestId,
         usageMetadata: embeddingResult.usageMetadata,
         metadata: { source: 'job_description_embedding', job_description_id: jobDescriptionId, chunk_index: index },
@@ -13317,7 +14332,7 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
   const subAction = String(body?.sub || '').trim();
 
   if (subAction === 'overview') {
-    const [allUsage, models, providerCredit, orgRows, walletRows, grantRows] = await Promise.all([
+    const [allUsage, models, providerCredit, orgRows, walletRows, grantRows, centralDefaults] = await Promise.all([
       safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_usage_ledger', {
         select: 'id,org_id,capability,model,provider,status,raw_cost_irt,billed_amount_irt,margin_percent,created_at',
         order: 'created_at.desc',
@@ -13342,6 +14357,7 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
         order: 'created_at.desc',
         limit: 3000,
       }),
+      loadSaasAiDefaultModels(supabaseUrl, serviceRoleKey),
     ]);
     const orgNameById = new Map((orgRows || []).map((row: any) => [
       normalizeId(row?.id),
@@ -13413,6 +14429,7 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
     return json(200, {
       success: true,
       models,
+      centralDefaults,
       allUsage: allUsage.slice(0, 200).map((row: any) => ({
         ...row,
         org_name: orgNameById.get(normalizeId(row?.org_id)) || 'سازمان بدون نام',
@@ -13494,10 +14511,14 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
     const requestedDefaults = Array.isArray(row?.metadata?.default_capability_tags)
       ? Array.from(new Set(row.metadata.default_capability_tags.map((tag: any) => String(tag || '').trim()).filter(Boolean)))
       : [];
-    const validDefaultCapabilities = new Set([PRIMARY_MODEL_DEFAULT_KEY, ...Object.keys(AI_CAPABILITY_FEATURE_KEYS)]);
+    const validDefaultCapabilities = new Set([
+      PRIMARY_MODEL_DEFAULT_KEY,
+      ...Object.keys(AI_CAPABILITY_FEATURE_KEYS),
+      ...AI_AGENT_KEYS.map((key) => `agent:${key}`),
+    ]);
     const invalidDefault = requestedDefaults.find((capability) => !validDefaultCapabilities.has(capability));
     if (invalidDefault) return json(400, { success: false, message: `ایجنت پیش‌فرض «${getAiAgentLabel(invalidDefault)}» معتبر نیست.` });
-    const supportsDefault = (capability: string) => capability === PRIMARY_MODEL_DEFAULT_KEY
+    const supportsDefault = (capability: string) => (capability === PRIMARY_MODEL_DEFAULT_KEY || capability.startsWith('agent:'))
       ? capabilityTags.some((tag) => PRIMARY_MODEL_CAPABILITIES.has(tag))
       : capabilityTags.includes(capability) || (CAPABILITY_SELECTION_ALIASES[capability] || []).some((alias) => capabilityTags.includes(alias));
     const unsupportedDefault = requestedDefaults.find((capability) => !supportsDefault(capability));
@@ -13539,6 +14560,20 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
       metadata: nextMetadata,
       updated_at: new Date().toISOString(),
     }], 'id');
+    if (requestedDefaults.length > 0 && row.is_active !== false) {
+      await restUpsert(
+        supabaseUrl,
+        serviceRoleKey,
+        'saas_ai_default_models',
+        requestedDefaults.map((slotKey: string) => ({
+          slot_key: slotKey,
+          model_id: modelId,
+          updated_by: authContext?.userId || null,
+          updated_at: new Date().toISOString(),
+        })),
+        'slot_key',
+      ).catch(() => null);
+    }
     return json(200, { success: true, model: rows[0] || null, replacedDefaults });
   }
 
@@ -13553,27 +14588,280 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
     return json(200, { success: true, modelId, is_active: isActive });
   }
 
+  if (subAction === 'save_central_defaults') {
+    const incoming = body?.defaults && typeof body.defaults === 'object' ? body.defaults : {};
+    const allowedSlots = new Set([
+      PRIMARY_MODEL_DEFAULT_KEY,
+      'agent_fast',
+      'context_compression',
+      'workflow_ai_prompt',
+      'deep_reasoning',
+      'auto_decision',
+      ...AI_AGENT_KEYS.map((key) => `agent:${key}`),
+    ]);
+    const activeModels = await listActiveAiModels(supabaseUrl, serviceRoleKey);
+    const activeIds = new Set(activeModels.map((m: any) => String(m?.id || '').trim()).filter(Boolean));
+    const nowIso = new Date().toISOString();
+    const rowsToUpsert: Array<Record<string, any>> = [];
+    for (const [rawSlot, rawModel] of Object.entries(incoming)) {
+      const slotKey = String(rawSlot || '').trim();
+      if (!allowedSlots.has(slotKey)) continue;
+      const modelId = String(rawModel || '').trim() || null;
+      if (modelId && !activeIds.has(modelId)) {
+        return json(400, { success: false, message: `مدل انتخاب‌شده (${modelId}) در فهرست مدل‌های فعال وجود ندارد.` });
+      }
+      rowsToUpsert.push({
+        slot_key: slotKey,
+        model_id: modelId,
+        updated_by: authContext?.userId || null,
+        updated_at: nowIso,
+      });
+    }
+    if (rowsToUpsert.length > 0) {
+      await restUpsert(supabaseUrl, serviceRoleKey, 'saas_ai_default_models', rowsToUpsert, 'slot_key');
+    }
+    const centralDefaults = await loadSaasAiDefaultModels(supabaseUrl, serviceRoleKey);
+    return json(200, { success: true, centralDefaults, message: 'پیش‌فرض‌های مرکزی مدل ایجنت‌ها و رله با موفقیت ذخیره شد.' });
+  }
+
+  if (subAction === 'apply_recommended_defaults') {
+    const activeModels = await listActiveAiModels(supabaseUrl, serviceRoleKey);
+    if (!activeModels.length) {
+      return json(400, { success: false, message: 'هیچ مدل فعالی در کاتالوگ پیدا نشد.' });
+    }
+    const scoreCatalogModel = (m: any, profile: 'orchestrator' | 'balanced_fa' | 'economy_agent' | 'relay') => {
+      const id = String(m?.id || '').toLowerCase();
+      const tier = String(m?.metadata?.tier || '').toLowerCase();
+      const inCost = Number(m?.input_usd_per_1m ?? 0);
+      const outCost = Number(m?.output_usd_per_1m ?? 0);
+      const totalCost = Number.isFinite(inCost + outCost) ? inCost + outCost : 10;
+      let score = 0;
+      if (profile === 'relay') {
+        if (Array.isArray(m?.capability_tags) && m.capability_tags.includes('agent_fast')) score += 20;
+        if (tier === 'fast' || tier === 'economy') score += 12;
+        if (/luna|flash|lightning/.test(id)) score += 8;
+        score -= totalCost * 3;
+      } else if (profile === 'orchestrator') {
+        if (Array.isArray(m?.capability_tags) && m.capability_tags.includes('deep_reasoning')) score += 10;
+        if (tier === 'balanced') score += 10;
+        if (/sonnet-5-5|6\.1-sol|qwen3\.8-max/.test(id)) score += 14;
+        if (tier === 'flagship' || totalCost > 25) score -= 8;
+      } else if (profile === 'balanced_fa') {
+        if (tier === 'balanced') score += 10;
+        if (tier === 'economy') score += 6;
+        if (/qwen3\.8-max|deepseek-v4\.1-flash|nemotron-3-ultra/.test(id)) score += 12;
+        score -= totalCost * 0.5;
+      } else {
+        if (tier === 'economy' || tier === 'fast') score += 14;
+        if (/deepseek-v4\.1-flash|nemotron-3-ultra|glm-5\.3-flash/.test(id)) score += 10;
+        score -= totalCost * 1.5;
+      }
+      return score;
+    };
+    const pickBest = (slot: string, profile: 'orchestrator' | 'balanced_fa' | 'economy_agent' | 'relay') => {
+      const candidates = activeModels.filter((m: any) => modelSupportsSlot(m, slot));
+      const pool = candidates.length ? candidates : activeModels;
+      return [...pool].sort((a, b) => scoreCatalogModel(b, profile) - scoreCatalogModel(a, profile))[0]?.id || null;
+    };
+    const nowIso = new Date().toISOString();
+    const recommendedPairs: Array<[string, string | null, string]> = [
+      [PRIMARY_MODEL_DEFAULT_KEY, pickBest('primary', 'balanced_fa'), 'مدل اصلی متعادل و اقتصادی برای کارهای روزمره'],
+      ['agent_fast', pickBest('agent_fast', 'relay'), 'مدل سریع و بسیار کم‌هزینه برای رله و بررسی‌های کوتاه'],
+      ['context_compression', pickBest('context_compression', 'economy_agent'), 'مدل اقتصادی برای فشرده‌سازی زمینه گفتگو'],
+      ['agent:lead_orchestrator', pickBest('deep_reasoning', 'orchestrator'), 'مدل دقیق و متعادل برای هماهنگی راهبر'],
+      ['agent:project_process', pickBest('deep_reasoning', 'orchestrator'), 'مدل دقیق برای طراحی ساختار فرآیند و پروژه'],
+      ['agent:sales_leads', pickBest('primary', 'balanced_fa'), 'مدل متعادل و مسلط به فروش و فاکتور'],
+      ['agent:purchase_supply', pickBest('primary', 'balanced_fa'), 'مدل متعادل برای تامین و خرید'],
+      ['agent:hr_manager', pickBest('primary', 'economy_agent'), 'مدل اقتصادی و باکیفیت برای منابع انسانی'],
+      ['agent:instagrammer', pickBest('primary', 'economy_agent'), 'مدل سریع و اقتصادی برای سناریوهای اینستاگرام'],
+      ['agent:customer_response', pickBest('primary', 'economy_agent'), 'مدل کم‌هزینه و سریع برای پاسخگویی مشتریان'],
+      ['agent:reservation', pickBest('primary', 'economy_agent'), 'مدل سریع و به‌صرفه برای رزرواسیون'],
+      ['agent:system_guide', pickBest('primary', 'economy_agent'), 'مدل اقتصادی برای آموزش کار با سامانه'],
+    ];
+    const rowsToUpsert = recommendedPairs
+      .filter(([, modelId]) => Boolean(modelId))
+      .map(([slot_key, model_id, notes_fa]) => ({
+        slot_key,
+        model_id,
+        notes_fa,
+        updated_by: authContext?.userId || null,
+        updated_at: nowIso,
+      }));
+    if (rowsToUpsert.length > 0) {
+      await restUpsert(supabaseUrl, serviceRoleKey, 'saas_ai_default_models', rowsToUpsert, 'slot_key');
+    }
+    const centralDefaults = await loadSaasAiDefaultModels(supabaseUrl, serviceRoleKey);
+    return json(200, { success: true, centralDefaults, message: 'ترکیب پیشنهادی اقتصادی و موثر روی همه ایجنت‌ها و رله تنظیم شد.' });
+  }
+
   return json(400, { success: false, message: 'عملیات SaaS AI پشتیبانی نمی‌شود.' });
 };
 
-const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
-  const actionLogId = normalizeId(body?.actionLogId);
-  if (!isUuid(actionLogId)) return json(400, { success: false, message: 'شناسه اقدام معتبر نیست.' });
+const sha256Hex = async (value: string): Promise<string> => {
+  const encoded = new TextEncoder().encode(String(value || ''));
+  const digest = await crypto.subtle.digest('SHA-256', encoded);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+};
 
-  const rows = await restSelect(supabaseUrl, serviceRoleKey, 'ai_action_logs', {
-    id: `eq.${actionLogId}`,
-    org_id: `eq.${authContext.orgId}`,
-    created_by: `eq.${authContext.userId}`,
-    select: '*',
-    limit: 1,
+const syncPricingTagsAndChangelogs = async ({
+  supabaseUrl,
+  serviceRoleKey,
+  orgId,
+  userId,
+  moduleId,
+  table,
+  recordsById,
+  addTagTitles,
+  removeTagTitles,
+}: {
+  supabaseUrl: string;
+  serviceRoleKey: string;
+  orgId: string;
+  userId: string;
+  moduleId: string;
+  table: string;
+  recordsById: Map<string, any>;
+  addTagTitles: string[];
+  removeTagTitles: string[];
+}) => {
+  const cleanAdd = Array.from(new Set((addTagTitles || []).map((t) => String(t || '').trim()).filter(Boolean)));
+  const cleanRemove = Array.from(new Set((removeTagTitles || []).map((t) => String(t || '').trim()).filter(Boolean)));
+  if (!cleanAdd.length && !cleanRemove.length) return;
+  const recordIds = Array.from(recordsById.keys()).filter((id) => isUuid(id));
+  if (!recordIds.length) return;
+
+  const existingTags = await safeRestSelect(supabaseUrl, serviceRoleKey, 'tags', {
+    org_id: `eq.${orgId}`,
+    select: 'id,title,color',
+    limit: 500,
   });
-  const action = rows[0] || null;
-  if (!action) return json(404, { success: false, message: 'اقدام پیشنهادی پیدا نشد.' });
-  if (String(action.status) !== 'proposed') {
-    return json(409, { success: false, message: 'این اقدام قبلا پردازش شده است.', status: action.status });
+  const tagByTitle = new Map<string, any>(
+    (existingTags || []).map((t: any) => [String(t?.title || '').trim(), t]),
+  );
+
+  const resolvedAddTags: Array<{ id: string; title: string; color: string }> = [];
+  for (const title of cleanAdd) {
+    let found = tagByTitle.get(title);
+    if (!found) {
+      const inserted = await restInsert(supabaseUrl, serviceRoleKey, 'tags', [{
+        org_id: orgId,
+        title,
+        color: '#6366f1',
+        created_by: userId || null,
+      }]).catch(() => []);
+      found = inserted[0] || null;
+      if (found) tagByTitle.set(title, found);
+    }
+    if (found?.id) {
+      resolvedAddTags.push({
+        id: String(found.id),
+        title: String(found.title || title),
+        color: String(found.color || '#6366f1'),
+      });
+    }
   }
-  if (['create_record_from_prompt', 'update_record_from_prompt'].includes(String(action.action_type))) {
-    const isUpdate = String(action.action_type) === 'update_record_from_prompt';
+
+  const removeTagObjs = cleanRemove
+    .map((title) => tagByTitle.get(title))
+    .filter((t: any) => Boolean(t?.id));
+  const removeIds = new Set(removeTagObjs.map((t: any) => String(t.id)));
+  const removeTitlesLower = new Set(cleanRemove.map((t) => t.toLowerCase()));
+
+  for (const recId of recordIds) {
+    const row = recordsById.get(recId);
+    if (resolvedAddTags.length) {
+      await restUpsert(
+        supabaseUrl,
+        serviceRoleKey,
+        'record_tags',
+        resolvedAddTags.map((tag) => ({
+          org_id: orgId,
+          module_id: moduleId,
+          record_id: recId,
+          tag_id: tag.id,
+          created_by: userId || null,
+        })),
+        'module_id,record_id,tag_id',
+      ).catch(() => []);
+    }
+    for (const rmId of removeIds) {
+      await restDelete(supabaseUrl, serviceRoleKey, 'record_tags', {
+        org_id: `eq.${orgId}`,
+        module_id: `eq.${moduleId}`,
+        record_id: `eq.${recId}`,
+        tag_id: `eq.${rmId}`,
+      }).catch(() => null);
+    }
+
+    if (row && Object.prototype.hasOwnProperty.call(row, 'tags')) {
+      const currentTags = Array.isArray(row.tags) ? row.tags : [];
+      const filtered = currentTags.filter((item: any) => {
+        const itemId = String(item?.id || '').trim();
+        const itemTitle = String(item?.title || item || '').trim().toLowerCase();
+        return !removeIds.has(itemId) && !removeTitlesLower.has(itemTitle);
+      });
+      const existingTagIds = new Set(filtered.map((item: any) => String(item?.id || item?.title || '').trim()));
+      const mergedTags = [
+        ...filtered,
+        ...resolvedAddTags.filter((tag) => !existingTagIds.has(tag.id) && !existingTagIds.has(tag.title)),
+      ];
+      await restPatch(supabaseUrl, serviceRoleKey, table, {
+        id: `eq.${recId}`,
+        org_id: `eq.${orgId}`,
+      }, {
+        tags: mergedTags,
+        updated_by: userId || null,
+        updated_at: new Date().toISOString(),
+      }).catch(() => []);
+
+      await restInsert(supabaseUrl, serviceRoleKey, 'changelogs', [{
+        org_id: orgId,
+        module_id: moduleId,
+        record_id: recId,
+        action: 'update',
+        field_name: 'tags',
+        field_label: 'برچسب‌ها',
+        old_value: currentTags.map((t: any) => t?.title || t).filter(Boolean).join('، ') || '-',
+        new_value: mergedTags.map((t: any) => t?.title || t).filter(Boolean).join('، ') || '-',
+        user_id: userId || null,
+        record_title: buildAiRecordTitle(row, moduleId),
+        metadata: { source: 'ai_price_adjustment' },
+      }]).catch(() => []);
+    }
+  }
+};
+
+const executeProposedActionLog = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  action: any,
+  body: any = {},
+  callerAuthHeader = '',
+): Promise<{ status: number; payload: Record<string, any> }> => {
+  const actionLogId = String(action?.id || '');
+  const actionType = String(action?.action_type || '').trim();
+  const centralProvider = getCentralProviderConfig().provider;
+  const markRunCompleted = async (resultSummary: Record<string, any>, failed = false) => {
+    const runId = normalizeId(action?.proposed_payload?.agent_run_id || action?.result_payload?.agent_run_id);
+    if (runId && isUuid(runId)) {
+      await restPatch(supabaseUrl, serviceRoleKey, 'ai_agent_runs', {
+        id: `eq.${runId}`,
+        org_id: `eq.${authContext.orgId}`,
+      }, {
+        status: failed ? 'failed' : 'completed',
+        updated_at: new Date().toISOString(),
+        completed_at: failed ? null : new Date().toISOString(),
+        source_metadata: {
+          ...(action?.proposed_payload || {}),
+          execution_result: resultSummary,
+        },
+      }).catch(() => []);
+    }
+  };
+
+  if (['create_record_from_prompt', 'update_record_from_prompt'].includes(actionType)) {
+    const isUpdate = actionType === 'update_record_from_prompt';
     const mutationVerb = isUpdate ? 'ویرایش' : 'ساخت';
     const proposed = action.proposed_payload || {};
     const targetModuleId = String(proposed.target_module_id || '').trim();
@@ -13582,7 +14870,7 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
         status: 'failed',
         result_payload: { error: 'invalid_target_module' },
       });
-      return json(400, { success: false, message: `ماژول مقصد برای ${mutationVerb} رکورد معتبر نیست.` });
+      return { status: 400, payload: { success: false, message: `ماژول مقصد برای ${mutationVerb} رکورد معتبر نیست.` } };
     }
     const targetPerm = getModulePermission(authContext.permissions, targetModuleId);
     const hasMutationAccess = isUpdate
@@ -13593,16 +14881,18 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
         status: 'failed',
         result_payload: { error: `${isUpdate ? 'update' : 'create'}_access_denied` },
       });
-      return json(403, { success: false, message: `شما دسترسی ${mutationVerb} رکورد در این ماژول را ندارید.` });
+      return { status: 403, payload: { success: false, message: `شما دسترسی ${mutationVerb} رکورد در این ماژول را ندارید.` } };
     }
     const schema = proposed.record_creation_schema && typeof proposed.record_creation_schema === 'object'
       ? proposed.record_creation_schema
       : { fields: [] };
     const fields = Array.isArray(schema?.fields) ? schema.fields : [];
-    if (fields.length === 0) return json(400, { success: false, message: `فیلدهای مجاز برای ${mutationVerb} رکورد مشخص نیست.` });
+    if (fields.length === 0) {
+      return { status: 400, payload: { success: false, message: `فیلدهای مجاز برای ${mutationVerb} رکورد مشخص نیست.` } };
+    }
     const targetTable = getModuleTable(targetModuleId);
     if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(targetTable)) {
-      return json(400, { success: false, message: `جدول مقصد برای ${mutationVerb} رکورد معتبر نیست.` });
+      return { status: 400, payload: { success: false, message: `جدول مقصد برای ${mutationVerb} رکورد معتبر نیست.` } };
     }
     const moduleId = normalizeId(proposed.module_id || action.module_id);
     const recordId = normalizeId(proposed.record_id || action.record_id);
@@ -13618,7 +14908,7 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
           status: 'failed',
           result_payload: { error: 'access_denied_on_confirm' },
         });
-        return json(403, { success: false, message: 'دسترسی شما به رکورد مرتبط برای ساخت رکورد تایید نشد.' });
+        return { status: 403, payload: { success: false, message: 'دسترسی شما به رکورد مرتبط برای ساخت رکورد تایید نشد.' } };
       }
     }
     const overriddenRecords = Array.isArray(body?.proposedRecords) ? body.proposedRecords : null;
@@ -13626,7 +14916,7 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
       ? proposed.records.slice(0, 20)
       : [{ record_id: proposed.record_id || null, fields: proposed.payload || {} }];
     if (overriddenRecords && overriddenRecords.length > storedRecords.length) {
-      return json(400, { success: false, message: 'تعداد رکوردهای تاییدشده نمی‌تواند بیشتر از پیشنهاد اولیه باشد.' });
+      return { status: 400, payload: { success: false, message: 'تعداد رکوردهای تاییدشده نمی‌تواند بیشتر از پیشنهاد اولیه باشد.' } };
     }
     const rawRecords = (overriddenRecords?.length ? overriddenRecords : Array.isArray(proposed.records) && proposed.records.length
       ? proposed.records
@@ -13636,7 +14926,7 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
       const storedRecordIds = new Set(storedRecords.map((record: any) => String(record?.record_id || '').trim()).filter(Boolean));
       const hasUnexpectedRecord = overriddenRecords.some((record: any) => !storedRecordIds.has(String(record?.record_id || '').trim()));
       if (hasUnexpectedRecord) {
-        return json(400, { success: false, message: 'رکورد مقصد ویرایش با پیشنهاد اولیه مطابقت ندارد.' });
+        return { status: 400, payload: { success: false, message: 'رکورد مقصد ویرایش با پیشنهاد اولیه مطابقت ندارد.' } };
       }
     }
     const mutationDrafts = rawRecords
@@ -13646,7 +14936,9 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
         tables: sanitizeAiRecordTables({ tables: draft?.tables || {} }, schema),
       }))
       .filter((draft: any) => Object.keys(draft.fields).length > 0 || Object.keys(draft.tables).length > 0);
-    if (mutationDrafts.length === 0) return json(400, { success: false, message: `اطلاعات کافی برای ${mutationVerb} رکورد وجود ندارد.` });
+    if (mutationDrafts.length === 0) {
+      return { status: 400, payload: { success: false, message: `اطلاعات کافی برای ${mutationVerb} رکورد وجود ندارد.` } };
+    }
 
     const resolvedMutationDrafts = await resolveAiMutationRelations(supabaseUrl, serviceRoleKey, authContext.orgId, mutationDrafts, schema);
     mutationDrafts.splice(0, mutationDrafts.length, ...resolvedMutationDrafts);
@@ -13656,7 +14948,7 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
     if (isUpdate) {
       const updateIds = Array.from(new Set(mutationDrafts.map((draft: any) => draft.record_id).filter(Boolean)));
       if (updateIds.length !== mutationDrafts.length) {
-        return json(400, { success: false, message: 'رکورد مقصد برای یکی از ویرایش‌ها مشخص نیست.' });
+        return { status: 400, payload: { success: false, message: 'رکورد مقصد برای یکی از ویرایش‌ها مشخص نیست.' } };
       }
       const currentRows = await restSelect(supabaseUrl, serviceRoleKey, targetTable, {
         org_id: `eq.${authContext.orgId}`,
@@ -13675,7 +14967,7 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
           status: 'failed',
           result_payload: { error: 'update_access_denied_on_confirm' },
         });
-        return json(403, { success: false, message: 'دسترسی ویرایش همه رکوردهای پیشنهادی تایید نشد.' });
+        return { status: 403, payload: { success: false, message: 'دسترسی ویرایش همه رکوردهای پیشنهادی تایید نشد.' } };
       }
       for (const draft of mutationDrafts) {
         const patchedRows = await restPatch(supabaseUrl, serviceRoleKey, targetTable, {
@@ -13716,30 +15008,33 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
     const mutationSucceeded = mutationRecords.length === mutationDrafts.length && mutationRecords.length > 0;
     await restPatch(supabaseUrl, serviceRoleKey, 'ai_action_logs', { id: `eq.${actionLogId}` }, {
       status: mutationSucceeded ? 'executed' : 'failed',
+      approval_status: mutationSucceeded ? 'approved' : action.approval_status,
       confirmed_by: authContext.userId,
       executed_at: new Date().toISOString(),
       result_payload: { created_records: createdRecords, updated_records: updatedRecords },
       result: { created_records: createdRecords, updated_records: updatedRecords },
     });
+    await markRunCompleted({ createdRecords, updatedRecords }, !mutationSucceeded);
     if (!mutationSucceeded) {
-      return json(422, {
-        success: false,
-        executed: false,
-        message: `${mutationVerb} رکورد تایید شد اما نتیجه ثبت کامل دریافت نشد. هیچ موفقیتی اعلام نشد؛ لطفاً نتیجه را بررسی و دوباره تلاش کنید.`,
-        actionLogId,
-        createdRecords,
-        updatedRecords,
-      });
+      return {
+        status: 422,
+        payload: {
+          success: false,
+          executed: false,
+          message: `${mutationVerb} رکورد تایید شد اما نتیجه ثبت کامل دریافت نشد. هیچ موفقیتی اعلام نشد؛ لطفاً نتیجه را بررسی و دوباره تلاش کنید.`,
+          actionLogId,
+          createdRecords,
+          updatedRecords,
+        },
+      };
     }
     if (action.thread_id) {
       await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
         thread_id: action.thread_id,
         role: 'assistant',
-        content: mutationSucceeded
-          ? `${(isUpdate ? updatedRecords : createdRecords).length.toLocaleString('fa-IR')} ${moduleLabel} تایید و ${isUpdate ? 'ویرایش' : 'ساخته'} شد.`
-          : `اطلاعات کافی برای ${mutationVerb} رکورد پیدا نشد.`,
-        provider: getEnvProviderConfig().provider,
-        model: getEnvProviderConfig().model,
+        content: `${(isUpdate ? updatedRecords : createdRecords).length.toLocaleString('fa-IR')} ${moduleLabel} تایید و ${isUpdate ? 'ویرایش' : 'ساخته'} شد.`,
+        provider: centralProvider,
+        model: proposed?.model || '',
         metadata: {
           source: `confirm_${isUpdate ? 'update' : 'create'}_record`,
           action_log_id: actionLogId,
@@ -13767,10 +15062,10 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
         },
       }).catch(() => []);
     }
-    return json(200, { success: true, executed: true, actionLogId, threadId: action.thread_id || null, createdRecords, updatedRecords });
+    return { status: 200, payload: { success: true, executed: true, actionLogId, threadId: action.thread_id || null, createdRecords, updatedRecords } };
   }
 
-  if (String(action.action_type) === 'process_operation_from_prompt') {
+  if (actionType === 'process_operation_from_prompt') {
     const proposed = action.proposed_payload || {};
     const moduleId = normalizeId(proposed.module_id || action.module_id);
     const recordId = normalizeId(proposed.record_id || action.record_id);
@@ -13785,10 +15080,10 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
         status: 'failed',
         result_payload: { error: 'access_denied_on_confirm' },
       });
-      return json(403, { success: false, message: 'دسترسی شما به رکورد مقصد برای اجرای اقدام فرآیندی تایید نشد.' });
+      return { status: 403, payload: { success: false, message: 'دسترسی شما به رکورد مقصد برای اجرای اقدام فرآیندی تایید نشد.' } };
     }
     const operations = Array.isArray(proposed.operations) ? proposed.operations : [];
-    if (operations.length === 0) return json(400, { success: false, message: 'اقدام فرآیندی قابل اجرا پیدا نشد.' });
+    if (operations.length === 0) return { status: 400, payload: { success: false, message: 'اقدام فرآیندی قابل اجرا پیدا نشد.' } };
     const requestedIndexes = Array.isArray(body?.selectedOperationIndexes)
       ? body.selectedOperationIndexes
       : operations.map((_operation: any, index: number) => index);
@@ -13798,7 +15093,7 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
         .filter((value: number) => Number.isInteger(value) && value >= 0 && value < operations.length),
     ));
     if (selectedIndexes.length === 0) {
-      return json(400, { success: false, message: 'حداقل یک اقدام فرآیندی را برای اجرا انتخاب کنید.' });
+      return { status: 400, payload: { success: false, message: 'حداقل یک اقدام فرآیندی را برای اجرا انتخاب کنید.' } };
     }
     const [processContext, orgPeopleContext] = await Promise.all([
       loadAiProcessContext(supabaseUrl, serviceRoleKey, authContext, pageContext),
@@ -13810,18 +15105,20 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
     }
     await restPatch(supabaseUrl, serviceRoleKey, 'ai_action_logs', { id: `eq.${actionLogId}` }, {
       status: 'executed',
+      approval_status: 'approved',
       confirmed_by: authContext.userId,
       executed_at: new Date().toISOString(),
       result_payload: { operations: executed },
       result: { operations: executed },
     });
+    await markRunCompleted({ operations: executed });
     if (action.thread_id) {
       await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
         thread_id: action.thread_id,
         role: 'assistant',
         content: 'اقدام‌های فرآیندی تایید و اجرا شد.',
-        provider: getEnvProviderConfig().provider,
-        model: getEnvProviderConfig().model,
+        provider: centralProvider,
+        model: proposed?.model || '',
         metadata: {
           source: 'confirm_process_operation',
           action_log_id: actionLogId,
@@ -13829,11 +15126,577 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
         },
       }).catch(() => null);
     }
-    return json(200, { success: true, executed: true, actionLogId, operations: executed });
+    return { status: 200, payload: { success: true, executed: true, actionLogId, operations: executed } };
   }
 
-  if (String(action.action_type) !== 'send_note') {
-    return json(400, { success: false, message: 'این نوع اقدام در v1 پشتیبانی نمی‌شود.' });
+  if (actionType === 'apply_price_adjustment') {
+    const proposed = action.proposed_payload || {};
+    const payload = proposed?.payload && typeof proposed.payload === 'object' ? proposed.payload : proposed;
+    const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+    const requestedScopes: string[] = Array.isArray(payload?.scopes) && payload.scopes.length
+      ? payload.scopes.map((s: any) => String(s || '').trim()).filter(Boolean)
+      : ['products'];
+
+    const permChecks = {
+      products: canViewModule(getModulePermission(authContext.permissions, 'products'))
+        && getModulePermission(authContext.permissions, 'products')?.edit !== false
+        && isPlanModuleEnabled(planContext, 'products'),
+      price_lists: canViewModule(getModulePermission(authContext.permissions, 'price_lists'))
+        && getModulePermission(authContext.permissions, 'price_lists')?.edit !== false
+        && isPlanModuleEnabled(planContext, 'price_lists'),
+      product_bundles: canViewModule(getModulePermission(authContext.permissions, 'product_bundles'))
+        && getModulePermission(authContext.permissions, 'product_bundles')?.edit !== false
+        && isPlanModuleEnabled(planContext, 'product_bundles'),
+      proforma_invoices: canViewModule(getModulePermission(authContext.permissions, 'invoices'))
+        && getModulePermission(authContext.permissions, 'invoices')?.edit !== false
+        && isPlanModuleEnabled(planContext, 'invoices'),
+    };
+
+    const allowedScopes = requestedScopes.filter((scope: any) => permChecks[scope as keyof typeof permChecks]) as Array<'products' | 'price_lists' | 'product_bundles' | 'proforma_invoices'>;
+    if (!allowedScopes.length) {
+      return { status: 403, payload: { success: false, message: 'شما یا پلن سازمان دسترسی ویرایش در هیچ‌یک از بخش‌های انتخاب‌شده برای تغییر قیمت ندارید.' } };
+    }
+
+    const rawTargets = Array.isArray(payload?.targets) ? payload.targets : [];
+    const normalizedTargets = rawTargets
+      .map((t: any) => ({
+        productId: String(t?.productId || t?.product_id || '').trim(),
+        mode: (['percent_increase', 'percent_decrease', 'fixed_delta', 'set_price'].includes(String(t?.mode || '').trim())
+          ? String(t.mode).trim()
+          : 'percent_increase') as any,
+        value: Number(t?.value ?? 0),
+        roundingStep: Number(t?.roundingStep ?? t?.rounding_step ?? 1) || 1,
+        alsoUpdateBuyPrice: Boolean(t?.alsoUpdateBuyPrice ?? t?.also_update_buy_price),
+      }))
+      .filter((t: any) => isUuid(t.productId) && Number.isFinite(t.value));
+
+    if (!normalizedTargets.length) {
+      return { status: 400, payload: { success: false, message: 'هیچ کالای معتبری برای تنظیم قیمت مشخص نشده است.' } };
+    }
+
+    const targetIds = normalizedTargets.map((t: any) => t.productId);
+    const [products, priceLists, productBundles, proformaInvoices] = await Promise.all([
+      safeRestSelect(supabaseUrl, serviceRoleKey, 'products', {
+        org_id: `eq.${authContext.orgId}`,
+        id: `in.(${targetIds.join(',')})`,
+        select: 'id,name,system_code,sell_price,buy_price,tags',
+        limit: 200,
+      }),
+      allowedScopes.includes('price_lists')
+        ? safeRestSelect(supabaseUrl, serviceRoleKey, 'price_lists', {
+            org_id: `eq.${authContext.orgId}`,
+            ...(Array.isArray(payload?.price_list_ids) && payload.price_list_ids.length
+              ? { id: `in.(${payload.price_list_ids.filter(isUuid).join(',')})` }
+              : {}),
+            select: 'id,name,items,tags',
+            limit: 60,
+          })
+        : Promise.resolve([]),
+      allowedScopes.includes('product_bundles')
+        ? safeRestSelect(supabaseUrl, serviceRoleKey, 'product_bundles', {
+            org_id: `eq.${authContext.orgId}`,
+            select: 'id,name,bundle_number,products,tags',
+            limit: 120,
+          })
+        : Promise.resolve([]),
+      allowedScopes.includes('proforma_invoices')
+        ? safeRestSelect(supabaseUrl, serviceRoleKey, 'invoices', {
+            org_id: `eq.${authContext.orgId}`,
+            status: 'eq.proforma',
+            ...(Array.isArray(payload?.proforma_invoice_ids) && payload.proforma_invoice_ids.length
+              ? { id: `in.(${payload.proforma_invoice_ids.filter(isUuid).join(',')})` }
+              : {}),
+            select: 'id,name,system_code,status,global_discount_type,global_discount_value,total_invoice_amount,total_received_amount,remaining_balance,invoiceItems,tags',
+            limit: 120,
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const resultPlan = applyPriceAdjustment({
+      products,
+      priceLists,
+      productBundles,
+      proformaInvoices,
+      targets: normalizedTargets,
+      scopes: allowedScopes,
+      priceListIds: Array.isArray(payload?.price_list_ids) ? payload.price_list_ids : undefined,
+      updatePriceListProfitPercentage: payload?.update_price_list_profit_percentage !== false,
+      bundleDiscountMode: (['keep_ratio', 'keep_amount', 'clear_discount'].includes(String(payload?.bundle_discount_mode || ''))
+        ? String(payload.bundle_discount_mode)
+        : 'keep_ratio') as any,
+      proformaInvoiceIds: Array.isArray(payload?.proforma_invoice_ids) && payload.proforma_invoice_ids.length
+        ? payload.proforma_invoice_ids
+        : null,
+    });
+
+    const addTagTitles = Array.isArray(payload?.add_tags) ? payload.add_tags : [];
+    const removeTagTitles = Array.isArray(payload?.remove_tags) ? payload.remove_tags : [];
+    const nowIso = new Date().toISOString();
+
+    for (const upd of resultPlan.productUpdates) {
+      await restPatch(supabaseUrl, serviceRoleKey, 'products', { id: `eq.${upd.id}`, org_id: `eq.${authContext.orgId}` }, {
+        ...upd.patch,
+        updated_by: authContext.userId,
+        updated_at: nowIso,
+      });
+      await restInsert(supabaseUrl, serviceRoleKey, 'changelogs', [{
+        org_id: authContext.orgId,
+        module_id: 'products',
+        record_id: upd.id,
+        action: 'update',
+        field_name: 'sell_price',
+        field_label: 'قیمت فروش',
+        old_value: String(upd.oldSellPrice),
+        new_value: String(upd.newSellPrice),
+        user_id: authContext.userId,
+        record_title: upd.name,
+        metadata: { source: 'ai_price_adjustment' },
+      }]).catch(() => []);
+    }
+    if (resultPlan.productUpdates.length) {
+      await syncPricingTagsAndChangelogs({
+        supabaseUrl,
+        serviceRoleKey,
+        orgId: authContext.orgId,
+        userId: authContext.userId,
+        moduleId: 'products',
+        table: 'products',
+        recordsById: new Map(products.filter((p: any) => resultPlan.productUpdates.some((u) => u.id === String(p.id))).map((p: any) => [String(p.id), p])),
+        addTagTitles,
+        removeTagTitles,
+      });
+    }
+
+    for (const upd of resultPlan.priceListUpdates) {
+      await restPatch(supabaseUrl, serviceRoleKey, 'price_lists', { id: `eq.${upd.id}`, org_id: `eq.${authContext.orgId}` }, {
+        ...upd.patch,
+        updated_by: authContext.userId,
+        updated_at: nowIso,
+      });
+    }
+    if (resultPlan.priceListUpdates.length) {
+      await syncPricingTagsAndChangelogs({
+        supabaseUrl,
+        serviceRoleKey,
+        orgId: authContext.orgId,
+        userId: authContext.userId,
+        moduleId: 'price_lists',
+        table: 'price_lists',
+        recordsById: new Map(priceLists.filter((pl: any) => resultPlan.priceListUpdates.some((u) => u.id === String(pl.id))).map((pl: any) => [String(pl.id), pl])),
+        addTagTitles,
+        removeTagTitles,
+      });
+    }
+
+    for (const upd of resultPlan.bundleUpdates) {
+      await restPatch(supabaseUrl, serviceRoleKey, 'product_bundles', { id: `eq.${upd.id}`, org_id: `eq.${authContext.orgId}` }, {
+        ...upd.patch,
+        updated_by: authContext.userId,
+        updated_at: nowIso,
+      });
+    }
+    if (resultPlan.bundleUpdates.length) {
+      await syncPricingTagsAndChangelogs({
+        supabaseUrl,
+        serviceRoleKey,
+        orgId: authContext.orgId,
+        userId: authContext.userId,
+        moduleId: 'product_bundles',
+        table: 'product_bundles',
+        recordsById: new Map(productBundles.filter((b: any) => resultPlan.bundleUpdates.some((u) => u.id === String(b.id))).map((b: any) => [String(b.id), b])),
+        addTagTitles,
+        removeTagTitles,
+      });
+    }
+
+    for (const upd of resultPlan.proformaUpdates) {
+      await restPatch(supabaseUrl, serviceRoleKey, 'invoices', { id: `eq.${upd.id}`, org_id: `eq.${authContext.orgId}`, status: 'eq.proforma' }, {
+        ...upd.patch,
+        updated_by: authContext.userId,
+        updated_at: nowIso,
+      });
+      await restInsert(supabaseUrl, serviceRoleKey, 'changelogs', [{
+        org_id: authContext.orgId,
+        module_id: 'invoices',
+        record_id: upd.id,
+        action: 'update',
+        field_name: 'total_invoice_amount',
+        field_label: 'جمع کل پیش‌فاکتور',
+        old_value: String(upd.oldTotal),
+        new_value: String(upd.newTotal),
+        user_id: authContext.userId,
+        record_title: upd.name,
+        metadata: { source: 'ai_price_adjustment' },
+      }]).catch(() => []);
+    }
+    if (resultPlan.proformaUpdates.length) {
+      await syncPricingTagsAndChangelogs({
+        supabaseUrl,
+        serviceRoleKey,
+        orgId: authContext.orgId,
+        userId: authContext.userId,
+        moduleId: 'invoices',
+        table: 'invoices',
+        recordsById: new Map(proformaInvoices.filter((i: any) => resultPlan.proformaUpdates.some((u) => u.id === String(i.id))).map((i: any) => [String(i.id), i])),
+        addTagTitles,
+        removeTagTitles,
+      });
+    }
+
+    const executionResult = {
+      productsUpdated: resultPlan.productUpdates.length,
+      priceListsUpdated: resultPlan.priceListUpdates.length,
+      bundlesUpdated: resultPlan.bundleUpdates.length,
+      proformasUpdated: resultPlan.proformaUpdates.length,
+      summaryLinesFa: resultPlan.summaryLinesFa,
+    };
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_action_logs', { id: `eq.${actionLogId}` }, {
+      status: 'executed',
+      approval_status: 'approved',
+      confirmed_by: authContext.userId,
+      executed_at: nowIso,
+      result_payload: executionResult,
+      result: executionResult,
+    });
+    await markRunCompleted(executionResult);
+    return {
+      status: 200,
+      payload: {
+        success: true,
+        executed: true,
+        actionLogId,
+        message: resultPlan.summaryLinesFa.length
+          ? `تغییر قیمت با موفقیت انجام شد: ${resultPlan.summaryLinesFa.join('، ')}`
+          : 'تغییرات قیمت اعمال شد.',
+        ...executionResult,
+      },
+    };
+  }
+
+  if (actionType === 'create_instagram_workflow_rule') {
+    const proposed = action.proposed_payload || {};
+    const payload = proposed?.payload && typeof proposed.payload === 'object' ? proposed.payload : proposed;
+    const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+    const workflowPerm = getModulePermission(authContext.permissions, 'workflows');
+    if (!isPlanFeatureEnabled(planContext, 'instagram_inbox') || !canCreateModule(workflowPerm)) {
+      return { status: 403, payload: { success: false, message: 'شما یا پلن سازمان دسترسی ساخت قانون پاسخ خودکار اینستاگرام را ندارید.' } };
+    }
+    const draft = buildInstagramWorkflowRuleDraft(payload);
+    const inserted = await restInsert(supabaseUrl, serviceRoleKey, 'workflows', [{
+      org_id: authContext.orgId,
+      ...draft,
+      created_by: authContext.userId,
+      updated_by: authContext.userId,
+    }]);
+    const rule = inserted[0] || null;
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_action_logs', { id: `eq.${actionLogId}` }, {
+      status: 'executed',
+      approval_status: 'approved',
+      confirmed_by: authContext.userId,
+      executed_at: new Date().toISOString(),
+      result_payload: { workflow_id: rule?.id || null, name: rule?.name || draft.name },
+      result: { workflow_id: rule?.id || null },
+    });
+    await markRunCompleted({ workflowId: rule?.id || null });
+    return { status: 200, payload: { success: true, executed: true, actionLogId, workflow: rule, message: `قانون پاسخ خودکار «${draft.name}» ثبت شد.` } };
+  }
+
+  if (actionType === 'create_instagram_showcase') {
+    const proposed = action.proposed_payload || {};
+    const payload = proposed?.payload && typeof proposed.payload === 'object' ? proposed.payload : proposed;
+    const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+    const igPerm = getModulePermission(authContext.permissions, 'instagram_conversations');
+    if (!isPlanFeatureEnabled(planContext, 'instagram_inbox') || igPerm?.view === false || igPerm?.edit === false) {
+      return { status: 403, payload: { success: false, message: 'دسترسی ساخت کارت ویترین اینستاگرام برای شما یا پلن سازمان فعال نیست.' } };
+    }
+    const draft = buildInstagramShowcaseCardDraft(payload);
+    const showcaseRows = await restInsert(supabaseUrl, serviceRoleKey, 'instagram_product_showcases', [{
+      org_id: authContext.orgId,
+      name: draft.name,
+      description: draft.description,
+      account_id: draft.account_id,
+      source_kind: draft.source_kind,
+      source_id: draft.source_id,
+      presentation: draft.presentation,
+      button_templates: draft.button_templates,
+      created_by: authContext.userId,
+      updated_by: authContext.userId,
+    }]);
+    const showcase = showcaseRows[0] || null;
+    const validItems = showcase?.id
+      ? (draft.items || []).filter((item: any) => isUuid(item?.source_record_id))
+      : [];
+    if (showcase?.id && validItems.length) {
+      await restInsert(
+        supabaseUrl,
+        serviceRoleKey,
+        'instagram_product_showcase_items',
+        validItems.map((item: any, idx: number) => ({
+          org_id: authContext.orgId,
+          showcase_id: showcase.id,
+          source_module_id: item.source_module_id,
+          source_record_id: item.source_record_id,
+          sort_order: Number.isFinite(Number(item.sort_order)) ? Number(item.sort_order) : idx,
+          title_override: item.title_override,
+          image_override_url: item.image_override_url,
+          snapshot: item.snapshot || {},
+        })),
+      );
+    }
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_action_logs', { id: `eq.${actionLogId}` }, {
+      status: 'executed',
+      approval_status: 'approved',
+      confirmed_by: authContext.userId,
+      executed_at: new Date().toISOString(),
+      result_payload: { showcase_id: showcase?.id || null, items_count: validItems.length },
+      result: { showcase_id: showcase?.id || null },
+    });
+    await markRunCompleted({ showcaseId: showcase?.id || null });
+    return { status: 200, payload: { success: true, executed: true, actionLogId, showcase, message: `کارت ویترین اینستاگرام «${draft.name}» ساخته شد.` } };
+  }
+
+  if (actionType === 'send_instagram_message' || actionType === 'reply_instagram_comment') {
+    const proposed = action.proposed_payload || {};
+    const payload = proposed?.payload && typeof proposed.payload === 'object' ? proposed.payload : proposed;
+    const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+    const igPerm = getModulePermission(authContext.permissions, 'instagram_conversations');
+    if (!isPlanFeatureEnabled(planContext, 'instagram_inbox') || igPerm?.view === false || igPerm?.edit === false) {
+      return { status: 403, payload: { success: false, message: 'دسترسی ارسال پیام یا پاسخ کامنت اینستاگرام تایید نشد.' } };
+    }
+    const authHeaderToForward = callerAuthHeader || `Bearer ${serviceRoleKey}`;
+    const igRes = await fetch(`${supabaseUrl.replace(/\/+$/, '')}/functions/v1/instagram-boxapi`, {
+      method: 'POST',
+      headers: {
+        Authorization: authHeaderToForward,
+        apikey: serviceRoleKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        action: actionType === 'reply_instagram_comment' ? 'reply_comment' : 'send_message',
+        ...payload,
+      }),
+    });
+    const igJson = await igRes.json().catch(() => ({}));
+    if (!igRes.ok || igJson?.success === false) {
+      return { status: igRes.status || 400, payload: { success: false, message: String(igJson?.message || 'ارسال پیام اینستاگرام ناموفق بود.') } };
+    }
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_action_logs', { id: `eq.${actionLogId}` }, {
+      status: 'executed',
+      approval_status: 'approved',
+      confirmed_by: authContext.userId,
+      executed_at: new Date().toISOString(),
+      result_payload: igJson,
+      result: igJson,
+    });
+    await markRunCompleted(igJson);
+    return { status: 200, payload: { success: true, executed: true, actionLogId, result: igJson, message: 'عملیات اینستاگرام با موفقیت انجام شد.' } };
+  }
+
+  if (actionType === 'create_process_template') {
+    const proposed = action.proposed_payload || {};
+    const payload = proposed?.payload && typeof proposed.payload === 'object' ? proposed.payload : proposed;
+    const tplPerm = getModulePermission(authContext.permissions, 'process_templates');
+    const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+    if (!canCreateModule(tplPerm) || !isPlanModuleEnabled(planContext, 'process_templates')) {
+      return { status: 403, payload: { success: false, message: 'شما دسترسی ساخت الگوی فرآیند را ندارید.' } };
+    }
+    const blueprint = normalizeProcessTemplateBlueprint(payload);
+    if (!blueprint) {
+      return { status: 400, payload: { success: false, message: 'ساختار الگوی فرآیند (نام یا مراحل) کامل نیست.' } };
+    }
+    const tplRows = await restInsert(supabaseUrl, serviceRoleKey, 'process_templates', [{
+      org_id: authContext.orgId,
+      name: blueprint.name,
+      description: blueprint.description || null,
+      module_id: blueprint.module_ids[0] || 'projects',
+      module_ids: blueprint.module_ids,
+      ...(blueprint.process_kind ? { process_kind: blueprint.process_kind } : {}),
+      is_active: true,
+      created_by: authContext.userId,
+      updated_by: authContext.userId,
+    }]);
+    const template = tplRows[0] || null;
+    if (template?.id && blueprint.stages.length) {
+      // process_template_stages intentionally does not carry org_id in KalamApp schema
+      await restInsert(
+        supabaseUrl,
+        serviceRoleKey,
+        'process_template_stages',
+        blueprint.stages.map((st) => ({
+          template_id: template.id,
+          stage_name: st.stage_name,
+          sort_order: st.sort_order,
+          default_status: st.default_status,
+          default_assignee_id: st.default_assignee_id && isUuid(st.default_assignee_id) ? st.default_assignee_id : null,
+          default_assignee_role_id: st.default_assignee_role_id && isUuid(st.default_assignee_role_id) ? st.default_assignee_role_id : null,
+          auto_create_task: st.auto_create_task !== false,
+          metadata: st.metadata || {},
+        })),
+      );
+    }
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_action_logs', { id: `eq.${actionLogId}` }, {
+      status: 'executed',
+      approval_status: 'approved',
+      confirmed_by: authContext.userId,
+      executed_at: new Date().toISOString(),
+      result_payload: { template_id: template?.id || null, stages_count: blueprint.stages.length },
+      result: { template_id: template?.id || null },
+    });
+    await markRunCompleted({ templateId: template?.id || null });
+    return { status: 200, payload: { success: true, executed: true, actionLogId, template, message: `الگوی فرآیند «${blueprint.name}» با ${blueprint.stages.length.toLocaleString('fa-IR')} مرحله ساخته شد.` } };
+  }
+
+  if (actionType === 'settle_invoice_payment') {
+    const proposed = action.proposed_payload || {};
+    const payload = proposed?.payload && typeof proposed.payload === 'object' ? proposed.payload : proposed;
+    const invoicePerm = getModulePermission(authContext.permissions, 'invoices');
+    const cbPerm = getModulePermission(authContext.permissions, 'cash_bank_operations');
+    if (invoicePerm?.view === false || invoicePerm?.edit === false || !canCreateModule(cbPerm)) {
+      return { status: 403, payload: { success: false, message: 'دسترسی ثبت دریافت روی فاکتور یا عملیات نقد و بانک تایید نشد.' } };
+    }
+    const invoiceId = normalizeId(payload?.invoice_id || payload?.invoiceId || action.record_id);
+    if (!isUuid(invoiceId)) return { status: 400, payload: { success: false, message: 'شناسه فاکتور برای تسویه مشخص نیست.' } };
+    const invRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'invoices', {
+      id: `eq.${invoiceId}`,
+      org_id: `eq.${authContext.orgId}`,
+      select: '*',
+      limit: 1,
+    });
+    const invoice = invRows[0] || null;
+    if (!invoice || !canAccessAssignedRecord(invoice, authContext, getRecordScope(invoicePerm))) {
+      return { status: 403, payload: { success: false, message: 'دسترسی به این فاکتور تایید نشد.' } };
+    }
+    const amount = Math.round(Number(String(payload?.amount || 0).replace(/,/g, '').trim()));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return { status: 400, payload: { success: false, message: 'مبلغ پرداخت برای تسویه فاکتور معتبر نیست.' } };
+    }
+    const paymentType = String(payload?.payment_type || 'transfer').trim() || 'transfer';
+    const operationDate = String(payload?.date || payload?.operation_date || new Date().toISOString().slice(0, 10)).trim();
+    const targetAccountId = normalizeId(payload?.receipt_account_id || payload?.target_account || payload?.bank_account_id || payload?.cash_box_id);
+    const validTargetAccount = isUuid(targetAccountId) ? targetAccountId : null;
+    const description = String(payload?.description || 'تسویه ثبت‌شده با دستیار هوش مصنوعی').trim();
+    const attachmentUrl = String(payload?.attachment || payload?.image_url || '').trim() || null;
+
+    const existingPayments = Array.isArray(invoice.payments) ? invoice.payments : [];
+    const nextPayments = [
+      ...existingPayments,
+      {
+        id: crypto.randomUUID(),
+        payment_type: paymentType,
+        target_account: validTargetAccount,
+        status: 'received',
+        responsible_id: authContext.userId,
+        date: operationDate,
+        amount,
+        description,
+        attachment: attachmentUrl,
+      },
+    ];
+    const summary = recalculateInvoiceFinancialSummary({ ...invoice, payments: nextPayments }, Array.isArray(invoice.invoiceItems) ? invoice.invoiceItems : []);
+    const nextStatus = summary.remaining_balance <= 0
+      ? 'settled'
+      : (['created', 'proforma'].includes(String(invoice.status || '')) ? 'prepayment' : invoice.status);
+
+    await restPatch(supabaseUrl, serviceRoleKey, 'invoices', {
+      id: `eq.${invoiceId}`,
+      org_id: `eq.${authContext.orgId}`,
+    }, {
+      payments: nextPayments,
+      ...summary,
+      status: nextStatus,
+      updated_by: authContext.userId,
+      updated_at: new Date().toISOString(),
+    });
+
+    const cbRows = await restInsert(supabaseUrl, serviceRoleKey, 'cash_bank_operations', [{
+      org_id: authContext.orgId,
+      operation_type: 'receipt',
+      status: 'received',
+      operation_date: operationDate,
+      amount,
+      payment_type: paymentType,
+      ...(validTargetAccount ? { receipt_account_id: validTargetAccount } : {}),
+      sales_invoice_id: invoiceId,
+      customer_id: invoice.customer_id || null,
+      assignee_id: authContext.userId,
+      description,
+      ...(attachmentUrl ? { image_url: attachmentUrl } : {}),
+      created_by: authContext.userId,
+    }]).catch(() => []);
+
+    const settleResult = {
+      invoice_id: invoiceId,
+      cash_bank_operation_id: cbRows[0]?.id || null,
+      amount,
+      remaining_balance: summary.remaining_balance,
+      status: nextStatus,
+    };
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_action_logs', { id: `eq.${actionLogId}` }, {
+      status: 'executed',
+      approval_status: 'approved',
+      confirmed_by: authContext.userId,
+      executed_at: new Date().toISOString(),
+      result_payload: settleResult,
+      result: settleResult,
+    });
+    await markRunCompleted(settleResult);
+    return {
+      status: 200,
+      payload: {
+        success: true,
+        executed: true,
+        actionLogId,
+        ...settleResult,
+        message: `پرداخت به مبلغ ${amount.toLocaleString('fa-IR')} روی فاکتور ثبت و سند دریافت ایجاد شد.`,
+      },
+    };
+  }
+
+  if (actionType === 'relay_to_staff') {
+    const proposed = action.proposed_payload || {};
+    const payload = proposed?.payload && typeof proposed.payload === 'object' ? proposed.payload : proposed;
+    const recipients = Array.isArray(payload?.recipient_user_ids)
+      ? payload.recipient_user_ids
+      : payload?.recipient_user_id
+      ? [payload.recipient_user_id]
+      : [];
+    const relayRes = await relayAgentMessageToStaff({
+      supabaseUrl,
+      serviceRoleKey,
+      orgId: authContext.orgId,
+      agentKey: (action?.agent_key || payload?.agent_key || 'lead_orchestrator') as AgentKey,
+      recipientUserIds: recipients,
+      content: String(payload?.content || payload?.message || '').trim(),
+      moduleId: payload?.module_id || action?.module_id || null,
+      recordId: payload?.record_id || action?.record_id || null,
+      requestedByUserId: authContext.userId,
+      priority: 10,
+      relayKind: 'relay_question',
+      attachments: Array.isArray(payload?.attachments) ? payload.attachments : [],
+    });
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_action_logs', { id: `eq.${actionLogId}` }, {
+      status: relayRes.sent ? 'executed' : 'failed',
+      approval_status: relayRes.sent ? 'approved' : action.approval_status,
+      confirmed_by: authContext.userId,
+      executed_at: new Date().toISOString(),
+      result_payload: relayRes,
+      result: relayRes,
+    });
+    await markRunCompleted(relayRes, !relayRes.sent);
+    return {
+      status: relayRes.sent ? 200 : 400,
+      payload: {
+        success: relayRes.sent,
+        executed: relayRes.sent,
+        actionLogId,
+        ...relayRes,
+        message: relayRes.sent ? 'پیام به همکار مسئول ارسال شد.' : (relayRes.skippedReason || 'ارسال پیام به همکار انجام نشد.'),
+      },
+    };
+  }
+
+  if (actionType !== 'send_note') {
+    return { status: 400, payload: { success: false, message: 'این نوع اقدام هنوز پشتیبانی نمی‌شود.' } };
   }
 
   const proposed = action.proposed_payload || {};
@@ -13849,11 +15712,11 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
       status: 'failed',
       result: { error: 'access_denied_on_confirm' },
     });
-    return json(403, { success: false, message: 'دسترسی شما به این رکورد برای ثبت یادداشت تایید نشد.' });
+    return { status: 403, payload: { success: false, message: 'دسترسی شما به این رکورد برای ثبت یادداشت تایید نشد.' } };
   }
 
   const content = String(proposed.content || '').trim();
-  if (!content) return json(400, { success: false, message: 'متن یادداشت خالی است.' });
+  if (!content) return { status: 400, payload: { success: false, message: 'متن یادداشت خالی است.' } };
 
   const noteRows = await restInsert(supabaseUrl, serviceRoleKey, 'notes', [{
     org_id: authContext.orgId,
@@ -13871,20 +15734,1379 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
     metadata: {
       action_log_id: actionLogId,
       confirmed_by: authContext.userId,
-      provider: proposed.provider || getEnvProviderConfig().provider,
-      model: proposed.model || getEnvProviderConfig().model,
+      provider: proposed.provider || centralProvider,
+      model: proposed.model || '',
     },
   }]);
   const note = noteRows[0] || null;
 
   await restPatch(supabaseUrl, serviceRoleKey, 'ai_action_logs', { id: `eq.${actionLogId}` }, {
     status: 'executed',
+    approval_status: 'approved',
     confirmed_by: authContext.userId,
     executed_at: new Date().toISOString(),
     result: { note_id: note?.id || null },
   });
+  await markRunCompleted({ noteId: note?.id || null });
 
-  return json(200, { success: true, note, actionLogId });
+  return { status: 200, payload: { success: true, note, actionLogId } };
+};
+
+const handleConfirmAction = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  body: any,
+  callerAuthHeader = '',
+) => {
+  const actionLogId = normalizeId(body?.actionLogId);
+  if (!isUuid(actionLogId)) return json(400, { success: false, message: 'شناسه اقدام معتبر نیست.' });
+
+  const rows = await restSelect(supabaseUrl, serviceRoleKey, 'ai_action_logs', {
+    id: `eq.${actionLogId}`,
+    org_id: `eq.${authContext.orgId}`,
+    select: '*',
+    limit: 1,
+  });
+  const action = rows[0] || null;
+  if (!action) return json(404, { success: false, message: 'اقدام پیشنهادی پیدا نشد.' });
+  const isOwner = String(action.created_by || '') === String(authContext.userId || '');
+  if (!isOwner && !canManageAiSettings(authContext)) {
+    return json(403, { success: false, message: 'شما مجوز تایید این اقدام را ندارید.' });
+  }
+  if (String(action.status) !== 'proposed') {
+    return json(409, { success: false, message: 'این اقدام قبلا پردازش شده است.', status: action.status });
+  }
+  const executed = await executeProposedActionLog(supabaseUrl, serviceRoleKey, authContext, action, body, callerAuthHeader);
+  return json(executed.status, executed.payload);
+};
+
+// ---------------------------------------------------------------------------
+// 13 Modular AaaS Handlers
+// ---------------------------------------------------------------------------
+
+const handleGetAgentsWorkspaceOverview = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
+  const canManage = canManageAiSettings(authContext) || authContext?.permissions?.__ai_agents?.edit === true;
+  const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+  const [
+    grounding,
+    activeRuns,
+    pendingApprovals,
+    usageRows,
+    users,
+    roles,
+    catalogRows,
+    profileRows,
+    saasDefaults,
+    orgAiSettings,
+    agentWorkflows,
+  ] = await Promise.all([
+    loadCentralAiGrounding({
+      supabaseUrl,
+      serviceRoleKey,
+      authContext,
+      planContext,
+      freeChatMode: false,
+      includeCalendar: false,
+    }),
+    safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_agent_runs', {
+      org_id: `eq.${authContext.orgId}`,
+      select: 'id,agent_key,selected_agents,status,channel,trigger_type,initiated_by,execution_policy,created_at,updated_at,completed_at,error_message,source_metadata',
+      order: 'created_at.desc',
+      limit: 60,
+    }),
+    safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_action_logs', {
+      org_id: `eq.${authContext.orgId}`,
+      status: 'eq.proposed',
+      select: 'id,action_type,module_id,record_id,agent_key,channel,approval_status,proposed_payload,created_by,created_at',
+      order: 'created_at.desc',
+      limit: 40,
+    }),
+    safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_usage_ledger', {
+      org_id: `eq.${authContext.orgId}`,
+      select: 'agent_key,cached_input_tokens,cache_savings_irt,total_tokens,customer_price_irt,created_at',
+      order: 'created_at.desc',
+      limit: 300,
+    }),
+    canManage
+      ? safeRestSelect(supabaseUrl, serviceRoleKey, 'profiles', {
+          org_id: `eq.${authContext.orgId}`,
+          is_active: 'eq.true',
+          select: 'id,full_name,role_id,job_title,telegram_chat_id,bale_chat_id,rubika_chat_id',
+          limit: 500,
+        })
+      : Promise.resolve([]),
+    canManage
+      ? safeRestSelect(supabaseUrl, serviceRoleKey, 'org_roles', {
+          org_id: `eq.${authContext.orgId}`,
+          select: 'id,title',
+          limit: 200,
+        })
+      : Promise.resolve([]),
+    listActiveAiModels(supabaseUrl, serviceRoleKey),
+    safeRestSelect(supabaseUrl, serviceRoleKey, 'profiles', {
+      id: `eq.${authContext.userId}`,
+      org_id: `eq.${authContext.orgId}`,
+      select: 'id,telegram_chat_id,bale_chat_id,rubika_chat_id',
+      limit: 1,
+    }),
+    loadSaasAiDefaultModels(supabaseUrl, serviceRoleKey),
+    loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext),
+    safeRestSelect(supabaseUrl, serviceRoleKey, 'workflows', {
+      org_id: `eq.${authContext.orgId}`,
+      agent_key: 'not.is.null',
+      select: 'id,name,description,module_id,trigger_type,interval_value,interval_unit,interval_at,is_active,agent_key,actions,last_run_at,updated_at',
+      order: 'updated_at.desc',
+      limit: 150,
+    }).catch(() => []),
+  ]);
+
+  const nowMs = Date.now();
+  const agentStates = grounding.agentStates || ({} as Record<AgentKey, any>);
+  const canViewAgent = (agentKey: string): boolean => {
+    const normalized = (String(agentKey || '').trim() || 'lead_orchestrator') as AgentKey;
+    return agentStates[normalized]?.canView === true;
+  };
+
+  const visiblePendingApprovals = (pendingApprovals || []).filter((item: any) => {
+    const key = String(item?.agent_key || item?.proposed_payload?.agent_key || 'lead_orchestrator').trim();
+    if (!canViewAgent(key)) return false;
+    if (canManage) return true;
+    return !item?.created_by || String(item.created_by) === String(authContext.userId);
+  });
+
+  const visibleRuns = (activeRuns || []).filter((run: any) => {
+    const key = String(run?.agent_key || 'lead_orchestrator').trim();
+    if (!canViewAgent(key)) return false;
+    if (canManage) return true;
+    return !run?.initiated_by
+      || String(run.initiated_by) === String(authContext.userId)
+      || String(run?.trigger_type || '') === 'background_cron'
+      || String(run?.execution_policy || '') === 'background_agent'
+      || String(run?.channel || '') === 'agent_inbox';
+  });
+
+  const usageByAgent: Record<string, { runs: number; totalTokens: number; cachedTokens: number; savingsIrt: number; todaySpentIrt: number }> = {};
+  const tehranDateFormatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tehran',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const todayTehran = tehranDateFormatter.format(new Date(nowMs));
+  for (const row of usageRows || []) {
+    const key = String(row?.agent_key || '').trim() || 'lead_orchestrator';
+    const current = usageByAgent[key] || { runs: 0, totalTokens: 0, cachedTokens: 0, savingsIrt: 0, todaySpentIrt: 0 };
+    current.runs += 1;
+    current.totalTokens += Number(row?.total_tokens || 0);
+    current.cachedTokens += Number(row?.cached_input_tokens || 0);
+    current.savingsIrt += Number(row?.cache_savings_irt || 0);
+    if (row?.created_at && tehranDateFormatter.format(new Date(row.created_at)) === todayTehran) {
+      current.todaySpentIrt += Number(row?.customer_price_irt || 0);
+    }
+    usageByAgent[key] = current;
+  }
+
+  const meProfile = profileRows?.[0] || {};
+  const agentsOverview = buildAgentsOverviewForActor(grounding)
+    .filter((item) => item.canView === true)
+    .map((item) => {
+      const def = getAgentDefinition(item.key);
+      const cfg = (grounding.agentConfigs || []).find((c: any) => String(c?.agent_key || '') === item.key) || null;
+      const agentRuns = visibleRuns.filter((r: any) => String(r?.agent_key || '') === item.key).slice(0, 10);
+      const recentRun = agentRuns[0] || null;
+      const status = String(recentRun?.status || '');
+      const runTs = new Date(recentRun?.updated_at || recentRun?.created_at || 0).getTime();
+      const ageMs = Number.isFinite(runTs) && runTs > 0 ? Math.max(0, nowMs - runTs) : Number.POSITIVE_INFINITY;
+      const hasActivePending = visiblePendingApprovals.some(
+        (ap: any) => String(ap?.agent_key || ap?.proposed_payload?.agent_key || 'lead_orchestrator').trim() === item.key,
+      );
+      const isWorking = status === 'running'
+        ? ageMs <= 3 * 60 * 1000
+        : (status === 'waiting_approval' || status === 'waiting_confirmation')
+          ? (hasActivePending || ageMs <= 15 * 60 * 1000)
+          : false;
+
+      const bgConfig = cfg?.background_config && typeof cfg.background_config === 'object' ? cfg.background_config : {};
+      const bgPlanEnabled = isPlanFeatureEnabled(planContext, 'ai_background_agents');
+      const bgEnabled = Boolean(def?.supportsBackground && bgPlanEnabled && item.orgEnabled !== false && bgConfig?.enabled === true);
+      const intervalMin = Math.min(1440, Math.max(5, Number(bgConfig?.interval_minutes || def?.defaultBackgroundConfig?.interval_minutes || 60)));
+      const lastBgAt = cfg?.background_last_run_at || item.backgroundLastRunAt || null;
+      const lastBgMs = lastBgAt ? new Date(lastBgAt).getTime() : NaN;
+      const nextBackgroundRunAt = bgEnabled
+        ? (Number.isFinite(lastBgMs) ? new Date(lastBgMs + intervalMin * 60_000).toISOString() : new Date(nowMs + 5 * 60_000).toISOString())
+        : null;
+
+      const resolvedMainModel = tryResolveModelSlot({
+        slot: 'dashboard_chat',
+        catalogRows,
+        orgAiSettings,
+        saasDefaultModels: saasDefaults,
+        agentConfig: cfg || { agent_key: item.key },
+      });
+      const resolvedFastModel = tryResolveModelSlot({
+        slot: 'agent_fast',
+        catalogRows,
+        orgAiSettings,
+        saasDefaultModels: saasDefaults,
+        agentConfig: cfg || { agent_key: item.key },
+        preferFastAgentModel: true,
+      });
+      const matchingWorkflows = (agentWorkflows || []).filter((wf: any) => String(wf?.agent_key || '') === item.key);
+
+      return {
+        ...item,
+        modelOverride: cfg?.model_override || null,
+        fastModelOverride: cfg?.fast_model_override || null,
+        effectiveModelId: resolvedMainModel?.model || null,
+        effectiveModelSource: resolvedMainModel?.source || null,
+        effectiveFastModelId: resolvedFastModel?.model || null,
+        effectiveFastModelSource: resolvedFastModel?.source || null,
+        saasDefaultModelId: saasDefaults?.[`agent:${item.key}`] || saasDefaults?.[PRIMARY_AI_MODEL_KEY] || null,
+        saasFastDefaultModelId: saasDefaults?.agent_fast || null,
+        workflowTriggers: matchingWorkflows,
+        backgroundConfig: bgConfig,
+        policyJson: cfg?.policy_json || {},
+        allowedChannels: cfg?.allowed_channels || ['web', 'staff_bot', 'agent_inbox'],
+        usageStats: usageByAgent[item.key] || { runs: 0, totalTokens: 0, cachedTokens: 0, savingsIrt: 0, todaySpentIrt: 0 },
+        latestRun: recentRun,
+        recentRuns: agentRuns,
+        isWorking,
+        backgroundLastRunAt: lastBgAt,
+        backgroundLastStatus: cfg?.background_last_status || item.backgroundLastStatus || null,
+        backgroundLastSummary: cfg?.background_last_summary || item.backgroundLastSummary || null,
+        backgroundLastError: cfg?.background_last_error || item.backgroundLastError || null,
+        nextBackgroundRunAt,
+      };
+    });
+
+  return json(200, {
+    success: true,
+    canManage,
+    saasDefaults,
+    planFeatures: {
+      ...(planContext?.features && typeof planContext.features === 'object' ? planContext.features : {}),
+      ai_staff_bot: isPlanFeatureEnabled(planContext, 'ai_staff_bot'),
+      ai_background_agents: isPlanFeatureEnabled(planContext, 'ai_background_agents'),
+      instagram_inbox: isPlanFeatureEnabled(planContext, 'instagram_inbox'),
+    },
+    enabledModules: planContext?.reason === 'saas_admin_organization'
+      ? {}
+      : {
+          ...(planContext?.enabledModules && typeof planContext.enabledModules === 'object' ? planContext.enabledModules : {}),
+          ...(planContext?.moduleOverrides && typeof planContext.moduleOverrides === 'object' ? planContext.moduleOverrides : {}),
+        },
+    agents: agentsOverview,
+    recentRuns: visibleRuns,
+    pendingApprovals: visiblePendingApprovals,
+    memberPermissions: canManage ? grounding.memberPermissions : [],
+    users,
+    roles,
+    models: (catalogRows || []).filter((m: any) => m?.is_active !== false && m?.is_coming_soon !== true).map((m: any) => ({
+      id: m.id,
+      displayName: m.display_name_fa || m.id,
+      provider: m.provider,
+      capabilityTags: m.capability_tags || [],
+    })),
+    staffBotBindStatus: {
+      telegram: Boolean(meProfile?.telegram_chat_id),
+      bale: Boolean(meProfile?.bale_chat_id),
+      rubika: Boolean(meProfile?.rubika_chat_id),
+    },
+  });
+};
+
+const handleSaveOrgAgentConfig = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const agentKey = String(body?.agentKey || body?.agent_key || '').trim() as AgentKey;
+  if (!AI_AGENT_KEYS.includes(agentKey)) {
+    return json(400, { success: false, message: 'کلید ایجنت معتبر نیست.' });
+  }
+  const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+  const grounding = await loadCentralAiGrounding({
+    supabaseUrl,
+    serviceRoleKey,
+    authContext,
+    planContext,
+    freeChatMode: false,
+    includeCalendar: false,
+  });
+  const agentState = grounding.agentStates?.[agentKey];
+  const toggleOnly = body?.toggleOnly === true;
+  const canSave = toggleOnly
+    ? Boolean(agentState?.canToggle || agentState?.canEdit)
+    : Boolean(agentState?.canEdit);
+  if (!canSave) {
+    return json(403, {
+      success: false,
+      message: toggleOnly
+        ? `شما مجوز فعال یا غیرفعال‌سازی ${getAgentTitleFa(agentKey)} را ندارید.`
+        : `شما مجوز ویرایش تنظیمات ${getAgentTitleFa(agentKey)} را ندارید.`,
+    });
+  }
+  const nextEnabled = Object.prototype.hasOwnProperty.call(body || {}, 'isEnabled') || Object.prototype.hasOwnProperty.call(body || {}, 'is_enabled')
+    ? (body?.isEnabled !== false && body?.is_enabled !== false)
+    : (agentState?.orgEnabled !== false);
+  if (nextEnabled && agentState?.planAllowed === false) {
+    return json(403, { success: false, message: `${getAgentTitleFa(agentKey)} در پلن فعلی سازمان فعال نیست.` });
+  }
+
+  const existingRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_agent_configs', {
+    org_id: `eq.${authContext.orgId}`,
+    agent_key: `eq.${agentKey}`,
+    select: '*',
+    limit: 1,
+  });
+  const existingRow = existingRows[0] || null;
+  const def = getAgentDefinition(agentKey);
+  const nowIso = new Date().toISOString();
+
+  if (toggleOnly) {
+    if (existingRow) {
+      const patched = await restPatch(supabaseUrl, serviceRoleKey, 'org_ai_agent_configs', {
+        org_id: `eq.${authContext.orgId}`,
+        agent_key: `eq.${agentKey}`,
+      }, {
+        is_enabled: nextEnabled,
+        updated_by: authContext.userId,
+        updated_at: nowIso,
+      });
+      return json(200, {
+        success: true,
+        config: patched[0] || { ...existingRow, is_enabled: nextEnabled },
+        message: `${getAgentTitleFa(agentKey)} ${nextEnabled ? 'فعال' : 'غیرفعال'} شد.`,
+      });
+    }
+    const inserted = await restUpsert(supabaseUrl, serviceRoleKey, 'org_ai_agent_configs', [{
+      org_id: authContext.orgId,
+      agent_key: agentKey,
+      is_enabled: nextEnabled,
+      tone_style: def?.defaultToneStyle || 'friendly_warm',
+      allowed_channels: ['web', 'staff_bot', 'agent_inbox'],
+      background_config: def?.defaultBackgroundConfig || {},
+      updated_by: authContext.userId,
+      updated_at: nowIso,
+    }], 'org_id,agent_key');
+    return json(200, {
+      success: true,
+      config: inserted[0] || null,
+      message: `${getAgentTitleFa(agentKey)} ${nextEnabled ? 'فعال' : 'غیرفعال'} شد.`,
+    });
+  }
+
+  const hasModelOverride = Object.prototype.hasOwnProperty.call(body || {}, 'modelOverride')
+    || Object.prototype.hasOwnProperty.call(body || {}, 'model_override');
+  const hasFastModelOverride = Object.prototype.hasOwnProperty.call(body || {}, 'fastModelOverride')
+    || Object.prototype.hasOwnProperty.call(body || {}, 'fast_model_override');
+  const rawModelOverride = hasModelOverride ? (body?.modelOverride ?? body?.model_override) : existingRow?.model_override;
+  const rawFastModelOverride = hasFastModelOverride ? (body?.fastModelOverride ?? body?.fast_model_override) : existingRow?.fast_model_override;
+  const modelOverride = rawModelOverride ? String(rawModelOverride).trim() : null;
+  const fastModelOverride = rawFastModelOverride ? String(rawFastModelOverride).trim() : null;
+
+  if ((hasModelOverride && modelOverride) || (hasFastModelOverride && fastModelOverride)) {
+    const catalogRows = await listActiveAiModels(supabaseUrl, serviceRoleKey);
+    const activeModelIds = new Set(
+      (catalogRows || []).filter((m: any) => m?.is_active !== false && m?.is_coming_soon !== true).map((m: any) => String(m.id)),
+    );
+    if (hasModelOverride && modelOverride && !activeModelIds.has(modelOverride)) {
+      return json(400, { success: false, message: 'مدل انتخاب‌شده در فهرست مدل‌های فعال سازمان وجود ندارد.' });
+    }
+    if (hasFastModelOverride && fastModelOverride && !activeModelIds.has(fastModelOverride)) {
+      return json(400, { success: false, message: 'مدل سریع انتخاب‌شده در فهرست مدل‌های فعال سازمان وجود ندارد.' });
+    }
+  }
+
+  const rawTone = String(body?.toneStyle || body?.tone_style || existingRow?.tone_style || def?.defaultToneStyle || 'friendly_warm').trim();
+  const toneStyle: AgentToneStyle = (['formal', 'friendly_warm', 'concise', 'coaching', 'custom'] as const).includes(rawTone as AgentToneStyle)
+    ? (rawTone as AgentToneStyle)
+    : 'friendly_warm';
+
+  const rawBg = body?.backgroundConfig && typeof body.backgroundConfig === 'object'
+    ? body.backgroundConfig
+    : (existingRow?.background_config && typeof existingRow.background_config === 'object'
+      ? existingRow.background_config
+      : (def?.defaultBackgroundConfig || {}));
+  const bgEnabled = rawBg?.enabled === true;
+  if (bgEnabled && !isPlanFeatureEnabled(planContext, 'ai_background_agents')) {
+    return json(403, { success: false, message: 'قابلیت پایش و زمان‌بندی خودکار ایجنت‌ها در پلن فعلی سازمان فعال نیست.' });
+  }
+  const clampNum = (val: unknown, fallback: number, min: number, max: number) => {
+    const n = Number(val);
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : fallback;
+  };
+  const sanitizedBackgroundConfig = def?.supportsBackground
+    ? {
+        ...(existingRow?.background_config && typeof existingRow.background_config === 'object' ? existingRow.background_config : {}),
+        enabled: bgEnabled,
+        interval_minutes: clampNum(rawBg?.interval_minutes, Number(def?.defaultBackgroundConfig?.interval_minutes || 60), 5, 1440),
+        cooldown_minutes: clampNum(rawBg?.cooldown_minutes, Number(def?.defaultBackgroundConfig?.cooldown_minutes || 240), 5, 10080),
+        daily_budget_irt: clampNum(rawBg?.daily_budget_irt, Number(def?.defaultBackgroundConfig?.daily_budget_irt ?? 30000), 0, 10000000),
+        respect_work_schedule: rawBg?.respect_work_schedule !== false,
+      }
+    : { enabled: false };
+
+  const patchFields: Record<string, any> = {
+    is_enabled: nextEnabled,
+    model_override: modelOverride,
+    fast_model_override: fastModelOverride,
+    tone_style: toneStyle,
+    allowed_channels: Array.isArray(body?.allowedChannels)
+      ? body.allowedChannels
+      : (Array.isArray(existingRow?.allowed_channels) && existingRow.allowed_channels.length > 0
+        ? existingRow.allowed_channels
+        : ['web', 'staff_bot', 'agent_inbox']),
+    background_config: sanitizedBackgroundConfig,
+    ...(body?.policyJson && typeof body.policyJson === 'object' ? { policy_json: body.policyJson } : {}),
+    updated_by: authContext.userId,
+    updated_at: nowIso,
+  };
+
+  if (existingRow) {
+    const patched = await restPatch(supabaseUrl, serviceRoleKey, 'org_ai_agent_configs', {
+      org_id: `eq.${authContext.orgId}`,
+      agent_key: `eq.${agentKey}`,
+    }, patchFields);
+    return json(200, { success: true, config: patched[0] || { ...existingRow, ...patchFields }, message: `تنظیمات ${getAgentTitleFa(agentKey)} ذخیره شد.` });
+  }
+
+  const row = {
+    org_id: authContext.orgId,
+    agent_key: agentKey,
+    ...patchFields,
+  };
+  const saved = await restUpsert(supabaseUrl, serviceRoleKey, 'org_ai_agent_configs', [row], 'org_id,agent_key');
+  return json(200, { success: true, config: saved[0] || row, message: `تنظیمات ${getAgentTitleFa(agentKey)} ذخیره شد.` });
+};
+
+const handleSaveAgentMemberPermissions = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const canManageAgents = canManageAiSettings(authContext) || authContext?.permissions?.__ai_agents?.edit === true;
+  if (!canManageAgents) {
+    return json(403, { success: false, message: 'شما مجوز تغییر دسترسی اعضای ایجنت را ندارید.' });
+  }
+  const entries = Array.isArray(body?.entries) ? body.entries : [body];
+  if (!entries.length) return json(400, { success: false, message: 'آیتمی برای ذخیره دسترسی ارسال نشده است.' });
+
+  const [orgUsers, orgRoles] = await Promise.all([
+    safeRestSelect(supabaseUrl, serviceRoleKey, 'profiles', { org_id: `eq.${authContext.orgId}`, select: 'id', limit: 1000 }),
+    safeRestSelect(supabaseUrl, serviceRoleKey, 'org_roles', { org_id: `eq.${authContext.orgId}`, select: 'id', limit: 500 }),
+  ]);
+  const validUserIds = new Set(orgUsers.map((u: any) => String(u.id)));
+  const validRoleIds = new Set(orgRoles.map((r: any) => String(r.id)));
+  const allowedAgents = new Set(['__staff_bot', ...AI_AGENT_KEYS]);
+
+  const rowsToUpsert: Record<string, any>[] = [];
+  for (const item of entries) {
+    const subjectType = String(item?.subjectType || item?.subject_type || '').trim();
+    const subjectId = normalizeId(item?.subjectId || item?.subject_id);
+    const agentKey = String(item?.agentKey || item?.agent_key || '').trim();
+    if (!['user', 'role'].includes(subjectType) || !isUuid(subjectId) || !allowedAgents.has(agentKey)) {
+      return json(400, { success: false, message: 'مشخصات کاربر، نقش یا کلید ایجنت معتبر نیست.' });
+    }
+    if (subjectType === 'user' && !validUserIds.has(subjectId)) {
+      return json(403, { success: false, message: 'کاربر انتخاب‌شده به این سازمان تعلق ندارد.' });
+    }
+    if (subjectType === 'role' && !validRoleIds.has(subjectId)) {
+      return json(403, { success: false, message: 'نقش انتخاب‌شده به این سازمان تعلق ندارد.' });
+    }
+    const rawTone = item?.toneStyle || item?.tone_style ? String(item?.toneStyle || item?.tone_style).trim() : null;
+    rowsToUpsert.push({
+      org_id: authContext.orgId,
+      subject_type: subjectType,
+      subject_id: subjectId,
+      agent_key: agentKey,
+      can_use: item?.canUse !== false && item?.can_use !== false,
+      staff_bot_enabled: item?.staffBotEnabled === true || item?.staff_bot_enabled === true,
+      autonomy_mode: String(item?.autonomyMode || item?.autonomy_mode || 'confirm') === 'auto_low_risk' ? 'auto_low_risk' : 'confirm',
+      tone_style: rawTone && ['formal', 'friendly_warm', 'concise', 'coaching', 'custom'].includes(rawTone) ? rawTone : null,
+      updated_by: authContext.userId,
+      updated_at: new Date().toISOString(),
+    });
+  }
+
+  const saved = await restUpsert(
+    supabaseUrl,
+    serviceRoleKey,
+    'org_ai_agent_member_permissions',
+    rowsToUpsert,
+    'org_id,subject_type,subject_id,agent_key',
+  );
+  return json(200, { success: true, permissions: saved, message: 'دسترسی‌های ایجنت‌ها و بات همکار با موفقیت ذخیره شد.' });
+};
+
+const handleListWaitingApprovals = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
+  const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+  const grounding = await loadCentralAiGrounding({
+    supabaseUrl,
+    serviceRoleKey,
+    authContext,
+    planContext,
+    freeChatMode: false,
+    includeCalendar: false,
+  });
+  const canManageAgents = canManageAiSettings(authContext) || authContext?.permissions?.__ai_agents?.edit === true;
+  const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_action_logs', {
+    org_id: `eq.${authContext.orgId}`,
+    status: 'eq.proposed',
+    select: 'id,thread_id,action_type,module_id,record_id,agent_key,channel,approval_status,proposed_payload,created_by,created_at',
+    order: 'created_at.desc',
+    limit: '60',
+  });
+  const visibleApprovals = (rows || []).filter((item: any) => {
+    const agKey = String(item?.agent_key || item?.proposed_payload?.agent_key || 'lead_orchestrator').trim();
+    if (grounding.agentStates?.[agKey]?.canView !== true) return false;
+    if (canManageAgents) return true;
+    return !item?.created_by || String(item.created_by) === String(authContext.userId);
+  });
+  return json(200, { success: true, approvals: visibleApprovals });
+};
+
+const handleResolveWaitingApproval = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any | null,
+  body: any,
+  callerAuthHeader = '',
+) => {
+  const decision = String(body?.decision || '').trim().toLowerCase();
+  if (decision !== 'approve' && decision !== 'reject') {
+    return json(400, { success: false, message: 'تصمیم تأیید نامعتبر است.' });
+  }
+  const callbackToken = String(body?.callbackToken || body?.callback_token || '').trim();
+  const actionLogId = normalizeId(body?.actionLogId || body?.action_log_id);
+
+  const scopedOrgId = normalizeId(authContext?.orgId || body?.orgId);
+  if (!scopedOrgId) {
+    return json(403, { success: false, message: 'سازمان اقدام مشخص نیست.' });
+  }
+
+  let action: any = null;
+  if (callbackToken) {
+    const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_action_logs', {
+      callback_token: `eq.${callbackToken}`,
+      org_id: `eq.${scopedOrgId}`,
+      select: '*',
+      limit: 1,
+    });
+    action = rows[0] || null;
+  } else if (authContext && isUuid(actionLogId)) {
+    const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_action_logs', {
+      id: `eq.${actionLogId}`,
+      org_id: `eq.${authContext.orgId}`,
+      select: '*',
+      limit: 1,
+    });
+    action = rows[0] || null;
+  }
+
+  if (!action || normalizeId(action.org_id) !== scopedOrgId) {
+    return json(404, { success: false, message: 'اقدام در انتظار تأیید پیدا نشد.' });
+  }
+  if (String(action.status) !== 'proposed') {
+    return json(409, { success: false, message: 'این اقدام قبلاً پردازش شده است.', status: action.status });
+  }
+
+  let effectiveAuthContext = authContext;
+  const resolvedActionAgentKey = (String(action?.agent_key || action?.proposed_payload?.agent_key || '').trim() as AgentKey);
+  const channelType = String(body?.channelType || body?.channel_type || '').trim().toLowerCase();
+  const chatId = String(body?.chatId || body?.chat_id || '').trim();
+  const isStaffBotCallback = !effectiveAuthContext && ['telegram', 'bale', 'rubika'].includes(channelType) && Boolean(chatId);
+
+  if (!effectiveAuthContext) {
+    let targetUserId = '';
+    if (isStaffBotCallback) {
+      const chatCol = `${channelType}_chat_id`;
+      const boundProfiles = await safeRestSelect(supabaseUrl, serviceRoleKey, 'profiles', {
+        org_id: `eq.${normalizeId(action.org_id)}`,
+        [chatCol]: `eq.${chatId}`,
+        is_active: 'eq.true',
+        select: 'id',
+        limit: 1,
+      });
+      targetUserId = normalizeId(boundProfiles[0]?.id);
+      if (!isUuid(targetUserId)) {
+        return json(403, { success: false, message: 'حساب همکار متصل به این گفتگو یافت نشد یا غیرفعال است.' });
+      }
+    } else {
+      targetUserId = normalizeId(action.created_by);
+      if (!isUuid(targetUserId)) {
+        return json(403, { success: false, message: 'هویت کاربر صادرکننده اقدام مشخص نیست.' });
+      }
+    }
+    effectiveAuthContext = await loadUserContext(supabaseUrl, serviceRoleKey, { id: targetUserId });
+    if (
+      normalizeId(effectiveAuthContext?.orgId) !== normalizeId(action.org_id)
+      || effectiveAuthContext?.profile?.is_active === false
+    ) {
+      return json(403, { success: false, message: 'عدم تطابق سازمان یا غیرفعال‌بودن حساب برای تأیید اقدام.' });
+    }
+  }
+
+  {
+    const canManageAgents = canManageAiSettings(effectiveAuthContext)
+      || effectiveAuthContext?.permissions?.__ai_agents?.edit === true;
+    const isOwner = Boolean(action.created_by && String(action.created_by) === String(effectiveAuthContext.userId || ''));
+    let canEditAgent = canManageAgents;
+    const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, effectiveAuthContext);
+    if (isStaffBotCallback && !isPlanFeatureEnabled(planContext, 'ai_staff_bot')) {
+      return json(403, { success: false, message: 'قابلیت بات هوشمند همکار در پلن فعلی سازمان فعال نیست.' });
+    }
+    if (resolvedActionAgentKey && AI_AGENT_KEYS.includes(resolvedActionAgentKey)) {
+      const grounding = await loadCentralAiGrounding({
+        supabaseUrl,
+        serviceRoleKey,
+        authContext: effectiveAuthContext,
+        planContext,
+        freeChatMode: false,
+        includeCalendar: false,
+      });
+      const state = grounding.agentStates?.[resolvedActionAgentKey];
+      if (state?.canView !== true) {
+        return json(403, { success: false, message: 'دسترسی به این ایجنت برای شما فعال نیست.' });
+      }
+      if (isStaffBotCallback && !canManageAgents && state?.staffBotEnabled !== true) {
+        return json(403, { success: false, message: 'مجوز استفاده از بات همکار برای این ایجنت فعال نیست.' });
+      }
+      canEditAgent = canEditAgent || state?.canEdit === true;
+    } else if (isStaffBotCallback && !canManageAgents) {
+      const grounding = await loadCentralAiGrounding({
+        supabaseUrl,
+        serviceRoleKey,
+        authContext: effectiveAuthContext,
+        planContext,
+        freeChatMode: false,
+        includeCalendar: false,
+      });
+      const anyStaffBot = Object.values(grounding.agentStates || {}).some((s: any) => s?.staffBotEnabled === true);
+      if (!anyStaffBot) {
+        return json(403, { success: false, message: 'مجوز تأیید از طریق بات همکار برای شما فعال نیست.' });
+      }
+    }
+    if (!isOwner && !canEditAgent) {
+      return json(403, { success: false, message: 'شما مجوز تایید یا رد این اقدام را ندارید.' });
+    }
+  }
+
+  if (decision === 'reject') {
+    const nowIso = new Date().toISOString();
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_action_logs', {
+      id: `eq.${action.id}`,
+      org_id: `eq.${effectiveAuthContext.orgId}`,
+    }, {
+      status: 'rejected',
+      approval_status: 'rejected',
+      confirmed_by: effectiveAuthContext.userId,
+      executed_at: nowIso,
+      result_payload: { rejected_by: effectiveAuthContext.userId, reason: body?.reason || null },
+    });
+    const runId = normalizeId(action?.proposed_payload?.agent_run_id || action?.result_payload?.agent_run_id);
+    if (runId && isUuid(runId)) {
+      await restPatch(supabaseUrl, serviceRoleKey, 'ai_agent_runs', {
+        id: `eq.${runId}`,
+        org_id: `eq.${effectiveAuthContext.orgId}`,
+      }, { status: 'cancelled', updated_at: nowIso }).catch(() => []);
+    }
+    return json(200, { success: true, decision: 'reject', actionLogId: action.id, message: 'اقدام پیشنهادی با دستور شما لغو شد.' });
+  }
+
+  const executed = await executeProposedActionLog(supabaseUrl, serviceRoleKey, effectiveAuthContext, action, body, callerAuthHeader);
+  return json(executed.status, { ...executed.payload, decision: 'approve' });
+};
+
+const handleStartAgentOnboardingQa = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const agentKey = String(body?.agentKey || body?.agent_key || '').trim() as AgentKey;
+  const def = getAgentDefinition(agentKey);
+  if (!def) return json(400, { success: false, message: 'ایجنت انتخاب‌شده معتبر نیست.' });
+  const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+  const grounding = await loadCentralAiGrounding({
+    supabaseUrl,
+    serviceRoleKey,
+    authContext,
+    planContext,
+    freeChatMode: false,
+    includeCalendar: false,
+  });
+  if (grounding.agentStates?.[agentKey]?.canEdit !== true) {
+    return json(403, { success: false, message: 'برای مصاحبه آنبوردینگ ایجنت، دسترسی ویرایش این ایجنت لازم است.' });
+  }
+  const existing = await safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_agent_configs', {
+    org_id: `eq.${authContext.orgId}`,
+    agent_key: `eq.${agentKey}`,
+    select: 'policy_json,onboarding_completed_at,tone_style',
+    limit: 1,
+  });
+  return json(200, {
+    success: true,
+    agentKey,
+    titleFa: def.titleFa,
+    questions: def.onboardingQuestions,
+    existingPolicy: existing[0]?.policy_json || {},
+    onboardingCompletedAt: existing[0]?.onboarding_completed_at || null,
+    toneStyle: existing[0]?.tone_style || 'friendly_warm',
+  });
+};
+
+const handleSubmitAgentOnboardingQa = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const agentKey = String(body?.agentKey || body?.agent_key || '').trim() as AgentKey;
+  if (!AI_AGENT_KEYS.includes(agentKey)) {
+    return json(400, { success: false, message: 'ایجنت انتخاب‌شده معتبر نیست.' });
+  }
+  const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+  const grounding = await loadCentralAiGrounding({
+    supabaseUrl,
+    serviceRoleKey,
+    authContext,
+    planContext,
+    freeChatMode: false,
+    includeCalendar: false,
+  });
+  if (grounding.agentStates?.[agentKey]?.canEdit !== true) {
+    return json(403, { success: false, message: 'فقط کاربر دارای مجوز ویرایش ایجنت می‌تواند مصاحبه آنبوردینگ را ثبت کند.' });
+  }
+  const existing = await safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_agent_configs', {
+    org_id: `eq.${authContext.orgId}`,
+    agent_key: `eq.${agentKey}`,
+    select: '*',
+    limit: 1,
+  });
+  const compiled = compileOnboardingQaPolicy({
+    agentKey,
+    existingPolicy: existing[0]?.policy_json || {},
+    answers: body?.answers && typeof body.answers === 'object' ? body.answers : {},
+  });
+  const nowIso = new Date().toISOString();
+  const nextTone = body?.toneStyle && ['formal', 'friendly_warm', 'concise', 'coaching', 'custom'].includes(String(body.toneStyle))
+    ? String(body.toneStyle)
+    : (existing[0]?.tone_style || 'friendly_warm');
+  const saved = existing[0]
+    ? await restPatch(supabaseUrl, serviceRoleKey, 'org_ai_agent_configs', {
+        org_id: `eq.${authContext.orgId}`,
+        agent_key: `eq.${agentKey}`,
+      }, {
+        tone_style: nextTone,
+        policy_json: compiled.policyJson,
+        onboarding_completed_at: nowIso,
+        updated_by: authContext.userId,
+        updated_at: nowIso,
+      })
+    : await restUpsert(supabaseUrl, serviceRoleKey, 'org_ai_agent_configs', [{
+        org_id: authContext.orgId,
+        agent_key: agentKey,
+        is_enabled: true,
+        tone_style: nextTone,
+        policy_json: compiled.policyJson,
+        onboarding_completed_at: nowIso,
+        updated_by: authContext.userId,
+        updated_at: nowIso,
+      }], 'org_id,agent_key');
+
+  return json(200, {
+    success: true,
+    config: saved[0] || null,
+    policyJson: compiled.policyJson,
+    summaryFa: compiled.summaryFa,
+    message: `سیاست تخصصی ${getAgentTitleFa(agentKey)} ثبت شد.`,
+  });
+};
+
+const handleCreateStaffBotBindToken = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const channelType = String(body?.channelType || body?.channel_type || 'telegram').trim().toLowerCase();
+  if (!['telegram', 'bale', 'rubika'].includes(channelType)) {
+    return json(400, { success: false, message: 'پیام‌رسان انتخاب‌شده پشتیبانی نمی‌شود.' });
+  }
+  const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+  if (!isPlanFeatureEnabled(planContext, 'ai_staff_bot')) {
+    return json(403, { success: false, message: 'قابلیت بات هوشمند همکار در پلن فعلی سازمان فعال نیست.' });
+  }
+  const grounding = await loadCentralAiGrounding({
+    supabaseUrl,
+    serviceRoleKey,
+    authContext,
+    planContext,
+    freeChatMode: false,
+    includeCalendar: false,
+  });
+  const hasStaffBotAccess = canManageAiSettings(authContext)
+    || Object.values(grounding.agentStates || {}).some((s: any) => s.staffBotEnabled === true);
+  if (!hasStaffBotAccess) {
+    return json(403, { success: false, message: 'دسترسی استفاده از بات همکار در تنظیمات ایجنت‌ها برای شما فعال نشده است.' });
+  }
+
+  const empRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'employees', {
+    org_id: `eq.${authContext.orgId}`,
+    related_profile_id: `eq.${authContext.userId}`,
+    select: 'id',
+    limit: 1,
+  });
+
+  const numBuf = new Uint32Array(1);
+  crypto.getRandomValues(numBuf);
+  const otpCode = String(100000 + (numBuf[0] % 900000));
+  const nowIso = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  const tokenHash = await sha256Hex(`${authContext.orgId}:${authContext.userId}:${channelType}:${otpCode}:${Date.now()}:${crypto.randomUUID()}`);
+
+  await restPatch(supabaseUrl, serviceRoleKey, 'ai_staff_bot_bind_tokens', {
+    org_id: `eq.${authContext.orgId}`,
+    user_id: `eq.${authContext.userId}`,
+    channel_type: `eq.${channelType}`,
+    used_at: 'is.null',
+  }, {
+    used_at: nowIso,
+  }).catch(() => []);
+
+  await restInsert(supabaseUrl, serviceRoleKey, 'ai_staff_bot_bind_tokens', [{
+    org_id: authContext.orgId,
+    user_id: authContext.userId,
+    employee_id: empRows[0]?.id || null,
+    channel_type: channelType,
+    bind_code: otpCode,
+    token_hash: tokenHash,
+    expires_at: expiresAt,
+    metadata: { requested_from: 'profile' },
+  }]);
+
+  return json(200, {
+    success: true,
+    channelType,
+    otpCode,
+    expiresAt,
+    ttlSeconds: 600,
+    instructionFa: `کد ۶ رقمی زیر را تا ۱۰ دقیقه آینده در بات رسمی سازمان در ${channelType === 'telegram' ? 'تلگرام' : channelType === 'bale' ? 'بله' : 'روبیکا'} ارسال کنید:\n${otpCode}`,
+  });
+};
+
+const handleVerifyStaffBotOtp = async (supabaseUrl: string, serviceRoleKey: string, body: any) => {
+  const channelType = String(body?.channelType || body?.channel_type || '').trim().toLowerCase();
+  const chatId = String(body?.chatId || body?.chat_id || '').trim();
+  const otpCode = String(body?.otpCode || body?.otp_code || '').trim();
+  const orgIdHint = normalizeId(body?.orgId || body?.org_id);
+  if (!['telegram', 'bale', 'rubika'].includes(channelType) || !chatId || !/^\d{6}$/.test(otpCode)) {
+    return json(400, { success: false, matched: false, message: 'پارامترهای کد تایید بات معتبر نیست.' });
+  }
+
+  const tokenRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_staff_bot_bind_tokens', {
+    channel_type: `eq.${channelType}`,
+    bind_code: `eq.${otpCode}`,
+    used_at: 'is.null',
+    ...(isUuid(orgIdHint) ? { org_id: `eq.${orgIdHint}` } : {}),
+    select: '*',
+    order: 'created_at.desc',
+    limit: 5,
+  });
+  const nowMs = Date.now();
+  const validToken = (tokenRows || []).find((row: any) => {
+    const expMs = Date.parse(String(row?.expires_at || ''));
+    return Number.isFinite(expMs) && expMs > nowMs;
+  }) || null;
+  if (!validToken) {
+    return json(200, { success: false, matched: false, message: 'کد تایید معتبر نیست یا منقضی شده است.' });
+  }
+
+  const orgId = String(validToken.org_id);
+  const userId = String(validToken.user_id);
+  const authContext = await loadUserContext(supabaseUrl, serviceRoleKey, { id: userId });
+  if (normalizeId(authContext?.orgId) !== normalizeId(orgId)) {
+    return json(403, { success: false, matched: false, message: 'عدم تطابق سازمان همکار.' });
+  }
+  const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+  if (!isPlanFeatureEnabled(planContext, 'ai_staff_bot')) {
+    return json(403, { success: false, matched: false, message: 'قابلیت بات همکار در پلن سازمان فعال نیست.' });
+  }
+
+  const nowIso = new Date().toISOString();
+  await restPatch(supabaseUrl, serviceRoleKey, 'ai_staff_bot_bind_tokens', { id: `eq.${validToken.id}` }, {
+    used_at: nowIso,
+    metadata: { ...(validToken.metadata || {}), verified_chat_id: chatId, verified_at: nowIso },
+  });
+
+  const chatCol = `${channelType}_chat_id`;
+  await restPatch(supabaseUrl, serviceRoleKey, 'profiles', {
+    id: `eq.${userId}`,
+    org_id: `eq.${orgId}`,
+  }, {
+    [chatCol]: chatId,
+    updated_at: nowIso,
+  });
+
+  const empRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'employees', {
+    org_id: `eq.${orgId}`,
+    related_profile_id: `eq.${userId}`,
+    select: 'id,full_name',
+    limit: 1,
+  });
+  const employeeId = empRows[0]?.id ? String(empRows[0].id) : (validToken.employee_id ? String(validToken.employee_id) : null);
+
+  let bindingId: string | null = null;
+  if (employeeId) {
+    const bindingRows = await restUpsert(
+      supabaseUrl,
+      serviceRoleKey,
+      'bot_chat_identity_bindings',
+      [{
+        org_id: orgId,
+        channel_type: channelType,
+        chat_id: chatId,
+        target_module_id: 'employees',
+        target_record_id: employeeId,
+        profile_id: userId,
+        display_name: authContext.profile?.full_name || empRows[0]?.full_name || null,
+        last_seen_at: nowIso,
+      }],
+      'org_id,channel_type,chat_id',
+    ).catch(() => []);
+    bindingId = bindingRows[0]?.id || null;
+  }
+
+  // Respect chk_counterparty_bot_direct_threads_target_link strictly:
+  // Either target_module_id='employees' + target_record_id=employeeId + employee_id=employeeId + profile_id=userId,
+  // OR all 5 counterparty target fields NULL + profile_id=userId.
+  await restUpsert(
+    supabaseUrl,
+    serviceRoleKey,
+    'counterparty_bot_direct_threads',
+    [{
+      org_id: orgId,
+      channel_type: channelType,
+      chat_id: chatId,
+      binding_id: bindingId,
+      target_module_id: employeeId ? 'employees' : null,
+      target_record_id: employeeId ? employeeId : null,
+      customer_id: null,
+      supplier_id: null,
+      employee_id: employeeId ? employeeId : null,
+      profile_id: userId,
+      display_name: authContext.profile?.full_name || null,
+      last_seen_at: nowIso,
+      last_message_at: nowIso,
+      metadata: {
+        staff_bound: true,
+        staff_bound_at: nowIso,
+      },
+    }],
+    'org_id,channel_type,chat_id',
+  ).catch((err) => console.warn('counterparty_bot_direct_threads upsert warning in staff bind:', err));
+
+  return json(200, {
+    success: true,
+    matched: true,
+    userId,
+    fullName: authContext.profile?.full_name || 'همکار گرامی',
+    replyText: `حساب شما (${authContext.profile?.full_name || 'همکار'}) با موفقیت به بات هوشمند سازمان متصل شد. از این پس می‌توانید دستورات کاری، ویس، تصویر فاکتور یا پرسش‌های خود را مستقیماً همین‌جا ارسال کنید.`,
+  });
+};
+
+const handleListAgentMessages = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const limit = Math.min(100, Math.max(10, Number(body?.limit || 60)));
+  const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+  const grounding = await loadCentralAiGrounding({
+    supabaseUrl,
+    serviceRoleKey,
+    authContext,
+    planContext,
+    freeChatMode: false,
+    includeCalendar: false,
+  });
+  const canManageAgents = canManageAiSettings(authContext) || authContext?.permissions?.__ai_agents?.edit === true;
+
+  const [noteRows, rawThreads] = await Promise.all([
+    safeRestSelect(supabaseUrl, serviceRoleKey, 'notes', {
+      org_id: `eq.${authContext.orgId}`,
+      select: 'id,module_id,record_id,content,author_id,author_name,mention_user_ids,mention_role_ids,reply_to,source_type,metadata,created_at',
+      order: 'created_at.desc',
+      limit,
+    }),
+    safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_threads', {
+      org_id: `eq.${authContext.orgId}`,
+      status: 'eq.active',
+      select: 'id,title,user_id,module_id,record_id,agent_key,selected_agents,channel,shared_user_ids,shared_role_ids,metadata,created_at,updated_at',
+      order: 'updated_at.desc',
+      limit: 40,
+    }),
+  ]);
+
+  const visibleAgentNotes = (noteRows || []).filter((n: any) => {
+    const convKey = String(n?.metadata?.conversation_key || '').trim();
+    const isAgentNote = convKey.startsWith('agent:') || (n?.source_type === 'ai' && Boolean(n?.metadata?.agent_key));
+    if (!isAgentNote) return false;
+    const rawKey = (String(n?.metadata?.agent_key || '').trim()
+      || String(convKey || '').replace(/^agent:/, '').trim()
+      || 'lead_orchestrator') as AgentKey;
+    const agentKey: AgentKey = AI_AGENT_KEYS.includes(rawKey) ? rawKey : 'lead_orchestrator';
+    if (grounding.agentStates?.[agentKey]?.canView !== true) return false;
+    if (String(n?.author_id || '') === String(authContext.userId)) return true;
+    const mentionsUser = Array.isArray(n?.mention_user_ids) && n.mention_user_ids.includes(authContext.userId);
+    const mentionsRole = authContext.roleId && Array.isArray(n?.mention_role_ids) && n.mention_role_ids.includes(authContext.roleId);
+    return mentionsUser || mentionsRole || canManageAgents || n?.metadata?.requested_by_user_id === authContext.userId;
+  });
+
+  const visibleThreads = (rawThreads || []).filter((thread: any) => {
+    if (isHiddenAssistantThread(thread)) return false;
+    const isOwner = normalizeId(thread?.user_id) === normalizeId(authContext.userId);
+    const isSharedUser = Array.isArray(thread?.shared_user_ids) && thread.shared_user_ids.includes(authContext.userId);
+    const isSharedRole = authContext.roleId && Array.isArray(thread?.shared_role_ids) && thread.shared_role_ids.includes(authContext.roleId);
+    if (!isOwner && !isSharedUser && !isSharedRole && !canManageAgents) return false;
+    const rawKey = (
+      String(thread?.agent_key || '').trim()
+      || String(thread?.metadata?.agent_key || '').trim()
+      || (Array.isArray(thread?.selected_agents) ? String(thread.selected_agents[0] || '').trim() : '')
+      || 'lead_orchestrator'
+    ) as AgentKey;
+    const agentKey: AgentKey = AI_AGENT_KEYS.includes(rawKey) ? rawKey : 'lead_orchestrator';
+    return grounding.agentStates?.[agentKey]?.canView === true;
+  }).slice(0, 24);
+
+  const threadById = new Map<string, any>(visibleThreads.map((t: any) => [String(t.id), t]));
+  const threadIds = Array.from(threadById.keys());
+  const recentThreadMessages = threadIds.length > 0
+    ? await safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_messages', {
+        org_id: `eq.${authContext.orgId}`,
+        thread_id: `in.(${threadIds.join(',')})`,
+        select: 'id,thread_id,role,content,metadata,created_at',
+        order: 'created_at.desc',
+        limit: 120,
+      }).catch(() => [])
+    : [];
+
+  const synthesizedThreadEntries = (recentThreadMessages || [])
+    .filter((msg: any) => ['user', 'assistant'].includes(String(msg?.role || '').trim()) && String(msg?.content || '').trim())
+    .map((msg: any) => {
+      const thread = threadById.get(String(msg?.thread_id || ''));
+      const rawKey = (
+        String(msg?.metadata?.agent_key || '').trim()
+        || String(thread?.agent_key || '').trim()
+        || String(thread?.metadata?.agent_key || '').trim()
+        || (Array.isArray(thread?.selected_agents) ? String(thread.selected_agents[0] || '').trim() : '')
+        || 'lead_orchestrator'
+      ) as AgentKey;
+      const agentKey: AgentKey = AI_AGENT_KEYS.includes(rawKey) ? rawKey : 'lead_orchestrator';
+      const isUser = String(msg.role) === 'user';
+      return {
+        id: `ai-msg-${msg.id}`,
+        module_id: thread?.module_id || null,
+        record_id: thread?.record_id || null,
+        content: String(msg.content || '').trim(),
+        author_id: isUser ? thread?.user_id || null : null,
+        author_name: isUser ? 'شما' : getAgentTitleFa(agentKey),
+        source_type: isUser ? 'user' : 'ai',
+        created_at: msg.created_at,
+        metadata: {
+          agent_key: agentKey,
+          conversation_key: `agent:${agentKey}`,
+          source_table: 'ai_messages',
+          thread_id: msg.thread_id,
+          thread_title: thread?.title || null,
+          channel: thread?.channel || 'web',
+        },
+      };
+    });
+
+  const allCombinedMessages = [...visibleAgentNotes, ...synthesizedThreadEntries]
+    .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime());
+
+  const threadsByAgent = new Map<string, { agentKey: AgentKey; titleFa: string; conversationKey: string; lastMessageAt: string; lastPreview: string; unreadCount: number; messages: any[] }>();
+  for (const n of allCombinedMessages) {
+    const rawKey = (String(n?.metadata?.agent_key || '').trim()
+      || String(n?.metadata?.conversation_key || '').replace(/^agent:/, '').trim()
+      || 'lead_orchestrator') as AgentKey;
+    const agentKey: AgentKey = AI_AGENT_KEYS.includes(rawKey) ? rawKey : 'lead_orchestrator';
+    const key = `agent:${agentKey}`;
+    const current = threadsByAgent.get(key) || {
+      agentKey,
+      titleFa: getAgentTitleFa(agentKey),
+      conversationKey: key,
+      lastMessageAt: String(n.created_at || ''),
+      lastPreview: String(n.content || '').slice(0, 140),
+      unreadCount: 0,
+      messages: [],
+    };
+    if (current.messages.length < 30) {
+      current.messages.push(n);
+    }
+    threadsByAgent.set(key, current);
+  }
+
+  return json(200, {
+    success: true,
+    threads: Array.from(threadsByAgent.values()),
+    messages: allCombinedMessages.slice(0, limit),
+  });
+};
+
+const handleReplyAgentMessage = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const rawAgentKey = String(body?.agentKey || body?.agent_key || body?.conversationKey || '').replace(/^agent:/, '').trim() as AgentKey;
+  const agentKey: AgentKey = AI_AGENT_KEYS.includes(rawAgentKey) ? rawAgentKey : 'lead_orchestrator';
+  const content = String(body?.content || body?.message || '').trim();
+  if (!content) return json(400, { success: false, message: 'متن پاسخ خالی است.' });
+
+  const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+  const grounding = await loadCentralAiGrounding({
+    supabaseUrl,
+    serviceRoleKey,
+    authContext,
+    planContext,
+    freeChatMode: false,
+    includeCalendar: false,
+  });
+  const check = resolveRunnableAgentsForActor({ requestedAgents: [agentKey], grounding });
+  if (!check.permittedAgents.includes(agentKey)) {
+    return json(403, {
+      success: false,
+      message: check.blockedAgents[0]?.reasonFa || `شما دسترسی گفتگو با ${getAgentTitleFa(agentKey)} را ندارید.`,
+    });
+  }
+
+  const replyToId = normalizeId(body?.replyToId || body?.reply_to);
+  const attachments = Array.isArray(body?.attachments) ? body.attachments : [];
+  const moduleId = normalizeId(body?.moduleId || body?.module_id) || null;
+  const recordId = normalizeId(body?.recordId || body?.record_id) || null;
+  const conversationKey = `agent:${agentKey}`;
+
+  const userNoteRows = await restInsert(supabaseUrl, serviceRoleKey, 'notes', [{
+    org_id: authContext.orgId,
+    module_id: moduleId,
+    record_id: recordId,
+    content,
+    author_id: authContext.userId,
+    author_name: authContext.profile?.full_name || 'کاربر',
+    source_type: 'user',
+    mention_user_ids: [authContext.userId],
+    mention_role_ids: [],
+    reply_to: isUuid(replyToId) ? replyToId : null,
+    metadata: {
+      agent_key: agentKey,
+      conversation_key: conversationKey,
+      attachments,
+      channel: 'agent_inbox',
+    },
+  }]);
+
+  let agentReplyText = '';
+  let proposedAction: any = null;
+  if (body?.triggerAgentReply !== false) {
+    try {
+      const chatRes = await handleChat(supabaseUrl, serviceRoleKey, authContext, {
+        message: content,
+        agents: [agentKey],
+        channel: 'agent_inbox',
+        preferFastAgentModel: body?.preferFastAgentModel === true,
+        context: moduleId && recordId
+          ? { mode: 'record', moduleId, recordId }
+          : { mode: 'page', route: '/notifications' },
+      });
+      const parsedChat = await chatRes.json().catch(() => ({}));
+      agentReplyText = String(parsedChat?.answer || '').trim();
+      proposedAction = parsedChat?.proposedAction || null;
+      if (agentReplyText) {
+        await relayAgentMessageToStaff({
+          supabaseUrl,
+          serviceRoleKey,
+          orgId: authContext.orgId,
+          agentKey,
+          recipientUserIds: [authContext.userId],
+          content: agentReplyText,
+          moduleId,
+          recordId,
+          requestedByUserId: authContext.userId,
+          priority: 10,
+          waitingApprovalId: proposedAction?.id || null,
+          relayKind: proposedAction ? 'approval_request' : 'followup',
+        });
+      }
+    } catch (err) {
+      console.warn('Agent inbox auto follow-up failed:', err);
+    }
+  }
+
+  return json(200, {
+    success: true,
+    userNote: userNoteRows[0] || null,
+    agentKey,
+    conversationKey,
+    agentReplyText: agentReplyText || null,
+    proposedAction,
+  });
+};
+
+const handleStaffBotAgentTurn = async (supabaseUrl: string, serviceRoleKey: string, body: any) => {
+  const orgId = normalizeId(body?.orgId || body?.org_id);
+  const channelType = String(body?.channelType || body?.channel_type || '').trim().toLowerCase();
+  const chatId = String(body?.chatId || body?.chat_id || '').trim();
+  const message = String(body?.message || '').trim() || 'سلام، فایل/ویس ارسال شد.';
+  if (!isUuid(orgId) || !['telegram', 'bale', 'rubika'].includes(channelType) || !chatId) {
+    return json(400, { success: false, message: 'مشخصات نشست بات همکار کامل نیست.' });
+  }
+
+  const chatCol = `${channelType}_chat_id`;
+  const profileRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'profiles', {
+    org_id: `eq.${orgId}`,
+    [chatCol]: `eq.${chatId}`,
+    is_active: 'eq.true',
+    select: 'id,full_name,org_id,role_id',
+    limit: 1,
+  });
+  const profile = profileRows[0] || null;
+  if (!profile?.id) {
+    return json(404, { success: false, staffBound: false, message: 'حساب همکار متصل برای این شناسه چت پیدا نشد.' });
+  }
+
+  const authContext = await loadUserContext(supabaseUrl, serviceRoleKey, { id: String(profile.id) });
+  const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+  if (!isPlanFeatureEnabled(planContext, 'ai_staff_bot')) {
+    return json(200, {
+      success: false,
+      staffBound: true,
+      replyText: 'قابلیت بات هوشمند همکار در پلن فعلی سازمان غیرفعال است.',
+    });
+  }
+  const grounding = await loadCentralAiGrounding({
+    supabaseUrl,
+    serviceRoleKey,
+    authContext,
+    planContext,
+    message,
+    freeChatMode: false,
+    includeCalendar: false,
+  });
+  const staffBotPermittedAgents = Object.values(grounding.agentStates || {})
+    .filter((s: any) => s.canUse && s.staffBotEnabled)
+    .map((s: any) => s.agentKey);
+  if (!staffBotPermittedAgents.length && !canManageAiSettings(authContext)) {
+    return json(200, {
+      success: false,
+      staffBound: true,
+      replyText: 'دسترسی استفاده از بات هوشمند همکار در تنظیمات ایجنت‌ها برای حساب شما فعال نشده است.',
+    });
+  }
+
+  const attachment = body?.attachment && typeof body.attachment === 'object' ? body.attachment : null;
+  const chatReqBody: Record<string, any> = {
+    message,
+    channel: 'staff_bot',
+    preferFastAgentModel: true,
+    continueByContext: true,
+    context: { mode: 'page', route: `/staff-bot/${channelType}` },
+  };
+  if (staffBotPermittedAgents.length) {
+    const suggested = heuristicSelectAgentsAndCapabilities({
+      message,
+      allowedAgents: staffBotPermittedAgents,
+    });
+    chatReqBody.agents = suggested.agents;
+    chatReqBody.capabilities = suggested.capabilities;
+  }
+
+  const res = attachment
+    ? await handleChatWithFile(supabaseUrl, serviceRoleKey, authContext, { ...chatReqBody, file: attachment })
+    : await handleChat(supabaseUrl, serviceRoleKey, authContext, chatReqBody);
+  const parsed = await res.json().catch(() => ({}));
+
+  return json(200, {
+    success: parsed?.success !== false,
+    staffBound: true,
+    replyText: String(parsed?.answer || parsed?.message || 'پاسخ آماده نشد.').trim(),
+    proposedAction: parsed?.proposedAction || null,
+    selectedAgents: parsed?.selectedAgents || [],
+    primaryAgent: parsed?.primaryAgent || null,
+  });
+};
+
+const handleRunBackgroundAgents = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  isInternalCron: boolean,
+  authContext: any | null,
+  body: any,
+) => {
+  const rawAgentKey = String(body?.agentKey || body?.agent_key || '').trim() as AgentKey;
+  const hasScopedAgentKey = Boolean(rawAgentKey);
+  if (hasScopedAgentKey && !AI_AGENT_KEYS.includes(rawAgentKey)) {
+    return json(400, { success: false, message: 'کلید ایجنت معتبر نیست.' });
+  }
+
+  let scopedOrgId: string | null = null;
+  let forceRun = false;
+
+  if (!isInternalCron) {
+    if (!authContext?.orgId) {
+      return json(403, { success: false, message: 'مجوز اجرای دستی ایجنت‌های پس‌زمینه را ندارید.' });
+    }
+    scopedOrgId = String(authContext.orgId);
+    forceRun = body?.force === true;
+
+    const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+    const grounding = await loadCentralAiGrounding({
+      supabaseUrl,
+      serviceRoleKey,
+      authContext,
+      planContext,
+      freeChatMode: false,
+      includeCalendar: false,
+    });
+
+    const canManageAny = canManageAiSettings(authContext)
+      || authContext?.permissions?.__ai_agents?.edit === true
+      || Object.values(grounding.agentStates || {}).some((s: any) => s?.canEdit === true);
+
+    if (hasScopedAgentKey) {
+      const targetState = grounding.agentStates?.[rawAgentKey];
+      if (targetState?.canEdit !== true) {
+        return json(403, {
+          success: false,
+          message: `شما مجوز اجرای دستی یا مدیریت زمان‌بندی خودکار ${getAgentTitleFa(rawAgentKey)} را ندارید.`,
+        });
+      }
+      if (targetState?.planAllowed === false || !isPlanFeatureEnabled(planContext, 'ai_background_agents')) {
+        return json(403, {
+          success: false,
+          message: 'قابلیت پایش و زمان‌بندی خودکار یا ایجنت انتخاب‌شده در پلن فعلی سازمان فعال نیست.',
+        });
+      }
+      if (targetState?.orgEnabled === false) {
+        return json(400, {
+          success: false,
+          message: `${getAgentTitleFa(rawAgentKey)} در تنظیمات سازمان خاموش است.`,
+        });
+      }
+      if (forceRun) {
+        const def = getAgentDefinition(rawAgentKey);
+        if (def?.supportsBackground) {
+          const existingRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_agent_configs', {
+            org_id: `eq.${scopedOrgId}`,
+            agent_key: `eq.${rawAgentKey}`,
+            select: 'id',
+            limit: 1,
+          });
+          if (!existingRows.length) {
+            const nowIso = new Date().toISOString();
+            await restUpsert(supabaseUrl, serviceRoleKey, 'org_ai_agent_configs', [{
+              org_id: scopedOrgId,
+              agent_key: rawAgentKey,
+              is_enabled: true,
+              tone_style: def.defaultToneStyle || 'friendly_warm',
+              allowed_channels: ['web', 'staff_bot', 'agent_inbox'],
+              background_config: { ...(def.defaultBackgroundConfig || {}), enabled: false },
+              updated_by: authContext.userId,
+              updated_at: nowIso,
+            }], 'org_id,agent_key').catch(() => []);
+          }
+        }
+      }
+    } else if (!canManageAny) {
+      return json(403, { success: false, message: 'مجوز اجرای دستی ایجنت‌های پس‌زمینه را ندارید.' });
+    }
+  }
+
+  const tickResult = await runAiBackgroundAgentsTick({
+    supabaseUrl,
+    serviceRoleKey,
+    orgId: scopedOrgId,
+    agentKey: hasScopedAgentKey ? rawAgentKey : null,
+    force: forceRun,
+    maxOrgs: isInternalCron ? Number(body?.maxOrgs || 15) : 1,
+  });
+  return json(200, {
+    success: true,
+    ...tickResult,
+  });
 };
 
 Deno.serve(async (req: Request) => {
@@ -13909,10 +17131,18 @@ Deno.serve(async (req: Request) => {
     const action: AssistantAction = String(body?.action || 'chat') as AssistantAction;
     const authHeader = req.headers.get('authorization') || '';
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-    const isInternalImageWorker = action === 'process_ai_image_jobs'
-      && token === serviceRoleKey
-      && ['ai-image-worker', 'workflow-interval-runner'].includes(String(req.headers.get('x-kalam-internal') || ''));
-    if (isInternalImageWorker) return await handleProcessAiImageJobs(supabaseUrl, serviceRoleKey);
+    const internalCaller = String(req.headers.get('x-kalam-internal') || '').trim();
+    const isInternalServiceCall = token === serviceRoleKey && Boolean(internalCaller);
+
+    if (isInternalServiceCall && ['ai-image-worker', 'workflow-interval-runner'].includes(internalCaller)) {
+      if (action === 'process_ai_image_jobs') return await handleProcessAiImageJobs(supabaseUrl, serviceRoleKey);
+      if (action === 'run_background_agents') return await handleRunBackgroundAgents(supabaseUrl, serviceRoleKey, true, null, body);
+    }
+    if (isInternalServiceCall && internalCaller === 'bot-webhook') {
+      if (action === 'verify_staff_bot_otp') return await handleVerifyStaffBotOtp(supabaseUrl, serviceRoleKey, body);
+      if (action === 'staff_bot_agent_turn') return await handleStaffBotAgentTurn(supabaseUrl, serviceRoleKey, body);
+      if (action === 'resolve_waiting_approval') return await handleResolveWaitingApproval(supabaseUrl, serviceRoleKey, null, body, authHeader);
+    }
     if (!token) return json(401, { success: false, message: 'نشست شما معتبر نیست. دوباره وارد حساب کاربری شوید.' });
 
     const user = await verifyUserToken(supabaseUrl, serviceRoleKey, token);
@@ -13970,7 +17200,18 @@ Deno.serve(async (req: Request) => {
     }
     if (action === 'suggest_reply' || action === 'bot_customer_agent_turn') return await handleSuggestReply(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'propose_note') return await handleProposeNote(supabaseUrl, serviceRoleKey, authContext, body);
-    if (action === 'confirm_action') return await handleConfirmAction(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'confirm_action') return await handleConfirmAction(supabaseUrl, serviceRoleKey, authContext, body, authHeader);
+    if (action === 'get_agents_workspace_overview') return await handleGetAgentsWorkspaceOverview(supabaseUrl, serviceRoleKey, authContext);
+    if (action === 'save_org_agent_config') return await handleSaveOrgAgentConfig(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'save_agent_member_permissions') return await handleSaveAgentMemberPermissions(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'list_waiting_approvals') return await handleListWaitingApprovals(supabaseUrl, serviceRoleKey, authContext);
+    if (action === 'resolve_waiting_approval') return await handleResolveWaitingApproval(supabaseUrl, serviceRoleKey, authContext, body, authHeader);
+    if (action === 'start_agent_onboarding_qa') return await handleStartAgentOnboardingQa(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'submit_agent_onboarding_qa') return await handleSubmitAgentOnboardingQa(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'create_staff_bot_bind_token') return await handleCreateStaffBotBindToken(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'list_agent_messages') return await handleListAgentMessages(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'reply_agent_message') return await handleReplyAgentMessage(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'run_background_agents') return await handleRunBackgroundAgents(supabaseUrl, serviceRoleKey, false, authContext, body);
     if (action === 'saas_ai') return await handleSaasAi(supabaseUrl, serviceRoleKey, authContext, body);
 
     return json(400, { success: false, message: 'اقدام درخواستی پشتیبانی نمی‌شود.' });

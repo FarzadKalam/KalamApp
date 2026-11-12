@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMemo } from 'react';
 import { 
@@ -6,7 +6,8 @@ import {
 } from 'antd';
 import { 
     UserOutlined, ArrowRightOutlined, CheckCircleOutlined, 
-    CloseCircleOutlined, IdcardOutlined, SafetyCertificateOutlined, EditOutlined, UploadOutlined, RobotOutlined
+    CloseCircleOutlined, IdcardOutlined, SafetyCertificateOutlined, EditOutlined, UploadOutlined, RobotOutlined,
+    CopyOutlined, MessageOutlined
 } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { invokeUserAdminFunction } from '../utils/userAdminInvoke';
@@ -24,7 +25,12 @@ import { assertPhoneAvailableForOrg, getPhoneOtpStatusMeta, getPhoneOwnershipErr
 import { getOtpErrorMessage, normalizeOtpToken, verifyPhoneChangeOtp } from '../utils/otpAuth';
 import { normalizeIranMobile } from '../utils/phoneNumber';
 import { getPreferredRelationTargetField } from '../utils/relationTargetField';
-import { fetchCurrentUserRoleContext } from '../utils/permissions';
+import {
+  AI_AGENTS_PERMISSION_KEY,
+  AI_AGENTS_STAFF_BOT_PERMISSION_KEY,
+  fetchCurrentUserRoleContext,
+} from '../utils/permissions';
+import { hasCurrentOrgPlanFeature } from '../utils/saasPlanFeatures';
 import { clearSessionBootstrapCache, fetchSessionBootstrap, getCachedAuthUser } from '../utils/sessionCache';
 import { clearReferenceDataCache } from '../utils/referenceData';
 import { clearIdentityDirectoryCache } from '../utils/identityDirectory';
@@ -57,6 +63,16 @@ const ProfilePage: React.FC = () => {
     const [phoneOtpCode, setPhoneOtpCode] = useState('');
     const [phoneOtpLoading, setPhoneOtpLoading] = useState(false);
     const [phoneOtpRequested, setPhoneOtpRequested] = useState(false);
+    const [staffBotBindChannel, setStaffBotBindChannel] = useState<'telegram' | 'bale' | 'rubika'>('telegram');
+    const [staffBotBindLoading, setStaffBotBindLoading] = useState(false);
+    const [staffBotOtpInfo, setStaffBotOtpInfo] = useState<{
+        channelType: 'telegram' | 'bale' | 'rubika';
+        otpCode: string;
+        expiresAt: string;
+        instructionFa: string;
+    } | null>(null);
+    const [staffBotRemainingSeconds, setStaffBotRemainingSeconds] = useState(0);
+    const [canUseStaffBot, setCanUseStaffBot] = useState(false);
     const [profileFieldPermissions, setProfileFieldPermissions] = useState<Record<string, boolean>>({});
     const [activeToggleLoading, setActiveToggleLoading] = useState(false);
     const [selfAvatarUploading, setSelfAvatarUploading] = useState(false);
@@ -72,6 +88,52 @@ const ProfilePage: React.FC = () => {
     useEffect(() => {
         fetchRoles();
     }, [currentOrgId]);
+
+    useEffect(() => {
+        if (!staffBotOtpInfo?.expiresAt) {
+            setStaffBotRemainingSeconds(0);
+            return;
+        }
+        const updateCountdown = () => {
+            const expiresMs = new Date(staffBotOtpInfo.expiresAt).getTime();
+            if (Number.isNaN(expiresMs)) {
+                setStaffBotRemainingSeconds(0);
+                return;
+            }
+            const remaining = Math.max(0, Math.floor((expiresMs - Date.now()) / 1000));
+            setStaffBotRemainingSeconds(remaining);
+        };
+        updateCountdown();
+        const timer = window.setInterval(updateCountdown, 1000);
+        return () => window.clearInterval(timer);
+    }, [staffBotOtpInfo?.expiresAt]);
+
+    const handleCreateStaffBotBindToken = async () => {
+        setStaffBotBindLoading(true);
+        try {
+            const { data, error } = await supabase.functions.invoke('ai-assistant', {
+                body: {
+                    action: 'create_staff_bot_bind_token',
+                    channelType: staffBotBindChannel,
+                },
+            });
+            if (error) throw error;
+            if (!data?.success) {
+                throw new Error(String(data?.message || 'ایجاد کد اتصال بات همکار ناموفق بود.'));
+            }
+            setStaffBotOtpInfo({
+                channelType: (data.channelType || staffBotBindChannel) as 'telegram' | 'bale' | 'rubika',
+                otpCode: String(data.otpCode || '').trim(),
+                expiresAt: String(data.expiresAt || '').trim(),
+                instructionFa: String(data.instructionFa || '').trim(),
+            });
+            message.success('کد اتصال ۶ رقمی آماده شد.');
+        } catch (err: any) {
+            message.error(toFaErrorMessage(err, 'ایجاد کد اتصال بات همکار ناموفق بود.'));
+        } finally {
+            setStaffBotBindLoading(false);
+        }
+    };
 
     const fetchRoles = async () => {
         if (!currentOrgId) {
@@ -115,6 +177,33 @@ const ProfilePage: React.FC = () => {
         }
         const context = await fetchCurrentUserRoleContext(supabase);
         setProfileFieldPermissions(context.permissions?.profiles?.fields || {});
+        const aiPerms = context.permissions?.[AI_AGENTS_PERMISSION_KEY] || {};
+        const normalizedSoftwareRole = String(snapshot.profile?.role || '').trim().toLowerCase();
+        const isOrgAdminRole = normalizedSoftwareRole === 'admin' || normalizedSoftwareRole === 'super_admin';
+        const roleAllowsStaffBot =
+            aiPerms.view !== false &&
+            (aiPerms.edit === true ||
+                (isOrgAdminRole
+                    ? aiPerms.fields?.[AI_AGENTS_STAFF_BOT_PERMISSION_KEY] !== false
+                    : aiPerms.fields?.[AI_AGENTS_STAFF_BOT_PERMISSION_KEY] === true));
+        if (!roleAllowsStaffBot) {
+            setCanUseStaffBot(false);
+        } else {
+            const [planAllowed, overviewRes] = await Promise.all([
+                hasCurrentOrgPlanFeature('ai_staff_bot', { defaultEnabled: false }),
+                supabase.functions
+                    .invoke('ai-assistant', { body: { action: 'get_agents_workspace_overview' } })
+                    .catch(() => ({ data: null })),
+            ]);
+            const ovData = (overviewRes as any)?.data;
+            const hasAnyEligibleAgent = ovData?.success
+                ? (ovData?.planFeatures?.ai_staff_bot === true &&
+                    (ovData?.canManage === true ||
+                        (Array.isArray(ovData?.agents) &&
+                            ovData.agents.some((agent: any) => agent?.staffBotEnabled === true))))
+                : planAllowed;
+            setCanUseStaffBot(Boolean(planAllowed && hasAnyEligibleAgent));
+        }
     };
 
     const formatPersianDate = (val: any, format: string) => {
@@ -866,6 +955,81 @@ const ProfilePage: React.FC = () => {
                                                     تایید شماره
                                                 </Button>
                                             </div>
+                                        </div>
+                                    ) : null}
+
+                                    {canSelfVerifyPhone && canUseStaffBot ? (
+                                        <div className="rounded-2xl border border-gray-200 dark:border-gray-800 p-4 space-y-3">
+                                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                                <div className="flex items-center gap-2 font-semibold text-gray-800 dark:text-gray-100">
+                                                    <MessageOutlined className="text-leather-500" />
+                                                    <span>اتصال بات هوشمند همکار</span>
+                                                </div>
+                                                <div className="flex flex-wrap items-center gap-1.5">
+                                                    <Tag color={record.telegram_chat_id ? 'green' : 'default'}>
+                                                        تلگرام: {record.telegram_chat_id ? 'متصل' : 'متصل نیست'}
+                                                    </Tag>
+                                                    <Tag color={record.bale_chat_id ? 'green' : 'default'}>
+                                                        بله: {record.bale_chat_id ? 'متصل' : 'متصل نیست'}
+                                                    </Tag>
+                                                    <Tag color={record.rubika_chat_id ? 'green' : 'default'}>
+                                                        روبیکا: {record.rubika_chat_id ? 'متصل' : 'متصل نیست'}
+                                                    </Tag>
+                                                </div>
+                                            </div>
+                                            <div className="text-sm text-gray-500 dark:text-gray-400">
+                                                برای دریافت یادآوری‌ها، پیگیری امور و گفتگو با ایجنت‌های مجاز از طریق پیام‌رسان، کانال موردنظر را انتخاب کرده و کد اتصال ۶ رقمی بسازید.
+                                            </div>
+                                            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                                                <Select
+                                                    value={staffBotBindChannel}
+                                                    onChange={(val) => setStaffBotBindChannel(val)}
+                                                    className="sm:w-48"
+                                                    options={[
+                                                        { value: 'telegram', label: 'تلگرام' },
+                                                        { value: 'bale', label: 'بله' },
+                                                        { value: 'rubika', label: 'روبیکا' },
+                                                    ]}
+                                                />
+                                                <Button
+                                                    type="primary"
+                                                    className="bg-leather-600"
+                                                    loading={staffBotBindLoading}
+                                                    onClick={() => void handleCreateStaffBotBindToken()}
+                                                >
+                                                    دریافت کد اتصال ۶ رقمی
+                                                </Button>
+                                            </div>
+                                            {staffBotOtpInfo ? (
+                                                <Alert
+                                                    type={staffBotRemainingSeconds > 0 ? 'success' : 'warning'}
+                                                    showIcon
+                                                    message={
+                                                        <div className="flex flex-wrap items-center gap-2">
+                                                            <span>کد اتصال ({staffBotOtpInfo.channelType === 'bale' ? 'بله' : staffBotOtpInfo.channelType === 'rubika' ? 'روبیکا' : 'تلگرام'}):</span>
+                                                            <code dir="ltr" className="rounded bg-white px-2 py-0.5 text-base font-bold tracking-widest text-slate-900 ring-1 ring-slate-200 dark:bg-black/30 dark:text-white dark:ring-white/15">
+                                                                {staffBotOtpInfo.otpCode}
+                                                            </code>
+                                                            <Button
+                                                                size="small"
+                                                                icon={<CopyOutlined />}
+                                                                onClick={() => {
+                                                                    void navigator.clipboard?.writeText(staffBotOtpInfo.otpCode);
+                                                                    message.success('کد اتصال کپی شد.');
+                                                                }}
+                                                            >
+                                                                کپی کد
+                                                            </Button>
+                                                            <Tag color={staffBotRemainingSeconds > 0 ? 'blue' : 'red'}>
+                                                                {staffBotRemainingSeconds > 0
+                                                                    ? `اعتبار: ${toPersianNumber(Math.floor(staffBotRemainingSeconds / 60))}:${toPersianNumber(String(staffBotRemainingSeconds % 60).padStart(2, '0'))}`
+                                                                    : 'منقضی شده — دوباره دریافت کنید'}
+                                                            </Tag>
+                                                        </div>
+                                                    }
+                                                    description={staffBotOtpInfo.instructionFa}
+                                                />
+                                            ) : null}
                                         </div>
                                     ) : null}
                                 </div>

@@ -130,9 +130,9 @@ export const buildStoryTextLayerStyle = (
     case 'pill_brand':
       return {
         ...base,
-        backgroundColor: 'rgb(var(--brand-500-rgb, 119 102 68))',
+        backgroundColor: 'rgb(var(--brand-500-rgb, 79 70 229))',
         color: layer.color || '#FFFFFF',
-        boxShadow: '0 10px 24px rgba(var(--brand-600-rgb, 102 87 58), 0.35)',
+        boxShadow: '0 10px 24px rgba(var(--brand-600-rgb, 67 56 202), 0.35)',
       };
     case 'frost':
       return {
@@ -187,10 +187,10 @@ const getStickerVariantStyles = (variant: StoryStickerVariant = 'frost'): React.
       };
     case 'brand':
       return {
-        background: 'rgb(var(--brand-500-rgb, 119 102 68))',
+        background: 'rgb(var(--brand-500-rgb, 79 70 229))',
         color: '#FFFFFF',
         border: '1px solid rgba(255, 255, 255, 0.24)',
-        boxShadow: '0 10px 24px rgba(var(--brand-600-rgb, 102 87 58), 0.35)',
+        boxShadow: '0 10px 24px rgba(var(--brand-600-rgb, 67 56 202), 0.35)',
       };
     case 'amber':
       return {
@@ -384,7 +384,7 @@ export const StoryStickerVisual: React.FC<StoryStickerVisualProps> = ({
             height: Math.round(22 * effectiveScale),
             borderRadius: '50%',
             background: sticker.variant === 'light' || !sticker.variant
-              ? 'rgba(var(--brand-500-rgb, 119 102 68), 0.14)'
+              ? 'rgba(var(--brand-500-rgb, 79 70 229), 0.14)'
               : 'rgba(255,255,255,0.2)',
             flexShrink: 0,
           }}
@@ -436,7 +436,7 @@ export const StoryStickerVisual: React.FC<StoryStickerVisualProps> = ({
           alignItems: 'center',
           justifyContent: 'center',
           background: sticker.variant === 'light'
-            ? 'rgb(var(--brand-500-rgb, 119 102 68))'
+            ? 'rgb(var(--brand-500-rgb, 79 70 229))'
             : 'rgba(255,255,255,0.22)',
           color: '#FFFFFF',
           cursor: 'pointer',

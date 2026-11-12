@@ -1,4 +1,5 @@
 import { BlockType, type ModuleDefinition } from '../types';
+import { AI_AGENT_KEYS, type AgentKey } from './aiAgentCatalog';
 import { getResolvedAssigneeId } from './assigneeValue';
 import { CUSTOMER_CLUB_PERMISSION_KEY } from './customerClub';
 import { fetchAssigneeDirectory } from './referenceData';
@@ -55,6 +56,12 @@ export const VOIP_PERMISSION_KEY = '__voip';
 export const STORIES_PERMISSION_KEY = '__stories';
 export const SAAS_ADMIN_PERMISSION_KEY = '__saas_admin';
 export const COMMUNICATIONS_PERMISSION_KEY = '__communications';
+export const AI_AGENTS_PERMISSION_KEY = '__ai_agents';
+export const AI_AGENTS_STAFF_BOT_PERMISSION_KEY = '__staff_bot';
+export const AI_AGENT_PERMISSION_ACTIONS = ['view', 'chat', 'toggle', 'edit'] as const;
+export type AiAgentPermissionAction = typeof AI_AGENT_PERMISSION_ACTIONS[number];
+export const getAiAgentPermissionFieldKey = (agentKey: AgentKey | string, action: AiAgentPermissionAction) =>
+  `${String(agentKey || '').trim()}.${action}`;
 export const BOT_GROUP_ACCESS_PERMISSION_KEY = 'bot_group_access';
 export { CUSTOMER_CLUB_PERMISSION_KEY };
 export const SAAS_ADMIN_MODULE_IDS = ['saas_orgs', 'saas_demo_requests', 'saas_users', 'saas_user_announcements', 'saas_support_tickets', 'saas_local_installations'] as const;
@@ -525,6 +532,24 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
     delete: false,
     record_scope: 'own',
     fields: { create: true, view_own: true, reply_own: true },
+  };
+
+  const defaultAiAgentFields: Record<string, boolean> = {
+    [AI_AGENTS_STAFF_BOT_PERMISSION_KEY]: false,
+  };
+  AI_AGENT_KEYS.forEach((agentKey) => {
+    defaultAiAgentFields[getAiAgentPermissionFieldKey(agentKey, 'view')] = true;
+    defaultAiAgentFields[getAiAgentPermissionFieldKey(agentKey, 'chat')] = true;
+    defaultAiAgentFields[getAiAgentPermissionFieldKey(agentKey, 'toggle')] = false;
+    defaultAiAgentFields[getAiAgentPermissionFieldKey(agentKey, 'edit')] = false;
+  });
+
+  defaults[AI_AGENTS_PERMISSION_KEY] = {
+    view: true,
+    edit: false,
+    delete: false,
+    record_scope: 'all',
+    fields: defaultAiAgentFields,
   };
 
   return defaults;

@@ -95,4 +95,71 @@ describe('AiCapabilityComposerActions', () => {
     );
     expect(screen.getByLabelText('پیوست فایل به هوش مصنوعی')).toBeInTheDocument();
   });
+
+  it('clearly separates Agents and Skills capsules with distinct labels and controls', () => {
+    const onChange = vi.fn();
+    const onAgentsChange = vi.fn();
+    render(
+      <AiCapabilityComposerActions
+        selected={['pricing_adjustment']}
+        onChange={onChange}
+        selectedAgents={['sales_leads', 'instagrammer']}
+        onAgentsChange={onAgentsChange}
+        onVoiceSend={vi.fn()}
+        onFilePrepared={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText('انتخاب ایجنت‌های تخصصی')).toHaveTextContent('ایجنت‌ها');
+    expect(screen.getByLabelText('انتخاب عملکرد هوش مصنوعی')).toHaveTextContent('مهارت‌ها');
+    expect(screen.getByText('فروش و لید')).toBeInTheDocument();
+    expect(screen.getByText('اینستاگرامر')).toBeInTheDocument();
+    expect(screen.getByText('تنظیم قیمت')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText('حذف ایجنت فروش و لید'));
+    expect(onAgentsChange).toHaveBeenCalledWith(['instagrammer']);
+
+    fireEvent.click(screen.getByLabelText('حذف مهارت تنظیم قیمت'));
+    expect(onChange).toHaveBeenCalledWith([]);
+  });
+
+  it('strictly hides non-accessible agents from the picker and hides the Agents trigger when none can chat', async () => {
+    const partialAccess = {
+      sales_leads: { canView: true, canChat: true, canUse: true, isHidden: false } as any,
+      hr_manager: { canView: true, canChat: false, canUse: false, isHidden: false } as any,
+      instagrammer: { canView: false, canChat: false, canUse: false, isHidden: true } as any,
+    };
+
+    const { rerender } = render(
+      <AiCapabilityComposerActions
+        selected={[]}
+        onChange={vi.fn()}
+        selectedAgents={[]}
+        onAgentsChange={vi.fn()}
+        agentAccessMap={partialAccess}
+        onVoiceSend={vi.fn()}
+        onFilePrepared={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('انتخاب ایجنت‌های تخصصی'));
+    expect(await screen.findByText('ایجنت فروش و لید')).toBeInTheDocument();
+    expect(screen.queryByText('ایجنت منابع انسانی')).not.toBeInTheDocument();
+    expect(screen.queryByText('ایجنت اینستاگرامر')).not.toBeInTheDocument();
+
+    rerender(
+      <AiCapabilityComposerActions
+        selected={[]}
+        onChange={vi.fn()}
+        selectedAgents={[]}
+        onAgentsChange={vi.fn()}
+        agentAccessMap={{
+          sales_leads: { canView: false, canChat: false, canUse: false, isHidden: true } as any,
+        }}
+        onVoiceSend={vi.fn()}
+        onFilePrepared={vi.fn()}
+      />,
+    );
+    expect(screen.queryByLabelText('انتخاب ایجنت‌های تخصصی')).not.toBeInTheDocument();
+  });
 });

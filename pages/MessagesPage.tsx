@@ -6,9 +6,9 @@ const EmailWorkspace = React.lazy(() => import('../components/email/EmailWorkspa
 const InstagramInboxPage = React.lazy(() => import('./InstagramInboxPage'));
 const MessagingSurfacePrototype = React.lazy(() => import('../components/notifications/messaging/MessagingSurfacePrototype'));
 
-type MessagesTab = 'notes' | 'bot_messages' | 'bot_direct_messages' | 'sms_messages' | 'voip_calls' | 'email_messages' | 'instagram';
-type MessagesInitialFilter = 'internal' | 'bot_group' | 'bot_direct' | 'sms' | 'call' | 'email';
-const MESSAGE_TABS = new Set<MessagesTab>(['notes', 'bot_messages', 'bot_direct_messages', 'sms_messages', 'voip_calls', 'email_messages', 'instagram']);
+type MessagesTab = 'notes' | 'agent' | 'bot_messages' | 'bot_direct_messages' | 'sms_messages' | 'voip_calls' | 'email_messages' | 'instagram';
+type MessagesInitialFilter = 'internal' | 'agent' | 'bot_group' | 'bot_direct' | 'sms' | 'call' | 'email';
+const MESSAGE_TABS = new Set<MessagesTab>(['notes', 'agent', 'bot_messages', 'bot_direct_messages', 'sms_messages', 'voip_calls', 'email_messages', 'instagram']);
 
 const MessagesPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -25,15 +25,20 @@ const MessagesPage: React.FC = () => {
   const requestedBotGroupId = String(searchParams.get('botGroup') || '').trim() || undefined;
   const requestedBotDirectThreadId = String(searchParams.get('botDirectThread') || '').trim() || undefined;
   const initialFilter = useMemo<MessagesInitialFilter>(() => {
+    if (requestedTab === 'agent' || requestedConversationKey?.startsWith('agent:')) return 'agent';
     if (requestedTab === 'bot_messages') return 'bot_group';
     if (requestedTab === 'bot_direct_messages') return 'bot_direct';
     if (requestedTab === 'email_messages') return 'email';
     if (requestedTab === 'sms_messages') return 'sms';
     if (requestedTab === 'voip_calls') return 'call';
     return 'internal';
-  }, [requestedTab]);
+  }, [requestedConversationKey, requestedTab]);
   const initialConversationKey = useMemo(() => {
-    if (requestedConversationKey) return `live:internal:${requestedConversationKey}`;
+    if (requestedConversationKey) {
+      return requestedConversationKey.startsWith('agent:')
+        ? `live:agent:${requestedConversationKey}`
+        : `live:internal:${requestedConversationKey}`;
+    }
     if (requestedBotGroupId) return `live:bot_group:${requestedBotGroupId}`;
     if (requestedBotDirectThreadId) return `live:bot_direct:${requestedBotDirectThreadId}`;
     return null;

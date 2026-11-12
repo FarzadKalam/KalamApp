@@ -1,4 +1,12 @@
-export type AgentExecutionPolicy = 'interactive_chat' | 'customer_auto_reply' | 'workflow_automation';
+import { normalizeSelectedAgents, type AgentKey, type AgentToneStyle } from './ai-agent-catalog.ts';
+
+export type AgentExecutionPolicy =
+  | 'interactive_chat'
+  | 'customer_auto_reply'
+  | 'staff_bot_chat'
+  | 'workflow_automation'
+  | 'background_agent'
+  | 'onboarding_qa';
 
 export type AgentPlanStep = {
   id: string;
@@ -6,11 +14,14 @@ export type AgentPlanStep = {
   status_message: string;
   reason?: string;
   requires_confirmation: boolean;
+  agent_key?: AgentKey;
 };
 
 export type AgentPlan = {
   policy: AgentExecutionPolicy;
   capabilities: string[];
+  selected_agents: AgentKey[];
+  tone_style?: AgentToneStyle;
   target_module_id: string | null;
   mutation_mode: 'create' | 'update';
   confidence: 'low' | 'medium' | 'high';
@@ -49,6 +60,7 @@ const toConfidence = (value: unknown): AgentPlan['confidence'] =>
 export const normalizeAgentPlan = (input: any, options: {
   policy: AgentExecutionPolicy;
   allowedCapabilities: string[];
+  allowedAgents?: AgentKey[];
   isKnownModule: (moduleId: string) => boolean;
 }): AgentPlan => {
   const allowed = new Set(options.allowedCapabilities.map((item) => String(item || '').trim()).filter(Boolean));
@@ -57,12 +69,21 @@ export const normalizeAgentPlan = (input: any, options: {
     .map((item: unknown) => asText(item, 80))
     .filter((item: string) => allowed.has(item))
     .filter((item: string) => options.policy !== 'customer_auto_reply' || !CUSTOMER_AUTO_REPLY_FORBIDDEN_OPERATORS.has(item))));
+
+  const requestedAgents = normalizeSelectedAgents(input?.selected_agents ?? input?.agents ?? []);
+  const allowedAgentSet = Array.isArray(options.allowedAgents) && options.allowedAgents.length > 0
+    ? new Set(options.allowedAgents)
+    : null;
+  const selectedAgents = allowedAgentSet
+    ? requestedAgents.filter((key) => allowedAgentSet.has(key))
+    : requestedAgents;
+
   const rawModuleId = asText(input?.target_module_id, 120);
   const targetModuleId = rawModuleId && options.isKnownModule(rawModuleId) ? rawModuleId : null;
   const mutationMode = String(input?.mutation_mode) === 'update' ? 'update' : 'create';
   const rawSteps = Array.isArray(input?.steps) ? input.steps : [];
   const clarificationQuestions = Array.isArray(input?.clarification_questions)
-    ? input.clarification_questions.map((item: unknown) => asText(item, 220)).filter(Boolean).slice(0, 3)
+    ? input.clarification_questions.map((item: unknown) => asText(item, 220)).filter(Boolean).slice(0, 4)
     : [];
   const steps = rawSteps.slice(0, 8).map((step: any, index: number) => {
     const operator = asText(step?.operator, 80);
@@ -72,13 +93,15 @@ export const normalizeAgentPlan = (input: any, options: {
       operator: usableOperator,
       status_message: asText(step?.status_message, 180) || 'در حال آماده‌سازی اطلاعات لازم…',
       reason: asText(step?.reason, 320) || undefined,
-      requires_confirmation: options.policy === 'interactive_chat' && CONFIRMATION_REQUIRED_OPERATORS.has(usableOperator),
+      requires_confirmation: (options.policy === 'interactive_chat' || options.policy === 'staff_bot_chat')
+        && CONFIRMATION_REQUIRED_OPERATORS.has(usableOperator),
     };
   }).filter((step: AgentPlanStep) => Boolean(step.operator));
 
   return {
     policy: options.policy,
     capabilities,
+    selected_agents: selectedAgents,
     target_module_id: targetModuleId,
     mutation_mode: mutationMode,
     confidence: toConfidence(input?.confidence),
@@ -89,7 +112,8 @@ export const normalizeAgentPlan = (input: any, options: {
       id: `step_${index + 1}`,
       operator,
       status_message: 'در حال آماده‌سازی عملیات…',
-      requires_confirmation: options.policy === 'interactive_chat' && CONFIRMATION_REQUIRED_OPERATORS.has(operator),
+      requires_confirmation: (options.policy === 'interactive_chat' || options.policy === 'staff_bot_chat')
+        && CONFIRMATION_REQUIRED_OPERATORS.has(operator),
     })),
   };
 };

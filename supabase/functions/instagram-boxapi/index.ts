@@ -126,7 +126,7 @@ const requireInstagramInboxEdit = (context: any) => {
   if (saasAdmin.view === true || saasAdmin.edit === true || instagram.edit === true) return;
   requireConnectionManagement(context);
 };
-const providerRequest = async (provider: any, operationKey: 'sync_accounts' | 'list_posts' | 'send_message' | 'send_generic_template' | 'reply_comment' | 'get_connect_url' | 'show_profile', body?: Record<string, any>) => {
+const providerRequest = async (provider: any, operationKey: 'sync_accounts' | 'list_posts' | 'send_message' | 'send_generic_template' | 'reply_comment' | 'get_connect_url' | 'show_profile' | 'follow_status', body?: Record<string, any>) => {
   const adapter = getInstagramProvider(text(provider?.provider_key));
   if (!adapter) throw new Error('سرویس‌دهندهٔ این اتصال در سامانه پشتیبانی نمی‌شود.');
   const operation = adapter.operations[operationKey];
@@ -323,6 +323,66 @@ const requestContactProfile = async (provider: any, account: any, contact: any, 
   await providerRequest(provider, 'show_profile', { account_id: account.provider_account_id, sender_id: contact.instagram_scoped_id });
   return true;
 };
+// بررسی می‌کند که آیا نیاز به درخواست وضعیت فالو داریم.
+// اگر قبلاً در ۶ ساعت گذشته چک شده، دوباره درخواست نمی‌دهیم.
+const shouldRequestFollowStatus = (contact: any) => {
+  const checkedAt = Date.parse(text(contact?.follow_status_checked_at));
+  return !Number.isFinite(checkedAt) || Date.now() - checkedAt >= 6 * 60 * 60 * 1000;
+};
+
+// ارسال درخواست آسنکرون follow_status به BoxAPI.
+// نتیجه از طریق Webhook با event_type = action.follow_status دریافت می‌شود.
+const requestFollowStatus = async (provider: any, account: any, contact: any, url: string, serviceKey: string) => {
+  if (!provider || !account?.provider_account_id || !contact?.id || !text(contact?.instagram_scoped_id) || !shouldRequestFollowStatus(contact)) return false;
+  // زمان درخواست را ثبت می‌کنیم تا از ارسال مجدد جلوگیری شود
+  await rest(url, serviceKey, `instagram_contacts?id=eq.${encodeURIComponent(contact.id)}&org_id=eq.${encodeURIComponent(provider.org_id)}`, {
+    method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ follow_status_checked_at: now(), updated_at: now() }),
+  });
+  await providerRequest(provider, 'follow_status', { account_id: account.provider_account_id, customer_id: contact.instagram_scoped_id });
+  return true;
+};
+
+// پردازش Webhook آسنکرون follow_status از BoxAPI.
+// ساختار payload مشابه action.show_profile است (بر اساس payload‌های واقعی لاگ‌شده):
+// { event_type: "action.follow_status", account_id: "...", data: { result: { following: true/false }, request: { customer_id: "..." }, success: true } }
+const processFollowStatusWebhook = async (provider: any, envelope: any, url: string, serviceKey: string) => {
+  if (text(envelope?.event_type) !== 'follow_status') return null;
+  const account = await resolveWebhookAccount(provider, envelope, url, serviceKey);
+  if (!account) return { persisted: 0, reason: 'شناسهٔ پیج callback وضعیت فالو با هیچ پیج متصل این سازمان تطبیق نداشت.' };
+  const payload = envelope?.data || {};
+  // نتیجه ممکن است در data.result یا data مستقیم باشد (مطابق pattern واقعی BoxAPI)
+  const result = [payload?.result, payload?.data, payload].find((candidate: any) => candidate && typeof candidate === 'object') || {};
+  // customer_id از request (مشابه show_profile) یا مستقیم
+  const customerId = text(payload?.request?.customer_id || payload?.customer_id || result?.sender_id || result?.user_id || result?.id);
+  if (!customerId) return { persisted: 0, reason: 'در callback وضعیت فالو، شناسهٔ مخاطب قابل استخراج نبود.' };
+  // استخراج وضعیت فالو — BoxAPI ممکن است following: true/false یا status: "following"/"not_following" بفرستد
+  let followStatus: string = 'unknown';
+  if (result?.following === true || text(result?.status).toLowerCase() === 'following' || text(result?.follow_status).toLowerCase() === 'following') {
+    followStatus = 'following';
+  } else if (result?.following === false || text(result?.status).toLowerCase() === 'not_following' || text(result?.follow_status).toLowerCase() === 'not_following') {
+    followStatus = 'not_following';
+  }
+  // پیدا کردن contact بر اساس instagram_scoped_id
+  const contacts = await rest(url, serviceKey, `instagram_contacts?org_id=eq.${encodeURIComponent(provider.org_id)}&account_id=eq.${encodeURIComponent(account.id)}&instagram_scoped_id=eq.${encodeURIComponent(customerId)}&select=id&limit=1`);
+  const contact = contacts?.[0];
+  if (!contact?.id) return { persisted: 0, reason: 'مخاطب متناظر callback وضعیت فالو در سازمان پیدا نشد.' };
+  // ذخیره وضعیت فالو روی contact
+  await rest(url, serviceKey, `instagram_contacts?id=eq.${encodeURIComponent(contact.id)}&org_id=eq.${encodeURIComponent(provider.org_id)}`, {
+    method: 'PATCH', headers: { Prefer: 'return=minimal' },
+    body: JSON.stringify({ follow_status: followStatus, follow_status_checked_at: now(), updated_at: now() }),
+  });
+  // ثبت رویداد در interaction events برای استفاده در شرط‌های workflow
+  await rest(url, serviceKey, 'instagram_interaction_events', {
+    method: 'POST',
+    body: JSON.stringify({
+      org_id: provider.org_id, provider_id: provider.id, account_id: account.id,
+      account_username: account.username || null, event_type: 'follow_status_checked',
+      message_text: followStatus, tags: [], payload: { follow_status: followStatus, raw: payload },
+      occurred_at: now(),
+    }),
+  });
+  return { persisted: 1, followStatus };
+};
 const coverExtension = (contentType: string, sourceUrl: string) => {
   if (/image\/avif/i.test(contentType)) return 'avif';
   if (/image\/webp/i.test(contentType)) return 'webp';
@@ -516,6 +576,8 @@ const processMessagingWebhook = async (provider: any, envelope: any, url: string
     if (isInbound) {
       try { await requestContactProfile(provider, account, contact, url, serviceKey); }
       catch (error) { console.warn('instagram contact profile lookup skipped', error); }
+      try { await requestFollowStatus(provider, account, contact, url, serviceKey); }
+      catch (error) { console.warn('instagram contact follow status check skipped', error); }
     }
     persisted += 1;
     if (isInbound) await rest(url, serviceKey, 'instagram_interaction_events?on_conflict=org_id,event_type,source_message_id', {
@@ -582,10 +644,11 @@ const handleWebhook = async (req: Request, url: string, serviceKey: string) => {
     const profileResult = await processProfileWebhook(provider, processingEnvelope, url, serviceKey);
     await processListPostsWebhook(provider, processingEnvelope, url, serviceKey);
     const commentResult = await processCommentWebhook(provider, processingEnvelope, url, serviceKey);
-    const processingReason = text(messagingResult?.reason || profileResult?.reason || commentResult?.reason);
+    const followResult = await processFollowStatusWebhook(provider, processingEnvelope, url, serviceKey);
+    const processingReason = text(messagingResult?.reason || profileResult?.reason || commentResult?.reason || followResult?.reason);
     await rest(url, serviceKey, eventPath, {
       method: 'PATCH', headers: { Prefer: 'return=minimal' },
-      body: JSON.stringify({ processing_status: processingReason ? 'ignored' : ['messaging', 'show_profile', 'list_posts', 'comment', 'comments', 'comment_created'].includes(normalizedEventType) ? 'processed' : 'ignored', processed_at: now(), error_message: processingReason || null }),
+      body: JSON.stringify({ processing_status: processingReason ? 'ignored' : ['messaging', 'show_profile', 'list_posts', 'comment', 'comments', 'comment_created', 'follow_status'].includes(normalizedEventType) ? 'processed' : 'ignored', processed_at: now(), error_message: processingReason || null }),
     });
   } catch (error) {
     const errorMessage = text(error).slice(0, 1000) || 'خطای نامشخص در پردازش وب‌هوک';

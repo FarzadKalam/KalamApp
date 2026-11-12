@@ -111,6 +111,7 @@ export type WorkflowRecord = {
   id: string;
   module_id: string;
   module_ids?: string[] | null;
+  agent_key?: string | null;
   scope_type?: 'standard' | 'process_activator' | string | null;
   process_template_id?: string | null;
   process_trigger_key?: string | null;

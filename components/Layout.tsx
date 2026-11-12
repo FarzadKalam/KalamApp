@@ -29,6 +29,7 @@ import {
   GiftOutlined,
   InstagramOutlined,
   CalendarOutlined,
+  RobotOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -38,6 +39,7 @@ import AppVersionUpdateBanner from './AppVersionUpdateBanner';
 import { getTutorialContexts } from '../utils/tutorialContexts';
 import {
   ACCOUNTING_PERMISSION_KEY,
+  AI_AGENTS_PERMISSION_KEY,
   CUSTOMER_CLUB_PERMISSION_KEY,
   REPORTS_PERMISSION_KEY,
   SETTINGS_PERMISSION_KEY,
@@ -731,6 +733,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     rolePermissions?.[CUSTOMER_CLUB_PERMISSION_KEY]?.view !== false;
   const filesAccess = resolveFilesAccessPermissions(rolePermissions);
   const communicationsAccess = resolveCommunicationsPermissions(rolePermissions);
+  const canViewAiAgentsWorkspace =
+    communicationsAccess.canUseWorkspace &&
+    rolePermissions?.[AI_AGENTS_PERMISSION_KEY]?.view !== false;
   const canViewInstagramInbox = instagramInboxFeatureEnabled && (
     rolePermissions?.[SAAS_ADMIN_PERMISSION_KEY]?.view === true
     || rolePermissions?.[SAAS_ADMIN_PERMISSION_KEY]?.edit === true
@@ -849,6 +854,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           ...(canViewSupportCustomer ? [{ key: '/support/tickets', icon: <Badge count={supportUnread} size="small" overflowCount={99}><MessageOutlined /></Badge>, label: 'تیکت‌های پشتیبانی' }] : []),
           { key: '/instagram', icon: <InstagramOutlined />, label: 'صندوق اینستاگرام', disabled: !canViewInstagramInbox },
           { key: '/ai', icon: <AiSparkleIcon className="h-4 w-4" />, label: 'دستیار هوشمند سازمان', disabled: !communicationsAccess.canUseWorkspace },
+          { key: '/ai/agents', icon: <RobotOutlined />, label: 'میز کار ایجنت‌ها', disabled: !canViewAiAgentsWorkspace },
           { key: '/secretariat_documents', label: 'نامه‌ها و مکاتبات', disabled: !canViewModule('secretariat_documents') },
           { key: `/${ADVERTISING_CAMPAIGNS_MODULE_ID}`, label: 'کمپین‌های تبلیغاتی', disabled: !canViewAdvertisingCampaigns },
         ],
@@ -1054,6 +1060,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         case '/instagram':
         case '/ai':
           return key === '/instagram' ? canViewInstagramInbox : communicationsAccess.canUseWorkspace;
+        case '/ai/agents':
+          return canViewAiAgentsWorkspace;
         case '/gallery':
           return filesAccess.canViewGallery;
         case RECYCLE_BIN_ROUTE:

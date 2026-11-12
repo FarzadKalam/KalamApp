@@ -36,6 +36,11 @@ import { supabase } from '../../supabaseClient';
 import { ADVERTISING_CAMPAIGNS_MODULE_ID } from '../../utils/advertisingCampaigns';
 import { CONTENT_CALENDAR_MODULE_ID } from '../../modules/contentCalendarsConfig';
 import { PLAN_FEATURE_OPTIONS as FEATURE_OPTIONS } from '../../utils/planFeatureCatalog';
+import {
+  deriveLegacyEnabledAiAgentFeatureKeys,
+  hasExplicitAiAgentPlanFlags,
+} from '../../utils/aiAgentCatalog';
+import { AI_AGENT_PLAN_FEATURES } from '../../utils/saasOfferingCatalog';
 
 const { Title, Text } = Typography;
 const { Panel } = Collapse;
@@ -145,6 +150,11 @@ const MODULE_GROUPS: { label: string; modules: { id: string; label: string }[] }
 ];
 
 
+
+const AI_AGENT_FEATURE_OPTIONS = AI_AGENT_PLAN_FEATURES.map((item) => ({
+  id: item.id,
+  label: item.label,
+}));
 
 type PlanRow = {
   id: string;
@@ -264,7 +274,16 @@ const SaasAdminPlans: React.FC = () => {
   const openEdit = (plan: PlanRow) => {
     setEditing(plan);
     setSelectedModules(modulesToArray(plan.enabled_modules));
-    setSelectedFeatures(featuresToArray(plan.enabled_features));
+    const baseFeatures = featuresToArray(plan.enabled_features);
+    const initialFeatures = hasExplicitAiAgentPlanFlags(plan.enabled_features)
+      ? baseFeatures
+      : Array.from(
+        new Set([
+          ...baseFeatures,
+          ...deriveLegacyEnabledAiAgentFeatureKeys(plan.enabled_modules, plan.enabled_features),
+        ]),
+      );
+    setSelectedFeatures(initialFeatures);
     setDisplayFeatures(parseDisplayFeatures(Array.isArray(plan.display_features) ? plan.display_features : []));
     setNewFeatureText('');
     form.setFieldsValue({
@@ -821,6 +840,49 @@ const SaasAdminPlans: React.FC = () => {
                       selectedFeatures.includes(feat.id)
                         ? 'border-slate-900 bg-slate-900 text-white'
                         : 'border-gray-200 hover:border-gray-300 text-slate-600'
+                    }`}
+                    onClick={() => toggleFeature(feat.id)}
+                  >
+                    <Checkbox
+                      checked={selectedFeatures.includes(feat.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={() => toggleFeature(feat.id)}
+                    />
+                    <span>{feat.label}</span>
+                  </div>
+                ))}
+              </div>
+              <Divider className="my-3" />
+              <div className="mb-2 flex items-center justify-between">
+                <Text strong className="text-xs text-slate-700">ایجنت‌های هوشمند مجاز در این پلن</Text>
+                <Space size={4}>
+                  <Button
+                    type="link"
+                    size="small"
+                    onClick={() => setSelectedFeatures((prev) => Array.from(new Set([...prev, ...AI_AGENT_FEATURE_OPTIONS.map((f) => f.id)])))}
+                  >
+                    انتخاب همه
+                  </Button>
+                  <Button
+                    type="link"
+                    size="small"
+                    onClick={() => {
+                      const agentIds = new Set(AI_AGENT_FEATURE_OPTIONS.map((f) => f.id));
+                      setSelectedFeatures((prev) => prev.filter((id) => !agentIds.has(id)));
+                    }}
+                  >
+                    حذف همه
+                  </Button>
+                </Space>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {AI_AGENT_FEATURE_OPTIONS.map((feat) => (
+                  <div
+                    key={feat.id}
+                    className={`flex items-center gap-2 rounded-xl border px-3 py-2.5 cursor-pointer transition-colors text-sm ${
+                      selectedFeatures.includes(feat.id)
+                        ? 'border-indigo-700 bg-indigo-700 text-white'
+                        : 'border-gray-200 hover:border-indigo-300 text-slate-600'
                     }`}
                     onClick={() => toggleFeature(feat.id)}
                   >

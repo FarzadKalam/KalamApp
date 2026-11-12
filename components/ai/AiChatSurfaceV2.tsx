@@ -10,6 +10,7 @@ import { formatPersianPrice } from '../../utils/persianNumberFormatter';
 import AssistantPanel from './AssistantPanel';
 import AiSparkleIcon from './AiSparkleIcon';
 import type { AiComposerCapability } from './AiCapabilityComposerActions';
+import { normalizeSelectedAgents, type AgentKey, type AgentToneStyle } from '../../utils/aiAgentCatalog';
 
 type AiThreadRow = {
   id: string;
@@ -202,6 +203,20 @@ const AiChatSurfaceV2: React.FC = () => {
       ? routeState.aiInitialCapabilities.map((item: any) => String(item || '').trim()).filter(Boolean) as AiComposerCapability[]
       : null
   ), [routeState.aiInitialCapabilities]);
+  const initialAgents = useMemo<AgentKey[] | null>(() => {
+    const queryAgent = String(searchParams.get('agent') || '').trim();
+    const candidates = Array.isArray(routeState.aiInitialAgents)
+      ? routeState.aiInitialAgents
+      : queryAgent
+        ? [queryAgent]
+        : null;
+    const normalized = candidates ? normalizeSelectedAgents(candidates) : [];
+    return normalized.length ? normalized : null;
+  }, [routeState.aiInitialAgents, searchParams]);
+  const initialToneStyle = useMemo<AgentToneStyle | null>(() => {
+    const raw = String(routeState.aiInitialToneStyle || '').trim();
+    return raw ? (raw as AgentToneStyle) : null;
+  }, [routeState.aiInitialToneStyle]);
   const initialMediaSettings = useMemo(() => (
     routeState.aiInitialMediaSettings && typeof routeState.aiInitialMediaSettings === 'object'
       ? routeState.aiInitialMediaSettings
@@ -216,6 +231,8 @@ const AiChatSurfaceV2: React.FC = () => {
     prompt: initialPrompt,
     inputKind: routeState.aiInitialInputKind || null,
     capabilities: initialCapabilities || [],
+    agents: initialAgents || [],
+    toneStyle: initialToneStyle || null,
     recordCreationTarget: routeState.aiInitialRecordCreationTargetModuleId || null,
     fileCount: effectiveInitialFiles.length,
     fileName: effectiveInitialFile?.fileName || null,
@@ -224,7 +241,7 @@ const AiChatSurfaceV2: React.FC = () => {
     mediaSourceImageCount: initialMediaSourceImages.length,
     forceNewThread,
     locationKey: location.key || '',
-  }), [effectiveInitialFile?.fileName, effectiveInitialFiles.length, forceNewThread, initialCapabilities, initialMediaSettings, initialMediaSourceImages.length, initialPrompt, initialVoipCallLogId, location.key, routeState.aiInitialInputKind, routeState.aiInitialRecordCreationTargetModuleId]);
+  }), [effectiveInitialFile?.fileName, effectiveInitialFiles.length, forceNewThread, initialAgents, initialCapabilities, initialMediaSettings, initialMediaSourceImages.length, initialPrompt, initialToneStyle, initialVoipCallLogId, location.key, routeState.aiInitialInputKind, routeState.aiInitialRecordCreationTargetModuleId]);
 
   const loadThreads = useCallback(async (preferredThreadId?: string | null) => {
     setLoadingThreads(true);
@@ -559,6 +576,8 @@ const AiChatSurfaceV2: React.FC = () => {
             initialPrompt={initialPrompt}
             initialInputKind={String(routeState.aiInitialInputKind || 'text')}
             initialCapabilities={initialCapabilities}
+            initialAgents={initialAgents}
+            initialToneStyle={initialToneStyle}
             initialRecordCreationTargetModuleId={String(routeState.aiInitialRecordCreationTargetModuleId || '').trim() || null}
             initialModelOverride={String(routeState.aiInitialModelOverride || '').trim() || null}
             initialMediaSettings={initialMediaSettings as any}
@@ -570,6 +589,7 @@ const AiChatSurfaceV2: React.FC = () => {
             onThreadDeleted={handleThreadDeleted}
             onThreadRenamed={handleThreadRenamed}
             onThreadUpserted={handleThreadUpserted}
+            showAgentInboxBox
           />
         </main>
       </div>

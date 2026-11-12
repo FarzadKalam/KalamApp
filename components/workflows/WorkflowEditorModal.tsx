@@ -40,6 +40,7 @@ import {
 import { getWorkflowActionTypeLabelFa } from '../../utils/workflowActionSummary';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { attachWorkflowTemplateFieldCatalog } from '../../utils/workflowTemplateFieldCatalog';
+import { AI_AGENT_CATALOG } from '../../utils/aiAgentCatalog';
 import {
   resolveOverlayPopupContainer,
 } from '../../utils/popupContainer';
@@ -62,11 +63,13 @@ type WorkflowEditorModalProps = {
   onClose: () => void;
   onSaved: () => void;
   initialModuleId?: string | null;
+  initialAgentKey?: string | null;
   record?: WorkflowRecord | null;
   canEdit?: boolean;
   moduleOptions: WorkflowModuleOption[];
   initialDraft?: {
     moduleId?: string;
+    agentKey?: string | null;
     name?: string;
     description?: string;
     triggerType?: WorkflowTriggerType;
@@ -85,6 +88,7 @@ type WorkflowEditorModalProps = {
 
 type FormValues = {
   module_id: string;
+  agent_key?: string | null;
   name: string;
   description?: string;
   trigger_type: 'on_create' | 'on_upsert' | 'interval';
@@ -209,6 +213,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
   onClose,
   onSaved,
   initialModuleId,
+  initialAgentKey,
   record,
   canEdit = true,
   moduleOptions,
@@ -359,9 +364,11 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
   useEffect(() => {
     if (!open) return;
     const nextModuleId = record?.module_id || initialDraft?.moduleId || initialModuleId || '';
+    const nextAgentKey = record?.agent_key || initialDraft?.agentKey || initialAgentKey || null;
     setModuleId(nextModuleId);
     form.setFieldsValue({
       module_id: nextModuleId,
+      agent_key: nextAgentKey || undefined,
       name: record?.name || initialDraft?.name || '',
       description: record?.description || initialDraft?.description || '',
       trigger_type: lockedTriggerType || (record?.trigger_type as any) || initialDraft?.triggerType || 'on_create',
@@ -383,7 +390,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
     setConditionsAny(Array.isArray(record?.conditions_any) ? (record.conditions_any as any) : []);
     setActions(Array.isArray(record?.actions) ? (record.actions as any) : (initialDraft?.actions || []));
     setFlowSelection(null);
-  }, [open, record, initialModuleId, initialDraft, form, lockedTriggerType]);
+  }, [open, record, initialModuleId, initialAgentKey, initialDraft, form, lockedTriggerType]);
 
   useEffect(() => {
     if (!open || !moduleId) return;
@@ -453,6 +460,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
       const isInterval = effectiveTriggerType === 'interval';
       const payload: Record<string, any> = {
         module_id: values.module_id,
+        agent_key: String(values.agent_key || '').trim() || null,
         name: values.name?.trim(),
         description: values.description?.trim() || null,
         trigger_type: effectiveTriggerType,
@@ -528,6 +536,23 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
               <Input placeholder="مثال: اعلان سفارش‌های معوق" />
             </Form.Item>
           </div>
+          <Form.Item label="ایجنت مسئول (اختیاری)" name="agent_key">
+            <AdaptiveSelectField
+              allowClear
+              className="w-full"
+              showSearch
+              optionFilterProp="label"
+              optionLabelProp="label"
+              options={AI_AGENT_CATALOG.map((agent) => ({
+                label: `${agent.titleFa} — ${agent.shortTitleFa}`,
+                value: agent.key,
+              }))}
+              getPopupContainer={resolveOverlayPopupContainer}
+              modalContainer={resolveOverlayPopupContainer}
+              overlayZIndexBase={overlayZIndexBase}
+              placeholder="در صورت اتصال به ایجنت، اجرا با مدل و شخصیت همان ایجنت ثبت می‌شود"
+            />
+          </Form.Item>
           <Form.Item label="توضیحات" name="description">
             <Input.TextArea rows={2} placeholder="توضیح کوتاه درباره هدف این گردش کار" />
           </Form.Item>

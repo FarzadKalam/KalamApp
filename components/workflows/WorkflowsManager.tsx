@@ -5,6 +5,7 @@ import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
 import WorkflowEditorModal from './WorkflowEditorModal';
 import { WorkflowCondition, WorkflowRecord, createWorkflowId } from '../../utils/workflowTypes';
+import { getAgentDefinition } from '../../utils/aiAgentCatalog';
 import { isSaasAdminModuleId, WORKFLOWS_PERMISSION_KEY } from '../../utils/permissions';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { resolveSelectPopupContainer } from '../../utils/popupContainer';
@@ -238,6 +239,11 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
             <div className="font-bold text-gray-800 dark:text-gray-100">{row?.name || '-'}</div>
             {row?.scope_type === 'process_activator' ? (
               <Tag icon={<ThunderboltOutlined />} color="gold">فعال‌کننده فرآیند</Tag>
+            ) : null}
+            {row?.agent_key ? (
+              <Tag color="purple">
+                {getAgentDefinition(row.agent_key)?.shortTitleFa || row.agent_key}
+              </Tag>
             ) : null}
           </div>
           {row?.description ? (

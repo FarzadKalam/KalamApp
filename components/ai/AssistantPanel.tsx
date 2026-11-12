@@ -38,6 +38,17 @@ import AiMessageRenderer from './AiMessageRenderer';
 import { type AiRecordMutationDraft } from './AiRecordMutationApprovalCard';
 import QuickRecordFormModal from './QuickRecordFormModal';
 import AiProcessOperationApprovalCard from './AiProcessOperationApprovalCard';
+import AiAgentMessagesCompactBox from './AiAgentMessagesCompactBox';
+import {
+  AI_AGENT_CATALOG,
+  buildAgentAccessMapFromOverviewAgents,
+  getAgentTitleFa,
+  normalizeSelectedAgents,
+  resolveClientAgentAccess,
+  type AgentKey,
+  type AgentToneStyle,
+  type ClientAgentAccessEvaluation,
+} from '../../utils/aiAgentCatalog';
 
 type ChatMessage = {
   id: string;
@@ -109,6 +120,7 @@ const NON_STREAM_CHAT_CAPABILITIES = new Set([
   'document_generation',
   'record_creation',
   'process_operation',
+  'pricing_adjustment',
 ]);
 
 const IMAGE_PROMPT_ONLY_PATTERNS = [
@@ -141,6 +153,7 @@ const buildAiPendingStatusText = (capabilities: string[], fallback = 'در حا�
   if (set.has('web_search')) return 'در حال جستجو...';
   if (set.has('deep_reasoning')) return 'در حال فکر کردن...';
   if (set.has('process_operation')) return 'در حال بررسی اقدام فرآیندی...';
+  if (set.has('pricing_adjustment')) return 'در حال تحلیل و محاسبه تنظیم قیمت...';
   if (set.has('record_creation')) return 'در حال آماده‌سازی پیش‌نویس رکورد...';
   return fallback;
 };
@@ -195,6 +208,8 @@ interface AssistantPanelProps {
   initialPrompt?: string | null;
   initialInputKind?: string | null;
   initialCapabilities?: AiComposerCapability[] | null;
+  initialAgents?: AgentKey[] | null;
+  initialToneStyle?: AgentToneStyle | null;
   initialRecordCreationTargetModuleId?: string | null;
   initialModelOverride?: string | null;
   initialMediaSettings?: AiMediaSettings | null;
@@ -209,6 +224,7 @@ interface AssistantPanelProps {
   onThreadRenamed?: (threadId: string, title: string, thread?: any) => void;
   onThreadUpserted?: (thread: any) => void;
   showThreadListButton?: boolean;
+  showAgentInboxBox?: boolean;
 }
 
 const parseRouteContext = (pathname: string, search: string): AssistantContext => {
@@ -469,6 +485,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   initialPrompt,
   initialInputKind,
   initialCapabilities,
+  initialAgents,
+  initialToneStyle,
   initialRecordCreationTargetModuleId,
   initialModelOverride,
   initialMediaSettings,
@@ -483,6 +501,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   onThreadRenamed,
   onThreadUpserted,
   showThreadListButton = false,
+  showAgentInboxBox = false,
 }) => {
   const { message } = App.useApp();
   const location = useLocation();
@@ -506,6 +525,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const [capabilityAvailability, setCapabilityAvailability] = useState<Record<string, any>>({});
   const [selectedCapabilities, setSelectedCapabilities] = useState<AiComposerCapability[]>(DEFAULT_COMPOSER_CAPABILITIES);
   const [autoSuggestedCapabilities, setAutoSuggestedCapabilities] = useState<AiComposerCapability[]>([]);
+  const [selectedAgents, setSelectedAgents] = useState<AgentKey[]>([]);
+  const [toneStyle, setToneStyle] = useState<AgentToneStyle>('friendly_warm');
+  const [agentAccessMap, setAgentAccessMap] = useState<Partial<Record<AgentKey, ClientAgentAccessEvaluation>> | null>(null);
   const [mediaSettings, setMediaSettings] = useState<AiMediaSettings>({});
   const [mediaSourceImages, setMediaSourceImages] = useState<AiMediaSourceImage[]>([]);
   const [bundleInputs, setBundleInputs] = useState<AiBundleInput[]>([]);
@@ -612,8 +634,16 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       .filter((item) => item.data)
   ), []);
 
+  const effectiveAgents = useMemo(
+    () => (selectedCapabilities.includes('free_chat') ? [] : normalizeSelectedAgents(selectedAgents)),
+    [selectedAgents, selectedCapabilities],
+  );
+  const effectiveToneStyle = selectedCapabilities.includes('free_chat') ? undefined : toneStyle;
+
   const buildComposerPreferences = useCallback(() => ({
     selectedCapabilities,
+    selectedAgents: effectiveAgents,
+    toneStyle,
     mediaSettings,
     mediaSourceImages: sanitizeMediaSourceImagesForPreferences(mediaSourceImages),
     recordCreationTargetModuleId,
@@ -621,7 +651,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     modelOverrides,
     skipGenerationConfirmationByKind,
     currentModelOverride: modelOverrideRef.current || null,
-  }), [mediaSettings, mediaSourceImages, modelOverrides, processOperationMode, recordCreationTargetModuleId, sanitizeMediaSourceImagesForPreferences, selectedCapabilities, skipGenerationConfirmationByKind]);
+  }), [effectiveAgents, mediaSettings, mediaSourceImages, modelOverrides, processOperationMode, recordCreationTargetModuleId, sanitizeMediaSourceImagesForPreferences, selectedCapabilities, skipGenerationConfirmationByKind, toneStyle]);
 
   useEffect(() => {
     composerPreferencesRef.current = buildComposerPreferences();
@@ -638,6 +668,15 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         setSelectedCapabilities(nextCapabilities);
         setProcessOperationMode(nextCapabilities.includes('process_operation'));
       }
+    }
+    if (Array.isArray(prefs.selectedAgents)) {
+      const nextAgents = normalizeSelectedAgents(prefs.selectedAgents);
+      if (nextAgents.length || !options.preferCurrentInitial) {
+        setSelectedAgents(nextAgents);
+      }
+    }
+    if (prefs.toneStyle && typeof prefs.toneStyle === 'string') {
+      setToneStyle(prefs.toneStyle as AgentToneStyle);
     }
     if (Object.prototype.hasOwnProperty.call(prefs, 'processOperationMode') && !Array.isArray(prefs.selectedCapabilities)) {
       setProcessOperationMode(prefs.processOperationMode === true);
@@ -664,6 +703,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       setProcessOperationMode(false);
       setRecordCreationTargetModuleId(null);
       setMediaSourceImages([]);
+      setSelectedAgents([]);
       setPendingAiAction(null);
     }
     if (prefs.skipGenerationConfirmationByKind && typeof prefs.skipGenerationConfirmationByKind === 'object') {
@@ -854,6 +894,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       setMessages([]);
       setThreadTitle('');
       setDraftThreadTitle('');
+      setSelectedAgents([]);
       setBundleInputs((previous) => {
         revokeBundleInputPreviewUrls(previous);
         return [];
@@ -1135,6 +1176,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       forceNewThread: params.forceNewThread === true,
       context: contextWithSelection,
       modelOverride: modelOverrideRef.current,
+      ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
+      ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
     });
     const rawSuggestedCapabilities = Array.from(new Set(
       Array.isArray(data?.capabilities)
@@ -1154,7 +1197,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     };
     setAutoSuggestedCapabilities(result.suggestedCapabilities);
     return result;
-  }, [callAssistant, contextWithSelection, threadId]);
+  }, [callAssistant, contextWithSelection, effectiveAgents, effectiveToneStyle, threadId]);
 
   const executeAutoRoute = useCallback(async (params: {
     messageText: string;
@@ -1201,6 +1244,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         action: bundlePayload.length > 0 ? 'run_task_bundle' : 'chat',
         primaryModelOnly: true,
         capabilities: routeCapabilities,
+        ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
+        ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
         message: params.messageText || 'ورودی‌های پیوست‌شده را بررسی کن.',
         userMessageText: params.messageText,
         inputKind: bundlePayload.length > 0 ? 'task_bundle' : params.inputKind,
@@ -1364,6 +1409,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       return await withAgentPlan(callAssistant({
         action: 'run_task_bundle',
         capabilities: routeCapabilities,
+        ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
+        ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
         message: params.messageText || (autoRecordSchema
           ? 'از ورودی‌های پیوست‌شده یک رکورد جدید بساز.'
           : capabilitySet.has('process_operation')
@@ -1393,6 +1440,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         ? 'record_chat'
         : 'dashboard_chat',
       capabilities: routeCapabilities,
+      ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
+      ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
       message: params.messageText,
       inputKind: params.inputKind,
       threadId: params.forceNewThread ? null : threadId,
@@ -1400,7 +1449,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       context: contextWithSelection,
       modelOverride: modelOverrideRef.current,
     }));
-  }, [callAssistant, composerImageSources, contextWithSelection, imageEditSourceUrl, mediaSettings, requestAutoRoute, skipGenerationConfirmationByKind, threadId]);
+  }, [callAssistant, composerImageSources, contextWithSelection, effectiveAgents, effectiveToneStyle, imageEditSourceUrl, mediaSettings, requestAutoRoute, skipGenerationConfirmationByKind, threadId]);
 
   const resolvePendingMessage = useCallback((pendingId: string, serverMsg: any) => {
     setMessages((prev) => prev.map((item) => item.id === pendingId ? {
@@ -1620,6 +1669,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     const nextInitialCapabilities = normalizeInitialCapabilities(initialCapabilities);
     const startsInFreeChatMode = nextInitialCapabilities.includes('free_chat');
     setSelectedCapabilities(nextInitialCapabilities);
+    setSelectedAgents(startsInFreeChatMode ? [] : normalizeSelectedAgents(initialAgents));
+    if (initialToneStyle) {
+      setToneStyle(initialToneStyle);
+    }
     setAutoSuggestedCapabilities([]);
     setRecordCreationTargetModuleId(startsInFreeChatMode ? null : String(initialRecordCreationTargetModuleId || '').trim() || null);
     setProcessOperationMode(nextInitialCapabilities.includes('process_operation'));
@@ -1686,8 +1739,23 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           name: String(bootstrap?.profile?.full_name || bootstrap?.user?.email || bootstrap?.profile?.mobile_1 || 'شما').trim() || 'شما',
           avatarUrl: bootstrap?.profile?.avatar_url || null,
         });
-        const overview = await callAssistant({ action: 'get_ai_overview' });
-        if (mounted) setCapabilityAvailability(overview?.capabilityAvailability || {});
+        setAgentAccessMap(resolveClientAgentAccess({
+          permissions: bootstrap?.permissions || null,
+          userId: bootstrap?.user?.id || null,
+          roleId: bootstrap?.roleId || null,
+          isOrgAdmin: String(bootstrap?.profile?.role || '').toLowerCase() === 'admin'
+            || bootstrap?.permissions?.__settings_tabs?.edit === true,
+        }));
+        const [overviewRes, workspaceRes] = await Promise.allSettled([
+          callAssistant({ action: 'get_ai_overview' }),
+          callAssistant({ action: 'get_agents_workspace_overview' }),
+        ]);
+        if (mounted && overviewRes.status === 'fulfilled') {
+          setCapabilityAvailability(overviewRes.value?.capabilityAvailability || {});
+        }
+        if (mounted && workspaceRes.status === 'fulfilled' && Array.isArray(workspaceRes.value?.agents)) {
+          setAgentAccessMap(buildAgentAccessMapFromOverviewAgents(workspaceRes.value.agents));
+        }
       } catch {
         // Sending requests will surface capability errors.
       }
@@ -1697,6 +1765,17 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       mounted = false;
     };
   }, [active, callAssistant]);
+
+  useEffect(() => {
+    if (!agentAccessMap) return;
+    setSelectedAgents((prev) => {
+      const next = prev.filter((key) => {
+        const access = agentAccessMap[key];
+        return Boolean(access && (access.canView ?? access.canUse) !== false && (access.canChat ?? access.canUse) !== false);
+      });
+      return next.length === prev.length ? prev : next;
+    });
+  }, [agentAccessMap]);
 
   useEffect(() => {
     if (!active) return;
@@ -1774,6 +1853,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                     streaming: true,
                     source_user_text: text,
                     ...(payload?.agentId ? { agent_id: resolveAiAgentId(payload.agentId) } : {}),
+                    ...(Array.isArray(payload?.selectedAgents) ? { selected_agents: payload.selectedAgents } : {}),
+                    ...(payload?.primaryAgent ? { agent_key: payload.primaryAgent } : {}),
+                    ...(payload?.toneStyle ? { tone_style: payload.toneStyle } : {}),
+                    ...(Array.isArray(payload?.instagramMediaCards) && payload.instagramMediaCards.length > 0
+                      ? { instagram_media_cards: payload.instagramMediaCards }
+                      : {}),
                   },
                 };
               }
@@ -1788,6 +1873,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           },
           onDone: (payload) => {
             if (payload?.threadId) setThreadId(String(payload.threadId));
+            if (payload?.proposedAction?.id) setPendingAiAction(payload.proposedAction);
             applyThreadTitleFromResponse(payload, text);
             setMessages((prev) => prev.map((item) => {
               if (item.id === thinkingMessage.id) {
@@ -1806,6 +1892,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                     finish_reason: payload?.finishReason || payload?.finish_reason || null,
                     usage: payload?.usage,
                     attachments: Array.isArray(payload?.attachments) ? payload.attachments : [],
+                    ...(Array.isArray(payload?.selectedAgents) ? { selected_agents: payload.selectedAgents } : {}),
+                    ...(payload?.primaryAgent ? { agent_key: payload.primaryAgent } : {}),
+                    ...(payload?.toneStyle ? { tone_style: payload.toneStyle } : {}),
+                    ...(Array.isArray(payload?.instagramMediaCards) && payload.instagramMediaCards.length > 0
+                      ? { instagram_media_cards: payload.instagramMediaCards }
+                      : {}),
                   },
                 };
               }
@@ -1910,6 +2002,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             action: 'chat_stream',
             capability: streamCapability,
             capabilities: streamCapabilities,
+            ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
+            ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
             message: assistantText,
             inputKind,
             threadId: shouldStartProcessGuideThread ? null : threadId,
@@ -1933,6 +2027,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         action: 'process_operation_from_prompt',
         capability: 'record_chat',
         capabilities: selectedCapabilities.filter((capability) => capability !== 'text_chat'),
+        ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
+        ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
         message: assistantText,
         inputKind,
         threadId: shouldStartProcessGuideThread ? null : threadId,
@@ -1945,6 +2041,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         outputMode: plannedRecordMutationMode === 'update' ? 'update_record' : 'create_record',
         capability: contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat',
         capabilities: selectedCapabilities.filter((capability) => capability !== 'text_chat'),
+        ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
+        ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
         message: assistantText,
         inputKind,
         threadId: shouldStartProcessGuideThread ? null : threadId,
@@ -1955,7 +2053,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         previewOnly: true,
       } : {
         action: 'chat',
-        capability: selectedCapabilities.includes('legal_assistant')
+        capability: selectedCapabilities.includes('pricing_adjustment')
+          ? 'pricing_adjustment'
+          : selectedCapabilities.includes('legal_assistant')
           ? 'legal_assistant'
           : selectedCapabilities.includes('deep_reasoning')
           ? 'deep_reasoning'
@@ -1963,6 +2063,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           ? 'record_chat'
           : 'dashboard_chat',
         capabilities: selectedCapabilities.filter((capability) => capability !== 'text_chat'),
+        ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
+        ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
         message: assistantText,
         inputKind,
         threadId: shouldStartProcessGuideThread ? null : threadId,
@@ -2042,6 +2144,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             metadata: {
               usage: data.usage,
               ...(data?.agentPlan ? { agent_plan: data.agentPlan } : {}),
+              ...(Array.isArray(data?.selectedAgents) ? { selected_agents: data.selectedAgents } : {}),
+              ...(data?.primaryAgent ? { agent_key: data.primaryAgent } : {}),
+              ...(data?.toneStyle ? { tone_style: data.toneStyle } : {}),
+              ...(Array.isArray(data?.instagramMediaCards) && data.instagramMediaCards.length > 0
+                ? { instagram_media_cards: data.instagramMediaCards }
+                : {}),
               attachments: Array.isArray(data.attachments) ? data.attachments : [],
             ...(data?.file ? { file: data.file } : {}),
             ...(data?.image ? { image: data.image } : {}),
@@ -2096,7 +2204,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     } finally {
       setSubmitting(false);
     }
-  }, [activeRecordCreationSchema, applyThreadTitleFromResponse, callAssistant, callAssistantStream, contextWithSelection, executeAutoRoute, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, submitting, threadId]);
+  }, [activeRecordCreationSchema, applyThreadTitleFromResponse, callAssistant, callAssistantStream, contextWithSelection, effectiveAgents, effectiveToneStyle, executeAutoRoute, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, submitting, threadId]);
 
   useEffect(() => {
     const prompt = String(initialPrompt || '').trim();
@@ -2476,6 +2584,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         : callAssistant({
           action: 'run_task_bundle',
           capabilities: effectiveCapabilities,
+          ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
+          ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
           message: assistantPrompt || (activeRecordCreationSchema ? 'از ورودی‌های پیوست‌شده یک رکورد جدید بساز.' : processOperationMode ? 'با توجه به ورودی‌های پیوست‌شده، اقدام لازم را پیشنهاد بده.' : 'ورودی‌های پیوست‌شده را تحلیل کن.'),
           userMessageText: assistantPrompt,
           inputKind: 'task_bundle',
@@ -2566,6 +2676,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             metadata: {
               usage: data.usage,
               ...(data?.agentPlan ? { agent_plan: data.agentPlan } : {}),
+              ...(Array.isArray(data?.selectedAgents) ? { selected_agents: data.selectedAgents } : {}),
+              ...(data?.primaryAgent ? { agent_key: data.primaryAgent } : {}),
+              ...(data?.toneStyle ? { tone_style: data.toneStyle } : {}),
+              ...(Array.isArray(data?.instagramMediaCards) && data.instagramMediaCards.length > 0
+                ? { instagram_media_cards: data.instagramMediaCards }
+                : {}),
               capability: activeRecordCreationSchema ? 'record_creation' : processOperationMode ? 'process_operation' : 'document_analysis',
               ...(data?.file ? { file: data.file } : {}),
               ...(data?.image ? { image: data.image } : {}),
@@ -2610,7 +2726,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     } finally {
       setSubmitting(false);
     }
-  }, [activeRecordCreationSchema, buildBundleInputPayloads, bundleInputs, callAssistant, contextWithSelection, executeAutoRoute, initialVoipCallLogId, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, submitting, threadId]);
+  }, [activeRecordCreationSchema, buildBundleInputPayloads, bundleInputs, callAssistant, contextWithSelection, effectiveAgents, effectiveToneStyle, executeAutoRoute, initialVoipCallLogId, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, submitting, threadId]);
 
   useEffect(() => {
     if (!active || !autoSubmitInitialPrompt || !initialFile || submitting || loadingThread || bundleInputs.length === 0) return;
@@ -2727,12 +2843,20 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         ...(Array.isArray(data?.updatedRecords) ? data.updatedRecords : []),
       ];
       const executedOperationCount = Array.isArray(data?.operations) ? data.operations.length : 0;
-      if ((data?.executed !== true && data?.success !== true) || (executedRecords.length === 0 && executedOperationCount === 0)) {
+      const requiresRecordOrProcessResult = Boolean(pendingRecordMutationType || pendingProcessOperations.length > 0);
+      if (
+        (data?.executed !== true && data?.success !== true)
+        || (requiresRecordOrProcessResult && executedRecords.length === 0 && executedOperationCount === 0)
+      ) {
         throw new Error('ثبت یا ویرایش رکورد نتیجه قابل تایید نداشت.');
       }
-      message.success(executedOperationCount > 0
-        ? `${executedOperationCount.toLocaleString('fa-IR')} اقدام با موفقیت اجرا شد.`
-        : `${executedRecords.length.toLocaleString('fa-IR')} رکورد با موفقیت ثبت یا ویرایش شد.`);
+      message.success(
+        executedOperationCount > 0
+          ? `${executedOperationCount.toLocaleString('fa-IR')} اقدام با موفقیت اجرا شد.`
+          : executedRecords.length > 0
+          ? `${executedRecords.length.toLocaleString('fa-IR')} رکورد با موفقیت ثبت یا ویرایش شد.`
+          : String(data?.message || 'اقدام پیشنهادی با موفقیت تایید و اجرا شد.'),
+      );
       setPendingAiAction(null);
       setQuickRecordFormOpen(false);
       await loadThread();
@@ -2929,6 +3053,96 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             )}
             <MessageAttachmentGallery attachments={attachments} presentation={isUser ? undefined : 'assistant'} />
             {!isUser && item.metadata?.agent_plan && <details className="ai-chat-details"><summary>برنامهٔ ایجنت راهبر</summary><AiAgentPlanCard plan={item.metadata.agent_plan} /></details>}
+            {!isUser ? (() => {
+              const instagramCards = Array.isArray(item.metadata?.instagram_media_cards)
+                ? item.metadata.instagram_media_cards
+                : Array.isArray(item.metadata?.instagramMediaCards)
+                  ? item.metadata.instagramMediaCards
+                  : [];
+              if (!instagramCards.length) return null;
+              return (
+                <div className="mt-2.5 space-y-1.5 border-t border-slate-200/70 pt-2 dark:border-white/10">
+                  <div className="text-[10.5px] font-bold text-slate-600 dark:text-slate-300">
+                    رسانه‌های اینستاگرام جهت انتخاب و بررسی:
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {instagramCards.map((card: any, cardIdx: number) => {
+                      const thumb = String(card?.thumbnail_url || card?.media_url || '').trim();
+                      const mediaType = String(card?.media_type || 'post').toLowerCase();
+                      const mediaLabel = mediaType === 'story' ? 'استوری' : mediaType === 'reel' ? 'ریل' : 'پست';
+                      const permalink = String(card?.permalink || '').trim();
+                      const caption = String(card?.caption || '').trim();
+                      const isExpired = card?.is_expired === true;
+                      return (
+                        <div
+                          key={String(card?.id || permalink || cardIdx)}
+                          className="flex flex-col justify-between gap-1.5 rounded-xl border border-slate-200/80 bg-slate-50/85 p-2 text-right dark:border-white/10 dark:bg-white/[0.04]"
+                        >
+                          <div className="flex items-start gap-2">
+                            {thumb ? (
+                              <img
+                                src={thumb}
+                                alt={mediaLabel}
+                                className="h-14 w-14 shrink-0 rounded-lg object-cover ring-1 ring-slate-200 dark:ring-white/10"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg bg-pink-50 text-[10px] font-bold text-pink-600 dark:bg-pink-500/15 dark:text-pink-300">
+                                {mediaLabel}
+                              </div>
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-1">
+                                <Tag color="magenta" className="m-0 text-[10px]">{mediaLabel}</Tag>
+                                {mediaType === 'story' ? (
+                                  <Tag color={isExpired ? 'default' : 'green'} className="m-0 text-[10px]">
+                                    {isExpired ? 'منقضی شده (۲۴ساعت)' : 'استوری فعال'}
+                                  </Tag>
+                                ) : null}
+                                {card?.account_username ? (
+                                  <span className="truncate text-[10px] text-slate-400">@{String(card.account_username)}</span>
+                                ) : null}
+                              </div>
+                              <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-700 dark:text-slate-200">
+                                {caption || 'بدون کپشن'}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap items-center justify-between gap-1 pt-1">
+                            {permalink ? (
+                              <a
+                                href={permalink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[10.5px] font-semibold text-[rgb(var(--brand-700-rgb))] underline decoration-dotted"
+                              >
+                                مشاهده در اینستاگرام
+                              </a>
+                            ) : <span />}
+                            <Button
+                              size="small"
+                              type="primary"
+                              ghost
+                              disabled={isExpired && mediaType === 'story'}
+                              className="!h-6 !px-2 !text-[10.5px]"
+                              onClick={() => {
+                                const snippet = [
+                                  `این ${mediaLabel} را انتخاب می‌کنم:`,
+                                  permalink || caption.slice(0, 80),
+                                ].filter(Boolean).join(' ');
+                                setInput((prev) => (String(prev || '').trim() ? `${prev}\n${snippet}` : snippet));
+                              }}
+                            >
+                              انتخاب برای شرط/کارت
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })() : null}
             {!pendingKind && providerRawText && attachments.length === 0 ? (
               <details className="mt-2 rounded-lg border border-white/20 bg-black/5 p-2 text-left text-[10px] leading-4 dark:bg-black/20" dir="ltr">
                 <summary className="cursor-pointer text-right font-semibold" dir="rtl">
@@ -2949,7 +3163,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           </div>
           )}
           <div className="ai-chat-meta mt-1 flex flex-wrap items-center gap-1">
-            {isUser ? <span>{authorName}</span> : null}
+            {isUser ? <span>{authorName}</span> : item.metadata?.agent_key ? <span>{getAgentTitleFa(String(item.metadata.agent_key))}</span> : null}
             {item.created_at ? <span>{toFaDateTime(item.created_at)}</span> : null}
             {!isUser && item.model ? <span>{item.model}</span> : null}
             {!isUser && usageText ? <span>{usageText}</span> : null}
@@ -3298,6 +3512,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       </div>
 
       <div className="ai-assistant-composer-region">
+        <div className={showAgentInboxBox ? 'flex flex-col gap-2.5 lg:grid lg:grid-cols-[minmax(0,1fr)_272px] lg:items-start' : 'block'}>
+          <div className="min-w-0">
         {pendingAiAction ? (
           <div className="ai-approval-card">
             <div className="flex flex-wrap items-start justify-between gap-2">
@@ -3307,7 +3523,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                     ? String(pendingAiAction?.title || 'تایید ساخت خروجی')
                     : pendingRecordMutationType
                     ? `پیش‌نویس ${pendingRecordMutationType === 'update_record_from_prompt' ? 'ویرایش' : 'ساخت'} ${String(pendingAiAction?.title || 'رکورد').trim()}`
-                    : 'هوش مصنوعی یک اقدام قابل اجرا پیشنهاد داده است.'}
+                    : String(pendingAiAction?.summaryFa || 'هوش مصنوعی یک اقدام قابل اجرا پیشنهاد داده است.')}
                 </div>
                 <div className="mt-1 ai-approval-description">
                   {String(pendingAiAction?.actionType || '') === 'confirm_generation'
@@ -3424,7 +3640,22 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               <Button size="small" onClick={() => setInput((prev) => String(prev || '').trim() ? prev : String(pendingAiAction?.actionType || '') === 'confirm_generation' ? 'دستور ساخت را این‌طور اصلاح کن: ' : 'این پیش‌نویس را این‌طور اصلاح کن: ')} disabled={confirmingAiAction}>
                 ویرایش با پیام
               </Button>
-              <Button size="small" danger onClick={() => setPendingAiAction(null)} disabled={confirmingAiAction}>
+              <Button
+                size="small"
+                danger
+                onClick={() => {
+                  const currentId = String(pendingAiAction?.id || '').trim();
+                  setPendingAiAction(null);
+                  if (currentId && !currentId.startsWith('local-generation-')) {
+                    void callAssistant({
+                      action: 'resolve_waiting_approval',
+                      actionLogId: currentId,
+                      decision: 'reject',
+                    }).catch(() => undefined);
+                  }
+                }}
+                disabled={confirmingAiAction}
+              >
                 رد پیشنهاد
               </Button>
             </Space>
@@ -3440,6 +3671,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             autoSuggested={autoSuggestedCapabilities}
             onChange={handleComposerCapabilitiesChange}
             capabilityAvailability={capabilityAvailability}
+            selectedAgents={effectiveAgents}
+            onAgentsChange={(next) => setSelectedAgents(normalizeSelectedAgents(next))}
+            agentAccessMap={agentAccessMap}
+            toneStyle={toneStyle}
+            onToneStyleChange={setToneStyle}
             loading={submitting || generatingImage || generatingVoiceOutput || generatingVideo || generatingDocument}
             moduleId={fileRecordScope.moduleId}
             recordId={fileRecordScope.recordId}
@@ -3499,6 +3735,21 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           </div>
         ) : null}
         </AiMessageComposer>
+          </div>
+          {showAgentInboxBox && (
+            !agentAccessMap
+            || AI_AGENT_CATALOG.some((def) => {
+              const access = agentAccessMap[def.key];
+              return Boolean(access && (access.canView ?? access.canUse) !== false);
+            })
+          ) ? (
+            <AiAgentMessagesCompactBox
+              className="w-full shrink-0"
+              agentAccessMap={agentAccessMap}
+              onSelectAgent={(agentKey) => setSelectedAgents((prev) => normalizeSelectedAgents([...prev, agentKey]))}
+            />
+          ) : null}
+        </div>
       </div>
       {pendingRecordMutationType && pendingAiAction ? (
         <QuickRecordFormModal

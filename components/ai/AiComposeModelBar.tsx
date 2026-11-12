@@ -102,10 +102,13 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
   if (!info) return null;
 
   return (
-    <div className="flex items-center gap-1 text-[9px] leading-4 text-gray-400 dark:text-gray-500" dir="rtl">
-      {!compact && <AiSparkleIcon className="h-2.5 w-2.5 text-[rgb(var(--brand-500-rgb))]" />}
+    <div
+      className="inline-flex max-w-full items-center gap-1 rounded-lg border border-slate-200/80 bg-slate-50/80 px-2 py-0.5 text-[11px] leading-4 text-slate-500 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-400"
+      dir="rtl"
+    >
+      {!compact && <AiSparkleIcon className="h-3 w-3 shrink-0 text-[rgb(var(--brand-500-rgb))]" />}
       <Tooltip title={`موتور تخصصی «${effectiveCapability ? getAiAgentLabel(effectiveCapability) : 'هوش مصنوعی'}» برای همین ارسال قابل تغییر است`}>
-        <span className={compact ? 'sr-only' : 'shrink-0'}>موتور:</span>
+        <span className={compact ? 'sr-only' : 'shrink-0 text-[10.5px]'}>موتور:</span>
       </Tooltip>
       <Select
         size="small"
@@ -114,7 +117,7 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
         value={value || undefined}
         options={options}
         popupMatchSelectWidth={false}
-        className="min-w-[104px] !text-[9px]"
+        className="min-w-[106px] !text-[11px]"
         onChange={(next) => {
           const model = String(next || '');
           setOverride(model);

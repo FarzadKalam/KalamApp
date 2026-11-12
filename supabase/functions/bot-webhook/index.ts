@@ -2450,11 +2450,13 @@ const sendBotTextMessage = async ({
   settings,
   chatId,
   text,
+  replyMarkup,
 }: {
   channel: BotChannel;
   settings: IntegrationSettings;
   chatId: string;
   text: string;
+  replyMarkup?: Record<string, any> | null;
 }) => {
   const normalizedSettings = normalizeBotSettings(channel, settings);
   const token = String(normalizedSettings?.bot_token || '').trim();
@@ -2470,6 +2472,7 @@ const sendBotTextMessage = async ({
       chat_id: chatId,
       text: normalizedText,
       ...(channel === 'rubika' ? {} : { parse_mode: 'HTML' }),
+      ...(channel !== 'rubika' && replyMarkup ? { reply_markup: replyMarkup } : {}),
     }),
   });
   const raw = await response.text();
@@ -2479,6 +2482,57 @@ const sendBotTextMessage = async ({
     throw new Error(String(parsed?.description || parsed?.message || raw || 'Could not send bot text message'));
   }
   return parsed;
+};
+
+const answerBotCallbackQuery = async ({
+  channel,
+  settings,
+  callbackQueryId,
+  text,
+}: {
+  channel: BotChannel;
+  settings: IntegrationSettings;
+  callbackQueryId: string;
+  text?: string;
+}) => {
+  if (channel === 'rubika' || !callbackQueryId) return null;
+  const normalizedSettings = normalizeBotSettings(channel, settings);
+  const token = String(normalizedSettings?.bot_token || '').trim();
+  if (!token) return null;
+  const baseUrl = String(normalizedSettings?.api_base_url || DEFAULT_API_BASE_URL[channel]).trim();
+  const res = await fetch(buildSendMessageUrl(baseUrl, token, '/bot{token}/answerCallbackQuery'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      callback_query_id: callbackQueryId,
+      ...(text ? { text: String(text).slice(0, 180) } : {}),
+    }),
+  }).catch(() => null);
+  return res ? await res.text().catch(() => null) : null;
+};
+
+const callAiAssistantInternal = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  payload: Record<string, any>,
+) => {
+  const res = await fetch(`${supabaseUrl.replace(/\/+$/, '')}/functions/v1/ai-assistant`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: serviceRoleKey,
+      'x-kalam-internal': 'bot-webhook',
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(55000),
+  });
+  const raw = await res.text();
+  try {
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return { success: false, message: raw || 'پاسخ نامعتبر از سرویس هوش مصنوعی' };
+  }
 };
 
 const normalizeAiBaseUrl = (value: any) => {
@@ -3345,6 +3399,158 @@ Deno.serve(async (req) => {
         ignored: true,
         message: 'No chat id found in update',
       });
+    }
+
+    // ── Staff AI Bot Interception (Callback approvals, 6-digit OTP bind, direct staff messages) ──
+    const directChatId = String(senderChatId || contact.chatId || '').trim();
+    if (orgId && !contact?.isGroup && directChatId) {
+      const payloadNodes = resolveInboundPayloadNodes(payload);
+      const callbackQuery = payloadNodes.callbackQuery;
+      const callbackData = String(callbackQuery?.data || contact.text || '').trim();
+      const callbackMatch = callbackData.match(/^(ai_approve|ai_reject):([a-zA-Z0-9_-]{8,128})$/);
+
+      if (callbackMatch) {
+        const decision = callbackMatch[1] === 'ai_approve' ? 'approve' : 'reject';
+        const callbackToken = callbackMatch[2];
+        const approvalResult = await callAiAssistantInternal(supabaseUrl, serviceRoleKey, {
+          action: 'resolve_waiting_approval',
+          orgId,
+          decision,
+          callbackToken,
+          channelType: channel,
+          chatId: directChatId,
+        });
+        if (callbackQuery?.id) {
+          await answerBotCallbackQuery({
+            channel,
+            settings: (integration?.settings || {}) as IntegrationSettings,
+            callbackQueryId: String(callbackQuery.id),
+            text: approvalResult?.success
+              ? (decision === 'approve' ? 'تأیید و اجرا شد.' : 'اقدام لغو شد.')
+              : String(approvalResult?.message || 'پردازش انجام نشد.'),
+          });
+        }
+        const replyMsg = approvalResult?.success
+          ? String(approvalResult?.message || (decision === 'approve' ? '✅ عملیات با موفقیت تأیید و اجرا شد.' : '❌ عملیات پیشنهادی با دستور شما لغو شد.'))
+          : String(approvalResult?.message || 'امکان پردازش این درخواست تأیید وجود ندارد.');
+        await sendBotTextMessage({
+          channel,
+          settings: (integration?.settings || {}) as IntegrationSettings,
+          chatId: directChatId,
+          text: replyMsg,
+        }).catch(() => null);
+        return json(200, {
+          success: true,
+          channel,
+          staff_bot_handled: true,
+          mode: 'approval_callback',
+          decision,
+        });
+      }
+
+      const otpMatch = String(contact.text || '').trim().match(/^(?:\/bind\s+|\/start\s+)?(\d{6})$/i);
+      if (otpMatch) {
+        const otpResult = await callAiAssistantInternal(supabaseUrl, serviceRoleKey, {
+          action: 'verify_staff_bot_otp',
+          channelType: channel,
+          chatId: directChatId,
+          orgId,
+          otpCode: otpMatch[1],
+        });
+        if (otpResult?.matched) {
+          await sendBotTextMessage({
+            channel,
+            settings: (integration?.settings || {}) as IntegrationSettings,
+            chatId: directChatId,
+            text: String(otpResult?.replyText || 'حساب همکار شما با موفقیت به بات هوشمند سازمان متصل شد.'),
+          }).catch(() => null);
+          return json(200, {
+            success: true,
+            channel,
+            staff_bot_handled: true,
+            mode: 'staff_otp_bind',
+            user_id: otpResult?.userId || null,
+          });
+        }
+      }
+
+      const staffChatCol = `${channel}_chat_id`;
+      const boundStaffRows = await restSelectRows(supabaseUrl, serviceRoleKey, 'profiles', {
+        org_id: `eq.${orgId}`,
+        [staffChatCol]: `eq.${directChatId}`,
+        is_active: 'eq.true',
+        select: 'id,full_name',
+        limit: 1,
+      }).catch(() => []);
+
+      if (boundStaffRows.length > 0 && boundStaffRows[0]?.id) {
+        let staffAttachment: Record<string, any> | null = null;
+        try {
+          const mediaEnvelope = extractMediaEnvelope(payload);
+          const firstMedia = mediaEnvelope.items[0] || normalizeExtractedMedia(extractMediaInfo(payload));
+          if (firstMedia) {
+            const mediaStored = await resolveAndStoreInboundMedia({
+              supabaseUrl,
+              serviceRoleKey,
+              requestUrl: req.url,
+              requestHeaders: req.headers,
+              channel,
+              orgId,
+              integrationSettings: (integration?.settings || {}) as IntegrationSettings,
+              mediaInfo: firstMedia,
+            });
+            staffAttachment = {
+              name: mediaStored?.fileName || firstMedia.fileName || 'فایل پیوست',
+              mimeType: mediaStored?.mimeType || firstMedia.mimeType || null,
+              fileType: firstMedia.messageType || 'file',
+              url: mediaStored?.fileUrl || firstMedia.fileUrl || null,
+              storageBucket: mediaStored?.storageBucket || null,
+              storagePath: mediaStored?.storagePath || null,
+            };
+          }
+        } catch (mediaErr) {
+          console.warn('[bot-webhook] staff attachment extraction warning:', mediaErr);
+        }
+
+        const staffTurnResult = await callAiAssistantInternal(supabaseUrl, serviceRoleKey, {
+          action: 'staff_bot_agent_turn',
+          orgId,
+          channelType: channel,
+          chatId: directChatId,
+          message: String(contact.text || '').trim() || (staffAttachment ? 'این فایل/ویس را بررسی و پردازش کن.' : 'سلام'),
+          attachment: staffAttachment,
+        });
+
+        let replyText = String(staffTurnResult?.replyText || staffTurnResult?.message || 'پاسخ آماده نشد.').trim();
+        const proposedCallbackToken = String(staffTurnResult?.proposedAction?.callbackToken || '').trim();
+        let replyMarkup: Record<string, any> | null = null;
+        if (proposedCallbackToken && channel !== 'rubika') {
+          replyMarkup = {
+            inline_keyboard: [[
+              { text: '✅ تأیید و اجرا', callback_data: `ai_approve:${proposedCallbackToken}` },
+              { text: '❌ لغو', callback_data: `ai_reject:${proposedCallbackToken}` },
+            ]],
+          };
+        } else if (proposedCallbackToken && channel === 'rubika') {
+          replyText = `${replyText}\n\nبرای تأیید و اجرای این اقدام، وارد داشبورد یا پیام‌های ایجنت در نرم‌افزار شوید.`;
+        }
+
+        await sendBotTextMessage({
+          channel,
+          settings: (integration?.settings || {}) as IntegrationSettings,
+          chatId: directChatId,
+          text: replyText,
+          replyMarkup,
+        }).catch(() => null);
+
+        return json(200, {
+          success: true,
+          channel,
+          staff_bot_handled: true,
+          mode: 'staff_bot_agent_turn',
+          primary_agent: staffTurnResult?.primaryAgent || null,
+        });
+      }
     }
 
     const rowPayload: Record<string, any> = {

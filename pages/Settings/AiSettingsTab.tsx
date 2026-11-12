@@ -16,13 +16,14 @@ import {
   Table,
   Tag,
 } from 'antd';
-import { CreditCardOutlined, ReloadOutlined, SaveOutlined, ThunderboltOutlined, UserOutlined } from '@ant-design/icons';
+import { CreditCardOutlined, ReloadOutlined, RobotOutlined, SaveOutlined, ThunderboltOutlined, UserOutlined } from '@ant-design/icons';
 import { getAiAgentLabel } from '../../supabase/functions/_shared/ai-agents';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import AiKnowledgeTab from './AiKnowledgeTab';
 import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
 import PriceAmountInput from '../../components/PriceAmountInput';
+import AiAgentConfigPanel from '../../components/ai/AiAgentConfigPanel';
 
 type AiCapabilityKey =
   | 'dashboard_chat'
@@ -40,7 +41,9 @@ type AiCapabilityKey =
   | 'document_generation'
   | 'voip_auto_reply'
   | 'auto_decision'
-  | 'customer_auto_reply';
+  | 'customer_auto_reply'
+  | 'agent_fast'
+  | 'context_compression';
 
 const CAPABILITIES: Array<{
   key: AiCapabilityKey;
@@ -64,6 +67,8 @@ const CAPABILITIES: Array<{
   { key: 'document_generation', label: getAiAgentLabel('document_generation'), description: 'تولید فایل Word، Excel، PDF یا CSV', phase: 'active' },
   { key: 'voip_auto_reply', label: getAiAgentLabel('voip_auto_reply'), description: 'پاسخ صوتی خودکار در تماس‌ها', phase: 'next' },
   { key: 'customer_auto_reply', label: getAiAgentLabel('customer_auto_reply'), description: 'مدل پاسخ خودکار بات‌ها و گفتگوهای مشتریان', phase: 'active' },
+  { key: 'agent_fast', label: 'مدل سریع ایجنت‌ها (رله)', description: 'مدل اقتصادی و سریع برای پایش، رله داخلی و پاسخ‌های کوتاه', phase: 'active' },
+  { key: 'context_compression', label: 'فشرده‌سازی زمینه گفتگو', description: 'مدل قابل انتخاب برای خلاصه‌سازی گفتگوهای طولانی و کاهش هزینه', phase: 'active' },
 ];
 
 const PRIMARY_MODEL_KEY = '__primary_model';
@@ -146,6 +151,14 @@ const AiSettingsTab: React.FC = () => {
   }, []);
 
   const models = useMemo(() => (overview?.models || []) as any[], [overview]);
+  const saasDefaults = useMemo(() => (overview?.saasDefaults || {}) as Record<string, string | null>, [overview]);
+  const resolveModelDisplayName = (modelId?: string | null) => {
+    const clean = String(modelId || '').trim();
+    if (!clean) return '';
+    const found = models.find((m) => String(m?.id || '').trim() === clean);
+    return String(found?.display_name_fa || found?.label || clean).trim();
+  };
+  const primaryCentralDefaultLabel = resolveModelDisplayName(saasDefaults[PRIMARY_MODEL_KEY]);
   const capabilityAvailability = useMemo(() => (overview?.capabilityAvailability || {}) as Record<string, any>, [overview]);
   const modelOptionsByCapability = useMemo(() => {
     const result: Record<string, Array<{ label: string; value: string }>> = {};
@@ -413,12 +426,22 @@ const AiSettingsTab: React.FC = () => {
         </Space>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
           <Statistic title="مصرف ثبت‌شده" value={totals.billed_amount_irt || 0} formatter={formatCurrency} />
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
           <Statistic title="تعداد درخواست‌ها" value={totals.requests || 0} />
+        </div>
+        <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
+          <Statistic
+            title="صرفه‌جویی کش پرامپت"
+            value={totals.cache_savings_irt || 0}
+            formatter={formatCurrency}
+          />
+          <div className="mt-1 text-[11px] text-gray-500">
+            توکن کش‌شده: {Number(totals.cached_input_tokens || 0).toLocaleString('fa-IR')}
+          </div>
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
           <div className="flex items-start justify-between gap-2">
@@ -449,14 +472,20 @@ const AiSettingsTab: React.FC = () => {
                       <div className="font-semibold text-gray-800 dark:text-gray-100">مدل اصلی سازمان</div>
                       <div className="text-xs leading-5 text-gray-500">
                         برای گفتگو، تحلیل اسناد، ساخت رکورد و ایجنت‌های متنی استفاده می‌شود؛ موتورهای تخصصی مثل تصویر، ویدیو، صدا و ساخت فایل جدا تنظیم می‌شوند.
+                        {primaryCentralDefaultLabel ? ` (پیش‌فرض مرکزی سیستم: ${primaryCentralDefaultLabel})` : ''}
                       </div>
                     </div>
                     <Form.Item name={['selected_models', PRIMARY_MODEL_KEY]} className="m-0 max-w-xl">
                       <Select
+                        allowClear
                         showSearch
                         optionFilterProp="label"
                         options={primaryModelOptions}
-                        placeholder="انتخاب مدل اصلی"
+                        placeholder={
+                          primaryCentralDefaultLabel
+                            ? `استفاده از پیش‌فرض مرکزی (${primaryCentralDefaultLabel})`
+                            : 'انتخاب مدل اصلی'
+                        }
                       />
                     </Form.Item>
                   </div>
@@ -466,6 +495,7 @@ const AiSettingsTab: React.FC = () => {
                       const disabledByPlan = availability.planAvailable === false;
                       const disabledByReadiness = capability.phase === 'next' || availability.tenantReady === false || availability.hasReadyModel === false;
                       const switchDisabled = disabledByPlan || disabledByReadiness;
+                      const slotCentralDefaultLabel = resolveModelDisplayName(saasDefaults[capability.key]);
                       return (
                     <div
                       key={capability.key}
@@ -473,14 +503,28 @@ const AiSettingsTab: React.FC = () => {
                     >
                       <div className="md:col-span-4">
                         <div className="font-semibold">{capability.label}</div>
-                        <div className="text-xs text-gray-500">{capability.description}</div>
+                        <div className="text-xs text-gray-500">
+                          {capability.description}
+                          {slotCentralDefaultLabel ? ` (پیش‌فرض سیستم: ${slotCentralDefaultLabel})` : ''}
+                        </div>
                       </div>
                       <Form.Item name={['selected_models', capability.key]} className="m-0 md:col-span-5">
                         <Select
+                          allowClear
                           showSearch
                           optionFilterProp="label"
-                          options={modelOptionsByCapability[capability.key] || []}
-                          placeholder="انتخاب مدل"
+                          options={
+                            (modelOptionsByCapability[capability.key] || []).length > 0
+                              ? modelOptionsByCapability[capability.key]
+                              : (capability.key === 'agent_fast' || capability.key === 'context_compression')
+                                ? primaryModelOptions
+                                : []
+                          }
+                          placeholder={
+                            slotCentralDefaultLabel
+                              ? `پیش‌فرض مرکزی (${slotCentralDefaultLabel})`
+                              : 'ارث‌بری از مدل اصلی / انتخاب مدل'
+                          }
                         />
                       </Form.Item>
                       <Form.Item name={['feature_flags', capability.key]} valuePropName="checked" className="m-0 md:col-span-2">
@@ -629,6 +673,16 @@ const AiSettingsTab: React.FC = () => {
               key: 'knowledge',
               label: 'دانش و اسناد هوش مصنوعی',
               children: <AiKnowledgeTab />,
+            },
+            {
+              key: 'agents',
+              label: (
+                <span className="inline-flex items-center gap-2">
+                  <RobotOutlined />
+                  مدیریت ایجنت‌های هوشمند و دسترسی همکاران
+                </span>
+              ),
+              children: <AiAgentConfigPanel compact onSaved={loadOverview} />,
             },
           ]}
         />

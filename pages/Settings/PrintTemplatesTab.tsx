@@ -1383,7 +1383,7 @@ const PrintTemplatesTab: React.FC = () => {
               />
             </div>
 
-            <div className="rounded-[28px] border border-slate-200/80 dark:border-slate-800 bg-gradient-to-b from-[#faf7f2] via-[#f8fafc] to-[#f1f5f9] dark:from-[#0b1120] dark:via-[#111827] dark:to-[#0f172a] p-4">
+            <div className="rounded-[28px] border border-slate-200/80 dark:border-slate-800 bg-gradient-to-b from-[#f8fafc] via-[#ffffff] to-[#f1f5f9] dark:from-[#0b1120] dark:via-[#111827] dark:to-[#0f172a] p-4">
               <div className="text-xs text-slate-500 dark:text-slate-400 mb-3">
                 {editingPageFrame.label}
               </div>

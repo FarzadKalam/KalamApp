@@ -14,7 +14,7 @@ export const instagramInteractionEventsConfig: ModuleDefinition = {
   supportedViewModes: [ViewMode.LIST],
   defaultViewMode: ViewMode.LIST,
   fields: [
-    { key: 'event_type', labels: { fa: 'نوع رویداد', en: 'Event Type' }, type: FieldType.SELECT, location: FieldLocation.HEADER, order: 1, isKey: true, isTableColumn: true, nature: FieldNature.SYSTEM, options: [{ value: 'direct_received', label: 'دایرکت جدید', color: 'blue' }, { value: 'comment_received', label: 'کامنت جدید', color: 'orange' }, { value: 'comment_replied', label: 'پاسخ به کامنت', color: 'green' }, { value: 'showcase_button_clicked', label: 'کلیک دکمه ویترین', color: 'magenta' }] },
+    { key: 'event_type', labels: { fa: 'نوع رویداد', en: 'Event Type' }, type: FieldType.SELECT, location: FieldLocation.HEADER, order: 1, isKey: true, isTableColumn: true, nature: FieldNature.SYSTEM, options: [{ value: 'direct_received', label: 'دایرکت جدید', color: 'blue' }, { value: 'comment_received', label: 'کامنت جدید', color: 'orange' }, { value: 'comment_replied', label: 'پاسخ به کامنت', color: 'green' }, { value: 'showcase_button_clicked', label: 'کلیک دکمه ویترین', color: 'magenta' }, { value: 'follow_status_checked', label: 'وضعیت فالو بررسی شد', color: 'cyan' }] },
     { key: 'account_username', labels: { fa: 'پیج اینستاگرام', en: 'Instagram Page' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, isTableColumn: true, nature: FieldNature.SYSTEM },
     { key: 'media_type', labels: { fa: 'نوع رسانه', en: 'Media Type' }, type: FieldType.SELECT, location: FieldLocation.HEADER, order: 2.2, isTableColumn: true, nature: FieldNature.SYSTEM, options: [{ value: 'post', label: 'پست', color: 'blue' }, { value: 'reel', label: 'ریل', color: 'purple' }, { value: 'story', label: 'استوری', color: 'gold' }] },
     { key: 'button_key', labels: { fa: 'دکمه انتخاب‌شده', en: 'Button' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 3, isTableColumn: true, nature: FieldNature.SYSTEM },
@@ -23,6 +23,7 @@ export const instagramInteractionEventsConfig: ModuleDefinition = {
     { key: 'media_permalink', labels: { fa: 'لینک پست یا استوری', en: 'Media Permalink' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'details', order: 1.6, nature: FieldNature.SYSTEM },
     { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 3.5, isTableColumn: true, nature: FieldNature.STANDARD },
     { key: 'showcase_id', labels: { fa: 'ویترین محصولات', en: 'Showcase' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'details', order: 2, nature: FieldNature.SYSTEM },
+    { key: 'follow_status', labels: { fa: 'وضعیت فالو', en: 'Follow Status' }, type: FieldType.SELECT, location: FieldLocation.HEADER, order: 3.8, isTableColumn: true, nature: FieldNature.SYSTEM, options: [{ value: 'following', label: 'فالو کرده', color: 'green' }, { value: 'not_following', label: 'فالو نکرده', color: 'red' }, { value: 'unknown', label: 'نامشخص', color: 'default' }] },
     { key: 'occurred_at', labels: { fa: 'زمان رویداد', en: 'Occurred At' }, type: FieldType.DATETIME, location: FieldLocation.HEADER, order: 4, isTableColumn: true, nature: FieldNature.SYSTEM },
   ],
   blocks: [{ id: 'details', titles: { fa: 'جزئیات رویداد', en: 'Event Details' }, type: BlockType.FIELD_GROUP, order: 1 }],

@@ -102,7 +102,7 @@ const STICKER_VARIANT_OPTIONS: Array<{ value: StoryStickerVariant; label: string
   { value: 'frost', label: 'شیشه‌ای', dotColor: '#334155' },
   { value: 'light', label: 'روشن', dotColor: '#f8fafc' },
   { value: 'dark', label: 'تیره', dotColor: '#0f172a' },
-  { value: 'brand', label: 'برند', dotColor: 'rgb(var(--brand-500-rgb, 119 102 68))' },
+  { value: 'brand', label: 'برند', dotColor: 'rgb(var(--brand-500-rgb, 79 70 229))' },
   { value: 'amber', label: 'کهربایی', dotColor: '#f59e0b' },
   { value: 'emerald', label: 'سبز', dotColor: '#10b981' },
   { value: 'rose', label: 'رز', dotColor: '#f43f5e' },
@@ -968,7 +968,7 @@ const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
         dir="rtl"
       >
         {/* ─── ستون راست: بوم تعاملی ۹:۱۶ + نوار اسلایدها ─── */}
-        <div className="lg:col-span-5 flex flex-col justify-between gap-3 p-4 border-b lg:border-b-0 lg:border-l border-slate-200 dark:border-dark-border bg-gradient-to-br from-[#faf7f2] via-[#f8fafc] to-[#f1f5f9] dark:from-[#14171c] dark:via-[#181b21] dark:to-[#111318]">
+        <div className="lg:col-span-5 flex flex-col justify-between gap-3 p-4 border-b lg:border-b-0 lg:border-l border-slate-200 dark:border-dark-border bg-gradient-to-br from-[#f8fafc] via-[#ffffff] to-[#eef2ff] dark:from-[#14171c] dark:via-[#181b21] dark:to-[#111318]">
           {/* نوار دسترسی سریع روی بوم */}
           <div className="flex flex-wrap items-center justify-between gap-1.5">
             <Space size={6} wrap>

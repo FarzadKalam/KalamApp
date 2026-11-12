@@ -1,14 +1,15 @@
 import { useSyncExternalStore } from 'react';
 import type { NoteAttachment } from './noteContent';
 
-export type OverlayNotificationKind = 'note' | 'task' | 'responsibility' | 'bot' | 'assistant' | 'voip_call' | 'sms' | 'email';
-export type OverlayNotificationChannel = 'internal' | 'system' | 'bot' | 'sms' | 'voip' | 'generic' | 'email';
+export type OverlayNotificationKind = 'note' | 'task' | 'responsibility' | 'bot' | 'assistant' | 'agent' | 'voip_call' | 'sms' | 'email';
+export type OverlayNotificationChannel = 'internal' | 'system' | 'bot' | 'agent' | 'sms' | 'voip' | 'generic' | 'email';
 
 export interface UiNotificationOverlayItem {
   id: string;
   kind: OverlayNotificationKind;
   channel?: OverlayNotificationChannel;
   kindLabel?: string;
+  priority?: number;
   title: string;
   subtitle?: string | null;
   body: string;
@@ -129,6 +130,7 @@ const areItemsPresentationEqual = (left: UiNotificationOverlayItem[], right: UiN
       || leftItem?.kind !== rightItem?.kind
       || leftItem?.channel !== rightItem?.channel
       || leftItem?.kindLabel !== rightItem?.kindLabel
+      || Number(leftItem?.priority || 0) !== Number(rightItem?.priority || 0)
       || leftItem?.title !== rightItem?.title
       || leftItem?.subtitle !== rightItem?.subtitle
       || leftItem?.body !== rightItem?.body
@@ -148,14 +150,19 @@ const recompute = () => {
   const unique = new Map<string, UiNotificationOverlayItem>();
   Object.values(notificationsBySource)
     .flat()
-    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+    .sort((a, b) => {
+      const priorityDiff = Number(b.priority || 0) - Number(a.priority || 0);
+      if (priorityDiff !== 0) return priorityDiff;
+      return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    })
     .forEach((item) => {
       if (!unique.has(item.id)) unique.set(item.id, item);
     });
   notifications = Array.from(unique.values())
     .sort((a, b) => {
+      const priorityDiff = Number(b.priority || 0) - Number(a.priority || 0);
       const timeDiff = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
-      return timeDiff || String(a.id).localeCompare(String(b.id));
+      return priorityDiff || timeDiff || String(a.id).localeCompare(String(b.id));
     });
 };
 

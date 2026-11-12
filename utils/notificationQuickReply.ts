@@ -14,6 +14,7 @@ export const canQuickReplyNotification = ({
   if (normalizedCategory === 'system' || normalizedCategory === 'assistant') return false;
 
   const key = String(conversationKey || '').trim();
+  if (normalizedCategory === 'agent' || key.startsWith('agent:')) return true;
   return key.startsWith('direct:') || key.startsWith('group:');
 };
 

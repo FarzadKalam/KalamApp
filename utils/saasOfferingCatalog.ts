@@ -1,9 +1,16 @@
 import { getAiAgentLabel } from '../supabase/functions/_shared/ai-agents';
+import { AI_AGENT_CATALOG, getAiAgentPlanFeatureKey } from './aiAgentCatalog';
 export type SaasOfferingOption = {
   id: string;
   label: string;
   description?: string;
 };
+
+export const AI_AGENT_PLAN_FEATURES: SaasOfferingOption[] = AI_AGENT_CATALOG.map((agent) => ({
+  id: getAiAgentPlanFeatureKey(agent.key),
+  label: agent.titleFa,
+  description: agent.subtitleFa,
+}));
 
 export const SAAS_MODULE_GROUPS: Array<{ label: string; modules: SaasOfferingOption[] }> = [
   { label: 'فروش و بازاریابی', modules: [
@@ -42,20 +49,31 @@ export const SAAS_MODULE_GROUPS: Array<{ label: string; modules: SaasOfferingOpt
 
 export const SAAS_FEATURE_OPTIONS: SaasOfferingOption[] = [
   { id: 'ai_chat', label: getAiAgentLabel('text_chat') }, { id: 'ai_knowledge', label: getAiAgentLabel('organization_knowledge') },
+  { id: 'ai_knowledge_limited', label: 'دانش سازمانی هوش مصنوعی (محدود)' },
   { id: 'ai_document_analysis', label: getAiAgentLabel('document_analysis') }, { id: 'ai_web_search', label: getAiAgentLabel('web_search') },
   { id: 'ai_voice_input', label: getAiAgentLabel('voice_input') }, { id: 'ai_voice_output', label: getAiAgentLabel('voice_output') },
   { id: 'ai_image_generation', label: getAiAgentLabel('image_generation') }, { id: 'ai_video_generation', label: getAiAgentLabel('video_generation') },
-  { id: 'ai_deep_reasoning', label: getAiAgentLabel('deep_reasoning') }, { id: 'taxpayer_system', label: 'سامانه مودیان' },
+  { id: 'ai_deep_reasoning', label: getAiAgentLabel('deep_reasoning') },
+  { id: 'ai_legal_assistant', label: 'دستیار حقوقی هوش مصنوعی' },
+  { id: 'ai_voip_auto_reply', label: 'پاسخگویی خودکار VoIP با هوش مصنوعی' },
+  { id: 'ai_staff_bot', label: 'بات هوشمند همکار (تلگرام/بله/روبیکا)' },
+  { id: 'ai_background_agents', label: 'ایجنت‌های خودکار پس‌زمینه (زمان‌بندی خودکار)' },
+  ...AI_AGENT_PLAN_FEATURES,
+  { id: 'taxpayer_system', label: 'سامانه مودیان' },
   { id: 'internal_realtime_notifications', label: 'اعلان لحظه‌ای داخل سامانه' },
   { id: 'organization_email', label: 'ایمیل سازمانی؛ ارسال، دریافت و گزارش‌ها' },
   { id: 'managed_organization_email', label: 'صندوق میزبانی‌شده با نام سازمان روی دامنه تازه سیستم (هزینه‌دار)' },
   { id: 'api_access', label: 'دسترسی API' }, { id: 'wordpress_connection', label: 'اتصال به وردپرس و ووکامرس' }, { id: 'advanced_reports', label: 'گزارش‌ساز پیشرفته' }, { id: 'map_view', label: 'نمای نقشه' },
   { id: 'multi_lane_processes', label: 'فرآیندهای چندردیفه' }, { id: 'content_calendar', label: 'تقویم محتوایی' },
+  { id: 'billboard_status_management', label: 'مدیریت تغییر وضعیت تابلوها' },
   { id: 'white_label', label: 'حذف برند تازه سیستم' }, { id: 'custom_domain', label: 'دامنه اختصاصی' },
   { id: 'own_payment_gateway', label: 'درگاه پرداخت اختصاصی' }, { id: 'online_invoice_payment', label: 'پرداخت آنلاین فاکتور' },
   { id: 'online_catalog', label: 'کاتالوگ آنلاین' }, { id: 'retail_sales_invoice', label: 'فاکتور فروشگاهی سریع' },
   { id: 'reservations', label: 'رزرواسیون' }, { id: 'qr_scan', label: 'اسکن QR' }, { id: 'instagram_inbox', label: 'صندوق اینستاگرام' },
-  { id: 'campaign_sms', label: 'کمپین پیامکی' }, { id: 'campaign_email', label: 'کمپین ایمیلی' }, { id: 'campaign_instagram_post', label: 'کمپین اینستاگرام' },
+  { id: 'campaign_sms', label: 'کمپین پیامکی' }, { id: 'campaign_email', label: 'کمپین ایمیلی' },
+  { id: 'campaign_bot_group', label: 'کمپین گروه بات' }, { id: 'campaign_bot_private', label: 'کمپین پی‌وی بات' },
+  { id: 'campaign_instagram_post', label: 'کمپین اینستاگرام' },
+  { id: 'campaign_voice_call', label: 'کمپین تماس صوتی' },
   { id: 'saas_account_billing', label: 'مدیریت حساب و اشتراک' }, { id: 'ai_credit_topup', label: 'کیف پول مصرف AI' },
   { id: 'sms_credit_topup', label: 'کیف پول مصرف پیامک' }, { id: 'extra_users_purchase', label: 'خرید کاربر اضافه' },
   { id: 'business_model_canvas', label: 'بوم کسب‌وکار' }, { id: 'bale_bot', label: 'بات بله' }, { id: 'rubika_bot', label: 'بات روبیکا' },
@@ -65,9 +83,10 @@ export const SAAS_FEATURE_OPTIONS: SaasOfferingOption[] = [
 ];
 
 const featureGroupIds: Array<{ label: string; ids: string[] }> = [
-  { label: 'هوش مصنوعی', ids: ['ai_chat','ai_knowledge','ai_document_analysis','ai_web_search','ai_voice_input','ai_voice_output','ai_image_generation','ai_video_generation','ai_deep_reasoning','ai_credit_topup'] },
-  { label: 'ارتباطات و کمپین', ids: ['internal_realtime_notifications','instagram_inbox','campaign_sms','campaign_email','campaign_instagram_post','bale_bot','rubika_bot'] },
-  { label: 'مدیریت و گزارش', ids: ['api_access','advanced_reports','map_view','multi_lane_processes','content_calendar','white_label','custom_domain','reservations','qr_scan','business_model_canvas','online_catalog'] },
+  { label: 'هوش مصنوعی', ids: ['ai_chat','ai_knowledge','ai_knowledge_limited','ai_document_analysis','ai_web_search','ai_voice_input','ai_voice_output','ai_image_generation','ai_video_generation','ai_deep_reasoning','ai_legal_assistant','ai_voip_auto_reply','ai_staff_bot','ai_background_agents','ai_credit_topup'] },
+  { label: 'ایجنت‌های هوشمند', ids: AI_AGENT_PLAN_FEATURES.map((item) => item.id) },
+  { label: 'ارتباطات و کمپین', ids: ['internal_realtime_notifications','instagram_inbox','campaign_sms','campaign_email','campaign_bot_group','campaign_bot_private','campaign_instagram_post','campaign_voice_call','bale_bot','rubika_bot'] },
+  { label: 'مدیریت و گزارش', ids: ['api_access','advanced_reports','map_view','multi_lane_processes','content_calendar','billboard_status_management','white_label','custom_domain','reservations','qr_scan','business_model_canvas','online_catalog'] },
   { label: 'فروش و پرداخت', ids: ['wordpress_connection','taxpayer_system','own_payment_gateway','online_invoice_payment','retail_sales_invoice','saas_account_billing','sms_credit_topup','extra_users_purchase'] },
 ];
 const groupedFeatureIds = new Set(featureGroupIds.flatMap((group) => group.ids));

@@ -16,6 +16,8 @@ export const PLAN_FEATURE_OPTIONS = [
   { id: 'ai_deep_reasoning', label: getAiAgentLabel('deep_reasoning') },
   { id: 'ai_legal_assistant', label: getAiAgentLabel('legal_assistant') },
   { id: 'ai_voip_auto_reply', label: getAiAgentLabel('voip_auto_reply') },
+  { id: 'ai_staff_bot', label: 'بات هوشمند همکار (تلگرام/بله/روبیکا)' },
+  { id: 'ai_background_agents', label: 'ایجنت‌های خودکار پس‌زمینه' },
   { id: 'taxpayer_system', label: 'سامانه مودیان' },
   { id: 'organization_email', label: 'ایمیل سازمانی؛ ارسال، دریافت و گزارش‌ها' },
   { id: 'managed_organization_email', label: 'صندوق میزبانی‌شده با نام سازمان روی دامنه تازه سیستم (هزینه‌دار)' },

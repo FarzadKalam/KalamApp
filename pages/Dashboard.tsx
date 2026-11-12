@@ -13,6 +13,7 @@ import { MODULES } from '../moduleRegistry';
 import { FieldType, type ModuleDefinition } from '../types';
 import {
   DASHBOARD_PERMISSION_KEY,
+  SAAS_ADMIN_PERMISSION_KEY,
   SETTINGS_PERMISSION_KEY,
   canAccessAssignedRecord,
   fetchCurrentUserRecordAccessContext,
@@ -48,6 +49,15 @@ import { getDashboardGreetingFa } from '../utils/dashboardGreeting';
 import '../components/dashboard/Dashboard.css';
 import PhoneDisplay from '../components/PhoneDisplay';
 import OccasionsWidget from '../components/dashboard/OccasionsWidget';
+import DashboardAgentDeskStrip, { type DashboardAgentDeskOverviewMeta } from '../components/dashboard/DashboardAgentDeskStrip';
+import AiAgentMessagesCompactBox from '../components/ai/AiAgentMessagesCompactBox';
+import {
+  buildAgentAccessMapFromOverviewAgents,
+  resolveClientAgentAccess,
+  type AgentKey,
+  type AgentToneStyle,
+  type ClientAgentAccessEvaluation,
+} from '../utils/aiAgentCatalog';
 import StoryBar from '../components/stories/StoryBar';
 import type { RecordedVoice } from '../components/ai/AiVoiceRecorder';
 import type { AiUploadedFilePrompt } from '../components/ai/AiFileUploadButton';
@@ -946,6 +956,49 @@ const Dashboard: React.FC = () => {
   const [dashboardMediaSourceImages, setDashboardMediaSourceImages] = useState<AiMediaSourceImage[]>([]);
   const [dashboardModelOverrides, setDashboardModelOverrides] = useState<Record<string, string>>({});
   const dashboardModelOverrideRef = useRef<string | null>(null);
+  const [dashboardSelectedAgents, setDashboardSelectedAgents] = useState<AgentKey[]>([]);
+  const [dashboardToneStyle, setDashboardToneStyle] = useState<AgentToneStyle>('friendly_warm');
+  const [dashboardAgentAccessMap, setDashboardAgentAccessMap] = useState<Partial<Record<AgentKey, ClientAgentAccessEvaluation>> | null>(null);
+  const [dashboardAgentInboxOpen, setDashboardAgentInboxOpen] = useState(false);
+  const [dashboardAgentInboxAgentKey, setDashboardAgentInboxAgentKey] = useState<AgentKey | null>(null);
+  const [dashboardAgentInboxMeta, setDashboardAgentInboxMeta] = useState<{
+    approvalCount: number;
+    unreadCount: number;
+    threadCount: number;
+  }>({ approvalCount: 0, unreadCount: 0, threadCount: 0 });
+  const dashboardInboxAutoOpenedRef = useRef(false);
+
+  const handleToggleDashboardAgentInbox = useCallback((focusAgentKey?: AgentKey) => {
+    if (focusAgentKey) {
+      setDashboardAgentInboxAgentKey(focusAgentKey);
+      setDashboardAgentInboxOpen(true);
+      return;
+    }
+    setDashboardAgentInboxAgentKey(null);
+    setDashboardAgentInboxOpen((prev) => !prev);
+  }, []);
+
+  const handleDashboardDeskOverviewMeta = useCallback((meta: DashboardAgentDeskOverviewMeta) => {
+    setDashboardAgentInboxMeta((prev) => ({ ...prev, approvalCount: meta.totalApprovals }));
+    if (Array.isArray(meta.agents)) {
+      setDashboardAgentAccessMap(buildAgentAccessMapFromOverviewAgents(meta.agents));
+    }
+    if (meta.totalApprovals > 0 && !dashboardInboxAutoOpenedRef.current) {
+      dashboardInboxAutoOpenedRef.current = true;
+      setDashboardAgentInboxOpen(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!dashboardAgentAccessMap) return;
+    setDashboardSelectedAgents((prev) => {
+      const next = prev.filter((key) => {
+        const access = dashboardAgentAccessMap[key];
+        return Boolean(access && (access.canView ?? access.canUse) !== false && (access.canChat ?? access.canUse) !== false);
+      });
+      return next.length === prev.length ? prev : next;
+    });
+  }, [dashboardAgentAccessMap]);
 
   // ─── استوری‌ها ───────────────────────────────
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -973,7 +1026,7 @@ const Dashboard: React.FC = () => {
   const moduleSelection = <DashboardModuleSelection orgId={orgId} userId={currentUserId} selected={preferences.moduleIds ?? selectedModuleIds}
     options={Object.keys(MODULES).filter(id => !isSaasAdminModuleId(id) && dashboardPermissions[id]?.view !== false).map(id => ({ value: id, label: MODULES[id].titles.fa }))} />;
   const widgetChoices = [
-    { id: 'stories', label: 'استوری‌ها' },{ id: 'ai', label: 'دستیار هوشمند' },{ id: 'my_tasks', label: 'کارهای من' },{ id: 'reports_slider', label: 'گزارش‌های منتخب' },
+    { id: 'stories', label: 'استوری‌ها' },{ id: 'ai', label: 'دستیار هوشمند' },{ id: 'agents_desk', label: 'میز کار ایجنت‌ها' },{ id: 'my_tasks', label: 'کارهای من' },{ id: 'reports_slider', label: 'گزارش‌های منتخب' },
     { id: 'activity_calendar', label: 'تقویم فعالیت‌ها' },{ id: 'our_processes', label: 'فرآیندهای ما' },{ id: 'communications', label: 'ارتباطات' },{ id: 'goals', label: 'اهداف و موفقیت‌ها' },{ id: 'quick_add', label: 'افزودن سریع' },
     ...cards.map(card => ({ id: 'summary:' + card.moduleId, label: card.title })),...recentSections.map(section => ({ id: 'recent:' + section.moduleId, label: section.title })),
   ];
@@ -1031,6 +1084,19 @@ const Dashboard: React.FC = () => {
         setStoriesPermissions(resolveStoriesPermissions(perms));
         setCanPublishSaasStory(resolveSaasAdminFieldPermission(perms, 'publish_saas_story'));
         setCanPublishSaasAdminStory(resolveSaasAdminFieldPermission(perms, 'publish_saas_admin_story'));
+        if (userId) {
+          const normalizedRole = String(profile?.role || '').trim().toLowerCase();
+          setDashboardAgentAccessMap((prev) => prev || resolveClientAgentAccess({
+            permissions: perms,
+            userId,
+            roleId: snapshot.roleId,
+            isOrgAdmin:
+              perms?.[SETTINGS_PERMISSION_KEY]?.edit === true
+              || perms?.[SAAS_ADMIN_PERMISSION_KEY]?.edit === true
+              || normalizedRole === 'super_admin'
+              || normalizedRole === 'admin',
+          }));
+        }
         const prepared = await buildDashboardBootstrap();
         if (!active) return;
         setWidgetPermissions(prepared.widgetPermissions);
@@ -1102,6 +1168,8 @@ const Dashboard: React.FC = () => {
         state: {
           aiInitialPrompt: question,
           aiInitialCapabilities: dashboardAiCapabilities.length ? dashboardAiCapabilities : undefined,
+          aiInitialAgents: dashboardSelectedAgents.length ? dashboardSelectedAgents : undefined,
+          aiInitialToneStyle: dashboardToneStyle,
           aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
           aiInitialModelOverride: dashboardModelOverrideRef.current,
           aiInitialMediaSettings: dashboardMediaSettings,
@@ -1110,7 +1178,7 @@ const Dashboard: React.FC = () => {
           forceNewThread: true,
         },
       });
-  }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardMediaSettings, dashboardMediaSourceImages, dashboardNeedsRecordModule, dashboardRecordCreationTargetModuleId, message, navigate]);
+  }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardMediaSettings, dashboardMediaSourceImages, dashboardNeedsRecordModule, dashboardRecordCreationTargetModuleId, dashboardSelectedAgents, dashboardToneStyle, message, navigate]);
 
   const handleSubmitDashboardVoice = useCallback(async (voice: RecordedVoice) => {
     if (dashboardVoiceSending) return;
@@ -1136,6 +1204,8 @@ const Dashboard: React.FC = () => {
           aiInitialPrompt: transcript,
           aiInitialInputKind: 'voice',
           aiInitialCapabilities: dashboardAiCapabilities.length ? dashboardAiCapabilities : undefined,
+          aiInitialAgents: dashboardSelectedAgents.length ? dashboardSelectedAgents : undefined,
+          aiInitialToneStyle: dashboardToneStyle,
           aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
           aiInitialModelOverride: dashboardModelOverrideRef.current,
           aiInitialMediaSettings: dashboardMediaSettings,
@@ -1149,7 +1219,7 @@ const Dashboard: React.FC = () => {
     } finally {
       setDashboardVoiceSending(false);
     }
-  }, [dashboardAiCapabilities, dashboardMediaSettings, dashboardMediaSourceImages, dashboardRecordCreationTargetModuleId, dashboardVoiceSending, message, navigate]);
+  }, [dashboardAiCapabilities, dashboardMediaSettings, dashboardMediaSourceImages, dashboardRecordCreationTargetModuleId, dashboardSelectedAgents, dashboardToneStyle, dashboardVoiceSending, message, navigate]);
 
   const handleSubmitDashboardFiles = useCallback(async (filePrompts: AiUploadedFilePrompt[]) => {
     if (dashboardFileSending) return;
@@ -1162,6 +1232,8 @@ const Dashboard: React.FC = () => {
           aiInitialFiles: preparedFiles,
           aiInitialPrompt: dashboardAiQuestion.trim() || '',
           aiInitialCapabilities: dashboardAiCapabilities.length ? dashboardAiCapabilities : undefined,
+          aiInitialAgents: dashboardSelectedAgents.length ? dashboardSelectedAgents : undefined,
+          aiInitialToneStyle: dashboardToneStyle,
           aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
           aiInitialModelOverride: dashboardModelOverrideRef.current,
           aiInitialMediaSettings: dashboardMediaSettings,
@@ -1174,7 +1246,7 @@ const Dashboard: React.FC = () => {
     } finally {
       setDashboardFileSending(false);
     }
-  }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardFileSending, dashboardMediaSettings, dashboardMediaSourceImages, dashboardRecordCreationTargetModuleId, navigate]);
+  }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardFileSending, dashboardMediaSettings, dashboardMediaSourceImages, dashboardRecordCreationTargetModuleId, dashboardSelectedAgents, dashboardToneStyle, navigate]);
 
   const handleSubmitDashboardFile = useCallback(async (filePrompt: AiUploadedFilePrompt) => {
     await handleSubmitDashboardFiles([filePrompt]);
@@ -1366,13 +1438,18 @@ const Dashboard: React.FC = () => {
           <Card className="dashboard-content-card">
             <AiMessageComposer reserveMenuSpace value={dashboardAiQuestion} onChange={setDashboardAiQuestion} onSubmit={handleSubmitDashboardAiQuestion}
               canSubmit={!dashboardAiSendDisabled} busy={dashboardVoiceSending || dashboardFileSending} maxRows={4}
-              placeholder="از دستیار هوشمند سازمان بپرسید…"
-              sendLabel={dashboardVideoMode ? 'ساخت ویدیو با هوش مصنوعی' : dashboardVoiceOutputMode ? 'تولید صدا با هوش مصنوعی' : dashboardImageMode ? 'ساخت تصویر با هوش مصنوعی' : 'ارسال پیام به هوش مصنوعی'}
+              placeholder="از ایجنت‌ها و دستیار هوشمند سازمان بپرسید…"
+              sendLabel={dashboardVideoMode ? 'ساخت ویدیو با هوش مصنوعی' : dashboardVoiceOutputMode ? 'تولید صدا با هوش مصنوعی' : dashboardImageMode ? 'ساخت تصویر با هوش مصنوعی' : dashboardSelectedAgents.length > 1 ? `ارسال به ${dashboardSelectedAgents.length.toLocaleString('fa-IR')} ایجنت` : 'ارسال پیام به هوش مصنوعی'}
               tools={<AiCapabilityComposerActions
                       compact={isMobile}
                       selected={dashboardAiCapabilities}
                       onChange={handleDashboardCapabilitiesChange}
                       capabilityAvailability={dashboardAiCapabilityAvailability}
+                      selectedAgents={dashboardSelectedAgents}
+                      onAgentsChange={setDashboardSelectedAgents}
+                      agentAccessMap={dashboardAgentAccessMap}
+                      toneStyle={dashboardToneStyle}
+                      onToneStyleChange={setDashboardToneStyle}
                       moduleId={null}
                       recordId={null}
                       onVoiceSend={handleSubmitDashboardVoice}
@@ -1408,6 +1485,42 @@ const Dashboard: React.FC = () => {
           </Card>
         </DashboardWidgetFrame>}
       </div>
+      {dashboardReady && communicationsAccess.canUseWorkspace && canShowWidget('agents_desk') ? (
+        <DashboardWidgetFrame widgetId="agents_desk" title="میز کار ایجنت‌ها" defaultOrder={1.5} className="dashboard-agents-desk-frame mb-5">
+          <div className="space-y-3">
+            <DashboardAgentDeskStrip
+              selectedAgents={dashboardSelectedAgents}
+              onToggleAgent={(key) => {
+                setDashboardSelectedAgents((prev) => (
+                  prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key]
+                ));
+              }}
+              agentAccessMap={dashboardAgentAccessMap}
+              toneStyle={dashboardToneStyle}
+              inboxOpen={dashboardAgentInboxOpen}
+              onToggleInbox={handleToggleDashboardAgentInbox}
+              onOverviewMeta={handleDashboardDeskOverviewMeta}
+              externalInboxBadgeCount={
+                dashboardAgentInboxOpen
+                  ? dashboardAgentInboxMeta.approvalCount + dashboardAgentInboxMeta.unreadCount
+                  : undefined
+              }
+            />
+            {dashboardAgentInboxOpen ? (
+              <AiAgentMessagesCompactBox
+                layoutMode="wide"
+                agentAccessMap={dashboardAgentAccessMap}
+                initialAgentKey={dashboardAgentInboxAgentKey}
+                onClose={() => setDashboardAgentInboxOpen(false)}
+                onMetaChange={setDashboardAgentInboxMeta}
+                onSelectAgent={(agentKey) => {
+                  setDashboardSelectedAgents((prev) => (prev.includes(agentKey) ? prev : [...prev, agentKey]));
+                }}
+              />
+            ) : null}
+          </div>
+        </DashboardWidgetFrame>
+      ) : null}
       {loading && !dashboardReady && <div className="dashboard-initial-loading" role="status" aria-label="در حال آماده‌سازی داشبورد" aria-busy="true"><div className="dashboard-summary-grid">{Array.from({ length: 6 }, (_, index) => <Card key={index}><Skeleton active paragraph={{ rows: 2 }} /></Card>)}</div><div className="dashboard-widget-grid"><DashboardWidgetLoading widgetId="reports_slider" title="گزارش‌ها" defaultOrder={3} /><DashboardWidgetLoading widgetId="my_tasks" title="کارهای من" defaultOrder={4} /></div></div>}
       {!loading && dashboardReady && widgetPermissions.__all === false && !dashboardError && <Card><Empty description="دسترسی مشاهدهٔ داشبورد برای این نقش غیرفعال است." /></Card>}
       {canShowWidget('summary_cards') && selectedModuleIds.length > 0 && <div className="dashboard-summary-grid">{selectedModuleIds.map(moduleId => { const card = cards.find(item => item.moduleId === moduleId);if (!card && !loading) return null;return <DashboardWidgetFrame key={moduleId} widgetId={`summary:${moduleId}`} title={card?.title || getModuleTitle(moduleId)} settings={moduleSelection}>
