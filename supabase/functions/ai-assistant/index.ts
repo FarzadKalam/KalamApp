@@ -1,6 +1,11 @@
 // @ts-nocheck
 
 import {
+  buildAgentInboxPayload,
+  isHiddenAgentInboxThread,
+  resolveEligibleAgentInboxThread,
+} from '../_shared/ai-agent-inbox.ts';
+import {
   normalizeAgentPlan,
   shouldEscalateCustomerAutoReply,
   type AgentExecutionPolicy,
@@ -6831,23 +6836,7 @@ const handleGetThread = async (supabaseUrl: string, serviceRoleKey: string, auth
   });
 };
 
-const isHiddenAssistantThread = (thread: any) => {
-  const metadata = thread?.metadata && typeof thread.metadata === 'object' ? thread.metadata : {};
-  const contextKey = String(thread?.context_key || metadata?.context_key || '').trim();
-  const lastActivityKind = String(metadata?.last_activity_kind || '').trim();
-  const replyChannel = String(metadata?.reply_channel || '').trim();
-  const source = String(metadata?.source || metadata?.context?.source || '').trim();
-  const capability = String(metadata?.capability || '').trim();
-  return contextKey.startsWith('reply:sms:')
-    || contextKey.startsWith('reply:bot:')
-    || lastActivityKind === 'reply_suggestion'
-    || replyChannel === 'sms'
-    || replyChannel === 'bot'
-    || source === 'reply_suggestion'
-    || source === 'notifications_chat_reply_suggest'
-    || capability === 'customer_reply_suggestion'
-    || metadata?.customer_reply_suggestion === true;
-};
+const isHiddenAssistantThread = (thread: any) => isHiddenAgentInboxThread(thread);
 
 const handleListThreads = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const search = String(body?.search || '').trim();
@@ -7332,6 +7321,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     : [];
   const nativeTools = useNativeGeminiWebSearch ? [{ googleSearch: {} }] : [];
 
+  const explicitAgentSelected = normalizedExplicitAgents.length > 0;
   let thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
     threadId: body?.threadId || null,
     title: message.slice(0, 90),
@@ -7343,7 +7333,11 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     selectedAgents,
     channel,
     forceNew: body?.forceNewThread === true,
-    metadata: { free_chat: freeChatMode, tone_style: preferredToneStyle },
+    metadata: {
+      free_chat: freeChatMode,
+      tone_style: preferredToneStyle,
+      explicit_agent_selected: explicitAgentSelected,
+    },
   });
   const existingThreadIsFreeChat = thread?.metadata?.free_chat === true;
   if (thread && existingThreadIsFreeChat !== freeChatMode) {
@@ -7358,7 +7352,11 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
       selectedAgents,
       channel,
       forceNew: true,
-      metadata: { free_chat: freeChatMode, tone_style: preferredToneStyle },
+      metadata: {
+        free_chat: freeChatMode,
+        tone_style: preferredToneStyle,
+        explicit_agent_selected: explicitAgentSelected,
+      },
     });
   }
   const previousMessages = await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, thread.id, 30);
@@ -7576,6 +7574,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     selectedCapabilitySet: new Set(mergedCapabilities),
     selectedAgents,
     primaryAgent,
+    explicitAgentSelected,
     blockedAgents: mergedBlockedAgents,
     instagramMediaCards: skillAssembly.instagramMediaCards || [],
     preferredToneStyle,
@@ -7705,6 +7704,7 @@ const patchChatThreadAfterAssistant = async (
       free_chat: prepared.freeChatMode === true,
       agent_key: prepared.primaryAgent || 'lead_orchestrator',
       selected_agents: prepared.selectedAgents || ['lead_orchestrator'],
+      explicit_agent_selected: prepared.explicitAgentSelected === true || prepared.thread?.metadata?.explicit_agent_selected === true,
       tone_style: prepared.preferredToneStyle || 'friendly_warm',
       channel: prepared.channel || 'web',
       selected_process_id: prepared.pageContext.selectedProcessId || prepared.pageContext.context?.selectedProcessId || prepared.pageContext.context?.selectedProcessGroupId || null,
@@ -8494,7 +8494,11 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     selectedAgents,
     channel,
     forceNew: body?.forceNewThread === true,
-    metadata: { free_chat: freeChatMode, tone_style: preferredToneStyle },
+    metadata: {
+      free_chat: freeChatMode,
+      tone_style: preferredToneStyle,
+      explicit_agent_selected: normalizedExplicitAgents.length > 0,
+    },
   });
   const previousMessages = await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, thread.id, 30);
   const compressedContext = thread?.metadata?.compressed_context && typeof thread.metadata.compressed_context === 'object'
@@ -16839,24 +16843,25 @@ const handleListAgentMessages = async (supabaseUrl: string, serviceRoleKey: stri
     return mentionsUser || mentionsRole || canManageAgents || n?.metadata?.requested_by_user_id === authContext.userId;
   });
 
-  const visibleThreads = (rawThreads || []).filter((thread: any) => {
-    if (isHiddenAssistantThread(thread)) return false;
-    const isOwner = normalizeId(thread?.user_id) === normalizeId(authContext.userId);
-    const isSharedUser = Array.isArray(thread?.shared_user_ids) && thread.shared_user_ids.includes(authContext.userId);
-    const isSharedRole = authContext.roleId && Array.isArray(thread?.shared_role_ids) && thread.shared_role_ids.includes(authContext.roleId);
-    if (!isOwner && !isSharedUser && !isSharedRole && !canManageAgents) return false;
-    const rawKey = (
-      String(thread?.agent_key || '').trim()
-      || String(thread?.metadata?.agent_key || '').trim()
-      || (Array.isArray(thread?.selected_agents) ? String(thread.selected_agents[0] || '').trim() : '')
-      || 'lead_orchestrator'
-    ) as AgentKey;
-    const agentKey: AgentKey = AI_AGENT_KEYS.includes(rawKey) ? rawKey : 'lead_orchestrator';
-    return grounding.agentStates?.[agentKey]?.canView === true;
-  }).slice(0, 24);
+  const eligibleThreads = (rawThreads || [])
+    .map((thread: any) => {
+      const resolved = resolveEligibleAgentInboxThread(thread);
+      if (!resolved.eligible || !resolved.agentKey) return null;
+      const isOwner = normalizeId(thread?.user_id) === normalizeId(authContext.userId);
+      const isSharedUser = Array.isArray(thread?.shared_user_ids) && thread.shared_user_ids.includes(authContext.userId);
+      const isSharedRole = authContext.roleId && Array.isArray(thread?.shared_role_ids) && thread.shared_role_ids.includes(authContext.roleId);
+      if (!isOwner && !isSharedUser && !isSharedRole && !canManageAgents) return null;
+      if (grounding.agentStates?.[resolved.agentKey]?.canView !== true) return null;
+      return {
+        thread,
+        agentKey: resolved.agentKey,
+        channel: resolved.channel,
+      };
+    })
+    .filter((item: any): item is { thread: any; agentKey: AgentKey; channel: string } => Boolean(item))
+    .slice(0, 24);
 
-  const threadById = new Map<string, any>(visibleThreads.map((t: any) => [String(t.id), t]));
-  const threadIds = Array.from(threadById.keys());
+  const threadIds = eligibleThreads.map((item) => String(item.thread.id));
   const recentThreadMessages = threadIds.length > 0
     ? await safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_messages', {
         org_id: `eq.${authContext.orgId}`,
@@ -16867,68 +16872,17 @@ const handleListAgentMessages = async (supabaseUrl: string, serviceRoleKey: stri
       }).catch(() => [])
     : [];
 
-  const synthesizedThreadEntries = (recentThreadMessages || [])
-    .filter((msg: any) => ['user', 'assistant'].includes(String(msg?.role || '').trim()) && String(msg?.content || '').trim())
-    .map((msg: any) => {
-      const thread = threadById.get(String(msg?.thread_id || ''));
-      const rawKey = (
-        String(msg?.metadata?.agent_key || '').trim()
-        || String(thread?.agent_key || '').trim()
-        || String(thread?.metadata?.agent_key || '').trim()
-        || (Array.isArray(thread?.selected_agents) ? String(thread.selected_agents[0] || '').trim() : '')
-        || 'lead_orchestrator'
-      ) as AgentKey;
-      const agentKey: AgentKey = AI_AGENT_KEYS.includes(rawKey) ? rawKey : 'lead_orchestrator';
-      const isUser = String(msg.role) === 'user';
-      return {
-        id: `ai-msg-${msg.id}`,
-        module_id: thread?.module_id || null,
-        record_id: thread?.record_id || null,
-        content: String(msg.content || '').trim(),
-        author_id: isUser ? thread?.user_id || null : null,
-        author_name: isUser ? 'شما' : getAgentTitleFa(agentKey),
-        source_type: isUser ? 'user' : 'ai',
-        created_at: msg.created_at,
-        metadata: {
-          agent_key: agentKey,
-          conversation_key: `agent:${agentKey}`,
-          source_table: 'ai_messages',
-          thread_id: msg.thread_id,
-          thread_title: thread?.title || null,
-          channel: thread?.channel || 'web',
-        },
-      };
-    });
-
-  const allCombinedMessages = [...visibleAgentNotes, ...synthesizedThreadEntries]
-    .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime());
-
-  const threadsByAgent = new Map<string, { agentKey: AgentKey; titleFa: string; conversationKey: string; lastMessageAt: string; lastPreview: string; unreadCount: number; messages: any[] }>();
-  for (const n of allCombinedMessages) {
-    const rawKey = (String(n?.metadata?.agent_key || '').trim()
-      || String(n?.metadata?.conversation_key || '').replace(/^agent:/, '').trim()
-      || 'lead_orchestrator') as AgentKey;
-    const agentKey: AgentKey = AI_AGENT_KEYS.includes(rawKey) ? rawKey : 'lead_orchestrator';
-    const key = `agent:${agentKey}`;
-    const current = threadsByAgent.get(key) || {
-      agentKey,
-      titleFa: getAgentTitleFa(agentKey),
-      conversationKey: key,
-      lastMessageAt: String(n.created_at || ''),
-      lastPreview: String(n.content || '').slice(0, 140),
-      unreadCount: 0,
-      messages: [],
-    };
-    if (current.messages.length < 30) {
-      current.messages.push(n);
-    }
-    threadsByAgent.set(key, current);
-  }
+  const inboxPayload = buildAgentInboxPayload({
+    visibleAgentNotes,
+    eligibleThreads,
+    threadMessages: recentThreadMessages || [],
+    limit,
+  });
 
   return json(200, {
     success: true,
-    threads: Array.from(threadsByAgent.values()),
-    messages: allCombinedMessages.slice(0, limit),
+    threads: inboxPayload.threads,
+    messages: inboxPayload.messages,
   });
 };
 
