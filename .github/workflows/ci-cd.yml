@@ -16,6 +16,10 @@ concurrency:
   group: kalamapp-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -335,7 +339,24 @@ jobs:
       - name: Pack dist
         run: tar -czf dist.tar.gz -C dist .
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle-${{ github.sha }}
+          path: dist.tar.gz
+          retention-days: 3
+
+      - name: Pull exact CI bundle on server
+        id: artifact_pull
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: node scripts/pull-ci-release-artifact.mjs
+
       - name: Upload bundle
+        if: steps.artifact_pull.outcome != 'success'
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
           SERVER_PORT: ${{ secrets.SERVER_PORT }}
