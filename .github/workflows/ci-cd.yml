@@ -128,7 +128,7 @@ jobs:
       - name: Shared AI agents and chat surfaces regression checks
         timeout-minutes: 10
         run: >-
-          npx vitest run supabase/functions/_shared/ai-agents.test.ts supabase/functions/_shared/ai-agent-contract.test.ts supabase/functions/_shared/ai-agent-inbox.test.ts
+          npx vitest run supabase/functions/_shared/ai-agents.test.ts supabase/functions/_shared/ai-agent-contract.test.ts supabase/functions/_shared/ai-agent-inbox.test.ts utils/__tests__/aiAaasFoundation.test.ts
           components/ai/AiMessageComposer.test.tsx components/ai/AiGenerationStatusCard.test.tsx
           components/ai/AiChatSurfaceV2.test.tsx components/ai/AssistantPanel.operators.test.tsx
           components/ai/AiCapabilityComposerActions.test.tsx components/ai/AiComposeModelBar.test.tsx
@@ -255,6 +255,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Preserve concurrent committed changes and wait for earlier releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/wait-for-production-release.mjs
 
       - uses: actions/download-artifact@v4
         with:

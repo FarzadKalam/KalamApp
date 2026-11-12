@@ -241,6 +241,34 @@ describe('Modular AaaS Foundation', () => {
     });
     expect(chosenCompression.model).toBe('org-selected-compact-model');
     expect(chosenCompression.source).toBe('org_slot');
+
+    const chosenPerAgentDefault = resolveModelSlot({
+      slot: 'dashboard_chat',
+      catalogRows: [
+        {
+          id: 'deepseek-v4.1-flash',
+          provider: 'deepseek',
+          capability_tags: ['dashboard_chat', 'record_chat', 'agent_fast'],
+          is_active: true,
+          is_coming_soon: false,
+        },
+        {
+          id: 'qwen3.8-max',
+          provider: 'qwen',
+          capability_tags: ['dashboard_chat', 'record_chat'],
+          is_active: true,
+          is_coming_soon: false,
+        },
+      ],
+      orgAiSettings: null,
+      saasDefaultModels: {
+        __primary_model: 'qwen3.8-max',
+        'agent:system_guide': 'deepseek-v4.1-flash',
+      },
+      agentConfig: { agent_key: 'system_guide' },
+    });
+    expect(chosenPerAgentDefault.model).toBe('deepseek-v4.1-flash');
+    expect(chosenPerAgentDefault.source).toBe('saas_agent_default');
   });
 
   it('enforces Hybrid Plan x RBAC x Member Override access and Tehran work schedules', () => {
