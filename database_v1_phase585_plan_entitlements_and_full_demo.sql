@@ -13,7 +13,7 @@ create or replace function public.get_org_plan_access_context(p_org_id uuid)
 returns jsonb language plpgsql stable security definer set search_path=public as $$
 declare
  s public.saas_org_settings%rowtype; p public.saas_plans%rowtype;
- f jsonb := '{}'::jsonb; m jsonb := '{}'::jsonb; inherited_f jsonb; inherited_m jsonb;
+ f jsonb := '{}'::jsonb; m jsonb := '{}'::jsonb; inherited_f jsonb; inherited_m jsonb; entitlement_f jsonb:='{}'; entitlement_m jsonb:='{}';
  e record; internal_org boolean; available boolean; local_policy record;
 begin
  if p_org_id is null then return jsonb_build_object('available',false,'features','{}'::jsonb,'enabledModules','{}'::jsonb); end if;
@@ -46,8 +46,8 @@ begin
  for e in select item_kind,entitlement_code,bool_and(state='enabled') as enabled
    from public.saas_org_entitlements where org_id=p_org_id and item_kind in ('feature','module')
    and (expires_at is null or expires_at>now()) group by item_kind,entitlement_code loop
-   if e.item_kind='feature' then f:=f||jsonb_build_object(e.entitlement_code,e.enabled);
-   else m:=m||jsonb_build_object(e.entitlement_code,e.enabled); end if;
+   if e.item_kind='feature' then f:=f||jsonb_build_object(e.entitlement_code,e.enabled); entitlement_f:=entitlement_f||jsonb_build_object(e.entitlement_code,e.enabled);
+   else m:=m||jsonb_build_object(e.entitlement_code,e.enabled); entitlement_m:=entitlement_m||jsonb_build_object(e.entitlement_code,e.enabled); end if;
  end loop;
  inherited_f:=f; inherited_m:=m;
  f:=f||coalesce(s.feature_overrides,'{}'); m:=m||coalesce(s.module_overrides,'{}');
@@ -61,7 +61,7 @@ begin
  select coalesce(jsonb_object_agg(key, coalesce(value='true'::jsonb or lower(value#>>'{}') in ('true','1','yes','on','enabled'),false)),'{}') into m from jsonb_each(m);
  return jsonb_build_object('available',coalesce(available,false),'planCode',s.plan_code,
    'features',f,'enabledModules',m,'moduleOverrides',coalesce(s.module_overrides,'{}'),
-   'strictModules',true,'featureOverrides',coalesce(s.feature_overrides,'{}'),'inheritedFeatures',inherited_f,'inheritedModules',inherited_m,
+   'featureEntitlements',entitlement_f,'moduleEntitlements',entitlement_m,'strictModules',true,'featureOverrides',coalesce(s.feature_overrides,'{}'),'inheritedFeatures',inherited_f,'inheritedModules',inherited_m,
    'status',s.status,'isReadonly',coalesce(s.is_readonly,false),
    'reason',case when internal_org then 'internal_organization' when not available then 'plan_unavailable' else null end);
 end; $$;

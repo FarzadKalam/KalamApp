@@ -92,8 +92,8 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
   const allModuleIds = useMemo(() => SAAS_MODULE_GROUPS.flatMap((group) => group.modules.map((item) => item.id)), []);
   const allFeatureIds = useMemo(() => SAAS_FEATURE_OPTIONS.map((item) => item.id), []);
   const plan = plans.find((item) => item.code === selectedPlan);
-  const inheritedModules = selectedPlan === accessContext?.planCode ? accessContext?.inheritedModules || {} : plan?.enabled_modules || {};
-  const inheritedFeatures = selectedPlan === accessContext?.planCode ? accessContext?.inheritedFeatures || {} : plan?.enabled_features || {};
+  const inheritedModules = selectedPlan === accessContext?.planCode ? accessContext?.inheritedModules || {} : { ...(plan?.enabled_modules || {}), ...(accessContext?.moduleEntitlements || {}) };
+  const inheritedFeatures = selectedPlan === accessContext?.planCode ? accessContext?.inheritedFeatures || {} : { ...(plan?.enabled_features || {}), ...(accessContext?.featureEntitlements || {}) };
   const effectiveModules = { ...inheritedModules, ...moduleOverrides };
   const effectiveFeatures = { ...inheritedFeatures, ...featureOverrides };
   const selectedModules = Object.keys(effectiveModules).filter((key) => isPlanValueEnabled(effectiveModules[key]));
