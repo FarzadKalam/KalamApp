@@ -168,6 +168,7 @@ const SaasAdminAiSettings: React.FC = () => {
   const [form] = Form.useForm<ModelFormValues>();
   const defaultCapabilityTags = Form.useWatch(['metadata', 'default_capability_tags'], form) || [];
   const isDefaultModel = Form.useWatch(['metadata', 'is_default_model'], form) === true;
+  const overrideExchangeRate = Form.useWatch(['metadata', 'override_exchange_rate'], form) === true;
 
   const loadOverview = useCallback(async () => {
     setLoading(true);
@@ -259,18 +260,26 @@ const SaasAdminAiSettings: React.FC = () => {
   const orgSummaries = useMemo(() => (overview?.orgSummaries || []) as any[], [overview]);
   const allUsage = useMemo(() => (overview?.allUsage || []) as any[], [overview]);
   const totals = overview?.totals || {};
+  const liveExchangeRate = overview?.liveExchangeRate || {};
+  const liveExchangeRateIrt = Number(liveExchangeRate?.rate || 0) > 0 ? Number(liveExchangeRate.rate) : null;
+  const liveExchangeRateSource = String(liveExchangeRate?.source || '').trim();
   const providerCredit = overview?.providerCredit || {};
   const providerBalance = providerCredit?.credit?.toman
     ?? providerCredit?.credit?.irt
-    ?? providerCredit?.credit?.rial
+    ?? (providerCredit?.credit?.rial !== null && providerCredit?.credit?.rial !== undefined
+      ? Number(providerCredit.credit.rial) / 10
+      : null)
     ?? providerCredit?.credit?.remaining_irt
     ?? providerCredit?.credit?.remaining
     ?? null;
-  const providerTokenBalance = providerCredit?.credit?.token
+  const providerTokenBalance = providerCredit?.credit?.remainingUnit
+    ?? providerCredit?.credit?.remaining_unit
+    ?? providerCredit?.credit?.token
     ?? providerCredit?.credit?.tokens
     ?? providerCredit?.credit?.unit
     ?? providerCredit?.credit?.credit
     ?? null;
+  const providerTotalUnit = providerCredit?.credit?.totalUnit ?? providerCredit?.credit?.total_unit ?? null;
 
   const handleSyncModels = async () => {
     setSyncing(true);
@@ -307,12 +316,14 @@ const SaasAdminAiSettings: React.FC = () => {
       input_usd_per_1m: model.input_usd_per_1m ?? 0,
       output_usd_per_1m: model.output_usd_per_1m ?? 0,
       margin_percent: 30,
+      exchange_rate_irt: 0,
       is_active: true,
       is_coming_soon: false,
       metadata: {
         context_window: model.context_window ?? null,
         provider_catalog_id: model.id,
         provider_capability_hints: Array.isArray(model.provider_capability_hints) ? model.provider_capability_hints : [],
+        override_exchange_rate: false,
       },
     });
     setProviderModelsOpen(false);
@@ -322,11 +333,14 @@ const SaasAdminAiSettings: React.FC = () => {
   const openEdit = (model: AiModel | null) => {
     setEditModel(model);
     if (model) {
+      const hasManualRate = model.metadata?.override_exchange_rate === true && Number(model.exchange_rate_irt || 0) > 0;
       form.setFieldsValue({
         ...model,
+        exchange_rate_irt: hasManualRate ? Number(model.exchange_rate_irt) : 0,
         capability_tags: model.capability_tags || [],
         metadata: {
           ...(model.metadata || {}),
+          override_exchange_rate: hasManualRate,
           is_default_model: Array.isArray(model.metadata?.default_capability_tags) && model.metadata.default_capability_tags.length > 0,
         },
       });
@@ -335,10 +349,11 @@ const SaasAdminAiSettings: React.FC = () => {
       form.setFieldsValue({
         provider: 'avalai',
         margin_percent: 30,
+        exchange_rate_irt: 0,
         is_active: true,
         is_coming_soon: false,
         capability_tags: [],
-        metadata: { default_capability_tags: [] },
+        metadata: { default_capability_tags: [], override_exchange_rate: false },
       });
     }
     setEditOpen(true);
@@ -348,11 +363,16 @@ const SaasAdminAiSettings: React.FC = () => {
     try {
       const values = await form.validateFields();
       const allValues = form.getFieldsValue(true);
+      const merged = { ...(editModel || {}), ...allValues, ...values };
+      const manualOverride = merged?.metadata?.override_exchange_rate === true && Number(merged?.exchange_rate_irt || 0) > 0;
       setEditSaving(true);
       await callAi({
         action: 'saas_ai',
         sub: 'upsert_model',
-        model: { ...(editModel || {}), ...allValues, ...values },
+        model: {
+          ...merged,
+          exchange_rate_irt: manualOverride ? Number(merged.exchange_rate_irt) : 0,
+        },
       });
       message.success(editModel ? 'مدل ویرایش شد.' : 'مدل جدید اضافه شد.');
       setEditOpen(false);
@@ -459,6 +479,32 @@ const SaasAdminAiSettings: React.FC = () => {
       render: (v: number) => `${Number(v || 0)}٪`,
     },
     {
+      title: 'نرخ ارز / برآورد پایه',
+      width: 170,
+      render: (_: unknown, row: AiModel) => {
+        const hasManual = row.metadata?.override_exchange_rate === true && Number(row.exchange_rate_irt || 0) > 0;
+        const effectiveRate = hasManual ? Number(row.exchange_rate_irt) : liveExchangeRateIrt;
+        return (
+          <div className="space-y-0.5 text-[11px]">
+            {hasManual ? (
+              <Tag color="orange" className="m-0 text-[10px]">دستی: {formatIrt(row.exchange_rate_irt)}</Tag>
+            ) : (
+              <Tag color={liveExchangeRateIrt ? 'green' : 'default'} className="m-0 text-[10px]">
+                {liveExchangeRateIrt ? `نرخ AvalAI: ${formatIrt(liveExchangeRateIrt)}` : 'خودکار از AvalAI'}
+              </Tag>
+            )}
+            {effectiveRate ? (
+              <div className="text-[10px] text-gray-500">
+                {row.specific_cost_usd
+                  ? `پایه: ${formatIrt(Number(row.specific_cost_usd || 0) * effectiveRate)}`
+                  : `۱M ورودی: ${formatIrt(Number(row.input_usd_per_1m || 0) * effectiveRate)}`}
+              </div>
+            ) : null}
+          </div>
+        );
+      },
+    },
+    {
       title: 'وضعیت',
       width: 90,
       render: (_: unknown, row: AiModel) => (
@@ -487,17 +533,39 @@ const SaasAdminAiSettings: React.FC = () => {
 
   const usageColumns = [
     { title: 'تاریخ', dataIndex: 'created_at', width: 140, render: (v: string) => v ? new Date(v).toLocaleDateString('fa-IR', { dateStyle: 'short' }) : '-' },
-    { title: 'سازمان', dataIndex: 'org_name', width: 160, render: (v: string) => <span className="text-xs font-semibold">{v || 'سازمان بدون نام'}</span> },
+    {
+      title: 'سازمان',
+      dataIndex: 'org_name',
+      width: 170,
+      render: (v: string, row: any) => (
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="text-xs font-semibold">{v || 'سازمان بدون نام'}</span>
+          {row.currency_label ? <Tag className="m-0 text-[9px]">{row.currency_label}</Tag> : null}
+        </div>
+      ),
+    },
     { title: 'قابلیت', dataIndex: 'capability' },
     { title: 'مدل', dataIndex: 'model', render: (v: string) => <Text className="font-mono text-xs">{v}</Text> },
     { title: 'وضعیت', dataIndex: 'status', render: (v: string) => <Tag>{v}</Tag> },
+    { title: 'نرخ دلار', dataIndex: 'exchange_rate_irt', render: (v: number) => Number(v || 0) > 0 ? formatIrt(v) : '-' },
     { title: 'هزینه مشتری (تومان)', dataIndex: 'billed_amount_irt', render: (v: number) => formatIrt(v) },
     { title: 'هزینه خام (تومان)', dataIndex: 'raw_cost_irt', render: (v: number) => formatIrt(v) },
   ];
 
   const orgColumns = [
-    { title: 'سازمان', dataIndex: 'org_name', render: (v: string) => <span className="text-xs font-semibold">{v || 'سازمان بدون نام'}</span> },
-    { title: 'اعتبار باقی‌مانده', dataIndex: 'wallet_remaining_irt', render: (v: number) => formatIrt(v) },
+    {
+      title: 'سازمان',
+      dataIndex: 'org_name',
+      render: (v: string, row: any) => (
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="text-xs font-semibold">{v || 'سازمان بدون نام'}</span>
+          <Tag color={row.currency_code === 'IRR' ? 'gold' : 'blue'} className="m-0 text-[9px]">
+            {row.currency_label || (row.currency_code === 'IRR' ? 'ریال' : 'تومان')}
+          </Tag>
+        </div>
+      ),
+    },
+    { title: 'اعتبار باقی‌مانده (تومان)', dataIndex: 'wallet_remaining_irt', render: (v: number) => formatIrt(v) },
     { title: 'تعداد درخواست', dataIndex: 'requests' },
     { title: 'هزینه مشتری (تومان)', dataIndex: 'billed_irt', render: (v: number) => formatIrt(v) },
     { title: 'هزینه خام (تومان)', dataIndex: 'raw_irt', render: (v: number) => formatIrt(v) },
@@ -548,14 +616,42 @@ const SaasAdminAiSettings: React.FC = () => {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
           <Statistic title="اعتبار AvalAI" value={providerBalance || 0} formatter={formatIrt} />
           {providerTokenBalance !== null && providerTokenBalance !== undefined ? (
             <div className="mt-1 text-xs text-gray-500">
-              واحد/توکن: {Number(providerTokenBalance || 0).toLocaleString('fa-IR')}
+              واحد مصرفی: {Number(providerTokenBalance || 0).toLocaleString('en-US', { maximumFractionDigits: 4 })}
+              {providerTotalUnit !== null && providerTotalUnit !== undefined
+                ? ` / ${Number(providerTotalUnit || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+                : ''}
             </div>
           ) : null}
+        </div>
+        <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
+          <Statistic
+            title="نرخ زنده دلار AvalAI"
+            value={liveExchangeRateIrt ?? 0}
+            formatter={(val) => (Number(val || 0) > 0 ? formatIrt(val) : 'نامشخص')}
+          />
+          <div className="mt-1">
+            <Tag
+              color={
+                liveExchangeRateSource === 'avalai_credit'
+                  ? 'green'
+                  : liveExchangeRateSource === 'ledger_history'
+                    ? 'blue'
+                    : 'gold'
+              }
+              className="m-0 text-[10px]"
+            >
+              {liveExchangeRateSource === 'avalai_credit'
+                ? 'زنده از AvalAI'
+                : liveExchangeRateSource === 'ledger_history'
+                  ? 'آخرین نرخ AvalAI'
+                  : 'در انتظار همگام‌سازی'}
+            </Tag>
+          </div>
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
           <Statistic title="کل درآمد ثبت‌شده" value={totals.billed_irt || 0} formatter={formatIrt} />
@@ -901,8 +997,40 @@ const SaasAdminAiSettings: React.FC = () => {
             <Form.Item name="margin_percent" label="حاشیه سود (٪)">
               <InputNumber min={0} max={500} className="w-full" />
             </Form.Item>
-            <Form.Item name="exchange_rate_irt" label="نرخ تبدیل (تومان/دلار)">
-              <InputNumber min={0} className="w-full" />
+            <Form.Item
+              name={['metadata', 'override_exchange_rate']}
+              label="تعیین نرخ تبدیل دستی"
+              valuePropName="checked"
+              tooltip="در حالت خودکار، نرخ تبدیل دلار دقیقاً از پاسخ لحظه‌ای AvalAI خوانده می‌شود."
+            >
+              <Switch
+                checkedChildren="دستی"
+                unCheckedChildren="خودکار AvalAI"
+                onChange={(checked) => {
+                  if (!checked) {
+                    form.setFieldValue('exchange_rate_irt', 0);
+                  } else if (!Number(form.getFieldValue('exchange_rate_irt') || 0) && liveExchangeRateIrt) {
+                    form.setFieldValue('exchange_rate_irt', Math.round(liveExchangeRateIrt));
+                  }
+                }}
+              />
+            </Form.Item>
+            <Form.Item
+              name="exchange_rate_irt"
+              label="نرخ تبدیل (تومان/دلار)"
+              className="col-span-2"
+              dependencies={[['metadata', 'override_exchange_rate']]}
+            >
+              <InputNumber
+                min={0}
+                disabled={!overrideExchangeRate}
+                className="w-full"
+                placeholder={
+                  liveExchangeRateIrt
+                    ? `خودکار از نرخ زنده AvalAI (${Math.round(liveExchangeRateIrt).toLocaleString('fa-IR')} تومان)`
+                    : 'خودکار از نرخ زنده AvalAI'
+                }
+              />
             </Form.Item>
             <Form.Item name="is_active" label="فعال" valuePropName="checked">
               <Switch />

@@ -49,6 +49,8 @@ import AiAgentMessagesCompactBox from '../components/ai/AiAgentMessagesCompactBo
 import AiAgentIcon, { AiAgentAvatar, AiAgentDeskSeatFigure } from '../components/ai/AiAgentIcon';
 import AiSparkleIcon from '../components/ai/AiSparkleIcon';
 import DashboardAgentDetailModal, { type DashboardAgentModalItem } from '../components/dashboard/DashboardAgentDetailModal';
+import { useCurrencyConfig } from '../utils/currency';
+import { convertIrtToDisplayAmount, getAiDisplayCurrencyMeta } from '../utils/aiCurrency';
 
 const getModuleTitle = (moduleId: string): string => (
   MODULES[moduleId]?.titles?.faSingular || MODULES[moduleId]?.titles?.fa || moduleId
@@ -138,6 +140,7 @@ const formatJalaliDateTime = (value?: string | null) => {
 
 const AiAgentsWorkspacePage: React.FC = () => {
   const { message } = App.useApp();
+  const orgCurrency = useCurrencyConfig();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState<any | null>(null);
@@ -327,6 +330,20 @@ const AiAgentsWorkspacePage: React.FC = () => {
     return { permittedCount, workingCount, totalTriggers, totalSavingsIrt };
   }, [agentsList]);
 
+  const liveExchangeRateIrt = Number(overview?.liveExchangeRate?.rate || 0) > 0
+    ? Number(overview?.liveExchangeRate?.rate)
+    : null;
+  const savingsCurrencyMeta = useMemo(
+    () => getAiDisplayCurrencyMeta(overview?.company, orgCurrency, { exchangeRateIrt: liveExchangeRateIrt }),
+    [liveExchangeRateIrt, orgCurrency, overview?.company],
+  );
+  const displaySavingsAmount = convertIrtToDisplayAmount(
+    summaryStats.totalSavingsIrt,
+    overview?.company,
+    orgCurrency,
+    { exchangeRateIrt: liveExchangeRateIrt },
+  );
+
   const canAccessConfigPanel = Boolean(
     overview?.canManage || agentsList.some((a) => a.canToggle || a.canEdit),
   );
@@ -478,7 +495,18 @@ const AiAgentsWorkspacePage: React.FC = () => {
           <Statistic title="فعال‌کننده‌های گردش کار" value={toPersianNumber(summaryStats.totalTriggers)} suffix="سناریو" />
         </Card>
         <Card size="small" className="rounded-2xl">
-          <Statistic title="صرفه‌جویی کش پرامپت" value={toPersianNumber(Math.round(summaryStats.totalSavingsIrt))} suffix="تومان" />
+          {savingsCurrencyMeta.isUsdConverted ? (
+            <Statistic
+              title="صرفه‌جویی کش پرامپت"
+              value={`$${displaySavingsAmount.toLocaleString('en-US', { maximumFractionDigits: 4 })}`}
+            />
+          ) : (
+            <Statistic
+              title="صرفه‌جویی کش پرامپت"
+              value={toPersianNumber(Math.round(displaySavingsAmount))}
+              suffix={savingsCurrencyMeta.label}
+            />
+          )}
         </Card>
       </div>
 

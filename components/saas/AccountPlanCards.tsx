@@ -3,6 +3,7 @@ import { Button, Card, Col, InputNumber, Row, Select, Space, Tag, Typography } f
 import { CheckCircleOutlined, DownOutlined, UpOutlined } from '@ant-design/icons';
 import { parseSaasPlanDisplayFeatures } from '../../utils/saasPlanDisplayFeatures';
 import { CheckoutDiscounts, TERM_OPTIONS, planCheckoutTotal, termDiscountPercent, userDiscountPercent } from '../../utils/saasCheckoutPricing';
+import { useCurrencyConfig } from '../../utils/currency';
 
 type StorePlan = {
   code: string;
@@ -36,6 +37,9 @@ type Props = {
 };
 
 const AccountPlanCards: React.FC<Props> = ({ plans, publicPlans, cart, usersUsed, termMonths, discounts, onSelect, onRemove, onQuantityChange, onTermChange }) => {
+  const orgCurrency = useCurrencyConfig();
+  const displayMultiplier = orgCurrency.code === 'IRR' ? 10 : 1;
+  const displayCurrencyLabel = orgCurrency.code === 'IRR' ? (orgCurrency.label || 'ریال') : 'تومان';
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const publicPlanByCode = new Map(publicPlans.map((plan) => [plan.code, plan]));
 
@@ -61,8 +65,8 @@ const AccountPlanCards: React.FC<Props> = ({ plans, publicPlans, cart, usersUsed
           </div>
           <Typography.Text type="secondary" className="mt-2 block min-h-10 text-sm">{plan?.short_description || item.description || 'پلن اشتراک سازمان'}</Typography.Text>
           <div className="mt-4 flex flex-wrap items-baseline gap-2">
-            <span className="text-2xl font-black text-slate-900 dark:text-white">{Math.round(Number(item.price_irt || 0)).toLocaleString('fa-IR')}</span>
-            <Typography.Text type="secondary" className="text-xs">تومان به ازای هر کاربر در ماه</Typography.Text>
+            <span className="text-2xl font-black text-slate-900 dark:text-white">{Math.round(Number(item.price_irt || 0) * displayMultiplier).toLocaleString('fa-IR')}</span>
+            <Typography.Text type="secondary" className="text-xs">{displayCurrencyLabel} به ازای هر کاربر در ماه</Typography.Text>
           </div>
           <div className="mt-2 text-xs text-emerald-700 dark:text-emerald-300">از ۶ کاربر به بالا، تخفیف پلکانی تعداد کاربران اعمال می‌شود.</div>
           {discounts.users.length > 0 ? <div className="mt-2 flex flex-wrap gap-1">{discounts.users.map((rule) => <Tag key={rule.minimum} color="green">{Number(rule.minimum).toLocaleString('fa-IR')}+ کاربر: {Number(rule.percent).toLocaleString('fa-IR')}٪</Tag>)}</div> : null}
@@ -93,7 +97,7 @@ const AccountPlanCards: React.FC<Props> = ({ plans, publicPlans, cart, usersUsed
             <Typography.Text className="block text-xs">دوره پرداخت</Typography.Text>
             <Select className="w-full" value={termMonths} options={TERM_OPTIONS} onChange={onTermChange} aria-label={`دوره پرداخت ${item.title}`} />
             <div className="flex flex-wrap gap-1">{usersDiscount > 0 ? <Tag color="green">تخفیف تعداد: {usersDiscount.toLocaleString('fa-IR')}٪</Tag> : null}{termDiscount > 0 ? <Tag color="blue">تخفیف دوره: {termDiscount.toLocaleString('fa-IR')}٪</Tag> : null}</div>
-            <Typography.Text strong className="block">مبلغ این دوره: {planCheckoutTotal(count, termMonths, Number(item.price_irt || 0), yearlyPrice, discounts).toLocaleString('fa-IR')} تومان</Typography.Text>
+            <Typography.Text strong className="block">مبلغ این دوره: {Math.round(planCheckoutTotal(count, termMonths, Number(item.price_irt || 0), yearlyPrice, discounts) * displayMultiplier).toLocaleString('fa-IR')} {displayCurrencyLabel}</Typography.Text>
           </div> : null}
         </Card>
       </Col>;

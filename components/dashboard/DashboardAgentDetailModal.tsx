@@ -47,6 +47,13 @@ import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { createWorkflowId, type WorkflowRecord } from '../../utils/workflowTypes';
 import WorkflowEditorModal from '../workflows/WorkflowEditorModal';
 import { AiAgentAvatar } from '../ai/AiAgentIcon';
+import { useCurrencyConfig } from '../../utils/currency';
+import {
+  convertDisplayInputToIrt,
+  convertIrtToDisplayAmount,
+  formatAiCurrencyFromIrt,
+  getAiDisplayCurrencyMeta,
+} from '../../utils/aiCurrency';
 
 export type DashboardAgentModalItem = {
   key: AgentKey;
@@ -167,6 +174,11 @@ const DashboardAgentDetailModal: React.FC<DashboardAgentDetailModalProps> = ({
   onOpenChatPage,
 }) => {
   const { message } = App.useApp();
+  const orgCurrency = useCurrencyConfig();
+  const budgetCurrencyMeta = useMemo(
+    () => getAiDisplayCurrencyMeta(orgCurrency, orgCurrency),
+    [orgCurrency],
+  );
   const [activeTab, setActiveTab] = useState<'activity' | 'settings'>('activity');
   const [toggling, setToggling] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -403,7 +415,7 @@ const DashboardAgentDetailModal: React.FC<DashboardAgentDetailModalProps> = ({
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200/80 bg-slate-50/75 px-3 py-2 text-xs dark:border-white/10 dark:bg-white/[0.03]">
             <div className="flex flex-wrap items-center gap-3 text-slate-600 dark:text-slate-300">
               <span>اجراها: <b>{toPersianNumber(Number(agent.usageStats?.runs || 0))}</b></span>
-              <span>صرفه‌جویی کش: <b>{toPersianNumber(Math.round(Number(agent.usageStats?.savingsIrt || 0)))}</b> تومان</span>
+              <span>صرفه‌جویی کش: <b>{formatAiCurrencyFromIrt(agent.usageStats?.savingsIrt || 0, orgCurrency, orgCurrency)}</b></span>
               <span>لحن: <b>{getAgentToneLabelFa(agent.toneStyle)}</b></span>
             </div>
             <Button size="small" icon={<ReloadOutlined />} loading={refreshing} onClick={() => void onRefresh()}>
@@ -450,11 +462,11 @@ const DashboardAgentDetailModal: React.FC<DashboardAgentDetailModalProps> = ({
                 <div className="rounded-lg bg-slate-50 px-2.5 py-1.5 dark:bg-white/[0.04]">
                   مصرف امروز بررسی خودکار:{' '}
                   <b className="text-slate-800 dark:text-slate-100">
-                    {toPersianNumber(Math.round(Number(agent.usageStats?.todaySpentIrt || 0)))}
+                    {formatAiCurrencyFromIrt(agent.usageStats?.todaySpentIrt || 0, orgCurrency, orgCurrency)}
                   </b>
                   {Number(agent.backgroundConfig?.daily_budget_irt || 0) > 0
-                    ? ` از ${toPersianNumber(Math.round(Number(agent.backgroundConfig?.daily_budget_irt || 0)))} تومان`
-                    : ' تومان'}
+                    ? ` از ${formatAiCurrencyFromIrt(agent.backgroundConfig?.daily_budget_irt || 0, orgCurrency, orgCurrency)}`
+                    : ''}
                 </div>
               </div>
 
@@ -684,15 +696,15 @@ const DashboardAgentDetailModal: React.FC<DashboardAgentDetailModalProps> = ({
                           />
                         </div>
                         <div>
-                          <div className="mb-1 text-[11px] text-slate-500">بودجه روزانه (تومان)</div>
+                          <div className="mb-1 text-[11px] text-slate-500">بودجه روزانه ({budgetCurrencyMeta.label})</div>
                           <InputNumber
                             min={0}
-                            max={10000000}
-                            step={5000}
+                            max={10000000 * budgetCurrencyMeta.multiplierFromIrt}
+                            step={5000 * budgetCurrencyMeta.multiplierFromIrt}
                             className="w-full"
                             disabled={!bgPlanAllowed}
-                            value={draftDailyBudgetIrt}
-                            onChange={(val) => setDraftDailyBudgetIrt(Math.max(0, Number(val || 0)))}
+                            value={convertIrtToDisplayAmount(draftDailyBudgetIrt, orgCurrency, orgCurrency)}
+                            onChange={(val) => setDraftDailyBudgetIrt(Math.max(0, convertDisplayInputToIrt(val, orgCurrency, orgCurrency)))}
                           />
                         </div>
                       </div>

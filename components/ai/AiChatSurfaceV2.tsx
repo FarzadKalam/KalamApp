@@ -7,6 +7,8 @@ import { MODULES } from '../../moduleRegistry';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 import { formatPersianPrice } from '../../utils/persianNumberFormatter';
+import { useCurrencyConfig, type CurrencyConfig } from '../../utils/currency';
+import { formatAiCurrencyFromIrt } from '../../utils/aiCurrency';
 import AssistantPanel from './AssistantPanel';
 import AiSparkleIcon from './AiSparkleIcon';
 import type { AiComposerCapability } from './AiCapabilityComposerActions';
@@ -51,6 +53,10 @@ type AiCreditSummary = {
   company?: {
     currency_code?: string | null;
     currency_label?: string | null;
+  } | null;
+  liveExchangeRate?: {
+    rate?: number | null;
+    source?: string | null;
   } | null;
 };
 
@@ -120,7 +126,10 @@ const formatThreadTime = (value?: string | null) => {
   return new Intl.DateTimeFormat('fa-IR', { month: 'short', day: 'numeric' }).format(date);
 };
 
-const formatAiCreditSummary = (summary?: AiCreditSummary | null) => {
+const formatAiCreditSummary = (
+  summary?: AiCreditSummary | null,
+  fallbackCurrency?: CurrencyConfig | null,
+) => {
   if (!summary) return 'در حال دریافت...';
   if (summary.access?.allowed === false) return 'دسترسی هوش مصنوعی ندارید';
   const daily = summary.dailyUsage || {};
@@ -130,13 +139,14 @@ const formatAiCreditSummary = (summary?: AiCreditSummary | null) => {
     ? `مصرف امروز: ${formatPersianPrice(usedTokens)} از ${formatPersianPrice(limitTokens)} توکن`
     : `مصرف امروز: ${formatPersianPrice(usedTokens)} توکن`;
   if (!summary.access?.canManageAiSettings && !summary.access?.canViewSaasAdmin) return usageText;
-  const currencyCode = String(summary.company?.currency_code || 'IRT').toUpperCase();
-  const currencyLabel = String(summary.company?.currency_label || (currencyCode === 'IRR' ? 'ریال' : 'تومان')).trim() || 'تومان';
-  const currencyMultiplier = currencyCode === 'IRR' ? 10 : 1;
-  const amount = summary.orgWallet?.remainingIrt === null || summary.orgWallet?.remainingIrt === undefined
-    ? null
-    : Math.max(0, Number(summary.orgWallet?.remainingIrt || 0)) * currencyMultiplier;
-  const amountText = amount === null ? 'نامشخص' : `${formatPersianPrice(amount)} ${currencyLabel}`;
+  const amountText = summary.orgWallet?.remainingIrt === null || summary.orgWallet?.remainingIrt === undefined
+    ? 'نامشخص'
+    : formatAiCurrencyFromIrt(
+        Math.max(0, Number(summary.orgWallet?.remainingIrt || 0)),
+        summary.company,
+        fallbackCurrency,
+        { exchangeRateIrt: summary.liveExchangeRate?.rate },
+      );
   return `${usageText} | اعتبار سازمان: ${amountText}`;
 };
 
@@ -170,6 +180,7 @@ const isHiddenAssistantThread = (thread?: AiThreadRow | null) => {
 
 const AiChatSurfaceV2: React.FC = () => {
   const { message } = App.useApp();
+  const orgCurrency = useCurrencyConfig();
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const [threads, setThreads] = useState<AiThreadRow[]>([]);
@@ -409,7 +420,7 @@ const AiChatSurfaceV2: React.FC = () => {
             <div className="min-w-0">
               <div className="truncate text-[13px] font-bold text-slate-800 dark:text-slate-100">دستیار هوشمند سازمان</div>
               <div className="mt-0.5 truncate text-[10.5px] leading-4 text-slate-500 dark:text-slate-400">
-                {formatAiCreditSummary(aiCreditSummary)}
+                {formatAiCreditSummary(aiCreditSummary, orgCurrency)}
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1">

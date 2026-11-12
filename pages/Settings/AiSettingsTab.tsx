@@ -24,6 +24,14 @@ import AiKnowledgeTab from './AiKnowledgeTab';
 import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
 import PriceAmountInput from '../../components/PriceAmountInput';
 import AiAgentConfigPanel from '../../components/ai/AiAgentConfigPanel';
+import { useCurrencyConfig } from '../../utils/currency';
+import {
+  convertDisplayInputToIrt,
+  convertIrtToDisplayAmount,
+  formatAiCurrencyFromIrt,
+  getAiDisplayCurrencyMeta,
+  resolveAiCurrencyConfig,
+} from '../../utils/aiCurrency';
 
 type AiCapabilityKey =
   | 'dashboard_chat'
@@ -96,6 +104,7 @@ const normalizePolicyDraft = (policy?: any) => ({
 
 const AiSettingsTab: React.FC = () => {
   const { message } = App.useApp();
+  const orgCurrency = useCurrencyConfig();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -129,14 +138,21 @@ const AiSettingsTab: React.FC = () => {
         })),
       });
       const selectedModels = data?.settings?.selected_models || {};
+      const loadedCompanyCurrency = resolveAiCurrencyConfig(data?.company, orgCurrency);
+      const rawDailyLimitIrt = data?.settings?.daily_limit_irt;
+      const rawMonthlyLimitIrt = data?.settings?.monthly_limit_irt;
       form.setFieldsValue({
         selected_models: selectedModels,
         feature_flags: {
           ...Object.fromEntries(CAPABILITIES.map((item) => [item.key, item.phase === 'active'])),
           ...(data?.settings?.feature_flags || {}),
         },
-        daily_limit_irt: data?.settings?.daily_limit_irt ?? null,
-        monthly_limit_irt: data?.settings?.monthly_limit_irt ?? null,
+        daily_limit_irt: rawDailyLimitIrt === null || rawDailyLimitIrt === undefined
+          ? null
+          : convertIrtToDisplayAmount(rawDailyLimitIrt, loadedCompanyCurrency, orgCurrency),
+        monthly_limit_irt: rawMonthlyLimitIrt === null || rawMonthlyLimitIrt === undefined
+          ? null
+          : convertIrtToDisplayAmount(rawMonthlyLimitIrt, loadedCompanyCurrency, orgCurrency),
         require_human_approval: data?.settings?.require_human_approval !== false,
       });
     } catch (error: any) {
@@ -206,8 +222,12 @@ const AiSettingsTab: React.FC = () => {
             ...(values.selected_models || {}),
           },
           feature_flags: values.feature_flags || {},
-          daily_limit_irt: values.daily_limit_irt ?? null,
-          monthly_limit_irt: values.monthly_limit_irt ?? null,
+          daily_limit_irt: values.daily_limit_irt === null || values.daily_limit_irt === undefined || values.daily_limit_irt === ''
+            ? null
+            : convertDisplayInputToIrt(values.daily_limit_irt, aiCompanyCurrency, orgCurrency),
+          monthly_limit_irt: values.monthly_limit_irt === null || values.monthly_limit_irt === undefined || values.monthly_limit_irt === ''
+            ? null
+            : convertDisplayInputToIrt(values.monthly_limit_irt, aiCompanyCurrency, orgCurrency),
           require_human_approval: values.require_human_approval !== false,
         },
         usage_policies: usagePolicyDraft,
@@ -226,11 +246,36 @@ const AiSettingsTab: React.FC = () => {
   const usagePolicies = overview?.usagePolicies || {};
   const wallet = overview?.wallet || {};
 
-  const currencyCode = String(overview?.company?.currency_code || 'IRT').toUpperCase();
-  const currencyLabel = String(overview?.company?.currency_label || 'تومان');
-  const currencyMultiplier = currencyCode === 'IRR' ? 10 : 1;
+  const aiCompanyCurrency = useMemo(
+    () => resolveAiCurrencyConfig(overview?.company, orgCurrency),
+    [overview?.company, orgCurrency],
+  );
+  const liveExchangeRateIrt = Number(overview?.liveExchangeRate?.rate || 0) > 0
+    ? Number(overview?.liveExchangeRate?.rate)
+    : null;
+  const budgetCurrencyMeta = useMemo(
+    () => getAiDisplayCurrencyMeta(overview?.company, orgCurrency, { exchangeRateIrt: null }),
+    [overview?.company, orgCurrency],
+  );
+  const topupCurrency = aiCompanyCurrency.code === 'IRR'
+    ? {
+        code: 'IRR' as const,
+        label: aiCompanyCurrency.label || 'ریال',
+        min: 100000,
+        minError: 'حداقل مبلغ شارژ اعتبار هوش مصنوعی ۱۰۰٬۰۰۰ ریال (۱۰٬۰۰۰ تومان) است.',
+        step: 1000000,
+        defaultAmount: 5000000,
+      }
+    : {
+        code: 'IRT' as const,
+        label: 'تومان',
+        min: 10000,
+        minError: 'حداقل مبلغ شارژ اعتبار هوش مصنوعی ۱۰٬۰۰۰ تومان است.',
+        step: 100000,
+        defaultAmount: 500000,
+      };
   const formatCurrency = (value: unknown) =>
-    `${Math.round(Number(value || 0) * currencyMultiplier).toLocaleString('fa-IR', { maximumFractionDigits: 0 })} ${currencyLabel}`;
+    formatAiCurrencyFromIrt(value, aiCompanyCurrency, orgCurrency, { exchangeRateIrt: liveExchangeRateIrt });
 
   const updateDefaultPolicy = (patch: Record<string, any>) => {
     setUsagePolicyDraft((current) => ({
@@ -260,17 +305,18 @@ const AiSettingsTab: React.FC = () => {
   };
 
   const handleTopup = async () => {
-    const amount = Math.round(Number(topupAmount || 0));
-    if (!Number.isFinite(amount) || amount < 10000) {
-      message.error('حداقل مبلغ شارژ اعتبار هوش مصنوعی ۱۰٬۰۰۰ تومان است.');
+    const rawAmount = Math.round(Number(topupAmount || 0));
+    if (!Number.isFinite(rawAmount) || rawAmount < topupCurrency.min) {
+      message.error(topupCurrency.minError);
       return;
     }
+    const amountIrt = topupCurrency.code === 'IRR' ? Math.round(rawAmount / 10) : rawAmount;
     setTopupLoading(true);
     try {
       const { data, error } = await supabase.functions.invoke('payment-gateway', {
         body: {
           action: 'create_ai_credit_topup',
-          amount_irt: amount,
+          amount_irt: amountIrt,
           return_origin: window.location.origin,
         },
       });
@@ -446,7 +492,14 @@ const AiSettingsTab: React.FC = () => {
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
           <div className="flex items-start justify-between gap-2">
             <Statistic title="اعتبار سازمان" value={Number(wallet?.balance_irt || 0) + Number(wallet?.included_quota_irt || 0) - Number(wallet?.reserved_irt || 0)} formatter={formatCurrency} />
-            <Button size="small" icon={<CreditCardOutlined />} onClick={() => setTopupOpen(true)}>
+            <Button
+              size="small"
+              icon={<CreditCardOutlined />}
+              onClick={() => {
+                setTopupAmount(topupCurrency.defaultAmount);
+                setTopupOpen(true);
+              }}
+            >
               شارژ اعتبار
             </Button>
           </div>
@@ -558,11 +611,11 @@ const AiSettingsTab: React.FC = () => {
                     description="در فاز اول، ساخت رکورد یا ارسال پیام توسط AI به‌صورت پیشنهاد ثبت می‌شود و قبل از اجرا باید تایید شود."
                   />
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                    <Form.Item label="سقف روزانه مصرف" name="daily_limit_irt">
-                      <InputNumber min={0} className="w-full" formatter={(value) => `${value || ''}`} />
+                    <Form.Item label={`سقف روزانه مصرف (${budgetCurrencyMeta.label})`} name="daily_limit_irt">
+                      <InputNumber min={0} step={budgetCurrencyMeta.code === 'IRR' ? 100000 : 10000} className="w-full" formatter={(value) => `${value || ''}`} />
                     </Form.Item>
-                    <Form.Item label="سقف ماهانه مصرف" name="monthly_limit_irt">
-                      <InputNumber min={0} className="w-full" formatter={(value) => `${value || ''}`} />
+                    <Form.Item label={`سقف ماهانه مصرف (${budgetCurrencyMeta.label})`} name="monthly_limit_irt">
+                      <InputNumber min={0} step={budgetCurrencyMeta.code === 'IRR' ? 1000000 : 100000} className="w-full" formatter={(value) => `${value || ''}`} />
                     </Form.Item>
                     <Form.Item label="تایید انسانی" name="require_human_approval" valuePropName="checked">
                       <Switch checkedChildren="لازم است" unCheckedChildren="لازم نیست" />
@@ -584,7 +637,7 @@ const AiSettingsTab: React.FC = () => {
                   <Alert
                     type="info"
                     showIcon
-                    message="سقف مصرف روزانه بر اساس توکن مدیریت می‌شود؛ پرداخت و شارژ اعتبار سازمان با تومان انجام می‌شود."
+                    message={`سقف مصرف روزانه بر اساس توکن مدیریت می‌شود؛ نمایش اعتبار و شارژ بر حسب ${topupCurrency.label} است.`}
                     description="مقدار پیش‌فرض ۸۰٬۰۰۰ توکن در روز برای هر کاربر است. سیاست اختصاصی کاربر از نقش و سپس پیش‌فرض سازمان دقیق‌تر است."
                   />
                   <div className="rounded-lg border border-gray-200 p-3 dark:border-white/10">
@@ -701,16 +754,16 @@ const AiSettingsTab: React.FC = () => {
             type="info"
             showIcon
             message="پرداخت از درگاه مرکزی تازه سیستم انجام می‌شود."
-            description="اعتبار هوش مصنوعی سازمان با تومان شارژ می‌شود؛ هزینه هر درخواست پس از محاسبه واقعی AvalAI و حاشیه مصوب از همین اعتبار کم می‌شود."
+            description={`اعتبار هوش مصنوعی بر حسب ${topupCurrency.label} شارژ می‌شود؛ هزینه هر درخواست پس از محاسبه واقعی نرخ روز AvalAI و حاشیه مصوب از همین اعتبار کم می‌شود.`}
           />
           <div>
-            <div className="mb-1 text-xs text-gray-500">مبلغ شارژ (تومان)</div>
+            <div className="mb-1 text-xs text-gray-500">مبلغ شارژ ({topupCurrency.label})</div>
             <PriceAmountInput
-              min={10000}
-              step={100000}
+              min={topupCurrency.min}
+              step={topupCurrency.step}
               value={topupAmount}
               onChange={(value) => setTopupAmount(Number(value || 0))}
-              currencyLabel="تومان"
+              currencyLabel={topupCurrency.label}
             />
           </div>
           <Input.TextArea

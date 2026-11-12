@@ -31,6 +31,8 @@ import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 import AiMessageComposer from './AiMessageComposer';
 import { buildSmartAiThreadTitle } from '../../utils/aiThreadTitle';
 import { resolveModalPopupContainer } from '../../utils/popupContainer';
+import { useCurrencyConfig, type CurrencyConfig } from '../../utils/currency';
+import { formatAiCurrencyFromIrt } from '../../utils/aiCurrency';
 import MessageAttachmentGallery from '../messaging/MessageAttachmentGallery';
 import { extractAiMessageAttachments, normalizeAiMessageText } from '../../utils/aiMessageParts';
 import ComposerAttachmentChips, { type ComposerAttachmentChipItem } from '../common/ComposerAttachmentChips';
@@ -335,7 +337,10 @@ const toFaDateTime = (value?: string | null) => {
   }
 };
 
-const formatUsageMetadata = (metadata?: Record<string, any> | null) => {
+const formatUsageMetadata = (
+  metadata?: Record<string, any> | null,
+  orgCurrency?: CurrencyConfig | null,
+) => {
   const usageBox = metadata?.usage || metadata;
   const usage = usageBox?.usage || usageBox;
   const parts: string[] = [];
@@ -351,7 +356,15 @@ const formatUsageMetadata = (metadata?: Record<string, any> | null) => {
     ?? usageBox?.billing?.billed_amount_irt
     ?? metadata?.customer_billing?.amount_irt
     ?? null;
-  if (billed && Number(billed) > 0) parts.push(`${Math.round(Number(billed)).toLocaleString('fa-IR')} تومان`);
+  const exchangeRateIrt = Number(
+    usageBox?.customer_billing?.exchange_rate_irt
+    ?? usageBox?.billing?.exchange_rate_irt
+    ?? metadata?.customer_billing?.exchange_rate_irt
+    ?? 0,
+  ) || null;
+  if (billed && Number(billed) > 0) {
+    parts.push(formatAiCurrencyFromIrt(billed, orgCurrency, orgCurrency, { exchangeRateIrt }));
+  }
   return parts.join(' · ');
 };
 
@@ -504,6 +517,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   showAgentInboxBox = false,
 }) => {
   const { message } = App.useApp();
+  const orgCurrency = useCurrencyConfig();
   const location = useLocation();
   const navigate = useNavigate();
   const [input, setInput] = useState('');
@@ -2991,7 +3005,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     const messageAuthor = item.metadata?.author && typeof item.metadata.author === 'object' ? item.metadata.author : null;
     const authorName = String(messageAuthor?.name || '').trim() || currentUserView.name;
     const authorAvatarUrl = String(messageAuthor?.avatar_url || '').trim() || currentUserView.avatarUrl;
-    const usageText = !isUser ? formatUsageMetadata(item.metadata?.usage || item.metadata) : '';
+    const usageText = !isUser ? formatUsageMetadata(item.metadata?.usage || item.metadata, orgCurrency) : '';
     const messageText = normalizeAiMessageText(item.content);
     const attachments = extractAiMessageAttachments(item);
     const pendingKind = getPendingGenerationKind(item);
@@ -3235,6 +3249,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     forwardMessage,
     handleEditImage,
     messages,
+    orgCurrency,
     recheckPending,
     recheckingId,
     stopActiveStream,
