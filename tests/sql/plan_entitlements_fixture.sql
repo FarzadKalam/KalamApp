@@ -1,9 +1,9 @@
 create extension if not exists pgcrypto;
 create schema auth;
 create function auth.uid() returns uuid language sql stable as $$ select null::uuid $$;
-create role anon;
-create role authenticated;
-create role service_role;
+do $$ begin if not exists(select 1 from pg_roles where rolname='anon') then create role anon; end if; end $$;
+do $$ begin if not exists(select 1 from pg_roles where rolname='authenticated') then create role authenticated; end if; end $$;
+do $$ begin if not exists(select 1 from pg_roles where rolname='service_role') then create role service_role; end if; end $$;
 create table organizations(id uuid primary key default gen_random_uuid(),internal boolean default false);
 create table saas_plans(id uuid primary key default gen_random_uuid(),code text unique,is_active boolean default true,is_demo_default boolean default false,trial_days int default 30,sort_order int default 1,enabled_modules jsonb default '{}',enabled_features jsonb default '{}');
 create table saas_org_settings(org_id uuid primary key references organizations,plan_code text,status text default 'active',is_demo boolean default false,is_readonly boolean default false,trial_ends_at timestamptz,feature_overrides jsonb default '{}',module_overrides jsonb default '{}',request_id uuid);

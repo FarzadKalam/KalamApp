@@ -15,23 +15,23 @@ export const AI_AGENT_PLAN_FEATURES: SaasOfferingOption[] = AI_AGENT_CATALOG.map
 export const SAAS_MODULE_GROUPS: Array<{ label: string; modules: SaasOfferingOption[] }> = [
   { label: 'فروش و بازاریابی', modules: [
     { id: 'customers', label: 'مشتریان' }, { id: 'marketing_leads', label: 'سرنخ‌ها و بازاریابی' },
-    { id: 'invoices', label: 'فاکتور فروش' }, { id: 'price_lists', label: 'لیست قیمت‌ها' }, { id: 'billboards', label: 'تبلیغات محیطی' },
+    { id: 'invoices', label: 'فاکتور فروش' }, { id: 'sales_return_invoices', label: 'برگشت از فروش' }, { id: 'personas', label: 'پرسونای مشتری' }, { id: 'billboard_status_changes', label: 'تغییر وضعیت تابلوها' }, { id: 'price_lists', label: 'لیست قیمت‌ها' }, { id: 'billboards', label: 'تبلیغات محیطی' },
   ] },
   { label: 'خرید و تامین', modules: [
-    { id: 'suppliers', label: 'تامین‌کنندگان' }, { id: 'purchase_invoices', label: 'فاکتور خرید' },
+    { id: 'purchase_return_invoices', label: 'برگشت از خرید' }, { id: 'suppliers', label: 'تامین‌کنندگان' }, { id: 'purchase_invoices', label: 'فاکتور خرید' },
     { id: 'expense_documents', label: 'هزینه‌ها' }, { id: 'assets', label: 'اموال' },
   ] },
   { label: 'انبار و تولید', modules: [
     { id: 'products', label: 'کالاها و خدمات' }, { id: 'warehouses', label: 'انبارها' }, { id: 'shelves', label: 'قفسه‌ها' },
-    { id: 'stock_transfers', label: 'تردد و حواله' }, { id: 'product_bundles', label: 'پکیج‌ها' }, { id: 'production_boms', label: 'BOM تولید' }, { id: 'production_orders', label: 'سفارشات تولید' },
+    { id: 'stock_transfers', label: 'تردد و حواله' }, { id: 'product_bundles', label: 'پکیج‌ها' }, { id: 'production_boms', label: 'BOM تولید' }, { id: 'production_orders', label: 'سفارشات تولید' }, { id: 'production_group_orders', label: 'سفارش تولید گروهی' },
   ] },
   { label: 'پروژه و فرآیند', modules: [
     { id: 'projects', label: 'پروژه‌ها' }, { id: 'tasks', label: 'فعالیت‌ها' }, { id: 'content_calendars', label: 'تقویم‌های محتوایی' },
     { id: 'process_templates', label: 'الگوهای فرآیند' }, { id: 'process_runs', label: 'اجرای فرآیند' },
-    { id: 'goals', label: 'اهداف' },
+    { id: 'goals', label: 'اهداف' }, { id: 'reservations', label: 'رزروها' }, { id: 'reservation_resources', label: 'منابع رزرو' },
   ] },
   { label: 'منابع انسانی', modules: [
-    { id: 'employees', label: 'کارکنان' }, { id: 'job_descriptions', label: 'شرح شغل‌ها' }, { id: 'employee_bonus_requests', label: 'پاداش' }, { id: 'employee_penalty_requests', label: 'جریمه' }, { id: 'attendance_logs', label: 'تردد و حضور' }, { id: 'work_schedules', label: 'برنامه کاری' },
+    { id: 'mbti_assessments', label: 'ارزیابی شخصیت' }, { id: 'employees', label: 'کارکنان' }, { id: 'job_descriptions', label: 'شرح شغل‌ها' }, { id: 'employee_bonus_requests', label: 'پاداش' }, { id: 'employee_penalty_requests', label: 'جریمه' }, { id: 'attendance_logs', label: 'تردد و حضور' }, { id: 'work_schedules', label: 'برنامه کاری' },
     { id: 'leave_requests', label: 'مرخصی‌ها' }, { id: 'overtime_requests', label: 'اضافه‌کاری' }, { id: 'mission_requests', label: 'ماموریت‌ها' },
     { id: 'employee_advances', label: 'مساعده' }, { id: 'payroll_slips', label: 'فیش حقوقی' }, { id: 'employee_contracts', label: 'قراردادها' }, { id: 'recruitment_applicants', label: 'استخدام' },
   ] },
@@ -44,6 +44,7 @@ export const SAAS_MODULE_GROUPS: Array<{ label: string; modules: SaasOfferingOpt
     { id: 'secretariat_documents', label: 'نامه‌ها و مکاتبات' }, { id: 'advertising_campaigns', label: 'کمپین‌های تبلیغاتی' },
     { id: 'web_forms', label: 'وب‌فرم‌ها' }, { id: 'surveys', label: 'نظرسنجی‌ها' }, { id: 'calculation_formulas', label: 'فرمول‌های محاسباتی' }, { id: 'delivery_forms', label: 'فرم‌های تحویل' },
     { id: 'automation_execution_reports', label: 'گزارش اتوماسیون' }, { id: 'sms_delivery_reports', label: 'گزارش پیامک' }, { id: 'voip_call_reports', label: 'گزارش تماس' }, { id: 'counterparty_bot_groups', label: 'گروه‌های بات' },
+    { id: 'instructions', label: 'آموزش‌ها و دستورالعمل‌ها' }, { id: 'email_delivery_reports', label: 'گزارش ایمیل' }, { id: 'instagram_conversations', label: 'گفتگوهای اینستاگرام' }, { id: 'instagram_interaction_events', label: 'تعامل‌های اینستاگرام' }, { id: 'advertising_campaign_tools', label: 'کانال‌های کمپین' }, { id: 'advertising_campaign_responses', label: 'پاسخ‌های کمپین' },
     { id: 'chat_groups', label: 'بستر چت داخلی' }, { id: 'organization_chart', label: 'چارت سازمانی' },
   ] },
 ];
@@ -115,3 +116,17 @@ export const SAAS_MODULE_LABELS = Object.fromEntries(
 export const SAAS_FEATURE_LABELS = Object.fromEntries(
   SAAS_FEATURE_OPTIONS.map((item) => [item.id, item.label]),
 );
+
+// Legacy plans inherit a submodule from its parent only until explicitly configured.
+export const SAAS_MODULE_PLAN_INHERITANCE: Record<string, string> = {
+  sales_return_invoices: 'invoices', purchase_return_invoices: 'purchase_invoices',
+  personas: 'marketing_leads', billboard_status_changes: 'billboards',
+  production_group_orders: 'production_orders',
+  advertising_campaign_tools: 'advertising_campaigns', advertising_campaign_responses: 'advertising_campaigns',
+  mbti_assessments: 'employees',
+};
+export const SAAS_MODULE_FEATURE_INHERITANCE: Record<string, string> = {
+  reservations: 'reservations', reservation_resources: 'reservations',
+  email_delivery_reports: 'organization_email', instagram_conversations: 'instagram_inbox',
+  instagram_interaction_events: 'instagram_inbox',
+};

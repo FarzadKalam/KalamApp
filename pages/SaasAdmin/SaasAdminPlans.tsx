@@ -32,6 +32,7 @@ import {
   UpOutlined,
   DownOutlined,
 } from '@ant-design/icons';
+import { buildExplicitPlanFlags, isPlanValueEnabled } from '../../utils/planAccessEditing';
 import { supabase } from '../../supabaseClient';
 import { PLAN_FEATURE_OPTIONS as FEATURE_OPTIONS } from '../../utils/planFeatureCatalog';
 import {
@@ -78,19 +79,17 @@ type PlanRow = {
 
 // تبدیل enabled_modules از DB به آرایه moduleId
 const modulesToArray = (obj: Record<string, any>): string[] =>
-  Object.entries(obj || {}).filter(([, v]) => v === true).map(([k]) => k);
+  Object.entries(obj || {}).filter(([, v]) => isPlanValueEnabled(v)).map(([k]) => k);
 
 // تبدیل آرایه moduleId به enabled_modules برای DB
-const arrayToModules = (ids: string[]): Record<string, boolean> =>
-  Object.fromEntries(ids.map((id) => [id, true]));
+const arrayToModules = (ids: string[], original: Record<string, boolean> = {}) =>
+  buildExplicitPlanFlags(MODULE_GROUPS.flatMap((group) => group.modules.map(({ id }) => id)), ids, original);
 
 const featuresToArray = (obj: Record<string, any>): string[] =>
-  Object.entries(obj || {}).filter(([, v]) => v === true).map(([k]) => k);
+  Object.entries(obj || {}).filter(([, value]) => isPlanValueEnabled(value)).map(([key]) => key);
 
-const arrayToFeatures = (ids: string[], original: Record<string, any> = {}): Record<string, any> => ({
-  ...original,
-  ...Object.fromEntries(FEATURE_OPTIONS.map(({ id }) => [id, ids.includes(id)])),
-});
+const arrayToFeatures = (ids: string[], original: Record<string, any> = {}) =>
+  buildExplicitPlanFlags(FEATURE_OPTIONS.map(({ id }) => id), ids, original);
 
 const formatPrice = (n: number) =>
   n ? Math.round(n).toLocaleString('fa-IR', { maximumFractionDigits: 0 }) : '—';
@@ -243,7 +242,7 @@ const SaasAdminPlans: React.FC = () => {
 
       const payload = {
         ...values,
-        enabled_modules: arrayToModules(selectedModules),
+        enabled_modules: arrayToModules(selectedModules, editing?.enabled_modules),
         enabled_features: arrayToFeatures(selectedFeatures, editing?.enabled_features),
         display_features: displayFeatures,
         updated_at: new Date().toISOString(),

@@ -74,7 +74,7 @@ export const isPlanModuleEnabled = (planContext: any, moduleId: string): boolean
   if (direct !== null) return direct;
   const parent = checkExplicit(canonical);
   if (parent !== null) return parent;
-  return true;
+  return planContext.strictModules !== true;
 };
 
 export const AI_AGENTS_PERMISSION_KEY = '__ai_agents';

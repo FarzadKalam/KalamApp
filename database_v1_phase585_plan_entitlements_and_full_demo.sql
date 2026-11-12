@@ -3,7 +3,7 @@
 begin;
 create or replace function public.saas_offering_keys()
 returns jsonb language sql immutable set search_path=public as $$
- select '{"features": ["ai_chat", "ai_knowledge", "ai_knowledge_limited", "ai_document_analysis", "ai_web_search", "ai_voice_input", "ai_voice_output", "ai_image_generation", "ai_video_generation", "ai_deep_reasoning", "ai_legal_assistant", "ai_voip_auto_reply", "ai_staff_bot", "ai_background_agents", "taxpayer_system", "internal_realtime_notifications", "organization_email", "managed_organization_email", "webhooks", "mbti_ai_analysis", "support_tickets", "api_access", "wordpress_connection", "advanced_reports", "map_view", "multi_lane_processes", "content_calendar", "billboard_status_management", "white_label", "custom_domain", "own_payment_gateway", "online_invoice_payment", "online_catalog", "retail_sales_invoice", "reservations", "qr_scan", "instagram_inbox", "campaign_sms", "campaign_email", "campaign_bot_group", "campaign_bot_private", "campaign_instagram_post", "campaign_voice_call", "saas_account_billing", "ai_credit_topup", "sms_credit_topup", "extra_users_purchase", "business_model_canvas", "bale_bot", "rubika_bot", "internal_chat", "organization_chart", "advanced_commission", "performance_payroll_kpi", "goals", "ai_agent:lead_orchestrator", "ai_agent:sales_leads", "ai_agent:purchase_supply", "ai_agent:customer_response", "ai_agent:hr_manager", "ai_agent:reservation", "ai_agent:project_process", "ai_agent:instagrammer", "ai_agent:system_guide"], "modules": ["customers", "marketing_leads", "invoices", "price_lists", "billboards", "suppliers", "purchase_invoices", "expense_documents", "assets", "products", "warehouses", "shelves", "stock_transfers", "product_bundles", "production_boms", "production_orders", "projects", "tasks", "content_calendars", "process_templates", "process_runs", "goals", "employees", "job_descriptions", "employee_bonus_requests", "employee_penalty_requests", "attendance_logs", "work_schedules", "leave_requests", "overtime_requests", "mission_requests", "employee_advances", "payroll_slips", "employee_contracts", "recruitment_applicants", "chart_of_accounts", "journal_entries", "cash_boxes", "bank_accounts", "petty_funds", "cheques", "barters", "cash_bank_operations", "accounting_event_rules", "cost_centers", "fiscal_years", "secretariat_documents", "advertising_campaigns", "web_forms", "surveys", "calculation_formulas", "delivery_forms", "automation_execution_reports", "sms_delivery_reports", "voip_call_reports", "counterparty_bot_groups", "chat_groups", "organization_chart"]}'::jsonb;
+ select '{"features": ["ai_chat", "ai_knowledge", "ai_knowledge_limited", "ai_document_analysis", "ai_web_search", "ai_voice_input", "ai_voice_output", "ai_image_generation", "ai_video_generation", "ai_deep_reasoning", "ai_legal_assistant", "ai_voip_auto_reply", "ai_staff_bot", "ai_background_agents", "taxpayer_system", "internal_realtime_notifications", "organization_email", "managed_organization_email", "webhooks", "mbti_ai_analysis", "support_tickets", "api_access", "wordpress_connection", "advanced_reports", "map_view", "multi_lane_processes", "content_calendar", "billboard_status_management", "white_label", "custom_domain", "own_payment_gateway", "online_invoice_payment", "online_catalog", "retail_sales_invoice", "reservations", "qr_scan", "instagram_inbox", "campaign_sms", "campaign_email", "campaign_bot_group", "campaign_bot_private", "campaign_instagram_post", "campaign_voice_call", "saas_account_billing", "ai_credit_topup", "sms_credit_topup", "extra_users_purchase", "business_model_canvas", "bale_bot", "rubika_bot", "internal_chat", "organization_chart", "advanced_commission", "performance_payroll_kpi", "goals", "ai_agent:lead_orchestrator", "ai_agent:sales_leads", "ai_agent:purchase_supply", "ai_agent:customer_response", "ai_agent:hr_manager", "ai_agent:reservation", "ai_agent:project_process", "ai_agent:instagrammer", "ai_agent:system_guide"], "modules": ["customers", "marketing_leads", "invoices", "sales_return_invoices", "personas", "billboard_status_changes", "price_lists", "billboards", "purchase_return_invoices", "suppliers", "purchase_invoices", "expense_documents", "assets", "products", "warehouses", "shelves", "stock_transfers", "product_bundles", "production_boms", "production_orders", "production_group_orders", "projects", "tasks", "content_calendars", "process_templates", "process_runs", "goals", "reservations", "reservation_resources", "mbti_assessments", "employees", "job_descriptions", "employee_bonus_requests", "employee_penalty_requests", "attendance_logs", "work_schedules", "leave_requests", "overtime_requests", "mission_requests", "employee_advances", "payroll_slips", "employee_contracts", "recruitment_applicants", "chart_of_accounts", "journal_entries", "cash_boxes", "bank_accounts", "petty_funds", "cheques", "barters", "cash_bank_operations", "accounting_event_rules", "cost_centers", "fiscal_years", "secretariat_documents", "advertising_campaigns", "web_forms", "surveys", "calculation_formulas", "delivery_forms", "automation_execution_reports", "sms_delivery_reports", "voip_call_reports", "counterparty_bot_groups", "instructions", "email_delivery_reports", "instagram_conversations", "instagram_interaction_events", "advertising_campaign_tools", "advertising_campaign_responses", "chat_groups", "organization_chart"], "moduleParents": {"sales_return_invoices": "invoices", "purchase_return_invoices": "purchase_invoices", "personas": "marketing_leads", "billboard_status_changes": "billboards", "production_group_orders": "production_orders", "advertising_campaign_tools": "advertising_campaigns", "advertising_campaign_responses": "advertising_campaigns", "mbti_assessments": "employees"}, "moduleFeatures": {"reservations": "reservations", "reservation_resources": "reservations", "email_delivery_reports": "organization_email", "instagram_conversations": "instagram_inbox", "instagram_interaction_events": "instagram_inbox"}}'::jsonb;
 $$;
 revoke all on function public.saas_offering_keys() from public,anon,authenticated;
 
@@ -30,6 +30,19 @@ begin
    select coalesce(jsonb_object_agg(value,true),'{}') into m from jsonb_array_elements_text(public.saas_offering_keys()->'modules');
  end if;
  f := f || coalesce(p.enabled_features,'{}'); m := m || coalesce(p.enabled_modules,'{}');
+ for e in select key,value from jsonb_each_text(public.saas_offering_keys()->'moduleParents') loop
+  if not m?e.key then m:=m||jsonb_build_object(e.key,coalesce(m->e.value,'false'::jsonb)); end if;
+ end loop;
+ for e in select key,value from jsonb_each_text(public.saas_offering_keys()->'moduleFeatures') loop
+  if not m?e.key then m:=m||jsonb_build_object(e.key,coalesce(f->e.value,'false'::jsonb)); end if;
+ end loop;
+ if not m?'instructions' then m:=m||'{"instructions":true}'::jsonb; end if;
+ -- Legacy plans allow agents subject to module dependencies. An organization
+ -- switching just one agent off must not switch every other legacy agent off.
+ if not exists(select 1 from jsonb_object_keys(f) k where k like 'ai_agent:%') then
+  select f||coalesce(jsonb_object_agg(value,true),'{}') into f
+  from jsonb_array_elements_text(public.saas_offering_keys()->'features') where value like 'ai_agent:%';
+ end if;
  for e in select item_kind,entitlement_code,bool_and(state='enabled') as enabled
    from public.saas_org_entitlements where org_id=p_org_id and item_kind in ('feature','module')
    and (expires_at is null or expires_at>now()) group by item_kind,entitlement_code loop
@@ -46,7 +59,7 @@ begin
  select coalesce(jsonb_object_agg(key, coalesce(value='true'::jsonb or lower(value#>>'{}') in ('true','1','yes','on','enabled'),false)),'{}') into m from jsonb_each(m);
  return jsonb_build_object('available',coalesce(available,false),'planCode',s.plan_code,
    'features',f,'enabledModules',m,'moduleOverrides',coalesce(s.module_overrides,'{}'),
-   'featureOverrides',coalesce(s.feature_overrides,'{}'),'inheritedFeatures',inherited_f,'inheritedModules',inherited_m,
+   'strictModules',true,'featureOverrides',coalesce(s.feature_overrides,'{}'),'inheritedFeatures',inherited_f,'inheritedModules',inherited_m,
    'status',s.status,'isReadonly',coalesce(s.is_readonly,false),
    'reason',case when internal_org then 'internal_organization' when not available then 'plan_unavailable' else null end);
 end; $$;
@@ -157,12 +170,12 @@ where is_demo and trial_ends_at>now() and status in ('demo','trial','active');
 -- Editing integrations remains org-scoped AND plan-scoped; disabled plans cannot create tokens through direct REST.
 drop policy if exists org_members_manage_api_tokens on public.org_api_tokens;
 create policy org_members_manage_api_tokens on public.org_api_tokens for all to authenticated
-using(org_id=public.current_org_id() and public.current_org_has_plan_feature('api_access',false))
-with check(org_id=public.current_org_id() and public.current_org_has_plan_feature('api_access',false));
+using(org_id=(select public.current_org_id()) and (select public.current_org_has_plan_feature('api_access',false)))
+with check(org_id=(select public.current_org_id()) and (select public.current_org_has_plan_feature('api_access',false)));
 drop policy if exists org_members_manage_webhooks on public.org_webhooks;
 create policy org_members_manage_webhooks on public.org_webhooks for all to authenticated
-using(org_id=public.current_org_id() and public.current_org_has_plan_feature('webhooks',false))
-with check(org_id=public.current_org_id() and public.current_org_has_plan_feature('webhooks',false));
+using(org_id=(select public.current_org_id()) and (select public.current_org_has_plan_feature('webhooks',false)))
+with check(org_id=(select public.current_org_id()) and (select public.current_org_has_plan_feature('webhooks',false)));
 
 -- Update the existing credit notices by semantic condition, preserving target audiences and dismissal records.
 update public.saas_user_announcements a set

@@ -17,6 +17,9 @@ begin
  update saas_org_settings set feature_overrides='{"api_access":false}' where org_id=a;
  if public.org_has_plan_feature(a,'api_access') then raise exception 'Internal organization bypassed explicit off'; end if;
  update organizations set internal=false where id=a;
+ update saas_plans set enabled_features=enabled_features-'ai_agent:lead_orchestrator' where code='paid';
+ update saas_org_settings set feature_overrides='{"ai_agent:lead_orchestrator":false}' where org_id=a;
+ if public.org_has_plan_feature(a,'ai_agent:lead_orchestrator') or not public.org_has_plan_feature(a,'ai_agent:project_process') then raise exception 'One legacy agent override disabled other agents'; end if;
  update saas_org_settings set is_demo=true where org_id=a;
  select to_jsonb(s) into result from saas_org_settings s where org_id=a;
  if result->>'plan_code'<>'public_demo_full' or abs(extract(epoch from ((result->>'trial_ends_at')::timestamptz-now()))-15*86400)>1 then raise exception 'Demo defaults invalid'; end if;

@@ -18,6 +18,8 @@ import {
 } from 'antd';
 import { ClockCircleOutlined, DeleteOutlined, RocketOutlined, SaveOutlined, ShoppingOutlined, WalletOutlined } from '@ant-design/icons';
 import { executeSaasModuleAction } from '../../utils/saasAdminModules';
+import { isPlanValueEnabled } from '../../utils/planAccessEditing';
+import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { supabase } from '../../supabaseClient';
 import { SAAS_FEATURE_GROUPS, SAAS_FEATURE_OPTIONS, SAAS_MODULE_GROUPS, SAAS_QUOTA_OPTIONS } from '../../utils/saasOfferingCatalog';
 import {
@@ -94,15 +96,15 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
   const inheritedFeatures = selectedPlan === accessContext?.planCode ? accessContext?.inheritedFeatures || {} : plan?.enabled_features || {};
   const effectiveModules = { ...inheritedModules, ...moduleOverrides };
   const effectiveFeatures = { ...inheritedFeatures, ...featureOverrides };
-  const selectedModules = Object.keys(effectiveModules).filter((key) => effectiveModules[key] === true);
+  const selectedModules = Object.keys(effectiveModules).filter((key) => isPlanValueEnabled(effectiveModules[key]));
   const selectedFeatures = Array.from(new Set([
-    ...Object.keys(effectiveFeatures).filter((key) => effectiveFeatures[key] === true),
+    ...Object.keys(effectiveFeatures).filter((key) => isPlanValueEnabled(effectiveFeatures[key])),
     ...(!hasExplicitAiAgentPlanFlags(effectiveFeatures) ? deriveLegacyEnabledAiAgentFeatureKeys(effectiveModules, effectiveFeatures) : []),
   ]));
   const renderAccessGroups = (kind: 'modules' | 'features') => {
     const overrides = kind === 'modules' ? moduleOverrides : featureOverrides;
     const setOverrides = kind === 'modules' ? setModuleOverrides : setFeatureOverrides;
-    const selected = kind === 'modules' ? selectedModules : selectedFeatures;
+    const inherited = kind === 'modules' ? inheritedModules : inheritedFeatures;
     const groups = kind === 'modules' ? SAAS_MODULE_GROUPS.map((group) => ({ label: group.label, items: group.modules })) : SAAS_FEATURE_GROUPS.map((group) => ({ label: group.label, items: group.features }));
     const all = kind === 'modules' ? allModuleIds : allFeatureIds;
     const assign = (ids: string[], value: boolean) => setOverrides((current) => ({ ...current, ...Object.fromEntries(ids.map((id) => [id, value])) }));
@@ -115,7 +117,7 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
           <Text className="text-xs">{item.label}</Text>
           <Select aria-label={`دسترسی ${item.label}`} className="min-w-[140px]" size="small"
             value={Object.prototype.hasOwnProperty.call(overrides, item.id) ? String(overrides[item.id]) : 'inherit'}
-            options={[{ value: 'inherit', label: `طبق پلن · ${selected.includes(item.id) ? 'فعال' : 'غیرفعال'}` }, { value: 'true', label: 'فعال برای سازمان' }, { value: 'false', label: 'غیرفعال برای سازمان' }]}
+            options={[{ value: 'inherit', label: `طبق پلن · ${isPlanValueEnabled(inherited[item.id]) ? 'فعال' : 'غیرفعال'}` }, { value: 'true', label: 'فعال برای سازمان' }, { value: 'false', label: 'غیرفعال برای سازمان' }]}
             onChange={(value) => setOverrides((current) => {
               const next = { ...current };
               if (value === 'inherit') delete next[item.id]; else next[item.id] = value === 'true';
@@ -174,7 +176,7 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
       const rawQuotas = next?.management?.quota_adjustments || {};
       setQuotas({ ...rawQuotas });
     } catch (error: any) {
-      setAccountError(error?.message || 'دریافت وضعیت حساب سازمان ناموفق بود.');
+      setAccountError(toFaErrorMessage(error, 'دریافت وضعیت حساب سازمان ناموفق بود.'));
     } finally {
       setAccountLoading(false);
     }
@@ -232,7 +234,7 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
       await loadAccount();
       onChanged();
     } catch (error: any) {
-      message.error(error?.message || 'ذخیره تنظیمات حساب ناموفق بود.');
+      message.error(toFaErrorMessage(error, 'ذخیره تنظیمات حساب ناموفق بود.'));
     } finally {
       setAccountSaving(false);
     }
@@ -301,7 +303,7 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
       message.success(result.message || 'عملیات انجام شد.');
       onChanged();
     } catch (error: any) {
-      message.error(error?.message || 'عملیات سازمان ناموفق بود.');
+      message.error(toFaErrorMessage(error, 'عملیات سازمان ناموفق بود.'));
     } finally {
       setActionLoading(null);
     }
