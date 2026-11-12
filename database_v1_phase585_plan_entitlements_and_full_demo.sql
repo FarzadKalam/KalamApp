@@ -75,26 +75,50 @@ end; $$;
 revoke all on function public.admin_get_saas_org_access(uuid) from public,anon;
 grant execute on function public.admin_get_saas_org_access(uuid) to authenticated;
 
--- Keep the public signatures used by existing policies and functions.
+-- Point checks used inside RLS read just the requested flag. They must not
+-- rebuild the full access snapshot for every row of a large tenant table.
+create or replace function public.cloud_org_has_plan_access(p_org_id uuid,p_key text,p_kind text,p_default boolean default false)
+returns boolean language plpgsql stable security definer set search_path=public as $$
+declare ctx record; policy jsonb; overrides jsonb; value jsonb; parent text; internal_org boolean;
+begin
+ if p_org_id is null or nullif(trim(p_key),'') is null or p_kind not in ('feature','module') then return false; end if;
+ select s.org_id,s.status,s.is_demo,s.trial_ends_at,s.feature_overrides,s.module_overrides,
+  p.id as plan_id,p.enabled_features,p.enabled_modules into ctx
+ from public.saas_org_settings s left join public.saas_plans p on lower(p.code)=lower(s.plan_code) and p.is_active
+ where s.org_id=p_org_id limit 1;
+ internal_org:=public.org_is_saas_admin(p_org_id);
+ if (ctx.org_id is null or ctx.plan_id is null) and not internal_org then return false; end if;
+ if coalesce(ctx.status,'active') in ('suspended','failed','draft') or
+  ((coalesce(ctx.is_demo,false) or coalesce(ctx.status,'') in ('trial','demo')) and (ctx.trial_ends_at is null or ctx.trial_ends_at<=now())) then return false; end if;
+ policy:=case when p_kind='feature' then coalesce(ctx.enabled_features,'{}') else coalesce(ctx.enabled_modules,'{}') end;
+ overrides:=case when p_kind='feature' then coalesce(ctx.feature_overrides,'{}') else coalesce(ctx.module_overrides,'{}') end;
+ if overrides?p_key then value:=overrides->p_key;
+ elsif exists(select 1 from public.saas_org_entitlements where org_id=p_org_id and item_kind=p_kind and entitlement_code=p_key and state='disabled' and (expires_at is null or expires_at>now())) then return false;
+ elsif exists(select 1 from public.saas_org_entitlements where org_id=p_org_id and item_kind=p_kind and entitlement_code=p_key and state='enabled' and (expires_at is null or expires_at>now())) then return true;
+ elsif policy?p_key then value:=policy->p_key;
+ elsif internal_org then return true;
+ elsif p_kind='feature' and p_key like 'ai_agent:%' and not exists(select 1 from jsonb_object_keys(policy) k where k like 'ai_agent:%') then return true;
+ elsif p_kind='module' then
+  parent:=public.saas_offering_keys()->'moduleParents'->>p_key;
+  if parent is not null then value:=coalesce(ctx.enabled_modules->parent,'false'::jsonb);
+  else
+   parent:=public.saas_offering_keys()->'moduleFeatures'->>p_key;
+   if parent is not null then value:=coalesce(ctx.enabled_features->parent,'false'::jsonb);
+   elsif p_key='instructions' then return true; end if;
+  end if;
+ end if;
+ if value is null then return coalesce(p_default,false); end if;
+ return coalesce(value='true'::jsonb or lower(value#>>'{}') in ('true','1','yes','on','enabled','full','limited') or value->'enabled'='true'::jsonb or value->'available'='true'::jsonb,false);
+end; $$;
 create or replace function public.cloud_org_has_plan_feature(p_org_id uuid,p_feature_key text,p_default_enabled boolean default false)
-returns boolean language plpgsql stable security definer set search_path=public as $$
-declare ctx jsonb;
-begin
- if p_org_id is null or nullif(trim(p_feature_key),'') is null then return false; end if;
- ctx:=public.get_org_plan_access_context(p_org_id);
- if ctx->'available' is distinct from 'true'::jsonb then return false; end if;
- return coalesce((ctx->'features'->>p_feature_key)::boolean,p_default_enabled,false);
-end; $$;
+returns boolean language sql stable security definer set search_path=public as $$
+ select public.cloud_org_has_plan_access(p_org_id,p_feature_key,'feature',p_default_enabled);
+$$;
 create or replace function public.cloud_org_has_plan_module(p_org_id uuid,p_module_id text,p_default_enabled boolean default false)
-returns boolean language plpgsql stable security definer set search_path=public as $$
-declare ctx jsonb;
-begin
- if p_org_id is null or nullif(trim(p_module_id),'') is null then return false; end if;
- ctx:=public.get_org_plan_access_context(p_org_id);
- if ctx->'available' is distinct from 'true'::jsonb then return false; end if;
- return coalesce((ctx->'enabledModules'->>p_module_id)::boolean,p_default_enabled,false);
-end; $$;
-revoke all on function public.cloud_org_has_plan_feature(uuid,text,boolean),public.cloud_org_has_plan_module(uuid,text,boolean) from public,anon,authenticated;
+returns boolean language sql stable security definer set search_path=public as $$
+ select public.cloud_org_has_plan_access(p_org_id,p_module_id,'module',p_default_enabled);
+$$;
+revoke all on function public.cloud_org_has_plan_access(uuid,text,text,boolean),public.cloud_org_has_plan_feature(uuid,text,boolean),public.cloud_org_has_plan_module(uuid,text,boolean) from public,anon,authenticated;
 
 -- A webhook flag is distinct from its count quota. Preserve API-enabled plans.
 update public.saas_plans set enabled_features=coalesce(enabled_features,'{}')||jsonb_build_object('webhooks',coalesce(enabled_features->'api_access','false'::jsonb)) where not coalesce(enabled_features,'{}')?'webhooks';
@@ -133,7 +157,7 @@ create or replace function public.grant_saas_consumption_welcome_credit(p_org_id
 returns jsonb language plpgsql security definer set search_path=public as $$
 declare v_ai numeric:=0; v_sms numeric:=0; previous_ai numeric:=0; previous_sms numeric:=0; sms_balance numeric;
 begin
- if p_org_id is null or p_gift_kind not in ('demo','first_paid_plan') then return jsonb_build_object('success',false); end if;
+ if p_org_id is null or coalesce(p_gift_kind,'') not in ('demo','first_paid_plan') then return jsonb_build_object('success',false); end if;
  -- Serialize before checking the receipt, so retries/concurrent provisioning cannot double-credit.
  perform pg_advisory_xact_lock(hashtextextended(p_org_id::text,585));
  select ai_amount_irt,sms_amount_irt into previous_ai,previous_sms from public.saas_consumption_credit_gifts where org_id=p_org_id and gift_kind=p_gift_kind;
@@ -167,15 +191,45 @@ grant execute on function public.grant_saas_consumption_welcome_credit(uuid,text
 select public.grant_saas_consumption_welcome_credit(org_id,'demo',plan_code) from public.saas_org_settings
 where is_demo and trial_ends_at>now() and status in ('demo','trial','active');
 
--- Editing integrations remains org-scoped AND plan-scoped; disabled plans cannot create tokens through direct REST.
+-- Match the existing connector role contract as well as the plan gate.
+create or replace function public.current_user_can_manage_org_integrations(p_write boolean default false)
+returns boolean language plpgsql stable security definer set search_path=public as $$
+declare member record; settings jsonb; org uuid:=public.current_org_id();
+begin
+ if org is null or auth.uid() is null then return false; end if;
+ select m.is_owner,m.software_role,m.role_id,r.id as valid_role,r.permissions into member
+ from public.user_organization_memberships m left join public.org_roles r on r.id=m.role_id and r.org_id=m.org_id
+ where m.org_id=org and m.user_id=auth.uid() and m.is_active limit 1;
+ if not found then return false; end if;
+ if p_write and exists(select 1 from public.saas_org_settings where org_id=org and is_readonly) then return false; end if;
+ if member.is_owner then return true; end if;
+ if lower(coalesce(member.software_role,'')) not in ('super_admin','admin','manager') then return false; end if;
+ if member.role_id is not null and member.valid_role is null then return false; end if;
+ settings:=coalesce(member.permissions->'__settings_tabs','{}');
+ return settings->'view' is distinct from 'false'::jsonb
+   and settings->'fields'->'connections' is distinct from 'false'::jsonb
+   and (not p_write or settings->'edit' is distinct from 'false'::jsonb);
+end; $$;
+revoke all on function public.current_user_can_manage_org_integrations(boolean) from public,anon;
+grant execute on function public.current_user_can_manage_org_integrations(boolean) to authenticated;
+
 drop policy if exists org_members_manage_api_tokens on public.org_api_tokens;
-create policy org_members_manage_api_tokens on public.org_api_tokens for all to authenticated
-using(org_id=(select public.current_org_id()) and (select public.current_org_has_plan_feature('api_access',false)))
-with check(org_id=(select public.current_org_id()) and (select public.current_org_has_plan_feature('api_access',false)));
 drop policy if exists org_members_manage_webhooks on public.org_webhooks;
-create policy org_members_manage_webhooks on public.org_webhooks for all to authenticated
-using(org_id=(select public.current_org_id()) and (select public.current_org_has_plan_feature('webhooks',false)))
-with check(org_id=(select public.current_org_id()) and (select public.current_org_has_plan_feature('webhooks',false)));
+do $$
+declare item record; policy_name text; base text; writable text;
+begin
+ for item in select * from (values ('org_api_tokens','api_access'),('org_webhooks','webhooks')) t(table_name,feature_key) loop
+  base:=format('org_id=(select public.current_org_id()) and (select public.current_org_has_plan_feature(%L,false))',item.feature_key);
+  writable:=base||' and (select public.current_user_can_manage_org_integrations(true))';
+  foreach policy_name in array array['read','insert','update','delete'] loop
+   execute format('drop policy if exists %I on public.%I','p_'||item.table_name||'_plan_'||policy_name,item.table_name);
+  end loop;
+  execute format('create policy %I on public.%I for select to authenticated using (%s and (select public.current_user_can_manage_org_integrations(false)))','p_'||item.table_name||'_plan_read',item.table_name,base);
+  execute format('create policy %I on public.%I for insert to authenticated with check (%s)','p_'||item.table_name||'_plan_insert',item.table_name,writable);
+  execute format('create policy %I on public.%I for update to authenticated using (%s) with check (%s)','p_'||item.table_name||'_plan_update',item.table_name,writable,writable);
+  execute format('create policy %I on public.%I for delete to authenticated using (%s)','p_'||item.table_name||'_plan_delete',item.table_name,writable);
+ end loop;
+end; $$;
 
 -- Update the existing credit notices by semantic condition, preserving target audiences and dismissal records.
 update public.saas_user_announcements a set
@@ -197,7 +251,7 @@ begin
   or exists(select 1 from jsonb_each(p_module_overrides||p_feature_overrides) where jsonb_typeof(value)<>'boolean') then raise exception 'invalid_access_overrides'; end if;
  perform 1 from public.saas_onboarding_requests where id=p_request_id for update;
  if not found then return jsonb_build_object('success',false,'message','درخواست دمو یافت نشد.'); end if;
- select org_id into request_org from public.saas_org_settings where request_id=p_request_id limit 1;
+ select s.org_id into request_org from public.saas_org_settings s join public.saas_onboarding_requests r on r.id=p_request_id where s.request_id=r.id or s.org_id=r.org_id limit 1;
  if request_org is not null then return jsonb_build_object('success',true,'org_id',request_org,'message','این درخواست قبلاً به سازمان متصل شده است.'); end if;
  result:=public.admin_convert_demo_request_to_org(p_request_id);
  if result->'success' is distinct from 'true'::jsonb then return result; end if;

@@ -1,11 +1,13 @@
 create extension if not exists pgcrypto;
 create schema auth;
-create function auth.uid() returns uuid language sql stable as $$ select null::uuid $$;
+create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('test.uid',true),'')::uuid $$;
 do $$ begin if not exists(select 1 from pg_roles where rolname='anon') then create role anon; end if; end $$;
 do $$ begin if not exists(select 1 from pg_roles where rolname='authenticated') then create role authenticated; end if; end $$;
 do $$ begin if not exists(select 1 from pg_roles where rolname='service_role') then create role service_role; end if; end $$;
 create table organizations(id uuid primary key default gen_random_uuid(),internal boolean default false);
 create table saas_plans(id uuid primary key default gen_random_uuid(),code text unique,is_active boolean default true,is_demo_default boolean default false,trial_days int default 30,sort_order int default 1,enabled_modules jsonb default '{}',enabled_features jsonb default '{}');
+create table org_roles(id uuid primary key,org_id uuid,permissions jsonb default '{}');
+create table user_organization_memberships(org_id uuid,user_id uuid,role_id uuid,is_active boolean default true,is_owner boolean default false,software_role text);
 create table saas_org_settings(org_id uuid primary key references organizations,plan_code text,status text default 'active',is_demo boolean default false,is_readonly boolean default false,trial_ends_at timestamptz,feature_overrides jsonb default '{}',module_overrides jsonb default '{}',request_id uuid);
 create table saas_org_entitlements(org_id uuid,item_kind text,entitlement_code text,state text,expires_at timestamptz);
 create table local_deployment_runtime(org_id uuid,features jsonb,modules jsonb);
@@ -39,3 +41,6 @@ create function trg_grant_saas_consumption_welcome_credit() returns trigger lang
  if new.is_demo then perform grant_saas_consumption_welcome_credit(new.org_id,'demo',new.plan_code); end if; return new;
 end; $$;
 create trigger trg_saas_consumption_welcome_credit after insert or update of is_demo,plan_code on saas_org_settings for each row execute function trg_grant_saas_consumption_welcome_credit();
+
+insert into user_organization_memberships(org_id,user_id,is_owner,software_role) select id,'00000000-0000-0000-0000-000000000003'::uuid,true,'admin' from organizations;
+select set_config('test.uid','00000000-0000-0000-0000-000000000003',false);

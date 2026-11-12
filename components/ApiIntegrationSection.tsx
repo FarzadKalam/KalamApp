@@ -119,9 +119,10 @@ const CopyButton: React.FC<{ text: string; label?: string }> = ({ text, label })
 
 type ApiTokensSectionProps = {
   orgId: string | null;
+  writable: boolean;
 };
 
-const ApiTokensSection: React.FC<ApiTokensSectionProps> = ({ orgId }) => {
+const ApiTokensSection: React.FC<ApiTokensSectionProps> = ({ orgId, writable }) => {
   const { message, modal } = AntdApp.useApp();
   const [tokens, setTokens] = useState<ApiToken[]>([]);
   const [loading, setLoading] = useState(false);
@@ -153,6 +154,7 @@ const ApiTokensSection: React.FC<ApiTokensSectionProps> = ({ orgId }) => {
   useEffect(() => { load(); }, [load]);
 
   const handleCreate = async () => {
+    if (!writable) { message.error('اجازهٔ تغییر اتصال‌ها را ندارید.'); return; }
     if (!orgId) {
       message.error('سازمان جاری برای ایجاد توکن API مشخص نیست.');
       return;
@@ -195,6 +197,7 @@ const ApiTokensSection: React.FC<ApiTokensSectionProps> = ({ orgId }) => {
   };
 
   const handleDeactivate = async (id: string) => {
+    if (!writable) { message.error('اجازهٔ تغییر اتصال‌ها را ندارید.'); return; }
     if (!orgId) return;
 
     try {
@@ -212,6 +215,7 @@ const ApiTokensSection: React.FC<ApiTokensSectionProps> = ({ orgId }) => {
   };
 
   const handleDelete = async (id: string) => {
+    if (!writable) { message.error('اجازهٔ تغییر اتصال‌ها را ندارید.'); return; }
     if (!orgId) return;
 
     try {
@@ -262,24 +266,26 @@ const ApiTokensSection: React.FC<ApiTokensSectionProps> = ({ orgId }) => {
         <Space>
           {record.is_active && (
             <Popconfirm
+              disabled={!writable}
               title="توکن را غیرفعال کنم؟"
               onConfirm={() => handleDeactivate(record.id)}
               okText="بله"
               cancelText="خیر"
             >
               <Tooltip title="غیرفعال کردن">
-                <Button size="small" type="text" icon={<StopOutlined />} />
+                <Button size="small" type="text" disabled={!writable} icon={<StopOutlined />} />
               </Tooltip>
             </Popconfirm>
           )}
           <Popconfirm
+            disabled={!writable}
             title="این توکن حذف شود؟"
             onConfirm={() => handleDelete(record.id)}
             okText="بله"
             cancelText="خیر"
           >
             <Tooltip title="حذف">
-              <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+              <Button size="small" type="text" danger disabled={!writable} icon={<DeleteOutlined />} />
             </Tooltip>
           </Popconfirm>
         </Space>
@@ -312,6 +318,7 @@ const ApiTokensSection: React.FC<ApiTokensSectionProps> = ({ orgId }) => {
           type="primary"
           icon={<PlusOutlined />}
           loading={creating}
+          disabled={!writable}
           onClick={handleCreate}
         >
           ایجاد توکن جدید
@@ -333,7 +340,7 @@ const ApiTokensSection: React.FC<ApiTokensSectionProps> = ({ orgId }) => {
 
 // ─── Webhooks Sub-Section ────────────────────────────────────────────────────
 
-const WebhooksSection: React.FC<{ orgId: string | null }> = ({ orgId }) => {
+const WebhooksSection: React.FC<{ orgId: string | null; writable: boolean }> = ({ orgId, writable }) => {
   const { message } = AntdApp.useApp();
   const [webhooks, setWebhooks] = useState<OrgWebhook[]>([]);
   const [loading, setLoading] = useState(false);
@@ -369,6 +376,7 @@ const WebhooksSection: React.FC<{ orgId: string | null }> = ({ orgId }) => {
   };
 
   const handleSave = async () => {
+    if (!writable) { message.error('اجازهٔ تغییر اتصال‌ها را ندارید.'); return; }
     if (!orgId) { message.error('سازمان جاری مشخص نیست.'); return; }
     try {
       const values = await form.validateFields();
@@ -395,6 +403,7 @@ const WebhooksSection: React.FC<{ orgId: string | null }> = ({ orgId }) => {
   };
 
   const handleToggleActive = async (id: string, current: boolean) => {
+    if (!writable) { message.error('اجازهٔ تغییر اتصال‌ها را ندارید.'); return; }
     try {
       const { error } = await supabase
         .from('org_webhooks')
@@ -409,6 +418,7 @@ const WebhooksSection: React.FC<{ orgId: string | null }> = ({ orgId }) => {
   };
 
   const handleDelete = async (id: string) => {
+    if (!writable) { message.error('اجازهٔ تغییر اتصال‌ها را ندارید.'); return; }
     try {
       const { error } = await supabase
         .from('org_webhooks')
@@ -513,17 +523,19 @@ const WebhooksSection: React.FC<{ orgId: string | null }> = ({ orgId }) => {
               size="small"
               type="text"
               icon={record.is_active ? <StopOutlined /> : <CheckCircleOutlined />}
+              disabled={!writable}
               onClick={() => handleToggleActive(record.id, record.is_active)}
             />
           </Tooltip>
           <Popconfirm
+            disabled={!writable}
             title="این webhook حذف شود؟"
             onConfirm={() => handleDelete(record.id)}
             okText="بله"
             cancelText="خیر"
           >
             <Tooltip title="حذف">
-              <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+              <Button size="small" type="text" danger disabled={!writable} icon={<DeleteOutlined />} />
             </Tooltip>
           </Popconfirm>
         </Space>
@@ -539,7 +551,7 @@ const WebhooksSection: React.FC<{ orgId: string | null }> = ({ orgId }) => {
         </Title>
         <Space>
           <Button size="small" icon={<ReloadOutlined />} onClick={load} loading={loading} />
-          <Button type="primary" size="small" icon={<PlusOutlined />} onClick={openCreate}>
+          <Button type="primary" size="small" disabled={!writable} icon={<PlusOutlined />} onClick={openCreate}>
             افزودن Webhook
           </Button>
         </Space>
@@ -623,16 +635,18 @@ type ApiIntegrationSectionProps = {
 };
 
 const ApiIntegrationSection: React.FC<ApiIntegrationSectionProps> = ({ orgId }) => {
-  const [access, setAccess] = useState<{ api: boolean; webhooks: boolean } | null>(null);
+  const [access, setAccess] = useState<{ api: boolean; webhooks: boolean; read: boolean; write: boolean } | null>(null);
   useEffect(() => {
     let cancelled = false;
     setAccess(null);
-    if (!orgId) { setAccess({ api: false, webhooks: false }); return; }
+    if (!orgId) { setAccess({ api: false, webhooks: false, read: false, write: false }); return; }
     void Promise.all([
       hasCurrentOrgPlanFeature('api_access', { force: true }),
       hasCurrentOrgPlanFeature('webhooks', { force: true }),
-    ]).then(([api, webhooks]) => { if (!cancelled) setAccess({ api, webhooks }); })
-      .catch(() => { if (!cancelled) setAccess({ api: false, webhooks: false }); });
+      supabase.rpc('current_user_can_manage_org_integrations', { p_write: false }),
+      supabase.rpc('current_user_can_manage_org_integrations', { p_write: true }),
+    ]).then(([api, webhooks, read, write]) => { if (!cancelled) setAccess({ api, webhooks, read: !read.error && read.data === true, write: !write.error && write.data === true }); })
+      .catch(() => { if (!cancelled) setAccess({ api: false, webhooks: false, read: false, write: false }); });
     return () => { cancelled = true; };
   }, [orgId]);
   return <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
@@ -640,10 +654,10 @@ const ApiIntegrationSection: React.FC<ApiIntegrationSectionProps> = ({ orgId }) 
       <ApiOutlined />
       <Title level={4} className="!mb-0">اتصال به نرم‌افزارهای دیگر</Title>
     </div>
-    {!access ? <Spin /> : <>
-      {access.api ? <ApiTokensSection orgId={orgId} /> : <Alert type="info" showIcon message="دسترسی API در پلن سازمان فعال نیست." />}
+    {!access ? <Spin /> : !access.read ? <Alert type="info" showIcon message="اجازهٔ مشاهده یا مدیریت اتصال‌های سازمان را ندارید." /> : <>
+      {access.api ? <ApiTokensSection orgId={orgId} writable={access.write} /> : <Alert type="info" showIcon message="دسترسی API در پلن سازمان فعال نیست." />}
       <Divider />
-      {access.webhooks ? <WebhooksSection orgId={orgId} /> : <Alert type="info" showIcon message="وب‌هوک در پلن سازمان فعال نیست." />}
+      {access.webhooks ? <WebhooksSection orgId={orgId} writable={access.write} /> : <Alert type="info" showIcon message="وب‌هوک در پلن سازمان فعال نیست." />}
     </>}
   </div>;
 };
