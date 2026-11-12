@@ -1,5 +1,5 @@
 ﻿// @ts-nocheck
-import { hasBotPlanAccess } from '../_shared/bot-plan-access.ts';
+import { hasBotPlanAccess, canUseBotAction } from '../_shared/bot-plan-access.ts';
 
 type BotChannel = 'telegram' | 'bale' | 'rubika';
 
@@ -3729,7 +3729,7 @@ const diagnoseRubikaRuntime = async ({
   };
 };
 
-const requireConnectionPlanAccess = async (url: string, serviceKey: string, integration: any, channel: string, caller: any) => {
+const requireConnectionPlanAccess = async (url: string, serviceKey: string, integration: any, channel: string, caller: any, action: string) => {
   const orgId = String(integration?.org_id || '').trim();
   if (!orgId || !await hasBotPlanAccess(url, serviceKey, orgId, channel)) throw new Error('این اتصال بات در پلن سازمان فعال نیست.');
   if (caller?.role === 'service_role') return;
@@ -3737,10 +3737,23 @@ const requireConnectionPlanAccess = async (url: string, serviceKey: string, inte
   query.searchParams.set('org_id', `eq.${orgId}`);
   query.searchParams.set('user_id', `eq.${caller?.id || ''}`);
   query.searchParams.set('is_active', 'eq.true');
-  query.searchParams.set('select', 'org_id'); query.searchParams.set('limit', '1');
+  query.searchParams.set('select', 'org_id,role_id,is_owner,software_role'); query.searchParams.set('limit', '1');
   const result = await fetch(query, { headers: getServiceHeaders(serviceKey) });
   const memberships = result.ok ? await result.json() : [];
   if (!Array.isArray(memberships) || memberships.length !== 1) throw new Error('دسترسی به اتصال این سازمان وجود ندارد.');
+  const membership = memberships[0];
+  let permissions: any = {};
+  if (membership.role_id && membership.is_owner !== true) {
+    const roles = new URL(`${url.replace(/\/+$/, '')}/rest/v1/org_roles`);
+    roles.searchParams.set('org_id', `eq.${orgId}`); roles.searchParams.set('id', `eq.${membership.role_id}`);
+    roles.searchParams.set('select', 'permissions'); roles.searchParams.set('limit', '1');
+    const result = await fetch(roles, { headers: getServiceHeaders(serviceKey) });
+    const rows = result.ok ? await result.json() : [];
+    if (!Array.isArray(rows) || rows.length !== 1) throw new Error('نقش سازمانی معتبر نیست.');
+    permissions = rows[0].permissions || {};
+  }
+  if (!canUseBotAction(permissions, action, membership)) throw new Error('اجازهٔ استفاده از این بخش اتصال بات را ندارید.');
+
 };
 
 Deno.serve(async (req) => {
@@ -3804,7 +3817,7 @@ Deno.serve(async (req) => {
         });
       }
       const integration = await getConnectionRecordLoose(supabaseUrl, serviceRoleKey, channel, connectionId);
-      await requireConnectionPlanAccess(supabaseUrl, serviceRoleKey, integration, channel, caller);
+      await requireConnectionPlanAccess(supabaseUrl, serviceRoleKey, integration, channel, caller, action);
       const diagnostic = await diagnoseRubikaRuntime({
         supabaseUrl,
         serviceRoleKey,
@@ -3818,7 +3831,7 @@ Deno.serve(async (req) => {
     }
 
     const integration = await getConnectionRecord(supabaseUrl, serviceRoleKey, channel, connectionId);
-    await requireConnectionPlanAccess(supabaseUrl, serviceRoleKey, integration, channel, caller);
+    await requireConnectionPlanAccess(supabaseUrl, serviceRoleKey, integration, channel, caller, action);
 
     if (action === 'start_capture') {
       let providerResult: any = null;
