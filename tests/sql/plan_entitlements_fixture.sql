@@ -20,7 +20,7 @@ create table org_api_tokens(org_id uuid,token text);
 create table org_webhooks(org_id uuid);
 alter table org_api_tokens enable row level security;
 alter table org_webhooks enable row level security;
-grant select on org_api_tokens,org_webhooks to authenticated;
+grant select,insert,update,delete on org_api_tokens,org_webhooks to authenticated;
 create table saas_onboarding_requests(id uuid primary key,org_id uuid);
 create table saas_user_announcements(id int primary key,kind text,title text,body text,conditions_all jsonb);
 create function org_is_saas_admin(uuid) returns boolean language sql stable as $$ select coalesce((select internal from organizations where id=$1),false) $$;
@@ -44,3 +44,20 @@ create trigger trg_saas_consumption_welcome_credit after insert or update of is_
 
 insert into user_organization_memberships(org_id,user_id,is_owner,software_role) select id,'00000000-0000-0000-0000-000000000003'::uuid,true,'admin' from organizations;
 select set_config('test.uid','00000000-0000-0000-0000-000000000003',false);
+
+-- Dependencies of the new atomic wrapper are stubbed: one simulates successful
+-- conversion and the other a save failure so rollback/retry behavior is exercised.
+create function admin_convert_demo_request_to_org(p_request_id uuid) returns jsonb language plpgsql as $$
+declare org uuid:=gen_random_uuid();
+begin
+ insert into organizations(id) values(org);
+ insert into saas_org_settings(org_id,plan_code,is_demo,status,request_id) values(org,'public_demo_full',true,'demo',p_request_id);
+ update saas_onboarding_requests set org_id=org where id=p_request_id;
+ return jsonb_build_object('success',true,'org_id',org);
+end; $$;
+create function admin_update_saas_org_account(p_org_id uuid,p_plan_code text,p_module_overrides jsonb default '{}',p_feature_overrides jsonb default '{}',p_quota_adjustments jsonb default '{}') returns jsonb language plpgsql as $$
+begin
+ if p_plan_code='simulate_save_failure' then raise exception 'simulated_access_save_failure'; end if;
+ update saas_org_settings set plan_code=p_plan_code,module_overrides=p_module_overrides,feature_overrides=p_feature_overrides where org_id=p_org_id;
+ return '{}'::jsonb;
+end; $$;

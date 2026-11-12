@@ -189,7 +189,7 @@ jobs:
           utils/moduleListFilterDisplay.test.ts
           utils/optionHelpers.test.ts utils/moduleListLive.test.ts
           utils/saasPlanDisplayFeatures.test.ts utils/saasOfferingCatalog.test.ts utils/userAnnouncements.test.ts
-          supabase/functions/_shared/org-plan-access.test.ts components/saas/SaasOrgAdminDrawer.test.tsx utils/overlayLocks.test.ts utils/ownerPasswordPolicy.test.ts utils/email.test.ts
+          supabase/functions/_shared/org-plan-access.test.ts supabase/functions/_shared/ai-plan-capabilities.test.ts components/saas/SaasOrgAdminDrawer.test.tsx utils/overlayLocks.test.ts utils/ownerPasswordPolicy.test.ts utils/email.test.ts
           hooks/useTableColumnLayout.test.tsx components/table/TableChoiceFilter.test.tsx
           components/SmartTableRenderer.test.tsx
           components/moduleList/RelatedActivityIndicators.test.tsx

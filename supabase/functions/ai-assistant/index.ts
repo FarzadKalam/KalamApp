@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { loadOrgPlanAccess } from '../_shared/org-plan-access.ts';
+import { AI_CAPABILITY_FEATURE_KEYS, isAiCapabilityPlanAvailable, canUseOrganizationKnowledge } from '../_shared/ai-plan-capabilities.ts';
 
 import {
   normalizeAgentPlan,
@@ -207,31 +208,6 @@ const PRIMARY_MODEL_CAPABILITIES = new Set([
 
 const PRIMARY_MODEL_DEFAULT_KEY = '__primary_model';
 
-const AI_CAPABILITY_FEATURE_KEYS: Record<string, string> = {
-  dashboard_chat: 'ai_chat',
-  record_chat: 'ai_chat',
-  customer_reply_suggestion: 'ai_chat',
-  document_analysis: 'ai_document_analysis',
-  workflow_ai_prompt: 'ai_chat',
-  deep_reasoning: 'ai_deep_reasoning',
-  legal_assistant: 'ai_legal_assistant',
-  web_search: 'ai_web_search',
-  embedding: 'ai_document_analysis',
-  voice_input: 'ai_voice_input',
-  image_generation: 'ai_image_generation',
-  image_edit: 'ai_image_generation',
-  voice_output: 'ai_voice_output',
-  video_generation: 'ai_video_generation',
-  document_generation: 'ai_document_analysis',
-  record_creation: 'ai_chat',
-  process_operation: 'ai_chat',
-  pricing_adjustment: 'ai_chat',
-  agent_fast: 'ai_chat',
-  context_compression: 'ai_chat',
-  voip_auto_reply: 'ai_voip_auto_reply',
-  auto_decision: 'ai_deep_reasoning',
-  customer_auto_reply: 'ai_chat',
-};
 
 const TENANT_READY_AI_CAPABILITIES = new Set([
   'dashboard_chat',
@@ -1257,19 +1233,6 @@ const truthyPlanFeature = (value: any) => {
 const loadTenantAiPlanContext = (supabaseUrl: string, serviceRoleKey: string, authContext: any) =>
   loadOrgPlanAccess(supabaseUrl, serviceRoleKey, authContext?.orgId || '');
 
-const isAiCapabilityPlanAvailable = (planContext: any, capability: string) => {
-  const normalized = String(capability || '').trim();
-  const featureKey = AI_CAPABILITY_FEATURE_KEYS[normalized];
-  if (!featureKey) return true;
-  if (!planContext?.available) return false;
-  if (normalized === 'dashboard_chat' || normalized === 'record_chat' || normalized === 'workflow_ai_prompt' || normalized === 'customer_reply_suggestion' || normalized === 'pricing_adjustment' || normalized === 'agent_fast' || normalized === 'context_compression') {
-    return truthyPlanFeature(planContext?.features?.[featureKey]) || truthyPlanFeature(planContext?.features?.ai_knowledge);
-  }
-  if (normalized === 'document_analysis' || normalized === 'embedding') {
-    return truthyPlanFeature(planContext?.features?.[featureKey]) || truthyPlanFeature(planContext?.features?.ai_knowledge);
-  }
-  return truthyPlanFeature(planContext?.features?.[featureKey]);
-};
 
 const buildAiCapabilityAvailability = (planContext: any, settings: any, catalogRows: any[] = []) => {
   const selected = settings?.feature_flags && typeof settings.feature_flags === 'object' ? settings.feature_flags : {};
@@ -7124,7 +7087,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     [...(runnableAgents.blockedAgents || []), ...(skillAssembly.blockedAgents || [])]
       .map((item) => [item.agentKey, item]),
   ).values());
-  const canUseKnowledge = !freeChatMode && isAiCapabilityPlanAvailable(planContext, 'document_analysis');
+  const canUseKnowledge = !freeChatMode && canUseOrganizationKnowledge(planContext);
   const requiresAuthoritativeProcessContext = !freeChatMode && (
     rawContext.intent === 'process_guide'
     || ['process_templates', 'process_runs', 'content_calendars'].includes(String(pageContext?.moduleId || '').trim())
@@ -8301,7 +8264,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     [...(runnableAgents.blockedAgents || []), ...(skillAssembly.blockedAgents || [])]
       .map((item) => [item.agentKey, item]),
   ).values());
-  const canUseKnowledge = !freeChatMode && isAiCapabilityPlanAvailable(planContext, 'document_analysis');
+  const canUseKnowledge = !freeChatMode && canUseOrganizationKnowledge(planContext);
   const [knowledgeChunks, companyContext, orgPeopleContext, calendarContext] = await Promise.all([
     canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, prompt, { moduleId: pageContext.moduleId }) : Promise.resolve([]),
     freeChatMode ? Promise.resolve(null) : (grounding.company ? Promise.resolve(grounding.company) : loadCompanyContext(supabaseUrl, serviceRoleKey, authContext)),
@@ -8741,7 +8704,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
   const permittedUpdateRecords = isUpdate ? (Array.isArray(pageContext?.records) ? pageContext.records : []).slice(0, 20) : [];
   const permittedUpdateRecordIds = new Set(permittedUpdateRecords.map((record: any) => String(record?.id || '').trim()).filter(Boolean));
   const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
-  const canUseKnowledge = isAiCapabilityPlanAvailable(planContext, 'document_analysis');
+  const canUseKnowledge = canUseOrganizationKnowledge(planContext);
   const file = body?.file || body?.attachment || null;
   const filePrompt = file ? [
     prompt,
@@ -11401,7 +11364,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
     ? internalImageJob.pageContext
     : await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const useOrganizationContext = imageSettings.useOrganizationContext === true;
-  const canUseKnowledge = useOrganizationContext && isAiCapabilityPlanAvailable(planContext, 'document_analysis');
+  const canUseKnowledge = useOrganizationContext && canUseOrganizationKnowledge(planContext);
   const requiresAuthoritativeProcessContext = rawContext.intent === 'process_guide'
     || ['process_templates', 'process_runs'].includes(String(pageContext?.moduleId || '').trim());
   const [companyContext, knowledgeChunks, authoritativeProcessContext, userMemories] = await Promise.all([

@@ -1,6 +1,8 @@
 import { normalizeEmail } from './email';
 import { BRAND_PALETTE_PRESETS, type BrandingPaletteKey } from "../theme/brandTheme";
 import { toFaErrorMessage } from "./errorMessageFa";
+import { getOwnerPasswordValidationError } from '../supabase/functions/_shared/owner-password-policy';
+export { getOwnerPasswordValidationError } from '../supabase/functions/_shared/owner-password-policy';
 
 export const SAAS_DEFAULT_BRAND_PALETTE_KEY: BrandingPaletteKey = "kalam_sky";
 
@@ -24,7 +26,7 @@ export const isValidOwnerEmail = (value: string) =>
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeOwnerEmail(value));
 
 export const isValidOwnerPassword = (value: string) =>
-  String(value || "").trim().length >= 6;
+  getOwnerPasswordValidationError(value) === null;
 
 export const isBrandPaletteKey = (value: string): value is BrandingPaletteKey =>
   Object.prototype.hasOwnProperty.call(BRAND_PALETTE_PRESETS, value);

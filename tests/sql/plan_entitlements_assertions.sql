@@ -47,7 +47,13 @@ end $$;
 select set_config('test.uid','00000000-0000-0000-0000-000000000003',false);
 select set_config('test.org','00000000-0000-0000-0000-000000000001',false);
 set role authenticated;
-do $$ begin if (select count(*) from org_api_tokens)<>1 then raise exception 'Allowed tenant token inaccessible'; end if; end $$;
+do $$ begin
+ if (select count(*) from org_api_tokens)<>1 then raise exception 'Allowed tenant token inaccessible'; end if;
+ begin
+  insert into org_api_tokens values('00000000-0000-0000-0000-000000000002','cross-org');
+  raise exception 'Cross-org insert escaped RLS';
+ exception when insufficient_privilege then null; end;
+end $$;
 reset role;
 select set_config('test.uid','00000000-0000-0000-0000-000000000004',false);
 set role authenticated;
@@ -67,3 +73,23 @@ select set_config('test.org','',false);
 set role authenticated;
 do $$ begin if exists(select 1 from org_api_tokens) then raise exception 'No-org REST bypass'; end if; end $$;
 reset role;
+
+select set_config('test.admin','yes',false);
+do $$
+declare request_id uuid:=gen_random_uuid(); result jsonb; target uuid; before_count int;
+begin
+ insert into saas_onboarding_requests(id) values(request_id);
+ select count(*) into before_count from organizations;
+ begin
+  perform admin_provision_demo_request_with_access(request_id,'simulate_save_failure','{}','{}');
+  raise exception 'Save failure was swallowed';
+ exception when raise_exception then
+  if sqlerrm<>'simulated_access_save_failure' then raise; end if;
+ end;
+ if (select count(*) from organizations)<>before_count or exists(select 1 from saas_org_settings where saas_org_settings.request_id=request_id) then raise exception 'Failed access save left a partial organization'; end if;
+ result:=admin_provision_demo_request_with_access(request_id,'public_demo_full','{}','{"api_access":false}');
+ target:=(result->>'org_id')::uuid;
+ if result->'success' is distinct from 'true'::jsonb or public.org_has_plan_feature(target,'api_access') then raise exception 'Manual access choice not applied'; end if;
+ perform admin_provision_demo_request_with_access(request_id,'public_demo_full','{}','{"api_access":true}');
+ if public.org_has_plan_feature(target,'api_access') or (select count(*) from saas_consumption_credit_gifts where org_id=target and gift_kind='demo')<>1 then raise exception 'Retry changed existing access or repeated credit'; end if;
+end $$;

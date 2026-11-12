@@ -52,8 +52,10 @@ begin
  inherited_f:=f; inherited_m:=m;
  f:=f||coalesce(s.feature_overrides,'{}'); m:=m||coalesce(s.module_overrides,'{}');
  -- Offline installations use their signed per-org availability contract.
- select features,modules into local_policy from public.local_deployment_runtime where org_id=p_org_id;
- if found then f:=local_policy.features; m:=local_policy.modules; inherited_f:=f; inherited_m:=m; available:=true; end if;
+ if to_regclass('public.local_deployment_runtime') is not null then
+  execute 'select features,modules from public.local_deployment_runtime where org_id=$1' into local_policy using p_org_id;
+  if local_policy.features is not null then f:=local_policy.features; m:=local_policy.modules; inherited_f:=f; inherited_m:=m; available:=true; end if;
+ end if;
  -- Normalize legacy representations once, retain unknown keys for forward compatibility.
  select coalesce(jsonb_object_agg(key, coalesce(value='true'::jsonb or lower(value#>>'{}') in ('true','1','yes','on','enabled','full','limited') or value->'enabled'='true'::jsonb or value->'available'='true'::jsonb,false)),'{}') into f from jsonb_each(f);
  select coalesce(jsonb_object_agg(key, coalesce(value='true'::jsonb or lower(value#>>'{}') in ('true','1','yes','on','enabled'),false)),'{}') into m from jsonb_each(m);
@@ -119,6 +121,33 @@ returns boolean language sql stable security definer set search_path=public as $
  select public.cloud_org_has_plan_access(p_org_id,p_module_id,'module',p_default_enabled);
 $$;
 revoke all on function public.cloud_org_has_plan_access(uuid,text,text,boolean),public.cloud_org_has_plan_feature(uuid,text,boolean),public.cloud_org_has_plan_module(uuid,text,boolean) from public,anon,authenticated;
+
+-- Preserve offline policies when installed, without requiring that optional
+-- deployment phase on cloud organizations. Current-org wrappers keep working.
+create or replace function public.org_has_plan_feature(p_org_id uuid,p_feature_key text,p_default_enabled boolean default false)
+returns boolean language plpgsql stable security definer set search_path=public as $$
+declare policy jsonb;
+begin
+ if p_org_id is null or nullif(trim(p_feature_key),'') is null then return false; end if;
+ if to_regclass('public.local_deployment_runtime') is not null then
+  execute 'select features from public.local_deployment_runtime where org_id=$1' into policy using p_org_id;
+  if policy is not null then return coalesce(policy->p_feature_key,'false'::jsonb)='true'::jsonb; end if;
+ end if;
+ return public.cloud_org_has_plan_feature(p_org_id,p_feature_key,p_default_enabled);
+end; $$;
+create or replace function public.org_has_plan_module(p_org_id uuid,p_module_id text,p_default_enabled boolean default false)
+returns boolean language plpgsql stable security definer set search_path=public as $$
+declare policy jsonb;
+begin
+ if p_org_id is null or nullif(trim(p_module_id),'') is null then return false; end if;
+ if to_regclass('public.local_deployment_runtime') is not null then
+  execute 'select modules from public.local_deployment_runtime where org_id=$1' into policy using p_org_id;
+  if policy is not null then return coalesce(policy->p_module_id,'false'::jsonb)='true'::jsonb; end if;
+ end if;
+ return public.cloud_org_has_plan_module(p_org_id,p_module_id,p_default_enabled);
+end; $$;
+revoke all on function public.org_has_plan_feature(uuid,text,boolean),public.org_has_plan_module(uuid,text,boolean) from public,anon,authenticated;
+grant execute on function public.org_has_plan_feature(uuid,text,boolean),public.org_has_plan_module(uuid,text,boolean) to service_role;
 
 -- A webhook flag is distinct from its count quota. Preserve API-enabled plans.
 update public.saas_plans set enabled_features=coalesce(enabled_features,'{}')||jsonb_build_object('webhooks',coalesce(enabled_features->'api_access','false'::jsonb)) where not coalesce(enabled_features,'{}')?'webhooks';
