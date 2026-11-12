@@ -1,9 +1,19 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import AiMessageRenderer from './AiMessageRenderer';
 
 describe('AiMessageRenderer', () => {
+  afterEach(cleanup);
+  it('renders a scrollable semantic table, escapes HTML, and leaves tables in code fences as code', () => {
+    const { container } = render(<AiMessageRenderer text={'| نام | مقدار |\n| --- | --- |\n| <img src=x onerror=alert(1)> | ۱۲ |\n\n```text\n| الف | ب |\n| --- | --- |\n```'} />);
+    expect(container.querySelectorAll('table')).toHaveLength(1);
+    expect(screen.getByRole('table')).toHaveAccessibleName('جدول پاسخ هوش مصنوعی');
+    expect(container.querySelector('thead th')?.getAttribute('scope')).toBe('col');
+    expect(container.querySelector('.ai-table-region')?.getAttribute('tabindex')).toBe('0');
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('code')?.textContent).toContain('| الف | ب |');
+  });
   it('renders safe rich AI text and copy controls without executing raw HTML', () => {
     const onCopy = vi.fn();
     render(

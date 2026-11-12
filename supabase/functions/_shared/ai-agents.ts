@@ -37,12 +37,12 @@ export function resolveAiAgentId(value: unknown): AiAgentId {
 export const getAiAgent = (id: unknown) => AI_AGENTS[resolveAiAgentId(id)];
 export const getAiAgentLabel = (id: unknown) => getAiAgent(id).label;
 
-export type AiAgentActivity = { agentId: AiAgentId; phase: 'started' | 'completed'; at: number };
+export type AiAgentActivity = { agentId: AiAgentId; phase: 'started' | 'completed' | 'failed'; at: number };
 export function parseAiAgentActivity(value: unknown): AiAgentActivity | null {
   if (!value || typeof value !== 'object') return null;
   const item = value as Record<string, unknown>;
   if (typeof item.agentId !== 'string' || !Object.prototype.hasOwnProperty.call(AI_AGENTS, item.agentId)) return null;
-  if (item.phase !== 'started' && item.phase !== 'completed') return null;
+  if (item.phase !== 'started' && item.phase !== 'completed' && item.phase !== 'failed') return null;
   if (typeof item.at !== 'number' || !Number.isFinite(item.at)) return null;
   return { agentId: item.agentId as AiAgentId, phase: item.phase, at: item.at };
 }
@@ -54,8 +54,30 @@ export function applyAiAgentActivity(current: AiAgentActivity[], event: AiAgentA
 }
 
 export type AiAgentActivityReporter = (event: AiAgentActivity) => void;
+export const appendAiAgentEvent = (events: AiAgentActivity[], event: AiAgentActivity) => [...events.slice(-79), event];
+
+export function getAiExecutionSteps(events: AiAgentActivity[]) {
+  const steps: Array<{ agentId: AiAgentId; startedAt: number; endedAt?: number; failed?: boolean; parallel: boolean }> = [];
+  for (const event of events.slice(-80)) {
+    if (event.phase === 'started') {
+      const active = steps.filter(step => step.endedAt === undefined);
+      active.forEach(step => { step.parallel = true; });
+      steps.push({ agentId: event.agentId, startedAt: event.at, parallel: active.length > 0 });
+    } else {
+      const step = steps.find(item => item.agentId === event.agentId && item.endedAt === undefined);
+      if (step) { step.endedAt = event.at; step.failed = event.phase === 'failed'; }
+    }
+  }
+  return steps;
+}
 export async function withAiAgentActivity<T>(agentId: AiAgentId, work: () => Promise<T>, report?: AiAgentActivityReporter): Promise<T> {
   report?.({ agentId, phase: 'started', at: Date.now() });
-  try { return await work(); }
-  finally { report?.({ agentId, phase: 'completed', at: Date.now() }); }
+  try {
+    const result = await work();
+    report?.({ agentId, phase: 'completed', at: Date.now() });
+    return result;
+  } catch (error) {
+    report?.({ agentId, phase: 'failed', at: Date.now() });
+    throw error;
+  }
 }

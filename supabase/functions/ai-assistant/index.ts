@@ -8,7 +8,9 @@ import {
 import { resolvePersianCalendarContext } from '../_shared/persian-calendar-resolver.ts';
 import { PEYDA_REGULAR_WOFF2_BASE64 } from './peyda-font.ts';
 import { GEMINI_PREBUILT_VOICES, resolveSpeechModelProvider } from '../_shared/speech-model-provider.ts';
-import { getAiAgentLabel, resolveAiAgentId, withAiAgentActivity, type AiAgentActivityReporter } from '../_shared/ai-agents.ts';
+import { getAiAgentLabel, resolveAiAgentId, withAiAgentActivity, appendAiAgentEvent, type AiAgentActivity, type AiAgentActivityReporter } from '../_shared/ai-agents.ts';
+
+import { AI_CHAT_FORMAT_INSTRUCTION_FA } from '../_shared/ai-chat-formatting.ts';
 
 type AssistantAction =
   | 'chat'
@@ -3133,7 +3135,7 @@ const buildPromptMessages = (
     return [
       {
         role: 'system',
-        content: 'شما در حالت گفتگوی آزاد هستید. فقط به پرسش کاربر، دانش عمومی خود و حافظهٔ شخصیِ مجاز زیر تکیه کنید. از دانش، اسناد، رکوردها، گزارش‌ها، نام شرکت، کاربران، نقش‌ها، تنظیمات، فرآیندها، صفحهٔ فعلی یا هر دادهٔ سازمانی استفاده نکنید و دربارهٔ آن‌ها ادعا نکنید. اگر کاربر به اطلاعات سازمانی نیاز دارد، از او بخواهید حالت گفتگوی آزاد را خاموش کند. پاسخ‌ها فارسی، روشن و کوتاه باشند. حافظه فقط برای رعایت ترجیح‌های پایدار کاربر است و نباید به‌عنوان حقیقت بیرونی تلقی شود.',
+        content: AI_CHAT_FORMAT_INSTRUCTION_FA + ' ' + 'شما در حالت گفتگوی آزاد هستید. فقط به پرسش کاربر، دانش عمومی خود و حافظهٔ شخصیِ مجاز زیر تکیه کنید. از دانش، اسناد، رکوردها، گزارش‌ها، نام شرکت، کاربران، نقش‌ها، تنظیمات، فرآیندها، صفحهٔ فعلی یا هر دادهٔ سازمانی استفاده نکنید و دربارهٔ آن‌ها ادعا نکنید. اگر کاربر به اطلاعات سازمانی نیاز دارد، از او بخواهید حالت گفتگوی آزاد را خاموش کند. پاسخ‌ها فارسی، روشن و کوتاه باشند. حافظه فقط برای رعایت ترجیح‌های پایدار کاربر است و نباید به‌عنوان حقیقت بیرونی تلقی شود.',
       },
       ...freeChatHistory,
       {
@@ -3229,7 +3231,7 @@ const buildPromptMessages = (
     ? ' شما در نقش طراح تقویم محتوایی این کسب‌وکار هستید. تقویم، مشتری مرتبط، پروژه‌ها، فعالیت‌ها، سازمان، نقش‌ها و الگوهای فرآیندِ موجود در current_page و authoritative_process_context منابع اصلی شما هستند. اگر این تقویم برای مشتری تعریف شده، لحن، مخاطب، پیشنهاد محتوا و اولویت‌ها را بر اساس همان مشتری و داده‌های مجاز او تنظیم کن؛ اما هیچ داده‌ای از مشتری یا سازمان دیگر حدس نزن. در گفتگوی متنی ابتدا هدف تجاری، مخاطب، کانال‌ها، بازه زمانی، تعداد یا فرمت محتوا، پیام اصلی، محدودیت‌های برند یا تاییدکننده را فقط در صورت نامشخص بودن و حداکثر در ۲ تا ۳ سوال کوتاه بپرس. پیش از پیشنهاد زمان‌بندی، تعارض با محتوای موجود و تعطیلی یا مناسبت تاییدشده را بررسی کن. برای اجرای فرآیند، فقط الگوها، مرحله‌ها، مسئول پیش‌فرض، فیلدها، وضعیت‌ها و اتوماسیون‌هایی را به‌کار ببر که واقعاً در context آمده‌اند؛ جزئیات ثبت‌نشده را نساز یا به الگو نسبت نده.'
     : '';
 
-  const systemContent = `${tenantIdentity}${conversationContinuity}${recordScopeInstruction}${processGroundingInstruction}${contentCalendarDesignerInstruction} اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. personal_memory شامل ترجیح‌های پایدار خود همین کاربر است؛ فقط در حد مرتبط آن‌ها را رعایت کنید و آن را دادهٔ سازمان یا حقیقت بیرونی فرض نکنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction}${copyableOutputInstruction}${jalaliAndReportsInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه ایجنت «ساخت فایل» را فعال کند.`;
+  const systemContent = `${AI_CHAT_FORMAT_INSTRUCTION_FA} ${tenantIdentity}${conversationContinuity}${recordScopeInstruction}${processGroundingInstruction}${contentCalendarDesignerInstruction} اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. personal_memory شامل ترجیح‌های پایدار خود همین کاربر است؛ فقط در حد مرتبط آن‌ها را رعایت کنید و آن را دادهٔ سازمان یا حقیقت بیرونی فرض نکنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction}${copyableOutputInstruction}${jalaliAndReportsInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه ایجنت «ساخت فایل» را فعال کند.`;
 
   const historyMessages = (historyRows || [])
     .filter((item) => ['user', 'assistant'].includes(String(item?.role || '')))
@@ -7239,6 +7241,7 @@ const ssePayload = (event: string, payload: Record<string, any>) =>
 
 const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const encoder = new TextEncoder();
+  let activityLog: AiAgentActivity[] = [];
   return new Response(new ReadableStream({
     start(controller) {
       let streamClosed = false;
@@ -7254,7 +7257,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
       (async () => {
         let prepared: any = null;
         try {
-          prepared = await prepareChatRequest(supabaseUrl, serviceRoleKey, authContext, body, activity => send('agent_activity', activity));
+          prepared = await prepareChatRequest(supabaseUrl, serviceRoleKey, authContext, body, activity => { activityLog = appendAiAgentEvent(activityLog, activity); send('agent_activity', activity); });
           const respondingAgent = resolveAiAgentId(prepared.freeChatMode ? 'free_chat' : prepared.capability);
           send('meta', {
             success: true,
@@ -7274,7 +7277,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
             onDelta: (text) => {
               if (text) send('delta', { text });
             },
-          }), activity => send('agent_activity', activity));
+          }), activity => { activityLog = appendAiAgentEvent(activityLog, activity); send('agent_activity', activity); });
 
           const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
             thread_id: prepared.thread.id,
@@ -7283,6 +7286,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
             provider: aiResult.provider,
             model: aiResult.model,
             metadata: {
+              agent_activity_log: activityLog,
               context_summary: prepared.pageContext.summary,
               context_key: prepared.contextKey,
               company_currency_label: prepared.companyContext?.currency_label || null,
@@ -7326,6 +7330,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
           await patchChatThreadAfterAssistant(supabaseUrl, serviceRoleKey, authContext, prepared, aiResult);
 
           send('done', {
+            agentActivityLog: activityLog,
             success: true,
             threadId: prepared.thread.id,
             threadTitle: prepared.thread.title || null,
@@ -7360,7 +7365,8 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
               provider: prepared.providerConfig.provider,
               model: prepared.providerConfig.model,
               metadata: {
-                context_summary: prepared.pageContext.summary,
+                agent_activity_log: activityLog,
+              context_summary: prepared.pageContext.summary,
                 context_key: prepared.contextKey,
                 company_currency_label: prepared.companyContext?.currency_label || null,
                 knowledge_chunk_ids: prepared.knowledgeChunks.map((chunk: any) => chunk.id),
@@ -7389,6 +7395,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
               incomplete: true,
             }).catch(() => []);
             send('done', {
+              agentActivityLog: activityLog,
               success: true,
               incomplete: true,
               threadId: prepared.thread.id,
@@ -7427,7 +7434,8 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
               provider: prepared.providerConfig.provider,
               model: prepared.providerConfig.model,
               metadata: {
-                context_summary: prepared.pageContext.summary,
+                agent_activity_log: activityLog,
+              context_summary: prepared.pageContext.summary,
                 context_key: prepared.contextKey,
                 company_currency_label: prepared.companyContext?.currency_label || null,
                 knowledge_chunk_ids: prepared.knowledgeChunks.map((chunk: any) => chunk.id),
@@ -8945,7 +8953,9 @@ const handlePrimaryModelTaskBundle = async (
   });
 };
 
-const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any, reportActivity?: AiAgentActivityReporter) => {
+  let activityLog: AiAgentActivity[] = [];
+  const report: AiAgentActivityReporter = event => { activityLog = appendAiAgentEvent(activityLog, event); reportActivity?.(event); };
   const selectedCapabilities = Array.from(new Set(Array.isArray(body?.capabilities)
     ? body.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean)
     : []));
@@ -8988,13 +8998,13 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
   const previousTaskContext = existingThread?.metadata?.task_bundle_context && typeof existingThread.metadata.task_bundle_context === 'object'
     ? existingThread.metadata.task_bundle_context
     : null;
-  const transcripts = await transcribeTaskBundleVoices(
+  const transcripts = await withAiAgentActivity('voice_input', () => transcribeTaskBundleVoices(
     supabaseUrl,
     serviceRoleKey,
     authContext,
     inputs,
     decisionProviderConfig,
-  );
+  ), inputs.some(input => !!input.audio) ? report : undefined);
   const voipAnalysisContext = await buildVoipAnalysisContext(
     supabaseUrl,
     serviceRoleKey,
@@ -9023,7 +9033,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
 
   // Store exactly what the user supplied once. All following prompts are
   // private agent steps and must never replace this visible conversation turn.
-  const bundlePageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
+  const bundlePageContext = await withAiAgentActivity('organization_data', () => buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext), report);
   const publicThread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
     threadId: workingThreadId,
     title: baseMessage || 'پیوست‌های ارسالی برای هوش مصنوعی',
@@ -9066,8 +9076,13 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     },
   });
 
-  const runStep = async (stepName: string, promise: Promise<Response>) => {
-    const data = await parseAssistantJsonResponse(await promise);
+  const runStep = async (stepName: string, work: () => Promise<Response>) => {
+    const agentId = resolveAiAgentId(stepName === 'chat' ? 'text_chat' : stepName.replace(/_\d+$/, ''));
+    report({ agentId, phase: 'started', at: Date.now() });
+    let data: any;
+    try { data = await parseAssistantJsonResponse(await work()); }
+    catch (error) { report({ agentId, phase: 'failed', at: Date.now() }); throw error; }
+    report({ agentId, phase: data?.success === false ? 'failed' : 'completed', at: Date.now() });
     if (data?.threadId) workingThreadId = String(data.threadId);
     if (data?.provider) provider = data.provider;
     if (data?.model) model = data.model;
@@ -9100,7 +9115,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     if (files.length > 0) {
       for (const [fileIndex, currentFile] of files.slice(0, 6).entries()) {
         const filename = String(currentFile?.filename || `پیوست ${fileIndex + 1}`).trim();
-        const analysisData = await runStep(`document_analysis_${fileIndex + 1}`, handleChatWithFile(supabaseUrl, serviceRoleKey, authContext, {
+        const analysisData = await runStep(`document_analysis_${fileIndex + 1}`, () => handleChatWithFile(supabaseUrl, serviceRoleKey, authContext, {
           ...body,
           action: 'chat_with_file',
           capability: 'document_analysis',
@@ -9121,7 +9136,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
         if (part) analysisParts.push(`نتیجه ${filename}:\n${part}`);
       }
     } else {
-      const analysisData = await runStep('document_analysis', handleChat(supabaseUrl, serviceRoleKey, authContext, {
+      const analysisData = await runStep('document_analysis', () => handleChat(supabaseUrl, serviceRoleKey, authContext, {
         ...body,
         action: 'chat',
         capability: 'document_analysis',
@@ -9150,7 +9165,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     const recordMutationMode = String(body?.recordMutationMode || body?.record_mutation_mode || '').trim() === 'update'
       ? 'update'
       : 'create';
-    const data = await runStep('record_creation', handleRecordMutationFromPrompt(supabaseUrl, serviceRoleKey, authContext, {
+    const data = await runStep('record_creation', () => handleRecordMutationFromPrompt(supabaseUrl, serviceRoleKey, authContext, {
       ...body,
       action: recordMutationMode === 'update' ? 'update_record_from_prompt' : 'create_record_from_prompt',
       outputMode: recordMutationMode === 'update' ? 'update_record' : 'create_record',
@@ -9166,7 +9181,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
   }
 
   if (selectedCapabilitySet.has('process_operation')) {
-    const data = await runStep('process_operation', handleProcessOperationFromPrompt(supabaseUrl, serviceRoleKey, authContext, {
+    const data = await runStep('process_operation', () => handleProcessOperationFromPrompt(supabaseUrl, serviceRoleKey, authContext, {
       ...body,
       action: 'process_operation_from_prompt',
       message: sharedPrompt,
@@ -9185,7 +9200,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
       'اگر موضوع، سند پرداخت/رسید/هزینه است، جدول داده‌های استخراج‌شده، ابهام‌ها و پیشنهاد ثبت را هم بیاور.',
       sharedPrompt,
     ].join('\n\n');
-    const data = await runStep('document_generation', handleGenerateDocument(supabaseUrl, serviceRoleKey, authContext, {
+    const data = await runStep('document_generation', () => handleGenerateDocument(supabaseUrl, serviceRoleKey, authContext, {
       ...body,
       action: 'generate_document',
       message: documentPrompt,
@@ -9203,7 +9218,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     && !selectedCapabilitySet.has('process_operation')
     && !selectedCapabilitySet.has('document_generation');
   if (needsVisibleFinalAnswer) {
-    const data = await runStep('chat', handleChat(supabaseUrl, serviceRoleKey, authContext, {
+    const data = await runStep('chat', () => handleChat(supabaseUrl, serviceRoleKey, authContext, {
       ...body,
       action: 'chat',
       message: sharedPrompt || prompt,
@@ -9258,8 +9273,16 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     ? await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, workingThreadId, 200)
     : [];
 
+  const visibleMessages = filterVisibleAiMessages(threadMessages.length ? threadMessages : collectedMessages);
+  const finalMessageId = voiceOutput?.message?.id || collectedResults[collectedResults.length - 1]?.messageId;
+  const finalMessage = visibleMessages.find(item => item.role === 'assistant' && item.id === finalMessageId);
+  if (finalMessage?.id && activityLog.length) {
+    finalMessage.metadata = { ...(finalMessage.metadata || {}), agent_activity_log: activityLog };
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', { id: `eq.${finalMessage.id}`, org_id: `eq.${authContext.orgId}` }, { metadata: finalMessage.metadata });
+  }
   return json(200, {
     success: true,
+    agentActivityLog: activityLog,
     threadId: workingThreadId,
     messageId: voiceOutput?.message?.id || collectedResults[collectedResults.length - 1]?.messageId || null,
     answer: finalAnswer,
@@ -9278,7 +9301,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     } : null,
     taskBundle: bundleMeta,
     results: collectedResults,
-    messages: filterVisibleAiMessages(threadMessages.length ? threadMessages : collectedMessages),
+    messages: visibleMessages,
   });
 };
 
@@ -13941,7 +13964,25 @@ Deno.serve(async (req: Request) => {
     if (action === 'generate_video') return await handleGenerateVideo(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_video_status') return await handleGetVideoStatus(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'generate_document') return await handleGenerateDocument(supabaseUrl, serviceRoleKey, authContext, body);
-    if (action === 'run_task_bundle') return await handleRunTaskBundle(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'run_task_bundle') {
+      if (body?.stream !== true) return await handleRunTaskBundle(supabaseUrl, serviceRoleKey, authContext, body);
+      const encoder = new TextEncoder();
+      return new Response(new ReadableStream({
+        start(controller) {
+          let closed = false;
+          const send = (event: string, payload: any) => { if (!closed) { try { controller.enqueue(encoder.encode(ssePayload(event, payload))); } catch { closed = true; } } };
+          const heartbeat = setInterval(() => send('ping', { at: Date.now() }), STREAM_HEARTBEAT_INTERVAL_MS);
+          (async () => {
+            try {
+              const result = await handleRunTaskBundle(supabaseUrl, serviceRoleKey, authContext, body, event => send('agent_activity', event));
+              const payload = await result.json();
+              send(payload?.success === false ? 'error' : 'done', payload);
+            } catch (error) { send('error', { success: false, message: 'اجرای درخواست کامل نشد. دوباره تلاش کنید.' }); }
+            finally { clearInterval(heartbeat); if (!closed) { try { controller.close(); } catch { /* Disconnected client. */ } closed = true; } }
+          })();
+        },
+      }), { headers: { ...corsHeaders, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', 'X-Kalam-Function-Build': FUNCTION_BUILD } });
+    }
     if (action === 'embed_document_chunks') return await handleEmbedDocumentChunks(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'rebuild_instruction_ai_context') return await handleRebuildInstructionAiContext(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'rebuild_job_description_ai_context') return await handleRebuildJobDescriptionAiContext(supabaseUrl, serviceRoleKey, authContext, body);

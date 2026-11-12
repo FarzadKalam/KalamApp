@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { App, Avatar, Button, Checkbox, Drawer, Empty, Input, Modal, Popconfirm, Popover, Progress, Space, Spin, Tag, Tooltip } from 'antd';
 import { CheckOutlined, CloseOutlined, CompressOutlined, CopyOutlined, DeleteOutlined, EditOutlined, ForwardOutlined, MenuOutlined, ShareAltOutlined, UserAddOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -35,6 +35,11 @@ import MessageAttachmentGallery from '../messaging/MessageAttachmentGallery';
 import { extractAiMessageAttachments, normalizeAiMessageText } from '../../utils/aiMessageParts';
 import ComposerAttachmentChips, { type ComposerAttachmentChipItem } from '../common/ComposerAttachmentChips';
 import AiMessageRenderer from './AiMessageRenderer';
+import AiExecutionTimeline from './AiExecutionTimeline';
+import { getAiModelTransitions } from '../../utils/aiChatPresentation';
+import { readAiTaskResponse } from '../../utils/aiEventStream';
+import { getSelectedOrganizationId } from '../../utils/organizationContext';
+import { appendAiAgentEvent } from '../../supabase/functions/_shared/ai-agents';
 import { type AiRecordMutationDraft } from './AiRecordMutationApprovalCard';
 import QuickRecordFormModal from './QuickRecordFormModal';
 import AiProcessOperationApprovalCard from './AiProcessOperationApprovalCard';
@@ -209,6 +214,7 @@ interface AssistantPanelProps {
   onThreadRenamed?: (threadId: string, title: string, thread?: any) => void;
   onThreadUpserted?: (thread: any) => void;
   showThreadListButton?: boolean;
+  onOpenThreadList?: () => void;
 }
 
 const parseRouteContext = (pathname: string, search: string): AssistantContext => {
@@ -483,11 +489,14 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   onThreadRenamed,
   onThreadUpserted,
   showThreadListButton = false,
+  onOpenThreadList,
 }) => {
   const { message } = App.useApp();
   const location = useLocation();
   const navigate = useNavigate();
   const [input, setInput] = useState('');
+  const [queuedGuidance, setQueuedGuidance] = useState<string | null>(null);
+  const [guidanceMode, setGuidanceMode] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -562,6 +571,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const renamingThreadRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
+  const historyScrollPendingRef = useRef(false);
+  const displayedHistoryThreadRef = useRef<string | null>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
   const autoSubmittedInitialPromptRef = useRef('');
   const autoSubmittedInitialBundleRef = useRef('');
@@ -879,21 +890,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   );
   const activeRecordCreationSchema = recordCreationSchema || pendingRecordCreationSchema;
 
-  const callAssistant = useCallback(async (body: Record<string, any>) => {
-    const requestBody = {
-      ...body,
-      composerPreferences: body.composerPreferences ?? composerPreferencesRef.current,
-    };
-    const { data, error } = await supabase.functions.invoke('ai-assistant', { body: requestBody });
-    if (error) throw error;
-    if (!data?.success) {
-      const nextError: any = new Error(String(data?.message || 'درخواست دستیار ناموفق بود.'));
-      nextError.payload = data;
-      throw nextError;
-    }
-    return data;
-  }, []);
-
   const copyText = useCallback(async (text: string, label = 'متن') => {
     const value = String(text || '').trim();
     if (!value) return;
@@ -988,6 +984,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         apikey: SUPABASE_ANON_KEY,
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
+        ...(getSelectedOrganizationId() ? { 'x-client-info': `kalamapp; org=${getSelectedOrganizationId()}` } : {}),
       },
       body: JSON.stringify({ ...body, action: 'chat_stream', composerPreferences: body.composerPreferences ?? composerPreferencesRef.current }),
       signal: controller.signal,
@@ -1067,6 +1064,42 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       });
     }
     if (streamAbortRef.current === controller) streamAbortRef.current = null;
+  }, []);
+
+  const callAssistant = useCallback(async (body: Record<string, any>) => {
+    const requestBody = {
+      ...body,
+      composerPreferences: body.composerPreferences ?? composerPreferencesRef.current,
+    };
+    if (body.action === 'run_task_bundle') {
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) throw new Error('نشست شما معتبر نیست. دوباره وارد حساب شوید.');
+      const orgId = getSelectedOrganizationId();
+      const response = await fetch(`${SUPABASE_URL.replace(/\/+$/, '')}/functions/v1/ai-assistant`, {
+        method: 'POST', headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
+          ...(orgId ? { 'x-client-info': `kalamapp; org=${orgId}` } : {}) },
+        body: JSON.stringify({ ...requestBody, stream: true }),
+      });
+      return readAiTaskResponse(response, payload => {
+        const event = parseAiAgentActivity(payload); if (!event) return;
+        setMessages(current => {
+          const target = [...current].reverse().find(item => item.metadata?.pending_status === true);
+          return current.map(item => item.id === target?.id ? { ...item, metadata: { ...(item.metadata || {}),
+            agent_activities: applyAiAgentActivity(item.metadata?.agent_activities || [], event),
+            agent_activity_log: appendAiAgentEvent(item.metadata?.agent_activity_log || [], event),
+          } } : item);
+        });
+      });
+    }
+    const { data, error } = await supabase.functions.invoke('ai-assistant', { body: requestBody });
+    if (error) throw error;
+    if (!data?.success) {
+      const nextError: any = new Error(String(data?.message || 'درخواست دستیار ناموفق بود.'));
+      nextError.payload = data;
+      throw nextError;
+    }
+    return data;
   }, []);
 
   const buildBundleInputPayloads = useCallback(async () => Promise.all(bundleInputs.map(async (item) => {
@@ -1568,6 +1601,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           provider: item.provider || null,
           model: item.model || null,
         }));
+      if (displayedHistoryThreadRef.current !== requestedThreadId) {
+        displayedHistoryThreadRef.current = requestedThreadId;
+        historyScrollPendingRef.current = true;
+        shouldStickToBottomRef.current = true;
+      }
       setMessages(nextMessages);
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'خواندن تاریخچه چت ناموفق بود.'));
@@ -1608,6 +1646,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     // allowed to initialise the composer again.
     if (initializedPanelSessionRef.current === initialPanelSessionKey) return;
     initializedPanelSessionRef.current = initialPanelSessionKey;
+    displayedHistoryThreadRef.current = null;
+    historyScrollPendingRef.current = false;
+    shouldStickToBottomRef.current = true;
+    setQueuedGuidance(null);
+    setGuidanceMode(false);
     setThreadId(normalizedInitialThreadId);
     setThreadContext(null);
     setMessages([]);
@@ -1698,14 +1741,24 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     };
   }, [active, callAssistant]);
 
-  useEffect(() => {
-    if (!active) return;
+  useLayoutEffect(() => {
+    if (!active || messages.length === 0) return;
+    const initialNode = scrollRef.current;
+    if (historyScrollPendingRef.current && initialNode) {
+      // Restore history before paint; never animate through the whole conversation.
+      historyScrollPendingRef.current = false;
+      const previousBehavior = initialNode.style.scrollBehavior;
+      initialNode.style.scrollBehavior = 'auto';
+      initialNode.scrollTop = initialNode.scrollHeight;
+      initialNode.style.scrollBehavior = previousBehavior;
+      return;
+    }
     const frameId = window.requestAnimationFrame(() => {
       const node = scrollRef.current;
       if (!node) return;
       if (!shouldStickToBottomRef.current) return;
       if (typeof node.scrollTo === 'function') {
-        node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' });
+        node.scrollTo({ top: node.scrollHeight, behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
         return;
       }
       node.scrollTop = node.scrollHeight;
@@ -1754,7 +1807,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             const activity = parseAiAgentActivity(payload);
             if (!activity) return;
             setMessages(prev => prev.map(item => item.id === thinkingMessage.id ? {
-              ...item, metadata: { ...(item.metadata || {}), agent_activities: applyAiAgentActivity(item.metadata?.agent_activities || [], activity) },
+              ...item, metadata: { ...(item.metadata || {}), agent_activities: applyAiAgentActivity(item.metadata?.agent_activities || [], activity),
+                agent_activity_log: appendAiAgentEvent(item.metadata?.agent_activity_log || [], activity) },
             } : item));
           },
           onMeta: (payload) => {
@@ -2089,7 +2143,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           id: `assistant-error-${Date.now()}`,
           role: 'assistant',
           content: errorText,
-          metadata: { failed: true },
+          metadata: { failed: true, agent_activity_log: prev.find(item => item.id === thinkingMessage.id)?.metadata?.agent_activity_log || [] },
           created_at: new Date().toISOString(),
         },
       ]);
@@ -2097,6 +2151,16 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       setSubmitting(false);
     }
   }, [activeRecordCreationSchema, applyThreadTitleFromResponse, callAssistant, callAssistantStream, contextWithSelection, executeAutoRoute, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, submitting, threadId]);
+
+  // Wait for persistence of the prior response; never overlap completion/mutation requests.
+  useEffect(() => {
+    if (!queuedGuidance || submitting || loadingThread || !active || !threadId || pendingAiAction) return;
+    const latest = [...messages].reverse().find(item => item.role === 'assistant');
+    if (latest?.metadata?.failed || latest?.metadata?.incomplete || latest?.metadata?.stopped) return;
+    const guidance = queuedGuidance;
+    setQueuedGuidance(null); setGuidanceMode(false);
+    void submitChat(guidance, 'guidance');
+  }, [active, loadingThread, messages, pendingAiAction, queuedGuidance, submitChat, submitting, threadId]);
 
   useEffect(() => {
     const prompt = String(initialPrompt || '').trim();
@@ -2440,6 +2504,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       created_at: new Date().toISOString(),
       metadata: {
         pending_status: true,
+        live_task_bundle: true,
         capabilities: effectiveCapabilities.length > 0 ? effectiveCapabilities : ['auto_router'],
         kind: 'document_analysis',
         started_at: Date.now(),
@@ -2567,6 +2632,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               usage: data.usage,
               ...(data?.agentPlan ? { agent_plan: data.agentPlan } : {}),
               capability: activeRecordCreationSchema ? 'record_creation' : processOperationMode ? 'process_operation' : 'document_analysis',
+              agent_activity_log: data.agentActivityLog || prev.find(item => item.id === thinkingMessage.id)?.metadata?.agent_activity_log || [],
               ...(data?.file ? { file: data.file } : {}),
               ...(data?.image ? { image: data.image } : {}),
             },
@@ -2601,7 +2667,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             id: `assistant-bundle-error-${Date.now()}`,
             role: 'assistant',
             content: errorText,
-            metadata: { failed: true },
+            metadata: { failed: true, agent_activity_log: prev.find(item => item.id === thinkingMessage.id)?.metadata?.agent_activity_log || [] },
             created_at: new Date().toISOString(),
           },
         ]);
@@ -2862,7 +2928,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   // Typing in the composer must not rebuild every rich message card.  Several
   // cards contain media previews and markdown, so keeping this callback stable
   // makes the compose box responsive even in long conversations.
+  const modelTransitions = useMemo(() => getAiModelTransitions(messages), [messages]);
   const renderMessage = useCallback((item: ChatMessage, index: number) => {
+    const modelTransition = modelTransitions.get(index);
+    const executionEvents: AiAgentActivity[] = (Array.isArray(item.metadata?.agent_activity_log) ? item.metadata.agent_activity_log : []).map(parseAiAgentActivity).filter((event: AiAgentActivity | null): event is AiAgentActivity => Boolean(event));
     const isUser = item.role === 'user';
     const messageAuthor = item.metadata?.author && typeof item.metadata.author === 'object' ? item.metadata.author : null;
     const authorName = String(messageAuthor?.name || '').trim() || currentUserView.name;
@@ -2886,7 +2955,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       ? (typeof providerRaw === 'string' ? providerRaw : JSON.stringify(providerRaw, null, 2))
       : '';
     return (
-      <div key={item.id} className={`flex items-start gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+      <div key={item.id} className="min-w-0">
+      {modelTransition ? <div className="ai-model-transition" role="separator" aria-label={`مدل از ${modelTransition.from} به ${modelTransition.to} تغییر کرد`}><span>از اینجا مدل از <bdi>{modelTransition.from}</bdi> به <bdi>{modelTransition.to}</bdi> تغییر کرد</span></div> : null}
+      <div className={`flex items-start gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
         {isUser ? (
           <ProfileAvatar size={28} src={authorAvatarUrl} name={authorName} icon={<UserOutlined />} />
         ) : (
@@ -2897,7 +2968,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           />
         )}
         <div className={`ai-chat-message-column ${isUser ? 'is-user items-end' : 'items-start'} flex flex-col`}>
-          {pendingKind ? (
+          {isUser && item.metadata?.input_kind === 'guidance' ? <span className="ai-chat-meta">هدایت پاسخ</span> : null}
+          {!isUser && executionEvents.length > 0 ? <AiExecutionTimeline events={executionEvents} running={isStreaming || waitingForResponse} /> : null}
+          {pendingKind && !(pendingKind === 'document_analysis' && item.metadata?.live_task_bundle && executionEvents.length > 0) ? (
             <AiGenerationStatusCard
               kind={pendingKind}
               startedAtMs={Number(item.metadata?.started_at) || Date.now()}
@@ -2912,12 +2985,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           <div
             className={`ai-chat-message${isUser ? ' is-user' : ''}`}
           >
-            {isUser ? messageText : waitingForResponse ? (
+            {isUser ? messageText : waitingForResponse && executionEvents.length === 0 ? (
               <AiActivityStatus agentId={respondingAgent} activities={activeAgents} onStop={isStreaming ? stopActiveStream : undefined} />
             ) : (
               <AiMessageRenderer
                 agentId={respondingAgent}
                 activities={activeAgents}
+                showActivityStatus={executionEvents.length === 0}
                 text={messageText}
                 streaming={isStreaming}
                 failed={isFailed}
@@ -3009,8 +3083,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           </div>
         </div>
       </div>
+      </div>
     );
   }, [
+    modelTransitions,
     contextWithSelection.mode,
     contextWithSelection.moduleId,
     contextWithSelection.recordId,
@@ -3206,11 +3282,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             </div>
           </div>
           <Space size={4}>
-            {showThreadListButton ? (
-              <Tooltip title="فهرست گفتگوها">
-                <Button type="text" size="small" icon={<MenuOutlined />} onClick={() => setThreadListOpen(true)} aria-label="فهرست گفتگوهای هوش مصنوعی" />
-              </Tooltip>
-            ) : null}
             {!checkingAiKnowledge && !aiKnowledgeConfigured ? (
               <Popover
                 trigger="click"
@@ -3271,6 +3342,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             >
               <Button type="text" size="small" danger icon={<DeleteOutlined />} loading={deletingThread} disabled={messages.length === 0 && !threadId} aria-label="حذف گفتگوی هوش مصنوعی" />
             </Popconfirm>
+            {showThreadListButton || onOpenThreadList ? <Tooltip title="فهرست گفتگوها"><Button type="text" className={`ai-thread-menu-button${!showThreadListButton ? ' md:!hidden' : ''}`} icon={<MenuOutlined />} onClick={() => onOpenThreadList ? onOpenThreadList() : setThreadListOpen(true)} aria-label="فهرست گفتگوهای هوش مصنوعی" /></Tooltip> : null}
           </Space>
         </div>
         <Space size={[6, 6]} wrap>
@@ -3430,11 +3502,21 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             </Space>
           </div>
         ) : null}
+        {submitting && messages.some(item => item.metadata?.streaming === true) && !guidanceMode && !queuedGuidance ? <div className="ai-guidance-toolbar"><Button type="text" aria-label="هدایت پاسخ" icon={<ForwardOutlined />} onClick={() => setGuidanceMode(true)}>هدایت پاسخ</Button></div> : null}
+        {guidanceMode || queuedGuidance ? <div className="ai-guidance-note" role="status"><span>{queuedGuidance ? `راهنمایی در انتظار اعمال: ${queuedGuidance}` : 'راهنمایی را بنویسید؛ پس از پایان پاسخ جاری اعمال می‌شود.'}</span>{queuedGuidance && !submitting ? <Button type="text" onClick={() => { const text = queuedGuidance; setQueuedGuidance(null); void submitChat(text, 'guidance'); }}>اعمال راهنمایی</Button> : null}<Button type="text" aria-label="لغو هدایت پاسخ" onClick={() => { setGuidanceMode(false); setQueuedGuidance(null); }} icon={<CloseOutlined />} /></div> : null}
         <AiMessageComposer value={input} onChange={setInput}
-          onSubmit={() => void (shouldUseTaskBundle ? submitTaskBundle() : documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat())}
-          canSubmit={Boolean(input.trim() || bundleInputs.length)} busy={submitting || generatingImage || generatingVoiceOutput || generatingVideo || generatingDocument}
+          onSubmit={() => {
+            if (guidanceMode) {
+              if (input.trim().length > 4000) { message.warning('راهنمایی را کوتاه‌تر از چهار هزار نویسه بنویسید.'); return; }
+              if (submitting) { setQueuedGuidance(input.trim()); setInput(''); setGuidanceMode(false); }
+              else { setGuidanceMode(false); void submitChat(undefined, 'guidance'); }
+              return;
+            }
+            void (shouldUseTaskBundle ? submitTaskBundle() : documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat());
+          }}
+          canSubmit={guidanceMode ? Boolean(input.trim()) : Boolean(input.trim() || bundleInputs.length)} busy={!guidanceMode && (submitting || generatingImage || generatingVoiceOutput || generatingVideo || generatingDocument)}
           placeholder="سوال خود را بنویسید..."
-          sendLabel={shouldUseTaskBundle ? 'ارسال' : documentMode ? 'ساخت فایل' : videoMode ? 'ساخت ویدیو' : voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : activeRecordCreationSchema ? 'آماده‌سازی پیش‌نویس' : 'ارسال'}
+          sendLabel={guidanceMode ? 'ثبت راهنمایی پاسخ' : shouldUseTaskBundle ? 'ارسال' : documentMode ? 'ساخت فایل' : videoMode ? 'ساخت ویدیو' : voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : activeRecordCreationSchema ? 'آماده‌سازی پیش‌نویس' : 'ارسال'}
           tools={<AiCapabilityComposerActions
             selected={selectedCapabilities}
             autoSuggested={autoSuggestedCapabilities}

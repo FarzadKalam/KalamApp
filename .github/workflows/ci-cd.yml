@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       deploy:
-        description: 'Deploy this tested revision, including explicit phases 582/583 and ai-assistant'
+        description: 'Deploy tested frontend and updated application functions; no database migration'
         type: boolean
         default: false
 
@@ -107,8 +107,12 @@ jobs:
         timeout-minutes: 10
         run: >-
           npx vitest run supabase/functions/_shared/ai-agents.test.ts supabase/functions/_shared/ai-agent-contract.test.ts
+          utils/aiChatEnhancements.test.ts
+          utils/ownerPasswordPolicy.test.ts
+          utils/email.test.ts
           components/ai/AiMessageComposer.test.tsx components/ai/AiGenerationStatusCard.test.tsx
           components/ai/AiChatSurfaceV2.test.tsx components/ai/AssistantPanel.operators.test.tsx
+          components/common/TooltipDismissalBoundary.test.tsx
           components/ai/AiCapabilityComposerActions.test.tsx components/ai/AiComposeModelBar.test.tsx
           components/ai/AiRecordMutationApprovalCard.test.tsx components/ai/AiMessageRenderer.test.tsx
           --maxWorkers=1 --no-file-parallelism
@@ -139,7 +143,7 @@ jobs:
         run: deno check --node-modules-dir=none supabase/functions/email-admin/index.ts supabase/functions/send-email/index.ts supabase/functions/email-provider-events/index.ts supabase/functions/email-sync-worker/index.ts supabase/functions/send-sms/index.ts
 
       - name: AI assistant dependency checks
-        run: deno check --node-modules-dir=none supabase/functions/_shared/ai-agents.ts supabase/functions/ai-assistant/index.ts
+        run: deno check --node-modules-dir=none supabase/functions/_shared/ai-agents.ts supabase/functions/ai-assistant/index.ts supabase/functions/user-admin/index.ts supabase/functions/_shared/owner-password-policy.ts
 
       - name: Messaging attachment and viewer isolation regression checks
         timeout-minutes: 8
@@ -351,19 +355,7 @@ jobs:
             exit 1
           fi
 
-      - name: Apply the explicit cash and bank performance migration
-        shell: pwsh
-        env:
-          DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
-          DEPLOY_PORT: ${{ secrets.SERVER_PORT }}
-          DEPLOY_USER: ${{ secrets.SERVER_USER }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $migrations = @('database_v1_phase582_cash_bank_context_performance.sql', 'database_v1_phase583_internal_organization_lookup_index.sql')
-          $migrations | ForEach-Object { Get-FileHash -Algorithm SHA256 -LiteralPath $_ } | Format-List
-          & ./scripts/run-server-db-migrations.ps1 -SqlFiles $migrations
-
-      - name: Deploy the AI assistant with shared agents
+      - name: Deploy updated application functions
         shell: pwsh
         env:
           DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
@@ -371,7 +363,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVER_USER }}
           DEPLOY_FUNCTIONS_PATH: /opt/kalamapp/supabase/docker/volumes/functions
           DEPLOY_FUNCTIONS_COMPOSE_DIR: /opt/kalamapp/supabase/docker
-        run: ./scripts/deploy-supabase-function.ps1 -Functions @('ai-assistant')
+        run: ./scripts/deploy-supabase-function.ps1 -Functions @('ai-assistant', 'user-admin')
 
       - name: Activate release
         env:

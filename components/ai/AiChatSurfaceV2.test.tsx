@@ -47,6 +47,79 @@ vi.mock('../../supabaseClient', () => ({
 }));
 
 describe('AiChatSurfaceV2', () => {
+  it('positions opened history at the last message without animating, including after switching threads', async () => {
+    const height = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function(this: HTMLElement) { return this.classList.contains('ai-chat-message-list') ? 5000 : 0; });
+    const viewport = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function(this: HTMLElement) { return this.classList.contains('ai-chat-message-list') ? 600 : 0; });
+    const scrollTo = vi.fn();
+    const previousScrollTo = HTMLElement.prototype.scrollTo;
+    HTMLElement.prototype.scrollTo = scrollTo;
+    const defaultInvoke = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async (name, options) => {
+      if (options?.body?.action === 'get_thread') {
+        const id = options.body.threadId;
+        return {data:{success:true,threadId:id,thread:{id,title:'گفتگوی آزمایشی'},messages:[{id:`answer-${id}`,role:'assistant',content:`آخرین پاسخ ${id}`}]},error:null};
+      }
+      return defaultInvoke(name, options);
+    });
+    try {
+      const {container} = renderSurface(['/ai?thread=thread-1']);
+      await screen.findByText('آخرین پاسخ thread-1');
+      const list = container.querySelector('.ai-chat-message-list') as HTMLElement;
+      expect(list.scrollTop).toBe(5000);
+      list.scrollTop = 100;
+      fireEvent.scroll(list);
+      fireEvent.click(await screen.findByRole('button', {name:/گفتگوی پشتیبانی/}));
+      await screen.findByText('آخرین پاسخ thread-2');
+      expect((container.querySelector('.ai-chat-message-list') as HTMLElement).scrollTop).toBe(5000);
+      expect(scrollTo).not.toHaveBeenCalled();
+    } finally {
+      height.mockRestore(); viewport.mockRestore();
+      HTMLElement.prototype.scrollTo = previousScrollTo;
+    }
+  }, 15000);
+
+  it('has no compact mobile sidebar and opens the thread list with the highlighted menu', async () => {
+    let container!: HTMLElement;
+    await act(async () => { container = renderSurface(['/ai?new=1']).container; });
+    const menu = await screen.findByLabelText('فهرست گفتگوهای هوش مصنوعی');
+    expect(container.querySelectorAll('aside')).toHaveLength(1);
+    expect(menu.className).toContain('ai-thread-menu-button');
+    await act(async () => fireEvent.click(menu));
+    const drawer = await screen.findByRole('dialog');
+    expect(drawer).toHaveTextContent('گفتگوهای هوش مصنوعی');
+    fireEvent.click(screen.getByLabelText('بستن فهرست گفتگوهای هوش مصنوعی'));
+  }, 15000);
+
+  it.each([false, true])('queues guidance once and respects cancellation (cancelled=%s)', async (cancelled) => {
+    let finish!: () => void;
+    const encoder = new TextEncoder();
+    fetchMock.mockImplementationOnce(() => Promise.resolve(new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(encoder.encode('event: meta\ndata: {"threadId":"thread-1","model":"model-a"}\n\nevent: delta\ndata: {"text":"پاسخ در حال اجرا"}\n\n'));
+      finish = () => { controller.enqueue(encoder.encode('event: done\ndata: {"success":true,"threadId":"thread-1","messageId":"first","answer":"پاسخ نخست","model":"model-a"}\n\n')); controller.close(); };
+    }}),{headers:{'Content-Type':'text/event-stream'}})));
+    await act(async () => { renderSurface(['/ai?new=1']); });
+    const input = await screen.findByLabelText('پیام به دستیار هوشمند');
+    await act(async () => fireEvent.change(input, { target: { value: 'درخواست نخست' } }));
+    await act(async () => fireEvent.click(screen.getByLabelText('ارسال')));
+    fireEvent.click(await screen.findByRole('button',{name:'هدایت پاسخ'}));
+    fireEvent.change(input, { target: { value: 'پاسخ را کوتاه‌تر کن' } });
+    fireEvent.click(screen.getByLabelText('ثبت راهنمایی پاسخ'));
+    expect(await screen.findByText(/راهنمایی در انتظار اعمال/)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    if (cancelled) fireEvent.click(screen.getByLabelText('لغو هدایت پاسخ'));
+    await act(async () => finish());
+    if (cancelled) {
+      await screen.findByText('پاسخ نخست');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText(/راهنمایی در انتظار اعمال/)).toBeNull();
+      return;
+    }
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const guided = JSON.parse(String(fetchMock.mock.calls[1][1].body));
+    expect(guided).toMatchObject({threadId:'thread-1',message:'پاسخ را کوتاه‌تر کن',inputKind:'guidance'});
+    await screen.findByText('پاسخ تازه');
+    expect(screen.getByRole('separator')).toHaveTextContent('model-a');
+  }, 15000);
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
@@ -171,7 +244,7 @@ describe('AiChatSurfaceV2', () => {
     expect(invokeMock.mock.calls.some((call) => call[1]?.body?.action === 'get_thread' && call[1]?.body?.threadId === 'thread-1')).toBe(false);
   }, 15000);
 
-  it('shows observed parallel agent activity before metadata and clears it after the final answer', async () => {
+  it('shows parallel activity before metadata and retains its honest history after the answer', async () => {
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     const encoder=new TextEncoder();
     fetchMock.mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({start(value){controller=value;}}),{headers:{'Content-Type':'text/event-stream'}}));
@@ -182,15 +255,18 @@ describe('AiChatSurfaceV2', () => {
     const send=(event:string,payload:unknown)=>act(async()=>{controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`));});
     await send('agent_activity',{agentId:'organization_data',phase:'started',at:1});
     await send('agent_activity',{agentId:'organization_knowledge',phase:'started',at:2});
-    expect(await screen.findByText('در حال بررسی اطلاعات واقعی سازمان…')).toBeInTheDocument();
-    expect(await screen.findByText('در حال بررسی دانش سازمان…')).toBeInTheDocument();
+    expect(await screen.findByText(/در حال بررسی اطلاعات واقعی سازمان/)).toBeInTheDocument();
+    expect(await screen.findByText(/در حال بررسی دانش سازمان/)).toBeInTheDocument();
     await send('agent_activity',{agentId:'organization_data',phase:'completed',at:3});
-    await waitFor(()=>expect(screen.queryByText('در حال بررسی اطلاعات واقعی سازمان…')).not.toBeInTheDocument());
-    expect(screen.getByText('در حال بررسی دانش سازمان…')).toBeInTheDocument();
+    await waitFor(()=>expect(screen.queryByText(/در حال بررسی اطلاعات واقعی سازمان/)).not.toBeInTheDocument());
+    expect(screen.getByText(/در حال بررسی دانش سازمان/)).toBeInTheDocument();
     await send('done',{success:true,threadId:'new-thread',messageId:'answer-1',answer:'گزارش آماده است'});
     await act(async()=>controller.close());
     expect(await screen.findByText('گزارش آماده است')).toBeInTheDocument();
-    expect(screen.queryByText('در حال بررسی دانش سازمان…')).not.toBeInTheDocument();
+    expect(screen.queryByText(/در حال بررسی دانش سازمان/)).not.toBeInTheDocument();
+    expect(document.querySelectorAll('.ai-execution-timeline li')).toHaveLength(2);
+    expect(document.querySelectorAll('.ai-execution-timeline li[data-state="running"]')).toHaveLength(0);
+    expect(screen.getByText(/مرحله ناتمام است/)).toBeInTheDocument();
   },15000);
 
   it('does not auto-submit when a dashboard file is only queued for the new conversation', async () => {
@@ -285,6 +361,7 @@ describe('AiChatSurfaceV2', () => {
     renderSurface(['/ai']);
 
     await waitFor(() => expect(screen.getAllByText('گفتگوی واقعی فروش').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByLabelText('حذف گفتگوی هوش مصنوعی')).toBeEnabled());
     invokeMock.mockClear();
 
     fireEvent.click(screen.getByLabelText('حذف گفتگوی هوش مصنوعی'));

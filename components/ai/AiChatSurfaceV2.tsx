@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Avatar, Badge, Button, Drawer, Empty, Input, Spin, Tooltip } from 'antd';
-import { CloseOutlined, MenuOutlined, PlusOutlined, PushpinFilled, PushpinOutlined, SearchOutlined, ShareAltOutlined } from '@ant-design/icons';
+import { CloseOutlined, PlusOutlined, PushpinFilled, PushpinOutlined, SearchOutlined, ShareAltOutlined } from '@ant-design/icons';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
@@ -541,16 +541,9 @@ const AiChatSurfaceV2: React.FC = () => {
         <aside className="order-last hidden h-full min-h-0 w-[292px] shrink-0 border-l border-slate-200/70 bg-slate-50/86 dark:border-white/[0.07] dark:bg-[#181818] md:block">
           {renderThreadList(false)}
         </aside>
-        <aside className="order-last h-full min-h-0 w-[76px] shrink-0 border-l border-slate-200/70 bg-slate-50/90 dark:border-white/[0.07] dark:bg-[#181818] md:hidden">
-          <div className="flex h-full min-h-0 flex-col">
-            <div className="border-b border-slate-200/70 px-2 py-2 dark:border-white/[0.07]">
-              <Button block type="text" icon={<MenuOutlined />} onClick={() => setThreadListOpen(true)} aria-label="باز کردن فهرست گفتگوهای هوش مصنوعی" />
-            </div>
-            {renderThreadList(true)}
-          </div>
-        </aside>
         <main className="min-w-0 flex-1">
           <AssistantPanel
+            onOpenThreadList={() => setThreadListOpen(true)}
             key={activeThreadId || `new-${newConversationSeed}-${initialPanelKey}`}
             active
             initialThreadId={activeThreadId}
@@ -574,9 +567,10 @@ const AiChatSurfaceV2: React.FC = () => {
         </main>
       </div>
       <Drawer
+        closable={false}
         open={threadListOpen}
         onClose={closeThreadList}
-        placement="right"
+        placement="left"
         width="min(92vw, 360px)"
         title={null}
         classNames={{ body: '!p-0' }}

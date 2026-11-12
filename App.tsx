@@ -12,6 +12,7 @@ import routerBindings, { UnsavedChangesNotifier, DocumentTitleHandler, CatchAllN
 import { BrowserRouter, Navigate, Route, Routes, Outlet, useParams, useLocation } from "react-router-dom";
 import { trackPageView, sendWebVitals } from "./utils/analytics";
 import ConfigProvider from "antd/es/config-provider";
+import TooltipDismissalBoundary from "./components/common/TooltipDismissalBoundary";
 import AntdApp from "antd/es/app";
 import antdTheme from "antd/es/theme";
 import faIR from "antd/locale/fa_IR";
@@ -401,6 +402,7 @@ const MarketingSiteHostApp: React.FC = () => {
           message={{ top: 72, duration: 3.5, maxCount: 4 }}
           notification={{ placement: "topLeft", duration: 4.5, maxCount: 4 }}
         >
+          <TooltipDismissalBoundary />
           <PwaInstallPrompt />
           <PublicThemeBoundary>
             <LazyRouteBoundary>

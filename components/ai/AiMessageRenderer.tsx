@@ -1,6 +1,7 @@
 import React from 'react';
+import { parseAiMarkdownTable } from '../../utils/aiMarkdownTable';
 import { Button, Tooltip } from 'antd';
-import { CopyOutlined, ReloadOutlined } from '@ant-design/icons';
+import { CopyOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons';
 import AiActivityStatus from './AiActivityStatus';
 import type { AiAgentActivity } from '../../supabase/functions/_shared/ai-agents';
 
@@ -14,9 +15,11 @@ type AiMessageRendererProps = {
   onStop?: () => void;
   agentId?: string;
   activities?: AiAgentActivity[];
+  showActivityStatus?: boolean;
 };
 
 type Block =
+  | { type: 'table'; headers: string[]; rows: string[][] }
   | { type: 'paragraph'; text: string }
   | { type: 'heading'; level: 1 | 2 | 3 | 4 | 5 | 6; text: string }
   | { type: 'quote'; text: string }
@@ -111,7 +114,9 @@ const parseBlocks = (text: string): Block[] => {
     listItems = [];
   };
 
-  lines.forEach((line) => {
+  let consumedThrough = -1;
+  lines.forEach((line, lineIndex) => {
+    if (lineIndex <= consumedThrough) return;
     const fence = line.match(/^```(\S*)\s*$/);
     if (fence) {
       if (codeLines) {
@@ -129,6 +134,13 @@ const parseBlocks = (text: string): Block[] => {
     }
     if (codeLines) {
       codeLines.push(line);
+      return;
+    }
+    const table = parseAiMarkdownTable(lines, lineIndex);
+    if (table) {
+      flushParagraph(); flushQuote(); flushList();
+      blocks.push({ type: 'table', headers: table.headers, rows: table.rows });
+      consumedThrough = table.end;
       return;
     }
     if (/^\s*$/.test(line)) {
@@ -217,12 +229,14 @@ const AiMessageRenderer: React.FC<AiMessageRendererProps> = ({
   onStop,
   agentId = 'text_chat',
   activities,
+  showActivityStatus = true,
 }) => {
   const blocks = parseBlocks(text);
   const hasText = String(text || '').trim().length > 0;
   return (
     <div className="ai-message-renderer min-w-0">
-      {streaming && <AiActivityStatus agentId={agentId} activities={activities} onStop={onStop} />}
+      {streaming && showActivityStatus && <AiActivityStatus agentId={agentId} activities={activities} onStop={onStop} />}
+      {streaming && !showActivityStatus && onStop ? <div className="flex justify-end"><Button type="text" className="ai-chat-icon" icon={<StopOutlined />} onClick={onStop} aria-label="توقف دریافت پاسخ" /></div> : null}
       {(failed || stopped) && onRetry && <div className="mb-1 flex items-center justify-end gap-1">
         {(failed || stopped) && onRetry ? (
           <Tooltip title="تلاش دوباره">
@@ -235,6 +249,12 @@ const AiMessageRenderer: React.FC<AiMessageRendererProps> = ({
       ) : (
         <div className="space-y-2">
           {blocks.map((block, index) => {
+            if (block.type === 'table') return <div key={`table-${index}`} className="ai-table-region" role="region" aria-label="جدول پاسخ هوش مصنوعی؛ برای دیدن ستون‌ها پیمایش کنید" tabIndex={0}>
+              <table className="ai-response-table"><caption className="sr-only">جدول پاسخ هوش مصنوعی</caption>
+                <thead><tr>{block.headers.map((cell, column) => <th scope="col" key={column}>{renderInline(cell)}</th>)}</tr></thead>
+                <tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, column) => <td key={column}><bdi>{renderInline(cell)}</bdi></td>)}</tr>)}</tbody>
+              </table>
+            </div>;
             if (block.type === 'hr') return <hr key={`hr-${index}`} className="border-slate-200 dark:border-white/10" />;
             if (block.type === 'heading') return renderHeading(block, index);
             if (block.type === 'code') {

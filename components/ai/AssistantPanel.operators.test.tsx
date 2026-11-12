@@ -1,6 +1,6 @@
 import React from 'react';
 import { App } from 'antd';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AssistantPanel from './AssistantPanel';
@@ -152,7 +152,14 @@ describe('AssistantPanel AI operators', () => {
 
   beforeEach(() => {
     invokeMock.mockReset();
-    vi.stubGlobal('fetch', vi.fn(async () => makeStreamResponse()));
+    vi.stubGlobal('fetch', vi.fn(async (_url: any, options: any) => {
+      const body = JSON.parse(String(options?.body || '{}'));
+      if (body.action === 'run_task_bundle') {
+        const result = await invokeMock('ai-assistant', { body });
+        return Response.json(result.data);
+      }
+      return makeStreamResponse();
+    }));
     invokeMock.mockImplementation(async (_functionName: string, options?: any) => {
       const action = options?.body?.action;
       if (action === 'get_ai_overview') {
@@ -286,6 +293,33 @@ describe('AssistantPanel AI operators', () => {
     expect(body?.bundle?.inputs?.[0]?.file?.filename).toBe('proposal.pdf');
     expect(body?.bundle?.inputs?.[0]?.file?.data).toContain('data:application/pdf');
   });
+
+  it('shows observed bundle stages live, then retains them with the completed answer', async () => {
+    await renderPanel();
+    let finish!: () => void;
+    const encoder = new TextEncoder();
+    const events = [
+      {agentId:'organization_data',phase:'started',at:1}, {agentId:'organization_data',phase:'completed',at:2},
+      {agentId:'document_analysis',phase:'started',at:3},
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream({start(controller){
+      for(const event of events) controller.enqueue(encoder.encode(`event: agent_activity\ndata: ${JSON.stringify(event)}\n\n`));
+      finish = () => {
+        const done = {agentId:'document_analysis',phase:'completed',at:4};
+        controller.enqueue(encoder.encode(`event: agent_activity\ndata: ${JSON.stringify(done)}\n\nevent: done\ndata: ${JSON.stringify({success:true,threadId:'thread-1',messageId:'bundle-result',model:'model-a',answer:'پاسخ مرحله‌ای آماده شد',agentActivityLog:[...events,done]})}\n\n`));
+        controller.close();
+      };
+    }}),{headers:{'Content-Type':'text/event-stream'}})));
+    fireEvent.click(screen.getAllByText('cap-document_analysis')[0]);
+    fireEvent.click(screen.getAllByText('send-file')[0]);
+    await typeAndSend('این فایل را بررسی کن', 'ارسال');
+    await screen.findByText(/مراحل انجام درخواست/);
+    expect(screen.queryByRole('button',{name:'هدایت پاسخ'})).toBeNull();
+    expect(document.querySelectorAll('.ai-execution-timeline li')).toHaveLength(2);
+    await act(async () => finish());
+    await screen.findByText('پاسخ مرحله‌ای آماده شد');
+    expect(document.querySelectorAll('.ai-execution-timeline li[data-state="completed"]')).toHaveLength(2);
+  }, 15000);
 
   it.each([
     ['image_generation', 'cap-image_generation', 'generate_image', 'ساخت تصویر'],

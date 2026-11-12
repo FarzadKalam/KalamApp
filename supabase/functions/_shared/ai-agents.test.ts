@@ -30,6 +30,6 @@ describe('shared AI agent contract', () => {
     expect(report.mock.calls.map(([event])=>event.phase)).toEqual(['started','completed']);
     report.mockClear();
     await expect(withAiAgentActivity('organization_data',async()=>{throw new Error('denied');},report)).rejects.toThrow('denied');
-    expect(report.mock.calls.map(([event])=>event.phase)).toEqual(['started','completed']);
+    expect(report.mock.calls.map(([event])=>event.phase)).toEqual(['started','failed']);
   });
 });
