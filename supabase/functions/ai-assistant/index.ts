@@ -7246,7 +7246,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
   const providerSlot = body?.preferFastAgentModel === true ? 'agent_fast' : capability;
   const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, providerSlot, {
     modelOverride: body?.modelOverride,
-    agentConfig: primaryAgentConfig,
+    agentConfig: primaryAgentConfig || { agent_key: primaryAgent },
   });
   const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings || initialOrgAiSettings, capability);
   for (const selectedCapability of selectedCapabilities) {
@@ -8437,7 +8437,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
   const providerSlot = body?.preferFastAgentModel === true ? 'agent_fast' : primaryCapability;
   const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, providerSlot, {
     modelOverride: body?.modelOverride,
-    agentConfig: primaryAgentConfig,
+    agentConfig: primaryAgentConfig || { agent_key: primaryAgent },
   });
   const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings || initialOrgAiSettings, capability);
   for (const selectedCap of selectedCapabilities) {
