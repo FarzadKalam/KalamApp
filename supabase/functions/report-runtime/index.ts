@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { loadOrgPlanAccess } from '../_shared/org-plan-access.ts';
 // Authoritative report execution endpoint. It never returns source records;
 // browsers receive only calculated buckets, totals and chart-ready series.
 
@@ -540,6 +541,8 @@ Deno.serve(async (request) => {
     const report = (await reportResponse.json())?.[0];
     if (!report?.id || !report?.org_id)
       return json(404, { error: "report_not_found" });
+    const planAccess = await loadOrgPlanAccess(url, serviceRoleKey, String(report.org_id));
+    if (!planAccess.available || planAccess.features?.advanced_reports !== true) return json(403, { error: 'plan_feature_disabled', message: 'گزارش‌ساز پیشرفته در پلن سازمان فعال نیست.' });
     const config =
       report.config && typeof report.config === "object" ? report.config : {};
     // A report is first read with the caller JWT. The interval worker is the only

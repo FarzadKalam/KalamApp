@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { hasBotPlanAccess } from '../_shared/bot-plan-access.ts';
 
 import { normalizeAgentPlan, shouldEscalateCustomerAutoReply } from '../_shared/ai-agent-contract.ts';
 
@@ -3391,6 +3392,7 @@ Deno.serve(async (req) => {
     const integration = await findIntegrationBySecret(supabaseUrl, serviceRoleKey, channel, secret);
     const contact = extractContact(payload);
     const orgId = String(integration?.org_id || '').trim();
+    if (!await hasBotPlanAccess(supabaseUrl, serviceRoleKey, orgId, channel)) return json(200, { success: true, ignored: true, reason: 'plan_feature_disabled' });
     const senderChatId = String(contact?.senderId || contact?.chatId || '').trim();
 
     if (!contact.chatId) {

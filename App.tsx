@@ -1,3 +1,4 @@
+import PlanFeatureBoundary from './components/saas/PlanFeatureBoundary';
 import { TAZE_SYSTEM_BRAND_ASSETS } from './utils/tazeSystemBrandAssets';
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { HelmetProvider } from "react-helmet-async";
@@ -928,7 +929,7 @@ function App() {
             <Route path="/instagram" element={<InstagramInboxPage />} />
             <Route path="/gallery" element={<FilesGalleryPage />} />
             <Route path="/org-knowledge" element={<OrgKnowledgePage />} />
-            <Route path="/org-knowledge/business-model-canvas" element={<OrgKnowledgeBusinessModelCanvasPage />} />
+            <Route path="/org-knowledge/business-model-canvas" element={<PlanFeatureBoundary feature="business_model_canvas"><OrgKnowledgeBusinessModelCanvasPage /></PlanFeatureBoundary>} />
             <Route path="/recycle-bin" element={<RecycleBinPage />} />
             <Route path="/share-target" element={<ShareTargetPage />} />
             <Route path="/search" element={<GlobalSearchPage />} />
@@ -936,11 +937,11 @@ function App() {
             <Route path="/web_forms/create" element={<WebFormBuilderPage />} />
             <Route path="/web_forms/:id" element={<WebFormBuilderPage />} />
             <Route path="/web_forms/:id/edit" element={<WebFormBuilderPage />} />
-            <Route path="/reports" element={<ReportsHubPage />} />
-            <Route path="/reports/create" element={<ReportBuilderPage />} />
-            <Route path="/reports/:reportId" element={<ReportViewerPage />} />
-            <Route path="/reports/:reportId/edit" element={<ReportBuilderPage />} />
-            <Route path="/goals" element={<GoalsHubPage />} />
+            <Route path="/reports" element={<PlanFeatureBoundary feature="advanced_reports"><ReportsHubPage /></PlanFeatureBoundary>} />
+            <Route path="/reports/create" element={<PlanFeatureBoundary feature="advanced_reports"><ReportBuilderPage /></PlanFeatureBoundary>} />
+            <Route path="/reports/:reportId" element={<PlanFeatureBoundary feature="advanced_reports"><ReportViewerPage /></PlanFeatureBoundary>} />
+            <Route path="/reports/:reportId/edit" element={<PlanFeatureBoundary feature="advanced_reports"><ReportBuilderPage /></PlanFeatureBoundary>} />
+            <Route path="/goals" element={<PlanFeatureBoundary feature="goals"><GoalsHubPage /></PlanFeatureBoundary>} />
             <Route path="/customer-club" element={<CustomerClubPage />} />
             <Route path="/accounting" element={<AccountingPage />} />
             <Route path="/accounting/reports" element={<AccountingReportsPage />} />

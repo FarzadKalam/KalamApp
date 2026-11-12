@@ -1,3 +1,4 @@
+import { useOrgPlanFeature } from '../../hooks/useOrgPlanFeature';
 import React from 'react';
 import { TAZE_SYSTEM_BRAND_ASSETS } from '../../utils/tazeSystemBrandAssets';
 
@@ -8,6 +9,8 @@ type Props = {
 
 // Product attribution is shared by all organizations, independent of tenant identity.
 const TazeSystemAttribution: React.FC<Props> = ({ variant = 'sidebar', collapsed = false }) => {
+  const whiteLabel = useOrgPlanFeature('white_label');
+  if (whiteLabel === true) return null;
   const account = variant === 'account';
   const iconOnly = !account && collapsed;
   return (

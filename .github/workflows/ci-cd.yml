@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       deploy:
-        description: 'Deploy this tested revision, including explicit phases 582/583 and ai-assistant'
+        description: 'Publish this tested release with explicit phases 585/586 and the listed feature-gated functions'
         type: boolean
         default: false
 
@@ -66,7 +66,10 @@ jobs:
           sed '/^create role /d' tests/sql/plan_entitlements_fixture.sql | docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d plan_entitlements_test -v ON_ERROR_STOP=1
           for file in database_v1_phase585_plan_entitlements_and_full_demo.sql \
             database_v1_phase585_plan_entitlements_and_full_demo.sql \
-            tests/sql/plan_entitlements_assertions.sql; do
+            tests/sql/plan_entitlements_assertions.sql \
+            database_v1_phase586_feature_runtime_bindings.sql \
+            database_v1_phase586_feature_runtime_bindings.sql \
+            tests/sql/feature_runtime_assertions.sql; do
             docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d plan_entitlements_test -v ON_ERROR_STOP=1 < "$file"
           done
 
@@ -152,7 +155,7 @@ jobs:
         run: deno check --node-modules-dir=none supabase/functions/email-admin/index.ts supabase/functions/send-email/index.ts supabase/functions/email-provider-events/index.ts supabase/functions/email-sync-worker/index.ts supabase/functions/send-sms/index.ts
 
       - name: AI assistant dependency checks
-        run: deno check --node-modules-dir=none supabase/functions/_shared/ai-agents.ts supabase/functions/ai-assistant/index.ts supabase/functions/api-gateway/index.ts supabase/functions/webhook-delivery/index.ts supabase/functions/user-admin/index.ts
+        run: deno check --node-modules-dir=none supabase/functions/_shared/ai-agents.ts supabase/functions/ai-assistant/index.ts supabase/functions/api-gateway/index.ts supabase/functions/webhook-delivery/index.ts supabase/functions/user-admin/index.ts supabase/functions/bot-admin/index.ts supabase/functions/bot-webhook/index.ts supabase/functions/report-runtime/index.ts supabase/functions/activity-performance/index.ts
 
       - name: Messaging attachment and viewer isolation regression checks
         timeout-minutes: 8
@@ -189,7 +192,7 @@ jobs:
           utils/moduleListFilterDisplay.test.ts
           utils/optionHelpers.test.ts utils/moduleListLive.test.ts
           utils/saasPlanDisplayFeatures.test.ts utils/saasOfferingCatalog.test.ts utils/userAnnouncements.test.ts
-          supabase/functions/_shared/org-plan-access.test.ts supabase/functions/_shared/ai-plan-capabilities.test.ts components/saas/SaasOrgAdminDrawer.test.tsx utils/overlayLocks.test.ts utils/ownerPasswordPolicy.test.ts utils/email.test.ts
+          supabase/functions/_shared/org-plan-access.test.ts supabase/functions/_shared/ai-plan-capabilities.test.ts supabase/functions/_shared/bot-plan-access.test.ts components/saas/SaasOrgAdminDrawer.test.tsx components/saas/PlanFeatureBoundary.test.tsx utils/overlayLocks.test.ts utils/ownerPasswordPolicy.test.ts utils/email.test.ts
           hooks/useTableColumnLayout.test.tsx components/table/TableChoiceFilter.test.tsx
           components/SmartTableRenderer.test.tsx
           components/moduleList/RelatedActivityIndicators.test.tsx
@@ -235,7 +238,7 @@ jobs:
           path: dist
 
   deploy:
-    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.deploy)
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy
     needs: ci
     runs-on: ubuntu-latest
     steps:
@@ -366,7 +369,7 @@ jobs:
             exit 1
           fi
 
-      - name: Apply the explicit cash and bank performance migration
+      - name: Apply the explicitly approved plan feature migrations
         shell: pwsh
         env:
           DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
@@ -374,7 +377,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVER_USER }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $migrations = @('database_v1_phase582_cash_bank_context_performance.sql', 'database_v1_phase583_internal_organization_lookup_index.sql')
+          $migrations = @('database_v1_phase585_plan_entitlements_and_full_demo.sql', 'database_v1_phase586_feature_runtime_bindings.sql')
           $migrations | ForEach-Object { Get-FileHash -Algorithm SHA256 -LiteralPath $_ } | Format-List
           & ./scripts/run-server-db-migrations.ps1 -SqlFiles $migrations
 
@@ -386,7 +389,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVER_USER }}
           DEPLOY_FUNCTIONS_PATH: /opt/kalamapp/supabase/docker/volumes/functions
           DEPLOY_FUNCTIONS_COMPOSE_DIR: /opt/kalamapp/supabase/docker
-        run: ./scripts/deploy-supabase-function.ps1 -Functions @('ai-assistant')
+        run: ./scripts/deploy-supabase-function.ps1 -Functions @('ai-assistant','api-gateway','webhook-delivery','user-admin','bot-admin','bot-webhook','report-runtime','activity-performance')
 
       - name: Activate release
         env:

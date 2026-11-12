@@ -1,3 +1,4 @@
+import { useOrgPlanFeature } from './useOrgPlanFeature';
 import { useEffect, useRef } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { botMessageInsertBus, noteInsertBus } from '../utils/communicationRealtimeBus';
@@ -37,6 +38,7 @@ export const useNotificationRealtimeSync = ({
   responsibilityTables,
   onVoipUpsert,
 }: UseNotificationRealtimeSyncOptions) => {
+  const realtimeAllowed = useOrgPlanFeature('internal_realtime_notifications', currentOrgId, true);
   // Store callbacks in refs so the channel setup effect never re-runs due to function identity changes.
   const mapBroadcastSectionRef = useRef(mapBroadcastSection);
   const scheduleLiveRefreshRef = useRef(scheduleLiveRefresh);
@@ -55,7 +57,7 @@ export const useNotificationRealtimeSync = ({
   useEffect(() => { responsibilityTablesRef.current = responsibilityTables; }, [responsibilityTables]);
 
   useEffect(() => {
-    if (!enabled || !currentUserId) return;
+    if (!enabled || !currentUserId || realtimeAllowed !== true) return;
 
     let disposed = false;
     let reconnectTimer: number | null = null;
@@ -202,6 +204,7 @@ export const useNotificationRealtimeSync = ({
     currentRoleId,
     currentUserId,
     enabled,
+    realtimeAllowed,
     supabase,
     variant,
   ]);

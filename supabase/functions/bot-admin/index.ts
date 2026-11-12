@@ -1,4 +1,5 @@
 ﻿// @ts-nocheck
+import { hasBotPlanAccess } from '../_shared/bot-plan-access.ts';
 
 type BotChannel = 'telegram' | 'bale' | 'rubika';
 
@@ -3728,6 +3729,20 @@ const diagnoseRubikaRuntime = async ({
   };
 };
 
+const requireConnectionPlanAccess = async (url: string, serviceKey: string, integration: any, channel: string, caller: any) => {
+  const orgId = String(integration?.org_id || '').trim();
+  if (!orgId || !await hasBotPlanAccess(url, serviceKey, orgId, channel)) throw new Error('این اتصال بات در پلن سازمان فعال نیست.');
+  if (caller?.role === 'service_role') return;
+  const query = new URL(`${url.replace(/\/+$/, '')}/rest/v1/user_organization_memberships`);
+  query.searchParams.set('org_id', `eq.${orgId}`);
+  query.searchParams.set('user_id', `eq.${caller?.id || ''}`);
+  query.searchParams.set('is_active', 'eq.true');
+  query.searchParams.set('select', 'org_id'); query.searchParams.set('limit', '1');
+  const result = await fetch(query, { headers: getServiceHeaders(serviceKey) });
+  const memberships = result.ok ? await result.json() : [];
+  if (!Array.isArray(memberships) || memberships.length !== 1) throw new Error('دسترسی به اتصال این سازمان وجود ندارد.');
+};
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -3750,7 +3765,7 @@ Deno.serve(async (req) => {
     }
 
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-    await verifyUserToken(supabaseUrl, serviceRoleKey, token);
+    const caller = await verifyUserToken(supabaseUrl, serviceRoleKey, token);
 
     const body = (await req.json()) as BotAdminBody;
     const action = String(body?.action || '').trim();
@@ -3789,6 +3804,7 @@ Deno.serve(async (req) => {
         });
       }
       const integration = await getConnectionRecordLoose(supabaseUrl, serviceRoleKey, channel, connectionId);
+      await requireConnectionPlanAccess(supabaseUrl, serviceRoleKey, integration, channel, caller);
       const diagnostic = await diagnoseRubikaRuntime({
         supabaseUrl,
         serviceRoleKey,
@@ -3802,6 +3818,7 @@ Deno.serve(async (req) => {
     }
 
     const integration = await getConnectionRecord(supabaseUrl, serviceRoleKey, channel, connectionId);
+    await requireConnectionPlanAccess(supabaseUrl, serviceRoleKey, integration, channel, caller);
 
     if (action === 'start_capture') {
       let providerResult: any = null;

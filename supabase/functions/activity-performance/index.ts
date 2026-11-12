@@ -87,6 +87,11 @@ Deno.serve(async (request) => {
     const requestedEmployeeIds = new Set((Array.isArray(input?.employeeIds) ? input.employeeIds : []).map((value: any) => String(value || '').trim()).filter(Boolean));
     if (!/^\d{4}-\d{2}-\d{2}$/.test(periodStart) || !/^\d{4}-\d{2}-\d{2}$/.test(periodEnd) || periodEnd < periodStart) return response(400, { error: 'invalid_period' });
     const headers = { apikey: anonKey, authorization };
+    const licenseResponse = await fetch(`${url}/rest/v1/rpc/current_org_has_plan_feature`, {
+      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ p_feature_key: 'performance_payroll_kpi', p_default_enabled: true }),
+    });
+    if (!licenseResponse.ok || await licenseResponse.json() !== true) return response(403, { error: 'plan_feature_disabled', message: 'حقوق مبتنی بر عملکرد در پلن سازمان فعال نیست.' });
     const [employees, tasks, rules, formulas] = await Promise.all([
       fetchPaged(url, headers, 'employees', { select: 'id,related_profile_id' }),
       (async () => {

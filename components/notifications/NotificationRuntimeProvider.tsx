@@ -1,3 +1,4 @@
+import { useOrgPlanFeature } from '../../hooks/useOrgPlanFeature';
 import EmailNotificationRuntime from '../email/EmailNotificationRuntime';
 import React, {
   createContext,
@@ -446,6 +447,7 @@ const buildRealtimeInternalOverlayRow = (
 export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
   const [identity, setIdentity] = useState({ userId: '', roleId: '', orgId: '', fullName: '' });
+  const realtimeAllowed = useOrgPlanFeature('internal_realtime_notifications', identity.orgId, true);
   const viewerRef = useRef(identity);
   viewerRef.current = identity;
   const [ready, setReady] = useState(false);
@@ -1153,7 +1155,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
   }, [identity.orgId, identity.userId, refreshOverlay, refreshSummary]);
 
   useEffect(() => {
-    if (!identity.userId || !identity.orgId) return undefined;
+    if (!identity.userId || !identity.orgId || realtimeAllowed !== true) return undefined;
     const tables = [
       'notes',
       'counterparty_bot_groups',
@@ -1217,7 +1219,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
         void supabase.removeChannel(channel);
       }
     };
-  }, [identity.orgId, identity.userId, scheduleRefresh]);
+  }, [identity.orgId, identity.userId, scheduleRefresh, realtimeAllowed]);
 
   useEffect(() => {
     if (!identity.userId) return undefined;

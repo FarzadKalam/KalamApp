@@ -1,3 +1,5 @@
+import { hasCurrentOrgPlanFeature } from './saasPlanFeatures';
+import { BOT_PLAN_FEATURES } from '../supabase/functions/_shared/bot-plan-features';
 import { getActiveChannelSettings } from './channelSettings';
 import { createOutboundMessageLog, updateOutboundMessageStatus } from './outboundMessages';
 import { supabase } from '../supabaseClient';
@@ -120,6 +122,7 @@ export const sendBotMessageViaGateway = async ({
   fallbackText,
   extraPayload,
 }: SendBotMessageArgs) => {
+  if (!await hasCurrentOrgPlanFeature(BOT_PLAN_FEATURES[channel], { defaultEnabled: true })) throw new Error('این اتصال بات در پلن سازمان فعال نیست.');
   const recipient = String(chatId || '').trim();
   const messageText = String(text || '').trim();
   const normalizedAttachments = Array.isArray(attachments)
@@ -175,7 +178,7 @@ export const sendBotMessageViaGateway = async ({
     const activeConnection = await getActiveChannelSettings(channel);
     const connectionId = String(activeConnection?.id || '').trim();
 
-    if (typeof window !== 'undefined' && connectionId) {
+    if (connectionId) {
 
       const { data: proxyData, error: proxyError } = await supabase.functions.invoke('bot-admin', {
         body: {

@@ -61,3 +61,20 @@ begin
  update saas_org_settings set plan_code=p_plan_code,module_overrides=p_module_overrides,feature_overrides=p_feature_overrides where org_id=p_org_id;
  return '{}'::jsonb;
 end; $$;
+
+create table goals(org_id uuid);
+create table report_definitions(org_id uuid);
+create table org_documents(org_id uuid,document_type text);
+create table notes(org_id uuid,module_id text,record_id text,metadata jsonb default '{}');
+alter table goals enable row level security;
+alter table report_definitions enable row level security;
+alter table org_documents enable row level security;
+alter table notes enable row level security;
+create policy fixture_org_goals on goals to authenticated using(org_id=current_org_id()) with check(org_id=current_org_id());
+create policy fixture_org_reports on report_definitions to authenticated using(org_id=current_org_id()) with check(org_id=current_org_id());
+create policy fixture_org_documents on org_documents to authenticated using(org_id=current_org_id()) with check(org_id=current_org_id());
+create policy fixture_org_notes on notes to authenticated using(org_id=current_org_id()) with check(org_id=current_org_id());
+grant select,insert on goals,report_definitions,org_documents,notes to authenticated;
+insert into goals values('00000000-0000-0000-0000-000000000001');
+insert into report_definitions values('00000000-0000-0000-0000-000000000001');
+insert into org_documents values('00000000-0000-0000-0000-000000000001','general'),('00000000-0000-0000-0000-000000000001','business_model_canvas');

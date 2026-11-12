@@ -1,3 +1,5 @@
+import PlanFeatureBoundary from '../components/saas/PlanFeatureBoundary';
+import { hasCurrentOrgPlanFeature } from '../utils/saasPlanFeatures';
 ﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   App,
@@ -6384,6 +6386,7 @@ const HRPage: React.FC = () => {
   };
 
   const ensureActivityPerformanceLedgerForSummary = useCallback(async (row: EmployeeSummaryRow, periodStart: string, periodEnd: string) => {
+    if (!await hasCurrentOrgPlanFeature('performance_payroll_kpi', { defaultEnabled: true })) return;
     const employeeIdValue = String(row.profile.source_id || '').trim();
     if (!employeeIdValue) return;
     const { data, error } = await supabase.functions.invoke('activity-performance', {
@@ -8789,13 +8792,13 @@ const HRPage: React.FC = () => {
             activeKey={activeTab}
             onChange={setActiveTab}
             items={[
-              { key: 'performance', label: 'عملکرد', children: performanceTabContent },
+              { key: 'performance', label: 'عملکرد', children: <PlanFeatureBoundary feature="performance_payroll_kpi">{performanceTabContent}</PlanFeatureBoundary> },
               { key: 'attendance', label: 'تردد', children: attendanceTabContent },
               { key: 'schedules', label: 'برنامه حضور', children: schedulesTabContent },
               { key: 'requests', label: 'درخواست‌ها', children: requestsTabContent },
               { key: 'compensation', label: 'پاداش / جریمه', children: compensationTabContent },
-              { key: 'goals', label: 'تحقق اهداف', children: goalFulfillmentTabContent },
-              { key: 'commissions', label: 'پورسانت‌ها', children: commissionsTabContent },
+              { key: 'goals', label: 'تحقق اهداف', children: <PlanFeatureBoundary feature="goals">{goalFulfillmentTabContent}</PlanFeatureBoundary> },
+              { key: 'commissions', label: 'پورسانت‌ها', children: <PlanFeatureBoundary feature="advanced_commission">{commissionsTabContent}</PlanFeatureBoundary> },
               { key: 'advances', label: 'مساعده‌ها', children: advancesTabContent },
               { key: 'payroll', label: 'فیش حقوقی', children: payrollTabContent },
             ]}

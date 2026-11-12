@@ -1,3 +1,4 @@
+import { PLAN_FEATURE_TABLES } from './planFeatureBindings';
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { SAAS_FEATURE_OPTIONS, SAAS_MODULE_GROUPS, SAAS_MODULE_PLAN_INHERITANCE, SAAS_MODULE_FEATURE_INHERITANCE } from './saasOfferingCatalog';
@@ -38,4 +39,11 @@ describe('plan access editing', () => {
     expect(['enabled', 'limited', true, { enabled: true }].every(isPlanValueEnabled)).toBe(true);
     expect(['false', false, null, { enabled: false }].some(isPlanValueEnabled)).toBe(false);
   });
+});
+
+it('keeps runtime table licensing synchronized with the central resource bindings', () => {
+  const sql = readFileSync('database_v1_phase586_feature_runtime_bindings.sql', 'utf8');
+  const snapshot = JSON.parse(sql.match(/select '(\{[^\n]*\})'::jsonb/)![1]);
+  expect(snapshot).toEqual(PLAN_FEATURE_TABLES);
+  for (const feature of Object.values(PLAN_FEATURE_TABLES)) expect(SAAS_FEATURE_OPTIONS.some((item) => item.id === feature)).toBe(true);
 });
