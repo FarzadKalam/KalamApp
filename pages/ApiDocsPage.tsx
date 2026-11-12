@@ -20,13 +20,14 @@ import {
 import { MODULES } from '../moduleRegistry';
 import type { ModuleDefinition } from '../types';
 import { FieldType } from '../types';
+import { publicRuntimeConfig } from '../utils/runtimeConfig';
 
 const { Sider, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL ?? '{SUPABASE_URL}';
+const SUPABASE_URL = publicRuntimeConfig.supabaseUrl || '{SUPABASE_URL}';
 const GATEWAY_URL = `${SUPABASE_URL}/functions/v1/api-gateway`;
 
 interface ApiDocsPageProps {

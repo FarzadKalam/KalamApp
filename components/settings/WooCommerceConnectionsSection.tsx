@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Form, Input, Modal, Space, Switch, Table, Tag, Typography } from 'antd';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
-import { supabase } from '../../supabaseClient';
+import { supabase, SUPABASE_URL } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import WooCommerceSyncModal from './WooCommerceSyncModal';
 
@@ -21,7 +21,7 @@ type InboxOrder = {
   received_at: string;
   processing_status: string;
 };
-const functionUrl = `${import.meta.env.VITE_SUPABASE_URL || ''}/functions/v1/external-connectors`;
+const functionUrl = `${SUPABASE_URL}/functions/v1/external-connectors`;
 
 const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ orgId }) => {
   const { message, modal } = App.useApp();

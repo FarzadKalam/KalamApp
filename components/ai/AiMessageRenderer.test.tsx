@@ -47,7 +47,7 @@ describe('AiMessageRenderer', () => {
     const onRetry = vi.fn();
     const { rerender } = render(<AiMessageRenderer text="" streaming onStop={onStop} />);
 
-    expect(screen.getByText('در حال آماده‌سازی پاسخ...')).toBeInTheDocument();
+    expect(screen.getByText('در حال آماده‌سازی پاسخ…')).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('توقف دریافت پاسخ'));
     expect(onStop).toHaveBeenCalled();
 

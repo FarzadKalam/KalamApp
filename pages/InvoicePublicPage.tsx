@@ -1,3 +1,4 @@
+import { iranMobileLocal } from '../supabase/functions/_shared/phone-number';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -96,14 +97,7 @@ const formatNumber = (value: number | null | undefined) => {
   return Number(value).toLocaleString('fa-IR');
 };
 
-const normalizePhone = (raw: string): string => {
-  let digits = String(raw || '').replace(/[^\d۰-۹]/g, '');
-  digits = digits.replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
-  if (digits.startsWith('0098')) digits = `0${digits.slice(4)}`;
-  else if (digits.startsWith('98') && digits.length === 12) digits = `0${digits.slice(2)}`;
-  else if (digits.length === 10 && digits.startsWith('9')) digits = `0${digits}`;
-  return digits;
-};
+const normalizePhone = (value: unknown): string => iranMobileLocal(value) ?? '';
 
 const hexToRgba = (hex: string, alpha: number) => {
   const clean = hex.replace('#', '');

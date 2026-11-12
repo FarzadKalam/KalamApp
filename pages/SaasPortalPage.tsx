@@ -16,6 +16,7 @@ import { getOtpErrorMessage, normalizeOtpPhone, normalizeOtpToken, OTP_RESEND_SE
 import { signOutLocalSession } from '../utils/authSession';
 import { getInternalAppUrl } from '../utils/hostRouting';
 import { handoffSessionToTenant } from '../utils/tenantSessionHandoff';
+import { selectOrganizationContext } from '../utils/organizationContext';
 import { assertDemoOtpRequestAllowed, lookupPhoneLoginCandidate, lookupPhoneSignupInvite, requestExistingProfilePhoneOtp } from '../utils/phoneAuth';
 import {
   getDemoProvisionErrorMessage,
@@ -109,6 +110,7 @@ const SAAS_WIZARD_PHONE_STORAGE_KEY = 'kalam_saas_wizard_phone';
 const SAAS_WIZARD_OTP_STORAGE_KEY = 'kalam_saas_wizard_otp';
 const SAAS_WIZARD_COOLDOWN_UNTIL_STORAGE_KEY = 'kalam_saas_wizard_cooldown_until';
 const SAAS_WIZARD_FORM_STORAGE_KEY = 'kalam_saas_wizard_form';
+const SAAS_WIZARD_EXISTING_PHONE_STORAGE_KEY = 'kalam_saas_wizard_existing_phone';
 
 // ─── Helpers ─────────────────────────────────────────
 // ─── Sub-components ───────────────────────────────────
@@ -120,10 +122,10 @@ const Logo = () => (
   </div>
 );
 
-const StepIndicator = ({ step }: { step: WizardStep }) => {
-  const steps: WizardStep[] = ['phone', 'info', 'otp', 'provisioning'];
+const StepIndicator = ({ step, isLogin = false }: { step: WizardStep; isLogin?: boolean }) => {
+  const steps: WizardStep[] = isLogin ? ['phone', 'otp', 'organizations'] : ['phone', 'info', 'otp', 'provisioning'];
   const current = steps.indexOf(step);
-  const labels = ['شماره موبایل', 'اطلاعات', 'کد تایید', 'راه‌اندازی'];
+  const labels = isLogin ? ['شماره موبایل', 'کد تایید', 'ورود به سازمان'] : ['شماره موبایل', 'اطلاعات', 'کد تایید', 'راه‌اندازی'];
   return (
     <div className="flex items-center gap-2 mb-8">
       {steps.map((s, i) => (
@@ -193,6 +195,7 @@ const SaasPortalPage: React.FC = () => {
     const savedFormRaw = window.sessionStorage.getItem(SAAS_WIZARD_FORM_STORAGE_KEY) || '';
 
     if (savedPhone) setPhone(savedPhone);
+    setIsExistingPhoneUser(Boolean(savedPhone) && window.sessionStorage.getItem(SAAS_WIZARD_EXISTING_PHONE_STORAGE_KEY) === normalizeOtpPhone(savedPhone));
     // OTP کد را هرگز از sessionStorage بازیابی نکن — کد منقضی‌شده موجب خطای 403 می‌شود.
     if (savedCooldownUntil > Date.now()) {
       setOtpCooldown(Math.ceil((savedCooldownUntil - Date.now()) / 1000));
@@ -305,6 +308,7 @@ const SaasPortalPage: React.FC = () => {
     window.sessionStorage.removeItem(SAAS_WIZARD_OTP_STORAGE_KEY); // پاک‌کردن کلید قدیمی در صورت وجود
     window.sessionStorage.removeItem(SAAS_WIZARD_COOLDOWN_UNTIL_STORAGE_KEY);
     window.sessionStorage.removeItem(SAAS_WIZARD_FORM_STORAGE_KEY);
+    window.sessionStorage.removeItem(SAAS_WIZARD_EXISTING_PHONE_STORAGE_KEY);
   };
 
   const inputClassName = 'rounded-xl !bg-white !text-slate-900 placeholder:!text-slate-400';
@@ -372,6 +376,7 @@ const SaasPortalPage: React.FC = () => {
     }
     setError('');
     setOrganizationChoices([]);
+    window.sessionStorage.removeItem(SAAS_WIZARD_EXISTING_PHONE_STORAGE_KEY);
     setIsExistingMemberCreatingDemo(false);
     setLoading(true);
     try {
@@ -400,11 +405,13 @@ const SaasPortalPage: React.FC = () => {
       }
       setIsExistingPhoneUser(isExisting);
       if (isExisting) {
-        if (candidate?.has_phone_identity === true) {
+        if (candidate?.exists_in_auth === true && candidate?.has_phone_identity === true) {
           await requestSmsOtp(supabase.auth, normalizedPhone, { shouldCreateUser: false });
         } else {
           await requestExistingProfilePhoneOtp(normalizedPhone);
         }
+        window.sessionStorage.setItem(SAAS_WIZARD_EXISTING_PHONE_STORAGE_KEY, normalizedPhone);
+        setOtpCode('');
         setStep('otp');
         setOtpCooldown(OTP_RESEND_SECONDS);
       } else {
@@ -460,16 +467,8 @@ const SaasPortalPage: React.FC = () => {
 
     if (profileError) throw profileError;
     const currentProfile = (profile || null) as WizardAuthenticatedProfile | null;
-    if (currentProfile?.is_active === false) {
-      throw new Error('__otp_user_inactive__');
-    }
-
-    const { data: ctx, error: ctxError } = await supabase.rpc('get_current_saas_context');
-    if (ctxError) throw ctxError;
-
     return {
       profile: currentProfile,
-      saasContext: ctx as any,
     };
   }, []);
 
@@ -489,6 +488,7 @@ const SaasPortalPage: React.FC = () => {
         p_org_id: organization.org_id,
       });
       if (activateError || !(data as any)?.success) throw activateError || new Error('organization_access_denied');
+      selectOrganizationContext(organization.org_id);
       clearWizardState();
       const host = String((data as any)?.resolved_host || organization.resolved_host || '').trim();
       if (host?.endsWith('.tazesystem.ir')) await handoffSessionToTenant(host, organization.org_id);
@@ -520,15 +520,8 @@ const SaasPortalPage: React.FC = () => {
     try {
       await verifySmsOtp(supabase.auth, normalizedPhone as string, token);
       otpVerified = true;
-      const { profile, saasContext } = await resolveAuthenticatedDemoSessionState();
-      let organizations: OrganizationAccess[] = [];
-      try {
-        organizations = await loadOrganizationChoices();
-      } catch {
-        // در انتشار مرحله‌ای، تا زمانی که migration عضویت‌ها فعال نشده،
-        // رفتار امن و قدیمیِ هدایت به سازمان اصلی حفظ می‌شود.
-        organizations = [];
-      }
+      const { profile } = await resolveAuthenticatedDemoSessionState();
+      const organizations = await loadOrganizationChoices();
 
       // شماره‌ای که قبلاً عضو سازمانی بوده است، همیشه ابتدا انتخاب سازمان را می‌بیند.
       // فقط عضو غیرمالک می‌تواند از همین صفحه یک کسب‌وکار مستقل تازه بسازد.
@@ -538,17 +531,7 @@ const SaasPortalPage: React.FC = () => {
         return;
       }
 
-      // کاربر موجود با سازمان — هدایت به پنل
-      if (saasContext?.org_id && saasContext?.slug) {
-        clearWizardState();
-        window.location.href = `https://${saasContext.slug}${TAZE_SUFFIX}`;
-        return;
-      }
-      if (profile?.org_id) {
-        clearWizardState();
-        window.location.href = getInternalAppUrl();
-        return;
-      }
+      if (profile?.org_id) throw new Error('عضویت فعالی برای این حساب پیدا نشد. برای بررسی دسترسی با مدیر سازمان تماس بگیرید.');
 
       // کاربر جدید — اطلاعات قبلاً پر شده، مستقیم provisioning
       // اگر از مسیر existing user آمده، اطلاعات پر نشده — باید info را پر کند
@@ -644,6 +627,7 @@ const SaasPortalPage: React.FC = () => {
         setProvisionResult(result);
         setStep('done');
       });
+      if (result.org_id) selectOrganizationContext(result.org_id);
 
       try {
         const seedResult = await seedCurrentOrgDemoData({ orgId: result.org_id || null });
@@ -791,7 +775,7 @@ const SaasPortalPage: React.FC = () => {
         {/* ─ Step: Existing organization selection ─ */}
         {step === 'organizations' && (
           <div>
-            <StepIndicator step="phone" />
+            <StepIndicator step="organizations" isLogin />
             <h1 className="text-2xl font-black text-slate-900 mb-2">انتخاب سازمان</h1>
             <p className="text-slate-500 text-sm mb-6 leading-7">
               این شماره پیش‌تر به سازمان‌های زیر دسترسی داشته است. برای ورود، سازمان موردنظر را انتخاب کنید.
@@ -809,6 +793,7 @@ const SaasPortalPage: React.FC = () => {
                 >
                   <span className="flex flex-col items-start gap-1 py-1">
                     <span className="font-black text-slate-900">{organization.org_name}</span>
+                    {organization.resolved_host && <span dir="ltr" className="text-xs font-normal text-slate-600 break-all whitespace-normal">{organization.resolved_host}</span>}
                     <span className="text-xs font-normal text-slate-500">
                       {organization.is_owner ? 'صاحب حساب' : (organization.role_name || 'کاربر سازمان')}
                     </span>
@@ -834,8 +819,12 @@ const SaasPortalPage: React.FC = () => {
         {/* ─ Step: OTP ─ */}
         {step === 'otp' && (
           <div>
-            <StepIndicator step="otp" />
-            <h1 className="text-2xl font-black text-slate-900 mb-2">کد تایید</h1>
+            <StepIndicator step="otp" isLogin={isExistingPhoneUser} />
+            <h1 className="text-2xl font-black text-slate-900 mb-2">{isExistingPhoneUser ? 'ورود به حساب شما' : 'کد تایید'}</h1>
+            {isExistingPhoneUser && (
+              <Alert type="info" showIcon className="mb-4 rounded-xl" message="شما قبلاً ثبت‌نام کرده‌اید؛ در حال ورود به حساب فعلی‌تان هستید."
+                description="کد پیامک‌شده را وارد کنید. بعد از تأیید شماره، نام و آدرس سازمان‌های شما نمایش داده می‌شود تا وارد سازمان دلخواهتان شوید." />
+            )}
             <p className="text-slate-500 text-sm mb-8 leading-7">
               کد ۶ رقمی ارسال‌شده به <span className="font-bold text-slate-700 ltr-text">{normalizedPhone}</span> را وارد کنید.
             </p>
@@ -843,6 +832,8 @@ const SaasPortalPage: React.FC = () => {
             <div className="space-y-4">
               <Input
                 placeholder="کد تایید"
+                aria-label="کد تایید پیامکی"
+                autoComplete="one-time-code"
                 value={otpCode}
                 onChange={(e) => setOtpCode(e.target.value)}
                 onPressEnter={handleVerifyOtp}
@@ -863,6 +854,14 @@ const SaasPortalPage: React.FC = () => {
               >
                 تایید و ادامه
               </Button>
+              <div className="text-center">
+                <button type="button" disabled={loading} className="text-sm font-bold text-slate-600 underline min-h-11" onClick={() => {
+                  setOtpCode('');
+                  setError('');
+                  setStep('phone');
+                }}>اصلاح شماره موبایل</button>
+                {isExistingPhoneUser && <a href="/login" className="block text-sm font-bold text-slate-600 underline py-3">ورود با ایمیل و رمز عبور</a>}
+              </div>
               <div className="text-center">
                 {otpCooldown > 0 ? (
                   <span className="text-xs text-slate-400">

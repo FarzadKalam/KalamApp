@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Spin, Tooltip } from 'antd';
-import { CloseOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Button, Tooltip } from 'antd';
+import { CloseOutlined, ReloadOutlined, PictureOutlined, SoundOutlined, VideoCameraOutlined, FileTextOutlined, FileSearchOutlined } from '@ant-design/icons';
+import { getAiAgent } from '../../supabase/functions/_shared/ai-agents';
+import './AiChatPresentation.css';
 
 export type AiGenerationKind =
   | 'image_generation'
@@ -9,17 +11,17 @@ export type AiGenerationKind =
   | 'document_generation'
   | 'document_analysis';
 
-const KIND_LABEL: Record<AiGenerationKind, string> = {
-  image_generation: 'در حال ساخت تصویر',
-  voice_output: 'در حال تولید صدا',
-  video_generation: 'در حال ساخت ویدیو',
-  document_generation: 'در حال ساخت فایل',
-  document_analysis: 'در حال تحلیل سند',
+const KIND_ICON: Record<AiGenerationKind, React.ReactNode> = {
+  image_generation: <PictureOutlined />,
+  voice_output: <SoundOutlined />,
+  video_generation: <VideoCameraOutlined />,
+  document_generation: <FileTextOutlined />,
+  document_analysis: <FileSearchOutlined />,
 };
 
 const KIND_HINT: Record<AiGenerationKind, string> = {
-  image_generation: 'معمولاً چند ثانیه طول می‌کشد.',
-  voice_output: 'معمولاً چند ثانیه طول می‌کشد.',
+  image_generation: 'تصویر به‌محض آماده‌شدن در همین گفتگو نمایش داده می‌شود.',
+  voice_output: 'پاسخ صوتی به‌محض آماده‌شدن اینجا نمایش داده می‌شود.',
   video_generation: 'ساخت ویدیو ممکن است چند دقیقه طول بکشد.',
   document_generation: 'در حال آماده‌سازی فایل خروجی…',
   document_analysis: 'در حال خواندن و تحلیل سند…',
@@ -97,28 +99,30 @@ const AiGenerationStatusCard: React.FC<AiGenerationStatusCardProps> = ({
     : '';
 
   return (
-    <div className="w-full max-w-[320px] rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.85)] p-3 dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.9)]">
-      <div className="flex items-center gap-2">
-        <Spin size="small" />
-        <div className="min-w-0 flex-1">
-          <div className="text-[12px] font-semibold text-[rgb(var(--brand-800-rgb))] dark:text-[rgb(var(--brand-100-rgb))]">
-            {KIND_LABEL[kind]}…
-          </div>
-          <div className="text-[10px] leading-4 text-gray-500 dark:text-gray-400">{KIND_HINT[kind]}</div>
+    <div className={`ai-chat-theme ai-generation-card${failedNote ? ' has-note' : ''}`} aria-label={getAiAgent(kind).label}>
+      <div className="ai-generation-heading">
+        <span className="ai-generation-icon" aria-hidden="true">{KIND_ICON[kind]}</span>
+        <div className="ai-generation-copy" role="status" aria-live="polite">
+          <strong>{getAiAgent(kind).label}</strong>
+          <div>{failedNote ? 'نیازمند بررسی وضعیت' : `${getAiAgent(kind).activity}…`}</div>
         </div>
-        <span className="shrink-0 rounded-md bg-white/70 px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-gray-600 dark:bg-black/20 dark:text-gray-300">
+        <span className="ai-generation-timer" aria-label="زمان سپری‌شده" dir="ltr">
           {formatElapsed(elapsed)}
         </span>
       </div>
 
+      {['image_generation', 'video_generation'].includes(kind) && <div className="ai-generation-preview" aria-hidden="true">{KIND_ICON[kind]}</div>}
+      <div className="ai-generation-track" aria-hidden="true" />
+      <div className="ai-generation-hint mt-2">{KIND_HINT[kind]}</div>
+
       {failedNote ? (
-        <div className="mt-2 text-[10px] leading-4 text-amber-700 dark:text-amber-400">{failedNote}</div>
+        <div className="ai-generation-note" role="status">{failedNote}</div>
       ) : null}
 
       {providerRawText ? (
-        <details className="mt-2 rounded-lg border border-amber-200/70 bg-white/60 p-2 text-left text-[10px] leading-4 text-gray-600 dark:border-amber-300/20 dark:bg-black/20 dark:text-gray-300" dir="ltr">
-          <summary className="cursor-pointer text-right font-semibold text-amber-700 dark:text-amber-300" dir="rtl">
-            پاسخ خام سرویس‌دهنده
+        <details className="ai-chat-details" dir="ltr">
+          <summary dir="rtl">
+            جزئیات پاسخ سرویس‌دهنده
           </summary>
           <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap break-words font-mono">
             {providerRawText.slice(0, 4000)}
@@ -126,15 +130,17 @@ const AiGenerationStatusCard: React.FC<AiGenerationStatusCardProps> = ({
         </details>
       ) : null}
 
-      <div className="mt-2 flex items-center justify-end gap-1">
+      <div className="ai-generation-actions">
         {onDismiss ? (
           <Tooltip title="بستن این کارت">
-            <Button type="text" size="small" icon={<CloseOutlined />} onClick={onDismiss} className="!text-gray-400" />
+            <Button type="text" className="ai-chat-icon" icon={<CloseOutlined />} onClick={onDismiss} aria-label="بستن کارت ساخت خروجی" />
           </Tooltip>
         ) : null}
         <Tooltip title={canRecheck ? 'بررسی وضعیت ساخت' : 'چند لحظه صبر کنید…'}>
           <Button
             size="small"
+            type="text"
+            aria-label="بررسی مجدد"
             icon={<ReloadOutlined spin={checking} />}
             loading={checking}
             disabled={!canRecheck}

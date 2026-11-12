@@ -1,3 +1,5 @@
+import { EmailActions, EmailComposeButton } from './email/EmailActions';
+import { isEmailField } from '../utils/organizationEmail';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Form, Input, InputNumber, Select, Switch, Upload, Modal, App, Tag, Button, Tooltip } from 'antd';
 import {
@@ -44,7 +46,7 @@ import { isAutoNameEnabled, normalizeAutoNameEnabled } from '../utils/autoName';
 import { useCurrencyConfig } from '../utils/currency';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { joinStoragePath, sanitizeStorageFileName } from '../utils/storagePath';
-import { getSafeOptionFallback, isEmptyRelationValue } from '../utils/optionHelpers';
+import { getChoiceLabelFallbackFa, getSafeOptionFallback, isEmptyRelationValue } from '../utils/optionHelpers';
 import { getFinancialStatusLabelFa } from '../utils/financialValueLabels';
 import { fetchCurrentUserRolePermissions, resolveReadyTextPermissions } from '../utils/permissions';
 import { fetchDynamicOptionsByCategory } from '../utils/referenceData';
@@ -2067,6 +2069,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             </span>
           );
         }
+        if (isEmailField(field)) return <EmailActions value={value} moduleId={moduleId} recordId={allValues?.id} />;
         if (fieldType === FieldType.PHONE) {
           return (
             <PhoneActionsPopover
@@ -2091,7 +2094,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     ? formatDisplayText(selectedOpt.label, '')
                     : fieldType === FieldType.STATUS
                       ? getFinancialStatusLabelFa(value)
-                      : getSafeOptionFallback(value));
+                      : getChoiceLabelFallbackFa(value));
                 if (fieldType === FieldType.RELATION && resolvedRelationTargetModuleId && value) {
                    const targetModule = String(selectedOpt?.module || resolvedRelationTargetModuleId || '').trim();
                    const canOpenRelation = Boolean(selectedOpt && selectedOpt?.linkable !== false && selectedOpt?.missing !== true && selectedOpt?.inaccessible !== true);
@@ -2146,7 +2149,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
              const labels = values.map((item) => {
                const selectedOpt = fieldOptions.find((o: any) => String(o?.value) === String(item));
                 if (selectedOpt?.label) return formatDisplayText(selectedOpt.label, '');
-                return getSafeOptionFallback(item);
+                return getChoiceLabelFallbackFa(item);
               });
               return <span className="text-gray-800 break-words">{labels.join('، ')}</span>;
         }
@@ -2220,6 +2223,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
           <Input
             {...commonProps}
             value={formatTextForInput(value)}
+            suffix={isEmailField(field) ? <EmailComposeButton value={value} moduleId={moduleId} recordId={allValues?.id} /> : undefined}
             onChange={e => onChange(normalizeDigitsToEnglish(e.target.value))}
             allowClear
           />

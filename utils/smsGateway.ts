@@ -1,6 +1,10 @@
+import { dialPhone } from '../supabase/functions/_shared/phone-number';
 ﻿import { supabase } from '../supabaseClient';
 import { getActiveChannelSettings } from './channelSettings';
+import { getSelectedOrganizationId } from './organizationContext';
 import { createOutboundMessageLog, updateOutboundMessageStatus } from './outboundMessages';
+
+const organizationHeaders = () => getSelectedOrganizationId() ? { 'x-client-info': `kalamapp; org=${getSelectedOrganizationId()}` } : undefined;
 
 type SmsMode = 'rest' | 'soap';
 
@@ -282,7 +286,7 @@ const sendSmsDirect = async (
 
   const requestUrl = resolveSmsRequestUrl(baseUrl);
   const useSoapRequest = mode === 'soap' || /\/post\/send\.asmx(\/SendSimpleSMS2)?$/i.test(baseUrl);
-  const recipients = Array.from(new Set((to || []).map((value) => String(value || '').trim()).filter(Boolean)));
+  const recipients = Array.from(new Set((to || []).map(dialPhone).filter(Boolean)));
 
   if (recipients.length === 0) {
     throw new Error('ع¯غŒط±ظ†ط¯ظ‡ ظ¾غŒط§ظ…ع© ظ…ط´ط®طµ ظ†ط´ط¯ظ‡ ط§ط³طھ.');
@@ -390,7 +394,7 @@ const invokeSmsFunction = async (
   let lastError: unknown = null;
   const maxAttempts = 2;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const { data, error } = await supabase.functions.invoke('send-sms', { body: payload });
+    const { data, error } = await supabase.functions.invoke('send-sms', { body: payload, headers: organizationHeaders() });
     if (error) {
       const message = await getInvokeErrorMessage(error, 'خطا در فراخوانی سرویس پیامک.');
       lastError = new Error(message);
@@ -423,7 +427,7 @@ export const getSmsBalanceViaGateway = async (overrideSettings?: SmsSettings) =>
     payload.overrideSettings = overrideSettings;
   }
 
-  const { data, error } = await supabase.functions.invoke('send-sms', { body: payload });
+  const { data, error } = await supabase.functions.invoke('send-sms', { body: payload, headers: organizationHeaders() });
   if (error) throw new Error(await getInvokeErrorMessage(error, 'ط®ط·ط§ ط¯ط± ط¯ط±غŒط§ظپطھ ط§ط¹طھط¨ط§ط± ظ¾غŒط§ظ…ع©.'));
   if (data && data.success === false) {
     throw new Error(getErrorMessage(data, 'ط¯ط±غŒط§ظپطھ ط§ط¹طھط¨ط§ط± ظ¾غŒط§ظ…ع© ظ†ط§ظ…ظˆظپظ‚ ط¨ظˆط¯.'));
@@ -448,7 +452,7 @@ export const sendSmsViaGateway = async ({
   skipReportLog = false,
   senderNumber,
 }: SendSmsViaGatewayArgs): Promise<SmsGatewaySendResult> => {
-  const recipients = Array.from(new Set((to || []).map((value) => String(value || '').trim()).filter(Boolean)));
+  const recipients = Array.from(new Set((to || []).map(dialPhone).filter(Boolean)));
   const messageText = String(text || '').trim();
 
   if (recipients.length === 0) {

@@ -52,7 +52,7 @@ export const normalizeAgentPlan = (input: any, options: {
   isKnownModule: (moduleId: string) => boolean;
 }): AgentPlan => {
   const allowed = new Set(options.allowedCapabilities.map((item) => String(item || '').trim()).filter(Boolean));
-  const requestedCapabilities = Array.isArray(input?.capabilities) ? input.capabilities : [];
+  const requestedCapabilities: unknown[] = Array.isArray(input?.capabilities) ? input.capabilities : [];
   const capabilities = Array.from(new Set(requestedCapabilities
     .map((item: unknown) => asText(item, 80))
     .filter((item: string) => allowed.has(item))

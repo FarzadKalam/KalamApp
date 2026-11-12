@@ -1,8 +1,10 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { normalizeApiBaseUrl } from './utils/urlHostNormalization';
+import { organizationContextFetch } from './utils/organizationContext';
+import { publicRuntimeConfig } from './utils/runtimeConfig';
 
-const supabaseUrl = normalizeApiBaseUrl(import.meta.env.VITE_SUPABASE_URL);
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabaseUrl = normalizeApiBaseUrl(publicRuntimeConfig.supabaseUrl);
+const supabaseAnonKey = publicRuntimeConfig.supabaseAnonKey;
 
 if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase Environment Variables');
@@ -17,7 +19,9 @@ const globalStore = globalThis as typeof globalThis & {
 };
 
 if (!globalStore.__kalam_supabase_client__) {
-  globalStore.__kalam_supabase_client__ = createClient<any>(supabaseUrl, supabaseAnonKey);
+  globalStore.__kalam_supabase_client__ = createClient<any>(supabaseUrl, supabaseAnonKey, {
+    global: { fetch: organizationContextFetch },
+  });
 }
 
 if (!globalStore.__kalam_supabase_public_client__) {

@@ -2,6 +2,7 @@ import path from 'path';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import fs from 'fs';
+import { configDefaults } from 'vitest/config';
 
 const toPosixPath = (value: string) => value.split(path.win32.sep).join('/');
 
@@ -212,6 +213,7 @@ export default defineConfig(({ mode }) => {
         }
       },
       test: {
+        exclude: [...configDefaults.exclude, 'tmp/**', 'installer/output/**', 'installer/staging/**'],
         environment: 'jsdom',
         setupFiles: './test/setup.ts',
         css: true,

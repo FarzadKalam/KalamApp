@@ -26,6 +26,7 @@ import {
   PlusOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
+import { getAiAgentLabel } from '../../supabase/functions/_shared/ai-agents';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
@@ -33,24 +34,24 @@ import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
 const { Text } = Typography;
 
 const ALL_CAPABILITIES = [
-  { key: 'dashboard_chat', label: 'گفتگو داشبورد' },
-  { key: 'record_chat', label: 'گفتگو رکورد' },
-  { key: 'customer_reply_suggestion', label: 'پیشنهاد پاسخ مشتری' },
-  { key: 'document_analysis', label: 'تحلیل اسناد' },
-  { key: 'workflow_ai_prompt', label: 'پرامپت گردش کار' },
-  { key: 'deep_reasoning', label: 'تفکر عمیق' },
-  { key: 'auto_decision', label: 'تصمیم‌گیری خودکار' },
-  { key: 'legal_assistant', label: 'دستیار حقوقی' },
-  { key: 'voip_auto_reply', label: 'VOIP خودکار' },
-  { key: 'web_search', label: 'جستجوی وب' },
-  { key: 'voice_input', label: 'ورودی صوتی (STT)' },
-  { key: 'voice_output', label: 'خروجی صوتی (TTS)' },
-  { key: 'image_generation', label: 'تولید تصویر' },
-  { key: 'image_edit', label: 'ویرایش تصویر' },
-  { key: 'video_generation', label: 'تولید ویدیو' },
-  { key: 'embedding', label: 'Embedding اسناد' },
-  { key: 'document_generation', label: 'تولید سند' },
-  { key: 'customer_auto_reply', label: 'پاسخگویی خودکار مشتریان' },
+  { key: 'dashboard_chat', label: getAiAgentLabel('dashboard_chat') },
+  { key: 'record_chat', label: getAiAgentLabel('record_chat') },
+  { key: 'customer_reply_suggestion', label: getAiAgentLabel('customer_reply_suggestion') },
+  { key: 'document_analysis', label: getAiAgentLabel('document_analysis') },
+  { key: 'workflow_ai_prompt', label: getAiAgentLabel('workflow_ai_prompt') },
+  { key: 'deep_reasoning', label: getAiAgentLabel('deep_reasoning') },
+  { key: 'auto_decision', label: getAiAgentLabel('auto_decision') },
+  { key: 'legal_assistant', label: getAiAgentLabel('legal_assistant') },
+  { key: 'voip_auto_reply', label: getAiAgentLabel('voip_auto_reply') },
+  { key: 'web_search', label: getAiAgentLabel('web_search') },
+  { key: 'voice_input', label: getAiAgentLabel('voice_input') },
+  { key: 'voice_output', label: getAiAgentLabel('voice_output') },
+  { key: 'image_generation', label: getAiAgentLabel('image_generation') },
+  { key: 'image_edit', label: getAiAgentLabel('image_edit') },
+  { key: 'video_generation', label: getAiAgentLabel('video_generation') },
+  { key: 'embedding', label: getAiAgentLabel('embedding') },
+  { key: 'document_generation', label: getAiAgentLabel('document_generation') },
+  { key: 'customer_auto_reply', label: getAiAgentLabel('customer_auto_reply') },
 ];
 
 const MODEL_TABS = [
@@ -518,13 +519,13 @@ const SaasAdminAiSettings: React.FC = () => {
                   message="برای هر ویژگی (capability)، فقط مدل‌هایی که capability_tags آن‌ها شامل آن ویژگی باشد در انتخاب سازمان‌ها نشان داده می‌شود."
                 />
                 <div className="flex flex-wrap items-center gap-2">
-                  <Text type="secondary" className="text-xs">فیلتر بر اساس عملگر:</Text>
+                  <Text type="secondary" className="text-xs">فیلتر بر اساس ایجنت:</Text>
                   <Select
                     allowClear
                     className="min-w-56"
                     value={catalogCapabilityFilter}
                     onChange={setCatalogCapabilityFilter}
-                    placeholder="همه عملگرها"
+                    placeholder="همه ایجنت‌ها"
                     options={ALL_CAPABILITIES.map((capability) => ({ value: capability.key, label: capability.label }))}
                   />
                 </div>
@@ -782,7 +783,7 @@ const SaasAdminAiSettings: React.FC = () => {
             </Form.Item>
             <Form.Item
               name={['metadata', 'default_capability_tags']}
-              label="پیش‌فرض برای عملگرها"
+              label="پیش‌فرض برای ایجنت‌ها"
               className="col-span-2"
               dependencies={[['metadata', 'is_default_model']]}
             >
@@ -790,7 +791,7 @@ const SaasAdminAiSettings: React.FC = () => {
                 mode="multiple"
                 disabled={!isDefaultModel}
                 options={DEFAULT_CAPABILITY_OPTIONS.map((capability) => ({ value: capability.key, label: capability.label }))}
-                placeholder="عملگرهایی که این مدل باید پیش‌فرض آن‌ها باشد"
+                placeholder="ایجنت‌هایی که این مدل باید پیش‌فرض آن‌ها باشد"
               />
             </Form.Item>
             {defaultReplacementPreview.length > 0 ? (
@@ -809,7 +810,7 @@ const SaasAdminAiSettings: React.FC = () => {
                             : 'اکنون مدل پیش‌فرضی ندارد.'}
                         </div>
                       ))}
-                      <div>پس از ذخیره، این مدل پیش‌فرض مرکزی این عملگرها می‌شود؛ انتخاب ذخیره‌شده هر سازمان تغییر نمی‌کند.</div>
+                      <div>پس از ذخیره، این مدل پیش‌فرض مرکزی این ایجنت‌ها می‌شود؛ انتخاب ذخیره‌شده هر سازمان تغییر نمی‌کند.</div>
                     </div>
                   )}
                 />

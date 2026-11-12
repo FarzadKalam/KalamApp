@@ -15,6 +15,7 @@ import { toPersianNumber } from '../../utils/persianNumberFormatter';
 type MessageAttachmentGalleryProps = {
   attachments?: Array<NoteAttachment | null | undefined>;
   call?: boolean;
+  presentation?: 'assistant';
 };
 
 const AudioAttachmentPlayer: React.FC<{ name: string; url?: string | null; call?: boolean }> = ({ name, url, call = false }) => (
@@ -23,7 +24,7 @@ const AudioAttachmentPlayer: React.FC<{ name: string; url?: string | null; call?
   </div>
 );
 
-const MessageAttachmentGallery: React.FC<MessageAttachmentGalleryProps> = ({ attachments = [], call = false }) => {
+const MessageAttachmentGallery: React.FC<MessageAttachmentGalleryProps> = ({ attachments = [], call = false, presentation }) => {
   const [visibleImages, setVisibleImages] = useState(4);
   const [previewAttachment, setPreviewAttachment] = useState<NoteAttachment | null>(null);
   const normalized = useMemo(() => dedupeAttachments(attachments), [attachments]);
@@ -38,9 +39,9 @@ const MessageAttachmentGallery: React.FC<MessageAttachmentGalleryProps> = ({ att
   if (normalized.length === 0) return null;
 
   return (
-    <div className="mt-3 space-y-2">
+    <div className={`mt-3 space-y-2${presentation === 'assistant' ? ' ai-generated-gallery' : ''}`}>
       {images.length > 0 ? (
-        <div className={`grid gap-1.5 ${images.length === 1 ? 'max-w-[156px] grid-cols-1' : 'max-w-[260px] grid-cols-2'}`}>
+        <div className={`grid gap-1.5 ${presentation === 'assistant' ? 'w-full max-w-[480px] ' : ''}${images.length === 1 ? (presentation === 'assistant' ? 'grid-cols-1' : 'max-w-[156px] grid-cols-1') : (presentation === 'assistant' ? 'grid-cols-2' : 'max-w-[260px] grid-cols-2')}`}>
           {images.slice(0, visibleImages).map((attachment, index) => {
             const hiddenCount = images.length - visibleImages;
             const showOverlay = index === visibleImages - 1 && hiddenCount > 0;
@@ -52,7 +53,7 @@ const MessageAttachmentGallery: React.FC<MessageAttachmentGalleryProps> = ({ att
                 aria-label={`نمایش تصویر ${attachment.name}`}
                 onClick={() => showOverlay ? setVisibleImages((count) => count + 12) : setPreviewAttachment(attachment)}
               >
-                <MessageAttachmentImage attachment={attachment} className="h-full w-full object-cover" />
+                <MessageAttachmentImage attachment={attachment} className={`h-full w-full ${presentation === 'assistant' ? 'object-contain' : 'object-cover'}`} />
                 <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/45 to-transparent p-2 text-[11px] font-semibold text-white">
                   <span className="line-clamp-1">{attachment.name}</span>
                 </div>

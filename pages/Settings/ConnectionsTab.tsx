@@ -1,3 +1,4 @@
+import EmailSettings from '../../components/email/EmailSettings';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   App as AntdApp,
@@ -6,13 +7,12 @@ import {
   Collapse,
   Form,
   Input,
-  InputNumber,
   Select,
   Space,
   Switch,
 } from 'antd';
 import { CopyOutlined, LinkOutlined, ReloadOutlined, SafetyCertificateOutlined, SaveOutlined, SearchOutlined, SendOutlined } from '@ant-design/icons';
-import { supabase } from '../../supabaseClient';
+import { supabase, SUPABASE_URL } from '../../supabaseClient';
 import { getSmsBalanceViaGateway, sendSmsViaGateway } from '../../utils/smsGateway';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { OFFICIAL_BOT_API_BASE_URL, type BotChannel } from '../../utils/botGateway';
@@ -519,11 +519,6 @@ const ConnectionsTab: React.FC = () => {
     []
   );
 
-  const emailProviderOptions = useMemo(
-    () => [{ label: 'SMTP', value: 'smtp' }],
-    []
-  );
-
   const siteProviderOptions = useMemo(
     () => [{ label: 'REST API', value: 'rest_api' }],
     []
@@ -645,7 +640,7 @@ const ConnectionsTab: React.FC = () => {
     form.getFieldValue('taxpayer_system') || DEFAULT_VALUES.taxpayer_system;
 
   const smsInboundWebhookUrl = useMemo(() => {
-    const supabaseUrl = String(import.meta.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '');
+    const supabaseUrl = SUPABASE_URL.replace(/\/+$/, '');
     const secret = String(smsWebhookSecret || '').trim();
     if (!supabaseUrl || !currentOrgId || !secret) return '';
     const params = new URLSearchParams({
@@ -656,7 +651,7 @@ const ConnectionsTab: React.FC = () => {
   }, [currentOrgId, smsWebhookSecret]);
 
   const voipWebhookUrl = useMemo(() => {
-    const supabaseUrl = String(import.meta.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '');
+    const supabaseUrl = SUPABASE_URL.replace(/\/+$/, '');
     const secret = String(voipWebhookSecret || '').trim();
     if (!supabaseUrl || !currentOrgId || !secret) return '';
     const params = new URLSearchParams({
@@ -945,22 +940,6 @@ const ConnectionsTab: React.FC = () => {
           provider: values.sms?.provider || 'meli_payamak',
           settings: buildSmsOverrideSettings(currentSmsValues),
           is_active: values.sms?.is_active !== false,
-        },
-        {
-          id: rowIds.email,
-          org_id: resolvedOrgId,
-          connection_type: 'email',
-          provider: values.email?.provider || 'smtp',
-          settings: {
-            host: values.email?.host || '',
-            port: values.email?.port || 587,
-            username: values.email?.username || '',
-            password: values.email?.password || '',
-            from_email: values.email?.from_email || '',
-            from_name: values.email?.from_name || '',
-            secure_tls: values.email?.secure_tls !== false,
-          },
-          is_active: values.email?.is_active !== false,
         },
         {
           id: rowIds.site,
@@ -1842,39 +1821,7 @@ const ConnectionsTab: React.FC = () => {
             {
               key: 'email',
               label: 'اتصال ایمیل',
-              children: (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <Form.Item label="ارائه‌دهنده ایمیل" name={['email', 'provider']}>
-                    <Select options={emailProviderOptions} />
-                  </Form.Item>
-                  <Form.Item label="پورت" name={['email', 'port']}>
-                    <InputNumber className="w-full persian-number" min={1} />
-                  </Form.Item>
-                  <Form.Item label="فعال" name={['email', 'is_active']} valuePropName="checked">
-                    <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
-                  </Form.Item>
-
-                  <Form.Item label="SMTP Host" name={['email', 'host']}>
-                    <Input />
-                  </Form.Item>
-                  <Form.Item label="نام کاربری" name={['email', 'username']}>
-                    <Input />
-                  </Form.Item>
-                  <Form.Item label="رمز عبور" name={['email', 'password']}>
-                    <Input.Password />
-                  </Form.Item>
-
-                  <Form.Item label="ایمیل فرستنده" name={['email', 'from_email']}>
-                    <Input />
-                  </Form.Item>
-                  <Form.Item label="نام فرستنده" name={['email', 'from_name']}>
-                    <Input />
-                  </Form.Item>
-                  <Form.Item label="امنیت TLS" name={['email', 'secure_tls']} valuePropName="checked">
-                    <Switch />
-                  </Form.Item>
-                </div>
-              ),
+              children: <EmailSettings />,
             },
             {
               key: 'site',

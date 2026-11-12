@@ -1,3 +1,4 @@
+import { iranMobileLocal } from '../supabase/functions/_shared/phone-number';
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Button, App, Checkbox, Modal, Progress, Select, Form, Input, Skeleton } from 'antd';
@@ -4001,18 +4002,7 @@ const ModuleShow: React.FC = () => {
     return baseName.toLowerCase().endsWith('.pdf') ? baseName : `${baseName}.pdf`;
   }, [data, id, moduleConfig]);
 
-  const normalizeSmsPhone = useCallback((value: unknown) => {
-    let digits = String(value ?? '')
-      .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
-      .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
-      .replace(/[^\d]/g, '')
-      .trim();
-    if (!digits) return '';
-    if (digits.startsWith('0098')) digits = `0${digits.slice(4)}`;
-    else if (digits.startsWith('98')) digits = `0${digits.slice(2)}`;
-    else if (digits.length === 10 && digits.startsWith('9')) digits = `0${digits}`;
-    return /^09\d{9}$/.test(digits) ? digits : '';
-  }, []);
+  const normalizeSmsPhone = useCallback((value: unknown) => iranMobileLocal(value) ?? '', []);
 
   const uploadGeneratedPdf = useCallback(async (
     blob: Blob,

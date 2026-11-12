@@ -1,6 +1,6 @@
 import React from 'react';
 import { App } from 'antd';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AiChatSurfaceV2 from './AiChatSurfaceV2';
@@ -170,6 +170,28 @@ describe('AiChatSurfaceV2', () => {
     await waitFor(() => expect(screen.getByText('پاسخ تازه')).toBeInTheDocument());
     expect(invokeMock.mock.calls.some((call) => call[1]?.body?.action === 'get_thread' && call[1]?.body?.threadId === 'thread-1')).toBe(false);
   }, 15000);
+
+  it('shows observed parallel agent activity before metadata and clears it after the final answer', async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const encoder=new TextEncoder();
+    fetchMock.mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({start(value){controller=value;}}),{headers:{'Content-Type':'text/event-stream'}}));
+    renderSurface([{pathname:'/ai',state:{aiInitialPrompt:'گزارش سازمان',forceNewThread:true}}]);
+    await waitFor(()=>expect(fetchMock).toHaveBeenCalled());
+    // No fabricated retrieval stages before the server reports actual execution.
+    expect(screen.queryByText('در حال بررسی دانش سازمان…')).not.toBeInTheDocument();
+    const send=(event:string,payload:unknown)=>act(async()=>{controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`));});
+    await send('agent_activity',{agentId:'organization_data',phase:'started',at:1});
+    await send('agent_activity',{agentId:'organization_knowledge',phase:'started',at:2});
+    expect(await screen.findByText('در حال بررسی اطلاعات واقعی سازمان…')).toBeInTheDocument();
+    expect(await screen.findByText('در حال بررسی دانش سازمان…')).toBeInTheDocument();
+    await send('agent_activity',{agentId:'organization_data',phase:'completed',at:3});
+    await waitFor(()=>expect(screen.queryByText('در حال بررسی اطلاعات واقعی سازمان…')).not.toBeInTheDocument());
+    expect(screen.getByText('در حال بررسی دانش سازمان…')).toBeInTheDocument();
+    await send('done',{success:true,threadId:'new-thread',messageId:'answer-1',answer:'گزارش آماده است'});
+    await act(async()=>controller.close());
+    expect(await screen.findByText('گزارش آماده است')).toBeInTheDocument();
+    expect(screen.queryByText('در حال بررسی دانش سازمان…')).not.toBeInTheDocument();
+  },15000);
 
   it('does not auto-submit when a dashboard file is only queued for the new conversation', async () => {
     renderSurface([{

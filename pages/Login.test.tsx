@@ -174,7 +174,16 @@ const {
     functions: {
       invoke: (...args: any[]) => functionState.invoke(...args),
     },
-    rpc: (...args: any[]) => rpcState(...args),
+    rpc: async (...args: any[]) => {
+      const result = await rpcState(...args);
+      if (result?.error || result?.data != null) return result;
+      const user = (await authState.getUser())?.data?.user;
+      const profile = (dbState.profiles || []).find(row => row.id === user?.id);
+      if (args[0] === 'get_current_user_organization_accesses') return { data: profile?.is_active !== false && profile?.org_id ? [{ org_id: profile.org_id, org_name: 'سازمان تست', role_name: 'ویرایشگر', resolved_host: null }] : [], error: null };
+      if (args[0] === 'activate_current_user_organization') return { data: { success: true }, error: null };
+      if (args[0] === 'get_current_organization_context') return { data: profile ? { ...profile, org_name: 'سازمان تست', permissions: {} } : null, error: null };
+      return result;
+    },
     from(table: string) {
       return {
         select: (expr: string) => new MockFromQuery(table, 'select').select(expr),
@@ -400,7 +409,7 @@ describe('Login OTP and password flows', () => {
     expect(document.body.textContent || '').toContain('ورود با موفقیت انجام شد');
   }, 15000);
 
-  it('repairs legacy phone conflict and continues login with the verified session', async () => {
+  it('re-authenticates the original identity rather than copying its profile to an OTP orphan', async () => {
     rpcState.mockImplementation(async (fn: string) => {
       if (fn === 'check_phone_login_candidate') {
         return {
@@ -452,19 +461,16 @@ describe('Login OTP and password flows', () => {
     await waitFor(() => {
       expect(functionState.invoke).toHaveBeenCalledWith('user-admin', {
         body: {
-          action: 'repair_legacy_phone_login',
+          action: 'request_existing_profile_phone_otp',
           phone: '+989125555555',
-        },
-        headers: {
-          Authorization: 'Bearer session-token',
         },
       });
     });
     await waitFor(() => {
-      expect(mockTrackSuccessfulLogin).toHaveBeenCalledWith('otp');
-      expect(mockNavigate).toHaveBeenCalledWith('/', { replace: true });
+      expect(authState.signOut).toHaveBeenCalled();
     });
-    expect(authState.signOut).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(mockTrackSuccessfulLogin).not.toHaveBeenCalled();
     expect(authState.signInWithOtp).toHaveBeenCalledTimes(1);
   }, 15000);
 
@@ -519,11 +525,11 @@ describe('Login OTP and password flows', () => {
     await waitFor(() => {
       expect(authState.signOut).toHaveBeenCalled();
     });
-    expect(document.body.textContent || '').toContain('به یک سازمان دیگر متصل یا برای آن رزرو شده است');
+    await waitFor(() => expect(document.body.textContent || '').toContain('به یک سازمان دیگر متصل یا برای آن رزرو شده است'));
     expect(mockNavigate).not.toHaveBeenCalled();
   }, 15000);
 
-  it('blocks password login for inactive users after successful auth', async () => {
+  it('blocks password login when no active organization membership remains', async () => {
     getDbState().profiles = [
       {
         id: 'user-2',
@@ -540,7 +546,7 @@ describe('Login OTP and password flows', () => {
     authState.getUser.mockResolvedValue({ data: { user: { id: 'user-2', email: 'inactive@test.local', phone: '+989120000000' } }, error: null });
 
     renderLogin();
-    fireEvent.change(screen.getByPlaceholderText('admin@example.com'), { target: { value: 'inactive۱۲٣@test.local' } });
+    fireEvent.change(screen.getByPlaceholderText('شماره موبایل یا ایمیل حساب'), { target: { value: 'inactive۱۲٣@test.local' } });
     const passwordInputs = document.body.querySelectorAll('input[type="password"]');
     fireEvent.change(passwordInputs[0] as HTMLInputElement, { target: { value: 'secret123' } });
     fireEvent.click(screen.getByText('ورود'));
@@ -552,9 +558,69 @@ describe('Login OTP and password flows', () => {
       });
       expect(authState.signOut).toHaveBeenCalled();
     });
-    expect(document.body.textContent || '').toContain('حساب کاربری شما غیرفعال است');
+    expect(document.body.textContent || '').toContain('عضویت فعالی برای این حساب پیدا نشد');
     expect(mockNavigate).not.toHaveBeenCalled();
   }, 15000);
+
+  it('changes a forgotten password only after successful phone verification', async () => {
+    getDbState().profiles = [{ id: 'recovery-user', org_id: 'org-1', role_id: 'role-viewer', role: 'viewer',
+      full_name: 'کاربر بازیابی', mobile_1: '09121234567', is_active: true }];
+    rpcState.mockImplementation(async (fn: string) => fn === 'check_phone_login_candidate'
+      ? { data: { exists_in_profiles: true, exists_in_auth: true, has_phone_identity: true, is_active: true }, error: null }
+      : { data: null, error: null });
+    authState.signInWithOtp.mockResolvedValue({ error: null });
+    authState.verifyOtp.mockResolvedValue({ error: null });
+    authState.getUser.mockResolvedValue({ data: { user: { id: 'recovery-user', phone: '+989121234567' } }, error: null });
+    renderLogin();
+    fireEvent.click(screen.getByText('فراموشی رمز عبور'));
+    await screen.findByText('بازیابی رمز عبور با شماره موبایل');
+    setOtpPhone('09121234567'); clickRequestOtp();
+    await screen.findByText('تأیید شماره و تعیین رمز جدید');
+    expect(authState.updateUser).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('رقم 1 کد تایید'), { target: { value: '123456' } });
+    fireEvent.click(screen.getByText('تأیید شماره و تعیین رمز جدید'));
+    await screen.findByText('رمز جدید حساب شخصی');
+    const fields = document.querySelectorAll('input[type="password"]');
+    fireEvent.change(fields[0], { target: { value: 'new-password' } });
+    fireEvent.change(fields[1], { target: { value: 'different-password' } });
+    fireEvent.click(screen.getByText('ثبت رمز جدید'));
+    expect(authState.updateUser).not.toHaveBeenCalled();
+    fireEvent.change(fields[1], { target: { value: 'new-password' } });
+    fireEvent.click(screen.getByText('ثبت رمز جدید'));
+    await waitFor(() => expect(authState.updateUser).toHaveBeenCalledWith({ password: 'new-password' }));
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/', { replace: true }));
+  });
+
+  it('does not offer password entry when phone verification fails', async () => {
+    rpcState.mockImplementation(async (fn: string) => fn === 'check_phone_login_candidate'
+      ? { data: { exists_in_profiles: true, exists_in_auth: true, has_phone_identity: true, is_active: true }, error: null }
+      : { data: null, error: null });
+    authState.signInWithOtp.mockResolvedValue({ error: null });
+    authState.verifyOtp.mockResolvedValue({ error: { message: 'invalid otp' } });
+    renderLogin();
+    fireEvent.click(screen.getByText('فراموشی رمز عبور'));
+    await screen.findByText('بازیابی رمز عبور با شماره موبایل');
+    setOtpPhone('09121234567'); clickRequestOtp();
+    await screen.findByText('تأیید شماره و تعیین رمز جدید');
+    fireEvent.change(screen.getByLabelText('رقم 1 کد تایید'), { target: { value: '000000' } });
+    fireEvent.click(screen.getByText('تأیید شماره و تعیین رمز جدید'));
+    await waitFor(() => expect(authState.verifyOtp).toHaveBeenCalled());
+    expect(screen.queryByText('ثبت رمز جدید')).not.toBeInTheDocument();
+    expect(authState.updateUser).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('accepts Persian mobile digits for password sign-in and resolves verified memberships', async () => {
+    getDbState().profiles = [{ id: 'phone-password-user', org_id: 'org-1', role_id: 'role-viewer', role: 'viewer', is_active: true }];
+    authState.signInWithPassword.mockResolvedValue({ error: null });
+    authState.getUser.mockResolvedValue({ data: { user: { id: 'phone-password-user', phone: '+989121234567' } }, error: null });
+    renderLogin();
+    fireEvent.change(screen.getByPlaceholderText('شماره موبایل یا ایمیل حساب'), { target: { value: '۰۹۱۲۱۲۳۴۵۶۷' } });
+    fireEvent.change(document.querySelector('input[type="password"]')!, { target: { value: 'secret123' } });
+    fireEvent.click(screen.getByText('ورود'));
+    await waitFor(() => expect(authState.signInWithPassword).toHaveBeenCalledWith({ phone: '+989121234567', password: 'secret123' }));
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/', { replace: true }));
+  });
 
   it('restores OTP session state and cooldown from storage', async () => {
     localStorage.setItem('kalam_login_mode', 'otp');

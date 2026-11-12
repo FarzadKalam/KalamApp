@@ -374,6 +374,8 @@ echo "Deployed $RELEASE_DIR"
     throw "Remote activation failed."
   }
 
+  Write-Step 'Synchronizing dedicated installation release selection'
+  & (Join-Path $PSScriptRoot 'sync-local-release.ps1') -ConfigFile $ConfigFile
   Write-Step "Deploy completed successfully"
 }
 finally {

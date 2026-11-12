@@ -1,4 +1,5 @@
 import { supabase } from "../supabaseClient";
+import { fetchSessionBootstrap } from "./sessionCache";
 import { toFaErrorMessage } from "./errorMessageFa";
 
 type DemoDataAdminAction = "seed_org_demo_data" | "clear_org_demo_data" | "get_demo_seed_status";
@@ -19,10 +20,12 @@ const invokeDemoDataAdmin = async <T = DemoDataAdminStatus>(
   action: DemoDataAdminAction,
   options?: { orgId?: string | null },
 ) => {
+  const orgId = options?.orgId || (await fetchSessionBootstrap(supabase)).orgId;
+  if (!orgId) throw new Error('سازمان جاری برای مدیریت داده‌های دمو مشخص نیست. دوباره وارد شوید.');
   const { data, error } = await supabase.functions.invoke("demo-data-admin", {
     body: {
       action,
-      org_id: options?.orgId || null,
+      org_id: orgId,
     },
   });
   if (error) {

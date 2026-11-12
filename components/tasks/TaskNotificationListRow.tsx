@@ -13,6 +13,7 @@ import AssigneeAvatarDisplay from '../common/AssigneeAvatarDisplay';
 import RecordLockControl from '../recordLocks/RecordLockControl';
 import TaskActionButtons from './TaskActionButtons';
 import TaskRelatedProcessBar from './TaskRelatedProcessBar';
+import { getChoiceLabelFallbackFa } from '../../utils/optionHelpers';
 
 type SelectOption = { label: string; value: string | number; color?: string; icon?: string };
 
@@ -30,6 +31,9 @@ type TaskNotificationListRowProps = {
   currentUser?: { id?: string | null; fullName?: string | null } | null;
   canLockRecord?: boolean;
   canUnlockRecord?: boolean;
+  readOnly?: boolean;
+  canViewField?: (key: string) => boolean;
+  compact?: boolean;
 };
 
 const resolveOptionLabel = (value: any, options: SelectOption[]) =>
@@ -62,6 +66,9 @@ const TaskNotificationListRow: React.FC<TaskNotificationListRowProps> = ({
   currentUser = null,
   canLockRecord = false,
   canUnlockRecord = false,
+  readOnly = false,
+  canViewField = () => true,
+  compact = false,
 }) => {
   const [expanded, setExpanded] = React.useState(false);
   const [lockPatch, setLockPatch] = React.useState<Record<string, any>>({});
@@ -104,10 +111,10 @@ const TaskNotificationListRow: React.FC<TaskNotificationListRowProps> = ({
   return (
     <article
       className="overflow-hidden rounded-xl border border-gray-200/90 bg-white shadow-sm transition-shadow hover:shadow-md dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.92)]"
-      style={{ borderRightWidth: 4, borderRightColor: statusColor }}
+      style={{ borderRightWidth: 4, borderRightColor: canViewField('status') ? statusColor : undefined }}
     >
-      <div className="flex min-w-0 items-center gap-2 px-3 py-2.5">
-        <AssigneeAvatarDisplay
+      <div className={`${compact ? 'grid grid-cols-[30px_minmax(0,1fr)]' : 'flex'} min-w-0 items-center gap-2 px-3 py-2.5`}>
+        {canViewField('assignee_id') && <AssigneeAvatarDisplay
           source={{
             ...effectiveTask,
             assignee_name: effectiveTask.assignee_name || assigneeNameMap[String(effectiveTask?.assignee_id || '')],
@@ -119,11 +126,11 @@ const TaskNotificationListRow: React.FC<TaskNotificationListRowProps> = ({
           showLabel={false}
           emptyPlaceholder={<span className="h-[30px] w-[30px] rounded-full border border-dashed border-gray-300 dark:border-gray-600" />}
           className="shrink-0"
-        />
+        />}
 
         <button
           type="button"
-          className="min-w-0 flex-1 text-right"
+          className={`min-w-0 flex-1 text-right ${compact && !canViewField('assignee_id') ? 'col-span-2' : ''}`}
           onClick={() => {
             openTaskProcessModal({ task: effectiveTask });
             onClose?.();
@@ -132,14 +139,14 @@ const TaskNotificationListRow: React.FC<TaskNotificationListRowProps> = ({
           <span className="block truncate text-sm font-bold text-gray-800 hover:text-leather-700 hover:underline dark:text-gray-100">
             {toPersianNumber(displayTaskTitle)}
           </span>
-          {currentStatusLabel ? (
+          {canViewField('status') && currentStatusLabel ? (
             <span className="mt-0.5 block truncate text-[10px] font-semibold" style={{ color: statusColor }}>
               {currentStatusLabel}
             </span>
           ) : null}
         </button>
 
-        <div className="relative z-20 flex shrink-0 items-center gap-0.5" onClick={(event) => event.stopPropagation()}>
+        <div className={`relative z-20 flex items-center gap-0.5 py-0.5 ${compact ? 'col-span-2 min-w-0 max-w-full' : 'shrink-0'}`} onClick={(event) => event.stopPropagation()}>
           <RecordLockControl
             moduleId="tasks"
             recordId={String(effectiveTask?.id || '')}
@@ -148,15 +155,15 @@ const TaskNotificationListRow: React.FC<TaskNotificationListRowProps> = ({
             canUnlock={canUnlockRecord}
             onChanged={handleLockChanged}
           />
-          <TaskActionButtons
+          {canViewField('status') && <TaskActionButtons
             task={effectiveTask}
-            disabled={lockState.isLocked}
+            disabled={readOnly || lockState.isLocked}
             currentUser={currentUser}
             onTaskUpdated={onTaskUpdated}
             statusOptions={resolvedStatusOptions}
             hideReschedule
-            buttonClassName="!h-8 !w-8"
-          />
+            buttonClassName={compact ? '!h-11 !w-11 md:!h-8 md:!w-8' : '!h-8 !w-8'}
+          />}
         </div>
       </div>
 
@@ -169,17 +176,17 @@ const TaskNotificationListRow: React.FC<TaskNotificationListRowProps> = ({
                 قفل شده
               </span>
             ) : null}
-            {effectiveTask.priority ? (
+            {canViewField('priority') && effectiveTask.priority ? (
               <Tag className="!m-0 !rounded-full !border-0 !bg-[rgba(var(--brand-50-rgb),0.9)] !px-2 !py-0.5 !text-[11px] !text-gray-700 dark:!bg-[rgba(var(--brand-700-rgb),0.28)] dark:!text-gray-100">
-                {toPersianNumber(resolveOptionLabel(effectiveTask.priority, priorityOptions) || String(effectiveTask.priority))}
+                {toPersianNumber(resolveOptionLabel(effectiveTask.priority, priorityOptions) || getChoiceLabelFallbackFa(effectiveTask.priority))}
               </Tag>
             ) : null}
-            {effectiveTask.due_date ? (
+            {canViewField('due_date') && effectiveTask.due_date ? (
               <span className="rounded-full bg-gray-100 px-2 py-0.5 dark:bg-white/10">
                 موعد: {safeJalaliFormat(effectiveTask.due_date, 'YYYY/MM/DD HH:mm')}
               </span>
             ) : null}
-            {taskTags.map((tag) => (
+            {canViewField('tags') && taskTags.map((tag) => (
               <Tag key={tag} className="!m-0 !rounded-full !border-0 !bg-gray-100 !px-2 !py-0.5 !text-[11px] !text-gray-600 dark:!bg-white/10 dark:!text-gray-200">
                 {toPersianNumber(tag)}
               </Tag>
@@ -187,7 +194,7 @@ const TaskNotificationListRow: React.FC<TaskNotificationListRowProps> = ({
           </div>
 
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-gray-500 dark:text-gray-300">
-            <AssigneeAvatarDisplay
+            {canViewField('assignee_id') && <AssigneeAvatarDisplay
               source={{
                 ...effectiveTask,
                 assignee_name: effectiveTask.assignee_name || assigneeNameMap[String(effectiveTask?.assignee_id || '')],
@@ -198,8 +205,8 @@ const TaskNotificationListRow: React.FC<TaskNotificationListRowProps> = ({
               avatarSize={20}
               className="min-w-0"
               labelClassName="truncate font-semibold"
-            />
-            {recordTitle && sourceLink.moduleId && sourceLink.recordId ? (
+            />}
+            {canViewField('source_record_id') && recordTitle && sourceLink.moduleId && sourceLink.recordId ? (
               <span className="min-w-0 truncate">
                 رکورد مرتبط:{' '}
                 <Link to={`/${sourceLink.moduleId}/${sourceLink.recordId}`} className="text-leather-600 hover:underline" onClick={onClose}>
@@ -209,12 +216,12 @@ const TaskNotificationListRow: React.FC<TaskNotificationListRowProps> = ({
             ) : null}
           </div>
 
-          <TaskRelatedProcessBar
+          {canViewField('process_group_id') && <TaskRelatedProcessBar
             task={effectiveTask}
             variant="compact"
             className="mt-3"
             stopClickPropagation
-          />
+          />}
         </div>
       ) : null}
 
@@ -222,7 +229,7 @@ const TaskNotificationListRow: React.FC<TaskNotificationListRowProps> = ({
         type="text"
         size="small"
         block
-        className="!h-7 !rounded-none !border-x-0 !border-b-0 !border-t !border-gray-100 !text-gray-400 hover:!text-leather-700 dark:!border-white/10 dark:!text-gray-400"
+        className={`${compact ? '!h-11 md:!h-7' : '!h-7'} !rounded-none !border-x-0 !border-b-0 !border-t !border-gray-100 !text-gray-400 hover:!text-leather-700 dark:!border-white/10 dark:!text-gray-400`}
         icon={expanded ? <UpOutlined /> : <DownOutlined />}
         aria-expanded={expanded}
         aria-label={expanded ? 'بستن جزئیات فعالیت' : 'نمایش جزئیات فعالیت'}

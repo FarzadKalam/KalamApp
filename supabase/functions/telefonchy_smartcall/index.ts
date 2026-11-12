@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { dialPhone } from '../_shared/phone-number.ts';
 
 import { parseTehranProviderDateTimeToUtcIso } from '../_shared/tehran-datetime.ts';
 
@@ -44,10 +45,7 @@ const firstValue = (...values: any[]) => {
   return '';
 };
 
-const normalizePhone = (value: any) =>
-  String(value || '')
-    .trim()
-    .replace(/[\u200e\u200f\s().-]/g, '');
+const normalizePhone = dialPhone;
 
 const trimTrailingSlash = (value: string) => String(value || '').replace(/\/+$/, '');
 

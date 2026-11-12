@@ -17,6 +17,7 @@ import {
   Tag,
 } from 'antd';
 import { CreditCardOutlined, ReloadOutlined, SaveOutlined, ThunderboltOutlined, UserOutlined } from '@ant-design/icons';
+import { getAiAgentLabel } from '../../supabase/functions/_shared/ai-agents';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import AiKnowledgeTab from './AiKnowledgeTab';
@@ -47,22 +48,22 @@ const CAPABILITIES: Array<{
   description: string;
   phase: 'active' | 'next';
 }> = [
-  { key: 'dashboard_chat', label: 'گفتگو آزاد در داشبورد', description: 'پرسش و پاسخ عمومی با زمینه سازمان', phase: 'active' },
-  { key: 'record_chat', label: 'گفتگو روی رکورد', description: 'تحلیل و پاسخ درباره رکورد فعلی', phase: 'active' },
-  { key: 'customer_reply_suggestion', label: 'پیشنهاد پاسخ مشتریان', description: 'متن آماده پاسخ برای پیام‌ها و گروه‌های مشتریان', phase: 'active' },
-  { key: 'document_analysis', label: 'تحلیل اسناد', description: 'پرسش و پاسخ روی دانش و اسناد سازمان', phase: 'active' },
-  { key: 'workflow_ai_prompt', label: 'پرامپت در گردش کار', description: 'اجرای پرامپت در گردش کارهای معمولی و زمان‌بندی‌شده', phase: 'active' },
-  { key: 'deep_reasoning', label: 'تفکر عمیق', description: 'استفاده از مدل‌های reasoning برای سوالات پیچیده', phase: 'active' },
-  { key: 'auto_decision', label: 'تصمیم‌گیری خودکار', description: 'انتخاب و ارزیابی هوشمند گزینه‌ها در عملگرهای خودکار', phase: 'active' },
-  { key: 'legal_assistant', label: 'دستیار حقوقی', description: 'پاسخ حقوقی با تکیه بر اسناد سازمان و جستجوی وب', phase: 'active' },
-  { key: 'web_search', label: 'جستجوی وب', description: 'جستجوی اینترنتی برای سوالات نیازمند اطلاعات جاری', phase: 'active' },
-  { key: 'voice_input', label: 'دریافت و تحلیل صدا', description: 'تبدیل فایل صوتی به متن و تحلیل آن', phase: 'active' },
-  { key: 'voice_output', label: 'تولید صدا', description: 'پاسخگویی با فایل صوتی', phase: 'active' },
-  { key: 'image_generation', label: 'تولید تصویر', description: 'ساخت تصویر با پرامپت', phase: 'active' },
-  { key: 'video_generation', label: 'تولید ویدیو', description: 'ساخت ویدیو با متن یا تصویر', phase: 'active' },
-  { key: 'document_generation', label: 'ساخت فایل', description: 'تولید فایل Word، Excel، PDF یا CSV', phase: 'active' },
-  { key: 'voip_auto_reply', label: 'پاسخگویی خودکار VOIP', description: 'پاسخ صوتی خودکار در تماس‌ها', phase: 'next' },
-  { key: 'customer_auto_reply', label: 'پاسخگویی خودکار مشتریان', description: 'مدل پاسخ خودکار بات‌ها و گفتگوهای مشتریان', phase: 'active' },
+  { key: 'dashboard_chat', label: getAiAgentLabel('dashboard_chat'), description: 'پرسش و پاسخ عمومی با زمینه سازمان', phase: 'active' },
+  { key: 'record_chat', label: getAiAgentLabel('record_chat'), description: 'تحلیل و پاسخ درباره رکورد فعلی', phase: 'active' },
+  { key: 'customer_reply_suggestion', label: getAiAgentLabel('customer_reply_suggestion'), description: 'متن آماده پاسخ برای پیام‌ها و گروه‌های مشتریان', phase: 'active' },
+  { key: 'document_analysis', label: getAiAgentLabel('document_analysis'), description: 'پرسش و پاسخ روی دانش و اسناد سازمان', phase: 'active' },
+  { key: 'workflow_ai_prompt', label: getAiAgentLabel('workflow_ai_prompt'), description: 'اجرای پرامپت در گردش کارهای معمولی و زمان‌بندی‌شده', phase: 'active' },
+  { key: 'deep_reasoning', label: getAiAgentLabel('deep_reasoning'), description: 'استفاده از مدل‌های reasoning برای سوالات پیچیده', phase: 'active' },
+  { key: 'auto_decision', label: getAiAgentLabel('auto_decision'), description: 'انتخاب و ارزیابی هوشمند گزینه‌ها در ایجنت‌های خودکار', phase: 'active' },
+  { key: 'legal_assistant', label: getAiAgentLabel('legal_assistant'), description: 'پاسخ حقوقی با تکیه بر اسناد سازمان و جستجوی وب', phase: 'active' },
+  { key: 'web_search', label: getAiAgentLabel('web_search'), description: 'جستجوی اینترنتی برای سوالات نیازمند اطلاعات جاری', phase: 'active' },
+  { key: 'voice_input', label: getAiAgentLabel('voice_input'), description: 'تبدیل فایل صوتی به متن و تحلیل آن', phase: 'active' },
+  { key: 'voice_output', label: getAiAgentLabel('voice_output'), description: 'پاسخگویی با فایل صوتی', phase: 'active' },
+  { key: 'image_generation', label: getAiAgentLabel('image_generation'), description: 'ساخت تصویر با پرامپت', phase: 'active' },
+  { key: 'video_generation', label: getAiAgentLabel('video_generation'), description: 'ساخت ویدیو با متن یا تصویر', phase: 'active' },
+  { key: 'document_generation', label: getAiAgentLabel('document_generation'), description: 'تولید فایل Word، Excel، PDF یا CSV', phase: 'active' },
+  { key: 'voip_auto_reply', label: getAiAgentLabel('voip_auto_reply'), description: 'پاسخ صوتی خودکار در تماس‌ها', phase: 'next' },
+  { key: 'customer_auto_reply', label: getAiAgentLabel('customer_auto_reply'), description: 'مدل پاسخ خودکار بات‌ها و گفتگوهای مشتریان', phase: 'active' },
 ];
 
 const PRIMARY_MODEL_KEY = '__primary_model';
@@ -438,7 +439,7 @@ const AiSettingsTab: React.FC = () => {
               label: (
                 <span className="inline-flex items-center gap-2">
                   <AiSparkleIcon className="h-4 w-4" />
-                  مدل هر عملکرد
+                  مدل هر ایجنت
                 </span>
               ),
               children: (
@@ -447,7 +448,7 @@ const AiSettingsTab: React.FC = () => {
                     <div className="mb-2">
                       <div className="font-semibold text-gray-800 dark:text-gray-100">مدل اصلی سازمان</div>
                       <div className="text-xs leading-5 text-gray-500">
-                        برای گفتگو، تحلیل اسناد، ساخت رکورد و عملگرهای متنی استفاده می‌شود؛ موتورهای تخصصی مثل تصویر، ویدیو، صدا و ساخت فایل جدا تنظیم می‌شوند.
+                        برای گفتگو، تحلیل اسناد، ساخت رکورد و ایجنت‌های متنی استفاده می‌شود؛ موتورهای تخصصی مثل تصویر، ویدیو، صدا و ساخت فایل جدا تنظیم می‌شوند.
                       </div>
                     </div>
                     <Form.Item name={['selected_models', PRIMARY_MODEL_KEY]} className="m-0 max-w-xl">

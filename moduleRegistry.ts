@@ -1,5 +1,7 @@
 import { FieldLocation, FieldNature, FieldType, ModuleDefinition } from './types';
+import { emailDeliveryReportsConfig } from './modules/emailDeliveryReportsConfig';
 import { saasSupportTicketsConfig } from './modules/saasSupportTicketsConfig';
+import { saasLocalInstallationsConfig } from './modules/saasLocalInstallationsConfig';
 import { productsConfig } from './modules/productsConfig';
 import { billboardConfig } from './modules/billboardsConfig';
 import { billboardStatusChangesConfig } from './modules/billboardStatusChangesConfig';
@@ -226,6 +228,7 @@ export const BASE_MODULES: Record<string, ModuleDefinition> = {
   web_forms: webFormsConfig,
   automation_execution_reports: automationExecutionReportsConfig,
   sms_delivery_reports: smsDeliveryReportsConfig,
+  email_delivery_reports: emailDeliveryReportsConfig,
   voip_call_reports: voipCallReportsConfig,
   counterparty_bot_groups: counterpartyBotGroupsConfig,
   instagram_conversations: instagramConversationsConfig,
@@ -244,6 +247,7 @@ export const BASE_MODULES: Record<string, ModuleDefinition> = {
   saas_users: saasUsersConfig,
   saas_user_announcements: saasUserAnnouncementsConfig,
   saas_support_tickets: saasSupportTicketsConfig,
+  saas_local_installations: saasLocalInstallationsConfig,
 };
 
 export const MODULES: Record<string, ModuleDefinition> = {

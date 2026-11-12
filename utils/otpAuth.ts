@@ -58,8 +58,8 @@ export const getOtpErrorMessage = (error: any, fallback = 'خطا در عملی�
   if (raw.includes('__otp_profile_org_access_incomplete__')) {
     return 'برای این کاربر جایگاه سازمانی کامل و صریح پیدا نشد. برای جلوگیری از ورود به سازمان اشتباه، ورود متوقف شد. org_id و role_id کاربر باید دقیق بررسی و اصلاح شود.';
   }
-  if (raw.includes('otp_disabled')) {
-    return 'ورود با کد یکبارمصرف در حال حاضر برای این شماره در دسترس نیست. تنظیمات Phone Auth و سناریوی ثبت نام یا ورود با شماره را بررسی کنید.';
+  if (raw.includes('otp_disabled') || raw.includes('signups not allowed for otp') || raw.includes('signup not allowed for otp')) {
+    return 'ارسال کد برای این حساب انجام نشد. از گزینهٔ «وارد شوید» با ایمیل و رمز عبورتان وارد شوید یا با پشتیبانی تماس بگیرید.';
   }
   if (raw.includes('phone_provider_disabled')) {
     return 'ورود با شماره موبایل در تنظیمات احراز هویت سرور فعال نشده است.';
@@ -96,12 +96,6 @@ export const createOtpUiError = (error: any, fallback?: string) => {
 
 export const normalizeOtpPhone = (value: unknown) => normalizeIranMobile(value);
 
-const shouldResendExistingPhoneOtp = (error: any, shouldCreateUser?: boolean) => {
-  if (shouldCreateUser !== false) return false;
-  const raw = getRawErrorText(error);
-  return raw.includes('signups not allowed for otp') || raw.includes('signup not allowed for otp');
-};
-
 export const requestSmsOtp = async (
   authClient: any,
   phone: string,
@@ -119,17 +113,7 @@ export const requestSmsOtp = async (
 
   const { error } = await authClient.signInWithOtp(payload);
   if (error) {
-    // در نصب‌های GoTrue که ثبت‌نام بسته است، /otp ممکن است برای یک حساب ایمیلیِ
-    // دارای شماره نیز به‌اشتباه مسیر ثبت‌نام را بگیرد. فقط در ورودِ حساب موجود
-    // از /resend استفاده می‌کنیم؛ هیچ حساب تازه‌ای از این مسیر ساخته نمی‌شود.
-    if (shouldResendExistingPhoneOtp(error, shouldCreateUser) && typeof authClient.resend === 'function') {
-      const { error: resendError } = await authClient.resend({
-        phone: normalizedPhone,
-        type: 'sms',
-      });
-      if (!resendError) return normalizedPhone;
-      throw createOtpUiError(resendError, 'ارسال کد تایید ناموفق بود.');
-    }
+    // /resend برای شمارهٔ ناموجود هم ۲۰۰ خالی می‌دهد؛ جایگزین درخواست ورود نیست.
     throw createOtpUiError(error, 'ارسال کد تایید ناموفق بود.');
   }
   return normalizedPhone;

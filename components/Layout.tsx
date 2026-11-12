@@ -10,8 +10,6 @@ import {
   UserOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
-  LeftOutlined,
-  RightOutlined,
   HomeOutlined,
   BankOutlined,
   BarChartOutlined,
@@ -37,7 +35,6 @@ import { supabase } from '../supabaseClient';
 import { signOutLocalSession } from '../utils/authSession';
 import { MODULES } from '../moduleRegistry';
 import AppVersionUpdateBanner from './AppVersionUpdateBanner';
-import ContextualTutorialButton from './cms/ContextualTutorialButton';
 import { getTutorialContexts } from '../utils/tutorialContexts';
 import {
   ACCOUNTING_PERMISSION_KEY,
@@ -86,17 +83,21 @@ import AiAssistantLauncher from './communications/AiAssistantLauncher';
 import AiSparkleIcon from './ai/AiSparkleIcon';
 import ActionIcon from './common/ActionIcon';
 import NotificationUnreadBadge from './notifications/NotificationUnreadBadge';
-import SidebarMenu from './layout/SidebarMenu';
-import TazeSystemAttribution from './common/TazeSystemAttribution';
+import MainSidebar from './layout/MainSidebar';
+import './layout/WorkspaceChrome.css';
+import HeaderSearchSurface from './layout/HeaderSearchSurface';
+import OrganizationAccessModal from './OrganizationAccessModal';
 import { resolveMobileKeyboardViewport } from '../utils/mobileKeyboardViewport';
 import { ADVERTISING_CAMPAIGNS_MODULE_ID } from '../utils/advertisingCampaigns';
 import { renderModuleIcon } from '../utils/moduleIcons';
 import { CONTENT_CALENDAR_PLAN_FEATURE } from '../modules/contentCalendarsConfig';
 import { SaasReadonlyContext } from './saas/SaasReadonlyContext';
 import { BILLBOARD_STATUS_MANAGEMENT_PLAN_FEATURE } from '../utils/billboardStatusChanges';
+import { isSelfHostedDeployment } from '../utils/runtimeConfig';
 
-const { Header, Sider, Content } = AntLayout;
+const { Header, Content } = AntLayout;
 const NotificationsPopover = React.lazy(() => import('./NotificationsPopover'));
+const EmailComposerHost = React.lazy(() => import('./email/EmailComposerHost'));
 const GlobalTaskProcessModalHost = React.lazy(() => import('./tasks/GlobalTaskProcessModalHost'));
 const GoalProgressSlider = React.lazy(() => import('./goals/GoalProgressSlider'));
 
@@ -105,15 +106,16 @@ interface LayoutProps {
   isDarkMode: boolean;
   toggleTheme: () => void;
   brandShortName: string;
+  brandLogoUrl?: string | null;
   preloadRoute?: (href: string) => Promise<unknown> | void;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, brandShortName, preloadRoute }) => {
+const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, brandShortName, brandLogoUrl, preloadRoute }) => {
   const { message: messageApi, modal } = App.useApp();
   const navigate = useNavigate();
   const location = useLocation();
   const initialIsMobile = typeof window !== 'undefined' ? window.innerWidth < 768 : false;
-  const [collapsed, setCollapsed] = useState(() => initialIsMobile || location.pathname !== '/');
+  const [collapsed, setCollapsed] = useState(true);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [isMobile, setIsMobile] = useState(initialIsMobile);
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -122,6 +124,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [saasAdminOrgVerified, setSaasAdminOrgVerified] = useState(false);
   const [breadcrumb, setBreadcrumb] = useState<{ moduleTitle?: string; moduleId?: string; recordName?: string } | null>(null);
   const [globalSearch, setGlobalSearch] = useState('');
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<GlobalSearchGroup[]>([]);
   const [searchTouched, setSearchTouched] = useState(false);
@@ -150,10 +153,21 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [alertsDrawerMounted, setAlertsDrawerMounted] = useState(false);
   const [alertsDrawerOpen, setAlertsDrawerOpen] = useState(false);
   const [sessionBootstrapError, setSessionBootstrapError] = useState<any>(null);
+  const [organizationModalOpen, setOrganizationModalOpen] = useState(false);
   const searchRef = useRef<InputRef>(null);
   const searchBoxRef = useRef<HTMLDivElement>(null);
   const searchRequestRef = useRef(0);
   const searchAbortRef = useRef<AbortController | null>(null);
+  const dismissGlobalSearch = useCallback(() => {
+    searchAbortRef.current?.abort();
+    searchAbortRef.current = null;
+    searchRequestRef.current += 1;
+    setGlobalSearch('');
+    setSearchResults([]);
+    setSearchTouched(false);
+    setSearchLoading(false);
+  }, []);
+  useEffect(() => { dismissGlobalSearch(); }, [currentUser?.id, resolvedOrgId, dismissGlobalSearch]);
   const wasMobileViewportRef = useRef(initialIsMobile);
   const normalMobileViewportHeightRef = useRef(0);
   const keyboardVisibleRef = useRef(false);
@@ -195,6 +209,17 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       setRolePermissionsReady(true);
     }
   }, [applySessionBootstrapSnapshot]);
+
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return;
+      void fetchSessionBootstrap(supabase, { force: true }).then(snapshot => applySessionBootstrapSnapshot(snapshot));
+    };
+    window.addEventListener('focus', refresh);
+    const interval = window.setInterval(refresh, 60_000);
+    return () => { window.removeEventListener('focus', refresh); window.clearInterval(interval); };
+  }, [currentUser?.id, applySessionBootstrapSnapshot]);
 
   // مجوز نمایش بخش «تازه سیستم» فقط با permission نقش تعیین نمی‌شود؛
   // سازمان جاری نیز باید یکی از سازمان‌های واقعی مدیر SaaS باشد.
@@ -840,6 +865,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/suppliers', label: 'تامین کنندگان' },
           { key: '/warehouses', label: 'انبارها' },
           { key: '/shelves', label: 'قفسه‌ها' },
+          { key: '/assets', label: 'اموال', disabled: !canViewModule('assets') },
           { key: '/stock_transfers', label: 'تردد کالاها و حواله‌ها', disabled: !canViewModule('stock_transfers') },
           {
             key: 'billboards',
@@ -882,7 +908,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/invoices', label: 'فاکتورهای فروش' },
           { key: '/purchase_invoices', label: 'فاکتورهای خرید' },
           { key: '/expense_documents', label: 'هزینه‌ها', disabled: !canViewModule('expense_documents') },
-          { key: '/assets', label: 'اموال', disabled: !canViewModule('assets') },
           { key: '/sales_return_invoices', label: 'فاکتورهای برگشت از فروش', disabled: !canViewModule('sales_return_invoices') },
           { key: '/purchase_return_invoices', label: 'فاکتورهای برگشت از خرید', disabled: !canViewModule('purchase_return_invoices') },
         ]
@@ -935,6 +960,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/reports', label: 'گزارش‌ساز', disabled: !canViewReportsHub },
           { key: '/automation_execution_reports', label: 'گزارشات فرآیند و اتوماسیون', disabled: !canViewModule('automation_execution_reports') },
           { key: '/sms_delivery_reports', label: 'گزارشات ارسال پیامک', disabled: !canViewModule('sms_delivery_reports') },
+          { key: '/email_delivery_reports', label: 'گزارش‌های ایمیل', disabled: !canViewModule('email_delivery_reports') },
           { key: '/voip_call_reports', label: 'گزارش تماس‌های VoIP', disabled: !canViewModule('voip_call_reports') },
           { key: '/counterparty_bot_groups', label: 'گروه‌های بات', disabled: !canViewModule('counterparty_bot_groups') },
         ],
@@ -958,6 +984,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/instructions', label: 'دستورالعمل‌ها', disabled: !canViewModule('instructions') },
           { key: '/goals', label: 'اهداف', disabled: !canViewGoalsHub },
           { key: '/org-knowledge', icon: <AiSparkleIcon className="h-4 w-4" />, label: 'دانش سازمان', disabled: !canViewOrgKnowledge },
+          ...(isSelfHostedDeployment() ? [{ key: '/installation', icon: <CloudServerOutlined />, label: 'وضعیت نصب اختصاصی' }] : []),
           { key: '/production_orders', label: 'سفارشات تولید' },
           { key: '/gallery', label: 'مدیریت فایل‌ها' },
           { key: RECYCLE_BIN_ROUTE, icon: <DeleteOutlined />, label: 'سطل بازیافت' },
@@ -971,6 +998,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/taze-system', label: 'داشبورد SaaS' },
           { key: '/saas_users', label: 'همه کاربران' },
           { key: '/saas_orgs', label: 'سازمان‌ها' },
+          ...(saasAdminPermissions.view && saasAdminPermissionFields.local_view === true ? [{ key: '/saas_local_installations', label: 'نصب‌های اختصاصی' }] : []),
           { key: '/saas_demo_requests', label: 'درخواست‌های دمو' },
           ...(saasWorkflowAccess ? [{ key: '/taze-system/workflows', label: 'گردش‌کار سازمان‌ها، کاربران و دموها' }] : []),
           ...(supportAdminAccess ? [{ key: '/taze-system/tickets', icon: <Badge count={supportUnread} size="small" overflowCount={99}><MessageOutlined /></Badge>, label: 'تیکت‌ها' }] : []),
@@ -1058,6 +1086,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         case '/cms_categories':
         case '/cms_tags':
           return canViewSaasAdmin;
+        case '/saas_local_installations':
+          return canViewSaasAdmin && rolePermissions?.[SAAS_ADMIN_PERMISSION_KEY]?.view === true && rolePermissions?.[SAAS_ADMIN_PERMISSION_KEY]?.fields?.local_view === true;
+        case '/installation':
+          return isSelfHostedDeployment();
         case '/support/tickets':
           return canViewSupportCustomer;
         case '/accounting/account-review':
@@ -1123,8 +1155,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     [rolePermissions]
   );
   const globalSearchCacheNamespace = useMemo(
-    () => `${String(currentUser?.id || '')}:${JSON.stringify(rolePermissions)}`,
-    [currentUser?.id, rolePermissions]
+    () => `${String(resolvedOrgId || '')}:${String(currentUser?.id || '')}:${JSON.stringify(rolePermissions)}`,
+    [resolvedOrgId, currentUser?.id, rolePermissions]
   );
   const prioritizedGlobalSearchModules = useMemo(
     () => splitGlobalSearchModulesByPriority(searchableGlobalSearchModules),
@@ -1237,11 +1269,19 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const userMenu = {
     items: [
       {
+        key: 'organizations', label: 'سازمان‌های من', icon: <BankOutlined />,
+        onClick: () => setOrganizationModalOpen(true),
+      },
+      {
         key: 'profile',
         label: 'پروفایل کاربری',
         icon: <UserOutlined />,
         onClick: () => handleSidebarNavigate('/profile'),
       },
+      ...(isMobile ? [
+        { key: 'refresh', label: 'تازه‌کردن صفحه', icon: <ActionIcon name="refresh" />, onClick: () => handlePageRefresh() },
+        { key: 'theme', label: isDarkMode ? 'حالت روشن' : 'حالت شب', icon: <ActionIcon name={isDarkMode ? 'sun' : 'moon'} />, onClick: toggleTheme },
+      ] : []),
       { type: 'divider' as const },
       { 
         key: 'logout', 
@@ -1409,9 +1449,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         }}
       >
         <ReloadOutlined style={{ fontSize: 48, color: '#1677ff' }} spin={!rolePermissionsReady} />
-        <div style={{ fontSize: 18, fontWeight: 600 }}>اتصال به اطلاعات سازمان کامل نشد</div>
+        <div style={{ fontSize: 18, fontWeight: 600 }}>دسترسی به سازمان تأیید نشد</div>
         <div style={{ color: '#666', maxWidth: 380 }}>
-          اتصال شبکه یا پاسخ سرور کامل نبود. پس از برقراری اینترنت دوباره تلاش کنید.
+          ممکن است اتصال برقرار نباشد یا عضویت شما در این سازمان غیرفعال شده باشد. دوباره تلاش کنید یا از صفحه ورود، سازمان مجاز دیگری انتخاب کنید.
         </div>
         <Button
           type="primary"
@@ -1421,6 +1461,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         >
           تلاش مجدد
         </Button>
+        <Button onClick={async () => { await signOutLocalSession(); window.location.href = isSelfHostedDeployment() ? '/login' : 'https://app.tazesystem.ir/login'; }}>ورود به سازمان دیگر</Button>
       </div>
     );
   }
@@ -1462,87 +1503,24 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
   return (
     <AntLayout
-      className="overflow-hidden bg-gray-100 dark:bg-dark-bg transition-colors duration-300"
+      className="workspace-chrome overflow-hidden bg-gray-100 dark:bg-dark-bg transition-colors duration-300"
       style={{
         height: 'var(--app-viewport-height, 100dvh)',
         ...(isKeyboardVisible ? { transform: 'translateY(var(--app-viewport-offset-top, 0px))' } : {}),
       }}
     >
       
-      {isMobile && !collapsed && (
-        <div 
-          className="fixed inset-y-0 left-0 z-[1180] bg-black/40 transition-opacity duration-180"
-          style={{ right: 260 }}
-          onClick={() => setCollapsed(true)}
-        />
-      )}
-
-      <Sider 
-        data-collapsed={!isMobile && collapsed}
-        trigger={null} 
-        collapsible 
-        collapsed={isMobile ? false : collapsed}
-        collapsedWidth={isMobile ? 0 : 80}
-        zeroWidthTriggerStyle={{ display: 'none' }}
-        className={`app-main-sider border-l border-gray-200 dark:border-dark-border shadow-sm transition-transform duration-180 ease-out z-[1200] overflow-visible ${isMobile && collapsed ? 'translate-x-full pointer-events-none' : ''}`}
-        style={{ 
-          height: 'var(--app-viewport-height, 100dvh)',
-          position: 'fixed', 
-          right: 0, 
-          top: 0,
-          bottom: 0,
-          zIndex: 1200,
-          pointerEvents: 'auto',
-          touchAction: 'manipulation',
-          display: 'block',
-          backgroundColor: isDarkMode ? 'rgb(var(--app-dark-surface-rgb))' : undefined,
-        }}
-        theme={isDarkMode ? 'dark' : 'light'}
-        width={260}
-      >
-        <div className="flex h-full min-h-0 flex-col">
-        <div className="h-16 shrink-0 flex items-center justify-center border-b border-gray-200 dark:border-dark-border overflow-hidden px-4 sticky top-0 bg-inherit z-10">
-          <div className={`transition-all duration-300 font-black text-lg text-leather-500 tracking-tighter whitespace-nowrap ${collapsed ? 'opacity-0 w-0 hidden' : 'opacity-100'}`}>
-            {brandShortName}
-          </div>
-          {collapsed && !isMobile && <div className="text-leather-500 font-black text-2xl absolute">ک</div>}
-        </div>
-
-        {!isMobile && (
-          <Button
-            type="text"
-            size="small"
-            icon={collapsed ? <LeftOutlined /> : <RightOutlined />}
-            onClick={toggleSidebar}
-            aria-label={collapsed ? 'باز کردن سایدبار' : 'بستن سایدبار'}
-            className="absolute -left-3 top-20 z-20 h-7 w-7 !min-w-0 !p-0 rounded-full border border-gray-200 dark:border-dark-border bg-white/95 dark:bg-dark-surface text-gray-500 dark:text-gray-300 shadow-sm hover:!text-leather-500 hover:!bg-white dark:hover:!bg-dark-surface"
-          />
-        )}
-
-        <div className="min-h-0 flex-1 overflow-y-auto">
-            <SidebarMenu
-              items={menuItems}
-              selectedKey={selectedSidebarKey}
-              ancestorKeys={sidebarAncestorKeys}
-              collapsed={collapsed}
-              isMobile={isMobile}
-              isDarkMode={isDarkMode}
-              onNavigate={handleSidebarNavigate}
-            />
-        </div>
-        <div
-          className="flex shrink-0 items-center justify-center border-t border-gray-100 px-3 pt-1 dark:border-dark-border"
-          style={{ paddingBottom: 'max(4px, env(safe-area-inset-bottom))' }}
-        >
-          <TazeSystemAttribution collapsed={collapsed && !isMobile} />
-        </div>
-        </div>
-      </Sider>
+      <MainSidebar items={menuItems} railItems={visibleRawMenuItems} selectedKey={selectedSidebarKey}
+        ancestorKeys={sidebarAncestorKeys} collapsed={collapsed} onCollapsedChange={setCollapsed}
+        isMobile={isMobile} isDarkMode={isDarkMode} onNavigate={handleSidebarNavigate}
+        onPreload={scheduleRoutePreload} brandShortName={brandShortName} brandLogoUrl={brandLogoUrl}
+        contexts={getTutorialContexts(location.pathname, Object.keys(MODULES))}
+        orgId={resolvedOrgId || null} userId={currentUser?.id || null} />
 
       <AntLayout 
         className="app-workspace-content bg-gray-100 dark:bg-dark-bg overflow-hidden flex flex-col"
         style={{ 
-          paddingRight: isMobile ? 0 : (collapsed ? 80 : 260), 
+          paddingRight: isMobile ? 0 : 80,
           width: '100%',
           height: 'var(--app-viewport-height, 100dvh)',
         }}
@@ -1552,19 +1530,29 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           onDismiss={dismissUserAnnouncement}
         />
         <Header 
-          className="sticky top-0 z-[1000] flex h-16 w-full items-center justify-between gap-2 border-b border-gray-200 px-2 sm:px-4 dark:border-dark-border transition-colors duration-300"
+          data-search-open={mobileSearchOpen}
+          className="app-main-header sticky top-0 z-[1000] flex h-16 w-full items-center justify-between gap-2 border-b border-gray-200 px-2 sm:px-4 dark:border-dark-border transition-colors duration-300"
           style={{ 
             backgroundColor: isDarkMode ? 'rgba(23, 28, 48, 0.82)' : 'rgba(255, 255, 255, 0.82)',
           }}
         >
-          <div className="relative flex min-w-0 flex-1 items-center" ref={searchBoxRef}>
-            <div className="flex h-9 w-full min-w-0 max-w-[360px] items-center rounded-2xl border border-gray-200 bg-white/80 px-2.5 shadow-sm transition-all focus-within:border-leather-400 focus-within:bg-white focus-within:shadow-md sm:h-10 sm:px-3 dark:border-dark-border dark:bg-dark-surface/85 dark:focus-within:border-leather-400">
+          <HeaderSearchSurface
+            key={`${resolvedOrgId || ''}:${currentUser?.id || ''}`}
+            isMobile={isMobile}
+            resetKey={`${location.pathname}:${location.search}`}
+            inputRef={searchRef}
+            containerRef={searchBoxRef}
+            onDismiss={dismissGlobalSearch}
+            onOpenChange={setMobileSearchOpen}
+          >
+            <div className="app-header-search-field flex h-9 w-full min-w-0 max-w-[360px] items-center rounded-2xl border border-gray-200 bg-white/80 px-2.5 shadow-sm transition-all focus-within:border-leather-400 focus-within:bg-white focus-within:shadow-md sm:h-10 sm:px-3 dark:border-dark-border dark:bg-dark-surface/85 dark:focus-within:border-leather-400">
               <ActionIcon name="search" className="h-[18px] w-[18px] shrink-0 text-gray-400 dark:text-gray-500" />
               <Input
                 ref={searchRef}
                 value={globalSearch}
                 onChange={(e) => setGlobalSearch(e.target.value)}
                 onPressEnter={openGlobalSearchPage}
+                aria-label="جستجو در همه بخش‌ها"
                 placeholder="جستجو در همه جا..."
                 className="mr-2 w-full border-none bg-transparent text-[11px] text-gray-700 outline-none placeholder-gray-400 sm:text-xs dark:text-gray-200"
                 variant="borderless"
@@ -1573,18 +1561,18 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
             {(searchLoading || searchTouched || searchResults.length > 0) && globalSearch.trim() && (
               <div
-                className="absolute top-12 right-0 z-[1200] overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl ring-1 ring-black/5 dark:border-dark-border dark:bg-dark-surface dark:ring-white/10"
+                className="app-header-search-results absolute top-12 right-0 z-[1200] overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl ring-1 ring-black/5 dark:border-dark-border dark:bg-dark-surface dark:ring-white/10"
                 style={{ width: 'min(420px, calc(100vw - 24px))', maxHeight: 'min(68vh, 440px)' }}
               >
                 <div className="flex h-12 items-center justify-between gap-3 border-b border-gray-100 px-3 dark:border-white/10">
                   <div className="min-w-0">
-                    <div className="text-[10px] font-bold text-gray-400">جستجوی سراسری</div>
-                    <div className="truncate text-xs font-semibold text-gray-700 dark:text-gray-200">{globalSearch.trim()}</div>
+                    <div className="text-xs font-bold text-gray-500 dark:text-gray-400">جستجوی سراسری</div>
+                    <div className="truncate text-sm font-semibold text-gray-700 dark:text-gray-200">{globalSearch.trim()}</div>
                   </div>
                   {searchLoading ? <Spin size="small" /> : null}
                 </div>
 
-                <div className="overflow-y-auto p-2" style={{ maxHeight: '340px' }}>
+                <div className="app-header-search-results-body overflow-y-auto p-2" style={{ maxHeight: '340px' }}>
                   {searchLoading && searchResults.length === 0 && (
                     <div className="space-y-2 p-2">
                       {[0, 1, 2].map((item) => (
@@ -1594,7 +1582,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                   )}
 
                   {!searchLoading && searchTouched && searchResults.length === 0 && (
-                    <div className="px-3 py-8 text-center text-xs text-gray-400">
+                    <div className="px-3 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
                       نتیجه‌ای برای این جستجو پیدا نشد
                     </div>
                   )}
@@ -1602,7 +1590,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                   {searchResults.map((group) => (
                     <div key={group.moduleId} className="mb-2 last:mb-0">
                       <div className="mb-1 flex items-center justify-between px-2">
-                        <div className="flex min-w-0 items-center gap-2 text-[11px] font-black text-gray-500 dark:text-gray-300">
+                        <div className="flex min-w-0 items-center gap-2 text-[13px] font-bold text-gray-600 dark:text-gray-300">
                           <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-leather-50 text-[11px] text-leather-600 dark:bg-leather-500/10 dark:text-leather-300">
                             {getSearchModuleIcon(group.moduleId)}
                           </span>
@@ -1611,7 +1599,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                         {group.hasMore ? (
                           <button
                             type="button"
-                            className="text-[11px] font-semibold text-leather-600 hover:text-leather-500 dark:text-leather-300"
+                            className="min-h-8 text-xs font-semibold text-leather-600 hover:text-leather-500 dark:text-leather-300"
                             onClick={openGlobalSearchPage}
                           >
                             موارد بیشتر
@@ -1630,13 +1618,13 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                             <span className="min-w-0 flex-1 overflow-hidden">
                               <span
                                 className="block truncate font-bold text-gray-800 dark:text-gray-100"
-                                style={{ fontSize: 12, lineHeight: '18px', maxWidth: '100%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                                style={{ fontSize: 14, lineHeight: '22px', maxWidth: '100%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
                               >
                                 {item.title}
                               </span>
                               <span
-                                className="mt-0.5 flex min-w-0 items-center gap-1 text-gray-400"
-                                style={{ fontSize: 10, lineHeight: '14px', maxWidth: '100%', whiteSpace: 'nowrap', overflow: 'hidden' }}
+                                className="mt-0.5 flex min-w-0 items-center gap-1 text-gray-500 dark:text-gray-400"
+                                style={{ fontSize: 12, lineHeight: '18px', maxWidth: '100%', whiteSpace: 'nowrap', overflow: 'hidden' }}
                               >
                                 {item.subtitle ? (
                                   <span className="persian-number truncate" style={{ maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -1666,14 +1654,14 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                     size="small"
                     icon={<SearchOutlined />}
                     onClick={openGlobalSearchPage}
-                    className="!h-8 !rounded-xl !text-xs !font-bold !text-leather-600 dark:!text-leather-300"
+                    className="!h-10 !rounded-xl !text-sm !font-bold !text-leather-600 dark:!text-leather-300"
                   >
                     مشاهده بیشتر
                   </Button>
                 </div>
               </div>
             )}
-          </div>
+          </HeaderSearchSurface>
           {!isMobile && activeModuleId ? (
             <div
               className="pointer-events-auto absolute left-1/2 top-1/2 hidden w-[280px] -translate-x-1/2 -translate-y-1/2 md:block lg:w-[380px] xl:w-[460px]"
@@ -1688,14 +1676,14 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               </React.Suspense>
             </div>
           ) : null}
-          <div className="app-header-actions">
+          <div className="app-header-actions" aria-hidden={mobileSearchOpen || undefined}>
             <Button
               type="text"
               size={isMobile ? 'small' : 'middle'}
               shape="circle"
               icon={<ActionIcon name="refresh" className={refreshingPage ? 'app-action-icon-spinning' : undefined} />}
               onClick={handlePageRefresh}
-              className={headerActionButtonClassName}
+              className={`${headerActionButtonClassName} app-header-refresh`}
               title="رفرش صفحه"
               aria-label="رفرش صفحه"
             />
@@ -1705,12 +1693,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               shape="circle"
               icon={<ActionIcon name={isDarkMode ? 'sun' : 'moon'} />}
               onClick={toggleTheme}
-              className={headerActionButtonClassName}
+              className={`${headerActionButtonClassName} app-header-theme-toggle`}
               title={isDarkMode ? 'حالت روشن' : 'حالت شب'}
               aria-label={isDarkMode ? 'حالت روشن' : 'حالت شب'}
             />
-            <ContextualTutorialButton contexts={getTutorialContexts(location.pathname, Object.keys(MODULES))}
-              buttonClassName={headerActionButtonClassName} buttonIcon={<ActionIcon name="book" />} />
             {isDemoOrg && hasDemoBatch && (
               <Popconfirm
                 title="حذف داده‌های دمو"
@@ -1791,7 +1777,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               </React.Suspense>
             ) : null}
             <Dropdown menu={userMenu} placement="bottomLeft" trigger={['click']}>
-                <div className="cursor-pointer transition-transform hover:scale-105">
+                <Button type="text" className="app-header-profile !h-auto min-h-11 !px-2" aria-label="حساب کاربری و سازمان‌های من">
+                   <span className="app-header-profile-label max-w-[120px] md:max-w-[200px] truncate text-sm" title={currentUserProfile?.org_name}>
+                     {currentUserProfile?.org_name || 'سازمان من'}
+                   </span>
                    <ProfileAvatar
                      size="small"
                      src={resolvedAvatarSrc}
@@ -1799,12 +1788,13 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                      className="border border-leather-500 shadow-lg"
                      name={currentUserProfile?.full_name || currentUser?.user_metadata?.full_name || currentUser?.email}
                    />
-                </div>
+                </Button>
             </Dropdown>
           </div>
         </Header>
 
         <AppVersionUpdateBanner />
+        <OrganizationAccessModal open={organizationModalOpen} onClose={() => setOrganizationModalOpen(false)} currentOrgId={resolvedOrgId} />
 
         {/* ── Trial countdown banner ── */}
         {isDemoOrg && !orgIsReadonly && orgTrialDaysLeft !== null && orgTrialDaysLeft <= 7 && (
@@ -1888,18 +1878,18 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                const isActive = location.pathname === item.key;
                if (item.isCenter) {
                  return (
-                   <div
+                   <button type="button" aria-label={item.label}
                      key={item.key}
                      onPointerDown={() => scheduleRoutePreload(item.key)}
                      onClick={() => { void handleSidebarNavigate(item.key); }}
-                     className="relative -top-5 bg-leather-500 w-14 h-14 rounded-2xl flex items-center justify-center shadow-xl border-4 border-gray-100 dark:border-dark-bg active:scale-90 transition-all"
+                     className="workspace-mobile-home relative -top-5 bg-leather-500 w-14 h-14 rounded-2xl flex items-center justify-center shadow-xl border-4 border-gray-100 dark:border-dark-bg active:scale-90 transition-all"
                    >
                       <HomeOutlined className="text-white text-2xl" />
-                   </div>
+                   </button>
                  );
                }
                return (
-                 <div 
+                 <button type="button" aria-label={item.label} aria-expanded={item.isMenu ? !collapsed : undefined} aria-haspopup={item.isMenu ? 'dialog' : undefined}
                    key={item.key} 
                    onPointerDown={() => !item.isMenu && scheduleRoutePreload(item.key)}
                    onClick={() => { item.isMenu ? toggleSidebar() : void handleSidebarNavigate(item.key); }}
@@ -1907,13 +1897,14 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                  >
                     <div className="text-xl">{item.icon}</div>
                     <span className="text-[8px] font-black uppercase">{item.label}</span>
-                 </div>
+                 </button>
                );
              })}
           </div>
         )}
         <React.Suspense fallback={null}>
           <GlobalTaskProcessModalHost />
+          <EmailComposerHost />
         </React.Suspense>
         <DrawerInteractionRecovery />
         <UserAnnouncementsPopupHost

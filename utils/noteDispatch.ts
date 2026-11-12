@@ -1,3 +1,4 @@
+import { dialPhone } from '../supabase/functions/_shared/phone-number';
 import { supabase } from '../supabaseClient';
 import { sendSmsViaGateway } from './smsGateway';
 import { isActiveProfileRow } from './activeProfileRecipients';
@@ -17,19 +18,7 @@ const isMissingColumnError = (error: any, column: string) => {
   return code === 'PGRST204' || (text.includes(column.toLowerCase()) && (text.includes('column') || text.includes('schema cache')));
 };
 
-const normalizePhone = (value: any): string => {
-  const raw = String(value ?? '')
-    .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
-    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
-    .trim();
-  if (!raw) return '';
-  let digits = raw.replace(/[^\d]/g, '');
-  if (!digits) return '';
-  if (digits.startsWith('0098')) digits = `0${digits.slice(4)}`;
-  else if (digits.startsWith('98')) digits = `0${digits.slice(2)}`;
-  else if (digits.length === 10 && digits.startsWith('9')) digits = `0${digits}`;
-  return digits;
-};
+const normalizePhone = (value: unknown): string => dialPhone(value);
 
 const isValidIranMobile = (phone: string) => /^09\d{9}$/.test(String(phone || ''));
 

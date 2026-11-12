@@ -1,4 +1,6 @@
 // @ts-nocheck
+import { dialPhone, iranMobileE164 } from '../_shared/phone-number.ts';
+import { fetchOrganizationRequestContext } from '../_shared/organization-request-context.ts';
 
 type SmsMode = 'rest' | 'soap';
 
@@ -385,14 +387,7 @@ const getEffectiveOtpTimeoutMs = (
   ? Math.max(configuredTimeoutMs, MIN_CONSOLE_SHARED_OTP_TIMEOUT_MS)
   : configuredTimeoutMs;
 
-const normalizeRecipientPhone = (value: string) => {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  if (/^\+989\d{9}$/.test(raw)) return `0${raw.slice(3)}`;
-  if (/^989\d{9}$/.test(raw)) return `0${raw.slice(2)}`;
-  if (/^00989\d{9}$/.test(raw)) return `0${raw.slice(4)}`;
-  return raw;
-};
+const normalizeRecipientPhone = dialPhone;
 
 const maskPhoneForLog = (value: string) => {
   const digits = String(value || '').replace(/\D/g, '');
@@ -540,31 +535,10 @@ const verifyUserToken = async (supabaseUrl: string, serviceRoleKey: string, user
   return user;
 };
 
-const getUserSmsContext = async (supabaseUrl: string, serviceRoleKey: string, userId: string) => {
-  const profilesUrl = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/profiles`);
-  profilesUrl.searchParams.set('id', `eq.${userId}`);
-  profilesUrl.searchParams.set('select', 'org_id,role_id');
-  profilesUrl.searchParams.set('limit', '1');
-  const profileResponse = await fetch(profilesUrl.toString(), { headers: getServiceHeaders(serviceRoleKey) });
-  const profileRows = profileResponse.ok ? await profileResponse.json() : [];
-  const profile = Array.isArray(profileRows) ? profileRows[0] : null;
-  const orgId = String(profile?.org_id || '').trim();
-  if (!orgId) throw new Error('سازمان کاربر برای ارسال پیامک مشخص نیست.');
-
-  let canManageSettings = false;
-  const roleId = String(profile?.role_id || '').trim();
-  if (roleId) {
-    const rolesUrl = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/org_roles`);
-    rolesUrl.searchParams.set('id', `eq.${roleId}`);
-    rolesUrl.searchParams.set('org_id', `eq.${orgId}`);
-    rolesUrl.searchParams.set('select', 'permissions');
-    rolesUrl.searchParams.set('limit', '1');
-    const roleResponse = await fetch(rolesUrl.toString(), { headers: getServiceHeaders(serviceRoleKey) });
-    const roleRows = roleResponse.ok ? await roleResponse.json() : [];
-    const permissions = Array.isArray(roleRows) ? roleRows[0]?.permissions || {} : {};
-    canManageSettings = permissions?.__settings_tabs?.view !== false && permissions?.__settings_tabs?.edit !== false;
-  }
-  return { orgId, canManageSettings };
+const getUserSmsContext = async (supabaseUrl: string, serviceRoleKey: string, token: string, request: Request) => {
+  const context = await fetchOrganizationRequestContext(supabaseUrl, serviceRoleKey, token, request);
+  const settings = context.permissions?.__settings_tabs || {};
+  return { orgId: context.org_id, canManageSettings: Boolean(context.role_id) && settings.view !== false && settings.edit !== false };
 };
 
 type HookLeafEntry = { path: string; value: string };
@@ -597,16 +571,10 @@ const collectHookLeafEntries = (
 };
 
 const normalizeIranMobileFromAny = (value: string): string => {
-  const raw = normalizeDigitsToEnglish(value).trim();
-  if (!raw) return '';
-  const digits = raw.replace(/\D/g, '');
-  if (/^00989\d{9}$/.test(digits)) return `+${digits.slice(2)}`;
-  if (/^989\d{9}$/.test(digits)) return `+${digits}`;
-  if (/^09\d{9}$/.test(digits)) return `+98${digits.slice(1)}`;
-  if (/^9\d{9}$/.test(digits)) return `+98${digits}`;
-  const embedded = raw.match(/(?:\+?98|0098|0)?9\d{9}/);
-  if (embedded?.[0]) return normalizeIranMobileFromAny(embedded[0]);
-  return '';
+  const direct = iranMobileE164(value);
+  if (direct) return direct;
+  const embedded = normalizeDigitsToEnglish(value).match(/(?:\+?98|0098|0)?9\d{9}/);
+  return embedded ? iranMobileE164(embedded[0]) ?? '' : '';
 };
 
 const extractHookOtp = (body: AuthHookPayload & Record<string, any>) => {
@@ -1614,8 +1582,8 @@ Deno.serve(async (req) => {
     let allowSettingsOverride = isInternalServiceRequest;
     if (!isInternalServiceRequest) {
       try {
-        const user = await verifyUserToken(supabaseUrl, serviceRoleKey, token);
-        const context = await getUserSmsContext(supabaseUrl, serviceRoleKey, String(user.id));
+        await verifyUserToken(supabaseUrl, serviceRoleKey, token);
+        const context = await getUserSmsContext(supabaseUrl, serviceRoleKey, token, req);
         requestOrgId = context.orgId;
         allowSettingsOverride = context.canManageSettings;
       } catch {

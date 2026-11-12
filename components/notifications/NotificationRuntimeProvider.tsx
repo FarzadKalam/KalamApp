@@ -1,3 +1,4 @@
+import EmailNotificationRuntime from '../email/EmailNotificationRuntime';
 import React, {
   createContext,
   useCallback,
@@ -1183,6 +1184,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
 
   return (
     <NotificationRuntimeContext.Provider value={value}>
+      <EmailNotificationRuntime orgId={identity.orgId} userId={identity.userId} />
       {children}
     </NotificationRuntimeContext.Provider>
   );

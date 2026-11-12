@@ -1,6 +1,8 @@
 import React from 'react';
 import { Button, Tooltip } from 'antd';
-import { CopyOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons';
+import { CopyOutlined, ReloadOutlined } from '@ant-design/icons';
+import AiActivityStatus from './AiActivityStatus';
+import type { AiAgentActivity } from '../../supabase/functions/_shared/ai-agents';
 
 type AiMessageRendererProps = {
   text: string;
@@ -10,6 +12,8 @@ type AiMessageRendererProps = {
   onCopyText?: (text: string, label?: string) => void;
   onRetry?: () => void;
   onStop?: () => void;
+  agentId?: string;
+  activities?: AiAgentActivity[];
 };
 
 type Block =
@@ -195,7 +199,7 @@ const CopyButton: React.FC<{ text: string; title: string; onCopy?: (text: string
     <Button
       type="text"
       size="small"
-      className="!h-5 !w-5 !min-w-0 !px-0 !text-slate-400 hover:!text-[rgb(var(--brand-700-rgb))]"
+      className="ai-chat-icon"
       icon={<CopyOutlined />}
       onClick={() => onCopy?.(text, label)}
       aria-label={title}
@@ -211,28 +215,23 @@ const AiMessageRenderer: React.FC<AiMessageRendererProps> = ({
   onCopyText,
   onRetry,
   onStop,
+  agentId = 'text_chat',
+  activities,
 }) => {
   const blocks = parseBlocks(text);
   const hasText = String(text || '').trim().length > 0;
   return (
     <div className="ai-message-renderer min-w-0">
-      <div className="mb-1 flex items-center justify-end gap-1">
-        {streaming && onStop ? (
-          <Tooltip title="توقف دریافت پاسخ">
-            <Button type="text" size="small" danger className="!h-5 !w-5 !min-w-0 !px-0" icon={<StopOutlined />} onClick={onStop} aria-label="توقف دریافت پاسخ" />
-          </Tooltip>
-        ) : null}
+      {streaming && <AiActivityStatus agentId={agentId} activities={activities} onStop={onStop} />}
+      {(failed || stopped) && onRetry && <div className="mb-1 flex items-center justify-end gap-1">
         {(failed || stopped) && onRetry ? (
           <Tooltip title="تلاش دوباره">
-            <Button type="text" size="small" className="!h-5 !w-5 !min-w-0 !px-0" icon={<ReloadOutlined />} onClick={onRetry} aria-label="تلاش دوباره" />
+            <Button type="text" size="small" className="ai-chat-icon" icon={<ReloadOutlined />} onClick={onRetry} aria-label="تلاش دوباره" />
           </Tooltip>
         ) : null}
-      </div>
+      </div>}
       {!hasText && streaming ? (
-        <div className="flex items-center gap-2 text-[12px] text-slate-500 dark:text-slate-300">
-          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[rgb(var(--brand-600-rgb))]" />
-          در حال آماده‌سازی پاسخ...
-        </div>
+        null
       ) : (
         <div className="space-y-2">
           {blocks.map((block, index) => {
@@ -271,7 +270,7 @@ const AiMessageRenderer: React.FC<AiMessageRendererProps> = ({
               <p key={`p-${index}`} className="m-0 min-w-0 whitespace-pre-wrap">{renderInline(block.text)}</p>
             );
           })}
-          {streaming ? <span className="inline-block h-4 w-1 animate-pulse rounded bg-[rgb(var(--brand-600-rgb))] align-middle" /> : null}
+          {streaming ? <span className="ai-chat-stream-cursor" aria-hidden="true" /> : null}
         </div>
       )}
     </div>

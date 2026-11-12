@@ -6,6 +6,7 @@ import { supabase, SUPABASE_URL } from '../../supabaseClient';
 import { buildImagePreviewUrl } from '../../utils/imagePreview';
 import { normalizePublicAssetUrl } from '../../utils/assetUrl';
 import AiAudioPlayer from './AiAudioPlayer';
+import './AiChatPresentation.css';
 
 type AiAttachmentLike = {
   url?: string | null;
@@ -106,7 +107,7 @@ const AiMessageAttachmentPreview: React.FC<AiMessageAttachmentPreviewProps> = ({
 
   if (normalized.isVideo) {
     return (
-      <div className="mt-3 w-full max-w-[420px] overflow-hidden rounded-lg border border-gray-200 bg-white/80 p-2 dark:border-dark-border dark:bg-dark-surface/80">
+      <div className="ai-chat-theme ai-generated-attachment w-full max-w-[480px]">
         <video controls preload="metadata" src={normalized.url} className="max-h-[360px] w-full rounded-lg">
           مرورگر شما از پخش ویدیو پشتیبانی نمی‌کند.
         </video>
@@ -125,7 +126,7 @@ const AiMessageAttachmentPreview: React.FC<AiMessageAttachmentPreviewProps> = ({
 
   if (normalized.isImage) {
     return (
-      <div className="mt-3 overflow-hidden rounded-lg border border-gray-200 bg-white/80 p-2 dark:border-dark-border dark:bg-dark-surface/80">
+      <div className="ai-chat-theme ai-generated-attachment">
         <Image
           src={buildImagePreviewUrl(normalized.url, 'gallery')}
           preview={{ src: normalized.url }}
@@ -165,7 +166,7 @@ const AiMessageAttachmentPreview: React.FC<AiMessageAttachmentPreviewProps> = ({
   }
 
   return (
-    <div className="mt-3 w-[220px] rounded-lg border border-gray-200 bg-white/80 p-2 dark:border-dark-border dark:bg-dark-surface/80">
+    <div className="ai-chat-theme ai-generated-attachment w-full max-w-[320px]">
       <FileExtensionTile
         fileName={normalized.fileName}
         url={normalized.url}

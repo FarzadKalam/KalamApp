@@ -317,6 +317,7 @@ const ensureIdentityDirectoryRealtime = (supabaseClient: any, orgId: string) => 
   const channel = supabaseClient
     .channel(`identity-directory-${orgId}`)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles', filter: `org_id=eq.${orgId}` }, invalidate)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'user_organization_memberships', filter: `org_id=eq.${orgId}` }, invalidate)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'org_roles', filter: `org_id=eq.${orgId}` }, invalidate)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_groups', filter: `org_id=eq.${orgId}` }, invalidate)
     .subscribe();

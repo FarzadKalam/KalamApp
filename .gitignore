@@ -48,3 +48,11 @@ kalamapp-vscode.pub
 *.pem
 *.ppk
 *.key
+
+# Generated offline installer state and build artifacts; never customer secrets.
+/tmp/
+/.manus/
+__pycache__/
+*.pyc
+/installer/output/
+/installer/staging/

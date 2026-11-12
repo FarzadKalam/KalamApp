@@ -1,5 +1,6 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { Button, Card, Empty, Segmented, Select, Spin } from 'antd';
+import DashboardWidgetFrame from './DashboardWidgetFrame';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { Alert, Button, Card, Empty, Segmented, Select, Spin } from 'antd';
 import { CalendarOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { MODULES } from '../../moduleRegistry';
@@ -11,6 +12,10 @@ import PersianDatePicker from '../PersianDatePicker';
 import { openTaskProcessModal } from '../../utils/taskProcessModalEvents';
 import { fetchDynamicOptionsByCategory } from '../../utils/referenceData';
 import { getMergedTaskTypeOptions } from '../../utils/taskMeta';
+import { getPersianMonthRange } from '../../utils/calendarPresentation';
+import { getChoiceLabelFallbackFa } from '../../utils/optionHelpers';
+import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { TASK_RUNTIME_UPDATED_EVENT, applyTaskRuntimeUpdate, type TaskRuntimeUpdatedPayload } from '../../utils/taskRuntimeEvents';
 
 type TaskCalendarRow = {
   id: string;
@@ -32,7 +37,7 @@ type TaskCalendarRow = {
 type TaskViewKey = 'all' | 'mine';
 
 const TASK_SELECT_FIELDS =
-  'id,name,status,priority,task_type,start_date,due_date,completed_at,assignee_id,assignee_role_id,assignee_type,org_id,updated_at,created_at';
+  'id,name,status,priority,task_type,start_date,due_date,completed_at,assignee_id,assignee_role_id,assignee_type,org_id,updated_at,created_at,recurrence_info,source_module_id,source_record_id,process_group_id,source_template_id,production_line_id,related_production_order';
 const TASK_QUERY_LIMIT = 240;
 
 const tasksModule = MODULES.tasks;
@@ -71,9 +76,9 @@ const endOfWeek = (anchor: Date) => {
   return createDateAtMidday(from);
 };
 
-const startOfMonth = (anchor: Date) => createDateAtMidday(new Date(anchor.getFullYear(), anchor.getMonth(), 1));
+const startOfMonth = (anchor: Date) => createDateAtMidday(getPersianMonthRange(anchor).from);
 
-const endOfMonth = (anchor: Date) => createDateAtMidday(new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0));
+const endOfMonth = (anchor: Date) => createDateAtMidday(getPersianMonthRange(anchor).to);
 
 const createDefaultRange = () => {
   const now = createDateAtMidday(new Date());
@@ -100,6 +105,7 @@ type TaskCalendarWidgetProps = {
 const TaskCalendarWidget: React.FC<TaskCalendarWidgetProps> = ({ prefetchedTasks }) => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(!prefetchedTasks || prefetchedTasks.length === 0);
+  const [loadError, setLoadError] = useState('');
   const [rows, setRows] = useState<TaskCalendarRow[]>([]);
   const [canViewWidget, setCanViewWidget] = useState(true);
   const [canViewAll, setCanViewAll] = useState(false);
@@ -111,13 +117,14 @@ const TaskCalendarWidget: React.FC<TaskCalendarWidgetProps> = ({ prefetchedTasks
   const [dateTo, setDateTo] = useState<string>(formatIsoDate(createDefaultRange().to));
   const [recordAccess, setRecordAccess] = useState<Awaited<ReturnType<typeof fetchCurrentUserRecordAccessContext>> | null>(null);
   const [allTaskTypeOptions, setAllTaskTypeOptions] = useState<Array<{ label: string; value: string }>>([]);
-  const initialLoadDoneRef = React.useRef(false);
+  const requestGeneration = useRef(0);
   const selectedDateFieldMeta = useMemo(
     () => taskDateFields.find((field) => String(field?.key || '') === selectedDateField) || null,
     [selectedDateField]
   );
 
   const loadTasks = useCallback(async () => {
+    const generation = ++requestGeneration.current;
     if (!tasksModule) {
       setCanViewWidget(false);
       setRows([]);
@@ -125,41 +132,12 @@ const TaskCalendarWidget: React.FC<TaskCalendarWidgetProps> = ({ prefetchedTasks
       return;
     }
 
-    const isInitialLoad = !initialLoadDoneRef.current;
-    initialLoadDoneRef.current = true;
-
-    if (isInitialLoad && prefetchedTasks && prefetchedTasks.length > 0) {
-      try {
-        const access = await fetchCurrentUserRecordAccessContext(supabase);
-        const modulePerm = access.permissions?.tasks || {};
-        if (modulePerm.view !== false) {
-          const normalizedDateField = String(selectedDateField || 'due_date').trim() || 'due_date';
-          const fromValue = String(dateFrom || '').trim();
-          const toValue = String(dateTo || '').trim();
-          const usesDateTimeRange = selectedDateFieldMeta?.type === FieldType.DATETIME || normalizedDateField === 'completed_at';
-          const filtered = (prefetchedTasks as TaskCalendarRow[]).filter((row) => {
-            const fieldVal = String((row as any)[normalizedDateField] || '').trim();
-            if (!fieldVal) return true;
-            const compareVal = usesDateTimeRange ? fieldVal.slice(0, 10) : fieldVal;
-            if (fromValue && compareVal < fromValue) return false;
-            if (toValue && compareVal > toValue) return false;
-            return true;
-          });
-          setRows(filtered);
-          setCanViewWidget(true);
-          setCanViewAll(String(modulePerm.record_scope || 'all') === 'all');
-          setRecordAccess(access);
-          setLoading(false);
-          return;
-        }
-      } catch {
-        // fall through to normal fetch
-      }
-    }
-
     setLoading(true);
+    setLoadError('');
     try {
       const access = await fetchCurrentUserRecordAccessContext(supabase);
+      if (generation !== requestGeneration.current) return;
+      if (!access.orgId || !access.userId) { setCanViewWidget(false);setRows([]);return; }
       const modulePerm = access.permissions?.tasks || {};
       const moduleScope = String(modulePerm.record_scope || (modulePerm.view === false ? 'own' : 'all'));
       const effectiveTaskView: TaskViewKey = moduleScope === 'all' ? taskView : 'mine';
@@ -194,7 +172,7 @@ const TaskCalendarWidget: React.FC<TaskCalendarWidgetProps> = ({ prefetchedTasks
         applySharedFilters(
           supabase
             .from('tasks')
-            .select(TASK_SELECT_FIELDS)
+            .select(TASK_SELECT_FIELDS).eq('org_id', access.orgId)
         );
 
       let nextRows: TaskCalendarRow[] = [];
@@ -236,6 +214,7 @@ const TaskCalendarWidget: React.FC<TaskCalendarWidgetProps> = ({ prefetchedTasks
         }
       }
 
+      if (generation !== requestGeneration.current) return;
       setRows(nextRows);
       setCanViewWidget(true);
       setCanViewAll(moduleScope === 'all');
@@ -243,16 +222,16 @@ const TaskCalendarWidget: React.FC<TaskCalendarWidgetProps> = ({ prefetchedTasks
       if (moduleScope !== 'all' && taskView !== 'mine') {
         setTaskView('mine');
       }
-    } catch {
-      setCanViewWidget(false);
-      setRows([]);
+    } catch (cause) {
+      if (generation === requestGeneration.current) setLoadError(toFaErrorMessage(cause as any, 'دریافت تقویم فعالیت‌ها انجام نشد.'));
     } finally {
-      setLoading(false);
+      if (generation === requestGeneration.current) setLoading(false);
     }
   }, [dateFrom, dateTo, prefetchedTasks, selectedDateField, selectedDateFieldMeta?.type, taskView]);
 
   React.useEffect(() => {
     void loadTasks();
+    return () => { requestGeneration.current++; };
   }, [loadTasks]);
 
   React.useEffect(() => {
@@ -263,7 +242,7 @@ const TaskCalendarWidget: React.FC<TaskCalendarWidgetProps> = ({ prefetchedTasks
           ? await fetchDynamicOptionsByCategory(supabase, taskTypeField.dynamicOptionsCategory)
           : getMergedTaskTypeOptions([]);
         if (!cancelled) {
-          setAllTaskTypeOptions(options);
+          setAllTaskTypeOptions(getMergedTaskTypeOptions(options));
         }
       } catch {
         if (!cancelled) {
@@ -290,6 +269,17 @@ const TaskCalendarWidget: React.FC<TaskCalendarWidgetProps> = ({ prefetchedTasks
     }
   }, [rangeType]);
 
+  React.useEffect(() => {
+    if (!recordAccess?.orgId) return;
+    const update = (event: Event) => {
+      const task = (event as CustomEvent<TaskRuntimeUpdatedPayload>).detail?.task;
+      if (!task?.id || (task.org_id && task.org_id !== recordAccess.orgId)) return;
+      setRows(previous => applyTaskRuntimeUpdate(previous, task));
+    };
+    window.addEventListener(TASK_RUNTIME_UPDATED_EVENT, update);
+    return () => window.removeEventListener(TASK_RUNTIME_UPDATED_EVENT, update);
+  }, [recordAccess?.orgId]);
+
   const taskTypeOptions = useMemo(() => {
     const map = new Map<string, { label: string; value: string }>();
     allTaskTypeOptions.forEach((item: any) => {
@@ -300,7 +290,7 @@ const TaskCalendarWidget: React.FC<TaskCalendarWidgetProps> = ({ prefetchedTasks
     rows.forEach((row) => {
       const value = String(row?.task_type || '').trim();
       if (!value || map.has(value)) return;
-      map.set(value, { value, label: value });
+      map.set(value, { value, label: getChoiceLabelFallbackFa(value, 'نوع اختصاصی') });
     });
     return [{ value: 'all', label: 'همه نوع‌ها' }, ...Array.from(map.values())];
   }, [allTaskTypeOptions, rows]);
@@ -332,14 +322,14 @@ const TaskCalendarWidget: React.FC<TaskCalendarWidgetProps> = ({ prefetchedTasks
 
   if (!canViewWidget) {
     return (
-      <Card className="shadow-sm">
+      <DashboardWidgetFrame widgetId="activity_calendar" title="تقویم فعالیت‌ها" defaultOrder={7} onRefresh={() => { void loadTasks(); }} ><Card className="shadow-sm">
         <Empty description="دسترسی به ویجت تقویم فعالیت‌ها ندارید" />
-      </Card>
+      </Card></DashboardWidgetFrame>
     );
   }
 
   return (
-    <Card className="shadow-sm">
+    <DashboardWidgetFrame widgetId="activity_calendar" title="تقویم فعالیت‌ها" defaultOrder={7} onRefresh={() => { void loadTasks(); }} ><Card className="shadow-sm">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <CalendarOutlined className="text-[rgba(var(--brand-600-rgb),1)]" />
@@ -404,6 +394,7 @@ const TaskCalendarWidget: React.FC<TaskCalendarWidgetProps> = ({ prefetchedTasks
         </div>
       </div>
 
+      {loadError && <Alert type="error" showIcon message={loadError} action={<Button onClick={() => void loadTasks()}>تلاش دوباره</Button>} />}
       {loading ? (
         <div className="flex h-[460px] items-center justify-center">
           <Spin />
@@ -422,12 +413,13 @@ const TaskCalendarWidget: React.FC<TaskCalendarWidgetProps> = ({ prefetchedTasks
             dateFieldKey={selectedDateField}
             onDateFieldChange={(fieldKey) => setSelectedDateField(String(fieldKey || 'due_date'))}
             navigate={handleCalendarNavigate}
+            canViewField={key => recordAccess?.permissions?.tasks?.fields?.[key] !== false}
             fieldOptions={taskTypeField?.key ? { [taskTypeField.key]: allTaskTypeOptions } : {}}
           />
         </div>
       )}
 
-    </Card>
+    </Card></DashboardWidgetFrame>
   );
 };
 

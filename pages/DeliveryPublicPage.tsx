@@ -1,3 +1,4 @@
+import { iranMobileLocal } from '../supabase/functions/_shared/phone-number';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
@@ -91,14 +92,7 @@ const FORM_TYPE_LABELS: Record<string, string> = {
 const toFarsiDigits = (value: string): string =>
   String(value).replace(/\d/g, (digit) => '۰۱۲۳۴۵۶۷۸۹'[Number(digit)]);
 
-const normalizePhone = (raw: string): string => {
-  let digits = String(raw || '').replace(/[^\d۰-۹]/g, '');
-  digits = digits.replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
-  if (digits.startsWith('0098')) digits = `0${digits.slice(4)}`;
-  else if (digits.startsWith('98') && digits.length === 12) digits = `0${digits.slice(2)}`;
-  else if (digits.length === 10 && digits.startsWith('9')) digits = `0${digits}`;
-  return digits;
-};
+const normalizePhone = (value: unknown): string => iranMobileLocal(value) ?? '';
 
 const getDeliveryTableRowKey = (row: Record<string, any>) => {
   const candidates = [

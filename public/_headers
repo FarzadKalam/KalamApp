@@ -7,6 +7,12 @@
 /version.json
   Cache-Control: no-cache, no-store, must-revalidate
 
+/kalamapp-runtime-config.js
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/central-release.json
+  Cache-Control: no-cache, no-store, must-revalidate
+
 /index.html
   Cache-Control: no-cache, no-store, must-revalidate
 

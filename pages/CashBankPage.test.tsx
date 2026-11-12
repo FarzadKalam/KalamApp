@@ -24,6 +24,20 @@ const ready = async () => { render(<App><CashBankPage /></App>); await screen.fi
 const filter = async () => { await act(async () => mock.table.onChange({}, { amount: [JSON.stringify({ from: 0, to: 5000 })], status: [JSON.stringify(['received'])] }, {}, { action: 'filter' })); };
 
 describe('cash and bank report', () => {
+  it('shows a recoverable ledger error instead of silently presenting an empty report', async () => {
+    let failed = true;
+    mock.rpc.mockImplementation(async (name: string) => name === 'get_cash_bank_unified_ledger_page' && failed
+      ? { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }
+      : { data: name === 'get_cash_bank_dashboard_stats' ? {} : { rows: [{ row_key: 'recovered', amount: 100 }], total: 1 }, error: null });
+    await act(async () => { render(<App><CashBankPage /></App>); });
+    await screen.findByRole('button', { name: 'تلاش دوباره' });
+    expect(mock.table.dataSource).toHaveLength(0);
+    failed = false;
+    fireEvent.click(screen.getByRole('button', { name: 'تلاش دوباره' }));
+    await waitFor(() => expect(mock.table.dataSource).toHaveLength(1));
+    expect(screen.queryByRole('button', { name: 'تلاش دوباره' })).toBeNull();
+  });
+
   it('uses server-side filters and all matching rows for totals with tenant-scoped column preferences', async () => {
     await ready(); await filter();
     expect(mock.table.scopeKey).toContain(':org-a:user-a:');

@@ -3,6 +3,12 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import AiCapabilityComposerActions from './AiCapabilityComposerActions';
 
+vi.mock('../../supabaseClient', () => ({
+  supabase: {}, supabasePublic: {}, supabaseSignUpClient: {},
+  SUPABASE_URL: 'https://supabase.invalid', SUPABASE_ANON_KEY: 'isolated-test-only',
+  SUPABASE_AUTH_STORAGE_KEY: 'isolated-ai-test',
+}));
+
 describe('AiCapabilityComposerActions', () => {
   afterEach(() => cleanup());
 
@@ -17,14 +23,14 @@ describe('AiCapabilityComposerActions', () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText('انتخاب عملکرد هوش مصنوعی'));
-    const textChatLabel = await screen.findByText('گفتگوی متنی');
+    fireEvent.click(screen.getByLabelText('انتخاب ایجنت هوش مصنوعی'));
+    const textChatLabel = await screen.findByText('ایجنت گفتگو');
     const operatorList = textChatLabel.closest('label')?.parentElement;
-    expect(operatorList?.querySelector('label')?.textContent).toContain('گفتگوی متنی');
-    const freeChatLabel = await screen.findByText('گفتگوی آزاد');
+    expect(operatorList?.querySelector('label')?.textContent).toContain('ایجنت گفتگو');
+    const freeChatLabel = await screen.findByText('ایجنت گفتگوی آزاد');
     const capabilityLabels = Array.from(document.querySelectorAll('label'))
-      .filter((label) => label.textContent?.includes('گفتگوی متنی') || label.textContent?.includes('گفتگوی آزاد') || label.textContent?.includes('تحلیل اسناد'));
-    expect(capabilityLabels.at(-1)?.textContent).toContain('گفتگوی آزاد');
+      .filter((label) => label.textContent?.includes('ایجنت گفتگو') || label.textContent?.includes('ایجنت گفتگوی آزاد') || label.textContent?.includes('ایجنت تحلیل اسناد'));
+    expect(capabilityLabels.at(-1)?.textContent).toContain('ایجنت گفتگوی آزاد');
 
     fireEvent.click(textChatLabel.closest('label')?.querySelector('input[type="checkbox"]') as HTMLInputElement);
     expect(onChange).toHaveBeenLastCalledWith(['text_chat']);
@@ -37,7 +43,7 @@ describe('AiCapabilityComposerActions', () => {
         onFilePrepared={vi.fn()}
       />
     );
-    const documentLabel = await screen.findByText('تحلیل اسناد');
+    const documentLabel = await screen.findByText('ایجنت تحلیل اسناد');
     fireEvent.click(documentLabel.closest('label')?.querySelector('input[type="checkbox"]') as HTMLInputElement);
     expect(onChange).toHaveBeenLastCalledWith(['document_analysis']);
     fireEvent.click(freeChatLabel.closest('label')?.querySelector('input[type="checkbox"]') as HTMLInputElement);
@@ -58,12 +64,12 @@ describe('AiCapabilityComposerActions', () => {
       />
     );
 
-    expect(screen.getByText('تصمیم‌گیری خودکار')).toBeInTheDocument();
-    expect(screen.getByText('تشخیص: جستجوی گوگل')).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('انتخاب عملکرد هوش مصنوعی'));
+    expect(screen.getByText('ایجنت راهبر')).toBeInTheDocument();
+    expect(screen.getByText('تشخیص: ایجنت پژوهش')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('انتخاب ایجنت هوش مصنوعی'));
 
     await waitFor(() => expect(screen.getAllByText('تشخیص خودکار').length).toBeGreaterThan(0));
-    const webSearchCheckbox = screen.getByText('جستجوی گوگل').closest('label')?.querySelector('input[type="checkbox"]') as HTMLInputElement | null;
+    const webSearchCheckbox = screen.getByText('ایجنت پژوهش').closest('label')?.querySelector('input[type="checkbox"]') as HTMLInputElement | null;
     expect(webSearchCheckbox?.checked).toBe(true);
   });
 

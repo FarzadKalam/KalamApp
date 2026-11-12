@@ -268,7 +268,7 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
 
   return (
     <>
-      <div ref={overlayAnchorRef} className="relative z-20 flex min-w-0 max-w-full items-center justify-start gap-1.5 overflow-x-auto overflow-y-visible px-0.5 py-1">
+      <div ref={overlayAnchorRef} className="relative z-20 flex min-w-0 max-w-full items-center justify-start gap-1.5 overflow-x-auto px-1 py-1.5">
         {!onlyReschedule && taskInstructionIds.length > 0 ? (
           <Badge count={taskInstructionIds.length} size="small" style={{ fontSize: 10 }}>
             <Button

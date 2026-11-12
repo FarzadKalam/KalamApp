@@ -9,9 +9,19 @@ vi.mock('./outboundMessages', () => ({
   updateOutboundMessageStatus: vi.fn(),
 }));
 
-import { getConfiguredSmsSenderNumbers } from './smsGateway';
+import { getConfiguredSmsSenderNumbers, getSmsBalanceViaGateway } from './smsGateway';
+import { supabase } from '../supabaseClient';
+import { clearOrganizationContext, selectOrganizationContext } from './organizationContext';
 
 describe('SMS sender numbers', () => {
+  it('uses this tab organization when checking its SMS connection', async () => {
+    selectOrganizationContext('organization-a');
+    vi.mocked(supabase.functions.invoke).mockResolvedValueOnce({ data: { balance: 2 }, error: null } as any);
+    try {
+      await getSmsBalanceViaGateway();
+      expect(supabase.functions.invoke).toHaveBeenCalledWith('send-sms', { body: { action: 'get_balance' }, headers: { 'x-client-info': 'kalamapp; org=organization-a' } });
+    } finally { clearOrganizationContext(); }
+  });
   it('normalizes Persian and Arabic digits and removes duplicates', () => {
     expect(getConfiguredSmsSenderNumbers({
       sender_number: '۵۰۰۰',

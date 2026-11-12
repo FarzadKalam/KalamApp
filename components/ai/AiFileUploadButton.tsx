@@ -18,6 +18,7 @@ type AiFileUploadButtonProps = {
   loading?: boolean;
   size?: ButtonProps['size'];
   className?: string;
+  buttonType?: ButtonProps['type'];
   moduleId?: string | null;
   recordId?: string | null;
   directUpload?: boolean;
@@ -31,6 +32,7 @@ const AiFileUploadButton: React.FC<AiFileUploadButtonProps> = ({
   loading = false,
   size,
   className,
+  buttonType,
   moduleId,
   recordId,
   directUpload = false,
@@ -139,6 +141,7 @@ const AiFileUploadButton: React.FC<AiFileUploadButtonProps> = ({
     <>
       <Tooltip title="ارسال فایل به هوش مصنوعی">
         <Button
+          type={buttonType}
           icon={<PaperClipOutlined />}
           disabled={disabled || loading || preparing}
           loading={preparing || loading}

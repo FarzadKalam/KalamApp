@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { iranMobileE164, iranMobileLocal, iranMobileAuth } from '../_shared/phone-number.ts';
 import { normalizeEmail } from './normalizeEmail.ts';
 
 type UserAdminAction =
@@ -34,11 +35,12 @@ type UserAdminBody = {
   isActive?: boolean;
   token?: string | null;
   skipProfileUpsert?: boolean;
+  settings?: Record<string, unknown>;
 };
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-organization-id',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
@@ -63,27 +65,11 @@ const normalizeDigitsToEnglish = (value: unknown): string =>
     .replace(/[\u06F0-\u06F9]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0))
     .replace(/[\u0660-\u0669]/g, (digit) => String(digit.charCodeAt(0) - 0x0660));
 
-const normalizeIranMobileE164 = (value?: string | null) => {
-  const raw = normalizeDigitsToEnglish(value).trim();
-  if (!raw) return null;
-  const digits = raw.replace(/\D+/g, '');
-  if (digits.length === 10 && digits.startsWith('9')) return `+98${digits}`;
-  if (digits.length === 11 && digits.startsWith('09')) return `+98${digits.slice(1)}`;
-  if (digits.length === 12 && digits.startsWith('989')) return `+${digits}`;
-  if (digits.length === 13 && digits.startsWith('0989')) return `+${digits.slice(1)}`;
-  if (raw.startsWith('+98') && /^(\+98)9\d{9}$/.test(raw.replace(/\s+/g, ''))) return raw.replace(/\s+/g, '');
-  return null;
-};
+const normalizeIranMobileE164 = iranMobileE164;
 
-const toLocalIranMobile = (value?: string | null) => {
-  const normalized = normalizeIranMobileE164(value);
-  return normalized ? normalized.replace(/^\+98/, '0') : null;
-};
+const toLocalIranMobile = iranMobileLocal;
 
-const toGoTruePhone = (value?: string | null) => {
-  const normalized = normalizeIranMobileE164(value);
-  return normalized ? normalized.replace(/^\+/, '') : null;
-};
+const toGoTruePhone = iranMobileAuth;
 
 const isValidEmail = (value?: string | null) =>
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmail(value));
@@ -135,10 +121,11 @@ const invokeRpcAsUser = async (
   userToken: string,
   functionName: string,
   payload: Record<string, any>,
+  contextHeaders: Record<string, string> = {},
 ) => {
   const response = await fetch(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/rpc/${functionName}`, {
     method: 'POST',
-    headers: getServiceHeaders(serviceRoleKey, userToken),
+    headers: { ...getServiceHeaders(serviceRoleKey, userToken), ...contextHeaders },
     body: JSON.stringify(payload),
   });
   const parsed = await readJsonSafe(response);
@@ -324,23 +311,20 @@ const fetchProfileByPhoneOrEmail = async (
   const excludeUserId = String(options.excludeUserId || '').trim();
 
   if (normalizedPhone) {
-    const phoneUrl = restUrl(supabaseUrl, 'profiles');
-    phoneUrl.searchParams.set('mobile_1', `eq.${normalizedPhone}`);
-    phoneUrl.searchParams.set('select', 'id,org_id,role,role_id,is_active,full_name,email,mobile_1');
-    phoneUrl.searchParams.set('limit', '1');
-    if (excludeUserId) {
-      phoneUrl.searchParams.set('id', `neq.${excludeUserId}`);
-    }
-
+    const phoneUrl = restUrl(supabaseUrl, 'rpc/find_profile_by_phone_for_auth');
     const phoneResponse = await fetch(phoneUrl.toString(), {
-      method: 'GET',
+      method: 'POST',
       headers: getServiceHeaders(serviceRoleKey),
+      body: JSON.stringify({ p_phone: normalizedPhone, p_exclude_user_id: excludeUserId || null }),
     });
     if (!phoneResponse.ok) {
       const raw = await phoneResponse.text();
       throw new Error(raw || 'Phone duplicate lookup failed');
     }
     const phoneRows = await phoneResponse.json();
+    if (Array.isArray(phoneRows) && phoneRows.length > 1) {
+      throw createReasonedError('این شماره به چند حساب متصل است و نیاز به بررسی مدیر دارد.', 'phone_profile_conflict', 409);
+    }
     const phoneMatch = Array.isArray(phoneRows) ? phoneRows[0] || null : null;
     if (phoneMatch?.id) return phoneMatch;
   }
@@ -534,10 +518,18 @@ const requestExistingProfilePhoneOtp = async (
   }
 
   const targetProfile = await fetchProfileByPhoneOrEmail(supabaseUrl, serviceRoleKey, { phone: normalizedPhone });
-  if (!targetProfile?.id || targetProfile.is_active === false) {
+  if (!targetProfile?.id) {
     throw createReasonedError('برای این شماره حساب سازمانی فعال پیدا نشد.', 'phone_profile_not_found', 404);
   }
 
+  const activeMembershipUrl = restUrl(supabaseUrl, 'user_organization_memberships');
+  activeMembershipUrl.searchParams.set('user_id', 'eq.' + targetProfile.id);
+  activeMembershipUrl.searchParams.set('is_active', 'eq.true');
+  activeMembershipUrl.searchParams.set('select', 'org_id');
+  activeMembershipUrl.searchParams.set('limit', '1');
+  const activeResponse = await fetch(activeMembershipUrl, { headers: getServiceHeaders(serviceRoleKey) });
+  const activeRows = await readJsonSafe(activeResponse);
+  if (!activeResponse.ok || !activeRows?.length) throw createReasonedError('عضویت فعالی برای این حساب پیدا نشد.', 'phone_profile_not_found', 403);
   const targetUserId = String(targetProfile.id);
   const targetAuthUser = await fetchAuthUserById(supabaseUrl, serviceRoleKey, targetUserId).catch(() => null);
   if (!targetAuthUser?.id) {
@@ -657,22 +649,6 @@ const releaseInactiveDuplicateProfileEmailConflict = async (
   return true;
 };
 
-const hasSaasAdminAccess = async (
-  supabaseUrl: string,
-  serviceRoleKey: string,
-  callerProfile: any,
-) => {
-  const role = await fetchRole(supabaseUrl, serviceRoleKey, callerProfile?.role_id);
-  const permission = role?.permissions?.__saas_admin;
-  if (!permission || typeof permission !== 'object') return false;
-  const fields = permission.fields || {};
-  return permission.view === true
-    || permission.edit === true
-    || fields.edit_orgs === true
-    || fields.edit_requests === true
-    || fields.demo_override === true;
-};
-
 const repairPhoneOwnerConflict = async (
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -708,128 +684,6 @@ const repairPhoneOwnerConflict = async (
     blocked: false,
     conflictUserId: String(conflictingAuthUsers[0]?.id || ''),
   };
-};
-
-const repairLegacyPhoneLogin = async (
-  supabaseUrl: string,
-  serviceRoleKey: string,
-  callerUser: any,
-  phone: string,
-) => {
-  const callerUserId = String(callerUser?.id || '').trim();
-  const normalizedPhone = normalizeIranMobileE164(phone || callerUser?.phone || '');
-  if (!callerUserId || !normalizedPhone) {
-    throw new Error('شماره موبایل معتبر برای تعمیر ورود پیامکی پیدا نشد.');
-  }
-
-  const callerProfile = await fetchProfile(supabaseUrl, serviceRoleKey, callerUserId);
-  if (callerProfile?.id) {
-    return {
-      repaired: false,
-      reason: 'caller_has_profile',
-      targetUserId: callerUserId,
-    };
-  }
-
-  const targetProfile = await fetchProfileByPhoneOrEmail(supabaseUrl, serviceRoleKey, {
-    phone: normalizedPhone,
-    excludeUserId: callerUserId,
-  });
-  if (!targetProfile?.id) {
-    return {
-      repaired: false,
-      reason: 'target_profile_not_found',
-    };
-  }
-  if (targetProfile.is_active === false) {
-    return {
-      repaired: false,
-      reason: 'target_profile_inactive',
-      targetUserId: String(targetProfile.id || ''),
-    };
-  }
-
-  const targetUserId = String(targetProfile.id || '');
-  const conflictingAuthUsers = (await findAuthUsersByPhone(supabaseUrl, serviceRoleKey, normalizedPhone)).filter((user: any) => {
-    const id = String(user?.id || '');
-    return id && id !== callerUserId && id !== targetUserId;
-  });
-  for (const authUser of conflictingAuthUsers) {
-    const conflictProfile = await fetchProfile(supabaseUrl, serviceRoleKey, String(authUser?.id || ''));
-    if (conflictProfile?.id) {
-      return {
-        repaired: false,
-        reason: 'target_phone_blocked',
-        conflictUserId: String(authUser?.id || ''),
-        conflictProfileId: String(conflictProfile.id || ''),
-        targetUserId,
-      };
-    }
-  }
-  for (const authUser of conflictingAuthUsers) {
-    await deleteAuthUser(supabaseUrl, serviceRoleKey, String(authUser?.id || ''));
-  }
-
-  if (targetUserId !== callerUserId) {
-    await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, {
-      phone: null,
-      phone_confirm: false,
-    });
-    await upsertProfile(supabaseUrl, serviceRoleKey, {
-      id: targetUserId,
-      mobile_1: null,
-      mobile: null,
-    });
-  }
-
-  await updateAuthUser(supabaseUrl, serviceRoleKey, callerUserId, {
-    phone: toGoTruePhone(normalizedPhone),
-    phone_confirm: true,
-    user_metadata: {
-      full_name: targetProfile.full_name || callerUser?.user_metadata?.full_name || '',
-      phone_verified: true,
-    },
-  });
-  await upsertProfile(supabaseUrl, serviceRoleKey, {
-    id: callerUserId,
-    org_id: targetProfile.org_id || null,
-    role_id: targetProfile.role_id || null,
-    role: targetProfile.role || 'admin',
-    full_name: targetProfile.full_name || null,
-    email: targetProfile.email || null,
-    mobile_1: toLocalIranMobile(normalizedPhone),
-    is_active: true,
-  });
-
-  try {
-    const requestsUrl = restUrl(supabaseUrl, 'saas_onboarding_requests');
-    requestsUrl.searchParams.set('auth_user_id', `eq.${targetUserId}`);
-    requestsUrl.searchParams.set('mobile', `eq.${normalizedPhone}`);
-    await fetch(requestsUrl.toString(), {
-      method: 'PATCH',
-      headers: getServiceHeaders(serviceRoleKey),
-      body: JSON.stringify({ auth_user_id: callerUserId }),
-    });
-  } catch { /* best effort */ }
-
-  try {
-    const issuanceUrl = restUrl(supabaseUrl, 'saas_demo_issuance');
-    issuanceUrl.searchParams.set('auth_user_id', `eq.${targetUserId}`);
-    issuanceUrl.searchParams.set('mobile', `eq.${normalizedPhone}`);
-    await fetch(issuanceUrl.toString(), {
-      method: 'PATCH',
-      headers: getServiceHeaders(serviceRoleKey),
-      body: JSON.stringify({ auth_user_id: callerUserId }),
-    });
-  } catch { /* best effort */ }
-
-  return {
-    repaired: true,
-    reason: 'caller_profile_adopted',
-    targetUserId: callerUserId,
-    previousUserId: targetUserId,
-  };
-
 };
 
 const resendOtp = async (
@@ -958,7 +812,7 @@ const assertOrgAccess = (
   targetOrgId?: string | null,
   targetSoftwareRole?: string | null,
 ) => {
-  const canCrossOrg = callerRole === 'super_admin';
+  const canCrossOrg = false;
   const callerOrgId = String(callerProfile?.org_id || '').trim();
   const normalizedTargetOrgId = String(targetOrgId || '').trim();
   const normalizedTargetSoftwareRole = String(targetSoftwareRole || '').trim().toLowerCase();
@@ -1011,54 +865,21 @@ Deno.serve(async (request) => {
     }
 
     const caller = await verifyUserToken(supabaseUrl, serviceRoleKey, userToken);
-    const callerProfile = await fetchProfile(supabaseUrl, serviceRoleKey, String(caller.id));
+    let callerProfile = await fetchProfile(supabaseUrl, serviceRoleKey, String(caller.id));
+    const contextHeaders: Record<string, string> = {};
+    const origin = request.headers.get('Origin');
+    if (origin) contextHeaders.Origin = origin;
+    const selectedOrg = request.headers.get('x-organization-id');
+    if (selectedOrg) contextHeaders['x-organization-id'] = selectedOrg;
+    const clientInfo = request.headers.get('x-client-info');
+    if (clientInfo) contextHeaders['x-client-info'] = clientInfo;
+    const scopedRpc = (name: string, payload: Record<string, any> = {}) =>
+      invokeRpcAsUser(supabaseUrl, serviceRoleKey, userToken, name, payload, contextHeaders);
     if (action === 'repair_legacy_phone_login') {
-      const normalizedPhone = normalizeIranMobileE164(body?.phone || caller?.phone || '');
-      if (!normalizedPhone) {
-        return json(400, { success: false, message: 'شماره موبایل معتبر برای تعمیر ورود پیامکی پیدا نشد.' });
-      }
-
-      const repairResult = await repairLegacyPhoneLogin(supabaseUrl, serviceRoleKey, caller, normalizedPhone);
-      if (!repairResult.repaired) {
-        if (repairResult.reason === 'caller_has_profile') {
-          return json(200, {
-            success: true,
-            repaired: false,
-            reason: repairResult.reason,
-            targetUserId: repairResult.targetUserId || null,
-          });
-        }
-        if (repairResult.reason === 'target_profile_inactive') {
-          return json(403, {
-            success: false,
-            message: 'کاربر سازمانی متناظر با این شماره غیرفعال است.',
-            reason: repairResult.reason,
-            targetUserId: repairResult.targetUserId || null,
-          });
-        }
-        if (repairResult.reason === 'target_phone_blocked') {
-          return json(409, {
-            success: false,
-            message: 'این شماره هنوز روی یک کاربر سازمانی دیگر ثبت شده و تعمیر خودکار آن امن نیست.',
-            reason: repairResult.reason,
-            targetUserId: repairResult.targetUserId || null,
-            conflictUserId: repairResult.conflictUserId || null,
-            conflictProfileId: repairResult.conflictProfileId || null,
-          });
-        }
-        return json(404, {
-          success: false,
-          message: 'برای این شماره، کاربر سازمانی فعال و یکتایی پیدا نشد.',
-          reason: repairResult.reason || 'target_profile_not_found',
-        });
-      }
-
-      return json(200, {
-        success: true,
-        repaired: true,
-        targetUserId: repairResult.targetUserId || null,
-      });
+      return json(409, { success: false, reason_code: 'phone_profile_conflict',
+        message: 'برای ورود به حساب اصلی، از صفحه ورود کد تازه بگیرید. انتقال خودکار حساب مجاز نیست.' });
     }
+
     if (action === 'setup_owner_credentials') {
       const targetUserId = String(caller?.id || '').trim();
       const fullName = String(body?.fullName || '').trim();
@@ -1121,7 +942,7 @@ Deno.serve(async (request) => {
     }
 
     if (action.startsWith('saas_')) {
-      if (!(await hasSaasAdminAccess(supabaseUrl, serviceRoleKey, callerProfile))) {
+      if (!(await scopedRpc('current_user_has_saas_admin_permission'))) {
         return json(403, { success: false, message: 'دسترسی تازه سیستم برای این عملیات کافی نیست.' });
       }
 
@@ -1173,14 +994,19 @@ Deno.serve(async (request) => {
         }
         const profile = await upsertProfile(supabaseUrl, serviceRoleKey, {
           id: targetUserId,
-          org_id: requestedOrgId,
-          role_id: roleId,
-          role: softwareRole,
+          ...(!existingProfile?.id ? { org_id: requestedOrgId, role_id: roleId, role: softwareRole } : {}),
           full_name: fullName,
           email,
           mobile_1: normalizedPhone ? toLocalIranMobile(normalizedPhone) : null,
-          is_active: body?.isActive !== false,
+          ...(!existingProfile?.id ? { is_active: body?.isActive !== false } : {}),
         });
+        const membershipUrl = restUrl(supabaseUrl, 'user_organization_memberships');
+        membershipUrl.searchParams.set('on_conflict', 'user_id,org_id');
+        const membershipResponse = await fetch(membershipUrl, { method: 'POST',
+          headers: { ...getServiceHeaders(serviceRoleKey), Prefer: 'resolution=merge-duplicates,return=minimal' },
+          body: JSON.stringify({ user_id: targetUserId, org_id: requestedOrgId, role_id: roleId,
+            software_role: softwareRole, is_active: body?.isActive !== false }) });
+        if (!membershipResponse.ok) throw new Error('ذخیره عضویت سازمانی ناموفق بود.');
         return json(200, { success: true, createdProfile: !existingProfile?.id, profile });
       }
 
@@ -1318,6 +1144,30 @@ Deno.serve(async (request) => {
       }
     }
 
+    const memberContext = await scopedRpc('get_current_organization_context');
+    if (!memberContext?.org_id || (body?.orgId && body.orgId !== memberContext.org_id)) {
+      return json(403, { success: false, message: 'دسترسی شما به این سازمان فعال نیست.' });
+    }
+    callerProfile = { ...callerProfile, ...memberContext };
+    const fetchScopedTarget = async (targetUserId: string) => {
+      const url = restUrl(supabaseUrl, 'user_organization_memberships');
+      url.searchParams.set('user_id', `eq.${targetUserId}`);
+      url.searchParams.set('org_id', `eq.${memberContext.org_id}`);
+      url.searchParams.set('select', 'org_id,role_id,software_role,is_active');
+      const response = await fetch(url, { headers: getServiceHeaders(serviceRoleKey) });
+      const rows = await readJsonSafe(response);
+      if (!response.ok || !rows?.[0]) throw createReasonedError('عضویت کاربر در این سازمان پیدا نشد.', 'membership_not_found', 403);
+      const profile = await fetchProfile(supabaseUrl, serviceRoleKey, targetUserId);
+      const membershipsUrl = restUrl(supabaseUrl, 'user_organization_memberships');
+      membershipsUrl.searchParams.set('user_id', `eq.${targetUserId}`);
+      membershipsUrl.searchParams.set('select', 'org_id');
+      membershipsUrl.searchParams.set('limit', '2');
+      const membershipResponse = await fetch(membershipsUrl, { headers: getServiceHeaders(serviceRoleKey) });
+      const memberships = await readJsonSafe(membershipResponse);
+      if (!membershipResponse.ok) throw new Error('بررسی عضویت‌های کاربر ناموفق بود.');
+      return { ...profile, ...rows[0], role: rows[0].software_role,
+        can_edit_identity: targetUserId === caller.id || memberships.length === 1 };
+    };
     const callerRole = String(callerProfile?.role || '').trim().toLowerCase();
     const callerOrgRole = await fetchRole(supabaseUrl, serviceRoleKey, callerProfile?.role_id);
     const callerOrgRoleTitle = String(callerOrgRole?.title || '').trim();
@@ -1335,7 +1185,8 @@ Deno.serve(async (request) => {
         return json(400, { success: false, message: 'رمز عبور باید حداقل ۶ کاراکتر باشد.' });
       }
 
-      const targetProfile = await fetchProfile(supabaseUrl, serviceRoleKey, targetUserId);
+      const targetProfile = await fetchScopedTarget(targetUserId);
+      if (!targetProfile.can_edit_identity) return json(403, { success: false, message: 'رمز عبور حساب مشترک را خود شخص باید تغییر دهد.' });
       if (!targetProfile?.id) {
         return json(404, { success: false, message: 'پروفایل کاربر مقصد پیدا نشد.' });
       }
@@ -1376,7 +1227,7 @@ Deno.serve(async (request) => {
         const releasedOrphanPhone = duplicateIsPhoneMatch
           ? await releaseOrphanProfilePhoneConflict(supabaseUrl, serviceRoleKey, duplicateProfile, normalizedPhone, {
             targetOrgId,
-            canCrossOrg: callerRole === 'super_admin',
+            canCrossOrg: false,
           })
           : false;
         if (!releasedOrphanPhone) {
@@ -1509,11 +1360,24 @@ Deno.serve(async (request) => {
         return json(400, { success: false, message: 'شناسه کاربر الزامی است.' });
       }
 
-      const targetProfile = await fetchProfile(supabaseUrl, serviceRoleKey, targetUserId);
+      const targetProfile = await fetchScopedTarget(targetUserId);
       if (!targetProfile?.id) {
         return json(404, { success: false, message: 'پروفایل کاربر مقصد پیدا نشد.' });
       }
 
+      assertOrgAccess(callerProfile, callerRole, targetProfile.org_id, targetProfile.role);
+      const memberPatch = { role_id: body?.roleId ?? targetProfile.role_id, role: body?.role ?? targetProfile.role,
+        is_active: body?.isActive !== false, settings: body?.settings || {} };
+      if (!targetProfile.can_edit_identity) {
+        const identityChanged = (body.fullName != null && String(body.fullName).trim() !== String(targetProfile.full_name || '').trim())
+          || (body.email !== undefined && (normalizeEmail(body.email) || null) !== (normalizeEmail(targetProfile.email) || null))
+          || (body.phone && normalizeIranMobileE164(body.phone) !== normalizeIranMobileE164(targetProfile.mobile_1))
+          || (body.avatarUrl !== undefined && (body.avatarUrl || null) !== (targetProfile.avatar_url || null)) || body.password;
+        if (identityChanged) return json(403, { success: false, message: 'اطلاعات شخصی مشترک را خود شخص باید ویرایش کند.' });
+        await scopedRpc('manage_organization_member', { p_user_id: targetUserId, p_patch: memberPatch });
+        return json(200, { success: true });
+      }
+      await scopedRpc('manage_organization_member', { p_user_id: targetUserId, p_patch: memberPatch, p_validate_only: true });
       const password = String(body?.password || '').trim();
       const fullName = String(body?.fullName || targetProfile.full_name || '').trim();
       const email = normalizeEmail(body?.email) || null;
@@ -1542,13 +1406,13 @@ Deno.serve(async (request) => {
         const releasedOrphanPhone = duplicateIsPhoneMatch
           ? await releaseOrphanProfilePhoneConflict(supabaseUrl, serviceRoleKey, duplicateProfile, normalizedPhone, {
             targetOrgId: body?.orgId || targetProfile.org_id || callerProfile.org_id,
-            canCrossOrg: callerRole === 'super_admin',
+            canCrossOrg: false,
           })
           : false;
         const releasedInactiveEmail = !duplicateIsPhoneMatch
           ? await releaseInactiveDuplicateProfileEmailConflict(supabaseUrl, serviceRoleKey, duplicateProfile, email, {
             targetOrgId: body?.orgId || targetProfile.org_id || callerProfile.org_id,
-            canCrossOrg: callerRole === 'super_admin',
+            canCrossOrg: false,
           })
           : false;
         if (releasedOrphanPhone || releasedInactiveEmail) {
@@ -1628,16 +1492,13 @@ Deno.serve(async (request) => {
       await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, authPayload);
       const profile = await upsertProfile(supabaseUrl, serviceRoleKey, {
         id: targetUserId,
-        org_id: targetOrgId,
         full_name: fullName,
         email,
         mobile_1: toLocalIranMobile(normalizedPhone),
-        role_id: roleId,
-        role: softwareRole,
         avatar_url: avatarUrl,
-        is_active: isActive,
       });
 
+      await scopedRpc('manage_organization_member', { p_user_id: targetUserId, p_patch: memberPatch });
       return json(200, { success: true, profile });
     }
 
@@ -1650,14 +1511,13 @@ Deno.serve(async (request) => {
         return json(400, { success: false, message: 'نمی‌توانید حساب کاربری خودتان را حذف کنید.' });
       }
 
-      const targetProfile = await fetchProfile(supabaseUrl, serviceRoleKey, targetUserId);
+      const targetProfile = await fetchScopedTarget(targetUserId);
       if (!targetProfile?.id) {
         return json(404, { success: false, message: 'پروفایل کاربر مقصد پیدا نشد.' });
       }
 
       assertOrgAccess(callerProfile, callerRole, targetProfile.org_id, targetProfile.role);
-      await deleteAuthUser(supabaseUrl, serviceRoleKey, targetUserId);
-      await deleteProfile(supabaseUrl, serviceRoleKey, targetUserId).catch(() => null);
+      await scopedRpc('manage_organization_member', { p_user_id: targetUserId, p_remove: true });
       return json(200, { success: true });
     }
 
@@ -1668,7 +1528,8 @@ Deno.serve(async (request) => {
         return json(400, { success: false, message: 'شناسه کاربر و شماره موبایل معتبر الزامی است.' });
       }
 
-      const targetProfile = await fetchProfile(supabaseUrl, serviceRoleKey, targetUserId);
+      const targetProfile = await fetchScopedTarget(targetUserId);
+      if (!targetProfile.can_edit_identity) return json(403, { success: false, message: 'تأیید شماره حساب مشترک باید توسط خود شخص انجام شود.' });
       if (!targetProfile?.id) {
         return json(404, { success: false, message: 'پروفایل کاربر مقصد پیدا نشد.' });
       }
@@ -1735,7 +1596,8 @@ Deno.serve(async (request) => {
         return json(400, { success: false, message: 'شناسه کاربر، شماره موبایل و کد تایید الزامی است.' });
       }
 
-      const targetProfile = await fetchProfile(supabaseUrl, serviceRoleKey, targetUserId);
+      const targetProfile = await fetchScopedTarget(targetUserId);
+      if (!targetProfile.can_edit_identity) return json(403, { success: false, message: 'تأیید شماره حساب مشترک باید توسط خود شخص انجام شود.' });
       if (!targetProfile?.id) {
         return json(404, { success: false, message: 'پروفایل کاربر مقصد پیدا نشد.' });
       }

@@ -1,6 +1,9 @@
+import { iranMobileLocal } from '../../../supabase/functions/_shared/phone-number';
+import EmailWorkspace from '../../email/EmailWorkspace';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   AudioOutlined,
+  MailOutlined,
   BookOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
@@ -212,7 +215,7 @@ type ComposerSendPayload = {
 };
 
 type MessagingSurfacePrototypeProps = {
-  initialFilter?: ChannelKind | 'all';
+  initialFilter?: ChannelKind | 'all' | 'email';
   initialConversationKey?: string | null;
   initialForwardMessage?: {
     content?: string | null;
@@ -278,7 +281,8 @@ const actionIcons: Record<ConversationAction, React.ReactNode> = {
   call: <PhoneOutlined />,
 };
 
-const channelFilters: Array<{ key: ChannelKind | 'all'; label: string; icon: React.ReactNode }> = [
+const channelFilters: Array<{ key: ChannelKind | 'all' | 'email'; label: string; icon: React.ReactNode }> = [
+  { key: 'email', label: 'ایمیل', icon: <MailOutlined /> },
   { key: 'all', label: 'همه', icon: <MessageOutlined /> },
   { key: 'internal', label: 'داخلی', icon: channelMeta.internal.icon },
   { key: 'bot_group', label: 'گروه بات', icon: channelMeta.bot_group.icon },
@@ -1120,17 +1124,7 @@ const normalizeIdArray = (value: any): string[] => {
   return [];
 };
 
-const normalizeIranMobileForSms = (value: unknown) => {
-  let digits = String(value || '')
-    .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
-    .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
-    .replace(/\D/g, '');
-  if (!digits) return '';
-  if (digits.startsWith('0098')) digits = `0${digits.slice(4)}`;
-  else if (digits.startsWith('98')) digits = `0${digits.slice(2)}`;
-  else if (digits.length === 10 && digits.startsWith('9')) digits = `0${digits}`;
-  return /^09\d{9}$/.test(digits) ? digits : '';
-};
+const normalizeIranMobileForSms = (value: unknown) => iranMobileLocal(value) ?? '';
 
 const buildBotSmsNotificationText = (orgName: string, platformLabel: string) => {
   const safeOrgName = String(orgName || '').trim() || 'سازمان';
@@ -1484,8 +1478,8 @@ const MessagingConversationList: React.FC<{
   loadingMoreCalls?: boolean;
   onLoadMoreSms?: () => void;
   onLoadMoreCalls?: () => void;
-  activeFilter: ChannelKind | 'all';
-  onChangeFilter: (value: ChannelKind | 'all') => void;
+  activeFilter: ChannelKind | 'all' | 'email';
+  onChangeFilter: (value: ChannelKind | 'all' | 'email') => void;
   unreadSummary?: MessagingUnreadSummary;
 }> = ({ conversations, selectedKey, onSelect, compact = false, loading = false, onRefresh, refreshing = false, onCreateInternalGroup, hasMoreSms = false, hasMoreCalls = false, loadingMoreSms = false, loadingMoreCalls = false, onLoadMoreSms, onLoadMoreCalls, activeFilter, onChangeFilter, unreadSummary = EMPTY_MESSAGING_UNREAD_SUMMARY }) => (
   <MessagingConversationListInner conversations={conversations} selectedKey={selectedKey} onSelect={onSelect} compact={compact} loading={loading} onRefresh={onRefresh} refreshing={refreshing} onCreateInternalGroup={onCreateInternalGroup} hasMoreSms={hasMoreSms} hasMoreCalls={hasMoreCalls} loadingMoreSms={loadingMoreSms} loadingMoreCalls={loadingMoreCalls} onLoadMoreSms={onLoadMoreSms} onLoadMoreCalls={onLoadMoreCalls} activeFilter={activeFilter} onChangeFilter={onChangeFilter} unreadSummary={unreadSummary} />
@@ -1506,8 +1500,8 @@ const MessagingConversationListInner: React.FC<{
   loadingMoreCalls: boolean;
   onLoadMoreSms?: () => void;
   onLoadMoreCalls?: () => void;
-  activeFilter: ChannelKind | 'all';
-  onChangeFilter: (value: ChannelKind | 'all') => void;
+  activeFilter: ChannelKind | 'all' | 'email';
+  onChangeFilter: (value: ChannelKind | 'all' | 'email') => void;
   unreadSummary: MessagingUnreadSummary;
 }> = ({ conversations, selectedKey, onSelect, compact = false, loading = false, onRefresh, refreshing = false, onCreateInternalGroup, hasMoreSms, hasMoreCalls, loadingMoreSms, loadingMoreCalls, onLoadMoreSms, onLoadMoreCalls, activeFilter, onChangeFilter, unreadSummary }) => {
   const [searchOpen, setSearchOpen] = useState(false);
@@ -1526,7 +1520,8 @@ const MessagingConversationListInner: React.FC<{
       getConversationBadgeLabel(conversation),
     ].some((value) => String(value || '').toLocaleLowerCase('fa').includes(normalizedSearch)))
     : channelFilteredConversations;
-  const filterUnreadCounts: Record<ChannelKind | 'all', number> = {
+  const filterUnreadCounts: Record<ChannelKind | 'all' | 'email', number> = {
+    email: 0,
     all: unreadSummary.all,
     internal: unreadSummary.internal,
     bot_group: unreadSummary.bot_group,
@@ -2531,7 +2526,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
   const notificationRuntime = useOptionalNotificationRuntime();
   const [selectedKey, setSelectedKey] = useState(() => normalizeMessagingConversationKey(initialConversationKey));
   const [readEnabledConversationKey, setReadEnabledConversationKey] = useState(() => normalizeMessagingConversationKey(initialConversationKey));
-  const [conversationFilter, setConversationFilter] = useState<ChannelKind | 'all'>(initialFilter);
+  const [conversationFilter, setConversationFilter] = useState<ChannelKind | 'all' | 'email'>(initialFilter);
   const [conversationListOpen, setConversationListOpen] = useState(false);
   const [phoneBindOpen, setPhoneBindOpen] = useState(false);
   const [phoneBindLoading, setPhoneBindLoading] = useState(false);
@@ -3635,7 +3630,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
     setConversationListOpen(false);
   };
 
-  const changeConversationFilter = (value: ChannelKind | 'all') => {
+  const changeConversationFilter = (value: ChannelKind | 'all' | 'email') => {
     setConversationFilter(value);
   };
 
@@ -5528,6 +5523,8 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
       ? selection
       : null;
   })();
+
+  if (conversationFilter === 'email') return <EmailWorkspace onBack={() => setConversationFilter('all')} />;
 
   return (
     <div dir="rtl" data-testid="messaging-v2-prototype" className="h-full min-h-0 overflow-hidden bg-slate-100 text-slate-800 dark:bg-[#101113] dark:text-slate-100">

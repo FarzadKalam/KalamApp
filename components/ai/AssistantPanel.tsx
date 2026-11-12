@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Avatar, Button, Checkbox, Drawer, Empty, Input, Modal, Popconfirm, Popover, Progress, Space, Spin, Tag, Tooltip } from 'antd';
-import { CheckOutlined, CloseOutlined, CompressOutlined, CopyOutlined, DeleteOutlined, EditOutlined, ForwardOutlined, MenuOutlined, SendOutlined, ShareAltOutlined, UserAddOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
+import { CheckOutlined, CloseOutlined, CompressOutlined, CopyOutlined, DeleteOutlined, EditOutlined, ForwardOutlined, MenuOutlined, ShareAltOutlined, UserAddOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
@@ -18,6 +18,9 @@ import type { RecordedVoice } from './AiVoiceRecorder';
 import type { AiUploadedFilePrompt } from './AiFileUploadButton';
 import AiCapabilityComposerActions, { normalizeAiComposerCapabilities, type AiComposerCapability } from './AiCapabilityComposerActions';
 import AiComposeModelBar from './AiComposeModelBar';
+import AiActivityStatus from './AiActivityStatus';
+import AiAgentPlanCard from './AiAgentPlanCard';
+import { getAiAgentLabel, resolveAiAgentId, parseAiAgentActivity, applyAiAgentActivity, type AiAgentActivity } from '../../supabase/functions/_shared/ai-agents';
 import AiGenerationStatusCard, { type AiGenerationKind } from './AiGenerationStatusCard';
 import AiAudioPlayer from './AiAudioPlayer';
 import AiMediaSettingsPopover, { type AiMediaSettings, type AiMediaSourceImage } from './AiMediaSettingsPopover';
@@ -25,7 +28,7 @@ import { resolveAiAttachmentUrl } from './AiMessageAttachmentPreview';
 import { blobToBase64 } from '../../utils/blobBase64';
 import { buildAiRecordCreationSchema, buildAiRecordModuleOptions } from '../../utils/aiRecordCreation';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
-import { shouldSubmitComposerOnEnter } from '../../utils/composeKeyboard';
+import AiMessageComposer from './AiMessageComposer';
 import { buildSmartAiThreadTitle } from '../../utils/aiThreadTitle';
 import { resolveModalPopupContainer } from '../../utils/popupContainer';
 import MessageAttachmentGallery from '../messaging/MessageAttachmentGallery';
@@ -968,6 +971,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     body: Record<string, any>,
     handlers: {
       onMeta?: (payload: any) => void;
+      onActivity?: (payload: unknown) => void;
       onDelta?: (text: string) => void;
       onDone?: (payload: any) => void;
       onError?: (payload: any) => void;
@@ -1013,6 +1017,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       let payload: any = null;
       try { payload = JSON.parse(dataText); } catch { payload = { text: dataText }; }
       if (eventName === 'meta') handlers.onMeta?.(payload);
+      if (eventName === 'agent_activity') handlers.onActivity?.(payload);
       if (eventName === 'delta') {
         const text = String(payload?.text || '');
         streamedText += text;
@@ -1745,6 +1750,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       const runStreamingChat = async (streamBody: Record<string, any>) => {
         let serverError: any = null;
         await callAssistantStream(streamBody, {
+          onActivity: (payload) => {
+            const activity = parseAiAgentActivity(payload);
+            if (!activity) return;
+            setMessages(prev => prev.map(item => item.id === thinkingMessage.id ? {
+              ...item, metadata: { ...(item.metadata || {}), agent_activities: applyAiAgentActivity(item.metadata?.agent_activities || [], activity) },
+            } : item));
+          },
           onMeta: (payload) => {
             if (payload?.threadId) setThreadId(String(payload.threadId));
             applyThreadTitleFromResponse(payload, text);
@@ -1761,6 +1773,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                     pending_status: true,
                     streaming: true,
                     source_user_text: text,
+                    ...(payload?.agentId ? { agent_id: resolveAiAgentId(payload.agentId) } : {}),
                   },
                 };
               }
@@ -2864,6 +2877,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     const isStreaming = !isUser && item.metadata?.streaming === true;
     const isFailed = !isUser && (item.metadata?.failed === true || item.metadata?.incomplete === true);
     const isStopped = !isUser && item.metadata?.stopped === true;
+    const waitingForResponse = !isUser && item.metadata?.pending_status === true && !isFailed && !isStopped && (!isStreaming || !messageText.trim());
+    const activeAgents: AiAgentActivity[] = (Array.isArray(item.metadata?.agent_activities) ? item.metadata.agent_activities : []).map(parseAiAgentActivity).filter((activity: AiAgentActivity | null): activity is AiAgentActivity => Boolean(activity));
+    const capabilities = Array.isArray(item.metadata?.capabilities) ? item.metadata.capabilities : [];
+    const respondingAgent = resolveAiAgentId(item.metadata?.agent_id || item.metadata?.capability || capabilities[0]);
     const providerRaw = item.metadata?.provider_raw_response || item.metadata?.provider_error_raw || item.metadata?.avalai_raw_response || null;
     const providerRawText = providerRaw
       ? (typeof providerRaw === 'string' ? providerRaw : JSON.stringify(providerRaw, null, 2))
@@ -2875,11 +2892,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         ) : (
           <Avatar
             size={28}
-            className="!bg-[#fdf2f8] !text-[#be185d] dark:!bg-[#3b1022] dark:!text-[#f9a8d4]"
+            className="ai-chat-avatar"
             icon={<AiSparkleIcon className="h-4 w-4" />}
           />
         )}
-        <div className={`min-w-0 max-w-[86%] ${isUser ? 'items-end' : 'items-start'} flex flex-col`}>
+        <div className={`ai-chat-message-column ${isUser ? 'is-user items-end' : 'items-start'} flex flex-col`}>
           {pendingKind ? (
             <AiGenerationStatusCard
               kind={pendingKind}
@@ -2893,14 +2910,14 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             />
           ) : (
           <div
-            className={`whitespace-pre-wrap rounded-2xl px-3 py-2 text-[12px] leading-6 shadow-[0_10px_24px_rgba(15,23,42,0.08)] dark:shadow-[0_10px_24px_rgba(0,0,0,0.24)] ${
-              isUser
-                ? 'rounded-tr-md bg-[rgb(var(--brand-600-rgb))] text-white dark:bg-[rgb(var(--brand-500-rgb))] dark:text-white'
-                : 'rounded-tl-md border border-slate-200/70 bg-white text-slate-700 dark:border-white/[0.08] dark:bg-white/[0.055] dark:text-slate-100'
-            }`}
+            className={`ai-chat-message${isUser ? ' is-user' : ''}`}
           >
-            {isUser ? messageText : (
+            {isUser ? messageText : waitingForResponse ? (
+              <AiActivityStatus agentId={respondingAgent} activities={activeAgents} onStop={isStreaming ? stopActiveStream : undefined} />
+            ) : (
               <AiMessageRenderer
+                agentId={respondingAgent}
+                activities={activeAgents}
                 text={messageText}
                 streaming={isStreaming}
                 failed={isFailed}
@@ -2910,7 +2927,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 onRetry={retryText ? () => void submitChat(retryText, 'text') : undefined}
               />
             )}
-            <MessageAttachmentGallery attachments={attachments} />
+            <MessageAttachmentGallery attachments={attachments} presentation={isUser ? undefined : 'assistant'} />
+            {!isUser && item.metadata?.agent_plan && <details className="ai-chat-details"><summary>برنامهٔ ایجنت راهبر</summary><AiAgentPlanCard plan={item.metadata.agent_plan} /></details>}
             {!pendingKind && providerRawText && attachments.length === 0 ? (
               <details className="mt-2 rounded-lg border border-white/20 bg-black/5 p-2 text-left text-[10px] leading-4 dark:bg-black/20" dir="ltr">
                 <summary className="cursor-pointer text-right font-semibold" dir="rtl">
@@ -2930,7 +2948,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             ) : null}
           </div>
           )}
-          <div className={`mt-1 flex flex-wrap items-center gap-1 text-[9px] leading-4 ${isUser ? 'text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-200-rgb))]' : 'text-gray-400'}`}>
+          <div className="ai-chat-meta mt-1 flex flex-wrap items-center gap-1">
             {isUser ? <span>{authorName}</span> : null}
             {item.created_at ? <span>{toFaDateTime(item.created_at)}</span> : null}
             {!isUser && item.model ? <span>{item.model}</span> : null}
@@ -3117,8 +3135,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   }, [compressThreadContext, compressingContext, estimatedContextPercent, messages.length, threadId]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-slate-100 text-slate-800 dark:bg-[#101113] dark:text-slate-100">
-      <div className="border-b border-slate-200/65 bg-white/92 px-3 py-2.5 backdrop-blur dark:border-white/[0.07] dark:bg-[#17191c]/95">
+    <div className="ai-chat-theme ai-chat-panel flex h-full min-h-0 flex-col">
+      <div className="border-b border-slate-200/65 bg-white/92 px-3 py-2.5 backdrop-blur dark:border-white/[0.07] dark:bg-[#1c1c1f]/95">
         <div className="mb-2 flex items-center justify-between gap-2">
           <div className="min-w-0 flex-1">
             {editingThreadTitle ? (
@@ -3262,7 +3280,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         </Space>
       </div>
 
-      <div ref={scrollRef} onScroll={handleMessageScroll} className="min-h-0 flex-1 overflow-y-auto bg-[linear-gradient(180deg,rgba(248,250,252,0.94),rgba(241,245,249,0.82))] px-3 py-3 dark:bg-none dark:bg-[#101113]">
+      <div ref={scrollRef} onScroll={handleMessageScroll} className="ai-chat-message-list min-h-0 flex-1 overflow-y-auto px-3 py-3">
         {loadingThread && messages.length === 0 ? (
           <div className="flex justify-center py-10">
             <Spin />
@@ -3279,9 +3297,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         )}
       </div>
 
-      <div className="max-h-[48vh] shrink-0 overflow-y-auto border-t border-slate-200/65 bg-white/95 px-3 py-2.5 dark:border-white/[0.07] dark:bg-[#17191c]">
+      <div className="ai-assistant-composer-region">
         {pendingAiAction ? (
-          <div className="mb-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950 shadow-sm dark:border-amber-400/20 dark:bg-[#241a0d] dark:text-amber-100">
+          <div className="ai-approval-card">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
                 <div className="font-bold">
@@ -3291,7 +3309,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                     ? `پیش‌نویس ${pendingRecordMutationType === 'update_record_from_prompt' ? 'ویرایش' : 'ساخت'} ${String(pendingAiAction?.title || 'رکورد').trim()}`
                     : 'هوش مصنوعی یک اقدام قابل اجرا پیشنهاد داده است.'}
                 </div>
-                <div className="mt-1 text-amber-800 dark:text-amber-200/85">
+                <div className="mt-1 ai-approval-description">
                   {String(pendingAiAction?.actionType || '') === 'confirm_generation'
                     ? 'قبل از ساخت، دستور و تنظیمات را بررسی کنید؛ اجرا فقط بعد از تایید شما انجام می‌شود.'
                     : 'اطلاعات فهمیده‌شده را بررسی کنید؛ می‌توانید تایید کنید، رد کنید یا با پیام یا فایل صوتی توضیح تکمیلی بدهید.'}
@@ -3299,16 +3317,16 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               </div>
             </div>
             {String(pendingAiAction?.actionType || '') === 'confirm_generation' ? (
-              <div className="mt-2 space-y-2 rounded-xl border border-amber-200/70 bg-white/72 p-2 dark:border-amber-300/15 dark:bg-white/[0.045]">
+              <div className="ai-approval-section space-y-3">
                 <div>
-                  <div className="font-semibold text-amber-900 dark:text-amber-100">دستور ساخت</div>
-                  <div className="mt-1 whitespace-pre-wrap rounded-lg bg-amber-50/80 p-2 text-amber-900 dark:bg-black/20 dark:text-amber-50">
+                  <div className="font-semibold ">دستور ساخت</div>
+                  <div className="ai-approval-prompt">
                     {String(pendingAiAction?.prompt || pendingAiAction?.confirmBody?.prompt || pendingAiAction?.confirmBody?.message || '').trim() || 'درخواست کاربر'}
                   </div>
                 </div>
                 {pendingGenerationCanChooseModel ? (
-                  <div className="rounded-lg border border-amber-100/80 bg-white/60 p-2 dark:border-white/10 dark:bg-white/[0.035]">
-                    <div className="mb-1 font-semibold text-amber-900 dark:text-amber-100">موتور هوش مصنوعی</div>
+                  <div className="rounded-lg border border-[var(--ai-chat-line)] bg-white/60 p-2 dark:border-white/10 dark:bg-white/[0.035]">
+                    <div className="mb-1 font-semibold ">موتور هوش مصنوعی</div>
                     <AiComposeModelBar
                       selectedCapabilities={[pendingGenerationKind]}
                       fallbackCapability={contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat'}
@@ -3337,8 +3355,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                   </div>
                 ) : null}
                 {pendingGenerationCanChooseModel && ['image_generation', 'video_generation', 'voice_output', 'document_generation'].includes(pendingGenerationKind) ? (
-                  <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-100/80 bg-white/60 p-2 dark:border-white/10 dark:bg-white/[0.035]">
-                    <span className="font-semibold text-amber-900 dark:text-amber-100">تنظیمات خاص خروجی</span>
+                  <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--ai-chat-line)] bg-white/60 p-2 dark:border-white/10 dark:bg-white/[0.035]">
+                    <span className="font-semibold ">تنظیمات خاص خروجی</span>
                     <AiMediaSettingsPopover
                       capability={pendingGenerationKind as 'image_generation' | 'voice_output' | 'video_generation' | 'document_generation'}
                       settings={mediaSettings}
@@ -3350,24 +3368,24 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 ) : null}
                 {pendingGenerationSettingsRows.length > 0 ? (
                   <div>
-                    <div className="font-semibold text-amber-900 dark:text-amber-100">تنظیمات</div>
+                    <div className="font-semibold ">تنظیمات</div>
                     <div className="mt-1 space-y-1">
                       {pendingGenerationSettingsRows.map((row: any, rowIndex: number) => (
-                        <div key={`${String(row?.label || 'setting')}-${rowIndex}`} className="flex items-start justify-between gap-3 border-b border-amber-100/80 py-1 last:border-b-0 dark:border-white/10">
-                          <span className="shrink-0 font-semibold text-amber-900 dark:text-amber-100">{String(row?.label || 'تنظیم')}</span>
-                          <span className="min-w-0 text-left text-amber-800 dark:text-amber-200/85">{String(row?.value || 'پیش‌فرض')}</span>
+                        <div key={`${String(row?.label || 'setting')}-${rowIndex}`} className="flex items-start justify-between gap-3 border-b border-[var(--ai-chat-line)] py-1 last:border-b-0 dark:border-white/10">
+                          <span className="shrink-0 font-semibold ">{String(row?.label || 'تنظیم')}</span>
+                          <span className="min-w-0 text-left ai-approval-description">{String(row?.value || 'پیش‌فرض')}</span>
                         </div>
                       ))}
                     </div>
                   </div>
                 ) : null}
-                <div className="font-semibold text-amber-900 dark:text-amber-100">آیا تایید می‌کنید؟</div>
+                <div className="font-semibold ">آیا تایید می‌کنید؟</div>
                 <Checkbox
                   checked={rememberGenerationPreference}
                   onChange={(event) => setRememberGenerationPreference(event.target.checked)}
-                  className="text-xs text-amber-900 dark:text-amber-100"
+                  className="text-xs "
                 >
-                  این اطلاعات را برای این عملکرد ({getGenerationConfirmationTitle(pendingGenerationKind).replace(/^تایید\s*/, '')}) در این گفتگو ذخیره کن و دیگر نپرس.
+                  این اطلاعات را برای این عملکرد ({getAiAgentLabel(pendingGenerationKind)}) در این گفتگو ذخیره کن و دیگر نپرس.
                 </Checkbox>
               </div>
             ) : null}
@@ -3412,6 +3430,50 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             </Space>
           </div>
         ) : null}
+        <AiMessageComposer value={input} onChange={setInput}
+          onSubmit={() => void (shouldUseTaskBundle ? submitTaskBundle() : documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat())}
+          canSubmit={Boolean(input.trim() || bundleInputs.length)} busy={submitting || generatingImage || generatingVoiceOutput || generatingVideo || generatingDocument}
+          placeholder="سوال خود را بنویسید..."
+          sendLabel={shouldUseTaskBundle ? 'ارسال' : documentMode ? 'ساخت فایل' : videoMode ? 'ساخت ویدیو' : voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : activeRecordCreationSchema ? 'آماده‌سازی پیش‌نویس' : 'ارسال'}
+          tools={<AiCapabilityComposerActions
+            selected={selectedCapabilities}
+            autoSuggested={autoSuggestedCapabilities}
+            onChange={handleComposerCapabilitiesChange}
+            capabilityAvailability={capabilityAvailability}
+            loading={submitting || generatingImage || generatingVoiceOutput || generatingVideo || generatingDocument}
+            moduleId={fileRecordScope.moduleId}
+            recordId={fileRecordScope.recordId}
+            onVoiceSend={queueVoiceInput}
+            onFilePrepared={queueUploadedFile}
+            onFilesPrepared={queueUploadedFiles}
+            voiceLoading={submitting}
+            fileLoading={submitting}
+            allowMultipleFiles
+            size="small"
+            recordCreationModuleOptions={recordCreationModuleOptions}
+            recordCreationTargetModuleId={recordCreationTargetModuleId}
+            onRecordCreationTargetModuleChange={setRecordCreationTargetModuleId}
+            mediaSettings={mediaSettings}
+            onMediaSettingsChange={setMediaSettings}
+            mediaModelId={activeMediaModelId}
+            onApplyPrompt={(text) => setInput((prev) => (String(prev || '').trim() ? `${prev}\n${text}` : text))}
+          />} model={<AiComposeModelBar compact
+            selectedCapabilities={selectedCapabilities}
+            fallbackCapability={contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat'}
+            persistedOverrides={modelOverrides}
+            onModelOverrideChange={(model, capability) => {
+              modelOverrideRef.current = model;
+              const key = String(capability || '').trim();
+              if (key) {
+                setModelOverrides((prev) => {
+                  if (model) return { ...prev, [key]: model };
+                  const next = { ...prev };
+                  delete next[key];
+                  return next;
+                });
+              }
+            }}
+          />}>
         {imageEditSourceUrl ? (
           <div className="mb-2 flex items-center gap-2 rounded-lg border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.7)] p-1.5 ps-2 text-[11px] text-gray-600 dark:border-white/10 dark:bg-white/5 dark:text-gray-300">
             <img src={imageEditSourceUrl} alt="مبنای اصلاح" className="h-8 w-8 rounded object-cover" />
@@ -3436,73 +3498,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               ) : null)}
           </div>
         ) : null}
-        <Input.TextArea
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onPressEnter={(event) => {
-            if (!shouldSubmitComposerOnEnter(event)) return;
-            event.preventDefault();
-            void (shouldUseTaskBundle ? submitTaskBundle() : documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat());
-          }}
-          placeholder="سوال خود را بنویسید..."
-          autoSize={{ minRows: 1, maxRows: 8 }}
-          className="!rounded-2xl !border-slate-200/70 !bg-slate-50/85 !px-3 !py-2 !text-[12px] !leading-6 !shadow-none dark:!border-white/[0.08] dark:!bg-white/[0.045]"
-        />
-        <div className="mt-1">
-          <AiComposeModelBar
-            selectedCapabilities={selectedCapabilities}
-            fallbackCapability={contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat'}
-            persistedOverrides={modelOverrides}
-            onModelOverrideChange={(model, capability) => {
-              modelOverrideRef.current = model;
-              const key = String(capability || '').trim();
-              if (key) {
-                setModelOverrides((prev) => {
-                  if (model) return { ...prev, [key]: model };
-                  const next = { ...prev };
-                  delete next[key];
-                  return next;
-                });
-              }
-            }}
-          />
-        </div>
-        <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
-          <AiCapabilityComposerActions
-            selected={selectedCapabilities}
-            autoSuggested={autoSuggestedCapabilities}
-            onChange={handleComposerCapabilitiesChange}
-            capabilityAvailability={capabilityAvailability}
-            loading={submitting || generatingImage || generatingVoiceOutput || generatingVideo || generatingDocument}
-            moduleId={fileRecordScope.moduleId}
-            recordId={fileRecordScope.recordId}
-            onVoiceSend={queueVoiceInput}
-            onFilePrepared={queueUploadedFile}
-            onFilesPrepared={queueUploadedFiles}
-            voiceLoading={submitting}
-            fileLoading={submitting}
-            allowMultipleFiles
-            size="small"
-            recordCreationModuleOptions={recordCreationModuleOptions}
-            recordCreationTargetModuleId={recordCreationTargetModuleId}
-            onRecordCreationTargetModuleChange={setRecordCreationTargetModuleId}
-            mediaSettings={mediaSettings}
-            onMediaSettingsChange={setMediaSettings}
-            mediaModelId={activeMediaModelId}
-            onApplyPrompt={(text) => setInput((prev) => (String(prev || '').trim() ? `${prev}\n${text}` : text))}
-          />
-          <Button
-            type="primary"
-            icon={<SendOutlined />}
-            className="shrink-0"
-            loading={shouldUseTaskBundle ? submitting : documentMode ? generatingDocument : videoMode ? generatingVideo : voiceOutputMode ? generatingVoiceOutput : imageMode ? generatingImage : submitting}
-            disabled={!input.trim() && bundleInputs.length === 0}
-            onClick={() => void (shouldUseTaskBundle ? submitTaskBundle() : documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat())}
-            size="small"
-          >
-            {shouldUseTaskBundle ? 'ارسال' : documentMode ? 'ساخت فایل' : videoMode ? 'ساخت ویدیو' : voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : activeRecordCreationSchema ? 'آماده‌سازی پیش‌نویس' : 'ارسال'}
-          </Button>
-        </div>
+        </AiMessageComposer>
       </div>
       {pendingRecordMutationType && pendingAiAction ? (
         <QuickRecordFormModal
@@ -3564,7 +3560,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         destroyOnHidden
         getContainer={typeof document === 'undefined' ? undefined : () => document.body}
       >
-        <div className="h-full overflow-y-auto bg-slate-50 p-2 dark:bg-[#131518]">
+        <div className="h-full overflow-y-auto bg-slate-50 p-2 dark:bg-[#181818]">
           {drawerThreadsLoading ? (
             <div className="flex justify-center py-10"><Spin /></div>
           ) : drawerThreads.length === 0 ? (

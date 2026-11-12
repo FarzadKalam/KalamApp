@@ -1,3 +1,4 @@
+import { phoneLookupKey } from '../supabase/functions/_shared/phone-number';
 import { buildRecordReferenceKey } from './recordReference';
 
 export type NotificationReadChecker = (
@@ -94,21 +95,7 @@ const getTime = (value: any) => {
   return Number.isFinite(time) ? time : 0;
 };
 
-export const normalizePhoneThreadValue = (value: any) => {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  let digits = raw.replace(/\D/g, '');
-  if (!digits) return raw;
-  if (digits.startsWith('0098')) {
-    digits = digits.slice(4);
-  } else if (digits.startsWith('98') && digits.length >= 12) {
-    digits = digits.slice(2);
-  }
-  if (digits.length > 10 && digits.startsWith('0')) {
-    digits = digits.slice(1);
-  }
-  return digits || raw;
-};
+export const normalizePhoneThreadValue = (value: unknown) => phoneLookupKey(value) || String(value ?? '').trim();
 
 export const resolveSmsCounterpartyPhone = (row: any) => {
   const direction = String(row?.direction || '').trim().toLowerCase();

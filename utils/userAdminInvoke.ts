@@ -1,5 +1,6 @@
 import { normalizeEmail } from './email';
 import { supabase } from '../supabaseClient';
+import { getSelectedOrganizationId } from './organizationContext';
 
 const readFunctionErrorPayload = async (error: any) => {
   const context = error?.context;
@@ -22,6 +23,7 @@ export const invokeUserAdminFunction = async (body: Record<string, unknown>) => 
     body: { ...body, ...(body.email !== undefined ? { email: normalizeEmail(body.email) || null } : {}) },
     headers: {
       Authorization: `Bearer ${accessToken}`,
+      ...(getSelectedOrganizationId() ? { 'x-client-info': `kalamapp; org=${getSelectedOrganizationId()}` } : {}),
     },
   });
 

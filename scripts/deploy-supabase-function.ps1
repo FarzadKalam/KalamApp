@@ -300,6 +300,12 @@ try {
     $archiveSourceRoot = $archiveStagingRoot
   }
 
+  # Every function may import ../_shared, including email and user management.
+  # Include shared dependencies for ordinary deployments as well as workflow bundles.
+  if ((Test-Path -LiteralPath (Join-Path $archiveSourceRoot '_shared')) -and -not ($archiveEntries -contains '_shared')) {
+    $archiveEntries += '_shared'
+  }
+
   Write-Step "Packing functions: $($selectedFunctions -join ', ')"
   $tarArgs = @('-czf', $localArchive, '-C', $archiveSourceRoot, '--') + $archiveEntries
   & tar @tarArgs

@@ -1,3 +1,4 @@
+import { iranMobileE164, phoneDigits } from '../supabase/functions/_shared/phone-number';
 export type PhoneCountry = {
   code: string;
   faName: string;
@@ -63,11 +64,7 @@ const toEnglishDigits = (value: unknown): string =>
     .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
     .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)));
 
-export const normalizePhoneDigits = (value: unknown): string => {
-  const raw = toEnglishDigits(value).trim();
-  if (!raw) return '';
-  return raw.replace(/\D/g, '');
-};
+export const normalizePhoneDigits = phoneDigits;
 
 export const getPhoneCountryFlag = (countryCode: string): string => {
   const code = String(countryCode || '').trim().toUpperCase();
@@ -131,6 +128,8 @@ export const normalizePhoneForStorageWithCountry = (
   countryCode?: string | null
 ): string => {
   const country = getPhoneCountryByCode(countryCode);
+  const mobile = country.code === 'IR' ? normalizeIranMobile(value) : null;
+  if (mobile) return mobile;
   const nationalDigits = normalizeNationalNumberForStorage(value, country);
   if (!nationalDigits) return '';
   return `+${country.dialCode}${nationalDigits}`;
@@ -152,6 +151,9 @@ export const parsePhoneNumber = (value: unknown): {
       isE164: false,
     };
   }
+
+  const canonicalMobile = normalizeIranMobile(raw);
+  if (canonicalMobile) return { country: fallbackCountry, nationalNumber: `0${canonicalMobile.slice(3)}`, e164: canonicalMobile, isE164: true };
 
   if (raw.startsWith('+') || raw.startsWith('00')) {
     const digits = raw.startsWith('+') ? normalizePhoneDigits(raw) : normalizePhoneDigits(raw).replace(/^00/, '');
@@ -185,28 +187,7 @@ export const parsePhoneNumber = (value: unknown): {
   };
 };
 
-export const normalizeIranMobile = (value: unknown): string | null => {
-  const raw = toEnglishDigits(value).trim();
-  if (!raw) return null;
-
-  const digits = normalizePhoneDigits(raw);
-  if (!digits) return null;
-
-  if (/^00989\d{9}$/.test(digits)) {
-    return `+${digits.slice(2)}`;
-  }
-  if (/^989\d{9}$/.test(digits)) {
-    return `+${digits}`;
-  }
-  if (/^09\d{9}$/.test(digits)) {
-    return `+98${digits.slice(1)}`;
-  }
-  if (/^9\d{9}$/.test(digits)) {
-    return `+98${digits}`;
-  }
-
-  return null;
-};
+export const normalizeIranMobile = iranMobileE164;
 
 export const formatIranMobileForInput = (value: unknown): string => {
   const normalized = normalizeIranMobile(value);

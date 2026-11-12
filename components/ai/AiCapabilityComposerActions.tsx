@@ -1,11 +1,12 @@
 import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import { Button, Checkbox, Drawer, Grid, Popover, Select, Space, Tag, Tooltip } from 'antd';
+import { Button, Checkbox, Drawer, Grid, Popover, Select, Tag, Tooltip } from 'antd';
 import type { ButtonProps } from 'antd';
 import {
   AudioOutlined,
   FileSearchOutlined,
   GlobalOutlined,
   PlusOutlined,
+  CloseOutlined,
   SafetyCertificateOutlined,
   ThunderboltOutlined,
   PictureOutlined,
@@ -19,22 +20,11 @@ import AiFileUploadButton, { type AiUploadedFilePrompt } from './AiFileUploadBut
 const MessageComposerModal = lazy(() => import('../MessageComposerModal'));
 import AiVoiceRecorder, { type RecordedVoice } from './AiVoiceRecorder';
 import AiMediaSettingsPopover, { type AiMediaSettings } from './AiMediaSettingsPopover';
+import { getAiAgent, getAiAgentLabel, type AiComposerAgentId } from '../../supabase/functions/_shared/ai-agents';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 
-export type AiComposerCapability =
-  | 'text_chat'
-  | 'free_chat'
-  | 'document_analysis'
-  | 'voice_input'
-  | 'voice_output'
-  | 'image_generation'
-  | 'video_generation'
-  | 'document_generation'
-  | 'web_search'
-  | 'deep_reasoning'
-  | 'legal_assistant'
-  | 'record_creation'
-  | 'process_operation';
+/** Compatibility alias for persisted composer preferences and existing callers. */
+export type AiComposerCapability = AiComposerAgentId;
 
 type CapabilityAvailability = Record<string, { enabled?: boolean; planAvailable?: boolean; tenantReady?: boolean; hasReadyModel?: boolean } | undefined>;
 
@@ -46,6 +36,7 @@ type AiCapabilityComposerActionsProps = {
   disabled?: boolean;
   loading?: boolean;
   size?: ButtonProps['size'];
+  compact?: boolean;
   moduleId?: string | null;
   recordId?: string | null;
   onVoiceSend: (voice: RecordedVoice) => void | Promise<void>;
@@ -72,19 +63,19 @@ const CAPABILITY_META: Array<{
   icon: React.ReactNode;
   kind: 'toggle' | 'inline';
 }> = [
-  { key: 'text_chat', label: 'گفتگوی متنی', description: 'گفتگوی مستقیم بدون تصمیم‌گیری خودکار', icon: <MessageOutlined />, kind: 'toggle' },
-  { key: 'document_analysis', label: 'تحلیل اسناد', description: 'تحلیل فایل، رسید، عکس یا سند', icon: <FileSearchOutlined />, kind: 'inline' },
-  { key: 'voice_input', label: 'تحلیل صدا', description: 'ضبط و تبدیل فایل صوتی به متن', icon: <AudioOutlined />, kind: 'inline' },
-  { key: 'voice_output', label: 'تولید صدا', description: 'تبدیل متن به فایل صوتی', icon: <SoundOutlined />, kind: 'toggle' },
-  { key: 'image_generation', label: 'ساخت تصویر', description: 'ارسال متن برای تولید تصویر', icon: <PictureOutlined />, kind: 'toggle' },
-  { key: 'video_generation', label: 'ساخت ویدیو', description: 'تولید ویدیو از متن یا تصویر', icon: <VideoCameraOutlined />, kind: 'toggle' },
-  { key: 'document_generation', label: 'ساخت فایل', description: 'ساخت فایل Word، Excel، PDF یا CSV', icon: <FileWordOutlined />, kind: 'toggle' },
-  { key: 'web_search', label: 'جستجوی گوگل', description: 'استفاده از اطلاعات بروز وب', icon: <GlobalOutlined />, kind: 'toggle' },
-  { key: 'deep_reasoning', label: 'تفکر عمیق', description: 'استفاده از مدل reasoning سازمان', icon: <ThunderboltOutlined />, kind: 'toggle' },
-  { key: 'legal_assistant', label: 'دستیار حقوقی', description: 'پاسخ حقوقی با تکیه بر اسناد و وب', icon: <SafetyCertificateOutlined />, kind: 'toggle' },
-  { key: 'record_creation', label: 'ایجاد/ویرایش رکورد', description: 'پیشنهاد ایجاد یا ویرایش فاکتور، هزینه، مشتری، محصول و...', icon: <PlusOutlined />, kind: 'toggle' },
-  { key: 'process_operation', label: 'اقدام فرآیندی', description: 'پیشنهاد اجرای فرآیند یا تغییر مرحله', icon: <ThunderboltOutlined />, kind: 'toggle' },
-  { key: 'free_chat', label: 'گفتگوی آزاد', description: 'گفتگوی خام با هوش مصنوعی بدون استفاده از دانش سازمان', icon: <MessageOutlined />, kind: 'toggle' },
+  { key: 'text_chat', label: getAiAgentLabel('text_chat'), description: getAiAgent('text_chat').description, icon: <MessageOutlined />, kind: 'toggle' },
+  { key: 'document_analysis', label: getAiAgentLabel('document_analysis'), description: getAiAgent('document_analysis').description, icon: <FileSearchOutlined />, kind: 'inline' },
+  { key: 'voice_input', label: getAiAgentLabel('voice_input'), description: getAiAgent('voice_input').description, icon: <AudioOutlined />, kind: 'inline' },
+  { key: 'voice_output', label: getAiAgentLabel('voice_output'), description: getAiAgent('voice_output').description, icon: <SoundOutlined />, kind: 'toggle' },
+  { key: 'image_generation', label: getAiAgentLabel('image_generation'), description: getAiAgent('image_generation').description, icon: <PictureOutlined />, kind: 'toggle' },
+  { key: 'video_generation', label: getAiAgentLabel('video_generation'), description: getAiAgent('video_generation').description, icon: <VideoCameraOutlined />, kind: 'toggle' },
+  { key: 'document_generation', label: getAiAgentLabel('document_generation'), description: getAiAgent('document_generation').description, icon: <FileWordOutlined />, kind: 'toggle' },
+  { key: 'web_search', label: getAiAgentLabel('web_search'), description: getAiAgent('web_search').description, icon: <GlobalOutlined />, kind: 'toggle' },
+  { key: 'deep_reasoning', label: getAiAgentLabel('deep_reasoning'), description: getAiAgent('deep_reasoning').description, icon: <ThunderboltOutlined />, kind: 'toggle' },
+  { key: 'legal_assistant', label: getAiAgentLabel('legal_assistant'), description: getAiAgent('legal_assistant').description, icon: <SafetyCertificateOutlined />, kind: 'toggle' },
+  { key: 'record_creation', label: getAiAgentLabel('record_creation'), description: getAiAgent('record_creation').description, icon: <PlusOutlined />, kind: 'toggle' },
+  { key: 'process_operation', label: getAiAgentLabel('process_operation'), description: getAiAgent('process_operation').description, icon: <ThunderboltOutlined />, kind: 'toggle' },
+  { key: 'free_chat', label: getAiAgentLabel('free_chat'), description: getAiAgent('free_chat').description, icon: <MessageOutlined />, kind: 'toggle' },
 ];
 
 const isCapabilityUsable = (availability: CapabilityAvailability | undefined, key: AiComposerCapability) => {
@@ -110,6 +101,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   disabled = false,
   loading = false,
   size,
+  compact: _compact = false,
   moduleId,
   recordId,
   onVoiceSend,
@@ -136,8 +128,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   const autoMode = selectedSet.size === 0;
   const autoSuggestedSet = useMemo(() => new Set(autoSuggested), [autoSuggested]);
   const actionSize = size || 'small';
-  const iconActionClass = '!flex !h-7 !w-7 !items-center !justify-center !rounded-lg !p-0';
-  const capabilityTagClass = 'm-0 !inline-flex !h-7 !items-center !rounded-md !px-2 !text-[11px]';
+  const iconActionClass = 'ai-composer-icon';
   const effectiveSelected = autoMode && autoSuggested.length > 0 ? autoSuggested : selected;
   const effectiveSelectedSet = useMemo(() => new Set(effectiveSelected), [effectiveSelected]);
   // Only one media-generation capability is active at a time.
@@ -215,19 +206,76 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
     </div>
   );
 
+  const activeOperatorMetas = useMemo(() => {
+    return effectiveSelected
+      .map((key) => CAPABILITY_META.find((item) => item.key === key))
+      .filter((meta): meta is (typeof CAPABILITY_META)[number] => Boolean(meta));
+  }, [effectiveSelected]);
+
   const triggerButton = (
-    <Tooltip title="انتخاب عملکرد هوش مصنوعی">
-      <Button icon={<PlusOutlined />} disabled={disabled || loading} size={actionSize} className={iconActionClass} onClick={() => handleOpenChange(true)} aria-label="انتخاب عملکرد هوش مصنوعی" />
-    </Tooltip>
+    <div className={`ai-composer-operator-pill ${!autoMode ? 'is-custom' : 'is-auto'}`}>
+      <Tooltip title={autoMode ? 'ایجنت راهبر؛ انتخاب خودکار ایجنت فعال است' : 'انتخاب ایجنت هوش مصنوعی'}>
+        <Button
+          type="text"
+          disabled={disabled || loading}
+          size={actionSize}
+          className="ai-composer-operator-trigger"
+          onClick={() => handleOpenChange(true)}
+          aria-label="انتخاب ایجنت هوش مصنوعی"
+          aria-expanded={open}
+        >
+          <span className="ai-composer-operator-icon">
+            <PlusOutlined />
+          </span>
+          <span className="ai-composer-operator-label">
+            {autoMode ? (
+              autoSuggested.length > 0 ? (
+                <>
+                  <span className="ai-composer-operator-auto-text">ایجنت راهبر</span>
+                  {activeOperatorMetas.map((meta) => (
+                    <span key={meta.key} className="ai-composer-operator-chip">
+                      {`تشخیص: ${meta.label}`}
+                    </span>
+                  ))}
+                </>
+              ) : (
+                <span className="ai-composer-operator-auto-text">ایجنت راهبر</span>
+              )
+            ) : (
+              activeOperatorMetas.map((meta) => (
+                <span key={meta.key} className="ai-composer-operator-chip">
+                  <span>{meta.label}</span>
+                </span>
+              ))
+            )}
+          </span>
+        </Button>
+      </Tooltip>
+      {!autoMode && (
+        <Tooltip title="بازگشت به حالت خودکار">
+          <Button
+            type="text"
+            size="small"
+            className="ai-composer-operator-reset"
+            aria-label="بازگشت به حالت خودکار"
+            icon={<CloseOutlined />}
+            onClick={(event) => {
+              event.stopPropagation();
+              onChange([]);
+            }}
+          />
+        </Tooltip>
+      )}
+    </div>
   );
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5" dir="rtl">
+    <div className="ai-composer-actions" dir="rtl">
       {isMobile ? (
         <>
           {triggerButton}
           <Drawer
-            title="عملکردهای هوش مصنوعی"
+            title="ایجنت‌های هوش مصنوعی"
             open={open}
             onClose={() => handleOpenChange(false)}
             placement="bottom"
@@ -258,32 +306,6 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
         </Popover>
       )}
 
-      <Space size={[4, 4]} wrap>
-        {autoMode ? (
-          <Tag className={capabilityTagClass}>تصمیم‌گیری خودکار</Tag>
-        ) : null}
-        {effectiveSelected
-          .filter((key) => CAPABILITY_META.some((item) => item.key === key))
-          .map((key) => {
-            const meta = CAPABILITY_META.find((item) => item.key === key);
-            if (!meta) return null;
-            return (
-              <Tag
-                key={key}
-                color={autoMode ? 'processing' : undefined}
-                closable={!autoMode}
-                onClose={(event) => {
-                  event.preventDefault();
-                  setCapability(key, false);
-                }}
-                className={capabilityTagClass}
-              >
-                {autoMode ? `تشخیص: ${meta.label}` : meta.label}
-              </Tag>
-            );
-          })}
-      </Space>
-
       {activeMediaCapability && onMediaSettingsChange ? (
         <AiMediaSettingsPopover
           capability={activeMediaCapability}
@@ -291,6 +313,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
           onSettingsChange={onMediaSettingsChange}
           disabled={disabled || loading}
           size={actionSize}
+          iconOnly
           modelId={mediaModelId}
         />
       ) : null}
@@ -299,7 +322,9 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
         <>
           <Tooltip title="پرامپت‌های آماده">
             <Button
+              type="text"
               icon={<SnippetsOutlined />}
+              aria-label="پرامپت‌های آماده"
               size={actionSize}
               className={iconActionClass}
               disabled={disabled || loading}
@@ -327,10 +352,11 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
       ) : null}
 
       {(selectedSet.has('voice_input') || autoMode) && isCapabilityUsable(capabilityAvailability, 'voice_input') ? (
-        <AiVoiceRecorder disabled={disabled} loading={voiceLoading} size={actionSize} className={iconActionClass} onSend={onVoiceSend} />
+        <AiVoiceRecorder buttonType="text" disabled={disabled} loading={voiceLoading} size={actionSize} className={iconActionClass} onSend={onVoiceSend} />
       ) : null}
 
       <AiFileUploadButton
+        buttonType="text"
         disabled={disabled}
         loading={fileLoading}
         onPrepared={onFilePrepared}
@@ -353,6 +379,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
           options={recordCreationModuleOptions}
           optionFilterProp="label"
           placeholder="نوع رکورد برای ایجاد/ویرایش"
+          aria-label="نوع رکورد برای ایجاد یا ویرایش"
           disabled={disabled || loading}
           onChange={(value) => onRecordCreationTargetModuleChange(value ? String(value) : null)}
         />

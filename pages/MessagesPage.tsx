@@ -2,11 +2,13 @@ import React, { Suspense, useEffect, useMemo } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import type { AssistantContext } from '../utils/aiAssistantEvents';
 
+const EmailWorkspace = React.lazy(() => import('../components/email/EmailWorkspace'));
+const InstagramInboxPage = React.lazy(() => import('./InstagramInboxPage'));
 const MessagingSurfacePrototype = React.lazy(() => import('../components/notifications/messaging/MessagingSurfacePrototype'));
 
-type MessagesTab = 'notes' | 'bot_messages' | 'bot_direct_messages' | 'sms_messages' | 'voip_calls';
-type MessagesInitialFilter = 'internal' | 'bot_group' | 'bot_direct' | 'sms' | 'call';
-const MESSAGE_TABS = new Set<MessagesTab>(['notes', 'bot_messages', 'bot_direct_messages', 'sms_messages', 'voip_calls']);
+type MessagesTab = 'notes' | 'bot_messages' | 'bot_direct_messages' | 'sms_messages' | 'voip_calls' | 'email_messages' | 'instagram';
+type MessagesInitialFilter = 'internal' | 'bot_group' | 'bot_direct' | 'sms' | 'call' | 'email';
+const MESSAGE_TABS = new Set<MessagesTab>(['notes', 'bot_messages', 'bot_direct_messages', 'sms_messages', 'voip_calls', 'email_messages', 'instagram']);
 
 const MessagesPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -25,6 +27,7 @@ const MessagesPage: React.FC = () => {
   const initialFilter = useMemo<MessagesInitialFilter>(() => {
     if (requestedTab === 'bot_messages') return 'bot_group';
     if (requestedTab === 'bot_direct_messages') return 'bot_direct';
+    if (requestedTab === 'email_messages') return 'email';
     if (requestedTab === 'sms_messages') return 'sms';
     if (requestedTab === 'voip_calls') return 'call';
     return 'internal';
@@ -64,11 +67,11 @@ const MessagesPage: React.FC = () => {
   return (
     <div className="messages-page-root" style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <Suspense fallback={null}>
-        <MessagingSurfacePrototype
+        {requestedTab === 'instagram' ? <InstagramInboxPage /> : requestedTab === 'email_messages' ? <EmailWorkspace initialMessageId={searchParams.get('email') || undefined} onBack={() => navigate('/messages')} /> : <MessagingSurfacePrototype key={requestedTab || 'notes'}
           initialFilter={initialFilter}
           initialConversationKey={initialConversationKey}
           initialForwardMessage={initialForwardMessage}
-        />
+        />}
       </Suspense>
     </div>
   );

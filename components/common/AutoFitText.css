@@ -1,0 +1,2 @@
+.auto-fit-text{display:block;width:100%;min-width:0}
+.auto-fit-text>span{display:inline-block;white-space:nowrap;max-width:none;font-variant-numeric:tabular-nums}

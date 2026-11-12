@@ -74,7 +74,7 @@ const requireCallerOrgAccess = async (client: any, callerUserId: string, request
     }
   }
 
-  if (!profile?.id || profile.is_active === false) {
+  if (!profile?.id) {
     throw new Error('پروفایل کاربر یا سازمان جاری پیدا نشد.');
   }
   const targetOrgId = normalizedRequestedOrgId || String(profile.org_id || '').trim();
