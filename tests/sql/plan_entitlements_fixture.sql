@@ -78,3 +78,8 @@ grant select,insert on goals,report_definitions,org_documents,notes to authentic
 insert into goals values('00000000-0000-0000-0000-000000000001');
 insert into report_definitions values('00000000-0000-0000-0000-000000000001');
 insert into org_documents values('00000000-0000-0000-0000-000000000001','general'),('00000000-0000-0000-0000-000000000001','business_model_canvas');
+
+-- Dependencies of the previously committed agent-default migration (phase 584).
+create table auth.users(id uuid primary key);
+create table ai_model_catalog(id text primary key,provider text,display_name_fa text,capability_tags text[],input_usd_per_1m numeric,cached_input_usd_per_1m numeric,output_usd_per_1m numeric,specific_cost_usd numeric,specific_cost_unit text,margin_percent numeric,is_active boolean,is_coming_soon boolean,metadata jsonb,updated_at timestamptz default now());
+create table workflows(id uuid primary key default gen_random_uuid(),org_id uuid,is_active boolean default true);

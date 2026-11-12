@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       deploy:
-        description: 'Publish this tested release with explicit phases 585/586 and the listed feature-gated functions'
+        description: 'Publish this tested release with explicit phases 584/585/586 and the listed feature-gated functions'
         type: boolean
         default: false
 
@@ -64,7 +64,9 @@ jobs:
           set -euo pipefail
           docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test plan_entitlements_test
           sed '/^create role /d' tests/sql/plan_entitlements_fixture.sql | docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d plan_entitlements_test -v ON_ERROR_STOP=1
-          for file in database_v1_phase585_plan_entitlements_and_full_demo.sql \
+          for file in database_v1_phase584_agent_defaults_and_workflow_triggers.sql \
+            database_v1_phase584_agent_defaults_and_workflow_triggers.sql \
+            database_v1_phase585_plan_entitlements_and_full_demo.sql \
             database_v1_phase585_plan_entitlements_and_full_demo.sql \
             tests/sql/plan_entitlements_assertions.sql \
             database_v1_phase586_feature_runtime_bindings.sql \
@@ -153,6 +155,12 @@ jobs:
 
       - name: Email function dependency checks
         run: deno check --node-modules-dir=none supabase/functions/email-admin/index.ts supabase/functions/send-email/index.ts supabase/functions/email-provider-events/index.ts supabase/functions/email-sync-worker/index.ts supabase/functions/send-sms/index.ts
+
+      - name: Prepare activity performance deployment dependencies
+        run: |
+          mkdir -p supabase/functions/activity-performance/_runtime-deps
+          cp shared/recordRuntime.ts shared/taskRuntimeCatalog.ts supabase/functions/activity-performance/_runtime-deps/
+          cp utils/formulaRuntime.ts supabase/functions/activity-performance/_runtime-deps/
 
       - name: AI assistant dependency checks
         run: deno check --node-modules-dir=none supabase/functions/_shared/ai-agents.ts supabase/functions/ai-assistant/index.ts supabase/functions/api-gateway/index.ts supabase/functions/webhook-delivery/index.ts supabase/functions/user-admin/index.ts supabase/functions/bot-admin/index.ts supabase/functions/bot-webhook/index.ts supabase/functions/report-runtime/index.ts supabase/functions/activity-performance/index.ts
@@ -377,7 +385,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVER_USER }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $migrations = @('database_v1_phase585_plan_entitlements_and_full_demo.sql', 'database_v1_phase586_feature_runtime_bindings.sql')
+          $migrations = @('database_v1_phase584_agent_defaults_and_workflow_triggers.sql', 'database_v1_phase585_plan_entitlements_and_full_demo.sql', 'database_v1_phase586_feature_runtime_bindings.sql')
           $migrations | ForEach-Object { Get-FileHash -Algorithm SHA256 -LiteralPath $_ } | Format-List
           & ./scripts/run-server-db-migrations.ps1 -SqlFiles $migrations
 
