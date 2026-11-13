@@ -16,7 +16,7 @@ const browser = await chromium.launch({ ...(process.env.PLAYWRIGHT_BROWSER === '
 const errors = [];
 let page;
 try {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'fa-IR', serviceWorkers: 'block', reducedMotion: 'reduce' });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'fa-IR', serviceWorkers: 'block', reducedMotion: 'no-preference' });
   await context.route('**/feedback-test/**', route => {
     const pathname = new URL(route.request().url()).pathname;
     if (pathname.endsWith('/index.html')) return route.fulfill({ contentType: 'text/html', body: html });
@@ -26,7 +26,11 @@ try {
   });
   page = await context.newPage();
   const dismissAll = async () => {
-    while (await page.getByRole('button', { name: 'بستن پیام', exact: true }).count()) await page.getByRole('button', { name: 'بستن پیام', exact: true }).first().click();
+    while (await page.locator('[data-sileo-toast]').count()) {
+      const toast = page.locator('[data-sileo-toast]').first();
+      await toast.focus();
+      await toast.press('Escape');
+    }
   };
   page.on('pageerror', error => errors.push(error.message));
   const scripts = [];
@@ -51,18 +55,22 @@ try {
     await page.getByRole('button', { name: 'نمایش پیام سرنخ' }).click();
     const toast = page.locator('[data-sileo-toast]').filter({ hasText: 'سرنخ فروش ثبت شد' });
     await toast.locator('[data-sileo-content][data-visible="true"]').waitFor();
-    await toast.locator('[data-sileo-content]').evaluate(async el => {
-      while (Number(getComputedStyle(el).opacity) < .99) await new Promise(requestAnimationFrame);
-    });
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-sileo-content][data-visible="true"]')].every(el => Number(getComputedStyle(el).opacity) >= .99));
+    await page.waitForTimeout(650); // Capture the finished upstream spring shape.
     const toastBox = await toast.boundingBox();
     assert.ok(await page.evaluate(({ x, y }) => !document.elementFromPoint(x, y)?.closest('[data-sileo-toast]'), { x: toastBox.x + 2, y: toastBox.y + 2 }), 'Transparent margins must not block the page beneath');
     assert.equal(await toast.getByRole('button', { name: 'ثبت فعالیت', exact: true }).count(), 1);
     assert.equal(await toast.getByRole('button', { name: 'تماس', exact: true }).count(), 1);
     assert.equal(await toast.getByRole('button', { name: 'ارسال پیام', exact: true }).count(), 1);
-    assert.ok(await toast.locator('[data-sileo-title]').evaluate(el => getComputedStyle(el).color === (document.querySelector('main').style.background === 'rgb(16, 24, 40)' ? 'rgb(23, 32, 51)' : 'rgb(248, 250, 252)')), 'Day/night contrast follows app theme');
+    assert.ok(await toast.locator('[data-sileo-description]').evaluate(el => getComputedStyle(el).color === (document.querySelector('main').style.background === 'rgb(16, 24, 40)' ? 'rgb(82, 82, 82)' : 'rgb(212, 212, 212)')), 'Day/night description contrast follows app theme');
+    assert.ok(await toast.evaluate(el => {
+      const title = el.querySelector('[data-sileo-title]');
+      const badge = el.querySelector('[data-sileo-badge]');
+      return getComputedStyle(title).color !== getComputedStyle(el.querySelector('[data-sileo-description]')).color && getComputedStyle(badge).backgroundColor !== 'rgba(0, 0, 0, 0)';
+    }), 'Preserve the upstream colored title and soft state badge');
     await page.screenshot({ path: `${output}/${mode}-desktop.png` });
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await page.waitForTimeout(650);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await page.screenshot({ path: `${output}/${mode}-mobile.png` });
     await toast.getByRole('button', { name: 'ثبت فعالیت', exact: true }).click();
@@ -70,6 +78,12 @@ try {
     await dismissAll();
     await page.setViewportSize({ width: 1280, height: 900 });
   }
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.getByRole('button', { name: 'نمایش پیام سرنخ' }).click();
+  await page.locator('[data-sileo-content][data-visible="true"]').waitFor();
+  assert.ok(await page.locator('[data-sileo-content]').evaluate(el => getComputedStyle(el).transitionDuration === '0s'), 'Reduced motion removes content transitions');
+  assert.equal(await page.locator('[data-sileo-svg] > g').getAttribute('filter'), null, 'Reduced motion bypasses SVG blur');
+  await dismissAll();
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.getByRole('button', { name: 'ارسال هم‌زمان پیام‌ها' }).click();
   assert.ok(await page.locator('[data-sileo-toast]').count() <= 3, 'A burst cannot create an unbounded animation queue');

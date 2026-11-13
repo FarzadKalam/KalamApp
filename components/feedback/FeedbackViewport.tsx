@@ -18,18 +18,19 @@ const FeedbackViewport = ({ items }: { items: FeedbackItem[] }) => {
   const isDark = token.colorBgContainer !== '#ffffff' && token.colorBgContainer !== '#fff';
   return (
     <section className="app-feedback-viewport" data-sileo-viewport data-position="top-center" dir="rtl" aria-label="پیام‌های سامانه" aria-live="polite" aria-relevant="additions text" style={{
-      '--feedback-width': `${width}px`, '--feedback-ink': isDark ? '#172033' : '#f8fafc',
-      '--feedback-muted': isDark ? '#344054' : '#e2e8f0', '--feedback-line': isDark ? '#cbd5e1' : '#475467',
+      fontFamily: token.fontFamily,
+      '--feedback-width': `${width}px`, '--feedback-ink': isDark ? '#171717' : '#fafafa',
+      '--feedback-muted': isDark ? '#525252' : '#d4d4d4', '--feedback-line': isDark ? 'rgb(0 0 0 / .06)' : 'rgb(255 255 255 / .08)',
     } as React.CSSProperties}>
       {items.map(item => <div className="app-feedback-item" key={item.id}
         onMouseEnter={() => pauseFeedback(item.id, true)} onMouseLeave={() => pauseFeedback(item.id, false)}
         onFocus={() => pauseFeedback(item.id, true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) pauseFeedback(item.id, false); }}>
         <Sileo id={item.id} refreshKey={String(item.revision)} title={item.title} state={item.kind} width={width} reducedMotion={reducedMotion}
-          fill={isDark ? '#f8fafc' : '#172033'} roundness={10} position="center" icon={item.icon}
+          fill={isDark ? '#ffffff' : '#171717'} position="center" icon={item.icon}
           description={item.description || item.actions?.length ? <>
             {item.description && <div className="app-feedback-description">{item.description}</div>}
             {!!item.actions?.length && <div className="app-feedback-actions" role="group" aria-label="اقدام‌های پیشنهادی">
-              {item.actions.slice(0, 3).map(action => <button key={action.key} type="button" aria-label={action.label} title={action.label} className={action.iconOnly ? 'app-feedback-icon-action' : 'app-feedback-primary-action'} onClick={() => { action.onClick(); closeFeedback(item.id); }}>
+              {item.actions.slice(0, 3).map(action => <button key={action.key} type="button" data-sileo-button data-state={item.kind} aria-label={action.label} title={action.label} className={action.iconOnly ? 'app-feedback-icon-action' : 'app-feedback-primary-action'} onClick={() => { action.onClick(); closeFeedback(item.id); }}>
                 {action.icon && <span aria-hidden="true">{action.icon}</span>}{!action.iconOnly && action.label}
               </button>)}
             </div>}

@@ -542,6 +542,7 @@ export const Sileo = memo(function Sileo({
       role="group"
       tabIndex={0}
       aria-label={title}
+      aria-keyshortcuts="Escape"
       data-sileo-toast
       data-ready={ready}
       data-expanded={open}
@@ -609,7 +610,6 @@ export const Sileo = memo(function Sileo({
             >
               {headerLayer.current.view.title}
             </span>
-            <button type="button" className="app-feedback-close" aria-label="بستن پیام" onClick={onDismiss}><span aria-hidden="true"><X /></span></button>
           </div>
           {headerLayer.prev && (
             <div
