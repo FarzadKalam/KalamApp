@@ -26,7 +26,7 @@ const Preview = () => {
   const layout = resolveSidebarLayout(pathname, mobile, collapsed);
   const navigate = (href: string) => { setPathname(href); setCollapsed(href !== '/'); };
   return <ConfigProvider direction="rtl" theme={{ algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm, token: { fontFamily: 'Peyda, Tahoma, sans-serif' } }}>
-    <div className="workspace-chrome" data-sidebar-mode={layout.mode} style={{ minHeight: '100vh' }}>
+    <div className="workspace-chrome" data-sidebar-mode={layout.mode} style={{ minHeight: '100vh', color: 'var(--workspace-text)' }}>
       <MainSidebar items={items} railItems={items} selectedKey={pathname} ancestorKeys={[]} collapsed={collapsed} onCollapsedChange={setCollapsed} isMobile={mobile} isDarkMode={dark} onNavigate={navigate} brandShortName="تازه سیستم" contexts={[]} orgId="preview-org" userId="preview-user" presentation={layout.mode} />
       <main className="app-workspace-content" style={{ paddingRight: layout.reservedWidth, minHeight: '100vh', width: '100%', boxSizing: 'border-box', minWidth: 0 }}>
         <header className="app-main-header" style={{ padding: 16, display: 'flex', gap: 16, flexWrap: 'wrap' }}>

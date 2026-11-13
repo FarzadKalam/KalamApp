@@ -57,6 +57,12 @@
 .app-sidebar-panel-menu{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:4px 8px 12px;overscroll-behavior:contain}
 .app-sidebar-panel-menu>.ant-menu{margin-top:8px;border-inline-end:0;background:transparent}
 .app-sidebar-panel .ant-menu-item,.app-sidebar-panel .ant-menu-submenu-title{min-height:44px;line-height:44px;border-radius:11px;margin-inline:0;width:100%}
+.app-sidebar-panel .ant-menu-item,.app-sidebar-panel .ant-menu-submenu-title,.workspace-sidebar-submenu .ant-menu-item,.workspace-sidebar-submenu .ant-menu-submenu-title{color:var(--workspace-text)!important}
+.app-sidebar-panel .ant-menu-item-selected,.workspace-sidebar-submenu .ant-menu-item-selected{background:var(--workspace-solid,#4338ca)!important;color:#fff!important}
+.app-sidebar-panel .ant-menu-item-disabled,.app-sidebar-panel .ant-menu-submenu-disabled>.ant-menu-submenu-title,.workspace-sidebar-submenu .ant-menu-item-disabled{color:var(--workspace-muted)!important;opacity:.5}
+.app-sidebar-panel .sidebar-module-search .ant-input-affix-wrapper{background:var(--workspace-surface)!important;border-color:var(--workspace-line)!important;color:var(--workspace-text)!important}
+.app-sidebar-panel .sidebar-module-search input{background:transparent!important;color:var(--workspace-text)!important}
+.app-sidebar-panel .sidebar-module-search input::placeholder{color:var(--workspace-muted)!important;opacity:1}
 .app-sidebar-panel .ant-menu-item-icon{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;margin:0!important}
 .app-sidebar-panel .ant-menu-item-icon svg{width:18px;height:18px}
 .app-sidebar-panel .ant-menu-title-content{margin-inline-start:10px!important}

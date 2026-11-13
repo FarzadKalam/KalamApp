@@ -70,6 +70,13 @@ try {
   }
   await page.screenshot({ path: `${output}/desktop-light.png`, fullPage: true });
   await page.getByRole('button', { name: 'تغییر روز و شب', exact: true }).click();
+  await panel.locator('.ant-menu-dark').waitFor();
+  await page.waitForFunction(() => {
+    const title = document.querySelector('.app-sidebar-panel .ant-menu-submenu-title');
+    const search = document.querySelector('.app-sidebar-panel .ant-input-affix-wrapper');
+    const channels = el => getComputedStyle(el).color.match(/\d+/g).slice(0, 3).map(Number);
+    return channels(title).every(value => value > 180) && channels(search).every(value => value > 180);
+  });
   await page.screenshot({ path: `${output}/desktop-dark.png`, fullPage: true });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   assert.equal(await page.locator('.app-workspace-content').evaluate(el => getComputedStyle(el).transitionDuration), '0s');
@@ -82,6 +89,7 @@ try {
   assert.equal(await page.locator('.app-main-rail').count(), 0);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await page.getByRole('button', { name: 'باز کردن منوی گوشی', exact: true }).click();
+  await drawer.waitFor({ state: 'visible' });
   await page.screenshot({ path: `${output}/mobile-dark.png`, fullPage: true });
   assert.deepEqual(errors, []);
   fs.writeFileSync(`${output}/checks.json`, JSON.stringify({ passed: true, checks: ['dashboard push', 'other pages overlay', 'nested RTL hover', 'outside dismissal', 'Escape focus', 'responsive widths', 'touch navigation', 'day/night', 'reduced motion'], errors }, null, 2));
