@@ -1,0 +1,162 @@
+name: Deploy verified frontend artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: 'Successful CI-CD run containing the tested dist artifact'
+        required: true
+        type: string
+      source_sha:
+        description: 'Exact source commit verified by that CI run'
+        required: true
+        type: string
+
+concurrency:
+  group: kalamapp-frontend-artifact-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      BUILD_RUN_ID: ${{ inputs.build_run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify tested source and preserve newer application changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'JS'
+          import { execFileSync } from 'node:child_process';
+          const { SOURCE_SHA: source, BUILD_RUN_ID: runId, GITHUB_REPOSITORY: repo, GH_TOKEN: token } = process.env;
+          if (!/^[a-f0-9]{40}$/.test(source) || !/^\d+$/.test(runId)) throw new Error('Invalid release identity');
+          const response = await fetch(`https://api.github.com/repos/${repo}/actions/runs/${runId}`, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } });
+          if (!response.ok) throw new Error('Could not verify the CI run');
+          const run = await response.json();
+          if (run.status !== 'completed' || run.conclusion !== 'success' || run.head_sha !== source || run.path !== '.github/workflows/ci-cd.yml') throw new Error('The exact source must have a successful CI-CD run');
+          execFileSync('git', ['fetch', 'origin', 'main']);
+          execFileSync('git', ['merge-base', '--is-ancestor', source, 'origin/main']);
+          const changes = execFileSync('git', ['diff', '--name-only', `${source}..origin/main`], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+          if (changes.some(file => !file.startsWith('docs/') && !file.startsWith('.github/workflows/'))) throw new Error('Main has newer application changes; build them before deployment');
+          console.log('Successful CI source verified; newer application changes will not be overwritten.');
+          JS
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify frontend version and source provenance
+        run: |
+          set -euo pipefail
+          node scripts/verify-pwa-release.mjs
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const manifest = JSON.parse(fs.readFileSync('dist/central-release.json', 'utf8'));
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const seo = JSON.parse(fs.readFileSync('dist/seo-generation.json', 'utf8'));
+          if (manifest.commit_sha !== process.env.SOURCE_SHA || manifest.version !== pkg.version) throw new Error('Artifact provenance mismatch');
+          if (!seo.dynamicComplete) throw new Error('CMS output is incomplete; preserve and validate existing SEO pages before deployment');
+          console.log(`Verified frontend ${pkg.version} from ${manifest.commit_sha}`);
+          JS
+          tar -czf dist.tar.gz -C dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle-${{ github.sha }}
+          path: dist.tar.gz
+          retention-days: 3
+
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+
+      - name: Add server host key
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          for attempt in 1 2 3; do
+            if ssh-keyscan -T 15 -p "${SERVER_PORT:-22}" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null; then exit 0; fi
+            sleep 3
+          done
+          exit 1
+
+      - name: Pull exact verified bundle on server
+        id: pull
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: node scripts/pull-ci-release-artifact.mjs
+
+      - name: Resumable transfer fallback
+        if: steps.pull.outcome != 'success'
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          set -euo pipefail
+          export RSYNC_RSH="ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -p ${SERVER_PORT:-22}"
+          timeout 480 rsync --append-verify --partial --timeout=90 dist.tar.gz "$SERVER_USER@$SERVER_HOST:/tmp/kalamapp-dist-$GITHUB_SHA.tar.gz"
+
+      - name: Activate frontend only
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          ARCHIVE_SHA="$(sha256sum dist.tar.gz | cut -d ' ' -f 1)"
+          PUBLIC_ORIGIN="$(node --input-type=module -e "import { PUBLIC_SITE_URL } from './shared/publicBrandSeo.mjs'; console.log(PUBLIC_SITE_URL)")"
+          CURRENT_SHA="$(curl --silent --fail --max-time 25 "$PUBLIC_ORIGIN/central-release.json?run=$GITHUB_RUN_ID" | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).commit_sha')"
+          [[ "$CURRENT_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git merge-base --is-ancestor "$CURRENT_SHA" "$SOURCE_SHA"
+          timeout 150 ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -p "${SERVER_PORT:-22}" "$SERVER_USER@$SERVER_HOST" "bash -s -- '${DEPLOY_PATH:-/var/www/kalamapp}' '$GITHUB_SHA' '$ARCHIVE_SHA' '$CURRENT_SHA'" <<'REMOTE'
+          set -euo pipefail
+          DEPLOY_ROOT="$1"
+          REVISION="$2"
+          EXPECTED_SHA="$3"
+          EXPECTED_CURRENT="$4"
+          mkdir -p "$DEPLOY_ROOT/releases"
+          exec 9>"$DEPLOY_ROOT/.frontend-publish.lock"
+          flock -w 90 9
+          CURRENT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit_sha"])' "$DEPLOY_ROOT/current/central-release.json")"
+          [ "$CURRENT" = "$EXPECTED_CURRENT" ] || { echo 'Another release became active; refusing to overwrite it'; exit 1; }
+          ARCHIVE="/tmp/kalamapp-dist-$REVISION.tar.gz"
+          echo "$EXPECTED_SHA  $ARCHIVE" | sha256sum --check --status
+          RELEASE="$DEPLOY_ROOT/releases/$(date +%Y%m%d%H%M%S)"
+          mkdir -p "$RELEASE"
+          tar -xzf "$ARCHIVE" -C "$RELEASE"
+          ln -sfn "$RELEASE" "$DEPLOY_ROOT/current"
+          sudo systemctl reload nginx || true
+          rm -f "$ARCHIVE"
+          echo "Frontend activated at $RELEASE"
+          REMOTE
+
+      - name: Verify live PWA version and cache headers
+        run: node scripts/verify-live-pwa-release.mjs https://tazesystem.ir https://app.tazesystem.ir https://kalam.tazesystem.ir
