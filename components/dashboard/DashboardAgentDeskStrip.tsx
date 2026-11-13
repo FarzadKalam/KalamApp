@@ -19,7 +19,6 @@ import {
 } from '../../utils/aiAgentCatalog';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import AiAgentIcon, { AiAgentCameoFigure, AiAgentDeskSeatFigure } from '../ai/AiAgentIcon';
-import AutonomousNightShiftHub from './AutonomousNightShiftHub';
 import DashboardAgentDetailModal, { type DashboardAgentModalItem } from './DashboardAgentDetailModal';
 
 type AgentLiveMeta = {
@@ -86,7 +85,6 @@ type DashboardAgentDeskStripProps = {
   onToggleInbox?: (focusAgentKey?: AgentKey) => void;
   onOverviewMeta?: (meta: DashboardAgentDeskOverviewMeta) => void;
   externalInboxBadgeCount?: number;
-  defaultNightShiftOpen?: boolean;
 };
 
 const DashboardAgentDeskStrip: React.FC<DashboardAgentDeskStripProps> = ({
@@ -99,7 +97,6 @@ const DashboardAgentDeskStrip: React.FC<DashboardAgentDeskStripProps> = ({
   onToggleInbox,
   onOverviewMeta,
   externalInboxBadgeCount,
-  defaultNightShiftOpen = false,
 }) => {
   const navigate = useNavigate();
   const [deskOverviewLoaded, setDeskOverviewLoaded] = useState(false);
