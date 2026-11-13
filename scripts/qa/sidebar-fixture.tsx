@@ -21,7 +21,7 @@ const Preview = () => {
   const [dark, setDark] = useState(false);
   const [mobile, setMobile] = useState(window.innerWidth < 768);
   const [clicks, setClicks] = useState(0);
-  useEffect(() => { const resize = () => { setMobile(window.innerWidth < 768); setCollapsed(true); }; window.addEventListener('resize', resize); return () => window.removeEventListener('resize', resize); }, []);
+  useEffect(() => { const resize = () => { const nextMobile = window.innerWidth < 768; setMobile(nextMobile); if (nextMobile) setCollapsed(true); }; window.addEventListener('resize', resize); return () => window.removeEventListener('resize', resize); }, []);
   useEffect(() => { document.documentElement.classList.toggle('dark', dark); }, [dark]);
   const layout = resolveSidebarLayout(pathname, mobile, collapsed);
   const navigate = (href: string) => { setPathname(href); setCollapsed(href !== '/'); };
