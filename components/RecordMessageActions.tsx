@@ -93,6 +93,7 @@ const RecordMessageActions: React.FC<RecordMessageActionsProps> = ({
               size={buttonSize}
               type={buttonVariant}
               icon={<PhoneOutlined />}
+              aria-label="تماس"
               loading={calling}
               onClick={(event) => { stopEvent(event); setCallPreviewOpen(true); }}
             />
@@ -104,6 +105,7 @@ const RecordMessageActions: React.FC<RecordMessageActionsProps> = ({
               size={buttonSize}
               type={buttonVariant}
               icon={<MessageOutlined />}
+              aria-label="ارسال پیام"
               onClick={(event) => {
                 stopEvent(event);
                 setComposerMode('sms');
@@ -117,6 +119,7 @@ const RecordMessageActions: React.FC<RecordMessageActionsProps> = ({
               size={buttonSize}
               type={buttonVariant}
               icon={<RobotOutlined />}
+              aria-label="ارسال با بات"
               onClick={(event) => {
                 stopEvent(event);
                 setComposerMode('bot');

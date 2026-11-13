@@ -9,7 +9,8 @@ await build({
     builder.onResolve({ filter: /(^|\/)supabaseClient(?:\.ts)?$/ }, () => ({ path: 'supabase-preview', namespace: 'feedback-preview' }));
     builder.onLoad({ filter: /.*/, namespace: 'feedback-preview' }, () => ({ contents: `
       const query = new Proxy(function(){}, { get: (_, key) => key === 'then' ? (resolve, reject) => Promise.resolve({ data: [], error: null }).then(resolve, reject) : query, apply: () => query });
-      export const supabase = query; export const publicSupabase = query; export const signupSupabase = query;
+      export const supabase = query; export const supabasePublic = query; export const supabaseSignUpClient = query;
+      export const SUPABASE_URL = 'https://isolated-preview.invalid'; export const SUPABASE_ANON_KEY = 'isolated-preview-only'; export const SUPABASE_AUTH_STORAGE_KEY = 'isolated-preview-auth';
     `, loader: 'js' }));
   } }],
 });

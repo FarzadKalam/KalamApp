@@ -1,12 +1,13 @@
 import React from 'react';
 import App from 'antd/es/app';
 import { MemoryRouter } from 'react-router-dom';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import UploadProgressOverlay from './UploadProgressOverlay';
 import { setUiNotificationOverlayItems, setUiNotificationOverlayViewer, setUiNotificationOverlayExpanded } from '../utils/uiNotificationOverlayStore';
 
 const emptyTasks: never[] = [];
+afterEach(cleanup);
 vi.mock('../utils/uploadProgressStore', () => ({
   useUploadTasks: () => emptyTasks, cancelUploadTask: vi.fn(), retryUploadTask: vi.fn(),
 }));
