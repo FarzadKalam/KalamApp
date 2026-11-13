@@ -1,4 +1,3 @@
-import { ECOSYSTEM_STATUS_LABELS, PUBLIC_ECOSYSTEM_GROUPS } from '../shared/publicEcosystem.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { PUBLIC_SITE_URL, publicOrganizationSchema, publicWebsiteSchema, publicWebApplicationSchema } from '../shared/publicBrandSeo.mjs';
