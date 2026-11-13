@@ -49,7 +49,7 @@
 
 .app-sidebar-navigation{display:contents}
 .app-main-rail{width:var(--workspace-sidebar-rail-width,80px)}
-.app-sidebar-panel{position:fixed;inset-block:12px;right:var(--workspace-sidebar-rail-width,80px);width:var(--workspace-sidebar-panel-width,260px);z-index:1110;display:flex;flex-direction:column;min-height:0;direction:rtl;background:var(--workspace-surface);color:var(--workspace-text);border:1px solid var(--workspace-line);border-radius:20px;box-shadow:0 12px 36px rgb(0 0 0 / .10)}
+.app-sidebar-panel{position:fixed;top:12px;max-height:calc(100dvh - 24px);right:var(--workspace-sidebar-rail-width,80px);width:var(--workspace-sidebar-panel-width,260px);z-index:1110;display:flex;flex-direction:column;min-height:0;direction:rtl;background:var(--workspace-surface);color:var(--workspace-text);border:1px solid var(--workspace-line);border-radius:20px;box-shadow:0 12px 36px rgb(0 0 0 / .10)}
 .app-sidebar-panel-header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px;border-bottom:1px solid var(--workspace-line);min-height:68px;flex-shrink:0}
 .app-sidebar-panel-header .app-drawer-brand{min-width:0;font-size:14px;font-weight:600}
 .app-sidebar-panel-header .app-drawer-brand>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
