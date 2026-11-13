@@ -4,6 +4,7 @@ import { ConfigProvider, theme, type MenuProps } from 'antd';
 import { TeamOutlined, BankOutlined, DashboardOutlined } from '@ant-design/icons';
 import MainSidebar from '../../components/layout/MainSidebar';
 import { resolveSidebarLayout } from '../../utils/sidebarLayout';
+import { renderModuleIcon } from '../../utils/moduleIcons';
 import '../../components/layout/WorkspaceChrome.css';
 import '../../components/dashboard/Dashboard.css';
 
@@ -27,10 +28,11 @@ const Preview = () => {
   const navigate = (href: string) => { setPathname(href); setCollapsed(href !== '/'); };
   const decorate = (rows: MenuProps['items']): MenuProps['items'] => rows?.map(item => {
     if (!item) return item;
-    if ('children' in item && Array.isArray(item.children)) return { ...item, children: decorate(item.children) || [] };
+    const icon = 'icon' in item && item.icon ? item.icon : renderModuleIcon(String(item.key).replace(/^\//, '').split(/[/?#]/)[0]);
+    if ('children' in item && Array.isArray(item.children)) return { ...item, icon, children: decorate(item.children) || [] };
     const href = 'key' in item ? String(item.key) : '';
     if (!href.startsWith('/') || !('label' in item)) return item;
-    return { ...item, label: <a className="sidebar-menu-link" href={href} onClick={event => { event.preventDefault(); event.stopPropagation(); navigate(href); }}>{item.label}</a> };
+    return { ...item, icon: <a className="sidebar-menu-icon-link" href={href} onClick={event => { event.preventDefault(); event.stopPropagation(); navigate(href); }}>{icon}</a>, label: <a className="sidebar-menu-link" href={href} onClick={event => { event.preventDefault(); event.stopPropagation(); navigate(href); }}><span className="sidebar-menu-link__text">{item.label}</span></a> };
   });
   return <ConfigProvider direction="rtl" theme={{ algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm, token: { fontFamily: 'Peyda, Tahoma, sans-serif' } }}>
     <div className="workspace-chrome" data-sidebar-mode={layout.mode} style={{ minHeight: '100vh', color: 'var(--workspace-text)' }}>

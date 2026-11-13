@@ -87,6 +87,7 @@ import ActionIcon from './common/ActionIcon';
 import NotificationUnreadBadge from './notifications/NotificationUnreadBadge';
 import MainSidebar from './layout/MainSidebar';
 import { resolveSidebarLayout } from '../utils/sidebarLayout';
+import { promoteSidebarGroup } from '../utils/sidebarNavigation';
 import './layout/WorkspaceChrome.css';
 import HeaderSearchSurface from './layout/HeaderSearchSurface';
 import OrganizationAccessModal from './OrganizationAccessModal';
@@ -505,10 +506,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
       const href = typeof item.key === 'string' && item.key.startsWith('/') ? resolveSidebarHref(item.key) : undefined;
       const label = 'label' in item ? item.label : null;
-      const moduleId = href ? href.slice(1).split('/')[0] : '';
-      const configuredModuleIcon = moduleId && MODULES[moduleId]
-        ? renderModuleIcon(MODULES[moduleId], { className: 'text-[16px]' })
-        : null;
+      const moduleId = String(href || item.key).replace(/^\//, '').split(/[/?#]/)[0];
+      const configuredModuleIcon = renderModuleIcon(MODULES[moduleId] || moduleId, { className: 'text-[16px]' });
       const nextItem: any = {
         ...item,
         label: buildSidebarLabel(label, href, Boolean((item as any).disabled)),
@@ -1059,6 +1058,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           return true;
         case '/accounting':
           return canViewAccountingDashboard;
+        case '/billboards':
+          return canViewBillboards;
+        case '/billboard_status_changes':
+          return canViewBillboardStatusChanges;
         case '/cash_bank':
         case '/cash_bank_operations':
           return canViewCashBank;
@@ -1142,9 +1145,12 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         return acc;
       }, []);
 
-    return filterItems(rawMenuItems);
+    return promoteSidebarGroup(filterItems(rawMenuItems), 'billboards', billboardsModuleEnabled) || [];
   }, [
     rawMenuItems,
+    billboardsModuleEnabled,
+    canViewBillboards,
+    canViewBillboardStatusChanges,
     canViewAccountingDashboard,
     canViewAccountingSettings,
     canViewAdvertisingCampaigns,

@@ -36,7 +36,7 @@ try {
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'No horizontal overflow');
   };
   await assertDashboard();
-  assert.ok(await panel.locator('.ant-menu-item-selected a').evaluate(el => {
+  assert.ok(await panel.locator('.ant-menu-item-selected .sidebar-menu-link').evaluate(el => {
     const range = document.createRange(); range.selectNodeContents(el);
     const text = range.getBoundingClientRect(), row = el.closest('.ant-menu-item').getBoundingClientRect();
     return text.width > 0 && text.top >= row.top && text.bottom <= row.bottom;
@@ -84,15 +84,33 @@ try {
     return channels(title).every(value => value > 180) && channels(search).every(value => value > 180);
   });
   await page.waitForFunction(() => !document.querySelector('.app-sidebar-panel').getAnimations({ subtree: true }).some(animation => animation.playState === 'running'));
+  await panel.locator('.ant-menu-submenu-title').filter({ hasText: 'امور مالی' }).hover();
+  const darkPopup = page.locator('.workspace-sidebar-submenu--dark:visible').first();
+  await darkPopup.waitFor();
+  assert.ok(await darkPopup.locator('.sidebar-menu-link').first().evaluate(el => {
+    const rgb = getComputedStyle(el).color.match(/\d+/g).slice(0, 3).map(Number);
+    return rgb.every(value => value >= 180);
+  }), 'Portalled submenu link text stays readable in dark mode');
+  for (const scope of [panel, darkPopup]) {
+    assert.ok(await scope.locator('.ant-menu-item').evaluateAll(rows => rows.every(row => {
+      const icon = row.querySelector('.ant-menu-item-icon svg'), text = row.querySelector('.sidebar-menu-link__text');
+      if (!icon || !text) return false;
+      const i = icon.getBoundingClientRect(), t = text.getBoundingClientRect();
+      return Math.abs(i.y + i.height / 2 - t.y - t.height / 2) <= 3;
+    })), 'Every record has an icon centered with its label');
+  }
+  await darkPopup.locator('.ant-menu-submenu-title').filter({ hasText: 'گزارش‌های مالی' }).hover();
+  const nestedDark = page.locator('.workspace-sidebar-submenu--dark:visible').last();
+  await nestedDark.getByText('گزارش فروش', { exact: true }).waitFor();
   await page.screenshot({ path: `${output}/desktop-dark.png`, fullPage: true });
-  assert.equal(await panel.locator('.ant-menu-item-selected a').evaluate(el => getComputedStyle(el).color), 'rgb(255, 255, 255)', 'Selected record links inherit the readable menu color');
+  assert.equal(await panel.locator('.ant-menu-item-selected .sidebar-menu-link').evaluate(el => getComputedStyle(el).color), 'rgb(255, 255, 255)', 'Selected record links inherit the readable menu color');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   assert.equal(await page.locator('.app-workspace-content').evaluate(el => getComputedStyle(el).transitionDuration), '0s');
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: 'باز کردن منوی گوشی', exact: true }).click();
   const drawer = page.locator('.ant-drawer-body');
   await drawer.locator('.ant-menu-submenu-title').filter({ hasText: 'امور مالی' }).click();
-  await drawer.getByRole('menuitem', { name: 'فاکتورها', exact: true }).click();
+  await drawer.getByRole('link', { name: 'فاکتورها', exact: true }).click();
   await page.locator('.ant-drawer-content-wrapper').waitFor({ state: 'hidden' });
   assert.equal(await page.locator('.app-main-rail').count(), 0);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));

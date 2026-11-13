@@ -36,8 +36,8 @@ export const filterSidebarItems = (items: MenuProps['items'], query: string, par
   });
 };
 const groupKeys = (items: MenuProps['items']): string[] => (items || []).flatMap(item => item && 'children' in item && Array.isArray(item.children) ? [String(item.key), ...groupKeys(item.children)] : []);
-const flyoutItems = (items: MenuProps['items']): MenuProps['items'] => items?.map(item => item && 'children' in item && Array.isArray(item.children)
-  ? { ...item, popupClassName: 'app-main-sider-submenu-popup workspace-sidebar-submenu', popupOffset: [-6, 0], children: flyoutItems(item.children) || [] } : item);
+const flyoutItems = (items: MenuProps['items'], dark: boolean): MenuProps['items'] => items?.map(item => item && 'children' in item && Array.isArray(item.children)
+  ? { ...item, theme: dark ? 'dark' as const : 'light' as const, popupClassName: `app-main-sider-submenu-popup workspace-sidebar-submenu workspace-sidebar-submenu--${dark ? 'dark' : 'light'}`, popupOffset: [-6, 0], children: flyoutItems(item.children, dark) || [] } : item);
 
 // Expanding a submenu must not rerender the page, drawers and workspace header.
 const SidebarMenu = memo(function SidebarMenu({ items, selectedKey, ancestorKeys, collapsed, isMobile, isDarkMode, onNavigate, searchEnabled = true, desktopFlyout = false }: SidebarMenuProps) {
@@ -48,7 +48,7 @@ const SidebarMenu = memo(function SidebarMenu({ items, selectedKey, ancestorKeys
   const flyout = desktopFlyout && !isMobile;
   useEffect(() => { setOpenKeys(flyout ? [] : ancestorKeys); }, [ancestorKeys, flyout]);
   const selectedKeys = useMemo(() => [selectedKey], [selectedKey]);
-  const renderedItems = useMemo(() => flyout ? flyoutItems(filteredItems) : filteredItems, [flyout, filteredItems]);
+  const renderedItems = useMemo(() => flyout ? flyoutItems(filteredItems, isDarkMode) : filteredItems, [flyout, filteredItems, isDarkMode]);
   return (
     <>
     {searchEnabled && (!collapsed || isMobile) && <div className="sidebar-module-search"><Input allowClear prefix={<SearchOutlined />} aria-label="جستجوی ماژول" placeholder="جستجوی ماژول…" value={search} onChange={event => setSearch(event.target.value)} /></div>}

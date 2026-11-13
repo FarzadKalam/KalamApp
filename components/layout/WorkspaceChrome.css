@@ -87,3 +87,17 @@
 @media(prefers-reduced-motion:no-preference){.app-sidebar-panel{animation:workspace-sidebar-enter 180ms cubic-bezier(.2,0,0,1)}}
 @keyframes workspace-sidebar-enter{from{opacity:0;transform:translateX(8px)}to{opacity:1;transform:translateX(0)}}
 @media(prefers-reduced-motion:reduce){.workspace-chrome[data-sidebar-mode="push"] .app-workspace-content{transition:none!important}.app-sidebar-panel,.workspace-sidebar-submenu{animation:none!important;transition:none!important}}
+
+/* Portalled submenus carry their own theme, independent of their DOM parent. */
+.workspace-sidebar-submenu--dark{--workspace-surface:#1c1c1f;--workspace-text:#f4f4f5;--workspace-muted:#b7b7be;--workspace-line:#353539;color-scheme:dark}
+.workspace-sidebar-submenu--light{--workspace-surface:#fff;--workspace-text:#292e31;--workspace-muted:#596168;--workspace-line:#e5e7e8;color-scheme:light}
+:is(.app-sidebar-panel,.app-module-drawer,.workspace-sidebar-submenu) .ant-menu{color:var(--workspace-text)!important;background:var(--workspace-surface)!important}
+:is(.app-sidebar-panel,.app-module-drawer,.workspace-sidebar-submenu) :is(.ant-menu-item,.ant-menu-submenu-title){display:flex;align-items:center;gap:10px;min-height:44px;height:auto!important;padding-block:8px;line-height:1.7!important;color:var(--workspace-text)!important}
+:is(.app-sidebar-panel,.app-module-drawer,.workspace-sidebar-submenu) .ant-menu-item-selected{color:#fff!important;background:var(--workspace-solid,#4338ca)!important}
+:is(.app-sidebar-panel,.app-module-drawer,.workspace-sidebar-submenu) .ant-menu-title-content{display:flex;align-items:center;flex:1;min-width:0;margin-inline:0!important;line-height:1.7!important;color:inherit!important}
+:is(.app-sidebar-panel,.app-module-drawer,.workspace-sidebar-submenu) :is(.sidebar-menu-label,.sidebar-menu-link,.sidebar-menu-link__text){display:flex;align-items:center;min-width:0;line-height:1.7;color:inherit!important}
+:is(.app-sidebar-panel,.app-module-drawer,.workspace-sidebar-submenu) :is(.ant-menu-item-icon,.sidebar-menu-icon-link){display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;flex:0 0 22px;margin:0!important;line-height:1;color:inherit!important;vertical-align:middle}
+:is(.app-sidebar-panel,.app-module-drawer,.workspace-sidebar-submenu) .ant-menu-item-icon svg{display:block;width:18px;height:18px}
+:is(.app-sidebar-panel,.app-module-drawer,.workspace-sidebar-submenu) :is(.ant-menu-item-disabled,.ant-menu-submenu-disabled>.ant-menu-submenu-title){color:var(--workspace-muted)!important}
+:is(.app-sidebar-panel,.app-module-drawer,.workspace-sidebar-submenu) .ant-menu-submenu-title{padding-inline-end:32px}
+:is(.app-sidebar-panel,.app-module-drawer,.workspace-sidebar-submenu) .ant-menu-submenu-arrow{color:inherit!important}
