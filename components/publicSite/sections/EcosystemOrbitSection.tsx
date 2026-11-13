@@ -97,7 +97,7 @@ const EcosystemOrbitSection: React.FC<{ props: OrbitProps }> = ({ props }) => {
           <div className="ecosystem-controls">
             <span><i aria-hidden="true" /> در حال توسعه</span>
             <button type="button" onClick={() => setPaused((value) => !value)} aria-pressed={paused} disabled={!!reducedMotion}>
-              {paused || reducedMotion ? <PlayCircleOutlined /> : <PauseOutlined />}
+              {paused || reducedMotion ? <PlayCircleOutlined aria-hidden="true" /> : <PauseOutlined aria-hidden="true" />}
               {reducedMotion ? 'نمایش بدون حرکت' : paused ? 'ادامهٔ حرکت' : 'توقف حرکت'}
             </button>
           </div>
