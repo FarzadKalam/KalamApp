@@ -53,6 +53,9 @@ const RecordMessageActions: React.FC<RecordMessageActionsProps> = ({
   const hasPhone = Boolean(primaryPhone);
   const hasBot = useMemo(() => hasAnyRecordBotTarget(record), [record]);
   const buttonSize = compact ? 'small' : 'middle';
+  const recordTitle = getRecordTitle(record || {});
+  const contactName = [record?.full_name, record?.business_name, record?.legal_name, record?.name, record?.title].find(value => typeof value === 'string' && value.trim()) || '';
+  const contactDescription = [record?.description, record?.notes].find(value => typeof value === 'string' && value.trim()) || '';
 
   const handleCall = async (event?: React.MouseEvent<HTMLElement>) => {
     stopEvent(event);
@@ -130,11 +133,11 @@ const RecordMessageActions: React.FC<RecordMessageActionsProps> = ({
       </div>}
 
       {callPreviewOpen && <Modal open title="شماره‌گیر مخاطب" onCancel={() => { if (!calling) { setCallPreviewOpen(false); onActionComplete?.(); } }}
-        footer={<Button type="primary" icon={<PhoneOutlined />} loading={calling} onClick={() => { void handleCall().finally(() => { setCallPreviewOpen(false); onActionComplete?.(); }); }}>برقراری تماس</Button>}>
+        footer={<Button type="primary" aria-label="برقراری تماس" icon={<PhoneOutlined aria-hidden="true" />} loading={calling} onClick={() => { void handleCall().finally(() => { setCallPreviewOpen(false); onActionComplete?.(); }); }}>برقراری تماس</Button>}>
         <div className="space-y-4 py-3" dir="rtl">
-          <div><div className="mb-1 text-xs text-gray-500 dark:text-gray-400">مخاطب</div><div className="font-semibold">{getRecordTitle(record || {})}</div></div>
+          <div><div className="mb-1 text-xs text-gray-500 dark:text-gray-400">مخاطب</div><div className="font-semibold">{recordTitle}</div>{contactName && contactName !== recordTitle && <div className="mt-1 text-sm">{contactName}</div>}</div>
           <div><div className="mb-1 text-xs text-gray-500 dark:text-gray-400">شماره تماس</div><PhoneDisplay value={primaryPhone} /></div>
-          {(record?.description || record?.notes) && <div><div className="mb-1 text-xs text-gray-500 dark:text-gray-400">توضیحات مخاطب</div><p className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-7">{String(record?.description || record?.notes)}</p></div>}
+          {contactDescription && <div><div className="mb-1 text-xs text-gray-500 dark:text-gray-400">توضیحات مخاطب</div><p className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-7">{contactDescription}</p></div>}
         </div>
       </Modal>}
       {composerMode && (
