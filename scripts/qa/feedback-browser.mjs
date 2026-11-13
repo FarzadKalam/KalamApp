@@ -51,6 +51,9 @@ try {
     await page.getByRole('button', { name: 'نمایش پیام سرنخ' }).click();
     const toast = page.locator('[data-sileo-toast]').filter({ hasText: 'سرنخ فروش ثبت شد' });
     await toast.locator('[data-sileo-content][data-visible="true"]').waitFor();
+    await toast.locator('[data-sileo-content]').evaluate(async el => {
+      while (Number(getComputedStyle(el).opacity) < .99) await new Promise(requestAnimationFrame);
+    });
     const toastBox = await toast.boundingBox();
     assert.ok(await page.evaluate(({ x, y }) => !document.elementFromPoint(x, y)?.closest('[data-sileo-toast]'), { x: toastBox.x + 2, y: toastBox.y + 2 }), 'Transparent margins must not block the page beneath');
     assert.equal(await toast.getByRole('button', { name: 'ثبت فعالیت', exact: true }).count(), 1);
@@ -59,6 +62,7 @@ try {
     assert.ok(await toast.locator('[data-sileo-title]').evaluate(el => getComputedStyle(el).color === (document.querySelector('main').style.background === 'rgb(16, 24, 40)' ? 'rgb(23, 32, 51)' : 'rgb(248, 250, 252)')), 'Day/night contrast follows app theme');
     await page.screenshot({ path: `${output}/${mode}-desktop.png` });
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await page.screenshot({ path: `${output}/${mode}-mobile.png` });
     await toast.getByRole('button', { name: 'ثبت فعالیت', exact: true }).click();
