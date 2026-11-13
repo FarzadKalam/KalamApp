@@ -82,12 +82,25 @@ describe('central delivery policy', () => {
     const action = vi.fn(() => job);
     const handle = appFeedback.info({ title: 'گزارش آماده است', actions: [{ key: 'open', label: 'بازکردن', onClick: action }] });
     const running = runFeedbackAction(handle.id, 'open');
+    appFeedback.info({ title: 'در حال آماده‌سازی گزارش', key: 'report-progress', actions: [] });
     await runFeedbackAction(handle.id, 'open');
     expect(action).toHaveBeenCalledOnce();
     setFeedbackScope('another-org');
     reject(new Error('Network error'));
     await running;
     expect(getFeedbackSnapshot()).toHaveLength(0);
+  });
+  it('retains the action lock when the same keyed message is updated while running', async () => {
+    let finish!: () => void;
+    const job = new Promise<void>(resolve => { finish = resolve; });
+    const action = vi.fn(() => job);
+    const actions = [{ key: 'run', label: 'اجرا', onClick: action }];
+    const handle = appFeedback.info({ key: 'running', title: 'آماده', actions });
+    const running = runFeedbackAction(handle.id, 'run');
+    appFeedback.info({ key: 'running', title: 'در حال انجام', actions });
+    await runFeedbackAction(handle.id, 'run');
+    expect(action).toHaveBeenCalledOnce();
+    finish(); await running;
   });
   it('shows a Persian error when an action fails and does not erase a keyed result', async () => {
     const failed = appFeedback.info({ title: 'کار', actions: [{ key: 'fail', label: 'تلاش', onClick: () => { throw new Error('Network error'); } }] });

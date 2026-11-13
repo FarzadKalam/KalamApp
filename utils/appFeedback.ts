@@ -106,7 +106,7 @@ const publish = (options: FeedbackOptions, native?: NativeFeedbackTransport) => 
   }
   const title = kind === 'error' ? toFaErrorMessage(options.title, FEEDBACK_POLICY.labels.failure) : options.title;
   const visualRevision = (previous?.item.visualRevision ?? 0) + (sameVisibleContent(previous?.item, { ...options, title, kind }) ? 0 : 1);
-  const record: FeedbackRecord = { item: { ...options, title, key, id, kind, revision: (previous?.item.revision ?? 0) + 1, visualRevision }, native, runningActions: new Set(), remaining: native ? null : remaining, deadline: 0, shown: previous?.shown ?? false, paused: previous?.paused ?? false, settle: previous?.settle ?? [] };
+  const record: FeedbackRecord = { item: { ...options, title, key, id, kind, revision: (previous?.item.revision ?? 0) + 1, visualRevision }, native, runningActions: previous?.runningActions ?? new Set(), remaining: native ? null : remaining, deadline: 0, shown: previous?.shown ?? false, paused: previous?.paused ?? false, settle: previous?.settle ?? [] };
   records.set(id, record);
   while (records.size > FEEDBACK_POLICY.maxVisible) closeFeedback(records.keys().next().value!);
   schedule(record);
