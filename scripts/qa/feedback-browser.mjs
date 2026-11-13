@@ -46,6 +46,8 @@ try {
     await page.getByRole('button', { name: 'نمایش پیام سرنخ' }).click();
     const toast = page.locator('[data-sileo-toast]').filter({ hasText: 'سرنخ فروش ثبت شد' });
     await toast.locator('[data-sileo-content][data-visible="true"]').waitFor();
+    const toastBox = await toast.boundingBox();
+    assert.ok(await page.evaluate(({ x, y }) => !document.elementFromPoint(x, y)?.closest('[data-sileo-toast]'), { x: toastBox.x + 2, y: toastBox.y + 2 }), 'Transparent margins must not block the page beneath');
     assert.equal(await toast.getByRole('button', { name: 'ثبت فعالیت', exact: true }).count(), 1);
     assert.equal(await toast.getByRole('button', { name: 'تماس', exact: true }).count(), 1);
     assert.equal(await toast.getByRole('button', { name: 'ارسال پیام', exact: true }).count(), 1);
@@ -59,15 +61,26 @@ try {
     for (const close of await page.getByRole('button', { name: 'بستن پیام', exact: true }).all()) await close.click();
     await page.setViewportSize({ width: 1280, height: 900 });
   }
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.getByRole('button', { name: 'ارسال هم‌زمان پیام‌ها' }).click();
   assert.ok(await page.locator('[data-sileo-toast]').count() <= 3, 'A burst cannot create an unbounded animation queue');
+  const frameSample = await page.evaluate(async () => {
+    const samples = [];
+    let previous = performance.now();
+    for (let frame = 0; frame < 90; frame++) {
+      const now = await new Promise(resolve => requestAnimationFrame(resolve));
+      samples.push(now - previous); previous = now;
+    }
+    samples.sort((a, b) => a - b);
+    return { frameCount: samples.length, p95FrameMs: samples[Math.floor(samples.length * .95)], maxFrameMs: samples.at(-1) };
+  });
   await page.waitForFunction(() => document.querySelectorAll('[data-sileo-toast]').length === 0);
   assert.equal(await page.locator('.app-feedback-viewport').count(), 0, 'No visual renderer remains active after messages expire');
   const files = fs.readdirSync('dist/assets').filter(file => /^FeedbackViewport-.*\.js$/.test(file));
   assert.ok(files.length > 0);
   const budget = files.map(file => ({ file, gzipBytes: gzipSync(fs.readFileSync(`dist/assets/${file}`)).length }));
   assert.ok(budget.every(file => file.gzipBytes <= 20000), 'The lazy renderer stays below 20 KB gzip');
-  fs.writeFileSync(`${output}/checks.json`, JSON.stringify({ errors, rendererBudget: budget, maxVisible: 3, scripts }, null, 2));
+  fs.writeFileSync(`${output}/checks.json`, JSON.stringify({ errors, rendererBudget: budget, maxVisible: 3, frameSample, scripts }, null, 2));
   assert.deepEqual(errors, []);
   console.log('PASS: compact persistent overlay; lazy renderer/panel; Persian actions; day/night; mobile; bounded burst; idle teardown; renderer budget.');
 } catch (error) { console.log(error); throw error; } finally { await browser.close(); }

@@ -18,7 +18,7 @@ describe('contact action confirmation', () => {
     expect(requestVoipSmartCall).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'برقراری تماس' }));
     await waitFor(() => expect(requestVoipSmartCall).toHaveBeenCalledOnce());
-    expect(requestVoipSmartCall).toHaveBeenCalledWith(expect.objectContaining({ phone: '09120000000', recordId: 'record', moduleId: 'customers' }));
+    expect(requestVoipSmartCall).toHaveBeenCalledWith(expect.objectContaining({ phone: '+989120000000', recordId: 'record', moduleId: 'customers' }));
   });
   it('also requires confirmation for existing contact shortcuts', async () => {
     render(<App><RecordMessageActions moduleId="customers" record={record} /></App>);

@@ -20,7 +20,7 @@ export const feedbackMessage: MessageInstance = {
   destroy: key => clearFeedback(key === undefined ? undefined : String(key)),
 };
 const notificationOpen = (args: NotificationArgs, kind: FeedbackKind = 'info') => {
-  publishFeedback({ title: typeof args.message === 'string' ? args.message : 'اعلان سامانه', description: args.description ?? args.message, kind, key: args.key === undefined ? undefined : String(args.key), icon: args.icon, onClose: args.onClose, durationMs: args.duration === null || args.duration === 0 ? null : args.duration === undefined ? undefined : args.duration * 1000 });
+  publishFeedback({ title: typeof args.message === 'string' ? (kind === 'error' ? toFaErrorMessage(args.message) : args.message) : 'اعلان سامانه', description: args.description ?? (typeof args.message === 'string' ? undefined : args.message), kind, key: args.key === undefined ? undefined : String(args.key), icon: args.icon, onClose: args.onClose, durationMs: args.duration === null || args.duration === 0 ? null : args.duration === undefined ? undefined : args.duration * 1000 });
 };
 export const feedbackNotification: NotificationInstance = {
   open: args => notificationOpen(args, args.type),

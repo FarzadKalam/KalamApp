@@ -521,7 +521,7 @@ export const Sileo = memo(function Sileo({
     (e: React.PointerEvent<HTMLDivElement>) => {
       if (exiting || !onDismiss) return;
       const target = e.target as HTMLElement;
-      if (target.closest("[data-sileo-button]")) return;
+      if (target.closest("button")) return;
       pointerStartRef.current = e.clientY;
       e.currentTarget.setPointerCapture(e.pointerId);
       const el = buttonRef.current;
