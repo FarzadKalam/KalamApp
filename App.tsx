@@ -114,6 +114,7 @@ const loadMbtiAssessmentReportPage = () => import("./pages/MbtiAssessmentReportP
 const loadFilesGalleryPage = () => import("./pages/FilesGalleryPage");
 const loadWebFormsHubPage = () => import("./pages/WebFormsHubPage");
 const loadWebFormBuilderPage = () => import("./pages/WebFormBuilderPage");
+const loadTenantSiteBuilderPage = () => import("./pages/TenantSiteBuilderPage");
 const loadReportsHubPage = () => import("./pages/ReportsHubPage");
 const loadGoalsHubPage = () => import("./pages/GoalsHubPage");
 const loadReportBuilderPage = () => import("./pages/ReportBuilderPage");
@@ -179,6 +180,7 @@ const MbtiAssessmentReportPage = lazy(loadMbtiAssessmentReportPage);
 const FilesGalleryPage = lazy(loadFilesGalleryPage);
 const WebFormsHubPage = lazy(loadWebFormsHubPage);
 const WebFormBuilderPage = lazy(loadWebFormBuilderPage);
+const TenantSiteBuilderPage = lazy(loadTenantSiteBuilderPage);
 const ReportsHubPage = lazy(loadReportsHubPage);
 const GoalsHubPage = lazy(loadGoalsHubPage);
 const ReportBuilderPage = lazy(loadReportBuilderPage);
@@ -920,6 +922,8 @@ function App() {
             <Route path="/recycle-bin" element={<RecycleBinPage />} />
             <Route path="/share-target" element={<ShareTargetPage />} />
             <Route path="/search" element={<GlobalSearchPage />} />
+            <Route path="/site-builder" element={<TenantSiteBuilderPage />} />
+            <Route path="/site-builder/:id" element={<TenantSiteBuilderPage />} />
             <Route path="/web_forms" element={<WebFormsHubPage />} />
             <Route path="/web_forms/create" element={<WebFormBuilderPage />} />
             <Route path="/web_forms/:id" element={<WebFormBuilderPage />} />

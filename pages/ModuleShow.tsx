@@ -137,6 +137,7 @@ import {
 } from '../utils/recordLockRuntime';
 
 const SmartForm = React.lazy(() => import('../components/SmartForm'));
+const ProductSiteContentPanel = React.lazy(() => import('../components/products/ProductSiteContentPanel'));
 const OperationalFinancialOverviewPanel = React.lazy(() => import('../components/accounting/OperationalFinancialOverviewPanel'));
 const AccountLedgerPanel = React.lazy(() => import('../components/accounting/AccountLedgerPanel'));
 const StartProductionModal = React.lazy(() => import('../components/production/StartProductionModal'));
@@ -6679,6 +6680,12 @@ const ModuleShow: React.FC = () => {
         recordTitleFieldKey={recordTitleField?.key || null}
         renderRecordTitle={renderEditableRecordTitle}
       />
+
+      {moduleId === 'products' && id && data ? (
+        <React.Suspense fallback={<Skeleton active paragraph={{ rows: 4 }} />}>
+          <ProductSiteContentPanel product={{ ...displayData, id, org_id: data?.org_id }} canEdit={canEditModule} />
+        </React.Suspense>
+      ) : null}
 
       {moduleId === 'content_calendars' && data ? (
         <ContentCalendarRuntime

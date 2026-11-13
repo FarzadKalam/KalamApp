@@ -69,7 +69,7 @@ const requireUserOrg = async (req: Request, orgId: string, write: boolean) => {
     if (settingsError) throw settingsError;
     if (settings?.is_readonly === true) throw new Error('حساب سازمان در حالت فقط‌خواندنی است.');
   }
-  if (membership.is_owner === true) return orgId;
+  if (membership.is_owner === true) return { orgId, userId: auth.user.id };
   const roleName = trim(membership.software_role).toLowerCase();
   if (!['super_admin', 'admin', 'manager'].includes(roleName)) throw new Error('اجازهٔ مدیریت اتصال‌ها را ندارید.');
   if (membership.role_id) {
@@ -90,6 +90,38 @@ const safeConnection = (row: any) => ({
   last_checked_at: row.last_checked_at, last_check_status: row.last_check_status,
   sync_policy: row.sync_policy || { products: 'manual', customers: 'manual', invoices: 'manual' },
 });
+const safeHistoryError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : '';
+  // Deliberately whitelist known generic failures; never persist third-party/server text.
+  if (/واحد پول/.test(message)) return 'currency_mismatch';
+  if (/ایمیل/.test(message)) return 'required_email';
+  if (/پیدا نشد/.test(message)) return 'record_not_found';
+  if (/اتصال/.test(message)) return 'connection_error';
+  return 'sync_failed';
+};
+const historyFields = (module: string, direction: string) => {
+  const fields: Record<string, string[]> = {
+    products: ['name','manual_code','product_type','sell_price','description','image_url','status','stock'],
+    customers: ['full_name','first_name','last_name','email','mobile_1','address','city'],
+    invoices: ['status','customer_id','line_items','shipping_amount'],
+  };
+  // Names only: no value or remote payload is recorded.
+  return fields[module] || [];
+};
+const beginHistory = async (event: Record<string, unknown>) => {
+  try {
+    const { data, error } = await client.from('external_sync_history').insert(event).select('id').single();
+    if (error) throw error;
+    return data?.id || null;
+  } catch (error) { console.warn('external sync history start failed'); return null; }
+};
+const finishHistory = async (id: string | null, fields: Record<string, unknown>) => {
+  if (!id) return;
+  try {
+    const { error } = await client.from('external_sync_history').update({ ...fields, finished_at: new Date().toISOString() }).eq('id', id);
+    if (error) throw error;
+  } catch (error) { console.warn('external sync history finish failed'); }
+};
 
 const getConnection = async (orgId: string, id: string) => {
   const { data, error } = await client.from('external_connections').select('*')
@@ -547,8 +579,23 @@ Deno.serve(async (req: Request) => {
     const action = trim(body?.action);
     const orgId = trim(body?.orgId);
     if (!/^[0-9a-f-]{36}$/i.test(orgId)) return reply(400, { error: 'invalid_org' });
-    await requireUserOrg(req, orgId, !['list', 'list_orders', 'preview_sync'].includes(action));
+    const authContext = await requireUserOrg(req, orgId, !['list', 'list_orders', 'preview_sync', 'list_sync_history'].includes(action));
 
+    if (action === 'list_sync_history') {
+      const connectionId = trim(body.id || body.connectionId);
+      if (!/^[0-9a-f-]{36}$/i.test(connectionId)) throw new Error('شناسه اتصال معتبر نیست.');
+      await getConnection(orgId, connectionId);
+      const page = Math.max(1, Math.min(10000, Math.floor(Number(body.page) || 1)));
+      const limit = Math.max(1, Math.min(100, Math.floor(Number(body.limit) || 25)));
+      let query = client.from('external_sync_history').select('id,connection_id,module_key,action,direction,source,started_at,finished_at,status,actor_user_id,rows_received,rows_created,rows_updated,rows_failed,changed_fields,error_code', { count: 'exact' })
+        .eq('org_id', orgId).eq('connection_id', connectionId).order('started_at', { ascending: false })
+        .range((page - 1) * limit, page * limit - 1);
+      if (body.module) query = query.eq('module_key', parseModule(body.module));
+      if (body.status && ['started','succeeded','partial','failed'].includes(body.status)) query = query.eq('status', body.status);
+      const { data, error, count } = await query;
+      if (error) throw error;
+      return reply(200, { events: data || [], page, limit, total: count || 0 });
+    }
     if (action === 'list') {
       const { data, error } = await client.from('external_connections')
         .select('*').eq('org_id', orgId).eq('provider', 'woocommerce').order('created_at', { ascending: false });
@@ -612,7 +659,19 @@ Deno.serve(async (req: Request) => {
       const module = parseModule(body.module);
       const direction = body.direction === 'from_site' ? 'from_site' : body.direction === 'to_site' ? 'to_site' : null;
       if (!direction) throw new Error('جهت همگام‌سازی معتبر نیست.');
-      return reply(200, { result: await syncRecord(connection, module, direction, trim(body.localId), trim(body.externalId)) });
+      const startedAt = new Date().toISOString();
+      const eventId = await beginHistory({ org_id: orgId, connection_id: connection.id, module_key: module,
+        action: 'sync_record', direction, source: 'manual', started_at: startedAt, status: 'started', actor_user_id: authContext.userId });
+      try {
+        const result = await syncRecord(connection, module, direction, trim(body.localId), trim(body.externalId));
+        await finishHistory(eventId, { status: 'succeeded', rows_received: 1, rows_created: direction === 'from_site' && !body.localId ? 1 : 0,
+          rows_updated: 1, rows_failed: 0, changed_fields: historyFields(module, direction) });
+        return reply(200, { result });
+      } catch (error) {
+        await finishHistory(eventId, { status: 'failed', rows_received: 0, rows_created: 0, rows_updated: 0, rows_failed: 1,
+          changed_fields: [], error_code: safeHistoryError(error) });
+        throw error;
+      }
     }
     if (action === 'link_matching_record') {
       const connection = await getConnection(orgId, trim(body.id));
@@ -650,13 +709,24 @@ Deno.serve(async (req: Request) => {
         return reply(200, { ok: true });
       }
       const page = Math.max(1, Math.min(1000, Math.floor(Number(body.page) || 1)));
-      const orders = await wooGet(connection, `orders?per_page=25&page=${page}&orderby=modified&order=desc`);
+      const eventId = await beginHistory({ org_id: orgId, connection_id: connection.id, module_key: 'invoices',
+        action: 'sync_orders', direction: 'from_site', source: 'manual', started_at: new Date().toISOString(), status: 'started', actor_user_id: authContext.userId });
+      let orders: any[];
+      try { orders = await wooGet(connection, `orders?per_page=25&page=${page}&orderby=modified&order=desc`); }
+      catch (error) {
+        await finishHistory(eventId, { status: 'failed', rows_received: 0, rows_created: 0, rows_updated: 0, rows_failed: 0,
+          changed_fields: [], error_code: safeHistoryError(error) });
+        throw error;
+      }
       let imported = 0;
       const failed: string[] = [];
       for (const order of orders) {
         try { await storeOrder(connection, order); imported += 1; }
         catch (error) { failed.push(`سفارش ${trim(order?.number || order?.id)}: ${error instanceof Error ? error.message : 'خطای نامشخص'}`); }
       }
+      await finishHistory(eventId, { status: failed.length ? (imported ? 'partial' : 'failed') : 'succeeded',
+        rows_received: orders.length, rows_created: imported, rows_updated: 0, rows_failed: failed.length,
+        changed_fields: imported ? historyFields('invoices', 'from_site') : [], error_code: failed.length ? 'order_import_failed' : null });
       return reply(200, { ok: failed.length === 0, received: orders.length, imported, failed, page });
     }
     if (action === 'list_orders') {

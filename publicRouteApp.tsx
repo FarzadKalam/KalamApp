@@ -13,11 +13,13 @@ const loadInquiryForm = () => import("./pages/InquiryForm");
 const loadInvoicePublicPage = () => import("./pages/InvoicePublicPage");
 const loadDeliveryPublicPage = () => import("./pages/DeliveryPublicPage");
 const loadPaymentCallbackPage = () => import("./pages/PaymentCallbackPage");
+const loadTenantPublishedSitePage = () => import("./pages/TenantPublishedSitePage");
 
 const InquiryForm = lazy(loadInquiryForm);
 const InvoicePublicPage = lazy(loadInvoicePublicPage);
 const DeliveryPublicPage = lazy(loadDeliveryPublicPage);
 const PaymentCallbackPage = lazy(loadPaymentCallbackPage);
+const TenantPublishedSitePage = lazy(loadTenantPublishedSitePage);
 
 const PublicRouteFallback = () => <BrandLoadingScreen message="در حال آماده‌سازی صفحه…" />;
 
@@ -60,6 +62,7 @@ const PublicRouteApp: React.FC = () => {
                 <Route path="/i/:code" element={<InvoicePublicPage />} />
                 <Route path="/d/:code" element={<DeliveryPublicPage />} />
                 <Route path="/payment/callback" element={<PaymentCallbackPage />} />
+                <Route path="/site/:orgSlug/:pageSlug" element={<TenantPublishedSitePage />} />
               </Routes>
             </LazyRouteBoundary>
           </AntdApp>

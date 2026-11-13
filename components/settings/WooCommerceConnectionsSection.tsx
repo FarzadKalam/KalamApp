@@ -21,6 +21,21 @@ type InboxOrder = {
   received_at: string;
   processing_status: string;
 };
+type SyncHistoryEntry = {
+  id: string;
+  module_key: string;
+  action: string;
+  direction: string;
+  source: string;
+  started_at: string;
+  status: string;
+  rows_received: number;
+  rows_created: number;
+  rows_updated: number;
+  rows_failed: number;
+  changed_fields: string[];
+  error_code: string | null;
+};
 const functionUrl = `${import.meta.env.VITE_SUPABASE_URL || ''}/functions/v1/external-connectors`;
 
 const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ orgId }) => {
@@ -29,6 +44,9 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
   const [connections, setConnections] = useState<WooConnection[]>([]);
   const [orders, setOrders] = useState<InboxOrder[]>([]);
   const [selected, setSelected] = useState<WooConnection | null>(null);
+  const [historyConnection, setHistoryConnection] = useState<WooConnection | null>(null);
+  const [historyRows, setHistoryRows] = useState<SyncHistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [syncConnection, setSyncConnection] = useState<WooConnection | null>(null);
   const [featureAllowed, setFeatureAllowed] = useState<boolean | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -159,6 +177,20 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
     }
   };
 
+  const showHistory = async (connection: WooConnection) => {
+    setHistoryConnection(connection);
+    setHistoryLoading(true);
+    try {
+      const data = await call({ action: 'list_sync_history', id: connection.id, page: 1, limit: 25 });
+      setHistoryRows(data.events || []);
+    } catch (error) {
+      message.error(toFaErrorMessage(error, 'بارگذاری تاریخچهٔ همگام‌سازی ناموفق بود.'));
+      setHistoryRows([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
   if (featureAllowed === false) return <Alert className="mt-6" type="info" showIcon
     message="اتصال به وردپرس و ووکامرس در پلن این سازمان فعال نیست."
     description="این ویژگی از پلن رشد در دسترس است و مدیر سازمان می‌تواند آن را از صفحه حساب بررسی کند."
@@ -188,6 +220,7 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
           <Button size="small" disabled={!row.is_active || busy} onClick={() => void run(row, 'test')}>آزمون اتصال</Button>
           <Button size="small" type="primary" disabled={!row.is_active || busy} onClick={() => setSyncConnection(row)}>همگام‌سازی</Button>
           <Button size="small" onClick={() => void run(row, 'list_orders')}>صندوق ورودی</Button>
+          <Button size="small" onClick={() => void showHistory(row)}>تاریخچه</Button>
         </Space> },
       ]} />
     <Modal title={editing ? 'ویرایش فروشگاه' : 'افزودن فروشگاه'} open={open} onCancel={() => setOpen(false)}
@@ -214,6 +247,20 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
           { title: 'وضعیت فروشگاه', dataIndex: 'external_status' },
           { title: 'پردازش', dataIndex: 'processing_status', render: (value: string) => value === 'processed' ? 'ثبت‌شده در فاکتورها' : value === 'error' ? 'نیازمند بررسی' : 'در انتظار' },
           { title: 'دریافت', dataIndex: 'received_at', render: (value: string) => new Date(value).toLocaleString('fa-IR') },
+        ]} />
+    </Modal>
+    <Modal title={`تاریخچهٔ همگام‌سازی ${historyConnection?.name || ''}`} open={!!historyConnection}
+      onCancel={() => setHistoryConnection(null)} footer={<Button onClick={() => setHistoryConnection(null)}>بستن</Button>} width={900}>
+      <Alert className="mb-3" type="info" showIcon message="گزارش اجراها؛ مقدارهای خصوصی و کلیدهای اتصال ذخیره یا نمایش داده نمی‌شوند." />
+      <Table<SyncHistoryEntry> rowKey="id" dataSource={historyRows} loading={historyLoading} size="small" pagination={{ pageSize: 10 }} scroll={{ x: 760 }}
+        locale={{ emptyText: 'هنوز اجرای همگام‌سازی ثبت نشده است.' }} columns={[
+          { title: 'زمان', dataIndex: 'started_at', render: (value: string) => new Date(value).toLocaleString('fa-IR') },
+          { title: 'بخش', dataIndex: 'module_key', render: (value: string) => ({ products: 'کالاها', customers: 'مشتریان', invoices: 'فاکتورها' } as Record<string, string>)[value] || value },
+          { title: 'جهت', dataIndex: 'direction', render: (value: string) => value === 'from_site' ? 'از فروشگاه به کلام' : 'از کلام به فروشگاه' },
+          { title: 'نتیجه', dataIndex: 'status', render: (value: string) => value === 'succeeded' ? 'موفق' : value === 'partial' ? 'نیمه‌موفق' : value === 'started' ? 'در حال اجرا' : 'ناموفق' },
+          { title: 'دریافتی/ساخته/به‌روزشده', render: (_, row) => `${row.rows_received}/${row.rows_created}/${row.rows_updated}` },
+          { title: 'نام فیلدها', dataIndex: 'changed_fields', render: (fields: string[]) => fields?.length ? fields.join('، ') : '—' },
+          { title: 'خطا', dataIndex: 'error_code', render: (value: string | null) => value || '—' },
         ]} />
     </Modal>
     <WooCommerceSyncModal connection={syncConnection} onClose={() => setSyncConnection(null)} call={call}

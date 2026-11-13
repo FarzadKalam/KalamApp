@@ -58,6 +58,7 @@ type AssistantAction =
   | 'rebuild_instruction_ai_context'
   | 'rebuild_job_description_ai_context'
   | 'analyze_mbti_assessment'
+  | 'suggest_product_site_content'
   | 'saas_ai';
 
 type RequestContext = {
@@ -13883,6 +13884,93 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
   return json(200, { success: true, note, actionLogId });
 };
 
+const handleSuggestProductSiteContent = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  body: any,
+) => {
+  const productId = normalizeId(body?.productId || body?.product_id);
+  if (!productId || !authContext?.orgId || !authContext?.userId) {
+    return json(400, { success: false, message: 'محصول یا سازمان معتبر نیست.' });
+  }
+  if (authContext.permissions?.products?.view === false || authContext.permissions?.products?.edit === false) {
+    return json(403, { success: false, message: 'اجازهٔ مشاهده یا ویرایش محتوای محصول را ندارید.' });
+  }
+  const memberships = await restSelect(supabaseUrl, serviceRoleKey, 'user_organization_memberships', {
+    org_id: `eq.${authContext.orgId}`,
+    user_id: `eq.${authContext.userId}`,
+    is_active: 'eq.true',
+    select: 'user_id',
+    limit: 1,
+  });
+  if (!memberships.length) return json(403, { success: false, message: 'عضویت فعال در سازمان پیدا نشد.' });
+  const products = await restSelect(supabaseUrl, serviceRoleKey, 'products', {
+    id: `eq.${productId}`,
+    org_id: `eq.${authContext.orgId}`,
+    select: 'id,name,description,product_type,category,brand_name,main_unit,delivery_time',
+    limit: 1,
+  });
+  const product = products[0];
+  if (!product) return json(404, { success: false, message: 'محصول در سازمان جاری پیدا نشد.' });
+  const usageAccess = await assertAiUsageAllowed(supabaseUrl, serviceRoleKey, authContext);
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'dashboard_chat');
+  await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, 'dashboard_chat');
+  const allowedKeys = ['name', 'description', 'product_type', 'category', 'brand_name', 'main_unit', 'delivery_time'];
+  const facts: Record<string, string> = {};
+  for (const key of allowedKeys) {
+    const limit = key === 'description' ? 1200 : 200;
+    const value = String(product[key] || '').trim().slice(0, limit);
+    if (value) facts[key] = value;
+  }
+  const result = await callChatCompletions(providerConfig, [
+    {
+      role: 'system',
+      content: [
+        'شما دستیار نگارش توضیحات محصول برای فروشگاه فارسی‌زبان هستید.',
+        'فقط بر پایهٔ داده‌های واقعی ارائه‌شده بنویس؛ ویژگی، ضمانت، قیمت، موجودی، تأییدیه یا ادعای بی‌پشتوانه نساز.',
+        'اگر اطلاعات کافی نیست، متن کوتاه و محتاطانه بنویس و جای خالی را با ادعای ساختگی پر نکن.',
+        'فقط JSON معتبر با کلیدهای short_description, description, seo_title, seo_description, slug, focus_keyword برگردان.',
+        'هیچ نظر یا امتیاز مشتری تولید نکن. خروجی فقط پیشنهاد است و نباید چیزی را ذخیره یا منتشر کنی.',
+      ].join('\n'),
+    },
+    { role: 'user', content: JSON.stringify({ product: facts, language: 'fa-IR' }) },
+  ], {
+    temperature: 0.25,
+    maxTokens: 700,
+    responseFormat: { type: 'json_object' },
+    safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_product_site_content`,
+  });
+  await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+    capability: 'dashboard_chat',
+    provider: result.provider,
+    model: result.model,
+    requestId: result.requestId,
+    usageMetadata: result.usageMetadata,
+    metadata: { source: 'product_site_content_suggestion', product_id: productId },
+  });
+  const suggestion = extractJsonObjectFromText(result.content) || {};
+  const output = {
+    short_description: String(suggestion.short_description || '').trim().slice(0, 800),
+    description: String(suggestion.description || '').trim().slice(0, 12000),
+    seo_title: String(suggestion.seo_title || '').trim().slice(0, 180),
+    seo_description: String(suggestion.seo_description || '').trim().slice(0, 320),
+    slug: String(suggestion.slug || '').toLowerCase().replace(/[^a-z0-9-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 180),
+    focus_keyword: String(suggestion.focus_keyword || '').trim().slice(0, 120),
+  };
+  if (!output.short_description && !output.description) {
+    return json(502, { success: false, message: 'پیشنهاد متنی معتبر از مدل دریافت نشد.' });
+  }
+  return json(200, {
+    success: true,
+    suggestion: output,
+    saved: false,
+    published: false,
+    usage: result.usageMetadata || null,
+    usageAccess: { remainingTokens: usageAccess.dailyUsage?.remainingTokens ?? null },
+  });
+};
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -13913,6 +14001,10 @@ Deno.serve(async (req: Request) => {
 
     const user = await verifyUserToken(supabaseUrl, serviceRoleKey, token);
     const authContext = await loadUserContext(supabaseUrl, serviceRoleKey, user);
+
+    if (action === 'suggest_product_site_content') {
+      return await handleSuggestProductSiteContent(supabaseUrl, serviceRoleKey, authContext, body);
+    }
 
     if (action === 'get_ai_settings') return await handleGetAiSettings(supabaseUrl, serviceRoleKey, authContext);
     if (action === 'save_ai_settings') return await handleSaveAiSettings(supabaseUrl, serviceRoleKey, authContext, body);
