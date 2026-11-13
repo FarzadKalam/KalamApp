@@ -890,6 +890,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/stock_transfers', label: 'تردد کالاها و حواله‌ها', disabled: !canViewModule('stock_transfers') },
           {
             key: 'billboards',
+            icon: renderModuleIcon('billboards'),
             label: 'تبلیغات محیطی',
             children: [
               { key: '/billboards', label: 'تابلوها', disabled: !canViewBillboards },
