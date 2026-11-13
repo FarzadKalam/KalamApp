@@ -1,0 +1,43 @@
+import { useEffect, useState } from 'react';
+import theme from 'antd/es/theme';
+import { closeFeedback, feedbackShown, pauseFeedback, type FeedbackItem } from '../../utils/appFeedback';
+import usePrefersReducedMotion from '../../hooks/usePrefersReducedMotion';
+import { Sileo } from './sileo/sileo';
+import './feedback.css';
+
+const FeedbackViewport = ({ items }: { items: FeedbackItem[] }) => {
+  const { token } = theme.useToken();
+  const reducedMotion = usePrefersReducedMotion();
+  const [width, setWidth] = useState(() => Math.min(350, window.innerWidth - 32));
+  useEffect(() => {
+    const resize = () => setWidth(Math.min(350, window.innerWidth - 32));
+    window.addEventListener('resize', resize, { passive: true });
+    return () => window.removeEventListener('resize', resize);
+  }, []);
+  useEffect(() => { items.forEach(item => feedbackShown(item.id)); }, [items]);
+  const isDark = token.colorBgContainer !== '#ffffff' && token.colorBgContainer !== '#fff';
+  return (
+    <section className="app-feedback-viewport" data-sileo-viewport data-position="top-center" dir="rtl" aria-label="پیام‌های سامانه" aria-live="polite" aria-relevant="additions text" style={{
+      '--feedback-width': `${width}px`, '--feedback-ink': isDark ? '#172033' : '#f8fafc',
+      '--feedback-muted': isDark ? '#344054' : '#e2e8f0', '--feedback-line': isDark ? '#cbd5e1' : '#475467',
+    } as React.CSSProperties}>
+      {items.map(item => <div className="app-feedback-item" key={item.id}
+        onMouseEnter={() => pauseFeedback(item.id, true)} onMouseLeave={() => pauseFeedback(item.id, false)}
+        onFocus={() => pauseFeedback(item.id, true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) pauseFeedback(item.id, false); }}>
+        <Sileo id={item.id} refreshKey={String(item.revision)} title={item.title} state={item.kind} width={width} reducedMotion={reducedMotion}
+          fill={isDark ? '#f8fafc' : '#172033'} roundness={10} position="center" icon={item.icon}
+          description={item.description || item.actions?.length ? <>
+            {item.description && <div className="app-feedback-description">{item.description}</div>}
+            {!!item.actions?.length && <div className="app-feedback-actions" role="group" aria-label="اقدام‌های پیشنهادی">
+              {item.actions.slice(0, 3).map(action => <button key={action.key} type="button" aria-label={action.label} title={action.label} className={action.iconOnly ? 'app-feedback-icon-action' : 'app-feedback-primary-action'} onClick={() => { action.onClick(); closeFeedback(item.id); }}>
+                {action.icon && <span aria-hidden="true">{action.icon}</span>}{!action.iconOnly && action.label}
+              </button>)}
+            </div>}
+          </> : undefined}
+          autoExpandDelayMs={item.description || item.actions?.length ? 150 : undefined}
+          onDismiss={() => closeFeedback(item.id)} />
+      </div>)}
+    </section>
+  );
+};
+export default FeedbackViewport;

@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { NoteAttachment } from './noteContent';
+import { setFeedbackScope } from './appFeedback';
 
 export type OverlayNotificationKind = 'note' | 'task' | 'responsibility' | 'bot' | 'assistant' | 'agent' | 'voip_call' | 'sms' | 'email';
 export type OverlayNotificationChannel = 'internal' | 'system' | 'bot' | 'agent' | 'sms' | 'voip' | 'generic' | 'email';
@@ -30,6 +31,32 @@ let notifications: UiNotificationOverlayItem[] = [];
 const suppressedSources = new Set<string>();
 const dismissedForSessionIds = new Set<string>();
 let viewerScope = '';
+let viewerStartedAt = Date.now();
+let panelExpanded = false;
+const announcedIds = new Set<string>();
+const presentationKey = () => `taze:overlay-presentation:v2:${viewerScope}`;
+const persistPanel = () => {
+  if (!viewerScope || typeof window === 'undefined') return;
+  try { window.sessionStorage.setItem(presentationKey(), JSON.stringify({ expanded: panelExpanded, announced: [...announcedIds].slice(-100) })); } catch { /* Optional viewer-local presentation storage. */ }
+};
+export const setUiNotificationOverlayExpanded = (expanded: boolean) => {
+  if (expanded === panelExpanded) return;
+  panelExpanded = expanded;
+  persistPanel();
+  emit();
+};
+export const useUiNotificationOverlayExpanded = () => useSyncExternalStore(
+  listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+  () => panelExpanded, () => false,
+);
+export const claimFreshOverlayAnnouncements = (items: UiNotificationOverlayItem[]) => {
+  const fresh = items.filter(item => !announcedIds.has(item.id) && Date.parse(item.createdAt || '') >= viewerStartedAt);
+  items.forEach(item => announcedIds.add(item.id));
+  // Bounded session state: old pages are already excluded by viewerStartedAt.
+  if (announcedIds.size > 200) [...announcedIds].slice(0, announcedIds.size - 100).forEach(id => announcedIds.delete(id));
+  persistPanel();
+  return fresh;
+};
 let closedThrough = 0;
 const dismissalStorageKey = () => `taze:overlay-dismissed:v1:${viewerScope}`;
 const persistDismissals = () => {
@@ -59,6 +86,17 @@ export const setUiNotificationOverlayViewer = (orgId: string, userId: string) =>
   const nextScope = orgId && userId ? JSON.stringify([orgId, userId]) : '';
   if (nextScope === viewerScope) return;
   viewerScope = nextScope;
+  viewerStartedAt = Date.now();
+  panelExpanded = false;
+  announcedIds.clear();
+  setFeedbackScope(nextScope);
+  if (viewerScope && typeof window !== 'undefined') {
+    try {
+      const saved = JSON.parse(window.sessionStorage.getItem(presentationKey()) || '{}');
+      panelExpanded = saved?.expanded === true;
+      if (Array.isArray(saved?.announced)) saved.announced.forEach((id: unknown) => { if (typeof id === 'string') announcedIds.add(id); });
+    } catch { /* Keep the compact default for unavailable or corrupt storage. */ }
+  }
   dismissedForSessionIds.clear();
   closedThrough = 0;
   snoozedUntilById.clear();
@@ -89,6 +127,7 @@ export const hideUiNotificationOverlayItems = (ids: string[]) => {
 };
 
 export const closeUiNotificationOverlay = () => {
+  setUiNotificationOverlayExpanded(false);
   // A later feed page may contain unseen old rows. They are not new events.
   closedThrough = Date.now();
   hideUiNotificationOverlayItems(notifications.map((item) => item.id));

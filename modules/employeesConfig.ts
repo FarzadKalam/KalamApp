@@ -25,6 +25,7 @@ const saveEmployeeRecord = createWebFormTemplateRecordSaver({
 });
 
 export const employeesModule: ModuleDefinition = {
+  createdFeedback: { primary: 'create_activity', communications: true },
   id: 'employees',
   titles: { fa: 'کارکنان', faSingular: 'کارمند', en: 'Employees' },
   nature: ModuleNature.STANDARD,

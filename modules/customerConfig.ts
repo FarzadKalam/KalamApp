@@ -15,6 +15,7 @@ import {
 } from './advertisingCampaignAttributionFields';
 
 export const customerModule: ModuleDefinition = {
+  createdFeedback: { primary: 'create_invoice', communications: true },
   id: 'customers',
   titles: { fa: 'مدیریت مشتریان', faSingular: 'مشتری', en: 'Customers' },
   nature: ModuleNature.CRM,

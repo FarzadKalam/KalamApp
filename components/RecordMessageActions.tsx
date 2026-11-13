@@ -1,13 +1,17 @@
 import React, { useMemo, useState } from 'react';
-import { App, Button, Tooltip } from 'antd';
+import { App, Button, Modal, Tooltip } from 'antd';
 import { MessageOutlined, PhoneOutlined, RobotOutlined } from '@ant-design/icons';
 import MessageComposerModal from './MessageComposerModal';
 import { getPrimaryRecordPhone, hasAnyRecordBotTarget } from '../utils/recordMessaging';
 import { normalizePhoneForStorage } from '../utils/phoneNumber';
 import { buildVoipFallbackUrl, requestVoipSmartCall } from '../utils/voipGateway';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { getRecordTitle } from '../utils/recordTitle';
+import PhoneDisplay from './PhoneDisplay';
 
 type RecordMessageActionsProps = {
+  initialAction?: 'call' | 'sms';
+  onActionComplete?: () => void;
   moduleId?: string | null;
   record?: Record<string, any> | null;
   phoneValue?: unknown;
@@ -28,6 +32,8 @@ const stopEvent = (event?: React.MouseEvent<HTMLElement>) => {
 
 const RecordMessageActions: React.FC<RecordMessageActionsProps> = ({
   moduleId,
+  initialAction,
+  onActionComplete,
   record,
   phoneValue,
   compact = false,
@@ -35,8 +41,9 @@ const RecordMessageActions: React.FC<RecordMessageActionsProps> = ({
   buttonVariant = 'default',
 }) => {
   const { message } = App.useApp();
-  const [composerMode, setComposerMode] = useState<'sms' | 'bot' | null>(null);
+  const [composerMode, setComposerMode] = useState<'sms' | 'bot' | null>(initialAction === 'sms' ? 'sms' : null);
   const [calling, setCalling] = useState(false);
+  const [callPreviewOpen, setCallPreviewOpen] = useState(initialAction === 'call');
 
   const primaryPhone = useMemo(
     () => getPrimaryRecordPhone(moduleId, record, phoneValue),
@@ -79,7 +86,7 @@ const RecordMessageActions: React.FC<RecordMessageActionsProps> = ({
 
   return (
     <>
-      <div className={`flex items-center gap-1 ${className}`.trim()}>
+      {!initialAction && <div className={`flex items-center gap-1 ${className}`.trim()}>
         {hasPhone && (
           <Tooltip title="تماس">
             <Button
@@ -87,7 +94,7 @@ const RecordMessageActions: React.FC<RecordMessageActionsProps> = ({
               type={buttonVariant}
               icon={<PhoneOutlined />}
               loading={calling}
-              onClick={handleCall}
+              onClick={(event) => { stopEvent(event); setCallPreviewOpen(true); }}
             />
           </Tooltip>
         )}
@@ -117,8 +124,16 @@ const RecordMessageActions: React.FC<RecordMessageActionsProps> = ({
             />
           </Tooltip>
         )}
-      </div>
+      </div>}
 
+      {callPreviewOpen && <Modal open title="شماره‌گیر مخاطب" onCancel={() => { if (!calling) { setCallPreviewOpen(false); onActionComplete?.(); } }}
+        footer={<Button type="primary" icon={<PhoneOutlined />} loading={calling} onClick={() => { void handleCall().finally(() => { setCallPreviewOpen(false); onActionComplete?.(); }); }}>برقراری تماس</Button>}>
+        <div className="space-y-4 py-3" dir="rtl">
+          <div><div className="mb-1 text-xs text-gray-500 dark:text-gray-400">مخاطب</div><div className="font-semibold">{getRecordTitle(record || {})}</div></div>
+          <div><div className="mb-1 text-xs text-gray-500 dark:text-gray-400">شماره تماس</div><PhoneDisplay value={primaryPhone} /></div>
+          {(record?.description || record?.notes) && <div><div className="mb-1 text-xs text-gray-500 dark:text-gray-400">توضیحات مخاطب</div><p className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-7">{String(record?.description || record?.notes)}</p></div>}
+        </div>
+      </Modal>}
       {composerMode && (
         <MessageComposerModal
           open={composerMode !== null}
@@ -126,7 +141,7 @@ const RecordMessageActions: React.FC<RecordMessageActionsProps> = ({
           moduleId={moduleId}
           record={record}
           initialPhone={primaryPhone}
-          onCancel={() => setComposerMode(null)}
+          onCancel={() => { setComposerMode(null); onActionComplete?.(); }}
         />
       )}
     </>

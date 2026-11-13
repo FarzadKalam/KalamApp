@@ -1,3 +1,4 @@
+import AppFeedbackHost from "./components/feedback/AppFeedbackHost";
 import { Suspense, lazy, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { HelmetProvider } from "react-helmet-async";
@@ -54,6 +55,7 @@ const PublicRouteApp: React.FC = () => {
             message={{ top: 72, duration: 3.5, maxCount: 4 }}
             notification={{ placement: "topLeft", duration: 4.5, maxCount: 4 }}
           >
+          <AppFeedbackHost />
             <LazyRouteBoundary>
               <Routes>
                 <Route path="/inquiry/*" element={<InquiryForm />} />

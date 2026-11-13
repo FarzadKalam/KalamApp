@@ -1,3 +1,4 @@
+import AppFeedbackHost from "./components/feedback/AppFeedbackHost";
 import './initDayjs';
 import { Suspense, lazy, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -65,6 +66,7 @@ const MarketingSiteApp = () => {
         <ConfigProvider direction="rtl" locale={faIR} theme={{ token: { fontFamily: 'Peyda, Tahoma, Arial, sans-serif' } }}>
           <JalaliLocaleListener />
           <AntdApp message={{ top: 72, duration: 3.5, maxCount: 4 }} notification={{ placement: 'topLeft', duration: 4.5, maxCount: 4 }}>
+          <AppFeedbackHost />
             <PwaInstallPrompt />
             <PublicThemeBoundary>
               <Suspense fallback={null}>

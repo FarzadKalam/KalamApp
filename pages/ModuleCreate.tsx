@@ -1,3 +1,4 @@
+import { showRecordCreatedFeedback } from '../utils/recordFeedback';
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
@@ -140,7 +141,7 @@ export const ModuleCreate = () => {
   }, [moduleId]);
 
   useEffect(() => {
-    if (moduleId !== 'invoices' || !retailSalesInvoiceEnabled) return;
+    if (moduleId !== 'invoices' || !retailSalesInvoiceEnabled || initialValuesFromState?.customer_id) return;
     let active = true;
     void supabase.from('company_settings').select('retail_invoice_settings').limit(1).maybeSingle()
       .then(({ data }) => {
@@ -440,6 +441,7 @@ export const ModuleCreate = () => {
                 });
               }
               if (insertedId) {
+                showRecordCreatedFeedback(moduleConfig, { ...normalizedPayload, id: insertedId });
                 navigate(`/${moduleId}/${insertedId}`);
               } else {
                 navigate(`/${moduleId}`);

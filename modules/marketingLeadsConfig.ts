@@ -21,6 +21,7 @@ const saveMarketingLeadRecord = createWebFormTemplateRecordSaver({
 });
 
 export const marketingLeadsModule: ModuleDefinition = {
+  createdFeedback: { primary: 'create_activity', communications: true },
   id: 'marketing_leads',
   titles: { fa: 'لیدهای بازاریابی', en: 'Marketing Leads' },
   nature: ModuleNature.MARKETING,

@@ -183,6 +183,8 @@ jobs:
         timeout-minutes: 5
         run: >-
           npx vitest run utils/uiNotificationOverlayStore.test.ts
+          utils/appFeedback.test.ts utils/recordFeedback.test.ts
+          components/RecordMessageActions.test.tsx
           components/UploadProgressOverlay.test.tsx components/layout/SidebarMenu.test.tsx
           components/stories/storyStudio.test.ts
           --maxWorkers=1 --no-file-parallelism
@@ -261,6 +263,16 @@ jobs:
           done
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/ecosystem-browser/node_modules/playwright/index.mjs" node scripts/qa/ecosystem-orbit.mjs
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/ecosystem-browser/node_modules/playwright/index.mjs" node scripts/qa/public-startup.mjs
+          node scripts/qa/build-feedback-preview.mjs
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/ecosystem-browser/node_modules/playwright/index.mjs" node scripts/qa/feedback-browser.mjs
+
+      - name: Upload feedback review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: feedback-review
+          path: tmp/feedback-review
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
         if: always()

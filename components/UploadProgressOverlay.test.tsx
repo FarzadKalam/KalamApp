@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import UploadProgressOverlay from './UploadProgressOverlay';
-import { setUiNotificationOverlayItems, setUiNotificationOverlayViewer } from '../utils/uiNotificationOverlayStore';
+import { setUiNotificationOverlayItems, setUiNotificationOverlayViewer, setUiNotificationOverlayExpanded } from '../utils/uiNotificationOverlayStore';
 
 const emptyTasks: never[] = [];
 vi.mock('../utils/uploadProgressStore', () => ({
@@ -18,6 +18,7 @@ describe('notification panel navigation', () => {
     setUiNotificationOverlayItems([item], 'runtime');
     const tree = (route: string) => <App><MemoryRouter key={route} initialEntries={[route]}><UploadProgressOverlay /></MemoryRouter></App>;
     const { rerender } = render(tree('/leads'));
+    fireEvent.click(await screen.findByRole('button', { name: 'نمایش اعلان‌ها و آپلودها' }));
     await screen.findByText('اعلان قبلی');
     fireEvent.click(screen.getByRole('button', { name: 'بستن پنجره' }));
     expect(item.onDismiss).not.toHaveBeenCalled();
@@ -25,6 +26,23 @@ describe('notification panel navigation', () => {
     act(() => { setUiNotificationOverlayItems([item, { ...item, id: 'old-page', title: 'صفحه قدیمی' }], 'runtime'); });
     expect(screen.queryByRole('button', { name: 'بستن پنجره' })).not.toBeInTheDocument();
     act(() => { setUiNotificationOverlayItems([{ ...item, id: 'fresh-panel', title: 'اعلان واقعاً جدید', createdAt: new Date(Date.now() + 1000).toISOString() }], 'runtime'); });
-    await waitFor(() => expect(screen.getByText('اعلان واقعاً جدید')).toBeVisible());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'نمایش اعلان‌ها و آپلودها' })).toBeVisible());
+    expect(screen.queryByRole('button', { name: 'بستن پنجره' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'نمایش اعلان‌ها و آپلودها' }));
+    await screen.findByText('اعلان واقعاً جدید');
+  });
+  it('preserves minimization over route remounts and incoming notifications', async () => {
+    setUiNotificationOverlayViewer('compact-org', 'compact-user');
+    setUiNotificationOverlayExpanded(false);
+    const item = { id: 'compact-one', kind: 'note' as const, title: 'پیام خوانده‌نشده', body: 'متن', createdAt: new Date().toISOString(), onOpen: vi.fn() };
+    setUiNotificationOverlayItems([item]);
+    const tree = (route: string) => <App><MemoryRouter key={route} initialEntries={[route]}><UploadProgressOverlay /></MemoryRouter></App>;
+    const { rerender } = render(tree('/leads'));
+    fireEvent.click(await screen.findByRole('button', { name: 'نمایش اعلان‌ها و آپلودها' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'کوچک کردن پنجره' }));
+    rerender(tree('/customers'));
+    act(() => setUiNotificationOverlayItems([item, { ...item, id: 'compact-two' }]));
+    expect(screen.getByRole('button', { name: 'نمایش اعلان‌ها و آپلودها' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: 'کوچک کردن پنجره' })).not.toBeInTheDocument();
   });
 });

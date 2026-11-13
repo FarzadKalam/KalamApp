@@ -17,6 +17,8 @@ import faIR from "antd/locale/fa_IR";
 import { JalaliLocaleListener } from "antd-jalali";
 import { supabase } from "./supabaseClient";
 import { MODULES } from "./moduleRegistry";
+import AppFeedbackHost from "./components/feedback/AppFeedbackHost";
+import RecordFeedbackActionHost from "./components/feedback/RecordFeedbackActionHost";
 import UploadProgressOverlay from "./components/UploadProgressOverlay";
 import { NotificationRuntimeProvider } from "./components/notifications/NotificationRuntimeProvider";
 import OrganizationAvatarPreloader from "./components/common/OrganizationAvatarPreloader";
@@ -987,6 +989,8 @@ function App() {
           message={{ top: 72, duration: 3.5, maxCount: 4 }}
           notification={{ placement: "topLeft", duration: 4.5, maxCount: 4 }}
         >
+          <AppFeedbackHost />
+          <RecordFeedbackActionHost />
           <PwaInstallPrompt />
           <OfflineOverlay />
           <RefineAppContent />

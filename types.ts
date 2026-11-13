@@ -403,6 +403,11 @@ export interface ModuleRecordAction {
 
 export interface ModuleDefinition {
   id: string;
+  /** اقدام‌های اختیاری پیام ثبت موفق؛ مسیرها و دسترسی‌ها در سرویس مرکزی بررسی می‌شوند. */
+  createdFeedback?: {
+    primary?: 'create_activity' | 'create_invoice';
+    communications?: boolean;
+  };
   /** کلید آیکون یکپارچهٔ ماژول؛ برای منو، عنوان‌ها و سایر سطوح UI استفاده می‌شود. */
   iconKey?: string;
   titles: { fa: string; en?: string; faSingular?: string };

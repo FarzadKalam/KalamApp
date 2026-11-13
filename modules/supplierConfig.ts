@@ -10,6 +10,7 @@ import {
 } from '../types';
 
 export const supplierModule: ModuleDefinition = {
+  createdFeedback: { primary: 'create_activity', communications: true },
   id: 'suppliers',
   titles: { fa: 'مدیریت تامین‌کنندگان', en: 'Suppliers' },
   nature: ModuleNature.STANDARD,

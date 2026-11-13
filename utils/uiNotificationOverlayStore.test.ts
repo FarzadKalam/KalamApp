@@ -11,6 +11,9 @@ import {
   closeUiNotificationOverlay,
   setUiNotificationOverlayPagination,
   useUiNotificationOverlayPagination,
+  useUiNotificationOverlayExpanded,
+  setUiNotificationOverlayExpanded,
+  claimFreshOverlayAnnouncements,
 } from './uiNotificationOverlayStore';
 
 const buildItem = (id: string, callbacks: { dismiss?: () => void; snooze?: (until: string) => void } = {}) => ({
@@ -25,6 +28,27 @@ const buildItem = (id: string, callbacks: { dismiss?: () => void; snooze?: (unti
 });
 
 describe('ui notification overlay store', () => {
+  it('isolates panel expansion by viewer and remembers the user’s compact choice', () => {
+    setUiNotificationOverlayViewer('exp-org', 'exp-user');
+    const { result } = renderHook(useUiNotificationOverlayExpanded);
+    expect(result.current).toBe(false);
+    act(() => setUiNotificationOverlayExpanded(true));
+    act(() => setUiNotificationOverlayViewer('exp-org', 'another-user'));
+    expect(result.current).toBe(false);
+    act(() => setUiNotificationOverlayViewer('exp-org', 'exp-user'));
+    expect(result.current).toBe(true);
+    act(() => setUiNotificationOverlayExpanded(false));
+    act(() => setUiNotificationOverlayViewer('other-org', 'exp-user'));
+    act(() => setUiNotificationOverlayViewer('exp-org', 'exp-user'));
+    expect(result.current).toBe(false);
+  });
+  it('announces genuine new events once and never announces historical pagination', () => {
+    setUiNotificationOverlayViewer('announce-org', 'announce-user');
+    expect(claimFreshOverlayAnnouncements([buildItem('history')])).toEqual([]);
+    const fresh = { ...buildItem('fresh'), createdAt: new Date(Date.now() + 1).toISOString() };
+    expect(claimFreshOverlayAnnouncements([fresh])).toHaveLength(1);
+    expect(claimFreshOverlayAnnouncements([fresh])).toEqual([]);
+  });
   it('does not rerender pagination for unchanged polling results but uses the newest cursor callback', () => {
     setUiNotificationOverlayViewer('pagination-org', 'pagination-user');
     const previous = vi.fn(); const latest = vi.fn();

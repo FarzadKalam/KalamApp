@@ -1,3 +1,4 @@
+import { showRecordCreatedFeedback } from '../utils/recordFeedback';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Form, Button, Spin, Divider, Modal, Checkbox, App, Switch } from 'antd';
 import { SaveOutlined, CloseOutlined } from '@ant-design/icons';
@@ -1896,6 +1897,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
         clearSmartFormDraft(draftKey);
         formDirtyRef.current = false;
       } else {
+        let feedbackCreatedRecord: Record<string, any> | null = null;
         let customerClubCreditResolution: number | null | undefined;
         const personModuleMap = {
           customers: { entityType: 'customer', table: 'customers', links: ['linked_supplier_id', 'linked_employee_id'] },
@@ -2462,10 +2464,12 @@ const SmartForm: React.FC<SmartFormProps> = ({
               console.warn('Changelog insert failed:', err);
             }
           }
+          feedbackCreatedRecord = inserted?.id ? { ...values, ...inserted } : null;
           onPersisted?.({ id: inserted?.id ?? null, values });
         }
 
-        messageApi.success('ثبت شد');
+        if (feedbackCreatedRecord) showRecordCreatedFeedback(module, feedbackCreatedRecord);
+        else messageApi.success('تغییرات ذخیره شد');
         confirmedInvoicePaymentAllocationRef.current = null;
         clearSmartFormDraft(draftKey);
         formDirtyRef.current = false;

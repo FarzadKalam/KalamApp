@@ -54,6 +54,7 @@ try {
   await page.waitForFunction(() => document.fonts.status === 'loaded');
   assert.equal(await page.locator('.ecosystem-orb').count(), 28);
   assert.ok(!scripts.some(file => /^\/assets\/App-.*\.js$/.test(file)), 'The marketing host must not request the tenant App entry');
+  assert.ok(!scripts.some(file => /FeedbackViewport-|NotificationOverlayPanel-/.test(file)), 'Idle public pages must not download feedback animations or the tenant inbox');
   assert.deepEqual(errors, [], 'Public entry loads without browser errors');
   await page.screenshot({ path: `${output}/startup-ready-desktop.png` });
   await page.setViewportSize({ width: 390, height: 844 });
