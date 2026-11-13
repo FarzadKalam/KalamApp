@@ -1,8 +1,9 @@
 import React, { useId, useRef, useState } from 'react';
 import { PauseOutlined, PlayCircleOutlined } from '@ant-design/icons';
-import { useInView, useReducedMotion } from 'framer-motion';
+import { useInView } from 'framer-motion';
 import { ECOSYSTEM_STATUS_LABELS, PUBLIC_ECOSYSTEM_GROUPS, type EcosystemItem } from '../../../shared/publicEcosystem.mjs';
 import { TAZE_SYSTEM_BRAND_ASSETS } from '../../../utils/tazeSystemBrandAssets';
+import usePrefersReducedMotion from '../../../hooks/usePrefersReducedMotion';
 import { renderIcon } from '../iconMap';
 import { SectionHeading, SectionShell } from '../primitives';
 import './ecosystemOrbit.css';
@@ -22,7 +23,7 @@ const EcosystemOrbitSection: React.FC<{ props: OrbitProps }> = ({ props }) => {
   const sectionId = useId();
   const canvas = useRef<HTMLDivElement>(null);
   const inView = useInView(canvas, { amount: 0.15 });
-  const reducedMotion = useReducedMotion();
+  const reducedMotion = usePrefersReducedMotion();
   const [paused, setPaused] = useState(false);
   const [groupId, setGroupId] = useState('communications');
   const [selected, setSelected] = useState<EcosystemItem | null>(null);
