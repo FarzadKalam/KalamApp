@@ -36,6 +36,11 @@ try {
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'No horizontal overflow');
   };
   await assertDashboard();
+  assert.ok(await panel.locator('.ant-menu-item-selected a').evaluate(el => {
+    const range = document.createRange(); range.selectNodeContents(el);
+    const text = range.getBoundingClientRect(), row = el.closest('.ant-menu-item').getBoundingClientRect();
+    return text.width > 0 && text.top >= row.top && text.bottom <= row.bottom;
+  }), 'Record link text is visible inside its menu row beside the icon');
   const expandedWidth = (await body.boundingBox()).width;
   await page.getByRole('button', { name: 'عملیات صفحه', exact: true }).click();
   assert.equal(await panel.count(), 1, 'Dashboard operations do not collapse or shift the menu');
