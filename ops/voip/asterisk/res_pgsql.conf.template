@@ -1,0 +1,7 @@
+[general]
+dbhost = ${ASTERISK_PGSQL_HOST}
+dbport = ${ASTERISK_PGSQL_PORT}
+dbname = ${ASTERISK_PGSQL_DB}
+dbuser = ${ASTERISK_PGSQL_USER}
+dbpass = ${ASTERISK_PGSQL_PASSWORD}
+requirements = warn

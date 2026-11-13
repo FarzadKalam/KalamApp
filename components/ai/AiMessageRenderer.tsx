@@ -23,6 +23,7 @@ type Block =
   | { type: 'ul'; items: string[] }
   | { type: 'ol'; items: string[] }
   | { type: 'code'; text: string; language?: string }
+  | { type: 'table'; headers: string[]; rows: string[][] }
   | { type: 'hr' };
 
 const URL_RE = /https?:\/\/[^\s<>()]+/gi;
@@ -94,6 +95,7 @@ const parseBlocks = (text: string): Block[] => {
   let listType: 'ul' | 'ol' | null = null;
   let listItems: string[] = [];
   let quote: string[] = [];
+  let tableLines: string[] = [];
   let codeLines: string[] | null = null;
   let codeLanguage = '';
 
@@ -110,6 +112,26 @@ const parseBlocks = (text: string): Block[] => {
     listType = null;
     listItems = [];
   };
+  const flushTable = () => {
+    if (tableLines.length >= 2) {
+      const parseRow = (rowStr: string) =>
+        rowStr.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+      const headerLine = tableLines[0];
+      const separatorLine = tableLines[1];
+      const isSeparator = /^[\s|:-]+$/.test(separatorLine) && separatorLine.includes('-');
+      if (isSeparator) {
+        const headers = parseRow(headerLine);
+        const rows = tableLines.slice(2).map(parseRow).filter((r) => r.some(Boolean));
+        blocks.push({ type: 'table', headers, rows });
+        tableLines = [];
+        return;
+      }
+    }
+    if (tableLines.length) {
+      paragraph.push(...tableLines);
+      tableLines = [];
+    }
+  };
 
   lines.forEach((line) => {
     const fence = line.match(/^```(\S*)\s*$/);
@@ -122,6 +144,7 @@ const parseBlocks = (text: string): Block[] => {
         flushParagraph();
         flushQuote();
         flushList();
+        flushTable();
         codeLines = [];
         codeLanguage = fence[1] || '';
       }
@@ -135,14 +158,28 @@ const parseBlocks = (text: string): Block[] => {
       flushParagraph();
       flushQuote();
       flushList();
+      flushTable();
       return;
     }
     if (/^\s*---+\s*$/.test(line)) {
       flushParagraph();
       flushQuote();
       flushList();
+      flushTable();
       blocks.push({ type: 'hr' });
       return;
+    }
+    // Markdown table row detection
+    const isPipeRow = /^\s*\|(.+)\|\s*$/.test(line) || (line.includes('|') && /^[\s|:-]+$/.test(line));
+    if (isPipeRow) {
+      flushParagraph();
+      flushQuote();
+      flushList();
+      tableLines.push(line);
+      return;
+    }
+    if (tableLines.length > 0) {
+      flushTable();
     }
     const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*$/);
     if (heading) {
@@ -191,6 +228,7 @@ const parseBlocks = (text: string): Block[] => {
   flushParagraph();
   flushQuote();
   flushList();
+  flushTable();
   return blocks.length ? blocks : [{ type: 'paragraph', text: String(text || '').trim() }];
 };
 
@@ -245,6 +283,34 @@ const AiMessageRenderer: React.FC<AiMessageRendererProps> = ({
                     <CopyButton text={block.text} title="کپی کد" label="کد" onCopy={onCopyText} />
                   </div>
                   <pre className="m-0 overflow-x-auto p-2 text-left text-[11px] leading-5" dir="ltr"><code>{block.text}</code></pre>
+                </div>
+              );
+            }
+            if (block.type === 'table') {
+              return (
+                <div key={`tbl-${index}`} className="my-2.5 max-w-full overflow-x-auto rounded-xl border border-slate-200/90 bg-white/95 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
+                  <table className="w-full min-w-full border-collapse text-right text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200/90 bg-slate-100/80 text-slate-900 dark:border-white/10 dark:bg-white/[0.08] dark:text-slate-100 font-bold">
+                        {block.headers.map((h, hIdx) => (
+                          <th key={hIdx} className="px-3 py-2 whitespace-nowrap">
+                            {renderInline(h)}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-white/[0.04]">
+                      {block.rows.map((row, rIdx) => (
+                        <tr key={rIdx} className="transition-colors hover:bg-slate-50/70 dark:hover:bg-white/[0.02]">
+                          {row.map((cell, cIdx) => (
+                            <td key={cIdx} className="px-3 py-2 text-slate-700 dark:text-slate-200">
+                              {renderInline(cell)}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               );
             }

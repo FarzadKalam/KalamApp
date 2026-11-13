@@ -1,0 +1,27 @@
+[general]
+static=yes
+writeprotect=yes
+clearglobalvars=no
+
+; Tenant-isolated internal & outbound call router.
+; Endpoint IDs are strictly namespaced in Supabase as k_<12hex>_<ext>.
+[kalam-org-router]
+exten => _X.,1,NoOp(KalamApp tenant call from ${CALLERID(all)} to ${EXTEN} via ${CHANNEL(pjsip,endpoint)})
+ same => n,Set(KALAM_NS=${CUT(CHANNEL(pjsip,endpoint),_,1-2)})
+ same => n,GotoIf($["${KALAM_NS}" = ""]?reject)
+ same => n,Set(TARGET_EP=${KALAM_NS}_${EXTEN})
+ same => n,GotoIf($["${PJSIP_ENDPOINT(${TARGET_EP},aors)}" != ""]?internal:outbound)
+ same => n(internal),Dial(PJSIP/${TARGET_EP},45,TtKk)
+ same => n,Hangup()
+ same => n(outbound),Set(ORG_TRUNK=${SHELL(curl -s --max-time 2 -H "x-kalam-voip-secret: ${KALAMAPP_VOIP_INTERNAL_SECRET}" "${KALAMAPP_WEBHOOK_URL}?action=resolve_trunk&ns=${KALAM_NS}&ext=${EXTEN}" | tr -d '\r\n')})
+ same => n,GotoIf($["${ORG_TRUNK}" != ""]?dialtrunk:notrunk)
+ same => n(dialtrunk),Dial(PJSIP/${EXTEN}@${ORG_TRUNK},60,Tt)
+ same => n,Hangup()
+ same => n(notrunk),Playback(ss-noservice)
+ same => n,Hangup()
+ same => n(reject),Hangup()
+
+; Inbound calls from tenant trunk contexts
+[from-trunk]
+exten => _.,1,NoOp(Inbound call on trunk ${CHANNEL(pjsip,endpoint)} DID ${EXTEN})
+ same => n,Hangup()

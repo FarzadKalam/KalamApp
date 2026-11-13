@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, App, Form, Input, Modal, Select, Spin, Tag, Typography } from 'antd';
-import { RobotOutlined } from '@ant-design/icons';
+import { Alert, App, Button, Form, Input, Modal, Select, Spin, Tag, Typography } from 'antd';
+import { MessageOutlined, RobotOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import {
   AGENT_TONE_STYLES,
@@ -63,6 +63,7 @@ const AiAgentOnboardingWizard: React.FC<AiAgentOnboardingWizardProps> = ({
       form.setFieldsValue({
         toneStyle: data.toneStyle || agentDef?.defaultToneStyle || 'friendly_warm',
         customToneNotes: String(existingPolicy.custom_tone_notes || ''),
+        customInstructions: String(existingPolicy.custom_instructions || existingPolicy.org_custom_notes || ''),
         extraInstructions: String(existingPolicy.org_custom_notes || ''),
         answers: initialAnswers,
       });
@@ -88,6 +89,9 @@ const AiAgentOnboardingWizard: React.FC<AiAgentOnboardingWizardProps> = ({
       const answersPayload: Record<string, any> = {
         ...(values.answers || {}),
       };
+      if (String(values.customInstructions || '').trim()) {
+        answersPayload.custom_instructions = String(values.customInstructions).trim();
+      }
       if (String(values.customToneNotes || '').trim()) {
         answersPayload.custom_tone_notes = String(values.customToneNotes).trim();
       }
@@ -180,6 +184,39 @@ const AiAgentOnboardingWizard: React.FC<AiAgentOnboardingWizardProps> = ({
                 <Input.TextArea rows={2} placeholder="ویژگی‌های لحن دلخواه این ایجنت را بنویسید..." />
               </Form.Item>
             ) : null}
+
+            <div className="mb-4 rounded-xl border border-indigo-200/80 bg-indigo-50/25 p-3.5 dark:border-indigo-500/20 dark:bg-indigo-950/20">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <span className="font-bold text-slate-800 dark:text-slate-100 text-xs">
+                  دستورات و خط‌مشی اختصاصی مدیر به ایجنت (Custom Instructions)
+                </span>
+                <Button
+                  size="small"
+                  type="dashed"
+                  icon={<MessageOutlined />}
+                  onClick={() => {
+                    const msg = encodeURIComponent(
+                      `سلام ${agentDef?.titleFa || 'ایجنت'}! من مدیر سازمان هستم و می‌خواهم خط‌مشی‌ها، اهداف و قوانین اختصاصی سازمان را با تو مرور و تنظیم کنم تا طبق استانداردهای ما عمل کنی.`
+                    );
+                    window.location.href = `/ai?agent=${agentKey}&q=${msg}`;
+                  }}
+                >
+                  گفتگوی مستقیم همسوسازی با مدل
+                </Button>
+              </div>
+              <Form.Item
+                name="customInstructions"
+                noStyle
+              >
+                <Input.TextArea
+                  rows={3}
+                  placeholder="دستورات کلیدی، اولویت‌ها، قواعد رفتاری یا استثناهایی که این ایجنت باید همیشه رعایت کند..."
+                />
+              </Form.Item>
+              <div className="mt-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+                این دستورات مستقیماً در مغز و پرامپت سامانه قرار گرفته و بر پاسخ‌های این ایجنت در سراسر سیستم اولویت دارد.
+              </div>
+            </div>
 
             {questions.map((question, index) => (
               <Form.Item

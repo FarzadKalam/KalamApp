@@ -190,7 +190,7 @@ export const StoryRing: React.FC<StoryRingProps> = ({ story, size = 60, onClick 
                     const target = e.currentTarget;
                     if (!target.dataset.fallbackApplied) {
                       target.dataset.fallbackApplied = '1';
-                      target.src = '/tazesystem_logo.png';
+                      target.src = '/logo.png';
                     }
                   }}
                 />

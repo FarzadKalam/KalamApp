@@ -1,4 +1,4 @@
-import { PUBLIC_SITE_NAME, PUBLIC_SITE_URL, publicOrganizationSchema, publicWebsiteSchema } from '../shared/publicBrandSeo.mjs';
+import { PUBLIC_SITE_NAME, PUBLIC_SITE_URL, publicOrganizationSchema, publicWebsiteSchema, publicWebApplicationSchema } from '../shared/publicBrandSeo.mjs';
 
 const SITE_NAME = PUBLIC_SITE_NAME;
 const SITE_URL = PUBLIC_SITE_URL;
@@ -62,6 +62,10 @@ export function generateOrganizationJsonLd(): JsonLdObject {
 
 export function generateWebSiteJsonLd(): JsonLdObject {
   return publicWebsiteSchema();
+}
+
+export function generateWebApplicationJsonLd(): JsonLdObject {
+  return publicWebApplicationSchema();
 }
 
 export function generateBreadcrumbJsonLd(
@@ -244,12 +248,12 @@ export function buildTutorialPostSeo(tutorial: {
 
 export function buildHomeSeo(): SeoProps {
   return {
-    title: `${SITE_NAME} | CRM ایرانی هوشمند و نرم‌افزار یکپارچه کسب‌وکار`,
+    title: `${SITE_NAME} | CRM و ERP ایرانی یکپارچه با هوش مصنوعی و شبکه‌های اجتماعی`,
     description: SITE_DESCRIPTION,
     canonical: SITE_URL,
     ogImage: DEFAULT_OG_IMAGE,
     ogType: 'website',
-    jsonLd: [generateOrganizationJsonLd(), generateWebSiteJsonLd()],
+    jsonLd: [generateOrganizationJsonLd(), generateWebSiteJsonLd(), generateWebApplicationJsonLd()],
   };
 }
 

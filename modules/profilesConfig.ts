@@ -149,6 +149,7 @@ export const profilesModule: ModuleDefinition = {
       location: FieldLocation.BLOCK,
       blockId: 'voip_info',
       options: [
+        { label: 'تلفن زنده داخل اپ (WebRTC)', value: 'webphone_webrtc' },
         { label: 'Smart Call تلفنچی', value: 'telefonchy_smartcall' },
         { label: 'لینک SIP', value: 'sip_link' },
         { label: 'لینک تلفن', value: 'tel_link' },

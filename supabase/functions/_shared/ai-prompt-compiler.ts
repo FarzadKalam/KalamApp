@@ -59,14 +59,16 @@ export const buildMultiAgentPromptSection = (params: {
       ? state.config.policy_json
       : {};
     const customNotes = String(policy?.custom_tone_notes || policy?.notes || '').trim();
+    const customInstr = String(policy?.custom_instructions || policy?.org_custom_notes || '').trim();
     const compactPolicy = Object.keys(policy).length > 0 ? JSON.stringify(policy) : 'تنظیم اختصاصی اضافه ثبت نشده';
     return [
       `### ${def?.titleFa || agentKey} (${agentKey})`,
       `- مأموریت: ${def?.roleFocusFa || ''}`,
       `- وضعیت دسترسی کاربر: ${state?.canUse ? 'مجاز و فعال' : 'محدودشده بر اساس دسترسی یا پلن'}`,
+      customInstr ? `- دستورات و خط‌مشی اختصاصی مدیر سازمان: ${customInstr}` : '',
       `- سیاست سازمانی ثبت‌شده: ${compactPolicy}`,
       `- راهنمای لحن: ${getAgentToneGuidanceFa(state?.toneStyle, customNotes)}`,
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   });
 
   const orchestrationNote = sortedAgents.length > 1

@@ -29,6 +29,7 @@ import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import ApiIntegrationSection from '../../components/ApiIntegrationSection';
 import WooCommerceConnectionsSection from '../../components/settings/WooCommerceConnectionsSection';
 import InstagramProviderConnectionsSection from '../../components/settings/InstagramProviderConnectionsSection';
+import VoipConnectionsSection from '../../components/settings/VoipConnectionsSection';
 import { SAAS_ADMIN_PERMISSION_KEY } from '../../utils/permissions';
 import { loadScopedCompanySettings } from '../../utils/companySettings';
 import { normalizeCurrencyConfig } from '../../utils/currency';
@@ -120,7 +121,10 @@ type FormValues = {
     default_extension?: string;
     webhook_secret?: string;
     smartcall_enabled?: boolean;
-    default_dial_mode?: 'telefonchy_smartcall' | 'sip_link' | 'tel_link';
+    default_dial_mode?: 'webphone_webrtc' | 'telefonchy_smartcall' | 'sip_link' | 'tel_link';
+    wss_url?: string;
+    sip_domain?: string;
+    turn_host?: string;
     is_active?: boolean;
   };
   telegram_bot: {
@@ -524,19 +528,7 @@ const ConnectionsTab: React.FC = () => {
     []
   );
 
-  const voipProviderOptions = useMemo(
-    () => [{ label: 'تلفنچی', value: 'telefonchy' }],
-    []
-  );
 
-  const voipDialModeOptions = useMemo(
-    () => [
-      { label: 'Smart Call تلفنچی', value: 'telefonchy_smartcall' },
-      { label: 'لینک SIP', value: 'sip_link' },
-      { label: 'لینک تلفن', value: 'tel_link' },
-    ],
-    []
-  );
 
   const telegramProviderOptions = useMemo(
     () => [{ label: 'Telegram Bot API', value: 'telegram_bot_api' }],
@@ -633,6 +625,9 @@ const ConnectionsTab: React.FC = () => {
     webhook_secret: String(voipValues?.webhook_secret || '').trim(),
     smartcall_enabled: voipValues?.smartcall_enabled === true,
     default_dial_mode: voipValues?.default_dial_mode || 'telefonchy_smartcall',
+    wss_url: String(voipValues?.wss_url || '').trim(),
+    sip_domain: String(voipValues?.sip_domain || '').trim(),
+    turn_host: String(voipValues?.turn_host || '').trim(),
     is_active: voipValues?.is_active === true,
   });
 
@@ -966,6 +961,9 @@ const ConnectionsTab: React.FC = () => {
             webhook_secret: currentVoipValues.webhook_secret || '',
             smartcall_enabled: currentVoipValues.smartcall_enabled === true,
             default_dial_mode: currentVoipValues.default_dial_mode || 'telefonchy_smartcall',
+            wss_url: currentVoipValues.wss_url || '',
+            sip_domain: currentVoipValues.sip_domain || '',
+            turn_host: currentVoipValues.turn_host || '',
           },
           is_active: currentVoipValues.is_active === true,
         },
@@ -1261,26 +1259,10 @@ const ConnectionsTab: React.FC = () => {
   const handleTestVoipConnection = async () => {
     const voipValues = form.getFieldValue('voip') || {};
     const settings = buildVoipRequestSettings(voipValues);
-    if (settings.provider !== 'telefonchy') {
-      message.error('در حال حاضر فقط تست اتصال تلفنچی پشتیبانی می‌شود.');
-      return;
-    }
-    if (!settings.base_url) {
-      message.error('Base URL تلفنچی را وارد کنید.');
-      return;
-    }
-    if (!settings.webservice_token) {
-      message.error('Webservice Token تلفنچی را وارد کنید.');
-      return;
-    }
-    if (!settings.service_id) {
-      message.error('Service ID تلفنچی را وارد کنید.');
-      return;
-    }
-
     setVoipTesting(true);
     try {
-      const { data, error } = await supabase.functions.invoke('telefonchy_smartcall', {
+      const functionName = settings.provider === 'telefonchy' ? 'telefonchy_smartcall' : 'voip-dial';
+      const { data, error } = await supabase.functions.invoke(functionName, {
         body: {
           action: 'test_connection',
           overrideSettings: settings,
@@ -1290,8 +1272,8 @@ const ConnectionsTab: React.FC = () => {
       if (!data?.success) {
         throw new Error(String(data?.message || 'تست اتصال VoIP ناموفق بود.'));
       }
-      message.success(String(data?.message || 'اتصال تلفنچی برقرار است.'));
-      if (Number(data?.sample_count || 0) === 0) {
+      message.success(String(data?.message || 'اتصال VoIP برقرار است.'));
+      if (Number(data?.sample_count || 0) === 0 && settings.provider === 'telefonchy') {
         message.info('اتصال برقرار است، اما در بازه تست نمونه تماسی از API برنگشت.');
       }
     } catch (err: any) {
@@ -1913,101 +1895,17 @@ const ConnectionsTab: React.FC = () => {
               key: 'voip',
               label: 'اتصال تلفن VoIP',
               children: (
-                <>
-                  <Alert
-                    type="info"
-                    showIcon
-                    className="mb-3"
-                    message="اتصال فعلی برای کنترل و ثبت تماس است."
-                    description="در این فاز مکالمه داخل مرورگر پیاده‌سازی نشده و تماس از طریق تلفنچی و کلاینت‌های SIP مثل PortSIP انجام می‌شود. KalamApp گزارش، ارتباط با رکوردها، اعلان و Smart Call را مدیریت می‌کند."
-                  />
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <Form.Item label="ارائه‌دهنده VoIP" name={['voip', 'provider']}>
-                      <Select options={voipProviderOptions} />
-                    </Form.Item>
-                    <Form.Item label="فعال" name={['voip', 'is_active']} valuePropName="checked">
-                      <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
-                    </Form.Item>
-                    <Form.Item label="Smart Call" name={['voip', 'smartcall_enabled']} valuePropName="checked">
-                      <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
-                    </Form.Item>
-
-                    <Form.Item label="Base URL" name={['voip', 'base_url']} className="md:col-span-2">
-                      <Input placeholder="https://panel.telefonchy.com" />
-                    </Form.Item>
-                    <Form.Item label="حالت پیش‌فرض شماره‌گیری" name={['voip', 'default_dial_mode']}>
-                      <Select options={voipDialModeOptions} />
-                    </Form.Item>
-
-                    <Form.Item label="Webservice Token" name={['voip', 'webservice_token']} className="md:col-span-2">
-                      <Input.Password placeholder="توکن وب‌سرویس تلفنچی" autoComplete="new-password" />
-                    </Form.Item>
-                    <Form.Item label="Service ID" name={['voip', 'service_id']}>
-                      <Input placeholder="شناسه سرویس تلفنچی" />
-                    </Form.Item>
-                    <Form.Item label="داخلی پیش‌فرض" name={['voip', 'default_extension']}>
-                      <Input placeholder="مثال: 101" />
-                    </Form.Item>
-                    <Form.Item label="Webhook Secret" name={['voip', 'webhook_secret']} className="md:col-span-2">
-                      <Input.Password placeholder="برای اعتبارسنجی webhook داخلی" autoComplete="new-password" />
-                    </Form.Item>
-                    <div className="md:col-span-3">
-                      <Space wrap>
-                        <Button
-                          icon={<SafetyCertificateOutlined />}
-                          loading={voipTesting}
-                          onClick={handleTestVoipConnection}
-                        >
-                          تست اتصال VoIP
-                        </Button>
-                        <Button
-                          icon={<ReloadOutlined />}
-                          loading={voipSyncing}
-                          onClick={handleSyncRecentVoipCalls}
-                        >
-                          همگام‌سازی تماس‌های اخیر
-                        </Button>
-                        <Button
-                          icon={<CopyOutlined />}
-                          disabled={!voipWebhookUrl}
-                          onClick={() => copyBotValue(voipWebhookUrl, 'آدرس Webhook تماس')}
-                        >
-                          کپی آدرس Webhook
-                        </Button>
-                      </Space>
-                      {voipWebhookUrl ? (
-                        <Alert
-                          type="info"
-                          showIcon
-                          className="mt-3"
-                          message="آدرس Webhook تماس‌های تلفنچی"
-                          description={
-                            <span dir="ltr" className="block break-all text-left">
-                              {voipWebhookUrl}
-                            </span>
-                          }
-                        />
-                      ) : (
-                        <Alert
-                          type="warning"
-                          showIcon
-                          className="mt-3"
-                          message="برای دریافت خودکار تماس‌ها، Webhook Secret و سازمان کاربر باید مشخص باشد."
-                          description="اگر فقط با تلفن VoIP تماس بگیرید و Webhook تلفنچی روی این آدرس تنظیم نشده باشد، تماس به‌صورت خودکار وارد پروژه نمی‌شود. تا زمان تنظیم webhook از دکمه همگام‌سازی تماس‌ها استفاده کنید."
-                        />
-                      )}
-                      {voipSyncInfo ? (
-                        <Alert
-                          type="success"
-                          showIcon
-                          className="mt-3"
-                          message="نتیجه همگام‌سازی"
-                          description={`دریافت‌شده از تلفنچی: ${Number(voipSyncInfo.fetched || 0).toLocaleString('fa-IR')}، ذخیره/بروزرسانی‌شده: ${Number(voipSyncInfo.saved || 0).toLocaleString('fa-IR')}`}
-                        />
-                      ) : null}
-                    </div>
-                  </div>
-                </>
+                <VoipConnectionsSection
+                  form={form}
+                  currentOrgId={currentOrgId}
+                  voipWebhookUrl={voipWebhookUrl}
+                  copyValue={copyBotValue}
+                  testing={voipTesting}
+                  syncing={voipSyncing}
+                  syncInfo={voipSyncInfo}
+                  onTest={handleTestVoipConnection}
+                  onSync={handleSyncRecentVoipCalls}
+                />
               ),
             },
             {

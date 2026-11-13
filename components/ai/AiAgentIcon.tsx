@@ -270,6 +270,365 @@ export const AiAgentAvatar: React.FC<AiAgentAvatarProps> = ({
   );
 };
 
+export type CameoProfile = {
+  headType: 'squircle' | 'circle' | 'oval' | 'rounded-square' | 'faceted-squircle';
+  hairType:
+    | 'side-part-commander'
+    | 'curls-forward'
+    | 'clean-crop'
+    | 'soft-bob'
+    | 'top-knot'
+    | 'slick-back'
+    | 'architect-part'
+    | 'stylish-waves'
+    | 'neat-crop';
+  mouthType: 'calm-beam' | 'warm-smile' | 'firm-line' | 'precise-line' | 'open-beam';
+  accessory: 'none' | 'glasses' | 'earpiece' | 'commander-star';
+};
+
+export const CAMEO_AGENT_PROFILES: Record<string, CameoProfile> = {
+  lead_orchestrator: {
+    headType: 'squircle',
+    hairType: 'side-part-commander',
+    mouthType: 'calm-beam',
+    accessory: 'commander-star',
+  },
+  sales_leads: {
+    headType: 'oval',
+    hairType: 'curls-forward',
+    mouthType: 'warm-smile',
+    accessory: 'none',
+  },
+  purchase_supply: {
+    headType: 'rounded-square',
+    hairType: 'clean-crop',
+    mouthType: 'firm-line',
+    accessory: 'glasses',
+  },
+  customer_response: {
+    headType: 'circle',
+    hairType: 'soft-bob',
+    mouthType: 'warm-smile',
+    accessory: 'earpiece',
+  },
+  hr_manager: {
+    headType: 'oval',
+    hairType: 'top-knot',
+    mouthType: 'warm-smile',
+    accessory: 'none',
+  },
+  reservation: {
+    headType: 'squircle',
+    hairType: 'slick-back',
+    mouthType: 'precise-line',
+    accessory: 'none',
+  },
+  project_process: {
+    headType: 'faceted-squircle',
+    hairType: 'architect-part',
+    mouthType: 'calm-beam',
+    accessory: 'none',
+  },
+  instagrammer: {
+    headType: 'circle',
+    hairType: 'stylish-waves',
+    mouthType: 'open-beam',
+    accessory: 'none',
+  },
+  system_guide: {
+    headType: 'squircle',
+    hairType: 'neat-crop',
+    mouthType: 'warm-smile',
+    accessory: 'glasses',
+  },
+};
+
+export const getCameoProfile = (agentKey?: string | null): CameoProfile => {
+  const key = String(agentKey || '').trim().toLowerCase();
+  return (
+    CAMEO_AGENT_PROFILES[key] || {
+      headType: 'squircle',
+      hairType: 'clean-crop',
+      mouthType: 'calm-beam',
+      accessory: 'none',
+    }
+  );
+};
+
+export type AiAgentCameoFigureProps = {
+  agentKey?: AgentKey | string | null;
+  color?: string | null;
+  size?: number;
+  activeVisual?: boolean;
+  isWorking?: boolean;
+  className?: string;
+};
+
+/**
+ * Authentic DiceBear Cameo Avatar Vector Representation for KalamApp AI Agents.
+ */
+export const AiAgentCameoFigure: React.FC<AiAgentCameoFigureProps> = ({
+  agentKey,
+  color,
+  size = 56,
+  activeVisual = true,
+  isWorking = false,
+  className = '',
+}) => {
+  const rawUid = useId().replace(/:/g, '');
+  const def = getAgentDefinition(agentKey);
+  const profile = getCameoProfile(agentKey);
+  const accent = activeVisual ? (color || def?.badgeColor || '#6366f1') : '#94a3b8';
+  const overlayColor = '#ffffff';
+  const overlayOpacity = '0.45';
+
+  let headPath = '';
+  if (profile.headType === 'squircle') {
+    headPath = 'M18 40 q0-24 24-24 h16 q24 0 24 24 v18 q0 24-24 24 H42 q-24 0-24-24 Z';
+  } else if (profile.headType === 'circle') {
+    headPath = 'M50 16 A34 34 0 1 1 49.9 16 Z';
+  } else if (profile.headType === 'oval') {
+    headPath = 'M50 14 A30 36 0 1 1 49.9 14 Z';
+  } else if (profile.headType === 'rounded-square') {
+    headPath = 'M22 20 h56 a12 12 0 0 1 12 12 v40 a12 12 0 0 1 -12 12 h-56 a12 12 0 0 1 -12 -12 v-40 a12 12 0 0 1 12 -12 Z';
+  } else {
+    headPath = 'M20 40 q0-23 23-23 h14 q23 0 23 23 v16 q0 23-23 23 H43 q-23 0-23-23 Z';
+  }
+
+  let hairMarkup = null;
+  if (profile.hairType === 'side-part-commander') {
+    hairMarkup = (
+      <path
+        d="M10 10 h80 v32 c-8 -6 -24 -6 -40 2 c-14 7 -26 6 -40 0 Z"
+        fill={overlayColor}
+        fillOpacity={overlayOpacity}
+      />
+    );
+  } else if (profile.hairType === 'curls-forward') {
+    hairMarkup = (
+      <path
+        d="M10 10 h80 v34 a8 8 0 0 1 -16 0 a8 8 0 0 1 -16 0 a8 8 0 0 1 -16 0 a8 8 0 0 1 -16 0 a8 8 0 0 1 -16 0 Z"
+        fill={overlayColor}
+        fillOpacity={overlayOpacity}
+      />
+    );
+  } else if (profile.hairType === 'clean-crop') {
+    hairMarkup = (
+      <path
+        d="M12 12 h76 v26 c-12 0 -24 -2 -38 4 c-14 6 -26 4 -38 -2 Z"
+        fill={overlayColor}
+        fillOpacity={overlayOpacity}
+      />
+    );
+  } else if (profile.hairType === 'soft-bob') {
+    hairMarkup = (
+      <path
+        d="M12 10 h76 v46 c-6 0 -12 -14 -12 -28 c-16 0 -36 0 -52 14 Z"
+        fill={overlayColor}
+        fillOpacity={overlayOpacity}
+      />
+    );
+  } else if (profile.hairType === 'top-knot') {
+    hairMarkup = (
+      <g>
+        <circle cx="50" cy="11" r="9" fill={accent} />
+        <circle cx="50" cy="11" r="9" fill={overlayColor} fillOpacity={overlayOpacity} />
+        <path
+          d="M14 14 h72 v30 c-14 -4 -30 -4 -44 2 c-12 5 -20 4 -28 0 Z"
+          fill={overlayColor}
+          fillOpacity={overlayOpacity}
+        />
+      </g>
+    );
+  } else if (profile.hairType === 'slick-back') {
+    hairMarkup = (
+      <path
+        d="M12 10 h76 v24 c-20 -4 -48 -4 -76 6 Z"
+        fill={overlayColor}
+        fillOpacity={overlayOpacity}
+      />
+    );
+  } else if (profile.hairType === 'architect-part') {
+    hairMarkup = (
+      <path
+        d="M10 10 h80 v32 l-36 -12 l-44 14 Z"
+        fill={overlayColor}
+        fillOpacity={overlayOpacity}
+      />
+    );
+  } else if (profile.hairType === 'stylish-waves') {
+    hairMarkup = (
+      <path
+        d="M10 10 h80 v48 c-10 -4 -16 -18 -18 -32 c-14 4 -28 4 -44 -4 Z"
+        fill={overlayColor}
+        fillOpacity={overlayOpacity}
+      />
+    );
+  } else {
+    hairMarkup = (
+      <path
+        d="M12 12 h76 v28 c-14 -2 -28 -2 -42 4 c-14 6 -24 4 -34 -2 Z"
+        fill={overlayColor}
+        fillOpacity={overlayOpacity}
+      />
+    );
+  }
+
+  let mouthMarkup = null;
+  if (profile.mouthType === 'calm-beam') {
+    mouthMarkup = (
+      <path
+        d="M38 66 q12 5 24 0"
+        stroke={overlayColor}
+        strokeOpacity="0.9"
+        strokeWidth="4.5"
+        strokeLinecap="round"
+        fill="none"
+      />
+    );
+  } else if (profile.mouthType === 'warm-smile') {
+    mouthMarkup = (
+      <path
+        d="M37 65 q13 7 26 0"
+        stroke={overlayColor}
+        strokeOpacity="0.95"
+        strokeWidth="4.8"
+        strokeLinecap="round"
+        fill="none"
+      />
+    );
+  } else if (profile.mouthType === 'firm-line') {
+    mouthMarkup = (
+      <line
+        x1="39"
+        y1="66"
+        x2="61"
+        y2="66"
+        stroke={overlayColor}
+        strokeOpacity="0.9"
+        strokeWidth="4.5"
+        strokeLinecap="round"
+      />
+    );
+  } else if (profile.mouthType === 'precise-line') {
+    mouthMarkup = (
+      <line
+        x1="40"
+        y1="67"
+        x2="60"
+        y2="67"
+        stroke={overlayColor}
+        strokeOpacity="0.9"
+        strokeWidth="4.2"
+        strokeLinecap="round"
+      />
+    );
+  } else {
+    mouthMarkup = (
+      <path
+        d="M36 64 q14 8 28 0"
+        stroke={overlayColor}
+        strokeOpacity="0.95"
+        strokeWidth="4.8"
+        strokeLinecap="round"
+        fill="none"
+      />
+    );
+  }
+
+  let accessoryMarkup = null;
+  if (profile.accessory === 'glasses') {
+    accessoryMarkup = (
+      <g>
+        <rect
+          x="25"
+          y="45"
+          width="20"
+          height="13"
+          rx="5"
+          fill="none"
+          stroke={overlayColor}
+          strokeOpacity="0.85"
+          strokeWidth="3.5"
+        />
+        <rect
+          x="55"
+          y="45"
+          width="20"
+          height="13"
+          rx="5"
+          fill="none"
+          stroke={overlayColor}
+          strokeOpacity="0.85"
+          strokeWidth="3.5"
+        />
+        <line
+          x1="45"
+          y1="51"
+          x2="55"
+          y2="51"
+          stroke={overlayColor}
+          strokeOpacity="0.85"
+          strokeWidth="3"
+        />
+      </g>
+    );
+  } else if (profile.accessory === 'earpiece') {
+    accessoryMarkup = (
+      <g>
+        <circle cx="81" cy="53" r="5" fill={overlayColor} fillOpacity="0.9" />
+        <path
+          d="M81 56 q-4 8 -12 11"
+          stroke={overlayColor}
+          strokeOpacity="0.9"
+          strokeWidth="3"
+          strokeLinecap="round"
+          fill="none"
+        />
+      </g>
+    );
+  } else if (profile.accessory === 'commander-star') {
+    accessoryMarkup = (
+      <polygon
+        points="50,22 52.5,27.5 58,28.5 54,32.5 55,38 50,35 45,38 46,32.5 42,28.5 47.5,27.5"
+        fill={overlayColor}
+        fillOpacity={0.92}
+      />
+    );
+  }
+
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 100 100"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={`shrink-0 select-none ${className}`.trim()}
+      aria-hidden="true"
+    >
+      <defs>
+        <clipPath id={`cameo-clip-${rawUid}`}>
+          <path d={headPath} />
+        </clipPath>
+      </defs>
+
+      {/* Head Silhouette in Role Accent Color */}
+      <path d={headPath} fill={accent} />
+
+      {/* Clipped Cameo Features: Hair, Accessory & Mouth */}
+      <g clipPath={`url(#cameo-clip-${rawUid})`}>
+        {hairMarkup}
+        {accessoryMarkup}
+        {mouthMarkup}
+      </g>
+
+      {/* Subtle crisp highlight rim for dark mode elegance */}
+      <path d={headPath} stroke="#ffffff" strokeOpacity="0.2" strokeWidth="1.5" fill="none" />
+    </svg>
+  );
+};
+
 export type AiAgentDeskSeatFigureProps = {
   agentKey: AgentKey;
   color: string;
@@ -281,21 +640,9 @@ export type AiAgentDeskSeatFigureProps = {
   seatIndex?: number;
 };
 
-const SEAT_POSE: Record<AgentKey, { headShiftX: number; leanDeg: number; torsoFillOpacity: number }> = {
-  lead_orchestrator: { headShiftX: 0, leanDeg: 0, torsoFillOpacity: 0.92 },
-  sales_leads: { headShiftX: -0.9, leanDeg: -1.6, torsoFillOpacity: 0.86 },
-  purchase_supply: { headShiftX: 0.8, leanDeg: 1.2, torsoFillOpacity: 0.86 },
-  customer_response: { headShiftX: -0.6, leanDeg: -1.1, torsoFillOpacity: 0.86 },
-  hr_manager: { headShiftX: 0.5, leanDeg: 0.8, torsoFillOpacity: 0.86 },
-  reservation: { headShiftX: -0.5, leanDeg: -0.8, torsoFillOpacity: 0.86 },
-  project_process: { headShiftX: 0.9, leanDeg: 1.5, torsoFillOpacity: 0.86 },
-  instagrammer: { headShiftX: -0.8, leanDeg: -1.4, torsoFillOpacity: 0.86 },
-  system_guide: { headShiftX: 0.6, leanDeg: 1, torsoFillOpacity: 0.86 },
-};
-
 /**
- * Refined Faceless Modern Silhouette seated behind a desk station on the shared studio desk.
- * Lead Orchestrator is rendered noticeably taller & flanked by a commander dual-monitor setup.
+ * Seated Cameo Figure at the Shared Studio Desk.
+ * Replaces the old silhouette with the dignified, official DiceBear Cameo portrait!
  */
 export const AiAgentDeskSeatFigure: React.FC<AiAgentDeskSeatFigureProps> = ({
   agentKey,
@@ -307,324 +654,58 @@ export const AiAgentDeskSeatFigure: React.FC<AiAgentDeskSeatFigureProps> = ({
   hasPending = false,
   seatIndex = 0,
 }) => {
-  const rawUid = useId().replace(/:/g, '');
   const isLead = agentKey === 'lead_orchestrator';
   const activeVisual = canUse && orgEnabled;
   const accent = activeVisual ? color : '#94a3b8';
-  const pose = SEAT_POSE[agentKey] || { headShiftX: 0, leanDeg: 0, torsoFillOpacity: 0.86 };
-  const delayStyle = { animationDelay: `${(seatIndex % 9) * 0.24}s` };
-
-  const renderDomainProp = () => {
-    switch (agentKey) {
-      case 'lead_orchestrator':
-        return (
-          <g>
-            {/* Subtle commander dual-side wing monitors behind main screen */}
-            <rect
-              x="16"
-              y="38.5"
-              width="12"
-              height="14.5"
-              rx="2.4"
-              className="fill-slate-800/90 dark:fill-slate-900"
-              stroke={accent}
-              strokeWidth="1"
-              opacity={activeVisual ? 0.72 : 0.35}
-            />
-            <rect
-              x="64"
-              y="38.5"
-              width="12"
-              height="14.5"
-              rx="2.4"
-              className="fill-slate-800/90 dark:fill-slate-900"
-              stroke={accent}
-              strokeWidth="1"
-              opacity={activeVisual ? 0.72 : 0.35}
-            />
-            {/* Executive commander star crest above silhouette */}
-            <path
-              d="M46 2.8L47.3 5.9L50.4 7.1L47.3 8.3L46 11.4L44.7 8.3L41.6 7.1L44.7 5.9L46 2.8Z"
-              fill={accent}
-              opacity={activeVisual ? 0.96 : 0.45}
-            />
-          </g>
-        );
-
-      case 'sales_leads':
-        return (
-          <g transform="translate(65, 21)" opacity={activeVisual ? 0.92 : 0.45}>
-            <rect x="0" y="7" width="3" height="6" rx="1" fill={accent} fillOpacity="0.45" />
-            <rect x="4.5" y="4.5" width="3" height="8.5" rx="1" fill={accent} fillOpacity="0.72" />
-            <rect x="9" y="1.5" width="3" height="11.5" rx="1" fill={accent} />
-          </g>
-        );
-
-      case 'purchase_supply':
-        return (
-          <g transform="translate(65.5, 42.5)" opacity={activeVisual ? 0.92 : 0.45}>
-            <path d="M6.5 0L12.5 3.2V9.8L6.5 13L0.5 9.8V3.2L6.5 0Z" fill={accent} fillOpacity="0.22" stroke={accent} strokeWidth="1.2" strokeLinejoin="round" />
-            <path d="M0.5 3.2L6.5 6.4L12.5 3.2M6.5 6.4V13" stroke={accent} strokeWidth="1.1" strokeLinejoin="round" />
-          </g>
-        );
-
-      case 'customer_response':
-        return (
-          <g transform={`translate(${pose.headShiftX}, 0)`} stroke={accent} strokeLinecap="round" fill="none">
-            <path d="M36.8 20.5C36.8 14.3 40.8 10.8 46 10.8C51.2 10.8 55.2 14.3 55.2 20.5" strokeWidth="1.75" />
-            <rect x="34.8" y="19" width="2.6" height="5.4" rx="1.3" fill={accent} stroke="none" />
-            <rect x="54.6" y="19" width="2.6" height="5.4" rx="1.3" fill={accent} stroke="none" />
-            <path d="M36.3 24.4C37.2 27.1 40.1 28 43.3 28" strokeWidth="1.25" />
-            <circle cx="43.8" cy="28" r="1.05" fill={accent} stroke="none" />
-          </g>
-        );
-
-      case 'hr_manager':
-        return (
-          <g transform="translate(66.5, 22)" opacity={activeVisual ? 0.9 : 0.45}>
-            <circle cx="4.5" cy="4" r="2.2" fill={accent} />
-            <path d="M1 10.8C1 8.5 2.5 7.2 4.5 7.2C6.5 7.2 8 8.5 8 10.8" fill={accent} />
-            <circle cx="9.8" cy="4.6" r="1.7" fill={accent} opacity="0.58" />
-            <path d="M7.8 10.6C8 8.8 9.1 7.8 10.7 7.8C12.2 7.8 13.3 8.8 13.4 10.6" fill={accent} opacity="0.58" />
-          </g>
-        );
-
-      case 'reservation':
-        return (
-          <g transform="translate(65.5, 41.5)" opacity={activeVisual ? 0.92 : 0.45}>
-            <circle cx="6.5" cy="6.5" r="5.5" fill={accent} fillOpacity="0.16" stroke={accent} strokeWidth="1.3" />
-            <path d="M6.5 3.6V6.6L8.7 7.9" stroke={accent} strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
-          </g>
-        );
-
-      case 'project_process':
-        return (
-          <g transform="translate(65.5, 24)" opacity={activeVisual ? 0.92 : 0.45}>
-            <rect x="0" y="0" width="13" height="3.2" rx="1.6" fill={accent} />
-            <rect x="0" y="5" width="9.5" height="3.2" rx="1.6" fill={accent} opacity="0.65" />
-            <rect x="0" y="10" width="11.5" height="3.2" rx="1.6" fill={accent} opacity="0.4" />
-          </g>
-        );
-
-      case 'instagrammer':
-        return (
-          <g transform={`translate(${pose.headShiftX}, 0)`}>
-            {/* Subtle content-creator ring-light halo */}
-            <circle cx="46" cy="20.2" r="13.2" stroke={accent} strokeWidth="1.3" strokeDasharray="3 2.5" opacity={activeVisual ? 0.65 : 0.3} />
-            <circle cx="57.5" cy="12" r="2.2" fill={accent} opacity={activeVisual ? 0.95 : 0.45} />
-          </g>
-        );
-
-      case 'system_guide':
-        return (
-          <g>
-            {/* Minimal optical glasses bar across brow line */}
-            <g transform={`translate(${pose.headShiftX}, 0)`} stroke="#f8fafc" strokeWidth="1.15" opacity="0.82" fill="none">
-              <circle cx="43.1" cy="20.4" r="2.1" />
-              <circle cx="48.9" cy="20.4" r="2.1" />
-              <path d="M45.2 20.4H46.8" />
-            </g>
-            {/* Guide handbook emblem on desk corner */}
-            <g transform="translate(65.5, 42)" opacity={activeVisual ? 0.9 : 0.45}>
-              <rect x="0.5" y="1" width="11" height="10" rx="2" fill={accent} fillOpacity="0.2" stroke={accent} strokeWidth="1.2" />
-              <path d="M6 1.5V10.5" stroke={accent} strokeWidth="1.1" />
-            </g>
-          </g>
-        );
-
-      default:
-        return null;
-    }
-  };
+  const delayStyle = { animationDelay: `${(seatIndex % 9) * 0.22}s` };
 
   return (
     <div
-      className={`relative flex w-full items-end justify-center select-none transition-all duration-200 ${
-        isLead ? 'h-[72px]' : 'h-[62px]'
+      className={`relative flex w-full flex-col items-center justify-end select-none transition-all duration-200 ${
+        isLead ? 'h-[74px]' : 'h-[64px]'
       } ${!activeVisual ? 'opacity-55 grayscale-[35%]' : ''}`}
     >
-      {/* Subtle desk halo when selected, commander, or actively running */}
+      {/* Illuminated Aura Floor Glow when working, selected or lead */}
       {((isWorking || isSelected || isLead) && activeVisual) ? (
         <div
           className={`pointer-events-none absolute bottom-1 rounded-full blur-md transition-opacity ${
             isLead ? 'h-14 w-16' : 'h-12 w-14'
-          } ${isWorking ? 'kalam-desk-screen-glow' : isSelected ? 'opacity-45' : 'opacity-25'}`}
-          style={{ backgroundColor: `${accent}36`, ...delayStyle }}
+          } ${isWorking ? 'kalam-desk-screen-glow' : isSelected ? 'opacity-40' : 'opacity-20'}`}
+          style={{ backgroundColor: `${accent}35`, ...delayStyle }}
         />
       ) : null}
 
-      <svg
-        width={isLead ? '96' : '86'}
-        height={isLead ? '68' : '60'}
-        viewBox="0 0 92 64"
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-        className="relative z-10 overflow-visible"
-        aria-hidden="true"
+      {/* Cameo Avatar Disc */}
+      <div
+        className={`relative z-10 transition-transform duration-200 ${
+          !activeVisual
+            ? ''
+            : isWorking
+              ? 'kalam-desk-agent-working'
+              : 'kalam-desk-agent-idle'
+        }`}
+        style={delayStyle}
       >
-        <defs>
-          <linearGradient id={`beam-${rawUid}`} x1="46" y1="39" x2="46" y2="8" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stopColor={accent} stopOpacity="0.34" />
-            <stop offset="100%" stopColor={accent} stopOpacity="0" />
-          </linearGradient>
-          <linearGradient id={`torso-${rawUid}`} x1="46" y1="29" x2="46" y2="59" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stopColor={accent} stopOpacity={pose.torsoFillOpacity} />
-            <stop offset="100%" stopColor={accent} stopOpacity={isLead ? '0.68' : '0.58'} />
-          </linearGradient>
-        </defs>
+        <AiAgentCameoFigure
+          agentKey={agentKey}
+          color={accent}
+          size={isLead ? 58 : 50}
+          activeVisual={activeVisual}
+          isWorking={isWorking}
+        />
 
-        {/* Upward monitor light cone onto seated teammate while working */}
-        {isWorking && activeVisual ? (
-          <path
-            d="M32 39L24 12H68L60 39H32Z"
-            fill={`url(#beam-${rawUid})`}
-            className="kalam-desk-screen-glow"
-            style={delayStyle}
-          />
-        ) : null}
+        {/* Minimalist Desk Workstation Base Bar */}
+        <div className="mx-auto -mt-1 h-1.5 w-9 rounded-full bg-slate-300 dark:bg-slate-700/80" />
+      </div>
 
-        {/* Modern Faceless Silhouette Character behind laptop */}
-        <g
-          className={
-            !activeVisual
-              ? ''
-              : isWorking
-                ? 'kalam-desk-agent-working'
-                : 'kalam-desk-agent-idle'
-          }
-          style={delayStyle}
-        >
-          <g transform={`rotate(${pose.leanDeg} 46 56)`}>
-            {/* Subtle shoulder & collar silhouette with crisp anatomical taper */}
-            <path
-              d={
-                isLead
-                  ? 'M25.5 58C26.2 42.8 33.8 33.2 46 33.2C58.2 33.2 65.8 42.8 66.5 58H25.5Z'
-                  : 'M28 58C28.8 43.8 35.4 35.2 46 35.2C56.6 35.2 63.2 43.8 64 58H28Z'
-              }
-              fill={`url(#torso-${rawUid})`}
-            />
-            {/* Neck bridge connecting silhouette seamlessly */}
-            <rect
-              x="42.5"
-              y={isLead ? '28.5' : '30'}
-              width="7"
-              height="6.2"
-              rx="3.2"
-              fill={accent}
-              opacity={activeVisual ? 0.85 : 0.65}
-            />
-            {/* Clean collar V-detail */}
-            <path
-              d={isLead ? 'M40.5 34.4L46 39.2L51.5 34.4' : 'M41.5 36.2L46 40L50.5 36.2'}
-              stroke="#ffffff"
-              strokeWidth="1.25"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              opacity="0.55"
-            />
-
-            {/* Sleek Faceless Head Silhouette */}
-            <circle
-              cx={46 + pose.headShiftX}
-              cy={isLead ? '20' : '21.8'}
-              r={isLead ? '9.1' : '8.2'}
-              fill={accent}
-            />
-            {/* Subtle crown/rim highlight for clean silhouette depth */}
-            <path
-              d={
-                isLead
-                  ? `M${39.5 + pose.headShiftX} 16.5C${41.5 + pose.headShiftX} 13.5 ${46.2 + pose.headShiftX} 12.2 ${51.2 + pose.headShiftX} 14.3`
-                  : `M${40 + pose.headShiftX} 18.6C${41.8 + pose.headShiftX} 15.8 ${46.2 + pose.headShiftX} 14.8 ${50.5 + pose.headShiftX} 16.6`
-              }
-              stroke="#ffffff"
-              strokeWidth="1.2"
-              strokeLinecap="round"
-              opacity="0.38"
-            />
-          </g>
-
-          {renderDomainProp()}
-
-          {/* Animated typing hands behind laptop top edge */}
-          <circle
-            cx="33"
-            cy="51"
-            r="2.4"
-            className={`fill-white dark:fill-slate-800 ${isWorking && activeVisual ? 'kalam-desk-hand-left' : ''}`}
-            style={delayStyle}
-            stroke={accent}
-            strokeWidth="1.5"
-          />
-          <circle
-            cx="59"
-            cy="51"
-            r="2.4"
-            className={`fill-white dark:fill-slate-800 ${isWorking && activeVisual ? 'kalam-desk-hand-right' : ''}`}
-            style={delayStyle}
-            stroke={accent}
-            strokeWidth="1.5"
-          />
-        </g>
-
-        {/* Sleek Open Laptop sitting flush on the Long Desk */}
-        <g>
-          <rect
-            x={isLead ? '26.5' : '28.5'}
-            y={isLead ? '39.5' : '40.5'}
-            width={isLead ? '39' : '35'}
-            height={isLead ? '20.5' : '19.5'}
-            rx="3.2"
-            className="fill-slate-800 dark:fill-slate-900"
-            stroke={isSelected && activeVisual ? accent : isLead ? accent : '#475569'}
-            strokeWidth={isSelected || isLead ? '1.6' : '1.2'}
-          />
-          {/* Glowing status bar along lid */}
-          <rect
-            x={isLead ? '30.5' : '31.5'}
-            y={isLead ? '41.4' : '42.3'}
-            width={isLead ? '31' : '29'}
-            height="1.6"
-            rx="0.8"
-            fill={accent}
-            opacity={isWorking ? 0.95 : 0.42}
-          />
-          {/* Laptop base lip resting on tabletop */}
-          <rect
-            x={isLead ? '23' : '25'}
-            y="59"
-            width={isLead ? '46' : '42'}
-            height="3"
-            rx="1.5"
-            className="fill-slate-300 dark:fill-slate-600"
-          />
-          {isWorking && activeVisual ? (
-            <g className="kalam-desk-typing-dots" style={delayStyle}>
-              <circle cx="40.5" cy="50.4" r="1.45" fill={accent} className="kalam-dot-1" />
-              <circle cx="46" cy="50.4" r="1.45" fill={accent} className="kalam-dot-2" />
-              <circle cx="51.5" cy="50.4" r="1.45" fill={accent} className="kalam-dot-3" />
-            </g>
-          ) : (
-            <circle
-              cx="46"
-              cy="50.4"
-              r={isLead ? '2.6' : '2.2'}
-              fill={accent}
-              fillOpacity={activeVisual ? (isSelected || isLead ? 0.92 : 0.65) : 0.25}
-            />
-          )}
-        </g>
-
-        {/* Floating minimal status spark if waiting approval */}
-        {hasPending && activeVisual ? (
-          <g className="kalam-desk-pending-bob" style={delayStyle}>
-            <circle cx="68" cy="14" r="5.5" fill="#f59e0b" stroke="#ffffff" strokeWidth="1.4" />
-            <path d="M68 11.6V14.3" stroke="#ffffff" strokeWidth="1.4" strokeLinecap="round" />
-            <circle cx="68" cy="16.1" r="0.8" fill="#ffffff" />
-          </g>
-        ) : null}
-      </svg>
+      {/* Floating minimal status spark if waiting approval */}
+      {hasPending && activeVisual ? (
+        <div className="kalam-desk-pending-bob pointer-events-none absolute -top-1 right-2 z-20">
+          <span className="flex h-3 w-3 items-center justify-center rounded-full bg-amber-500 shadow-sm ring-2 ring-white dark:ring-slate-900">
+            <span className="h-1 w-1 rounded-full bg-white" />
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 };

@@ -1,3 +1,4 @@
+import { VOIP_DIAL_MODE_OPTIONS } from '../../utils/voipProvidersCatalog';
 import { normalizeEmail } from '../../utils/email';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
@@ -53,7 +54,7 @@ type UserRow = {
   voip_operator_code?: string | null;
   voip_extension?: string | null;
   voip_service_id?: string | null;
-  voip_dial_mode?: 'telefonchy_smartcall' | 'sip_link' | 'tel_link' | null;
+  voip_dial_mode?: 'webphone_webrtc' | 'telefonchy_smartcall' | 'sip_link' | 'tel_link' | null;
   created_at?: string | null;
   org_roles?: any;
   can_edit_identity?: boolean;
@@ -70,11 +71,7 @@ const SYSTEM_ROLE_OPTIONS = [
   { label: 'مشاهده‌گر', value: 'viewer' },
 ];
 
-const VOIP_DIAL_MODE_OPTIONS = [
-  { label: 'Smart Call تلفنچی', value: 'telefonchy_smartcall' },
-  { label: 'لینک SIP', value: 'sip_link' },
-  { label: 'لینک تلفن', value: 'tel_link' },
-];
+// VOIP_DIAL_MODE_OPTIONS imported from utils/voipProvidersCatalog
 
 const normalizeRoleToken = (value?: string | null) =>
   String(value || '')
@@ -894,7 +891,7 @@ const UsersTab: React.FC = () => {
                 <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
               </Form.Item>
               <Form.Item label="حالت شماره‌گیری" name="voip_dial_mode" className="mb-0">
-                <Select options={VOIP_DIAL_MODE_OPTIONS} getPopupContainer={resolveOverlayPopupContainer} />
+                <Select options={[...VOIP_DIAL_MODE_OPTIONS]} getPopupContainer={resolveOverlayPopupContainer} />
               </Form.Item>
               <Form.Item label="کد اپراتور تلفنچی" name="voip_operator_code" normalize={normalizeDigitsToEnglish} className="mb-0">
                 <Input placeholder="کد اپراتور" />

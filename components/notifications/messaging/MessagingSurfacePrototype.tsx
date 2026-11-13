@@ -106,6 +106,7 @@ import {
 } from '../../../utils/internalNoteAccess';
 import {
   AGENT_CONVERSATION_PREFIX,
+  AI_AGENT_CATALOG,
   extractAgentKeyFromRow,
   getAgentDefinition,
   getAgentTitleFa,
@@ -3264,6 +3265,32 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
   const displayConversations = useMemo(() => {
     if (reelInitialLoading) return [];
     const liveInternal = liveInternalConversations;
+    const existingAgentKeys = new Set(
+      liveInternal
+        .filter((c) => c.channel === 'agent' && c.agentKey)
+        .map((c) => String(c.agentKey).trim()),
+    );
+    const catalogAgentConversations: Conversation[] = AI_AGENT_CATALOG.map((def) => {
+      const sourceConversationKey = `agent:${def.key}`;
+      const liveKey = getLiveInternalConversationKey(sourceConversationKey);
+      return {
+        key: liveKey,
+        channel: 'agent',
+        sourceConversationKey,
+        internalKind: 'agent',
+        agentKey: def.key,
+        title: def.titleFa,
+        subtitle: def.subtitleFa,
+        preview: def.descriptionFa,
+        time: '',
+        lastActivityAt: null,
+        unread: 0,
+        tone: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-200',
+        avatarText: def.shortTitleFa.slice(0, 1),
+        status: 'آماده گفتگو',
+        actions: ['search', 'reply', 'forward', 'activity'],
+      };
+    }).filter((c) => !existingAgentKeys.has(c.agentKey as string));
     const liveBotGroups = mergeBotRpcConversations(
       liveData.conversations.filter((conversation) => conversation.channel === 'bot_group'),
       buildBotRpcConversations(botConversations.items),
@@ -3273,6 +3300,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
     const liveCalls = liveData.conversations.filter((conversation) => conversation.channel === 'call');
     return sortConversationsByActivity([
       ...liveInternal,
+      ...catalogAgentConversations,
       ...liveBotGroups,
       ...liveBotDirect,
       ...liveSms,

@@ -17,8 +17,8 @@ describe('shared SaaS offering catalog', () => {
     expect(modules).toEqual(expect.arrayContaining(['goals', 'assets', 'organization_chart', 'job_descriptions', 'sms_delivery_reports']));
   });
   it('keeps the demo provisioning catalog synchronized with every configurable offering', () => {
-    const sql = readFileSync('database_v1_phase585_plan_entitlements_and_full_demo.sql', 'utf8');
-    const snapshot = JSON.parse(sql.match(/select '(\{.*\})'::jsonb/)![1]);
+    const sql = readFileSync('database_v1_phase587_unified_voip_asterisk_realtime.sql', 'utf8');
+    const snapshot = JSON.parse(sql.match(/select '(\{[^\n]*"features":[^\n]*\})'::jsonb/)![1]);
     expect(snapshot.moduleParents).toEqual(SAAS_MODULE_PLAN_INHERITANCE);
     expect(snapshot.moduleFeatures).toEqual(SAAS_MODULE_FEATURE_INHERITANCE);
     expect(snapshot.features.sort()).toEqual(SAAS_FEATURE_OPTIONS.map((item) => item.id).sort());
@@ -42,8 +42,8 @@ describe('plan access editing', () => {
 });
 
 it('keeps runtime table licensing synchronized with the central resource bindings', () => {
-  const sql = readFileSync('database_v1_phase586_feature_runtime_bindings.sql', 'utf8');
-  const snapshot = JSON.parse(sql.match(/select '(\{[^\n]*\})'::jsonb/)![1]);
+  const sql = readFileSync('database_v1_phase587_unified_voip_asterisk_realtime.sql', 'utf8');
+  const snapshot = JSON.parse(sql.match(/select '(\{[^\n]*"voip_sip_endpoints":[^\n]*\})'::jsonb/)![1]);
   expect(snapshot).toEqual(PLAN_FEATURE_TABLES);
   for (const feature of Object.values(PLAN_FEATURE_TABLES)) expect(SAAS_FEATURE_OPTIONS.some((item) => item.id === feature)).toBe(true);
 });

@@ -5,6 +5,7 @@ import {
   Button,
   Checkbox,
   Empty,
+  Input,
   InputNumber,
   Segmented,
   Select,
@@ -18,6 +19,7 @@ import {
 } from 'antd';
 import {
   EditOutlined,
+  MessageOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   QuestionCircleOutlined,
@@ -154,6 +156,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
     fastModelOverride: string | null;
     toneStyle: AgentToneStyle;
     allowedChannels: string[];
+    customInstructions: string;
     backgroundConfig: {
       enabled: boolean;
       interval_minutes: number;
@@ -213,6 +216,10 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
         (item: AgentOverviewRow) => item.key === def.key,
       ) as AgentOverviewRow | undefined;
       const bg = serverItem?.backgroundConfig || def.defaultBackgroundConfig;
+      const policy = (serverItem?.policyJson && typeof serverItem.policyJson === 'object') ? serverItem.policyJson : {};
+      const customInstr = typeof policy.custom_instructions === 'string'
+        ? policy.custom_instructions
+        : (typeof policy.org_custom_notes === 'string' ? policy.org_custom_notes : '');
       nextAgentDrafts[def.key] = {
         isEnabled: serverItem ? serverItem.orgEnabled !== false : true,
         modelOverride: serverItem?.modelOverride || null,
@@ -221,6 +228,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
         allowedChannels: Array.isArray(serverItem?.allowedChannels) && serverItem.allowedChannels.length > 0
           ? serverItem.allowedChannels
           : ['web', 'staff_bot', 'agent_inbox'],
+        customInstructions: customInstr,
         backgroundConfig: {
           enabled: bg?.enabled === true,
           interval_minutes: Math.max(15, Number(bg?.interval_minutes || def.defaultBackgroundConfig.interval_minutes || 60)),
@@ -334,6 +342,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
           fastModelOverride: null,
           toneStyle: activeAgentDef.defaultToneStyle,
           allowedChannels: ['web', 'staff_bot', 'agent_inbox'],
+          customInstructions: '',
           backgroundConfig: { ...activeAgentDef.defaultBackgroundConfig },
         }),
         ...patch,
@@ -345,6 +354,13 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
     if (!activeDraft || !activeCanToggle) return;
     setSavingAgentKey(activeAgentKey);
     try {
+      const existingPolicy = (activeOverviewRow?.policyJson && typeof activeOverviewRow.policyJson === 'object')
+        ? activeOverviewRow.policyJson
+        : {};
+      const nextPolicy = {
+        ...existingPolicy,
+        custom_instructions: activeDraft.customInstructions?.trim() || '',
+      };
       const payloadBody = activeCanEdit
         ? {
             action: 'save_org_agent_config',
@@ -355,6 +371,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
             toneStyle: activeDraft.toneStyle,
             allowedChannels: activeDraft.allowedChannels,
             backgroundConfig: activeDraft.backgroundConfig,
+            policyJson: nextPolicy,
           }
         : {
             action: 'save_org_agent_config',
@@ -801,6 +818,38 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
                           value={activeDraft.allowedChannels}
                           options={CHANNEL_OPTIONS}
                           onChange={(checked) => updateActiveDraft({ allowedChannels: checked as string[] })}
+                        />
+                      </div>
+
+                      <div className="rounded-xl border border-indigo-200/80 bg-indigo-50/20 p-3.5 dark:border-indigo-500/20 dark:bg-indigo-950/10 space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="text-xs font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+                            <ThunderboltOutlined className="text-indigo-600" />
+                            دستورات و خط‌مشی اختصاصی مدیر به این ایجنت (Custom Instructions)
+                          </div>
+                          <Button
+                            size="small"
+                            type="dashed"
+                            icon={<MessageOutlined />}
+                            onClick={() => {
+                              const alignmentMsg = encodeURIComponent(
+                                `سلام ${activeAgentDef.titleFa}! من مدیر سازمان هستم و می‌خواهم خط‌مشی‌ها، اهداف و قوانین اختصاصی سازمان را با تو مرور و تنظیم کنم تا طبق استانداردهای ما عمل کنی.`
+                              );
+                              window.location.href = `/ai?agent=${activeAgentKey}&q=${alignmentMsg}`;
+                            }}
+                          >
+                            همسوسازی و تدوین دستورات در گفتگو با مدل
+                          </Button>
+                        </div>
+                        <div className="text-[11.5px] text-slate-500 dark:text-slate-400">
+                          دستورالعمل‌ها، اولویت‌ها، خط قرمزها و قواعد رفتاری خاص این سازمان که مدل باید در همه پاسخ‌ها و خروجی‌های خود لحاظ کند:
+                        </div>
+                        <Input.TextArea
+                          rows={3}
+                          disabled={!activeCanEdit}
+                          value={activeDraft.customInstructions}
+                          placeholder="مثلاً: در مذاکرات اولویت با سفارش‌های نقدی است؛ برای فیش‌های حقوقی اطلاعات محرمانه حفظ شود؛ و در فاکتورها تخفیف بالای ۵٪ بدون تأیید مدیر داده نشود..."
+                          onChange={(e) => updateActiveDraft({ customInstructions: e.target.value })}
                         />
                       </div>
 

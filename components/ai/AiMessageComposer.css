@@ -51,18 +51,19 @@
   .ai-composer-model .ant-select{width:auto!important;max-width:100%!important}
 }
 @media(max-width:767px){
-  .ai-message-composer{padding:10px;border-radius:18px}
-  .ai-message-composer textarea.ant-input{font-size:16px}
-  .ai-composer-footer{flex-wrap:wrap;gap:8px 6px}
-  .ai-composer-tools{order:1;flex:1 1 auto;min-width:0}
-  .ai-composer-send.ant-btn{order:2;flex-shrink:0}
-  .ai-composer-model{order:3;flex:1 0 100%!important;max-width:100%!important;min-width:0!important;margin-inline-end:0!important;padding-top:6px;border-top:1px dashed color-mix(in srgb,var(--ai-composer-line) 50%,transparent)}
-  .ai-composer-model .ant-select{width:auto!important;max-width:100%!important}
-  .ai-composer-model .ant-select-selection-item{font-size:12px}
-  .ai-composer-icon.ant-btn{width:44px!important;min-width:44px!important;height:44px!important}
-  .ai-composer-send.ant-btn{width:44px;min-width:44px;height:44px}
-  .ai-composer-operator-pill{height:44px;min-height:44px}
-  .ai-composer-operator-trigger.ant-btn{height:40px!important;min-height:40px!important}
-  .ai-composer-operator-reset.ant-btn{width:30px!important;min-width:30px!important;height:36px!important}
+  .ai-message-composer{padding:8px 10px;border-radius:16px}
+  .ai-message-composer textarea.ant-input{font-size:14px;line-height:1.5!important;padding:2px 4px 6px!important}
+  .ai-composer-footer{display:flex;align-items:center;flex-wrap:nowrap;gap:6px;margin-top:2px}
+  .ai-composer-tools{order:1;display:flex;align-items:center;flex:1 1 auto;min-width:0;overflow-x:auto}
+  .ai-composer-model{order:2;flex:0 1 auto;max-width:130px!important;min-width:0!important;margin-inline-end:0!important;padding-top:0!important;border-top:none!important}
+  .ai-composer-model .ant-select{width:100%!important;max-width:130px!important}
+  .ai-composer-model .ant-select-selector{height:30px!important;padding:0 6px!important}
+  .ai-composer-model .ant-select-selection-item{font-size:11px!important;line-height:28px!important}
+  .ai-composer-send.ant-btn{order:3;flex-shrink:0;width:34px!important;min-width:34px!important;height:34px!important}
+  .ai-composer-icon.ant-btn{width:32px!important;min-width:32px!important;height:32px!important}
+  .ai-composer-operator-pill{height:30px;min-height:30px}
+  .ai-composer-operator-trigger.ant-btn{height:28px!important;min-height:28px!important;font-size:11px!important}
+  .ai-composer-operator-reset.ant-btn{width:22px!important;min-width:22px!important;height:24px!important}
+  .ai-assistant-composer-region{padding:6px 8px max(6px,env(safe-area-inset-bottom))}
 }
 @media(prefers-reduced-motion:reduce){.ai-message-composer{transition:none}}

@@ -98,11 +98,7 @@ const resolveManualChunk = (id: string) => {
       return 'editor-vendor';
     }
 
-    if (
-      normalizedId.includes('/node_modules/leaflet/') ||
-      normalizedId.includes('/node_modules/react-leaflet/') ||
-      normalizedId.includes('/node_modules/maplibre-gl/')
-    ) {
+    if (normalizedId.includes('/node_modules/maplibre-gl/')) {
       return 'map-vendor';
     }
 

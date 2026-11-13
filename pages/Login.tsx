@@ -7,7 +7,7 @@ import { supabase } from '../supabaseClient';
 import { BRANDING_APPLIED_EVENT, DEFAULT_BRANDING } from '../theme/brandTheme';
 import { readRuntimeBranding } from '../utils/brandingRuntime';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
-import { getDefaultAuthenticatedAppPath, isInternalRootHost, isSaasAdminPanelHost, isSaasAppHost, isTenantHost } from '../utils/hostRouting';
+import { getDefaultAuthenticatedAppPath, isInternalRootHost, isLocalHost, isSaasAdminPanelHost, isSaasAppHost, isTenantHost } from '../utils/hostRouting';
 import { activateSaasAdminPanelContext } from '../utils/saasAdminPanel';
 import { getOtpErrorMessage, normalizeOtpPhone, normalizeOtpToken, OTP_RESEND_SECONDS, requestSmsOtp, verifySmsOtp } from '../utils/otpAuth';
 import { assertLoginOtpRequestAllowed, consumePhoneSignupInvite, lookupPhoneLoginCandidate, lookupPhoneSignupInvite, requestExistingProfilePhoneOtp } from '../utils/phoneAuth';
@@ -219,7 +219,7 @@ const Login = () => {
       await refreshAuthenticatedSessionBootstrap();
       await trackSuccessfulLogin(loginMode);
       const host = String(organization.resolved_host || '').trim().toLowerCase();
-      if (host) {
+      if (host && !isLocalHost()) {
         if (isSaasAppHost() && host !== window.location.hostname) {
           if (host.endsWith('.tazesystem.ir')) {
             await handoffSessionToTenant(host, organization.org_id);
@@ -286,6 +286,15 @@ const Login = () => {
       return;
     }
 
+    if (isLocalHost(currentHost)) {
+      if (organizations.length === 1) {
+        await activateOrganizationAndRedirect(organizations[0]);
+        return;
+      }
+      setOrganizationChoices(organizations);
+      return;
+    }
+
     // Resolve the exact organization bound to this host; never guess from an empty hostname.
     if (isInternalRootHost(currentHost)) {
       const { data: branding, error: brandingError } = await supabase.rpc('get_public_branding', { p_hostname: currentHost });
@@ -306,16 +315,11 @@ const Login = () => {
     }
 
     if (isSaasAppHost()) {
-      const tenantOrganizations = organizations.filter((item) => {
-        const host = String(item.resolved_host || '').trim().toLowerCase();
-        return host && !isSaasAppHost(host);
-      });
-      if (tenantOrganizations.length === 0) throw new Error('برای این حساب، آدرس اختصاصی سازمان پیدا نشد.');
-      if (tenantOrganizations.length === 1) {
-        await activateOrganizationAndRedirect(tenantOrganizations[0]);
+      if (organizations.length === 1) {
+        await activateOrganizationAndRedirect(organizations[0]);
         return;
       }
-      setOrganizationChoices(tenantOrganizations);
+      setOrganizationChoices(organizations);
       return;
     }
 

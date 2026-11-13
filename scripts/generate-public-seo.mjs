@@ -1,7 +1,8 @@
 import { ECOSYSTEM_STATUS_LABELS, PUBLIC_ECOSYSTEM_GROUPS } from '../shared/publicEcosystem.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
-import { PUBLIC_SITE_URL, publicOrganizationSchema, publicWebsiteSchema } from '../shared/publicBrandSeo.mjs';
+import { PUBLIC_SITE_URL, publicOrganizationSchema, publicWebsiteSchema, publicWebApplicationSchema } from '../shared/publicBrandSeo.mjs';
+import { ECOSYSTEM_STATUS_LABELS, PUBLIC_ECOSYSTEM_GROUPS } from '../shared/publicEcosystem.mjs';
 
 const root = process.cwd();
 const distDir = path.join(root, 'dist');
@@ -12,10 +13,10 @@ const siteUrl = PUBLIC_SITE_URL;
 const pages = [
   {
     path: '/', file: 'home.html',
-    title: 'تازه سیستم | CRM ایرانی هوشمند و نرم‌افزار یکپارچه کسب‌وکار',
-    description: 'تازه سیستم؛ CRM ایرانی دارای هوش مصنوعی، دایرکت هوشمند اینستاگرام و نرم‌افزار یکپارچه فروش، حسابداری، پروژه، فرآیند و منابع انسانی.',
-    heading: 'CRM ایرانی هوشمند و نرم‌افزار یکپارچه کسب‌وکار',
-    body: 'مشتریان، فروش، دایرکت اینستاگرام، حسابداری، پروژه‌ها، فرآیندها، منابع انسانی و هوش مصنوعی کسب‌وکار را در یک فضای ابری مدیریت کنید.',
+    title: 'تازه سیستم | CRM و ERP ایرانی یکپارچه با هوش مصنوعی و شبکه‌های اجتماعی',
+    description: 'نرم‌افزار تازه سیستم؛ پلتفرم یکپارچه ابری برای مدیریت مشتریان، CRM ایرانی هوشمند، دایرکت اینستاگرام، حسابداری، پروژه و منابع انسانی.',
+    heading: 'نرم‌افزار یکپارچه تازه سیستم؛ CRM ایرانی هوشمند و مدیریت کسب‌وکار',
+    body: 'نرم‌افزار تازه سیستم امکان مدیریت یکپارچه فروش، دایرکت هوشمند اینستاگرام، حسابداری، پروژه‌ها، فرآیندها، منابع انسانی و هوش مصنوعی کسب‌وکار را در یک فضای ابری فراهم می‌کند.',
     image: `${siteUrl}/logo.png`,
   },
   {
@@ -83,10 +84,10 @@ const pages = [
   },
   {
     path: '/solutions/smart-instagram-direct', file: 'solutions/smart-instagram-direct.html',
-    title: 'دایرکت هوشمند اینستاگرام؛ حرفه‌ای و اقتصادی | تازه سیستم',
-    description: 'دایرکت هوشمند اینستاگرام برای پاسخ سریع و حرفه‌ای، مدیریت کامنت و استوری، ارجاع گفتگو، ثبت لید و کاهش کار تکراری تیم.',
-    heading: 'دایرکت هوشمند حرفه‌ای و اقتصادی',
-    body: 'پاسخ‌های پرتکرار، درخواست قیمت، ارجاع به اپراتور و ثبت مخاطب را در یک مسیر کنترل‌شده مدیریت کنید.',
+    title: 'دایرکت هوشمند اینستاگرام متصل به CRM و فروش | تازه سیستم',
+    description: 'نرم‌افزار دایرکت هوشمند اینستاگرام متصل به CRM تازه سیستم؛ پاسخ‌گویی خودکار با هوش مصنوعی، تبدیل کامنت به لید فروش، صدور فاکتور و ارجاع به اپراتور.',
+    heading: 'دایرکت هوشمند اینستاگرام متصل به CRM؛ حرفه‌ای و اقتصادی',
+    body: 'نرم‌افزار دایرکت هوشمند اینستاگرام تازه سیستم، پیام‌ها، کامنت‌ها و استوری‌ها را به لید فروش تبدیل می‌کند؛ پاسخ‌گویی با هوش مصنوعی، صدور فاکتور پرداخت و اتصال به انبار و باشگاه مشتریان در یک سامانه ابری یکپارچه.',
   },
   {
     path: '/solutions/affordable-business-ai', file: 'solutions/affordable-business-ai.html',
@@ -139,7 +140,7 @@ const writeSeoPage = ({ file, title, description, canonical, heading, bodyHtml, 
     isPartOf: file === 'home.html' ? { '@id': `${siteUrl}/#website` } : { '@type': 'WebSite', name: 'تازه سیستم', url: siteUrl }, inLanguage: 'fa-IR',
   }).replaceAll('<', '\\u003c');
   const brandJsonLd = file === 'home.html'
-    ? [publicOrganizationSchema(), publicWebsiteSchema()].map((schema) =>
+    ? [publicOrganizationSchema(), publicWebsiteSchema(), publicWebApplicationSchema()].map((schema) =>
       `<script data-rh="true" type="application/ld+json">${JSON.stringify(schema).replaceAll('<', '\\u003c')}</script>`)
     : [];
   const head = [

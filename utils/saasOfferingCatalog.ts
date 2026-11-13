@@ -77,6 +77,7 @@ export const SAAS_FEATURE_OPTIONS: SaasOfferingOption[] = [
   { id: 'campaign_bot_group', label: 'کمپین گروه بات' }, { id: 'campaign_bot_private', label: 'کمپین پی‌وی بات' },
   { id: 'campaign_instagram_post', label: 'کمپین اینستاگرام' },
   { id: 'campaign_voice_call', label: 'کمپین تماس صوتی' },
+  { id: 'voip_webphone', label: 'تلفن زنده تحت وب (WebPhone)' },
   { id: 'saas_account_billing', label: 'مدیریت حساب و اشتراک' }, { id: 'ai_credit_topup', label: 'کیف پول مصرف AI' },
   { id: 'sms_credit_topup', label: 'کیف پول مصرف پیامک' }, { id: 'extra_users_purchase', label: 'خرید کاربر اضافه' },
   { id: 'telegram_bot', label: 'بات تلگرام' }, { id: 'business_model_canvas', label: 'بوم کسب‌وکار' }, { id: 'bale_bot', label: 'بات بله' }, { id: 'rubika_bot', label: 'بات روبیکا' },
@@ -88,7 +89,7 @@ export const SAAS_FEATURE_OPTIONS: SaasOfferingOption[] = [
 const featureGroupIds: Array<{ label: string; ids: string[] }> = [
   { label: 'هوش مصنوعی', ids: ['ai_chat','ai_knowledge','ai_knowledge_limited','ai_document_analysis','ai_web_search','ai_voice_input','ai_voice_output','ai_image_generation','ai_video_generation','ai_deep_reasoning','ai_legal_assistant','ai_voip_auto_reply','ai_staff_bot','ai_background_agents','ai_credit_topup','mbti_ai_analysis'] },
   { label: 'ایجنت‌های هوشمند', ids: AI_AGENT_PLAN_FEATURES.map((item) => item.id) },
-  { label: 'ارتباطات و کمپین', ids: ['internal_realtime_notifications','instagram_inbox','campaign_sms','campaign_email','campaign_bot_group','campaign_bot_private','campaign_instagram_post','campaign_voice_call','telegram_bot','bale_bot','rubika_bot'] },
+  { label: 'ارتباطات و کمپین', ids: ['internal_realtime_notifications','instagram_inbox','campaign_sms','campaign_email','campaign_bot_group','campaign_bot_private','campaign_instagram_post','campaign_voice_call','voip_webphone','telegram_bot','bale_bot','rubika_bot'] },
   { label: 'مدیریت و گزارش', ids: ['webhooks','support_tickets','api_access','advanced_reports','map_view','multi_lane_processes','content_calendar','billboard_status_management','white_label','custom_domain','reservations','qr_scan','business_model_canvas','online_catalog'] },
   { label: 'فروش و پرداخت', ids: ['wordpress_connection','taxpayer_system','own_payment_gateway','online_invoice_payment','retail_sales_invoice','saas_account_billing','sms_credit_topup','extra_users_purchase'] },
 ];

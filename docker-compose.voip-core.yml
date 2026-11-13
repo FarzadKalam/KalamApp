@@ -1,0 +1,48 @@
+# سرویس هستهٔ VoIP (Asterisk Realtime + Coturn TURN/STUN)
+# این فایل در کنار docker-compose اصلی Supabase روی سرور VPS اجرا می‌شود
+# تا مکالمه زنده WebRTC در مرورگر، داخلی‌های چندسازمانی و ترانک‌های SIP مدیریت شوند.
+services:
+  voip-asterisk:
+    container_name: kalamapp-voip-asterisk
+    build:
+      context: ./ops/voip/asterisk
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      ASTERISK_PGSQL_HOST: ${ASTERISK_PGSQL_HOST:-127.0.0.1}
+      ASTERISK_PGSQL_PORT: ${ASTERISK_PGSQL_PORT:-5432}
+      ASTERISK_PGSQL_DB: ${ASTERISK_PGSQL_DB:-postgres}
+      ASTERISK_PGSQL_USER: ${ASTERISK_PGSQL_USER:-postgres}
+      ASTERISK_PGSQL_PASSWORD: ${POSTGRES_PASSWORD:-}
+      VOIP_PUBLIC_IP: ${VOIP_PUBLIC_IP:-194.5.175.192}
+      VOIP_STUN_SERVER: ${VOIP_STUN_SERVER:-127.0.0.1:3478}
+      KALAMAPP_WEBHOOK_URL: ${KALAMAPP_WEBHOOK_URL:-http://127.0.0.1:8000/functions/v1/voip-call-webhook}
+      KALAMAPP_VOIP_INTERNAL_SECRET: ${KALAMAPP_VOIP_INTERNAL_SECRET:-}
+    volumes:
+      - voip-asterisk-spool:/var/spool/asterisk
+      - voip-asterisk-logs:/var/log/asterisk
+
+  voip-coturn:
+    container_name: kalamapp-voip-coturn
+    image: coturn/coturn:4.6.2
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - -n
+      - --log-file=stdout
+      - --listening-port=3478
+      - --min-port=49152
+      - --max-port=49352
+      - --realm=${VOIP_REALM:-kalamapp.ir}
+      - --use-auth-secret
+      - --static-auth-secret=${VOIP_TURN_SECRET:-change-me-turn-secret}
+      - --external-ip=${VOIP_PUBLIC_IP:-194.5.175.192}
+      - --no-cli
+      - --no-tls
+      - --no-dtls
+      - --stale-nonce=600
+
+volumes:
+  voip-asterisk-spool:
+  voip-asterisk-logs:

@@ -1,8 +1,9 @@
 import { supabase } from '../supabaseClient';
 import { fetchSessionBootstrap } from './sessionCache';
 import { normalizePhoneForStorage } from './phoneNumber';
+import { dialWebPhone } from './voipStore';
 
-type VoipDialMode = 'telefonchy_smartcall' | 'sip_link' | 'tel_link';
+export type VoipDialMode = 'webphone_webrtc' | 'telefonchy_smartcall' | 'sip_link' | 'tel_link';
 
 export type VoipSmartCallArgs = {
   phone: unknown;
@@ -13,6 +14,7 @@ export type VoipSmartCallArgs = {
 
 export type VoipSmartCallResult = {
   started: boolean;
+  mode?: VoipDialMode;
   fallbackUrl?: string;
   fallbackMode?: VoipDialMode;
   callLogId?: string | null;
@@ -50,7 +52,25 @@ export const requestVoipSmartCall = async ({
   const dialMode = String(profile.voip_dial_mode || 'tel_link') as VoipDialMode;
   const fallbackUrl = buildVoipFallbackUrl(normalizedPhone, dialMode);
 
-  if (profile.voip_enabled !== true || dialMode !== 'telefonchy_smartcall') {
+  if (profile.voip_enabled !== true) {
+    return {
+      started: false,
+      fallbackUrl,
+      fallbackMode: dialMode,
+      message: 'تماس از مسیر جایگزین باز شد.',
+    };
+  }
+
+  if (dialMode === 'webphone_webrtc') {
+    await dialWebPhone(normalizedPhone, { moduleId, recordId, title });
+    return {
+      started: true,
+      mode: 'webphone_webrtc',
+      message: 'تماس زنده از طریق تلفن داخل برنامه آغاز شد.',
+    };
+  }
+
+  if (dialMode !== 'telefonchy_smartcall') {
     return {
       started: false,
       fallbackUrl,
@@ -66,7 +86,7 @@ export const requestVoipSmartCall = async ({
   if (recordId) body.recordId = recordId;
   if (title) body.title = title;
 
-  const { data, error } = await supabase.functions.invoke('telefonchy_smartcall', { body });
+  const { data, error } = await supabase.functions.invoke('voip-dial', { body });
   if (error) throw new Error(getErrorMessage(error, 'شروع تماس VoIP ناموفق بود.'));
   if (data && data.success === false) {
     throw new Error(getErrorMessage(data, 'شروع تماس VoIP ناموفق بود.'));
@@ -74,7 +94,8 @@ export const requestVoipSmartCall = async ({
 
   return {
     started: true,
+    mode: 'telefonchy_smartcall',
     callLogId: data?.call_log_id || null,
-    message: 'تماس VoIP آغاز شد.',
+    message: data?.message || 'تماس VoIP آغاز شد.',
   };
 };

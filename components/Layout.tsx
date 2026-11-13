@@ -52,7 +52,7 @@ import {
   type PermissionMap,
 } from '../utils/permissions';
 import { CUSTOMER_CLUB_FEATURE } from '../utils/customerClub';
-import { hasCurrentOrgPlanFeature, RESERVATIONS_PLAN_FEATURE } from '../utils/saasPlanFeatures';
+import { hasCurrentOrgPlanFeature, RESERVATIONS_PLAN_FEATURE, VOIP_WEBPHONE_PLAN_FEATURE } from '../utils/saasPlanFeatures';
 import { hasCurrentOrgPlanModule } from '../utils/saasPlanModules';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { RECYCLE_BIN_ROUTE } from '../utils/recycleBin';
@@ -102,6 +102,8 @@ const NotificationsPopover = React.lazy(() => import('./NotificationsPopover'));
 const EmailComposerHost = React.lazy(() => import('./email/EmailComposerHost'));
 const GlobalTaskProcessModalHost = React.lazy(() => import('./tasks/GlobalTaskProcessModalHost'));
 const GoalProgressSlider = React.lazy(() => import('./goals/GoalProgressSlider'));
+const WebPhoneWidget = React.lazy(() => import('./voip/WebPhoneWidget'));
+import WebPhoneHeaderButton from './voip/WebPhoneHeaderButton';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -152,6 +154,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [contentCalendarFeatureEnabled, setContentCalendarFeatureEnabled] = useState(false);
   const [reservationsFeatureEnabled, setReservationsFeatureEnabled] = useState(false);
   const [billboardStatusManagementFeatureEnabled, setBillboardStatusManagementFeatureEnabled] = useState(true);
+  const [voipWebphoneFeatureEnabled, setVoipWebphoneFeatureEnabled] = useState(false);
   const [alertsDrawerMounted, setAlertsDrawerMounted] = useState(false);
   const [alertsDrawerOpen, setAlertsDrawerOpen] = useState(false);
   const [sessionBootstrapError, setSessionBootstrapError] = useState<any>(null);
@@ -299,6 +302,18 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     void hasCurrentOrgPlanFeature(BILLBOARD_STATUS_MANAGEMENT_PLAN_FEATURE, { defaultEnabled: true })
       .then((enabled) => { if (active) setBillboardStatusManagementFeatureEnabled(enabled); })
       .catch(() => { if (active) setBillboardStatusManagementFeatureEnabled(true); });
+    return () => { active = false; };
+  }, [currentUser?.id, rolePermissionsReady]);
+
+  useEffect(() => {
+    if (!rolePermissionsReady || !currentUser?.id) {
+      setVoipWebphoneFeatureEnabled(false);
+      return;
+    }
+    let active = true;
+    void hasCurrentOrgPlanFeature(VOIP_WEBPHONE_PLAN_FEATURE, { defaultEnabled: false })
+      .then((enabled) => { if (active) setVoipWebphoneFeatureEnabled(enabled); })
+      .catch(() => { if (active) setVoipWebphoneFeatureEnabled(false); });
     return () => { active = false; };
   }, [currentUser?.id, rolePermissionsReady]);
 
@@ -1755,6 +1770,13 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                 buttonIcon={<ActionIcon name="ai" />}
               />
             ) : null}
+            {currentUserProfile?.voip_enabled && voipWebphoneFeatureEnabled ? (
+              <WebPhoneHeaderButton
+                visible
+                isMobile={isMobile}
+                className={headerActionButtonClassName}
+              />
+            ) : null}
             <Tooltip title="اعلان‌ها" placement="bottom">
               <NotificationUnreadBadge kind="alerts">
                 <Button
@@ -1913,6 +1935,11 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         <React.Suspense fallback={null}>
           <GlobalTaskProcessModalHost />
           <EmailComposerHost />
+          <WebPhoneWidget
+            voipEnabled={currentUserProfile?.voip_enabled === true}
+            dialMode={currentUserProfile?.voip_dial_mode}
+            planFeatureEnabled={voipWebphoneFeatureEnabled}
+          />
         </React.Suspense>
         <DrawerInteractionRecovery />
         <UserAnnouncementsPopupHost

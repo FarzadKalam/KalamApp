@@ -18,7 +18,8 @@ import {
   type ClientAgentAccessEvaluation,
 } from '../../utils/aiAgentCatalog';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
-import AiAgentIcon, { AiAgentDeskSeatFigure } from '../ai/AiAgentIcon';
+import AiAgentIcon, { AiAgentCameoFigure, AiAgentDeskSeatFigure } from '../ai/AiAgentIcon';
+import AutonomousNightShiftHub from './AutonomousNightShiftHub';
 import DashboardAgentDetailModal, { type DashboardAgentModalItem } from './DashboardAgentDetailModal';
 
 type AgentLiveMeta = {
@@ -85,6 +86,7 @@ type DashboardAgentDeskStripProps = {
   onToggleInbox?: (focusAgentKey?: AgentKey) => void;
   onOverviewMeta?: (meta: DashboardAgentDeskOverviewMeta) => void;
   externalInboxBadgeCount?: number;
+  defaultNightShiftOpen?: boolean;
 };
 
 const DashboardAgentDeskStrip: React.FC<DashboardAgentDeskStripProps> = ({
@@ -97,10 +99,12 @@ const DashboardAgentDeskStrip: React.FC<DashboardAgentDeskStripProps> = ({
   onToggleInbox,
   onOverviewMeta,
   externalInboxBadgeCount,
+  defaultNightShiftOpen = false,
 }) => {
   const navigate = useNavigate();
   const [deskOverviewLoaded, setDeskOverviewLoaded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [showNightShift, setShowNightShift] = useState(defaultNightShiftOpen);
   const [liveAgents, setLiveAgents] = useState<Record<string, AgentLiveMeta>>({});
   const [pendingApprovals, setPendingApprovals] = useState<any[]>([]);
   const [pendingApprovalsByAgent, setPendingApprovalsByAgent] = useState<Record<string, number>>({});
@@ -384,6 +388,24 @@ const DashboardAgentDeskStrip: React.FC<DashboardAgentDeskStripProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
+          <Button
+            size="small"
+            type={showNightShift ? 'primary' : 'default'}
+            icon={<span className="text-[12px] leading-none">🌙</span>}
+            onClick={() => setShowNightShift((prev) => !prev)}
+            className={`!inline-flex !items-center !gap-1.5 !rounded-xl !text-[11px] font-semibold transition ${
+              showNightShift
+                ? '!border-indigo-500 !bg-gradient-to-r !from-indigo-600 !to-indigo-800 !text-white shadow-sm'
+                : '!border-indigo-200/90 !bg-indigo-50/70 !text-indigo-800 hover:!border-indigo-300 hover:!bg-indigo-100 dark:!border-indigo-400/30 dark:!bg-indigo-500/15 dark:!text-indigo-200'
+            }`}
+          >
+            <span>شیفت شبانه ۲۴/۷</span>
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+            </span>
+          </Button>
+
           {onToggleInbox ? (
             <Button
               size="small"
@@ -555,16 +577,15 @@ const DashboardAgentDeskStrip: React.FC<DashboardAgentDeskStripProps> = ({
                   >
                     <div className="flex min-w-0 items-center gap-1.5">
                       <span
-                        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg"
+                        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg overflow-hidden"
                         style={{
                           backgroundColor: agent.orgEnabled ? `${agent.badgeColor}18` : 'rgba(148,163,184,0.16)',
-                          color: agent.orgEnabled ? agent.badgeColor : '#94a3b8',
                         }}
                       >
-                        <AiAgentIcon
+                        <AiAgentCameoFigure
                           agentKey={agent.key}
-                          size={13}
-                          color={agent.orgEnabled ? agent.badgeColor : '#94a3b8'}
+                          size={16}
+                          accentColor={agent.orgEnabled ? agent.badgeColor : '#94a3b8'}
                         />
                       </span>
                       <div className="min-w-0 flex-1 text-[11px] font-bold leading-4 text-slate-800 dark:text-slate-100 break-words">
@@ -632,6 +653,47 @@ const DashboardAgentDeskStrip: React.FC<DashboardAgentDeskStripProps> = ({
           </div>
         </div>
       </div>
+
+      {/* 24/7 Nocturnal Autonomous Hub: Active Background Flow & Metrics */}
+      {showNightShift ? (
+        <div className="mt-4">
+          <AutonomousNightShiftHub
+            onOpenAgentModal={(key) => setActiveModalAgentKey(key)}
+            activeAgentsCount={visibleCards.length}
+          />
+        </div>
+      ) : (
+        /* Subtle Teaser Bar prompting night shift capabilities */
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => setShowNightShift(true)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              setShowNightShift(true);
+            }
+          }}
+          className="mt-3 flex cursor-pointer items-center justify-between rounded-xl border border-indigo-200/80 bg-gradient-to-r from-indigo-950 via-[#0a0f26] to-slate-900 px-3.5 py-2 text-white shadow-sm transition hover:border-indigo-400 hover:shadow-md"
+        >
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-indigo-500/25 text-amber-300">
+              🌙
+            </span>
+            <div className="text-[11.5px] font-bold text-indigo-100">
+              وقتی شما خوابید؛ ایجنت‌ها و اتوماسیون‌های تازه‌سیستم در حال کارند
+            </div>
+            <span className="hidden sm:inline-block rounded-full bg-indigo-500/20 px-2 py-0.5 text-[10px] text-indigo-300">
+              پایش ۲۴/۷ فعال
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-cyan-300 hover:text-cyan-200">
+            <span>مشاهده وضعیت و شاخص‌ها</span>
+            <span className="text-xs">←</span>
+          </div>
+        </div>
+      )}
 
       <DashboardAgentDetailModal
         open={Boolean(activeModalAgent)}

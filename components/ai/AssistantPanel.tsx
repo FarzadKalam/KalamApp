@@ -44,6 +44,7 @@ import AiAgentMessagesCompactBox from './AiAgentMessagesCompactBox';
 import {
   AI_AGENT_CATALOG,
   buildAgentAccessMapFromOverviewAgents,
+  getAgentDefinition,
   getAgentTitleFa,
   normalizeSelectedAgents,
   resolveClientAgentAccess,
@@ -51,6 +52,7 @@ import {
   type AgentToneStyle,
   type ClientAgentAccessEvaluation,
 } from '../../utils/aiAgentCatalog';
+import { AiAgentCameoFigure } from './AiAgentIcon';
 
 type ChatMessage = {
   id: string;
@@ -3018,23 +3020,40 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     const waitingForResponse = !isUser && item.metadata?.pending_status === true && !isFailed && !isStopped && (!isStreaming || !messageText.trim());
     const activeAgents: AiAgentActivity[] = (Array.isArray(item.metadata?.agent_activities) ? item.metadata.agent_activities : []).map(parseAiAgentActivity).filter((activity: AiAgentActivity | null): activity is AiAgentActivity => Boolean(activity));
     const capabilities = Array.isArray(item.metadata?.capabilities) ? item.metadata.capabilities : [];
+    const effectiveAgentKey = (
+      item.metadata?.agent_key
+      || item.metadata?.agent_id
+      || (selectedAgents.length === 1 ? selectedAgents[0] : null)
+      || (initialAgents.length === 1 ? initialAgents[0] : null)
+      || 'lead_orchestrator'
+    ) as AgentKey;
+    const agentDef = getAgentDefinition(effectiveAgentKey);
     const respondingAgent = resolveAiAgentId(item.metadata?.agent_id || item.metadata?.capability || capabilities[0]);
     const providerRaw = item.metadata?.provider_raw_response || item.metadata?.provider_error_raw || item.metadata?.avalai_raw_response || null;
     const providerRawText = providerRaw
       ? (typeof providerRaw === 'string' ? providerRaw : JSON.stringify(providerRaw, null, 2))
       : '';
     return (
-      <div key={item.id} className={`flex items-start gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+      <div
+        key={item.id}
+        className={`flex w-full items-start gap-2.5 my-2.5 ${isUser ? 'justify-start flex-row' : 'justify-end flex-row-reverse'}`}
+      >
         {isUser ? (
-          <ProfileAvatar size={28} src={authorAvatarUrl} name={authorName} icon={<UserOutlined />} />
+          <ProfileAvatar size={28} src={authorAvatarUrl} name={authorName} icon={<UserOutlined />} className="shrink-0 mt-0.5" />
         ) : (
-          <Avatar
-            size={28}
-            className="ai-chat-avatar"
-            icon={<AiSparkleIcon className="h-4 w-4" />}
-          />
+          <div
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-200/80 bg-slate-900 shadow-sm overflow-hidden mt-0.5"
+            style={{ borderColor: agentDef?.badgeColor ? `${agentDef.badgeColor}90` : undefined }}
+            title={agentDef?.titleFa || 'ایجنت هوشمند'}
+          >
+            <AiAgentCameoFigure
+              agentKey={effectiveAgentKey}
+              size={24}
+              accentColor={agentDef?.badgeColor}
+            />
+          </div>
         )}
-        <div className={`ai-chat-message-column ${isUser ? 'is-user items-end' : 'items-start'} flex flex-col`}>
+        <div className={`ai-chat-message-column ${isUser ? 'is-user items-start max-w-[85%] sm:max-w-[78%]' : 'is-assistant items-end max-w-[90%] sm:max-w-[84%]'} flex flex-col min-w-0`}>
           {pendingKind ? (
             <AiGenerationStatusCard
               kind={pendingKind}
@@ -3048,13 +3067,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             />
           ) : (
           <div
-            className={`ai-chat-message${isUser ? ' is-user' : ''}`}
+            className={`ai-chat-message text-right${isUser ? ' is-user' : ' is-assistant w-full'}`}
           >
             {isUser ? messageText : waitingForResponse ? (
-              <AiActivityStatus agentId={respondingAgent} activities={activeAgents} onStop={isStreaming ? stopActiveStream : undefined} />
+              <AiActivityStatus agentId={effectiveAgentKey || respondingAgent} activities={activeAgents} onStop={isStreaming ? stopActiveStream : undefined} />
             ) : (
               <AiMessageRenderer
-                agentId={respondingAgent}
+                agentId={effectiveAgentKey || respondingAgent}
                 activities={activeAgents}
                 text={messageText}
                 streaming={isStreaming}
@@ -3066,7 +3085,20 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               />
             )}
             <MessageAttachmentGallery attachments={attachments} presentation={isUser ? undefined : 'assistant'} />
-            {!isUser && item.metadata?.agent_plan && <details className="ai-chat-details"><summary>برنامهٔ ایجنت راهبر</summary><AiAgentPlanCard plan={item.metadata.agent_plan} /></details>}
+            {!isUser && item.metadata?.agent_plan && (
+              <div className="mt-2.5 rounded-xl border border-indigo-200/60 bg-indigo-50/40 p-2 text-xs dark:border-indigo-500/20 dark:bg-indigo-950/20">
+                <div className="flex items-center justify-between mb-1 text-[11px] font-bold text-indigo-900 dark:text-indigo-200">
+                  <span className="flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                    <span>فرایند گام‌به‌گام و ارجاع ایجنت‌ها</span>
+                  </span>
+                  <span className="text-[10px] text-indigo-600/80 dark:text-indigo-300/80">
+                    {agentDef?.shortTitleFa || 'راهبر ارکستر'}
+                  </span>
+                </div>
+                <AiAgentPlanCard plan={item.metadata.agent_plan} />
+              </div>
+            )}
             {!isUser ? (() => {
               const instagramCards = Array.isArray(item.metadata?.instagram_media_cards)
                 ? item.metadata.instagram_media_cards
@@ -3176,64 +3208,70 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             ) : null}
           </div>
           )}
-          <div className="ai-chat-meta mt-1 flex flex-wrap items-center gap-1">
-            {isUser ? <span>{authorName}</span> : item.metadata?.agent_key ? <span>{getAgentTitleFa(String(item.metadata.agent_key))}</span> : null}
-            {item.created_at ? <span>{toFaDateTime(item.created_at)}</span> : null}
-            {!isUser && item.model ? <span>{item.model}</span> : null}
-            {!isUser && usageText ? <span>{usageText}</span> : null}
-            {messageText ? (
-              <Tooltip title={isUser ? 'کپی پیام' : 'کپی کل پاسخ'}>
-                <Button
-                  type="text"
-                  size="small"
-                  className="!h-5 !px-1 !text-gray-400 hover:!text-[rgb(var(--brand-700-rgb))]"
-                  icon={<CopyOutlined />}
-                  onClick={() => copyText(messageText, isUser ? 'پیام' : 'پاسخ')}
-                  aria-label={isUser ? 'کپی پیام' : 'کپی کل پاسخ'}
-                />
-              </Tooltip>
-            ) : null}
-            {messageText || attachments.length > 0 ? (
-              <Tooltip title="فوروارد">
-                <Button
-                  type="text"
-                  size="small"
-                  className="!h-5 !px-1 !text-gray-400 hover:!text-[rgb(var(--brand-700-rgb))]"
-                  icon={<ForwardOutlined />}
-                  onClick={() => void forwardMessage({
-                    channel: 'assistant',
-                    actorName: isUser ? 'شما' : 'دستیار هوشمند',
-                    createdAt: item.created_at || null,
-                    createdAtLabel: item.created_at ? toFaDateTime(item.created_at) : '',
-                    content: messageText,
-                    attachments,
-                    relatedModuleId: contextWithSelection.mode === 'record' ? contextWithSelection.moduleId : null,
-                    relatedRecordId: contextWithSelection.mode === 'record' ? contextWithSelection.recordId : null,
-                  })}
-                  aria-label="فوروارد پیام"
-                />
-              </Tooltip>
-            ) : null}
-            {messageText ? (
-              <Tooltip title="ایجاد فعالیت">
-                <Button
-                  type="text"
-                  size="small"
-                  className="!h-5 !px-1 !text-gray-400 hover:!text-[rgb(var(--brand-700-rgb))]"
-                  icon={<UserAddOutlined />}
-                  onClick={() => void createActivityFromMessage({
-                    channel: 'assistant',
-                    actorName: isUser ? 'شما' : 'دستیار هوشمند',
-                    createdAt: item.created_at || null,
-                    createdAtLabel: item.created_at ? toFaDateTime(item.created_at) : '',
-                    content: messageText,
-                    attachments,
-                    relatedModuleId: contextWithSelection.mode === 'record' ? contextWithSelection.moduleId : null,
-                    relatedRecordId: contextWithSelection.mode === 'record' ? contextWithSelection.recordId : null,
-                  })}
-                />
-              </Tooltip>
-            ) : null}
+          <div className="ai-chat-meta mt-1 flex flex-wrap sm:flex-nowrap items-center justify-between gap-1 w-full text-[10.5px]">
+            <div className="flex items-center gap-1.5 truncate text-slate-500 dark:text-slate-400">
+              <span className="font-bold text-slate-700 dark:text-slate-200">
+                {isUser ? authorName : (agentDef?.shortTitleFa || 'دستیار')}
+              </span>
+              {item.created_at ? <span>• {toFaDateTime(item.created_at)}</span> : null}
+              {!isUser && item.model ? <span className="opacity-75 font-mono text-[9.5px]">({item.model})</span> : null}
+              {!isUser && usageText ? <span className="hidden sm:inline-block opacity-75">• {usageText}</span> : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-0.5">
+              {messageText ? (
+                <Tooltip title={isUser ? 'کپی پیام' : 'کپی کل پاسخ'}>
+                  <Button
+                    type="text"
+                    size="small"
+                    className="!h-5 !px-1 !text-gray-400 hover:!text-[rgb(var(--brand-700-rgb))]"
+                    icon={<CopyOutlined />}
+                    onClick={() => copyText(messageText, isUser ? 'پیام' : 'پاسخ')}
+                    aria-label={isUser ? 'کپی پیام' : 'کپی کل پاسخ'}
+                  />
+                </Tooltip>
+              ) : null}
+              {messageText || attachments.length > 0 ? (
+                <Tooltip title="فوروارد">
+                  <Button
+                    type="text"
+                    size="small"
+                    className="!h-5 !px-1 !text-gray-400 hover:!text-[rgb(var(--brand-700-rgb))]"
+                    icon={<ForwardOutlined />}
+                    onClick={() => void forwardMessage({
+                      channel: 'assistant',
+                      actorName: isUser ? 'شما' : (agentDef?.titleFa || 'دستیار هوشمند'),
+                      createdAt: item.created_at || null,
+                      createdAtLabel: item.created_at ? toFaDateTime(item.created_at) : '',
+                      content: messageText,
+                      attachments,
+                      relatedModuleId: contextWithSelection.mode === 'record' ? contextWithSelection.moduleId : null,
+                      relatedRecordId: contextWithSelection.mode === 'record' ? contextWithSelection.recordId : null,
+                    })}
+                    aria-label="فوروارد پیام"
+                  />
+                </Tooltip>
+              ) : null}
+              {messageText ? (
+                <Tooltip title="ایجاد فعالیت">
+                  <Button
+                    type="text"
+                    size="small"
+                    className="!h-5 !px-1 !text-gray-400 hover:!text-[rgb(var(--brand-700-rgb))]"
+                    icon={<UserAddOutlined />}
+                    onClick={() => void createActivityFromMessage({
+                      channel: 'assistant',
+                      actorName: isUser ? 'شما' : (agentDef?.titleFa || 'دستیار هوشمند'),
+                      createdAt: item.created_at || null,
+                      createdAtLabel: item.created_at ? toFaDateTime(item.created_at) : '',
+                      content: messageText,
+                      attachments,
+                      relatedModuleId: contextWithSelection.mode === 'record' ? contextWithSelection.moduleId : null,
+                      relatedRecordId: contextWithSelection.mode === 'record' ? contextWithSelection.recordId : null,
+                    })}
+                  />
+                </Tooltip>
+              ) : null}
+            </div>
           </div>
         </div>
       </div>
@@ -3758,11 +3796,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               return Boolean(access && (access.canView ?? access.canUse) !== false);
             })
           ) ? (
-            <AiAgentMessagesCompactBox
-              className="w-full shrink-0"
-              agentAccessMap={agentAccessMap}
-              onSelectAgent={(agentKey) => setSelectedAgents((prev) => normalizeSelectedAgents([...prev, agentKey]))}
-            />
+            <div className="hidden lg:block w-full shrink-0">
+              <AiAgentMessagesCompactBox
+                className="w-full shrink-0"
+                agentAccessMap={agentAccessMap}
+                onSelectAgent={(agentKey) => setSelectedAgents((prev) => normalizeSelectedAgents([...prev, agentKey]))}
+              />
+            </div>
           ) : null}
         </div>
       </div>
