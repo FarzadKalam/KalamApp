@@ -408,7 +408,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     const latestNavigationState = latestNavigationStateRef.current;
     const targetPath = String(resolvedHref).split(/[?#]/)[0] || resolvedHref;
     if (targetPath === '/ai') {
-      if (latestNavigationState.isMobile) setCollapsed(true);
+      setCollapsed(true);
       navigate('/ai', { state: { forceNewThread: true, aiEntrySource: 'layout' } });
       window.setTimeout(() => { sidebarNavigationRef.current = ''; }, 350);
       return;
@@ -419,7 +419,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     }
     if (sidebarNavigationRef.current === resolvedHref) return;
     sidebarNavigationRef.current = resolvedHref;
-    if (latestNavigationState.isMobile) setCollapsed(true);
+    setCollapsed(true);
     navigate(resolvedHref);
     window.setTimeout(() => {
       if (sidebarNavigationRef.current === resolvedHref) {

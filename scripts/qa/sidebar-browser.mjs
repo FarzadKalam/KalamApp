@@ -51,6 +51,7 @@ try {
   await page.waitForFunction(() => [...document.querySelectorAll('.workspace-sidebar-submenu')].filter(el => el.getBoundingClientRect().width > 0 && getComputedStyle(el).visibility !== 'hidden').length >= 2);
   await page.getByRole('menuitem', { name: 'گزارش فروش', exact: true }).click();
   await panel.waitFor({ state: 'detached' });
+  assert.ok(page.url().endsWith('/sidebar-test/index.html'), 'Menu links use client navigation without reloading the document');
   await page.getByRole('button', { name: 'صفحه مشتریان', exact: true }).click();
   const before = await body.boundingBox();
   await toggle.click(); await panel.waitFor();

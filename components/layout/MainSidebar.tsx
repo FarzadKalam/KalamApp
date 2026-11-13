@@ -67,11 +67,7 @@ function MainSidebar({ items, railItems, selectedKey, ancestorKeys, collapsed, o
     </aside>}
     {!isMobile && !collapsed && <aside id="workspace-sidebar-panel" className="app-sidebar-panel" aria-label={panelTitle}>
       <header className="app-sidebar-panel-header"><span className="app-drawer-brand">{logo}<span>{panelTitle}</span></span><Button type="text" icon={<CloseOutlined />} aria-label="بستن فهرست ماژول‌ها" onClick={close} /></header>
-      <nav className="app-sidebar-panel-menu" aria-label="ماژول‌های سامانه" onClickCapture={event => {
-        if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-        const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
-        if (anchor?.getAttribute('href')?.startsWith('/') && anchor.getAttribute('aria-disabled') !== 'true' && !anchor.classList.contains('is-disabled')) close();
-      }}>
+      <nav className="app-sidebar-panel-menu" aria-label="ماژول‌های سامانه">
         <SidebarMenu items={panelItems} selectedKey={selectedKey} ancestorKeys={expandedKeys} collapsed={false} isMobile={false} desktopFlyout isDarkMode={isDarkMode} onNavigate={href => { close(); onNavigate(href); }} />
       </nav>
       <footer className="app-drawer-footer"><ContextualTutorialButton contexts={contexts} viewer={viewer} buttonClassName="app-rail-item" /><TazeSystemAttribution collapsed={false} /></footer>
