@@ -1,3 +1,4 @@
+import { ECOSYSTEM_STATUS_LABELS, PUBLIC_ECOSYSTEM_GROUPS } from '../shared/publicEcosystem.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { PUBLIC_SITE_URL, publicOrganizationSchema, publicWebsiteSchema } from '../shared/publicBrandSeo.mjs';
@@ -172,7 +173,8 @@ fs.mkdirSync(outputDir, { recursive: true });
 
 for (const page of pages) {
   const canonical = `${siteUrl}${page.path === '/' ? '' : page.path}`;
-  writeSeoPage({ ...page, canonical, bodyHtml: `<p>${escapeHtml(page.body)}</p>` });
+  const ecosystemHtml = page.path === '/' ? `<section><h2>زیست‌بوم تازه سیستم</h2><p>پشتیبانی در محصول به معنی اتصال فعال همهٔ سازمان‌ها نیست؛ استفاده به پلن و تنظیمات سازمان بستگی دارد. موارد در حال توسعه هنوز قابل استفاده نیستند.</p>${PUBLIC_ECOSYSTEM_GROUPS.map(group => `<h3>${escapeHtml(group.title)}</h3><ul>${group.items.map(item => `<li>${escapeHtml(item.name)} — ${escapeHtml(ECOSYSTEM_STATUS_LABELS[item.status])}: ${escapeHtml(item.description)}</li>`).join('')}</ul>`).join('')}</section>` : '';
+  writeSeoPage({ ...page, canonical, bodyHtml: `<p>${escapeHtml(page.body)}</p>${ecosystemHtml}` });
 }
 
 let dynamicCount = 0;

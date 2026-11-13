@@ -1,0 +1,98 @@
+{
+  "retrievedAt": "2026-11-13",
+  "note": "Brand marks identify technologies and integrations; no partnership is implied. Simple Icons: CC0; Lobe Icons: MIT, trademarks belong to their owners. Other marks are website icons from the named official sites.",
+  "sources": [
+    {
+      "name": "nginx",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/nginx.svg"
+    },
+    {
+      "name": "supabase",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/supabase.svg"
+    },
+    {
+      "name": "whatsapp",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/whatsapp.svg"
+    },
+    {
+      "name": "docker",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/docker.svg"
+    },
+    {
+      "name": "woocommerce",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/woocommerce.svg"
+    },
+    {
+      "name": "wordpress",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/wordpress.svg"
+    },
+    {
+      "name": "postgresql",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/postgresql.svg"
+    },
+    {
+      "name": "instagram",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/instagram.svg"
+    },
+    {
+      "name": "elevenlabs",
+      "url": "https://registry.npmmirror.com/@lobehub/icons-static-svg/latest/files/icons/elevenlabs.svg"
+    },
+    {
+      "name": "glm",
+      "url": "https://registry.npmmirror.com/@lobehub/icons-static-svg/latest/files/icons/zai.svg"
+    },
+    {
+      "name": "deepseek",
+      "url": "https://registry.npmmirror.com/@lobehub/icons-static-svg/latest/files/icons/deepseek-color.svg"
+    },
+    {
+      "name": "nvidia",
+      "url": "https://registry.npmmirror.com/@lobehub/icons-static-svg/latest/files/icons/nvidia-color.svg"
+    },
+    {
+      "name": "gemini",
+      "url": "https://registry.npmmirror.com/@lobehub/icons-static-svg/latest/files/icons/gemini-color.svg"
+    },
+    {
+      "name": "qwen",
+      "url": "https://registry.npmmirror.com/@lobehub/icons-static-svg/latest/files/icons/qwen-color.svg"
+    },
+    {
+      "name": "openai",
+      "url": "https://registry.npmmirror.com/@lobehub/icons-static-svg/latest/files/icons/openai.svg"
+    },
+    {
+      "name": "grok",
+      "url": "https://registry.npmmirror.com/@lobehub/icons-static-svg/latest/files/icons/grok.svg"
+    },
+    {
+      "name": "claude",
+      "url": "https://registry.npmmirror.com/@lobehub/icons-static-svg/latest/files/icons/claude.svg"
+    },
+    {
+      "name": "mahak",
+      "url": "https://www.mahaksoft.com/wp-content/uploads/2022/05/cropped-New-Logo-MahakSoft-57-180x180.png"
+    },
+    {
+      "name": "sepidar",
+      "url": "https://www.sepidarsystem.com/wp-content/uploads/2018/06/cropped-sepidar-company-logo-180x180.jpg"
+    },
+    {
+      "name": "melipayamak",
+      "url": "https://www.melipayamak.com/wp-content/uploads/2018/09/cropped-logo-180x180.png"
+    },
+    {
+      "name": "kavenegar",
+      "url": "https://kavenegar.com/images/favicon.ico"
+    },
+    {
+      "name": "zarinpal",
+      "url": "https://www.zarinpal.com/icons/apple-touch-icon.png"
+    },
+    {
+      "name": "telefonchy",
+      "url": "https://telefonchy.com/favicon/apple-touch-icon.png"
+    }
+  ]
+}

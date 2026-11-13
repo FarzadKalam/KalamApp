@@ -2,7 +2,7 @@ import React from 'react';
 import type { SectionType } from './types';
 import { HeroSection, LogosSection, StatsSection, FeaturesSection } from './sections/sectionsA';
 import {
-  ProcessSection, AutomationSection, CommunicationsSection, IntegrationsSection, AiSection,
+  ProcessSection, AutomationSection, CommunicationsSection, AiSection,
 } from './sections/sectionsB';
 import {
   CalendarSection, ScreenshotsSection, ComparisonSection, TestimonialsSection, FaqSection, CtaSection,
@@ -10,6 +10,7 @@ import {
 } from './sections/sectionsC';
 import { HeroTreeSection, HrSection, AccountingSection, ProcessShowcaseSection } from './sections/sectionsD';
 import CloudAccessSection from './sections/CloudAccessSection';
+import EcosystemOrbitSection from './sections/EcosystemOrbitSection';
 import PricingSection from './shared/PricingSection';
 
 // ──────────────────────────────────────────────────
@@ -202,13 +203,10 @@ export const SECTION_REGISTRY: Record<SectionType, SectionDef> = {
   },
   integrations: {
     type: 'integrations',
-    labelFa: 'اتصالات',
-    description: 'وردپرس، حسابداری، مؤدیان، API و Webhook.',
-    Component: IntegrationsSection,
-    editor: [
-      ...baseHeadingFields,
-      { key: 'items', label: 'اتصالات', type: 'item-list', itemLabel: 'اتصال', fields: iconItemFields },
-    ],
+    labelFa: 'زیست‌بوم و مدار اتصالات',
+    description: 'چهار مدار زیرساخت، هوش مصنوعی، ارتباطات و کسب‌وکار؛ نمادها و وضعیت‌ها از فهرست مشترک محصول خوانده می‌شوند.',
+    Component: EcosystemOrbitSection,
+    editor: [...baseHeadingFields],
   },
   ai: {
     type: 'ai',

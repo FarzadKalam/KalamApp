@@ -244,6 +244,30 @@ jobs:
       - name: Verify PWA release
         run: node scripts/verify-pwa-release.mjs
 
+      - name: Public ecosystem browser checks
+        timeout-minutes: 8
+        env:
+          PLAYWRIGHT_BROWSER: chromium
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/ecosystem-browser" --no-package-lock --no-save playwright@1.64.1
+          node "$RUNNER_TEMP/ecosystem-browser/node_modules/playwright/cli.js" install --with-deps chromium
+          npm run preview -- --host 127.0.0.1 --port 5189 > "$RUNNER_TEMP/ecosystem-preview.log" 2>&1 &
+          PREVIEW_PID=$!
+          trap 'kill "$PREVIEW_PID" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:5189/tazesystem > /dev/null; then break; fi
+            sleep 1
+          done
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/ecosystem-browser/node_modules/playwright/index.mjs" node scripts/qa/ecosystem-orbit.mjs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ecosystem-review
+          path: tmp/ecosystem-review
+          if-no-files-found: ignore
+
       - uses: actions/upload-artifact@v4
         with:
           name: dist
