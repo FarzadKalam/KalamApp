@@ -78,6 +78,7 @@ try {
     return channels(title).every(value => value > 180) && channels(search).every(value => value > 180);
   });
   await page.screenshot({ path: `${output}/desktop-dark.png`, fullPage: true });
+  assert.equal(await panel.locator('.ant-menu-item-selected a').evaluate(el => getComputedStyle(el).color), 'rgb(255, 255, 255)', 'Selected record links inherit the readable menu color');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   assert.equal(await page.locator('.app-workspace-content').evaluate(el => getComputedStyle(el).transitionDuration), '0s');
   await page.setViewportSize({ width: 390, height: 844 });

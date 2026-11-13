@@ -63,6 +63,9 @@
 .app-sidebar-panel .sidebar-module-search .ant-input-affix-wrapper{background:var(--workspace-surface)!important;border-color:var(--workspace-line)!important;color:var(--workspace-text)!important}
 .app-sidebar-panel .sidebar-module-search input{background:transparent!important;color:var(--workspace-text)!important}
 .app-sidebar-panel .sidebar-module-search input::placeholder{color:var(--workspace-muted)!important;opacity:1}
+.app-sidebar-panel .sidebar-menu-link,.app-module-drawer .sidebar-menu-link,.workspace-sidebar-submenu .sidebar-menu-link{display:flex;min-width:0;width:100%;color:inherit!important;text-decoration:none}
+.app-sidebar-panel .sidebar-menu-icon-link,.app-module-drawer .sidebar-menu-icon-link,.workspace-sidebar-submenu .sidebar-menu-icon-link{display:inline-flex;align-items:center;justify-content:center;color:inherit!important;text-decoration:none}
+.app-sidebar-panel .sidebar-menu-link.is-disabled,.app-sidebar-panel .sidebar-menu-icon-link.is-disabled{pointer-events:none;cursor:not-allowed}
 .app-sidebar-panel .ant-menu-item-icon{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;margin:0!important}
 .app-sidebar-panel .ant-menu-item-icon svg{width:18px;height:18px}
 .app-sidebar-panel .ant-menu-title-content{margin-inline-start:10px!important}

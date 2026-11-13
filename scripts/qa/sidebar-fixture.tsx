@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ConfigProvider, theme } from 'antd';
+import { ConfigProvider, theme, type MenuProps } from 'antd';
 import { TeamOutlined, BankOutlined, DashboardOutlined } from '@ant-design/icons';
 import MainSidebar from '../../components/layout/MainSidebar';
 import { resolveSidebarLayout } from '../../utils/sidebarLayout';
@@ -25,9 +25,16 @@ const Preview = () => {
   useEffect(() => { document.documentElement.classList.toggle('dark', dark); }, [dark]);
   const layout = resolveSidebarLayout(pathname, mobile, collapsed);
   const navigate = (href: string) => { setPathname(href); setCollapsed(href !== '/'); };
+  const decorate = (rows: MenuProps['items']): MenuProps['items'] => rows?.map(item => {
+    if (!item) return item;
+    if ('children' in item && Array.isArray(item.children)) return { ...item, children: decorate(item.children) || [] };
+    const href = 'key' in item ? String(item.key) : '';
+    if (!href.startsWith('/') || !('label' in item)) return item;
+    return { ...item, label: <a className="sidebar-menu-link" href={href} onClick={event => { event.preventDefault(); event.stopPropagation(); navigate(href); }}>{item.label}</a> };
+  });
   return <ConfigProvider direction="rtl" theme={{ algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm, token: { fontFamily: 'Peyda, Tahoma, sans-serif' } }}>
     <div className="workspace-chrome" data-sidebar-mode={layout.mode} style={{ minHeight: '100vh', color: 'var(--workspace-text)' }}>
-      <MainSidebar items={items} railItems={items} selectedKey={pathname} ancestorKeys={[]} collapsed={collapsed} onCollapsedChange={setCollapsed} isMobile={mobile} isDarkMode={dark} onNavigate={navigate} brandShortName="تازه سیستم" contexts={[]} orgId="preview-org" userId="preview-user" presentation={layout.mode} />
+      <MainSidebar items={decorate(items)} railItems={items} selectedKey={pathname} ancestorKeys={[]} collapsed={collapsed} onCollapsedChange={setCollapsed} isMobile={mobile} isDarkMode={dark} onNavigate={navigate} brandShortName="تازه سیستم" contexts={[]} orgId="preview-org" userId="preview-user" presentation={layout.mode} />
       <main className="app-workspace-content" style={{ paddingRight: layout.reservedWidth, minHeight: '100vh', width: '100%', boxSizing: 'border-box', minWidth: 0 }}>
         <header className="app-main-header" style={{ padding: 16, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           <button onClick={() => navigate('/')}>صفحه داشبورد</button><button onClick={() => navigate('/customers')}>صفحه مشتریان</button>
