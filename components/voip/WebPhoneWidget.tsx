@@ -244,6 +244,13 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
     return dialInput.trim();
   }, [voip.activeCall?.remoteNumber, dialInput]);
 
+  const contactInitials = useMemo(() => {
+    const name = voip.activeCall?.remoteDisplayName || dialInput || 'تلفن';
+    const parts = name.trim().split(/\s+/);
+    if (parts.length >= 2) return `${parts[0][0]}‌${parts[1][0]}`;
+    return name.slice(0, 2);
+  }, [voip.activeCall?.remoteDisplayName, dialInput]);
+
   // Fetch recent calls when drawer is expanded
   useEffect(() => {
     if (!showHistoryDrawer) return;
@@ -421,13 +428,6 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
     const { moduleId, recordId } = activeCall.matchedContact;
     navigate(`/${moduleId}/${recordId}`);
   };
-
-  const contactInitials = useMemo(() => {
-    const name = activeCall?.remoteDisplayName || dialInput || 'تلفن';
-    const parts = name.trim().split(/\s+/);
-    if (parts.length >= 2) return `${parts[0][0]}‌${parts[1][0]}`;
-    return name.slice(0, 2);
-  }, [activeCall?.remoteDisplayName, dialInput]);
 
   return (
     <div
