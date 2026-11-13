@@ -1,5 +1,4 @@
 import PlanFeatureBoundary from './components/saas/PlanFeatureBoundary';
-import { TAZE_SYSTEM_BRAND_ASSETS } from './utils/tazeSystemBrandAssets';
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { HelmetProvider } from "react-helmet-async";
 import { createRoot } from "react-dom/client";
@@ -11,7 +10,7 @@ import { createSchemaCompatibleDataProvider } from './utils/selectCompat';
 import { authProvider } from "./authProvider";
 import routerBindings, { UnsavedChangesNotifier, DocumentTitleHandler, CatchAllNavigate } from "@refinedev/react-router-v6";
 import { BrowserRouter, Navigate, Route, Routes, Outlet, useParams, useLocation } from "react-router-dom";
-import { trackPageView, sendWebVitals } from "./utils/analytics";
+import { trackPageView } from "./utils/analytics";
 import ConfigProvider from "antd/es/config-provider";
 import AntdApp from "antd/es/app";
 import antdTheme from "antd/es/theme";
@@ -122,6 +121,7 @@ const loadReportBuilderPage = () => import("./pages/ReportBuilderPage");
 const loadReportViewerPage = () => import("./pages/ReportViewerPage");
 const loadCustomerClubPage = () => import("./pages/CustomerClubPage");
 const loadPublicSite = () => import("./pages/PublicSite");
+const MarketingSiteHostApp = lazy(() => import('./marketingSiteApp'));
 const loadSaasPortalPage = () => import("./pages/SaasPortalPage");
 const loadWorkSchedulesPage = () => import("./pages/WorkSchedulesPage");
 const loadAttendanceDailySchedulePage = () => import("./pages/AttendanceDailySchedulePage");
@@ -354,75 +354,6 @@ const AuthenticatedOutletBoundary: React.FC = () => {
   );
 };
 
-const MarketingSiteHostApp: React.FC = () => {
-  useEffect(() => {
-    document.body.style.fontFamily = "var(--font-family-app)";
-    // تنظیم favicon اختصاصی تازه سیستم
-    const existing = document.querySelector<HTMLLinkElement>('link[rel*="icon"]');
-    const link: HTMLLinkElement = existing || document.createElement("link");
-    link.rel = "icon";
-    link.type = "image/png";
-    link.href = TAZE_SYSTEM_BRAND_ASSETS.favicon;
-    if (!existing) document.head.appendChild(link);
-  }, []);
-
-  useEffect(() => {
-    // GTM فقط برای سایت عمومی
-    const gtmId = import.meta.env.VITE_GTM_ID as string | undefined;
-    if (!gtmId) return;
-    window.dataLayer = window.dataLayer || [];
-    window.dataLayer.push({ 'gtm.start': new Date().getTime(), event: 'gtm.js' });
-    const script = document.createElement('script');
-    script.async = true;
-    script.src = `https://www.googletagmanager.com/gtm.js?id=${gtmId}`;
-    document.head.appendChild(script);
-    const noscript = document.createElement('noscript');
-    const iframe = document.createElement('iframe');
-    iframe.src = `https://www.googletagmanager.com/ns.html?id=${gtmId}`;
-    iframe.height = '0';
-    iframe.width = '0';
-    iframe.style.cssText = 'display:none;visibility:hidden';
-    noscript.appendChild(iframe);
-    document.body.insertBefore(noscript, document.body.firstChild);
-  }, []);
-
-  useEffect(() => {
-    sendWebVitals();
-  }, []);
-
-  return (
-    <HelmetProvider>
-    <BrowserRouter>
-      <RouteTracker />
-      <ConfigProvider
-        direction="rtl"
-        locale={faIR}
-        theme={{ token: { fontFamily: "Peyda, Tahoma, Arial, sans-serif" } }}
-      >
-        <JalaliLocaleListener />
-        <AntdApp
-          message={{ top: 72, duration: 3.5, maxCount: 4 }}
-          notification={{ placement: "topLeft", duration: 4.5, maxCount: 4 }}
-        >
-          <PwaInstallPrompt />
-          <PublicThemeBoundary>
-            <LazyRouteBoundary>
-              <Routes>
-                <Route path="/i/:code" element={<InvoicePublicPage />} />
-                <Route path="/d/:code" element={<DeliveryPublicPage />} />
-                <Route path="/c/:token" element={<OnlineCatalogPublicPage />} />
-                <Route path="/payment/callback" element={<PaymentCallbackPage />} />
-                <Route path="/*" element={<PublicSite />} />
-              </Routes>
-            </LazyRouteBoundary>
-          </PublicThemeBoundary>
-        </AntdApp>
-      </ConfigProvider>
-    </BrowserRouter>
-    </HelmetProvider>
-  );
-};
-
 // Keep the onboarding route outside the authenticated Refine tree. Signing in
 // changes App branding/session state; an inline Refine child would remount the
 // wizard while its provisioning request is still running.
@@ -449,7 +380,7 @@ function App() {
   const saasAdminPanelHost = isSaasAdminPanelHost();
 
   if (marketingHost) {
-    return <MarketingSiteHostApp />;
+    return <LazyRouteBoundary><MarketingSiteHostApp /></LazyRouteBoundary>;
   }
   if (window.location.pathname === '/auth/handoff') {
     return <TenantSessionHandoffPage />;

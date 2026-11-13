@@ -260,6 +260,7 @@ jobs:
             sleep 1
           done
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/ecosystem-browser/node_modules/playwright/index.mjs" node scripts/qa/ecosystem-orbit.mjs
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/ecosystem-browser/node_modules/playwright/index.mjs" node scripts/qa/public-startup.mjs
 
       - uses: actions/upload-artifact@v4
         if: always()

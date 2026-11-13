@@ -18,7 +18,9 @@ const bootstrapAndRender = async () => {
   const useStandalonePublicBootstrap = shouldUseStandalonePublicBootstrap(window.location.pathname);
   const appModulePromise = useStandalonePublicBootstrap
     ? import("./publicRouteApp")
-    : import("./initDayjs").then(() => import("./App"));
+    : isMarketingHost
+      ? import("./marketingSiteApp")
+      : import("./initDayjs").then(() => import("./App"));
   const runtimeBrandingPromise = loadRuntimeBranding()
     .then((runtimeBranding) => {
       persistRuntimeBranding(runtimeBranding);
@@ -27,12 +29,14 @@ const bootstrapAndRender = async () => {
     .catch(() => undefined);
 
   const bootstrapModule = await appModulePromise;
-  const mount = "mountPublicRouteApp" in bootstrapModule
-    ? bootstrapModule.mountPublicRouteApp
-    : bootstrapModule.mountApp;
+  const mount = "mountMarketingSiteApp" in bootstrapModule
+    ? bootstrapModule.mountMarketingSiteApp
+    : "mountPublicRouteApp" in bootstrapModule
+      ? bootstrapModule.mountPublicRouteApp
+      : bootstrapModule.mountApp;
   mount(container!);
-  // Keep the server-rendered SEO fallback visible until React has mounted.
-  // Hiding it in index.html made a slow first chunk look like a black screen.
+  // index.html hides crawler content before first paint; noscript restores it
+  // for readers without JavaScript. Never show that content as a loading page.
   window.requestAnimationFrame(() => {
     document.documentElement.classList.add("js");
   });
