@@ -57,7 +57,7 @@ export const installFeedbackBridge = (message: MessageInstance, notification: No
     adaptedNotification[type] = args => {
       const kind = type === 'open' ? args.type || 'info' : type;
       const options = notificationOptions(args, kind);
-      if (args.actions || args.btn || args.onClick || args.props || args.style || args.className || args.closable !== undefined || args.closeIcon !== undefined || args.role === 'alert' || args.placement || args.showProgress || args.pauseOnHover === false) {
+      if (args.actions || args.btn || args.onClick || args.props || args.style || args.className || args.closable !== undefined || args.closeIcon !== undefined || args.role === 'alert' || args.placement || args.showProgress || args.pauseOnHover === false || (args.message != null && typeof args.message !== 'string')) {
         publishNativeFeedback(options, {
           show: (key, onClose) => originalNotification[type]({ ...args, key, onClose, duration: args.duration === null ? 0 : args.duration ?? ((FEEDBACK_POLICY.durations[kind] ?? 0) / 1000), message: typeof args.message === 'string' ? options.title : args.message }),
           close: key => originalNotification.destroy(key),

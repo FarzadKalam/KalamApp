@@ -20,6 +20,7 @@ const FeedbackViewport = ({ items }: { items: FeedbackItem[] }) => {
   return (
     <section className="app-feedback-viewport" data-sileo-viewport data-position="top-center" dir="rtl" aria-label="پیام‌های سامانه" aria-live="polite" aria-relevant="additions text" style={{
       fontFamily: token.fontFamily,
+      '--feedback-top-desktop': `${FEEDBACK_POLICY.offsets.desktop}px`, '--feedback-top-mobile': `${FEEDBACK_POLICY.offsets.mobile}px`, '--feedback-gutter': `${FEEDBACK_POLICY.viewportGutter}px`,
       '--feedback-width': `${width}px`, '--feedback-ink': isDark ? '#171717' : '#fafafa',
       '--feedback-muted': isDark ? '#525252' : '#d4d4d4', '--feedback-line': isDark ? 'rgb(0 0 0 / .06)' : 'rgb(255 255 255 / .08)',
     } as React.CSSProperties}>

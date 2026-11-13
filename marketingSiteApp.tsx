@@ -1,4 +1,5 @@
 import AppFeedbackHost from "./components/feedback/AppFeedbackHost";
+import { FEEDBACK_ANTD_CONFIG } from './utils/feedbackPolicy';
 import './initDayjs';
 import { Suspense, lazy, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -65,7 +66,7 @@ const MarketingSiteApp = () => {
         <MarketingRouteTracker />
         <ConfigProvider direction="rtl" locale={faIR} theme={{ token: { fontFamily: 'Peyda, Tahoma, Arial, sans-serif' } }}>
           <JalaliLocaleListener />
-          <AntdApp message={{ top: 72, duration: 3.5, maxCount: 4 }} notification={{ placement: 'topLeft', duration: 4.5, maxCount: 4 }}>
+          <AntdApp message={FEEDBACK_ANTD_CONFIG.message} notification={FEEDBACK_ANTD_CONFIG.notification}>
           <AppFeedbackHost />
             <PwaInstallPrompt />
             <PublicThemeBoundary>

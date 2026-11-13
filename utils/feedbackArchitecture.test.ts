@@ -19,5 +19,10 @@ describe('feedback architecture boundaries', () => {
     const app = fs.readFileSync('App.tsx', 'utf8');
     expect(app).toContain('notificationProvider={refineFeedbackProvider}');
     expect(app).not.toContain('useNotificationProvider');
+    for (const entry of ['App.tsx', 'marketingSiteApp.tsx', 'publicRouteApp.tsx']) {
+      const content = fs.readFileSync(entry, 'utf8');
+      expect(content).toContain('message={FEEDBACK_ANTD_CONFIG.message}');
+      expect(content).toContain('notification={FEEDBACK_ANTD_CONFIG.notification}');
+    }
   });
 });

@@ -1,4 +1,5 @@
 import AppFeedbackHost from "./components/feedback/AppFeedbackHost";
+import { FEEDBACK_ANTD_CONFIG } from './utils/feedbackPolicy';
 import { Suspense, lazy, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { HelmetProvider } from "react-helmet-async";
@@ -52,8 +53,8 @@ const PublicRouteApp: React.FC = () => {
         >
           <JalaliLocaleListener />
           <AntdApp
-            message={{ top: 72, duration: 3.5, maxCount: 4 }}
-            notification={{ placement: "topLeft", duration: 4.5, maxCount: 4 }}
+            message={FEEDBACK_ANTD_CONFIG.message}
+            notification={FEEDBACK_ANTD_CONFIG.notification}
           >
           <AppFeedbackHost />
             <LazyRouteBoundary>

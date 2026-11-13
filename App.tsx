@@ -6,6 +6,7 @@ import { focusManager } from "@tanstack/react-query";
 import { Refine, Authenticated } from "@refinedev/core";
 import { ErrorComponent } from "@refinedev/antd";
 import { refineFeedbackProvider } from './utils/refineFeedbackProvider';
+import { FEEDBACK_ANTD_CONFIG } from './utils/feedbackPolicy';
 import { dataProvider } from "@refinedev/supabase";
 import { createSchemaCompatibleDataProvider } from './utils/selectCompat';
 import { authProvider } from "./authProvider";
@@ -986,8 +987,8 @@ function App() {
       >
         <JalaliLocaleListener />
         <AntdApp
-          message={{ top: 72, duration: 3.5, maxCount: 4 }}
-          notification={{ placement: "topLeft", duration: 4.5, maxCount: 4 }}
+          message={FEEDBACK_ANTD_CONFIG.message}
+          notification={FEEDBACK_ANTD_CONFIG.notification}
         >
           <AppFeedbackHost />
           <RecordFeedbackActionHost />
