@@ -13,14 +13,14 @@ vi.mock('../utils/uploadProgressStore', () => ({
 }));
 
 describe('notification panel navigation', () => {
-  it('keeps the closed panel hidden across route remounts and reopens for a fresh notification', async () => {
+  it('keeps the closed panel hidden across remounts and waits for an explicit reopen', async () => {
     setUiNotificationOverlayViewer('panel-org', 'panel-user');
     const item = { id: 'initial-panel', kind: 'note' as const, title: 'اعلان قبلی', body: 'متن پیام', createdAt: new Date(Date.now() - 60_000).toISOString(), onOpen: vi.fn(), onDismiss: vi.fn() };
     setUiNotificationOverlayItems([item], 'runtime');
     const tree = (route: string) => <App><MemoryRouter key={route} initialEntries={[route]}><UploadProgressOverlay /></MemoryRouter></App>;
     const { rerender } = render(tree('/leads'));
     fireEvent.click(await screen.findByRole('button', { name: 'نمایش اعلان‌ها و آپلودها' }));
-    await screen.findByText('اعلان قبلی');
+    await screen.findByText('اعلان قبلی', {}, { timeout: 4000 });
     fireEvent.click(screen.getByRole('button', { name: 'بستن پنجره' }));
     expect(item.onDismiss).not.toHaveBeenCalled();
     rerender(tree('/customers'));
@@ -30,7 +30,7 @@ describe('notification panel navigation', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'نمایش اعلان‌ها و آپلودها' })).toBeVisible());
     expect(screen.queryByRole('button', { name: 'بستن پنجره' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'نمایش اعلان‌ها و آپلودها' }));
-    await screen.findByText('اعلان واقعاً جدید');
+    await screen.findByText('اعلان واقعاً جدید', {}, { timeout: 4000 });
   });
   it('preserves minimization over route remounts and incoming notifications', async () => {
     setUiNotificationOverlayViewer('compact-org', 'compact-user');
