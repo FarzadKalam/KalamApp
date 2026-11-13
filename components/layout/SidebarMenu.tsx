@@ -37,7 +37,7 @@ export const filterSidebarItems = (items: MenuProps['items'], query: string, par
 };
 const groupKeys = (items: MenuProps['items']): string[] => (items || []).flatMap(item => item && 'children' in item && Array.isArray(item.children) ? [String(item.key), ...groupKeys(item.children)] : []);
 const flyoutItems = (items: MenuProps['items']): MenuProps['items'] => items?.map(item => item && 'children' in item && Array.isArray(item.children)
-  ? { ...item, popupClassName: 'app-main-sider-submenu-popup workspace-sidebar-submenu', popupOffset: [-6, 0], children: flyoutItems(item.children) } : item);
+  ? { ...item, popupClassName: 'app-main-sider-submenu-popup workspace-sidebar-submenu', popupOffset: [-6, 0], children: flyoutItems(item.children) || [] } : item);
 
 // Expanding a submenu must not rerender the page, drawers and workspace header.
 const SidebarMenu = memo(function SidebarMenu({ items, selectedKey, ancestorKeys, collapsed, isMobile, isDarkMode, onNavigate, searchEnabled = true, desktopFlyout = false }: SidebarMenuProps) {

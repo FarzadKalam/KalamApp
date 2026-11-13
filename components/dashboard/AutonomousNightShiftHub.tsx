@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Tag, Tooltip, message } from 'antd';
 import {
   AppstoreOutlined,
@@ -148,7 +148,7 @@ export const AutonomousNightShiftHub: React.FC<AutonomousNightShiftHubProps> = (
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [isScanning, setIsScanning] = useState(false);
   const [liveClock, setLiveClock] = useState('');
-  const [pulseTick, setPulseTick] = useState(0);
+  const [, setPulseTick] = useState(0);
 
   // Live Iranian Standard Time Clock
   useEffect(() => {

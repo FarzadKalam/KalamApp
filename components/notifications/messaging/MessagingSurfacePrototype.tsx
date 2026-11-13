@@ -3270,7 +3270,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
         .filter((c) => c.channel === 'agent' && c.agentKey)
         .map((c) => String(c.agentKey).trim()),
     );
-    const catalogAgentConversations: Conversation[] = AI_AGENT_CATALOG.map((def) => {
+    const catalogAgentConversations: Conversation[] = AI_AGENT_CATALOG.map((def): Conversation => {
       const sourceConversationKey = `agent:${def.key}`;
       const liveKey = getLiveInternalConversationKey(sourceConversationKey);
       return {

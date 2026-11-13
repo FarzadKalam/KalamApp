@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Avatar, Badge, Button, Drawer, Empty, Input, Spin, Tooltip } from 'antd';
-import { CloseOutlined, MenuOutlined, PlusOutlined, PushpinFilled, PushpinOutlined, SearchOutlined, ShareAltOutlined } from '@ant-design/icons';
+import { CloseOutlined, PlusOutlined, PushpinFilled, PushpinOutlined, SearchOutlined, ShareAltOutlined } from '@ant-design/icons';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';

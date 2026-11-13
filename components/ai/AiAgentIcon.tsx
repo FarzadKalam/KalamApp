@@ -358,6 +358,7 @@ export const getCameoProfile = (agentKey?: string | null): CameoProfile => {
 export type AiAgentCameoFigureProps = {
   agentKey?: AgentKey | string | null;
   color?: string | null;
+  accentColor?: string | null;
   size?: number;
   activeVisual?: boolean;
   isWorking?: boolean;
@@ -370,15 +371,15 @@ export type AiAgentCameoFigureProps = {
 export const AiAgentCameoFigure: React.FC<AiAgentCameoFigureProps> = ({
   agentKey,
   color,
+  accentColor,
   size = 56,
   activeVisual = true,
-  isWorking = false,
   className = '',
 }) => {
   const rawUid = useId().replace(/:/g, '');
   const def = getAgentDefinition(agentKey);
   const profile = getCameoProfile(agentKey);
-  const accent = activeVisual ? (color || def?.badgeColor || '#6366f1') : '#94a3b8';
+  const accent = activeVisual ? (color || accentColor || def?.badgeColor || '#6366f1') : '#94a3b8';
   const overlayColor = '#ffffff';
   const overlayOpacity = '0.45';
 

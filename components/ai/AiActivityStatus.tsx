@@ -1,4 +1,3 @@
-import React from 'react';
 import { Button, Tooltip } from 'antd';
 import { StopOutlined } from '@ant-design/icons';
 import { getAiAgent, type AiAgentActivity } from '../../supabase/functions/_shared/ai-agents';

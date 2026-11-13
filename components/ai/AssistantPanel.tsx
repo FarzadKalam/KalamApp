@@ -45,7 +45,6 @@ import {
   AI_AGENT_CATALOG,
   buildAgentAccessMapFromOverviewAgents,
   getAgentDefinition,
-  getAgentTitleFa,
   normalizeSelectedAgents,
   resolveClientAgentAccess,
   type AgentKey,
@@ -3024,7 +3023,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       item.metadata?.agent_key
       || item.metadata?.agent_id
       || (selectedAgents.length === 1 ? selectedAgents[0] : null)
-      || (initialAgents.length === 1 ? initialAgents[0] : null)
+      || (initialAgents?.length === 1 ? initialAgents[0] : null)
       || 'lead_orchestrator'
     ) as AgentKey;
     const agentDef = getAgentDefinition(effectiveAgentKey);

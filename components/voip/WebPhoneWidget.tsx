@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { App, Badge, Button, Input, Space, Spin, Tag, Tooltip } from 'antd';
+import { App, Button, Input, Spin, Tag, Tooltip } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import {
   answerWebPhoneCall,
@@ -211,7 +211,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
 
   const [dialInput, setDialInput] = useState('');
   const [transferTarget, setTransferTarget] = useState('');
-  const [showTransferBox, setShowTransferBox] = useState(false);
+  const [, setShowTransferBox] = useState(false);
   const [showDtmfPad, setShowDtmfPad] = useState(false);
   const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
   const [showAiDivertModal, setShowAiDivertModal] = useState(false);
@@ -225,7 +225,6 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
   // Recent calls history state
   const [recentCalls, setRecentCalls] = useState<RecentCallItem[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
-  const [activeAudioId, setActiveAudioId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!voipEnabled || !planFeatureEnabled) return;
