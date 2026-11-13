@@ -76,7 +76,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: 'باز کردن منوی گوشی', exact: true }).click();
   const drawer = page.locator('.ant-drawer-body');
-  await drawer.getByRole('menuitem', { name: 'امور مالی', exact: true }).click();
+  await drawer.locator('.ant-menu-submenu-title').filter({ hasText: 'امور مالی' }).click();
   await drawer.getByRole('menuitem', { name: 'فاکتورها', exact: true }).click();
   await page.locator('.ant-drawer-content-wrapper').waitFor({ state: 'hidden' });
   assert.equal(await page.locator('.app-main-rail').count(), 0);
