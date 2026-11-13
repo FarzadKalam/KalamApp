@@ -52,7 +52,7 @@ export const PUBLIC_ECOSYSTEM_GROUPS = [
   },
   {
     id: 'business', title: 'کسب‌وکار و مالی', caption: 'فروشگاه، پرداخت و حسابداری',
-    description: 'اتصال عملیات فروش و مالی؛ اتصال نرم‌افزارهای حسابداریِ در حال توسعه از امکانات موجود جدا مشخص شده است.',
+    description: 'ابزارهای فروش، فروشگاه و امور مالی، در کنار یک فضای کار مشترک.',
     radius: 258, duration: 115, reverse: true,
     items: [
       { id: 'wordpress', name: 'وردپرس', logo: logo('wordpress.svg'), status: 'supported', description: 'اتصال سایت وردپرسی از بخش اتصالات فروشگاهی محصول.' },

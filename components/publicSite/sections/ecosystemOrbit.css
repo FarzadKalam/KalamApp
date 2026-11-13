@@ -13,12 +13,9 @@
 .ecosystem-detail { margin-top: 20px; padding: 20px; background: white; border: 1px solid var(--site-line); border-radius: 18px; min-height: 166px; }
 .ecosystem-detail h3 { margin: 0; font-size: 15px; font-weight: 800; color: var(--site-ink); }
 .ecosystem-detail p { margin: 10px 0 0; line-height: 2; font-size: 13px; color: var(--site-muted); }
-.ecosystem-detail > small { display: block; margin-top: 8px; color: var(--site-muted); font-size: 12px; line-height: 1.8; }
 .ecosystem-detail-title { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .ecosystem-detail-title > img { width: 28px; height: 28px; object-fit: contain; }
-.ecosystem-detail-title > span[data-status] { margin-inline-start: auto; padding: 3px 8px; border-radius: 8px; background: var(--site-soft); font-size: 11px; color: var(--site-muted); }
-.ecosystem-detail-title > span[data-status="development"] { color: rgb(var(--brand-800-rgb)); background: rgb(var(--brand-50-rgb)); }
-.ecosystem-disclaimer { font-size: 12px; line-height: 2; color: var(--site-muted); margin: 16px 4px 0; }
+.ecosystem-mark[data-status="development"] { filter: grayscale(1); opacity: .32; }
 .ecosystem-visual { min-width: 0; }
 .ecosystem-canvas { position: relative; width: 580px; height: 580px; margin-inline: auto; direction: ltr; isolation: isolate; background: radial-gradient(circle, rgb(var(--brand-100-rgb) / .7), transparent 65%); }
 .ecosystem-center { position: absolute; z-index: 2; left: 50%; top: 50%; transform: translate(-50%, -50%); display: grid; place-items: center; width: 88px; height: 88px; background: white; border: 1px solid rgb(var(--brand-200-rgb)); border-radius: 26px; box-shadow: 0 10px 45px rgb(var(--brand-500-rgb) / .16); }
@@ -31,20 +28,16 @@
 .ecosystem-orb { position: relative; display: grid; place-items: center; width: 48px; height: 48px; border: 1px solid var(--site-line); border-radius: 16px; background: white; color: var(--site-ink); box-shadow: 0 4px 15px rgb(25 28 36 / .06); pointer-events: auto; animation: ecosystem-revolve var(--lap) linear infinite; animation-direction: var(--counter-direction); transition: box-shadow 180ms, border-color 180ms; }
 .ecosystem-orb > img { width: 28px; height: 28px; object-fit: contain; }
 .ecosystem-orb > span:first-child { font-size: 22px; }
-.ecosystem-orb[data-status="development"] { border: 1px dashed rgb(var(--brand-500-rgb)); }
-.ecosystem-development-dot, .ecosystem-controls > span > i { width: 9px; height: 9px; background: rgb(var(--brand-500-rgb)); border: 2px solid white; border-radius: 50%; }
-.ecosystem-development-dot { position: absolute; right: -2px; top: -2px; }
 .ecosystem-orb:hover, .ecosystem-orb:focus-visible, .ecosystem-orb[aria-pressed="true"] { border-color: rgb(var(--brand-500-rgb)); box-shadow: 0 4px 24px rgb(var(--brand-500-rgb) / .2); z-index: 3; }
 .ecosystem-node:has(.ecosystem-orb:hover), .ecosystem-node:focus-within { z-index: 4; }
 .ecosystem-ring:has(.ecosystem-orb:hover), .ecosystem-ring:focus-within { z-index: 4; }
 .ecosystem-orb-label { position: absolute; top: calc(100% + 9px); left: 50%; transform: translateX(-50%); visibility: hidden; opacity: 0; padding: 6px 10px; border-radius: 10px; background: var(--site-ink); color: white; font-size: 12px; white-space: nowrap; pointer-events: none; direction: rtl; transition: opacity 160ms; }
-.ecosystem-orb-label small { display: block; font-size: 11px; margin-top: 3px; }
 .ecosystem-orb:hover .ecosystem-orb-label, .ecosystem-orb:focus-visible .ecosystem-orb-label { visibility: visible; opacity: 1; }
 .ecosystem-canvas[data-paused="true"] .ecosystem-ring, .ecosystem-canvas[data-paused="true"] .ecosystem-orb,
 .ecosystem-canvas:hover .ecosystem-ring, .ecosystem-canvas:hover .ecosystem-orb,
 .ecosystem-canvas:focus-within .ecosystem-ring, .ecosystem-canvas:focus-within .ecosystem-orb { animation-play-state: paused; }
 .ecosystem-controls { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 24px; color: var(--site-muted); font-size: 12px; margin-top: 12px; }
-.ecosystem-controls > span, .ecosystem-controls > button { display: inline-flex; align-items: center; gap: 8px; }
+.ecosystem-controls > button { display: inline-flex; align-items: center; gap: 8px; }
 .ecosystem-controls > button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--site-line); border-radius: 12px; background: white; color: var(--site-ink); }
 .ecosystem-controls > button:disabled { cursor: default; }
 .ecosystem-directory { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--site-line); }
@@ -53,7 +46,6 @@
 .ecosystem-directory-items > button { display: inline-flex; align-items: center; gap: 9px; min-height: 44px; padding: 9px 12px; background: white; border: 1px solid var(--site-line); border-radius: 12px; color: var(--site-ink); font-size: 12px; }
 .ecosystem-directory-items > button[aria-pressed="true"] { border-color: rgb(var(--brand-500-rgb)); background: rgb(var(--brand-50-rgb)); }
 .ecosystem-directory-items img { width: 22px; height: 22px; object-fit: contain; }
-.ecosystem-directory-items small { font-size: 11px; color: rgb(var(--brand-700-rgb)); }
 @keyframes ecosystem-revolve { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 @media (max-width: 1199px) {
   .ecosystem-layout { grid-template-columns: 1fr; gap: 24px; }

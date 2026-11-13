@@ -59,7 +59,13 @@ try {
   await section.locator('.ecosystem-canvas').hover();
   await whatsapp.hover();
   assert.equal(await whatsapp.evaluate(el => getComputedStyle(el).animationPlayState), 'paused');
-  assert.match(await section.locator('.ecosystem-detail').innerText(), /هنوز قابل استفاده نیست/);
+  assert.equal(await section.locator('.ecosystem-detail').innerText(), 'واتساپ');
+  assert.doesNotMatch(await section.innerText(), /در حال توسعه|هنوز قابل استفاده نیست|پشتیبانی می‌شود/);
+  for (const mark of await section.locator('.ecosystem-orb .ecosystem-mark[data-status="development"]').all()) {
+    assert.equal(await mark.evaluate(el => getComputedStyle(el).filter), 'grayscale(1)');
+    assert.equal(await mark.evaluate(el => getComputedStyle(el).opacity), '0.32');
+  }
+  assert.equal(await section.locator('.ecosystem-orb .ecosystem-mark[data-status="supported"]').first().evaluate(el => getComputedStyle(el).filter), 'none');
   await whatsapp.click();
   await page.mouse.move(5, 5);
   assert.match(await section.locator('.ecosystem-detail').innerText(), /واتساپ/);
@@ -94,7 +100,12 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await section.locator('.ecosystem-groups').getByRole('button').filter({ hasText: 'کسب‌وکار و مالی' }).click();
   await section.locator('.ecosystem-directory').getByRole('button').filter({ hasText: 'سپیدار' }).click();
-  assert.match(await section.locator('.ecosystem-detail').innerText(), /سپیدار[\s\S]*در حال توسعه[\s\S]*هنوز قابل استفاده نیست/);
+  assert.equal(await section.locator('.ecosystem-detail').innerText(), 'سپیدار');
+  for (const mark of await section.locator('.ecosystem-detail .ecosystem-mark, .ecosystem-directory .ecosystem-mark[data-status="development"]').all()) {
+    assert.equal(await mark.evaluate(el => getComputedStyle(el).filter), 'grayscale(1)');
+    assert.equal(await mark.evaluate(el => getComputedStyle(el).opacity), '0.32');
+  }
+  assert.doesNotMatch(await section.innerText(), /در حال توسعه|هنوز قابل استفاده نیست|پشتیبانی می‌شود/);
   await section.screenshot({ path: `${output}/mobile.png` });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.waitForFunction(() => document.querySelector('.ecosystem-controls button')?.disabled === true);

@@ -11,8 +11,8 @@ import './ecosystemOrbit.css';
 const IntegrationMark = ({ item }: { item: EcosystemItem }) => {
   const [failed, setFailed] = useState(false);
   return item.logo && !failed
-    ? <img src={item.logo} alt="" width={30} height={30} loading="lazy" decoding="async" onError={() => setFailed(true)} />
-    : <span aria-hidden="true">{item.icon ? renderIcon(item.icon) : item.name.slice(0, 1)}</span>;
+    ? <img className="ecosystem-mark" data-status={item.status} src={item.logo} alt="" width={30} height={30} loading="lazy" decoding="async" onError={() => setFailed(true)} />
+    : <span className="ecosystem-mark" data-status={item.status} aria-hidden="true">{item.icon ? renderIcon(item.icon) : item.name.slice(0, 1)}</span>;
 };
 
 type OrbitProps = { eyebrow?: string; title?: string; text?: string };
@@ -59,15 +59,13 @@ const EcosystemOrbitSection: React.FC<{ props: OrbitProps }> = ({ props }) => {
           </div>
           <div className="ecosystem-detail" id={detailId} aria-live="polite" aria-atomic="true">
             {current ? <>
-              <div className="ecosystem-detail-title"><IntegrationMark key={current.id} item={current} /><h3>{current.name}</h3><span data-status={current.status}>{ECOSYSTEM_STATUS_LABELS[current.status]}</span></div>
-              <p>{current.description}</p>
+              <div className="ecosystem-detail-title"><IntegrationMark key={current.id} item={current} /><h3>{current.name}</h3></div>
+              {current.status !== 'development' && <p>{current.description}</p>}
             </> : <>
               <h3>{group.title}</h3>
               <p>{group.description}</p>
-              <small>برای آشنایی با هر نماد، روی آن بروید یا آن را لمس کنید.</small>
             </>}
           </div>
-          <p className="ecosystem-disclaimer">«پشتیبانی می‌شود» به معنی وجود قابلیت در محصول است؛ استفاده به پلن، تنظیمات و حساب سرویس سازمان شما بستگی دارد. موارد «در حال توسعه» هنوز قابل استفاده نیستند.</p>
         </div>
         <div className="ecosystem-visual">
           <div ref={canvas} className="ecosystem-canvas" data-paused={paused || !inView || !!reducedMotion} data-selected-group={groupId}>
@@ -87,8 +85,7 @@ const EcosystemOrbitSection: React.FC<{ props: OrbitProps }> = ({ props }) => {
                       onClick={() => { setGroupId(ring.id); setSelected(item); setHovered(null); }}
                       onKeyDown={(event) => { if (event.key === 'Escape') { setSelected(null); setHovered(null); } }}>
                       <IntegrationMark item={item} />
-                      {item.status === 'development' && <span className="ecosystem-development-dot" aria-hidden="true" />}
-                      <span className="ecosystem-orb-label" aria-hidden="true">{item.name}{item.status === 'development' && <small>در حال توسعه</small>}</span>
+                      <span className="ecosystem-orb-label" aria-hidden="true">{item.name}</span>
                     </button>
                   </li>;
                 })}
@@ -96,7 +93,6 @@ const EcosystemOrbitSection: React.FC<{ props: OrbitProps }> = ({ props }) => {
             ))}
           </div>
           <div className="ecosystem-controls">
-            <span><i aria-hidden="true" /> در حال توسعه</span>
             <button type="button" onClick={() => setPaused((value) => !value)} aria-pressed={paused} disabled={!!reducedMotion}>
               {paused || reducedMotion ? <PlayCircleOutlined aria-hidden="true" /> : <PauseOutlined aria-hidden="true" />}
               {reducedMotion ? 'نمایش بدون حرکت' : paused ? 'ادامهٔ حرکت' : 'توقف حرکت'}
@@ -107,8 +103,8 @@ const EcosystemOrbitSection: React.FC<{ props: OrbitProps }> = ({ props }) => {
       <div className="ecosystem-directory">
         <h3>{group.title}</h3>
         <div className="ecosystem-directory-items" role="group" aria-label={`فهرست ${group.title}`}>
-          {group.items.map((item) => <button type="button" key={item.id} aria-pressed={selected?.id === item.id} aria-controls={detailId} onClick={() => { setSelected(item); setHovered(null); }}>
-            <IntegrationMark item={item} /><span>{item.name}</span>{item.status === 'development' && <small>در حال توسعه</small>}
+          {group.items.map((item) => <button type="button" key={item.id} aria-label={`${item.name}؛ ${ECOSYSTEM_STATUS_LABELS[item.status]}`} aria-pressed={selected?.id === item.id} aria-controls={detailId} onClick={() => { setSelected(item); setHovered(null); }}>
+            <IntegrationMark item={item} /><span>{item.name}</span>
           </button>)}
         </div>
       </div>
