@@ -26,7 +26,7 @@ const FeedbackViewport = ({ items }: { items: FeedbackItem[] }) => {
       {items.map(item => <div className="app-feedback-item" key={item.id}
         onMouseEnter={() => pauseFeedback(item.id, true)} onMouseLeave={() => pauseFeedback(item.id, false)}
         onFocus={() => pauseFeedback(item.id, true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) pauseFeedback(item.id, false); }}>
-        <Sileo id={item.id} refreshKey={String(item.revision)} title={item.title} state={item.kind} width={width} reducedMotion={reducedMotion}
+        <Sileo id={item.id} refreshKey={String(item.visualRevision)} title={item.title} state={item.kind} width={width} reducedMotion={reducedMotion}
           fill={isDark ? '#ffffff' : '#171717'} position="center" icon={item.icon}
           description={item.description || item.actions?.length ? <>
             {item.description && <div className="app-feedback-description">{item.description}</div>}

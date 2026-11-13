@@ -23,6 +23,7 @@ export interface FeedbackOptions {
 export interface FeedbackItem extends FeedbackOptions {
   id: string;
   revision: number;
+  visualRevision: number;
   kind: FeedbackKind;
 }
 export type NativeFeedbackTransport = { show: (id: string, onClose: () => void) => void; close: (id: string) => void };
@@ -83,6 +84,14 @@ export const pauseFeedback = (id: string, paused: boolean) => {
   record.paused = paused;
   schedule(record);
 };
+const sameVisibleContent = (previous: FeedbackItem | undefined, options: FeedbackOptions) => {
+  if (!previous || previous.title !== options.title || previous.description !== options.description || previous.kind !== options.kind || previous.icon !== options.icon) return false;
+  const before = previous.actions || [], after = options.actions || [];
+  return before.length === after.length && before.every((action, index) => {
+    const next = after[index];
+    return action.key === next.key && action.label === next.label && action.icon === next.icon && action.iconOnly === next.iconOnly;
+  });
+};
 const publish = (options: FeedbackOptions, native?: NativeFeedbackTransport) => {
   const key = options.key === undefined ? undefined : String(options.key);
   const previous = key === undefined ? undefined : [...records.values()].find(record => record.item.key === key);
@@ -96,7 +105,8 @@ const publish = (options: FeedbackOptions, native?: NativeFeedbackTransport) => 
     try { previous.native.close(id); } catch { /* The replacement remains usable. */ }
   }
   const title = kind === 'error' ? toFaErrorMessage(options.title, FEEDBACK_POLICY.labels.failure) : options.title;
-  const record: FeedbackRecord = { item: { ...options, title, key, id, kind, revision: (previous?.item.revision ?? 0) + 1 }, native, runningActions: new Set(), remaining: native ? null : remaining, deadline: 0, shown: previous?.shown ?? false, paused: previous?.paused ?? false, settle: previous?.settle ?? [] };
+  const visualRevision = (previous?.item.visualRevision ?? 0) + (sameVisibleContent(previous?.item, { ...options, title, kind }) ? 0 : 1);
+  const record: FeedbackRecord = { item: { ...options, title, key, id, kind, revision: (previous?.item.revision ?? 0) + 1, visualRevision }, native, runningActions: new Set(), remaining: native ? null : remaining, deadline: 0, shown: previous?.shown ?? false, paused: previous?.paused ?? false, settle: previous?.settle ?? [] };
   records.set(id, record);
   while (records.size > FEEDBACK_POLICY.maxVisible) closeFeedback(records.keys().next().value!);
   schedule(record);

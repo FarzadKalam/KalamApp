@@ -66,9 +66,13 @@ describe('central delivery policy', () => {
     const cancel = vi.fn();
     refineFeedbackProvider.open({ key: 'undo', type: 'progress', message: 'در انتظار', undoableTimeout: 2, cancelMutation: cancel });
     const id = getFeedbackSnapshot()[0].id;
+    const visualRevision = getFeedbackSnapshot()[0].visualRevision;
+    refineFeedbackProvider.open({ key: 'undo', type: 'progress', message: 'در انتظار', undoableTimeout: 1, cancelMutation: cancel });
+    expect(getFeedbackSnapshot()[0].visualRevision).toBe(visualRevision);
     refineFeedbackProvider.open({ key: 'undo', type: 'progress', message: 'در انتظار', undoableTimeout: 0, cancelMutation: cancel });
     expect(getFeedbackSnapshot()[0].id).toBe(id);
     expect(getFeedbackSnapshot()[0].actions).toBeUndefined();
+    expect(getFeedbackSnapshot()[0].visualRevision).toBeGreaterThan(visualRevision);
     refineFeedbackProvider.close('undo');
     expect(getFeedbackSnapshot()).toHaveLength(0);
   });
