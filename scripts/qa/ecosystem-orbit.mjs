@@ -64,6 +64,7 @@ try {
   await pause.click();
   assert.equal(await section.locator('.ecosystem-canvas').getAttribute('data-paused'), 'true');
   await section.getByRole('button', { name: 'ادامهٔ حرکت', exact: true }).click();
+  await page.keyboard.press('Tab'); // Enter keyboard modality before checking focus-visible.
   await whatsapp.focus();
   assert.equal(await whatsapp.evaluate(el => getComputedStyle(el).animationPlayState), 'paused');
   assert.equal(await whatsapp.evaluate(el => getComputedStyle(el).outlineStyle), 'solid');
