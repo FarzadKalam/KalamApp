@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { App, Avatar, Badge, Button, Drawer, Empty, Input, Spin, Tooltip } from 'antd';
+import { App, Badge, Button, Drawer, Empty, Input, Spin, Tooltip } from 'antd';
 import { CloseOutlined, PlusOutlined, PushpinFilled, PushpinOutlined, SearchOutlined, ShareAltOutlined } from '@ant-design/icons';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
@@ -10,7 +10,6 @@ import { formatPersianPrice } from '../../utils/persianNumberFormatter';
 import { useCurrencyConfig, type CurrencyConfig } from '../../utils/currency';
 import { formatAiCurrencyFromIrt } from '../../utils/aiCurrency';
 import AssistantPanel from './AssistantPanel';
-import AiSparkleIcon from './AiSparkleIcon';
 import type { AiComposerCapability } from './AiCapabilityComposerActions';
 import { getAgentDefinition, normalizeSelectedAgents, type AgentKey, type AgentToneStyle } from '../../utils/aiAgentCatalog';
 import { AiAgentCameoFigure } from './AiAgentIcon';

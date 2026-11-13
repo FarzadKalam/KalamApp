@@ -19,7 +19,6 @@ import type { AiUploadedFilePrompt } from './AiFileUploadButton';
 import AiCapabilityComposerActions, { normalizeAiComposerCapabilities, type AiComposerCapability } from './AiCapabilityComposerActions';
 import AiComposeModelBar from './AiComposeModelBar';
 import AiActivityStatus from './AiActivityStatus';
-import AiAgentPlanCard from './AiAgentPlanCard';
 import { getAiAgentLabel, resolveAiAgentId, parseAiAgentActivity, applyAiAgentActivity, type AiAgentActivity } from '../../supabase/functions/_shared/ai-agents';
 import AiGenerationStatusCard, { type AiGenerationKind } from './AiGenerationStatusCard';
 import AiAudioPlayer from './AiAudioPlayer';
@@ -40,9 +39,7 @@ import AiMessageRenderer from './AiMessageRenderer';
 import { type AiRecordMutationDraft } from './AiRecordMutationApprovalCard';
 import QuickRecordFormModal from './QuickRecordFormModal';
 import AiProcessOperationApprovalCard from './AiProcessOperationApprovalCard';
-import AiAgentMessagesCompactBox from './AiAgentMessagesCompactBox';
 import {
-  AI_AGENT_CATALOG,
   buildAgentAccessMapFromOverviewAgents,
   getAgentDefinition,
   normalizeSelectedAgents,
@@ -1184,7 +1181,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   }) => {
     const data = await callAssistant({
       action: 'suggest_auto_capabilities',
-      message: effectiveChatMessage || params.messageText,
+      message: params.messageText,
       inputKind: params.inputKind,
       bundle: params.bundlePayload?.length ? { inputs: params.bundlePayload } : undefined,
       threadId: params.forceNewThread ? null : threadId,
@@ -1432,12 +1429,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         capabilities: routeCapabilities,
         ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
         ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
-        message: params.messageText || (autoRecordSchema
+        message: effectiveChatMessage || params.messageText || (autoRecordSchema
           ? 'از ورودی‌های پیوست‌شده یک رکورد جدید بساز.'
           : capabilitySet.has('process_operation')
           ? 'با توجه به ورودی‌های پیوست‌شده، اقدام لازم را پیشنهاد بده.'
           : 'ورودی‌های پیوست‌شده را بررسی کن.'),
-        userMessageText: params.messageText,
+        userMessageText: effectiveChatMessage || params.messageText,
         inputKind: bundlePayload.length > 0 ? 'task_bundle' : params.inputKind,
         bundle: executionBundlePayload.length ? { inputs: executionBundlePayload } : undefined,
         threadId: params.forceNewThread ? null : threadId,
@@ -1463,7 +1460,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       capabilities: routeCapabilities,
       ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
       ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
-      message: params.messageText,
+      message: effectiveChatMessage || params.messageText,
       inputKind: params.inputKind,
       threadId: params.forceNewThread ? null : threadId,
       forceNewThread: params.forceNewThread === true,
