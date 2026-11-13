@@ -260,7 +260,7 @@ const AiMessageRenderer: React.FC<AiMessageRendererProps> = ({
   const hasText = String(text || '').trim().length > 0;
   return (
     <div className="ai-message-renderer min-w-0">
-      {(streaming || (Array.isArray(activities) && activities.length > 0)) && <AiActivityStatus agentId={agentId} activities={activities} streaming={Boolean(streaming)} onStop={onStop} />}
+      {streaming && <AiActivityStatus agentId={agentId} activities={activities} onStop={onStop} />}
       {(failed || stopped) && onRetry && <div className="mb-1 flex items-center justify-end gap-1">
         {(failed || stopped) && onRetry ? (
           <Tooltip title="تلاش دوباره">

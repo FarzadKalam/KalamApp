@@ -90,10 +90,10 @@ export const getActivityIcon = (activity: AiAgentActivity): React.ReactNode => {
 };
 
 export const getActivityLineText = (activity: AiAgentActivity): string => {
-  if (activity.detail) return activity.detail;
+  if (activity.detail) return activity.detail.endsWith('…') ? activity.detail : `${activity.detail}…`;
   const fallback = getAiAgent(activity.agentId);
-  const actionType = activity.actionType || AI_ACTIVITY_ACTION_BY_CAPABILITY[activity.agentId];
-  return fallback.activity || (actionType ? ACTION_LABEL_MAP[actionType] : 'در حال پردازش');
+  const raw = fallback.activity || (activity.actionType ? ACTION_LABEL_MAP[activity.actionType] : 'در حال پردازش');
+  return raw.endsWith('…') ? raw : `${raw}…`;
 };
 
 export default function AiActivityStatus({ agentId = 'text_chat', activities = [], streaming = true, onStop }: Props) {
