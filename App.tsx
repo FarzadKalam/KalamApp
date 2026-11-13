@@ -10,7 +10,6 @@ import { createSchemaCompatibleDataProvider } from './utils/selectCompat';
 import { authProvider } from "./authProvider";
 import routerBindings, { UnsavedChangesNotifier, DocumentTitleHandler, CatchAllNavigate } from "@refinedev/react-router-v6";
 import { BrowserRouter, Navigate, Route, Routes, Outlet, useParams, useLocation } from "react-router-dom";
-import { trackPageView } from "./utils/analytics";
 import ConfigProvider from "antd/es/config-provider";
 import AntdApp from "antd/es/app";
 import antdTheme from "antd/es/theme";
@@ -320,14 +319,6 @@ const getInitialBranding = (): BrandingConfig => {
 };
 
 const SilentRouteFallback = () => null;
-
-const RouteTracker: React.FC = () => {
-  const location = useLocation();
-  useEffect(() => {
-    trackPageView(location.pathname + location.search);
-  }, [location.pathname, location.search]);
-  return null;
-};
 
 const isSaasOnboardingPath = (pathname?: string, saasAppHost = false) => {
   if (!saasAppHost) return false;
