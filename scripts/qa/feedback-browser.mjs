@@ -54,6 +54,7 @@ try {
     if (mode === 'dark') await page.getByRole('button', { name: 'تغییر روز و شب' }).click();
     await page.getByRole('button', { name: 'نمایش پیام سرنخ' }).click();
     const toast = page.locator('[data-sileo-toast]').filter({ hasText: 'سرنخ فروش ثبت شد' });
+    await toast.locator('[data-sileo-header]').hover();
     await toast.locator('[data-sileo-content][data-visible="true"]').waitFor();
     await page.waitForFunction(() => [...document.querySelectorAll('[data-sileo-content][data-visible="true"]')].every(el => Number(getComputedStyle(el).opacity) >= .99));
     await page.waitForTimeout(650); // Capture the finished upstream spring shape.
@@ -70,9 +71,13 @@ try {
     }), 'Preserve the upstream colored title and soft state badge');
     await page.screenshot({ path: `${output}/${mode}-desktop.png` });
     await page.setViewportSize({ width: 390, height: 844 });
+    await toast.locator('[data-sileo-header]').hover();
     await page.waitForTimeout(650);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await page.screenshot({ path: `${output}/${mode}-mobile.png` });
+    await toast.getByRole('button', { name: 'ثبت فعالیت', exact: true }).focus();
+    await page.mouse.move(0, 0);
+    assert.equal(await toast.getAttribute('data-expanded'), 'true', 'Leaving with the pointer must not collapse a keyboard-focused action');
     await toast.getByRole('button', { name: 'ثبت فعالیت', exact: true }).click();
     await page.getByText('فرم فعالیت آمادهٔ تکمیل است', { exact: true }).waitFor();
     await dismissAll();

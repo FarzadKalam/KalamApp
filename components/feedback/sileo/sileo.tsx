@@ -446,7 +446,7 @@ export const Sileo = memo(function Sileo({
   const handleLeave: MouseEventHandler<HTMLDivElement> = useCallback(
     (e) => {
       onMouseLeave?.(e);
-      setIsExpanded(false);
+      if (!e.currentTarget.contains(e.currentTarget.ownerDocument.activeElement)) setIsExpanded(false);
     },
     [onMouseLeave],
   );
@@ -555,7 +555,7 @@ export const Sileo = memo(function Sileo({
       onMouseEnter={handleEnter}
       onMouseLeave={handleLeave}
       onFocus={() => { if (hasDesc) setIsExpanded(true); }}
-      onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setIsExpanded(false); }}
+      onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget) && !event.currentTarget.matches(':hover')) setIsExpanded(false); }}
       onKeyDown={(event) => { if (event.key === "Escape") onDismiss?.(); }}
       onTransitionEnd={handleTransitionEnd}
       onPointerDown={handlePointerDown}
