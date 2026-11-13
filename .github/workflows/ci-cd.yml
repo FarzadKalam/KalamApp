@@ -125,6 +125,14 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      - name: Central feedback, contact confirmation and popup navigation
+        timeout-minutes: 5
+        run: >-
+          npx vitest run utils/uiNotificationOverlayStore.test.ts
+          utils/appFeedback.test.ts utils/recordFeedback.test.ts
+          components/RecordMessageActions.test.tsx components/UploadProgressOverlay.test.tsx
+          --maxWorkers=1 --no-file-parallelism
+
       - name: Shared AI agents and chat surfaces regression checks
         timeout-minutes: 10
         run: >-
@@ -182,10 +190,7 @@ jobs:
       - name: Notification dismissal and sidebar regression checks
         timeout-minutes: 5
         run: >-
-          npx vitest run utils/uiNotificationOverlayStore.test.ts
-          utils/appFeedback.test.ts utils/recordFeedback.test.ts
-          components/RecordMessageActions.test.tsx
-          components/UploadProgressOverlay.test.tsx components/layout/SidebarMenu.test.tsx
+          npx vitest run components/layout/SidebarMenu.test.tsx
           components/stories/storyStudio.test.ts
           --maxWorkers=1 --no-file-parallelism
 

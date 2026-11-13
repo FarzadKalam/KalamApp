@@ -24,14 +24,14 @@ const Icon = ({
 );
 
 export const ArrowRight = () => (
-  <Icon title="Arrow Right">
+  <Icon title="ادامه">
     <path d="M5 12h14" />
     <path d="m12 5 7 7-7 7" />
   </Icon>
 );
 
 export const LifeBuoy = () => (
-  <Icon title="Life Buoy">
+  <Icon title="اطلاع‌رسانی">
     <circle cx="12" cy="12" r="10" />
     <path d="m4.93 4.93 4.24 4.24" />
     <path d="m14.83 9.17 4.24-4.24" />
@@ -42,20 +42,20 @@ export const LifeBuoy = () => (
 );
 
 export const LoaderCircle = (props: SVGProps<SVGSVGElement>) => (
-  <Icon title="Loader Circle" {...props}>
+  <Icon title="در حال انجام" {...props}>
     <path d="M21 12a9 9 0 1 1-6.219-8.56" />
   </Icon>
 );
 
 export const X = () => (
-  <Icon title="X">
+  <Icon title="بستن">
     <path d="M18 6 6 18" />
     <path d="m6 6 12 12" />
   </Icon>
 );
 
 export const CircleAlert = () => (
-  <Icon title="Circle Alert">
+  <Icon title="هشدار">
     <circle cx="12" cy="12" r="10" />
     <line x1="12" x2="12" y1="8" y2="12" />
     <line x1="12" x2="12.01" y1="16" y2="16" />
@@ -63,7 +63,7 @@ export const CircleAlert = () => (
 );
 
 export const Check = () => (
-  <Icon title="Check">
+  <Icon title="انجام شد">
     <path d="M20 6 9 17l-5-5" />
   </Icon>
 );
