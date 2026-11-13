@@ -1,6 +1,7 @@
 .app-feedback-viewport[data-sileo-viewport] { z-index: 2147483200; top: calc(72px + env(safe-area-inset-top, 0px)); padding: 8px 0; max-width: calc(100vw - 32px); gap: 12px; }
 .app-feedback-item { position: relative; width: var(--feedback-width); color: var(--feedback-ink); pointer-events: none; filter: drop-shadow(0 8px 16px rgb(0 0 0 / .22)); }
-.app-feedback-item [data-sileo-toast] { width: var(--feedback-width); cursor: default; touch-action: pan-x; }
+.app-feedback-item [data-sileo-toast] { width: var(--feedback-width); cursor: default; touch-action: pan-x; pointer-events: none; }
+.app-feedback-item [data-sileo-header] { pointer-events: auto; }
 .app-feedback-item [data-sileo-toast] { --sileo-height: 44px; }
 .app-feedback-item [data-sileo-title] { color: var(--feedback-ink); font-family: inherit; text-transform: none; max-width: calc(var(--feedback-width) - 112px); overflow: hidden; text-overflow: ellipsis; line-height: 1.6; }
 .app-feedback-item [data-sileo-header] { padding: 6px 14px; }

@@ -1,5 +1,5 @@
 import '../../initDayjs';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import ConfigProvider from 'antd/es/config-provider';
