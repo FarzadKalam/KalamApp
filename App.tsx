@@ -4,7 +4,8 @@ import { HelmetProvider } from "react-helmet-async";
 import { createRoot } from "react-dom/client";
 import { focusManager } from "@tanstack/react-query";
 import { Refine, Authenticated } from "@refinedev/core";
-import { ErrorComponent, useNotificationProvider } from "@refinedev/antd";
+import { ErrorComponent } from "@refinedev/antd";
+import { refineFeedbackProvider } from './utils/refineFeedbackProvider';
 import { dataProvider } from "@refinedev/supabase";
 import { createSchemaCompatibleDataProvider } from './utils/selectCompat';
 import { authProvider } from "./authProvider";
@@ -760,13 +761,12 @@ function App() {
   };
 
   const RefineAppContent: React.FC = () => {
-    const notificationProvider = useNotificationProvider();
 
     return (
       <Refine
         dataProvider={createSchemaCompatibleDataProvider(dataProvider(supabase))}
         authProvider={authProvider}
-        notificationProvider={notificationProvider}
+        notificationProvider={refineFeedbackProvider}
         routerProvider={routerBindings}
         resources={resources}
         options={{

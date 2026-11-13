@@ -129,7 +129,7 @@ jobs:
         timeout-minutes: 5
         run: >-
           npx vitest run utils/uiNotificationOverlayStore.test.ts
-          utils/appFeedback.test.ts utils/recordFeedback.test.ts
+          utils/appFeedback.test.ts utils/feedbackRouting.test.ts utils/feedbackArchitecture.test.ts utils/recordFeedback.test.ts
           components/RecordMessageActions.test.tsx components/UploadProgressOverlay.test.tsx
           --maxWorkers=1 --no-file-parallelism
 

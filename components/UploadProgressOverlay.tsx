@@ -10,6 +10,7 @@ import { appFeedback } from '../utils/appFeedback';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
 import { isPublicOverlaySuppressedPath } from '../utils/publicOverlay';
 import './notifications/notificationOverlay.css';
+import { FEEDBACK_POLICY } from '../utils/feedbackPolicy';
 
 const NotificationOverlayPanel = lazy(() => import('./notifications/NotificationOverlayPanel'));
 
@@ -27,10 +28,10 @@ const UploadProgressOverlay = () => {
       const fresh = claimFreshOverlayAnnouncements(items);
       if (!fresh.length) return;
       appFeedback.info({ title: fresh.length > 1 ? `${toPersianNumber(String(fresh.length))} اعلان تازه` : fresh[0].title,
-        key: 'notification-heads-up', durationMs: 5000,
+        key: 'notification-heads-up', durationMs: FEEDBACK_POLICY.notificationHeadsUpMs,
         actions: [{ key: 'open-notifications', label: 'مشاهدهٔ اعلان‌ها', onClick: () => setUiNotificationOverlayExpanded(true) }],
       });
-    }, 250);
+    }, FEEDBACK_POLICY.announcementDebounceMs);
     return () => clearTimeout(timer);
   }, [items, expanded, suppressed]);
   if (suppressed || (!tasks.length && !items.length)) return null;

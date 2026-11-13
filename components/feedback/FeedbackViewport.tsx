@@ -1,16 +1,17 @@
 import { useEffect, useState } from 'react';
 import theme from 'antd/es/theme';
-import { closeFeedback, feedbackShown, pauseFeedback, type FeedbackItem } from '../../utils/appFeedback';
+import { closeFeedback, feedbackShown, pauseFeedback, runFeedbackAction, type FeedbackItem } from '../../utils/appFeedback';
 import usePrefersReducedMotion from '../../hooks/usePrefersReducedMotion';
 import { Sileo } from './sileo/sileo';
 import './feedback.css';
+import { FEEDBACK_POLICY } from '../../utils/feedbackPolicy';
 
 const FeedbackViewport = ({ items }: { items: FeedbackItem[] }) => {
   const { token } = theme.useToken();
   const reducedMotion = usePrefersReducedMotion();
-  const [width, setWidth] = useState(() => Math.min(350, window.innerWidth - 32));
+  const [width, setWidth] = useState(() => Math.min(FEEDBACK_POLICY.width, window.innerWidth - FEEDBACK_POLICY.viewportGutter));
   useEffect(() => {
-    const resize = () => setWidth(Math.min(350, window.innerWidth - 32));
+    const resize = () => setWidth(Math.min(FEEDBACK_POLICY.width, window.innerWidth - FEEDBACK_POLICY.viewportGutter));
     window.addEventListener('resize', resize, { passive: true });
     return () => window.removeEventListener('resize', resize);
   }, []);
@@ -30,12 +31,12 @@ const FeedbackViewport = ({ items }: { items: FeedbackItem[] }) => {
           description={item.description || item.actions?.length ? <>
             {item.description && <div className="app-feedback-description">{item.description}</div>}
             {!!item.actions?.length && <div className="app-feedback-actions" role="group" aria-label="اقدام‌های پیشنهادی">
-              {item.actions.slice(0, 3).map(action => <button key={action.key} type="button" data-sileo-button data-state={item.kind} aria-label={action.label} title={action.label} className={action.iconOnly ? 'app-feedback-icon-action' : 'app-feedback-primary-action'} onClick={() => { action.onClick(); closeFeedback(item.id); }}>
+              {item.actions.slice(0, FEEDBACK_POLICY.maxActions).map(action => <button key={action.key} type="button" data-sileo-button data-state={item.kind} aria-label={action.label} title={action.label} className={action.iconOnly ? 'app-feedback-icon-action' : 'app-feedback-primary-action'} onClick={() => { void runFeedbackAction(item.id, action.key); }}>
                 {action.icon && <span aria-hidden="true">{action.icon}</span>}{!action.iconOnly && action.label}
               </button>)}
             </div>}
           </> : undefined}
-          autoExpandDelayMs={item.description || item.actions?.length ? 150 : undefined}
+          autoExpandDelayMs={item.description || item.actions?.length ? FEEDBACK_POLICY.expandDelayMs : undefined}
           onDismiss={() => closeFeedback(item.id)} />
       </div>)}
     </section>

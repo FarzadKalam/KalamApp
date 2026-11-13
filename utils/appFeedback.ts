@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import { FEEDBACK_POLICY } from './feedbackPolicy';
+import { toFaErrorMessage } from './errorMessageFa';
 
 export type FeedbackKind = 'success' | 'error' | 'warning' | 'info' | 'loading';
 export interface FeedbackAction {
@@ -23,15 +25,15 @@ export interface FeedbackItem extends FeedbackOptions {
   revision: number;
   kind: FeedbackKind;
 }
-type FeedbackRecord = { item: FeedbackItem; timer?: ReturnType<typeof setTimeout>; remaining: number | null; deadline: number; shown: boolean; paused: boolean; settle: (() => void)[] };
+export type NativeFeedbackTransport = { show: (id: string, onClose: () => void) => void; close: (id: string) => void };
+type FeedbackRecord = { item: FeedbackItem; native?: NativeFeedbackTransport; runningActions: Set<string>; timer?: ReturnType<typeof setTimeout>; remaining: number | null; deadline: number; shown: boolean; paused: boolean; settle: (() => void)[] };
 const records = new Map<string, FeedbackRecord>();
 const listeners = new Set<() => void>();
 let snapshot: FeedbackItem[] = [];
 let sequence = 0;
 let scope = '';
 let scopeGeneration = 0;
-const MAX_VISIBLE = 3;
-const emit = () => { snapshot = [...records.values()].map(record => record.item); listeners.forEach(listener => listener()); };
+const emit = () => { snapshot = [...records.values()].filter(record => !record.native).map(record => record.item); listeners.forEach(listener => listener()); };
 export const subscribeFeedback = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
 export const getFeedbackSnapshot = () => snapshot;
 export const getFeedbackScope = () => scope;
@@ -41,13 +43,15 @@ export const closeFeedback = (id: string) => {
   if (!record) return;
   clearTimeout(record.timer);
   records.delete(id);
+  try { record.native?.close(id); } catch { /* Cleanup must continue if a legacy renderer has already gone away. */ }
   emit();
   record.settle.forEach(resolve => resolve());
   try { record.item.onClose?.(); } catch { /* Presentation callbacks must not interrupt cleanup. */ }
 };
 export const clearFeedback = (key?: string | number) => {
+  const normalizedKey = key === undefined ? undefined : String(key);
   for (const record of [...records.values()]) {
-    if (key === undefined || record.item.key === key) closeFeedback(record.item.id);
+    if (normalizedKey === undefined || record.item.key === normalizedKey) closeFeedback(record.item.id);
   }
 };
 export const setFeedbackScope = (next: string) => {
@@ -79,22 +83,52 @@ export const pauseFeedback = (id: string, paused: boolean) => {
   record.paused = paused;
   schedule(record);
 };
-export const publishFeedback = (options: FeedbackOptions) => {
+const publish = (options: FeedbackOptions, native?: NativeFeedbackTransport) => {
   const key = options.key === undefined ? undefined : String(options.key);
   const previous = key === undefined ? undefined : [...records.values()].find(record => record.item.key === key);
   const id = previous?.item.id ?? `feedback-${++sequence}`;
   const kind = options.kind ?? 'info';
-  const duration = options.durationMs === undefined ? (kind === 'loading' ? null : kind === 'error' ? 6000 : 4000) : options.durationMs;
+  const duration = options.durationMs === undefined ? FEEDBACK_POLICY.durations[kind] : options.durationMs;
   const remaining = duration === null || duration <= 0 ? null : duration;
   if (previous) clearTimeout(previous.timer);
-  const record: FeedbackRecord = { item: { ...options, key, id, kind, revision: (previous?.item.revision ?? 0) + 1 }, remaining, deadline: 0, shown: previous?.shown ?? false, paused: previous?.paused ?? false, settle: previous?.settle ?? [] };
+  if (previous?.native && !native) {
+    records.delete(id);
+    try { previous.native.close(id); } catch { /* The replacement remains usable. */ }
+  }
+  const title = kind === 'error' ? toFaErrorMessage(options.title, FEEDBACK_POLICY.labels.failure) : options.title;
+  const record: FeedbackRecord = { item: { ...options, title, key, id, kind, revision: (previous?.item.revision ?? 0) + 1 }, native, runningActions: new Set(), remaining: native ? null : remaining, deadline: 0, shown: previous?.shown ?? false, paused: previous?.paused ?? false, settle: previous?.settle ?? [] };
   records.set(id, record);
-  while (records.size > MAX_VISIBLE) closeFeedback(records.keys().next().value!);
+  while (records.size > FEEDBACK_POLICY.maxVisible) closeFeedback(records.keys().next().value!);
   schedule(record);
   emit();
   const settled = new Promise<boolean>(resolve => record.settle.push(() => resolve(true)));
   const close = () => closeFeedback(id);
+  if (native) {
+    const revision = record.item.revision;
+    try { native.show(id, () => { if (records.get(id)?.item.revision === revision) closeFeedback(id); }); }
+    catch (error) { closeFeedback(id); throw error; }
+  }
   return Object.assign(close, { then: settled.then.bind(settled), id });
+};
+export const publishFeedback = (options: FeedbackOptions) => publish(options);
+/** Rich legacy notices still share keys, capacity, close handles and org cleanup. */
+export const publishNativeFeedback = (options: FeedbackOptions, transport: NativeFeedbackTransport) => publish(options, transport);
+/** Both visual renderers use this gate: no duplicate click, stale org or lost error. */
+export const runFeedbackAction = async (id: string, key: string) => {
+  const record = records.get(id);
+  const action = record?.item.actions?.find(candidate => candidate.key === key);
+  if (!record || !action || record.runningActions.has(key)) return;
+  const generation = scopeGeneration;
+  const revision = record.item.revision;
+  record.runningActions.add(key);
+  try {
+    const result = action.onClick() as unknown;
+    // Ant Design-compatible close handles are callable thenables, not jobs.
+    if (result && typeof result === 'object' && 'then' in result && typeof result.then === 'function') await (result as PromiseLike<unknown>);
+    if (generation === scopeGeneration && records.get(id)?.item.revision === revision) closeFeedback(id);
+  } catch (error) {
+    if (generation === scopeGeneration) appFeedback.error(toFaErrorMessage(error, FEEDBACK_POLICY.labels.failure));
+  } finally { record.runningActions.delete(key); }
 };
 const normalize = (options: FeedbackOptions | string): FeedbackOptions => typeof options === 'string' ? { title: options } : options;
 export const appFeedback = {

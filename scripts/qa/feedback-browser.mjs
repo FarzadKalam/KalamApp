@@ -78,6 +78,14 @@ try {
     await dismissAll();
     await page.setViewportSize({ width: 1280, height: 900 });
   }
+  await page.getByRole('button', { name: 'نمایش پیام انصراف' }).click();
+  await page.getByRole('button', { name: 'انصراف', exact: true }).click();
+  await page.getByText('عملیات لغو شد', { exact: true }).waitFor();
+  await dismissAll();
+  await page.getByRole('button', { name: 'نمایش اعلان پیشرفته' }).click();
+  await page.locator('.ant-notification-notice').filter({ hasText: 'اعلان پیشرفتهٔ آزمایشی' }).waitFor();
+  await page.getByRole('button', { name: 'تعویض سازمان آزمایشی' }).click();
+  await page.locator('.ant-notification-notice').filter({ hasText: 'اعلان پیشرفتهٔ آزمایشی' }).waitFor({ state: 'hidden' });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.getByRole('button', { name: 'نمایش پیام سرنخ' }).click();
   await page.locator('[data-sileo-content][data-visible="true"]').waitFor();

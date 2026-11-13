@@ -7,6 +7,7 @@ import { fetchCurrentUserRoleContext, resolveCommunicationsPermissions } from '.
 import { hasCurrentOrgPlanModule } from './saasPlanModules';
 import { getPrimaryRecordPhone } from './recordMessaging';
 import { getRecordTitle } from './recordTitle';
+import { FEEDBACK_POLICY } from './feedbackPolicy';
 
 export const RECORD_FEEDBACK_ACTION_EVENT = 'tazesystem:record-feedback-action';
 export type RecordFeedbackActionRequest = {
@@ -27,7 +28,7 @@ export const showRecordCreatedFeedback = (module: ModuleDefinition, record: Reco
   const key = `record-created:${module.id}:${record.id}`;
   const config = module.createdFeedback;
   const scope = getFeedbackScope();
-  appFeedback.success({ title, description, key, durationMs: config ? 10000 : 4000 });
+  appFeedback.success({ title, description, key, durationMs: config ? FEEDBACK_POLICY.recordCreatedMs : FEEDBACK_POLICY.durations.success });
   if (!config || !record.id) return;
   void (async () => {
     const context = await fetchCurrentUserRoleContext(supabase);
@@ -46,6 +47,6 @@ export const showRecordCreatedFeedback = (module: ModuleDefinition, record: Reco
       if (comm.canUseSms && context.permissions?.__communications?.edit !== false) actions.push({ key: 'message', label: 'ارسال پیام', icon: <MessageOutlined />, iconOnly: true, onClick: () => request('message') });
     }
     if (getFeedbackScope() !== scope || !getFeedbackSnapshot().some(item => item.key === key)) return;
-    appFeedback.success({ title, description, key, durationMs: 10000, actions });
+    appFeedback.success({ title, description, key, durationMs: FEEDBACK_POLICY.recordCreatedMs, actions });
   })().catch(() => { /* The save is complete; optional action discovery may fail closed. */ });
 };

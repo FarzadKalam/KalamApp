@@ -11,11 +11,16 @@ import MessageOutlined from '@ant-design/icons/MessageOutlined';
 import AppFeedbackHost from '../../components/feedback/AppFeedbackHost';
 import UploadProgressOverlay from '../../components/UploadProgressOverlay';
 import { appFeedback } from '../../utils/appFeedback';
+import { refineFeedbackProvider } from '../../utils/refineFeedbackProvider';
 import { setUiNotificationOverlayItems, setUiNotificationOverlayViewer } from '../../utils/uiNotificationOverlayStore';
 
 setUiNotificationOverlayViewer('isolated-preview-org', 'isolated-preview-viewer');
 const initial = { id: 'preview-history', kind: 'note' as const, title: 'پیگیری سفارش مشتری', body: 'این یک اعلان نمونه برای بررسی نمایش است.', createdAt: new Date(Date.now() - 60000).toISOString(), onOpen: () => undefined };
 setUiNotificationOverlayItems([initial]);
+const AdvancedPreview = () => {
+  const { notification } = App.useApp();
+  return <button type="button" onClick={() => notification.open({ key: 'advanced-preview', message: 'اعلان پیشرفتهٔ آزمایشی', description: 'این پیام برای بررسی پاک‌سازی سازمان است.', role: 'alert', duration: 0 })}>نمایش اعلان پیشرفته</button>;
+};
 const Preview = () => {
   const [dark, setDark] = useState(false);
   const [route, setRoute] = useState('/marketing_leads');
@@ -28,6 +33,9 @@ const Preview = () => {
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 24 }}>
           <button type="button" onClick={() => setDark(value => !value)}>تغییر روز و شب</button>
           <button type="button" onClick={() => setRoute(route === '/customers' ? '/marketing_leads' : '/customers')}>جابجایی صفحه</button>
+          <AdvancedPreview />
+          <button type="button" onClick={() => setUiNotificationOverlayViewer('isolated-preview-other-org', 'isolated-preview-viewer')}>تعویض سازمان آزمایشی</button>
+          <button type="button" onClick={() => refineFeedbackProvider.open({ key: 'preview-undo', type: 'progress', message: 'در انتظار انجام عملیات', undoableTimeout: 5, cancelMutation: () => { appFeedback.info('عملیات لغو شد'); } })}>نمایش پیام انصراف</button>
           <button type="button" onClick={() => appFeedback.success({ title: 'سرنخ فروش ثبت شد', description: 'شرکت نمونه', durationMs: 0, actions: [
             { key: 'activity', label: 'ثبت فعالیت', onClick: () => appFeedback.info('فرم فعالیت آمادهٔ تکمیل است') },
             { key: 'call', label: 'تماس', iconOnly: true, icon: <PhoneOutlined />, onClick: () => appFeedback.info('پیش‌نمایش تماس؛ تماسی برقرار نشد') },
