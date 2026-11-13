@@ -14,6 +14,7 @@ const links = [...builtIndex.matchAll(/<link[^>]+rel="stylesheet"[^>]*>/g)].map(
 const html = `<!doctype html><html lang="fa" dir="rtl"><head><meta name="viewport" content="width=device-width, initial-scale=1">${links}<link rel="stylesheet" href="/feedback-test/entry.css"></head><body style="margin:0"><div id="root"></div><script type="module" src="/feedback-test/entry.js"></script></body></html>`;
 const browser = await chromium.launch({ ...(process.env.PLAYWRIGHT_BROWSER === 'chromium' ? {} : { channel: 'msedge' }), headless: true });
 const errors = [];
+let page;
 try {
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'fa-IR', serviceWorkers: 'block', reducedMotion: 'reduce' });
   await context.route('**/feedback-test/**', route => {
@@ -23,7 +24,10 @@ try {
     if (!/^[-\w]+\.(js|css)$/.test(basename)) return route.abort();
     return route.fulfill({ contentType: basename.endsWith('.css') ? 'text/css' : 'text/javascript', body: fs.readFileSync(path.join(dir, basename)) });
   });
-  const page = await context.newPage();
+  page = await context.newPage();
+  const dismissAll = async () => {
+    while (await page.getByRole('button', { name: 'بستن پیام', exact: true }).count()) await page.getByRole('button', { name: 'بستن پیام', exact: true }).first().click();
+  };
   page.on('pageerror', error => errors.push(error.message));
   const scripts = [];
   page.on('request', request => { if (request.url().endsWith('.js')) scripts.push(request.url()); });
@@ -40,7 +44,8 @@ try {
   await page.getByRole('button', { name: 'اعلان تازه', exact: true }).click();
   await dock.waitFor();
   assert.equal(await page.getByRole('button', { name: 'کوچک کردن پنجره' }).count(), 0, 'New notifications do not expand the panel');
-  for (const button of await page.getByRole('button', { name: 'بستن پیام', exact: true }).all()) await button.click();
+  await page.locator('[data-sileo-toast]').filter({ hasText: 'اعلان تازه' }).waitFor();
+  await dismissAll();
   for (const mode of ['light', 'dark']) {
     if (mode === 'dark') await page.getByRole('button', { name: 'تغییر روز و شب' }).click();
     await page.getByRole('button', { name: 'نمایش پیام سرنخ' }).click();
@@ -58,7 +63,7 @@ try {
     await page.screenshot({ path: `${output}/${mode}-mobile.png` });
     await toast.getByRole('button', { name: 'ثبت فعالیت', exact: true }).click();
     await page.getByText('فرم فعالیت آمادهٔ تکمیل است', { exact: true }).waitFor();
-    for (const close of await page.getByRole('button', { name: 'بستن پیام', exact: true }).all()) await close.click();
+    await dismissAll();
     await page.setViewportSize({ width: 1280, height: 900 });
   }
   await page.emulateMedia({ reducedMotion: 'no-preference' });
@@ -83,4 +88,8 @@ try {
   fs.writeFileSync(`${output}/checks.json`, JSON.stringify({ errors, rendererBudget: budget, maxVisible: 3, frameSample, scripts }, null, 2));
   assert.deepEqual(errors, []);
   console.log('PASS: compact persistent overlay; lazy renderer/panel; Persian actions; day/night; mobile; bounded burst; idle teardown; renderer budget.');
-} catch (error) { console.log(error); throw error; } finally { await browser.close(); }
+} catch (error) {
+  console.log('Browser errors:', errors);
+  if (page) { console.log('Page:', (await page.locator('body').innerText()).slice(0, 1200)); await page.screenshot({ path: `${output}/failure.png` }).catch(() => undefined); }
+  console.log(error); throw error;
+} finally { await browser.close(); }

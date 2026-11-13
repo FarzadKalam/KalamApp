@@ -22,9 +22,10 @@ const UploadProgressOverlay = () => {
   const screens = Grid.useBreakpoint();
   const suppressed = isPublicOverlaySuppressedPath(pathname);
   useEffect(() => {
-    const fresh = claimFreshOverlayAnnouncements(items);
-    if (suppressed || expanded || !fresh.length) return;
+    if (suppressed || expanded || !items.length) return;
     const timer = setTimeout(() => {
+      const fresh = claimFreshOverlayAnnouncements(items);
+      if (!fresh.length) return;
       appFeedback.info({ title: fresh.length > 1 ? `${toPersianNumber(String(fresh.length))} اعلان تازه` : fresh[0].title,
         key: 'notification-heads-up', durationMs: 5000,
         actions: [{ key: 'open-notifications', label: 'مشاهدهٔ اعلان‌ها', onClick: () => setUiNotificationOverlayExpanded(true) }],
