@@ -33,7 +33,10 @@ const page = await context.newPage();
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 try {
+  const publishedPage = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/rpc/get_cms_landing_page'));
   await page.goto(base, { waitUntil: 'domcontentloaded', timeout: 120000 });
+  await publishedPage;
+  await page.locator('.product-hero').waitFor({ state: 'detached' });
   console.log('Local page loaded');
   const section = page.locator('.ecosystem-section');
   await section.waitFor();
