@@ -13,6 +13,7 @@ interface SidebarMenuProps {
   isDarkMode: boolean;
   onNavigate: (href: string) => void;
   searchEnabled?: boolean;
+  desktopFlyout?: boolean;
 }
 
 export const sidebarLabelText = (label: React.ReactNode): string => {
@@ -35,30 +36,36 @@ export const filterSidebarItems = (items: MenuProps['items'], query: string, par
   });
 };
 const groupKeys = (items: MenuProps['items']): string[] => (items || []).flatMap(item => item && 'children' in item && Array.isArray(item.children) ? [String(item.key), ...groupKeys(item.children)] : []);
+const flyoutItems = (items: MenuProps['items']): MenuProps['items'] => items?.map(item => item && 'children' in item && Array.isArray(item.children)
+  ? { ...item, popupClassName: 'app-main-sider-submenu-popup workspace-sidebar-submenu', popupOffset: [-6, 0], children: flyoutItems(item.children) } : item);
 
 // Expanding a submenu must not rerender the page, drawers and workspace header.
-const SidebarMenu = memo(function SidebarMenu({ items, selectedKey, ancestorKeys, collapsed, isMobile, isDarkMode, onNavigate, searchEnabled = true }: SidebarMenuProps) {
+const SidebarMenu = memo(function SidebarMenu({ items, selectedKey, ancestorKeys, collapsed, isMobile, isDarkMode, onNavigate, searchEnabled = true, desktopFlyout = false }: SidebarMenuProps) {
   const [openKeys, setOpenKeys] = useState(ancestorKeys);
   const [search, setSearch] = useState('');
   const filteredItems = useMemo(() => filterSidebarItems(items, search)?.map(item => item && 'children' in item && String(item.key) === selectedKey ? { ...item, className: `${item.className || ''} sidebar-selected-group` } : item), [items, search, selectedKey]);
   const searchOpenKeys = useMemo(() => groupKeys(filteredItems), [filteredItems]);
-  useEffect(() => { setOpenKeys(ancestorKeys); }, [ancestorKeys]);
+  const flyout = desktopFlyout && !isMobile;
+  useEffect(() => { setOpenKeys(flyout ? [] : ancestorKeys); }, [ancestorKeys, flyout]);
   const selectedKeys = useMemo(() => [selectedKey], [selectedKey]);
+  const renderedItems = useMemo(() => flyout ? flyoutItems(filteredItems) : filteredItems, [flyout, filteredItems]);
   return (
     <>
     {searchEnabled && (!collapsed || isMobile) && <div className="sidebar-module-search"><Input allowClear prefix={<SearchOutlined />} aria-label="جستجوی ماژول" placeholder="جستجوی ماژول…" value={search} onChange={event => setSearch(event.target.value)} /></div>}
     {search && !filteredItems?.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="ماژولی با این عبارت پیدا نشد." /> : <Menu
       theme={isDarkMode ? 'dark' : 'light'}
-      mode="inline"
+      mode={flyout ? 'vertical' : 'inline'}
       direction="rtl"
-      inlineCollapsed={!isMobile && collapsed}
+      inlineCollapsed={flyout ? undefined : !isMobile && collapsed}
       selectedKeys={selectedKeys}
-      openKeys={collapsed && !isMobile ? undefined : search ? searchOpenKeys : openKeys}
+      openKeys={collapsed && !isMobile ? undefined : search && !flyout ? searchOpenKeys : openKeys}
       onOpenChange={setOpenKeys}
-      triggerSubMenuAction="click"
+      triggerSubMenuAction={flyout ? 'hover' : 'click'}
+      subMenuOpenDelay={0.12}
+      subMenuCloseDelay={0.2}
       // Avoid measuring/animating submenu heights over a busy workspace.
       motion={{ motionAppear: false, motionEnter: false, motionLeave: false }}
-      items={filteredItems}
+      items={renderedItems}
       onClick={({ key }) => { if (key.startsWith('/')) onNavigate(key); }}
       className="mt-4 border-none bg-transparent font-medium"
     />}

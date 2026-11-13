@@ -193,6 +193,7 @@ jobs:
         timeout-minutes: 5
         run: >-
           npx vitest run components/layout/SidebarMenu.test.tsx
+          utils/sidebarLayout.test.ts
           components/stories/storyStudio.test.ts
           --maxWorkers=1 --no-file-parallelism
 
@@ -272,6 +273,16 @@ jobs:
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/ecosystem-browser/node_modules/playwright/index.mjs" node scripts/qa/public-startup.mjs
           node scripts/qa/build-feedback-preview.mjs
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/ecosystem-browser/node_modules/playwright/index.mjs" node scripts/qa/feedback-browser.mjs
+          UI_PREVIEW_ENTRY=scripts/qa/sidebar-fixture.tsx UI_PREVIEW_DIR=tmp/sidebar-preview node scripts/qa/build-feedback-preview.mjs
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/ecosystem-browser/node_modules/playwright/index.mjs" node scripts/qa/sidebar-browser.mjs
+
+      - name: Upload sidebar review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sidebar-review
+          path: tmp/sidebar-review
+          if-no-files-found: ignore
 
       - name: Upload feedback review
         if: always()

@@ -86,6 +86,7 @@ import AiSparkleIcon from './ai/AiSparkleIcon';
 import ActionIcon from './common/ActionIcon';
 import NotificationUnreadBadge from './notifications/NotificationUnreadBadge';
 import MainSidebar from './layout/MainSidebar';
+import { resolveSidebarLayout } from '../utils/sidebarLayout';
 import './layout/WorkspaceChrome.css';
 import HeaderSearchSurface from './layout/HeaderSearchSurface';
 import OrganizationAccessModal from './OrganizationAccessModal';
@@ -830,7 +831,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
     if (location.pathname === '/') {
       setCollapsed((prev) => (prev ? false : prev));
-    } else if (previousPathnameRef.current === '/') {
+    } else if (previousPathnameRef.current !== location.pathname) {
       setCollapsed((prev) => (prev ? prev : true));
     }
 
@@ -1191,12 +1192,13 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     [findMenuPath, rawMenuItems, selectedSidebarKey],
   );
 
+  const sidebarLayout = resolveSidebarLayout(location.pathname, isMobile, collapsed);
   useEffect(() => {
     document.documentElement.style.setProperty(
       '--app-main-sider-width',
-      isMobile ? '0px' : (collapsed ? '80px' : '260px'),
+      `${sidebarLayout.reservedWidth}px`,
     );
-  }, [collapsed, isMobile]);
+  }, [sidebarLayout.reservedWidth]);
 
   useEffect(() => {
     const term = globalSearch.trim();
@@ -1526,6 +1528,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
   return (
     <AntLayout
+      data-sidebar-mode={sidebarLayout.mode}
       className="workspace-chrome overflow-hidden bg-gray-100 dark:bg-dark-bg transition-colors duration-300"
       style={{
         height: 'var(--app-viewport-height, 100dvh)',
@@ -1534,6 +1537,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     >
       
       <MainSidebar items={menuItems} railItems={visibleRawMenuItems} selectedKey={selectedSidebarKey}
+        presentation={sidebarLayout.mode}
         ancestorKeys={sidebarAncestorKeys} collapsed={collapsed} onCollapsedChange={setCollapsed}
         isMobile={isMobile} isDarkMode={isDarkMode} onNavigate={handleSidebarNavigate}
         onPreload={scheduleRoutePreload} brandShortName={brandShortName} brandLogoUrl={brandLogoUrl}
@@ -1543,7 +1547,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       <AntLayout 
         className="app-workspace-content bg-gray-100 dark:bg-dark-bg overflow-hidden flex flex-col"
         style={{ 
-          paddingRight: isMobile ? 0 : 80,
+          paddingRight: sidebarLayout.reservedWidth,
+          minWidth: 0,
           width: '100%',
           height: 'var(--app-viewport-height, 100dvh)',
         }}
