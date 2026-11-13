@@ -12,7 +12,8 @@ import { formatAiCurrencyFromIrt } from '../../utils/aiCurrency';
 import AssistantPanel from './AssistantPanel';
 import AiSparkleIcon from './AiSparkleIcon';
 import type { AiComposerCapability } from './AiCapabilityComposerActions';
-import { normalizeSelectedAgents, type AgentKey, type AgentToneStyle } from '../../utils/aiAgentCatalog';
+import { getAgentDefinition, normalizeSelectedAgents, type AgentKey, type AgentToneStyle } from '../../utils/aiAgentCatalog';
+import { AiAgentCameoFigure } from './AiAgentIcon';
 
 type AiThreadRow = {
   id: string;
@@ -105,6 +106,16 @@ const getThreadSource = (thread: AiThreadRow): AiThreadSource | null => {
     href,
     label: recordId ? `رکورد ${moduleTitle || moduleId}` : `فهرست ${moduleTitle || moduleId}`,
   };
+};
+
+const getThreadAgent = (thread: AiThreadRow) => {
+  const metadata = thread.metadata || {};
+  const rawKey = String(
+    metadata.agent_key
+    || (Array.isArray(metadata.selected_agents) ? metadata.selected_agents[0] : '')
+    || 'lead_orchestrator'
+  ).trim() as AgentKey;
+  return getAgentDefinition(rawKey) || getAgentDefinition('lead_orchestrator')!;
 };
 
 const getThreadSubtitle = (thread: AiThreadRow) => {
@@ -465,6 +476,7 @@ const AiChatSurfaceV2: React.FC = () => {
           const active = thread.id === activeThreadId;
           const title = getThreadTitle(thread);
           const source = getThreadSource(thread);
+          const threadAgent = getThreadAgent(thread);
           if (compact) {
             return (
               <div
@@ -485,9 +497,13 @@ const AiChatSurfaceV2: React.FC = () => {
                 className={`flex w-full flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 transition ${active ? 'bg-white shadow-[inset_0_0_0_1px_rgba(15,23,42,0.10),0_8px_18px_rgba(15,23,42,0.08)] dark:bg-white/[0.10]' : 'hover:bg-white/80 dark:hover:bg-white/[0.06]'}`}
               >
                 <Badge size="small" color="#c0392b">
-                  <Avatar size={34} className="!bg-[rgba(var(--brand-100-rgb),0.88)] !text-[rgb(var(--brand-700-rgb))] dark:!bg-[rgba(var(--brand-600-rgb),0.18)] dark:!text-[rgb(var(--brand-200-rgb))]">
-                    <AiSparkleIcon className="h-4 w-4" />
-                  </Avatar>
+                  <div
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border bg-slate-900 overflow-hidden"
+                    style={{ borderColor: `${threadAgent.badgeColor}90` }}
+                    title={threadAgent.titleFa}
+                  >
+                    <AiAgentCameoFigure agentKey={threadAgent.key} size={28} accentColor={threadAgent.badgeColor} />
+                  </div>
                 </Badge>
                 <button
                   type="button"
@@ -518,9 +534,13 @@ const AiChatSurfaceV2: React.FC = () => {
               }}
               className={`mb-1.5 flex w-full items-start gap-2.5 rounded-xl border px-2.5 py-2 text-right transition ${active ? 'border-slate-300/80 bg-white shadow-[0_10px_26px_rgba(15,23,42,0.08)] dark:border-white/15 dark:bg-white/[0.085]' : 'border-transparent bg-white/58 hover:bg-white/92 dark:bg-transparent dark:hover:bg-white/[0.055]'}`}
             >
-              <Avatar size={36} className="!bg-[rgba(var(--brand-100-rgb),0.88)] !text-[rgb(var(--brand-700-rgb))] dark:!bg-[rgba(var(--brand-600-rgb),0.18)] dark:!text-[rgb(var(--brand-200-rgb))]">
-                <AiSparkleIcon className="h-4 w-4" />
-              </Avatar>
+              <div
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border bg-slate-900 shadow-sm overflow-hidden mt-0.5"
+                style={{ borderColor: `${threadAgent.badgeColor}90` }}
+                title={threadAgent.titleFa}
+              >
+                <AiAgentCameoFigure agentKey={threadAgent.key} size={28} accentColor={threadAgent.badgeColor} />
+              </div>
               <span className="min-w-0 flex-1">
                 <span className="flex min-w-0 items-center justify-between gap-2">
                   <span className="flex min-w-0 items-start gap-1"><span className="line-clamp-2 text-[13px] font-bold leading-5 text-slate-800 dark:text-slate-100">{title}</span>{thread.is_shared ? <ShareAltOutlined className="mt-1 shrink-0 text-[11px] text-[rgb(var(--brand-600-rgb))]" /> : null}</span>
@@ -536,18 +556,26 @@ const AiChatSurfaceV2: React.FC = () => {
                     {formatThreadTime(thread.updated_at || thread.created_at)}
                   </span>
                 </span>
-                {source ? (
-                  <Link
-                    to={source.href}
-                    onClick={(event) => event.stopPropagation()}
-                    className="mt-1 block line-clamp-1 text-[11px] leading-5 text-[rgb(var(--brand-700-rgb))] underline decoration-dotted underline-offset-2 dark:text-[rgb(var(--brand-300-rgb))]"
-                    title={`باز کردن ${source.label}`}
+                <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] leading-5">
+                  <span
+                    className="inline-flex items-center rounded-full px-1.5 py-0 text-[10px] font-medium"
+                    style={{ backgroundColor: `${threadAgent.badgeColor}1a`, color: threadAgent.badgeColor }}
                   >
-                    {source.label}
-                  </Link>
-                ) : (
-                  <span className="mt-1 line-clamp-1 text-[11px] leading-5 text-slate-500 dark:text-slate-300">{getThreadSubtitle(thread)}</span>
-                )}
+                    {threadAgent.titleFa}
+                  </span>
+                  {source ? (
+                    <Link
+                      to={source.href}
+                      onClick={(event) => event.stopPropagation()}
+                      className="line-clamp-1 text-[11px] text-[rgb(var(--brand-700-rgb))] underline decoration-dotted underline-offset-2 dark:text-[rgb(var(--brand-300-rgb))]"
+                      title={`باز کردن ${source.label}`}
+                    >
+                      {source.label}
+                    </Link>
+                  ) : (
+                    <span className="line-clamp-1 text-slate-500 dark:text-slate-400">{getThreadSubtitle(thread)}</span>
+                  )}
+                </span>
               </span>
             </div>
           );
@@ -593,7 +621,6 @@ const AiChatSurfaceV2: React.FC = () => {
             onThreadRenamed={handleThreadRenamed}
             onThreadUpserted={handleThreadUpserted}
             showThreadListButton
-            showAgentInboxBox
           />
         </main>
       </div>

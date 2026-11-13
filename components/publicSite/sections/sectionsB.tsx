@@ -1,7 +1,7 @@
 import React from 'react';
 import { ArrowLeftOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
 import AiSparkleIcon from '../../ai/AiSparkleIcon';
-import AutonomousNightShiftHub from '../../dashboard/AutonomousNightShiftHub';
+import PublicNightShiftShowcase from './PublicNightShiftShowcase';
 import { BrandButton, Reveal, SectionHeading, SectionShell } from '../primitives';
 import { renderIcon } from '../iconMap';
 import type { IconItem } from '../types';
@@ -160,7 +160,7 @@ export const AiSection: React.FC<{ props: any }> = ({ props }) => {
       </div>
 
       <div className="mt-10">
-        <AutonomousNightShiftHub />
+        <PublicNightShiftShowcase />
       </div>
     </SectionShell>
   );

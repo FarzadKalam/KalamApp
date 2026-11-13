@@ -123,7 +123,7 @@ export const collectSqlFirstFindingsForAgent = async (params: {
         cooldownKey: `stale_lead:${lead.id}`,
         cooldownMinutes: 480,
         titleFa: 'پیگیری سرنخ بدون اقدام',
-        messageFa: `ایجنت فروش و لید: سرنخ «${lead.full_name || lead.name || lead.system_code || 'جدید'}» بیش از ۲۴ ساعت است پیگیری جدیدی نداشته است.`,
+        messageFa: `ایجنت بازاریابی و فروش: سرنخ «${lead.full_name || lead.name || lead.system_code || 'جدید'}» بیش از ۲۴ ساعت است پیگیری جدیدی نداشته است.`,
         moduleId: 'marketing_leads',
         recordId: String(lead.id),
         recipientUserIds: recipients,

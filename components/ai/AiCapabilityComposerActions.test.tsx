@@ -24,13 +24,13 @@ describe('AiCapabilityComposerActions', () => {
     );
 
     fireEvent.click(screen.getByLabelText('انتخاب ایجنت هوش مصنوعی'));
-    const textChatLabel = await screen.findByText('ایجنت گفتگو');
+    const textChatLabel = await screen.findByText('مهارت گفتگو');
     const operatorList = textChatLabel.closest('label')?.parentElement;
-    expect(operatorList?.querySelector('label')?.textContent).toContain('ایجنت گفتگو');
-    const freeChatLabel = await screen.findByText('ایجنت گفتگوی آزاد');
+    expect(operatorList?.querySelector('label')?.textContent).toContain('مهارت گفتگو');
+    const freeChatLabel = await screen.findByText('مهارت گفتگوی آزاد');
     const capabilityLabels = Array.from(document.querySelectorAll('label'))
-      .filter((label) => label.textContent?.includes('ایجنت گفتگو') || label.textContent?.includes('ایجنت گفتگوی آزاد') || label.textContent?.includes('ایجنت تحلیل اسناد'));
-    expect(capabilityLabels.at(-1)?.textContent).toContain('ایجنت گفتگوی آزاد');
+      .filter((label) => label.textContent?.includes('مهارت گفتگو') || label.textContent?.includes('مهارت گفتگوی آزاد') || label.textContent?.includes('مهارت تحلیل اسناد'));
+    expect(capabilityLabels.at(-1)?.textContent).toContain('مهارت گفتگوی آزاد');
 
     fireEvent.click(textChatLabel.closest('label')?.querySelector('input[type="checkbox"]') as HTMLInputElement);
     expect(onChange).toHaveBeenLastCalledWith(['text_chat']);
@@ -43,7 +43,7 @@ describe('AiCapabilityComposerActions', () => {
         onFilePrepared={vi.fn()}
       />
     );
-    const documentLabel = await screen.findByText('ایجنت تحلیل اسناد');
+    const documentLabel = await screen.findByText('مهارت تحلیل اسناد');
     fireEvent.click(documentLabel.closest('label')?.querySelector('input[type="checkbox"]') as HTMLInputElement);
     expect(onChange).toHaveBeenLastCalledWith(['document_analysis']);
     fireEvent.click(freeChatLabel.closest('label')?.querySelector('input[type="checkbox"]') as HTMLInputElement);
@@ -65,11 +65,11 @@ describe('AiCapabilityComposerActions', () => {
     );
 
     expect(screen.getByText('ایجنت راهبر')).toBeInTheDocument();
-    expect(screen.getByText('تشخیص: ایجنت پژوهش')).toBeInTheDocument();
+    expect(screen.getByText('تشخیص: مهارت پژوهش وب')).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('انتخاب ایجنت هوش مصنوعی'));
 
     await waitFor(() => expect(screen.getAllByText('تشخیص خودکار').length).toBeGreaterThan(0));
-    const webSearchCheckbox = screen.getByText('ایجنت پژوهش').closest('label')?.querySelector('input[type="checkbox"]') as HTMLInputElement | null;
+    const webSearchCheckbox = screen.getByText('مهارت پژوهش وب').closest('label')?.querySelector('input[type="checkbox"]') as HTMLInputElement | null;
     expect(webSearchCheckbox?.checked).toBe(true);
   });
 
@@ -112,11 +112,11 @@ describe('AiCapabilityComposerActions', () => {
 
     expect(screen.getByLabelText('انتخاب ایجنت‌های تخصصی')).toHaveTextContent('ایجنت‌ها');
     expect(screen.getByLabelText('انتخاب عملکرد هوش مصنوعی')).toHaveTextContent('مهارت‌ها');
-    expect(screen.getByText('فروش و لید')).toBeInTheDocument();
+    expect(screen.getByText('بازاریابی و فروش')).toBeInTheDocument();
     expect(screen.getByText('اینستاگرامر')).toBeInTheDocument();
     expect(screen.getByText('تنظیم قیمت')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByLabelText('حذف ایجنت فروش و لید'));
+    fireEvent.click(screen.getByLabelText('حذف ایجنت بازاریابی و فروش'));
     expect(onAgentsChange).toHaveBeenCalledWith(['instagrammer']);
 
     fireEvent.click(screen.getByLabelText('حذف مهارت تنظیم قیمت'));
@@ -143,7 +143,7 @@ describe('AiCapabilityComposerActions', () => {
     );
 
     fireEvent.click(screen.getByLabelText('انتخاب ایجنت‌های تخصصی'));
-    expect(await screen.findByText('ایجنت فروش و لید')).toBeInTheDocument();
+    expect(await screen.findByText('ایجنت بازاریابی و فروش')).toBeInTheDocument();
     expect(screen.queryByText('ایجنت منابع انسانی')).not.toBeInTheDocument();
     expect(screen.queryByText('ایجنت اینستاگرامر')).not.toBeInTheDocument();
 

@@ -735,7 +735,7 @@ describe('Modular AaaS Foundation', () => {
       ),
     );
 
-    const salesDeskBtn = await screen.findByLabelText('میز فروش و لید');
+    const salesDeskBtn = await screen.findByLabelText('میز بازاریابی و فروش');
     expect(salesDeskBtn).toBeInTheDocument();
     // All 9 agents render when mocked overview returns all 9, or check clicking opens the detail modal
     fireEvent.click(salesDeskBtn);

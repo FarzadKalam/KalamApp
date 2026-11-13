@@ -60,6 +60,7 @@ type AiCapabilityComposerActionsProps = {
   moduleId?: string | null;
   recordId?: string | null;
   onVoiceSend: (voice: RecordedVoice) => void | Promise<void>;
+  onMoveTranscriptToComposer?: (transcript: string) => void;
   onFilePrepared: (filePrompt: AiUploadedFilePrompt) => void | Promise<void>;
   onFilesPrepared?: (filePrompts: AiUploadedFilePrompt[]) => void | Promise<void>;
   voiceLoading?: boolean;
@@ -132,6 +133,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   moduleId,
   recordId,
   onVoiceSend,
+  onMoveTranscriptToComposer,
   onFilePrepared,
   onFilesPrepared,
   voiceLoading = false,
@@ -759,7 +761,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
       ) : null}
 
       {(selectedSet.has('voice_input') || autoMode) && isCapabilityUsable(capabilityAvailability, 'voice_input') ? (
-        <AiVoiceRecorder buttonType="text" disabled={disabled} loading={voiceLoading} size={actionSize} className={iconActionClass} onSend={onVoiceSend} />
+        <AiVoiceRecorder buttonType="text" disabled={disabled} loading={voiceLoading} size={actionSize} className={iconActionClass} onSend={onVoiceSend} onMoveTranscriptToComposer={onMoveTranscriptToComposer} />
       ) : null}
 
       <AiFileUploadButton

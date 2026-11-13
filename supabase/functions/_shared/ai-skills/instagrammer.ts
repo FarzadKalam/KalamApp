@@ -251,10 +251,13 @@ export const instagrammerSkill: DomainSkillModule = {
   agentKey: 'instagrammer',
   titleFa: 'ایجنت اینستاگرامر',
   buildContractPrompt: () => [
-    '## قرارداد تخصصی ایجنت اینستاگرامر (صندوق اینستاگرام + تسلط به مستندات رسمی اینستاگرام و قانون‌گذاری)',
-    '1. **مشاهده و ارائه پست‌ها، ریل‌ها و استوری‌ها برای انتخاب کاربر**:',
+    '## قرارداد تخصصی ایجنت اینستاگرامر (تقویم محتوایی + صندوق اینستاگرام + قانون‌گذاری رسمی)',
+    '1. **تسلط بر تقویم محتوایی و زمان‌بندی انتشار (`content_calendars`)**:',
+    '   - برنامه‌ریزی و تدوین تقویم انتشار پست، ریلز و استوری؛ بازبینی وضعیت انتشار (پیش‌نویس، آماده انتشار، منتشرشده) و تدوین کپشن، هشتگ‌ها و نوع رسانه.',
+    '   - هماهنگ‌سازی زمان‌بندی محتوا با کمپین‌های تبلیغاتی و بررسی اثربخشی تعاملات بر اساس تاریخ‌های تقویم محتوایی.',
+    '2. **مشاهده و ارائه پست‌ها، ریل‌ها و استوری‌ها برای انتخاب کاربر**:',
     '   - همیشه فهرست پست‌ها و ریل‌ها (`instagram_social_media`) و استوری‌های فعالِ دارای ریپلای (`instagram_interaction_events` با `media_type=story` و مهلت ۲۴ ساعته منقضی‌نشده) را همراه کپشن، لینک و تصویر برای تأیید یا انتخاب کاربر نمایش بده.',
-    '2. **ساخت و مدیریت قوانین پاسخ خودکار اینستاگرام (`workflows` روی `instagram_interaction_events`)**:',
+    '3. **ساخت و مدیریت قوانین پاسخ خودکار اینستاگرام (`workflows` روی `instagram_interaction_events`)**:',
     '   - تفکیک دقیق بین ۴ سطح شرط مطابق پنل پروژه:',
     '     • دایرکت عمومی (`event_type = direct_received` بدون `media_permalink`)',
     '     • دایرکت ریپلای یک استوری خاص (`event_type = direct_received` + `media_permalink` + `media_type = story` و فقط استوری فعال)',
@@ -262,9 +265,9 @@ export const instagrammerSkill: DomainSkillModule = {
     '     • کامنت یک پست یا ریل خاص (`event_type = comment_received` + `media_permalink` + `media_type = post|reel`)',
     '     • کلیک دکمه ویترین (`event_type = showcase_button_clicked` + `button_key`)',
     '   - اکشن‌های مجاز: `reply_instagram_comment` و `send_instagram_message` (با پیام یا `showcase_id`).',
-    '3. **ساخت کارت‌های عکس و دکمه‌دار (`instagram_product_showcases`) با تسلط به مستندات رسمی اینستاگرام و قانون‌گذاری**:',
+    '4. **ساخت کارت‌های عکس و دکمه‌دار (`instagram_product_showcases`) با تسلط به مستندات رسمی اینستاگرام و قانون‌گذاری**:',
     '   - اگر کارت دارای تصویر با نشانی `https://` است، خروجی با `send_generic_template` (۱ تا ۱۰ کارت) و حداکثر ۳ دکمه رسمی (`web_url` با لینک `https://` یا `postback` برای اکشن داخلی) ارسال می‌شود؛ در غیر این صورت `send_message` دکمه‌دار است.',
-    '4. **خط قرمزهای مستندات رسمی اینستاگرام و قانون‌گذاری (ممنوعیت‌ها)**:',
+    '5. **خط قرمزهای مستندات رسمی اینستاگرام و قانون‌گذاری (ممنوعیت‌ها)**:',
     '   - ارسال دایرکت انبوه یا سرد (Cold DM) بدون تعامل قبلی مخاطب مطلقاً ممنوع است.',
     '   - Private Reply به کامنت فقط تا ۷ روز پس از کامنت و برای مخاطب بدون دایرکت قبلی مجاز است.',
     '   - قابلیت‌های مستندنشده در قانون‌گذاری رسمی اینستاگرام مثل «لایک/Reaction پیام دایرکت» یا «ریپلای به یک پیام مشخص در دایرکت» را هرگز به‌عنوان قابلیت قابل انجام وعده نده.',
@@ -283,7 +286,7 @@ export const instagrammerSkill: DomainSkillModule = {
     }
 
     const nowIso = new Date().toISOString();
-    const [accounts, postsAndReels, activeStoryEvents, unresolvedComments, showcases, igWorkflows] = await Promise.all([
+    const [accounts, postsAndReels, activeStoryEvents, unresolvedComments, showcases, igWorkflows, contentCalendars] = await Promise.all([
       sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'instagram_accounts', {
         org_id: `eq.${orgId}`,
         is_active: 'eq.true',
@@ -326,6 +329,14 @@ export const instagrammerSkill: DomainSkillModule = {
         order: 'updated_at.desc',
         limit: 25,
       }),
+      canViewModuleWithPlan(plan, perms, 'content_calendars')
+        ? sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'content_calendars', {
+            org_id: `eq.${orgId}`,
+            select: 'id,title,scheduled_at,status,channel,media_type,caption,tags,assignee_id',
+            order: 'scheduled_at.desc',
+            limit: 20,
+          })
+        : Promise.resolve([]),
     ]);
 
     const accountUsernameById = new Map((accounts || []).map((a: any) => [String(a.id), String(a.username || '')]));
@@ -389,6 +400,15 @@ export const instagrammerSkill: DomainSkillModule = {
         is_active: w.is_active !== false,
         conditions_all: w.conditions_all,
         actions_count: Array.isArray(w.actions) ? w.actions.length : 0,
+      })),
+      content_calendar_items: (contentCalendars || []).map((c: any) => ({
+        id: c.id,
+        title: c.title,
+        scheduled_at: c.scheduled_at,
+        status: c.status,
+        channel: c.channel,
+        media_type: c.media_type,
+        caption: c.caption ? String(c.caption).slice(0, 120) : null,
       })),
     };
   },

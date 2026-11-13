@@ -1184,7 +1184,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   }) => {
     const data = await callAssistant({
       action: 'suggest_auto_capabilities',
-      message: params.messageText,
+      message: effectiveChatMessage || params.messageText,
       inputKind: params.inputKind,
       bundle: params.bundlePayload?.length ? { inputs: params.bundlePayload } : undefined,
       threadId: params.forceNewThread ? null : threadId,
@@ -1416,9 +1416,15 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         : item;
     });
 
-    if (bundlePayload.length > 0
+    const hasNonVoiceBundle = executionBundlePayload.some((item) => String(item?.type || '') !== 'voice' || !item?.text);
+    const transcribedVoicePrompt = executionBundlePayload
+      .filter((item) => String(item?.type || '') === 'voice' && item?.text)
+      .map((item) => String(item.text).trim())
+      .filter(Boolean)
+      .join('\n');
+    const effectiveChatMessage = [params.messageText, transcribedVoicePrompt].filter(Boolean).join('\n').trim();
+    if (hasNonVoiceBundle
       || capabilitySet.has('document_analysis')
-      || capabilitySet.has('voice_input')
       || capabilitySet.has('record_creation')
       || capabilitySet.has('process_operation')) {
       return await withAgentPlan(callAssistant({
@@ -2564,7 +2570,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       metadata: {
         pending_status: true,
         capabilities: effectiveCapabilities.length > 0 ? effectiveCapabilities : ['auto_router'],
-        kind: 'document_analysis',
+        kind: bundleInputs.some((item) => item.type === 'file' || item.type === 'image')
+          ? 'document_analysis'
+          : bundleInputs.some((item) => item.type === 'voice' || item.type === 'audio')
+            ? 'voice_input'
+            : 'auto_router',
         started_at: Date.now(),
       },
     };
@@ -2697,7 +2707,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               ...(Array.isArray(data?.instagramMediaCards) && data.instagramMediaCards.length > 0
                 ? { instagram_media_cards: data.instagramMediaCards }
                 : {}),
-              capability: activeRecordCreationSchema ? 'record_creation' : processOperationMode ? 'process_operation' : 'document_analysis',
+              capability: activeRecordCreationSchema ? 'record_creation' : processOperationMode ? 'process_operation' : (bundleInputs.some((item) => item.type === 'file' || item.type === 'image') ? 'document_analysis' : 'text_chat'),
               ...(data?.file ? { file: data.file } : {}),
               ...(data?.image ? { image: data.image } : {}),
             },
@@ -3027,6 +3037,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       || 'lead_orchestrator'
     ) as AgentKey;
     const agentDef = getAgentDefinition(effectiveAgentKey);
+    const rawSelectedAgents = Array.isArray(item.metadata?.selected_agents) ? item.metadata.selected_agents : [];
+    const collaboratingAgents = Array.from(new Set(
+      [effectiveAgentKey, ...rawSelectedAgents]
+        .map((k) => getAgentDefinition(k as AgentKey))
+        .filter((d): d is NonNullable<typeof d> => Boolean(d)),
+    ));
     const respondingAgent = resolveAiAgentId(item.metadata?.agent_id || item.metadata?.capability || capabilities[0]);
     const providerRaw = item.metadata?.provider_raw_response || item.metadata?.provider_error_raw || item.metadata?.avalai_raw_response || null;
     const providerRawText = providerRaw
@@ -3043,7 +3059,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           <div
             className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-200/80 bg-slate-900 shadow-sm overflow-hidden mt-0.5"
             style={{ borderColor: agentDef?.badgeColor ? `${agentDef.badgeColor}90` : undefined }}
-            title={agentDef?.titleFa || 'ایجنت هوشمند'}
+            title={agentDef?.titleFa || 'ایجنت راهبر'}
           >
             <AiAgentCameoFigure
               agentKey={effectiveAgentKey}
@@ -3053,6 +3069,30 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           </div>
         )}
         <div className={`ai-chat-message-column ${isUser ? 'is-user items-start max-w-[85%] sm:max-w-[78%]' : 'is-assistant items-end max-w-[90%] sm:max-w-[84%]'} flex flex-col min-w-0`}>
+          {!isUser ? (
+            <div className="mb-1 flex flex-wrap items-center justify-end gap-1.5 self-stretch text-[11px]">
+              {collaboratingAgents.length > 1 ? (
+                collaboratingAgents.map((colDef) => (
+                  <span
+                    key={colDef.key}
+                    className="inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10.5px] font-semibold"
+                    style={{
+                      borderColor: `${colDef.badgeColor}40`,
+                      backgroundColor: `${colDef.badgeColor}14`,
+                      color: colDef.badgeColor,
+                    }}
+                  >
+                    <AiAgentCameoFigure agentKey={colDef.key} size={13} accentColor={colDef.badgeColor} />
+                    <span>{colDef.titleFa}</span>
+                  </span>
+                ))
+              ) : (
+                <span className="font-semibold text-slate-600 dark:text-slate-300">
+                  {agentDef?.titleFa || 'ایجنت راهبر'}
+                </span>
+              )}
+            </div>
+          ) : null}
           {pendingKind ? (
             <AiGenerationStatusCard
               kind={pendingKind}
@@ -3084,20 +3124,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               />
             )}
             <MessageAttachmentGallery attachments={attachments} presentation={isUser ? undefined : 'assistant'} />
-            {!isUser && item.metadata?.agent_plan && (
-              <div className="mt-2.5 rounded-xl border border-indigo-200/60 bg-indigo-50/40 p-2 text-xs dark:border-indigo-500/20 dark:bg-indigo-950/20">
-                <div className="flex items-center justify-between mb-1 text-[11px] font-bold text-indigo-900 dark:text-indigo-200">
-                  <span className="flex items-center gap-1.5">
-                    <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                    <span>فرایند گام‌به‌گام و ارجاع ایجنت‌ها</span>
-                  </span>
-                  <span className="text-[10px] text-indigo-600/80 dark:text-indigo-300/80">
-                    {agentDef?.shortTitleFa || 'راهبر ارکستر'}
-                  </span>
-                </div>
-                <AiAgentPlanCard plan={item.metadata.agent_plan} />
-              </div>
-            )}
+
             {!isUser ? (() => {
               const instagramCards = Array.isArray(item.metadata?.instagram_media_cards)
                 ? item.metadata.instagram_media_cards
@@ -3732,6 +3759,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             moduleId={fileRecordScope.moduleId}
             recordId={fileRecordScope.recordId}
             onVoiceSend={queueVoiceInput}
+            onMoveTranscriptToComposer={(transcript) => {
+              const clean = String(transcript || '').trim();
+              if (!clean) return;
+              setInput((prev) => (prev.trim() ? `${prev.trim()}\n${clean}` : clean));
+            }}
             onFilePrepared={queueUploadedFile}
             onFilesPrepared={queueUploadedFiles}
             voiceLoading={submitting}
@@ -3788,21 +3820,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         ) : null}
         </AiMessageComposer>
           </div>
-          {showAgentInboxBox && (
-            !agentAccessMap
-            || AI_AGENT_CATALOG.some((def) => {
-              const access = agentAccessMap[def.key];
-              return Boolean(access && (access.canView ?? access.canUse) !== false);
-            })
-          ) ? (
-            <div className="hidden lg:block w-full shrink-0">
-              <AiAgentMessagesCompactBox
-                className="w-full shrink-0"
-                agentAccessMap={agentAccessMap}
-                onSelectAgent={(agentKey) => setSelectedAgents((prev) => normalizeSelectedAgents([...prev, agentKey]))}
-              />
-            </div>
-          ) : null}
+
         </div>
       </div>
       {pendingRecordMutationType && pendingAiAction ? (

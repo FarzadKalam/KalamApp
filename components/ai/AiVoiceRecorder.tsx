@@ -1,9 +1,9 @@
 import React, { useContext, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AiComposerSlots } from './AiComposerSlots';
-import { App, Button, Tooltip } from 'antd';
+import { App, Button, Input, Tooltip } from 'antd';
 import type { ButtonProps } from 'antd';
-import { AudioOutlined, CloseOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
+import { ArrowDownOutlined, AudioOutlined, CloseOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import AiAudioPlayer from './AiAudioPlayer';
 
@@ -34,6 +34,7 @@ type AiVoiceRecorderProps = {
   className?: string;
   buttonType?: ButtonProps['type'];
   onSend: (voice: RecordedVoice) => void | Promise<void>;
+  onMoveTranscriptToComposer?: (transcript: string) => void;
 };
 
 const formatSeconds = (ms: number) => {
@@ -43,7 +44,17 @@ const formatSeconds = (ms: number) => {
   return `${minutes.toLocaleString('fa-IR')}:${seconds.toString().padStart(2, '0')}`;
 };
 
-const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loading = false, size, className, buttonType, onSend }) => {
+const EQUALIZER_BARS = [7, 13, 9, 16, 11, 18, 10, 15, 8, 17, 12, 14, 9, 16, 10, 13];
+
+const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({
+  disabled = false,
+  loading = false,
+  size,
+  className,
+  buttonType,
+  onSend,
+  onMoveTranscriptToComposer,
+}) => {
   const slots = useContext(AiComposerSlots);
   const renderTransient = (node: React.ReactNode) => slots.transient ? createPortal(node, slots.transient) : node;
   const { message } = App.useApp();
@@ -58,6 +69,7 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
   const [recorded, setRecorded] = useState<RecordedVoice | null>(null);
   const [recordedUrl, setRecordedUrl] = useState<string | null>(null);
   const [liveTranscript, setLiveTranscript] = useState('');
+  const [editableTranscript, setEditableTranscript] = useState('');
   const liveTranscriptRef = useRef('');
 
   const cleanupStream = () => {
@@ -105,6 +117,7 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
       setRecordedUrl(null);
       setDurationMs(0);
       setLiveTranscript('');
+      setEditableTranscript('');
       liveTranscriptRef.current = '';
       const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (SpeechRecognitionCtor) {
@@ -141,13 +154,15 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
         cleanupStream();
         if (blob.size > 0) {
           const previewUrl = URL.createObjectURL(blob);
+          const finalTranscript = liveTranscriptRef.current.trim();
+          setEditableTranscript(finalTranscript);
           setRecorded({
             blob,
             mimeType,
             durationMs: finalDuration,
             filename: `فایل صوتی-${Date.now()}.webm`,
             previewUrl,
-              transcript: liveTranscriptRef.current || undefined,
+            transcript: finalTranscript || undefined,
           });
           setRecordedUrl(previewUrl);
         }
@@ -176,76 +191,126 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
     setRecordedUrl(null);
     setDurationMs(0);
     setLiveTranscript('');
+    setEditableTranscript('');
     liveTranscriptRef.current = '';
   };
 
   const send = async () => {
     if (!recorded || loading) return;
     const queuedPreviewUrl = URL.createObjectURL(recorded.blob);
-    await onSend({ ...recorded, previewUrl: queuedPreviewUrl });
+    const finalTranscript = editableTranscript.trim() || recorded.transcript;
+    await onSend({ ...recorded, transcript: finalTranscript, previewUrl: queuedPreviewUrl });
+    discard();
+  };
+
+  const moveToComposer = () => {
+    const text = editableTranscript.trim();
+    if (!text || !onMoveTranscriptToComposer) return;
+    onMoveTranscriptToComposer(text);
     discard();
   };
 
   if (recorded) {
     return renderTransient(
-      <div className="ai-voice-preview">
-        <div className="ai-voice-preview-player">
-          <AiAudioPlayer src={recordedUrl} title="فایل صوتی آماده ارسال" subtitle={formatSeconds(recorded.durationMs)} downloadName={recorded.filename} compact />
+      <div className="flex w-full min-w-0 flex-col gap-2 rounded-xl border border-slate-200/80 bg-slate-50/90 p-2.5 dark:border-white/10 dark:bg-white/[0.04]" dir="rtl">
+        <div className="flex w-full min-w-0 items-center gap-1.5">
+          <div className="min-w-0 flex-1">
+            <AiAudioPlayer src={recordedUrl} title="فایل صوتی آماده ارسال" subtitle={formatSeconds(recorded.durationMs)} downloadName={recorded.filename} compact />
+          </div>
+          <Tooltip title="حذف فایل صوتی">
+            <Button size="small" type="text" aria-label="حذف فایل صوتی" icon={<CloseOutlined />} onClick={discard} disabled={loading} />
+          </Tooltip>
+          <Tooltip title="ارسال فایل صوتی">
+            <Button size="small" type="primary" aria-label="ارسال فایل صوتی" icon={<SendOutlined />} loading={loading} onClick={() => void send()} />
+          </Tooltip>
         </div>
-        <Tooltip title="حذف فایل صوتی">
-          <Button size="small" type="text" aria-label="حذف فایل صوتی" icon={<CloseOutlined />} onClick={discard} disabled={loading} />
-        </Tooltip>
-        <Tooltip title="ارسال فایل صوتی">
-          <Button size="small" type="primary" aria-label="ارسال فایل صوتی" icon={<SendOutlined />} loading={loading} onClick={() => void send()} />
-        </Tooltip>
+        {(editableTranscript || onMoveTranscriptToComposer) ? (
+          <div className="flex flex-col gap-1.5 rounded-lg border border-slate-200/80 bg-white px-2.5 py-1.5 dark:border-white/10 dark:bg-black/20">
+            <Input.TextArea
+              variant="borderless"
+              autoSize={{ minRows: 1, maxRows: 5 }}
+              value={editableTranscript}
+              onChange={(event) => setEditableTranscript(event.target.value)}
+              placeholder="متن تبدیل‌شده صدا (اینتر بزنید تا به کادر پیام منتقل شود)…"
+              className="!p-0 !text-[13px] !leading-6 text-slate-800 dark:text-slate-100"
+              onPressEnter={(event) => {
+                if (event.shiftKey || event.nativeEvent.isComposing) return;
+                if (onMoveTranscriptToComposer && editableTranscript.trim()) {
+                  event.preventDefault();
+                  moveToComposer();
+                }
+              }}
+            />
+            {onMoveTranscriptToComposer && editableTranscript.trim() ? (
+              <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-1 text-[11px] text-slate-500 dark:border-white/10 dark:text-slate-400">
+                <span>برای انتقال به کادر پیام و ویرایش نهایی، کلید Enter را بزنید</span>
+                <Button
+                  type="link"
+                  size="small"
+                  icon={<ArrowDownOutlined />}
+                  onClick={moveToComposer}
+                  className="!h-auto !p-0 !text-[11px]"
+                >
+                  انتقال به کادر پیام
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     );
   }
 
   if (recording) {
     return renderTransient(
-      <div className="flex min-h-11 w-full min-w-0 items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 dark:border-red-900/60 dark:bg-red-950/30">
-        <Button
-          danger
-          type="primary"
-          shape="circle"
-          icon={<StopOutlined />}
-          onClick={stopRecording}
-          aria-label="توقف ضبط صدا"
-        />
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="flex items-center gap-2 text-xs text-red-700 dark:text-red-300">
-            <span className="font-medium">در حال دریافت صدا</span>
-            <span className="tabular-nums">{formatSeconds(durationMs)}</span>
-            <span className="flex h-5 items-center gap-0.5 overflow-hidden" aria-hidden="true">
-              {Array.from({ length: 24 }, (_, index) => (
-                <span key={index} className="w-1 rounded-full bg-red-400 animate-pulse" style={{ height: `${6 + ((index * 7) % 13)}px`, animationDelay: `${index * 35}ms` }} />
+      <div className="flex w-full min-w-0 flex-col gap-2 rounded-xl border border-red-200 bg-red-50/95 px-3 py-2.5 dark:border-red-900/60 dark:bg-red-950/35" dir="rtl">
+        <div className="flex w-full min-w-0 items-center gap-2.5">
+          <Button
+            danger
+            type="primary"
+            shape="circle"
+            size="middle"
+            icon={<StopOutlined />}
+            onClick={stopRecording}
+            aria-label="توقف ضبط صدا"
+            className="shrink-0"
+          />
+          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs text-red-700 dark:text-red-300">
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="h-2 w-2 rounded-full bg-red-500 animate-ping" />
+              <span className="font-semibold whitespace-nowrap">در حال ضبط صدا</span>
+              <span className="tabular-nums font-medium">{formatSeconds(durationMs)}</span>
+            </div>
+            <div className="flex h-5 min-w-0 max-w-full flex-1 items-center justify-end gap-[2px] overflow-hidden" aria-hidden="true">
+              {EQUALIZER_BARS.map((height, index) => (
+                <span
+                  key={index}
+                  className="w-[3px] shrink-0 rounded-full bg-red-400/90 animate-pulse"
+                  style={{ height: `${height}px`, animationDelay: `${index * 45}ms` }}
+                />
               ))}
-            </span>
+            </div>
           </div>
-          <div className="min-h-5 truncate text-sm text-slate-700 dark:text-slate-200">
-            {liveTranscript || 'صحبت کنید؛ متن تشخیص‌داده‌شده همین‌جا نمایش داده می‌شود…'}
-          </div>
+        </div>
+        <div className="w-full min-w-0 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-white/75 px-2.5 py-1.5 text-[13px] leading-6 text-slate-700 dark:bg-black/25 dark:text-slate-200">
+          {liveTranscript || 'صحبت کنید؛ متن تشخیص‌داده‌شده به‌صورت کامل همین‌جا نمایش داده می‌شود…'}
         </div>
       </div>
     );
   }
 
   return (
-    <Tooltip title={recording ? 'توقف ضبط فایل صوتی' : 'ضبط فایل صوتی'}>
+    <Tooltip title="ضبط پیام صوتی">
       <Button
         type={buttonType}
         aria-label="ضبط فایل صوتی"
-        icon={recording ? <StopOutlined /> : <AudioOutlined />}
-        danger={recording}
+        icon={<AudioOutlined />}
         disabled={disabled || loading}
-        loading={loading && !recording}
+        loading={loading}
         size={size}
-        onClick={recording ? stopRecording : () => void startRecording()}
-        className={[className, recording ? 'animate-pulse' : ''].filter(Boolean).join(' ')}
-      >
-        {recording ? formatSeconds(durationMs) : null}
-      </Button>
+        onClick={() => void startRecording()}
+        className={className}
+      />
     </Tooltip>
   );
 };

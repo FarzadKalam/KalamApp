@@ -7174,6 +7174,12 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
   const canUseKnowledge = !freeChatMode && canUseOrganizationKnowledge(planContext);
   const requiresAuthoritativeProcessContext = !freeChatMode && (
     rawContext.intent === 'process_guide'
+    || selectedAgents.includes('project_process')
+    || selectedAgents.includes('customer_response')
+    || selectedAgents.includes('instagrammer')
+    || selectedAgents.includes('sales_leads')
+    || selectedCapabilitySet.has('process_operation')
+    || /(?:الگو(?:ی|های)?\s*فرآ?یند|مراحل\s*فرآ?یند|ویزارد\s*فرآ?یند|process_template|کمپین|تقویم\s*محتوا|وضعیت\s*سفارش|پیگیری\s*کار)/i.test(message)
     || ['process_templates', 'process_runs', 'content_calendars'].includes(String(pageContext?.moduleId || '').trim())
   );
   const [knowledgeChunks, companyContext, orgPeopleContext, calendarContext, authoritativeProcessContext] = await Promise.all([
@@ -10030,7 +10036,6 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
 
   const shouldRunAnalysis = selectedCapabilitySet.has('document_analysis')
     || files.length > 0
-    || transcripts.length > 0
     || !!previousTaskContext;
 
   let analysisText = String(previousTaskContext?.summary || previousTaskContext?.analysis || '').trim();
@@ -15515,6 +15520,9 @@ const executeProposedActionLog = async (
           default_assignee_id: st.default_assignee_id && isUuid(st.default_assignee_id) ? st.default_assignee_id : null,
           default_assignee_role_id: st.default_assignee_role_id && isUuid(st.default_assignee_role_id) ? st.default_assignee_role_id : null,
           auto_create_task: st.auto_create_task !== false,
+          wage: Number.isFinite(Number(st.wage)) ? Number(st.wage) : 0,
+          ...(st.process_node_key ? { process_node_key: st.process_node_key } : {}),
+          ...(st.process_lane_key ? { process_lane_key: st.process_lane_key } : {}),
           metadata: st.metadata || {},
         })),
       );

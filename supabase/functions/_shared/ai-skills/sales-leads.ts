@@ -147,20 +147,23 @@ export const recommendComplementaryProducts = (params: {
 
 export const salesLeadsSkill: DomainSkillModule = {
   agentKey: 'sales_leads',
-  titleFa: 'ایجنت فروش و لید',
+  titleFa: 'ایجنت بازاریابی و فروش',
   buildContractPrompt: () => [
-    '## قرارداد تخصصی ایجنت فروش و لید',
-    '1. **پیش‌فاکتور و فاکتور فروش (`invoices`)**:',
+    '## قرارداد تخصصی ایجنت بازاریابی و فروش',
+    '1. **کمپین‌های بازاریابی و تبلیغات (`campaigns`)**:',
+    '   - تحلیل عملکرد کمپین‌های تبلیغاتی (بودجه، هزینه‌کرد، کانال تبلیغاتی، نرخ جذب لید و هزینه به ازای هر لید CPA).',
+    '   - اتصال لیدهای جذب‌شده به کمپین‌های مربوطه و پیشنهاد بهبود نرخ تبدیل سرنخ‌ها به مشتری و صدور پیش‌فاکتور.',
+    '2. **پیش‌فاکتور و فاکتور فروش (`invoices`)**:',
     '   - همیشه نرخ کالا را از ۳ منبع «قیمت پایه محصول»، «لیست‌های قیمت فعال» و «آخرین فروش به همان مشتری» بررسی کن. اگر بین قیمت‌ها تفاوت بود یا کاربر اولویت را تعیین نکرده، قیمت‌ها را مقایسه کن و از کاربر بپرس کدام اعمال شود.',
     '   - پس از مشخص شدن اقلام اولیه، بر اساس پکیج‌های فروش (`product_bundles`) و خریدهای هم‌زمان قبلی (فقط کالاهای موجود)، حداکثر ۲ تا ۳ پیشنهاد مکمل مفید ارائه بده.',
     '   - جدول دریافت‌ها (`payments`: `payment_type`, `target_account`, `amount`, `date`, `status`, `description`, یا `cheque_id`/`barter_id`) را همراه فاکتور تنظیم کن.',
-    '2. **تسویه فاکتور با رسید پرداخت**:',
+    '3. **تسویه فاکتور با رسید پرداخت**:',
     '   - در سناریوی «فاکتور فلانی رو تسویه کن اینم رسید پرداختش»، ابتدا مشتری و فاکتورهای باز (`remaining_balance > 0`) را پیدا کن؛ مبلغ/تاریخ/بانک و پیوست رسید را با مبلغ مانده تطبیق بده، حساب مقصد را اگر مشخص نیست بپرس، و ردیف دریافت روی `payments` فاکتور و رکورد `cash_bank_operations` (`operation_type = receipt`, `sales_invoice_id`) پیشنهاد/ثبت کن.',
-    '3. **برگشت از فروش (`sales_return_invoices` روی جدول `invoices` با `taxpayer_invoice_subject = 4`)**:',
+    '4. **برگشت از فروش (`sales_return_invoices` روی جدول `invoices` با `taxpayer_invoice_subject = 4`)**:',
     '   - حتماً فاکتور مرجع (`source_invoice_id`)، مشتری و اقلام/مقادیر برگشتی و دلیل عودت را کنترل و پیش‌نویس را برای تأیید ارائه کن.',
-    '4. **ساخت پروژه پس از فروش (`projects` + `process_template_id`)**:',
+    '5. **ساخت پروژه پس از فروش (`projects` + `process_template_id`)**:',
     '   - برای سفارش‌های اجرایی/خدماتی، الگوهای فرآیند مرتبط (`process_templates`) را پیشنهاد بده و پس از تأیید، پروژه متصل به مشتری، فاکتور و الگو بساز.',
-    '5. **لیدها (`marketing_leads`)**: تحلیل وضعیت، پیشنهاد تماس/پیگیری و ثبت فعالیت پیگیری.',
+    '6. **لیدها و سرنخ‌ها (`marketing_leads`)**: تحلیل وضعیت، کانال جذب، پیشنهاد تماس/پیگیری و ثبت فعالیت پیگیری.',
   ].join('\n'),
   gatherDomainContext: async (ctx: SkillExecutionContext) => {
     const orgId = normalizeId(ctx.grounding.orgId);
@@ -177,6 +180,7 @@ export const salesLeadsSkill: DomainSkillModule = {
       openInvoices,
       openLeads,
       processTemplates,
+      campaigns,
     ] = await Promise.all([
       canViewModuleWithPlan(plan, perms, 'customers')
         ? sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'customers', {
@@ -220,7 +224,7 @@ export const salesLeadsSkill: DomainSkillModule = {
       canViewModuleWithPlan(plan, perms, 'marketing_leads')
         ? sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'marketing_leads', {
             org_id: `eq.${orgId}`,
-            select: 'id,full_name,business_name,name,system_code,status,mobile_1,updated_at',
+            select: 'id,full_name,business_name,name,system_code,status,mobile_1,campaign_id,updated_at',
             order: 'updated_at.desc',
             limit: 10,
           })
@@ -233,6 +237,14 @@ export const salesLeadsSkill: DomainSkillModule = {
             limit: 12,
           })
         : Promise.resolve([]),
+      canViewModuleWithPlan(plan, perms, 'campaigns')
+        ? sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'campaigns', {
+            org_id: `eq.${orgId}`,
+            select: 'id,name,title,system_code,budget,status,start_date,end_date,channel',
+            order: 'updated_at.desc',
+            limit: 10,
+          })
+        : Promise.resolve([]),
     ]);
 
     if (customers.length) bundle.customers_sample = customers;
@@ -241,6 +253,7 @@ export const salesLeadsSkill: DomainSkillModule = {
     if (bundles.length) bundle.product_bundles_count = bundles.length;
     if (openInvoices.length) bundle.recent_invoices = openInvoices;
     if (openLeads.length) bundle.recent_leads = openLeads;
+    if (campaigns.length) bundle.active_campaigns = campaigns;
     if (processTemplates.length) {
       bundle.project_process_templates = processTemplates.filter(
         (t) => t.module_id === 'projects' || (Array.isArray(t.module_ids) && t.module_ids.includes('projects')),

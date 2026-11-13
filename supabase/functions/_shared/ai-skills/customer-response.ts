@@ -6,12 +6,18 @@ export const customerResponseSkill: DomainSkillModule = {
   titleFa: 'ایجنت پاسخگویی مشتری',
   buildContractPrompt: () => [
     '## قرارداد تخصصی ایجنت پاسخگویی مشتری',
-    '1. **نمای یکپارچه ارتباطی مشتری (Omnichannel View)**:',
-    '   - برای پیگیری وضعیت یک مشتری، سوابق مجاز بات‌ها (`counterparty_bot_direct_messages`)، پیامک‌ها (`outbound_messages`)، تماس‌های تلفنی (`voip_call_logs`)، فاکتورها و فعالیت‌های باز او را کنار هم تحلیل کن.',
-    '2. **پیگیری واقعی از همکار مسئول (Staff Relay — با کنترل تکراری و دسترسی)**:',
-    '   - وقتی برای پاسخ دقیق به مشتری نیاز به استعلام زمان تحویل، تأیید تخفیف یا وضعیت اجرا است، می‌توانی از ابزار رله داخلی (`relay_to_responsible_staff`) به مسئول مرتبط پیام ارسال کنی و پاسخ را بعداً در صندوق ایجنت جمع‌بندی کنی.',
-    '3. **ایزولاسیون امنیتی در پاسخ بیرونی**:',
-    '   - در مکالمه مستقیم با مشتری (`customer_auto_reply`), **مطلقاً** اطلاعات محرمانه داخلی (حاشیه سود، قیمت خرید، ترازنامه، نام داخلی پرسنل یا یادداشت‌های داخلی) را فاش نکن، ریسک غیردستوری نساز و اگر درخواست نامطمئن است به مسئول مربوط ارجاع بده.',
+    '1. **تسلط بر وضعیت پروژه‌ها، فرآیندها و فعالیت‌های مشتری (`projects`, `process_runs`, `tasks`)**:',
+    '   - هنگام پاسخ به سؤالات مشتری درباره وضعیت سفارش، پروژه یا خدمت، فوراً پروژه‌های فعال (`active_projects`) و فرآیندهای در حال اجرای مشتری (`in_progress_process_runs` همراه با `stages`) را بررسی کن.',
+    '   - به مشتری دقیق و شفاف توضیح بده که کار در چه مرحله‌ای است، چه پیشرفتی داشته و چه اقداماتی در دست انجام است.',
+    '2. **شناخت دقیق کارکنان مسئول و نقش‌های سازمانی (`organization_staff`)**:',
+    '   - وظایف و تسک‌های فعال (`customer_tasks`) را به کارکنان مسئول (`assignee`) و عنوان نقش آنها تطبیق بده.',
+    '   - هنگام پاسخ، با لحن محترمانه و حرفه‌ای نام همکار مسئول و سمت او را ذکر کن (مثلاً: «همکارمان آقای/خانم ... مسئول این مرحله هستند و در حال پیگیری آن می‌باشند»).',
+    '3. **نمای یکپارچه ارتباطی مشتری (Omnichannel View)**:',
+    '   - سوابق پیام‌های پیام‌رسان‌ها (`counterparty_bot_direct_messages`)، پیامک‌ها (`outbound_messages`) و تماس‌های صوتی (`voip_call_logs`) را کنار هم تحلیل کن تا پاسخ تکراری یا متناقض ندهی.',
+    '4. **پیگیری واقعی از همکار مسئول (Staff Relay)**:',
+    '   - در صورتی که مشتری سوال خاصی پرسید که نیازمند استعلام جدید است، از ابزار رله داخلی (`relay_to_responsible_staff`) برای ارسال پیام مستقیم به مسئول همان تسک یا فرآیند استفاده کن.',
+    '5. **حفظ امنیت اطلاعات سازمانی**:',
+    '   - در پاسخ‌های عمومی به مشتری، اطلاعات محرمانه نظیر بهای تمام‌شده، حاشیه سود یا ترازهای حسابداری داخلی را فاش نکن.',
   ].join('\n'),
   gatherDomainContext: async (ctx: SkillExecutionContext) => {
     const orgId = normalizeId(ctx.grounding.orgId);
@@ -24,7 +30,16 @@ export const customerResponseSkill: DomainSkillModule = {
       ? String(ctx.pageContext.recordId)
       : null;
 
-    const [recentBotMessages, recentSms, recentCalls] = await Promise.all([
+    const [
+      recentBotMessages,
+      recentSms,
+      recentCalls,
+      projects,
+      processRuns,
+      tasks,
+      employees,
+      orgRoles,
+    ] = await Promise.all([
       canViewModuleWithPlan(plan, perms, 'customers')
         ? sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'counterparty_bot_direct_messages', {
             org_id: `eq.${orgId}`,
@@ -50,11 +65,87 @@ export const customerResponseSkill: DomainSkillModule = {
         order: 'created_at.desc',
         limit: 8,
       }),
+      canViewModuleWithPlan(plan, perms, 'projects')
+        ? sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'projects', {
+            org_id: `eq.${orgId}`,
+            ...(customerId ? { customer_id: `eq.${customerId}` } : {}),
+            select: 'id,name,title,system_code,customer_id,status,progress,start_date,end_date,assignee_id',
+            order: 'updated_at.desc',
+            limit: 15,
+          })
+        : Promise.resolve([]),
+      canViewModuleWithPlan(plan, perms, 'process_runs')
+        ? sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'process_runs', {
+            org_id: `eq.${orgId}`,
+            ...(customerId ? { customer_id: `eq.${customerId}` } : {}),
+            select: 'id,name,title,system_code,customer_id,status,current_stage_name,current_assignee_id,progress,module_id,record_id,updated_at',
+            order: 'updated_at.desc',
+            limit: 15,
+          })
+        : Promise.resolve([]),
+      canViewModuleWithPlan(plan, perms, 'tasks')
+        ? sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'tasks', {
+            org_id: `eq.${orgId}`,
+            ...(customerId ? { customer_id: `eq.${customerId}` } : {}),
+            select: 'id,title,system_code,customer_id,project_id,assignee_id,assignee_name,status,due_date,priority',
+            order: 'updated_at.desc',
+            limit: 20,
+          })
+        : Promise.resolve([]),
+      canViewModuleWithPlan(plan, perms, 'employees')
+        ? sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'employees', {
+            org_id: `eq.${orgId}`,
+            select: 'id,full_name,name,mobile,role_title,department,status',
+            limit: 30,
+          })
+        : Promise.resolve([]),
+      sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'org_roles', {
+        org_id: `eq.${orgId}`,
+        select: 'id,name,title',
+        limit: 20,
+      }),
     ]);
+
+    // Enrich process runs with their active stages
+    const runIds = (processRuns || []).map((r: any) => normalizeId(r?.id)).filter(Boolean);
+    const runStages = runIds.length
+      ? await sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'process_run_stages', {
+          process_run_id: `in.(${runIds.join(',')})`,
+          select: 'id,process_run_id,stage_name,status,assignee_id,due_date,completed_at',
+          order: 'sort_order.asc',
+          limit: 100,
+        })
+      : [];
+
+    const stagesByRunId = new Map<string, any[]>();
+    for (const stage of runStages || []) {
+      const rid = normalizeId(stage?.process_run_id);
+      if (!rid) continue;
+      if (!stagesByRunId.has(rid)) stagesByRunId.set(rid, []);
+      stagesByRunId.get(rid)!.push(stage);
+    }
+
+    const enrichedProcessRuns = (processRuns || []).map((r: any) => ({
+      ...r,
+      stages: stagesByRunId.get(normalizeId(r?.id)) || [],
+    }));
 
     if (recentBotMessages.length) bundle.recent_bot_messages = recentBotMessages;
     if (recentSms.length) bundle.recent_sms_messages = recentSms;
     if (recentCalls.length) bundle.recent_voip_calls = recentCalls;
+    if (projects.length) bundle.active_projects = projects;
+    if (enrichedProcessRuns.length) bundle.in_progress_process_runs = enrichedProcessRuns;
+    if (tasks.length) bundle.customer_tasks = tasks;
+    if (employees.length) {
+      bundle.organization_staff = employees.map((emp: any) => ({
+        id: emp.id,
+        name: emp.full_name || emp.name,
+        role: emp.role_title,
+        department: emp.department,
+      }));
+    }
+    if (orgRoles.length) bundle.organization_roles = orgRoles;
+
     return bundle;
   },
 };

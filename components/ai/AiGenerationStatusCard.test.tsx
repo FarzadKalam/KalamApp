@@ -7,7 +7,7 @@ describe('AI generation status',()=>{
     vi.useFakeTimers();vi.setSystemTime(new Date('2026-11-10T12:00:00Z'));
     const recheck=vi.fn(),dismiss=vi.fn();
     render(<AiGenerationStatusCard kind="image_generation" startedAtMs={Date.now()} onRecheck={recheck} onDismiss={dismiss} />);
-    expect(screen.getByText('ایجنت تصویرساز')).toBeInTheDocument();
+    expect(screen.getByText('مهارت تصویرسازی')).toBeInTheDocument();
     expect(screen.getByText('در حال ساخت تصویر…')).toBeInTheDocument();
     expect(screen.getByRole('button',{name:'بررسی مجدد'})).toBeDisabled();
     await act(async()=>vi.advanceTimersByTime(5000));
