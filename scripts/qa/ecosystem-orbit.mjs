@@ -55,7 +55,7 @@ try {
   }
   await section.getByRole('button', { name: 'ادامهٔ حرکت', exact: true }).click();
   console.log('All local logos decoded');
-  const whatsapp = section.getByRole('button', { name: 'واتساپ؛ در حال توسعه', exact: true });
+  const whatsapp = section.locator('.ecosystem-canvas').getByRole('button', { name: 'واتساپ؛ در حال توسعه', exact: true });
   await section.locator('.ecosystem-canvas').hover();
   await whatsapp.hover();
   assert.equal(await whatsapp.evaluate(el => getComputedStyle(el).animationPlayState), 'paused');
