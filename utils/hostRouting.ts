@@ -32,7 +32,15 @@ export const isSaasAdminPanelHost = (hostname = getCurrentHostname()) => {
 
 export const isLocalHost = (hostname = getCurrentHostname()) => {
   const normalized = normalizeHostname(hostname);
-  return normalized === "localhost" || normalized === "127.0.0.1";
+  return (
+    normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "0.0.0.0" ||
+    normalized.startsWith("192.168.") ||
+    normalized.startsWith("10.") ||
+    normalized.startsWith("172.") ||
+    /^\d+\.\d+\.\d+\.\d+$/.test(normalized)
+  );
 };
 
 export const isTenantHost = (hostname = getCurrentHostname()) => {

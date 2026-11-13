@@ -309,12 +309,7 @@ const Login = () => {
       return;
     }
 
-    if (!isSaasAppHost() && organizations.some((item) => String(item.resolved_host || '').trim())) {
-      await signOutLocalSession();
-      throw new Error('این شماره به سازمان این آدرس دسترسی ندارد.');
-    }
-
-    if (isSaasAppHost()) {
+    if (isSaasAppHost(currentHost) || isLocalHost(currentHost)) {
       if (organizations.length === 1) {
         await activateOrganizationAndRedirect(organizations[0]);
         return;
