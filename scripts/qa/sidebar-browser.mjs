@@ -83,6 +83,7 @@ try {
     const channels = el => getComputedStyle(el).color.match(/\d+/g).slice(0, 3).map(Number);
     return channels(title).every(value => value > 180) && channels(search).every(value => value > 180);
   });
+  await page.waitForFunction(() => !document.querySelector('.app-sidebar-panel').getAnimations({ subtree: true }).some(animation => animation.playState === 'running'));
   await page.screenshot({ path: `${output}/desktop-dark.png`, fullPage: true });
   assert.equal(await panel.locator('.ant-menu-item-selected a').evaluate(el => getComputedStyle(el).color), 'rgb(255, 255, 255)', 'Selected record links inherit the readable menu color');
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -97,6 +98,10 @@ try {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await page.getByRole('button', { name: 'باز کردن منوی گوشی', exact: true }).click();
   await drawer.waitFor({ state: 'visible' });
+  await page.waitForFunction(() => {
+    const rect = document.querySelector('.ant-drawer-body')?.getBoundingClientRect();
+    return rect && rect.width > 0 && rect.left >= 0 && rect.right <= innerWidth + 1;
+  });
   await page.screenshot({ path: `${output}/mobile-dark.png`, fullPage: true });
   assert.deepEqual(errors, []);
   fs.writeFileSync(`${output}/checks.json`, JSON.stringify({ passed: true, checks: ['dashboard push', 'other pages overlay', 'nested RTL hover', 'outside dismissal', 'Escape focus', 'responsive widths', 'touch navigation', 'day/night', 'reduced motion'], errors }, null, 2));
