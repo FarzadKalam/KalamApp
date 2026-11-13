@@ -5,10 +5,10 @@ describe('shared AI agent contract', () => {
   it('keeps saved capability aliases compatible and never exposes unknown keys', () => {
     expect(resolveAiAgentId('dashboard_chat')).toBe('text_chat');
     expect(resolveAiAgentId('auto_router')).toBe('auto_decision');
-    expect(getAiAgentLabel('private-unknown-key')).toBe('ایجنت راهبر');
-    expect(getAiAgentLabel('constructor')).toBe('ایجنت راهبر');
-    expect(getAiAgentLabel('__proto__')).toBe('ایجنت راهبر');
-    for (const agent of Object.values(AI_AGENTS)) expect(agent.label).toMatch(/^ایجنت /);
+    expect(getAiAgentLabel('private-unknown-key')).toBe('انتخاب خودکار');
+    expect(getAiAgentLabel('constructor')).toBe('انتخاب خودکار');
+    expect(getAiAgentLabel('__proto__')).toBe('انتخاب خودکار');
+    for (const agent of Object.values(AI_AGENTS)) expect(agent.label).toMatch(/^(ایجنت|مهارت|انتخاب) /);
   });
   it('tracks parallel observed work without dropping another agent or accepting unknown events', () => {
     const first: AiAgentActivity = { agentId:'organization_data', phase:'started', at:1 };
