@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Drawer, Tooltip, type MenuProps } from 'antd';
-import { AppstoreOutlined, BankOutlined, CloseOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, BankOutlined, CloseOutlined, LeftOutlined } from '@ant-design/icons';
 import SidebarMenu, { sidebarLabelText } from './SidebarMenu';
 import ContextualTutorialButton from '../cms/ContextualTutorialButton';
 import TazeSystemAttribution from '../common/TazeSystemAttribution';
@@ -50,19 +50,28 @@ function MainSidebar({ items, railItems, selectedKey, ancestorKeys, collapsed, o
   return <div ref={sidebarRef} className="app-sidebar-navigation" style={{ '--workspace-sidebar-panel-width': `${SIDEBAR_LAYOUT.panelWidth}px`, '--workspace-sidebar-rail-width': `${SIDEBAR_LAYOUT.railWidth}px` } as React.CSSProperties}>
     {!isMobile && <aside className="app-main-rail" aria-label="ناوبری اصلی">
       <div className="app-rail-brand" title={brandShortName}>{logo}</div>
-      <nav className="app-rail-links">{(railItems || []).map(item => {
+      <nav className="app-rail-links">{(railItems || []).map((item, index) => {
         if (!item || !('key' in item)) return null;
         const key = String(item.key || ''), label = sidebarLabelText('label' in item ? item.label : '');
         const hasChildren = 'children' in item && Array.isArray(item.children);
         const active = key === displayedKey || ((collapsed || !requestedGroup) && ancestorKeys.includes(key));
         const icon = 'icon' in item && item.icon ? item.icon : key.startsWith('/') ? renderModuleIcon(key.slice(1).split('/')[0]) : <AppstoreOutlined />;
-        return <Tooltip key={key} title={label} placement="left"><Button type="text" aria-label={label} aria-expanded={hasChildren ? !collapsed && requestedGroup === key : undefined} aria-controls={hasChildren ? 'workspace-sidebar-panel' : undefined} className={`app-rail-item ${active ? 'is-active' : ''}`} icon={icon}
-          disabled={'disabled' in item && Boolean(item.disabled)} onPointerEnter={() => { if (!hasChildren && key.startsWith('/')) onPreload?.(key); }}
-          onClick={() => { if (hasChildren) { setRequestedGroup(key);onCollapsedChange(false); } else if (key.startsWith('/')) onNavigate(key); }} /></Tooltip>;
+        const isDashboard = key === '/' || index === 0;
+        const isMainSidebarOpen = !collapsed && requestedGroup === null;
+        return <React.Fragment key={key}>
+          <Tooltip title={label} placement="left"><Button type="text" aria-label={label} aria-expanded={hasChildren ? !collapsed && requestedGroup === key : undefined} aria-controls={hasChildren ? 'workspace-sidebar-panel' : undefined} className={`app-rail-item ${active ? 'is-active' : ''}`} icon={icon}
+            disabled={'disabled' in item && Boolean(item.disabled)} onPointerEnter={() => { if (!hasChildren && key.startsWith('/')) onPreload?.(key); }}
+            onClick={() => { if (hasChildren) { setRequestedGroup(key);onCollapsedChange(false); } else if (key.startsWith('/')) onNavigate(key); }} /></Tooltip>
+          {isDashboard && <Tooltip title={isMainSidebarOpen ? 'بستن منو' : 'باز کردن فهرست ماژول‌ها'} placement="left">
+            <button type="button" aria-label="باز کردن فهرست ماژول‌ها" aria-expanded={isMainSidebarOpen} aria-controls="workspace-sidebar-panel" className={`app-rail-toggle-btn ${isMainSidebarOpen ? 'is-open' : ''}`}
+              onClick={() => { if (isMainSidebarOpen) { onCollapsedChange(true); } else { setRequestedGroup(null); onCollapsedChange(false); } }}>
+              <LeftOutlined className="app-rail-toggle-icon" />
+            </button>
+          </Tooltip>}
+        </React.Fragment>;
       })}</nav>
       <div className="app-rail-footer">
         <ContextualTutorialButton contexts={contexts} viewer={viewer} buttonClassName="app-rail-item" />
-        <Tooltip title="فهرست ماژول‌ها" placement="left"><Button type="text" className="app-rail-item" icon={<MenuUnfoldOutlined />} aria-label="باز کردن فهرست ماژول‌ها" aria-expanded={!collapsed} aria-controls="workspace-sidebar-panel" onClick={() => { setRequestedGroup(null); onCollapsedChange(!collapsed); }} /></Tooltip>
       </div>
     </aside>}
     {!isMobile && !collapsed && <aside id="workspace-sidebar-panel" className="app-sidebar-panel" aria-label={panelTitle}>

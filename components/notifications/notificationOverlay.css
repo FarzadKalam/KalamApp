@@ -1,4 +1,7 @@
-.notification-overlay-dock { position: fixed; z-index: 2147483000; right: 16px; left: auto; display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 14px; border: 1px solid; border-radius: 18px; box-shadow: 0 8px 24px rgb(0 0 0 / .24); font: inherit; font-size: 13px; cursor: pointer; }
+.notification-overlay-dock { position: fixed; z-index: 2147483000; right: calc(var(--workspace-sidebar-rail-width, 80px) + 16px); left: auto; display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 14px; border: 1px solid; border-radius: 18px; box-shadow: 0 8px 24px rgb(0 0 0 / .24); font: inherit; font-size: 13px; cursor: pointer; }
+@media (max-width: 767px) {
+  .notification-overlay-dock { right: 16px; }
+}
 .notification-overlay-count { min-width: 24px; height: 24px; display: grid; place-items: center; border-radius: 8px; background: rgb(128 128 128 / .2); font-size: 12px; }
 .notification-overlay-dock:hover { box-shadow: 0 10px 28px rgb(0 0 0 / .3); }
 .notification-overlay-dock:focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }

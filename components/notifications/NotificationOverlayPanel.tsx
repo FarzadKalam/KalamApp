@@ -434,7 +434,7 @@ const NotificationOverlayPanel: React.FC = () => {
       style={{
         zIndex: 2147483000,
         bottom: floatingBottom,
-        right: isMobileViewport ? 12 : 'calc(var(--app-main-sider-width, 0px) + 16px)',
+        right: isMobileViewport ? 12 : 'calc(max(var(--app-main-sider-width, 80px), var(--workspace-sidebar-rail-width, 80px)) + 16px)',
       }}
     >
       <div

@@ -52,6 +52,7 @@ const UploadProgressOverlay = () => {
   return <button type="button" className="notification-overlay-dock" aria-label="نمایش اعلان‌ها و آپلودها" aria-expanded={false}
     onClick={() => setUiNotificationOverlayExpanded(true)} style={{
       bottom: screens.md ? '20px' : 'calc(var(--app-mobile-footer-height, 64px) + 14px + env(safe-area-inset-bottom, 0px))',
+      right: screens.md ? 'calc(var(--workspace-sidebar-rail-width, 80px) + 16px)' : '16px',
       background: token.colorTextHeading, color: token.colorBgContainer, borderColor: token.colorPrimary,
     }}>
     {uploadCount ? <CloudUploadOutlined aria-hidden="true" /> : <BellOutlined aria-hidden="true" />}
