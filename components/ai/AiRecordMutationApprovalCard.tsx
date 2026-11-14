@@ -45,7 +45,7 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
       .filter((table: any) => table.key && table.columns.length > 0)
   ), [schema]);
 
-  const editableFields = useMemo(() => {
+  const editableFields = useMemo<ModuleField[]>(() => {
     const schemaKeys = new Set(
       (Array.isArray(schema?.fields) ? schema.fields : [])
         .map((item: any) => String(item?.key || '').trim())
