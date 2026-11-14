@@ -600,7 +600,9 @@ describe('Modular AaaS Foundation', () => {
       ),
     );
 
-    expect(screen.getByText('تنظیم قیمت')).toBeInTheDocument();
+    // The compact viewport exposes selection through its icon buttons and drawer.
+    expect(screen.getByRole('button', { name: 'انتخاب عملکرد هوش مصنوعی' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'انتخاب ایجنت‌های تخصصی' }).querySelectorAll('[data-agent-key]')).toHaveLength(2);
     expect(screen.getByTestId('dashboard-agent-desk-strip')).toBeInTheDocument();
     for (const def of AI_AGENT_CATALOG) {
       expect(screen.getByLabelText(`میز ${def.shortTitleFa}`)).toBeInTheDocument();
