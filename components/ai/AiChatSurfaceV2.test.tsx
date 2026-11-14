@@ -241,7 +241,7 @@ describe('AiChatSurfaceV2', () => {
       }]);
 
     await waitFor(() => expect(screen.getByText(/پاسخ نصفه/)).toBeInTheDocument());
-    expect(screen.getByText(/متن دریافت‌شده حفظ شد/)).toBeInTheDocument();
+    expect(screen.getByText(/متن دریافت‌شده حفظ شد/, { selector: '.ai-chat-message-column.is-assistant *' })).toBeInTheDocument();
     expect(screen.queryByText('پاسخ هوش مصنوعی کامل دریافت نشد.')).not.toBeInTheDocument();
   }, 15000);
 
@@ -260,7 +260,7 @@ describe('AiChatSurfaceV2', () => {
     }]);
 
     await waitFor(() => expect(screen.getByText(/متن دریافت‌شده پیش از قطع اتصال/)).toBeInTheDocument());
-    expect(screen.getByText(/متن دریافت‌شده حفظ شد/)).toBeInTheDocument();
+    expect(screen.getByText(/متن دریافت‌شده حفظ شد/, { selector: '.ai-chat-message-column.is-assistant *' })).toBeInTheDocument();
   }, 15000);
 
   it('renames the active thread inline from the conversation header', async () => {
