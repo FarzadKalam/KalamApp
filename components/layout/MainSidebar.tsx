@@ -47,28 +47,38 @@ function MainSidebar({ items, railItems, selectedKey, ancestorKeys, collapsed, o
   const requestedItem = (items || []).find(item => item && 'key' in item && String(item.key) === requestedGroup);
   const panelItems = requestedItem && 'children' in requestedItem ? requestedItem.children : items;
   const panelTitle = requestedItem && 'label' in requestedItem ? sidebarLabelText(requestedItem.label) : 'فهرست ماژول‌ها';
+  const isMainSidebarOpen = !collapsed && requestedGroup === null;
   return <div ref={sidebarRef} className="app-sidebar-navigation" style={{ '--workspace-sidebar-panel-width': `${SIDEBAR_LAYOUT.panelWidth}px`, '--workspace-sidebar-rail-width': `${SIDEBAR_LAYOUT.railWidth}px` } as React.CSSProperties}>
     {!isMobile && <aside className="app-main-rail" aria-label="ناوبری اصلی">
       <div className="app-rail-brand" title={brandShortName}>{logo}</div>
-      <nav className="app-rail-links">{(railItems || []).map((item, index) => {
+      <Tooltip title={isMainSidebarOpen ? 'بستن منو' : 'باز کردن فهرست ماژول‌ها'} placement="left">
+        <button
+          type="button"
+          aria-label={isMainSidebarOpen ? 'بستن منو' : 'باز کردن فهرست ماژول‌ها'}
+          aria-expanded={isMainSidebarOpen}
+          aria-controls="workspace-sidebar-panel"
+          className={`app-rail-edge-toggle ${isMainSidebarOpen ? 'is-open' : ''}`}
+          onClick={() => {
+            if (isMainSidebarOpen) {
+              onCollapsedChange(true);
+            } else {
+              setRequestedGroup(null);
+              onCollapsedChange(false);
+            }
+          }}
+        >
+          <LeftOutlined className="app-rail-toggle-icon" />
+        </button>
+      </Tooltip>
+      <nav className="app-rail-links">{(railItems || []).map((item) => {
         if (!item || !('key' in item)) return null;
         const key = String(item.key || ''), label = sidebarLabelText('label' in item ? item.label : '');
         const hasChildren = 'children' in item && Array.isArray(item.children);
         const active = key === displayedKey || ((collapsed || !requestedGroup) && ancestorKeys.includes(key));
         const icon = 'icon' in item && item.icon ? item.icon : key.startsWith('/') ? renderModuleIcon(key.slice(1).split('/')[0]) : <AppstoreOutlined />;
-        const isDashboard = key === '/' || index === 0;
-        const isMainSidebarOpen = !collapsed && requestedGroup === null;
-        return <React.Fragment key={key}>
-          <Tooltip title={label} placement="left"><Button type="text" aria-label={label} aria-expanded={hasChildren ? !collapsed && requestedGroup === key : undefined} aria-controls={hasChildren ? 'workspace-sidebar-panel' : undefined} className={`app-rail-item ${active ? 'is-active' : ''}`} icon={icon}
-            disabled={'disabled' in item && Boolean(item.disabled)} onPointerEnter={() => { if (!hasChildren && key.startsWith('/')) onPreload?.(key); }}
-            onClick={() => { if (hasChildren) { setRequestedGroup(key);onCollapsedChange(false); } else if (key.startsWith('/')) onNavigate(key); }} /></Tooltip>
-          {isDashboard && <Tooltip title={isMainSidebarOpen ? 'بستن منو' : 'باز کردن فهرست ماژول‌ها'} placement="left">
-            <button type="button" aria-label="باز کردن فهرست ماژول‌ها" aria-expanded={isMainSidebarOpen} aria-controls="workspace-sidebar-panel" className={`app-rail-toggle-btn ${isMainSidebarOpen ? 'is-open' : ''}`}
-              onClick={() => { if (isMainSidebarOpen) { onCollapsedChange(true); } else { setRequestedGroup(null); onCollapsedChange(false); } }}>
-              <LeftOutlined className="app-rail-toggle-icon" />
-            </button>
-          </Tooltip>}
-        </React.Fragment>;
+        return <Tooltip key={key} title={label} placement="left"><Button type="text" aria-label={label} aria-expanded={hasChildren ? !collapsed && requestedGroup === key : undefined} aria-controls={hasChildren ? 'workspace-sidebar-panel' : undefined} className={`app-rail-item ${active ? 'is-active' : ''}`} icon={icon}
+          disabled={'disabled' in item && Boolean(item.disabled)} onPointerEnter={() => { if (!hasChildren && key.startsWith('/')) onPreload?.(key); }}
+          onClick={() => { if (hasChildren) { setRequestedGroup(key);onCollapsedChange(false); } else if (key.startsWith('/')) onNavigate(key); }} /></Tooltip>;
       })}</nav>
       <div className="app-rail-footer">
         <ContextualTutorialButton contexts={contexts} viewer={viewer} buttonClassName="app-rail-item" />
