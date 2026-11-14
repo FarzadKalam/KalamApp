@@ -4,6 +4,8 @@
 
 ### پرسش‌های تعاملی ایجنت‌ها — 2026-11-14
 
+- اصلاح بعدی همان روز: نسخهٔ `3.4.1` فقط برای رفع بریدگی عنوان‌های زیرمنوی آیکون‌دار، با [CI موفق](https://github.com/FarzadKalam/KalamApp/actions/runs/43615994332) و [انتشار موفق](https://github.com/FarzadKalam/KalamApp/actions/runs/43616836583) فعال شد. صفحهٔ «تازه‌ها» تغییر نکرد. نسخهٔ زنده و مهر کش روی هر سه دامنه `3.4.1` است؛ هر ۹ بررسی `index.html`، `sw.js` و `version.json` با پاسخ ۲۰۰ و هدرهای جلوگیری از کش موفق شدند. منشأ انتشار کامیت `1a44b9de6676fe7bb7aa35bddee4b2cdc26e794b` را تأیید کرد. اقدام Search Console همچنان در انتظار مالک است.
+
 - وضعیت: نسخهٔ `3.4.0` در 2026-11-14 پس از تأیید کاربر و [CI موفق](https://github.com/FarzadKalam/KalamApp/actions/runs/43612979125)، از همان خروجی با [انتشار موفق](https://github.com/FarzadKalam/KalamApp/actions/runs/43613734322) منتشر شد.
 - تغییر عمومی: معرفی پرسش‌های تعاملی در صفحهٔ «تازه‌ها». اصلاحات ثبت اطلاعات و سایدبار فقط در تغییرات نسخه ثبت شده‌اند.
 - شواهد زنده: `central-release.json` نسخهٔ `3.4.0` و کامیت `f3730909af673f918f6e4f437ab98c7dbdd7e8d9` را تأیید کرد. `index.html`، `sw.js` و `version.json` روی `tazesystem.ir`، `app.tazesystem.ir` و `kalam.tazesystem.ir` پاسخ ۲۰۰، هدر `no-cache, no-store, must-revalidate`، نسخه و مهر درست و بدون token خام دارند.
