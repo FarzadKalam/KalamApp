@@ -16,16 +16,19 @@ import {
   FileDoneOutlined,
   FileSearchOutlined,
   FolderOpenOutlined,
+  GiftOutlined,
   FormOutlined,
   FundOutlined,
   InboxOutlined,
   InstagramOutlined,
   NotificationOutlined,
+  MessageOutlined,
   ProjectOutlined,
   ReadOutlined,
   RetweetOutlined,
   RobotOutlined,
   SendOutlined,
+  SettingOutlined,
   ShoppingOutlined,
   SolutionOutlined,
   SwapOutlined,
@@ -40,6 +43,9 @@ type ModuleIconComponent = (props: { className?: string; style?: CSSProperties }
 // کلیدهای presentation در registry ثبت می‌شوند؛ بنابراین همهٔ سطوح UI از یک
 // خانوادهٔ آیکون سبک Ant Design استفاده می‌کنند و نیازی به بارگیری کتابخانهٔ جدید نیست.
 export const MODULE_ICON_KEYS: Record<string, string> = {
+  accounting: 'bank', hr: 'team', reports: 'bar_chart', gallery: 'folder', settings: 'setting',
+  'customer-club': 'gift', messages: 'message', support: 'message', 'taze-system': 'cloud_server',
+  goals: 'fund', installation: 'cloud_server', 'org-knowledge': 'read',
   products: 'shopping', billboards: 'environment', billboard_status_changes: 'retweet', product_bundles: 'container',
   warehouses: 'inbox', shelves: 'container', stock_transfers: 'swap', secretariat_documents: 'file_done',
   delivery_forms: 'send', advertising_campaigns: 'bar_chart', advertising_campaign_tools: 'form', advertising_campaign_responses: 'file_search',
@@ -61,6 +67,7 @@ export const MODULE_ICON_KEYS: Record<string, string> = {
 };
 
 const ICONS: Record<string, ModuleIconComponent> = {
+  setting: SettingOutlined, gift: GiftOutlined, message: MessageOutlined,
   shopping: ShoppingOutlined, environment: EnvironmentOutlined, retweet: RetweetOutlined, container: ContainerOutlined,
   inbox: InboxOutlined, swap: SwapOutlined, file_done: FileDoneOutlined, send: SendOutlined, bar_chart: BarChartOutlined,
   form: FormOutlined, file_search: FileSearchOutlined, calendar: CalendarOutlined, calculator: CalculatorOutlined,

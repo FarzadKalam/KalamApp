@@ -194,6 +194,7 @@ jobs:
         run: >-
           npx vitest run components/layout/SidebarMenu.test.tsx
           utils/sidebarLayout.test.ts
+          utils/sidebarNavigation.test.ts
           components/stories/storyStudio.test.ts
           --maxWorkers=1 --no-file-parallelism
 
