@@ -4,6 +4,7 @@ import theme from 'antd/es/theme';
 import Grid from 'antd/es/grid';
 import BellOutlined from '@ant-design/icons/BellOutlined';
 import CloudUploadOutlined from '@ant-design/icons/CloudUploadOutlined';
+import CloseOutlined from '@ant-design/icons/CloseOutlined';
 import { useUploadTasks } from '../utils/uploadProgressStore';
 import {
   claimFreshOverlayAnnouncements,
@@ -11,6 +12,8 @@ import {
   useUiNotificationOverlayExpanded,
   useUiNotificationOverlayItems,
   useUiNotificationOverlayUnreadSummary,
+  useUiNotificationOverlayDockHidden,
+  closeUiNotificationOverlay,
 } from '../utils/uiNotificationOverlayStore';
 import { appFeedback } from '../utils/appFeedback';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
@@ -26,6 +29,7 @@ const UploadProgressOverlay = () => {
   const items = useUiNotificationOverlayItems();
   const unreadSummary = useUiNotificationOverlayUnreadSummary();
   const expanded = useUiNotificationOverlayExpanded();
+  const dockHidden = useUiNotificationOverlayDockHidden();
   const { token } = theme.useToken();
   const screens = Grid.useBreakpoint();
   const suppressed = isPublicOverlaySuppressedPath(pathname);
@@ -42,22 +46,26 @@ const UploadProgressOverlay = () => {
     return () => clearTimeout(timer);
   }, [items, expanded, suppressed]);
   const centralTotal = unreadSummary.ready
-    ? (unreadSummary.communicationUnread + unreadSummary.alertsUnread)
+    ? (unreadSummary.communicationUnread + unreadSummary.alertsUnread + items.filter(item => item.kind === 'email').length)
     : items.length;
-  const effectiveUnread = centralTotal > 0 ? centralTotal : items.length;
-  if (suppressed || (!tasks.length && !effectiveUnread && !items.length)) return null;
+  const effectiveUnread = Math.max(centralTotal, items.length);
+  if (suppressed || (dockHidden && !expanded) || (!tasks.length && !items.length)) return null;
   if (expanded) return <Suspense fallback={null}><NotificationOverlayPanel /></Suspense>;
   const uploadCount = tasks.filter(task => task.status === 'uploading').length;
   const totalCount = (effectiveUnread || items.length) + tasks.length;
-  return <button type="button" className="notification-overlay-dock" aria-label="نمایش اعلان‌ها و آپلودها" aria-expanded={false}
-    onClick={() => setUiNotificationOverlayExpanded(true)} style={{
+  return <div className="notification-overlay-dock" dir="rtl" style={{
       bottom: screens.md ? '20px' : 'calc(var(--app-mobile-footer-height, 64px) + 14px + env(safe-area-inset-bottom, 0px))',
       right: screens.md ? 'calc(var(--workspace-sidebar-rail-width, 80px) + 16px)' : '16px',
       background: token.colorTextHeading, color: token.colorBgContainer, borderColor: token.colorPrimary,
     }}>
+    <button type="button" className="notification-overlay-dock-open" aria-label="نمایش اعلان‌ها و آپلودها" aria-expanded={false}
+      onClick={() => setUiNotificationOverlayExpanded(true)}>
     {uploadCount ? <CloudUploadOutlined aria-hidden="true" /> : <BellOutlined aria-hidden="true" />}
     <span>{uploadCount ? 'آپلودها و اعلان‌ها' : 'اعلان‌ها'}</span>
     <span className="notification-overlay-count">{toPersianNumber(String(totalCount))}</span>
-  </button>;
+    </button>
+    <button type="button" className="notification-overlay-dock-close" aria-label="بستن اعلان‌های گوشهٔ صفحه"
+      onClick={closeUiNotificationOverlay}><CloseOutlined aria-hidden="true" style={{ fontSize: 12 }} /></button>
+  </div>;
 };
 export default UploadProgressOverlay;

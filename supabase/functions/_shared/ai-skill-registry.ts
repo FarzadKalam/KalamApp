@@ -130,14 +130,11 @@ export const assembleMultiSkillContext = async (
   ]);
 
   const domainContextByAgent: Record<string, any> = {};
-  let instagramMediaCards: any[] = [];
+  const instagramMediaCards: any[] = [];
   for (const [agentKey, data] of entries) {
     if (data && Object.keys(data).length > 0) {
       domainContextByAgent[agentKey] = data;
-      if (agentKey === 'instagrammer' && Array.isArray(data.media_cards)
-        && /(?:پست|ریل|استوری|رسانه|permalink|ویترین)/i.test(ctx.userMessage)) {
-        instagramMediaCards = data.media_cards;
-      }
+
     }
   }
   if (pricingData && Object.keys(pricingData).length > 0) {

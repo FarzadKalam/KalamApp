@@ -39,10 +39,10 @@ import {
   snoozeUiNotificationOverlayItem,
   useUiNotificationOverlayPagination,
   useUiNotificationOverlayItems,
-  useUiNotificationOverlayUnreadSummary,
   setUiNotificationOverlayExpanded,
 } from '../../utils/uiNotificationOverlayStore';
-import type { OverlayNotificationChannel, UiNotificationOverlayItem } from '../../utils/uiNotificationOverlayStore';
+import type { UiNotificationOverlayItem } from '../../utils/uiNotificationOverlayStore';
+import { countNotificationOverlayTabs, resolveNotificationOverlayTab as resolveNotificationTab, type NotificationOverlayTab as OverlayFilterTab } from '../../utils/notificationOverlayCategories';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import ProfileAvatar from '../common/ProfileAvatar';
@@ -153,23 +153,6 @@ const getPresenceClassName = (phase: PresencePhase) => (
       : 'translate-y-0 opacity-100'
 );
 
-type OverlayFilterTab = 'all' | 'agent' | 'internal' | 'activities' | 'responsibilities' | 'system' | 'bot' | 'sms' | 'voip' | 'uploads' | 'email';
-
-const resolveNotificationTab = (item: UiNotificationOverlayItem): Exclude<OverlayFilterTab, 'uploads' | 'all'> => {
-  const channel = String(item.channel || '').trim() as OverlayNotificationChannel;
-  if (item.kind === 'agent' || channel === 'agent') return 'agent';
-  if (item.kind === 'task') return 'activities';
-  if (item.kind === 'responsibility') return 'responsibilities';
-  if (channel === 'internal' || channel === 'system' || channel === 'bot' || channel === 'sms') return channel;
-  if (channel === 'voip') return 'voip';
-  if (channel === 'email' || item.kind === 'email') return 'email';
-  if (item.kind === 'bot') return 'bot';
-  if (item.kind === 'sms') return 'sms';
-  if (item.kind === 'voip_call') return 'voip';
-  if (item.kind === 'assistant') return 'system';
-  return 'internal';
-};
-
 const ExpandableNotificationText: React.FC<{ text: string }> = ({ text }) => {
   const contentRef = React.useRef<HTMLDivElement | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -279,7 +262,6 @@ const NotificationOverlayPanel: React.FC = () => {
   const location = useLocation();
   const tasks = useUploadTasks();
   const notifications = useUiNotificationOverlayItems();
-  const unreadSummary = useUiNotificationOverlayUnreadSummary();
   const overlayPagination = useUiNotificationOverlayPagination();
   const { message } = App.useApp();
   const { token } = theme.useToken();
@@ -299,54 +281,12 @@ const NotificationOverlayPanel: React.FC = () => {
     [tasks],
   );
 
-  const tabCounts = useMemo(() => {
-    if (unreadSummary.ready && unreadSummary.summary) {
-      const summary = unreadSummary.summary;
-      const botCount = (summary.bot_messages ?? 0) + (summary.bot_group_messages ?? 0) + (summary.bot_direct_messages ?? 0);
-      const agentCount = notifications.filter((item) => resolveNotificationTab(item) === 'agent').length;
-      const internalCount = (summary.notes ?? 0);
-      const activitiesCount = (summary.tasks ?? 0);
-      const responsibilitiesCount = (summary.responsibilities ?? 0);
-      const systemCount = (summary.system_messages ?? 0);
-      const smsCount = (summary.sms_messages ?? 0);
-      const voipCount = (summary.voip_calls ?? 0);
-      const emailCount = (summary.email_messages ?? 0);
-      const allCount = tasks.length + unreadSummary.communicationUnread + unreadSummary.alertsUnread + agentCount;
-      return {
-        all: allCount,
-        agent: agentCount,
-        internal: internalCount,
-        activities: activitiesCount,
-        responsibilities: responsibilitiesCount,
-        system: systemCount,
-        bot: botCount,
-        sms: smsCount,
-        email: emailCount,
-        voip: voipCount,
-        uploads: tasks.length,
-      };
-    }
-    const counts: Record<OverlayFilterTab, number> = {
-      all: tasks.length,
-      agent: 0,
-      internal: 0,
-      activities: 0,
-      responsibilities: 0,
-      system: 0,
-      bot: 0,
-      sms: 0,
-      email: 0,
-      voip: 0,
-      uploads: tasks.length,
-    };
-    notifications.forEach((item) => {
-      counts.all += 1;
-      counts[resolveNotificationTab(item)] += 1;
-    });
-    return counts;
-  }, [notifications, tasks.length, unreadSummary]);
+  // The popup pages a mixed feed. Counts must describe the same rows it renders,
+  // rather than global counters that also include unloaded pages and other sources.
+  const tabCounts = useMemo(() => countNotificationOverlayTabs(notifications, tasks.length), [notifications, tasks.length]);
   const filteredNotifications = useMemo(() => {
-    if (activeTab === 'all' || activeTab === 'uploads') return notifications;
+    if (activeTab === 'uploads') return [];
+    if (activeTab === 'all') return notifications;
     return notifications.filter((item) => resolveNotificationTab(item) === activeTab);
   }, [activeTab, notifications]);
   const filteredTasks = useMemo(() => {
@@ -402,7 +342,7 @@ const NotificationOverlayPanel: React.FC = () => {
         ? `${toPersianNumber(String(activeCount))} مورد در حال آپلود`
         : `${toPersianNumber(String(activeTabMeta?.count || 0))} مورد آپلود`
     )
-    : `${toPersianNumber(String(activeTabMeta?.count || 0))} مورد خوانده‌نشده`;
+    : `${toPersianNumber(String(activeTabMeta?.count || 0))} مورد بارگذاری‌شده`;
 
   React.useEffect(() => {
     if (tabCounts[activeTab] > 0) return;
@@ -487,7 +427,7 @@ const NotificationOverlayPanel: React.FC = () => {
           style={{ borderBottom: `1px solid ${token.colorBorderSecondary}` }}
         >
           <div className="flex min-w-max items-center gap-2">
-            {tabOptions.map((tab) => {
+            {tabOptions.filter(tab => tab.key === 'all' || tab.count > 0).map((tab) => {
               const isActive = tab.key === activeTab;
               return (
                 <button
@@ -705,7 +645,7 @@ const NotificationOverlayPanel: React.FC = () => {
                   onClick={() => overlayPagination.loadMore?.()}
                   className="px-0 text-xs text-gray-500 hover:!text-leather-600"
                 >
-                  مشاهده پیام‌های بیشتر
+                  بارگذاری پیام‌های بیشتر از همهٔ دسته‌ها
                 </Button>
               </div>
             ) : null}

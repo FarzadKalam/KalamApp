@@ -145,7 +145,7 @@ jobs:
       - name: Central feedback, contact confirmation and popup navigation
         timeout-minutes: 5
         run: >-
-          npx vitest run utils/uiNotificationOverlayStore.test.ts
+          npx vitest run utils/uiNotificationOverlayStore.test.ts utils/notificationOverlayCategories.test.ts
           utils/appFeedback.test.ts utils/feedbackRouting.test.ts utils/feedbackArchitecture.test.ts utils/recordFeedback.test.ts
           components/RecordMessageActions.test.tsx components/UploadProgressOverlay.test.tsx
           --maxWorkers=1 --no-file-parallelism
@@ -154,7 +154,7 @@ jobs:
         timeout-minutes: 10
         run: >-
           npx vitest run supabase/functions/ai-assistant/operational-preflight.test.ts supabase/functions/_shared/ai-gateway.test.ts
-          supabase/functions/_shared/ai-native-skills.test.ts supabase/functions/_shared/ai-agent-data.test.ts
+          supabase/functions/_shared/ai-native-skills.test.ts supabase/functions/_shared/ai-agent-data.test.ts supabase/functions/_shared/ai-skills/instagram-tools.test.ts
           supabase/functions/_shared/ai-tool-calls.test.ts supabase/functions/ai-assistant/data-tool-loop.test.ts
           supabase/functions/_shared/ai-agent-task-contract.test.ts supabase/functions/_shared/ai-agent-task-runtime.test.ts
           supabase/functions/_shared/ai-agent-task-management.test.ts supabase/functions/ai-assistant/agent-task-execution.test.ts

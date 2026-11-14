@@ -49,7 +49,6 @@ import {
   normalizeSelectedAgents,
   resolveClientAgentAccess,
   type AgentKey,
-  type AgentToneStyle,
   type ClientAgentAccessEvaluation,
 } from '../../utils/aiAgentCatalog';
 import { AiAgentCameoFigure } from './AiAgentIcon';
@@ -213,7 +212,6 @@ interface AssistantPanelProps {
   initialInputKind?: string | null;
   initialCapabilities?: AiComposerCapability[] | null;
   initialAgents?: AgentKey[] | null;
-  initialToneStyle?: AgentToneStyle | null;
   initialRecordCreationTargetModuleId?: string | null;
   initialModelOverride?: string | null;
   initialMediaSettings?: AiMediaSettings | null;
@@ -509,7 +507,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   initialInputKind,
   initialCapabilities,
   initialAgents,
-  initialToneStyle,
   initialRecordCreationTargetModuleId,
   initialModelOverride,
   initialMediaSettings,
@@ -550,7 +547,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const [selectedCapabilities, setSelectedCapabilities] = useState<AiComposerCapability[]>(DEFAULT_COMPOSER_CAPABILITIES);
   const [autoSuggestedCapabilities, setAutoSuggestedCapabilities] = useState<AiComposerCapability[]>([]);
   const [selectedAgents, setSelectedAgents] = useState<AgentKey[]>([]);
-  const [toneStyle, setToneStyle] = useState<AgentToneStyle>('friendly_warm');
   const [agentAccessMap, setAgentAccessMap] = useState<Partial<Record<AgentKey, ClientAgentAccessEvaluation>> | null>(null);
   const [mediaSettings, setMediaSettings] = useState<AiMediaSettings>({});
   const [mediaSourceImages, setMediaSourceImages] = useState<AiMediaSourceImage[]>([]);
@@ -661,12 +657,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     () => (selectedCapabilities.includes('free_chat') ? [] : normalizeSelectedAgents(selectedAgents)),
     [selectedAgents, selectedCapabilities],
   );
-  const effectiveToneStyle = selectedCapabilities.includes('free_chat') ? undefined : toneStyle;
 
   const buildComposerPreferences = useCallback(() => ({
     selectedCapabilities,
     selectedAgents: effectiveAgents,
-    toneStyle,
     mediaSettings,
     mediaSourceImages: sanitizeMediaSourceImagesForPreferences(mediaSourceImages),
     recordCreationTargetModuleId,
@@ -674,7 +668,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     modelOverrides,
     skipGenerationConfirmationByKind,
     currentModelOverride: modelOverrideRef.current || null,
-  }), [effectiveAgents, mediaSettings, mediaSourceImages, modelOverrides, processOperationMode, recordCreationTargetModuleId, sanitizeMediaSourceImagesForPreferences, selectedCapabilities, skipGenerationConfirmationByKind, toneStyle]);
+  }), [effectiveAgents, mediaSettings, mediaSourceImages, modelOverrides, processOperationMode, recordCreationTargetModuleId, sanitizeMediaSourceImagesForPreferences, selectedCapabilities, skipGenerationConfirmationByKind]);
 
   useEffect(() => {
     composerPreferencesRef.current = buildComposerPreferences();
@@ -697,9 +691,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       if (nextAgents.length || !options.preferCurrentInitial) {
         setSelectedAgents(nextAgents);
       }
-    }
-    if (prefs.toneStyle && typeof prefs.toneStyle === 'string') {
-      setToneStyle(prefs.toneStyle as AgentToneStyle);
     }
     if (Object.prototype.hasOwnProperty.call(prefs, 'processOperationMode') && !Array.isArray(prefs.selectedCapabilities)) {
       setProcessOperationMode(prefs.processOperationMode === true);
@@ -1195,7 +1186,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       modelOverride: modelOverrideRef.current,
       capabilities: selectedCapabilities,
       ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
-      ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
     });
     const rawSuggestedCapabilities = Array.from(new Set(
       Array.isArray(data?.capabilities)
@@ -1215,7 +1205,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     };
     setAutoSuggestedCapabilities(result.suggestedCapabilities);
     return result;
-  }, [callAssistant, contextWithSelection, effectiveAgents, effectiveToneStyle, selectedCapabilities, threadId]);
+  }, [callAssistant, contextWithSelection, effectiveAgents, selectedCapabilities, threadId]);
 
   const executeAutoRoute = useCallback(async (params: {
     messageText: string;
@@ -1269,7 +1259,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         primaryModelOnly: true,
         capabilities: routeCapabilities,
         ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
-        ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
         message: params.messageText || 'ورودی‌های پیوست‌شده را بررسی کن.',
         userMessageText: params.messageText,
         inputKind: bundlePayload.length > 0 ? 'task_bundle' : params.inputKind,
@@ -1440,7 +1429,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         action: 'run_task_bundle',
         capabilities: routeCapabilities,
         ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
-        ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
         message: effectiveChatMessage || params.messageText || (autoRecordSchema
           ? 'از ورودی‌های پیوست‌شده یک رکورد جدید بساز.'
           : capabilitySet.has('process_operation')
@@ -1471,7 +1459,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         : 'dashboard_chat',
       capabilities: routeCapabilities,
       ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
-      ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
       message: effectiveChatMessage || params.messageText,
       inputKind: params.inputKind,
       threadId: params.forceNewThread ? null : threadId,
@@ -1479,7 +1466,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       context: contextWithSelection,
       modelOverride: modelOverrideRef.current,
     }));
-  }, [callAssistant, composerImageSources, contextWithSelection, effectiveAgents, effectiveToneStyle, imageEditSourceUrl, mediaSettings, requestAutoRoute, skipGenerationConfirmationByKind, threadId]);
+  }, [callAssistant, composerImageSources, contextWithSelection, effectiveAgents, imageEditSourceUrl, mediaSettings, requestAutoRoute, skipGenerationConfirmationByKind, threadId]);
 
   const resolvePendingMessage = useCallback((pendingId: string, serverMsg: any) => {
     setMessages((prev) => prev.map((item) => item.id === pendingId ? {
@@ -1701,9 +1688,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     const startsInFreeChatMode = nextInitialCapabilities.includes('free_chat');
     setSelectedCapabilities(nextInitialCapabilities);
     setSelectedAgents(startsInFreeChatMode ? [] : normalizeSelectedAgents(initialAgents));
-    if (initialToneStyle) {
-      setToneStyle(initialToneStyle);
-    }
     setAutoSuggestedCapabilities([]);
     setRecordCreationTargetModuleId(startsInFreeChatMode ? null : String(initialRecordCreationTargetModuleId || '').trim() || null);
     setProcessOperationMode(nextInitialCapabilities.includes('process_operation'));
@@ -2035,7 +2019,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             capability: streamCapability,
             capabilities: streamCapabilities,
             ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
-            ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
             message: assistantText,
             inputKind,
             threadId: shouldStartProcessGuideThread ? null : threadId,
@@ -2060,7 +2043,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         capability: 'record_chat',
         capabilities: selectedCapabilities.filter((capability) => capability !== 'text_chat'),
         ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
-        ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
         message: assistantText,
         inputKind,
         threadId: shouldStartProcessGuideThread ? null : threadId,
@@ -2074,7 +2056,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         capability: contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat',
         capabilities: selectedCapabilities.filter((capability) => capability !== 'text_chat'),
         ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
-        ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
         message: assistantText,
         inputKind,
         threadId: shouldStartProcessGuideThread ? null : threadId,
@@ -2096,7 +2077,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           : 'dashboard_chat',
         capabilities: selectedCapabilities.filter((capability) => capability !== 'text_chat'),
         ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
-        ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
         message: assistantText,
         inputKind,
         threadId: shouldStartProcessGuideThread ? null : threadId,
@@ -2237,7 +2217,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     } finally {
       setSubmitting(false);
     }
-  }, [activeRecordCreationSchema, applyThreadTitleFromResponse, callAssistant, callAssistantStream, contextWithSelection, effectiveAgents, effectiveToneStyle, executeAutoRoute, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, submitting, threadId]);
+  }, [activeRecordCreationSchema, applyThreadTitleFromResponse, callAssistant, callAssistantStream, contextWithSelection, effectiveAgents, executeAutoRoute, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, submitting, threadId]);
 
   useEffect(() => {
     const prompt = String(initialPrompt || '').trim();
@@ -2625,7 +2605,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           action: 'run_task_bundle',
           capabilities: effectiveCapabilities,
           ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
-          ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
           message: assistantPrompt || (activeRecordCreationSchema ? 'از ورودی‌های پیوست‌شده یک رکورد جدید بساز.' : processOperationMode ? 'با توجه به ورودی‌های پیوست‌شده، اقدام لازم را پیشنهاد بده.' : 'ورودی‌های پیوست‌شده را تحلیل کن.'),
           userMessageText: assistantPrompt,
           inputKind: 'task_bundle',
@@ -2767,7 +2746,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     } finally {
       setSubmitting(false);
     }
-  }, [activeRecordCreationSchema, buildBundleInputPayloads, bundleInputs, callAssistant, contextWithSelection, effectiveAgents, effectiveToneStyle, executeAutoRoute, initialVoipCallLogId, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, submitting, threadId]);
+  }, [activeRecordCreationSchema, buildBundleInputPayloads, bundleInputs, callAssistant, contextWithSelection, effectiveAgents, executeAutoRoute, initialVoipCallLogId, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, submitting, threadId]);
 
   useEffect(() => {
     if (!active || !autoSubmitInitialPrompt || !initialFile || submitting || loadingThread || bundleInputs.length === 0) return;
@@ -3797,8 +3776,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             selectedAgents={effectiveAgents}
             onAgentsChange={(next) => setSelectedAgents(normalizeSelectedAgents(next))}
             agentAccessMap={agentAccessMap}
-            toneStyle={toneStyle}
-            onToneStyleChange={setToneStyle}
             loading={submitting || generatingImage || generatingVoiceOutput || generatingVideo || generatingDocument}
             moduleId={fileRecordScope.moduleId}
             recordId={fileRecordScope.recordId}

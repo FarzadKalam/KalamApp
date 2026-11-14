@@ -11,7 +11,7 @@ import { useCurrencyConfig, type CurrencyConfig } from '../../utils/currency';
 import { formatAiCurrencyFromIrt } from '../../utils/aiCurrency';
 import AssistantPanel from './AssistantPanel';
 import type { AiComposerCapability } from './AiCapabilityComposerActions';
-import { getAgentDefinition, normalizeSelectedAgents, type AgentKey, type AgentToneStyle } from '../../utils/aiAgentCatalog';
+import { getAgentDefinition, normalizeSelectedAgents, type AgentKey } from '../../utils/aiAgentCatalog';
 import { AiAgentCameoFigure } from './AiAgentIcon';
 
 type AiThreadRow = {
@@ -234,10 +234,6 @@ const AiChatSurfaceV2: React.FC = () => {
     const normalized = candidates ? normalizeSelectedAgents(candidates) : [];
     return normalized.length ? normalized : null;
   }, [routeState.aiInitialAgents, searchParams]);
-  const initialToneStyle = useMemo<AgentToneStyle | null>(() => {
-    const raw = String(routeState.aiInitialToneStyle || '').trim();
-    return raw ? (raw as AgentToneStyle) : null;
-  }, [routeState.aiInitialToneStyle]);
   const initialMediaSettings = useMemo(() => (
     routeState.aiInitialMediaSettings && typeof routeState.aiInitialMediaSettings === 'object'
       ? routeState.aiInitialMediaSettings
@@ -253,7 +249,6 @@ const AiChatSurfaceV2: React.FC = () => {
     inputKind: routeState.aiInitialInputKind || null,
     capabilities: initialCapabilities || [],
     agents: initialAgents || [],
-    toneStyle: initialToneStyle || null,
     recordCreationTarget: routeState.aiInitialRecordCreationTargetModuleId || null,
     fileCount: effectiveInitialFiles.length,
     fileName: effectiveInitialFile?.fileName || null,
@@ -262,7 +257,7 @@ const AiChatSurfaceV2: React.FC = () => {
     mediaSourceImageCount: initialMediaSourceImages.length,
     forceNewThread,
     locationKey: location.key || '',
-  }), [effectiveInitialFile?.fileName, effectiveInitialFiles.length, forceNewThread, initialAgents, initialCapabilities, initialMediaSettings, initialMediaSourceImages.length, initialPrompt, initialToneStyle, initialVoipCallLogId, location.key, routeState.aiInitialInputKind, routeState.aiInitialRecordCreationTargetModuleId]);
+  }), [effectiveInitialFile?.fileName, effectiveInitialFiles.length, forceNewThread, initialAgents, initialCapabilities, initialMediaSettings, initialMediaSourceImages.length, initialPrompt, initialVoipCallLogId, location.key, routeState.aiInitialInputKind, routeState.aiInitialRecordCreationTargetModuleId]);
 
   const loadThreads = useCallback(async (preferredThreadId?: string | null) => {
     setLoadingThreads(true);
@@ -607,7 +602,6 @@ const AiChatSurfaceV2: React.FC = () => {
             initialInputKind={String(routeState.aiInitialInputKind || 'text')}
             initialCapabilities={initialCapabilities}
             initialAgents={initialAgents}
-            initialToneStyle={initialToneStyle}
             initialRecordCreationTargetModuleId={String(routeState.aiInitialRecordCreationTargetModuleId || '').trim() || null}
             initialModelOverride={String(routeState.aiInitialModelOverride || '').trim() || null}
             initialMediaSettings={initialMediaSettings as any}

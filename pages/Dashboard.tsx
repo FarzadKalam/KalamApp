@@ -55,7 +55,6 @@ import {
   buildAgentAccessMapFromOverviewAgents,
   resolveClientAgentAccess,
   type AgentKey,
-  type AgentToneStyle,
   type ClientAgentAccessEvaluation,
 } from '../utils/aiAgentCatalog';
 import StoryBar from '../components/stories/StoryBar';
@@ -957,7 +956,6 @@ const Dashboard: React.FC = () => {
   const [dashboardModelOverrides, setDashboardModelOverrides] = useState<Record<string, string>>({});
   const dashboardModelOverrideRef = useRef<string | null>(null);
   const [dashboardSelectedAgents, setDashboardSelectedAgents] = useState<AgentKey[]>([]);
-  const [dashboardToneStyle, setDashboardToneStyle] = useState<AgentToneStyle>('friendly_warm');
   const [dashboardAgentAccessMap, setDashboardAgentAccessMap] = useState<Partial<Record<AgentKey, ClientAgentAccessEvaluation>> | null>(null);
   const [dashboardAgentInboxOpen, setDashboardAgentInboxOpen] = useState(false);
   const [dashboardAgentInboxAgentKey, setDashboardAgentInboxAgentKey] = useState<AgentKey | null>(null);
@@ -1169,7 +1167,6 @@ const Dashboard: React.FC = () => {
           aiInitialPrompt: question,
           aiInitialCapabilities: dashboardAiCapabilities.length ? dashboardAiCapabilities : undefined,
           aiInitialAgents: dashboardSelectedAgents.length ? dashboardSelectedAgents : undefined,
-          aiInitialToneStyle: dashboardToneStyle,
           aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
           aiInitialModelOverride: dashboardModelOverrideRef.current,
           aiInitialMediaSettings: dashboardMediaSettings,
@@ -1178,7 +1175,7 @@ const Dashboard: React.FC = () => {
           forceNewThread: true,
         },
       });
-  }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardMediaSettings, dashboardMediaSourceImages, dashboardNeedsRecordModule, dashboardRecordCreationTargetModuleId, dashboardSelectedAgents, dashboardToneStyle, message, navigate]);
+  }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardMediaSettings, dashboardMediaSourceImages, dashboardNeedsRecordModule, dashboardRecordCreationTargetModuleId, dashboardSelectedAgents, message, navigate]);
 
   const handleSubmitDashboardVoice = useCallback(async (voice: RecordedVoice) => {
     if (dashboardVoiceSending) return;
@@ -1205,7 +1202,6 @@ const Dashboard: React.FC = () => {
           aiInitialInputKind: 'voice',
           aiInitialCapabilities: dashboardAiCapabilities.length ? dashboardAiCapabilities : undefined,
           aiInitialAgents: dashboardSelectedAgents.length ? dashboardSelectedAgents : undefined,
-          aiInitialToneStyle: dashboardToneStyle,
           aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
           aiInitialModelOverride: dashboardModelOverrideRef.current,
           aiInitialMediaSettings: dashboardMediaSettings,
@@ -1219,7 +1215,7 @@ const Dashboard: React.FC = () => {
     } finally {
       setDashboardVoiceSending(false);
     }
-  }, [dashboardAiCapabilities, dashboardMediaSettings, dashboardMediaSourceImages, dashboardRecordCreationTargetModuleId, dashboardSelectedAgents, dashboardToneStyle, dashboardVoiceSending, message, navigate]);
+  }, [dashboardAiCapabilities, dashboardMediaSettings, dashboardMediaSourceImages, dashboardRecordCreationTargetModuleId, dashboardSelectedAgents, dashboardVoiceSending, message, navigate]);
 
   const handleSubmitDashboardFiles = useCallback(async (filePrompts: AiUploadedFilePrompt[]) => {
     if (dashboardFileSending) return;
@@ -1233,7 +1229,6 @@ const Dashboard: React.FC = () => {
           aiInitialPrompt: dashboardAiQuestion.trim() || '',
           aiInitialCapabilities: dashboardAiCapabilities.length ? dashboardAiCapabilities : undefined,
           aiInitialAgents: dashboardSelectedAgents.length ? dashboardSelectedAgents : undefined,
-          aiInitialToneStyle: dashboardToneStyle,
           aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
           aiInitialModelOverride: dashboardModelOverrideRef.current,
           aiInitialMediaSettings: dashboardMediaSettings,
@@ -1246,7 +1241,7 @@ const Dashboard: React.FC = () => {
     } finally {
       setDashboardFileSending(false);
     }
-  }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardFileSending, dashboardMediaSettings, dashboardMediaSourceImages, dashboardRecordCreationTargetModuleId, dashboardSelectedAgents, dashboardToneStyle, navigate]);
+  }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardFileSending, dashboardMediaSettings, dashboardMediaSourceImages, dashboardRecordCreationTargetModuleId, dashboardSelectedAgents, navigate]);
 
   const handleSubmitDashboardFile = useCallback(async (filePrompt: AiUploadedFilePrompt) => {
     await handleSubmitDashboardFiles([filePrompt]);
@@ -1448,8 +1443,6 @@ const Dashboard: React.FC = () => {
                       selectedAgents={dashboardSelectedAgents}
                       onAgentsChange={setDashboardSelectedAgents}
                       agentAccessMap={dashboardAgentAccessMap}
-                      toneStyle={dashboardToneStyle}
-                      onToneStyleChange={setDashboardToneStyle}
                       moduleId={null}
                       recordId={null}
                       onVoiceSend={handleSubmitDashboardVoice}
@@ -1496,7 +1489,6 @@ const Dashboard: React.FC = () => {
                 ));
               }}
               agentAccessMap={dashboardAgentAccessMap}
-              toneStyle={dashboardToneStyle}
               inboxOpen={dashboardAgentInboxOpen}
               onToggleInbox={handleToggleDashboardAgentInbox}
               onOverviewMeta={handleDashboardDeskOverviewMeta}

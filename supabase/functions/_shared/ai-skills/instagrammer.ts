@@ -256,7 +256,8 @@ export const instagrammerSkill: DomainSkillModule = {
     '   - برنامه‌ریزی و تدوین تقویم انتشار پست، ریلز و استوری؛ بازبینی وضعیت انتشار (پیش‌نویس، آماده انتشار، منتشرشده) و تدوین کپشن، هشتگ‌ها و نوع رسانه.',
     '   - هماهنگ‌سازی زمان‌بندی محتوا با کمپین‌های تبلیغاتی و بررسی اثربخشی تعاملات بر اساس تاریخ‌های تقویم محتوایی.',
     '2. **مشاهده و ارائه پست‌ها، ریل‌ها و استوری‌ها برای انتخاب کاربر**:',
-    '   - همیشه فهرست پست‌ها و ریل‌ها (`instagram_social_media`) و استوری‌های فعالِ دارای ریپلای (`instagram_interaction_events` با `media_type=story` و مهلت ۲۴ ساعته منقضی‌نشده) را همراه کپشن، لینک و تصویر برای تأیید یا انتخاب کاربر نمایش بده.',
+    '   - فقط وقتی درخواست به اطلاعات واقعی حساب، پست، ریل، استوری، کامنت یا قانون اینستاگرام نیاز دارد، ابزار read_instagram_context را فراخوانی کن. نام کانال جذب یا تصویر یک دایرکت برای ثبت لید، دلیل خواندن حساب یا پست‌ها نیست.',
+    '   - برای تحلیل زمینه، showMediaCards را false نگه دار. تنها وقتی انتخاب یا نمایش رسانه به انجام درخواست کمک می‌کند، showMediaCards=true بفرست و در صورت امکان mediaIds مرتبط را انتخاب کن؛ کارت نامرتبط نفرست.',
     '3. **ساخت و مدیریت قوانین پاسخ خودکار اینستاگرام (`workflows` روی `instagram_interaction_events`)**:',
     '   - تفکیک دقیق بین ۴ سطح شرط مطابق پنل پروژه:',
     '     • دایرکت عمومی (`event_type = direct_received` بدون `media_permalink`)',
@@ -273,7 +274,10 @@ export const instagrammerSkill: DomainSkillModule = {
     '   - قابلیت‌های مستندنشده در قانون‌گذاری رسمی اینستاگرام مثل «لایک/Reaction پیام دایرکت» یا «ریپلای به یک پیام مشخص در دایرکت» را هرگز به‌عنوان قابلیت قابل انجام وعده نده.',
     '   - پیش از ذخیره قانون گردش‌کار، ساخت ویترین یا ارسال پیام دایرکت/کامنت واقعی به مخاطب، حتماً پیش‌نمایش دقیق و لیست گزینه‌ها را برای تأیید کاربر نمایش بده.',
   ].join('\n'),
-  gatherDomainContext: async (ctx: SkillExecutionContext) => {
+  gatherDomainContext: async () => ({ available_tools: ['read_instagram_context'] }),
+};
+
+export const loadInstagramDomainContext = async (ctx: SkillExecutionContext): Promise<Record<string, any> | null> => {
     const orgId = normalizeId(ctx.grounding.orgId);
     if (!orgId || ctx.grounding.freeChatMode) return null;
     const perms = ctx.authContext?.permissions;
@@ -411,5 +415,4 @@ export const instagrammerSkill: DomainSkillModule = {
         caption: c.caption ? String(c.caption).slice(0, 120) : null,
       })),
     };
-  },
 };

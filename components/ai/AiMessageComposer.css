@@ -67,3 +67,9 @@
   .ai-assistant-composer-region{padding:6px 8px max(6px,env(safe-area-inset-bottom))}
 }
 @media(prefers-reduced-motion:reduce){.ai-message-composer{transition:none}}
+.ai-composer-agent-portraits{display:inline-flex;align-items:center;isolation:isolate;max-width:40px}
+.ai-composer-agent-portraits>span{display:inline-flex;flex-shrink:0;border-radius:50%;overflow:hidden;background:var(--ai-composer-surface,#fff)}
+.ai-composer-agent-portraits>span+span{margin-inline-start:-18px}
+.ai-composer-agent-more{position:absolute;inset-inline-end:0;bottom:0;min-width:14px;height:14px;justify-content:center;align-items:center;font-size:9px;background:var(--ai-composer-text)!important;color:var(--ai-composer-surface)}
+.ai-composer-agent-trigger.ant-btn{position:relative}
+@media(pointer:coarse){.ai-composer-agent-trigger.ant-btn,.ai-composer-skill-trigger.ant-btn{width:44px!important;min-width:44px!important;height:44px!important}}

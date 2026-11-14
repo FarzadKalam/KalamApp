@@ -1,4 +1,5 @@
 import React from 'react';
+import { Grid } from 'antd';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import AiCapabilityComposerActions from './AiCapabilityComposerActions';
@@ -10,7 +11,7 @@ vi.mock('../../supabaseClient', () => ({
 }));
 
 describe('AiCapabilityComposerActions', () => {
-  afterEach(() => cleanup());
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('keeps text chat first and adds free chat as the final, separate operator', async () => {
     const onChange = vi.fn();
@@ -97,6 +98,7 @@ describe('AiCapabilityComposerActions', () => {
   });
 
   it('clearly separates Agents and Skills capsules with distinct labels and controls', () => {
+    vi.spyOn(Grid, 'useBreakpoint').mockReturnValue({ md: true });
     const onChange = vi.fn();
     const onAgentsChange = vi.fn();
     render(
@@ -121,6 +123,23 @@ describe('AiCapabilityComposerActions', () => {
 
     fireEvent.click(screen.getByLabelText('حذف مهارت تنظیم قیمت'));
     expect(onChange).toHaveBeenCalledWith([]);
+  });
+
+  it('uses only operable icons on mobile with the current Cameo avatar and grouped agents', () => {
+    vi.spyOn(Grid, 'useBreakpoint').mockReturnValue({ md: false });
+    const props = { selected: ['web_search' as const], onChange: vi.fn(), onAgentsChange: vi.fn(), onVoiceSend: vi.fn(), onFilePrepared: vi.fn() };
+    const { rerender } = render(<AiCapabilityComposerActions {...props} selectedAgents={[]} />);
+    const agent = screen.getByRole('button', { name: 'انتخاب ایجنت‌های تخصصی' });
+    expect(agent.querySelector('[data-agent-key="lead_orchestrator"]')).toBeInTheDocument();
+    expect(screen.queryByText('ایجنت‌ها')).not.toBeInTheDocument();
+    expect(screen.queryByText('مهارت‌ها')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('لحن پاسخ ایجنت')).not.toBeInTheDocument();
+    rerender(<AiCapabilityComposerActions {...props} selectedAgents={['sales_leads', 'instagrammer']} />);
+    expect(agent.querySelectorAll('[data-agent-key]')).toHaveLength(2);
+    expect(agent.querySelector('[data-agent-key="sales_leads"]')).toBeInTheDocument();
+    expect(agent.querySelector('[data-agent-key="lead_orchestrator"]')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'انتخاب عملکرد هوش مصنوعی' }));
+    expect(screen.getByRole('button', { name: 'انتخاب عملکرد هوش مصنوعی' })).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('strictly hides non-accessible agents from the picker and hides the Agents trigger when none can chat', async () => {

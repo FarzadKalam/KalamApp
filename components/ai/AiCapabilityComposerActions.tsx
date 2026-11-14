@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import { Button, Checkbox, Drawer, Grid, Popover, Select, Tag, Tooltip } from 'antd';
+import { Button, Checkbox, Drawer, Grid, Popover, Tag, Tooltip } from 'antd';
 import type { ButtonProps } from 'antd';
 import {
   AudioOutlined,
@@ -25,17 +25,15 @@ import AiMediaSettingsPopover, { type AiMediaSettings } from './AiMediaSettingsP
 import { getAiAgent, getAiAgentLabel, type AiComposerAgentId } from '../../supabase/functions/_shared/ai-agents';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 import {
-  AGENT_TONE_STYLES,
   AI_AGENT_CATALOG,
   PRICING_ADJUSTMENT_SKILL_META,
   getAgentDefinition,
   normalizeSelectedAgents,
   type AgentKey,
-  type AgentToneStyle,
   type ClientAgentAccessEvaluation,
 } from '../../utils/aiAgentCatalog';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
-import AiAgentIcon, { AiAgentAvatar } from './AiAgentIcon';
+import AiAgentIcon, { AiAgentAvatar, AiAgentCameoFigure } from './AiAgentIcon';
 
 /** Compatibility alias for persisted composer preferences and existing callers. */
 export type AiComposerCapability = AiComposerAgentId | 'pricing_adjustment';
@@ -50,8 +48,6 @@ type AiCapabilityComposerActionsProps = {
   selectedAgents?: AgentKey[];
   onAgentsChange?: (next: AgentKey[]) => void;
   agentAccessMap?: Partial<Record<AgentKey, ClientAgentAccessEvaluation>> | null;
-  toneStyle?: AgentToneStyle;
-  onToneStyleChange?: (next: AgentToneStyle) => void;
   showAgentPicker?: boolean;
   disabled?: boolean;
   loading?: boolean;
@@ -124,8 +120,6 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   selectedAgents = [],
   onAgentsChange,
   agentAccessMap = null,
-  toneStyle = 'friendly_warm',
-  onToneStyleChange,
   showAgentPicker = true,
   disabled = false,
   loading = false,
@@ -394,21 +388,21 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   }, [effectiveSelected]);
 
   const legacyTriggerButton = (
-    <div className={`ai-composer-operator-pill ${!autoMode ? 'is-custom' : 'is-auto'}`}>
+    <div className={isMobile ? 'inline-flex items-center' : `ai-composer-operator-pill ${!autoMode ? 'is-custom' : 'is-auto'}`}>
       <Tooltip title={autoMode ? 'ایجنت راهبر؛ انتخاب خودکار ایجنت فعال است' : 'انتخاب ایجنت هوش مصنوعی'}>
         <Button
           type="text"
           disabled={disabled || loading}
           size={actionSize}
-          className="ai-composer-operator-trigger"
+          className={isMobile ? 'ai-composer-icon' : 'ai-composer-operator-trigger'}
           onClick={() => handleOpenChange(true)}
           aria-label="انتخاب ایجنت هوش مصنوعی"
           aria-expanded={open}
         >
           <span className="ai-composer-operator-icon">
-            <PlusOutlined />
+            {isMobile ? <ThunderboltOutlined /> : <PlusOutlined />}
           </span>
-          <span className="ai-composer-operator-label">
+          <span className={isMobile ? 'sr-only' : 'ai-composer-operator-label'}>
             {autoMode ? (
               autoSuggested.length > 0 ? (
                 <>
@@ -432,7 +426,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
           </span>
         </Button>
       </Tooltip>
-      {!autoMode && (
+      {!isMobile && !autoMode && (
         <Tooltip title="بازگشت به حالت خودکار">
           <Button
             type="text"
@@ -456,12 +450,13 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
         icon={<ThunderboltOutlined />}
         disabled={disabled || loading}
         size={actionSize}
-        className="!inline-flex !h-6 !items-center !gap-1 !rounded-lg !border-teal-200/90 !bg-white !px-2 !text-[11px] !font-bold !text-teal-700 !shadow-sm hover:!border-teal-400 hover:!text-teal-800 dark:!border-teal-400/30 dark:!bg-slate-900/90 dark:!text-teal-200"
+        className={isMobile ? 'ai-composer-icon ai-composer-skill-trigger' : '!inline-flex !h-6 !items-center !gap-1 !rounded-lg !border-teal-200/90 !bg-white !px-2 !text-[11px] !font-bold !text-teal-700 !shadow-sm hover:!border-teal-400 hover:!text-teal-800 dark:!border-teal-400/30 dark:!bg-slate-900/90 dark:!text-teal-200'}
         onClick={isMobile ? () => handleOpenChange(true) : undefined}
         aria-label="انتخاب عملکرد هوش مصنوعی"
+        aria-expanded={open}
       >
-        <span>مهارت‌ها</span>
-        {selected.length > 0 ? (
+        {!isMobile ? <span>مهارت‌ها</span> : null}
+        {!isMobile && selected.length > 0 ? (
           <span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-teal-600 px-1 text-[10px] font-bold text-white">
             {toPersianNumber(selected.length)}
           </span>
@@ -473,15 +468,23 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   const agentTriggerButton = (
     <Tooltip title={agentsOpen ? undefined : 'انتخاب همکار هوشمند (چه ایجنتی مسئول پاسخ و اجرای همین درخواست باشد؟)'}>
       <Button
-        icon={<RobotOutlined />}
+        icon={isMobile ? undefined : <RobotOutlined />}
         disabled={disabled || loading}
         size={actionSize}
         onClick={isMobile ? () => handleAgentsOpenChange(true) : undefined}
-        className="!inline-flex !h-6 !items-center !gap-1 !rounded-lg !border-indigo-200/90 !bg-white !px-2 !text-[11px] !font-bold !text-indigo-700 !shadow-sm hover:!border-indigo-400 hover:!text-indigo-800 dark:!border-indigo-400/30 dark:!bg-slate-900/90 dark:!text-indigo-200"
+        className={isMobile ? 'ai-composer-icon ai-composer-agent-trigger' : '!inline-flex !h-6 !items-center !gap-1 !rounded-lg !border-indigo-200/90 !bg-white !px-2 !text-[11px] !font-bold !text-indigo-700 !shadow-sm hover:!border-indigo-400 hover:!text-indigo-800 dark:!border-indigo-400/30 dark:!bg-slate-900/90 dark:!text-indigo-200'}
         aria-label="انتخاب ایجنت‌های تخصصی"
+        aria-expanded={agentsOpen}
       >
-        <span>ایجنت‌ها</span>
-        {normalizedSelectedAgents.length > 0 ? (
+        {isMobile ? (
+          <span className="ai-composer-agent-portraits" aria-label={(normalizedSelectedAgents.length ? normalizedSelectedAgents : ['lead_orchestrator'] as AgentKey[]).map(key => getAgentDefinition(key)?.titleFa).join('، ')}>
+            {(normalizedSelectedAgents.length ? normalizedSelectedAgents : ['lead_orchestrator'] as AgentKey[]).slice(0, 3).map(key => (
+              <span key={key} data-agent-key={key}><AiAgentCameoFigure agentKey={key} size={28} /></span>
+            ))}
+            {normalizedSelectedAgents.length > 3 ? <span className="ai-composer-agent-more">{toPersianNumber(normalizedSelectedAgents.length)}</span> : null}
+          </span>
+        ) : <span>ایجنت‌ها</span>}
+        {!isMobile && normalizedSelectedAgents.length > 0 ? (
           <span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-indigo-600 px-1 text-[10px] font-bold text-white">
             {toPersianNumber(normalizedSelectedAgents.length)}
           </span>
@@ -499,7 +502,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
       {hasDualCapsules ? (
         <>
           {agentPickerEnabled ? (
-            <div className="inline-flex max-w-full flex-wrap items-center gap-1 rounded-xl border border-indigo-200/80 bg-indigo-50/50 px-1.5 py-0.5 dark:border-indigo-400/20 dark:bg-indigo-500/[0.08]">
+            <div className={isMobile ? 'inline-flex items-center' : 'inline-flex max-w-full flex-wrap items-center gap-1 rounded-xl border border-indigo-200/80 bg-indigo-50/50 px-1.5 py-0.5 dark:border-indigo-400/20 dark:bg-indigo-500/[0.08]'}>
               {isMobile ? (
                 <>
                   {agentTriggerButton}
@@ -535,7 +538,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
                 </Popover>
               )}
 
-              {normalizedSelectedAgents.map((agentKey) => {
+              {!isMobile && normalizedSelectedAgents.map((agentKey) => {
                 const def = getAgentDefinition(agentKey);
                 if (!def) return null;
                 return (
@@ -560,7 +563,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
             </div>
           ) : null}
 
-          <div className="inline-flex max-w-full flex-wrap items-center gap-1 rounded-xl border border-dashed border-teal-300/85 bg-teal-50/40 px-1.5 py-0.5 dark:border-teal-400/25 dark:bg-teal-500/[0.06]">
+          <div className={isMobile ? 'inline-flex items-center' : 'inline-flex max-w-full flex-wrap items-center gap-1 rounded-xl border border-dashed border-teal-300/85 bg-teal-50/40 px-1.5 py-0.5 dark:border-teal-400/25 dark:bg-teal-500/[0.06]'}>
             {isMobile ? (
               <>
                 {skillTriggerButton}
@@ -596,7 +599,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
               </Popover>
             )}
 
-            {activeSkillEntries.map((meta) => (
+            {!isMobile && activeSkillEntries.map((meta) => (
               <span
                 key={meta.key}
                 className={`inline-flex h-6 items-center gap-1 rounded-lg border px-2 text-[11px] font-semibold shadow-sm ${
@@ -661,28 +664,6 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
           )}
         </>
       )}
-
-      {onToneStyleChange && !isFreeChatMode ? (
-        <Tooltip title="لحن پاسخ ایجنت">
-          <div className="inline-flex h-6 items-center gap-1 rounded-lg border border-slate-200/85 bg-slate-50/75 px-1.5 dark:border-white/10 dark:bg-white/[0.04]">
-            <span className="text-[10.5px] font-medium text-slate-400">لحن:</span>
-            <Select
-              size={actionSize}
-              variant="borderless"
-              value={toneStyle || 'friendly_warm'}
-              disabled={disabled || loading}
-              popupMatchSelectWidth={false}
-              className="min-w-[96px] !text-[11px]"
-              aria-label="لحن پاسخ ایجنت"
-              options={AGENT_TONE_STYLES.map((item) => ({
-                value: item.value,
-                label: item.labelFa,
-              }))}
-              onChange={(value) => onToneStyleChange(String(value || 'friendly_warm') as AgentToneStyle)}
-            />
-          </div>
-        </Tooltip>
-      ) : null}
 
       {activeMediaCapability && onMediaSettingsChange ? (
         <AiMediaSettingsPopover

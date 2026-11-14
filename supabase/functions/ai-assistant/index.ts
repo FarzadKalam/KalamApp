@@ -37,6 +37,7 @@ import {
   assembleMultiSkillContext,
   resolveRunnableAgentsForActor,
 } from '../_shared/ai-skill-registry.ts';
+import { createInstagramReadToolRuntime } from '../_shared/ai-skills/instagram-tools.ts';
 import {
   buildAgentsOverviewForActor,
   compileOnboardingQaPolicy,
@@ -1848,8 +1849,11 @@ const buildAgentDataToolRuntime = async (supabaseUrl: string, serviceRoleKey: st
   const pendingTasks: any[] = [];
   const completedDataModules = new Set<string>();
   const dataReadCursors = new Map<string, string | null>();
+  const instagram = options.sourceModuleIds ? null : createInstagramReadToolRuntime({ supabaseUrl, serviceRoleKey, authContext, grounding,
+    userMessage: '', selectedAgents, selectedCapabilities: [] });
   return {
-    tools: [describe, fieldOptionsTool, ...AGENT_DATA_TOOLS, ...(options.threadId && taskAccess.canManage ? AGENT_TASK_TOOLS : [])],
+    tools: [describe, fieldOptionsTool, ...AGENT_DATA_TOOLS, ...(instagram?.tools || []), ...(options.threadId && taskAccess.canManage ? AGENT_TASK_TOOLS : [])],
+    instagramMediaCards: instagram?.mediaCards || [],
     persistTaskProposal: async () => {
       if (!pendingTasks.length) return null;
       const actions = [];
@@ -1861,6 +1865,7 @@ const buildAgentDataToolRuntime = async (supabaseUrl: string, serviceRoleKey: st
     systemMessage: { role: 'system', content: 'برای خواندن اطلاعات واقعی از ابزارهای مجاز سازمان استفاده کن. رکوردهای اولیهٔ زمینه فقط نمونه‌اند و سقف دسترسی نیستند. نام ماژول و فیلد را از describe_organization_data بگیر. برای ادامهٔ خواندن از nextAfterId استفاده کن؛ تا وقتی hasMore=true است نتیجه را به کل داده تعمیم نده. محدودیت بودجهٔ یک نوبت را با محدودیت تعداد رکوردهای سازمان اشتباه نگیر. شناسهٔ خام را در پاسخ ننویس. اگر ابزار داده خطا داد، ادعای نبود داده نکن.'
       + (options.threadId && taskAccess.canManage ? `\n${AGENT_TASK_CONVERSATION_PROMPT}\n${AI_QUESTIONS_PROMPT}` : '') },
     execute: async (name: string, args: any) => {
+      if (name === 'read_instagram_context' && instagram) return await instagram.execute(args);
       if (options.threadId && taskAccess.canManage && name === 'list_agent_tasks') {
         if (args.afterId && !isUuid(args.afterId)) throw new Error('نشانگر فهرست کارها معتبر نیست.');
         const rows = await restSelect(supabaseUrl, serviceRoleKey, 'workflows', { org_id: `eq.${authContext.orgId}`,
@@ -7805,7 +7810,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     primaryAgent,
     explicitAgentSelected,
     blockedAgents: mergedBlockedAgents,
-    instagramMediaCards: skillAssembly.instagramMediaCards || [],
+    instagramMediaCards: dataToolRuntime?.instagramMediaCards || [],
     preferredToneStyle,
     channel,
     cachedPrefixHash,
@@ -8973,7 +8978,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       channel,
       cached_prefix_hash: cachedPrefixHash,
       clarification_questions: presentAiQuestionResponse(aiResult.content).questions,
-      instagram_media_cards: Array.isArray(skillAssembly.instagramMediaCards) ? skillAssembly.instagramMediaCards : [],
+      instagram_media_cards: fileDataTools?.instagramMediaCards || [],
       file: {
         filename,
         mime_type: mimeType,
@@ -9090,7 +9095,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     selectedAgents,
     primaryAgent,
     blockedAgents: mergedBlockedAgents,
-    instagramMediaCards: skillAssembly.instagramMediaCards || [],
+    instagramMediaCards: fileDataTools?.instagramMediaCards || [],
     toneStyle: preferredToneStyle,
     cachedPrefixHash,
     provider: aiResult.provider,

@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import UploadProgressOverlay from './UploadProgressOverlay';
 import './notifications/NotificationOverlayPanel';
-import { setUiNotificationOverlayItems, setUiNotificationOverlayViewer, setUiNotificationOverlayExpanded } from '../utils/uiNotificationOverlayStore';
+import { setUiNotificationOverlayItems, setUiNotificationOverlayViewer, setUiNotificationOverlayExpanded, setUiNotificationOverlayUnreadSummary } from '../utils/uiNotificationOverlayStore';
 
 const emptyTasks: never[] = [];
 afterEach(() => {
@@ -19,6 +19,22 @@ vi.mock('../utils/uploadProgressStore', () => ({
 }));
 
 describe('notification panel navigation', () => {
+  it('closes the dock despite a positive global unread count and never marks its messages read', async () => {
+    setUiNotificationOverlayViewer('dock-close-org', 'dock-close-user');
+    const item = { id: 'dock-close', kind: 'email' as const, channel: 'email' as const, title: 'ایمیل تازه', body: 'پیام', createdAt: new Date(Date.now() - 60000).toISOString(), onOpen: vi.fn(), onDismiss: vi.fn() };
+    setUiNotificationOverlayUnreadSummary({ ready: true, communicationUnread: 30, alertsUnread: 4, summary: {} });
+    setUiNotificationOverlayItems([item]);
+    const tree = (route: string) => <App><MemoryRouter key={route} initialEntries={[route]}><UploadProgressOverlay /></MemoryRouter></App>;
+    const { rerender } = render(tree('/leads'));
+    fireEvent.click(screen.getByRole('button', { name: 'بستن اعلان‌های گوشهٔ صفحه' }));
+    expect(screen.queryByRole('button', { name: 'نمایش اعلان‌ها و آپلودها' })).not.toBeInTheDocument();
+    expect(item.onDismiss).not.toHaveBeenCalled();
+    rerender(tree('/customers'));
+    act(() => setUiNotificationOverlayItems([item]));
+    expect(screen.queryByRole('button', { name: 'نمایش اعلان‌ها و آپلودها' })).not.toBeInTheDocument();
+    act(() => setUiNotificationOverlayItems([{ ...item, id: 'new-dock-event', createdAt: new Date(Date.now() + 1000).toISOString() }]));
+    expect(screen.getByRole('button', { name: 'نمایش اعلان‌ها و آپلودها' })).toBeVisible();
+  });
   beforeEach(() => {
     if (typeof window !== 'undefined' && window.sessionStorage) {
       window.sessionStorage.clear();

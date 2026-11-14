@@ -33,21 +33,27 @@ const dismissedForSessionIds = new Set<string>();
 let viewerScope = '';
 let viewerStartedAt = Date.now();
 let panelExpanded = false;
+let dockHidden = false;
 const announcedIds = new Set<string>();
 const presentationKey = () => `taze:overlay-presentation:v2:${viewerScope}`;
 const persistPanel = () => {
   if (!viewerScope || typeof window === 'undefined') return;
-  try { window.sessionStorage.setItem(presentationKey(), JSON.stringify({ expanded: panelExpanded, announced: [...announcedIds].slice(-100) })); } catch { /* Optional viewer-local presentation storage. */ }
+  try { window.sessionStorage.setItem(presentationKey(), JSON.stringify({ expanded: panelExpanded, dockHidden, announced: [...announcedIds].slice(-100) })); } catch { /* Optional viewer-local presentation storage. */ }
 };
 export const setUiNotificationOverlayExpanded = (expanded: boolean) => {
-  if (expanded === panelExpanded) return;
+  if (expanded === panelExpanded && (!expanded || !dockHidden)) return;
   panelExpanded = expanded;
+  if (expanded) dockHidden = false;
   persistPanel();
   emit();
 };
 export const useUiNotificationOverlayExpanded = () => useSyncExternalStore(
   listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
   () => panelExpanded, () => false,
+);
+export const useUiNotificationOverlayDockHidden = () => useSyncExternalStore(
+  listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+  () => dockHidden, () => false,
 );
 export const claimFreshOverlayAnnouncements = (items: UiNotificationOverlayItem[]) => {
   const fresh = items.filter(item => !announcedIds.has(item.id) && Date.parse(item.createdAt || '') >= viewerStartedAt);
@@ -88,12 +94,14 @@ export const setUiNotificationOverlayViewer = (orgId: string, userId: string) =>
   viewerScope = nextScope;
   viewerStartedAt = Date.now();
   panelExpanded = false;
+  dockHidden = false;
   announcedIds.clear();
   setFeedbackScope(nextScope);
   if (viewerScope && typeof window !== 'undefined') {
     try {
       const saved = JSON.parse(window.sessionStorage.getItem(presentationKey()) || '{}');
       panelExpanded = saved?.expanded === true;
+      dockHidden = saved?.dockHidden === true;
       if (Array.isArray(saved?.announced)) saved.announced.forEach((id: unknown) => { if (typeof id === 'string') announcedIds.add(id); });
     } catch { /* Keep the compact default for unavailable or corrupt storage. */ }
   }
@@ -111,6 +119,7 @@ export const setUiNotificationOverlayViewer = (orgId: string, userId: string) =>
   }
   notificationsBySource = {};
   notifications = [];
+  unreadSummarySnapshot = DEFAULT_UNREAD_SUMMARY;
   currentLoadMore = null;
   paginationSnapshot = { hasMore: false, loading: false, loadMore: null };
   emit();
@@ -127,7 +136,9 @@ export const hideUiNotificationOverlayItems = (ids: string[]) => {
 };
 
 export const closeUiNotificationOverlay = () => {
+  dockHidden = true;
   setUiNotificationOverlayExpanded(false);
+  persistPanel();
   // A later feed page may contain unseen old rows. They are not new events.
   closedThrough = Date.now();
   hideUiNotificationOverlayItems(notifications.map((item) => item.id));
@@ -207,6 +218,10 @@ const recompute = () => {
 
 export const setUiNotificationOverlayItems = (items: UiNotificationOverlayItem[], source = 'default') => {
   const normalizedItems = normalizeItems(items);
+  if (dockHidden && normalizedItems.some(item => Date.parse(item.createdAt || '') > closedThrough)) {
+    dockHidden = false;
+    persistPanel();
+  }
   const previous = notificationsBySource[source] || [];
   if (areItemsPresentationEqual(previous, normalizedItems)) {
     notificationsBySource[source] = normalizedItems;
