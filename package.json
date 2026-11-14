@@ -1,7 +1,7 @@
 {
   "name": "tazesystem",
   "private": true,
-  "version": "3.3.8",
+  "version": "3.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -30,7 +30,9 @@
     "deploy:monitor": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-server-monitor.ps1",
     "test:organization-email": "vitest run utils/managedEmail.test.ts test/organizationEmail.test.ts utils/organizationEmail.test.ts components/email/EmailComposerHost.test.tsx --maxWorkers=1",
     "test:local-installations": "vitest run test/localInstallations.test.ts test/localDeploymentRuntime.test.ts utils/localInstallations.test.ts utils/runtimeConfig.test.ts --maxWorkers=1",
-    "test:local-installer": "python -m unittest discover -s installer/local/tests -v"
+    "test:local-installer": "python -m unittest discover -s installer/local/tests -v",
+    "ai:schemas": "node scripts/export-ai-record-schemas.mjs",
+    "ai:schemas:check": "node scripts/export-ai-record-schemas.mjs --check"
   },
   "dependencies": {
     "@ant-design/icons": "^5.6.1",

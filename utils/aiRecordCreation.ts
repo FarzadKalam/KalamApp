@@ -11,6 +11,9 @@ export type AiRecordFieldSpec = {
   relationTargetModule?: string | null;
   readonly?: boolean;
   aiWritable?: boolean;
+  dynamicOptionsCategory?: string;
+  defaultValue?: unknown;
+  defaultValueKind?: 'today';
 };
 
 export type AiRecordTableSpec = {
@@ -70,6 +73,9 @@ const toFieldSpec = (field: ModuleField, moduleId: string, aiWritable: boolean):
   required: (field as any)?.validation?.required === true,
   readonly: (field as any)?.readonly === true || (field as any)?.nature === 'system',
   aiWritable,
+  dynamicOptionsCategory: field.dynamicOptionsCategory || undefined,
+  defaultValue: typeof field.defaultValue === 'function' ? undefined : field.defaultValue,
+  defaultValueKind: typeof field.defaultValue === 'function' && String(field.type) === 'date' ? 'today' : undefined,
   options: Array.isArray((field as any).options)
     ? (field as any).options.slice(0, 80).map((option: any) => ({
         label: String(option?.label ?? option?.title ?? option?.name ?? option?.value ?? '').trim(),

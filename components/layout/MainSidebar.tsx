@@ -14,7 +14,7 @@ type Props = {
   brandShortName: string; brandLogoUrl?: string | null; contexts: string[]; orgId: string | null; userId: string | null;
   presentation?: 'push' | 'overlay';
 };
-function MainSidebar({ items, railItems, selectedKey, ancestorKeys, collapsed, onCollapsedChange, isMobile, isDarkMode, onNavigate, onPreload, brandShortName, brandLogoUrl, contexts, orgId, userId, presentation = 'overlay' }: Props) {
+function MainSidebar({ items, railItems, selectedKey, ancestorKeys, collapsed, onCollapsedChange, isMobile, isDarkMode, onNavigate, onPreload, brandShortName, brandLogoUrl, contexts, orgId, userId }: Props) {
   const [requestedGroup, setRequestedGroup] = useState<string | null>(null);
   const [failedLogoUrl, setFailedLogoUrl] = useState<string | null>(null);
   const sidebarRef = useRef<HTMLDivElement>(null);

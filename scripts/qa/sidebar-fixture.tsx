@@ -27,10 +27,10 @@ const Preview = () => {
   const navigate = (href: string) => { setPathname(href); setCollapsed(href !== '/'); };
   const decorate = (rows: MenuProps['items']): MenuProps['items'] => rows?.map(item => {
     if (!item) return item;
-    if ('children' in item && Array.isArray(item.children)) return { ...item, children: decorate(item.children) || [] };
+    if ('children' in item && Array.isArray(item.children)) return { ...item, label: <span className="sidebar-menu-label">{item.label}</span>, children: decorate(item.children) || [] };
     const href = 'key' in item ? String(item.key) : '';
     if (!href.startsWith('/') || !('label' in item)) return item;
-    return { ...item, label: <a className="sidebar-menu-link" href={href} onClick={event => { event.preventDefault(); event.stopPropagation(); navigate(href); }}>{item.label}</a> };
+    return { ...item, label: <a className="sidebar-menu-link" href={href} onClick={event => { event.preventDefault(); event.stopPropagation(); navigate(href); }}><span className="sidebar-menu-link__text">{item.label}</span></a> };
   });
   return <ConfigProvider direction="rtl" theme={{ algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm, token: { fontFamily: 'Peyda, Tahoma, sans-serif' } }}>
     <div className="workspace-chrome" data-sidebar-mode={layout.mode} style={{ minHeight: '100vh', color: 'var(--workspace-text)' }}>

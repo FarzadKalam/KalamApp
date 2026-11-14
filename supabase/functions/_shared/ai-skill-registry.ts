@@ -134,7 +134,8 @@ export const assembleMultiSkillContext = async (
   for (const [agentKey, data] of entries) {
     if (data && Object.keys(data).length > 0) {
       domainContextByAgent[agentKey] = data;
-      if (agentKey === 'instagrammer' && Array.isArray(data.media_cards)) {
+      if (agentKey === 'instagrammer' && Array.isArray(data.media_cards)
+        && /(?:پست|ریل|استوری|رسانه|permalink|ویترین)/i.test(ctx.userMessage)) {
         instagramMediaCards = data.media_cards;
       }
     }

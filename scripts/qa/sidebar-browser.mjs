@@ -2,12 +2,22 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { createServer } from 'node:http';
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || pathToFileURL(path.resolve('tmp/ui-review/node_modules/playwright/index.mjs')).href);
 const output = 'tmp/sidebar-review';
 fs.mkdirSync(output, { recursive: true });
 const links = [...fs.readFileSync('dist/index.html', 'utf8').matchAll(/<link[^>]+rel="stylesheet"[^>]*>/g)].map(match => match[0]).join('');
 const html = `<!doctype html><html lang="fa" dir="rtl"><head><meta name="viewport" content="width=device-width, initial-scale=1">${links}<link rel="stylesheet" href="/sidebar-test/entry.css"></head><body style="margin:0"><div id="root"></div><script type="module" src="/sidebar-test/entry.js"></script></body></html>`;
+const root = path.resolve('dist');
+const server = createServer((request, response) => {
+  const file = path.resolve(root, `.${new URL(request.url, 'http://localhost').pathname}`);
+  if (!file.startsWith(root + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) { response.writeHead(404).end(); return; }
+  response.setHeader('Content-Type', file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream');
+  response.end(fs.readFileSync(file));
+});
+await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+const origin = `http://127.0.0.1:${server.address().port}`;
 const browser = await chromium.launch({ ...(process.env.PLAYWRIGHT_BROWSER === 'chromium' ? {} : { channel: 'msedge' }), headless: true });
 const errors = [];
 let page;
@@ -22,7 +32,7 @@ try {
   });
   page = await context.newPage();
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto('http://127.0.0.1:5189/sidebar-test/index.html', { waitUntil: 'networkidle' });
+  await page.goto(`${origin}/sidebar-test/index.html`, { waitUntil: 'networkidle' });
   const panel = page.locator('.app-sidebar-panel');
   const body = page.locator('.sidebar-preview-body');
   const toggle = page.getByRole('button', { name: 'باز کردن فهرست ماژول‌ها', exact: true });
@@ -36,6 +46,17 @@ try {
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'No horizontal overflow');
   };
   await assertDashboard();
+  const assertLabelsVisible = async (scope) => {
+    const labels = await scope.locator('.sidebar-menu-label, .sidebar-menu-link__text').evaluateAll(elements => elements.filter(element => element.getClientRects().length).map(element => {
+      const range = document.createRange(); range.selectNodeContents(element);
+      const text = range.getBoundingClientRect();
+      const row = element.closest('.ant-menu-item, .ant-menu-submenu-title').getBoundingClientRect();
+      return { label: element.textContent, text: { top: text.top, bottom: text.bottom, width: text.width }, row: { top: row.top, bottom: row.bottom } };
+    }));
+    // Glyph bounds may extend one pixel beyond the line box in Peyda.
+    for (const item of labels) assert.ok(item.text.width > 4 && item.text.top >= item.row.top - 2 && item.text.bottom <= item.row.bottom + 2, `Menu text must fit inside its row: ${JSON.stringify(item)}`);
+  };
+  await assertLabelsVisible(panel);
   assert.ok(await panel.locator('.ant-menu-item-selected a').evaluate(el => {
     const range = document.createRange(); range.selectNodeContents(el);
     const text = range.getBoundingClientRect(), row = el.closest('.ant-menu-item').getBoundingClientRect();
@@ -43,7 +64,8 @@ try {
   }), 'Record link text is visible inside its menu row beside the icon');
   const expandedWidth = (await body.boundingBox()).width;
   await page.getByRole('button', { name: 'عملیات صفحه', exact: true }).click();
-  assert.equal(await panel.count(), 1, 'Dashboard operations do not collapse or shift the menu');
+  assert.equal(await panel.count(), 0, 'Clicking outside dismisses the menu');
+  await toggle.click();
   await page.getByRole('button', { name: 'بستن فهرست ماژول‌ها', exact: true }).click();
   await settled();
   assert.ok((await body.boundingBox()).width > expandedWidth + 250, 'Closing restores dashboard width');
@@ -51,6 +73,7 @@ try {
   await panel.locator('.ant-menu-submenu-title').filter({ hasText: 'امور مالی' }).hover();
   const popups = page.locator('.workspace-sidebar-submenu:visible');
   await popups.first().waitFor();
+  await assertLabelsVisible(popups.first());
   assert.ok((await popups.first().boundingBox()).x < (await panel.boundingBox()).x, 'RTL submenu opens to the left');
   await popups.first().locator('.ant-menu-submenu-title').filter({ hasText: 'گزارش‌های مالی' }).hover();
   await page.waitForFunction(() => [...document.querySelectorAll('.workspace-sidebar-submenu')].filter(el => el.getBoundingClientRect().width > 0 && getComputedStyle(el).visibility !== 'hidden').length >= 2);
@@ -76,7 +99,9 @@ try {
   }
   await page.screenshot({ path: `${output}/desktop-light.png`, fullPage: true });
   await page.getByRole('button', { name: 'تغییر روز و شب', exact: true }).click();
+  await toggle.click();
   await panel.locator('.ant-menu-dark').waitFor();
+  await assertLabelsVisible(panel);
   await page.waitForFunction(() => {
     const title = document.querySelector('.app-sidebar-panel .ant-menu-submenu-title');
     const search = document.querySelector('.app-sidebar-panel .ant-input-affix-wrapper');
@@ -92,6 +117,7 @@ try {
   await page.getByRole('button', { name: 'باز کردن منوی گوشی', exact: true }).click();
   const drawer = page.locator('.ant-drawer-body');
   await drawer.locator('.ant-menu-submenu-title').filter({ hasText: 'امور مالی' }).click();
+  await assertLabelsVisible(drawer);
   await drawer.getByRole('menuitem', { name: 'فاکتورها', exact: true }).click();
   await page.locator('.ant-drawer-content-wrapper').waitFor({ state: 'hidden' });
   assert.equal(await page.locator('.app-main-rail').count(), 0);
@@ -109,4 +135,4 @@ try {
   if (page) await page.screenshot({ path: `${output}/failure.png`, fullPage: true }).catch(() => {});
   console.error(errors);
   throw error;
-} finally { await browser.close(); }
+} finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }

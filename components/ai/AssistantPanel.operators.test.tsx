@@ -7,6 +7,15 @@ import AssistantPanel from './AssistantPanel';
 
 const invokeMock = vi.fn();
 
+// Keep this integration test focused on the conversation and approval path;
+// full module editors have their own field and table tests.
+vi.mock('../../moduleRegistry', () => ({ MODULES: Object.fromEntries(['customers', 'marketing_leads', 'expense_documents', 'tasks'].map((id) => [id, {
+  id, titles: { fa: id === 'marketing_leads' ? 'لید' : 'مشتری' },
+  fields: [{ key: 'name', type: 'text', labels: { fa: 'نام' } }], blocks: [],
+}])) }));
+vi.mock('../SmartFieldRenderer', () => ({ default: ({ field, value, onChange }: any) => <input aria-label={field.labels.fa} value={value || ''} onChange={(event) => onChange(event.target.value)} /> }));
+vi.mock('../EditableTable', () => ({ default: () => null }));
+
 vi.mock('../../supabaseClient', () => ({
   SUPABASE_URL: 'https://example.test',
   SUPABASE_ANON_KEY: 'anon-test-key',
@@ -315,7 +324,7 @@ describe('AssistantPanel AI operators', () => {
     expect(findBody('chat')).toBeFalsy();
   });
 
-  it('uses direct text chat without invoking the automatic decision engine', async () => {
+  it('keeps ordinary text streamed after checking for an operational request', async () => {
     await renderPanel();
     fireEvent.click(screen.getAllByText('cap-text_chat')[0]);
     await waitFor(() => expect(screen.getByTestId('selected-capabilities')).toHaveTextContent('text_chat'));
@@ -325,7 +334,7 @@ describe('AssistantPanel AI operators', () => {
     const body = findFetchBody('chat_stream') as any;
     expect(body?.capability).toBe('dashboard_chat');
     expect(body?.capabilities).toEqual([]);
-    expect(findBody('suggest_auto_capabilities')).toBeFalsy();
+    expect(findBody('suggest_auto_capabilities')).toBeTruthy();
   });
 
   it('uses free chat independently and sends its explicit no-organization mode to the server', async () => {
@@ -366,6 +375,31 @@ describe('AssistantPanel AI operators', () => {
     await waitFor(() => expect(findBody('create_record_from_prompt') || findBody('run_task_bundle')).toBeTruthy());
     const body = findBody('run_task_bundle') || findBody('create_record_from_prompt');
     expect(body?.recordCreation?.moduleId).toBe('customers');
+  });
+
+  it.each(['create', 'update'] as const)('keeps primary-model %s requests on the operational approval path', async (mutationMode) => {
+    await renderPanel();
+    invokeMock.mockImplementation(async (_name: string, options: any) => {
+      const action = options?.body?.action;
+      if (action === 'suggest_auto_capabilities') return { data: { success: true, primaryModelOnly: true, capabilities: ['record_creation'], targetModuleId: 'marketing_leads', mutationMode }, error: null };
+      if (action === 'run_task_bundle') return { data: { success: true, threadId: 'thread-1', answer: 'پیش‌نویس آماده است', proposedAction: {
+        id: 'approval-1', actionType: `${mutationMode}_record_from_prompt`, targetModuleId: 'marketing_leads',
+        schema: { moduleId: 'marketing_leads', moduleLabel: 'لید', fields: [{ key: 'name', type: 'text', label: 'نام' }] },
+        proposedPayload: { records: [{ record_id: mutationMode === 'update' ? 'existing-1' : null, fields: { name: 'مهدخت' } }, { fields: { name: 'دوم' } }] },
+      } }, error: null };
+      if (action === 'confirm_action') return { data: { success: true, executed: true, createdRecords: mutationMode === 'create' ? [{ title: 'مهدخت' }] : [], updatedRecords: mutationMode === 'update' ? [{ title: 'مهدخت' }] : [] }, error: null };
+      return { data: { success: true, threadId: 'thread-1', messages: [] }, error: null };
+    });
+    await typeAndSend('اطلاعات این مشتری را ثبت کن');
+    await waitFor(() => expect(findBody('run_task_bundle')).toBeTruthy());
+    expect(findFetchBody('chat_stream')).toBeFalsy();
+    expect(findBody('run_task_bundle').previewOnly).toBe(true);
+    expect(findBody('run_task_bundle').recordMutationMode).toBe(mutationMode);
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`تایید و ${mutationMode === 'create' ? 'ثبت' : 'ویرایش'}`) }));
+    await waitFor(() => expect(findBody('confirm_action')).toBeTruthy());
+    expect(findBody('confirm_action').proposedRecords).toHaveLength(2);
+    expect(getBodies().filter((body) => body.action === 'confirm_action')).toHaveLength(1);
   });
 
   it('routes an insurance expense to an editable expense draft instead of a manual CRM reply', async () => {
@@ -502,6 +536,7 @@ describe('AssistantPanel AI operators', () => {
     expect(body?.recordMutationMode).toBe('create');
     expect(body?.bundle?.inputs).toHaveLength(2);
     expect(body?.bundle?.inputs?.[1]?.text).toContain('دو لید');
-    expect(body?.bundle?.inputs?.[1]?.audio).toBeNull();
+    expect(body?.bundle?.inputs?.[1]?.type).toBe('text');
+    expect(body?.bundle?.inputs?.[1]?.audio).toBeUndefined();
   }, 10000);
 });

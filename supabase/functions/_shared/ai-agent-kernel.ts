@@ -78,7 +78,13 @@ export const heuristicSelectAgentsAndCapabilities = (params: {
     detectedCaps.add('record_creation');
   }
 
-  if (detectedAgents.size === 0 || detectedAgents.size > 1) {
+  // An explicitly addressed specialist owns the request. Channel names in a
+  // receipt, screenshot or lead source are evidence, not delegation requests.
+  if (explicitAgents.length > 0) {
+    detectedAgents.clear();
+    explicitAgents.forEach((agent) => detectedAgents.add(agent));
+  }
+  if (detectedAgents.size === 0 || (explicitAgents.length === 0 && detectedAgents.size > 1)) {
     detectedAgents.add('lead_orchestrator');
   }
 

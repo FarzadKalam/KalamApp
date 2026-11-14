@@ -26,6 +26,7 @@ import AiMediaSettingsPopover, { type AiMediaSettings, type AiMediaSourceImage }
 import { resolveAiAttachmentUrl } from './AiMessageAttachmentPreview';
 import { blobToBase64 } from '../../utils/blobBase64';
 import { buildAiRecordCreationSchema, buildAiRecordModuleOptions } from '../../utils/aiRecordCreation';
+import { hasAiStructuredAction } from '../../supabase/functions/_shared/ai-record-contract';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 import AiMessageComposer from './AiMessageComposer';
 import { buildSmartAiThreadTitle } from '../../utils/aiThreadTitle';
@@ -38,6 +39,8 @@ import ComposerAttachmentChips, { type ComposerAttachmentChipItem } from '../com
 import AiMessageRenderer from './AiMessageRenderer';
 import { type AiRecordMutationDraft } from './AiRecordMutationApprovalCard';
 import QuickRecordFormModal from './QuickRecordFormModal';
+import AiQuestionCard from './AiQuestionCard';
+import { normalizeAiQuestions, presentAiQuestionResponse } from '../../supabase/functions/_shared/ai-questions';
 import AiProcessOperationApprovalCard from './AiProcessOperationApprovalCard';
 import {
   buildAgentAccessMapFromOverviewAgents,
@@ -1188,6 +1191,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       forceNewThread: params.forceNewThread === true,
       context: contextWithSelection,
       modelOverride: modelOverrideRef.current,
+      capabilities: selectedCapabilities,
       ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
       ...(effectiveToneStyle ? { toneStyle: effectiveToneStyle } : {}),
     });
@@ -1209,7 +1213,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     };
     setAutoSuggestedCapabilities(result.suggestedCapabilities);
     return result;
-  }, [callAssistant, contextWithSelection, effectiveAgents, effectiveToneStyle, threadId]);
+  }, [callAssistant, contextWithSelection, effectiveAgents, effectiveToneStyle, selectedCapabilities, threadId]);
 
   const executeAutoRoute = useCallback(async (params: {
     messageText: string;
@@ -1218,12 +1222,16 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     forceNewThread?: boolean;
     route?: any;
   }) => {
-    const bundlePayload = Array.isArray(params.bundlePayload) ? params.bundlePayload : [];
+    let bundlePayload = Array.isArray(params.bundlePayload) ? params.bundlePayload : [];
     const route = params.route || await requestAutoRoute({
       messageText: params.messageText,
       inputKind: params.inputKind,
       bundlePayload,
       forceNewThread: params.forceNewThread,
+    });
+    bundlePayload = bundlePayload.map((item) => {
+      const transcript = route.voiceTranscripts?.find((entry: any) => String(entry?.inputId || '') === String(item?.id || ''));
+      return transcript?.transcript ? { id: item.id, type: 'text', label: item.label, text: String(transcript.transcript) } : item;
     });
     const clarificationQuestions = Array.isArray(route?.agentPlan?.clarification_questions)
       ? route.agentPlan.clarification_questions.map((item: any) => String(item || '').trim()).filter(Boolean).slice(0, 3)
@@ -1277,7 +1285,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     if (capabilitySet.has('record_creation') && !autoRecordSchema) {
       return {
         success: true,
-        answer: 'برای ساخت یا ویرایش دقیق، نوع رکورد و در صورت ویرایش، رکورد هدف را مشخص کنید.',
+        answer: 'می‌خواهید چه اطلاعاتی ثبت یا اصلاح شود؟ فقط مورد مبهم را توضیح دهید؛ اطلاعات ارسال‌شدهٔ قبلی حفظ می‌شود.',
         agentPlan: route.agentPlan,
       };
     }
@@ -1603,6 +1611,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         threadId: requestedThreadId,
       });
       setThreadId(data.threadId ? String(data.threadId) : null);
+      setPendingAiAction(data.proposedAction?.id ? data.proposedAction : null);
       setThreadContext(getThreadContext(data?.thread));
       if (data?.thread) onThreadUpserted?.(data.thread);
       setThreadIsShared(data?.thread?.is_shared === true);
@@ -1909,6 +1918,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                     incomplete: payload?.incomplete === true,
                     finish_reason: payload?.finishReason || payload?.finish_reason || null,
                     usage: payload?.usage,
+                    clarification_questions: normalizeAiQuestions(payload?.questions),
                     attachments: Array.isArray(payload?.attachments) ? payload.attachments : [],
                     ...(Array.isArray(payload?.selectedAgents) ? { selected_agents: payload.selectedAgents } : {}),
                     ...(payload?.primaryAgent ? { agent_key: payload.primaryAgent } : {}),
@@ -1983,7 +1993,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           ? 'record_chat'
           : 'dashboard_chat';
         let canStream = selectedCapabilities.every((capability) => !NON_STREAM_CHAT_CAPABILITIES.has(capability));
-        if (selectedCapabilities.length === 0) {
+        if (selectedCapabilities.length === 0 || selectedCapabilities.every((item) => ['text_chat', 'document_analysis', 'voice_input', 'record_creation'].includes(item))) {
           const route = await requestAutoRoute({
             messageText: assistantText,
             inputKind,
@@ -2009,7 +2019,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             : contextWithSelection.mode === 'record'
             ? 'record_chat'
             : 'dashboard_chat';
-          if (route.primaryModelOnly) {
+          if (route.primaryModelOnly && !hasAiStructuredAction(route.suggestedCapabilities)) {
             streamCapabilities = [];
             canStream = true;
             streamCapability = contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat';
@@ -2034,7 +2044,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         }
       }
 
-      const data = await (selectedCapabilities.length === 0 && !processOperationMode && !activeRecordCreationSchema
+      const data = await (plannedAutoRoute && !processOperationMode && !activeRecordCreationSchema
         ? executeAutoRoute({
           messageText: assistantText,
           inputKind,
@@ -2161,6 +2171,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           content: normalizeAiMessageText(data.answer) || (data?.autoAction === 'generate_voice_output' ? 'فایل صوتی آماده شد.' : 'پاسخی دریافت نشد.'),
             metadata: {
               usage: data.usage,
+              clarification_questions: normalizeAiQuestions(data.questions),
               ...(data?.agentPlan ? { agent_plan: data.agentPlan } : {}),
               ...(Array.isArray(data?.selectedAgents) ? { selected_agents: data.selectedAgents } : {}),
               ...(data?.primaryAgent ? { agent_key: data.primaryAgent } : {}),
@@ -2302,7 +2313,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           id: data.messageId || `assistant-image-${Date.now()}`,
           role: 'assistant',
           content: normalizeAiMessageText(data.answer) || 'تصویر آماده شد.',
-          metadata: { usage: data.usage, image: data.image, capability: 'image_generation' },
+          metadata: { usage: data.usage,
+              clarification_questions: normalizeAiQuestions(data.questions), image: data.image, capability: 'image_generation' },
           provider: data.provider || null,
           model: data.model || null,
           created_at: new Date().toISOString(),
@@ -2353,7 +2365,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           id: data.messageId || `assistant-voice-output-${Date.now()}`,
           role: 'assistant',
           content: normalizeAiMessageText(data.answer) || 'فایل صوتی آماده شد.',
-          metadata: { usage: data.usage, file: data.file, capability: 'voice_output' },
+          metadata: { usage: data.usage,
+              clarification_questions: normalizeAiQuestions(data.questions), file: data.file, capability: 'voice_output' },
           provider: data.provider || null,
           model: data.model || null,
           created_at: new Date().toISOString(),
@@ -2435,7 +2448,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           id: data.messageId || `assistant-doc-${Date.now()}`,
           role: 'assistant',
           content: normalizeAiMessageText(data.answer) || 'فایل آماده شد.',
-          metadata: { usage: data.usage, file: data.file, capability: 'document_generation', format: data.format || format },
+          metadata: { usage: data.usage,
+              clarification_questions: normalizeAiQuestions(data.questions), file: data.file, capability: 'document_generation', format: data.format || format },
           provider: data.provider || null,
           model: data.model || null,
           created_at: new Date().toISOString(),
@@ -2597,7 +2611,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           metadata: { ...(item.metadata || {}), agent_plan: recordRoute.agentPlan },
         } : item));
       }
-      const data = await (effectiveCapabilities.length === 0 && !processOperationMode && !activeRecordCreationSchema
+      const data = await (effectiveCapabilities.every((item) => ['text_chat', 'document_analysis', 'voice_input', 'record_creation'].includes(item)) && !processOperationMode && !activeRecordCreationSchema
         ? executeAutoRoute({
           messageText: assistantPrompt,
           inputKind: 'task_bundle',
@@ -2697,6 +2711,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             content: normalizeAiMessageText(data.answer) || (data?.autoAction === 'generate_voice_output' ? 'فایل صوتی آماده شد.' : 'نتیجه آماده شد.'),
             metadata: {
               usage: data.usage,
+              clarification_questions: normalizeAiQuestions(data.questions),
               ...(data?.agentPlan ? { agent_plan: data.agentPlan } : {}),
               ...(Array.isArray(data?.selectedAgents) ? { selected_agents: data.selectedAgents } : {}),
               ...(data?.primaryAgent ? { agent_key: data.primaryAgent } : {}),
@@ -3014,7 +3029,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     const authorName = String(messageAuthor?.name || '').trim() || currentUserView.name;
     const authorAvatarUrl = String(messageAuthor?.avatar_url || '').trim() || currentUserView.avatarUrl;
     const usageText = !isUser ? formatUsageMetadata(item.metadata?.usage || item.metadata, orgCurrency) : '';
-    const messageText = normalizeAiMessageText(item.content);
+    const rawMessageText = normalizeAiMessageText(item.content);
+    const presentation = !isUser ? presentAiQuestionResponse(rawMessageText) : { answer: rawMessageText, questions: [] };
+    const messageText = !isUser && item.metadata?.streaming === true && /^\s*(?:```json\s*)?\{/.test(rawMessageText)
+      ? 'در حال آماده‌سازی پاسخ…' : presentation.answer;
     const attachments = extractAiMessageAttachments(item);
     const pendingKind = getPendingGenerationKind(item);
     const retryText = !isUser
@@ -3121,6 +3139,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               />
             )}
             <MessageAttachmentGallery attachments={attachments} presentation={isUser ? undefined : 'assistant'} />
+            {!isUser && normalizeAiQuestions(item.metadata?.clarification_questions || presentation.questions).length > 0 ? (
+              <AiQuestionCard questions={normalizeAiQuestions(item.metadata?.clarification_questions || presentation.questions)}
+                disabled={submitting || messages.slice(index + 1).some((later) => later.role === 'user')}
+                onAnswer={(answer) => submitChat(answer, 'clarification_answer')} />
+            ) : null}
 
             {!isUser ? (() => {
               const instagramCards = Array.isArray(item.metadata?.instagram_media_cards)

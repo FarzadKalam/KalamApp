@@ -140,8 +140,6 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   fileLoading = false,
   directFileUpload = false,
   allowMultipleFiles = false,
-  recordCreationModuleOptions = [],
-  recordCreationTargetModuleId,
   onRecordCreationTargetModuleChange,
   mediaSettings = {},
   onMediaSettingsChange,
@@ -622,21 +620,6 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
               </span>
             ))}
 
-            {selectedSet.has('record_creation') && onRecordCreationTargetModuleChange ? (
-              <Select
-                allowClear
-                showSearch
-                className="min-w-[185px]"
-                size={actionSize}
-                value={recordCreationTargetModuleId || undefined}
-                options={recordCreationModuleOptions}
-                optionFilterProp="label"
-                placeholder="نوع رکورد برای ایجاد/ویرایش"
-                aria-label="نوع رکورد برای ایجاد یا ویرایش"
-                disabled={disabled || loading}
-                onChange={(value) => onRecordCreationTargetModuleChange(value ? String(value) : null)}
-              />
-            ) : null}
           </div>
         </>
       ) : (
@@ -675,21 +658,6 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
               {legacyTriggerButton}
             </Popover>
           )}
-          {selectedSet.has('record_creation') && onRecordCreationTargetModuleChange ? (
-            <Select
-              allowClear
-              showSearch
-              className="min-w-[210px]"
-              size={actionSize}
-              value={recordCreationTargetModuleId || undefined}
-              options={recordCreationModuleOptions}
-              optionFilterProp="label"
-              placeholder="نوع رکورد برای ایجاد/ویرایش"
-              aria-label="نوع رکورد برای ایجاد یا ویرایش"
-              disabled={disabled || loading}
-              onChange={(value) => onRecordCreationTargetModuleChange(value ? String(value) : null)}
-            />
-          ) : null}
         </>
       )}
 

@@ -28,6 +28,7 @@ vi.mock('../SmartFieldRenderer', () => ({
     </button>
   ),
 }));
+vi.mock('../EditableTable', () => ({ default: () => null }));
 
 describe('AiRecordMutationApprovalCard', () => {
   afterEach(cleanup);
@@ -71,5 +72,18 @@ describe('AiRecordMutationApprovalCard', () => {
     fireEvent.click(screen.getByRole('switch', { name: 'مشاهده دیگر فیلدها' }));
     expect(screen.getByText(/موبایل:/)).toBeTruthy();
     expect(screen.getByText(/توضیحات:/)).toBeTruthy();
+  });
+
+  it.each(['create_record_from_prompt', 'update_record_from_prompt'] as const)('supports selecting multiple drafts for %s and discloses new options', (actionType) => {
+    const onChange = vi.fn();
+    render(<AiRecordMutationApprovalCard actionType={actionType} moduleId="marketing_leads"
+      schema={{ fields: [{ key: 'full_name', label: 'نام کامل' }, { key: 'city', label: 'شهر', type: 'select', options: [{ label: 'گلبهار', value: 'گلبهار' }] }],
+        optionProposals: [{ fieldKey: 'city', fieldLabel: 'شهر', label: 'گلبهار', value: 'گلبهار' }] }}
+      records={[{ record_id: 'a', fields: { full_name: 'مهدخت', city: 'گلبهار' } }, { record_id: 'b', selected: false, fields: { full_name: 'دیگر' } }]} onChange={onChange} />);
+    expect(screen.getAllByText('شهر: گلبهار').length).toBeGreaterThan(0);
+    expect(screen.getByText('گزینه‌های تازه همراه ثبت اضافه می‌شوند')).toBeTruthy();
+    const switches = screen.getAllByRole('switch', { name: actionType === 'update_record_from_prompt' ? 'انتخاب برای ویرایش' : 'انتخاب برای ثبت' });
+    fireEvent.click(switches[0]);
+    expect(onChange).toHaveBeenCalledWith([expect.objectContaining({ selected: false }), expect.objectContaining({ selected: false })]);
   });
 });

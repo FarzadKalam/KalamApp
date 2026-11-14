@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Button, Carousel, Empty, Switch } from 'antd';
+import { Alert, Button, Carousel, Empty, Switch } from 'antd';
 import { LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { MODULES } from '../../moduleRegistry';
 import type { ModuleField } from '../../types';
@@ -51,7 +51,10 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
         .map((item: any) => String(item?.key || '').trim())
         .filter(Boolean),
     );
-    return (moduleConfig?.fields || [])
+    return (Array.isArray(schema?.fields) ? schema.fields : [])
+      .map((spec: any) => ({ ...(moduleConfig?.fields || []).find((field: ModuleField) => field.key === spec.key),
+        ...spec, labels: { fa: spec.label || (moduleConfig?.fields || []).find((field: ModuleField) => field.key === spec.key)?.labels?.fa || spec.key },
+      } as ModuleField))
       .filter((field: ModuleField) => schemaKeys.has(String(field.key)))
       .map((field: ModuleField) => ({
         ...field,
@@ -80,6 +83,13 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
 
   return (
     <div className="mt-2 rounded-xl border border-[var(--ai-chat-line,#dfe2e5)] bg-[var(--ai-chat-surface,#fff)] p-2 dark:border-white/10 dark:bg-white/[0.045]">
+      {schema?.optionProposals?.some((proposal: any) => records.some((record) => record.selected !== false &&
+        (Array.isArray(record.fields?.[proposal.fieldKey]) ? record.fields[proposal.fieldKey] : [record.fields?.[proposal.fieldKey]]).includes(proposal.value))) ? (
+        <Alert className="mb-3" type="info" showIcon message="گزینه‌های تازه همراه ثبت اضافه می‌شوند"
+          description={schema.optionProposals.filter((proposal: any) => records.some((record) => record.selected !== false &&
+            (Array.isArray(record.fields?.[proposal.fieldKey]) ? record.fields[proposal.fieldKey] : [record.fields?.[proposal.fieldKey]]).includes(proposal.value)))
+            .map((proposal: any) => `${proposal.fieldLabel}: ${proposal.label}`).join('، ')} />
+      ) : null}
       {records.length > 1 ? (
         <div className="mb-2 flex items-center justify-between gap-2">
           <Button
@@ -104,7 +114,7 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
         </div>
       ) : null}
 
-      <Carousel ref={carouselRef} dots={records.length > 1} draggable afterChange={setActiveIndex} adaptiveHeight>
+      <Carousel ref={carouselRef} dots={records.length > 1} infinite={false} draggable afterChange={setActiveIndex} adaptiveHeight>
         {records.map((record, recordIndex) => {
           const proposedKeys = new Set(Object.keys(record.fields || {}));
           const primaryFields = editableFields.filter((field) => proposedKeys.has(String(field.key)));
