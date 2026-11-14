@@ -9697,9 +9697,8 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
     ? existingThread.metadata.task_bundle_context
     : null;
   const inputs = normalizeTaskBundleInputs(body);
-  // Do not transcribe a voice with a separate engine while the automatic
-  // path is deciding.  The selected primary model receives the original
-  // attachment in the execution step.
+  // Reuse the existing dedicated speech path once, so routing can see the
+  // actual request rather than an audio filename. The browser reuses it below.
   const transcripts = await transcribeTaskBundleVoices(supabaseUrl, serviceRoleKey, authContext, inputs, undefined, { preferDedicatedTranscription: true });
   const prompt = inputs.length
     ? buildTaskBundlePrompt(body, inputs, transcripts, previousTaskContext)
@@ -10151,7 +10150,8 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
   });
 
   const runStep = async (stepName: string, promise: Promise<Response>) => {
-    const data = await parseAssistantJsonResponse(await promise);
+    const response = await promise;
+    const data = await parseAssistantJsonResponse(response);
     if (data?.threadId) workingThreadId = String(data.threadId);
     if (data?.provider) provider = data.provider;
     if (data?.model) model = data.model;
@@ -10164,6 +10164,11 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
       if (message) collectedMessages.push(message);
     }
     if (data?.proposedAction && !proposedAction) proposedAction = data.proposedAction;
+    if (!response.ok || data?.success === false) {
+      const error: any = new Error(String(data?.message || 'انجام درخواست ناموفق بود؛ نتیجه‌ای ثبت نشده است.'));
+      error.status = response.status >= 400 ? response.status : 422;
+      throw error;
+    }
     collectedResults.push({ step: stepName, ...data });
     return data;
   };
