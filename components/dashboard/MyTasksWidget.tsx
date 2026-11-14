@@ -9,10 +9,11 @@ import { getTaskStatusOptions } from '../../utils/processTaskStatusOptions';
 import { TASK_RUNTIME_UPDATED_EVENT, applyTaskRuntimeUpdate, type TaskRuntimeUpdatedPayload } from '../../utils/taskRuntimeEvents';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { fetchAssigneeDirectory } from '../../utils/referenceData';
+import { fetchRecordLockMap, mergeRecordLockIntoRecord } from '../../utils/recordLockRuntime';
 import TaskNotificationListRow from '../tasks/TaskNotificationListRow';
 import DashboardWidgetFrame from './DashboardWidgetFrame';
 
-const COLUMNS = ['id','org_id','name','status','priority','task_type','due_date','start_date','updated_at','recurrence_info','assignee_id','assignee_role_id','assignee_type','source_module_id','source_record_id','related_to_module','process_group_id','source_template_id','production_line_id','related_production_order','project_id','tags','is_locked','locked_at','locked_by'];
+const COLUMNS = ['id','org_id','name','status','priority','task_type','due_date','start_date','updated_at','recurrence_info','assignee_id','assignee_role_id','assignee_type','source_module_id','source_record_id','related_to_module','process_group_id','source_template_id','production_line_id','related_production_order','project_id','tags'];
 const PAGE_SIZE = 8;
 function MyTasksWidget({ orgId }: { orgId: string }) {
   const navigate = useNavigate();
@@ -32,12 +33,17 @@ function MyTasksWidget({ orgId }: { orgId: string }) {
       setAccess(context);
       if (!context.userId || context.permissions?.tasks?.view === false) { setRows([]);setHasMore(false);return; }
       const roleClause = context.roleId ? `,assignee_role_id.eq.${context.roleId},assignee_id.eq.${context.roleId}` : '';
-      const result = await runSelectWithCompatibleColumns<any>({ cacheKey: 'dashboard-my-tasks', columns: COLUMNS, execute: columns => supabase.from('tasks').select(columns).eq('org_id', orgId)
+      const result = await runSelectWithCompatibleColumns<any>({ cacheKey: `dashboard-my-tasks:${orgId}`, columns: COLUMNS, execute: columns => supabase.from('tasks').select(columns).eq('org_id', orgId)
         .or(`assignee_id.eq.${context.userId}${roleClause}`).not('status', 'in', '(done,completed,canceled,cancelled)').order('due_date', { ascending: true, nullsFirst: false }).order('updated_at', { ascending: false }).order('id', { ascending: true }).range(offset, offset + PAGE_SIZE) });
       if (result.error) throw result.error;
+      if (current !== request.current) return;
+      const page = (result.data || []).slice(0, PAGE_SIZE);
+      // Locks are shared metadata, not columns on tasks. Resolve only this page
+      // through the tenant-safe RPC and never present a failed lookup as unlocked.
+      const locks = await fetchRecordLockMap('tasks', page.map((task: any) => task.id), { forceRefresh: true, throwOnError: true });
       if (current === request.current) {
-        const page = (result.data || []).slice(0, PAGE_SIZE);
-        setRows(previous => append ? [...new Map([...previous, ...page].map(task => [task.id, task])).values()] : page);
+        const hydratedPage = page.map((task: any) => mergeRecordLockIntoRecord(task, locks.get(task.id)));
+        setRows(previous => append ? [...new Map([...previous, ...hydratedPage].map(task => [task.id, task])).values()] : hydratedPage);
         nextOffset.current = offset + PAGE_SIZE;
         setHasMore((result.data || []).length > PAGE_SIZE);
       }
