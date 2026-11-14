@@ -119,6 +119,19 @@ jobs:
             docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d ledger_test -v ON_ERROR_STOP=1 < "$file"
           done
 
+      - name: Isolated conversational agent task queue checks
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test ai_agent_tasks_test
+          for file in tests/sql/ai_agent_tasks_fixture.sql \
+            database_v1_phase589_conversational_agent_tasks.sql \
+            database_v1_phase589_conversational_agent_tasks.sql \
+            tests/sql/ai_agent_tasks_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d ai_agent_tasks_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
       - name: Install
         run: npm ci
 
@@ -138,7 +151,10 @@ jobs:
       - name: Shared AI agents and chat surfaces regression checks
         timeout-minutes: 10
         run: >-
-          npx vitest run supabase/functions/ai-assistant/record-execution.test.ts supabase/functions/_shared/ai-record-contract.test.ts supabase/functions/_shared/ai-agents.test.ts supabase/functions/_shared/ai-agent-contract.test.ts supabase/functions/_shared/ai-agent-inbox.test.ts utils/__tests__/aiAaasFoundation.test.ts
+          npx vitest run supabase/functions/ai-assistant/operational-preflight.test.ts supabase/functions/_shared/ai-gateway.test.ts
+          supabase/functions/_shared/ai-agent-task-contract.test.ts supabase/functions/_shared/ai-agent-task-runtime.test.ts
+          supabase/functions/_shared/ai-agent-task-queue.test.ts supabase/functions/workflow-interval-runner/agent-task-delivery.test.ts
+          supabase/functions/ai-assistant/record-execution.test.ts supabase/functions/_shared/ai-record-contract.test.ts supabase/functions/_shared/ai-agents.test.ts supabase/functions/_shared/ai-agent-contract.test.ts supabase/functions/_shared/ai-agent-inbox.test.ts utils/__tests__/aiAaasFoundation.test.ts
           components/ai/AiMessageComposer.test.tsx components/ai/AiGenerationStatusCard.test.tsx
           components/ai/AiChatSurfaceV2.test.tsx components/ai/AssistantPanel.operators.test.tsx
           components/ai/AiCapabilityComposerActions.test.tsx components/ai/AiComposeModelBar.test.tsx
@@ -179,6 +195,7 @@ jobs:
       - name: AI assistant dependency checks
         run: |
           npm run ai:schemas:check
+          deno check --node-modules-dir=none supabase/functions/_shared/ai-agent-task-contract.ts supabase/functions/_shared/ai-agent-task-runtime.ts supabase/functions/_shared/ai-agent-task-queue.ts
           deno check --node-modules-dir=none supabase/functions/_shared/ai-agents.ts supabase/functions/ai-assistant/index.ts supabase/functions/api-gateway/index.ts supabase/functions/webhook-delivery/index.ts supabase/functions/user-admin/index.ts supabase/functions/bot-admin/index.ts supabase/functions/bot-webhook/index.ts supabase/functions/report-runtime/index.ts supabase/functions/activity-performance/index.ts
 
       - name: Messaging attachment and viewer isolation regression checks

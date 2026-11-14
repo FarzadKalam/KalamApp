@@ -1,5 +1,7 @@
 // @ts-nocheck
 import { dialPhone } from '../_shared/phone-number.ts';
+import { summarizeAgentTaskDeliveries } from '../_shared/ai-agent-task-contract.ts';
+import { enqueueDueAgentTasks } from '../_shared/ai-agent-task-queue.ts';
 // workflow-interval-runner: Server-side interval workflow executor
 // Called by pg_cron via pg_net every 5 minutes — no browser dependency.
 // Tenant isolation: every DB operation is filtered by org_id.
@@ -1392,7 +1394,7 @@ const runSaasBillingCycle = async (url: string, key: string) =>
 
 async function fetchQueuedWorkflows(url: string, key: string): Promise<WorkflowRow[]> {
   const rows = await dbGet(url, key,
-    `workflows?is_active=eq.true&trigger_type=eq.interval&server_queued_at=not.is.null&order=updated_at.asc&limit=${MAX_WORKFLOWS}`
+    `workflows?is_active=eq.true&trigger_type=eq.interval&agent_task_config=is.null&server_queued_at=not.is.null&order=updated_at.asc&limit=${MAX_WORKFLOWS}`
   );
   return rows as WorkflowRow[];
 }
@@ -4077,17 +4079,24 @@ async function executeAction(
       ai_updated_record_title: updatedRecords[0]?.title || '',
       ai_process_operation_count: String(executedProcessOperations.length || ''),
     };
+    const channelResults: Array<ActionExecutionResult & { channel: string }> = [];
+    const deliverAiResult = async (deliveryAction: WorkflowAction) => {
+      const result = await executeAction(deliveryAction, actionRecord, moduleId, orgId, url, key, actorUserId);
+      const channel = deliveryAction.type === 'send_sms' ? 'sms' : deliveryAction.type === 'send_email' ? 'email'
+        : deliveryAction.type === 'send_note' ? 'note' : deliveryAction.type === 'send_instagram_message' ? 'instagram' : 'bot';
+      channelResults.push({ ...result, channel });
+    };
     for (const channel of deliveryChannels) {
       if (channel === 'sms') {
-        await executeAction({ ...action, type: 'send_sms', config: { message: '{{ai_answer}}', ...(channelConfigs.sms || {}) } }, actionRecord, moduleId, orgId, url, key, actorUserId);
+        await deliverAiResult({ ...action, type: 'send_sms', config: { message: '{{ai_answer}}', ...(channelConfigs.sms || {}) } });
         continue;
       }
       if (channel === 'email') {
-        await executeAction({ ...action, type: 'send_email', config: { subject: 'پیام هوش مصنوعی', body: '{{ai_answer}}', ...(channelConfigs.email || {}) } }, actionRecord, moduleId, orgId, url, key, actorUserId);
+        await deliverAiResult({ ...action, type: 'send_email', config: { subject: 'پیام هوش مصنوعی', body: '{{ai_answer}}', ...(channelConfigs.email || {}) } });
         continue;
       }
       if (channel === 'bot') {
-        await executeAction({
+        await deliverAiResult({
           ...action,
           type: 'send_bot_message',
           config: {
@@ -4099,20 +4108,23 @@ async function executeAction(
             message_source: 'ai',
             ai_generated: true,
           },
-        }, actionRecord, moduleId, orgId, url, key, actorUserId);
+        });
         continue;
       }
       if (channel === 'note') {
-        await executeAction({ ...action, type: 'send_note', config: { note_text: '{{ai_answer}}', ...(channelConfigs.note || {}) } }, actionRecord, moduleId, orgId, url, key, actorUserId);
+        await deliverAiResult({ ...action, type: 'send_note', config: { note_text: '{{ai_answer}}', ...(channelConfigs.note || {}) } });
         continue;
       }
       if (channel === 'instagram') {
-        await executeAction({ ...action, type: 'send_instagram_message', config: { ...(channelConfigs.instagram || {}), recipient_source: 'current_record', message: String((channelConfigs.instagram || {}).message || '{{ai_answer}}') } }, actionRecord, moduleId, orgId, url, key, actorUserId);
+        await deliverAiResult({ ...action, type: 'send_instagram_message', config: { ...(channelConfigs.instagram || {}), recipient_source: 'current_record', message: String((channelConfigs.instagram || {}).message || '{{ai_answer}}') } });
       }
     }
-    return actionResult(action, 'success', undefined, {
+    const deliverySummary = deliveryChannels.length ? summarizeAgentTaskDeliveries(channelResults) : null;
+    return actionResult(action, deliverySummary?.status || 'success', deliverySummary?.status === 'failed'
+      ? 'پاسخ ایجنت آماده شد؛ ارسال آن در همهٔ روش‌های درخواستی تأیید نشد.' : undefined, {
       affected_count: 1 + createdRecords.length + updatedRecords.length + executedProcessOperations.length,
       details: {
+        channel_results: channelResults,
         model: aiResult.model,
         avalai_request_id: aiResult.requestId,
         created_records: createdRecords,
@@ -5834,7 +5846,14 @@ async function enqueueWorkflowScanJobs(
 
 async function runIntervalEnqueueTick(url: string, key: string): Promise<Record<string, any>> {
   const now = new Date();
-  const stats = { checkedWorkflows: 0, queuedWorkflows: 0, queuedScans: 0 };
+  const agentTaskStats = await enqueueDueAgentTasks({
+    loadDue: (nowIso, limit) => dbGet(url, key, `workflows?is_active=eq.true&trigger_type=eq.interval&agent_task_config=not.is.null&agent_task_next_run_at=lte.${encodeURIComponent(nowIso)}&select=id,org_id,agent_task_revision,agent_task_next_run_at,agent_task_config&order=agent_task_next_run_at.asc,id.asc&limit=${limit}`),
+    enqueue: (input) => callRpc(url, key, 'enqueue_ai_agent_task_run', {
+      p_org_id: input.orgId, p_workflow_id: input.workflowId, p_expected_revision: input.revision,
+      p_due_at: input.dueAt, p_next_run_at: input.nextRunAt, p_now: input.nowIso,
+    }),
+  }, now);
+  const stats = { checkedWorkflows: 0, queuedWorkflows: 0, queuedScans: 0, agentTasks: agentTaskStats };
   const workflows = await fetchQueuedWorkflows(url, key);
   stats.checkedWorkflows = workflows.length;
   for (const workflow of workflows) {
@@ -6025,7 +6044,8 @@ async function processWorkflowActionJob(url: string, key: string, job: WorkflowI
     action, record, moduleId, job.org_id, url, key, job.payload?.actor_user_id || null,
     { parentExecutionKey: `interval-job:${job.id}`, actionIndex: Number(job.action_index || 0) },
   );
-  await completeIntervalJob(url, key, job, 'succeeded', { action_result: actionResultValue });
+  await completeIntervalJob(url, key, job, actionResultValue.status === 'failed' ? 'failed'
+    : actionResultValue.status === 'skipped' ? 'skipped' : 'succeeded', { action_result: actionResultValue });
   await finalizeWorkflowActionReport(url, key, job).catch((error) => {
     console.warn('[workflow-runner] Queue report will be reconciled:', error?.message || error);
   });

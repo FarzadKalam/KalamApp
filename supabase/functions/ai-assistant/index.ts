@@ -58,6 +58,8 @@ import {
   pickPreferredCatalogModelForSlot,
   resolveModelSlot,
   tryResolveModelSlot,
+  isPrimaryAgentOperation,
+  resolveCapabilityModelSlot,
 } from '../_shared/ai-gateway.ts';
 import {
   compactThreadConversation,
@@ -1460,7 +1462,7 @@ const pickCapabilityModelFromCatalog = (
   agentConfig?: any,
   saasDefaultModels: Record<string, string | null> = {},
 ) => {
-  const effectiveCapability = capability === 'pricing_adjustment' ? 'primary' : capability;
+  const effectiveCapability = resolveCapabilityModelSlot(capability);
   const slotResolved = tryResolveModelSlot({
     slot: effectiveCapability,
     catalogRows,
@@ -10055,8 +10057,8 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
   }
 
   for (const selectedCapability of selectedCapabilities) {
-    if (selectedCapability === 'voice_input') {
-      await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, decisionProviderConfig.orgAiSettings, 'voice_input');
+    if (selectedCapability === 'voice_input' || isPrimaryAgentOperation(selectedCapability)) {
+      await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, decisionProviderConfig.orgAiSettings, selectedCapability);
       continue;
     }
     if (AI_CAPABILITY_FEATURE_KEYS[selectedCapability]) {

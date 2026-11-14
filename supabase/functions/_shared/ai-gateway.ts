@@ -25,6 +25,14 @@ export type AiModelCatalogRow = {
 
 export const PRIMARY_MODEL_DEFAULT_KEY = '__primary_model';
 
+// Operations are tools of the selected agent, not standalone model families.
+// Keep entitlement/feature checks on their original operation capability.
+export const isPrimaryAgentOperation = (capability: string): boolean =>
+  ['record_creation', 'process_operation', 'pricing_adjustment', 'agent_task'].includes(capability);
+
+export const resolveCapabilityModelSlot = (capability: ModelSlot): ModelSlot =>
+  isPrimaryAgentOperation(capability) ? 'primary' : capability;
+
 export const PRIMARY_MODEL_CAPABILITIES = new Set([
   'dashboard_chat',
   'record_chat',
@@ -87,6 +95,7 @@ export const isActiveSelectableModel = (model: AiModelCatalogRow): boolean =>
   Boolean(model?.id) && model?.is_active !== false && model?.is_coming_soon !== true;
 
 export const modelSupportsSlot = (model: AiModelCatalogRow, slot: ModelSlot): boolean => {
+  slot = resolveCapabilityModelSlot(slot);
   if (!isActiveSelectableModel(model)) return false;
   const tags = Array.isArray(model?.capability_tags) ? model.capability_tags.map((t) => String(t || '').trim()) : [];
   if (slot === 'embedding') {
@@ -111,6 +120,7 @@ export const pickPreferredCatalogModelForSlot = (
   catalogRows: AiModelCatalogRow[],
   slot: ModelSlot,
 ): AiModelCatalogRow | null => {
+  slot = resolveCapabilityModelSlot(slot);
   const candidates = (catalogRows || []).filter((model) => modelSupportsSlot(model, slot));
   if (!candidates.length) return null;
 
@@ -178,6 +188,7 @@ export type ResolvedModelResult = {
 };
 
 export const tryResolveModelSlot = (input: ResolveModelSlotInput): ResolvedModelResult | null => {
+  input = { ...input, slot: resolveCapabilityModelSlot(input.slot) };
   const catalogRows = (input.catalogRows || []).filter(isActiveSelectableModel);
   if (!catalogRows.length) return null;
 
