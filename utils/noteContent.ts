@@ -97,7 +97,80 @@ const normalizeAttachment = (value: any): NoteAttachment | null => {
   };
 };
 
+const ATTACHMENT_JSON_PATTERN = /("attachments"|"file_url"|"download_url"|"url"|"mime_type"|"mimeType"|"fileType"|"fileName"|"file_name")/i;
+
+const isLikelyAttachmentJson = (value: string) => {
+  const trimmed = value.trim();
+  return (trimmed.startsWith('{') || trimmed.startsWith('[')) && ATTACHMENT_JSON_PATTERN.test(trimmed);
+};
+
+const recoverTruncatedAttachmentsJson = (trimmed: string): ParsedNoteContent | null => {
+  if (!isLikelyAttachmentJson(trimmed)) return null;
+
+  let text = '';
+  const textMatch = trimmed.match(/"text"\s*:\s*"((?:\\.|[^"\\])*)"/);
+  if (textMatch) {
+    try {
+      text = JSON.parse(`"${textMatch[1]}"`);
+    } catch {
+      text = textMatch[1];
+    }
+  }
+
+  const names: string[] = [];
+  const nameRegex = /"(?:name|file_name|fileName)"\s*:\s*"((?:\\.|[^"\\])*)"/gi;
+  let match: RegExpExecArray | null;
+  while ((match = nameRegex.exec(trimmed)) !== null) {
+    try { names.push(JSON.parse(`"${match[1]}"`)); } catch { names.push(match[1]); }
+  }
+
+  const urls: string[] = [];
+  const urlRegex = /"(?:url|file_url|download_url|path)"\s*:\s*"((?:\\.|[^"\\])*)"/gi;
+  while ((match = urlRegex.exec(trimmed)) !== null) {
+    try { urls.push(JSON.parse(`"${match[1]}"`)); } catch { urls.push(match[1]); }
+  }
+
+  const attachments: NoteAttachment[] = [];
+  const maxItems = Math.max(names.length, urls.length, 1);
+  for (let i = 0; i < maxItems; i++) {
+    const name = names[i] || urls[i]?.split('?')[0].split('/').pop() || '';
+    const url = urls[i] || '';
+    if (name || url) {
+      attachments.push({
+        name: name || 'فایل',
+        url: url || '',
+        fileType: resolveNoteAttachmentFileType({ name, url }),
+      });
+    }
+  }
+
+  if (attachments.length > 0) {
+    return { text, attachments };
+  }
+
+  const isImage = /image|\.png|\.jpe?g|\.webp|\.gif|\.svg/i.test(trimmed);
+  const isAudio = /voice|audio|\.mp3|\.ogg|\.opus|\.wav|\.m4a/i.test(trimmed);
+  const isVideo = /video|\.mp4|\.mkv|\.mov|\.webm/i.test(trimmed);
+  const fileType = isImage ? 'image' : isAudio ? 'voice' : isVideo ? 'video' : 'file';
+
+  return {
+    text,
+    attachments: [{
+      name: 'فایل',
+      url: '',
+      fileType,
+    }],
+  };
+};
+
 const extractStructuredContent = (value: unknown): ParsedNoteContent | null => {
+  if (Array.isArray(value)) {
+    const attachments = value.map(normalizeAttachment).filter(Boolean) as NoteAttachment[];
+    if (attachments.length > 0) {
+      return { text: '', attachments };
+    }
+  }
+
   if (!isObject(value)) return null;
 
   const text = String(value.text ?? value.content ?? '').trim();
@@ -105,20 +178,34 @@ const extractStructuredContent = (value: unknown): ParsedNoteContent | null => {
     ? value.attachments.map(normalizeAttachment).filter(Boolean) as NoteAttachment[]
     : [];
 
-  return { text, attachments };
+  if (attachments.length > 0 || text) {
+    return { text, attachments };
+  }
+
+  const single = normalizeAttachment(value);
+  if (single && (single.url || (single.name && single.name !== 'file'))) {
+    return { text: '', attachments: [single] };
+  }
+
+  return null;
 };
 
 export const parseNoteContent = (rawValue: unknown): ParsedNoteContent => {
   if (typeof rawValue === 'string') {
     const trimmed = rawValue.trim();
-    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
       try {
         const parsed = JSON.parse(trimmed);
         const structured = extractStructuredContent(parsed);
         if (structured) return structured;
       } catch {
-        // fall back to plain text
+        const recovered = recoverTruncatedAttachmentsJson(trimmed);
+        if (recovered) return recovered;
       }
+    }
+    if (isLikelyAttachmentJson(trimmed)) {
+      const recovered = recoverTruncatedAttachmentsJson(trimmed);
+      if (recovered) return recovered;
     }
     return { text: rawValue, attachments: [] };
   }

@@ -4027,8 +4027,8 @@ const extractImagePayload = (raw: any): {
 
 const CHAT_COMPLETIONS_TIMEOUT_MS = PROVIDER_REQUEST_TIMEOUT_MS;
 const CHAT_COMPLETION_CONTINUATION_LIMIT = 5;
-const DEFAULT_CHAT_MAX_TOKENS = 3500;
-const DEFAULT_REASONING_MAX_TOKENS = 4500;
+const DEFAULT_CHAT_MAX_TOKENS = 8192;
+const DEFAULT_REASONING_MAX_TOKENS = 16384;
 
 const buildContinuationMessages = (
   messages: Array<{ role: string; content: any }>,
@@ -4213,9 +4213,9 @@ const callChatCompletions = async (
         continue;
       }
       if (!isCompleteChatFinishReason(finishReason)) {
-        if (accumulatedContent.trim() && String(finishReason || '').trim() === 'length') {
+        if (accumulatedContent.trim()) {
           return {
-            content: `${accumulatedContent.trim()}\n\n[پاسخ به سقف خروجی رسید؛ ادامه کامل‌تری لازم است.]`,
+            content: accumulatedContent.trim(),
             attachments: accumulatedAttachments,
             provider: providerConfig.provider,
             model,
@@ -4224,7 +4224,7 @@ const callChatCompletions = async (
             baseUrl,
             raw: parsed,
             finishReason,
-            incomplete: true,
+            incomplete: String(finishReason || '').trim() === 'length',
             usageMetadata: mergeChatUsageMetadata(usageParts, { ...providerConfig, model }) || extractUsageMetadata(parsed, { ...providerConfig, model }),
           };
         }
@@ -4245,7 +4245,7 @@ const callChatCompletions = async (
     }
     if (accumulatedContent.trim()) {
       return {
-        content: `${accumulatedContent.trim()}\n\n[پاسخ به سقف خروجی رسید؛ ادامه کامل‌تری لازم است.]`,
+        content: accumulatedContent.trim(),
         attachments: accumulatedAttachments,
         provider: providerConfig.provider,
         model,
@@ -4486,9 +4486,7 @@ const callChatCompletionsStream = async (
   }
 
   return {
-    content: String(finishReason || '').trim() === 'length'
-      ? `${content.trim()}\n\n[پاسخ به سقف خروجی رسید؛ ادامه کامل‌تری لازم است.]`
-      : content.trim(),
+    content: content.trim(),
     attachments: [],
     provider: providerConfig.provider,
     model,

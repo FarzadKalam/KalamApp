@@ -1023,6 +1023,8 @@ const doesInternalNoteBelongToConversation = (
       && canCurrentUserAccessInternalSystemNote(row, normalizedCurrentUserId, currentRoleId);
   }
   if (key.startsWith(CHAT_GROUP_PREFIX)) return groupId === getChatGroupSelectionId(key);
+  const rowConversationKey = String(row?.conversation_key || metadata?.conversation_key || '').trim();
+  if (rowConversationKey && rowConversationKey === key) return true;
   if (!key.startsWith('direct:') || groupId || isInternalSystemNote(row)) return false;
   const userMentionMatches = normalizeIdArray(row?.mention_user_ids).some((targetUserId) => (
     buildDirectConversationKey(authorId, targetUserId) === key
@@ -3067,8 +3069,12 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
       const rowAuthorId = resolveInternalAuthorId(row);
       const rowMentionUserIds = normalizeIdArray(row?.mention_user_ids);
       const rowMentionRoleIds = normalizeIdArray(row?.mention_role_ids);
+      const rowConversationKey = String(row?.conversation_key || row?.metadata?.conversation_key || '').trim();
+      const directMatch = rowConversationKey.startsWith('direct:')
+        && rowConversationKey.split(':').slice(1).includes(profileId);
       const mightAffectCurrentUser = rowAuthorId === profileId
         || rowMentionUserIds.includes(profileId)
+        || directMatch
         || (
           Boolean(liveData.profile.roleId)
           && rowMentionRoleIds.includes(String(liveData.profile.roleId).trim())
@@ -3114,6 +3120,10 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
             new Date(left?.created_at || 0).getTime() - new Date(right?.created_at || 0).getTime()
           ));
         });
+      }
+      void refreshInternalConversations({ force: true });
+      if (selectedInternalSourceKey) {
+        void refreshInternalTimeline({ force: true });
       }
     };
     const unsubscribeNotes = noteInsertBus.subscribe(appendRealtimeNote);
@@ -3398,11 +3408,10 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
           return [...prev, row].sort((left: any, right: any) => compareIsoAsc(left?.created_at, right?.created_at));
         });
       }
-      if (
-        rowGroupId
-        || (activeConversation.channel === 'bot_direct' && rowDirectThreadId && activeConversation.key === `live:bot_direct:${rowDirectThreadId}`)
-      ) {
-        if (rowDirectThreadId) liveData.appendBotDirectMessage(row);
+      if (rowDirectThreadId) {
+        liveData.appendBotDirectMessage(row);
+      }
+      if (rowGroupId || rowDirectThreadId) {
         void liveData.refresh({ background: true });
         void refreshBotConversations({ force: true });
       }

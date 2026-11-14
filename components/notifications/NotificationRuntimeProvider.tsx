@@ -33,6 +33,7 @@ import {
   setUiNotificationOverlayItems,
   setUiNotificationOverlayViewer,
   setUiNotificationOverlayPagination,
+  setUiNotificationOverlayUnreadSummary,
 } from '../../utils/uiNotificationOverlayStore';
 import {
   botMessageInsertBus,
@@ -41,6 +42,7 @@ import {
   voipCallInsertBus,
 } from '../../utils/communicationRealtimeBus';
 import { dedupeAttachments, extractBotMessageAttachments } from '../../utils/messageAttachments';
+import { getAttachmentsPreviewLabel } from '../../utils/messagePreview';
 import { parseNoteContent, type NoteAttachment } from '../../utils/noteContent';
 import { canCurrentUserAccessInternalSystemNote, isInternalSystemNoteRow } from '../../utils/internalNoteAccess';
 import {
@@ -87,8 +89,15 @@ type OverlayFeedRow = {
   has_more?: boolean | null;
 };
 
-const COMMUNICATION_SECTIONS = ['notes', 'bot_messages', 'sms_messages', 'voip_calls'] as const;
-const ALERT_SECTIONS = ['tasks', 'responsibilities'] as const;
+const COMMUNICATION_SECTIONS = [
+  'notes',
+  'bot_messages',
+  'bot_group_messages',
+  'bot_direct_messages',
+  'sms_messages',
+  'voip_calls',
+] as const;
+const ALERT_SECTIONS = ['tasks', 'responsibilities', 'system_messages'] as const;
 const OVERLAY_SOURCE = 'notification-runtime';
 const isAbortRequestError = (error: any) => {
   const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
@@ -323,15 +332,21 @@ const resolveOverlayTitle = (row: OverlayFeedRow) => {
 const resolveOverlayBody = (row: OverlayFeedRow) => {
   if (row.section === 'responsibilities') return resolveResponsibilityOverlayBody(row);
   const attachments = resolveOverlayAttachments(row);
-  const body = String(row.body || '').trim();
-  if (body && !/^لینک$/i.test(body)) return body;
-  if (attachments.length > 0) {
-    const firstType = String(attachments[0]?.fileType || '').trim();
-    if (attachments.length > 1 && attachments.every((item) => String(item.fileType || '') === 'image')) return 'چند تصویر ارسال شد.';
-    if (firstType === 'image') return 'تصویر ارسال شد.';
-    if (firstType === 'video') return 'ویدیو ارسال شد.';
-    if (firstType === 'voice' || firstType === 'audio') return 'پیام صوتی ارسال شد.';
-    return 'فایل ارسال شد.';
+  const rawBody = String(row.body || '').trim();
+  const parsed = parseNoteContent(rawBody);
+  const combinedAttachments = dedupeAttachments([...attachments, ...parsed.attachments]);
+  const text = String(parsed.text || '').replace(/\s+/g, ' ').trim();
+  const isJsonText = /^\s*(\{|\[).*("attachments"|"file_url"|"url"|"mime_type"|"name":)/i.test(text);
+  const cleanText = isJsonText ? '' : text;
+
+  if (cleanText && !/^لینک$/i.test(cleanText)) {
+    if (combinedAttachments.length > 0) {
+      return `${cleanText} · ${getAttachmentsPreviewLabel(combinedAttachments)}`;
+    }
+    return cleanText;
+  }
+  if (combinedAttachments.length > 0) {
+    return getAttachmentsPreviewLabel(combinedAttachments);
   }
   return 'برای مشاهده جزئیات کلیک کنید.';
 };
@@ -1257,11 +1272,23 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
     setUiNotificationOverlayPagination(false, false, null);
   }, []);
 
+  const communicationUnread = sumNotificationUnread(summary, COMMUNICATION_SECTIONS);
+  const alertsUnread = sumNotificationUnread(summary, ALERT_SECTIONS);
+
+  useEffect(() => {
+    setUiNotificationOverlayUnreadSummary({
+      ready,
+      summary,
+      communicationUnread,
+      alertsUnread,
+    });
+  }, [alertsUnread, communicationUnread, ready, summary]);
+
   const value = useMemo<NotificationRuntimeValue>(() => ({
     ready,
     summary,
-    communicationUnread: sumNotificationUnread(summary, COMMUNICATION_SECTIONS),
-    alertsUnread: sumNotificationUnread(summary, ALERT_SECTIONS),
+    communicationUnread,
+    alertsUnread,
     revisions,
     refreshSummary,
     refreshOverlay,

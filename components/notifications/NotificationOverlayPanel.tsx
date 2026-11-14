@@ -39,6 +39,7 @@ import {
   snoozeUiNotificationOverlayItem,
   useUiNotificationOverlayPagination,
   useUiNotificationOverlayItems,
+  useUiNotificationOverlayUnreadSummary,
   setUiNotificationOverlayExpanded,
 } from '../../utils/uiNotificationOverlayStore';
 import type { OverlayNotificationChannel, UiNotificationOverlayItem } from '../../utils/uiNotificationOverlayStore';
@@ -278,6 +279,7 @@ const NotificationOverlayPanel: React.FC = () => {
   const location = useLocation();
   const tasks = useUploadTasks();
   const notifications = useUiNotificationOverlayItems();
+  const unreadSummary = useUiNotificationOverlayUnreadSummary();
   const overlayPagination = useUiNotificationOverlayPagination();
   const { message } = App.useApp();
   const { token } = theme.useToken();
@@ -298,6 +300,32 @@ const NotificationOverlayPanel: React.FC = () => {
   );
 
   const tabCounts = useMemo(() => {
+    if (unreadSummary.ready && unreadSummary.summary) {
+      const summary = unreadSummary.summary;
+      const botCount = (summary.bot_messages ?? 0) + (summary.bot_group_messages ?? 0) + (summary.bot_direct_messages ?? 0);
+      const agentCount = notifications.filter((item) => resolveNotificationTab(item) === 'agent').length;
+      const internalCount = (summary.notes ?? 0);
+      const activitiesCount = (summary.tasks ?? 0);
+      const responsibilitiesCount = (summary.responsibilities ?? 0);
+      const systemCount = (summary.system_messages ?? 0);
+      const smsCount = (summary.sms_messages ?? 0);
+      const voipCount = (summary.voip_calls ?? 0);
+      const emailCount = (summary.email_messages ?? 0);
+      const allCount = tasks.length + unreadSummary.communicationUnread + unreadSummary.alertsUnread + agentCount;
+      return {
+        all: allCount,
+        agent: agentCount,
+        internal: internalCount,
+        activities: activitiesCount,
+        responsibilities: responsibilitiesCount,
+        system: systemCount,
+        bot: botCount,
+        sms: smsCount,
+        email: emailCount,
+        voip: voipCount,
+        uploads: tasks.length,
+      };
+    }
     const counts: Record<OverlayFilterTab, number> = {
       all: tasks.length,
       agent: 0,
@@ -316,7 +344,7 @@ const NotificationOverlayPanel: React.FC = () => {
       counts[resolveNotificationTab(item)] += 1;
     });
     return counts;
-  }, [notifications, tasks.length]);
+  }, [notifications, tasks.length, unreadSummary]);
   const filteredNotifications = useMemo(() => {
     if (activeTab === 'all' || activeTab === 'uploads') return notifications;
     return notifications.filter((item) => resolveNotificationTab(item) === activeTab);

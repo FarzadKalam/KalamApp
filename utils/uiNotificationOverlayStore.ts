@@ -292,3 +292,38 @@ export const useUiNotificationOverlayPagination = () =>
     () => paginationSnapshot,
     () => paginationSnapshot,
   );
+
+export type UiNotificationOverlayUnreadSummary = {
+  ready: boolean;
+  communicationUnread: number;
+  alertsUnread: number;
+  summary: Record<string, number>;
+};
+
+const DEFAULT_UNREAD_SUMMARY: UiNotificationOverlayUnreadSummary = {
+  ready: false,
+  communicationUnread: 0,
+  alertsUnread: 0,
+  summary: {},
+};
+
+let unreadSummarySnapshot: UiNotificationOverlayUnreadSummary = DEFAULT_UNREAD_SUMMARY;
+
+export const setUiNotificationOverlayUnreadSummary = (patch: Partial<UiNotificationOverlayUnreadSummary>) => {
+  unreadSummarySnapshot = {
+    ...unreadSummarySnapshot,
+    ...patch,
+    ready: patch.ready ?? true,
+  };
+  emit();
+};
+
+export const useUiNotificationOverlayUnreadSummary = () =>
+  useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    () => unreadSummarySnapshot,
+    () => DEFAULT_UNREAD_SUMMARY,
+  );
