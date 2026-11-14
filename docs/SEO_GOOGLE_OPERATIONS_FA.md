@@ -2,6 +2,12 @@
 
 > این فایل مرجع اجرایی SEO پروژه است. هر تغییر مرتبط با سایت عمومی، محتوای عمومی، sitemap، robots، canonical، داده ساختاریافته، Search Console یا گزارش جستجو باید همین‌جا ثبت و به‌روز شود.
 
+### اصلاح اعلان، کامپوزر و فعالیت‌های داشبورد — 2026-11-15
+
+- وضعیت: نسخهٔ `3.5.1` با [CI کامل موفق](https://github.com/FarzadKalam/KalamApp/actions/runs/43642647893) و [انتشار همان خروجی](https://github.com/FarzadKalam/KalamApp/actions/runs/43643552125) فعال شد؛ منبع کد `f40997e29e5270be7b9c646434b6c80f35b123e5` است. فقط frontend و تابع `ai-assistant` مستقر شدند؛ migration اجرا نشد.
+- شواهد زنده: هر ۹ بررسی `index.html`، `sw.js` و `version.json` روی `tazesystem.ir`، `app.tazesystem.ir` و `kalam.tazesystem.ir` با پاسخ ۲۰۰ و هدر `no-cache, no-store, must-revalidate` موفق شدند؛ نسخه و مهر کش `3.5.1` و بدون token خام هستند. منشأ انتشار نیز نسخه و کامیت یادشده را اعلام می‌کند.
+- این انتشار رفع ایراد است و ورودی قابلیت تازه به `/updates` اضافه نشد. اقدام بعدی Search Console همچنان بررسی ایندکس و عملکرد از حساب مالک است؛ در این نوبت داده‌ای از آن حساب دریافت نشد. آزمون داخل حساب واقعی مطابق `docs/AI_RELEASE_ACCEPTANCE_TESTS_FA.md` پیگیری شود؛ پیش‌نمایش سنگین محلی در این نوبت نهایی نشد و ادعای بررسی بصری زندهٔ کامپوزر ثبت نمی‌شود.
+
 ### معرفی کارهای خودکار ایجنت‌ها — 2026-11-15
 
 - وضعیت: نسخهٔ `3.5.0` پس از تأیید صریح کاربر، با [CI کامل موفق](https://github.com/FarzadKalam/KalamApp/actions/runs/43637177837) و [انتشار موفق همان خروجی](https://github.com/FarzadKalam/KalamApp/actions/runs/43638067871) منتشر شد؛ منبع ساخت `cdde8b2a8639538e94e30ce2cf9b7baff025e162` است.
