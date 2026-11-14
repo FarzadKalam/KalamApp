@@ -22,17 +22,32 @@ function MainSidebar({ items, railItems, selectedKey, ancestorKeys, collapsed, o
     if (collapsed || isMobile) return;
     const dismiss = (event: PointerEvent) => {
       const target = event.target;
-      if (presentation === 'push' || !(target instanceof Element) || sidebarRef.current?.contains(target) || target.closest('.app-main-sider-submenu-popup')) return;
+      if (!(target instanceof Element)) return;
+      if (
+        target.closest('#workspace-sidebar-panel') ||
+        target.closest('.app-main-sider-submenu-popup') ||
+        target.closest('.workspace-sidebar-submenu') ||
+        target.closest('.app-main-rail')
+      ) {
+        return;
+      }
       onCollapsedChange(true);
+      setRequestedGroup(null);
     };
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.defaultPrevented) {
-      sidebarRef.current?.querySelector<HTMLElement>('.app-main-rail [aria-expanded="true"]')?.focus();
-      onCollapsedChange(true);
-    } };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented) {
+        sidebarRef.current?.querySelector<HTMLElement>('.app-main-rail [aria-expanded="true"]')?.focus();
+        onCollapsedChange(true);
+        setRequestedGroup(null);
+      }
+    };
     document.addEventListener('pointerdown', dismiss);
     document.addEventListener('keydown', escape);
-    return () => { document.removeEventListener('pointerdown', dismiss); document.removeEventListener('keydown', escape); };
-  }, [collapsed, isMobile, presentation, onCollapsedChange]);
+    return () => {
+      document.removeEventListener('pointerdown', dismiss);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [collapsed, isMobile, onCollapsedChange]);
   useEffect(() => { setRequestedGroup(null); }, [orgId, userId, selectedKey]);
   const displayedKey = !collapsed && requestedGroup ? requestedGroup : selectedKey;
   const logo = brandLogoUrl && failedLogoUrl !== brandLogoUrl
