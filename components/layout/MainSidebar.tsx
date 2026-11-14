@@ -91,7 +91,7 @@ function MainSidebar({ items, railItems, selectedKey, ancestorKeys, collapsed, o
       </nav>
       <footer className="app-drawer-footer"><ContextualTutorialButton contexts={contexts} viewer={viewer} buttonClassName="app-rail-item" /><TazeSystemAttribution collapsed={false} /></footer>
     </aside>}
-    {isMobile && <Drawer open={!collapsed} onClose={close} placement="right" title={<span className="app-drawer-brand">{logo}<span>{brandShortName}</span></span>} width="min(320px, calc(100vw - 20px))"
+    {isMobile && <Drawer open={!collapsed} onClose={close} placement="right" title={<span className="app-drawer-brand">{logo}<span>{brandShortName}</span></span>} width="min(360px, calc(100vw - 20px))"
       rootClassName={`app-module-drawer ${isDarkMode ? 'app-module-drawer-dark' : ''}`} zIndex={1200} destroyOnClose
       styles={{ body: { padding: '4px 8px 12px', background: isDarkMode ? '#1c1c1f' : '#fff' }, header: { background: isDarkMode ? '#1c1c1f' : '#fff' }, mask: { background: isMobile ? 'rgba(0,0,0,.24)' : 'rgba(0,0,0,.07)' } }}
       footer={<div className="app-drawer-footer"><ContextualTutorialButton contexts={contexts} viewer={viewer} buttonClassName="app-rail-item" /><TazeSystemAttribution collapsed={false} /></div>}>

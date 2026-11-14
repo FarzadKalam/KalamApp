@@ -301,6 +301,9 @@ html.dark .layout-main-scroll :is([class~="text-red-500"], [class~="text-red-600
 .app-module-drawer .sidebar-menu-label {
   min-width: 0;
   flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .app-main-sider-submenu-popup,
@@ -312,8 +315,8 @@ html.dark .layout-main-scroll :is([class~="text-red-500"], [class~="text-red-600
 .app-main-sider-submenu-popup .ant-menu,
 .workspace-sidebar-submenu .ant-menu {
   direction: rtl;
-  min-width: 220px;
-  max-width: min(320px, calc(100vw - 24px));
+  min-width: 280px;
+  max-width: min(400px, calc(100vw - 24px));
 }
 
 .dark .app-main-sider.ant-layout-sider,

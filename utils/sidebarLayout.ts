@@ -1,4 +1,4 @@
-export const SIDEBAR_LAYOUT = Object.freeze({ railWidth: 80, panelWidth: 260, contentGap: 12 });
+export const SIDEBAR_LAYOUT = Object.freeze({ railWidth: 80, panelWidth: 320, contentGap: 12 });
 
 export const resolveSidebarLayout = (pathname: string, isMobile: boolean, collapsed: boolean) => {
   const push = !isMobile && pathname === '/';
