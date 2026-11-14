@@ -16,6 +16,7 @@ export const AI_CAPABILITY_FEATURE_KEYS: Record<string, string> = {
   document_generation: 'ai_document_analysis',
   record_creation: 'ai_chat',
   process_operation: 'ai_chat',
+  agent_task: 'ai_background_agents',
   pricing_adjustment: 'ai_chat',
   agent_fast: 'ai_chat',
   context_compression: 'ai_chat',

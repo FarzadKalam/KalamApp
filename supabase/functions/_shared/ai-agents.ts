@@ -16,6 +16,7 @@ export const AI_AGENTS = {
   legal_assistant: { label: 'مهارت مشاوره حقوقی', description: 'بررسی حقوقی با تکیه بر منابع موجود', activity: 'در حال بررسی حقوقی' },
   record_creation: { label: 'مهارت ثبت اطلاعات', description: 'پیشنهاد ساخت یا ویرایش رکورد با تأیید شما', activity: 'در حال آماده‌سازی پیش‌نویس' },
   process_operation: { label: 'مهارت عملیات فرآیند', description: 'پیشنهاد اجرای فرآیند و تغییر مرحله با تأیید شما', activity: 'در حال بررسی فرآیند' },
+  agent_task: { label: 'مهارت کار خودکار', description: 'آماده‌سازی کار زمان‌دار یا رویدادی با تأیید شما', activity: 'در حال آماده‌سازی کار خودکار' },
   organization_data: { label: 'مهارت اطلاعات سازمان', description: 'بررسی داده‌های واقعی در محدودهٔ دسترسی کاربر', activity: 'در حال بررسی اطلاعات واقعی سازمان' },
   organization_knowledge: { label: 'مهارت دانش سازمان', description: 'بازیابی دانش و دستورالعمل‌های مجاز سازمان', activity: 'در حال بررسی دانش سازمان' },
   customer_reply_suggestion: { label: 'مهارت پیشنهاد پاسخ مشتری', description: 'پیشنهاد پاسخ برای پیام‌های مشتریان', activity: 'در حال آماده‌سازی پاسخ مشتری' },
@@ -26,7 +27,7 @@ export const AI_AGENTS = {
 } as const;
 
 export type AiAgentId = keyof typeof AI_AGENTS;
-export const AI_COMPOSER_AGENT_IDS = ['text_chat', 'document_analysis', 'voice_input', 'voice_output', 'image_generation', 'video_generation', 'document_generation', 'web_search', 'deep_reasoning', 'legal_assistant', 'record_creation', 'process_operation', 'free_chat'] as const satisfies readonly AiAgentId[];
+export const AI_COMPOSER_AGENT_IDS = ['text_chat', 'document_analysis', 'voice_input', 'voice_output', 'image_generation', 'video_generation', 'document_generation', 'web_search', 'deep_reasoning', 'legal_assistant', 'record_creation', 'process_operation', 'agent_task', 'free_chat'] as const satisfies readonly AiAgentId[];
 export type AiComposerAgentId = typeof AI_COMPOSER_AGENT_IDS[number];
 const ALIASES: Record<string, AiAgentId> = { auto_router: 'auto_decision', dashboard_chat: 'text_chat', record_chat: 'text_chat' };
 export function resolveAiAgentId(value: unknown): AiAgentId {
@@ -75,6 +76,7 @@ export const AI_ACTIVITY_ACTION_BY_CAPABILITY: Record<AiAgentId, AiActivityActio
   legal_assistant: 'legal_review',
   record_creation: 'record_mutation',
   process_operation: 'process_operation',
+  agent_task: 'workflow_action',
   organization_data: 'read_data',
   organization_knowledge: 'search_knowledge',
   customer_reply_suggestion: 'customer_reply',

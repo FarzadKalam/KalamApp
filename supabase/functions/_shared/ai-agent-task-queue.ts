@@ -8,6 +8,7 @@ export type DueAgentTask = { id: string; org_id: string; agent_task_revision: nu
 export const enqueueDueAgentTasks = async (ports: {
   loadDue: (nowIso: string, limit: number) => Promise<DueAgentTask[]>;
   enqueue: (input: { orgId: string; workflowId: string; revision: number; dueAt: string; nextRunAt: string | null; nowIso: string }) => Promise<string | null>;
+  rejectInvalid?: (task: DueAgentTask) => Promise<void>;
 }, now = new Date(), limit = 25) => {
   const nowIso = now.toISOString();
   const tasks = await ports.loadDue(nowIso, Math.min(100, Math.max(1, limit)));
@@ -17,14 +18,21 @@ export const enqueueDueAgentTasks = async (ports: {
       || !Number.isFinite(Date.parse(task.agent_task_next_run_at)) || Date.parse(task.agent_task_next_run_at) > now.getTime()) {
       result.rejected++; continue;
     }
+    let nextRunAt: string | null;
+    try { nextRunAt = nextAgentTaskRunAt(task.agent_task_config.schedule, now); }
+    catch {
+      result.rejected++;
+      // Remove a permanently corrupt oldest item from the due queue, so it
+      // cannot starve every tenant behind it. Transport failures stay retryable.
+      await ports.rejectInvalid?.(task);
+      continue;
+    }
     try {
-      const nextRunAt = nextAgentTaskRunAt(task.agent_task_config.schedule, now);
       const jobId = await ports.enqueue({ orgId: task.org_id, workflowId: task.id, revision: task.agent_task_revision,
         dueAt: task.agent_task_next_run_at, nextRunAt, nowIso });
       if (jobId) result.queued++;
     } catch {
-      // The caller's metrics expose rejected items; a corrupt schedule cannot
-      // cause a guessed delivery or prevent other due tenants from enqueueing.
+      // A transient database error must not pause a valid schedule.
       result.rejected++;
     }
   }

@@ -84,7 +84,7 @@ export const AGENT_TASK_CONVERSATION_PROMPT = `درخواست کار مداوم 
 وقتی دستور، زمان/رویداد، منابع و گیرنده روشن بود با prepare_agent_task فقط پیش‌نویس آماده کن. نتیجهٔ ابزار شامل کارت تأیید است؛ آن را دوباره با جدول یا JSON به کاربر نشان نده. فقط بگو کارت آمادهٔ بررسی است.
 برای ابهام واقعی از قرارداد سؤال‌های پویا استفاده کن. اگر کاربر گفت به خودم، شماره یا ایمیل تأییدشدهٔ پروفایل در اطلاعات ابزار را استفاده کن؛ دادهٔ ناشناخته نساز. منطقهٔ زمانی را صریح در کارت درج کن. برای یک رویداد on_create یا on_upsert فقط همان ماژول فعال‌کننده را مشخص کن.
 config: {version:1,agentKey,instruction,trigger:interval|on_create|on_upsert,schedule,sourceModuleIds,sourceLimit:100,notifyWhen:always|findings,deliveries:[{channel:chat}|{channel:sms,numbers:[...]}|{channel:email,addresses:[...],subject:...}]}.
-schedule برای interval: {kind:daily,at:HH:mm,timeZone:Asia/Tehran} یا weekly با weekdays صفر=یکشنبه تا شش=شنبه، monthly با day، interval با minutes حداقل۵، once با at تاریخ ISO دارای offset. برای رویداد schedule=null.
+schedule برای interval: {kind:daily,at:HH:mm,timeZone:Asia/Tehran} یا weekly با weekdays صفر=یکشنبه تا شش=شنبه، monthly با day و calendar:persian برای ماه شمسی یا calendar:gregory برای ماه میلادی، interval با minutes حداقل۵، once با at تاریخ ISO دارای offset. برای رویداد schedule=null.
 درخواست prepare_agent_task: {operation:create|update|pause|resume,name,workflowId:null|string,expectedRevision:null|number,config}.`;
 
 export const AGENT_TASK_TOOLS = [

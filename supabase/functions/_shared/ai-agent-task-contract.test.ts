@@ -44,6 +44,11 @@ describe('agent task contract', () => {
     expect(nextAgentTaskRunAt({ kind: 'weekly', at: '09:00', weekdays: [6], timeZone: 'Asia/Tehran' }, new Date('2026-11-14T06:00:00Z'))).toBe('2026-11-21T05:30:00.000Z');
     expect(nextAgentTaskRunAt({ kind: 'monthly', at: '09:00', day: 31, timeZone: 'Asia/Tehran' }, new Date('2026-02-01T00:00:00Z'))).toBe('2026-02-28T05:30:00.000Z');
   });
+  it('distinguishes Persian months from Gregorian months and clamps Esfand safely', () => {
+    const monthly = { kind: 'monthly' as const, at: '09:00', day: 1, calendar: 'persian' as const, timeZone: 'Asia/Tehran' };
+    expect(nextAgentTaskRunAt(monthly, new Date('2026-03-01T00:00:00Z'))).toBe('2026-03-21T05:30:00.000Z');
+    expect(nextAgentTaskRunAt({ ...monthly, day: 31 }, new Date('2026-03-01T00:00:00Z'))).toBe('2026-03-20T05:30:00.000Z');
+  });
   it('handles DST gaps and sends only once during an overlapping local hour', () => {
     expect(nextAgentTaskRunAt({ kind: 'daily', at: '02:30', timeZone: 'America/New_York' }, new Date('2026-03-08T05:00:00Z'))).toBe('2026-03-08T07:00:00.000Z');
     const fall = { kind: 'daily' as const, at: '01:30', timeZone: 'America/New_York' };

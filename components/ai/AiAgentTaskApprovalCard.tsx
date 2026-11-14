@@ -2,6 +2,8 @@ import React from 'react';
 import { Checkbox, Input, InputNumber, Select } from 'antd';
 import { getAgentTitleFa } from '../../utils/aiAgentCatalog';
 import { MODULES } from '../../moduleRegistry';
+import PersianDatePicker from '../PersianDatePicker';
+import { formatAgentTaskScheduleFa } from '../../utils/aiAgentTaskPresentation';
 
 type Props = { change: any; onChange: (change: any) => void; disabled?: boolean };
 const operations: Record<string, string> = { create: 'ساخت کار خودکار', update: 'ویرایش کار خودکار', pause: 'توقف کار خودکار', resume: 'ادامهٔ کار خودکار' };
@@ -33,13 +35,16 @@ const AiAgentTaskApprovalCard: React.FC<Props> = ({ change, onChange, disabled }
     </div>
     {config.trigger === 'interval' && schedule ? <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2"><Select aria-label="تکرار اجرا" value={schedule.kind} disabled={!editing} options={scheduleKinds} style={{ minWidth: 140 }}
-        onChange={kind => patchConfig({ schedule: { kind, timeZone: schedule.timeZone, ...(kind === 'interval' ? { minutes: 60 } : kind === 'once' ? { at: '' } : { at: '09:00', ...(kind === 'weekly' ? { weekdays: [6] } : kind === 'monthly' ? { day: 1 } : {}) }) } })} />
+        onChange={kind => patchConfig({ schedule: { kind, timeZone: schedule.timeZone, ...(kind === 'interval' ? { minutes: 60 } : kind === 'once' ? { at: '' } : { at: '09:00', ...(kind === 'weekly' ? { weekdays: [6] } : kind === 'monthly' ? { day: 1, calendar: 'persian' } : {}) }) } })} />
         {schedule.kind === 'interval' ? <InputNumber aria-label="فاصله اجرا به دقیقه" disabled={!editing} min={5} max={525600} value={schedule.minutes} onChange={minutes => patchSchedule({ minutes })} />
-          : <Input aria-label={schedule.kind === 'once' ? 'زمان دقیق اجرای یک‌باره' : 'ساعت اجرا'} dir="ltr" type={schedule.kind === 'once' ? 'text' : 'time'} style={{ width: schedule.kind === 'once' ? 280 : 130 }} disabled={!editing} value={schedule.at} placeholder={schedule.kind === 'once' ? '2026-12-01T09:00:00+03:30' : '09:00'} onChange={event => patchSchedule({ at: event.target.value })} />}
+          : schedule.kind === 'once' ? <PersianDatePicker type="DATETIME" value={schedule.at || null} disabled={!editing} pickerTitle="زمان اجرای کار" onChange={at => patchSchedule({ at })} />
+            : <Input aria-label="ساعت اجرا" dir="ltr" type="time" style={{ width: 130 }} disabled={!editing} value={schedule.at} onChange={event => patchSchedule({ at: event.target.value })} />}
         {schedule.kind === 'monthly' ? <InputNumber aria-label="روز ماه" min={1} max={31} disabled={!editing} value={schedule.day} onChange={day => patchSchedule({ day })} /> : null}
+        {schedule.kind === 'monthly' ? <Select aria-label="تقویم ماهانه" value={schedule.calendar || 'gregory'} disabled={!editing} style={{ minWidth: 130 }} options={[{ value: 'persian', label: 'ماه شمسی' }, { value: 'gregory', label: 'ماه میلادی' }]} onChange={calendar => patchSchedule({ calendar })} /> : null}
       </div>
       {schedule.kind === 'weekly' ? <Checkbox.Group aria-label="روزهای اجرا" disabled={!editing} options={weekdays.map((label, value) => ({ label, value }))} value={schedule.weekdays} onChange={days => patchSchedule({ weekdays: days })} /> : null}
       <label className="flex flex-wrap items-center gap-2"><span>منطقهٔ زمانی</span><Input aria-label="منطقهٔ زمانی" dir="ltr" style={{ width: 180 }} disabled={!editing} value={schedule.timeZone} onChange={event => patchSchedule({ timeZone: event.target.value })} /></label>
+      <div className="ai-approval-description">{formatAgentTaskScheduleFa(schedule)}</div>
     </div> : null}
     <div className="space-y-2"><div className="font-semibold">دریافت نتیجه</div>
       {config.deliveries.map((delivery: any, index: number) => {

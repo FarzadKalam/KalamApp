@@ -10,7 +10,7 @@ import EditableTable from '../EditableTable';
 export type AiRecordMutationDraft = {
   record_id?: string | null;
   record_title?: string | null;
-  /** هر پیش‌نویس در مودال افزودن سریع جداگانه انتخاب و تایید می‌شود. */
+  /** هر پیش‌نویس جدا انتخاب می‌شود؛ موارد منتخب یک‌جا تأیید می‌شوند. */
   selected?: boolean;
   fields: Record<string, any>;
   tables?: Record<string, any[]>;
@@ -22,6 +22,7 @@ type Props = {
   schema: any;
   records: AiRecordMutationDraft[];
   onChange: (records: AiRecordMutationDraft[]) => void;
+  disabled?: boolean;
 };
 
 const AiRecordMutationApprovalCard: React.FC<Props> = ({
@@ -30,6 +31,7 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
   schema,
   records,
   onChange,
+  disabled = false,
 }) => {
   const carouselRef = useRef<any>(null);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -66,12 +68,14 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
   }, [moduleConfig, moduleId, schema]);
 
   const updateField = (recordIndex: number, fieldKey: string, value: any) => {
+    if (disabled) return;
     onChange(records.map((record, index) => index === recordIndex
       ? { ...record, fields: { ...(record.fields || {}), [fieldKey]: value } }
       : record));
   };
 
   const updateSelection = (recordIndex: number, selected: boolean) => {
+    if (disabled) return;
     onChange(records.map((record, index) => index === recordIndex
       ? { ...record, selected }
       : record));
@@ -138,6 +142,7 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
                 </span>
                 <Switch
                   size="small"
+                  disabled={disabled}
                   checked={record.selected !== false}
                   onChange={(checked) => updateSelection(recordIndex, checked)}
                   aria-label={actionType === 'update_record_from_prompt' ? 'انتخاب برای ویرایش' : 'انتخاب برای ثبت'}
@@ -147,7 +152,7 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
                 {visibleFields.map((field) => (
                   <div key={field.key} className="min-w-0 [&_.ant-form-item]:mb-2 [&_.ant-form-item-label]:pb-0.5">
                     <SmartFieldRenderer
-                      field={field}
+                      field={disabled ? { ...field, readonly: true } : field}
                       value={record.fields?.[field.key]}
                       onChange={(value) => updateField(recordIndex, String(field.key), value)}
                       forceEditMode
@@ -183,7 +188,7 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
                             moduleId={moduleId}
                             parentValues={record.fields || {}}
                             relationOptions={{}}
-                            canEditModule
+                            canEditModule={!disabled}
                             canViewField={(fieldKey: string) => allowedColumns.has(String(fieldKey || '').trim())}
                             onChange={(nextRows: any[]) => onChange(records.map((item, index) => index === recordIndex
                               ? { ...item, tables: { ...(item.tables || {}), [table.key]: nextRows } }

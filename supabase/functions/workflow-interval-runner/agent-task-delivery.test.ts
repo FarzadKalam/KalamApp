@@ -11,6 +11,29 @@ const branch = source.slice(branchStart, branchEnd);
 const compile = (body: string, deps: Record<string, unknown>) => new Function(...Object.keys(deps),
   ts.transpileModule(body, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText)(...Object.values(deps));
 
+describe('actual conversational task workflow adapter', () => {
+  const start = source.indexOf("  if (action.type === 'run_agent_task') {");
+  const end = source.indexOf("  if (action.type === 'send_message')", start);
+  it.each(['scheduled', 'event'])('carries the approved revision and durable claim for %s runs', async mode => {
+    const fetch = vi.fn(async (_url, request) => {
+      const body = JSON.parse(request.body);
+      expect(body).toMatchObject({ workflowId: 'workflow-1', orgId: 'org-1', revision: 3, executionKey: 'claim-1', eventRecordId: mode === 'event' ? 'record-1' : null });
+      expect(body.deadlineAt).toBeGreaterThan(Date.now());
+      expect(request.headers['x-kalam-internal']).toBe('workflow-interval-runner');
+      return new Response('{"status":"success","message":"ارسال تأیید شد"}');
+    });
+    const run = compile(`return async function(action) { const config = action.config; const orgId='org-1',url='https://test.invalid',key='fake',recordId='${mode === 'event' ? 'record-1' : 'workflow-1'}'; ${source.slice(start,end)} }`, {
+      fetch, actionResult: (_action: any, status: string) => ({ status }),
+    });
+    const config = { __workflow_id: 'workflow-1', __durable_execution_key: 'claim-1',
+      ...(mode === 'scheduled' ? { workflow_id: 'workflow-1', task_revision: 3 } : { revision: 3 }) };
+    expect((await run({ type: 'run_agent_task', config })).status).toBe('success');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect((await run({ type: 'run_agent_task', config: { ...config, __durable_execution_key: '' } })).status).toBe('failed');
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
 const aiDelivery = (statuses: Record<string, string>, channels: string[]) => {
   const executeAction = vi.fn(async (action: any) => ({ action_type: action.type, status: statuses[action.type], recipient_count: 1 }));
   const run = compile(`return async function(action) {

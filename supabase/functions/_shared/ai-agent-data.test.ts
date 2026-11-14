@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { compileAgentDataQuery, readAgentDataPage, countAgentData, aggregateAgentData, type AgentDataAccess } from './ai-agent-data';
+import { compileAgentDataQuery, readAgentDataPage, countAgentData, aggregateAgentData, agentRecordMatchesViewConditions, type AgentDataAccess } from './ai-agent-data';
 const orgId = '00000000-0000-4000-8000-000000000001';
 const userId = '00000000-0000-4000-8000-000000000002';
 const access = (scope: 'all' | 'own' | 'team' | 'subtree' = 'all'): AgentDataAccess => ({ orgId, userId,
@@ -8,6 +8,16 @@ const access = (scope: 'all' | 'own' | 'team' | 'subtree' = 'all'): AgentDataAcc
     fields: [{ key: 'name', label: 'نام', type: 'text' }, { key: 'status', label: 'وضعیت', type: 'select' }] }] });
 
 describe('central agent data gateway', () => {
+  it('applies server-owned view conditions to reads and counts and fails closed for unsupported relations', async () => {
+    const scope = access(); scope.modules[0].viewConditions = { conditions_all: [{ field: 'status', operator: 'eq', value: 'active' }], conditions_any: [{ field: 'name', operator: 'eq', value: 'الف' }] };
+    const query = compileAgentDataQuery(scope, { moduleId: 'marketing_leads' });
+    expect(query.params.and).toBe('(status.eq."active",or(name.eq."الف"))');
+    expect(agentRecordMatchesViewConditions({ status: 'active', name: 'ب' }, scope.modules[0].viewConditions)).toBe(false);
+    expect(agentRecordMatchesViewConditions({ status: 'active', name: 'الف' }, scope.modules[0].viewConditions)).toBe(true);
+    scope.modules[0].viewConditions = { conditions_all: [{ field: 'customer.owner', operator: 'eq', value: userId }] };
+    expect(() => compileAgentDataQuery(scope, { moduleId: 'marketing_leads' })).toThrow('مسیر امن');
+    expect(agentRecordMatchesViewConditions({}, scope.modules[0].viewConditions)).toBe(false);
+  });
   it('counts beyond every page while preserving organization and owner filters', async () => {
     const count = vi.fn(async (_table, params) => { expect(params.org_id).toBe(`eq.${orgId}`); expect(params.and).toContain(userId); return 45001; });
     expect(await countAgentData(access('own'), { moduleId: 'marketing_leads' }, count)).toMatchObject({ count: 45001, coverage: 'complete' });

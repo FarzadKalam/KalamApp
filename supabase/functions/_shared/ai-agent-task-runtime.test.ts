@@ -76,6 +76,13 @@ describe('agent task runtime', () => {
     expect((await executeAgentTask(ports, input)).status).toBe('skipped');
     expect(ports.deliver).not.toHaveBeenCalled();
   });
+  it('never treats a truncated sample with no findings as a completed negative check', async () => {
+    const { ports, input } = fixture();
+    ports.readSource = vi.fn(async (_actor, moduleId) => ({ moduleId, records: [], truncated: true }));
+    ports.generate = vi.fn(async () => ({ answer: 'موردی نیست.', hasFindings: false }));
+    await expect(executeAgentTask(ports, input)).rejects.toThrow('بررسی کامل');
+    expect(ports.deliver).not.toHaveBeenCalled();
+  });
   it('bounds the total source data and explicitly reports truncated coverage', async () => {
     const { ports, workflow, input } = fixture();
     (workflow.config as any).sourceModuleIds = ['marketing_leads', 'invoices'];

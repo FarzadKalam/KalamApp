@@ -2,6 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { enqueueDueAgentTasks } from './ai-agent-task-queue';
 
 describe('agent task queue producer', () => {
+  it('quarantines a corrupt oldest schedule but leaves transient enqueue failures retryable', async () => {
+    const invalid = { id: 'bad', org_id: 'org-1', agent_task_revision: 1, agent_task_next_run_at: '2026-11-14T05:30:00Z', agent_task_config: { schedule: { kind: 'daily' as const, at: '09:00', timeZone: '' } } };
+    const valid = { ...invalid, id: 'valid', agent_task_config: { schedule: { ...invalid.agent_task_config.schedule, timeZone: 'Asia/Tehran' } } };
+    const rejectInvalid = vi.fn(async () => {});
+    const result = await enqueueDueAgentTasks({ loadDue: async () => [invalid, valid], rejectInvalid,
+      enqueue: async () => { throw new Error('transient network failure'); } }, new Date('2026-11-14T07:00:00Z'));
+    expect(result.rejected).toBe(2); expect(rejectInvalid).toHaveBeenCalledExactlyOnceWith(invalid);
+  });
   it('coalesces missed occurrences into one job and advances from current time', async () => {
     const enqueue = vi.fn(async () => 'job-1');
     const result = await enqueueDueAgentTasks({ loadDue: async () => [{ id: 'workflow-1', org_id: 'org-1', agent_task_revision: 2,

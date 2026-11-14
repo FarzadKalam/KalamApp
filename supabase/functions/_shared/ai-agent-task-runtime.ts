@@ -16,7 +16,7 @@ export type AgentTaskRuntimePorts = {
   // Adapter must apply CURRENT record and field ACL; a service key is not ACL.
   readSource: (actor: AgentTaskActor, moduleId: string, limit: number) => Promise<AgentTaskSource>;
   canReadEvent?: (actor: AgentTaskActor, moduleId: string, recordId: string) => Promise<boolean>;
-  generate: (input: { actor: AgentTaskActor; config: AgentTaskConfig; sources: AgentTaskSource[]; eventRecordId: string | null }) => Promise<{ answer: string; hasFindings: boolean }>;
+  generate: (input: { actor: AgentTaskActor; config: AgentTaskConfig; sources: AgentTaskSource[]; eventRecordId: string | null }) => Promise<{ answer: string; hasFindings: boolean; coverageComplete?: boolean }>;
   deliver: (actor: AgentTaskActor, delivery: AgentTaskDelivery, input: { answer: string; workflow: AgentTaskWorkflow; config: AgentTaskConfig; executionKey: string }) => Promise<Omit<AgentTaskDeliveryResult, 'channel'>>;
 };
 
@@ -77,10 +77,13 @@ export const executeAgentTask = async (ports: AgentTaskRuntimePorts, input: {
     throw new Error('نتیجهٔ بررسی ایجنت کامل و معتبر نیست؛ نتیجه‌ای ارسال نشد.');
   }
   const sourceCounts = sources.map(source => ({ moduleId: source.moduleId, count: source.records.length, truncated: source.truncated }));
+  const partial = sources.some(source => source.truncated) && result.coverageComplete !== true;
+  if (partial && !result.hasFindings) throw new Error('بررسی کامل داده‌ها تأیید نشد؛ نتیجهٔ ناقص به‌عنوان نبود مورد گزارش نمی‌شود.');
   if (config.notifyWhen === 'findings' && !result.hasFindings) {
     return { ...stopped('بررسی انجام شد؛ موردی مطابق شرط اطلاع‌رسانی پیدا نشد.'), sourceCounts };
   }
-  const answer = result.answer.trim().replace(/\b[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}\b/gi, '[شناسهٔ داخلی]');
+  const answer = (partial ? 'این نتیجه از بررسی بخشی از داده‌های مجاز به دست آمده است؛ بررسی همهٔ داده‌ها تأیید نشده است.\n\n' : '')
+    + result.answer.trim().replace(/\b[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}\b/gi, '[شناسهٔ داخلی]');
   const deliveries: AgentTaskDeliveryResult[] = [];
   for (const delivery of config.deliveries) {
     // Cancel/pause/permission revocation while a model was running must win.
@@ -93,6 +96,9 @@ export const executeAgentTask = async (ports: AgentTaskRuntimePorts, input: {
     const liveActor = assertActor(await ports.loadActor(input.orgId, workflow.creatorId));
     assertChannels(liveActor);
     if (accessFingerprint !== liveActor.accessFingerprint) throw new Error('محدودهٔ دسترسی هنگام بررسی تغییر کرد؛ ارسال نتیجه لغو شد.');
+    if (input.eventRecordId && (!ports.canReadEvent || !await ports.canReadEvent(liveActor, config.sourceModuleIds[0], input.eventRecordId))) {
+      throw new Error('دسترسی به رکورد فعال‌کننده پیش از ارسال تغییر کرد؛ ارسال نتیجه لغو شد.');
+    }
     try {
       deliveries.push({ ...(await ports.deliver(liveActor, delivery, { answer, workflow: current, config, executionKey: input.executionKey })), channel: delivery.channel });
     } catch {

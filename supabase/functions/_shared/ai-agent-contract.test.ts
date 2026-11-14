@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { normalizeAgentPlan, shouldEscalateCustomerAutoReply } from './ai-agent-contract';
 
 describe('AI agent plan contract', () => {
+  it('routes scheduling to its own approval and never creates a normal task record instead', () => {
+    const plan = normalizeAgentPlan({ capabilities: ['agent_task','record_creation','process_operation'], confidence: 'high' }, {
+      policy: 'interactive_chat', allowedCapabilities: ['agent_task','record_creation','process_operation'], isKnownModule: () => true,
+    });
+    expect(plan.capabilities).toEqual(['agent_task']); expect(plan.steps[0].requires_confirmation).toBe(true);
+    expect(normalizeAgentPlan({ capabilities: ['agent_task'] }, { policy: 'customer_auto_reply', allowedCapabilities: ['agent_task'], isKnownModule: () => true }).capabilities).toEqual([]);
+  });
   it('accepts only enabled capabilities and registered modules', () => {
     const plan = normalizeAgentPlan({
       capabilities: ['record_creation', 'unknown_operator'],

@@ -20,6 +20,7 @@ export const supportsNativeAgentSkill = (model: Model, skill: string): boolean =
   }
   if (skill === 'deep_reasoning') return metadata.supports_reasoning === true || metadata.reasoning === true;
   if (skill === 'web_search') return metadata.supports_web_search === true;
+  if (skill === 'legal_assistant' || skill === 'customer_reply_suggestion') return tags.some(tag => ['dashboard_chat','record_chat','workflow_ai_prompt'].includes(tag));
   return false;
 };
 

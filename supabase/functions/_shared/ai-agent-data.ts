@@ -79,7 +79,9 @@ export const compileAgentDataQuery = (access: AgentDataAccess, input: AgentDataQ
   conditions.push(...permitted.all.map(permissionPredicate));
   if (permitted.any.length) conditions.push(`or(${permitted.any.map(permissionPredicate).join(',')})`);
   for (const filter of filters) {
-    if (!allowedFields.has(filter.field)) throw new Error('فیلد شرط در محدودهٔ دسترسی نیست.');
+    const referenceFilter = filter.field === 'id' && (filter.operator === 'eq' && uuid(filter.value)
+      || filter.operator === 'in' && Array.isArray(filter.value) && filter.value.every(uuid));
+    if (!allowedFields.has(filter.field) && !referenceFilter) throw new Error('فیلد شرط در محدودهٔ دسترسی نیست.');
     if (filter.operator === 'in') {
       if (!Array.isArray(filter.value) || !filter.value.length || filter.value.length > 100) throw new Error('فهرست مقادیر شرط معتبر نیست.');
       conditions.push(`${filter.field}.in.(${filter.value.map(quote).join(',')})`);

@@ -4,7 +4,7 @@ export type AgentTaskSchedule =
   | { kind: 'interval'; minutes: number; timeZone: string }
   | { kind: 'daily'; at: string; timeZone: string }
   | { kind: 'weekly'; at: string; weekdays: number[]; timeZone: string }
-  | { kind: 'monthly'; at: string; day: number; timeZone: string };
+  | { kind: 'monthly'; at: string; day: number; timeZone: string; calendar?: 'persian' | 'gregory' };
 
 export type AgentTaskDelivery =
   | { channel: 'chat' }
@@ -64,7 +64,11 @@ export const normalizeAgentTaskSchedule = (input: any): AgentTaskSchedule => {
       if (!weekdays.length) return fail('حداقل یک روز هفته را مشخص کنید.');
       return { kind: 'weekly', at: time(input.at), weekdays, timeZone: zone };
     }
-    case 'monthly': return { kind: 'monthly', at: time(input.at), day: integer(input.day, 1, 31, 'روز ماه'), timeZone: zone };
+    case 'monthly': {
+      if (input.calendar != null && !['persian','gregory'].includes(input.calendar)) return fail('تقویم ماهانه معتبر نیست.');
+      return { kind: 'monthly', at: time(input.at), day: integer(input.day, 1, 31, 'روز ماه'), timeZone: zone,
+        ...(input.calendar ? { calendar: input.calendar } : {}) };
+    }
     default: return fail('نوع زمان‌بندی پشتیبانی نمی‌شود.');
   }
 };
@@ -152,11 +156,17 @@ export const nextAgentTaskRunAt = (scheduleInput: AgentTaskSchedule, after: Date
   if (schedule.kind === 'interval') return new Date(after.getTime() + schedule.minutes * 60000).toISOString();
   const local = localParts(after, schedule.timeZone);
   const [hour, minute] = schedule.at.split(':').map(Number);
+  const persianDay = schedule.kind === 'monthly' && schedule.calendar === 'persian'
+    ? new Intl.DateTimeFormat('en-US', { calendar: 'persian', numberingSystem: 'latn', timeZone: 'UTC', day: 'numeric' }) : null;
   for (let offset = 0; offset <= 370; offset++) {
     const day = new Date(Date.UTC(local.year, local.month - 1, local.day + offset));
     if (schedule.kind === 'weekly' && !schedule.weekdays.includes(day.getUTCDay())) continue;
-    const monthEnd = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth() + 1, 0)).getUTCDate();
-    if (schedule.kind === 'monthly' && day.getUTCDate() !== Math.min(schedule.day, monthEnd)) continue;
+    if (schedule.kind === 'monthly') {
+      const nextDay = new Date(day.getTime() + 86400000);
+      const current = persianDay ? Number(persianDay.format(day)) : day.getUTCDate();
+      const next = persianDay ? Number(persianDay.format(nextDay)) : nextDay.getUTCDate();
+      if (current !== schedule.day && !(current < schedule.day && next === 1)) continue;
+    }
     const candidate = wallClockInstant({ year: day.getUTCFullYear(), month: day.getUTCMonth() + 1, day: day.getUTCDate(), hour, minute }, schedule.timeZone);
     if (candidate > after.getTime()) return new Date(candidate).toISOString();
   }

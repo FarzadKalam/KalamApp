@@ -3822,14 +3822,15 @@ async function executeAction(
   if (action.type === 'run_agent_task') {
     const workflowId = String(config.__workflow_id || '').trim();
     const executionKey = String(config.__durable_execution_key || '').trim();
-    if (!workflowId || workflowId !== config.workflow_id || !executionKey) {
+    if (!workflowId || (config.workflow_id && workflowId !== config.workflow_id) || !executionKey) {
       return actionResult(action, 'failed', 'کار ایجنت باید از صف پایدار و گردش‌کار تأییدشده اجرا شود.');
     }
     const response = await fetch(`${url.replace(/\/+$/, '')}/functions/v1/ai-assistant`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}`,
         apikey: key, 'x-kalam-internal': 'workflow-interval-runner' },
       body: JSON.stringify({ action: 'run_agent_task', orgId, workflowId,
-        revision: config.task_revision, executionKey, eventRecordId: recordId === workflowId ? null : recordId }),
+        revision: config.task_revision ?? config.revision, executionKey, eventRecordId: recordId === workflowId ? null : recordId,
+        deadlineAt: Date.now() + 110000 }),
       signal: AbortSignal.timeout(120000),
     });
     const result = await response.json().catch(() => ({}));
@@ -5877,6 +5878,10 @@ async function runIntervalEnqueueTick(url: string, key: string): Promise<Record<
       p_org_id: input.orgId, p_workflow_id: input.workflowId, p_expected_revision: input.revision,
       p_due_at: input.dueAt, p_next_run_at: input.nextRunAt, p_now: input.nowIso,
     }),
+    rejectInvalid: async task => {
+      await dbPatch(url, key, 'workflows', `org_id=eq.${task.org_id}&id=eq.${task.id}&agent_task_revision=eq.${task.agent_task_revision}&agent_task_next_run_at=eq.${encodeURIComponent(task.agent_task_next_run_at)}`,
+        { is_active: false, agent_task_next_run_at: null, description: 'برنامهٔ زمانی معتبر نیست؛ پیش از ادامه، تنظیمات کار را اصلاح کنید.', updated_at: now.toISOString() });
+    },
   }, now);
   const stats = { checkedWorkflows: 0, queuedWorkflows: 0, queuedScans: 0, agentTasks: agentTaskStats };
   const workflows = await fetchQueuedWorkflows(url, key);

@@ -156,6 +156,7 @@ jobs:
           supabase/functions/_shared/ai-tool-calls.test.ts supabase/functions/ai-assistant/data-tool-loop.test.ts
           supabase/functions/_shared/ai-agent-task-contract.test.ts supabase/functions/_shared/ai-agent-task-runtime.test.ts
           supabase/functions/_shared/ai-agent-task-management.test.ts supabase/functions/ai-assistant/agent-task-execution.test.ts
+          supabase/functions/_shared/ai-agent-task-lifecycle.test.ts components/ai/AiAgentTaskApprovalCard.test.tsx
           supabase/functions/_shared/ai-agent-task-queue.test.ts supabase/functions/workflow-interval-runner/agent-task-delivery.test.ts
           supabase/functions/ai-assistant/record-execution.test.ts supabase/functions/_shared/ai-record-contract.test.ts supabase/functions/_shared/ai-agents.test.ts supabase/functions/_shared/ai-agent-contract.test.ts supabase/functions/_shared/ai-agent-inbox.test.ts utils/__tests__/aiAaasFoundation.test.ts
           components/ai/AiMessageComposer.test.tsx components/ai/AiGenerationStatusCard.test.tsx

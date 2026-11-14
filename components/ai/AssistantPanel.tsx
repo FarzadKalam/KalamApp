@@ -1242,10 +1242,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       ...(await result),
       ...(route?.agentPlan ? { agentPlan: route.agentPlan } : {}),
     });
-    if (clarificationQuestions.length > 0 && !route.primaryModelOnly) {
+    if (clarificationQuestions.length > 0 && !route.primaryModelOnly
+      && !route.suggestedCapabilities.some((capability: string) => ['agent_task','record_creation','process_operation'].includes(capability))) {
       return {
         success: true,
-        answer: `برای انجام دقیق درخواست، لطفاً این موارد را مشخص کنید:\n${clarificationQuestions.map((question: string) => `• ${question}`).join('\n')}`,
+        answer: 'برای ادامهٔ درخواست، این موارد را مشخص کنید.',
+        questions: normalizeAiQuestions(clarificationQuestions),
         agentPlan: route.agentPlan,
       };
     }
@@ -3715,6 +3717,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 moduleId={String(pendingAiAction.targetModuleId || pendingAiAction.proposedPayload?.target_module_id || '').trim()}
                 schema={pendingAiAction.schema}
                 records={pendingRecordMutationRecords}
+                disabled={confirmingAiAction}
                 onChange={records => setPendingAiAction((current: any) => current ? { ...current,
                   proposedPayload: { ...(current.proposedPayload || {}), records, payload: records[0]?.fields || {} },
                 } : current)}

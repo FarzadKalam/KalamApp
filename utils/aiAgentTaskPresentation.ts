@@ -7,7 +7,7 @@ export const formatAgentTaskScheduleFa = (schedule: AgentTaskSchedule | null): s
   if (schedule.kind === 'interval') return `هر ${schedule.minutes.toLocaleString('fa-IR')} دقیقه · ${zone}`;
   if (schedule.kind === 'daily') return `هر روز ساعت ${at} · ${zone}`;
   if (schedule.kind === 'weekly') return `${schedule.weekdays.map(day => dayNames[day]).join('، ')} ساعت ${at} · ${zone}`;
-  if (schedule.kind === 'monthly') return `روز ${schedule.day.toLocaleString('fa-IR')} هر ماه میلادی، ساعت ${at} · ${zone}`;
+  if (schedule.kind === 'monthly') return `روز ${schedule.day.toLocaleString('fa-IR')} هر ماه ${schedule.calendar === 'persian' ? 'شمسی' : 'میلادی'}، ساعت ${at} · ${zone}`;
   try { return `یک‌بار ${new Date(schedule.at).toLocaleString('fa-IR', { timeZone: schedule.timeZone })} · ${zone}`; }
   catch { return 'زمان اجرا نیازمند بررسی است'; }
 };
