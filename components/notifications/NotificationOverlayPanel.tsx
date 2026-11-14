@@ -41,7 +41,6 @@ import {
   useUiNotificationOverlayItems,
   setUiNotificationOverlayExpanded,
 } from '../../utils/uiNotificationOverlayStore';
-import type { UiNotificationOverlayItem } from '../../utils/uiNotificationOverlayStore';
 import { countNotificationOverlayTabs, resolveNotificationOverlayTab as resolveNotificationTab, type NotificationOverlayTab as OverlayFilterTab } from '../../utils/notificationOverlayCategories';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
