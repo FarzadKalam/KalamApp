@@ -11,6 +11,7 @@ import {
 import { getWorkflowMessageChannels, WORKFLOW_MESSAGE_CHANNEL_LABELS } from '../shared/workflowMessageAction';
 
 const ACTION_TYPE_LABELS_FA: Partial<Record<WorkflowActionType, string>> = {
+  run_agent_task: 'اجرای کار خودکار ایجنت',
   send_note_sms: 'ارسال یادداشت + اطلاع‌رسانی پیامکی',
   send_telegram_bot: 'ارسال پیام در گروه توسط بات (قدیمی)',
   send_bale_bot: 'ارسال پیام در گروه توسط بات (قدیمی)',

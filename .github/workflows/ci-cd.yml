@@ -152,7 +152,10 @@ jobs:
         timeout-minutes: 10
         run: >-
           npx vitest run supabase/functions/ai-assistant/operational-preflight.test.ts supabase/functions/_shared/ai-gateway.test.ts
+          supabase/functions/_shared/ai-native-skills.test.ts supabase/functions/_shared/ai-agent-data.test.ts
+          supabase/functions/_shared/ai-tool-calls.test.ts supabase/functions/ai-assistant/data-tool-loop.test.ts
           supabase/functions/_shared/ai-agent-task-contract.test.ts supabase/functions/_shared/ai-agent-task-runtime.test.ts
+          supabase/functions/_shared/ai-agent-task-management.test.ts supabase/functions/ai-assistant/agent-task-execution.test.ts
           supabase/functions/_shared/ai-agent-task-queue.test.ts supabase/functions/workflow-interval-runner/agent-task-delivery.test.ts
           supabase/functions/ai-assistant/record-execution.test.ts supabase/functions/_shared/ai-record-contract.test.ts supabase/functions/_shared/ai-agents.test.ts supabase/functions/_shared/ai-agent-contract.test.ts supabase/functions/_shared/ai-agent-inbox.test.ts utils/__tests__/aiAaasFoundation.test.ts
           components/ai/AiMessageComposer.test.tsx components/ai/AiGenerationStatusCard.test.tsx
@@ -195,7 +198,8 @@ jobs:
       - name: AI assistant dependency checks
         run: |
           npm run ai:schemas:check
-          deno check --node-modules-dir=none supabase/functions/_shared/ai-agent-task-contract.ts supabase/functions/_shared/ai-agent-task-runtime.ts supabase/functions/_shared/ai-agent-task-queue.ts
+          deno check --node-modules-dir=none supabase/functions/_shared/ai-agent-task-management.ts supabase/functions/_shared/ai-agent-task-contract.ts supabase/functions/_shared/ai-agent-task-runtime.ts supabase/functions/_shared/ai-agent-task-queue.ts
+          deno check --node-modules-dir=none supabase/functions/_shared/ai-agent-data.ts supabase/functions/_shared/ai-native-skills.ts supabase/functions/_shared/ai-tool-calls.ts
           deno check --node-modules-dir=none supabase/functions/_shared/ai-agents.ts supabase/functions/ai-assistant/index.ts supabase/functions/api-gateway/index.ts supabase/functions/webhook-delivery/index.ts supabase/functions/user-admin/index.ts supabase/functions/bot-admin/index.ts supabase/functions/bot-webhook/index.ts supabase/functions/report-runtime/index.ts supabase/functions/activity-performance/index.ts
 
       - name: Messaging attachment and viewer isolation regression checks

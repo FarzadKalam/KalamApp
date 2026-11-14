@@ -395,8 +395,9 @@ describe('AssistantPanel AI operators', () => {
     expect(findFetchBody('chat_stream')).toBeFalsy();
     expect(findBody('run_task_bundle').previewOnly).toBe(true);
     expect(findBody('run_task_bundle').recordMutationMode).toBe(mutationMode);
-    await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy());
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(`تایید و ${mutationMode === 'create' ? 'ثبت' : 'ویرایش'}`) }));
+    await waitFor(() => expect(screen.getByRole('button', { name: new RegExp(`تأیید و ${mutationMode === 'create' ? 'ثبت' : 'ویرایش'}`) })).toBeTruthy());
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`تأیید و ${mutationMode === 'create' ? 'ثبت' : 'ویرایش'}`) }));
     await waitFor(() => expect(findBody('confirm_action')).toBeTruthy());
     expect(findBody('confirm_action').proposedRecords).toHaveLength(2);
     expect(getBodies().filter((body) => body.action === 'confirm_action')).toHaveLength(1);

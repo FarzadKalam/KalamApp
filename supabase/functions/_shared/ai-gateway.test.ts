@@ -7,6 +7,20 @@ const catalog = [
   { id: 'voice-only', provider: 'test', is_active: true, capability_tags: ['voice_output'] },
 ];
 describe('operational model slot resolution', () => {
+  it('keeps native image analysis on the selected primary even with an old analysis slot', () => {
+    const result = tryResolveModelSlot({ slot: 'document_analysis', catalogRows: catalog,
+      orgAiSettings: { selected_models: { __primary_model: 'tenant-main', document_analysis: 'sales-model' } } });
+    expect(result?.model).toBe('tenant-main'); expect(result?.source).toBe('org_primary');
+  });
+  it('recognizes catalog vision metadata without requiring an artificial skill model tag', () => {
+    const vision = { ...catalog[1], metadata: { input_modalities: ['text', 'image'] } };
+    expect(tryResolveModelSlot({ slot: 'document_analysis', catalogRows: [catalog[0], vision],
+      agentConfig: { agent_key: 'sales_leads', model_override: 'sales-model' } })?.model).toBe('sales-model');
+  });
+  it('uses an analysis specialist when the chosen primary has no native analysis support', () => {
+    expect(tryResolveModelSlot({ slot: 'document_analysis', catalogRows: catalog,
+      orgAiSettings: { selected_models: { __primary_model: 'sales-model', document_analysis: 'tenant-main' } } })?.model).toBe('tenant-main');
+  });
   it.each(['record_creation', 'process_operation', 'pricing_adjustment', 'agent_task'])('runs %s on the primary agent model without invented catalog tags', slot => {
     expect(catalog.some(row => row.capability_tags.includes(slot))).toBe(false);
     expect(resolveCapabilityModelSlot(slot)).toBe('primary');

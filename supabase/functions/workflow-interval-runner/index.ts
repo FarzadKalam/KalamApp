@@ -1580,6 +1580,8 @@ async function shouldSkipWorkflowIntervalRecord(
 ): Promise<boolean> {
   if (isDeletedLikeWorkflowRecord(record)) return true;
   const recordId = String(record?.id || '').trim();
+
+
   if (await isWorkflowRecordInRecycleBin(url, key, orgId, sourceTable, recordId)) return true;
 
   if (sourceTable === 'tasks') {
@@ -3817,6 +3819,28 @@ async function executeAction(
   }
   const recordId = String(record?.id || '').trim();
 
+  if (action.type === 'run_agent_task') {
+    const workflowId = String(config.__workflow_id || '').trim();
+    const executionKey = String(config.__durable_execution_key || '').trim();
+    if (!workflowId || workflowId !== config.workflow_id || !executionKey) {
+      return actionResult(action, 'failed', 'کار ایجنت باید از صف پایدار و گردش‌کار تأییدشده اجرا شود.');
+    }
+    const response = await fetch(`${url.replace(/\/+$/, '')}/functions/v1/ai-assistant`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}`,
+        apikey: key, 'x-kalam-internal': 'workflow-interval-runner' },
+      body: JSON.stringify({ action: 'run_agent_task', orgId, workflowId,
+        revision: config.task_revision, executionKey, eventRecordId: recordId === workflowId ? null : recordId }),
+      signal: AbortSignal.timeout(120000),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !['success','skipped','failed'].includes(result.status)) {
+      return actionResult(action, 'failed', 'اجرای کار خودکار ایجنت تأیید نشد.');
+    }
+    return actionResult(action, result.status, result.message, { details: {
+      delivery_results: result.deliveries || [], source_counts: result.sourceCounts || [],
+    } });
+  }
+
   // اکشن چندکانالهٔ جدید یک لایهٔ هماهنگ‌کننده است و هر کانال را با مسیر
   // تثبیت‌شدهٔ پیشین اجرا می‌کند؛ بنابراین گردش‌کارهای ذخیره‌شده تغییر معنا نمی‌دهند.
   if (action.type === 'send_message') {
@@ -5188,6 +5212,7 @@ async function executeDurableAction(
   context?: DurableActionContext,
 ): Promise<ActionExecutionResult> {
   if (!context?.parentExecutionKey) {
+    if (action.type === 'run_agent_task') return actionResult(action, 'failed', 'برای اجرای کار ایجنت، کلید اجرای پایدار لازم است.');
     return executeActionWithRetry(action, record, moduleId, orgId, url, key, actorUserId);
   }
 
@@ -5217,7 +5242,7 @@ async function executeDurableAction(
   }
 
   try {
-    const result = await executeActionWithRetry(action, record, moduleId, orgId, url, key, actorUserId);
+    const result = await executeActionWithRetry({ ...action, config: { ...action.config, __durable_execution_key: actionKey } }, record, moduleId, orgId, url, key, actorUserId);
     await callRpc(url, key, 'complete_workflow_action_execution', {
       p_execution_key: actionKey,
       p_status: result.status === 'failed' ? 'failed' : 'succeeded',

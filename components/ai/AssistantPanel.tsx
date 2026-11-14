@@ -38,10 +38,11 @@ import { extractAiMessageAttachments, normalizeAiMessageText } from '../../utils
 import ComposerAttachmentChips, { type ComposerAttachmentChipItem } from '../common/ComposerAttachmentChips';
 import AiMessageRenderer from './AiMessageRenderer';
 import { type AiRecordMutationDraft } from './AiRecordMutationApprovalCard';
-import QuickRecordFormModal from './QuickRecordFormModal';
+import AiRecordMutationApprovalCard from './AiRecordMutationApprovalCard';
 import AiQuestionCard from './AiQuestionCard';
 import { normalizeAiQuestions, presentAiQuestionResponse } from '../../supabase/functions/_shared/ai-questions';
 import AiProcessOperationApprovalCard from './AiProcessOperationApprovalCard';
+import AiAgentTaskApprovalCard from './AiAgentTaskApprovalCard';
 import {
   buildAgentAccessMapFromOverviewAgents,
   getAgentDefinition,
@@ -466,6 +467,14 @@ const buildLocalGenerationConfirmation = (params: {
 };
 
 const buildPendingActionRevisionPrompt = (pendingAction: any, text: string) => {
+  if (pendingAction?.actionType === 'agent_task_batch') return [
+    'این پیش‌نویس‌های کار خودکار را با حفظ اطلاعات قبلی طبق اصلاح کاربر دوباره با prepare_agent_task آماده کن. هیچ کاری هنوز تأیید نشده است.',
+    JSON.stringify(pendingAction.actions.map((item: any) => item.payload)), text,
+  ].join('\n');
+  if (pendingAction?.actionType === 'manage_agent_task') return [
+    'کاربر می‌خواهد همین پیش‌نویس کار خودکار را اصلاح کند؛ اطلاعات قبلی را حفظ و فقط اصلاح درخواست‌شده را اعمال کن. دوباره با prepare_agent_task کارت آماده کن.',
+    JSON.stringify(pendingAction.payload), 'اصلاح کاربر:', text,
+  ].join('\n');
   const proposedPayload = pendingAction?.proposedPayload || pendingAction?.proposed_payload || {};
   const payload = proposedPayload?.payload && typeof proposedPayload.payload === 'object' ? proposedPayload.payload : {};
   const records = Array.isArray(proposedPayload?.records) && proposedPayload.records.length
@@ -578,7 +587,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const [recordCreationTargetModuleId, setRecordCreationTargetModuleId] = useState<string | null>(null);
   const [processOperationMode, setProcessOperationMode] = useState(false);
   const [pendingAiAction, setPendingAiAction] = useState<any | null>(null);
-  const [quickRecordFormOpen, setQuickRecordFormOpen] = useState(false);
   const [confirmingAiAction, setConfirmingAiAction] = useState(false);
   const [rememberGenerationPreference, setRememberGenerationPreference] = useState(false);
   const [skipGenerationConfirmationByKind, setSkipGenerationConfirmationByKind] = useState<Record<string, boolean>>({});
@@ -732,12 +740,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     if (pendingAiAction?.actionType === 'confirm_generation') setRememberGenerationPreference(false);
   }, [pendingAiAction?.id, pendingAiAction?.actionType]);
 
-  useEffect(() => {
-    const actionType = String(pendingAiAction?.actionType || '');
-    if (actionType === 'create_record_from_prompt' || actionType === 'update_record_from_prompt') {
-      setQuickRecordFormOpen(true);
-    }
-  }, [pendingAiAction?.id, pendingAiAction?.actionType]);
 
   useEffect(() => {
     if (active) return undefined;
@@ -1828,7 +1830,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const submitChat = useCallback(async (rawText?: string, inputKind = 'text') => {
     const text = String(rawText ?? input).trim();
     if (!text || submitting) return;
-    const assistantText = pendingAiAction && activeRecordCreationSchema
+    const assistantText = pendingAiAction && (activeRecordCreationSchema || ['manage_agent_task', 'agent_task_batch'].includes(pendingAiAction.actionType))
       ? buildPendingActionRevisionPrompt(pendingAiAction, text)
       : text;
     const shouldStartProcessGuideThread = false;
@@ -2528,7 +2530,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const submitTaskBundle = useCallback(async () => {
     const prompt = input.trim();
     if (submitting || (!prompt && bundleInputs.length === 0)) return;
-    const assistantPrompt = pendingAiAction && activeRecordCreationSchema && prompt
+    const assistantPrompt = pendingAiAction && (activeRecordCreationSchema || ['manage_agent_task', 'agent_task_batch'].includes(pendingAiAction.actionType)) && prompt
       ? buildPendingActionRevisionPrompt(pendingAiAction, prompt)
       : prompt;
     const effectiveCapabilities = (() => {
@@ -2836,7 +2838,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         const data = await callAssistant(finalConfirmBody);
         message.success('درخواست تایید شد و اجرا شد.');
         setPendingAiAction(null);
-        setQuickRecordFormOpen(false);
         const nextThreadId = String(data?.threadId || finalConfirmBody?.threadId || threadId || '').trim();
         if (data?.threadId) setThreadId(String(data.threadId));
         if (rememberGenerationPreference && generationKind && nextThreadId) {
@@ -2872,6 +2873,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       const data = await callAssistant({
         action: 'confirm_action',
         actionLogId: actionId,
+        ...(pendingAiAction?.actionType === 'agent_task_batch' ? {
+          actionLogIds: pendingAiAction.actions.filter((item: any) => item.selected !== false).map((item: any) => item.id),
+          proposedTasks: Object.fromEntries(pendingAiAction.actions.filter((item: any) => item.selected !== false).map((item: any) => [item.id, item.payload])),
+        } : {}),
+        proposedTask: pendingAiAction?.actionType === 'manage_agent_task' ? pendingAiAction.payload : undefined,
         proposedRecords,
         selectedOperationIndexes: proposedOperations,
       });
@@ -2895,7 +2901,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           : String(data?.message || 'اقدام پیشنهادی با موفقیت تایید و اجرا شد.'),
       );
       setPendingAiAction(null);
-      setQuickRecordFormOpen(false);
       await loadThread();
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'اجرای اقدام تاییدشده ناموفق بود.'));
@@ -3704,11 +3709,30 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 </Checkbox>
               </div>
             ) : null}
-            {pendingRecordMutationType && pendingRecordMutationRecords.length > 0 ? (
-              <Button size="small" onClick={() => setQuickRecordFormOpen(true)}>
-                بررسی و ویرایش فرم
-              </Button>
+            {pendingRecordMutationType && pendingAiAction ? (
+              <AiRecordMutationApprovalCard
+                actionType={pendingRecordMutationType}
+                moduleId={String(pendingAiAction.targetModuleId || pendingAiAction.proposedPayload?.target_module_id || '').trim()}
+                schema={pendingAiAction.schema}
+                records={pendingRecordMutationRecords}
+                onChange={records => setPendingAiAction((current: any) => current ? { ...current,
+                  proposedPayload: { ...(current.proposedPayload || {}), records, payload: records[0]?.fields || {} },
+                } : current)}
+              />
             ) : null}
+            {pendingAiAction?.actionType === 'manage_agent_task' ? (
+              <AiAgentTaskApprovalCard change={pendingAiAction.payload} disabled={confirmingAiAction}
+                onChange={payload => setPendingAiAction((current: any) => current ? { ...current, payload } : current)} />
+            ) : null}
+            {pendingAiAction?.actionType === 'agent_task_batch' ? pendingAiAction.actions.map((item: any, index: number) => (
+              <div key={item.id} className="ai-approval-section">
+                <Checkbox checked={item.selected !== false} disabled={confirmingAiAction} onChange={event => setPendingAiAction((current: any) => ({ ...current,
+                  actions: current.actions.map((action: any, itemIndex: number) => itemIndex === index ? { ...action, selected: event.target.checked } : action),
+                }))}>انتخاب این کار</Checkbox>
+                <AiAgentTaskApprovalCard change={item.payload} disabled={confirmingAiAction || item.selected === false}
+                  onChange={payload => setPendingAiAction((current: any) => ({ ...current, actions: current.actions.map((action: any, itemIndex: number) => itemIndex === index ? { ...action, payload } : action) }))} />
+              </div>
+            )) : null}
             {pendingProcessOperations.length > 0 ? (
               <AiProcessOperationApprovalCard
                 operations={pendingProcessOperations}
@@ -3727,15 +3751,14 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 : 'برای اصلاح، توضیح جدید را در کادر پیام بنویسید یا فایل صوتی بفرستید؛ دستیار آن را به همین پیش‌نویس اضافه می‌کند.'}
             </div>
             <Space size={6} className="mt-2">
-              {pendingRecordMutationType ? (
-                <Button type="primary" size="small" loading={confirmingAiAction} onClick={() => setQuickRecordFormOpen(true)}>
-                  بررسی و تایید در فرم
-                </Button>
-              ) : (
-                <Button type="primary" size="small" loading={confirmingAiAction} onClick={() => void confirmPendingAiAction()}>
-                  تایید و اجرا
-                </Button>
-              )}
+              <Button type="primary" size="small" loading={confirmingAiAction}
+                disabled={Boolean((pendingRecordMutationType && pendingRecordMutationRecords.every(record => record.selected === false))
+                  || (pendingAiAction.actionType === 'agent_task_batch' && pendingAiAction.actions.every((item: any) => item.selected === false)))}
+                onClick={() => void confirmPendingAiAction()}>
+                {pendingRecordMutationType
+                  ? `تأیید و ${pendingRecordMutationType === 'update_record_from_prompt' ? 'ویرایش' : 'ثبت'} ${pendingRecordMutationRecords.filter(record => record.selected !== false).length.toLocaleString('fa-IR')} مورد`
+                  : pendingAiAction.actionType === 'manage_agent_task' ? 'تأیید و اعمال کار' : 'تایید و اجرا'}
+              </Button>
               <Button size="small" onClick={() => setInput((prev) => String(prev || '').trim() ? prev : String(pendingAiAction?.actionType || '') === 'confirm_generation' ? 'دستور ساخت را این‌طور اصلاح کن: ' : 'این پیش‌نویس را این‌طور اصلاح کن: ')} disabled={confirmingAiAction}>
                 ویرایش با پیام
               </Button>
@@ -3746,11 +3769,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                   const currentId = String(pendingAiAction?.id || '').trim();
                   setPendingAiAction(null);
                   if (currentId && !currentId.startsWith('local-generation-')) {
-                    void callAssistant({
-                      action: 'resolve_waiting_approval',
-                      actionLogId: currentId,
-                      decision: 'reject',
-                    }).catch(() => undefined);
+                    void Promise.all((pendingAiAction.actionType === 'agent_task_batch' ? pendingAiAction.actions.map((item: any) => item.id) : [currentId]).map((id: string) => callAssistant({
+                      action: 'resolve_waiting_approval', actionLogId: id, decision: 'reject',
+                    }))).catch(() => undefined);
                   }
                 }}
                 disabled={confirmingAiAction}
@@ -3843,27 +3864,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
 
         </div>
       </div>
-      {pendingRecordMutationType && pendingAiAction ? (
-        <QuickRecordFormModal
-          open={quickRecordFormOpen}
-          actionType={pendingRecordMutationType}
-          moduleId={String(pendingAiAction?.targetModuleId || pendingAiAction?.proposedPayload?.target_module_id || '').trim()}
-          moduleLabel={pendingAiAction?.title || pendingAiAction?.schema?.moduleLabel || null}
-          schema={pendingAiAction?.schema}
-          records={pendingRecordMutationRecords}
-          loading={confirmingAiAction}
-          onChange={(records) => setPendingAiAction((current: any) => current ? {
-            ...current,
-            proposedPayload: {
-              ...(current.proposedPayload || {}),
-              records,
-              payload: records[0]?.fields || {},
-            },
-          } : current)}
-          onCancel={() => setQuickRecordFormOpen(false)}
-          onConfirm={() => void confirmPendingAiAction()}
-        />
-      ) : null}
       <Modal
         open={shareOpen}
         title="اشتراک‌گذاری گفتگو"

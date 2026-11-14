@@ -7,6 +7,7 @@ export type AgentTaskWorkflow = {
 export type AgentTaskActor = {
   userId: string; orgId: string; active: boolean; canRunTasks: boolean;
   allowedAgentKeys: string[]; allowedModuleIds: string[]; allowedDeliveryChannels: string[];
+  accessFingerprint?: string;
 };
 export type AgentTaskSource = { moduleId: string; records: unknown[]; truncated: boolean };
 export type AgentTaskRuntimePorts = {
@@ -14,6 +15,7 @@ export type AgentTaskRuntimePorts = {
   loadActor: (orgId: string, userId: string) => Promise<AgentTaskActor | null>;
   // Adapter must apply CURRENT record and field ACL; a service key is not ACL.
   readSource: (actor: AgentTaskActor, moduleId: string, limit: number) => Promise<AgentTaskSource>;
+  canReadEvent?: (actor: AgentTaskActor, moduleId: string, recordId: string) => Promise<boolean>;
   generate: (input: { actor: AgentTaskActor; config: AgentTaskConfig; sources: AgentTaskSource[]; eventRecordId: string | null }) => Promise<{ answer: string; hasFindings: boolean }>;
   deliver: (actor: AgentTaskActor, delivery: AgentTaskDelivery, input: { answer: string; workflow: AgentTaskWorkflow; config: AgentTaskConfig; executionKey: string }) => Promise<Omit<AgentTaskDeliveryResult, 'channel'>>;
 };
@@ -43,6 +45,7 @@ export const executeAgentTask = async (ports: AgentTaskRuntimePorts, input: {
     return actor;
   };
   const actor = assertActor(await ports.loadActor(input.orgId, workflow.creatorId));
+  const accessFingerprint = actor.accessFingerprint;
   const config = normalizeAgentTaskConfig(workflow.config, { agentKeys: actor.allowedAgentKeys, moduleIds: actor.allowedModuleIds });
   const assertChannels = (current: AgentTaskActor) => {
     if (config.deliveries.some(delivery => !current.allowedDeliveryChannels.includes(delivery.channel))) {
@@ -53,6 +56,9 @@ export const executeAgentTask = async (ports: AgentTaskRuntimePorts, input: {
     }
   };
   assertChannels(actor);
+  if (input.eventRecordId && (!ports.canReadEvent || !await ports.canReadEvent(actor, config.sourceModuleIds[0], input.eventRecordId))) {
+    return stopped('رکورد فعال‌کننده در محدودهٔ دسترسی جاری صاحب کار نیست.');
+  }
 
   const sources: AgentTaskSource[] = [];
   // One total bound across sources, with truncation explicitly reported.
@@ -86,6 +92,7 @@ export const executeAgentTask = async (ports: AgentTaskRuntimePorts, input: {
     }
     const liveActor = assertActor(await ports.loadActor(input.orgId, workflow.creatorId));
     assertChannels(liveActor);
+    if (accessFingerprint !== liveActor.accessFingerprint) throw new Error('محدودهٔ دسترسی هنگام بررسی تغییر کرد؛ ارسال نتیجه لغو شد.');
     try {
       deliveries.push({ ...(await ports.deliver(liveActor, delivery, { answer, workflow: current, config, executionKey: input.executionKey })), channel: delivery.channel });
     } catch {

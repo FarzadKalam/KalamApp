@@ -1,4 +1,5 @@
 import type { AgentKey } from './ai-agent-catalog.ts';
+import { NATIVE_AGENT_SKILLS, supportsNativeAgentSkill } from './ai-native-skills.ts';
 
 export type ModelSlot =
   | 'primary'
@@ -104,6 +105,8 @@ export const modelSupportsSlot = (model: AiModelCatalogRow, slot: ModelSlot): bo
   if (slot === 'primary') {
     return tags.some((tag) => PRIMARY_MODEL_CAPABILITIES.has(tag));
   }
+  if (NATIVE_AGENT_SKILLS.has(slot) && model.metadata?.native_skills?.[slot] === false) return false;
+  if (NATIVE_AGENT_SKILLS.has(slot) && supportsNativeAgentSkill(model, slot)) return true;
   const accepted = [
     slot,
     ...(CAPABILITY_SELECTION_ALIASES[slot] || []),
@@ -266,6 +269,21 @@ export const tryResolveModelSlot = (input: ResolveModelSlotInput): ResolvedModel
         catalogRow: saasAgentRow,
         source: 'saas_agent_default',
       };
+    }
+  }
+
+  // Native skills stay with the selected agent/primary model. An old dedicated
+  // slot must not delegate vision/reasoning when that model can do it itself.
+  // An explicit request-level override above still takes precedence.
+  if (NATIVE_AGENT_SKILLS.has(input.slot)) {
+    for (const [rawId, source] of [
+      [selectedModels[PRIMARY_MODEL_DEFAULT_KEY], 'org_primary'],
+      [saasDefaults[PRIMARY_MODEL_DEFAULT_KEY], 'saas_slot_default'],
+    ] as const) {
+      const primary = acceptIfValid(rawId);
+      if (primary && supportsNativeAgentSkill(primary, input.slot)) {
+        return { model: primary.id, provider: String(primary.provider || 'avalai'), catalogRow: primary, source };
+      }
     }
   }
 

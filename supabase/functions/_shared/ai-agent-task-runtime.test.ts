@@ -53,11 +53,22 @@ describe('agent task runtime', () => {
     expect((await executeAgentTask(ports, input)).status).toBe('skipped');
     expect(ports.deliver).not.toHaveBeenCalled();
   });
+  it('does not react to an event record outside the current actor scope', async () => {
+    const { ports, input } = fixture();
+    ports.canReadEvent = vi.fn(async () => false);
+    expect((await executeAgentTask(ports, { ...input, eventRecordId: 'not-permitted' })).status).toBe('skipped');
+    expect(ports.generate).not.toHaveBeenCalled(); expect(ports.deliver).not.toHaveBeenCalled();
+  });
   it('revalidates permissions after generation before sending', async () => {
     const { ports, actor, input } = fixture();
     ports.generate = vi.fn(async () => { actor.canRunTasks = false; return { answer: 'گزارش', hasFindings: true }; });
     await expect(executeAgentTask(ports, input)).rejects.toThrow();
     expect(ports.deliver).not.toHaveBeenCalled();
+  });
+  it('cancels delivery when field or row access changes during generation', async () => {
+    const { ports, actor, input } = fixture(); actor.accessFingerprint = 'scope-before';
+    ports.generate = vi.fn(async () => { actor.accessFingerprint = 'scope-after'; return { answer: 'گزارش', hasFindings: true }; });
+    await expect(executeAgentTask(ports, input)).rejects.toThrow('دسترسی'); expect(ports.deliver).not.toHaveBeenCalled();
   });
   it('does not send when the model found nothing under a findings-only policy', async () => {
     const { ports, input } = fixture();
