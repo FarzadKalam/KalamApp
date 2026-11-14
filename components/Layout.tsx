@@ -516,7 +516,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       };
 
       if ('children' in item && Array.isArray(item.children) && item.children.length > 0) {
-        nextItem.popupClassName = 'app-main-sider-submenu-popup';
+        nextItem.popupClassName = 'app-main-sider-submenu-popup workspace-sidebar-submenu';
         nextItem.popupOffset = [-8, 4];
         nextItem.children = mapSidebarMenuItems(item.children);
       }
