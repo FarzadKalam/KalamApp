@@ -10,10 +10,10 @@ import '../../components/dashboard/Dashboard.css';
 const items = [
   { key: '/', label: 'داشبورد', icon: <DashboardOutlined /> },
   { key: 'finance', label: 'امور مالی', icon: <BankOutlined />, children: [
-    { key: '/invoices', label: 'فاکتورها' },
-    { key: 'reports', label: 'گزارش‌های مالی', children: [{ key: '/reports/sales', label: 'گزارش فروش' }] },
+    { key: '/invoices', label: 'فاکتورها', icon: <BankOutlined /> },
+    { key: 'reports', label: 'گزارش‌های مالی', icon: <BankOutlined />, children: [{ key: '/reports/sales', label: 'گزارش فروش', icon: <BankOutlined /> }] },
   ] },
-  { key: 'people', label: 'مخاطبان', icon: <TeamOutlined />, children: [{ key: '/customers', label: 'مشتریان' }, { key: '/suppliers', label: 'تأمین‌کنندگان' }] },
+  { key: 'people', label: 'مخاطبان', icon: <TeamOutlined />, children: [{ key: '/customers', label: 'مشتریان', icon: <TeamOutlined /> }, { key: '/suppliers', label: 'تأمین‌کنندگان', icon: <TeamOutlined /> }] },
 ];
 const Preview = () => {
   const [pathname, setPathname] = useState('/');
@@ -30,7 +30,8 @@ const Preview = () => {
     if ('children' in item && Array.isArray(item.children)) return { ...item, label: <span className="sidebar-menu-label">{item.label}</span>, children: decorate(item.children) || [] };
     const href = 'key' in item ? String(item.key) : '';
     if (!href.startsWith('/') || !('label' in item)) return item;
-    return { ...item, label: <a className="sidebar-menu-link" href={href} onClick={event => { event.preventDefault(); event.stopPropagation(); navigate(href); }}><span className="sidebar-menu-link__text">{item.label}</span></a> };
+    const icon = 'icon' in item ? item.icon : null;
+    return { ...item, icon: icon ? <a className="sidebar-menu-icon-link" href={href} onClick={event => { event.preventDefault(); event.stopPropagation(); navigate(href); }}>{icon}</a> : undefined, label: <a className="sidebar-menu-link" href={href} onClick={event => { event.preventDefault(); event.stopPropagation(); navigate(href); }}><span className="sidebar-menu-link__text">{item.label}</span></a> };
   });
   return <ConfigProvider direction="rtl" theme={{ algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm, token: { fontFamily: 'Peyda, Tahoma, sans-serif' } }}>
     <div className="workspace-chrome" data-sidebar-mode={layout.mode} style={{ minHeight: '100vh', color: 'var(--workspace-text)' }}>

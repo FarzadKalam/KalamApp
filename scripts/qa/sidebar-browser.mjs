@@ -51,13 +51,14 @@ try {
       const range = document.createRange(); range.selectNodeContents(element);
       const text = range.getBoundingClientRect();
       const row = element.closest('.ant-menu-item, .ant-menu-submenu-title').getBoundingClientRect();
-      return { label: element.textContent, text: { top: text.top, bottom: text.bottom, width: text.width }, row: { top: row.top, bottom: row.bottom } };
+      return { label: element.textContent, text: { top: text.top, bottom: text.bottom, left: text.left, right: text.right, width: text.width }, row: { top: row.top, bottom: row.bottom, left: row.left, right: row.right } };
     }));
     // Glyph bounds may extend one pixel beyond the line box in Peyda.
-    for (const item of labels) assert.ok(item.text.width > 4 && item.text.top >= item.row.top - 2 && item.text.bottom <= item.row.bottom + 2, `Menu text must fit inside its row: ${JSON.stringify(item)}`);
+    assert.ok(labels.length > 0, 'The menu scope contains visible labels');
+    for (const item of labels) assert.ok(item.text.width > 4 && item.text.top >= item.row.top - 2 && item.text.bottom <= item.row.bottom + 2 && item.text.left >= item.row.left && item.text.right <= item.row.right, `Menu text must fit inside its row: ${JSON.stringify(item)}`);
   };
   await assertLabelsVisible(panel);
-  assert.ok(await panel.locator('.ant-menu-item-selected a').evaluate(el => {
+  assert.ok(await panel.locator('.ant-menu-item-selected a.sidebar-menu-link').evaluate(el => {
     const range = document.createRange(); range.selectNodeContents(el);
     const text = range.getBoundingClientRect(), row = el.closest('.ant-menu-item').getBoundingClientRect();
     return text.width > 0 && text.top >= row.top && text.bottom <= row.bottom;
@@ -77,7 +78,9 @@ try {
   assert.ok((await popups.first().boundingBox()).x < (await panel.boundingBox()).x, 'RTL submenu opens to the left');
   await popups.first().locator('.ant-menu-submenu-title').filter({ hasText: 'گزارش‌های مالی' }).hover();
   await page.waitForFunction(() => [...document.querySelectorAll('.workspace-sidebar-submenu')].filter(el => el.getBoundingClientRect().width > 0 && getComputedStyle(el).visibility !== 'hidden').length >= 2);
-  await page.getByRole('menuitem', { name: 'گزارش فروش', exact: true }).click();
+  await assertLabelsVisible(popups.nth(1));
+  await page.screenshot({ path: `${output}/submenu-light.png`, fullPage: true });
+  await popups.nth(1).getByRole('link', { name: 'گزارش فروش', exact: true }).click();
   await panel.waitFor({ state: 'detached' });
   assert.ok(page.url().endsWith('/sidebar-test/index.html'), 'Menu links use client navigation without reloading the document');
   await page.getByRole('button', { name: 'صفحه مشتریان', exact: true }).click();
@@ -110,7 +113,12 @@ try {
   });
   await page.waitForFunction(() => !document.querySelector('.app-sidebar-panel').getAnimations({ subtree: true }).some(animation => animation.playState === 'running'));
   await page.screenshot({ path: `${output}/desktop-dark.png`, fullPage: true });
-  assert.equal(await panel.locator('.ant-menu-item-selected a').evaluate(el => getComputedStyle(el).color), 'rgb(255, 255, 255)', 'Selected record links inherit the readable menu color');
+  await panel.locator('.ant-menu-submenu-title').filter({ hasText: 'امور مالی' }).hover();
+  await popups.first().waitFor();
+  await assertLabelsVisible(popups.first());
+  await page.screenshot({ path: `${output}/submenu-dark.png`, fullPage: true });
+  await page.mouse.move(20, 800);
+  assert.equal(await panel.locator('.ant-menu-item-selected a.sidebar-menu-link').evaluate(el => getComputedStyle(el).color), 'rgb(255, 255, 255)', 'Selected record links inherit the readable menu color');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   assert.equal(await page.locator('.app-workspace-content').evaluate(el => getComputedStyle(el).transitionDuration), '0s');
   await page.setViewportSize({ width: 390, height: 844 });
@@ -118,7 +126,7 @@ try {
   const drawer = page.locator('.ant-drawer-body');
   await drawer.locator('.ant-menu-submenu-title').filter({ hasText: 'امور مالی' }).click();
   await assertLabelsVisible(drawer);
-  await drawer.getByRole('menuitem', { name: 'فاکتورها', exact: true }).click();
+  await drawer.getByRole('link', { name: 'فاکتورها', exact: true }).click();
   await page.locator('.ant-drawer-content-wrapper').waitFor({ state: 'hidden' });
   assert.equal(await page.locator('.app-main-rail').count(), 0);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -132,7 +140,8 @@ try {
   assert.deepEqual(errors, []);
   fs.writeFileSync(`${output}/checks.json`, JSON.stringify({ passed: true, checks: ['dashboard push', 'other pages overlay', 'nested RTL hover', 'outside dismissal', 'Escape focus', 'responsive widths', 'touch navigation', 'day/night', 'reduced motion'], errors }, null, 2));
 } catch (error) {
+  if (page) fs.writeFileSync(`${output}/failure-layout.json`, JSON.stringify(await page.locator('.workspace-sidebar-submenu:visible .ant-menu-item').evaluateAll(rows => rows.map(row => ({html:row.outerHTML, display:getComputedStyle(row).display, children:[...row.children].map(el=>({tag:el.tagName,cls:el.className,display:getComputedStyle(el).display,rect:el.getBoundingClientRect().toJSON()}))}))), null, 2));
   if (page) await page.screenshot({ path: `${output}/failure.png`, fullPage: true }).catch(() => {});
   console.error(errors);
   throw error;
-} finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
+} finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
