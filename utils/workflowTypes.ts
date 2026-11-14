@@ -1,4 +1,5 @@
 import { ModuleField } from '../types';
+import type { AgentTaskConfig } from '../supabase/functions/_shared/ai-agent-task-contract';
 
 export type WorkflowTriggerType = 'on_create' | 'on_upsert' | 'interval';
 export type WorkflowIntervalUnit = 'hour' | 'day' | 'week' | 'month';
@@ -53,6 +54,7 @@ export type WorkflowActionType =
   | 'reply_instagram_comment'
   | 'send_email'
   | 'run_ai_prompt'
+  | 'run_agent_task'
   | 'send_bot_message'
   | 'send_telegram_bot'
   | 'send_bale_bot'
@@ -108,6 +110,9 @@ export type WorkflowAction = {
 };
 
 export type WorkflowRecord = {
+  agent_task_config?: AgentTaskConfig | null;
+  agent_task_revision?: number;
+  agent_task_next_run_at?: string | null;
   id: string;
   module_id: string;
   module_ids?: string[] | null;

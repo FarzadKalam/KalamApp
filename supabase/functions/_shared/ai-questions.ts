@@ -29,6 +29,16 @@ export const presentAiQuestionResponse = (content: string) => {
     if (parsed?.proposed_action || parsed?.action_type) {
       return { answer: visibleText(parsed.reply || parsed.proposed_action?.summary_fa || parsed.summary_fa) || 'اقدام پیشنهادی آمادهٔ بررسی است؛ هنوز اجرا نشده است.', questions: [] as AiQuestion[] };
     }
-  } catch { /* A normal prose reply. */ }
+  } catch { /* A normal prose reply or an action block after prose. */ }
+  let actionSummary = '';
+  const answer = content.replace(/```(?:json)?\s*([\s\S]*?)```/gi, (block, raw) => {
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed?.proposed_action && !parsed?.action_type) return block;
+      actionSummary = visibleText(parsed.reply || parsed.proposed_action?.summary_fa || parsed.summary_fa);
+      return '';
+    } catch { return block; }
+  }).trim();
+  if (answer !== content.trim()) return { answer: answer || actionSummary || 'اقدام پیشنهادی آمادهٔ بررسی است؛ هنوز اجرا نشده است.', questions: [] as AiQuestion[] };
   return { answer: content, questions: [] as AiQuestion[] };
 };

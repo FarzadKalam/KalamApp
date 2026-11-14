@@ -38,6 +38,7 @@ import {
   workflowExecutionModeOptions,
 } from '../../utils/workflowTypes';
 import { getWorkflowActionTypeLabelFa } from '../../utils/workflowActionSummary';
+import AiAgentTaskManagerModal from '../ai/AiAgentTaskManagerModal';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { attachWorkflowTemplateFieldCatalog } from '../../utils/workflowTemplateFieldCatalog';
 import { AI_AGENT_CATALOG } from '../../utils/aiAgentCatalog';
@@ -640,6 +641,11 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
     }
     return null;
   };
+
+  if (record?.agent_task_config) return <AiAgentTaskManagerModal
+    change={open ? { operation: 'update', name: record.name, workflowId: record.id,
+      expectedRevision: record.agent_task_revision, config: record.agent_task_config } : null}
+    onClose={onClose} onSaved={onSaved} />;
 
   return (
     <Modal

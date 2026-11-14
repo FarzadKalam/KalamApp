@@ -32,6 +32,7 @@ export type AgentPlan = {
 };
 
 const CONFIRMATION_REQUIRED_OPERATORS = new Set([
+  'agent_task',
   'record_creation',
   'process_operation',
   'image_generation',
@@ -41,6 +42,7 @@ const CONFIRMATION_REQUIRED_OPERATORS = new Set([
 ]);
 
 const CUSTOMER_AUTO_REPLY_FORBIDDEN_OPERATORS = new Set([
+  'agent_task',
   'record_creation',
   'process_operation',
   'image_generation',
@@ -68,7 +70,8 @@ export const normalizeAgentPlan = (input: any, options: {
   const capabilities = Array.from(new Set(requestedCapabilities
     .map((item: unknown) => asText(item, 80))
     .filter((item: string) => allowed.has(item))
-    .filter((item: string) => options.policy !== 'customer_auto_reply' || !CUSTOMER_AUTO_REPLY_FORBIDDEN_OPERATORS.has(item))));
+    .filter((item: string) => options.policy !== 'customer_auto_reply' || !CUSTOMER_AUTO_REPLY_FORBIDDEN_OPERATORS.has(item))
+    .filter((item: string) => !(allowed.has('agent_task') && requestedCapabilities.includes('agent_task')) || !['record_creation','process_operation'].includes(item))));
 
   const requestedAgents = normalizeSelectedAgents(input?.selected_agents ?? input?.agents ?? []);
   const allowedAgentSet = Array.isArray(options.allowedAgents) && options.allowedAgents.length > 0

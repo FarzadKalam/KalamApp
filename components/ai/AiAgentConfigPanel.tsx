@@ -43,6 +43,8 @@ import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { createWorkflowId, type WorkflowRecord } from '../../utils/workflowTypes';
 import WorkflowEditorModal from '../workflows/WorkflowEditorModal';
 import AiAgentOnboardingWizard from './AiAgentOnboardingWizard';
+import AiAgentTaskManagerModal from './AiAgentTaskManagerModal';
+import { formatAgentTaskScheduleFa } from '../../utils/aiAgentTaskPresentation';
 import { AiAgentAvatar } from './AiAgentIcon';
 import { useCurrencyConfig } from '../../utils/currency';
 import {
@@ -147,6 +149,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
   const [wizardAgentKey, setWizardAgentKey] = useState<AgentKey | null>(null);
   const [workflowEditorOpen, setWorkflowEditorOpen] = useState(false);
   const [editingWorkflowRecord, setEditingWorkflowRecord] = useState<WorkflowRecord | null>(null);
+  const [taskChange, setTaskChange] = useState<any | null>(null);
   const [workflowDraftAgentKey, setWorkflowDraftAgentKey] = useState<AgentKey | null>(null);
   const [togglingWorkflowId, setTogglingWorkflowId] = useState<string | null>(null);
 
@@ -436,6 +439,12 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
 
   const handleToggleWorkflowTrigger = async (workflowId: string, nextActive: boolean) => {
     if (!activeCanEdit || !workflowId || togglingWorkflowId) return;
+    const task = activeOverviewRow?.workflowTriggers?.find((row: any) => row.id === workflowId);
+    if (task?.agent_task_config) {
+      setTaskChange({ operation: nextActive ? 'resume' : 'pause', name: task.name, workflowId: task.id,
+        expectedRevision: task.agent_task_revision, config: task.agent_task_config });
+      return;
+    }
     setTogglingWorkflowId(workflowId);
     try {
       const { error } = await supabase
@@ -467,6 +476,11 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
         .eq('id', workflowId)
         .maybeSingle();
       if (error) throw error;
+      if (data?.agent_task_config) {
+        setTaskChange({ operation: 'update', name: data.name, workflowId: data.id,
+          expectedRevision: data.agent_task_revision, config: data.agent_task_config });
+        return;
+      }
       setEditingWorkflowRecord((data as WorkflowRecord) || null);
       setWorkflowDraftAgentKey(activeAgentKey);
       setWorkflowEditorOpen(true);
@@ -1036,7 +1050,9 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
                         {Array.isArray(activeOverviewRow?.workflowTriggers) && activeOverviewRow.workflowTriggers.length > 0 ? (
                           <div className="space-y-1.5">
                             {activeOverviewRow.workflowTriggers.map((wf: any) => {
-                              const triggerLabel = wf.trigger_type === 'interval'
+                              const triggerLabel = wf.agent_task_config && wf.trigger_type === 'interval'
+                                ? formatAgentTaskScheduleFa(wf.agent_task_config.schedule)
+                                : wf.trigger_type === 'interval'
                                 ? `زمان‌بندی هر ${toPersianNumber(Number(wf.interval_value || 1))} ${wf.interval_unit === 'hour' ? 'ساعت' : wf.interval_unit === 'day' ? 'روز' : wf.interval_unit === 'week' ? 'هفته' : 'ماه'}`
                                 : wf.trigger_type === 'on_upsert'
                                   ? 'هنگام ایجاد یا ویرایش رکورد'
@@ -1280,6 +1296,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
         }}
       />
 
+      <AiAgentTaskManagerModal change={taskChange} onClose={() => setTaskChange(null)} onSaved={reloadAll} />
       <WorkflowEditorModal
         open={workflowEditorOpen}
         onClose={() => {

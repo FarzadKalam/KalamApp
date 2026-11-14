@@ -96,6 +96,7 @@ const CAPABILITY_META: Array<{
   { key: 'legal_assistant', label: getAiAgentLabel('legal_assistant'), description: getAiAgent('legal_assistant').description, icon: <SafetyCertificateOutlined />, kind: 'toggle' },
   { key: 'record_creation', label: getAiAgentLabel('record_creation'), description: getAiAgent('record_creation').description, icon: <PlusOutlined />, kind: 'toggle' },
   { key: 'process_operation', label: getAiAgentLabel('process_operation'), description: getAiAgent('process_operation').description, icon: <ThunderboltOutlined />, kind: 'toggle' },
+  { key: 'agent_task', label: getAiAgentLabel('agent_task'), description: getAiAgent('agent_task').description, icon: <ThunderboltOutlined />, kind: 'toggle' },
   { key: 'pricing_adjustment', label: PRICING_ADJUSTMENT_SKILL_META.labelFa, description: PRICING_ADJUSTMENT_SKILL_META.descriptionFa, icon: <DollarOutlined />, kind: 'toggle' },
   { key: 'free_chat', label: getAiAgentLabel('free_chat'), description: getAiAgent('free_chat').description, icon: <MessageOutlined />, kind: 'toggle' },
 ];
