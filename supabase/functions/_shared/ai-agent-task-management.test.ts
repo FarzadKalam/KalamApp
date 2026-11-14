@@ -19,6 +19,7 @@ describe('conversational task write boundary', () => {
     const f = fixture(); expect(f.ports.insert).not.toHaveBeenCalled();
     const result = await confirmAgentTaskChange(f.ports, { access: f.access, change: f.change, now: f.now, actionId: 'approval-1' });
     expect(result.success).toBe(true);
+    expect(f.ports.claim).toHaveBeenCalledWith(orgId, userId, 'approval-1', f.change);
     expect(f.ports.insert).toHaveBeenCalledWith(expect.objectContaining({ org_id: orgId, created_by: userId,
       agent_task_origin_action_id: 'approval-1', agent_task_revision: 1, agent_task_next_run_at: '2026-11-14T05:30:00.000Z',
       actions: [{ id: 'agent-task-1', type: 'run_agent_task', config: { revision: 1 } }] }));

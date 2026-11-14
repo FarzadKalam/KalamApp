@@ -377,6 +377,36 @@ describe('AssistantPanel AI operators', () => {
     expect(body?.recordCreation?.moduleId).toBe('customers');
   });
 
+  it('reviews several scheduled task cards in the chat and confirms their edited drafts together once', async () => {
+    await renderPanel();
+    const original = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async (name: string, options: any) => {
+      if (options.body.action === 'suggest_auto_capabilities') return { data: { success: true, capabilities: ['agent_task'], primaryModelOnly: false }, error: null };
+      if (options.body.action === 'confirm_action') return { data: { success: true, message: 'دو کار ثبت شد.' }, error: null };
+      return original(name, options);
+    });
+    const actions = [1,2].map(index => ({ id: `task-approval-${index}`, actionType: 'manage_agent_task', payload: {
+      operation: index === 1 ? 'create' : 'update', name: `بررسی روزانه ${index}`, workflowId: index === 1 ? null : 'existing-task', expectedRevision: index === 1 ? null : 1,
+      config: { agentKey: 'sales_leads', instruction: 'سرنخ‌های بی‌پاسخ را بررسی کن', sourceModuleIds: ['marketing_leads'],
+        trigger: 'interval', schedule: { kind: 'daily', at: '09:00', timeZone: 'Asia/Tehran' },
+        deliveries: [{ channel: 'sms', numbers: ['09121234567'] }], notifyWhen: 'findings' },
+    } }));
+    vi.mocked(fetch).mockImplementation(async () => new Response(`event: done\ndata: ${JSON.stringify({ success: true,
+      threadId: 'thread-1', messageId: 'task-message', answer: 'کارت‌ها آمادهٔ بررسی‌اند.',
+      proposedAction: { id: actions[0].id, actionType: 'agent_task_batch', summaryFa: 'بررسی کارهای خودکار', actions },
+    })}\n\n`, { headers: { 'Content-Type': 'text/event-stream' } }));
+    await typeAndSend('هر روز ساعت نه سرنخ‌ها را بررسی و نتیجه را پیامک کن');
+    await waitFor(() => expect(screen.getAllByLabelText('عنوان کار خودکار')).toHaveLength(2));
+    expect(findBody('confirm_action')).toBeFalsy(); expect(findBody('create_record_from_prompt')).toBeFalsy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.change(screen.getAllByLabelText('عنوان کار خودکار')[0], { target: { value: 'بررسی اصلاح‌شده' } });
+    fireEvent.click(screen.getByRole('button', { name: 'تایید و اجرا' }));
+    await waitFor(() => expect(findBody('confirm_action')).toBeTruthy());
+    expect(findBody('confirm_action').actionLogIds).toEqual(actions.map(action => action.id));
+    expect(findBody('confirm_action').proposedTasks[actions[0].id].name).toBe('بررسی اصلاح‌شده');
+    expect(getBodies().filter(body => body.action === 'confirm_action')).toHaveLength(1);
+  });
+
   it.each(['create', 'update'] as const)('keeps primary-model %s requests on the operational approval path', async (mutationMode) => {
     await renderPanel();
     invokeMock.mockImplementation(async (_name: string, options: any) => {

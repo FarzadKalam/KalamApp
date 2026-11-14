@@ -65,6 +65,7 @@ import {
   tryResolveModelSlot,
   isPrimaryAgentOperation,
   resolveCapabilityModelSlot,
+  modelSupportsSlot,
 } from '../_shared/ai-gateway.ts';
 import {
   compactThreadConversation,
@@ -1288,7 +1289,7 @@ const buildAiCapabilityAvailability = (planContext: any, settings: any, catalogR
   }) !== null;
   Object.keys(AI_CAPABILITY_FEATURE_KEYS).forEach((capability) => {
     const planAvailable = isAiCapabilityPlanAvailable(planContext, capability);
-    const isPrimaryAgentCapability = capability === 'record_creation' || capability === 'process_operation' || capability === 'pricing_adjustment';
+    const isPrimaryAgentCapability = isPrimaryAgentOperation(capability);
     const hasReadyModel = capability === 'embedding'
       ? hasEmbeddingModel
       : isPrimaryAgentCapability
@@ -1332,13 +1333,7 @@ const assertAiCapabilityEnabled = async (
 };
 
 const filterSelectableAiModels = (models: any[], capability: string) =>
-  (models || []).filter((model: any) => {
-    const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
-    const acceptedTags = [capability, ...(CAPABILITY_SELECTION_ALIASES[capability] || [])];
-    return model?.is_active !== false
-      && model?.is_coming_soon !== true
-      && tags.some((tag: string) => acceptedTags.includes(String(tag || '').trim()));
-  });
+  (models || []).filter((model: any) => modelSupportsSlot(model, capability));
 
 const isCatalogDefaultFor = (model: any, capability: string) =>
   Array.isArray(model?.metadata?.default_capability_tags)
@@ -2960,7 +2955,7 @@ const filterFreshJobDescriptionChunks = async (
     if (!jobDescription) return false;
     if (jobDescription?.use_for_ai !== true) return false;
     if (String(jobDescription?.ai_index_status || '').trim() !== 'ready') return false;
-    return canAccessAssignedRecord(jobDescription, authContext, recordScope);
+    return canAccessAssignedRecord(jobDescription, authContext, recordScope, perm);
   });
 };
 
@@ -6837,7 +6832,7 @@ const handleGetComposeModels = async (supabaseUrl: string, serviceRoleKey: strin
   const capabilities: Record<string, any> = {};
   Object.keys(AI_CAPABILITY_FEATURE_KEYS).forEach((capability) => {
     if (capability === 'embedding') return;
-    const isPrimaryAgentCapability = capability === 'record_creation' || capability === 'process_operation' || capability === 'pricing_adjustment';
+    const isPrimaryAgentCapability = isPrimaryAgentOperation(capability);
     const isFastSlotCapability = capability === 'agent_fast' || capability === 'context_compression';
     const sourceModels = isPrimaryAgentCapability
       ? models.filter((model: any) => {
@@ -15283,9 +15278,9 @@ const executeProposedActionLog = async (
       load: async (_orgId, id) => loadManagedAgentTask(supabaseUrl, serviceRoleKey, authContext, id),
       findCreated: async (orgId, id) => (await restSelect(supabaseUrl, serviceRoleKey, 'workflows', {
         org_id: `eq.${orgId}`, created_by: `eq.${authContext.userId}`, agent_task_origin_action_id: `eq.${id}`, select: 'id,agent_task_next_run_at', limit: 1 }))[0] || null,
-      claim: async (orgId, userId, id) => (await restPatch(supabaseUrl, serviceRoleKey, 'ai_action_logs', {
+      claim: async (orgId, userId, id, approvedChange) => (await restPatch(supabaseUrl, serviceRoleKey, 'ai_action_logs', {
         org_id: `eq.${orgId}`, created_by: `eq.${userId}`, id: `eq.${id}`, status: 'eq.proposed',
-      }, { status: 'confirmed', approval_status: 'approved', confirmed_by: userId })).length === 1,
+      }, { status: 'confirmed', approval_status: 'approved', confirmed_by: userId, proposed_payload: approvedChange })).length === 1,
       insert: async row => (await restInsert(supabaseUrl, serviceRoleKey, 'workflows', [row]))[0] || null,
       update: async (orgId, userId, id, revision, row) => (await restPatch(supabaseUrl, serviceRoleKey, 'workflows', {
         org_id: `eq.${orgId}`, created_by: `eq.${userId}`, id: `eq.${id}`, agent_task_revision: `eq.${revision}`,
@@ -16246,10 +16241,12 @@ const handleConfirmAction = async (
     if (!ids.length || ids.length > 8 || new Set(ids).size !== ids.length || ids.some(id => !isUuid(id))) return json(400, { success: false, message: 'کارهای انتخاب‌شده برای تأیید معتبر نیستند.' });
     const results = [];
     for (const id of ids) {
-      const response = await handleConfirmAction(supabaseUrl, serviceRoleKey, authContext, {
-        actionLogId: id, proposedTask: body?.proposedTasks?.[id], expectedActionType: 'manage_agent_task',
-      }, callerAuthHeader);
-      results.push({ actionLogId: id, ...(await response.json()) });
+      try {
+        const response = await handleConfirmAction(supabaseUrl, serviceRoleKey, authContext, {
+          actionLogId: id, proposedTask: body?.proposedTasks?.[id], expectedActionType: 'manage_agent_task',
+        }, callerAuthHeader);
+        results.push({ actionLogId: id, ...(await response.json()) });
+      } catch { results.push({ actionLogId: id, success: false, message: 'تغییر این کار تأیید نشد؛ وضعیت آن را پیش از تلاش دوباره بررسی کنید.' }); }
     }
     const succeeded = results.filter(result => result.success === true).length;
     return json(200, { success: succeeded === results.length, results,

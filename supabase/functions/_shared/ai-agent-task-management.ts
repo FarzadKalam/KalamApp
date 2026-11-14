@@ -36,7 +36,7 @@ export type AgentTaskManagementPorts = {
   load: (orgId: string, workflowId: string) => Promise<ManagedAgentTask | null>;
   findCreated: (orgId: string, actionId: string) => Promise<Record<string, any> | null>;
   // Must atomically claim proposed -> confirmed. A concurrent confirmation loses.
-  claim: (orgId: string, userId: string, actionId: string) => Promise<boolean>;
+  claim: (orgId: string, userId: string, actionId: string, approvedChange: AgentTaskChange) => Promise<boolean>;
   insert: (row: Record<string, unknown>) => Promise<Record<string, any> | null>;
   update: (orgId: string, userId: string, workflowId: string, expectedRevision: number, row: Record<string, unknown>) => Promise<Record<string, any> | null>;
   finish: (orgId: string, actionId: string, success: boolean, result: Record<string, unknown>) => Promise<void>;
@@ -50,7 +50,7 @@ export const confirmAgentTaskChange = async (ports: AgentTaskManagementPorts, in
   const now = input.now || new Date();
   const existing = input.change.workflowId ? await ports.load(access.orgId, input.change.workflowId) : null;
   const change = prepareAgentTaskChange(input.change, access, existing, now);
-  if (!await ports.claim(access.orgId, access.userId, actionId)) return fail('این تأیید قبلاً پردازش شده است؛ وضعیت کار را تازه کنید.');
+  if (!await ports.claim(access.orgId, access.userId, actionId, change)) return fail('این تأیید قبلاً پردازش شده است؛ وضعیت کار را تازه کنید.');
   try {
     const revision = (existing?.revision || 0) + 1;
     const active = change.operation !== 'pause';
