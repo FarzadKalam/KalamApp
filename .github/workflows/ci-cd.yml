@@ -128,6 +128,8 @@ jobs:
           for file in tests/sql/ai_agent_tasks_fixture.sql \
             database_v1_phase589_conversational_agent_tasks.sql \
             database_v1_phase589_conversational_agent_tasks.sql \
+            database_v1_phase590_agent_tasks_legacy_scheduler_boundary.sql \
+            database_v1_phase590_agent_tasks_legacy_scheduler_boundary.sql \
             tests/sql/ai_agent_tasks_assertions.sql; do
             docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d ai_agent_tasks_test -v ON_ERROR_STOP=1 < "$file"
           done

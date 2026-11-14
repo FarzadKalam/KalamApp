@@ -16,6 +16,14 @@ create table public.workflows (
   module_id text, created_by uuid, updated_by uuid, created_at timestamptz default now(), updated_at timestamptz default now(),
   is_active boolean default true, trigger_type text, last_run_at timestamptz, server_queued_at timestamptz
 );
+alter table public.workflows add column interval_value integer, add column interval_unit text,
+  add column interval_at text, add column interval_first_run_at timestamptz, add column interval_minute integer,
+  add column interval_day_of_month integer, add column interval_allowed_from_hour integer, add column interval_allowed_to_hour integer;
+create table public.report_definitions (is_active boolean, server_queued_at timestamptz, config jsonb, last_run_at timestamptz);
+create table public.work_schedules (is_active boolean, status text, notification_server_queued_at timestamptz,
+  notification_schedule jsonb, effective_from date, effective_to date, notification_last_run_at timestamptz);
+create function public.workflow_interval_scheduled_due_at(timestamptz,integer,text,text,timestamptz,integer,integer,timestamptz)
+returns timestamptz language sql as $$ select $8; $$;
 create table public.workflow_interval_jobs (
   id uuid primary key default gen_random_uuid(), org_id uuid not null,
   job_kind text, dedupe_key text unique, workflow_id uuid, module_id text, record_id uuid,

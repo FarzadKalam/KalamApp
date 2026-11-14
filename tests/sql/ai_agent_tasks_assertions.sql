@@ -51,4 +51,16 @@ do $$ begin
   exception when insufficient_privilege then null; end;
 end $$;
 reset role;
+-- Run the actual legacy cron under a database session without a service JWT.
+-- An unfiltered task update would trip the approval guard and abort the tick.
+select set_config('request.jwt.claim.role','service_role',false);
+update public.workflows set is_active=true;
+insert into public.workflows(id,org_id,name,trigger_type,interval_value,interval_unit)
+values ('00000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000010','ordinary workflow','interval',1,'day');
+select set_config('request.jwt.claim.role','',false);
+select public.queue_due_interval_workflows();
+do $$ begin
+  assert (select server_queued_at is null from public.workflows where agent_task_config is not null), 'Legacy cron must leave task due cursors alone';
+  assert (select server_queued_at is not null from public.workflows where agent_task_config is null), 'Legacy cron must still mark ordinary workflows';
+end $$;
 select 'agent task queue and approval boundary assertions passed' as result;
