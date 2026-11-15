@@ -45,6 +45,9 @@ vi.mock('../../utils/sessionCache', () => ({
 vi.mock('../../utils/blobBase64', () => ({
   blobToBase64: vi.fn(async () => 'voice-base64'),
 }));
+vi.mock('../../utils/aiFileAttachments', () => ({
+  uploadAiFileAttachments: vi.fn(async () => [{ url: 'https://example.test/voice.webm', assetId: 'voice-asset', entryId: 'voice-entry' }]),
+}));
 
 vi.mock('../../utils/aiRecordCreation', () => ({
   buildAiRecordModuleOptions: vi.fn(() => [{ label: 'مشتریان', value: 'customers' }]),
@@ -567,7 +570,7 @@ describe('AssistantPanel AI operators', () => {
     expect(body?.recordMutationMode).toBe('create');
     expect(body?.bundle?.inputs).toHaveLength(2);
     expect(body?.bundle?.inputs?.[1]?.text).toContain('دو لید');
-    expect(body?.bundle?.inputs?.[1]?.type).toBe('text');
-    expect(body?.bundle?.inputs?.[1]?.audio).toBeUndefined();
+    expect(body?.bundle?.inputs?.[1]?.type).toBe('voice');
+    expect(body?.bundle?.inputs?.[1]?.audio).toEqual(expect.objectContaining({ data: null, url: 'https://example.test/voice.webm', assetId: 'voice-asset' }));
   }, 10000);
 });
