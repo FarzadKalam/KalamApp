@@ -161,7 +161,7 @@ jobs:
           supabase/functions/_shared/ai-agent-task-lifecycle.test.ts components/ai/AiAgentTaskApprovalCard.test.tsx
           supabase/functions/_shared/ai-agent-task-queue.test.ts supabase/functions/workflow-interval-runner/agent-task-delivery.test.ts
           supabase/functions/_shared/ai-record-files.test.ts supabase/functions/_shared/ai-record-lookups.test.ts
-          components/ai/AiRecordResultCard.test.tsx utils/aiMessageParts.test.ts
+          components/ai/AiRecordResultCard.test.tsx components/ai/AiUsageHistoryTable.test.tsx utils/aiMessageParts.test.ts
           supabase/functions/ai-assistant/record-execution.test.ts supabase/functions/_shared/ai-record-contract.test.ts supabase/functions/_shared/ai-agents.test.ts supabase/functions/_shared/ai-agent-contract.test.ts supabase/functions/_shared/ai-agent-inbox.test.ts utils/__tests__/aiAaasFoundation.test.ts
           components/ai/AiMessageComposer.test.tsx components/ai/AiGenerationStatusCard.test.tsx
           components/ai/AiChatSurfaceV2.test.tsx components/ai/AssistantPanel.operators.test.tsx
