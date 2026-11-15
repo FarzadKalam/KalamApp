@@ -26,6 +26,35 @@ describe('central model-specific thinking contract',() => {
     expect(applyReasoningParameters({},model('qwen3.8-flash'),'xhigh')).toEqual({ enable_thinking: true,reasoning_effort: 'xhigh' });
     expect(applyReasoningParameters({},model('deepseek-v4.1-flash'),'auto')).toEqual({});
   });
+  it('offers managed Qwen Max thinking without inventing levels and obeys the streaming requirement',async () => {
+    const max=model('qwen3.8-max');
+    expect(reasoningOptions(max).map(option => option.value)).toEqual(['auto','none','enabled']);
+    expect(() => resolveReasoningEffort(max,'high')).toThrow();
+    const request={ model: max.id,messages: [{ role: 'user',content: 'بررسی' }],tools: [{ type: 'function',function: { name: 'read' } }] };
+    const prepared=prepareReasoningTransport(max,request,'enabled');
+    expect(prepared).toMatchObject({ path: '/chat/completions',route: 'chat-collected',body: { model: max.id,enable_thinking: true,stream: true,stream_options: { include_usage: true },tools: request.tools } });
+    expect(prepared.body).not.toHaveProperty('reasoning_effort');
+    expect(prepareReasoningTransport(max,request,'none')).toMatchObject({ route: 'chat',body: { enable_thinking: false } });
+    expect(prepareReasoningTransport(max,request,'auto')).toMatchObject({ route: 'chat-collected',body: { stream: true } });
+    expect(prepareReasoningTransport(max,request,'auto').body).not.toHaveProperty('enable_thinking');
+    expect(prepareReasoningTransport(max,{ ...request,stream: true },'enabled').route).toBe('chat');
+    const chunks=[
+      { id: 'r',model: max.id,choices: [{ index: 0,delta: { reasoning_content: 'private' } }] },
+      { choices: [{ index: 0,delta: { content: 'سلام',tool_calls: [{ index: 0,id: 'call',function: { name: 'read',arguments: '{"page":' } }] } }] },
+      { choices: [{ index: 0,delta: { content: ' دنیا',tool_calls: [{ index: 0,function: { arguments: '2}' } }] },finish_reason: 'tool_calls' }] },
+      { choices: [],usage: { prompt_tokens: 10,completion_tokens: 20,total_tokens: 30 } },
+    ];
+    const sse=chunks.map(chunk => `data: ${JSON.stringify(chunk)}\r\n\r\n`).join('')+'data: [DONE]\r\n\r\n';
+    const bytes=new TextEncoder().encode(sse);
+    const source=new Response(new ReadableStream({start(controller){for(let i=0;i<bytes.length;i+=7)controller.enqueue(bytes.slice(i,i+7));controller.close();}}),{ headers: { 'Content-Type': 'text/event-stream','x-request-id': 'r' } });
+    const response=await bridgeReasoningResponse(source,prepared.route,false),result=await response.json();
+    expect(response.headers.get('Content-Type')).toBe('application/json');
+    expect(response.headers.get('x-request-id')).toBe('r');
+    expect(result.choices[0]).toMatchObject({ finish_reason: 'tool_calls',message: { content: 'سلام دنیا',reasoning_content: 'private',tool_calls: [{ id: 'call',function: { name: 'read',arguments: '{"page":2}' } }] } });
+    expect(result.usage.total_tokens).toBe(30);
+    await expect(bridgeReasoningResponse(new Response(sse.replace('data: [DONE]\r\n\r\n','')),'chat-collected',false)).rejects.toThrow('قطع');
+    await expect(bridgeReasoningResponse(new Response('data: {"error":{"message":"provider failed"}}\n\n'),'chat-collected',false)).rejects.toThrow('provider failed');
+  });
   it('uses Responses for Luna thinking with tools and preserves opaque state without replay',() => {
     const item={ type: 'reasoning',id: 'r',encrypted_content: 'opaque' };
     const prepared=prepareReasoningTransport(model('gpt-6-luna'),{ model: 'gpt-6-luna',max_tokens: 4000,

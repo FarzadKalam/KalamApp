@@ -24,7 +24,17 @@ const nativeParts = (content: any) => parts(content).map(part => {
 });
 export const prepareReasoningTransport = (model: any,original: Record<string,any>,effort?: string | null) => {
   const body=applyReasoningParameters({ ...original },model,effort);
-  const route=getReasoningProfile(model).route;
+  const profile=getReasoningProfile(model),route=profile.route;
+  if (!route && profile.streamForThinking) {
+    // DashScope requires streaming for enabled thinking. Keep callers' JSON
+    // contract by collecting the upstream stream centrally, including tools/usage.
+    const thinking=body.enable_thinking!==false;
+    if (thinking) {
+      body.stream=true;
+      body.stream_options={ ...body.stream_options,include_usage: true };
+    }
+    return { path: '/chat/completions',body,route: thinking && original.stream!==true ? 'chat-collected' as const : 'chat' as const };
+  }
   if (!route) return { path: '/chat/completions',body,route: 'chat' as const };
   if (route==='responses') {
     const input:any[]=[];
@@ -95,7 +105,55 @@ export const normalizeReasoningResponse = (data:any,route:string) => {
 
 /** Stream native protocols as the shared internal Chat event contract. Opaque
  * reasoning/signatures are carried to the next tool round, never user deltas. */
+const collectChatStream = async (response: Response) => {
+  if (!response.body) throw new Error('پاسخ زنده مدل خالی است.');
+  const reader=response.body.getReader(),decoder=new TextDecoder();
+  const choices=new Map<number,any>();
+  let buffer='',ended=false,result:any={};
+  const consume=(data:string) => {
+    if (data==='[DONE]') { ended=true;return; }
+    const frame=json(data);
+    if (frame.error) throw new Error(frame.error.message || 'پاسخ مدل ناموفق بود.');
+    for (const key of ['id','model','created','system_fingerprint','usage']) if (frame[key]!=null) result[key]=frame[key];
+    for (const part of frame.choices || []) {
+      const index=part.index ?? 0;
+      const choice=choices.get(index) || { index,message: { role: 'assistant',content: '' },finish_reason: null };
+      const delta=part.delta || {};
+      for (const key of ['content','reasoning_content','refusal']) if (typeof delta[key]==='string') choice.message[key]=(choice.message[key] || '')+delta[key];
+      for (const call of delta.tool_calls || []) {
+        const calls=choice.message.tool_calls ||= [];
+        const target=calls[call.index ?? 0] ||= { type: 'function',function: { name: '',arguments: '' } };
+        if (call.id) target.id=call.id;
+        if (call.type) target.type=call.type;
+        if (call.function?.name) target.function.name+=call.function.name;
+        if (call.function?.arguments) target.function.arguments+=call.function.arguments;
+      }
+      if (part.finish_reason!=null) choice.finish_reason=part.finish_reason;
+      choices.set(index,choice);
+    }
+  };
+  try {
+    while (!ended) {
+      const { value,done }=await reader.read();
+      buffer+=decoder.decode(value,{ stream: !done });
+      let match:RegExpExecArray|null;
+      while ((match=/\r?\n\r?\n/.exec(buffer))) {
+        const frame=buffer.slice(0,match.index);buffer=buffer.slice(match.index+match[0].length);
+        const data=frame.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+        if (data) consume(data);
+        if (ended) break;
+      }
+      if (done && !ended) throw new Error('پاسخ زنده مدل پیش از پایان قطع شد.');
+    }
+    if (!choices.size || [...choices.values()].some(choice => !choice.finish_reason)) throw new Error('پاسخ زنده مدل پیش از پایان قطع شد.');
+    result={ ...result,object: 'chat.completion',choices: [...choices.values()].sort((a,b) => a.index-b.index) };
+    const headers=new Headers(response.headers);headers.set('Content-Type','application/json');headers.delete('Content-Length');headers.delete('Content-Encoding');
+    return new Response(JSON.stringify(result),{ status: response.status,headers });
+  } finally { await reader.cancel().catch(() => {}); }
+};
+
 export const bridgeReasoningResponse = async (response: Response,route: string,stream: boolean) => {
+  if (route==='chat-collected' && response.ok) return collectChatStream(response);
   if (route==='chat' || !response.ok) return response;
   if (!stream) return new Response(JSON.stringify(normalizeReasoningResponse(await response.json(),route)),{ status: response.status,headers: response.headers });
   if (!response.body) throw new Error('پاسخ زنده مدل خالی است.');

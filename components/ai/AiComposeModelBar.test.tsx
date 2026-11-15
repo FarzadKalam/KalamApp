@@ -2,6 +2,7 @@ import React from 'react';
 import { render, waitFor,screen,fireEvent,cleanup } from '@testing-library/react';
 import { beforeEach,afterEach, describe, expect, it, vi } from 'vitest';
 import AiComposeModelBar from './AiComposeModelBar';
+import { reasoningOptions } from '../../supabase/functions/_shared/ai-reasoning';
 
 const invokeMock = vi.fn();
 
@@ -69,6 +70,22 @@ describe('AiComposeModelBar', () => {
 
     await waitFor(() => expect(onChange).toHaveBeenCalledWith('custom-web', 'web_search'));
     expect(onChange.mock.calls.some((call) => call[0] === null)).toBe(false);
+  });
+
+  it('exposes the actual Qwen Max thinking choices inside the composer model menu',async () => {
+    const data=(await invokeMock()).data;
+    data.capabilities.dashboard_chat.model='qwen3.8-max';
+    data.capabilities.dashboard_chat.selectable=[{ value: 'qwen3.8-max',label: 'Qwen 3.8 Max' }];
+    data.capabilities.dashboard_chat.reasoningByModel={ 'qwen3.8-max': { options: reasoningOptions({ id: 'qwen3.8-max' }),defaultValue: 'auto' } };
+    invokeMock.mockResolvedValue({ data });
+    const change=vi.fn();
+    render(<AiComposeModelBar selectedCapabilities={[]} fallbackCapability="dashboard_chat" onModelOverrideChange={vi.fn()} onReasoningChange={change} />);
+    await screen.findByRole('combobox',{ name: 'مدل هوش مصنوعی' });
+    fireEvent.mouseDown(screen.getByRole('combobox',{ name: 'مدل هوش مصنوعی' }));
+    fireEvent.mouseDown(await screen.findByRole('combobox',{ name: 'میزان تفکر' }));
+    fireEvent.click(await screen.findByText('فعال'));
+    expect(change).toHaveBeenCalledWith('enabled','qwen3.8-max');
+    expect(screen.queryByText('زیاد')).not.toBeInTheDocument();
   });
 
   it('nests the selected model thinking control in the model menu and sends its actual level',async () => {

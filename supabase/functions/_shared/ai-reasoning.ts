@@ -7,7 +7,7 @@ export const REASONING_LEVEL_LABELS: Record<string,string> = {
 };
 export type ReasoningProfile = {
   supported: boolean; levels: string[]; parameter: 'reasoning_effort'|'thinking'|'enable_thinking'|'output_config';
-  route?: 'responses'|'messages'; required?: boolean; source?: string;
+  route?: 'responses'|'messages'; required?: boolean; source?: string; streamForThinking?: boolean;
 };
 const exactProfiles: Record<string,ReasoningProfile> = {
   'claude-haiku-5-5': { supported: true,levels: ['low','medium','high','xhigh','max'],parameter: 'output_config',route: 'messages' },
@@ -15,8 +15,10 @@ const exactProfiles: Record<string,ReasoningProfile> = {
   'gpt-6-sol': { supported: true,levels: ['none','low','medium','high','xhigh','max'],parameter: 'reasoning_effort',route: 'responses' },
   'gpt-6.1-sol': { supported: true,levels: ['low','medium','high','xhigh','max'],parameter: 'reasoning_effort',route: 'responses',required: true },
   'glm-5.3': { supported: true,levels: ['low','high','max'],parameter: 'reasoning_effort',required: true },
-  'qwen3.8-flash': { supported: true,levels: ['none','low','medium','xhigh'],parameter: 'enable_thinking' },
-  'qwen3.8-27b': { supported: true,levels: ['none','low','medium','xhigh'],parameter: 'enable_thinking' },
+  'qwen3.8-max': { supported: true,levels: ['none','enabled'],parameter: 'enable_thinking',streamForThinking: true,
+    source: 'https://docs.avalai.org/en/providers/alibaba#qwen38-max' },
+  'qwen3.8-flash': { supported: true,levels: ['none','low','medium','xhigh'],parameter: 'enable_thinking',streamForThinking: true },
+  'qwen3.8-27b': { supported: true,levels: ['none','low','medium','xhigh'],parameter: 'enable_thinking',streamForThinking: true },
   'qwen3.8-2.4t-a95b': { supported: true,levels: ['low','medium','xhigh'],parameter: 'reasoning_effort',required: true },
   // The current AvalAI references establish reasoning, but no reliable effort enum.
   'deepseek-v4.1-flash': { supported: true,levels: [],parameter: 'reasoning_effort' },
@@ -32,7 +34,8 @@ export const getReasoningProfile = (model: any): ReasoningProfile => {
     const parameter=['reasoning_effort','thinking','enable_thinking','output_config'].includes(config.parameter) ? config.parameter : base?.parameter || 'reasoning_effort';
     const levels=Array.isArray(config.levels) && config.levels.length ? [...new Set<string>(config.levels.filter((value: any) => value!=='auto' && Object.hasOwn(REASONING_LEVEL_LABELS,value)))] : base?.levels || [];
     return { ...base,supported: true,parameter,levels: config.required ? levels.filter(value => value!=='none') : levels,
-      required: config.required ?? base?.required,route: ['responses','messages'].includes(config.route) ? config.route : base?.route,source: config.source || 'catalog' };
+      required: config.required ?? base?.required,route: ['responses','messages'].includes(config.route) ? config.route : base?.route,
+      streamForThinking: config.stream_for_thinking ?? base?.streamForThinking,source: config.source || 'catalog' };
   }
   return base || { supported: model?.metadata?.supports_reasoning===true || model?.metadata?.reasoning===true || model?.capability_tags?.includes('deep_reasoning')===true,
     levels: [],parameter: 'reasoning_effort' };
