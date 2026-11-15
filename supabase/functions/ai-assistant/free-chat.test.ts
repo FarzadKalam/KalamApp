@@ -12,6 +12,9 @@ describe('free conversation identity',() => {
     const thread=await create('url','key',{orgId:'org',userId:'actor'},{forceNew:true,title:'متن',agentKey:'lead_orchestrator',selectedAgents:['lead_orchestrator'],metadata:{free_chat:true}});
     expect(thread.agent_key).toBeNull();expect(thread.selected_agents).toEqual([]);
     expect(thread.metadata.agent_key).toBeNull();expect(thread.metadata.selected_agents).toEqual([]);
+    const switchMode=load('ensureThread','insertAiMessage',{...deps,isUuid:()=>true,fetchThreadForRead:async()=>({id:'old-org-thread',metadata:{free_chat:false}})});
+    const freeThread=await switchMode('url','key',{orgId:'org',userId:'actor'},{threadId:'old-org-thread',forceNew:true,metadata:{free_chat:true}});
+    expect(freeThread.id).not.toBe('old-org-thread');expect(freeThread.metadata.free_chat).toBe(true);
     const patch=vi.fn(async(..._args:any[])=>[]);
     const complete=load('patchChatThreadAfterAssistant','handleChat',{restPatch:patch,getContextKind:deps.getContextKind,buildThreadContextLabel:deps.buildThreadContextLabel,buildThreadModelOverrides:()=>({}),buildThreadComposerPreferences:()=>({})});
     await complete('url','key',{orgId:'org'},{freeChatMode:true,message:'متن',pageContext:{context:{}},providerConfig:{},thread:{id:'thread',agent_key:'lead_orchestrator',metadata:{agent_key:'lead_orchestrator'}},selectedAgents:[],body:{}},{});

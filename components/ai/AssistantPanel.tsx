@@ -2997,10 +2997,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     if (submitting || loadingThread) return;
     setThreadListOpen(false);
     if (onNewConversation) {onNewConversation();return;}
+    if (conversationContext.mode==='record') restoredRecordThreadScopeRef.current=`${conversationContext.moduleId}:${conversationContext.recordId}`;
     setThreadId(null);setThreadContext(null);setMessages([]);setThreadTitle('');setDraftThreadTitle('');setPendingAiAction(null);setInput('');
     setImageEditSourceUrl(null);
     setBundleInputs(previous => {revokeBundleInputPreviewUrls(previous);return [];});
-  },[submitting,loadingThread,onNewConversation]);
+  },[submitting,loadingThread,onNewConversation,conversationContext.mode,conversationContext.moduleId,conversationContext.recordId]);
 
   const saveThreadSharing = useCallback(async () => {
     if (!threadId || sharingThread) return;
@@ -3399,12 +3400,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const estimatedContextLimit = estimateModelContextLimit(activeModelForContext);
   const estimatedContextPercent = Math.max(0, Math.min(100, Math.round((estimatedContextTokens / Math.max(1, estimatedContextLimit)) * 100)));
   const recordThreadScope = useMemo(() => {
+    if (selectedCapabilities.includes('free_chat')) return null;
     const moduleId = String(contextWithSelection.moduleId || '').trim();
     const recordId = String(contextWithSelection.recordId || '').trim();
     return showThreadListButton && contextWithSelection.mode === 'record' && moduleId && recordId
       ? { moduleId, recordId }
       : null;
-  }, [contextWithSelection.mode, contextWithSelection.moduleId, contextWithSelection.recordId, showThreadListButton]);
+  }, [contextWithSelection.mode, contextWithSelection.moduleId, contextWithSelection.recordId, showThreadListButton,selectedCapabilities]);
   const fetchDrawerThreads = useCallback(async () => {
     const data = await callAssistant({
       action: 'list_threads',
@@ -3514,6 +3516,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               ) : (
                 <span className="font-semibold">گفتگوی آزاد در داشبورد</span>
               )}
+              {conversationContext.mode === 'list' && (conversationContext.selectedRecordIds?.length || 0) > 0 ? <Tag color="blue">{(conversationContext.selectedRecordIds?.length || 0).toLocaleString('fa-IR')} انتخاب‌شده</Tag> : null}
             </div>
           </div>
           <div className="ai-chat-header-actions flex shrink-0 items-center gap-1">
@@ -3577,11 +3580,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               <Button type="text" size="small" danger icon={<DeleteOutlined />} loading={deletingThread} disabled={messages.length === 0 && !threadId} aria-label="حذف گفتگوی هوش مصنوعی" />
             </Popconfirm>
             {showThreadListButton ? <Tooltip title="فهرست گفتگوها">
-              <Button className={onOpenThreadList ? 'md:!hidden' : undefined} type="text" size="small" icon={<MenuOutlined />} onClick={() => onOpenThreadList ? onOpenThreadList() : setThreadListOpen(true)} aria-label="فهرست گفتگوهای هوش مصنوعی" aria-expanded={onOpenThreadList ? threadListExpanded : threadListOpen} />
+              <Button className={onOpenThreadList ? 'ai-chat-thread-toggle' : undefined} type="text" size="small" icon={<MenuOutlined />} onClick={() => onOpenThreadList ? onOpenThreadList() : setThreadListOpen(true)} aria-label="فهرست گفتگوهای هوش مصنوعی" aria-expanded={onOpenThreadList ? threadListExpanded : threadListOpen} />
             </Tooltip> : null}
           </div>
         </div>
-        {conversationContext.mode === 'list' && (conversationContext.selectedRecordIds?.length || 0) > 0 ? <Tag color="blue">{(conversationContext.selectedRecordIds?.length || 0).toLocaleString('fa-IR')} انتخاب‌شده</Tag> : null}
       </div>
 
       <div ref={scrollRef} onScroll={handleMessageScroll} className="ai-chat-message-list min-h-0 flex-1 overflow-y-auto px-3 py-3">

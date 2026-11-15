@@ -3,5 +3,6 @@
 .ai-chat-surface .ai-chat-header-row{height:100%;margin-bottom:0}
 .ai-chat-thread-search{animation:ai-chat-search-open .18s ease-out;transform-origin:right center}
 @keyframes ai-chat-search-open{from{opacity:0;transform:translateX(8px) scaleX(.94)}to{opacity:1;transform:none}}
-@media(max-width:767px){.ai-chat-surface .ai-chat-surface-header{height:76px;min-height:76px;border-radius:20px;padding:10px}.ai-chat-surface .ai-chat-header-actions{gap:0}.ai-chat-surface .ai-chat-header-actions .ant-btn{width:36px;min-width:36px;height:40px;padding:0}}
+@media(min-width:768px){.ai-chat-surface .ai-chat-thread-toggle{display:none}}
+@media(max-width:767px){.ai-chat-surface .ai-chat-surface-header{height:76px;min-height:76px;border-radius:20px;padding:10px}.ai-chat-surface .ai-chat-header-actions{gap:0}.ai-chat-surface .ai-chat-surface-header .ant-btn{width:44px;min-width:44px;height:44px;padding:0}}
 @media(prefers-reduced-motion:reduce){.ai-chat-thread-search{animation:none}}

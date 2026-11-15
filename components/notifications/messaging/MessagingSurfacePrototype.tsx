@@ -56,6 +56,7 @@ import { toFaErrorMessage } from '../../../utils/errorMessageFa';
 import { sendSmsViaGateway } from '../../../utils/smsGateway';
 import SharedNoteComposer from '../../notes/SharedNoteComposer';
 import AdaptiveIdentityPicker from '../../AdaptiveIdentityPicker';
+import { resolveModalPopupContainer } from '../../../utils/popupContainer';
 import type { AssigneeDirectory } from '../../../utils/referenceData';
 import { clearIdentityDirectoryCache, searchIdentityOptions } from '../../../utils/identityDirectory';
 import { isMissingColumnError, isMissingTableLikeError } from '../../../utils/notificationAssigneeHelpers';
@@ -6121,6 +6122,9 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
               placeholder="انتخاب کاربران"
               pickerTitle="انتخاب اعضای گروه داخلی"
               className="w-full"
+              getPopupContainer={resolveModalPopupContainer}
+              modalContainer={resolveModalPopupContainer}
+              preferLocalPopupContainer
             />
           </div>
           <div>
@@ -6135,6 +6139,9 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
               placeholder="انتخاب نقش‌ها"
               pickerTitle="انتخاب نقش‌های گروه داخلی"
               className="w-full"
+              getPopupContainer={resolveModalPopupContainer}
+              modalContainer={resolveModalPopupContainer}
+              preferLocalPopupContainer
             />
           </div>
         </div>

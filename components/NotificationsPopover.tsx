@@ -79,6 +79,7 @@ import {
 } from '../utils/notificationConversationKeys';
 import ProfileAvatar from './common/ProfileAvatar';
 import AdaptiveIdentityPicker from './AdaptiveIdentityPicker';
+import { resolveModalPopupContainer } from '../utils/popupContainer';
 import { clearIdentityDirectoryCache } from '../utils/identityDirectory';
 import { preloadAvatarUrls } from '../utils/profileAvatar';
 import { PROFILE_AVATAR_UPDATED_EVENT, type ProfileAvatarUpdatedDetail } from '../utils/profileAvatarEvents';
@@ -8857,7 +8858,9 @@ useEffect(() => {
             onChange={(values) => setGroupMemberDrafts((Array.isArray(values) ? values : []).map(String))}
             placeholder="انتخاب اعضا و نقش‌ها"
             className="w-full"
-            overlayZIndexBase={1400}
+            getPopupContainer={resolveModalPopupContainer}
+            modalContainer={resolveModalPopupContainer}
+            preferLocalPopupContainer
           />
           <div className="text-xs text-gray-500">
             با انتخاب نقش، همه اعضای دارای آن نقش تا زمانی که همان نقش را داشته باشند عضو گروه می‌مانند.

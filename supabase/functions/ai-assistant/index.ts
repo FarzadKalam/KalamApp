@@ -6699,17 +6699,19 @@ const ensureThread = async (
   },
 ) => {
   const requestedThreadId = normalizeId(payload.threadId);
+  const matchesConversationMode = (thread: any) => typeof payload.metadata?.free_chat !== 'boolean'
+    || (thread?.metadata?.free_chat === true) === payload.metadata.free_chat;
   if (requestedThreadId && isUuid(requestedThreadId)) {
     // A member with whom a thread is shared can continue that same thread.
     // Access is evaluated centrally and fail-closed by fetchThreadForRead.
     const accessibleThread = await fetchThreadForRead(supabaseUrl, serviceRoleKey, authContext, requestedThreadId);
-    if (accessibleThread) return accessibleThread;
+    if (accessibleThread && matchesConversationMode(accessibleThread)) return accessibleThread;
   }
 
   const contextKey = payload.contextKey || buildContextKey(payload.pageContext?.context || {});
   if (!payload.forceNew && payload.continueByContext === true) {
     const existing = await findThreadByContextKey(supabaseUrl, serviceRoleKey, authContext, contextKey);
-    if (existing) return existing;
+    if (existing && matchesConversationMode(existing)) return existing;
   }
 
   const threadTitle = buildThreadTitle(payload.title || '', payload.pageContext);
