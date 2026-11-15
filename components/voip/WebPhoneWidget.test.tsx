@@ -72,5 +72,10 @@ describe('WebPhoneWidget and Header Button', () => {
     expect(screen.getByText('101')).toBeDefined();
     expect(screen.getByText('سوابق و پرونده مخاطب')).toBeDefined();
     expect(screen.getByRole('button', { name: /برقراری تماس صوتی/i })).toBeDefined();
+
+    // Verify tactile keypad has dir="ltr" for standard international layout
+    const digit1 = screen.getByText('1');
+    const keypadContainer = digit1.closest('[dir="ltr"]');
+    expect(keypadContainer).not.toBeNull();
   });
 });

@@ -183,14 +183,31 @@ Deno.serve(async (req) => {
         });
       }
 
-      const endpoints = await restSelect(supabaseUrl, serviceRoleKey, 'voip_sip_endpoints', {
+      let endpoints = await restSelect(supabaseUrl, serviceRoleKey, 'voip_sip_endpoints', {
         org_id: `eq.${orgId}`,
         assignee_profile_id: `eq.${profile.id}`,
         is_active: 'eq.true',
-        select: 'id,extension,display_name,pjsip_id,sip_secret,webrtc_enabled,transport,max_contacts',
+        select: 'id,extension,display_name,pjsip_id,sip_secret,webrtc_enabled,transport,max_contacts,metadata',
         limit: '1',
       });
-      const endpoint = endpoints[0] || null;
+      let endpoint = endpoints[0] || null;
+      if (!endpoint && profile.voip_extension) {
+        const byExt = await restSelect(supabaseUrl, serviceRoleKey, 'voip_sip_endpoints', {
+          org_id: `eq.${orgId}`,
+          extension: `eq.${profile.voip_extension}`,
+          is_active: 'eq.true',
+          select: 'id,extension,display_name,pjsip_id,sip_secret,webrtc_enabled,transport,max_contacts,metadata',
+          limit: '1',
+        });
+        if (byExt[0]) {
+          endpoint = byExt[0];
+          await fetch(`${trimTrailingSlash(supabaseUrl)}/rest/v1/voip_sip_endpoints?id=eq.${endpoint.id}&org_id=eq.${orgId}`, {
+            method: 'PATCH',
+            headers: serviceHeaders(serviceRoleKey),
+            body: JSON.stringify({ assignee_profile_id: profile.id, updated_by: user.id }),
+          }).catch(() => undefined);
+        }
+      }
       if (!endpoint) {
         return json(200, {
           success: true,
@@ -200,8 +217,24 @@ Deno.serve(async (req) => {
         });
       }
 
-      const wssUrl = resolveDefaultWssUrl(req, settings);
-      const sipDomain = resolveSipDomain(settings, wssUrl);
+      const activeProvider = normalizeVoipProviderKey(activeSettingRow?.provider || 'telefonchy');
+      const customWss = String(endpoint.metadata?.wss_url || endpoint.metadata?.server_url || '').trim();
+      const rawWssUrl = customWss || resolveDefaultWssUrl(req, settings);
+      let wssUrl = rawWssUrl;
+      if (wssUrl && !/^wss?:\/\//i.test(wssUrl)) {
+        let clean = wssUrl.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+        if (!clean.includes(':') && (clean.includes('telefonchy') || activeProvider === 'telefonchy')) {
+          clean = `${clean}:5065`;
+        }
+        wssUrl = `wss://${clean}/ws`;
+      }
+
+      const customDomain = String(endpoint.metadata?.sip_domain || '').trim();
+      const sipDomain = customDomain || resolveSipDomain(settings, wssUrl);
+
+      const isTelefonchyOrDirect = activeProvider === 'telefonchy' || Boolean(endpoint.metadata?.wss_url);
+      const authUser = isTelefonchyOrDirect ? endpoint.extension : endpoint.pjsip_id;
+
       const turnHost = String(settings?.turn_host || Deno.env.get('VOIP_TURN_HOST') || sipDomain).trim();
       const turnPort = Number(settings?.turn_port || Deno.env.get('VOIP_TURN_PORT') || 3478) || 3478;
       const turnSecret = String(Deno.env.get('VOIP_TURN_SECRET') || '').trim();
@@ -216,8 +249,8 @@ Deno.serve(async (req) => {
         success: true,
         enabled: Boolean(wssUrl),
         reason: wssUrl ? null : 'missing_wss_url',
-        dialMode: String(profile.voip_dial_mode || settings.default_dial_mode || 'telefonchy_smartcall'),
-        provider: normalizeVoipProviderKey(activeSettingRow?.provider || 'telefonchy'),
+        dialMode: String(profile.voip_dial_mode || settings.default_dial_mode || 'webphone_webrtc'),
+        provider: activeProvider,
         wssUrl,
         sipDomain,
         iceServers,
@@ -225,7 +258,8 @@ Deno.serve(async (req) => {
           extension: endpoint.extension,
           displayName: endpoint.display_name || profile.full_name || endpoint.extension,
           pjsipId: endpoint.pjsip_id,
-          sipUri: `sip:${endpoint.pjsip_id}@${sipDomain}`,
+          authUsername: authUser,
+          sipUri: `sip:${authUser}@${sipDomain}`,
           sipSecret: endpoint.sip_secret,
           transport: endpoint.transport || 'wss',
         },
@@ -373,11 +407,47 @@ Deno.serve(async (req) => {
       return json(200, { success: true, endpoints });
     }
 
+    if (action === 'get_user_endpoint') {
+      const targetUserId = String(body?.userId || body?.profileId || user.id).trim();
+      const endpoints = await restSelect(supabaseUrl, serviceRoleKey, 'voip_sip_endpoints', {
+        org_id: `eq.${orgId}`,
+        assignee_profile_id: `eq.${targetUserId}`,
+        limit: '1',
+        select: 'id,extension,display_name,pjsip_id,sip_secret,webrtc_enabled,transport,max_contacts,metadata,is_active',
+      });
+      return json(200, { success: true, endpoint: endpoints[0] || null });
+    }
+
     if (action === 'upsert_endpoint') {
       const ep = body?.endpoint && typeof body.endpoint === 'object' ? body.endpoint : {};
       const extension = String(ep.extension || '').replace(/[^\w-]/g, '').trim();
       if (!extension) return json(400, { success: false, message: 'شماره داخلی معتبر نیست.' });
       const pjsipId = buildTenantPjsipId(orgId, extension);
+
+      let targetId = ep.id ? String(ep.id).trim() : null;
+      if (!targetId) {
+        let existingEndpoints: any[] = [];
+        if (ep.assignee_profile_id) {
+          existingEndpoints = await restSelect(supabaseUrl, serviceRoleKey, 'voip_sip_endpoints', {
+            org_id: `eq.${orgId}`,
+            assignee_profile_id: `eq.${ep.assignee_profile_id}`,
+            limit: '1',
+            select: 'id',
+          });
+        }
+        if (existingEndpoints.length === 0) {
+          existingEndpoints = await restSelect(supabaseUrl, serviceRoleKey, 'voip_sip_endpoints', {
+            org_id: `eq.${orgId}`,
+            extension: `eq.${extension}`,
+            limit: '1',
+            select: 'id',
+          });
+        }
+        if (existingEndpoints.length > 0) {
+          targetId = existingEndpoints[0].id;
+        }
+      }
+
       const payload: Record<string, any> = {
         org_id: orgId,
         assignee_profile_id: ep.assignee_profile_id || null,
@@ -391,21 +461,22 @@ Deno.serve(async (req) => {
         max_contacts: Math.min(20, Math.max(1, Number(ep.max_contacts || 3) || 3)),
         is_active: ep.is_active !== false,
         updated_by: user.id,
+        metadata: (ep.metadata && typeof ep.metadata === 'object') ? ep.metadata : {},
       };
       if (String(ep.sip_secret || '').trim()) {
         payload.sip_secret = String(ep.sip_secret).trim();
-      } else if (!ep.id) {
+      } else if (!targetId) {
         const bytes = new Uint8Array(12);
         crypto.getRandomValues(bytes);
         payload.sip_secret = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
       }
-      if (!ep.id) payload.created_by = user.id;
+      if (!targetId) payload.created_by = user.id;
 
-      const targetUrl = ep.id
-        ? `${trimTrailingSlash(supabaseUrl)}/rest/v1/voip_sip_endpoints?id=eq.${ep.id}&org_id=eq.${orgId}`
+      const targetUrl = targetId
+        ? `${trimTrailingSlash(supabaseUrl)}/rest/v1/voip_sip_endpoints?id=eq.${targetId}&org_id=eq.${orgId}`
         : `${trimTrailingSlash(supabaseUrl)}/rest/v1/voip_sip_endpoints`;
       const res = await fetch(targetUrl, {
-        method: ep.id ? 'PATCH' : 'POST',
+        method: targetId ? 'PATCH' : 'POST',
         headers: { ...serviceHeaders(serviceRoleKey), Prefer: 'return=representation' },
         body: JSON.stringify(payload),
       });

@@ -15,9 +15,11 @@ import {
   Table,
   Tag,
   Upload,
+  Tooltip,
 } from 'antd';
-import { DeleteOutlined, PlusOutlined, SaveOutlined, UploadOutlined, UserOutlined } from '@ant-design/icons';
+import { DeleteOutlined, PlusOutlined, SaveOutlined, UploadOutlined, UserOutlined, QrcodeOutlined, ScanOutlined, KeyOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
+import { VoipQrScannerModal, PortSipQrDisplayModal } from '../../components/voip/VoipQrScannerModal';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { loadProfilesWithCompat } from '../../utils/profileDirectory';
@@ -113,9 +115,24 @@ const UsersTab: React.FC = () => {
   const [phoneOtpLoading, setPhoneOtpLoading] = useState(false);
   const [phoneOtpRequested, setPhoneOtpRequested] = useState(false);
   const [phoneOtpCode, setPhoneOtpCode] = useState('');
+  const [orgVoipConfig, setOrgVoipConfig] = useState<{
+    provider: string;
+    wss_url?: string;
+    sip_domain?: string;
+    default_dial_mode?: string;
+    is_active?: boolean;
+  } | null>(null);
+  const [userEndpoint, setUserEndpoint] = useState<any>(null);
+  const [qrScannerOpen, setQrScannerOpen] = useState(false);
+  const [portSipQrOpen, setPortSipQrOpen] = useState(false);
   const [form] = Form.useForm();
 
   const mobileValue = Form.useWatch('mobile', form);
+  const watchedVoipEnabled = Form.useWatch('voip_enabled', form);
+  const watchedVoipDialMode = Form.useWatch('voip_dial_mode', form);
+  const watchedExtension = Form.useWatch('voip_extension', form);
+  const watchedPassword = Form.useWatch('voip_sip_password', form);
+  const watchedServerUrl = Form.useWatch('voip_server_url', form);
   const normalizedFormPhone = useMemo(() => normalizeIranMobile(mobileValue), [mobileValue]);
   const fallbackCurrentRoleTitle = useMemo(() => {
     const currentRole = roles.find((role) => String(role?.id || '') === String(currentUserRoleId || ''));
@@ -256,6 +273,28 @@ const UsersTab: React.FC = () => {
 
       setRows([...profileRows, ...inviteRows]);
       setRoles(rolesData || []);
+
+      try {
+        const { data: voipRow } = await supabase
+          .from('integration_settings')
+          .select('provider, settings, is_active')
+          .eq('org_id', currentOrgId)
+          .eq('connection_type', 'voip')
+          .eq('is_active', true)
+          .maybeSingle();
+
+        if (voipRow) {
+          setOrgVoipConfig({
+            provider: voipRow.provider || 'telefonchy',
+            wss_url: voipRow.settings?.wss_url || '',
+            sip_domain: voipRow.settings?.sip_domain || '',
+            default_dial_mode: voipRow.settings?.default_dial_mode || (voipRow.provider === 'telefonchy' ? 'webphone_webrtc' : 'webphone_webrtc'),
+            is_active: voipRow.is_active === true,
+          });
+        }
+      } catch {
+        // ignore
+      }
     } catch (error) {
       message.error(toFaErrorMessage(error as any, 'خطا در دریافت کاربران'));
     } finally {
@@ -373,6 +412,7 @@ const UsersTab: React.FC = () => {
     setIsDrawerOpen(false);
     setEditingUser(null);
     setSeedInvite(null);
+    setUserEndpoint(null);
     setAvatarUrl(null);
     setPhoneAuthState(null);
     setPhoneOtpRequested(false);
@@ -383,6 +423,7 @@ const UsersTab: React.FC = () => {
   const openCreateDrawer = () => {
     setEditingUser(null);
     setSeedInvite(null);
+    setUserEndpoint(null);
     setAvatarUrl(null);
     setPhoneAuthState(null);
     setPhoneOtpRequested(false);
@@ -395,7 +436,9 @@ const UsersTab: React.FC = () => {
       voip_operator_code: '',
       voip_extension: '',
       voip_service_id: '',
-      voip_dial_mode: 'telefonchy_smartcall',
+      voip_dial_mode: orgVoipConfig?.default_dial_mode || 'webphone_webrtc',
+      voip_sip_password: '',
+      voip_server_url: orgVoipConfig?.wss_url || orgVoipConfig?.sip_domain || (orgVoipConfig?.provider === 'telefonchy' ? 'sip.telefonchy.com' : ''),
     });
     setIsDrawerOpen(true);
   };
@@ -403,6 +446,7 @@ const UsersTab: React.FC = () => {
   const openCompleteInviteDrawer = (record: UserRow) => {
     setEditingUser(record);
     setSeedInvite(record);
+    setUserEndpoint(null);
     setAvatarUrl(null);
     setPhoneOtpRequested(false);
     setPhoneOtpCode('');
@@ -418,7 +462,9 @@ const UsersTab: React.FC = () => {
       voip_operator_code: record.voip_operator_code || '',
       voip_extension: record.voip_extension || '',
       voip_service_id: record.voip_service_id || '',
-      voip_dial_mode: record.voip_dial_mode || 'telefonchy_smartcall',
+      voip_dial_mode: record.voip_dial_mode || orgVoipConfig?.default_dial_mode || 'webphone_webrtc',
+      voip_sip_password: '',
+      voip_server_url: orgVoipConfig?.wss_url || orgVoipConfig?.sip_domain || (orgVoipConfig?.provider === 'telefonchy' ? 'sip.telefonchy.com' : ''),
     });
     setIsDrawerOpen(true);
   };
@@ -435,6 +481,7 @@ const UsersTab: React.FC = () => {
 
     setEditingUser(record);
     setSeedInvite(null);
+    setUserEndpoint(null);
     setAvatarUrl(record.avatar_url || null);
     setPhoneOtpRequested(false);
     setPhoneOtpCode('');
@@ -450,11 +497,31 @@ const UsersTab: React.FC = () => {
       voip_operator_code: record.voip_operator_code || '',
       voip_extension: record.voip_extension || '',
       voip_service_id: record.voip_service_id || '',
-      voip_dial_mode: record.voip_dial_mode || 'telefonchy_smartcall',
+      voip_dial_mode: record.voip_dial_mode || orgVoipConfig?.default_dial_mode || 'webphone_webrtc',
+      voip_sip_password: '',
+      voip_server_url: orgVoipConfig?.wss_url || orgVoipConfig?.sip_domain || (orgVoipConfig?.provider === 'telefonchy' ? 'sip.telefonchy.com' : ''),
       password: '',
       password_confirm: '',
     });
     setIsDrawerOpen(true);
+
+    void (async () => {
+      try {
+        const { data: epData } = await supabase.functions.invoke('voip-session', {
+          body: { action: 'get_user_endpoint', userId: record.id },
+        });
+        const ep = epData?.endpoint;
+        if (ep) {
+          setUserEndpoint(ep);
+          form.setFieldsValue({
+            voip_sip_password: ep.sip_secret || '',
+            voip_server_url: ep.metadata?.wss_url || ep.metadata?.server_url || ep.metadata?.sip_domain || orgVoipConfig?.wss_url || orgVoipConfig?.sip_domain || '',
+          });
+        }
+      } catch {
+        // ignore
+      }
+    })();
   };
 
   const invokeUserAdmin = async (body: Record<string, any>) => {
@@ -463,10 +530,10 @@ const UsersTab: React.FC = () => {
 
   const buildVoipProfilePatch = (values: any) => ({
     voip_enabled: values.voip_enabled === true,
-    voip_operator_code: String(values.voip_operator_code || '').trim() || null,
-    voip_extension: String(values.voip_extension || '').trim() || null,
+    voip_operator_code: String(values.voip_operator_code || values.voip_extension || '').trim() || null,
+    voip_extension: String(values.voip_extension || values.voip_operator_code || '').trim() || null,
     voip_service_id: String(values.voip_service_id || '').trim() || null,
-    voip_dial_mode: values.voip_dial_mode || 'telefonchy_smartcall',
+    voip_dial_mode: values.voip_dial_mode || orgVoipConfig?.default_dial_mode || 'webphone_webrtc',
   });
 
   const handleAddOrEditUser = async (values: any) => {
@@ -520,6 +587,49 @@ const UsersTab: React.FC = () => {
             fullName: String(values.full_name || editingUser.full_name || '').trim() || null,
           });
         }
+
+        if (values.voip_enabled && values.voip_extension) {
+          try {
+            await supabase.functions.invoke('voip-session', {
+              body: {
+                action: 'upsert_endpoint',
+                endpoint: {
+                  id: userEndpoint?.id || undefined,
+                  assignee_profile_id: editingUser.id,
+                  extension: String(values.voip_extension).trim(),
+                  display_name: String(values.full_name || editingUser.full_name || values.voip_extension).trim(),
+                  sip_secret: String(values.voip_sip_password || '').trim() || undefined,
+                  webrtc_enabled: values.voip_dial_mode === 'webphone_webrtc',
+                  transport: 'wss',
+                  is_active: true,
+                  metadata: {
+                    wss_url: String(values.voip_server_url || '').trim() || undefined,
+                    sip_domain: String(values.voip_server_url || '').trim() || undefined,
+                    provider: orgVoipConfig?.provider || 'telefonchy',
+                  },
+                },
+              },
+            });
+          } catch (epErr) {
+            console.warn('Failed to sync voip endpoint for user:', epErr);
+          }
+        } else if (!values.voip_enabled && userEndpoint?.id) {
+          try {
+            await supabase.functions.invoke('voip-session', {
+              body: {
+                action: 'upsert_endpoint',
+                endpoint: {
+                  id: userEndpoint.id,
+                  extension: userEndpoint.extension,
+                  is_active: false,
+                },
+              },
+            });
+          } catch {
+            // ignore
+          }
+        }
+
         clearReferenceDataCache();
         clearIdentityDirectoryCache(currentOrgId);
         message.success(`اطلاعات و عضویت کاربر در ${currentOrgName} ذخیره شد.`);
@@ -554,6 +664,32 @@ const UsersTab: React.FC = () => {
             p_user_id: createdId, p_patch: { settings: buildVoipProfilePatch(values) },
           });
           if (settingsError) throw settingsError;
+
+          if (values.voip_enabled && values.voip_extension) {
+            try {
+              await supabase.functions.invoke('voip-session', {
+                body: {
+                  action: 'upsert_endpoint',
+                  endpoint: {
+                    assignee_profile_id: createdId,
+                    extension: String(values.voip_extension).trim(),
+                    display_name: String(values.full_name || values.voip_extension).trim(),
+                    sip_secret: String(values.voip_sip_password || '').trim() || undefined,
+                    webrtc_enabled: values.voip_dial_mode === 'webphone_webrtc',
+                    transport: 'wss',
+                    is_active: true,
+                    metadata: {
+                      wss_url: String(values.voip_server_url || '').trim() || undefined,
+                      sip_domain: String(values.voip_server_url || '').trim() || undefined,
+                      provider: orgVoipConfig?.provider || 'telefonchy',
+                    },
+                  },
+                },
+              });
+            } catch (epErr) {
+              console.warn('Failed to create voip endpoint for new user:', epErr);
+            }
+          }
           const { data: createdMembers, error: createdMemberError } = await supabase.rpc('list_organization_members', {
             p_org_id: currentOrgId, p_user_id: createdId, p_limit: 1,
           });
@@ -884,25 +1020,182 @@ const UsersTab: React.FC = () => {
             <Switch disabled={editingUser?.id === currentUserId} checkedChildren="فعال" unCheckedChildren="غیرفعال" />
           </Form.Item>
 
-          <div className="mt-6 rounded-2xl border border-gray-200 dark:border-gray-800 p-4">
-            <div className="mb-3 font-semibold">تنظیمات VoIP</div>
+          <div className="mt-6 rounded-2xl border border-gray-200 dark:border-gray-800 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="font-semibold text-sm">تنظیمات VoIP و تماس</div>
+              {orgVoipConfig?.provider === 'telefonchy' ? (
+                <Tag color="blue" className="!rounded-lg !text-xs">
+                  پرووایدر فعال سازمان: تلفنچی
+                </Tag>
+              ) : orgVoipConfig?.provider ? (
+                <Tag color="cyan" className="!rounded-lg !text-xs">
+                  پرووایدر فعال: {orgVoipConfig.provider}
+                </Tag>
+              ) : null}
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <Form.Item label="فعال در VoIP" name="voip_enabled" valuePropName="checked" className="mb-0">
                 <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
               </Form.Item>
-              <Form.Item label="حالت شماره‌گیری" name="voip_dial_mode" className="mb-0">
-                <Select options={[...VOIP_DIAL_MODE_OPTIONS]} getPopupContainer={resolveOverlayPopupContainer} />
-              </Form.Item>
-              <Form.Item label="کد اپراتور تلفنچی" name="voip_operator_code" normalize={normalizeDigitsToEnglish} className="mb-0">
-                <Input placeholder="کد اپراتور" />
-              </Form.Item>
-              <Form.Item label="داخلی VoIP" name="voip_extension" normalize={normalizeDigitsToEnglish} className="mb-0">
-                <Input placeholder="مثال: 101" />
-              </Form.Item>
-              <Form.Item label="شناسه سرویس VoIP" name="voip_service_id" className="mb-0 md:col-span-2">
-                <Input placeholder="در صورت تفاوت با اتصال پیش‌فرض" />
-              </Form.Item>
+              {watchedVoipEnabled ? (
+                <Form.Item label="حالت شماره‌گیری" name="voip_dial_mode" className="mb-0">
+                  <Select options={[...VOIP_DIAL_MODE_OPTIONS]} getPopupContainer={resolveOverlayPopupContainer} />
+                </Form.Item>
+              ) : null}
             </div>
+
+            {watchedVoipEnabled ? (
+              <div className="pt-2 border-t border-gray-100 dark:border-gray-800/80 space-y-3">
+                {watchedVoipDialMode === 'webphone_webrtc' ? (
+                  <>
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="اتصال مستقیم تحت وب (WebRTC)"
+                      description="مکالمه زنده مستقیماً داخل همین سامانه انجام می‌شود. برای اتصال به خطوط تلفنچی یا سرور SIP، شماره داخلی، رمز عبور خط و آدرس اینترنتی سرور را وارد کنید، یا با اسکن کد QR تلفنچی/PortSIP آن‌ها را به صورت خودکار بارگذاری نمایید."
+                    />
+
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="dashed"
+                        icon={<ScanOutlined />}
+                        onClick={() => setQrScannerOpen(true)}
+                        className="!rounded-xl text-xs font-medium"
+                      >
+                        اسکن کد QR تلفنچی / PortSIP
+                      </Button>
+                      {watchedExtension ? (
+                        <Button
+                          icon={<QrcodeOutlined />}
+                          onClick={() => setPortSipQrOpen(true)}
+                          className="!rounded-xl text-xs font-medium"
+                        >
+                          نمایش کد QR برای PortSIP موبایل
+                        </Button>
+                      ) : null}
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <Form.Item
+                        label="شناسه اپراتور / داخلی"
+                        name="voip_extension"
+                        normalize={normalizeDigitsToEnglish}
+                        rules={[{ required: true, message: 'شناسه اپراتور الزامی است' }]}
+                        className="mb-0"
+                      >
+                        <Input placeholder="مثال: 101" dir="ltr" />
+                      </Form.Item>
+
+                      <Form.Item
+                        label="رمز عبور"
+                        name="voip_sip_password"
+                        rules={[{ required: !userEndpoint?.id, message: 'رمز عبور الزامی است' }]}
+                        className="mb-0"
+                        extra={
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const bytes = new Uint8Array(8);
+                              crypto.getRandomValues(bytes);
+                              const gen = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+                              form.setFieldValue('voip_sip_password', gen);
+                              message.info('رمز عبور تصادفی تولید و درج شد.');
+                            }}
+                            className="text-[11px] text-sky-600 dark:text-sky-400 hover:underline inline-flex items-center gap-1 mt-1 cursor-pointer"
+                          >
+                            <KeyOutlined className="w-3 h-3" />
+                            <span>تولید رمز تصادفی</span>
+                          </button>
+                        }
+                      >
+                        <Input.Password placeholder={userEndpoint?.id ? 'در صورت تغییر، رمز جدید را وارد کنید' : 'رمز عبور خط'} dir="ltr" />
+                      </Form.Item>
+
+                      <Form.Item
+                        label="دامین سرور (Domain)"
+                        name="voip_server_url"
+                        className="mb-0"
+                        extra="مثال: sip.telefonchy.com"
+                      >
+                        <Input placeholder="مثال: sip.telefonchy.com" dir="ltr" />
+                      </Form.Item>
+
+                      {orgVoipConfig?.provider === 'telefonchy' ? (
+                        <>
+                          <Form.Item label="کد اپراتور تلفنچی (در صورت تفاوت با شناسه)" name="voip_operator_code" normalize={normalizeDigitsToEnglish} className="mb-0">
+                            <Input placeholder="پیش‌فرض: همان شناسه اپراتور" dir="ltr" />
+                          </Form.Item>
+                          <Form.Item label="شناسه سرویس تلفنچی" name="voip_service_id" className="mb-0">
+                            <Input placeholder="در صورت وجود چند خط یا سرویس" dir="ltr" />
+                          </Form.Item>
+                        </>
+                      ) : null}
+                    </div>
+                  </>
+                ) : watchedVoipDialMode === 'telefonchy_smartcall' ? (
+                  <>
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="تماس هوشمند تلفنچی (Smart Call)"
+                      description="هنگام تماس، تلفنچی ابتدا با داخلی یا تلفن رومیزی/PortSIP اپراتور تماس می‌گیرد و با پاسخ دادن اپراتور، تماس با مشتری برقرار می‌شود."
+                    />
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <Form.Item
+                        label="کد اپراتور تلفنچی"
+                        name="voip_operator_code"
+                        normalize={normalizeDigitsToEnglish}
+                        rules={[{ required: true, message: 'کد اپراتور تلفنچی الزامی است' }]}
+                        className="mb-0"
+                      >
+                        <Input placeholder="مثال: 101 یا کد اپراتور در پنل تلفنچی" dir="ltr" />
+                      </Form.Item>
+                      <Form.Item label="داخلی VoIP" name="voip_extension" normalize={normalizeDigitsToEnglish} className="mb-0">
+                        <Input placeholder="جهت تطبیق لاگ‌های تماس" dir="ltr" />
+                      </Form.Item>
+                      <Form.Item label="شناسه سرویس VoIP" name="voip_service_id" className="mb-0 md:col-span-2">
+                        <Input placeholder="در صورت تفاوت با اتصال پیش‌فرض" dir="ltr" />
+                      </Form.Item>
+                    </div>
+                  </>
+                ) : watchedVoipDialMode === 'sip_link' ? (
+                  <>
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="لینک نرم‌افزار SIP"
+                      description="با کلیک روی تماس، نرم‌افزار پیش‌فرض تماس اینترنتی (مثل PortSIP یا MicroSIP) اجرا می‌شود."
+                    />
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <Form.Item label="داخلی VoIP" name="voip_extension" normalize={normalizeDigitsToEnglish} className="mb-0">
+                        <Input placeholder="مثال: 101" dir="ltr" />
+                      </Form.Item>
+                      <Form.Item label="سرور یا دامنه SIP" name="voip_server_url" className="mb-0">
+                        <Input placeholder="مثال: sip.telefonchy.com" dir="ltr" />
+                      </Form.Item>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="لینک تلفن (tel:)"
+                      description="تماس از طریق شماره‌گیر پیش‌فرض سیستم‌عامل باز می‌شود."
+                    />
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <Form.Item label="شماره یا داخلی VoIP" name="voip_extension" normalize={normalizeDigitsToEnglish} className="mb-0">
+                        <Input placeholder="مثال: 101" dir="ltr" />
+                      </Form.Item>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : null}
           </div>
 
           <div className="mt-6 rounded-2xl border border-gray-200 dark:border-gray-800 p-4 space-y-3">
@@ -949,6 +1242,28 @@ const UsersTab: React.FC = () => {
 
         </Form>
       </Modal>
+
+      <VoipQrScannerModal
+        open={qrScannerOpen}
+        onClose={() => setQrScannerOpen(false)}
+        onSuccess={(cfg) => {
+          if (cfg.extension) form.setFieldValue('voip_extension', cfg.extension);
+          if (cfg.password) form.setFieldValue('voip_sip_password', cfg.password);
+          if (cfg.serverUrl || cfg.sipDomain) {
+            form.setFieldValue('voip_server_url', cfg.serverUrl || cfg.sipDomain);
+          }
+          if (cfg.operatorCode) form.setFieldValue('voip_operator_code', cfg.operatorCode);
+        }}
+      />
+
+      <PortSipQrDisplayModal
+        open={portSipQrOpen}
+        onClose={() => setPortSipQrOpen(false)}
+        extension={watchedExtension || ''}
+        password={watchedPassword || userEndpoint?.sip_secret || ''}
+        serverUrl={watchedServerUrl || orgVoipConfig?.sip_domain || orgVoipConfig?.wss_url || ''}
+        displayName={form.getFieldValue('full_name') || watchedExtension || ''}
+      />
 
       <style>{`
         .custom-erp-table .ant-table-thead > tr > th { background: #f9fafb !important; color: #6b7280 !important; font-size: 12px !important; }

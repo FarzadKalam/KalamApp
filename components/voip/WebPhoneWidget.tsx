@@ -595,7 +595,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
 
                 {/* Inline DTMF Pad */}
                 {showDtmfPad ? (
-                  <div className="grid grid-cols-3 gap-1.5 p-2 rounded-2xl bg-slate-100/60 dark:bg-[#121922] border border-slate-200 dark:border-[#242f3d]">
+                  <div className="grid grid-cols-3 gap-1.5 p-2 rounded-2xl bg-slate-100/60 dark:bg-[#121922] border border-slate-200 dark:border-[#242f3d]" dir="ltr" style={{ direction: 'ltr' }}>
                     {['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'].map((digit) => (
                       <button
                         key={digit}
@@ -708,8 +708,8 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
               ) : null}
             </div>
 
-            {/* Tactile Ergonomic 3x4 Keypad */}
-            <div className="grid grid-cols-3 gap-2 text-center">
+            {/* Tactile Ergonomic 3x4 Keypad (International standard: 1 on the left, 2 middle, 3 right) */}
+            <div className="grid grid-cols-3 gap-2 text-center" dir="ltr" style={{ direction: 'ltr' }}>
               {KEYPAD_ROWS.flat().map(({ digit, sub }) => (
                 <button
                   key={digit}

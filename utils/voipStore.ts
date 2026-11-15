@@ -57,6 +57,7 @@ export type WebPhoneSessionConfig = {
     extension: string;
     displayName: string;
     pjsipId: string;
+    authUsername?: string;
     sipUri: string;
     sipSecret: string;
     transport: string;
@@ -354,7 +355,7 @@ export const connectVoipWebPhone = async (options?: { force?: boolean }): Promis
 
       const ua = new UserAgent({
         uri,
-        authorizationUsername: cfg.endpoint.pjsipId,
+        authorizationUsername: cfg.endpoint.authUsername || cfg.endpoint.pjsipId,
         authorizationPassword: cfg.endpoint.sipSecret,
         displayName: cfg.endpoint.displayName,
         transportOptions: {
