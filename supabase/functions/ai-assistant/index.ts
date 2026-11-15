@@ -6713,10 +6713,11 @@ const ensureThread = async (
   }
 
   const threadTitle = buildThreadTitle(payload.title || '', payload.pageContext);
-  const selectedAgents = Array.isArray(payload.selectedAgents) && payload.selectedAgents.length
+  const freeChatMode = payload.metadata?.free_chat === true;
+  const selectedAgents = freeChatMode ? [] : Array.isArray(payload.selectedAgents) && payload.selectedAgents.length
     ? normalizeSelectedAgents(payload.selectedAgents)
     : (payload.agentKey ? normalizeSelectedAgents([payload.agentKey]) : ['lead_orchestrator']);
-  const primaryAgentKey = String(payload.agentKey || selectedAgents[0] || 'lead_orchestrator').trim() || 'lead_orchestrator';
+  const primaryAgentKey = freeChatMode ? null : String(payload.agentKey || selectedAgents[0] || 'lead_orchestrator').trim() || 'lead_orchestrator';
   const channel = String(payload.channel || 'web').trim() || 'web';
   const inserted = await restInsert(supabaseUrl, serviceRoleKey, 'ai_threads', [{
     org_id: authContext.orgId,
@@ -7060,8 +7061,8 @@ const handleGetComposeModels = async (supabaseUrl: string, serviceRoleKey: strin
     loadSaasAiDefaultConfiguration(supabaseUrl, serviceRoleKey),
   ]);
   const saasDefaults=centralDefaults.models;
-  const selectedAgent=normalizeSelectedAgents(body.agents)[0] || 'lead_orchestrator';
-  const configs=authContext.orgId ? await restSelect(supabaseUrl,serviceRoleKey,'org_ai_agent_configs',{
+  const selectedAgent=body.freeChat===true ? null : normalizeSelectedAgents(body.agents)[0] || 'lead_orchestrator';
+  const configs=authContext.orgId && selectedAgent ? await restSelect(supabaseUrl,serviceRoleKey,'org_ai_agent_configs',{
     org_id: `eq.${authContext.orgId}`,agent_key: `eq.${selectedAgent}`,select: 'agent_key,model_override,policy_json',limit: 1,
   }) : [];
   const agentConfig=configs[0] || { agent_key: selectedAgent };
@@ -7696,11 +7697,11 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     err.status = 403;
     throw err;
   }
-  const selectedAgents: AgentKey[] = runnableAgents.permittedAgents.length
+  const selectedAgents: AgentKey[] = freeChatMode ? [] : runnableAgents.permittedAgents.length
     ? runnableAgents.permittedAgents
     : (['lead_orchestrator'] as AgentKey[]);
   const primaryAgent: AgentKey = selectedAgents[0] || 'lead_orchestrator';
-  const primaryAgentConfig = grounding.agentConfigs.find((c: any) => String(c?.agent_key || '') === primaryAgent) || null;
+  const primaryAgentConfig = freeChatMode ? null : grounding.agentConfigs.find((c: any) => String(c?.agent_key || '') === primaryAgent) || null;
   const mergedCapabilities = Array.from(new Set([...selectedCapabilities, ...heuristic.capabilities]));
   const requestedTone = String(body?.toneStyle || body?.tone_style || '').trim();
   const preferredToneStyle: AgentToneStyle = (['formal', 'friendly_warm', 'concise', 'coaching', 'custom'] as const)
@@ -7711,7 +7712,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
   const providerSlot = body?.preferFastAgentModel === true ? 'agent_fast' : capability;
   const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, providerSlot, {
     modelOverride: body?.modelOverride,
-    agentConfig: primaryAgentConfig || { agent_key: primaryAgent },
+    agentConfig: freeChatMode ? null : primaryAgentConfig || { agent_key: primaryAgent },
   });
   const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings || initialOrgAiSettings, capability);
   for (const selectedCapability of selectedCapabilities) {
@@ -7800,7 +7801,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     contextKey,
     provider: providerConfig.provider,
     model: providerConfig.model,
-    agentKey: primaryAgent,
+    agentKey: selectedAgents.length ? primaryAgent : null,
     selectedAgents,
     channel,
     forceNew: body?.forceNewThread === true,
@@ -7819,7 +7820,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
       contextKey,
       provider: providerConfig.provider,
       model: providerConfig.model,
-      agentKey: primaryAgent,
+      agentKey: selectedAgents.length ? primaryAgent : null,
       selectedAgents,
       channel,
       forceNew: true,
@@ -7852,7 +7853,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
       internal_agent_step: body?.metadata?.internal_agent_step === true || body?.metadata?.internal_agent_input === true,
       capabilities: mergedCapabilities,
       selected_agents: selectedAgents,
-      agent_key: primaryAgent,
+      agent_key: selectedAgents.length ? primaryAgent : null,
       tone_style: preferredToneStyle,
       channel,
       free_chat: freeChatMode,
@@ -7948,7 +7949,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     cachedPrefixHash = compiled.cachedPrefixHash;
     cacheOptions = buildAvalaiCacheOptions({
       orgId: authContext.orgId,
-      agentKey: primaryAgent,
+      agentKey: selectedAgents.length ? primaryAgent : null,
       prefixHash: cachedPrefixHash,
       modelCatalog: providerConfig.modelCatalog,
       modelId: providerConfig.model,
@@ -7969,7 +7970,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     explicitCapabilities: selectedCapabilities,
     selectedCapabilitySet: new Set(mergedCapabilities),
     selectedAgents,
-    primaryAgent,
+    primaryAgent: freeChatMode ? null : primaryAgent,
     explicitAgentSelected,
     blockedAgents: mergedBlockedAgents,
     instagramMediaCards: dataToolRuntime?.instagramMediaCards || [],
@@ -8080,8 +8081,8 @@ const patchChatThreadAfterAssistant = async (
     context_type: getContextKind(prepared.pageContext.context || {}),
     module_id: prepared.pageContext.moduleId || null,
     record_id: prepared.pageContext.recordId || null,
-    agent_key: prepared.primaryAgent || prepared.thread?.agent_key || 'lead_orchestrator',
-    selected_agents: Array.isArray(prepared.selectedAgents) && prepared.selectedAgents.length
+    agent_key: prepared.freeChatMode ? null : prepared.primaryAgent || prepared.thread?.agent_key || 'lead_orchestrator',
+    selected_agents: prepared.freeChatMode ? [] : Array.isArray(prepared.selectedAgents) && prepared.selectedAgents.length
       ? prepared.selectedAgents
       : (prepared.thread?.selected_agents || ['lead_orchestrator']),
     channel: prepared.channel || prepared.thread?.channel || 'web',
@@ -8097,8 +8098,8 @@ const patchChatThreadAfterAssistant = async (
       record_id: prepared.pageContext.recordId || null,
       intent: prepared.pageContext.intent || prepared.pageContext.context?.intent || null,
       free_chat: prepared.freeChatMode === true,
-      agent_key: prepared.primaryAgent || 'lead_orchestrator',
-      selected_agents: prepared.selectedAgents || ['lead_orchestrator'],
+      agent_key: prepared.freeChatMode ? null : prepared.primaryAgent || 'lead_orchestrator',
+      selected_agents: prepared.freeChatMode ? [] : prepared.selectedAgents || ['lead_orchestrator'],
       explicit_agent_selected: prepared.explicitAgentSelected === true || prepared.thread?.metadata?.explicit_agent_selected === true,
       tone_style: prepared.preferredToneStyle || 'friendly_warm',
       channel: prepared.channel || 'web',
@@ -8287,7 +8288,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
       web_search_used: webSearchResults.length > 0,
       capabilities: selectedCapabilities,
       selected_agents: selectedAgents,
-      agent_key: primaryAgent,
+      agent_key: selectedAgents.length ? primaryAgent : null,
       tone_style: preferredToneStyle,
       channel,
       cached_prefix_hash: cachedPrefixHash,
@@ -8318,7 +8319,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
           serviceRoleKey,
           orgId: authContext.orgId,
           userId: authContext.userId,
-          agentKey: primaryAgent,
+          agentKey: selectedAgents.length ? primaryAgent : null,
           selectedAgents,
           channel,
           summaryFa: extractedAction.summaryFa,
@@ -8354,7 +8355,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     capability,
     provider: aiResult.provider,
     model: aiResult.model,
-    agentKey: primaryAgent,
+    agentKey: selectedAgents.length ? primaryAgent : null,
     channel,
     modelCatalog: providerConfig.modelCatalog,
     usageMetadata: aiResult.usageMetadata,
@@ -8364,7 +8365,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
       knowledge_chunk_ids: knowledgeChunks.map((chunk) => chunk.id),
       capabilities: selectedCapabilities,
       selected_agents: selectedAgents,
-      agent_key: primaryAgent,
+      agent_key: selectedAgents.length ? primaryAgent : null,
       web_search_forced: forceWebSearch,
     },
   });
@@ -8821,11 +8822,11 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       message: runnableAgents.blockedAgents[0]?.reasonFa || 'شما دسترسی استفاده از این ایجنت را ندارید.',
     });
   }
-  const selectedAgents: AgentKey[] = runnableAgents.permittedAgents.length
+  const selectedAgents: AgentKey[] = freeChatMode ? [] : runnableAgents.permittedAgents.length
     ? runnableAgents.permittedAgents
     : (['lead_orchestrator'] as AgentKey[]);
   const primaryAgent: AgentKey = selectedAgents[0] || 'lead_orchestrator';
-  const primaryAgentConfig = grounding.agentConfigs.find((c: any) => String(c?.agent_key || '') === primaryAgent) || null;
+  const primaryAgentConfig = freeChatMode ? null : grounding.agentConfigs.find((c: any) => String(c?.agent_key || '') === primaryAgent) || null;
   const mergedCapabilities = Array.from(new Set([...selectedCapabilities, ...heuristic.capabilities, 'document_analysis']));
   const requestedTone = String(body?.toneStyle || body?.tone_style || '').trim();
   const preferredToneStyle: AgentToneStyle = (['formal', 'friendly_warm', 'concise', 'coaching', 'custom'] as const)
@@ -8838,7 +8839,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
   const providerSlot = body?.preferFastAgentModel === true ? 'agent_fast' : primaryCapability;
   const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, providerSlot, {
     modelOverride: body?.modelOverride,
-    agentConfig: primaryAgentConfig || { agent_key: primaryAgent },
+    agentConfig: freeChatMode ? null : primaryAgentConfig || { agent_key: primaryAgent },
   });
   const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings || initialOrgAiSettings, capability);
   for (const selectedCap of selectedCapabilities) {
@@ -8891,7 +8892,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     contextKey,
     provider: providerConfig.provider,
     model: providerConfig.model,
-    agentKey: primaryAgent,
+    agentKey: selectedAgents.length ? primaryAgent : null,
     selectedAgents,
     channel,
     forceNew: body?.forceNewThread === true,
@@ -8924,7 +8925,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       internal_agent_step: internalAgentStep,
       capabilities: mergedCapabilities,
       selected_agents: selectedAgents,
-      agent_key: primaryAgent,
+      agent_key: selectedAgents.length ? primaryAgent : null,
       tone_style: preferredToneStyle,
       channel,
       file: {
@@ -8994,7 +8995,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     cachedPrefixHash = compiled.cachedPrefixHash;
     cacheOptions = buildAvalaiCacheOptions({
       orgId: authContext.orgId,
-      agentKey: primaryAgent,
+      agentKey: selectedAgents.length ? primaryAgent : null,
       prefixHash: cachedPrefixHash,
       modelCatalog: providerConfig.modelCatalog,
       modelId: providerConfig.model,
@@ -9116,7 +9117,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       avalai_request_id: aiResult.requestId || null,
       capability,
       selected_agents: selectedAgents,
-      agent_key: primaryAgent,
+      agent_key: selectedAgents.length ? primaryAgent : null,
       tone_style: preferredToneStyle,
       channel,
       cached_prefix_hash: cachedPrefixHash,
@@ -9141,7 +9142,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
           serviceRoleKey,
           orgId: authContext.orgId,
           userId: authContext.userId,
-          agentKey: primaryAgent,
+          agentKey: selectedAgents.length ? primaryAgent : null,
           selectedAgents,
           channel,
           summaryFa: extractedAction.summaryFa,
@@ -9177,7 +9178,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     capability,
     provider: aiResult.provider,
     model: aiResult.model,
-    agentKey: primaryAgent,
+    agentKey: selectedAgents.length ? primaryAgent : null,
     channel,
     modelCatalog: providerConfig.modelCatalog,
     usageMetadata: aiResult.usageMetadata,
@@ -9186,7 +9187,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       context_key: contextKey,
       filename,
       selected_agents: selectedAgents,
-      agent_key: primaryAgent,
+      agent_key: selectedAgents.length ? primaryAgent : null,
       analysis_fallback: aiResult?.analysisFallback || null,
     },
   });
@@ -9199,7 +9200,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     context_type: getContextKind(pageContext.context || {}),
     module_id: pageContext.moduleId || null,
     record_id: pageContext.recordId || null,
-    agent_key: primaryAgent,
+    agent_key: selectedAgents.length ? primaryAgent : null,
     selected_agents: selectedAgents,
     channel,
     ...(cachedPrefixHash ? { cached_prefix_hash: cachedPrefixHash } : {}),
@@ -9212,7 +9213,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       context: pageContext.context || null,
       module_id: pageContext.moduleId || null,
       record_id: pageContext.recordId || null,
-      agent_key: primaryAgent,
+      agent_key: selectedAgents.length ? primaryAgent : null,
       selected_agents: selectedAgents,
       tone_style: preferredToneStyle,
       channel,
@@ -9236,7 +9237,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       questions: presentAiQuestionResponse(aiResult.content).questions,
     proposedAction,
     selectedAgents,
-    primaryAgent,
+    primaryAgent: freeChatMode ? null : primaryAgent,
     blockedAgents: mergedBlockedAgents,
     instagramMediaCards: fileDataTools?.instagramMediaCards || [],
     toneStyle: preferredToneStyle,

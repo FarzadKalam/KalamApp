@@ -15,6 +15,10 @@ vi.mock('../../supabaseClient', () => ({
 }));
 
 describe('AiComposeModelBar', () => {
+  it('requests organization defaults when no agent is selected in free conversation',async () => {
+    render(<AiComposeModelBar selectedCapabilities={['free_chat']} agents={[]} fallbackCapability="dashboard_chat" onModelOverrideChange={vi.fn()} />);
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('ai-assistant',{body:{action:'get_compose_models',freeChat:true,agents:[]}}));
+  });
   afterEach(cleanup);
   beforeEach(() => {
     invokeMock.mockReset();

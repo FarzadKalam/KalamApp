@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Avatar, Button, Checkbox, Drawer, Empty, Input, Modal, Popconfirm, Popover, Progress, Space, Spin, Tag, Tooltip } from 'antd';
-import { CheckOutlined, CloseOutlined, CompressOutlined, CopyOutlined, DeleteOutlined, EditOutlined, ForwardOutlined, MenuOutlined, ShareAltOutlined, UserAddOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
+import { CheckOutlined, CloseOutlined, PlusOutlined, CopyOutlined, DeleteOutlined, EditOutlined, ForwardOutlined, MenuOutlined, ShareAltOutlined, UserAddOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
@@ -231,6 +231,9 @@ interface AssistantPanelProps {
   onThreadRenamed?: (threadId: string, title: string, thread?: any) => void;
   onThreadUpserted?: (thread: any) => void;
   showThreadListButton?: boolean;
+  onOpenThreadList?: () => void;
+  threadListExpanded?: boolean;
+  onNewConversation?: () => void;
   showAgentInboxBox?: boolean;
 }
 
@@ -527,6 +530,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   onThreadRenamed,
   onThreadUpserted,
   showThreadListButton = false,
+  onOpenThreadList,
+  threadListExpanded,
+  onNewConversation,
   showAgentInboxBox = false,
 }) => {
   const { message } = App.useApp();
@@ -602,7 +608,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const [editingThreadTitle, setEditingThreadTitle] = useState(false);
   const [draftThreadTitle, setDraftThreadTitle] = useState(initialTitle);
   const [renamingThread, setRenamingThread] = useState(false);
-  const [compressingContext, setCompressingContext] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [sharingThread, setSharingThread] = useState(false);
   const [sharedIdentityTokens, setSharedIdentityTokens] = useState<string[]>([]);
@@ -619,7 +624,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const initializedPanelSessionRef = useRef<string | null>(null);
   const modelOverrideRef = useRef<string | null>(null);
   const composerPreferencesRef = useRef<Record<string, any>>({});
-  const autoCompressedSignatureRef = useRef('');
   const restoredRecordThreadScopeRef = useRef('');
   const appliedInitialPromptRef = useRef('');
   const normalizedInitialThreadId = String(initialThreadId || '').trim() || null;
@@ -905,10 +909,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const shouldUseTaskBundle = !imageMode && !videoMode && (bundleInputs.length > 0 || workflowCapabilityCount > 1);
   const handleComposerCapabilitiesChange = useCallback((next: AiComposerCapability[]) => {
     const normalizedNext = normalizeAiComposerCapabilities(next);
-    const entersFreeChat = normalizedNext.includes('free_chat') && !selectedCapabilities.includes('free_chat');
+    const changesChatMode = normalizedNext.includes('free_chat') !== selectedCapabilities.includes('free_chat');
     setSelectedCapabilities(normalizedNext);
     setAutoSuggestedCapabilities([]);
-    if (entersFreeChat) {
+    if (changesChatMode) {
       setThreadId(null);
       setThreadContext(null);
       setMessages([]);
@@ -2989,23 +2993,14 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     }
   }, [callAssistant, message, onThreadDeleted, threadId]);
 
-  const compressThreadContext = useCallback(async () => {
-    if (!threadId || compressingContext) return;
-    setCompressingContext(true);
-    try {
-      const data = await callAssistant({
-        action: 'compress_thread_context',
-        threadId,
-        modelOverride: modelOverrideRef.current,
-      });
-      if (data?.thread) onThreadUpserted?.(data.thread);
-      message.success?.('زمینه گفتگو فشرده شد و برای ادامه همین گفتگو ذخیره شد.');
-    } catch (error: any) {
-      message.error?.(toFaErrorMessage(error, 'فشرده‌سازی زمینه گفتگو ناموفق بود.'));
-    } finally {
-      setCompressingContext(false);
-    }
-  }, [callAssistant, compressingContext, message, onThreadUpserted, threadId]);
+  const startFreshConversation = useCallback(() => {
+    if (submitting || loadingThread) return;
+    setThreadListOpen(false);
+    if (onNewConversation) {onNewConversation();return;}
+    setThreadId(null);setThreadContext(null);setMessages([]);setThreadTitle('');setDraftThreadTitle('');setPendingAiAction(null);setInput('');
+    setImageEditSourceUrl(null);
+    setBundleInputs(previous => {revokeBundleInputPreviewUrls(previous);return [];});
+  },[submitting,loadingThread,onNewConversation]);
 
   const saveThreadSharing = useCallback(async () => {
     if (!threadId || sharingThread) return;
@@ -3061,9 +3056,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       || (initialAgents?.length === 1 ? initialAgents[0] : null)
       || 'lead_orchestrator'
     ) as AgentKey;
-    const agentDef = getAgentDefinition(effectiveAgentKey);
+    const isFreeConversation = item.metadata?.free_chat === true || capabilities.includes('free_chat');
+    const agentDef = isFreeConversation ? null : getAgentDefinition(effectiveAgentKey);
     const rawSelectedAgents = Array.isArray(item.metadata?.selected_agents) ? item.metadata.selected_agents : [];
-    const collaboratingAgents = Array.from(new Set(
+    const collaboratingAgents = isFreeConversation ? [] : Array.from(new Set(
       [effectiveAgentKey, ...rawSelectedAgents]
         .map((k) => getAgentDefinition(k as AgentKey))
         .filter((d): d is NonNullable<typeof d> => Boolean(d)),
@@ -3449,18 +3445,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       });
   }, [active, fetchDrawerThreads, loadThread, loadingThread, recordThreadScope, threadId]);
 
-  useEffect(() => {
-    if (!threadId || compressingContext || estimatedContextPercent < 90 || messages.length < 8) return;
-    const signature = `${threadId}:${messages.length}:${estimatedContextPercent}`;
-    if (autoCompressedSignatureRef.current === signature) return;
-    autoCompressedSignatureRef.current = signature;
-    void compressThreadContext();
-  }, [compressThreadContext, compressingContext, estimatedContextPercent, messages.length, threadId]);
-
   return (
     <div className="ai-chat-theme ai-chat-panel flex h-full min-h-0 flex-col">
-      <div className="border-b border-slate-200/65 bg-white/92 px-3 py-2.5 backdrop-blur dark:border-white/[0.07] dark:bg-[#1c1c1f]/95">
-        <div className="mb-2 flex items-center justify-between gap-2">
+      <div data-testid="ai-conversation-header" className="ai-chat-surface-header border-b border-slate-200/65 bg-white/92 px-3 py-2.5 backdrop-blur dark:border-white/[0.07] dark:bg-[#1c1c1f]/95">
+        <div className="ai-chat-header-row flex items-center justify-between gap-2">
           <div className="min-w-0 flex-1">
             {editingThreadTitle ? (
               <div className="flex min-w-0 items-center gap-1" onClick={(event) => event.stopPropagation()}>
@@ -3528,12 +3516,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               )}
             </div>
           </div>
-          <Space size={4}>
-            {showThreadListButton ? (
-              <Tooltip title="فهرست گفتگوها">
-                <Button type="text" size="small" icon={<MenuOutlined />} onClick={() => setThreadListOpen(true)} aria-label="فهرست گفتگوهای هوش مصنوعی" />
-              </Tooltip>
-            ) : null}
+          <div className="ai-chat-header-actions flex shrink-0 items-center gap-1">
             {!checkingAiKnowledge && !aiKnowledgeConfigured ? (
               <Popover
                 trigger="click"
@@ -3564,15 +3547,14 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 />
               </span>
             </Tooltip>
-            <Tooltip title="فشرده‌سازی زمینه گفتگو">
+            <Tooltip title="گفتگوی جدید">
               <Button
                 type="text"
                 size="small"
-                icon={<CompressOutlined />}
-                loading={compressingContext}
-                disabled={!threadId || messages.length < 4}
-                onClick={() => void compressThreadContext()}
-                aria-label="فشرده‌سازی زمینه گفتگو"
+                icon={<PlusOutlined />}
+                disabled={submitting || loadingThread}
+                onClick={startFreshConversation}
+                aria-label="شروع گفتگوی جدید"
               />
             </Tooltip>
             <Tooltip title="اشتراک‌گذاری گفتگو">
@@ -3594,13 +3576,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             >
               <Button type="text" size="small" danger icon={<DeleteOutlined />} loading={deletingThread} disabled={messages.length === 0 && !threadId} aria-label="حذف گفتگوی هوش مصنوعی" />
             </Popconfirm>
-          </Space>
+            {showThreadListButton ? <Tooltip title="فهرست گفتگوها">
+              <Button className={onOpenThreadList ? 'md:!hidden' : undefined} type="text" size="small" icon={<MenuOutlined />} onClick={() => onOpenThreadList ? onOpenThreadList() : setThreadListOpen(true)} aria-label="فهرست گفتگوهای هوش مصنوعی" aria-expanded={onOpenThreadList ? threadListExpanded : threadListOpen} />
+            </Tooltip> : null}
+          </div>
         </div>
-        <Space size={[6, 6]} wrap>
-          {conversationContext.mode === 'list' && (conversationContext.selectedRecordIds?.length || 0) > 0 ? (
-            <Tag color="blue">{Math.min(conversationContext.selectedRecordIds?.length || 0, 10).toLocaleString('fa-IR')} انتخاب‌شده</Tag>
-          ) : null}
-        </Space>
+        {conversationContext.mode === 'list' && (conversationContext.selectedRecordIds?.length || 0) > 0 ? <Tag color="blue">{(conversationContext.selectedRecordIds?.length || 0).toLocaleString('fa-IR')} انتخاب‌شده</Tag> : null}
       </div>
 
       <div ref={scrollRef} onScroll={handleMessageScroll} className="ai-chat-message-list min-h-0 flex-1 overflow-y-auto px-3 py-3">
@@ -3907,6 +3888,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         placement="right"
         width="min(92vw, 360px)"
         title={recordThreadScope ? 'گفتگوهای این رکورد' : 'گفتگوهای هوش مصنوعی'}
+        footer={<Button block type="primary" icon={<PlusOutlined />} disabled={submitting || loadingThread} onClick={startFreshConversation}>گفتگوی جدید</Button>}
         classNames={{ body: '!p-0' }}
         destroyOnHidden
         getContainer={typeof document === 'undefined' ? undefined : () => document.body}

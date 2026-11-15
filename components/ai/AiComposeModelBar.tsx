@@ -56,6 +56,7 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
   const [override, setOverride] = useState<string | null>(null);
   const onModelOverrideChangeRef = useRef(onModelOverrideChange);
   const agentKeys=(agents || []).join(',');
+  const freeChat=selectedCapabilities.includes('free_chat');
 
   useEffect(() => {
     onModelOverrideChangeRef.current = onModelOverrideChange;
@@ -65,7 +66,7 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
     let mounted = true;
     (async () => {
       try {
-        const { data, error } = await supabase.functions.invoke('ai-assistant', { body: { action: 'get_compose_models',agents: agentKeys ? agentKeys.split(',') : [] } });
+        const { data, error } = await supabase.functions.invoke('ai-assistant', { body: { action: 'get_compose_models',freeChat,agents: agentKeys ? agentKeys.split(',') : [] } });
         if (error) throw error;
         if (mounted && data?.success) setCapabilities(data.capabilities || {});
       } catch {
@@ -73,7 +74,7 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
       }
     })();
     return () => { mounted = false; };
-  }, [refreshKey,agentKeys]);
+  }, [refreshKey,agentKeys,freeChat]);
 
   const effectiveCapability = useMemo(
     () => resolveEffectiveCapability(new Set(selectedCapabilities), fallbackCapability),

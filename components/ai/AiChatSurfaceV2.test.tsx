@@ -1,9 +1,10 @@
 import React from 'react';
 import { App } from 'antd';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AiChatSurfaceV2 from './AiChatSurfaceV2';
+vi.mock('../../moduleRegistry',()=>({MODULES:{customers:{id:'customers',titles:{fa:'مشتریان'},fields:[],blocks:[]}}}));
 
 const invokeMock = vi.fn();
 const fetchMock = vi.fn();
@@ -132,7 +133,9 @@ describe('AiChatSurfaceV2', () => {
     await waitFor(() => expect(screen.getAllByText('گفتگوی واقعی فروش').length).toBeGreaterThan(0));
     expect(invokeMock).toHaveBeenCalledWith('ai-assistant', expect.objectContaining({ body: expect.objectContaining({ action: 'list_threads' }) }));
 
-    fireEvent.change(screen.getByPlaceholderText('جستجوی گفتگوها'), { target: { value: 'پشتیبانی' } });
+    expect(screen.queryByPlaceholderText('جستجوی گفتگوها')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button',{name:'جستجوی گفتگوهای هوش مصنوعی'}));
+    fireEvent.change(await screen.findByPlaceholderText('جستجوی گفتگوها'), { target: { value: 'پشتیبانی' } });
     expect(screen.getAllByText('گفتگوی پشتیبانی').length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getAllByText('گفتگوی پشتیبانی')[0]);
@@ -170,6 +173,32 @@ describe('AiChatSurfaceV2', () => {
     await waitFor(() => expect(screen.getByText('پاسخ تازه')).toBeInTheDocument());
     expect(invokeMock.mock.calls.some((call) => call[1]?.body?.action === 'get_thread' && call[1]?.body?.threadId === 'thread-1')).toBe(false);
   }, 15000);
+
+  it('opens the shared thread drawer with a persistent new conversation action',async () => {
+    renderSurface(['/ai']);
+    await screen.findAllByText('گفتگوی واقعی فروش');
+    expect(screen.queryByLabelText('فشرده‌سازی زمینه گفتگو')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('فهرست گفتگوهای هوش مصنوعی'));
+    const drawer=await screen.findByTestId('ai-thread-drawer');
+    expect(within(drawer).getByText('گفتگوی واقعی فروش')).toBeInTheDocument();
+    const newChat=within(drawer).getByRole('button',{name:/گفتگوی جدید.*Ctrl/});
+    expect(newChat.parentElement).toHaveClass('shrink-0');
+    fireEvent.click(newChat);
+    await waitFor(() => expect(screen.getByLabelText('فهرست گفتگوهای هوش مصنوعی')).toHaveAttribute('aria-expanded','false'));
+    expect(screen.getByLabelText('شروع گفتگوی جدید')).toBeInTheDocument();
+  },30000);
+
+  it('handles the new conversation shortcut with a Persian keyboard without invoking browser shortcuts',async () => {
+    vi.stubGlobal('matchMedia',vi.fn((query:string) => ({matches:query.includes('hover'),media:query,addListener:vi.fn(),removeListener:vi.fn(),addEventListener:vi.fn(),removeEventListener:vi.fn(),dispatchEvent:vi.fn()})));
+    renderSurface(['/ai']);
+    await screen.findAllByText('گفتگوی واقعی فروش');
+    const oldShortcut=new KeyboardEvent('keydown',{key:'N',code:'KeyN',altKey:true,shiftKey:true,cancelable:true});
+    window.dispatchEvent(oldShortcut);expect(oldShortcut.defaultPrevented).toBe(false);
+    const shortcut=new KeyboardEvent('keydown',{key:'د',code:'KeyN',altKey:true,ctrlKey:true,cancelable:true});
+    act(() => {window.dispatchEvent(shortcut);});
+    expect(shortcut.defaultPrevented).toBe(true);
+    await waitFor(() => expect(within(screen.getByTestId('ai-conversation-header')).queryByText('گفتگوی واقعی فروش')).not.toBeInTheDocument());
+  },15000);
 
   it('shows observed parallel agent activity before metadata and clears it after the final answer', async () => {
     let controller!: ReadableStreamDefaultController<Uint8Array>;

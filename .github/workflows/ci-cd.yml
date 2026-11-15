@@ -173,7 +173,7 @@ jobs:
           npx vitest run supabase/functions/ai-assistant/operational-preflight.test.ts supabase/functions/_shared/ai-gateway.test.ts
           supabase/functions/_shared/ai-native-skills.test.ts supabase/functions/_shared/ai-agent-data.test.ts supabase/functions/_shared/ai-skills/instagram-tools.test.ts
           supabase/functions/_shared/ai-process-data.test.ts supabase/functions/_shared/ai-process-operations.test.ts supabase/functions/ai-assistant/process-execution.test.ts
-          supabase/functions/_shared/ai-context-lifecycle.test.ts supabase/functions/ai-assistant/thread-memory.test.ts
+          supabase/functions/_shared/ai-context-lifecycle.test.ts supabase/functions/ai-assistant/thread-memory.test.ts supabase/functions/ai-assistant/free-chat.test.ts
           supabase/functions/_shared/ai-reasoning.test.ts
           supabase/functions/_shared/ai-tool-calls.test.ts supabase/functions/ai-assistant/data-tool-loop.test.ts
           supabase/functions/_shared/ai-agent-task-contract.test.ts supabase/functions/_shared/ai-agent-task-runtime.test.ts

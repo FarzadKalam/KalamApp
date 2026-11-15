@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Badge, Button, Drawer, Empty, Input, Spin, Tooltip } from 'antd';
-import { CloseOutlined, PlusOutlined, PushpinFilled, PushpinOutlined, SearchOutlined, ShareAltOutlined } from '@ant-design/icons';
+import { CloseOutlined, PlusOutlined, PushpinFilled, PushpinOutlined, SearchOutlined, ShareAltOutlined, MessageOutlined } from '@ant-design/icons';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
@@ -13,6 +13,7 @@ import AssistantPanel from './AssistantPanel';
 import type { AiComposerCapability } from './AiCapabilityComposerActions';
 import { getAgentDefinition, normalizeSelectedAgents, type AgentKey } from '../../utils/aiAgentCatalog';
 import { AiAgentCameoFigure } from './AiAgentIcon';
+import './AiChatSurfaceV2.css';
 
 type AiThreadRow = {
   id: string;
@@ -89,6 +90,7 @@ type AiThreadSource = {
 };
 
 const getThreadSource = (thread: AiThreadRow): AiThreadSource | null => {
+  if(thread.metadata?.free_chat === true) return null;
   const metadata = thread.metadata || {};
   const storedContext = metadata.context && typeof metadata.context === 'object' ? metadata.context : {};
   const moduleId = String(storedContext.moduleId || thread.module_id || metadata.module_id || '').trim();
@@ -109,6 +111,7 @@ const getThreadSource = (thread: AiThreadRow): AiThreadSource | null => {
 
 const getThreadAgent = (thread: AiThreadRow) => {
   const metadata = thread.metadata || {};
+  if (metadata.free_chat === true) return { ...getAgentDefinition('lead_orchestrator')!,titleFa: 'بدون ایجنت',badgeColor: '#64748b' };
   const rawKey = String(
     metadata.agent_key
     || (Array.isArray(metadata.selected_agents) ? metadata.selected_agents[0] : '')
@@ -118,6 +121,7 @@ const getThreadAgent = (thread: AiThreadRow) => {
 };
 
 const getThreadSubtitle = (thread: AiThreadRow) => {
+  if (thread.metadata?.free_chat === true) return 'گفتگوی آزاد';
   const source = getThreadSource(thread);
   if (source) return source.label;
   const metadata = thread.metadata || {};
@@ -200,9 +204,16 @@ const AiChatSurfaceV2: React.FC = () => {
   const [aiCreditSummary, setAiCreditSummary] = useState<AiCreditSummary | null>(null);
   const [dismissedAiWarning, setDismissedAiWarning] = useState(false);
   const [search, setSearch] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
   const [newConversationSeed, setNewConversationSeed] = useState(0);
   const [initialRouteConsumed, setInitialRouteConsumed] = useState(false);
   const searchInputRef = useRef<any>(null);
+  const drawerSearchInputRef = useRef<any>(null);
+  useEffect(() => {
+    if (!searchOpen) return;
+    const frame=window.requestAnimationFrame(() => (threadListOpen ? drawerSearchInputRef : searchInputRef).current?.focus?.());
+    return () => window.cancelAnimationFrame(frame);
+  },[searchOpen,threadListOpen]);
   const routeState = (location.state && typeof location.state === 'object' ? location.state : {}) as Record<string, any>;
   const initialFile = routeState.aiInitialFile && typeof routeState.aiInitialFile === 'object' ? routeState.aiInitialFile : null;
   const initialVoipCallLogId = String(routeState.aiInitialVoipCallLogId || '').trim() || null;
@@ -350,7 +361,8 @@ const AiChatSurfaceV2: React.FC = () => {
   useEffect(() => {
     if (typeof window === 'undefined' || !window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
     const onShortcut = (event: KeyboardEvent) => {
-      if (!event.altKey || !event.shiftKey || event.ctrlKey || event.metaKey || event.key.toLowerCase() !== 'n') return;
+      if (event.defaultPrevented || event.repeat || event.isComposing || event.getModifierState('AltGraph') || !event.altKey || !(event.ctrlKey || event.metaKey) || event.shiftKey || (event.code !== 'KeyN' && event.key.toLowerCase() !== 'n')) return;
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
       event.preventDefault();
       startNewConversation();
     };
@@ -417,35 +429,32 @@ const AiChatSurfaceV2: React.FC = () => {
     }
   }, [handleThreadUpserted, message, threads]);
 
-  const renderThreadList = (compact = false) => (
-    <div className={compact ? 'flex h-full flex-col gap-1 overflow-y-auto px-1 py-1.5' : 'flex h-full min-h-0 flex-col'}>
+  const renderThreadList = (compact = false, inDrawer = false) => (
+    <div className={compact ? 'flex h-full flex-col gap-1 overflow-y-auto px-1 py-1.5' : 'flex min-h-0 flex-1 flex-col'}>
       {!compact ? (
-        <div className="border-b border-slate-200/60 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-[#1c1c1f]">
-          <div className="flex items-center justify-between gap-2">
-            <div className="min-w-0">
+        <>
+        <div data-testid="ai-thread-list-header" className="ai-chat-surface-header border-b border-slate-200/60 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-[#1c1c1f]">
+          <div className="ai-chat-header-row flex items-center justify-between gap-2">
+            {searchOpen ? <div className="ai-chat-thread-search min-w-0 flex-1">
+              <Input ref={inDrawer ? drawerSearchInputRef : searchInputRef} allowClear value={search} onChange={event => setSearch(event.target.value)} placeholder="جستجوی گفتگوها"
+                onKeyDown={event => { if(event.key==='Escape'){event.stopPropagation();setSearch('');setSearchOpen(false);} }}
+                suffix={<Button type="text" size="small" icon={<CloseOutlined />} aria-label="بستن جستجوی گفتگوها" onClick={() => {setSearch('');setSearchOpen(false);}} />} />
+            </div> : <div className="min-w-0 flex-1">
               <div className="truncate text-[13px] font-bold text-slate-800 dark:text-slate-100">دستیار هوشمند سازمان</div>
               <div className="mt-0.5 truncate text-[10.5px] leading-4 text-slate-500 dark:text-slate-400">
                 {formatAiCreditSummary(aiCreditSummary, orgCurrency)}
               </div>
-            </div>
+            </div>}
             <div className="flex shrink-0 items-center gap-1">
               <Tooltip title="جستجوی گفتگوها">
-                <Button type="text" shape="circle" icon={<SearchOutlined />} aria-label="جستجوی گفتگوهای هوش مصنوعی" onClick={() => searchInputRef.current?.focus?.()} />
+                <Button type="text" shape="circle" icon={<SearchOutlined />} aria-label="جستجوی گفتگوهای هوش مصنوعی" aria-expanded={searchOpen} onClick={() => {setSearchOpen(true);(inDrawer ? drawerSearchInputRef : searchInputRef).current?.focus?.();}} />
               </Tooltip>
-              <Tooltip title={<span>گفتگوی جدید <kbd className="keyboard-shortcut-hint mr-1 text-[9px] opacity-70">Alt+Shift+N</kbd></span>}>
+              <Tooltip title={<span>گفتگوی جدید <kbd className="keyboard-shortcut-hint mr-1 text-[9px] opacity-70">Ctrl+Alt+N</kbd></span>}>
                 <Button type="text" shape="circle" icon={<PlusOutlined />} aria-label="گفتگوی جدید هوش مصنوعی" onClick={startNewConversation} />
               </Tooltip>
             </div>
           </div>
-          <Input
-            ref={searchInputRef}
-            allowClear
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="جستجوی گفتگوها"
-            prefix={<SearchOutlined className="text-slate-400" />}
-            className="mt-2"
-          />
+        </div>
           {aiUsageWarningText && !dismissedAiWarning ? (
             <div className="mt-2 flex items-start justify-between gap-2 rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-[10.5px] leading-5 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
               <span>{aiUsageWarningText}</span>
@@ -459,7 +468,7 @@ const AiChatSurfaceV2: React.FC = () => {
               />
             </div>
           ) : null}
-        </div>
+        </>
       ) : null}
       <div className={compact ? 'space-y-1' : 'min-h-0 flex-1 overflow-y-auto p-1.5'}>
         {loadingThreads ? (
@@ -496,7 +505,7 @@ const AiChatSurfaceV2: React.FC = () => {
                     style={{ borderColor: `${threadAgent.badgeColor}90` }}
                     title={threadAgent.titleFa}
                   >
-                    <AiAgentCameoFigure agentKey={threadAgent.key} size={28} accentColor={threadAgent.badgeColor} />
+                    {thread.metadata?.free_chat ? <MessageOutlined /> : <AiAgentCameoFigure agentKey={threadAgent.key} size={28} accentColor={threadAgent.badgeColor} />}
                   </div>
                 </Badge>
                 <button
@@ -533,7 +542,7 @@ const AiChatSurfaceV2: React.FC = () => {
                 style={{ borderColor: `${threadAgent.badgeColor}90` }}
                 title={threadAgent.titleFa}
               >
-                <AiAgentCameoFigure agentKey={threadAgent.key} size={28} accentColor={threadAgent.badgeColor} />
+                {thread.metadata?.free_chat ? <MessageOutlined /> : <AiAgentCameoFigure agentKey={threadAgent.key} size={28} accentColor={threadAgent.badgeColor} />}
               </div>
               <span className="min-w-0 flex-1">
                 <span className="flex min-w-0 items-center justify-between gap-2">
@@ -576,9 +585,9 @@ const AiChatSurfaceV2: React.FC = () => {
         })}
       </div>
       {!compact ? (
-        <div className="border-t border-slate-200/60 p-2 dark:border-white/[0.07]">
+        <div className="sticky bottom-0 shrink-0 border-t border-slate-200/60 bg-white p-2 pb-[max(8px,env(safe-area-inset-bottom))] dark:border-white/[0.07] dark:bg-[#1c1c1f]">
           <Button block type="primary" icon={<PlusOutlined />} onClick={startNewConversation}>
-            گفتگوی جدید <kbd className="keyboard-shortcut-hint mr-1 text-[9px] opacity-70">Alt+Shift+N</kbd>
+            گفتگوی جدید <kbd className="keyboard-shortcut-hint mr-1 text-[9px] opacity-70">Ctrl+Alt+N</kbd>
           </Button>
         </div>
       ) : null}
@@ -586,9 +595,9 @@ const AiChatSurfaceV2: React.FC = () => {
   );
 
   return (
-    <div dir="rtl" data-testid="ai-chat-v2" className="ai-chat-theme h-full min-h-0 overflow-hidden bg-slate-100 text-slate-800 dark:bg-[#141414] dark:text-slate-100">
-      <div className="flex h-full min-h-0 overflow-hidden">
-        <aside className="order-last hidden h-full min-h-0 w-[292px] shrink-0 border-l border-slate-200/70 bg-slate-50/86 dark:border-white/[0.07] dark:bg-[#181818] md:block">
+    <div dir="rtl" data-testid="ai-chat-v2" className="ai-chat-surface ai-chat-theme h-full min-h-0 overflow-hidden bg-slate-100 text-slate-800 dark:bg-[#141414] dark:text-slate-100">
+      <div className="flex h-full min-h-0 gap-2 overflow-hidden p-2">
+        <aside aria-label="فهرست گفتگوها" className="order-last hidden h-full min-h-0 w-[292px] shrink-0 md:flex md:flex-col">
           {renderThreadList(false)}
         </aside>
         <main className="min-w-0 flex-1">
@@ -615,6 +624,9 @@ const AiChatSurfaceV2: React.FC = () => {
             onThreadRenamed={handleThreadRenamed}
             onThreadUpserted={handleThreadUpserted}
             showThreadListButton
+            onOpenThreadList={() => setThreadListOpen(true)}
+            threadListExpanded={threadListOpen}
+            onNewConversation={startNewConversation}
           />
         </main>
       </div>
@@ -624,6 +636,8 @@ const AiChatSurfaceV2: React.FC = () => {
         placement="right"
         width="min(92vw, 360px)"
         title={null}
+        closable={false}
+        rootClassName="ai-chat-surface ai-chat-thread-drawer"
         classNames={{ body: '!p-0' }}
         destroyOnHidden
         getContainer={typeof document === 'undefined' ? undefined : () => document.body}
@@ -631,12 +645,12 @@ const AiChatSurfaceV2: React.FC = () => {
           if (!nextOpen) scheduleOverlayLockRelease();
         }}
       >
-        <div className="flex h-full min-h-0 flex-col">
+        <div data-testid="ai-thread-drawer" className="flex h-full min-h-0 flex-col">
           <div className="flex items-center justify-between border-b border-slate-200/70 bg-white px-3 py-2 dark:border-white/[0.07] dark:bg-[#1c1c1f]">
             <div className="text-sm font-bold">گفتگوهای هوش مصنوعی</div>
             <Button type="text" shape="circle" icon={<CloseOutlined />} onClick={closeThreadList} aria-label="بستن فهرست گفتگوهای هوش مصنوعی" />
           </div>
-          {renderThreadList(false)}
+          {renderThreadList(false,true)}
         </div>
       </Drawer>
     </div>
