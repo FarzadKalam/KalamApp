@@ -180,7 +180,8 @@ export const createProcessDataRuntime = (options: {
           if (section === 'links') await getRecord(row.module_id, row.record_id, [moduleFor(row.module_id).fields.find(f => !heavy.has(f.key))!.key]);
           visible.push(row);
         } catch (error) {
-          if (!String(error?.message).includes('دسترسی') && !String(error?.message).includes('محدوده') && !String(error?.message).includes('پیدا نشد')) throw error;
+          const reason=error instanceof Error ? error.message : String(error);
+          if (!reason.includes('دسترسی') && !reason.includes('محدوده') && !reason.includes('پیدا نشد')) throw error;
         }
       }
       return { records: visible, hasMore: rows.length > size, nextAfterId: rows.length > size ? rows[size - 1].id : null, coverage: rows.length > size || args.afterId ? 'page' : 'complete' };

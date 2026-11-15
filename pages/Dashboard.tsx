@@ -1043,8 +1043,7 @@ const Dashboard: React.FC = () => {
       : dashboardVoiceOutputMode
         ? dashboardModelOverrides.voice_output || dashboardModelOverrideRef.current
         : null;
-  const dashboardNeedsRecordModule = dashboardAiCapabilities.includes('record_creation') && !dashboardRecordCreationTargetModuleId;
-  const dashboardAiSendDisabled = !dashboardAiQuestion.trim() || dashboardNeedsRecordModule;
+  const dashboardAiSendDisabled = !dashboardAiQuestion.trim();
 
   const handleDashboardCapabilitiesChange = useCallback((next: AiComposerCapability[]) => {
     const normalizedNext = normalizeAiComposerCapabilities(next);
@@ -1161,10 +1160,6 @@ const Dashboard: React.FC = () => {
   const handleSubmitDashboardAiQuestion = useCallback(() => {
     const question = dashboardAiQuestion.trim();
     if (!question) return;
-    if (dashboardNeedsRecordModule) {
-      message.warning('برای ساخت رکورد، ابتدا نوع رکورد را انتخاب کنید.');
-      return;
-    }
     setDashboardAiQuestion('');
       navigate('/ai', {
         state: {
@@ -1180,7 +1175,7 @@ const Dashboard: React.FC = () => {
           forceNewThread: true,
         },
       });
-  }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardMediaSettings, dashboardMediaSourceImages, dashboardNeedsRecordModule, dashboardRecordCreationTargetModuleId, dashboardSelectedAgents, message, navigate]);
+  }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardMediaSettings, dashboardMediaSourceImages, dashboardRecordCreationTargetModuleId, dashboardSelectedAgents, message, navigate]);
 
   const handleSubmitDashboardVoice = useCallback(async (voice: RecordedVoice) => {
     if (dashboardVoiceSending) return;

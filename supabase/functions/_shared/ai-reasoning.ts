@@ -34,7 +34,7 @@ export const getReasoningProfile = (model: any): ReasoningProfile => {
     return { ...base,supported: true,parameter,levels: config.required ? levels.filter(value => value!=='none') : levels,
       required: config.required ?? base?.required,route: ['responses','messages'].includes(config.route) ? config.route : base?.route,source: config.source || 'catalog' };
   }
-  return base || { supported: model?.metadata?.supports_reasoning===true || model?.metadata?.reasoning===true,
+  return base || { supported: model?.metadata?.supports_reasoning===true || model?.metadata?.reasoning===true || model?.capability_tags?.includes('deep_reasoning')===true,
     levels: [],parameter: 'reasoning_effort' };
 };
 export const reasoningOptions = (model: any) => {

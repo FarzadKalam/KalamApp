@@ -14613,6 +14613,10 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
     return json(403, { success: false, message: 'دسترسی پنل مدیریت تازه سیستم لازم است.' });
   }
   const subAction = String(body?.sub || '').trim();
+  if (['gift_credit','upsert_model','toggle_model','save_central_defaults','apply_recommended_defaults'].includes(subAction)
+    && authContext.permissions?.__saas_admin?.edit !== true) {
+    return json(403,{ success: false,message: 'برای تغییر تنظیمات مرکزی، مجوز ویرایش مدیریت تازه سیستم لازم است.' });
+  }
 
   if (subAction === 'usage_page') return await handleAiUsagePage(supabaseUrl, serviceRoleKey, authContext, body, true);
 

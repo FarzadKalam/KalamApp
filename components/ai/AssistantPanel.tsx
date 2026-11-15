@@ -18,7 +18,7 @@ import type { RecordedVoice } from './AiVoiceRecorder';
 import type { AiUploadedFilePrompt } from './AiFileUploadButton';
 import { uploadAiFileAttachments } from '../../utils/aiFileAttachments';
 import AiCapabilityComposerActions, { normalizeAiComposerCapabilities, type AiComposerCapability } from './AiCapabilityComposerActions';
-import AiComposeModelBar from './AiComposeModelBar';
+import AiComposeModelBar, { resolveEffectiveCapability } from './AiComposeModelBar';
 import AiActivityStatus from './AiActivityStatus';
 import { getAiAgentLabel, resolveAiAgentId, parseAiAgentActivity, applyAiAgentActivity, type AiAgentActivity } from '../../supabase/functions/_shared/ai-agents';
 import AiGenerationStatusCard, { type AiGenerationKind } from './AiGenerationStatusCard';
@@ -1726,7 +1726,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       file: filePrompt,
     })));
     modelOverrideRef.current = String(initialModelOverride || '').trim() || null;
-    setModelOverrides({});
+    const initialCapability=resolveEffectiveCapability(new Set(initialCapabilities || []),contextWithSelection.mode==='record' ? 'record_chat' : 'dashboard_chat');
+    setModelOverrides(initialCapability && initialModelOverride ? { [initialCapability]: initialModelOverride } : {});
     setReasoningOverrides(initialReasoningOverrides || {});
     autoSubmittedInitialPromptRef.current = '';
     autoSubmittedInitialBundleRef.current = '';

@@ -25,7 +25,7 @@ type AiComposeModelBarProps = {
   onReasoningChange?: (effort: string | null,model: string) => void;
 };
 
-const resolveEffectiveCapability = (selected: Set<string>, fallbackCapability?: string | null) => {
+export const resolveEffectiveCapability = (selected: Set<string>, fallbackCapability?: string | null) => {
   if (selected.has('document_generation')) return 'document_generation';
   if (selected.has('video_generation')) return 'video_generation';
   if (selected.has('image_generation')) return 'image_generation';

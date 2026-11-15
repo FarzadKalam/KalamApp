@@ -1,8 +1,11 @@
 // @vitest-environment node
-import { describe,expect,it } from 'vitest';
+import { describe,expect,it,vi,afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 import { applyReasoningParameters,reasoningOptions,resolveReasoningEffort } from './ai-reasoning';
 import { prepareReasoningTransport,normalizeReasoningResponse,bridgeReasoningResponse } from './ai-reasoning-transport';
 const model=(id:string,metadata?:any) => ({ id,metadata });
+afterEach(() => vi.unstubAllGlobals());
 describe('central model-specific thinking contract',() => {
   it('offers only verified levels, never guesses an enum from a family name',() => {
     expect(reasoningOptions(model('glm-5.3')).map(row => row.value)).toEqual(['auto','low','high','max']);
@@ -57,5 +60,37 @@ describe('central model-specific thinking contract',() => {
     const result=await bridgeReasoningResponse(new Response('data: {"type":"response.output_text.delta","delta":"partial"}\n\n'),'responses',true);
     await expect(result.text()).rejects.toThrow('قطع');
     expect(normalizeReasoningResponse({ status: 'incomplete',output: [] },'responses').choices[0].finish_reason).toBe('length');
+  });
+  it('keeps native streamed signatures and supplies valid empty tool arguments',async () => {
+    const events=[{ type: 'message_start',message: { id: 'r',usage: { input_tokens: 2 } } },
+      { type: 'content_block_start',index: 0,content_block: { type: 'thinking',thinking: '',signature: '' } },
+      { type: 'content_block_delta',index: 0,delta: { type: 'thinking_delta',thinking: 'private' } },
+      { type: 'content_block_delta',index: 0,delta: { type: 'signature_delta',signature: 'signed' } },
+      { type: 'content_block_start',index: 1,content_block: { type: 'tool_use',id: 'c',name: 'read',input: {} } },
+      { type: 'content_block_stop',index: 1 },{ type: 'message_delta',delta: { stop_reason: 'tool_use' },usage: { output_tokens: 10 } },{ type: 'message_stop' }];
+    const response=await bridgeReasoningResponse(new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('')),'messages',true);
+    const frames=(await response.text()).split('\n\n').filter(frame => frame.startsWith('data: {')).map(frame => JSON.parse(frame.slice(6)));
+    expect(frames.some(frame => frame.choices[0].delta.content==='private')).toBe(false);
+    expect(frames[1].choices[0].delta.tool_calls[0].function.arguments).toBe('{}');
+    expect(frames.at(-1).choices[0].delta.native_items[0].signature).toBe('signed');
+    expect(frames.at(-1).choices[0].finish_reason).toBe('tool_calls');
+  });
+  it('routes the actual shared gateway through native thinking without changing the chosen model',async () => {
+    const source=readFileSync(new URL('../ai-assistant/index.ts',import.meta.url),'utf8');
+    const code=source.slice(source.indexOf('const requestAvalaiWithFallback ='),source.indexOf('const getServiceHeaders ='));
+    const fetch=vi.fn(async () => new Response(JSON.stringify({ id: 'result',content: [{ type: 'text',text: 'پاسخ' }],stop_reason: 'end_turn',usage: { input_tokens: 5,output_tokens: 10 } })));
+    vi.stubGlobal('fetch',fetch);
+    const deps={ prepareReasoningTransport,bridgeReasoningResponse,DEFAULT_AI_BASE_URL: 'https://provider.test/v1',
+      uniqueBaseUrls: (values:string[]) => values,normalizeBaseUrl: (value:string) => value,isRetryableProviderStatus: () => false,isProviderTimeoutError: () => false };
+    const run=new Function(...Object.keys(deps),ts.transpileModule(code+'\nreturn requestAvalaiWithFallback;',{
+      compilerOptions: { target: ts.ScriptTarget.ES2022 },
+    }).outputText)(...Object.values(deps));
+    const result=await run({ model: 'claude-haiku-5-5',apiKey: 'test-only',reasoningModelId: 'claude-haiku-5-5',reasoningEffort: 'low' },'/chat/completions',{
+      method: 'POST',headers: { Authorization: 'Bearer test-only' },body: JSON.stringify({ model: 'claude-haiku-5-5',max_tokens: 4096,messages: [{ role: 'user',content: 'سؤال' }] }),
+    });
+    const [url,init]=fetch.mock.calls[0] as any;
+    expect(url).toBe('https://provider.test/v1/messages');expect(init.headers.get('anthropic-version')).toBe('2023-06-01');
+    expect(JSON.parse(init.body)).toMatchObject({ model: 'claude-haiku-5-5',output_config: { effort: 'low' } });
+    expect((await result.response.json()).choices[0].message.content).toBe('پاسخ');
   });
 });
