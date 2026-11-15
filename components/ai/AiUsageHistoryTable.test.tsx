@@ -5,9 +5,10 @@ import AiUsageHistoryTable from './AiUsageHistoryTable';
 
 const invoke = vi.hoisted(() => vi.fn());
 const showError = vi.hoisted(() => vi.fn());
+const message = vi.hoisted(() => ({ error: showError }));
 vi.mock('../../supabaseClient', () => ({ supabase: { functions: { invoke } } }));
 vi.mock('antd', () => ({
-  App: { useApp: () => ({ message: { error: showError } }) },
+  App: { useApp: () => ({ message }) },
   Empty: () => null,
   Table: ({ dataSource, pagination }: any) => <div>
     <span>{dataSource.map((row: any) => row.id).join(',')}</span>

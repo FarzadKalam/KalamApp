@@ -30,6 +30,7 @@ const AiUsageHistoryTable: React.FC<Props> = ({ central = false, columns, refres
     }).catch((error) => {
       if (active) {
         setRows([]);
+        setTotal(0);
         message.error(toFaErrorMessage(error, 'دریافت فهرست مصرف ناموفق بود.'));
       }
     }).finally(() => { if (active) setLoading(false); });
