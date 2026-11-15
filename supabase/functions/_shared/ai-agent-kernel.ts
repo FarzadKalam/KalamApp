@@ -68,7 +68,7 @@ export const heuristicSelectAgentsAndCapabilities = (params: {
     detectedAgents.add('system_guide');
   }
   if (/(تغییر\s*قیمت|تنظیم\s*قیمت|افزایش\s*قیمت|کاهش\s*قیمت|اصلاح\s*قیمت|درصد.*(افزایش|کاهش|تغییر|ببر\s*بالا|بیار\s*پایین)|لیست\s*قیمت.*(تغییر|افزایش|کاهش)|پکیج.*قیمت|پیش[‌ ]?فاکتور.*قیمت)/i.test(text)) {
-    detectedAgents.add('sales_leads');
+    detectedAgents.add('purchase_supply');
     detectedCaps.add('pricing_adjustment');
     detectedCaps.add('record_creation');
   }
@@ -84,6 +84,11 @@ export const heuristicSelectAgentsAndCapabilities = (params: {
     detectedAgents.clear();
     explicitAgents.forEach((agent) => detectedAgents.add(agent));
   }
+  if (detectedCaps.has('pricing_adjustment') && !detectedCaps.has('free_chat')) {
+    detectedAgents.clear();
+    detectedAgents.add('purchase_supply');
+    if (explicitAgents.includes('lead_orchestrator')) detectedAgents.add('lead_orchestrator');
+  }
   if (detectedAgents.size === 0 || (explicitAgents.length === 0 && detectedAgents.size > 1)) {
     detectedAgents.add('lead_orchestrator');
   }
@@ -92,7 +97,11 @@ export const heuristicSelectAgentsAndCapabilities = (params: {
   if (Array.isArray(params.allowedAgents) && params.allowedAgents.length > 0) {
     const allowedSet = new Set(params.allowedAgents);
     const filtered = agents.filter((a) => allowedSet.has(a));
-    agents = filtered.length ? filtered : [params.allowedAgents[0]];
+    // Preserve a blocked pricing owner for the common access guard to reject;
+    // substituting an unrelated permitted agent would change responsibility.
+    agents = detectedCaps.has('pricing_adjustment')
+      ? agents.filter(agent => agent === 'purchase_supply' || allowedSet.has(agent))
+      : filtered.length ? filtered : [params.allowedAgents[0]];
   }
 
   return {

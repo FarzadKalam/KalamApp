@@ -1,3 +1,5 @@
+import { heuristicSelectAgentsAndCapabilities } from './ai-agent-kernel';
+import { shouldAttachPricingAdjustmentSkill,pricingAdjustmentSkill } from './ai-skills/pricing-adjustment';
 import { describe, expect, it } from 'vitest';
 import { normalizeAgentPlan, shouldEscalateCustomerAutoReply } from './ai-agent-contract';
 
@@ -43,4 +45,21 @@ describe('AI agent plan contract', () => {
     expect(shouldEscalateCustomerAutoReply(plan)).toBe(false);
     expect(shouldEscalateCustomerAutoReply({ ...plan, risk: 'medium' })).toBe(true);
   });
+});
+
+describe('purchase-owned price changes',()=>{
+ it('routes price changes to purchase and keeps an addressed lead informed',()=>{
+  expect(heuristicSelectAgentsAndCapabilities({message:'قیمت لیست قیمت را افزایش بده',explicitAgents:['sales_leads']}).agents).toEqual(['purchase_supply']);
+  expect(heuristicSelectAgentsAndCapabilities({message:'تنظیم قیمت کالا',explicitAgents:['lead_orchestrator']}).agents).toEqual(['purchase_supply','lead_orchestrator']);
+  expect(heuristicSelectAgentsAndCapabilities({message:'لید ثبت کن',explicitAgents:['sales_leads']}).agents).toEqual(['sales_leads']);
+  expect(heuristicSelectAgentsAndCapabilities({message:'تنظیم قیمت',allowedAgents:['sales_leads']}).agents).toEqual(['purchase_supply']);
+ });
+ it('does not attach pricing for free chat, an unrelated specialist or an inaccessible owner',()=>{
+  const ctx:any={userMessage:'افزایش قیمت',selectedAgents:['purchase_supply'],selectedCapabilities:[],grounding:{freeChatMode:false,agentStates:{purchase_supply:{canUse:true,canView:true,canChat:true}}}};
+  expect(pricingAdjustmentSkill.agentKey).toBe('purchase_supply');
+  expect(shouldAttachPricingAdjustmentSkill(ctx)).toBe(true);
+  expect(shouldAttachPricingAdjustmentSkill({...ctx,selectedAgents:['sales_leads']})).toBe(false);
+  expect(shouldAttachPricingAdjustmentSkill({...ctx,grounding:{...ctx.grounding,freeChatMode:true}})).toBe(false);
+  expect(shouldAttachPricingAdjustmentSkill({...ctx,grounding:{agentStates:{}}})).toBe(false);
+ });
 });

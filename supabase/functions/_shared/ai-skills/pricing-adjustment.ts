@@ -461,6 +461,10 @@ export const applyPriceAdjustment = (input: ApplyPriceAdjustmentPlanInput): Appl
 };
 
 export const shouldAttachPricingAdjustmentSkill = (ctx: SkillExecutionContext): boolean => {
+  if (ctx.grounding.freeChatMode) return false;
+  const owner=ctx.grounding.agentStates?.purchase_supply;
+  if (!owner?.canUse || !owner?.canView || !owner?.canChat) return false;
+  if (!(ctx.selectedAgents || []).some(key => key==='purchase_supply' || key==='lead_orchestrator')) return false;
   if ((ctx.selectedCapabilities || []).includes('pricing_adjustment')) return true;
   if (['products', 'price_lists', 'product_bundles'].includes(String(ctx.pageContext?.moduleId || ''))) {
     return PRICING_ADJUSTMENT_KEYWORDS_REGEX.test(ctx.userMessage || '');
@@ -477,10 +481,11 @@ const extractSearchTokens = (message: string): string[] => {
 };
 
 export const pricingAdjustmentSkill: DomainSkillModule = {
-  agentKey: 'sales_leads',
+  agentKey: 'purchase_supply',
   titleFa: 'مهارت تنظیم قیمت و مقایسه بازار',
   buildContractPrompt: () => [
-    '## قرارداد تخصصی مهارت تنظیم قیمت (`pricing_adjustment`)',
+    '## قرارداد تخصصی تنظیم قیمت؛ مسئول: ایجنت خرید و تأمین (`purchase_supply`)',
+    'راهبر هماهنگ‌کننده است؛ تغییر قیمت با مسئولیت خرید و تأمین و فقط در محدوده مجوز ماژول و فیلد و پس از کارت تأیید انجام می‌شود.',
     'وقتی کاربر درخواست تغییر/افزایش/کاهش قیمت دسته‌جمعی یا تکی دارد (مثلاً «همه بنرها را ۲۰٪ افزایش بده») یا چند اسکرین‌شات قیمت سایت/کانال رقیب می‌فرستد:',
     '1. **جمع‌آوری شفاف ابهام‌ها پیش از اجرای نهایی (هرگز سرخود همه جا را تغییر نده!)**:',
     '   اگر کاربر موارد زیر را صراحتاً تعیین نکرده، ابتدا فهرست اقلام شناسایی‌شده + تصمیم‌های زیر را دقیق و کوتاه بپرس:',
