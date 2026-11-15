@@ -1,7 +1,7 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Modal } from 'antd';
 import OverlayEventBoundary from './OverlayEventBoundary';
-import { resolveStableOverlayRoot } from '../utils/popupContainer';
+import { resolveParentOverlayZIndex, resolveStableOverlayRoot } from '../utils/popupContainer';
 
 interface AdaptivePickerSurfaceProps {
   open: boolean;
@@ -39,6 +39,11 @@ const AdaptivePickerSurface: React.FC<AdaptivePickerSurfaceProps> = ({
   modalContainer,
 }) => {
   const anchorRef = useRef<HTMLDivElement | null>(null);
+  const [parentOverlayZIndex,setParentOverlayZIndex] = useState(0);
+  useLayoutEffect(() => {
+    if (open) setParentOverlayZIndex(resolveParentOverlayZIndex(anchorRef.current,0));
+  },[open,zIndex]);
+  const effectiveZIndex = Math.max(zIndex,parentOverlayZIndex+10);
   const getModalContainer = useMemo(
     () =>
       modalContainer
@@ -65,7 +70,7 @@ const AdaptivePickerSurface: React.FC<AdaptivePickerSurfaceProps> = ({
         destroyOnHidden={false}
         centered
         width="auto"
-        zIndex={zIndex}
+        zIndex={effectiveZIndex}
         className="kalam-adaptive-picker-modal"
         rootClassName="kalam-adaptive-picker-modal-root"
         getContainer={getModalContainer}
@@ -81,9 +86,9 @@ const AdaptivePickerSurface: React.FC<AdaptivePickerSurfaceProps> = ({
           paddingBottom: 0,
         }}
         styles={{
-          mask: { zIndex, backgroundColor: 'rgba(15, 23, 42, 0.58)', backdropFilter: 'blur(4px)' },
+          mask: { zIndex: effectiveZIndex, backgroundColor: 'rgba(15, 23, 42, 0.58)', backdropFilter: 'blur(4px)' },
           wrapper: {
-            zIndex: zIndex + 1,
+            zIndex: effectiveZIndex + 1,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
