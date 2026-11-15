@@ -1,4 +1,4 @@
-import React,{lazy,Suspense} from 'react';
+import {lazy,Suspense} from 'react';
 import {Modal,Spin} from 'antd';
 const AssistantPanel=lazy(()=>import('./AssistantPanel'));
 export default function AiApprovalReviewModal({action,onClose}:{action:any;onClose:()=>void}){

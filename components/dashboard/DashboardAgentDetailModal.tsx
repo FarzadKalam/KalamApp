@@ -392,7 +392,7 @@ const DashboardAgentDetailModal: React.FC<DashboardAgentDetailModalProps> = ({
       });
       if (error) throw error;
       if (!data?.success) throw new Error(String(data?.message || 'ثبت تصمیم ناموفق بود.'));
-      message.success(decision === 'approve' ? 'اقدام تایید و اجرا شد.' : 'اقدام پیشنهادی لغو شد.');
+      message.success('اقدام پیشنهادی لغو شد.');
       await onRefresh();
     } catch (err: any) {
       message.error(toFaErrorMessage(err, 'ثبت تصمیم تایید/رد ناموفق بود.'));

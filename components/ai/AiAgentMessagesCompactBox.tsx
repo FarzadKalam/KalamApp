@@ -244,7 +244,7 @@ const AiAgentMessagesCompactBox: React.FC<AiAgentMessagesCompactBoxProps> = ({
       if ((data as any)?.success === false) {
         throw new Error(String((data as any)?.message || 'پردازش تصمیم ناموفق بود.'));
       }
-      message.success(decision === 'approve' ? 'اقدام ایجنت تایید و اجرا شد.' : 'اقدام ایجنت لغو شد.');
+      message.success('اقدام ایجنت لغو شد.');
       await loadAgentInbox();
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'ثبت تصمیم تایید/رد ناموفق بود.'));
