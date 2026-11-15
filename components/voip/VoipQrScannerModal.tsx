@@ -306,7 +306,7 @@ export const PortSipQrDisplayModal: React.FC<PortSipQrDisplayModalProps> = ({
           ) : null}
         </div>
 
-        <Space orientation="horizontal" wrap className="justify-center">
+        <Space direction="horizontal" wrap className="justify-center">
           <Button
             size="small"
             onClick={() => {

@@ -15,7 +15,6 @@ import {
   Table,
   Tag,
   Upload,
-  Tooltip,
 } from 'antd';
 import { DeleteOutlined, PlusOutlined, SaveOutlined, UploadOutlined, UserOutlined, QrcodeOutlined, ScanOutlined, KeyOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
