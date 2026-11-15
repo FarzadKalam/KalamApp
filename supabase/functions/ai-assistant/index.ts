@@ -38,7 +38,7 @@ import {
   resolveRunnableAgentsForActor,
 } from '../_shared/ai-skill-registry.ts';
 import { createInstagramReadToolRuntime } from '../_shared/ai-skills/instagram-tools.ts';
-import { normalizeIntakeAttachments } from '../_shared/ai-intake-attachments.ts';
+import { normalizeIntakeAttachments, collectAiIntakeAttachments } from '../_shared/ai-intake-attachments.ts';
 import { createAiRecordLookupRuntime, normalizePersonName } from '../_shared/ai-record-lookups.ts';
 import { linkAiRecordFiles } from '../_shared/ai-record-files.ts';
 
@@ -7628,7 +7628,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
   const userMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: thread.id,
     role: 'user',
-    content: message,
+    content: String(body?.userMessageText ?? message).trim() || 'پیوست‌های ارسالی',
     provider: providerConfig.provider,
     model: providerConfig.model,
     metadata: {
@@ -9279,11 +9279,10 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     ? thread.metadata.compressed_context
     : null;
 
-  const intakeAttachments = normalizeIntakeAttachments([
-    ...(thread?.metadata?.record_intake_context?.moduleId === targetModuleId ? thread.metadata.record_intake_context.attachments || [] : []),
+  const intakeAttachments = collectAiIntakeAttachments([
     ...(body?.intakeAttachments || []),
     ...files,
-  ]);
+  ], thread?.metadata?.record_intake_context?.moduleId === targetModuleId ? thread.metadata.record_intake_context.attachments || [] : [], previousMessages);
   effectiveSchema = { ...effectiveSchema, intakeAttachments };
   // Keep references even if a provider fails before producing a draft.
   await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {

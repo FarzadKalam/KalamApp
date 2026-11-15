@@ -16,3 +16,16 @@ export const normalizeIntakeAttachments = (values: any[]): IntakeAttachment[] =>
   }
   return [...unique.values()];
 };
+
+/** Continue the most recent file turn, without borrowing files from completed work. */
+export const collectAiIntakeAttachments = (current: any[], pending: any[], messages: any[]) => {
+  const supplied = normalizeIntakeAttachments([...pending, ...current]);
+  if (supplied.length) return supplied;
+  for (const message of [...messages].reverse()) {
+    if (message.metadata?.created_records?.length || message.metadata?.updated_records?.length) break;
+    if (message.role !== 'user' || message.metadata?.internal_agent_step) continue;
+    const files = normalizeIntakeAttachments([...(message.metadata?.attachments || []), ...(message.metadata?.files || []), message.metadata?.file].filter(Boolean));
+    if (files.length) return files;
+  }
+  return [];
+};

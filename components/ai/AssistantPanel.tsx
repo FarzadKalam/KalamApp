@@ -3120,7 +3120,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             {isUser ? messageText : waitingForResponse ? (
               <AiActivityStatus agentId={effectiveAgentKey || respondingAgent} activities={activeAgents} onStop={isStreaming ? stopActiveStream : undefined} />
             ) : (
-              {!isUser ? <AiRecordResultCard metadata={item.metadata} /> : null}
               <AiMessageRenderer
                 agentId={effectiveAgentKey || respondingAgent}
                 activities={activeAgents}
@@ -3133,6 +3132,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 onRetry={retryText ? () => void submitChat(retryText, 'text') : undefined}
               />
             )}
+            {!isUser ? <AiRecordResultCard metadata={item.metadata} /> : null}
             <MessageAttachmentGallery attachments={attachments} presentation={isUser ? undefined : 'assistant'} />
             {!isUser && normalizeAiQuestions(item.metadata?.clarification_questions || presentation.questions).length > 0 ? (
               <AiQuestionCard questions={normalizeAiQuestions(item.metadata?.clarification_questions || presentation.questions)}

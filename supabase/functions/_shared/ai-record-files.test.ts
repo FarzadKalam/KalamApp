@@ -1,10 +1,15 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
 import { linkAiRecordFiles } from './ai-record-files';
-import { normalizeIntakeAttachments } from './ai-intake-attachments';
+import { normalizeIntakeAttachments, collectAiIntakeAttachments } from './ai-intake-attachments';
 
 describe('intake file lifecycle', () => {
   const file = { url: 'https://files.test/photo.jpg', assetId: 'asset-a', entryId: 'source-a', name: 'تصویر مشتری', mimeType: 'image/jpeg' };
+  it('retains an earlier screenshot through clarification, but isolates completed requests', () => {
+    const messages = [{ role: 'user', metadata: { attachments: [file] } }, { role: 'assistant', content: 'چه اقدامی انجام دهم؟' }, { role: 'user', content: 'لید ثبت کن' }];
+    expect(collectAiIntakeAttachments([], [], messages)).toEqual(normalizeIntakeAttachments([file]));
+    expect(collectAiIntakeAttachments([], [], [...messages, { role: 'assistant', metadata: { created_records: [{ id: 'saved' }] } }])).toEqual([]);
+  });
   it('preserves durable references across JSON round trips and deduplicates all file types', () => {
     const files = normalizeIntakeAttachments([file, { file }, { audio: { ...file, assetId: 'voice-a', mimeType: 'audio/webm' } },
       { url: 'blob:temporary' }, { url: 'data:image/jpeg;base64,secret' }]);
