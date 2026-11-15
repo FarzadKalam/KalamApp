@@ -2,7 +2,7 @@
 import { loadOrgPlanAccess } from '../_shared/org-plan-access.ts';
 import { executeAgentToolCalls, appendStreamToolCalls, type AgentToolExecutor } from '../_shared/ai-tool-calls.ts';
 import { AGENT_DATA_TOOLS, readAgentDataPage, countAgentData, aggregateAgentData, agentRecordMatchesViewConditions, type AgentDataAccess } from '../_shared/ai-agent-data.ts';
-import { NATIVE_AGENT_SKILLS, isUnsupportedNativeInputError } from '../_shared/ai-native-skills.ts';
+import { NATIVE_AGENT_SKILLS, runNativeAgentInput } from '../_shared/ai-native-skills.ts';
 import { executeAgentTask } from '../_shared/ai-agent-task-runtime.ts';
 import { AGENT_TASK_TOOLS, AGENT_TASK_CONVERSATION_PROMPT, prepareAgentTaskChange, confirmAgentTaskChange } from '../_shared/ai-agent-task-management.ts';
 import { AI_RECORD_SCHEMAS } from '../_shared/ai-record-schemas.generated.ts';
@@ -38,6 +38,31 @@ import {
   resolveRunnableAgentsForActor,
 } from '../_shared/ai-skill-registry.ts';
 import { createInstagramReadToolRuntime } from '../_shared/ai-skills/instagram-tools.ts';
+import { normalizeIntakeAttachments } from '../_shared/ai-intake-attachments.ts';
+import { createAiRecordLookupRuntime, normalizePersonName } from '../_shared/ai-record-lookups.ts';
+import { linkAiRecordFiles } from '../_shared/ai-record-files.ts';
+
+// Carry the verified caller only in this request; never put credentials in model or thread data.
+const actorFileRest = async (url: string, key: string, authorization: string, table: string, query: any, row?: any) => {
+  if (!authorization || authorization === `Bearer ${key}`) throw new Error('نشست کاربر برای دسترسی به فایل تأیید نشد.');
+  const endpoint = new URL(`${url}/rest/v1/${table}`);
+  for (const [name, value] of Object.entries(query || {})) endpoint.searchParams.set(name, String(value));
+  const response = await fetch(endpoint, { method: row ? 'POST' : 'GET', headers: {
+    apikey: key, Authorization: authorization, 'Content-Type': 'application/json', Prefer: 'return=representation',
+  }, ...(row ? { body: JSON.stringify(row) } : {}) });
+  if (!response.ok) throw new Error('دسترسی یا ذخیرهٔ اطلاعات فایل تأیید نشد.');
+  return await response.json();
+};
+const createRecordFieldTools = (url: string, key: string, auth: any, moduleIds: string[], plan: any) => createAiRecordLookupRuntime({
+  moduleIds, orgId: auth.orgId, loadSchema: moduleId => loadAiMutationSchema(url, key, auth, moduleId),
+  read: (table, query) => auth.callerAuthorization
+    ? actorFileRest(url, key, auth.callerAuthorization, table, query) : restSelect(url, key, table, query),
+  tableForModule: getModuleTable,
+  canReadModule: moduleId => canViewModuleWithPlan(plan, auth.permissions, moduleId),
+  canReadRecord: (moduleId, row) => canAccessAssignedRecord(row, auth, getRecordScope(getModulePermission(auth.permissions, moduleId)), getModulePermission(auth.permissions, moduleId)),
+  ...(auth.callerAuthorization ? { identityLookup: (kind, query, offset) => actorFileRest(url, key, auth.callerAuthorization,
+    'rpc/search_org_identity_options', {}, { p_query: query, p_scopes: [kind], p_limit_per_scope: 26, p_offset: offset }) } : {}),
+});
 import {
   buildAgentsOverviewForActor,
   compileOnboardingQaPolicy,
@@ -1690,7 +1715,8 @@ const loadAiMutationSchema = async (supabaseUrl: string, serviceRoleKey: string,
   const settings = await restSelect(supabaseUrl, serviceRoleKey, 'integration_settings', {
     org_id: `eq.${authContext.orgId}`, connection_type: 'eq.module_settings', is_active: 'eq.true', select: 'settings', order: 'updated_at.desc', limit: 1,
   });
-  const schema = resolveAiRecordSchema(AI_RECORD_SCHEMAS[moduleId], settings[0]?.settings?.modules?.[moduleId]?.schema, permission);
+  const moduleSettings = settings[0]?.settings?.modules?.[moduleId] || {};
+  const schema = resolveAiRecordSchema(AI_RECORD_SCHEMAS[moduleId], { ...moduleSettings.schema, conditionalDisplay: moduleSettings.conditionalDisplay }, permission);
   const rows: any[] = [];
   // Read only categories used by permitted fields, in bounded pages.
   for (const category of new Set(schema.fields.map((field: any) => field.dynamicOptionsCategory).filter(Boolean))) {
@@ -1849,10 +1875,11 @@ const buildAgentDataToolRuntime = async (supabaseUrl: string, serviceRoleKey: st
   const pendingTasks: any[] = [];
   const completedDataModules = new Set<string>();
   const dataReadCursors = new Map<string, string | null>();
+  const fieldLookups = createRecordFieldTools(supabaseUrl, serviceRoleKey, authContext, modules.map(module => module.id), grounding.planContext);
   const instagram = options.sourceModuleIds ? null : createInstagramReadToolRuntime({ supabaseUrl, serviceRoleKey, authContext, grounding,
     userMessage: '', selectedAgents, selectedCapabilities: [] });
   return {
-    tools: [describe, fieldOptionsTool, ...AGENT_DATA_TOOLS, ...(instagram?.tools || []), ...(options.threadId && taskAccess.canManage ? AGENT_TASK_TOOLS : [])],
+    tools: [describe, fieldOptionsTool, ...fieldLookups.tools, ...AGENT_DATA_TOOLS, ...(instagram?.tools || []), ...(options.threadId && taskAccess.canManage ? AGENT_TASK_TOOLS : [])],
     instagramMediaCards: instagram?.mediaCards || [],
     persistTaskProposal: async () => {
       if (!pendingTasks.length) return null;
@@ -1865,6 +1892,7 @@ const buildAgentDataToolRuntime = async (supabaseUrl: string, serviceRoleKey: st
     systemMessage: { role: 'system', content: 'برای خواندن اطلاعات واقعی از ابزارهای مجاز سازمان استفاده کن. رکوردهای اولیهٔ زمینه فقط نمونه‌اند و سقف دسترسی نیستند. نام ماژول و فیلد را از describe_organization_data بگیر. برای ادامهٔ خواندن از nextAfterId استفاده کن؛ تا وقتی hasMore=true است نتیجه را به کل داده تعمیم نده. محدودیت بودجهٔ یک نوبت را با محدودیت تعداد رکوردهای سازمان اشتباه نگیر. شناسهٔ خام را در پاسخ ننویس. اگر ابزار داده خطا داد، ادعای نبود داده نکن.'
       + (options.threadId && taskAccess.canManage ? `\n${AGENT_TASK_CONVERSATION_PROMPT}\n${AI_QUESTIONS_PROMPT}` : '') },
     execute: async (name: string, args: any) => {
+      if (name === 'lookup_record_field') return await fieldLookups.execute(name, args);
       if (name === 'read_instagram_context' && instagram) return await instagram.execute(args);
       if (options.threadId && taskAccess.canManage && name === 'list_agent_tasks') {
         if (args.afterId && !isUuid(args.afterId)) throw new Error('نشانگر فهرست کارها معتبر نیست.');
@@ -3589,7 +3617,7 @@ const buildPromptMessages = (
   return [
     {
       role: 'system',
-      content: systemContent,
+      content: systemContent + ' پاسخ را طبیعی و کوتاه و متمرکز بر درخواست فعلی بنویس. مقدمه، خلاصهٔ تکراری، سؤال پاسخ‌داده‌شده و شرح تأیید را دوباره تکرار نکن. اطلاعات فایل و افراد را از زمینه و ابزارهای مجاز بررسی کن و صرف نبودن در خلاصه نگو وجود ندارند. جزئیات پیش‌نویس و نتیجه را کارت تعاملی نمایش می‌دهد.',
     },
     ...(compressedSummary ? [{
       role: 'assistant',
@@ -4848,8 +4876,8 @@ const buildOpenAiInputContentParts = (text: string, file?: any) => {
     file?.data || file?.base64 || file?.file_data || file?.fileData,
     mimeType || null,
   );
-  if (data && mimeType.startsWith('image/')) {
-    parts.push({ type: 'image_url', image_url: { url: data } });
+  if ((data || /^https:\/\//i.test(String(file?.url || ''))) && mimeType.startsWith('image/')) {
+    parts.push({ type: 'image_url', image_url: { url: data || file.url } });
     return parts;
   }
   const filePart = buildOpenAiFileContentPart(file || {});
@@ -4947,34 +4975,44 @@ const sanitizeAiRecordTables = (rawPayload: any, schema: any) => {
 const AI_RELATION_SEARCH_FIELDS = ['system_code', 'name', 'title', 'full_name', 'business_name', 'sku', 'invoice_number'];
 
 const resolveAiRelationValue = async (
-  supabaseUrl: string,
-  serviceRoleKey: string,
-  orgId: string,
-  field: any,
-  value: any,
-  cache?: Map<string, string | null>,
+  supabaseUrl: string, serviceRoleKey: string, orgId: string, field: any, value: any,
+  cache?: Map<string, string | null>, authContext?: any,
 ) => {
   const raw = String(value ?? '').trim();
-  if (!raw || isUuid(raw)) return raw || null;
-  const targetModuleId = String(field?.relationTargetModule || field?.relation_target_module || '').trim();
-  const targetTable = getModuleTable(targetModuleId);
-  if (!targetModuleId || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(targetTable)) return null;
-  const cacheKey = `${targetTable}:${raw}`;
-  if (cache?.has(cacheKey)) return cache.get(cacheKey) || null;
-  for (const searchField of AI_RELATION_SEARCH_FIELDS) {
-    const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, targetTable, {
-      org_id: `eq.${orgId}`,
-      [searchField]: `eq.${raw}`,
-      select: 'id',
-      limit: 2,
-    });
-    if (rows.length === 1 && rows[0]?.id) {
-      cache?.set(cacheKey, rows[0].id);
-      return rows[0].id;
+  if (!raw) return null;
+  if (['user', 'role'].includes(field?.type)) {
+    const kind = field.type;
+    let rows;
+    if (authContext?.callerAuthorization) {
+      rows = await actorFileRest(supabaseUrl, serviceRoleKey, authContext.callerAuthorization, 'rpc/search_org_identity_options', {}, {
+        p_query: isUuid(raw) ? null : normalizePersonName(raw), p_scopes: [kind], p_limit_per_scope: 26, p_offset: 0,
+        p_exact_tokens: isUuid(raw) ? [`${kind}:${raw}`] : null,
+      });
+      rows = rows.filter((row: any) => row.is_active !== false && (isUuid(raw) ? row.id === raw : normalizePersonName(row.label) === normalizePersonName(raw)));
+    } else {
+      rows = await restSelect(supabaseUrl, serviceRoleKey, kind === 'user' ? 'profiles' : 'org_roles', {
+        org_id: `eq.${orgId}`, ...(isUuid(raw) ? { id: `eq.${raw}` } : { [kind === 'user' ? 'full_name' : 'title']: `eq.${normalizePersonName(raw)}` }), select: 'id', limit: 2 });
     }
+    if (rows.length !== 1) throw new Error(`برای «${field.label || 'مسئول'}» گزینهٔ یکتا و مجازی پیدا نشد؛ نام را دقیق‌تر مشخص کنید.`);
+    return rows[0].id;
   }
-  cache?.set(cacheKey, null);
-  return null;
+  const targetModuleId = String(field?.relationTargetModule || '').trim();
+  const targetTable = getModuleTable(targetModuleId);
+  if (!targetModuleId || !authContext || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(targetTable)) throw new Error('مقصد ارتباط در دسترس نیست.');
+  const cacheKey = `${targetTable}:${raw}`;
+  if (cache?.has(cacheKey)) return cache.get(cacheKey);
+  const targetSchema = await loadAiMutationSchema(supabaseUrl, serviceRoleKey, authContext, targetModuleId);
+  const permission = getModulePermission(authContext.permissions, targetModuleId);
+  const keys = isUuid(raw) ? ['id'] : AI_RELATION_SEARCH_FIELDS.filter(key => targetSchema.fields.some((spec: any) => spec.key === key));
+  for (const searchField of keys) {
+    // Two candidates only; scope/view-condition checks need their full current row.
+    const rows = await restSelect(supabaseUrl, serviceRoleKey, targetTable, {
+      org_id: `eq.${orgId}`, [searchField]: `eq.${raw}`, select: '*', limit: 2,
+    });
+    const permitted = rows.filter((row: any) => canAccessAssignedRecord(row, authContext, getRecordScope(permission), permission));
+    if (permitted.length === 1) { cache?.set(cacheKey, permitted[0].id); return permitted[0].id; }
+  }
+  throw new Error(`مقدار «${field.label || 'ارتباط'}» یکتا یا در دسترس نیست؛ گزینهٔ مجاز را مشخص کنید.`);
 };
 
 const resolveAiMutationRelations = async (
@@ -4983,32 +5021,33 @@ const resolveAiMutationRelations = async (
   orgId: string,
   drafts: any[],
   schema: any,
+  authContext?: any,
 ) => {
   const relationCache = new Map<string, string | null>();
   const fieldSpecs = new Map<string, any>(
     (Array.isArray(schema?.fields) ? schema.fields : [])
       .map((field: any) => [String(field?.key || '').trim(), field] as const)
-      .filter(([key, field]) => key && field?.relationTargetModule),
+      .filter(([key, field]) => key && (field?.relationTargetModule || ['user', 'role'].includes(field?.type))),
   );
   const tableSpecs = new Map<string, Map<string, any>>(
     (Array.isArray(schema?.tables) ? schema.tables : []).map((table: any) => [
       String(table?.key || '').trim(),
       new Map((Array.isArray(table?.columns) ? table.columns : [])
         .map((field: any) => [String(field?.key || '').trim(), field] as const)
-        .filter(([key, field]) => key && field?.relationTargetModule)),
+        .filter(([key, field]) => key && (field?.relationTargetModule || ['user', 'role'].includes(field?.type)))),
     ]),
   );
   return Promise.all((drafts || []).map(async (draft: any) => {
     const fields = { ...(draft.fields || {}) };
     for (const [key, spec] of fieldSpecs) {
-      if (Object.prototype.hasOwnProperty.call(fields, key)) fields[key] = await resolveAiRelationValue(supabaseUrl, serviceRoleKey, orgId, spec, fields[key], relationCache);
+      if (Object.prototype.hasOwnProperty.call(fields, key)) fields[key] = await resolveAiRelationValue(supabaseUrl, serviceRoleKey, orgId, spec, fields[key], relationCache, authContext);
     }
     const tables: Record<string, any[]> = {};
     for (const [tableKey, columns] of tableSpecs) {
       tables[tableKey] = await Promise.all((Array.isArray(draft.tables?.[tableKey]) ? draft.tables[tableKey] : []).map(async (row: any) => {
         const next = { ...(row || {}) };
         for (const [key, spec] of columns) {
-          if (Object.prototype.hasOwnProperty.call(next, key)) next[key] = await resolveAiRelationValue(supabaseUrl, serviceRoleKey, orgId, spec, next[key], relationCache);
+          if (Object.prototype.hasOwnProperty.call(next, key)) next[key] = await resolveAiRelationValue(supabaseUrl, serviceRoleKey, orgId, spec, next[key], relationCache, authContext);
         }
         return next;
       }));
@@ -5049,15 +5088,8 @@ const normalizeAiClarificationQuestions = (value: any) =>
 const hideUserVisibleUuids = (value: any) => String(value || '')
   .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '');
 
-const buildAiClarificationReply = (reply: string, questions: string[]) => {
-  const base = hideUserVisibleUuids(reply).trim() || 'برای انجام دقیق این درخواست به چند اطلاعات تکمیلی نیاز دارم.';
-  if (!questions.length) return base;
-  return [
-    base,
-    '',
-    ...questions.map((question, index) => `${index + 1}. ${hideUserVisibleUuids(question).trim()}`),
-  ].join('\n');
-};
+const buildAiClarificationReply = (reply: string, questions: string[]) =>
+  hideUserVisibleUuids(reply).trim() || (questions.length ? 'برای ادامه، این موارد را مشخص کنید.' : 'اطلاعات کافی برای این درخواست ندارم.');
 
 const callEmbeddings = async (providerConfig: any, input: string, model: string) => {
   if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
@@ -7603,6 +7635,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
       context: pageContext.context,
       context_key: contextKey,
       context_summary: pageContext.summary,
+      attachments: normalizeIntakeAttachments([...(body?.metadata?.attachments || []), ...(Array.isArray(body?.files) ? body.files : [body?.file]).filter(Boolean)]),
       input_kind: String(body?.inputKind || body?.input_kind || 'text').trim() || 'text',
       internal_agent_step: body?.metadata?.internal_agent_step === true || body?.metadata?.internal_agent_input === true,
       capabilities: mergedCapabilities,
@@ -8747,12 +8780,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
   const activeCompactionSummary = String(thread?.compaction_summary || compressedContext?.summary || '').trim() || null;
   const activeWorkingState = thread?.working_state && typeof thread.working_state === 'object' ? thread.working_state : null;
 
-  const userContentForDb = [
-    prompt,
-    '',
-    `فایل پیوست: ${filename}`,
-    mimeType ? `نوع فایل: ${mimeType}` : '',
-  ].filter(Boolean).join('\n');
+  const userContentForDb = String(body?.userMessageText ?? prompt).trim() || 'پیوست‌های ارسالی';
   const userMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: thread.id,
     role: 'user',
@@ -8763,6 +8791,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       context: pageContext.context,
       context_key: contextKey,
       context_summary: pageContext.summary,
+      attachments: normalizeIntakeAttachments([...(body?.metadata?.attachments || []), ...(Array.isArray(body?.files) ? body.files : [body?.file]).filter(Boolean)]),
       input_kind: String(body?.inputKind || body?.input_kind || 'file').trim() || 'file',
       internal_agent_step: internalAgentStep,
       capabilities: mergedCapabilities,
@@ -8860,39 +8889,25 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
   let analysisError: any = null;
   let primaryAnalysisError = '';
   try {
-    aiResult = await callChatCompletions(providerConfig, promptMessages, {
-      safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}`,
-      tools: fileDataTools?.tools,
-      toolExecutor: fileDataTools?.execute,
-      promptCacheKey: cacheOptions?.promptCacheKey,
-      supportsExplicitCacheControl: cacheOptions?.supportsExplicitCacheControl === true,
+    aiResult = await runNativeAgentInput({ hasNativeInput: fileParts.length > 0,
+      primary: () => callChatCompletions(providerConfig, promptMessages, {
+        safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}`,
+        tools: fileDataTools?.tools, toolExecutor: fileDataTools?.execute,
+        promptCacheKey: cacheOptions?.promptCacheKey, supportsExplicitCacheControl: cacheOptions?.supportsExplicitCacheControl === true,
+      }),
+      fallback: async (error) => {
+        const specialized = await resolveSpecializedProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'document_analysis');
+        const result = await callChatCompletions(specialized, promptMessages, {
+          safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_document_analysis_fallback`,
+          tools: fileDataTools?.tools, toolExecutor: fileDataTools?.execute, supportsExplicitCacheControl: false,
+        });
+        result.analysisFallback = { used: true, primary_model: providerConfig.model, primary_error: shortenProviderError(String((error as any)?.message || error)) };
+        return result;
+      },
     });
   } catch (error: any) {
+    analysisError = error;
     primaryAnalysisError = String(error?.message || error || '').trim();
-    if (isUnsupportedNativeInputError(error)) {
-      try {
-        const specializedProviderConfig = await resolveSpecializedProviderConfig(
-          supabaseUrl,
-          serviceRoleKey,
-          authContext,
-          'document_analysis',
-        );
-        aiResult = await callChatCompletions(specializedProviderConfig, promptMessages, {
-          safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_document_analysis_fallback`,
-          tools: fileDataTools?.tools,
-          toolExecutor: fileDataTools?.execute,
-          promptCacheKey: cacheOptions?.promptCacheKey,
-          supportsExplicitCacheControl: false,
-        });
-        aiResult.analysisFallback = {
-          used: true,
-          primary_model: providerConfig.model,
-          primary_error: shortenProviderError(primaryAnalysisError),
-        };
-      } catch (fallbackError: any) {
-        analysisError = fallbackError;
-      }
-    }
   }
   if (!aiResult) {
     const error = analysisError || new Error(primaryAnalysisError || 'file_chat_failed');
@@ -9182,7 +9197,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
   const permittedUpdateRecordIds = new Set(permittedUpdateRecords.map((record: any) => String(record?.id || '').trim()).filter(Boolean));
   const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
   const canUseKnowledge = canUseOrganizationKnowledge(planContext);
-  const files = (Array.isArray(body?.files) ? body.files : [body?.file || body?.attachment]).filter(Boolean).slice(0, 6);
+  const files = (Array.isArray(body?.files) ? body.files : [body?.file || body?.attachment]).filter(Boolean);
   const file = files[0] || null;
   const filePrompt = file ? [
     prompt,
@@ -9196,7 +9211,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     const options = Array.isArray(field?.options) && field.options.length
       ? ` گزینه‌های مجاز: ${field.options.slice(0, 40).map((option: any) => `${option?.label || option?.value}=${option?.value}`).join('، ')}`
       : '';
-    return `- ${field.key}: ${field.label || field.key} (${field.type || 'text'}${field.required ? '، ضروری' : ''})${options}${field.allowNewOption ? '؛ در نبود گزینهٔ هم‌معنی، مقدار تازه را با نام فارسی در fields پیشنهاد بده؛ افزودن آن با همان تأیید کاربر انجام می‌شود.' : ''}`;
+    return `- ${field.key}: ${field.label || field.key} (${field.type || 'text'}${field.required ? (field.logic || effectiveSchema.conditionalDisplay?.rules?.some((rule: any) => rule.targetFieldKey === field.key) ? '، فقط در صورت فعال بودن شرط ضروری است' : '، ضروری') : ''})${options}${field.allowNewOption ? '؛ در نبود گزینهٔ هم‌معنی، مقدار تازه را با نام فارسی در fields پیشنهاد بده؛ افزودن آن با همان تأیید کاربر انجام می‌شود.' : ''}`;
   }).join('\n');
 
   const tableLines = tables.map((table: any) => {
@@ -9223,6 +9238,9 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     `اگر برای ${mutationVerb} قابل اتکا اطلاعات کافی نیست، یا برای خواسته کاربر ابهام مهمی وجود دارد، تغییری ایجاد نکن و needs_clarification=true بده.`,
     'فقط دربارهٔ فیلد ضروریِ بدون مقدار یا پیش‌فرض و ابهام مؤثر بر صحت مقصد سؤال کن. اطلاعات موجود در تصویر، صدا، سند یا گفتگو را دوباره نپرس. برای فیلد اختیاری مثل مسئول، موضوع یا منبعِ نامشخص، ثبت را متوقف نکن و مقدار حدسی نساز. عنوان را از نام و درخواست روشن کاربر استخراج کن.',
     'نوع رکورد قبلاً تشخیص داده شده است؛ از کاربر انتخاب ماژول نخواه. فقط همان ثبت یا ویرایش درخواستی را آماده کن. فعالیت پیگیری یا هر اقدام اضافی را جدا پیشنهاد بده و در این ثبت اجرا نکن.',
+    `شرط نمایش و الزام فیلدها مطابق فرم: ${JSON.stringify({ fields: fields.filter((field: any) => field.logic).map((field: any) => ({ key: field.key, logic: field.logic })), rules: effectiveSchema.conditionalDisplay || {} })}`,
+    'برای تعیین مسئول یا ارتباط از نام، ابزار lookup_record_field را صدا بزن. نبود نام در خلاصهٔ افراد به معنی نبود کاربر نیست. شناسه یا نام کاربری از کاربر نخواه؛ فقط در چند نتیجهٔ هم‌نام نام‌های انسانی را برای انتخاب نشان بده.',
+    'پاسخ را کوتاه، طبیعی و فقط دربارهٔ تغییر همین نوبت بنویس؛ خلاصهٔ قبلی، سؤال پاسخ‌داده‌شده و توضیح تأیید را تکرار نکن. جزئیات را کارت نشان می‌دهد.',
     'خروجی باید فقط JSON معتبر باشد؛ هیچ متن اضافی قبل یا بعد JSON ننویس.',
     'کلیدهای fields فقط باید از فهرست فیلدهای مجاز باشند. ستون org_id، id، system_code، created_at، updated_at، created_by و updated_by را برنگردان.',
     '',
@@ -9261,13 +9279,27 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     ? thread.metadata.compressed_context
     : null;
 
-  const userMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+  const intakeAttachments = normalizeIntakeAttachments([
+    ...(thread?.metadata?.record_intake_context?.moduleId === targetModuleId ? thread.metadata.record_intake_context.attachments || [] : []),
+    ...(body?.intakeAttachments || []),
+    ...files,
+  ]);
+  effectiveSchema = { ...effectiveSchema, intakeAttachments };
+  // Keep references even if a provider fails before producing a draft.
+  await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
+    metadata: { ...(thread.metadata || {}), record_intake_context: { ...(thread.metadata?.record_intake_context || {}),
+      moduleId: targetModuleId, attachments: intakeAttachments } },
+  });
+  const userMessage = body?.metadata?.internal_agent_input === true && body?.metadata?.public_user_message_id
+    ? { id: body.metadata.public_user_message_id }
+    : await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: thread.id,
     role: 'user',
-    content: filePrompt,
+    content: prompt,
     provider: providerConfig.provider,
     model: providerConfig.model,
     metadata: {
+      attachments: normalizeIntakeAttachments(files),
       context: pageContext.context,
       context_key: contextKey,
       input_kind: String(body?.inputKind || body?.input_kind || (file ? 'file' : 'text')).trim() || 'text',
@@ -9306,20 +9338,45 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
   const earlierFacts = intakeContext?.moduleId === targetModuleId
     ? (intakeContext.records || []).map((record: any) => ({ fields: sanitizeAiRecordPayload(record, effectiveSchema) })) : [];
   mutationMessages.push({ role: 'system', content: [systemPrompt, updateTargetPrompt, earlierFacts.length ? `اطلاعات استخراج‌شدهٔ قبلی همین درخواست؛ اصلاح صریح جدید کاربر اولویت دارد:\n${JSON.stringify(earlierFacts)}` : ''].filter(Boolean).join('\n\n') });
+  const modelFiles = files.length ? files : intakeAttachments.filter((item: any) => item.mimeType.startsWith('image/'));
   const lastMutationUserIndex = mutationMessages.map((item) => item.role).lastIndexOf('user');
   if (lastMutationUserIndex >= 0) {
     mutationMessages[lastMutationUserIndex] = {
       role: 'user',
-      content: files.some((item: any) => !String(item?.text || '').trim())
-        ? [{ type: 'text', text: filePrompt }, ...files.flatMap((item: any) => buildOpenAiInputContentParts('', item).slice(1))]
+      content: modelFiles.some((item: any) => !String(item?.text || '').trim())
+        ? [{ type: 'text', text: filePrompt }, ...modelFiles.flatMap((item: any) => buildOpenAiInputContentParts('', item).slice(1))]
         : filePrompt,
     };
   }
 
-  const aiResult = await callChatCompletions(providerConfig, mutationMessages, {
+  if (intakeAttachments.length) mutationMessages.splice(1, 0, { role: 'system', content:
+    `پیوست‌های همین درخواست برای اتصال پس از تأیید موجودند: ${JSON.stringify(intakeAttachments.map(({ name, assetId }) => ({ name, assetId })))}. از کاربر بارگذاری دوباره نخواه. اطلاعات استخراج‌شدهٔ پیشین را حفظ کن.` });
+  const recordTools = createRecordFieldTools(supabaseUrl, serviceRoleKey, authContext, [targetModuleId], mutationPlanContext);
+  const mutationCallOptions = { tools: recordTools.tools, toolExecutor: recordTools.execute,
     safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}_${isUpdate ? 'update' : 'create'}_record`,
     responseFormat: { type: 'json_object' },
-  });
+  };
+  let aiResult;
+  try {
+    aiResult = await runNativeAgentInput({ hasNativeInput: modelFiles.some((item: any) => !String(item.text || '').trim()),
+      primary: () => callChatCompletions(providerConfig, mutationMessages, mutationCallOptions),
+      fallback: async (error) => {
+        const specialized = await resolveSpecializedProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'document_analysis');
+        const result = await callChatCompletions(specialized, mutationMessages, mutationCallOptions);
+        result.analysisFallback = { used: true, primary_model: providerConfig.model, primary_error: shortenProviderError(String((error as any)?.message || error)) };
+        return result;
+      },
+    });
+  } catch (error) {
+    const failure = shortenProviderError(String((error as any)?.message || error));
+    const failedMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+      thread_id: thread.id, role: 'assistant', content: 'آماده‌سازی پیش‌نویس انجام نشد؛ چیزی ثبت نشده و پیوست‌ها در گفتگو محفوظ‌اند.',
+      provider: providerConfig.provider, model: providerConfig.model,
+      metadata: { failed: true, action: mutationAction, error: failure, target_module_id: targetModuleId },
+    });
+    return json(502, { success: false, threadId: thread.id, messageId: failedMessage?.id,
+      message: 'آماده‌سازی پیش‌نویس انجام نشد؛ پیوست‌ها محفوظ‌اند. دوباره تلاش کنید.' });
+  }
 
   const parsed = extractJsonObjectFromText(aiResult.content);
   if (!parsed || (!Array.isArray(parsed.records) && !normalizeAiQuestions(parsed.questions).length)) throw new Error('پیش‌نویس معتبر از پاسخ ایجنت دریافت نشد؛ هنوز چیزی ثبت نشده است.');
@@ -9328,6 +9385,9 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
   let rawRecordDrafts = Array.isArray(parsed?.records) && parsed.records.length
     ? parsed.records
     : [];
+  if (isUpdate) rawRecordDrafts = rawRecordDrafts.map((draft: any) => ({ ...draft,
+    original: permittedUpdateRecords.find((record: any) => String(record.id) === String(draft.record_id)) || {} }));
+  rawRecordDrafts = await resolveAiMutationRelations(supabaseUrl, serviceRoleKey, authContext.orgId, rawRecordDrafts, effectiveSchema, authContext);
   const optionPreparation = prepareAiRecordOptions(rawRecordDrafts, effectiveSchema, canAddAiDynamicOption(targetPerm));
   rawRecordDrafts = optionPreparation.records;
   effectiveSchema = { ...optionPreparation.schema, optionProposals: optionPreparation.proposals };
@@ -9374,23 +9434,18 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
       ).trim();
       if (isUpdate && (!requestedRecordId || !permittedUpdateRecordIds.has(requestedRecordId))) return null;
       return {
+        original: isUpdate ? Object.fromEntries(fields.filter((field: any) => recordDraft.original?.[field.key] !== undefined)
+          .map((field: any) => [field.key, recordDraft.original[field.key]])) : undefined,
         record_id: isUpdate ? requestedRecordId : null,
         record_title: isUpdate ? buildAiRecordTitle(currentRecord, `${moduleLabel} ${index + 1}`) : `${moduleLabel} ${index + 1}`,
         fields: fieldsPayload,
         tables: tablePayload,
       };
     })
-    .filter((draft: any) => draft && (Object.keys(draft.fields || {}).length > 0 || Object.keys(draft.tables || {}).length > 0));
+    .filter((draft: any) => draft && (Object.keys(draft.fields || {}).length > 0 || Object.keys(draft.tables || {}).length > 0 || (isUpdate && intakeAttachments.length > 0)));
   const payload = recordDrafts[0]?.fields || {};
   const generatedReply = String(parsed?.reply || '').trim();
-  const previewOnly = (
-    body?.previewOnly === true
-    || body?.preview_only === true
-    || body?.autoExecute === false
-    || body?.auto_execute === false
-  );
-
-  if (previewOnly || needsClarification || optionPreparation.proposals.length > 0) {
+  {
     const hasPayload = !needsClarification && recordDrafts.length > 0;
     const candidateSelectionHint = needsClarification && isUpdate && permittedUpdateRecords.length > 1
       ? `\n\nرکوردهای قابل انتخاب:\n${permittedUpdateRecords
@@ -9407,7 +9462,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
       thread_id: thread.id,
       role: 'assistant',
-      content: hasPayload ? `${reply}\n\nبرای ${mutationVerb} رکورد، تایید کاربر لازم است.` : reply,
+      content: reply,
       provider: aiResult.provider,
       model: aiResult.model,
       metadata: {
@@ -9441,6 +9496,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
         target_table: targetTable,
         module_label: moduleLabel,
         record_creation_schema: effectiveSchema,
+        intake_attachments: intakeAttachments,
         payload,
         records: recordDrafts,
         option_proposals: optionPreparation.proposals,
@@ -9489,7 +9545,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
         last_activity_kind: hasPayload ? `${isUpdate ? 'update' : 'create'}_record_preview` : `${isUpdate ? 'update' : 'create'}_record_skipped`,
         last_message_preview: prompt.slice(0, 300),
         last_action_log_id: proposedAction?.id || null,
-        record_intake_context: { moduleId: targetModuleId, records: recordDrafts },
+        record_intake_context: { moduleId: targetModuleId, records: recordDrafts, attachments: intakeAttachments },
       },
     });
     return json(200, {
@@ -9527,151 +9583,6 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     });
   }
 
-  const createdRecords: any[] = [];
-  const updatedRecords: any[] = [];
-  const executableRecordDrafts = await resolveAiMutationRelations(supabaseUrl, serviceRoleKey, authContext.orgId, recordDrafts, effectiveSchema);
-  if (executableRecordDrafts.length > 0) {
-    if (isUpdate) {
-      for (const draft of executableRecordDrafts) {
-        const currentRecord = permittedUpdateRecords.find((record: any) => String(record?.id || '') === String(draft.record_id || '')) || {};
-      await restPatch(supabaseUrl, serviceRoleKey, targetTable, {
-          id: `eq.${draft.record_id}`,
-        org_id: `eq.${authContext.orgId}`,
-      }, {
-          ...draft.fields,
-          ...draft.tables,
-        updated_by: authContext.userId || null,
-        updated_at: new Date().toISOString(),
-      });
-      updatedRecords.push({
-        module_id: targetModuleId,
-        table: targetTable,
-          id: draft.record_id,
-          title: buildAiRecordTitle({ ...currentRecord, ...draft.fields }, moduleLabel),
-      });
-      }
-    } else {
-      const rows = await restInsert(supabaseUrl, serviceRoleKey, targetTable, executableRecordDrafts.map((draft: any) => ({
-        org_id: authContext.orgId,
-        ...draft.fields,
-        ...draft.tables,
-      })));
-      rows.forEach((created: any) => {
-        if (!created) return;
-        createdRecords.push({
-          module_id: targetModuleId,
-          table: targetTable,
-          id: created.id || null,
-          title: buildAiRecordTitle(created, moduleLabel),
-        });
-      });
-    }
-  }
-
-  const reply = isUpdate
-    ? (updatedRecords.length > 0
-        ? `${moduleLabel} با اطلاعات استخراج‌شده به‌روزرسانی شد.`
-        : 'اطلاعات کافی برای ویرایش رکورد پیدا نشد.')
-    : (createdRecords.length > 0
-        ? `${moduleLabel} با اطلاعات استخراج‌شده ساخته شد.`
-        : 'اطلاعات کافی برای ساخت رکورد پیدا نشد.');
-  const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
-    thread_id: thread.id,
-    role: 'assistant',
-    content: reply,
-    provider: aiResult.provider,
-    model: aiResult.model,
-    metadata: {
-      context_key: contextKey,
-      usage: aiResult.usageMetadata,
-      avalai_request_id: aiResult.requestId || null,
-      capability,
-      action: mutationAction,
-      target_module_id: targetModuleId,
-      created_records: createdRecords,
-      updated_records: updatedRecords,
-      raw_ai_json: parsed,
-    },
-  });
-
-  const ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
-    threadId: thread.id,
-    messageId: assistantMessage?.id || null,
-    requestId: aiResult.requestId,
-    capability,
-    provider: aiResult.provider,
-    model: aiResult.model,
-    usageMetadata: aiResult.usageMetadata,
-    metadata: {
-      source: mutationAction,
-      context_key: contextKey,
-      target_module_id: targetModuleId,
-      created_count: createdRecords.length,
-      updated_count: updatedRecords.length,
-    },
-  });
-  await patchAiMessageCustomerBilling(supabaseUrl, serviceRoleKey, authContext, assistantMessage, aiResult.usageMetadata, ledger);
-
-  await restInsert(supabaseUrl, serviceRoleKey, 'ai_action_logs', [{
-    org_id: authContext.orgId,
-    thread_id: thread.id,
-    message_id: assistantMessage?.id || null,
-    module_id: pageContext.moduleId || targetModuleId,
-    record_id: pageContext.recordId || createdRecords[0]?.id || updatedRecords[0]?.id || null,
-    action_type: mutationAction,
-    status: createdRecords.length > 0 || updatedRecords.length > 0 ? 'executed' : 'skipped',
-    proposed_payload: {
-      prompt,
-      target_module_id: targetModuleId,
-      schema_fields: fields.map((field: any) => field.key),
-    },
-    result_payload: {
-      reply,
-      created_records: createdRecords,
-      updated_records: updatedRecords,
-      model: aiResult.model,
-    },
-    avalai_request_id: aiResult.requestId || null,
-    created_by: authContext.userId || null,
-    executed_at: new Date().toISOString(),
-  }]).catch((error: any) => console.warn('AI record mutation action log skipped', error));
-
-  await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
-    updated_at: new Date().toISOString(),
-    provider: aiResult.provider,
-    model: aiResult.model,
-    context_type: getContextKind(pageContext.context || {}),
-    module_id: pageContext.moduleId || targetModuleId,
-    record_id: pageContext.recordId || createdRecords[0]?.id || updatedRecords[0]?.id || null,
-    metadata: {
-      ...(thread?.metadata || {}),
-      route: pageContext.context?.route || null,
-      summary: pageContext.summary || null,
-      context_kind: getContextKind(pageContext.context || {}),
-      context_label: buildThreadContextLabel(pageContext),
-      context: pageContext.context || null,
-      module_id: pageContext.moduleId || targetModuleId,
-      record_id: pageContext.recordId || createdRecords[0]?.id || updatedRecords[0]?.id || null,
-      last_activity_kind: isUpdate ? 'update_record' : 'create_record',
-      last_message_preview: prompt.slice(0, 300),
-      last_created_records: createdRecords,
-      last_updated_records: updatedRecords,
-    },
-  });
-
-  return json(200, {
-    success: true,
-    threadId: thread.id,
-    userMessageId: userMessage?.id || null,
-    messageId: assistantMessage?.id || null,
-    answer: reply,
-    createdRecords,
-    updatedRecords,
-    provider: aiResult.provider,
-    model: aiResult.model,
-    usage: withCustomerBilling(aiResult.usageMetadata, ledger),
-    ledger,
-  });
 };
 
 const compactVoipContextRecord = (record: any, maxLength = 1100) => {
@@ -9834,7 +9745,7 @@ const normalizeTaskBundleInputs = (body: any) => {
         } : null,
       };
     })
-    .map((input: any) => input.audio && !String(input.audio.data || '').trim()
+    .map((input: any) => input.audio && !String(input.audio.data || '').trim() && !input.audio.url
       ? { ...input, audio: null }
       : input)
     .filter((input: any) => input.text || input.file || input.audio);
@@ -9854,7 +9765,7 @@ const transcribeTaskBundleVoices = async (
     || await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'dashboard_chat');
   await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, baseProviderConfig.orgAiSettings, 'voice_input');
   const transcripts: any[] = [];
-  for (const input of voiceInputs.slice(0, 3)) {
+  for (const input of voiceInputs) {
     const audioData = String(input.audio.data || '');
     const mimeType = String(input.audio.mimeType || 'audio/webm');
     const filename = String(input.audio.filename || 'voice.webm');
@@ -10284,6 +10195,7 @@ const handlePrimaryModelTaskBundle = async (
   if (attachments.length > 0) {
     return await handleChatWithFile(supabaseUrl, serviceRoleKey, authContext, {
       ...body,
+      metadata: { ...(body.metadata || {}), attachments: normalizeIntakeAttachments(inputs) },
       action: 'chat_with_file',
       capability: baseCapability,
       capabilities: [],
@@ -10297,6 +10209,7 @@ const handlePrimaryModelTaskBundle = async (
 
   return await handleChat(supabaseUrl, serviceRoleKey, authContext, {
     ...body,
+    metadata: { ...(body.metadata || {}), attachments: normalizeIntakeAttachments(inputs) },
     action: 'chat',
     capability: baseCapability,
     capabilities: [],
@@ -10398,33 +10311,16 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
   workingThreadId = String(publicThread?.id || workingThreadId || '').trim() || null;
   provider = decisionProviderConfig.provider || null;
   model = decisionProviderConfig.model || null;
-  const publicInputSummary = inputs.map((input: any) => {
-    if (input?.audio) return `فایل صوتی: ${String(input?.label || input?.audio?.filename || 'فایل صوتی').trim() || 'فایل صوتی'}`;
-    const file = input?.file || {};
-    const label = String(file?.filename || input?.label || (input?.type === 'image' ? 'تصویر' : 'فایل')).trim() || 'فایل';
-    return `${input?.type === 'image' ? 'تصویر' : 'پیوست'}: ${label}`;
-  });
-  await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+  const publicUserMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: workingThreadId,
     role: 'user',
-    content: [visibleUserMessage, ...publicInputSummary].filter(Boolean).join('\n') || 'پیوست‌های ارسالی',
+    content: visibleUserMessage || 'پیوست‌های ارسالی',
     provider: decisionProviderConfig.provider,
     model: decisionProviderConfig.model,
     metadata: {
       input_kind: 'task_bundle',
       task_bundle: bundleMeta,
-      attachments: inputs.map((input: any) => ({
-        type: input?.type || null,
-        label: input?.label || null,
-        filename: input?.file?.filename || input?.audio?.filename || null,
-        mime_type: input?.file?.mimeType || input?.audio?.mimeType || null,
-        url: input?.file?.url || input?.audio?.url || null,
-        file_type: input?.audio ? 'audio' : input?.type === 'image' ? 'image' : 'file',
-        asset_id: input?.file?.assetId || input?.audio?.assetId || null,
-        entry_id: input?.file?.entryId || input?.audio?.entryId || null,
-        module_id: input?.file?.moduleId || input?.audio?.moduleId || null,
-        record_id: input?.file?.recordId || input?.audio?.recordId || null,
-      })),
+      attachments: normalizeIntakeAttachments(inputs),
     },
   });
 
@@ -10465,7 +10361,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     ].join('\n\n');
     const analysisParts: string[] = [];
     if (files.length > 0) {
-      for (const [fileIndex, currentFile] of files.slice(0, 6).entries()) {
+      for (const [fileIndex, currentFile] of files.entries()) {
         const filename = String(currentFile?.filename || `پیوست ${fileIndex + 1}`).trim();
         const analysisData = await runStep(`document_analysis_${fileIndex + 1}`, handleChatWithFile(supabaseUrl, serviceRoleKey, authContext, {
           ...body,
@@ -10524,11 +10420,12 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
       capability: body?.capability || (body?.context?.mode === 'record' ? 'record_chat' : 'dashboard_chat'),
       message: sharedPrompt,
       inputKind: 'task_bundle',
+      intakeAttachments: normalizeIntakeAttachments(inputs),
       file: firstFile,
       files,
       threadId: workingThreadId,
       previewOnly: true,
-      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, internal_agent_input: true },
+      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, internal_agent_input: true, public_user_message_id: publicUserMessage?.id },
     }));
     if (data?.answer) finalAnswerParts.push(String(data.answer));
   }
@@ -10542,7 +10439,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
       file: firstFile,
       threadId: workingThreadId,
       previewOnly: true,
-      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, internal_agent_input: true },
+      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, internal_agent_input: true, public_user_message_id: publicUserMessage?.id },
     }));
     if (data?.answer) finalAnswerParts.push(String(data.answer));
   }
@@ -10560,7 +10457,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
       prompt: documentPrompt,
       inputKind: 'task_bundle_document',
       threadId: workingThreadId,
-      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, internal_agent_input: true },
+      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, internal_agent_input: true, public_user_message_id: publicUserMessage?.id },
     }));
     if (data?.answer) finalAnswerParts.push(String(data.answer));
   }
@@ -10577,7 +10474,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
       message: sharedPrompt || prompt,
       inputKind: 'task_bundle',
       threadId: workingThreadId,
-      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, internal_agent_input: true },
+      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, internal_agent_input: true, public_user_message_id: publicUserMessage?.id },
     }));
     if (data?.answer) finalAnswerParts.push(String(data.answer));
   }
@@ -11731,6 +11628,7 @@ const handleGenerateVoiceOutput = async (supabaseUrl: string, serviceRoleKey: st
       context: pageContext.context,
       context_key: contextKey,
       context_summary: pageContext.summary,
+      attachments: normalizeIntakeAttachments([...(body?.metadata?.attachments || []), ...(Array.isArray(body?.files) ? body.files : [body?.file]).filter(Boolean)]),
       input_kind: 'voice_output_prompt',
       capability: 'voice_output',
     },
@@ -11924,6 +11822,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
       context: pageContext.context,
       context_key: contextKey,
       context_summary: pageContext.summary,
+      attachments: normalizeIntakeAttachments([...(body?.metadata?.attachments || []), ...(Array.isArray(body?.files) ? body.files : [body?.file]).filter(Boolean)]),
       input_kind: 'image_prompt',
       capability: 'image_generation',
     },
@@ -14619,6 +14518,7 @@ const handleProposeNote = async (supabaseUrl: string, serviceRoleKey: string, au
     metadata: {
       context_key: buildContextKey(pageContext.context || {}),
       context_summary: pageContext.summary,
+      attachments: normalizeIntakeAttachments([...(body?.metadata?.attachments || []), ...(Array.isArray(body?.files) ? body.files : [body?.file]).filter(Boolean)]),
       input_kind: 'propose_note',
       module_id: pageContext.moduleId,
       record_id: pageContext.recordId,
@@ -15372,7 +15272,16 @@ const executeProposedActionLog = async (
       ? proposed.records
       : [{ record_id: proposed.record_id || null, fields: body?.proposedPayload || proposed.payload || {} }])
       .slice(0, 20);
-    const optionPreparation = prepareAiRecordOptions(rawRecords, schema, canAddAiDynamicOption(targetPerm));
+    const validationRows = isUpdate ? await restSelect(supabaseUrl, serviceRoleKey, targetTable, {
+      org_id: `eq.${authContext.orgId}`, id: `in.(${rawRecords.map((record: any) => record.record_id).join(',')})`, select: '*', limit: 20,
+    }) : [];
+    if (isUpdate && rawRecords.some((draft: any) => !storedRecords.some((stored: any) => stored.record_id === draft.record_id)
+      || !validationRows.some((row: any) => row.id === draft.record_id && canAccessAssignedRecord(row, authContext, getRecordScope(targetPerm), targetPerm)))) {
+      return { status: 403, payload: { success: false, message: 'دسترسی ویرایش رکوردهای انتخاب‌شده تأیید نشد.' } };
+    }
+    const validatedRecords = rawRecords.map((record: any) => ({ ...record,
+      original: isUpdate ? validationRows.find((row: any) => row.id === record.record_id) || {} : {} }));
+    const optionPreparation = prepareAiRecordOptions(validatedRecords, schema, canAddAiDynamicOption(targetPerm));
     const approvedOptions = Array.isArray(proposed.option_proposals) ? proposed.option_proposals : [];
     if (optionPreparation.questions.length || optionPreparation.proposals.some((option: any) => !approvedOptions.some((approved: any) => approved.category === option.category && approved.value === option.value))) {
       return { status: 409, payload: { success: false, message: 'گزینه‌های اطلاعات تغییر کرده‌اند یا اجازهٔ افزودن ندارید؛ پیش‌نویس را دوباره آماده کنید.' } };
@@ -15393,12 +15302,12 @@ const executeProposedActionLog = async (
         fields: sanitizeAiRecordPayload({ fields: draft?.fields || draft?.payload || {} }, schema),
         tables: sanitizeAiRecordTables({ tables: draft?.tables || {} }, schema),
       }))
-      .filter((draft: any) => Object.keys(draft.fields).length > 0 || Object.keys(draft.tables).length > 0);
+      .filter((draft: any) => Object.keys(draft.fields).length > 0 || Object.keys(draft.tables).length > 0 || (isUpdate && proposed.intake_attachments?.length > 0));
     if (mutationDrafts.length === 0) {
       return { status: 400, payload: { success: false, message: `اطلاعات کافی برای ${mutationVerb} رکورد وجود ندارد.` } };
     }
 
-    const resolvedMutationDrafts = await resolveAiMutationRelations(supabaseUrl, serviceRoleKey, authContext.orgId, mutationDrafts, schema);
+    const resolvedMutationDrafts = await resolveAiMutationRelations(supabaseUrl, serviceRoleKey, authContext.orgId, mutationDrafts, schema, authContext);
     mutationDrafts.splice(0, mutationDrafts.length, ...resolvedMutationDrafts);
     const moduleLabel = String(proposed.module_label || schema?.moduleLabel || targetModuleId).trim() || targetModuleId;
     const createdRecords: any[] = [];
@@ -15482,6 +15391,13 @@ const executeProposedActionLog = async (
         });
       });
     }
+    const attachmentResults = await linkAiRecordFiles({ attachments: proposed.intake_attachments || [],
+      records: [...createdRecords, ...updatedRecords], orgId: authContext.orgId,
+      read: (table, query) => actorFileRest(supabaseUrl, serviceRoleKey, callerAuthHeader, table, query),
+      insert: (table, row) => actorFileRest(supabaseUrl, serviceRoleKey, callerAuthHeader, table, {}, row),
+      canReadSource: async (sourceModuleId, sourceRecordId) => (await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext,
+        { mode: 'record', moduleId: sourceModuleId, recordId: sourceRecordId })).permitted === true,
+    });
     const mutationRecords = isUpdate ? updatedRecords : createdRecords;
     const mutationSucceeded = mutationRecords.length === mutationDrafts.length && mutationRecords.length > 0;
     await restPatch(supabaseUrl, serviceRoleKey, 'ai_action_logs', { id: `eq.${actionLogId}` }, {
@@ -15489,8 +15405,8 @@ const executeProposedActionLog = async (
       approval_status: mutationSucceeded ? 'approved' : action.approval_status,
       confirmed_by: authContext.userId,
       executed_at: new Date().toISOString(),
-      result_payload: { created_records: createdRecords, updated_records: updatedRecords },
-      result: { created_records: createdRecords, updated_records: updatedRecords },
+      result_payload: { created_records: createdRecords, updated_records: updatedRecords, attachment_results: attachmentResults },
+      result: { created_records: createdRecords, updated_records: updatedRecords, attachment_results: attachmentResults },
     });
     await markRunCompleted({ createdRecords, updatedRecords }, !mutationSucceeded);
     if (!mutationSucceeded) {
@@ -15514,6 +15430,7 @@ const executeProposedActionLog = async (
         provider: centralProvider,
         model: proposed?.model || '',
         metadata: {
+          attachment_results: attachmentResults,
           source: `confirm_${isUpdate ? 'update' : 'create'}_record`,
           action_log_id: actionLogId,
           created_records: createdRecords,
@@ -17737,6 +17654,7 @@ Deno.serve(async (req: Request) => {
 
     const user = await verifyUserToken(supabaseUrl, serviceRoleKey, token);
     const authContext = await loadUserContext(supabaseUrl, serviceRoleKey, user);
+    Object.defineProperty(authContext, 'callerAuthorization', { value: authHeader, enumerable: false });
 
     if (action === 'get_ai_settings') return await handleGetAiSettings(supabaseUrl, serviceRoleKey, authContext);
     if (action === 'save_ai_settings') return await handleSaveAiSettings(supabaseUrl, serviceRoleKey, authContext, body);

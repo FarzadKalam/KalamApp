@@ -39,6 +39,15 @@ export const normalizeAiMessageText = (value: unknown) => {
   return parts.join('\n').trim();
 };
 
+/** Remove old generated captions only when the corresponding attachment is present. */
+export const removeAiAttachmentCaptions = (content: string, attachments: Array<{ name?: string }>) => {
+  const names = new Set(attachments.map((file) => String(file.name || '').trim()).filter(Boolean));
+  return content.split('\n').filter((line) => {
+    const match = line.trim().match(/^(?:تصویر|پیوست|فایل|فایل صوتی):\s*(.+)$/);
+    return !match || !names.has(match[1].trim());
+  }).join('\n').trim();
+};
+
 const toAttachment = (value: any): NoteAttachment | null => {
   if (!value) return null;
   const url = normalizeText(

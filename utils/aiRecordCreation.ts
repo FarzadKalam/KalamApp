@@ -7,6 +7,7 @@ export type AiRecordFieldSpec = {
   label: string;
   type: string;
   required?: boolean;
+  logic?: ModuleField['logic'];
   options?: Array<{ label: string; value: string | number }>;
   relationTargetModule?: string | null;
   readonly?: boolean;
@@ -71,6 +72,7 @@ const toFieldSpec = (field: ModuleField, moduleId: string, aiWritable: boolean):
   label: getFieldLabelFa(field as any, { moduleId }),
   type: String(field.type || 'text'),
   required: (field as any)?.validation?.required === true,
+  logic: field.logic,
   readonly: (field as any)?.readonly === true || (field as any)?.nature === 'system',
   aiWritable,
   dynamicOptionsCategory: field.dynamicOptionsCategory || undefined,

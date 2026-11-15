@@ -16,6 +16,7 @@ import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 import type { IdentityOption } from '../../utils/identityDirectory';
 import type { RecordedVoice } from './AiVoiceRecorder';
 import type { AiUploadedFilePrompt } from './AiFileUploadButton';
+import { uploadAiFileAttachments } from '../../utils/aiFileAttachments';
 import AiCapabilityComposerActions, { normalizeAiComposerCapabilities, type AiComposerCapability } from './AiCapabilityComposerActions';
 import AiComposeModelBar from './AiComposeModelBar';
 import AiActivityStatus from './AiActivityStatus';
@@ -39,6 +40,8 @@ import ComposerAttachmentChips, { type ComposerAttachmentChipItem } from '../com
 import AiMessageRenderer from './AiMessageRenderer';
 import { type AiRecordMutationDraft } from './AiRecordMutationApprovalCard';
 import AiRecordMutationApprovalCard from './AiRecordMutationApprovalCard';
+import AiRecordResultCard from './AiRecordResultCard';
+import { removeAiAttachmentCaptions } from '../../utils/aiMessageParts';
 import AiQuestionCard from './AiQuestionCard';
 import { normalizeAiQuestions, presentAiQuestionResponse } from '../../supabase/functions/_shared/ai-questions';
 import AiProcessOperationApprovalCard from './AiProcessOperationApprovalCard';
@@ -1120,6 +1123,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
 
   const buildBundleInputPayloads = useCallback(async () => Promise.all(bundleInputs.map(async (item) => {
     if (item.type === 'voice') {
+      const [stored] = await uploadAiFileAttachments([new File([item.voice.blob], item.voice.filename, { type: item.voice.mimeType })], {
+        moduleId: contextWithSelection.mode === 'record' ? contextWithSelection.moduleId : null,
+        recordId: contextWithSelection.mode === 'record' ? contextWithSelection.recordId : null,
+      });
       return {
         id: item.id,
         type: 'voice',
@@ -1129,6 +1136,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           mimeType: item.voice.mimeType,
           durationMs: item.voice.durationMs,
           filename: item.voice.filename,
+          url: stored?.url || null,
+          assetId: stored?.assetId || null,
+          entryId: stored?.entryId || null,
+          moduleId: stored?.moduleId || null,
+          recordId: stored?.recordId || null,
         },
       };
     }
@@ -1167,7 +1179,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         recordId: item.file.recordId || null,
       },
     };
-  })), [bundleInputs]);
+  })), [bundleInputs, contextWithSelection]);
 
   const requestAutoRoute = useCallback(async (params: {
     messageText: string;
@@ -1223,7 +1235,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     });
     bundlePayload = bundlePayload.map((item) => {
       const transcript = route.voiceTranscripts?.find((entry: any) => String(entry?.inputId || '') === String(item?.id || ''));
-      return transcript?.transcript ? { id: item.id, type: 'text', label: item.label, text: String(transcript.transcript) } : item;
+      return transcript?.transcript ? { ...item, text: String(transcript.transcript), audio: { ...item.audio, data: null } } : item;
     });
     const clarificationQuestions = Array.isArray(route?.agentPlan?.clarification_questions)
       ? route.agentPlan.clarification_questions.map((item: any) => String(item || '').trim()).filter(Boolean).slice(0, 3)
@@ -2527,14 +2539,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     })();
     setInput('');
     setPendingAiAction(null);
-    const bundleSummary = bundleInputs.map((item) => {
-      if (item.type === 'voice' || item.type === 'audio') return `فایل صوتی: ${item.label}`;
-      return `${item.type === 'image' ? 'تصویر' : 'فایل'}: ${item.label}`;
-    });
     const userMessage: ChatMessage = {
       id: `user-bundle-${Date.now()}`,
       role: 'user',
-      content: [prompt, ...bundleSummary].filter(Boolean).join('\n') || 'ورودی‌های پیوست‌شده',
+      content: prompt || '',
       created_at: new Date().toISOString(),
       metadata: {
         input_kind: 'task_bundle',
@@ -3015,11 +3023,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     const authorName = String(messageAuthor?.name || '').trim() || currentUserView.name;
     const authorAvatarUrl = String(messageAuthor?.avatar_url || '').trim() || currentUserView.avatarUrl;
     const usageText = !isUser ? formatUsageMetadata(item.metadata?.usage || item.metadata, orgCurrency) : '';
-    const rawMessageText = normalizeAiMessageText(item.content);
+    const attachments = extractAiMessageAttachments(item);
+    const rawMessageText = isUser ? removeAiAttachmentCaptions(normalizeAiMessageText(item.content), attachments) : normalizeAiMessageText(item.content);
     const presentation = !isUser ? presentAiQuestionResponse(rawMessageText) : { answer: rawMessageText, questions: [] };
     const messageText = !isUser && item.metadata?.streaming === true && /^\s*(?:```json\s*)?\{/.test(rawMessageText)
       ? 'در حال آماده‌سازی پاسخ…' : presentation.answer;
-    const attachments = extractAiMessageAttachments(item);
     const pendingKind = getPendingGenerationKind(item);
     const retryText = !isUser
       ? normalizeAiMessageText([...messages].slice(0, index).reverse().find((messageItem) => messageItem.role === 'user')?.content)
@@ -3112,6 +3120,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             {isUser ? messageText : waitingForResponse ? (
               <AiActivityStatus agentId={effectiveAgentKey || respondingAgent} activities={activeAgents} onStop={isStreaming ? stopActiveStream : undefined} />
             ) : (
+              {!isUser ? <AiRecordResultCard metadata={item.metadata} /> : null}
               <AiMessageRenderer
                 agentId={effectiveAgentKey || respondingAgent}
                 activities={activeAgents}
@@ -3241,13 +3250,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           </div>
           )}
           <div className="ai-chat-meta mt-1 flex flex-wrap sm:flex-nowrap items-center justify-between gap-1 w-full text-[10.5px]">
-            <div className="flex items-center gap-1.5 truncate text-slate-500 dark:text-slate-400">
-              <span className="font-bold text-slate-700 dark:text-slate-200">
-                {isUser ? authorName : (agentDef?.shortTitleFa || 'دستیار')}
-              </span>
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-slate-500 dark:text-slate-400">
+              {isUser ? <span className="font-bold text-slate-700 dark:text-slate-200">{authorName}</span> : null}
               {item.created_at ? <span>• {toFaDateTime(item.created_at)}</span> : null}
               {!isUser && item.model ? <span className="opacity-75 font-mono text-[9.5px]">({item.model})</span> : null}
-              {!isUser && usageText ? <span className="hidden sm:inline-block opacity-75">• {usageText}</span> : null}
+              {!isUser && usageText ? <span className="whitespace-normal opacity-75">• {usageText}</span> : null}
             </div>
             <div className="flex shrink-0 items-center gap-0.5">
               {messageText ? (
@@ -3339,6 +3346,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       return proposedPayload.records.map((record: any) => ({
         record_id: String(record?.record_id || '').trim() || null,
         record_title: String(record?.record_title || '').trim() || null,
+        original: record?.original || {},
         selected: record?.selected !== false,
         fields: record?.fields && typeof record.fields === 'object' ? record.fields : {},
         tables: record?.tables && typeof record.tables === 'object' ? record.tables : {},

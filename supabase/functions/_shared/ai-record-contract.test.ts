@@ -11,6 +11,17 @@ const base = { moduleId: 'marketing_leads', fields: [
 ], tables: [] };
 
 describe('shared operational intake', () => {
+  it('requires conditional fields only while their canonical form condition is active', () => {
+    const schema = { fields: [{ key: 'campaign', label: 'کمپین', required: true,
+      logic: { visibleIf: { field: 'source', operator: 'equals', value: 'campaign' } } }, { key: 'source' }] };
+    expect(getAiRecordRequiredQuestions([{ fields: { source: 'instagram' } }], schema, false)).toEqual([]);
+    expect(getAiRecordRequiredQuestions([{ fields: { source: 'campaign' } }], schema, false)).toEqual(['لطفاً «کمپین» را مشخص کنید.']);
+    expect(getAiRecordRequiredQuestions([{ fields: { source: 'campaign', campaign: 'chosen' } }], schema, false)).toEqual([]);
+    expect(getAiRecordRequiredQuestions([{ original: { source: 'instagram' }, fields: { source: 'campaign' } }], schema, true)).toEqual(['لطفاً «کمپین» را مشخص کنید.']);
+    expect(getAiRecordRequiredQuestions([{ original: { source: 'campaign', campaign: 'existing' }, fields: { source: 'campaign' } }], schema, true)).toEqual([]);
+    const configured = resolveAiRecordSchema(schema, { fields: [{ key: 'campaign', validation: { required: false } }] }, {});
+    expect(getAiRecordRequiredQuestions([{ fields: { source: 'campaign' } }], configured, false)).toEqual([]);
+  });
   it.each(['sales_leads', 'purchase_supply', 'hr_manager', 'reservation', 'project_process'] as const)('keeps explicitly addressed %s when input mentions Instagram', (agent) => {
     const route = heuristicSelectAgentsAndCapabilities({ message: 'اطلاعات مشتری از دایرکت اینستاگرام را ثبت کن', explicitAgents: [agent] });
     expect(route.agents).toEqual([agent]);

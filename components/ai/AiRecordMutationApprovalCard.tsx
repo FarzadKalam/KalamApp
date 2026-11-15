@@ -6,12 +6,14 @@ import type { ModuleField } from '../../types';
 import { getFieldLabelFa } from '../../utils/fieldLabel';
 import SmartFieldRenderer from '../SmartFieldRenderer';
 import EditableTable from '../EditableTable';
+import { getAiRecordFieldState } from '../../supabase/functions/_shared/ai-record-contract';
 
 export type AiRecordMutationDraft = {
   record_id?: string | null;
   record_title?: string | null;
   /** هر پیش‌نویس جدا انتخاب می‌شود؛ موارد منتخب یک‌جا تأیید می‌شوند. */
   selected?: boolean;
+  original?: Record<string, any>;
   fields: Record<string, any>;
   tables?: Record<string, any[]>;
 };
@@ -87,6 +89,8 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
 
   return (
     <div className="mt-2 rounded-xl border border-[var(--ai-chat-line,#dfe2e5)] bg-[var(--ai-chat-surface,#fff)] p-2 dark:border-white/10 dark:bg-white/[0.045]">
+      {schema?.intakeAttachments?.length ? <Alert className="mb-3" type="info" showIcon message="پیوست‌های همراه این ثبت"
+        description={<div>این فایل‌ها پس از تأیید به رکوردهای منتخب متصل می‌شوند: {schema.intakeAttachments.map((file: any) => file.name).join('، ')}</div>} /> : null}
       {schema?.optionProposals?.some((proposal: any) => records.some((record) => record.selected !== false &&
         (Array.isArray(record.fields?.[proposal.fieldKey]) ? record.fields[proposal.fieldKey] : [record.fields?.[proposal.fieldKey]]).includes(proposal.value))) ? (
         <Alert className="mb-3" type="info" showIcon message="گزینه‌های تازه همراه ثبت اضافه می‌شوند"
@@ -121,8 +125,9 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
       <Carousel ref={carouselRef} dots={records.length > 1} infinite={false} draggable afterChange={setActiveIndex} adaptiveHeight>
         {records.map((record, recordIndex) => {
           const proposedKeys = new Set(Object.keys(record.fields || {}));
-          const primaryFields = editableFields.filter((field) => proposedKeys.has(String(field.key)));
-          const otherFields = editableFields.filter((field) => !proposedKeys.has(String(field.key)));
+          const allowedFields = editableFields.filter(field => getAiRecordFieldState(field, schema, record).visible);
+          const primaryFields = allowedFields.filter((field) => proposedKeys.has(String(field.key)));
+          const otherFields = allowedFields.filter((field) => !proposedKeys.has(String(field.key)));
           const visibleFields = showOtherFields[recordIndex]
             ? [...primaryFields, ...otherFields]
             : primaryFields;
@@ -153,13 +158,13 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
                   <div key={field.key} className="min-w-0 [&_.ant-form-item]:mb-2 [&_.ant-form-item-label]:pb-0.5">
                     <SmartFieldRenderer
                       field={disabled ? { ...field, readonly: true } : field}
-                      value={record.fields?.[field.key]}
+                      value={Object.prototype.hasOwnProperty.call(record.fields || {}, field.key) ? record.fields[field.key] : record.original?.[field.key]}
                       onChange={(value) => updateField(recordIndex, String(field.key), value)}
                       forceEditMode
                       compactMode
                       disableRequired
                       moduleId={moduleId}
-                      allValues={record.fields || {}}
+                      allValues={{ ...(record.original || {}), ...(record.fields || {}) }}
                       recordId={actionType === 'update_record_from_prompt' ? record.record_id || undefined : undefined}
                       overlayZIndexBase={32000}
                     />

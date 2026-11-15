@@ -7,7 +7,6 @@ import type { NoteAttachment } from '../../utils/noteContent';
 import { uploadAiFileAttachments } from '../../utils/aiFileAttachments';
 import { ensureRecordAiFilesFolder, ensureWorkspaceAiFilesFolder } from '../../utils/fileManagerService';
 import {
-  buildAiUploadedFilePrompt,
   buildAiUploadedFilePromptFromUrl,
   type AiUploadedFilePrompt,
 } from '../../utils/aiUploadedFilePrompt';
@@ -123,8 +122,7 @@ const AiFileUploadButton: React.FC<AiFileUploadButtonProps> = ({
     if (!files.length) return;
     setPreparing(true);
     try {
-      const prepared = await Promise.all(files.map((file) => buildAiUploadedFilePrompt(file)));
-      await dispatchPrepared(prepared);
+      await handleUploadFiles(files);
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'آماده‌سازی فایل برای هوش مصنوعی ناموفق بود.'));
     } finally {

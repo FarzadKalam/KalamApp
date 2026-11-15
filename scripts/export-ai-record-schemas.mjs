@@ -29,3 +29,11 @@ new Function('require', 'module', 'exports', result.outputFiles[0].text)(createR
     await fs.writeFile(target, output, 'utf8');
   }
 }
+// Ship the canonical form policy to Edge Functions without outside-root imports.
+const policy = await build({ stdin: { contents: 'export { resolveConditionalFieldState } from "./utils/conditionalFieldRules.ts";', resolveDir: process.cwd() }, bundle: true,
+  write: false, platform: 'neutral', format: 'esm', target: 'es2022', logLevel: 'silent' });
+const policyOutput = '// @ts-nocheck\n// Generated from utils/conditionalFieldRules.ts; do not edit.\n' + policy.outputFiles[0].text;
+const policyTarget = new URL('../supabase/functions/_shared/ai-field-policy.generated.ts', import.meta.url);
+if (process.argv.includes('--check')) {
+  if (await fs.readFile(policyTarget, 'utf8') !== policyOutput) throw new Error('AI field policy is stale; run npm run ai:schemas');
+} else await fs.writeFile(policyTarget, policyOutput, 'utf8');

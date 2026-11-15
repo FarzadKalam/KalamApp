@@ -1,4 +1,5 @@
 /** Pure record contract shared by preparation, approval and execution. */
+import { resolveConditionalFieldState } from './ai-field-policy.generated.ts';
 export type RecordOptionProposal = { fieldKey: string; fieldLabel: string; category: string; label: string; value: string };
 const text = (value: unknown) => String(value ?? '').trim();
 const comparable = (value: unknown) => text(value).replace(/[يى]/g, 'ی').replace(/ك/g, 'ک').replace(/[\u200c\s]+/g, ' ').toLowerCase();
@@ -26,7 +27,7 @@ export const resolveAiRecordSchema = (base: any, configured: any, permission: an
     && field.readonly !== true && field.nature !== 'system' && field.aiWritable !== false
     && field.isActive !== false && field.disabled !== true
     && !['image', 'json', 'checklist', 'progress_stages', 'readonly_lookup', 'tags'].includes(field.type));
-  return { ...base, fields, contextFields: undefined,
+  return { ...base, fields, conditionalDisplay: configured?.conditionalDisplay || base?.conditionalDisplay, contextFields: undefined,
     tables: (base?.tables || []).filter((table: any) => permission?.fields?.[table.key] !== false)
       .map((table: any) => ({ ...table, columns: table.columns.filter((column: any) =>
         permission?.fields?.[`${table.key}.${column.key}`] !== false && permission?.fields?.[column.key] !== false) })) };
@@ -77,11 +78,19 @@ export const prepareAiRecordOptions = (records: any[], schema: any, mayAdd: bool
   return { records: nextRecords, schema: nextSchema, proposals: Array.from(proposals.values()), questions: Array.from(questions) };
 };
 
+export const getAiRecordFieldState = (field: any, schema: any, record: any) => {
+  const fields = (schema.fields || []).map((item: any) => ({ ...item, validation: { ...item.validation, required: item.required === true } }));
+  const values = { ...Object.fromEntries(fields.filter((item: any) => item.defaultValue !== undefined).map((item: any) => [item.key, item.defaultValue])), ...(record.original || {}), ...(record.fields || {}) };
+  return resolveConditionalFieldState(fields.find((item: any) => item.key === field.key) || field, values, schema.conditionalDisplay, fields);
+};
+
 export const getAiRecordRequiredQuestions = (records: any[], schema: any, isUpdate: boolean) => {
-  return (schema.fields || []).filter((field: any) => field.required
-    && records.some((record) => {
-      const value = record.fields?.[field.key];
-      if (isUpdate && value === undefined) return false;
+  return (schema.fields || []).filter((field: any) => records.some((record) => {
+      const state = getAiRecordFieldState(field, schema, record);
+      if (!state.visible || !state.required) return false;
+      const suppliedValue = record.fields?.[field.key];
+      const value = suppliedValue === undefined ? record.original?.[field.key] : suppliedValue;
+      if (isUpdate && suppliedValue === undefined && !field.logic && !schema.conditionalDisplay?.rules?.some((rule: any) => rule.targetFieldKey === field.key)) return false;
       if (!isUpdate && value === undefined && field.defaultValue !== undefined && field.defaultValue !== null && field.defaultValue !== '') return false;
       return value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0);
     }))

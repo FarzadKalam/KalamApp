@@ -30,3 +30,14 @@ export const isUnsupportedNativeInputError = (error: unknown): boolean => {
   const message = String((error as any)?.message || error || '').toLowerCase();
   return /(?:image|vision|file|document|input modality|content.?type).{0,90}(?:not supported|unsupported|does not support)|(?:not supported|unsupported|does not support).{0,90}(?:image|vision|file|document|input modality)|unsupported_(?:image|file|input)/i.test(message);
 };
+
+/** One execution policy for chat, file analysis and structured record intake. */
+export const runNativeAgentInput = async <T>(options: {
+  hasNativeInput: boolean; primary: () => Promise<T>; fallback: (error: unknown) => Promise<T>;
+}): Promise<T> => {
+  try { return await options.primary(); }
+  catch (error) {
+    if (!options.hasNativeInput || !isUnsupportedNativeInputError(error)) throw error;
+    return await options.fallback(error);
+  }
+};

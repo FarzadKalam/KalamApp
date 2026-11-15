@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { canAddAiDynamicOption, getAiRecordRequiredQuestions, prepareAiRecordOptions } from '../_shared/ai-record-contract';
+import { linkAiRecordFiles } from '../_shared/ai-record-files';
 
 // Execute the actual handler with an in-memory REST boundary; never contact a
 // tenant or AI provider. Extracting the declaration avoids starting Deno.serve.
@@ -27,7 +28,7 @@ const harness = (mode: 'create' | 'update' = 'create', permission = { view: true
     loadAiMutationSchema: async () => structuredClone(schema), resolveProviderConfig: async () => ({ orgAiSettings: {} }), assertAiCapabilityEnabled: async () => {},
     loadTenantAiPlanContext: async () => ({}), loadCentralAiGrounding: async () => ({}), normalizeSelectedAgents: () => [], resolveRunnableAgentsForActor: () => ({ blockedAgents: [] }),
     getModuleTable: () => 'marketing_leads', getRecordScope: () => 'all', canAccessAssignedRecord: (row: any, auth: any) => row.org_id === auth.orgId,
-    canAddAiDynamicOption, getAiRecordRequiredQuestions, prepareAiRecordOptions,
+    canAddAiDynamicOption, getAiRecordRequiredQuestions, prepareAiRecordOptions, linkAiRecordFiles,
     sanitizeAiRecordPayload: (record: any, currentSchema: any) => Object.fromEntries(Object.entries(record.fields || {}).filter(([key]) => currentSchema.fields.some((field: any) => field.key === key))),
     sanitizeAiRecordTables: () => ({}), resolveAiMutationRelations: async (_url: any, _key: any, _org: any, drafts: any) => drafts,
     buildAiRecordTitle: (record: any) => record.name,
