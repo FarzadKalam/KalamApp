@@ -24,6 +24,7 @@ import AiKnowledgeTab from './AiKnowledgeTab';
 import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
 import PriceAmountInput from '../../components/PriceAmountInput';
 import AiAgentConfigPanel from '../../components/ai/AiAgentConfigPanel';
+import AiUsageHistoryTable from '../../components/ai/AiUsageHistoryTable';
 import { useCurrencyConfig } from '../../utils/currency';
 import {
   convertDisplayInputToIrt,
@@ -474,14 +475,14 @@ const AiSettingsTab: React.FC = () => {
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
-          <Statistic title="مصرف ثبت‌شده" value={totals.billed_amount_irt || 0} formatter={formatCurrency} />
+          <Statistic title="مصرف ۲۰۰ درخواست اخیر" value={totals.billed_amount_irt || 0} formatter={formatCurrency} />
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
-          <Statistic title="تعداد درخواست‌ها" value={totals.requests || 0} />
+          <Statistic title="درخواست‌های نهایی از ۲۰۰ مورد اخیر" value={totals.requests || 0} />
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
           <Statistic
-            title="صرفه‌جویی کش پرامپت"
+            title="صرفه‌جویی کش در ۲۰۰ درخواست اخیر"
             value={totals.cache_savings_irt || 0}
             formatter={formatCurrency}
           />
@@ -691,20 +692,17 @@ const AiSettingsTab: React.FC = () => {
             },
             {
               key: 'usage',
-              label: 'مصرف اخیر',
+              label: 'تاریخچه مصرف',
               children: (
-                <Table
-                  rowKey="id"
-                  size="small"
-                  dataSource={overview?.usage?.recent || []}
-                  locale={{ emptyText: <Empty description="هنوز مصرفی ثبت نشده است." /> }}
+                <AiUsageHistoryTable
+                  refreshKey={overview}
                   columns={[
+                    { title: 'تاریخ', dataIndex: 'created_at', render: (value: string) => value ? new Date(value).toLocaleString('fa-IR') : '-' },
                     { title: 'قابلیت', dataIndex: 'capability' },
                     { title: 'مدل', dataIndex: 'model' },
                     { title: 'وضعیت', dataIndex: 'status', render: (value) => <Tag>{String(value || '-')}</Tag> },
                     { title: 'هزینه', dataIndex: 'billed_amount_irt', render: formatCurrency },
                   ]}
-                  pagination={{ pageSize: 8 }}
                 />
               ),
             },

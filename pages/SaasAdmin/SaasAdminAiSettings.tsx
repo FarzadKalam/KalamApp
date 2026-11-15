@@ -34,6 +34,7 @@ import { AI_AGENT_CATALOG } from '../../utils/aiAgentCatalog';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
+import AiUsageHistoryTable from '../../components/ai/AiUsageHistoryTable';
 
 const { Text } = Typography;
 
@@ -258,7 +259,6 @@ const SaasAdminAiSettings: React.FC = () => {
       current: models.filter((model) => Array.isArray(model.metadata?.default_capability_tags) && model.metadata.default_capability_tags.includes(capability)),
     })), [defaultCapabilityTags, models]);
   const orgSummaries = useMemo(() => (overview?.orgSummaries || []) as any[], [overview]);
-  const allUsage = useMemo(() => (overview?.allUsage || []) as any[], [overview]);
   const totals = overview?.totals || {};
   const liveExchangeRate = overview?.liveExchangeRate || {};
   const liveExchangeRateIrt = Number(liveExchangeRate?.rate || 0) > 0 ? Number(liveExchangeRate.rate) : null;
@@ -654,13 +654,13 @@ const SaasAdminAiSettings: React.FC = () => {
           </div>
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
-          <Statistic title="کل درآمد ثبت‌شده" value={totals.billed_irt || 0} formatter={formatIrt} />
+          <Statistic title="درآمد ۶۰۰ درخواست اخیر" value={totals.billed_irt || 0} formatter={formatIrt} />
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
-          <Statistic title="هزینه خام پرداختی" value={totals.raw_irt || 0} formatter={formatIrt} />
+          <Statistic title="هزینه خام ۶۰۰ درخواست اخیر" value={totals.raw_irt || 0} formatter={formatIrt} />
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
-          <Statistic title="کل درخواست‌ها" value={totals.requests || 0} />
+          <Statistic title="درخواست‌های نهایی از ۶۰۰ مورد اخیر" value={totals.requests || 0} />
         </div>
       </div>
 
@@ -788,7 +788,7 @@ const SaasAdminAiSettings: React.FC = () => {
           },
           {
             key: 'usage_orgs',
-            label: 'خلاصه مصرف هر سازمان',
+            label: 'خلاصه مصرف هر سازمان در ۶۰۰ درخواست اخیر',
             children: (
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -833,15 +833,10 @@ const SaasAdminAiSettings: React.FC = () => {
             key: 'usage_all',
             label: 'ریز تراکنش‌های مصرف (همه سازمان‌ها)',
             children: (
-              <Table
-                rowKey="id"
-                size="small"
-                loading={loading}
-                dataSource={allUsage}
+              <AiUsageHistoryTable
+                central
+                refreshKey={overview}
                 columns={usageColumns}
-                pagination={{ pageSize: 10 }}
-                locale={{ emptyText: <Empty description="تراکنشی ثبت نشده است." /> }}
-                scroll={{ x: 900 }}
               />
             ),
           },

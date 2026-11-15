@@ -141,6 +141,7 @@ type AssistantAction =
   | 'get_ai_settings'
   | 'save_ai_settings'
   | 'get_ai_overview'
+  | 'get_ai_usage_page'
   | 'get_ai_credit_summary'
   | 'get_ai_usage_summary'
   | 'get_compose_models'
@@ -6843,6 +6844,36 @@ const handleGetAiOverview = async (supabaseUrl: string, serviceRoleKey: string, 
     liveExchangeRate,
     company: companyContext,
   });
+};
+
+// One page is fetched at a time; the count belongs to the same scoped query.
+const handleAiUsagePage = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any, central: boolean) => {
+  if (central ? !canViewSaasAdmin(authContext) : !canManageAiSettings(authContext) || !authContext.orgId) {
+    return json(403, { success: false, message: 'دسترسی مشاهده مصرف هوش مصنوعی را ندارید.' });
+  }
+  const page = Math.max(1, Math.min(Math.floor(Number.MAX_SAFE_INTEGER / 100), Math.floor(Number(body?.page) || 1)));
+  const pageSize = Math.max(1, Math.min(100, Math.floor(Number(body?.pageSize) || 20)));
+  const params: Record<string, string | number> = {
+    select: 'id,org_id,user_id,capability,model,provider,agent_key,channel,status,raw_cost_irt,billed_amount_irt,exchange_rate_irt,cached_input_tokens,cache_savings_irt,usage,created_at',
+    order: 'created_at.desc,id.desc', limit: pageSize, offset: (page - 1) * pageSize,
+  };
+  if (!central) params.org_id = `eq.${authContext.orgId}`;
+  const response = await fetch(restUrl(supabaseUrl, 'org_ai_usage_ledger', params), {
+    headers: { ...getServiceHeaders(serviceRoleKey), Prefer: 'count=exact' },
+  });
+  if (!response.ok) throw new Error('دریافت فهرست مصرف هوش مصنوعی ناموفق بود.');
+  const rows = await response.json();
+  const countValue = response.headers.get('content-range')?.split('/')[1];
+  if (!countValue || countValue === '*' || !Number.isFinite(Number(countValue))) throw new Error('شمارش درخواست‌های هوش مصنوعی ناموفق بود.');
+  if (central && rows.length) {
+    const orgIds = [...new Set(rows.map((row: any) => normalizeId(row.org_id)).filter(Boolean))];
+    const orgs = orgIds.length ? await restSelect(supabaseUrl, serviceRoleKey, 'organizations', {
+      select: 'id,name,slug', id: `in.(${orgIds.join(',')})`,
+    }) : [];
+    const names = new Map(orgs.map((org: any) => [normalizeId(org.id), String(org.name || org.slug || '').trim()]));
+    rows.forEach((row: any) => { row.org_name = names.get(normalizeId(row.org_id)) || 'سازمان بدون نام'; });
+  }
+  return json(200, { success: true, rows, total: Number(countValue), page, pageSize });
 };
 
 // Non-admin endpoint: lets any org member see which model each capability will
@@ -14622,6 +14653,8 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
   }
   const subAction = String(body?.sub || '').trim();
 
+  if (subAction === 'usage_page') return await handleAiUsagePage(supabaseUrl, serviceRoleKey, authContext, body, true);
+
   if (subAction === 'overview') {
     const [allUsage, models, providerCredit, orgRows, companyCurrencyRows, walletRows, grantRows, centralDefaults] = await Promise.all([
       safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_usage_ledger', {
@@ -17665,6 +17698,7 @@ Deno.serve(async (req: Request) => {
     if (action === 'get_ai_settings') return await handleGetAiSettings(supabaseUrl, serviceRoleKey, authContext);
     if (action === 'save_ai_settings') return await handleSaveAiSettings(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_ai_overview') return await handleGetAiOverview(supabaseUrl, serviceRoleKey, authContext);
+    if (action === 'get_ai_usage_page') return await handleAiUsagePage(supabaseUrl, serviceRoleKey, authContext, body, false);
     if (action === 'get_ai_credit_summary' || action === 'get_ai_usage_summary') return await handleGetAiCreditSummary(supabaseUrl, serviceRoleKey, authContext);
     if (action === 'get_compose_models') return await handleGetComposeModels(supabaseUrl, serviceRoleKey, authContext);
     if (action === 'test_provider') return await handleTestProvider(supabaseUrl, serviceRoleKey, authContext, body);
