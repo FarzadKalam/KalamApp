@@ -138,7 +138,9 @@ export const bridgeReasoningResponse = async (response: Response,route: string,s
             if (delta.type==='input_json_delta') { block._json+=delta.partial_json;emit({ tool_calls: [{ index: callIndexes.get(String(event.index)),function: { arguments: delta.partial_json } }] }); }
           }
           if (event.type==='content_block_stop' && blocks[event.index]?._json!==undefined) {
-            const block=blocks[event.index];block.input=block._json ? json(block._json) : block.input;delete block._json;
+            const block=blocks[event.index];
+            if (!block._json) emit({ tool_calls: [{ index: callIndexes.get(String(event.index)),function: { arguments: JSON.stringify(block.input || {}) } }] });
+            block.input=block._json ? json(block._json) : block.input;delete block._json;
           }
           if (event.type==='message_delta') {
             nativeUsage={ ...nativeUsage,...event.usage };

@@ -4438,7 +4438,7 @@ const mergeChatUsageMetadata = (items: any[], providerConfig: any) => {
 
 const createAiContextBudget = (providerConfig: any,messages: any[],options: any = {}) => {
   const window = getModelContextWindowTokens(providerConfig.modelCatalog);
-  const requested = options.maxCompletionTokens ?? options.maxTokens ?? (isReasoningModel(providerConfig.model) ? DEFAULT_REASONING_MAX_TOKENS : DEFAULT_CHAT_MAX_TOKENS);
+  const requested = options.maxCompletionTokens ?? options.maxTokens ?? (isReasoningModel(providerConfig.model) || getReasoningProfile(providerConfig.modelCatalog || { id: providerConfig.model }).supported ? DEFAULT_REASONING_MAX_TOKENS : DEFAULT_CHAT_MAX_TOKENS);
   const outputTokens = Math.max(256,Math.min(requested,Math.floor(window / 4)));
   if (options.disableAutoCompaction) return { outputTokens,prepare: async (value: any[]) => value };
   const controller = createContextBudgetController({ modelCatalog: providerConfig.modelCatalog,tools: options.tools,outputTokens,initialMessages: messages,
@@ -5423,7 +5423,7 @@ const appendImageContextToPrompt = (prompt: string, args: { companyContext?: any
 const stripProcessTechnicalIds = (value: any, depth = 0): any => {
   if (depth > 8 || value === null || value === undefined) return value;
   if (typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.trim())) return null;
-  if (Array.isArray(value)) return value.slice(0, 40).map((item) => stripProcessTechnicalIds(item, depth + 1));
+  if (Array.isArray(value)) return value.map((item) => stripProcessTechnicalIds(item, depth + 1));
   if (typeof value !== 'object') return value;
   return Object.entries(value).reduce<Record<string, any>>((result, [key, item]) => {
     const normalizedKey = String(key || '').trim().toLowerCase();
@@ -10891,7 +10891,11 @@ const loadAiProcessImageContext = async (url:string,key:string,auth:any,page:any
     const result=await runtime.execute({ moduleId: page.moduleId,recordId: page.recordId,section,pageSize: 50,afterId });
     records.push(...result.records);afterId=result.nextAfterId;
   } while (afterId);
-  return { scope: { module_id: page.moduleId,record_id: page.recordId },record: root.records[0],section,records,coverage: 'complete' };
+  const record=root.records[0];
+  return { scope: { module_id: page.moduleId,record_id: page.recordId },record,section,records,coverage: 'complete',
+    templates: page.moduleId==='process_templates' ? [{ ...record,stages: records }] : [],
+    runs: page.moduleId==='process_templates' ? [] : [{ ...record,process_name: record?.process_name || record?.name,stages: records }],
+  };
 };
 
 const loadAiProcessOperationContext = async (url: string, key: string, auth: any, page: any, operations: any[]) => {

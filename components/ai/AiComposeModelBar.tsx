@@ -102,6 +102,7 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
     ? String(persistedOverrides?.[effectiveCapability] || '').trim()
     : '';
   const value = info ? (override && optionValues.has(override) ? override : persistedValue || info.model) : null;
+  const reasoningInfo=value ? info?.reasoningByModel?.[value] : null;
 
   useEffect(() => {
     // Showing the resolved default must not persist it as a user override;
@@ -134,13 +135,13 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
           onModelOverrideChange(model || null, effectiveCapability);
         }}
         disabled={info.available === false}
-        dropdownRender={menu => <div dir="rtl">
+        popupRender={menu => <div dir="rtl">
           {menu}
-          {value && info.reasoningByModel?.[value]?.options?.length ? <div className="mt-1 border-t border-slate-200 p-2 dark:border-white/10"
+          {value && reasoningInfo?.options?.length ? <div className="mt-1 border-t border-slate-200 p-2 dark:border-white/10"
             onMouseDown={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
             <div className="mb-1 text-xs font-medium">تفکر</div>
-            <AiReasoningSelect model={{ metadata: { reasoning_config: { levels: info.reasoningByModel[value].options.map(option => option.value),supported: true } } }}
-              value={reasoningOverrides?.[value]} inheritLabel={`پیش‌فرض تنظیمات: ${info.reasoningByModel[value].options.find(option => option.value===info.reasoningByModel[value].defaultValue)?.label || 'خودکار مدل'}`}
+            <AiReasoningSelect model={{ metadata: { reasoning_config: { levels: reasoningInfo.options.map(option => option.value),supported: true } } }}
+              value={reasoningOverrides?.[value]} inheritLabel={`پیش‌فرض تنظیمات: ${reasoningInfo.options.find(option => option.value===reasoningInfo.defaultValue)?.label || 'خودکار مدل'}`}
               onChange={effort => onReasoningChange?.(effort,value)} />
           </div> : null}
         </div>}
