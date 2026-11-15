@@ -1,4 +1,3 @@
-import React from 'react';
 import { CheckCircleOutlined, LinkOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import { MODULES } from '../../moduleRegistry';
