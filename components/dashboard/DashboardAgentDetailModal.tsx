@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import AiApprovalReviewModal from '../ai/AiApprovalReviewModal';
 import {
   Alert,
   App,
@@ -174,6 +175,7 @@ const DashboardAgentDetailModal: React.FC<DashboardAgentDetailModalProps> = ({
   onOpenChatPage,
 }) => {
   const { message } = App.useApp();
+  const [reviewApproval,setReviewApproval]=useState<any>(null);
   const orgCurrency = useCurrencyConfig();
   const budgetCurrencyMeta = useMemo(
     () => getAiDisplayCurrencyMeta(orgCurrency, orgCurrency),
@@ -381,6 +383,7 @@ const DashboardAgentDetailModal: React.FC<DashboardAgentDetailModalProps> = ({
   };
 
   const handleResolveApproval = async (actionLogId: string, decision: 'approve' | 'reject') => {
+    if(decision==='approve'){setReviewApproval(agentApprovals.find(item=>item.id===actionLogId));return;}
     if (!actionLogId || resolvingId) return;
     setResolvingId(actionLogId);
     try {
@@ -845,7 +848,7 @@ const DashboardAgentDetailModal: React.FC<DashboardAgentDetailModalProps> = ({
       )}
       footer={(
         <div dir="rtl" className="flex flex-wrap items-center justify-between gap-2">
-          <Button onClick={onClose}>بستن</Button>
+          <><AiApprovalReviewModal action={reviewApproval} onClose={()=>{setReviewApproval(null);void onRefresh();}} /><Button onClick={onClose}>بستن</Button></>
           {canChat ? (
             <Space wrap>
               {onToggleAgentInComposer ? (

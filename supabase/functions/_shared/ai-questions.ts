@@ -1,3 +1,4 @@
+import {RECORD_CHOICE_GUIDANCE} from './ai-record-display.ts';
 export type AiQuestion = { id: string; title: string; options: string[] };
 const visibleText = (value: unknown) => typeof value === 'string'
   ? value.replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '').trim() : '';
@@ -18,7 +19,7 @@ export const normalizeAiQuestions = (input: unknown): AiQuestion[] => {
 export const buildAiQuestionAnswer = (questions: AiQuestion[], answers: Record<string, string>) =>
   questions.map((question) => `${question.title}\nپاسخ: ${String(answers[question.id] || '').trim()}`).join('\n\n');
 
-export const AI_QUESTIONS_PROMPT = 'وقتی برای ادامه به پاسخ کاربر نیاز داری، فقط سؤال‌های ضروری و هنوز بی‌پاسخ را مطرح کن. برای نمایش پرسش تعاملی، فقط JSON با ساختار {"reply":"توضیح کوتاه فارسی","questions":[{"title":"پرسش","options":["گزینه اول","گزینه دوم"]}]} برگردان. options اختیاری است؛ گزینهٔ حدسی، شناسه یا UUID نساز. تأیید تغییر داده از مسیر کارت عملیاتی انجام می‌شود. در پاسخ عادی JSON تولید نکن.';
+export const AI_QUESTIONS_PROMPT = RECORD_CHOICE_GUIDANCE + '\n' + 'وقتی برای ادامه به پاسخ کاربر نیاز داری، فقط سؤال‌های ضروری و هنوز بی‌پاسخ را مطرح کن. برای نمایش پرسش تعاملی، فقط JSON با ساختار {"reply":"توضیح کوتاه فارسی","questions":[{"title":"پرسش","options":["گزینه اول","گزینه دوم"]}]} برگردان. options اختیاری است؛ گزینهٔ حدسی، شناسه یا UUID نساز. تأیید تغییر داده از مسیر کارت عملیاتی انجام می‌شود. در پاسخ عادی JSON تولید نکن.';
 
 export const presentAiQuestionResponse = (content: string) => {
   try {

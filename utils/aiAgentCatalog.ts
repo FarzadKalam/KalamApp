@@ -147,7 +147,7 @@ export const AI_AGENT_CATALOG: readonly AiAgentDefinition[] = [
     badgeColor: '#10b981',
     iconKey: 'shopping',
     primaryModules: ['campaigns', 'marketing_leads', 'customers', 'invoices'],
-    optionalModules: ['advertising_campaigns', 'products', 'price_lists', 'product_bundles', 'cash_bank_operations', 'sales_return_invoices', 'projects', 'process_templates', 'process_runs', 'tasks'],
+    optionalModules: ['billboards', 'billboard_status_changes', 'advertising_campaigns', 'products', 'price_lists', 'product_bundles', 'cash_bank_operations', 'sales_return_invoices', 'projects', 'process_templates', 'process_runs', 'tasks'],
     defaultCapabilities: ['record_creation', 'process_operation'],
     defaultToneStyle: 'friendly_warm',
     supportsBackground: true,

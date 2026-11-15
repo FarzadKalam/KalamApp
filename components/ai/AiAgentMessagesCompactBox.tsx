@@ -13,6 +13,7 @@ import {
   UpOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
+import AiApprovalReviewModal from './AiApprovalReviewModal';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import {
@@ -39,6 +40,7 @@ type AgentInboxThread = {
 };
 
 type WaitingApprovalItem = {
+  thread_id?: string | null;
   id: string;
   action_type?: string | null;
   agent_key?: string | null;
@@ -80,6 +82,7 @@ const AiAgentMessagesCompactBox: React.FC<AiAgentMessagesCompactBoxProps> = ({
 }) => {
   const { message } = App.useApp();
   const navigate = useNavigate();
+  const [reviewApproval,setReviewApproval]=useState<any>(null);
   const [rawThreads, setRawThreads] = useState<AgentInboxThread[]>([]);
   const [rawApprovals, setRawApprovals] = useState<WaitingApprovalItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -226,6 +229,7 @@ const AiAgentMessagesCompactBox: React.FC<AiAgentMessagesCompactBoxProps> = ({
   }, [activeThread, canChatWithAgent, loadAgentInbox, message, replyText, sendingReply]);
 
   const handleApprovalDecision = useCallback(async (actionLogId: string, decision: 'approve' | 'reject') => {
+    if(decision==='approve'){setReviewApproval(approvals.find(item=>item.id===actionLogId));return;}
     if (!actionLogId || resolvingApprovalId) return;
     setResolvingApprovalId(actionLogId);
     try {
@@ -247,7 +251,7 @@ const AiAgentMessagesCompactBox: React.FC<AiAgentMessagesCompactBoxProps> = ({
     } finally {
       setResolvingApprovalId(null);
     }
-  }, [loadAgentInbox, message, resolvingApprovalId]);
+  }, [loadAgentInbox, message, resolvingApprovalId,approvals]);
 
   const visibleMessages = useMemo(() => {
     if (!activeThread) return [];
@@ -591,6 +595,7 @@ const AiAgentMessagesCompactBox: React.FC<AiAgentMessagesCompactBoxProps> = ({
       data-testid="ai-agent-messages-compact-box"
       className={`flex flex-col overflow-hidden rounded-2xl border border-slate-200/85 bg-white text-right shadow-sm dark:border-white/[0.09] dark:bg-dark-surface ${className}`}
     >
+      <AiApprovalReviewModal action={reviewApproval} onClose={()=>{setReviewApproval(null);void loadAgentInbox();}} />
       {/* Sleek Glass Header */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/75 bg-gradient-to-l from-indigo-50/70 via-white to-teal-50/45 px-3 py-2 dark:border-white/[0.07] dark:from-indigo-950/25 dark:via-dark-surface dark:to-teal-950/15">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">

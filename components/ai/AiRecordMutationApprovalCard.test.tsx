@@ -49,6 +49,7 @@ describe('AiRecordMutationApprovalCard', () => {
     );
 
     expect(screen.getByText('رکورد ۱ از ۲')).toBeTruthy();
+    expect(screen.getAllByText('نام کامل',{exact:true}).length).toBeGreaterThan(0);
     expect(screen.queryByText('11111111-1111-4111-8111-111111111111')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /نام کامل: آرمان/ }));
     expect(onChange).toHaveBeenCalledWith([

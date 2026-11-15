@@ -1,3 +1,4 @@
+import {describeAiRecord} from './ai-record-display.ts';
 /** Structured data gateway shared by page, module, record and scheduled agents.
  * Model inputs can choose a query, never a tenant, table name or raw SQL. */
 export type AgentDataField = { key: string; label: string; type: string };
@@ -71,6 +72,7 @@ export const compileAgentDataQuery = (access: AgentDataAccess, input: AgentDataQ
   if (!module || !column(module.table)) throw new Error('ماژول در محدودهٔ مجاز ایجنت نیست.');
   const allowedFields = new Map(module.fields.filter(field => column(field.key)).map(field => [field.key, field]));
   const fields = [...new Set(input.fields?.length ? input.fields : module.fields.slice(0, 12).map(field => field.key))];
+  for(const key of ['name','title','full_name','business_name','display_name','system_code','invoice_date','total_invoice_amount','currency_code']) if(fields.length<40&&allowedFields.has(key)&&!fields.includes(key)) fields.push(key);
   if (!fields.length || fields.length > 40 || fields.some(field => !allowedFields.has(field))) throw new Error('فیلدهای درخواست‌شده مجاز نیستند.');
   const filters = input.filters || [];
   if (!Array.isArray(filters) || filters.length > 20) throw new Error('تعداد شرط‌های درخواست معتبر نیست.');
@@ -137,7 +139,7 @@ export const readAgentDataPage = async (access: AgentDataAccess, query: AgentDat
       if (serialized && serialized.length > 1000) { truncatedFields.push(field); return [field, serialized.slice(0, 1000)]; }
       return [field, value];
     }));
-    const record = { reference: row.id, fields, truncatedFields };
+    const record = { reference: row.id, display: describeAiRecord(fields), fields, truncatedFields };
     const size = JSON.stringify(record).length;
     if (records.length && responseSize + size > 48000) { hasMore = true; break; }
     records.push(record); responseSize += size;

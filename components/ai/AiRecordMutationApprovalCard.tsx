@@ -5,6 +5,7 @@ import { MODULES } from '../../moduleRegistry';
 import type { ModuleField } from '../../types';
 import { getFieldLabelFa } from '../../utils/fieldLabel';
 import SmartFieldRenderer from '../SmartFieldRenderer';
+import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 import EditableTable from '../EditableTable';
 import { getAiRecordFieldState } from '../../supabase/functions/_shared/ai-record-contract';
 
@@ -156,7 +157,11 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
               <div className="grid grid-cols-1 gap-x-3 sm:grid-cols-2">
                 {visibleFields.map((field) => (
                   <div key={field.key} className="min-w-0 [&_.ant-form-item]:mb-2 [&_.ant-form-item-label]:pb-0.5">
-                    <SmartFieldRenderer
+                    <div className="mb-1 text-xs font-semibold text-slate-700 dark:text-slate-200">{getFieldLabelFa(field,{moduleId})}</div>
+                    {field.type === 'user' || field.key === 'assignee_id' ? <AdaptiveIdentityPicker scopes={['user']} valueMode="raw"
+                      value={record.fields?.[field.key] ?? record.original?.[field.key]} disabled={disabled}
+                      aria-label={getFieldLabelFa(field,{moduleId})} pickerTitle={getFieldLabelFa(field,{moduleId})}
+                      onChange={value => updateField(recordIndex,String(field.key),value || null)} className="w-full" /> : <SmartFieldRenderer
                       field={disabled ? { ...field, readonly: true } : field}
                       value={Object.prototype.hasOwnProperty.call(record.fields || {}, field.key) ? record.fields[field.key] : record.original?.[field.key]}
                       onChange={(value) => updateField(recordIndex, String(field.key), value)}
@@ -167,7 +172,7 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
                       allValues={{ ...(record.original || {}), ...(record.fields || {}) }}
                       recordId={actionType === 'update_record_from_prompt' ? record.record_id || undefined : undefined}
                       overlayZIndexBase={32000}
-                    />
+                    />}
                   </div>
                 ))}
               </div>

@@ -1,3 +1,4 @@
+import {describeAiRecord} from './ai-record-display.ts';
 /** Shared, paginated field lookup. Field and destination come from the authorized schema. */
 export const normalizePersonName = (value: unknown) => String(value ?? '').replace(/[يى]/g, 'ی').replace(/ك/g, 'ک')
   .replace(/^(?:خانم|آقای|آقا)\s+/, '').replace(/[\u200c\s]+/g, ' ').trim();
@@ -42,6 +43,6 @@ export const createAiRecordLookupRuntime = (options: {
     const rows = await options.read(table, { org_id: `eq.${options.orgId}`, select: !isUser && !isRole ? '*' : ['id', ...searchFields].join(','),
       or: `(${searchFields.map((key: string) => `${key}.ilike.*${term}*`).join(',')})`, order: 'id.asc', offset, limit: 26 });
     return { records: rows.slice(0, 25).filter((row: any) => isUser || isRole || !options.canReadRecord || options.canReadRecord(target, row))
-      .map((row: any) => ({ id: row.id, title: searchFields.map((key: string) => row[key]).filter(Boolean).join(' · ') })), hasMore: rows.length > 25, nextOffset: rows.length > 25 ? offset + 25 : null };
+      .map((row: any) => ({ id: row.id, title: describeAiRecord(row).label || searchFields.filter((key:string)=>key!=='system_code').map((key: string) => row[key]).filter(Boolean).join(' · ') })), hasMore: rows.length > 25, nextOffset: rows.length > 25 ? offset + 25 : null };
   },
 });
