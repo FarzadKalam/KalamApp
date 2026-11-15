@@ -1,6 +1,7 @@
 import { CheckCircleOutlined, LinkOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import { MODULES } from '../../moduleRegistry';
+import { getRecordTitle } from '../../utils/recordTitle';
 
 /** Durable execution receipt for every module, in the approval surface. */
 export default function AiRecordResultCard({ metadata }: { metadata: any }) {
@@ -13,7 +14,7 @@ export default function AiRecordResultCard({ metadata }: { metadata: any }) {
     <div className="mb-2 flex items-center gap-2 font-semibold"><CheckCircleOutlined className="text-emerald-600 dark:text-emerald-400" />ذخیره شد</div>
     <ul className="m-0 list-none space-y-2 p-0">{results.map((record: any) => <li key={`${record.module_id}:${record.id}`}>
       <Link className="flex min-h-11 items-center justify-between gap-2 rounded-lg px-2 hover:bg-black/5 focus-visible:outline focus-visible:outline-2 dark:hover:bg-white/5" to={`/${record.module_id}/${record.id}`}>
-        <span className="min-w-0 break-words">{record.title && !/^[a-f\d]{8}-[a-f\d-]{27,}$/i.test(record.title) ? record.title : 'مشاهدهٔ رکورد'}<small className="mr-2 opacity-70">{record.verb}</small></span><LinkOutlined aria-hidden />
+        <span className="min-w-0 break-words">{getRecordTitle({ title: record.title }, undefined, { fallback: 'مشاهدهٔ رکورد' })}<small className="mr-2 opacity-70">{record.verb}</small></span><LinkOutlined aria-hidden />
       </Link>
       {(metadata.attachment_results || []).filter((file: any) => file.record_id === record.id).map((file: any, index: number) => <div key={index} className={`px-2 py-1 text-xs ${file.success ? 'opacity-70' : 'text-amber-700 dark:text-amber-300'}`}>{file.name}: {file.success ? 'پیوست شد' : file.message || 'اتصال انجام نشد'}</div>)}
     </li>)}</ul>

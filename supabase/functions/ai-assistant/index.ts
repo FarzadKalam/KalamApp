@@ -10312,6 +10312,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     forceNew: body?.forceNewThread === true,
   });
   workingThreadId = String(publicThread?.id || workingThreadId || '').trim() || null;
+  body = { ...body, forceNewThread: false };
   provider = decisionProviderConfig.provider || null;
   model = decisionProviderConfig.model || null;
   const publicUserMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {

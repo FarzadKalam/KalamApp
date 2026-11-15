@@ -42,6 +42,7 @@ import { type AiRecordMutationDraft } from './AiRecordMutationApprovalCard';
 import AiRecordMutationApprovalCard from './AiRecordMutationApprovalCard';
 import AiRecordResultCard from './AiRecordResultCard';
 import { removeAiAttachmentCaptions } from '../../utils/aiMessageParts';
+import { normalizeIntakeAttachments } from '../../supabase/functions/_shared/ai-intake-attachments';
 import AiQuestionCard from './AiQuestionCard';
 import { normalizeAiQuestions, presentAiQuestionResponse } from '../../supabase/functions/_shared/ai-questions';
 import AiProcessOperationApprovalCard from './AiProcessOperationApprovalCard';
@@ -1422,7 +1423,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       if (String(item?.type || '') !== 'voice') return item;
       const transcript = route.voiceTranscripts.find((entry: any) => String(entry?.inputId || '') === String(item?.id || ''));
       return transcript?.transcript
-        ? { ...item, text: String(transcript.transcript), audio: null }
+        ? { ...item, text: String(transcript.transcript), audio: { ...item.audio, data: null } }
         : item;
     });
 
@@ -1472,6 +1473,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       capabilities: routeCapabilities,
       ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
       message: effectiveChatMessage || params.messageText,
+      metadata: { attachments: normalizeIntakeAttachments(executionBundlePayload) },
       inputKind: params.inputKind,
       threadId: params.forceNewThread ? null : threadId,
       forceNewThread: params.forceNewThread === true,
