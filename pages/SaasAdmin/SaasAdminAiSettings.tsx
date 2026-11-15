@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import AiReasoningSelect from '../../components/ai/AiReasoningSelect';
+import { REASONING_LEVEL_LABELS } from '../../supabase/functions/_shared/ai-reasoning';
 import {
   Alert,
   App,
@@ -164,6 +166,7 @@ const SaasAdminAiSettings: React.FC = () => {
   const [giftReason, setGiftReason] = useState('اعتبار هدیه هوش مصنوعی');
   const [giftSaving, setGiftSaving] = useState(false);
   const [centralDefaultsDraft, setCentralDefaultsDraft] = useState<Record<string, string | null>>({});
+  const [centralReasoningDraft,setCentralReasoningDraft]=useState<Record<string,string | null>>({});
   const [centralDefaultsSaving, setCentralDefaultsSaving] = useState(false);
   const [centralDefaultsRecommending, setCentralDefaultsRecommending] = useState(false);
   const [form] = Form.useForm<ModelFormValues>();
@@ -183,6 +186,7 @@ const SaasAdminAiSettings: React.FC = () => {
         }
       }
       setCentralDefaultsDraft(nextDefaults);
+      setCentralReasoningDraft(data?.centralReasoningDefaults || {});
     } catch (err: any) {
       message.error(toFaErrorMessage(err, 'دریافت اطلاعات هوش مصنوعی ناموفق بود.'));
     } finally {
@@ -209,6 +213,7 @@ const SaasAdminAiSettings: React.FC = () => {
         action: 'saas_ai',
         sub: 'save_central_defaults',
         defaults: centralDefaultsDraft,
+        reasoning_defaults: centralReasoningDraft,
       });
       if (data?.centralDefaults && typeof data.centralDefaults === 'object') {
         setCentralDefaultsDraft(data.centralDefaults);
@@ -654,13 +659,13 @@ const SaasAdminAiSettings: React.FC = () => {
           </div>
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
-          <Statistic title="درآمد ۶۰۰ درخواست اخیر" value={totals.billed_irt || 0} formatter={formatIrt} />
+          <Statistic title="کل درآمد ثبت‌شده" value={totals.billed_irt || 0} formatter={formatIrt} />
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
-          <Statistic title="هزینه خام ۶۰۰ درخواست اخیر" value={totals.raw_irt || 0} formatter={formatIrt} />
+          <Statistic title="کل هزینه خام پرداختی" value={totals.raw_irt || 0} formatter={formatIrt} />
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
-          <Statistic title="درخواست‌های نهایی از ۶۰۰ مورد اخیر" value={totals.requests || 0} />
+          <Statistic title="کل درخواست‌های نهایی" value={totals.requests || 0} />
         </div>
       </div>
 
@@ -734,13 +739,19 @@ const SaasAdminAiSettings: React.FC = () => {
                         value={centralDefaultsDraft[slot.key] || undefined}
                         options={activeDefaultModelOptions}
                         placeholder="انتخاب از مدل‌های فعال"
-                        onChange={(val) =>
+                        onChange={(val) => {
+                          setCentralReasoningDraft(previous => ({ ...previous,[slot.key]: null }));
                           setCentralDefaultsDraft((prev) => ({
                             ...prev,
                             [slot.key]: val ? String(val) : null,
-                          }))
-                        }
+                          }));
+                        }}
                       />
+                      <div className="mt-2">
+                        <AiReasoningSelect model={models.find(model => model.id===(centralDefaultsDraft[slot.key] || centralDefaultsDraft[PRIMARY_MODEL_DEFAULT_KEY]))}
+                          value={centralReasoningDraft[slot.key]} inheritLabel="تفکر: پیش‌فرض مدل"
+                          onChange={effort => setCentralReasoningDraft(previous => ({ ...previous,[slot.key]: effort }))} />
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -788,7 +799,7 @@ const SaasAdminAiSettings: React.FC = () => {
           },
           {
             key: 'usage_orgs',
-            label: 'خلاصه مصرف هر سازمان در ۶۰۰ درخواست اخیر',
+            label: 'خلاصه مصرف هر سازمان',
             children: (
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -979,6 +990,19 @@ const SaasAdminAiSettings: React.FC = () => {
             </Form.Item>
             <Form.Item name="input_usd_per_1m" label="ورودی (USD/1M توکن)">
               <InputNumber min={0} step={0.01} className="w-full" />
+            </Form.Item>
+            <Form.Item name={['metadata','reasoning_config','levels']} label="سطح‌های تفکر تأییدشده" className="col-span-2"
+              tooltip="برای تغییر قرارداد مدل فقط سطح‌های تأییدشده در مستندات ارائه‌دهنده را انتخاب کنید. مقدار خالی از قرارداد شناخته‌شده مدل استفاده می‌کند.">
+              <Select mode="multiple" allowClear options={Object.entries(REASONING_LEVEL_LABELS).filter(([value]) => value!=='auto').map(([value,label]) => ({ value,label }))} />
+            </Form.Item>
+            <Form.Item name={['metadata','reasoning_config','parameter']} label="پارامتر تفکر مدل">
+              <Select allowClear options={[
+                { value: 'reasoning_effort',label: 'سطح تفکر استاندارد' },{ value: 'enable_thinking',label: 'تفکر قابل فعال‌سازی با سطح' },
+                { value: 'thinking',label: 'تفکر روشن / خاموش' },{ value: 'output_config',label: 'سطح تفکر بومی Claude' },
+              ]} />
+            </Form.Item>
+            <Form.Item name={['metadata','reasoning_config','route']} label="مسیر اجرای تفکر">
+              <Select allowClear options={[{ value: 'responses',label: 'Responses' },{ value: 'messages',label: 'Messages' }]} placeholder="مسیر شناخته‌شده مدل" />
             </Form.Item>
             <Form.Item name="output_usd_per_1m" label="خروجی (USD/1M توکن)">
               <InputNumber min={0} step={0.01} className="w-full" />

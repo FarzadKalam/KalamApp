@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { appendStreamToolCalls, executeAgentToolCalls } from '../_shared/ai-tool-calls';
+import { appendContinuationText,createContinuationDeltaBuffer } from '../_shared/ai-context-lifecycle';
 const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 const nonstream = source.slice(source.indexOf('const callChatCompletions ='), source.indexOf('const callChatCompletionsStream ='));
 const stream = source.slice(source.indexOf('const callChatCompletionsStream ='), source.indexOf('const getPublicSupabaseUrl ='));
@@ -13,6 +14,8 @@ const sse = (values: any[]) => new Response(values.map(value => `data: ${JSON.st
 const harness = (streaming: boolean, responses: Response[]) => {
   const sent: any[] = [];
   const deps = {
+    appendContinuationText,createContinuationDeltaBuffer,
+    createAiContextBudget: () => ({ outputTokens: 4000,prepare: async (messages: any[]) => messages }),
     executeAgentToolCalls, appendStreamToolCalls,
     requestAvalaiWithFallback: vi.fn(async (_config: any, _path: string, options: any) => {
       sent.push(JSON.parse(options.body));

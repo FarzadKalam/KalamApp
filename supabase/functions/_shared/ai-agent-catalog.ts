@@ -367,7 +367,7 @@ export const AI_AGENT_CATALOG: readonly AiAgentDefinition[] = [
     badgeColor: '#3b82f6',
     iconKey: 'workflow',
     primaryModules: ['projects', 'tasks'],
-    optionalModules: ['process_templates', 'process_runs', 'customers', 'employees', 'invoices', 'content_calendars'],
+    optionalModules: ['process_templates', 'process_runs', 'customers', 'employees', 'invoices', 'content_calendars', 'workflows'],
     defaultCapabilities: ['record_creation', 'process_operation'],
     defaultToneStyle: 'concise',
     supportsBackground: true,

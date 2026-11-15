@@ -604,6 +604,7 @@ const AiChatSurfaceV2: React.FC = () => {
             initialAgents={initialAgents}
             initialRecordCreationTargetModuleId={String(routeState.aiInitialRecordCreationTargetModuleId || '').trim() || null}
             initialModelOverride={String(routeState.aiInitialModelOverride || '').trim() || null}
+            initialReasoningOverrides={routeState.aiInitialReasoningOverrides}
             initialMediaSettings={initialMediaSettings as any}
             initialMediaSourceImages={initialMediaSourceImages as any}
             initialFiles={effectiveInitialFiles as any}

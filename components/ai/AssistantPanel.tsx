@@ -218,6 +218,7 @@ interface AssistantPanelProps {
   initialAgents?: AgentKey[] | null;
   initialRecordCreationTargetModuleId?: string | null;
   initialModelOverride?: string | null;
+  initialReasoningOverrides?: Record<string,string>;
   initialMediaSettings?: AiMediaSettings | null;
   initialMediaSourceImages?: AiMediaSourceImage[] | null;
   initialFiles?: Array<(AiUploadedFilePrompt & { message?: string | null })> | null;
@@ -513,6 +514,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   initialAgents,
   initialRecordCreationTargetModuleId,
   initialModelOverride,
+  initialReasoningOverrides,
   initialMediaSettings,
   initialMediaSourceImages,
   initialFiles,
@@ -591,6 +593,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const [rememberGenerationPreference, setRememberGenerationPreference] = useState(false);
   const [skipGenerationConfirmationByKind, setSkipGenerationConfirmationByKind] = useState<Record<string, boolean>>({});
   const [modelOverrides, setModelOverrides] = useState<Record<string, string>>({});
+  const [reasoningOverrides,setReasoningOverrides]=useState<Record<string,string>>(initialReasoningOverrides || {});
+  const changeReasoning=useCallback((effort:string | null,model:string) => {
+    setReasoningOverrides(previous => { const next={ ...previous };if (effort) next[model]=effort;else delete next[model];return next; });
+  },[]);
   const initialTitle = String(initialThreadTitle || '').trim() || 'گفتگوی هوش مصنوعی';
   const [threadTitle, setThreadTitle] = useState(initialTitle);
   const [editingThreadTitle, setEditingThreadTitle] = useState(false);
@@ -670,9 +676,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     recordCreationTargetModuleId,
     processOperationMode,
     modelOverrides,
+    reasoningOverrides,
     skipGenerationConfirmationByKind,
     currentModelOverride: modelOverrideRef.current || null,
-  }), [effectiveAgents, mediaSettings, mediaSourceImages, modelOverrides, processOperationMode, recordCreationTargetModuleId, sanitizeMediaSourceImagesForPreferences, selectedCapabilities, skipGenerationConfirmationByKind]);
+  }), [effectiveAgents, mediaSettings, mediaSourceImages, modelOverrides,reasoningOverrides, processOperationMode, recordCreationTargetModuleId, sanitizeMediaSourceImagesForPreferences, selectedCapabilities, skipGenerationConfirmationByKind]);
 
   useEffect(() => {
     composerPreferencesRef.current = buildComposerPreferences();
@@ -714,6 +721,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         .filter(([, value]) => value))
       : {};
     if (prefs.modelOverrides && typeof prefs.modelOverrides === 'object') setModelOverrides(loadedOverrides);
+    if (prefs.reasoningOverrides && typeof prefs.reasoningOverrides==='object') setReasoningOverrides(prefs.reasoningOverrides);
     if (Object.prototype.hasOwnProperty.call(prefs, 'currentModelOverride')) {
       modelOverrideRef.current = String(prefs.currentModelOverride || '').trim() || null;
     }
@@ -1719,6 +1727,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     })));
     modelOverrideRef.current = String(initialModelOverride || '').trim() || null;
     setModelOverrides({});
+    setReasoningOverrides(initialReasoningOverrides || {});
     autoSubmittedInitialPromptRef.current = '';
     autoSubmittedInitialBundleRef.current = '';
   }, [active, initialPanelSessionKey]);
@@ -2895,6 +2904,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       await loadThread();
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'اجرای اقدام تاییدشده ناموفق بود.'));
+      if (pendingAiAction?.actionType === 'process_operation_from_prompt') {
+        setPendingAiAction(null);
+        await loadThread();
+      }
     } finally {
       setConfirmingAiAction(false);
     }
@@ -3639,6 +3652,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                   <div className="rounded-lg border border-[var(--ai-chat-line)] bg-white/60 p-2 dark:border-white/10 dark:bg-white/[0.035]">
                     <div className="mb-1 font-semibold ">موتور هوش مصنوعی</div>
                     <AiComposeModelBar
+                      agents={effectiveAgents}
+                      reasoningOverrides={reasoningOverrides} onReasoningChange={changeReasoning}
                       selectedCapabilities={[pendingGenerationKind]}
                       fallbackCapability={contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat'}
                       persistedOverrides={modelOverrides}
@@ -3809,6 +3824,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             mediaModelId={activeMediaModelId}
             onApplyPrompt={(text) => setInput((prev) => (String(prev || '').trim() ? `${prev}\n${text}` : text))}
           />} model={<AiComposeModelBar compact
+            agents={effectiveAgents}
+            reasoningOverrides={reasoningOverrides} onReasoningChange={changeReasoning}
             selectedCapabilities={selectedCapabilities}
             fallbackCapability={contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat'}
             persistedOverrides={modelOverrides}

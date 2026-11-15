@@ -1,4 +1,3 @@
-import { sharedRestSelect, canViewModuleWithPlan, normalizeId } from '../ai-grounding.ts';
 import type { DomainSkillModule, SkillExecutionContext } from './types.ts';
 
 export type ProcessTemplateBlueprintStage = {
@@ -111,97 +110,6 @@ export const normalizeProcessTemplateBlueprint = (raw: any): ProcessTemplateBlue
 export const projectProcessSkill: DomainSkillModule = {
   agentKey: 'project_process',
   titleFa: 'ایجنت پروژه و فرآیند',
-  buildContractPrompt: () => [
-    '## قرارداد تخصصی ایجنت پروژه و فرآیند (دسترسی کامل به ویزارد و جزئیات الگوهای فرآیند V2)',
-    'تو دسترسی کامل به جدول `process_templates` و تمام مراحل آن در `process_template_stages` (از جمله `metadata`، گراف مسیرها، فیلدهای اختصاصی، وضعیت‌های اختصاصی، اتوماسیون‌ها و زمان‌بندی‌ها) داری و هرگز نباید بگویی به جزئیات الگوهای فرآیند دسترسی نداری.',
-    '1. **ساختار کامل ویزارد تعریف الگوی فرآیند در KalamApp (`process_templates` + `process_template_stages`)**:',
-    '   - **گام ۱ (اطلاعات پایه الگو)**: `name` (نام الگو)، `description` (توضیحات)، `module_ids` (ماژول‌های هدف مثل `projects`, `invoices`, `marketing_leads`, `customers`, `production_orders`, `tasks`)، `process_kind` (نوع فرآیند)، `auto_copy_mode`، `is_active`.',
-    '   - **گام ۲ (چینش گراف و خطوط موازی/ترتیبی)**: هر مرحله در `process_template_stages` دارای `process_lane_key` (خط/مسیر موازی مثل `lane_1`, `lane_2`)، `process_node_key` (شناسه یکتای گره)، `sort_order` (ترتیب)، و `metadata.process_graph` (اتصالات و وابستگی بین گره‌ها) است.',
-    '   - **گام ۳ (جزئیات هر مرحله در ویزارد مراحل)**:',
-    '     • هویت مرحله: `stage_name`، `metadata.description`، `metadata.task_type` (نوع فعالیت)، `auto_create_task` (ساخت خودکار تسک در شروع مرحله).',
-    '     • مسئولیت: `default_assignee_id` (کاربر مشخص)، `default_assignee_role_id` (نقش سازمانی)، یا `metadata.default_assignee_field` (ارجاع پویا به مسئول رکورد والد).',
-    '     • زمان‌بندی و مهلت: `metadata.duration_value`، `metadata.duration_unit` (`day` | `hour`)، `metadata.due_anchor_type` (`process_start` | `previous_stage_due` | `stage_start` | `specific_stage_due`) و `metadata.due_anchor_stage_node_key`.',
-    '     • وزن و دستمزد: `metadata.weight` (وزن مرحله در پیشرفت فرآیند) و `wage` (دستمزد مرحله).',
-    '     • فرم و وضعیت‌های اختصاصی تسک مرحله: `metadata.process_task_custom_fields` (فیلدهای فرم اختصاصی داخل تسک)، `metadata.process_task_status_options` (وضعیت‌های اختصاصی مرحله) و `metadata.instruction_ids` (دستورالعمل‌های متصل).',
-    '     • اتوماسیون مرحله: `metadata.automation_rules` (قوانین خودکار مثل ارسال پیام، تغییر فیلد رکورد، یا ایجاد رکورد هنگام ورود/تکمیل مرحله).',
-    '   - وقتی کاربر می‌خواهد یک الگوی فرآیند بسازید یا بازطراحی کنید، بر اساس همین ساختار ویزارد گام‌به‌گام با او جلو برو، الگوهای فعلی سازمان در `active_process_templates` (به همراه مراحل و `stages` داخلشان) را بخوان و تحلیل کن، و پس از نهایی شدن ساختار، نقشه کامل را برای تأیید و ثبت مستقیم ارائه بده.',
-    '2. **ایجاد فعالیت (`tasks`) و پروژه (`projects`) با رعایت تقویم جلالی**:',
-    '   - نام مسئول را از `orgDirectory` پیدا کن؛ اگر فرد دقیق پیدا نشد یا چند نفر هم‌نام بودند بپرس؛ تاریخ نسبی/جلالی را با `calendarContext` تبدیل کن و اگر روز جمعه یا تعطیل رسمی بود هشدار بده یا اولین روز کاری را پیشنهاد بده.',
-    '3. **شناخت اجرای فرآیندها (`process_runs` و `process_run_stages`)**: همیشه وضعیت واقعی مراحل اجراشده، مراحل در جریان و وابستگی‌ها را از `active_process_runs` بخوان و بدون دلیل حدس نزن.',
-  ].join('\n'),
-  gatherDomainContext: async (ctx: SkillExecutionContext) => {
-    const orgId = normalizeId(ctx.grounding.orgId);
-    if (!orgId || ctx.grounding.freeChatMode) return null;
-    const perms = ctx.authContext?.permissions;
-    const plan = ctx.grounding.planContext;
-    const bundle: Record<string, any> = {};
-
-    const canTemplates = canViewModuleWithPlan(plan, perms, 'process_templates');
-    const [templates, projects, processRuns] = await Promise.all([
-      canTemplates
-        ? sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'process_templates', {
-            org_id: `eq.${orgId}`,
-            select: 'id,name,description,module_id,module_ids,process_kind,auto_copy_mode,is_active,updated_at',
-            order: 'updated_at.desc',
-            limit: 30,
-          })
-        : Promise.resolve([]),
-      canViewModuleWithPlan(plan, perms, 'projects')
-        ? sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'projects', {
-            org_id: `eq.${orgId}`,
-            select: 'id,name,system_code,status,customer_id,assignee_id,process_template_id,updated_at',
-            order: 'updated_at.desc',
-            limit: 10,
-          })
-        : Promise.resolve([]),
-      canViewModuleWithPlan(plan, perms, 'process_runs')
-        ? sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'process_runs', {
-            org_id: `eq.${orgId}`,
-            status: 'eq.active',
-            select: 'id,process_name,module_id,record_id,template_id,status,updated_at',
-            order: 'updated_at.desc',
-            limit: 10,
-          })
-        : Promise.resolve([]),
-    ]);
-
-    const templateIds = (templates || []).map((t: any) => normalizeId(t?.id)).filter(Boolean);
-    const templateStages = templateIds.length
-      ? await sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'process_template_stages', {
-          template_id: `in.(${templateIds.join(',')})`,
-          select: 'id,template_id,stage_name,sort_order,default_status,default_assignee_id,default_assignee_role_id,auto_create_task,wage,process_node_key,process_lane_key,metadata',
-          order: 'sort_order.asc',
-          limit: 300,
-        })
-      : [];
-
-    const stagesByTemplate = new Map<string, any[]>();
-    for (const stage of templateStages || []) {
-      const tid = normalizeId(stage?.template_id);
-      if (!tid) continue;
-      if (!stagesByTemplate.has(tid)) stagesByTemplate.set(tid, []);
-      stagesByTemplate.get(tid)!.push(stage);
-    }
-
-    const enrichedTemplates = (templates || []).map((tpl: any) => ({
-      ...tpl,
-      stages: stagesByTemplate.get(normalizeId(tpl?.id)) || [],
-    }));
-
-    if (enrichedTemplates.length) bundle.active_process_templates = enrichedTemplates;
-    if (projects.length) bundle.recent_projects = projects;
-    if (processRuns.length) bundle.active_process_runs = processRuns;
-    bundle.process_template_wizard_schema = {
-      step_1_basic: ['name', 'description', 'module_ids', 'process_kind', 'auto_copy_mode', 'is_active'],
-      step_2_graph_and_lanes: ['process_lane_key', 'process_node_key', 'sort_order', 'metadata.process_graph'],
-      step_3_stage_details: [
-        'stage_name', 'default_status', 'auto_create_task', 'wage',
-        'default_assignee_id', 'default_assignee_role_id', 'metadata.default_assignee_field',
-        'metadata.description', 'metadata.task_type', 'metadata.weight',
-        'metadata.duration_value', 'metadata.duration_unit', 'metadata.due_anchor_type', 'metadata.due_anchor_stage_node_key',
-        'metadata.instruction_ids', 'metadata.process_task_custom_fields', 'metadata.process_task_status_options', 'metadata.automation_rules',
-      ],
-    };
-    return bundle;
-  },
+  buildContractPrompt: () => 'پروژه و فرآیند: از قرارداد و ابزار مرکزی فرآیند استفاده کن؛ ابتدا هدف را مشخص کن، جزئیات لازم را بخوان و پیشنهاد قابل تأیید آماده کن.',
+  gatherDomainContext: async () => ({ source: 'on_demand_tools', tool: 'read_process_context', coverage: 'not_loaded' }),
 };

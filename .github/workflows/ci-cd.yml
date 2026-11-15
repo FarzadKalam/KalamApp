@@ -84,6 +84,23 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Isolated AI usage and atomic process changes
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test ai_process_usage_test
+          for file in tests/sql/ai_process_usage_fixture.sql \
+            database_v1_phase591_ai_usage_complete_statistics.sql \
+            database_v1_phase591_ai_usage_complete_statistics.sql \
+            database_v1_phase592_ai_process_task_atomic_update.sql \
+            database_v1_phase592_ai_process_task_atomic_update.sql \
+            database_v1_phase593_ai_model_reasoning_defaults.sql \
+            database_v1_phase593_ai_model_reasoning_defaults.sql \
+            tests/sql/ai_process_usage_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d ai_process_usage_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
       - name: Cash and bank request context and optimized SQL checks
         env:
           POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
@@ -155,6 +172,9 @@ jobs:
         run: >-
           npx vitest run supabase/functions/ai-assistant/operational-preflight.test.ts supabase/functions/_shared/ai-gateway.test.ts
           supabase/functions/_shared/ai-native-skills.test.ts supabase/functions/_shared/ai-agent-data.test.ts supabase/functions/_shared/ai-skills/instagram-tools.test.ts
+          supabase/functions/_shared/ai-process-data.test.ts supabase/functions/_shared/ai-process-operations.test.ts supabase/functions/ai-assistant/process-execution.test.ts
+          supabase/functions/_shared/ai-context-lifecycle.test.ts supabase/functions/ai-assistant/thread-memory.test.ts
+          supabase/functions/_shared/ai-reasoning.test.ts
           supabase/functions/_shared/ai-tool-calls.test.ts supabase/functions/ai-assistant/data-tool-loop.test.ts
           supabase/functions/_shared/ai-agent-task-contract.test.ts supabase/functions/_shared/ai-agent-task-runtime.test.ts
           supabase/functions/_shared/ai-agent-task-management.test.ts supabase/functions/ai-assistant/agent-task-execution.test.ts
@@ -205,6 +225,9 @@ jobs:
           npm run ai:schemas:check
           deno check --node-modules-dir=none supabase/functions/_shared/ai-agent-task-management.ts supabase/functions/_shared/ai-agent-task-contract.ts supabase/functions/_shared/ai-agent-task-runtime.ts supabase/functions/_shared/ai-agent-task-queue.ts
           deno check --node-modules-dir=none supabase/functions/_shared/ai-agent-data.ts supabase/functions/_shared/ai-native-skills.ts supabase/functions/_shared/ai-tool-calls.ts
+          deno check --node-modules-dir=none supabase/functions/_shared/ai-process-data.ts supabase/functions/_shared/ai-process-operations.ts
+          deno check --node-modules-dir=none supabase/functions/_shared/ai-context-policy.ts supabase/functions/_shared/ai-context-lifecycle.ts supabase/functions/_shared/ai-context-compressor.ts
+          deno check --node-modules-dir=none supabase/functions/_shared/ai-reasoning.ts supabase/functions/_shared/ai-reasoning-transport.ts
           deno check --node-modules-dir=none supabase/functions/_shared/ai-agents.ts supabase/functions/ai-assistant/index.ts supabase/functions/api-gateway/index.ts supabase/functions/webhook-delivery/index.ts supabase/functions/user-admin/index.ts supabase/functions/bot-admin/index.ts supabase/functions/bot-webhook/index.ts supabase/functions/report-runtime/index.ts supabase/functions/activity-performance/index.ts
 
       - name: Messaging attachment and viewer isolation regression checks

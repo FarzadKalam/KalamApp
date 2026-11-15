@@ -954,7 +954,10 @@ const Dashboard: React.FC = () => {
   const [dashboardMediaSettings, setDashboardMediaSettings] = useState<AiMediaSettings>({});
   const [dashboardMediaSourceImages, setDashboardMediaSourceImages] = useState<AiMediaSourceImage[]>([]);
   const [dashboardModelOverrides, setDashboardModelOverrides] = useState<Record<string, string>>({});
+  const [dashboardReasoningOverrides,setDashboardReasoningOverrides]=useState<Record<string,string>>({});
   const dashboardModelOverrideRef = useRef<string | null>(null);
+  const dashboardReasoningOverridesRef=useRef(dashboardReasoningOverrides);
+  dashboardReasoningOverridesRef.current=dashboardReasoningOverrides;
   const [dashboardSelectedAgents, setDashboardSelectedAgents] = useState<AgentKey[]>([]);
   const [dashboardAgentAccessMap, setDashboardAgentAccessMap] = useState<Partial<Record<AgentKey, ClientAgentAccessEvaluation>> | null>(null);
   const [dashboardAgentInboxOpen, setDashboardAgentInboxOpen] = useState(false);
@@ -1003,6 +1006,7 @@ const Dashboard: React.FC = () => {
   const [currentUserName, setCurrentUserName] = useState('');
   const [currentUserAvatar, setCurrentUserAvatar] = useState<string | null>(null);
   const [orgId, setOrgId] = useState<string | null>(null);
+  useEffect(() => { setDashboardReasoningOverrides({}); },[orgId]);
   const [storiesPermissions, setStoriesPermissions] = useState<ReturnType<typeof resolveStoriesPermissions> | null>(null);
   const [canPublishSaasStory, setCanPublishSaasStory] = useState(false);
   const [canPublishSaasAdminStory, setCanPublishSaasAdminStory] = useState(false);
@@ -1169,6 +1173,7 @@ const Dashboard: React.FC = () => {
           aiInitialAgents: dashboardSelectedAgents.length ? dashboardSelectedAgents : undefined,
           aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
           aiInitialModelOverride: dashboardModelOverrideRef.current,
+          aiInitialReasoningOverrides: dashboardReasoningOverridesRef.current,
           aiInitialMediaSettings: dashboardMediaSettings,
           aiInitialMediaSourceImages: dashboardMediaSourceImages,
           aiAutoSubmitInitial: true,
@@ -1204,6 +1209,7 @@ const Dashboard: React.FC = () => {
           aiInitialAgents: dashboardSelectedAgents.length ? dashboardSelectedAgents : undefined,
           aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
           aiInitialModelOverride: dashboardModelOverrideRef.current,
+          aiInitialReasoningOverrides: dashboardReasoningOverridesRef.current,
           aiInitialMediaSettings: dashboardMediaSettings,
           aiInitialMediaSourceImages: dashboardMediaSourceImages,
           aiAutoSubmitInitial: true,
@@ -1231,6 +1237,7 @@ const Dashboard: React.FC = () => {
           aiInitialAgents: dashboardSelectedAgents.length ? dashboardSelectedAgents : undefined,
           aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
           aiInitialModelOverride: dashboardModelOverrideRef.current,
+          aiInitialReasoningOverrides: dashboardReasoningOverridesRef.current,
           aiInitialMediaSettings: dashboardMediaSettings,
           aiInitialMediaSourceImages: dashboardMediaSourceImages,
           aiAutoSubmitInitial: false,
@@ -1459,6 +1466,9 @@ const Dashboard: React.FC = () => {
                       onMediaSettingsChange={setDashboardMediaSettings}
                       mediaModelId={dashboardMediaModelId}
                     />} model={<AiComposeModelBar
+                      agents={dashboardSelectedAgents}
+                      reasoningOverrides={dashboardReasoningOverrides}
+                      onReasoningChange={(effort,model) => setDashboardReasoningOverrides(previous => { const next={ ...previous };if (effort) next[model]=effort;else delete next[model];return next; })}
                       compact
                       selectedCapabilities={dashboardAiCapabilities}
                       fallbackCapability="dashboard_chat"

@@ -3,12 +3,14 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Select, Tooltip } from 'antd';
 import { supabase } from '../../supabaseClient';
 import AiSparkleIcon from './AiSparkleIcon';
+import AiReasoningSelect from './AiReasoningSelect';
 
 type CapabilityModelInfo = {
   model: string;
   modelLabel: string;
   selectable: Array<{ value: string; label: string }>;
   available: boolean;
+  reasoningByModel?: Record<string,{ options: Array<{ value: string;label: string }>;defaultValue: string }>;
 };
 
 type AiComposeModelBarProps = {
@@ -18,6 +20,9 @@ type AiComposeModelBarProps = {
   refreshKey?: number;
   persistedOverrides?: Record<string, string> | null;
   compact?: boolean;
+  agents?: string[];
+  reasoningOverrides?: Record<string,string>;
+  onReasoningChange?: (effort: string | null,model: string) => void;
 };
 
 const resolveEffectiveCapability = (selected: Set<string>, fallbackCapability?: string | null) => {
@@ -44,10 +49,13 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
   refreshKey,
   persistedOverrides,
   compact = false,
+  agents,
+  reasoningOverrides,onReasoningChange,
 }) => {
   const [capabilities, setCapabilities] = useState<Record<string, CapabilityModelInfo>>({});
   const [override, setOverride] = useState<string | null>(null);
   const onModelOverrideChangeRef = useRef(onModelOverrideChange);
+  const agentKeys=(agents || []).join(',');
 
   useEffect(() => {
     onModelOverrideChangeRef.current = onModelOverrideChange;
@@ -57,7 +65,7 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
     let mounted = true;
     (async () => {
       try {
-        const { data, error } = await supabase.functions.invoke('ai-assistant', { body: { action: 'get_compose_models' } });
+        const { data, error } = await supabase.functions.invoke('ai-assistant', { body: { action: 'get_compose_models',agents: agentKeys ? agentKeys.split(',') : [] } });
         if (error) throw error;
         if (mounted && data?.success) setCapabilities(data.capabilities || {});
       } catch {
@@ -65,7 +73,7 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
       }
     })();
     return () => { mounted = false; };
-  }, [refreshKey]);
+  }, [refreshKey,agentKeys]);
 
   const effectiveCapability = useMemo(
     () => resolveEffectiveCapability(new Set(selectedCapabilities), fallbackCapability),
@@ -124,6 +132,16 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
           onModelOverrideChange(model || null, effectiveCapability);
         }}
         disabled={info.available === false}
+        dropdownRender={menu => <div dir="rtl">
+          {menu}
+          {value && info.reasoningByModel?.[value]?.options?.length ? <div className="mt-1 border-t border-slate-200 p-2 dark:border-white/10"
+            onMouseDown={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
+            <div className="mb-1 text-xs font-medium">تفکر</div>
+            <AiReasoningSelect model={{ metadata: { reasoning_config: { levels: info.reasoningByModel[value].options.map(option => option.value),supported: true } } }}
+              value={reasoningOverrides?.[value]} inheritLabel={`پیش‌فرض تنظیمات: ${info.reasoningByModel[value].options.find(option => option.value===info.reasoningByModel[value].defaultValue)?.label || 'خودکار مدل'}`}
+              onChange={effort => onReasoningChange?.(effort,value)} />
+          </div> : null}
+        </div>}
       />
     </div>
   );

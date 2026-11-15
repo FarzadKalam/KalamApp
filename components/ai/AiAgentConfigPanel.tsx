@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import AiReasoningSelect from './AiReasoningSelect';
 import {
   Alert,
   App,
@@ -156,6 +157,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
   const [agentDrafts, setAgentDrafts] = useState<Record<string, {
     isEnabled: boolean;
     modelOverride: string | null;
+    reasoningEffort?: string | null;
     fastModelOverride: string | null;
     toneStyle: AgentToneStyle;
     allowedChannels: string[];
@@ -226,6 +228,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
       nextAgentDrafts[def.key] = {
         isEnabled: serverItem ? serverItem.orgEnabled !== false : true,
         modelOverride: serverItem?.modelOverride || null,
+        reasoningEffort: policy.reasoning_effort || null,
         fastModelOverride: serverItem?.fastModelOverride || null,
         toneStyle: (serverItem?.toneStyle || def.defaultToneStyle) as AgentToneStyle,
         allowedChannels: Array.isArray(serverItem?.allowedChannels) && serverItem.allowedChannels.length > 0
@@ -363,6 +366,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
       const nextPolicy = {
         ...existingPolicy,
         custom_instructions: activeDraft.customInstructions?.trim() || '',
+        reasoning_effort: activeDraft.reasoningEffort || null,
       };
       const payloadBody = activeCanEdit
         ? {
@@ -788,8 +792,14 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
                                 ? `پیش‌فرض سیستم (${modelLabelById[activeOverviewRow.saasDefaultModelId] || activeOverviewRow.saasDefaultModelId})`
                                 : 'استفاده از مدل پیش‌فرض سیستم/سازمان'
                             }
-                            onChange={(val) => updateActiveDraft({ modelOverride: val ? String(val) : null })}
+                            onChange={(val) => updateActiveDraft({ modelOverride: val ? String(val) : null,reasoningEffort: null })}
                           />
+                          <div className="mt-2">
+                            <AiReasoningSelect disabled={!activeCanEdit}
+                              model={(overview?.models || []).find((model:any) => model.id===(activeDraft.modelOverride || activeOverviewRow?.effectiveModelId || activeOverviewRow?.saasDefaultModelId))}
+                              value={activeDraft.reasoningEffort} inheritLabel="تفکر: پیش‌فرض سازمان / مدل"
+                              onChange={reasoningEffort => updateActiveDraft({ reasoningEffort })} />
+                          </div>
                         </div>
 
                         <div className="rounded-xl border border-slate-100 p-3 dark:border-white/10">

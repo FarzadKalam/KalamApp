@@ -151,8 +151,11 @@ export const compileLayeredAgentPrompt = async (params: {
   const cachedPrefixHash = await computeSha256Hex(staticSystemPrefix);
 
   // BLOCK 2: Compacted History + Lossless Working State
-  const workingStateJson = params.workingState && Object.keys(params.workingState).length > 0
-    ? JSON.stringify(params.workingState)
+  const stateForPrompt = params.workingState ? Object.fromEntries(Object.entries(params.workingState).map(([key,value]) => [key,
+    Array.isArray(value) && value.length>20 ? { recent: value.slice(-20),total: value.length,more: 'read_conversation_memory: state' } : value,
+  ])) : null;
+  const workingStateJson = stateForPrompt && Object.keys(stateForPrompt).length > 0
+    ? JSON.stringify(stateForPrompt)
     : '';
   const summaryText = String(params.compactionSummary || '').trim();
   const compactionParts = [
@@ -185,13 +188,11 @@ export const compileLayeredAgentPrompt = async (params: {
     `زمینه پویا و پرسش کاربر:\n${JSON.stringify({ ...params.contextPayload, user_message: params.userMessage })}`,
   ].filter(Boolean).join('\n\n');
 
-  const maxHistory = Math.max(4, Math.min(24, Number(params.maxHistoryMessages || 12)));
   const cleanedHistory = (params.historyMessages || [])
     .filter((item) => ['user', 'assistant'].includes(String(item?.role || '')))
-    .slice(-maxHistory)
     .map((item) => ({
       role: String(item.role),
-      content: String(item.content || '').slice(0, 3000),
+      content: String(item.content || ''),
     }));
 
   const messages: Array<{ role: string; content: any }> = [

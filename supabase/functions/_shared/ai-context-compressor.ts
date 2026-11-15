@@ -1,5 +1,9 @@
 import { resolveModelSlot, type AiModelCatalogRow } from './ai-gateway.ts';
 import { estimateMessagesTokens, estimateTextTokens } from './ai-prompt-compiler.ts';
+import { summarizeContextMessages } from './ai-context-lifecycle.ts';
+import { getModelContextWindowTokens, AUTO_COMPACTION_THRESHOLD_RATIO } from './ai-context-policy.ts';
+import { normalizeIntakeAttachments } from './ai-intake-attachments.ts';
+export { getModelContextWindowTokens, DEFAULT_CONTEXT_WINDOW_TOKENS, AUTO_COMPACTION_THRESHOLD_RATIO } from './ai-context-policy.ts';
 
 export type WorkingState = {
   confirmed_entities?: Record<string, { id?: string; system_code?: string; label?: string }>;
@@ -9,16 +13,11 @@ export type WorkingState = {
   pending_drafts?: Array<{ module_id: string; summary: string; draft_id?: string | null }>;
   open_questions?: string[];
   user_decisions?: string[];
+  attachment_refs?: Array<{ message_id?: string; asset_id?: string; entry_id?: string; name?: string;url?: string }>;
+  pending_action_refs?: Array<{ action_id: string; status: string }>;
+  completed_record_refs?: Array<{ module_id: string; id: string; title?: string }>;
+  active_intake_attachments?: ReturnType<typeof normalizeIntakeAttachments>;
   updated_at?: string;
-};
-
-export const DEFAULT_CONTEXT_WINDOW_TOKENS = 64_000;
-export const AUTO_COMPACTION_THRESHOLD_RATIO = 0.7;
-
-export const getModelContextWindowTokens = (modelCatalog?: AiModelCatalogRow | null): number => {
-  const fromMeta = Number(modelCatalog?.metadata?.context_window ?? modelCatalog?.metadata?.max_context_tokens ?? 0);
-  if (Number.isFinite(fromMeta) && fromMeta >= 4096) return fromMeta;
-  return DEFAULT_CONTEXT_WINDOW_TOKENS;
 };
 
 export const shouldAutoCompactContext = (params: {
@@ -32,9 +31,9 @@ export const shouldAutoCompactContext = (params: {
   const contextWindow = getModelContextWindowTokens(params.modelCatalog);
   const ratio = contextWindow > 0 ? estimatedTokens / contextWindow : 0;
   const threshold = Number(params.thresholdRatio ?? AUTO_COMPACTION_THRESHOLD_RATIO);
-  const minMessages = Number(params.minMessagesBeforeAutoCompact ?? 14);
+  const minMessages = Number(params.minMessagesBeforeAutoCompact ?? 40);
   return {
-    shouldCompact: params.rawMessageCount >= minMessages && ratio >= threshold,
+    shouldCompact: ratio >= threshold || params.rawMessageCount >= minMessages,
     estimatedTokens,
     contextWindow,
     ratio: Number(ratio.toFixed(3)),
@@ -55,6 +54,24 @@ export const mergeWorkingStateFromMessages = (
 
   for (const msg of messages || []) {
     const meta = msg?.metadata && typeof msg.metadata === 'object' ? msg.metadata : {};
+    const files = normalizeIntakeAttachments([...(meta.attachments || []),...(meta.files || []),meta.file].filter(Boolean));
+    if (files.length && msg.role === 'user') {
+      next.active_intake_attachments = normalizeIntakeAttachments([...(next.active_intake_attachments || []),...files]);
+      const refs = new Map((next.attachment_refs || []).map(ref => [ref.asset_id || ref.entry_id || `${ref.message_id}:${ref.url || ref.name}`,ref]));
+      files.forEach(file => refs.set(file.assetId || file.entryId || `${msg.id}:${file.url || file.name}`,{ message_id: msg.id,asset_id: file.assetId || undefined,entry_id: file.entryId || undefined,name: file.name,url: file.url || undefined }));
+      next.attachment_refs = [...refs.values()];
+    }
+    if (meta.action_log_id && (meta.requires_confirmation || meta.source?.startsWith('confirm_'))) {
+      const refs = new Map((next.pending_action_refs || []).map(ref => [ref.action_id,ref]));
+      refs.set(meta.action_log_id,{ action_id: meta.action_log_id,status: meta.source?.startsWith('confirm_') ? 'processed' : 'pending' });
+      next.pending_action_refs = [...refs.values()];
+    }
+    if (meta.created_records?.length || meta.updated_records?.length) {
+      const refs = new Map((next.completed_record_refs || []).map(ref => [`${ref.module_id}:${ref.id}`,ref]));
+      [...(meta.created_records || []),...(meta.updated_records || [])].forEach(ref => { if (ref.module_id && ref.id) refs.set(`${ref.module_id}:${ref.id}`,{ module_id: ref.module_id,id: ref.id,title: ref.title }); });
+      next.completed_record_refs = [...refs.values()];
+      next.active_intake_attachments = [];
+    }
     if (meta?.selected_price_list_id) {
       next.selected_price_list_id = String(meta.selected_price_list_id);
       if (meta.selected_price_list_label) next.selected_price_list_label = String(meta.selected_price_list_label);
@@ -72,8 +89,8 @@ export const mergeWorkingStateFromMessages = (
         };
       }
     }
-    if (Array.isArray(meta?.clarification_questions) && meta.role !== 'user') {
-      next.open_questions = meta.clarification_questions.map((q: any) => String(q || '').trim()).filter(Boolean).slice(0, 5);
+    if (Array.isArray(meta?.clarification_questions) && msg.role !== 'user') {
+      next.open_questions = meta.clarification_questions.map((q: any) => String(q?.question || q?.title || q || '').trim()).filter(Boolean).slice(0, 5);
     } else if (msg.role === 'user' && String(msg.content || '').trim()) {
       const text = String(msg.content).trim();
       if (/تایید|موافقم|انجام بده|ثبت کن|باشه|قبول/i.test(text)) {
@@ -98,6 +115,7 @@ export const compactThreadConversation = async (params: {
   catalogRows: AiModelCatalogRow[];
   orgAiSettings?: Record<string, any> | null;
   requestedModelOverride?: string | null;
+  compressionModel?: { model: string; provider: string; catalogRow: AiModelCatalogRow | null };
   runCompressionLlm: (resolvedModel: {
     model: string;
     provider: string;
@@ -139,39 +157,28 @@ export const compactThreadConversation = async (params: {
   const workingState = mergeWorkingStateFromMessages(params.existingWorkingState, chatTurns);
 
   // Dynamically resolve selectable compression model (zero hardcoded fallback!)
-  const resolved = resolveModelSlot({
+  const resolved = params.compressionModel || resolveModelSlot({
     slot: 'context_compression',
     catalogRows: params.catalogRows,
     orgAiSettings: params.orgAiSettings,
     requestedOverride: params.requestedModelOverride,
   });
 
-  const transcript = turnsToCompact
-    .map((turn) => `${turn.role === 'user' ? 'کاربر' : 'دستیار'}: ${String(turn.content || '').slice(0, 1800)}`)
-    .join('\n\n');
-
-  const previousSummaryBlock = String(params.existingSummary || '').trim()
-    ? `خلاصه قبلی تا پیش از این پیام‌ها:\n${String(params.existingSummary).trim()}\n\n`
-    : '';
-
-  const promptMessages = [
-    {
-      role: 'system',
-      content: [
-        'خلاصه‌ساز دقیق و فشرده حافظه مکالمه در سیستم یکپارچه سازمانی هستی.',
-        'پیام‌های قدیمی‌تر زیر را در یک خلاصه فارسی ساختاریافته، کوتاه و بدون تکرار ادغام کن.',
-        'موارد الزامی برای حفظ: تصمیم‌های قطعی کاربر، کد سیستمی و نام رکوردها (مشتری، کالا، فاکتور، پروژه، فرآیند)، اولویت قیمت/لیست قیمت، محدودیت‌ها، مبالغ، تاریخ‌ها و کارهای باز.',
-        'تعارف، سلام و احوال‌پرسی و جزئیات کم‌ارزش را حذف کن و هیچ UUID خامی در متن نیاور.',
-      ].join('\n'),
-    },
-    {
-      role: 'user',
-      content: `${previousSummaryBlock}پیام‌های جدید برای ادغام در خلاصه:\n${transcript}`,
-    },
-  ];
-
-  const llmResult = await params.runCompressionLlm(resolved, promptMessages);
-  const summary = String(llmResult?.content || '').trim();
+  const results: any[] = [];
+  const summary = await summarizeContextMessages(turnsToCompact, async promptMessages => {
+    const result = await params.runCompressionLlm(resolved, promptMessages as Array<{ role: string; content: string }>);
+    results.push(result);
+    return result.content;
+  }, String(params.existingSummary || ''), Math.max(1000,Math.min(24000,Math.floor(getModelContextWindowTokens(resolved.catalogRow)*0.8))));
+  const merge = (values: any[]): any => {
+    if (!values.length) return null;
+    const first = values.find(value => value != null);
+    if (first == null) return null;
+    if (typeof first === 'number') return values.reduce((sum,value) => sum + (Number(value) || 0),0);
+    if (first && typeof first === 'object' && !Array.isArray(first)) return Object.fromEntries([...new Set(values.flatMap(value => Object.keys(value || {})))].map(key => [key,merge(values.map(value => value?.[key]))]));
+    return first;
+  };
+  const llmResult = { usageMetadata: merge(results.map(result => result.usageMetadata)),requestId: results.at(-1)?.requestId || null };
 
   return {
     compacted: Boolean(summary),

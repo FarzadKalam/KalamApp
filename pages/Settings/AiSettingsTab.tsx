@@ -25,6 +25,7 @@ import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
 import PriceAmountInput from '../../components/PriceAmountInput';
 import AiAgentConfigPanel from '../../components/ai/AiAgentConfigPanel';
 import AiUsageHistoryTable from '../../components/ai/AiUsageHistoryTable';
+import AiReasoningSelect from '../../components/ai/AiReasoningSelect';
 import { useCurrencyConfig } from '../../utils/currency';
 import {
   convertDisplayInputToIrt,
@@ -144,6 +145,7 @@ const AiSettingsTab: React.FC = () => {
       const rawMonthlyLimitIrt = data?.settings?.monthly_limit_irt;
       form.setFieldsValue({
         selected_models: selectedModels,
+        reasoning_efforts: data?.settings?.metadata?.reasoning_efforts || {},
         feature_flags: {
           ...Object.fromEntries(CAPABILITIES.map((item) => [item.key, item.phase === 'active'])),
           ...(data?.settings?.feature_flags || {}),
@@ -223,6 +225,7 @@ const AiSettingsTab: React.FC = () => {
             ...(values.selected_models || {}),
           },
           feature_flags: values.feature_flags || {},
+          reasoning_efforts: values.reasoning_efforts || {},
           daily_limit_irt: values.daily_limit_irt === null || values.daily_limit_irt === undefined || values.daily_limit_irt === ''
             ? null
             : convertDisplayInputToIrt(values.daily_limit_irt, aiCompanyCurrency, orgCurrency),
@@ -411,7 +414,7 @@ const AiSettingsTab: React.FC = () => {
       },
     },
     {
-      title: 'مصرف اخیر',
+      title: 'کل مصرف ثبت‌شده',
       width: 130,
       render: (_: unknown, row: any) => `${Number(row?.recentUsage?.usedTokens || 0).toLocaleString('fa-IR')} توکن`,
     },
@@ -475,14 +478,14 @@ const AiSettingsTab: React.FC = () => {
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
-          <Statistic title="مصرف ۲۰۰ درخواست اخیر" value={totals.billed_amount_irt || 0} formatter={formatCurrency} />
+          <Statistic title="کل مصرف ثبت‌شده" value={totals.billed_amount_irt || 0} formatter={formatCurrency} />
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
-          <Statistic title="درخواست‌های نهایی از ۲۰۰ مورد اخیر" value={totals.requests || 0} />
+          <Statistic title="کل درخواست‌های نهایی" value={totals.requests || 0} />
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
           <Statistic
-            title="صرفه‌جویی کش در ۲۰۰ درخواست اخیر"
+            title="صرفه‌جویی کش پرامپت"
             value={totals.cache_savings_irt || 0}
             formatter={formatCurrency}
           />
@@ -507,7 +510,9 @@ const AiSettingsTab: React.FC = () => {
         </div>
       </div>
 
-      <Form form={form} layout="vertical">
+      <Form form={form} layout="vertical" onValuesChange={changed => {
+        for (const slot of Object.keys(changed.selected_models || {})) form.setFieldValue(['reasoning_efforts',slot],null);
+      }}>
         <Collapse
           defaultActiveKey={['models', 'policy', 'user_usage']}
           items={[
@@ -542,6 +547,12 @@ const AiSettingsTab: React.FC = () => {
                         }
                       />
                     </Form.Item>
+                    <Form.Item noStyle shouldUpdate>
+                      {() => <Form.Item label="تفکر پیش‌فرض" name={['reasoning_efforts',PRIMARY_MODEL_KEY]} className="mb-0 mt-2 max-w-xl">
+                        <AiReasoningSelect model={models.find(model => model.id===(form.getFieldValue(['selected_models',PRIMARY_MODEL_KEY]) || saasDefaults[PRIMARY_MODEL_KEY]))}
+                          inheritLabel="پیش‌فرض مرکزی / مدل" />
+                      </Form.Item>}
+                    </Form.Item>
                   </div>
                   {CAPABILITIES.map((capability) => (
                     (() => {
@@ -562,7 +573,8 @@ const AiSettingsTab: React.FC = () => {
                           {slotCentralDefaultLabel ? ` (پیش‌فرض سیستم: ${slotCentralDefaultLabel})` : ''}
                         </div>
                       </div>
-                      <Form.Item name={['selected_models', capability.key]} className="m-0 md:col-span-5">
+                      <div className="space-y-2 md:col-span-5">
+                      <Form.Item name={['selected_models', capability.key]} className="m-0">
                         <Select
                           allowClear
                           showSearch
@@ -581,6 +593,13 @@ const AiSettingsTab: React.FC = () => {
                           }
                         />
                       </Form.Item>
+                      <Form.Item noStyle shouldUpdate>
+                        {() => <Form.Item name={['reasoning_efforts',capability.key]} className="m-0">
+                          <AiReasoningSelect model={models.find(model => model.id===(form.getFieldValue(['selected_models',capability.key]) || saasDefaults[capability.key]
+                            || form.getFieldValue(['selected_models',PRIMARY_MODEL_KEY]) || saasDefaults[PRIMARY_MODEL_KEY]))} inheritLabel="تفکر: پیش‌فرض سازمان / مدل" />
+                        </Form.Item>}
+                      </Form.Item>
+                      </div>
                       <Form.Item name={['feature_flags', capability.key]} valuePropName="checked" className="m-0 md:col-span-2">
                         <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" disabled={switchDisabled} />
                       </Form.Item>
