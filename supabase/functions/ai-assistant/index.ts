@@ -9265,6 +9265,8 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     contextKey,
     provider: providerConfig.provider,
     model: providerConfig.model,
+    agentKey: primaryAgent,
+    selectedAgents: runnableAgents.permittedAgents,
     forceNew: body?.forceNewThread === true,
   });
   const [companyContext, orgPeopleContext, knowledgeChunks, retrievedContexts, previousMessages, calendarContext] = await Promise.all([
@@ -9371,7 +9373,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     const failedMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
       thread_id: thread.id, role: 'assistant', content: 'آماده‌سازی پیش‌نویس انجام نشد؛ چیزی ثبت نشده و پیوست‌ها در گفتگو محفوظ‌اند.',
       provider: providerConfig.provider, model: providerConfig.model,
-      metadata: { failed: true, action: mutationAction, error: failure, target_module_id: targetModuleId },
+      metadata: { failed: true, agent_key: primaryAgent, selected_agents: runnableAgents.permittedAgents, action: mutationAction, error: failure, target_module_id: targetModuleId },
     });
     return json(502, { success: false, threadId: thread.id, messageId: failedMessage?.id,
       message: 'آماده‌سازی پیش‌نویس انجام نشد؛ پیوست‌ها محفوظ‌اند. دوباره تلاش کنید.' });
@@ -9469,6 +9471,8 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
         usage: aiResult.usageMetadata,
         avalai_request_id: aiResult.requestId || null,
         capability,
+        agent_key: primaryAgent,
+        selected_agents: runnableAgents.permittedAgents,
         action: mutationAction,
         target_module_id: targetModuleId,
         proposed_record: hasPayload ? payload : null,
@@ -9544,7 +9548,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
         last_activity_kind: hasPayload ? `${isUpdate ? 'update' : 'create'}_record_preview` : `${isUpdate ? 'update' : 'create'}_record_skipped`,
         last_message_preview: prompt.slice(0, 300),
         last_action_log_id: proposedAction?.id || null,
-        record_intake_context: { moduleId: targetModuleId, records: recordDrafts, attachments: intakeAttachments },
+        record_intake_context: { moduleId: targetModuleId, records: recordDrafts.length ? recordDrafts : thread?.metadata?.record_intake_context?.records || [], attachments: intakeAttachments },
       },
     });
     return json(200, {
@@ -15430,6 +15434,8 @@ const executeProposedActionLog = async (
         model: proposed?.model || '',
         metadata: {
           attachment_results: attachmentResults,
+          agent_key: proposed.agent_key || approvalAgents[0] || null,
+          selected_agents: approvalAgents,
           source: `confirm_${isUpdate ? 'update' : 'create'}_record`,
           action_log_id: actionLogId,
           created_records: createdRecords,
