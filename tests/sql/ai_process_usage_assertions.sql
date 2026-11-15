@@ -13,7 +13,7 @@ do $$ declare s jsonb; begin
 end $$;
 reset role;
 set test.org='10000000-0000-4000-8000-000000000001';
-set test.user='20000000-0000-4000-8000-000000000001';
+set "test.user"='20000000-0000-4000-8000-000000000001';
 set role authenticated;
 do $$ declare r jsonb; begin
   begin perform public.get_ai_usage_complete_statistics(null); raise exception 'statistics access must be denied'; exception when insufficient_privilege then null; end;
@@ -34,6 +34,17 @@ do $$ declare r jsonb; begin
 end $$;
 reset role;
 -- A stage failure rolls back the task rather than producing a partial edit.
+-- Old activities inherit the runtime snapshot, without replacing an existing
+-- task snapshot with a changed template definition.
+update public.tasks set recurrence_info=recurrence_info-'process_task_custom_fields'-'process_task_status_options';
+update public.process_run_stages set metadata='{"process_task_custom_fields":[{"key":"report","requiredForStatus":"approved"}],"process_task_status_options":[{"value":"approved","label":"تأیید"}]}';
+set role authenticated;
+do $$ declare stamp timestamptz; begin
+  select updated_at into stamp from public.tasks limit 1;
+  perform public.apply_ai_process_task_change('50000000-0000-4000-8000-000000000001','{"status":"approved"}','{"report":"approved report"}',stamp);
+  assert (select status='approved' and recurrence_info#>>'{process_task_custom_fields,0,key}'='report' from public.tasks limit 1),'legacy runtime fallback becomes a stable task snapshot';
+end $$;
+reset role;
 delete from public.process_run_stages;
 set role authenticated;
 do $$ declare old_time timestamptz; begin

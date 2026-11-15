@@ -95,7 +95,7 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
       setOverride(persisted);
       return;
     }
-    setOverride((current) => (current && optionValues.has(current) ? current : null));
+    setOverride(null);
   }, [effectiveCapability, info, optionValues, persistedOverrides]);
 
   const persistedValue = effectiveCapability && optionValues.has(String(persistedOverrides?.[effectiveCapability] || '').trim())
@@ -104,8 +104,10 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
   const value = info ? (override && optionValues.has(override) ? override : persistedValue || info.model) : null;
 
   useEffect(() => {
-    if (info) onModelOverrideChangeRef.current(value || null, effectiveCapability);
-  }, [effectiveCapability, info, value]);
+    // Showing the resolved default must not persist it as a user override;
+    // otherwise changing agents keeps the previous agent's default model.
+    if (info) onModelOverrideChangeRef.current(override && optionValues.has(override) ? override : persistedValue || null, effectiveCapability);
+  }, [effectiveCapability, info, override,optionValues,persistedValue]);
 
   if (!info) return null;
 
