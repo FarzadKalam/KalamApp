@@ -1616,6 +1616,9 @@ const resolveProviderConfig = async (
   }
   const modelCatalog = catalogRows.find((row: any) => String(row?.id || '').trim() === model) || null;
   const compressionModel = tryResolveModelSlot({ slot: 'context_compression',catalogRows,orgAiSettings: settings,saasDefaultModels: saasDefaults });
+  const compressionReasoning=resolveReasoningEffort(compressionModel?.catalogRow || modelCatalog,null,
+    settings?.metadata?.reasoning_efforts?.context_compression,centralDefaults.reasoning.context_compression,'low');
+  if (compressionModel) compressionModel.reasoningEffort=compressionReasoning;
   const reasoningSlot=options.agentConfig?.agent_key ? `agent:${options.agentConfig.agent_key}` : capability;
   const reasoningEffort=resolveReasoningEffort(modelCatalog,authContext.reasoningOverrides?.[model],
     options.agentConfig?.policy_json?.reasoning_effort,settings?.metadata?.reasoning_efforts?.[reasoningSlot],
@@ -1630,6 +1633,7 @@ const resolveProviderConfig = async (
     orgAiSettings: settings,
     modelCatalog,
     compressionModel,
+    compressionReasoning,
     assertContextBudget: () => assertAiUsageAllowed(supabaseUrl,serviceRoleKey,authContext),
     onContextCompression: async (result: any,selected: any) => recordAiUsageLedger(supabaseUrl,serviceRoleKey,authContext,{
       requestId: result.requestId,capability: 'context_compression',provider: selected.provider || centralConfig.provider,
@@ -4445,7 +4449,9 @@ const createAiContextBudget = (providerConfig: any,messages: any[],options: any 
     compress: async prompt => {
       await providerConfig.assertContextBudget?.();
       const selected = providerConfig.compressionModel || { model: providerConfig.model,provider: providerConfig.provider,catalogRow: providerConfig.modelCatalog };
-      const result = await callChatCompletions({ ...providerConfig,model: selected.model,modelCatalog: selected.catalogRow },prompt,{
+      const result = await callChatCompletions({ ...providerConfig,model: selected.model,modelCatalog: selected.catalogRow,
+        reasoningModelId: selected.model,reasoningEffort: selected.reasoningEffort || providerConfig.compressionReasoning || 'auto',
+      },prompt,{
         maxTokens: 1200,temperature: 0.1,disableAutoCompaction: true,deadlineAt: options.deadlineAt,
         safetyIdentifier: options.safetyIdentifier,
       });
@@ -6590,7 +6596,9 @@ const loadAiThreadMemory = async (url: string,key: string,auth: any,thread: any,
         messages: buffer,keepRecentCount: 6,catalogRows: [],compressionModel: selected,
         runCompressionLlm: async (_resolved,prompt) => {
           await provider.assertContextBudget?.();
-          const result=await callChatCompletions({ ...provider,model: selected.model,modelCatalog: selected.catalogRow },prompt,{
+          const result=await callChatCompletions({ ...provider,model: selected.model,modelCatalog: selected.catalogRow,
+            reasoningModelId: selected.model,reasoningEffort: selected.reasoningEffort || provider.compressionReasoning || 'auto',
+          },prompt,{
             maxTokens: 1200,temperature: 0.1,disableAutoCompaction: true,
             safetyIdentifier: `org_${auth.orgId}_user_${auth.userId}_memory`,
           });

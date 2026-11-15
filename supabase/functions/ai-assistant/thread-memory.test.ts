@@ -19,18 +19,19 @@ describe('durable model conversation memory',() => {
       return messages.filter(row => !date || row.created_at>date).slice(0,query.limit);
     });
     const patch=vi.fn(async (_u,_k,_t,_q,update) => { Object.assign(thread,update); return [thread]; });
-    const call=vi.fn(async () => ({ content: 'هدف و تصمیم‌های قبلی و فایل مرجع محفوظ است.',requestId: 'compression' }));
+    const call=vi.fn(async (_provider:any,_messages:any) => ({ content: 'هدف و تصمیم‌های قبلی و فایل مرجع محفوظ است.',requestId: 'compression' }));
     const deps={ restSelect: (_u:any,_k:any,table:any,query:any) => read(table,query),restPatch: patch,compactThreadConversation,
       mergeWorkingStateFromMessages,estimateMessagesTokens,getModelContextWindowTokens,filterVisibleAiMessages: (rows:any[]) => rows,callChatCompletions: call };
     const run=new Function(...Object.keys(deps),ts.transpileModule(code+'\nreturn loadAiThreadMemory;',{
       compilerOptions: { target: ts.ScriptTarget.ES2022 },
     }).outputText)(...Object.values(deps));
-    const provider={ model: 'selected-model',provider: 'test',modelCatalog: { id: 'selected-model' } };
+    const provider={ model: 'selected-model',provider: 'test',modelCatalog: { id: 'selected-model' },reasoningEffort: 'max',compressionReasoning: 'low' };
     const result=await run('test','key',{ orgId: 'org' },thread,provider);
     expect(result.at(-1).content).toBe('turn 90'); expect(thread.compaction_cursor_message_id).toBe('74');
     expect(thread.working_state.attachment_refs[0].asset_id).toBe('asset');
     expect(thread.working_state.active_intake_attachments[0].url).toBe('https://files.test/source');
     expect(call).toHaveBeenCalledTimes(1);
+    expect(call.mock.calls[0][0].reasoningEffort).toBe('low');
     const resumed=await run('test','key',{ orgId: 'org' },thread,provider);
     expect(resumed.at(-1).content).toBe('turn 90'); expect(call).toHaveBeenCalledTimes(1);
     expect(read.mock.calls.every(([_table,query]) => query.org_id === 'eq.org')).toBe(true);
