@@ -4455,8 +4455,8 @@ const createAiContextBudget = (providerConfig: any,messages: any[],options: any 
         maxTokens: 1200,temperature: 0.1,disableAutoCompaction: true,deadlineAt: options.deadlineAt,
         safetyIdentifier: options.safetyIdentifier,
       });
-      if (result.incomplete) throw new Error('خلاصه زمینه کامل نشد؛ اصل گفتگو محفوظ است.');
       await providerConfig.onContextCompression?.(result,selected);
+      if (result.incomplete) throw new Error('خلاصه زمینه کامل نشد؛ اصل گفتگو محفوظ است.');
       return result.content;
     },
   });
@@ -6602,8 +6602,8 @@ const loadAiThreadMemory = async (url: string,key: string,auth: any,thread: any,
             maxTokens: 1200,temperature: 0.1,disableAutoCompaction: true,
             safetyIdentifier: `org_${auth.orgId}_user_${auth.userId}_memory`,
           });
-          if (result.incomplete) throw new Error('خلاصه‌سازی حافظه کامل نشد؛ پیام‌های اصلی محفوظ‌اند.');
           await provider.onContextCompression?.(result,selected);
+          if (result.incomplete) throw new Error('خلاصه‌سازی حافظه کامل نشد؛ پیام‌های اصلی محفوظ‌اند.');
           return { content: result.content,requestId: result.requestId };
         },
       });

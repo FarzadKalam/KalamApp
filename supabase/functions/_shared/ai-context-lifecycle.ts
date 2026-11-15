@@ -75,7 +75,7 @@ export const createContextBudgetController = (options: {
       const calls=new Map(old.flatMap(message => message.tool_calls || []).map(call => [call.id,call.function]));
       const checkpoints=old.filter(message => message.role === 'tool').map(message => {
         let result: any; try { result=JSON.parse(message.content); } catch { return null; }
-        const keys=['moduleId','field','hasMore','nextAfterId','nextOffset','coverage','count','sum','min','max','readyForApproval','workflowId','expectedRevision'];
+        const keys=['moduleId','field','source','nextSource','hasMore','nextAfterId','nextOffset','coverage','count','nonNullCount','total','sum','min','max','readyForApproval','workflowId','expectedRevision'];
         const progress=Object.fromEntries(keys.filter(key => result?.[key] !== undefined).map(key => [key,result[key]]));
         return Object.keys(progress).length ? { call: calls.get(message.tool_call_id),result: progress } : null;
       }).filter(Boolean);

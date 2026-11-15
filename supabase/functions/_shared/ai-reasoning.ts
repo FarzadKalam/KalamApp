@@ -30,7 +30,7 @@ export const getReasoningProfile = (model: any): ReasoningProfile => {
   if (config?.supported === false) return { supported: false,levels: [],parameter: 'reasoning_effort' };
   if (config && typeof config==='object' && (config.supported===true || config.parameter || config.route || config.levels?.length)) {
     const parameter=['reasoning_effort','thinking','enable_thinking','output_config'].includes(config.parameter) ? config.parameter : base?.parameter || 'reasoning_effort';
-    const levels=config.levels?.length ? [...new Set<string>(config.levels.filter((value: any) => value!=='auto' && Object.hasOwn(REASONING_LEVEL_LABELS,value)))] : base?.levels || [];
+    const levels=Array.isArray(config.levels) && config.levels.length ? [...new Set<string>(config.levels.filter((value: any) => value!=='auto' && Object.hasOwn(REASONING_LEVEL_LABELS,value)))] : base?.levels || [];
     return { ...base,supported: true,parameter,levels: config.required ? levels.filter(value => value!=='none') : levels,
       required: config.required ?? base?.required,route: ['responses','messages'].includes(config.route) ? config.route : base?.route,source: config.source || 'catalog' };
   }

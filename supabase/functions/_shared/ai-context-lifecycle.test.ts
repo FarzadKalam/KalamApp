@@ -17,10 +17,11 @@ describe('shared context lifecycle for every agent',() => {
   it('keeps tool-call groups valid and exact cursor/aggregation progress without replay',async () => {
     const messages:any[]=[{ role: 'system',content: 'policy' },{ role: 'user',content: 'همه موارد را جمع کن' }];
     for (let i=0;i<4;i++) messages.push({ role: 'assistant',content: null,tool_calls: [{ id: `c${i}`,function: { name: 'aggregate_organization_data',arguments: JSON.stringify({ afterId: `cursor-${i}` }) } }] },
-      { role: 'tool',tool_call_id: `c${i}`,content: JSON.stringify({ coverage: 'partial',sum: '123456789.001',nextAfterId: `cursor-${i+1}`,hasMore: true,records: 'x'.repeat(3000) }) });
+      { role: 'tool',tool_call_id: `c${i}`,content: JSON.stringify({ coverage: 'partial',sum: '123456789.001',nextAfterId: `cursor-${i+1}`,nextSource: 'links',hasMore: true,records: 'x'.repeat(3000) }) });
     const next=await createContextBudgetController({ initialMessages: messages,modelCatalog: { metadata: { context_window: 4096 } },outputTokens: 1024,compress: async () => 'بررسی ادامه دارد' }).prepare(messages,true);
     expect(() => contextMessageGroups(next)).not.toThrow();
     expect(JSON.stringify(next)).toContain('123456789.001'); expect(JSON.stringify(next)).toContain('cursor-4');
+    expect(next.map(message => String(message.content || '')).join('\n')).toContain('"nextSource":"links"');
     expect(next.some(message => message.role === 'user' && message.content === 'همه موارد را جمع کن')).toBe(true);
   });
 

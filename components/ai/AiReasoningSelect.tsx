@@ -8,7 +8,7 @@ const AiReasoningSelect:React.FC<Props>=({ model,value,onChange,inheritLabel='پ
   if (!options.length) return null;
   const valid=options.some(option => option.value===value);
   return <Tooltip title="تفکر بیشتر می‌تواند زمان پاسخ و مصرف توکن را افزایش دهد.">
-    <Select aria-label="میزان تفکر" className="w-full" disabled={disabled} value={valid ? value : ''}
+    <Select aria-label="میزان تفکر" className="w-full [&_.ant-select-selector]:!min-h-11 sm:[&_.ant-select-selector]:!min-h-8" disabled={disabled} value={valid ? value : ''}
       options={[{ value: '',label: inheritLabel },...options]}
       onChange={next => onChange?.(next || null)} />
   </Tooltip>;
