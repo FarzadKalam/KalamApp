@@ -10,6 +10,7 @@ beforeAll(async()=>{
  await import('./index');
 });
 beforeEach(()=>{
+ vi.stubGlobal('Deno',{env:{get:(name:string)=>({SUPABASE_URL:'https://isolated.invalid',SUPABASE_SERVICE_ROLE_KEY:'fixture-key',KALAMAPP_VOIP_INTERNAL_SECRET:'fixture-internal'}[name])}});
  fixtures.healthy=true;calls=[];
  vi.stubGlobal('fetch',vi.fn(async(input:any,init:any)=>{
   const url=new URL(input);calls.push({url,init});let data:any=[];
