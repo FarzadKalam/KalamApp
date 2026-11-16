@@ -35,7 +35,7 @@ begin
   if not found or v_cheque.org_id is null or v_cheque.status not in ('bounced','returned') then return; end if;
   insert into public.commission_review_cases
     (org_id,employee_id,ledger_entry_id,cheque_id,review_after,posted_amount_at_risk,details)
-  select l.org_id,l.employee_id,l.id,v_cheque.id,l.period_end + 1,l.amount,
+  select l.org_id,l.employee_id,l.id,v_cheque.id,greatest(l.period_end + 1,current_date),l.amount,
     jsonb_build_object('ledger_title', l.title, 'cheque_number', v_cheque.serial_no,
       'cheque_status',v_cheque.status,'calculation_snapshot',l.details,
       'amount_is_upper_bound',true,'requires_manual_recalculation',true)

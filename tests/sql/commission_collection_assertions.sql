@@ -45,7 +45,7 @@ do $$ declare employee uuid:='10000000-0000-0000-0000-000000000001'; snapshot js
 end $$;
 
 select test_assert((select count(*)=1 from commission_review_cases),'bounce did not create exactly one review case');
-select test_assert((select review_after='2026-06-01' and posted_amount_at_risk=100000 and details->>'amount_is_upper_bound'='true'
+select test_assert((select review_after=greatest('2026-06-01'::date,current_date) and posted_amount_at_risk=100000 and details->>'amount_is_upper_bound'='true'
  from commission_review_cases),'review case amount/date contract wrong');
 select test_assert((select amount=100000 and status='proposed' and details->'rows'->0->>'invoice_id'='30000000-0000-0000-0000-000000000001'
  from payroll_calculation_entries where source_key='seed-a'),'bounce changed financial history');
