@@ -1,4 +1,6 @@
 import unittest
+import re
+from pathlib import Path
 from bridge_worker import build_objects, bridge_ids, registration_status, realtime_value
 
 
@@ -53,6 +55,44 @@ class BridgeObjectsTest(unittest.TestCase):
         self.assertEqual(registration_status('Status: Registered'), 'registered')
         self.assertEqual(registration_status('Status: Unregistered'), 'pending')
         self.assertEqual(registration_status('Status: Rejected'), 'rejected')
+
+
+class BridgeDialplanTest(unittest.TestCase):
+    def setUp(self):
+        self.dialplan = Path(__file__).with_name('extensions.conf.template').read_text(encoding='utf-8')
+
+    def context(self, name):
+        return self.dialplan.split('[' + name + ']', 1)[1].split('\n[', 1)[0]
+
+    def test_routes_read_authenticated_channel_endpoint(self):
+        # Asterisk CHANNEL's endpoint is a top-level item, not a pjsip signalling subtype.
+        for name, variable in [('kalam-org-router', 'KALAM_EP'),
+                               ('taze-external-out', 'BRIDGE_EP'),
+                               ('taze-external-in', 'BRIDGE_EP')]:
+            self.assertIn('Set(' + variable + '=${CHANNEL(endpoint)})', self.context(name))
+        self.assertNotIn('CHANNEL(pjsip,endpoint)', self.dialplan)
+        # CUT takes a variable name, not an unevaluated function expression.
+        self.assertNotIn('CUT(CHANNEL(', self.dialplan)
+
+    def test_external_routes_cannot_select_another_account_or_reverse_role(self):
+        browser, provider = bridge_ids('10000000-0000-4000-8000-000000000001')
+        other_browser, _ = bridge_ids('20000000-0000-4000-8000-000000000001')
+        for context, expected, rejected, target_role in [
+            ('taze-external-out', browser, provider, 'provider'),
+            ('taze-external-in', provider, browser, 'browser'),
+        ]:
+            source = self.context(context)
+            match = re.search(r'REGEX\("([^"]+)" \$\{BRIDGE_EP\}\)', source)
+            self.assertIsNotNone(match)
+            pattern = match.group(1)
+            for invalid in ['', rejected, 'browser', expected + '_extra', '../' + expected]:
+                self.assertIsNone(re.fullmatch(pattern, invalid))
+            self.assertIsNotNone(re.fullmatch(pattern, expected))
+            self.assertIn('CUT(BRIDGE_EP,_,1-2)', source)
+            self.assertIn('${BRIDGE_PREFIX}_' + target_role, source)
+            self.assertNotIn(other_browser, source)
+            self.assertLess(source.index('REGEX('), source.index('Dial('))
+            self.assertIn('Hangup(21)', source)
 
 
 if __name__ == '__main__':
