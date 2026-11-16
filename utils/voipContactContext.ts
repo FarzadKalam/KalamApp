@@ -1,6 +1,6 @@
 import {supabase} from '../supabaseClient';
 import {getSelectedOrganizationId} from './organizationContext';
-export type CallContactIdentity={moduleId:'customers'|'suppliers'|'employees';recordId:string;title:string;phone:string;rank?:string;jobTitle?:string};
+export type CallContactIdentity={moduleId:'customers'|'suppliers'|'employees';recordId:string;title:string;phone:string;rank?:string;jobTitle?:string;avatarUrl?:string|null};
 export type CallContactSection={section:string;moduleId:string;label:string;state:string;count:number|null;offset?:number;hasMore?:boolean;rows:Record<string,any>[]};
 export const CALL_CONTACT_SECTION_KEYS=['invoices','purchases','projects','tasks','processes','groups','sms','email','calls'] as const;
 export const CALL_CONTACT_SECTION_LABELS:Record<string,string>={invoices:'فاکتورهای فروش و پرداخت‌ها',purchases:'فاکتورهای خرید و پرداخت‌ها',projects:'پروژه‌ها',tasks:'فعالیت‌های مرتبط',processes:'فرآیندها',groups:'گروه‌های پیام‌رسان',sms:'پیامک‌ها',email:'ایمیل‌ها',calls:'تماس‌ها'};

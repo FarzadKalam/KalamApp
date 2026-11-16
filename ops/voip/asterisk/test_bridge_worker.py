@@ -31,6 +31,9 @@ class BridgeObjectsTest(unittest.TestCase):
         self.assertEqual(provider['transport'], 'transport-udp')
         self.assertEqual(provider['media_encryption'], 'no')
         self.assertEqual(provider['direct_media'], 'no')
+        # Advertising Opus on one leg caused answered calls with no audio: this image has no transcoder.
+        self.assertEqual(browser['allow'], 'alaw,ulaw')
+        self.assertEqual(provider['allow'], browser['allow'])
         registration = rows['ps_registrations'][0]
         self.assertEqual(registration['line'], 'yes')
         self.assertEqual(registration['endpoint'], provider['id'])

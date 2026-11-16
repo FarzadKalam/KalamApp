@@ -1,6 +1,10 @@
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { cleanup,fireEvent,render, screen } from '@testing-library/react';
+import {afterEach} from 'vitest';
+import {dialWebPhone,useVoipState} from '../../utils/voipStore';
+afterEach(()=>{cleanup();vi.clearAllMocks();});
+vi.mock('./VoipDirectoryPicker',()=>({default:()=>null}));
 import WebPhoneWidget from './WebPhoneWidget';
 import WebPhoneHeaderButton from './WebPhoneHeaderButton';
 vi.mock('./CallContactContextPanel',()=>({default:()=> <div>پروندهٔ مخاطب تماس</div>}));
@@ -51,6 +55,9 @@ vi.mock('../../utils/voipStore', () => ({
   toggleHoldWebPhone: vi.fn(),
   sendDtmfWebPhone: vi.fn(),
   transferWebPhoneCall: vi.fn(),
+  disconnectVoipWebPhone:vi.fn(),
+  getWebPhoneAudioOutputs:vi.fn(async()=>[]),
+  selectWebPhoneAudioOutput:vi.fn(async()=>''),
 }));
 
 describe('WebPhoneWidget and Header Button', () => {
@@ -70,13 +77,26 @@ describe('WebPhoneWidget and Header Button', () => {
     );
 
     expect(screen.getByText('تلفن اینترنتی تازه سیستم')).toBeDefined();
-    expect(screen.getByText('101')).toBeDefined();
-    expect(screen.getByText('سوابق و پرونده مخاطب')).toBeDefined();
+    expect(screen.getByText(/حساب: 101/)).toBeDefined();
+    expect(screen.queryByText('سوابق و پرونده مخاطب')).toBeNull();
+    expect(screen.getByRole('button',{name:'جست‌وجوی داخلی و مخاطب'})).toBeDefined();
     expect(screen.getByRole('button', { name: /برقراری تماس صوتی/i })).toBeDefined();
 
     // Verify tactile keypad has dir="ltr" for standard international layout
     const digit1 = screen.getByText('1');
     const keypadContainer = digit1.closest('[dir="ltr"]');
     expect(keypadContainer).not.toBeNull();
+    fireEvent.click(digit1);
+    const history=screen.getByRole('button',{name:/سوابق و پرونده مخاطب/});
+    expect(history.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('پروندهٔ مخاطب تماس')).toBeNull();
+    fireEvent.click(history);expect(screen.getByText('پروندهٔ مخاطب تماس')).toBeDefined();
+    expect(dialWebPhone).not.toHaveBeenCalled();
+  });
+  it('shows the permitted contact avatar and speaker control during a call',()=>{
+    vi.mocked(useVoipState).mockReturnValueOnce({status:'registered',extension:'101',panelOpen:true,activeCall:{state:'active',remoteNumber:'09120000000',remoteDisplayName:'مخاطب',avatarUrl:'/portrait.png'},errorMessage:null} as any);
+    render(<WebPhoneWidget voipEnabled planFeatureEnabled dialMode="webphone_webrtc" />);
+    expect(screen.getByRole('button',{name:'بلندگو و خروجی صدا'})).toBeDefined();
+    expect(document.querySelector('img[src$="/portrait.png"]')).not.toBeNull();
   });
 });

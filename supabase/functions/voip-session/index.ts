@@ -6,8 +6,9 @@ import { dialPhone } from '../_shared/phone-number.ts';
 import {normalizeVoipProviderKey} from '../_shared/voip-providers.ts';
 import {resolveVoipRouteStrategy,selectVoipRoute,normalizeProviderSipServer} from '../_shared/voip-route-strategy.ts';
 import {prepareProviderBridge} from '../_shared/voip-provider-bridge.ts';
+import {searchVoipOperators,normalizeDialExtension,validDialExtension} from '../_shared/voip-directory.ts';
 
-const FUNCTION_BUILD = 'voip-session-2026-11-16-tenant-modes-v2';
+const FUNCTION_BUILD = 'voip-session-2026-11-17-dial-directory';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -137,6 +138,14 @@ Deno.serve(async (req) => {
     const messages={organization_disabled:'اتصال تلفن سازمان فعال نیست.',under_development:'مرکز تلفن ابری تازه‌سیستم در حال توسعه است.',reports_only:'حالت سازمان فقط گزارشات تماس است؛ مکالمهٔ داخل تازه‌سیستم فعال نیست.',plan_disabled:'مکالمهٔ داخل تازه‌سیستم در پلن سازمان فعال نیست.',user_disabled:'مکالمه برای این کاربر فعال نیست.'};
     if(action==='get_connection_policy') return json(200,{success:true,...policy,enabled:!disabledReason,reason:disabledReason,message:messages[disabledReason]||null,provider:activeSettingRow?.provider||null});
 
+    if(action==='search_directory'){
+      if(disabledReason)return json(403,{success:false,message:messages[disabledReason]});
+      const offset=Number(body.offset||0);
+      if(!Number.isSafeInteger(offset)||offset<0||offset>2147483647)return json(400,{success:false,message:'شمارهٔ صفحه معتبر نیست.'});
+      const result=await searchVoipOperators((table,params)=>restSelect(supabaseUrl,serviceRoleKey,table,params),orgId,body.query,offset);
+      return json(200,{success:true,...result});
+    }
+
     if(action==='get_webphone_session'){
       if(disabledReason)return json(200,{success:true,enabled:false,reason:disabledReason,message:messages[disabledReason]});
       const accounts=await restSelect(supabaseUrl,serviceRoleKey,'voip_external_accounts',{
@@ -255,6 +264,10 @@ Deno.serve(async (req) => {
       const extension=String(ep.extension||previous?.extension||'').trim();
       if(!extension||/[\s@<>;]/.test(extension))return json(400,{success:false,message:'نام کاربری یا داخلی SIP معتبر نیست.'});
       const metadata={...(previous?.metadata||{}),...(ep.metadata||{})};
+      if(ep.metadata&&Object.hasOwn(ep.metadata,'dial_extension')){
+        metadata.dial_extension=normalizeDialExtension(ep.metadata.dial_extension);
+        if(metadata.dial_extension&&!validDialExtension(metadata.dial_extension))return json(400,{success:false,message:'داخلی قابل شماره‌گیری باید فقط شامل عدد، ستاره یا مربع باشد.'});
+      }
       if(metadata.server_url&&!normalizeProviderSipServer(metadata.server_url))return json(400,{success:false,message:'سرور SIP را به صورت دامنه یا دامنه:پورت وارد کنید.'});
       if(metadata.sip_port&&(!Number.isInteger(Number(metadata.sip_port))||Number(metadata.sip_port)<1||Number(metadata.sip_port)>65535))return json(400,{success:false,message:'پورت SIP باید بین ۱ تا ۶۵۵۳۵ باشد.'});
       if(metadata.sip_transport&&!['udp','tcp'].includes(metadata.sip_transport))return json(400,{success:false,message:'نوع اتصال SIP باید UDP یا TCP باشد.'});

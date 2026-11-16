@@ -50,20 +50,20 @@ function ContactSection({identity,section}:{identity:CallContactIdentity;section
  </div>;
 }
 
-export default function CallContactContextPanel({phone,onChoosePhone}:{phone:string;onChoosePhone?:(phone:string)=>void}){
+export default function CallContactContextPanel({phone,onChoosePhone,embedded=false}:{phone:string;onChoosePhone?:(phone:string)=>void;embedded?:boolean}){
  const [query,setQuery]=useState('');const [candidates,setCandidates]=useState<CallContactIdentity[]>([]);const [selected,setSelected]=useState<CallContactIdentity|null>(null);const [busy,setBusy]=useState(false);const [error,setError]=useState('');
- const orgId=getSelectedOrganizationId();const lookup=query.trim()||phone;
+ const orgId=getSelectedOrganizationId();const lookup=embedded?phone:query.trim()||phone;
  useEffect(()=>{
   let current=true;const controller=new AbortController();setCandidates([]);setSelected(null);setError('');
-  if(lookup.trim().length<2)return;
+  if(lookup.trim().length<2){setBusy(false);return;}
   setBusy(true);
   const timer=setTimeout(()=>{void readVoipContactContext({action:'search',query:lookup},controller.signal).then(data=>{if(!current)return;const rows=data.candidates||[];setCandidates(rows);if(rows.length===1)setSelected(rows[0]);}).catch(()=>{if(current)setError('شناسایی مخاطب انجام نشد.');}).finally(()=>{if(current)setBusy(false);});},350);
   return ()=>{current=false;clearTimeout(timer);controller.abort();};
  },[lookup,orgId]);
- return <section aria-label="پروندهٔ مخاطب تماس" className="rounded-2xl border border-slate-200 dark:border-slate-700 p-3 text-xs space-y-3">
-  <h3 className="font-bold">پرونده و تاریخچهٔ مخاطب</h3>
-  <Input aria-label="جست‌وجوی مخاطب با نام یا شماره" placeholder="نام مشتری، تأمین‌کننده، کارمند یا شماره" value={query} onChange={event=>setQuery(event.target.value)} allowClear />
-  {busy&&<Spin size="small" />}{error&&<p role="alert">{error}</p>}
+ return <section aria-label="پروندهٔ مخاطب تماس" className={embedded?'text-xs space-y-3':'rounded-2xl border border-slate-200 dark:border-slate-700 p-3 text-xs space-y-3'}>
+  {!embedded&&<><h3 className="font-bold">پرونده و تاریخچهٔ مخاطب</h3>
+  <Input aria-label="جست‌وجوی مخاطب با نام یا شماره" placeholder="نام مشتری، تأمین‌کننده، کارمند یا شماره" value={query} onChange={event=>setQuery(event.target.value)} allowClear /></>}
+  <div className="min-h-5">{busy&&<Spin size="small" />}{error&&<p role="alert">{error}</p>}</div>
   {!busy&&!error&&lookup.length>=2&&!candidates.length&&<p>مخاطبی با دسترسی مجاز پیدا نشد.</p>}
   {candidates.length>1&&<p>چند مخاطب پیدا شد؛ پرونده را انتخاب کنید.</p>}
   {candidates.length>1&&candidates.map(item=><Button key={item.moduleId+item.recordId} block onClick={()=>setSelected(item)}>{item.title} · {roleLabels[item.moduleId]}</Button>)}
@@ -73,7 +73,7 @@ export default function CallContactContextPanel({phone,onChoosePhone}:{phone:str
    {onChoosePhone&&selected.phone&&<Button size="small" onClick={()=>{onChoosePhone(selected.phone);setQuery('');}}>انتخاب شمارهٔ این مخاطب</Button>}
    <p className="text-slate-500">سوابق بر اساس آخرین تغییر نمایش داده می‌شوند؛ شناسایی شماره به معنی تأیید هویت نیست.</p>
    <Collapse size="small" defaultActiveKey={['invoices','projects']} items={[
-    ...CALL_CONTACT_SECTION_KEYS.map(section=>({key:section,label:CALL_CONTACT_SECTION_LABELS[section],children:<ContactSection identity={selected} section={section} />})),
+    ...CALL_CONTACT_SECTION_KEYS.filter(section=>!embedded||section!=='calls').map(section=>({key:section,label:CALL_CONTACT_SECTION_LABELS[section],children:<ContactSection identity={selected} section={section} />})),
     {key:'financial',label:'گردش و ماندهٔ مالی مخاطب',children:<React.Suspense fallback={<Spin size="small" />}><OperationalFinancialOverviewPanel entityType={selected.moduleId==='customers'?'customer':selected.moduleId==='suppliers'?'supplier':'employee'} entityId={selected.recordId} /></React.Suspense>},
    ]} />
   </div>}

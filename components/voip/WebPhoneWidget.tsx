@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { App, Button, Input, Spin, Tag, Tooltip } from 'antd';
+import { App, Avatar, Button, Input, Spin, Tag, Tooltip } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import {
   answerWebPhoneCall,
@@ -13,6 +13,8 @@ import {
   toggleMuteWebPhone,
   transferWebPhoneCall,
   useVoipState,
+  getWebPhoneAudioOutputs,
+  selectWebPhoneAudioOutput,
 } from '../../utils/voipStore';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { supabase } from '../../supabaseClient';
@@ -22,6 +24,12 @@ import { getVoipRecordingFileName, loadVoipRecordingBlob, type VoipRecordingCall
 import CallContactContextPanel from './CallContactContextPanel';
 import {getSelectedOrganizationId} from '../../utils/organizationContext';
 import {loadRecentVoipCalls,type RecentVoipCall} from '../../utils/voipCallHistory';
+import {SearchOutlined,SoundOutlined} from '@ant-design/icons';
+import AdaptivePickerSurface from '../AdaptivePickerSurface';
+import {normalizePublicAssetUrl} from '../../utils/assetUrl';
+import type {VoipAudioOutput} from '../../utils/voipAudioOutput';
+import VoipDirectoryPicker from './VoipDirectoryPicker';
+import {playVoipKeypadTone,disposeVoipKeypadTone} from '../../utils/voipKeypadTone';
 
 // --- Pure SVG Icons (No Emojis) ---
 const SvgIcons = {
@@ -199,17 +207,25 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
   const { message } = App.useApp();
   const navigate = useNavigate();
   const voip = useVoipState();
+  const orgId=getSelectedOrganizationId();
 
   const [dialInput, setDialInput] = useState('');
   const [transferTarget, setTransferTarget] = useState('');
   const [, setShowTransferBox] = useState(false);
   const [showDtmfPad, setShowDtmfPad] = useState(false);
   const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
+  const [directoryOpen,setDirectoryOpen]=useState(false);
+  const [chosenContact,setChosenContact]=useState<{phone:string;title:string;avatarUrl?:string|null;moduleId?:string;recordId?:string}|null>(null);
+  const [audioPickerOpen,setAudioPickerOpen]=useState(false);
+  const [audioOutputs,setAudioOutputs]=useState<VoipAudioOutput[]>([]);
+  const [audioOutputId,setAudioOutputId]=useState('');
+  const [audioOutputError,setAudioOutputError]=useState('');
+  useEffect(()=>{setChosenContact(null);setDialInput('');setDirectoryOpen(false);setShowHistoryDrawer(false);},[orgId]);
 
   const [busyAction, setBusyAction] = useState(false);
   const [transcribingId, setTranscribingId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(()=>()=>{void disconnectVoipWebPhone();},[]);
+  useEffect(()=>()=>{void disconnectVoipWebPhone();disposeVoipKeypadTone();},[]);
 
   // Recent calls history state
   const [recentCalls, setRecentCalls] = useState<RecentCallItem[]>([]);
@@ -246,7 +262,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
 
   // Fetch recent calls when drawer is expanded
   useEffect(() => {
-    if (!showHistoryDrawer) return;
+    if (!showHistoryDrawer||!targetPhoneNumber) return;
     let isMounted = true;
     const fetchHistory = async () => {
       setLoadingHistory(true);
@@ -263,9 +279,10 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
         if (isMounted) setLoadingHistory(false);
       }
     };
-    void fetchHistory();
+    const timer=setTimeout(()=>void fetchHistory(),350);
     return () => {
       isMounted = false;
+      clearTimeout(timer);
     };
   }, [showHistoryDrawer, targetPhoneNumber]);
 
@@ -279,7 +296,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
     if (!clean) return;
     setBusyAction(true);
     try {
-      await dialWebPhone(clean);
+      await dialWebPhone(clean,chosenContact?.phone===clean?chosenContact:undefined);
       setDialInput('');
     } catch (err: any) {
       message.error(toFaErrorMessage(err, 'برقراری تماس ناموفق بود.'));
@@ -384,9 +401,16 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
     navigate(`/${moduleId}/${recordId}`);
   };
 
+  const openAudioPicker=async()=>{
+    setAudioPickerOpen(true);setAudioOutputError('');
+    try{setAudioOutputs(await getWebPhoneAudioOutputs());}
+    catch{setAudioOutputs([]);setAudioOutputError('دریافت خروجی‌های صدا انجام نشد.');}
+  };
+
   return (
     <div
       dir="rtl"
+      style={{height:'min(680px, calc(100dvh - 2.5rem))'}}
       className="fixed bottom-5 left-5 z-[1050] flex flex-col max-h-[calc(100dvh-2.5rem)] w-[380px] max-w-[calc(100vw-2.5rem)] rounded-3xl border border-slate-200/90 dark:border-[#242f3d] bg-white/95 dark:bg-[#17212b]/95 backdrop-blur-2xl shadow-2xl shadow-black/40 text-slate-800 dark:text-slate-100 overflow-hidden transition-all duration-300 font-sans"
     >
       {/* Top Header Bar */}
@@ -396,7 +420,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
           <span className="text-xs font-bold text-slate-900 dark:text-white">تلفن اینترنتی تازه سیستم</span>
           {voip.extension ? (
             <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/20">
-              {voip.extension}
+              <span title="نام کاربری حساب SIP">حساب: {voip.extension}</span>
             </span>
           ) : null}
         </div>
@@ -436,9 +460,9 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
             {/* Telegram Circular Avatar & Waveform */}
             <div className="text-center space-y-2 py-1">
               <div className="relative w-16 h-16 mx-auto">
-                <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-sky-500 to-indigo-600 text-white flex items-center justify-center text-lg font-bold shadow-lg shadow-sky-500/30">
+                <Avatar size={64} src={normalizePublicAssetUrl(activeCall.avatarUrl||activeCall.matchedContact?.avatarUrl)} className="!bg-sky-600 !text-white !text-lg !font-bold shadow-lg shadow-sky-500/30">
                   {contactInitials}
-                </div>
+                </Avatar>
                 {activeCall.state === 'active' ? (
                   <span className="absolute bottom-0 right-0 w-4 h-4 rounded-full bg-emerald-500 border-2 border-white dark:border-[#17212b]" />
                 ) : (
@@ -510,7 +534,8 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
             ) : (
               <div className="space-y-2.5">
                 {/* Secondary Action Pills */}
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-4 gap-2">
+                  <Tooltip title="بلندگو و خروجی صدا"><button type="button" aria-label="بلندگو و خروجی صدا" onClick={()=>void openAudioPicker()} className="h-11 rounded-2xl flex items-center justify-center bg-slate-100 dark:bg-[#242f3d] text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-[#2e3b4d]"><SoundOutlined /></button></Tooltip>
                   <Tooltip title={activeCall.muted ? 'وصل میکروفون' : 'بی‌صدا'}>
                     <button
                       onClick={() => toggleMuteWebPhone()}
@@ -547,7 +572,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
                     {['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'].map((digit) => (
                       <button
                         key={digit}
-                        onClick={() => void sendDtmfWebPhone(digit)}
+                        onClick={() => {playVoipKeypadTone(digit);void sendDtmfWebPhone(digit).catch(err=>message.error(toFaErrorMessage(err,'ارسال کلید انجام نشد.')));}}
                         className="h-8 rounded-xl bg-white dark:bg-[#1e2a37] text-xs font-mono font-bold hover:bg-sky-500 hover:text-white transition shadow-sm"
                       >
                         {digit}
@@ -594,12 +619,14 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
           <div className="space-y-3">
             {/* Display / Input Row with Backspace */}
             <div className="flex items-center gap-1 bg-slate-100 dark:bg-[#121922] p-1.5 rounded-2xl border border-slate-200 dark:border-[#242f3d]">
+              <button type="button" aria-label="جست‌وجوی داخلی و مخاطب" title="جست‌وجوی داخلی و مخاطب" className="shrink-0 h-11 w-11 rounded-xl text-sky-600 dark:text-sky-400 hover:bg-sky-500/10" onClick={()=>setDirectoryOpen(true)}><SearchOutlined /></button>
               <Input
                 dir="ltr"
                 variant="borderless"
                 placeholder="شماره تماس یا داخلی..."
                 value={dialInput}
                 onChange={(e) => setDialInput(e.target.value)}
+                onKeyDown={event=>{if(!event.repeat)playVoipKeypadTone(event.key);}}
                 onPressEnter={() => void handleDial()}
                 className="!font-mono !text-base !font-bold text-center !tracking-wider"
               />
@@ -619,7 +646,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
               {KEYPAD_ROWS.flat().map(({ digit, sub }) => (
                 <button
                   key={digit}
-                  onClick={() => setDialInput((prev) => `${prev}${digit}`)}
+                  onClick={() => {playVoipKeypadTone(digit);setDialInput((prev) => `${prev}${digit}`);}}
                   className="h-11 rounded-2xl bg-slate-100/80 dark:bg-[#202b36] hover:bg-slate-200 dark:hover:bg-[#283644] active:scale-90 border border-slate-200/60 dark:border-[#2c3c4c]/40 transition flex flex-col items-center justify-center"
                 >
                   <span className="font-mono font-black text-sm text-slate-800 dark:text-slate-100 leading-none">
@@ -646,11 +673,18 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
           </div>
         )}
 
-        <CallContactContextPanel key={`${getSelectedOrganizationId()}:${targetPhoneNumber}`} phone={targetPhoneNumber} onChoosePhone={activeCall?undefined:setDialInput} />
+        <VoipDirectoryPicker key={getSelectedOrganizationId()} open={directoryOpen} onClose={()=>setDirectoryOpen(false)} onChoose={(phone,contact)=>{setDialInput(phone);setChosenContact(contact?{...contact,phone}:null);}} />
+        <AdaptivePickerSurface open={audioPickerOpen&&!!activeCall} onClose={()=>setAudioPickerOpen(false)} title="بلندگو و خروجی صدا" closeLabel="بستن">
+          <div className="space-y-2 text-sm">
+            {audioOutputError&&<p role="alert">{audioOutputError}</p>}
+            {!audioOutputs.length?<p>این مرورگر امکان انتخاب خروجی صدا را در اختیار برنامه نمی‌گذارد. بلندگو یا هدست را از تنظیمات صدای دستگاه انتخاب کنید.</p>:audioOutputs.map(output=><Button key={output.id} block type={audioOutputId===output.id?'primary':'default'} onClick={()=>{void selectWebPhoneAudioOutput(output.id).then(id=>{setAudioOutputId(id);setAudioPickerOpen(false);}).catch(err=>setAudioOutputError(toFaErrorMessage(err,'تغییر خروجی صدا انجام نشد.')));}}>{output.label}</Button>)}
+          </div>
+        </AdaptivePickerSurface>
         {/* TOGGLEABLE ACCORDION / DRAWER: CONTACT HISTORY & ACTIVITIES */}
-        <div className="border-t border-slate-100 dark:border-[#232e3c] pt-2">
+        {targetPhoneNumber&&<div className="border-t border-slate-100 dark:border-[#232e3c] pt-2">
           <button
             onClick={() => setShowHistoryDrawer((prev) => !prev)}
+            aria-expanded={showHistoryDrawer}
             className="w-full py-2 px-2.5 rounded-xl bg-slate-50 dark:bg-[#1e2a37]/50 hover:bg-slate-100 dark:hover:bg-[#1e2a37] text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between transition"
           >
             <div className="flex items-center gap-2">
@@ -666,7 +700,9 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
           </button>
 
           {showHistoryDrawer ? (
-            <div className="mt-2.5 space-y-2 max-h-56 overflow-y-auto pr-0.5 text-xs">
+            <div className="mt-2.5 space-y-2 h-64 overflow-y-auto pr-0.5 text-xs">
+              <CallContactContextPanel key={getSelectedOrganizationId()} embedded phone={targetPhoneNumber} onChoosePhone={activeCall?undefined:setDialInput} />
+              <h3 className="font-bold">تماس‌های اخیر این شماره</h3>
               {loadingHistory ? (
                 <div className="text-center py-4 text-slate-400">
                   <Spin size="small" />
@@ -752,7 +788,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
               )}
             </div>
           ) : null}
-        </div>
+        </div>}
       </div>
     </div>
   );

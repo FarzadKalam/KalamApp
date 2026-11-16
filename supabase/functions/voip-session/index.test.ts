@@ -70,3 +70,16 @@ it('cannot save an account for a user outside the active organization',async()=>
  expect((await request({action:'upsert_endpoint',endpoint:{assignee_profile_id:'foreign-user',extension:'101',sip_secret:'test-only'}})).status).toBe(403);
  expect(calls.some(call=>call.url.pathname.endsWith('/voip_external_accounts')&&call.init?.method==='POST')).toBe(false);
 });
+it('directory is disabled for reports-only or unavailable plans',async()=>{
+ expect((await request({action:'search_directory'})).status).toBe(403);
+ usage='browser';plan.features.voip_webphone=false;
+ expect((await request({action:'search_directory'})).status).toBe(403);
+ expect(calls.some(call=>call.url.pathname.endsWith('/voip_external_accounts'))).toBe(false);
+});
+it('directory reads are tenant scoped and never select SIP credentials',async()=>{
+ usage='browser';await request({action:'search_directory',query:'۱۰۱'});
+ const selected=calls.filter(call=>call.url.pathname.endsWith('/voip_external_accounts'));
+ expect(selected).toHaveLength(1);expect(selected[0].url.searchParams.get('org_id')).toBe('eq.org-b');
+ expect(selected[0].url.searchParams.get('select')).not.toContain('sip_secret');
+ expect(selected[0].url.searchParams.get('select')).not.toMatch(/\bextension\b/);
+});

@@ -12,7 +12,8 @@ export default function VoipUserFields({settings,form,onScan,hasAccount}:{settin
   {enabled&&!policy.development&&<>
    {policy.canUseBrowser&&<Button onClick={onScan}>ورود اطلاعات از QR سرویس‌دهنده / PortSIP</Button>}
    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-    <Form.Item label="شماره داخلی / نام کاربری SIP" name="voip_extension" rules={[{required:true,message:'داخلی را وارد کنید.'}]}><Input dir="ltr" autoComplete="off" /></Form.Item>
+    <Form.Item label="نام کاربری ورود SIP" name="voip_extension" extra="همان نام کاربری ورود به PortSIP؛ ممکن است با داخلی کوتاه تماس متفاوت باشد." rules={[{required:true,message:'نام کاربری ورود را وارد کنید.'}]}><Input dir="ltr" autoComplete="off" /></Form.Item>
+    {policy.canUseBrowser&&<Form.Item label="داخلی قابل شماره‌گیری" name="voip_dial_extension" extra="شماره‌ای که همکاران برای تماس با این کاربر می‌گیرند؛ مانند ۱۰۱ یا ۱۰۲. برای ورود استفاده نمی‌شود." rules={[{pattern:/^[0-9۰-۹٠-٩*#]{1,20}$/,message:'داخلی تماس را فقط با عدد، ستاره یا مربع وارد کنید.'}]}><Input dir="ltr" inputMode="tel" autoComplete="off" /></Form.Item>}
     <Form.Item label="کد اپراتور برای تطبیق گزارش‌ها" name="voip_operator_code"><Input dir="ltr" /></Form.Item>
     <Form.Item label="شناسه سرویس (اگر با پیش‌فرض سازمان متفاوت است)" name="voip_service_id"><Input dir="ltr" /></Form.Item>
     {policy.canUseBrowser&&<>

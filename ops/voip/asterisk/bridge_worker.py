@@ -49,11 +49,12 @@ def build_objects(row):
                      dict(id=provider, org_id=org, auth_type='userpass', username=auth_username, password=row['sip_secret'])],
         'ps_endpoints': [
             dict(common, id=browser, transport='transport-wss', aors=browser, auth=browser, outbound_auth=None,
-                 context='taze-external-out', allow='opus,alaw,ulaw', webrtc='yes', ice_support='yes',
+                 # The image has no Opus transcoder. Both legs must negotiate supported G.711.
+                 context='taze-external-out', allow='alaw,ulaw', webrtc='yes', ice_support='yes',
                  dtls_auto_generate_cert='yes', dtls_verify='fingerprint', dtls_setup='actpass',
                  media_encryption='dtls', use_avpf='yes', media_use_received_transport='yes', rtcp_mux='yes'),
             dict(common, id=provider, transport='transport-' + transport, aors=provider, auth=None,
-                 outbound_auth=provider, context='taze-external-in', allow='alaw,ulaw,opus', webrtc='no',
+                 outbound_auth=provider, context='taze-external-in', allow='alaw,ulaw', webrtc='no',
                  ice_support='no', dtls_auto_generate_cert='no', media_encryption='no', use_avpf='no',
                  media_use_received_transport='no', rtcp_mux='no', from_user=extension, from_domain=domain)],
         'ps_registrations': [dict(id=provider, org_id=org, transport='transport-' + transport,

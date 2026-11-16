@@ -437,6 +437,7 @@ const UsersTab: React.FC = () => {
       voip_service_id: '',
       voip_dial_mode: orgVoipConfig?.default_dial_mode || 'webphone_webrtc',
       voip_sip_password: '',
+      voip_dial_extension: '',
       voip_server_url: '',
       voip_wss_url: '',
       voip_sip_domain: '',
@@ -466,6 +467,7 @@ const UsersTab: React.FC = () => {
       voip_service_id: record.voip_service_id || '',
       voip_dial_mode: record.voip_dial_mode || orgVoipConfig?.default_dial_mode || 'webphone_webrtc',
       voip_sip_password: '',
+      voip_dial_extension: '',
       voip_server_url: '',
       voip_wss_url: '',
       voip_sip_domain: '',
@@ -504,6 +506,7 @@ const UsersTab: React.FC = () => {
       voip_service_id: record.voip_service_id || '',
       voip_dial_mode: record.voip_dial_mode || orgVoipConfig?.default_dial_mode || 'webphone_webrtc',
       voip_sip_password: '',
+      voip_dial_extension: '',
       voip_server_url: '',
       voip_wss_url: '',
       voip_sip_domain: '',
@@ -523,6 +526,7 @@ const UsersTab: React.FC = () => {
           setUserEndpoint(ep);
           form.setFieldsValue({
             voip_sip_password: '',
+            voip_dial_extension: ep.metadata?.dial_extension || '',
             voip_wss_url: ep.metadata?.wss_url || '',
             voip_sip_domain: ep.metadata?.sip_domain || '',
             voip_auth_username: ep.metadata?.auth_username || '',
@@ -544,8 +548,8 @@ const UsersTab: React.FC = () => {
 
   const buildVoipProfilePatch = (values: any) => ({
     voip_enabled: values.voip_enabled === true,
-    voip_operator_code: String(values.voip_operator_code || values.voip_extension || '').trim() || null,
-    voip_extension: String(values.voip_extension || values.voip_operator_code || '').trim() || null,
+    voip_operator_code: String(values.voip_operator_code || '').trim() || null,
+    voip_extension: String(values.voip_extension || '').trim() || null,
     voip_service_id: String(values.voip_service_id || '').trim() || null,
     voip_dial_mode: resolveVoipPolicy(orgVoipConfig||{},orgVoipConfig?.provider).canUseBrowser ? 'webphone_webrtc' : 'tel_link',
   });
@@ -556,7 +560,7 @@ const UsersTab: React.FC = () => {
     const {data,error}=await supabase.functions.invoke('voip-session',{body:{action:'upsert_endpoint',endpoint:{
       id:userEndpoint?.id,assignee_profile_id:profileId,extension:String(values.voip_extension||userEndpoint?.extension||'').trim(),
       display_name:String(values.full_name||values.voip_extension||'').trim(),sip_secret:String(values.voip_sip_password||'').trim()||undefined,
-      is_active:values.voip_enabled===true,metadata:{wss_url:String(values.voip_wss_url||'').trim(),
+      is_active:values.voip_enabled===true,metadata:{dial_extension:String(values.voip_dial_extension||'').trim(),wss_url:String(values.voip_wss_url||'').trim(),
         sip_domain:String(values.voip_sip_domain||'').trim(),auth_username:String(values.voip_auth_username||'').trim(),
         server_url:String(values.voip_server_url||'').trim(),provider:orgVoipConfig?.provider,
         connection_strategy:values.voip_connection_strategy||'auto',sip_transport:values.voip_sip_transport||'udp',sip_port:values.voip_sip_port||null},

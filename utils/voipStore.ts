@@ -13,6 +13,9 @@ import { supabase } from '../supabaseClient';
 import {createVoipRegistrationWait,getSipRegistrationError} from './voipRegistration';
 import {mayFallbackToVoipGateway} from '../supabase/functions/_shared/voip-route-strategy';
 import {resolveVoipContact} from './voipContactContext';
+import {searchVoipOperatorDirectory} from './voipDirectory';
+import {listVoipAudioOutputs,setVoipAudioOutput} from './voipAudioOutput';
+import {prepareVoipRingbackTone,startVoipRingbackTone,stopVoipRingbackTone,disposeVoipRingbackTone} from './voipRingbackTone';
 
 export type WebPhoneRegistrationStatus =
   | 'disabled'
@@ -27,6 +30,7 @@ export type WebPhoneMatchedContact = {
   moduleId: string;
   recordId: string;
   title: string;
+  avatarUrl?:string|null;
 };
 
 export type WebPhoneCallSnapshot = {
@@ -35,6 +39,7 @@ export type WebPhoneCallSnapshot = {
   state: 'ringing' | 'connecting' | 'active';
   remoteNumber: string;
   remoteDisplayName: string;
+  avatarUrl?:string|null;
   startedAtMs: number;
   answeredAtMs: number | null;
   muted: boolean;
@@ -133,6 +138,9 @@ const attachRemoteAudio = (session: Session) => {
   }
 };
 
+export const getWebPhoneAudioOutputs=()=>listVoipAudioOutputs(ensureRemoteAudioElement());
+export const selectWebPhoneAudioOutput=(deviceId:string)=>setVoipAudioOutput(ensureRemoteAudioElement(),deviceId);
+
 const setSessionAudioTrackMuted = (session: Session, muted: boolean) => {
   const sdh: any = session.sessionDescriptionHandler;
   const pc: RTCPeerConnection | undefined = sdh?.peerConnection || sdh?._peerConnection;
@@ -147,7 +155,7 @@ const setSessionAudioTrackMuted = (session: Session, muted: boolean) => {
 const lookupCrmContactByPhone = async (rawPhone: string): Promise<WebPhoneMatchedContact | null> => {
   try {
     const contact=await resolveVoipContact(rawPhone);
-    if(contact)return {moduleId:contact.moduleId,recordId:contact.recordId,title:contact.title};
+    if(contact)return {moduleId:contact.moduleId,recordId:contact.recordId,title:contact.title,avatarUrl:contact.avatarUrl};
   } catch {
     // Non-blocking lookup
   }
@@ -171,6 +179,7 @@ const bindSessionLifecycle = (
     direction: WebPhoneCallDirection;
     remoteNumber: string;
     remoteDisplayName: string;
+    avatarUrl?:string|null;
     contextModuleId?: string | null;
     contextRecordId?: string | null;
   },
@@ -185,6 +194,7 @@ const bindSessionLifecycle = (
       state: meta.direction === 'incoming' ? 'ringing' : 'connecting',
       remoteNumber: meta.remoteNumber,
       remoteDisplayName: meta.remoteDisplayName || meta.remoteNumber,
+      avatarUrl:meta.avatarUrl||null,
       startedAtMs,
       answeredAtMs: null,
       muted: false,
@@ -195,12 +205,23 @@ const bindSessionLifecycle = (
     },
   });
 
-  void lookupCrmContactByPhone(meta.remoteNumber).then((matched) => {
-    if (!matched || snapshot.activeCall?.callId !== meta.callId) return;
+  void lookupCrmContactByPhone(meta.remoteNumber).then(async(matched) => {
+    if(snapshot.activeCall?.callId !== meta.callId)return;
+    if(!matched){
+      if(/^[0-9*#]{1,6}$/.test(meta.remoteNumber)){
+        try{
+          const directory=await searchVoipOperatorDirectory(meta.remoteNumber);
+          const people=directory.items.filter(person=>person.phone===meta.remoteNumber);
+          if(people.length===1&&snapshot.activeCall?.callId===meta.callId)updateSnapshot({activeCall:{...snapshot.activeCall,remoteDisplayName:people[0].title,avatarUrl:people[0].avatarUrl}});
+        }catch{/* Directory lookup must not interrupt a call. */}
+      }
+      return;
+    }
     updateSnapshot({
       activeCall: {
         ...snapshot.activeCall,
         matchedContact: matched,
+        avatarUrl:matched.avatarUrl||snapshot.activeCall.avatarUrl||null,
         remoteDisplayName: matched.title || snapshot.activeCall.remoteDisplayName,
         contextModuleId: snapshot.activeCall.contextModuleId||matched.moduleId,
         contextRecordId: snapshot.activeCall.contextRecordId||matched.recordId,
@@ -227,6 +248,7 @@ const bindSessionLifecycle = (
   session.stateChange.addListener((newState) => {
     if (activeSession !== session) return;
     if (newState === SessionState.Established) {
+      stopVoipRingbackTone();
       attachRemoteAudio(session);
       const currentCall = snapshot.activeCall;
       if (currentCall && currentCall.callId === meta.callId) {
@@ -247,6 +269,7 @@ const bindSessionLifecycle = (
         extension: snapshot.extension,
       });
     } else if (newState === SessionState.Terminated) {
+      stopVoipRingbackTone();
       const currentCall = snapshot.activeCall;
       const wasAnswered = Boolean(currentCall?.answeredAtMs);
       const talkSeconds = currentCall?.answeredAtMs
@@ -271,6 +294,7 @@ const bindSessionLifecycle = (
 };
 
 export const disconnectVoipWebPhone = async () => {
+  disposeVoipRingbackTone();
   connectionGeneration++;
   if(bridgeHeartbeat){clearInterval(bridgeHeartbeat);bridgeHeartbeat=null;}
   const closingSession=activeSession,closingRegisterer=registerer,closingAgent=userAgent;
@@ -439,10 +463,11 @@ export const connectVoipWebPhone = async (options?: { force?: boolean; route?: '
 
 export const dialWebPhone = async (
   rawTarget: string,
-  context?: { moduleId?: string | null; recordId?: string | null; title?: string | null },
+  context?: { moduleId?: string | null; recordId?: string | null; title?: string | null;avatarUrl?:string|null },
 ): Promise<boolean> => {
   const cleanTarget = String(rawTarget || '').trim();
   if (!cleanTarget) throw new Error('شماره مقصد وارد نشده است.');
+  prepareVoipRingbackTone();
   if (activeSession) throw new Error('در حال حاضر یک تماس فعال وجود دارد.');
 
   const connected = snapshot.status === 'registered' && userAgent ? true : await connectVoipWebPhone();
@@ -454,6 +479,7 @@ export const dialWebPhone = async (
   if (!targetUri) throw new Error('شماره یا داخلی مقصد معتبر نیست.');
 
   const inviter = new Inviter(userAgent, targetUri, {
+    earlyMedia:true,
     sessionDescriptionHandlerOptions: {
       constraints: { audio: true, video: false },
     },
@@ -464,11 +490,20 @@ export const dialWebPhone = async (
     direction: 'outgoing',
     remoteNumber: cleanTarget,
     remoteDisplayName: String(context?.title || cleanTarget).trim(),
+    avatarUrl:context?.avatarUrl||null,
     contextModuleId: context?.moduleId || null,
     contextRecordId: context?.recordId || null,
   });
 
-  await inviter.invite();
+  await inviter.invite({requestDelegate:{
+    onProgress:response=>{
+      if(activeSession!==inviter)return;
+      if(response.message.statusCode===180)startVoipRingbackTone();
+      if(response.message.statusCode===183){stopVoipRingbackTone();attachRemoteAudio(inviter);}
+    },
+    onAccept:()=>stopVoipRingbackTone(),
+    onReject:()=>stopVoipRingbackTone(),
+  }});
   return true;
 };
 

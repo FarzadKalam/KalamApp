@@ -3,7 +3,7 @@ import {canViewModuleWithPlan} from './ai-grounding.ts';
 
 export const CONTACT_MODULES=['customers','suppliers','employees'] as const;
 export type ContactModule=typeof CONTACT_MODULES[number];
-export type ContactIdentity={moduleId:ContactModule;recordId:string;title:string;phone:string;rank?:string;updatedAt?:string};
+export type ContactIdentity={moduleId:ContactModule;recordId:string;title:string;phone:string;rank?:string;updatedAt?:string;avatarUrl?:string|null};
 export type ContactContextReader={orgId:string;permissions:any;plan:any;read:(table:string,params:Record<string,string>,count?:boolean)=>Promise<{rows:any[];count:number|null}>;rpc:(name:string,body:any)=>Promise<any>};
 const UUID=/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i;
 const safeText=(value:any)=>typeof value==='string'&&!UUID.test(value)?value.trim():'';
@@ -24,7 +24,16 @@ export async function searchCallContacts(ctx:ContactContextReader,input:string):
  if(!CONTACT_MODULES.some(module=>allowed(ctx,module)))return [];
  const matches=await ctx.rpc('search_call_contact_identities',{p_query:query,p_phone_key:key||null});
  const rows=(Array.isArray(matches)?matches:[]).filter(row=>CONTACT_MODULES.includes(row.moduleId)&&allowed(ctx,row.moduleId));
- return sortContactActivity(rows).map(row=>({moduleId:row.moduleId,recordId:row.id,title:title(row),phone:row.mobile_1||row.mobile_2||row.phone||'',rank:row.rank,updatedAt:row.updated_at||row.created_at}));
+ const avatars=new Map<string,string>();
+ await Promise.all(CONTACT_MODULES.map(async module=>{
+  if(!fieldAllowed(ctx,module,'image_url'))return;
+  const ids=rows.filter(row=>row.moduleId===module&&UUID.test(row.id)).map(row=>row.id);if(!ids.length)return;
+  try{
+   const result=await ctx.read(module,{org_id:`eq.${ctx.orgId}`,id:`in.(${ids.join(',')})`,select:'id,image_url',limit:String(ids.length)});
+   for(const row of result.rows)if(typeof row.image_url==='string')avatars.set(module+row.id,row.image_url);
+  }catch{/* Optional images must not block the authorized identity lookup. */}
+ }));
+ return sortContactActivity(rows).map(row=>({moduleId:row.moduleId,recordId:row.id,title:title(row),phone:row.mobile_1||row.mobile_2||row.phone||'',rank:row.rank,updatedAt:row.updated_at||row.created_at,avatarUrl:avatars.get(row.moduleId+row.id)||null}));
 }
 
 export const CALL_CONTEXT_SECTIONS={

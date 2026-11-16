@@ -6,7 +6,7 @@ describe('shared call contact context',()=>{
  it('uses exact directory lookup, keeps tenant filters and does not use phone suffixes',async()=>{
   const ctx=reader();const rows=await searchCallContacts(ctx,'۰۹۱۲۰۰۰۰۰۰۰');expect(rows).toHaveLength(1);
   expect(ctx.rpc).toHaveBeenCalledWith('search_call_contact_identities',{p_query:'۰۹۱۲۰۰۰۰۰۰۰',p_phone_key:'9120000000'});
-  expect(ctx.read).not.toHaveBeenCalled();
+  expect(ctx.read).toHaveBeenCalledWith('customers',expect.objectContaining({org_id:`eq.${org}`,select:'id,image_url'}));
  });
  it('never greets a randomly chosen person when the number has multiple matches',()=>{
   const candidates=[{moduleId:'customers' as const,recordId:id,title:'نفر اول',phone:'09120000000'},{moduleId:'suppliers' as const,recordId:id,title:'نفر دوم',phone:'09120000000'}];
@@ -19,6 +19,10 @@ describe('shared call contact context',()=>{
  it('strips hidden identity fields before requesting them',async()=>{
   const ctx=reader();ctx.permissions.customers.fields={mobile_1:false};await loadCallIdentity(ctx,'customers',id);
   expect(vi.mocked(ctx.read).mock.calls[0][1].select.split(',')).not.toContain('mobile_1');
+ });
+ it('never requests a hidden contact avatar',async()=>{
+  const ctx=reader();ctx.permissions.customers.fields={image_url:{view:false}};
+  const people=await searchCallContacts(ctx,'09120000000');expect(people[0].avatarUrl).toBeNull();expect(ctx.read).not.toHaveBeenCalled();
  });
  it('preserves full counts and exact cursors from the server instead of counting the current page',async()=>{
   const ctx=reader();vi.mocked(ctx.rpc).mockImplementation(async(name)=>name==='filter_call_contact_identities'?[id]:({rows:[{id,name:'فاکتور'}],count:1234,hasMore:true}));
