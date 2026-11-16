@@ -2,7 +2,7 @@ import {useEffect,useState} from 'react';
 import {App,Form,Input,Modal} from 'antd';
 import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 import VoipUserFields from './VoipUserFields';
-import VoipQrScannerModal from './VoipQrScannerModal';
+import {VoipQrScannerModal} from './VoipQrScannerModal';
 import {supabase} from '../../supabaseClient';
 import {toFaErrorMessage} from '../../utils/errorMessageFa';
 import {normalizeDialExtension} from '../../supabase/functions/_shared/voip-directory';

@@ -14,6 +14,7 @@ import {getAgentDefinition} from '../utils/aiAgentCatalog';
 import {AiAgentAvatar} from '../components/ai/AiAgentIcon';
 import ContactCenterOperatorModal from '../components/voip/ContactCenterOperatorModal';
 import ContactCenterConnectionModal from '../components/voip/ContactCenterConnectionModal';
+import CustomerVoiceConsole from '../components/voip/CustomerVoiceConsole';
 const MessagingSurface=React.lazy(()=>import('../components/notifications/messaging/MessagingSurfacePrototype'));
 const AiAgentConfigPanel=React.lazy(()=>import('../components/ai/AiAgentConfigPanel'));
 const panel='rounded-3xl border border-slate-200/80 bg-white dark:border-white/10 dark:bg-[#17212b]';
@@ -44,7 +45,7 @@ export default function ContactCenterPage(){
   </header>
   <div className="grid grid-cols-1 xl:grid-cols-[350px_minmax(0,1fr)] gap-5 items-start">
    <aside className="space-y-4 xl:sticky xl:top-4">
-    {policy.data?.enabled&&plan===true?<div ref={dockRef} aria-label="شماره‌گیر مرکز تماس" />:<div className={`${panel} p-5 space-y-3`}><PhoneOutlined className="text-2xl text-sky-500" /><h2 className="font-bold">شماره‌گیر</h2><p className="text-sm text-slate-500">{policy.data?.message||'دریافت وضعیت اتصال تلفن…'}</p>{policy.error&&<Alert type="warning" message="دریافت وضعیت اتصال ناموفق بود." />}{canSettings&&<Button onClick={()=>setSettingsOpen(true)}>تنظیم اتصال تلفن</Button>}</div>}
+    {policy.data?.enabled&&plan===true?<div ref={dockRef} aria-label="شماره‌گیر مرکز تماس" />:<div className={`${panel} p-5 space-y-3`}><PhoneOutlined className="text-2xl text-sky-500" /><h2 className="font-bold">شماره‌گیر</h2><p className="text-sm text-slate-500">{policy.data?.message||'دریافت وضعیت اتصال تلفن…'}</p>{!!policy.error&&<Alert type="warning" message="دریافت وضعیت اتصال ناموفق بود." />}{canSettings&&<Button onClick={()=>setSettingsOpen(true)}>تنظیم اتصال تلفن</Button>}</div>}
     <button type="button" className={`${panel} w-full p-4 flex items-center gap-3 text-start hover:border-sky-400`} onClick={()=>setAgentOpen(true)}><AiAgentAvatar agentKey="customer_response" size={44} /><div className="min-w-0 flex-1"><strong className="block text-sm">{agent?.titleFa||'ایجنت پاسخ‌گویی مشتری'}</strong><span className="text-xs text-slate-500">مدل‌ها، دستورالعمل‌ها و تنظیمات تماس صوتی</span></div><SettingOutlined /></button>
     <Button block size="large" type="primary" icon={<AudioOutlined />} onClick={()=>setVoiceOpen(true)}>تماس با هوش مصنوعی</Button>
    </aside>
@@ -59,7 +60,7 @@ export default function ContactCenterPage(){
     </div>
     <section className={`${panel} p-4 md:p-5 space-y-4`} aria-label="اپراتورهای مرکز تماس">
      <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-bold">اپراتورها</h2><p className="mt-1 text-xs text-slate-500">وضعیت اتصال معتبر؛ به‌روزرسانی هر ۱۵ ثانیه</p></div>{canManage&&plan===true&&<Button icon={<PlusOutlined />} onClick={()=>setEditing(null)}>اتصال کاربر به اپراتور</Button>}</div>
-     {!canManage?<p className="text-sm text-slate-500">مدیریت اپراتورها نیازمند دسترسی مدیریت کاربران یا تنظیمات سازمان است.</p>:plan!==true?<p className="text-sm text-slate-500">مکالمهٔ داخل سامانه در پلن سازمان فعال نیست.</p>:operators.isPending?<Spin />:operators.error?<Alert type="error" message="دریافت اپراتورها انجام نشد." action={<Button onClick={()=>void operators.refetch()}>تلاش دوباره</Button>} />:!operators.data?.items.length?<Empty description="هنوز حساب اپراتوری متصل نشده است" />:<div className="grid grid-cols-1 md:grid-cols-2 gap-3">{operators.data.items.map(operator=>{
+     {!canManage?<p className="text-sm text-slate-500">مدیریت اپراتورها نیازمند دسترسی مدیریت کاربران یا تنظیمات سازمان است.</p>:plan!==true?<p className="text-sm text-slate-500">مکالمهٔ داخل سامانه در پلن سازمان فعال نیست.</p>:operators.isLoading?<Spin />:operators.error?<Alert type="error" message="دریافت اپراتورها انجام نشد." action={<Button onClick={()=>void operators.refetch()}>تلاش دوباره</Button>} />:!operators.data?.items.length?<Empty description="هنوز حساب اپراتوری متصل نشده است" />:<div className="grid grid-cols-1 md:grid-cols-2 gap-3">{operators.data.items.map(operator=>{
       const isSelf=operator.profileId===session.user?.id;const busy=isSelf?!!phone.activeCall:operator.status==='busy';const online=isSelf?phone.status==='registered':operator.status==='online';
       return <div key={operator.id} className="rounded-2xl border border-slate-200 dark:border-white/10 p-3 flex items-center gap-3">
        <div className="relative"><Avatar size={44} src={normalizePublicAssetUrl(operator.avatarUrl)||undefined}>{operator.title.slice(0,1)}</Avatar><span aria-label={busy?'در حال مکالمه':online?'متصل':'قطع'} className={`absolute bottom-0 left-0 h-3 w-3 rounded-full border-2 border-white dark:border-slate-900 ${busy?'bg-amber-500':online?'bg-emerald-500':'bg-slate-400'}`} /></div>
@@ -75,6 +76,6 @@ export default function ContactCenterPage(){
   {orgId&&editing!==undefined&&<ContactCenterOperatorModal open operator={editing} orgId={orgId} settings={settings} onClose={()=>setEditing(undefined)} onSaved={refresh} />}
   {orgId&&settingsOpen&&<ContactCenterConnectionModal open orgId={orgId} onClose={()=>setSettingsOpen(false)} onSaved={refresh} />}
   <Modal open={agentOpen} onCancel={()=>setAgentOpen(false)} footer={null} width={1100} title={agent?.titleFa||'تنظیمات ایجنت پاسخ‌گویی'} destroyOnHidden><React.Suspense fallback={<Spin />}><AiAgentConfigPanel compact initialAgentKey="customer_response" /></React.Suspense></Modal>
-  <Modal open={voiceOpen} onCancel={()=>setVoiceOpen(false)} footer={null} title="تماس با هوش مصنوعی" destroyOnHidden><div className="space-y-3"><p>مسیر صوتی ایجنت پاسخ‌گویی در حال اتصال به مرکز تماس است.</p><Button block onClick={()=>{setVoiceOpen(false);setAgentOpen(true);}}>مدل و دستورالعمل پاسخ‌گویی</Button></div></Modal>
+  {voiceOpen&&<CustomerVoiceConsole open onClose={()=>setVoiceOpen(false)} />}
  </div>;
 }

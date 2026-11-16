@@ -12,7 +12,7 @@ export default function ContactCenterConnectionModal({open,onClose,orgId,onSaved
   if(!open)return;let current=true;setLoading(true);setReady(false);form.resetFields();
   void loadScopedIntegrationSettings(supabase,{connectionType:'voip',columns:'id,org_id,provider,settings,is_active'}).then(result=>{
    if(!current)return;if(result.error||result.orgId!==orgId)throw new Error('دسترسی به اتصال تلفن این سازمان ممکن نشد.');
-   setRow(result.data);form.setFieldsValue({voip:{usage_mode:'reports',...(result.data?.settings||{}),provider:result.data?.provider||'telefonchy',is_active:result.data?.is_active===true}});setReady(true);
+   const stored=result.data as any;setRow(stored);form.setFieldsValue({voip:{usage_mode:'reports',...(stored?.settings||{}),provider:stored?.provider||'telefonchy',is_active:stored?.is_active===true}});setReady(true);
   }).catch(error=>{if(current)message.error(toFaErrorMessage(error,'تنظیمات دریافت نشد.'));}).finally(()=>{if(current)setLoading(false);});
   return()=>{current=false;};
  },[open,orgId,form,message]);

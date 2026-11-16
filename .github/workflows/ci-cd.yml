@@ -393,7 +393,7 @@ jobs:
         env:
           VITE_SUPABASE_URL: https://isolated-test.invalid
           VITE_SUPABASE_ANON_KEY: isolated-test-only
-        run: npx vitest run utils/voipQr.test.ts utils/voipConnectionPolicy.test.ts utils/voipRouteStrategy.test.ts utils/voipStoreLifecycle.test.ts utils/voipCallHistory.test.ts utils/voipAudioOutput.test.ts supabase/functions/voip-session/index.test.ts supabase/functions/_shared/voip-contact-context.test.ts supabase/functions/_shared/voip-directory.test.ts components/settings/VoipConnectionSettings.test.tsx components/voip/WebPhoneWidget.test.tsx components/voip/VoipDirectoryPicker.test.tsx components/voip/CallContactContextPanel.test.tsx --maxWorkers=1 --no-file-parallelism
+        run: npx vitest run utils/voipQr.test.ts utils/voipConnectionPolicy.test.ts utils/voipRouteStrategy.test.ts utils/voipStoreLifecycle.test.ts utils/voipCallHistory.test.ts utils/voipAudioOutput.test.ts supabase/functions/voip-session/index.test.ts supabase/functions/_shared/voip-contact-context.test.ts supabase/functions/_shared/voip-directory.test.ts components/settings/VoipConnectionSettings.test.tsx components/voip/WebPhoneWidget.test.tsx components/voip/VoipDirectoryPicker.test.tsx components/voip/CallContactContextPanel.test.tsx pages/ContactCenterPage.test.tsx --maxWorkers=1 --no-file-parallelism
 
       - name: Call contact Edge dependency checks
         run: deno check --node-modules-dir=none supabase/functions/voip-contact-context/index.ts

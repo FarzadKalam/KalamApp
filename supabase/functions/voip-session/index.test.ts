@@ -83,3 +83,8 @@ it('directory reads are tenant scoped and never select SIP credentials',async()=
  expect(selected[0].url.searchParams.get('select')).not.toContain('sip_secret');
  expect(selected[0].url.searchParams.get('select')).not.toMatch(/\bextension\b/);
 });
+it('operator management remains gated by the webphone plan',async()=>{
+ plan.features.voip_webphone=false;
+ expect((await request({action:'list_center_operators'})).status).toBe(403);
+ expect(calls.some(call=>call.url.pathname.endsWith('/voip_provider_bridges'))).toBe(false);
+});

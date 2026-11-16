@@ -3281,7 +3281,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
   ]);
   const displayConversations = useMemo(() => {
     if (reelInitialLoading) return [];
-    if(callsOnly)return liveData.conversations.filter(conversation=>conversation.channel==='call');
+    if(callsOnly)return liveData.conversations.filter(conversation=>conversation.channel==='call') as Conversation[];
     const liveInternal = liveInternalConversations;
     const existingAgentKeys = new Set(
       liveInternal

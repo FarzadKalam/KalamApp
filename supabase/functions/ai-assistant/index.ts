@@ -1662,6 +1662,7 @@ const resolveSpecializedProviderConfig = async (
   serviceRoleKey: string,
   authContext: any,
   capability: string,
+  modelOverride?:string|null,
 ) => {
   const centralConfig = getCentralProviderConfig();
   const settings = await loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
@@ -1671,6 +1672,7 @@ const resolveSpecializedProviderConfig = async (
     : {};
   const allowed = filterSelectableAiModels(catalogRows, capability);
   const allowedIds = new Set(allowed.map((model: any) => String(model?.id || '').trim()).filter(Boolean));
+  if(modelOverride&&!allowedIds.has(String(modelOverride).trim()))throw new Error('مدل انتخاب‌شده برای این قابلیت صوتی مجاز نیست.');
   const primaryModel = String(selected?.[PRIMARY_AI_MODEL_KEY] || '').trim();
   const selectedAlias = (CAPABILITY_SELECTION_ALIASES[capability] || [])
     .map((alias) => String(selected?.[alias] || '').trim())
@@ -1678,7 +1680,7 @@ const resolveSpecializedProviderConfig = async (
   const configuredDefault = allowed.find((model: any) => (
     String(model?.id || '').trim() !== primaryModel && isCatalogDefaultFor(model, capability)
   ));
-  const model = [String(selected?.[capability] || '').trim(), selectedAlias, String(configuredDefault?.id || '').trim()]
+  const model = [String(modelOverride||'').trim(),String(selected?.[capability] || '').trim(), selectedAlias, String(configuredDefault?.id || '').trim()]
     .find((modelId) => modelId && modelId !== primaryModel && allowedIds.has(modelId))
     || String(allowed.find((item: any) => String(item?.id || '').trim() !== primaryModel)?.id || '').trim();
   if (!model) throw new Error(`موتور تخصصی جداگانه‌ای برای ${capability} تنظیم نشده است.`);
@@ -11590,16 +11592,15 @@ const handleTranscribeVoice = async (supabaseUrl: string, serviceRoleKey: string
   if (!audioBase64) return json(400, { success: false, message: 'فایل صوتی ارسال نشده است.' });
   const rawContext = normalizeContext(body?.context || {});
   const baseCapability = rawContext.mode === 'record' ? 'record_chat' : 'dashboard_chat';
-  const decisionProviderConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, baseCapability, {
-    modelOverride: body?.modelOverride,
-  });
+  // This override selects the speech engine, not the primary chat model.
+  const decisionProviderConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, baseCapability);
   await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, decisionProviderConfig.orgAiSettings, 'voice_input');
   const mimeType = String(audio?.mimeType || audio?.mime_type || body?.mimeType || 'audio/webm');
   const filename = String(audio?.filename || body?.filename || 'voice.webm');
   // This endpoint is used by fast voice flows. Do not first try the chat
   // model: Gemini chat accepts neither this multipart transcription endpoint
   // nor browser WebM as a generic chat file.
-  const specializedProviderConfig = await resolveSpecializedProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'voice_input');
+  const specializedProviderConfig = await resolveSpecializedProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'voice_input',body?.modelOverride);
   const result = await callAudioTranscription(specializedProviderConfig, audioBase64, mimeType, filename);
   result.source = 'specialized_voice_engine';
   const ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
