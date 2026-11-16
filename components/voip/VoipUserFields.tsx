@@ -1,4 +1,3 @@
-import React from 'react';
 import {Alert,Button,Form,Input,Switch} from 'antd';
 import type {FormInstance} from 'antd';
 import {normalizeSipDomain,normalizeWssUrl,resolveVoipPolicy} from '../../utils/voipConnectionPolicy';

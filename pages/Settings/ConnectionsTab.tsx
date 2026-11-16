@@ -1,4 +1,5 @@
 import {resolveVoipPolicy} from '../../utils/voipConnectionPolicy';
+import {useQueryClient} from '@tanstack/react-query';
 import EmailSettings from '../../components/email/EmailSettings';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
@@ -414,6 +415,7 @@ const pickPreferredConnectionRow = (rows: ConnectionRecord[]) => {
 };
 
 const ConnectionsTab: React.FC = () => {
+  const voipQueryClient=useQueryClient();
   const { message } = AntdApp.useApp();
   const [form] = Form.useForm<FormValues>();
   const [loading, setLoading] = useState(false);
@@ -1122,6 +1124,7 @@ const ConnectionsTab: React.FC = () => {
       }
 
       setTableMissing(false);
+      await voipQueryClient.invalidateQueries({queryKey:['voip-connection-policy']});
       message.success('تنظیمات اتصالات ذخیره شد.');
     } catch (err: any) {
       if (Array.isArray(err?.errorFields)) return;

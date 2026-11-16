@@ -1,6 +1,6 @@
 import VoipUserFields from '../../components/voip/VoipUserFields';
+import {useQueryClient} from '@tanstack/react-query';
 import {resolveVoipPolicy} from '../../utils/voipConnectionPolicy';
-import { VOIP_DIAL_MODE_OPTIONS } from '../../utils/voipProvidersCatalog';
 import { normalizeEmail } from '../../utils/email';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
@@ -18,7 +18,7 @@ import {
   Tag,
   Upload,
 } from 'antd';
-import { DeleteOutlined, PlusOutlined, SaveOutlined, UploadOutlined, UserOutlined, QrcodeOutlined, ScanOutlined, KeyOutlined } from '@ant-design/icons';
+import { DeleteOutlined, PlusOutlined, SaveOutlined, UploadOutlined, UserOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import { VoipQrScannerModal } from '../../components/voip/VoipQrScannerModal';
 import { supabase } from '../../supabaseClient';
@@ -37,7 +37,6 @@ import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import ProfileAvatar from '../../components/common/ProfileAvatar';
 import { emitProfileAvatarUpdated } from '../../utils/profileAvatarEvents';
 import OtpCodeInput from '../../components/common/OtpCodeInput';
-import { normalizeDigitsToEnglish } from '../../utils/persianNumericInput';
 import AdaptiveIdentityPicker from '../../components/AdaptiveIdentityPicker';
 import { clearIdentityDirectoryCache } from '../../utils/identityDirectory';
 
@@ -96,6 +95,7 @@ const toInviteDisplayPhone = (value?: string | null) => {
 };
 
 const UsersTab: React.FC = () => {
+  const voipQueryClient=useQueryClient();
   const { message } = App.useApp();
   const [rows, setRows] = useState<UserRow[]>([]);
   const [roles, setRoles] = useState<any[]>([]);
@@ -558,6 +558,7 @@ const UsersTab: React.FC = () => {
         server_url:String(values.voip_server_url||'').trim(),provider:orgVoipConfig?.provider},
     }}});
     if(error||!data?.success)throw new Error(`عضویت کاربر ذخیره شد، اما تنظیم حساب تلفن انجام نشد: ${data?.message||error?.message||'دوباره تلاش کنید.'}`);
+    await voipQueryClient.invalidateQueries({queryKey:['voip-connection-policy',currentOrgId]});
   };
 
   const handleAddOrEditUser = async (values: any) => {

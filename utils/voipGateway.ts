@@ -20,12 +20,6 @@ export type VoipSmartCallResult = {
   message?: string;
 };
 
-const getErrorMessage = (value: any, fallback: string) => {
-  if (!value) return fallback;
-  if (typeof value === 'string') return value || fallback;
-  return String(value.message || value.error || fallback);
-};
-
 export const buildVoipFallbackUrl = (
   phone: unknown,
   mode: VoipDialMode | string | null | undefined

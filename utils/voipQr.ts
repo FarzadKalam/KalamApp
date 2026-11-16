@@ -76,7 +76,6 @@ const extractFromRecord = (obj: Record<string, any>): Partial<ParsedVoipConfig> 
   // Telefonchy / PortSIP protocols array support (e.g. [{"pn":"UDP","port":"5060"},{"pn":"WSS","port":"5065"}])
   if (Array.isArray(target.protocols)) {
     const wssProto = target.protocols.find((p: any) => p && String(p?.pn || '').toUpperCase() === 'WSS');
-    const wsProto = target.protocols.find((p: any) => p && String(p?.pn || '').toUpperCase() === 'WS');
     const udpProto = target.protocols.find((p: any) => p && String(p?.pn || '').toUpperCase() === 'UDP');
 
     if (wssProto?.port) wssPort=Number(wssProto.port)||undefined;

@@ -1,4 +1,3 @@
-import React from 'react';
 import {Alert,Button,Collapse,Form,Input,Space,Switch} from 'antd';
 import type {FormInstance} from 'antd';
 import AdaptiveSelectField from '../AdaptiveSelectField';

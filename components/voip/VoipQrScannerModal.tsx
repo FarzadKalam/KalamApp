@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { App, Modal, Tabs, Button, Upload, Input, Alert, Space, Typography } from 'antd';
+import { App, Modal, Tabs, Button, Upload, Input, Alert, Typography } from 'antd';
 import type { UploadProps } from 'antd';
 import { parseVoipQrConfig, type ParsedVoipConfig } from '../../utils/voipQr';
 
