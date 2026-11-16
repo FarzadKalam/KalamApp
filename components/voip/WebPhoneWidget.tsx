@@ -25,7 +25,7 @@ import { getVoipRecordingFileName, loadVoipRecordingBlob, type VoipRecordingCall
 import CallContactContextPanel from './CallContactContextPanel';
 import {getSelectedOrganizationId} from '../../utils/organizationContext';
 import {loadRecentVoipCalls,type RecentVoipCall} from '../../utils/voipCallHistory';
-import {SearchOutlined,SoundOutlined,ExportOutlined} from '@ant-design/icons';
+import {SearchOutlined,SoundOutlined,ExportOutlined,PoweroffOutlined} from '@ant-design/icons';
 import {useVoipDockTarget} from '../../utils/voipDock';
 import AdaptivePickerSurface from '../AdaptivePickerSurface';
 import {normalizePublicAssetUrl} from '../../utils/assetUrl';
@@ -418,7 +418,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
     >
       {/* Top Header Bar */}
       <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-slate-100 dark:border-[#232e3c] bg-slate-50/70 dark:bg-[#1f2b38]/70">
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${voip.status === 'registered' ? 'bg-emerald-500 shadow-sm shadow-emerald-500/50' : voip.status === 'connecting' ? 'bg-amber-400 animate-pulse' : 'bg-rose-500'}`} />
           <span className="text-xs font-bold text-slate-900 dark:text-white">تلفن اینترنتی تازه سیستم</span>
           {voip.extension ? (
@@ -427,7 +427,8 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
             </span>
           ) : null}
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1.5">
+          {!activeCall&&voip.status==='registered'&&<Tooltip title="قطع اتصال تلفن در این تب"><button type="button" className="inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-400 hover:text-rose-500" aria-label="قطع اتصال تلفن در این تب" onClick={()=>void disconnectVoipWebPhone()}><PoweroffOutlined className="text-xs" /></button></Tooltip>}
           {!dockTarget&&<Tooltip title="مرکز تماس در تب جدید"><a href="/contact-center" target="_blank" rel="noopener noreferrer" aria-label="مرکز تماس در تب جدید" className="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-400 hover:text-sky-500"><ExportOutlined className="text-xs" /></a></Tooltip>}
           <Tooltip title="اتصال مجدد">
             <button

@@ -14,13 +14,14 @@ import {getAgentDefinition} from '../utils/aiAgentCatalog';
 import {AiAgentAvatar} from '../components/ai/AiAgentIcon';
 import ContactCenterOperatorModal from '../components/voip/ContactCenterOperatorModal';
 import ContactCenterConnectionModal from '../components/voip/ContactCenterConnectionModal';
-import CustomerVoiceConsole from '../components/voip/CustomerVoiceConsole';
+const CustomerVoiceConsole=React.lazy(()=>import('../components/voip/CustomerVoiceConsole'));
 const MessagingSurface=React.lazy(()=>import('../components/notifications/messaging/MessagingSurfacePrototype'));
 const AiAgentConfigPanel=React.lazy(()=>import('../components/ai/AiAgentConfigPanel'));
 const panel='rounded-3xl border border-slate-200/80 bg-white dark:border-white/10 dark:bg-[#17212b]';
 export default function ContactCenterPage(){
  const selectedOrg=getSelectedOrganizationId();const [session,setSession]=useState<any>(null);const [sessionError,setSessionError]=useState(false);
  const [offset,setOffset]=useState(0);const [editing,setEditing]=useState<ContactCenterOperator|null|undefined>(undefined);const [settingsOpen,setSettingsOpen]=useState(false);const [agentOpen,setAgentOpen]=useState(false);const [voiceOpen,setVoiceOpen]=useState(false);
+ const [voiceMounted,setVoiceMounted]=useState(false);
  const [summary,setSummary]=useState({loaded:0,answered:0,missed:0});
  useEffect(()=>{let current=true;setSession(null);setSessionError(false);setOffset(0);void fetchSessionBootstrap(supabase).then(data=>{if(current){setSession(data);setSessionError(!!data.bootstrapError);}}).catch(()=>{if(current)setSessionError(true);});return()=>{current=false;};},[selectedOrg]);
  const orgId=String(session?.orgId||'')||null;const permissions=session?.permissions;
@@ -47,7 +48,7 @@ export default function ContactCenterPage(){
    <aside className="space-y-4 xl:sticky xl:top-4">
     {policy.data?.enabled&&plan===true?<div ref={dockRef} aria-label="شماره‌گیر مرکز تماس" />:<div className={`${panel} p-5 space-y-3`}><PhoneOutlined className="text-2xl text-sky-500" /><h2 className="font-bold">شماره‌گیر</h2><p className="text-sm text-slate-500">{policy.data?.message||'دریافت وضعیت اتصال تلفن…'}</p>{!!policy.error&&<Alert type="warning" message="دریافت وضعیت اتصال ناموفق بود." />}{canSettings&&<Button onClick={()=>setSettingsOpen(true)}>تنظیم اتصال تلفن</Button>}</div>}
     <button type="button" className={`${panel} w-full p-4 flex items-center gap-3 text-start hover:border-sky-400`} onClick={()=>setAgentOpen(true)}><AiAgentAvatar agentKey="customer_response" size={44} /><div className="min-w-0 flex-1"><strong className="block text-sm">{agent?.titleFa||'ایجنت پاسخ‌گویی مشتری'}</strong><span className="text-xs text-slate-500">مدل‌ها، دستورالعمل‌ها و تنظیمات تماس صوتی</span></div><SettingOutlined /></button>
-    <Button block size="large" type="primary" icon={<AudioOutlined />} onClick={()=>setVoiceOpen(true)}>تماس با هوش مصنوعی</Button>
+    <Button block size="large" type="primary" icon={<AudioOutlined />} onClick={()=>{setVoiceMounted(true);setVoiceOpen(true);}}>تماس با هوش مصنوعی</Button>
    </aside>
    <main className="min-w-0 space-y-5">
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -76,6 +77,6 @@ export default function ContactCenterPage(){
   {orgId&&editing!==undefined&&<ContactCenterOperatorModal open operator={editing} orgId={orgId} settings={settings} onClose={()=>setEditing(undefined)} onSaved={refresh} />}
   {orgId&&settingsOpen&&<ContactCenterConnectionModal open orgId={orgId} onClose={()=>setSettingsOpen(false)} onSaved={refresh} />}
   <Modal open={agentOpen} onCancel={()=>setAgentOpen(false)} footer={null} width={1100} title={agent?.titleFa||'تنظیمات ایجنت پاسخ‌گویی'} destroyOnHidden><React.Suspense fallback={<Spin />}><AiAgentConfigPanel compact initialAgentKey="customer_response" /></React.Suspense></Modal>
-  <CustomerVoiceConsole open={voiceOpen} onClose={()=>setVoiceOpen(false)} />
+  {voiceMounted&&<React.Suspense fallback={null}><CustomerVoiceConsole key={orgId} open={voiceOpen} onClose={()=>setVoiceOpen(false)} /></React.Suspense>}
  </div>;
 }

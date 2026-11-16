@@ -16,6 +16,8 @@ import {resolveVoipContact} from './voipContactContext';
 import {searchVoipOperatorDirectory} from './voipDirectory';
 import {listVoipAudioOutputs,setVoipAudioOutput} from './voipAudioOutput';
 import {prepareVoipRingbackTone,startVoipRingbackTone,stopVoipRingbackTone,disposeVoipRingbackTone} from './voipRingbackTone';
+import {acquireVoipTabOwnership} from './voipTabOwnership';
+import {getSelectedOrganizationId} from './organizationContext';
 
 export type WebPhoneRegistrationStatus =
   | 'disabled'
@@ -103,6 +105,7 @@ let remoteAudioElement: HTMLAudioElement | null = null;
 let connectPromise: Promise<boolean> | null = null;
 let connectionGeneration=0;
 let bridgeHeartbeat:ReturnType<typeof setInterval>|null=null;
+let releaseTabOwnership:(()=>void)|null=null;
 
 const emit = () => {
   listeners.forEach((listener) => listener());
@@ -298,6 +301,7 @@ export const disconnectVoipWebPhone = async () => {
   connectionGeneration++;
   if(bridgeHeartbeat){clearInterval(bridgeHeartbeat);bridgeHeartbeat=null;}
   const closingSession=activeSession,closingRegisterer=registerer,closingAgent=userAgent;
+  const closingOwnership=releaseTabOwnership;releaseTabOwnership=null;
   activeSession=null;registerer=null;userAgent=null;currentConfig=null;connectPromise=null;
   updateSnapshot({status:'idle',available:false,activeCall:null,extension:null,displayName:null,provider:null,errorMessage:null});
   if(closingSession?.state===SessionState.Established)await closingSession.bye().catch(()=>undefined);
@@ -305,6 +309,7 @@ export const disconnectVoipWebPhone = async () => {
   else if(closingSession instanceof Invitation)await closingSession.reject().catch(()=>undefined);
   if(closingRegisterer)await closingRegisterer.unregister().catch(()=>undefined);
   if(closingAgent)await closingAgent.stop().catch(()=>undefined);
+  closingOwnership?.();
 };
 
 export const connectVoipWebPhone = async (options?: { force?: boolean; route?: 'gateway' }): Promise<boolean> => {
@@ -349,6 +354,12 @@ export const connectVoipWebPhone = async (options?: { force?: boolean; route?: '
         return false;
       }
 
+      if(!releaseTabOwnership){
+        const release=await acquireVoipTabOwnership(`${getSelectedOrganizationId()||'current'}:${cfg.sipDomain}:${cfg.endpoint.extension}`);
+        if(generation!==connectionGeneration){release?.();return false;}
+        if(!release){updateSnapshot({status:'error',available:false,errorMessage:'تلفن این حساب در تب دیگری متصل است. برای جابه‌جایی، اتصال را در همان تب ببندید و اینجا اتصال مجدد بزنید.'});return false;}
+        releaseTabOwnership=release;
+      }
       const uri = UserAgent.makeURI(cfg.endpoint.sipUri);
       if (!uri) throw new Error('آدرس SIP داخلی معتبر نیست.');
 

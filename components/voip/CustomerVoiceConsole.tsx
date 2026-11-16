@@ -1,4 +1,4 @@
-import {useState} from 'react';
+import React,{useState} from 'react';
 import {Alert,Button,Input,Modal,Segmented} from 'antd';
 import {AudioOutlined,PhoneOutlined,StopOutlined,SendOutlined,SoundOutlined} from '@ant-design/icons';
 import AiComposeModelBar from '../ai/AiComposeModelBar';
@@ -6,10 +6,12 @@ import AiApprovalReviewModal from '../ai/AiApprovalReviewModal';
 import {AiAgentAvatar} from '../ai/AiAgentIcon';
 import {useCustomerVoiceConversation} from '../../hooks/useCustomerVoiceConversation';
 import {useCustomerPhoneAi} from '../../hooks/useCustomerPhoneAi';
+const AssistantPanel=React.lazy(()=>import('../ai/AssistantPanel'));
 export default function CustomerVoiceConsole({open,onClose}:{open:boolean;onClose:()=>void}){
  const [mode,setMode]=useState('browser');const [models,setModels]=useState<Record<string,string>>({});const [note,setNote]=useState('');const [sent,setSent]=useState(false);
  const voice=useCustomerVoiceConversation(models);
  const telephone=useCustomerPhoneAi();const [number,setNumber]=useState('');const [purpose,setPurpose]=useState('');const [noteError,setNoteError]=useState('');const [sendingNote,setSendingNote]=useState(false);
+ const [reviewThread,setReviewThread]=useState(false);
  const telephoneActive=!!telephone.session&&['queued','preparing','dialing','active'].includes(telephone.session.status);
  const sendNote=async()=>{setSendingNote(true);setNoteError('');try{if(mode==='phone')await telephone.note(note);else voice.addNote(note);setNote('');setSent(true);}catch{setNoteError('یادداشت ارسال نشد؛ دوباره تلاش کنید.');}finally{setSendingNote(false);}};
  const update=(model:string|null,capability?:string|null)=>{if(!capability)return;setModels(previous=>model?{...previous,[capability]:model}:Object.fromEntries(Object.entries(previous).filter(([key])=>key!==capability)));};
@@ -22,7 +24,7 @@ export default function CustomerVoiceConsole({open,onClose}:{open:boolean;onClos
     <p className="text-xs text-slate-500">با شروع، میکروفون فعال می‌شود. پس از پایان جمله مکث کنید؛ پاسخ را می‌شنوید. مصرف مدل‌ها در هزینه‌های معمول هوش مصنوعی ثبت می‌شود.</p>
     <div className="rounded-2xl bg-slate-100 dark:bg-slate-800 p-4 text-center"><strong>{({idle:'آمادهٔ شروع',listening:'گوش می‌دهم…',thinking:'در حال آماده‌کردن پاسخ…',speaking:'در حال پاسخ‌گویی…'})[voice.state]}</strong></div>
     {voice.error&&<Alert type="error" showIcon message={voice.error} />}
-    <div className="flex gap-2">{voice.state==='idle'?<Button type="primary" icon={<AudioOutlined />} onClick={()=>void voice.start()}>شروع گفتگوی صوتی</Button>:<Button danger icon={<StopOutlined />} onClick={voice.stop}>پایان گفتگو</Button>}{voice.threadId&&<a href={`/ai?thread=${encodeURIComponent(voice.threadId)}`} target="_blank" rel="noopener noreferrer">مشاهدهٔ گفتگو و هزینه‌ها</a>}</div>
+    <div className="flex gap-2">{voice.state==='idle'?<Button type="primary" icon={<AudioOutlined />} onClick={()=>void voice.start()}>شروع گفتگوی صوتی</Button>:<Button danger icon={<StopOutlined />} onClick={voice.stop}>پایان گفتگو</Button>}{voice.threadId&&<Button type="link" onClick={()=>setReviewThread(true)}>مشاهدهٔ گفتگو و هزینه‌ها</Button>}</div>
     <div className="max-h-64 overflow-y-auto space-y-2">{voice.messages.map((message,index)=><div key={index} className={`p-3 rounded-xl ${message.role==='assistant'?'bg-sky-50 dark:bg-sky-950':'bg-slate-100 dark:bg-slate-800'}`}><strong className="text-xs">{message.role==='assistant'?'پاسخ‌گوی مشتری':'اپراتور'}</strong><p className="whitespace-pre-wrap text-sm mt-1">{message.text}</p></div>)}</div>
     {voice.approval&&<Button onClick={()=>voice.setApproval({...voice.approval,reviewOpen:true})}>مشاهدهٔ کارت تأیید اقدام</Button>}
    </>:<div className="space-y-3">
@@ -36,5 +38,6 @@ export default function CustomerVoiceConsole({open,onClose}:{open:boolean;onClos
    <div className="rounded-2xl border border-slate-200 dark:border-slate-700 p-3 space-y-2"><label htmlFor="customer-voice-note" className="text-sm font-semibold">یادداشت خصوصی اپراتور برای مدل</label><Input.TextArea id="customer-voice-note" value={note} onChange={event=>{setNote(event.target.value);setSent(false);}} maxLength={2000} rows={2} placeholder="راهنمایی‌ای که در پاسخ بعدی به آن توجه شود" /><Button disabled={!note.trim()||(mode==='phone'?!telephoneActive:voice.state==='idle')} loading={sendingNote} icon={<SendOutlined />} onClick={()=>void sendNote()}>ارسال یادداشت</Button>{sent&&<p role="status" className="text-xs text-emerald-600">برای پاسخ بعدی در صف قرار گرفت.</p>}{noteError&&<p role="alert" className="text-xs text-red-600">{noteError}</p>}</div>
   </div>
   {voice.approval?.reviewOpen&&<AiApprovalReviewModal action={voice.approval} onClose={()=>voice.setApproval({...voice.approval,reviewOpen:false})} />}
+  <Modal open={reviewThread} onCancel={()=>setReviewThread(false)} footer={null} title="گفتگو و هزینه‌های صوتی" width={950} destroyOnHidden><div className="h-[75dvh] min-h-0">{voice.threadId&&<React.Suspense fallback={null}><AssistantPanel active initialThreadId={voice.threadId} /></React.Suspense>}</div></Modal>
  </Modal>;
 }
