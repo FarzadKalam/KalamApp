@@ -194,6 +194,19 @@ jobs:
             docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d voip_external_test -v ON_ERROR_STOP=1 < "$file"
           done
 
+      - name: Isolated SIP bridge authorization and lease checks
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          for file in tests/sql/voip_provider_bridge_fixture.sql \
+            database_v1_phase597_voip_provider_bridge.sql \
+            database_v1_phase597_voip_provider_bridge.sql \
+            tests/sql/voip_provider_bridge_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d voip_external_test -v ON_ERROR_STOP=1 < "$file"
+          done
+          python3 -m unittest discover -s ops/voip/asterisk -p test_bridge_worker.py -v
+
       - name: Install
         run: npm ci
 
@@ -350,7 +363,7 @@ jobs:
         env:
           VITE_SUPABASE_URL: https://isolated-test.invalid
           VITE_SUPABASE_ANON_KEY: isolated-test-only
-        run: npx vitest run utils/voipQr.test.ts utils/voipConnectionPolicy.test.ts supabase/functions/voip-session/index.test.ts components/settings/VoipConnectionSettings.test.tsx components/voip/WebPhoneWidget.test.tsx --maxWorkers=1 --no-file-parallelism
+        run: npx vitest run utils/voipQr.test.ts utils/voipConnectionPolicy.test.ts utils/voipRouteStrategy.test.ts supabase/functions/voip-session/index.test.ts components/settings/VoipConnectionSettings.test.tsx components/voip/WebPhoneWidget.test.tsx --maxWorkers=1 --no-file-parallelism
 
       - name: Build
         env:

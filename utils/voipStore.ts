@@ -14,6 +14,7 @@ import { normalizePhoneForStorage } from './phoneNumber';
 import { getRecordTitle } from './recordTitle';
 import { MODULES } from '../moduleRegistry';
 import {createVoipRegistrationWait,getSipRegistrationError} from './voipRegistration';
+import {mayFallbackToVoipGateway} from '../supabase/functions/_shared/voip-route-strategy';
 
 export type WebPhoneRegistrationStatus =
   | 'disabled'
@@ -46,6 +47,9 @@ export type WebPhoneCallSnapshot = {
 };
 
 export type WebPhoneSessionConfig = {
+  route?: 'direct'|'gateway';
+  strategy?: 'auto'|'direct'|'gateway';
+  retryAfterMs?: number;
   enabled: boolean;
   reason?: string | null;
   message?: string | null;
@@ -94,6 +98,7 @@ let activeSession: Session | null = null;
 let currentConfig: WebPhoneSessionConfig | null = null;
 let remoteAudioElement: HTMLAudioElement | null = null;
 let connectPromise: Promise<boolean> | null = null;
+let bridgeHeartbeat:ReturnType<typeof setInterval>|null=null;
 
 const emit = () => {
   listeners.forEach((listener) => listener());
@@ -293,6 +298,7 @@ const bindSessionLifecycle = (
 };
 
 export const disconnectVoipWebPhone = async () => {
+  if(bridgeHeartbeat){clearInterval(bridgeHeartbeat);bridgeHeartbeat=null;}
   try {
     if (activeSession) {
       if (activeSession.state === SessionState.Established) {
@@ -321,22 +327,30 @@ export const disconnectVoipWebPhone = async () => {
   }
 };
 
-export const connectVoipWebPhone = async (options?: { force?: boolean }): Promise<boolean> => {
-  if (connectPromise && !options?.force) return connectPromise;
+export const connectVoipWebPhone = async (options?: { force?: boolean; route?: 'gateway' }): Promise<boolean> => {
+  if (activeSession) return snapshot.status==='registered';
+  if (connectPromise) return connectPromise;
   if (snapshot.status === 'registered' && userAgent && !options?.force) return true;
 
   connectPromise = (async () => {
+    let registrationFailure='transport';
     try {
       if (options?.force) {
         await disconnectVoipWebPhone();
       }
       updateSnapshot({ status: 'connecting', errorMessage: null });
 
-      const { data, error } = await supabase.functions.invoke('voip-session', {
-        body: { action: 'get_webphone_session' },
-      });
-      if (error) throw new Error(error.message || 'دریافت نشست تلفن زنده ناموفق بود.');
-      const cfg = (data || {}) as WebPhoneSessionConfig;
+      const readConfig=async()=>{
+        const {data,error}=await supabase.functions.invoke('voip-session',{body:{action:'get_webphone_session',route:options?.route}});
+        if(error||!data?.success)throw new Error('دریافت نشست تلفن زنده ناموفق بود.');
+        return data as WebPhoneSessionConfig;
+      };
+      let cfg=await readConfig();
+      const deadline=Date.now()+30_000;
+      while(cfg.reason==='gateway_provisioning'&&Date.now()<deadline){
+        await new Promise(resolve=>setTimeout(resolve,2000));
+        cfg=await readConfig();
+      }
       currentConfig = cfg;
 
       if (!cfg.enabled || !cfg.endpoint || !cfg.wssUrl) {
@@ -372,6 +386,8 @@ export const connectVoipWebPhone = async (options?: { force?: boolean }): Promis
         },
         delegate: {
           onDisconnect: () => {
+            if(userAgent!==ua)return;
+            if(registrationFailure!=='registration_rejected')registrationFailure='transport';
             const message='اتصال وب‌سوکت تلفن قطع شد. آدرس WSS، گواهی و دسترسی شبکهٔ سرویس‌دهنده را بررسی کنید.';
             registrationWait?.fail(message);
             updateSnapshot({status:'error',errorMessage:message});
@@ -417,7 +433,8 @@ export const connectVoipWebPhone = async (options?: { force?: boolean }): Promis
       try {
         await ua.start();
         registrationWait=createVoipRegistrationWait();
-        await reg.register({requestDelegate:{onReject:response=>registrationWait?.fail(getSipRegistrationError(response.message.statusCode))}});
+        registrationFailure='registration_timeout';
+        await reg.register({requestDelegate:{onReject:response=>{registrationFailure='registration_rejected';registrationWait?.fail(getSipRegistrationError(response.message.statusCode));}}});
         if(!await registrationWait.promise)throw new Error(registrationWait.getError()||'ثبت داخلی تأیید نشد.');
       } catch(error) {
         registrationWait?.fail('اتصال حساب SIP متوقف شد.');
@@ -433,8 +450,17 @@ export const connectVoipWebPhone = async (options?: { force?: boolean }): Promis
         displayName: cfg.endpoint.displayName,
         provider: cfg.provider || null,
       });
+      if(cfg.route==='gateway'){
+        if(bridgeHeartbeat)clearInterval(bridgeHeartbeat);
+        bridgeHeartbeat=setInterval(()=>{void supabase.functions.invoke('voip-session',{body:{action:'get_webphone_session',route:'gateway'}});},60_000);
+      }
       return true;
     } catch (err: any) {
+      if(mayFallbackToVoipGateway(currentConfig?.route,currentConfig?.strategy,registrationFailure,!!activeSession)){
+        await disconnectVoipWebPhone();
+        connectPromise=null;
+        return await connectVoipWebPhone({route:'gateway'});
+      }
       updateSnapshot({
         available: true,
         status: 'error',

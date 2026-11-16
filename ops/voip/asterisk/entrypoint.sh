@@ -12,9 +12,19 @@ export KALAMAPP_WEBHOOK_URL="${KALAMAPP_WEBHOOK_URL:-http://127.0.0.1:8000/funct
 export KALAMAPP_VOIP_INTERNAL_SECRET="${KALAMAPP_VOIP_INTERNAL_SECRET:-}"
 
 envsubst < /etc/asterisk/res_pgsql.conf.template > /etc/asterisk/res_pgsql.conf
-envsubst < /etc/asterisk/extensions.conf.template > /etc/asterisk/extensions.conf
+envsubst '${KALAMAPP_WEBHOOK_URL} ${KALAMAPP_VOIP_INTERNAL_SECRET}' < /etc/asterisk/extensions.conf.template > /etc/asterisk/extensions.conf
+envsubst '${VOIP_PUBLIC_IP}' < /etc/asterisk/pjsip.conf.template > /etc/asterisk/pjsip.conf
 
 chown asterisk:asterisk /etc/asterisk/res_pgsql.conf /etc/asterisk/extensions.conf
 chmod 640 /etc/asterisk/res_pgsql.conf /etc/asterisk/extensions.conf
 
-exec asterisk -f -U asterisk -G asterisk -vvv
+asterisk -f -U asterisk -G asterisk -vvv &
+asterisk_pid=$!
+python3 /usr/local/bin/kalamapp-bridge-worker.py &
+bridge_worker_pid=$!
+trap 'kill "$bridge_worker_pid" "$asterisk_pid" 2>/dev/null || true; wait || true' EXIT INT TERM
+# A failed subprocess must not leave a seemingly healthy container behind.
+set +e
+wait -n "$asterisk_pid" "$bridge_worker_pid"
+worker_status=$?
+exit "$worker_status"

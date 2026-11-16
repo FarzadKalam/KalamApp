@@ -9,17 +9,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gettext-base \
     ca-certificates \
+    python3 \
+    python3-psycopg2 \
   && rm -rf /var/lib/apt/lists/*
 
 COPY extconfig.conf /etc/asterisk/extconfig.conf
 COPY sorcery.conf /etc/asterisk/sorcery.conf
 COPY res_pgsql.conf.template /etc/asterisk/res_pgsql.conf.template
-COPY pjsip.conf /etc/asterisk/pjsip.conf
+COPY pjsip.conf /etc/asterisk/pjsip.conf.template
 COPY http.conf /etc/asterisk/http.conf
 COPY rtp.conf /etc/asterisk/rtp.conf
 COPY modules.conf /etc/asterisk/modules.conf
 COPY extensions.conf.template /etc/asterisk/extensions.conf.template
 COPY entrypoint.sh /usr/local/bin/kalamapp-asterisk-entrypoint.sh
+COPY bridge_worker.py /usr/local/bin/kalamapp-bridge-worker.py
 
 RUN chmod +x /usr/local/bin/kalamapp-asterisk-entrypoint.sh \
   && chown -R asterisk:asterisk /etc/asterisk /var/spool/asterisk /var/log/asterisk /var/lib/asterisk

@@ -15,7 +15,7 @@ services:
       ASTERISK_PGSQL_DB: ${ASTERISK_PGSQL_DB:-postgres}
       ASTERISK_PGSQL_USER: ${ASTERISK_PGSQL_USER:-postgres}
       ASTERISK_PGSQL_PASSWORD: ${POSTGRES_PASSWORD:-}
-      VOIP_PUBLIC_IP: ${VOIP_PUBLIC_IP:-194.5.175.192}
+      VOIP_PUBLIC_IP: ${VOIP_PUBLIC_IP:?VOIP_PUBLIC_IP is required}
       VOIP_STUN_SERVER: ${VOIP_STUN_SERVER:-127.0.0.1:3478}
       KALAMAPP_WEBHOOK_URL: ${KALAMAPP_WEBHOOK_URL:-http://127.0.0.1:8000/functions/v1/voip-call-webhook}
       KALAMAPP_VOIP_INTERNAL_SECRET: ${KALAMAPP_VOIP_INTERNAL_SECRET:-}
@@ -36,8 +36,8 @@ services:
       - --max-port=49352
       - --realm=${VOIP_REALM:-kalamapp.ir}
       - --use-auth-secret
-      - --static-auth-secret=${VOIP_TURN_SECRET:-change-me-turn-secret}
-      - --external-ip=${VOIP_PUBLIC_IP:-194.5.175.192}
+      - --static-auth-secret=${VOIP_TURN_SECRET:?VOIP_TURN_SECRET is required}
+      - --external-ip=${VOIP_PUBLIC_IP:?VOIP_PUBLIC_IP is required}
       - --no-cli
       - --no-tls
       - --no-dtls

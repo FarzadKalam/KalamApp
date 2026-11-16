@@ -526,6 +526,9 @@ const UsersTab: React.FC = () => {
             voip_wss_url: ep.metadata?.wss_url || '',
             voip_sip_domain: ep.metadata?.sip_domain || '',
             voip_auth_username: ep.metadata?.auth_username || '',
+            voip_connection_strategy: ep.metadata?.connection_strategy || 'auto',
+            voip_sip_transport: ep.metadata?.sip_transport || 'udp',
+            voip_sip_port: ep.metadata?.sip_port || null,
             voip_server_url: ep.metadata?.server_url || ep.metadata?.legacy_sip_host || '',
           });
         }
@@ -555,7 +558,8 @@ const UsersTab: React.FC = () => {
       display_name:String(values.full_name||values.voip_extension||'').trim(),sip_secret:String(values.voip_sip_password||'').trim()||undefined,
       is_active:values.voip_enabled===true,metadata:{wss_url:String(values.voip_wss_url||'').trim(),
         sip_domain:String(values.voip_sip_domain||'').trim(),auth_username:String(values.voip_auth_username||'').trim(),
-        server_url:String(values.voip_server_url||'').trim(),provider:orgVoipConfig?.provider},
+        server_url:String(values.voip_server_url||'').trim(),provider:orgVoipConfig?.provider,
+        connection_strategy:values.voip_connection_strategy||'auto',sip_transport:values.voip_sip_transport||'udp',sip_port:values.voip_sip_port||null},
     }}});
     if(error||!data?.success)throw new Error(`عضویت کاربر ذخیره شد، اما تنظیم حساب تلفن انجام نشد: ${data?.message||error?.message||'دوباره تلاش کنید.'}`);
     await voipQueryClient.invalidateQueries({queryKey:['voip-connection-policy',currentOrgId]});
@@ -1055,6 +1059,8 @@ const UsersTab: React.FC = () => {
           if (cfg.wssUrl) form.setFieldValue('voip_wss_url',cfg.wssUrl);
           if (cfg.sipDomain) form.setFieldValue('voip_sip_domain',cfg.sipDomain);
           if (cfg.authUsername) form.setFieldValue('voip_auth_username',cfg.authUsername);
+          if (cfg.port) form.setFieldValue('voip_sip_port',cfg.port);
+          if (cfg.transport&&['udp','tcp'].includes(cfg.transport.toLowerCase())) form.setFieldValue('voip_sip_transport',cfg.transport.toLowerCase());
           if (cfg.operatorCode) form.setFieldValue('voip_operator_code', cfg.operatorCode);
           if (!cfg.wssUrl) message.info('اطلاعات SIP وارد شد؛ آدرس WSS مرورگر در این QR نبود و باید جدا مشخص شود.');
         }}

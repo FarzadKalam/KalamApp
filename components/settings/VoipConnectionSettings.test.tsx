@@ -20,6 +20,7 @@ it('reports-only hides browser credentials and cloud PBX administration',async()
 it('enables browser settings while preserving API token and service ID across mode changes',async()=>{
  render(<Fixture />);
  fireEvent.change(screen.getAllByRole('combobox')[0],{target:{value:'browser'}});
+ fireEvent.click(await screen.findByText('تنظیمات اختیاری WebRTC مستقیم سرویس‌دهنده'));
  expect(await screen.findByText('آدرس کامل وب‌سوکت امن سرویس‌دهنده (WSS)')).toBeInTheDocument();
  expect(screen.getByDisplayValue('fixture-token')).toBeInTheDocument();
  expect(screen.getByDisplayValue('fixture-service')).toBeInTheDocument();

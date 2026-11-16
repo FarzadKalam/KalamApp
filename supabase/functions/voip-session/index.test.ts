@@ -5,13 +5,14 @@ vi.mock('../_shared/org-plan-access.ts',()=>({loadOrgPlanAccess:async()=>plan}))
 let handler:(request:Request)=>Promise<Response>;
 let usage='reports',source='external',member=true,contextOrg='org-b';
 let account:any;
+let gatewayState='pending';
 let calls:{url:URL;init:any}[]=[];
 beforeAll(async()=>{
  vi.stubGlobal('Deno',{env:{get:(name:string)=>name==='SUPABASE_URL'?'https://isolated.invalid':'test-key'},serve:(fn:any)=>{handler=fn;}});
  await import('./index');
 });
 beforeEach(()=>{
- vi.stubGlobal('Deno',{env:{get:(name:string)=>name==='SUPABASE_URL'?'https://isolated.invalid':'test-key'}});
+ vi.stubGlobal('Deno',{env:{get:(name:string)=>({SUPABASE_URL:'https://isolated.invalid',SUPABASE_SERVICE_ROLE_KEY:'test-key',VOIP_GATEWAY_WSS_URL:'wss://gateway.example.test/voip-ws',VOIP_GATEWAY_SIP_DOMAIN:'gateway.example.test',VOIP_TURN_HOST:'gateway.example.test',VOIP_TURN_SECRET:'isolated-turn-key'}[name])}});
  usage='reports';source='external';member=true;plan.features.voip_webphone=true;calls=[];
  account={id:'external-a',assignee_profile_id:'user-a',extension:'101',sip_secret:'fixture-secret',metadata:{wss_url:'wss://edge.example.test/socket',sip_domain:'pbx.example.test'}};
  vi.stubGlobal('fetch',vi.fn(async(input:any,init:any)=>{
@@ -23,6 +24,7 @@ beforeEach(()=>{
   else if(url.pathname.endsWith('/integration_settings'))data=[{id:'setting',is_active:true,provider:'telefonchy',settings:{usage_mode:usage,browser_source:source}}];
   else if(url.pathname.endsWith('/voip_external_accounts'))data=account?[account]:[];
   else if(url.pathname.endsWith('/user_organization_memberships'))data=[];
+  else if(url.pathname.endsWith('/rpc/prepare_voip_provider_bridge'))data={browser_username:'bridge-user',browser_secret:'browser-only-secret',registration_status:gatewayState};
   return Response.json(data);
  }));
 });
@@ -47,8 +49,21 @@ it('fails closed without membership or plan access',async()=>{
  expect(await (await request({action:'get_webphone_session'})).json()).toMatchObject({enabled:false,reason:'plan_disabled'});
 });
 it('does not guess a WSS URL from legacy provider metadata',async()=>{
- usage='browser';account.metadata.wss_url='192.0.2.10';
+ usage='browser';account.metadata.wss_url='192.0.2.10';account.metadata.connection_strategy='direct';
  expect(await (await request({action:'get_webphone_session'})).json()).toMatchObject({enabled:false,reason:'missing_verified_wss'});
+});
+it('uses a separate browser secret for native SIP and never returns provider credentials',async()=>{
+ usage='browser';account.metadata.wss_url='';gatewayState='registered';
+ const result=await (await request({action:'get_webphone_session'})).json();
+ expect(result).toMatchObject({enabled:true,route:'gateway',endpoint:{sipSecret:'browser-only-secret',authUsername:'bridge-user'}});
+ expect(JSON.stringify(result)).not.toContain('fixture-secret');
+ const call=calls.find(call=>call.url.pathname.endsWith('/rpc/prepare_voip_provider_bridge'))!;
+ expect(JSON.parse(call.init.body)).toEqual({p_org_id:'org-b',p_user_id:'user-a'});
+});
+it('does not announce pending or rejected provider registration as connected',async()=>{
+ usage='browser';account.metadata.wss_url='';
+ gatewayState='pending';expect(await (await request({action:'get_webphone_session'})).json()).toMatchObject({enabled:false,reason:'gateway_provisioning'});
+ gatewayState='rejected';expect(await (await request({action:'get_webphone_session'})).json()).toMatchObject({enabled:false,reason:'provider_rejected'});
 });
 it('cannot save an account for a user outside the active organization',async()=>{
  usage='browser';account=null;

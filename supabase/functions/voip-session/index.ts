@@ -4,6 +4,8 @@ import {loadVoipOrganizationContext} from '../_shared/voip-organization-context.
 import { loadOrgPlanAccess } from '../_shared/org-plan-access.ts';
 import { dialPhone } from '../_shared/phone-number.ts';
 import {normalizeVoipProviderKey} from '../_shared/voip-providers.ts';
+import {resolveVoipRouteStrategy,selectVoipRoute,normalizeProviderSipServer} from '../_shared/voip-route-strategy.ts';
+import {prepareProviderBridge} from '../_shared/voip-provider-bridge.ts';
 
 const FUNCTION_BUILD = 'voip-session-2026-11-16-tenant-modes-v2';
 
@@ -144,10 +146,16 @@ Deno.serve(async (req) => {
       const account=accounts[0];
       if(!account)return json(200,{success:true,enabled:false,reason:'no_external_account',message:'حساب اپراتور سرویس‌دهنده برای شما تنظیم نشده است.'});
       const connection=resolveExternalWebphone(settings,account);
+      const strategy=resolveVoipRouteStrategy(account.metadata?.connection_strategy||settings.connection_strategy);
+      const leases=await restSelect(supabaseUrl,serviceRoleKey,'voip_provider_bridges',{
+        org_id:`eq.${orgId}`,account_id:`eq.${account.id}`,lease_until:`gt.${new Date().toISOString()}`,select:'id',limit:'1'});
+      const route=selectVoipRoute({strategy,wssUrl:connection.wssUrl,requestGateway:body.route==='gateway',gatewayLeaseActive:leases.length>0});
+      if(route==='gateway')return json(200,{...await prepareProviderBridge({url:supabaseUrl,key:serviceRoleKey,orgId,userId:profile.id,account,
+        displayName:account.display_name||profile.full_name||account.extension,env:name=>Deno.env.get(name)}),strategy,provider:activeSettingRow.provider});
       if(connection.reason)return json(200,{success:true,enabled:false,reason:connection.reason,message:connection.reason==='missing_verified_wss'?'آدرس کامل WSS سرویس‌دهنده مشخص نیست؛ اطلاعات PortSIP به‌تنهایی کافی نیست.':connection.reason==='missing_sip_domain'?'دامنه SIP حساب سرویس‌دهنده مشخص نیست.':'نام کاربری یا رمز حساب سرویس‌دهنده کامل نیست.'});
       let iceServers=[];
       try {const parsed=JSON.parse(settings.ice_servers_json||'[]');if(Array.isArray(parsed))iceServers=parsed.filter(item=>item&&item.urls);}catch{}
-      return json(200,{success:true,enabled:true,dialMode:'webphone_webrtc',provider:activeSettingRow.provider,
+      return json(200,{success:true,enabled:true,route:'direct',strategy,dialMode:'webphone_webrtc',provider:activeSettingRow.provider,
         wssUrl:connection.wssUrl,sipDomain:connection.sipDomain,iceServers,
         endpoint:{extension:account.extension,displayName:account.display_name||profile.full_name||account.extension,
           authUsername:connection.username,pjsipId:connection.username,
@@ -247,6 +255,9 @@ Deno.serve(async (req) => {
       const extension=String(ep.extension||previous?.extension||'').trim();
       if(!extension||/[\s@<>;]/.test(extension))return json(400,{success:false,message:'نام کاربری یا داخلی SIP معتبر نیست.'});
       const metadata={...(previous?.metadata||{}),...(ep.metadata||{})};
+      if(metadata.server_url&&!normalizeProviderSipServer(metadata.server_url))return json(400,{success:false,message:'سرور SIP را به صورت دامنه یا دامنه:پورت وارد کنید.'});
+      if(metadata.sip_port&&(!Number.isInteger(Number(metadata.sip_port))||Number(metadata.sip_port)<1||Number(metadata.sip_port)>65535))return json(400,{success:false,message:'پورت SIP باید بین ۱ تا ۶۵۵۳۵ باشد.'});
+      if(metadata.sip_transport&&!['udp','tcp'].includes(metadata.sip_transport))return json(400,{success:false,message:'نوع اتصال SIP باید UDP یا TCP باشد.'});
       for(const [key,validate] of [['wss_url',normalizeWssUrl],['sip_domain',normalizeSipDomain]]){
         if(ep.metadata?.[key]&&!validate(ep.metadata[key]))return json(400,{success:false,message:key==='wss_url'?'آدرس کامل و امن WSS لازم است؛ آدرس SIP را جای آن وارد نکنید.':'دامنه SIP معتبر نیست.'});
       }

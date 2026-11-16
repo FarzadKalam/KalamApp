@@ -24,17 +24,17 @@ export default function VoipConnectionSettings({form,voipWebhookUrl,copyValue,te
   </div>
   {policy.development && <Alert showIcon type="info" message="مرکز تلفن ابری تازه‌سیستم در حال توسعه است" description="این مسیر هنوز برای مکالمه فعال نیست. تازه‌سیستم شماره تلفن یا مجوز مخابراتی ارائه نمی‌کند؛ اتصال آینده بر پایهٔ خط یا ترانک موجود سازمان خواهد بود. برای مکالمهٔ فعلی از سرویس‌دهندهٔ دیگر استفاده کنید." />}
   {!policy.development&&<>
-   <Alert showIcon type="info" message={policy.usageMode==='reports'?'دریافت گزارش و رویداد تماس':'ورود با حساب موجود سرویس‌دهنده'} description={policy.usageMode==='reports'?'صوت مکالمه در PortSIP یا تلفن اپراتور انجام می‌شود. این حالت وب‌فون و شماره‌گیری داخل تازه‌سیستم را فعال نمی‌کند.':'این حالت اکانت تازه‌ای نزد سرویس‌دهنده نمی‌سازد. اتصال API با اتصال صوت فرق دارد؛ برای مکالمه باید WSS، احراز هویت داخلی و صدای دوطرفه آزمایش شوند.'} />
-   {policy.canUseBrowser&&<div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-2xl border border-gray-200 dark:border-gray-700 p-4">
+   <Alert showIcon type="info" message={policy.usageMode==='reports'?'دریافت گزارش و رویداد تماس':'ورود با حساب موجود سرویس‌دهنده'} description={policy.usageMode==='reports'?'صوت مکالمه در PortSIP یا تلفن اپراتور انجام می‌شود. این حالت وب‌فون و شماره‌گیری داخل تازه‌سیستم را فعال نمی‌کند.':'نام کاربری، رمز و سرور SIP هر اپراتور را در ویرایش کاربر وارد کنید. اتصال خودکار از WebRTC مستقیم یا درگاه SIP آماده‌شدهٔ سامانه استفاده می‌کند. این مسیر نیز گزارش‌ها و رویدادهای تماس را دارد.'} />
+   {policy.canUseBrowser&&<Collapse items={[{key:'direct',label:'تنظیمات اختیاری WebRTC مستقیم سرویس‌دهنده',children:<div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-2xl border border-gray-200 dark:border-gray-700 p-4">
     <Form.Item label="آدرس کامل وب‌سوکت امن سرویس‌دهنده (WSS)" name={['voip','wss_url']} rules={[{validator:async(_,value)=>{if(value&&!normalizeWssUrl(value))throw new Error('آدرس کامل با wss:// وارد کنید؛ آدرس SIP یا پورت UDP قابل جایگزینی نیست.');}}]} extra="از سرویس‌دهنده یا QR دریافت کنید؛ پورت و مسیر نباید حدس زده شوند. می‌توان آن را در حساب اپراتور هم وارد کرد.">
      <Input dir="ltr" placeholder="wss://pbx.example.com:port/path" />
     </Form.Item>
     <Form.Item label="دامنه SIP اعلام‌شده توسط سرویس‌دهنده" name={['voip','sip_domain']} rules={[{validator:async(_,value)=>{if(value&&!normalizeSipDomain(value))throw new Error('دامنه SIP را بدون آدرس وب‌سوکت و مسیر وارد کنید.');}}]} extra="ممکن است با میزبان WSS فرق داشته باشد؛ اطلاعات حساب اپراتور اولویت دارد."><Input dir="ltr" placeholder="pbx.example.com" /></Form.Item>
-    <div className="md:col-span-2"><Alert showIcon type="warning" message="کارکرد PortSIP به‌تنهایی تأیید WebRTC نیست" description="در تلفنچی، API تماس سریع تلفن اپراتور را زنگ می‌زند. استفاده از میکروفن مرورگر نیازمند اتصال صوت مجزا است؛ آدرس وب‌سوکت و قابلیت WebRTC باید برای همین حساب تأیید شوند." /></div>
+    <div className="md:col-span-2"><Alert showIcon type="info" message="برای SIP معمولی، WSS سرویس‌دهنده لازم نیست" description="درگاه سامانه ارتباط مرورگر را به SIP تبدیل می‌کند. این فیلدها فقط برای اتصال مستقیم مرورگر به سرویس‌دهنده هستند؛ آدرس یا پورت را حدس نزنید." /></div>
     <div className="md:col-span-2"><Collapse items={[{key:'ice',label:'تنظیمات پیشرفتهٔ شبکهٔ صوت',children:<>
       <Form.Item label="سرورهای ICE اعلام‌شده توسط سرویس‌دهنده (JSON)" name={['voip','ice_servers_json']} extra={'نمونه: [{"urls":"stun:stun.example.com:3478"}]. مشخصات TURN ثابت سازمان در اختیار کاربران مجاز وب‌فون قرار می‌گیرد.'} rules={[{validator:async(_,value)=>{if(!value)return;try{const servers=JSON.parse(value);if(!Array.isArray(servers)||servers.some(item=>!item?.urls))throw new Error();}catch{throw new Error('فهرست JSON سرورهای ICE معتبر نیست.');}}}]}><Input.TextArea dir="ltr" rows={3} /></Form.Item>
     </>}]} /></div>
-   </div>}
+   </div>}]} />}
   </>}
    <Collapse defaultActiveKey={['reports']} items={[{key:'reports',label:'اتصال گزارش‌ها، رویدادها و فایل ضبط مکالمات',children:<>
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

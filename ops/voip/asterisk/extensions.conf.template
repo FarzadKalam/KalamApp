@@ -25,3 +25,23 @@ exten => _X.,1,NoOp(KalamApp tenant call from ${CALLERID(all)} to ${EXTEN} via $
 [from-trunk]
 exten => _.,1,NoOp(Inbound call on trunk ${CHANNEL(pjsip,endpoint)} DID ${EXTEN})
  same => n,Hangup()
+
+; Each external account has one generated UUID namespace. No cross-tenant trunk resolver is used.
+[taze-external-out]
+exten => _[+*#0-9]!,1,Set(BRIDGE_EP=${CHANNEL(pjsip,endpoint)})
+ same => n,Set(BRIDGE_PREFIX=${CUT(BRIDGE_EP,_,1-2)})
+ same => n,GotoIf($[${REGEX("^b_[0-9a-f]{32}_browser$" ${BRIDGE_EP})} != 1]?reject)
+ same => n,GotoIf($["${FILTER(0-9+*#,${EXTEN})}" != "${EXTEN}"]?reject)
+ same => n,Dial(PJSIP/${EXTEN}@${BRIDGE_PREFIX}_provider,60)
+ same => n,Hangup()
+ same => n(reject),Hangup(21)
+
+; Provider INVITEs are matched to their registration's unique Contact 'line' parameter.
+; No shared provider-IP identification or caller-supplied destination selects the browser.
+[taze-external-in]
+exten => _.,1,Set(BRIDGE_EP=${CHANNEL(pjsip,endpoint)})
+ same => n,Set(BRIDGE_PREFIX=${CUT(BRIDGE_EP,_,1-2)})
+ same => n,GotoIf($[${REGEX("^b_[0-9a-f]{32}_provider$" ${BRIDGE_EP})} != 1]?reject)
+ same => n,Dial(PJSIP/${BRIDGE_PREFIX}_browser,45)
+ same => n,Hangup()
+ same => n(reject),Hangup(21)
