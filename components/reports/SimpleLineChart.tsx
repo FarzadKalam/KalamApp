@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { REPORT_CHART_MAX_GROUPS } from '../../utils/reportRowLimit';
 import { Empty } from 'antd';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 
@@ -6,6 +7,7 @@ export type SimpleLineChartItem = { label: string; value: number; tone?: 'increa
 
 const SimpleLineChart: React.FC<{ items: SimpleLineChartItem[]; valueFormatter?: (value: number) => React.ReactNode }> = ({ items, valueFormatter }) => {
   const safeItems = useMemo(() => (Array.isArray(items) ? items.filter((item) => Number.isFinite(Number(item?.value))) : []), [items]);
+  if (safeItems.length > REPORT_CHART_MAX_GROUPS) return <Empty description="تعداد گروه‌های نمودار زیاد است؛ جدول گزارش را ببینید یا گروه‌بندی را محدودتر کنید." />;
   if (safeItems.length < 2) return <Empty description="برای نمودار خطی حداقل دو گروه لازم است" />;
   const values = safeItems.map((item) => Number(item.value || 0));
   const min = Math.min(0, ...values); const max = Math.max(0, ...values); const range = Math.max(1, max - min);

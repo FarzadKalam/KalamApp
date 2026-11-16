@@ -1,4 +1,5 @@
 import React from 'react';
+import { REPORT_CHART_MAX_GROUPS } from '../../utils/reportRowLimit';
 import { Empty } from 'antd';
 import { formatPersianPrice, toPersianNumber } from '../../utils/persianNumberFormatter';
 
@@ -16,6 +17,7 @@ interface SimpleBarChartProps {
 }
 
 const SimpleBarChart: React.FC<SimpleBarChartProps> = ({ items, valueLabel = 'مقدار', valueFormatter }) => {
+  if (items?.length > REPORT_CHART_MAX_GROUPS) return <Empty description="تعداد گروه‌های نمودار زیاد است؛ جدول گزارش را ببینید یا گروه‌بندی را محدودتر کنید." />;
   const safeItems = Array.isArray(items) ? items.filter((item) => Number(item?.value || 0) !== 0) : [];
   const maxValue = safeItems.reduce((max, item) => Math.max(max, Math.abs(Number(item.value || 0))), 0);
   const renderValue = valueFormatter || ((value: number) => formatPersianPrice(value));

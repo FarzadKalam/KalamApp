@@ -1,5 +1,5 @@
 import { MODULES } from '../moduleRegistry';
-import {normalizeReportRowLimit} from './reportRowLimit';
+import {normalizeReportRowLimit, REPORT_ROW_LIMIT_MAX} from './reportRowLimit';
 import { BlockType, FieldType, type BlockDefinition, type ModuleField } from '../types';
 import { isSaasAdminModuleId } from './permissions';
 import { supportsModuleAssignee } from './assigneeSupport';
@@ -161,6 +161,10 @@ export const buildReportTableRowCombinations = (
     const blockId = String(source?.blockId || '').trim();
     const rows = Array.isArray(source?.rows) ? source.rows : [];
     if (!blockId || rows.length === 0) return combinations;
+
+    if (combinations.length > Math.floor(REPORT_ROW_LIMIT_MAX / rows.length)) {
+      throw new Error('report_expanded_row_limit_exceeded');
+    }
 
     return combinations.flatMap((combination) => rows.map((row, rowIndex) => ({
       rowsByBlockId: { ...combination.rowsByBlockId, [blockId]: row },

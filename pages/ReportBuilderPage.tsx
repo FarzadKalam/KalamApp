@@ -1,3 +1,4 @@
+import {toPersianNumber} from '../utils/persianNumberFormatter';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {digitsToEnglish} from '../utils/persianSearchText';
 import {isValidReportRowLimit,REPORT_ROW_LIMIT_MIN,REPORT_ROW_LIMIT_MAX} from '../utils/reportRowLimit';
@@ -491,7 +492,7 @@ const ReportBuilderPage: React.FC = () => {
   );
 
   const handleSave = async () => {
-    if(calculationMode==='normal'&&!isValidReportRowLimit(rowLimit)){message.error('حداکثر ردیف باید عدد صحیح بین ۲۰ و ۵۰۰۰ باشد.');return;}
+    if(calculationMode==='normal'&&!isValidReportRowLimit(rowLimit)){message.error(`حداکثر ردیف باید عدد صحیح بین ${toPersianNumber(REPORT_ROW_LIMIT_MIN)} و ${toPersianNumber(REPORT_ROW_LIMIT_MAX)} باشد.`);return;}
     if (![0, 1, 3].every((item) => validateStep(item as WizardStep))) return;
     try {
       setSaving(true);
@@ -653,7 +654,7 @@ const ReportBuilderPage: React.FC = () => {
                 <div>
                   <div className="mb-2 font-bold">حداکثر ردیف</div>
                   <InputNumber min={REPORT_ROW_LIMIT_MIN} max={REPORT_ROW_LIMIT_MAX} precision={0} changeOnBlur={false} aria-label="حداکثر ردیف" className="w-full persian-number" value={rowLimit} parser={value=>Number(digitsToEnglish(value).replace(/[٬,]/g,''))} onChange={setRowLimit} />
-                  <div className="mt-1 text-xs text-gray-500">از ۲۰ تا ۵۰۰۰ ردیف؛ داده‌ها به‌صورت صفحه‌بندی‌شده دریافت می‌شوند.</div>
+                  <div className="mt-1 text-xs text-gray-500">از {toPersianNumber(REPORT_ROW_LIMIT_MIN)} تا {toPersianNumber(REPORT_ROW_LIMIT_MAX)} رکورد؛ دریافت و نمایش صفحه‌بندی می‌شود. گزارش بسیار حجیم یا دارای ردیف‌های داخلی زیاد ممکن است به بازه یا فیلتر محدودتر نیاز داشته باشد.</div>
                 </div>
               </> : <div className="md:col-span-2">
                 <div className="mb-2 font-bold">گزارش‌های مرجع</div>

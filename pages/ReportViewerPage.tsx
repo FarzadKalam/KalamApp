@@ -1,4 +1,4 @@
-import {fetchReportRowsByPage} from '../utils/reportRowLimit';
+import {fetchReportRowsByPage,createReportDataBudget,createReportWorkScheduler,REPORT_CHART_MAX_GROUPS,REPORT_ROW_LIMIT_MAX} from '../utils/reportRowLimit';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Button, Collapse, Empty, Progress, Select, Spin, Statistic, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -411,6 +411,11 @@ const removeCachedReportResult = (cacheKey: string) => {
 };
 
 const writeCachedReportResult = (cacheKey: string, value: unknown) => {
+  // Large reports stay in memory; serializing duplicate parent/group trees can exceed storage and freeze the UI.
+  if (Array.isArray((value as any)?.rows) && (value as any).rows.length > 2000) {
+    removeCachedReportResult(cacheKey);
+    return;
+  }
   try {
     sessionStorage.setItem(cacheKey, JSON.stringify(value));
   } catch (error) {
@@ -569,7 +574,8 @@ const ReportViewerPage: React.FC = () => {
     [config.metric_type, fieldMap, metricFieldKeys]
   );
   const chartDimensionField = config.chart_dimension_field || config.group_bys[0]?.field || null;
-  const chartAvailable = !!chartDimensionField && chartRows.length > 0;
+  const chartTooLarge = chartRows.length > REPORT_CHART_MAX_GROUPS;
+  const chartAvailable = !!chartDimensionField && chartRows.length > 0 && !chartTooLarge;
   useEffect(() => {
     window.dispatchEvent(
       new CustomEvent('erp:breadcrumb', {
@@ -762,6 +768,8 @@ const ReportViewerPage: React.FC = () => {
         selectedTableBlocks,
       );
 
+      const reportDataBudget = createReportDataBudget();
+      const scheduleReportWork = createReportWorkScheduler();
       const baseRows = await fetchReportRowsByPage<any>(config.row_limit,(start,end) => runSelectWithCompatibleColumns<any[]>({
         cacheKey: `report-viewer:${moduleId}`,
         columns: baseColumns,
@@ -781,8 +789,7 @@ const ReportViewerPage: React.FC = () => {
             },
           ).order('id',{ascending:true}).range(start,end);
         },
-      }));
-
+      }), {budget: reportDataBudget});
 
       const scopedRows = baseRows.filter((row: any) =>
         !isDeletedReportRecord(row) && canAccessAssignedRecord(row, roleContext.userId, roleContext.roleId, modulePerm.record_scope || 'all', {
@@ -806,12 +813,13 @@ const ReportViewerPage: React.FC = () => {
           .filter(Boolean)));
         const linksByRun = new Map<string, Record<string, string>>();
         for (let offset = 0; offset < runIds.length; offset += 100) {
-          const { data: linkRows, error: linkError } = await supabase
+          const linkRows = await fetchReportRowsByPage<any>(REPORT_ROW_LIMIT_MAX, (start,end) => supabase
             .from('process_run_links')
             .select('process_run_id, module_id, record_id, is_primary')
             .in('process_run_id', runIds.slice(offset, offset + 100))
-            .order('is_primary', { ascending: false });
-          if (linkError) throw linkError;
+            .order('is_primary', { ascending: false })
+            .order('process_run_id').order('module_id').order('record_id').range(start,end), {budget:reportDataBudget});
+          if (linkRows.length === REPORT_ROW_LIMIT_MAX) throw new Error('report_row_limit_exceeded');
           (linkRows || []).forEach((link: any) => {
             const runId = String(link?.process_run_id || '').trim();
             const linkedModuleId = String(link?.module_id || '').trim();
@@ -890,6 +898,7 @@ const ReportViewerPage: React.FC = () => {
             .select('*')
             .in('id', chunk);
           if (relatedRowsError) throw relatedRowsError;
+          reportDataBudget.add(relatedRows || []);
           (relatedRows || []).forEach((relatedRow: any) => {
             const relatedId = String(relatedRow?.id || '').trim();
             if (relatedId) tableRelationRecordCache.set(`${targetModuleId}:${relatedId}`, isDeletedReportRecord(relatedRow) ? null : relatedRow);
@@ -915,6 +924,7 @@ const ReportViewerPage: React.FC = () => {
           .eq('id', normalizedRecordId)
           .maybeSingle();
         if (relatedError) throw relatedError;
+        reportDataBudget.add(relatedRecord);
         const normalizedRelatedRecord = relatedRecord && !isDeletedReportRecord(relatedRecord)
           ? relatedRecord as Record<string, any>
           : null;
@@ -944,6 +954,7 @@ const ReportViewerPage: React.FC = () => {
         );
 
         for (const tableCombo of tableCombos) {
+          await scheduleReportWork();
           const candidateRow: ReportRow = {
             ...sourceRow,
             __report_parent_row: sourceRow,
@@ -1169,7 +1180,7 @@ const ReportViewerPage: React.FC = () => {
       });
     } catch (error) {
       const reason = String((error as any)?.message || error || '');
-      if (reason.includes('report_row_limit_exceeded') || reason.includes('report_expanded_row_limit_exceeded')) {
+      if (reason.includes('report_row_limit_exceeded') || reason.includes('report_expanded_row_limit_exceeded') || reason.includes('report_data_size_exceeded')) {
         message.error('حجم داده گزارش از سقف اجرای امن عبور کرده است؛ برای اجرای کامل، بازه یا شرط‌های گزارش را محدود کنید.');
       } else if (reason.includes('unsupported_report_grouping') || reason.includes('unsupported_report_metric') || reason.includes('unsupported_report_condition')) {
         message.error('یکی از فیلدهای انتخاب‌شده در این گزارش هنوز برای اجرای سروری قابل محاسبه نیست؛ هیچ نتیجه ناقصی نمایش داده نشد.');
@@ -1528,7 +1539,7 @@ const ReportViewerPage: React.FC = () => {
     return visibleFields.map((field) => field.labels?.fa || field.key);
   }, [config.group_bys.length, groupByFields, visibleDetailFields, visibleFields]);
 
-  const exportCellRows = useMemo<ExportCell[][]>(() => {
+  const buildExportCellRows = (): ExportCell[][] => {
     if (config.group_bys.length > 0) {
       return groupedDetailRows.map((row) => [
         ...groupByFields.map((field) => ({
@@ -1551,18 +1562,13 @@ const ReportViewerPage: React.FC = () => {
     return rows.map((row) => visibleFields.map((field) => ({
       value: formatReportCellValue(field as any, row, relationOptions, currencyLabel),
     })));
-  }, [config, currencyLabel, fieldMap, groupByFields, groupedDetailRows, metricFieldKeys, relationOptions, rows, visibleDetailFields, visibleFields]);
-
-  const exportRows = useMemo(
-    () => exportCellRows.map((line) => line.map((cell) => cell.rowSpan === 0 ? '' : cell.value)),
-    [exportCellRows]
-  );
+  };
 
   useEffect(() => {
     setSelectedPrintFields(config.print_selected_field_keys || {});
   }, [config.print_selected_field_keys]);
 
-  const exportMergeRanges = useMemo(() => {
+  const buildExportMergeRanges = (exportCellRows: ExportCell[][]) => {
     if (config.group_bys.length === 0) return [];
     const ranges: Array<{ s: { r: number; c: number }; e: { r: number; c: number } }> = [];
     exportCellRows.forEach((line, rowIndex) => {
@@ -1577,9 +1583,12 @@ const ReportViewerPage: React.FC = () => {
       });
     });
     return ranges;
-  }, [config.group_bys.length, exportCellRows, groupByFields.length]);
+  };
 
   const handleExportExcel = async () => {
+    const exportCellRows = buildExportCellRows();
+    const exportRows = exportCellRows.map(line => line.map(cell => cell.rowSpan === 0 ? '' : cell.value));
+    const exportMergeRanges = buildExportMergeRanges(exportCellRows);
     try {
       const XLSX = await import('xlsx');
       const sheet = XLSX.utils.aoa_to_sheet([exportHeaders, ...exportRows]);
@@ -1637,7 +1646,7 @@ const ReportViewerPage: React.FC = () => {
     const effectiveHeaders = printHeaders.length > 0 ? printHeaders : exportHeaders;
     const effectiveCellRows = printHeaders.length > 0
       ? printCellRows
-      : exportCellRows;
+      : buildExportCellRows();
     const printFontSize = effectiveHeaders.length > 14 ? (orientation === 'landscape' ? 6.5 : 5.8) : (orientation === 'landscape' ? 8 : 7);
     const tableRowsHtml = effectiveCellRows.map((line) => `
       <tr>${line.map((cell) => {
@@ -1826,7 +1835,7 @@ const ReportViewerPage: React.FC = () => {
     []
   );
   const reportPrintPreviewSourceVersion = useMemo(
-    () => createPrintPreviewFingerprint({
+    () => !isPrintModalOpen ? '' : createPrintPreviewFingerprint({
       report,
       rows,
       groupedDetailRows,
@@ -1837,6 +1846,7 @@ const ReportViewerPage: React.FC = () => {
       renderMode,
     }),
     [
+      isPrintModalOpen,
       activeMetricKey,
       groupedDetailRows,
       renderMode,
@@ -2025,6 +2035,7 @@ const ReportViewerPage: React.FC = () => {
           <SimpleLineChart items={chartItems} valueFormatter={(value) => activeMetricKey === '__count' ? toPersianNumber(value) : formatMetricValue(Number(value || 0), String(fieldMap[activeMetricKey]?.type || '').toLowerCase(), currencyLabel)} />
         )}
 
+        {chartTooLarge && <div className="my-4 text-sm text-gray-500">تعداد گروه‌ها برای نمودار خوانا زیاد است؛ همهٔ ردیف‌ها در جدول و خروجی در دسترس‌اند. برای نمودار، گروه‌بندی یا بازه را محدودتر کنید.</div>}
         {executing && <ReportExecutionProgress />}
 
         {(config.output_modes.includes('table') || !chartAvailable) && (
