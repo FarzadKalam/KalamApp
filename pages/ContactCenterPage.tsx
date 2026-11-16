@@ -47,7 +47,7 @@ export default function ContactCenterPage(){
   <div className="grid grid-cols-1 xl:grid-cols-[350px_minmax(0,1fr)] gap-5 items-start">
    <aside className="space-y-4 xl:sticky xl:top-4">
     {policy.data?.enabled&&plan===true?<div ref={dockRef} aria-label="شماره‌گیر مرکز تماس" />:<div className={`${panel} p-5 space-y-3`}><PhoneOutlined className="text-2xl text-sky-500" /><h2 className="font-bold">شماره‌گیر</h2><p className="text-sm text-slate-500">{policy.data?.message||'دریافت وضعیت اتصال تلفن…'}</p>{!!policy.error&&<Alert type="warning" message="دریافت وضعیت اتصال ناموفق بود." />}{canSettings&&<Button onClick={()=>setSettingsOpen(true)}>تنظیم اتصال تلفن</Button>}</div>}
-    <button type="button" className={`${panel} w-full p-4 flex items-center gap-3 text-start hover:border-sky-400`} onClick={()=>setAgentOpen(true)}><AiAgentAvatar agentKey="customer_response" size={44} /><div className="min-w-0 flex-1"><strong className="block text-sm">{agent?.titleFa||'ایجنت پاسخ‌گویی مشتری'}</strong><span className="text-xs text-slate-500">مدل‌ها، دستورالعمل‌ها و تنظیمات تماس صوتی</span></div><SettingOutlined /></button>
+    <button type="button" className={`${panel} w-full p-4 flex items-center gap-3 text-start hover:border-sky-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 transition-colors motion-reduce:transition-none`} onClick={()=>setAgentOpen(true)}><AiAgentAvatar agentKey="customer_response" size={44} /><div className="min-w-0 flex-1"><strong className="block text-sm">{agent?.titleFa||'ایجنت پاسخ‌گویی مشتری'}</strong><span className="text-xs text-slate-500">مدل‌ها، دستورالعمل‌ها و تنظیمات تماس صوتی</span></div><SettingOutlined /></button>
     <Button block size="large" type="primary" icon={<AudioOutlined />} onClick={()=>{setVoiceMounted(true);setVoiceOpen(true);}}>تماس با هوش مصنوعی</Button>
    </aside>
    <main className="min-w-0 space-y-5">
@@ -66,7 +66,7 @@ export default function ContactCenterPage(){
       return <div key={operator.id} className="rounded-2xl border border-slate-200 dark:border-white/10 p-3 flex items-center gap-3">
        <div className="relative"><Avatar size={44} src={normalizePublicAssetUrl(operator.avatarUrl)||undefined}>{operator.title.slice(0,1)}</Avatar><span aria-label={busy?'در حال مکالمه':online?'متصل':'قطع'} className={`absolute bottom-0 left-0 h-3 w-3 rounded-full border-2 border-white dark:border-slate-900 ${busy?'bg-amber-500':online?'bg-emerald-500':'bg-slate-400'}`} /></div>
        <div className="min-w-0 flex-1"><h3 className="font-semibold text-sm truncate">{operator.title}</h3><p className="mt-1 text-xs text-slate-500">داخلی تماس: <bdi dir="ltr">{operator.metadata.dial_extension||'ثبت نشده'}</bdi></p><Tag className="mt-1" color={busy?'gold':online?'success':'default'}>{busy?'در حال مکالمه':online?'متصل':operator.isActive?'قطع':'غیرفعال'}</Tag></div>
-       <Button type="text" icon={<EditOutlined />} aria-label={`ویرایش ${operator.title}`} onClick={()=>setEditing(operator)} />
+       <Button type="text" style={{minWidth:44,minHeight:44}} icon={<EditOutlined />} aria-label={`ویرایش ${operator.title}`} onClick={()=>setEditing(operator)} />
       </div>;
      })}</div>}
      {(offset>0||operators.data?.hasMore)&&<div className="flex gap-2"><Button disabled={!offset} onClick={()=>setOffset(Math.max(0,offset-20))}>صفحهٔ قبل</Button><Button disabled={!operators.data?.hasMore} onClick={()=>setOffset(operators.data!.nextOffset)}>صفحهٔ بعد</Button></div>}

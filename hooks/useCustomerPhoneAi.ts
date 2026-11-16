@@ -1,12 +1,12 @@
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {supabase} from '../supabaseClient';
 import {getSelectedOrganizationId} from '../utils/organizationContext';
-import {dialWebPhone,rejectOrHangupWebPhoneCall,useVoipState} from '../utils/voipStore';
+import {dialWebPhone,getVoipSnapshot,rejectOrHangupWebPhoneCall,useVoipState} from '../utils/voipStore';
 import {toFaErrorMessage} from '../utils/errorMessageFa';
 type Event={id:number;kind:'customer'|'assistant'|'operator_note'|'system';content:string;created_at:string};
 export function useCustomerPhoneAi(){
  const [sessionId,setSessionId]=useState<string|null>(null);const [session,setSession]=useState<any>(null);const [events,setEvents]=useState<Event[]>([]);const [error,setError]=useState('');const [busy,setBusy]=useState(false);
- const cursor=useRef(0);const polling=useRef(false);const phone=useVoipState();const monitoringCall=useRef(false);
+ const cursor=useRef(0);const polling=useRef(false);const phone=useVoipState();const monitoringCall=useRef<string|null>(null);
  const org=getSelectedOrganizationId();const generation=useRef(0);
  useEffect(()=>{generation.current++;setSessionId(null);setSession(null);setEvents([]);cursor.current=0;},[org]);
  const invoke=useCallback(async(body:any)=>{
@@ -29,10 +29,10 @@ export function useCustomerPhoneAi(){
  };
  const listen=async()=>{
   if(!sessionId)return;setError('');setBusy(true);
-  try{const data=await invoke({action:'listen',sessionId});await dialWebPhone(data.phone,{title:'شنیدن تماس پاسخ‌گوی هوشمند'});monitoringCall.current=true;}
+  try{const data=await invoke({action:'listen',sessionId});await dialWebPhone(data.phone,{title:'شنیدن تماس پاسخ‌گوی هوشمند'});monitoringCall.current=getVoipSnapshot().activeCall?.callId||null;}
   catch(cause){setError(toFaErrorMessage(cause,'اتصال برای شنیدن تماس انجام نشد.'));}finally{setBusy(false);}
  };
  const note=async(text:string)=>{if(!sessionId)return;await invoke({action:'note',sessionId,note:text});};
- const cancel=async()=>{if(!sessionId)return;try{await invoke({action:'cancel',sessionId});setSession((previous:any)=>({...previous,status:'cancelled'}));if(monitoringCall.current){await rejectOrHangupWebPhoneCall();monitoringCall.current=false;}}catch(cause){setError(toFaErrorMessage(cause,'پایان تماس انجام نشد.'));}};
+ const cancel=async()=>{if(!sessionId)return;try{await invoke({action:'cancel',sessionId});setSession((previous:any)=>({...previous,status:'cancelled'}));if(monitoringCall.current&&getVoipSnapshot().activeCall?.callId===monitoringCall.current)await rejectOrHangupWebPhoneCall();monitoringCall.current=null;}catch(cause){setError(toFaErrorMessage(cause,'پایان تماس انجام نشد.'));}};
  return {session,events,error,busy,start,listen,note,cancel,canListen:session?.canListen&&!phone.activeCall,sessionId};
 }
