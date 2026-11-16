@@ -79,7 +79,13 @@ def asterisk(command):
     return result.stdout
 
 
-def reconcile(connection):
+def realtime_value(value):
+    # PostgreSQL Realtime splits on ';' before decoding Asterisk's ^XX escapes.
+    # Preserve URI transport parameters and arbitrary provider passwords as one value.
+    return value.replace('^', '^5E').replace(';', '^3B') if isinstance(value, str) else value
+
+
+def reconcile(connection, force=False):
     import psycopg2.extras
     import psycopg2.sql as sql
     with connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
@@ -107,7 +113,7 @@ def reconcile(connection):
             browser, provider = bridge_ids(row['bridge_id'])
             active_ids.extend([browser, provider])
             valid_rows.append(row)
-            if row['revision'] == row['synced_revision']:
+            if not force and row['revision'] == row['synced_revision']:
                 cursor.execute("""select (select count(*) from public.ps_endpoints where id=any(%s))
                     +(select count(*) from public.ps_auths where id=any(%s))
                     +(select count(*) from public.ps_aors where id=any(%s))
@@ -122,7 +128,7 @@ def reconcile(connection):
                         sql.Identifier(table), sql.SQL(',').join(map(sql.Identifier, columns)),
                         sql.SQL(',').join(sql.Placeholder() for _ in columns),
                         sql.SQL(',').join(sql.SQL('{}=excluded.{}').format(sql.Identifier(key), sql.Identifier(key)) for key in columns if key != 'id'))
-                    cursor.execute(query, [record[key] for key in columns])
+                    cursor.execute(query, [realtime_value(record[key]) for key in columns])
             cursor.execute("update public.voip_provider_bridges set synced_revision=%s,registration_status='pending',failure_code=null where id=%s and org_id=%s", (row['revision'], row['bridge_id'], row['org_id']))
             changed = True
         # Covers expired leases, removed memberships/accounts, plan changes and strategy changes.
@@ -156,8 +162,10 @@ def main():
                     cursor.execute("select pg_try_advisory_lock(724031996)")
                     if not cursor.fetchone()[0]:
                         raise RuntimeError('another_bridge_worker_active')
+                first_pass = True
                 while True:
-                    reconcile(connection)
+                    reconcile(connection, force=first_pass)
+                    first_pass = False
                     time.sleep(3)
         except Exception as error:
             # Do not log SQL, parameter values, passwords or provider response bodies.

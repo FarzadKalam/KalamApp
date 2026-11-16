@@ -1,8 +1,13 @@
 import unittest
-from bridge_worker import build_objects, bridge_ids, registration_status
+from bridge_worker import build_objects, bridge_ids, registration_status, realtime_value
 
 
 class BridgeObjectsTest(unittest.TestCase):
+    def test_realtime_preserves_uri_parameters_and_password_delimiters(self):
+        self.assertEqual(realtime_value('sip:pbx.test:5060;transport=tcp'), 'sip:pbx.test:5060^3Btransport=tcp')
+        self.assertEqual(realtime_value('fixture;secret^3B'), 'fixture^3Bsecret^5E3B')
+        self.assertEqual(realtime_value(5060), 5060)
+        self.assertIsNone(realtime_value(None))
     def row(self, bridge_id='10000000-0000-4000-8000-000000000001'):
         return dict(bridge_id=bridge_id, org_id='org-a', extension='101', sip_secret='remote-fixture-secret',
                     browser_secret='local-fixture-secret', metadata=dict(server_url='pbx.example.test', sip_domain='tenant.example.test'))
