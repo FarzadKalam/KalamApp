@@ -1,7 +1,12 @@
 set role authenticated;
 select set_config('test.org','10000000-0000-4000-8000-000000000001',false);
 select set_config('test.permissions','{"customers":{"view":true},"invoices":{"view":true}}',false);
-do $$declare result jsonb;begin
+do $$declare result jsonb;s text;begin
+ perform set_config('test.permissions','{"customers":{"view":true},"invoices":{"view":true},"purchase_invoices":{"view":true},"projects":{"view":true},"tasks":{"view":true},"process_runs":{"view":true},"counterparty_bot_groups":{"view":true},"sms_delivery_reports":{"view":true},"email_delivery_reports":{"view":true},"voip_call_reports":{"view":true}}',true);
+ foreach s in array array['purchases','projects','tasks','processes','groups','sms','email','calls']loop
+  result:=public.read_call_contact_history('customers','40000000-0000-4000-8000-000000000001',s,0);
+  if result->>'count'<>'0' then raise exception 'empty authorized section is inconsistent: %',s;end if;
+ end loop;
  result:=public.read_call_contact_history('customers','40000000-0000-4000-8000-000000000001','invoices',0);
  if (result->>'count')::int<>21 or jsonb_array_length(result->'rows')<>20 or not (result->>'hasMore')::boolean then raise exception 'page treated as complete history';end if;
  if result->'rows'->0->>'name'<>'فاکتور 21' then raise exception 'newest activity ordering failed';end if;

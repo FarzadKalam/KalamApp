@@ -152,7 +152,7 @@ begin
   v_where:=v_where||format(' or t.phone_number_id in(select l.phone_number_id from public.phone_number_links l where l.org_id=%L::uuid and l.entity_type=%L and l.entity_id=%L::uuid)',v_org,p_module_id,p_record_id);
  when 'calls' then
   v_module:='voip_call_reports';v_table:='voip_call_logs';v_columns:=array['id','title','direction','status','started_at','talk_seconds','created_at','updated_at'];
-  v_where:=format('(t.related_module_id=%L and t.related_record_id=%L::uuid) or (t.module_id=%L and t.record_id=%L::uuid) or t.phone_number_id in(select l.phone_number_id from public.phone_number_links l where l.org_id=%L::uuid and l.entity_type=%L and l.entity_id=%L::uuid)',p_module_id,p_record_id,p_module_id,p_record_id,v_org,p_module_id,p_record_id);
+  v_where:=format('(t.related_module_id=%L and t.related_record_id=%L::uuid) or (t.module_id=%L and t.record_id=%L) or t.phone_number_id in(select l.phone_number_id from public.phone_number_links l where l.org_id=%L::uuid and l.entity_type=%L and l.entity_id=%L::uuid)',p_module_id,p_record_id,p_module_id,p_record_id,v_org,p_module_id,p_record_id);
  when 'email' then
   v_module:='email_delivery_reports';v_table:='email_messages';v_columns:=array['id','subject','status','direction','message_at','created_at'];v_where:=format('(t.related_module_id=%L and t.related_record_id=%L::uuid)',p_module_id,p_record_id);
  else raise exception 'invalid_contact_section';end case;

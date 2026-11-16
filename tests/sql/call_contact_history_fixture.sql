@@ -10,6 +10,19 @@ create function public.kalam_phone_lookup_key(text) returns text language sql im
 create table public.phone_numbers(id uuid,org_id uuid,lookup_key text);
 create table public.phone_number_links(org_id uuid,entity_type text,entity_id uuid,source_field text,phone_number_id uuid);
 grant select on public.phone_numbers,public.phone_number_links to authenticated;
+create table public.projects(id uuid,org_id uuid,customer_id uuid,owner_id uuid,source_purchase_invoice_id uuid,name text,system_code text,status text,start_date date,due_date date,progress_percent numeric,created_at timestamptz,updated_at timestamptz);
+create table public.purchase_invoices(id uuid,org_id uuid,supplier_id uuid,project_id uuid,name text,system_code text,status text,invoice_date date,total_invoice_amount numeric,total_received_amount numeric,remaining_balance numeric,payments jsonb,created_at timestamptz,updated_at timestamptz);
+create table public.tasks(id uuid,org_id uuid,name text,system_code text,status text,due_date timestamptz,assignee_id uuid,related_customer uuid,related_supplier uuid,source_module_id text,source_record_id uuid,project_id uuid,created_at timestamptz,updated_at timestamptz);
+create table public.process_runs(id uuid,org_id uuid,process_name text,system_code text,status text,started_at timestamptz,completed_at timestamptz,module_id text,record_id uuid,created_at timestamptz,updated_at timestamptz);
+create table public.counterparty_bot_groups(id uuid,org_id uuid,customer_id uuid,supplier_id uuid,employee_id uuid,group_title text,channel_type text,status text,last_inbound_at timestamptz,created_at timestamptz,updated_at timestamptz);
+create table public.sms_delivery_reports(id uuid,org_id uuid,title text,message_text text,status text,direction text,sent_at timestamptz,created_at timestamptz,updated_at timestamptz,related_module_id text,related_record_id uuid,customer_id uuid,phone_number_id uuid);
+create table public.email_messages(id uuid,org_id uuid,subject text,status text,direction text,message_at timestamptz,created_at timestamptz,related_module_id text,related_record_id uuid);
+create table public.voip_call_logs(id uuid,org_id uuid,title text,direction text,status text,started_at timestamptz,talk_seconds int,created_at timestamptz,updated_at timestamptz,related_module_id text,related_record_id uuid,module_id text,record_id text,phone_number_id uuid);
+do $$declare t text;begin foreach t in array array['projects','purchase_invoices','tasks','process_runs','counterparty_bot_groups','sms_delivery_reports','email_messages','voip_call_logs']loop
+ execute format('alter table public.%I enable row level security',t);
+ execute format('create policy fixture_org on public.%I to authenticated using(org_id=public.current_org_id())',t);
+ execute format('grant select on public.%I to authenticated',t);
+end loop;end$$;
 create table public.invoices(id uuid primary key default gen_random_uuid(),org_id uuid not null,customer_id uuid,name text,system_code text,status text,invoice_date date,remaining_balance numeric,total_invoice_amount numeric,total_received_amount numeric,payments jsonb,created_at timestamptz,updated_at timestamptz,is_deleted boolean);
 alter table public.invoices add column assignee_id uuid,add column assignee_type text,add column assignee_role_id uuid;
 alter table public.customers enable row level security;
