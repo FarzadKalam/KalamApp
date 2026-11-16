@@ -1,7 +1,7 @@
 import {describe,it,expect,vi} from 'vitest';
 import {searchCallContacts,loadCallIdentity,loadCallContextSection,externalCallAgentIdentity,sortContactActivity,type ContactContextReader} from './voip-contact-context';
 const org='10000000-0000-4000-8000-000000000001';const id='20000000-0000-4000-8000-000000000001';
-const reader=():ContactContextReader=>({orgId:org,permissions:{customers:{view:true},suppliers:{view:true},employees:{view:true},invoices:{view:true}},plan:{available:true},read:vi.fn(async(table)=>({rows:table==='customers'?[{id,full_name:'مخاطب',mobile_1:'09120000000'}]:[],count:null})),rpc:vi.fn(async()=>({rows:[],count:0}))});
+const reader=():ContactContextReader=>({orgId:org,permissions:{customers:{view:true},suppliers:{view:true},employees:{view:true},invoices:{view:true}},plan:{available:true},read:vi.fn(async(table)=>({rows:table==='customers'?[{id,full_name:'مخاطب',mobile_1:'09120000000'}]:[],count:null})),rpc:vi.fn(async(name)=>name==='filter_call_contact_identities'?[id]:({rows:[],count:0}))});
 describe('shared call contact context',()=>{
  it('uses exact directory lookup, keeps tenant filters and does not use phone suffixes',async()=>{
   const ctx=reader();const rows=await searchCallContacts(ctx,'۰۹۱۲۰۰۰۰۰۰۰');expect(rows).toHaveLength(1);
@@ -22,7 +22,7 @@ describe('shared call contact context',()=>{
   expect(vi.mocked(ctx.read).mock.calls[0][1].select.split(',')).not.toContain('mobile_1');
  });
  it('preserves full counts and exact cursors from the server instead of counting the current page',async()=>{
-  const ctx=reader();vi.mocked(ctx.rpc).mockResolvedValue({rows:[{id,name:'فاکتور'}],count:1234,hasMore:true});
+  const ctx=reader();vi.mocked(ctx.rpc).mockImplementation(async(name)=>name==='filter_call_contact_identities'?[id]:({rows:[{id,name:'فاکتور'}],count:1234,hasMore:true}));
   const identity=await loadCallIdentity(ctx,'customers',id);const section=await loadCallContextSection(ctx,identity,'invoices',20);
   expect(section).toMatchObject({count:1234,hasMore:true});expect(ctx.rpc).toHaveBeenCalledWith('read_call_contact_history',{p_module_id:'customers',p_record_id:id,p_section:'invoices',p_offset:20});
   expect(section.rows[0].href).toBe(`/invoices/${id}`);

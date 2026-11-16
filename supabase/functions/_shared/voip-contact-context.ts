@@ -41,7 +41,10 @@ export async function searchCallContacts(ctx:ContactContextReader,input:string):
   }
   if(filters.or==='()')return [];
   const result=await ctx.read(module,filters);
-  return sortContactActivity(result.rows).map(row=>({moduleId:module,recordId:row.id,title:title(row),phone:row.mobile_1||row.mobile_2||row.phone||'',rank:row.rank,updatedAt:row.updated_at||row.created_at}));
+  if(!result.rows.length)return [];
+  const ids=await ctx.rpc('filter_call_contact_identities',{p_module_id:module,p_ids:result.rows.map(row=>row.id)});
+  const visible=new Set(Array.isArray(ids)?ids:[]);
+  return sortContactActivity(result.rows.filter(row=>visible.has(row.id))).map(row=>({moduleId:module,recordId:row.id,title:title(row),phone:row.mobile_1||row.mobile_2||row.phone||'',rank:row.rank,updatedAt:row.updated_at||row.created_at}));
  }));
  return results.flat().sort((a,b)=>(Date.parse(b.updatedAt||'')||0)-(Date.parse(a.updatedAt||'')||0));
 }
@@ -64,6 +67,8 @@ export async function loadCallIdentity(ctx:ContactContextReader,module:string,id
  const columns=['id','full_name','first_name','last_name','prefix','mobile_1','mobile_2','phone','created_at','updated_at',...(module==='suppliers'?[]:['email']),...(module==='employees'?['job_title','related_profile_id']:['business_name','rank'])];
  const result=await ctx.read(module,{org_id:`eq.${ctx.orgId}`,id:`eq.${id}`,select:selectFields(ctx,module,columns),limit:'1'});
  const record=result.rows[0];if(!record)throw new Error('contact_not_available');
+ const visible=await ctx.rpc('filter_call_contact_identities',{p_module_id:module,p_ids:[id]});
+ if(!Array.isArray(visible)||!visible.includes(id))throw new Error('contact_not_available');
  return {moduleId:module as ContactModule,recordId:id,title:title(record),phone:record.mobile_1||record.mobile_2||record.phone||'',rank:record.rank,jobTitle:record.job_title,record};
 }
 

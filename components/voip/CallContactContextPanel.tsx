@@ -8,6 +8,7 @@ import {readVoipContactContext,CALL_CONTACT_SECTION_KEYS,CALL_CONTACT_SECTION_LA
 import {getSelectedOrganizationId} from '../../utils/organizationContext';
 const OperationalFinancialOverviewPanel=React.lazy(()=>import('../accounting/OperationalFinancialOverviewPanel'));
 const roleLabels={customers:'مشتری',suppliers:'تأمین‌کننده',employees:'کارمند'};
+const activityDate=(row:any)=>new Date(Math.max(Date.parse(row.updated_at||'')||0,Date.parse(row.created_at||'')||0)).toISOString();
 
 function GroupMessages({identity,groupId,offset}:{identity:CallContactIdentity;groupId:string;offset:number}){
  const [items,setItems]=useState<any[]|null>(null);const [error,setError]=useState('');const [busy,setBusy]=useState(false);
@@ -31,7 +32,7 @@ function ContactSection({identity,section}:{identity:CallContactIdentity;section
     const status=statusField?.options?.find(option=>String(option.value)===String(row.status))?.label;
     return <div key={row.id} className="rounded-xl border border-slate-200 dark:border-slate-700 p-2 space-y-1">
      <a href={row.href} target="_blank" rel="noopener noreferrer" className="font-semibold">{getRecordTitle(row,config)}</a>
-     <div className="flex flex-wrap gap-2">{status&&<Tag>{status}</Tag>}<time>{safeJalaliFormat(row.updated_at||row.created_at,'YYYY/MM/DD HH:mm')}</time></div>
+     <div className="flex flex-wrap gap-2">{status&&<Tag>{status}</Tag>}<time>{row.updated_at||row.created_at?safeJalaliFormat(activityDate(row),'YYYY/MM/DD HH:mm'):''}</time></div>
      {['invoice_date','total_invoice_amount','total_received_amount','remaining_balance','due_date','started_at'].filter(key=>row[key]!=null).map(key=>{
       const field=config?.fields?.find(field=>field.key===key);if(!field)return null;
       return <p key={key}>{getFieldLabelFa(field,{moduleId:data.moduleId})}: {key.endsWith('date')||key.endsWith('_at')?safeJalaliFormat(row[key],'YYYY/MM/DD'):toPersianNumber(Number(row[key]).toLocaleString('en-US'))}</p>;

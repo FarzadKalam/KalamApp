@@ -217,9 +217,6 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
   const [, setShowTransferBox] = useState(false);
   const [showDtmfPad, setShowDtmfPad] = useState(false);
   const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
-  const [showAiDivertModal, setShowAiDivertModal] = useState(false);
-  const [aiBriefText, setAiBriefText] = useState('');
-  const [playHoldMusic, setPlayHoldMusic] = useState(true);
 
   const [busyAction, setBusyAction] = useState(false);
   const [transcribingId, setTranscribingId] = useState<string | null>(null);
@@ -328,7 +325,6 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
       await rejectOrHangupWebPhoneCall();
       setShowTransferBox(false);
       setShowDtmfPad(false);
-      setShowAiDivertModal(false);
     } catch (err: any) {
       message.error(toFaErrorMessage(err, 'پایان تماس ناموفق بود.'));
     } finally {
@@ -351,33 +347,6 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
     }
   };
 
-  // AI Voice Responder Handover
-  const handleAiDivert = async () => {
-    setBusyAction(true);
-    try {
-      // 1. Brief the model / log context if provided
-      if (aiBriefText.trim()) {
-        await supabase.from('voip_call_logs').update({
-          metadata: {
-            ai_brief: aiBriefText.trim(),
-            ai_handover_at: new Date().toISOString(),
-            hold_music: playHoldMusic,
-          },
-        }).eq('id', activeCall?.callId || '');
-      }
-      // 2. Blind transfer to the AI Voice Responder extension (e.g. '800' or designated IVR node)
-      await transferWebPhoneCall('800');
-      message.success('تماس با موفقیت به پاسخگوی هوش مصنوعی واگذار شد.');
-      setShowAiDivertModal(false);
-      setAiBriefText('');
-    } catch (err: any) {
-      message.error(toFaErrorMessage(err, 'واگذاری تماس به هوش مصنوعی ناموفق بود.'));
-    } finally {
-      setBusyAction(false);
-    }
-  };
-
-  // Fast AI Speech-to-Text Transcription for Call History
   const handleTranscribeAudio = async (callItem: RecentCallItem) => {
     setTranscribingId(callItem.id);
     try {
@@ -438,10 +407,10 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
   return (
     <div
       dir="rtl"
-      className="fixed bottom-5 left-5 z-[1050] w-[326px] max-w-[calc(100vw-2.5rem)] rounded-3xl border border-slate-200/90 dark:border-[#242f3d] bg-white/95 dark:bg-[#17212b]/95 backdrop-blur-2xl shadow-2xl shadow-black/40 text-slate-800 dark:text-slate-100 overflow-hidden transition-all duration-300 font-sans"
+      className="fixed bottom-5 left-5 z-[1050] flex flex-col max-h-[calc(100dvh-2.5rem)] w-[380px] max-w-[calc(100vw-2.5rem)] rounded-3xl border border-slate-200/90 dark:border-[#242f3d] bg-white/95 dark:bg-[#17212b]/95 backdrop-blur-2xl shadow-2xl shadow-black/40 text-slate-800 dark:text-slate-100 overflow-hidden transition-all duration-300 font-sans"
     >
       {/* Top Header Bar */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 dark:border-[#232e3c] bg-slate-50/70 dark:bg-[#1f2b38]/70">
+      <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-slate-100 dark:border-[#232e3c] bg-slate-50/70 dark:bg-[#1f2b38]/70">
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${voip.status === 'registered' ? 'bg-emerald-500 shadow-sm shadow-emerald-500/50' : voip.status === 'connecting' ? 'bg-amber-400 animate-pulse' : 'bg-rose-500'}`} />
           <span className="text-xs font-bold text-slate-900 dark:text-white">تلفن اینترنتی تازه سیستم</span>
@@ -474,7 +443,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
       </div>
 
       {/* Main Body */}
-      <div className="p-4 space-y-3.5">
+      <div className="min-h-0 overflow-y-auto overscroll-contain p-4 space-y-3.5">
         {voip.errorMessage && voip.status !== 'registered' ? (
           <div className="rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-300">
             {voip.errorMessage}
@@ -561,7 +530,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
             ) : (
               <div className="space-y-2.5">
                 {/* Secondary Action Pills */}
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   <Tooltip title={activeCall.muted ? 'وصل میکروفون' : 'بی‌صدا'}>
                     <button
                       onClick={() => toggleMuteWebPhone()}
@@ -589,14 +558,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
                     </button>
                   </Tooltip>
 
-                  <Tooltip title="دایورت به هوش مصنوعی">
-                    <button
-                      onClick={() => setShowAiDivertModal((prev) => !prev)}
-                      className={`h-10 rounded-2xl flex items-center justify-center transition border ${showAiDivertModal ? 'bg-purple-600 text-white border-purple-500' : 'bg-purple-500/10 text-purple-600 dark:text-purple-300 border-purple-500/20 hover:bg-purple-500/20'}`}
-                    >
-                      <SvgIcons.Robot className="w-4 h-4" />
-                    </button>
-                  </Tooltip>
+
                 </div>
 
                 {/* Inline DTMF Pad */}
@@ -611,48 +573,6 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
                         {digit}
                       </button>
                     ))}
-                  </div>
-                ) : null}
-
-                {/* Inline AI Divert Box */}
-                {showAiDivertModal ? (
-                  <div className="p-3 rounded-2xl bg-purple-500/10 border border-purple-500/30 space-y-2 text-xs">
-                    <div className="flex items-center justify-between font-bold text-purple-700 dark:text-purple-300">
-                      <span className="flex items-center gap-1.5">
-                        <SvgIcons.Robot className="w-4 h-4" />
-                        <span>واگذاری به پاسخگوی هوش مصنوعی</span>
-                      </span>
-                      <button onClick={() => setShowAiDivertModal(false)} className="text-slate-400 hover:text-slate-200">
-                        <SvgIcons.Close className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                    <Input.TextArea
-                      rows={2}
-                      placeholder="توضیح یا سناریو به هوش مصنوعی (اختیاری: مثلاً به مشتری بگو فاکتور فردا ارسال میشه)..."
-                      value={aiBriefText}
-                      onChange={(e) => setAiBriefText(e.target.value)}
-                      className="!text-xs !rounded-xl"
-                    />
-                    <div className="flex items-center justify-between text-[11px] pt-1">
-                      <label className="flex items-center gap-1.5 cursor-pointer text-slate-600 dark:text-slate-400">
-                        <input
-                          type="checkbox"
-                          checked={playHoldMusic}
-                          onChange={(e) => setPlayHoldMusic(e.target.checked)}
-                          className="rounded text-purple-600"
-                        />
-                        <span>پخش آهنگ انتظار حین اتصال</span>
-                      </label>
-                      <Button
-                        size="small"
-                        type="primary"
-                        loading={busyAction}
-                        onClick={handleAiDivert}
-                        className="!bg-purple-600 hover:!bg-purple-500 !border-purple-600 !rounded-xl text-xs font-bold"
-                      >
-                        تأیید و واگذاری
-                      </Button>
-                    </div>
                   </div>
                 ) : null}
 

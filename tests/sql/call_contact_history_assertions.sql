@@ -12,6 +12,13 @@ do $$declare result jsonb;begin
  perform set_config('test.permissions','{"customers":{"view":true},"invoices":{"view":true,"fields":{"remaining_balance":false,"payments":false}}}',true);
  result:=public.read_call_contact_history('customers','40000000-0000-4000-8000-000000000001','invoices',0);
  if result->'rows'->0?'remaining_balance' or result->'rows'->0?'payments' or result->'summary'<>'null'::jsonb then raise exception 'field restrictions leaked through summary';end if;
+ perform set_config('test.user','20000000-0000-4000-8000-000000000001',true);
+ perform set_config('test.permissions','{"customers":{"view":true},"invoices":{"view":true,"record_scope":"own"}}',true);
+ result:=public.read_call_contact_history('customers','40000000-0000-4000-8000-000000000001','invoices',0);
+ if (result->>'count')::int<>3 then raise exception 'own record scope bypassed';end if;
+ perform set_config('test.permissions','{"customers":{"view":true},"invoices":{"view":true,"view_conditions":{"conditions_all":[{"field":"related.customer","operator":"eq","value":"blocked"}]}}}',true);
+ result:=public.read_call_contact_history('customers','40000000-0000-4000-8000-000000000001','invoices',0);
+ if (result->>'count')::int<>0 then raise exception 'unsupported view conditions ignored';end if;
  perform set_config('test.org','',true);
  begin
   perform public.read_call_contact_history('customers','40000000-0000-4000-8000-000000000001','invoices',0);
