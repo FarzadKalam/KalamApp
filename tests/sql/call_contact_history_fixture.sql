@@ -3,6 +3,11 @@ create schema if not exists auth;
 create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('test.user',true),'')::uuid$$;
 grant usage on schema auth to authenticated;
 create function public.org_has_plan_module(uuid,text,boolean) returns boolean language sql stable as $$select true$$;
+revoke all on function public.org_has_plan_module(uuid,text,boolean) from public,anon,authenticated;
+grant execute on function public.org_has_plan_module(uuid,text,boolean) to service_role;
+create function public.current_org_has_plan_module(text,boolean) returns boolean language sql stable security definer set search_path=public as $$select public.current_org_id() is not null and public.org_has_plan_module(public.current_org_id(),$1,$2)$$;
+revoke all on function public.current_org_has_plan_module(text,boolean) from public,anon;
+grant execute on function public.current_org_has_plan_module(text,boolean) to authenticated;
 create function public.get_current_organization_context() returns jsonb language sql stable as $$
  select jsonb_build_object('permissions',coalesce(nullif(current_setting('test.permissions',true),''),'{}')::jsonb)
 $$;
