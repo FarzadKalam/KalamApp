@@ -204,10 +204,14 @@ jobs:
             database_v1_phase597_voip_provider_bridge.sql \
             database_v1_phase602_voip_operator_call_presence.sql \
             database_v1_phase602_voip_operator_call_presence.sql \
+            database_v1_phase603_customer_voice_sessions.sql \
+            database_v1_phase603_customer_voice_sessions.sql \
+            tests/sql/customer_voice_session_assertions.sql \
             tests/sql/voip_provider_bridge_assertions.sql; do
             docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d voip_external_test -v ON_ERROR_STOP=1 < "$file"
           done
           python3 -m unittest discover -s ops/voip/asterisk -p test_bridge_worker.py -v
+          python3 -m unittest discover -s ops/voip/asterisk -p test_voice_worker.py -v
 
       - name: Call contact history isolation and pagination
         env:
@@ -393,7 +397,7 @@ jobs:
         env:
           VITE_SUPABASE_URL: https://isolated-test.invalid
           VITE_SUPABASE_ANON_KEY: isolated-test-only
-        run: npx vitest run utils/voipQr.test.ts utils/voipConnectionPolicy.test.ts utils/voipRouteStrategy.test.ts utils/voipStoreLifecycle.test.ts utils/voipCallHistory.test.ts utils/voipAudioOutput.test.ts supabase/functions/voip-session/index.test.ts supabase/functions/_shared/voip-contact-context.test.ts supabase/functions/_shared/voip-directory.test.ts components/settings/VoipConnectionSettings.test.tsx components/voip/WebPhoneWidget.test.tsx components/voip/VoipDirectoryPicker.test.tsx components/voip/CallContactContextPanel.test.tsx pages/ContactCenterPage.test.tsx --maxWorkers=1 --no-file-parallelism
+        run: npx vitest run utils/voipQr.test.ts utils/voipConnectionPolicy.test.ts utils/voipRouteStrategy.test.ts utils/voipStoreLifecycle.test.ts utils/voipCallHistory.test.ts utils/voipAudioOutput.test.ts supabase/functions/voip-session/index.test.ts supabase/functions/_shared/voip-contact-context.test.ts supabase/functions/_shared/voip-directory.test.ts supabase/functions/_shared/customer-voice-turn.test.ts components/settings/VoipConnectionSettings.test.tsx components/voip/WebPhoneWidget.test.tsx components/voip/VoipDirectoryPicker.test.tsx components/voip/CallContactContextPanel.test.tsx pages/ContactCenterPage.test.tsx --maxWorkers=1 --no-file-parallelism
 
       - name: Call contact Edge dependency checks
         run: deno check --node-modules-dir=none supabase/functions/voip-contact-context/index.ts

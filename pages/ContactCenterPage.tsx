@@ -76,6 +76,6 @@ export default function ContactCenterPage(){
   {orgId&&editing!==undefined&&<ContactCenterOperatorModal open operator={editing} orgId={orgId} settings={settings} onClose={()=>setEditing(undefined)} onSaved={refresh} />}
   {orgId&&settingsOpen&&<ContactCenterConnectionModal open orgId={orgId} onClose={()=>setSettingsOpen(false)} onSaved={refresh} />}
   <Modal open={agentOpen} onCancel={()=>setAgentOpen(false)} footer={null} width={1100} title={agent?.titleFa||'تنظیمات ایجنت پاسخ‌گویی'} destroyOnHidden><React.Suspense fallback={<Spin />}><AiAgentConfigPanel compact initialAgentKey="customer_response" /></React.Suspense></Modal>
-  {voiceOpen&&<CustomerVoiceConsole open onClose={()=>setVoiceOpen(false)} />}
+  <CustomerVoiceConsole open={voiceOpen} onClose={()=>setVoiceOpen(false)} />
  </div>;
 }

@@ -22,9 +22,11 @@ asterisk -f -U asterisk -G asterisk -vvv &
 asterisk_pid=$!
 python3 /usr/local/bin/kalamapp-bridge-worker.py &
 bridge_worker_pid=$!
-trap 'kill "$bridge_worker_pid" "$asterisk_pid" 2>/dev/null || true; wait || true' EXIT INT TERM
+python3 /usr/local/bin/kalamapp-voice-worker.py &
+voice_worker_pid=$!
+trap 'kill "$voice_worker_pid" "$bridge_worker_pid" "$asterisk_pid" 2>/dev/null || true; wait || true' EXIT INT TERM
 # A failed subprocess must not leave a seemingly healthy container behind.
 set +e
-wait -n "$asterisk_pid" "$bridge_worker_pid"
+wait -n "$asterisk_pid" "$bridge_worker_pid" "$voice_worker_pid"
 worker_status=$?
 exit "$worker_status"

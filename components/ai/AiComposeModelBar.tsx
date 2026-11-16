@@ -20,6 +20,7 @@ type AiComposeModelBarProps = {
   refreshKey?: number;
   persistedOverrides?: Record<string, string> | null;
   compact?: boolean;
+  disabled?:boolean;
   agents?: string[];
   reasoningOverrides?: Record<string,string>;
   onReasoningChange?: (effort: string | null,model: string) => void;
@@ -49,6 +50,7 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
   refreshKey,
   persistedOverrides,
   compact = false,
+  disabled=false,
   agents,
   reasoningOverrides,onReasoningChange,
 }) => {
@@ -135,7 +137,7 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
           setOverride(model);
           onModelOverrideChange(model || null, effectiveCapability);
         }}
-        disabled={info.available === false}
+        disabled={disabled||info.available === false}
         popupRender={menu => <div dir="rtl">
           {menu}
           {value && reasoningInfo?.options?.length ? <div className="mt-1 border-t border-slate-200 p-2 dark:border-white/10"

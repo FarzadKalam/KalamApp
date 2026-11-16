@@ -527,6 +527,7 @@ const UsersTab: React.FC = () => {
           form.setFieldsValue({
             voip_sip_password: '',
             voip_dial_extension: ep.metadata?.dial_extension || '',
+            voip_ai_dedicated:ep.metadata?.ai_dedicated===true,
             voip_wss_url: ep.metadata?.wss_url || '',
             voip_sip_domain: ep.metadata?.sip_domain || '',
             voip_auth_username: ep.metadata?.auth_username || '',
@@ -560,7 +561,7 @@ const UsersTab: React.FC = () => {
     const {data,error}=await supabase.functions.invoke('voip-session',{body:{action:'upsert_endpoint',endpoint:{
       id:userEndpoint?.id,assignee_profile_id:profileId,extension:String(values.voip_extension||userEndpoint?.extension||'').trim(),
       display_name:String(values.full_name||values.voip_extension||'').trim(),sip_secret:String(values.voip_sip_password||'').trim()||undefined,
-      is_active:values.voip_enabled===true,metadata:{dial_extension:String(values.voip_dial_extension||'').trim(),wss_url:String(values.voip_wss_url||'').trim(),
+      is_active:values.voip_enabled===true,metadata:{ai_dedicated:values.voip_ai_dedicated===true,dial_extension:String(values.voip_dial_extension||'').trim(),wss_url:String(values.voip_wss_url||'').trim(),
         sip_domain:String(values.voip_sip_domain||'').trim(),auth_username:String(values.voip_auth_username||'').trim(),
         server_url:String(values.voip_server_url||'').trim(),provider:orgVoipConfig?.provider,
         connection_strategy:values.voip_connection_strategy||'auto',sip_transport:values.voip_sip_transport||'udp',sip_port:values.voip_sip_port||null},

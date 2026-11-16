@@ -1,4 +1,5 @@
 // @ts-nocheck
+import {runCustomerVoiceTurn} from '../_shared/customer-voice-turn.ts';
 import { loadOrgPlanAccess } from '../_shared/org-plan-access.ts';
 import { executeAgentToolCalls, appendStreamToolCalls, type AgentToolExecutor } from '../_shared/ai-tool-calls.ts';
 import { AGENT_DATA_TOOLS, readAgentDataPage, countAgentData, aggregateAgentData, agentRecordMatchesViewConditions, type AgentDataAccess } from '../_shared/ai-agent-data.ts';
@@ -166,6 +167,7 @@ type AssistantAction =
   | 'save_user_memory'
   | 'delete_user_memory'
   | 'transcribe_voice'
+  | 'customer_voice_turn'
   | 'generate_voice_output'
   | 'generate_image'
   | 'process_ai_image_jobs'
@@ -17711,6 +17713,14 @@ Deno.serve(async (req: Request) => {
     if (action === 'archive_thread') return await handleArchiveThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'toggle_thread_pin') return await handleToggleThreadPin(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'share_thread') return await handleShareThread(supabaseUrl, serviceRoleKey, authContext, body);
+    if(action==='customer_voice_turn'){
+      const secret=Deno.env.get('KALAMAPP_VOIP_INTERNAL_SECRET')||'';
+      if(!secret||req.headers.get('x-kalam-voip-secret')!==secret)return json(403,{success:false,message:'مسیر پاسخ‌گویی تلفنی فقط برای درگاه مجاز فعال است.'});
+      return json(200,await runCustomerVoiceTurn(supabaseUrl,serviceRoleKey,authContext,body,{
+      loadPlan:loadTenantAiPlanContext,read:restSelect,insert:restInsert,provider:resolveProviderConfig,
+      transcribe:callAudioTranscription,chat:callChatCompletions,speak:callAudioSpeech,ledger:recordAiUsageLedger,assertCapability:assertAiCapabilityEnabled,
+      }));
+    }
     if (action === 'transcribe_voice') return await handleTranscribeVoice(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'generate_voice_output') return await handleGenerateVoiceOutput(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'generate_image') return await handleGenerateImage(supabaseUrl, serviceRoleKey, authContext, body);

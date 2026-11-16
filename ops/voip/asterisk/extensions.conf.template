@@ -29,6 +29,12 @@ exten => _.,1,NoOp(Inbound call on trunk ${CHANNEL(endpoint)} DID ${EXTEN})
 
 ; Each external account has one generated UUID namespace. No cross-tenant trunk resolver is used.
 [taze-external-out]
+; Listen-only AI monitoring is resolved against the authenticated operator and active session.
+exten => _*88*X.,1,AGI(agi://127.0.0.1:45732/join/${EXTEN},${CHANNEL(endpoint)})
+ same => n,GotoIf($["${VOICE_ALLOWED}" != "1"]?reject)
+ same => n,ChanSpy(${VOICE_TARGET},uqES)
+ same => n,Hangup()
+ same => n(reject),Hangup(21)
 exten => _[+*#0-9]!,1,Set(BRIDGE_EP=${CHANNEL(endpoint)})
  same => n,Set(BRIDGE_PREFIX=${CUT(BRIDGE_EP,_,1-2)})
  same => n,GotoIf($[${REGEX("^b_[0-9a-f]{32}_browser$" ${BRIDGE_EP})} != 1]?reject)
@@ -36,6 +42,12 @@ exten => _[+*#0-9]!,1,Set(BRIDGE_EP=${CHANNEL(endpoint)})
  same => n,Dial(PJSIP/${EXTEN}@${BRIDGE_PREFIX}_provider,60)
  same => n,Hangup()
  same => n(reject),Hangup(21)
+
+; Only platform-originated channels enter this context; it is never an endpoint's context.
+[taze-ai-customer]
+exten => _.,1,Answer()
+ same => n,AGI(agi://127.0.0.1:45732/voice/${EXTEN})
+ same => n,Hangup()
 
 ; Provider INVITEs are matched to their registration's unique Contact 'line' parameter.
 ; No shared provider-IP identification or caller-supplied destination selects the browser.

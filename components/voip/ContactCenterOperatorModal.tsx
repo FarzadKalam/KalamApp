@@ -11,14 +11,14 @@ export default function ContactCenterOperatorModal({open,operator,orgId,settings
  const [form]=Form.useForm();const {message}=App.useApp();const [busy,setBusy]=useState(false);const [scanner,setScanner]=useState(false);
  useEffect(()=>{
   if(!open)return;form.resetFields();const meta=operator?.metadata||{};
-  form.setFieldsValue({profileId:operator?.profileId,full_name:operator?.title||'',voip_enabled:operator?operator.isActive:true,
+  form.setFieldsValue({profileId:operator?.profileId,full_name:operator?.title||'',voip_enabled:operator?operator.isActive:true,voip_ai_dedicated:meta.ai_dedicated===true,
    voip_extension:operator?.loginUsername||'',voip_dial_extension:meta.dial_extension||'',voip_server_url:meta.server_url||'',voip_sip_domain:meta.sip_domain||'',
    voip_auth_username:meta.auth_username||'',voip_wss_url:meta.wss_url||'',voip_connection_strategy:meta.connection_strategy||'auto',voip_sip_transport:meta.sip_transport||'udp',voip_sip_port:meta.sip_port||null});
  },[open,operator,orgId,form]);
  const save=async()=>{
   try{
    const values=await form.validateFields();setBusy(true);
-   const metadata={dial_extension:normalizeDialExtension(values.voip_dial_extension),provider:settings.provider,
+   const metadata={dial_extension:normalizeDialExtension(values.voip_dial_extension),provider:settings.provider,ai_dedicated:values.voip_ai_dedicated===true,
     server_url:values.voip_server_url||'',sip_domain:values.voip_sip_domain||'',auth_username:values.voip_auth_username||'',wss_url:values.voip_wss_url||'',
     connection_strategy:values.voip_connection_strategy||'auto',sip_transport:values.voip_sip_transport||'udp',sip_port:values.voip_sip_port||null};
    const result=await supabase.functions.invoke('voip-session',{headers:{'x-organization-id':orgId},body:{action:'upsert_endpoint',endpoint:{id:operator?.id,assignee_profile_id:values.profileId,display_name:values.full_name,extension:values.voip_extension,sip_secret:values.voip_sip_password||undefined,is_active:values.voip_enabled===true,metadata}}});

@@ -154,6 +154,7 @@ Deno.serve(async (req) => {
       });
       const account=accounts[0];
       if(!account)return json(200,{success:true,enabled:false,reason:'no_external_account',message:'حساب اپراتور سرویس‌دهنده برای شما تنظیم نشده است.'});
+      if(account.metadata?.ai_dedicated===true)return json(200,{success:true,enabled:false,reason:'ai_reserved',message:'این حساب برای پاسخ‌گوی AI رزرو شده است؛ برای اپراتور انسانی حساب جدا انتخاب کنید.'});
       const connection=resolveExternalWebphone(settings,account);
       const strategy=resolveVoipRouteStrategy(account.metadata?.connection_strategy||settings.connection_strategy);
       const leases=await restSelect(supabaseUrl,serviceRoleKey,'voip_provider_bridges',{

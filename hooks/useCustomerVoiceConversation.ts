@@ -10,13 +10,14 @@ export function useCustomerVoiceConversation(models:Record<string,string>){
  const engine=useRef<{stream:MediaStream;context:AudioContext;recorder:MediaRecorder|null;audio:HTMLAudioElement|null;timer:number;controller:AbortController;stopped:boolean}|null>(null);
  const settings=useRef(models);settings.current=models;const notes=useRef<string[]>([]);const thread=useRef<string|null>(null);
  const generation=useRef(0);
+ const org=getSelectedOrganizationId();
  const stop=()=>{
   const current=engine.current;engine.current=null;
   generation.current++;
   if(current){current.stopped=true;current.controller.abort();window.clearInterval(current.timer);current.audio?.pause();current.stream.getTracks().forEach(track=>track.stop());if(current.recorder?.state==='recording')current.recorder.stop();void current.context.close();}
   setState('idle');
  };
- useEffect(()=>()=>stop(),[]);
+ useEffect(()=>()=>stop(),[org]);
  const addNote=(value:string)=>{const text=value.trim().slice(0,2000);if(text)notes.current.push(text);};
  const start=async()=>{
   stop();setError('');setMessages([]);setThreadId(null);setApproval(null);thread.current=null;notes.current=[];
@@ -25,6 +26,7 @@ export function useCustomerVoiceConversation(models:Record<string,string>){
    const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
    if(startedGeneration!==generation.current){stream.getTracks().forEach(track=>track.stop());return;}
    const context=new AudioContext();await context.resume();const source=context.createMediaStreamSource(stream);const analyser=context.createAnalyser();analyser.fftSize=1024;source.connect(analyser);
+   if(startedGeneration!==generation.current){stream.getTracks().forEach(track=>track.stop());void context.close();return;}
    const current={stream,context,recorder:null as MediaRecorder|null,audio:null as HTMLAudioElement|null,timer:0,controller:new AbortController(),stopped:false};engine.current=current;
    const orgId=getSelectedOrganizationId();const invoke=async(body:any)=>{
     const result=await supabase.functions.invoke('ai-assistant',{body,headers:orgId?{'x-organization-id':orgId}:{},signal:current.controller.signal});
@@ -56,7 +58,7 @@ export function useCustomerVoiceConversation(models:Record<string,string>){
        const audio=new Audio(url);current.audio=audio;audio.onended=()=>resolve();audio.onerror=()=>reject(new Error('پخش پاسخ صوتی انجام نشد.'));setState('speaking');void audio.play().catch(reject);
        current.controller.signal.addEventListener('abort',()=>{audio.pause();resolve();},{once:true});
       });
-     })().catch(cause=>{if(!current.stopped)setError(toFaErrorMessage(cause,'گفتگوی صوتی انجام نشد.'));}).finally(()=>{
+     })().catch(cause=>{if(!current.stopped){setError(toFaErrorMessage(cause,'گفتگوی صوتی انجام نشد.'));stop();}}).finally(()=>{
       processing=false;if(!current.stopped){setState('listening');record();}
      });
     };

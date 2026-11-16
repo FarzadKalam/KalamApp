@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import AiReasoningSelect from './AiReasoningSelect';
+import AdaptiveSelectField from '../AdaptiveSelectField';
 import {
   Alert,
   App,
@@ -148,6 +149,15 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
   const [activeAgentKey, setActiveAgentKey] = useState<AgentKey>(initialAgentKey);
   const [savingAgentKey, setSavingAgentKey] = useState<AgentKey | null>(null);
   const [runningBackground, setRunningBackground] = useState(false);
+  const [voiceAccounts,setVoiceAccounts]=useState<Array<{value:string;label:string}>>([]);
+  const [voiceAccountsOffset,setVoiceAccountsOffset]=useState(0);const [voiceAccountsMore,setVoiceAccountsMore]=useState(false);
+  const loadVoiceAccounts=useCallback(async(offset=0)=>{
+    const {data,error}=await supabase.functions.invoke('voip-session',{body:{action:'list_center_operators',offset}});
+    if(error||!data?.success)return;
+    const items=(data.items||[]).filter((item:any)=>item.isActive&&item.metadata?.ai_dedicated===true).map((item:any)=>({value:item.id,label:item.title+(item.metadata?.dial_extension?` · ${item.metadata.dial_extension}`:'')}));
+    setVoiceAccounts(previous=>offset?[...previous,...items]:items);setVoiceAccountsMore(data.hasMore===true);setVoiceAccountsOffset(data.nextOffset||offset+20);
+  },[]);
+  useEffect(()=>{if(activeAgentKey==='customer_response')void loadVoiceAccounts();},[activeAgentKey,loadVoiceAccounts]);
   const [runningSingleSchedule, setRunningSingleSchedule] = useState(false);
   const [wizardAgentKey, setWizardAgentKey] = useState<AgentKey | null>(null);
   const [workflowEditorOpen, setWorkflowEditorOpen] = useState(false);
@@ -165,6 +175,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
     allowedChannels: string[];
     customInstructions: string;
     voiceInstructions?:string;
+    voiceAccountId?:string|null;
     backgroundConfig: {
       enabled: boolean;
       interval_minutes: number;
@@ -239,6 +250,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
           : ['web', 'staff_bot', 'agent_inbox'],
         customInstructions: customInstr,
         voiceInstructions:String(policy.voice_instructions||''),
+        voiceAccountId:policy.voice_account_id||null,
         backgroundConfig: {
           enabled: bg?.enabled === true,
           interval_minutes: Math.max(15, Number(bg?.interval_minutes || def.defaultBackgroundConfig.interval_minutes || 60)),
@@ -371,7 +383,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
         ...existingPolicy,
         custom_instructions: activeDraft.customInstructions?.trim() || '',
         reasoning_effort: activeDraft.reasoningEffort || null,
-        ...(activeAgentKey==='customer_response'?{voice_instructions:activeDraft.voiceInstructions?.trim()||''}:{}),
+        ...(activeAgentKey==='customer_response'?{voice_instructions:activeDraft.voiceInstructions?.trim()||'',voice_account_id:activeDraft.voiceAccountId||null}:{}),
       };
       const payloadBody = activeCanEdit
         ? {
@@ -886,6 +898,10 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
                         <label htmlFor="customer-voice-instructions" className="text-sm font-semibold">دستورالعمل اختصاصی تماس صوتی</label>
                         <p className="text-xs text-slate-500">شیوهٔ خوشامدگویی فارسی، پاسخ‌های کوتاه، مکث، ارجاع و پایان تماس را اینجا مشخص کنید. دستورالعمل عمومی و مجوزهای ایجنت نیز رعایت می‌شوند.</p>
                         <Input.TextArea id="customer-voice-instructions" rows={4} maxLength={12000} disabled={!activeCanEdit} value={activeDraft.voiceInstructions||''} onChange={event=>updateActiveDraft({voiceInstructions:event.target.value})} placeholder="مثلاً با نام سازمان خوشامد بگو؛ هر بار یک پرسش کوتاه بپرس؛ پیش از گفتن اطلاعات مالی احراز هویت کن." />
+                        <label className="block text-sm font-semibold">اپراتور مستقل مخصوص AI</label>
+                        <AdaptiveSelectField disabled={!activeCanEdit} allowClear value={activeDraft.voiceAccountId||undefined} options={voiceAccounts} placeholder="حساب مستقل پاسخ‌گوی AI را انتخاب کنید" pickerTitle="انتخاب حساب تلفن AI" onChange={value=>updateActiveDraft({voiceAccountId:value||null})} />
+                        {voiceAccountsMore&&<Button size="small" onClick={()=>void loadVoiceAccounts(voiceAccountsOffset)}>حساب‌های بیشتر</Button>}
+                        <p className="text-xs text-slate-500">حساب را از مرکز تماس اضافه و گزینهٔ «مخصوص پاسخ‌گوی هوشمند» را فعال کنید. نام کاربری و رمز تلفن در مدل قرار نمی‌گیرند.</p>
                       </div>}
                       <div className="rounded-xl border border-slate-100 p-3 dark:border-white/10 space-y-3">
                         <div className="flex flex-wrap items-center justify-between gap-2">

@@ -10,6 +10,7 @@ export default function VoipUserFields({settings,form,onScan,hasAccount}:{settin
   <Alert type="info" showIcon message={policy.usageMode==='reports'?'حالت سازمان: فقط گزارشات تماس':policy.development?'مرکز تلفن ابری تازه‌سیستم — در حال توسعه':'حالت سازمان: مکالمه با سرویس‌دهندهٔ دیگر'} description="مسیر اصلی تماس در تنظیمات VoIP سازمان تعیین می‌شود؛ همهٔ کاربران از همان مسیر پیروی می‌کنند." />
   <Form.Item label={policy.usageMode==='reports'?'فعال برای تطبیق گزارش تماس‌ها':'فعال برای این کاربر'} name="voip_enabled" valuePropName="checked"><Switch disabled={policy.development} /></Form.Item>
   {enabled&&!policy.development&&<>
+   {policy.canUseBrowser&&<Form.Item label="حساب مستقل مخصوص پاسخ‌گوی هوشمند" name="voip_ai_dedicated" valuePropName="checked" extra="این حساب برای تماس‌های AI رزرو می‌شود؛ آن را هم‌زمان برای ورود اپراتور انسانی استفاده نکنید."><Switch /></Form.Item>}
    {policy.canUseBrowser&&<Button onClick={onScan}>ورود اطلاعات از QR سرویس‌دهنده / PortSIP</Button>}
    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
     <Form.Item label="نام کاربری ورود SIP" name="voip_extension" extra="همان نام کاربری ورود به PortSIP؛ ممکن است با داخلی کوتاه تماس متفاوت باشد." rules={[{required:true,message:'نام کاربری ورود را وارد کنید.'}]}><Input dir="ltr" autoComplete="off" /></Form.Item>

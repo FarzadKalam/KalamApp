@@ -28,7 +28,8 @@ it('bounds and paginates account reads while discarding filter operators from qu
 it('management returns a bounded projection and rejects stale online or busy state',async()=>{
  const bridge='20000000-0000-4000-8000-000000000001';let fresh=true;let calls=1;
  const read=vi.fn(async(table:string,params:Record<string,string>)=>{
-  if(table!=='profiles')expect(params.org_id).toBe('eq.org-a');
+  if(table!=='profiles'&&table!=='ps_contacts')expect(params.org_id).toBe('eq.org-a');
+  if(table==='ps_contacts')expect(params.endpoint).toBe('in.(b_'+bridge.replace(/-/g,'')+'_browser)');
   if(table==='voip_external_accounts')return [{id:'account',assignee_profile_id:user,extension:'login',is_active:true,display_name:'همکار',metadata:{dial_extension:'101',password:'secret',internal_token:'secret'}}];
   if(table==='profiles')return [{id:user,avatar_url:'/avatar.png'}];
   if(table==='voip_provider_bridges')return [{account_id:'account',id:bridge,registration_status:'registered',lease_until:new Date(Date.now()+60000).toISOString(),last_checked_at:new Date(Date.now()-(fresh?0:60000)).toISOString(),active_call_count:calls}];

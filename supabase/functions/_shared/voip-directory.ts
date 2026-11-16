@@ -39,8 +39,10 @@ export async function listContactCenterOperators(read:ReadRows,orgId:string,offs
  const profilesById=new Map(profiles.map(row=>[row.id,row]));
  const bridges=page.length?await read('voip_provider_bridges',{org_id:`eq.${orgId}`,account_id:`in.(${page.map(row=>row.id).join(',')})`,select:'account_id,id,registration_status,lease_until,last_checked_at,active_call_count',limit:'20'}):[];
  const endpoints=bridges.map(row=>'b_'+String(row.id).replace(/-/g,'')+'_browser');
- const contacts=endpoints.length?await read('ps_contacts',{org_id:`eq.${orgId}`,endpoint:`in.(${endpoints.join(',')})`,select:'endpoint,expiration_time',limit:'100'}):[];
- const safeKeys=['dial_extension','server_url','sip_domain','auth_username','wss_url','connection_strategy','sip_transport','sip_port'];
+ // Asterisk owns this private schema; contacts have no org_id. Scope by exact,
+ // server-derived endpoints from this tenant's accounts, never a supplied endpoint.
+ const contacts=endpoints.length?await read('ps_contacts',{endpoint:`in.(${endpoints.join(',')})`,select:'endpoint,expiration_time',limit:'100'}):[];
+ const safeKeys=['dial_extension','server_url','sip_domain','auth_username','wss_url','connection_strategy','sip_transport','sip_port','ai_dedicated'];
  return {items:page.map(account=>{
   const person=profilesById.get(account.assignee_profile_id);const bridge=bridges.find(row=>row.account_id===account.id);
   const endpoint=bridge?'b_'+String(bridge.id).replace(/-/g,'')+'_browser':'';
