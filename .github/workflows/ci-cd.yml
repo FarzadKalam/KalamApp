@@ -330,7 +330,7 @@ jobs:
         env:
           VITE_SUPABASE_URL: https://isolated-test.invalid
           VITE_SUPABASE_ANON_KEY: isolated-test-only
-        run: npx vitest run utils/reportRowLimit.test.ts utils/reporting.test.ts utils/commissionRuntime.test.ts components/hr/CommissionChequeCard.test.tsx --maxWorkers=1 --no-file-parallelism
+        run: npx vitest run utils/reportRowLimit.test.ts utils/reporting.test.ts utils/commissionRuntime.test.ts utils/commissionChequeDisplay.test.ts components/hr/CommissionChequeCard.test.tsx --maxWorkers=1 --no-file-parallelism
 
       - name: Build
         env:

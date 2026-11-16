@@ -5407,11 +5407,11 @@ const HRPage: React.FC = () => {
             has_cheque: chequePayments.length > 0,
             cheque_payments: chequePayments.map((p: any) => ({
               cheque_id: p?.cheque_id || p?.spent_cheque_id || null,
-              cheque_number: p?.cheque_number || p?.serial_no || null,
+              cheque_number: p?.cheque_number || p?.serial_no || p?.cheque_serial_no || null,
               amount: p?.amount || 0,
-              due_date: p?.due_date || p?.maturity_date || null,
+              due_date: p?.cheque_due_date || p?.due_date || p?.maturity_date || null,
               cheque_status: p?.cheque_status || p?.status || null,
-              bank_name: p?.bank_name || null,
+              bank_name: p?.cheque_bank_name || p?.bank_name || null,
             })),
             lines: row.lines.map((line) => ({
               source_key: line.source_key,
@@ -8465,7 +8465,7 @@ const HRPage: React.FC = () => {
                             <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-orange-50 dark:bg-orange-900/10">
                               <div className="text-xs font-bold text-orange-700 mb-2">اطلاعات چک‌های فاکتور</div>
                               <div className="flex flex-wrap gap-3">
-                                {cheques.map((cheque: any, ci: number) => <CommissionChequeCard key={ci} cheque={cheque} formatMoney={formatMoney} />)}
+                                {cheques.map((cheque: any, ci: number) => <CommissionChequeCard key={ci} cheque={cheque} invoiceId={invRow.invoice_id} formatMoney={formatMoney} />)}
                               </div>
                             </div>
                           )}
@@ -9670,7 +9670,7 @@ const HRPage: React.FC = () => {
                                       <div className="px-3 py-2 bg-orange-50 dark:bg-orange-900/10 border border-orange-200 dark:border-orange-700 rounded-lg">
                                         <div className="text-xs font-bold text-orange-700 mb-2">چک‌های فاکتور</div>
                                         <div className="flex flex-wrap gap-3">
-                                          {invoiceCheques.map((cheque: any, ci: number) => <CommissionChequeCard key={ci} cheque={cheque} formatMoney={formatMoney} />)}
+                                          {invoiceCheques.map((cheque: any, ci: number) => <CommissionChequeCard key={ci} cheque={cheque} invoiceId={invoiceRow.invoice_id} formatMoney={formatMoney} />)}
                                         </div>
                                       </div>
                                     )}
@@ -9730,7 +9730,7 @@ const HRPage: React.FC = () => {
                                   <div className="px-3 py-2 bg-orange-50 dark:bg-orange-900/10 border border-orange-200 dark:border-orange-700 rounded-lg">
                                     <div className="text-xs font-bold text-orange-700 mb-2">چک‌های فاکتور</div>
                                     <div className="flex flex-wrap gap-3">
-                                      {invoiceCheques.map((cheque: any, ci: number) => <CommissionChequeCard key={ci} cheque={cheque} formatMoney={formatMoney} />)}
+                                      {invoiceCheques.map((cheque: any, ci: number) => <CommissionChequeCard key={ci} cheque={cheque} invoiceId={invoiceRow.invoice_id} formatMoney={formatMoney} />)}
                                     </div>
                                   </div>
                                 )}

@@ -50,7 +50,7 @@ export async function loadCommissionPeriodInvoices(assigneeIds: string[]) {
       commission_percentage: item.commission_percentage ?? rates.get(item.product_id)?.commission_percentage})),
       payments: hydrated.payments.map(payment => {
         const cheque = cheques.find(row => row.id === (payment.cheque_id || payment.spent_cheque_id));
-        return cheque ? {...payment, cheque_amount:cheque.amount, due_date:cheque.due_date, cheque_number:cheque.serial_no} : payment;
+        return cheque ? {...payment, cheque_amount:cheque.amount, due_date:cheque.due_date || payment.cheque_due_date || payment.due_date, cheque_number:cheque.serial_no} : payment;
       })};
   });
 }
