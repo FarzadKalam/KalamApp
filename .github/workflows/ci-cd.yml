@@ -217,6 +217,8 @@ jobs:
             database_v1_phase598_call_contact_history.sql \
             database_v1_phase599_call_contact_current_org_plan.sql \
             database_v1_phase599_call_contact_current_org_plan.sql \
+            database_v1_phase600_call_contact_legacy_reference_types.sql \
+            database_v1_phase600_call_contact_legacy_reference_types.sql \
             tests/sql/call_contact_history_assertions.sql; do
             docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d voip_external_test -v ON_ERROR_STOP=1 < "$file"
           done
