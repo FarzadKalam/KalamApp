@@ -42,6 +42,38 @@ end;$$;
 revoke all on function public.filter_call_contact_identities(text,uuid[]) from public,anon;
 grant execute on function public.filter_call_contact_identities(text,uuid[]) to authenticated;
 
+create or replace function public.search_call_contact_identities(p_query text,p_phone_key text default null)
+returns jsonb language plpgsql stable security invoker set search_path=public as $$
+declare ctx jsonb:=public.get_current_organization_context();org uuid:=public.current_org_id();m text;cols text[];phone_cols text[];name_cols text[];projection text;predicate text;rows jsonb;result jsonb:='[]';
+begin
+ if org is null or length(trim(coalesce(p_query,'')))<2 or length(p_query)>100 then return result;end if;
+ if not public.org_has_plan_feature(org,'voip_webphone',true) then return result;end if;
+ if p_phone_key is not null and p_phone_key!~'^[0-9]{7,15}$' then return result;end if;
+ foreach m in array array['customers','suppliers','employees']loop
+  if not(ctx->'permissions'?m) or coalesce((ctx->'permissions'->m->>'view')::boolean,false)=false then continue;end if;
+  cols:=array['id','full_name','first_name','last_name','mobile_1','mobile_2','phone','updated_at','created_at'];
+  if m<>'employees' then cols:=cols||array['business_name','rank'];else cols:=cols||array['job_title'];end if;
+  select array_agg(c) into cols from unnest(cols)c where c='id' or
+   (coalesce(ctx->'permissions'->m->'fields'->c,'true')<>'false'::jsonb and coalesce(ctx->'permissions'->m->'fields'->c->>'view','true')<>'false');
+  select array_agg(c) into phone_cols from unnest(cols)c where c in('mobile_1','mobile_2','phone');
+  select array_agg(c) into name_cols from unnest(cols)c where c in('full_name','first_name','last_name','business_name');
+  select 'jsonb_build_object('||string_agg(format('%L,t.%I',c,c),',')||')' into projection from unnest(cols)c;
+  if p_phone_key is not null then
+   select string_agg(format('public.kalam_phone_lookup_key(t.%I)=$3',c),' or ') into predicate from unnest(phone_cols)c;
+   predicate:=coalesce(predicate,'false')||format(' or exists(select 1 from public.phone_number_links l join public.phone_numbers n on n.id=l.phone_number_id and n.org_id=l.org_id where l.org_id=$1 and l.entity_type=%L and l.entity_id=t.id and l.source_field=any($5) and n.lookup_key=$3)',m);
+  else
+   select string_agg(format('position(lower($2) in lower(coalesce(t.%I,'''')))>0',c),' or ') into predicate from unnest(name_cols)c;
+   predicate:=coalesce(predicate,'false');
+  end if;
+  execute format('select coalesce(jsonb_agg(value),''[]''::jsonb) from(select (%s)||jsonb_build_object(''moduleId'',%L) value from public.%I t where t.org_id=$1 and (%s) and public.call_contact_scope_visible($4,%L,to_jsonb(t)) order by greatest(t.updated_at,t.created_at) desc nulls last,t.id desc limit 20)matched',projection,m,m,predicate,m)
+   into rows using org,p_query,p_phone_key,ctx,phone_cols;
+  result:=result||rows;
+ end loop;
+ return result;
+end;$$;
+revoke all on function public.search_call_contact_identities(text,text) from public,anon;
+grant execute on function public.search_call_contact_identities(text,text) to authenticated;
+
 create or replace function public.read_call_contact_history(p_module_id text,p_record_id uuid,p_section text,p_offset integer default 0)
 returns jsonb language plpgsql security invoker set search_path=public as $$
 declare

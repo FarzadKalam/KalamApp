@@ -1,4 +1,4 @@
-import {phoneLookupKey,iranMobileLocal,iranMobileE164} from './phone-number.ts';
+import {phoneLookupKey} from './phone-number.ts';
 import {canViewModuleWithPlan} from './ai-grounding.ts';
 
 export const CONTACT_MODULES=['customers','suppliers','employees'] as const;
@@ -13,8 +13,7 @@ export const sortContactActivity=(rows:any[])=>rows.slice().sort((a,b)=>contactA
 const allowed=(ctx:ContactContextReader,module:string)=>canViewModuleWithPlan(ctx.plan,ctx.permissions,module);
 const fieldAllowed=(ctx:ContactContextReader,module:string,field:string)=>ctx.permissions?.[module]?.fields?.[field]!==false&&ctx.permissions?.[module]?.fields?.[field]?.view!==false;
 const selectFields=(ctx:ContactContextReader,module:string,columns:string[])=>columns.filter(key=>key==='id'||fieldAllowed(ctx,module,key)).join(',');
-const phoneValues=(phone:string)=>[...new Set([phoneLookupKey(phone),iranMobileLocal(phone),iranMobileE164(phone)].filter(Boolean))] as string[];
-const idList=(ids:string[])=>ids.filter(id=>UUID.test(id)).join(',');
+
 
 /** End-user RLS is mandatory in reader; never use service-role REST for this data. */
 export async function searchCallContacts(ctx:ContactContextReader,input:string):Promise<ContactIdentity[]>{
@@ -22,31 +21,10 @@ export async function searchCallContacts(ctx:ContactContextReader,input:string):
  const isPhone=/^[+\d۰-۹٠-٩\s().-]+$/.test(query);
  const key=isPhone?phoneLookupKey(query):'';
  if(isPhone&&key.length<7)return [];
- let directory:any[]=[];
- if(key){
-  const numbers=await ctx.read('phone_numbers',{select:'id',org_id:`eq.${ctx.orgId}`,lookup_key:`eq.${key}`,limit:'20'});
-  if(numbers.rows.length)directory=(await ctx.read('phone_number_links',{select:'entity_type,entity_id,source_field',org_id:`eq.${ctx.orgId}`,phone_number_id:`in.(${idList(numbers.rows.map(row=>row.id))})`,limit:'50'})).rows;
- }
- const results=await Promise.all(CONTACT_MODULES.map(async module=>{
-  if(!allowed(ctx,module))return [];
-  const cols=['id','full_name','first_name','last_name','mobile_1','mobile_2','phone','updated_at','created_at',...(module==='employees'?['job_title','related_profile_id']:['business_name','rank'])];
-  const filters:Record<string,string>={org_id:`eq.${ctx.orgId}`,select:selectFields(ctx,module,cols),limit:'20',order:'updated_at.desc.nullslast,created_at.desc,id.desc'};
-  if(key){
-   const ids=directory.filter(row=>row.entity_type===module&&row.source_field&&fieldAllowed(ctx,module,row.source_field)).map(row=>row.entity_id);
-   const variants=phoneValues(query);
-   filters.or='('+[...(ids.length?[`id.in.(${idList(ids)})`]:[]),...['mobile_1','mobile_2','phone'].filter(f=>fieldAllowed(ctx,module,f)).flatMap(field=>variants.map(value=>`${field}.eq.${value}`))].join(',')+')';
-  }else{
-   const text=query.replace(/[%*,()."\\]/g,'').trim();if(!text)return [];
-   filters.or='('+['full_name','first_name','last_name',...(module==='employees'?[]:['business_name'])].filter(f=>fieldAllowed(ctx,module,f)).map(field=>`${field}.ilike.*${text}*`).join(',')+')';
-  }
-  if(filters.or==='()')return [];
-  const result=await ctx.read(module,filters);
-  if(!result.rows.length)return [];
-  const ids=await ctx.rpc('filter_call_contact_identities',{p_module_id:module,p_ids:result.rows.map(row=>row.id)});
-  const visible=new Set(Array.isArray(ids)?ids:[]);
-  return sortContactActivity(result.rows.filter(row=>visible.has(row.id))).map(row=>({moduleId:module,recordId:row.id,title:title(row),phone:row.mobile_1||row.mobile_2||row.phone||'',rank:row.rank,updatedAt:row.updated_at||row.created_at}));
- }));
- return results.flat().sort((a,b)=>(Date.parse(b.updatedAt||'')||0)-(Date.parse(a.updatedAt||'')||0));
+ if(!CONTACT_MODULES.some(module=>allowed(ctx,module)))return [];
+ const matches=await ctx.rpc('search_call_contact_identities',{p_query:query,p_phone_key:key||null});
+ const rows=(Array.isArray(matches)?matches:[]).filter(row=>CONTACT_MODULES.includes(row.moduleId)&&allowed(ctx,row.moduleId));
+ return sortContactActivity(rows).map(row=>({moduleId:row.moduleId,recordId:row.id,title:title(row),phone:row.mobile_1||row.mobile_2||row.phone||'',rank:row.rank,updatedAt:row.updated_at||row.created_at}));
 }
 
 export const CALL_CONTEXT_SECTIONS={
