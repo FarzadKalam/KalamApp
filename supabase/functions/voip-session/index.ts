@@ -184,7 +184,7 @@ Deno.serve(async (req) => {
         org_id: `eq.${orgId}`,
         provider: `eq.${provider}`,
         call_id: `eq.${callId}`,
-        select: 'id,started_at,metadata',
+        select: 'id,started_at,metadata,related_module_id,related_record_id',
         limit: '1',
       });
 
@@ -199,8 +199,8 @@ Deno.serve(async (req) => {
         destination_number: destinationNumber || null,
         extension,
         operator_code: profile.voip_operator_code || null,
-        related_module_id: body?.moduleId || null,
-        related_record_id: body?.recordId || null,
+        related_module_id: body?.moduleId || existing[0]?.related_module_id || null,
+        related_record_id: body?.recordId || existing[0]?.related_record_id || null,
         assignee_id: profile.id,
         title: (direction === 'incoming' ? sourceNumber : destinationNumber) || 'تماس تحت وب',
         metadata: {

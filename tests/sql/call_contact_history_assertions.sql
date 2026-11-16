@@ -19,6 +19,9 @@ do $$declare result jsonb;begin
  perform set_config('test.permissions','{"customers":{"view":true,"record_scope":"own"},"invoices":{"view":true}}',true);
  result:=public.search_call_contact_identities('مخاطب',null);
  if jsonb_array_length(result)<>1 then raise exception 'identity scope applied after page limit';end if;
+ perform set_config('test.permissions','{"customers":{"view":true},"invoices":{"view":true,"view_conditions":{"conditions_all":[{"field":"status","operator":"eq","value":"settled"}]}}}',true);
+ result:=public.read_call_contact_history('customers','40000000-0000-4000-8000-000000000001','invoices',0);
+ if (result->>'count')::int<>1 then raise exception 'organization-defined view conditions not respected';end if;
  perform set_config('test.permissions','{"customers":{"view":true},"invoices":{"view":true,"view_conditions":{"conditions_all":[{"field":"related.customer","operator":"eq","value":"blocked"}]}}}',true);
  result:=public.read_call_contact_history('customers','40000000-0000-4000-8000-000000000001','invoices',0);
  if (result->>'count')::int<>0 then raise exception 'unsupported view conditions ignored';end if;

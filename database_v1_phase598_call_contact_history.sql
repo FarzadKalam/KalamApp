@@ -1,18 +1,52 @@
 -- One paginated, RLS-preserving relation graph for the call UI and agent tools.
 begin;
+create or replace function public.call_contact_condition_matches(p_row jsonb,p_condition jsonb)
+returns boolean language plpgsql immutable set search_path=public as $$
+declare f text:=p_condition->>'field';op text:=p_condition->>'operator';v jsonb;expected jsonb:=p_condition->'value';actual_text text;expected_text text;
+begin
+ if f is null or f!~'^[a-zA-Z_][a-zA-Z0-9_]*$' or not(p_row?f)then return null;end if;
+ v:=p_row->f;actual_text:=p_row->>f;expected_text:=p_condition->>'value';
+ case op
+ when 'eq' then return actual_text is not distinct from expected_text;
+ when 'neq' then return actual_text is not null and expected_text is not null and actual_text<>expected_text;
+ when 'is_empty' then return actual_text is null or actual_text='';
+ when 'is_not_empty' then return actual_text is not null and actual_text<>'';
+ when 'contains' then return actual_text is not null and expected_text is not null and position(expected_text in actual_text)>0;
+ when 'in' then if jsonb_typeof(expected)<>'array' then return null;end if;return exists(select 1 from jsonb_array_elements_text(expected)x where x=actual_text);
+ when 'not_in' then if jsonb_typeof(expected)<>'array' then return null;end if;return actual_text is not null and not exists(select 1 from jsonb_array_elements_text(expected)x where x=actual_text);
+ when 'gt','gte','lt','lte' then
+  if actual_text is null or expected_text is null then return false;end if;
+  if jsonb_typeof(v)='number' and jsonb_typeof(expected)='number' then
+   return case op when 'gt' then actual_text::numeric>expected_text::numeric when 'gte' then actual_text::numeric>=expected_text::numeric when 'lt' then actual_text::numeric<expected_text::numeric else actual_text::numeric<=expected_text::numeric end;
+  elsif jsonb_typeof(v)='string' and jsonb_typeof(expected)='string' then
+   return case op when 'gt' then actual_text>expected_text when 'gte' then actual_text>=expected_text when 'lt' then actual_text<expected_text else actual_text<=expected_text end;
+  end if;
+  return false;
+ else return null;
+ end case;
+exception when others then return null;
+end;$$;
+revoke all on function public.call_contact_condition_matches(jsonb,jsonb) from public,anon;
+grant execute on function public.call_contact_condition_matches(jsonb,jsonb) to authenticated;
+
 -- Shared, fail-closed scope check. Context is always built by the calling RPC,
 -- never accepted from the browser. A boolean helper grants no data access.
 create or replace function public.call_contact_scope_visible(p_context jsonb,p_module text,p_row jsonb)
 returns boolean language plpgsql stable security invoker set search_path=public as $$
 declare p jsonb:=coalesce(p_context->'permissions'->p_module,'{}');s text:=coalesce(nullif(p->>'record_scope',''),'all');
- u uuid:=auth.uid();r uuid:=nullif(p_context->>'role_id','')::uuid;allowed_roles uuid[];
+ u uuid:=auth.uid();r uuid:=nullif(p_context->>'role_id','')::uuid;allowed_roles uuid[];g jsonb:=p->'view_conditions';all_conditions jsonb;any_conditions jsonb;c jsonb;matched boolean;any_matched boolean:=false;
 begin
  if not(p_context->'permissions'?p_module) or coalesce((p->>'view')::boolean,false)=false then return false;end if;
- -- Related-record conditions need the central condition compiler; deny rather
- -- than silently ignoring a rule. Empty condition groups impose no restriction.
- if coalesce(jsonb_array_length(p->'view_conditions'->'conditions'),0)>0
-  or coalesce(jsonb_array_length(p->'view_conditions'->'conditions_all'),0)>0
-  or coalesce(jsonb_array_length(p->'view_conditions'->'conditions_any'),0)>0 then return false;end if;
+ if g?'conditions_all' or g?'conditions_any' then all_conditions:=coalesce(g->'conditions_all','[]');any_conditions:=coalesce(g->'conditions_any','[]');
+ elsif g->>'logic'='or' then all_conditions:='[]';any_conditions:=coalesce(g->'conditions','[]');
+ else all_conditions:=coalesce(g->'conditions','[]');any_conditions:='[]';end if;
+ for c in select value from jsonb_array_elements(all_conditions)loop
+  matched:=public.call_contact_condition_matches(p_row,c);if matched is distinct from true then return false;end if;
+ end loop;
+ for c in select value from jsonb_array_elements(any_conditions)loop
+  matched:=public.call_contact_condition_matches(p_row,c);if matched is null then return false;end if;any_matched:=any_matched or matched;
+ end loop;
+ if jsonb_array_length(any_conditions)>0 and not any_matched then return false;end if;
  if s='all' then return true;end if;
  if u is null then return false;end if;
  if s='own' then return p_row->>'assignee_type'='user' and p_row->>'assignee_id'=u::text;end if;

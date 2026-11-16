@@ -96,6 +96,7 @@ let activeSession: Session | null = null;
 let currentConfig: WebPhoneSessionConfig | null = null;
 let remoteAudioElement: HTMLAudioElement | null = null;
 let connectPromise: Promise<boolean> | null = null;
+let connectionGeneration=0;
 let bridgeHeartbeat:ReturnType<typeof setInterval>|null=null;
 
 const emit = () => {
@@ -201,8 +202,15 @@ const bindSessionLifecycle = (
         ...snapshot.activeCall,
         matchedContact: matched,
         remoteDisplayName: matched.title || snapshot.activeCall.remoteDisplayName,
+        contextModuleId: snapshot.activeCall.contextModuleId||matched.moduleId,
+        contextRecordId: snapshot.activeCall.contextRecordId||matched.recordId,
       },
     });
+    void logWebRtcCall({callId:meta.callId,direction:meta.direction,
+      status:snapshot.activeCall?.state==='active'?'answered':'ringing',
+      sourceNumber:meta.direction==='incoming'?meta.remoteNumber:snapshot.extension,
+      destinationNumber:meta.direction==='outgoing'?meta.remoteNumber:snapshot.extension,
+      extension:snapshot.extension,moduleId:matched.moduleId,recordId:matched.recordId});
   });
 
   void logWebRtcCall({
@@ -263,33 +271,16 @@ const bindSessionLifecycle = (
 };
 
 export const disconnectVoipWebPhone = async () => {
+  connectionGeneration++;
   if(bridgeHeartbeat){clearInterval(bridgeHeartbeat);bridgeHeartbeat=null;}
-  try {
-    if (activeSession) {
-      if (activeSession.state === SessionState.Established) {
-        await activeSession.bye().catch(() => undefined);
-      } else if (activeSession instanceof Inviter) {
-        await activeSession.cancel().catch(() => undefined);
-      } else if (activeSession instanceof Invitation) {
-        await activeSession.reject().catch(() => undefined);
-      }
-      activeSession = null;
-    }
-    if (registerer) {
-      await registerer.unregister().catch(() => undefined);
-      registerer = null;
-    }
-    if (userAgent) {
-      await userAgent.stop().catch(() => undefined);
-      userAgent = null;
-    }
-  } finally {
-    currentConfig = null;
-    updateSnapshot({
-      status: 'idle',
-      activeCall: null,
-    });
-  }
+  const closingSession=activeSession,closingRegisterer=registerer,closingAgent=userAgent;
+  activeSession=null;registerer=null;userAgent=null;currentConfig=null;connectPromise=null;
+  updateSnapshot({status:'idle',available:false,activeCall:null,extension:null,displayName:null,provider:null,errorMessage:null});
+  if(closingSession?.state===SessionState.Established)await closingSession.bye().catch(()=>undefined);
+  else if(closingSession instanceof Inviter)await closingSession.cancel().catch(()=>undefined);
+  else if(closingSession instanceof Invitation)await closingSession.reject().catch(()=>undefined);
+  if(closingRegisterer)await closingRegisterer.unregister().catch(()=>undefined);
+  if(closingAgent)await closingAgent.stop().catch(()=>undefined);
 };
 
 export const connectVoipWebPhone = async (options?: { force?: boolean; route?: 'gateway' }): Promise<boolean> => {
@@ -299,9 +290,11 @@ export const connectVoipWebPhone = async (options?: { force?: boolean; route?: '
 
   connectPromise = (async () => {
     let registrationFailure='transport';
+    let generation=connectionGeneration;
     try {
       if (options?.force) {
         await disconnectVoipWebPhone();
+        generation=connectionGeneration;
       }
       updateSnapshot({ status: 'connecting', errorMessage: null });
 
@@ -313,9 +306,11 @@ export const connectVoipWebPhone = async (options?: { force?: boolean; route?: '
       let cfg=await readConfig();
       const deadline=Date.now()+30_000;
       while(cfg.reason==='gateway_provisioning'&&Date.now()<deadline){
+        if(generation!==connectionGeneration)return false;
         await new Promise(resolve=>setTimeout(resolve,2000));
         cfg=await readConfig();
       }
+      if(generation!==connectionGeneration)return false;
       currentConfig = cfg;
 
       if (!cfg.enabled || !cfg.endpoint || !cfg.wssUrl) {
@@ -397,6 +392,7 @@ export const connectVoipWebPhone = async (options?: { force?: boolean; route?: '
       registerer = reg;
       try {
         await ua.start();
+        if(generation!==connectionGeneration){await ua.stop().catch(()=>undefined);return false;}
         registrationWait=createVoipRegistrationWait();
         registrationFailure='registration_timeout';
         await reg.register({requestDelegate:{onReject:response=>{registrationFailure='registration_rejected';registrationWait?.fail(getSipRegistrationError(response.message.statusCode));}}});
@@ -421,6 +417,7 @@ export const connectVoipWebPhone = async (options?: { force?: boolean; route?: '
       }
       return true;
     } catch (err: any) {
+      if(generation!==connectionGeneration)return false;
       if(mayFallbackToVoipGateway(currentConfig?.route,currentConfig?.strategy,registrationFailure,!!activeSession)){
         await disconnectVoipWebPhone();
         connectPromise=null;
@@ -433,7 +430,7 @@ export const connectVoipWebPhone = async (options?: { force?: boolean; route?: '
       });
       return false;
     } finally {
-      connectPromise = null;
+      if(generation===connectionGeneration)connectPromise = null;
     }
   })();
 
