@@ -223,6 +223,18 @@ jobs:
             docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d voip_external_test -v ON_ERROR_STOP=1 < "$file"
           done
 
+      - name: Asterisk dynamic contact persistence and private grants
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          for file in tests/sql/voip_contact_fields_fixture.sql \
+            database_v1_phase601_voip_realtime_contact_fields.sql \
+            database_v1_phase601_voip_realtime_contact_fields.sql \
+            tests/sql/voip_contact_fields_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d voip_external_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
       - name: Install
         run: npm ci
 

@@ -21,6 +21,7 @@ import { blobToBase64 } from '../../utils/blobBase64';
 import { getVoipRecordingFileName, loadVoipRecordingBlob, type VoipRecordingCall } from '../../utils/voipRecording';
 import CallContactContextPanel from './CallContactContextPanel';
 import {getSelectedOrganizationId} from '../../utils/organizationContext';
+import {loadRecentVoipCalls,type RecentVoipCall} from '../../utils/voipCallHistory';
 
 // --- Pure SVG Icons (No Emojis) ---
 const SvgIcons = {
@@ -182,20 +183,7 @@ const formatCallDuration = (answeredAtMs: number | null, nowMs: number) => {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 };
 
-type RecentCallItem = {
-  id: string;
-  counterparty_phone?: string | null;
-  direction?: string | null;
-  status?: string | null;
-  started_at?: string | null;
-  duration?: number | null;
-  extension?: string | null;
-  assignee_name?: string | null;
-  recording_url?: string | null;
-  file_id?: string | null;
-  transcript?: string | null;
-  transcript_status?: string | null;
-};
+type RecentCallItem = RecentVoipCall;
 
 type WebPhoneWidgetProps = {
   voipEnabled: boolean;
@@ -226,6 +214,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
   // Recent calls history state
   const [recentCalls, setRecentCalls] = useState<RecentCallItem[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [historyError, setHistoryError] = useState<string|null>(null);
 
   useEffect(() => {
     if (!voipEnabled || !planFeatureEnabled) {
@@ -258,28 +247,18 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
   // Fetch recent calls when drawer is expanded
   useEffect(() => {
     if (!showHistoryDrawer) return;
-    const phone = targetPhoneNumber.replace(/[^0-9]/g, '');
     let isMounted = true;
     const fetchHistory = async () => {
       setLoadingHistory(true);
+      setHistoryError(null);
+      setRecentCalls([]);
       try {
-        let query = supabase
-          .from('voip_call_logs')
-          .select('id, counterparty_phone, direction, status, started_at, duration, extension, recording_url, file_id, transcript, transcript_status')
-          .order('started_at', { ascending: false })
-          .limit(8);
-
-        if (phone && phone.length >= 4) {
-          query = query.ilike('counterparty_phone', `%${phone.slice(-7)}%`);
-        }
-
-        const { data, error } = await query;
-        if (error) throw error;
+        const data = await loadRecentVoipCalls(targetPhoneNumber);
         if (isMounted) {
           setRecentCalls((data as RecentCallItem[]) || []);
         }
       } catch (err) {
-        console.warn('Failed to load recent voip calls:', err);
+        if(isMounted)setHistoryError(toFaErrorMessage(err,'دریافت سوابق تماس انجام نشد.'));
       } finally {
         if (isMounted) setLoadingHistory(false);
       }
@@ -693,6 +672,8 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
                   <Spin size="small" />
                   <div className="text-[10px] mt-1">در حال دریافت تاریخچه...</div>
                 </div>
+              ) : historyError ? (
+                <div role="alert" className="py-3 text-center text-xs text-red-600 dark:text-red-400">{historyError}</div>
               ) : recentCalls.length === 0 ? (
                 <div className="text-center py-3 text-slate-400 text-[11px]">
                   سابقه‌ای برای این شماره یافت نشد.
@@ -721,8 +702,8 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
                     </div>
 
                     <div className="flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400 font-mono">
-                      <span>داخلی: {call.extension || '۱۰۱'}</span>
-                      {call.duration ? <span>مدت: {toPersianNumber(Math.floor(call.duration / 60))}:{toPersianNumber(call.duration % 60)}</span> : null}
+                      <span>داخلی: {call.extension || '—'}</span>
+                      {call.talk_seconds ? <span>مدت: {toPersianNumber(Math.floor(call.talk_seconds / 60))}:{toPersianNumber(call.talk_seconds % 60)}</span> : null}
                     </div>
 
                     {/* Audio Recording Player if present */}
