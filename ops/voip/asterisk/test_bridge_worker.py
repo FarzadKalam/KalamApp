@@ -2,10 +2,15 @@ import unittest
 import re
 import configparser
 from pathlib import Path
-from bridge_worker import build_objects, bridge_ids, registration_status, realtime_value
+from bridge_worker import build_objects, bridge_ids, registration_status, realtime_value,active_channel_counts
 
 
 class BridgeObjectsTest(unittest.TestCase):
+    def test_busy_presence_comes_from_channel_names_and_stays_in_its_namespace(self):
+        one='b_'+'1'*32
+        two='b_'+'2'*32
+        output=f'PJSIP/{one}_browser-00000001!taze-external-out!101!1!Up\nPJSIP/{one}_provider-00000002!taze-external-in!101!1!Up\nPJSIP/{two}_browser-00000003!other\nLocal/fake!{one}_browser\n'
+        self.assertEqual(active_channel_counts(output),{one:2,two:1})
     def test_realtime_preserves_uri_parameters_and_password_delimiters(self):
         self.assertEqual(realtime_value('sip:pbx.test:5060;transport=tcp'), 'sip:pbx.test:5060^3Btransport=tcp')
         self.assertEqual(realtime_value('fixture;secret^3B'), 'fixture^3Bsecret^5E3B')

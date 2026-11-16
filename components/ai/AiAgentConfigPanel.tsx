@@ -95,6 +95,7 @@ type AiAgentConfigPanelProps = {
   overview?: any | null;
   onSaved?: () => void | Promise<void>;
   compact?: boolean;
+  initialAgentKey?:AgentKey;
 };
 
 const CHANNEL_OPTIONS = [
@@ -138,12 +139,13 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
   overview: externalOverview = null,
   onSaved,
   compact = false,
+  initialAgentKey='lead_orchestrator',
 }) => {
   const { message } = App.useApp();
   const orgCurrency = useCurrencyConfig();
   const [internalOverview, setInternalOverview] = useState<any | null>(null);
   const [loading, setLoading] = useState(false);
-  const [activeAgentKey, setActiveAgentKey] = useState<AgentKey>('lead_orchestrator');
+  const [activeAgentKey, setActiveAgentKey] = useState<AgentKey>(initialAgentKey);
   const [savingAgentKey, setSavingAgentKey] = useState<AgentKey | null>(null);
   const [runningBackground, setRunningBackground] = useState(false);
   const [runningSingleSchedule, setRunningSingleSchedule] = useState(false);
@@ -162,6 +164,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
     toneStyle: AgentToneStyle;
     allowedChannels: string[];
     customInstructions: string;
+    voiceInstructions?:string;
     backgroundConfig: {
       enabled: boolean;
       interval_minutes: number;
@@ -235,6 +238,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
           ? serverItem.allowedChannels
           : ['web', 'staff_bot', 'agent_inbox'],
         customInstructions: customInstr,
+        voiceInstructions:String(policy.voice_instructions||''),
         backgroundConfig: {
           enabled: bg?.enabled === true,
           interval_minutes: Math.max(15, Number(bg?.interval_minutes || def.defaultBackgroundConfig.interval_minutes || 60)),
@@ -367,6 +371,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
         ...existingPolicy,
         custom_instructions: activeDraft.customInstructions?.trim() || '',
         reasoning_effort: activeDraft.reasoningEffort || null,
+        ...(activeAgentKey==='customer_response'?{voice_instructions:activeDraft.voiceInstructions?.trim()||''}:{}),
       };
       const payloadBody = activeCanEdit
         ? {
@@ -877,6 +882,11 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
                         />
                       </div>
 
+                      {activeAgentKey==='customer_response'&&<div className="rounded-xl border border-sky-200 bg-sky-50/50 p-3 dark:border-sky-900 dark:bg-sky-950/20 space-y-2">
+                        <label htmlFor="customer-voice-instructions" className="text-sm font-semibold">دستورالعمل اختصاصی تماس صوتی</label>
+                        <p className="text-xs text-slate-500">شیوهٔ خوشامدگویی فارسی، پاسخ‌های کوتاه، مکث، ارجاع و پایان تماس را اینجا مشخص کنید. دستورالعمل عمومی و مجوزهای ایجنت نیز رعایت می‌شوند.</p>
+                        <Input.TextArea id="customer-voice-instructions" rows={4} maxLength={12000} disabled={!activeCanEdit} value={activeDraft.voiceInstructions||''} onChange={event=>updateActiveDraft({voiceInstructions:event.target.value})} placeholder="مثلاً با نام سازمان خوشامد بگو؛ هر بار یک پرسش کوتاه بپرس؛ پیش از گفتن اطلاعات مالی احراز هویت کن." />
+                      </div>}
                       <div className="rounded-xl border border-slate-100 p-3 dark:border-white/10 space-y-3">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">

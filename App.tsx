@@ -219,6 +219,7 @@ const LandingPageEditor = lazy(loadLandingPageEditor);
 const CmsPageEditor = lazy(loadCmsPageEditor);
 const ApiDocsPage = lazy(loadApiDocsPage);
 const MessagesPage = lazy(loadMessagesPage);
+const ContactCenterPage=lazy(()=>import('./pages/ContactCenterPage'));
 const SupportTicketsPage = lazy(loadSupportTicketsPage);
 const SupportWorkflowsPage = lazy(loadSupportWorkflowsPage);
 const SaasLifecycleWorkflowsPage = lazy(loadSaasLifecycleWorkflowsPage);
@@ -848,6 +849,7 @@ function App() {
             <Route path="/attendance/daily/:scheduleId" element={<AttendanceDailySchedulePage />} />
             <Route path="/mbti_assessments/:id/report" element={<MbtiAssessmentReportPage />} />
             <Route path="/messages" element={<MessagesPage />} />
+            <Route path="/contact-center" element={<LazyRouteBoundary><ContactCenterPage /></LazyRouteBoundary>} />
             <Route path="/support/tickets" element={<SupportTicketsPage />} />
             <Route path="/installation" element={<LocalInstallationDashboard />} />
             <Route path="/support/tickets/:ticketId" element={<SupportTicketsPage />} />

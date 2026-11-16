@@ -226,6 +226,8 @@ type ComposerSendPayload = {
 };
 
 type MessagingSurfacePrototypeProps = {
+  callsOnly?:boolean;
+  onCallSummary?:(summary:{loaded:number;answered:number;missed:number})=>void;
   initialFilter?: ChannelKind | 'all' | 'email';
   initialConversationKey?: string | null;
   initialForwardMessage?: {
@@ -1560,8 +1562,9 @@ const MessagingConversationList: React.FC<{
   activeFilter: ChannelKind | 'all' | 'email';
   onChangeFilter: (value: ChannelKind | 'all' | 'email') => void;
   unreadSummary?: MessagingUnreadSummary;
-}> = ({ conversations, selectedKey, onSelect, compact = false, loading = false, onRefresh, refreshing = false, onCreateInternalGroup, hasMoreSms = false, hasMoreCalls = false, loadingMoreSms = false, loadingMoreCalls = false, onLoadMoreSms, onLoadMoreCalls, activeFilter, onChangeFilter, unreadSummary = EMPTY_MESSAGING_UNREAD_SUMMARY }) => (
-  <MessagingConversationListInner conversations={conversations} selectedKey={selectedKey} onSelect={onSelect} compact={compact} loading={loading} onRefresh={onRefresh} refreshing={refreshing} onCreateInternalGroup={onCreateInternalGroup} hasMoreSms={hasMoreSms} hasMoreCalls={hasMoreCalls} loadingMoreSms={loadingMoreSms} loadingMoreCalls={loadingMoreCalls} onLoadMoreSms={onLoadMoreSms} onLoadMoreCalls={onLoadMoreCalls} activeFilter={activeFilter} onChangeFilter={onChangeFilter} unreadSummary={unreadSummary} />
+  callsOnly?:boolean;
+}> = ({ conversations, selectedKey, onSelect, compact = false, loading = false, onRefresh, refreshing = false, onCreateInternalGroup, hasMoreSms = false, hasMoreCalls = false, loadingMoreSms = false, loadingMoreCalls = false, onLoadMoreSms, onLoadMoreCalls, activeFilter, onChangeFilter, unreadSummary = EMPTY_MESSAGING_UNREAD_SUMMARY,callsOnly=false }) => (
+  <MessagingConversationListInner callsOnly={callsOnly} conversations={conversations} selectedKey={selectedKey} onSelect={onSelect} compact={compact} loading={loading} onRefresh={onRefresh} refreshing={refreshing} onCreateInternalGroup={onCreateInternalGroup} hasMoreSms={hasMoreSms} hasMoreCalls={hasMoreCalls} loadingMoreSms={loadingMoreSms} loadingMoreCalls={loadingMoreCalls} onLoadMoreSms={onLoadMoreSms} onLoadMoreCalls={onLoadMoreCalls} activeFilter={activeFilter} onChangeFilter={onChangeFilter} unreadSummary={unreadSummary} />
 );
 
 const MessagingConversationListInner: React.FC<{
@@ -1582,7 +1585,8 @@ const MessagingConversationListInner: React.FC<{
   activeFilter: ChannelKind | 'all' | 'email';
   onChangeFilter: (value: ChannelKind | 'all' | 'email') => void;
   unreadSummary: MessagingUnreadSummary;
-}> = ({ conversations, selectedKey, onSelect, compact = false, loading = false, onRefresh, refreshing = false, onCreateInternalGroup, hasMoreSms, hasMoreCalls, loadingMoreSms, loadingMoreCalls, onLoadMoreSms, onLoadMoreCalls, activeFilter, onChangeFilter, unreadSummary }) => {
+  callsOnly?:boolean;
+}> = ({ conversations, selectedKey, onSelect, compact = false, loading = false, onRefresh, refreshing = false, onCreateInternalGroup, hasMoreSms, hasMoreCalls, loadingMoreSms, loadingMoreCalls, onLoadMoreSms, onLoadMoreCalls, activeFilter, onChangeFilter, unreadSummary,callsOnly=false }) => {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchValue, setSearchValue] = useState('');
   const normalizedSearch = String(searchValue || '').trim().toLocaleLowerCase('fa');
@@ -1615,9 +1619,9 @@ const MessagingConversationListInner: React.FC<{
       {!compact ? (
         <div className="border-b border-slate-200/60 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-[#17191c]">
         <div className="flex items-center justify-between gap-2">
-          <div className="truncate text-[13px] font-bold text-slate-800 dark:text-slate-100">پیام رسانی</div>
+          <div className="truncate text-[13px] font-bold text-slate-800 dark:text-slate-100">{callsOnly?'تماس‌ها':'پیام رسانی'}</div>
           <div className="flex shrink-0 items-center gap-1">
-            <Tooltip title="ایجاد گروه داخلی جدید">
+            {!callsOnly&&<Tooltip title="ایجاد گروه داخلی جدید">
               <Button
                 type="text"
                 shape="circle"
@@ -1625,7 +1629,7 @@ const MessagingConversationListInner: React.FC<{
                 aria-label="ایجاد گروه داخلی جدید"
                 onClick={onCreateInternalGroup}
               />
-            </Tooltip>
+            </Tooltip>}
             <Tooltip title="بروزرسانی پیام‌ها">
               <Button
                 type="text"
@@ -1684,7 +1688,7 @@ const MessagingConversationListInner: React.FC<{
           />
         ) : null}
         <div className="mt-2 flex flex-wrap gap-1">
-          {channelFilters.map((filter) => {
+          {channelFilters.filter(filter=>!callsOnly||filter.key==='call').map((filter) => {
             const active = activeFilter === filter.key;
             return (
               <button
@@ -2602,6 +2606,8 @@ type ChatGroupRow = {
 };
 
 const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
+  callsOnly=false,
+  onCallSummary,
   initialFilter = 'internal',
   initialConversationKey = null,
   initialForwardMessage = null,
@@ -2691,7 +2697,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
   const runtimeRevisionRef = useRef(notificationRuntime.revisions);
   const botStatusWatchTimerRef = useRef<number | null>(null);
   const botTimelineRefreshRef = useRef<null | ((options?: { force?: boolean }) => Promise<any>)>(null);
-  const liveData = useMessagingOmniLiveData({ realtimeEnabled: !notificationRuntime.ready });
+  const liveData = useMessagingOmniLiveData({ realtimeEnabled: !notificationRuntime.ready,callsOnly });
   useEffect(() => {
     if (!liveData.profile.id || Object.keys(messagingModuleLabelMap).length > 0) return undefined;
     let disposed = false;
@@ -2714,13 +2720,13 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
   const internalConversations = useNotificationConversationList({
     supabase,
     section: 'notes',
-    enabled: Boolean(liveData.profile.id),
+    enabled: Boolean(liveData.profile.id)&&!callsOnly,
     cacheScopeKey,
   });
   const botConversations = useNotificationConversationList({
     supabase,
     section: 'bot_messages',
-    enabled: Boolean(liveData.profile.id),
+    enabled: Boolean(liveData.profile.id)&&!callsOnly,
     cacheScopeKey,
   });
   const selectedInternalSourceKey = getInternalSourceConversationKey(selectedKey);
@@ -3152,7 +3158,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
     if (!liveData.profile.id || !internalReelReady) return;
     setReelBootstrapped(true);
   }, [internalReelReady, liveData.profile.id, reelBootstrapped]);
-  const reelInitialLoading = !reelBootstrapped;
+  const reelInitialLoading = !callsOnly&&!reelBootstrapped;
   const liveInternalConversations = useMemo(
     () => sortConversationsByActivity(mergeDirectoryDirectConversations(
       ensureInternalSpecialConversations(
@@ -3275,6 +3281,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
   ]);
   const displayConversations = useMemo(() => {
     if (reelInitialLoading) return [];
+    if(callsOnly)return liveData.conversations.filter(conversation=>conversation.channel==='call');
     const liveInternal = liveInternalConversations;
     const existingAgentKeys = new Set(
       liveInternal
@@ -3317,7 +3324,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
       ...liveSms,
       ...liveCalls,
     ].map((conversation) => applyLocalReadThrough(conversation, localReadThroughByConversation)));
-  }, [botConversations.items, liveData.conversations, liveInternalConversations, localReadThroughByConversation, reelInitialLoading]);
+  }, [botConversations.items, liveData.conversations, liveInternalConversations, localReadThroughByConversation, reelInitialLoading,callsOnly]);
   const initialMessagingLoading = displayConversations.length === 0 && (reelInitialLoading || liveData.loading);
   const messagingUnreadSummary = useMemo<MessagingUnreadSummary>(() => {
     const systemConversation = displayConversations.find((conversation) => conversation.channel === 'internal' && conversation.internalKind === 'system');
@@ -3789,7 +3796,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
   };
 
   const changeConversationFilter = (value: ChannelKind | 'all' | 'email') => {
-    setConversationFilter(value);
+    setConversationFilter(callsOnly?'call':value);
   };
 
   const toggleConversationSearch = () => {
@@ -5770,13 +5777,19 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
       : null;
   })();
 
+  useEffect(()=>{
+    if(!callsOnly||!onCallSummary)return;const events=liveData.events.filter(event=>event.kind==='call');
+    const statuses=events.map(event=>String((event as any).sourceRow?.status||''));
+    onCallSummary({loaded:events.length,answered:statuses.filter(status=>status==='answered').length,missed:statuses.filter(status=>['missed','no_answer','busy','failed'].includes(status)).length});
+  },[callsOnly,onCallSummary,liveData.events]);
+
   if (conversationFilter === 'email') return <EmailWorkspace onBack={() => setConversationFilter('all')} />;
 
   return (
     <div dir="rtl" data-testid="messaging-v2-prototype" className="h-full min-h-0 overflow-hidden bg-slate-100 text-slate-800 dark:bg-[#101113] dark:text-slate-100">
       <div className="flex h-full min-h-0 overflow-hidden">
         <aside className="order-last hidden h-full min-h-0 w-[292px] shrink-0 border-l border-slate-200/70 bg-slate-50/86 dark:border-white/[0.07] dark:bg-[#131518] md:block">
-          <MessagingConversationList
+          <MessagingConversationList callsOnly={callsOnly}
             conversations={displayConversations}
             selectedKey={selectedKey}
             onSelect={selectConversation}
@@ -5800,7 +5813,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
             <div className="border-b border-slate-200/70 px-2 py-2 dark:border-white/[0.07]">
               <Button block type="text" icon={<MenuOutlined />} onClick={() => setConversationListOpen(true)} aria-label="باز کردن فهرست گفتگوها" />
             </div>
-            <MessagingConversationList
+            <MessagingConversationList callsOnly={callsOnly}
               conversations={displayConversations}
               selectedKey={selectedKey}
               onSelect={selectConversation}
@@ -5825,7 +5838,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
                 <div className="text-sm font-bold">گفتگوها</div>
                 <Button type="text" shape="circle" icon={<CloseOutlined />} onClick={() => setConversationListOpen(false)} aria-label="بستن فهرست گفتگوها" />
               </div>
-              <MessagingConversationList
+              <MessagingConversationList callsOnly={callsOnly}
                 conversations={displayConversations}
                 selectedKey={selectedKey}
                 onSelect={selectConversation}

@@ -6,7 +6,7 @@ import { dialPhone } from '../_shared/phone-number.ts';
 import {normalizeVoipProviderKey} from '../_shared/voip-providers.ts';
 import {resolveVoipRouteStrategy,selectVoipRoute,normalizeProviderSipServer} from '../_shared/voip-route-strategy.ts';
 import {prepareProviderBridge} from '../_shared/voip-provider-bridge.ts';
-import {searchVoipOperators,normalizeDialExtension,validDialExtension} from '../_shared/voip-directory.ts';
+import {searchVoipOperators,listContactCenterOperators,normalizeDialExtension,validDialExtension} from '../_shared/voip-directory.ts';
 
 const FUNCTION_BUILD = 'voip-session-2026-11-17-dial-directory';
 
@@ -239,6 +239,12 @@ Deno.serve(async (req) => {
     }
 
     if(!isAdmin)return json(403,{success:false,message:'مدیریت حساب تلفن نیازمند دسترسی ویرایش کاربران یا تنظیمات سازمان است.'});
+    if(action==='list_center_operators'){
+      if(!webphonePlanEnabled)return json(403,{success:false,message:'مدیریت مکالمه در پلن این سازمان فعال نیست.'});
+      const offset=Number(body.offset||0);
+      if(!Number.isSafeInteger(offset)||offset<0||offset>2147483647)return json(400,{success:false,message:'شمارهٔ صفحه معتبر نیست.'});
+      return json(200,{success:true,...await listContactCenterOperators((table,params)=>restSelect(supabaseUrl,serviceRoleKey,table,params),orgId,offset)});
+    }
     if(action==='list_trunks'||action==='list_endpoints')return json(200,{success:true,trunks:[],endpoints:[],message:'مدیریت مرکز تلفن تازه‌سیستم در حال توسعه است.'});
     if(action==='get_user_endpoint'){
       if(!policy.canUseBrowser||!webphonePlanEnabled)return json(200,{success:true,endpoint:null});

@@ -73,6 +73,17 @@ def registration_status(output):
     return 'registered' if re.search(r'\bRegistered\b', output) else 'pending'
 
 
+def active_channel_counts(output):
+    """Count only trusted Asterisk channel names, never caller ID or a SIP header."""
+    counts = {}
+    for line in output.splitlines():
+        match = re.match(r'^PJSIP/(b_[0-9a-f]{32})_(?:browser|provider)-[0-9a-f]+!', line)
+        if match:
+            key = match.group(1)
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def asterisk(command):
     result = subprocess.run(['asterisk', '-rx', command], capture_output=True, text=True, timeout=10)
     if result.returncode:
@@ -140,6 +151,7 @@ def reconcile(connection, force=False):
         connection.commit()
         if changed:
             asterisk('module reload res_pjsip_outbound_registration.so')
+        channel_counts = active_channel_counts(asterisk('core show channels concise')) if valid_rows else {}
         for row in valid_rows:
             _, provider = bridge_ids(row['bridge_id'])
             output = asterisk('pjsip show registration ' + provider)
@@ -147,7 +159,8 @@ def reconcile(connection, force=False):
                 asterisk('module reload res_pjsip_outbound_registration.so')
                 output = asterisk('pjsip show registration ' + provider)
             state = registration_status(output)
-            cursor.execute('update public.voip_provider_bridges set registration_status=%s,last_checked_at=now() where id=%s and org_id=%s', (state, row['bridge_id'], row['org_id']))
+            namespace = 'b_' + str(row['bridge_id']).replace('-', '')
+            cursor.execute('update public.voip_provider_bridges set registration_status=%s,active_call_count=%s,last_checked_at=now() where id=%s and org_id=%s', (state, channel_counts.get(namespace, 0), row['bridge_id'], row['org_id']))
         connection.commit()
 
 

@@ -1404,8 +1404,9 @@ const buildBotDirectLiveModels = (
   return { conversations, events };
 };
 
-export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }) => {
+export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean;callsOnly?:boolean }) => {
   const realtimeEnabled = options?.realtimeEnabled !== false;
+  const callsOnly=options?.callsOnly===true;
   const [profile, setProfile] = useState<LiveProfile>({
     id: null,
     orgId: null,
@@ -1508,7 +1509,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
           setReadStateKeys(nextReadStateKeys || new Set());
           return nextReadStateKeys;
         });
-      const smsPromise = safeLiveFetch('sms', () => fetchSmsMessages(profile), { rows: [], hasMore: false })
+      const smsPromise = (callsOnly?Promise.resolve({ rows: [], hasMore: false }):safeLiveFetch('sms', () => fetchSmsMessages(profile), { rows: [], hasMore: false }))
         .then((page) => {
           const rows = page?.rows || [];
           setSmsMessages(rows);
@@ -1537,12 +1538,12 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
           setVoipOperatorIdentities(identities || {});
           return identities || {};
         });
-      const botGroupPromise = safeLiveFetch('bot-groups', () => fetchBotGroups(profile), [] as BotGroupRow[])
+      const botGroupPromise = (callsOnly?Promise.resolve([] as BotGroupRow[]):safeLiveFetch('bot-groups', () => fetchBotGroups(profile), [] as BotGroupRow[]))
         .then((rows) => {
           setBotGroups(rows || []);
           return rows || [];
         });
-      const botDirectThreadPromise = safeLiveFetch('bot-direct-threads', () => fetchBotDirectThreads(profile), [] as BotDirectThreadRow[])
+      const botDirectThreadPromise = (callsOnly?Promise.resolve([] as BotDirectThreadRow[]):safeLiveFetch('bot-direct-threads', () => fetchBotDirectThreads(profile), [] as BotDirectThreadRow[]))
         .then((rows) => {
           setBotDirectThreads(rows || []);
           return rows || [];
@@ -1556,8 +1557,8 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
       await readStatePromise;
       await voipOperatorIdentityPromise;
       const [botMessageRows, botDirectMessageRows] = await Promise.all([
-        safeLiveFetch('bot-group-messages', () => fetchBotGroupMessages(botGroupRows), [] as BotMessageRow[]),
-        safeLiveFetch('bot-direct-messages', () => fetchBotDirectMessages(botDirectThreadRows), [] as BotMessageRow[]),
+        (callsOnly?Promise.resolve([] as BotMessageRow[]):safeLiveFetch('bot-group-messages', () => fetchBotGroupMessages(botGroupRows), [] as BotMessageRow[])),
+        (callsOnly?Promise.resolve([] as BotMessageRow[]):safeLiveFetch('bot-direct-messages', () => fetchBotDirectMessages(botDirectThreadRows), [] as BotMessageRow[])),
       ]);
       const bindingRows = await safeLiveFetch(
         'bot-sender-bindings',
@@ -1598,7 +1599,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
       refreshInFlightRef.current = false;
       setLoading(false);
     }
-  }, [profile]);
+  }, [profile,callsOnly]);
 
   useEffect(() => {
     if (!profile.id) return;

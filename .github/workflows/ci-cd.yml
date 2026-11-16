@@ -202,6 +202,8 @@ jobs:
           for file in tests/sql/voip_provider_bridge_fixture.sql \
             database_v1_phase597_voip_provider_bridge.sql \
             database_v1_phase597_voip_provider_bridge.sql \
+            database_v1_phase602_voip_operator_call_presence.sql \
+            database_v1_phase602_voip_operator_call_presence.sql \
             tests/sql/voip_provider_bridge_assertions.sql; do
             docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d voip_external_test -v ON_ERROR_STOP=1 < "$file"
           done

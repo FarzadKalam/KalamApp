@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import {createPortal} from 'react-dom';
 import { App, Avatar, Button, Input, Spin, Tag, Tooltip } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -24,7 +25,8 @@ import { getVoipRecordingFileName, loadVoipRecordingBlob, type VoipRecordingCall
 import CallContactContextPanel from './CallContactContextPanel';
 import {getSelectedOrganizationId} from '../../utils/organizationContext';
 import {loadRecentVoipCalls,type RecentVoipCall} from '../../utils/voipCallHistory';
-import {SearchOutlined,SoundOutlined} from '@ant-design/icons';
+import {SearchOutlined,SoundOutlined,ExportOutlined} from '@ant-design/icons';
+import {useVoipDockTarget} from '../../utils/voipDock';
 import AdaptivePickerSurface from '../AdaptivePickerSurface';
 import {normalizePublicAssetUrl} from '../../utils/assetUrl';
 import type {VoipAudioOutput} from '../../utils/voipAudioOutput';
@@ -207,6 +209,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
   const { message } = App.useApp();
   const navigate = useNavigate();
   const voip = useVoipState();
+  const dockTarget=useVoipDockTarget();
   const orgId=getSelectedOrganizationId();
 
   const [dialInput, setDialInput] = useState('');
@@ -287,7 +290,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
   }, [showHistoryDrawer, targetPhoneNumber]);
 
   if (!voipEnabled || !planFeatureEnabled) return null;
-  if (!voip.panelOpen && !voip.activeCall) return null;
+  if (!voip.panelOpen && !voip.activeCall&&!dockTarget) return null;
 
   const activeCall = voip.activeCall;
 
@@ -407,11 +410,11 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
     catch{setAudioOutputs([]);setAudioOutputError('دریافت خروجی‌های صدا انجام نشد.');}
   };
 
-  return (
+  const phoneView=(
     <div
       dir="rtl"
       style={{height:'min(680px, calc(100dvh - 2.5rem))'}}
-      className="fixed bottom-5 left-5 z-[1050] flex flex-col max-h-[calc(100dvh-2.5rem)] w-[380px] max-w-[calc(100vw-2.5rem)] rounded-3xl border border-slate-200/90 dark:border-[#242f3d] bg-white/95 dark:bg-[#17212b]/95 backdrop-blur-2xl shadow-2xl shadow-black/40 text-slate-800 dark:text-slate-100 overflow-hidden transition-all duration-300 font-sans"
+      className={`${dockTarget?'relative w-full':'fixed bottom-5 left-5 z-[1050] w-[380px] max-w-[calc(100vw-2.5rem)]'} flex flex-col max-h-[calc(100dvh-2.5rem)] rounded-3xl border border-slate-200/90 dark:border-[#242f3d] bg-white/95 dark:bg-[#17212b]/95 backdrop-blur-2xl shadow-xl shadow-black/10 text-slate-800 dark:text-slate-100 overflow-hidden font-sans`}
     >
       {/* Top Header Bar */}
       <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-slate-100 dark:border-[#232e3c] bg-slate-50/70 dark:bg-[#1f2b38]/70">
@@ -425,6 +428,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
           ) : null}
         </div>
         <div className="flex items-center gap-1.5">
+          {!dockTarget&&<Tooltip title="مرکز تماس در تب جدید"><a href="/contact-center" target="_blank" rel="noopener noreferrer" aria-label="مرکز تماس در تب جدید" className="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-400 hover:text-sky-500"><ExportOutlined className="text-xs" /></a></Tooltip>}
           <Tooltip title="اتصال مجدد">
             <button
               onClick={() => void connectVoipWebPhone({ force: true })}
@@ -434,7 +438,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
               <SvgIcons.Refresh className={`w-3.5 h-3.5 ${voip.status === 'connecting' ? 'animate-spin' : ''}`} />
             </button>
           </Tooltip>
-          {!activeCall ? (
+          {!activeCall&&!dockTarget ? (
             <button
               onClick={() => setVoipPanelOpen(false)}
               className="p-1 rounded-full text-slate-400 hover:text-rose-400 transition"
@@ -792,6 +796,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
       </div>
     </div>
   );
+  return dockTarget?createPortal(phoneView,dockTarget):phoneView;
 };
 
 export default WebPhoneWidget;

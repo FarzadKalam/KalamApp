@@ -986,6 +986,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/automation_execution_reports', label: 'گزارشات فرآیند و اتوماسیون', disabled: !canViewModule('automation_execution_reports') },
           { key: '/sms_delivery_reports', label: 'گزارشات ارسال پیامک', disabled: !canViewModule('sms_delivery_reports') },
           { key: '/email_delivery_reports', label: 'گزارش‌های ایمیل', disabled: !canViewModule('email_delivery_reports') },
+          { key:'/contact-center',label:'مرکز تماس',disabled:!canViewModule('voip_call_reports') },
           { key: '/voip_call_reports', label: 'گزارش تماس‌های VoIP', disabled: !canViewModule('voip_call_reports') },
           { key: '/counterparty_bot_groups', label: 'گروه‌های بات', disabled: !canViewModule('counterparty_bot_groups') },
         ],
