@@ -151,6 +151,36 @@ jobs:
             docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d ai_agent_tasks_test -v ON_ERROR_STOP=1 < "$file"
           done
 
+      - name: Isolated commission receipts, review cases and stale concurrent posting
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test commission_collection_test
+          for file in tests/sql/commission_collection_fixture.sql \
+            database_v1_phase586_feature_runtime_bindings.sql \
+            database_v1_phase594_commission_posting_snapshot_guard.sql \
+            database_v1_phase594_commission_posting_snapshot_guard.sql \
+            database_v1_phase595_commission_cheque_review_cases.sql \
+            database_v1_phase595_commission_cheque_review_cases.sql \
+            tests/sql/commission_collection_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d commission_collection_test -v ON_ERROR_STOP=1 < "$file"
+          done
+          docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d commission_collection_test -v ON_ERROR_STOP=1 < tests/sql/commission_collection_concurrent_a.sql > /tmp/commission-worker-a.log 2>&1 &
+          worker_a=$!
+          ready=false
+          for attempt in $(seq 1 50); do
+            if [ "$(docker exec "$POSTGRES_CONTAINER" psql -U ledger_test -d commission_collection_test -Atc "select count(*) from pg_stat_activity where application_name='commission_concurrency_a' and wait_event='PgSleep'")" = "1" ]; then
+              ready=true
+              break
+            fi
+            sleep 0.1
+          done
+          if [ "$ready" != true ]; then cat /tmp/commission-worker-a.log; exit 1; fi
+          docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d commission_collection_test -v ON_ERROR_STOP=1 < tests/sql/commission_collection_concurrent_b.sql
+          wait "$worker_a"
+          cat /tmp/commission-worker-a.log
+
       - name: Install
         run: npm ci
 
@@ -294,6 +324,13 @@ jobs:
           utils/hrFilters.test.ts utils/popupContainer.test.ts
           components/AdaptiveSelectField.test.tsx components/PersianDateRangePicker.test.tsx
           --maxWorkers=1 --no-file-parallelism
+
+      - name: Report row limits and commission collection checks
+        timeout-minutes: 5
+        env:
+          VITE_SUPABASE_URL: https://isolated-test.invalid
+          VITE_SUPABASE_ANON_KEY: isolated-test-only
+        run: npx vitest run utils/reportRowLimit.test.ts utils/reporting.test.ts utils/commissionRuntime.test.ts components/hr/CommissionChequeCard.test.tsx --maxWorkers=1 --no-file-parallelism
 
       - name: Build
         env:

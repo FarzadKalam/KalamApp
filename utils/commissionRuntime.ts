@@ -38,6 +38,15 @@ export type CommissionPostedAllocation = {
   invoice_id: string;
   invoice_item_key: string;
   posted_amount: number;
+  /** Snapshot of the ledger line, retained for legacy item identity matching. */
+  details?: Record<string, any> | null;
+};
+
+export type CommissionHistoryIssue = {
+  invoiceId: string;
+  itemKey: string;
+  code: 'ambiguous_item_identity' | 'unmatched_historical_item';
+  messageFa: string;
 };
 
 export type CommissionPersistedDraft = {
@@ -228,7 +237,8 @@ const isChequePayment = (payment: any) =>
  * باید علاوه بر نهایی بودن، وصول یا خرج‌شده باشد.
  */
 const isValidReceiptPayment = (payment: any) =>
-  isFinalPayment(payment) && (!isChequePayment(payment) || isCollectedChequePayment(payment));
+  isFinalPayment(payment) && (!isChequePayment(payment)
+    || (payment?.cheque_collection_verified !== false && isCollectedChequePayment(payment)));
 
 /**
  * ردیف‌های دریافت روی خود فاکتور، مرجع نمایش و محاسبه‌اند. عملیات خزانه فقط
@@ -260,6 +270,34 @@ export const mergeCommissionInvoicePayments = (
   });
 };
 
+/** Hydrate invoice/legacy-operation rows from an explicitly fetched cheque
+ * register, never from the stale cheque snapshot inside invoice JSON.
+ * The caller must fetch ids from BOTH invoice rows and operation rows and show
+ * issues for missing records/dates; these rows must not silently disappear. */
+export const hydrateCommissionReceiptCheques = (
+  invoicePayments: unknown,
+  operationPayments: unknown,
+  cheques: Array<{ id: string; status?: string | null; cleared_at?: string | null; spent_date?: string | null }>,
+) => {
+  const register = new Map(cheques.map(cheque => [normalizeText(cheque.id), cheque]));
+  const issues: Array<{ chequeId: string | null; code: 'cheque_not_found' | 'collection_date_missing' }> = [];
+  const payments = mergeCommissionInvoicePayments(invoicePayments, operationPayments).map(payment => {
+    if (!isChequePayment(payment)) return payment;
+    const id = normalizeText(payment.cheque_id || payment.spent_cheque_id);
+    const cheque = id ? register.get(id) : undefined;
+    if (!cheque) {
+      issues.push({ chequeId: id || null, code: 'cheque_not_found' });
+      return { ...payment, cheque_status: 'unknown', cheque_cleared_at: null, cheque_collection_verified: false };
+    }
+    const at = cheque.cleared_at || cheque.spent_date || null;
+    const collected = COLLECTED_CHEQUE_STATUSES.has(normalizeText(cheque.status).toLowerCase());
+    if (collected && parseDateTime(at) === null) issues.push({ chequeId: id, code: 'collection_date_missing' });
+    return { ...payment, cheque_status: cheque.status || 'unknown', cheque_cleared_at: at,
+      cheque_collection_verified: !collected || parseDateTime(at) !== null };
+  });
+  return { payments, issues };
+};
+
 const resolveInvoiceReceivedAmount = (invoice: CommissionInvoiceRecord) => {
   const payments = Array.isArray(invoice.payments) ? invoice.payments : [];
   const datedValidReceipts = payments
@@ -277,12 +315,8 @@ const resolveLegacyRecordedCollection = (
   periodEnd: string,
 ) => {
   const payments = Array.isArray(invoice.payments) ? invoice.payments : [];
-  const hasDatedValidReceipt = payments.some((payment) =>
-    isValidReceiptPayment(payment)
-    && resolvePaymentAmount(payment) > 0
-    && parseDateTime(paymentDate(payment)) !== null,
-  );
-  if (hasDatedValidReceipt) return null;
+  // Cached totals cannot override pending, failed, bounced or undated evidence.
+  if (payments.length > 0) return null;
 
   const recordedReceived = clamp(toNumber(invoice.total_received_amount), 0, invoiceTotal);
   const hasZeroRemainingBalance = normalizeText(invoice.remaining_balance) !== ''
@@ -297,8 +331,74 @@ const resolveLegacyRecordedCollection = (
 export const buildCommissionInvoiceItemKey = (invoiceId: string, item: any, index: number) => {
   const directId = normalizeText(item?.id || item?.row_id || item?.line_id || item?.uuid);
   if (directId) return `${invoiceId}:${directId}`;
+  const rowKey = normalizeText(item?.row_key);
+  if (rowKey) return `${invoiceId}:${rowKey}`;
   const product = normalizeText(item?.product_id || item?.package_id || item?.description || 'item');
   return `${invoiceId}:${index}:${product}`;
+};
+
+/** Preserve financial history across row reordering. An index by itself is
+ * never evidence of identity; uncertain history blocks the entire invoice. */
+export const reconcileCommissionHistory = ({ invoices, postedAllocations = [], existingDrafts = [] }: {
+  invoices: CommissionInvoiceRecord[];
+  postedAllocations?: CommissionPostedAllocation[];
+  existingDrafts?: CommissionPersistedDraft[];
+}) => {
+  const invoiceById = new Map(invoices.map(invoice => [String(invoice.id), invoice]));
+  const issues: CommissionHistoryIssue[] = [];
+  const blockedInvoiceIds = new Set<string>();
+  const issueKeys = new Set<string>();
+  invoices.forEach(invoice => {
+    const items = Array.isArray(invoice.invoiceItems) ? invoice.invoiceItems : [];
+    const seen = new Set<string>();
+    items.forEach((item,index) => {
+      const key = buildCommissionInvoiceItemKey(String(invoice.id),item,index);
+      if (seen.has(key)) {
+        blockedInvoiceIds.add(String(invoice.id));
+        issues.push({invoiceId:String(invoice.id),itemKey:key,code:'ambiguous_item_identity',
+          messageFa:`ردیف‌های «${normalizeText(invoice.name) || 'فاکتور بدون عنوان'}» شناسهٔ تکراری دارند؛ پیش از ثبت پورسانت اصلاح شوند.`});
+      }
+      seen.add(key);
+    });
+  });
+  const resolveKey = (invoiceId: string, itemKey: string, details?: Record<string, any> | null) => {
+    const invoice = invoiceById.get(invoiceId);
+    // History outside the loaded invoice set is retained, never reassigned.
+    if (!invoice) return itemKey;
+    const items = Array.isArray(invoice.invoiceItems) ? invoice.invoiceItems : [];
+    const legacyTail = itemKey.startsWith(`${invoiceId}:`) ? itemKey.slice(invoiceId.length + 1) : '';
+    const legacyMatch = /^(\d+):(.*)$/.exec(legacyTail);
+    const stableMatches = items.filter((item,index) =>
+      Boolean(normalizeText(item?.id || item?.row_id || item?.line_id || item?.uuid || item?.row_key))
+      && buildCommissionInvoiceItemKey(invoiceId,item,index) === itemKey);
+    let candidates = stableMatches;
+    if (candidates.length === 0) {
+      const snapshotId = normalizeText(details?.id || details?.row_id || details?.line_id || details?.uuid || details?.row_key);
+      const product = normalizeText(details?.product_id || details?.package_id || legacyMatch?.[2]);
+      candidates = items.filter(item => {
+        if (snapshotId) return normalizeText(item?.id || item?.row_id || item?.line_id || item?.uuid || item?.row_key) === snapshotId;
+        if (!product || normalizeText(item?.product_id || item?.package_id || item?.description || 'item') !== product) return false;
+        if (details?.net_amount != null && Math.abs(resolveInvoiceItemNetAmount(item) - toNumber(details.net_amount)) > 0.000001) return false;
+        if (details?.quantity != null && Math.abs(toNumber(item?.quantity ?? item?.qty ?? item?.usage ?? item?.stock) - toNumber(details.quantity)) > 0.000001) return false;
+        return true;
+      });
+    }
+    if (candidates.length === 1) return buildCommissionInvoiceItemKey(invoiceId,candidates[0],items.indexOf(candidates[0]));
+    const code = candidates.length > 1 ? 'ambiguous_item_identity' : 'unmatched_historical_item';
+    const issueKey = `${invoiceId}::${itemKey}::${code}`;
+    if (!issueKeys.has(issueKey)) {
+      issues.push({invoiceId,itemKey,code,messageFa:`تطبیق سابقهٔ پورسانت در «${normalizeText(invoice.name) || 'فاکتور بدون عنوان'}» قطعی نیست؛ پیش از ثبت، ردیف‌های فاکتور و سابقهٔ پرداخت بررسی شوند.`});
+      issueKeys.add(issueKey);
+    }
+    blockedInvoiceIds.add(invoiceId);
+    return itemKey;
+  };
+  const allocations = postedAllocations.map(entry => ({...entry,
+    invoice_item_key: resolveKey(entry.invoice_id,entry.invoice_item_key,entry.details)}));
+  const drafts = existingDrafts.map(draft => ({...draft,
+    invoice_item_key: normalizeDraftStatus(draft.draft_status) === 'canceled' ? draft.invoice_item_key
+      : resolveKey(draft.invoice_id,draft.invoice_item_key,draft.details)}));
+  return {postedAllocations:allocations,existingDrafts:drafts,issues,blockedInvoiceIds:[...blockedInvoiceIds]};
 };
 
 const getProductLabel = (item: any, index: number) =>
@@ -314,6 +414,70 @@ const getItemCommissionPercent = (
   if (mode === 'employee_default') return toNumber(employeeDefaultCommissionByEmployeeId[employeeId]);
   const productPercent = toNumber(item?.commission_percentage_snapshot ?? item?.commission_percentage);
   return productPercent > 0 ? productPercent : toNumber(employeeDefaultCommissionByEmployeeId[employeeId]);
+};
+
+/** Financial period totals are independent of commission eligibility. Callers
+ * provide all invoices of the selected assignee, including older/future dates.
+ * Receipt rows must already have authoritative cheque hydration applied. */
+export const summarizeCommissionPeriod = ({invoices,employeeIdByAssigneeId,employeeDefaultCommissionByEmployeeId,
+  percentMode='product_default',periodStart,periodEnd}: {
+  invoices: CommissionInvoiceRecord[];
+  employeeIdByAssigneeId: Record<string,string>;
+  employeeDefaultCommissionByEmployeeId: Record<string,number>;
+  percentMode?: CommissionPercentMode;
+  periodStart: string;
+  periodEnd: string;
+}) => {
+  let sales=0,received=0,nonCommissionSales=0,nonCommissionQuantity=0;
+  const seenInvoices=new Set<string>();
+  const receivedCheques=new Map<string,{amount:number;face:number}>();
+  const outstanding=new Map<string,{amount:number;face:number}>();
+  const seenEvents=new Set<string>();
+  const addCheque=(map:Map<string,{amount:number;face:number}>,key:string,payment:any) => {
+    const previous=map.get(key)||{amount:0,face:0};
+    map.set(key,{amount:previous.amount+resolvePaymentAmount(payment),face:Math.max(previous.face,toNumber(payment.cheque_amount))});
+  };
+  invoices.forEach(invoice=>{
+    if(seenInvoices.has(String(invoice.id)))return;
+    seenInvoices.add(String(invoice.id));
+    const inSalesPeriod=APPROVED_STATUSES.has(normalizeText(invoice.status).toLowerCase())
+      && isInPeriod(invoice.invoice_date,periodStart,periodEnd);
+    if(inSalesPeriod){
+      sales+=resolveInvoiceTotalAmount(invoice);
+      const employeeId=employeeIdByAssigneeId[normalizeText(invoice.assignee_id)]||'';
+      (invoice.invoiceItems||[]).forEach(item=>{
+        if(getItemCommissionPercent(item,employeeId,percentMode,employeeDefaultCommissionByEmployeeId)>0)return;
+        nonCommissionSales+=resolveInvoiceItemNetAmount(item);
+        nonCommissionQuantity+=Math.max(0,toNumber(item?.quantity??item?.qty??item?.usage??item?.stock));
+      });
+    }
+    (invoice.payments||[]).forEach((payment,index)=>{
+      const cheque=isChequePayment(payment);
+      const chequeId=normalizeText(payment.cheque_id||payment.spent_cheque_id);
+      const stableEventId=normalizeText(payment._cash_bank_operation_id||payment.id||payment.payment_id);
+      // A cheque repeated as an invoice/operation mirror is one allocation;
+      // distinct partial receipts retain their event id or amount/date identity.
+      const eventKey=stableEventId?`event:${stableEventId}`:cheque&&chequeId
+        ?`cheque:${chequeId}:${invoice.id}:${resolvePaymentAmount(payment)}:${normalizeText(paymentDate(payment))}`
+        :`row:${invoice.id}:${index}`;
+      if(seenEvents.has(eventKey))return;
+      seenEvents.add(eventKey);
+      const chequeKey=chequeId||eventKey;
+      if(isValidReceiptPayment(payment)&&isInPeriod(receiptDate(payment),periodStart,periodEnd)){
+        if(cheque)addCheque(receivedCheques,chequeKey,payment);
+        else received+=resolvePaymentAmount(payment);
+      }
+      const status=normalizeText(payment.cheque_status).toLowerCase();
+      if(cheque&&isFinalPayment(payment)&&status&&status!=='unknown'
+        &&!COLLECTED_CHEQUE_STATUSES.has(status)&&!['returned','rejected','canceled','cancelled','failed'].includes(status)
+        &&isInPeriod(payment.due_date||payment.cheque_due_date||payment.maturity_date,periodStart,periodEnd)){
+        addCheque(outstanding,chequeKey,payment);
+      }
+    });
+  });
+  const totalCheques=(map:Map<string,{amount:number;face:number}>)=>[...map.values()]
+    .reduce((sum,entry)=>sum+(entry.face>0?Math.min(entry.amount,entry.face):entry.amount),0);
+  return {sales,received:received+totalCheques(receivedCheques),outstandingCheques:totalCheques(outstanding),nonCommissionSales,nonCommissionQuantity};
 };
 
 const sumPaymentsInPeriod = (
@@ -358,15 +522,17 @@ const resolveFullSettlementAt = (
   invoice: CommissionInvoiceRecord,
   invoiceTotal: number,
   calculationEnd: string,
+  requireCollection = false,
 ) => {
   const end = parseDateTime(`${calculationEnd}T23:59:59.999`);
   if (end === null) return null;
 
   const payments = Array.isArray(invoice.payments) ? invoice.payments : [];
-  // تسویهٔ کامل به وصول چک وابسته نیست؛ کافی است پرداخت معتبر ثبت شده باشد.
+  // مبنای تسویهٔ ثبت‌شده، ثبت پرداخت را می‌سنجد؛ مبنای وصول کامل، فقط
+  // دریافت واقعاً وصول‌شده را با تاریخ وصول (نه تاریخ صدور چک) می‌سنجد.
   const validPayments = payments
-    .filter((payment) => isFinalPayment(payment) && resolvePaymentAmount(payment) > 0)
-    .map((payment) => ({ payment, at: parseDateTime(paymentDate(payment)) }))
+    .filter((payment) => (requireCollection ? isValidReceiptPayment(payment) : isFinalPayment(payment)) && resolvePaymentAmount(payment) > 0)
+    .map((payment) => ({ payment, at: parseDateTime(requireCollection ? receiptDate(payment) : paymentDate(payment)) }))
     .filter((entry): entry is { payment: any; at: number } => entry.at !== null && entry.at <= end)
     .sort((left, right) => left.at - right.at);
 
@@ -379,7 +545,7 @@ const resolveFullSettlementAt = (
   const hasZeroRemainingBalance = normalizeText(invoice.remaining_balance) !== ''
     && toNumber(invoice.remaining_balance) <= 0;
   const settledAt = normalizeText(invoice.settled_at || invoice.completed_at || invoice.updated_at || invoice.invoice_date) || null;
-  if ((recordedReceived >= invoiceTotal || hasZeroRemainingBalance) && settledAt) {
+  if ((!requireCollection || payments.length === 0) && (recordedReceived >= invoiceTotal || hasZeroRemainingBalance) && settledAt) {
     const settledTime = parseDateTime(settledAt);
     if (settledTime !== null && settledTime <= end) return settledAt;
   }
@@ -445,7 +611,7 @@ const getInvoiceEvent = (
   }
 
   if (basis === 'full_settlement_only') {
-    const collectedAt = resolveFullSettlementAt(invoice, invoiceTotal, periodEnd);
+    const collectedAt = resolveFullSettlementAt(invoice, invoiceTotal, periodEnd, true);
     if (!collectedAt || !isInPeriod(collectedAt, periodStart, periodEnd)) {
       return {
         eventType: 'full_collection',
@@ -470,17 +636,20 @@ const getInvoiceEvent = (
       isValidReceiptPayment,
       receiptDate,
     );
-    if (paidAmount > 0) {
+    const cumulativeAmount = sumPaymentsUntil(payments, periodEnd, isValidReceiptPayment, receiptDate);
+    if (paidAmount > 0 || cumulativeAmount > 0) {
       return {
         eventType: 'payment_collection',
         eventAt: findLatestPaymentDate(
           payments,
-          (payment) => isValidReceiptPayment(payment) && isInPeriod(receiptDate(payment), periodStart, periodEnd),
+          (payment) => isValidReceiptPayment(payment) && (paidAmount > 0
+            ? isInPeriod(receiptDate(payment), periodStart, periodEnd)
+            : (parseDateTime(receiptDate(payment)) ?? Infinity) <= (parseDateTime(`${periodEnd}T23:59:59.999`) ?? -Infinity)),
           receiptDate,
         ),
         // سهم این دوره از جمع دریافتی‌های معتبر تا پایان دوره به دست می‌آید؛
         // سهم‌های ثبت‌شدهٔ قبلی در مرحلهٔ تخصیص کم می‌شوند.
-        poolAmount: clamp(sumPaymentsUntil(payments, periodEnd, isValidReceiptPayment, receiptDate), 0, invoiceTotal),
+        poolAmount: clamp(cumulativeAmount, 0, invoiceTotal),
         exclusionReason: null,
       };
     }
@@ -640,6 +809,9 @@ const buildDraftIndex = (drafts: CommissionPersistedDraft[]) => {
   const map = new Map<string, CommissionPersistedDraft>();
   drafts.forEach((draft) => {
     map.set(draft.source_key, draft);
+    map.set(buildCommissionDraftSourceKey({employeeId:draft.employee_id,basis:draft.source_basis,
+      percentMode:draft.percent_mode,invoiceId:draft.invoice_id,itemKey:draft.invoice_item_key,
+      sourcePeriodStart:draft.period_start,sourcePeriodEnd:draft.period_end}),draft);
   });
   return map;
 };
@@ -783,6 +955,7 @@ export const buildCommissionDraftRows = ({
   postedAllocations = [],
   existingDrafts = [],
   includeNotCalculated = false,
+  onHistoryIssues,
 }: {
   invoices: CommissionInvoiceRecord[];
   employeeIdByAssigneeId: Record<string, string>;
@@ -794,8 +967,14 @@ export const buildCommissionDraftRows = ({
   postedAllocations?: CommissionPostedAllocation[];
   existingDrafts?: CommissionPersistedDraft[];
   includeNotCalculated?: boolean;
+  onHistoryIssues?: (issues: CommissionHistoryIssue[]) => void;
 }): CommissionDraftRow[] => {
   const rows: CommissionDraftRow[] = [];
+  const history = reconcileCommissionHistory({invoices,postedAllocations,existingDrafts});
+  postedAllocations = history.postedAllocations;
+  existingDrafts = history.existingDrafts;
+  const blockedInvoiceIds = new Set(history.blockedInvoiceIds);
+  if (history.issues.length > 0) onHistoryIssues?.(history.issues);
   const postedByKey = buildPostedAllocationMap(postedAllocations);
   const matchingDrafts = existingDrafts.filter((draft) =>
     draft.source_basis === basis
@@ -806,6 +985,7 @@ export const buildCommissionDraftRows = ({
   const consumedDraftKeys = new Set<string>();
 
   for (const invoice of Array.isArray(invoices) ? invoices : []) {
+    if (blockedInvoiceIds.has(String(invoice.id))) continue;
     const assigneeId = normalizeText(invoice.assignee_id);
     const employeeId = assigneeId ? normalizeText(employeeIdByAssigneeId[assigneeId]) : '';
     if (!employeeId) continue;
@@ -816,9 +996,13 @@ export const buildCommissionDraftRows = ({
     const event = getInvoiceEvent(invoice, basis, periodStart, periodEnd);
     if (!includeNotCalculated && event.poolAmount <= 0) continue;
 
+    const isHistoricalCollection = basis === 'prepaid_and_settled_invoices'
+      && event.poolAmount > 0 && event.eventAt != null
+      && (parseDateTime(event.eventAt) ?? Infinity) < (parseDateTime(`${periodStart}T00:00:00`) ?? -Infinity);
+    const deferredReservationByItem = new Map<string, number>();
     const lines: CommissionDraftLine[] = invoiceItems.map((item, index) => {
       const itemKey = buildCommissionInvoiceItemKey(String(invoice.id), item, index);
-      const sourceKey = buildCommissionDraftSourceKey({
+      const canonicalSourceKey = buildCommissionDraftSourceKey({
         employeeId,
         basis,
         percentMode,
@@ -827,7 +1011,20 @@ export const buildCommissionDraftRows = ({
         sourcePeriodStart: periodStart,
         sourcePeriodEnd: periodEnd,
       });
-      const savedDraft = currentDraftIndex.get(sourceKey);
+      const historicalDraft = isHistoricalCollection ? matchingDrafts
+        .filter(draft => draft.employee_id === employeeId && draft.invoice_id === String(invoice.id) && draft.invoice_item_key === itemKey && draft.period_end < periodStart)
+        .sort((a,b) => b.period_end.localeCompare(a.period_end))[0] : undefined;
+      if (basis === 'prepaid_and_settled_invoices') {
+        const reservedAmount = matchingDrafts.filter(draft => draft.employee_id === employeeId
+          && draft.invoice_id === String(invoice.id) && draft.invoice_item_key === itemKey
+          && draft.period_end < periodStart && draft.decision_status === 'defer_to_next_period'
+          && normalizeDraftStatus(draft.draft_status) !== 'posted')
+          .reduce((sum, draft) => sum + Math.max(0, toNumber(draft.remaining_amount)), 0);
+        if (reservedAmount > 0) deferredReservationByItem.set(itemKey, reservedAmount);
+      }
+      const currentDraft = currentDraftIndex.get(canonicalSourceKey);
+      const savedDraft = currentDraft || (historicalDraft?.decision_status === 'exclude' ? historicalDraft : undefined);
+      const sourceKey = currentDraft?.source_key || canonicalSourceKey;
       if (savedDraft) consumedDraftKeys.add(sourceKey);
       const postedKey = `${invoice.id}::${itemKey}`;
       const netAmount = resolveInvoiceItemNetAmount(item);
@@ -874,13 +1071,13 @@ export const buildCommissionDraftRows = ({
         percent_mode: percentMode,
         eligibility_event_type: savedDraft?.eligibility_event_type || event.eventType,
         eligibility_event_at: savedDraft?.eligibility_event_at || event.eventAt,
-        is_from_previous_period: false,
+        is_from_previous_period: isHistoricalCollection,
         draft_status: normalizeDraftStatus(savedDraft?.draft_status),
         exclusion_reason: event.exclusionReason,
       };
     });
 
-    const calculatedRow = recomputeCommissionDraftRow({
+    let calculatedRow = recomputeCommissionDraftRow({
       key: `commission_row:${employeeId}:${invoice.id}:${basis}:${percentMode}:${periodStart}:${periodEnd}`,
       mode: 'pool',
       employee_id: employeeId,
@@ -907,8 +1104,19 @@ export const buildCommissionDraftRows = ({
       item_count: lines.length,
       lines,
       exclusion_reason: event.exclusionReason,
-      is_from_previous_period: false,
+      is_from_previous_period: isHistoricalCollection,
     });
+    if (isHistoricalCollection || deferredReservationByItem.size > 0) {
+      // Allocate the full pool first, then reserve amounts already represented
+      // by deferred backlog without redistributing their share to other lines.
+      calculatedRow = recomputeFixedRow({ ...calculatedRow, mode: 'fixed',
+        lines: calculatedRow.lines.map(line => {
+          const reservedAmount = deferredReservationByItem.get(line.invoice_item_key) || 0;
+          const remainingAmount = Math.max(0, line.remaining_amount - reservedAmount);
+          return reservedAmount > 0 ? { ...line, remaining_amount: remainingAmount,
+            entitled_amount: Math.max(0, line.entitled_amount - Math.min(line.remaining_amount, reservedAmount)) } : line;
+        }) });
+    }
     // فاکتورهای قدیمی که برای این دوره هیچ رویداد تازه یا تصمیم دستی ندارند،
     // نباید در معوق یا مستثنا نمایش داده شوند.
     if (includeNotCalculated || calculatedRow.lines.some((line) => line.selected_amount > 0 || line.decision_status !== 'auto')) {
@@ -918,6 +1126,7 @@ export const buildCommissionDraftRows = ({
 
   const backlogDrafts = matchingDrafts.filter((draft) =>
     normalizeDraftStatus(draft.draft_status) !== 'posted'
+    && !blockedInvoiceIds.has(draft.invoice_id)
     && !consumedDraftKeys.has(draft.source_key)
     && draft.decision_status === 'defer_to_next_period'
     && draft.remaining_amount > 0

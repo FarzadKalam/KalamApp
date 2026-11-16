@@ -1,4 +1,5 @@
 import { MODULES } from '../moduleRegistry';
+import {normalizeReportRowLimit} from './reportRowLimit';
 import { BlockType, FieldType, type BlockDefinition, type ModuleField } from '../types';
 import { isSaasAdminModuleId } from './permissions';
 import { supportsModuleAssignee } from './assigneeSupport';
@@ -378,9 +379,7 @@ export const createDefaultReportConfig = (): ReportDefinitionConfig => ({
 });
 
 export const clampReportRowLimit = (value: unknown) => {
-  const parsed = Number.parseInt(String(value || ''), 10);
-  if (!Number.isFinite(parsed)) return 200;
-  return Math.min(500, Math.max(20, parsed));
+  return normalizeReportRowLimit(value);
 };
 
 export const clampGroupingDefinitions = (value: unknown): ReportGroupingDefinition[] => {

@@ -1,3 +1,7 @@
+import CommissionSummary from '../components/hr/CommissionSummary';
+import { loadCommissionPeriodInvoices } from '../utils/commissionPeriodData';
+import { summarizeCommissionPeriod } from '../utils/commissionRuntime';
+import CommissionChequeCard from '../components/hr/CommissionChequeCard';
 import PlanFeatureBoundary from '../components/saas/PlanFeatureBoundary';
 import { hasCurrentOrgPlanFeature } from '../utils/saasPlanFeatures';
 ﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -94,7 +98,7 @@ const COMMISSION_INVOICE_SELECT =
 // استفاده می‌شود تا محاسبه متوقف نشود؛ schema رسمی شامل تاریخ‌های چرخهٔ فاکتور است.
 const COMMISSION_INVOICE_SELECT_FALLBACK =
   'id, name, status, invoice_date, assignee_id, invoiceItems, payments';
-const COMMISSION_CHEQUE_SELECT = 'id, status, cleared_at, spent_date, updated_at';
+const COMMISSION_CHEQUE_SELECT = 'id, status, cleared_at, spent_date, updated_at, due_date, serial_no, amount';
 const COMMISSION_CHEQUE_SELECT_FALLBACK = 'id, status, updated_at';
 
 const fetchAllCommissionPages = async <T,>(
@@ -163,9 +167,9 @@ import {
 } from '../utils/activityPerformanceRuntime';
 import {
   buildCommissionDraftRows,
+  hydrateCommissionReceiptCheques,
   buildCommissionDraftSourceKey,
   getCommissionLineReviewBucket,
-  mergeCommissionInvoicePayments,
   recomputeCommissionDraftRow,
   type CommissionBasis,
   type CommissionDecisionStatus,
@@ -1548,7 +1552,16 @@ const HRPage: React.FC = () => {
   const [savingActivityPerformance, setSavingActivityPerformance] = useState(false);
   const [goalTouchRows, setGoalTouchRows] = useState<EmployeeGoalTouchRow[]>([]);
   const [goalTouchLoading, setGoalTouchLoading] = useState(false);
+  const [commissionFinancialTotals, setCommissionFinancialTotals] = useState<ReturnType<typeof summarizeCommissionPeriod> | null>(null);
+  const [dashboardCommissionFinancialTotals, setDashboardCommissionFinancialTotals] = useState<ReturnType<typeof summarizeCommissionPeriod> | null>(null);
+  const [dashboardCommissionSummaryError, setDashboardCommissionSummaryError] = useState('');
   const [commissionRows, setCommissionRows] = useState<CommissionDraftRow[]>([]);
+  const [commissionPreviewSnapshot, setCommissionPreviewSnapshot] = useState<{
+    employeeId: string; ledger: { id: string; updated_at: string }[];
+    cheques: { id: string; status: string; cleared_at: string | null; spent_date: string | null }[];
+  } | null>(null);
+  const [commissionPreviewIssues, setCommissionPreviewIssues] = useState<string[]>([]);
+  const [commissionReviewCases, setCommissionReviewCases] = useState<any[]>([]);
   const [commissionLoading, setCommissionLoading] = useState(false);
   const [calculatedCommissionRows, setCalculatedCommissionRows] = useState<CommissionLedgerRow[]>([]);
   const [calculatedCommissionLoading, setCalculatedCommissionLoading] = useState(false);
@@ -2805,6 +2818,8 @@ const HRPage: React.FC = () => {
     }
 
     setCalculatedCommissionLoading(true);
+    setDashboardCommissionFinancialTotals(null);
+    setDashboardCommissionSummaryError('');
     try {
       const { data, error } = await fetchAllCommissionPages<any>((from, to) => supabase
         .from('payroll_calculation_entries')
@@ -2819,6 +2834,17 @@ const HRPage: React.FC = () => {
         .range(from, to));
       if (error) throw error;
 
+      try {
+        const selectedProfiles = visibleSummaries.map(row => row.profile);
+        const employees = Object.fromEntries(selectedProfiles.map(profile => [String(profile.related_profile_id || profile.id),String(profile.source_id || profile.id)]));
+        const rates = Object.fromEntries(selectedProfiles.map(profile => [String(profile.source_id || profile.id),toNumber(profile.commission_percentage)]));
+        const summaryInvoices = await loadCommissionPeriodInvoices(Object.keys(employees));
+        setDashboardCommissionFinancialTotals(summarizeCommissionPeriod({invoices: summaryInvoices,
+          employeeIdByAssigneeId:employees, employeeDefaultCommissionByEmployeeId:rates,
+          percentMode:'product_default',periodStart,periodEnd}));
+      } catch (summaryError) {
+        setDashboardCommissionSummaryError(toFaErrorMessage(summaryError,'دریافت جمع‌بندی مالی ناموفق بود.'));
+      }
       const mappedRows = (data || []).map((row: any) => {
         const employeeIdValue = row?.employee_id ? String(row.employee_id) : null;
         return {
@@ -4747,6 +4773,7 @@ const HRPage: React.FC = () => {
       percent_mode: 'product_default',
     });
     setCommissionRows([]);
+    setCommissionPreviewSnapshot(null);
     setCommissionReviewTab('current_period');
     setCommissionSearch('');
     setCommissionHistoryRows([]);
@@ -4796,17 +4823,30 @@ const HRPage: React.FC = () => {
       }
       const { periodStart, periodEnd } = periodValues;
 
+      setCommissionFinancialTotals(null);
       setCommissionLoading(true);
+      setCommissionPreviewSnapshot(null);
+      setCommissionPreviewIssues([]);
+      setCommissionReviewCases([]);
+      setCommissionRows([]);
       const employeeIdValue = String(selectedProfile.source_id || selectedProfile.id);
       const assigneeId = String(selectedProfile.related_profile_id || selectedProfile.id || '').trim();
       const fetchCommissionInvoices = async (select: string) => fetchAllCommissionPages<any>((from, to) => supabase
         .from('invoices')
         .select(select)
         .eq('assignee_id', assigneeId)
-        .lte('invoice_date', periodEnd)
-        .order('invoice_date', { ascending: false })
+                .order('invoice_date', { ascending: false })
         .order('id', { ascending: false })
         .range(from, to));
+      const { error: reviewSyncError } = await supabase.rpc('sync_commission_review_cases', { p_employee_id: employeeIdValue });
+      if (reviewSyncError) throw reviewSyncError;
+      const reviewResult = await fetchAllCommissionPages<any>((from, to) => supabase
+        .from('commission_review_cases')
+        .select('id, review_after, posted_amount_at_risk, details, created_at')
+        .eq('employee_id', employeeIdValue).eq('status', 'pending_review')
+        .lte('review_after', periodEnd).order('id', { ascending: true }).range(from, to));
+      if (reviewResult.error) throw reviewResult.error;
+      setCommissionReviewCases(reviewResult.data || []);
       const invoicesPromise = fetchCommissionInvoices(COMMISSION_INVOICE_SELECT)
         .then(async (result) => {
           if (!result.error || !isMissingSelectColumnError(result.error)) return result;
@@ -4866,6 +4906,7 @@ const HRPage: React.FC = () => {
       }));
       const invoiceIds = invoices.map((invoice) => String(invoice.id || '').trim()).filter(Boolean);
       const operationPaymentsByInvoiceId = new Map<string, any[]>();
+      const authoritativeCheques:any[]=[];
       if (invoiceIds.length > 0) {
         const operationRows: any[] = [];
         for (const invoiceIdChunk of chunkCommissionQueryIds(invoiceIds, COMMISSION_OPERATION_QUERY_ID_CHUNK_SIZE)) {
@@ -4881,8 +4922,8 @@ const HRPage: React.FC = () => {
           operationRows.push(...(operationResult.data || []));
         }
         const chequeIds = Array.from(new Set(
-          operationRows
-            .map((operation: any) => String(operation?.cheque_id || '').trim())
+          [...operationRows,...invoices.flatMap(invoice=>invoice.payments || [])]
+            .map((operation: any) => String(operation?.cheque_id || operation?.spent_cheque_id || '').trim())
             .filter(Boolean),
         ));
         const chequeStatusById = new Map<string, string>();
@@ -4904,6 +4945,7 @@ const HRPage: React.FC = () => {
             );
             if (chequeResult.error) throw chequeResult.error;
             chequeRows.push(...(chequeResult.data || []));
+            authoritativeCheques.push(...(chequeResult.data || []));
           }
           chequeRows.forEach((cheque: any) => {
             const chequeId = String(cheque?.id || '').trim();
@@ -4920,6 +4962,7 @@ const HRPage: React.FC = () => {
           const rows = operationPaymentsByInvoiceId.get(invoiceId) || [];
           rows.push({
             _cash_bank_operation_id: operation.id,
+            cheque_id: operation.cheque_id || null,
             amount: operation.amount,
             status: operation.status,
             payment_type: operation.payment_type,
@@ -4964,12 +5007,13 @@ const HRPage: React.FC = () => {
         }
       }
 
-      const enrichedInvoices = invoices.map((invoice) => ({
+      const collectionIssues:string[]=[];
+      const enrichedInvoices = invoices.map((invoice) => {
+        const hydrated=hydrateCommissionReceiptCheques(invoice.payments,operationPaymentsByInvoiceId.get(String(invoice.id || '')) || [],authoritativeCheques);
+        hydrated.issues.forEach(issue=>collectionIssues.push(`${invoice.name || 'فاکتور فروش'}: ${issue.code==='cheque_not_found' ? 'اطلاعات مرجع چک در دسترس نیست' : 'تاریخ وصول چک مشخص نیست'}`));
+        return ({
         ...invoice,
-        payments: mergeCommissionInvoicePayments(
-          invoice.payments,
-          operationPaymentsByInvoiceId.get(String(invoice.id || '')) || [],
-        ),
+        payments: hydrated.payments,
         invoiceItems: (invoice.invoiceItems || []).map((item: any) => {
           const product = productById.get(String(item?.product_id || ''));
           const billboard = billboardById.get(String(item?.product_id || ''));
@@ -4979,7 +5023,9 @@ const HRPage: React.FC = () => {
             commission_percentage: item?.commission_percentage ?? product?.commission_percentage ?? billboard?.commission_percentage ?? 0,
           };
         }),
-      }));
+      });});
+
+      if(collectionIssues.length)message.warning(`برخی دریافت‌ها نیاز به بررسی دارند و در محاسبه معتبر تلقی نشده‌اند: ${collectionIssues.slice(0,5).join('؛ ')}${collectionIssues.length>5 ? ` و ${collectionIssues.length-5} مورد دیگر` : ''}`);
 
       const postedAllocations: CommissionPostedAllocation[] = [];
       (existingResult.data || []).forEach((entry: any) => {
@@ -5003,6 +5049,7 @@ const HRPage: React.FC = () => {
                 invoice_id: rowInvoiceId,
                 invoice_item_key: itemKey,
                 posted_amount: toNumber(line?.commission_amount ?? line?.selected_amount ?? 0),
+                details: line,
               });
             });
           });
@@ -5018,6 +5065,7 @@ const HRPage: React.FC = () => {
               invoice_id: invoiceId,
               invoice_item_key: itemKey,
               posted_amount: toNumber(line?.commission_amount ?? line?.selected_amount ?? 0),
+              details: line,
             });
           });
           return;
@@ -5030,6 +5078,7 @@ const HRPage: React.FC = () => {
             invoice_id: invoiceId,
             invoice_item_key: itemKeys[0],
             posted_amount: toNumber(entry?.amount),
+            details,
           });
         }
       });
@@ -5038,12 +5087,35 @@ const HRPage: React.FC = () => {
       const paymentsMap = new Map<string, any[]>();
       enrichedInvoices.forEach((invoice) => {
         if (invoice.id && Array.isArray(invoice.payments) && invoice.payments.length > 0) {
-          paymentsMap.set(String(invoice.id), invoice.payments);
+          paymentsMap.set(String(invoice.id), invoice.payments.map((payment: any) => {
+            const cheque = authoritativeCheques.find(item => item.id === (payment.cheque_id || payment.spent_cheque_id));
+            return cheque ? { ...payment, cheque_amount: cheque.amount ?? payment.cheque_amount, cheque_number: cheque.serial_no || payment.cheque_number, due_date: cheque.due_date || payment.due_date } : payment;
+          }));
         }
       });
       setCommissionInvoicePaymentsById(paymentsMap);
 
+      setCommissionFinancialTotals(summarizeCommissionPeriod({
+        invoices: enrichedInvoices.map(invoice => ({...invoice, payments: paymentsMap.get(String(invoice.id)) || invoice.payments})),
+        employeeIdByAssigneeId: { [assigneeId]: employeeIdValue },
+        employeeDefaultCommissionByEmployeeId: { [employeeIdValue]: toNumber(selectedProfile.commission_percentage) },
+        percentMode: values.percent_mode, periodStart, periodEnd,
+      }));
+      const historyIssues: string[] = [];
+      (existingResult.data || []).forEach((entry: any) => {
+        if (entry.status === 'draft' || toNumber(entry.amount) <= 0) return;
+        const details = entry.details || {};
+        const lines = Array.isArray(details.rows)
+          ? details.rows.flatMap((row: any) => Array.isArray(row.lines) ? row.lines : [])
+          : (Array.isArray(details.lines) ? details.lines : []);
+        const allocated = lines.reduce((sum: number, line: any) => sum + toNumber(line.commission_amount ?? line.selected_amount), 0);
+        const singleLegacy = details.invoice_id && Array.isArray(details.item_keys) && details.item_keys.length === 1;
+        if (!singleLegacy && Math.abs(allocated - toNumber(entry.amount)) > 0.01) {
+          historyIssues.push(`جزئیات تخصیص «${entry.title || 'پورسانت پیشین'}» با مبلغ ثبت‌شده برابر نیست؛ پیش از ثبت دوباره بررسی شود.`);
+        }
+      });
       const previewRows = buildCommissionDraftRows({
+        onHistoryIssues: (issues) => issues.forEach((issue) => historyIssues.push(issue.messageFa)),
         invoices: enrichedInvoices,
         employeeIdByAssigneeId: { [assigneeId]: employeeIdValue },
         employeeDefaultCommissionByEmployeeId: { [employeeIdValue]: toNumber(selectedProfile.commission_percentage) },
@@ -5068,6 +5140,13 @@ const HRPage: React.FC = () => {
           decision_status: String(row.decision_status || 'auto') as CommissionDecisionStatus,
         })) as CommissionPersistedDraft[],
         includeNotCalculated: false,
+      });
+      setCommissionPreviewIssues([...collectionIssues, ...historyIssues]);
+      // Only an entirely successful preview can be saved. Identity ambiguity blocks the whole calculation.
+      if (!historyIssues.length) setCommissionPreviewSnapshot({
+        employeeId: employeeIdValue,
+        ledger: (existingResult.data || []).map((entry: any) => ({ id: entry.id, updated_at: entry.updated_at })),
+        cheques: authoritativeCheques.map((cheque) => ({ id: cheque.id, status: cheque.status, cleared_at: cheque.cleared_at || null, spent_date: cheque.spent_date || null })),
       });
       setCommissionRows(previewRows);
       setCommissionReviewTab(previewRows.some((row) => row.selected_amount > 0) ? 'current_period' : 'backlog');
@@ -5238,6 +5317,9 @@ const HRPage: React.FC = () => {
     status: 'draft' | 'proposed';
   }) => {
     const employeeIdValue = String(selectedProfile.source_id || selectedProfile.id || '').trim();
+    if (!commissionPreviewSnapshot || commissionPreviewSnapshot.employeeId !== employeeIdValue) {
+      throw new Error('پیش‌نمایش معتبر نیست؛ ابتدا دوباره محاسبه کنید.');
+    }
     const assigneeIdValue = String(selectedProfile.related_profile_id || '').trim() || null;
     const employeeLabel = selectedProfile.full_name || 'بازاریاب انتخاب‌شده';
     const basis = commissionForm.getFieldValue('basis') as CommissionBasis;
@@ -5286,6 +5368,8 @@ const HRPage: React.FC = () => {
       assignee_id: assigneeIdValue,
       details: {
         calculation_key: calculationKey,
+        ledger_snapshot: commissionPreviewSnapshot.ledger,
+        cheque_snapshot: commissionPreviewSnapshot.cheques,
         basis,
         percent_mode: percentMode,
         assignee_id: assigneeIdValue,
@@ -5295,6 +5379,8 @@ const HRPage: React.FC = () => {
         selected_amount: amount,
         deferred_amount: deferredAmount,
         excluded_amount: excludedAmount,
+        unallocated_amount: commissionRows.reduce((sum,row)=>sum+row.lines.filter(line=>line.decision_status !== 'exclude' && line.decision_status !== 'defer_to_next_period').reduce((total,line)=>total+Math.max(0,line.remaining_amount-line.selected_amount),0),0),
+        period_summary: commissionFinancialTotals,
         commission_percent: effectiveRate,
         invoice_count: invoiceIds.length,
         item_count: selectedLines.length,
@@ -5319,6 +5405,7 @@ const HRPage: React.FC = () => {
             source_period_end: row.source_period_end,
             has_cheque: chequePayments.length > 0,
             cheque_payments: chequePayments.map((p: any) => ({
+              cheque_id: p?.cheque_id || p?.spent_cheque_id || null,
               cheque_number: p?.cheque_number || p?.serial_no || null,
               amount: p?.amount || 0,
               due_date: p?.due_date || p?.maturity_date || null,
@@ -5345,7 +5432,7 @@ const HRPage: React.FC = () => {
         }),
       },
     };
-  }, [commissionForm, commissionInvoicePaymentsById, commissionRows]);
+  }, [commissionForm, commissionInvoicePaymentsById, commissionRows, commissionPreviewSnapshot, commissionFinancialTotals]);
 
   const handleSaveCommissionDraft = useCallback(async () => {
     try {
@@ -7609,7 +7696,7 @@ const HRPage: React.FC = () => {
         const hasCheque = (commissionInvoicePaymentsById.get(String(row.invoice_id || '')) || []).some((p: any) => String(p?.payment_type || '').toLowerCase() === 'cheque');
         return (
           <div className="flex flex-wrap items-center gap-1">
-            <a href={`/invoices/${row.invoice_id}`} className="text-leather-700 hover:underline">{val}</a>
+            <a href={`/invoices/${row.invoice_id}`} target="_blank" rel="noopener noreferrer" className="text-leather-700 hover:underline">{val}</a>
             {hasCheque && <Tag color="orange" className="text-xs">چک</Tag>}
           </div>
         );
@@ -8317,6 +8404,18 @@ const HRPage: React.FC = () => {
             rowKey="id"
             columns={calculatedCommissionColumns}
             dataSource={calculatedCommissionRows}
+            footer={() => <>
+              {dashboardCommissionSummaryError && <Alert type="warning" message={dashboardCommissionSummaryError} showIcon />}
+              <CommissionSummary formatMoney={formatMoney} values={{...(dashboardCommissionFinancialTotals || {}),
+                invoiceCount:calculatedCommissionRows.reduce((sum,row)=>sum+toNumber(row.details?.invoice_count),0),
+                lineCount:calculatedCommissionRows.reduce((sum,row)=>sum+toNumber(row.details?.item_count),0),
+                commissionTotal:calculatedCommissionRows.reduce((sum,row)=>sum+row.amount,0),
+                excluded:calculatedCommissionRows.reduce((sum,row)=>sum+toNumber(row.details?.excluded_amount),0),
+                deferred:calculatedCommissionRows.reduce((sum,row)=>sum+toNumber(row.details?.deferred_amount),0),
+                unallocated:calculatedCommissionRows.reduce((sum,row)=>sum+toNumber(row.details?.unallocated_amount),0),
+              }} />
+              <p className="text-xs text-gray-500 mt-2">جمع‌های مالی مربوط به بازاریاب‌های نمایش‌داده‌شده و بازهٔ انتخابی‌اند؛ بدون پورسانت بر اساس درصد کالا و پیش‌فرض بازاریاب محاسبه می‌شود. تعداد فاکتور و قلم، مجموع موارد ثبت‌شده در محاسبه‌هاست.</p>
+            </>}
             pagination={{ pageSize: 15, showSizeChanger: false }}
             scroll={{ x: 1200 }}
             expandable={{
@@ -8332,8 +8431,8 @@ const HRPage: React.FC = () => {
                       return (
                         <div key={invRow.invoice_id || idx} className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
                           <div className="bg-gray-50 dark:bg-gray-800 px-4 py-2 flex flex-wrap items-center gap-2">
-                            <a href={`/invoices/${invRow.invoice_id}`} className="font-bold text-leather-700 hover:underline text-sm">
-                              {invRow.invoice_name || invRow.invoice_id || `فاکتور ${toPersianNumber(idx + 1)}`}
+                            <a href={`/invoices/${invRow.invoice_id}`} target="_blank" rel="noopener noreferrer" className="font-bold text-leather-700 hover:underline text-sm">
+                              {invRow.invoice_name || `فاکتور ${toPersianNumber(idx + 1)}`}
                             </a>
                             {invRow.invoice_status && renderInvoiceStatusTag(invRow.invoice_status)}
                             {hasCheque && <Tag color="orange" className="text-xs">دارای چک</Tag>}
@@ -8365,15 +8464,7 @@ const HRPage: React.FC = () => {
                             <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-orange-50 dark:bg-orange-900/10">
                               <div className="text-xs font-bold text-orange-700 mb-2">اطلاعات چک‌های فاکتور</div>
                               <div className="flex flex-wrap gap-3">
-                                {cheques.map((cheque: any, ci: number) => (
-                                  <div key={ci} className="bg-white dark:bg-gray-900 border border-orange-200 dark:border-orange-700 rounded-md px-3 py-2 text-xs space-y-1 min-w-[180px]">
-                                    {cheque.cheque_number && <div><span className="text-gray-500">شماره چک: </span><span className="persian-number font-bold">{toPersianNumber(cheque.cheque_number)}</span></div>}
-                                    {cheque.bank_name && <div><span className="text-gray-500">بانک: </span><span>{cheque.bank_name}</span></div>}
-                                    <div><span className="text-gray-500">مبلغ: </span><span className="persian-number font-bold text-green-700">{formatMoney(toNumber(cheque.amount))}</span></div>
-                                    {cheque.due_date && <div><span className="text-gray-500">سررسید: </span><span className="persian-number">{toPersianNumber(safeJalaliFormat(cheque.due_date, 'YYYY/MM/DD'))}</span></div>}
-                                    {cheque.cheque_status && <div><span className="text-gray-500">وضعیت: </span><Tag color={cheque.cheque_status === 'cleared' ? 'green' : cheque.cheque_status === 'bounced' ? 'red' : 'blue'} className="text-xs">{cheque.cheque_status}</Tag></div>}
-                                  </div>
-                                ))}
+                                {cheques.map((cheque: any, ci: number) => <CommissionChequeCard key={ci} cheque={cheque} formatMoney={formatMoney} />)}
                               </div>
                             </div>
                           )}
@@ -9339,7 +9430,13 @@ const HRPage: React.FC = () => {
         zIndex={COMMISSION_MODAL_Z_INDEX}
       >
         <div className="space-y-4">
-          <Form form={commissionForm} layout="vertical">
+          <Form form={commissionForm} layout="vertical" disabled={commissionLoading} onValuesChange={() => {
+            setCommissionRows([]);
+            setCommissionFinancialTotals(null);
+            setCommissionPreviewSnapshot(null);
+            setCommissionPreviewIssues([]);
+            setCommissionReviewCases([]);
+          }}>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <Form.Item
                 name="period_range"
@@ -9437,6 +9534,28 @@ const HRPage: React.FC = () => {
             </div>
           </Form>
 
+          {commissionFinancialTotals && <CommissionSummary formatMoney={formatMoney} values={{...commissionFinancialTotals,
+            invoiceCount: new Set(commissionRows.filter(row=>row.selected_amount>0).map(row=>row.invoice_id)).size,
+            lineCount:commissionRows.reduce((sum,row)=>sum+row.lines.filter(line=>line.selected_amount>0).length,0),
+            commissionTotal:commissionDraftTotals.selected,excluded:commissionDraftTotals.excluded,deferred:commissionDraftTotals.deferred,
+            unallocated:commissionRows.reduce((sum,row)=>sum+row.lines.filter(line=>line.decision_status!=='exclude' && line.decision_status!=='defer_to_next_period').reduce((total,line)=>total+Math.max(0,line.remaining_amount-line.selected_amount),0),0),
+          }} />}
+          {commissionPreviewIssues.length > 0 && (
+            <Alert type={commissionPreviewSnapshot ? 'warning' : 'error'} showIcon
+              message="موارد نیازمند بررسی در محاسبه"
+              description={<ul className="list-disc pr-5 space-y-1">{commissionPreviewIssues.map((issue, index) => <li key={index}>{issue}</li>)}</ul>} />
+          )}
+          {commissionReviewCases.length > 0 && (
+            <Card title="موارد اصلاحی منتظر بررسی این دوره">
+              <p className="text-xs text-gray-500 mb-3">سابقهٔ قبلی حفظ شده است. مبلغ مرتبط، کل پورسانت محاسبهٔ قبلی است و مبلغ قطعی اصلاح نیست؛ از حقوق این دوره خودکار کسر نمی‌شود. مبالغ این موارد را با هم جمع نکنید، چون ممکن است به یک محاسبه مربوط باشند.</p>
+              {commissionReviewCases.map((item) => <div key={item.id} className="border-b border-gray-200 dark:border-gray-700 py-3 last:border-0">
+                <div className="font-bold">{item.details?.ledger_title || 'محاسبه پورسانت پیشین'}</div>
+                <div className="text-sm mt-1">چک {item.details?.cheque_number || 'بدون شماره'} برگشت خورده یا عودت شده است. پورسانت مرتبط: <span className="persian-number">{formatMoney(item.posted_amount_at_risk)}</span></div>
+                <div className="text-xs text-gray-500 mt-1">قابل بررسی از {toPersianNumber(safeJalaliFormat(item.review_after, 'YYYY/MM/DD'))}</div>
+                {(item.details?.calculation_snapshot?.rows || []).map((row: any) => row.invoice_id ? <Button type="link" key={row.invoice_id} onClick={() => navigate(`/invoices/${row.invoice_id}`)}>{row.invoice_name || 'مشاهده فاکتور'}</Button> : null)}
+              </div>)}
+            </Card>
+          )}
           <Card>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap gap-4 text-sm text-gray-500">
@@ -9455,14 +9574,14 @@ const HRPage: React.FC = () => {
               </div>
               <Space>
                 <Button onClick={handleBuildCommissionPreview} loading={commissionLoading}>محاسبه</Button>
-                <Button onClick={handleSaveCommissionDraft} loading={commissionModalSaving} disabled={commissionRows.length === 0}>
+                <Button onClick={handleSaveCommissionDraft} loading={commissionModalSaving} disabled={commissionRows.length === 0 || !commissionPreviewSnapshot}>
                   ذخیره پیش‌نویس
                 </Button>
                 <Button
                   type="primary"
                   onClick={handleSaveCommissionCalculation}
                   loading={commissionModalSaving}
-                  disabled={commissionDraftTotals.selected <= 0}
+                  disabled={commissionDraftTotals.selected <= 0 || !commissionPreviewSnapshot}
                 >
                   ثبت نهایی
                 </Button>
@@ -9550,15 +9669,7 @@ const HRPage: React.FC = () => {
                                       <div className="px-3 py-2 bg-orange-50 dark:bg-orange-900/10 border border-orange-200 dark:border-orange-700 rounded-lg">
                                         <div className="text-xs font-bold text-orange-700 mb-2">چک‌های فاکتور</div>
                                         <div className="flex flex-wrap gap-3">
-                                          {invoiceCheques.map((cheque: any, ci: number) => (
-                                            <div key={ci} className="bg-white dark:bg-gray-900 border border-orange-200 rounded-md px-3 py-2 text-xs space-y-1 min-w-[160px]">
-                                              {cheque.cheque_number && <div><span className="text-gray-500">شماره: </span><span className="persian-number font-bold">{toPersianNumber(cheque.cheque_number)}</span></div>}
-                                              {cheque.bank_name && <div><span className="text-gray-500">بانک: </span>{cheque.bank_name}</div>}
-                                              <div><span className="text-gray-500">مبلغ: </span><span className="persian-number font-bold text-green-700">{formatMoney(toNumber(cheque.amount))}</span></div>
-                                              {(cheque.due_date || cheque.maturity_date) && <div><span className="text-gray-500">سررسید: </span><span className="persian-number">{toPersianNumber(safeJalaliFormat(cheque.due_date || cheque.maturity_date, 'YYYY/MM/DD'))}</span></div>}
-                                              {(cheque.cheque_status || cheque.status) && <div><span className="text-gray-500">وضعیت: </span><Tag color={(cheque.cheque_status || cheque.status) === 'cleared' ? 'green' : (cheque.cheque_status || cheque.status) === 'bounced' ? 'red' : 'blue'} className="text-xs">{cheque.cheque_status || cheque.status}</Tag></div>}
-                                            </div>
-                                          ))}
+                                          {invoiceCheques.map((cheque: any, ci: number) => <CommissionChequeCard key={ci} cheque={cheque} formatMoney={formatMoney} />)}
                                         </div>
                                       </div>
                                     )}
@@ -9618,15 +9729,7 @@ const HRPage: React.FC = () => {
                                   <div className="px-3 py-2 bg-orange-50 dark:bg-orange-900/10 border border-orange-200 dark:border-orange-700 rounded-lg">
                                     <div className="text-xs font-bold text-orange-700 mb-2">چک‌های فاکتور</div>
                                     <div className="flex flex-wrap gap-3">
-                                      {invoiceCheques.map((cheque: any, ci: number) => (
-                                        <div key={ci} className="bg-white dark:bg-gray-900 border border-orange-200 rounded-md px-3 py-2 text-xs space-y-1 min-w-[160px]">
-                                          {cheque.cheque_number && <div><span className="text-gray-500">شماره: </span><span className="persian-number font-bold">{toPersianNumber(cheque.cheque_number)}</span></div>}
-                                          {cheque.bank_name && <div><span className="text-gray-500">بانک: </span>{cheque.bank_name}</div>}
-                                          <div><span className="text-gray-500">مبلغ: </span><span className="persian-number font-bold text-green-700">{formatMoney(toNumber(cheque.amount))}</span></div>
-                                          {(cheque.due_date || cheque.maturity_date) && <div><span className="text-gray-500">سررسید: </span><span className="persian-number">{toPersianNumber(safeJalaliFormat(cheque.due_date || cheque.maturity_date, 'YYYY/MM/DD'))}</span></div>}
-                                          {(cheque.cheque_status || cheque.status) && <div><span className="text-gray-500">وضعیت: </span><Tag color={(cheque.cheque_status || cheque.status) === 'cleared' ? 'green' : (cheque.cheque_status || cheque.status) === 'bounced' ? 'red' : 'blue'} className="text-xs">{cheque.cheque_status || cheque.status}</Tag></div>}
-                                        </div>
-                                      ))}
+                                      {invoiceCheques.map((cheque: any, ci: number) => <CommissionChequeCard key={ci} cheque={cheque} formatMoney={formatMoney} />)}
                                     </div>
                                   </div>
                                 )}

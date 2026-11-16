@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {digitsToEnglish} from '../utils/persianSearchText';
+import {isValidReportRowLimit,REPORT_ROW_LIMIT_MIN,REPORT_ROW_LIMIT_MAX} from '../utils/reportRowLimit';
 import {
   Alert,
   App,
@@ -105,7 +107,7 @@ const ReportBuilderPage: React.FC = () => {
   const [viewerRoleIds, setViewerRoleIds] = useState<string[]>([]);
   const [showInMembersDashboard, setShowInMembersDashboard] = useState(false);
   const [secondaryModuleIds, setSecondaryModuleIds] = useState<string[]>([]);
-  const [rowLimit, setRowLimit] = useState(200);
+  const [rowLimit, setRowLimit] = useState<number|null>(200);
   const [columns, setColumns] = useState<string[]>([]);
   const [conditionsAll, setConditionsAll] = useState<any[]>([]);
   const [conditionsAny, setConditionsAny] = useState<any[]>([]);
@@ -489,6 +491,7 @@ const ReportBuilderPage: React.FC = () => {
   );
 
   const handleSave = async () => {
+    if(calculationMode==='normal'&&!isValidReportRowLimit(rowLimit)){message.error('حداکثر ردیف باید عدد صحیح بین ۲۰ و ۵۰۰۰ باشد.');return;}
     if (![0, 1, 3].every((item) => validateStep(item as WizardStep))) return;
     try {
       setSaving(true);
@@ -543,8 +546,9 @@ const ReportBuilderPage: React.FC = () => {
       };
 
       if (isEditMode && reportId) {
-        const { error } = await supabase.from('report_definitions').update(payload).eq('id', reportId);
+        const { data:savedReport,error } = await supabase.from('report_definitions').update(payload).eq('id', reportId).select('id,config').single();
         if (error) throw error;
+        if(!savedReport || normalizeReportConfig(savedReport.config).row_limit!==config.row_limit)throw new Error('ذخیره حداکثر ردیف تأیید نشد.');
         message.success('گزارش به‌روزرسانی شد.');
         navigate(`/reports/${reportId}`);
         return;
@@ -648,7 +652,8 @@ const ReportBuilderPage: React.FC = () => {
                 </div>
                 <div>
                   <div className="mb-2 font-bold">حداکثر ردیف</div>
-                  <InputNumber min={20} max={500} className="w-full persian-number" value={rowLimit} onChange={(value) => setRowLimit(clampReportRowLimit(value))} />
+                  <InputNumber min={REPORT_ROW_LIMIT_MIN} max={REPORT_ROW_LIMIT_MAX} precision={0} changeOnBlur={false} aria-label="حداکثر ردیف" className="w-full persian-number" value={rowLimit} parser={value=>Number(digitsToEnglish(value).replace(/[٬,]/g,''))} onChange={setRowLimit} />
+                  <div className="mt-1 text-xs text-gray-500">از ۲۰ تا ۵۰۰۰ ردیف؛ داده‌ها به‌صورت صفحه‌بندی‌شده دریافت می‌شوند.</div>
                 </div>
               </> : <div className="md:col-span-2">
                 <div className="mb-2 font-bold">گزارش‌های مرجع</div>

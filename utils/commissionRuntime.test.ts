@@ -2,13 +2,243 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCommissionDraftRows,
   buildCommissionDraftSourceKey,
+  buildCommissionInvoiceItemKey,
   getCommissionLineReviewBucket,
+  hydrateCommissionReceiptCheques,
+  reconcileCommissionHistory,
   mergeCommissionInvoicePayments,
   recomputeCommissionDraftRow,
+  summarizeCommissionPeriod,
   type CommissionPersistedDraft,
 } from './commissionRuntime';
 
 describe('commissionRuntime', () => {
+  const collectedAuditArgs = (invoice: Record<string, any>, extra: Record<string, any> = {}) => ({
+    invoices: [{ id: 'audit-invoice', name: 'فاکتور آزمون', invoice_date: '2026-04-10', status: 'final', assignee_id: 'audit-profile',
+      total_invoice_amount: 1000000, invoiceItems: [{ id: 'item-1', line_total: 1000000, commission_percentage: 10 }], ...invoice }],
+    employeeIdByAssigneeId: { 'audit-profile': 'audit-employee' }, employeeDefaultCommissionByEmployeeId: { 'audit-employee': 0 },
+    basis: 'prepaid_and_settled_invoices' as const, percentMode: 'product_default' as const,
+    periodStart: '2026-05-01', periodEnd: '2026-05-31', ...extra,
+  });
+
+  it('summarizes sales by invoice date, actual receipts by collection date and pending cheques by due date', () => {
+    const args=collectedAuditArgs({invoice_date:'2026-05-10',payments:[
+      {id:'cash',amount:100000,payment_type:'cash',status:'received',date:'2026-05-11'},
+      {id:'pending',cheque_id:'pending',amount:200000,payment_type:'cheque',status:'received',cheque_status:'new',date:'2026-04-12',due_date:'2026-05-25'},
+      {id:'bounced',cheque_id:'bounced',amount:300000,payment_type:'cheque',status:'received',cheque_status:'bounced',date:'2026-04-12',due_date:'2026-05-25'},
+      {id:'returned',cheque_id:'returned',amount:900000,payment_type:'cheque',status:'received',cheque_status:'returned',due_date:'2026-05-25'},
+      {id:'not-due',cheque_id:'not-due',amount:900000,payment_type:'cheque',status:'received',cheque_status:'new',due_date:'2026-06-01'},
+    ],invoiceItems:[{line_total:600000,commission_percentage:10,quantity:2},{line_total:400000,commission_percentage:0,quantity:4}]});
+    args.invoices.push({...args.invoices[0],id:'old',invoice_date:'2026-04-01',payments:[
+      {id:'collected',cheque_id:'collected',amount:500000,payment_type:'cheque',status:'received',cheque_status:'cleared',date:'2026-04-10',cheque_cleared_at:'2026-05-12'}]});
+    args.invoices.push({...args.invoices[0],id:'future',invoice_date:'2026-06-01',payments:[
+      {id:'future-pending',cheque_id:'future-pending',amount:100000,payment_type:'cheque',status:'received',cheque_status:'new',due_date:'2026-05-20'}]});
+    expect(summarizeCommissionPeriod(args)).toEqual({sales:1000000,received:600000,outstandingCheques:600000,nonCommissionSales:400000,nonCommissionQuantity:4});
+  });
+
+  it('does not double-count repeated invoices or receipt mirrors and caps unique cheque allocations to face value', () => {
+    const args=collectedAuditArgs({invoice_date:'2026-05-10',payments:[
+      {id:'cash',amount:100000,payment_type:'cash',status:'received',date:'2026-05-11'},
+      {id:'cash',amount:100000,payment_type:'cash',status:'received',date:'2026-05-11'},
+      ...['p1','p2'].map(id=>({id,cheque_id:'same-cheque',amount:400000,cheque_amount:600000,payment_type:'cheque',status:'received',cheque_status:'new',due_date:'2026-05-25'})),
+      ...['c1','c2'].map(id=>({id,cheque_id:'cleared-cheque',amount:400000,cheque_amount:600000,payment_type:'cheque',status:'received',cheque_status:'cleared',cheque_cleared_at:'2026-05-25'})),
+    ]});
+    args.invoices.push(args.invoices[0]);
+    const summary=summarizeCommissionPeriod(args);
+    expect(summary.sales).toBe(1000000);expect(summary.received).toBe(700000);expect(summary.outstandingCheques).toBe(600000);
+  });
+
+  it('uses effective selected rate for noncommission quantity and ignores cache-only or invalid receipts', () => {
+    const args=collectedAuditArgs({invoice_date:'2026-05-10',total_received_amount:1000000,remaining_balance:0,
+      invoiceItems:[{line_total:1000000,quantity:3,commission_percentage:10}],payments:[
+        {id:'failed',amount:1000000,payment_type:'cash',status:'canceled',date:'2026-05-12'},
+        {id:'undated',amount:1000000,payment_type:'cash',status:'received'},
+      ]});
+    expect(summarizeCommissionPeriod({...args,percentMode:'employee_default'})).toEqual({sales:1000000,received:0,outstandingCheques:0,nonCommissionSales:1000000,nonCommissionQuantity:3});
+    expect(summarizeCommissionPeriod(args).nonCommissionSales).toBe(0);
+  });
+
+  it('uses authoritative cheque collection and reversal status over stale invoice snapshots', () => {
+    const payment={amount:1000000,payment_type:'cheque',status:'received',cheque_id:'cheque-1',date:'2026-04-12',cheque_status:'new'};
+    const cleared=hydrateCommissionReceiptCheques([payment],[],[{id:'cheque-1',status:'cleared',cleared_at:'2026-05-12'}]);
+    expect(cleared.issues).toEqual([]);
+    expect(buildCommissionDraftRows(collectedAuditArgs({payments:cleared.payments}))[0].selected_amount).toBe(100000);
+    const bounced=hydrateCommissionReceiptCheques([{...payment,cheque_status:'cleared',cheque_cleared_at:'2026-05-12'}],[],[{id:'cheque-1',status:'bounced'}]);
+    for(const basis of ['prepaid_and_settled_invoices','full_settlement_only'] as const)
+      expect(buildCommissionDraftRows(collectedAuditArgs({payments:bounced.payments,total_received_amount:1000000,remaining_balance:0},{basis}))).toEqual([]);
+  });
+
+  it('keeps stable row keys when invoice items are reordered, preserving direct id priority', () => {
+    const item={row_key:'stable-row',product_id:'product-a'};
+    expect(buildCommissionInvoiceItemKey('invoice',item,0)).toBe('invoice:stable-row');
+    expect(buildCommissionInvoiceItemKey('invoice',item,5)).toBe('invoice:stable-row');
+    expect(buildCommissionInvoiceItemKey('invoice',{...item,id:'direct-id'},5)).toBe('invoice:direct-id');
+  });
+
+  it('consumes a legacy allocation exactly once after row-key introduction and reorder', () => {
+    const args=collectedAuditArgs({payments:[{amount:1000000,payment_type:'cash',status:'received',date:'2026-05-12'}],
+      invoiceItems:[{row_key:'b',product_id:'product-b',line_total:400000,commission_percentage:10},
+        {row_key:'a',product_id:'product-a',line_total:600000,commission_percentage:10}]});
+    const allocations:any=[{basis:args.basis,percent_mode:args.percentMode,invoice_id:'audit-invoice',
+      invoice_item_key:'audit-invoice:0:product-a',posted_amount:60000,details:{product_id:'product-a',net_amount:600000}}];
+    const history=reconcileCommissionHistory({invoices:args.invoices,postedAllocations:allocations});
+    expect(history.issues).toEqual([]);expect(history.postedAllocations[0].invoice_item_key).toBe('audit-invoice:a');
+    expect(buildCommissionDraftRows({...args,postedAllocations:allocations})[0].selected_amount).toBe(40000);
+  });
+
+  it('disambiguates repeated products only through a unique unchanged snapshot', () => {
+    const invoices:any=[{id:'invoice',invoiceItems:[{row_key:'small',product_id:'same',line_total:300000,quantity:1},
+      {row_key:'large',product_id:'same',line_total:700000,quantity:2}]}];
+    const history=reconcileCommissionHistory({invoices,postedAllocations:[{basis:'prepaid_and_settled_invoices',percent_mode:'product_default',
+      invoice_id:'invoice',invoice_item_key:'invoice:0:same',posted_amount:70000,details:{product_id:'same',net_amount:700000,quantity:2}}]});
+    expect(history.issues).toEqual([]);expect(history.postedAllocations[0].invoice_item_key).toBe('invoice:large');
+  });
+
+  it('blocks ambiguous or unmatched legacy history and exposes Persian review issues', () => {
+    const args=collectedAuditArgs({payments:[{amount:1000000,payment_type:'cash',status:'received',date:'2026-05-12'}],
+      invoiceItems:[{row_key:'a',product_id:'same',line_total:500000,commission_percentage:10},
+        {row_key:'b',product_id:'same',line_total:500000,commission_percentage:10}]});
+    for(const product of ['same','deleted-product']) {
+      let issues:any[]=[];
+      const rows=buildCommissionDraftRows({...args,postedAllocations:[{basis:args.basis,percent_mode:args.percentMode,
+        invoice_id:'audit-invoice',invoice_item_key:`audit-invoice:0:${product}`,posted_amount:50000}],onHistoryIssues:value=>{issues=value;}});
+      expect(rows).toEqual([]);expect(issues).toHaveLength(1);expect(issues[0].messageFa).toContain('پیش از ثبت');
+    }
+  });
+
+  it('blocks duplicate stable invoice row identities even before any commission history exists', () => {
+    const history=reconcileCommissionHistory({invoices:[{id:'invoice',invoiceItems:[{row_key:'duplicate'},{row_key:'duplicate'}]}]});
+    expect(history.blockedInvoiceIds).toEqual(['invoice']);expect(history.issues[0].code).toBe('ambiguous_item_identity');
+  });
+
+  it('aliases an existing current draft while preserving its persisted source key and saved rate', () => {
+    const args=collectedAuditArgs({payments:[{amount:1000000,payment_type:'cash',status:'received',date:'2026-05-12'}],
+      invoiceItems:[{row_key:'new-stable',product_id:'product-a',line_total:1000000,commission_percentage:50}]});
+    const draft:any={source_key:'original-persisted-source',employee_id:'audit-employee',period_start:'2026-05-01',period_end:'2026-05-31',
+      source_basis:args.basis,percent_mode:args.percentMode,invoice_id:'audit-invoice',invoice_item_key:'audit-invoice:0:product-a',
+      entitled_amount:100000,posted_amount:0,remaining_amount:100000,decision_status:'auto',draft_status:'draft',
+      details:{product_id:'product-a',net_amount:1000000,commission_percent:10}};
+    const [row]=buildCommissionDraftRows({...args,existingDrafts:[draft]});
+    expect(row.selected_amount).toBe(100000);expect(row.lines[0].source_key).toBe('original-persisted-source');
+    expect(row.lines[0].invoice_item_key).toBe('audit-invoice:new-stable');
+  });
+
+  it('keeps deferred legacy history once after reordering and blocks its backlog when identity is ambiguous', () => {
+    const args=collectedAuditArgs({payments:[{amount:1000000,payment_type:'cash',status:'received',date:'2026-04-12'}],
+      invoiceItems:[{row_key:'stable-a',product_id:'product-a',line_total:1000000,commission_percentage:10}]});
+    const draft:any={source_key:'deferred-original',employee_id:'audit-employee',period_start:'2026-04-01',period_end:'2026-04-30',
+      source_basis:args.basis,percent_mode:args.percentMode,invoice_id:'audit-invoice',invoice_item_key:'audit-invoice:7:product-a',
+      entitled_amount:100000,posted_amount:0,remaining_amount:100000,decision_status:'defer_to_next_period',draft_status:'draft',
+      details:{product_id:'product-a',net_amount:1000000,commission_percent:10}};
+    const rows=buildCommissionDraftRows({...args,existingDrafts:[draft]});
+    expect(rows).toHaveLength(1);expect(rows[0].remaining_amount).toBe(100000);
+    expect(rows[0].lines[0].source_key).toBe('deferred-original');
+    expect(rows[0].lines[0].invoice_item_key).toBe('audit-invoice:stable-a');
+    const ambiguous={...args,invoices:args.invoices.map(invoice=>({...invoice,invoiceItems:[...invoice.invoiceItems,
+      {...invoice.invoiceItems[0],row_key:'stable-b'}]}))};
+    expect(buildCommissionDraftRows({...ambiguous,existingDrafts:[draft]})).toEqual([]);
+  });
+
+  it('hydrates legacy operation cheque ids and leaves cash payments untouched', () => {
+    const cash={amount:200000,payment_type:'cash',status:'received',date:'2026-05-10'};
+    const result=hydrateCommissionReceiptCheques([], [cash,{amount:800000,payment_type:'cheque',status:'received',spent_cheque_id:'spent-1',date:'2026-04-10'}],
+      [{id:'spent-1',status:'paid',spent_date:'2026-05-12'}]);
+    expect(result.payments[0]).toBe(cash);expect(result.issues).toEqual([]);
+    expect(buildCommissionDraftRows(collectedAuditArgs({payments:result.payments}))[0].selected_amount).toBe(100000);
+  });
+
+  it('reports missing authoritative cheque data and dates rather than manufacturing collection at issue time', () => {
+    const payment={amount:1000000,payment_type:'cheque',status:'received',cheque_id:'cheque-1',date:'2026-05-12',cheque_status:'cleared'};
+    for(const cheques of [[],[{id:'cheque-1',status:'cleared'}]]) {
+      const result=hydrateCommissionReceiptCheques([payment],[],cheques);
+      expect(result.issues).toHaveLength(1);
+      for(const basis of ['prepaid_and_settled_invoices','full_settlement_only'] as const)
+        expect(buildCommissionDraftRows(collectedAuditArgs({payments:result.payments,total_received_amount:1000000,remaining_balance:0},{basis}))).toEqual([]);
+    }
+  });
+
+  it('never turns pending or bounced cheques into real receipts through invoice cached totals', () => {
+    for (const basis of ['prepaid_and_settled_invoices', 'full_settlement_only'] as const) {
+      for (const cheque_status of ['new', 'in_bank', 'bounced', 'returned', 'canceled']) {
+        const rows = buildCommissionDraftRows(collectedAuditArgs({ total_received_amount: 1000000, remaining_balance: 0, updated_at: '2026-05-12',
+          payments: [{ amount: 1000000, payment_type: 'cheque', status: 'received', cheque_status, date: '2026-05-12' }] }, { basis }));
+        expect(rows.reduce((sum,row)=>sum+row.selected_amount,0)).toBe(0);
+      }
+    }
+  });
+
+  it('fails closed for undated or failed receipt rows instead of substituting cached settlement', () => {
+    for (const payment of [{ amount: 1000000, payment_type: 'cash', status: 'received' },
+      { amount: 1000000, payment_type: 'cash', status: 'canceled', date: '2026-05-12' }]) {
+      expect(buildCommissionDraftRows(collectedAuditArgs({ total_received_amount: 1000000, remaining_balance: 0, updated_at: '2026-05-12', payments: [payment] }))).toEqual([]);
+    }
+  });
+
+  it('includes both period boundaries and excludes future receipts from the cumulative entitlement', () => {
+    const args=collectedAuditArgs({payments:[{amount:200000,payment_type:'cash',status:'received',date:'2026-05-01T00:00:00'},
+      {amount:300000,payment_type:'cash',status:'received',date:'2026-05-31T23:59:59.999'},
+      {amount:500000,payment_type:'cash',status:'received',date:'2026-06-01T00:00:00'}]});
+    expect(buildCommissionDraftRows(args)[0].selected_amount).toBe(50000);
+  });
+
+  it('shows an uncalculated earlier real receipt as backlog with its original collection date', () => {
+    const [row] = buildCommissionDraftRows(collectedAuditArgs({ payments: [{ amount: 1000000, payment_type: 'cash', status: 'received', date: '2026-04-12' }] }));
+    expect(row.selected_amount).toBe(100000);
+    expect(row.is_from_previous_period).toBe(true);
+    expect(row.eligibility_event_at).toContain('2026-04-12');
+    expect(getCommissionLineReviewBucket(row,row.lines[0])).toBe('backlog');
+  });
+
+  it('subtracts previous posting from old receipts and does not resurrect fully consumed commission', () => {
+    const args = collectedAuditArgs({ payments: [{ amount: 1000000, payment_type: 'cash', status: 'received', date: '2026-04-12' }] });
+    const allocation = { basis: 'prepaid_and_settled_invoices' as const, percent_mode: 'product_default' as const,
+      invoice_id: 'audit-invoice', invoice_item_key: 'audit-invoice:item-1', posted_amount: 60000 };
+    expect(buildCommissionDraftRows({ ...args, postedAllocations: [allocation] })[0].selected_amount).toBe(40000);
+    expect(buildCommissionDraftRows({ ...args, postedAllocations: [{ ...allocation, posted_amount: 100000 }] })).toEqual([]);
+  });
+
+  it('includes missed old and current receipt portions cumulatively without double-paying earlier posting', () => {
+    const args = collectedAuditArgs({ payments: [{ amount: 400000, payment_type: 'cash', status: 'received', date: '2026-04-12' },
+      { amount: 300000, payment_type: 'cash', status: 'received', date: '2026-05-12' }] });
+    expect(buildCommissionDraftRows(args)[0].selected_amount).toBe(70000);
+    expect(buildCommissionDraftRows({ ...args, postedAllocations: [{ basis: 'prepaid_and_settled_invoices', percent_mode: 'product_default',
+      invoice_id: 'audit-invoice', invoice_item_key: 'audit-invoice:item-1', posted_amount: 40000 }] })[0].selected_amount).toBe(30000);
+  });
+
+  it('recognizes full real collection only when the final cheque clears, preserving partial receipt treatment', () => {
+    const args=collectedAuditArgs({ payments: [{ amount: 200000, payment_type: 'cash', status: 'received', date: '2026-04-12' },
+      { amount: 800000, payment_type: 'cheque', status: 'received', cheque_status: 'cleared', date: '2026-04-13', cheque_cleared_at: '2026-05-12' }] });
+    const [row]=buildCommissionDraftRows({ ...args, basis:'full_settlement_only' });
+    expect(row.selected_amount).toBe(100000); expect(row.eligibility_event_at).toContain('2026-05-12');
+    expect(buildCommissionDraftRows({ ...args, periodStart:'2026-04-01',periodEnd:'2026-04-30',basis:'full_settlement_only' })).toEqual([]);
+  });
+
+  it('keeps previous manual exclusion and avoids duplicating a saved deferred backlog line', () => {
+    const args=collectedAuditArgs({ payments:[{ amount:1000000,payment_type:'cash',status:'received',date:'2026-04-12' }] });
+    const draft:any={source_key:'saved-april',employee_id:'audit-employee',assignee_id:'audit-profile',period_start:'2026-04-01',period_end:'2026-04-30',
+      source_basis:'prepaid_and_settled_invoices',percent_mode:'product_default',invoice_id:'audit-invoice',invoice_item_key:'audit-invoice:item-1',
+      entitled_amount:100000,posted_amount:0,remaining_amount:100000,decision_status:'exclude',draft_status:'draft',details:{net_amount:1000000,commission_percent:10}};
+    const excluded=buildCommissionDraftRows({...args,existingDrafts:[draft]});
+    expect(excluded.reduce((sum,row)=>sum+row.selected_amount,0)).toBe(0);
+    expect(excluded[0].lines[0].decision_status).toBe('exclude');
+    const otherEmployee=buildCommissionDraftRows({...args,existingDrafts:[{...draft,employee_id:'previous-employee'}]});
+    expect(otherEmployee.reduce((sum,row)=>sum+row.selected_amount,0)).toBe(100000);
+    const deferred=buildCommissionDraftRows({...args,existingDrafts:[{...draft,decision_status:'defer_to_next_period'}]});
+    expect(deferred).toHaveLength(1);expect(deferred[0].lines).toHaveLength(1);expect(deferred[0].remaining_amount).toBe(100000);
+  });
+  it('reserves a deferred old portion once while keeping the newly received portion available', () => {
+    const args=collectedAuditArgs({payments:[{amount:400000,payment_type:'cash',status:'received',date:'2026-04-12'},
+      {amount:300000,payment_type:'cash',status:'received',date:'2026-05-12'}]});
+    const deferred:any={source_key:'deferred-april',employee_id:'audit-employee',assignee_id:'audit-profile',period_start:'2026-04-01',period_end:'2026-04-30',
+      source_basis:'prepaid_and_settled_invoices',percent_mode:'product_default',invoice_id:'audit-invoice',invoice_item_key:'audit-invoice:item-1',
+      entitled_amount:40000,posted_amount:0,remaining_amount:40000,decision_status:'defer_to_next_period',draft_status:'draft',details:{net_amount:1000000,commission_percent:10}};
+    const rows=buildCommissionDraftRows({...args,existingDrafts:[deferred]});
+    expect(rows).toHaveLength(2);
+    expect(rows.reduce((sum,row)=>sum+row.remaining_amount,0)).toBe(70000);
+    expect(rows.reduce((sum,row)=>sum+row.selected_amount,0)).toBe(30000);
+    const backlog=rows.find(row=>row.key.startsWith('commission_backlog:'))!;
+    expect(backlog.remaining_amount).toBe(40000);expect(backlog.selected_amount).toBe(0);
+  });
   it('uses invoice receipt rows instead of adding their mirrored cash operations again', () => {
     const payments = mergeCommissionInvoicePayments(
       [

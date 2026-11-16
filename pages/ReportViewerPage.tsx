@@ -1,3 +1,4 @@
+import {fetchReportRowsByPage} from '../utils/reportRowLimit';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Button, Collapse, Empty, Progress, Select, Spin, Statistic, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -761,7 +762,7 @@ const ReportViewerPage: React.FC = () => {
         selectedTableBlocks,
       );
 
-      const baseResult = await runSelectWithCompatibleColumns<any[]>({
+      const baseRows = await fetchReportRowsByPage<any>(config.row_limit,(start,end) => runSelectWithCompatibleColumns<any[]>({
         cacheKey: `report-viewer:${moduleId}`,
         columns: baseColumns,
         execute: (selectExpr) => {
@@ -778,12 +779,12 @@ const ReportViewerPage: React.FC = () => {
               // تا زمان تبدیل آن برای همان ردیف، پیش‌فیلتر سراسری امن نیست.
               excludedFieldKeys: moduleId === 'tasks' ? ['status'] : [],
             },
-          ).limit(config.row_limit);
+          ).order('id',{ascending:true}).range(start,end);
         },
-      });
-      if (baseResult.error) throw baseResult.error;
+      }));
 
-      const scopedRows = (baseResult.data || []).filter((row: any) =>
+
+      const scopedRows = baseRows.filter((row: any) =>
         !isDeletedReportRecord(row) && canAccessAssignedRecord(row, roleContext.userId, roleContext.roleId, modulePerm.record_scope || 'all', {
           currentOrgId: roleContext.orgId,
           allowedRoleIds: roleContext.allowedRoleIds,
