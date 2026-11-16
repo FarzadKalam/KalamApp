@@ -221,6 +221,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
   const [busyAction, setBusyAction] = useState(false);
   const [transcribingId, setTranscribingId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(()=>()=>{void disconnectVoipWebPhone();},[]);
 
   // Recent calls history state
   const [recentCalls, setRecentCalls] = useState<RecentCallItem[]>([]);

@@ -6,6 +6,7 @@ import {getFieldLabelFa} from '../../utils/fieldLabel';
 import {safeJalaliFormat,toPersianNumber} from '../../utils/persianNumberFormatter';
 import {readVoipContactContext,CALL_CONTACT_SECTION_KEYS,CALL_CONTACT_SECTION_LABELS,type CallContactIdentity,type CallContactSection} from '../../utils/voipContactContext';
 import {getSelectedOrganizationId} from '../../utils/organizationContext';
+import {useCurrencyConfig} from '../../utils/currency';
 const OperationalFinancialOverviewPanel=React.lazy(()=>import('../accounting/OperationalFinancialOverviewPanel'));
 const roleLabels={customers:'مشتری',suppliers:'تأمین‌کننده',employees:'کارمند'};
 const activityDate=(row:any)=>new Date(Math.max(Date.parse(row.updated_at||'')||0,Date.parse(row.created_at||'')||0)).toISOString();
@@ -17,6 +18,7 @@ function GroupMessages({identity,groupId,offset}:{identity:CallContactIdentity;g
 }
 
 function ContactSection({identity,section}:{identity:CallContactIdentity;section:string}){
+ const currency=useCurrencyConfig();
  const [data,setData]=useState<CallContactSection|null>(null);const [busy,setBusy]=useState(true);const [error,setError]=useState('');
  const load=async(offset=0)=>{setBusy(true);setError('');try{const response=await readVoipContactContext({action:'section',moduleId:identity.moduleId,recordId:identity.recordId,section,offset});setData(previous=>offset&&previous?{...response.result,rows:[...previous.rows,...response.result.rows]}:response.result);}catch{setError('این بخش بارگیری نشد؛ سابقهٔ خالی محسوب نمی‌شود.');}finally{setBusy(false);}};
  useEffect(()=>{void load();},[identity.moduleId,identity.recordId,section]);
@@ -32,12 +34,12 @@ function ContactSection({identity,section}:{identity:CallContactIdentity;section
     const status=statusField?.options?.find(option=>String(option.value)===String(row.status))?.label;
     return <div key={row.id} className="rounded-xl border border-slate-200 dark:border-slate-700 p-2 space-y-1">
      <a href={row.href} target="_blank" rel="noopener noreferrer" className="font-semibold">{getRecordTitle(row,config)}</a>
-     <div className="flex flex-wrap gap-2">{status&&<Tag>{status}</Tag>}<time>{row.updated_at||row.created_at?safeJalaliFormat(activityDate(row),'YYYY/MM/DD HH:mm'):''}</time></div>
+     <div className="flex flex-wrap gap-2">{status&&<Tag>{status}</Tag>}{row.channel_type&&<Tag>{config?.fields.find(field=>field.key==='channel_type')?.options?.find(option=>option.value===row.channel_type)?.label||'پیام‌رسان'}</Tag>}<time>{row.updated_at||row.created_at?safeJalaliFormat(activityDate(row),'YYYY/MM/DD HH:mm'):''}</time></div>
      {['invoice_date','total_invoice_amount','total_received_amount','remaining_balance','due_date','started_at'].filter(key=>row[key]!=null).map(key=>{
       const field=config?.fields?.find(field=>field.key===key);if(!field)return null;
-      return <p key={key}>{getFieldLabelFa(field,{moduleId:data.moduleId})}: {key.endsWith('date')||key.endsWith('_at')?safeJalaliFormat(row[key],'YYYY/MM/DD'):toPersianNumber(Number(row[key]).toLocaleString('en-US'))}</p>;
+      return <p key={key}>{getFieldLabelFa(field,{moduleId:data.moduleId})}: {key.endsWith('date')||key.endsWith('_at')?safeJalaliFormat(row[key],'YYYY/MM/DD'):`${toPersianNumber(Number(row[key]).toLocaleString('en-US'))} ${currency.label}`}</p>;
      })}
-     {Array.isArray(row.payments)&&row.payments.length>0&&<Collapse size="small" items={[{key:'payments',label:`پرداخت‌های فاکتور (${toPersianNumber(row.payments.length)})`,children:row.payments.map((payment:any,index:number)=><p key={index}>{toPersianNumber(Number(payment.amount||0).toLocaleString('en-US'))} · {safeJalaliFormat(payment.date||payment.payment_date,'YYYY/MM/DD')}</p>)}]} />}
+     {Array.isArray(row.payments)&&row.payments.length>0&&<Collapse size="small" items={[{key:'payments',label:`پرداخت‌های فاکتور (${toPersianNumber(row.payments.length)})`,children:row.payments.map((payment:any,index:number)=><p key={index}>{toPersianNumber(Number(payment.amount||0).toLocaleString('en-US'))} {currency.label} · {safeJalaliFormat(payment.date||payment.payment_date,'YYYY/MM/DD')}</p>)}]} />}
      {row.message_text&&<p className="whitespace-pre-wrap break-words">{String(row.message_text).slice(0,500)}</p>}
      {section==='groups'&&<GroupMessages identity={identity} groupId={row.id} offset={Math.floor(index/20)*20} />}
     </div>;
@@ -67,7 +69,7 @@ export default function CallContactContextPanel({phone,onChoosePhone}:{phone:str
   {candidates.length>1&&candidates.map(item=><Button key={item.moduleId+item.recordId} block onClick={()=>setSelected(item)}>{item.title} · {roleLabels[item.moduleId]}</Button>)}
   {selected&&<div key={selected.moduleId+selected.recordId} className="space-y-2">
    <a href={`/${selected.moduleId}/${selected.recordId}`} target="_blank" rel="noopener noreferrer" className="font-semibold">{selected.title}</a><Tag>{roleLabels[selected.moduleId]}</Tag>
-   {selected.rank&&<p>سطح مخاطب: {selected.rank}</p>}
+   {selected.rank&&<p>سطح مخاطب: {MODULES[selected.moduleId]?.fields.find(field=>field.key==='rank')?.options?.find(option=>option.value===selected.rank)?.label||'تعریف‌شده در پرونده'}</p>}
    {onChoosePhone&&selected.phone&&<Button size="small" onClick={()=>{onChoosePhone(selected.phone);setQuery('');}}>انتخاب شمارهٔ این مخاطب</Button>}
    <p className="text-slate-500">سوابق بر اساس آخرین تغییر نمایش داده می‌شوند؛ شناسایی شماره به معنی تأیید هویت نیست.</p>
    <Collapse size="small" defaultActiveKey={['invoices','projects']} items={[

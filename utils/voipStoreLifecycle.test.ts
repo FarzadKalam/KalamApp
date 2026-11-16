@@ -30,7 +30,7 @@ it('ignores a previous organization session that arrives after disconnect',async
 });
 it('clears contact identity before asynchronous transport teardown finishes',async()=>{
  mocks.invoke.mockResolvedValue({data:config('مخاطب قبلی'),error:null});await connectVoipWebPhone();
- let finish:()=>void=()=>{};mocks.constructed[0].stop=vi.fn(()=>new Promise<void>(resolve=>{finish=resolve;}));
+ let finish:()=>void=()=>{};const teardown=new Promise<void>(resolve=>{finish=resolve;});mocks.constructed[0].stop=vi.fn(()=>teardown);
  const disconnect=disconnectVoipWebPhone();
  expect(getVoipSnapshot()).toMatchObject({activeCall:null,displayName:null,provider:null,extension:null});
  await Promise.resolve();finish();await disconnect;
