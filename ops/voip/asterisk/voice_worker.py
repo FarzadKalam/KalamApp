@@ -171,6 +171,7 @@ class VoiceAGI(socketserver.StreamRequestHandler):
           join public.user_organization_memberships m on m.user_id=a.assignee_profile_id and m.org_id=s.org_id and m.is_active
           left join public.org_roles r on r.id=m.role_id and r.org_id=m.org_id
           where s.join_code=%s and s.status='active' and a.is_active
+          and coalesce((r.permissions->'voip_call_reports'->>'view')::boolean,true)
           and (s.requested_by=m.user_id or coalesce((r.permissions->'__settings_tabs'->>'edit')::boolean,false))
           limit 1""", (bridge, code[4:]))
         channel = rows[0]['channel_name'] if rows else ''
@@ -246,7 +247,8 @@ def main():
                 query("update public.voip_provider_bridges b set lease_until=now()+interval '5 minutes' from public.voip_ai_sessions s where s.bridge_id=b.id and s.org_id=b.org_id and s.status in ('preparing','dialing','active')")
                 query("update public.voip_ai_sessions set status='cancelled',failure_code='duration_limit',ended_at=now() where status='active' and started_at+make_interval(secs=>max_duration_seconds+30)<now()")
                 rows = query("""update public.voip_ai_sessions set status='preparing',heartbeat_at=now()
-                 where id=(select id from public.voip_ai_sessions where status='queued' order by created_at for update skip locked limit 1)
+                 where (select count(*) from public.voip_ai_sessions where status in ('preparing','dialing','active'))<8
+                 and id=(select id from public.voip_ai_sessions where status='queued' order by created_at for update skip locked limit 1)
                  returning *""")
                 for job in rows:
                     threading.Thread(target=prepare_job, args=(job,), daemon=True).start()

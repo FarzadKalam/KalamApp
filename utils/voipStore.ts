@@ -18,6 +18,7 @@ import {listVoipAudioOutputs,setVoipAudioOutput} from './voipAudioOutput';
 import {prepareVoipRingbackTone,startVoipRingbackTone,stopVoipRingbackTone,disposeVoipRingbackTone} from './voipRingbackTone';
 import {acquireVoipTabOwnership} from './voipTabOwnership';
 import {getSelectedOrganizationId} from './organizationContext';
+import {isVoipMonitorTarget} from './voipMonitorTarget';
 
 export type WebPhoneRegistrationStatus =
   | 'disabled'
@@ -166,6 +167,7 @@ const lookupCrmContactByPhone = async (rawPhone: string): Promise<WebPhoneMatche
 };
 
 const logWebRtcCall = async (payload: Record<string, any>) => {
+  if(isVoipMonitorTarget(payload.sourceNumber)||isVoipMonitorTarget(payload.destinationNumber))return;
   try {
     await supabase.functions.invoke('voip-session', {
       body: { action: 'log_webrtc_call', ...payload },

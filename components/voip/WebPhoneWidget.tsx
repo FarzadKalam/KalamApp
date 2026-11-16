@@ -27,6 +27,7 @@ import {getSelectedOrganizationId} from '../../utils/organizationContext';
 import {loadRecentVoipCalls,type RecentVoipCall} from '../../utils/voipCallHistory';
 import {SearchOutlined,SoundOutlined,ExportOutlined,PoweroffOutlined} from '@ant-design/icons';
 import {useVoipDockTarget} from '../../utils/voipDock';
+import {isVoipMonitorTarget} from '../../utils/voipMonitorTarget';
 import AdaptivePickerSurface from '../AdaptivePickerSurface';
 import {normalizePublicAssetUrl} from '../../utils/assetUrl';
 import type {VoipAudioOutput} from '../../utils/voipAudioOutput';
@@ -252,7 +253,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
   }, [voip.activeCall?.answeredAtMs]);
 
   const targetPhoneNumber = useMemo(() => {
-    if (voip.activeCall?.remoteNumber) return voip.activeCall.remoteNumber;
+    if (voip.activeCall?.remoteNumber) return isVoipMonitorTarget(voip.activeCall.remoteNumber)?'':voip.activeCall.remoteNumber;
     return dialInput.trim();
   }, [voip.activeCall?.remoteNumber, dialInput]);
 
@@ -479,7 +480,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
                 <div className="text-sm font-extrabold text-slate-900 dark:text-white truncate">
                   {activeCall.remoteDisplayName}
                 </div>
-                {activeCall.remoteDisplayName !== activeCall.remoteNumber ? (
+                {activeCall.remoteDisplayName !== activeCall.remoteNumber&&!isVoipMonitorTarget(activeCall.remoteNumber) ? (
                   <div className="text-xs text-slate-500 dark:text-slate-400 font-mono mt-0.5" dir="ltr">
                     {activeCall.remoteNumber}
                   </div>
