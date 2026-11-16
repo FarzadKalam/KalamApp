@@ -52,7 +52,7 @@ export default function VoipDirectoryPicker({open,onClose,onChoose}:{open:boolea
      {item.phone&&<bdi className="font-mono" dir="ltr">{item.phone}</bdi>}
     </button>)}
     {!busy&&!operatorError&&!operators.length&&<p className="text-xs text-slate-500">داخلی‌ای یافت نشد.</p>}
-    {hasMore&&<Button loading={busy} onClick={()=>void more()}>داخلی‌های بیشتر</Button>}
+    {hasMore&&<Button aria-label="داخلی‌های بیشتر" loading={busy} onClick={()=>void more()}>داخلی‌های بیشتر</Button>}
    </section>
    <section aria-label="مخاطبان مجاز" className="space-y-2">
     <h3 className="font-semibold text-sm">مخاطبان</h3>

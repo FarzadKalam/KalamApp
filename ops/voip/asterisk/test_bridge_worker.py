@@ -1,5 +1,6 @@
 import unittest
 import re
+import configparser
 from pathlib import Path
 from bridge_worker import build_objects, bridge_ids, registration_status, realtime_value
 
@@ -66,6 +67,15 @@ class BridgeDialplanTest(unittest.TestCase):
 
     def context(self, name):
         return self.dialplan.split('[' + name + ']', 1)[1].split('\n[', 1)[0]
+
+    def test_browser_media_is_not_bound_to_the_private_http_listener(self):
+        root = Path(__file__).parent
+        sip = configparser.ConfigParser(interpolation=None)
+        sip.read(root / 'pjsip.conf', encoding='utf-8')
+        http = configparser.ConfigParser()
+        http.read(root / 'http.conf', encoding='utf-8')
+        self.assertEqual(sip['transport-wss']['bind'], '0.0.0.0')
+        self.assertEqual(http['general']['bindaddr'], '127.0.0.1')
 
     def test_routes_read_authenticated_channel_endpoint(self):
         # Asterisk CHANNEL's endpoint is a top-level item, not a pjsip signalling subtype.
