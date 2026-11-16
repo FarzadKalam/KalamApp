@@ -10,6 +10,7 @@ describe('tenant-wide VoIP product modes',()=>{
   }
  });
  it('never enables browser audio merely because the provider is Telefonchy or an old user selected webphone',()=>{
+  expect(resolveVoipPolicy(null,null).canUseBrowser).toBe(false);
   expect(resolveVoipPolicy({},'telefonchy').canUseBrowser).toBe(false);
   expect(resolveVoipPolicy({usage_mode:'reports',default_dial_mode:'webphone_webrtc'}).canUseBrowser).toBe(false);
  });

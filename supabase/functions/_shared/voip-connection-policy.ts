@@ -1,7 +1,7 @@
 /** Product contract shared by the UI and edge functions. Never infer WSS from a SIP host/port. */
 export type VoipUsageMode = 'reports' | 'browser';
 export type VoipBrowserSource = 'external' | 'taze_pbx';
-export const resolveVoipPolicy = (input: Record<string, any> | null | undefined = {}, provider = '') => {
+export const resolveVoipPolicy = (input: Record<string, any> | null | undefined = {}, provider: string | null | undefined = '') => {
   const settings=input||{};
   const usageMode: VoipUsageMode = settings.usage_mode === 'browser' ? 'browser'
     : settings.usage_mode === 'reports' ? 'reports'
