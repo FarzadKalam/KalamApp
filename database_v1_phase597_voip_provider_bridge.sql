@@ -5,7 +5,7 @@ create table if not exists public.voip_provider_bridges(
  id uuid primary key default gen_random_uuid(),
  org_id uuid not null references public.organizations(id),
  account_id uuid not null references public.voip_external_accounts(id) on delete cascade,
- browser_secret text not null default encode(gen_random_bytes(24),'hex'),
+ browser_secret text not null default replace(gen_random_uuid()::text||gen_random_uuid()::text,'-',''),
  revision text not null default '',
  synced_revision text not null default '',
  lease_until timestamptz not null default now(),
