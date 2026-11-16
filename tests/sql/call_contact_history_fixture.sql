@@ -3,7 +3,7 @@ create function public.get_current_organization_context() returns jsonb language
  select jsonb_build_object('permissions',coalesce(nullif(current_setting('test.permissions',true),''),'{}')::jsonb)
 $$;
 create table public.customers(id uuid primary key,org_id uuid not null,full_name text);
-create table public.invoices(id uuid primary key default gen_random_uuid(),org_id uuid not null,customer_id uuid,name text,status text,remaining_balance numeric,total_invoice_amount numeric,payments jsonb,created_at timestamptz,updated_at timestamptz,is_deleted boolean);
+create table public.invoices(id uuid primary key default gen_random_uuid(),org_id uuid not null,customer_id uuid,name text,system_code text,status text,invoice_date date,remaining_balance numeric,total_invoice_amount numeric,total_received_amount numeric,payments jsonb,created_at timestamptz,updated_at timestamptz,is_deleted boolean);
 alter table public.customers enable row level security;
 alter table public.invoices enable row level security;
 create policy customer_org on public.customers to authenticated using(org_id=public.current_org_id());
