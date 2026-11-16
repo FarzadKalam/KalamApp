@@ -49,15 +49,14 @@ begin
  if jsonb_array_length(any_conditions)>0 and not any_matched then return false;end if;
  if s='all' then return true;end if;
  if u is null then return false;end if;
- if s='own' then return p_row->>'assignee_type'='user' and p_row->>'assignee_id'=u::text;end if;
- if s='team' then return r is not null and p_row->>'assignee_type'='role' and coalesce(p_row->>'assignee_role_id',p_row->>'assignee_id')=r::text;end if;
+ if s='own' then return p_row->>'assignee_id'=u::text;end if;
+ if s='team' then return p_row->>'assignee_id'=u::text or (r is not null and p_row->>'assignee_role_id'=r::text);end if;
  if s='subtree' then
   with recursive tree as(select id from public.org_roles where id=r and org_id=public.current_org_id()
    union select child.id from public.org_roles child join tree parent on child.parent_id=parent.id where child.org_id=public.current_org_id())
    select coalesce(array_agg(id),'{}'::uuid[]) into allowed_roles from tree;
-  if p_row->>'assignee_type'='role' then return coalesce(p_row->>'assignee_role_id',p_row->>'assignee_id')=any(allowed_roles::text[]);end if;
-  if p_row->>'assignee_type'='user' then return p_row->>'assignee_id'=u::text or exists(select 1 from public.user_organization_memberships m
-    where m.org_id=public.current_org_id() and m.is_active and m.user_id::text=p_row->>'assignee_id' and m.role_id=any(allowed_roles));end if;
+  return p_row->>'assignee_role_id'=any(allowed_roles::text[]) or p_row->>'assignee_id'=u::text or exists(select 1 from public.user_organization_memberships m
+    where m.org_id=public.current_org_id() and m.is_active and m.user_id::text=p_row->>'assignee_id' and m.role_id=any(allowed_roles));
  end if;
  return false;
 exception when others then return false;
@@ -69,6 +68,7 @@ create or replace function public.filter_call_contact_identities(p_module_id tex
 returns jsonb language plpgsql stable security invoker set search_path=public as $$
 declare result jsonb;ctx jsonb:=public.get_current_organization_context();begin
  if public.current_org_id() is null or p_module_id not in('customers','suppliers','employees') or coalesce(array_length(p_ids,1),0)>100 then raise exception 'invalid_contact_scope';end if;
+ if not public.org_has_plan_module(public.current_org_id(),p_module_id,false) then return '[]'::jsonb;end if;
  execute format('select coalesce(jsonb_agg(c.id),''[]''::jsonb) from public.%I c where c.org_id=$1 and c.id=any($2) and public.call_contact_scope_visible($3,$4,to_jsonb(c))',p_module_id)
  into result using public.current_org_id(),p_ids,ctx,p_module_id;
  return result;
@@ -81,9 +81,9 @@ returns jsonb language plpgsql stable security invoker set search_path=public as
 declare ctx jsonb:=public.get_current_organization_context();org uuid:=public.current_org_id();m text;cols text[];phone_cols text[];name_cols text[];projection text;predicate text;rows jsonb;result jsonb:='[]';
 begin
  if org is null or length(trim(coalesce(p_query,'')))<2 or length(p_query)>100 then return result;end if;
- if not public.org_has_plan_feature(org,'voip_webphone',true) then return result;end if;
  if p_phone_key is not null and p_phone_key!~'^[0-9]{7,15}$' then return result;end if;
  foreach m in array array['customers','suppliers','employees']loop
+  if not public.org_has_plan_module(org,m,false) then continue;end if;
   if not(ctx->'permissions'?m) or coalesce((ctx->'permissions'->m->>'view')::boolean,false)=false then continue;end if;
   cols:=array['id','full_name','first_name','last_name','mobile_1','mobile_2','phone','updated_at','created_at'];
   if m<>'employees' then cols:=cols||array['business_name','rank'];else cols:=cols||array['job_title'];end if;
@@ -157,7 +157,7 @@ begin
   v_module:='email_delivery_reports';v_table:='email_messages';v_columns:=array['id','subject','status','direction','message_at','created_at'];v_where:=format('(t.related_module_id=%L and t.related_record_id=%L::uuid)',p_module_id,p_record_id);
  else raise exception 'invalid_contact_section';end case;
  if not(v_permissions?v_module) or coalesce((v_permissions->v_module->>'view')::boolean,false)=false then raise exception 'section_access_denied';end if;
- if not public.org_has_plan_feature(v_org,'voip_webphone',true) then raise exception 'call_context_plan_denied';end if;
+ if not public.org_has_plan_module(v_org,p_module_id,false) or not public.org_has_plan_module(v_org,v_module,false) then raise exception 'call_context_plan_denied';end if;
  -- Field restrictions are applied before projection; no credentials/full row leaves this function.
  select array_agg(c) into v_columns from unnest(v_columns)c where c='id' or
   (coalesce(v_permissions->v_module->'fields'->c,'true'::jsonb)<>'false'::jsonb and coalesce(v_permissions->v_module->'fields'->c->>'view','true')<>'false');

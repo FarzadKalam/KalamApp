@@ -14,7 +14,7 @@ Deno.serve(async(req:Request)=>{
   if(!token)return json(401,{success:false,message:'برای دیدن پروندهٔ مخاطب وارد حساب شوید.'});
   const context=await loadVoipOrganizationContext(req,base,key,token);
   const plan=await loadOrgPlanAccess(base,key,context.org_id);
-  if(!plan.available||!(plan.features?.voip_webphone===true||plan.reason==='internal_organization'))return json(403,{success:false,message:'دسترسی به پروندهٔ تماس در پلن سازمان فعال نیست.'});
+  if(!plan.available)return json(403,{success:false,message:'دسترسی به اطلاعات سازمان در پلن جاری فعال نیست.'});
   const headers:Record<string,string>={apikey:key,Authorization:authorization,'Content-Type':'application/json','x-organization-id':context.org_id};
   for(const name of ['origin','x-client-info'])if(req.headers.get(name))headers[name]=req.headers.get(name)!;
   const reader:ContactContextReader={orgId:context.org_id,permissions:context.permissions,plan,

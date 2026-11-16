@@ -2,6 +2,7 @@
 create schema if not exists auth;
 create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('test.user',true),'')::uuid$$;
 grant usage on schema auth to authenticated;
+create function public.org_has_plan_module(uuid,text,boolean) returns boolean language sql stable as $$select true$$;
 create function public.get_current_organization_context() returns jsonb language sql stable as $$
  select jsonb_build_object('permissions',coalesce(nullif(current_setting('test.permissions',true),''),'{}')::jsonb)
 $$;

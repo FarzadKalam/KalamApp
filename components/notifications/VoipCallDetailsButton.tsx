@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Button, Modal } from 'antd';
+import { Button, Modal,Spin } from 'antd';
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
 import { hasVoipRecording, type VoipRecordingCall } from '../../utils/voipRecording';
+const CallContactContextPanel=React.lazy(()=>import('../voip/CallContactContextPanel'));
 
 type VoipCallDetailsButtonProps = {
   call: VoipRecordingCall & Record<string, any>;
@@ -111,6 +112,7 @@ const VoipCallDetailsButton: React.FC<VoipCallDetailsButtonProps> = ({ call, com
             </div>
           ))}
         </div>
+        {open&&<div className="mt-3"><React.Suspense fallback={<Spin size="small" />}><CallContactContextPanel phone={String(direction==='outgoing'?call?.destination_number:call?.source_number||'')} /></React.Suspense></div>}
       </Modal>
     </>
   );
