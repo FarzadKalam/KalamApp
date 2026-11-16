@@ -1944,6 +1944,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           <GlobalTaskProcessModalHost />
           <EmailComposerHost />
           <WebPhoneWidget
+            key={`${resolvedOrgId}:${currentUser?.id}`}
             voipEnabled={currentUserProfile?.voip_enabled === true && browserVoipEnabled}
             dialMode={browserVoipEnabled?'webphone_webrtc':'tel_link'}
             planFeatureEnabled={voipWebphoneFeatureEnabled}

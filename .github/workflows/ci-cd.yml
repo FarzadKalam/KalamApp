@@ -207,6 +207,18 @@ jobs:
           done
           python3 -m unittest discover -s ops/voip/asterisk -p test_bridge_worker.py -v
 
+      - name: Call contact history isolation and pagination
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          for file in tests/sql/call_contact_history_fixture.sql \
+            database_v1_phase598_call_contact_history.sql \
+            database_v1_phase598_call_contact_history.sql \
+            tests/sql/call_contact_history_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d voip_external_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
       - name: Install
         run: npm ci
 
@@ -363,7 +375,10 @@ jobs:
         env:
           VITE_SUPABASE_URL: https://isolated-test.invalid
           VITE_SUPABASE_ANON_KEY: isolated-test-only
-        run: npx vitest run utils/voipQr.test.ts utils/voipConnectionPolicy.test.ts utils/voipRouteStrategy.test.ts supabase/functions/voip-session/index.test.ts components/settings/VoipConnectionSettings.test.tsx components/voip/WebPhoneWidget.test.tsx --maxWorkers=1 --no-file-parallelism
+        run: npx vitest run utils/voipQr.test.ts utils/voipConnectionPolicy.test.ts utils/voipRouteStrategy.test.ts supabase/functions/voip-session/index.test.ts supabase/functions/_shared/voip-contact-context.test.ts components/settings/VoipConnectionSettings.test.tsx components/voip/WebPhoneWidget.test.tsx --maxWorkers=1 --no-file-parallelism
+
+      - name: Call contact Edge dependency checks
+        run: deno check --node-modules-dir=none supabase/functions/voip-contact-context/index.ts
 
       - name: Build
         env:

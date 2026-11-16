@@ -10,11 +10,9 @@ import {
   UserAgent,
 } from 'sip.js';
 import { supabase } from '../supabaseClient';
-import { normalizePhoneForStorage } from './phoneNumber';
-import { getRecordTitle } from './recordTitle';
-import { MODULES } from '../moduleRegistry';
 import {createVoipRegistrationWait,getSipRegistrationError} from './voipRegistration';
 import {mayFallbackToVoipGateway} from '../supabase/functions/_shared/voip-route-strategy';
+import {resolveVoipContact} from './voipContactContext';
 
 export type WebPhoneRegistrationStatus =
   | 'disabled'
@@ -146,42 +144,9 @@ const setSessionAudioTrackMuted = (session: Session, muted: boolean) => {
 };
 
 const lookupCrmContactByPhone = async (rawPhone: string): Promise<WebPhoneMatchedContact | null> => {
-  const normalized = normalizePhoneForStorage(rawPhone) || String(rawPhone || '').replace(/\D/g, '');
-  if (!normalized || normalized.length < 5) return null;
-  const suffix = normalized.slice(-9);
   try {
-    const { data: phoneRows } = await supabase
-      .from('phone_numbers')
-      .select('id')
-      .or(`normalized_number.eq.${normalized},normalized_number.ilike.%${suffix}`)
-      .limit(3);
-
-    if (Array.isArray(phoneRows) && phoneRows.length > 0) {
-      const ids = phoneRows.map((r: any) => r.id).filter(Boolean);
-      const { data: linkRows } = await supabase
-        .from('phone_number_links')
-        .select('entity_type, entity_id')
-        .in('phone_number_id', ids)
-        .limit(1);
-      const firstLink = Array.isArray(linkRows) ? linkRows[0] : null;
-      if (firstLink?.entity_type && firstLink?.entity_id) {
-        const modCfg = MODULES[firstLink.entity_type];
-        const table = modCfg?.table || firstLink.entity_type;
-        const { data: rec } = await supabase
-          .from(table)
-          .select('*')
-          .eq('id', firstLink.entity_id)
-          .limit(1)
-          .maybeSingle();
-        if (rec) {
-          return {
-            moduleId: firstLink.entity_type,
-            recordId: String(firstLink.entity_id),
-            title: getRecordTitle(rec, modCfg, { fallback: normalized }),
-          };
-        }
-      }
-    }
+    const contact=await resolveVoipContact(rawPhone);
+    if(contact)return {moduleId:contact.moduleId,recordId:contact.recordId,title:contact.title};
   } catch {
     // Non-blocking lookup
   }

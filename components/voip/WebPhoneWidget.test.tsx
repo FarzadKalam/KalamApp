@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import WebPhoneWidget from './WebPhoneWidget';
 import WebPhoneHeaderButton from './WebPhoneHeaderButton';
+vi.mock('./CallContactContextPanel',()=>({default:()=> <div>پروندهٔ مخاطب تماس</div>}));
 
 // Mock react-router-dom
 vi.mock('react-router-dom', () => ({

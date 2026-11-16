@@ -8,6 +8,7 @@ import { getModelContextWindowTokens } from '../_shared/ai-context-policy.ts';
 import { getReasoningProfile,reasoningOptions,resolveReasoningEffort } from '../_shared/ai-reasoning.ts';
 import { prepareReasoningTransport,bridgeReasoningResponse } from '../_shared/ai-reasoning-transport.ts';
 import { createProcessDataRuntime, sanitizeProcessValue, PROCESS_RECORD_FIELDS, PROCESS_WORKFLOW_FIELDS, PROCESS_DATA_GUIDANCE } from '../_shared/ai-process-data.ts';
+import {createCallContactTools,CALL_CONTEXT_TOOL_MODULES} from '../_shared/voip-contact-tools.ts';
 import { NATIVE_AGENT_SKILLS, runNativeAgentInput } from '../_shared/ai-native-skills.ts';
 import { executeAgentTask } from '../_shared/ai-agent-task-runtime.ts';
 import { AGENT_TASK_TOOLS, AGENT_TASK_CONVERSATION_PROMPT, prepareAgentTaskChange, confirmAgentTaskChange } from '../_shared/ai-agent-task-management.ts';
@@ -1924,6 +1925,18 @@ const buildAgentDataToolRuntime = async (supabaseUrl: string, serviceRoleKey: st
     return module ? rows.map(row => sanitizeProcessValue(row,module.id,fieldAllowed)) : rows;
   };
   const processData = createProcessDataRuntime({ access, read, fieldAllowed,taskRelationFields: processTaskRelationFields });
+  const callContacts=authContext.callerAuthorization?createCallContactTools({
+    orgId:authContext.orgId,plan:grounding.planContext,
+    permissions:Object.fromEntries(modules.map(module=>[module.id,getModulePermission(authContext.permissions,module.id)])),
+    read:async(table,params)=>({rows:await read(table,params),count:null}),
+    rpc:async(name,body)=>{
+      const response=await fetch(`${supabaseUrl}/rest/v1/rpc/${name}`,{method:'POST',headers:{apikey:serviceRoleKey,Authorization:authContext.callerAuthorization,'Content-Type':'application/json','x-organization-id':authContext.orgId,'x-client-info':`kalamapp; org=${authContext.orgId}`},body:JSON.stringify(body),signal:AbortSignal.timeout(12000)});
+      if(!response.ok)throw new Error('پروندهٔ مخاطب در محدودهٔ مجاز بازیابی نشد.');
+      const result=await response.json();
+      const moduleId=CALL_CONTEXT_TOOL_MODULES[body.p_section];
+      return moduleId&&Array.isArray(result?.rows)?{...result,rows:result.rows.map(row=>sanitizeProcessValue(row,moduleId,fieldAllowed))}:result;
+    },
+  }):null;
   const memoryTool = { type: 'function',function: { name: 'read_conversation_memory',
     description: 'بازیابی متن اصلی پیام، فایل‌ها و وضعیت دقیق همین گفتگو پس از فشرده‌سازی؛ اصل پیام و تأییدهای معلق از خلاصه حذف نمی‌شوند. offset ادامه داده است، نه سقف تاریخچه.',
     parameters: { type: 'object',properties: { kind: { type: 'string',enum: ['state','message_text','messages','attachments'] },field: { type: 'string' },messageId: { type: 'string' },offset: { type: 'integer',minimum: 0 } },required: ['kind'],additionalProperties: false },
@@ -1942,7 +1955,7 @@ const buildAgentDataToolRuntime = async (supabaseUrl: string, serviceRoleKey: st
   const instagram = options.sourceModuleIds ? null : createInstagramReadToolRuntime({ supabaseUrl, serviceRoleKey, authContext, grounding,
     userMessage: '', selectedAgents, selectedCapabilities: [] });
   return {
-    tools: [describe, fieldOptionsTool, ...fieldLookups.tools, ...AGENT_DATA_TOOLS, ...processData.tools, ...(options.threadId ? [memoryTool] : []), ...(instagram?.tools || []), ...(options.threadId && taskAccess.canManage ? AGENT_TASK_TOOLS : [])],
+    tools: [describe, fieldOptionsTool, ...fieldLookups.tools, ...AGENT_DATA_TOOLS, ...processData.tools,...(callContacts?.tools||[]), ...(options.threadId ? [memoryTool] : []), ...(instagram?.tools || []), ...(options.threadId && taskAccess.canManage ? AGENT_TASK_TOOLS : [])],
     instagramMediaCards: instagram?.mediaCards || [],
     persistTaskProposal: async () => {
       if (!pendingTasks.length) return null;
@@ -1956,6 +1969,7 @@ const buildAgentDataToolRuntime = async (supabaseUrl: string, serviceRoleKey: st
       + `\n${PROCESS_DATA_GUIDANCE}`
       + (options.threadId && taskAccess.canManage ? `\n${AGENT_TASK_CONVERSATION_PROMPT}\n${AI_QUESTIONS_PROMPT}` : '') },
     execute: async (name: string, args: any) => {
+      if(callContacts&&['search_call_contacts','read_call_contact_context'].includes(name))return callContacts.execute(name,args);
       if (name === 'read_conversation_memory' && options.threadId) {
         const thread = await fetchThreadForRead(supabaseUrl,serviceRoleKey,authContext,options.threadId);
         if (!thread) throw new Error('حافظه گفتگو در دسترس نیست.');

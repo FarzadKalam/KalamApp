@@ -19,6 +19,8 @@ import { supabase } from '../../supabaseClient';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
 import { blobToBase64 } from '../../utils/blobBase64';
 import { getVoipRecordingFileName, loadVoipRecordingBlob, type VoipRecordingCall } from '../../utils/voipRecording';
+import CallContactContextPanel from './CallContactContextPanel';
+import {getSelectedOrganizationId} from '../../utils/organizationContext';
 
 // --- Pure SVG Icons (No Emojis) ---
 const SvgIcons = {
@@ -744,6 +746,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
           </div>
         )}
 
+        <CallContactContextPanel key={`${getSelectedOrganizationId()}:${targetPhoneNumber}`} phone={targetPhoneNumber} onChoosePhone={activeCall?undefined:setDialInput} />
         {/* TOGGLEABLE ACCORDION / DRAWER: CONTACT HISTORY & ACTIVITIES */}
         <div className="border-t border-slate-100 dark:border-[#232e3c] pt-2">
           <button
