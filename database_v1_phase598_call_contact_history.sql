@@ -36,7 +36,7 @@ returns boolean language plpgsql stable security invoker set search_path=public 
 declare p jsonb:=coalesce(p_context->'permissions'->p_module,'{}');s text:=coalesce(nullif(p->>'record_scope',''),'all');
  u uuid:=auth.uid();r uuid:=nullif(p_context->>'role_id','')::uuid;allowed_roles uuid[];g jsonb:=p->'view_conditions';all_conditions jsonb;any_conditions jsonb;c jsonb;matched boolean;any_matched boolean:=false;
 begin
- if not(p_context->'permissions'?p_module) or coalesce((p->>'view')::boolean,false)=false then return false;end if;
+ if not(p_context->'permissions'?p_module) or coalesce((p->>'view')::boolean,true)=false then return false;end if;
  if g?'conditions_all' or g?'conditions_any' then all_conditions:=coalesce(g->'conditions_all','[]');any_conditions:=coalesce(g->'conditions_any','[]');
  elsif g->>'logic'='or' then all_conditions:='[]';any_conditions:=coalesce(g->'conditions','[]');
  else all_conditions:=coalesce(g->'conditions','[]');any_conditions:='[]';end if;
@@ -84,7 +84,7 @@ begin
  if p_phone_key is not null and p_phone_key!~'^[0-9]{7,15}$' then return result;end if;
  foreach m in array array['customers','suppliers','employees']loop
   if not public.org_has_plan_module(org,m,false) then continue;end if;
-  if not(ctx->'permissions'?m) or coalesce((ctx->'permissions'->m->>'view')::boolean,false)=false then continue;end if;
+  if not(ctx->'permissions'?m) or coalesce((ctx->'permissions'->m->>'view')::boolean,true)=false then continue;end if;
   cols:=array['id','full_name','first_name','last_name','mobile_1','mobile_2','phone','updated_at','created_at'];
   if m<>'employees' then cols:=cols||array['business_name','rank'];else cols:=cols||array['job_title'];end if;
   select array_agg(c) into cols from unnest(cols)c where c='id' or
@@ -116,7 +116,7 @@ declare
 begin
  if v_org is null or p_module_id not in ('customers','suppliers','employees') or p_record_id is null then raise exception 'contact_scope_required';end if;
  v_context:=public.get_current_organization_context();v_permissions:=coalesce(v_context->'permissions','{}');
- if not(v_permissions?p_module_id) or coalesce((v_permissions->p_module_id->>'view')::boolean,false)=false then raise exception 'contact_access_denied';end if;
+ if not(v_permissions?p_module_id) or coalesce((v_permissions->p_module_id->>'view')::boolean,true)=false then raise exception 'contact_access_denied';end if;
  execute format('select to_jsonb(c) from public.%I c where c.org_id=$1 and c.id=$2',p_module_id) into v_contact using v_org,p_record_id;
  if v_contact is null then raise exception 'contact_not_available';end if;
  if not public.call_contact_scope_visible(v_context,p_module_id,v_contact) then raise exception 'contact_scope_denied';end if;
@@ -139,10 +139,10 @@ begin
  when 'tasks' then
   v_module:='tasks';v_table:=v_module;v_columns:=array['id','name','system_code','status','due_date','assignee_id','project_id','created_at','updated_at'];
   v_where:=format('(t.%I=%L::uuid or (t.source_module_id=%L and t.source_record_id=%L::uuid))',v_task_fk,case when p_module_id='employees' then v_profile else p_record_id end,p_module_id,p_record_id);
-  if v_permissions?'projects' and coalesce((v_permissions->'projects'->>'view')::boolean,false) then v_where:=v_where||format(' or t.project_id in(%s)',v_projects);end if;
+  if v_permissions?'projects' and coalesce((v_permissions->'projects'->>'view')::boolean,true) then v_where:=v_where||format(' or t.project_id in(%s)',v_projects);end if;
  when 'processes' then
   v_module:='process_runs';v_table:=v_module;v_columns:=array['id','process_name','system_code','status','started_at','completed_at','module_id','record_id','created_at','updated_at'];v_where:=format('(t.module_id=%L and t.record_id=%L::uuid)',p_module_id,p_record_id);
-  if v_permissions?'projects' and coalesce((v_permissions->'projects'->>'view')::boolean,false) then v_where:=v_where||format(' or (t.module_id=''projects'' and t.record_id in(%s))',v_projects);end if;
+  if v_permissions?'projects' and coalesce((v_permissions->'projects'->>'view')::boolean,true) then v_where:=v_where||format(' or (t.module_id=''projects'' and t.record_id in(%s))',v_projects);end if;
  when 'groups' then
   v_module:='counterparty_bot_groups';v_table:=v_module;v_columns:=array['id','group_title','channel_type','status','last_inbound_at','created_at','updated_at'];v_where:=format('t.%I=%L::uuid',v_party_fk,p_record_id);
  when 'sms' then
@@ -156,7 +156,7 @@ begin
  when 'email' then
   v_module:='email_delivery_reports';v_table:='email_messages';v_columns:=array['id','subject','status','direction','message_at','created_at'];v_where:=format('(t.related_module_id=%L and t.related_record_id=%L::uuid)',p_module_id,p_record_id);
  else raise exception 'invalid_contact_section';end case;
- if not(v_permissions?v_module) or coalesce((v_permissions->v_module->>'view')::boolean,false)=false then raise exception 'section_access_denied';end if;
+ if not(v_permissions?v_module) or coalesce((v_permissions->v_module->>'view')::boolean,true)=false then raise exception 'section_access_denied';end if;
  if not public.org_has_plan_module(v_org,p_module_id,false) or not public.org_has_plan_module(v_org,v_module,false) then raise exception 'call_context_plan_denied';end if;
  -- Field restrictions are applied before projection; no credentials/full row leaves this function.
  select array_agg(c) into v_columns from unnest(v_columns)c where c='id' or
