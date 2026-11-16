@@ -181,6 +181,19 @@ jobs:
           wait "$worker_a"
           cat /tmp/commission-worker-a.log
 
+      - name: Isolated external VoIP account separation
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test voip_external_test
+          for file in tests/sql/voip_external_accounts_fixture.sql \
+            database_v1_phase596_voip_external_accounts.sql \
+            database_v1_phase596_voip_external_accounts.sql \
+            tests/sql/voip_external_accounts_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d voip_external_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
       - name: Install
         run: npm ci
 
@@ -331,6 +344,13 @@ jobs:
           VITE_SUPABASE_URL: https://isolated-test.invalid
           VITE_SUPABASE_ANON_KEY: isolated-test-only
         run: npx vitest run utils/reportRowLimit.test.ts utils/reporting.test.ts utils/commissionRuntime.test.ts utils/commissionChequeDisplay.test.ts components/hr/CommissionChequeCard.test.tsx --maxWorkers=1 --no-file-parallelism
+
+      - name: Tenant VoIP modes, account separation and registration checks
+        timeout-minutes: 5
+        env:
+          VITE_SUPABASE_URL: https://isolated-test.invalid
+          VITE_SUPABASE_ANON_KEY: isolated-test-only
+        run: npx vitest run utils/voipQr.test.ts utils/voipConnectionPolicy.test.ts supabase/functions/voip-session/index.test.ts components/settings/VoipConnectionSettings.test.tsx components/voip/WebPhoneWidget.test.tsx --maxWorkers=1 --no-file-parallelism
 
       - name: Build
         env:

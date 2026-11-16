@@ -1,17 +1,15 @@
 // @ts-nocheck
+import {resolveVoipPolicy,resolveExternalWebphone,normalizeWssUrl,normalizeSipDomain} from '../_shared/voip-connection-policy.ts';
+import {loadVoipOrganizationContext} from '../_shared/voip-organization-context.ts';
 import { loadOrgPlanAccess } from '../_shared/org-plan-access.ts';
 import { dialPhone } from '../_shared/phone-number.ts';
-import {
-  buildCoturnIceServers,
-  buildTenantPjsipId,
-  normalizeVoipProviderKey,
-} from '../_shared/voip-providers.ts';
+import {normalizeVoipProviderKey} from '../_shared/voip-providers.ts';
 
-const FUNCTION_BUILD = 'voip-session-2026-11-12-unified-v1';
+const FUNCTION_BUILD = 'voip-session-2026-11-16-tenant-modes-v2';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, x-organization-id, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
@@ -67,44 +65,8 @@ const restSelect = async (
 
 const canManageOrgVoipSettings = (permissions: Record<string, any> | null | undefined) => {
   const perms = permissions && typeof permissions === 'object' ? permissions : {};
-  if (perms.__saas_admin?.edit === true || perms.__saas_admin?.view === true) return true;
   if (perms.__settings_tabs?.edit === true) return true;
   return perms.profiles?.edit === true;
-};
-
-const resolveDefaultWssUrl = (req: Request, settings: Record<string, any>) => {
-  const configured = String(
-    settings?.wss_url ||
-      Deno.env.get('VOIP_WSS_URL') ||
-      '',
-  ).trim();
-  if (configured) return configured;
-  const supabaseUrl = String(Deno.env.get('SUPABASE_URL') || '').trim();
-  try {
-    if (supabaseUrl && /^https:/i.test(supabaseUrl)) {
-      const host = new URL(supabaseUrl).host;
-      return `wss://${host}/voip-ws`;
-    }
-  } catch {
-    // ignore URL parse error
-  }
-  const origin = req.headers.get('origin') || req.headers.get('host') || '';
-  if (origin) {
-    const cleanHost = origin.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
-    if (cleanHost) return `wss://${cleanHost}/voip-ws`;
-  }
-  return '';
-};
-
-const resolveSipDomain = (settings: Record<string, any>, wssUrl: string) => {
-  const explicit = String(settings?.sip_domain || Deno.env.get('VOIP_SIP_DOMAIN') || '').trim();
-  if (explicit) return explicit;
-  try {
-    if (wssUrl) return new URL(wssUrl.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:')).hostname;
-  } catch {
-    // ignore
-  }
-  return 'voip.kalamapp.ir';
 };
 
 Deno.serve(async (req) => {
@@ -131,7 +93,8 @@ Deno.serve(async (req) => {
       select: 'id,org_id,role_id,full_name,voip_enabled,voip_extension,voip_operator_code,voip_service_id,voip_dial_mode',
       limit: '1',
     });
-    const profile = profiles[0];
+    const context=await loadVoipOrganizationContext(req,supabaseUrl,serviceRoleKey,userToken);
+    const profile = profiles[0] ? {...profiles[0],...context.settings,org_id:context.org_id,role_id:context.role_id} : null;
     if (!profile?.id || !profile?.org_id) {
       return json(403, { success: false, message: 'پروفایل سازمانی کاربر مشخص نیست.' });
     }
@@ -145,7 +108,7 @@ Deno.serve(async (req) => {
           limit: '1',
         })
       : [];
-    const permissions = roles[0]?.permissions || {};
+    const permissions = context.permissions || {};
     const isAdmin = canManageOrgVoipSettings(permissions);
 
     const planAccess = await loadOrgPlanAccess(trimTrailingSlash(supabaseUrl), serviceRoleKey, orgId);
@@ -165,108 +128,34 @@ Deno.serve(async (req) => {
       ? activeSettingRow.settings
       : {};
 
-    if (action === 'get_webphone_session') {
-      if (!webphonePlanEnabled) {
-        return json(200, {
-          success: true,
-          enabled: false,
-          reason: 'plan_disabled',
-          message: 'تلفن زنده تحت وب در پلن فعلی سازمان فعال نیست.',
-        });
-      }
-      if (profile.voip_enabled !== true) {
-        return json(200, {
-          success: true,
-          enabled: false,
-          reason: 'user_disabled',
-          message: 'تلفن VoIP برای حساب این کاربر فعال نشده است.',
-        });
-      }
+    const policy=resolveVoipPolicy(settings,activeSettingRow?.provider);
+    const disabledReason=activeSettingRow?.is_active!==true ? 'organization_disabled'
+      :policy.development?'under_development':!policy.canUseBrowser?'reports_only'
+      :!webphonePlanEnabled?'plan_disabled':profile.voip_enabled!==true?'user_disabled':null;
+    const messages={organization_disabled:'اتصال تلفن سازمان فعال نیست.',under_development:'مرکز تلفن ابری تازه‌سیستم در حال توسعه است.',reports_only:'حالت سازمان فقط گزارشات تماس است؛ مکالمهٔ داخل تازه‌سیستم فعال نیست.',plan_disabled:'مکالمهٔ داخل تازه‌سیستم در پلن سازمان فعال نیست.',user_disabled:'مکالمه برای این کاربر فعال نیست.'};
+    if(action==='get_connection_policy') return json(200,{success:true,...policy,enabled:!disabledReason,reason:disabledReason,message:messages[disabledReason]||null,provider:activeSettingRow?.provider||null});
 
-      let endpoints = await restSelect(supabaseUrl, serviceRoleKey, 'voip_sip_endpoints', {
-        org_id: `eq.${orgId}`,
-        assignee_profile_id: `eq.${profile.id}`,
-        is_active: 'eq.true',
-        select: 'id,extension,display_name,pjsip_id,sip_secret,webrtc_enabled,transport,max_contacts,metadata',
-        limit: '1',
+    if(action==='get_webphone_session'){
+      if(disabledReason)return json(200,{success:true,enabled:false,reason:disabledReason,message:messages[disabledReason]});
+      const accounts=await restSelect(supabaseUrl,serviceRoleKey,'voip_external_accounts',{
+        org_id:`eq.${orgId}`,assignee_profile_id:`eq.${profile.id}`,is_active:'eq.true',
+        select:'id,extension,display_name,sip_secret,metadata',limit:'1',
       });
-      let endpoint = endpoints[0] || null;
-      if (!endpoint && profile.voip_extension) {
-        const byExt = await restSelect(supabaseUrl, serviceRoleKey, 'voip_sip_endpoints', {
-          org_id: `eq.${orgId}`,
-          extension: `eq.${profile.voip_extension}`,
-          is_active: 'eq.true',
-          select: 'id,extension,display_name,pjsip_id,sip_secret,webrtc_enabled,transport,max_contacts,metadata',
-          limit: '1',
-        });
-        if (byExt[0]) {
-          endpoint = byExt[0];
-          await fetch(`${trimTrailingSlash(supabaseUrl)}/rest/v1/voip_sip_endpoints?id=eq.${endpoint.id}&org_id=eq.${orgId}`, {
-            method: 'PATCH',
-            headers: serviceHeaders(serviceRoleKey),
-            body: JSON.stringify({ assignee_profile_id: profile.id, updated_by: user.id }),
-          }).catch(() => undefined);
-        }
-      }
-      if (!endpoint) {
-        return json(200, {
-          success: true,
-          enabled: false,
-          reason: 'no_endpoint',
-          message: 'داخلی WebRTC برای این کاربر تعریف نشده است. از بخش مدیریت کاربران یا تنظیمات VoIP داخلی را بسازید.',
-        });
-      }
-
-      const activeProvider = normalizeVoipProviderKey(activeSettingRow?.provider || 'telefonchy');
-      const customWss = String(endpoint.metadata?.wss_url || endpoint.metadata?.server_url || '').trim();
-      const rawWssUrl = customWss || resolveDefaultWssUrl(req, settings);
-      let wssUrl = rawWssUrl;
-      if (wssUrl && !/^wss?:\/\//i.test(wssUrl)) {
-        let clean = wssUrl.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
-        if (!clean.includes(':') && (clean.includes('telefonchy') || activeProvider === 'telefonchy')) {
-          clean = `${clean}:5065`;
-        }
-        wssUrl = `wss://${clean}/ws`;
-      }
-
-      const customDomain = String(endpoint.metadata?.sip_domain || '').trim();
-      const sipDomain = customDomain || resolveSipDomain(settings, wssUrl);
-
-      const isTelefonchyOrDirect = activeProvider === 'telefonchy' || Boolean(endpoint.metadata?.wss_url);
-      const authUser = isTelefonchyOrDirect ? endpoint.extension : endpoint.pjsip_id;
-
-      const turnHost = String(settings?.turn_host || Deno.env.get('VOIP_TURN_HOST') || sipDomain).trim();
-      const turnPort = Number(settings?.turn_port || Deno.env.get('VOIP_TURN_PORT') || 3478) || 3478;
-      const turnSecret = String(Deno.env.get('VOIP_TURN_SECRET') || '').trim();
-      const iceServers = await buildCoturnIceServers({
-        turnHost,
-        turnPort,
-        turnSecret,
-        userId: endpoint.pjsip_id,
-      });
-
-      return json(200, {
-        success: true,
-        enabled: Boolean(wssUrl),
-        reason: wssUrl ? null : 'missing_wss_url',
-        dialMode: String(profile.voip_dial_mode || settings.default_dial_mode || 'webphone_webrtc'),
-        provider: activeProvider,
-        wssUrl,
-        sipDomain,
-        iceServers,
-        endpoint: {
-          extension: endpoint.extension,
-          displayName: endpoint.display_name || profile.full_name || endpoint.extension,
-          pjsipId: endpoint.pjsip_id,
-          authUsername: authUser,
-          sipUri: `sip:${authUser}@${sipDomain}`,
-          sipSecret: endpoint.sip_secret,
-          transport: endpoint.transport || 'wss',
-        },
-      });
+      const account=accounts[0];
+      if(!account)return json(200,{success:true,enabled:false,reason:'no_external_account',message:'حساب اپراتور سرویس‌دهنده برای شما تنظیم نشده است.'});
+      const connection=resolveExternalWebphone(settings,account);
+      if(connection.reason)return json(200,{success:true,enabled:false,reason:connection.reason,message:connection.reason==='missing_verified_wss'?'آدرس کامل WSS سرویس‌دهنده مشخص نیست؛ اطلاعات PortSIP به‌تنهایی کافی نیست.':connection.reason==='missing_sip_domain'?'دامنه SIP حساب سرویس‌دهنده مشخص نیست.':'نام کاربری یا رمز حساب سرویس‌دهنده کامل نیست.'});
+      let iceServers=[];
+      try {const parsed=JSON.parse(settings.ice_servers_json||'[]');if(Array.isArray(parsed))iceServers=parsed.filter(item=>item&&item.urls);}catch{}
+      return json(200,{success:true,enabled:true,dialMode:'webphone_webrtc',provider:activeSettingRow.provider,
+        wssUrl:connection.wssUrl,sipDomain:connection.sipDomain,iceServers,
+        endpoint:{extension:account.extension,displayName:account.display_name||profile.full_name||account.extension,
+          authUsername:connection.username,pjsipId:connection.username,
+          sipUri:`sip:${connection.sipUser}@${connection.sipDomain}`,sipSecret:account.sip_secret,transport:'wss'}});
     }
 
     if (action === 'log_webrtc_call') {
+      if(disabledReason)return json(403,{success:false,message:messages[disabledReason]});
       if (profile.voip_enabled !== true) {
         return json(403, { success: false, message: 'VoIP برای این کاربر فعال نیست.' });
       }
@@ -332,174 +221,49 @@ Deno.serve(async (req) => {
       return json(200, { success: true, callLog: Array.isArray(saved) ? saved[0] : saved });
     }
 
-    // Admin actions for multi-tenant SIP trunks & operator extensions
-    if (!isAdmin) {
-      return json(403, { success: false, message: 'فقط مدیر سیستم می‌تواند داخلی‌ها و ترانک‌های SIP را مدیریت کند.' });
+    if(!isAdmin)return json(403,{success:false,message:'مدیریت حساب تلفن نیازمند دسترسی ویرایش کاربران یا تنظیمات سازمان است.'});
+    if(action==='list_trunks'||action==='list_endpoints')return json(200,{success:true,trunks:[],endpoints:[],message:'مدیریت مرکز تلفن تازه‌سیستم در حال توسعه است.'});
+    if(action==='get_user_endpoint'){
+      if(!policy.canUseBrowser||!webphonePlanEnabled)return json(200,{success:true,endpoint:null});
+      const rows=await restSelect(supabaseUrl,serviceRoleKey,'voip_external_accounts',{
+        org_id:`eq.${orgId}`,assignee_profile_id:`eq.${String(body.userId||body.profileId||user.id)}`,
+        select:'id,extension,display_name,metadata,is_active',limit:'1'});
+      return json(200,{success:true,endpoint:rows[0]||null});
     }
-    if (!webphonePlanEnabled) {
-      return json(403, { success: false, message: 'قابلیت تلفن زنده تحت وب در پلن فعلی سازمان فعال نیست.' });
-    }
-
-    if (action === 'list_trunks') {
-      const trunks = await restSelect(supabaseUrl, serviceRoleKey, 'voip_sip_trunks', {
-        org_id: `eq.${orgId}`,
-        select: 'id,provider,title,pjsip_trunk_id,sip_host,sip_port,transport,auth_type,sip_username,outbound_caller_id,did_numbers,api_base_url,is_active,is_default,created_at,updated_at',
-        order: 'is_default.desc,created_at.desc',
-      });
-      return json(200, { success: true, trunks });
-    }
-
-    if (action === 'save_trunk') {
-      const trunk = body?.trunk && typeof body.trunk === 'object' ? body.trunk : {};
-      const provider = normalizeVoipProviderKey(trunk.provider || 'sip_trunk');
-      const payload: Record<string, any> = {
-        org_id: orgId,
-        provider,
-        title: String(trunk.title || 'ترانک اصلی VoIP').trim(),
-        sip_host: String(trunk.sip_host || '').trim() || null,
-        sip_port: Math.min(65535, Math.max(1, Number(trunk.sip_port || 5060) || 5060)),
-        transport: ['udp', 'tcp', 'tls', 'wss'].includes(String(trunk.transport || '')) ? trunk.transport : 'udp',
-        auth_type: ['user_pass', 'ip_based', 'register'].includes(String(trunk.auth_type || '')) ? trunk.auth_type : 'user_pass',
-        sip_username: String(trunk.sip_username || '').trim() || null,
-        outbound_caller_id: String(trunk.outbound_caller_id || '').trim() || null,
-        did_numbers: Array.isArray(trunk.did_numbers) ? trunk.did_numbers.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
-        api_base_url: String(trunk.api_base_url || '').trim() || null,
-        is_active: trunk.is_active !== false,
-        is_default: trunk.is_default === true,
-        updated_by: user.id,
-      };
-      if (String(trunk.sip_secret || '').trim()) payload.sip_secret = String(trunk.sip_secret).trim();
-      if (String(trunk.api_token || '').trim()) payload.api_token = String(trunk.api_token).trim();
-      if (String(trunk.webhook_secret || '').trim()) payload.webhook_secret = String(trunk.webhook_secret).trim();
-      if (!trunk.id) payload.created_by = user.id;
-
-      const targetUrl = trunk.id
-        ? `${trimTrailingSlash(supabaseUrl)}/rest/v1/voip_sip_trunks?id=eq.${trunk.id}&org_id=eq.${orgId}`
-        : `${trimTrailingSlash(supabaseUrl)}/rest/v1/voip_sip_trunks`;
-      const res = await fetch(targetUrl, {
-        method: trunk.id ? 'PATCH' : 'POST',
-        headers: { ...serviceHeaders(serviceRoleKey), Prefer: 'return=representation' },
-        body: JSON.stringify(payload),
-      });
-      const raw = await res.text();
-      if (!res.ok) throw new Error(raw || 'ذخیره ترانک SIP ناموفق بود.');
-      const saved = parseJsonSafe(raw);
-      return json(200, { success: true, trunk: Array.isArray(saved) ? saved[0] : saved, message: 'ترانک SIP با موفقیت ذخیره شد.' });
-    }
-
-    if (action === 'delete_trunk') {
-      const trunkId = String(body?.trunkId || '').trim();
-      if (!trunkId) return json(400, { success: false, message: 'شناسه ترانک مشخص نیست.' });
-      const res = await fetch(`${trimTrailingSlash(supabaseUrl)}/rest/v1/voip_sip_trunks?id=eq.${trunkId}&org_id=eq.${orgId}`, {
-        method: 'DELETE',
-        headers: serviceHeaders(serviceRoleKey),
-      });
-      if (!res.ok) throw new Error((await res.text()) || 'حذف ترانک ناموفق بود.');
-      return json(200, { success: true, message: 'ترانک حذف شد.' });
-    }
-
-    if (action === 'list_endpoints') {
-      const endpoints = await restSelect(supabaseUrl, serviceRoleKey, 'voip_sip_endpoints', {
-        org_id: `eq.${orgId}`,
-        select: 'id,assignee_profile_id,trunk_id,extension,display_name,endpoint_kind,pjsip_id,webrtc_enabled,transport,max_contacts,is_active,created_at,updated_at',
-        order: 'extension.asc',
-      });
-      return json(200, { success: true, endpoints });
-    }
-
-    if (action === 'get_user_endpoint') {
-      const targetUserId = String(body?.userId || body?.profileId || user.id).trim();
-      const endpoints = await restSelect(supabaseUrl, serviceRoleKey, 'voip_sip_endpoints', {
-        org_id: `eq.${orgId}`,
-        assignee_profile_id: `eq.${targetUserId}`,
-        limit: '1',
-        select: 'id,extension,display_name,pjsip_id,sip_secret,webrtc_enabled,transport,max_contacts,metadata,is_active',
-      });
-      return json(200, { success: true, endpoint: endpoints[0] || null });
-    }
-
-    if (action === 'upsert_endpoint') {
-      const ep = body?.endpoint && typeof body.endpoint === 'object' ? body.endpoint : {};
-      const extension = String(ep.extension || '').replace(/[^\w-]/g, '').trim();
-      if (!extension) return json(400, { success: false, message: 'شماره داخلی معتبر نیست.' });
-      const pjsipId = buildTenantPjsipId(orgId, extension);
-
-      let targetId = ep.id ? String(ep.id).trim() : null;
-      if (!targetId) {
-        let existingEndpoints: any[] = [];
-        if (ep.assignee_profile_id) {
-          existingEndpoints = await restSelect(supabaseUrl, serviceRoleKey, 'voip_sip_endpoints', {
-            org_id: `eq.${orgId}`,
-            assignee_profile_id: `eq.${ep.assignee_profile_id}`,
-            limit: '1',
-            select: 'id',
-          });
-        }
-        if (existingEndpoints.length === 0) {
-          existingEndpoints = await restSelect(supabaseUrl, serviceRoleKey, 'voip_sip_endpoints', {
-            org_id: `eq.${orgId}`,
-            extension: `eq.${extension}`,
-            limit: '1',
-            select: 'id',
-          });
-        }
-        if (existingEndpoints.length > 0) {
-          targetId = existingEndpoints[0].id;
-        }
+    if(action==='upsert_endpoint'){
+      if(!policy.canUseBrowser||!webphonePlanEnabled||activeSettingRow?.is_active!==true)return json(403,{success:false,message:'ورود حساب اپراتور فقط در حالت مکالمه با سرویس‌دهندهٔ دیگر و پلن مجاز فعال است.'});
+      const ep=body.endpoint||{};
+      let previous=null;
+      if(ep.id){
+        const rows=await restSelect(supabaseUrl,serviceRoleKey,'voip_external_accounts',{id:`eq.${String(ep.id)}`,org_id:`eq.${orgId}`,select:'id,assignee_profile_id,extension,display_name,metadata,is_active',limit:'1'});
+        previous=rows[0];if(!previous)return json(404,{success:false,message:'حساب اپراتور در این سازمان پیدا نشد.'});
       }
-
-      const payload: Record<string, any> = {
-        org_id: orgId,
-        assignee_profile_id: ep.assignee_profile_id || null,
-        trunk_id: ep.trunk_id || null,
-        extension,
-        display_name: String(ep.display_name || extension).trim(),
-        endpoint_kind: ['operator', 'ai_agent', 'queue_virtual'].includes(String(ep.endpoint_kind || '')) ? ep.endpoint_kind : 'operator',
-        pjsip_id: pjsipId,
-        webrtc_enabled: ep.webrtc_enabled !== false,
-        transport: ['wss', 'udp', 'tcp', 'tls'].includes(String(ep.transport || '')) ? ep.transport : 'wss',
-        max_contacts: Math.min(20, Math.max(1, Number(ep.max_contacts || 3) || 3)),
-        is_active: ep.is_active !== false,
-        updated_by: user.id,
-        metadata: (ep.metadata && typeof ep.metadata === 'object') ? ep.metadata : {},
-      };
-      if (String(ep.sip_secret || '').trim()) {
-        payload.sip_secret = String(ep.sip_secret).trim();
-      } else if (!targetId) {
-        const bytes = new Uint8Array(12);
-        crypto.getRandomValues(bytes);
-        payload.sip_secret = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+      const target=String(ep.assignee_profile_id||previous?.assignee_profile_id||'');
+      const members=await restSelect(supabaseUrl,serviceRoleKey,'user_organization_memberships',{
+        org_id:`eq.${orgId}`,user_id:`eq.${target}`,is_active:'eq.true',select:'user_id',limit:'1'});
+      if(!members.length)return json(403,{success:false,message:'اپراتور باید عضو فعال همین سازمان باشد.'});
+      if(!previous){const rows=await restSelect(supabaseUrl,serviceRoleKey,'voip_external_accounts',{org_id:`eq.${orgId}`,assignee_profile_id:`eq.${target}`,select:'id,assignee_profile_id,extension,display_name,metadata,is_active',limit:'1'});previous=rows[0]||null;}
+      if(previous&&previous.assignee_profile_id!==target)return json(403,{success:false,message:'تغییر مالک حساب اپراتور مجاز نیست.'});
+      const extension=String(ep.extension||previous?.extension||'').trim();
+      if(!extension||/[\s@<>;]/.test(extension))return json(400,{success:false,message:'نام کاربری یا داخلی SIP معتبر نیست.'});
+      const metadata={...(previous?.metadata||{}),...(ep.metadata||{})};
+      for(const [key,validate] of [['wss_url',normalizeWssUrl],['sip_domain',normalizeSipDomain]]){
+        if(ep.metadata?.[key]&&!validate(ep.metadata[key]))return json(400,{success:false,message:key==='wss_url'?'آدرس کامل و امن WSS لازم است؛ آدرس SIP را جای آن وارد نکنید.':'دامنه SIP معتبر نیست.'});
       }
-      if (!targetId) payload.created_by = user.id;
-
-      const targetUrl = targetId
-        ? `${trimTrailingSlash(supabaseUrl)}/rest/v1/voip_sip_endpoints?id=eq.${targetId}&org_id=eq.${orgId}`
-        : `${trimTrailingSlash(supabaseUrl)}/rest/v1/voip_sip_endpoints`;
-      const res = await fetch(targetUrl, {
-        method: targetId ? 'PATCH' : 'POST',
-        headers: { ...serviceHeaders(serviceRoleKey), Prefer: 'return=representation' },
-        body: JSON.stringify(payload),
-      });
-      const raw = await res.text();
-      if (!res.ok) throw new Error(raw || 'ذخیره داخلی SIP ناموفق بود.');
-      const saved = parseJsonSafe(raw);
-      return json(200, { success: true, endpoint: Array.isArray(saved) ? saved[0] : saved, message: 'داخلی WebRTC ذخیره شد.' });
+      const secret=String(ep.sip_secret||'').trim();
+      if(!previous&&!secret)return json(400,{success:false,message:'رمز حساب موجود سرویس‌دهنده را وارد کنید؛ رمز خودکار ساخته نمی‌شود.'});
+      const payload={org_id:orgId,assignee_profile_id:target,extension,display_name:String(ep.display_name||previous?.display_name||extension),
+        is_active:ep.is_active!==false,metadata,updated_at:new Date().toISOString(),...(secret?{sip_secret:secret}:{})};
+      const targetUrl=previous?`${trimTrailingSlash(supabaseUrl)}/rest/v1/voip_external_accounts?id=eq.${previous.id}&org_id=eq.${orgId}`:`${trimTrailingSlash(supabaseUrl)}/rest/v1/voip_external_accounts`;
+      const response=await fetch(targetUrl,{method:previous?'PATCH':'POST',headers:{...serviceHeaders(serviceRoleKey),Prefer:'return=representation'},body:JSON.stringify(payload)});
+      const saved=await response.json().catch(()=>null);
+      if(!response.ok||!Array.isArray(saved)||!saved[0])throw new Error('ذخیره حساب اپراتور سرویس‌دهنده ناموفق بود.');
+      const {sip_secret:_secret,...safe}=saved[0];
+      return json(200,{success:true,endpoint:safe,message:'اطلاعات حساب موجود سرویس‌دهنده ذخیره شد؛ وضعیت اتصال صوت باید جدا آزمایش شود.'});
     }
-
-    if (action === 'delete_endpoint') {
-      const endpointId = String(body?.endpointId || '').trim();
-      if (!endpointId) return json(400, { success: false, message: 'شناسه داخلی مشخص نیست.' });
-      const res = await fetch(`${trimTrailingSlash(supabaseUrl)}/rest/v1/voip_sip_endpoints?id=eq.${endpointId}&org_id=eq.${orgId}`, {
-        method: 'DELETE',
-        headers: serviceHeaders(serviceRoleKey),
-      });
-      if (!res.ok) throw new Error((await res.text()) || 'حذف داخلی ناموفق بود.');
-      return json(200, { success: true, message: 'داخلی حذف شد.' });
-    }
-
-    return json(400, { success: false, message: 'عملیات درخواستی پشتیبانی نمی‌شود.' });
-  } catch (error: any) {
-    console.error('[voip-session] error', String(error?.message || error));
-    return json(500, { success: false, message: String(error?.message || 'خطا در مدیریت نشست VoIP.') });
+    return json(400,{success:false,message:'این عملیات در مسیر انتخاب‌شده فعال نیست؛ مرکز تلفن ابری تازه‌سیستم در حال توسعه است.'});
+  }catch(error){
+    console.error('[voip-session] request failed');
+    return json(500,{success:false,message:'دریافت یا ذخیره تنظیمات تلفن ناموفق بود. عضویت سازمان و کامل‌بودن تنظیمات را بررسی کنید.'});
   }
 });

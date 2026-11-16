@@ -1,4 +1,6 @@
 // @ts-nocheck
+import {resolveVoipPolicy} from '../_shared/voip-connection-policy.ts';
+import {loadVoipOrganizationContext} from '../_shared/voip-organization-context.ts';
 import { dialPhone } from '../_shared/phone-number.ts';
 
 import { parseTehranProviderDateTimeToUtcIso } from '../_shared/tehran-datetime.ts';
@@ -7,7 +9,7 @@ const FUNCTION_BUILD = 'telefonchy-smartcall-2026-09-16-call-outcome-and-target'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, x-organization-id, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
@@ -605,7 +607,9 @@ Deno.serve(async (req) => {
       return json(200, { success: true, provider: 'telefonchy', stats });
     }
     const user = await verifyUserToken(supabaseUrl, serviceRoleKey, requestToken);
-    const profile = await fetchProfile(supabaseUrl, serviceRoleKey, user.id);
+    const originalProfile = await fetchProfile(supabaseUrl, serviceRoleKey, user.id);
+    const context=await loadVoipOrganizationContext(req,supabaseUrl,serviceRoleKey,requestToken);
+    const profile=originalProfile?{...originalProfile,...context.settings,org_id:context.org_id}:null;
     if (!profile?.id || !profile?.org_id) {
       return json(403, { success: false, message: 'پروفایل سازمانی کاربر برای VoIP کامل نیست.' });
     }
@@ -665,6 +669,7 @@ Deno.serve(async (req) => {
     if (profile.voip_enabled !== true) {
       return json(403, { success: false, message: 'VoIP برای این کاربر فعال نیست.' });
     }
+    if(!resolveVoipPolicy(settingsRow?.settings,settingsRow?.provider).canUseBrowser)return json(403,{success:false,message:'مکالمه در حالت گزارشات یا مسیر در حال توسعه فعال نیست.'});
     if (settings.smartcall_enabled === false) {
       return json(400, { success: false, message: 'Smart Call در تنظیمات VoIP فعال نیست.' });
     }

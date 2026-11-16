@@ -1,4 +1,6 @@
 // @ts-nocheck
+import {resolveVoipPolicy} from '../_shared/voip-connection-policy.ts';
+import {loadVoipOrganizationContext} from '../_shared/voip-organization-context.ts';
 import { dialPhone } from '../_shared/phone-number.ts';
 import {
   getVoipProviderCapabilities,
@@ -9,7 +11,7 @@ const FUNCTION_BUILD = 'voip-dial-2026-11-12-adaptor-v1';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, x-organization-id, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
@@ -71,7 +73,8 @@ Deno.serve(async (req) => {
       { headers: serviceHeaders(serviceRoleKey) },
     );
     const profileRows = profileRes.ok ? parseJsonSafe(await profileRes.text()) : [];
-    const profile = Array.isArray(profileRows) ? profileRows[0] : null;
+    const context=await loadVoipOrganizationContext(req,supabaseUrl,serviceRoleKey,userToken);
+    const profile = Array.isArray(profileRows)&&profileRows[0] ? {...profileRows[0],...context.settings,org_id:context.org_id} : null;
     if (!profile?.org_id) return json(403, { success: false, message: 'سازمان کاربر مشخص نیست.' });
 
     const settingRes = await fetch(
@@ -87,12 +90,16 @@ Deno.serve(async (req) => {
     const capabilities = getVoipProviderCapabilities(providerKey);
     const action = String(body?.action || 'dial').trim();
 
+    if(['dial','smartcall'].includes(action)&&!resolveVoipPolicy(activeSetting?.settings,activeSetting?.provider).canUseBrowser)return json(403,{success:false,message:'حالت گزارشات یا مسیر در حال توسعه، مکالمه را فعال نمی‌کند.'});
     if (providerKey === 'telefonchy') {
       // Delegate seamlessly to existing tested Telefonchy Edge Function logic
       const delegateRes = await fetch(`${trimTrailingSlash(supabaseUrl)}/functions/v1/telefonchy_smartcall`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${userToken}`,
+          Origin:req.headers.get('origin')||'',
+          'x-client-info':req.headers.get('x-client-info')||'',
+          'x-organization-id':req.headers.get('x-organization-id')||'',
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({

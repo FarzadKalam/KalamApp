@@ -1,5 +1,4 @@
 import { supabase } from '../supabaseClient';
-import { fetchSessionBootstrap } from './sessionCache';
 import { normalizePhoneForStorage } from './phoneNumber';
 import { dialWebPhone } from './voipStore';
 
@@ -47,21 +46,10 @@ export const requestVoipSmartCall = async ({
     throw new Error('شماره تماس معتبر نیست.');
   }
 
-  const bootstrap = await fetchSessionBootstrap(supabase);
-  const profile = bootstrap.profile || {};
-  const dialMode = String(profile.voip_dial_mode || 'tel_link') as VoipDialMode;
-  const fallbackUrl = buildVoipFallbackUrl(normalizedPhone, dialMode);
-
-  if (profile.voip_enabled !== true) {
-    return {
-      started: false,
-      fallbackUrl,
-      fallbackMode: dialMode,
-      message: 'تماس از مسیر جایگزین باز شد.',
-    };
-  }
-
-  if (dialMode === 'webphone_webrtc') {
+  const {data:policy,error:policyError}=await supabase.functions.invoke('voip-session',{body:{action:'get_connection_policy'}});
+  if(policyError||!policy?.success)throw new Error('تنظیمات تماس سازمان در دسترس نیست.');
+  if(!policy.enabled)throw new Error(policy.message||'مکالمه داخل تازه‌سیستم برای این سازمان فعال نیست.');
+  {
     await dialWebPhone(normalizedPhone, { moduleId, recordId, title });
     return {
       started: true,
@@ -70,32 +58,4 @@ export const requestVoipSmartCall = async ({
     };
   }
 
-  if (dialMode !== 'telefonchy_smartcall') {
-    return {
-      started: false,
-      fallbackUrl,
-      fallbackMode: dialMode,
-      message: 'تماس از مسیر جایگزین باز شد.',
-    };
-  }
-
-  const body: Record<string, any> = {
-    to: normalizedPhone,
-  };
-  if (moduleId) body.moduleId = moduleId;
-  if (recordId) body.recordId = recordId;
-  if (title) body.title = title;
-
-  const { data, error } = await supabase.functions.invoke('voip-dial', { body });
-  if (error) throw new Error(getErrorMessage(error, 'شروع تماس VoIP ناموفق بود.'));
-  if (data && data.success === false) {
-    throw new Error(getErrorMessage(data, 'شروع تماس VoIP ناموفق بود.'));
-  }
-
-  return {
-    started: true,
-    mode: 'telefonchy_smartcall',
-    callLogId: data?.call_log_id || null,
-    message: data?.message || 'تماس VoIP آغاز شد.',
-  };
 };

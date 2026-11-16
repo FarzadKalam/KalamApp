@@ -13,6 +13,7 @@ import { supabase } from '../supabaseClient';
 import { normalizePhoneForStorage } from './phoneNumber';
 import { getRecordTitle } from './recordTitle';
 import { MODULES } from '../moduleRegistry';
+import {createVoipRegistrationWait,getSipRegistrationError} from './voipRegistration';
 
 export type WebPhoneRegistrationStatus =
   | 'disabled'
@@ -353,7 +354,10 @@ export const connectVoipWebPhone = async (options?: { force?: boolean }): Promis
       const uri = UserAgent.makeURI(cfg.endpoint.sipUri);
       if (!uri) throw new Error('آدرس SIP داخلی معتبر نیست.');
 
+      let registrationWait:ReturnType<typeof createVoipRegistrationWait>|null=null;
       const ua = new UserAgent({
+        logBuiltinEnabled:false,
+        logConfiguration:false,
         uri,
         authorizationUsername: cfg.endpoint.authUsername || cfg.endpoint.pjsipId,
         authorizationPassword: cfg.endpoint.sipSecret,
@@ -367,6 +371,11 @@ export const connectVoipWebPhone = async (options?: { force?: boolean }): Promis
           },
         },
         delegate: {
+          onDisconnect: () => {
+            const message='اتصال وب‌سوکت تلفن قطع شد. آدرس WSS، گواهی و دسترسی شبکهٔ سرویس‌دهنده را بررسی کنید.';
+            registrationWait?.fail(message);
+            updateSnapshot({status:'error',errorMessage:message});
+          },
           onInvite: (invitation: Invitation) => {
             if (activeSession) {
               void invitation.reject().catch(() => undefined);
@@ -389,6 +398,7 @@ export const connectVoipWebPhone = async (options?: { force?: boolean }): Promis
       reg.stateChange.addListener((state) => {
         if (registerer !== reg) return;
         if (state === RegistererState.Registered) {
+          registrationWait?.success();
           updateSnapshot({
             available: true,
             status: 'registered',
@@ -402,10 +412,20 @@ export const connectVoipWebPhone = async (options?: { force?: boolean }): Promis
         }
       });
 
-      await ua.start();
-      await reg.register();
       userAgent = ua;
       registerer = reg;
+      try {
+        await ua.start();
+        registrationWait=createVoipRegistrationWait();
+        await reg.register({requestDelegate:{onReject:response=>registrationWait?.fail(getSipRegistrationError(response.message.statusCode))}});
+        if(!await registrationWait.promise)throw new Error(registrationWait.getError()||'ثبت داخلی تأیید نشد.');
+      } catch(error) {
+        registrationWait?.fail('اتصال حساب SIP متوقف شد.');
+        if(registerer===reg)registerer=null;
+        if(userAgent===ua)userAgent=null;
+        await ua.stop().catch(()=>undefined);
+        throw error;
+      }
 
       updateSnapshot({
         available: true,

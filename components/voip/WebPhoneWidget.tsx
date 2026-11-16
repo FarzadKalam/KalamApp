@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   answerWebPhoneCall,
   connectVoipWebPhone,
+  disconnectVoipWebPhone,
   dialWebPhone,
   rejectOrHangupWebPhoneCall,
   sendDtmfWebPhone,
@@ -227,7 +228,10 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
   const [loadingHistory, setLoadingHistory] = useState(false);
 
   useEffect(() => {
-    if (!voipEnabled || !planFeatureEnabled) return;
+    if (!voipEnabled || !planFeatureEnabled) {
+      void disconnectVoipWebPhone();
+      return;
+    }
     if (dialMode === 'webphone_webrtc') {
       void connectVoipWebPhone();
     }

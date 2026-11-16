@@ -10,6 +10,8 @@
 
 export interface ParsedVoipConfig {
   extension?: string;
+  authUsername?: string;
+  wssPort?: number;
   password?: string;
   serverUrl?: string;
   sipDomain?: string;
@@ -68,7 +70,8 @@ const extractFromRecord = (obj: Record<string, any>): Partial<ParsedVoipConfig> 
 
   let portStr = getFirst(['port', 'sip_port', 'sipPort', 'sipServerPort', 'server_port']);
   let transport = getFirst(['transport', 'protocol', 'media_transport']);
-  let explicitWssUrl: string | undefined = undefined;
+  let explicitWssUrl: string | undefined = getFirst(['wss_url','wssUrl']);
+  let wssPort: number | undefined;
 
   // Telefonchy / PortSIP protocols array support (e.g. [{"pn":"UDP","port":"5060"},{"pn":"WSS","port":"5065"}])
   if (Array.isArray(target.protocols)) {
@@ -76,20 +79,9 @@ const extractFromRecord = (obj: Record<string, any>): Partial<ParsedVoipConfig> 
     const wsProto = target.protocols.find((p: any) => p && String(p?.pn || '').toUpperCase() === 'WS');
     const udpProto = target.protocols.find((p: any) => p && String(p?.pn || '').toUpperCase() === 'UDP');
 
-    if (wssProto?.port && serverUrl) {
-      const cleanHost = serverUrl.replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').replace(/\/.*$/, '').split(':')[0];
-      explicitWssUrl = `wss://${cleanHost}:${wssProto.port}/ws`;
-      if (!portStr) portStr = String(wssProto.port);
-      if (!transport) transport = 'wss';
-    } else if (wsProto?.port && serverUrl) {
-      const cleanHost = serverUrl.replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').replace(/\/.*$/, '').split(':')[0];
-      explicitWssUrl = `ws://${cleanHost}:${wsProto.port}/ws`;
-      if (!portStr) portStr = String(wsProto.port);
-      if (!transport) transport = 'ws';
-    } else if (udpProto?.port && !portStr) {
-      portStr = String(udpProto.port);
-      if (!transport) transport = 'udp';
-    }
+    if (wssProto?.port) wssPort=Number(wssProto.port)||undefined;
+    if (udpProto?.port&&!portStr)portStr=String(udpProto.port);
+
   }
 
   const port = portStr ? parseInt(portStr, 10) : undefined;
@@ -98,6 +90,9 @@ const extractFromRecord = (obj: Record<string, any>): Partial<ParsedVoipConfig> 
 
   return {
     extension,
+    authUsername:getFirst(['auth_name','authName','auth_username','authorization_username']),
+    wssPort,
+    sipDomain:getFirst(['sip_domain','sipDomain','domain','userDomain','dn']),
     password,
     serverUrl,
     wssUrl: explicitWssUrl,
@@ -182,6 +177,10 @@ export const parseVoipQrConfig = (raw: string): ParsedVoipConfig => {
 
     if (Object.keys(kv).length > 0) {
       const extracted = extractFromRecord(kv);
+      if (!result.wssUrl && extracted.wssUrl) result.wssUrl=extracted.wssUrl;
+      if (!result.authUsername && extracted.authUsername) result.authUsername=extracted.authUsername;
+      if (!result.sipDomain && extracted.sipDomain) result.sipDomain=extracted.sipDomain;
+      if (!result.wssPort && extracted.wssPort) result.wssPort=extracted.wssPort;
       if (!result.extension && extracted.extension) result.extension = extracted.extension;
       if (!result.password && extracted.password) result.password = extracted.password;
       if (!result.serverUrl && extracted.serverUrl) result.serverUrl = extracted.serverUrl;
@@ -198,69 +197,18 @@ export const parseVoipQrConfig = (raw: string): ParsedVoipConfig => {
     if (/^wss?:\/\//i.test(s)) {
       result.wssUrl = s;
       try {
-        result.sipDomain = new URL(s).hostname;
+        if (!result.sipDomain) result.sipDomain = new URL(s).hostname;
       } catch {
-        result.sipDomain = s.replace(/^wss?:\/\//i, '').split('/')[0].split(':')[0];
+        if (!result.sipDomain) result.sipDomain = s.replace(/^wss?:\/\//i, '').split('/')[0].split(':')[0];
       }
     } else {
       const clean = s.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
       const parts = clean.split(':');
-      result.sipDomain = parts[0];
-      if (!result.wssUrl) {
-        const explicitPort = parts[1] || result.port;
-        result.wssUrl = explicitPort
-          ? `wss://${result.sipDomain}:${explicitPort}/ws`
-          : `wss://${result.sipDomain}/ws`;
-      }
+      if (!result.sipDomain) result.sipDomain = parts[0];
+      // UDP/TCP SIP host and port are not a WebSocket endpoint.
+
     }
   }
 
   return result;
-};
-
-/**
- * Format PortSIP / Telefonchy JSON payload for QR code generation
- */
-export const buildPortSipQrPayload = (config: {
-  extension: string;
-  password?: string;
-  serverUrl?: string;
-  displayName?: string;
-  port?: number;
-}): string => {
-  const domain = String(config.serverUrl || '')
-    .replace(/^wss?:\/\//i, '')
-    .replace(/^https?:\/\//i, '')
-    .split('/')[0]
-    .split(':')[0] || 'phone2.telefonchy.com';
-
-  const ext = String(config.extension || '').trim();
-  const pwd = String(config.password || '').trim();
-  const sipPort = String(config.port || 5060);
-  const wssPort = '5065';
-
-  const payload = {
-    name: ext,
-    dn: domain,
-    wdn: domain,
-    protocols: [
-      { pn: 'UDP', port: sipPort },
-      { pn: 'WSS', port: wssPort },
-    ],
-    ip: domain,
-    private: domain,
-    ext,
-    pwd,
-    v: 1,
-    username: ext,
-    auth_name: ext,
-    password: pwd,
-    domain,
-    sip_server: domain,
-    sip_port: parseInt(sipPort, 10),
-    display_name: String(config.displayName || ext).trim(),
-    transport: 'udp',
-  };
-
-  return JSON.stringify(payload, null, 2);
 };

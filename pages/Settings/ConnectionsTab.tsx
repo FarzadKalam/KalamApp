@@ -1,3 +1,4 @@
+import {resolveVoipPolicy} from '../../utils/voipConnectionPolicy';
 import EmailSettings from '../../components/email/EmailSettings';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
@@ -114,6 +115,9 @@ type FormValues = {
     is_active?: boolean;
   };
   voip: {
+    usage_mode?: 'reports'|'browser';
+    browser_source?: 'external'|'taze_pbx';
+    ice_servers_json?: string;
     provider?: string;
     base_url?: string;
     webservice_token?: string;
@@ -617,6 +621,9 @@ const ConnectionsTab: React.FC = () => {
   };
 
   const buildVoipRequestSettings = (voipValues: FormValues['voip']) => ({
+    usage_mode: resolveVoipPolicy(voipValues,voipValues?.provider).usageMode,
+    browser_source: resolveVoipPolicy(voipValues,voipValues?.provider).browserSource,
+    ice_servers_json: voipValues?.ice_servers_json || '',
     provider: String(voipValues?.provider || 'telefonchy').trim(),
     base_url: String(voipValues?.base_url || 'https://panel.telefonchy.com').trim(),
     webservice_token: String(voipValues?.webservice_token || '').trim(),
@@ -782,6 +789,8 @@ const ConnectionsTab: React.FC = () => {
           ...DEFAULT_VALUES.voip,
           provider: String(byType.voip?.provider || DEFAULT_VALUES.voip.provider),
           ...(byType.voip?.settings || {}),
+          usage_mode: resolveVoipPolicy(byType.voip?.settings,byType.voip?.provider).usageMode,
+          browser_source: resolveVoipPolicy(byType.voip?.settings,byType.voip?.provider).browserSource,
           is_active: byType.voip?.is_active ?? DEFAULT_VALUES.voip.is_active,
         },
         telegram_bot: {
@@ -954,13 +963,16 @@ const ConnectionsTab: React.FC = () => {
           connection_type: 'voip',
           provider: currentVoipValues.provider || 'telefonchy',
           settings: {
+            usage_mode: resolveVoipPolicy(currentVoipValues,currentVoipValues.provider).usageMode,
+            browser_source: resolveVoipPolicy(currentVoipValues,currentVoipValues.provider).browserSource,
+            ice_servers_json: currentVoipValues.ice_servers_json || '',
             base_url: currentVoipValues.base_url || 'https://panel.telefonchy.com',
             webservice_token: currentVoipValues.webservice_token || '',
             service_id: currentVoipValues.service_id || '',
             default_extension: currentVoipValues.default_extension || '',
             webhook_secret: currentVoipValues.webhook_secret || '',
-            smartcall_enabled: currentVoipValues.smartcall_enabled === true,
-            default_dial_mode: currentVoipValues.default_dial_mode || 'telefonchy_smartcall',
+            smartcall_enabled: false,
+            default_dial_mode: resolveVoipPolicy(currentVoipValues,currentVoipValues.provider).canUseBrowser ? 'webphone_webrtc' : 'tel_link',
             wss_url: currentVoipValues.wss_url || '',
             sip_domain: currentVoipValues.sip_domain || '',
             turn_host: currentVoipValues.turn_host || '',

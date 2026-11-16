@@ -1,3 +1,4 @@
+import {useVoipConnectionPolicy} from '../hooks/useVoipConnectionPolicy';
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Layout as AntLayout, Button, Dropdown, App, Input, Spin, Popconfirm, Tooltip, Badge } from 'antd';
 import type { InputRef, MenuProps } from 'antd';
@@ -125,6 +126,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [isMobile, setIsMobile] = useState(initialIsMobile);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [currentUserProfile, setCurrentUserProfile] = useState<any>(null);
+  const orgVoipPolicy=useVoipConnectionPolicy(currentUserProfile?.org_id,currentUserProfile?.voip_enabled===true,currentUserProfile?.id);
+  const browserVoipEnabled=orgVoipPolicy.data?.enabled===true;
   const [resolvedOrgId, setResolvedOrgId] = useState<string | null | undefined>(undefined);
   const [saasAdminOrgVerified, setSaasAdminOrgVerified] = useState(false);
   const [breadcrumb, setBreadcrumb] = useState<{ moduleTitle?: string; moduleId?: string; recordName?: string } | null>(null);
@@ -1775,7 +1778,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                 buttonIcon={<ActionIcon name="ai" />}
               />
             ) : null}
-            {currentUserProfile?.voip_enabled && voipWebphoneFeatureEnabled ? (
+            {currentUserProfile?.voip_enabled && voipWebphoneFeatureEnabled && browserVoipEnabled ? (
               <WebPhoneHeaderButton
                 visible
                 isMobile={isMobile}
@@ -1941,8 +1944,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           <GlobalTaskProcessModalHost />
           <EmailComposerHost />
           <WebPhoneWidget
-            voipEnabled={currentUserProfile?.voip_enabled === true}
-            dialMode={currentUserProfile?.voip_dial_mode}
+            voipEnabled={currentUserProfile?.voip_enabled === true && browserVoipEnabled}
+            dialMode={browserVoipEnabled?'webphone_webrtc':'tel_link'}
             planFeatureEnabled={voipWebphoneFeatureEnabled}
           />
         </React.Suspense>
