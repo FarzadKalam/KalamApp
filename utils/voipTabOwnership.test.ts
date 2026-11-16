@@ -8,5 +8,7 @@ it('denies a second owner until the first tab releases the SIP account',async()=
  }}});
  const release=await acquireVoipTabOwnership('org:user');expect(release).toBeTypeOf('function');
  expect(await acquireVoipTabOwnership('org:user')).toBeNull();release!();
- await Promise.resolve();expect(await acquireVoipTabOwnership('org:user')).toBeTypeOf('function');
+ await vi.waitFor(()=>expect(occupied).toBe(false));
+ const nextRelease=await acquireVoipTabOwnership('org:user');
+ expect(nextRelease).toBeTypeOf('function');nextRelease!();
 });

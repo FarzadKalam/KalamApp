@@ -1580,7 +1580,8 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean;c
       setBotSenderBindings(bindingRows || []);
       setBotGroupMessages(botMessageRows || []);
       setBotDirectMessages(botDirectMessageRows || []);
-      const cacheKey = buildMessagingOmniCacheKey(profile);
+      // A calls-only snapshot must never replace the full messaging snapshot.
+      const cacheKey = buildMessagingOmniCacheKey(profile)+(callsOnly?':calls':'');
       writeMessagingOmniCache(cacheKey, {
         fetchedAt: Date.now(),
         profile,
@@ -1603,14 +1604,14 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean;c
 
   useEffect(() => {
     if (!profile.id) return;
-    const cacheKey = buildMessagingOmniCacheKey(profile);
+    const cacheKey = buildMessagingOmniCacheKey(profile)+(callsOnly?':calls':'');
     const cached = readMessagingOmniCache(cacheKey);
     if (cached && appliedCacheKeyRef.current !== cacheKey) {
       appliedCacheKeyRef.current = cacheKey;
       applyCachedSnapshot(cached);
     }
     void refresh({ background: Boolean(cached) });
-  }, [applyCachedSnapshot, profile, refresh]);
+  }, [applyCachedSnapshot, profile, refresh,callsOnly]);
 
   const mergeRecordLabels = useCallback(async (rows: any[]) => {
     const labels = await safeLiveFetch(

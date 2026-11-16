@@ -36,7 +36,9 @@ Deno.serve(async(req:Request)=>{
   const token=(req.headers.get('authorization')||'').replace(/^Bearer\s+/i,'');if(!token)return response(401,{success:false});
   const context=await loadVoipOrganizationContext(req,base,key,token);
   const userResult=await fetch(base+'/auth/v1/user',{headers:{apikey:key,Authorization:'Bearer '+token}});const user=await userResult.json();if(!userResult.ok||!user.id)return response(401,{success:false});
-  const org=context.org_id;const manager=context.permissions?.__settings_tabs?.edit===true||context.permissions?.profiles?.edit===true;
+  const org=context.org_id;const manager=context.permissions?.__settings_tabs?.edit===true;
+  const reportPermission=context.permissions?.voip_call_reports;
+  if(reportPermission?.view===false||(!reportPermission&&context.permissions?.__voip?.view===false))return response(403,{success:false,message:'دسترسی تماس‌های سازمان برای شما فعال نیست.'});
   if(body.action==='start'){
    const health=await rest('voip_ai_worker_health',{id:'eq.asterisk-voice',checked_at:`gt.${new Date(Date.now()-20000).toISOString()}`,select:'id'});
    if(!health.length)return response(503,{success:false,message:'پاسخ‌گوی صوتی روی درگاه آماده نیست؛ تماس آغاز نشد.'});
