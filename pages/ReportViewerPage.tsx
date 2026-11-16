@@ -935,7 +935,11 @@ const ReportViewerPage: React.FC = () => {
       const nextRows: ReportRow[] = [];
       const sharedContext = createWorkflowEvaluationContext(moduleId);
       if (neededKeys.includes('tags') || conditionFieldKeys.includes('tags')) {
-        await prefetchWorkflowRecordTags({ moduleId, records: reportSourceRows, context: sharedContext });
+        // The tag-map RPC is also subject to the server's response row cap.
+        // Await each chunk so the shared batching queue cannot merge all 100k IDs again.
+        for (let offset = 0; offset < reportSourceRows.length; offset += 250) {
+          await prefetchWorkflowRecordTags({ moduleId, records: reportSourceRows.slice(offset, offset + 250), context: sharedContext });
+        }
       }
       for (let index = 0; index < reportSourceRows.length; index += 1) {
         const sourceRow = reportSourceRows[index];
