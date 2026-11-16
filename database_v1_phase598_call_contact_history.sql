@@ -94,7 +94,7 @@ begin
   select 'jsonb_build_object('||string_agg(format('%L,t.%I',c,c),',')||')' into projection from unnest(cols)c;
   if p_phone_key is not null then
    select string_agg(format('public.kalam_phone_lookup_key(t.%I)=$3',c),' or ') into predicate from unnest(phone_cols)c;
-   predicate:=coalesce(predicate,'false')||format(' or exists(select 1 from public.phone_number_links l join public.phone_numbers n on n.id=l.phone_number_id and n.org_id=l.org_id where l.org_id=$1 and l.entity_type=%L and l.entity_id=t.id and l.source_field=any($5) and n.lookup_key=$3)',m);
+   predicate:=coalesce(predicate,'false')||format(' or exists(select 1 from public.phone_number_links l join public.phone_numbers n on n.id=l.phone_number_id and n.org_id=l.org_id where l.org_id=$1 and l.entity_type=%L and l.entity_id=t.id and (l.source_field=any($5) or (cardinality($5)>0 and l.source_table=''manual_phone_binding'' and l.source_field=''identity'')) and n.lookup_key=$3)',m);
   else
    select string_agg(format('position(lower($2) in lower(coalesce(t.%I,'''')))>0',c),' or ') into predicate from unnest(name_cols)c;
    predicate:=coalesce(predicate,'false');

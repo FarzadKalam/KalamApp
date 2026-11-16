@@ -9,7 +9,7 @@ $$;
 create table public.customers(id uuid primary key default gen_random_uuid(),org_id uuid not null,full_name text,first_name text,last_name text,business_name text,mobile_1 text,mobile_2 text,phone text,rank text,created_at timestamptz default now(),updated_at timestamptz default now(),assignee_type text,assignee_id uuid,assignee_role_id uuid);
 create function public.kalam_phone_lookup_key(text) returns text language sql immutable as $$select regexp_replace($1,'[^0-9]','','g')$$;
 create table public.phone_numbers(id uuid,org_id uuid,lookup_key text);
-create table public.phone_number_links(org_id uuid,entity_type text,entity_id uuid,source_field text,phone_number_id uuid);
+create table public.phone_number_links(org_id uuid,entity_type text,entity_id uuid,source_field text,phone_number_id uuid,source_table text);
 grant select on public.phone_numbers,public.phone_number_links to authenticated;
 create table public.projects(id uuid,org_id uuid,customer_id uuid,owner_id uuid,source_purchase_invoice_id uuid,name text,system_code text,status text,start_date date,due_date date,progress_percent numeric,created_at timestamptz,updated_at timestamptz);
 create table public.purchase_invoices(id uuid,org_id uuid,supplier_id uuid,project_id uuid,name text,system_code text,status text,invoice_date date,total_invoice_amount numeric,total_received_amount numeric,remaining_balance numeric,payments jsonb,created_at timestamptz,updated_at timestamptz);
@@ -33,6 +33,8 @@ create policy invoice_org on public.invoices to authenticated using(org_id=publi
 grant select on public.customers,public.invoices to authenticated;
 insert into public.customers(id,org_id,full_name,assignee_type,assignee_id) values('40000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000001','مخاطب آزمون','user','20000000-0000-4000-8000-000000000001');
 insert into public.customers(org_id,full_name,created_at,updated_at) select '10000000-0000-4000-8000-000000000001','مخاطب دیگر',now()+interval '1 day',now()+interval '1 day' from generate_series(1,21);
+insert into public.phone_numbers values('60000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000001','9120000000');
+insert into public.phone_number_links values('10000000-0000-4000-8000-000000000001','customers','40000000-0000-4000-8000-000000000001','identity','60000000-0000-4000-8000-000000000001','manual_phone_binding');
 insert into public.invoices(org_id,customer_id,name,status,remaining_balance,total_invoice_amount,created_at,updated_at,is_deleted)
  select '10000000-0000-4000-8000-000000000001','40000000-0000-4000-8000-000000000001','فاکتور '||i,
  case when i=1 then 'proforma' when i=2 then 'settled' when i=3 then 'completed' else 'created' end,
