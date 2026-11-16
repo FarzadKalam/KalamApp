@@ -460,7 +460,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
             {/* Telegram Circular Avatar & Waveform */}
             <div className="text-center space-y-2 py-1">
               <div className="relative w-16 h-16 mx-auto">
-                <Avatar size={64} src={normalizePublicAssetUrl(activeCall.avatarUrl||activeCall.matchedContact?.avatarUrl)} className="!bg-sky-600 !text-white !text-lg !font-bold shadow-lg shadow-sky-500/30">
+                <Avatar size={64} src={normalizePublicAssetUrl(activeCall.avatarUrl||activeCall.matchedContact?.avatarUrl)||undefined} className="!bg-sky-600 !text-white !text-lg !font-bold shadow-lg shadow-sky-500/30">
                   {contactInitials}
                 </Avatar>
                 {activeCall.state === 'active' ? (

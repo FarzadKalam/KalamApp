@@ -47,7 +47,7 @@ export default function VoipDirectoryPicker({open,onClose,onChoose}:{open:boolea
     <h3 className="font-semibold text-sm">داخلی‌های سازمان</h3>
     {operatorError&&<p role="alert" className="text-xs text-red-600 dark:text-red-400">{operatorError}</p>}
     {operators.map(item=><button type="button" key={item.id} disabled={!item.phone} onClick={()=>choose(item.phone,item)} className="w-full min-h-14 rounded-xl border border-slate-200 dark:border-slate-700 p-2 flex items-center gap-3 text-start hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-60">
-     <Avatar src={normalizePublicAssetUrl(item.avatarUrl)} icon={<UserOutlined />} />
+     <Avatar src={normalizePublicAssetUrl(item.avatarUrl)||undefined} icon={<UserOutlined />} />
      <span className="min-w-0 flex-1"><span className="block font-medium">{item.title}</span><span className="block text-xs text-slate-500">{item.phone?'داخلی تماس':'داخلی تماس ثبت نشده؛ مدیر در تنظیمات کاربر وارد کند'}</span></span>
      {item.phone&&<bdi className="font-mono" dir="ltr">{item.phone}</bdi>}
     </button>)}
@@ -58,7 +58,7 @@ export default function VoipDirectoryPicker({open,onClose,onChoose}:{open:boolea
     <h3 className="font-semibold text-sm">مخاطبان</h3>
     {contactError&&<p role="alert" className="text-xs text-red-600 dark:text-red-400">{contactError}</p>}
     {contacts.map(item=><button type="button" key={item.moduleId+item.recordId} disabled={!item.phone} onClick={()=>choose(item.phone,item)} className="w-full min-h-14 rounded-xl border border-slate-200 dark:border-slate-700 p-2 flex items-center gap-3 text-start hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-60">
-     <Avatar src={normalizePublicAssetUrl(item.avatarUrl)} icon={<UserOutlined />} /><span className="min-w-0 flex-1"><span className="block font-medium">{item.title}</span><span className="block text-xs text-slate-500">{roleLabels[item.moduleId]}</span></span>
+     <Avatar src={normalizePublicAssetUrl(item.avatarUrl)||undefined} icon={<UserOutlined />} /><span className="min-w-0 flex-1"><span className="block font-medium">{item.title}</span><span className="block text-xs text-slate-500">{roleLabels[item.moduleId]}</span></span>
      <bdi className="font-mono" dir="ltr">{item.phone||'بدون شماره'}</bdi>
     </button>)}
     {!busy&&!contactError&&!contacts.length&&<p className="text-xs text-slate-500">{query.trim().length<2?'برای جست‌وجوی مخاطب دست‌کم دو نویسه بنویسید.':'مخاطبی در محدودهٔ دسترسی شما یافت نشد.'}</p>}
