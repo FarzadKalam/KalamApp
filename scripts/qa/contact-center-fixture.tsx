@@ -5,7 +5,7 @@ import {QueryClient,QueryClientProvider} from '@tanstack/react-query';
 import {MemoryRouter} from 'react-router-dom';
 import ContactCenterPage from '../../pages/ContactCenterPage';
 import WebPhoneWidget from '../../components/voip/WebPhoneWidget';
-import '../../App.css';
+// Use the production styles linked by the browser harness, including Persian fonts.
 const client=new QueryClient({defaultOptions:{queries:{retry:false}}});
 function Preview(){
  const [dark,setDark]=useState(false);

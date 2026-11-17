@@ -2021,7 +2021,7 @@ const TimelineEventCard: React.FC<{
         }`}
         style={outgoing ? { background: 'rgb(var(--brand-800-rgb))' } : undefined}
       >
-        <div className="flex items-center justify-between gap-3">
+        <div className={isCall?'flex flex-wrap items-start justify-between gap-2':'flex items-center justify-between gap-3'}>
           <div className="flex min-w-0 items-center gap-2">
             {unread ? (
               <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-rose-500 shadow-[0_0_0_3px_rgba(244,63,94,0.14)]" title="پیام خوانده نشده" />

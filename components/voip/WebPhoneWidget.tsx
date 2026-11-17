@@ -414,7 +414,7 @@ const WebPhoneWidget: React.FC<WebPhoneWidgetProps> = ({
   const phoneView=(
     <div
       dir="rtl"
-      style={{height:'min(680px, calc(100dvh - 2.5rem))'}}
+      style={{height:dockTarget?'min(500px, calc(100dvh - 2.5rem))':'min(680px, calc(100dvh - 2.5rem))'}}
       className={`${dockTarget?'relative w-full':'fixed bottom-5 left-5 z-[1050] w-[380px] max-w-[calc(100vw-2.5rem)]'} flex flex-col max-h-[calc(100dvh-2.5rem)] rounded-3xl border border-slate-200/90 dark:border-[#242f3d] bg-white/95 dark:bg-[#17212b]/95 backdrop-blur-2xl shadow-xl shadow-black/10 text-slate-800 dark:text-slate-100 overflow-hidden font-sans`}
     >
       {/* Top Header Bar */}

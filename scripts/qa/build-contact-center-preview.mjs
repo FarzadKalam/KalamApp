@@ -3,11 +3,11 @@ import fs from 'node:fs';import path from 'node:path';import {createRequire} fro
 const require=createRequire(import.meta.url);const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));
 const org='10000000-0000-4000-8000-000000000001';const user='20000000-0000-4000-8000-000000000001';
 const snapshot={user:{id:user},profile:{id:user,org_id:org,full_name:'همکار نمونه',voip_enabled:true},orgId:org,roleId:'30000000-0000-4000-8000-000000000001',permissions:{__settings_tabs:{edit:true},profiles:{edit:true},voip_call_reports:{view:true}},loadedAt:Date.now()};
-await build({entryPoints:['scripts/qa/contact-center-fixture.tsx'],outdir:'tmp/contact-center-preview',entryNames:'entry',chunkNames:'[name]-[hash]',bundle:true,splitting:true,format:'esm',platform:'browser',minify:true,
+await build({entryPoints:['scripts/qa/contact-center-fixture.tsx'],outdir:'tmp/contact-center-preview',entryNames:'entry',chunkNames:'[name]-[hash]',bundle:true,splitting:true,format:'esm',platform:'browser',minify:true,loader:{'.woff2':'file','.woff':'file','.ttf':'file'},
  define:{'process.env.NODE_ENV':'"production"','import.meta.env':JSON.stringify({DEV:false,PROD:true,MODE:'test',BASE_URL:'/',VITE_SUPABASE_URL:'https://isolated-preview.invalid',VITE_SUPABASE_ANON_KEY:'fixture'}),__TAZESYSTEM_APP_VERSION__:JSON.stringify(pkg.version)},
  plugins:[{name:'isolated-contact-center',setup(builder){
   builder.onResolve({filter:/^@ant-design\/icons\/[A-Z][\w]+$/},({path:name})=>({path:require.resolve(name.replace('@ant-design/icons/','@ant-design/icons/es/icons/')+'.js')}));
-  builder.onResolve({filter:/(^|\/)sessionCache(?:\.ts)?$/},args=>args.namespace==='contact-center'?undefined:{path:'session',namespace:'contact-center'});
+  builder.onResolve({filter:/(^|[\\/])sessionCache(?:\.ts)?$/},args=>args.namespace==='contact-center'?{path:path.resolve('utils/sessionCache.ts')}:{path:'session',namespace:'contact-center'});
   builder.onResolve({filter:/(^|\/)useOrgPlanFeature(?:\.ts)?$/},()=>({path:'plan',namespace:'contact-center'}));
   builder.onResolve({filter:/(^|\/)supabaseClient(?:\.ts)?$/},()=>({path:'backend',namespace:'contact-center'}));
   builder.onLoad({filter:/.*/,namespace:'contact-center'},args=>{
