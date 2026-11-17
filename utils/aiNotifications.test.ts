@@ -9,5 +9,6 @@ it('links an AI response to its own conversation and a reminder to the agent inb
  expect(aiNotificationHref({thread_id:'thread',agent_key:'sales_leads'})).toBe('/ai?thread=thread');
  expect(aiNotificationHref({thread_id:null,agent_key:'sales_leads'})).toBe('/ai?inbox=1&agent=sales_leads');
  expect(isCompletedAiResponse({role:'assistant',content:'partial',metadata:{pending_status:true}})).toBe(false);
+ expect(isCompletedAiResponse({role:'assistant',content:'partial',metadata:{streaming:true}})).toBe(false);
  expect(isCompletedAiResponse({role:'assistant',content:'complete'})).toBe(true);
 });

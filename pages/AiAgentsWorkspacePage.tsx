@@ -46,6 +46,7 @@ import { toPersianNumber } from '../utils/persianNumberFormatter';
 import AiAgentConfigPanel from '../components/ai/AiAgentConfigPanel';
 import AiAgentOnboardingWizard from '../components/ai/AiAgentOnboardingWizard';
 import AiAgentMessagesCompactBox from '../components/ai/AiAgentMessagesCompactBox';
+import NotificationUnreadBadge from '../components/notifications/NotificationUnreadBadge';
 import AiAgentIcon, { AiAgentAvatar, AiAgentDeskSeatFigure } from '../components/ai/AiAgentIcon';
 import AiSparkleIcon from '../components/ai/AiSparkleIcon';
 import DashboardAgentDetailModal, { type DashboardAgentModalItem } from '../components/dashboard/DashboardAgentDetailModal';
@@ -639,7 +640,7 @@ const AiAgentsWorkspacePage: React.FC = () => {
                                     )}
                                   </div>
 
-                                  <AiAgentDeskSeatFigure
+                                  <NotificationUnreadBadge kind="ai" agentKey={agent.key}><AiAgentDeskSeatFigure
                                     agentKey={agent.key}
                                     color={agent.badgeColor}
                                     isWorking={agent.isWorking}
@@ -648,7 +649,7 @@ const AiAgentsWorkspacePage: React.FC = () => {
                                     orgEnabled={agent.orgEnabled}
                                     hasPending={apprCount > 0}
                                     seatIndex={idx}
-                                  />
+                                  /></NotificationUnreadBadge>
                                 </div>
                               );
                             })}

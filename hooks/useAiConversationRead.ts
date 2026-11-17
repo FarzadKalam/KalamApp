@@ -1,13 +1,13 @@
-import {useEffect,useRef,useState} from 'react';
+import {useEffect,useRef} from 'react';
+import {useDocumentVisible} from './useDocumentVisible';
 import {useOptionalNotificationRuntime} from '../components/notifications/NotificationRuntimeProvider';
 import {isCompletedAiResponse} from '../utils/aiNotifications';
 
 /** Reading is acknowledged only for a visible, loaded conversation, never its navigation link. */
 export function useAiConversationRead(threadId:string|null,messages:readonly any[],active:boolean){
  const runtime=useOptionalNotificationRuntime();
- const [visible,setVisible]=useState(()=>typeof document==='undefined'||document.visibilityState==='visible');
+ const visible=useDocumentVisible();
  const acknowledged=useRef('');
- useEffect(()=>{const changed=()=>setVisible(document.visibilityState==='visible');document.addEventListener('visibilitychange',changed);return()=>document.removeEventListener('visibilitychange',changed);},[]);
  useEffect(()=>{
   if(!active||!visible||!threadId)return;
   const complete=messages.filter(isCompletedAiResponse).filter(row=>/^[a-f0-9-]{36}$/i.test(String(row.id||'')));

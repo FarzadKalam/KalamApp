@@ -12,7 +12,7 @@ import React, {
 } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
-import {EMPTY_AI_NOTIFICATIONS,normalizeAiNotifications,aiNotificationHref,aiNotificationTitle,type AiNotificationSnapshot} from '../../utils/aiNotifications';
+import {EMPTY_AI_NOTIFICATIONS,normalizeAiNotifications,aiNotificationHref,aiNotificationTitle,isCompletedAiResponse,type AiNotificationSnapshot} from '../../utils/aiNotifications';
 import { MODULES } from '../../moduleRegistry';
 import { AI_OPEN_EVENT, type AssistantContext } from '../../utils/aiAssistantEvents';
 import { sendBotMessageViaGateway } from '../../utils/botGateway';
@@ -1252,8 +1252,10 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
               else if (table === 'voip_call_logs') voipCallInsertBus.emit(payload.new);
             }
             if(table==='ai_messages'){
-              if(payload?.eventType!=='DELETE'&&payload?.new)aiMessageUpdateBus.emit(payload.new);
-              scheduleRefresh();return;
+              if(isCompletedAiResponse(payload?.new)){
+                aiMessageUpdateBus.emit(payload.new);scheduleRefresh();
+              }else if(payload?.eventType==='DELETE'||isCompletedAiResponse(payload?.old))scheduleRefresh();
+              return;
             }
             if(table==='ai_threads'||(table==='user_organization_memberships'&&String(row.user_id||'')===identity.userId)){scheduleRefresh();return;}
             if(table==='communication_read_cursors'&&row.channel==='ai'){scheduleRefresh();return;}
@@ -1314,7 +1316,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
   }, []);
 
   const communicationUnread = Math.max(0,sumNotificationUnread(summary, COMMUNICATION_SECTIONS)-ai.communicationAgentNoteTotal);
-  const alertsUnread = sumNotificationUnread(summary, ALERT_SECTIONS);
+  const alertsUnread = Math.max(0,sumNotificationUnread(summary, ALERT_SECTIONS)-ai.alertAgentNoteTotal);
 
   useEffect(() => {
     setUiNotificationOverlayUnreadSummary({

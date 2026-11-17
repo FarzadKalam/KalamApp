@@ -9,7 +9,8 @@ create table public.communication_read_cursors(org_id uuid,user_id uuid,channel 
 create table public.ai_threads(id uuid primary key,org_id uuid,user_id uuid,title text,agent_key text,selected_agents jsonb,
  shared_user_ids uuid[] default '{}',shared_role_ids uuid[] default '{}',metadata jsonb default '{}',status text default 'active',archived_at timestamptz,context_key text,created_at timestamptz default now());
 create table public.ai_messages(id uuid primary key default gen_random_uuid(),org_id uuid,thread_id uuid,role text,content text,metadata jsonb default '{}',created_at timestamptz default now());
-create table public.notes(id uuid primary key default gen_random_uuid(),org_id uuid,author_id uuid,author_name text,content text,metadata jsonb default '{}',mention_user_ids uuid[] default '{}',mention_role_ids uuid[] default '{}',created_at timestamptz default now());
+create table public.notes(id uuid primary key default gen_random_uuid(),org_id uuid,author_id uuid,author_name text,source_type text default 'ai',content text,metadata jsonb default '{}',mention_user_ids uuid[] default '{}',mention_role_ids uuid[] default '{}',created_at timestamptz default now());
+create function public.kalam_internal_message_is_system_v2(text,jsonb,text) returns boolean language sql immutable as $$select $1 in ('ai','assistant','system')$$;
 create table public.notification_read_states(org_id uuid,user_id uuid,section text,source_type text,source_id text,read_at timestamptz,dismissed_at timestamptz);
 create table public.notification_inbox_items(org_id uuid,section text,source_type text,source_id text);
 insert into public.user_organization_memberships values

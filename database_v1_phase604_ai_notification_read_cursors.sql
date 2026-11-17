@@ -16,6 +16,7 @@ returns boolean language sql immutable set search_path=public as $$
  select p_role='assistant' and length(trim(coalesce(p_content,'')))>0
   and coalesce(p_metadata->>'status','')<>'failed'
   and not coalesce(p_metadata,'{}'::jsonb) @> '{"pending_status":true}'
+  and not coalesce(p_metadata,'{}'::jsonb) @> '{"streaming":true}'
   and not coalesce(p_metadata,'{}'::jsonb) @> '{"failed":true}'
   and not coalesce(p_metadata,'{}'::jsonb) @> '{"incomplete":true}'
   and not coalesce(p_metadata,'{}'::jsonb) @> '{"stopped":true}'
@@ -57,7 +58,7 @@ with me as (
     nullif(to_jsonb(t)->'selected_agents'->>0,''),nullif(t.metadata->'selected_agents'->>0,''),'lead_orchestrator') end as agent_key,
   coalesce(nullif(t.title,''),'گفتگوی هوش مصنوعی') as title,a.content,coalesce(a.notification_ready_at,a.created_at) as created_at,
   coalesce((coalesce(a.notification_ready_at,a.created_at),a.id::text)>(coalesce(c.read_through_at,baseline.read_through_at,t.created_at),
-   coalesce(c.read_through_id,baseline.read_through_id,'')),false) as is_unread,false as in_communication
+   coalesce(c.read_through_id,baseline.read_through_id,'')),false) as is_unread,false as in_communication,false as in_system_unread
  from me join public.ai_threads t on t.org_id=me.org_id and
   (t.user_id=me.user_id or me.user_id=any(t.shared_user_ids) or me.role_id=any(t.shared_role_ids))
  join public.ai_messages a on a.org_id=t.org_id and a.thread_id=t.id and a.role='assistant'
@@ -80,13 +81,17 @@ with me as (
   coalesce(nullif(n.author_name,''),'ایجنت هوشمند') as title,n.content,n.created_at,
   (rs.read_at is null and rs.dismissed_at is null and
     (c.read_through_at is null or (n.created_at,n.id::text)>(c.read_through_at,coalesce(c.read_through_id,'')))) as is_unread,
-  exists(select 1 from public.notification_inbox_items i where i.org_id=me.org_id and i.section='notes' and i.source_type='note' and i.source_id=n.id::text) as in_communication
+  exists(select 1 from public.notification_inbox_items i where i.org_id=me.org_id and i.section='notes' and i.source_type='note' and i.source_id=n.id::text) as in_communication,
+  (rs.read_at is null and rs.dismissed_at is null
+   and (s.read_through_at is null or (n.created_at,n.id::text)>(s.read_through_at,coalesce(s.read_through_id,'')))
+   and public.kalam_internal_message_is_system_v2(n.source_type,n.metadata,null)) as in_system_unread
  from me join public.notes n on n.org_id=me.org_id and n.author_id is distinct from me.user_id
   and (me.user_id=any(n.mention_user_ids) or me.role_id=any(n.mention_role_ids))
  left join public.notification_read_states rs on rs.org_id=me.org_id and rs.user_id=me.user_id
   and rs.section='notes' and rs.source_type='note' and rs.source_id=n.id::text
  left join public.communication_read_cursors c on c.org_id=me.org_id and c.user_id=me.user_id and c.channel='internal'
   and c.conversation_key='agent:'||coalesce(nullif(n.metadata->>'agent_key',''),nullif(substr(n.metadata->>'conversation_key',7),''),'lead_orchestrator')
+ left join public.communication_read_cursors s on s.org_id=me.org_id and s.user_id=me.user_id and s.channel='internal' and s.conversation_key='system'
  where (n.metadata ? 'agent_key' or n.metadata->>'conversation_key' like 'agent:%')
   and length(trim(n.content))>0 and coalesce(n.metadata->>'pending_status','false')<>'true'
   and coalesce(n.metadata->>'failed','false')<>'true' and coalesce(n.metadata->>'incomplete','false')<>'true'
@@ -105,7 +110,8 @@ revoke all on public.ai_notification_events from public,anon,authenticated;
 -- No client can query the view directly, and the function accepts no alternate viewer or tenant.
 create or replace function public.get_ai_notification_snapshot_v1()
 returns jsonb language sql stable security definer set search_path=public as $$
- with unread as materialized(select * from public.ai_notification_events where is_unread),
+ with events as materialized(select * from public.ai_notification_events),
+ unread as materialized(select * from events where is_unread),
  grouped as (select conversation_key,thread_id,agent_key,count(*) as unread_count,max(created_at) as latest
   from unread group by conversation_key,thread_id,agent_key),
  agents as (select agent_key,sum(unread_count) as unread_count from grouped where agent_key is not null group by agent_key),
@@ -113,6 +119,7 @@ returns jsonb language sql stable security definer set search_path=public as $$
  select jsonb_build_object(
   'total',(select count(*) from unread),'agentNoteTotal',(select count(*) from unread where source_type='note'),
   'communicationAgentNoteTotal',(select count(*) from unread where source_type='note' and in_communication),
+  'alertAgentNoteTotal',(select count(*) from events where source_type='note' and in_system_unread),
   'byAgent',coalesce((select jsonb_object_agg(agent_key,unread_count) from agents),'{}'::jsonb),
   'byConversation',coalesce((select jsonb_object_agg(conversation_key,unread_count) from
     (select * from grouped order by latest desc limit 200) g),'{}'::jsonb),

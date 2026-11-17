@@ -34,6 +34,8 @@ do $$declare data jsonb;begin
  data:=public.get_ai_notification_snapshot_v1();
  if (data->>'total')::int<>1 or (data->>'agentNoteTotal')::int<>1 then raise exception 'relay duplicate counted or reminder recipient leaked';end if;
  if not public.mark_ai_conversation_read_v1('agent:sales_leads','note','60000000-0000-4000-8000-000000000001') then raise exception 'agent reminder cannot be marked';end if;
+ if (public.get_ai_notification_snapshot_v1()->>'agentNoteTotal')::int<>0 then raise exception 'read reminder remained in the AI badge';end if;
+ if (public.get_ai_notification_snapshot_v1()->>'alertAgentNoteTotal')::int<>1 then raise exception 'legacy system counter correction was lost after reading agent inbox';end if;
 end$$;
 reset role;
 do $$begin

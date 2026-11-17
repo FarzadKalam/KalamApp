@@ -1,5 +1,6 @@
 import { iranMobileLocal } from '../../../supabase/functions/_shared/phone-number';
 import EmailWorkspace from '../../email/EmailWorkspace';
+import {useDocumentVisible} from '../../../hooks/useDocumentVisible';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   AudioOutlined,
@@ -2615,6 +2616,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
 }) => {
   const { message } = App.useApp();
   const notificationRuntime = useOptionalNotificationRuntime();
+  const documentVisible=useDocumentVisible();
   const [selectedKey, setSelectedKey] = useState(() => normalizeMessagingConversationKey(initialConversationKey));
   const [readEnabledConversationKey, setReadEnabledConversationKey] = useState(() => normalizeMessagingConversationKey(initialConversationKey));
   const [conversationFilter, setConversationFilter] = useState<ChannelKind | 'all' | 'email'>(initialFilter);
@@ -3665,6 +3667,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
 
   useEffect(() => {
     if (!activeConversation.key || !activeEvents.length) return;
+    if (!documentVisible) return;
     if (readEnabledConversationKey !== activeConversation.key) return;
     const currentUserId = String(liveData.profile.id || '').trim();
     const readableEvents = activeEvents.filter((item) => {
@@ -3751,6 +3754,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({
       console.warn('Messaging v2 mark read failed', error);
     });
   }, [
+    documentVisible,
     activeConversation.channel,
     activeConversation.key,
     activeConversation.lastActivityAt,
