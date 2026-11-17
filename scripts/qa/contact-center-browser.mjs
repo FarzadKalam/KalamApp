@@ -22,7 +22,16 @@ try{
  await operatorDialog.getByRole('combobox').first().click();
  const userChoice=page.locator('.ant-select-item-option').filter({hasText:'همکار انتخابی'});
  await userChoice.waitFor();
- assert.ok(await userChoice.evaluate(element=>{const box=element.getBoundingClientRect();return element.contains(document.elementFromPoint(box.x+box.width/2,box.y+box.height/2));}),'user choice is above the modal and clickable');
+ await page.screenshot({path:output+'/operator-picker-open.png'});
+ await page.waitForFunction(label=>{
+  const element=[...document.querySelectorAll('.ant-select-item-option')].find(item=>item.textContent.includes(label));
+  if(!element)return false;const box=element.getBoundingClientRect();
+  const target=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2);
+  window.__pickerLayerCheck={box:{x:box.x,y:box.y,width:box.width,height:box.height},hit:target?.className,
+   popupZ:window.getComputedStyle(element.closest('.ant-select-dropdown')).zIndex,
+   modalZ:[...document.querySelectorAll('.ant-modal-wrap')].map(node=>window.getComputedStyle(node).zIndex)};
+  return element.contains(target);
+ },'همکار انتخابی',{timeout:5000}).catch(async error=>{console.error(JSON.stringify(await page.evaluate(()=>window.__pickerLayerCheck)));throw error;});
  await userChoice.click();await operatorDialog.getByText('همکار انتخابی',{exact:true}).waitFor();
  await page.screenshot({path:output+'/operator-picker.png'});await operatorDialog.getByRole('button',{name:'انصراف',exact:true}).click();
  await page.getByRole('button',{name:'تماس با هوش مصنوعی',exact:true}).click();await page.getByText('آزمایش داخل مرورگر',{exact:true}).waitFor();await page.getByText('تماس با مخاطب',{exact:true}).click();await page.getByLabel('شمارهٔ مخاطب',{exact:true}).waitFor();await page.screenshot({path:output+'/voice-console.png'});await page.keyboard.press('Escape');
