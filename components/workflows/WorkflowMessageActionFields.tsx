@@ -11,6 +11,7 @@ import {
   SendOutlined,
 } from '@ant-design/icons';
 import AdaptiveSelectField from '../AdaptiveSelectField';
+import SaasWorkflowTicketOptions from './SaasWorkflowTicketOptions';
 import type { WorkflowAction } from '../../utils/workflowTypes';
 import {
   getWorkflowMessageChannels,
@@ -28,11 +29,13 @@ const CHANNEL_VISUALS: Record<WorkflowMessageChannel, { icon: React.ReactNode; a
   bot_private: { icon: <SendOutlined />, activeClass: 'border-indigo-400 bg-indigo-50 text-indigo-800 dark:border-indigo-400/70 dark:bg-indigo-500/15 dark:text-indigo-100' },
   instagram: { icon: <InstagramOutlined />, activeClass: 'border-pink-400 bg-pink-50 text-pink-800 dark:border-pink-400/70 dark:bg-pink-500/15 dark:text-pink-100' },
   email: { icon: <MailOutlined />, activeClass: 'border-amber-400 bg-amber-50 text-amber-800 dark:border-amber-400/70 dark:bg-amber-500/15 dark:text-amber-100' },
+  ticket: { icon: <FileTextOutlined />, activeClass: 'border-sky-400 bg-sky-50 text-sky-800 dark:border-sky-400/70 dark:bg-sky-500/15 dark:text-sky-100' },
 };
 
 type Props = {
   action: WorkflowAction;
   disabled?: boolean;
+  canSendTicket?: boolean;
   recipientFieldOptions: Array<{ label: string; value: string }>;
   /** قرارداد لایهٔ نمایشِ سازندهٔ گردش‌کار برای popup انتخاب فیلدهای گیرنده. */
   recipientFieldPickerProps?: Pick<React.ComponentProps<typeof AdaptiveSelectField>, 'getPopupContainer' | 'modalContainer' | 'overlayZIndexBase' | 'adaptiveMode' | 'preferLocalPopupContainer' | 'listHeight' | 'popupMatchSelectWidth' | 'showSearch' | 'optionFilterProp'>;
@@ -50,6 +53,7 @@ type Props = {
 const WorkflowMessageActionFields: React.FC<Props> = ({
   action,
   disabled = false,
+  canSendTicket = false,
   recipientFieldOptions,
   recipientFieldPickerProps,
   renderIdentityRecipientPicker,
@@ -63,7 +67,7 @@ const WorkflowMessageActionFields: React.FC<Props> = ({
   webFormRelationModuleOptions,
 }) => {
   const config = action.config || {};
-  const selectedChannels = getWorkflowMessageChannels(action);
+  const selectedChannels = getWorkflowMessageChannels(action).filter((channel) => channel !== 'ticket' || canSendTicket);
   const [activeChannel, setActiveChannel] = useState<WorkflowMessageChannel | null>(() => selectedChannels[0] || null);
 
   const selectedSet = useMemo(() => new Set(selectedChannels), [selectedChannels]);
@@ -130,7 +134,7 @@ const WorkflowMessageActionFields: React.FC<Props> = ({
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
-        {WORKFLOW_MESSAGE_CHANNELS.map((channel) => {
+        {WORKFLOW_MESSAGE_CHANNELS.filter((channel) => channel !== 'ticket' || canSendTicket).map((channel) => {
           const visual = CHANNEL_VISUALS[channel];
           const isActive = selectedSet.has(channel);
           return (
@@ -150,11 +154,16 @@ const WorkflowMessageActionFields: React.FC<Props> = ({
       </div>
 
       <Input
+        aria-label="عنوان پیام"
+        aria-required={selectedSet.has('ticket')}
         value={String(config[getWorkflowMessageTitleField(action)] || '')}
         disabled={disabled}
         onChange={(event) => onConfigPatch({ [getWorkflowMessageTitleField(action)]: event.target.value })}
-        placeholder="عنوان پیام (اختیاری؛ برای گزارش‌ها و تشخیص ارسال‌ها)"
+        placeholder={selectedSet.has('ticket') ? 'عنوان تیکت (الزامی)' : 'عنوان پیام (اختیاری؛ برای گزارش‌ها و تشخیص ارسال‌ها)'}
       />
+
+      {canSendTicket && selectedSet.has('ticket')
+        ? <SaasWorkflowTicketOptions config={config} disabled={disabled} onChange={onConfigPatch} /> : null}
 
       <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
         <AdaptiveSelectField

@@ -21,6 +21,7 @@ import { executeSaasModuleAction } from '../../utils/saasAdminModules';
 import { isPlanValueEnabled } from '../../utils/planAccessEditing';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { supabase } from '../../supabaseClient';
+import SaasSalesCustomerLink from './SaasSalesCustomerLink';
 import { SAAS_FEATURE_GROUPS, SAAS_FEATURE_OPTIONS, SAAS_MODULE_GROUPS, SAAS_QUOTA_OPTIONS } from '../../utils/saasOfferingCatalog';
 import {
   deriveLegacyEnabledAiAgentFeatureKeys,
@@ -346,6 +347,7 @@ const SaasOrgAdminDrawer: React.FC<Props> = ({ open, record, onClose, onChanged 
           <Descriptions.Item label="پایان دوره آزمایشی">{displayDate(record?.trial_ends_at)}</Descriptions.Item>
         </Descriptions>
 
+        {open && sourceKind === 'org' && orgId ? <SaasSalesCustomerLink key={orgId} tenantId={orgId} /> : null}
         <Divider orientation="right" plain>مالک و اطلاعات تماس</Divider>
         <Descriptions bordered size="small" column={1}>
           <Descriptions.Item label="نام مالک / متقاضی">{owner?.owner_name || record?.owner_name || '—'}</Descriptions.Item>
