@@ -91,6 +91,11 @@ export type CommissionDraftLine = {
   quantity: number;
   net_amount: number;
   commission_percent: number;
+  commission_base_amount?: number;
+  commission_rate_missing?: boolean;
+  commission_rate_overridden?: boolean;
+  product_module?: 'products' | 'billboards';
+  reserved_backlog_amount?: number;
   entitled_amount: number;
   posted_amount: number;
   remaining_amount: number;
@@ -123,6 +128,8 @@ export type CommissionDraftRow = {
   invoice_status: string | null;
   invoice_total_amount: number;
   invoice_received_amount: number;
+  invoice_verified_received_amount?: number;
+  invoice_future_base_amount?: number;
   invoice_tags: unknown;
   basis: CommissionBasis;
   percent_mode: CommissionPercentMode;
@@ -298,16 +305,6 @@ export const hydrateCommissionReceiptCheques = (
   return { payments, issues };
 };
 
-const resolveInvoiceReceivedAmount = (invoice: CommissionInvoiceRecord) => {
-  const payments = Array.isArray(invoice.payments) ? invoice.payments : [];
-  const datedValidReceipts = payments
-    .filter((payment) => isValidReceiptPayment(payment))
-    .reduce((sum, payment) => sum + resolvePaymentAmount(payment), 0);
-  // برای داده‌های قدیمی که هنوز سطر پرداخت ندارند، مقدار موجود فقط نمایشی است
-  // و هرگز مبنای ایجاد پورسانت نخواهد بود.
-  return datedValidReceipts > 0 ? datedValidReceipts : toNumber(invoice.total_received_amount);
-};
-
 const resolveLegacyRecordedCollection = (
   invoice: CommissionInvoiceRecord,
   invoiceTotal: number,
@@ -402,7 +399,7 @@ export const reconcileCommissionHistory = ({ invoices, postedAllocations = [], e
 };
 
 const getProductLabel = (item: any, index: number) =>
-  normalizeText(item?.product_name || item?.name || item?.title || item?.description || item?.product_id || item?.package_id)
+  normalizeText(item?.product_name || item?.name || item?.title || item?.description)
   || `ردیف ${index + 1}`;
 
 const getItemCommissionPercent = (
@@ -516,6 +513,37 @@ const findLatestPaymentDate = (
     .filter((value): value is number => value !== null)
     .sort((a, b) => b - a)[0];
   return latest ? new Date(latest).toISOString() : null;
+};
+
+/** Cumulative, verified receipts through the selected period; pending cheques remain outstanding. */
+export const getCommissionInvoiceFinancials = (invoice: CommissionInvoiceRecord, periodEnd: string) => {
+  const total = Math.max(0, resolveInvoiceTotalAmount(invoice));
+  const received = Math.max(0, sumPaymentsUntil(invoice.payments || [], periodEnd, isValidReceiptPayment, receiptDate));
+  return {
+    invoice_total_amount: total,
+    invoice_received_amount: received,
+    invoice_verified_received_amount: received,
+    invoice_future_base_amount: Math.max(0, total - received),
+  };
+};
+
+/** Historical snapshots predate the explicit base field; rate and entitlement preserve its original value. */
+export const getCommissionLineBaseAmount = (line: Record<string, any>): number | null => {
+  if (line.commission_base_amount != null) return Math.max(0, toNumber(line.commission_base_amount));
+  if (toNumber(line.commission_percent) > 0 && line.entitled_amount != null)
+    return Math.max(0, (toNumber(line.entitled_amount) - toNumber(line.posted_amount)) * 100 / toNumber(line.commission_percent));
+  return null;
+};
+
+export const updateCommissionLineRate = (row: CommissionDraftRow, lineKey: string, percent: number): CommissionDraftRow => {
+  if (!Number.isFinite(percent) || percent < 0 || percent > 100) throw new Error('درصد باید بین صفر و صد باشد.');
+  const backlog = row.key.startsWith('commission_backlog:');
+  return recomputeCommissionDraftRow({ ...row, mode: backlog ? 'fixed' : 'pool', lines: row.lines.map(line => {
+    if (line.key !== lineKey) return line;
+    const entitlement = backlog && line.commission_percent > 0 ? line.entitled_amount / line.commission_percent * percent : line.entitled_amount;
+    return { ...line, commission_percent: percent, commission_rate_missing: false, commission_rate_overridden: true,
+      entitled_amount: entitlement, remaining_amount: backlog ? Math.max(0, entitlement - line.posted_amount) : line.remaining_amount };
+  }) });
 };
 
 const resolveFullSettlementAt = (
@@ -857,7 +885,7 @@ const recomputePoolRow = (row: CommissionDraftRow): CommissionDraftRow => {
 
   const nextLines = row.lines.map((line) => {
     const active = allocatableLines.some((item) => item.key === line.key);
-    const entitledAmount = active ? (line.net_amount * (line.commission_percent / 100) * ratio) : 0;
+    const entitledAmount = Math.max(0, (active ? (line.net_amount * (line.commission_percent / 100) * ratio) : 0) - (line.reserved_backlog_amount || 0));
     const postedAmount = clamp(line.posted_amount, 0, entitledAmount);
     const remainingAmount = Math.max(0, entitledAmount - postedAmount);
     const selectedAmount = line.decision_status === 'defer_to_next_period' ? 0 : remainingAmount;
@@ -871,6 +899,7 @@ const recomputePoolRow = (row: CommissionDraftRow): CommissionDraftRow => {
 
     return {
       ...line,
+      commission_base_amount: line.commission_percent > 0 ? remainingAmount * 100 / line.commission_percent : 0,
       entitled_amount: entitledAmount,
       remaining_amount: remainingAmount,
       selected_amount: selectedAmount,
@@ -904,6 +933,7 @@ const recomputeFixedRow = (row: CommissionDraftRow): CommissionDraftRow => {
             : null;
     return {
       ...line,
+      commission_base_amount: line.commission_percent > 0 ? remainingAmount * 100 / line.commission_percent : 0,
       remaining_amount: remainingAmount,
       selected_amount: selectedAmount,
       exclusion_reason: exclusionReason,
@@ -932,6 +962,7 @@ export const getCommissionLineReviewBucket = (
   line: CommissionDraftLine,
 ): CommissionReviewBucket => {
   if (line.decision_status === 'exclude') return 'excluded';
+  if (line.commission_rate_missing) return 'current_period';
   if (line.decision_status === 'include' && line.selected_amount > 0) return 'current_period';
   if (line.is_from_previous_period || line.decision_status === 'defer_to_next_period') return 'backlog';
   if (line.selected_amount > 0 || line.remaining_amount > 0) return 'current_period';
@@ -994,7 +1025,10 @@ export const buildCommissionDraftRows = ({
     if (invoiceItems.length === 0) continue;
 
     const event = getInvoiceEvent(invoice, basis, periodStart, periodEnd);
-    if (!includeNotCalculated && event.poolAmount <= 0) continue;
+    const hasMissingRate = invoiceItems.some(item => getItemCommissionPercent(item, employeeId, percentMode, employeeDefaultCommissionByEmployeeId) <= 0);
+    const showMissingRate = hasMissingRate && (event.poolAmount > 0 || Boolean(invoice.invoice_date && invoice.invoice_date <= periodEnd))
+      && !['canceled', 'cancelled'].includes(normalizeText(invoice.status).toLowerCase());
+    if (!includeNotCalculated && event.poolAmount <= 0 && !showMissingRate) continue;
 
     const isHistoricalCollection = basis === 'prepaid_and_settled_invoices'
       && event.poolAmount > 0 && event.eventAt != null
@@ -1043,7 +1077,7 @@ export const buildCommissionDraftRows = ({
         employee_id: employeeId,
         assignee_id: assigneeId,
         invoice_id: String(invoice.id),
-        invoice_name: normalizeText(invoice.name) || String(invoice.id || 'فاکتور فروش'),
+        invoice_name: normalizeText(invoice.name) || 'فاکتور بدون عنوان',
         invoice_date: invoice.invoice_date || null,
         invoice_status: invoice.status || null,
         invoice_item_key: itemKey,
@@ -1052,6 +1086,9 @@ export const buildCommissionDraftRows = ({
         quantity: toNumber(item?.quantity ?? item?.qty ?? 0),
         net_amount: netAmount,
         commission_percent: percent,
+        commission_rate_missing: percent <= 0 && savedDraft?.details?.commission_rate_overridden !== true,
+        commission_rate_overridden: savedDraft?.details?.commission_rate_overridden === true,
+        product_module: item?.commission_product_module,
         entitled_amount: Math.max(0, toNumber(savedDraft?.entitled_amount)),
         posted_amount: Math.max(
           Math.max(0, toNumber(savedDraft?.posted_amount)),
@@ -1083,11 +1120,10 @@ export const buildCommissionDraftRows = ({
       employee_id: employeeId,
       assignee_id: assigneeId,
       invoice_id: String(invoice.id),
-      invoice_name: normalizeText(invoice.name) || String(invoice.id || 'فاکتور فروش'),
+      invoice_name: normalizeText(invoice.name) || 'فاکتور بدون عنوان',
       invoice_date: invoice.invoice_date || null,
       invoice_status: invoice.status || null,
-      invoice_total_amount: Math.max(0, resolveInvoiceTotalAmount(invoice)),
-      invoice_received_amount: Math.max(0, resolveInvoiceReceivedAmount(invoice)),
+      ...getCommissionInvoiceFinancials(invoice, periodEnd),
       invoice_tags: invoice.tags ?? null,
       basis,
       percent_mode: percentMode,
@@ -1113,13 +1149,13 @@ export const buildCommissionDraftRows = ({
         lines: calculatedRow.lines.map(line => {
           const reservedAmount = deferredReservationByItem.get(line.invoice_item_key) || 0;
           const remainingAmount = Math.max(0, line.remaining_amount - reservedAmount);
-          return reservedAmount > 0 ? { ...line, remaining_amount: remainingAmount,
+          return reservedAmount > 0 ? { ...line, remaining_amount: remainingAmount, reserved_backlog_amount: reservedAmount,
             entitled_amount: Math.max(0, line.entitled_amount - Math.min(line.remaining_amount, reservedAmount)) } : line;
         }) });
     }
     // فاکتورهای قدیمی که برای این دوره هیچ رویداد تازه یا تصمیم دستی ندارند،
     // نباید در معوق یا مستثنا نمایش داده شوند.
-    if (includeNotCalculated || calculatedRow.lines.some((line) => line.selected_amount > 0 || line.decision_status !== 'auto')) {
+    if (includeNotCalculated || showMissingRate || calculatedRow.lines.some((line) => line.selected_amount > 0 || line.decision_status !== 'auto')) {
       rows.push(calculatedRow);
     }
   }
@@ -1142,7 +1178,7 @@ export const buildCommissionDraftRows = ({
       employee_id: draft.employee_id,
       assignee_id: normalizeText(draft.assignee_id),
       invoice_id: draft.invoice_id,
-      invoice_name: String(details.invoice_name || draft.invoice_id || 'فاکتور فروش'),
+      invoice_name: String(details.invoice_name || 'فاکتور بدون عنوان'),
       invoice_date: details.invoice_date || null,
       invoice_status: details.invoice_status || null,
       invoice_item_key: draft.invoice_item_key,
@@ -1151,6 +1187,10 @@ export const buildCommissionDraftRows = ({
       quantity: toNumber(details.quantity),
       net_amount: Math.max(0, toNumber(details.net_amount)),
       commission_percent: Math.max(0, toNumber(details.commission_percent)),
+      product_module: details.product_module || invoices.find(invoice => invoice.id === draft.invoice_id)?.invoiceItems
+        ?.find(item => String(item.product_id || '') === String(details.product_id || ''))?.commission_product_module,
+      commission_rate_overridden: details.commission_rate_overridden === true,
+      commission_rate_missing: toNumber(details.commission_percent) <= 0 && details.commission_rate_overridden !== true,
       entitled_amount: Math.max(0, toNumber(draft.entitled_amount)),
       posted_amount: Math.max(0, toNumber(draft.posted_amount)),
       remaining_amount: Math.max(0, toNumber(draft.remaining_amount)),
@@ -1182,6 +1222,7 @@ export const buildCommissionDraftRows = ({
     const first = entries[0];
     if (!first) return;
     const details = first.draft.details || {};
+    const currentInvoice = invoices.find(invoice => invoice.id === first.draft.invoice_id);
     const lines = entries.map((entry) => entry.line);
     rows.push(recomputeCommissionDraftRow({
       key: `commission_backlog:${first.draft.employee_id}:${first.draft.invoice_id}`,
@@ -1189,11 +1230,13 @@ export const buildCommissionDraftRows = ({
       employee_id: first.draft.employee_id,
       assignee_id: normalizeText(first.draft.assignee_id),
       invoice_id: first.draft.invoice_id,
-      invoice_name: String(details.invoice_name || first.draft.invoice_id || 'فاکتور فروش'),
+      invoice_name: String(details.invoice_name || 'فاکتور بدون عنوان'),
       invoice_date: details.invoice_date || null,
       invoice_status: details.invoice_status || null,
-      invoice_total_amount: Math.max(0, toNumber(details.invoice_total_amount)),
-      invoice_received_amount: Math.max(0, toNumber(details.invoice_received_amount)),
+      ...(currentInvoice ? getCommissionInvoiceFinancials(currentInvoice, periodEnd) : {
+        invoice_total_amount: Math.max(0, toNumber(details.invoice_total_amount)),
+        invoice_received_amount: Math.max(0, toNumber(details.invoice_received_amount)),
+      }),
       invoice_tags: details.invoice_tags ?? null,
       basis: first.draft.source_basis,
       percent_mode: first.draft.percent_mode,

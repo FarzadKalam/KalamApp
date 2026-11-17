@@ -1,3 +1,6 @@
+import CommissionRatePopover from '../components/hr/CommissionRatePopover';
+import CommissionInvoiceFinancials from '../components/hr/CommissionInvoiceFinancials';
+import { saveCommissionProductDefault } from '../utils/commissionRateEditing';
 import CommissionSummary from '../components/hr/CommissionSummary';
 import { loadCommissionPeriodInvoices } from '../utils/commissionPeriodData';
 import { summarizeCommissionPeriod } from '../utils/commissionRuntime';
@@ -171,6 +174,8 @@ import {
   hydrateCommissionReceiptCheques,
   buildCommissionDraftSourceKey,
   getCommissionLineReviewBucket,
+  getCommissionLineBaseAmount,
+  updateCommissionLineRate,
   recomputeCommissionDraftRow,
   type CommissionBasis,
   type CommissionDecisionStatus,
@@ -5020,8 +5025,9 @@ const HRPage: React.FC = () => {
           const billboard = billboardById.get(String(item?.product_id || ''));
           return {
             ...item,
-            product_name: item?.product_name || item?.name || product?.name || billboard?.name || billboard?.address || item?.product_id || null,
+            product_name: item?.product_name || item?.name || product?.name || billboard?.name || billboard?.address || null,
             commission_percentage: item?.commission_percentage ?? product?.commission_percentage ?? billboard?.commission_percentage ?? 0,
+            commission_product_module: product ? 'products' : billboard ? 'billboards' : undefined,
           };
         }),
       });});
@@ -5150,7 +5156,7 @@ const HRPage: React.FC = () => {
         cheques: authoritativeCheques.map((cheque) => ({ id: cheque.id, status: cheque.status, cleared_at: cheque.cleared_at || null, spent_date: cheque.spent_date || null })),
       });
       setCommissionRows(previewRows);
-      setCommissionReviewTab(previewRows.some((row) => row.selected_amount > 0) ? 'current_period' : 'backlog');
+      setCommissionReviewTab(previewRows.some((row) => row.selected_amount > 0 || row.lines.some(line => line.commission_rate_missing)) ? 'current_period' : 'backlog');
     } catch (err: any) {
       if (err?.errorFields) return;
       message.error(toFaErrorMessage(err, 'محاسبه پورسانت ناموفق بود'));
@@ -5217,6 +5223,26 @@ const HRPage: React.FC = () => {
     String(row?.sourceRowKey || row?.key || '').replace(/:(current_period|backlog|excluded)$/, '')
   ), []);
 
+  const renderCommissionRateItem = (label: string, line: CommissionDraftLine, invoiceRow: any) => (
+    <CommissionRatePopover line={{ ...line, product_label: label }} onSave={async (percent, saveDefault) => {
+      if (saveDefault) {
+        if (!line.product_module || !line.product_id) throw new Error('رکورد اصلی این قلم پیدا نشد.');
+        await saveCommissionProductDefault(line.product_module, line.product_id, percent);
+      }
+      const rowKey = resolveCommissionReviewRowKey(invoiceRow);
+      setCommissionRows(current => current.map(row => row.key === rowKey ? updateCommissionLineRate(row, line.key, percent) : row));
+      message.success(saveDefault ? 'پیش‌فرض قلم ذخیره و درصد ردیف اعمال شد؛ محاسبه را ذخیره کنید.' : 'درصد این ردیف اعمال شد؛ برای نگهداری، محاسبه را ذخیره کنید.');
+    }} />
+  );
+
+  const commissionBaseColumn = {
+    title: 'مبلغ مبنای محاسبهٔ پورسانت', key: 'commission_base_amount',
+    render: (_: unknown, line: any) => {
+      const amount = getCommissionLineBaseAmount(line);
+      return <span className="persian-number">{amount == null ? 'در سابقه ثبت نشده' : formatMoney(amount)}</span>;
+    },
+  };
+
   const buildCommissionDraftPayloads = useCallback(async ({
     periodStart,
     periodEnd,
@@ -5235,6 +5261,7 @@ const HRPage: React.FC = () => {
         || line.remaining_amount > 0
         || line.decision_status !== 'auto'
         || Boolean(line.draft_id)
+        || Boolean(line.commission_rate_overridden)
       ))
       .map(({ row, line }) => {
         const postedAmount = posting ? line.posted_amount + line.selected_amount : line.posted_amount;
@@ -5280,12 +5307,18 @@ const HRPage: React.FC = () => {
             invoice_status: row.invoice_status,
             invoice_total_amount: row.invoice_total_amount,
             invoice_received_amount: row.invoice_received_amount,
+            invoice_verified_received_amount: row.invoice_verified_received_amount,
+            invoice_future_base_amount: row.invoice_future_base_amount,
             invoice_tags: row.invoice_tags,
             product_id: line.product_id,
             product_label: line.product_label,
             quantity: line.quantity,
             net_amount: line.net_amount,
             commission_percent: line.commission_percent,
+            commission_base_amount: line.commission_base_amount,
+            commission_rate_missing: line.commission_rate_missing,
+            commission_rate_overridden: line.commission_rate_overridden,
+            product_module: line.product_module,
             event_pool_amount: row.event_pool_amount,
           },
         };
@@ -5325,7 +5358,7 @@ const HRPage: React.FC = () => {
     const employeeLabel = selectedProfile.full_name || 'بازاریاب انتخاب‌شده';
     const basis = commissionForm.getFieldValue('basis') as CommissionBasis;
     const percentMode = commissionForm.getFieldValue('percent_mode') as CommissionPercentMode;
-    const activeRows = commissionRows.filter((row) => row.selected_amount > 0 || row.lines.some((line) => line.decision_status !== 'auto'));
+    const activeRows = commissionRows.filter((row) => row.selected_amount > 0 || row.lines.some((line) => line.decision_status !== 'auto' || line.commission_rate_overridden || line.commission_rate_missing));
     const selectedLines = activeRows.flatMap((row) => row.lines.filter((line) => line.selected_amount > 0));
     const invoiceIds = Array.from(new Set(activeRows.map((row) => String(row.invoice_id || '').trim()).filter(Boolean)));
     const amount = activeRows.reduce((sum, row) => sum + row.selected_amount, 0);
@@ -5396,6 +5429,10 @@ const HRPage: React.FC = () => {
             invoice_status: row.invoice_status,
             basis: row.basis,
             percent_mode: row.percent_mode,
+            invoice_total_amount: row.invoice_total_amount,
+            invoice_received_amount: row.invoice_received_amount,
+            invoice_verified_received_amount: row.invoice_verified_received_amount,
+            invoice_future_base_amount: row.invoice_future_base_amount,
             base_amount: row.base_amount,
             entitled_amount: row.entitled_amount,
             posted_amount: row.posted_amount,
@@ -5421,6 +5458,10 @@ const HRPage: React.FC = () => {
               quantity: line.quantity,
               net_amount: line.net_amount,
               commission_percent: line.commission_percent,
+              commission_base_amount: line.commission_base_amount,
+              commission_rate_missing: line.commission_rate_missing,
+              commission_rate_overridden: line.commission_rate_overridden,
+              product_module: line.product_module,
               commission_amount: line.selected_amount,
               entitled_amount: line.entitled_amount,
               posted_amount: line.posted_amount,
@@ -7685,7 +7726,7 @@ const HRPage: React.FC = () => {
       key: 'employeeName',
       render: (_: unknown, row: any) => (
         <span className="font-bold text-leather-700">
-          {profiles.find((profile) => String(profile.source_id || '') === String(row.employee_id))?.full_name || row.employee_id}
+          {profiles.find((profile) => String(profile.source_id || '') === String(row.employee_id))?.full_name || 'بازاریاب'}
         </span>
       ),
     },
@@ -7699,6 +7740,7 @@ const HRPage: React.FC = () => {
           <div className="flex flex-wrap items-center gap-1">
             <a href={`/invoices/${row.invoice_id}`} target="_blank" rel="noopener noreferrer" className="text-leather-700 hover:underline">{val}</a>
             {hasCheque && <Tag color="orange" className="text-xs">چک</Tag>}
+            {row.lines?.some((line: CommissionDraftLine) => line.commission_rate_missing) && <Tag color="warning">پورسانت تعریف نشده</Tag>}
           </div>
         );
       },
@@ -7713,13 +7755,16 @@ const HRPage: React.FC = () => {
       title: 'جمع نهایی فاکتور',
       dataIndex: 'invoice_total_amount',
       key: 'invoice_total_amount',
-      render: (val: number) => <span className="persian-number">{formatMoney(val)}</span>,
+      render: (_: number, row: any) => <CommissionInvoiceFinancials row={row} field="invoice_total_amount" formatMoney={formatMoney} />,
     },
     {
-      title: 'جمع دریافتی',
-      dataIndex: 'invoice_received_amount',
+      title: 'جمع وصول‌شده تا پایان دوره',
+      dataIndex: 'invoice_verified_received_amount',
       key: 'invoice_received_amount',
-      render: (val: number) => <span className="persian-number">{formatMoney(val)}</span>,
+      render: (_: number, row: any) => <CommissionInvoiceFinancials row={row} field="invoice_verified_received_amount" formatMoney={formatMoney} />,
+    },
+    { title: 'ماندهٔ مبلغ برای ماه‌های بعد', dataIndex: 'invoice_future_base_amount', key: 'invoice_future_base_amount',
+      render: (_: number, row: any) => <CommissionInvoiceFinancials row={row} field="invoice_future_base_amount" formatMoney={formatMoney} />,
     },
     {
       title: 'سهم بازاریاب',
@@ -8441,17 +8486,20 @@ const HRPage: React.FC = () => {
                               سهم: <span className="font-bold text-green-700">{formatMoney(toNumber(invRow.selected_amount))}</span>
                             </span>
                           </div>
+                          <CommissionInvoiceFinancials row={{ ...invRow, source_period_end: invRow.source_period_end || ledgerRow.period_end }} formatMoney={formatMoney} />
                           {lines.length > 0 && (
                             <Table
                               rowKey={(line: any, lineIdx?: number) => line.source_key || line.item_key || String(lineIdx ?? 0)}
                               size="small"
                               pagination={false}
                               dataSource={lines}
+                              scroll={{ x: 1000 }}
                               className="commission-detail-lines"
                               columns={[
                                 { title: 'کالا/خدمات', dataIndex: 'product_label', key: 'product_label', render: (val: string) => <span className="text-sm">{val || '-'}</span> },
                                 { title: 'تعداد', dataIndex: 'quantity', key: 'quantity', render: (val: number) => <span className="persian-number">{toPersianNumber(val)}</span> },
                                 { title: 'مبلغ ردیف', dataIndex: 'net_amount', key: 'net_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
+                                commissionBaseColumn,
                                 { title: 'درصد پورسانت', dataIndex: 'commission_percent', key: 'commission_percent', render: (val: number) => <span className="persian-number">{toPersianNumber(val)}٪</span> },
                                 { title: 'مبلغ پورسانت', dataIndex: 'commission_amount', key: 'commission_amount', render: (val: number) => <span className="persian-number font-bold text-green-700">{formatMoney(val)}</span> },
                                 { title: 'تصمیم', dataIndex: 'decision_status', key: 'decision_status', render: (val: string) => {
@@ -9588,6 +9636,9 @@ const HRPage: React.FC = () => {
                 </Button>
               </Space>
             </div>
+            {commissionRows.some(row => row.lines.some(line => line.commission_rate_missing)) && <Alert type="warning" showIcon className="mb-3"
+              message={`${toPersianNumber(commissionRows.reduce((sum, row) => sum + row.lines.filter(line => line.commission_rate_missing).length, 0))} قلم درصد پورسانت ندارد`}
+              description="این فاکتورها در فهرست نگه داشته شده‌اند. برای مشاهده و تعیین درصد، روی نام قلم کلیک کنید. تا تعیین درصد، سهم این اقلام صفر است." />}
             {commissionLoading ? (
               <div className="py-10 flex items-center justify-center"><Spin /></div>
             ) : (
@@ -9642,10 +9693,12 @@ const HRPage: React.FC = () => {
                                       size="small"
                                       pagination={false}
                                       dataSource={invoiceRow.lines}
+                                      scroll={{ x: 1100 }}
                                       columns={[
-                                        { title: 'کالا/خدمات', dataIndex: 'product_label', key: 'product_label' },
+                                        { title: 'کالا/خدمات', dataIndex: 'product_label', key: 'product_label', render: (label: string, line: CommissionDraftLine) => renderCommissionRateItem(label, line, invoiceRow) },
                                         { title: 'تعداد', dataIndex: 'quantity', key: 'quantity', render: (val: number) => <span className="persian-number">{toPersianNumber(val)}</span> },
                                         { title: 'مبلغ نهایی ردیف', dataIndex: 'net_amount', key: 'net_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
+                                        commissionBaseColumn,
                                         { title: 'درصد', dataIndex: 'commission_percent', key: 'commission_percent', render: (val: number) => <span className="persian-number">{toPersianNumber(val)}%</span> },
                                         { title: 'احراز این دوره', dataIndex: 'entitled_amount', key: 'entitled_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
                                         { title: 'قبلاً ثبت‌شده', dataIndex: 'posted_amount', key: 'posted_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
@@ -9705,9 +9758,11 @@ const HRPage: React.FC = () => {
                                   size="small"
                                   pagination={false}
                                   dataSource={invoiceRow.lines}
+                                  scroll={{ x: 900 }}
                                   columns={[
-                                    { title: 'قلم', dataIndex: 'product_label', key: 'product_label' },
+                                    { title: 'قلم', dataIndex: 'product_label', key: 'product_label', render: (label: string, line: CommissionDraftLine) => renderCommissionRateItem(label, line, invoiceRow) },
                                     { title: 'دوره احراز', key: 'sourcePeriod', render: (_: unknown, line: CommissionDraftLine) => <span className="persian-number">{toPersianNumber(safeJalaliFormat(line.source_period_start, 'YYYY/MM/DD'))}</span> },
+                                    commissionBaseColumn,
                                     { title: 'مانده', dataIndex: 'remaining_amount', key: 'remaining_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
                                     { title: 'وضعیت', key: 'decision', render: (_: unknown, line: CommissionDraftLine) => <Tag color={line.decision_status === 'defer_to_next_period' ? 'orange' : 'blue'}>{line.decision_status === 'defer_to_next_period' ? 'منتقل‌شده' : 'آماده تصمیم'}</Tag> },
                                     {
@@ -9760,9 +9815,11 @@ const HRPage: React.FC = () => {
                               size="small"
                               pagination={false}
                               dataSource={invoiceRow.lines}
+                              scroll={{ x: 900 }}
                               columns={[
-                                { title: 'قلم', dataIndex: 'product_label', key: 'product_label' },
+                                { title: 'قلم', dataIndex: 'product_label', key: 'product_label', render: (label: string, line: CommissionDraftLine) => renderCommissionRateItem(label, line, invoiceRow) },
                                 { title: 'مبلغ نهایی', dataIndex: 'net_amount', key: 'net_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
+                                commissionBaseColumn,
                                 { title: 'علت', key: 'reason', render: (_: unknown, line: CommissionDraftLine) => <span>{line.exclusion_reason || invoiceRow.exclusion_reason || '-'}</span> },
                                 {
                                   title: 'اقدام',
@@ -9841,6 +9898,7 @@ const HRPage: React.FC = () => {
                                     columns={[
                                       { title: 'قلم', dataIndex: 'product_label', key: 'product_label' },
                                       { title: 'مبلغ نهایی', dataIndex: 'net_amount', key: 'net_amount', render: (value: number) => <span className="persian-number">{formatMoney(toNumber(value))}</span> },
+                                      commissionBaseColumn,
                                       { title: 'درصد', dataIndex: 'commission_percent', key: 'commission_percent', render: (value: number) => <span className="persian-number">{toPersianNumber(value)}٪</span> },
                                       { title: 'پورسانت ثبت‌شده', dataIndex: 'commission_amount', key: 'commission_amount', render: (value: number) => <span className="persian-number font-bold text-green-700">{formatMoney(toNumber(value))}</span> },
                                     ]}

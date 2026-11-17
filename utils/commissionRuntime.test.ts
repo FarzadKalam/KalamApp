@@ -9,10 +9,81 @@ import {
   mergeCommissionInvoicePayments,
   recomputeCommissionDraftRow,
   summarizeCommissionPeriod,
+  getCommissionInvoiceFinancials,
+  getCommissionLineBaseAmount,
+  updateCommissionLineRate,
   type CommissionPersistedDraft,
 } from './commissionRuntime';
 
 describe('commissionRuntime', () => {
+  it('allows rating an old previously unrated receipt without requiring a new payment', () => {
+    const args = collectedAuditArgs({ payments: [{ amount: 400000, status: 'received', payment_type: 'cash', date: '2026-04-10' }],
+      invoiceItems: [{ id: 'item-1', line_total: 1000000, commission_percentage: 0 }] });
+    const [row] = buildCommissionDraftRows(args);
+    expect(row.mode).toBe('fixed');
+    expect(row.lines[0].commission_rate_missing).toBe(true);
+    const edited = updateCommissionLineRate(row, row.lines[0].key, 5);
+    expect(edited.selected_amount).toBe(20000);
+    expect(edited.lines[0].commission_base_amount).toBe(400000);
+  });
+
+  it('reallocates a partial receipt across all rated items after resolving a missing rate', () => {
+    const args = collectedAuditArgs({ payments: [{ amount: 500000, status: 'received', payment_type: 'cash', date: '2026-05-10' }],
+      invoiceItems: [{ id: 'item-1', line_total: 500000, commission_percentage: 10 }, { id: 'item-2', line_total: 500000, commission_percentage: 0 }] });
+    const [row] = buildCommissionDraftRows(args);
+    expect(row.selected_amount).toBe(50000);
+    const edited = updateCommissionLineRate(row, row.lines[1].key, 5);
+    expect(edited.selected_amount).toBe(37500);
+    expect(edited.lines.map(line => line.commission_base_amount)).toEqual([250000, 250000]);
+  });
+
+  it('keeps a receipt invoice with no rate visible and recalculates it after an explicit rate', () => {
+    const args = collectedAuditArgs({ payments: [{ amount: 400000, status: 'received', payment_type: 'cash', date: '2026-05-10' }],
+      invoiceItems: [{ id: 'item-1', line_total: 1000000, commission_percentage: 0 }] });
+    const [row] = buildCommissionDraftRows(args);
+    expect(row.lines[0].commission_rate_missing).toBe(true);
+    expect(row.selected_amount).toBe(0);
+    const edited = updateCommissionLineRate(row, row.lines[0].key, 5);
+    expect(edited.selected_amount).toBe(20000);
+    expect(edited.lines[0].commission_base_amount).toBe(400000);
+    expect(edited.lines[0].commission_rate_missing).toBe(false);
+    expect(() => updateCommissionLineRate(row, row.lines[0].key, 101)).toThrow();
+  });
+
+  it('preserves an explicitly saved zero rate without warning or employee fallback', () => {
+    const args = collectedAuditArgs({ payments: [{ amount: 400000, status: 'received', payment_type: 'cash', date: '2026-05-10' }] });
+    const [row] = buildCommissionDraftRows(args);
+    const line = row.lines[0];
+    const [restored] = buildCommissionDraftRows({ ...args, includeNotCalculated: true, existingDrafts: [{
+      source_key: line.source_key, employee_id: line.employee_id, invoice_id: line.invoice_id, invoice_item_key: line.invoice_item_key,
+      source_basis: row.basis, percent_mode: row.percent_mode, period_start: args.periodStart, period_end: args.periodEnd,
+      entitled_amount: 0, posted_amount: 0, remaining_amount: 0, decision_status: 'auto', draft_status: 'draft',
+      details: { commission_percent: 0, commission_rate_overridden: true },
+    }] });
+    expect(restored.lines[0].commission_percent).toBe(0);
+    expect(restored.lines[0].commission_rate_missing).toBe(false);
+  });
+
+  it('shows only the newly unposted base for partial collections and historical rows', () => {
+    const args = collectedAuditArgs({ payments: [{ amount: 600000, status: 'received', payment_type: 'cash', date: '2026-05-10' }] });
+    const [initial] = buildCommissionDraftRows(args);
+    const [row] = buildCommissionDraftRows({ ...args, postedAllocations: [{ invoice_id: 'audit-invoice',
+      invoice_item_key: initial.lines[0].invoice_item_key, posted_amount: 40000,
+      basis: 'prepaid_and_settled_invoices', percent_mode: 'product_default' }] });
+    expect(row.selected_amount).toBe(20000);
+    expect(row.lines[0].commission_base_amount).toBe(200000);
+    expect(getCommissionLineBaseAmount({ entitled_amount: 60000, posted_amount: 40000, commission_percent: 10 })).toBe(200000);
+  });
+
+  it('leaves an uncollected cheque in future base even when cached totals say settled', () => {
+    const args = collectedAuditArgs({ total_received_amount: 1000000, payments: [
+      { amount: 400000, status: 'received', payment_type: 'cash', date: '2026-05-10' },
+      { amount: 600000, status: 'received', payment_type: 'cheque', cheque_status: 'new', date: '2026-05-10' },
+    ] });
+    expect(getCommissionInvoiceFinancials(args.invoices[0], '2026-05-31')).toEqual({
+      invoice_total_amount: 1000000, invoice_received_amount: 400000, invoice_verified_received_amount: 400000, invoice_future_base_amount: 600000,
+    });
+  });
   const collectedAuditArgs = (invoice: Record<string, any>, extra: Record<string, any> = {}) => ({
     invoices: [{ id: 'audit-invoice', name: 'فاکتور آزمون', invoice_date: '2026-04-10', status: 'final', assignee_id: 'audit-profile',
       total_invoice_amount: 1000000, invoiceItems: [{ id: 'item-1', line_total: 1000000, commission_percentage: 10 }], ...invoice }],
