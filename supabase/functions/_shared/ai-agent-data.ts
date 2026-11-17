@@ -7,7 +7,11 @@ export type AgentDataModule = { id: string; table: string; label: string; fields
 export type AgentDataAccess = { orgId: string; userId: string; roleId: string | null;
   allowedUserIds: string[]; allowedRoleIds: string[]; modules: AgentDataModule[] };
 export type AgentDataFilter = { field: string; operator: 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'is' | 'contains'; value: unknown };
-export type AgentDataQuery = { moduleId: string; fields?: string[]; filters?: AgentDataFilter[]; pageSize?: number; afterId?: string | null };
+export type AgentDataQuery = { moduleId: string; fields?: string[]; filters?: AgentDataFilter[]; anyFilters?: AgentDataFilter[]; pageSize?: number; afterId?: string | null };
+export const tenantAgentDataModuleIds = (schemas: Record<string, { table?: string }>, canRead: (id: string) => boolean, sourceModuleIds?: string[]) =>
+  [...Object.keys(schemas),'workflows'].filter((id,index,all) => all.indexOf(id) === index
+    && !id.startsWith('saas_') && !String(schemas[id]?.table || '').startsWith('saas_')
+    && (!sourceModuleIds || sourceModuleIds.includes(id)) && canRead(id));
 const uuid = (value: unknown) => /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(String(value || ''));
 const column = (value: string) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value);
 const quote = (value: unknown) => {
@@ -74,30 +78,37 @@ export const compileAgentDataQuery = (access: AgentDataAccess, input: AgentDataQ
   const fields = [...new Set(input.fields?.length ? input.fields : module.fields.slice(0, 12).map(field => field.key))];
   for(const key of ['name','title','full_name','business_name','display_name','system_code','invoice_date','total_invoice_amount','currency_code']) if(fields.length<40&&allowedFields.has(key)&&!fields.includes(key)) fields.push(key);
   if (!fields.length || fields.length > 40 || fields.some(field => !allowedFields.has(field))) throw new Error('فیلدهای درخواست‌شده مجاز نیستند.');
-  const filters = input.filters || [];
+  const anyFilters = input.anyFilters || [];
+  if (!Array.isArray(anyFilters) || anyFilters.length > 20) throw new Error('تعداد شرط‌های جایگزین معتبر نیست.');
+  if (input.filters !== undefined && !Array.isArray(input.filters)) throw new Error('شرط‌های درخواست معتبر نیستند.');
+  const filters = [...(input.filters || []), ...anyFilters];
   if (!Array.isArray(filters) || filters.length > 20) throw new Error('تعداد شرط‌های درخواست معتبر نیست.');
   const conditions: string[] = [];
   const permitted = permissionGroups(module.viewConditions);
   conditions.push(...permitted.all.map(permissionPredicate));
   if (permitted.any.length) conditions.push(`or(${permitted.any.map(permissionPredicate).join(',')})`);
+  const queryConditions: string[] = [];
   for (const filter of filters) {
     const referenceFilter = filter.field === 'id' && (filter.operator === 'eq' && uuid(filter.value)
       || filter.operator === 'in' && Array.isArray(filter.value) && filter.value.every(uuid));
     if (!allowedFields.has(filter.field) && !referenceFilter) throw new Error('فیلد شرط در محدودهٔ دسترسی نیست.');
     if (filter.operator === 'in') {
       if (!Array.isArray(filter.value) || !filter.value.length || filter.value.length > 100) throw new Error('فهرست مقادیر شرط معتبر نیست.');
-      conditions.push(`${filter.field}.in.(${filter.value.map(quote).join(',')})`);
+      queryConditions.push(`${filter.field}.in.(${filter.value.map(quote).join(',')})`);
     } else if (filter.operator === 'is') {
       if (![null, true, false].includes(filter.value as any)) throw new Error('شرط تهی یا منطقی معتبر نیست.');
-      conditions.push(`${filter.field}.is.${filter.value === null ? 'null' : filter.value}`);
+      queryConditions.push(`${filter.field}.is.${filter.value === null ? 'null' : filter.value}`);
     } else if (filter.operator === 'contains') {
       if (typeof filter.value !== 'string') throw new Error('عبارت جست‌وجو معتبر نیست.');
       // Keep wildcards supplied by the model literal; this is a contains query.
-      conditions.push(`${filter.field}.ilike.${quote(`*${filter.value.replace(/[%*_]/g, '')}*`)}`);
+      queryConditions.push(`${filter.field}.ilike.${quote(`*${filter.value.replace(/[%*_]/g, '')}*`)}`);
     } else if (['eq', 'neq', 'gt', 'gte', 'lt', 'lte'].includes(filter.operator)) {
-      conditions.push(`${filter.field}.${filter.operator}.${quote(filter.value)}`);
+      queryConditions.push(`${filter.field}.${filter.operator}.${quote(filter.value)}`);
     } else throw new Error('عملگر شرط پشتیبانی نمی‌شود.');
   }
+  const requiredCount = filters.length - anyFilters.length;
+  conditions.push(...queryConditions.slice(0, requiredCount));
+  if (anyFilters.length) conditions.push(`or(${queryConditions.slice(requiredCount).join(',')})`);
   const roleCondition = (ids: string[]) => `and(assignee_type.eq.role,or(assignee_role_id.in.(${ids.join(',')}),and(assignee_role_id.is.null,assignee_id.in.(${ids.join(',')}))))`;
   if (module.recordScope === 'own') conditions.push(`and(assignee_type.eq.user,assignee_id.eq.${access.userId})`);
   else if (module.recordScope === 'team') {
@@ -208,9 +219,10 @@ export const AGENT_DATA_TOOLS = [{ type: 'function', function: {
   parameters: { type: 'object', properties: {
     moduleId: { type: 'string' }, fields: { type: 'array', items: { type: 'string' } },
     filters: { type: 'array', items: { type: 'object', properties: { field: { type: 'string' }, operator: { type: 'string', enum: ['eq','neq','gt','gte','lt','lte','in','is','contains'] }, value: {} }, required: ['field','operator','value'], additionalProperties: false } },
+    anyFilters: filterSchema,
     pageSize: { type: 'integer', minimum: 1, maximum: 200 }, afterId: { type: ['string','null'] },
   }, required: ['moduleId'], additionalProperties: false },
 } }, { type: 'function', function: { name: 'count_organization_data', description: 'شمارش دقیق همهٔ رکوردهای مجاز مطابق شرط در پایگاه داده، بدون محدودیت تعداد رکوردهای یک صفحه.',
-  parameters: { type: 'object', properties: { moduleId: { type: 'string' }, filters: filterSchema }, required: ['moduleId'], additionalProperties: false } } },
+  parameters: { type: 'object', properties: { moduleId: { type: 'string' }, filters: filterSchema, anyFilters: filterSchema }, required: ['moduleId'], additionalProperties: false } } },
 { type: 'function', function: { name: 'aggregate_organization_data', description: 'جمع، کمینه و بیشینهٔ دقیق یک فیلد عددی مجاز با شرط. coverage=partial یعنی آمار یک بخش؛ با nextAfterId ادامه بده. عدد اعشاری به‌صورت رشته بازمی‌گردد تا دقت مالی حفظ شود.',
-  parameters: { type: 'object', properties: { moduleId: { type: 'string' }, field: { type: 'string' }, filters: filterSchema, afterId: { type: ['string','null'] } }, required: ['moduleId','field'], additionalProperties: false } } }];
+  parameters: { type: 'object', properties: { moduleId: { type: 'string' }, field: { type: 'string' }, filters: filterSchema, anyFilters: filterSchema, afterId: { type: ['string','null'] } }, required: ['moduleId','field'], additionalProperties: false } } }];

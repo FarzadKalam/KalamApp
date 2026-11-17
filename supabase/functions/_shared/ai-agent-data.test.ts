@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { compileAgentDataQuery, readAgentDataPage, countAgentData, aggregateAgentData, agentRecordMatchesViewConditions, type AgentDataAccess } from './ai-agent-data';
+import { compileAgentDataQuery, readAgentDataPage, countAgentData, aggregateAgentData, agentRecordMatchesViewConditions, tenantAgentDataModuleIds, type AgentDataAccess } from './ai-agent-data';
 const orgId = '00000000-0000-4000-8000-000000000001';
 const userId = '00000000-0000-4000-8000-000000000002';
 const access = (scope: 'all' | 'own' | 'team' | 'subtree' = 'all'): AgentDataAccess => ({ orgId, userId,
@@ -8,6 +8,20 @@ const access = (scope: 'all' | 'own' | 'team' | 'subtree' = 'all'): AgentDataAcc
     fields: [{ key: 'name', label: 'نام', type: 'text' }, { key: 'status', label: 'وضعیت', type: 'select' }] }] });
 
 describe('central agent data gateway', () => {
+  it('discovers all actor-permitted tenant sources while excluding the control plane and scheduled-source escapes', () => {
+    const schemas = { invoices: { table: 'invoices' },employees: { table: 'employees' },saas_orgs: { table: 'organizations' },alias: { table: 'saas_admin_users_view' } };
+    expect(tenantAgentDataModuleIds(schemas,id => id !== 'employees')).toEqual(['invoices','workflows']);
+    expect(tenantAgentDataModuleIds(schemas,() => true,['employees'])).toEqual(['employees']);
+  });
+  it('combines alternative search terms with required filters and owner scope', () => {
+    const result = compileAgentDataQuery(access('own'), { moduleId: 'marketing_leads',
+      filters: [{ field: 'status',operator: 'eq',value: 'active' }],
+      anyFilters: [{ field: 'name',operator: 'contains',value: 'استخدام' },{ field: 'name',operator: 'contains',value: 'آموزش' }] });
+    expect(result.params.org_id).toBe(`eq.${orgId}`);
+    expect(result.params.and).toContain('status.eq."active",or(name.ilike."*استخدام*",name.ilike."*آموزش*")');
+    expect(result.params.and).toContain(`assignee_id.eq.${userId}`);
+    expect(() => compileAgentDataQuery(access(),{ moduleId: 'marketing_leads',anyFilters: [{ field: 'secret',operator: 'eq',value: 'x' }] })).toThrow();
+  });
   it('applies server-owned view conditions to reads and counts and fails closed for unsupported relations', async () => {
     const scope = access(); scope.modules[0].viewConditions = { conditions_all: [{ field: 'status', operator: 'eq', value: 'active' }], conditions_any: [{ field: 'name', operator: 'eq', value: 'الف' }] };
     const query = compileAgentDataQuery(scope, { moduleId: 'marketing_leads' });

@@ -8,6 +8,7 @@ export const PROCESS_DATA_GUIDANCE = [
   'برای فیلدهای عمومی از فهرست فیلدهای مجاز؛ برای تعریف، مقدار و وضعیت اختصاصی و اتوماسیون از recurrence_info فعالیت و metadata مرحله استفاده کن. snapshot فعالیت بر الگوی فعلی مقدم است.',
   'اگر snapshot فعالیت قدیمی خالی بود، از process_run_id/process_run_stage_id و سپس source_template_id/source_stage_sort_order برای خواندن metadata مرحله مرتبط استفاده کن؛ نبود snapshot را نبود فیلد معرفی نکن.',
   'فقط بخش لازم را بخوان. field به همراه path و offset جزئیات JSON یا متن بلند را ادامه می‌دهد. hasMore و nextAfterId/nextOffset یعنی ادامه؛ صفحه یا خطا را نبود داده یا آمار کل معرفی نکن.',
+  'در بررسی کامل، مرحله‌ها و metadata شامل شرح، وابستگی، فیلدها و وضعیت‌های اختصاصی، موعد و زمان‌ها را بخوان؛ سپس activators و conditions_all/conditions_any/actions، فعالیت‌های واقعی و گزارش‌های automation_execution_reports را با فیلتر بررسی کن. history آخرین تغییرات مجاز هر رکورد را می‌خواند؛ چیزی که نخوانده‌ای بررسی‌شده اعلام نکن.',
   'زمان‌ها: برنامه start_date/due_date، شروع و پایان واقعی actual_start_at/actual_end_at، تکمیل completed_at؛ مسئول می‌تواند کاربر، نقش یا ارجاع پویا باشد. نام را از ابزار جست‌وجوی مسئول بازیابی کن.',
   'هیچ ادعای دسترسی کاملِ بدون خواندن نکن. همه خواندن‌ها تابع سازمان، مجوز فیلد/رکورد و پلن‌اند. هر تغییر فقط پیشنهاد کارت مرکزی است؛ پس از یک تأیید، نتیجه واقعی و پیوند رکوردها نمایش داده می‌شود.',
 ].join('\n');
@@ -25,11 +26,13 @@ const uuid = (id: unknown) => /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test
 const sensitive = (key: string) => /password|secret|api_?key|authorization|access_token|refresh_token|credential/i.test(key);
 const heavy = new Set(['recurrence_info','metadata','execution_process_draft','template_stages_preview','run_stages_preview','actions','conditions_all','conditions_any']);
 
-export const sanitizeProcessValue = (value: any, moduleId: string, fieldAllowed: (moduleId: string, field: string) => boolean, depth = 0): any => {
+export const sanitizeProcessValue = (value: any, moduleId: string, fieldAllowed: (moduleId: string, field: string) => boolean, depth = 0, path = ''): any => {
   if (depth > 30) throw new Error('عمق داده معتبر نیست.');
-  if (Array.isArray(value)) return value.filter(item => !item?.key || fieldAllowed(moduleId,String(item.key))).map(item => sanitizeProcessValue(item,moduleId,fieldAllowed,depth + 1));
+  if (Array.isArray(value)) return value.filter(item => !item?.key || fieldAllowed(moduleId,String(item.key))).map(item => sanitizeProcessValue(item,moduleId,fieldAllowed,depth + 1,path));
   if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.entries(value).filter(([key]) => !sensitive(key) && fieldAllowed(moduleId,key)).map(([key,val]) => [key,sanitizeProcessValue(val,moduleId,fieldAllowed,depth + 1)]));
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !sensitive(key) && fieldAllowed(moduleId,key)
+    && (!path || fieldAllowed(moduleId,`${path}.${key}`))).map(([key,val]) =>
+    [key,sanitizeProcessValue(val,moduleId,fieldAllowed,depth + 1,path ? `${path}.${key}` : key)]));
 };
 
 export const PROCESS_DATA_TOOLS = [{ type: 'function', function: {
@@ -37,7 +40,7 @@ export const PROCESS_DATA_TOOLS = [{ type: 'function', function: {
   description: 'جزئیات مجاز فرآیند بر اساس رکورد واقعی؛ انتخاب یک بخش و فیلدهای لازم، با ادامه صفحه و بدون بارگیری همه سازمان. برای field نام فیلد را بده؛ path مسیر داخل JSON و offset ادامه مقادیر است.',
   parameters: { type: 'object', properties: {
     moduleId: { type: 'string' }, recordId: { type: 'string' },
-    section: { type: 'string', enum: ['record','stages','tasks','runs','links','drafts','activators','field'] },
+    section: { type: 'string', enum: ['record','stages','tasks','runs','links','drafts','activators','field','history'] },
     fields: { type: 'array', items: { type: 'string' }, maxItems: 30 },
     field: { type: 'string' }, childId: { type: 'string' }, path: { type: 'array', items: { type: 'string' }, maxItems: 12 },
     afterId: { type: ['string','null'] }, offset: { type: 'integer', minimum: 0 }, pageSize: { type: 'integer', minimum: 1, maximum: 50 },
@@ -94,6 +97,17 @@ export const createProcessDataRuntime = (options: {
     const probe = module.fields.find(f => !heavy.has(f.key));
     if (!probe) throw new Error('فیلد قابل مشاهده برای رکورد وجود ندارد.');
     await getRecord(moduleId, recordId, [probe.key]);
+    if (section === 'history') {
+      const offset = args.offset ?? 0;
+      if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('صفحه تاریخچه معتبر نیست.');
+      const rows = await read('changelogs', { org_id: `eq.${access.orgId}`, module_id: `eq.${module.table}`,
+        record_id: `eq.${recordId}`, select: 'id,action,field_name,old_value,new_value,user_id,created_at',
+        order: 'created_at.desc,id.desc', offset, limit: size + 1 });
+      return { records: rows.slice(0,size).filter(row => !row.field_name ||
+        module.fields.some(field => field.key === row.field_name) && fieldAllowed(moduleId,row.field_name))
+        .map(row => clean(row,moduleId)), hasMore: rows.length > size,
+        nextOffset: rows.length > size ? offset + size : null, coverage: rows.length > size || offset ? 'page' : 'complete' };
+    }
     if (section === 'record') {
       const fields = args.fields || module.fields.filter(f => !heavy.has(f.key)).slice(0, 30).map(f => f.key);
       const row = await getRecord(moduleId, recordId, fields);

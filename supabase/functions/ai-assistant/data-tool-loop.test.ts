@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import { appendStreamToolCalls, executeAgentToolCalls } from '../_shared/ai-tool-calls';
+import { appendStreamToolCalls, buildAgentToolResultFallback, executeAgentToolCalls } from '../_shared/ai-tool-calls';
 import { appendContinuationText,createContinuationDeltaBuffer } from '../_shared/ai-context-lifecycle';
 const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 const nonstream = source.slice(source.indexOf('const callChatCompletions ='), source.indexOf('const callChatCompletionsStream ='));
@@ -16,7 +16,7 @@ const harness = (streaming: boolean, responses: Response[]) => {
   const deps = {
     appendContinuationText,createContinuationDeltaBuffer,
     createAiContextBudget: () => ({ outputTokens: 4000,prepare: async (messages: any[]) => messages }),
-    executeAgentToolCalls, appendStreamToolCalls,
+    executeAgentToolCalls, appendStreamToolCalls, buildAgentToolResultFallback,
     requestAvalaiWithFallback: vi.fn(async (_config: any, _path: string, options: any) => {
       sent.push(JSON.parse(options.body));
       const response = responses.shift(); if (!response) throw new Error('Unexpected provider call');
@@ -33,6 +33,7 @@ const harness = (streaming: boolean, responses: Response[]) => {
     shortenProviderError: (value: any) => String(value),
     CHAT_COMPLETION_CONTINUATION_LIMIT: 2, CHAT_COMPLETIONS_TIMEOUT_MS: 10000,
     STREAM_PROVIDER_INACTIVITY_TIMEOUT_MS: 10000, DEFAULT_CHAT_MAX_TOKENS: 4000, DEFAULT_REASONING_MAX_TOKENS: 4000,
+    STREAM_DEADLINE_PERSISTENCE_RESERVE_MS: 10000,
   };
   const declaration = streaming ? stream : nonstream;
   if (!streaming) delete (deps as any).parseChatStreamDelta;
@@ -66,6 +67,16 @@ describe('actual central agent data tool loop', () => {
     expect(execute).toHaveBeenCalledWith('read_organization_data', { moduleId: 'marketing_leads' });
     expect(result.content).toBe('گزارش کامل'); expect(deltas.join('')).toBe('گزارش کامل');
     expect(fixture.sent).toHaveLength(2);
+  });
+  it('returns the recovered data before the edge deadline instead of losing the turn', async () => {
+    const fixture = harness(true, [sse([
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call-1', type: 'function', function: { name: 'read_organization_data', arguments: '{"moduleId":"process_templates"}' } }] }, finish_reason: 'tool_calls' }] },
+    ])]);
+    const execute = vi.fn(async () => ({ label: 'الگوهای فرآیند', records: [{ fields: { name: 'استخدام نیروی فروش' } }], hasMore: false }));
+    const result = await fixture.run({ tools: [tool], toolExecutor: execute, deadlineAt: Date.now() + 5000 });
+    expect(result.content).toContain('استخدام نیروی فروش');
+    expect(result.finishReason).toBe('deadline_fallback');
+    expect(fixture.sent).toHaveLength(1);
   });
   it('stops at the declared tool budget instead of looping indefinitely', async () => {
     const response = () => new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [toolCall] }, finish_reason: 'tool_calls' }] }));

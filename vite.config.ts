@@ -184,11 +184,14 @@ export default defineConfig(({ mode }) => {
         },
       },
       plugins: [
-        react({ babel: { compact: false } }),
+        react({ babel: { compact: mode === 'production' } }),
         generateVersionJson(),
       ],
       build: {
         rollupOptions: {
+          // The application graph is large. Bounding concurrent file work
+          // prevents production builds from exhausting memory on 8 GB hosts.
+          maxParallelFileOps: 2,
           output: {
             manualChunks: resolveManualChunk,
           },

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
-import { createProcessDataRuntime, PROCESS_DATA_GUIDANCE } from './ai-process-data';
+import { createProcessDataRuntime, PROCESS_DATA_GUIDANCE, sanitizeProcessValue } from './ai-process-data';
 import type { AgentDataAccess } from './ai-agent-data';
 
 const org = '10000000-0000-4000-8000-000000000001';
@@ -16,6 +16,23 @@ const access: AgentDataAccess = { orgId: org,userId: user,roleId: null,allowedUs
 const setup = (read: any, fieldAllowed = (_m: string,_f: string) => true, scope = access) => createProcessDataRuntime({ access: scope,read,fieldAllowed });
 
 describe('central process reader', () => {
+  it('honors dotted column permissions inside nested table rows', () => {
+    expect(sanitizeProcessValue({ lines: [{ title: 'حقوق',amount: 500 }] },'payroll_slips',(_m,f) => f !== 'lines.amount'))
+      .toEqual({ lines: [{ title: 'حقوق' }] });
+  });
+  it('checks the parent before reading recent history and excludes denied field values', async () => {
+    const read = vi.fn(async (table) => table === 'projects' ? [{ id: parent,name: 'پروژه' }] : [
+      { id: id(1),field_name: 'name',old_value: 'قبلی',new_value: 'تازه' },
+      { id: id(2),field_name: 'hidden_salary',new_value: 'secret' },
+    ]);
+    const result = await setup(read).execute({ moduleId: 'projects',recordId: parent,section: 'history' });
+    expect(result.records).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toContain('secret');
+    expect(read.mock.calls[1][1]).toMatchObject({ org_id: `eq.${org}`,record_id: `eq.${parent}`,order: 'created_at.desc,id.desc' });
+    const deny = vi.fn(async () => []);
+    await expect(setup(deny).execute({ moduleId: 'projects',recordId: parent,section: 'history' })).rejects.toThrow();
+    expect(deny).toHaveBeenCalledTimes(1);
+  });
   it('loads no records at initialization, deduplicates within a request and paginates beyond old limits', async () => {
     const stages = Array.from({ length: 73 },(_,i) => ({ id: id(i+1),stage_name: `مرحله ${i+1}`,metadata: { marker: i } }));
     const read = vi.fn(async (table,params) => table === 'process_templates' ? [{ id: parent,name: 'الگو' }]

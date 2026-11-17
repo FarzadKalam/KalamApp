@@ -22,4 +22,22 @@ describe('authorized field lookup', () => {
     }
     expect(read).not.toHaveBeenCalled();
   });
+  it('resolves nested invoice line relations from the authorized table schema', async () => {
+    const read = vi.fn(async () => [{ id: 'product-ref',name: 'بنر' }]);
+    const runtime = createAiRecordLookupRuntime({ moduleIds: ['invoices'],orgId: 'org',read,
+      loadSchema: async (moduleId) => moduleId === 'invoices' ? { fields: [],tables: [{ key: 'items',columns: [{ key: 'product_id',type: 'relation',relationTargetModule: 'products' }] }] }
+        : { fields: [{ key: 'name',type: 'text' }] },tableForModule: id => id,canReadModule: () => true });
+    expect((await runtime.execute('lookup_record_field',{ moduleId: 'invoices',field: 'items.product_id',query: 'بنر' })).records[0].id).toBe('product-ref');
+    expect(read.mock.calls[0][0]).toBe('products');
+  });
+  it('searches permitted read-only names and system codes without making them writable',async () => {
+    const read = vi.fn(async () => [{ id: 'customer-ref',full_name: 'مشتری' }]);
+    const runtime = createAiRecordLookupRuntime({ moduleIds: ['invoices'],orgId: 'org',read,
+      loadSchema: async moduleId => moduleId === 'invoices' ? { fields: [{ key: 'customer',type: 'relation',relationTargetModule: 'customers' }] }
+        : { fields: [],lookupFields: [{ key: 'full_name' },{ key: 'system_code' }] },
+      tableForModule: id => id,canReadModule: () => true });
+    expect((await runtime.execute('lookup_record_field',{ moduleId: 'invoices',field: 'customer',query: 'مشتری' })).records).toHaveLength(1);
+    expect(read.mock.calls[0][1].or).toContain('full_name.ilike');
+    expect(read.mock.calls[0][1].or).toContain('system_code.ilike');
+  });
 });
