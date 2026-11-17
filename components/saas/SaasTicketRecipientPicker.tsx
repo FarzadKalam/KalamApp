@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert } from 'antd';
 import { supabase } from '../../supabaseClient';
 import AdaptiveSelectField from '../AdaptiveSelectField';
