@@ -65,6 +65,42 @@ jobs:
             docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d content_calendar_test -v ON_ERROR_STOP=1 < "$file"
           done
 
+      - name: SaaS workflow source isolation and invoice deduplication
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test saas_workflow_test
+          for file in tests/sql/saas_workflow_sources_fixture.sql \
+            database_v1_phase608_saas_workflow_sources_and_related_invoices.sql \
+            database_v1_phase608_saas_workflow_sources_and_related_invoices.sql \
+            tests/sql/saas_workflow_sources_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d saas_workflow_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
+      - name: SaaS catalog, sales invoice checkout and support audience
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test saas_sales_test
+          for file in tests/sql/saas_workflow_sources_fixture.sql tests/sql/saas_sales_workflows_fixture.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d saas_sales_test -v ON_ERROR_STOP=1 < "$file"
+          done
+          sed -n '/^create or replace function public.activate_saas_order_items(/,/^end; \$\$;/p' database_v1_phase560_saas_trial_purchase_and_user_seats.sql |
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d saas_sales_test -v ON_ERROR_STOP=1
+          for file in \
+            database_v1_phase608_saas_workflow_sources_and_related_invoices.sql \
+            database_v1_phase609_saas_sales_customer_and_catalog.sql \
+            database_v1_phase610_saas_invoice_account_delivery.sql \
+            database_v1_phase611_saas_workflow_support_delivery.sql \
+            database_v1_phase609_saas_sales_customer_and_catalog.sql \
+            database_v1_phase610_saas_invoice_account_delivery.sql \
+            database_v1_phase611_saas_workflow_support_delivery.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d saas_sales_test -v ON_ERROR_STOP=1 < "$file"
+          done
+          docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d saas_sales_test -v ON_ERROR_STOP=1 < tests/sql/saas_sales_workflows_assertions.sql
+
       - name: Plan entitlements and full demo SQL regression checks
         env:
           POSTGRES_CONTAINER: ${{ job.services.postgres.id }}

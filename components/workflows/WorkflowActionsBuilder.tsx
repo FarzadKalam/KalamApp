@@ -16,6 +16,7 @@ import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 import FormulaEditorModal from '../formulas/FormulaEditorModal';
 import MessageComposerModal from '../MessageComposerModal';
 import WorkflowMessageActionFields from './WorkflowMessageActionFields';
+import SaasWorkflowInvoiceItems from './SaasWorkflowInvoiceItems';
 import PersianDatePicker from '../PersianDatePicker';
 import RichTextEditor from '../RichTextEditor';
 import { STORY_GRADIENT_PRESET_LIST } from '../../utils/storyGradients';
@@ -54,6 +55,7 @@ import { normalizeWorkflowValueByFieldType } from '../../utils/filterUtils';
 import { supportsWorkflowProcessTemplateActions } from '../../utils/workflowHelpers';
 import { createProcessLinkedFieldKey, parseProcessLinkedFieldKey } from '../../utils/processTargets';
 import { supabase } from '../../supabaseClient';
+import { getSelectedOrganizationId } from '../../utils/organizationContext';
 import {
   AdaptivePickerMode,
   resolveModalPopupContainer,
@@ -337,7 +339,8 @@ const getRequiredTargetFields = (targetModuleId: string, relationFieldKey?: stri
     if (!field?.key) return false;
     if (field.nature === 'system') return false;
     if (field.readonly === true) return false;
-    if (field.key === relationFieldKey) return false;
+    if (field.key === relationFieldKey || (targetModuleId === 'invoices' && field.key === 'customer_id'
+      && ['saas_tenant_org_id', 'saas_demo_request_id'].includes(relationFieldKey || ''))) return false;
     return field?.validation?.required === true;
   });
 };
@@ -961,6 +964,18 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     ? activationStageOptions
     : processStageOptions;
   const canUseProcessTemplateActions = supportsWorkflowProcessTemplateActions(currentModuleId);
+  const organizationId = getSelectedOrganizationId();
+  const [saasActionPermission, setSaasActionPermission] = useState<{ moduleId: string; orgId: string | null } | null>(null);
+  const canUseSaasActions = saasActionPermission?.moduleId === currentModuleId && saasActionPermission?.orgId === organizationId;
+  useEffect(() => {
+    setSaasActionPermission(null);
+    if (!['saas_orgs', 'saas_demo_requests', 'invoices'].includes(currentModuleId)) return;
+    let current = true;
+    void Promise.resolve(supabase.rpc('saas_lifecycle_workflows_allowed')).then(({ data, error }) => {
+      if (current && !error && data === true) setSaasActionPermission({ moduleId: currentModuleId, orgId: organizationId });
+    }).catch(() => {});
+    return () => { current = false; };
+  }, [currentModuleId, organizationId]);
   const effectiveActionTypeOptions = useMemo(() => {
     const supplementalOptions: Array<{ label: string; value: WorkflowActionType }> = [
       { label: 'ارسال یادداشت + اطلاع‌رسانی پیامکی', value: 'send_note_sms' as WorkflowActionType },
@@ -989,10 +1004,14 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           )
         ));
     const optionsByValue = new Map(
-      [...baseOptions, ...supplementalOptions].map((option) => [String(option.value), option] as const)
+      [...baseOptions, ...supplementalOptions].filter(({ value }) =>
+        value === 'send_saas_invoice' ? canUseSaasActions
+          : value === 'apply_saas_invoice_access' ? canUseSaasActions && currentModuleId === 'invoices' : true,
+      ).map((option) => [String(option.value), option] as const)
     );
     safeValue.forEach((action) => {
       const actionType = String(action?.type || '') as WorkflowActionType;
+      if (actionType === 'send_saas_invoice' || actionType === 'apply_saas_invoice_access') return;
       if (!actionType || optionsByValue.has(actionType)) return;
       if (isWorkflowMessageActionType(actionType)) {
         optionsByValue.set(actionType, { label: 'ارسال پیام (ثبت‌شده)', value: actionType });
@@ -1004,7 +1023,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       }
     });
     return Array.from(optionsByValue.values());
-  }, [actionOptions, effectiveActivationStageOptions.length, enableNextStageActions, processStageOptions.length, safeValue]);
+  }, [actionOptions, canUseSaasActions, currentModuleId, effectiveActivationStageOptions.length, enableNextStageActions, processStageOptions.length, safeValue]);
 
   const addAction = () => {
     const type = effectiveActionTypeOptions[0]?.value || 'send_note';
@@ -1339,6 +1358,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     targets: Array<{ key: string; label: string }>
   ) => {
     const config = action.config || {};
+
     const focusedTarget = activeTextTargetByAction[action.id];
     const selectedTarget =
       (targets.some((target) => target.key === focusedTarget) ? focusedTarget : '')
@@ -1653,10 +1673,22 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     const actionType = action.type;
     const config = action.config || {};
 
+    if (actionType === 'send_saas_invoice' && canUseSaasActions) return <label className="block">
+      دورهٔ اشتراک اقلام پلن
+      <AdaptiveSelectField aria-label="دورهٔ اشتراک اقلام پلن" className="w-full"
+        options={[1, 3, 6, 12].map((value) => ({ value, label: `${value.toLocaleString('fa-IR')} ماه` }))}
+        value={Number(config.subscription_term_months || 1)} disabled={disabled}
+        onChange={(value) => updateActionConfig(action.id, { subscription_term_months: value })} />
+    </label>;
+    if (actionType === 'apply_saas_invoice_access' && canUseSaasActions && currentModuleId === 'invoices') {
+      return <div>دسترسی پلن، امکانات و افزونه‌ها از اقلام فاکتوری خوانده می‌شود که پرداخت آن در حساب و اشتراک تأیید شده است.</div>;
+    }
+
     if (isWorkflowMessageActionType(actionType)) {
       return (
         <WorkflowMessageActionFields
           action={action}
+          canSendTicket={canUseSaasActions}
           disabled={disabled}
           recipientFieldOptions={unifiedMessageRecipientFieldOptions}
           recipientFieldPickerProps={{
@@ -3160,6 +3192,9 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             </div>
           </div>
 
+          {canUseSaasActions && targetModuleId === 'invoices' && ['saas_orgs', 'saas_demo_requests'].includes(sourceModuleId)
+            ? <SaasWorkflowInvoiceItems disabled={disabled} items={Array.isArray(config.saas_invoice_items) ? config.saas_invoice_items : []}
+                onChange={(items) => updateActionConfig(action.id, { saas_invoice_items: items })} /> : null}
           <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-2 space-y-2">
             {targetModuleId === 'billboard_status_changes' ? (
               <Alert

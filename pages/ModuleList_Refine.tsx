@@ -2788,7 +2788,12 @@ export const ModuleListRefine: React.FC<{
         setFieldPermissionsModuleId(String(resolvedModuleId || ""));
         setPermissionViewConditions(null);
         setPermissionFilters([]);
-        setCanOpenWorkflows(false);
+        if (resolvedModuleId === 'saas_orgs' || resolvedModuleId === 'saas_demo_requests') {
+          const { data: allowed, error: workflowError } = await supabase.rpc('saas_lifecycle_workflows_allowed');
+          setCanOpenWorkflows(!workflowError && allowed === true);
+        } else {
+          setCanOpenWorkflows(false);
+        }
         setCanOpenGoals(false);
         setCanShowGoalCards(false);
         return;
@@ -6798,7 +6803,7 @@ export const ModuleListRefine: React.FC<{
     if (!isSystemManagedModule && canOpenGoals) {
       items.push({ key: "goals", label: "هدف‌گذاری" });
     }
-    if (!isSystemManagedModule && canOpenWorkflows) {
+    if ((!isSystemManagedModule || resolvedModuleId === 'saas_orgs' || resolvedModuleId === 'saas_demo_requests') && canOpenWorkflows) {
       items.push({ key: "workflows", label: "گردش کارها" });
     }
     if (!isSystemManagedModule && canEditModule) {
@@ -7753,6 +7758,7 @@ export const ModuleListRefine: React.FC<{
             onClose={() => setIsWorkflowsModalOpen(false)}
             defaultModuleId={resolvedModuleId}
             context="module_list"
+            saasOnly={resolvedModuleId === 'saas_orgs' || resolvedModuleId === 'saas_demo_requests'}
           />
         </React.Suspense>
       ) : null}
