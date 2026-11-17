@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Input, Select, Tag } from 'antd';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Button, Input, Select, Tag, theme } from 'antd';
+import type { RefSelectProps } from 'antd/es/select';
 import { DownOutlined } from '@ant-design/icons';
 import AdaptivePickerSurface from './AdaptivePickerSurface';
 import { getChoiceLabelFallbackFa } from '../utils/optionHelpers';
@@ -9,6 +10,7 @@ import {
   KALAM_SELECT_FIELD_CLASSNAME,
   mergeClassNames,
   resolveAdaptivePickerMode,
+  resolveParentOverlayZIndex,
   resolveSelectPopupContainer,
 } from '../utils/popupContainer';
 
@@ -133,6 +135,10 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
   preferLocalPopupContainer = false,
   ...restProps
 }) => {
+  const selectRef = useRef<RefSelectProps>(null);
+  const { token } = theme.useToken();
+  const [parentOverlayZIndex, setParentOverlayZIndex] = useState(0);
+  const effectiveOverlayZIndex = Math.max(overlayZIndexBase, token.zIndexPopupBase + 50, parentOverlayZIndex + 10);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [internalSearch, setInternalSearch] = useState('');
   const [draftValue, setDraftValue] = useState<any>(mode === 'multiple' || mode === 'tags' ? [] : undefined);
@@ -282,6 +288,7 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
     };
     return (
       <Select
+        ref={selectRef}
         value={displayValue}
         onChange={handleDesktopChange}
         options={normalizedOptions as any}
@@ -299,7 +306,10 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
         filterOption={filterOption}
         onSearch={onSearch}
         searchValue={searchValue}
-        onOpenChange={onOpenChange}
+        onOpenChange={(open) => {
+          if (open) setParentOverlayZIndex(resolveParentOverlayZIndex(selectRef.current?.nativeElement, 0));
+          onOpenChange?.(open);
+        }}
         listHeight={listHeight}
         placement={placement}
         popupMatchSelectWidth={popupMatchSelectWidth}
@@ -326,9 +336,10 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
         styles={{
           popup: {
             root: {
-              ...buildStandardSelectPopupRootStyle({ zIndex: overlayZIndexBase, minWidth: 220 }),
+              ...buildStandardSelectPopupRootStyle({ zIndex: effectiveOverlayZIndex, minWidth: 220 }),
               ...popupStyle,
               ...(styles?.popup?.root || {}),
+              zIndex: Math.max(effectiveOverlayZIndex, Number(popupStyle?.zIndex) || 0, Number(styles?.popup?.root?.zIndex) || 0),
             },
           },
         }}
@@ -376,7 +387,7 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
         open={mobileOpen}
         title={pickerTitle || placeholder}
         subtitle={sheetSubtitle}
-        zIndex={overlayZIndexBase + 40}
+        zIndex={effectiveOverlayZIndex + 40}
         modalContainer={modalContainer || ((trigger) => {
           if (trigger) {
             const resolved = getPopupContainer(trigger);

@@ -28,6 +28,7 @@ import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import MessageAttachmentGallery from '../messaging/MessageAttachmentGallery';
 import { AiAgentAvatar } from './AiAgentIcon';
+import {useOptionalNotificationRuntime} from '../notifications/NotificationRuntimeProvider';
 
 type AgentInboxThread = {
   agentKey: AgentKey;
@@ -82,6 +83,7 @@ const AiAgentMessagesCompactBox: React.FC<AiAgentMessagesCompactBoxProps> = ({
 }) => {
   const { message } = App.useApp();
   const navigate = useNavigate();
+  const notificationRuntime=useOptionalNotificationRuntime();
   const [reviewApproval,setReviewApproval]=useState<any>(null);
   const [rawThreads, setRawThreads] = useState<AgentInboxThread[]>([]);
   const [rawApprovals, setRawApprovals] = useState<WaitingApprovalItem[]>([]);
@@ -120,8 +122,10 @@ const AiAgentMessagesCompactBox: React.FC<AiAgentMessagesCompactBoxProps> = ({
   }, [agentAccessMap]);
 
   const threads = useMemo(
-    () => rawThreads.filter((item) => canViewAgent(item.agentKey)),
-    [canViewAgent, rawThreads],
+    () => rawThreads.filter((item) => canViewAgent(item.agentKey)).map(item=>({...item,
+      unreadCount:notificationRuntime.ready?(notificationRuntime.ai?.byConversation['agent:'+item.agentKey]||0):item.unreadCount,
+    })),
+    [canViewAgent, rawThreads,notificationRuntime.ready,notificationRuntime.ai?.byConversation],
   );
 
   const approvals = useMemo(

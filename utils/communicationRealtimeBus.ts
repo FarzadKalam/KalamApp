@@ -44,3 +44,6 @@ export const smsMessageInsertBus = createTopic();
 
 /** Fired with the inserted VoIP call row from any realtime subscription. */
 export const voipCallInsertBus = createTopic();
+
+/** Completed AI messages, including asynchronous UPDATE completion, from the central subscription. */
+export const aiMessageUpdateBus = createTopic();

@@ -12,6 +12,7 @@ import React, {
 } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
+import {EMPTY_AI_NOTIFICATIONS,normalizeAiNotifications,aiNotificationHref,aiNotificationTitle,isCompletedAiResponse,type AiNotificationSnapshot} from '../../utils/aiNotifications';
 import { MODULES } from '../../moduleRegistry';
 import { AI_OPEN_EVENT, type AssistantContext } from '../../utils/aiAssistantEvents';
 import { sendBotMessageViaGateway } from '../../utils/botGateway';
@@ -40,6 +41,7 @@ import {
   noteInsertBus,
   smsMessageInsertBus,
   voipCallInsertBus,
+  aiMessageUpdateBus,
 } from '../../utils/communicationRealtimeBus';
 import { dedupeAttachments, extractBotMessageAttachments } from '../../utils/messageAttachments';
 import { getAttachmentsPreviewLabel } from '../../utils/messagePreview';
@@ -57,6 +59,8 @@ type RuntimeSection = NotificationUnreadSection | 'bot_direct_messages';
 type RuntimeRevisions = Record<RuntimeSection, number>;
 
 type NotificationRuntimeValue = {
+  ai: AiNotificationSnapshot;
+  markAiRead: (conversationKey:string,sourceType:'ai_message'|'note',sourceId:string)=>Promise<boolean>;
   ready: boolean;
   summary: NotificationUnreadSummaryMap;
   communicationUnread: number;
@@ -95,7 +99,6 @@ const COMMUNICATION_SECTIONS = [
   'bot_group_messages',
   'bot_direct_messages',
   'sms_messages',
-  'voip_calls',
 ] as const;
 const ALERT_SECTIONS = ['tasks', 'responsibilities', 'system_messages'] as const;
 const OVERLAY_SOURCE = 'notification-runtime';
@@ -173,6 +176,8 @@ const isBotOverlaySection = (section: RuntimeSection | string) => (
 
 const NotificationRuntimeContext = createContext<NotificationRuntimeValue | null>(null);
 const NOOP_NOTIFICATION_RUNTIME: NotificationRuntimeValue = {
+  ai: EMPTY_AI_NOTIFICATIONS,
+  markAiRead: async()=>false,
   ready: false,
   summary: EMPTY_NOTIFICATION_UNREAD_SUMMARY,
   communicationUnread: 0,
@@ -467,6 +472,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
   viewerRef.current = identity;
   const [ready, setReady] = useState(false);
   const [summary, setSummary] = useState<NotificationUnreadSummaryMap>(EMPTY_NOTIFICATION_UNREAD_SUMMARY);
+  const [ai,setAi]=useState<AiNotificationSnapshot>(EMPTY_AI_NOTIFICATIONS);
   const [revisions, setRevisions] = useState<RuntimeRevisions>(EMPTY_REVISIONS);
   const refreshTimerRef = useRef<number | null>(null);
   const realtimeConnectedRef = useRef(false);
@@ -516,6 +522,12 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
         return;
       }
       const nextSummary = normalizeNotificationUnreadSummary(response.data);
+      const aiResponse=await supabase.rpc('get_ai_notification_snapshot_v1');
+      if(viewerRef.current.orgId!==identity.orgId||viewerRef.current.userId!==identity.userId)return;
+      if(aiResponse&&!aiResponse.error){
+        const nextAi=normalizeAiNotifications(aiResponse.data);
+        setAi(current=>JSON.stringify(current)===JSON.stringify(nextAi)?current:nextAi);
+      }
       // V2 is the sole unread source. Older deployments may use V1 only until
       // the messaging migration is applied; they intentionally do not run a
       // second client-side query path.
@@ -534,6 +546,26 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
       }
     }
   }, [identity.orgId, identity.userId]);
+
+  const markAiRead=useCallback(async(conversationKey:string,sourceType:'ai_message'|'note',sourceId:string)=>{
+    if(!identity.orgId||!identity.userId||!conversationKey||!sourceId)return false;
+    const result=await supabase.rpc('mark_ai_conversation_read_v1',{p_conversation_key:conversationKey,p_source_type:sourceType,p_source_id:sourceId});
+    if(result.error||result.data!==true)return false;
+    await refreshSummary();return true;
+  },[identity.orgId,identity.userId,refreshSummary]);
+
+  useEffect(()=>{
+    setAi(EMPTY_AI_NOTIFICATIONS);
+    return()=>setUiNotificationOverlayItems([],'ai-notifications');
+  },[identity.orgId,identity.userId]);
+  useEffect(()=>{
+    setUiNotificationOverlayItems(ai.items.map(row=>({
+      id:'ai-message:'+row.source_id,kind:'agent' as const,channel:'agent' as const,
+      title:aiNotificationTitle(row),subtitle:row.title,body:row.content,createdAt:row.created_at,
+      avatarName:aiNotificationTitle(row),onOpen:()=>navigate(aiNotificationHref(row)),
+      onDismiss:async()=>{await markAiRead(row.conversation_key,'ai_message',row.source_id);},
+    })),'ai-notifications');
+  },[ai.items,markAiRead,navigate]);
 
   const markCommunicationRead = useCallback(async (
     channel: 'internal' | 'bot',
@@ -664,7 +696,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
         const targetKey = isAgentConversationKey(key)
           ? key
           : `${AGENT_CONVERSATION_PREFIX}${agentKey || 'lead_orchestrator'}`;
-        navigate(`/messages?tab=agent&conversation=${encodeURIComponent(targetKey)}`);
+        navigate(`/ai?inbox=1&agent=${encodeURIComponent(targetKey.slice(AGENT_CONVERSATION_PREFIX.length))}`);
         return;
       }
       navigate(key ? `/messages?tab=notes&conversation=${encodeURIComponent(key)}` : '/messages?tab=notes');
@@ -685,7 +717,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
       return;
     }
     if (row.section === 'voip_calls') {
-      navigate('/messages?tab=voip_calls');
+      navigate('/contact-center');
       return;
     }
     if (row.module_id && row.record_id) {
@@ -1183,6 +1215,9 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
       'notification_inbox_items',
       'notification_read_states',
       'communication_read_cursors',
+      'ai_messages',
+      'ai_threads',
+      'user_organization_memberships',
     ];
     let disposed = false;
     let channel: ReturnType<typeof supabase.channel> | null = null;
@@ -1216,6 +1251,14 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
               else if (table === 'outbound_messages' && String(payload.new?.channel_type || '').trim() === 'sms') smsMessageInsertBus.emit(payload.new);
               else if (table === 'voip_call_logs') voipCallInsertBus.emit(payload.new);
             }
+            if(table==='ai_messages'){
+              if(isCompletedAiResponse(payload?.new)){
+                aiMessageUpdateBus.emit(payload.new);scheduleRefresh();
+              }else if(payload?.eventType==='DELETE'||isCompletedAiResponse(payload?.old))scheduleRefresh();
+              return;
+            }
+            if(table==='ai_threads'||(table==='user_organization_memberships'&&String(row.user_id||'')===identity.userId)){scheduleRefresh();return;}
+            if(table==='communication_read_cursors'&&row.channel==='ai'){scheduleRefresh();return;}
             const section = mapRealtimeSection(table, row);
             if (section) scheduleRefresh(section);
           },
@@ -1272,19 +1315,20 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
     setUiNotificationOverlayPagination(false, false, null);
   }, []);
 
-  const communicationUnread = sumNotificationUnread(summary, COMMUNICATION_SECTIONS);
-  const alertsUnread = sumNotificationUnread(summary, ALERT_SECTIONS);
+  const communicationUnread = Math.max(0,sumNotificationUnread(summary, COMMUNICATION_SECTIONS)-ai.communicationAgentNoteTotal);
+  const alertsUnread = Math.max(0,sumNotificationUnread(summary, ALERT_SECTIONS)-ai.alertAgentNoteTotal);
 
   useEffect(() => {
     setUiNotificationOverlayUnreadSummary({
       ready,
-      summary,
+      summary:{...summary,ai_messages:ai.total},
       communicationUnread,
       alertsUnread,
     });
-  }, [alertsUnread, communicationUnread, ready, summary]);
+  }, [alertsUnread, communicationUnread, ready, summary,ai.total]);
 
   const value = useMemo<NotificationRuntimeValue>(() => ({
+    ai,markAiRead,
     ready,
     summary,
     communicationUnread,
@@ -1294,7 +1338,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
     refreshOverlay,
     markEntriesRead,
     markCommunicationRead,
-  }), [markCommunicationRead, markEntriesRead, ready, refreshOverlay, refreshSummary, revisions, summary]);
+  }), [ai,markAiRead,markCommunicationRead, markEntriesRead, ready, refreshOverlay, refreshSummary, revisions, summary]);
 
   return (
     <NotificationRuntimeContext.Provider value={value}>

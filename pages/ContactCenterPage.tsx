@@ -45,10 +45,22 @@ export default function ContactCenterPage(){
    <div className="flex flex-wrap gap-2">{canSettings&&<Button icon={<SettingOutlined />} onClick={()=>setSettingsOpen(true)}>تنظیمات اتصال</Button>}<Button icon={<ReloadOutlined />} onClick={refresh}>به‌روزرسانی</Button></div>
   </header>
   <div className="grid grid-cols-1 xl:grid-cols-[350px_minmax(0,1fr)] gap-5 items-start">
-   <aside className="space-y-4 xl:sticky xl:top-4">
+   <aside className="min-w-0 space-y-4">
     {policy.data?.enabled&&plan===true?<div ref={dockRef} aria-label="شماره‌گیر مرکز تماس" />:<div className={`${panel} p-5 space-y-3`}><PhoneOutlined className="text-2xl text-sky-500" /><h2 className="font-bold">شماره‌گیر</h2><p className="text-sm text-slate-500 dark:text-slate-400">{policy.data?.message||'دریافت وضعیت اتصال تلفن…'}</p>{!!policy.error&&<Alert type="warning" message="دریافت وضعیت اتصال ناموفق بود." />}{canSettings&&<Button onClick={()=>setSettingsOpen(true)}>تنظیم اتصال تلفن</Button>}</div>}
     <button type="button" className={`${panel} w-full p-4 flex items-center gap-3 text-start hover:border-sky-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 transition-colors motion-reduce:transition-none`} onClick={()=>setAgentOpen(true)}><AiAgentAvatar agentKey="customer_response" size={44} /><div className="min-w-0 flex-1"><strong className="block text-sm">{agent?.titleFa||'ایجنت پاسخ‌گویی مشتری'}</strong><span className="text-xs text-slate-500 dark:text-slate-400">مدل‌ها، دستورالعمل‌ها و تنظیمات تماس صوتی</span></div><SettingOutlined /></button>
     <Button block size="large" type="primary" aria-label="تماس با هوش مصنوعی" icon={<AudioOutlined />} onClick={()=>{setVoiceMounted(true);setVoiceOpen(true);}}>تماس با هوش مصنوعی</Button>
+    <section className={`${panel} p-4 md:p-5 space-y-4`} aria-label="اپراتورهای مرکز تماس">
+     <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-bold">اپراتورها</h2><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">وضعیت اتصال معتبر؛ به‌روزرسانی هر ۱۵ ثانیه</p></div>{canManage&&plan===true&&<Button icon={<PlusOutlined />} onClick={()=>setEditing(null)}>اتصال کاربر به اپراتور</Button>}</div>
+     {!canManage?<p className="text-sm text-slate-500 dark:text-slate-400">مدیریت اپراتورها نیازمند دسترسی مدیریت کاربران یا تنظیمات سازمان است.</p>:plan!==true?<p className="text-sm text-slate-500 dark:text-slate-400">مکالمهٔ داخل سامانه در پلن سازمان فعال نیست.</p>:operators.isLoading?<Spin />:operators.error?<Alert type="error" message="دریافت اپراتورها انجام نشد." action={<Button onClick={()=>void operators.refetch()}>تلاش دوباره</Button>} />:!operators.data?.items.length?<Empty description="هنوز حساب اپراتوری متصل نشده است" />:<div className="grid grid-cols-1 gap-3 max-h-[480px] overflow-y-auto overscroll-contain">{operators.data.items.map(operator=>{
+      const isSelf=operator.profileId===session.user?.id;const busy=isSelf?!!phone.activeCall:operator.status==='busy';const online=isSelf?phone.status==='registered':operator.status==='online';
+      return <div key={operator.id} className="rounded-2xl border border-slate-200 dark:border-white/10 p-3 flex items-center gap-3">
+       <div className="relative"><Avatar size={44} src={normalizePublicAssetUrl(operator.avatarUrl)||undefined}>{operator.title.slice(0,1)}</Avatar><span aria-label={busy?'در حال مکالمه':online?'متصل':'قطع'} className={`absolute bottom-0 left-0 h-3 w-3 rounded-full border-2 border-white dark:border-slate-900 ${busy?'bg-amber-500':online?'bg-emerald-500':'bg-slate-400'}`} /></div>
+       <div className="min-w-0 flex-1"><h3 className="font-semibold text-sm truncate">{operator.title}</h3><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">داخلی تماس: <bdi dir="ltr">{operator.metadata.dial_extension||'ثبت نشده'}</bdi></p><Tag className="mt-1" color={busy?'gold':online?'success':'default'}>{busy?'در حال مکالمه':online?'متصل':operator.isActive?'قطع':'غیرفعال'}</Tag></div>
+       <Button type="text" style={{minWidth:44,minHeight:44}} icon={<EditOutlined />} aria-label={`ویرایش ${operator.title}`} onClick={()=>setEditing(operator)} />
+      </div>;
+     })}</div>}
+     {(offset>0||operators.data?.hasMore)&&<div className="flex gap-2"><Button disabled={!offset} onClick={()=>setOffset(Math.max(0,offset-20))}>صفحهٔ قبل</Button><Button disabled={!operators.data?.hasMore} onClick={()=>setOffset(operators.data!.nextOffset)}>صفحهٔ بعد</Button></div>}
+    </section>
    </aside>
    <main className="min-w-0 space-y-5">
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -59,18 +71,7 @@ export default function ContactCenterPage(){
       {title:'اپراتورهای این صفحه',value:(operators.data?.items.length||0).toLocaleString('fa-IR'),icon:<TeamOutlined />,color:'text-violet-600'},
      ].map(card=><div key={card.title} className={`${panel} p-4`}><span className={`text-xl ${card.color}`}>{card.icon}</span><p className="mt-3 text-xs text-slate-500 dark:text-slate-400">{card.title}</p><strong className="mt-1 block text-xl">{card.value}</strong></div>)}
     </div>
-    <section className={`${panel} p-4 md:p-5 space-y-4`} aria-label="اپراتورهای مرکز تماس">
-     <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-bold">اپراتورها</h2><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">وضعیت اتصال معتبر؛ به‌روزرسانی هر ۱۵ ثانیه</p></div>{canManage&&plan===true&&<Button icon={<PlusOutlined />} onClick={()=>setEditing(null)}>اتصال کاربر به اپراتور</Button>}</div>
-     {!canManage?<p className="text-sm text-slate-500 dark:text-slate-400">مدیریت اپراتورها نیازمند دسترسی مدیریت کاربران یا تنظیمات سازمان است.</p>:plan!==true?<p className="text-sm text-slate-500 dark:text-slate-400">مکالمهٔ داخل سامانه در پلن سازمان فعال نیست.</p>:operators.isLoading?<Spin />:operators.error?<Alert type="error" message="دریافت اپراتورها انجام نشد." action={<Button onClick={()=>void operators.refetch()}>تلاش دوباره</Button>} />:!operators.data?.items.length?<Empty description="هنوز حساب اپراتوری متصل نشده است" />:<div className="grid grid-cols-1 md:grid-cols-2 gap-3">{operators.data.items.map(operator=>{
-      const isSelf=operator.profileId===session.user?.id;const busy=isSelf?!!phone.activeCall:operator.status==='busy';const online=isSelf?phone.status==='registered':operator.status==='online';
-      return <div key={operator.id} className="rounded-2xl border border-slate-200 dark:border-white/10 p-3 flex items-center gap-3">
-       <div className="relative"><Avatar size={44} src={normalizePublicAssetUrl(operator.avatarUrl)||undefined}>{operator.title.slice(0,1)}</Avatar><span aria-label={busy?'در حال مکالمه':online?'متصل':'قطع'} className={`absolute bottom-0 left-0 h-3 w-3 rounded-full border-2 border-white dark:border-slate-900 ${busy?'bg-amber-500':online?'bg-emerald-500':'bg-slate-400'}`} /></div>
-       <div className="min-w-0 flex-1"><h3 className="font-semibold text-sm truncate">{operator.title}</h3><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">داخلی تماس: <bdi dir="ltr">{operator.metadata.dial_extension||'ثبت نشده'}</bdi></p><Tag className="mt-1" color={busy?'gold':online?'success':'default'}>{busy?'در حال مکالمه':online?'متصل':operator.isActive?'قطع':'غیرفعال'}</Tag></div>
-       <Button type="text" style={{minWidth:44,minHeight:44}} icon={<EditOutlined />} aria-label={`ویرایش ${operator.title}`} onClick={()=>setEditing(operator)} />
-      </div>;
-     })}</div>}
-     {(offset>0||operators.data?.hasMore)&&<div className="flex gap-2"><Button disabled={!offset} onClick={()=>setOffset(Math.max(0,offset-20))}>صفحهٔ قبل</Button><Button disabled={!operators.data?.hasMore} onClick={()=>setOffset(operators.data!.nextOffset)}>صفحهٔ بعد</Button></div>}
-    </section>
+
     <section className={`${panel} overflow-hidden`} aria-label="فهرست تماس‌ها"><div className="p-4 border-b border-slate-200 dark:border-white/10"><h2 className="font-bold">تماس‌ها و پروندهٔ مکالمات</h2></div><div className="h-[720px] max-h-[90dvh]"><React.Suspense fallback={<div className="p-6"><Spin /></div>}><MessagingSurface callsOnly initialFilter="call" onCallSummary={setSummary} /></React.Suspense></div></section>
    </main>
   </div>

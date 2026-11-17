@@ -13,7 +13,7 @@ const recipient = '10000000-0000-4000-8000-000000000002';
 const otherUser = '10000000-0000-4000-8000-000000000003';
 const sql545 = readFileSync('database_v1_phase545_saas_support_tickets.sql','utf8');
 const sql563 = readFileSync('database_v1_phase563_account_checkout_and_support_access.sql','utf8');
-const migration = readFileSync('database_v1_phase605_support_navigation_and_ticket_type.sql','utf8');
+const migration = readFileSync('database_v1_phase607_support_navigation_and_ticket_type.sql','utf8');
 const definition = (source: string, name: string) => {
   const start = source.indexOf(`create or replace function public.${name}(`);
   if (start < 0) throw new Error(name);

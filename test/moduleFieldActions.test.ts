@@ -7,7 +7,7 @@ let db: PGlite;
 const org = '20000000-0000-4000-8000-000000000001';
 const other = '20000000-0000-4000-8000-000000000002';
 const uid = '10000000-0000-4000-8000-000000000001';
-const migration = readFileSync('database_v1_phase604_module_field_action_permissions.sql', 'utf8');
+const migration = readFileSync('database_v1_phase606_module_field_action_permissions.sql', 'utf8');
 const setPermission = (value: unknown) => db.query('update org_roles set permissions=$1::jsonb', [JSON.stringify({ customers: value })]);
 
 beforeAll(async () => {

@@ -873,7 +873,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         children: [
           { key: '/messages', icon: <MessageOutlined />, label: 'پیام‌رسانی', disabled: !communicationsAccess.canUseWorkspace },
           { key: '/instagram', icon: <InstagramOutlined />, label: 'صندوق اینستاگرام', disabled: !canViewInstagramInbox },
-          { key: '/ai', icon: <AiSparkleIcon className="h-4 w-4" />, label: 'دستیار هوشمند سازمان', disabled: !communicationsAccess.canUseWorkspace },
+          { key: '/ai', icon: <NotificationUnreadBadge kind="ai"><AiSparkleIcon className="h-4 w-4" /></NotificationUnreadBadge>, label: 'دستیار هوشمند سازمان', disabled: !communicationsAccess.canUseWorkspace },
           { key: '/ai/agents', icon: <RobotOutlined />, label: 'میز کار ایجنت‌ها', disabled: !canViewAiAgentsWorkspace },
           { key: '/secretariat_documents', label: 'نامه‌ها و مکاتبات', disabled: !canViewModule('secretariat_documents') },
           { key: `/${ADVERTISING_CAMPAIGNS_MODULE_ID}`, label: 'کمپین‌های تبلیغاتی', disabled: !canViewAdvertisingCampaigns },

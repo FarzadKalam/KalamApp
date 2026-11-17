@@ -16,8 +16,31 @@ try{
  await page.getByRole('heading',{name:'مرکز تماس',exact:true}).waitFor();await page.getByRole('heading',{name:'اپراتور نمونه',exact:true}).waitFor();
  await page.screenshot({path:output+'/desktop.png',fullPage:true});
  assert.equal(await page.locator('[aria-label="شماره‌گیر مرکز تماس"] [aria-label="جست‌وجوی داخلی و مخاطب"]').count(),1,'same phone is docked');
+ assert.equal(await page.locator('aside [aria-label="اپراتورهای مرکز تماس"]').count(),1,'operators are below phone actions in the right column');
+ await page.getByRole('button',{name:/اتصال کاربر به اپراتور/}).click();
+ const operatorDialog=page.getByRole('dialog',{name:'اتصال کاربر به حساب تلفن',exact:true});
+ await operatorDialog.getByRole('combobox').first().click();
+ const userChoice=page.locator('.ant-select-item-option').filter({hasText:'همکار انتخابی'});
+ await userChoice.waitFor();
+ await page.screenshot({path:output+'/operator-picker-open.png'});
+ await page.waitForFunction(label=>{
+  const element=[...document.querySelectorAll('.ant-select-item-option')].find(item=>item.textContent.includes(label));
+  if(!element)return false;const box=element.getBoundingClientRect();
+  const target=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2);
+  window.__pickerLayerCheck={box:{x:box.x,y:box.y,width:box.width,height:box.height},hit:target?.className,
+   popupZ:window.getComputedStyle(element.closest('.ant-select-dropdown')).zIndex,
+   modalZ:[...document.querySelectorAll('.ant-modal-wrap')].map(node=>window.getComputedStyle(node).zIndex)};
+  return element.contains(target);
+ },'همکار انتخابی',{timeout:5000}).catch(async error=>{console.error(JSON.stringify(await page.evaluate(()=>window.__pickerLayerCheck)));throw error;});
+ await userChoice.click();await operatorDialog.getByText('همکار انتخابی',{exact:true}).waitFor();
+ await page.screenshot({path:output+'/operator-picker.png'});await operatorDialog.getByRole('button',{name:'انصراف',exact:true}).click();
  await page.getByRole('button',{name:'تماس با هوش مصنوعی',exact:true}).click();await page.getByText('آزمایش داخل مرورگر',{exact:true}).waitFor();await page.getByText('تماس با مخاطب',{exact:true}).click();await page.getByLabel('شمارهٔ مخاطب',{exact:true}).waitFor();await page.screenshot({path:output+'/voice-console.png'});await page.keyboard.press('Escape');
  await page.setViewportSize({width:390,height:844});await page.waitForTimeout(350);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'mobile has no horizontal overflow');await page.screenshot({path:output+'/mobile.png',fullPage:true});
  await page.getByRole('button',{name:'تغییر پوستهٔ آزمون'}).click();await page.waitForTimeout(200);await page.screenshot({path:output+'/mobile-dark.png',fullPage:true});
+ await page.setViewportSize({width:1440,height:1000});await page.getByRole('button',{name:'نمای آزمون پیام‌رسانی',exact:true}).click();
+ const tabs=page.locator('button').filter({hasText:/^(همه|داخلی|گروه بات|پی‌وی بات|پیامک|ایمیل)$/});
+ await page.getByText('همه',{exact:true}).waitFor();
+ assert.deepEqual((await tabs.allTextContents()).map(text=>text.trim()),['همه','داخلی','گروه بات','پی‌وی بات','پیامک','ایمیل'],'messaging tabs start with all, end with email and omit calls and agents');
+ await page.screenshot({path:output+'/messaging-tabs.png',fullPage:true});
  assert.deepEqual(errors,[],'page has no runtime exceptions');console.log(JSON.stringify({desktop:true,mobile:true,dark:true,dockedPhone:true,bothVoiceModes:true,realCallPlaced:false}));
 }finally{await browser.close();server.close();}
