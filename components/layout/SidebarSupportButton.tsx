@@ -10,7 +10,7 @@ const SidebarSupportButton: React.FC<Props> = ({ ticketPath, unread = 0, onNavig
   const [phone, setPhone] = useState<{ label: string; href: string } | null>(null);
   useEffect(() => {
     let active = true;
-    void supabasePublic.rpc('get_site_footer').then(({ data, error }) => {
+    void Promise.resolve(supabasePublic.rpc('get_site_footer')).then(({ data, error }) => {
       const label = String(data?.phone || '').trim();
       const number = String(data?.phoneHref || label).replace(/^tel:/i, '')
         .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
