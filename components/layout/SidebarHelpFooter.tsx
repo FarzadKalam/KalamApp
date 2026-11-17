@@ -20,7 +20,7 @@ const SidebarHelpFooter: React.FC<Props> = ({ contexts, viewer, ticketPath, unre
       </div>
       <SidebarSupportButton ticketPath={ticketPath} unread={unread} onNavigate={onNavigate} />
     </div>
-    <TazeSystemAttribution collapsed={false} />
+    <div className="sidebar-help-attribution"><TazeSystemAttribution collapsed={false} alwaysVisible /></div>
   </div>
 );
 export default SidebarHelpFooter;

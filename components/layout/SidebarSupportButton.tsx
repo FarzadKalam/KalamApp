@@ -3,9 +3,9 @@ import { Badge, Button, Popover } from 'antd';
 import { CustomerServiceOutlined, MessageOutlined, PhoneOutlined } from '@ant-design/icons';
 import { supabasePublic } from '../../supabaseClient';
 
-type Props = { ticketPath?: string; unread?: number; onNavigate: (path: string) => void };
+type Props = { ticketPath?: string; unread?: number; onNavigate: (path: string) => void; iconOnly?: boolean };
 
-const SidebarSupportButton: React.FC<Props> = ({ ticketPath, unread = 0, onNavigate }) => {
+const SidebarSupportButton: React.FC<Props> = ({ ticketPath, unread = 0, onNavigate, iconOnly = false }) => {
   const [open, setOpen] = useState(false);
   const [phone, setPhone] = useState<{ label: string; href: string } | null>(null);
   useEffect(() => {
@@ -28,12 +28,13 @@ const SidebarSupportButton: React.FC<Props> = ({ ticketPath, unread = 0, onNavig
         {phone ? <><div dir="ltr" className="mb-2 text-right">{phone.label}</div><Button block href={phone.href}>باز کردن شماره‌گیر دستگاه</Button></>
           : <span className="text-xs text-gray-500">شماره پشتیبانی در دسترس نیست.</span>}
       </div>
-      {ticketPath && <Button block icon={<MessageOutlined />} onClick={() => { setOpen(false); onNavigate(ticketPath); }}>تیکت‌ها <Badge count={unread} size="small" /></Button>}
+      {ticketPath && <Button block icon={<MessageOutlined />} onClick={() => { setOpen(false); onNavigate(ticketPath); }}>تیکت‌ها <Badge count={unread} size="small" className="workspace-unread-badge" /></Button>}
     </div>}>
     <button type="button" aria-label="پشتیبانی" aria-expanded={open}
-      className="sidebar-support-button">
-      <Badge count={unread} size="small"><CustomerServiceOutlined className="text-2xl text-[rgb(var(--brand-600-rgb))] dark:text-white" /></Badge>
-      <span>پشتیبانی</span>
+      title={iconOnly ? 'پشتیبانی' : undefined}
+      className={iconOnly ? 'sidebar-support-button sidebar-support-button-icon' : 'sidebar-support-button'}>
+      <Badge count={unread} size="small" className="workspace-unread-badge"><CustomerServiceOutlined /></Badge>
+      {!iconOnly && <span>پشتیبانی</span>}
     </button>
   </Popover>;
 };

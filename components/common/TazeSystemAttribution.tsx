@@ -5,12 +5,13 @@ import { TAZE_SYSTEM_BRAND_ASSETS } from '../../utils/tazeSystemBrandAssets';
 type Props = {
   variant?: 'sidebar' | 'account';
   collapsed?: boolean;
+  alwaysVisible?: boolean;
 };
 
 // Product attribution is shared by all organizations, independent of tenant identity.
-const TazeSystemAttribution: React.FC<Props> = ({ variant = 'sidebar', collapsed = false }) => {
+const TazeSystemAttribution: React.FC<Props> = ({ variant = 'sidebar', collapsed = false, alwaysVisible = false }) => {
   const whiteLabel = useOrgPlanFeature('white_label');
-  if (whiteLabel === true) return null;
+  if (whiteLabel === true && !alwaysVisible) return null;
   const account = variant === 'account';
   const iconOnly = !account && collapsed;
   return (

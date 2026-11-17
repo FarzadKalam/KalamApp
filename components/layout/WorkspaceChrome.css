@@ -27,6 +27,7 @@
 .sidebar-module-search input{background:transparent}
 .app-drawer-footer{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .sidebar-help-footer{width:100%;display:flex;flex-direction:column;gap:10px}
+.sidebar-help-attribution{display:flex;justify-content:center;border-top:1px solid var(--workspace-line);padding-top:4px}
 .sidebar-help-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;direction:rtl}
 .sidebar-help-tutorials{min-width:0}
 .sidebar-tutorial-button.ant-btn,.sidebar-support-button{min-height:44px;display:inline-flex;align-items:center;justify-content:center;gap:8px;white-space:nowrap;border-radius:12px;padding:8px 12px;font-size:13px;font-weight:600}
@@ -36,9 +37,11 @@
 .sidebar-support-button:focus-visible{outline:2px solid rgb(var(--brand-500-rgb));outline-offset:2px}
 .dark .sidebar-support-button{color:var(--workspace-text);background:rgba(var(--brand-500-rgb),.18);border-color:rgba(var(--brand-300-rgb),.25)}
 .sidebar-support-button .anticon{font-size:22px}
+.sidebar-support-button-icon{width:44px;min-width:44px;height:44px;padding:0;border-radius:50%;background:transparent;border-color:transparent;color:var(--workspace-muted)}
+.dark .sidebar-support-button-icon{background:transparent;border-color:transparent;color:var(--workspace-muted)}
 .app-module-drawer-dark .ant-drawer-content,.app-module-drawer-dark .ant-drawer-footer{background:#1c1c1f;color:#f4f4f5}
 .app-module-drawer-dark .ant-drawer-header{border-color:#353539}
-.contextual-tutorial-badge .ant-badge-count{background:var(--workspace-solid);color:#fff;box-shadow:0 0 0 2px var(--workspace-surface)}
+.contextual-tutorial-badge .ant-badge-count,.workspace-unread-badge .ant-badge-count{background:var(--workspace-solid);color:#fff;box-shadow:0 0 0 2px var(--workspace-surface)}
 .workspace-chrome .ant-layout-header{background:var(--workspace-bg)!important;border-bottom:0}
 .workspace-chrome .app-header-actions{background:var(--workspace-surface);border-radius:30px;padding:3px 8px}
 .workspace-chrome .app-header-actions .ant-btn{border-radius:50%}

@@ -6,6 +6,7 @@ import ContextualTutorialButton from '../cms/ContextualTutorialButton';
 import { renderModuleIcon } from '../../utils/moduleIcons';
 import { SIDEBAR_LAYOUT } from '../../utils/sidebarLayout';
 import SidebarHelpFooter from './SidebarHelpFooter';
+import SidebarSupportButton from './SidebarSupportButton';
 
 type Props = {
   items: MenuProps['items']; railItems: MenuProps['items']; selectedKey: string; ancestorKeys: string[];
@@ -99,6 +100,7 @@ function MainSidebar({ items, railItems, selectedKey, ancestorKeys, collapsed, o
       })}</nav>
       <div className="app-rail-footer">
         <ContextualTutorialButton contexts={contexts} viewer={viewer} buttonClassName="app-rail-item" />
+        <SidebarSupportButton iconOnly ticketPath={supportTicketPath} unread={supportUnread} onNavigate={onNavigate} />
       </div>
     </aside>}
     {!isMobile && !collapsed && <aside id="workspace-sidebar-panel" className="app-sidebar-panel" aria-label={panelTitle}>
