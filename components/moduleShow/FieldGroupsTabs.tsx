@@ -88,7 +88,7 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
           .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
           .filter((f: any) => shouldRenderInGeneralModuleUi(f))
           .filter((f: any) => !shouldHideManagedAssigneeField(moduleId, f.key))
-          .filter((f) => !isDuplicateHrEmployeeField(moduleId, f.key))
+          .filter((f: { key: string }) => !isDuplicateHrEmployeeField(moduleId, f.key))
           .filter((f: any) => !(moduleId === 'tasks' && isTaskLegacySourceField(f.key)))
           .some((f: any) => (isFieldVisible ? isFieldVisible(f) : (!f.logic || checkVisibility(f.logic))));
 
@@ -142,7 +142,7 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
           .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
           .filter((f: any) => shouldRenderInGeneralModuleUi(f))
           .filter((f: any) => !shouldHideManagedAssigneeField(moduleId, f.key))
-          .filter((f) => !isDuplicateHrEmployeeField(moduleId, f.key))
+          .filter((f: { key: string }) => !isDuplicateHrEmployeeField(moduleId, f.key))
           .filter((f: any) => !(moduleId === 'tasks' && isTaskLegacySourceField(f.key)))
           .map((f: any) => (isFieldVisible ? isFieldVisible(f) : (!f.logic || checkVisibility(f.logic))) && (
             <div

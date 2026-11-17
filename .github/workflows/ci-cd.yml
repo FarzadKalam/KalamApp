@@ -423,7 +423,7 @@ jobs:
         timeout-minutes: 5
         run: >-
           npx vitest run
-          utils/hrFilters.test.ts utils/popupContainer.test.ts
+          utils/hrFilters.test.ts utils/popupContainer.test.ts test/internalWebFormMembership.test.ts
           components/AdaptiveSelectField.test.tsx components/PersianDateRangePicker.test.tsx
           --maxWorkers=1 --no-file-parallelism
 
