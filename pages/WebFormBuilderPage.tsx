@@ -1025,7 +1025,7 @@ const WebFormBuilderPage: React.FC = () => {
             is_active: true,
           };
         })
-        .filter(Boolean);
+        .filter((field): field is NonNullable<typeof field> => field !== null);
 
       const { error: deleteFieldsError } = await supabase.from("web_form_fields").delete().eq("web_form_id", webFormId);
       if (deleteFieldsError) throw deleteFieldsError;

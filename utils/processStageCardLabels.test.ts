@@ -15,6 +15,11 @@ describe('processStageCardLabels', () => {
     expect(formatProcessStageDueLabel('2026-06-29T08:00:00+03:30', now)).toBe('ده روز پیش ساعت ۰۸:۰۰');
   });
 
+  it('does not infer a clock time from an ISO date-only value', () => {
+    const now = new Date('2026-07-09T10:00:00+03:30');
+    expect(formatProcessStageDueLabel('2026-07-09', now)).toBe('امروز');
+  });
+
   it('does not expose English custom field keys as Persian labels', () => {
     expect(getProcessTaskCustomFieldLabelFa({
       key: 'approval_code',

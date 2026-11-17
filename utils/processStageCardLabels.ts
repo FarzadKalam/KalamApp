@@ -104,7 +104,22 @@ export const resolveProcessStageDueValue = ({
   return computed ? computed.toISOString() : '';
 };
 
-const startOfLocalDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+const tehranDateParts = (date: Date) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Tehran',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  return Object.fromEntries(parts.filter((part) => part.type !== 'literal').map(({ type, value }) => [type, Number(value)])) as {
+    year: number; month: number; day: number;
+  };
+};
+
+const startOfTehranDay = (date: Date) => {
+  const { year, month, day } = tehranDateParts(date);
+  return Date.UTC(year, month - 1, day);
+};
 
 const getRelativeDayLabel = (dayDiff: number) => {
   if (dayDiff === 0) return 'امروز';
@@ -120,8 +135,11 @@ const getRelativeDayLabel = (dayDiff: number) => {
 };
 
 const formatTimeLabel = (date: Date) => {
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Tehran', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(date);
+  const hours = parts.find((part) => part.type === 'hour')?.value ?? '00';
+  const minutes = parts.find((part) => part.type === 'minute')?.value ?? '00';
   return toPersianNumber(`${hours}:${minutes}`);
 };
 
@@ -133,9 +151,9 @@ export const formatProcessStageDueLabel = (value: unknown, now: Date = new Date(
     return toPersianNumber(safeJalaliFormat(raw, raw.includes(':') ? 'YYYY/MM/DD HH:mm' : 'YYYY/MM/DD') || raw);
   }
 
-  const dayDiff = Math.round((startOfLocalDay(parsed) - startOfLocalDay(now)) / 86_400_000);
+  const dayDiff = Math.round((startOfTehranDay(parsed) - startOfTehranDay(now)) / 86_400_000);
   const relativeLabel = getRelativeDayLabel(dayDiff);
-  const hasExplicitTime = /[T\s]\d{1,2}:\d{2}/.test(raw) || (parsed.getHours() !== 0 || parsed.getMinutes() !== 0);
+  const hasExplicitTime = /[T\s]\d{1,2}:\d{2}/.test(raw);
   if (relativeLabel) {
     const timeLabel = hasExplicitTime ? ` ساعت ${formatTimeLabel(parsed)}` : '';
     return toPersianNumber(`${relativeLabel}${timeLabel}`);

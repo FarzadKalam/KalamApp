@@ -195,6 +195,7 @@ type AssistantAction =
   | 'run_background_agents'
   | 'run_agent_task'
   | 'prepare_agent_task'
+  | 'suggest_product_site_content'
   | 'saas_ai';
 
 type RequestContext = {

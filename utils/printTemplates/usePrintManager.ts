@@ -1516,6 +1516,9 @@ export const usePrintManager = ({
   const isSystemFieldVisible = useCallback(
     (fieldPath: string, forceSelection = false) => {
       const normalizedPath = String(fieldPath || '').trim();
+      // Row numbers are renderer-owned presentation cells, not selectable
+      // record fields. They are intentionally absent from the field catalog.
+      if (/^block\.[^.]+\.__row_index__$/.test(normalizedPath)) return true;
       // A selection is a template-level visibility contract. It must apply to
       // direct placeholders in manual templates as well as system blocks,
       // otherwise the "printable fields" tab would save a setting that has no

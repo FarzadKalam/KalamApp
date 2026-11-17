@@ -26,16 +26,17 @@ That is all. You do not need GitHub, GitHub Actions, or GitHub Secrets for this 
 
 Before every production deploy, run this checklist for the current release:
 
-1. Confirm `package.json` version and `.version-changes.json` entry are in sync.
-2. Run `npx tsc --noEmit` and make sure there are no type errors.
-3. Verify `dist/sw.js` has the stamped cache version of the current release (and no raw version token), and `dist/version.json` reports that same version. After deploy, verify that the actual PWA host serves `sw.js`, `index.html`, and `version.json` with `Cache-Control: no-cache, no-store, must-revalidate`.
-4. Make sure the current database migration phase required by the release has already been executed on production.
-5. Smoke-test the critical paths after the final build:
+1. Fetch `origin/main`; confirm the release is being built from the latest `main` commit. The GitHub Actions production job enforces this and refuses stale commits or feature branches.
+2. Confirm `package.json` version and `.version-changes.json` entry are in sync.
+3. Run the project tests and `npx tsc --noEmit`; make sure both succeed.
+4. Verify `dist/sw.js` has the stamped cache version of the current release (and no raw version token), and `dist/version.json` reports that same version. After deploy, verify that the actual PWA host serves `sw.js`, `index.html`, and `version.json` with `Cache-Control: no-cache, no-store, must-revalidate`.
+5. Make sure each explicitly listed database migration required by the release has already been applied or is included in the approved deployment.
+6. Smoke-test the critical paths after the final build:
    - Dashboard open
    - One heavy module list
    - One process-enabled module show page
    - Public site routes such as `/blog`, `/learn`, `/updates`
-6. If the release contains runtime/performance changes, verify that no obvious `select('*')`, per-row process fetch, or full relation scan remains on the main user flow.
+7. If the release contains runtime/performance changes, verify that no obvious `select('*')`, per-row process fetch, or full relation scan remains on the main user flow.
 
 ## Local Deploy Without GitHub
 
@@ -108,15 +109,15 @@ DEPLOY_FUNCTIONS_RESTART_WITH_SUDO=true
 ```
 
 When either sudo flag is enabled, the deploy script allocates a TTY so you can enter the sudo password interactively. If you prefer not to use sudo, change ownership of the target directory and compose files so the deploy user can read and write them directly.
-## Legacy GitHub Actions Flow
+## GitHub Actions Flow
 
-The sections below are only for the old GitHub Actions based workflow.
-If you are using `npm run deploy:prod`, you can ignore them.
+CI runs on pushes and pull requests to `main`. Production deployment is separate and manual: dispatch the `CI-CD` workflow from the latest `main` commit and set `deploy=true`. The workflow rejects feature branches and stale commits before it changes production. It applies only the explicitly listed database migrations and Edge Functions; it does not publish tenant site pages or product content. Those remain manual actions inside the app.
 
 ## What You Get
 
-- CI on every push/PR: install, typecheck, build
-- CD on `main`: upload `dist/`, create a timestamped release, switch `current` symlink (atomic deploy), keep rollback history
+- CI on pushes and pull requests: install, typecheck, database and application tests, and build
+- Production release: only after a manual workflow dispatch from the latest `main`; the release uploads `dist/`, applies the listed migrations/functions, creates a timestamped release, and switches the `current` symlink
+- The server retains the last five frontend releases for code rollback. A code rollback does not automatically undo database migrations or restore changed records; database recovery requires a separate, compatible rollback or backup-restoration plan.
 
 ## GitHub Secrets (Required Only For GitHub Actions)
 
@@ -273,4 +274,3 @@ ls -1 /var/www/kalamapp/releases
 sudo ln -sfn /var/www/kalamapp/releases/<OLD_TIMESTAMP> /var/www/kalamapp/current
 sudo systemctl reload nginx
 ```
-

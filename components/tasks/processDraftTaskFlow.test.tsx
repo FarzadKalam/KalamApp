@@ -430,4 +430,50 @@ describe('process draft task flow', () => {
     expect(modal).toHaveAttribute('data-record-id', PROJECT_ID);
     expect(modal).not.toHaveAttribute('data-task-id');
   });
+
+  it('does not borrow another stage link for an unlinked active draft stage', async () => {
+    render(
+      <App>
+        <GlobalTaskProcessModalHost />
+      </App>
+    );
+
+    openTaskProcessModal({
+      draftModal: {
+        process: {
+          mode: 'run',
+          id: '77777777-7777-4777-8777-777777777777',
+          title: 'فرآیند محتوایی',
+          templateId: TEMPLATE_ID,
+          templateTitle: 'فرآیند محتوایی',
+          relatedRecordLabel: 'پروژه مرتبط',
+          statusLabel: 'draft',
+          lanes: [{
+            id: 'other-lane',
+            title: 'مرحله‌های دیگر',
+            stages: [{
+              id: 'other-stage',
+              title: 'مرحلهٔ دیگر',
+              kind: 'activity',
+              status: 'waiting',
+              source: { process_link_map: { projects: PROJECT_ID } },
+            }],
+          }],
+        },
+        stage: {
+          id: 'draft-without-link',
+          title: 'مرحلهٔ پیش‌نویس بدون لینک',
+          kind: 'draft',
+          status: 'draft',
+          source: { id: 'draft-without-link' },
+        },
+        onCreateDraftActivity: vi.fn(),
+        onSaveDraftActivity: vi.fn(),
+      },
+    });
+
+    const modal = await screen.findByTestId('global-process-modal');
+    expect(modal).not.toHaveAttribute('data-module-id');
+    expect(modal).not.toHaveAttribute('data-record-id');
+  });
 });

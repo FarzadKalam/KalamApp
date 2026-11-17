@@ -236,3 +236,98 @@ export const VoipQrScannerModal: React.FC<VoipQrScannerModalProps> = ({
     </Modal>
   );
 };
+
+interface PortSipQrDisplayModalProps {
+  open: boolean;
+  onClose: () => void;
+  extension: string;
+  password?: string;
+  serverUrl?: string;
+  displayName?: string;
+}
+
+export const PortSipQrDisplayModal: React.FC<PortSipQrDisplayModalProps> = ({
+  open,
+  onClose,
+  extension,
+  password,
+  serverUrl,
+  displayName,
+}) => {
+  const qrPayload = useMemo(() => {
+    return buildPortSipQrPayload({
+      extension,
+      password,
+      serverUrl,
+      displayName,
+    });
+  }, [extension, password, serverUrl, displayName]);
+
+  const sipUri = useMemo(() => {
+    const domain = String(serverUrl || '')
+      .replace(/^wss?:\/\//i, '')
+      .replace(/^https?:\/\//i, '')
+      .split('/')[0]
+      .split(':')[0] || 'sip.telefonchy.com';
+    return `sip:${extension}${password ? ':' + password : ''}@${domain}`;
+  }, [extension, password, serverUrl]);
+
+  return (
+    <Modal
+      open={open}
+      onCancel={onClose}
+      title="کد QR اتصال به خط در PortSIP"
+      footer={null}
+      centered
+      width={380}
+    >
+      <div className="flex flex-col items-center justify-center p-3 space-y-4 text-center">
+        <Text type="secondary" className="text-xs">
+          در اپلیکیشن PortSIP روی گوشی، آیکون اسکن QR را بزنید و این تصویر را اسکن کنید.
+        </Text>
+
+        <div className="p-3 bg-white rounded-2xl shadow-md border border-slate-200 inline-block">
+          <QRCode value={qrPayload} size={200} bordered={false} />
+        </div>
+
+        <div className="w-full space-y-1.5 text-xs text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/60 p-3 rounded-xl text-right">
+          <div className="flex justify-between">
+            <span className="font-semibold">شماره داخلی:</span>
+            <span className="font-mono font-bold" dir="ltr">{extension}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="font-semibold">سرور SIP:</span>
+            <span className="font-mono text-[11px]" dir="ltr">{serverUrl || 'sip.telefonchy.com'}</span>
+          </div>
+          {password ? (
+            <div className="flex justify-between">
+              <span className="font-semibold">رمز عبور:</span>
+              <span className="font-mono" dir="ltr">••••••••</span>
+            </div>
+          ) : null}
+        </div>
+
+        <Space direction="horizontal" wrap className="justify-center">
+          <Button
+            size="small"
+            onClick={() => {
+              void navigator.clipboard.writeText(sipUri);
+              message.success('لینک SIP کپی شد');
+            }}
+          >
+            کپی لینک SIP
+          </Button>
+          <Button
+            size="small"
+            onClick={() => {
+              void navigator.clipboard.writeText(qrPayload);
+              message.success('متن JSON کپی شد');
+            }}
+          >
+            کپی پیکربندی JSON
+          </Button>
+        </Space>
+      </div>
+    </Modal>
+  );
+};

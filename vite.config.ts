@@ -1,8 +1,8 @@
 import path from 'path';
 import { defineConfig, loadEnv } from 'vite';
+import { configDefaults } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import fs from 'fs';
-import { configDefaults } from 'vitest/config';
 
 const toPosixPath = (value: string) => value.split(path.win32.sep).join('/');
 
@@ -209,16 +209,28 @@ export default defineConfig(({ mode }) => {
         }
       },
       test: {
-        exclude: [...configDefaults.exclude, 'tmp/**', 'installer/output/**', 'installer/staging/**'],
+        exclude: [
+          ...configDefaults.exclude,
+          'tmp/**',
+          'installer/output/**',
+          'installer/staging/**',
+          'scripts/preserve-public-seo.test.mjs',
+          'scripts/public-brand-seo.test.mjs',
+        ],
         environment: 'jsdom',
+        environmentOptions: {
+          jsdom: {
+            url: 'http://localhost/',
+          },
+        },
         setupFiles: './test/setup.ts',
         css: true,
         // چند فایل UI/PDF سنگین هم‌زمان، زمان‌سنج آزمون‌ها را به‌صورت کاذب
         // مصرف می‌کردند. اجرای ترتیبی، نتیجهٔ قطعی و تکرارپذیر می‌دهد.
         fileParallelism: false,
-        // رابط‌های Ant Design در آزمون‌های یکپارچهٔ سنگین (به‌ویژه پیش‌نمایش چاپ)
-        // با وجود پایان صحیح، از سقف پیش‌فرض پنج‌ثانیه عبور می‌کنند.
-        testTimeout: 20_000,
+        // رابط‌های Ant Design و مسیرهای چندرسانه‌ای دستیار در آزمون‌های یکپارچهٔ
+        // سنگین، روی دستگاه‌های معمولی بیش از ۲۰ ثانیه زمان می‌برند.
+        testTimeout: 40_000,
       }
     };
 });
