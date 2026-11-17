@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { App, Modal, Tabs, Button, Upload, Input, Alert, Typography } from 'antd';
+import { App, Modal, Tabs, Button, Upload, Input, Alert, QRCode, Space, Typography } from 'antd';
 import type { UploadProps } from 'antd';
-import { parseVoipQrConfig, type ParsedVoipConfig } from '../../utils/voipQr';
+import { buildPortSipQrPayload, parseVoipQrConfig, type ParsedVoipConfig } from '../../utils/voipQr';
 
 const { Text } = Typography;
 
@@ -254,6 +254,7 @@ export const PortSipQrDisplayModal: React.FC<PortSipQrDisplayModalProps> = ({
   serverUrl,
   displayName,
 }) => {
+  const { message } = App.useApp();
   const qrPayload = useMemo(() => {
     return buildPortSipQrPayload({
       extension,
