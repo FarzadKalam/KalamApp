@@ -97,11 +97,14 @@ select t.* from thread_events t where not exists(
  select 1 from note_events n where n.agent_key=t.agent_key and n.content=t.content
   and abs(extract(epoch from n.created_at-t.created_at))<=180
 );
-revoke all on public.ai_notification_events from public,anon;
-grant select on public.ai_notification_events to authenticated;
+revoke all on public.ai_notification_events from public,anon,authenticated;
 
+-- Controlled definer entry: older source RLS resolves role shares through the primary profile.
+-- The private invoker view explicitly validates active membership in the selected organization,
+-- owner/user-share/current-role-share and reminder recipients, including under this function's role.
+-- No client can query the view directly, and the function accepts no alternate viewer or tenant.
 create or replace function public.get_ai_notification_snapshot_v1()
-returns jsonb language sql stable security invoker set search_path=public as $$
+returns jsonb language sql stable security definer set search_path=public as $$
  with unread as materialized(select * from public.ai_notification_events where is_unread),
  grouped as (select conversation_key,thread_id,agent_key,count(*) as unread_count,max(created_at) as latest
   from unread group by conversation_key,thread_id,agent_key),

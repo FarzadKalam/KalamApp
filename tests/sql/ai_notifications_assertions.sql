@@ -38,7 +38,20 @@ end$$;
 reset role;
 do $$begin
  if not exists(select 1 from public.communication_read_cursors where channel='internal' and conversation_key='agent:sales_leads') then raise exception 'agent read diverged from central cursors';end if;
+ if has_table_privilege('authenticated','public.ai_notification_events','SELECT') then raise exception 'raw AI notification view must remain private';end if;
 end$$;
+update public.ai_threads set shared_role_ids=array['30000000-0000-4000-8000-000000000001']::uuid[] where id='40000000-0000-4000-8000-000000000002';
+set role authenticated;
+do $$begin
+ if (public.get_ai_notification_snapshot_v1()->>'total')::int<>1 then raise exception 'current organization role share was ignored';end if;
+end$$;
+reset role;
+update public.user_organization_memberships set is_active=false where user_id='20000000-0000-4000-8000-000000000001';
+set role authenticated;
+do $$begin
+ if (public.get_ai_notification_snapshot_v1()->>'total')::int<>0 then raise exception 'revoked membership remained visible';end if;
+end$$;
+reset role;
 select set_config('test.org','',false);
 set role authenticated;
 do $$begin
