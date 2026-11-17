@@ -21,6 +21,21 @@ type InboxOrder = {
   received_at: string;
   processing_status: string;
 };
+type SyncHistoryEntry = {
+  id: string;
+  module_key: string;
+  action: string;
+  direction: string;
+  source: string;
+  started_at: string;
+  status: string;
+  rows_received: number;
+  rows_created: number;
+  rows_updated: number;
+  rows_failed: number;
+  changed_fields: string[];
+  error_code: string | null;
+};
 const functionUrl = `${SUPABASE_URL}/functions/v1/external-connectors`;
 
 const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ orgId }) => {
@@ -29,6 +44,9 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
   const [connections, setConnections] = useState<WooConnection[]>([]);
   const [orders, setOrders] = useState<InboxOrder[]>([]);
   const [selected, setSelected] = useState<WooConnection | null>(null);
+  const [historyConnection, setHistoryConnection] = useState<WooConnection | null>(null);
+  const [historyRows, setHistoryRows] = useState<SyncHistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [syncConnection, setSyncConnection] = useState<WooConnection | null>(null);
   const [featureAllowed, setFeatureAllowed] = useState<boolean | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -144,8 +162,9 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
       const data = await call({ action, id: connection.id });
       if (action === 'test') message.success('اتصال به سفارش‌های ووکامرس برقرار است.');
       if (action === 'sync_orders') {
-        if (data.failed?.length) message.warning(`${data.imported} سفارش به فاکتور تبدیل شد؛ ${data.failed.length} سفارش نیاز به بررسی دارد.`);
-        else message.success(`${data.imported} سفارش بررسی و در فاکتورها ثبت شد.`);
+        const summary = `${data.created || 0} فاکتور تازه، ${data.updated || 0} فاکتور به‌روزشده، ${data.linked || 0} اتصال به فاکتور موجود، ${data.skipped || 0} بدون تغییر`;
+        if (data.failed?.length) message.warning(`${summary}؛ ${data.failed.length} سفارش نیاز به بررسی دارد.`);
+        else message.success(`بررسی سفارش‌ها کامل شد: ${summary}.`);
       }
       if (action === 'list_orders') {
         setSelected(connection);
@@ -156,6 +175,20 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
       message.error(toFaErrorMessage(error, 'ارتباط با فروشگاه ناموفق بود.'));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const showHistory = async (connection: WooConnection) => {
+    setHistoryConnection(connection);
+    setHistoryLoading(true);
+    try {
+      const data = await call({ action: 'list_sync_history', id: connection.id, page: 1, limit: 25 });
+      setHistoryRows(data.events || []);
+    } catch (error) {
+      message.error(toFaErrorMessage(error, 'بارگذاری تاریخچهٔ همگام‌سازی ناموفق بود.'));
+      setHistoryRows([]);
+    } finally {
+      setHistoryLoading(false);
     }
   };
 
@@ -188,6 +221,7 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
           <Button size="small" disabled={!row.is_active || busy} onClick={() => void run(row, 'test')}>آزمون اتصال</Button>
           <Button size="small" type="primary" disabled={!row.is_active || busy} onClick={() => setSyncConnection(row)}>همگام‌سازی</Button>
           <Button size="small" onClick={() => void run(row, 'list_orders')}>صندوق ورودی</Button>
+          <Button size="small" onClick={() => void showHistory(row)}>تاریخچه</Button>
         </Space> },
       ]} />
     <Modal title={editing ? 'ویرایش فروشگاه' : 'افزودن فروشگاه'} open={open} onCancel={() => setOpen(false)}
@@ -214,6 +248,21 @@ const WooCommerceConnectionsSection: React.FC<{ orgId: string | null }> = ({ org
           { title: 'وضعیت فروشگاه', dataIndex: 'external_status' },
           { title: 'پردازش', dataIndex: 'processing_status', render: (value: string) => value === 'processed' ? 'ثبت‌شده در فاکتورها' : value === 'error' ? 'نیازمند بررسی' : 'در انتظار' },
           { title: 'دریافت', dataIndex: 'received_at', render: (value: string) => new Date(value).toLocaleString('fa-IR') },
+        ]} />
+    </Modal>
+    <Modal title={`تاریخچهٔ همگام‌سازی ${historyConnection?.name || ''}`} open={!!historyConnection}
+      onCancel={() => setHistoryConnection(null)} footer={<Button onClick={() => setHistoryConnection(null)}>بستن</Button>} width={900}>
+      <Alert className="mb-3" type="info" showIcon message="گزارش اجراها؛ مقدارهای خصوصی و کلیدهای اتصال ذخیره یا نمایش داده نمی‌شوند." />
+      <Table<SyncHistoryEntry> rowKey="id" dataSource={historyRows} loading={historyLoading} size="small" pagination={{ pageSize: 10 }} scroll={{ x: 760 }}
+        locale={{ emptyText: 'هنوز اجرای همگام‌سازی ثبت نشده است.' }} columns={[
+          { title: 'زمان', dataIndex: 'started_at', render: (value: string) => new Date(value).toLocaleString('fa-IR') },
+          { title: 'بخش', dataIndex: 'module_key', render: (value: string) => ({ products: 'کالاها', customers: 'مشتریان', invoices: 'فاکتورها' } as Record<string, string>)[value] || value },
+          { title: 'عملیات', dataIndex: 'action', render: (value: string) => ({ sync_record: 'همگام‌سازی رکورد', sync_orders: 'دریافت سفارش‌ها', sync_product_content: 'ارسال محتوای محصول' } as Record<string, string>)[value] || value },
+          { title: 'جهت', dataIndex: 'direction', render: (value: string) => value === 'from_site' ? 'از فروشگاه به کلام' : 'از کلام به فروشگاه' },
+          { title: 'نتیجه', dataIndex: 'status', render: (value: string) => value === 'succeeded' ? 'موفق' : value === 'partial' ? 'نیمه‌موفق' : value === 'started' ? 'در حال اجرا' : 'ناموفق' },
+          { title: 'دریافتی / ایجاد / به‌روزرسانی / خطا', render: (_, row) => `${row.rows_received} / ${row.rows_created} / ${row.rows_updated} / ${row.rows_failed}` },
+          { title: 'نام فیلدها', dataIndex: 'changed_fields', render: (fields: string[]) => fields?.length ? fields.join('، ') : '—' },
+          { title: 'خطا', dataIndex: 'error_code', render: (value: string | null) => value || '—' },
         ]} />
     </Modal>
     <WooCommerceSyncModal connection={syncConnection} onClose={() => setSyncConnection(null)} call={call}

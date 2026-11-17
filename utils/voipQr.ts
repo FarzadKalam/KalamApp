@@ -211,3 +211,44 @@ export const parseVoipQrConfig = (raw: string): ParsedVoipConfig => {
 
   return result;
 };
+
+/** Format a PortSIP / Telefonchy-compatible JSON payload for QR generation. */
+export const buildPortSipQrPayload = (config: {
+  extension: string;
+  password?: string;
+  serverUrl?: string;
+  displayName?: string;
+  port?: number;
+}): string => {
+  const domain = String(config.serverUrl || '')
+    .replace(/^wss?:\/\//i, '')
+    .replace(/^https?:\/\//i, '')
+    .split('/')[0]
+    .split(':')[0] || 'phone2.telefonchy.com';
+  const extension = String(config.extension || '').trim();
+  const password = String(config.password || '').trim();
+  const sipPort = String(config.port || 5060);
+
+  return JSON.stringify({
+    name: extension,
+    dn: domain,
+    wdn: domain,
+    protocols: [
+      { pn: 'UDP', port: sipPort },
+      { pn: 'WSS', port: '5065' },
+    ],
+    ip: domain,
+    private: domain,
+    ext: extension,
+    pwd: password,
+    v: 1,
+    username: extension,
+    auth_name: extension,
+    password,
+    domain,
+    sip_server: domain,
+    sip_port: Number.parseInt(sipPort, 10),
+    display_name: String(config.displayName || extension).trim(),
+    transport: 'udp',
+  }, null, 2);
+};

@@ -1009,6 +1009,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/web_forms', label: 'وب فرم‌ها', disabled: !canViewModule('web_forms') },
           { key: '/surveys', label: 'نظرسنجی‌ها', disabled: !canViewModule('surveys') },
           { key: '/instructions', label: 'دستورالعمل‌ها', disabled: !canViewModule('instructions') },
+          { key: '/site-builder', label: 'سایت‌ساز' },
           { key: '/goals', label: 'اهداف', disabled: !canViewGoalsHub },
           { key: '/org-knowledge', icon: <AiSparkleIcon className="h-4 w-4" />, label: 'دانش سازمان', disabled: !canViewOrgKnowledge },
           ...(isSelfHostedDeployment() ? [{ key: '/installation', icon: <CloudServerOutlined />, label: 'وضعیت نصب اختصاصی' }] : []),

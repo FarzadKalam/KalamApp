@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       deploy:
-        description: 'Publish this tested release with explicit phases 584/585/586 and the listed feature-gated functions'
+        description: 'Publish this tested release with explicit phases 589/590/591/592 and the approved tenant-content functions'
         type: boolean
         default: false
       skip_browser_checks:
@@ -258,6 +258,20 @@ jobs:
             docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d voip_external_test -v ON_ERROR_STOP=1 < "$file"
           done
 
+      - name: Tenant site and product content RLS integration checks
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test tenant_content_test
+          for file in tests/database/tenant-content-rls.integration.setup.sql \
+            database_v1_phase589_external_sync_history.sql \
+            database_v1_phase590_tenant_site_builder.sql \
+            database_v1_phase591_product_site_content_drafts.sql \
+            database_v1_phase592_woo_import_outcome.sql \
+            tests/database/tenant-content-rls.integration.test.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d tenant_content_test -v ON_ERROR_STOP=1 < "$file"
+          done
       - name: Install
         run: npm ci
 
@@ -336,7 +350,7 @@ jobs:
           deno check --node-modules-dir=none supabase/functions/_shared/ai-process-data.ts supabase/functions/_shared/ai-process-operations.ts
           deno check --node-modules-dir=none supabase/functions/_shared/ai-context-policy.ts supabase/functions/_shared/ai-context-lifecycle.ts supabase/functions/_shared/ai-context-compressor.ts
           deno check --node-modules-dir=none supabase/functions/_shared/ai-reasoning.ts supabase/functions/_shared/ai-reasoning-transport.ts
-          deno check --node-modules-dir=none supabase/functions/_shared/ai-agents.ts supabase/functions/ai-assistant/index.ts supabase/functions/api-gateway/index.ts supabase/functions/webhook-delivery/index.ts supabase/functions/user-admin/index.ts supabase/functions/bot-admin/index.ts supabase/functions/bot-webhook/index.ts supabase/functions/report-runtime/index.ts supabase/functions/activity-performance/index.ts
+          deno check --node-modules-dir=none supabase/functions/_shared/ai-agents.ts supabase/functions/ai-assistant/index.ts supabase/functions/external-connectors/index.ts supabase/functions/api-gateway/index.ts supabase/functions/webhook-delivery/index.ts supabase/functions/user-admin/index.ts supabase/functions/bot-admin/index.ts supabase/functions/bot-webhook/index.ts supabase/functions/report-runtime/index.ts supabase/functions/activity-performance/index.ts
 
       - name: Messaging attachment and viewer isolation regression checks
         timeout-minutes: 8
@@ -663,7 +677,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVER_USER }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $migrations = @('database_v1_phase584_agent_defaults_and_workflow_triggers.sql', 'database_v1_phase585_plan_entitlements_and_full_demo.sql', 'database_v1_phase586_feature_runtime_bindings.sql')
+          $migrations = @('database_v1_phase589_external_sync_history.sql', 'database_v1_phase590_tenant_site_builder.sql', 'database_v1_phase591_product_site_content_drafts.sql', 'database_v1_phase592_woo_import_outcome.sql')
           $migrations | ForEach-Object { Get-FileHash -Algorithm SHA256 -LiteralPath $_ } | Format-List
           & ./scripts/run-server-db-migrations.ps1 -SqlFiles $migrations
 
@@ -675,7 +689,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVER_USER }}
           DEPLOY_FUNCTIONS_PATH: /opt/kalamapp/supabase/docker/volumes/functions
           DEPLOY_FUNCTIONS_COMPOSE_DIR: /opt/kalamapp/supabase/docker
-        run: ./scripts/deploy-supabase-function.ps1 -Functions @('ai-assistant','api-gateway','webhook-delivery','user-admin','bot-admin','bot-webhook','report-runtime','activity-performance')
+        run: ./scripts/deploy-supabase-function.ps1 -Functions @('ai-assistant','external-connectors')
 
       - name: Activate release
         env:

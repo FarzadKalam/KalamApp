@@ -2636,9 +2636,11 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     return rows;
   }, [process, relatedLabelMap]);
   const primaryProcessRecordLink = useMemo(() => {
-    const ref = collectProcessRelatedRecordRefs(process)[0];
-    return ref || null;
-  }, [process]);
+    const activeStageRef = collectStageRelatedRecordRefs(stage)[0];
+    if (activeStageRef) return activeStageRef;
+    if (stage?.kind === 'draft') return null;
+    return collectProcessRelatedRecordRefs(process)[0] || null;
+  }, [process, stage]);
   const renderRouteText = useCallback((to: string, className: string, children: React.ReactNode) => {
     void to;
     void isInsideRouter;

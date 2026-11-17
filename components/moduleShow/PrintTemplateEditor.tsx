@@ -1120,7 +1120,7 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
       CustomTableRow,
       CustomTableHeader,
       CustomTableCell,
-    ],
+    ] as any,
     content: normalizedValue,
     onUpdate: ({ editor: currentEditor }) => {
       const nextHtml = currentEditor.getHTML();
@@ -1906,5 +1906,4 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
 };
 
 export default PrintTemplateEditor;
-
 

@@ -11,6 +11,7 @@ const shouldUseStandalonePublicBootstrap = (pathname: string) => {
     || normalizedPath.startsWith("/i/")
     || normalizedPath.startsWith("/d/")
     || normalizedPath === "/payment/callback"
+    || normalizedPath.startsWith("/site/")
   );
 };
 
