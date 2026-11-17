@@ -508,14 +508,14 @@ const AiChatSurfaceV2: React.FC = () => {
                 title={title}
                 onClick={() => {
                   setActiveThreadId(thread.id);
-                  if(showAgentInbox)navigate('/ai?thread='+encodeURIComponent(thread.id),{replace:true});
+                  if(showAgentInbox||requestedThreadId)navigate('/ai?thread='+encodeURIComponent(thread.id),{replace:true});
                   closeThreadList();
                 }}
                 onKeyDown={(event) => {
                   if (event.key !== 'Enter' && event.key !== ' ') return;
                   event.preventDefault();
                   setActiveThreadId(thread.id);
-                  if(showAgentInbox)navigate('/ai?thread='+encodeURIComponent(thread.id),{replace:true});
+                  if(showAgentInbox||requestedThreadId)navigate('/ai?thread='+encodeURIComponent(thread.id),{replace:true});
                   closeThreadList();
                 }}
                 className={`flex w-full flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 transition ${active ? 'bg-white shadow-[inset_0_0_0_1px_rgba(15,23,42,0.10),0_8px_18px_rgba(15,23,42,0.08)] dark:bg-white/[0.10]' : 'hover:bg-white/80 dark:hover:bg-white/[0.06]'}`}
@@ -548,14 +548,14 @@ const AiChatSurfaceV2: React.FC = () => {
               key={thread.id}
               onClick={() => {
                 setActiveThreadId(thread.id);
-                if(showAgentInbox)navigate('/ai?thread='+encodeURIComponent(thread.id),{replace:true});
+                if(showAgentInbox||requestedThreadId)navigate('/ai?thread='+encodeURIComponent(thread.id),{replace:true});
                 closeThreadList();
               }}
               onKeyDown={(event) => {
                 if (event.key !== 'Enter' && event.key !== ' ') return;
                 event.preventDefault();
                 setActiveThreadId(thread.id);
-                if(showAgentInbox)navigate('/ai?thread='+encodeURIComponent(thread.id),{replace:true});
+                if(showAgentInbox||requestedThreadId)navigate('/ai?thread='+encodeURIComponent(thread.id),{replace:true});
                 closeThreadList();
               }}
               className={`mb-1.5 flex w-full items-start gap-2.5 rounded-xl border px-2.5 py-2 text-right transition ${active ? 'border-slate-300/80 bg-white shadow-[0_10px_26px_rgba(15,23,42,0.08)] dark:border-white/15 dark:bg-white/[0.085]' : 'border-transparent bg-white/58 hover:bg-white/92 dark:bg-transparent dark:hover:bg-white/[0.055]'}`}

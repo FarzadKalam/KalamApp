@@ -52,6 +52,9 @@ describe('AiChatSurfaceV2', () => {
   it('opens the requested notification thread rather than another recent conversation',async()=>{
     renderSurface(['/ai?thread=thread-1']);
     await waitFor(()=>expect(invokeMock).toHaveBeenCalledWith('ai-assistant',expect.objectContaining({body:expect.objectContaining({action:'get_thread',threadId:'thread-1'})})));
+    const otherThread=(await screen.findAllByText('گفتگوی پشتیبانی')).find(item=>item.closest('[role="button"]'))!;
+    fireEvent.click(otherThread.closest('[role="button"]')!);
+    await waitFor(()=>expect(invokeMock).toHaveBeenCalledWith('ai-assistant',expect.objectContaining({body:expect.objectContaining({action:'get_thread',threadId:'thread-2'})})));
   });
   it('keeps the complete agent inbox inside the AI workspace',async()=>{
     renderSurface(['/ai?inbox=1&agent=sales_leads']);
