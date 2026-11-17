@@ -3,6 +3,7 @@ import { Button, Tooltip } from 'antd';
 import type { ButtonProps } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import AiSparkleIcon from '../ai/AiSparkleIcon';
+import NotificationUnreadBadge from '../notifications/NotificationUnreadBadge';
 
 type AiAssistantLauncherProps = {
   buttonClassName?: string;
@@ -52,9 +53,9 @@ const AiAssistantLauncher: React.FC<AiAssistantLauncherProps> = ({
 
   return tooltipTitle ? (
     <Tooltip title={<span>{tooltipTitle} <kbd className="keyboard-shortcut-hint mr-1 text-[9px] opacity-70">Alt+A</kbd></span>} placement="bottom">
-      {button}
+      <NotificationUnreadBadge kind="ai">{button}</NotificationUnreadBadge>
     </Tooltip>
-  ) : button;
+  ) : <NotificationUnreadBadge kind="ai">{button}</NotificationUnreadBadge>;
 };
 
 export default AiAssistantLauncher;

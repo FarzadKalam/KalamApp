@@ -1,3 +1,7 @@
+import {useAiConversationRead} from '../../hooks/useAiConversationRead';
+import {aiMessageUpdateBus} from '../../utils/communicationRealtimeBus';
+import {isCompletedAiResponse} from '../../utils/aiNotifications';
+import {useOptionalNotificationRuntime} from '../notifications/NotificationRuntimeProvider';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Avatar, Button, Checkbox, Drawer, Empty, Input, Modal, Popconfirm, Popover, Progress, Space, Spin, Tag, Tooltip } from 'antd';
 import { CheckOutlined, CloseOutlined, PlusOutlined, CopyOutlined, DeleteOutlined, EditOutlined, ForwardOutlined, MenuOutlined, ShareAltOutlined, UserAddOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
@@ -544,6 +548,17 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const [threadId, setThreadId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [loadingThread, setLoadingThread] = useState(false);
+  const notificationRuntime=useOptionalNotificationRuntime();
+  const lastNotificationFetchRef=useRef('');
+  useAiConversationRead(threadId,messages,!!active&&!submitting&&!loadingThread);
+  useEffect(()=>{
+    if(!active||!threadId||submitting)return;
+    return aiMessageUpdateBus.subscribe(row=>{
+      if(String(row.thread_id||'')!==threadId||!isCompletedAiResponse(row))return;
+      const incoming:ChatMessage={id:String(row.id),role:'assistant',content:normalizeAiMessageText(row.content),metadata:row.metadata||{},created_at:row.created_at,provider:row.provider,model:row.model};
+      setMessages(current=>[...current.filter(item=>item.id!==incoming.id),incoming].sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||''))));
+    });
+  },[active,threadId,submitting]);
   const [deletingThread, setDeletingThread] = useState(false);
   const deletingThreadRef = useRef(false);
   const [aiKnowledgeConfigured, setAiKnowledgeConfigured] = useState(true);
@@ -1668,6 +1683,17 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       setLoadingThread(false);
     }
   }, [active, applyComposerPreferences, callAssistant, message, onThreadUpserted, threadId]);
+
+  useEffect(()=>{
+    if(!active||!threadId||submitting||loadingThread)return;
+    const notification=notificationRuntime.ai?.items.find(item=>item.thread_id===threadId);
+    if(!notification)return;
+    const existing=messages.find(item=>item.id===notification.source_id);
+    if(existing&&isCompletedAiResponse(existing))return;
+    const signature=threadId+':'+notification.source_id+':'+notification.created_at;
+    if(lastNotificationFetchRef.current===signature)return;
+    lastNotificationFetchRef.current=signature;void loadThread(threadId);
+  },[active,threadId,submitting,loadingThread,messages,notificationRuntime.ai?.items,loadThread]);
 
   const loadAiKnowledgeStatus = useCallback(async () => {
     setCheckingAiKnowledge(true);

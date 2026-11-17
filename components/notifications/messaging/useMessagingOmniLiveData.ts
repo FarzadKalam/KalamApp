@@ -1404,9 +1404,11 @@ const buildBotDirectLiveModels = (
   return { conversations, events };
 };
 
-export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean;callsOnly?:boolean }) => {
+export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean;callsOnly?:boolean;includeCalls?:boolean;internalOnly?:boolean }) => {
   const realtimeEnabled = options?.realtimeEnabled !== false;
   const callsOnly=options?.callsOnly===true;
+  const includeCalls=callsOnly||options?.includeCalls!==false;
+  const internalOnly=options?.internalOnly===true;
   const [profile, setProfile] = useState<LiveProfile>({
     id: null,
     orgId: null,
@@ -1509,7 +1511,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean;c
           setReadStateKeys(nextReadStateKeys || new Set());
           return nextReadStateKeys;
         });
-      const smsPromise = (callsOnly?Promise.resolve({ rows: [], hasMore: false }):safeLiveFetch('sms', () => fetchSmsMessages(profile), { rows: [], hasMore: false }))
+      const smsPromise = ((callsOnly||internalOnly)?Promise.resolve({ rows: [], hasMore: false }):safeLiveFetch('sms', () => fetchSmsMessages(profile), { rows: [], hasMore: false }))
         .then((page) => {
           const rows = page?.rows || [];
           setSmsMessages(rows);
@@ -1518,7 +1520,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean;c
           smsPageCursorRef.current = getSmsPageCursor(rows);
           return rows;
         });
-      const callPromise = safeLiveFetch('voip', () => fetchVoipCalls(profile), { rows: [], hasMore: false })
+      const callPromise = (includeCalls?safeLiveFetch('voip', () => fetchVoipCalls(profile), { rows: [], hasMore: false }):Promise.resolve({rows:[],hasMore:false}))
         .then(async (page) => ({
           rows: await filterVoipCallsByPermissionConditions(page?.rows || [], profile),
           hasMore: Boolean(page?.hasMore),
@@ -1538,12 +1540,12 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean;c
           setVoipOperatorIdentities(identities || {});
           return identities || {};
         });
-      const botGroupPromise = (callsOnly?Promise.resolve([] as BotGroupRow[]):safeLiveFetch('bot-groups', () => fetchBotGroups(profile), [] as BotGroupRow[]))
+      const botGroupPromise = ((callsOnly||internalOnly)?Promise.resolve([] as BotGroupRow[]):safeLiveFetch('bot-groups', () => fetchBotGroups(profile), [] as BotGroupRow[]))
         .then((rows) => {
           setBotGroups(rows || []);
           return rows || [];
         });
-      const botDirectThreadPromise = (callsOnly?Promise.resolve([] as BotDirectThreadRow[]):safeLiveFetch('bot-direct-threads', () => fetchBotDirectThreads(profile), [] as BotDirectThreadRow[]))
+      const botDirectThreadPromise = ((callsOnly||internalOnly)?Promise.resolve([] as BotDirectThreadRow[]):safeLiveFetch('bot-direct-threads', () => fetchBotDirectThreads(profile), [] as BotDirectThreadRow[]))
         .then((rows) => {
           setBotDirectThreads(rows || []);
           return rows || [];
@@ -1557,8 +1559,8 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean;c
       await readStatePromise;
       await voipOperatorIdentityPromise;
       const [botMessageRows, botDirectMessageRows] = await Promise.all([
-        (callsOnly?Promise.resolve([] as BotMessageRow[]):safeLiveFetch('bot-group-messages', () => fetchBotGroupMessages(botGroupRows), [] as BotMessageRow[])),
-        (callsOnly?Promise.resolve([] as BotMessageRow[]):safeLiveFetch('bot-direct-messages', () => fetchBotDirectMessages(botDirectThreadRows), [] as BotMessageRow[])),
+        ((callsOnly||internalOnly)?Promise.resolve([] as BotMessageRow[]):safeLiveFetch('bot-group-messages', () => fetchBotGroupMessages(botGroupRows), [] as BotMessageRow[])),
+        ((callsOnly||internalOnly)?Promise.resolve([] as BotMessageRow[]):safeLiveFetch('bot-direct-messages', () => fetchBotDirectMessages(botDirectThreadRows), [] as BotMessageRow[])),
       ]);
       const bindingRows = await safeLiveFetch(
         'bot-sender-bindings',
@@ -1581,7 +1583,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean;c
       setBotGroupMessages(botMessageRows || []);
       setBotDirectMessages(botDirectMessageRows || []);
       // A calls-only snapshot must never replace the full messaging snapshot.
-      const cacheKey = buildMessagingOmniCacheKey(profile)+(callsOnly?':calls':'');
+      const cacheKey = buildMessagingOmniCacheKey(profile)+(callsOnly?':calls':includeCalls?'':internalOnly?':agents':':messages');
       writeMessagingOmniCache(cacheKey, {
         fetchedAt: Date.now(),
         profile,
@@ -1600,18 +1602,18 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean;c
       refreshInFlightRef.current = false;
       setLoading(false);
     }
-  }, [profile,callsOnly]);
+  }, [profile,callsOnly,includeCalls,internalOnly]);
 
   useEffect(() => {
     if (!profile.id) return;
-    const cacheKey = buildMessagingOmniCacheKey(profile)+(callsOnly?':calls':'');
+    const cacheKey = buildMessagingOmniCacheKey(profile)+(callsOnly?':calls':includeCalls?'':internalOnly?':agents':':messages');
     const cached = readMessagingOmniCache(cacheKey);
     if (cached && appliedCacheKeyRef.current !== cacheKey) {
       appliedCacheKeyRef.current = cacheKey;
       applyCachedSnapshot(cached);
     }
     void refresh({ background: Boolean(cached) });
-  }, [applyCachedSnapshot, profile, refresh,callsOnly]);
+  }, [applyCachedSnapshot, profile, refresh,callsOnly,includeCalls,internalOnly]);
 
   const mergeRecordLabels = useCallback(async (rows: any[]) => {
     const labels = await safeLiveFetch(

@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Badge, Button, Drawer, Empty, Input, Spin, Tooltip } from 'antd';
 import { CloseOutlined, PlusOutlined, PushpinFilled, PushpinOutlined, SearchOutlined, ShareAltOutlined, MessageOutlined } from '@ant-design/icons';
-import { Link, useLocation, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import NotificationUnreadBadge from '../notifications/NotificationUnreadBadge';
+import {useOptionalNotificationRuntime} from '../notifications/NotificationRuntimeProvider';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
@@ -14,6 +16,7 @@ import type { AiComposerCapability } from './AiCapabilityComposerActions';
 import { getAgentDefinition, normalizeSelectedAgents, type AgentKey } from '../../utils/aiAgentCatalog';
 import { AiAgentCameoFigure } from './AiAgentIcon';
 import './AiChatSurfaceV2.css';
+const AgentInboxSurface=React.lazy(()=>import('../notifications/messaging/MessagingSurfacePrototype'));
 
 type AiThreadRow = {
   id: string;
@@ -196,9 +199,14 @@ const AiChatSurfaceV2: React.FC = () => {
   const { message } = App.useApp();
   const orgCurrency = useCurrencyConfig();
   const location = useLocation();
+  const navigate=useNavigate();
+  const notificationRuntime=useOptionalNotificationRuntime();
   const [searchParams] = useSearchParams();
+  const requestedThreadId=String(searchParams.get('thread')||'').trim()||null;
+  const showAgentInbox=searchParams.get('inbox')==='1';
+  const inboxAgent=normalizeSelectedAgents([searchParams.get('agent')||'lead_orchestrator'])[0]||'lead_orchestrator';
   const [threads, setThreads] = useState<AiThreadRow[]>([]);
-  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(()=>requestedThreadId);
   const [threadListOpen, setThreadListOpen] = useState(false);
   const [loadingThreads, setLoadingThreads] = useState(true);
   const [aiCreditSummary, setAiCreditSummary] = useState<AiCreditSummary | null>(null);
@@ -280,6 +288,7 @@ const AiChatSurfaceV2: React.FC = () => {
         .filter((thread) => !isHiddenAssistantThread(thread));
       setThreads(sortAiThreads(nextThreads));
       setActiveThreadId((current) => {
+        if(requestedThreadId)return requestedThreadId;
         if (preferredThreadId && nextThreads.some((thread) => String(thread.id) === String(preferredThreadId))) return preferredThreadId;
         if (current && nextThreads.some((thread) => String(thread.id) === String(current))) return current;
         if (forceNewThread) return null;
@@ -290,11 +299,17 @@ const AiChatSurfaceV2: React.FC = () => {
     } finally {
       setLoadingThreads(false);
     }
-  }, [forceNewThread, message]);
+  }, [forceNewThread, message,requestedThreadId]);
 
   useEffect(() => {
     void loadThreads();
   }, [loadThreads]);
+  const aiNotificationRevision=JSON.stringify(notificationRuntime.ai?.byConversation||{});
+  const notificationRevisionRef=useRef(aiNotificationRevision);
+  useEffect(()=>{
+    if(notificationRevisionRef.current===aiNotificationRevision)return;
+    notificationRevisionRef.current=aiNotificationRevision;void loadThreads();
+  },[aiNotificationRevision,loadThreads]);
 
   useEffect(() => {
     if (!forceNewThread) return;
@@ -355,8 +370,9 @@ const AiChatSurfaceV2: React.FC = () => {
     setInitialRouteConsumed(true);
     setActiveThreadId(null);
     setNewConversationSeed((value) => value + 1);
+    if(showAgentInbox||requestedThreadId)navigate('/ai',{replace:true});
     closeThreadList();
-  }, [closeThreadList]);
+  }, [closeThreadList,showAgentInbox,requestedThreadId,navigate]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
@@ -471,6 +487,9 @@ const AiChatSurfaceV2: React.FC = () => {
         </>
       ) : null}
       <div className={compact ? 'space-y-1' : 'min-h-0 flex-1 overflow-y-auto p-1.5'}>
+        <Button block type={showAgentInbox?'primary':'text'} className="mb-2" onClick={()=>{navigate('/ai?inbox=1&agent='+encodeURIComponent(inboxAgent));closeThreadList();}}>
+          <Badge count={notificationRuntime.ai?.agentNoteTotal||0} size="small">پیام‌ها و یادآوری‌های ایجنت‌ها</Badge>
+        </Button>
         {loadingThreads ? (
           <div className="flex justify-center py-8"><Spin size="small" /></div>
         ) : filteredThreads.length === 0 ? (
@@ -489,17 +508,19 @@ const AiChatSurfaceV2: React.FC = () => {
                 title={title}
                 onClick={() => {
                   setActiveThreadId(thread.id);
+                  if(showAgentInbox)navigate('/ai?thread='+encodeURIComponent(thread.id),{replace:true});
                   closeThreadList();
                 }}
                 onKeyDown={(event) => {
                   if (event.key !== 'Enter' && event.key !== ' ') return;
                   event.preventDefault();
                   setActiveThreadId(thread.id);
+                  if(showAgentInbox)navigate('/ai?thread='+encodeURIComponent(thread.id),{replace:true});
                   closeThreadList();
                 }}
                 className={`flex w-full flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 transition ${active ? 'bg-white shadow-[inset_0_0_0_1px_rgba(15,23,42,0.10),0_8px_18px_rgba(15,23,42,0.08)] dark:bg-white/[0.10]' : 'hover:bg-white/80 dark:hover:bg-white/[0.06]'}`}
               >
-                <Badge size="small" color="#c0392b">
+                <NotificationUnreadBadge kind="ai" threadId={thread.id}>
                   <div
                     className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border bg-slate-900 overflow-hidden"
                     style={{ borderColor: `${threadAgent.badgeColor}90` }}
@@ -507,7 +528,7 @@ const AiChatSurfaceV2: React.FC = () => {
                   >
                     {thread.metadata?.free_chat ? <MessageOutlined /> : <AiAgentCameoFigure agentKey={threadAgent.key} size={28} accentColor={threadAgent.badgeColor} />}
                   </div>
-                </Badge>
+                </NotificationUnreadBadge>
                 <button
                   type="button"
                   onClick={(event) => void toggleThreadPin(event, thread)}
@@ -527,23 +548,25 @@ const AiChatSurfaceV2: React.FC = () => {
               key={thread.id}
               onClick={() => {
                 setActiveThreadId(thread.id);
+                if(showAgentInbox)navigate('/ai?thread='+encodeURIComponent(thread.id),{replace:true});
                 closeThreadList();
               }}
               onKeyDown={(event) => {
                 if (event.key !== 'Enter' && event.key !== ' ') return;
                 event.preventDefault();
                 setActiveThreadId(thread.id);
+                if(showAgentInbox)navigate('/ai?thread='+encodeURIComponent(thread.id),{replace:true});
                 closeThreadList();
               }}
               className={`mb-1.5 flex w-full items-start gap-2.5 rounded-xl border px-2.5 py-2 text-right transition ${active ? 'border-slate-300/80 bg-white shadow-[0_10px_26px_rgba(15,23,42,0.08)] dark:border-white/15 dark:bg-white/[0.085]' : 'border-transparent bg-white/58 hover:bg-white/92 dark:bg-transparent dark:hover:bg-white/[0.055]'}`}
             >
-              <div
+              <NotificationUnreadBadge kind="ai" threadId={thread.id}><div
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border bg-slate-900 shadow-sm overflow-hidden mt-0.5"
                 style={{ borderColor: `${threadAgent.badgeColor}90` }}
                 title={threadAgent.titleFa}
               >
                 {thread.metadata?.free_chat ? <MessageOutlined /> : <AiAgentCameoFigure agentKey={threadAgent.key} size={28} accentColor={threadAgent.badgeColor} />}
-              </div>
+              </div></NotificationUnreadBadge>
               <span className="min-w-0 flex-1">
                 <span className="flex min-w-0 items-center justify-between gap-2">
                   <span className="flex min-w-0 items-start gap-1"><span className="line-clamp-2 text-[13px] font-bold leading-5 text-slate-800 dark:text-slate-100">{title}</span>{thread.is_shared ? <ShareAltOutlined className="mt-1 shrink-0 text-[11px] text-[rgb(var(--brand-600-rgb))]" /> : null}</span>
@@ -601,7 +624,13 @@ const AiChatSurfaceV2: React.FC = () => {
           {renderThreadList(false)}
         </aside>
         <main className="min-w-0 flex-1">
-          <AssistantPanel
+          {showAgentInbox?<div className="flex h-full min-h-0 flex-col">
+            <div className="flex shrink-0 items-center gap-2 rounded-t-2xl border-b border-slate-200 bg-white p-2 dark:border-white/10 dark:bg-[#1c1c1f]">
+              <Button onClick={()=>navigate('/ai')}>بازگشت به گفتگوها</Button>
+              <Button icon={<PlusOutlined />} onClick={startNewConversation}>گفتگوی جدید</Button>
+            </div>
+            <div className="min-h-0 flex-1"><React.Suspense fallback={<Spin />}><AgentInboxSurface key={inboxAgent} agentsOnly initialFilter="agent" initialConversationKey={'live:agent:agent:'+inboxAgent} /></React.Suspense></div>
+          </div>:<AssistantPanel
             key={activeThreadId || `new-${newConversationSeed}-${initialPanelKey}`}
             active
             initialThreadId={activeThreadId}
@@ -627,7 +656,7 @@ const AiChatSurfaceV2: React.FC = () => {
             onOpenThreadList={() => setThreadListOpen(true)}
             threadListExpanded={threadListOpen}
             onNewConversation={startNewConversation}
-          />
+          />}
         </main>
       </div>
       <Drawer

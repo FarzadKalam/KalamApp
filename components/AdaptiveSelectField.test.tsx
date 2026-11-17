@@ -2,8 +2,22 @@ import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import AdaptiveSelectField from './AdaptiveSelectField';
+import { ConfigProvider, Modal } from 'antd';
+import { resolveOverlayPopupContainer } from '../utils/popupContainer';
 
 describe('AdaptiveSelectField', () => {
+  it('keeps the user choice above a high parent modal under the application popup theme', async () => {
+    const changed = vi.fn();
+    render(<ConfigProvider getPopupContainer={resolveOverlayPopupContainer} theme={{token:{zIndexPopupBase:13000}}}>
+      <Modal open zIndex={42000} footer={null} title="اتصال اپراتور">
+        <AdaptiveSelectField adaptiveMode="desktop" options={[{label:'همکار نمونه',value:'user'}]} onChange={changed} />
+      </Modal>
+    </ConfigProvider>);
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    const choice=await screen.findByTitle('همکار نمونه');
+    await waitFor(()=>expect(Number((choice.closest('.ant-select-dropdown') as HTMLElement).style.zIndex)).toBeGreaterThan(42000));
+    fireEvent.click(choice);expect(changed).toHaveBeenCalledWith('user');
+  });
   afterEach(() => {
     cleanup();
   });

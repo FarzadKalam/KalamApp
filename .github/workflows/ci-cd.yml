@@ -181,6 +181,19 @@ jobs:
           wait "$worker_a"
           cat /tmp/commission-worker-a.log
 
+      - name: AI unread completion, viewer isolation and central read cursors
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test ai_notifications_test
+          for file in tests/sql/ai_notifications_fixture.sql \
+            database_v1_phase604_ai_notification_read_cursors.sql \
+            database_v1_phase604_ai_notification_read_cursors.sql \
+            tests/sql/ai_notifications_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d ai_notifications_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
       - name: Isolated external VoIP account separation
         env:
           POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
@@ -253,6 +266,7 @@ jobs:
         timeout-minutes: 5
         run: >-
           npx vitest run utils/uiNotificationOverlayStore.test.ts utils/notificationOverlayCategories.test.ts
+          utils/aiNotifications.test.ts hooks/useAiConversationRead.test.tsx
           utils/appFeedback.test.ts utils/feedbackRouting.test.ts utils/feedbackArchitecture.test.ts utils/recordFeedback.test.ts
           components/RecordMessageActions.test.tsx components/UploadProgressOverlay.test.tsx components/dashboard/MyTasksWidget.test.tsx
           --maxWorkers=1 --no-file-parallelism

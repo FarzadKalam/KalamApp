@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AiChatSurfaceV2 from './AiChatSurfaceV2';
 vi.mock('../../moduleRegistry',()=>({MODULES:{customers:{id:'customers',titles:{fa:'مشتریان'},fields:[],blocks:[]}}}));
+vi.mock('../notifications/messaging/MessagingSurfacePrototype',()=>({default:({agentsOnly,initialConversationKey}:any)=><div data-testid="agent-inbox-surface">{agentsOnly?initialConversationKey:'wrong workspace'}</div>}));
 
 const invokeMock = vi.fn();
 const fetchMock = vi.fn();
@@ -48,6 +49,14 @@ vi.mock('../../supabaseClient', () => ({
 }));
 
 describe('AiChatSurfaceV2', () => {
+  it('opens the requested notification thread rather than another recent conversation',async()=>{
+    renderSurface(['/ai?thread=thread-1']);
+    await waitFor(()=>expect(invokeMock).toHaveBeenCalledWith('ai-assistant',expect.objectContaining({body:expect.objectContaining({action:'get_thread',threadId:'thread-1'})})));
+  });
+  it('keeps the complete agent inbox inside the AI workspace',async()=>{
+    renderSurface(['/ai?inbox=1&agent=sales_leads']);
+    expect(await screen.findByTestId('agent-inbox-surface')).toHaveTextContent('live:agent:agent:sales_leads');
+  });
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();

@@ -7,7 +7,7 @@ const InstagramInboxPage = React.lazy(() => import('./InstagramInboxPage'));
 const MessagingSurfacePrototype = React.lazy(() => import('../components/notifications/messaging/MessagingSurfacePrototype'));
 
 type MessagesTab = 'notes' | 'agent' | 'bot_messages' | 'bot_direct_messages' | 'sms_messages' | 'voip_calls' | 'email_messages' | 'instagram';
-type MessagesInitialFilter = 'internal' | 'agent' | 'bot_group' | 'bot_direct' | 'sms' | 'call' | 'email';
+type MessagesInitialFilter = 'all' | 'internal' | 'agent' | 'bot_group' | 'bot_direct' | 'sms' | 'call' | 'email';
 const MESSAGE_TABS = new Set<MessagesTab>(['notes', 'agent', 'bot_messages', 'bot_direct_messages', 'sms_messages', 'voip_calls', 'email_messages', 'instagram']);
 
 const MessagesPage: React.FC = () => {
@@ -31,7 +31,7 @@ const MessagesPage: React.FC = () => {
     if (requestedTab === 'email_messages') return 'email';
     if (requestedTab === 'sms_messages') return 'sms';
     if (requestedTab === 'voip_calls') return 'call';
-    return 'internal';
+    return requestedTab==='notes'?'internal':'all';
   }, [requestedConversationKey, requestedTab]);
   const initialConversationKey = useMemo(() => {
     if (requestedConversationKey) {
@@ -43,6 +43,14 @@ const MessagesPage: React.FC = () => {
     if (requestedBotDirectThreadId) return `live:bot_direct:${requestedBotDirectThreadId}`;
     return null;
   }, [requestedBotDirectThreadId, requestedBotGroupId, requestedConversationKey]);
+
+  useEffect(() => {
+    if(requestedTab==='voip_calls')navigate('/contact-center',{replace:true});
+    else if(requestedTab==='agent'||requestedConversationKey?.startsWith('agent:')){
+      const agent=requestedConversationKey?.replace(/^agent:/,'')||'lead_orchestrator';
+      navigate('/ai?inbox=1&agent='+encodeURIComponent(agent),{replace:true});
+    }
+  },[requestedTab,requestedConversationKey,navigate]);
 
   useEffect(() => {
     const context = (location.state as { assistantContext?: AssistantContext } | null)?.assistantContext;
