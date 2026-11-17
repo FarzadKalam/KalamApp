@@ -7,7 +7,7 @@ declare
   definition text;
   anchor text;
 begin
-  definition := pg_get_functiondef('public.submit_public_web_form(text,jsonb,jsonb,text)'::regprocedure);
+  definition := replace(pg_get_functiondef('public.submit_public_web_form(text,jsonb,jsonb,text)'::regprocedure), E'\r\n', E'\n');
   if strpos(definition, 'WEB_FORM_ORG_ACCESS_DENIED') = 0 then
     anchor := $old$  if coalesce(v_form.access_scope, 'public') = 'internal' and auth.uid() is null then
     raise exception 'WEB_FORM_AUTH_REQUIRED';
@@ -29,7 +29,7 @@ begin
   end if;$new$);
   end if;
 
-  definition := pg_get_functiondef('public.get_public_web_form(text,text)'::regprocedure);
+  definition := replace(pg_get_functiondef('public.get_public_web_form(text,text)'::regprocedure), E'\r\n', E'\n');
   if strpos(definition, 'WEB_FORM_ORG_ACCESS_DENIED') = 0 then
     anchor := $old$  return query
   select
