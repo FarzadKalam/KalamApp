@@ -26,7 +26,8 @@ import { getAssigneeLabel } from '../utils/assigneeLabel';
 import { buildResolvedAssigneeCombo, parseAssigneeValue } from '../utils/assigneeValue';
 import AdaptiveIdentityPicker from './AdaptiveIdentityPicker';
 import { getFieldLabelFa } from '../utils/fieldLabel';
-import { fetchCurrentUserRoleContext } from '../utils/permissions';
+import { fetchCurrentUserRoleContext, type ModulePermissionConfig } from '../utils/permissions';
+import { canModuleAction, canFieldAction, canWriteFieldValue } from '../utils/fieldAccess';
 import { fetchDynamicOptionsMap, fetchFormulaOptions } from '../utils/referenceData';
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import { getCachedAuthUser } from '../utils/sessionCache';
@@ -425,7 +426,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
   
   const [relationOptions, setRelationOptions] = useState<Record<string, any[]>>({});
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, any[]>>({});
-  const [modulePermissions, setModulePermissions] = useState<{ view?: boolean; edit?: boolean; delete?: boolean }>({});
+  const [modulePermissions, setModulePermissions] = useState<ModulePermissionConfig>({});
   const [fieldPermissions, setFieldPermissions] = useState<Record<string, boolean>>({});
   const [lastAppliedBomId, setLastAppliedBomId] = useState<string | null>(null);
   const bomConfirmOpenRef = useRef<string | null>(null);
@@ -733,6 +734,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
       const context = await fetchCurrentUserRoleContext(supabase);
       const modulePerms = context.permissions?.[module.id] || {};
       setModulePermissions({
+        ...modulePerms,
         view: modulePerms.view,
         edit: modulePerms.edit,
         delete: modulePerms.delete,
@@ -1476,6 +1478,10 @@ const SmartForm: React.FC<SmartFormProps> = ({
 
   // --- ذخیره نهایی ---
   const handleFinish = async (values: any) => {
+    if (!canModuleAction(modulePermissions, recordId || isBulkEdit ? 'edit' : 'create')) {
+      messageApi.error('دسترسی ثبت اطلاعات در این ماژول را ندارید.');
+      return;
+    }
     if (relationPopulatePending > 0) {
       messageApi.info('ابتدا به‌روزرسانی فیلدهای مرتبط را تأیید یا رد کنید.');
       return;
@@ -1885,6 +1891,16 @@ const SmartForm: React.FC<SmartFormProps> = ({
         }
       }
 
+      const deniedClear = Object.entries(values).find(([key, value]) =>
+        (recordId || isBulkEdit) && value !== undefined
+        && canFieldAction(modulePermissions, key, 'edit')
+        && !canWriteFieldValue(modulePermissions, key, value, false)
+        && JSON.stringify(value ?? null) !== JSON.stringify(initialRecord?.[key] ?? null));
+      if (deniedClear) {
+        throw new Error(`اجازهٔ پاک‌کردن مقدار «${getFieldLabelFa(runtimeFields.find((field) => field.key === deniedClear[0]), { moduleId: module.id, fieldKey: deniedClear[0] })}» را ندارید.`);
+      }
+      values = Object.fromEntries(Object.entries(values).filter(([key, value]) =>
+        canWriteFieldValue(modulePermissions, key, value, !recordId && !isBulkEdit)));
       if (onSave) {
         await onSave(values, {
           productInventory: productInventoryRows,
@@ -2630,7 +2646,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
     return () => window.removeEventListener('keydown', handleShortcut);
   }, [form, visible]);
 
-  const canEditModule = modulePermissions.edit !== false;
+  const canEditModule = canModuleAction(modulePermissions, recordId || isBulkEdit ? 'edit' : 'create');
   const visibleSystemFieldKeys = new Set(
     module.id === 'products'
       ? ['product_type']
@@ -2672,7 +2688,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
     ? [...baseHeaderFields, productTypeFieldFallback].sort((a, b) => (a.order || 0) - (b.order || 0))
     : baseHeaderFields;
   const statusField = headerFields.find((f) => f.key === 'status');
-  const runtimeStatusField = statusField ? conditionalFieldRuntime.getRuntimeField(statusField) : null;
+  const runtimeStatusField = statusField ? conditionalFieldRuntime.getRuntimeField({ ...statusField, readonly: statusField.readonly || !canFieldAction(modulePermissions, statusField.key, recordId ? 'edit' : 'create') }) : null;
   const preferredMediaField = useMemo(() => {
     const visibleImageFields = runtimeFields
       .filter((field) => field.type === FieldType.IMAGE)
@@ -2771,6 +2787,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
     ) {
       nextField = { ...nextField, readonly: true };
     }
+    if (!canFieldAction(modulePermissions, String(field.key), recordId || isBulkEdit ? 'edit' : 'create')) {
+      nextField = { ...nextField, readonly: true };
+    }
     return nextField;
   }, [
     currentValues?.related_to_module,
@@ -2778,6 +2797,8 @@ const SmartForm: React.FC<SmartFormProps> = ({
     isMarketingLeadFromExistingCustomer,
     module.id,
     recordId,
+    isBulkEdit,
+    modulePermissions,
   ]);
   const projectProcessLinkedFields = useMemo(() => {
     if (module.id !== 'projects' || !processDraftFieldKey || shouldHideProcessUiInSmartForm) return [] as Array<{
@@ -3037,7 +3058,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                             scopes={supportsRoleAssignee ? ['user', 'role'] : ['user']}
                             className="w-full max-w-full smartform-inline-assignee-select font-semibold text-gray-700 dark:text-gray-300"
                             overlayZIndexBase={fieldPopupZIndexBase}
-                            disabled={!canEditModule}
+                            disabled={!canEditModule || !canFieldAction(modulePermissions, 'assignee_id', recordId ? 'edit' : 'create')}
                             onChange={(val) => {
                               const { assignee_id, assignee_type } = parseAssigneeCombo(String(val || ''));
                               const normalizedType = String(assignee_type || 'user');
@@ -3103,7 +3124,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                         moduleId={module.id}
                         recordId={recordId}
                         imageUrl={mediaPreviewValue}
-                        canEdit={modulePermissions.edit !== false}
+                        canEdit={canFieldAction(modulePermissions, preferredMediaField.key, recordId ? 'edit' : 'create')}
                         onMainImageChange={handleTopMediaChange}
                       />
                     </div>
@@ -3241,7 +3262,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                             const preparedField = conditionalFieldRuntime.getRuntimeField(getPreparedField(field));
                             if (!preparedField || !conditionalFieldRuntime.isFieldVisible(preparedField)) return null;
                              let fieldValue = (currentValues as any)?.[preparedField.key];
-                            let isReadOnly = false;
+                            let isReadOnly = preparedField.readonly === true;
                             // فیلدهای خلاصه اگر محاسبه شده باشند
                             if (currentSummaryData && summaryConfigObj?.calculationType === SummaryCalculationType.INVOICE_FINANCIALS) {
                             }
@@ -3397,7 +3418,13 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                 parentValues={currentValues as Record<string, any>}
                                 relationOptions={relationOptions}
                                 dynamicOptions={dynamicOptions}
-                                canEditModule={canEditModule}
+                                canEditModule={canEditModule && canFieldAction(modulePermissions, block.id, recordId || isBulkEdit ? 'edit' : 'create')}
+                                canEditField={(key, value) =>
+                                  canFieldAction(modulePermissions, `${block.id}.${key}`, recordId || isBulkEdit ? 'edit' : 'create')
+                                  && canFieldAction(modulePermissions, key, recordId || isBulkEdit ? 'edit' : 'create')
+                                  && (value === undefined || (canWriteFieldValue(modulePermissions, `${block.id}.${key}`, value, !recordId && !isBulkEdit)
+                                    && canWriteFieldValue(modulePermissions, key, value, !recordId && !isBulkEdit)))
+                                }
                                 canViewField={(fieldKey) =>
                                   canViewField(`${block.id}.${fieldKey}`) && canViewField(fieldKey)
                                 }
@@ -3437,7 +3464,13 @@ const SmartForm: React.FC<SmartFormProps> = ({
                           moduleId={module.id}
                           relationOptions={relationOptions}
                           dynamicOptions={dynamicOptions}
-                          canEditModule={canEditModule}
+                          canEditModule={canEditModule && canFieldAction(modulePermissions, block.id, recordId || isBulkEdit ? 'edit' : 'create')}
+                                canEditField={(key, value) =>
+                                  canFieldAction(modulePermissions, `${block.id}.${key}`, recordId || isBulkEdit ? 'edit' : 'create')
+                                  && canFieldAction(modulePermissions, key, recordId || isBulkEdit ? 'edit' : 'create')
+                                  && (value === undefined || (canWriteFieldValue(modulePermissions, `${block.id}.${key}`, value, !recordId && !isBulkEdit)
+                                    && canWriteFieldValue(modulePermissions, key, value, !recordId && !isBulkEdit)))
+                                }
                           canViewField={(fieldKey) =>
                             canViewField(`${block.id}.${fieldKey}`) && canViewField(fieldKey)
                           }
@@ -3464,7 +3497,13 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                     parentValues={currentValues as Record<string, any>}
                                     relationOptions={relationOptions}
                                     dynamicOptions={dynamicOptions}
-                                  canEditModule={canEditModule}
+                                  canEditModule={canEditModule && canFieldAction(modulePermissions, block.id, recordId || isBulkEdit ? 'edit' : 'create')}
+                                canEditField={(key, value) =>
+                                  canFieldAction(modulePermissions, `${block.id}.${key}`, recordId || isBulkEdit ? 'edit' : 'create')
+                                  && canFieldAction(modulePermissions, key, recordId || isBulkEdit ? 'edit' : 'create')
+                                  && (value === undefined || (canWriteFieldValue(modulePermissions, `${block.id}.${key}`, value, !recordId && !isBulkEdit)
+                                    && canWriteFieldValue(modulePermissions, key, value, !recordId && !isBulkEdit)))
+                                }
                                   canViewField={(fieldKey) =>
                                     canViewField(`${block.id}.${fieldKey}`) && canViewField(fieldKey)
                                   }

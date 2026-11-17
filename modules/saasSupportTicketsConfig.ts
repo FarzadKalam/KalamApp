@@ -12,6 +12,8 @@ export const saasSupportTicketsConfig: ModuleDefinition = {
   registryVisibility: { workflows: true },
   blocks: [],
   fields: [
+    { key: 'ticket_type', labels: { fa: 'نوع تیکت', en: 'Ticket type' }, type: FieldType.SELECT, location: FieldLocation.HEADER, order: 0, nature: FieldNature.SYSTEM, readonly: true,
+      options: [{ value: 'incoming', label: 'دریافتی' }, { value: 'outgoing', label: 'ارسالی' }] },
     { key: 'subject', labels: { fa: 'عنوان تیکت', en: 'Subject' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, nature: FieldNature.STANDARD, isKey: true, isTableColumn: true },
     { key: 'category_code', labels: { fa: 'دسته‌بندی', en: 'Category' }, type: FieldType.SELECT, location: FieldLocation.HEADER, order: 2, nature: FieldNature.STANDARD, isTableColumn: true,
       options: [

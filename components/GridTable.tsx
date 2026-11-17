@@ -29,6 +29,7 @@ interface GridTableProps {
   mode?: 'db' | 'local' | 'external_view';
   canEditModule?: boolean;
   canViewField?: (fieldKey: string) => boolean;
+  canEditField?: (fieldKey: string, value?: unknown) => boolean;
   readOnly?: boolean;
   orderQuantity?: number;
   showDeliveredQtyColumn?: boolean;
@@ -121,6 +122,7 @@ const GridTable: React.FC<GridTableProps> = ({
   mode = 'db',
   canEditModule,
   canViewField,
+  canEditField,
   readOnly,
   orderQuantity = 0,
   showDeliveredQtyColumn = false,
@@ -1349,7 +1351,7 @@ const GridTable: React.FC<GridTableProps> = ({
                               dynamicOptions[field.dynamicOptionsCategory]
                             );
                           }
-                          const effectiveField = (isSpecsLocked || !rowCanEdit) ? { ...field, readonly: true } : field;
+                          const effectiveField = (isSpecsLocked || !rowCanEdit || (canEditField && !canEditField(field.key))) ? { ...field, readonly: true } : field;
                           return (
                             <div key={field.key} className={`space-y-1 min-w-0 ${isSpecsLocked ? 'opacity-75' : ''}`}>
                               <div className="text-[11px] text-gray-500 font-medium">{field.labels?.fa}</div>
@@ -1362,6 +1364,7 @@ const GridTable: React.FC<GridTableProps> = ({
                                 onOptionsUpdate={field.dynamicOptionsCategory ? () => refreshDynamicOptionsForCategory(field.dynamicOptionsCategory) : undefined}
                                 onChange={(val) => {
                                   if (isSpecsLocked || !rowCanEdit) return;
+                                  if (canEditField && !canEditField(field.key, val)) return;
                                   updateRow(rowIndex, { specs: { ...(row.specs || {}), [field.key]: val } });
                                 }}
                               />

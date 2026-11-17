@@ -1735,7 +1735,7 @@ const canAccessAssignedRecord = (record: any, authContext: any, recordScope = 'a
 };
 
 const canViewModule = (perm: any) => perm?.view !== false;
-const canCreateModule = (perm: any) => perm?.create !== false && perm?.edit !== false && perm?.view !== false;
+const canCreateModule = (perm: any) => (perm?.create ?? perm?.edit) !== false && perm?.view !== false;
 const agentPlanMutationAllowed = (perm: any, isUpdate: boolean) => isUpdate
   ? perm?.view !== false && perm?.edit !== false
   : canCreateModule(perm);
@@ -11027,8 +11027,8 @@ const processMutationPolicy = async (url: string, key: string, auth: any) => {
   return { can: (moduleId: string, action: 'view' | 'create' | 'edit', field?: string) => {
     const perm = auth.permissions?.[moduleId];
     return Boolean(perm && canViewModuleWithPlan(plan,auth.permissions,moduleId)
-      && (action === 'view' || perm[action] !== false && perm.edit !== false)
-      && (!field || !isSensitiveField(field) && perm.fields?.[field] !== false));
+      && (action === 'view' || (action === 'create' ? (perm.create ?? perm.edit) !== false : perm.edit !== false))
+      && (!field || !isSensitiveField(field) && perm.fields?.[field] !== false && perm.field_actions?.[field]?.[action] !== false));
   } };
 };
 
@@ -15316,6 +15316,20 @@ const executeProposedActionLog = async (
       .filter((draft: any) => Object.keys(draft.fields).length > 0 || Object.keys(draft.tables).length > 0 || (isUpdate && proposed.intake_attachments?.length > 0));
     if (mutationDrafts.length === 0) {
       return { status: 400, payload: { success: false, message: `اطلاعات کافی برای ${mutationVerb} رکورد وجود ندارد.` } };
+    }
+
+    // Service-authored confirmations must honor the same field actions as REST
+    // writes. Recheck the freshly loaded role before any approved data is saved.
+    const mutationAction = isUpdate ? 'edit' : 'create';
+    const fieldDenied = (key: string, value: any) => {
+      const rule = targetPerm.field_actions?.[key];
+      return targetPerm.fields?.[key] === false || rule?.view === false || rule?.[mutationAction] === false
+        || (isUpdate && rule?.delete === false && (value == null || value === '' || Array.isArray(value) && value.length === 0));
+    };
+    if (mutationDrafts.some((draft: any) => Object.entries(draft.fields || {}).some(([key,value]) => fieldDenied(key,value))
+      || Object.entries(draft.tables || {}).some(([key,rows]) => fieldDenied(key,rows)
+        || (Array.isArray(rows) && rows.some((row: any) => Object.entries(row || {}).some(([column,value]) => fieldDenied(column,value) || fieldDenied(`${key}.${column}`,value))))))) {
+      return { status: 403, payload: { success: false, message: 'دسترسی تغییر یا پاک‌کردن مقدار یکی از فیلدها را ندارید؛ پیش‌نویس را اصلاح کنید.' } };
     }
 
     const resolvedMutationDrafts = await resolveAiMutationRelations(supabaseUrl, serviceRoleKey, authContext.orgId, mutationDrafts, schema, authContext);

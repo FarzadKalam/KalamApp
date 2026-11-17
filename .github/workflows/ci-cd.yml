@@ -11,6 +11,10 @@ on:
         description: 'Publish this tested release with explicit phases 584/585/586 and the listed feature-gated functions'
         type: boolean
         default: false
+      skip_browser_checks:
+        description: 'Skip browser and screenshot checks when explicitly requested by the release owner'
+        type: boolean
+        default: false
 
 concurrency:
   group: kalamapp-${{ github.ref }}
@@ -338,6 +342,16 @@ jobs:
           components/stories/storyStudio.test.ts
           --maxWorkers=1 --no-file-parallelism
 
+      - name: Support direction, unread access and module field permissions
+        timeout-minutes: 5
+        env:
+          VITE_SUPABASE_URL: https://isolated-test.invalid
+          VITE_SUPABASE_ANON_KEY: isolated-test-only
+        run: >-
+          npx vitest run test/moduleFieldActions.test.ts test/supportTicketDirection.test.ts
+          utils/fieldAccess.test.ts utils/permissionAvailability.test.ts utils/permissions.test.ts utils/supportTickets.test.ts
+          --maxWorkers=1 --no-file-parallelism
+
       - name: Content calendar regression checks
         timeout-minutes: 8
         run: >-
@@ -413,6 +427,7 @@ jobs:
         run: node scripts/verify-pwa-release.mjs
 
       - name: Public ecosystem browser checks
+        if: github.event_name != 'workflow_dispatch' || !inputs.skip_browser_checks
         timeout-minutes: 8
         env:
           PLAYWRIGHT_BROWSER: chromium

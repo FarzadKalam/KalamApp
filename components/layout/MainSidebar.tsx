@@ -3,9 +3,9 @@ import { Button, Drawer, Tooltip, type MenuProps } from 'antd';
 import { AppstoreOutlined, BankOutlined, CloseOutlined, LeftOutlined } from '@ant-design/icons';
 import SidebarMenu, { sidebarLabelText } from './SidebarMenu';
 import ContextualTutorialButton from '../cms/ContextualTutorialButton';
-import TazeSystemAttribution from '../common/TazeSystemAttribution';
 import { renderModuleIcon } from '../../utils/moduleIcons';
 import { SIDEBAR_LAYOUT } from '../../utils/sidebarLayout';
+import SidebarHelpFooter from './SidebarHelpFooter';
 
 type Props = {
   items: MenuProps['items']; railItems: MenuProps['items']; selectedKey: string; ancestorKeys: string[];
@@ -13,8 +13,9 @@ type Props = {
   onNavigate: (href: string) => void; onPreload?: (href: string) => void;
   brandShortName: string; brandLogoUrl?: string | null; contexts: string[]; orgId: string | null; userId: string | null;
   presentation?: 'push' | 'overlay';
+  supportTicketPath?: string; supportUnread?: number;
 };
-function MainSidebar({ items, railItems, selectedKey, ancestorKeys, collapsed, onCollapsedChange, isMobile, isDarkMode, onNavigate, onPreload, brandShortName, brandLogoUrl, contexts, orgId, userId }: Props) {
+function MainSidebar({ items, railItems, selectedKey, ancestorKeys, collapsed, onCollapsedChange, isMobile, isDarkMode, onNavigate, onPreload, brandShortName, brandLogoUrl, contexts, orgId, userId, supportTicketPath, supportUnread }: Props) {
   const [requestedGroup, setRequestedGroup] = useState<string | null>(null);
   const [failedLogoUrl, setFailedLogoUrl] = useState<string | null>(null);
   const sidebarRef = useRef<HTMLDivElement>(null);
@@ -27,6 +28,7 @@ function MainSidebar({ items, railItems, selectedKey, ancestorKeys, collapsed, o
         target.closest('#workspace-sidebar-panel') ||
         target.closest('.app-main-sider-submenu-popup') ||
         target.closest('.workspace-sidebar-submenu') ||
+        target.closest('.workspace-support-popover') ||
         target.closest('.app-main-rail')
       ) {
         return;
@@ -104,12 +106,12 @@ function MainSidebar({ items, railItems, selectedKey, ancestorKeys, collapsed, o
       <nav className="app-sidebar-panel-menu" aria-label="ماژول‌های سامانه">
         <SidebarMenu items={panelItems} selectedKey={selectedKey} ancestorKeys={expandedKeys} collapsed={false} isMobile={false} desktopFlyout isDarkMode={isDarkMode} onNavigate={href => { close(); onNavigate(href); }} />
       </nav>
-      <footer className="app-drawer-footer"><ContextualTutorialButton contexts={contexts} viewer={viewer} buttonClassName="app-rail-item" /><TazeSystemAttribution collapsed={false} /></footer>
+      <footer className="app-drawer-footer"><SidebarHelpFooter contexts={contexts} viewer={viewer} ticketPath={supportTicketPath} unread={supportUnread} onNavigate={href => { close(); onNavigate(href); }} /></footer>
     </aside>}
     {isMobile && <Drawer open={!collapsed} onClose={close} placement="right" title={<span className="app-drawer-brand">{logo}<span>{brandShortName}</span></span>} width="min(360px, calc(100vw - 20px))"
       rootClassName={`app-module-drawer ${isDarkMode ? 'app-module-drawer-dark' : ''}`} zIndex={1200} destroyOnClose
       styles={{ body: { padding: '4px 8px 12px', background: isDarkMode ? '#1c1c1f' : '#fff' }, header: { background: isDarkMode ? '#1c1c1f' : '#fff' }, mask: { background: isMobile ? 'rgba(0,0,0,.24)' : 'rgba(0,0,0,.07)' } }}
-      footer={<div className="app-drawer-footer"><ContextualTutorialButton contexts={contexts} viewer={viewer} buttonClassName="app-rail-item" /><TazeSystemAttribution collapsed={false} /></div>}>
+      footer={<SidebarHelpFooter contexts={contexts} viewer={viewer} ticketPath={supportTicketPath} unread={supportUnread} onNavigate={href => { close(); onNavigate(href); }} />}>
       <SidebarMenu items={items} selectedKey={displayedKey} ancestorKeys={expandedKeys} collapsed={false} isMobile={isMobile} isDarkMode={isDarkMode}
         onNavigate={href => { close();onNavigate(href); }} />
     </Drawer>}

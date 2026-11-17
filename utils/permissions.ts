@@ -4,6 +4,7 @@ import { getResolvedAssigneeId } from './assigneeValue';
 import { CUSTOMER_CLUB_PERMISSION_KEY } from './customerClub';
 import { fetchAssigneeDirectory } from './referenceData';
 import { clearSessionBootstrapCache, fetchSessionBootstrap } from './sessionCache';
+import type { FieldActionPermissions } from './fieldAccess';
 
 export type RecordScope = 'all' | 'own' | 'team' | 'subtree';
 
@@ -23,11 +24,13 @@ export type ViewConditionGroup = {
 
 export type ModulePermissionConfig = {
   view?: boolean;
+  create?: boolean;
   edit?: boolean;
   delete?: boolean;
   record_scope?: RecordScope;
   view_conditions?: ViewConditionGroup;
   fields?: Record<string, any>;
+  field_actions?: Record<string, FieldActionPermissions>;
 };
 
 export type PermissionMap = Record<string, ModulePermissionConfig>;
@@ -113,8 +116,8 @@ export const SETTINGS_TAB_PERMISSIONS = [
   { key: 'users', label: 'مدیریت کاربران' },
   { key: 'roles', label: 'چارت سازمانی' },
   { key: 'module_settings', label: 'تنظیمات ماژول ها' },
-  { key: 'formulas', label: 'فرمول های محاسباتی' },
   { key: 'connections', label: 'اتصالات' },
+  { key: 'ai', label: 'هوش مصنوعی' },
   { key: 'print_templates', label: 'قالب‌های پرینت' },
   { key: 'reservation_settings', label: 'تنظیمات رزرواسیون' },
   { key: 'ai_knowledge', label: 'دانش سازمان' },
@@ -375,6 +378,7 @@ const mergeModulePermission = (base: ModulePermissionConfig, incoming?: ModulePe
   const viewConditions = normalizeViewConditionGroup(incoming?.view_conditions || base.view_conditions);
   return {
     view: incoming?.view ?? base.view ?? true,
+    create: incoming?.create ?? incoming?.edit ?? base.create ?? base.edit ?? true,
     edit: incoming?.edit ?? base.edit ?? true,
     delete: incoming?.delete ?? base.delete ?? true,
     record_scope:
@@ -384,6 +388,10 @@ const mergeModulePermission = (base: ModulePermissionConfig, incoming?: ModulePe
       ...(base.fields || {}),
       ...(incoming?.fields || {}),
     },
+    field_actions: Object.fromEntries(
+      [...new Set([...Object.keys(base.field_actions || {}), ...Object.keys(incoming?.field_actions || {})])]
+        .map((key) => [key, { ...base.field_actions?.[key], ...incoming?.field_actions?.[key] }])
+    ),
     view_conditions: hasViewConditionGroupConditions(viewConditions) ? viewConditions : undefined,
   };
 };

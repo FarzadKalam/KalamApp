@@ -1,6 +1,10 @@
 import { supabase } from '../supabaseClient';
 
 export const SUPPORT_BUCKET = 'saas-support-private';
+export const SUPPORT_READ_EVENT = 'support-ticket-read';
+export const SUPPORT_TICKET_TYPES = [
+  { value: 'incoming', label: 'دریافتی' }, { value: 'outgoing', label: 'ارسالی' },
+];
 export const SUPPORT_STATUS: Record<string, { title: string; color: string }> = {
   waiting_operator: { title: 'منتظر پاسخ اوپراتور', color: 'orange' },
   in_review: { title: 'در حال بررسی', color: 'blue' },
@@ -10,7 +14,7 @@ export const SUPPORT_STATUS: Record<string, { title: string; color: string }> = 
 
 export type SupportAttachment = { id: string; file_name: string; mime_type: string; file_size: number; object_path: string };
 export type SupportMessage = { id: string; body: string; visibility: 'customer' | 'internal'; message_kind: 'reply' | 'note' | 'forward'; author_id: string; author_name: string; created_at: string; attachments: SupportAttachment[] };
-export type SupportTicket = { id: string; code: string; subject: string; category_code: string; category_title?: string; status: string; customer_org_id: string; customer_org_name?: string; created_by: string; assigned_to: string | null; created_at: string; last_message_at: string; first_response_at?: string | null; closed_at?: string | null; unread_count?: number };
+export type SupportTicket = { customer_user_id?: string | null; ticket_type?: 'incoming' | 'outgoing'; id: string; code: string; subject: string; category_code: string; category_title?: string; status: string; customer_org_id: string; customer_org_name?: string; created_by: string; assigned_to: string | null; created_at: string; last_message_at: string; first_response_at?: string | null; closed_at?: string | null; unread_count?: number };
 export type SupportThread = { ticket: SupportTicket; messages: SupportMessage[]; forwards: Array<{ id: string; note_message_id: string; source_message_id: string; recipient_id: string; attachment_ids: string[] }>; events: Array<{ event_type: string; old_value: string | null; new_value: string | null; created_at: string }> };
 
 const allowedMimeTypes = new Set([

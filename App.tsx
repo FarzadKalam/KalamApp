@@ -851,6 +851,7 @@ function App() {
             <Route path="/messages" element={<MessagesPage />} />
             <Route path="/contact-center" element={<LazyRouteBoundary><ContactCenterPage /></LazyRouteBoundary>} />
             <Route path="/support/tickets" element={<SupportTicketsPage />} />
+            <Route path="/support/tickets/workflows" element={<SupportWorkflowsPage />} />
             <Route path="/installation" element={<LocalInstallationDashboard />} />
             <Route path="/support/tickets/:ticketId" element={<SupportTicketsPage />} />
             <Route path="/instagram" element={<InstagramInboxPage />} />

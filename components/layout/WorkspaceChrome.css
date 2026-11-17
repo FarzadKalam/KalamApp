@@ -26,6 +26,16 @@
 .sidebar-module-search .ant-input-affix-wrapper{min-height:44px;border-radius:12px;background:var(--workspace-surface)}
 .sidebar-module-search input{background:transparent}
 .app-drawer-footer{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.sidebar-help-footer{width:100%;display:flex;flex-direction:column;gap:10px}
+.sidebar-help-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;direction:rtl}
+.sidebar-help-tutorials{min-width:0}
+.sidebar-tutorial-button.ant-btn,.sidebar-support-button{min-height:44px;display:inline-flex;align-items:center;justify-content:center;gap:8px;white-space:nowrap;border-radius:12px;padding:8px 12px;font-size:13px;font-weight:600}
+.sidebar-tutorial-button.ant-btn{color:var(--workspace-text)}
+.sidebar-support-button{flex-shrink:0;color:rgb(var(--brand-700-rgb));background:rgba(var(--brand-500-rgb),.1);border:1px solid rgba(var(--brand-500-rgb),.2);cursor:pointer;transition:background .15s ease}
+.sidebar-support-button:hover{background:rgba(var(--brand-500-rgb),.18)}
+.sidebar-support-button:focus-visible{outline:2px solid rgb(var(--brand-500-rgb));outline-offset:2px}
+.dark .sidebar-support-button{color:var(--workspace-text);background:rgba(var(--brand-500-rgb),.18);border-color:rgba(var(--brand-300-rgb),.25)}
+.sidebar-support-button .anticon{font-size:22px}
 .app-module-drawer-dark .ant-drawer-content,.app-module-drawer-dark .ant-drawer-footer{background:#1c1c1f;color:#f4f4f5}
 .app-module-drawer-dark .ant-drawer-header{border-color:#353539}
 .contextual-tutorial-badge .ant-badge-count{background:var(--workspace-solid);color:#fff;box-shadow:0 0 0 2px var(--workspace-surface)}
@@ -145,8 +155,8 @@ html.dark .app-module-drawer .ant-menu-submenu-title *,
 .app-sidebar-panel .ant-menu-sub,.app-module-drawer .ant-menu-sub{background:transparent!important}
 .dark .app-sidebar-panel .ant-menu-sub,.dark .app-module-drawer .ant-menu-sub,html.dark .app-sidebar-panel .ant-menu-sub,html.dark .app-module-drawer .ant-menu-sub{background:transparent!important}
 .app-sidebar-panel>.app-drawer-footer{padding:10px 12px;border-top:1px solid var(--workspace-line);flex-shrink:0}
-.workspace-sidebar-submenu,.app-main-sider-submenu-popup{z-index:1250!important;direction:rtl!important}
-.workspace-sidebar-submenu .ant-menu,.app-main-sider-submenu-popup .ant-menu{min-width:280px;max-width:min(400px,calc(100vw - 24px));max-height:calc(100dvh - 32px);overflow-y:auto;border:1px solid var(--workspace-line);border-radius:16px!important;background:#fff!important;color:#0f172a!important;padding:6px!important;box-shadow:0 10px 28px rgb(0 0 0 / .12)}
+.workspace-sidebar-submenu,.app-main-sider-submenu-popup{z-index:1250!important;direction:rtl!important;padding-block:8px!important;box-sizing:border-box}
+.workspace-sidebar-submenu .ant-menu,.app-main-sider-submenu-popup .ant-menu{min-width:min(280px,calc(100vw - 24px));max-width:min(400px,calc(100vw - 24px));max-height:calc(100dvh - 32px);overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-gutter:stable;border:1px solid var(--workspace-line);border-radius:16px!important;background:#fff!important;color:#0f172a!important;padding:6px!important;box-shadow:0 10px 28px rgb(0 0 0 / .12)}
 .dark .workspace-sidebar-submenu .ant-menu,.dark .app-main-sider-submenu-popup .ant-menu,html.dark .workspace-sidebar-submenu .ant-menu,html.dark .app-main-sider-submenu-popup .ant-menu{background:#1c1c1f!important;border-color:#353539!important;color:#f4f4f5!important;box-shadow:0 14px 36px rgb(0 0 0 / .45),0 2px 8px rgb(0 0 0 / .3)}
 .workspace-sidebar-submenu .ant-menu-item,.workspace-sidebar-submenu .ant-menu-submenu-title,.app-main-sider-submenu-popup .ant-menu-item,.app-main-sider-submenu-popup .ant-menu-submenu-title{min-height:44px;line-height:44px;border-radius:10px}
 .workspace-sidebar-submenu .sidebar-menu-link,.app-main-sider-submenu-popup .sidebar-menu-link{display:flex;width:100%;color:inherit}

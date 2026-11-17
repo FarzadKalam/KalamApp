@@ -177,6 +177,7 @@ interface EditableTableProps {
   populateSource?: { moduleId?: string; recordId?: string; column?: string };
   canEditModule?: boolean;
   canViewField?: (fieldKey: string) => boolean;
+  canEditField?: (fieldKey: string, value?: unknown) => boolean;
   isMobile?: boolean;
   readOnly?: boolean;
   focusRowKey?: string | null;
@@ -206,6 +207,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   populateSource,
   canEditModule,
   canViewField,
+  canEditField,
   readOnly,
   focusRowKey,
   invoiceGlobalDiscountType,
@@ -1186,6 +1188,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   };
 
   const updateRow = (index: number, key: string, value: any) => {
+    if (canEditField && !canEditField(key, value)) return;
     const source = getActiveRowsSnapshot();
     const newData = [...source];
     newData[index] = { ...newData[index], [key]: value };
@@ -4630,7 +4633,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
     const value = isPriceListItems && col.key === 'currency_label'
       ? (recordValue || currencyLabel)
       : recordValue;
-    const fieldConfig = getFieldConfigForColumn(col, record);
+    const baseFieldConfig = getFieldConfigForColumn(col, record);
+    const fieldConfig = canEditField && !canEditField(col.key)
+      ? { ...baseFieldConfig, readonly: true } : baseFieldConfig;
     const options = getColumnOptions(col, rowKey, record);
     const showNoPriceListHint =
       isInvoiceItems &&

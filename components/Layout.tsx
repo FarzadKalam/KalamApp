@@ -1,6 +1,6 @@
 import {useVoipConnectionPolicy} from '../hooks/useVoipConnectionPolicy';
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Layout as AntLayout, Button, Dropdown, App, Input, Spin, Popconfirm, Tooltip, Badge } from 'antd';
+import { Layout as AntLayout, Button, Dropdown, App, Input, Spin, Popconfirm, Tooltip } from 'antd';
 import type { InputRef, MenuProps } from 'antd';
 import { 
   AppstoreOutlined,
@@ -38,6 +38,7 @@ import { signOutLocalSession } from '../utils/authSession';
 import { MODULES } from '../moduleRegistry';
 import AppVersionUpdateBanner from './AppVersionUpdateBanner';
 import { getTutorialContexts } from '../utils/tutorialContexts';
+import { SUPPORT_READ_EVENT } from '../utils/supportTickets';
 import {
   ACCOUNTING_PERMISSION_KEY,
   AI_AGENTS_PERMISSION_KEY,
@@ -261,10 +262,11 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       if (active) setSupportUnread(error ? 0 : Math.max(0, Number(data || 0)));
     }); };
     refresh();
+    window.addEventListener(SUPPORT_READ_EVENT, refresh);
     const timer = window.setInterval(refresh, 15000);
     const channel = supabase.channel(`org:${resolvedOrgId}:notifications`, { config: { private: true } } as any)
       .on('broadcast', { event: 'support_tickets_changed' }, refresh).subscribe();
-    return () => { active = false; window.clearInterval(timer); void supabase.removeChannel(channel); };
+    return () => { active = false; window.clearInterval(timer); window.removeEventListener(SUPPORT_READ_EVENT, refresh); void supabase.removeChannel(channel); };
   }, [currentUser?.id, resolvedOrgId]);
 
   useEffect(() => {
@@ -870,7 +872,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         label: 'ارتباطات',
         children: [
           { key: '/messages', icon: <MessageOutlined />, label: 'پیام‌رسانی', disabled: !communicationsAccess.canUseWorkspace },
-          ...(canViewSupportCustomer ? [{ key: '/support/tickets', icon: <Badge count={supportUnread} size="small" overflowCount={99}><MessageOutlined /></Badge>, label: 'تیکت‌های پشتیبانی' }] : []),
           { key: '/instagram', icon: <InstagramOutlined />, label: 'صندوق اینستاگرام', disabled: !canViewInstagramInbox },
           { key: '/ai', icon: <AiSparkleIcon className="h-4 w-4" />, label: 'دستیار هوشمند سازمان', disabled: !communicationsAccess.canUseWorkspace },
           { key: '/ai/agents', icon: <RobotOutlined />, label: 'میز کار ایجنت‌ها', disabled: !canViewAiAgentsWorkspace },
@@ -1027,8 +1028,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           ...(saasAdminPermissions.view && saasAdminPermissionFields.local_view === true ? [{ key: '/saas_local_installations', label: 'نصب‌های اختصاصی' }] : []),
           { key: '/saas_demo_requests', label: 'درخواست‌های دمو' },
           ...(saasWorkflowAccess ? [{ key: '/taze-system/workflows', label: 'گردش‌کار سازمان‌ها، کاربران و دموها' }] : []),
-          ...(supportAdminAccess ? [{ key: '/taze-system/tickets', icon: <Badge count={supportUnread} size="small" overflowCount={99}><MessageOutlined /></Badge>, label: 'تیکت‌ها' }] : []),
-          ...(supportAdminAccess && supportWorkflowAccess ? [{ key: '/taze-system/tickets/workflows', label: 'گردش‌کار تیکت‌ها' }] : []),
           { key: '/saas_user_announcements', label: 'اعلانات کاربران' },
           { key: '/taze-system/plans', label: 'پلن‌ها' },
           { key: '/taze-system/catalog', label: 'افزونه‌های فروشگاه' },
@@ -1541,6 +1540,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     >
       
       <MainSidebar items={menuItems} railItems={visibleRawMenuItems} selectedKey={selectedSidebarKey}
+        supportTicketPath={supportAdminAccess ? "/support/tickets" : canViewSupportCustomer ? "/support/tickets" : undefined}
+        supportUnread={supportUnread}
         presentation={sidebarLayout.mode}
         ancestorKeys={sidebarAncestorKeys} collapsed={collapsed} onCollapsedChange={setCollapsed}
         isMobile={isMobile} isDarkMode={isDarkMode} onNavigate={handleSidebarNavigate}

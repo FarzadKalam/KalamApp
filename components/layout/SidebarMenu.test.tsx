@@ -21,9 +21,16 @@ describe('sidebar render isolation', () => {
     expect(menuProbe.props.openKeys).toEqual([]);
     expect(menuProbe.props.items[0].popupClassName).toContain('workspace-sidebar-submenu');
     expect(menuProbe.props.items[0].children[0].disabled).toBe(true);
+    expect(menuProbe.props.builtinPlacements.rightTop).toMatchObject({
+      points: ['tr', 'tl'], htmlRegion: 'visible',
+      overflow: { adjustX: 1, adjustY: 1, shiftX: true, shiftY: true },
+    });
+    expect(menuProbe.props.getPopupContainer(document.createElement('button'))).toBe(document.body);
     rerender(<SidebarMenu items={items} selectedKey="/customers" ancestorKeys={['sales']} collapsed={false} isMobile desktopFlyout isDarkMode onNavigate={vi.fn()} />);
     expect(menuProbe.props.mode).toBe('inline');
     expect(menuProbe.props.triggerSubMenuAction).toBe('click');
+    expect(menuProbe.props.builtinPlacements).toBeUndefined();
+    expect(menuProbe.props.getPopupContainer).toBeUndefined();
   });
   it('finds nested Persian module labels with Arabic input and preserves icons', () => {
     const icon = <span>نماد</span>;

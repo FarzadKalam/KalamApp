@@ -1,12 +1,11 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
-import { Tabs, Empty, Spin } from 'antd';
-import { BankOutlined, UsergroupAddOutlined, ClusterOutlined, FunctionOutlined, ApartmentOutlined, LinkOutlined, SettingOutlined, FileTextOutlined, CreditCardOutlined } from '@ant-design/icons';
+import { Empty, Spin } from 'antd';
+import { BankOutlined, UsergroupAddOutlined, ClusterOutlined, ApartmentOutlined, LinkOutlined, SettingOutlined, FileTextOutlined, CreditCardOutlined } from '@ant-design/icons';
 import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
 import CompanyTab from './CompanyTab';
 import UsersTab from './UsersTab';
 import RolesTab from './RolesTab';
 import ConnectionsTab from './ConnectionsTab';
-import ModuleListRefine from '../ModuleList_Refine';
 import { supabase } from '../../supabaseClient';
 import { SETTINGS_PERMISSION_KEY, WORKFLOWS_PERMISSION_KEY, fetchCurrentUserRoleContext } from '../../utils/permissions';
 import WorkflowsManager from '../../components/workflows/WorkflowsManager';
@@ -17,6 +16,7 @@ import ReservationSettingsTab from './ReservationSettingsTab';
 import AccountStatusTab from './AccountStatusTab';
 import { useSearchParams } from 'react-router-dom';
 import { useReservationsFeature } from '../../hooks/useReservationsFeature';
+import SettingsNavigation from '../../components/settings/SettingsNavigation';
 
 const SettingsPage: React.FC = () => {
   const [loadingPermissions, setLoadingPermissions] = useState(true);
@@ -119,18 +119,13 @@ const SettingsPage: React.FC = () => {
       },
       {
         key: 'roles',
-        label: <span className="flex items-center gap-2 text-base"><ClusterOutlined /> چارت سازمانی</span>,
+        label: <span className="flex items-center gap-2 text-base"><ClusterOutlined /> چارت و دسترسی‌ها</span>,
         children: <RolesTab />,
       },
       {
         key: 'module_settings',
         label: <span className="flex items-center gap-2 text-base"><SettingOutlined /> تنظیمات ماژول‌ها</span>,
         children: <ModuleSettingsTab initialModuleId={requestedModuleId} />,
-      },
-      {
-        key: 'formulas',
-        label: <span className="flex items-center gap-2 text-base"><FunctionOutlined /> فرمول های محاسباتی</span>,
-        children: <ModuleListRefineWrapper moduleId="calculation_formulas" />,
       },
       {
         key: 'connections',
@@ -181,7 +176,7 @@ const SettingsPage: React.FC = () => {
 
   return (
     <div className="p-4 md:p-8 max-w-[1600px] mx-auto animate-fadeIn">
-      <div className="bg-white dark:bg-[#1a1a1a] rounded-[2rem] shadow-sm border border-gray-200 dark:border-gray-800 p-6 min-h-[70vh] transition-colors">
+      <div className="bg-white dark:bg-[#1a1a1a] rounded-[2rem] shadow-sm border border-gray-200 dark:border-gray-800 p-4 md:p-6 min-h-[70vh] transition-colors">
         {loadingPermissions || !reservationsResolved ? (
           <div className="h-[55vh] flex items-center justify-center">
             <Spin size="large" />
@@ -191,26 +186,15 @@ const SettingsPage: React.FC = () => {
             <Empty description="دسترسی به تب های تنظیمات ندارید" />
           </div>
         ) : (
-          <Tabs
+          <SettingsNavigation
             activeKey={activeTabKey}
             onChange={handleTabChange}
             items={items}
-            size="large"
-            className="dark:text-gray-200"
           />
         )}
       </div>
-      <style>{`
-        .dark .ant-tabs-tab { color: #888; }
-        .dark .ant-tabs-tab-active .ant-tabs-tab-btn { color: white !important; }
-        .dark .ant-tabs-ink-bar { background: rgb(var(--brand-500-rgb)) !important; }
-      `}</style>
     </div>
   );
 };
 
 export default SettingsPage;
-
-const ModuleListRefineWrapper: React.FC<{ moduleId: string }> = ({ moduleId }) => {
-  return <ModuleListRefine moduleIdOverride={moduleId} />;
-};

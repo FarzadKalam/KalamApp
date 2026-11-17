@@ -40,6 +40,7 @@ interface TablesSectionProps {
   checkVisibility: (logic: any) => boolean;
   isFieldVisible?: (field: any) => boolean;
   canViewField?: (fieldKey: string) => boolean;
+  canEditField?: (fieldKey: string, value?: unknown) => boolean;
   canEditModule?: boolean;
   onDataUpdate?: (patch: Record<string, any>) => void;
   focusBlockId?: string | null;
@@ -60,6 +61,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
   checkVisibility,
   isFieldVisible,
   canViewField,
+  canEditField,
   canEditModule = true,
   onDataUpdate,
   focusBlockId,
@@ -344,7 +346,8 @@ const TablesSection: React.FC<TablesSectionProps> = ({
               recordId={data.id}
               relationOptions={relationOptions}
               dynamicOptions={dynamicOptions}
-              canEditModule={canEditModule && !(productionLocked && String(block.id).startsWith('items_'))}
+              canEditModule={canEditModule && (!canEditField || canEditField(String(block.id))) && !(productionLocked && String(block.id).startsWith('items_'))}
+              canEditField={canEditField ? (key, value) => canEditField(`${block.id}.${key}`, value) && canEditField(key, value) : undefined}
               canViewField={(fieldKey) =>
                 (canViewField ? canViewField(`${block.id}.${fieldKey}`) !== false : true) &&
                 (canViewField ? canViewField(fieldKey) !== false : true)
@@ -366,7 +369,8 @@ const TablesSection: React.FC<TablesSectionProps> = ({
               invoiceGlobalDiscountValue={data?.global_discount_value ?? null}
               relationOptions={relationOptions}
               dynamicOptions={dynamicOptions}
-              canEditModule={canEditModule && !(productionLocked && String(block.id).startsWith('items_'))}
+              canEditModule={canEditModule && (!canEditField || canEditField(String(block.id))) && !(productionLocked && String(block.id).startsWith('items_'))}
+              canEditField={canEditField ? (key, value) => canEditField(`${block.id}.${key}`, value) && canEditField(key, value) : undefined}
               canViewField={(fieldKey) =>
                 (canViewField ? canViewField(`${block.id}.${fieldKey}`) !== false : true) &&
                 (canViewField ? canViewField(fieldKey) !== false : true)

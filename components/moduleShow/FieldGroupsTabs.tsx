@@ -23,6 +23,7 @@ interface FieldGroupsTabsProps {
   checkVisibility: (logic: any) => boolean;
   isFieldVisible?: (field: any) => boolean;
   canViewField?: (fieldKey: string) => boolean;
+  canEditField?: (fieldKey: string, value?: unknown) => boolean;
   canEditModule?: boolean;
   onDataUpdate?: (patch: Record<string, any>) => void;
   stockMovementQuickAddSignal?: number;
@@ -41,6 +42,7 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
   checkVisibility,
   isFieldVisible,
   canViewField,
+  canEditField,
   canEditModule = true,
   onDataUpdate,
   stockMovementQuickAddSignal = 0,
@@ -170,7 +172,8 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
               invoiceGlobalDiscountValue={data?.global_discount_value ?? null}
               relationOptions={relationOptions}
               dynamicOptions={dynamicOptions}
-              canEditModule={canEditModule}
+              canEditModule={canEditModule && (!canEditField || canEditField(String(block.id)))}
+              canEditField={canEditField ? (key, value) => canEditField(`${block.id}.${key}`, value) && canEditField(key, value) : undefined}
               canViewField={(fieldKey) =>
                 (canViewField ? canViewField(`${block.id}.${fieldKey}`) !== false : true) &&
                 (canViewField ? canViewField(fieldKey) !== false : true)

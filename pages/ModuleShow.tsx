@@ -1,4 +1,6 @@
 import { iranMobileLocal } from '../supabase/functions/_shared/phone-number';
+import { canFieldAction, canWriteFieldValue, canModuleAction } from '../utils/fieldAccess';
+import type { ModulePermissionConfig } from '../utils/permissions';
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Button, App, Checkbox, Modal, Progress, Select, Form, Input, Skeleton } from 'antd';
@@ -687,7 +689,7 @@ const ModuleShow: React.FC = () => {
   const recordFetchKeyRef = useRef<string>('');
   const skipNextOptionsFetchRef = useRef(false);
   const [fieldPermissions, setFieldPermissions] = useState<Record<string, boolean>>({});
-  const [modulePermissions, setModulePermissions] = useState<{ view?: boolean; edit?: boolean; delete?: boolean; record_scope?: RecordScope }>({});
+  const [modulePermissions, setModulePermissions] = useState<ModulePermissionConfig>({});
   const [currentPermissionMap, setCurrentPermissionMap] = useState<PermissionMap | null>(null);
   const [currentSoftwareRole, setCurrentSoftwareRole] = useState<string | null>(null);
   const [isCreateOrderOpen, setIsCreateOrderOpen] = useState(false);
@@ -2114,6 +2116,7 @@ const ModuleShow: React.FC = () => {
       const perms = modulePerms.fields || {};
       setFieldPermissions(perms);
       setModulePermissions({
+        ...modulePerms,
         view: modulePerms.view,
         edit: modulePerms.edit,
         delete: modulePerms.delete,
@@ -4609,6 +4612,10 @@ const ModuleShow: React.FC = () => {
   const saveEdit = async (key: string) => {
     const editScope = relationPopulateScopeRef.current;
     if (!canEditModule) return;
+    if (!canWriteFieldValue(modulePermissions, key, tempValues[key], false)) {
+      msg.error('دسترسی تغییر یا پاک‌کردن مقدار این فیلد را ندارید.');
+      return;
+    }
     // A field save can dispatch asynchronous automation. Guard the entry point so
     // repeated taps on the confirmation icon never submit the same edit twice.
     if (savingField === key) return;
@@ -5128,6 +5135,7 @@ const ModuleShow: React.FC = () => {
 
   const startEdit = (key: string, value: any) => {
     if (!canEditModule) return;
+    if (!canFieldAction(modulePermissions, key, 'edit')) return;
     setEditingFields(prev => ({ ...prev, [key]: true }));
     setTempValues(prev => ({
       ...prev,
@@ -6174,6 +6182,7 @@ const ModuleShow: React.FC = () => {
 
   const renderSmartField = (field: any, isHeader = false) => {
     if (!canViewField(field.key)) return null;
+    const canInlineEditField = canInlineEdit && canFieldAction(modulePermissions, field.key, 'edit');
     const isEditing = editingFields[field.key];
     const value = displayData[field.key];
     const isProcessDraftField = (
@@ -6202,7 +6211,7 @@ const ModuleShow: React.FC = () => {
             field={field}
             value={value}
             onChange={(nextValue) => {
-              if (!isProcessDraftField || !id || !canEditModule) return;
+              if (!isProcessDraftField || !id || !canEditModule || !canWriteFieldValue(modulePermissions, field.key, nextValue, false)) return;
               if (field.key === 'template_stages_preview' || field.key === 'run_stages_preview') return;
               const patch = { [field.key]: nextValue } as Record<string, any>;
               setData((prev: any) => ({ ...(prev || {}), ...patch }));
@@ -6216,7 +6225,7 @@ const ModuleShow: React.FC = () => {
                   }
                 });
             }}
-            forceEditMode={canEditModule}
+            forceEditMode={canInlineEditField}
             compactMode={false}
             options={options}
             recordId={id}
@@ -6356,13 +6365,13 @@ const ModuleShow: React.FC = () => {
           className="group flex w-full min-w-0 items-start gap-2 cursor-pointer"
           onClick={(event) => {
             event.stopPropagation();
-            if (!field.readonly && canInlineEdit && !isProcessTemplateFieldLocked) startEdit(field.key, value);
+            if (!field.readonly && canInlineEditField && !isProcessTemplateFieldLocked) startEdit(field.key, value);
           }}
         >
           <div className="min-w-0 flex-1 overflow-hidden">
             {displayNode}
           </div>
-          {!field.readonly && canInlineEdit && !isProcessTemplateFieldLocked && <EditOutlined className="text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity text-xs" />}
+          {!field.readonly && canInlineEditField && !isProcessTemplateFieldLocked && <EditOutlined className="text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity text-xs" />}
         </div>
       );
     }
@@ -6372,11 +6381,11 @@ const ModuleShow: React.FC = () => {
         className={`group flex justify-between min-h-[32px] hover:bg-gray-50 dark:hover:bg-white/5 px-3 rounded-lg -mx-3 transition-colors cursor-pointer border border-transparent hover:border-gray-100 dark:hover:border-gray-700 ${isSuperLongTextField ? 'items-start py-2' : 'items-center'}`}
         onClick={(event) => {
           event.stopPropagation();
-          if (!field.readonly && canInlineEdit && !isProcessTemplateFieldLocked) startEdit(field.key, value);
+          if (!field.readonly && canInlineEditField && !isProcessTemplateFieldLocked) startEdit(field.key, value);
         }}
       >
         <div className="text-gray-800 dark:text-gray-200 flex-1 min-w-0">{displayNode}</div>
-        {!field.readonly && canInlineEdit && !isProcessTemplateFieldLocked && <EditOutlined className="text-leather-400 opacity-0 group-hover:opacity-100 transition-opacity" />}
+        {!field.readonly && canInlineEditField && !isProcessTemplateFieldLocked && <EditOutlined className="text-leather-400 opacity-0 group-hover:opacity-100 transition-opacity" />}
       </div>
     );
   };
@@ -6623,7 +6632,7 @@ const ModuleShow: React.FC = () => {
         onModule={() => navigate(`/${moduleId}`)}
         onPrint={() => printManager.setIsPrintModalOpen(true)}
         onRefresh={handleHeaderRefresh}
-        onCopy={canEditModule ? handleCopyRecord : undefined}
+        onCopy={canModuleAction(modulePermissions, 'create') && !saasReadonly ? handleCopyRecord : undefined}
         refreshLoading={loading}
         onEdit={() => setIsEditDrawerOpen(true)}
         onDelete={handleDelete}
@@ -6657,10 +6666,12 @@ const ModuleShow: React.FC = () => {
         getUserName={getUserName}
         handleAssigneeChange={handleAssigneeChange}
         supportsRoleAssignee={supportsRoleAssignee}
-        canManageAssignee={supportsAssignee}
+        canManageAssignee={supportsAssignee && canFieldAction(modulePermissions, 'assignee_id', 'edit')}
         onImageUpdate={handleImageUpdate}
         onMainImageChange={handleMainImageChange}
         canViewField={canViewField}
+        canEditField={(key, value) => canFieldAction(modulePermissions, key, 'edit')
+          && (value === undefined || canWriteFieldValue(modulePermissions, key, value, false))}
         canEditModule={canEditModule}
         canUploadFilesManager={baseCanEditModule}
         canDeleteFilesManager={canEditModule}
@@ -6690,6 +6701,8 @@ const ModuleShow: React.FC = () => {
         checkVisibility={checkVisibility}
         isFieldVisible={conditionalFieldRuntime.isFieldVisible}
         canViewField={canViewField}
+        canEditField={(key, value) => canFieldAction(modulePermissions, key, 'edit')
+          && (value === undefined || canWriteFieldValue(modulePermissions, key, value, false))}
         canEditModule={canEditModule}
         onDataUpdate={handleRecordPatch}
         stockMovementQuickAddSignal={stockMovementQuickAddSignal}
@@ -6704,6 +6717,9 @@ const ModuleShow: React.FC = () => {
         checkVisibility={checkVisibility}
         isFieldVisible={conditionalFieldRuntime.isFieldVisible}
         canViewField={canViewField}
+        canEditField={(key, value) => canFieldAction(modulePermissions, key, 'edit')
+          && (value === undefined || canWriteFieldValue(modulePermissions, key, value, false))}
+
         canEditModule={canEditModule}
         onDataUpdate={handleRecordPatch}
         focusBlockId={focusBlockId}

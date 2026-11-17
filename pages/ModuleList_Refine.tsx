@@ -1,3 +1,4 @@
+import { canModuleAction } from '../utils/fieldAccess';
 ﻿import React, {
   useEffect,
   useMemo,
@@ -1263,6 +1264,7 @@ export const ModuleListRefine: React.FC<{
     () => cachedOptionSnapshot?.allRoles || [],
   );
   const [modulePermissions, setModulePermissions] = useState<{
+    create?: boolean;
     view?: boolean;
     edit?: boolean;
     delete?: boolean;
@@ -2815,6 +2817,7 @@ export const ModuleListRefine: React.FC<{
       );
       setModulePermissions({
         view: modulePerms.view,
+        create: modulePerms.create,
         edit: modulePerms.edit,
         delete: modulePerms.delete,
         record_scope: nextRecordScope,
@@ -3190,7 +3193,7 @@ export const ModuleListRefine: React.FC<{
     moduleConfig?.listDetailSurface === "saas_org_drawer";
   const useQuickPreviewModal =
     moduleConfig?.listPreviewMode === "modal" || detailDisabled;
-  const canCreateModule = canEditModule && !createDisabled;
+  const canCreateModule = !saasReadonly && canModuleAction(modulePermissions, 'create') && !createDisabled;
   const openModuleCreate = useCallback(() => {
     if (!canCreateModule) return;
     if (resolvedModuleId === 'billboard_status_changes') setIsBillboardStatusChangeOpen(true);

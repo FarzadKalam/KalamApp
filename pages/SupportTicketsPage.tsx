@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { App as AntApp, Badge, Button, Checkbox, Empty, Input, Modal, Select, Spin, Tag, Tooltip } from 'antd';
-import { FileAddOutlined, PaperClipOutlined, PlusOutlined, ReloadOutlined, SendOutlined } from '@ant-design/icons';
+import { App as AntApp, Badge, Button, Checkbox, Dropdown, Empty, Input, Modal, Select, Spin, Tag, Tooltip } from 'antd';
+import { FileAddOutlined, MoreOutlined, PaperClipOutlined, PlusOutlined, ReloadOutlined, SendOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import WorkflowsManager from '../components/workflows/WorkflowsManager';
 import { getSupportFileUrl, SUPPORT_STATUS, type SupportAttachment, type SupportMessage, type SupportThread, type SupportTicket, uploadSupportFiles, validateSupportFiles } from '../utils/supportTickets';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { fetchCurrentUserRoleContext, SETTINGS_PERMISSION_KEY } from '../utils/permissions';
+import { selectOrganizationContext } from '../utils/organizationContext';
+import { SUPPORT_READ_EVENT, SUPPORT_TICKET_TYPES } from '../utils/supportTickets';
 
 type Operator = { id: string; name: string };
 type Category = { code: string; title: string };
@@ -39,16 +42,18 @@ const AttachmentItem: React.FC<{ attachment: SupportAttachment }> = ({ attachmen
   </button>;
 };
 
-const SupportTicketsPage: React.FC<Props> = ({ admin = false }) => {
+const SupportTicketsPage: React.FC<Props> = ({ admin: adminRoute = false }) => {
   const { message } = AntApp.useApp();
   const navigate = useNavigate();
   const { ticketId } = useParams<{ ticketId?: string }>();
-  const [ready, setReady] = useState(!admin);
-  const [allowed, setAllowed] = useState(!admin);
-  const [canReply, setCanReply] = useState(!admin);
+  const [admin, setAdmin] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [allowed, setAllowed] = useState(false);
+  const [canReply, setCanReply] = useState(false);
   const [canCreate, setCanCreate] = useState(false);
   const [canManage, setCanManage] = useState(false);
   const [canWorkflows, setCanWorkflows] = useState(false);
+  const [canManageAccess, setCanManageAccess] = useState(false);
   const [currentUserId, setCurrentUserId] = useState('');
   const [currentOrgId, setCurrentOrgId] = useState('');
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
@@ -67,6 +72,12 @@ const SupportTicketsPage: React.FC<Props> = ({ admin = false }) => {
   const [newSubject, setNewSubject] = useState('');
   const [newBody, setNewBody] = useState('');
   const [newFiles, setNewFiles] = useState<File[]>([]);
+  const [customerOrgId, setCustomerOrgId] = useState<string>();
+  const [customerUserId, setCustomerUserId] = useState<string>();
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [recipientSearch, setRecipientSearch] = useState('');
+  const [customerOptions, setCustomerOptions] = useState<Operator[]>([]);
+  const [recipientOptions, setRecipientOptions] = useState<Operator[]>([]);
   const [replyBody, setReplyBody] = useState('');
   const [replyInternal, setReplyInternal] = useState(false);
   const [replyFiles, setReplyFiles] = useState<File[]>([]);
@@ -77,7 +88,7 @@ const SupportTicketsPage: React.FC<Props> = ({ admin = false }) => {
   const [activityOpen, setActivityOpen] = useState(false);
   const [activityTitle, setActivityTitle] = useState('');
   const [activityAssignee, setActivityAssignee] = useState<string>();
-  const basePath = admin ? '/taze-system/tickets' : '/support/tickets';
+  const basePath = adminRoute ? '/taze-system/tickets' : '/support/tickets';
   const selectedId = ticketId || '';
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
@@ -87,23 +98,60 @@ const SupportTicketsPage: React.FC<Props> = ({ admin = false }) => {
   useEffect(() => {
     void supabase.auth.getUser().then(({ data }) => setCurrentUserId(data.user?.id || ''));
     void supabase.rpc('current_org_id').then(({ data, error }) => setCurrentOrgId(!error && typeof data === 'string' ? data : ''));
-    if (admin) {
-      void Promise.all(['support_view', 'support_reply', 'support_manage', 'support_workflows'].map((p_permission) =>
+    let active = true;
+    void fetchCurrentUserRoleContext(supabase).then((context) => {
+      const settings = context.permissions?.[SETTINGS_PERMISSION_KEY];
+      if (active) setCanManageAccess(!!context.userId && settings?.view !== false && settings?.edit !== false && settings?.fields?.roles !== false);
+    });
+    setReady(false);
+    void Promise.all(['support_view', 'support_reply', 'support_manage', 'support_workflows'].map((p_permission) =>
         supabase.rpc('support_is_operator', { p_permission })))
-        .then((results) => {
-          setAllowed(results[0].data === true);
-          setCanReply(results[1].data === true);
-          setCanManage(results[2].data === true);
-          setCanWorkflows(results[3].data === true);
-        }).catch(() => setAllowed(false)).finally(() => setReady(true));
-      void supabase.rpc('support_list_operators').then(({ data }) => setOperators(Array.isArray(data) ? data : []));
-    } else {
-      void supabase.rpc('support_list_categories').then(({ data }) => setCategories(Array.isArray(data) ? data : []));
-      void supabase.rpc('support_customer_capabilities').then(({ data, error }) => {
-        setCanCreate(!error && data?.can_create === true);
+        .then(async (results) => {
+          if (!active) return;
+          const operator = !results[0].error && results[0].data === true;
+          setAdmin(operator);
+          setCanReply(operator && results[1].data === true);
+          setCanManage(operator && results[2].data === true);
+          setCanWorkflows(operator && results[3].data === true);
+          if (operator) {
+            setAllowed(true);
+            setCanCreate(results[1].data === true);
+            const [{ data }, categories] = await Promise.all([supabase.rpc('support_list_operators'), supabase.rpc('support_list_categories')]);
+            if (active) setOperators(Array.isArray(data) ? data : []);
+            if (active) setCategories(Array.isArray(categories.data) ? categories.data : []);
+          } else {
+            const [{ data, error }, categories] = await Promise.all([
+              supabase.rpc('support_customer_capabilities'), supabase.rpc('support_list_categories'),
+            ]);
+            if (!active) return;
+            setAllowed(!adminRoute && !error && (data?.can_create === true || data?.can_view === true || data?.can_view_own === true || data?.can_view_all === true));
+            setCanCreate(!adminRoute && !error && data?.can_create === true);
+            setCategories(Array.isArray(categories.data) ? categories.data : []);
+          }
+        }).catch(() => { if (active) setAllowed(false); }).finally(() => { if (active) setReady(true); });
+    return () => { active = false; };
+  }, [adminRoute]);
+
+  useEffect(() => {
+    if (!admin || !createOpen) return;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void supabase.rpc('support_search_customers', { p_search: customerSearch || null }).then(({ data, error }) => {
+        if (active) setCustomerOptions(!error && Array.isArray(data) ? data : []);
       });
-    }
-  }, [admin]);
+    }, 250);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [admin, createOpen, customerSearch]);
+  useEffect(() => {
+    if (!admin || !createOpen || !customerOrgId) { setRecipientOptions([]); return; }
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void supabase.rpc('support_search_customers', { p_org_id: customerOrgId, p_search: recipientSearch || null }).then(({ data, error }) => {
+        if (active) setRecipientOptions(!error && Array.isArray(data) ? data : []);
+      });
+    }, 250);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [admin, createOpen, customerOrgId, recipientSearch]);
 
   const loadTickets = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -137,11 +185,15 @@ const SupportTicketsPage: React.FC<Props> = ({ admin = false }) => {
       if (!admin) {
         const { data: replyAccess, error: replyError } = await supabase.rpc('support_customer_can', {
           p_customer_org_id: data.ticket.customer_org_id,
-          p_action: 'reply', p_creator: data.ticket.created_by,
+          p_action: 'reply', p_creator: data.ticket.customer_user_id || data.ticket.created_by,
         });
         setCanReply(!replyError && replyAccess === true);
       }
-      await supabase.rpc('support_mark_read', { p_ticket_id: id });
+      const { error: readError } = await supabase.rpc('support_mark_read', { p_ticket_id: id });
+      if (!readError) {
+        setTickets((previous) => previous.map((ticket) => ticket.id === id ? { ...ticket, unread_count: 0 } : ticket));
+        window.dispatchEvent(new Event(SUPPORT_READ_EVENT));
+      }
     } catch (error) { if (!quiet) message.error(toFaErrorMessage(error, 'دریافت گفتگو ناموفق بود.')); }
     finally { if (!quiet) setDetailLoading(false); }
   }, [admin, message]);
@@ -186,12 +238,14 @@ const SupportTicketsPage: React.FC<Props> = ({ admin = false }) => {
   };
 
   const createTicket = () => void run(async () => {
+    if (!canCreate || (admin && (!customerOrgId || !customerUserId))) throw new Error('سازمان و گیرنده تیکت را انتخاب کنید.');
     validateSupportFiles(newFiles);
-    const { data, error } = await supabase.rpc('support_create_ticket', {
+    const { data, error } = await supabase.rpc(admin ? 'support_create_outgoing_ticket' : 'support_create_ticket', {
+      ...(admin ? { p_customer_org_id: customerOrgId, p_customer_user_id: customerUserId } : {}),
       p_category: newCategory, p_subject: newSubject.trim(), p_body: newBody.trim(),
     });
     if (error) throw error;
-    setCreateOpen(false); setNewSubject(''); setNewBody(''); setNewFiles([]); setNewCategory(undefined);
+    setCreateOpen(false); setNewSubject(''); setNewBody(''); setNewFiles([]); setNewCategory(undefined); setCustomerOrgId(undefined); setCustomerUserId(undefined);
     navigate(`${basePath}/${data.id}`);
     if (newFiles.length) {
       try { await uploadSupportFiles(data.id, data.message_id, newFiles); }
@@ -251,8 +305,13 @@ const SupportTicketsPage: React.FC<Props> = ({ admin = false }) => {
     <aside className={`${selectedId ? 'hidden md:flex' : 'flex'} w-full flex-col border-l border-slate-200 dark:border-slate-700 md:w-80 lg:w-96`}>
       <div className="border-b border-slate-200 p-4 dark:border-slate-700">
         <div className="mb-3 flex items-center justify-between gap-2"><h1 className="text-lg font-bold text-slate-900 dark:text-slate-100">{admin ? 'تیکت‌های مشتریان' : 'تیکت‌های پشتیبانی'}</h1>
-          <div className="flex gap-1"><Tooltip title="تازه‌سازی"><Button icon={<ReloadOutlined />} onClick={() => void loadTickets()} /></Tooltip>
-          {!admin && canCreate && <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>تیکت جدید</Button>}</div></div>
+          <div className="flex gap-1">
+          {(canWorkflows || canManageAccess) && <Dropdown trigger={['click']} menu={{ items: [
+            ...(canWorkflows ? [{ key: 'workflows', label: 'گردش‌کار تیکت‌ها', onClick: () => navigate(`${basePath}/workflows`) }] : []),
+            ...(canManageAccess ? [{ key: 'access', label: 'دسترسی کاربران به تیکت‌ها', onClick: () => navigate('/settings?tab=roles&permission=__support_tickets') }] : []),
+          ] }}><Button icon={<MoreOutlined />} aria-label="گزینه‌های تیکت‌ها" /></Dropdown>}
+          <Tooltip title="تازه‌سازی"><Button icon={<ReloadOutlined />} onClick={() => void loadTickets()} /></Tooltip>
+          {canCreate && <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>{admin ? 'ارسال تیکت' : 'تیکت جدید'}</Button>}</div></div>
         <Input.Search allowClear placeholder="جستجوی عنوان یا کد تیکت" value={search} onChange={(event) => setSearch(event.target.value)} />
         <Select className="mt-2 w-full" allowClear placeholder="همه وضعیت‌ها" value={statusFilter || undefined} onChange={(value) => setStatusFilter(value || null)}
           options={Object.entries(SUPPORT_STATUS).map(([value, item]) => ({ value, label: item.title }))} />
@@ -272,10 +331,10 @@ const SupportTicketsPage: React.FC<Props> = ({ admin = false }) => {
           <div className="flex items-center gap-2"><Button className="md:hidden" onClick={() => navigate(basePath)}>بازگشت</Button><h2 className="min-w-0 flex-1 truncate text-lg font-bold text-slate-900 dark:text-slate-100">{selectedTicket.subject}</h2><span className="text-sm text-slate-500">{selectedTicket.code}</span></div>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs"><Tag color={SUPPORT_STATUS[selectedTicket.status]?.color}>{SUPPORT_STATUS[selectedTicket.status]?.title}</Tag><span className="text-slate-500 dark:text-slate-400">{selectedTicket.category_title || categories.find((item) => item.code === selectedTicket.category_code)?.title}</span>{admin && <span className="text-slate-500 dark:text-slate-400">{selectedTicket.customer_org_name}</span>}</div>
           {admin && <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Tag>{SUPPORT_TICKET_TYPES.find((type) => type.value === selectedTicket.ticket_type)?.label || 'دریافتی'}</Tag>
             {canManage && <><Select className="min-w-44" value={selectedTicket.status} loading={saving} onChange={setTicketStatus} options={Object.entries(SUPPORT_STATUS).map(([value, item]) => ({ value, label: item.title }))} />
               <Select className="min-w-44" allowClear placeholder="مسئول تیکت" value={selectedTicket.assigned_to || undefined} onChange={(value) => setAssignee(value || null)} options={operators.map((operator) => ({ value: operator.id, label: operator.name }))} /></>}
             {canReply && <Button icon={<FileAddOutlined />} onClick={() => { setActivityTitle(`پیگیری ${selectedTicket.code}: ${selectedTicket.subject}`); setActivityOpen(true); }}>ایجاد فعالیت</Button>}
-            {canWorkflows && <Button onClick={() => navigate('/taze-system/tickets/workflows')}>گردش‌کار تیکت‌ها</Button>}
           </div>}
         </header>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-slate-50 p-4 dark:bg-slate-950">
@@ -305,8 +364,16 @@ const SupportTicketsPage: React.FC<Props> = ({ admin = false }) => {
       </> : <div className="m-auto"><Empty description="گفتگو در دسترس نیست." /></div>}
     </section>
 
-    <Modal title="تیکت جدید" open={createOpen} onCancel={() => setCreateOpen(false)} onOk={createTicket} okText="ثبت تیکت" cancelText="انصراف" okButtonProps={{ loading: saving, disabled: !newCategory || newSubject.trim().length < 3 || !newBody.trim() }}>
-      <div className="space-y-3"><Select className="w-full" placeholder="دسته‌بندی را انتخاب کنید" value={newCategory} onChange={setNewCategory} options={categories.map((item) => ({ value: item.code, label: item.title }))} />
+    <Modal title={admin ? 'ارسال تیکت به مشتری' : 'تیکت جدید'} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={createTicket} okText="ثبت تیکت" cancelText="انصراف" okButtonProps={{ loading: saving, disabled: !newCategory || newSubject.trim().length < 3 || !newBody.trim() || (admin && (!customerOrgId || !customerUserId)) }}>
+      <div className="space-y-3">
+        {admin && <>
+          <label className="block text-sm">سازمان گیرنده<Select className="mt-1 w-full" placeholder="جستجوی سازمان مشتری" showSearch filterOption={false} onSearch={setCustomerSearch} value={customerOrgId}
+            onChange={(value) => { setCustomerOrgId(value); setCustomerUserId(undefined); setRecipientSearch(''); }} options={customerOptions.map((item) => ({ value: item.id, label: item.name }))} /></label>
+          <label className="block text-sm">گیرنده تیکت<Select className="mt-1 w-full" placeholder="جستجوی کاربر سازمان" showSearch filterOption={false} onSearch={setRecipientSearch} disabled={!customerOrgId} value={customerUserId}
+            onChange={setCustomerUserId} options={recipientOptions.map((item) => ({ value: item.id, label: item.name }))} /></label>
+          <p className="text-xs text-gray-500">نوع این تیکت در صندوق پشتیبانی «ارسالی» ثبت می‌شود.</p>
+        </>}
+        <Select className="w-full" placeholder="دسته‌بندی را انتخاب کنید" value={newCategory} onChange={setNewCategory} options={categories.map((item) => ({ value: item.code, label: item.title }))} />
         <Input placeholder="عنوان تیکت" value={newSubject} maxLength={180} onChange={(event) => setNewSubject(event.target.value)} />
         <Input.TextArea rows={5} placeholder="موضوع را توضیح دهید" value={newBody} maxLength={10000} onChange={(event) => setNewBody(event.target.value)} />
         <label className="cursor-pointer text-blue-600"><PaperClipOutlined /> افزودن فایل یا تصویر<input className="hidden" type="file" multiple onChange={(event) => setNewFiles(Array.from(event.target.files || []))} /></label>
@@ -328,7 +395,24 @@ const SupportTicketsPage: React.FC<Props> = ({ admin = false }) => {
 
 export const SupportWorkflowsPage: React.FC = () => {
   const navigate = useNavigate();
-  return <div dir="rtl" className="p-4"><Button className="mb-4" onClick={() => navigate('/taze-system/tickets')}>بازگشت به تیکت‌ها</Button>
+  const [allowed, setAllowed] = useState<boolean | null>(null);
+  useEffect(() => {
+    let active = true;
+    void Promise.all([supabase.rpc('support_workflow_context'), supabase.rpc('current_org_id')]).then(([context, current]) => {
+      if (!active) return;
+      if (context.error || !context.data || current.error) { setAllowed(false); return; }
+      if (context.data !== current.data) {
+        selectOrganizationContext(context.data);
+        window.location.assign('/support/tickets/workflows');
+        return;
+      }
+      setAllowed(true);
+    }).catch(() => { if (active) setAllowed(false); });
+    return () => { active = false; };
+  }, []);
+  if (allowed === null) return <div className="p-8 text-center"><Spin /></div>;
+  if (!allowed) return <Empty description="دسترسی به گردش‌کار تیکت‌ها ندارید." />;
+  return <div dir="rtl" className="p-4"><Button className="mb-4" onClick={() => navigate('/support/tickets')}>بازگشت به تیکت‌ها</Button>
     <h1 className="mb-4 text-xl font-bold">گردش‌کار تیکت‌ها</h1><WorkflowsManager inline supportOnly defaultModuleId="saas_support_tickets" context="settings" />
   </div>;
 };

@@ -12,6 +12,7 @@ import { syncCustomerLevelsByInvoiceCustomers } from "../utils/customerLeveling"
 import { attachTaskCompletionIfNeeded } from "../utils/taskCompletion";
 import { syncInvoiceAccountingEntries } from "../utils/accountingAutoPosting";
 import { fetchCurrentUserRoleContext, isSaasAdminModuleId, SAAS_ADMIN_PERMISSION_KEY } from "../utils/permissions";
+import { canModuleAction } from '../utils/fieldAccess';
 import { getCachedAuthUser } from "../utils/sessionCache";
 import { buildClientFallbackSystemCode, supportsSystemCode } from "../utils/systemCode";
 import { syncRecordTags } from "../utils/recordTags";
@@ -121,9 +122,7 @@ export const ModuleCreate = () => {
 
         const modulePerms = context.permissions?.[moduleId] || {};
         if (active) {
-          const saasAdminPerms = context.permissions?.[SAAS_ADMIN_PERMISSION_KEY] || {};
-          const isSaasAdmin = saasAdminPerms.view === true || saasAdminPerms.edit === true;
-          setCanCreate(isSaasAdmin || modulePerms.edit !== false);
+          setCanCreate(canModuleAction(modulePerms, 'create'));
           setPermissionLoading(false);
         }
       } catch {

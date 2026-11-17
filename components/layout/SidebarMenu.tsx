@@ -3,6 +3,7 @@ import Menu from 'antd/es/menu';
 import { Empty, Input, type MenuProps } from 'antd';
 import { SearchOutlined } from '@ant-design/icons';
 import { normalizePersianSearchText } from '../../utils/persianSearchText';
+import { getSidebarPopupContainer, SIDEBAR_FLYOUT_PLACEMENTS } from '../../utils/sidebarFlyout';
 
 interface SidebarMenuProps {
   items: MenuProps['items'];
@@ -56,6 +57,8 @@ const SidebarMenu = memo(function SidebarMenu({ items, selectedKey, ancestorKeys
       theme={isDarkMode ? 'dark' : 'light'}
       mode={flyout ? 'vertical' : 'inline'}
       direction="rtl"
+      builtinPlacements={flyout ? SIDEBAR_FLYOUT_PLACEMENTS : undefined}
+      getPopupContainer={flyout ? getSidebarPopupContainer : undefined}
       inlineCollapsed={flyout ? undefined : !isMobile && collapsed}
       selectedKeys={selectedKeys}
       openKeys={collapsed && !isMobile ? undefined : search && !flyout ? searchOpenKeys : openKeys}

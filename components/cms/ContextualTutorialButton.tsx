@@ -8,8 +8,8 @@ import { getSiteUrl } from '../../utils/seoHelpers';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { useContextualTutorials, type TutorialViewer } from '../../hooks/useContextualTutorials';
 
-type Props = { contexts: string[]; zIndex?: number; buttonClassName?: string; buttonIcon?: ReactNode; viewer?: TutorialViewer };
-export default function ContextualTutorialButton({ contexts, zIndex = 1600, buttonClassName, buttonIcon, viewer }: Props) {
+type Props = { contexts: string[]; zIndex?: number; buttonClassName?: string; buttonIcon?: ReactNode; buttonLabel?: string; viewer?: TutorialViewer };
+export default function ContextualTutorialButton({ contexts, zIndex = 1600, buttonClassName, buttonIcon, buttonLabel, viewer }: Props) {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<string>();
   const [group, setGroup] = useState('all');
@@ -23,7 +23,7 @@ export default function ContextualTutorialButton({ contexts, zIndex = 1600, butt
   const label = !loading && !error && unreadCount ? `آموزش این بخش، ${toPersianNumber(unreadCount)} آموزش دیده‌نشده` : 'آموزش این بخش';
   return <>
     <Tooltip title={label}><Badge count={error || loading || !unreadCount ? 0 : toPersianNumber(unreadCount)} showZero={false} size="small" overflowCount={99} className="contextual-tutorial-badge">
-      <Button type="text" aria-label={label} className={buttonClassName} icon={buttonIcon ?? <ReadOutlined />} onClick={() => { setSelected(undefined); setOpen(true); }} />
+      <Button type="text" aria-label={label} className={buttonClassName} icon={buttonIcon ?? <ReadOutlined />} onClick={() => { setSelected(undefined); setOpen(true); }}>{buttonLabel}</Button>
     </Badge></Tooltip>
     <Drawer title="آموزش این بخش" open={open} onClose={() => setOpen(false)} width="min(860px, 100vw)" zIndex={zIndex} destroyOnClose>
       <div dir="rtl">

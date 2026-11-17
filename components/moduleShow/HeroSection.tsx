@@ -37,6 +37,7 @@ interface HeroSectionProps {
   onImageUpdate: (file: File) => Promise<boolean> | boolean;
   onMainImageChange?: (url: string | null) => void;
   canViewField?: (fieldKey: string) => boolean;
+  canEditField?: (fieldKey: string, value?: unknown) => boolean;
   canManageAssignee?: boolean;
   canEditModule?: boolean;
   checkVisibility?: (logic: any) => boolean;
@@ -64,6 +65,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
   onImageUpdate,
   onMainImageChange,
   canViewField,
+  canEditField,
   canManageAssignee = true,
   canEditModule = true,
   checkVisibility,
@@ -171,13 +173,15 @@ const HeroSection: React.FC<HeroSectionProps> = ({
               moduleId={moduleId}
               recordId={String(data?.id || '')}
               imageUrl={heroImageUrl}
-              canEdit={!!canEditModule}
+              canEdit={!!canEditModule && (!canEditField || canEditField(imageField.key))}
               canViewFilesManager={!!canViewFilesManager}
               canEditFilesManager={!!canEditFilesManager && !!canEditModule}
               canUploadFilesManager={canUploadFilesManager}
               canDeleteFilesManager={!!canDeleteFilesManager}
-              onImageUpdate={canEditModule ? onImageUpdate : undefined}
-              onMainImageChange={canEditModule ? onMainImageChange : undefined}
+              onImageUpdate={canEditModule && (!canEditField || canEditField(imageField.key)) ? onImageUpdate : undefined}
+              onMainImageChange={canEditModule && (!canEditField || canEditField(imageField.key)) ? (url) => {
+                if (!canEditField || canEditField(imageField.key, url)) onMainImageChange?.(url);
+              } : undefined}
               openFilesManagerByDefault={shouldOpenGalleryFromQuery}
               highlightFileId={highlightFileId}
               onFilesManagerClose={handleCloseFilesManager}
