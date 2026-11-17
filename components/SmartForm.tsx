@@ -1,3 +1,4 @@
+import { usesSingleEmployeeField, isDuplicateHrEmployeeField } from '../utils/hrEmployeeFields';
 import { showRecordCreatedFeedback } from '../utils/recordFeedback';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Form, Button, Spin, Divider, Modal, Checkbox, App, Switch } from 'antd';
@@ -2677,6 +2678,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
       .filter((f) => shouldRenderInGeneralModuleUi(f))
       .filter(f => canViewField(f.key))
       .filter((f) => !shouldHideManagedAssigneeField(module.id, f.key))
+      .filter((f) => !isDuplicateHrEmployeeField(module.id, f.key))
       .filter((f) => f.key !== 'auto_name_enabled')
       .filter(f => f.nature !== 'system' || visibleSystemFieldKeys.has(f.key)) // بعضی فیلدهای سیستمی باید در فرم قابل ویرایش باشند
       .sort((a, b) => (a.order || 0) - (b.order || 0));
@@ -3019,7 +3021,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
           ) : (
             <Form form={form} layout="vertical" preserve onFinish={handleFinish} onValuesChange={handleValuesChange}>
               
-              {((supportsAssignee && canViewField('assignee_id')) || !!statusField || showAutoNameToggle) && (
+              {((supportsAssignee && !usesSingleEmployeeField(module.id) && canViewField('assignee_id')) || !!statusField || showAutoNameToggle) && (
                 <div className="mb-6 flex flex-col lg:flex-row lg:items-center gap-3">
                   {showAutoNameToggle && autoNameToggleField && (
                     <div className="w-full lg:flex-1 lg:max-w-[320px]">
@@ -3046,7 +3048,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                       </div>
                     </div>
                   )}
-                  {supportsAssignee && canViewField('assignee_id') && (
+                  {supportsAssignee && !usesSingleEmployeeField(module.id) && canViewField('assignee_id') && (
                     <div className="w-full lg:flex-1 lg:max-w-[320px]">
                       <div className="h-11 flex items-center justify-between sm:justify-start bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full pl-2 sm:pl-1 pr-3 py-1 gap-1 sm:gap-2">
                         <span className="text-xs text-gray-400 shrink-0">{assigneeLabel}:</span>
@@ -3238,6 +3240,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                     .filter(f => canViewField(f.key))
                     .filter((f) => !(module.id === 'tasks' && isTaskLegacySourceField(f.key)))
                     .filter((f) => !shouldHideManagedAssigneeField(module.id, f.key))
+                    .filter((f) => !isDuplicateHrEmployeeField(module.id, f.key))
                     .filter((f) => f.key !== 'auto_name_enabled')
                     .sort((a, b) => (a.order || 0) - (b.order || 0));
 

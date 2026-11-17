@@ -1,3 +1,4 @@
+import { isDuplicateHrEmployeeField } from '../utils/hrEmployeeFields';
 import { iranMobileLocal } from '../supabase/functions/_shared/phone-number';
 import { canFieldAction, canWriteFieldValue, canModuleAction } from '../utils/fieldAccess';
 import type { ModulePermissionConfig } from '../utils/permissions';
@@ -5392,6 +5393,7 @@ const ModuleShow: React.FC = () => {
       .filter(f => f.type !== FieldType.IMAGE && f.type !== FieldType.JSON && f.type !== FieldType.READONLY_LOOKUP)
       .filter((field) => isPrintableModuleField(moduleConfig, field))
       .filter(f => !shouldHideManagedAssigneeField(moduleId, f.key))
+      .filter((f) => !isDuplicateHrEmployeeField(moduleId, f.key))
       .filter(f => conditionalFieldRuntime.isFieldVisible(f))
       .filter(f => canViewField(f.key))
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))

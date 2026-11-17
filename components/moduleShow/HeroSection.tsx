@@ -1,4 +1,5 @@
-﻿import React, { useMemo } from 'react';
+﻿import { usesSingleEmployeeField, isDuplicateHrEmployeeField } from '../../utils/hrEmployeeFields';
+import React, { useMemo } from 'react';
 import { Tag } from 'antd';
 import {
   AppstoreOutlined,
@@ -208,7 +209,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                 )}
               </div>
 
-              {canManageAssignee && (canViewField ? canViewField('assignee_id') !== false : true) && (
+              {canManageAssignee && !usesSingleEmployeeField(moduleId) && (canViewField ? canViewField('assignee_id') !== false : true) && (
                 <div className="flex items-center justify-between sm:justify-start bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full pl-2 sm:pl-1 pr-3 py-1 gap-1 sm:gap-2 mb-4">
                   <span className="text-xs text-gray-400 shrink-0">{assigneeLabel}:</span>
                   <AdaptiveIdentityPicker
@@ -240,6 +241,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
               {moduleConfig.fields
                 .filter((f: any) => f.location === FieldLocation.HEADER && !['name', 'full_name', recordTitleFieldKey, 'image_url', 'system_code', 'tags'].filter(Boolean).includes(f.key))
                 .filter((f: any) => !shouldHideManagedAssigneeField(moduleId, f.key))
+                .filter((f) => !isDuplicateHrEmployeeField(moduleId, f.key))
                 .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
                 .filter((f: any) => (isFieldVisible ? isFieldVisible(f) : (!f.logic || (checkVisibility ? checkVisibility(f.logic) : true))))
                 .map((f: any) => (
@@ -250,6 +252,13 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                       : 'min-w-0 flex flex-col gap-1 border-r last:border-0 border-gray-100 dark:border-gray-700 px-4'}
                   >
                     <span className="text-xs text-gray-400 uppercase tracking-wider">{f.labels.fa}</span>
+                    {moduleId === 'leave_requests' && f.key === 'employee_id' && !data.employee_id && (
+                      <span className="text-sm">
+                        {(canViewField?.('requester_name') !== false && data.requester_name)
+                          || (canViewField?.('employee_name') !== false && data.employee_name)
+                          || 'کارمند مرتبط ثبت نشده است'}
+                      </span>
+                    )}
                     {renderSmartField(f, true)}
                   </div>
                 ))}
