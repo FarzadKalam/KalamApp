@@ -2,6 +2,8 @@ import { MODULES } from '../moduleRegistry';
 import { BlockDefinition, BlockType, FieldLocation, ModuleDefinition, ModuleField } from '../types';
 import { SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE, type ModuleSettingsConfig, type ModuleSettingsStore } from '../pages/Settings/moduleSettingsTypes';
 import { fetchSessionBootstrap } from './sessionCache';
+import { clearAppRuntimeCache, getAppRuntimeCached } from './appRuntimeCache';
+import { getSelectedOrganizationId } from './organizationContext';
 import { buildResolvedConditionalFieldSettings } from './conditionalFieldDefaults';
 import { type ConditionalFieldSettings, normalizeConditionalFieldSettings } from './conditionalFieldRules';
 
@@ -9,24 +11,17 @@ export const MODULE_SETTINGS_APPLIED_EVENT = 'kalam:module-settings-applied';
 export const MODULE_SETTINGS_UPDATED_EVENT = 'kalam:module-settings-updated';
 
 const MODULE_SETTINGS_TTL_MS = 5 * 60_000;
+const MODULE_SETTINGS_CACHE_PREFIX = 'module-settings:';
 
 const cloneDeep = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const isModuleSettingsUnavailableError = (error: any) =>
   Number(error?.status) === 404
   || String(error?.code || '').toUpperCase() === 'PGRST205';
 
-const moduleSettingsCache: {
-  orgId: string | null;
-  data: ModuleSettingsStore | null;
-  expiresAt: number;
-  unavailable: boolean;
-  promise: Promise<ModuleSettingsStore | null> | null;
-} = {
-  orgId: null,
-  data: null,
-  expiresAt: 0,
-  unavailable: false,
-  promise: null,
+let moduleSettingsGeneration = 0;
+export const clearModuleSettingsCache = () => {
+  moduleSettingsGeneration += 1;
+  clearAppRuntimeCache(MODULE_SETTINGS_CACHE_PREFIX);
 };
 
 const baseModuleRegistrySnapshot: Record<string, Pick<ModuleDefinition, 'fields' | 'blocks'>> = Object.fromEntries(
@@ -361,78 +356,33 @@ export const getBaseModuleFieldDefinition = (moduleId?: string | null, fieldKey?
 };
 
 export const loadModuleSettingsStore = async (supabaseClient: any): Promise<ModuleSettingsStore | null> => {
+  const generation = moduleSettingsGeneration;
+  const selectedOrgId = getSelectedOrganizationId();
   const session = await fetchSessionBootstrap(supabaseClient);
-  const orgId = String(session?.orgId || '').trim() || null;
-  const now = Date.now();
-  if (moduleSettingsCache.orgId === orgId && moduleSettingsCache.expiresAt > now) {
-    if (moduleSettingsCache.unavailable) return null;
-    if (moduleSettingsCache.data) return moduleSettingsCache.data;
-  }
+  const orgId = String(session.orgId || '').trim();
+  const userId = session.user?.id;
+  const isCurrent = () => generation === moduleSettingsGeneration && getSelectedOrganizationId() === selectedOrgId;
+  if (!userId || !orgId || session.bootstrapError || !isCurrent()) return null;
 
-  if (moduleSettingsCache.orgId === orgId && moduleSettingsCache.promise) {
-    return moduleSettingsCache.promise;
-  }
+  const store = await getAppRuntimeCached<ModuleSettingsStore | null>({
+    key: `${MODULE_SETTINGS_CACHE_PREFIX}${userId}:${orgId}`,
+    ttlMs: MODULE_SETTINGS_TTL_MS,
+    loader: async () => {
+      const { data, error } = await supabaseClient
+        .from('integration_settings')
+        .select('settings')
+        .eq('connection_type', SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE)
+        .eq('is_active', true)
+        .eq('org_id', orgId)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (isModuleSettingsUnavailableError(error)) return null;
+      if (error) throw error;
 
-  moduleSettingsCache.promise = (async () => {
-    let query = supabaseClient
-      .from('integration_settings')
-      .select('settings')
-      .eq('connection_type', SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE)
-      .eq('is_active', true)
-      .order('updated_at', { ascending: false })
-      .limit(1);
-
-    query = orgId
-      ? query.eq('org_id', orgId)
-      : query.is('org_id', null);
-
-    const { data, error } = await query.maybeSingle();
-
-    if (error) {
-      if (isModuleSettingsUnavailableError(error)) {
-        moduleSettingsCache.orgId = orgId;
-        moduleSettingsCache.data = null;
-        moduleSettingsCache.unavailable = true;
-        moduleSettingsCache.expiresAt = Date.now() + MODULE_SETTINGS_TTL_MS;
-        return null;
-      }
-      throw error;
-    }
-
-    const settings = data?.settings;
-    if (!settings || typeof settings !== 'object') {
-      moduleSettingsCache.orgId = orgId;
-      moduleSettingsCache.data = null;
-      moduleSettingsCache.unavailable = false;
-      moduleSettingsCache.expiresAt = Date.now() + MODULE_SETTINGS_TTL_MS;
-      return null;
-    }
-    const modules = (settings as any)?.modules;
-    if (!modules || typeof modules !== 'object') {
-      moduleSettingsCache.orgId = orgId;
-      moduleSettingsCache.data = null;
-      moduleSettingsCache.unavailable = false;
-      moduleSettingsCache.expiresAt = Date.now() + MODULE_SETTINGS_TTL_MS;
-      return null;
-    }
-
-    const store = { modules: modules as Record<string, ModuleSettingsConfig> };
-    moduleSettingsCache.orgId = orgId;
-    moduleSettingsCache.data = store;
-    moduleSettingsCache.unavailable = false;
-    moduleSettingsCache.expiresAt = Date.now() + MODULE_SETTINGS_TTL_MS;
-    return store;
-  })();
-
-  try {
-    return await moduleSettingsCache.promise;
-  } finally {
-    moduleSettingsCache.promise = null;
-  }
-};
-
-export const loadAndApplyModuleSettings = async (supabaseClient: any) => {
-  const store = await loadModuleSettingsStore(supabaseClient);
-  applyModuleSettingsStoreToRegistry(store);
-  return store;
+      const modules = data?.settings?.modules;
+      return modules && typeof modules === 'object' ? { modules } : null;
+    },
+  });
+  return isCurrent() ? store : null;
 };

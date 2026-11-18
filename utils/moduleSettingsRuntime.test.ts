@@ -1,6 +1,77 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BlockType, FieldLocation, FieldNature, FieldType } from '../types';
-import { mergeModuleSchemaWithBase } from './moduleSettingsRuntime';
+import { clearModuleSettingsCache, loadModuleSettingsStore, mergeModuleSchemaWithBase } from './moduleSettingsRuntime';
+import { clearOrganizationContext, selectOrganizationContext } from './organizationContext';
+import { fetchSessionBootstrap } from './sessionCache';
+
+vi.mock('./sessionCache', () => ({ fetchSessionBootstrap: vi.fn() }));
+
+const setupSettingsClient = () => {
+  const query = {
+    select: vi.fn().mockReturnThis(),
+    eq: vi.fn().mockReturnThis(),
+    order: vi.fn().mockReturnThis(),
+    limit: vi.fn().mockReturnThis(),
+    maybeSingle: vi.fn(),
+  };
+  const client = { from: vi.fn().mockReturnValue(query) };
+  return { client, query };
+};
+
+const setSessionScope = (orgId: string, userId = 'member-a') => {
+  selectOrganizationContext(orgId);
+  vi.mocked(fetchSessionBootstrap).mockResolvedValue({
+    user: { id: userId },
+    orgId,
+    profile: null,
+    roleId: null,
+    permissions: null,
+    loadedAt: 1,
+  });
+};
+
+describe('loadModuleSettingsStore', () => {
+  afterEach(() => {
+    clearModuleSettingsCache();
+    clearOrganizationContext();
+    vi.resetAllMocks();
+  });
+
+  it('shares the in-flight request and caches an empty result for one user and organization', async () => {
+    setSessionScope('org-a');
+    const { client, query } = setupSettingsClient();
+    query.maybeSingle.mockResolvedValue({ data: null, error: null });
+    await expect(Promise.all([loadModuleSettingsStore(client), loadModuleSettingsStore(client)]))
+      .resolves.toEqual([null, null]);
+    await expect(loadModuleSettingsStore(client)).resolves.toBeNull();
+    expect(query.maybeSingle).toHaveBeenCalledTimes(1);
+    expect(query.eq).toHaveBeenCalledWith('org_id', 'org-a');
+
+    setSessionScope('org-a', 'member-b');
+    await loadModuleSettingsStore(client);
+    expect(query.maybeSingle).toHaveBeenCalledTimes(2);
+  });
+
+  it('discards the pending result when the organization changes and settings are invalidated', async () => {
+    setSessionScope('org-a');
+    const { client, query } = setupSettingsClient();
+    let resolveOld!: (value: unknown) => void;
+    query.maybeSingle.mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve; }));
+    const old = loadModuleSettingsStore(client);
+    await Promise.resolve();
+    expect(query.eq).toHaveBeenCalledWith('org_id', 'org-a');
+
+    clearModuleSettingsCache();
+    setSessionScope('org-b');
+    const currentStore = { modules: { products: {} } };
+    query.maybeSingle.mockResolvedValue({ data: { settings: currentStore }, error: null });
+    await expect(loadModuleSettingsStore(client)).resolves.toEqual(currentStore);
+    resolveOld({ data: { settings: { modules: { invoices: {} } } }, error: null });
+    await expect(old).resolves.toBeNull();
+    expect(query.eq).toHaveBeenCalledWith('org_id', 'org-b');
+    expect(query.maybeSingle).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe('mergeModuleSchemaWithBase', () => {
   it('keeps original sales invoice labels when saved settings contain return invoice labels', () => {

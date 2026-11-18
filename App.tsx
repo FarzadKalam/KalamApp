@@ -52,9 +52,11 @@ import { clearReferenceDataCache, primeReferenceData } from "./utils/referenceDa
 import { clearSessionBootstrapCache, primeSessionBootstrap } from "./utils/sessionCache";
 import {
   applyModuleSettingsStoreToRegistry,
-  loadAndApplyModuleSettings,
+  clearModuleSettingsCache,
+  loadModuleSettingsStore,
   MODULE_SETTINGS_UPDATED_EVENT,
 } from "./utils/moduleSettingsRuntime";
+import { getSelectedOrganizationId } from "./utils/organizationContext";
 import { resolveOverlayPopupContainer } from "./utils/popupContainer";
 import { isMarketingHost, isSaasAdminPanelHost, isSaasAppHost } from "./utils/hostRouting";
 import { activateSaasAdminPanelContext } from "./utils/saasAdminPanel";
@@ -346,7 +348,14 @@ const PublicLazyRouteBoundary: React.FC<{ children: React.ReactNode }> = ({ chil
 const AuthenticatedOutletBoundary: React.FC = () => {
   const location = useLocation();
   return (
-    <Suspense key={location.pathname} fallback={<SilentRouteFallback />}>
+    <Suspense
+      key={location.pathname}
+      fallback={
+        <div className="flex min-h-[35vh] items-center justify-center text-sm text-gray-600 dark:text-gray-300" role="status">
+          در حال آماده‌سازی صفحه…
+        </div>
+      }
+    >
       <Outlet />
     </Suspense>
   );
@@ -397,6 +406,14 @@ function App() {
     userId: null,
   });
   const brandingRequestIdRef = useRef(0);
+  const moduleSettingsRequestIdRef = useRef(0);
+  const workspaceLoading = (
+    <BrandLoadingScreen
+      branding={branding}
+      identity={loadingBrandIdentity}
+      message="در حال آماده‌سازی فضای سازمان…"
+    />
+  );
 
   useEffect(() => {
     document.body.style.fontFamily = "var(--font-family-app)";
@@ -432,15 +449,26 @@ function App() {
   }, []);
 
   const loadModuleSettings = useCallback(async () => {
+    const requestId = ++moduleSettingsRequestIdRef.current;
+    const selectedOrgId = getSelectedOrganizationId();
+    const isCurrent = () => requestId === moduleSettingsRequestIdRef.current
+      && selectedOrgId === getSelectedOrganizationId();
+    let store: Awaited<ReturnType<typeof loadModuleSettingsStore>> = null;
     try {
-      await loadAndApplyModuleSettings(supabase);
+      store = await loadModuleSettingsStore(supabase);
     } catch (error) {
-      console.warn("Could not load module settings", error);
-      applyModuleSettingsStoreToRegistry(null);
-    } finally {
-      setModuleSettingsVersion((prev) => prev + 1);
-      setModuleSettingsReady(true);
+      if (isCurrent()) console.warn("Could not load module settings", error);
     }
+    if (!isCurrent()) return;
+    applyModuleSettingsStoreToRegistry(store);
+    setModuleSettingsVersion((prev) => prev + 1);
+    setModuleSettingsReady(true);
+  }, []);
+
+  const resetModuleSettings = useCallback(() => {
+    moduleSettingsRequestIdRef.current += 1;
+    clearModuleSettingsCache();
+    applyModuleSettingsStoreToRegistry(null);
   }, []);
 
   useEffect(() => {
@@ -496,14 +524,14 @@ function App() {
           preloadAuthenticatedShell(window.location.pathname);
           await loadModuleSettings();
         } else {
-          applyModuleSettingsStoreToRegistry(null);
+          resetModuleSettings();
           if (isMounted) {
             setModuleSettingsVersion((prev) => prev + 1);
             setModuleSettingsReady(true);
           }
         }
       } catch {
-        applyModuleSettingsStoreToRegistry(null);
+        resetModuleSettings();
         if (isMounted) {
           setModuleSettingsVersion((prev) => prev + 1);
           setModuleSettingsReady(true);
@@ -515,11 +543,13 @@ function App() {
 
     return () => {
       isMounted = false;
+      moduleSettingsRequestIdRef.current += 1;
     };
-  }, [loadModuleSettings, saasAppHost]);
+  }, [loadModuleSettings, resetModuleSettings, saasAppHost]);
 
   useEffect(() => {
     const handleModuleSettingsUpdated = () => {
+      clearModuleSettingsCache();
       void loadModuleSettings();
     };
 
@@ -553,7 +583,7 @@ function App() {
         if (!nextUserId) {
           clearRuntimeBrandingCache();
           void loadBranding(true);
-          applyModuleSettingsStoreToRegistry(null);
+          resetModuleSettings();
           setModuleSettingsVersion((prev) => prev + 1);
           setModuleSettingsReady(true);
           return;
@@ -573,6 +603,8 @@ function App() {
       if (eventName === "SIGNED_IN") {
         authLifecycleRef.current.initialized = true;
         if (!userChanged && nextUserId) return;
+        resetModuleSettings();
+        if (!isPublic) setModuleSettingsReady(false);
         clearSessionBootstrapCache();
         clearCurrentUserRoleContextCache();
         clearReferenceDataCache();
@@ -599,7 +631,7 @@ function App() {
         clearReferenceDataCache();
         clearRuntimeBrandingCache();
         void loadBranding(true);
-        applyModuleSettingsStoreToRegistry(null);
+        resetModuleSettings();
         setModuleSettingsVersion((prev) => prev + 1);
         setModuleSettingsReady(true);
         if (eventName === "TOKEN_REFRESH_FAILED") {
@@ -614,7 +646,7 @@ function App() {
     return () => {
       subscription?.subscription?.unsubscribe();
     };
-  }, [loadBranding, loadModuleSettings, saasAppHost]);
+  }, [loadBranding, loadModuleSettings, resetModuleSettings, saasAppHost]);
 
   const resources = useMemo(
     () =>
@@ -764,7 +796,8 @@ function App() {
     return <ModuleShow />;
   };
 
-  const RefineAppContent: React.FC = () => {
+  // Keep the Refine tree mounted when branding or module settings finish loading.
+  const renderRefineAppContent = () => {
 
     return (
       <Refine
@@ -800,7 +833,7 @@ function App() {
               <Route path="/demo" element={<LazyRouteBoundary><SaasPortalPage /></LazyRouteBoundary>} />
             </>
           ) : null}
-          <Route path="/login" element={<LazyRouteBoundary><Login /></LazyRouteBoundary>} />
+          <Route path="/login" element={<Suspense fallback={workspaceLoading}><Login /></Suspense>} />
           <Route path="/inquiry/*" element={<PublicLazyRouteBoundary><InquiryForm /></PublicLazyRouteBoundary>} />
           <Route path="/i/:code" element={<PublicLazyRouteBoundary><InvoicePublicPage /></PublicLazyRouteBoundary>} />
           <Route path="/d/:code" element={<PublicLazyRouteBoundary><DeliveryPublicPage /></PublicLazyRouteBoundary>} />
@@ -815,10 +848,11 @@ function App() {
             element={
               <Authenticated
                 key="authenticated-inner"
+                loading={workspaceLoading}
                 fallback={<CatchAllNavigate to="/login" />}
               >
-                <TenantHostSessionBoundary>
-                  <LazyRouteBoundary>
+                <TenantHostSessionBoundary loading={workspaceLoading}>
+                  <Suspense fallback={workspaceLoading}>
                     <NotificationRuntimeProvider>
                       <OrganizationAvatarPreloader />
                       <Layout
@@ -831,7 +865,7 @@ function App() {
                         <AuthenticatedOutletBoundary />
                       </Layout>
                     </NotificationRuntimeProvider>
-                  </LazyRouteBoundary>
+                  </Suspense>
                 </TenantHostSessionBoundary>
               </Authenticated>
             }
@@ -932,11 +966,7 @@ function App() {
   if (!moduleSettingsReady) {
     return (
       <ConfigProvider direction="rtl" locale={faIR}>
-        <BrandLoadingScreen
-          branding={branding}
-          identity={loadingBrandIdentity}
-          message="در حال آماده‌سازی فضای سازمان…"
-        />
+        {workspaceLoading}
       </ConfigProvider>
     );
   }
@@ -1003,7 +1033,7 @@ function App() {
           <RecordFeedbackActionHost />
           <PwaInstallPrompt />
           <OfflineOverlay />
-          <RefineAppContent />
+          {renderRefineAppContent()}
           <UploadProgressOverlay />
         </AntdApp>
       </ConfigProvider>

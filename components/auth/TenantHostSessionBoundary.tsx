@@ -21,13 +21,14 @@ const clearTenantScopedClientState = () => {
  * محتوای خصوصی tenant تا زمان تطبیق نشست با host رندر نمی‌شود.
  * این گارد نشست‌های قدیمی، بازگشت از حالت آفلاین و refresh را نیز پوشش می‌دهد.
  */
-const TenantHostSessionBoundary: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+const TenantHostSessionBoundary: React.FC<{ children: React.ReactNode; loading?: React.ReactNode }> = ({ children, loading }) => {
   const [accessState, setAccessState] = useState<AccessState>('checking');
   const [retryToken, setRetryToken] = useState(0);
 
   const validateAccess = useCallback(async () => {
     setAccessState('checking');
-    const result = await validateTenantHostSessionAccess(supabase);
+    const result = await validateTenantHostSessionAccess(supabase)
+      .catch(() => ({ status: 'unverified' } as const));
     if (result.status !== 'denied') {
       setAccessState(result.status);
       return;
@@ -51,6 +52,7 @@ const TenantHostSessionBoundary: React.FC<{ children: React.ReactNode }> = ({ ch
   }, [accessState]);
 
   if (accessState === 'allowed') return <>{children}</>;
+  if (accessState === 'checking' && loading) return <>{loading}</>;
 
   const isDenied = accessState === 'denied';
   return (
