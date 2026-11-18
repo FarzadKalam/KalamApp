@@ -61,7 +61,8 @@ export const buildMultiAgentPromptSection = (params: {
       : {};
     const customNotes = String(policy?.custom_tone_notes || policy?.notes || '').trim();
     const customInstr = String(policy?.custom_instructions || policy?.org_custom_notes || '').trim();
-    const compactPolicy = Object.keys(policy).length > 0 ? JSON.stringify(policy) : 'تنظیم اختصاصی اضافه ثبت نشده';
+    const publicPolicy = Object.fromEntries(Object.entries(policy).filter(([key]) => !['skill_settings', 'custom_instructions', 'org_custom_notes'].includes(key)));
+    const compactPolicy = Object.keys(publicPolicy).length > 0 ? JSON.stringify(publicPolicy) : 'تنظیم اختصاصی اضافه ثبت نشده';
     return [
       `### ${def?.titleFa || agentKey} (${agentKey})`,
       `- مأموریت: ${def?.roleFocusFa || ''}`,
@@ -75,7 +76,7 @@ export const buildMultiAgentPromptSection = (params: {
   const orchestrationNote = sortedAgents.length > 1
     ? [
         '## هماهنگی چندایجنتی هم‌زمان',
-        'کاربر هم‌زمان چند ایجنت را فعال کرده است. ایجنت راهبر وظیفه دارد پاسخ یا برنامه اقدام هر ایجنت را یکپارچه کند و بین مراحل فروش، خرید، پروژه، فرآیند، منابع انسانی یا رزرواسیون تداخل ایجاد نشود.',
+        'کاربر هم‌زمان چند ایجنت را فعال کرده است. دستیار کاربر پاسخ و برنامهٔ اقدام ایجنت‌ها را یکپارچه می‌کند.',
       ].join('\n')
     : '';
 
@@ -86,7 +87,6 @@ export const compileLayeredAgentPrompt = async (params: {
   userMessage: string;
   selectedAgents: AgentKey[];
   selectedCapabilities: string[];
-  skillContractsPrompt?: string;
   grounding: CentralAiGrounding;
   pageContextSummary?: string;
   contextPayload: Record<string, any>;
@@ -142,9 +142,8 @@ export const compileLayeredAgentPrompt = async (params: {
     RECORD_CHOICE_GUIDANCE,
     'شما هسته عامل هوشمند یکپارچه (AaaS) در پلتفرم سازمانی هستید و همیشه مطابق قوانین سازمان، حدود دسترسی کاربر و داده‌های واقعی عمل می‌کنید.',
     'قوانین قطعی:\n1. هیچ شناسه خام UUID را در متن پاسخ به کاربر نشان نده؛ از کد سیستمی، نام یا عنوان فارسی استفاده کن.\n2. هرگز داده، عدد، تاریخ یا رکوردی را حدس نزن؛ اگر ابهام یا بیش از یک گزینه معتبر وجود دارد، حداکثر ۲ تا ۳ سؤال شفاف و اجرایی بپرس.\n3. برای تغییرات حساس یا ساخت/اصلاح رکورد و اجرای فرآیند، بدون تأیید کاربر عملیات نهایی را قطعی فرض نکن.\n4. تمام متن‌های خروجی، توضیحات و گزارش‌ها فارسی، دقیق و خوانا باشند.',
-    sortedCapabilities.length ? `مهارت‌های انتخاب‌شده در این درخواست: ${sortedCapabilities.join('، ')}` : '',
+    sortedCapabilities.length ? `قابلیت‌های اجرایی این درخواست: ${sortedCapabilities.join('، ')}` : '',
     agentPromptSection,
-    params.skillContractsPrompt || '',
     params.legacySystemPrompt || '',
     `دانش و چارچوب پایدار سازمان (Cacheable Grounding):\n${JSON.stringify(staticGroundPayload)}`,
   ].filter(Boolean);
@@ -173,6 +172,9 @@ export const compileLayeredAgentPrompt = async (params: {
   const toneGuidance = getAgentToneGuidanceFa(effectiveTone);
 
   const volatileHeader = [
+    !params.grounding.freeChatMode && params.grounding.actorWorkIdentity
+      ? `زمینهٔ کاری صاحب گفتگو، دادهٔ تأییدشدهٔ سرور: ${JSON.stringify(params.grounding.actorWorkIdentity)}\nبرای شرح شغل، قرارداد، اهداف و دسترسی جزئی فقط در صورت نیاز ابزار read_actor_work_context را صدا بزن.`
+      : '',
     params.grounding.calendarContext
       ? `زمان و تقویم جلالی جاری: ${JSON.stringify({
           tehran_now_jalali: params.grounding.calendarContext.tehran_now_jalali,

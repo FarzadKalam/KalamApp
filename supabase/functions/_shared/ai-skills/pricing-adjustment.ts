@@ -23,9 +23,6 @@ export type PriceAdjustmentTargetItem = {
   alsoUpdateBuyPrice?: boolean;
 };
 
-export const PRICING_ADJUSTMENT_KEYWORDS_REGEX =
-  /(تغییر\s*قیمت|تنظیم\s*قیمت|افزایش\s*قیمت|کاهش\s*قیمت|اصلاح\s*قیمت|درصد.*(افزایش|کاهش|تغییر|ببر\s*بالا|بیار\s*پایین|گرون|ارزون)|(افزایش|کاهش)\s*(بد|کن)|لیست\s*قیمت.*(تغییر|افزایش|کاهش)|پیش[‌ ]?فاکتور.*قیمت|پکیج.*قیمت|برچسب.*قیمت|اسکرین[‌ ]?شات.*قیمت)/i;
-
 const toFiniteNumber = (value: unknown, fallback = 0): number => {
   if (value === null || value === undefined || value === '') return fallback;
   const parsed = Number(String(value).replace(/,/g, '').trim());
@@ -458,18 +455,6 @@ export const applyPriceAdjustment = (input: ApplyPriceAdjustmentPlanInput): Appl
     proformaUpdates,
     summaryLinesFa,
   };
-};
-
-export const shouldAttachPricingAdjustmentSkill = (ctx: SkillExecutionContext): boolean => {
-  if (ctx.grounding.freeChatMode) return false;
-  const owner=ctx.grounding.agentStates?.purchase_supply;
-  if (!owner?.canUse || !owner?.canView || !owner?.canChat) return false;
-  if (!(ctx.selectedAgents || []).some(key => key==='purchase_supply' || key==='lead_orchestrator')) return false;
-  if ((ctx.selectedCapabilities || []).includes('pricing_adjustment')) return true;
-  if (['products', 'price_lists', 'product_bundles'].includes(String(ctx.pageContext?.moduleId || ''))) {
-    return PRICING_ADJUSTMENT_KEYWORDS_REGEX.test(ctx.userMessage || '');
-  }
-  return PRICING_ADJUSTMENT_KEYWORDS_REGEX.test(ctx.userMessage || '');
 };
 
 const extractSearchTokens = (message: string): string[] => {

@@ -65,7 +65,11 @@ export const createContextBudgetController = (options: {
       const pinned=groups.filter(group => group.some(message => message.role === 'system' || message === originalUser));
       const removable=groups.filter(group => !pinned.includes(group));
       // Keep the newest complete tool interaction/answer verbatim when possible.
-      const tail=removable.length>1 && contextRequestTokens(removable.at(-1)!)<budget*0.35 ? removable.slice(-1) : [];
+      const latest=removable.at(-1);
+      const latestTokens=latest ? contextRequestTokens(latest) : 0;
+      const pinnedTokens=contextRequestTokens(pinned.flat(),options.tools);
+      const tail=removable.length>1 && latestTokens<budget*0.35
+        && pinnedTokens+latestTokens+1200<window-reserve ? removable.slice(-1) : [];
       const old=removable.slice(0,removable.length-tail.length).flat();
       if (!old.length) {
         if (contextRequestTokens(messages,options.tools) >= window-reserve) throw new Error('ورودی جاری از ظرفیت مدل بزرگ‌تر است؛ فایل را بخش‌بندی کنید. تاریخچه حذف نشده است.');

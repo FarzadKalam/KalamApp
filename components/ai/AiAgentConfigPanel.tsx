@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import AiReasoningSelect from './AiReasoningSelect';
+import AiAgentSkillsEditor from './AiAgentSkillsEditor';
+import { sanitizeAgentSkillSettings, type AiSkill } from '../../supabase/functions/_shared/ai-skill-catalog';
 import AdaptiveSelectField from '../AdaptiveSelectField';
 import {
   Alert,
@@ -174,6 +176,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
     toneStyle: AgentToneStyle;
     allowedChannels: string[];
     customInstructions: string;
+    skills: AiSkill[];
     voiceInstructions?:string;
     voiceAccountId?:string|null;
     backgroundConfig: {
@@ -249,6 +252,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
           ? serverItem.allowedChannels
           : ['web', 'staff_bot', 'agent_inbox'],
         customInstructions: customInstr,
+        skills: sanitizeAgentSkillSettings(def.key, policy.skill_settings),
         voiceInstructions:String(policy.voice_instructions||''),
         voiceAccountId:policy.voice_account_id||null,
         backgroundConfig: {
@@ -332,7 +336,8 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
       if (!row || (row.canView ?? row.canUse) === false) return false;
       if (canManage) return true;
       return Boolean(row.canEdit || row.canToggle);
-    });
+    }).map(def => def.key === 'lead_orchestrator' && byKey.get(def.key)?.titleFa
+      ? { ...def, titleFa: byKey.get(def.key).titleFa, shortTitleFa: byKey.get(def.key).titleFa } : def);
   }, [canManage, overview?.agents]);
 
   useEffect(() => {
@@ -365,6 +370,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
           toneStyle: activeAgentDef.defaultToneStyle,
           allowedChannels: ['web', 'staff_bot', 'agent_inbox'],
           customInstructions: '',
+          skills: [],
           backgroundConfig: { ...activeAgentDef.defaultBackgroundConfig },
         }),
         ...patch,
@@ -374,6 +380,11 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
 
   const handleSaveAgentConfig = async () => {
     if (!activeDraft || !activeCanToggle) return;
+    if (activeCanEdit && activeDraft.skills.some(skill => skill.id.startsWith('custom_')
+      && (!skill.title.trim() || !skill.instructions.trim() || !skill.triggers.some(term => term.trim())))) {
+      message.error('برای هر مهارت سفارشی نام، دستورالعمل و دست‌کم یک نمونهٔ کاربرد وارد کنید.');
+      return;
+    }
     setSavingAgentKey(activeAgentKey);
     try {
       const existingPolicy = (activeOverviewRow?.policyJson && typeof activeOverviewRow.policyJson === 'object')
@@ -383,6 +394,7 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
         ...existingPolicy,
         custom_instructions: activeDraft.customInstructions?.trim() || '',
         reasoning_effort: activeDraft.reasoningEffort || null,
+        skill_settings: sanitizeAgentSkillSettings(activeAgentKey, activeDraft.skills),
         ...(activeAgentKey==='customer_response'?{voice_instructions:activeDraft.voiceInstructions?.trim()||'',voice_account_id:activeDraft.voiceAccountId||null}:{}),
       };
       const payloadBody = activeCanEdit
@@ -894,6 +906,8 @@ const AiAgentConfigPanel: React.FC<AiAgentConfigPanelProps> = ({
                         />
                       </div>
 
+                      <AiAgentSkillsEditor key={activeAgentKey} agentKey={activeAgentKey} settings={activeDraft.skills}
+                        editable={activeCanEdit} onChange={skills => updateActiveDraft({ skills })} />
                       {activeAgentKey==='customer_response'&&<div className="rounded-xl border border-sky-200 bg-sky-50/50 p-3 dark:border-sky-900 dark:bg-sky-950/20 space-y-2">
                         <label htmlFor="customer-voice-instructions" className="text-sm font-semibold">دستورالعمل اختصاصی تماس صوتی</label>
                         <p className="text-xs text-slate-500">شیوهٔ خوشامدگویی فارسی، پاسخ‌های کوتاه، مکث، ارجاع و پایان تماس را اینجا مشخص کنید. دستورالعمل عمومی و مجوزهای ایجنت نیز رعایت می‌شوند.</p>

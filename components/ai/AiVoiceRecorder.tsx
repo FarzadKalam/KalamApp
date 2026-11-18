@@ -21,7 +21,7 @@ type SpeechRecognitionLike = {
   continuous: boolean;
   interimResults: boolean;
   onresult: ((event: any) => void) | null;
-  onerror: (() => void) | null;
+  onerror: ((event: { error?: string }) => void) | null;
   onend: (() => void) | null;
   start: () => void;
   stop: () => void;
@@ -34,6 +34,7 @@ type AiVoiceRecorderProps = {
   className?: string;
   buttonType?: ButtonProps['type'];
   onSend: (voice: RecordedVoice) => void | Promise<void>;
+  onTranscribe?: (voice: RecordedVoice) => Promise<string>;
   onMoveTranscriptToComposer?: (transcript: string) => void;
 };
 
@@ -53,6 +54,7 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({
   className,
   buttonType,
   onSend,
+  onTranscribe,
   onMoveTranscriptToComposer,
 }) => {
   const slots = useContext(AiComposerSlots);
@@ -64,13 +66,16 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({
   const startedAtRef = useRef<number>(0);
   const timerRef = useRef<number | null>(null);
   const speechRef = useRef<SpeechRecognitionLike | null>(null);
+  const recordedUrlRef = useRef<string | null>(null);
+  const generationRef = useRef(0);
   const [recording, setRecording] = useState(false);
   const [durationMs, setDurationMs] = useState(0);
   const [recorded, setRecorded] = useState<RecordedVoice | null>(null);
   const [recordedUrl, setRecordedUrl] = useState<string | null>(null);
   const [liveTranscript, setLiveTranscript] = useState('');
   const [editableTranscript, setEditableTranscript] = useState('');
-  const liveTranscriptRef = useRef('');
+  const [transcribing, setTranscribing] = useState(false);
+  const [speechUnavailable, setSpeechUnavailable] = useState(false);
 
   const cleanupStream = () => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -85,16 +90,19 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({
   };
 
   const stopSpeechRecognition = () => {
-    try { speechRef.current?.stop(); } catch { /* already stopped */ }
+    const speech = speechRef.current;
     speechRef.current = null;
+    try { speech?.stop(); } catch { /* already stopped */ }
   };
 
   useEffect(() => () => {
+    generationRef.current += 1;
     clearTimer();
-    cleanupStream();
+    if (recorderRef.current) recorderRef.current.onstop = null;
     stopSpeechRecognition();
-    if (recordedUrl) URL.revokeObjectURL(recordedUrl);
-  }, [recordedUrl]);
+    cleanupStream();
+    if (recordedUrlRef.current) URL.revokeObjectURL(recordedUrlRef.current);
+  }, []);
 
   const startRecording = async () => {
     if (disabled || loading || recording) return;
@@ -102,50 +110,73 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({
       message.warning('مرورگر شما از ضبط فایل صوتی پشتیبانی نمی‌کند.');
       return;
     }
+    const generation = ++generationRef.current;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm';
-      const recorder = new MediaRecorder(stream, { mimeType });
+      if (generationRef.current !== generation) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       streamRef.current = stream;
+      const preferredMimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find((type) => MediaRecorder.isTypeSupported(type));
+      const recorder = new MediaRecorder(stream, preferredMimeType ? { mimeType: preferredMimeType } : undefined);
+      const mimeType = recorder.mimeType || preferredMimeType || 'audio/webm';
       recorderRef.current = recorder;
       chunksRef.current = [];
       startedAtRef.current = Date.now();
       setRecorded(null);
-      if (recordedUrl) URL.revokeObjectURL(recordedUrl);
+      if (recordedUrlRef.current) URL.revokeObjectURL(recordedUrlRef.current);
+      recordedUrlRef.current = null;
       setRecordedUrl(null);
       setDurationMs(0);
       setLiveTranscript('');
       setEditableTranscript('');
-      liveTranscriptRef.current = '';
+      setTranscribing(false);
       const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      setSpeechUnavailable(!SpeechRecognitionCtor);
+      let completedSegments = '';
+      let finalSegment = '';
+      let hasInterim = false;
+      let speechFailed = false;
+      recorder.start();
       if (SpeechRecognitionCtor) {
         const speech = new SpeechRecognitionCtor() as SpeechRecognitionLike;
         speech.lang = 'fa-IR';
         speech.continuous = true;
         speech.interimResults = true;
         speech.onresult = (event) => {
-          let transcript = '';
+          if (generationRef.current !== generation) return;
+          finalSegment = '';
+          let interim = '';
           for (let index = 0; index < event.results.length; index += 1) {
-            transcript += `${event.results[index][0]?.transcript || ''} `;
+            const transcript = event.results[index][0]?.transcript || '';
+            if (event.results[index].isFinal) finalSegment += `${transcript} `;
+            else interim += `${transcript} `;
           }
-          liveTranscriptRef.current = transcript.trim();
-          setLiveTranscript(liveTranscriptRef.current);
+          hasInterim = Boolean(interim.trim());
+          setLiveTranscript(`${completedSegments} ${finalSegment} ${interim}`.trim());
         };
-        speech.onerror = () => undefined;
+        speech.onerror = (event) => {
+          if (generationRef.current !== generation || ['no-speech', 'aborted'].includes(event.error || '')) return;
+          speechFailed = true;
+          setSpeechUnavailable(true);
+        };
         speech.onend = () => {
-          if (recording && recorderRef.current?.state === 'recording') {
-            try { speech.start(); } catch { /* browser may reject a restart */ }
+          if (generationRef.current !== generation) return;
+          if (speechRef.current === speech && recorder.state === 'recording' && !speechFailed) {
+            completedSegments = `${completedSegments} ${finalSegment}`.trim();
+            finalSegment = '';
+            try { speech.start(); } catch { speechFailed = true; setSpeechUnavailable(true); }
           }
         };
         speechRef.current = speech;
-        try { speech.start(); } catch { speechRef.current = null; }
+        try { speech.start(); } catch { speechRef.current = null; speechFailed = true; setSpeechUnavailable(true); }
       }
       recorder.ondataavailable = (event) => {
         if (event.data?.size) chunksRef.current.push(event.data);
       };
       recorder.onstop = () => {
+        if (generationRef.current !== generation) return;
         clearTimer();
         stopSpeechRecognition();
         const finalDuration = Date.now() - startedAtRef.current;
@@ -154,20 +185,31 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({
         cleanupStream();
         if (blob.size > 0) {
           const previewUrl = URL.createObjectURL(blob);
-          const finalTranscript = liveTranscriptRef.current.trim();
-          setEditableTranscript(finalTranscript);
-          setRecorded({
+          const finalTranscript = !speechFailed && !hasInterim ? `${completedSegments} ${finalSegment}`.trim() : '';
+          const voice = {
             blob,
             mimeType,
             durationMs: finalDuration,
-            filename: `فایل صوتی-${Date.now()}.webm`,
+            filename: `فایل صوتی-${Date.now()}.${mimeType.includes('mp4') ? 'm4a' : 'webm'}`,
             previewUrl,
             transcript: finalTranscript || undefined,
-          });
+          };
+          setEditableTranscript(finalTranscript);
+          setRecorded(voice);
+          recordedUrlRef.current = previewUrl;
           setRecordedUrl(previewUrl);
+          if (!finalTranscript && onTranscribe) {
+            setTranscribing(true);
+            void onTranscribe(voice).then((transcript) => {
+              if (generationRef.current === generation) setEditableTranscript((current) => current || transcript.trim());
+            }).catch(() => {
+              if (generationRef.current === generation) setSpeechUnavailable(true);
+            }).finally(() => {
+              if (generationRef.current === generation) setTranscribing(false);
+            });
+          }
         }
       };
-      recorder.start();
       setRecording(true);
       timerRef.current = window.setInterval(() => {
         setDurationMs(Date.now() - startedAtRef.current);
@@ -185,18 +227,20 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({
   };
 
   const discard = () => {
+    generationRef.current += 1;
     stopSpeechRecognition();
     setRecorded(null);
-    if (recordedUrl) URL.revokeObjectURL(recordedUrl);
+    if (recordedUrlRef.current) URL.revokeObjectURL(recordedUrlRef.current);
+    recordedUrlRef.current = null;
     setRecordedUrl(null);
     setDurationMs(0);
     setLiveTranscript('');
     setEditableTranscript('');
-    liveTranscriptRef.current = '';
+    setTranscribing(false);
   };
 
   const send = async () => {
-    if (!recorded || loading) return;
+    if (!recorded || loading || transcribing) return;
     const queuedPreviewUrl = URL.createObjectURL(recorded.blob);
     const finalTranscript = editableTranscript.trim() || recorded.transcript;
     await onSend({ ...recorded, transcript: finalTranscript, previewUrl: queuedPreviewUrl });
@@ -221,17 +265,18 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({
             <Button size="small" type="text" aria-label="حذف فایل صوتی" icon={<CloseOutlined />} onClick={discard} disabled={loading} />
           </Tooltip>
           <Tooltip title="ارسال فایل صوتی">
-            <Button size="small" type="primary" aria-label="ارسال فایل صوتی" icon={<SendOutlined />} loading={loading} onClick={() => void send()} />
+            <Button size="small" type="primary" aria-label="ارسال فایل صوتی" icon={<SendOutlined />} loading={loading || transcribing} onClick={() => void send()} />
           </Tooltip>
         </div>
         {(editableTranscript || onMoveTranscriptToComposer) ? (
-          <div className="flex flex-col gap-1.5 rounded-lg border border-slate-200/80 bg-white px-2.5 py-1.5 dark:border-white/10 dark:bg-black/20">
+          <div aria-busy={transcribing} className="flex flex-col gap-1.5 rounded-lg border border-slate-200/80 bg-white px-2.5 py-1.5 dark:border-white/10 dark:bg-black/20">
             <Input.TextArea
               variant="borderless"
               autoSize={{ minRows: 1, maxRows: 5 }}
+              aria-label="متن پیام صوتی"
               value={editableTranscript}
               onChange={(event) => setEditableTranscript(event.target.value)}
-              placeholder="متن تبدیل‌شده صدا (اینتر بزنید تا به کادر پیام منتقل شود)…"
+              placeholder={transcribing ? 'در حال تبدیل صدا به متن…' : 'متن تبدیل‌شدهٔ صدا'}
               className="!p-0 !text-[13px] !leading-6 text-slate-800 dark:text-slate-100"
               onPressEnter={(event) => {
                 if (event.shiftKey || event.nativeEvent.isComposing) return;
@@ -241,6 +286,9 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({
                 }
               }}
             />
+            {!transcribing && !editableTranscript && onTranscribe ? (
+              <span className="text-xs text-slate-600 dark:text-slate-300">متن آماده نیست. می‌توانید آن را بنویسید یا خود فایل را بفرستید.</span>
+            ) : null}
             {onMoveTranscriptToComposer && editableTranscript.trim() ? (
               <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-1 text-[11px] text-slate-500 dark:border-white/10 dark:text-slate-400">
                 <span>برای انتقال به کادر پیام و ویرایش نهایی، کلید Enter را بزنید</span>
@@ -292,8 +340,8 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({
             </div>
           </div>
         </div>
-        <div className="w-full min-w-0 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-white/75 px-2.5 py-1.5 text-[13px] leading-6 text-slate-700 dark:bg-black/25 dark:text-slate-200">
-          {liveTranscript || 'صحبت کنید؛ متن تشخیص‌داده‌شده به‌صورت کامل همین‌جا نمایش داده می‌شود…'}
+        <div role="status" className="w-full min-w-0 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-white/75 px-2.5 py-1.5 text-[13px] leading-6 text-slate-700 dark:bg-black/25 dark:text-slate-200">
+          {liveTranscript || (speechUnavailable ? 'متن پس از پایان ضبط آماده می‌شود.' : 'صحبت کنید تا متن همین‌جا نمایش داده شود…')}
         </div>
       </div>
     );

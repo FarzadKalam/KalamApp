@@ -1,3 +1,4 @@
+import { buildActorWorkIdentity } from './ai-actor-work-context.ts';
 import {
   AI_AGENT_CATALOG,
   AI_AGENT_PLAN_FEATURE_PREFIX,
@@ -344,6 +345,7 @@ export const isWithinOrgWorkSchedule = (
 };
 
 export type CentralAiGrounding = {
+  actorWorkIdentity?: ReturnType<typeof buildActorWorkIdentity>;
   orgId: string;
   freeChatMode: boolean;
   company: Record<string, any> | null;
@@ -372,9 +374,14 @@ export const loadCentralAiGrounding = async (params: {
   message?: string;
   freeChatMode?: boolean;
   includeCalendar?: boolean;
+  includeDomainDirectory?: boolean;
 }): Promise<CentralAiGrounding> => {
   const orgId = normalizeId(params.authContext?.orgId);
   const freeChatMode = params.freeChatMode === true;
+  const runtimeSubjects = [
+    ['user', normalizeId(params.authContext?.userId)],
+    ['role', normalizeId(params.authContext?.roleId)],
+  ].filter(([, id]) => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id));
 
   const [agentConfigs, memberPermissions] = orgId
     ? await Promise.all([
@@ -386,6 +393,8 @@ export const loadCentralAiGrounding = async (params: {
         sharedRestSelect(params.supabaseUrl, params.serviceRoleKey, 'org_ai_agent_member_permissions', {
           org_id: `eq.${orgId}`,
           select: 'id,subject_type,subject_id,agent_key,can_use,staff_bot_enabled,autonomy_mode,tone_style',
+          ...(params.includeDomainDirectory === false && runtimeSubjects.length
+            ? { or: `(${runtimeSubjects.map(([type, id]) => `and(subject_type.eq.${type},subject_id.eq.${id})`).join(',')})` } : {}),
           limit: 500,
         }),
       ])
@@ -434,8 +443,9 @@ export const loadCentralAiGrounding = async (params: {
     };
   }
 
-  const canReadInstructions = canViewModulePermission(params.authContext?.permissions, 'instructions');
-  const canReadJobs = canViewModulePermission(params.authContext?.permissions, 'job_descriptions');
+  const includeDirectory = params.includeDomainDirectory !== false;
+  const canReadInstructions = includeDirectory && canViewModulePermission(params.authContext?.permissions, 'instructions');
+  const canReadJobs = includeDirectory && canViewModulePermission(params.authContext?.permissions, 'job_descriptions');
 
   const [
     companyRows,
@@ -451,11 +461,11 @@ export const loadCentralAiGrounding = async (params: {
       select: 'company_name,company_title,currency_code,currency_label,reservation_settings,working_hours,address,phone',
       limit: 1,
     }),
-    sharedRestSelect(params.supabaseUrl, params.serviceRoleKey, 'work_schedules', {
+    includeDirectory ? sharedRestSelect(params.supabaseUrl, params.serviceRoleKey, 'work_schedules', {
       org_id: `eq.${orgId}`,
       select: 'id,name,title,working_days,start_time,end_time,is_active,notes',
       limit: 20,
-    }),
+    }) : Promise.resolve([]),
     canReadInstructions
       ? sharedRestSelect(params.supabaseUrl, params.serviceRoleKey, 'instructions', {
           org_id: `eq.${orgId}`,
@@ -472,19 +482,19 @@ export const loadCentralAiGrounding = async (params: {
           limit: 40,
         })
       : Promise.resolve([]),
-    sharedRestSelect(params.supabaseUrl, params.serviceRoleKey, 'org_roles', {
+    includeDirectory ? sharedRestSelect(params.supabaseUrl, params.serviceRoleKey, 'org_roles', {
       org_id: `eq.${orgId}`,
       select: 'id,title,parent_id',
       order: 'title.asc',
       limit: 200,
-    }),
-    sharedRestSelect(params.supabaseUrl, params.serviceRoleKey, 'profiles', {
+    }) : Promise.resolve([]),
+    includeDirectory ? sharedRestSelect(params.supabaseUrl, params.serviceRoleKey, 'profiles', {
       org_id: `eq.${orgId}`,
       is_active: 'eq.true',
       select: 'id,full_name,role_id,job_title,position',
       order: 'full_name.asc',
       limit: 200,
-    }),
+    }) : Promise.resolve([]),
     params.includeCalendar === false
       ? Promise.resolve(null)
       : resolvePersianCalendarContext(String(params.message || '')),
@@ -513,6 +523,7 @@ export const loadCentralAiGrounding = async (params: {
   return {
     orgId,
     freeChatMode: false,
+    actorWorkIdentity: buildActorWorkIdentity(params.authContext),
     company,
     reservationSettings: company?.reservation_settings && typeof company.reservation_settings === 'object'
       ? company.reservation_settings

@@ -97,8 +97,8 @@ export const PRICING_ADJUSTMENT_SKILL_META = {
 export const AI_AGENT_CATALOG: readonly AiAgentDefinition[] = [
   {
     key: 'lead_orchestrator',
-    titleFa: 'ایجنت راهبر',
-    shortTitleFa: 'راهبر',
+    titleFa: 'دستیار من',
+    shortTitleFa: 'دستیار من',
     subtitleFa: 'هماهنگ‌کننده ایجنت‌ها، مهارت‌ها و تصمیم‌های بین‌بخشی',
     descriptionFa: 'درخواست‌های چندمرحله‌ای، ویس‌ها و سناریوهای ترکیبی را بین فروش، خرید، پروژه، فرآیند، منابع انسانی و رزرواسیون هماهنگ می‌کند و در نبود پاسخ روشن، سؤال دقیق می‌پرسد.',
     badgeColor: '#6366f1',

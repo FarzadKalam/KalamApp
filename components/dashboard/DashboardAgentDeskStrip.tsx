@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { usePersonalAssistantTitle } from '../../hooks/usePersonalAssistantTitle';
 import { Badge, Button, Tag, Tooltip } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -98,6 +99,7 @@ const DashboardAgentDeskStrip: React.FC<DashboardAgentDeskStripProps> = ({
   onOverviewMeta,
   externalInboxBadgeCount,
 }) => {
+  const personalTitle = usePersonalAssistantTitle();
   const navigate = useNavigate();
   const [deskOverviewLoaded, setDeskOverviewLoaded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -198,8 +200,8 @@ const DashboardAgentDeskStrip: React.FC<DashboardAgentDeskStripProps> = ({
 
       cards.push({
         key: def.key,
-        titleFa: def.titleFa,
-        shortTitleFa: def.shortTitleFa,
+        titleFa: def.key === 'lead_orchestrator' ? personalTitle : def.titleFa,
+        shortTitleFa: def.key === 'lead_orchestrator' ? personalTitle : def.shortTitleFa,
         subtitleFa: def.subtitleFa,
         descriptionFa: def.descriptionFa,
         badgeColor: def.badgeColor,
@@ -227,7 +229,7 @@ const DashboardAgentDeskStrip: React.FC<DashboardAgentDeskStripProps> = ({
       });
     }
     return cards;
-  }, [agentAccessMap, canManage, deskOverviewLoaded, liveAgents, recentRunsByAgent, toneStyle]);
+  }, [agentAccessMap, canManage, deskOverviewLoaded, liveAgents, personalTitle, recentRunsByAgent, toneStyle]);
 
   const activeModalAgent = useMemo(
     () => visibleCards.find((item) => item.key === activeModalAgentKey) || null,

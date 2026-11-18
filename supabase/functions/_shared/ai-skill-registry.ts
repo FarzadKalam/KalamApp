@@ -3,32 +3,10 @@ import {
   type AgentKey,
 } from './ai-agent-catalog.ts';
 import type { CentralAiGrounding } from './ai-grounding.ts';
-import { leadOrchestratorSkill } from './ai-skills/lead-orchestrator.ts';
-import { salesLeadsSkill } from './ai-skills/sales-leads.ts';
-import { purchaseSupplySkill } from './ai-skills/purchase-supply.ts';
-import { customerResponseSkill } from './ai-skills/customer-response.ts';
-import { hrManagerSkill } from './ai-skills/hr-manager.ts';
-import { reservationSkill } from './ai-skills/reservation.ts';
-import { projectProcessSkill } from './ai-skills/project-process.ts';
-import { instagrammerSkill } from './ai-skills/instagrammer.ts';
-import { systemGuideSkill } from './ai-skills/system-guide.ts';
-import {
-  pricingAdjustmentSkill,
-  shouldAttachPricingAdjustmentSkill,
-} from './ai-skills/pricing-adjustment.ts';
-import type { DomainSkillModule, SkillExecutionContext } from './ai-skills/types.ts';
-
-export const DOMAIN_SKILL_MAP: Record<AgentKey, DomainSkillModule> = {
-  lead_orchestrator: leadOrchestratorSkill,
-  sales_leads: salesLeadsSkill,
-  purchase_supply: purchaseSupplySkill,
-  customer_response: customerResponseSkill,
-  hr_manager: hrManagerSkill,
-  reservation: reservationSkill,
-  project_process: projectProcessSkill,
-  instagrammer: instagrammerSkill,
-  system_guide: systemGuideSkill,
-};
+import { pricingAdjustmentSkill } from './ai-skills/pricing-adjustment.ts';
+import { buildSystemGuideSoftwareArchitectureReference, systemGuideSkill } from './ai-skills/system-guide.ts';
+import type { SkillExecutionContext } from './ai-skills/types.ts';
+import { listAgentSkills } from './ai-skill-catalog.ts';
 
 export const resolveRunnableAgentsForActor = (params: {
   requestedAgents: AgentKey[];
@@ -66,85 +44,77 @@ export const resolveRunnableAgentsForActor = (params: {
   return { permittedAgents, blockedAgents };
 };
 
-export const assembleMultiSkillContext = async (
-  ctx: SkillExecutionContext,
-): Promise<{
-  skillContractsPrompt: string;
-  domainContextByAgent: Record<string, any>;
-  instagramMediaCards: any[];
-  blockedAgents: Array<{ agentKey: AgentKey; reasonFa: string }>;
-}> => {
-  const { permittedAgents, blockedAgents } = resolveRunnableAgentsForActor({
+export const createAgentSkillRuntime = (ctx: SkillExecutionContext) => {
+  if (ctx.grounding.freeChatMode || !ctx.selectedAgents.length) return null;
+  const { permittedAgents } = resolveRunnableAgentsForActor({
     requestedAgents: ctx.selectedAgents,
     grounding: ctx.grounding,
   });
 
-  // Always let lead_orchestrator assist with coordination when > 1 agents are selected and lead_orchestrator is permitted
   const orderedAgents: AgentKey[] = [...permittedAgents];
   if (
     orderedAgents.length > 1
     && !orderedAgents.includes('lead_orchestrator')
     && ctx.grounding.agentStates?.lead_orchestrator?.canUse
+    && ctx.grounding.agentStates.lead_orchestrator.canView
+    && ctx.grounding.agentStates.lead_orchestrator.canChat
   ) {
     orderedAgents.unshift('lead_orchestrator');
   }
 
-  const attachPricingAdjustment = shouldAttachPricingAdjustmentSkill(ctx);
-
-  const skillContractsPrompt = [
-    ...orderedAgents.map((key) => DOMAIN_SKILL_MAP[key]?.buildContractPrompt(ctx)),
-    attachPricingAdjustment ? pricingAdjustmentSkill.buildContractPrompt(ctx) : '',
-  ]
-    .filter(Boolean)
-    .join('\n\n');
-
-  if (ctx.grounding.freeChatMode || !orderedAgents.length) {
-    return {
-      skillContractsPrompt,
-      domainContextByAgent: {},
-      instagramMediaCards: [],
-      blockedAgents,
-    };
+  const findSkillSettings = (key: AgentKey) =>
+    ctx.grounding.agentConfigs.find(config => config.agent_key === key)?.policy_json?.skill_settings;
+  const skillEntries = orderedAgents.flatMap(agentKey => listAgentSkills(agentKey, findSkillSettings(agentKey))
+    .map(skill => ({ ...skill, agentKey, key: `${agentKey}:${skill.id}` })));
+  const purchase = ctx.grounding.agentStates?.purchase_supply;
+  if (orderedAgents.includes('lead_orchestrator') && !orderedAgents.includes('purchase_supply')
+    && purchase?.canUse && purchase.canView && purchase.canChat) {
+    const pricing = listAgentSkills('purchase_supply', findSkillSettings('purchase_supply')).find(skill => skill.id === 'price_update');
+    if (pricing) skillEntries.push({ ...pricing, agentKey: 'purchase_supply', key: 'purchase_supply:price_update' });
   }
-
-  const [entries, pricingData] = await Promise.all([
-    Promise.all(
-      orderedAgents.map(async (agentKey) => {
-        const skill = DOMAIN_SKILL_MAP[agentKey];
-        if (!skill) return [agentKey, null] as const;
-        try {
-          const result = await skill.gatherDomainContext(ctx);
-          return [agentKey, result] as const;
-        } catch (err) {
-          console.warn('domain skill gatherDomainContext failed', agentKey, err);
-          return [agentKey, null] as const;
-        }
-      }),
-    ),
-    attachPricingAdjustment
-      ? pricingAdjustmentSkill.gatherDomainContext(ctx).catch((err) => {
-          console.warn('pricing adjustment skill gatherDomainContext failed', err);
-          return null;
-        })
-      : Promise.resolve(null),
-  ]);
-
-  const domainContextByAgent: Record<string, any> = {};
-  const instagramMediaCards: any[] = [];
-  for (const [agentKey, data] of entries) {
-    if (data && Object.keys(data).length > 0) {
-      domainContextByAgent[agentKey] = data;
-
+  const allowed = new Map(skillEntries.filter(entry => entry.enabled).map(entry => [entry.key, entry]));
+  if (!allowed.size) return null;
+  const instructions = 'برای کار تخصصی در صورت نیاز از فهرست، مهارت را با read_agent_skills انتخاب کن. تصمیم را از معنا، فایل و زمینهٔ گفتگو بگیر. نمونه‌ها شرط فعال‌سازی نیستند. برای گفتگوی ساده به ابزار مهارت نیاز نیست. مجوز و تأیید عملیات همیشه با سرور است.';
+  const catalog = [...allowed.values()].map(entry => `${entry.key} | ${entry.title}${
+    entry.triggers.length ? ` | نمونه: ${entry.triggers.slice(0, 2).map(example => example.slice(0, 40)).join('، ')}` : ''
+  }`).join('\n');
+  type SkillResult = { id: string; title: string; instructions: string; details?: unknown };
+  const loaded = new Map<string, Promise<SkillResult>>();
+  const load = async (id: string): Promise<SkillResult> => {
+    const entry = allowed.get(id)!;
+    let details: unknown;
+    if (id === 'purchase_supply:price_update') details = pricingAdjustmentSkill.buildContractPrompt(ctx);
+    if (id === 'system_guide:page_guide') {
+      const reference = buildSystemGuideSoftwareArchitectureReference();
+      const moduleId = String(ctx.pageContext?.moduleId || '');
+      details = moduleId ? reference.split('\n').filter(line => line.includes('`' + moduleId + '`')).join('\n') || reference : reference;
     }
-  }
-  if (pricingData && Object.keys(pricingData).length > 0) {
-    domainContextByAgent.pricing_adjustment = pricingData;
-  }
-
+    if (id === 'system_guide:official_tutorial') {
+      details = await systemGuideSkill.gatherDomainContext(ctx).catch(() => ({ unavailable: true }));
+    }
+    if (id === 'reservation:availability') {
+      details = { reservationSettings: ctx.grounding.reservationSettings, timezone: 'Asia/Tehran' };
+    }
+    return { id, title: entry.title, instructions: entry.instructions, ...(details ? { details } : {}) };
+  };
   return {
-    skillContractsPrompt,
-    domainContextByAgent,
-    instagramMediaCards,
-    blockedAgents,
+    systemMessage: `${instructions}\n${catalog}`,
+    tool: { type: 'function', function: { name: 'read_agent_skills',
+      description: 'خواندن دستور کامل مهارت‌های مرتبط از فهرست مجاز؛ انتخاب با مدل است.',
+      parameters: { type: 'object', properties: {
+        skillIds: { type: 'array', minItems: 1, maxItems: 3, items: { type: 'string' } },
+      }, required: ['skillIds'], additionalProperties: false },
+    } },
+    execute: async (args: { skillIds?: unknown }) => {
+      const ids = args?.skillIds;
+      if (!Array.isArray(ids) || !ids.length || ids.length > 3 || ids.some(id => typeof id !== 'string' || !allowed.has(id))) {
+        return { success: false, message: 'مهارت را از فهرست مجاز همین درخواست انتخاب کن.' };
+      }
+      const unique = [...new Set(ids as string[])];
+      const fresh = unique.filter(id => !loaded.has(id));
+      if (fresh.length + loaded.size > 5) return { success: false, message: 'از دستور مهارت‌های خوانده‌شده استفاده کن.' };
+      for (const id of fresh) loaded.set(id, load(id));
+      return { success: true, skills: await Promise.all(unique.map(id => loaded.get(id)!)) };
+    },
   };
 };

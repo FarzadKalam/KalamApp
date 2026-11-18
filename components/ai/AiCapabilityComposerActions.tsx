@@ -19,6 +19,7 @@ import AdaptivePickerSurface from '../AdaptivePickerSurface';
 import AiFileUploadButton, { type AiUploadedFilePrompt } from './AiFileUploadButton';
 const MessageComposerModal = lazy(() => import('../MessageComposerModal'));
 import AiVoiceRecorder, { type RecordedVoice } from './AiVoiceRecorder';
+import { usePersonalAssistantTitle } from '../../hooks/usePersonalAssistantTitle';
 import AiMediaSettingsPopover, { type AiMediaSettings } from './AiMediaSettingsPopover';
 import { getAiAgent, getAiAgentLabel, type AiComposerAgentId } from '../../supabase/functions/_shared/ai-agents';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
@@ -53,6 +54,7 @@ type AiCapabilityComposerActionsProps = {
   moduleId?: string | null;
   recordId?: string | null;
   onVoiceSend: (voice: RecordedVoice) => void | Promise<void>;
+  onVoiceTranscribe?: (voice: RecordedVoice) => Promise<string>;
   onMoveTranscriptToComposer?: (transcript: string) => void;
   onFilePrepared: (filePrompt: AiUploadedFilePrompt) => void | Promise<void>;
   onFilesPrepared?: (filePrompts: AiUploadedFilePrompt[]) => void | Promise<void>;
@@ -118,6 +120,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   moduleId,
   recordId,
   onVoiceSend,
+  onVoiceTranscribe,
   onMoveTranscriptToComposer,
   onFilePrepared,
   onFilesPrepared,
@@ -132,6 +135,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   onApplyPrompt,
   promptRecord = null,
 }) => {
+  const personalTitle = usePersonalAssistantTitle();
   const [open, setOpen] = useState(false);
   const [agentsOpen, setAgentsOpen] = useState(false);
   const [promptModalOpen, setPromptModalOpen] = useState(false);
@@ -364,7 +368,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
                 size={30}
               />
               <div className="min-w-0 flex-1">
-                <div className="text-xs font-bold text-slate-800 dark:text-slate-100">{agent.titleFa}</div>
+                <div className="text-xs font-bold text-slate-800 dark:text-slate-100">{agent.key === 'lead_orchestrator' ? personalTitle : agent.titleFa}</div>
                 <div className="line-clamp-2 text-[11px] leading-4 text-slate-500 dark:text-slate-400">{agent.subtitleFa}</div>
               </div>
             </div>
@@ -378,7 +382,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   return (
     <div className="ai-composer-actions flex flex-wrap items-center gap-1.5" dir="rtl">
       {agentPickerEnabled ? <>
-        <Tooltip title={isFreeChatMode ? 'بدون ایجنت؛ گفتگوی آزاد' : portraitAgents.map(key => getAgentDefinition(key)?.titleFa).join('، ')}>
+        <Tooltip title={isFreeChatMode ? 'بدون ایجنت؛ گفتگوی آزاد' : portraitAgents.map(key => key === 'lead_orchestrator' ? personalTitle : getAgentDefinition(key)?.titleFa).join('، ')}>
           <Button type="text" disabled={disabled || loading} size={actionSize} className="ai-composer-icon ai-composer-agent-trigger"
             aria-label="انتخاب ایجنت‌های تخصصی" aria-expanded={agentsOpen} onClick={() => handleAgentsOpenChange(true)}>
             {isFreeChatMode ? <MessageOutlined /> : <span className="ai-composer-agent-portraits">
@@ -445,7 +449,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
       ) : null}
 
       {(selectedSet.has('voice_input') || autoMode) && isCapabilityUsable(capabilityAvailability, 'voice_input') ? (
-        <AiVoiceRecorder buttonType="text" disabled={disabled} loading={voiceLoading} size={actionSize} className={iconActionClass} onSend={onVoiceSend} onMoveTranscriptToComposer={onMoveTranscriptToComposer} />
+        <AiVoiceRecorder buttonType="text" disabled={disabled} loading={voiceLoading} size={actionSize} className={iconActionClass} onSend={onVoiceSend} onTranscribe={onVoiceTranscribe} onMoveTranscriptToComposer={onMoveTranscriptToComposer} />
       ) : null}
 
       <AiFileUploadButton

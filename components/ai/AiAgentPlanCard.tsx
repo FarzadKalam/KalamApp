@@ -19,7 +19,7 @@ const AiAgentPlanCard: React.FC<Props> = ({ plan }) => {
     <div className="ai-chat-theme ai-agent-plan" dir="rtl">
       <div className="mb-1 flex flex-wrap items-center gap-2 font-semibold">
         <SafetyCertificateOutlined />
-        <span>برنامهٔ ایجنت راهبر</span>
+        <span>برنامهٔ دستیار</span>
         <Tag color={risk === 'low' ? 'green' : risk === 'high' ? 'red' : 'gold'} className="m-0 text-[10px]">{RISK_LABEL[risk] || 'نیازمند بررسی'}</Tag>
       </div>
       <div className="space-y-1">

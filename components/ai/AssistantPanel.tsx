@@ -19,6 +19,8 @@ import ProfileAvatar from '../common/ProfileAvatar';
 import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 import type { IdentityOption } from '../../utils/identityDirectory';
 import type { RecordedVoice } from './AiVoiceRecorder';
+import { withOrganizationClientInfo } from '../../utils/organizationContext';
+import { usePersonalAssistantTitle } from '../../hooks/usePersonalAssistantTitle';
 import type { AiUploadedFilePrompt } from './AiFileUploadButton';
 import { uploadAiFileAttachments } from '../../utils/aiFileAttachments';
 import AiCapabilityComposerActions, { normalizeAiComposerCapabilities, type AiComposerCapability } from './AiCapabilityComposerActions';
@@ -540,12 +542,16 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   showAgentInboxBox = false,
 }) => {
   const { message } = App.useApp();
+  const personalTitle = usePersonalAssistantTitle();
   const orgCurrency = useCurrencyConfig();
   const location = useLocation();
   const navigate = useNavigate();
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
+  const threadIdRef = useRef(threadId);
+  const threadLoadSequence = useRef(0);
+  threadIdRef.current = threadId;
   const [submitting, setSubmitting] = useState(false);
   const [loadingThread, setLoadingThread] = useState(false);
   const notificationRuntime=useOptionalNotificationRuntime();
@@ -1064,11 +1070,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     streamAbortRef.current = controller;
     const response = await fetch(`${SUPABASE_URL.replace(/\/+$/, '')}/functions/v1/ai-assistant`, {
       method: 'POST',
-      headers: {
+      headers: withOrganizationClientInfo(new Headers({
         apikey: SUPABASE_ANON_KEY,
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
-      },
+      })),
       body: JSON.stringify({ ...body, action: 'chat_stream', composerPreferences: body.composerPreferences ?? composerPreferencesRef.current }),
       signal: controller.signal,
     });
@@ -1079,13 +1085,19 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       })();
       throw new Error(String(parsed?.message || raw || 'ارتباط با دستیار ناموفق بود.'));
     }
-    if (!response.body) throw new Error('پاسخ زنده از دستیار دریافت نشد.');
+    if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) {
+      if (streamAbortRef.current === controller) streamAbortRef.current = null;
+      const raw = await response.text().catch(() => '');
+      const data = (() => { try { return JSON.parse(raw); } catch { return null; } })();
+      throw new Error(String(data?.message || 'پاسخ زنده از دستیار دریافت نشد.'));
+    }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let terminalEventReceived = false;
     let streamedText = '';
+    let acceptedTurn: { threadId: string; userMessageId: string } | null = null;
     const handleEvent = (rawEvent: string) => {
       const eventName = rawEvent.split(/\r?\n/).find((line) => line.startsWith('event:'))?.slice(6).trim() || 'message';
       const dataText = rawEvent
@@ -1096,7 +1108,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       if (!dataText) return;
       let payload: any = null;
       try { payload = JSON.parse(dataText); } catch { payload = { text: dataText }; }
-      if (eventName === 'meta') handlers.onMeta?.(payload);
+      if (eventName === 'meta') {
+        if (payload?.threadId && payload?.userMessageId) acceptedTurn = { threadId: payload.threadId, userMessageId: payload.userMessageId };
+        handlers.onMeta?.(payload);
+      }
       if (eventName === 'agent_activity') handlers.onActivity?.(payload);
       if (eventName === 'delta') {
         const text = String(payload?.text || '');
@@ -1113,6 +1128,35 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       }
     };
 
+    const recoverSavedAnswer = async (turn: { threadId: string; userMessageId: string }) => {
+      for (const delay of [0, 800]) {
+        if (delay) await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
+        if (controller.signal.aborted) return false;
+        const saved = await callAssistant({ action: 'get_thread', threadId: turn.threadId, afterUserMessageId: turn.userMessageId }).catch(() => null);
+        const answer = saved?.messages?.[0];
+        if (!answer || controller.signal.aborted) continue;
+        const metadata = answer.metadata || {};
+        const result = {
+          ...turn,
+          messageId: answer.id,
+          answer: answer.content,
+          message: answer.content,
+          incomplete: metadata.incomplete === true,
+          finishReason: metadata.finish_reason,
+          attachments: metadata.attachments,
+          questions: metadata.clarification_questions,
+          selectedAgents: metadata.selected_agents,
+          primaryAgent: metadata.agent_key,
+          provider: answer.provider,
+          model: answer.model,
+          usage: metadata.usage,
+        };
+        if (metadata.failed === true) handlers.onError?.(result);
+        else handlers.onDone?.(result);
+        return true;
+      }
+      return false;
+    };
     try {
       while (true) {
         const chunk = await reader.read();
@@ -1123,21 +1167,17 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         parts.forEach((part) => {
           if (part.trim()) handleEvent(part);
         });
+        if (terminalEventReceived) break;
       }
       buffer += decoder.decode();
-      if (buffer.trim()) handleEvent(buffer);
+      if (!terminalEventReceived && buffer.trim()) handleEvent(buffer);
     } catch (error) {
       if (controller.signal.aborted) throw error;
-      handlers.onError?.({
-        success: false,
-        message: 'ارتباط زنده با دستیار پیش از پایان پاسخ قطع شد.',
-        incomplete: true,
-        finishReason: 'stream_interrupted',
-        partialContent: streamedText,
-      });
-      return;
+    } finally {
+      await reader.cancel().catch(() => {});
     }
-    if (!terminalEventReceived) {
+    const recovered = !terminalEventReceived && acceptedTurn && await recoverSavedAnswer(acceptedTurn);
+    if (!terminalEventReceived && !recovered && !controller.signal.aborted) {
       handlers.onError?.({
         success: false,
         message: 'ارتباط زنده با دستیار پیش از پایان پاسخ قطع شد.',
@@ -1147,20 +1187,23 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       });
     }
     if (streamAbortRef.current === controller) streamAbortRef.current = null;
-  }, []);
+  }, [callAssistant]);
 
   const buildBundleInputPayloads = useCallback(async () => Promise.all(bundleInputs.map(async (item) => {
     if (item.type === 'voice') {
-      const [stored] = await uploadAiFileAttachments([new File([item.voice.blob], item.voice.filename, { type: item.voice.mimeType })], {
+      const transcript = String(item.voice.transcript || '').trim();
+      const [uploads, audioData] = await Promise.all([uploadAiFileAttachments([new File([item.voice.blob], item.voice.filename, { type: item.voice.mimeType })], {
         moduleId: contextWithSelection.mode === 'record' ? contextWithSelection.moduleId : null,
         recordId: contextWithSelection.mode === 'record' ? contextWithSelection.recordId : null,
-      });
+      }), transcript ? Promise.resolve(null) : blobToBase64(item.voice.blob)]);
+      const [stored] = uploads;
       return {
         id: item.id,
         type: 'voice',
         label: item.label,
+        text: transcript,
         audio: {
-          data: await blobToBase64(item.voice.blob),
+          data: audioData,
           mimeType: item.voice.mimeType,
           durationMs: item.voice.durationMs,
           filename: item.voice.filename,
@@ -1630,7 +1673,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
 
   const loadThread = useCallback(async (targetThreadId?: string | null) => {
     if (!active) return;
-    const requestedThreadId = String(targetThreadId || threadId || '').trim();
+    const requestSequence = ++threadLoadSequence.current;
+    const requestedThreadId = String(targetThreadId || threadIdRef.current || '').trim();
     if (!requestedThreadId) {
       setThreadContext(null);
       setMessages([]);
@@ -1642,6 +1686,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         action: 'get_thread',
         threadId: requestedThreadId,
       });
+      if (requestSequence !== threadLoadSequence.current) return;
       setThreadId(data.threadId ? String(data.threadId) : null);
       setPendingAiAction(data.proposedAction?.id ? data.proposedAction : null);
       setThreadContext(getThreadContext(data?.thread));
@@ -1664,7 +1709,22 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       const loadedComposerPreferences = data?.thread?.metadata?.composer_preferences && typeof data.thread.metadata.composer_preferences === 'object'
         ? data.thread.metadata.composer_preferences
         : null;
-      if (loadedComposerPreferences) applyComposerPreferences(loadedComposerPreferences);
+      const savedAgents = normalizeSelectedAgents(loadedComposerPreferences?.selectedAgents);
+      const threadAgents = normalizeSelectedAgents(data?.thread?.selected_agents);
+      const lastSpecialist = [...(Array.isArray(data.messages) ? data.messages : [])].reverse()
+        .find((item) => item?.role === 'assistant' && !item.metadata?.failed
+          && normalizeSelectedAgents([item.metadata?.agent_key]).some((agent) => agent !== 'lead_orchestrator'));
+      const isFreeChat = data?.thread?.metadata?.free_chat === true
+        || loadedComposerPreferences?.selectedCapabilities?.includes?.('free_chat') === true;
+      const intentionallySelected = data?.thread?.metadata?.explicit_agent_selected === true
+        || savedAgents.some((agent) => agent !== 'lead_orchestrator');
+      const fallbackAgents = threadAgents.some((agent) => agent !== 'lead_orchestrator') ? threadAgents
+        : normalizeSelectedAgents([lastSpecialist?.metadata?.agent_key || (data?.thread?.agent_key !== 'lead_orchestrator' ? data?.thread?.agent_key : null)]);
+      applyComposerPreferences({
+        ...(loadedComposerPreferences || {}),
+        selectedCapabilities: isFreeChat ? ['free_chat'] : loadedComposerPreferences?.selectedCapabilities || [],
+        selectedAgents: isFreeChat ? [] : intentionallySelected && savedAgents.length ? savedAgents : fallbackAgents,
+      });
       const nextMessages = (Array.isArray(data.messages) ? data.messages : [])
         .filter((item: any) => item?.role === 'user' || item?.role === 'assistant')
         .map((item: any) => ({
@@ -1678,11 +1738,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         }));
       setMessages(nextMessages);
     } catch (error: any) {
-      message.error(toFaErrorMessage(error, 'خواندن تاریخچه چت ناموفق بود.'));
+      if (requestSequence === threadLoadSequence.current) message.error(toFaErrorMessage(error, 'خواندن تاریخچه چت ناموفق بود.'));
     } finally {
-      setLoadingThread(false);
+      if (requestSequence === threadLoadSequence.current) setLoadingThread(false);
     }
-  }, [active, applyComposerPreferences, callAssistant, message, onThreadUpserted, threadId]);
+  }, [active, applyComposerPreferences, callAssistant, message, onThreadUpserted]);
 
   useEffect(()=>{
     if(!active||!threadId||submitting||loadingThread)return;
@@ -1719,6 +1779,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
 
   useEffect(() => {
     if (!active) {
+      threadLoadSequence.current += 1;
       initializedPanelSessionRef.current = null;
       return;
     }
@@ -1726,7 +1787,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     // never reset the live conversation. Only a real thread/context switch is
     // allowed to initialise the composer again.
     if (initializedPanelSessionRef.current === initialPanelSessionKey) return;
+    threadLoadSequence.current += 1;
     initializedPanelSessionRef.current = initialPanelSessionKey;
+    setLoadingThread(false);
     setThreadId(normalizedInitialThreadId);
     setThreadContext(null);
     setMessages([]);
@@ -1983,7 +2046,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               ? {
                 ...item,
                 id: payload?.messageId || item.id,
-                content: recoverableError ? buildRecoverableStreamContent(item.content, payload, errorText) : errorText,
+                content: recoverableError ? buildRecoverableStreamContent(item.metadata?.streaming ? item.content : '', payload, errorText) : errorText,
                 metadata: {
                   ...(item.metadata || {}),
                   pending_status: false,
@@ -1999,7 +2062,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         });
         if (serverError) {
           if (isRecoverableStreamError(serverError)) {
-            message?.warning?.(PARTIAL_STREAM_NOTICE);
+            message?.warning?.(String(serverError?.partialContent || '').trim() ? PARTIAL_STREAM_NOTICE : toFaErrorMessage(serverError, 'پاسخ کامل دریافت نشد.'));
           } else {
             message?.error?.(toFaErrorMessage(serverError, String(serverError?.message || 'ارتباط با دستیار ناموفق بود.')));
           }
@@ -2035,7 +2098,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           ? 'record_chat'
           : 'dashboard_chat';
         let canStream = selectedCapabilities.every((capability) => !NON_STREAM_CHAT_CAPABILITIES.has(capability));
-        if (selectedCapabilities.length === 0 || selectedCapabilities.every((item) => ['text_chat', 'document_analysis', 'voice_input', 'record_creation'].includes(item))) {
+        const directContinuation = threadId && !shouldStartProcessGuideThread && !pendingAiAction
+          && /^(?:ادامه(?:\s+بده|\s+دهید)?|ادامه[‌ ]اش(?:\s+رو)?(?:\s+بگو)?)[.!؟?\s]*$/u.test(assistantText);
+        if (!directContinuation && (selectedCapabilities.length === 0 || selectedCapabilities.every((item) => ['text_chat', 'document_analysis', 'voice_input', 'record_creation'].includes(item)))) {
           const route = await requestAutoRoute({
             messageText: assistantText,
             inputKind,
@@ -3085,6 +3150,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     ) as AgentKey;
     const isFreeConversation = item.metadata?.free_chat === true || capabilities.includes('free_chat');
     const agentDef = isFreeConversation ? null : getAgentDefinition(effectiveAgentKey);
+    const agentTitle = isFreeConversation ? 'گفتگوی آزاد' : effectiveAgentKey === 'lead_orchestrator' ? personalTitle : agentDef?.titleFa || personalTitle;
     const rawSelectedAgents = Array.isArray(item.metadata?.selected_agents) ? item.metadata.selected_agents : [];
     const collaboratingAgents = isFreeConversation ? [] : Array.from(new Set(
       [effectiveAgentKey, ...rawSelectedAgents]
@@ -3107,7 +3173,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           <div
             className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-200/80 bg-slate-900 shadow-sm overflow-hidden mt-0.5"
             style={{ borderColor: agentDef?.badgeColor ? `${agentDef.badgeColor}90` : undefined }}
-            title={agentDef?.titleFa || 'ایجنت راهبر'}
+            title={agentTitle}
           >
             <AiAgentCameoFigure
               agentKey={effectiveAgentKey}
@@ -3131,12 +3197,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                     }}
                   >
                     <AiAgentCameoFigure agentKey={colDef.key} size={13} accentColor={colDef.badgeColor} />
-                    <span>{colDef.titleFa}</span>
+                    <span>{colDef.key === 'lead_orchestrator' ? personalTitle : colDef.titleFa}</span>
                   </span>
                 ))
               ) : (
                 <span className="font-semibold text-slate-600 dark:text-slate-300">
-                  {agentDef?.titleFa || 'ایجنت راهبر'}
+                  {agentTitle}
                 </span>
               )}
             </div>
@@ -3366,6 +3432,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     handleEditImage,
     messages,
     orgCurrency,
+    personalTitle,
     recheckPending,
     recheckingId,
     stopActiveStream,
@@ -3815,6 +3882,20 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             moduleId={fileRecordScope.moduleId}
             recordId={fileRecordScope.recordId}
             onVoiceSend={queueVoiceInput}
+            onVoiceTranscribe={async (voice) => {
+              const result = await callAssistant({
+                action: 'transcribe_voice',
+                context: contextWithSelection,
+                modelOverride: modelOverrides.voice_input || undefined,
+                audio: {
+                  data: await blobToBase64(voice.blob),
+                  mimeType: voice.mimeType,
+                  filename: voice.filename,
+                  durationMs: voice.durationMs,
+                },
+              });
+              return String(result.transcript || '');
+            }}
             onMoveTranscriptToComposer={(transcript) => {
               const clean = String(transcript || '').trim();
               if (!clean) return;

@@ -204,10 +204,7 @@ export const systemGuideSkill: DomainSkillModule = {
         };
       });
 
-    const guideConfig = ctx.grounding.agentStates?.system_guide?.config || null;
-
     return {
-      org_training_customization: guideConfig?.policy_json || {},
       user_accessible_instructions_count: ctx.grounding.instructions?.length || 0,
       user_accessible_job_descriptions_count: ctx.grounding.jobDescriptions?.length || 0,
       contextual_tutorials: contextualList,

@@ -4,6 +4,8 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { appendStreamToolCalls, buildAgentToolResultFallback, executeAgentToolCalls } from '../_shared/ai-tool-calls';
 import { appendContinuationText,createContinuationDeltaBuffer } from '../_shared/ai-context-lifecycle';
+import { createAgentSkillRuntime } from '../_shared/ai-skill-registry';
+import type { SkillExecutionContext } from '../_shared/ai-skills/types';
 const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 const nonstream = source.slice(source.indexOf('const callChatCompletions ='), source.indexOf('const callChatCompletionsStream ='));
 const stream = source.slice(source.indexOf('const callChatCompletionsStream ='), source.indexOf('const getPublicSupabaseUrl ='));
@@ -27,22 +29,53 @@ const harness = (streaming: boolean, responses: Response[]) => {
     normalizeAiContentText: (value: any) => String(value || ''), normalizeAiContentAttachments: () => [],
     extractUsageMetadata: (value: any) => value.usage || null,
     getChatFinishReason: (value: any) => value.choices?.[0]?.finish_reason || '',
+    getRecoverablePartialAiContent: (error: any) => error?.partialContent || '',
+    buildContinuationMessages: (messages: any[], partial: string) => [...messages, { role: 'assistant', content: partial }, { role: 'user', content: 'ادامه' }],
+    buildIncompleteAiResponseError: (reason: string, partial: string) => Object.assign(new Error(reason), { partialContent: partial, incomplete: true }),
     isCompleteChatFinishReason: (reason: any) => reason === 'stop',
     mergeChatUsageMetadata: (parts: any[]) => ({ total_tokens: parts.reduce((sum, part) => sum + (part?.total_tokens || 0), 0) }),
-    parseChatStreamDelta: (value: any) => ({ text: value.choices?.[0]?.delta?.content || '', finishReason: value.choices?.[0]?.finish_reason || '' }),
     shortenProviderError: (value: any) => String(value),
     CHAT_COMPLETION_CONTINUATION_LIMIT: 2, CHAT_COMPLETIONS_TIMEOUT_MS: 10000,
     STREAM_PROVIDER_INACTIVITY_TIMEOUT_MS: 10000, DEFAULT_CHAT_MAX_TOKENS: 4000, DEFAULT_REASONING_MAX_TOKENS: 4000,
     STREAM_DEADLINE_PERSISTENCE_RESERVE_MS: 10000,
   };
-  const declaration = streaming ? stream : nonstream;
-  if (!streaming) delete (deps as any).parseChatStreamDelta;
+  const declaration = streaming ? nonstream + stream : nonstream;
   const executable = ts.transpileModule(`${declaration}\nreturn ${streaming ? 'callChatCompletionsStream' : 'callChatCompletions'};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const run = new Function(...Object.keys(deps), executable)(...Object.values(deps));
-  return { sent, run: (options: any) => run({ model: 'chosen-agent', apiKey: 'fake-test', provider: 'fake' }, [{ role: 'user', content: 'همهٔ لیدها را بررسی کن' }], options) };
+  return { sent, run: (options: any, messages = [{ role: 'user', content: 'همهٔ لیدها را بررسی کن' }]) =>
+    run({ model: 'chosen-agent', apiKey: 'fake-test', provider: 'fake' }, messages, options) };
 };
 
 describe('actual central agent data tool loop', () => {
+  it.each([false, true])('loads instructions on the model decision from a continuation (stream: %s)', async streaming => {
+    const userMessage = 'مثل بار قبل انجامش بده';
+    const runtime = createAgentSkillRuntime({
+      userMessage, selectedAgents: ['sales_leads'], grounding: { agentConfigs: [],
+        agentStates: { sales_leads: { canUse: true, canView: true, canChat: true } } },
+    } as unknown as SkillExecutionContext)!;
+    const selection = { id: 'skill-1', type: 'function', function: {
+      name: 'read_agent_skills', arguments: JSON.stringify({ skillIds: ['sales_leads:sales_invoice'] }),
+    } };
+    const output = 'پیش‌نویس آماده است.';
+    const response = (message: any, finish_reason: string) => streaming
+      ? sse([{ choices: [{ delta: message, finish_reason }] }])
+      : new Response(JSON.stringify({ choices: [{ message, finish_reason }] }));
+    const fixture = harness(streaming, [
+      response({ tool_calls: [streaming ? { ...selection, index: 0 } : selection] }, 'tool_calls'),
+      response({ content: output }, 'stop'),
+    ]);
+    const execute = vi.fn(async (_name: string, input: Parameters<typeof runtime.execute>[0]) => runtime.execute(input));
+    const result = await fixture.run({ tools: [runtime.tool], toolExecutor: execute }, [
+      { role: 'system', content: runtime.systemMessage },
+      { role: 'assistant', content: 'فاکتور فروش مشتری را آماده کردم.' },
+      { role: 'user', content: userMessage },
+    ]);
+    expect(result.content).toBe(output);
+    expect(execute).toHaveBeenCalledWith('read_agent_skills', { skillIds: ['sales_leads:sales_invoice'] });
+    expect(JSON.stringify(fixture.sent[0].messages)).not.toContain('واحد واقعی');
+    expect(fixture.sent[1].messages.at(-1).content).toContain('واحد واقعی');
+  });
+
   it('continues the same model after a data tool call and accounts for both requests', async () => {
     const fixture = harness(false, [
       new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [toolCall] }, finish_reason: 'tool_calls' }], usage: { total_tokens: 10 } })),
@@ -76,6 +109,23 @@ describe('actual central agent data tool loop', () => {
     const result = await fixture.run({ tools: [tool], toolExecutor: execute, deadlineAt: Date.now() + 5000 });
     expect(result.content).toContain('استخدام نیروی فروش');
     expect(result.finishReason).toBe('deadline_fallback');
+    expect(fixture.sent).toHaveLength(1);
+  });
+  it('retries an invalid stream on the same model without asking the client to resubmit', async () => {
+    const fixture = harness(true, [
+      new Response(JSON.stringify({ error: { message: 'stream invalid' } }), { status: 400 }),
+      new Response(JSON.stringify({ choices: [{ message: { content: 'پاسخ کامل' }, finish_reason: 'stop' }] })),
+    ]);
+    const result = await fixture.run({});
+    expect(result.content).toBe('پاسخ کامل');
+    expect(fixture.sent.map(request => [request.model, Boolean(request.stream)])).toEqual([['chosen-agent', true], ['chosen-agent', false]]);
+  });
+  it('keeps a finalized text answer even if the gateway closes before the DONE frame', async () => {
+    const fixture = harness(true, [new Response('data: {"choices":[{"delta":{"content":"پاسخ کامل"},"finish_reason":"stop"}]}\n\n',
+      { headers: { 'Content-Type': 'text/event-stream' } })]);
+    const result = await fixture.run({});
+    expect(result.content).toBe('پاسخ کامل');
+    expect(result.incomplete).toBe(false);
     expect(fixture.sent).toHaveLength(1);
   });
   it('stops at the declared tool budget instead of looping indefinitely', async () => {

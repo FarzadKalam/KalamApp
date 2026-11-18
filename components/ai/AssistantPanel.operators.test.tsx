@@ -1,4 +1,3 @@
-import React from 'react';
 import { App } from 'antd';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -62,6 +61,7 @@ vi.mock('./AiCapabilityComposerActions', async () => {
     'div',
     { 'data-testid': 'ai-operator-actions' },
     React.createElement('div', { 'data-testid': 'selected-capabilities' }, (props.selected || []).join(',')),
+    React.createElement('div', { 'data-testid': 'selected-agents' }, (props.selectedAgents || []).join(',')),
     button('cap-text_chat', () => props.onChange(['text_chat'])),
     button('cap-free_chat', () => props.onChange(['free_chat'])),
     button('cap-web_search', () => props.onChange(['web_search'])),
@@ -100,6 +100,13 @@ vi.mock('./AiCapabilityComposerActions', async () => {
       durationMs: 1200,
       filename: 'voice.webm',
     })),
+    button('send-recognized-voice', () => props.onVoiceSend({
+      blob: new Blob(['voice'], { type: 'audio/webm' }),
+      mimeType: 'audio/webm',
+      durationMs: 1200,
+      filename: 'voice.webm',
+      transcript: 'متن آمادهٔ ویس',
+    })),
   );
   return {
     default: MockActions,
@@ -130,11 +137,11 @@ const makeStreamResponse = (answer = 'پاسخ تست') => new Response(
   { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
 );
 
-const renderPanel = async () => {
+const renderPanel = async (threadId?: string) => {
   render(
     <App>
       <MemoryRouter initialEntries={['/dashboard']}>
-        <AssistantPanel active />
+        <AssistantPanel active initialThreadId={threadId} />
       </MemoryRouter>
     </App>,
   );
@@ -317,6 +324,45 @@ describe('AssistantPanel AI operators', () => {
       }),
     ]));
     expect(findBody('run_task_bundle')).toBeFalsy();
+  });
+
+  it('restores a specialist from an older thread with no composer agent setting', async () => {
+    const original = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation(async (name, options) => options?.body?.action === 'get_thread'
+      ? { data: { success: true, threadId: 'older-thread', thread: { agent_key: 'hr_manager', selected_agents: ['hr_manager'],
+        metadata: { composer_preferences: { selectedAgents: [] } } }, messages: [] }, error: null }
+      : original?.(name, options));
+    await renderPanel('older-thread');
+    await waitFor(() => expect(screen.getByTestId('selected-agents').textContent).toBe('hr_manager'));
+    await typeAndSend('ادامه بده');
+    await waitFor(() => expect(findFetchBody('chat_stream')?.agents).toEqual(['hr_manager']));
+    expect(findBody('suggest_auto_capabilities')).toBeUndefined();
+  });
+
+  it('retrieves the persisted answer after the stream closes before its final event', async () => {
+    const original = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation(async (name, options) => options?.body?.afterUserMessageId === 'saved-turn'
+      ? { data: { success: true, messages: [{ id: 'saved-reply', content: 'پاسخ ذخیره‌شده بازیابی شد', metadata: {} }] }, error: null }
+      : original?.(name, options));
+    vi.mocked(fetch).mockImplementation(async () => new Response(
+      'event: meta\ndata: {"threadId":"thread-1","userMessageId":"saved-turn"}\n\n',
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    ));
+    await renderPanel();
+    await typeAndSend('این موضوع را بررسی کن');
+    await waitFor(() => expect(screen.getByText('پاسخ ذخیره‌شده بازیابی شد')).toBeTruthy());
+    expect(getFetchBodies().filter((body: any) => body.action === 'chat_stream')).toHaveLength(1);
+  });
+
+  it('passes an already recognized voice as text while retaining the audio attachment', async () => {
+    await renderPanel();
+    fireEvent.click(findButtonByVisibleName('send-recognized-voice'));
+    fireEvent.click(findButtonByVisibleName('ارسال'));
+    await waitFor(() => expect(findBody('suggest_auto_capabilities')?.bundle?.inputs?.[0]).toMatchObject({
+      type: 'voice',
+      text: 'متن آمادهٔ ویس',
+      audio: { data: null, assetId: 'voice-asset' },
+    }));
   });
 
   it('uses auto routing as the default text mode when no operator is selected', async () => {

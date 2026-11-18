@@ -32,6 +32,18 @@ describe('shared context lifecycle for every agent',() => {
     expect(JSON.stringify(compress.mock.calls)).toContain('IMPORTANT_TAIL');
   });
 
+  it('includes the latest old answer in the summary when pinned context leaves little space',async () => {
+    const system={ role: 'system',content: 'z'.repeat(6600) },current={ role: 'user',content: 'درخواست جاری' };
+    const latest={ role: 'assistant',content: 'نقطهٔ ادامه '+ 'x'.repeat(1550) };
+    const messages=[system,{ role: 'user',content: 'هدف اولیه' },latest,current];
+    const compress=vi.fn(async () => 'هدف اولیه و نقطهٔ ادامه');
+    const next=await createContextBudgetController({ initialMessages: messages,modelCatalog: { metadata: { context_window: 4096 } },outputTokens: 1024,compress }).prepare(messages,true);
+    expect(next[0]).toBe(system);
+    expect(next.at(-1)).toBe(current);
+    expect(next).not.toContain(latest);
+    expect(JSON.stringify(compress.mock.calls)).toContain('نقطهٔ ادامه');
+  });
+
   it('keeps file references and processed/pending identities outside the lossy summary',() => {
     const state=mergeWorkingStateFromMessages(null,[{ id: 'message',role: 'user',metadata: { attachments: [{ name: 'تصویر',url: 'https://files.test/image',assetId: 'asset',mimeType: 'image/jpeg',data: 'DO_NOT_STORE' }] } },
       { role: 'assistant',metadata: { action_log_id: 'action',requires_confirmation: true } }]);

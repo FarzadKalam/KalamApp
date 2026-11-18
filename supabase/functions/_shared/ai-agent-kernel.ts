@@ -67,12 +67,6 @@ export const heuristicSelectAgentsAndCapabilities = (params: {
   if (/(راهنما|آموزش|چطور|چگونه|کجا\s*تنظیم|نحوه\s*کار|ویدیو\s*آموزش|فیلم\s*آموزش|راهنمای\s*نرم|یاد\s*بگیرم|طریقه)/i.test(text)) {
     detectedAgents.add('system_guide');
   }
-  if (/(تغییر\s*قیمت|تنظیم\s*قیمت|افزایش\s*قیمت|کاهش\s*قیمت|اصلاح\s*قیمت|درصد.*(افزایش|کاهش|تغییر|ببر\s*بالا|بیار\s*پایین)|لیست\s*قیمت.*(تغییر|افزایش|کاهش)|پکیج.*قیمت|پیش[‌ ]?فاکتور.*قیمت)/i.test(text)) {
-    detectedAgents.add('purchase_supply');
-    detectedCaps.add('pricing_adjustment');
-    detectedCaps.add('record_creation');
-  }
-
   if (/(الگوی\s*فرآیند|فرآیند\s*کامل|پروژه\s*از\s*روی\s*الگو)/i.test(text)) {
     detectedCaps.add('process_operation');
     detectedCaps.add('record_creation');
@@ -238,8 +232,8 @@ export const compileOnboardingQaPolicy = (params: {
 export const buildAgentsOverviewForActor = (grounding: CentralAiGrounding) => {
   return Object.values(grounding.agentStates || {}).map((state) => ({
     key: state.agentKey,
-    titleFa: state.definition.titleFa,
-    shortTitleFa: state.definition.shortTitleFa,
+    titleFa: state.agentKey === 'lead_orchestrator' ? grounding.actorWorkIdentity?.assistantTitle || state.definition.titleFa : state.definition.titleFa,
+    shortTitleFa: state.agentKey === 'lead_orchestrator' ? grounding.actorWorkIdentity?.assistantTitle || state.definition.titleFa : state.definition.shortTitleFa,
     subtitleFa: state.definition.subtitleFa,
     descriptionFa: state.definition.descriptionFa,
     badgeColor: state.definition.badgeColor,
