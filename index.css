@@ -17,6 +17,7 @@
   --brand-900-rgb: 15 23 42;
   --brand-accent-pink-rgb: 219 39 119;
   --brand-text-rgb: 166 163 220;
+  --brand-text-hover-rgb: 184 181 227;
   --brand-on-primary-rgb: 255 255 255;
   --brand-on-primary-hover-rgb: 16 17 20;
   --app-dark-bg-rgb: 20 20 20;
@@ -187,9 +188,28 @@ body.kalam-app-shell-lock > .ant-picker-dropdown,
 }
 
 /* رنگ برند برای متن و لینک در تم شب از رنگ دکمه جداست تا روی پالت‌های تیره خوانا بماند. */
-html.dark .ant-btn-link,
-html.dark .ant-typography a {
+html.dark .ant-btn-link:not(.ant-btn-dangerous, :disabled, [aria-disabled="true"], .ant-btn-disabled) {
   color: rgb(var(--brand-text-rgb)) !important;
+}
+
+html.dark .ant-btn-link:not(.ant-btn-dangerous, :disabled, [aria-disabled="true"], .ant-btn-disabled):is(:hover, :focus-visible) {
+  color: rgb(var(--brand-text-hover-rgb)) !important;
+}
+
+/* Legacy foreground utilities also style record links in tables, cards and popovers. */
+html.dark :is(a[href], button, [role="link"], [class~="cursor-pointer"]):is(
+  [class~="text-leather-500"], [class~="text-leather-600"], [class~="text-leather-700"], [class~="text-leather-800"],
+  [class~="!text-leather-500"], [class~="!text-leather-600"], [class~="!text-leather-700"], [class~="!text-leather-800"]
+):not([class*="dark:text-"], [class*="dark:!text-"], [class^="bg-"], [class*=" bg-"], [class^="!bg-"], [class*=" !bg-"], :disabled, [aria-disabled="true"]) {
+  color: rgb(var(--brand-text-rgb)) !important;
+}
+
+html.dark :is(a[href], button, [role="link"], [class~="cursor-pointer"]):is(
+  [class~="hover:text-brand-500"], [class~="hover:text-brand-600"], [class~="hover:text-brand-700"],
+  [class~="hover:text-leather-500"], [class~="hover:text-leather-600"], [class~="hover:text-leather-700"], [class~="hover:text-leather-800"],
+  [class~="hover:!text-leather-500"], [class~="hover:!text-leather-600"], [class~="hover:!text-leather-700"], [class~="hover:!text-leather-800"]
+):not([class*="dark:hover:text-"], [class*="dark:hover:!text-"], [class^="bg-"], [class*=" bg-"], [class^="!bg-"], [class*=" !bg-"], :disabled, [aria-disabled="true"]):is(:hover, :focus-visible) {
+  color: rgb(var(--brand-text-hover-rgb)) !important;
 }
 
 /* Dark mode separates readable foregrounds from brand-filled controls. */

@@ -964,6 +964,8 @@ function App() {
             colorLink: isDarkMode ? getAccessibleDarkBrandTextColor(branding.palette) : branding.palette.primary,
             ...(isDarkMode ? {
               colorPrimaryHover: getDarkBrandHoverColor(branding.palette.primary),
+              colorLinkHover: getAccessibleDarkBrandTextColor(branding.palette, 0.2),
+              colorLinkActive: getAccessibleDarkBrandTextColor(branding.palette),
               colorBgBase: APP_DARK_COLORS.background,
               colorBgLayout: APP_DARK_COLORS.background,
               colorBgContainer: APP_DARK_COLORS.surface,

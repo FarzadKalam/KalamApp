@@ -8,7 +8,7 @@
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#ffffff",
-  "theme_color": "#1677ff",
+  "theme_color": "#F82377",
   "description": "سامانه ERP تازه سیستم برای مدیریت یکپارچه عملیات کسب‌وکار",
   "share_target": {
     "action": "/share-target",
