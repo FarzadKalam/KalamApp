@@ -79,7 +79,9 @@ describe('AI voice recording', () => {
     await start();
     fireEvent.click(screen.getByRole('button', { name: 'توقف ضبط صدا' }));
     await waitFor(() => expect((screen.getByRole('textbox', { name: 'متن پیام صوتی' }) as HTMLTextAreaElement).value).toBe('متن آماده از سرور'));
-    fireEvent.click(screen.getByRole('button', { name: 'ارسال فایل صوتی' }));
+    const send = screen.getByRole('button', { name: 'ارسال فایل صوتی' });
+    await waitFor(() => expect(send).not.toHaveClass('ant-btn-loading'));
+    fireEvent.click(send);
     await waitFor(() => expect(onSend).toHaveBeenCalledWith(expect.objectContaining({ transcript: 'متن آماده از سرور' })));
     expect(onTranscribe).toHaveBeenCalledTimes(1);
   });

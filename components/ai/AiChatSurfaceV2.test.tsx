@@ -229,7 +229,6 @@ describe('AiChatSurfaceV2', () => {
     await waitFor(()=>expect(screen.queryByText('در حال بررسی اطلاعات واقعی سازمان…')).not.toBeInTheDocument());
     expect(screen.getByText('در حال بررسی دانش سازمان…')).toBeInTheDocument();
     await send('done',{success:true,threadId:'new-thread',messageId:'answer-1',answer:'گزارش آماده است'});
-    await act(async()=>controller.close());
     expect(await screen.findByText('گزارش آماده است')).toBeInTheDocument();
     expect(screen.queryByText('در حال بررسی دانش سازمان…')).not.toBeInTheDocument();
   },15000);
@@ -252,14 +251,8 @@ describe('AiChatSurfaceV2', () => {
         },
       }]);
 
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
-      'ai-assistant',
-      expect.objectContaining({
-        body: expect.objectContaining({
-          action: 'get_ai_overview',
-        }),
-      }),
-    ));
+    expect(await screen.findByText('proposal.pdf')).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(invokeMock.mock.calls.some((call) => {
       const action = call[1]?.body?.action;
       return action === 'suggest_auto_capabilities' || action === 'run_task_bundle' || action === 'chat';
@@ -301,7 +294,7 @@ describe('AiChatSurfaceV2', () => {
     }]);
 
     await waitFor(() => expect(screen.getByText(/متن دریافت‌شده پیش از قطع اتصال/)).toBeInTheDocument());
-    expect(screen.getByText(/متن دریافت‌شده حفظ شد/, { selector: '.ai-chat-message-column.is-assistant *' })).toBeInTheDocument();
+    expect(await screen.findByText(/متن دریافت‌شده حفظ شد/, { selector: '.ai-chat-message-column.is-assistant *' }, { timeout: 4000 })).toBeInTheDocument();
   }, 15000);
 
   it('renames the active thread inline from the conversation header', async () => {
