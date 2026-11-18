@@ -251,7 +251,7 @@ describe('AiChatSurfaceV2', () => {
         },
       }]);
 
-    expect(await screen.findByText('proposal.pdf')).toBeInTheDocument();
+    expect(await screen.findByTitle('proposal.pdf')).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(invokeMock.mock.calls.some((call) => {
       const action = call[1]?.body?.action;
