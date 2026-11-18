@@ -90,6 +90,20 @@ describe('central model-specific thinking contract',() => {
     await expect(result.text()).rejects.toThrow('قطع');
     expect(normalizeReasoningResponse({ status: 'incomplete',output: [] },'responses').choices[0].finish_reason).toBe('length');
   });
+  it.each(['', 'بخش اول'])('recovers a missing suffix from the terminal Responses event', async streamed => {
+    const answer = 'بخش اول و ادامه';
+    const events = [
+      ...(streamed ? [{ type: 'response.output_text.delta', delta: streamed }] : []),
+      { type: 'response.completed', response: { status: 'completed', output: [
+        { type: 'message', content: [{ type: 'output_text', text: answer }] },
+      ] } },
+    ];
+    const upstream = new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
+    const adapted = await bridgeReasoningResponse(upstream, 'responses', true);
+    const frames = (await adapted.text()).split('\n\n').filter(frame => frame.startsWith('data: {')).map(frame => JSON.parse(frame.slice(6)));
+    expect(frames.map(frame => frame.choices[0].delta.content || '').join('')).toBe(answer);
+    expect(frames.at(-1).choices[0].finish_reason).toBe('stop');
+  });
   it('keeps native streamed signatures and supplies valid empty tool arguments',async () => {
     const events=[{ type: 'message_start',message: { id: 'r',usage: { input_tokens: 2 } } },
       { type: 'content_block_start',index: 0,content_block: { type: 'thinking',thinking: '',signature: '' } },

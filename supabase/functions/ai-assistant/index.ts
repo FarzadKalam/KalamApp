@@ -95,12 +95,14 @@ import {
   type CentralAiGrounding,
 } from '../_shared/ai-grounding.ts';
 import {
-  applyExplicitCacheControlIfSupported,
+  buildAgentStableSystemPrefix,
   compileLayeredAgentPrompt,
   estimateMessagesTokens,
 } from '../_shared/ai-prompt-compiler.ts';
 import {
-  buildAvalaiCacheOptions,
+  buildAvalaiPromptCacheKey,
+  orderAiRequestTools,
+  isAvalaiCacheKeyRejection,
   calculateCacheSavingsIrt,
   extractCachedInputTokens,
   pickPreferredCatalogModelForSlot,
@@ -233,7 +235,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'ai-assistant-2026-11-18-model-selected-skills';
+const FUNCTION_BUILD = 'ai-assistant-2026-11-18-stable-prompt-routing';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 const DEFAULT_AI_MODEL = '';
@@ -1645,6 +1647,7 @@ const resolveProviderConfig = async (
     centralDefaults.reasoning[reasoningSlot],centralDefaults.reasoning[capability],centralDefaults.reasoning[PRIMARY_MODEL_DEFAULT_KEY]);
   return {
     ...centralConfig,
+    orgId: authContext.orgId,
     model,
     reasoningEffort,reasoningModelId: model,
     capability,
@@ -1704,10 +1707,12 @@ const resolveSpecializedProviderConfig = async (
   if (!model) throw new Error(`موتور تخصصی جداگانه‌ای برای ${capability} تنظیم نشده است.`);
   return {
     ...centralConfig,
+    orgId: authContext.orgId,
     model,
     capability,
     serviceTier: String(settings?.metadata?.service_tier || centralConfig.serviceTier || 'default').trim() || 'default',
     orgAiSettings: settings,
+    modelCatalog: allowed.find(row => row.id === model) || null,
     source: 'specialized',
   };
 };
@@ -4545,6 +4550,23 @@ const createAiContextBudget = (providerConfig: any,messages: any[],options: any 
   return { outputTokens,prepare: controller.prepare };
 };
 
+const buildChatPromptCacheKey = (
+  providerConfig: any,
+  messages: Array<{ role: string; content: any }>,
+  tools: any[],
+  responseFormat?: Record<string, any> | null,
+) => buildAvalaiPromptCacheKey({
+  orgId: providerConfig.orgId,
+  workload: providerConfig.capability,
+  stableSystemPrefix: messages[0]?.role === 'system' && typeof messages[0].content === 'string'
+    ? messages[0].content : null,
+  modelId: providerConfig.model,
+  modelCatalog: providerConfig.modelCatalog,
+  route: getReasoningProfile({ ...providerConfig.modelCatalog, id: providerConfig.model }).route,
+  tools,
+  responseFormat,
+});
+
 const callChatCompletions = async (
   providerConfig: any,
   messages: Array<{ role: string; content: any }>,
@@ -4559,8 +4581,6 @@ const callChatCompletions = async (
     tools?: any[];
     toolExecutor?: AgentToolExecutor;
     maxToolRounds?: number;
-    promptCacheKey?: string | null;
-    supportsExplicitCacheControl?: boolean;
     disableAutoCompaction?: boolean;
   }
 ) => {
@@ -4574,14 +4594,14 @@ const callChatCompletions = async (
   const primaryModel = String(providerConfig.model || '').trim();
   if (!primaryModel) throw new Error('برای این قابلیت هوش مصنوعی، مدل فعال در تنظیمات سازمان پیدا نشد.');
   const modelsToTry = [primaryModel];
-  const promptCacheKey = String(options?.promptCacheKey || '').trim();
-  const supportsExplicitCacheControl = options?.supportsExplicitCacheControl === true;
+  const tools = orderAiRequestTools(options?.tools);
+  let promptCacheKey = await buildChatPromptCacheKey(providerConfig, messages, tools, options?.responseFormat);
 
   let lastErrorMessage = '';
   for (let attempt = 0; attempt < modelsToTry.length; attempt += 1) {
     const model = modelsToTry[attempt];
     const reasoning = isReasoningModel(model);
-    let currentMessages = applyExplicitCacheControlIfSupported(messages, supportsExplicitCacheControl);
+    let currentMessages = messages;
     const contextBudget = createAiContextBudget(providerConfig,currentMessages,options);
     let contextRetry = false;
     let accumulatedContent = '';
@@ -4629,9 +4649,7 @@ const callChatCompletions = async (
       if (options?.responseFormat && typeof options.responseFormat === 'object') {
         requestBody.response_format = options.responseFormat;
       }
-      if (Array.isArray(options?.tools) && options.tools.length > 0) {
-        requestBody.tools = options.tools;
-      }
+      if (tools.length) requestBody.tools = tools;
       if (reasoning) {
         requestBody.max_completion_tokens = contextBudget.outputTokens;
       } else {
@@ -4651,10 +4669,11 @@ const callChatCompletions = async (
           body: JSON.stringify(requestBody),
           signal: AbortSignal.timeout(Math.max(1, Math.min(options?.timeoutMs ?? CHAT_COMPLETIONS_TIMEOUT_MS, options?.deadlineAt ? options.deadlineAt - Date.now() : Infinity))),
         }, { disableFallback: true });
-        if (!result.response.ok && result.response.status === 400 && (requestBody.prompt_cache_key || supportsExplicitCacheControl)) {
+        if (!result.response.ok && result.response.status === 400 && promptCacheKey) {
           const rawCacheError = await result.response.clone().text();
-          if (/prompt_cache_key|cache_control|unsupported.*cache/i.test(rawCacheError)) {
-            const fallbackBody = { ...requestBody, messages: JSON.parse(JSON.stringify(currentMessages, (key, value) => key === 'cache_control' ? undefined : value)) };
+          if (isAvalaiCacheKeyRejection(rawCacheError)) {
+            promptCacheKey = undefined;
+            const fallbackBody = { ...requestBody };
             delete fallbackBody.prompt_cache_key;
             result = await requestAvalaiWithFallback(providerConfig, '/chat/completions', {
               method: 'POST',
@@ -4709,7 +4728,7 @@ const callChatCompletions = async (
       if (Array.isArray(toolCalls) && toolCalls.length > 0) {
         if (!options?.toolExecutor) throw new Error('مدل ابزار درخواست کرد ولی ابزار اجرایی برای این درخواست تعریف نشده است.');
         if (toolRounds >= maxToolRounds) throw new Error('بودجهٔ مراحل بررسی داده به پایان رسید؛ دامنهٔ بررسی را دقیق‌تر کنید یا ادامهٔ آن را بخواهید.');
-        const toolMessages = await executeAgentToolCalls(toolCalls, options.tools || [], options.toolExecutor);
+        const toolMessages = await executeAgentToolCalls(toolCalls, tools, options.toolExecutor);
         latestToolFallback = buildAgentToolResultFallback(toolMessages) || latestToolFallback;
         const providerMessage=parsed?.choices?.[0]?.message || {};
         currentMessages = [...currentMessages, { role: 'assistant', content: content || null, tool_calls: toolCalls,
@@ -4811,8 +4830,6 @@ const callChatCompletionsStream = async (
     safetyIdentifier?: string;
     timeoutMs?: number;
     tools?: any[];
-    promptCacheKey?: string | null;
-    supportsExplicitCacheControl?: boolean;
     onDelta?: (text: string) => void | Promise<void>;
     toolExecutor?: AgentToolExecutor;
     maxToolRounds?: number;
@@ -4829,13 +4846,13 @@ const callChatCompletionsStream = async (
   const model = String(providerConfig.model || '').trim();
   if (!model) throw new Error('برای این قابلیت هوش مصنوعی، مدل فعال در تنظیمات سازمان پیدا نشد.');
   const reasoning = isReasoningModel(model);
-  const promptCacheKey = String(options?.promptCacheKey || '').trim();
-  const supportsExplicitCacheControl = options?.supportsExplicitCacheControl === true;
+  const tools = orderAiRequestTools(options?.tools);
+  let promptCacheKey = await buildChatPromptCacheKey(providerConfig, messages, tools);
   let finalParsed: any = null;
   let finishReason = '';
   let content = '';
   let baseUrl = '';
-  let currentMessages = applyExplicitCacheControlIfSupported(messages, supportsExplicitCacheControl);
+  let currentMessages = messages;
   const contextBudget = createAiContextBudget(providerConfig,currentMessages,options);
   let contextRetry = false;
   let continuationBaseMessages: typeof currentMessages | null = null;
@@ -4902,7 +4919,7 @@ const callChatCompletionsStream = async (
     if (promptCacheKey) requestBody.prompt_cache_key = promptCacheKey;
     const serviceTier = String(providerConfig?.serviceTier || '').trim();
     if (serviceTier === 'default' || serviceTier === 'flex') requestBody.service_tier = serviceTier;
-    if (Array.isArray(options?.tools) && options.tools.length > 0) requestBody.tools = options.tools;
+    if (tools.length) requestBody.tools = tools;
     if (reasoning) {
       requestBody.max_completion_tokens = contextBudget.outputTokens;
     } else {
@@ -4946,18 +4963,17 @@ const callChatCompletionsStream = async (
       if (recovered) return recovered;
       throw buildIncompleteAiResponseError('stream_interrupted', content);
     }
-    // stream_options and cache hints are OpenAI/Anthropic extensions; fall back
-    // cleanly if a particular gateway rejects either parameter with HTTP 400.
+    // Retry once if the selected gateway rejects an optional request field.
     if (!result.response.ok && result.response.status === 400) {
       const rawError = await result.response.clone().text();
       const rejectStreamOptions = /stream_options|include_usage|unsupported.*stream/i.test(rawError);
-      const rejectCacheHints = /prompt_cache_key|cache_control|unsupported.*cache/i.test(rawError);
+      const rejectCacheHints = Boolean(promptCacheKey) && isAvalaiCacheKeyRejection(rawError);
       if (rejectStreamOptions || rejectCacheHints) {
         const fallbackBody = { ...requestBody };
         if (rejectStreamOptions) delete fallbackBody.stream_options;
         if (rejectCacheHints) {
+          promptCacheKey = undefined;
           delete fallbackBody.prompt_cache_key;
-          fallbackBody.messages = JSON.parse(JSON.stringify(currentMessages, (key, value) => key === 'cache_control' ? undefined : value));
         }
         try {
           result = await requestStream(fallbackBody);
@@ -5082,7 +5098,7 @@ const callChatCompletionsStream = async (
       if (!options.toolExecutor) throw new Error('ابزار اجرایی برای این پاسخ تعریف نشده است.');
       if (toolRounds >= maxToolRounds) throw new Error('بودجهٔ مراحل بررسی داده به پایان رسید؛ دامنهٔ بررسی را دقیق‌تر کنید یا ادامهٔ آن را بخواهید.');
       const toolCalls = [...pendingToolCalls.values()];
-      const toolMessages = await executeAgentToolCalls(toolCalls, options.tools || [], options.toolExecutor);
+      const toolMessages = await executeAgentToolCalls(toolCalls, tools, options.toolExecutor);
       latestToolFallback = buildAgentToolResultFallback(toolMessages) || latestToolFallback;
       currentMessages = [...currentMessages, { role: 'assistant', content: roundContent || null, tool_calls: toolCalls,...providerContinuation }, ...toolMessages];
       toolRounds++;
@@ -7826,7 +7842,14 @@ const extractProposedActionFromAiText = (text: string) => {
   };
 };
 
-const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any, reportActivity?: AiAgentActivityReporter) => {
+const prepareChatRequest = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  body: any,
+  reportActivity?: AiAgentActivityReporter,
+  onAccepted?: (turn: { threadId: string; userMessageId: string }) => void,
+) => {
   const message = String(body?.message || '').trim();
   if (!message) {
     const error: any = new Error('متن سوال خالی است.');
@@ -8055,6 +8078,8 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     },
   });
 
+  if (userMessage?.id) onAccepted?.({ threadId: thread.id, userMessageId: userMessage.id });
+
   const legacyPromptMessages = buildPromptMessages(
     message,
     pageContext,
@@ -8078,13 +8103,13 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     },
   );
 
+  const dataToolRuntime = freeChatMode ? null : await buildAgentDataToolRuntime(supabaseUrl, serviceRoleKey, authContext, grounding, selectedAgents, { threadId: thread.id, message, pageContext });
   let promptMessages = legacyPromptMessages;
   let cachedPrefixHash: string | null = null;
-  let cacheOptions: { promptCacheKey?: string; supportsExplicitCacheControl?: boolean } = {};
 
   if (freeChatMode) {
     if (requestedTone && promptMessages[0]?.role === 'system') {
-      promptMessages[0].content = `${promptMessages[0].content}\nلحن درخواستی کاربر: ${getAgentToneGuidanceFa(preferredToneStyle)}`;
+      promptMessages.splice(1, 0, { role: 'system', content: 'لحن درخواستی کاربر: ' + getAgentToneGuidanceFa(preferredToneStyle) });
     }
   } else {
     const legacySystemContent = [
@@ -8126,24 +8151,14 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
       workingState: activeWorkingState,
       preferredToneStyle,
       legacySystemPrompt: legacySystemContent,
+      currentSystemInstruction: dataToolRuntime?.systemMessage.content,
     });
 
     promptMessages = compiled.messages;
     cachedPrefixHash = compiled.cachedPrefixHash;
-    cacheOptions = buildAvalaiCacheOptions({
-      orgId: authContext.orgId,
-      agentKey: selectedAgents.length ? primaryAgent : null,
-      prefixHash: cachedPrefixHash,
-      modelCatalog: providerConfig.modelCatalog,
-      modelId: providerConfig.model,
-    });
   }
 
-  const dataToolRuntime = freeChatMode ? null : await buildAgentDataToolRuntime(supabaseUrl, serviceRoleKey, authContext, grounding, selectedAgents, { threadId: thread.id, message, pageContext });
-  if (dataToolRuntime) {
-    nativeTools.push(...dataToolRuntime.tools);
-    promptMessages = [dataToolRuntime.systemMessage, ...promptMessages];
-  }
+  if (dataToolRuntime) nativeTools.push(...dataToolRuntime.tools);
   return {
     message,
     body,
@@ -8160,7 +8175,6 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     preferredToneStyle,
     channel,
     cachedPrefixHash,
-    cacheOptions,
     capability,
     contextKey,
     providerConfig,
@@ -8308,7 +8322,6 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     preferredToneStyle,
     channel,
     cachedPrefixHash,
-    cacheOptions,
     capability,
     contextKey,
     providerConfig,
@@ -8330,8 +8343,6 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
       safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}`,
       tools: nativeTools,
       toolExecutor: prepared.toolExecutor,
-      promptCacheKey: cacheOptions?.promptCacheKey,
-      supportsExplicitCacheControl: cacheOptions?.supportsExplicitCacheControl === true,
       deadlineAt,
     });
   } catch (error: any) {
@@ -8613,7 +8624,8 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
         let prepared: any = null;
         let preparationMs: number | null = null;
         try {
-          prepared = await prepareChatRequest(supabaseUrl, serviceRoleKey, authContext, body, activity => send('agent_activity', activity));
+          prepared = await prepareChatRequest(supabaseUrl, serviceRoleKey, authContext, body,
+            activity => send('agent_activity', activity), turn => send('accepted', turn));
           preparationMs = Date.now() - requestStartedAt;
           const respondingAgent = resolveAiAgentId(prepared.freeChatMode ? 'free_chat' : prepared.capability);
           send('meta', {
@@ -8638,8 +8650,6 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
             safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${prepared.capability}`,
             tools: prepared.nativeTools,
             toolExecutor: prepared.toolExecutor,
-            promptCacheKey: prepared.cacheOptions?.promptCacheKey,
-            supportsExplicitCacheControl: prepared.cacheOptions?.supportsExplicitCacheControl === true,
             deadlineAt: requestDeadlineAt,
             onDelta: (text) => {
               if (text) send('delta', { text });
@@ -8921,6 +8931,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
       ...corsHeaders,
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
+      'X-Accel-Buffering': 'no',
       Connection: 'keep-alive',
       'X-Kalam-Function-Build': FUNCTION_BUILD,
     },
@@ -9152,9 +9163,9 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       freeChatMode,
     },
   );
+  const fileDataTools = freeChatMode ? null : await buildAgentDataToolRuntime(supabaseUrl, serviceRoleKey, authContext, grounding, selectedAgents, { threadId: thread.id, message: prompt, pageContext });
   let promptMessages = legacyPromptMessages;
   let cachedPrefixHash: string | null = null;
-  let cacheOptions: { promptCacheKey?: string; supportsExplicitCacheControl?: boolean } = {};
   if (!freeChatMode) {
     const compiled = await compileLayeredAgentPrompt({
       userMessage: prompt,
@@ -9176,6 +9187,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       compactionSummary: activeCompactionSummary,
       workingState: activeWorkingState,
       preferredToneStyle,
+      currentSystemInstruction: fileDataTools?.systemMessage.content,
       legacySystemPrompt: [
         String(legacyPromptMessages[0]?.content || '').trim(),
         'وقتی برای اجرای عملیاتی حساس (مثل `apply_price_adjustment`، `create_instagram_workflow_rule`، `create_instagram_showcase`، `create_process_template` یا `settle_invoice_payment`) اطلاعات تصویر/فایل کامل و آماده تأیید بود، علاوه بر توضیح فارسی، بلوک JSON `{ "proposed_action": { "action_type": "...", "summary_fa": "...", "module_id": "...", "record_id": "...", "payload": {...} } }` را برگردان.',
@@ -9183,13 +9195,6 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     });
     promptMessages = compiled.messages;
     cachedPrefixHash = compiled.cachedPrefixHash;
-    cacheOptions = buildAvalaiCacheOptions({
-      orgId: authContext.orgId,
-      agentKey: selectedAgents.length ? primaryAgent : null,
-      prefixHash: cachedPrefixHash,
-      modelCatalog: providerConfig.modelCatalog,
-      modelId: providerConfig.model,
-    });
   }
   const lastUserIndex = promptMessages.map((item) => item.role).lastIndexOf('user');
   if (lastUserIndex >= 0) {
@@ -9202,8 +9207,6 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     };
   }
 
-  const fileDataTools = freeChatMode ? null : await buildAgentDataToolRuntime(supabaseUrl, serviceRoleKey, authContext, grounding, selectedAgents, { threadId: thread.id, message: prompt, pageContext });
-  if (fileDataTools) promptMessages = [fileDataTools.systemMessage, ...promptMessages];
   let aiResult: any = null;
   let analysisError: any = null;
   let primaryAnalysisError = '';
@@ -9212,13 +9215,12 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       primary: () => callChatCompletions(providerConfig, promptMessages, {
         safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}`,
         tools: fileDataTools?.tools, toolExecutor: fileDataTools?.execute,
-        promptCacheKey: cacheOptions?.promptCacheKey, supportsExplicitCacheControl: cacheOptions?.supportsExplicitCacheControl === true,
       }),
       fallback: async (error) => {
         const specialized = await resolveSpecializedProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'document_analysis');
         const result = await callChatCompletions(specialized, promptMessages, {
           safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_document_analysis_fallback`,
-          tools: fileDataTools?.tools, toolExecutor: fileDataTools?.execute, supportsExplicitCacheControl: false,
+          tools: fileDataTools?.tools, toolExecutor: fileDataTools?.execute,
         });
         result.analysisFallback = { used: true, primary_model: providerConfig.model, primary_error: shortenProviderError(String((error as any)?.message || error)) };
         return result;
@@ -9654,6 +9656,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
       calendarContext,
     },
   );
+  mutationMessages.unshift({ role: 'system', content: buildAgentStableSystemPrefix(runnableAgents.permittedAgents) });
   const updateTargetPrompt = isUpdate
     ? [
         'رکوردهای مجاز برای ویرایش (شناسه فقط برای تطبیق داخلی است و نباید در reply نمایش داده شود):',

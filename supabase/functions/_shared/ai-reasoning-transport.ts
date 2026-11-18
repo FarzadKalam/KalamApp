@@ -9,7 +9,7 @@ const responseParts = (content: any,role: string) => parts(content).map(part => 
   throw new Error('این نوع ورودی در مسیر تفکر مدل پشتیبانی نمی‌شود.');
 });
 const nativeParts = (content: any) => parts(content).map(part => {
-  if (part.type==='text') return { type: 'text',text: part.text,...(part.cache_control ? { cache_control: part.cache_control } : {}) };
+  if (part.type==='text') return { type: 'text',text: part.text };
   if (part.type==='image_url') {
     const url=part.image_url?.url || part.image_url;
     const data=String(url).match(/^data:([^;]+);base64,(.*)$/s);
@@ -161,13 +161,18 @@ export const bridgeReasoningResponse = async (response: Response,route: string,s
   let buffer='',ended=false;
   const blocks:any[]=[],callIndexes=new Map<string,number>();
   let nativeUsage:any={},nativeId='';
+  let responseText = '';
   const translated=new ReadableStream<Uint8Array>({
     async pull(controller) {
       const emit=(delta:any,finish:any=null,usage?:any) => controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta,finish_reason: finish }],...(usage ? { usage } : {}) })}\n\n`));
       const consume=(event:any) => {
         if (event.type==='error' || event.type==='response.failed') throw new Error(event.error?.message || event.response?.error?.message || 'پاسخ مدل ناموفق بود.');
         if (route==='responses') {
-          if (event.type==='response.output_text.delta') emit({ content: event.delta });
+          if (event.type==='response.output_text.delta') {
+            const delta = String(event.delta || '');
+            responseText += delta;
+            if (delta) emit({ content: delta });
+          }
           if (event.type==='response.output_item.added' && event.item?.type==='function_call') {
             const index=callIndexes.size;callIndexes.set(event.item.id,index);
             emit({ tool_calls: [{ index,id: event.item.call_id,type: 'function',function: { name: event.item.name,arguments: '' } }] });
@@ -175,6 +180,10 @@ export const bridgeReasoningResponse = async (response: Response,route: string,s
           if (event.type==='response.function_call_arguments.delta') emit({ tool_calls: [{ index: callIndexes.get(event.item_id),function: { arguments: event.delta } }] });
           if (event.type==='response.completed' || event.type==='response.incomplete') {
             const result=normalizeReasoningResponse(event.response,route),choice=result.choices[0];
+            const finalText = choice.message.content;
+            if (finalText.startsWith(responseText) && finalText.length > responseText.length) {
+              emit({ content: finalText.slice(responseText.length) });
+            }
             emit({ response_items: choice.message.response_items },choice.finish_reason,result.usage);
             controller.enqueue(encoder.encode('data: [DONE]\n\n'));ended=true;
           }

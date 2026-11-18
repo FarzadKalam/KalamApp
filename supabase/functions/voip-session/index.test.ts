@@ -88,3 +88,43 @@ it('operator management remains gated by the webphone plan',async()=>{
  expect((await request({action:'list_center_operators'})).status).toBe(403);
  expect(calls.some(call=>call.url.pathname.endsWith('/voip_provider_bridges'))).toBe(false);
 });
+
+it('records the final event when the initial insert wins a concurrent write', async () => {
+ usage = 'browser';
+ const fallbackFetch = globalThis.fetch;
+ const writes = vi.fn();
+ let reads = 0;
+ vi.stubGlobal('fetch', async (input: any, init: any) => {
+  const url = new URL(input);
+  if (!url.pathname.endsWith('/voip_call_logs')) return fallbackFetch(input, init);
+  if (!init.method) return Response.json(reads++ ? [{ id: 'call-row', status: 'ringing', started_at: '2026-11-18T10:00:00Z' }] : []);
+  const row = JSON.parse(init.body);
+  writes(init.method, url.searchParams, row);
+  return init.method === 'POST'
+   ? Response.json({ code: '23505' }, { status: 409 })
+   : Response.json([{ id: 'call-row', ...row }]);
+ });
+ const response = await request({ action: 'log_webrtc_call', callId: 'same-concurrent-call', status: 'missed', talkSeconds: 0 });
+ expect(response.status).toBe(200);
+ expect(await response.json()).toMatchObject({ success: true, callLog: { id: 'call-row', status: 'missed', talk_seconds: 0 } });
+ expect(writes).toHaveBeenCalledTimes(2);
+ const [method, params, row] = writes.mock.calls[1];
+ expect(method).toBe('PATCH');
+ expect(params.get('org_id')).toBe('eq.org-b');
+ expect(params.get('status')).toBe('eq.ringing');
+ expect(row).not.toHaveProperty('started_at');
+});
+
+it('keeps a terminal status when a late ringing event arrives', async () => {
+ usage = 'browser';
+ const fallbackFetch = globalThis.fetch;
+ const previous = { id: 'call-row', status: 'missed', ended_at: '2026-11-18T10:00:00Z', metadata: { kept: true } };
+ vi.stubGlobal('fetch', async (input: any, init: any) => {
+  if (!new URL(input).pathname.endsWith('/voip_call_logs')) return fallbackFetch(input, init);
+  return Response.json([init.method === 'PATCH' ? { ...previous, ...JSON.parse(init.body) } : previous]);
+ });
+ const response = await request({ action: 'log_webrtc_call', callId: 'same-call', status: 'ringing' });
+ expect(await response.json()).toMatchObject({
+  success: true, callLog: { status: 'missed', ended_at: previous.ended_at, metadata: { kept: true } },
+ });
+});

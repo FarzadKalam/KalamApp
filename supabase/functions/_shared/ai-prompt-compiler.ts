@@ -46,7 +46,7 @@ const computeSha256Hex = async (input: string): Promise<string> => {
   return `fnv_${(hash >>> 0).toString(16)}`;
 };
 
-export const buildMultiAgentPromptSection = (params: {
+const buildAgentPolicySection = (params: {
   selectedAgents: AgentKey[];
   grounding: CentralAiGrounding;
 }): string => {
@@ -65,7 +65,6 @@ export const buildMultiAgentPromptSection = (params: {
     const compactPolicy = Object.keys(publicPolicy).length > 0 ? JSON.stringify(publicPolicy) : 'تنظیم اختصاصی اضافه ثبت نشده';
     return [
       `### ${def?.titleFa || agentKey} (${agentKey})`,
-      `- مأموریت: ${def?.roleFocusFa || ''}`,
       `- وضعیت دسترسی کاربر: ${state?.canUse ? 'مجاز و فعال' : 'محدودشده بر اساس دسترسی یا پلن'}`,
       customInstr ? `- دستورات و خط‌مشی اختصاصی مدیر سازمان: ${customInstr}` : '',
       `- سیاست سازمانی ثبت‌شده: ${compactPolicy}`,
@@ -73,14 +72,21 @@ export const buildMultiAgentPromptSection = (params: {
     ].filter(Boolean).join('\n');
   });
 
-  const orchestrationNote = sortedAgents.length > 1
-    ? [
-        '## هماهنگی چندایجنتی هم‌زمان',
-        'کاربر هم‌زمان چند ایجنت را فعال کرده است. دستیار کاربر پاسخ و برنامهٔ اقدام ایجنت‌ها را یکپارچه می‌کند.',
-      ].join('\n')
-    : '';
+  return agentBlocks.join('\n\n');
+};
 
-  return [orchestrationNote, ...agentBlocks].filter(Boolean).join('\n\n');
+export const buildAgentStableSystemPrefix = (selectedAgents: AgentKey[]): string => {
+  const missions = [...normalizeSelectedAgents(selectedAgents)].sort().flatMap(agentKey => {
+    const definition = getAgentDefinition(agentKey);
+    return definition ? [`${definition.titleFa} (${agentKey}): ${definition.roleFocusFa}`] : [];
+  });
+  return [
+    RECORD_CHOICE_GUIDANCE,
+    'شما هسته عامل هوشمند یکپارچه (AaaS) در پلتفرم سازمانی هستید و همیشه مطابق قوانین سازمان، حدود دسترسی کاربر و داده‌های واقعی عمل می‌کنید.',
+    'قوانین قطعی:\n1. هیچ شناسه خام UUID را در متن پاسخ به کاربر نشان نده؛ از کد سیستمی، نام یا عنوان فارسی استفاده کن.\n2. هرگز داده، عدد، تاریخ یا رکوردی را حدس نزن؛ اگر ابهام یا بیش از یک گزینه معتبر وجود دارد، حداکثر ۲ تا ۳ سؤال شفاف و اجرایی بپرس.\n3. برای تغییرات حساس یا ساخت/اصلاح رکورد و اجرای فرآیند، بدون تأیید کاربر عملیات نهایی را قطعی فرض نکن.\n4. تمام متن‌های خروجی، توضیحات و گزارش‌ها فارسی، دقیق و خوانا باشند.',
+    ...missions,
+    ...(missions.length > 1 ? ['دستیار کاربر پاسخ و برنامهٔ اقدام ایجنت‌های منتخب را یکپارچه می‌کند.'] : []),
+  ].join('\n\n');
 };
 
 export const compileLayeredAgentPrompt = async (params: {
@@ -95,13 +101,13 @@ export const compileLayeredAgentPrompt = async (params: {
   workingState?: Record<string, any> | null;
   preferredToneStyle?: AgentToneStyle | null;
   legacySystemPrompt?: string | null;
+  currentSystemInstruction?: string | null;
   maxHistoryMessages?: number;
 }): Promise<CompiledPromptResult> => {
   const sortedCapabilities = Array.from(new Set((params.selectedCapabilities || []).map((c) => String(c || '').trim()).filter(Boolean))).sort();
   const sortedAgents = [...normalizeSelectedAgents(params.selectedAgents)].sort();
 
-  // BLOCK 1: Byte-Stable Cacheable Prefix (ZERO timestamps or volatile per-turn IDs!)
-  const staticGroundPayload = params.grounding.freeChatMode
+  const permittedGrounding = params.grounding.freeChatMode
     ? {
         mode: 'free_chat',
         rule: 'در حالت گفتگوی آزاد، از داده‌های محرمانه و داخلی سازمان استفاده نمی‌شود؛ فقط پاسخ عمومی دقیق، محترمانه و فارسی بده.',
@@ -133,23 +139,14 @@ export const compileLayeredAgentPrompt = async (params: {
         })),
       };
 
-  const agentPromptSection = buildMultiAgentPromptSection({
-    selectedAgents: sortedAgents,
-    grounding: params.grounding,
-  });
-
-  const staticSections = [
-    RECORD_CHOICE_GUIDANCE,
-    'شما هسته عامل هوشمند یکپارچه (AaaS) در پلتفرم سازمانی هستید و همیشه مطابق قوانین سازمان، حدود دسترسی کاربر و داده‌های واقعی عمل می‌کنید.',
-    'قوانین قطعی:\n1. هیچ شناسه خام UUID را در متن پاسخ به کاربر نشان نده؛ از کد سیستمی، نام یا عنوان فارسی استفاده کن.\n2. هرگز داده، عدد، تاریخ یا رکوردی را حدس نزن؛ اگر ابهام یا بیش از یک گزینه معتبر وجود دارد، حداکثر ۲ تا ۳ سؤال شفاف و اجرایی بپرس.\n3. برای تغییرات حساس یا ساخت/اصلاح رکورد و اجرای فرآیند، بدون تأیید کاربر عملیات نهایی را قطعی فرض نکن.\n4. تمام متن‌های خروجی، توضیحات و گزارش‌ها فارسی، دقیق و خوانا باشند.',
-    sortedCapabilities.length ? `قابلیت‌های اجرایی این درخواست: ${sortedCapabilities.join('، ')}` : '',
-    agentPromptSection,
-    params.legacySystemPrompt || '',
-    `دانش و چارچوب پایدار سازمان (Cacheable Grounding):\n${JSON.stringify(staticGroundPayload)}`,
-  ].filter(Boolean);
-
-  const staticSystemPrefix = staticSections.join('\n\n');
+  const staticSystemPrefix = buildAgentStableSystemPrefix(sortedAgents);
   const cachedPrefixHash = await computeSha256Hex(staticSystemPrefix);
+  const currentSystem = [
+    params.legacySystemPrompt,
+    sortedCapabilities.length ? `قابلیت‌های اجرایی این درخواست: ${sortedCapabilities.join('، ')}` : '',
+    params.grounding.freeChatMode ? '' : buildAgentPolicySection({ selectedAgents: sortedAgents, grounding: params.grounding }),
+    params.currentSystemInstruction,
+  ].filter(Boolean).join('\n\n');
 
   // BLOCK 2: Compacted History + Lossless Working State
   const stateForPrompt = params.workingState ? Object.fromEntries(Object.entries(params.workingState).map(([key,value]) => [key,
@@ -189,6 +186,7 @@ export const compileLayeredAgentPrompt = async (params: {
 
   const volatileUserBlock = [
     volatileHeader,
+    `چارچوب و اطلاعات مجاز سازمان در این نوبت:\n${JSON.stringify(permittedGrounding)}`,
     `زمینه پویا و پرسش کاربر:\n${JSON.stringify({ ...params.contextPayload, user_message: params.userMessage })}`,
   ].filter(Boolean).join('\n\n');
 
@@ -201,6 +199,7 @@ export const compileLayeredAgentPrompt = async (params: {
 
   const messages: Array<{ role: string; content: any }> = [
     { role: 'system', content: staticSystemPrefix },
+    ...(currentSystem ? [{ role: 'system', content: currentSystem }] : []),
     ...(compactionBlock ? [{ role: 'assistant', content: compactionBlock }] : []),
     ...cleanedHistory,
     { role: 'user', content: volatileUserBlock },
@@ -214,28 +213,4 @@ export const compileLayeredAgentPrompt = async (params: {
     messages,
     estimatedTokens: estimateMessagesTokens(messages),
   };
-};
-
-export const applyExplicitCacheControlIfSupported = (
-  messages: Array<{ role: string; content: any }>,
-  supportsExplicitCacheControl: boolean,
-): Array<{ role: string; content: any }> => {
-  if (!supportsExplicitCacheControl || !Array.isArray(messages) || messages.length === 0) {
-    return messages;
-  }
-  return messages.map((msg, index) => {
-    if (index === 0 && msg.role === 'system' && typeof msg.content === 'string') {
-      return {
-        role: 'system',
-        content: [
-          {
-            type: 'text',
-            text: msg.content,
-            cache_control: { type: 'ephemeral' },
-          },
-        ],
-      };
-    }
-    return msg;
-  });
 };

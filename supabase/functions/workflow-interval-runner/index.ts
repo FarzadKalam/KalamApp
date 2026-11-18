@@ -51,9 +51,9 @@ import {
   isFridayAtTehranDate,
 } from '../_shared/persian-calendar-resolver.ts';
 import { getAgentDefinition } from '../_shared/ai-agent-catalog.ts';
-import { tryResolveModelSlot } from '../_shared/ai-gateway.ts';
+import { buildAvalaiPromptCacheKey, fetchAvalaiChatWithCacheKey, isModelReasoning, tryResolveModelSlot } from '../_shared/ai-gateway.ts';
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-09-30-separate-image-worker';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-11-18-stable-prompt-routing';
 const MAX_WORKFLOWS = 30;
 const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
@@ -2831,7 +2831,7 @@ async function createWorkflowAiThread(
   return { thread, assistantMessage };
 }
 
-async function loadWorkflowAiModel(url: string, key: string, orgId: string, agentKey?: string | null): Promise<string> {
+async function loadWorkflowAiModel(url: string, key: string, orgId: string, agentKey?: string | null) {
   const normalizedAgent = String(agentKey || '').trim().toLowerCase() || null;
   const [settingsRows, catalogRows, saasDefaultRows, agentConfigRows] = await Promise.all([
     dbGet(url, key, `org_ai_settings?org_id=eq.${orgId}&select=selected_models&limit=1`).catch(() => []),
@@ -2855,7 +2855,7 @@ async function loadWorkflowAiModel(url: string, key: string, orgId: string, agen
     saasDefaultModels,
     agentConfig,
   });
-  if (resolved?.model) return resolved.model;
+  if (resolved?.model) return resolved;
   throw new Error('برای اجرای پرامپت گردش کار، مدل فعال در تنظیمات هوش مصنوعی سازمان پیدا نشد.');
 }
 
@@ -3347,8 +3347,8 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
   await assertWorkflowAiEnabled(url, key, orgId);
   const agentKey = String(options?.agentKey || '').trim().toLowerCase() || null;
   const agentDef = agentKey ? getAgentDefinition(agentKey) : null;
-  const model = await loadWorkflowAiModel(url, key, orgId, agentKey);
-  const isReasoningModel = [/^o\d/i, /\bo[34][-_]/i, /^gpt-5/i, /deepseek-r\d/i, /\bqwq\b/i, /\breasonin/i].some((p) => p.test(model));
+  const { model, catalogRow } = await loadWorkflowAiModel(url, key, orgId, agentKey);
+  const isReasoningModel = isModelReasoning(model, catalogRow);
   const schema = options?.recordCreationSchema && typeof options.recordCreationSchema === 'object'
     ? options.recordCreationSchema
     : null;
@@ -3396,6 +3396,10 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
     requestBody.temperature = 0.2;
     requestBody.max_tokens = 2000;
   }
+  const cacheKey = await buildAvalaiPromptCacheKey({
+    orgId, workload: 'workflow_ai_prompt', modelId: model, modelCatalog: catalogRow,
+    stableSystemPrefix: requestBody.messages[0].content,
+  });
   let response: Response | null = null;
   let usedBaseUrl = '';
   // Do not chain fallback requests for long-running AI actions. On self-hosted
@@ -3403,15 +3407,14 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
   const baseUrls = workflowAiBaseUrls().slice(0, 1);
   for (const baseUrl of baseUrls) {
     try {
-      const nextResponse = await fetch(`${baseUrl}/chat/completions`, {
+      const nextResponse = await fetchAvalaiChatWithCacheKey(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify(requestBody),
         signal: AbortSignal.timeout(45000),
-      });
+      }, requestBody, cacheKey);
       response = nextResponse;
       usedBaseUrl = baseUrl;
       if (nextResponse.ok || !isRetryableAiStatus(nextResponse.status) || baseUrl === baseUrls[baseUrls.length - 1]) break;

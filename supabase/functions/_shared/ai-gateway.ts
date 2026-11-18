@@ -70,7 +70,7 @@ const REASONING_METADATA_FLAGS = ['reasoning', 'supports_reasoning', 'is_reasoni
 const GENERIC_REASONING_NAME_PATTERNS = [
   /^o\d/i,
   /\bo[34][-_]/i,
-  /^gpt-5/i,
+  /^gpt-[56](?:[.-]|$)/i,
   /deepseek-r\d/i,
   /\breasonin/i,
   /\bqwq\b/i,
@@ -372,27 +372,60 @@ export const isModelReasoning = (modelId: string, modelCatalog?: AiModelCatalogR
   return GENERIC_REASONING_NAME_PATTERNS.some((pattern) => pattern.test(String(modelId || '').trim()));
 };
 
-export const buildAvalaiCacheOptions = (params: {
+export const orderAiRequestTools = <T extends { type?: string; function?: { name?: string } }>(tools?: T[]): T[] => {
+  const key = (tool: T) => tool.function?.name || tool.type || Object.keys(tool).sort().join(':');
+  return [...(tools || [])].sort((left, right) => {
+    const a = key(left);
+    const b = key(right);
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+};
+
+/** AvalAI supports provider-side reuse. The routing key is an optional
+ * hint for supported endpoints, separate from caching and pricing. */
+export const buildAvalaiPromptCacheKey = async (params: {
   orgId?: string | null;
-  agentKey?: string | null;
-  prefixHash?: string | null;
+  workload?: string | null;
+  stableSystemPrefix?: string | null;
   modelCatalog?: AiModelCatalogRow | null;
   modelId?: string | null;
-}) => {
+  route?: 'chat' | 'responses' | 'messages';
+  tools?: readonly unknown[];
+  responseFormat?: unknown;
+}): Promise<string | undefined> => {
+  const model = String(params.modelId || params.modelCatalog?.id || '').trim().toLowerCase();
   const orgId = String(params.orgId || '').trim();
-  const prefixHash = String(params.prefixHash || '').trim();
-  if (!orgId || !prefixHash) return {};
+  const prefix = params.stableSystemPrefix;
+  if (!orgId || !model || !prefix || params.route === 'messages') return;
+  const meta = params.modelCatalog?.metadata;
+  if (meta?.supports_prompt_caching === false || meta?.supports_prompt_cache_key === false) return;
+  const openAiCompatibleKey = meta?.supports_prompt_cache_key === true
+    || /^gpt-\d/.test(model)
+    || /^o[1-9](?:$|-)/.test(model);
+  if (!openAiCompatibleKey || !globalThis.crypto?.subtle) return;
 
-  const agentPart = String(params.agentKey || 'general').trim() || 'general';
-  const cacheKey = `kalam_${orgId.slice(0, 8)}_${agentPart}_${prefixHash.slice(0, 16)}`;
-  const supportsExplicitCacheControl =
-    params.modelCatalog?.metadata?.supports_cache_control === true
-    || /claude/i.test(String(params.modelId || params.modelCatalog?.id || ''));
+  const identity = JSON.stringify([orgId, params.workload || '', model, params.route || 'chat',
+    prefix, params.tools || [], params.responseFormat || null]);
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity));
+  const key = Array.from(new Uint8Array(hash).slice(0, 20), byte => byte.toString(16).padStart(2, '0')).join('');
+  return `kalam_${key}`;
+};
 
-  return {
-    promptCacheKey: cacheKey,
-    supportsExplicitCacheControl,
-  };
+export const isAvalaiCacheKeyRejection = (errorText: string): boolean =>
+  /prompt_cache_key|unsupported.*cache/i.test(errorText);
+
+export const fetchAvalaiChatWithCacheKey = async (
+  url: string,
+  init: RequestInit,
+  payload: Record<string, unknown>,
+  cacheKey?: string,
+): Promise<Response> => {
+  const send = (body: Record<string, unknown>) => fetch(url, { ...init, body: JSON.stringify(body) });
+  if (!cacheKey) return send(payload);
+  const response = await send({ ...payload, prompt_cache_key: cacheKey });
+  return response.status === 400 && isAvalaiCacheKeyRejection(await response.clone().text())
+    ? send(payload)
+    : response;
 };
 
 export const extractCachedInputTokens = (usageMetadata: any): number => {

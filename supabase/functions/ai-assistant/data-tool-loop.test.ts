@@ -6,14 +6,16 @@ import { appendStreamToolCalls, buildAgentToolResultFallback, executeAgentToolCa
 import { appendContinuationText,createContinuationDeltaBuffer } from '../_shared/ai-context-lifecycle';
 import { createAgentSkillRuntime } from '../_shared/ai-skill-registry';
 import type { SkillExecutionContext } from '../_shared/ai-skills/types';
+import { buildAvalaiPromptCacheKey, isAvalaiCacheKeyRejection, orderAiRequestTools } from '../_shared/ai-gateway';
+import { getReasoningProfile } from '../_shared/ai-reasoning';
 const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
-const nonstream = source.slice(source.indexOf('const callChatCompletions ='), source.indexOf('const callChatCompletionsStream ='));
+const nonstream = source.slice(source.indexOf('const buildChatPromptCacheKey ='), source.indexOf('const callChatCompletionsStream ='));
 const stream = source.slice(source.indexOf('const callChatCompletionsStream ='), source.indexOf('const getPublicSupabaseUrl ='));
 const tool = { type: 'function', function: { name: 'read_organization_data' } };
 const toolCall = { id: 'call-1', type: 'function', function: { name: 'read_organization_data', arguments: '{"moduleId":"marketing_leads"}' } };
 const sse = (values: any[]) => new Response(values.map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } });
 
-const harness = (streaming: boolean, responses: Response[]) => {
+const harness = (streaming: boolean, responses: Response[], providerConfig: Record<string, any> = {}) => {
   const sent: any[] = [];
   const deps = {
     appendContinuationText,createContinuationDeltaBuffer,
@@ -24,7 +26,7 @@ const harness = (streaming: boolean, responses: Response[]) => {
       const response = responses.shift(); if (!response) throw new Error('Unexpected provider call');
       return { response, baseUrl: 'test://' };
     }),
-    applyExplicitCacheControlIfSupported: (messages: any) => messages,
+    buildAvalaiPromptCacheKey, isAvalaiCacheKeyRejection, orderAiRequestTools, getReasoningProfile,
     isReasoningModel: () => false, parseJsonSafe: JSON.parse,
     normalizeAiContentText: (value: any) => String(value || ''), normalizeAiContentAttachments: () => [],
     extractUsageMetadata: (value: any) => value.usage || null,
@@ -43,10 +45,28 @@ const harness = (streaming: boolean, responses: Response[]) => {
   const executable = ts.transpileModule(`${declaration}\nreturn ${streaming ? 'callChatCompletionsStream' : 'callChatCompletions'};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const run = new Function(...Object.keys(deps), executable)(...Object.values(deps));
   return { sent, run: (options: any, messages = [{ role: 'user', content: 'همهٔ لیدها را بررسی کن' }]) =>
-    run({ model: 'chosen-agent', apiKey: 'fake-test', provider: 'fake' }, messages, options) };
+    run({ model: 'chosen-agent', apiKey: 'fake-test', provider: 'fake', ...providerConfig }, messages, options) };
 };
 
 describe('actual central agent data tool loop', () => {
+  it.each([false, true])('sends only a routing key and retries a rejected hint (stream: %s)', async streaming => {
+    const fallback = streaming
+      ? sse([{ choices: [{ delta: { content: 'پاسخ کامل' }, finish_reason: 'stop' }] }])
+      : new Response(JSON.stringify({ choices: [{ message: { content: 'پاسخ کامل' }, finish_reason: 'stop' }] }));
+    const fixture = harness(streaming, [
+      new Response(JSON.stringify({ error: { message: 'unsupported parameter prompt_cache_key' } }), { status: 400 }),
+      fallback,
+    ], { model: 'gpt-6-luna', orgId: 'tenant-id' });
+    const messages = [{ role: 'system', content: 'قواعد ثابت' }, { role: 'system', content: 'زمینهٔ جاری' }, { role: 'user', content: 'درخواست' }];
+    expect((await fixture.run({}, messages)).content).toBe('پاسخ کامل');
+    expect(fixture.sent[0].prompt_cache_key).toMatch(/^kalam_/);
+    expect(fixture.sent[1]).not.toHaveProperty('prompt_cache_key');
+    for (const request of fixture.sent) {
+      expect(request.messages).toEqual(messages);
+      expect(JSON.stringify(request)).not.toMatch(/cache_control|prompt_cache_breakpoint|prompt_cache_options/);
+    }
+  });
+
   it.each([false, true])('loads instructions on the model decision from a continuation (stream: %s)', async streaming => {
     const userMessage = 'مثل بار قبل انجامش بده';
     const runtime = createAgentSkillRuntime({

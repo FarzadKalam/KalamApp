@@ -1108,9 +1108,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       if (!dataText) return;
       let payload: any = null;
       try { payload = JSON.parse(dataText); } catch { payload = { text: dataText }; }
-      if (eventName === 'meta') {
+      if (eventName === 'accepted' || eventName === 'meta') {
         if (payload?.threadId && payload?.userMessageId) acceptedTurn = { threadId: payload.threadId, userMessageId: payload.userMessageId };
-        handlers.onMeta?.(payload);
+        if (eventName === 'meta') handlers.onMeta?.(payload);
       }
       if (eventName === 'agent_activity') handlers.onActivity?.(payload);
       if (eventName === 'delta') {
@@ -1129,7 +1129,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     };
 
     const recoverSavedAnswer = async (turn: { threadId: string; userMessageId: string }) => {
-      for (const delay of [0, 800]) {
+      for (const delay of [0, 800, 1800, 3200]) {
         if (delay) await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
         if (controller.signal.aborted) return false;
         const saved = await callAssistant({ action: 'get_thread', threadId: turn.threadId, afterUserMessageId: turn.userMessageId }).catch(() => null);

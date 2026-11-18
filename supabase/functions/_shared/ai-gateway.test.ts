@@ -1,5 +1,54 @@
-import { describe, expect, it } from 'vitest';
-import { modelSupportsSlot, resolveCapabilityModelSlot, tryResolveModelSlot } from './ai-gateway';
+// @vitest-environment node
+import { describe, expect, it, vi } from 'vitest';
+import { buildAvalaiPromptCacheKey, fetchAvalaiChatWithCacheKey, modelSupportsSlot, orderAiRequestTools, resolveCapabilityModelSlot, tryResolveModelSlot } from './ai-gateway';
+
+describe('AvalAI cache routing hints', () => {
+  const stable = { orgId: 'internal-tenant-identifier', workload: 'dashboard_chat', stableSystemPrefix: 'قواعد ثابت سازمان' };
+
+  it.each(['gpt-6.2-sol', 'gpt-6.1-terra', 'gpt-6-luna'])('supports the implicit cache routing key for %s', async modelId => {
+    const key = await buildAvalaiPromptCacheKey({ ...stable, modelId, route: 'responses' });
+    expect(key).toMatch(/^kalam_[0-9a-f]{40}$/);
+    expect(key).not.toContain(stable.orgId);
+    expect(await buildAvalaiPromptCacheKey({ ...stable, modelId, orgId: 'another-tenant', route: 'responses' })).not.toBe(key);
+    expect(await buildAvalaiPromptCacheKey({ ...stable, modelId, route: 'chat' })).not.toBe(key);
+  });
+
+  it.each(['claude-haiku-5-5', 'gemini-4-hydrogen', 'deepseek-v4.1-flash'])('lets %s use provider caching without OpenAI parameters', async modelId => {
+    expect(await buildAvalaiPromptCacheKey({ ...stable, modelId, modelCatalog: { id: modelId, metadata: { supports_prompt_caching: true } } })).toBeUndefined();
+  });
+
+  it('uses verified support for a new alias and keeps request-specific overrides authoritative', async () => {
+    const newAlias = { id: 'new-model', metadata: { supports_prompt_cache_key: true } };
+    expect(await buildAvalaiPromptCacheKey({ ...stable, modelCatalog: newAlias })).toBeDefined();
+    expect(await buildAvalaiPromptCacheKey({ ...stable, modelCatalog: newAlias, route: 'messages' })).toBeUndefined();
+    expect(await buildAvalaiPromptCacheKey({ ...stable, orgId: null, modelCatalog: newAlias })).toBeUndefined();
+    expect(await buildAvalaiPromptCacheKey({ ...stable, modelCatalog: { id: 'gpt-6-luna', metadata: { supports_prompt_cache_key: false } } })).toBeUndefined();
+  });
+
+  it('stabilizes tool order and scopes a routing key to the actual tool schema', async () => {
+    const a = { type: 'function', function: { name: 'read_a', parameters: { properties: { page: { type: 'integer' } } } } };
+    const b = { type: 'function', function: { name: 'read_b' } };
+    const build = (tools: Array<typeof a | typeof b>) => buildAvalaiPromptCacheKey({ ...stable, modelId: 'gpt-6-luna', tools: orderAiRequestTools(tools) });
+    expect(orderAiRequestTools([b, a])).toEqual([a, b]);
+    expect(await build([a, b])).toBe(await build([b, a]));
+    expect(await build([a, b])).not.toBe(await build([a]));
+  });
+
+  it('retries the same direct request without a rejected routing key', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response('unsupported parameter prompt_cache_key', { status: 400 }))
+      .mockResolvedValueOnce(new Response('ok'));
+    vi.stubGlobal('fetch', fetch);
+    try {
+      const body = { model: 'gpt-6-luna', messages: [{ role: 'system', content: stable.stableSystemPrefix }] };
+      await expect(fetchAvalaiChatWithCacheKey('https://example.test/v1/chat/completions', {}, body, 'routing-hint')).resolves.toMatchObject({ ok: true });
+      expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ ...body, prompt_cache_key: 'routing-hint' });
+      expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual(body);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
 
 const catalog = [
   { id: 'tenant-main', provider: 'test', is_active: true, capability_tags: ['dashboard_chat', 'document_analysis'] },

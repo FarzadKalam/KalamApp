@@ -1,6 +1,6 @@
 // @vitest-environment node
 import {afterEach,expect,it,vi} from 'vitest';
-const mocks=vi.hoisted(()=>({invoke:vi.fn(),constructed:[] as any[]}));
+const mocks=vi.hoisted(()=>({invoke:vi.fn(),constructed:[] as any[],inviteError:null as Error|null}));
 const callAudio=vi.hoisted(()=>({prepareVoipRingbackTone:vi.fn(),startVoipRingbackTone:vi.fn(),stopVoipRingbackTone:vi.fn(),disposeVoipRingbackTone:vi.fn()}));
 vi.mock('./voipRingbackTone',()=>callAudio);
 vi.mock('../supabaseClient',()=>({supabase:{functions:{invoke:mocks.invoke}}}));
@@ -22,14 +22,14 @@ vi.mock('sip.js',()=>{
   stateChange={addListener:(fn:any)=>{this.listener=fn;}};
   inviteOptions:any;
   constructor(public ua:any,public uri:any,public options:any){Inviter.last=this;}
-  invite=async(options:any)=>{this.inviteOptions=options;};cancel=async()=>{};
+  invite=async(options:any)=>{this.inviteOptions=options;if(mocks.inviteError)throw mocks.inviteError;};cancel=async()=>{};
  }
  return {UserAgent,Registerer,RegistererState:{Registered:'Registered',Unregistered:'Unregistered'},Invitation:class{},Inviter,Session:class{},URI:class{},SessionState:{Established:'Established',Terminated:'Terminated'}};
 });
 import {connectVoipWebPhone,disconnectVoipWebPhone,getVoipSnapshot,dialWebPhone} from './voipStore';
 import {Inviter} from 'sip.js';
 const config=(displayName:string)=>({success:true,enabled:true,route:'direct',strategy:'direct',wssUrl:'wss://pbx.example.test/ws',sipDomain:'pbx.example.test',endpoint:{extension:'101',displayName,pjsipId:'101',sipUri:'sip:101@pbx.example.test',sipSecret:'fixture-secret',transport:'wss'}});
-afterEach(async()=>{await disconnectVoipWebPhone();vi.clearAllMocks();mocks.constructed.length=0;});
+afterEach(async()=>{await disconnectVoipWebPhone();vi.clearAllMocks();mocks.constructed.length=0;mocks.inviteError=null;});
 it('ignores a previous organization session that arrives after disconnect',async()=>{
  let resolveOld:(value:any)=>void=()=>{};
  mocks.invoke.mockImplementationOnce(()=>new Promise(resolve=>{resolveOld=resolve;}));
@@ -58,4 +58,10 @@ it('rings only on real SIP ringing and stops on early media, rejection and termi
  expect(callAudio.stopVoipRingbackTone).toHaveBeenCalledTimes(1);
  call.inviteOptions.requestDelegate.onReject();expect(callAudio.stopVoipRingbackTone).toHaveBeenCalledTimes(2);
  call.listener('Terminated');expect(callAudio.stopVoipRingbackTone).toHaveBeenCalledTimes(3);
+});
+
+it('identifies a browser microphone rejection separately from account permissions', async () => {
+ mocks.invoke.mockResolvedValue({ data: config('مخاطب'), error: null });
+ mocks.inviteError = new DOMException('Permission denied', 'NotAllowedError');
+ await expect(dialWebPhone('09120000000')).rejects.toThrow('مرورگر اجازهٔ استفاده از میکروفون را نداده است');
 });

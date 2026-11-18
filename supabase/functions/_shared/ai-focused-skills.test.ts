@@ -82,6 +82,27 @@ describe('model-selected agent skills', () => {
     expect(compiled.volatileUserBlock).not.toContain('مهارت نامرتبط');
     expect(compiled.volatileUserBlock).toContain('دستیار مدیر فروش');
   });
+
+  it('keeps changing role, page and tool guidance after the exact stable prefix', async () => {
+    const makePrompt = (term: string) => compileLayeredAgentPrompt({
+      selectedAgents: ['sales_leads'], userMessage: term, selectedCapabilities: [term],
+      grounding: {
+        company: { company_name: term },
+        orgDirectory: { roles: [], members: [] },
+        agentStates: { sales_leads: { canUse: true, config: { policy_json: { custom_instructions: term } } } },
+        actorWorkIdentity: buildActorWorkIdentity({ role: { title: term } }),
+      } as unknown as SkillExecutionContext['grounding'],
+      pageContextSummary: term, contextPayload: { retrieval: term }, historyMessages: [],
+      currentSystemInstruction: 'مهارت‌های مجاز و ابزارهای این نوبت ' + term, legacySystemPrompt: term,
+    });
+    const first = await makePrompt('زمینهٔ شیفت اول');
+    const second = await makePrompt('زمینهٔ شیفت دوم');
+    expect(first.cachedPrefixHash).toBe(second.cachedPrefixHash);
+    expect(first.messages[0]).toEqual(second.messages[0]);
+    expect(second.messages[0].content).not.toContain('زمینهٔ شیفت');
+    expect(second.messages[1]).toMatchObject({ role: 'system', content: expect.stringContaining('مهارت‌های مجاز و ابزارهای این نوبت زمینهٔ شیفت دوم') });
+    expect(second.messages.at(-1)?.content).toContain('زمینهٔ شیفت دوم');
+  });
 });
 
 describe('the current member’s work context', () => {

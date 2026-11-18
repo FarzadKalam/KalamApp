@@ -294,7 +294,24 @@ describe('AiChatSurfaceV2', () => {
     }]);
 
     await waitFor(() => expect(screen.getByText(/متن دریافت‌شده پیش از قطع اتصال/)).toBeInTheDocument());
-    expect(await screen.findByText(/متن دریافت‌شده حفظ شد/, { selector: '.ai-chat-message-column.is-assistant *' }, { timeout: 4000 })).toBeInTheDocument();
+    expect(await screen.findByText(/متن دریافت‌شده حفظ شد/, { selector: '.ai-chat-message-column.is-assistant *' }, { timeout: 8000 })).toBeInTheDocument();
+  }, 15000);
+
+  it('recovers a recorded answer when the stream closes after acceptance and before metadata', async () => {
+    fetchMock.mockResolvedValueOnce(streamResponse([
+      'event: accepted\ndata: {"threadId":"new-thread","userMessageId":"accepted-turn"}\n\n',
+    ]));
+    const fallback = invokeMock.getMockImplementation()!;
+    let recoveryAttempts = 0;
+    invokeMock.mockImplementation(async (...args) => {
+      if (args[1]?.body?.afterUserMessageId !== 'accepted-turn') return fallback(...args);
+      const messages = recoveryAttempts++ ? [{ id: 'saved-answer', content: 'پاسخ ذخیره‌شدهٔ گفتگو', metadata: {} }] : [];
+      return { data: { success: true, messages }, error: null };
+    });
+    renderSurface([{ pathname: '/ai', state: { aiInitialPrompt: 'درخواست تازه', forceNewThread: true } }]);
+    expect(await screen.findByText('پاسخ ذخیره‌شدهٔ گفتگو', {}, { timeout: 6000 })).toBeInTheDocument();
+    expect(recoveryAttempts).toBe(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   }, 15000);
 
   it('renames the active thread inline from the conversation header', async () => {

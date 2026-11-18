@@ -286,7 +286,7 @@ jobs:
           npx vitest run utils/uiNotificationOverlayStore.test.ts utils/notificationOverlayCategories.test.ts
           utils/aiNotifications.test.ts hooks/useAiConversationRead.test.tsx
           utils/appFeedback.test.ts utils/feedbackRouting.test.ts utils/feedbackArchitecture.test.ts utils/recordFeedback.test.ts
-          components/RecordMessageActions.test.tsx components/UploadProgressOverlay.test.tsx components/dashboard/MyTasksWidget.test.tsx
+          components/RecordMessageActions.test.tsx components/UploadProgressOverlay.test.tsx pages/ShareTargetPage.test.tsx utils/uploadFileWithProgress.test.ts components/dashboard/MyTasksWidget.test.tsx
           --maxWorkers=1 --no-file-parallelism
 
       - name: Shared AI agents and chat surfaces regression checks
@@ -297,7 +297,7 @@ jobs:
           supabase/functions/_shared/ai-process-data.test.ts supabase/functions/_shared/ai-process-operations.test.ts supabase/functions/ai-assistant/process-execution.test.ts
           supabase/functions/_shared/ai-context-lifecycle.test.ts supabase/functions/ai-assistant/thread-memory.test.ts supabase/functions/ai-assistant/free-chat.test.ts
           supabase/functions/_shared/ai-reasoning.test.ts
-          supabase/functions/_shared/ai-focused-skills.test.ts components/ai/AiAgentSkillsEditor.test.tsx components/ai/AiVoiceRecorder.test.tsx
+          supabase/functions/_shared/ai-focused-skills.test.ts supabase/functions/main/index.test.ts components/ai/AiAgentSkillsEditor.test.tsx components/ai/AiVoiceRecorder.test.tsx
           supabase/functions/_shared/ai-tool-calls.test.ts supabase/functions/ai-assistant/data-tool-loop.test.ts
           supabase/functions/_shared/ai-agent-task-contract.test.ts supabase/functions/_shared/ai-agent-task-runtime.test.ts
           supabase/functions/_shared/ai-agent-task-management.test.ts supabase/functions/ai-assistant/agent-task-execution.test.ts
