@@ -286,7 +286,7 @@ jobs:
           npx vitest run utils/uiNotificationOverlayStore.test.ts utils/notificationOverlayCategories.test.ts
           utils/aiNotifications.test.ts hooks/useAiConversationRead.test.tsx
           utils/appFeedback.test.ts utils/feedbackRouting.test.ts utils/feedbackArchitecture.test.ts utils/recordFeedback.test.ts
-          components/RecordMessageActions.test.tsx components/UploadProgressOverlay.test.tsx pages/ShareTargetPage.test.tsx utils/uploadFileWithProgress.test.ts components/dashboard/MyTasksWidget.test.tsx
+          components/RecordMessageActions.test.tsx components/UploadProgressOverlay.test.tsx pages/ShareTargetPage.test.tsx utils/uploadFileWithProgress.test.ts components/dashboard/MyTasksWidget.test.tsx components/dashboard/DashboardLayout.test.tsx
           --maxWorkers=1 --no-file-parallelism
 
       - name: Shared AI agents and chat surfaces regression checks

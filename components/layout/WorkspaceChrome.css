@@ -69,10 +69,10 @@
 .app-sidebar-panel-header .ant-btn{width:44px;height:44px;flex-shrink:0;border-radius:12px;color:var(--workspace-muted)}
 .app-sidebar-panel-menu{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:4px 8px 12px;overscroll-behavior:contain}
 .app-sidebar-panel-menu>.ant-menu{margin-top:8px;border-inline-end:0;background:transparent}
-.app-rail-edge-toggle{position:absolute;left:0;top:130px;transform:translate(-50%,-50%);width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;border:1px solid var(--workspace-line);background:var(--workspace-surface);color:var(--workspace-muted);cursor:pointer;z-index:1120;box-shadow:0 2px 6px rgb(0 0 0 / .14);transition:transform 180ms cubic-bezier(.2,0,0,1),background 180ms ease,border-color 180ms ease,color 180ms ease}
-.app-rail-edge-toggle:hover{border-color:rgb(var(--brand-500-rgb));color:rgb(var(--brand-600-rgb));transform:translate(-50%,-50%) scale(1.12);background:var(--workspace-surface)}
+.app-rail-edge-toggle{position:fixed;right:calc(var(--workspace-sidebar-rail-width,80px) - 11px);top:130px;transform:translateY(-50%);width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;border:1px solid var(--workspace-line);background:var(--workspace-surface);color:var(--workspace-muted);cursor:pointer;z-index:1120;box-shadow:0 2px 6px rgb(0 0 0 / .14);transition:transform 180ms cubic-bezier(.2,0,0,1),background 180ms ease,border-color 180ms ease,color 180ms ease}
+.app-rail-edge-toggle:hover{border-color:rgb(var(--brand-500-rgb));color:rgb(var(--brand-600-rgb));transform:translateY(-50%) scale(1.12);background:var(--workspace-surface)}
 .app-rail-edge-toggle.is-open{background:var(--workspace-solid);border-color:var(--workspace-solid);color:#fff}
-.app-rail-edge-toggle.is-open:hover{color:#fff;transform:translate(-50%,-50%) scale(1.12)}
+.app-rail-edge-toggle.is-open:hover{color:#fff;transform:translateY(-50%) scale(1.12)}
 .app-rail-edge-toggle .app-rail-toggle-icon{font-size:10px;line-height:1;transition:transform 200ms cubic-bezier(.2,0,0,1)}
 .app-rail-edge-toggle.is-open .app-rail-toggle-icon{transform:rotate(180deg)}
 .app-sidebar-panel .ant-menu-item,.app-sidebar-panel .ant-menu-submenu-title,.app-module-drawer .ant-menu-item,.app-module-drawer .ant-menu-submenu-title,.workspace-sidebar-submenu .ant-menu-item,.workspace-sidebar-submenu .ant-menu-submenu-title,.app-main-sider-submenu-popup .ant-menu-item,.app-main-sider-submenu-popup .ant-menu-submenu-title{min-height:44px;line-height:44px;border-radius:11px;margin-inline:0;width:100%;font-weight:500;font-size:14px;letter-spacing:-0.01em;white-space:nowrap!important;transition:background-color 140ms ease,color 140ms ease}

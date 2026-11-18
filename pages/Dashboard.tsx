@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Empty, Grid, Modal, Popover, Skeleton, Statistic, Table, Typography, message } from 'antd';
+import { Alert, Button, Card, Checkbox, Empty, Grid, Modal, Popover, Skeleton, Statistic, Table, Tooltip, Typography, message } from 'antd';
 import {
   DownOutlined,
-  SettingOutlined,
+  AppstoreOutlined,
+  CheckOutlined,
   CalendarOutlined,
   PlusOutlined,
   ReadOutlined,
@@ -40,6 +41,7 @@ import { renderModuleIcon } from '../utils/moduleIcons';
 import { readDashboardPreferences, useDashboardPreferences, updateDashboardPreferences } from '../utils/dashboardPreferences';
 import { hasCurrentOrgPlanModule } from '../utils/saasPlanModules';
 import DashboardWidgetFrame, { DashboardModuleSelection, DashboardWidgetScope } from '../components/dashboard/DashboardWidgetFrame';
+import { DashboardLayout } from '../components/dashboard/DashboardLayout';
 import CommunicationsWidget from '../components/dashboard/CommunicationsWidget';
 import MyTasksWidget from '../components/dashboard/MyTasksWidget';
 import DashboardWidgetLoading from '../components/dashboard/DashboardWidgetLoading';
@@ -943,6 +945,7 @@ const Dashboard: React.FC = () => {
   const [selectedModuleIds, setSelectedModuleIds] = useState<string[]>([]);
   const [dashboardPermissions, setDashboardPermissions] = useState<PermissionMap>({});
   const [dashboardError, setDashboardError] = useState('');
+  const [editingScope, setEditingScope] = useState<string | null>(null);
   const [personalizeOpen, setPersonalizeOpen] = useState(false);
   const [refreshRevision, setRefreshRevision] = useState(0);
   const [dashboardAiQuestion, setDashboardAiQuestion] = useState('');
@@ -1024,14 +1027,11 @@ const Dashboard: React.FC = () => {
     dashboardCardCache.clear();dashboardRecentSectionCache.clear();_dashboardTasksCache.expiresAt = 0;
     setRefreshRevision(value => value + 1);
   }, []);
+  const layoutScope = orgId && currentUserId ? orgId + ':' + currentUserId : null;
+  const editingLayout = layoutScope !== null && editingScope === layoutScope;
   const widgetScope = useMemo(() => ({ orgId, userId: currentUserId, onRefresh: refreshDashboard }), [orgId, currentUserId, refreshDashboard]);
   const moduleSelection = <DashboardModuleSelection orgId={orgId} userId={currentUserId} selected={preferences.moduleIds ?? selectedModuleIds}
     options={Object.keys(MODULES).filter(id => !isSaasAdminModuleId(id) && dashboardPermissions[id]?.view !== false).map(id => ({ value: id, label: MODULES[id].titles.fa }))} />;
-  const widgetChoices = [
-    { id: 'stories', label: 'استوری‌ها' },{ id: 'ai', label: 'دستیار هوشمند' },{ id: 'agents_desk', label: 'میز کار ایجنت‌ها' },{ id: 'my_tasks', label: 'کارهای من' },{ id: 'reports_slider', label: 'گزارش‌های منتخب' },
-    { id: 'activity_calendar', label: 'تقویم فعالیت‌ها' },{ id: 'our_processes', label: 'فرآیندهای ما' },{ id: 'communications', label: 'ارتباطات' },{ id: 'goals', label: 'اهداف و موفقیت‌ها' },{ id: 'quick_add', label: 'افزودن سریع' },
-    ...cards.map(card => ({ id: 'summary:' + card.moduleId, label: card.title })),...recentSections.map(section => ({ id: 'recent:' + section.moduleId, label: section.title })),
-  ];
   const dashboardRecordCreationModuleOptions = useMemo(() => buildAiRecordModuleOptions(), []);
   const dashboardImageMode = dashboardAiCapabilities.includes('image_generation');
   const dashboardVoiceOutputMode = dashboardAiCapabilities.includes('voice_output');
@@ -1153,6 +1153,22 @@ const Dashboard: React.FC = () => {
     return widgetPermissions[key] !== false && !preferences.hiddenWidgets.includes(key);
   };
 
+  const widgetChoices = [
+    { id: 'stories', label: 'استوری‌ها' },{ id: 'ai', label: 'دستیار هوشمند' },{ id: 'agents_desk', label: 'میز کار ایجنت‌ها' },{ id: 'my_tasks', label: 'کارهای من' },{ id: 'reports_slider', label: 'گزارش‌های منتخب' },
+    { id: 'activity_calendar', label: 'تقویم فعالیت‌ها' },{ id: 'our_processes', label: 'فرآیندهای ما' },{ id: 'communications', label: 'ارتباطات' },{ id: 'goals', label: 'اهداف و موفقیت‌ها' },{ id: 'quick_add', label: 'افزودن سریع' },
+    ...selectedModuleIds.flatMap(id => [
+      { id: 'summary:' + id, label: getModuleTitle(id) + ' · کارت خلاصه' },
+      { id: 'recent:' + id, label: getModuleTitle(id) + ' · رکوردهای اخیر' },
+    ]),
+  ].filter(({ id }) => {
+    if (!dashboardReady || widgetPermissions.__all === false) return false;
+    const group = id.startsWith('summary:') ? 'summary_cards' : id.startsWith('recent:') ? 'recent_lists' : id;
+    if (widgetPermissions[group] === false || widgetPermissions[id] === false) return false;
+    if (id === 'stories') return Boolean(storiesPermissions?.canView);
+    if (id === 'ai' || id === 'agents_desk' || id === 'communications') return communicationsAccess.canUseWorkspace;
+    if (id === 'quick_add') return quickActions.length > 0;
+    return true;
+  });
   const showReportsWidget = canShowWidget('reports_slider');
   const showOurProcessesWidget = canShowWidget('our_processes');
   const showActivityCalendarWidget = canShowWidget('activity_calendar');
@@ -1423,15 +1439,26 @@ const Dashboard: React.FC = () => {
             <Popover trigger="click" placement="bottomRight" content={<div className="dashboard-occasion-popover"><OccasionsWidget /></div>}><Button type="text" size="small">مناسبت‌ها <DownOutlined /></Button></Popover>
           </div>
         </div>
-        <Button className="dashboard-personalize-trigger" icon={<SettingOutlined />} onClick={() => setPersonalizeOpen(true)} aria-label="شخصی‌سازی داشبورد"><span className="dashboard-personalize-label">شخصی‌سازی</span></Button>
+        <div className="dashboard-layout-actions">
+          {editingLayout && <Button icon={<PlusOutlined />} onClick={() => setPersonalizeOpen(true)}>افزودن ویجت</Button>}
+          <Tooltip title={editingLayout ? 'پایان شخصی‌سازی' : 'شخصی‌سازی داشبورد'}>
+            <Button className="dashboard-personalize-trigger" type={editingLayout ? 'primary' : 'default'}
+              icon={editingLayout ? <CheckOutlined /> : <AppstoreOutlined />}
+              disabled={!layoutScope || !dashboardReady || widgetPermissions.__all === false}
+              aria-label={editingLayout ? 'پایان شخصی‌سازی' : 'شخصی‌سازی داشبورد'} aria-pressed={editingLayout}
+              onClick={() => { setPersonalizeOpen(false); setEditingScope(editingLayout ? null : layoutScope); }} />
+          </Tooltip>
+        </div>
       </header>
       {dashboardError && <Alert type="error" showIcon message={dashboardError} action={<Button onClick={refreshDashboard}>تلاش دوباره</Button>} />}
-      <div className="dashboard-overview-row">
-        {orgId && currentUserId && storiesPermissions?.canView && <DashboardWidgetFrame widgetId="stories" title="استوری‌ها" defaultOrder={0} className="dashboard-stories-frame" onRefresh={() => setStoryRefreshKey(value => value + 1)}>
+      {loading && !dashboardReady && <div className="dashboard-initial-loading" role="status" aria-label="در حال آماده‌سازی داشبورد" aria-busy="true"><div className="dashboard-summary-grid">{Array.from({ length: 6 }, (_, index) => <Card key={index}><Skeleton active paragraph={{ rows: 2 }} /></Card>)}</div><div className="dashboard-widget-grid"><DashboardWidgetLoading widgetId="reports_slider" title="گزارش‌ها" defaultOrder={3} /><DashboardWidgetLoading widgetId="my_tasks" title="کارهای من" defaultOrder={4} /></div></div>}
+      {!loading && dashboardReady && widgetPermissions.__all === false && !dashboardError && <Card><Empty description="دسترسی مشاهدهٔ داشبورد برای این نقش غیرفعال است." /></Card>}
+      <DashboardLayout key={layoutScope} editing={editingLayout}>
+        {orgId && currentUserId && storiesPermissions?.canView && widgetPermissions.stories !== false && <DashboardWidgetFrame key="stories" widgetId="stories" title="استوری‌ها" defaultOrder={0} className="dashboard-stories-frame" onRefresh={() => setStoryRefreshKey(value => value + 1)}>
           <StoryBar key={storyRefreshKey} orgId={orgId} currentUserId={currentUserId} canPublish={storiesPermissions.canPublish}
             onAddStory={() => { setEditingStory(null); setStoryEditorOpen(true); }} onOpenStory={handleOpenStory} />
         </DashboardWidgetFrame>}
-        {dashboardReady && communicationsAccess.canUseWorkspace && <DashboardWidgetFrame widgetId="ai" title="دستیار هوشمند سازمان" defaultOrder={1} className="dashboard-ai-frame" settings={aiWidgetSettings}>
+        {dashboardReady && communicationsAccess.canUseWorkspace && canShowWidget('ai') && <DashboardWidgetFrame key="ai" widgetId="ai" title="دستیار هوشمند سازمان" defaultOrder={1} className="dashboard-ai-frame" settings={aiWidgetSettings}>
           <Card className="dashboard-content-card">
             <AiMessageComposer reserveMenuSpace value={dashboardAiQuestion} onChange={setDashboardAiQuestion} onSubmit={handleSubmitDashboardAiQuestion}
               canSubmit={!dashboardAiSendDisabled} busy={dashboardVoiceSending || dashboardFileSending} maxRows={4}
@@ -1482,9 +1509,8 @@ const Dashboard: React.FC = () => {
                     />} />
           </Card>
         </DashboardWidgetFrame>}
-      </div>
       {dashboardReady && communicationsAccess.canUseWorkspace && canShowWidget('agents_desk') ? (
-        <DashboardWidgetFrame widgetId="agents_desk" title="میز کار ایجنت‌ها" defaultOrder={1.5} className="dashboard-agents-desk-frame mb-5">
+        <DashboardWidgetFrame key="agents_desk" widgetId="agents_desk" title="میز کار ایجنت‌ها" defaultOrder={1.5} className="dashboard-agents-desk-frame">
           <div className="space-y-3">
             <DashboardAgentDeskStrip
               selectedAgents={dashboardSelectedAgents}
@@ -1518,18 +1544,15 @@ const Dashboard: React.FC = () => {
           </div>
         </DashboardWidgetFrame>
       ) : null}
-      {loading && !dashboardReady && <div className="dashboard-initial-loading" role="status" aria-label="در حال آماده‌سازی داشبورد" aria-busy="true"><div className="dashboard-summary-grid">{Array.from({ length: 6 }, (_, index) => <Card key={index}><Skeleton active paragraph={{ rows: 2 }} /></Card>)}</div><div className="dashboard-widget-grid"><DashboardWidgetLoading widgetId="reports_slider" title="گزارش‌ها" defaultOrder={3} /><DashboardWidgetLoading widgetId="my_tasks" title="کارهای من" defaultOrder={4} /></div></div>}
-      {!loading && dashboardReady && widgetPermissions.__all === false && !dashboardError && <Card><Empty description="دسترسی مشاهدهٔ داشبورد برای این نقش غیرفعال است." /></Card>}
-      {canShowWidget('summary_cards') && selectedModuleIds.length > 0 && <div className="dashboard-summary-grid">{selectedModuleIds.map(moduleId => { const card = cards.find(item => item.moduleId === moduleId);if (!card && !loading) return null;return <DashboardWidgetFrame key={moduleId} widgetId={`summary:${moduleId}`} title={card?.title || getModuleTitle(moduleId)} settings={moduleSelection}>
+      {canShowWidget('summary_cards') && selectedModuleIds.length > 0 && selectedModuleIds.map(moduleId => { const card = cards.find(item => item.moduleId === moduleId);if (!card && !loading) return null;return <DashboardWidgetFrame key={'summary:' + moduleId} widgetId={`summary:${moduleId}`} title={card?.title || getModuleTitle(moduleId)} settings={moduleSelection}>
         <Card className="dashboard-summary-card" onClick={() => navigate(`/${moduleId}`)} tabIndex={0} role="link" onKeyDown={event => { if (event.key === 'Enter') navigate(`/${moduleId}`); }}>
           <div className="dashboard-stat-label">{getModuleIcon(moduleId)}<span>{getModuleTitle(moduleId)}</span></div>
           {card ? <><Statistic title={card.title} value={card.value} formatter={value => <AutoFitText>{card.kind === 'price' ? formatPersianPrice(Number(value || 0), true) : toPersianNumber(Number(value || 0))}</AutoFitText>} suffix={card.kind === 'price' ? currency.label : undefined} />
           <p className="dashboard-stat-description">{card.subtitle}</p></> : <Skeleton active paragraph={{ rows: 2 }} title={false} />}
         </Card>
-      </DashboardWidgetFrame>; })}</div>}
-      <div className="dashboard-widget-grid">
+      </DashboardWidgetFrame>; })}
         {showReportsWidget && (
-          <React.Suspense fallback={<DashboardWidgetLoading widgetId="reports_slider" title="گزارش‌ها" defaultOrder={3} />}>
+          <React.Suspense key="reports_slider" fallback={<DashboardWidgetLoading widgetId="reports_slider" title="گزارش‌ها" defaultOrder={3} />}>
             <ReportsSliderWidget
               key={`reports:${orgId}:${currentUserId}`}
               selectedModuleIds={selectedModuleIds}
@@ -1540,28 +1563,28 @@ const Dashboard: React.FC = () => {
             />
           </React.Suspense>
         )}
-        {canShowWidget('my_tasks') && orgId && <MyTasksWidget key={`tasks:${orgId}:${currentUserId}`} orgId={orgId} />}
-        {canShowWidget('communications') && orgId && <CommunicationsWidget key={orgId} orgId={orgId} permissions={dashboardPermissions} />}
-        {canShowWidget('goals') && <DashboardWidgetFrame widgetId="goals" title="اهداف و موفقیت‌ها" defaultOrder={6} className="dashboard-goals-frame">
+        {canShowWidget('my_tasks') && orgId && <MyTasksWidget key="my_tasks" orgId={orgId} />}
+        {canShowWidget('communications') && orgId && <CommunicationsWidget key="communications" orgId={orgId} permissions={dashboardPermissions} />}
+        {canShowWidget('goals') && <DashboardWidgetFrame key="goals" widgetId="goals" title="اهداف و موفقیت‌ها" defaultOrder={6} className="dashboard-goals-frame">
           <React.Suspense fallback={<Skeleton active paragraph={{ rows: 5 }} />}><GoalProgressSlider key={refreshRevision} placement="dashboard" hideWhenEmpty={isMobile} /></React.Suspense>
         </DashboardWidgetFrame>}
-        {showActivityCalendarWidget && <DeferredDashboardWidget widgetId="activity_calendar" title="تقویم فعالیت‌ها" defaultOrder={7} className="dashboard-wide-widget"><TaskCalendarWidget key={`calendar:${orgId}:${currentUserId}`} /></DeferredDashboardWidget>}
-        {showOurProcessesWidget && <DeferredDashboardWidget widgetId="our_processes" title="فرآیندهای ما" defaultOrder={8}><OurProcessesWidget key={`${orgId}:${currentUserId}`} /></DeferredDashboardWidget>}
-        {canShowWidget('quick_add') && quickActions.length > 0 && <DashboardWidgetFrame widgetId="quick_add" title="افزودن سریع" defaultOrder={8.5} settings={moduleSelection}>
+        {showActivityCalendarWidget && <DeferredDashboardWidget key="activity_calendar" widgetId="activity_calendar" title="تقویم فعالیت‌ها" defaultOrder={7} className="dashboard-wide-widget"><TaskCalendarWidget key={`calendar:${orgId}:${currentUserId}`} /></DeferredDashboardWidget>}
+        {showOurProcessesWidget && <DeferredDashboardWidget key="our_processes" widgetId="our_processes" title="فرآیندهای ما" defaultOrder={8}><OurProcessesWidget key={`${orgId}:${currentUserId}`} /></DeferredDashboardWidget>}
+        {canShowWidget('quick_add') && quickActions.length > 0 && <DashboardWidgetFrame key="quick_add" widgetId="quick_add" title="افزودن سریع" defaultOrder={8.5} settings={moduleSelection}>
           <Card title="افزودن سریع" className="dashboard-content-card"><div className="dashboard-quick-actions">{quickActions.map(action => <button type="button" className="dashboard-quick-action" key={action.moduleId} onClick={() => navigate(`/${action.moduleId}/create`)}><span className="dashboard-quick-icon">{getModuleIcon(action.moduleId)}</span><span className="dashboard-quick-copy"><strong>{action.title}</strong><small>{action.description}</small></span><PlusOutlined className="dashboard-quick-plus" /></button>)}</div></Card>
         </DashboardWidgetFrame>}
-        {canShowWidget('recent_lists') && recentSections.map(section => <DashboardWidgetFrame key={section.moduleId} widgetId={`recent:${section.moduleId}`} title={section.title} defaultOrder={10} settings={moduleSelection}>
+        {canShowWidget('recent_lists') && recentSections.map(section => <DashboardWidgetFrame key={'recent:' + section.moduleId} widgetId={`recent:${section.moduleId}`} title={section.title} defaultOrder={10} settings={moduleSelection}>
           <Card className="dashboard-content-card" title={<div className="flex items-center gap-2">{getModuleIcon(section.moduleId)}<span>{section.title}</span></div>}>
             <div className="mb-3 flex flex-wrap items-center gap-2"><Button icon={<PlusOutlined />} onClick={() => navigate(`/${section.moduleId}/create`)}>ایجاد</Button><Button type="link" onClick={() => navigate(`/${section.moduleId}`)}>مشاهدهٔ همه</Button></div>
             <Table dataSource={section.rows} columns={section.columns} size="small" pagination={false} locale={{ emptyText: 'رکوردی ثبت نشده است' }} rowKey="id" scroll={{ x: true }}
               onRow={record => ({ onClick: () => navigate(`/${section.moduleId}/${record.id}`), className: 'cursor-pointer' })} />
           </Card>
         </DashboardWidgetFrame>)}
-      </div>
-      <Modal title="داشبورد من" open={personalizeOpen} onCancel={() => setPersonalizeOpen(false)} footer={<Button onClick={() => setPersonalizeOpen(false)}>بستن</Button>} destroyOnClose>
+      </DashboardLayout>
+      <Modal title="ویجت‌های داشبورد" open={personalizeOpen && editingLayout} onCancel={() => setPersonalizeOpen(false)} footer={<Button onClick={() => setPersonalizeOpen(false)}>بستن</Button>} destroyOnClose>
         {moduleSelection}
         <div className="mt-5"><h3 className="mb-3 font-bold">نمایش ویجت‌ها</h3><div className="flex flex-col gap-3">{widgetChoices.map(widget => <Checkbox key={widget.id} checked={!preferences.hiddenWidgets.includes(widget.id)} onChange={event => updateDashboardPreferences(orgId, currentUserId, { hiddenWidgets: event.target.checked ? preferences.hiddenWidgets.filter(id => id !== widget.id) : [...new Set([...preferences.hiddenWidgets, widget.id])] })}>{widget.label}</Checkbox>)}</div></div>
-        <Button className="mt-5" onClick={() => updateDashboardPreferences(orgId, currentUserId, { hiddenWidgets: [], widgetOrder: [] })}>بازگرداندن نمایش و ترتیب پیش‌فرض</Button>
+        <Button className="mt-5" onClick={() => updateDashboardPreferences(orgId, currentUserId, { hiddenWidgets: [], widgetOrder: [], widgetWidths: {} })}>بازگرداندن چیدمان پیش‌فرض</Button>
       </Modal>
     </div>
       {/* ─── Story Modals ─── */}

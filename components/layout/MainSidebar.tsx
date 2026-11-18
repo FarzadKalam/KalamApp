@@ -65,20 +65,18 @@ function MainSidebar({ items, railItems, selectedKey, ancestorKeys, collapsed, o
   const requestedItem = (items || []).find(item => item && 'key' in item && String(item.key) === requestedGroup);
   const panelItems = requestedItem && 'children' in requestedItem ? requestedItem.children : items;
   const panelTitle = requestedItem && 'label' in requestedItem ? sidebarLabelText(requestedItem.label) : 'فهرست ماژول‌ها';
-  const isMainSidebarOpen = !collapsed && requestedGroup === null;
+  const isSidebarOpen = !collapsed;
   return <div ref={sidebarRef} className="app-sidebar-navigation" style={{ '--workspace-sidebar-panel-width': `${SIDEBAR_LAYOUT.panelWidth}px`, '--workspace-sidebar-rail-width': `${SIDEBAR_LAYOUT.railWidth}px` } as React.CSSProperties}>
-    {!isMobile && <aside className="app-main-rail" aria-label="ناوبری اصلی">
-      <div className="app-rail-brand" title={brandShortName}>{logo}</div>
-      <Tooltip title={isMainSidebarOpen ? 'بستن منو' : 'باز کردن فهرست ماژول‌ها'} placement="left">
+    {!isMobile && (<Tooltip title={isSidebarOpen ? 'بستن منو' : 'باز کردن فهرست ماژول‌ها'} placement="left">
         <button
           type="button"
-          aria-label={isMainSidebarOpen ? 'بستن منو' : 'باز کردن فهرست ماژول‌ها'}
-          aria-expanded={isMainSidebarOpen}
+          aria-label={isSidebarOpen ? 'بستن منو' : 'باز کردن فهرست ماژول‌ها'}
+          aria-expanded={isSidebarOpen}
           aria-controls="workspace-sidebar-panel"
-          className={`app-rail-edge-toggle ${isMainSidebarOpen ? 'is-open' : ''}`}
+          className={`app-rail-edge-toggle ${isSidebarOpen ? 'is-open' : ''}`}
           onClick={() => {
-            if (isMainSidebarOpen) {
-              onCollapsedChange(true);
+            if (isSidebarOpen) {
+              close();
             } else {
               setRequestedGroup(null);
               onCollapsedChange(false);
@@ -87,7 +85,9 @@ function MainSidebar({ items, railItems, selectedKey, ancestorKeys, collapsed, o
         >
           <LeftOutlined className="app-rail-toggle-icon" />
         </button>
-      </Tooltip>
+      </Tooltip>)}
+    {!isMobile && <aside className="app-main-rail" aria-label="ناوبری اصلی">
+      <div className="app-rail-brand" title={brandShortName}>{logo}</div>
       <nav className="app-rail-links">{(railItems || []).map((item) => {
         if (!item || !('key' in item)) return null;
         const key = String(item.key || ''), label = sidebarLabelText('label' in item ? item.label : '');
