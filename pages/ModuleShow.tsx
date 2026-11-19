@@ -1,6 +1,8 @@
+import { persistStagedMainRecordFiles, waitForMainFileUploads } from '../utils/mainRecordFiles';
+import { canQuickEditModuleField, getQuickEditAssigneeField } from '../utils/moduleListQuickEdit';
 import { isDuplicateHrEmployeeField } from '../utils/hrEmployeeFields';
 import { iranMobileLocal } from '../supabase/functions/_shared/phone-number';
-import { canFieldAction, canWriteFieldValue, canModuleAction } from '../utils/fieldAccess';
+import { canFieldAction, canWriteFieldValue, canModuleAction, isEmptyFieldValue } from '../utils/fieldAccess';
 import type { ModulePermissionConfig } from '../utils/permissions';
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
@@ -67,11 +69,11 @@ import { joinStoragePath, sanitizeStorageFileName } from '../utils/storagePath';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { getSafeOptionFallback } from '../utils/optionHelpers';
 import { getAssigneeLabel } from '../utils/assigneeLabel';
-import { getResolvedAssigneeId, parseAssigneeValue } from '../utils/assigneeValue';
+import { buildResolvedAssigneeCombo, getResolvedAssigneeId, parseAssigneeValue } from '../utils/assigneeValue';
 import { getFieldLabelFa } from '../utils/fieldLabel';
-import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchFormulaOptions } from '../utils/referenceData';
+import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchFormulaOptions, fetchRecordTagsMap } from '../utils/referenceData';
 import { getCachedAuthUser } from '../utils/sessionCache';
-import { shouldHideManagedAssigneeField, supportsModuleAssignee, supportsModuleRoleAssignee } from '../utils/assigneeSupport';
+import { shouldHideManagedAssigneeField, supportsModuleAssignee, supportsModuleAssigneeType, supportsModuleRoleAssignee } from '../utils/assigneeSupport';
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import { syncRecordTags } from '../utils/recordTags';
 import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
@@ -462,9 +464,19 @@ const _msIsMissingColumnError = (error: any, columnName: string) => {
   return !!text && !!needle && text.includes(needle) && (text.includes('column') || text.includes('schema cache'));
 };
 
-const ModuleShow: React.FC = () => {
+type QuickEditRequest = {
+  moduleId: string; orgId: string; recordId: string; fieldKey: string; label: string;
+  onCancel: () => void; onSaved: () => void;
+};
+
+const ModuleShow: React.FC<{ quickEdit?: QuickEditRequest }> = ({ quickEdit }) => {
   const saasReadonly = useSaasReadonly();
-  const { moduleId = 'products', id } = useParams();
+  const route = useParams();
+  const moduleId = quickEdit?.moduleId ?? route.moduleId ?? 'products';
+  const id = quickEdit?.recordId ?? route.id;
+  const isQuickEdit = !!quickEdit;
+  const quickEditOrgId = quickEdit?.orgId;
+  const quickEditFieldKey = quickEdit?.fieldKey;
   const navigate = useNavigate();
   const location = useLocation();
   const { message: msg, modal } = App.useApp();
@@ -472,21 +484,22 @@ const ModuleShow: React.FC = () => {
   const baseModuleConfig = MODULES[moduleId];
   const { moduleConfig: planBaseModuleConfig } = useContentCalendarPlanModule(baseModuleConfig);
   const focusBlockId = useMemo(
-    () => String((location.state as any)?.focusBlockId || '').trim() || null,
-    [location.state]
+    () => String((!isQuickEdit && (location.state as any)?.focusBlockId) || '').trim() || null,
+    [isQuickEdit, location.state]
   );
   const focusRowKey = useMemo(
-    () => String((location.state as any)?.focusRowKey || '').trim() || null,
-    [location.state]
+    () => String((!isQuickEdit && (location.state as any)?.focusRowKey) || '').trim() || null,
+    [isQuickEdit, location.state]
   );
   const openProcessLinksRequest = useMemo(() => {
+    if (isQuickEdit) return null;
     const request = (location.state as any)?.openProcessLinks;
     if (!request || typeof request !== 'object') return null;
     return {
       groupId: String(request?.groupId || '').trim() || null,
       templateId: String(request?.templateId || '').trim() || null,
     };
-  }, [location.state]);
+  }, [isQuickEdit, location.state]);
   const supportsAssignee = supportsModuleAssignee(baseModuleConfig);
   const supportsRoleAssignee = supportsModuleRoleAssignee(baseModuleConfig);
 
@@ -679,6 +692,9 @@ const ModuleShow: React.FC = () => {
   const [isBillboardStatusDecisionOpen, setIsBillboardStatusDecisionOpen] = useState(false);
   const [editingFields, setEditingFields] = useState<Record<string, boolean>>({});
   const [tempValues, setTempValues] = useState<Record<string, any>>({});
+  const quickFieldSubmitting = useRef(false);
+  const [quickAccessReady, setQuickAccessReady] = useState(false);
+  const [quickTagState, setQuickTagState] = useState<{ tags: any[]; loaded: boolean }>({ tags: [], loaded: false });
   const [savingField, setSavingField] = useState<string | null>(null);
   const [, setUploadingImage] = useState(false);
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, any[]>>({});
@@ -692,6 +708,14 @@ const ModuleShow: React.FC = () => {
   const [fieldPermissions, setFieldPermissions] = useState<Record<string, boolean>>({});
   const [modulePermissions, setModulePermissions] = useState<ModulePermissionConfig>({});
   const [currentPermissionMap, setCurrentPermissionMap] = useState<PermissionMap | null>(null);
+  useEffect(() => {
+    if (!quickEditOrgId || !id || moduleConfig?.fields.find(field => field.key === quickEditFieldKey)?.type !== FieldType.TAGS) return;
+    let active = true;
+    void fetchRecordTagsMap(supabase, moduleId, [id], { force: true }).then(tags => {
+      if (active) setQuickTagState({ tags: tags[id] || [], loaded: true });
+    }).catch(() => { if (active) setQuickTagState({ tags: [], loaded: false }); });
+    return () => { active = false; };
+  }, [id, moduleConfig?.fields, moduleId, quickEditFieldKey, quickEditOrgId]);
   const [currentSoftwareRole, setCurrentSoftwareRole] = useState<string | null>(null);
   const [isCreateOrderOpen, setIsCreateOrderOpen] = useState(false);
   const [autoSyncedBomId, setAutoSyncedBomId] = useState<string | null>(null);
@@ -1466,7 +1490,14 @@ const ModuleShow: React.FC = () => {
   const mergeUsersById = _msMergeUsersById;
 
   const fetchBaseInfo = useCallback(async () => {
-      if (moduleShowBaseInfoCache) {
+      if (quickEditOrgId) {
+      if (currentOrgId !== quickEditOrgId || quickEditFieldKey !== 'assignee_id') return;
+      const directory = await fetchAssigneeDirectory(supabase);
+      setAllUsers(directory.users);
+      setAllRoles(directory.roles);
+      return;
+    }
+    if (moduleShowBaseInfoCache) {
         setAllUsers((prev) => {
           const mergedUsers = mergeUsersById([...prev, ...moduleShowBaseInfoCache!.users]);
           writeModuleOptionSnapshot(moduleId, { allUsers: mergedUsers });
@@ -1498,7 +1529,7 @@ const ModuleShow: React.FC = () => {
       });
       setAllRoles(directory.roles);
       writeModuleOptionSnapshot(moduleId, { allRoles: directory.roles });
-  }, [moduleId]);
+  }, [currentOrgId, moduleId, quickEditFieldKey, quickEditOrgId]);
 
   const ensureUserLabels = useCallback(async (userIds: Array<string | null | undefined>) => {
     const normalizedIds = Array.from(
@@ -1545,13 +1576,14 @@ const ModuleShow: React.FC = () => {
         const recordProjection = buildModuleRecordProjection(moduleConfig);
         const recordResult = await runSelectWithCompatibleColumns<any | null>({
           cacheKey: `module-show:${moduleId}`,
-          columns: recordProjection.initialColumns,
+          columns: quickEditFieldKey && recordProjection.deferredProcessDraftColumns.includes(quickEditFieldKey)
+            ? [...recordProjection.initialColumns, quickEditFieldKey] : recordProjection.initialColumns,
           fallbackToWildcard: true,
-          execute: (selectExpr) => supabase
-            .from(moduleTable)
-            .select(selectExpr)
-            .eq('id', id)
-            .maybeSingle(),
+          execute: (selectExpr) => {
+            let query = supabase.from(moduleTable).select(selectExpr).eq('id', id);
+            if (quickEditOrgId && !isSaasAdminModuleId(moduleId)) query = query.eq('org_id', quickEditOrgId);
+            return query.maybeSingle();
+          },
         });
         const record = recordResult.data;
         const error = recordResult.error;
@@ -1559,7 +1591,7 @@ const ModuleShow: React.FC = () => {
         if (error && String(error.code) !== 'PGRST116') throw error;
         if (activeRecordRequestRef.current !== requestId) return;
         if (!record) {
-          if (moduleId === 'products') {
+          if (!isQuickEdit && moduleId === 'products') {
             const { data: billboardRecord, error: billboardError } = await supabase
               .from('billboards')
               .select('id')
@@ -1706,6 +1738,7 @@ const ModuleShow: React.FC = () => {
           const { data: tagsData } = await supabase
             .from('record_tags')
             .select('tags(id, title, color)')
+            .eq('module_id', moduleId)
             .eq('record_id', id);
           if (activeRecordRequestRef.current !== requestId) return;
           const tags = tagsData?.map((item: any) => item.tags).filter(Boolean) || [];
@@ -1744,7 +1777,7 @@ const ModuleShow: React.FC = () => {
     recordFetchKeyRef.current = fetchKey;
     recordFetchPromiseRef.current = run;
     return run;
-  }, [id, moduleConfig, moduleId, msg, navigate]);
+  }, [id, isQuickEdit, moduleConfig, moduleId, msg, navigate, quickEditFieldKey, quickEditOrgId]);
 
   useEffect(() => {
     if (!id) return;
@@ -1759,12 +1792,13 @@ const ModuleShow: React.FC = () => {
   }, [fetchRecord]);
 
   useEffect(() => {
+    if (isQuickEdit) return;
     void ensureUserLabels([data?.created_by, data?.updated_by, data?.assignee_type === 'user' ? data?.assignee_id : null]);
-  }, [data?.created_by, data?.updated_by, data?.assignee_id, data?.assignee_type, ensureUserLabels]);
+  }, [data?.created_by, data?.updated_by, data?.assignee_id, data?.assignee_type, ensureUserLabels, isQuickEdit]);
 
   useEffect(() => {
-    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
-  }, [id, moduleId]);
+    if (!isQuickEdit) window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, [id, isQuickEdit, moduleId]);
 
   useEffect(() => {
     if (!data) {
@@ -2070,6 +2104,11 @@ const ModuleShow: React.FC = () => {
   const fetchFieldPermissions = useCallback(async () => {
     try {
       const context = await fetchCurrentUserRecordAccessContext(supabase);
+      if (isQuickEdit && (!context.userId || !context.orgId || context.orgId !== quickEditOrgId)) {
+        setQuickAccessReady(true);
+        return;
+      }
+      setQuickAccessReady(true);
       setCurrentUserId(context.userId);
       setCurrentUserRoleId(context.roleId);
       setCurrentOrgId(context.orgId);
@@ -2127,11 +2166,12 @@ const ModuleShow: React.FC = () => {
     } catch (err) {
       if (String((err as any)?.name || '') === 'AbortError') return;
       console.warn('Could not fetch field permissions:', err);
+      setQuickAccessReady(true);
       setCurrentPermissionMap(null);
       setCurrentSoftwareRole(null);
       setCanIssueAccountingEntry(true);
     }
-  }, [moduleId]);
+  }, [isQuickEdit, moduleId, quickEditOrgId]);
 
   useEffect(() => {
     fetchFieldPermissions();
@@ -2592,7 +2632,7 @@ const ModuleShow: React.FC = () => {
   }, [moduleId, data, processDraftFieldKey, autoSyncedProcessTemplateId, processTemplateFieldOptions, processRuntimeSnapshot]);
 
   useEffect(() => {
-    if (!moduleConfig) return;
+    if (isQuickEdit || !moduleConfig) return;
     const recordName = getRecordTitle(data, moduleConfig || undefined, { fallback: '' });
     window.dispatchEvent(new CustomEvent('erp:breadcrumb', {
       detail: {
@@ -2604,15 +2644,15 @@ const ModuleShow: React.FC = () => {
     return () => {
       window.dispatchEvent(new CustomEvent('erp:breadcrumb', { detail: null }));
     };
-  }, [moduleConfig, moduleId, data, id]);
+  }, [isQuickEdit, moduleConfig, moduleId, data, id]);
 
   useEffect(() => {
-    if (!moduleConfig) return;
+    if (isQuickEdit || !moduleConfig) return;
     const moduleTitle = moduleConfig.titles?.fa || moduleId;
     const recordName = getRecordTitle(data, moduleConfig || undefined, { fallback: '' });
     const brandTitle = document.documentElement.getAttribute('data-brand-title') || 'هلدینگ رسانه ای کلام تازه.';
     document.title = recordName ? `${recordName} | ${moduleTitle} | ${brandTitle}` : `${moduleTitle} | ${brandTitle}`;
-  }, [moduleConfig, moduleId, data]);
+  }, [isQuickEdit, moduleConfig, moduleId, data]);
 
   const markCurrentModuleListChanged = useCallback((patch?: Record<string, any> | null) => {
     markModuleListChanged({
@@ -2707,9 +2747,8 @@ const ModuleShow: React.FC = () => {
     }, [assigneeLabel, data?.assignee_id, data?.assignee_type, data, id, markCurrentModuleListChanged, moduleConfig, moduleConfig?.table, moduleId, msg, supportsAssignee, supportsRoleAssignee]);
 
   // تابع برای کپی اقلام BOM به جداول مواد اولیه (با تایید کاربر)
-    const handleRelatedBomChange = useCallback(async (bomId: string) => {
-      if (!bomId) return;
-      if (bomCopyPromptRef.current === bomId) return;
+    const handleRelatedBomChange = useCallback(async (bomId: string, onSettled?: () => void) => {
+      if (!bomId || bomCopyPromptRef.current === bomId) { onSettled?.(); return; }
       bomCopyPromptRef.current = bomId;
 
       modal.confirm({
@@ -2717,6 +2756,7 @@ const ModuleShow: React.FC = () => {
         content: 'جداول سفارش تولید ریست شوند و مقادیر از روی BOM کپی شوند؟',
         okText: 'بله، کپی کن',
         cancelText: 'خیر',
+        afterClose: onSettled,
         onCancel: () => {
           bomCopyPromptRef.current = null;
         },
@@ -2745,6 +2785,9 @@ const ModuleShow: React.FC = () => {
               updateData['production_stages_draft'] = bom.production_stages_draft;
             }
 
+            if (onSettled && Object.entries(updateData).some(([key, value]) => !canWriteFieldValue(modulePermissions, key, value, false))) {
+              throw new Error('اجازهٔ تغییر همهٔ فیلدهای وابسته به شناسنامهٔ تولید را ندارید.');
+            }
             const { error: updateError } = await supabase
               .from(moduleTable)
               .update(updateData)
@@ -2766,11 +2809,10 @@ const ModuleShow: React.FC = () => {
           }
         }
       });
-    }, [id, moduleId, msg, modal]);
+    }, [id, moduleId, modulePermissions, moduleTable, msg, modal]);
 
-  const handleProcessTemplateChange = useCallback(async (templateId: string) => {
-    if (!templateId || !processDraftFieldKey || !id) return;
-    if (processTemplatePromptRef.current === templateId) return;
+  const handleProcessTemplateChange = useCallback(async (templateId: string, onSettled?: () => void) => {
+    if (!templateId || !processDraftFieldKey || !id || processTemplatePromptRef.current === templateId) { onSettled?.(); return; }
     processTemplatePromptRef.current = templateId;
 
     modal.confirm({
@@ -2778,6 +2820,7 @@ const ModuleShow: React.FC = () => {
       content: 'مراحل پیش‌نویس فرآیند با الگوی انتخاب‌شده جایگزین شود؟',
       okText: 'بله، جایگزین کن',
       cancelText: 'خیر',
+      afterClose: onSettled,
       onCancel: () => {
         processTemplatePromptRef.current = null;
       },
@@ -2813,6 +2856,9 @@ const ModuleShow: React.FC = () => {
             process_template_id: templateId,
             [processDraftFieldKey]: mappedDraft,
           };
+          if (onSettled && !canWriteFieldValue(modulePermissions, processDraftFieldKey, mappedDraft, false)) {
+            throw new Error('اجازهٔ تغییر مراحل فرآیند را ندارید.');
+          }
           const { error: updateError } = await supabase.from(moduleTable).update(patch).eq('id', id);
           if (updateError) throw updateError;
           await syncProcessDraftToLinkedRecords(supabase, mappedDraft, processLinkMap);
@@ -2839,7 +2885,7 @@ const ModuleShow: React.FC = () => {
         }
       },
     });
-  }, [data, id, moduleId, msg, modal, processDraftFieldKey, processTemplateFieldOptions]);
+  }, [data, id, moduleId, modulePermissions, moduleTable, msg, modal, processDraftFieldKey, processTemplateFieldOptions]);
 
   const handleDelete = () => {
     if (isRecycleBinEnabledModule(moduleId)) {
@@ -4611,29 +4657,44 @@ const ModuleShow: React.FC = () => {
   }, [msg, navigate]);
 
   const saveEdit = async (key: string) => {
+    if (quickEdit && (!id || !currentUserId || !quickAccessReady || currentOrgId !== quickEdit.orgId
+      || String(data?.id) !== id || accessDenied || !canAccessAssignedRecord(data, currentUserId, currentUserRoleId,
+        modulePermissions.record_scope ?? 'all', { currentOrgId, allowedRoleIds, allowedUserIds }))) return;
     const editScope = relationPopulateScopeRef.current;
     if (!canEditModule) return;
-    if (!canWriteFieldValue(modulePermissions, key, tempValues[key], false)) {
+    const fieldDef = moduleConfig?.fields.find((field) => field.key === key)
+      ?? (quickEdit && moduleConfig && key === 'assignee_id' ? getQuickEditAssigneeField(moduleConfig, assigneeLabel) : undefined);
+    if (quickEdit && (!fieldDef || !moduleConfig || !canQuickEditModuleField(moduleConfig, fieldDef, modulePermissions)
+      || !conditionalFieldRuntime.isFieldVisible(fieldDef))) return;
+    if (quickEdit && !Object.prototype.hasOwnProperty.call(tempValues, key)) { quickEdit.onCancel(); return; }
+    const submittedValue = tempValues[key];
+    if (quickEdit && fieldDef && conditionalFieldRuntime.getFieldRequired(fieldDef) && isEmptyFieldValue(submittedValue)) {
+      msg.error('وارد کردن مقدار این فیلد لازم است.');
+      return;
+    }
+    if (!canWriteFieldValue(modulePermissions, key, submittedValue, false)) {
       msg.error('دسترسی تغییر یا پاک‌کردن مقدار این فیلد را ندارید.');
       return;
     }
     // A field save can dispatch asynchronous automation. Guard the entry point so
     // repeated taps on the confirmation icon never submit the same edit twice.
-    if (savingField === key) return;
+    if (savingField === key || (quickEdit && quickFieldSubmitting.current)) return;
+    if (quickEdit) quickFieldSubmitting.current = true;
     if (moduleId === 'production_orders' && key === 'status') {
       setSavingField(key);
       try {
         const newStatus = tempValues[key];
-        await handleProductionStatusChange(String(newStatus));
+        if (quickEdit && data?.status === newStatus) quickEdit.onCancel();
+        else await handleProductionStatusChange(String(newStatus));
         setTimeout(() => setEditingFields(prev => ({ ...prev, [key]: false })), 100);
       } finally {
+        quickFieldSubmitting.current = false;
         setSavingField(null);
       }
       return;
     }
     setSavingField(key);
-    let newValue = tempValues[key];
-    const fieldDef = moduleConfig?.fields.find((field) => String(field?.key || '') === String(key));
+    let newValue = submittedValue;
     if (newValue === '' || newValue === undefined) newValue = null;
     if (fieldDef?.type === FieldType.MULTI_RELATION) {
       const normalizedValues = Array.isArray(newValue)
@@ -4642,6 +4703,25 @@ const ModuleShow: React.FC = () => {
       newValue = normalizedValues.length > 0 ? normalizedValues : null;
     }
     try {
+      if (quickEdit && fieldDef?.type === FieldType.IMAGE) await waitForMainFileUploads(supabase, moduleId);
+      if (quickEdit && fieldDef?.type === FieldType.TAGS && id) {
+        if (!quickTagState.loaded) throw new Error('برچسب‌های فعلی هنوز در دسترس نیستند.');
+        const nextTags = Array.isArray(newValue) ? newValue : [];
+        const keys = (tags: any[]) => new Set(tags.map(tag => String(tag?.id ?? tag)));
+        const nextIds = keys(nextTags);
+        if ([...keys(quickTagState.tags)].some(tag => !nextIds.has(tag)) && !canFieldAction(modulePermissions, key, 'delete')) {
+          throw new Error('اجازهٔ حذف برچسب را ندارید.');
+        }
+        await syncRecordTags(supabase, moduleId, id, nextTags);
+        markCurrentModuleListChanged();
+        msg.success('برچسب‌ها ذخیره شدند');
+        quickEdit.onSaved();
+        return;
+      }
+      if (quickEdit && key === 'assignee_id' && supportsAssignee) {
+        const nextAssignee = parseAssigneeValue(newValue);
+        if (nextAssignee.assigneeType === 'role' && !supportsRoleAssignee) throw new Error('این ماژول فقط مسئول از نوع کاربر می‌پذیرد.');
+      }
       const taskSourceEditKeys = new Set([
         'related_to_module',
         'source_record_id',
@@ -4684,6 +4764,7 @@ const ModuleShow: React.FC = () => {
           newValue,
         });
         msg.success('ذخیره شد');
+        quickEdit?.onSaved();
         setTimeout(() => setEditingFields(prev => ({ ...prev, [key]: false })), 100);
         return;
       }
@@ -4717,6 +4798,7 @@ const ModuleShow: React.FC = () => {
           newValue: updatedTask.status,
         });
         msg.success('ذخیره شد');
+        quickEdit?.onSaved();
         setTimeout(() => setEditingFields(prev => ({ ...prev, [key]: false })), 100);
         return;
       }
@@ -4726,6 +4808,15 @@ const ModuleShow: React.FC = () => {
       let updatePayload = moduleId === 'tasks' && taskSourceEditKeys.has(key)
         ? buildTaskSourcePatch({ ...(data || {}), ...tempValues, [key]: newValue })
         : { [key]: newValue };
+      if (quickEdit && key === 'assignee_id' && supportsAssignee) {
+        const parsed = parseAssigneeValue(newValue);
+        const role = parsed.assigneeType === 'role';
+        updatePayload = {
+          assignee_id: role ? null : parsed.assigneeId,
+          ...(supportsRoleAssignee ? { assignee_role_id: role ? parsed.assigneeId : null } : {}),
+          ...(supportsModuleAssigneeType(moduleConfig) ? { assignee_type: parsed.assigneeType } : {}),
+        };
+      }
       if (fieldDef?.relationConfig?.populateConfirmation || fieldDef?.multiRelationConfig?.populateConfirmation) {
         const populatePatch = await resolveRelationPopulatePatch({
           supabaseClient: supabase,
@@ -4795,8 +4886,24 @@ const ModuleShow: React.FC = () => {
           });
         }
       }
-      const { error } = await supabase.from(moduleTable).update(updatePayload).eq('id', id);
-      if (error) throw error;
+      const mutation = supabase.from(moduleTable).update(updatePayload).eq('id', id);
+      if (quickEdit) {
+        const deniedField = Object.entries(updatePayload).find(([fieldKey, fieldValue]) => fieldKey !== key
+          && JSON.stringify(data?.[fieldKey] ?? null) !== JSON.stringify(fieldValue ?? null)
+          && !(key === 'assignee_id' && ['assignee_type','assignee_role_id'].includes(fieldKey))
+          && !canWriteFieldValue(modulePermissions, fieldKey, fieldValue, false));
+        if (deniedField) throw new Error('اجازهٔ تغییر یکی از فیلدهای وابسته را ندارید.');
+        const scopedMutation = isSaasAdminModuleId(moduleId) ? mutation : mutation.eq('org_id', quickEdit.orgId);
+        const { data: saved, error } = await scopedMutation.select('id').maybeSingle();
+        if (error) throw error;
+        if (!saved) throw new Error('رکورد پیدا نشد یا اجازهٔ ویرایش آن را ندارید.');
+      } else {
+        const { error } = await mutation;
+        if (error) throw error;
+      }
+      if (quickEdit && key === 'image_url' && id) {
+        await persistStagedMainRecordFiles(supabase, moduleId, moduleTable, String(newValue || ''), id);
+      }
       if ((moduleId === 'invoices' || moduleId === 'purchase_invoices') && key === 'status') {
         const authUser = await getCachedAuthUser(supabase);
         const userId = authUser?.id || null;
@@ -4877,6 +4984,17 @@ const ModuleShow: React.FC = () => {
       }
       notifyOperationalFinancialRefresh(moduleId);
       msg.success('ذخیره شد');
+      if (quickEdit && newValue && data?.[key] !== newValue) {
+        if (key === 'related_bom' || (moduleId === 'production_orders' && key === 'bom_id')) {
+          void handleRelatedBomChange(String(newValue), quickEdit.onSaved);
+          return;
+        }
+        if (key === 'process_template_id' && processDraftFieldKey) {
+          void handleProcessTemplateChange(String(newValue), quickEdit.onSaved);
+          return;
+        }
+      }
+      quickEdit?.onSaved();
       setTimeout(() => setEditingFields(prev => ({ ...prev, [key]: false })), 100);
     } catch (error: any) {
       if (moduleId === 'tasks' && key === 'status') {
@@ -4885,7 +5003,7 @@ const ModuleShow: React.FC = () => {
         setTempValues((prev) => ({ ...(prev || {}), status: fallbackStatus }));
       }
       msg.error(toFaErrorMessage(error, 'عملیات ناموفق بود.'));
-    } finally { setSavingField(null); }
+    } finally { quickFieldSubmitting.current = false; setSavingField(null); }
   };
 
   const areValuesEqual = (a: any, b: any) => {
@@ -5616,6 +5734,7 @@ const ModuleShow: React.FC = () => {
       clearStartDraft();
       msg.success('تولید آغاز شد');
       setProductionModal(null);
+      if (quickEdit) { markCurrentModuleListChanged(); quickEdit.onSaved(); }
     } catch (e: any) {
       msg.error(toFaErrorMessage(e, 'شروع تولید ناموفق بود.'));
     } finally {
@@ -5692,6 +5811,7 @@ const ModuleShow: React.FC = () => {
           production_stopped_at: nowIso,
         });
         setProductionModal(null);
+        if (quickEdit) { markCurrentModuleListChanged(); quickEdit.onSaved(); }
         return;
       }
       setStatusLoading(true);
@@ -5710,6 +5830,7 @@ const ModuleShow: React.FC = () => {
       });
       msg.success('تولید متوقف شد');
       setProductionModal(null);
+      if (quickEdit) { markCurrentModuleListChanged(); quickEdit.onSaved(); }
     } catch (e: any) {
       msg.error(toFaErrorMessage(e, 'توقف تولید ناموفق بود.'));
     } finally {
@@ -5820,6 +5941,7 @@ const ModuleShow: React.FC = () => {
       });
       msg.success('تولید تکمیل شد');
       setProductionModal(null);
+      if (quickEdit) { markCurrentModuleListChanged(); quickEdit.onSaved(); }
     } catch (e: any) {
       msg.error(toFaErrorMessage(e, 'تکمیل تولید ناموفق بود.'));
     } finally {
@@ -6169,6 +6291,12 @@ const ModuleShow: React.FC = () => {
     return content;
   }, [baseCanEditModule, canEditModule, data, id, moduleId, printableFields, projectProcessLinkedFields, relationOptions]);
 
+  if (isQuickEdit && (!quickAccessReady || loading || accessDenied || !data || !moduleConfig || currentOrgId !== quickEditOrgId
+    || (!isSaasAdminModuleId(moduleId) && data.org_id !== quickEditOrgId))) {
+    return <Modal open footer={null} title={quickEdit?.label} onCancel={quickEdit?.onCancel} destroyOnHidden>
+      {!quickAccessReady || loading ? <div role="status">در حال بارگذاری فیلد…</div> : <div role="alert">این رکورد در دسترس نیست.</div>}
+    </Modal>;
+  }
   if (accessDenied) {
     return (
       <div className="flex h-screen items-center justify-center text-gray-400">
@@ -6185,7 +6313,7 @@ const ModuleShow: React.FC = () => {
   const renderSmartField = (field: any, isHeader = false) => {
     if (!canViewField(field.key)) return null;
     const canInlineEditField = canInlineEdit && canFieldAction(modulePermissions, field.key, 'edit');
-    const isEditing = editingFields[field.key];
+    const isEditing = isQuickEdit || editingFields[field.key];
     const value = displayData[field.key];
     const isProcessDraftField = (
       field.key === 'execution_process_draft' ||
@@ -6197,7 +6325,7 @@ const ModuleShow: React.FC = () => {
     const isSuperLongTextField = field.type === FieldType.SUPER_LONG_TEXT;
     const compactMode = (field.type === FieldType.PROGRESS_STAGES || isProcessDraftField) ? false : true;
 
-    if (field.type === FieldType.PROGRESS_STAGES || isProcessDraftField) {
+    if (!isQuickEdit && (field.type === FieldType.PROGRESS_STAGES || isProcessDraftField)) {
       let options = field.options;
       if (
         (moduleId === 'process_templates' && (field.key === 'module_id' || field.key === 'module_ids'))
@@ -6247,7 +6375,9 @@ const ModuleShow: React.FC = () => {
       }
     }
 
-    const tempValue = tempValues[field.key] !== undefined ? tempValues[field.key] : baseValue;
+    if (isQuickEdit && field.type === FieldType.TAGS) baseValue = quickTagState.tags;
+    if (isQuickEdit && field.key === 'assignee_id' && supportsAssignee) baseValue = buildResolvedAssigneeCombo(displayData);
+    const tempValue = Object.prototype.hasOwnProperty.call(tempValues, field.key) ? tempValues[field.key] : baseValue;
     let options = field.options;
     if (
       (moduleId === 'process_templates' && (field.key === 'module_id' || field.key === 'module_ids'))
@@ -6268,14 +6398,17 @@ const ModuleShow: React.FC = () => {
       && String(field.key || '').trim() === 'attachment_url';
 
     if (isEditing) {
-      const inlineEditorClassName = isHeader
+      const inlineEditorClassName = isQuickEdit ? 'flex min-w-0 flex-col gap-4' : isHeader
         ? `flex w-full min-w-0 flex-col gap-2 ${isLongTextField ? 'items-stretch' : ''}`
         : `flex w-full min-w-[150px] gap-1 ${isLongTextField ? 'items-start flex-col' : 'items-center'}`;
       return (
         <div className={inlineEditorClassName}>
           <div className={`min-w-0 flex-1 ${isLongTextField ? 'order-2 sm:order-1' : ''}`}>
             <SmartFieldRenderer
-              field={field}
+              field={isQuickEdit && field.key === 'assignee_id' && supportsAssignee ? { ...field, type: FieldType.SELECT, nature: FieldNature.STANDARD } : field}
+              standalone={isQuickEdit}
+              deferRecordFileAttach={isQuickEdit}
+              allowOptionManagement={!isQuickEdit}
               value={tempValue}
               onChange={(val) => {
                 if (isProcessTemplateFieldLocked) return;
@@ -6288,23 +6421,33 @@ const ModuleShow: React.FC = () => {
                   field.key === 'process_template_id' &&
                   val &&
                   val !== displayData?.process_template_id;
-                if (shouldHandleBom) {
+                if (!isQuickEdit && shouldHandleBom) {
                   setTimeout(() => handleRelatedBomChange(val), 100);
                 }
-                if (shouldHandleProcessTemplate) {
+                if (!isQuickEdit && shouldHandleProcessTemplate) {
                   setTimeout(() => handleProcessTemplateChange(val), 100);
                 }
               }}
               forceEditMode={true}
-              compactMode={compactMode}
-              options={options}
+              compactMode={isQuickEdit ? false : compactMode}
+              options={isQuickEdit && field.key === 'assignee_id' && supportsAssignee ? [
+                ...allUsers.map(user => ({ label: user.full_name || user.display_name || 'کاربر', value: `user:${user.id}` })),
+                ...(supportsRoleAssignee ? allRoles.map(role => ({ label: role.title || 'نقش', value: `role:${role.id}` })) : []),
+              ] : options}
               onOptionsUpdate={fetchOptions}
-              recordId={id}
+              recordId={isQuickEdit && field.type === FieldType.TAGS ? undefined : id}
               moduleId={moduleId}
-                allValues={displayData}
+              canCreateRelatedRecord={isQuickEdit ? (targetId) => !saasReadonly && canModuleAction(currentPermissionMap?.[targetId], 'create') : undefined}
+              allValues={displayData}
             />
           </div>
-          <div className={`flex shrink-0 gap-1 ${isHeader ? 'justify-end' : ''} ${isLongTextField ? 'order-1 sm:order-2' : ''}`}>
+          {isQuickEdit && field.type === FieldType.PROGRESS_STAGES ? <div className="flex justify-end">
+            <Button onClick={quickEdit?.onSaved}>بستن</Button>
+          </div> : isQuickEdit ? <div className="flex justify-end gap-2">
+            <Button onClick={quickEdit?.onCancel} disabled={savingField === field.key}>انصراف</Button>
+            <Button type="primary" icon={<CheckOutlined />} onClick={() => void saveEdit(field.key)}
+              loading={savingField === field.key} disabled={isProcessTemplateFieldLocked || (field.type === FieldType.TAGS && !quickTagState.loaded)}>ذخیره</Button>
+          </div> : <div className={`flex shrink-0 gap-1 ${isHeader ? 'justify-end' : ''} ${isLongTextField ? 'order-1 sm:order-2' : ''}`}>
             <Button
               size="small"
               type="text"
@@ -6322,7 +6465,7 @@ const ModuleShow: React.FC = () => {
               disabled={savingField === field.key}
               className="!h-8 !w-8 !min-w-8 rounded-full border border-gray-200 text-gray-500 hover:!border-rose-200 hover:!text-rose-600"
             />
-          </div>
+          </div>}
         </div>
       );
     }
@@ -6391,6 +6534,210 @@ const ModuleShow: React.FC = () => {
       </div>
     );
   };
+
+  const renderProductionDialogs = () => moduleId === 'production_orders' && (
+        <>
+          {productionModal === 'start' ? (
+            <React.Suspense fallback={null}>
+              <StartProductionModal
+                open
+                loading={statusLoading}
+                materials={startMaterials}
+                orderName={String(data?.name || '')}
+                sourceShelfOptionsByProduct={sourceShelfOptionsByProduct}
+                productionShelfOptions={productionShelfOptions}
+                onCancel={() => setProductionModal(null)}
+                onStart={handleConfirmStartProduction}
+                onToggleGroup={setStartMaterialCollapsed}
+                onDeliveryRowAdd={addStartDeliveryRow}
+                onDeliveryRowsDelete={deleteStartDeliveryRows}
+                onDeliveryRowsTransfer={transferStartDeliveryRows}
+                onDeliveryRowFieldChange={updateStartDeliveryRowField}
+                onSourceShelfChange={setStartMaterialSourceShelf}
+                onSourceShelfScan={handleSourceShelfScan}
+                onProductionShelfChange={setStartMaterialProductionShelf}
+                onConfirmGroup={handleConfirmStartGroup}
+              />
+            </React.Suspense>
+          ) : null}
+
+          <Modal
+            title={PRODUCTION_MESSAGES.stopTitle}
+            open={productionModal === 'stop'}
+            onOk={handleConfirmStopProduction}
+            onCancel={() => setProductionModal(null)}
+            okText="توقف تولید"
+            cancelText="انصراف"
+            confirmLoading={statusLoading}
+            destroyOnHidden
+          >
+            <div className="text-sm text-gray-600 whitespace-pre-line">
+              {PRODUCTION_MESSAGES.stopNotice}
+            </div>
+          </Modal>
+
+          <Modal
+            title={PRODUCTION_MESSAGES.completeTitle}
+            open={productionModal === 'complete'}
+            onOk={outputMode === 'existing' ? handleConfirmCompleteProduction : undefined}
+            onCancel={() => setProductionModal(null)}
+            okText={outputMode === 'existing' ? 'ثبت تکمیل' : undefined}
+            cancelText="انصراف"
+            confirmLoading={statusLoading}
+            destroyOnHidden
+            footer={outputMode === 'existing' ? undefined : null}
+          >
+            <div className="space-y-4">
+              <div className="text-sm text-gray-700 whitespace-pre-line">
+                تعداد "{toPersianNumber(getOrderQuantity(productionQuantityPreview))}" عدد از محصول بر اساس شناسنامه تولید "{getFieldValueLabel('bom_id', data?.bom_id) || '-'}" تولید شد.
+              </div>
+
+              <div className="rounded-xl border border-gray-200 bg-white p-3 space-y-2">
+                <div className="text-xs text-gray-500">قفسه نگهداری محصول تولید شده:</div>
+                <div className="flex items-center gap-2">
+                  <Select
+                    placeholder="انتخاب قفسه مقصد"
+                    value={outputShelfId}
+                    onChange={(val) => setOutputShelfId(val)}
+                    options={outputShelfOptions}
+                    showSearch
+                    optionFilterProp="label"
+                    className="w-full"
+                    getPopupContainer={resolveStablePopupContainer}
+                  />
+                  <QrScanPopover
+                    label=""
+                    buttonProps={{ type: 'default', shape: 'circle' }}
+                    onScan={({ moduleId: scannedModule, recordId: scannedRecordId }) => {
+                      if (scannedModule === 'shelves' && scannedRecordId) {
+                        setOutputShelfId(scannedRecordId);
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 space-y-2">
+                <div className="text-xs text-gray-500">نوع محصول تولید شده:</div>
+                <Select
+                  placeholder="انتخاب نوع محصول"
+                  value={outputProductType}
+                  onChange={(val) => {
+                    setOutputProductType(val);
+                    setOutputProductId(null);
+                  }}
+                  options={[
+                    { label: 'کالا', value: 'goods' },
+                  ]}
+                  className="w-full"
+                  getPopupContainer={resolveStablePopupContainer}
+                />
+              </div>
+
+              <div className="rounded-xl border border-gray-200 bg-white p-3 space-y-3">
+                <div className="text-xs text-gray-500">روش ثبت محصول خروجی:</div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type={outputMode === 'existing' ? 'primary' : 'default'}
+                    onClick={() => setOutputMode('existing')}
+                  >
+                    افزودن به محصول فعلی
+                  </Button>
+                  <Button
+                    type={outputMode === 'new' ? 'primary' : 'default'}
+                    onClick={() => setOutputMode('new')}
+                  >
+                    تعریف محصول جدید
+                  </Button>
+                </div>
+
+                {outputMode === 'existing' && (
+                  <div className="space-y-2">
+                    <div className="text-xs text-gray-500">به موجودی یکی از محصولات فعلی اضافه کنید:</div>
+                    <div className="flex items-center gap-2">
+                      <Select
+                        placeholder="انتخاب محصول"
+                        value={outputProductId}
+                        onChange={(val) => setOutputProductId(val)}
+                        options={filteredOutputProductOptions}
+                        showSearch
+                        optionFilterProp="label"
+                        className="w-full"
+                        getPopupContainer={resolveStablePopupContainer}
+                      />
+                      <QrScanPopover
+                        label=""
+                        buttonProps={{ type: 'default', shape: 'circle' }}
+                        onScan={({ moduleId: scannedModule, recordId: scannedRecordId }) => {
+                          if (scannedModule === 'products' && scannedRecordId) {
+                            const match = filteredOutputProductOptions.find((item) => item.value === scannedRecordId);
+                            if (!match) {
+                              msg.error('این محصول با نوع انتخاب‌شده همخوانی ندارد.');
+                              return;
+                            }
+                            setOutputProductId(scannedRecordId);
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {outputMode === 'new' && (
+                  <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-3 flex items-center justify-between">
+                    <div className="text-xs text-gray-500">محصول جدید بسازید:</div>
+                    <Button
+                      onClick={() => {
+                        if (!outputShelfId) {
+                          msg.error(PRODUCTION_MESSAGES.requireOutputShelf);
+                          return;
+                        }
+                        if (!outputProductType) {
+                          msg.error('نوع محصول تولید شده را انتخاب کنید.');
+                          return;
+                        }
+                        setProductionModal(null);
+                        setIsCreateProductOpen(true);
+                      }}
+                      type="dashed"
+                    >
+                      تعریف محصول جدید
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </Modal>
+
+          {isCreateProductOpen && MODULES['products'] && (
+            <React.Suspense fallback={null}>
+            <SmartForm
+              module={MODULES['products']}
+              visible={isCreateProductOpen}
+              title="ایجاد محصول جدید از سفارش تولید"
+              initialValues={buildNewProductInitialValues()}
+              onCancel={() => setIsCreateProductOpen(false)}
+              onSave={handleCreateProductSave}
+            />
+            </React.Suspense>
+          )}
+        </>
+      );
+
+  if (quickEdit) {
+    const found = moduleConfig.fields.find(field => field.key === quickEdit.fieldKey)
+      ?? (quickEdit.fieldKey === 'assignee_id' ? getQuickEditAssigneeField(moduleConfig, assigneeLabel) : undefined);
+    const field = found && conditionalFieldRuntime.getRuntimeField(found);
+    const editable = !!field && canEditModule && canQuickEditModuleField(moduleConfig, field, modulePermissions)
+      && conditionalFieldRuntime.isFieldVisible(field) && (field.key !== 'process_template_id' || !hasStartedProcessExecution);
+    return <>
+      <Modal open title={`ویرایش ${quickEdit.label}`} footer={null} width={field?.type === FieldType.SUPER_LONG_TEXT || field?.type === FieldType.PROGRESS_STAGES ? 780 : 520}
+        maskClosable={false} keyboard={!savingField} closable={!savingField} onCancel={quickEdit.onCancel} destroyOnHidden>
+        {editable && field ? renderSmartField(field, true) : <div role="alert">این فیلد برای این رکورد قابل ویرایش نیست.</div>}
+      </Modal>
+      {renderProductionDialogs()}
+    </>;
+  }
 
   const canUseAction = (actionId: string) => canViewField(`__action_${actionId}`);
   const handleModuleRecordAction = async (actionId: string) => {
@@ -6969,194 +7316,7 @@ const ModuleShow: React.FC = () => {
         </Form>
       </Modal>
 
-      {moduleId === 'production_orders' && (
-        <>
-          {productionModal === 'start' ? (
-            <React.Suspense fallback={null}>
-              <StartProductionModal
-                open
-                loading={statusLoading}
-                materials={startMaterials}
-                orderName={String(data?.name || '')}
-                sourceShelfOptionsByProduct={sourceShelfOptionsByProduct}
-                productionShelfOptions={productionShelfOptions}
-                onCancel={() => setProductionModal(null)}
-                onStart={handleConfirmStartProduction}
-                onToggleGroup={setStartMaterialCollapsed}
-                onDeliveryRowAdd={addStartDeliveryRow}
-                onDeliveryRowsDelete={deleteStartDeliveryRows}
-                onDeliveryRowsTransfer={transferStartDeliveryRows}
-                onDeliveryRowFieldChange={updateStartDeliveryRowField}
-                onSourceShelfChange={setStartMaterialSourceShelf}
-                onSourceShelfScan={handleSourceShelfScan}
-                onProductionShelfChange={setStartMaterialProductionShelf}
-                onConfirmGroup={handleConfirmStartGroup}
-              />
-            </React.Suspense>
-          ) : null}
-
-          <Modal
-            title={PRODUCTION_MESSAGES.stopTitle}
-            open={productionModal === 'stop'}
-            onOk={handleConfirmStopProduction}
-            onCancel={() => setProductionModal(null)}
-            okText="توقف تولید"
-            cancelText="انصراف"
-            confirmLoading={statusLoading}
-            destroyOnHidden
-          >
-            <div className="text-sm text-gray-600 whitespace-pre-line">
-              {PRODUCTION_MESSAGES.stopNotice}
-            </div>
-          </Modal>
-
-          <Modal
-            title={PRODUCTION_MESSAGES.completeTitle}
-            open={productionModal === 'complete'}
-            onOk={outputMode === 'existing' ? handleConfirmCompleteProduction : undefined}
-            onCancel={() => setProductionModal(null)}
-            okText={outputMode === 'existing' ? 'ثبت تکمیل' : undefined}
-            cancelText="انصراف"
-            confirmLoading={statusLoading}
-            destroyOnHidden
-            footer={outputMode === 'existing' ? undefined : null}
-          >
-            <div className="space-y-4">
-              <div className="text-sm text-gray-700 whitespace-pre-line">
-                تعداد "{toPersianNumber(getOrderQuantity(productionQuantityPreview))}" عدد از محصول بر اساس شناسنامه تولید "{getFieldValueLabel('bom_id', data?.bom_id) || '-'}" تولید شد.
-              </div>
-
-              <div className="rounded-xl border border-gray-200 bg-white p-3 space-y-2">
-                <div className="text-xs text-gray-500">قفسه نگهداری محصول تولید شده:</div>
-                <div className="flex items-center gap-2">
-                  <Select
-                    placeholder="انتخاب قفسه مقصد"
-                    value={outputShelfId}
-                    onChange={(val) => setOutputShelfId(val)}
-                    options={outputShelfOptions}
-                    showSearch
-                    optionFilterProp="label"
-                    className="w-full"
-                    getPopupContainer={resolveStablePopupContainer}
-                  />
-                  <QrScanPopover
-                    label=""
-                    buttonProps={{ type: 'default', shape: 'circle' }}
-                    onScan={({ moduleId: scannedModule, recordId: scannedRecordId }) => {
-                      if (scannedModule === 'shelves' && scannedRecordId) {
-                        setOutputShelfId(scannedRecordId);
-                      }
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 space-y-2">
-                <div className="text-xs text-gray-500">نوع محصول تولید شده:</div>
-                <Select
-                  placeholder="انتخاب نوع محصول"
-                  value={outputProductType}
-                  onChange={(val) => {
-                    setOutputProductType(val);
-                    setOutputProductId(null);
-                  }}
-                  options={[
-                    { label: 'کالا', value: 'goods' },
-                  ]}
-                  className="w-full"
-                  getPopupContainer={resolveStablePopupContainer}
-                />
-              </div>
-
-              <div className="rounded-xl border border-gray-200 bg-white p-3 space-y-3">
-                <div className="text-xs text-gray-500">روش ثبت محصول خروجی:</div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    type={outputMode === 'existing' ? 'primary' : 'default'}
-                    onClick={() => setOutputMode('existing')}
-                  >
-                    افزودن به محصول فعلی
-                  </Button>
-                  <Button
-                    type={outputMode === 'new' ? 'primary' : 'default'}
-                    onClick={() => setOutputMode('new')}
-                  >
-                    تعریف محصول جدید
-                  </Button>
-                </div>
-
-                {outputMode === 'existing' && (
-                  <div className="space-y-2">
-                    <div className="text-xs text-gray-500">به موجودی یکی از محصولات فعلی اضافه کنید:</div>
-                    <div className="flex items-center gap-2">
-                      <Select
-                        placeholder="انتخاب محصول"
-                        value={outputProductId}
-                        onChange={(val) => setOutputProductId(val)}
-                        options={filteredOutputProductOptions}
-                        showSearch
-                        optionFilterProp="label"
-                        className="w-full"
-                        getPopupContainer={resolveStablePopupContainer}
-                      />
-                      <QrScanPopover
-                        label=""
-                        buttonProps={{ type: 'default', shape: 'circle' }}
-                        onScan={({ moduleId: scannedModule, recordId: scannedRecordId }) => {
-                          if (scannedModule === 'products' && scannedRecordId) {
-                            const match = filteredOutputProductOptions.find((item) => item.value === scannedRecordId);
-                            if (!match) {
-                              msg.error('این محصول با نوع انتخاب‌شده همخوانی ندارد.');
-                              return;
-                            }
-                            setOutputProductId(scannedRecordId);
-                          }
-                        }}
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {outputMode === 'new' && (
-                  <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-3 flex items-center justify-between">
-                    <div className="text-xs text-gray-500">محصول جدید بسازید:</div>
-                    <Button
-                      onClick={() => {
-                        if (!outputShelfId) {
-                          msg.error(PRODUCTION_MESSAGES.requireOutputShelf);
-                          return;
-                        }
-                        if (!outputProductType) {
-                          msg.error('نوع محصول تولید شده را انتخاب کنید.');
-                          return;
-                        }
-                        setProductionModal(null);
-                        setIsCreateProductOpen(true);
-                      }}
-                      type="dashed"
-                    >
-                      تعریف محصول جدید
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </Modal>
-
-          {isCreateProductOpen && MODULES['products'] && (
-            <React.Suspense fallback={null}>
-            <SmartForm
-              module={MODULES['products']}
-              visible={isCreateProductOpen}
-              title="ایجاد محصول جدید از سفارش تولید"
-              initialValues={buildNewProductInitialValues()}
-              onCancel={() => setIsCreateProductOpen(false)}
-              onSave={handleCreateProductSave}
-            />
-            </React.Suspense>
-          )}
-        </>
-      )}
+      {renderProductionDialogs()}
 
       {botStatusModalOpen ? (
         <React.Suspense fallback={null}>

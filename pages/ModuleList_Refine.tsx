@@ -1,3 +1,5 @@
+import { canQuickEditModuleField } from '../utils/moduleListQuickEdit';
+import type { QuickEditCellController } from '../components/moduleList/QuickEditCell';
 import { canModuleAction } from '../utils/fieldAccess';
 ﻿import React, {
   useEffect,
@@ -53,6 +55,7 @@ import {
   EnvironmentOutlined,
   FileExcelOutlined,
   FilePdfOutlined,
+  FormOutlined,
   LockOutlined,
   MessageOutlined,
   PlusOutlined,
@@ -85,7 +88,7 @@ import {
   WORKFLOWS_PERMISSION_KEY,
   type ViewConditionGroup,
   type PermissionMap,
-  type RecordScope,
+  type ModulePermissionConfig,
 } from "../utils/permissions";
 import {
   buildCopyPayload,
@@ -204,6 +207,8 @@ import {
 import { getRecordTitle } from "../utils/recordTitle";
 import type { RenderCardItemProps } from "../components/moduleList/RenderCardItem";
 import type { RelatedActivitySummary } from "../components/moduleList/RelatedActivityIndicators";
+
+const QuickEditRecordField = React.lazy(() => import('./ModuleShow'));
 
 const MapView = React.lazy(() => import("../components/moduleList/MapView"));
 const SmartForm = React.lazy(() => import("../components/SmartForm"));
@@ -1187,6 +1192,9 @@ export const ModuleListRefine: React.FC<{
   const [searchTerm, setSearchTerm] = useState(
     persistedState?.searchTerm || "",
   );
+  const [quickEditModeScope, setQuickEditModeScope] = useState('');
+  const [quickEditTarget, setQuickEditTarget] = useState<{ scope: string; id: string; fieldKey: string; label: string } | null>(null);
+  const quickEditTrigger = useRef<HTMLElement | null>(null);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [selectAllPagesLoading, setSelectAllPagesLoading] = useState(false);
   const [selectedRowsMap, setSelectedRowsMap] = useState<Record<string, any>>(
@@ -1263,13 +1271,7 @@ export const ModuleListRefine: React.FC<{
   const [allRoles, setAllRoles] = useState<any[]>(
     () => cachedOptionSnapshot?.allRoles || [],
   );
-  const [modulePermissions, setModulePermissions] = useState<{
-    create?: boolean;
-    view?: boolean;
-    edit?: boolean;
-    delete?: boolean;
-    record_scope?: RecordScope;
-  }>({});
+  const [modulePermissions, setModulePermissions] = useState<ModulePermissionConfig>({});
   const [permissionViewConditions, setPermissionViewConditions] =
     useState<ViewConditionGroup | null>(null);
   const [permissionConditionAllowedIds, setPermissionConditionAllowedIds] =
@@ -2741,6 +2743,7 @@ export const ModuleListRefine: React.FC<{
       if (!context.roleId) {
         setModulePermissions(resolvedModuleId === 'saas_local_installations' ? { view: false, edit: false, delete: false } : {});
         setFieldPermissions({});
+        setFieldPermissionsModuleId(context.userId && context.orgId ? String(resolvedModuleId || "") : null);
         setPermissionViewConditions(null);
         setPermissionFilters([]);
         setCanOpenWorkflows(true);
@@ -2816,6 +2819,7 @@ export const ModuleListRefine: React.FC<{
         resolvedModuleId,
       );
       setModulePermissions({
+        ...modulePerms,
         view: modulePerms.view,
         create: modulePerms.create,
         edit: modulePerms.edit,
@@ -3163,6 +3167,38 @@ export const ModuleListRefine: React.FC<{
   const canViewModule =
     modulePermissions.view !== false || recordScope !== "all";
   const canEditModule = !saasReadonly && modulePermissions.edit !== false;
+  const quickEditScope = `${currentOrgId || ''}:${currentUserId || ''}:${resolvedModuleId || ''}`;
+  const canUseQuickEdit = Boolean(currentOrgId && currentUserId && canViewModule && canEditModule
+    && fieldPermissionsReady && moduleConfig && moduleConfig.disableInlineFieldEditing !== true
+    && moduleConfig.fields.some(field => canQuickEditModuleField(moduleConfig, field, modulePermissions))
+    && viewMode === ViewMode.LIST);
+  const quickEditActive = canUseQuickEdit && quickEditModeScope === quickEditScope;
+  const activeQuickEditTarget = quickEditActive && quickEditTarget?.scope === quickEditScope ? quickEditTarget : null;
+  const closeQuickEditField = useCallback(() => {
+    setQuickEditTarget(null);
+    requestAnimationFrame(() => quickEditTrigger.current?.isConnected && quickEditTrigger.current.focus({ preventScroll: true }));
+  }, []);
+  useEffect(() => {
+    if (!canUseQuickEdit || (quickEditModeScope && quickEditScope !== quickEditModeScope)) {
+      setQuickEditModeScope('');
+      setQuickEditTarget(null);
+    }
+  }, [canUseQuickEdit, quickEditModeScope, quickEditScope]);
+  const canQuickEditCell = useCallback<QuickEditCellController['canEdit']>((field, row) => Boolean(
+    canUseQuickEdit && moduleConfig && row.id != null && (row.org_id == null || row.org_id === currentOrgId)
+    && !isRecordIdLocked(String(row.id), row) && canViewField(field.key)
+    && canQuickEditModuleField(moduleConfig, field, modulePermissions)
+  ), [canUseQuickEdit, moduleConfig, currentOrgId, isRecordIdLocked, canViewField, modulePermissions]);
+  const openQuickEditCell = useCallback<QuickEditCellController['open']>((field, row, trigger) => {
+    if (!canQuickEditCell(field, row)) return;
+    quickEditTrigger.current = trigger;
+    setQuickEditModeScope(quickEditScope);
+    setQuickEditTarget({ scope: quickEditScope, id: String(row.id), fieldKey: field.key,
+      label: getFieldLabelFa(field, { moduleId: resolvedModuleId }) });
+  }, [canQuickEditCell, quickEditScope, resolvedModuleId]);
+  const quickEditController = useMemo<QuickEditCellController | undefined>(() => canUseQuickEdit ? ({
+    active: quickEditActive, canEdit: canQuickEditCell, open: openQuickEditCell,
+  }) : undefined, [canUseQuickEdit, quickEditActive, canQuickEditCell, openQuickEditCell]);
   const canDeleteModule =
     !saasReadonly && modulePermissions.delete !== false && moduleConfig?.disableDelete !== true;
   const canLockRecords = canUseRecordLockPermission(
@@ -6999,6 +7035,7 @@ export const ModuleListRefine: React.FC<{
                     }
                     selectAllPagesLoading={selectAllPagesLoading}
                     selectAllPagesDisabled={selectAllPagesLoading}
+                    onQuickEdit={canUseQuickEdit && !quickEditActive ? () => setQuickEditModeScope(quickEditScope) : undefined}
                     onEdit={
                       selectedRowKeys.length &&
                       canEditModule &&
@@ -7171,6 +7208,10 @@ export const ModuleListRefine: React.FC<{
                 >
                   همگام‌سازی تماس‌ها
                 </Button>
+              )}
+              {canUseQuickEdit && !quickEditActive && (
+                <Button icon={<FormOutlined />} title="ویرایش سریع" aria-label="ویرایش سریع جدول"
+                  className="!min-h-11 !min-w-11 shrink-0 rounded-xl" onClick={() => setQuickEditModeScope(quickEditScope)} />
               )}
               {canCreateModule && (
                 <Button
@@ -7369,8 +7410,13 @@ export const ModuleListRefine: React.FC<{
           ) : (
             <>
               {viewMode === ViewMode.LIST && (
-                <div className="bg-white dark:bg-[#1a1a1a] rounded-[1.5rem] shadow-sm border border-gray-200 dark:border-gray-800 h-full overflow-hidden p-1">
+                <div className="bg-white dark:bg-[#1a1a1a] rounded-[1.5rem] shadow-sm border border-gray-200 dark:border-gray-800 h-full overflow-hidden p-1 flex flex-col">
+                  {quickEditActive && <div className="flex items-center justify-between gap-2 px-3 py-1 text-xs bg-[rgba(var(--brand-100-rgb),0.5)] dark:bg-white/5 rounded-xl">
+                    <span role="status"><strong>ویرایش سریع</strong> · یک خانهٔ قابل ویرایش را انتخاب کنید.</span>
+                    <Button size="small" className="!min-h-11 shrink-0" onClick={() => { setQuickEditModeScope(''); setQuickEditTarget(null); }}>لغو ویرایش سریع</Button>
+                  </div>}
                   <SmartTableRenderer
+                    quickEdit={quickEditController}
                     moduleConfig={moduleConfig}
                     data={enrichedData}
                     loading={queryPending}
@@ -7403,7 +7449,7 @@ export const ModuleListRefine: React.FC<{
                     onColumnFiltersChange={handleColumnFiltersChange}
                     sorters={visibleSorters}
                     showFilterBar={false}
-                    containerClassName="h-full rounded-[1.2rem] overflow-hidden"
+                    containerClassName="h-full min-h-0 flex-1 rounded-[1.2rem] overflow-hidden"
                   />
                 </div>
               )}
@@ -7627,6 +7673,19 @@ export const ModuleListRefine: React.FC<{
           )}
         </div>
       </ViewWrapper>
+      {activeQuickEditTarget && resolvedModuleId && currentOrgId && (
+        <React.Suspense fallback={null}>
+          <QuickEditRecordField key={`${activeQuickEditTarget.scope}:${activeQuickEditTarget.id}:${activeQuickEditTarget.fieldKey}`} quickEdit={{
+            moduleId: resolvedModuleId, orgId: currentOrgId, recordId: activeQuickEditTarget.id,
+            fieldKey: activeQuickEditTarget.fieldKey, label: activeQuickEditTarget.label,
+            onCancel: closeQuickEditField,
+            onSaved: () => {
+              closeQuickEditField();
+              void tableQueryResult.refetch();
+            },
+          }} />
+        </React.Suspense>
+      )}
       {isBulkEditOpen && (
         <React.Suspense fallback={null}>
           <SmartForm
