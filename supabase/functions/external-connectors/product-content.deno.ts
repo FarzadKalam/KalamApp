@@ -1,5 +1,18 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.49.8';
 import { withWooProductLease } from './product-content.ts';
+import { normalizeWooProductDescription } from './product-content-html.ts';
+
+Deno.test('preserves supported WooCommerce formatting across a safe round trip', () => {
+  const app = normalizeWooProductDescription(
+    '<p style="text-align:center;position:fixed"><b>متن</b><a href="https://example.com/?a=1&b=2">پیوند</a></p>' +
+    '<script>discard()</script><a href="&#106;avascript:discard()">عنوان پیوند</a>',
+  );
+  if (app !== normalizeWooProductDescription(app, true) || !app.includes('text-align:center') ||
+    !app.includes('<strong>متن</strong>') || !app.includes('https://example.com/?a=1&amp;b=2') ||
+    /position|script|discard\(\)/.test(app)) throw new Error('Unexpected WooCommerce HTML round trip');
+  if (normalizeWooProductDescription('first\nsecond') !== '<p>first<br />second</p>' ||
+    normalizeWooProductDescription('<p>&nbsp;<br></p>', true) !== '') throw new Error('Unexpected legacy text normalization');
+});
 
 Deno.test('clears a WooCommerce product lease without reusing its acquire filters', async () => {
   const requests: Array<{ url: URL; operation: string | null }> = [];

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2.49.8';
-import sanitizeHtml from 'npm:sanitize-html@2.18.2';
+import { normalizeWooProductDescription } from './product-content-html.ts';
 import { normalizeProductSiteSlug } from '../_shared/product-site-slug.ts';
 import { buildWooProductContentPayload, mergeWooProductImages } from '../_shared/product-site-content.ts';
 import {
@@ -20,25 +20,6 @@ const safeUrl = (value: unknown) => {
     const url = new URL(trim(value));
     return url.protocol === 'https:' && !url.username && !url.password ? url.href : '';
   } catch { return ''; }
-};
-
-export const normalizeWooProductDescription = (value: unknown, html = false) => {
-  const input = trim(value);
-  const markup = html || /<\/?(?:p|h[2-4]|strong|b|em|i|u|ul|ol|li|span|br|a)\b/i.test(input)
-    ? input
-    : input.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\r?\n/g, '<br>');
-  const sanitized = sanitizeHtml(markup, {
-    allowedTags: ['p', 'h2', 'h3', 'h4', 'strong', 'b', 'em', 'i', 'u', 'ul', 'ol', 'li', 'span', 'br', 'a'],
-    allowedAttributes: { a: ['href'], p: ['style'], h2: ['style'], h3: ['style'], h4: ['style'], span: ['style'] },
-    allowedSchemes: ['https', 'http', 'mailto', 'tel'],
-    allowProtocolRelative: false,
-    allowedStyles: {
-      '*': { 'text-align': [/^(right|center|left)$/i], color: [/^#[\da-f]{3,8}$/i, /^rgb\(\d{1,3},\s*\d{1,3},\s*\d{1,3}\)$/i] },
-    },
-    transformTags: { b: 'strong', i: 'em' },
-  }).trim();
-  if (!sanitizeHtml(sanitized, { allowedTags: [], allowedAttributes: {} }).replace(/&nbsp;|\u00a0/g, '').trim()) return '';
-  return sanitized.startsWith('<') && /^<(?:p|h[2-4]|ul|ol)\b/.test(sanitized) ? sanitized : `<p>${sanitized}</p>`;
 };
 
 const localSnapshot = (product: any, draft: any): ProductContentSnapshot => ({

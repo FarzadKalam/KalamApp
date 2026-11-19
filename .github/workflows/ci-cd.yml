@@ -15,6 +15,10 @@ on:
         description: 'Publish the frontend without applying migrations or deploying Edge Functions'
         type: boolean
         default: false
+      woocommerce_connector_only:
+        description: 'Deploy just the WooCommerce Edge Function and verify its live response'
+        type: boolean
+        default: false
       skip_browser_checks:
         description: 'Skip browser and screenshot checks when explicitly requested by the release owner'
         type: boolean
@@ -30,6 +34,7 @@ permissions:
 
 jobs:
   ci:
+    if: ${{ !inputs.woocommerce_connector_only }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -531,8 +536,50 @@ jobs:
           name: dist
           path: dist
 
+  deploy_woocommerce_connector:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy && inputs.woocommerce_connector_only && !inputs.frontend_only
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: Check the WooCommerce connector and its regression tests
+        run: |
+          deno check --frozen --node-modules-dir=none supabase/functions/external-connectors/index.ts
+          deno test --frozen --node-modules-dir=none --allow-env=CI,FORCE_COLOR,NO_COLOR,TERM supabase/functions/external-connectors/product-content.deno.ts
+      - name: Verify latest main and wait for earlier releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/wait-for-production-release.mjs
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+      - name: Add server host key
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -T 15 -p "${SERVER_PORT:-22}" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 600 ~/.ssh/known_hosts
+      - name: Deploy the WooCommerce connector
+        shell: pwsh
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PORT: ${{ secrets.SERVER_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVER_USER }}
+          DEPLOY_FUNCTIONS_PATH: /opt/kalamapp/supabase/docker/volumes/functions
+          DEPLOY_FUNCTIONS_COMPOSE_DIR: /opt/kalamapp/supabase/docker
+        run: ./scripts/deploy-supabase-function.ps1 -Functions @('external-connectors')
+      - name: Check the live WooCommerce connector
+        run: node scripts/smoke-woocommerce-connector.mjs
+
   deploy:
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy && !inputs.woocommerce_connector_only
     needs: ci
     runs-on: ubuntu-latest
     steps:
@@ -708,6 +755,10 @@ jobs:
           DEPLOY_FUNCTIONS_PATH: /opt/kalamapp/supabase/docker/volumes/functions
           DEPLOY_FUNCTIONS_COMPOSE_DIR: /opt/kalamapp/supabase/docker
         run: ./scripts/deploy-supabase-function.ps1 -Functions @('external-connectors')
+
+      - name: Check the live WooCommerce connector
+        if: ${{ !inputs.frontend_only }}
+        run: node scripts/smoke-woocommerce-connector.mjs
 
       - name: Activate release
         env:
