@@ -31,6 +31,7 @@ import { buildTaskSourceInitialValues } from '../../utils/taskMeta';
 import { getPrimaryRecordPhone } from '../../utils/recordMessaging';
 import { buildVoipFallbackUrl, requestVoipSmartCall } from '../../utils/voipGateway';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { useProductSalesSummary } from '../../hooks/useProductSalesSummary';
 import { getFinancialPaymentTypeLabelFa, getFinancialStatusLabelFa } from '../../utils/financialValueLabels';
 import RelatedSurveyWebFormModal from './RelatedSurveyWebFormModal';
 
@@ -170,6 +171,11 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
   const [surveyWebFormModalOpen, setSurveyWebFormModalOpen] = useState(false);
   const [callStarting, setCallStarting] = useState(false);
   const [refreshSignal, setRefreshSignal] = useState(0);
+  const { data: salesSummary } = useProductSalesSummary(
+    String(currentRecord?.org_id || ''), currentRecordId,
+    currentModuleId === 'products' && tab.id === 'product_sales_invoices',
+  );
+  const invoiceRevision = salesSummary?.invoice_revision;
   const targetConfig = tab.targetModule ? MODULES[tab.targetModule] : undefined;
   const sourceConfig = MODULES[currentModuleId];
   const paymentModuleId = tab.relationType === 'supplier_payments' ? 'purchase_invoices' : 'invoices';
@@ -454,13 +460,10 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
         if (tab.relationType === 'jsonb_contains' && tab.targetModule && tab.jsonbColumn) {
           const matchKey = tab.jsonbMatchKey || 'product_id';
           const matchPayload = JSON.stringify([{ [matchKey]: currentRecordId }]);
-          const { data } = await applyTabFilters(
-            supabase
-              .from(getModuleTableName(tab.targetModule))
-              .select('*')
-              .filter(tab.jsonbColumn, 'cs', matchPayload),
-            tab.filters,
-          );
+          const query = supabase.from(getModuleTableName(tab.targetModule)).select('*')
+            .filter(tab.jsonbColumn, 'cs', matchPayload);
+          if (currentRecord?.org_id) query.eq('org_id', currentRecord.org_id);
+          const { data } = await applyTabFilters(query, tab.filters);
           setItems(data || []);
           await fetchProfileNames(data || []);
           return;
@@ -567,7 +570,7 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
     };
 
     void fetchRelated();
-  }, [tab, currentRecordId, currentModuleId, sourceFieldValue, refreshSignal]);
+  }, [tab, currentRecordId, currentModuleId, currentRecord?.org_id, sourceFieldValue, refreshSignal, invoiceRevision]);
 
   useEffect(() => {
     let cancelled = false;

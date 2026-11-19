@@ -279,6 +279,14 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: WooCommerce product content and sales regressions
+        run: >-
+          npx vitest run test/wooProductSales.test.ts utils/richText.test.ts
+          supabase/functions/_shared/product-site-content.test.ts
+          supabase/functions/_shared/product-content-status.test.ts
+          components/products/ProductWooSyncTable.test.tsx components/moduleShow/FieldGroupsTabs.test.tsx
+          --maxWorkers=1 --no-file-parallelism
+
       - name: Typecheck
         env:
           NODE_OPTIONS: --max-old-space-size=4096
@@ -674,7 +682,7 @@ jobs:
             exit 1
           fi
 
-      - name: Apply the explicitly approved plan feature migrations
+      - name: Apply the explicitly approved release migrations
         if: ${{ !inputs.frontend_only }}
         shell: pwsh
         env:
@@ -683,11 +691,11 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVER_USER }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $migrations = @('database_v1_phase589_external_sync_history.sql', 'database_v1_phase590_tenant_site_builder.sql', 'database_v1_phase591_product_site_content_drafts.sql', 'database_v1_phase592_woo_import_outcome.sql')
+          $migrations = @('database_v1_phase613_woo_product_content_sync.sql', 'database_v1_phase614_woo_invoice_product_sales.sql')
           $migrations | ForEach-Object { Get-FileHash -Algorithm SHA256 -LiteralPath $_ } | Format-List
           & ./scripts/run-server-db-migrations.ps1 -SqlFiles $migrations
 
-      - name: Deploy the AI assistant with shared agents
+      - name: Deploy the WooCommerce connector
         if: ${{ !inputs.frontend_only }}
         shell: pwsh
         env:
@@ -696,7 +704,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVER_USER }}
           DEPLOY_FUNCTIONS_PATH: /opt/kalamapp/supabase/docker/volumes/functions
           DEPLOY_FUNCTIONS_COMPOSE_DIR: /opt/kalamapp/supabase/docker
-        run: ./scripts/deploy-supabase-function.ps1 -Functions @('ai-assistant','external-connectors')
+        run: ./scripts/deploy-supabase-function.ps1 -Functions @('external-connectors')
 
       - name: Activate release
         env:

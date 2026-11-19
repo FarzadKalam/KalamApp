@@ -264,6 +264,7 @@ const BLOCKS = {
     type: BlockType.FIELD_GROUP,
   },
   retail_invoice: { id: 'retail_invoice', titles: { fa: 'تنظیمات فاکتور فروشگاهی', en: 'Retail Invoice Settings' }, icon: 'ShoppingCartOutlined', order: 3.5, type: BlockType.FIELD_GROUP },
+  product_site_content: { id: 'product_site_content', titles: { fa: 'محتوای سایت محصول', en: 'Product Site Content' }, icon: 'GlobalOutlined', order: 3.6, type: BlockType.FIELD_GROUP },
   product_stock_movements: {
     id: 'product_stock_movements',
     titles: { fa: 'ورود و خروج کالا', en: 'Inventory Movements' },
@@ -295,7 +296,7 @@ export const productsConfig: ModuleDefinition = {
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
   fields: fieldsArray,
-  blocks: [BLOCKS.baseInfo, BLOCKS.product_inventory, BLOCKS.sales_info, BLOCKS.retail_invoice, BLOCKS.product_stock_movements],
+  blocks: [BLOCKS.baseInfo, BLOCKS.product_inventory, BLOCKS.sales_info, BLOCKS.retail_invoice, BLOCKS.product_site_content, BLOCKS.product_stock_movements],
   relatedTabs: [
     {
       id: 'product_customers',

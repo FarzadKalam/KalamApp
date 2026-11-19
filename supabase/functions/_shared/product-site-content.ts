@@ -1,3 +1,5 @@
+import { normalizeProductSiteSlug } from './product-site-slug.ts';
+
 export interface ProductSiteContentForWoo {
   title?: unknown;
   short_description?: unknown;
@@ -57,10 +59,7 @@ export const buildWooProductContentPayload = (
   fallbackTitle: unknown,
   allowedImageOrigins: string[],
 ) => {
-  const slug = text(content.slug);
-  if (slug && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
-    throw new Error('slug محصول باید فقط شامل حروف انگلیسی کوچک، عدد و خط تیره باشد.');
-  }
+  const slug = normalizeProductSiteSlug(content.slug);
   const shortDescription = text(content.short_description);
   const description = text(content.description);
   const imageUrl = normalizePublicHttpsImageUrl(content.site_image_url, allowedImageOrigins);

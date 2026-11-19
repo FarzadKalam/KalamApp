@@ -1,9 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, App, Button, Card, Col, Form, Input, Modal, Progress, Row, Select, Space, Spin, Tag, Typography } from 'antd';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, App, Button, Card, Col, Form, Input, Modal, Progress, Row, Space, Spin, Tag, Typography } from 'antd';
 import { BulbOutlined, EyeOutlined, SaveOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { getProductSiteSeoChecklist } from '../../utils/productSiteSeoChecklist';
+import { richTextToPlainText } from '../../utils/richText';
+import { FieldType, type ModuleField } from '../../types';
+import { normalizeProductSiteSlug } from '../../supabase/functions/_shared/product-site-slug';
 import RecordFilesManager from '../RecordFilesManager';
+import RichTextContent from '../RichTextContent';
+import SmartFieldRenderer from '../SmartFieldRenderer';
+import ProductWooSyncTable from './ProductWooSyncTable';
 
 const { Text, Title } = Typography;
 
@@ -47,6 +53,17 @@ const contentFingerprint = (content: ProductSiteContent) => JSON.stringify([
   content.title, content.short_description, content.description, content.slug,
   content.seo_title, content.seo_description, content.focus_keyword, content.site_image_url, content.site_image_alt,
 ]);
+const displaySlug = (slug: string) => {
+  try { return decodeURIComponent(slug); } catch { return slug; }
+};
+const textFields = {
+  title: { key: 'title', type: FieldType.TEXT, labels: { fa: 'عنوان محصول در سایت' } },
+  short_description: { key: 'short_description', type: FieldType.LONG_TEXT, labels: { fa: 'توضیح کوتاه' } },
+  description: { key: 'description', type: FieldType.SUPER_LONG_TEXT, labels: { fa: 'توضیحات کامل' } },
+  seo_title: { key: 'seo_title', type: FieldType.TEXT, labels: { fa: 'عنوان سئو' } },
+  seo_description: { key: 'seo_description', type: FieldType.TEXT, labels: { fa: 'توضیح متا' } },
+  focus_keyword: { key: 'focus_keyword', type: FieldType.TEXT, labels: { fa: 'عبارت کلیدی پیشنهادی' } },
+} satisfies Record<string, ModuleField>;
 
 export default function ProductSiteContentPanel({ product, canEdit }: ProductSiteContentPanelProps) {
   const { message, modal } = App.useApp();
@@ -59,52 +76,38 @@ export default function ProductSiteContentPanel({ product, canEdit }: ProductSit
   const [suggestion, setSuggestion] = useState<Partial<ProductSiteContent> | null>(null);
   const [savedFingerprint, setSavedFingerprint] = useState(() => contentFingerprint(blank(product)));
   const [fileManagerOpen, setFileManagerOpen] = useState(false);
-  const [connections, setConnections] = useState<Array<{ id: string; name: string; is_active: boolean }>>([]);
-  const [selectedConnectionId, setSelectedConnectionId] = useState('');
-  const [loadingConnections, setLoadingConnections] = useState(false);
   const [syncingContent, setSyncingContent] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const currentProduct = useRef(product);
+  currentProduct.current = product;
+  const editable = canEdit && !loading && !loadFailed && !saving && !syncingContent;
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (showSpinner = true) => {
     if (!product?.id || !product?.org_id) { setLoading(false); return; }
-    setLoading(true);
+    if (showSpinner) setLoading(true);
+    setLoadFailed(false);
     try {
-      const { data, error } = await supabase.from('product_site_content').select('*')
+      const { data, error } = await supabase.from('product_site_content')
+        .select('id,org_id,product_id,title,short_description,description,slug,seo_title,seo_description,focus_keyword,site_image_url,site_image_alt,status,updated_at')
         .eq('org_id', product.org_id).eq('product_id', product.id).maybeSingle();
       if (error) throw error;
-      const nextValue = data ? { ...blank(product), ...data } : blank(product);
+      const nextValue = { ...blank(currentProduct.current), ...data, slug: displaySlug(data?.slug || '') };
       setValue(nextValue);
       setSavedFingerprint(contentFingerprint(nextValue));
     } catch (error: any) {
+      setLoadFailed(true);
       message.error(error?.message || 'بارگذاری محتوای سایت محصول ناموفق بود.');
     } finally {
       setLoading(false);
     }
-  }, [message, product?.id, product?.name, product?.org_id]);
+  }, [message, product?.id, product?.org_id]);
 
   useEffect(() => { void load(); }, [load]);
 
-  useEffect(() => {
-    let active = true;
-    if (!product?.org_id) return undefined;
-    setLoadingConnections(true);
-    void supabase.functions.invoke('external-connectors', { body: { action: 'list', orgId: product.org_id } })
-      .then(({ data, error }) => {
-        if (!active) return;
-        const available: Array<{ id: string; name: string; is_active: boolean }> = !error && Array.isArray(data?.connections)
-          ? data.connections.filter((item: any) => item?.is_active === true).map((item: any) => ({ id: String(item.id), name: String(item.name || 'WooCommerce'), is_active: true }))
-          : [];
-        setConnections(available);
-        setSelectedConnectionId((current) => available.some((item) => item.id === current) ? current : (available[0]?.id || ''));
-      })
-      .catch(() => { if (active) setConnections([]); })
-      .finally(() => { if (active) setLoadingConnections(false); });
-    return () => { active = false; };
-  }, [product?.org_id]);
-
   const checklist = useMemo(() => getProductSiteSeoChecklist({
     title: value.title,
-    shortDescription: value.short_description,
-    description: value.description,
+    shortDescription: richTextToPlainText(value.short_description),
+    description: richTextToPlainText(value.description),
     slug: value.slug,
     seoTitle: value.seo_title,
     seoDescription: value.seo_description,
@@ -115,10 +118,17 @@ export default function ProductSiteContentPanel({ product, canEdit }: ProductSit
   const score = checklist.length ? Math.round(checklist.filter((item) => item.passed).length * 100 / checklist.length) : 0;
 
   const update = (key: keyof ProductSiteContent, next: string) => setValue((previous) => ({ ...previous, [key]: next }));
+  const renderText = (field: keyof typeof textFields) => (
+    <Form.Item label={textFields[field].labels.fa}>
+      <SmartFieldRenderer field={textFields[field]} standalone forceEditMode={editable}
+        moduleId="products" recordId={String(product.id)} allValues={product}
+        value={value[field]} onChange={(next) => update(field, String(next ?? ''))} />
+    </Form.Item>
+  );
   const hasUnsavedChanges = contentFingerprint(value) !== savedFingerprint;
 
   const requestAiSuggestion = async () => {
-    if (!canEdit || !product?.id) return;
+    if (!editable || !product?.id) return;
     modal.confirm({
       title: 'دریافت پیشنهاد متنی با هوش مصنوعی',
       content: 'نام و چند ویژگی غیرمالی محصول برای ساخت پیش‌نویس به سرویس هوش مصنوعی سازمان فرستاده می‌شود. متن فقط پیشنهاد است؛ چیزی ذخیره یا منتشر نمی‌شود.',
@@ -145,7 +155,7 @@ export default function ProductSiteContentPanel({ product, canEdit }: ProductSit
   };
 
   const applySuggestion = () => {
-    if (!suggestion) return;
+    if (!suggestion || !editable) return;
     setValue((previous) => ({
       ...previous,
       short_description: suggestion.short_description ?? previous.short_description,
@@ -159,20 +169,39 @@ export default function ProductSiteContentPanel({ product, canEdit }: ProductSit
   };
 
   const saveDraft = async () => {
-    if (!canEdit) return;
+    if (!editable) return;
     if (!value.org_id || !value.product_id) { message.error('شناسهٔ سازمان یا محصول معتبر نیست.'); return; }
+    let slug: string;
+    try { slug = normalizeProductSiteSlug(value.slug); } catch {
+      message.error('نشانی کوتاه باید شامل حروف، عدد و خط تیره باشد.');
+      return;
+    }
+    if (value.title.length > 180 || value.seo_title.length > 180 || value.seo_description.length > 320
+        || value.focus_keyword.length > 120 || richTextToPlainText(value.short_description).trim().length > 800
+        || richTextToPlainText(value.description).trim().length > 12000 || value.short_description.length > 8000
+        || value.description.length > 60000) {
+      message.error('طول عنوان، توضیح کوتاه، توضیحات یا متن سئو بیش از اندازهٔ مجاز است.');
+      return;
+    }
     setSaving(true);
     try {
       const { data: userData } = await supabase.auth.getUser();
+      const { id, updated_at, ...fields } = value;
       const payload = {
-        ...value,
+        ...fields,
+        slug,
         status: 'draft' as const,
         updated_by: userData.user?.id || null,
         updated_at: new Date().toISOString(),
       };
-      const { data, error } = await supabase.from('product_site_content').upsert(payload, { onConflict: 'org_id,product_id' }).select('*').single();
+      const table = supabase.from('product_site_content');
+      const write = id && updated_at
+        ? table.update(payload).eq('org_id', value.org_id).eq('product_id', value.product_id).eq('updated_at', updated_at)
+        : table.insert(payload);
+      const { data, error } = await write.select('*').maybeSingle();
       if (error) throw error;
-      const nextValue = { ...blank(product), ...data };
+      if (!data) throw new Error('پیش‌نویس در جای دیگری تغییر کرده است. پیش از بارگذاری دوباره، متن فعلی را نگه دارید.');
+      const nextValue = { ...blank(product), ...data, slug: displaySlug(data.slug) };
       setValue(nextValue);
       setSavedFingerprint(contentFingerprint(nextValue));
       message.success('پیش‌نویس محتوای سایت ذخیره شد؛ چیزی منتشر نشده است.');
@@ -183,58 +212,33 @@ export default function ProductSiteContentPanel({ product, canEdit }: ProductSit
     }
   };
 
-  const syncSavedContentToWoo = () => {
-    if (!canEdit || !value.id || hasUnsavedChanges || !selectedConnectionId) return;
-    modal.confirm({
-      title: 'ارسال محتوای ذخیره‌شده به WooCommerce؟',
-      content: 'این کار عنوان، توضیح‌های غیرخالی، slug و در صورت انتخاب، تصویر را روی محصول متصل‌شده در فروشگاه به‌روزرسانی می‌کند. توضیح خالی نادیده گرفته می‌شود تا متن فعلی فروشگاه پاک نشود. تصویر باید از دامنهٔ ذخیره‌سازی همین برنامه یا CDN مجاز سرور باشد. وضعیت انتشار محصول در فروشگاه تغییر نمی‌کند؛ اما اگر محصول اکنون عمومی است، بازدیدکنندگان تغییر محتوا را خواهند دید. عنوان SEO و توضیح متا به افزونهٔ سئوی خاصی نگاشت نمی‌شوند.',
-      okText: 'ارسال دستی به فروشگاه',
-      cancelText: 'انصراف',
-      onOk: async () => {
-        setSyncingContent(true);
-        try {
-          const { data, error } = await supabase.functions.invoke('external-connectors', {
-            body: { action: 'sync_product_content', orgId: product.org_id, id: selectedConnectionId, localId: product.id },
-          });
-          if (error) throw error;
-          if (!data?.success) throw new Error(data?.message || 'ارسال محتوا ناموفق بود.');
-          message.success('محتوای ذخیره‌شده به محصول متصل در WooCommerce ارسال شد؛ تاریخچهٔ همگام‌سازی ثبت شده است.');
-        } catch (error: any) {
-          message.error(error?.message || 'ارسال محتوای محصول ناموفق بود.');
-        } finally {
-          setSyncingContent(false);
-        }
-      },
-    });
-  };
-
   if (loading) return <Card className="my-4"><div className="flex justify-center py-8"><Spin /></div></Card>;
 
   return (
     <Card className="my-4" title={<Space><span>محتوای سایت و SEO محصول</span><Tag color="blue">پیش‌نویس</Tag></Space>}>
-      <Alert className="mb-4" type="info" showIcon message="این محتوا از توضیحات داخلی محصول جداست. ذخیره فقط پیش‌نویس را نگه می‌دارد و هیچ چیزی به سایتی ارسال یا منتشر نمی‌شود. متن AI هم فقط پیشنهاد است و باید بازبینی شود." />
+      {loadFailed && <Alert className="mb-4" type="error" showIcon message="پیش‌نویس بارگذاری نشد." action={<Button onClick={() => void load()}>بارگذاری دوباره</Button>} />}
       <Row gutter={[16, 8]}>
         <Col xs={24} md={12}>
           <Form layout="vertical">
-            <Form.Item label="عنوان محصول در سایت"><Input maxLength={180} value={value.title} onChange={(event) => update('title', event.target.value)} disabled={!canEdit} /></Form.Item>
-            <Form.Item label="توضیح کوتاه"><Input.TextArea rows={3} maxLength={800} value={value.short_description} onChange={(event) => update('short_description', event.target.value)} disabled={!canEdit} /></Form.Item>
-            <Form.Item label="توضیحات کامل"><Input.TextArea rows={8} maxLength={12000} value={value.description} onChange={(event) => update('description', event.target.value)} disabled={!canEdit} /></Form.Item>
+            {renderText('title')}
+            {renderText('short_description')}
+            {renderText('description')}
             <Form.Item label="تصویر مخصوص سایت">
               <Space.Compact style={{ width: '100%' }}>
-                <Input dir="ltr" maxLength={2000} value={value.site_image_url} onChange={(event) => update('site_image_url', event.target.value)} disabled={!canEdit} placeholder="https://…" />
-                <Button disabled={!canEdit || !product?.id} onClick={() => setFileManagerOpen(true)}>انتخاب از فایل‌منیجر محصول</Button>
+                <Input dir="ltr" maxLength={2000} value={value.site_image_url} onChange={(event) => update('site_image_url', event.target.value)} disabled={!editable} placeholder="https://…" />
+                <Button disabled={!editable || !product?.id} onClick={() => setFileManagerOpen(true)}>انتخاب از فایل‌منیجر محصول</Button>
               </Space.Compact>
               <Text type="secondary">برای ارسال تصویر به فروشگاه، فایل باید از نشانی عمومی HTTPS قابل‌دسترسی باشد.</Text>
             </Form.Item>
-            <Form.Item label="متن جایگزین تصویر"><Input maxLength={250} value={value.site_image_alt} onChange={(event) => update('site_image_alt', event.target.value)} disabled={!canEdit} /></Form.Item>
+            <Form.Item label="متن جایگزین تصویر"><Input maxLength={250} value={value.site_image_alt} onChange={(event) => update('site_image_alt', event.target.value)} disabled={!editable} /></Form.Item>
           </Form>
         </Col>
         <Col xs={24} md={12}>
           <Form layout="vertical">
-            <Form.Item label="نشانی کوتاه (slug)"><Input dir="ltr" maxLength={180} value={value.slug} onChange={(event) => update('slug', event.target.value)} disabled={!canEdit} placeholder="sample-product" /></Form.Item>
-            <Form.Item label="عنوان SEO"><Input maxLength={180} value={value.seo_title} onChange={(event) => update('seo_title', event.target.value)} disabled={!canEdit} /></Form.Item>
-            <Form.Item label="توضیح متا"><Input.TextArea rows={3} maxLength={320} value={value.seo_description} onChange={(event) => update('seo_description', event.target.value)} disabled={!canEdit} /></Form.Item>
-            <Form.Item label="عبارت کلیدی پیشنهادی"><Input maxLength={120} value={value.focus_keyword} onChange={(event) => update('focus_keyword', event.target.value)} disabled={!canEdit} /></Form.Item>
+            <Form.Item label="نشانی کوتاه"><Input dir="ltr" maxLength={180} value={value.slug} onChange={(event) => update('slug', event.target.value)} disabled={!editable} placeholder="sample-product" /></Form.Item>
+            {renderText('seo_title')}
+            {renderText('seo_description')}
+            {renderText('focus_keyword')}
           </Form>
           <div className="rounded-xl border border-gray-200 p-4 dark:border-gray-700">
             <div className="mb-2 flex items-center justify-between"><Text strong>چک‌لیست آمادگی SEO KalamApp</Text><Text>{score}%</Text></div>
@@ -247,33 +251,23 @@ export default function ProductSiteContentPanel({ product, canEdit }: ProductSit
         </Col>
       </Row>
       <div className="mt-4 flex flex-wrap justify-end gap-2">
-        <Button icon={<BulbOutlined />} onClick={() => void requestAiSuggestion()} loading={generating} disabled={!canEdit}>پیشنهاد توضیحات با هوش مصنوعی</Button>
-        <Button icon={<EyeOutlined />} onClick={() => setPreviewOpen(true)}>پیش‌نمایش</Button>
-        <Button type="primary" icon={<SaveOutlined />} onClick={() => void saveDraft()} loading={saving} disabled={!canEdit}>ذخیرهٔ پیش‌نویس</Button>
+        <Button icon={<BulbOutlined />} onClick={() => void requestAiSuggestion()} loading={generating} disabled={!editable}>پیشنهاد توضیحات با هوش مصنوعی</Button>
+        <Button icon={<EyeOutlined />} onClick={() => setPreviewOpen(true)} disabled={loadFailed}>پیش‌نمایش پیش‌نویس</Button>
+        <Button type="primary" icon={<SaveOutlined />} onClick={() => void saveDraft()} loading={saving} disabled={!editable}>ذخیرهٔ پیش‌نویس</Button>
       </div>
-      <Card size="small" className="mt-4" title="همگام‌سازی دستی با WooCommerce">
-        <Space wrap>
-          <Typography.Text>فروشگاه فعال:</Typography.Text>
-          <Select aria-label="فروشگاه WooCommerce" style={{ minWidth: 220 }} loading={loadingConnections} value={selectedConnectionId || undefined}
-            placeholder={loadingConnections ? 'در حال دریافت…' : 'اتصال فعال را انتخاب کنید'} disabled={!canEdit || loadingConnections || connections.length === 0}
-            onChange={setSelectedConnectionId} options={connections.map((item) => ({ value: item.id, label: item.name }))} />
-          <Button danger loading={syncingContent} disabled={!canEdit || !value.id || hasUnsavedChanges || !selectedConnectionId || syncingContent}
-            onClick={syncSavedContentToWoo}>ارسال دستی محتوای ذخیره‌شده به فروشگاه…</Button>
-        </Space>
-        {!connections.length && !loadingConnections && <Alert className="mt-3" type="info" showIcon message="اتصال فعال WooCommerce در دسترس نیست یا اجازهٔ مشاهدهٔ آن وجود ندارد." />}
-        {hasUnsavedChanges && <Alert className="mt-3" type="warning" showIcon message="برای همگام‌سازی، ابتدا همین محتوا را ذخیره کنید." />}
-        <Typography.Paragraph type="secondary" className="mt-3 mb-0">هیچ همگام‌سازی خودکاری انجام نمی‌شود. هر ارسال با دکمه و تأیید جداگانه ثبت می‌شود. عنوان SEO، توضیح متا و عبارت کلیدی در پیش‌نویس باقی می‌مانند؛ نگاشت آن‌ها به افزونهٔ سئوی فروشگاه نیازمند پیکربندی اختصاصی است.</Typography.Paragraph>
-      </Card>
+      <ProductWooSyncTable orgId={String(product.org_id)} productId={String(product.id)} canEdit={canEdit && !loadFailed}
+        hasUnsavedChanges={hasUnsavedChanges} saving={saving} revision={value.updated_at}
+        onReceived={() => load(false)} onBusyChange={setSyncingContent} />
       <RecordFilesManager open={fileManagerOpen} onClose={() => setFileManagerOpen(false)} moduleId="products"
         recordId={String(product?.id || '')} mainImage={value.site_image_url}
         onMainImageChange={(url) => update('site_image_url', url || '')}
-        canEdit={canEdit} canUpload={canEdit} canDelete={false} />
+        canEdit={editable} canUpload={editable} canDelete={false} />
       <Modal open={previewOpen} onCancel={() => setPreviewOpen(false)} footer={<Button onClick={() => setPreviewOpen(false)}>بستن</Button>} title="پیش‌نمایش محتوای محصول" width={720}>
         <article dir="rtl" className="mx-auto max-w-2xl">
           {value.site_image_url ? <img src={value.site_image_url} alt={value.site_image_alt} className="mb-4 max-h-72 w-full rounded-xl object-cover" /> : null}
           <Title level={2}>{value.title || 'عنوان محصول'}</Title>
-          {value.short_description ? <p className="text-base font-medium">{value.short_description}</p> : null}
-          {value.description ? <p className="whitespace-pre-wrap leading-8">{value.description}</p> : <Text type="secondary">توضیحات کامل هنوز وارد نشده است.</Text>}
+          {value.short_description ? <RichTextContent value={value.short_description} className="text-base font-medium" /> : null}
+          {value.description ? <RichTextContent value={value.description} className="leading-8" /> : <Text type="secondary">توضیحات کامل هنوز وارد نشده است.</Text>}
           {value.slug ? <Text type="secondary" dir="ltr" className="block">/{value.slug}</Text> : null}
         </article>
       </Modal>
