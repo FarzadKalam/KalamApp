@@ -41,7 +41,7 @@ import { renderModuleIcon } from '../utils/moduleIcons';
 import { readDashboardPreferences, useDashboardPreferences, updateDashboardPreferences } from '../utils/dashboardPreferences';
 import { hasCurrentOrgPlanModule } from '../utils/saasPlanModules';
 import DashboardWidgetFrame, { DashboardModuleSelection, DashboardWidgetScope } from '../components/dashboard/DashboardWidgetFrame';
-import { DashboardLayout } from '../components/dashboard/DashboardLayout';
+import { DashboardLayout, DashboardDefaultLayoutSwitch } from '../components/dashboard/DashboardLayout';
 import CommunicationsWidget from '../components/dashboard/CommunicationsWidget';
 import MyTasksWidget from '../components/dashboard/MyTasksWidget';
 import DashboardWidgetLoading from '../components/dashboard/DashboardWidgetLoading';
@@ -1021,7 +1021,7 @@ const Dashboard: React.FC = () => {
   const [storyRefreshKey, setStoryRefreshKey] = useState(0);
   const preferences = useDashboardPreferences(orgId, currentUserId);
   const modulePreferenceKey = preferences.moduleIds?.join('|') ?? '__default__';
-  const dataVisibilityKey = preferences.hiddenWidgets.filter(id => id.startsWith('summary:') || id.startsWith('recent:') || id === 'summary_cards' || id === 'recent_lists').sort().join('|');
+  const dataVisibilityKey = preferences.hiddenWidgets.filter(id => id.startsWith('recent:') || id === 'summary_cards' || id === 'recent_lists').sort().join('|');
   const communicationsAccess = resolveCommunicationsPermissions(dashboardPermissions);
   const refreshDashboard = useCallback(() => {
     dashboardCardCache.clear();dashboardRecentSectionCache.clear();_dashboardTasksCache.expiresAt = 0;
@@ -1108,7 +1108,7 @@ const Dashboard: React.FC = () => {
         const hidden = new Set(preferences.hiddenWidgets);
         const reportFailure = (cause: unknown) => { if (active) setDashboardError(toFaErrorMessage(cause as any, 'دریافت بخشی از داشبورد انجام نشد؛ دوباره تلاش کنید.')); };
         await Promise.all([
-          mapWithConcurrency(prepared.moduleIds.filter(id => prepared.widgetPermissions.summary_cards !== false && !hidden.has('summary_cards') && !hidden.has('summary:' + id)), DASHBOARD_CARD_CONCURRENCY, async id => {
+          mapWithConcurrency((prepared.widgetPermissions.summary_cards !== false && !hidden.has('summary_cards') ? prepared.moduleIds : []), DASHBOARD_CARD_CONCURRENCY, async id => {
             try { const card = await loadCardForModule(id, prepared.recordAccess);if (active && card) setCards(previous => [...previous.filter(item => item.moduleId !== id), card]); }
             catch (cause) { reportFailure(cause); }
           }),
@@ -1156,13 +1156,11 @@ const Dashboard: React.FC = () => {
   const widgetChoices = [
     { id: 'stories', label: 'استوری‌ها' },{ id: 'ai', label: 'دستیار هوشمند' },{ id: 'agents_desk', label: 'میز کار ایجنت‌ها' },{ id: 'my_tasks', label: 'کارهای من' },{ id: 'reports_slider', label: 'گزارش‌های منتخب' },
     { id: 'activity_calendar', label: 'تقویم فعالیت‌ها' },{ id: 'our_processes', label: 'فرآیندهای ما' },{ id: 'communications', label: 'ارتباطات' },{ id: 'goals', label: 'اهداف و موفقیت‌ها' },{ id: 'quick_add', label: 'افزودن سریع' },
-    ...selectedModuleIds.flatMap(id => [
-      { id: 'summary:' + id, label: getModuleTitle(id) + ' · کارت خلاصه' },
-      { id: 'recent:' + id, label: getModuleTitle(id) + ' · رکوردهای اخیر' },
-    ]),
+    ...(selectedModuleIds.length > 0 ? [{ id: 'summary_cards', label: 'کارت‌های آماری' }] : []),
+    ...selectedModuleIds.map(id => ({ id: 'recent:' + id, label: getModuleTitle(id) + ' · رکوردهای اخیر' })),
   ].filter(({ id }) => {
     if (!dashboardReady || widgetPermissions.__all === false) return false;
-    const group = id.startsWith('summary:') ? 'summary_cards' : id.startsWith('recent:') ? 'recent_lists' : id;
+    const group = id.startsWith('recent:') ? 'recent_lists' : id;
     if (widgetPermissions[group] === false || widgetPermissions[id] === false) return false;
     if (id === 'stories') return Boolean(storiesPermissions?.canView);
     if (id === 'ai' || id === 'agents_desk' || id === 'communications') return communicationsAccess.canUseWorkspace;
@@ -1440,7 +1438,8 @@ const Dashboard: React.FC = () => {
           </div>
         </div>
         <div className="dashboard-layout-actions">
-          {editingLayout && <Button icon={<PlusOutlined />} onClick={() => setPersonalizeOpen(true)}>افزودن ویجت</Button>}
+          {editingLayout && <DashboardDefaultLayoutSwitch />}
+          {editingLayout && <Button size="small" icon={<PlusOutlined />} onClick={() => setPersonalizeOpen(true)}>افزودن ویجت</Button>}
           <Tooltip title={editingLayout ? 'پایان شخصی‌سازی' : 'شخصی‌سازی داشبورد'}>
             <Button className="dashboard-personalize-trigger" type={editingLayout ? 'primary' : 'default'}
               icon={editingLayout ? <CheckOutlined /> : <AppstoreOutlined />}
@@ -1544,13 +1543,19 @@ const Dashboard: React.FC = () => {
           </div>
         </DashboardWidgetFrame>
       ) : null}
-      {canShowWidget('summary_cards') && selectedModuleIds.length > 0 && selectedModuleIds.map(moduleId => { const card = cards.find(item => item.moduleId === moduleId);if (!card && !loading) return null;return <DashboardWidgetFrame key={'summary:' + moduleId} widgetId={`summary:${moduleId}`} title={card?.title || getModuleTitle(moduleId)} settings={moduleSelection}>
-        <Card className="dashboard-summary-card" onClick={() => navigate(`/${moduleId}`)} tabIndex={0} role="link" onKeyDown={event => { if (event.key === 'Enter') navigate(`/${moduleId}`); }}>
-          <div className="dashboard-stat-label">{getModuleIcon(moduleId)}<span>{getModuleTitle(moduleId)}</span></div>
-          {card ? <><Statistic title={card.title} value={card.value} formatter={value => <AutoFitText>{card.kind === 'price' ? formatPersianPrice(Number(value || 0), true) : toPersianNumber(Number(value || 0))}</AutoFitText>} suffix={card.kind === 'price' ? currency.label : undefined} />
-          <p className="dashboard-stat-description">{card.subtitle}</p></> : <Skeleton active paragraph={{ rows: 2 }} title={false} />}
-        </Card>
-      </DashboardWidgetFrame>; })}
+        {canShowWidget('summary_cards') && selectedModuleIds.length > 0 && <DashboardWidgetFrame key="summary_cards" widgetId="summary_cards" title="کارت‌های آماری" settings={moduleSelection} className="dashboard-stats-frame">
+          <div className="dashboard-summary-grid">{selectedModuleIds.map(moduleId => {
+            const card = cards.find(item => item.moduleId === moduleId);
+            if (!card && !loading) return null;
+            return (
+                    <Card key={moduleId} className="dashboard-summary-card" onClick={() => navigate(`/${moduleId}`)} tabIndex={0} role="link" onKeyDown={event => { if (event.key === 'Enter') navigate(`/${moduleId}`); }}>
+                      <div className="dashboard-stat-label">{getModuleIcon(moduleId)}<span>{getModuleTitle(moduleId)}</span></div>
+                      {card ? <><Statistic title={card.title} value={card.value} formatter={value => <AutoFitText>{card.kind === 'price' ? formatPersianPrice(Number(value || 0), true) : toPersianNumber(Number(value || 0))}</AutoFitText>} suffix={card.kind === 'price' ? currency.label : undefined} />
+                      <p className="dashboard-stat-description">{card.subtitle}</p></> : <Skeleton active paragraph={{ rows: 2 }} title={false} />}
+                    </Card>
+            );
+          })}</div>
+        </DashboardWidgetFrame>}
         {showReportsWidget && (
           <React.Suspense key="reports_slider" fallback={<DashboardWidgetLoading widgetId="reports_slider" title="گزارش‌ها" defaultOrder={3} />}>
             <ReportsSliderWidget
@@ -1583,8 +1588,7 @@ const Dashboard: React.FC = () => {
       </DashboardLayout>
       <Modal title="ویجت‌های داشبورد" open={personalizeOpen && editingLayout} onCancel={() => setPersonalizeOpen(false)} footer={<Button onClick={() => setPersonalizeOpen(false)}>بستن</Button>} destroyOnClose>
         {moduleSelection}
-        <div className="mt-5"><h3 className="mb-3 font-bold">نمایش ویجت‌ها</h3><div className="flex flex-col gap-3">{widgetChoices.map(widget => <Checkbox key={widget.id} checked={!preferences.hiddenWidgets.includes(widget.id)} onChange={event => updateDashboardPreferences(orgId, currentUserId, { hiddenWidgets: event.target.checked ? preferences.hiddenWidgets.filter(id => id !== widget.id) : [...new Set([...preferences.hiddenWidgets, widget.id])] })}>{widget.label}</Checkbox>)}</div></div>
-        <Button className="mt-5" onClick={() => updateDashboardPreferences(orgId, currentUserId, { hiddenWidgets: [], widgetOrder: [], widgetWidths: {} })}>بازگرداندن چیدمان پیش‌فرض</Button>
+        <div className="mt-5"><h3 className="mb-3 font-bold">نمایش ویجت‌ها</h3><div className="flex flex-col gap-3">{widgetChoices.map(widget => <Checkbox key={widget.id} checked={!preferences.hiddenWidgets.includes(widget.id)} onChange={event => updateDashboardPreferences(orgId, currentUserId, { layoutMode: 'custom', hiddenWidgets: event.target.checked ? preferences.hiddenWidgets.filter(id => id !== widget.id) : [...new Set([...preferences.hiddenWidgets, widget.id])] })}>{widget.label}</Checkbox>)}</div></div>
       </Modal>
     </div>
       {/* ─── Story Modals ─── */}
