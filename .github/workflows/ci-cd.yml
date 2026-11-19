@@ -343,6 +343,9 @@ jobs:
         with:
           deno-version: v2.9.6
 
+      - name: WooCommerce product transfer lock regression
+        run: deno test --frozen --node-modules-dir=none supabase/functions/external-connectors/product-content.deno.ts
+
       - name: Organization email backend regression checks
         run: deno test --node-modules-dir=none --allow-env --allow-read --allow-sys supabase/functions/_shared/email-runtime.deno.ts supabase/functions/send-email/send-email.deno.ts
 

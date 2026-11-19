@@ -74,8 +74,7 @@ export async function withWooProductLease<T>(
   work: (operation: string, baseline: ProductContentBaseline | null) => Promise<T>,
 ): Promise<T> {
   const operation = crypto.randomUUID();
-  const links = client.from('external_record_links');
-  const { data, error } = await links.update({
+  const { data, error } = await client.from('external_record_links').update({
     product_content_operation: operation,
     product_content_operation_until: new Date(Date.now() + 120_000).toISOString(),
   }).eq('org_id', orgId).eq('id', linkId)
@@ -86,7 +85,7 @@ export async function withWooProductLease<T>(
   try {
     return await work(operation, data.product_content_sync);
   } finally {
-    await links.update({ product_content_operation: null, product_content_operation_until: null })
+    await client.from('external_record_links').update({ product_content_operation: null, product_content_operation_until: null })
       .eq('org_id', orgId).eq('id', linkId).eq('product_content_operation', operation);
   }
 }
