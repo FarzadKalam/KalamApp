@@ -1,3 +1,4 @@
+import { canViewAiAgentModule, hasAiSettingsAdminPermission } from './ai-agent-role-access.ts';
 import { buildActorWorkIdentity } from './ai-actor-work-context.ts';
 import {
   AI_AGENT_CATALOG,
@@ -151,6 +152,7 @@ export const resolveAgentStatesForActor = (params: {
   userId?: string | null;
   roleId?: string | null;
   isOrgAdmin?: boolean;
+  softwareRole?: string | null;
 }): Record<AgentKey, ResolvedAgentMemberState> => {
   const userId = normalizeId(params.userId);
   const roleId = normalizeId(params.roleId);
@@ -171,7 +173,7 @@ export const resolveAgentStatesForActor = (params: {
   const aiFields = aiPerm?.fields && typeof aiPerm.fields === 'object' ? aiPerm.fields : {};
   const sectionView = !params.permissions || aiPerm?.view !== false;
   const sectionEdit = aiPerm?.edit === true;
-  const isOrgAdmin = Boolean(params.isOrgAdmin);
+  const isOrgAdmin = params.isOrgAdmin ?? hasAiSettingsAdminPermission(params.permissions);
 
   const staffBotGlobalPerm = findPerm(AI_AGENTS_STAFF_BOT_PERMISSION_KEY);
   const staffBotPlanAllowed = isPlanFeatureEnabled(params.planContext, 'ai_staff_bot');
@@ -183,34 +185,30 @@ export const resolveAgentStatesForActor = (params: {
     const permRow = findPerm(agentDef.key);
 
     const missingPlanModules = agentDef.primaryModules.filter((mod) => !isPlanModuleEnabled(params.planContext, mod));
-    const missingRbacModules = params.permissions
-      ? agentDef.primaryModules.filter((mod) => !canViewModulePermission(params.permissions, mod))
-      : [];
-
+    const missingRbacModules = agentDef.primaryModules.filter((moduleId) => !canViewAiAgentModule({
+      permissions: params.permissions, moduleId, parentModuleId: RETURN_INVOICE_PARENT_MODULES[moduleId],
+      softwareRole: params.softwareRole, isOrgAdmin,
+    }));
+    const blockedModules = new Set([...missingPlanModules, ...missingRbacModules]);
     const hasAnyUsableModule = agentDef.key === 'lead_orchestrator'
-      ? true
-      : agentDef.primaryModules.some((mod) => canViewModuleWithPlan(params.planContext, params.permissions, mod));
+      || agentDef.primaryModules.some((moduleId) => !blockedModules.has(moduleId));
 
     const planAllowed = isAgentPlanAllowed(params.planContext, agentDef);
     const roleAgentViewAllowed = sectionView && aiFields[getAiAgentPermissionFieldKey(agentDef.key, 'view')] !== false;
-    const rbacAllowed = roleAgentViewAllowed && (!params.permissions || isOrgAdmin || hasAnyUsableModule);
+    const rbacAllowed = roleAgentViewAllowed && hasAnyUsableModule;
 
     // Explicit member permission override takes precedence; otherwise allow when org, plan & RBAC permit
     const memberCanUse = permRow ? permRow.can_use !== false : true;
 
-    const baseRoleCanToggle = isOrgAdmin
-      ? aiFields[getAiAgentPermissionFieldKey(agentDef.key, 'toggle')] !== false
-      : (sectionEdit || aiFields[getAiAgentPermissionFieldKey(agentDef.key, 'toggle')] === true);
-    const baseRoleCanEdit = isOrgAdmin
-      ? aiFields[getAiAgentPermissionFieldKey(agentDef.key, 'edit')] !== false
-      : (sectionEdit || aiFields[getAiAgentPermissionFieldKey(agentDef.key, 'edit')] === true);
+    const baseRoleCanToggle = aiFields[getAiAgentPermissionFieldKey(agentDef.key, 'toggle')] ?? (isOrgAdmin || sectionEdit);
+    const baseRoleCanEdit = aiFields[getAiAgentPermissionFieldKey(agentDef.key, 'edit')] ?? (isOrgAdmin || sectionEdit);
     const baseRoleCanChat = !params.permissions
       ? true
       : aiFields[getAiAgentPermissionFieldKey(agentDef.key, 'chat')] !== false;
 
     const eligibleActor = planAllowed && rbacAllowed && memberCanUse;
-    const canToggle = eligibleActor && baseRoleCanToggle;
-    const canEdit = eligibleActor && baseRoleCanEdit;
+    const canToggle = eligibleActor && baseRoleCanToggle === true;
+    const canEdit = eligibleActor && baseRoleCanEdit === true;
     // Disabled agents are completely hidden from users without toggle/edit rights
     const canView = eligibleActor && (orgEnabled || canToggle || canEdit);
     const canChat = canView && orgEnabled && baseRoleCanChat;
@@ -249,7 +247,7 @@ export const resolveAgentStatesForActor = (params: {
       toneStyle,
       planAllowed,
       rbacAllowed,
-      missingModules: Array.from(new Set([...missingPlanModules, ...missingRbacModules])),
+      missingModules: Array.from(blockedModules),
       config,
     };
   }
@@ -400,24 +398,14 @@ export const loadCentralAiGrounding = async (params: {
       ])
     : [[], []];
 
-  const perms = params.authContext?.permissions;
-  const settingsPerm = perms?.__settings_tabs || {};
-  const settingsFields = settingsPerm?.fields || {};
-  const isOrgAdmin = !perms || typeof perms !== 'object'
-    ? true
-    : settingsPerm?.view !== false
-      && settingsPerm?.edit === true
-      && settingsFields?.ai !== false
-      && settingsFields?.ai_settings !== false;
-
   const agentStates = resolveAgentStatesForActor({
     agentConfigs,
     memberPermissions,
     planContext: params.planContext,
-    permissions: perms,
+    permissions: params.authContext?.permissions,
     userId: params.authContext?.userId,
     roleId: params.authContext?.roleId,
-    isOrgAdmin,
+    softwareRole: params.authContext?.softwareRole,
   });
 
   if (freeChatMode || !orgId) {

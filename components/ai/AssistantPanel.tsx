@@ -1875,8 +1875,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           permissions: bootstrap?.permissions || null,
           userId: bootstrap?.user?.id || null,
           roleId: bootstrap?.roleId || null,
-          isOrgAdmin: String(bootstrap?.profile?.role || '').toLowerCase() === 'admin'
-            || bootstrap?.permissions?.__settings_tabs?.edit === true,
+          softwareRole: bootstrap?.orgId ? bootstrap.profile?.role : null,
         }));
         const [overviewRes, workspaceRes] = await Promise.allSettled([
           callAssistant({ action: 'get_ai_overview' }),

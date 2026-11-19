@@ -30,7 +30,7 @@ import { resolveRunnableAgentsForActor } from '../../supabase/functions/_shared/
 import { AI_AGENT_CATALOG as SERVER_AI_AGENT_CATALOG } from '../../supabase/functions/_shared/ai-agent-catalog.ts';
 import { listAgentSkills } from '../../supabase/functions/_shared/ai-skill-catalog.ts';
 import { resolveModelSlot, tryResolveModelSlot } from '../../supabase/functions/_shared/ai-gateway.ts';
-import { isWithinOrgWorkSchedule, resolveAgentStatesForActor } from '../../supabase/functions/_shared/ai-grounding.ts';
+import { canViewModuleWithPlan, isWithinOrgWorkSchedule, loadCentralAiGrounding, resolveAgentStatesForActor } from '../../supabase/functions/_shared/ai-grounding.ts';
 import { compileLayeredAgentPrompt } from '../../supabase/functions/_shared/ai-prompt-compiler.ts';
 import {
   AUTO_COMPACTION_THRESHOLD_RATIO,
@@ -272,6 +272,60 @@ describe('Modular AaaS Foundation', () => {
     });
     expect(chosenPerAgentDefault.model).toBe('deepseek-v4.1-flash');
     expect(chosenPerAgentDefault.source).toBe('saas_agent_default');
+  });
+
+  it.each(['demo', 'internal_organization'])('shows permitted agents to verified admins with sparse role permissions (%s)', (reason) => {
+    const enabledModules = { customers: true, marketing_leads: true, invoices: true, campaigns: false, tasks: true, projects: true };
+    const features = { 'ai_agent:lead_orchestrator': true, 'ai_agent:sales_leads': true, 'ai_agent:project_process': true, 'ai_agent:hr_manager': false };
+    const permissions = reason === 'demo' ? {} : { __saas_admin: { view: true, edit: true } };
+    const planContext = { reason, available: true, strictModules: true, enabledModules, features };
+    const check = (actor: { softwareRole: string; permissions: Record<string, any> }, configs: { agent_key: string; is_enabled: boolean }[] = [], memberPermissions: { agent_key: string; subject_type: 'user'; subject_id: string; can_use: boolean }[] = []) => [
+      resolveClientAgentAccess({ ...actor, enabledModules, planFeatures: features, agentConfigs: configs, memberPermissions, userId: 'user' }),
+      resolveAgentStatesForActor({ ...actor, planContext, agentConfigs: configs, memberPermissions, userId: 'user' }),
+    ];
+    for (const access of check({ softwareRole: 'admin', permissions })) {
+      expect(access.sales_leads.canChat).toBe(true);
+      expect(access.project_process.canChat).toBe(true);
+      expect(access.hr_manager.canView).toBe(false);
+      expect(access.sales_leads.canEdit).toBe(false);
+    }
+    for (const access of check({ softwareRole: 'viewer', permissions })) {
+      expect(access.lead_orchestrator.canChat).toBe(true);
+      expect(access.sales_leads.canView).toBe(false);
+    }
+    for (const access of check({ softwareRole: 'admin', permissions: {
+      ...permissions, customers: { view: false }, invoices: { view: false }, marketing_leads: { view: false }, campaigns: { view: false },
+      __ai_agents: { edit: true, fields: { 'project_process.chat': false, 'project_process.toggle': false, 'project_process.edit': false } },
+    } })) {
+      expect(access.sales_leads.canView).toBe(false);
+      expect(access.project_process.canView).toBe(true);
+      expect(access.project_process.canChat).toBe(false);
+      expect(access.project_process.canToggle).toBe(false);
+      expect(access.project_process.canEdit).toBe(false);
+    }
+    for (const access of check({ softwareRole: 'admin', permissions }, [{ agent_key: 'project_process', is_enabled: false }],
+      [{ agent_key: 'sales_leads', subject_type: 'user', subject_id: 'user', can_use: false }])) {
+      expect(access.sales_leads.canView).toBe(false);
+      expect(access.project_process.canChat).toBe(false);
+    }
+  });
+
+  it('uses the active membership role in grounding without adding record permissions', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json([]));
+    const permissions = { __saas_admin: { view: true, edit: true } };
+    const planContext = { available: true, strictModules: true, enabledModules: { employees: true, tasks: true } };
+    try {
+      const grounding = await loadCentralAiGrounding({
+        supabaseUrl: 'https://example.invalid', serviceRoleKey: 'test', planContext,
+        authContext: { orgId: 'active-org', softwareRole: 'admin', permissions },
+        freeChatMode: true,
+      });
+      expect(grounding.agentStates.hr_manager.canChat).toBe(true);
+      expect(grounding.agentStates.hr_manager.canEdit).toBe(false);
+      expect(canViewModuleWithPlan(planContext, permissions, 'employees')).toBe(false);
+    } finally {
+      fetch.mockRestore();
+    }
   });
 
   it('enforces Hybrid Plan x RBAC x Member Override access and Tehran work schedules', () => {

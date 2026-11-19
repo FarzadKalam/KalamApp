@@ -14,7 +14,6 @@ import { MODULES } from '../moduleRegistry';
 import { FieldType, type ModuleDefinition } from '../types';
 import {
   DASHBOARD_PERMISSION_KEY,
-  SAAS_ADMIN_PERMISSION_KEY,
   SETTINGS_PERMISSION_KEY,
   canAccessAssignedRecord,
   fetchCurrentUserRecordAccessContext,
@@ -1086,16 +1085,11 @@ const Dashboard: React.FC = () => {
         setCanPublishSaasStory(resolveSaasAdminFieldPermission(perms, 'publish_saas_story'));
         setCanPublishSaasAdminStory(resolveSaasAdminFieldPermission(perms, 'publish_saas_admin_story'));
         if (userId) {
-          const normalizedRole = String(profile?.role || '').trim().toLowerCase();
           setDashboardAgentAccessMap((prev) => prev || resolveClientAgentAccess({
             permissions: perms,
             userId,
             roleId: snapshot.roleId,
-            isOrgAdmin:
-              perms?.[SETTINGS_PERMISSION_KEY]?.edit === true
-              || perms?.[SAAS_ADMIN_PERMISSION_KEY]?.edit === true
-              || normalizedRole === 'super_admin'
-              || normalizedRole === 'admin',
+            softwareRole: snapshot.orgId ? profile?.role : null,
           }));
         }
         const prepared = await buildDashboardBootstrap();
