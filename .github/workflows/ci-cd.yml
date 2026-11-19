@@ -8,7 +8,11 @@ on:
   workflow_dispatch:
     inputs:
       deploy:
-        description: 'Publish this tested release with explicit phases 589/590/591/592 and the approved tenant-content functions'
+        description: 'Publish this tested release'
+        type: boolean
+        default: false
+      frontend_only:
+        description: 'Publish the frontend without applying migrations or deploying Edge Functions'
         type: boolean
         default: false
       skip_browser_checks:
@@ -671,6 +675,7 @@ jobs:
           fi
 
       - name: Apply the explicitly approved plan feature migrations
+        if: ${{ !inputs.frontend_only }}
         shell: pwsh
         env:
           DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
@@ -683,6 +688,7 @@ jobs:
           & ./scripts/run-server-db-migrations.ps1 -SqlFiles $migrations
 
       - name: Deploy the AI assistant with shared agents
+        if: ${{ !inputs.frontend_only }}
         shell: pwsh
         env:
           DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
