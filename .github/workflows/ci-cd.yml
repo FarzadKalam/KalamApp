@@ -767,6 +767,18 @@ jobs:
           DEPLOY_FUNCTIONS_COMPOSE_DIR: /opt/kalamapp/supabase/docker
         run: ./scripts/deploy-supabase-function.ps1 -Functions @('goal-progress','report-runtime','workflow-interval-runner')
 
+      - uses: actions/setup-node@v4
+        if: ${{ !inputs.frontend_only }}
+        with:
+          node-version: 20
+
+      - name: Verify the live condition RPC and Edge Functions
+        if: ${{ !inputs.frontend_only }}
+        env:
+          DEPLOY_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          DEPLOY_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: node scripts/smoke-condition-runtimes.mjs
+
       - name: Recheck main before activating the frontend
         run: |
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main

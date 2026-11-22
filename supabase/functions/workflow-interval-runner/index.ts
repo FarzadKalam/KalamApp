@@ -57,7 +57,7 @@ import {
 import { getAgentDefinition } from '../_shared/ai-agent-catalog.ts';
 import { buildAvalaiPromptCacheKey, fetchAvalaiChatWithCacheKey, isModelReasoning, tryResolveModelSlot } from '../_shared/ai-gateway.ts';
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-11-18-stable-prompt-routing';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-11-22-table-conditions';
 const MAX_WORKFLOWS = 30;
 const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
