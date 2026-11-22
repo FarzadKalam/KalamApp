@@ -174,6 +174,7 @@ import {
   resolveProcessAssigneeReference,
 } from '../utils/processAssigneeReference';
 import { renderTypedTemplateValue, sanitizeOutboundDisplay } from '../shared/recordRuntime';
+import { getLinkedConditionTableSources } from '../utils/conditionTableFields';
 import {
   createProcessGroupId,
   ensureProcessRunForDraftStageGroup,
@@ -1335,6 +1336,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     return stageModuleIds.length > 0 ? stageModuleIds : automationScopeModuleIds;
   }, [automationScopeModuleIds, editingDraft]);
   const automationScopeModuleId = stageAutomationScopeModuleIds[0] || '';
+  const automationConditionTables = useMemo(
+    () => getLinkedConditionTableSources(stageAutomationScopeModuleIds),
+    [stageAutomationScopeModuleIds],
+  );
   const draftCustomAutomationFields = useMemo(
     () => buildProcessTaskCustomAutomationFields(draftCustomFields),
     [draftCustomFields]
@@ -12095,6 +12100,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                       ),
                                     })}
                                     fields={draftStageTaskType ? automationConditionFieldsWithoutTaskType : automationConditionFields}
+                                    tableSources={automationConditionTables}
                                     dynamicOptions={automationDynamicOptions}
                                     relationOptions={automationRelationOptions}
                                     dynamicFieldProps={{
@@ -12120,6 +12126,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                       ),
                                     })}
                                     fields={draftStageTaskType ? automationConditionFieldsWithoutTaskType : automationConditionFields}
+                                    tableSources={automationConditionTables}
                                     dynamicOptions={automationDynamicOptions}
                                     relationOptions={automationRelationOptions}
                                     dynamicFieldProps={{
@@ -12207,6 +12214,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                             triggerTypeOptions: processAutomationTriggerTypeOptions,
                             legacyTriggerOption: PROCESS_AUTOMATION_LEGACY_PREVIOUS_STAGE_TRIGGER_OPTION,
                             conditionFields: draftStageTaskType ? automationConditionFieldsWithoutTaskType : automationConditionFields,
+                            conditionTableSources: automationConditionTables,
                             hasLockedTaskType: !!draftStageTaskType,
                             lockedTaskTypeLabel: draftStageTaskTypeLabel,
                             dynamicOptions: automationDynamicOptions,

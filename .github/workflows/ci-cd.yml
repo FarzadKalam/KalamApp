@@ -472,6 +472,9 @@ jobs:
           VITE_MAP_STYLE_URL: ${{ secrets.VITE_MAP_STYLE_URL }}
         run: npm run build
 
+      - name: Check table conditions across feature runtimes
+        run: npx vitest run shared/recordRuntime.test.ts utils/workflowRuntime.test.ts utils/reporting.test.ts utils/reportQueryPrefilters.test.ts utils/viewDateFilters.test.ts utils/customerClub.test.ts utils/processActivatorContext.test.ts components/workflows/WorkflowConditionsGroup.test.tsx --maxWorkers=1 --no-file-parallelism
+
       - name: Verify PWA release
         run: node scripts/verify-pwa-release.mjs
 
@@ -732,7 +735,15 @@ jobs:
             exit 1
           fi
 
-      - name: Apply the explicitly approved release migrations
+      - name: Confirm this release includes the latest changes on main
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$GITHUB_SHA" != "$(git rev-parse origin/main)" ]; then
+            echo "::error::main has advanced. Test the newest source before deploying."
+            exit 1
+          fi
+
+      - name: Apply the explicitly approved condition-table migrations
         if: ${{ !inputs.frontend_only }}
         shell: pwsh
         env:
@@ -741,11 +752,11 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVER_USER }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $migrations = @('database_v1_phase613_woo_product_content_sync.sql', 'database_v1_phase614_woo_invoice_product_sales.sql')
+          $migrations = @('database_v1_phase615_customer_club_invoice_conditions.sql', 'database_v1_phase616_cash_bank_private_saved_views.sql')
           $migrations | ForEach-Object { Get-FileHash -Algorithm SHA256 -LiteralPath $_ } | Format-List
           & ./scripts/run-server-db-migrations.ps1 -SqlFiles $migrations
 
-      - name: Deploy the WooCommerce connector
+      - name: Deploy report and workflow condition runtimes
         if: ${{ !inputs.frontend_only }}
         shell: pwsh
         env:
@@ -754,11 +765,15 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVER_USER }}
           DEPLOY_FUNCTIONS_PATH: /opt/kalamapp/supabase/docker/volumes/functions
           DEPLOY_FUNCTIONS_COMPOSE_DIR: /opt/kalamapp/supabase/docker
-        run: ./scripts/deploy-supabase-function.ps1 -Functions @('external-connectors')
+        run: ./scripts/deploy-supabase-function.ps1 -Functions @('goal-progress','report-runtime','workflow-interval-runner')
 
-      - name: Check the live WooCommerce connector
-        if: ${{ !inputs.frontend_only }}
-        run: node scripts/smoke-woocommerce-connector.mjs
+      - name: Recheck main before activating the frontend
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$GITHUB_SHA" != "$(git rev-parse origin/main)" ]; then
+            echo "::error::main has advanced. Test the newest source before activating the frontend."
+            exit 1
+          fi
 
       - name: Activate release
         env:

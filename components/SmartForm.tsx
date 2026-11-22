@@ -2202,6 +2202,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
           if (rulesError) throw rulesError;
 
           const candidateRules = (ruleRows || []).filter((rule: any) => {
+            if (rule?.config?.invoice_conditions != null) return false;
             const conditionsAll = Array.isArray(rule?.conditions_all) ? rule.conditions_all : [];
             const conditionsAny = Array.isArray(rule?.conditions_any) ? rule.conditions_any : [];
             if (conditionsAll.length === 0 && conditionsAny.length === 0) return false;

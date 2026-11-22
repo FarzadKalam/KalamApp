@@ -52,6 +52,8 @@ import {
 import { getTaskStatusLabel, getTaskStatusOptions } from '../utils/processTaskStatusOptions';
 import { parseProcessLinkedFieldKey } from '../utils/processTargets';
 import WorkflowConditionsGroup from '../components/workflows/WorkflowConditionsGroup';
+import { isTableConditionOperator } from '../shared/recordRuntime';
+import { getConditionTableSources, hasIncompleteTableCondition } from '../utils/conditionTableFields';
 
 const { Title, Text } = Typography;
 
@@ -483,6 +485,7 @@ const ReportViewerPage: React.FC = () => {
 
   const config = useMemo(() => normalizeReportConfig(report?.config), [report?.config]);
   const moduleId = String(report?.module_id || '').trim();
+  const conditionTableSources = useMemo(() => getConditionTableSources(moduleId), [moduleId]);
   const secondaryModuleIds = config.secondary_module_ids;
   const scopedSurveyTemplateId = useMemo(
     () => (
@@ -532,21 +535,29 @@ const ReportViewerPage: React.FC = () => {
   }, [config.conditions_all, config.conditions_any, reportId]);
 
   const applyTemporaryConditions = useCallback(() => {
+    if (hasIncompleteTableCondition([...draftConditionsAll, ...draftConditionsAny], conditionTableSources)) {
+      message.error('برای هر شرط جدول، دست‌کم یک شرط ردیف کامل کنید.');
+      return;
+    }
     setReport((current) => current ? {
       ...current,
       config: { ...config, conditions_all: draftConditionsAll, conditions_any: draftConditionsAny },
     } : current);
     message.success('شرایط برای همین مشاهده اعمال شد.');
-  }, [config, draftConditionsAll, draftConditionsAny, message]);
+  }, [conditionTableSources, config, draftConditionsAll, draftConditionsAny, message]);
 
   const saveReportConditions = useCallback(async () => {
     if (!report || !reportId || !canEditReport) return;
+    if (hasIncompleteTableCondition([...draftConditionsAll, ...draftConditionsAny], conditionTableSources)) {
+      message.error('برای هر شرط جدول، دست‌کم یک شرط ردیف کامل کنید.');
+      return;
+    }
     const nextConfig = { ...config, conditions_all: draftConditionsAll, conditions_any: draftConditionsAny };
     const { error } = await supabase.from('report_definitions').update({ config: nextConfig }).eq('id', reportId);
     if (error) throw error;
     setReport((current) => current ? { ...current, config: nextConfig } : current);
     message.success('شرایط گزارش ذخیره شد.');
-  }, [canEditReport, config, draftConditionsAll, draftConditionsAny, message, report, reportId]);
+  }, [canEditReport, conditionTableSources, config, draftConditionsAll, draftConditionsAny, message, report, reportId]);
   const groupingFields = useMemo(
     () => config.group_bys.map((item) => fieldMap[item.field]).filter(Boolean),
     [config.group_bys, fieldMap]
@@ -758,6 +769,16 @@ const ReportViewerPage: React.FC = () => {
         ...config.conditions_all,
         ...config.conditions_any,
       ].map((condition: any) => String(condition?.field || '').trim()).filter(Boolean);
+      const tableConditionsAll = config.conditions_all.filter(({ operator }) => isTableConditionOperator(operator));
+      const reportRowConditionsAll = config.conditions_all.filter(({ operator }) => !isTableConditionOperator(operator));
+      const tableConditionsAny = config.conditions_any.every(({ operator }) => isTableConditionOperator(operator))
+        ? config.conditions_any
+        : [];
+      const canReadTableConditions = [...config.conditions_all, ...config.conditions_any].every(
+        ({ operator, field }) => !isTableConditionOperator(operator) || modulePerm.fields?.[field] !== false,
+      );
+      if (!canReadTableConditions) throw new Error('دسترسی به جدول انتخاب‌شده برای شرط گزارش وجود ندارد.');
+      const tableConditionContext = createWorkflowEvaluationContext(moduleId);
       const taskProcessFieldKeys = Array.from(new Set([
         ...neededKeys,
         ...conditionFieldKeys,
@@ -768,6 +789,12 @@ const ReportViewerPage: React.FC = () => {
         selectedTableBlocks,
       );
 
+      const canReadSourceRow = (row: any) => !isDeletedReportRecord(row)
+        && canAccessAssignedRecord(row, roleContext.userId, roleContext.roleId, modulePerm.record_scope || 'all', {
+          currentOrgId: roleContext.orgId,
+          allowedRoleIds: roleContext.allowedRoleIds,
+          allowedUserIds: roleContext.allowedUserIds,
+        });
       const reportDataBudget = createReportDataBudget();
       const scheduleReportWork = createReportWorkScheduler();
       const baseRows = await fetchReportRowsByPage<any>(config.row_limit,(start,end) => runSelectWithCompatibleColumns<any[]>({
@@ -789,22 +816,27 @@ const ReportViewerPage: React.FC = () => {
             },
           ).order('id',{ascending:true}).range(start,end);
         },
-      }), {budget: reportDataBudget});
+      }), {
+        budget: reportDataBudget,
+        accept: tableConditionsAll.length > 0 || tableConditionsAny.length > 0
+          ? async (record) => canReadSourceRow(record) && evaluateWorkflowConditions({
+            conditionsAll: tableConditionsAll,
+            conditionsAny: tableConditionsAny,
+            currentRecord: record,
+            moduleId,
+            context: tableConditionContext,
+          })
+          : undefined,
+      });
 
-      const scopedRows = baseRows.filter((row: any) =>
-        !isDeletedReportRecord(row) && canAccessAssignedRecord(row, roleContext.userId, roleContext.roleId, modulePerm.record_scope || 'all', {
-          currentOrgId: roleContext.orgId,
-          allowedRoleIds: roleContext.allowedRoleIds,
-          allowedUserIds: roleContext.allowedUserIds,
-        })
-      );
+      const scopedRows = baseRows.filter(canReadSourceRow);
       const processLinkedFieldKeys = Array.from(new Set([
         ...neededKeys,
         ...conditionFieldKeys,
       ].filter((fieldKey) => !!parseProcessLinkedFieldKey(fieldKey))));
       const canResolveProcessConditionsOnServer = conditionFieldKeys.every((fieldKey) => (
         !parseReportTableFieldKey(fieldKey) && !parseReportTableRelationFieldKey(fieldKey)
-      ));
+      )) && ![...config.conditions_all, ...config.conditions_any].some(({ operator }) => isTableConditionOperator(operator));
       let reportSourceRows = scopedRows;
       let conditionsResolvedByServer = false;
       if (moduleId === 'tasks' && processLinkedFieldKeys.length > 0) {
@@ -999,9 +1031,9 @@ const ReportViewerPage: React.FC = () => {
 
           const passed = conditionsResolvedByServer || await evaluateWorkflowConditions({
             conditionsAll: moduleId === 'tasks'
-              ? normalizeTaskStatusConditionsForRow(config.conditions_all, candidateRow)
-              : config.conditions_all,
-            conditionsAny: moduleId === 'tasks'
+              ? normalizeTaskStatusConditionsForRow(reportRowConditionsAll, candidateRow)
+              : reportRowConditionsAll,
+            conditionsAny: tableConditionsAny.length > 0 ? [] : moduleId === 'tasks'
               ? normalizeTaskStatusConditionsForRow(config.conditions_any, candidateRow)
               : config.conditions_any,
             currentRecord: candidateRow,
@@ -1977,8 +2009,8 @@ const ReportViewerPage: React.FC = () => {
             key: 'conditions',
             label: 'شرایط گزارش',
             children: <div className="space-y-4">
-              <WorkflowConditionsGroup value={draftConditionsAll} onChange={setDraftConditionsAll} fields={reportableFields} dynamicOptions={dynamicOptions} relationOptions={relationOptions} />
-              <WorkflowConditionsGroup value={draftConditionsAny} onChange={setDraftConditionsAny} fields={reportableFields} dynamicOptions={dynamicOptions} relationOptions={relationOptions} />
+              <WorkflowConditionsGroup value={draftConditionsAll} onChange={setDraftConditionsAll} fields={reportableFields} tableSources={conditionTableSources} dynamicOptions={dynamicOptions} relationOptions={relationOptions} />
+              <WorkflowConditionsGroup value={draftConditionsAny} onChange={setDraftConditionsAny} fields={reportableFields} tableSources={conditionTableSources} dynamicOptions={dynamicOptions} relationOptions={relationOptions} />
               <div className="flex flex-wrap gap-2">
                 <Button type="primary" className="kalam-btn-brand" onClick={applyTemporaryConditions}>اعمال موقت</Button>
                 <Button disabled={!canEditReport} onClick={() => void saveReportConditions().catch((error) => message.error(String(error?.message || 'ذخیره گزارش ناموفق بود')))}>ذخیره گزارش</Button>

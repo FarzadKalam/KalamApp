@@ -232,6 +232,7 @@ export const runnableProcessConditions = (value: any): any[] => {
   ]);
   return (Array.isArray(value) ? value : []).filter((condition: any) => {
     if (!String(condition?.field || '').trim()) return false;
+    if (condition.operator === 'table_any' || condition.operator === 'table_all') return true;
     if (noValueOperators.has(String(condition?.operator || 'eq'))) return true;
     return condition?.value !== null
       && condition?.value !== undefined

@@ -26,10 +26,14 @@ import { renderProcessStageForTaskCreation } from '../_shared/process-stage-temp
 import { buildAutomatedBotSenderPayload, extractBotProviderMessageId } from '../_shared/bot-system-message.ts';
 import {
   evaluateConditionCollection as evaluateCentralConditionCollection,
+  getConditionRecordField,
+  getTableRowRelationId,
+  isTableConditionOperator,
   richTextMarkupToPlainText,
   renderTemplateAsync as renderCentralTemplateAsync,
 } from './_runtime-deps/recordRuntime.ts';
 import { evaluateWorkflowConditionWithResolver } from './_runtime-deps/workflowConditionRuntime.ts';
+import { loadOrgPlanAccess } from '../_shared/org-plan-access.ts';
 import { assignProcessTemplateSystemVariableValues } from './_runtime-deps/processTemplateSystemVariables.ts';
 import {
   getLegacyWorkflowAttachmentFields,
@@ -477,6 +481,11 @@ async function resolveWorkflowFieldValue(
 
   const relatedMeta = parseWorkflowRelatedFieldKey(normalizedFieldKey);
   if (relatedMeta) {
+    if (relatedMeta.targetModuleId === 'reservations') {
+      if (!orgId) return undefined;
+      const access = await loadOrgPlanAccess(url, key, orgId);
+      if (!access.available || access.enabledModules?.reservations !== true) return undefined;
+    }
     const relationId = String(getFieldValue(record, relatedMeta.relationFieldKey) || '').trim();
     if (!relationId) return null;
     const relatedRecord = await fetchRelatedRecord(url, key, relatedMeta.targetModuleId, relationId, orgId);
@@ -1052,11 +1061,10 @@ async function evaluateConditionWithPrevious(
   const field = String(condition?.field || '').trim();
   if (!field) return true;
   const operator = String(condition?.operator || 'eq').trim();
-  const expected = condition?.value;
   const current = runtime
     ? await resolveWorkflowFieldValue(runtime.url, runtime.key, field, record, runtime.orgId, runtime.moduleId)
     : getFieldValueForCondition(record, field);
-  const previous = previousRecord
+  const previous = previousRecord && !isTableConditionOperator(operator)
     ? (runtime
         ? await resolveWorkflowFieldValue(runtime.url, runtime.key, field, previousRecord, runtime.orgId, runtime.moduleId)
         : getFieldValueForCondition(previousRecord, field))
@@ -1065,6 +1073,21 @@ async function evaluateConditionWithPrevious(
   return evaluateWorkflowConditionWithResolver({
     condition,
     resolveValues: async () => ({ currentValue: current, previousValue: previous }),
+    resolveTableRowValue: async (fieldKey, row) => {
+      const related = parseWorkflowRelatedFieldKey(fieldKey);
+      if (!related) return getConditionRecordField(row, fieldKey);
+      if (!runtime || !runtime.orgId || !WORKFLOW_MUTATION_MODULE_IDS.has(related.targetModuleId)
+          || !/^[a-z][a-z0-9_]*$/.test(related.targetFieldKey)) return undefined;
+      const relatedId = getTableRowRelationId(row, related.relationFieldKey, related.targetModuleId);
+      if (!relatedId) return undefined;
+      if (related.targetModuleId === 'billboards' || related.targetModuleId === 'reservations') {
+        const access = await loadOrgPlanAccess(runtime.url, runtime.key, runtime.orgId);
+        if (!access.available || access.enabledModules?.[related.targetModuleId] !== true) return undefined;
+      }
+      const rows = await dbGet(runtime.url, runtime.key,
+        `${getModuleTable(related.targetModuleId)}?id=eq.${encodeURIComponent(relatedId)}&org_id=eq.${encodeURIComponent(runtime.orgId)}&select=${related.targetFieldKey}&limit=1`);
+      return getConditionRecordField(rows[0], related.targetFieldKey);
+    },
     evaluateAsyncOperator: async ({ operator, currentValue, expectedValue }) => {
       switch (operator) {
     case 'is_friday': {
@@ -7189,7 +7212,9 @@ async function runServerProcessAutomationRules(
       conditionsAny,
       actionRecord,
       previousActionRecord,
-      evaluateConditionWithPrevious,
+      (condition, record, previous) => evaluateConditionWithPrevious(condition, record, previous, {
+        url, key, orgId, moduleId: source.moduleId || 'tasks',
+      }),
     )) continue;
     const firstMatch = String(rule?.execution_mode || 'every_match') === 'first_match' && Boolean(ruleId);
     if (firstMatch && !await claimProcessAutomationFirstMatchExecution(url, key, orgId, ruleId, taskId)) {

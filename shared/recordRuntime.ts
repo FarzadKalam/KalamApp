@@ -273,6 +273,52 @@ const dateRangeForWeek = (now: Date, offsetWeeks = 0) => {
   return { start, end: start + 6 };
 };
 
+export const getCoreCalendarConditionBounds = (operator: string, value?: unknown, now = new Date()) => {
+  const parts = getCalendarDateParts(now);
+  const currentDay = calendarDayNumber(parts);
+  if (!parts || currentDay === null) return null;
+  let start: number | null;
+  let last: number | null;
+  switch (operator) {
+    case 'is_today':
+    case 'is_yesterday':
+    case 'is_tomorrow':
+      start = last = currentDay + (operator === 'is_yesterday' ? -1 : operator === 'is_tomorrow' ? 1 : 0);
+      break;
+    case 'is_this_week':
+    case 'is_last_week': {
+      const week = dateRangeForWeek(now, operator === 'is_last_week' ? -1 : 0);
+      if (!week) return null;
+      ({ start, end: last } = week);
+      break;
+    }
+    case 'is_this_month':
+    case 'is_last_month': {
+      const month = parts.month - 1 - (operator === 'is_last_month' ? 1 : 0);
+      start = Date.UTC(parts.year, month, 1) / 86_400_000;
+      last = Date.UTC(parts.year, month + 1, 0) / 86_400_000;
+      break;
+    }
+    case 'date_between': {
+      const range = value && typeof value === 'object' ? value as { from?: unknown; to?: unknown } : {};
+      start = calendarDayNumber(getCalendarDateParts(range.from));
+      last = calendarDayNumber(getCalendarDateParts(range.to));
+      break;
+    }
+    default:
+      return null;
+  }
+  if (start === null || last === null) return null;
+  const formatDay = (number: number) => new Date(number * 86_400_000).toISOString().slice(0, 10);
+  const startDate = formatDay(start);
+  const endDate = formatDay(last + 1);
+  return {
+    startDate, endDate,
+    startInstant: new Date(`${startDate}T00:00:00+03:30`).toISOString(),
+    endInstant: new Date(`${endDate}T00:00:00+03:30`).toISOString(),
+  };
+};
+
 const compareCalendarDates = (left: unknown, right: unknown) => {
   const looksLikeDate = (value: unknown) => value instanceof Date
     || /^\d{4}-\d{2}-\d{2}(?:[T\s].*)?$/.test(String(value ?? '').trim());
@@ -407,6 +453,65 @@ export const evaluateCoreConditionOperator = ({
 };
 
 const NEGATIVE_ANY_OPERATORS = new Set(['neq', 'not_in', 'not_contains', 'occasion_neq', 'occasion_not_contains', 'is_false', 'is_null', 'is_empty']);
+
+export const isTableConditionOperator = (operator: unknown): operator is 'table_any' | 'table_all' =>
+  operator === 'table_any' || operator === 'table_all';
+
+export const getConditionRecordField = (record: unknown, field: string): unknown => {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return undefined;
+  return Object.prototype.hasOwnProperty.call(record, field)
+    ? (record as Record<string, unknown>)[field]
+    : undefined;
+};
+
+export const getTableRowRelationId = (row: Record<string, unknown>, field: string, targetModule: string): string => {
+  const value = getConditionRecordField(row, field);
+  const reference = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  const module = String(reference?.moduleId || reference?.module || reference?.targetModule
+    || (field === 'product_id' ? row.commission_product_module : '') || '').trim();
+  if (module && module !== targetModule) return '';
+  const id = String(reference ? reference.id || reference.value || reference.record_id || '' : value || '').trim();
+  return /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id) ? id : '';
+};
+
+export const isActiveConditionTableRow = (row: unknown): row is Record<string, unknown> => {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return false;
+  const { deleted_at, is_deleted, deleted, _deleted, __deleted, _destroy } = row as Record<string, unknown>;
+  return !deleted_at && is_deleted !== true && deleted !== true && _deleted !== true && __deleted !== true && _destroy !== true;
+};
+
+type TableRowCondition = { field: string; operator: string; value?: unknown };
+
+export const evaluateTableCondition = async (
+  operator: 'table_any' | 'table_all',
+  value: unknown,
+  rows: unknown,
+  evaluate: (condition: TableRowCondition, row: Record<string, unknown>) => Promise<boolean>,
+): Promise<boolean> => {
+  if (!Array.isArray(value) || value.length === 0 || !Array.isArray(rows)) return false;
+  const conditions: TableRowCondition[] = [];
+  for (const condition of value) {
+    if (!condition || typeof condition.field !== 'string' || !condition.field.trim()
+      || typeof condition.operator !== 'string' || !condition.operator.trim()
+      || isTableConditionOperator(condition.operator) || /^changed(?:_|$)/.test(condition.operator)) return false;
+    conditions.push(condition);
+  }
+
+  let hasRows = false;
+  for (const row of rows) {
+    if (!isActiveConditionTableRow(row)) continue;
+    hasRows = true;
+    let matched = true;
+    for (const condition of conditions) {
+      if (await evaluate(condition, row)) continue;
+      matched = false;
+      break;
+    }
+    if (operator === 'table_any' && matched) return true;
+    if (operator === 'table_all' && !matched) return false;
+  }
+  return operator === 'table_all' && hasRows;
+};
 
 export const evaluateConditionCollection = async <T extends { field?: unknown; operator?: unknown }>({
   conditionsAll = [],

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BlockType, FieldType } from '../types';
+import { getConditionTableSources } from './conditionTableFields';
 import {
   buildReportBaseSelectColumns,
   buildReportTableRowCombinations,
@@ -12,6 +13,22 @@ import {
 import { createWorkflowRelatedFieldKey } from './workflowTypes';
 import { buildReportTaskProcessFieldKey } from './reportTaskProcessFields';
 import { createProcessLinkedFieldKey } from './processTargets';
+
+describe('condition tables from the invoice registry', () => {
+  it('offers item targets and payment rows using the invoice definition', () => {
+    const sources = getConditionTableSources('invoices');
+    const itemFields = sources.find(({ key }) => key === 'invoiceItems')?.fields.map(({ key }) => key);
+    expect(itemFields).toEqual(expect.arrayContaining([
+      createWorkflowRelatedFieldKey('product_id', 'products', 'category'),
+      createWorkflowRelatedFieldKey('product_id', 'products', 'goods_subgroup'),
+      createWorkflowRelatedFieldKey('product_id', 'products', 'product_category'),
+      createWorkflowRelatedFieldKey('product_id', 'products', 'service_subgroup'),
+      createWorkflowRelatedFieldKey('product_id', 'billboards', 'address'),
+    ]));
+    expect(sources.find(({ key }) => key === 'payments')?.fields.some(({ key }) => key === 'amount')).toBe(true);
+    expect(sources.some(({ key }) => key === 'reservation_id')).toBe(false);
+  });
+});
 
 describe('buildReportBaseSelectColumns', () => {
   const moduleConfig = {

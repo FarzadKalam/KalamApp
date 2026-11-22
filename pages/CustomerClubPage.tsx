@@ -44,12 +44,17 @@ import {
   CUSTOMER_CLUB_FEATURE,
   CUSTOMER_CLUB_PERMISSION_KEY,
   customerClubRuleSupportsOnlinePaymentMessage,
+  getCustomerClubRequiredConditions,
   normalizeCustomerClubCode,
 } from "../utils/customerClub";
 import { fetchCurrentUserRoleContext } from "../utils/permissions";
 import { getWorkflowConditionFields } from "../utils/workflowHelpers";
 import { loadWorkflowConditionEditorOptions } from "../utils/workflowConditionOptions";
-import type { WorkflowCondition } from "../utils/workflowTypes";
+import { customerClubInvoiceConditionTables, getCustomerClubInvoiceConditionFields, getCustomerClubServerOperatorOptions, hasInvalidCustomerClubServerCondition } from "../utils/customerClubConditions";
+import { hasIncompleteTableCondition } from "../utils/conditionTableFields";
+import { isTableConditionOperator } from "../shared/recordRuntime";
+import { parseWorkflowRelatedFieldKey, type WorkflowCondition } from "../utils/workflowTypes";
+import { hasCurrentOrgPlanModule } from "../utils/saasPlanModules";
 import { resolveOverlayPopupContainer } from "../utils/popupContainer";
 
 const { Text } = Typography;
@@ -72,6 +77,9 @@ type LoyaltyRule = {
   config?: {
     notifications?: CustomerClubNotificationConfig;
     online_payment_success_message?: string;
+    invoice_conditions?: WorkflowCondition[];
+    invoice_customer_conditions_all?: WorkflowCondition[];
+    invoice_customer_conditions_any?: WorkflowCondition[];
   };
   created_at: string;
 };
@@ -144,6 +152,10 @@ const entryTypeLabel: Record<string, string> = {
 };
 
 const conditionFields = getWorkflowConditionFields("customers");
+const invoiceConditionFields = getCustomerClubInvoiceConditionFields(invoicesConfig.fields || []);
+const reservationConditionFields = getCustomerClubInvoiceConditionFields(getWorkflowConditionFields("invoices"))
+  .filter(({ key }) => parseWorkflowRelatedFieldKey(key)?.targetModuleId === "reservations");
+const customerServerConditionFields = getCustomerClubInvoiceConditionFields(customerModule.fields || []);
 const customerClubVariableFields: ModuleField[] = Array.from(
   new Map(
     [...(customerModule.fields || []), ...(invoicesConfig.fields || [])].map(
@@ -358,11 +370,18 @@ const CustomerClubPage: React.FC = () => {
   const [ruleConditionsAny, setRuleConditionsAny] = useState<
     WorkflowCondition[]
   >([]);
+  const [invoiceConditions, setInvoiceConditions] = useState<WorkflowCondition[]>([]);
+  const [availableInvoiceConditionFields, setAvailableInvoiceConditionFields] = useState(invoiceConditionFields.filter(({ key }) => key !== "reservation_id"));
+  const [invoiceConditionOptions, setInvoiceConditionOptions] = useState<Awaited<ReturnType<typeof loadWorkflowConditionEditorOptions>>>();
   const [ruleNotifications, setRuleNotifications] =
     useState<CustomerClubNotificationConfig>({});
   const [ruleForm] = Form.useForm();
   const selectedRuleType = String(Form.useWatch("rule_type", ruleForm) || "cashback");
+  const ruleStartsAt = Form.useWatch("starts_at", ruleForm);
+  const ruleEndsAt = Form.useWatch("ends_at", ruleForm);
+  const requiredRuleConditions = getCustomerClubRequiredConditions(selectedRuleType, Boolean(ruleStartsAt || ruleEndsAt));
   const supportsOnlinePaymentMessage = customerClubRuleSupportsOnlinePaymentMessage(selectedRuleType);
+  const supportsInvoiceConditions = supportsOnlinePaymentMessage || selectedRuleType === "referral";
 
   const [discountModalOpen, setDiscountModalOpen] = useState(false);
   const [editingDiscount, setEditingDiscount] = useState<DiscountCode | null>(
@@ -505,11 +524,12 @@ const CustomerClubPage: React.FC = () => {
   const openRuleModal = (row?: LoyaltyRule) => {
     setEditingRule(row || null);
     setRuleConditionsAll(
-      Array.isArray(row?.conditions_all) ? row!.conditions_all : [],
+      row?.config?.invoice_customer_conditions_all || (Array.isArray(row?.conditions_all) ? row.conditions_all : []),
     );
     setRuleConditionsAny(
-      Array.isArray(row?.conditions_any) ? row!.conditions_any : [],
+      row?.config?.invoice_customer_conditions_any || (Array.isArray(row?.conditions_any) ? row.conditions_any : []),
     );
+    setInvoiceConditions(Array.isArray(row?.config?.invoice_conditions) ? row.config.invoice_conditions : []);
     setRuleNotifications(row?.config?.notifications || {});
     ruleForm.setFieldsValue({
       name: row?.name || "",
@@ -527,6 +547,34 @@ const CustomerClubPage: React.FC = () => {
     setRuleModalOpen(true);
   };
 
+  useEffect(() => {
+    if (!ruleModalOpen || !supportsInvoiceConditions) return;
+    let active = true;
+    const load = async () => {
+      const context = await fetchCurrentUserRoleContext(supabase);
+      const canViewReservation = !!context.orgId && context.permissions?.reservations?.view !== false
+        && context.permissions?.invoices?.fields?.reservation_id !== false
+        && context.permissions?.invoices?.field_actions?.reservation_id?.view !== false
+        && await hasCurrentOrgPlanModule("reservations", { defaultEnabled: false });
+      const fields = [
+        ...invoiceConditionFields.filter(({ key }) => context.permissions?.invoices?.fields?.[key] !== false
+          && context.permissions?.invoices?.field_actions?.[key]?.view !== false
+          && (key !== "reservation_id" || canViewReservation)),
+        ...(canViewReservation ? reservationConditionFields.filter(({ key }) => {
+          const targetField = parseWorkflowRelatedFieldKey(key)?.targetFieldKey || "";
+          return context.permissions?.reservations?.fields?.[targetField] !== false
+            && context.permissions?.reservations?.field_actions?.[targetField]?.view !== false;
+        }) : []),
+      ];
+      if (!active) return;
+      setAvailableInvoiceConditionFields(fields);
+      const options = await loadWorkflowConditionEditorOptions("invoices", fields);
+      if (active) setInvoiceConditionOptions(options);
+    };
+    void load().catch(() => undefined);
+    return () => { active = false; };
+  }, [ruleModalOpen, supportsInvoiceConditions]);
+
   const saveRule = async () => {
     const values = await ruleForm.validateFields();
     const ruleType = String(values.rule_type || "").trim();
@@ -534,6 +582,37 @@ const CustomerClubPage: React.FC = () => {
       ...(editingRule?.config || {}),
       notifications: ruleNotifications,
     } as NonNullable<LoyaltyRule["config"]>;
+    const canSaveInvoiceConditions = customerClubRuleSupportsOnlinePaymentMessage(ruleType) || ruleType === "referral";
+    if (!canSaveInvoiceConditions && invoiceConditions.length > 0) {
+      message.error("برای تغییر نوع طرح، ابتدا شرط‌های فاکتور را حذف کنید.");
+      return;
+    }
+    const hasInvoiceConditions = invoiceConditions.length > 0;
+    if (hasInvoiceConditions) {
+      if (hasIncompleteTableCondition(invoiceConditions, customerClubInvoiceConditionTables)
+        || invoiceConditions.some((condition) => isTableConditionOperator(condition.operator)
+          ? hasInvalidCustomerClubServerCondition(condition.value, customerClubInvoiceConditionTables.find(({ key }) => key === condition.field)?.fields || [])
+          : hasInvalidCustomerClubServerCondition([condition], availableInvoiceConditionFields))) {
+        message.error("شرط‌های فاکتور و ردیف‌های آن را کامل کنید.");
+        return;
+      }
+      if (hasInvalidCustomerClubServerCondition([...ruleConditionsAll, ...ruleConditionsAny], customerServerConditionFields)) {
+        message.error("برای ترکیب شرط فاکتور با شرط مشتری، از فیلدهای مستقیم مشتری و عملگرهای قابل اجرا استفاده کنید.");
+        return;
+      }
+      const { error } = await supabase.rpc("record_scope_condition_matches", { p_record: {}, p_condition: {} });
+      if (error) {
+        message.error("اجرای سروری شرط‌های فاکتور هنوز در دسترس نیست.");
+        return;
+      }
+      nextConfig.invoice_conditions = invoiceConditions;
+      nextConfig.invoice_customer_conditions_all = ruleConditionsAll;
+      nextConfig.invoice_customer_conditions_any = ruleConditionsAny;
+    } else {
+      delete nextConfig.invoice_conditions;
+      delete nextConfig.invoice_customer_conditions_all;
+      delete nextConfig.invoice_customer_conditions_any;
+    }
     if (customerClubRuleSupportsOnlinePaymentMessage(ruleType)) {
       nextConfig.online_payment_success_message =
         String(values.online_payment_success_message || "").trim() || undefined;
@@ -553,8 +632,8 @@ const CustomerClubPage: React.FC = () => {
           : Number(values.max_reward_amount),
       starts_at: String(values.starts_at || "").trim() || null,
       ends_at: String(values.ends_at || "").trim() || null,
-      conditions_all: ruleConditionsAll,
-      conditions_any: ruleConditionsAny,
+      conditions_all: hasInvoiceConditions ? [] : ruleConditionsAll,
+      conditions_any: hasInvoiceConditions ? [] : ruleConditionsAny,
       config: nextConfig,
       is_active: values.is_active !== false,
     };
@@ -1133,9 +1212,16 @@ const CustomerClubPage: React.FC = () => {
               message="پاداش و اعلان این طرح فقط برای معرفِ مشتری ارسال می‌شود"
               description="در پروندهٔ مشتری جدید، نوع معرف و رکورد معرف را انتخاب کنید. اعتبار و اطلاع‌رسانیِ «هنگام وقوع شرط‌ها» برای همان معرف ثبت و ارسال می‌شود؛ مشتری معرفی‌شده پیام دریافت نمی‌کند. مشتری، کارمند و تأمین‌کننده هر سه پشتیبانی می‌شوند."
             />}
+            {requiredRuleConditions.length > 0 && <section aria-label="شرط‌های الزامی طرح"
+              className="rounded-xl border border-gray-200 p-3 dark:border-gray-700">
+              <div className="mb-2 text-sm font-semibold">شرط‌های الزامی طرح</div>
+              <ul className="list-disc space-y-1 ps-5 text-sm">
+                {requiredRuleConditions.map((condition) => <li key={condition}>{condition}</li>)}
+              </ul>
+            </section>}
             <div>
               <div className="mb-2 text-sm font-semibold">
-                همه شرط‌های هدف‌گیری
+                همهٔ شرط‌های مشتری
               </div>
               <WorkflowConditionsGroup
                 value={ruleConditionsAll}
@@ -1149,7 +1235,7 @@ const CustomerClubPage: React.FC = () => {
             </div>
             <div>
               <div className="mb-2 text-sm font-semibold">
-                حداقل یکی از شرط‌ها
+                حداقل یکی از شرط‌های مشتری
               </div>
               <WorkflowConditionsGroup
                 value={ruleConditionsAny}
@@ -1161,6 +1247,21 @@ const CustomerClubPage: React.FC = () => {
                 overlayZIndexBase={CUSTOMER_CLUB_CONDITION_OVERLAY_Z_INDEX}
               />
             </div>
+            {(supportsInvoiceConditions || invoiceConditions.length > 0) && <section aria-label="شرط‌های فاکتور مشتری" className="rounded-xl border border-gray-200 p-3 dark:border-gray-700">
+              <div className="mb-2 text-sm font-semibold">شرط‌های فاکتور مشتری</div>
+              <p className="mb-3 text-sm text-gray-600 dark:text-gray-300">شرط‌های این بخش روی همان فاکتور، اقلام و دریافت‌های آن بررسی می‌شوند.</p>
+              <WorkflowConditionsGroup
+                value={invoiceConditions}
+                onChange={setInvoiceConditions}
+                fields={availableInvoiceConditionFields}
+                tableSources={customerClubInvoiceConditionTables}
+                getOperatorOptions={getCustomerClubServerOperatorOptions}
+                dynamicOptions={invoiceConditionOptions?.dynamicOptions || {}}
+                relationOptions={invoiceConditionOptions?.relationOptions || {}}
+                popupContainer={resolveOverlayPopupContainer}
+                overlayZIndexBase={CUSTOMER_CLUB_CONDITION_OVERLAY_Z_INDEX}
+              />
+            </section>}
           </div>
           <CustomerClubNotificationActions
             value={ruleNotifications}

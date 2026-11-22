@@ -22,18 +22,30 @@ export const createReportDataBudget=(maxBytes=REPORT_MAX_SOURCE_BYTES)=>{
  }};
 };
 /** Stable query order belongs to the caller. Never return partial data on error. */
-export const fetchReportRowsByPage=async <T>(limit:number,read:(start:number,end:number)=>PromiseLike<{data:T[]|null;error:any}>,options:{budget?:ReturnType<typeof createReportDataBudget>}={})=>{
+export const fetchReportRowsByPage=async <T>(limit:number,read:(start:number,end:number)=>PromiseLike<{data:T[]|null;error:any}>,options:{budget?:ReturnType<typeof createReportDataBudget>; accept?: (row: T) => Promise<boolean>}={})=>{
  if(!isValidReportRowLimit(limit))throw new Error('invalid_report_row_limit');
  const budget=options.budget||createReportDataBudget();
  const rows:T[]=[];
+ let scanned=0;
  while(rows.length<limit){
-  const result=await read(rows.length,Math.min(limit,rows.length+REPORT_PAGE_SIZE)-1);
+  const scanLimit = options.accept ? REPORT_ROW_LIMIT_MAX : limit;
+  if(scanned>=scanLimit) {
+   const probe=await read(scanned,scanned);
+   if(probe.error)throw probe.error;
+   if(probe.data?.length)throw new Error('report_row_limit_exceeded');
+   break;
+  }
+  const result=await read(scanned,Math.min(scanLimit,scanned+REPORT_PAGE_SIZE)-1);
   if(result.error)throw result.error;
   const page=result.data||[];
   if(!page.length)break;
-  const selected=page.slice(0,limit-rows.length);
-  budget.add(selected);
-  rows.push(...selected);
+  budget.add(page);
+  scanned+=page.length;
+  for(const row of page){
+   if(!options.accept || await options.accept(row))rows.push(row);
+   if(rows.length>=limit)break;
+  }
+  if(options.accept && scanned%REPORT_PAGE_SIZE===0)await new Promise<void>(resolve=>setTimeout(resolve,0));
  }
  return rows;
 };

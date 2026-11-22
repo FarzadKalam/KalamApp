@@ -1,4 +1,6 @@
 import { MODULES } from '../moduleRegistry';
+import { getModuleTableBlocks } from './conditionTableFields';
+import { isTableConditionOperator } from '../shared/recordRuntime';
 import { supabase } from '../supabaseClient';
 import { FieldType } from '../types';
 import type { AssigneeDirectory } from './referenceData';
@@ -471,6 +473,7 @@ export const buildGoalSelectColumns = (goal: GoalRecord) => {
       .map((field) => String(field?.key || '').trim())
       .filter(Boolean)
   );
+  getModuleTableBlocks(goal.module_id).forEach((block) => declaredFieldKeys.add(block.id));
   const requestedKeys = new Set<string>([
     'id',
     'org_id',
@@ -684,6 +687,9 @@ const loadServerFilteredGoalRanges = async (
     });
     if (error || !data?.items?.main || !data?.items?.sub) throw error || new Error('goal_progress_response_invalid');
     if (data.items.main.mode !== 'server' || data.items.sub.mode !== 'server') return null;
+    const hasTableConditions = [...(goal.conditions_all || []), ...(goal.conditions_any || [])]
+      .some(({ operator }) => isTableConditionOperator(operator));
+    if (hasTableConditions && !data.items.main.tableConditionsSupported) return null;
     serverGoalProgressAvailability = 'available';
     return {
       mainRows: Array.isArray(data.items.main.rows) ? data.items.main.rows : [],

@@ -1,4 +1,5 @@
 import { FieldType } from '../types';
+import { getCoreCalendarConditionBounds } from '../shared/recordRuntime';
 
 type ReportCondition = {
   field?: string;
@@ -155,6 +156,10 @@ const getSafeAnyTerm = (
     return `and(${field.key}.gte.${bounds.start},${field.key}.lt.${bounds.end})`;
   }
   if (!field || !DATE_FIELD_TYPES.has(field.type)) return null;
+  const range = getCoreCalendarConditionBounds(operator, condition?.value);
+  if (range) return field.type === FieldType.DATE
+    ? `and(${field.key}.gte.${range.startDate},${field.key}.lt.${range.endDate})`
+    : `and(${field.key}.gte.${range.startInstant},${field.key}.lt.${range.endInstant})`;
   return getDateComparisonTerm(condition, field);
 };
 
@@ -198,6 +203,13 @@ export const applySafeReportConditionPrefilters = <T extends FilterQuery>(
       nextQuery = field.type === FieldType.DATE
         ? nextQuery.eq(field.key, bounds.date)
         : nextQuery.gte(field.key, bounds.start).lt(field.key, bounds.end);
+      return;
+    }
+    const range = DATE_FIELD_TYPES.has(field.type) ? getCoreCalendarConditionBounds(operator, condition?.value) : null;
+    if (range) {
+      nextQuery = field.type === FieldType.DATE
+        ? nextQuery.gte(field.key, range.startDate).lt(field.key, range.endDate)
+        : nextQuery.gte(field.key, range.startInstant).lt(field.key, range.endInstant);
       return;
     }
     const dateComparisonTerm = getDateComparisonTerm(condition, field);

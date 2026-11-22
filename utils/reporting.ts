@@ -1,6 +1,6 @@
 import { MODULES } from '../moduleRegistry';
 import {normalizeReportRowLimit, REPORT_ROW_LIMIT_MAX} from './reportRowLimit';
-import { BlockType, FieldType, type BlockDefinition, type ModuleField } from '../types';
+import { FieldType, type BlockDefinition, type ModuleField } from '../types';
 import { isSaasAdminModuleId } from './permissions';
 import { supportsModuleAssignee } from './assigneeSupport';
 import { buildSurveyReportFieldsFromSnapshot } from './surveyTemplates';
@@ -9,6 +9,7 @@ import { parseWorkflowRelatedFieldKey, WORKFLOW_ASSIGNEE_FIELD_KEY, type Workflo
 import { isReportTaskProcessFieldKey } from './reportTaskProcessFields';
 import { parseProcessLinkedFieldKey } from './processTargets';
 import { getCanonicalModuleFields } from './recordVariableCatalog';
+import { getModuleTableBlocks } from './conditionTableFields';
 
 /** `difference` is retained only to safely read old stored configurations; the builder no longer creates it. */
 export type ReportMetricType = 'count' | 'sum' | 'avg' | 'difference';
@@ -252,13 +253,7 @@ const dedupeFields = (fields: ModuleField[]) => {
   return Array.from(map.values());
 };
 
-export const getReportTableBlocks = (moduleId?: string | null): BlockDefinition[] => {
-  const normalizedModuleId = String(moduleId || '').trim();
-  const blocks = MODULES[normalizedModuleId]?.blocks || [];
-  return blocks
-    .filter((block) => block?.type === BlockType.TABLE && Array.isArray(block?.tableColumns) && block.tableColumns.length > 0)
-    .sort((a, b) => Number(a.order || 0) - Number(b.order || 0));
-};
+export const getReportTableBlocks = getModuleTableBlocks;
 
 export const getReportTableBlock = (moduleId?: string | null, tableSourceId?: string | null) => {
   const meta = parseReportTableSourceId(tableSourceId);
@@ -285,6 +280,7 @@ export const buildReportBaseSelectColumns = (
       .map((block) => String(block?.id || '').trim())
       .filter(Boolean)
   );
+  const availableTableBlockIds = new Set(getModuleTableBlocks(moduleConfig?.id).map((block) => block.id));
   const requiredColumns = new Set<string>(REPORT_BASE_SELECT_COLUMNS);
   if (supportsModuleAssignee(moduleConfig)) {
     REPORT_ASSIGNEE_SELECT_COLUMNS.forEach((column) => requiredColumns.add(column));
@@ -298,6 +294,10 @@ export const buildReportBaseSelectColumns = (
   (keys || []).forEach((rawKey) => {
     const key = String(rawKey || '').trim();
     if (!key) return;
+    if (availableTableBlockIds.has(key)) {
+      requiredColumns.add(key);
+      return;
+    }
 
     if (isReportTaskProcessFieldKey(key)) {
       requiredColumns.add('recurrence_info');

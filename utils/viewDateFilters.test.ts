@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FieldType } from '../types';
-import { buildViewDateBoundaryValue } from './viewDateFilters';
+import { buildCalendarViewFilters, buildViewDateBoundaryValue, refreshRelativeViewDateFilter } from './viewDateFilters';
 
 describe('viewDateFilters', () => {
   it('keeps DATE view filters on the local calendar day', () => {
@@ -19,5 +19,16 @@ describe('viewDateFilters', () => {
 
     expect(buildViewDateBoundaryValue(field, date, 'start')).toBe(localStart.toISOString());
     expect(buildViewDateBoundaryValue(field, date, 'end')).toBe(localEnd.toISOString());
+  });
+});
+
+
+describe('saved relative date filters', () => {
+  it('uses the current Tehran day when restoring a saved view', () => {
+    const field = { key: 'invoice_date', type: FieldType.DATE };
+    const saved = buildCalendarViewFilters(field, 'is_today', undefined, new Date('2026-11-21T19:00:00Z'))!;
+    expect(saved[0].value).toBe('2026-11-21');
+    expect(saved.map((filter) => refreshRelativeViewDateFilter(filter, [field], new Date('2026-11-21T21:00:00Z')).value))
+      .toEqual(['2026-11-22', '2026-11-23']);
   });
 });

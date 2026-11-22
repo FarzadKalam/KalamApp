@@ -11,6 +11,18 @@ export type CustomerClubDiscountType = 'amount' | 'percent';
 export const customerClubRuleSupportsOnlinePaymentMessage = (ruleType?: string | null) =>
   ['cashback', 'first_purchase'].includes(String(ruleType || '').trim().toLowerCase());
 
+export const getCustomerClubRequiredConditions = (ruleType: string, hasDateRange = false): string[] => {
+  if (!customerClubRuleSupportsOnlinePaymentMessage(ruleType) && ruleType !== 'referral') return [];
+  const conditions = [
+    'فاکتور به یک مشتری متصل باشد.',
+    'وضعیت فاکتور در خریدهای مشتری محاسبه شود.',
+  ];
+  if (hasDateRange) conditions.push('تاریخ فاکتور در بازهٔ تعیین‌شدهٔ طرح باشد.');
+  if (ruleType === 'first_purchase') conditions.push('مشتری سابقهٔ خرید واجد شرایط یا خرید ثبت‌شده از سیستم قبلی نداشته باشد.');
+  if (ruleType === 'referral') conditions.push('برای مشتری معرف ثبت شده باشد. پاداش به معرف تعلق می‌گیرد.');
+  return conditions;
+};
+
 export const isCustomerPurchaseStatus = (status?: string | null) => {
   const normalized = String(status || '').trim().toLowerCase();
   return !['created', 'proforma', 'canceled', 'cancelled'].includes(normalized);

@@ -48,6 +48,8 @@ import {
 import AdaptiveSelectField from '../AdaptiveSelectField';
 import WorkflowActionsBuilder, { getDefaultActionConfig } from './WorkflowActionsBuilder';
 import WorkflowConditionsGroup from './WorkflowConditionsGroup';
+import { getConditionTableSources, hasIncompleteTableCondition } from '../../utils/conditionTableFields';
+import { isTableConditionOperator } from '../../shared/recordRuntime';
 import WorkflowIntervalScheduleFields from './WorkflowIntervalScheduleFields';
 import { buildWorkflowFlowDocument } from './flow/flowAdapters';
 import { FlowSelection } from './flow/flowTypes';
@@ -229,6 +231,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
   const [form] = Form.useForm<FormValues>();
   const [submitting, setSubmitting] = useState(false);
   const [moduleId, setModuleId] = useState<string>(initialModuleId || '');
+  const conditionTableSources = useMemo(() => getConditionTableSources(moduleId), [moduleId]);
   const [dynamicOptions, setDynamicOptions] = useState<
     Record<string, Array<{ label: string; value: string }>>
   >({});
@@ -417,12 +420,9 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
     if (!open) return;
 
     const pruneInvalidConditions = (items: WorkflowCondition[]) => {
-      if (conditionFieldKeySet.size === 0) {
-        return items.length > 0 ? [] : items;
-      }
-      return items.filter((condition) =>
-        conditionFieldKeySet.has(String(condition?.field || '').trim())
-      );
+      return items.filter((condition) => isTableConditionOperator(condition.operator)
+        ? conditionTableSources.some(({ key }) => key === condition.field)
+        : conditionFieldKeySet.has(String(condition?.field || '').trim()));
     };
 
     setConditionsAll((prev) => {
@@ -433,10 +433,14 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
       const next = pruneInvalidConditions(prev);
       return next.length === prev.length ? prev : next;
     });
-  }, [conditionFieldKeySet, open]);
+  }, [conditionFieldKeySet, conditionTableSources, open]);
 
   const handleSubmit = async () => {
     if (!canEdit) return;
+    if (hasIncompleteTableCondition([...conditionsAll, ...conditionsAny], conditionTableSources)) {
+      message.error('برای هر شرط جدول، دست‌کم یک شرط ردیف کامل کنید.');
+      return;
+    }
     try {
       const values = await form.validateFields();
       if (!values.module_id) {
@@ -588,6 +592,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
       value={kind === 'all' ? conditionsAll : conditionsAny}
       onChange={kind === 'all' ? setConditionsAll : setConditionsAny}
       fields={conditionFields}
+      tableSources={conditionTableSources}
       dynamicOptions={dynamicOptions}
       relationOptions={relationOptions}
       disabled={!canEdit}

@@ -15,6 +15,7 @@ import { ACCOUNTING_PERMISSION_KEY, fetchCurrentUserRoleContext } from '../utils
 import ManagedDataTable from '../components/table/ManagedDataTable';
 import { buildCashBankLedgerFilters as buildLedgerFilters, buildCashBankLedgerPrintSummary, CASH_BANK_LEDGER_COLUMNS, CASH_BANK_LEDGER_PRINT_ID, cashBankLedgerPrintModule, fetchCashBankLedgerPrintRows, formatCashBankLedgerTotal } from '../utils/cashBankLedger';
 import type { ListPrintSummaryDefinition } from '../utils/listPrintExport';
+import CashBankLedgerViews from '../components/accounting/CashBankLedgerViews';
 
 const ListPrintRuntime = React.lazy(() => import('../components/moduleList/ListPrintRuntime'));
 const EMPTY_PRINT_OPTIONS: Record<string, any[]> = {};
@@ -92,6 +93,7 @@ const CashBankPage: React.FC = () => {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(isMobile ? 10 : 20);
   const [filters, setFilters] = useState<Record<string, any>>({});
+  const [currentViewId, setCurrentViewId] = useState<string | null>(null);
   const [sort, setSort] = useState<{ field: LedgerSortField; order: 'asc' | 'desc' }>({ field: 'date', order: 'desc' });
   const [identity, setIdentity] = useState<{ orgId: string; userId: string } | null>(null);
   const [totals, setTotals] = useState<{ receiptTotal: string; paymentTotal: string } | null>(null);
@@ -213,11 +215,11 @@ const CashBankPage: React.FC = () => {
   }), [columns]);
 
   const handleTableChange = useCallback((pagination: any, nextFilters: Record<string, any>, sorter: any, extra: any) => {
-    if (extra?.action === 'filter') { setFilters(nextFilters || {}); setPage(1); return; }
+    if (extra?.action === 'filter') { setCurrentViewId(null); setFilters(nextFilters || {}); setPage(1); return; }
     if (extra?.action === 'sort') {
       const activeSorter = Array.isArray(sorter) ? sorter[0] : sorter;
       const field = SORT_FIELD_BY_COLUMN[String(activeSorter?.field || activeSorter?.columnKey || '')] || 'date';
-      setSort({ field, order: activeSorter?.order === 'ascend' ? 'asc' : 'desc' }); setPage(1); return;
+      setCurrentViewId(null); setSort({ field, order: activeSorter?.order === 'ascend' ? 'asc' : 'desc' }); setPage(1); return;
     }
     if (extra?.action === 'paginate') { setPage(Number(pagination?.current || 1)); setPageSize(Number(pagination?.pageSize || 20)); }
   }, []);
@@ -247,6 +249,14 @@ const CashBankPage: React.FC = () => {
         <Button icon={<PlusOutlined />} onClick={() => navigate('/cheques/create')}>ثبت چک جدید</Button>
         <Button icon={<PlusOutlined />} onClick={() => navigate('/barters/create')}>افزودن تهاتر جدید</Button>
       </div>
+      {identity && <CashBankLedgerViews key={`${identity.orgId}:${identity.userId}`} {...identity}
+        currentViewId={currentViewId} state={{ filters, sort }}
+        onSelect={(id, view) => {
+          setCurrentViewId(id);
+          setFilters(view.filters || {});
+          setSort({ field: SORT_FIELD_BY_COLUMN[view.sort?.field] || (Object.values(SORT_FIELD_BY_COLUMN).find((field) => field === view.sort?.field) ?? 'date'), order: view.sort?.order === 'asc' ? 'asc' : 'desc' });
+          setPage(1);
+        }} />}
       {ledgerError ? <Alert className="mb-3" type="error" showIcon message={ledgerError}
         action={<Button size="small" onClick={() => { void loadLedger(); }}>تلاش دوباره</Button>} /> : null}
       <ManagedDataTable<RowItem> loading={tableLoading} dataSource={rows} columns={serverColumns} rowKey="key"

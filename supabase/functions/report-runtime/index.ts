@@ -82,6 +82,8 @@ const REPORT_TABLE_RELATION_FIELD_PREFIX = "__report_table_relation_field__";
 // (مثل invoiceItems) camelCase هستند و تنها برای خواندن کلید JSON به کار می‌روند.
 const safeTableBlockId = (value: unknown) =>
   /^[A-Za-z][A-Za-z0-9_]*$/.test(String(value || "").trim());
+const isTableCondition = (condition: any) =>
+  condition?.operator === "table_any" || condition?.operator === "table_all";
 const parseTableSource = (value: unknown) => {
   const raw = String(value || "").trim();
   if (!raw.startsWith(REPORT_TABLE_SOURCE_PREFIX)) return null;
@@ -399,6 +401,7 @@ const resolvePassedIds = async (
   conditionsAll: any[],
   conditionsAny: any[],
   reportFieldKeys: string[],
+  relatedAuthorization?: string,
 ) => {
   if (rows.length === 0) return { passedIds: new Set<string>(), resolvedRows: {} as Record<string, any> };
   if (conditionsAll.length === 0 && conditionsAny.length === 0 && reportFieldKeys.length === 0)
@@ -426,6 +429,7 @@ const resolvePassedIds = async (
             conditionsAll,
             conditionsAny,
             reportFieldKeys,
+            relatedAuthorization,
           },
         ],
       }),
@@ -705,11 +709,39 @@ Deno.serve(async (request) => {
       ];
       if (
         reportConditions.some(
-          (condition: any) => !isSupportedConditionField(condition?.field),
+          (condition: any) => isTableCondition(condition)
+            ? !safeTableBlockId(condition.field) || modulePermission.fields?.[condition.field] === false
+            : !isSupportedConditionField(condition?.field),
         )
       )
         return json(422, { error: "unsupported_report_condition" });
-      const conditionFields = conditionBaseColumns(reportConditions);
+      const canReadRelatedField = (targetModuleId: string, targetFieldKey: string) => {
+        if (targetModuleId === "billboards" && planAccess.enabledModules?.billboards !== true) return false;
+        if (targetModuleId === "reservations" && planAccess.enabledModules?.reservations !== true) return false;
+        const targetPermission = permissions?.[targetModuleId] || {};
+        return explicitViewer || (targetPermission.view !== false && targetPermission.fields?.[targetFieldKey] !== false
+          && targetPermission.field_actions?.[targetFieldKey]?.view !== false);
+      };
+      const canReadConditionField = (field: string) => {
+        if (field.startsWith("__workflow_related__")) {
+          const [key, target, targetField, ...extra] = field.slice("__workflow_related__".length).split("::");
+          return !extra.length && safeTableBlockId(key) && safeTableBlockId(target)
+            && safeTableBlockId(targetField) && canReadRelatedField(target, targetField);
+        }
+        return safeTableBlockId(field);
+      };
+      if (reportConditions.some((condition: any) => {
+        const field = String(condition?.field || "");
+        if (!isTableCondition(condition)) return field.startsWith("__workflow_related__") && !canReadConditionField(field);
+        return !Array.isArray(condition.value)
+          || condition.value.some((row: any) => !canReadConditionField(String(row?.field || "")));
+      })) {
+        return json(403, { error: "condition_field_access_denied" });
+      }
+      const conditionFields = [
+        ...conditionBaseColumns(reportConditions),
+        ...reportConditions.filter(isTableCondition).map((condition) => String(condition.field)),
+      ];
       // جدول‌های داخلی فقط با انتخاب یک ستون فعال نمی‌شوند: انتخاب خودِ بلوک
       // در سازنده نیز، درست مثل نسخهٔ قبلی مرورگر، هر ردیف داخلی را یک ورودی
       // مستقل برای شمارش و محاسبه می‌کند. این‌جا هر دو منبع را در نظر می‌گیریم.
@@ -763,6 +795,10 @@ Deno.serve(async (request) => {
         ...groupFields.filter((field) => field !== "__report_date__" && !parseTableBlockMetric(field)),
         ...selected.map((item: any) => String(item?.metric_key || "")).filter((field) => field !== "__count" && !parseTableBlockMetric(field)),
       ]));
+      if (relationFieldKeys.some((field) => {
+        const target = parseTableRelationField(field);
+        return target && !canReadRelatedField(target.targetModuleId, target.targetFieldKey);
+      })) return json(403, { error: "table_relation_field_access_denied" });
       const runtimeBaseColumns = conditionBaseColumns(runtimeFieldKeys.map((field) => ({ field })));
       const columns = Array.from(
         new Set([
@@ -795,14 +831,21 @@ Deno.serve(async (request) => {
           allowedRoles,
         ),
       );
+      const allConditions = readArray(sourceConfig.conditions_all);
+      const anyConditions = readArray(sourceConfig.conditions_any);
+      const parentAll = allConditions.filter(isTableCondition);
+      const parentAny = anyConditions.every(isTableCondition) ? anyConditions : [];
+      const qualifyingParents = parentAll.length || parentAny.length
+        ? (await resolvePassedIds(url, serviceHeaders, source, table, columns, parentRows, parentAll, parentAny, [], explicitViewer ? undefined : authorization)).passedIds
+        : null;
       const rawRows = await expandTableRows(
-        parentRows,
+        qualifyingParents ? parentRows.filter((row) => qualifyingParents.has(String(row.id))) : parentRows,
         tableBlockIds,
         tableFieldKeys,
         relationFieldKeys,
         String(report.org_id),
         url,
-        serviceHeaders,
+        explicitViewer ? serviceHeaders : headers,
       );
       const evaluated = await resolvePassedIds(
         url,
@@ -811,8 +854,8 @@ Deno.serve(async (request) => {
         table,
         columns,
         rawRows,
-        readArray(sourceConfig.conditions_all),
-        readArray(sourceConfig.conditions_any),
+        allConditions.filter((condition) => !isTableCondition(condition)),
+        parentAny.length ? [] : anyConditions,
         // Base and expanded table values are already available in `rawRows`;
         // the condition service is still used for selected labels and
         // snapshot fields so summary groups remain tenant/runtime-safe.
@@ -823,6 +866,7 @@ Deno.serve(async (request) => {
         runtimeFieldKeys.filter(
           (field) => field !== "__report_date__" && !isTableRuntimeField(field),
         ),
+        explicitViewer ? undefined : authorization,
       );
       for (const row of rawRows) {
         const rowKey = String(row?.__report_runtime_key || row?.id || "");

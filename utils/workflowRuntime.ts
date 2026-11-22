@@ -57,9 +57,14 @@ import { getCanonicalModuleFields, isRecordAuditUserFieldKey } from './recordVar
 import { filterActiveGroupMentionTargets, filterActiveMentionTargets, isActiveProfileRow } from './activeProfileRecipients';
 import {
   evaluateConditionCollection as evaluateCentralConditionCollection,
-  evaluateCoreConditionOperator,
+  getConditionRecordField,
+  getTableRowRelationId,
+  isTableConditionOperator,
   renderTemplateAsync as renderCentralTemplateAsync,
 } from '../shared/recordRuntime';
+import { evaluateWorkflowConditionWithResolver } from '../shared/workflowConditionRuntime';
+import { hasCurrentOrgPlanModule } from './saasPlanModules';
+import { fetchCurrentUserRoleContext } from './permissions';
 
 type WorkflowEvent = 'create' | 'upsert';
 type CounterpartyBotGroupRow = {
@@ -81,6 +86,7 @@ export type WorkflowEvaluationContext = {
   moduleId: string;
   relatedRecordCache: Map<string, Record<string, any> | null>;
   tagsCache: Map<string, string[]>;
+  tableRelationFields?: Map<string, Promise<unknown>>;
 };
 
 export const createWorkflowEvaluationContext = (moduleId: string): WorkflowEvaluationContext => ({
@@ -688,6 +694,14 @@ const resolveConditionFieldValue = async (
       return relatedFieldMeta.targetFieldKey === 'tags' ? [] : null;
     }
 
+    if (relatedFieldMeta.targetModuleId === 'reservations') {
+      const role = await fetchCurrentUserRoleContext(supabase);
+      const permission = role.permissions?.reservations;
+      if (!role.orgId || (sourceRecord.org_id && sourceRecord.org_id !== role.orgId)
+        || permission?.view === false || permission?.fields?.[relatedFieldMeta.targetFieldKey] === false
+        || permission?.field_actions?.[relatedFieldMeta.targetFieldKey]?.view === false
+        || !await hasCurrentOrgPlanModule('reservations', { defaultEnabled: false })) return undefined;
+    }
     const relatedRecord = await fetchRelatedRecord(
       relatedFieldMeta.targetModuleId,
       relationId,
@@ -804,21 +818,9 @@ const resolveConditionFieldValue = async (
   return record?.[fieldKey];
 };
 
-const evaluateResolvedCondition = async (
-  condition: WorkflowCondition,
-  currentValue: any,
-  previousValue: any
-): Promise<boolean> => {
-  const operator = String(condition?.operator || 'eq');
-  const expectedValue = condition?.value;
-  const coreResult = evaluateCoreConditionOperator({
-    operator,
-    currentValue,
-    previousValue,
-    expectedValue,
-  });
-  if (coreResult !== undefined) return coreResult;
-
+const evaluateAsyncConditionOperator = async ({ operator, currentValue, expectedValue }: {
+  operator: string; currentValue: any; expectedValue: any;
+}): Promise<boolean> => {
   switch (operator) {
     case 'is_friday': {
       const summary = await getHolidaySummaryForDate(currentValue);
@@ -891,12 +893,49 @@ const evaluateCondition = async (
   const fieldKey = String(condition?.field || '').trim();
   if (!fieldKey) return false;
 
-  const [currentValue, previousValue] = await Promise.all([
-    resolveConditionFieldValue(fieldKey, currentRecord, moduleId, context),
-    resolveConditionFieldValue(fieldKey, previousRecord || null, moduleId, context),
-  ]);
-
-  return evaluateResolvedCondition(condition, currentValue, previousValue);
+  const isTable = isTableConditionOperator(condition.operator);
+  return evaluateWorkflowConditionWithResolver({
+    condition,
+    resolveValues: async () => {
+      const [currentValue, previousValue] = await Promise.all([
+        isTable && Object.prototype.hasOwnProperty.call(currentRecord, fieldKey)
+          ? getConditionRecordField(currentRecord, fieldKey)
+          : resolveConditionFieldValue(fieldKey, currentRecord, moduleId, context),
+        !isTable && previousRecord ? resolveConditionFieldValue(fieldKey, previousRecord, moduleId, context) : undefined,
+      ]);
+      return { currentValue, previousValue };
+    },
+    evaluateAsyncOperator: evaluateAsyncConditionOperator,
+    resolveTableRowValue: async (field, row) => {
+      const relation = parseWorkflowRelatedFieldKey(field);
+      if (!relation) return getConditionRecordField(row, field);
+      const { targetModuleId, relationFieldKey, targetFieldKey } = relation;
+      const id = getTableRowRelationId(row, relationFieldKey, targetModuleId);
+      if (!id || !MODULES[targetModuleId]?.fields.some(({ key }) => key === targetFieldKey)) return undefined;
+      const session = await fetchCurrentUserRoleContext(supabase);
+      if (!session.orgId || (currentRecord.org_id && session.orgId !== currentRecord.org_id)) return undefined;
+      const permission = session.permissions?.[targetModuleId];
+      if (permission?.view === false || permission?.fields?.[targetFieldKey] === false
+        || permission?.field_actions?.[targetFieldKey]?.view === false) return undefined;
+      if (!await hasCurrentOrgPlanModule(targetModuleId, { defaultEnabled: !['billboards', 'reservations'].includes(targetModuleId) })) return undefined;
+      const fieldCache = context.tableRelationFields ??= new Map();
+      const cacheKey = JSON.stringify([session.orgId, targetModuleId, id, targetFieldKey]);
+      let pending = fieldCache.get(cacheKey);
+      if (!pending) {
+        pending = (async () => {
+          const { data, error } = await supabase.from(getModuleTable(targetModuleId))
+            .select(targetFieldKey)
+            .eq('org_id', session.orgId)
+            .eq('id', id)
+            .maybeSingle();
+          if (error) throw error;
+          return getConditionRecordField(data, targetFieldKey);
+        })();
+        fieldCache.set(cacheKey, pending);
+      }
+      return pending;
+    },
+  });
 };
 
 export const evaluateWorkflowConditions = async ({
