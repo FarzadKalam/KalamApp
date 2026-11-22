@@ -1,6 +1,6 @@
 // اتصال‌های خارجی: اعتبارسنجی و دریافت امن سفارش‌های ووکامرس در صندوق ورودی.
 import { createClient } from 'npm:@supabase/supabase-js@2.49.8';
-import { getSyncRowCounts } from '../_shared/external-sync-history.ts';
+import { getSyncRowCounts } from './external-sync-history.ts';
 import { createWooProductContentService, withWooProductLease } from './product-content.ts';
 
 const cors = {

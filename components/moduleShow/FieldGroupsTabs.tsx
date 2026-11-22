@@ -274,7 +274,7 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
           label: <span className="flex items-center gap-2 py-3">{block.titles.fa}</span>,
           children: block.id === 'product_site_content' && hasProductSiteContent ? (
             <React.Suspense fallback={<Skeleton active paragraph={{ rows: 4 }} />}>
-              <ProductSiteContentPanel key={`${data.org_id}:${recordId}`} product={{ ...data, id: recordId }}
+              <ProductSiteContentPanel key={`${data.org_id}:${recordId}`} title={block.titles.fa} product={{ ...data, id: recordId }}
                 canEdit={canEditModule && canEditField?.('product_site_content') !== false} />
             </React.Suspense>
           ) : renderBlockContent(block),

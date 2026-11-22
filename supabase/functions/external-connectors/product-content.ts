@@ -1,11 +1,11 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2.49.8';
 import { normalizeWooProductDescription } from './product-content-html.ts';
-import { normalizeProductSiteSlug } from '../_shared/product-site-slug.ts';
-import { buildWooProductContentPayload, mergeWooProductImages } from '../_shared/product-site-content.ts';
+import { normalizeProductSiteSlug } from './product-site-slug.ts';
+import { buildWooProductContentPayload, mergeWooProductImages } from './product-site-content.ts';
 import {
   getProductContentStatus, hashProductContent, hashProductContentImageUrl, productContentFields,
   type ProductContentBaseline, type ProductContentSnapshot,
-} from '../_shared/product-content-status.ts';
+} from './product-content-status.ts';
 
 const trim = (value: unknown) => String(value ?? '').trim();
 const contentColumns = `id,updated_at,${productContentFields.join(',')}`;

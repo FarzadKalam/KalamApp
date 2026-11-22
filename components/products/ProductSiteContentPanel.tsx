@@ -5,7 +5,7 @@ import { supabase } from '../../supabaseClient';
 import { getProductSiteSeoChecklist } from '../../utils/productSiteSeoChecklist';
 import { richTextToPlainText } from '../../utils/richText';
 import { FieldType, type ModuleField } from '../../types';
-import { normalizeProductSiteSlug } from '../../supabase/functions/_shared/product-site-slug';
+import { normalizeProductSiteSlug } from '../../supabase/functions/external-connectors/product-site-slug';
 import RecordFilesManager from '../RecordFilesManager';
 import RichTextContent from '../RichTextContent';
 import SmartFieldRenderer from '../SmartFieldRenderer';
@@ -31,6 +31,7 @@ interface ProductSiteContent {
 }
 
 interface ProductSiteContentPanelProps {
+  title: string;
   product: Record<string, any>;
   canEdit: boolean;
 }
@@ -65,7 +66,7 @@ const textFields = {
   focus_keyword: { key: 'focus_keyword', type: FieldType.TEXT, labels: { fa: 'عبارت کلیدی پیشنهادی' } },
 } satisfies Record<string, ModuleField>;
 
-export default function ProductSiteContentPanel({ product, canEdit }: ProductSiteContentPanelProps) {
+export default function ProductSiteContentPanel({ title, product, canEdit }: ProductSiteContentPanelProps) {
   const { message, modal } = App.useApp();
   const [value, setValue] = useState<ProductSiteContent>(() => blank(product));
   const [loading, setLoading] = useState(true);
@@ -215,7 +216,7 @@ export default function ProductSiteContentPanel({ product, canEdit }: ProductSit
   if (loading) return <Card className="my-4"><div className="flex justify-center py-8"><Spin /></div></Card>;
 
   return (
-    <Card className="my-4" title={<Space><span>محتوای سایت و SEO محصول</span><Tag color="blue">پیش‌نویس</Tag></Space>}>
+    <Card className="my-4" title={<Space><span>{title}</span><Tag color="blue">پیش‌نویس</Tag></Space>}>
       {loadFailed && <Alert className="mb-4" type="error" showIcon message="پیش‌نویس بارگذاری نشد." action={<Button onClick={() => void load()}>بارگذاری دوباره</Button>} />}
       <Row gutter={[16, 8]}>
         <Col xs={24} md={12}>

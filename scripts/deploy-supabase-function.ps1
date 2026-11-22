@@ -302,7 +302,9 @@ try {
 
   # Every function may import ../_shared, including email and user management.
   # Include shared dependencies for ordinary deployments as well as workflow bundles.
-  if ((Test-Path -LiteralPath (Join-Path $archiveSourceRoot '_shared')) -and -not ($archiveEntries -contains '_shared')) {
+  # external-connectors is verified as a self-contained folder in CI.
+  $connectorOnly = $selectedFunctions.Count -eq 1 -and $selectedFunctions[0] -eq 'external-connectors'
+  if (-not $connectorOnly -and (Test-Path -LiteralPath (Join-Path $archiveSourceRoot '_shared')) -and -not ($archiveEntries -contains '_shared')) {
     $archiveEntries += '_shared'
   }
 

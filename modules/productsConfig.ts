@@ -264,7 +264,7 @@ const BLOCKS = {
     type: BlockType.FIELD_GROUP,
   },
   retail_invoice: { id: 'retail_invoice', titles: { fa: 'تنظیمات فاکتور فروشگاهی', en: 'Retail Invoice Settings' }, icon: 'ShoppingCartOutlined', order: 3.5, type: BlockType.FIELD_GROUP },
-  product_site_content: { id: 'product_site_content', titles: { fa: 'محتوای سایت محصول', en: 'Product Site Content' }, icon: 'GlobalOutlined', order: 3.6, type: BlockType.FIELD_GROUP },
+  product_site_content: { id: 'product_site_content', titles: { fa: 'محتوا و سئو سایت', en: 'Site Content and SEO' }, icon: 'GlobalOutlined', order: 3.6, type: BlockType.FIELD_GROUP },
   product_stock_movements: {
     id: 'product_stock_movements',
     titles: { fa: 'ورود و خروج کالا', en: 'Inventory Movements' },

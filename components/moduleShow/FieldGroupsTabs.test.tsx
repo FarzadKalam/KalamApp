@@ -36,7 +36,7 @@ const props = {
 it('loads site content after the retail settings tab and preserves its draft while switching tabs', async () => {
   const { rerender } = render(<FieldGroupsTabs {...props} />);
   const retail = screen.getByRole('tab', { name: 'تنظیمات فاکتور فروشگاهی' });
-  const content = screen.getByRole('tab', { name: 'محتوای سایت محصول' });
+  const content = screen.getByRole('tab', { name: 'محتوا و سئو سایت' });
   expect(screen.getAllByRole('tab').indexOf(content)).toBe(screen.getAllByRole('tab').indexOf(retail) + 1);
   expect(screen.queryByLabelText('پیش‌نویس سایت')).toBeNull();
   fireEvent.click(content);

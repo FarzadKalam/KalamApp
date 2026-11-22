@@ -287,8 +287,9 @@ jobs:
       - name: WooCommerce product content and sales regressions
         run: >-
           npx vitest run test/wooProductSales.test.ts utils/richText.test.ts
-          supabase/functions/_shared/product-site-content.test.ts
-          supabase/functions/_shared/product-content-status.test.ts
+          supabase/functions/external-connectors/product-site-content.test.ts
+          supabase/functions/external-connectors/product-content-status.test.ts
+          supabase/functions/external-connectors/external-sync-history.test.ts
           components/products/ProductWooSyncTable.test.tsx components/moduleShow/FieldGroupsTabs.test.tsx
           --maxWorkers=1 --no-file-parallelism
 
@@ -349,7 +350,11 @@ jobs:
           deno-version: v2.9.6
 
       - name: WooCommerce product transfer lock regression
-        run: deno test --frozen --node-modules-dir=none --allow-env=CI,FORCE_COLOR,NO_COLOR,TERM supabase/functions/external-connectors/product-content.deno.ts
+        run: |
+          directory="$(mktemp -d)"
+          cp -r supabase/functions/external-connectors "$directory/"
+          deno check --frozen --lock=deno.lock --node-modules-dir=none "$directory/external-connectors/index.ts"
+          deno test --frozen --lock=deno.lock --node-modules-dir=none --allow-env=CI,FORCE_COLOR,NO_COLOR,TERM "$directory/external-connectors/product-content.deno.ts"
 
       - name: Organization email backend regression checks
         run: deno test --node-modules-dir=none --allow-env --allow-read --allow-sys supabase/functions/_shared/email-runtime.deno.ts supabase/functions/send-email/send-email.deno.ts
@@ -476,7 +481,9 @@ jobs:
         run: npx vitest run shared/recordRuntime.test.ts utils/workflowRuntime.test.ts utils/reporting.test.ts utils/reportQueryPrefilters.test.ts utils/viewDateFilters.test.ts utils/customerClub.test.ts utils/processActivatorContext.test.ts components/workflows/WorkflowConditionsGroup.test.tsx --maxWorkers=1 --no-file-parallelism
 
       - name: Verify PWA release
-        run: node scripts/verify-pwa-release.mjs
+        run: |
+          node --test scripts/verify-live-pwa-release.test.mjs
+          node scripts/verify-pwa-release.mjs
 
       - name: Public ecosystem browser checks
         if: github.event_name != 'workflow_dispatch' || !inputs.skip_browser_checks
@@ -550,8 +557,10 @@ jobs:
           deno-version: v2.9.6
       - name: Check the WooCommerce connector and its regression tests
         run: |
-          deno check --frozen --node-modules-dir=none supabase/functions/external-connectors/index.ts
-          deno test --frozen --node-modules-dir=none --allow-env=CI,FORCE_COLOR,NO_COLOR,TERM supabase/functions/external-connectors/product-content.deno.ts
+          directory="$(mktemp -d)"
+          cp -r supabase/functions/external-connectors "$directory/"
+          deno check --frozen --lock=deno.lock --node-modules-dir=none "$directory/external-connectors/index.ts"
+          deno test --frozen --lock=deno.lock --node-modules-dir=none --allow-env=CI,FORCE_COLOR,NO_COLOR,TERM "$directory/external-connectors/product-content.deno.ts"
       - name: Verify latest main and wait for earlier releases
         env:
           GH_TOKEN: ${{ github.token }}
