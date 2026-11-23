@@ -231,7 +231,7 @@ try {
     exit 0
   }
 
-  $selectedFunctions = Normalize-RequestedFunctions -RequestedFunctions $Functions -AvailableFunctions $availableFunctions -DeployAll:$All
+  $selectedFunctions = @(Normalize-RequestedFunctions -RequestedFunctions $Functions -AvailableFunctions $availableFunctions -DeployAll:$All)
 
   Load-EnvFile -Path (Join-Path $repoRoot $ConfigFile)
 
