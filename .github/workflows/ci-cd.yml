@@ -19,6 +19,10 @@ on:
         description: 'Deploy just the WooCommerce Edge Function and verify its live response'
         type: boolean
         default: false
+      cash_bank_ledger_migration_only:
+        description: 'Apply only the approved phase 617 cash and bank ledger migration'
+        type: boolean
+        default: false
       skip_browser_checks:
         description: 'Skip browser and screenshot checks when explicitly requested by the release owner'
         type: boolean
@@ -127,6 +131,9 @@ jobs:
             database_v1_phase582_cash_bank_context_performance.sql \
             database_v1_phase583_internal_organization_lookup_index.sql \
             database_v1_phase583_internal_organization_lookup_index.sql \
+            database_v1_phase617_cash_bank_ledger_cheque_lookup.sql \
+            database_v1_phase617_cash_bank_ledger_cheque_lookup.sql \
+            tests/sql/cash_bank_cheque_lookup_assertions.sql \
             tests/sql/cash_bank_context_assertions.sql; do
             docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d cash_bank_context_test -v ON_ERROR_STOP=1 < "$file"
           done
@@ -547,7 +554,7 @@ jobs:
           path: dist
 
   deploy_woocommerce_connector:
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy && inputs.woocommerce_connector_only && !inputs.frontend_only
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy && inputs.woocommerce_connector_only && !inputs.frontend_only && !inputs.cash_bank_ledger_migration_only
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
@@ -590,8 +597,48 @@ jobs:
       - name: Check the live WooCommerce connector
         run: node scripts/smoke-woocommerce-connector.mjs
 
+  deploy_cash_bank_ledger_migration:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy && inputs.cash_bank_ledger_migration_only && !inputs.frontend_only && !inputs.woocommerce_connector_only
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify latest main and wait for earlier releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/wait-for-production-release.mjs
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+      - name: Add server host key
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -T 15 -p "${SERVER_PORT:-22}" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 600 ~/.ssh/known_hosts
+      - name: Apply the approved ledger migration
+        shell: pwsh
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PORT: ${{ secrets.SERVER_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git fetch --no-tags origin main
+          if ($LASTEXITCODE -ne 0 -or (git rev-parse origin/main) -ne $env:GITHUB_SHA) {
+            throw 'Main advanced before the ledger migration. Validate the newest revision first.'
+          }
+          $migration = 'database_v1_phase617_cash_bank_ledger_cheque_lookup.sql'
+          Get-FileHash -Algorithm SHA256 -LiteralPath $migration | Format-List
+          & ./scripts/run-server-db-migrations.ps1 -SqlFiles @($migration)
+
   deploy:
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy && !inputs.woocommerce_connector_only
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy && !inputs.woocommerce_connector_only && !inputs.cash_bank_ledger_migration_only
     needs: ci
     runs-on: ubuntu-latest
     steps:
