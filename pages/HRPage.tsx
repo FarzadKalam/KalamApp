@@ -57,6 +57,7 @@ import PersianDateRangePicker, { type PersianDateRangeValue } from '../component
 import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
 import { useCurrencyConfig } from '../utils/currency';
 import { buildClientFallbackSystemCode } from '../utils/systemCode';
+import { fetchSessionBootstrap } from '../utils/sessionCache';
 import GoalProgressSlider from '../components/goals/GoalProgressSlider';
 import GoalsManager from '../components/goals/GoalsManager';
 import { ensureDefaultHrTaskGoals, executeGoalProgressForSubjects, normalizeGoalRecord, resolveGoalAssignedMembers } from '../utils/goals';
@@ -6767,6 +6768,8 @@ const HRPage: React.FC = () => {
       // ثبت دقیقاً از همان snapshotی انجام می‌شود که مرحلهٔ آخر ویزارد نمایش داده است.
       const ledgerEntries = payrollWizardOpenLedger as PayrollLedgerEntry[];
       const systemCode = await buildClientFallbackSystemCode(supabase, 'payroll_slips', 'payroll_slips');
+      const session = await fetchSessionBootstrap(supabase);
+      const creatorProfileId = String(session.profile?.id || session.user?.id || '').trim() || null;
       const payload = {
         name: `فیش حقوق ${row.name} ${toPersianNumber(safeJalaliFormat(monthStart.toISOString(), 'YYYY/MM'))}`,
         system_code: systemCode,
@@ -6774,7 +6777,7 @@ const HRPage: React.FC = () => {
         period_start: periodStart,
         period_end: periodEnd,
         status: 'draft',
-        assignee_id: row.profile.related_profile_id || null,
+        assignee_id: creatorProfileId,
         base_salary: payrollWizardBaseCompensation.amount,
         task_wage_total: row.taskWageTotal,
         bonus_total: payrollWizardDraft.ledgerBonusTotal,
