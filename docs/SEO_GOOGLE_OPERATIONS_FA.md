@@ -2,8 +2,12 @@
 
 ### اتصال مستقیم تازه‌سیستم به ChatGPT، Gemini و Claude (MCP) — ۲۰۲۶-۱۱-۲۶
 
-- وضعیت: معرفی قابلیت نسخهٔ `3.27.0` در صفحهٔ عمومی «تازه‌ها» (`pages/PublicSite.tsx`)، بخش امکانات عمومی، و پیش‌فرض سکشن‌های صفحهٔ اصلی (`defaultLandingConfig.ts`) ثبت شد؛ همچنین بولت ویژهٔ «اتصال به ChatGPT، Gemini و Claude (MCP)» در فاز ۶۲۰ برای پلن سازمانی (کارت صفحهٔ اول و `/pricing`) تعریف شد. هیچ استقراری روی سرور تولید انجام نشده و رفتار زنده پس از اجرای مهاجرت و استقرار تأیید خواهد شد.
-- اقدام بعدی: پس از تأیید صریح استقرار، بررسی خروجی `/updates`، کارت پلن سازمانی در `/` و `/pricing`، و وضعیت ایندکس در Search Console توسط مالک.
+- وضعیت: نسخهٔ `3.27.0` روی گیت‌هاب ساخته شد و فرانت‌اند، مهاجرت `620` و توابع Edge (`mcp-server`، `api-gateway` و توابع وابسته) روی سرور تولید مستقر شدند.
+- شواهد گیت‌هاب و زنده:
+  - [CI-CD (ساخت و تست کامل روی کامیت `d9c4b9f5`)](https://github.com/FarzadKalam/KalamApp/actions/runs/45885246270) موفق بود؛ در [اجرای استقرار `45885252193`](https://github.com/FarzadKalam/KalamApp/actions/runs/45885252193) مهاجرت `database_v1_phase620_external_mcp_access.sql` و توابع Edge مستقر شدند (تست smoke قدیمی `workflow-interval-runner` با برچسب `2026-11-22` مانع فعال‌سازی فرانت در آن اجرا شد و سپس اصلاح گردید).
+  - [انتشار بستهٔ فرانت‌اند `45887705400`](https://github.com/FarzadKalam/KalamApp/actions/runs/45887705400) موفق بود و روی هر سه دامنهٔ `tazesystem.ir`، `app.tazesystem.ir` و `kalam.tazesystem.ir` پاسخ `200` با هدر `Cache-Control: no-cache, no-store, must-revalidate`، نسخهٔ `3.27.0` در `version.json` و `CACHE_VERSION = 'v3.27.0'` در `sw.js` تأیید شد.
+  - نقطه پایانی `https://api.tazesystem.ir/functions/v1/mcp-server` پس از اصلاح پروتکل `https://` به‌طور مستقیم مستقر و متادیتای OAuth (`oauth-protected-resource` و `oauth-authorization-server`) با `200` و پاسخ `401` با هدر `WWW-Authenticate` تأیید شدند.
+- اقدام بعدی: آزمون پذیرش اتصال واقعی از ChatGPT / Codex، Gemini و Claude با حساب سازمان دارای پلن سازمانی؛ بررسی وضعیت ایندکس `/updates` و کارت‌های تعرفه در Search Console در انتظار اقدام مالک باقی می‌ماند.
 
 ### به‌روزرسانی دستیار هوشمند و پایداری همگام‌سازی مدل‌ها — ۲۰۲۶-۱۱-۲۶
 

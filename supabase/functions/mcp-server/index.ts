@@ -59,11 +59,13 @@ const resolvePublicMcpBaseUrl = (req: Request): string => {
   if (configured) return configured;
 
   const forwardedHost = String(req.headers.get('x-forwarded-host') || '').split(',')[0].trim();
-  const forwardedProto = String(req.headers.get('x-forwarded-proto') || '').split(',')[0].trim() || 'https';
+  const forwardedProto = String(req.headers.get('x-forwarded-proto') || '').split(',')[0].trim().toLowerCase();
   const reqHost = forwardedHost || String(req.headers.get('host') || '').trim();
 
-  if (reqHost && !/^(kong|functions|supabase-edge-functions|localhost|127\.0\.0\.1)(:\d+)?$/i.test(reqHost)) {
-    return `${forwardedProto}://${reqHost}/functions/v1/mcp-server`;
+  if (reqHost && !/^(kong|functions|supabase-edge-functions)(:\d+)?$/i.test(reqHost)) {
+    const isLoopback = /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(reqHost);
+    const proto = isLoopback ? (forwardedProto || 'http') : 'https';
+    return `${proto}://${reqHost}/functions/v1/mcp-server`;
   }
 
   const webhookBase = String(Deno.env.get('INSTAGRAM_WEBHOOK_PUBLIC_BASE_URL') || '').trim();

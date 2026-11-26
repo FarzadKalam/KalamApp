@@ -11,8 +11,25 @@ const cases = [
   ['functions/v1/goal-progress', { items: [] }, 200, (data) => !!data?.items && !Object.keys(data.items).length],
   ['functions/v1/report-runtime', {}, 400, (data) => data?.error === 'invalid_report'],
   ['functions/v1/workflow-interval-runner', {}, 401, (data) =>
-    data?.error === 'Unauthorized' && data?.build === 'workflow-interval-runner-2026-11-22-table-conditions'],
+    data?.error === 'Unauthorized' && (
+      data?.build === 'workflow-interval-runner-2026-11-26-saas-and-table-conditions' ||
+      data?.build === 'workflow-interval-runner-2026-11-22-table-conditions'
+    )],
 ];
+
+const mcpResponse = await fetch(`${url}/functions/v1/mcp-server/.well-known/oauth-protected-resource`, {
+  signal: AbortSignal.timeout(15_000),
+});
+const mcpMetadata = await mcpResponse.json().catch(() => null);
+if (
+  mcpResponse.status !== 200 ||
+  !String(mcpMetadata?.resource || '').startsWith('https://') ||
+  !Array.isArray(mcpMetadata?.scopes_supported) ||
+  !mcpMetadata.scopes_supported.includes('mcp:read')
+) {
+  throw new Error(`functions/v1/mcp-server metadata failed: HTTP ${mcpResponse.status} ${JSON.stringify(mcpMetadata)}`);
+}
+console.log('Verified functions/v1/mcp-server/.well-known/oauth-protected-resource');
 
 for (const [path, params, status, accepts] of cases) {
   const response = await fetch(`${url}/${path}`, {
