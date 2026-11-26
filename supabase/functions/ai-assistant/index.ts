@@ -780,11 +780,36 @@ const isProviderTimeoutError = (error: any) => {
   return /abort|timeout|timed out|upstream server is timing out|request has been cancelled|stream_inactive/i.test(text);
 };
 
+const createLinkedAttemptSignal = (outerSignal: AbortSignal | null | undefined, perAttemptTimeoutMs?: number) => {
+  if (!perAttemptTimeoutMs || perAttemptTimeoutMs <= 0) {
+    return { signal: outerSignal ?? undefined, cleanup: () => {} };
+  }
+  const controller = new AbortController();
+  const onOuterAbort = () => controller.abort((outerSignal as any)?.reason);
+  if (outerSignal) {
+    if (outerSignal.aborted) {
+      controller.abort((outerSignal as any)?.reason);
+      return { signal: controller.signal, cleanup: () => {} };
+    }
+    outerSignal.addEventListener('abort', onOuterAbort, { once: true });
+  }
+  const timer = setTimeout(() => {
+    controller.abort(new DOMException(`Attempt timed out after ${perAttemptTimeoutMs}ms`, 'TimeoutError'));
+  }, perAttemptTimeoutMs);
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timer);
+      if (outerSignal) outerSignal.removeEventListener('abort', onOuterAbort);
+    },
+  };
+};
+
 const requestAvalaiWithFallback = async (
   providerConfig: any,
   path: string,
   init: RequestInit,
-  options?: { stripVersionForPath?: boolean; disableFallback?: boolean },
+  options?: { stripVersionForPath?: boolean; disableFallback?: boolean; perAttemptTimeoutMs?: number },
 ) => {
   let protocol='chat',stream=false;
   if (path==='/chat/completions' && typeof init.body==='string') {
@@ -810,18 +835,26 @@ const requestAvalaiWithFallback = async (
       ? normalizeBaseUrl(baseUrl).replace(/\/v\d+$/i, '')
       : normalizeBaseUrl(baseUrl);
     const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
+    const linked = createLinkedAttemptSignal(init.signal, options?.perAttemptTimeoutMs);
+    const isLastBaseUrl = baseUrl === baseUrls[baseUrls.length - 1];
     try {
-      const response = await fetch(url, init);
-      if (response.ok || !isRetryableProviderStatus(response.status) || baseUrl === baseUrls[baseUrls.length - 1]) {
+      const response = await fetch(url, linked.signal ? { ...init, signal: linked.signal } : init);
+      linked.cleanup();
+      if (response.ok || !isRetryableProviderStatus(response.status) || isLastBaseUrl) {
         return { response: await bridgeReasoningResponse(response,protocol,stream), baseUrl };
       }
       lastError = new Error(`AvalAI retryable status ${response.status} from ${baseUrl}`);
     } catch (error) {
+      linked.cleanup();
       lastError = error;
+      const outerAborted = Boolean(init.signal?.aborted);
       if (isProviderTimeoutError(error)) {
+        if (!outerAborted && !isLastBaseUrl && options?.perAttemptTimeoutMs) {
+          continue;
+        }
         throw new Error('سرویس هوش مصنوعی در زمان مناسب پاسخ نداد. درخواست متوقف شد تا سرور دچار timeout نشود؛ چند لحظه بعد دوباره تلاش کنید یا مدل سریع‌تری انتخاب کنید.');
       }
-      if (baseUrl === baseUrls[baseUrls.length - 1]) throw error;
+      if (isLastBaseUrl) throw error;
     }
   }
 
@@ -7094,19 +7127,37 @@ const ensureOrgAiSettings = async (supabaseUrl: string, serviceRoleKey: string, 
 
 const fetchAvalaiCredit = async (providerConfig: any) => {
   if (!providerConfig.apiKey) return { available: false, message: 'کلید مرکزی AvalAI تنظیم نشده است.' };
-  const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/user/v1/credit', {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${providerConfig.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-  }, { stripVersionForPath: true });
-  const raw = await response.text();
-  const parsed = parseJsonSafe(raw);
-  if (!response.ok) {
-    return { available: false, status: response.status, message: typeof parsed === 'string' ? parsed : parsed?.message || 'اعتبار AvalAI دریافت نشد.', raw: parsed };
+  try {
+    const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/user/v1/credit', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${providerConfig.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      signal: AbortSignal.timeout(14000),
+    }, { stripVersionForPath: true, perAttemptTimeoutMs: 6500 });
+    const raw = await response.text();
+    const parsed = parseJsonSafe(raw);
+    if (!response.ok) {
+      const isHtml = typeof parsed === 'string' && /<html|<!doctype/i.test(parsed);
+      return {
+        available: false,
+        status: response.status,
+        message: isHtml
+          ? `سرویس AvalAI موقتاً پاسخگو نیست (کد ${response.status}).`
+          : (typeof parsed === 'string' ? parsed : parsed?.message || 'اعتبار AvalAI دریافت نشد.'),
+        raw: isHtml ? null : parsed,
+      };
+    }
+    return { available: true, credit: parsed, baseUrl };
+  } catch (error: any) {
+    return {
+      available: false,
+      message: isProviderTimeoutError(error)
+        ? 'دریافت اعتبار از AvalAI با تأخیر مواجه شد؛ اتصال سرویس‌دهنده را بررسی کنید.'
+        : String(error?.message || 'اعتبار AvalAI دریافت نشد.'),
+    };
   }
-  return { available: true, credit: parsed, baseUrl };
 };
 
 const handleGetAiSettings = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
@@ -14142,27 +14193,36 @@ const parseModelsResponse = (parsed: any) => {
 
 const fetchAvalaiPublicModelsIndex = async (providerConfig: any) => {
   const candidates = new Set<string>();
-  try {
-    const u = new URL(String(providerConfig?.baseUrl || DEFAULT_AI_BASE_URL));
-    candidates.add(`${u.origin}/public/models`);
-  } catch { /* ignore */ }
-  candidates.add('https://api.avalai.ir/public/models');
-  for (const url of candidates) {
+  const baseList = [
+    providerConfig?.baseUrl || DEFAULT_AI_BASE_URL,
+    ...(Array.isArray(providerConfig?.fallbackBaseUrls) ? providerConfig.fallbackBaseUrls : []),
+    DEFAULT_AI_FALLBACK_BASE_URL,
+    'https://api.avalai.ir/v1',
+  ];
+  for (const rawBase of baseList) {
     try {
-      const resp = await fetch(url, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!resp.ok) continue;
-      const parsed = parseJsonSafe(await resp.text());
-      const rows = parseModelsResponse(parsed);
-      if (rows.length > 0) {
-        return new Map(rows.map((m: any) => [String(m.id || '').trim(), m]));
-      }
-    } catch { /* try next candidate */ }
+      const u = new URL(String(rawBase || '').trim());
+      candidates.add(`${u.origin}/public/models`);
+    } catch { /* ignore */ }
   }
-  return new Map<string, any>();
+  try {
+    return await Promise.any(
+      Array.from(candidates).map(async (url) => {
+        const resp = await fetch(url, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(4000),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const parsed = parseJsonSafe(await resp.text());
+        const rows = parseModelsResponse(parsed);
+        if (rows.length === 0) throw new Error('empty');
+        return new Map(rows.map((m: any) => [String(m.id || '').trim(), m]));
+      }),
+    );
+  } catch {
+    return new Map<string, any>();
+  }
 };
 
 const handleListModels = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
@@ -14195,10 +14255,25 @@ const handleListModels = async (supabaseUrl: string, serviceRoleKey: string, aut
       warning: 'کلید مرکزی AI تنظیم نشده است و catalog مدل‌ها هم خالی است.',
     });
   }
-  const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/models', {
-    method: 'GET',
-    headers: { Authorization: `Bearer ${providerConfig.apiKey}`, 'Content-Type': 'application/json' },
-  });
+  let response: Response;
+  let baseUrl = providerConfig.baseUrl;
+  try {
+    const result = await requestAvalaiWithFallback(providerConfig, '/models', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${providerConfig.apiKey}`, 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(18000),
+    }, { perAttemptTimeoutMs: 8500 });
+    response = result.response;
+    baseUrl = result.baseUrl;
+  } catch (err: any) {
+    return json(200, {
+      success: true,
+      models: [],
+      warning: isProviderTimeoutError(err)
+        ? 'سرویس AvalAI در زمان مناسب پاسخ نداد و دریافت مدل‌ها متوقف شد.'
+        : String(err?.message || 'دریافت لیست مدل‌ها از AvalAI ناموفق بود.'),
+    });
+  }
   const raw = await response.text();
   const parsed = parseJsonSafe(raw);
   if (!response.ok) {
@@ -15189,25 +15264,31 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
     if (!providerConfig.apiKey) {
       return json(200, { success: true, models: [], warning: 'کلید مرکزی AI تنظیم نشده است.' });
     }
-    // ── fetch /models with an explicit 20 s timeout so the Edge Function never hangs ──
+    // ── fetch /models with per-attempt 8.5s & total 18s budget so fallback works and Gateway never 504s ──
     let modelsResponse: Response;
     try {
       const { response } = await requestAvalaiWithFallback(providerConfig, '/models', {
         method: 'GET',
         headers: { Authorization: `Bearer ${providerConfig.apiKey}`, 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(20000),
-      });
+        signal: AbortSignal.timeout(18000),
+      }, { perAttemptTimeoutMs: 8500 });
       modelsResponse = response;
     } catch (err: any) {
-      const msg = err?.name === 'TimeoutError' || /timeout|abort/i.test(String(err?.message || ''))
-        ? 'سرور AvalAI در ۲۰ ثانیه پاسخ نداد. لطفاً چند لحظه دیگر دوباره تلاش کنید.'
+      const msg = isProviderTimeoutError(err)
+        ? 'سرویس AvalAI در زمان مناسب پاسخ نداد (timeout). لطفاً چند دقیقه دیگر دوباره تلاش کنید یا اتصال شبکه به AvalAI را بررسی نمایید.'
         : (err?.message || 'خطای اتصال به AvalAI');
       return json(200, { success: false, models: [], message: msg });
     }
     const raw = await modelsResponse.text();
     const parsed = parseJsonSafe(raw);
     if (!modelsResponse.ok) {
-      return json(200, { success: false, models: [], message: 'دریافت لیست مدل‌ها از AvalAI ناموفق بود.', raw: parsed });
+      const isHtml = typeof parsed === 'string' && /<html|<!doctype/i.test(parsed);
+      const upstreamMsg = isHtml
+        ? `سرویس‌دهنده AvalAI موقتاً پاسخگو نیست (کد ${modelsResponse.status}). لطفاً چند دقیقه دیگر دوباره تلاش کنید.`
+        : (typeof parsed === 'object' && parsed?.error?.message)
+          ? `دریافت لیست مدل‌ها ناموفق بود: ${parsed.error.message}`
+          : `دریافت لیست مدل‌ها از AvalAI ناموفق بود (کد ${modelsResponse.status}).`;
+      return json(200, { success: false, models: [], message: upstreamMsg, status: modelsResponse.status });
     }
     const models = parseModelsResponse(parsed);
     // ── enrich missing limits & load existing catalog in parallel ──
@@ -15231,6 +15312,7 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
     // ── patch catalog rows in parallel (max 8 concurrent) ──
     const providerById = new Map(models.map((m: any) => [String(m.id || '').trim(), m]));
     const patchTasks: Array<Promise<unknown>> = [];
+    let syncedContextWindowsCount = 0;
     for (const row of existingCatalog) {
       const id = String(row?.id || '').trim();
       const matched = providerById.get(id);
@@ -15240,6 +15322,7 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
       const nextCtx = Number(matched.context_window || 0) >= 4096 ? Math.floor(Number(matched.context_window)) : null;
       const nextOut = Number(matched.max_output_tokens || 0) >= 1024 ? Math.floor(Number(matched.max_output_tokens)) : null;
       if ((nextCtx && meta.context_window !== nextCtx) || (nextOut && meta.max_output_tokens !== nextOut)) {
+        syncedContextWindowsCount += 1;
         patchTasks.push(restPatch(supabaseUrl, serviceRoleKey, 'ai_model_catalog', { id: `eq.${id}` }, {
           metadata: {
             ...meta,
@@ -15254,7 +15337,6 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
       }
     }
     if (patchTasks.length > 0) await Promise.all(patchTasks);
-    const syncedContextWindowsCount = patchTasks.length;
     return json(200, { success: true, models, syncedContextWindowsCount, raw: parsed });
   }
 

@@ -1,1 +1,0 @@
-const s=r=>new Promise((a,o)=>{const e=new FileReader;e.onload=()=>{const n=String(e.result||"");a(n.replace(/^data:[^;]+;base64,/,""))},e.onerror=()=>o(e.error||new Error("خواندن فایل ناموفق بود.")),e.readAsDataURL(r)});export{s as b};

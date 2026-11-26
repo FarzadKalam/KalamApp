@@ -3,8 +3,8 @@ import { CSS } from '@dnd-kit/utilities';
 import { DashboardLayoutContext } from './dashboardLayoutContext';
 import React, { createContext, useContext, useState, useRef } from 'react';
 import { Button, Dropdown, Empty, Modal, Select, Typography } from 'antd';
-import { ArrowDownOutlined, ArrowUpOutlined, DragOutlined, ColumnWidthOutlined, EyeInvisibleOutlined, MoreOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons';
-import { DASHBOARD_COLUMNS, dashboardWidgetWidth, readDashboardPreferences, updateDashboardPreferences, useDashboardPreferences } from '../../utils/dashboardPreferences';
+import { ArrowDownOutlined, ArrowUpOutlined, DragOutlined, EyeInvisibleOutlined, MoreOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons';
+import { DASHBOARD_COLUMNS, DASHBOARD_HEIGHT_STEP, dashboardWidgetHeight, dashboardWidgetWidth, readDashboardPreferences, updateDashboardPreferences, useDashboardPreferences } from '../../utils/dashboardPreferences';
 
 type WidgetScope = { orgId: string | null; userId: string | null; onRefresh?: () => void };
 export const DashboardWidgetScope = createContext<WidgetScope>({ orgId: null, userId: null });
@@ -17,63 +17,100 @@ export default function DashboardWidgetFrame({ widgetId, title, className = '', 
   const scope = useContext(DashboardWidgetScope);
   const preferences = useDashboardPreferences(scope.orgId, scope.userId);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const { editing, move } = useContext(DashboardLayoutContext);
+  const { editing, setPreview, move } = useContext(DashboardLayoutContext);
   const { setNodeRef, setActivatorNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({ id: widgetId, disabled: !editing });
   const { initial, minimum } = dashboardWidgetWidth(widgetId);
-  const width = preferences.widgetWidths?.[widgetId] ?? initial;
-  const pointer = useRef<{ x: number; step: number; width: number; id: number } | null>(null);
-  const hide = () => updateDashboardPreferences(scope.orgId, scope.userId, { hiddenWidgets: [...new Set([...preferences.hiddenWidgets, widgetId])] });
-  const resize = (value: number) => {
+  const width = preferences.layoutMode === 'custom' ? preferences.widgetWidths?.[widgetId] ?? initial : initial;
+  const height = preferences.layoutMode === 'custom' ? preferences.widgetHeights?.[widgetId] : undefined;
+  const frame = useRef<HTMLElement | null>(null);
+  const [previewHeight, setPreviewHeight] = useState<number>();
+  const pointer = useRef<{ id: number; origin: number; initial: number; step: number; sign: number } | null>(null);
+  const hide = () => updateDashboardPreferences(scope.orgId, scope.userId, { layoutMode: 'custom', hiddenWidgets: [...new Set([...preferences.hiddenWidgets, widgetId])] });
+  const clampWidth = (value: number) => Math.max(minimum, Math.min(DASHBOARD_COLUMNS, value));
+  const resize = (axis: 'width' | 'height', value: number) => {
     if (!editing) return;
     const latest = readDashboardPreferences(scope.orgId, scope.userId);
-    updateDashboardPreferences(scope.orgId, scope.userId, {
-      widgetWidths: { ...latest.widgetWidths, [widgetId]: Math.max(minimum, Math.min(DASHBOARD_COLUMNS, value)) },
+    updateDashboardPreferences(scope.orgId, scope.userId, axis === 'width' ? {
+      layoutMode: 'custom', widgetWidths: { ...latest.widgetWidths, [widgetId]: clampWidth(value) },
+    } : {
+      layoutMode: 'custom', widgetHeights: { ...latest.widgetHeights, [widgetId]: dashboardWidgetHeight(value) },
     });
   };
+  const stopResize = () => {
+    pointer.current = null;
+    setPreview(null);
+    setPreviewHeight(undefined);
+  };
+  const edge = (side: 'inline-start' | 'inline-end' | 'block-end') => {
+    const vertical = side === 'block-end';
+    const axis = vertical ? 'height' : 'width';
+    const label = (vertical ? 'تغییر ارتفاع ' : 'تغییر عرض ') + title + (side === 'inline-start' ? ' از لبهٔ آغاز' : '');
+    const calculate = (event: React.PointerEvent<HTMLButtonElement>) => {
+      const start = pointer.current;
+      if (start?.id !== event.pointerId) return;
+      const delta = ((vertical ? event.clientY : event.clientX) - start.origin) * start.sign;
+      const steps = Math.round(delta / start.step);
+      if (!steps) return;
+      const raw = start.initial + steps * (vertical ? DASHBOARD_HEIGHT_STEP : 1);
+      return vertical ? dashboardWidgetHeight(raw) : clampWidth(raw);
+    };
+    const signFor = (target: HTMLElement) => vertical ? 1 :
+      ((getComputedStyle(target).direction || target.closest('[dir]')?.getAttribute('dir')) === 'rtl' ? -1 : 1) * (side === 'inline-end' ? 1 : -1);
+    return <button type="button" className={'dashboard-widget-edge dashboard-widget-edge-' + side}
+      aria-label={label} title={label}
+      onPointerDown={event => {
+        if (!event.isPrimary || event.button !== 0 || !frame.current) return;
+        const container = frame.current.closest<HTMLElement>('.dashboard-layout-container');
+        if (!container || (!vertical && container.clientWidth < 720)) return;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        pointer.current = { id: event.pointerId, origin: vertical ? event.clientY : event.clientX,
+          initial: vertical ? height ?? frame.current.offsetHeight : width,
+          step: vertical ? DASHBOARD_HEIGHT_STEP : (container.clientWidth + 20) / DASHBOARD_COLUMNS,
+          sign: signFor(event.currentTarget) };
+      }}
+      onPointerMove={event => {
+        if (pointer.current?.id !== event.pointerId) return;
+        const value = calculate(event);
+        if (vertical) setPreviewHeight(value);
+        else setPreview(value === undefined ? null : { id: widgetId, width: value });
+      }}
+      onPointerUp={event => {
+        if (pointer.current?.id !== event.pointerId) return;
+        const value = calculate(event);
+        if (value !== undefined && value !== pointer.current.initial) resize(axis, value);
+        stopResize();
+      }}
+      onPointerCancel={stopResize} onLostPointerCapture={stopResize}
+      onKeyDown={event => {
+        const positiveKey = vertical ? 'ArrowDown' : 'ArrowRight';
+        const negativeKey = vertical ? 'ArrowUp' : 'ArrowLeft';
+        const delta = event.key === positiveKey ? 1 : event.key === negativeKey ? -1 : 0;
+        if (!delta) return;
+        event.preventDefault();
+        resize(axis, vertical ? (height ?? (frame.current?.offsetHeight || 300)) + delta * DASHBOARD_HEIGHT_STEP : width + delta * signFor(event.currentTarget));
+      }} />;
+  };
   const ref = React.useCallback((node: HTMLElement | null) => {
+    frame.current = node;
     setNodeRef(node);
     if (containerRef) (containerRef as React.MutableRefObject<HTMLElement | null>).current = node;
   }, [containerRef, setNodeRef]);
+  const displayHeight = previewHeight ?? height;
   return <section ref={ref} className={'dashboard-widget-frame ' + className} data-dashboard-widget={widgetId} aria-label={title}
-    data-widget-width={width} data-dragging={isDragging}
+    data-widget-width={width} data-dragging={isDragging} data-fixed-height={displayHeight !== undefined}
     hidden={preferences.hiddenWidgets.includes(widgetId)} style={{
-      '--widget-span': width,
+      '--widget-height': displayHeight !== undefined ? displayHeight + 'px' : undefined,
       ...(editing ? { transform: CSS.Translate.toString(transform), transition } : {}),
     } as React.CSSProperties}>
     {editing && <div className="dashboard-widget-edit-tools">
       <Button ref={setActivatorNodeRef} className="dashboard-widget-grip" type="text" icon={<DragOutlined />}
         {...attributes} {...listeners} aria-label={'جابه‌جایی ' + title} />
-      <Button className="dashboard-widget-resize" type="text" icon={<ColumnWidthOutlined />}
-        aria-label={'تغییر عرض ' + title}
-        onPointerDown={event => {
-          const grid = event.currentTarget.closest<HTMLElement>('.dashboard-layout');
-          if (!grid || event.button !== 0) return;
-          const style = getComputedStyle(grid);
-          if (style.gridTemplateColumns.split(' ').length !== DASHBOARD_COLUMNS) return;
-          event.currentTarget.setPointerCapture(event.pointerId);
-          pointer.current = { x: event.clientX, width, id: event.pointerId,
-            step: (grid.clientWidth + (parseFloat(style.columnGap) || 0)) / DASHBOARD_COLUMNS };
-        }}
-        onPointerUp={event => {
-          const start = pointer.current;
-          pointer.current = null;
-          if (start?.id !== event.pointerId || !start.step) return;
-          const delta = Math.round((start.x - event.clientX) / start.step);
-          if (delta) resize(start.width + delta);
-        }}
-        onPointerCancel={() => { pointer.current = null; }}
-        onLostPointerCapture={() => { pointer.current = null; }}
-        onKeyDown={event => {
-          if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
-          event.preventDefault();
-          resize(width + (event.key === 'ArrowLeft' ? 1 : -1));
-        }} />
     </div>}
     <Dropdown trigger={['click']} menu={{ items: [
       { key: 'settings', icon: <SettingOutlined />, label: 'تنظیمات ویجت', onClick: () => setSettingsOpen(true) },
       { key: 'refresh', icon: <ReloadOutlined />, label: 'تازه‌کردن اطلاعات', disabled: !onRefresh && !scope.onRefresh, onClick: onRefresh || scope.onRefresh },
-      ...(editing ? [{ key: 'narrow', label: 'باریک‌تر', disabled: width <= minimum, onClick: () => resize(width - 1) },
-      { key: 'wide', label: 'عریض‌تر', disabled: width >= DASHBOARD_COLUMNS, onClick: () => resize(width + 1) },
+      ...(editing ? [{ key: 'narrow', label: 'باریک‌تر', disabled: width <= minimum, onClick: () => resize('width', width - 1) },
+      { key: 'wide', label: 'عریض‌تر', disabled: width >= DASHBOARD_COLUMNS, onClick: () => resize('width', width + 1) },
       { key: 'up', icon: <ArrowUpOutlined />, label: 'بالاتر', onClick: () => move(widgetId, -1) },
       { key: 'down', icon: <ArrowDownOutlined />, label: 'پایین‌تر', onClick: () => move(widgetId, 1) },
       { key: 'hide', icon: <EyeInvisibleOutlined />, label: 'پنهان‌کردن از داشبورد من', onClick: hide }] : []),

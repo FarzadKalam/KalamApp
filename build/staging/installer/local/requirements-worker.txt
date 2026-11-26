@@ -1,2 +1,0 @@
-# Download and audit wheels on the controlled builder; install with --no-index.
-cryptography==50.0.2

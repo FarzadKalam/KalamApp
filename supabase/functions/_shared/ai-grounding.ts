@@ -1,3 +1,4 @@
+import { canViewAiAgentModule, hasAiSettingsAdminPermission } from './ai-agent-role-access.ts';
 import { buildActorWorkIdentity } from './ai-actor-work-context.ts';
 import {
   AI_AGENT_CATALOG,

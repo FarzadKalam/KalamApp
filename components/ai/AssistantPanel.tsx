@@ -2134,7 +2134,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         });
         if (serverError) {
           if (isRecoverableStreamError(serverError)) {
-            message?.warning?.(String(serverError?.partialContent || '').trim() ? PARTIAL_STREAM_NOTICE : toFaErrorMessage(serverError, 'پاسخ کامل دریافت نشد.'));
+            message?.warning?.(receivedStreamText || normalizeAiMessageText(serverError?.partialContent || serverError?.partial_content || serverError?.answer)
+              ? PARTIAL_STREAM_NOTICE : toFaErrorMessage(serverError, 'پاسخ کامل دریافت نشد.'));
           } else {
             message?.error?.(toFaErrorMessage(serverError, String(serverError?.message || 'ارتباط با دستیار ناموفق بود.')));
           }

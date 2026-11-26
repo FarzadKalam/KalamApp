@@ -56,3 +56,4 @@ __pycache__/
 *.pyc
 /installer/output/
 /installer/staging/
+/build/

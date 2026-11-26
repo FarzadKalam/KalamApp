@@ -1,1 +1,0 @@
-import{a as r}from"./ant-icons-vendor-Uj5X7Obb.js";let e=null;const o=new Set;function u(t){if(e!==t){e=t;for(const n of o)n()}}function c(){return r.useSyncExternalStore(t=>(o.add(t),()=>{o.delete(t)}),()=>e,()=>null)}export{u as s,c as u};

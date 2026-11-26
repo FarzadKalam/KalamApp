@@ -1,3 +1,5 @@
+import { persistStagedMainRecordFiles, waitForMainFileUploads } from '../utils/mainRecordFiles';
+import { canQuickEditModuleField, getQuickEditAssigneeField } from '../utils/moduleListQuickEdit';
 import { isDuplicateHrEmployeeField } from '../utils/hrEmployeeFields';
 import { iranMobileLocal } from '../supabase/functions/_shared/phone-number';
 import { canFieldAction, canWriteFieldValue, canModuleAction, isEmptyFieldValue } from '../utils/fieldAccess';
