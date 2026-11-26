@@ -31,14 +31,14 @@ const fromBase64 = (value: string): Uint8Array<ArrayBuffer> => {
   return bytes;
 };
 
-const toArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
+const toBufferSource = (bytes: Uint8Array): Uint8Array<ArrayBuffer> => {
   const copy = new Uint8Array(new ArrayBuffer(bytes.byteLength));
   copy.set(bytes);
-  return copy.buffer;
+  return copy;
 };
 
 const deriveAesGcmKey = async (secretSeed: string): Promise<CryptoKey> => {
-  const material = toArrayBuffer(new TextEncoder().encode(`${String(secretSeed || '')}:kalamapp:ai-provider-keys:v1`));
+  const material = toBufferSource(new TextEncoder().encode(`${String(secretSeed || '')}:kalamapp:ai-provider-keys:v1`));
   const digest = await crypto.subtle.digest('SHA-256', material);
   return await crypto.subtle.importKey('raw', digest, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
 };
@@ -66,7 +66,7 @@ export const maskProviderApiKey = (rawKey: string): string => {
 
 /** Computes a deterministic SHA-256 hex digest to detect duplicate keys without plaintext indexing. */
 export const hashProviderApiKeySha256 = async (rawKey: string): Promise<string> => {
-  const encoded = toArrayBuffer(new TextEncoder().encode(String(rawKey || '').trim()));
+  const encoded = toBufferSource(new TextEncoder().encode(String(rawKey || '').trim()));
   const digest = await crypto.subtle.digest('SHA-256', encoded);
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
 };
@@ -82,7 +82,7 @@ export const encryptProviderApiKey = async (rawKey: string, secretSeed: string):
   const cipherBuffer = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv },
     cryptoKey,
-    toArrayBuffer(new TextEncoder().encode(clean)),
+    toBufferSource(new TextEncoder().encode(clean)),
   );
   return `${ENCRYPTED_PREFIX}${toBase64(iv)}:${toBase64(new Uint8Array(cipherBuffer))}`;
 };
@@ -101,7 +101,7 @@ export const decryptProviderApiKey = async (storedValue: string, secretSeed: str
   const plainBuffer = await crypto.subtle.decrypt(
     { name: 'AES-GCM', iv },
     cryptoKey,
-    toArrayBuffer(cipherBytes),
+    toBufferSource(cipherBytes),
   );
   return new TextDecoder().decode(plainBuffer).trim();
 };

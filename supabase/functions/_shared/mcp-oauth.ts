@@ -90,10 +90,10 @@ export const base64UrlEncode = (bytes: Uint8Array): string => {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 };
 
-export const toArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
+export const toBufferSource = (bytes: Uint8Array): Uint8Array<ArrayBuffer> => {
   const copy = new Uint8Array(new ArrayBuffer(bytes.byteLength));
   copy.set(bytes);
-  return copy.buffer;
+  return copy;
 };
 
 export const generateRandomToken = (prefix: string, byteLength = 32): string => {
@@ -102,12 +102,12 @@ export const generateRandomToken = (prefix: string, byteLength = 32): string => 
 };
 
 export const sha256Hex = async (value: string): Promise<string> => {
-  const digest = await crypto.subtle.digest('SHA-256', toArrayBuffer(new TextEncoder().encode(value)));
+  const digest = await crypto.subtle.digest('SHA-256', toBufferSource(new TextEncoder().encode(value)));
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
 };
 
 export const computePkceS256Challenge = async (codeVerifier: string): Promise<string> => {
-  const digest = await crypto.subtle.digest('SHA-256', toArrayBuffer(new TextEncoder().encode(codeVerifier)));
+  const digest = await crypto.subtle.digest('SHA-256', toBufferSource(new TextEncoder().encode(codeVerifier)));
   return base64UrlEncode(new Uint8Array(digest));
 };
 
