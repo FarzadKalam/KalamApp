@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { BookOutlined, DownOutlined, GlobalOutlined, LinkOutlined, UpOutlined } from '@ant-design/icons';
 
 export type AiSourceItem = {

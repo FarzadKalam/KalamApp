@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import { useMemo } from 'react';
 import { Prompts, Welcome, type PromptProps } from '@ant-design/x';
 import {
   BarChartOutlined,

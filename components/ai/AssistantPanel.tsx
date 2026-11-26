@@ -978,8 +978,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       { label: 'گفتگوی آزاد', value: 'cap:free_chat', icon: <PlusOutlined />, extra: '/free', trigger: '/', keywords: 'گفتگوی آزاد free chat' },
     ];
     const agentMentions = AI_AGENT_CATALOG.filter((agent) => {
-      const access = resolveClientAgentAccess(agent.key, agentAccessMap);
-      return access.canChat;
+      if (!agentAccessMap) return true;
+      const access = agentAccessMap[agent.key];
+      return Boolean(access && (access.canView ?? access.canUse) !== false && (access.canChat ?? access.canUse) !== false);
     }).map((agent) => ({
       label: agent.titleFa,
       value: `agent:${agent.key}`,
