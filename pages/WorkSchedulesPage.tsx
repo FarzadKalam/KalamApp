@@ -81,6 +81,7 @@ type DayKey = (typeof DAYS)[number]['key'];
 type ShiftKey = (typeof SHIFTS)[number]['key'];
 type StatusKey = 'draft' | 'active' | 'expired';
 type PageMode = 'view' | 'edit';
+const ALL_SCHEDULE_DAYS = 'all';
 type CopyScope = 'day' | 'week';
 type CopyDestination = 'single_date' | 'week_days' | 'specific_week' | 'next_week';
 type CopyPopoverState = { columnKey: string; sourceDateKey: string; sourceWeekKey: string };
@@ -486,9 +487,12 @@ const WorkSchedulesPage: React.FC = () => {
     });
     return Array.from(byWeek.entries()).map(([key, dates]) => ({ key, dates }));
   }, [calendarDates]);
-  const visibleWeekIndex = Math.max(0, calendarWeeks.findIndex((week) => week.key === selectedWeekKey));
+  const selectedWeekIndex = calendarWeeks.findIndex((week) => week.key === selectedWeekKey);
+  const opensOnFriday = calendarWeeks.length > 1 && dayKeyFromDate(calendarWeeks[0].dates[0]) === 'fri';
+  const visibleWeekIndex = selectedWeekIndex >= 0 ? selectedWeekIndex : opensOnFriday ? 1 : 0;
   const visibleWeek = calendarWeeks[visibleWeekIndex];
   const nextWeek = calendarWeeks[visibleWeekIndex + 1];
+  const readOnlyDates = selectedWeekIndex < 0 ? calendarDates : visibleWeek.dates;
   const dateLabels = useMemo(() => new Map(calendarDates.map((date) => {
     const key = dateKeyFromDate(date);
     return [key, toPersianNumber(safeJalaliFormat(key, 'YYYY/MM/DD') || '')];
@@ -804,14 +808,14 @@ const WorkSchedulesPage: React.FC = () => {
         </div>
 
         <div className="divide-y divide-gray-100 dark:divide-white/5">
-          {visibleWeek?.dates.map((date) => {
+          {readOnlyDates.map((date) => {
             const dayKey = dayKeyFromDate(date);
             const day = DAYS.find((item) => item.key === dayKey) || DAYS[0];
             const dateKey = dateKeyFromDate(date);
             const holidaySummary = holidayByDate.get(dateKey);
             const plan = getDatePlan(column, date);
             return (
-            <div key={`${column.key}_${dateKey}`} className="px-5 py-4">
+            <div key={`${column.key}_${dateKey}`} className="px-5 py-4" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 160px' }}>
               <div className="flex items-center justify-between gap-3 mb-3">
                 <div className="font-bold text-gray-800 dark:text-white">{day.label} <span className="text-xs text-gray-500 persian-number">{dateLabels.get(dateKey)}</span></div>
                 <div className="flex flex-wrap justify-end gap-1">
@@ -1098,16 +1102,16 @@ const WorkSchedulesPage: React.FC = () => {
         )}
         {visibleWeek && calendarWeeks.length > 1 && (pageMode === 'edit' ? visibleColumns.length : assignedVisibleColumns.length) > 0 && (
           <div className="flex flex-wrap items-center gap-3 px-5 py-3">
-            <span>هفتهٔ برنامه</span>
+            <span>{pageMode === 'view' ? 'روزهای برنامه' : 'هفتهٔ برنامه'}</span>
             <Select
-              aria-label="هفتهٔ برنامه"
-              value={visibleWeek.key}
+              aria-label={pageMode === 'view' ? 'روزهای برنامه' : 'هفتهٔ برنامه'}
+              value={pageMode === 'view' && selectedWeekIndex < 0 ? ALL_SCHEDULE_DAYS : visibleWeek.key}
               onChange={(key) => {
                 setSelectedWeekKey(key);
                 setCopyPopover(null);
                 resetCopySettings();
               }}
-              options={weekOptions}
+              options={pageMode === 'view' ? [{ value: ALL_SCHEDULE_DAYS, label: 'همهٔ روزها' }, ...weekOptions] : weekOptions}
             />
           </div>
         )}
