@@ -8,7 +8,8 @@ import {resolveVoipRouteStrategy,selectVoipRoute,normalizeProviderSipServer} fro
 import {prepareProviderBridge} from '../_shared/voip-provider-bridge.ts';
 import {searchVoipOperators,listContactCenterOperators,normalizeDialExtension,validDialExtension} from '../_shared/voip-directory.ts';
 
-const FUNCTION_BUILD = 'voip-session-2026-11-17-dial-directory';
+const FUNCTION_BUILD = 'voip-session-2026-11-18-call-log-ordering';
+const terminalCallStatuses = new Set(['completed', 'missed', 'failed']);
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -190,53 +191,71 @@ Deno.serve(async (req) => {
       const destinationNumber = dialPhone(body?.destinationNumber || body?.destination_number || '') || String(body?.destinationNumber || '');
       const extension = String(body?.extension || profile.voip_extension || '').trim() || null;
 
-      const existing = await restSelect(supabaseUrl, serviceRoleKey, 'voip_call_logs', {
+      const callLogQuery = {
         org_id: `eq.${orgId}`,
         provider: `eq.${provider}`,
         call_id: `eq.${callId}`,
-        select: 'id,started_at,metadata,related_module_id,related_record_id',
+        select: 'id,status,started_at,ended_at,metadata,related_module_id,related_record_id',
         limit: '1',
-      });
+      };
 
       const nowIso = new Date().toISOString();
-      const rowPayload: Record<string, any> = {
+      const callFields = {
         org_id: orgId,
         provider,
         call_id: callId,
         direction,
-        status,
         source_number: sourceNumber || null,
         destination_number: destinationNumber || null,
         extension,
         operator_code: profile.voip_operator_code || null,
-        related_module_id: body?.moduleId || existing[0]?.related_module_id || null,
-        related_record_id: body?.recordId || existing[0]?.related_record_id || null,
         assignee_id: profile.id,
         title: (direction === 'incoming' ? sourceNumber : destinationNumber) || 'تماس تحت وب',
-        metadata: {
-          ...(existing[0]?.metadata && typeof existing[0].metadata === 'object' ? existing[0].metadata : {}),
-          webrtc: true,
-          build: FUNCTION_BUILD,
-        },
       };
-      if (status === 'ringing' && !existing[0]?.started_at) rowPayload.started_at = nowIso;
-      if (['completed', 'missed', 'failed'].includes(status)) rowPayload.ended_at = nowIso;
-      if (Number.isFinite(Number(body?.talkSeconds))) {
-        rowPayload.talk_seconds = Math.max(0, Math.floor(Number(body.talkSeconds)));
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const [existing] = await restSelect(supabaseUrl, serviceRoleKey, 'voip_call_logs', callLogQuery);
+        const previousStatus = existing?.status;
+        const preserveStatus = (terminalCallStatuses.has(previousStatus) && !terminalCallStatuses.has(status))
+          || (previousStatus === 'answered' && status === 'ringing');
+        const rowPayload: Record<string, any> = {
+          ...callFields,
+          status: preserveStatus ? previousStatus : status,
+          related_module_id: body?.moduleId || existing?.related_module_id || null,
+          related_record_id: body?.recordId || existing?.related_record_id || null,
+          metadata: {
+            ...(existing?.metadata && typeof existing.metadata === 'object' ? existing.metadata : {}),
+            webrtc: true,
+            build: FUNCTION_BUILD,
+          },
+        };
+        if (status === 'ringing' && !existing?.started_at) rowPayload.started_at = nowIso;
+        if (terminalCallStatuses.has(status) && !existing?.ended_at) rowPayload.ended_at = nowIso;
+        if (!preserveStatus && Number.isFinite(Number(body?.talkSeconds))) {
+          rowPayload.talk_seconds = Math.max(0, Math.floor(Number(body.talkSeconds)));
+        }
+        const targetUrl = new URL(`${trimTrailingSlash(supabaseUrl)}/rest/v1/voip_call_logs`);
+        if (existing?.id) {
+          targetUrl.searchParams.set('id', `eq.${existing.id}`);
+          targetUrl.searchParams.set('org_id', callLogQuery.org_id);
+          targetUrl.searchParams.set('provider', callLogQuery.provider);
+          targetUrl.searchParams.set('status', previousStatus ? `eq.${previousStatus}` : 'is.null');
+        }
+        const res = await fetch(targetUrl, {
+          method: existing?.id ? 'PATCH' : 'POST',
+          headers: { ...serviceHeaders(serviceRoleKey), Prefer: 'return=representation' },
+          body: JSON.stringify(rowPayload),
+        });
+        const saved = parseJsonSafe(await res.text());
+        if (res.ok) {
+          const callLog = Array.isArray(saved) ? saved[0] : saved;
+          if (callLog) return json(200, { success: true, callLog });
+          if (existing?.id) continue;
+        }
+        if (!existing?.id && res.status === 409 && saved?.code === '23505') continue;
+        console.error('[voip-session] call log write failed', res.status);
+        return json(500, { success: false, message: 'ثبت وضعیت تماس در سوابق ناموفق بود.' });
       }
-
-      const targetUrl = existing[0]?.id
-        ? `${trimTrailingSlash(supabaseUrl)}/rest/v1/voip_call_logs?id=eq.${existing[0].id}`
-        : `${trimTrailingSlash(supabaseUrl)}/rest/v1/voip_call_logs`;
-      const res = await fetch(targetUrl, {
-        method: existing[0]?.id ? 'PATCH' : 'POST',
-        headers: { ...serviceHeaders(serviceRoleKey), Prefer: 'return=representation' },
-        body: JSON.stringify(rowPayload),
-      });
-      const raw = await res.text();
-      if (!res.ok) throw new Error(raw || 'ثبت گزارش تماس WebRTC ناموفق بود.');
-      const saved = parseJsonSafe(raw);
-      return json(200, { success: true, callLog: Array.isArray(saved) ? saved[0] : saved });
+      return json(409, { success: false, message: 'وضعیت تماس هم‌زمان تغییر کرد و در سوابق به‌روز نشد.' });
     }
 
     if(!isAdmin)return json(403,{success:false,message:'مدیریت حساب تلفن نیازمند دسترسی ویرایش کاربران یا تنظیمات سازمان است.'});

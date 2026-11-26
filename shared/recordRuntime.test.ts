@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   evaluateCoreConditionOperator,
+  getCoreCalendarConditionBounds,
   renderTemplateAsync,
   renderTypedTemplateValue,
   sanitizeOutboundDisplay,
@@ -9,6 +10,60 @@ import {
   evaluateWorkflowConditionCollectionWithResolver,
   evaluateWorkflowConditionWithResolver,
 } from './workflowConditionRuntime';
+
+describe('conditions on table rows', () => {
+  const conditions = [
+    { field: 'payment_type', operator: 'eq', value: 'online' },
+    { field: 'status', operator: 'eq', value: 'received' },
+  ];
+  const pending = { payment_type: 'online', status: 'pending' };
+  const cash = { payment_type: 'cash', status: 'received' };
+  const online = { payment_type: 'online', status: 'received' };
+  const evaluate = (operator: string, currentValue: unknown, value = conditions) =>
+    evaluateWorkflowConditionWithResolver({
+      condition: { field: 'payments', operator, value },
+      resolveValues: async () => ({ currentValue }),
+      evaluateAsyncOperator: async () => false,
+    });
+
+  it('checks all predicates on a single row before matching any row', async () => {
+    expect(await evaluate('table_any', [pending, cash])).toBe(false);
+    expect(await evaluate('table_any', [pending, cash, online])).toBe(true);
+  });
+
+  it('does not pass a negative or empty check when a related row field is unavailable', async () => {
+    const field = '__workflow_related__product_id::products::category';
+    const evaluateRelation = (operator: string, currentValue: unknown) => evaluateWorkflowConditionWithResolver({
+      condition: { field: 'invoiceItems', operator: 'table_any', value: [{ field, operator, value: 'accepted' }] },
+      resolveValues: async () => ({ currentValue: [{ product_id: 'item' }] }),
+      resolveTableRowValue: async () => currentValue,
+      evaluateAsyncOperator: async () => false,
+    });
+    expect(await evaluateRelation('neq', undefined)).toBe(false);
+    expect(await evaluateRelation('is_null', undefined)).toBe(false);
+    expect(await evaluateRelation('is_null', null)).toBe(true);
+    expect(await evaluateRelation('eq', 'accepted')).toBe(true);
+  });
+
+  it('requires at least one active row and excludes deleted rows', async () => {
+    expect(await evaluate('table_all', [])).toBe(false);
+    expect(await evaluate('table_all', [online, { ...pending, _destroy: true }])).toBe(true);
+    expect(await evaluate('table_all', [online, pending])).toBe(false);
+    expect(await evaluate('table_any', [{ ...online, is_deleted: true }])).toBe(false);
+    expect(await evaluate('table_any', [online], [])).toBe(false);
+    expect(await evaluate('table_any', '[]')).toBe(false);
+  });
+});
+
+describe('calendar query bounds', () => {
+  it('uses the Tehran day across a UTC day boundary', () => {
+    const now = new Date('2026-11-21T21:00:00Z');
+    expect(getCoreCalendarConditionBounds('is_today', undefined, now)).toEqual({
+      startDate: '2026-11-22', endDate: '2026-11-23',
+      startInstant: '2026-11-21T20:30:00.000Z', endInstant: '2026-11-22T20:30:00.000Z',
+    });
+  });
+});
 
 describe('record runtime shared contract', () => {
   it('blanks unresolved tokens and redacts raw UUID values', async () => {

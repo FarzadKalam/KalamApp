@@ -1,7 +1,10 @@
+import { useSyncExternalStore } from 'react';
 import { MODULES } from '../moduleRegistry';
 import { BlockDefinition, BlockType, FieldLocation, ModuleDefinition, ModuleField } from '../types';
 import { SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE, type ModuleSettingsConfig, type ModuleSettingsStore } from '../pages/Settings/moduleSettingsTypes';
 import { fetchSessionBootstrap } from './sessionCache';
+import { clearAppRuntimeCache, getAppRuntimeCached } from './appRuntimeCache';
+import { getSelectedOrganizationId } from './organizationContext';
 import { buildResolvedConditionalFieldSettings } from './conditionalFieldDefaults';
 import { type ConditionalFieldSettings, normalizeConditionalFieldSettings } from './conditionalFieldRules';
 
@@ -9,24 +12,62 @@ export const MODULE_SETTINGS_APPLIED_EVENT = 'kalam:module-settings-applied';
 export const MODULE_SETTINGS_UPDATED_EVENT = 'kalam:module-settings-updated';
 
 const MODULE_SETTINGS_TTL_MS = 5 * 60_000;
+const MODULE_SETTINGS_CACHE_PREFIX = 'module-settings:';
 
 const cloneDeep = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const isModuleSettingsUnavailableError = (error: any) =>
   Number(error?.status) === 404
   || String(error?.code || '').toUpperCase() === 'PGRST205';
 
-const moduleSettingsCache: {
-  orgId: string | null;
-  data: ModuleSettingsStore | null;
-  expiresAt: number;
-  unavailable: boolean;
-  promise: Promise<ModuleSettingsStore | null> | null;
-} = {
-  orgId: null,
-  data: null,
-  expiresAt: 0,
-  unavailable: false,
-  promise: null,
+let moduleSettingsGeneration = 0;
+let moduleSettingsVersion = 0;
+const moduleSettingsListeners = new Set<() => void>();
+let primedModuleSettingsEntry: { orgId: string; store: ModuleSettingsStore | null; expiresAt: number } | null = null;
+
+export const getModuleSettingsVersion = () => moduleSettingsVersion;
+
+export const subscribeModuleSettings = (listener: () => void) => {
+  moduleSettingsListeners.add(listener);
+  return () => {
+    moduleSettingsListeners.delete(listener);
+  };
+};
+
+export const useModuleSettingsVersion = () =>
+  useSyncExternalStore(subscribeModuleSettings, getModuleSettingsVersion, getModuleSettingsVersion);
+
+const notifyModuleSettingsListeners = () => {
+  moduleSettingsVersion += 1;
+  moduleSettingsListeners.forEach((listener) => {
+    try {
+      listener();
+    } catch {
+      // ignore listener errors
+    }
+  });
+};
+
+export const clearModuleSettingsCache = () => {
+  moduleSettingsGeneration += 1;
+  primedModuleSettingsEntry = null;
+  clearAppRuntimeCache(MODULE_SETTINGS_CACHE_PREFIX);
+};
+
+export const primeModuleSettingsCache = (
+  store: ModuleSettingsStore | null,
+  orgId?: string | null
+) => {
+  clearAppRuntimeCache(MODULE_SETTINGS_CACHE_PREFIX);
+  const normalizedOrgId = String(orgId || getSelectedOrganizationId() || '').trim();
+  if (!normalizedOrgId) {
+    primedModuleSettingsEntry = null;
+    return;
+  }
+  primedModuleSettingsEntry = {
+    orgId: normalizedOrgId,
+    store: store ? cloneDeep(store) : null,
+    expiresAt: Date.now() + MODULE_SETTINGS_TTL_MS,
+  };
 };
 
 const baseModuleRegistrySnapshot: Record<string, Pick<ModuleDefinition, 'fields' | 'blocks'>> = Object.fromEntries(
@@ -105,10 +146,31 @@ const normalizeBlocks = (blocks: BlockDefinition[]) =>
 
 const isSchemaItemActive = (item: any) => item?.isActive !== false && item?.disabled !== true;
 
+const applyClearedKeys = <T extends Record<string, any>>(item: T): T => {
+  const clearedKeys = Array.isArray((item as any)?._clearedKeys) ? (item as any)._clearedKeys : [];
+  if (clearedKeys.length === 0) return item;
+  const next = { ...item };
+  clearedKeys.forEach((rawKey: string) => {
+    const key = String(rawKey || '').trim();
+    if (!key) return;
+    delete (next as any)[key];
+  });
+  return next;
+};
+
 const filterActiveSchema = (
   schema: { fields?: ModuleField[]; blocks?: BlockDefinition[] }
 ) => {
-  const activeBlocks = (schema.blocks || []).filter(isSchemaItemActive);
+  const activeBlocks = (schema.blocks || [])
+    .filter(isSchemaItemActive)
+    .map((block) =>
+      Array.isArray(block?.tableColumns)
+        ? {
+            ...block,
+            tableColumns: block.tableColumns.filter(isSchemaItemActive),
+          }
+        : block
+    );
   const activeBlockIds = new Set(
     activeBlocks.map((block) => String(block?.id || '').trim()).filter(Boolean)
   );
@@ -136,9 +198,11 @@ const mergeRequiredTagsField = (
 };
 
 const mergeStaticFieldOptions = (
-  baseField: ModuleField,
-  incomingField: ModuleField
-): ModuleField => {
+  baseField: { options?: any[]; type?: any },
+  incomingField: ModuleField | NonNullable<BlockDefinition['tableColumns']>[number]
+): any => {
+  if ((incomingField as any)?._optionsCustomized === true) return incomingField;
+  if (incomingField?.type && baseField?.type && incomingField.type !== baseField.type) return incomingField;
   if (!Array.isArray(baseField.options) || baseField.options.length === 0) return incomingField;
   if (!Array.isArray(incomingField.options)) return incomingField;
 
@@ -181,8 +245,24 @@ const mergeSchemaFieldsWithBase = (
   const mergedIncomingFields = (incomingFields || []).map((field) => {
     const fieldKey = String(field?.key || '').trim();
     const baseField = fieldKey ? baseFieldMap.get(fieldKey) : null;
-    if (!baseField) return field;
-    return mergeStaticFieldOptions(baseField, { ...cloneDeep(baseField), ...field });
+    if (!baseField) return applyClearedKeys(field);
+    const clonedBase = cloneDeep(baseField);
+    const typeChanged = Boolean(field?.type && baseField?.type && field.type !== baseField.type);
+    if (typeChanged) {
+      delete clonedBase.options;
+      delete clonedBase.dynamicOptionsCategory;
+      delete clonedBase.relationConfig;
+      delete clonedBase.defaultValue;
+    }
+    let merged = applyClearedKeys({ ...clonedBase, ...field });
+    if (String(field?.location || '').trim().toLowerCase() === 'header' && !String(field?.blockId || '').trim()) {
+      delete merged.blockId;
+    }
+    if (field?.defaultValue === null) {
+      delete merged.defaultValue;
+    }
+    merged = mergeStaticFieldOptions(baseField, merged);
+    return merged;
   });
 
   const incomingKeys = new Set(
@@ -193,6 +273,51 @@ const mergeSchemaFieldsWithBase = (
   );
   if (missingBaseFields.length === 0) return mergedIncomingFields;
   return [...mergedIncomingFields, ...cloneDeep(missingBaseFields)];
+};
+
+const mergeTableColumnsWithBase = (
+  baseColumns: BlockDefinition['tableColumns'],
+  incomingColumns: BlockDefinition['tableColumns'],
+  customized?: boolean
+): BlockDefinition['tableColumns'] => {
+  const baseCols = Array.isArray(baseColumns) ? baseColumns : [];
+  if (!Array.isArray(incomingColumns)) {
+    return baseColumns ? cloneDeep(baseColumns) : undefined;
+  }
+  const baseColMap = new Map(
+    baseCols
+      .map((col) => [String(col?.key || '').trim(), col] as const)
+      .filter(([key]) => Boolean(key))
+  );
+  const mergedIncoming = incomingColumns.map((col) => {
+    const colKey = String(col?.key || '').trim();
+    const baseCol = colKey ? baseColMap.get(colKey) : null;
+    if (!baseCol) return applyClearedKeys(col);
+    const clonedBase = cloneDeep(baseCol);
+    const typeChanged = Boolean(col?.type && baseCol?.type && col.type !== baseCol.type);
+    if (typeChanged) {
+      delete clonedBase.options;
+      delete clonedBase.dynamicOptionsCategory;
+      delete clonedBase.relationConfig;
+      delete clonedBase.defaultValue;
+    }
+    let merged = applyClearedKeys({ ...clonedBase, ...col });
+    if (col?.defaultValue === null) {
+      delete merged.defaultValue;
+    }
+    merged = mergeStaticFieldOptions(baseCol, merged);
+    return merged;
+  });
+
+  if (customized) {
+    return mergedIncoming;
+  }
+
+  const incomingKeys = new Set(
+    mergedIncoming.map((col) => String(col?.key || '').trim()).filter(Boolean)
+  );
+  const missingBase = baseCols.filter((col) => col?.key && !incomingKeys.has(String(col.key).trim()));
+  return missingBase.length > 0 ? [...mergedIncoming, ...cloneDeep(missingBase)] : mergedIncoming;
 };
 
 const mergeSchemaBlocksWithBase = (
@@ -207,9 +332,17 @@ const mergeSchemaBlocksWithBase = (
   const mergedIncomingBlocks = (incomingBlocks || []).map((block) => {
     const blockId = String(block?.id || '').trim();
     const baseBlock = blockId ? baseBlockMap.get(blockId) : null;
-    return baseBlock
-      ? { ...cloneDeep(baseBlock), ...block }
-      : block;
+    if (!baseBlock) return applyClearedKeys(block);
+    const merged = applyClearedKeys({ ...cloneDeep(baseBlock), ...block });
+    const mergedTableColumns = mergeTableColumnsWithBase(
+      baseBlock.tableColumns,
+      block.tableColumns,
+      Boolean((block as any)?._tableColumnsCustomized)
+    );
+    if (mergedTableColumns) {
+      merged.tableColumns = mergedTableColumns;
+    }
+    return merged;
   });
 
   const incomingIds = new Set(
@@ -331,6 +464,8 @@ export const applyModuleSettingsStoreToRegistry = (
     );
   });
 
+  notifyModuleSettingsListeners();
+
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(MODULE_SETTINGS_APPLIED_EVENT));
   }
@@ -361,78 +496,41 @@ export const getBaseModuleFieldDefinition = (moduleId?: string | null, fieldKey?
 };
 
 export const loadModuleSettingsStore = async (supabaseClient: any): Promise<ModuleSettingsStore | null> => {
+  const generation = moduleSettingsGeneration;
+  const selectedOrgId = getSelectedOrganizationId();
   const session = await fetchSessionBootstrap(supabaseClient);
-  const orgId = String(session?.orgId || '').trim() || null;
-  const now = Date.now();
-  if (moduleSettingsCache.orgId === orgId && moduleSettingsCache.expiresAt > now) {
-    if (moduleSettingsCache.unavailable) return null;
-    if (moduleSettingsCache.data) return moduleSettingsCache.data;
+  const orgId = String(session.orgId || '').trim();
+  const userId = session.user?.id;
+  const isCurrent = () => generation === moduleSettingsGeneration && getSelectedOrganizationId() === selectedOrgId;
+  if (!userId || !orgId || session.bootstrapError || !isCurrent()) return null;
+
+  if (
+    primedModuleSettingsEntry
+    && primedModuleSettingsEntry.orgId === orgId
+    && primedModuleSettingsEntry.expiresAt > Date.now()
+  ) {
+    return primedModuleSettingsEntry.store ? cloneDeep(primedModuleSettingsEntry.store) : null;
   }
 
-  if (moduleSettingsCache.orgId === orgId && moduleSettingsCache.promise) {
-    return moduleSettingsCache.promise;
-  }
+  const store = await getAppRuntimeCached<ModuleSettingsStore | null>({
+    key: `${MODULE_SETTINGS_CACHE_PREFIX}${userId}:${orgId}`,
+    ttlMs: MODULE_SETTINGS_TTL_MS,
+    loader: async () => {
+      const { data, error } = await supabaseClient
+        .from('integration_settings')
+        .select('settings')
+        .eq('connection_type', SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE)
+        .eq('is_active', true)
+        .eq('org_id', orgId)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (isModuleSettingsUnavailableError(error)) return null;
+      if (error) throw error;
 
-  moduleSettingsCache.promise = (async () => {
-    let query = supabaseClient
-      .from('integration_settings')
-      .select('settings')
-      .eq('connection_type', SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE)
-      .eq('is_active', true)
-      .order('updated_at', { ascending: false })
-      .limit(1);
-
-    query = orgId
-      ? query.eq('org_id', orgId)
-      : query.is('org_id', null);
-
-    const { data, error } = await query.maybeSingle();
-
-    if (error) {
-      if (isModuleSettingsUnavailableError(error)) {
-        moduleSettingsCache.orgId = orgId;
-        moduleSettingsCache.data = null;
-        moduleSettingsCache.unavailable = true;
-        moduleSettingsCache.expiresAt = Date.now() + MODULE_SETTINGS_TTL_MS;
-        return null;
-      }
-      throw error;
-    }
-
-    const settings = data?.settings;
-    if (!settings || typeof settings !== 'object') {
-      moduleSettingsCache.orgId = orgId;
-      moduleSettingsCache.data = null;
-      moduleSettingsCache.unavailable = false;
-      moduleSettingsCache.expiresAt = Date.now() + MODULE_SETTINGS_TTL_MS;
-      return null;
-    }
-    const modules = (settings as any)?.modules;
-    if (!modules || typeof modules !== 'object') {
-      moduleSettingsCache.orgId = orgId;
-      moduleSettingsCache.data = null;
-      moduleSettingsCache.unavailable = false;
-      moduleSettingsCache.expiresAt = Date.now() + MODULE_SETTINGS_TTL_MS;
-      return null;
-    }
-
-    const store = { modules: modules as Record<string, ModuleSettingsConfig> };
-    moduleSettingsCache.orgId = orgId;
-    moduleSettingsCache.data = store;
-    moduleSettingsCache.unavailable = false;
-    moduleSettingsCache.expiresAt = Date.now() + MODULE_SETTINGS_TTL_MS;
-    return store;
-  })();
-
-  try {
-    return await moduleSettingsCache.promise;
-  } finally {
-    moduleSettingsCache.promise = null;
-  }
-};
-
-export const loadAndApplyModuleSettings = async (supabaseClient: any) => {
-  const store = await loadModuleSettingsStore(supabaseClient);
-  applyModuleSettingsStoreToRegistry(store);
-  return store;
+      const modules = data?.settings?.modules;
+      return modules && typeof modules === 'object' ? { modules } : null;
+    },
+  });
+  return isCurrent() ? store : null;
 };

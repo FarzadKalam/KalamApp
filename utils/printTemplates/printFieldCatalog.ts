@@ -24,6 +24,8 @@ export const isPrintableTableBlock = (block: any) => {
   const type = String(block?.type || '').trim();
   return Boolean(
     block?.id
+    && block?.isActive !== false
+    && block?.disabled !== true
     && block?.printable !== false
     && (type === BlockType.TABLE || type === BlockType.GRID_TABLE),
   );
@@ -60,8 +62,8 @@ export const buildModulePrintFieldCatalog = ({
       if (!key) return;
       const blockId = normalizeText(field?.blockId);
       const block = blockId ? blockById.get(blockId) : null;
-      const isBlockField = String(field?.location || '').toLowerCase() === 'block' && Boolean(blockId);
-      if (isBlockField && block?.printable === false) return;
+      const isBlockField = Boolean(blockId) && normalizeText(field?.location).toLowerCase() !== 'header';
+      if (isBlockField && (block?.isActive === false || (block as any)?.disabled === true || block?.printable === false)) return;
       const label = getFieldLabelFa(field, { moduleId: moduleConfig?.id, fallback: key });
       const value = record?.[key];
       result.push({
@@ -94,7 +96,9 @@ export const buildModulePrintFieldCatalog = ({
         blockId,
         hasValue: rows.length > 0,
       });
-      (Array.isArray(block?.tableColumns) ? block.tableColumns : []).forEach((column: any) => {
+      (Array.isArray(block?.tableColumns) ? block.tableColumns : [])
+        .filter((column: any) => column?.isActive !== false && column?.disabled !== true && column?.printable !== false)
+        .forEach((column: any) => {
         const columnKey = normalizeText(column?.key);
         if (!columnKey) return;
         if (canViewField?.(`${blockId}.${columnKey}`) === false || canViewField?.(columnKey) === false) return;
@@ -152,7 +156,9 @@ export const getSelectedPrintTableColumns = ({
 }) => {
   const parentKey = `block.${blockId}`;
   const selected = new Set(Array.from(selectedFieldKeys || []).map(normalizeText));
-  const columns = Array.isArray(block?.tableColumns) ? block.tableColumns : [];
+  const columns = (Array.isArray(block?.tableColumns) ? block.tableColumns : []).filter(
+    (column: any) => column?.isActive !== false && column?.disabled !== true && column?.printable !== false
+  );
   const selectedChildren = columns.filter((column: any) => selected.has(`${parentKey}.${normalizeText(column?.key)}`));
   if (!hasExplicitSelection) return columns;
   // An explicit empty selection is meaningful: it must not restore every

@@ -1,0 +1,1 @@
+const e=a=>Array.isArray(a)?a.map((r,t)=>typeof r=="string"?{text:r.trim(),featured:t<6}:{text:String((r==null?void 0:r.text)??"").trim(),featured:!!(r!=null&&r.featured)}).filter(r=>r.text):[];export{e as p};

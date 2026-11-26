@@ -9,6 +9,7 @@ import SimpleBarChart from '../components/reports/SimpleBarChart';
 import SimplePieChart from '../components/reports/SimplePieChart';
 import SimpleLineChart from '../components/reports/SimpleLineChart';
 import { MODULES } from '../moduleRegistry';
+import { useModuleSettingsVersion } from '../utils/moduleSettingsRuntime';
 import { supabase } from '../supabaseClient';
 import {
   canAccessAssignedRecord,
@@ -52,6 +53,8 @@ import {
 import { getTaskStatusLabel, getTaskStatusOptions } from '../utils/processTaskStatusOptions';
 import { parseProcessLinkedFieldKey } from '../utils/processTargets';
 import WorkflowConditionsGroup from '../components/workflows/WorkflowConditionsGroup';
+import { isTableConditionOperator } from '../shared/recordRuntime';
+import { getConditionTableSources, hasIncompleteTableCondition } from '../utils/conditionTableFields';
 
 const { Title, Text } = Typography;
 
@@ -483,6 +486,7 @@ const ReportViewerPage: React.FC = () => {
 
   const config = useMemo(() => normalizeReportConfig(report?.config), [report?.config]);
   const moduleId = String(report?.module_id || '').trim();
+  const conditionTableSources = useMemo(() => getConditionTableSources(moduleId), [moduleId]);
   const secondaryModuleIds = config.secondary_module_ids;
   const scopedSurveyTemplateId = useMemo(
     () => (
@@ -492,13 +496,17 @@ const ReportViewerPage: React.FC = () => {
     ),
     [config.conditions_all, config.conditions_any, moduleId]
   );
-  const moduleConfig = MODULES[moduleId];
+  const moduleSettingsVersion = useModuleSettingsVersion();
+  const moduleConfig = useMemo(
+    () => (MODULES[moduleId] ? { ...MODULES[moduleId] } : undefined),
+    [moduleId, moduleSettingsVersion]
+  );
   const currencyLabel = readCurrencyConfig().label || '';
   const selectedTableBlocks = useMemo(
     () => secondaryModuleIds
       .map((sourceId) => getReportTableBlock(moduleId, sourceId))
       .filter((block): block is NonNullable<typeof block> => !!block),
-    [moduleId, secondaryModuleIds]
+    [moduleId, moduleSettingsVersion, secondaryModuleIds]
   );
   const reportableFields = useMemo(() => (
     getReportableFields(moduleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields).map((field) => (
@@ -514,7 +522,7 @@ const ReportViewerPage: React.FC = () => {
           ? { ...field, options: [...(field.options || []), ...taskProcessStatusOptions] }
           : field
     ))
-  ), [dynamicOptions, moduleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields, taskProcessStatusOptions]);
+  ), [dynamicOptions, moduleId, moduleSettingsVersion, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields, taskProcessStatusOptions]);
   const fieldMap = useMemo(
     () => reportableFields.reduce<Record<string, any>>((acc, field) => {
       acc[field.key] = field;
@@ -532,21 +540,29 @@ const ReportViewerPage: React.FC = () => {
   }, [config.conditions_all, config.conditions_any, reportId]);
 
   const applyTemporaryConditions = useCallback(() => {
+    if (hasIncompleteTableCondition([...draftConditionsAll, ...draftConditionsAny], conditionTableSources)) {
+      message.error('برای هر شرط جدول، دست‌کم یک شرط ردیف کامل کنید.');
+      return;
+    }
     setReport((current) => current ? {
       ...current,
       config: { ...config, conditions_all: draftConditionsAll, conditions_any: draftConditionsAny },
     } : current);
     message.success('شرایط برای همین مشاهده اعمال شد.');
-  }, [config, draftConditionsAll, draftConditionsAny, message]);
+  }, [conditionTableSources, config, draftConditionsAll, draftConditionsAny, message]);
 
   const saveReportConditions = useCallback(async () => {
     if (!report || !reportId || !canEditReport) return;
+    if (hasIncompleteTableCondition([...draftConditionsAll, ...draftConditionsAny], conditionTableSources)) {
+      message.error('برای هر شرط جدول، دست‌کم یک شرط ردیف کامل کنید.');
+      return;
+    }
     const nextConfig = { ...config, conditions_all: draftConditionsAll, conditions_any: draftConditionsAny };
     const { error } = await supabase.from('report_definitions').update({ config: nextConfig }).eq('id', reportId);
     if (error) throw error;
     setReport((current) => current ? { ...current, config: nextConfig } : current);
     message.success('شرایط گزارش ذخیره شد.');
-  }, [canEditReport, config, draftConditionsAll, draftConditionsAny, message, report, reportId]);
+  }, [canEditReport, conditionTableSources, config, draftConditionsAll, draftConditionsAny, message, report, reportId]);
   const groupingFields = useMemo(
     () => config.group_bys.map((item) => fieldMap[item.field]).filter(Boolean),
     [config.group_bys, fieldMap]
@@ -758,6 +774,16 @@ const ReportViewerPage: React.FC = () => {
         ...config.conditions_all,
         ...config.conditions_any,
       ].map((condition: any) => String(condition?.field || '').trim()).filter(Boolean);
+      const tableConditionsAll = config.conditions_all.filter(({ operator }) => isTableConditionOperator(operator));
+      const reportRowConditionsAll = config.conditions_all.filter(({ operator }) => !isTableConditionOperator(operator));
+      const tableConditionsAny = config.conditions_any.every(({ operator }) => isTableConditionOperator(operator))
+        ? config.conditions_any
+        : [];
+      const canReadTableConditions = [...config.conditions_all, ...config.conditions_any].every(
+        ({ operator, field }) => !isTableConditionOperator(operator) || modulePerm.fields?.[field] !== false,
+      );
+      if (!canReadTableConditions) throw new Error('دسترسی به جدول انتخاب‌شده برای شرط گزارش وجود ندارد.');
+      const tableConditionContext = createWorkflowEvaluationContext(moduleId);
       const taskProcessFieldKeys = Array.from(new Set([
         ...neededKeys,
         ...conditionFieldKeys,
@@ -768,6 +794,12 @@ const ReportViewerPage: React.FC = () => {
         selectedTableBlocks,
       );
 
+      const canReadSourceRow = (row: any) => !isDeletedReportRecord(row)
+        && canAccessAssignedRecord(row, roleContext.userId, roleContext.roleId, modulePerm.record_scope || 'all', {
+          currentOrgId: roleContext.orgId,
+          allowedRoleIds: roleContext.allowedRoleIds,
+          allowedUserIds: roleContext.allowedUserIds,
+        });
       const reportDataBudget = createReportDataBudget();
       const scheduleReportWork = createReportWorkScheduler();
       const baseRows = await fetchReportRowsByPage<any>(config.row_limit,(start,end) => runSelectWithCompatibleColumns<any[]>({
@@ -789,22 +821,27 @@ const ReportViewerPage: React.FC = () => {
             },
           ).order('id',{ascending:true}).range(start,end);
         },
-      }), {budget: reportDataBudget});
+      }), {
+        budget: reportDataBudget,
+        accept: tableConditionsAll.length > 0 || tableConditionsAny.length > 0
+          ? async (record) => canReadSourceRow(record) && evaluateWorkflowConditions({
+            conditionsAll: tableConditionsAll,
+            conditionsAny: tableConditionsAny,
+            currentRecord: record,
+            moduleId,
+            context: tableConditionContext,
+          })
+          : undefined,
+      });
 
-      const scopedRows = baseRows.filter((row: any) =>
-        !isDeletedReportRecord(row) && canAccessAssignedRecord(row, roleContext.userId, roleContext.roleId, modulePerm.record_scope || 'all', {
-          currentOrgId: roleContext.orgId,
-          allowedRoleIds: roleContext.allowedRoleIds,
-          allowedUserIds: roleContext.allowedUserIds,
-        })
-      );
+      const scopedRows = baseRows.filter(canReadSourceRow);
       const processLinkedFieldKeys = Array.from(new Set([
         ...neededKeys,
         ...conditionFieldKeys,
       ].filter((fieldKey) => !!parseProcessLinkedFieldKey(fieldKey))));
       const canResolveProcessConditionsOnServer = conditionFieldKeys.every((fieldKey) => (
         !parseReportTableFieldKey(fieldKey) && !parseReportTableRelationFieldKey(fieldKey)
-      ));
+      )) && ![...config.conditions_all, ...config.conditions_any].some(({ operator }) => isTableConditionOperator(operator));
       let reportSourceRows = scopedRows;
       let conditionsResolvedByServer = false;
       if (moduleId === 'tasks' && processLinkedFieldKeys.length > 0) {
@@ -999,9 +1036,9 @@ const ReportViewerPage: React.FC = () => {
 
           const passed = conditionsResolvedByServer || await evaluateWorkflowConditions({
             conditionsAll: moduleId === 'tasks'
-              ? normalizeTaskStatusConditionsForRow(config.conditions_all, candidateRow)
-              : config.conditions_all,
-            conditionsAny: moduleId === 'tasks'
+              ? normalizeTaskStatusConditionsForRow(reportRowConditionsAll, candidateRow)
+              : reportRowConditionsAll,
+            conditionsAny: tableConditionsAny.length > 0 ? [] : moduleId === 'tasks'
               ? normalizeTaskStatusConditionsForRow(config.conditions_any, candidateRow)
               : config.conditions_any,
             currentRecord: candidateRow,
@@ -1335,7 +1372,10 @@ const ReportViewerPage: React.FC = () => {
     () => new Set(activePrintFieldKeys.map((item) => String(item || '').trim()).filter(Boolean)),
     [activePrintFieldKeys]
   );
-  const hasExplicitPrintFieldSelection = activePrintFieldKeys.length > 0;
+  const hasExplicitPrintFieldSelection = Object.prototype.hasOwnProperty.call(
+    selectedPrintFields,
+    printTemplate,
+  );
   const selectedPrintCards = useMemo(
     () => summaryCards.filter((card) => !hasExplicitPrintFieldSelection || selectedPrintFieldKeySet.has(card.key)),
     [hasExplicitPrintFieldSelection, selectedPrintFieldKeySet, summaryCards]
@@ -1621,10 +1661,12 @@ const ReportViewerPage: React.FC = () => {
   const buildReportPrintHtml = (orientation: 'portrait' | 'landscape') => {
     const chartMax = Math.max(1, ...chartItems.map((item) => Number(item.value || 0)));
     const printHeaders = config.group_bys.length > 0
-      ? [
-          ...selectedPrintGroupFields.map((field) => field.labels?.fa || field.key),
-          ...(selectedPrintDetailFields.length > 0 ? selectedPrintDetailFields.map((field) => field.labels?.fa || field.key) : ['جمع گروه']),
-        ]
+      ? (selectedPrintGroupFields.length === 0 && selectedPrintDetailFields.length === 0
+          ? []
+          : [
+              ...selectedPrintGroupFields.map((field) => field.labels?.fa || field.key),
+              ...(selectedPrintDetailFields.length > 0 ? selectedPrintDetailFields.map((field) => field.labels?.fa || field.key) : ['جمع گروه']),
+            ])
       : selectedPrintVisibleFields.map((field) => field.labels?.fa || field.key);
     const printCellRows: ExportCell[][] = config.group_bys.length > 0
       ? groupedDetailRows.map((row) => [
@@ -1647,10 +1689,12 @@ const ReportViewerPage: React.FC = () => {
       : rows.map((row) => selectedPrintVisibleFields.map((field) => ({
           value: formatReportCellValue(field as any, row, relationOptions, currencyLabel),
         })));
-    const effectiveHeaders = printHeaders.length > 0 ? printHeaders : exportHeaders;
-    const effectiveCellRows = printHeaders.length > 0
+    const effectiveHeaders = hasExplicitPrintFieldSelection
+      ? printHeaders
+      : (printHeaders.length > 0 ? printHeaders : exportHeaders);
+    const effectiveCellRows = hasExplicitPrintFieldSelection
       ? printCellRows
-      : buildExportCellRows();
+      : (printHeaders.length > 0 ? printCellRows : buildExportCellRows());
     const printFontSize = effectiveHeaders.length > 14 ? (orientation === 'landscape' ? 6.5 : 5.8) : (orientation === 'landscape' ? 8 : 7);
     const tableRowsHtml = effectiveCellRows.map((line) => `
       <tr>${line.map((cell) => {
@@ -1720,6 +1764,7 @@ const ReportViewerPage: React.FC = () => {
         </header>
         ${cardsHtml}
         ${chartHtml}
+        ${effectiveHeaders.length > 0 ? `
         <section class="report-print-section">
           <h3>جدول گزارش</h3>
           <table class="report-print-table">
@@ -1727,6 +1772,7 @@ const ReportViewerPage: React.FC = () => {
             <tbody>${tableRowsHtml}</tbody>
           </table>
         </section>
+        ` : ''}
       </div>
     `;
   };
@@ -1977,8 +2023,8 @@ const ReportViewerPage: React.FC = () => {
             key: 'conditions',
             label: 'شرایط گزارش',
             children: <div className="space-y-4">
-              <WorkflowConditionsGroup value={draftConditionsAll} onChange={setDraftConditionsAll} fields={reportableFields} dynamicOptions={dynamicOptions} relationOptions={relationOptions} />
-              <WorkflowConditionsGroup value={draftConditionsAny} onChange={setDraftConditionsAny} fields={reportableFields} dynamicOptions={dynamicOptions} relationOptions={relationOptions} />
+              <WorkflowConditionsGroup value={draftConditionsAll} onChange={setDraftConditionsAll} fields={reportableFields} tableSources={conditionTableSources} dynamicOptions={dynamicOptions} relationOptions={relationOptions} />
+              <WorkflowConditionsGroup value={draftConditionsAny} onChange={setDraftConditionsAny} fields={reportableFields} tableSources={conditionTableSources} dynamicOptions={dynamicOptions} relationOptions={relationOptions} />
               <div className="flex flex-wrap gap-2">
                 <Button type="primary" className="kalam-btn-brand" onClick={applyTemporaryConditions}>اعمال موقت</Button>
                 <Button disabled={!canEditReport} onClick={() => void saveReportConditions().catch((error) => message.error(String(error?.message || 'ذخیره گزارش ناموفق بود')))}>ذخیره گزارش</Button>

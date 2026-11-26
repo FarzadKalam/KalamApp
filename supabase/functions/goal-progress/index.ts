@@ -6,6 +6,8 @@ import {
   evaluateWorkflowConditionCollectionWithResolver,
   evaluateWorkflowConditionWithResolver,
 } from "./_runtime-deps/workflowConditionRuntime.ts";
+import { getConditionRecordField, getTableRowRelationId } from "./_runtime-deps/recordRuntime.ts";
+import { loadOrgPlanAccess } from "../_shared/org-plan-access.ts";
 import { TASK_TYPE_FIELD_RUNTIME_CONFIG } from "./_runtime-deps/taskRuntimeCatalog.ts";
 import {
   getOfficialCalendarEventsForDate,
@@ -48,7 +50,7 @@ const safeColumns = (value: unknown) =>
   String(value || "")
     .split(",")
     .map((column) => column.trim())
-    .filter((column) => /^[a-z][a-z0-9_]*$/.test(column));
+    .filter((column) => /^[A-Za-z][A-Za-z0-9_]*$/.test(column));
 
 // «نوع فعالیت» ستونی واقعی و scalar در جدول tasks است. آن را تنها برای
 // شرطِ ALL به PostgREST می‌سپاریم؛ شرط‌های مجازی/رابطه‌ای همچنان با همان
@@ -392,7 +394,7 @@ const resolveTable = (moduleId: string) =>
     }) as Record<string, string>
   )[moduleId] || moduleId;
 
-const getConditionResolver = ({ url, headers, orgId, moduleId }: any) => {
+const getConditionResolver = ({ url, headers, orgId, moduleId, rowRelationHeaders = headers }: any) => {
   const relatedCache = new Map<string, Promise<Record<string, any> | null>>();
   const tagCache = new Map<string, Promise<string[]>>();
   const processLinkCache = new Map<string, Promise<string | null>>();
@@ -402,6 +404,47 @@ const getConditionResolver = ({ url, headers, orgId, moduleId }: any) => {
   const internalHeaders = serviceRoleKey
     ? { apikey: serviceRoleKey, authorization: `Bearer ${serviceRoleKey}` }
     : headers;
+  let planAccess: ReturnType<typeof loadOrgPlanAccess> | undefined;
+  const rowFieldCache = new Map<string, Promise<unknown>>();
+  const rowFieldPermissionCache = new Map<string, Promise<boolean>>();
+  const canReadRowField = (targetModule: string, targetField: string) => {
+    if (serviceRoleKey && rowRelationHeaders.authorization === `Bearer ${serviceRoleKey}`) return true;
+    const key = `${targetModule}:${targetField}`;
+    if (!rowFieldPermissionCache.has(key)) rowFieldPermissionCache.set(key, (async () => {
+      const result = await fetch(`${url}/rest/v1/rpc/current_user_can_module_field`, {
+        method: "POST",
+        headers: { ...rowRelationHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ p_module: targetModule, p_action: "view", p_field: targetField }),
+      });
+      return result.ok && await result.json() === true;
+    })());
+    return rowFieldPermissionCache.get(key);
+  };
+  const resolveTableRowValue = async (field: string, row: Record<string, unknown>) => {
+    const related = parseRelatedField(field);
+    if (!related) return getConditionRecordField(row, field);
+    const { targetModuleId, relationFieldKey, targetFieldKey } = related;
+    const table = resolveTable(targetModuleId);
+    const id = getTableRowRelationId(row, relationFieldKey, targetModuleId);
+    if (!id || !orgId || !safeTableName(table) || !safeTableName(targetFieldKey)) return undefined;
+    if (targetModuleId === "billboards" || targetModuleId === "reservations") {
+      planAccess ??= loadOrgPlanAccess(url, serviceRoleKey, orgId);
+      const access = await planAccess;
+      if (!access.available || access.enabledModules?.[targetModuleId] !== true) return undefined;
+    }
+    if (!await canReadRowField(targetModuleId, targetFieldKey)) return undefined;
+    const cacheKey = `${table}:${id}:${targetFieldKey}`;
+    if (!rowFieldCache.has(cacheKey)) rowFieldCache.set(cacheKey, (async () => {
+      const query = new URL(`${url}/rest/v1/${table}`);
+      query.searchParams.set("select", targetFieldKey);
+      query.searchParams.set("id", `eq.${id}`);
+      query.searchParams.set("org_id", `eq.${orgId}`);
+      query.searchParams.set("limit", "1");
+      const response = await fetch(query, { headers: rowRelationHeaders });
+      return response.ok ? getConditionRecordField((await response.json())?.[0], targetFieldKey) : undefined;
+    })());
+    return rowFieldCache.get(cacheKey);
+  };
   const fetchRelated = (targetModuleId: string, id: string) => {
     const table = resolveTable(targetModuleId);
     const cacheKey = `${table}:${id}`;
@@ -649,6 +692,12 @@ const getConditionResolver = ({ url, headers, orgId, moduleId }: any) => {
       const relatedId = String(
         getFieldValue(record, related.relationFieldKey) || "",
       ).trim();
+      if (related.targetModuleId === "reservations") {
+        planAccess ??= loadOrgPlanAccess(url, serviceRoleKey, orgId);
+        const access = await planAccess;
+        if (!access.available || access.enabledModules?.reservations !== true
+          || !await canReadRowField(related.targetModuleId, related.targetFieldKey)) return undefined;
+      }
       const relatedRecord = relatedId
         ? await fetchRelated(related.targetModuleId, relatedId)
         : null;
@@ -681,7 +730,7 @@ const getConditionResolver = ({ url, headers, orgId, moduleId }: any) => {
     }
     return getFieldValue(record, fieldKey);
   };
-  return { resolve, resolveDisplayValue, getRuntimeFieldConfig, normalizeCondition };
+  return { resolve, resolveDisplayValue, getRuntimeFieldConfig, normalizeCondition, resolveTableRowValue };
 };
 
 const evaluateAsyncWorkflowOperator = async ({
@@ -729,6 +778,7 @@ const passesConditions = async (
   conditionsAll: any[],
   conditionsAny: any[],
   resolveField: any,
+  resolveTableRowValue?: any,
 ) =>
   evaluateWorkflowConditionCollectionWithResolver({
     conditionsAll,
@@ -743,6 +793,7 @@ const passesConditions = async (
           ),
         }),
         evaluateAsyncOperator: evaluateAsyncWorkflowOperator,
+        resolveTableRowValue,
       }),
   });
 
@@ -914,6 +965,9 @@ Deno.serve(async (request) => {
               headers,
               orgId,
               moduleId,
+              rowRelationHeaders: internalReportRuntime && typeof item.relatedAuthorization === "string"
+                ? { apikey: anonKey, authorization: item.relatedAuthorization }
+                : headers,
             });
             const passedIds: string[] = [];
             const resolvedRows: Record<string, Record<string, { value: any; label: string }>> = {};
@@ -927,6 +981,7 @@ Deno.serve(async (request) => {
                   conditionsAll,
                   conditionsAny,
                   fieldResolver.resolve,
+                  fieldResolver.resolveTableRowValue,
                 )
               ) {
                 const id = String(
@@ -1041,12 +1096,13 @@ Deno.serve(async (request) => {
                 normalizedAll,
                 normalizedAny,
                 fieldResolver.resolve,
+                fieldResolver.resolveTableRowValue,
               ))
                 ? row
                 : null;
             }),
           );
-          output[key] = { mode: "server", rows: passed.filter(Boolean) };
+          output[key] = { mode: "server", rows: passed.filter(Boolean), tableConditionsSupported: true };
         } catch {
           // یک هدف ناسازگار یا موقتاً غیرقابل‌دسترسی نباید کل کارت‌های هدف را از کار بیندازد.
           if (key) output[key] = { mode: "fallback" };

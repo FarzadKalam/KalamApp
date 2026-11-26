@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
-import { App, Button, Card, Empty, Input, Select, Typography } from 'antd';
+import { App, Button, Card, Empty, Input, Progress, Select, Typography } from 'antd';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
@@ -12,6 +12,9 @@ import { getActiveChannelSettings } from '../utils/channelSettings';
 import { loadProfilesWithCompat } from '../utils/profileDirectory';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
+import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
+import { useUploadTasks } from '../utils/uploadProgressStore';
+import { toPersianNumber } from '../utils/persianNumberFormatter';
 
 const { Text, Title } = Typography;
 
@@ -67,6 +70,9 @@ const ShareTargetPage: React.FC = () => {
   const [messageText, setMessageText] = useState('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [activeUploadId, setActiveUploadId] = useState<string | null>(null);
+  const [uploadedFileCount, setUploadedFileCount] = useState(0);
+  const uploadTasks = useUploadTasks();
   const [lastTargets, setLastTargets] = useState<string[]>([]);
   const [autoDefaultDone, setAutoDefaultDone] = useState(false);
 
@@ -304,6 +310,7 @@ const ShareTargetPage: React.FC = () => {
     }
 
     setSubmitting(true);
+    setUploadedFileCount(0);
     try {
       const uploadedAttachments: Array<{ url: string; name: string; mimeType: string }> = [];
       const shareFiles = Array.isArray(sharePayload.files) ? sharePayload.files : [];
@@ -312,13 +319,19 @@ const ShareTargetPage: React.FC = () => {
         const file = sharedInboxFileToFile(item);
         const safeName = sanitizeStorageFileName(file.name || `share-${Date.now()}`);
         const filePath = joinStoragePath('share_inbox', currentOrgId, `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safeName}`);
-        const { error: uploadError } = await fileStorageClient.storage
-          .from(FILE_STORAGE_BUCKET)
-          .upload(filePath, file, {
-            upsert: false,
-            contentType: file.type || 'application/octet-stream',
-          });
-        if (uploadError) throw uploadError;
+        await uploadFileWithProgress({
+          client: fileStorageClient,
+          bucket: FILE_STORAGE_BUCKET,
+          path: filePath,
+          file,
+          contentType: file.type || 'application/octet-stream',
+          label: file.name || safeName,
+          detail: 'اشتراک‌گذاری از گوشی',
+          onTaskCreated: setActiveUploadId,
+          allowManualRetry: false,
+        });
+        setActiveUploadId(null);
+        setUploadedFileCount((count) => count + 1);
 
         const { data } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
         uploadedAttachments.push({
@@ -477,8 +490,9 @@ const ShareTargetPage: React.FC = () => {
       message.success('اشتراک‌گذاری با موفقیت ارسال شد.');
       navigate('/', { replace: true });
     } catch (error: any) {
-      message.error(toFaErrorMessage(error, 'ارسال اشتراک‌گذاری ناموفق بود.'));
+      if (!isUploadCanceledError(error)) message.error(toFaErrorMessage(error, 'ارسال اشتراک‌گذاری ناموفق بود.'));
     } finally {
+      setActiveUploadId(null);
       setSubmitting(false);
     }
   };
@@ -606,8 +620,22 @@ const ShareTargetPage: React.FC = () => {
             />
           </div>
 
+          {submitting && sharePayload.files.length > 0 ? (
+            <div role="status">
+              <Text>
+                {uploadedFileCount === sharePayload.files.length
+                  ? 'در حال ارسال به مقصدهای انتخاب‌شده…'
+                  : `بارگذاری فایل ${toPersianNumber(uploadedFileCount + 1)} از ${toPersianNumber(sharePayload.files.length)}`}
+              </Text>
+              <Progress
+                percent={uploadedFileCount === sharePayload.files.length ? 100 : uploadTasks.find((task) => task.id === activeUploadId)?.progress || 0}
+                format={(value) => `${toPersianNumber(value || 0)}٪`}
+              />
+            </div>
+          ) : null}
           <div className="flex items-center justify-end gap-2">
             <Button
+              disabled={submitting}
               onClick={() => {
                 void removeSharedInboxPayload(sharePayload.id);
                 navigate('/', { replace: true });

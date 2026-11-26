@@ -31,11 +31,55 @@ export default function LocalInstallationShow() {
       const { data, error } = await supabase.functions.invoke('local-installations', { body: { action: 'download', installation_id: id, job_id: job.id, org_id: query.access.data?.orgId } });
       if (error) throw error;
       if (!Array.isArray(data?.files) || !data.files.length) throw new Error(data?.message || 'آماده‌سازی لینک دریافت ناموفق بود.');
-      const files = data.files.map((f: { title: string; url: string }) => {
+      const files = data.files.map((f: { title: string; url: string; checksum?: string; version?: string; verified_at?: string }) => {
         const url = new URL(f.url); if (url.protocol !== 'https:') throw new Error('لینک دریافت امن نیست.');
-        return { title: f.title, url: url.href };
+        return { title: f.title, url: url.href, checksum: f.checksum, version: f.version, verified_at: f.verified_at };
       });
-      Modal.info({ title: 'دریافت فایل‌های نصب', content: <Space direction="vertical"><Typography.Paragraph>لینک‌ها دو دقیقه اعتبار دارند. کلید اعتماد انتشار را از مسیر مستقل دریافت کنید.</Typography.Paragraph>{files.map((f: { title: string; url: string }) => <a key={f.title} href={f.url} target="_blank" rel="noopener noreferrer">{f.title}</a>)}</Space>, okText: 'بستن' });
+      const isOfflineMode = install.delivery_mode === 'file';
+      Modal.info({
+        title: isOfflineMode ? 'دریافت بسته برای تحویل فیزیکی (آفلاین)' : 'مشخصات بسته و دریافت مستقیم در سرور مقصد',
+        width: 620,
+        content: (
+          <Space direction="vertical" className="w-full">
+            <Typography.Paragraph>
+              {isOfflineMode
+                ? 'برای تحویل فیزیکی (فلش‌مموری یا هارد اکسترنال)، فایل‌های زیر را دانلود و روی رسانه ذخیره کنید. لینک‌ها ۴ ساعت اعتبار دارند.'
+                : 'برای تحویل آنلاین، نیازی به دانلود ۲ گیگابایت روی رایانه محلی نیست؛ دستور زیر را مستقیماً روی سرور مقصد اجرا کنید تا فایل با قابلیت ادامه (Resume) بارگیری شود.'}
+            </Typography.Paragraph>
+            {files.map((f: { title: string; url: string; checksum?: string; version?: string }) => (
+              <Card key={f.title} size="small" title={f.title} className="bg-slate-50 dark:bg-slate-800 my-2">
+                <Space direction="vertical" className="w-full">
+                  {f.version && <div>نسخهٔ بسته: <strong>{f.version}</strong></div>}
+                  {f.checksum && (
+                    <div>
+                      <Typography.Text type="secondary">چک‌سام SHA-256 جهت راستی‌آزمایی صحت فایل:</Typography.Text>
+                      <br />
+                      <Typography.Text copyable code className="text-xs">{f.checksum}</Typography.Text>
+                    </div>
+                  )}
+                  {isOfflineMode ? (
+                    <Button type="primary" href={f.url} target="_blank" rel="noopener noreferrer">
+                      دانلود مستقیم ({f.title})
+                    </Button>
+                  ) : (
+                    <div>
+                      <Typography.Text type="secondary">دستور دانلود با قابلیت Resume در سرور مقصد:</Typography.Text>
+                      <Input.TextArea
+                        readOnly
+                        rows={2}
+                        dir="ltr"
+                        className="font-mono text-xs mt-1"
+                        value={`curl --fail --location --continue-at - --output ${f.title.includes('تنظیمات') ? 'config.tar.gz' : 'release.tar.gz'} '${f.url}'`}
+                      />
+                    </div>
+                  )}
+                </Space>
+              </Card>
+            ))}
+          </Space>
+        ),
+        okText: 'بستن',
+      });
     } catch (e) { message.error(toFaErrorMessage(e)); } finally { setBusy(null); }
   };
   if (query.access.isLoading || (query.isLoading && query.access.data?.view)) return <Spin />;
@@ -59,10 +103,18 @@ export default function LocalInstallationShow() {
       <Descriptions column={{ xs: 1, sm: 2 }} items={[
         { key: 'code', label: 'کد نصب', children: install.system_code }, { key: 'customer', label: 'مشتری', children: install.customer_name },
         { key: 'state', label: 'وضعیت', children: installationStatuses[install.status] }, { key: 'url', label: 'نشانی مقصد', children: <Typography.Text dir="ltr">{install.public_url}</Typography.Text> },
-        { key: 'release', label: 'نسخهٔ جاری تأییدشده', children: release?.version || 'بستهٔ لوکال تأییدشده ثبت نشده است' },
+        { key: 'release', label: 'نسخهٔ جاری تأییدشده', children: release?.version ? (
+          <Space>
+            <Tag color="cyan">{release.version}</Tag>
+            <Typography.Text type="secondary" className="text-xs">تأییدشده در {date(release.verified_at)}</Typography.Text>
+          </Space>
+        ) : <Tag color="orange">بستهٔ لوکال تأییدشده ثبت نشده است</Tag> },
+        { key: 'delivery', label: 'روش تحویل', children: install.delivery_mode === 'file' ? 'تحویل فیزیکی (آفلاین)' : 'دریافت آنلاین در سرور مقصد' },
         { key: 'telemetry', label: 'گزارش خودکار', children: install.telemetry_enabled ? 'با رضایت مشتری فعال' : 'خاموش' },
       ]} />
       {!release && <Alert className="my-4" type="warning" showIcon message="نسخهٔ مرکزی هنوز بستهٔ لوکال تأییدشده ندارد." description="آماده‌سازی پس از ثبت بسته‌ای که آزمون نصب آفلاین و دیتابیس را گذرانده باشد فعال می‌شود." />}
+      {release && install.status === 'draft' && <Alert className="my-4" type="info" showIcon message={`بستهٔ مرکزی نسخهٔ ${release.version} حاضر است.`} description="برای تولید بستهٔ تنظیمات و نهایی‌سازی، دکمهٔ «آماده‌سازی بسته» را بزنید." />}
+      {install.status === 'ready' && <Alert className="my-4" type="success" showIcon message="بستهٔ نصب اختصاصی آماده است." description="از جدول بسته‌ها و عملیات در زیر، دکمهٔ «دریافت بسته» را برای دانلود یا کپی دستور دریافت انتخاب کنید." />}
       {query.data.source_frozen && <Alert className="my-4" type="warning" showIcon message="نسخهٔ ابری این مشتری برای انتقال فقط‌خواندنی است." description="بازکردن نوشتن در ابر باید پس از اطمینان از توقف مقصد و بررسی اپراتور انجام شود." />}
       {install.install_kind === 'migration' && access.export && !recovery_key_configured && <Card size="small" title="کلید عمومی بازیابی مشتری" className="my-4">
         <Typography.Paragraph>مشتری کلید بازیابی را روی سرور خود می‌سازد و فقط بخش عمومی را تحویل می‌دهد. کلید خصوصی و رمز آن در مرکز ثبت نمی‌شوند.</Typography.Paragraph>

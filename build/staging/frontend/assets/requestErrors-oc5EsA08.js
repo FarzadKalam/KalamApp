@@ -1,0 +1,1 @@
+const i=t=>{const a=String((t==null?void 0:t.name)||"").trim().toLowerCase(),s=String((t==null?void 0:t.message)||(t==null?void 0:t.details)||(t==null?void 0:t.hint)||"").toLowerCase();return a==="aborterror"||s.includes("aborterror")||s.includes("signal is aborted")||s.includes("request was aborted")};export{i};

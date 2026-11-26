@@ -24,10 +24,12 @@ const contrastRatio = (first: string, second: string) => {
 describe('getAccessibleDarkBrandTextColor', () => {
   it('keeps branded text readable on the dark background and surface of every preset', () => {
     Object.values(BRAND_PALETTE_PRESETS).forEach(({ palette }) => {
-      const textColor = getAccessibleDarkBrandTextColor(palette);
-      expect(contrastRatio(textColor, palette.darkBg)).toBeGreaterThanOrEqual(4.5);
-      expect(contrastRatio(textColor, palette.darkSurface)).toBeGreaterThanOrEqual(4.5);
-      expect(contrastRatio(textColor, APP_DARK_COLORS.hover)).toBeGreaterThanOrEqual(4.5);
+      for (const emphasis of [0, 0.2]) {
+        const textColor = getAccessibleDarkBrandTextColor(palette, emphasis);
+        for (const background of [palette.darkBg, palette.darkSurface, APP_DARK_COLORS.elevated, APP_DARK_COLORS.hover]) {
+          expect(contrastRatio(textColor, background)).toBeGreaterThanOrEqual(4.5);
+        }
+      }
     });
   });
 });

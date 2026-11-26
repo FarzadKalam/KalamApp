@@ -1,0 +1,1 @@
+const n=()=>{var e,i;return typeof window>"u"?!1:((i=(e=window.matchMedia)==null?void 0:e.call(window,"(max-width: 767px), (pointer: coarse)"))==null?void 0:i.matches)??window.innerWidth<768},r=(e,i=n())=>{var o;return e.isComposing||(o=e.nativeEvent)!=null&&o.isComposing||i?!1:e.shiftKey!==!0};export{r as s};

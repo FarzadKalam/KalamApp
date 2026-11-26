@@ -38,6 +38,7 @@ import AdaptiveSelectField from '../AdaptiveSelectField';
 import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 import FormulaEditorModal from '../formulas/FormulaEditorModal';
 import WorkflowConditionsGroup from '../workflows/WorkflowConditionsGroup';
+import { getConditionTableSources, hasIncompleteTableCondition } from '../../utils/conditionTableFields';
 
 type GoalEditorModalProps = {
   open: boolean;
@@ -109,6 +110,7 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
   const [form] = Form.useForm<FormValues>();
   const [submitting, setSubmitting] = useState(false);
   const [moduleId, setModuleId] = useState<string>(initialModuleId || '');
+  const conditionTableSources = useMemo(() => getConditionTableSources(moduleId), [moduleId]);
   const [conditionsAll, setConditionsAll] = useState<any[]>([]);
   const [conditionsAny, setConditionsAny] = useState<any[]>([]);
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
@@ -314,6 +316,10 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
 
   const handleSubmit = async () => {
     if (!canEdit) return;
+    if (hasIncompleteTableCondition([...conditionsAll, ...conditionsAny], conditionTableSources)) {
+      message.error('برای هر شرط جدول، دست‌کم یک شرط ردیف کامل کنید.');
+      return;
+    }
     try {
       const values = await form.validateFields();
       if (!MODULES[values.module_id]) {
@@ -604,6 +610,7 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
                 value={conditionsAll}
                 onChange={(next) => setConditionsAll(next as any[])}
                 fields={conditionFields}
+                tableSources={conditionTableSources}
                 dynamicOptions={dynamicOptions}
                 relationOptions={relationOptions}
                 disabled={!canEdit}
@@ -617,6 +624,7 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
                 value={conditionsAny}
                 onChange={(next) => setConditionsAny(next as any[])}
                 fields={conditionFields}
+                tableSources={conditionTableSources}
                 dynamicOptions={dynamicOptions}
                 relationOptions={relationOptions}
                 disabled={!canEdit}

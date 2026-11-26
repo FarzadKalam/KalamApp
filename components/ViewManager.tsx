@@ -30,7 +30,9 @@ import {
 } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
+import { useModuleSettingsVersion } from '../utils/moduleSettingsRuntime';
 import { FieldType, ModuleField, SavedView, ViewConfig } from '../types';
+import { getConditionTableSources, hasIncompleteTableCondition } from '../utils/conditionTableFields';
 import WorkflowConditionsGroup from './workflows/WorkflowConditionsGroup';
 import AdaptivePickerSurface from './AdaptivePickerSurface';
 import AdaptiveSelectField from './AdaptiveSelectField';
@@ -63,6 +65,8 @@ type ViewManagerRenderMode = 'inline' | 'mobile-sheet';
 
 interface ViewManagerProps {
   moduleId: string;
+  orgId: string | null;
+  userId: string | null;
   currentView: SavedView | null;
   onViewChange: (view: SavedView | null, config: ViewConfig | null) => void;
   onRefresh: () => void;
@@ -75,6 +79,8 @@ const SAVED_VIEW_SELECT_FIELDS = 'id,name,module_id,config,is_default,created_at
 
 const ViewManager: React.FC<ViewManagerProps> = ({
   moduleId,
+  orgId,
+  userId,
   currentView,
   onViewChange,
   onRefresh: _onRefresh,
@@ -94,7 +100,12 @@ const ViewManager: React.FC<ViewManagerProps> = ({
   const [activeModalTab, setActiveModalTab] = useState('columns');
   const popupContainer = useCallback((triggerNode?: HTMLElement | null) => resolveOverlayPopupContainer(triggerNode), []);
 
-  const moduleConfig = MODULES[moduleId];
+  const scopeKey = JSON.stringify([orgId, userId, moduleId]);
+  const moduleSettingsVersion = useModuleSettingsVersion();
+  const moduleConfig = useMemo(
+    () => (MODULES[moduleId] ? { ...MODULES[moduleId] } : undefined),
+    [moduleId, moduleSettingsVersion]
+  );
   const defaultViewColumnKeys = useMemo(
     () => getModuleListVisibleFields(moduleConfig).map((field) => String(field?.key || '').trim()).filter(Boolean),
     [moduleConfig]
@@ -132,6 +143,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
   }, [config.columns, defaultViewColumnKeys, getViewColumnKeys]);
   const isEditingView = editingViewId !== null || editingDefaultView;
   const viewConditionFields = useMemo(() => getWorkflowConditionFields(moduleId), [moduleId]);
+  const viewConditionTables = useMemo(() => getConditionTableSources(moduleId), [moduleId]);
 
   const sortableFields = useMemo(() => {
     const fields = moduleConfig?.fields || [];
@@ -146,39 +158,10 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     const otherFields = fields.filter((f) => !timeSystemKeys.includes(f.key) && !dateTypes.has(f.type as FieldType));
     return [...timeSystemFields, ...otherDateFields, ...otherFields];
   }, [moduleConfig]);
-  const supportedViewFilterOperators = useMemo(
-    () =>
-      new Set([
-        'eq',
-        'neq',
-        'contains',
-        'not_contains',
-        'starts_with',
-        'ends_with',
-        'gt',
-        'gte',
-        'lt',
-        'lte',
-        'after_date',
-        'before_date',
-        'in',
-        'not_in',
-        'is_true',
-        'is_false',
-        'is_null',
-        'not_null',
-        'multi_count_gt',
-        'multi_count_lt',
-        'is_today',
-        'is_yesterday',
-        'is_tomorrow',
-      ]),
-    []
-  );
   const getViewFilterOperatorOptions = useCallback(
     (field?: ModuleField | null) =>
-      getWorkflowOperatorOptions(field).filter((option) => supportedViewFilterOperators.has(String(option.value || ''))),
-    [supportedViewFilterOperators]
+      getWorkflowOperatorOptions(field).filter(({ value }) => !/^changed(?:_|$)/.test(value)),
+    []
   );
   const getViewFilterDefaultOperator = useCallback(
     (field?: ModuleField | null) => getViewFilterOperatorOptions(field)[0]?.value || getDefaultWorkflowOperator(field),
@@ -282,11 +265,11 @@ const ViewManager: React.FC<ViewManagerProps> = ({
   }, []);
 
   useEffect(() => {
-    if (!moduleId) return;
+    if (!moduleId || !orgId || !userId) return;
     let active = true;
 
     const fetchViews = async () => {
-      const cachedViews = savedViewsCache.get(moduleId);
+      const cachedViews = savedViewsCache.get(scopeKey);
       if (cachedViews?.length) {
         setViews(cachedViews);
       } else {
@@ -296,30 +279,32 @@ const ViewManager: React.FC<ViewManagerProps> = ({
 
       try {
         const pending =
-          savedViewsPromiseCache.get(moduleId) ||
+          savedViewsPromiseCache.get(scopeKey) ||
           (async () => {
-            const { data } = await supabase
+            const { data, error } = await supabase
               .from('saved_views')
               .select(SAVED_VIEW_SELECT_FIELDS)
+              .eq('org_id', orgId)
               .eq('module_id', moduleId)
               .order('created_at', { ascending: false });
+            if (error) throw error;
             const normalized = normalizeViewsList((data || []) as SavedView[]);
             return filterViewsByAccess(normalized);
           })();
 
-        if (!savedViewsPromiseCache.has(moduleId)) {
-          savedViewsPromiseCache.set(moduleId, pending);
+        if (!savedViewsPromiseCache.has(scopeKey)) {
+          savedViewsPromiseCache.set(scopeKey, pending);
         }
 
         const nextViews = await pending;
-        savedViewsPromiseCache.delete(moduleId);
+        savedViewsPromiseCache.delete(scopeKey);
         if (!active) return;
-        savedViewsCache.set(moduleId, nextViews);
+        savedViewsCache.set(scopeKey, nextViews);
         setViews(nextViews);
       } catch {
-        savedViewsPromiseCache.delete(moduleId);
+        savedViewsPromiseCache.delete(scopeKey);
         if (!active) return;
-        setViews(savedViewsCache.get(moduleId) || [defaultView]);
+        setViews(savedViewsCache.get(scopeKey) || [defaultView]);
       } finally {
         if (active) setLoadingViews(false);
       }
@@ -329,7 +314,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     return () => {
       active = false;
     };
-  }, [defaultView, filterViewsByAccess, moduleId, normalizeViewsList]);
+  }, [defaultView, filterViewsByAccess, moduleId, normalizeViewsList, orgId, scopeKey, userId]);
 
   useEffect(() => {
     if (!moduleConfig || !isModalOpen) return;
@@ -453,6 +438,12 @@ const ViewManager: React.FC<ViewManagerProps> = ({
       return;
     }
 
+    if (hasIncompleteTableCondition(config.filters || [], viewConditionTables)) {
+      message.error('برای هر شرط جدول، دست‌کم یک شرط ردیف کامل کنید.');
+      setActiveModalTab('filters');
+      return;
+    }
+    if (!orgId || !userId) return;
     const validFilters = (config.filters || []).filter(
       (f) => f.field && f.operator && (
         !workflowOperatorNeedsValue(f.operator) || !(f.value === undefined || f.value === null)
@@ -480,6 +471,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
         let resetQuery = supabase
           .from('saved_views')
           .update({ is_default: false })
+          .eq('org_id', orgId)
           .eq('module_id', moduleId)
           .eq('is_default', true);
         if (editingViewId) {
@@ -500,6 +492,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
         const { data, error } = await supabase
           .from('saved_views')
           .update(payload)
+          .eq('org_id', orgId)
           .eq('id', targetEditId)
           .select()
           .single();
@@ -510,7 +503,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
             const nextViews = normalizeViewsList(
               prev.map((view) => (view.id === targetEditId ? savedData! : view))
             );
-            savedViewsCache.set(moduleId, nextViews);
+            savedViewsCache.set(scopeKey, nextViews);
             return nextViews;
           });
         }
@@ -518,7 +511,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
       } else {
         const { data, error } = await supabase
           .from('saved_views')
-          .insert([payload])
+          .insert([{ ...payload, org_id: orgId }])
           .select()
           .single();
         if (error) throw error;
@@ -526,7 +519,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
         if (savedData) {
           setViews((prev) => {
             const nextViews = normalizeViewsList([...prev, savedData!]);
-            savedViewsCache.set(moduleId, nextViews);
+            savedViewsCache.set(scopeKey, nextViews);
             return nextViews;
           });
         }
@@ -577,13 +570,18 @@ const ViewManager: React.FC<ViewManagerProps> = ({
   };
 
   const handleDeleteView = async (view: SavedView) => {
-    await supabase.from('saved_views').delete().eq('id', view.id);
+    if (!orgId || !userId) return;
+    const { error } = await supabase.from('saved_views').delete().eq('org_id', orgId).eq('id', view.id);
+    if (error) {
+      message.error(toFaErrorMessage(error, 'حذف نما انجام نشد.'));
+      return;
+    }
     setViews((prev) => {
       const remainingViews = prev.filter((item) => item.id !== view.id);
       const nextViews = view.is_default
         ? normalizeViewsList(remainingViews)
         : remainingViews;
-      savedViewsCache.set(moduleId, nextViews);
+      savedViewsCache.set(scopeKey, nextViews);
       return nextViews;
     });
     if (currentView?.id === view.id) onViewChange(null, null);
@@ -942,6 +940,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                       value={(config.filters || []) as any}
                       onChange={(next) => handleFilterChange(next as any[])}
                       fields={viewConditionFields}
+                      tableSources={viewConditionTables}
                       dynamicOptions={dynamicOptions}
                       relationOptions={relationOptions}
                       getOperatorOptions={getViewFilterOperatorOptions}

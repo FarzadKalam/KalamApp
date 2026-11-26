@@ -50,6 +50,7 @@ import FileExtensionTile from '../files/FileExtensionTile';
 import { isImageFileLike } from '../../utils/imagePreview';
 import { isAudioNoteAttachment, type NoteAttachment } from '../../utils/noteContent';
 import { isPublicOverlaySuppressedPath } from '../../utils/publicOverlay';
+import WebPushPermissionControl from './WebPushPermissionControl';
 
 const SnoozeScheduleModal = React.lazy(() => import('./SnoozeScheduleModal'));
 
@@ -397,6 +398,7 @@ const NotificationOverlayPanel: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-1">
+            <WebPushPermissionControl />
             <button
               type="button"
               onClick={() => setMinimized(true)}

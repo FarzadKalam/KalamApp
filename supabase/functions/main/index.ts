@@ -2,6 +2,9 @@ console.log('main function started');
 
 const VERIFY_JWT = Deno.env.get('VERIFY_JWT') === 'true';
 const DEFAULT_WORKER_TIMEOUT_MS = 60 * 1000;
+// A reused AI worker can accept a request near the middle of its lifetime.
+// Leave a full chat deadline and time to save the answer after retirement.
+const AI_ASSISTANT_WORKER_TIMEOUT_MS = 120 * 1000;
 // تولید تصویر ممکن است چند دقیقه زمان ببرد. این سقف فقط برای worker داخلی
 // تصویر است و مسیرهای عادی Edge Function را کوتاه و محافظت‌شده نگه می‌دارد.
 const AI_IMAGE_WORKER_TIMEOUT_MS = 15 * 60 * 1000;
@@ -52,7 +55,7 @@ Deno.serve(async (req: Request) => {
   const envVars = Object.keys(envVarsObj).map((key) => [key, envVarsObj[key]]);
   const workerTimeoutMs = isTrustedAiImageWorkerRequest(req, serviceName)
     ? AI_IMAGE_WORKER_TIMEOUT_MS
-    : DEFAULT_WORKER_TIMEOUT_MS;
+    : serviceName === 'ai-assistant' ? AI_ASSISTANT_WORKER_TIMEOUT_MS : DEFAULT_WORKER_TIMEOUT_MS;
 
   try {
     const worker = await EdgeRuntime.userWorkers.create({

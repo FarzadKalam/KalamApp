@@ -171,7 +171,7 @@ export const buildListPrintableFields = (
       label: getFieldLabelFa(field, { moduleId: moduleConfig?.id, fallback: field.key }),
       type: field?.type,
       group:
-        String(field?.location || '').trim().toLowerCase() === 'block' && String(field?.blockId || '').trim()
+        Boolean(String(field?.blockId || '').trim()) && String(field?.location || '').trim().toLowerCase() !== 'header'
           ? `بخش: ${blockTitleMap.get(String(field.blockId).trim()) || String(field.blockId).trim()}`
           : 'فیلدهای عمومی',
       defaultSelected: defaultSelectionKeySet.has(String(field?.key || '').trim()),
@@ -326,6 +326,10 @@ export const buildListTableHtml = (
   startIndex: number = 0,
   imageDisplayMode: PrintImageDisplayMode = DEFAULT_PRINT_IMAGE_DISPLAY_MODE,
 ) => {
+  if (!Array.isArray(fields) || fields.length === 0) {
+    return '';
+  }
+
   const headerHtml = fields
     .map((field) => `<th style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; background:rgba(var(--brand-500-rgb),0.08); font-weight:800;">${escapeHtml(field.label)}</th>`)
     .join('');

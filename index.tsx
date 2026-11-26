@@ -132,4 +132,13 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
   });
 }
 
-void bootstrapAndRender();
+void bootstrapAndRender().catch((error) => {
+  if (isDynamicImportFailure(error)) recoverFromDynamicImportFailure();
+  const placeholder = document.querySelector('.app-startup-placeholder');
+  if (!placeholder) return;
+  placeholder.setAttribute('aria-label', 'بارگذاری سامانه انجام نشد');
+  const retryLink = document.createElement('a');
+  retryLink.href = window.location.href;
+  retryLink.textContent = 'تلاش دوباره برای بارگذاری سامانه';
+  placeholder.replaceChildren(retryLink);
+});

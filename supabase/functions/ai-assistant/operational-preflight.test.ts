@@ -36,4 +36,14 @@ describe('actual task bundle operational preflight', () => {
     const fixture = harness(); fixture.assertAiCapabilityEnabled.mockRejectedValueOnce(new Error('permission denied'));
     await expect(fixture.run('test://', 'test', {}, { message: 'ثبت کن', capabilities: ['record_creation'] })).rejects.toThrow('permission denied');
   });
+  it('uses the editable transcript in planning without sending the audio to a model again', async () => {
+    const declarations = source.slice(source.indexOf('const transcribeTaskBundleVoices ='), source.indexOf('const buildAutoRouterHistoryText ='));
+    const executable = ts.transpileModule(declarations + '\nreturn { transcribeTaskBundleVoices, buildTaskBundlePrompt };',
+      { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const { transcribeTaskBundleVoices, buildTaskBundlePrompt } = new Function(executable)();
+    const inputs = [{ id: 'voice-message', label: 'ویس', text: 'برای مشتری فاکتور ثبت کن', audio: { data: 'unused-audio' } }];
+    const transcripts = await transcribeTaskBundleVoices('test://', 'test', {}, inputs);
+    expect(transcripts).toEqual([{ inputId: 'voice-message', label: 'ویس', transcript: 'برای مشتری فاکتور ثبت کن', source: 'composer_transcript' }]);
+    expect(buildTaskBundlePrompt({}, inputs, transcripts).match(/برای مشتری فاکتور ثبت کن/g)).toHaveLength(1);
+  });
 });

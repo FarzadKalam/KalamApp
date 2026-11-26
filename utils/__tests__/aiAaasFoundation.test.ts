@@ -26,7 +26,9 @@ import {
   setUiNotificationOverlayItems,
   setUiNotificationOverlayViewer,
 } from '../uiNotificationOverlayStore';
-import { DOMAIN_SKILL_MAP, resolveRunnableAgentsForActor } from '../../supabase/functions/_shared/ai-skill-registry.ts';
+import { resolveRunnableAgentsForActor } from '../../supabase/functions/_shared/ai-skill-registry.ts';
+import { AI_AGENT_CATALOG as SERVER_AI_AGENT_CATALOG } from '../../supabase/functions/_shared/ai-agent-catalog.ts';
+import { listAgentSkills } from '../../supabase/functions/_shared/ai-skill-catalog.ts';
 import { resolveModelSlot, tryResolveModelSlot } from '../../supabase/functions/_shared/ai-gateway.ts';
 import { isWithinOrgWorkSchedule, resolveAgentStatesForActor } from '../../supabase/functions/_shared/ai-grounding.ts';
 import { compileLayeredAgentPrompt } from '../../supabase/functions/_shared/ai-prompt-compiler.ts';
@@ -164,8 +166,9 @@ describe('Modular AaaS Foundation', () => {
     ];
 
     expect(AI_AGENT_CATALOG.map((a) => a.key)).toEqual(expectedKeys);
-    expectedKeys.forEach((key) => {
-      expect(DOMAIN_SKILL_MAP[key as keyof typeof DOMAIN_SKILL_MAP]).toBeTruthy();
+    expect(SERVER_AI_AGENT_CATALOG.map((agent) => agent.key)).toEqual(expectedKeys);
+    SERVER_AI_AGENT_CATALOG.forEach(({ key }) => {
+      expect(listAgentSkills(key).length).toBeGreaterThan(0);
     });
     expect(AGENT_TONE_STYLES.map((t) => t.value)).toEqual([
       'friendly_warm',

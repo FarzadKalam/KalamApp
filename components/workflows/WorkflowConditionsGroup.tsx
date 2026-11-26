@@ -19,8 +19,14 @@ import {
   workflowOperatorNumericValue,
   workflowOperatorNeedsValue,
 } from '../../utils/filterUtils';
-import { WORKFLOW_ASSIGNEE_FIELD_KEY, WorkflowCondition, createWorkflowId } from '../../utils/workflowTypes';
+import { WORKFLOW_ASSIGNEE_FIELD_KEY, WorkflowCondition, createWorkflowId, parseWorkflowRelatedFieldKey } from '../../utils/workflowTypes';
 import { getFieldLabelFa } from '../../utils/fieldLabel';
+import { isTableConditionOperator } from '../../shared/recordRuntime';
+import { getConditionTableSources, type ConditionTableSource } from '../../utils/conditionTableFields';
+import { loadWorkflowConditionEditorOptions } from '../../utils/workflowConditionOptions';
+import { fetchCurrentUserRoleContext } from '../../utils/permissions';
+import { hasCurrentOrgPlanModule } from '../../utils/saasPlanModules';
+import { supabase } from '../../supabaseClient';
 
 interface WorkflowConditionsGroupProps {
   value: WorkflowCondition[];
@@ -41,7 +47,14 @@ interface WorkflowConditionsGroupProps {
   overlayZIndexBase?: number;
   popupContainer?: (trigger?: HTMLElement | null) => HTMLElement;
   adaptiveMode?: AdaptivePickerMode;
+  tableSources?: ConditionTableSource[];
+  tableModuleId?: string;
 }
+
+const tableOperators = [
+  { value: 'table_any', label: 'حداقل یک ردیف' },
+  { value: 'table_all', label: 'همهٔ ردیف‌ها' },
+];
 
 const getFieldOptions = (
   field: ModuleField | undefined,
@@ -114,8 +127,11 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
   overlayZIndexBase = 1400,
   popupContainer = resolveSelectPopupContainer,
   adaptiveMode = 'auto',
+  tableSources: tableSourceOverride,
+  tableModuleId,
 }) => {
   const safeValue = Array.isArray(value) ? value : [];
+  const tableSources = useMemo(() => tableSourceOverride || getConditionTableSources(tableModuleId), [tableSourceOverride, tableModuleId]);
   const [occasionOptions, setOccasionOptions] = useState<HolidayOccasionOption[]>([]);
   const resolvedPopupContainer = (trigger?: HTMLElement | null) => {
     const configuredHost = popupContainer(trigger);
@@ -528,6 +544,13 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
     );
   };
 
+  const addTableCondition = () => {
+    if (onBeforeAddCondition?.() === false || !tableSources[0]) return;
+    onChange([...safeValue, {
+      id: createWorkflowId(), field: tableSources[0].key, operator: 'table_any', value: [],
+    }]);
+  };
+
   return (
     <div className="space-y-3">
       {safeValue.length === 0 ? (
@@ -537,6 +560,19 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           const field = fields.find((f) => f.key === condition.field);
           const isLocked = lockedConditionIdSet.has(String(condition.id || ''));
           const isRequired = requiredConditionIdSet.has(String(condition.id || ''));
+          if (isTableConditionOperator(condition.operator)) {
+            return <TableConditionEditor
+              key={condition.id}
+              condition={condition}
+              sources={tableSources}
+              disabled={disabled || isLocked}
+              onChange={(patch) => updateCondition(condition.id, patch)}
+              onRemove={() => removeCondition(condition.id)}
+              popupContainer={resolvedPopupContainer}
+              overlayZIndexBase={overlayZIndexBase}
+              adaptiveMode={adaptiveMode}
+            />;
+          }
           return (
             <div
               key={condition.id}
@@ -615,7 +651,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           );
         })
       )}
-      <Space>
+      <Space wrap>
         <Button
           type="dashed"
           htmlType="button"
@@ -630,9 +666,94 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
         >
           افزودن شرط
         </Button>
+        {tableSources.length > 0 && <Button
+          type="dashed"
+          htmlType="button"
+          icon={<PlusOutlined />}
+          disabled={disabled}
+          onClick={addTableCondition}
+        >
+          افزودن شرط جدول
+        </Button>}
       </Space>
     </div>
   );
+};
+
+const TableConditionEditor = ({
+  condition, sources, disabled, onChange, onRemove, popupContainer, overlayZIndexBase, adaptiveMode,
+}: {
+  condition: WorkflowCondition;
+  sources: ConditionTableSource[];
+  disabled: boolean;
+  onChange: (patch: Partial<WorkflowCondition>) => void;
+  onRemove: () => void;
+  popupContainer: NonNullable<WorkflowConditionsGroupProps['popupContainer']>;
+  overlayZIndexBase: number;
+  adaptiveMode: AdaptivePickerMode;
+}) => {
+  const source = sources.find((item) => item.key === condition.field);
+  const [options, setOptions] = useState<Awaited<ReturnType<typeof loadWorkflowConditionEditorOptions>>>();
+  const [conditionFields, setConditionFields] = useState<ModuleField[]>([]);
+  useEffect(() => {
+    let active = true;
+    setOptions(undefined);
+    const directFields = source?.fields.filter((field) => !parseWorkflowRelatedFieldKey(field.key)) || [];
+    setConditionFields(directFields);
+    const load = async () => {
+      if (!source) return;
+      const context = await fetchCurrentUserRoleContext(supabase);
+      if (!context.orgId) return;
+      const relatedModules = Array.from(new Set(source.fields.map(({ key }) => parseWorkflowRelatedFieldKey(key)?.targetModuleId).filter(Boolean))) as string[];
+      const allowedModules = new Set((await Promise.all(relatedModules.map(async (target) =>
+        context.permissions?.[target]?.view !== false
+        && await hasCurrentOrgPlanModule(target, { defaultEnabled: !['billboards', 'reservations'].includes(target) }) ? target : null))).filter(Boolean));
+      const allowedFields = source.fields.filter(({ key }) => {
+        const related = parseWorkflowRelatedFieldKey(key);
+        return !related || (allowedModules.has(related.targetModuleId)
+          && context.permissions?.[related.targetModuleId]?.fields?.[related.targetFieldKey] !== false
+          && context.permissions?.[related.targetModuleId]?.field_actions?.[related.targetFieldKey]?.view !== false);
+      });
+      if (!active) return;
+      setConditionFields(allowedFields);
+      const result = await loadWorkflowConditionEditorOptions(source.moduleId, allowedFields);
+      if (active) setOptions(result);
+    };
+    void load().catch(() => undefined);
+    return () => { active = false; };
+  }, [source]);
+  const pickerProps = { disabled, getPopupContainer: popupContainer, overlayZIndexBase, adaptiveMode, className: 'w-full' };
+  return <fieldset className="min-w-0 space-y-3 rounded-xl border border-gray-200 p-3 dark:border-gray-700">
+    <legend className="px-2 text-sm font-semibold">شرط ردیف‌های جدول</legend>
+    <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_1fr_auto] md:items-end">
+      <div>
+        <span className="mb-1 block text-sm">جدول</span>
+        <AdaptiveSelectField {...pickerProps} pickerTitle="جدول شرط" value={condition.field}
+          options={sources.map((item) => ({ value: item.key, label: item.label }))}
+          onChange={(field) => onChange({ field, value: [] })} />
+      </div>
+      <div>
+        <span className="mb-1 block text-sm">ردیف‌هایی که باید شرط را پاس کنند</span>
+        <AdaptiveSelectField {...pickerProps} pickerTitle="تعداد ردیف‌های واجد شرایط" value={condition.operator}
+          options={tableOperators} onChange={(operator) => onChange({ operator })} />
+      </div>
+      <Button aria-label="حذف شرط جدول" htmlType="button" danger type="text" disabled={disabled}
+        icon={<DeleteOutlined />} onClick={onRemove} />
+    </div>
+    <p className="text-sm text-gray-600 dark:text-gray-300">همهٔ شرط‌های زیر باید روی همان ردیف برقرار باشند.</p>
+    {source ? <WorkflowConditionsGroup
+      value={Array.isArray(condition.value) ? condition.value : []}
+      onChange={(value) => onChange({ value })}
+      fields={conditionFields}
+      disabled={disabled}
+      dynamicOptions={options?.dynamicOptions || {}}
+      relationOptions={options?.relationOptions || {}}
+      getOperatorOptions={source.getOperatorOptions || ((field) => getWorkflowOperatorOptions(field).filter(({ value }) => !/^changed(?:_|$)/.test(value)))}
+      popupContainer={popupContainer}
+      overlayZIndexBase={overlayZIndexBase}
+      adaptiveMode={adaptiveMode}
+    /> : <p role="alert" className="text-sm text-red-600 dark:text-red-300">جدول این شرط در دسترس نیست.</p>}
+  </fieldset>;
 };
 
 export default WorkflowConditionsGroup;

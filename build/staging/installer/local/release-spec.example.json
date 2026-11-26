@@ -1,0 +1,20 @@
+{
+  "version": "REPLACE_WITH_VERIFIED_VERSION",
+  "commit_sha": "REPLACE_WITH_FULL_DEPLOYED_COMMIT_SHA",
+  "schema_version": "REPLACE_WITH_VERIFIED_SCHEMA_ID",
+  "compose": "compose.yml",
+  "frontend_index": "frontend/index.html",
+  "auth_version": "REPLACE_WITH_TESTED_AUTH_IMAGE_DIGEST",
+  "python_wheels": [],
+  "admin_permissions": {},
+  "availability": { "features": {}, "modules": {} },
+  "install_sql": ["sql/bootstrap.sql", "sql/local-policy.sql"],
+  "upgrade_sql": [],
+  "upgrade_from": [],
+  "images": ["images/runtime.tar.gz"],
+  "debs": [],
+  "required_services": ["db", "auth", "rest", "realtime", "storage", "functions", "kong", "frontend"],
+  "image_ids": {},
+  "minimum_ram_bytes": 8589934592,
+  "minimum_free_bytes": 85899345920
+}

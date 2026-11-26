@@ -1,5 +1,5 @@
 import {expect,it,vi} from 'vitest';
-import {searchVoipOperators,listContactCenterOperators,normalizeDialExtension,validDialExtension} from './voip-directory';
+import {searchVoipOperators,normalizeDialExtension,validDialExtension} from './voip-directory';
 const user='10000000-0000-4000-8000-000000000001';
 it('lists only active members in the selected tenant and never reads authentication fields',async()=>{
  const read=vi.fn(async(table:string,_params:Record<string,string>)=>table==='voip_external_accounts'?[{id:'account',assignee_profile_id:user,display_name:'همکار',dial_extension:'۱۰۱',sip_secret:'must-not-escape',extension:'821999'}]:table==='user_organization_memberships'?[{user_id:user}]:[{id:user,avatar_url:'/avatar.png',full_name:'همکار'}]);
@@ -24,19 +24,4 @@ it('bounds and paginates account reads while discarding filter operators from qu
  const params=read.mock.calls[0][1];expect(params).toMatchObject({offset:'40',limit:'21'});
  expect(params.or).not.toContain('org_id.eq');expect(params.or).toContain('101');
  expect(normalizeDialExtension('١٠۲')).toBe('102');expect(validDialExtension('۱۰۱')).toBe(true);expect(validDialExtension('101@other')).toBe(false);
-});
-it('management returns a bounded projection and rejects stale online or busy state',async()=>{
- const bridge='20000000-0000-4000-8000-000000000001';let fresh=true;let calls=1;
- const read=vi.fn(async(table:string,params:Record<string,string>)=>{
-  if(table!=='profiles'&&table!=='ps_contacts')expect(params.org_id).toBe('eq.org-a');
-  if(table==='ps_contacts')expect(params.endpoint).toBe('in.(b_'+bridge.replace(/-/g,'')+'_browser)');
-  if(table==='voip_external_accounts')return [{id:'account',assignee_profile_id:user,extension:'login',is_active:true,display_name:'همکار',metadata:{dial_extension:'101',password:'secret',internal_token:'secret'}}];
-  if(table==='profiles')return [{id:user,avatar_url:'/avatar.png'}];
-  if(table==='voip_provider_bridges')return [{account_id:'account',id:bridge,registration_status:'registered',lease_until:new Date(Date.now()+60000).toISOString(),last_checked_at:new Date(Date.now()-(fresh?0:60000)).toISOString(),active_call_count:calls}];
-  return [{endpoint:'b_'+bridge.replace(/-/g,'')+'_browser',expiration_time:Date.now()/1000+60}];
- });
- expect((await listContactCenterOperators(read,'org-a')).items[0].status).toBe('busy');
- calls=0;expect((await listContactCenterOperators(read,'org-a')).items[0].status).toBe('online');
- fresh=false;const result=await listContactCenterOperators(read,'org-a');expect(result.items[0].status).toBe('offline');
- expect(JSON.stringify(result)).not.toMatch(/internal_token|password|secret/);
 });

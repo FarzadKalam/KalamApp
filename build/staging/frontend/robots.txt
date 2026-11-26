@@ -1,0 +1,28 @@
+User-agent: *
+Allow: /
+Disallow: /taze-system/
+Disallow: /settings/
+Disallow: /api/
+Sitemap: https://tazesystem.ir/sitemap.xml
+
+# AI Crawlers — allow blog and learn content
+User-agent: GPTBot
+Allow: /blog/
+Allow: /learn/
+Allow: /features
+Allow: /pricing
+Disallow: /taze-system/
+
+User-agent: Claude-Web
+Allow: /blog/
+Allow: /learn/
+Disallow: /taze-system/
+
+User-agent: PerplexityBot
+Allow: /blog/
+Allow: /learn/
+Disallow: /taze-system/
+
+User-agent: Googlebot
+Allow: /
+Disallow: /taze-system/

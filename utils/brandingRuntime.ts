@@ -2,6 +2,7 @@ import { TAZE_SYSTEM_BRAND_ASSETS } from "./tazeSystemBrandAssets";
 import {
   BRANDING_INTEGRATION_CONNECTION_TYPE,
   BRANDING_INTEGRATION_PROVIDER,
+  BRAND_PALETTE_PRESETS,
   DEFAULT_BRANDING,
   applyBrandCssVariables,
   mergeBrandingConfig,
@@ -25,6 +26,7 @@ const BRAND_ICON_ATTRIBUTE = "data-brand-icon";
 
 export type RuntimeBrandingResult = {
   branding: BrandingConfig;
+  themeColor: string;
   currency: CurrencyConfig;
   loadingIdentity: LoadingBrandIdentity;
 };
@@ -79,11 +81,11 @@ const buildRuntimeBranding = (
   const rawBranding = extractBrandingSettings(settingsInput);
   const companyFullName = String(companyRow.company_full_name || companyRow.company_name || "").trim();
   const tradeName = String(companyRow.trade_name || "").trim();
-  const paletteKey = String(companyRow.brand_palette_key || "").trim();
+  const paletteKey = String(rawBranding?.palette_key || companyRow.brand_palette_key || "").trim();
 
   const branding = mergeBrandingConfig(DEFAULT_BRANDING, {
     ...(rawBranding || {}),
-    palette_key: String(rawBranding?.palette_key || paletteKey || DEFAULT_BRANDING.paletteKey) as BrandingSettingsPayload["palette_key"],
+    palette_key: (paletteKey || DEFAULT_BRANDING.paletteKey) as BrandingSettingsPayload["palette_key"],
     brand_name: String(rawBranding?.brand_name || tradeName || companyFullName || DEFAULT_BRANDING.brandName),
     app_title: String(rawBranding?.app_title || companyFullName || tradeName || DEFAULT_BRANDING.appTitle),
     short_name: String(rawBranding?.short_name || tradeName || companyFullName || DEFAULT_BRANDING.shortName),
@@ -98,6 +100,9 @@ const buildRuntimeBranding = (
 
   return {
     branding,
+    themeColor: Object.prototype.hasOwnProperty.call(BRAND_PALETTE_PRESETS, paletteKey)
+      ? branding.palette.primary
+      : BRAND_PALETTE_PRESETS.taze_rose.palette.primary,
     currency,
     loadingIdentity: resolveLoadingBrandIdentity(companyRow, branding),
   };
@@ -307,6 +312,7 @@ export const loadRuntimeBranding = async (
 export const persistRuntimeBranding = (result: RuntimeBrandingResult) => {
   persistCurrencyConfig(result.currency);
   applyBrandingRuntime(result.branding);
+  document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute('content', result.themeColor);
   persistLoadingBrandIdentity(result.loadingIdentity);
   const hostname = getCurrentHostname();
   if (shouldUseCachedBranding(hostname)) {

@@ -18,7 +18,9 @@ import {
 import { ArrowLeftOutlined, ArrowRightOutlined, DeleteOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import WorkflowConditionsGroup from '../components/workflows/WorkflowConditionsGroup';
+import { getConditionTableSources, hasIncompleteTableCondition } from '../utils/conditionTableFields';
 import { MODULES } from '../moduleRegistry';
+import { useModuleSettingsVersion } from '../utils/moduleSettingsRuntime';
 import { supabase } from '../supabaseClient';
 import { fetchCurrentUserRoleContext, resolveReportsAccessPermissions } from '../utils/permissions';
 import AdaptiveIdentityPicker from '../components/AdaptiveIdentityPicker';
@@ -97,6 +99,7 @@ const ReportBuilderPage: React.FC = () => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [mainModuleId, setMainModuleId] = useState('');
+  const conditionTableSources = useMemo(() => getConditionTableSources(mainModuleId), [mainModuleId]);
   const [calculationMode, setCalculationMode] = useState<ReportCalculationMode>('normal');
   const [referenceReportIds, setReferenceReportIds] = useState<string[]>([]);
   const [increaseMetrics, setIncreaseMetrics] = useState<ReportReferenceMetric[]>([]);
@@ -134,8 +137,9 @@ const ReportBuilderPage: React.FC = () => {
   const [botGroupOptions, setBotGroupOptions] = useState<UserOption[]>([]);
   const popupContainer = useCallback((triggerNode?: HTMLElement | null) => resolveOverlayPopupContainer(triggerNode), []);
 
-  const moduleOptions = useMemo(() => getReportModuleOptions(permissions), [permissions]);
-  const secondaryModuleOptions = useMemo(() => getSecondaryModuleOptions(mainModuleId, permissions), [mainModuleId, permissions]);
+  const moduleSettingsVersion = useModuleSettingsVersion();
+  const moduleOptions = useMemo(() => getReportModuleOptions(permissions), [moduleSettingsVersion, permissions]);
+  const secondaryModuleOptions = useMemo(() => getSecondaryModuleOptions(mainModuleId, permissions), [mainModuleId, moduleSettingsVersion, permissions]);
   const scopedSurveyTemplateId = useMemo(
     () => (
       mainModuleId === 'surveys'
@@ -150,7 +154,7 @@ const ReportBuilderPage: React.FC = () => {
         ? { ...field, options: [...(field.options || []), ...taskProcessStatusOptions] }
         : field
     )),
-    [mainModuleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields, taskProcessStatusOptions]
+    [mainModuleId, moduleSettingsVersion, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields, taskProcessStatusOptions]
   );
   const conditionFields = useMemo(
     () => getReportConditionFields(mainModuleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields).map((field) => (
@@ -158,15 +162,15 @@ const ReportBuilderPage: React.FC = () => {
         ? { ...field, options: [...(field.options || []), ...taskProcessStatusOptions] }
         : field
     )),
-    [mainModuleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields, taskProcessStatusOptions]
+    [mainModuleId, moduleSettingsVersion, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields, taskProcessStatusOptions]
   );
   const groupableFields = useMemo(
     () => getGroupableReportFields(mainModuleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields),
-    [mainModuleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields]
+    [mainModuleId, moduleSettingsVersion, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields]
   );
   const summableFields = useMemo(
     () => getSummableReportFields(mainModuleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields),
-    [mainModuleId, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields]
+    [mainModuleId, moduleSettingsVersion, secondaryModuleIds, surveyTemplateSnapshot, taskProcessFields]
   );
   const selectedReferenceReports = useMemo(
     () => referenceReports.filter((report) => referenceReportIds.includes(String(report.id))),
@@ -492,6 +496,10 @@ const ReportBuilderPage: React.FC = () => {
   );
 
   const handleSave = async () => {
+    if (hasIncompleteTableCondition([...conditionsAll, ...conditionsAny], conditionTableSources)) {
+      message.error('برای هر شرط جدول، دست‌کم یک شرط ردیف کامل کنید.');
+      return;
+    }
     if(calculationMode==='normal'&&!isValidReportRowLimit(rowLimit)){message.error(`حداکثر ردیف باید عدد صحیح بین ${toPersianNumber(REPORT_ROW_LIMIT_MIN)} و ${toPersianNumber(REPORT_ROW_LIMIT_MAX)} باشد.`);return;}
     if (![0, 1, 3].every((item) => validateStep(item as WizardStep))) return;
     try {
@@ -808,6 +816,7 @@ const ReportBuilderPage: React.FC = () => {
               <div className="mb-4 font-black text-gray-800 dark:text-gray-100">همه این شرط‌ها باید برقرار باشند</div>
               <WorkflowConditionsGroup
                 value={conditionsAll}
+                tableSources={conditionTableSources}
                 onChange={setConditionsAll}
                 fields={conditionFields}
                 dynamicOptions={dynamicOptions}
@@ -820,6 +829,7 @@ const ReportBuilderPage: React.FC = () => {
               <div className="mb-4 font-black text-gray-800 dark:text-gray-100">کافی است یکی از این شرط‌ها برقرار باشد</div>
               <WorkflowConditionsGroup
                 value={conditionsAny}
+                tableSources={conditionTableSources}
                 onChange={setConditionsAny}
                 fields={conditionFields}
                 dynamicOptions={dynamicOptions}

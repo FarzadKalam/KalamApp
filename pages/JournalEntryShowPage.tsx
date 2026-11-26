@@ -25,6 +25,18 @@ import { buildPrintOutputName } from '../utils/printTemplates/outputName';
 import { generatePdfBlob, prepareGeneratedPdfWindow, printAsPdf } from '../utils/printTemplates/printAsPdf';
 import { createPrintPreviewFingerprint } from '../utils/printTemplates/previewFingerprint';
 import {
+  loadPrintFieldPreference,
+  loadPrintFieldPreferenceFromServer,
+  savePrintFieldPreference,
+  savePrintFieldPreferenceToServer,
+} from '../utils/printTemplates/fieldPreferences';
+import {
+  isPathAllowedByModulePrintSettings,
+  resolveEffectivePrintFieldKeys,
+} from '../utils/printTemplates/printableFields';
+import { fetchSessionBootstrap } from '../utils/sessionCache';
+import { getBaseModuleSchemaSnapshot, useModuleSettingsVersion } from '../utils/moduleSettingsRuntime';
+import {
   formatNumericForInput,
   parseNumericInput,
   preventNonNumericKeyDown,
@@ -222,6 +234,11 @@ const JournalEntryShowPage: React.FC = () => {
   const [statusLoading, setStatusLoading] = useState(false);
   const [saveRowId, setSaveRowId] = useState<string | null>(null);
   const [isPrintOpen, setIsPrintOpen] = useState(false);
+  const [printOrgId, setPrintOrgId] = useState<string | null>(null);
+  const [printUserId, setPrintUserId] = useState<string | null>(null);
+  const [selectedPrintFields, setSelectedPrintFields] = useState<Record<string, string[]>>({});
+  const [savingPrintFields, setSavingPrintFields] = useState(false);
+  const journalModuleSettingsVersion = useModuleSettingsVersion();
   const journalPrintTargetWindowRef = useRef<Window | null>(null);
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [correctionReason, setCorrectionReason] = useState('');
@@ -261,9 +278,219 @@ const JournalEntryShowPage: React.FC = () => {
     const draftRows = newRows.map((row) => ({ ...row, __isNew: true }));
     return [...existingRows, ...draftRows].sort((a, b) => Number(a.line_no) - Number(b.line_no));
   }, [lines, newRows]);
+  const journalStatusLabelMap: Record<string, string> = {
+    draft: 'پیش‌نویس',
+    posted: 'ثبت‌شده',
+    reversed: 'معکوس‌شده',
+  };
+
+  const journalPrintableFields = useMemo(() => {
+    const moduleConfig = MODULES['journal_entries'];
+    const baseModuleConfig = getBaseModuleSchemaSnapshot('journal_entries');
+    const yearName = years.find((y) => y.id === entry?.fiscal_year_id)?.title || '';
+    const candidates = [
+      { key: 'record.entry_no', labels: { fa: 'شماره سند' }, group: 'اطلاعات سند', hasValue: Boolean(entry?.entry_no) },
+      { key: 'record.entry_date', labels: { fa: 'تاریخ سند' }, group: 'اطلاعات سند', hasValue: Boolean(entry?.entry_date) },
+      { key: 'record.fiscal_year_id', labels: { fa: 'سال مالی' }, group: 'اطلاعات سند', hasValue: Boolean(yearName) },
+      { key: 'record.status', labels: { fa: 'وضعیت' }, group: 'اطلاعات سند', hasValue: Boolean(entry?.status) },
+      { key: 'record.description', labels: { fa: 'شرح سند' }, group: 'اطلاعات سند', hasValue: Boolean(entry?.description) },
+      { key: 'line.line_no', labels: { fa: 'ردیف' }, group: 'ردیف‌های سند', hasValue: lines.length > 0 },
+      { key: 'line.account', labels: { fa: 'حساب' }, group: 'ردیف‌های سند', hasValue: lines.length > 0 },
+      { key: 'line.description', labels: { fa: 'شرح ردیف' }, group: 'ردیف‌های سند', hasValue: lines.some((l) => Boolean(l.description)) },
+      { key: 'line.cost_center', labels: { fa: 'مرکز هزینه' }, group: 'ردیف‌های سند', hasValue: lines.some((l) => Boolean(l?.cost_centers?.name || l.cost_center_id)) },
+      { key: 'line.party', labels: { fa: 'طرف حساب' }, group: 'ردیف‌های سند', hasValue: lines.some((l) => Boolean(l.party_id)) },
+      { key: 'line.debit', labels: { fa: 'بدهکار' }, group: 'ردیف‌های سند', hasValue: lines.some((l) => parseNum(l.debit) > 0) },
+      { key: 'line.credit', labels: { fa: 'بستانکار' }, group: 'ردیف‌های سند', hasValue: lines.some((l) => parseNum(l.credit) > 0) },
+      { key: 'record.total_debit', labels: { fa: 'جمع بدهکار' }, group: 'جمع‌بندی', hasValue: true },
+      { key: 'record.total_credit', labels: { fa: 'جمع بستانکار' }, group: 'جمع‌بندی', hasValue: true },
+    ];
+    return candidates.filter((item) => {
+      if (!item.key.startsWith('record.')) return true;
+      return isPathAllowedByModulePrintSettings({
+        moduleConfig,
+        baseModuleConfig,
+        fieldPath: item.key,
+      });
+    });
+  }, [entry?.description, entry?.entry_date, entry?.entry_no, entry?.fiscal_year_id, entry?.status, journalModuleSettingsVersion, lines, years]);
+
+  useEffect(() => {
+    let active = true;
+    void fetchSessionBootstrap(supabase)
+      .then((snapshot) => {
+        if (!active) return;
+        const orgId = String(snapshot?.orgId || '').trim() || null;
+        const userId = String(snapshot?.user?.id || '').trim() || null;
+        setPrintOrgId(orgId);
+        setPrintUserId(userId);
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!journalPrintableFields.length) return;
+    let active = true;
+    const localPref = loadPrintFieldPreference({
+      scope: 'record',
+      userId: printUserId,
+      orgId: printOrgId,
+      moduleId: 'journal_entries',
+      templateId: 'journal_voucher',
+    });
+    if (Array.isArray(localPref)) {
+      setSelectedPrintFields((prev) => {
+        if (Object.prototype.hasOwnProperty.call(prev, 'journal_voucher')) return prev;
+        return {
+          ...prev,
+          journal_voucher: resolveEffectivePrintFieldKeys({
+            fields: journalPrintableFields,
+            selectedKeys: localPref,
+            hasExplicitSelection: true,
+          }),
+        };
+      });
+    }
+    if (printOrgId) {
+      void loadPrintFieldPreferenceFromServer({
+        orgId: printOrgId,
+        moduleId: 'journal_entries',
+        templateId: 'journal_voucher',
+        scope: 'record',
+      }).then((serverKeys) => {
+        if (!active || !Array.isArray(serverKeys)) return;
+        setSelectedPrintFields((prev) => ({
+          ...prev,
+          journal_voucher: resolveEffectivePrintFieldKeys({
+            fields: journalPrintableFields,
+            selectedKeys: serverKeys,
+            hasExplicitSelection: true,
+          }),
+        }));
+      });
+    }
+    return () => { active = false; };
+  }, [isPrintOpen, journalPrintableFields, printOrgId, printUserId]);
+
+  const hasExplicitJournalSelection = Object.prototype.hasOwnProperty.call(
+    selectedPrintFields,
+    'journal_voucher',
+  );
+  const activeJournalPrintKeys = useMemo(
+    () =>
+      resolveEffectivePrintFieldKeys({
+        fields: journalPrintableFields,
+        selectedKeys: selectedPrintFields.journal_voucher || [],
+        hasExplicitSelection: hasExplicitJournalSelection,
+      }),
+    [hasExplicitJournalSelection, journalPrintableFields, selectedPrintFields.journal_voucher],
+  );
+  const handleToggleJournalPrintField = useCallback(
+    (templateId: string, fieldKey: string) => {
+      setSelectedPrintFields((prev) => {
+        const hasCurrent = Object.prototype.hasOwnProperty.call(prev, templateId);
+        const current = resolveEffectivePrintFieldKeys({
+          fields: journalPrintableFields,
+          selectedKeys: prev[templateId] || [],
+          hasExplicitSelection: hasCurrent,
+        });
+        const next = current.includes(fieldKey)
+          ? current.filter((key) => key !== fieldKey)
+          : [...current, fieldKey];
+        return { ...prev, [templateId]: next };
+      });
+    },
+    [journalPrintableFields],
+  );
+  const handleToggleJournalPrintGroup = useCallback(
+    (templateId: string, groupName: string) => {
+      const groupKeys = journalPrintableFields
+        .filter((f) => f.group === groupName)
+        .map((f) => f.key);
+      if (groupKeys.length === 0) return;
+      setSelectedPrintFields((prev) => {
+        const hasCurrent = Object.prototype.hasOwnProperty.call(prev, templateId);
+        const current = resolveEffectivePrintFieldKeys({
+          fields: journalPrintableFields,
+          selectedKeys: prev[templateId] || [],
+          hasExplicitSelection: hasCurrent,
+        });
+        const allSelected = groupKeys.every((key) => current.includes(key));
+        const next = allSelected
+          ? current.filter((key) => !groupKeys.includes(key))
+          : Array.from(new Set([...current, ...groupKeys]));
+        return { ...prev, [templateId]: next };
+      });
+    },
+    [journalPrintableFields],
+  );
+  const handleMoveJournalPrintField = useCallback(
+    (templateId: string, fieldKey: string, direction: 'up' | 'down') => {
+      setSelectedPrintFields((prev) => {
+        const hasCurrent = Object.prototype.hasOwnProperty.call(prev, templateId);
+        const current = resolveEffectivePrintFieldKeys({
+          fields: journalPrintableFields,
+          selectedKeys: prev[templateId] || [],
+          hasExplicitSelection: hasCurrent,
+        });
+        const index = current.indexOf(fieldKey);
+        const target = direction === 'up' ? index - 1 : index + 1;
+        if (index < 0 || target < 0 || target >= current.length) return prev;
+        const next = [...current];
+        const tmp = next[index];
+        next[index] = next[target];
+        next[target] = tmp;
+        return { ...prev, [templateId]: next };
+      });
+    },
+    [journalPrintableFields],
+  );
+  const handleSaveJournalPrintFields = useCallback(
+    async (): Promise<boolean> => {
+      const templateId = 'journal_voucher';
+      const hasCurrent = Object.prototype.hasOwnProperty.call(selectedPrintFields, templateId);
+      const keysToSave = resolveEffectivePrintFieldKeys({
+        fields: journalPrintableFields,
+        selectedKeys: selectedPrintFields[templateId] || [],
+        hasExplicitSelection: hasCurrent,
+      });
+      setSavingPrintFields(true);
+      try {
+        savePrintFieldPreference({
+          scope: 'record',
+          userId: printUserId,
+          orgId: printOrgId,
+          moduleId: 'journal_entries',
+          templateId,
+          selectedFieldKeys: keysToSave,
+        });
+        if (printOrgId) {
+          const ok = await savePrintFieldPreferenceToServer({
+            orgId: printOrgId,
+            moduleId: 'journal_entries',
+            templateId,
+            scope: 'record',
+            selectedFieldKeys: keysToSave,
+          });
+          if (!ok) {
+            throw new Error('save_failed');
+          }
+        }
+        message.success('فیلدهای قابل چاپ سند ذخیره شد.');
+        return true;
+      } catch {
+        message.error('ذخیره تنظیمات فیلدهای قابل چاپ ناموفق بود.');
+        return false;
+      } finally {
+        setSavingPrintFields(false);
+      }
+    },
+    [journalPrintableFields, message, printOrgId, printUserId, selectedPrintFields],
+  );
+
   const journalPrintPreviewSourceVersion = useMemo(
-    () => createPrintPreviewFingerprint({ entry, lines, tableRows }),
-    [entry, lines, tableRows],
+    () => createPrintPreviewFingerprint({ entry, lines, tableRows, activeJournalPrintKeys }),
+    [activeJournalPrintKeys, entry, lines, tableRows],
   );
 
   const nextLineNo = useMemo(() => {
@@ -1514,45 +1741,146 @@ const JournalEntryShowPage: React.FC = () => {
   }
 
   const diff = parseNum(entry.total_debit) - parseNum(entry.total_credit);
-  const renderJournalPrintCard = () => (
-    <div className="print-card" style={{ width: '148mm', minHeight: '210mm', padding: '10mm' }}>
-      <div className="font-bold mb-2">سند حسابداری</div>
-      <div className="text-xs mb-2">
-        شماره: <span className="persian-number">{toPersianNumber(entry.entry_no || '-')}</span> | تاریخ:{' '}
-        <span className="persian-number">{toPersianNumber(safeJalaliFormat(entry.entry_date, 'YYYY/MM/DD') || '-')}</span>
+  const renderJournalPrintCard = () => {
+    const activeSet = new Set(activeJournalPrintKeys);
+    const fiscalYearTitle = years.find((y) => y.id === entry.fiscal_year_id)?.title || '-';
+    const headerItemsMap: Record<string, { label: string; value: React.ReactNode }> = {
+      'record.entry_no': {
+        label: 'شماره سند',
+        value: <span className="persian-number">{toPersianNumber(entry.entry_no || '-')}</span>,
+      },
+      'record.entry_date': {
+        label: 'تاریخ سند',
+        value: <span className="persian-number">{toPersianNumber(safeJalaliFormat(entry.entry_date, 'YYYY/MM/DD') || '-')}</span>,
+      },
+      'record.fiscal_year_id': {
+        label: 'سال مالی',
+        value: fiscalYearTitle,
+      },
+      'record.status': {
+        label: 'وضعیت',
+        value: journalStatusLabelMap[String(entry.status || '')] || entry.status || '-',
+      },
+      'record.description': {
+        label: 'شرح سند',
+        value: entry.description || '-',
+      },
+    };
+    const headerOrder = [
+      ...activeJournalPrintKeys.filter((k) => Boolean(headerItemsMap[k])),
+    ];
+    const lineColDefs: Record<string, { title: string; render: (line: Line) => React.ReactNode; className?: string }> = {
+      'line.line_no': {
+        title: 'ردیف',
+        className: 'persian-number',
+        render: (line) => toPersianNumber(line.line_no),
+      },
+      'line.account': {
+        title: 'حساب',
+        render: (line) => `[${toPersianNumber(line?.chart_of_accounts?.code || '-')}] ${line?.chart_of_accounts?.name || '-'}`,
+      },
+      'line.description': {
+        title: 'شرح',
+        render: (line) => line.description || '-',
+      },
+      'line.cost_center': {
+        title: 'مرکز هزینه',
+        render: (line) => line?.cost_centers?.name || '-',
+      },
+      'line.party': {
+        title: 'طرف حساب',
+        render: (line) => {
+          const pType = normalizePartyType(line.party_type);
+          const pId = String(line.party_id || '').trim();
+          if (!pType || !pId) return '-';
+          if (pType === 'customer') return customerLabelMap.get(pId) || '-';
+          if (pType === 'supplier') return supplierLabelMap.get(pId) || '-';
+          if (pType === 'employee') return employeeLabelMap.get(pId) || '-';
+          return '-';
+        },
+      },
+      'line.debit': {
+        title: 'بدهکار',
+        className: 'persian-number',
+        render: (line) => formatPersianPrice(line.debit || 0),
+      },
+      'line.credit': {
+        title: 'بستانکار',
+        className: 'persian-number',
+        render: (line) => formatPersianPrice(line.credit || 0),
+      },
+    };
+    const activeLineCols = activeJournalPrintKeys
+      .filter((k) => Boolean(lineColDefs[k]))
+      .map((k) => ({ key: k, ...lineColDefs[k] }));
+    const showTotalDebit = activeSet.has('record.total_debit');
+    const showTotalCredit = activeSet.has('record.total_credit');
+
+    return (
+      <div className="print-card" style={{ width: '148mm', minHeight: '210mm', padding: '10mm' }}>
+        <div className="font-bold mb-2">سند حسابداری</div>
+        {headerOrder.length > 0 && (
+          <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 8 }} className="text-xs">
+            <tbody>
+              {Array.from({ length: Math.ceil(headerOrder.length / 2) }).map((_, rowIndex) => {
+                const pair = headerOrder.slice(rowIndex * 2, rowIndex * 2 + 2);
+                return (
+                  <tr key={rowIndex}>
+                    {pair.map((key) => {
+                      const item = headerItemsMap[key];
+                      const colSpan = pair.length === 1 ? 2 : 1;
+                      return (
+                        <td
+                          key={key}
+                          colSpan={colSpan}
+                          style={{ border: '1px solid #d1d5db', padding: '4px 6px', width: colSpan === 2 ? '100%' : '50%' }}
+                        >
+                          <span style={{ fontWeight: 700 }}>{item.label}: </span>
+                          {item.value}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+        {activeLineCols.length > 0 && (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+            <thead>
+              <tr>
+                {activeLineCols.map((col) => (
+                  <th key={col.key} style={{ border: '1px solid #d1d5db', padding: 4 }}>{col.title}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((line) => (
+                <tr key={line.id}>
+                  {activeLineCols.map((col) => (
+                    <td key={col.key} style={{ border: '1px solid #d1d5db', padding: 4 }} className={col.className}>
+                      {col.render(line)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {(showTotalDebit || showTotalCredit) && (
+          <div className="mt-2 flex flex-wrap gap-4 text-xs font-bold">
+            {showTotalDebit && (
+              <span className="persian-number">جمع بدهکار: {formatPersianPrice(entry.total_debit || 0)}</span>
+            )}
+            {showTotalCredit && (
+              <span className="persian-number">جمع بستانکار: {formatPersianPrice(entry.total_credit || 0)}</span>
+            )}
+          </div>
+        )}
       </div>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead>
-          <tr>
-            <th style={{ border: '1px solid #d1d5db', padding: 4 }}>ردیف</th>
-            <th style={{ border: '1px solid #d1d5db', padding: 4 }}>حساب</th>
-            <th style={{ border: '1px solid #d1d5db', padding: 4 }}>شرح</th>
-            <th style={{ border: '1px solid #d1d5db', padding: 4 }}>بدهکار</th>
-            <th style={{ border: '1px solid #d1d5db', padding: 4 }}>بستانکار</th>
-          </tr>
-        </thead>
-        <tbody>
-          {lines.map((line) => (
-            <tr key={line.id}>
-              <td style={{ border: '1px solid #d1d5db', padding: 4 }} className="persian-number">
-                {toPersianNumber(line.line_no)}
-              </td>
-              <td style={{ border: '1px solid #d1d5db', padding: 4 }}>
-                {`[${toPersianNumber(line?.chart_of_accounts?.code || '-')}] ${line?.chart_of_accounts?.name || '-'}`}
-              </td>
-              <td style={{ border: '1px solid #d1d5db', padding: 4 }}>{line.description || '-'}</td>
-              <td style={{ border: '1px solid #d1d5db', padding: 4 }} className="persian-number">
-                {formatPersianPrice(line.debit || 0)}
-              </td>
-              <td style={{ border: '1px solid #d1d5db', padding: 4 }} className="persian-number">
-                {formatPersianPrice(line.credit || 0)}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+    );
+  };
   const getJournalPrintSourceHtml = () => renderToStaticMarkup(
     React.createElement(React.Fragment, null, renderJournalPrintCard())
   );
@@ -1803,6 +2131,14 @@ const JournalEntryShowPage: React.FC = () => {
         renderPrintCard={renderJournalPrintCard}
         printMode={false}
         previewMeta={{ paperSize: 'A5', orientation: 'portrait' }}
+        allowFieldSelectionTab={true}
+        printableFields={journalPrintableFields}
+        selectedPrintFields={selectedPrintFields}
+        onTogglePrintField={handleToggleJournalPrintField}
+        onTogglePrintFieldGroup={handleToggleJournalPrintGroup}
+        onMovePrintField={handleMoveJournalPrintField}
+        onSavePrintFields={handleSaveJournalPrintFields}
+        savingPrintFields={savingPrintFields}
       />
 
       <Modal

@@ -1,0 +1,1 @@
+const r="۰۱۲۳۴۵۶۷۸۹",c="٠١٢٣٤٥٦٧٨٩",g=/[\u200b-\u200f\u202a-\u202e\uFEFF]/g,n=e=>String(e??"").replace(/[۰-۹]/g,a=>String(r.indexOf(a))).replace(/[٠-٩]/g,a=>String(c.indexOf(a))),t=e=>n(e).replace(g," ").replace(/[ـ]+/g,"").replace(/ك/g,"ک").replace(/[يى]/g,"ی").replace(/ۀ/g,"ه").replace(/ة/g,"ه").trim().toLocaleLowerCase("fa").replace(/\s+/g," ");export{n as d,t as n};

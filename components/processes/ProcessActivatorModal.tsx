@@ -24,6 +24,7 @@ import WorkflowConditionsGroup from '../workflows/WorkflowConditionsGroup';
 import WorkflowIntervalScheduleFields from '../workflows/WorkflowIntervalScheduleFields';
 import { loadProcessTemplateStages } from '../../utils/processTemplateStages';
 import { getProcessStageNodeKey } from '../../utils/processGraph';
+import { getLinkedConditionTableSources, hasIncompleteTableCondition } from '../../utils/conditionTableFields';
 
 type OptionList = Array<{ label: string; value: string }>;
 
@@ -94,6 +95,7 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
   const triggerType = Form.useWatch('trigger_type', form);
   const isActive = Form.useWatch('is_active', form);
   const processExecutionAction = Form.useWatch('process_execution_action', form);
+  const conditionTables = useMemo(() => getLinkedConditionTableSources(targetModuleIds), [targetModuleIds]);
 
   const editableConditionsAll = useMemo(
     () => conditionsAll.filter((condition) => condition.id !== SOURCE_NODE_CONDITION_ID),
@@ -204,6 +206,10 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
+      if (hasIncompleteTableCondition([...editableConditionsAll, ...conditionsAny], conditionTables)) {
+        message.error('برای هر شرط جدول، دست‌کم یک شرط ردیف کامل کنید.');
+        return;
+      }
       setSubmitting(true);
       const { data: authData } = await supabase.auth.getUser();
       const userId = authData?.user?.id || null;
@@ -385,6 +391,7 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
               value={editableConditionsAll}
               onChange={setConditionsAll}
               fields={conditionFields}
+              tableSources={conditionTables}
               dynamicOptions={dynamicOptions}
               relationOptions={relationOptions}
               overlayZIndexBase={10150}
@@ -396,6 +403,7 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
               value={conditionsAny}
               onChange={setConditionsAny}
               fields={conditionFields}
+              tableSources={conditionTables}
               dynamicOptions={dynamicOptions}
               relationOptions={relationOptions}
               overlayZIndexBase={10150}

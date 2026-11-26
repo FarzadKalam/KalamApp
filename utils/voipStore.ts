@@ -474,6 +474,13 @@ export const connectVoipWebPhone = async (options?: { force?: boolean; route?: '
   return connectPromise;
 };
 
+const formatVoipMicrophoneError = (error: unknown) => {
+  if (error instanceof Error && ['NotAllowedError', 'PermissionDeniedError'].includes(error.name)) {
+    return new Error('مرورگر اجازهٔ استفاده از میکروفون را نداده است. دسترسی میکروفون این سایت را در مرورگر و تنظیمات دستگاه بررسی کنید.');
+  }
+  return error;
+};
+
 export const dialWebPhone = async (
   rawTarget: string,
   context?: { moduleId?: string | null; recordId?: string | null; title?: string | null;avatarUrl?:string|null },
@@ -516,7 +523,7 @@ export const dialWebPhone = async (
     },
     onAccept:()=>stopVoipRingbackTone(),
     onReject:()=>stopVoipRingbackTone(),
-  }});
+  }}).catch((error: unknown) => { throw formatVoipMicrophoneError(error); });
   return true;
 };
 
@@ -526,7 +533,7 @@ export const answerWebPhoneCall = async () => {
     sessionDescriptionHandlerOptions: {
       constraints: { audio: true, video: false },
     },
-  });
+  }).catch((error: unknown) => { throw formatVoipMicrophoneError(error); });
 };
 
 export const rejectOrHangupWebPhoneCall = async () => {

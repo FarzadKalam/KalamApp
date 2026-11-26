@@ -5,6 +5,7 @@ export const WORKFLOW_MESSAGE_CHANNELS = [
   'bot_private',
   'instagram',
   'email',
+  'ticket',
 ] as const;
 
 export type WorkflowMessageChannel = (typeof WORKFLOW_MESSAGE_CHANNELS)[number];
@@ -16,6 +17,7 @@ export const WORKFLOW_MESSAGE_CHANNEL_LABELS: Record<WorkflowMessageChannel, str
   bot_private: 'پی‌وی بات',
   instagram: 'دایرکت اینستاگرام',
   email: 'ایمیل',
+  ticket: 'ارسال تیکت',
 };
 
 export const WORKFLOW_MESSAGE_CHANNEL_TEXT_FIELDS: Record<WorkflowMessageChannel, string> = {
@@ -25,6 +27,7 @@ export const WORKFLOW_MESSAGE_CHANNEL_TEXT_FIELDS: Record<WorkflowMessageChannel
   bot_private: 'message_bot_private',
   instagram: 'message_instagram',
   email: 'message_email',
+  ticket: 'message_ticket',
 };
 
 const LEGACY_CHANNEL_BY_ACTION_TYPE: Record<string, WorkflowMessageChannel> = {
@@ -72,6 +75,7 @@ export const getWorkflowMessageTitleField = (action: { type?: unknown } | null |
 export const buildDefaultWorkflowMessageConfig = () => ({
   message_channels: [] as WorkflowMessageChannel[],
   message_title: '',
+  notify_when_app_closed: false,
   recipient_fields: [] as string[],
   recipient_assignees: [] as string[],
   manual_numbers: [] as string[],

@@ -36,4 +36,41 @@ describe('shared AI composer submission', () => {
     fireEvent.click(screen.getByRole('button',{name:'ارسال پیام'}));
     expect(submit).toHaveBeenCalledTimes(1);
   });
+  it('supports slash suggestions without breaking normal typing', () => {
+    const onChange = vi.fn();
+    const onSelectSuggestion = vi.fn();
+    const { rerender } = render(
+      <AiMessageComposer
+        value=""
+        onChange={onChange}
+        onSubmit={vi.fn()}
+        tools={null}
+        model={null}
+        suggestions={[
+          { label: 'جستجو در اینترنت', value: 'cap:web_search', trigger: '/', keywords: 'web' },
+          { label: 'تحلیلگر فروش', value: 'agent:sales_leads', trigger: '@', keywords: 'sales' },
+        ]}
+        onSelectSuggestion={onSelectSuggestion}
+      />,
+    );
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: '/' } });
+    expect(onChange).toHaveBeenCalledWith('/');
+    rerender(
+      <AiMessageComposer
+        value="/"
+        onChange={onChange}
+        onSubmit={vi.fn()}
+        tools={null}
+        model={null}
+        suggestions={[
+          { label: 'جستجو در اینترنت', value: 'cap:web_search', trigger: '/', keywords: 'web' },
+          { label: 'تحلیلگر فروش', value: 'agent:sales_leads', trigger: '@', keywords: 'sales' },
+        ]}
+        onSelectSuggestion={onSelectSuggestion}
+      />,
+    );
+    expect(screen.getByText('جستجو در اینترنت')).toBeInTheDocument();
+    expect(screen.queryByText('تحلیلگر فروش')).not.toBeInTheDocument();
+  });
 });

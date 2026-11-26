@@ -16,6 +16,7 @@ export const WORKFLOW_ACTION_CONTRACTS: Record<string, WorkflowActionContract> =
       'message_bot_private',
       'message_instagram',
       'message_email',
+      'message_ticket',
     ],
   },
   send_note: { templateFields: ['note_text'] },

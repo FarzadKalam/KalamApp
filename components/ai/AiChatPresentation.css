@@ -53,7 +53,20 @@
 .ai-message-renderer a{color:rgb(var(--brand-700-rgb))}
 .dark .ai-message-renderer a{color:rgb(var(--brand-200-rgb))}
 .ai-chat-stream-cursor{display:inline-block;width:5px;height:15px;border-radius:3px;background:currentColor;animation:ai-breathe 1.2s ease-in-out infinite}
+.ai-think-shimmer{background:linear-gradient(90deg,var(--ai-chat-muted) 20%,var(--ai-chat-text) 50%,var(--ai-chat-muted) 80%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:ai-shimmer 2s linear infinite}
+.ai-think-box .ant-thought-chain-item-title,.ai-think-streaming .ant-thought-chain-item-title{font-size:12px!important;line-height:1.6!important}
+.ai-think-box .ant-thought-chain-item-desc,.ai-think-streaming .ant-thought-chain-item-desc{font-size:11px!important;color:var(--ai-chat-muted)!important}
+.ai-welcome-container .ant-welcome{padding:8px 4px!important}
+.ai-welcome-container .ant-prompts-item:hover{border-color:rgb(var(--brand-500-rgb))!important}
+.ai-xmarkdown-body{font-size:14px;line-height:1.9;overflow-wrap:anywhere}
+.ai-xmarkdown-body p{margin:0 0 8px}
+.ai-xmarkdown-body p:last-child{margin-bottom:0}
+.ai-xmarkdown-body ul,.ai-xmarkdown-body ol{margin:4px 0 8px;padding-inline-start:20px}
+.ai-xmarkdown-body ul{list-style:disc}
+.ai-xmarkdown-body ol{list-style:decimal}
+.ai-xmarkdown-body li{margin-bottom:4px}
+@keyframes ai-shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
 @keyframes ai-breathe{0%,100%{opacity:.35}50%{opacity:1}}
 @keyframes ai-travel{0%{transform:translateX(290%)}100%{transform:translateX(-290%)}}
 @media(max-width:767px){.ai-chat-message{font-size:14px}.ai-generation-card{padding:12px}.ai-chat-icon.ant-btn{width:44px;min-width:44px;height:44px}.ai-generation-timer{font-size:11px}.ai-chat-meta .ant-btn{min-width:44px;height:44px!important}}
-@media(prefers-reduced-motion:reduce){.ai-activity-dot,.ai-generation-preview>span,.ai-chat-stream-cursor,.ai-generation-track:after{animation:none}}
+@media(prefers-reduced-motion:reduce){.ai-activity-dot,.ai-generation-preview>span,.ai-chat-stream-cursor,.ai-generation-track:after,.ai-think-shimmer{animation:none;color:var(--ai-chat-text)}}

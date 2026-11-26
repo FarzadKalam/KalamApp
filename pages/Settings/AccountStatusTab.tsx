@@ -17,12 +17,16 @@ import TazeSystemAttribution from '../../components/common/TazeSystemAttribution
 import PriceAmountInput from '../../components/PriceAmountInput';
 import { CheckoutDiscounts, TERM_OPTIONS, planCheckoutTotal } from '../../utils/saasCheckoutPricing';
 import { useCurrencyConfig } from '../../utils/currency';
+import { getSelectedOrganizationId } from '../../utils/organizationContext';
 
 const { Text, Title } = Typography;
 
 const titleForHistory = (item: any) => item?.title || 'تغییر حساب';
 const invokeSaasPayment = async (body: Record<string, unknown>) => {
-  const { data, error } = await supabase.functions.invoke('payment-gateway', { body });
+  const orgId = getSelectedOrganizationId();
+  const { data, error } = await supabase.functions.invoke('payment-gateway', {
+    body, ...(orgId ? { headers: { 'x-client-info': `kalamapp; org=${orgId}` } } : {}),
+  });
   if (error) {
     let payload: { message?: string } | null = null;
     try { payload = await error.context?.json(); } catch { /* پاسخ غیر JSON */ }
@@ -381,16 +385,16 @@ const AccountStatusTab: React.FC = () => {
       {pendingOrders.length > 0 && <Card className="rounded-2xl border-indigo-300" title="سفارش‌های آماده پرداخت">
         <div className="space-y-3">
           {pendingOrders.map((order: any) => <div key={String(order.id)} className="flex flex-col gap-3 rounded-xl border border-slate-200 p-4 md:flex-row md:items-center md:justify-between dark:border-slate-700">
-            <div><Text strong>سفارش مدیریت حساب</Text><div className="mt-1 text-xs text-slate-500">{order.created_at ? new Date(order.created_at).toLocaleDateString('fa-IR') : '—'} · {formatIrt(order.total_irt)}</div></div>
-            <Space wrap><Button onClick={() => openOrder(order)}>مشاهده و ویرایش</Button><Button type="primary" icon={<CreditCardOutlined />} loading={checkoutLoading} onClick={() => openOrder(order)}>بررسی و پرداخت</Button></Space>
+            <div><Text strong>{order.sales_invoice ? order.title : 'سفارش مدیریت حساب'}</Text><div className="mt-1 text-xs text-slate-500">{order.created_at ? new Date(order.created_at).toLocaleDateString('fa-IR') : '—'} · {formatIrt(order.total_irt)}</div></div>
+            <Space wrap><Button onClick={() => openOrder(order)}>{order.sales_invoice ? 'مشاهده اقلام' : 'مشاهده و ویرایش'}</Button><Button type="primary" icon={<CreditCardOutlined />} loading={checkoutLoading} onClick={() => openOrder(order)}>بررسی و پرداخت</Button></Space>
           </div>)}
         </div>
       </Card>}
 
-      <Modal open={!!selectedOrder} title="جزئیات سفارش آماده پرداخت" onCancel={() => { if (!orderActionLoading) setSelectedOrder(null); }} footer={[
+      <Modal open={!!selectedOrder} title={selectedOrder?.sales_invoice ? 'جزئیات فاکتور ارسالی' : 'جزئیات سفارش آماده پرداخت'} onCancel={() => { if (!orderActionLoading) setSelectedOrder(null); }} footer={[
         <Button key="close" onClick={() => setSelectedOrder(null)}>بستن</Button>,
-        <Button key="delete" danger loading={orderActionLoading} onClick={() => Modal.confirm({ title: 'این سفارش حذف شود؟', content: 'فقط سفارش پرداخت‌نشده حذف می‌شود.', okText: 'حذف سفارش', okButtonProps: { danger: true }, cancelText: 'انصراف', onOk: () => void deleteOrder() })}>حذف سفارش</Button>,
-        editingOrder ? <Button key="save" type="primary" loading={orderActionLoading} disabled={orderItems.length === 0} onClick={() => void saveOrder()}>ذخیره تغییرات</Button>
+        selectedOrder?.sales_invoice ? null : <Button key="delete" danger loading={orderActionLoading} onClick={() => Modal.confirm({ title: 'این سفارش حذف شود؟', content: 'فقط سفارش پرداخت‌نشده حذف می‌شود.', okText: 'حذف سفارش', okButtonProps: { danger: true }, cancelText: 'انصراف', onOk: () => void deleteOrder() })}>حذف سفارش</Button>,
+        selectedOrder?.sales_invoice ? null : editingOrder ? <Button key="save" type="primary" loading={orderActionLoading} disabled={orderItems.length === 0} onClick={() => void saveOrder()}>ذخیره تغییرات</Button>
           : <Button key="edit" onClick={() => setEditingOrder(true)}>ویرایش</Button>,
         !editingOrder ? <Button key="pay" type="primary" icon={<CreditCardOutlined />} loading={checkoutLoading} onClick={() => void checkoutPendingOrder(String(selectedOrder?.id || ''))}>پرداخت این سفارش</Button> : null,
       ]}>

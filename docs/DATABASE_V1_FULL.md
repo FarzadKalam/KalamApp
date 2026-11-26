@@ -70,12 +70,17 @@ This migration creates/completes all current module tables and runtime support t
 
 ## Apply order
 
+> **نکته مهم معماری (به‌روزرسانی نوامبر ۲۰۲۶):**  
+> این سند و فایل `database_v1_full.sql` مبنای فازهای اولیه (تا اردیبهشت ۱۴۰۵) بوده‌اند. با گسترش ماژول‌ها و فرآیندها، مایگریشن‌ها تا فاز ۶۱۴ (`database_v1_phase614_woo_invoice_product_sales.sql`) و ۲۹۸ جدول فعال گسترش یافته‌اند.  
+> برای نصب‌های جدید و لوکال (Offline Installer) و همچنین مرجع یکپارچه برای ایجنت‌های توسعه، اسکریپت تجمیع‌شدهٔ دیتابیس تمیز (`database_v1_bootstrap_clean.sql` / `sql/bootstrap.sql`) به‌صورت یکجا از خروجی ساختار استاندارد پروداکشن مبنا قرار می‌گیرد تا نیازی به بازپخش ترتیبی ۶۰۰+ فایل مایگریشن نباشد.  
+> برای تغییرات آتی دیتابیس همچنان از قانون فاز جدید (`database_v1_phase###_*.sql`) با ثبت افزایشی استفاده می‌شود.
+
 For a fresh database:
 
-1. Run `database_v1_full.sql` only.
+1. Run `database_v1_full.sql` only (legacy baseline) or the consolidated bootstrap script.
 
 For an existing database:
 
 1. Take backup.
-2. Run `database_v1_full.sql`.
+2. Run migrations in phase order.
 3. Optionally validate `NOT VALID` constraints after data cleanup.

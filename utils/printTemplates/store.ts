@@ -141,6 +141,9 @@ const toRecord = (value: unknown): Record<string, any> => {
 
 const getCompactPrintColumns = (columns: any[] = []) => {
   const filtered = columns.filter((column) => {
+    if (column?.isActive === false || column?.disabled === true || column?.printable === false) {
+      return false;
+    }
     const key = String(column?.key || "").trim();
     const title = String(column?.title || "").trim();
     if (!key || !title) return false;
@@ -193,9 +196,10 @@ const getModuleBlockTitleMap = (module: any) =>
 const getFieldGroupLabel = (module: any, field: any) => {
   const blockId = String(field?.blockId || "").trim();
   const isBlockField =
-    String(field?.location || "")
+    Boolean(blockId)
+    && String(field?.location || "")
       .trim()
-      .toLowerCase() === "block" && blockId;
+      .toLowerCase() !== "header";
   if (!isBlockField) return "فیلدهای عمومی";
   const blockTitle = getModuleBlockTitleMap(module).get(blockId) || blockId;
   return `بخش: ${blockTitle}`;
@@ -245,7 +249,7 @@ const buildCompactFieldsTemplateForCopy = (
       if (isLongTextType(field?.type)) {
         longTextRows.push(
           `
-<div style="margin-top:8px;">
+<div data-print-optional-field="record.${key}" style="margin-top:8px;">
   <div style="margin:0 0 3px 0; font-size:10px; color:#64748b;">${field.labels?.fa || key}</div>
   <div style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; background:#fff; ${getLongTextPrintStyle(11)}">${token}</div>
 </div>`.trim(),
@@ -434,7 +438,7 @@ const buildOfficialLetterHeaderTemplate = () =>
         </td>
         <td style="width:36%; padding:2px 2px 10px 2px; vertical-align:top; direction:rtl; text-align:center; line-height:1.9;">
           <div style="font-weight:800; font-size:13px; margin-bottom:2px;">بسمه تعالی</div>
-          <img src="{{company.logo_url}}" alt="لوگو" style="display:block; margin:0 auto; width:40px; height:40px; max-width:40px; max-height:40px; object-fit:contain;" />
+          <img data-print-optional-field="company.logo_url" src="{{company.logo_url}}" alt="لوگو" style="display:block; margin:0 auto; width:40px; height:40px; max-width:40px; max-height:40px; object-fit:contain;" />
         </td>
         <td style="width:32%; padding:2px 2px 10px 2px; vertical-align:top; direction:rtl; text-align:right; line-height:1.9;">
           <div style="font-weight:900; font-size:14px; color:#111827; overflow-wrap:anywhere;">{{company.company_full_name}}</div>
@@ -456,7 +460,7 @@ export const buildDefaultHeaderTemplateForModule = (moduleId: string) => {
     <tr>
       <td style="width:34%; vertical-align:top; text-align:right; border:none; padding:10px; background:rgba(var(--brand-50-rgb),0.42); overflow-wrap:anywhere;">
         <div style="display:flex; align-items:flex-start; gap:8px;">
-          <img src="{{company.logo_url}}" alt="لوگو" style="display:block; width:48px; height:48px; max-width:48px; max-height:48px; object-fit:contain;" />
+          <img data-print-optional-field="company.logo_url" src="{{company.logo_url}}" alt="لوگو" style="display:block; width:48px; height:48px; max-width:48px; max-height:48px; object-fit:contain;" />
           <div style="min-width:0;">
             <div style="font-weight:700; font-size:13px; line-height:1.8; overflow-wrap:anywhere;">{{company.company_full_name}}</div>
             <div style="font-size:11px; color:#6b7280; line-height:1.8; overflow-wrap:anywhere;">{{company.trade_name}}</div>
@@ -522,7 +526,7 @@ const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
 `;
   }
 
-  if (blockId === "payments") {
+  if (blockId === "payments" && isInvoiceModule(moduleId)) {
     const paymentSummaryTitle = invoiceConfig.isSales
       ? "جمع دریافت‌شده"
       : "جمع پرداخت‌شده";
@@ -1059,6 +1063,12 @@ export const getPrintTemplateVariables = (
       group: "اطلاعات سازمان",
     },
     {
+      label: "نام انگلیسی سازمان",
+      value: "company.company_name_en",
+      kind: "field",
+      group: "اطلاعات سازمان",
+    },
+    {
       label: "لوگوی سازمان",
       value: "company.logo_url",
       kind: "field",
@@ -1097,6 +1107,12 @@ export const getPrintTemplateVariables = (
     {
       label: "تلفن سازمان",
       value: "company.phone",
+      kind: "field",
+      group: "اطلاعات سازمان",
+    },
+    {
+      label: "ایمیل سازمان",
+      value: "company.email",
       kind: "field",
       group: "اطلاعات سازمان",
     },
@@ -1362,7 +1378,7 @@ export const buildSystemTemplateFieldOptionsForModule = (
   module: any,
 ): SystemTemplateFieldOption[] => {
   if (!module) return [];
-  const merged = buildModulePrintFieldCatalog({ moduleConfig: module }).map((field) => ({
+  const merged: SystemTemplateFieldOption[] = buildModulePrintFieldCatalog({ moduleConfig: module }).map((field) => ({
     key: field.key,
     label: field.label,
     group: field.group,
@@ -1371,6 +1387,28 @@ export const buildSystemTemplateFieldOptionsForModule = (
     parentKey: field.parentKey,
     columnKey: field.parentKey ? field.key.split('.').slice(2).join('.') : undefined,
   }));
+  if (
+    String(module?.id || '').trim() === 'payroll_slips'
+    && !merged.some((item) => item.key === 'record.employee_job_title')
+  ) {
+    const employeeInfoBlock = (Array.isArray(module?.blocks) ? module.blocks : []).find(
+      (b: any) => String(b?.id || '').trim() === 'employee_identity'
+    );
+    if (!employeeInfoBlock || (employeeInfoBlock.isActive !== false && employeeInfoBlock.printable !== false)) {
+      const insertAt = merged.findIndex((item) => item.key === 'record.employee_national_code');
+      const jobTitleOption: SystemTemplateFieldOption = {
+        key: 'record.employee_job_title',
+        label: 'سمت / عنوان شغلی',
+        group: `بخش: ${String(employeeInfoBlock?.titles?.fa || 'مشخصات کارمند')}`,
+        kind: 'record',
+      };
+      if (insertAt >= 0) {
+        merged.splice(insertAt, 0, jobTitleOption);
+      } else {
+        merged.push(jobTitleOption);
+      }
+    }
+  }
   const seen = new Set<string>();
   return merged.filter((item) => {
     if (seen.has(item.key)) return false;
@@ -1459,7 +1497,7 @@ const buildCompactA6DefaultTemplate = (
   <tbody>
     <tr>
       <td style="width:24%; border:none; padding:6px; background:rgba(var(--brand-50-rgb),0.45); text-align:center; vertical-align:middle;">
-        <img src="{{company.logo_url}}" alt="لوگو" style="max-width:24px; max-height:24px; object-fit:contain;" />
+        <img data-print-optional-field="company.logo_url" src="{{company.logo_url}}" alt="لوگو" style="max-width:24px; max-height:24px; object-fit:contain;" />
       </td>
       <td style="width:76%; border:none; padding:6px; background:rgba(var(--brand-500-rgb),0.08);">
         <div style="font-size:10px; color:#64748b; margin-bottom:2px;">${singularTitle}</div>
@@ -1517,7 +1555,7 @@ const buildCompactA5DefaultTemplate = (
   <tbody>
     <tr>
       <td style="width:18%; border:none; padding:6px; background:rgba(var(--brand-50-rgb),0.45); text-align:center; vertical-align:middle;">
-        <img src="{{company.logo_url}}" alt="لوگو" style="max-width:28px; max-height:28px; object-fit:contain;" />
+        <img data-print-optional-field="company.logo_url" src="{{company.logo_url}}" alt="لوگو" style="max-width:28px; max-height:28px; object-fit:contain;" />
       </td>
       <td style="width:82%; border:none; padding:6px 8px; background:rgba(var(--brand-500-rgb),0.08);">
         <div style="font-size:10px; color:#64748b; margin-bottom:2px;">${singularTitle}</div>
@@ -1575,7 +1613,7 @@ const buildCompactA4DefaultTemplate = (
   <tbody>
     <tr>
       <td style="width:14%; border:none; padding:7px; background:rgba(var(--brand-50-rgb),0.45); text-align:center; vertical-align:middle;">
-        <img src="{{company.logo_url}}" alt="لوگو" style="max-width:34px; max-height:34px; object-fit:contain;" />
+        <img data-print-optional-field="company.logo_url" src="{{company.logo_url}}" alt="لوگو" style="max-width:34px; max-height:34px; object-fit:contain;" />
       </td>
       <td style="width:86%; border:none; padding:7px 10px; background:rgba(var(--brand-500-rgb),0.08);">
         <div style="font-size:11px; color:#64748b; margin-bottom:2px;">${singularTitle}</div>
@@ -1635,7 +1673,7 @@ const buildListA4DefaultTemplate = (
   <tbody>
     <tr>
       <td style="width:16%; border:none; padding:8px; background:rgba(var(--brand-50-rgb),0.45); text-align:center; vertical-align:middle;">
-        <img src="{{company.logo_url}}" alt="لوگو" style="max-width:34px; max-height:34px; object-fit:contain;" />
+        <img data-print-optional-field="company.logo_url" src="{{company.logo_url}}" alt="لوگو" style="max-width:34px; max-height:34px; object-fit:contain;" />
       </td>
       <td style="width:54%; border:none; padding:8px 10px; background:rgba(var(--brand-500-rgb),0.08);">
         <div style="font-size:15px; font-weight:800; color:rgb(var(--brand-500-rgb));">{{system.list_title}}</div>
@@ -1932,7 +1970,7 @@ const buildListCatalogA4PortraitDefaultTemplate = (
   <tbody>
     <tr>
       <td style="width:16%; border:none; padding:8px; background:rgba(var(--brand-50-rgb),0.45); text-align:center; vertical-align:middle;">
-        <img src="{{company.logo_url}}" alt="لوگو" style="max-width:34px; max-height:34px; object-fit:contain;" />
+        <img data-print-optional-field="company.logo_url" src="{{company.logo_url}}" alt="لوگو" style="max-width:34px; max-height:34px; object-fit:contain;" />
       </td>
       <td style="width:54%; border:none; padding:8px 10px; background:rgba(var(--brand-500-rgb),0.08);">
         <div style="font-size:15px; font-weight:800; color:rgb(var(--brand-500-rgb));">{{system.list_title}}</div>
@@ -1994,7 +2032,7 @@ const buildSecretariatOfficialTemplate = (
     <div><span style="font-weight:800;">از:</span> {{system.letter_sender_display}}</div>
     <div><span style="font-weight:800;">به:</span> {{system.letter_recipient_display}}</div>
   </div>
-  <div style="min-height:470px; text-align:right; padding:0 2px; ${getLongTextPrintStyle(13)}">{{record.body}}</div>
+  <div data-print-optional-field="record.body" style="min-height:470px; text-align:right; padding:0 2px; ${getLongTextPrintStyle(13)}">{{record.body}}</div>
 </div>
 `.trim(),
   footerHtml: `
@@ -2033,7 +2071,7 @@ const buildDeliveryFormPrintTemplate = (now: string): StoredPrintTemplate => ({
   <tbody>
     <tr>
       <td style="width:18%; border:none; padding:8px; background:rgba(var(--brand-50-rgb),0.42); text-align:center; vertical-align:middle;">
-        <img src="{{company.logo_url}}" alt="لوگو" style="max-width:42px; max-height:42px; object-fit:contain;" />
+        <img data-print-optional-field="company.logo_url" src="{{company.logo_url}}" alt="لوگو" style="max-width:42px; max-height:42px; object-fit:contain;" />
       </td>
       <td style="width:50%; border:none; padding:8px 10px; background:rgba(var(--brand-500-rgb),0.08);">
         <div style="font-size:14px; font-weight:900; color:rgb(var(--brand-500-rgb));">فرم تحویل / رسید</div>
@@ -2071,7 +2109,7 @@ const buildDeliveryFormPrintTemplate = (now: string): StoredPrintTemplate => ({
     </tbody>
   </table>
   ${buildBlockSnippetTemplate("delivery_forms", "items")}
-  <div style="margin-top:8px; border:1px solid var(--table-border-color, #d1d5db); background:rgba(var(--brand-50-rgb),0.12); padding:8px;">
+  <div data-print-optional-field="record.notes" style="margin-top:8px; border:1px solid var(--table-border-color, #d1d5db); background:rgba(var(--brand-50-rgb),0.12); padding:8px;">
     <div style="font-weight:800; color:rgb(var(--brand-500-rgb)); margin-bottom:4px;">یادداشت‌ها و شرایط تحویل</div>
     <div style="${getLongTextPrintStyle(11)}">{{record.notes}}</div>
   </div>
@@ -2108,7 +2146,7 @@ const buildStockTransferVoucherPrintTemplate = (
   <tbody>
     <tr>
       <td style="width:16%; border:none; padding:8px; background:rgba(var(--brand-50-rgb),0.42); text-align:center; vertical-align:middle;">
-        <img src="{{company.logo_url}}" alt="لوگو" style="max-width:38px; max-height:38px; object-fit:contain;" />
+        <img data-print-optional-field="company.logo_url" src="{{company.logo_url}}" alt="لوگو" style="max-width:38px; max-height:38px; object-fit:contain;" />
       </td>
       <td style="width:52%; border:none; padding:8px 10px; background:rgba(var(--brand-500-rgb),0.08);">
         <div style="font-size:14px; font-weight:900; color:rgb(var(--brand-500-rgb));">حواله / تردد کالا</div>
@@ -2153,7 +2191,7 @@ const buildStockTransferVoucherPrintTemplate = (
       </tr>
     </tbody>
   </table>
-  <div style="border:1px solid var(--table-border-color, #d1d5db); padding:8px; background:rgba(var(--brand-50-rgb),0.12);">
+  <div data-print-optional-field="record.notes" style="border:1px solid var(--table-border-color, #d1d5db); padding:8px; background:rgba(var(--brand-50-rgb),0.12);">
     <div style="font-weight:800; color:rgb(var(--brand-500-rgb)); margin-bottom:4px;">یادداشت‌ها</div>
     <div style="${getLongTextPrintStyle(11)}">{{record.notes}}</div>
   </div>
@@ -2189,7 +2227,7 @@ const buildEmployeeContractPrintTemplate = (
   <tbody>
     <tr>
       <td style="width:18%; border:none; padding:8px; background:rgba(var(--brand-50-rgb),0.42); text-align:center; vertical-align:middle;">
-        <img src="{{company.logo_url}}" alt="لوگو" style="max-width:40px; max-height:40px; object-fit:contain;" />
+        <img data-print-optional-field="company.logo_url" src="{{company.logo_url}}" alt="لوگو" style="max-width:40px; max-height:40px; object-fit:contain;" />
       </td>
       <td style="width:52%; border:none; padding:8px 10px; background:rgba(var(--brand-500-rgb),0.08);">
         <div style="font-size:14px; font-weight:900; color:rgb(var(--brand-500-rgb));">قرارداد کارمند</div>
@@ -2228,7 +2266,7 @@ const buildEmployeeContractPrintTemplate = (
       </tr>
     </tbody>
   </table>
-  <div style="min-height:430px; padding:8px 4px; ${getLongTextPrintStyle(12)}">{{record.body}}</div>
+  <div data-print-optional-field="record.body" style="min-height:430px; padding:8px 4px; ${getLongTextPrintStyle(12)}">{{record.body}}</div>
 </div>
 `.trim(),
   footerHtml: buildDefaultFooterTemplateForModule("employee_contracts").trim(),
@@ -2271,7 +2309,7 @@ const buildPayrollSlipPrintTemplate = (
   <tbody>
     <tr>
       <td style="width:18%; border:none; padding:8px; background:rgba(var(--brand-50-rgb),0.42); text-align:center; vertical-align:middle;">
-        <img src="{{company.logo_url}}" alt="لوگو" style="max-width:40px; max-height:40px; object-fit:contain;" />
+        <img data-print-optional-field="company.logo_url" src="{{company.logo_url}}" alt="لوگو" style="max-width:40px; max-height:40px; object-fit:contain;" />
       </td>
       <td style="width:52%; border:none; padding:8px 10px; background:rgba(var(--brand-500-rgb),0.08);">
         <div style="font-size:14px; font-weight:900; color:rgb(var(--brand-500-rgb));">فیش حقوقی</div>
@@ -2297,50 +2335,52 @@ const buildPayrollSlipPrintTemplate = (
         <td style="width:32%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.status}}</td>
       </tr>
       <tr>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">سمت / عنوان شغلی</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.employee_job_title}}</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">کد ملی</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.employee_national_code}}</td>
+      </tr>
+      <tr>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">نام پدر</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.employee_father_name}}</td>
-      </tr>
-      <tr>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">وضعیت تاهل</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.employee_marital_status}}</td>
+      </tr>
+      <tr>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">وضعیت نظام وظیفه</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.employee_military_service_status}}</td>
-      </tr>
-      <tr>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">تعداد فرزند</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.employee_children_count}}</td>
+      </tr>
+      <tr>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">شماره بیمه</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.employee_insurance_number}}</td>
-      </tr>
-      <tr>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">حقوق پایه</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.base_salary}}</td>
+      </tr>
+      <tr>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">کارکرد</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.task_wage_total}}</td>
-      </tr>
-      <tr>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">مزایا</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.bonus_total}}</td>
+      </tr>
+      <tr>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">جمع حقوق و مزایا</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.earnings_total}}</td>
-      </tr>
-      <tr>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">جمع کسورات</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.deduction_total}}</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">ناخالص</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.earnings_total}}</td>
       </tr>
       <tr>
-        <td colspan="2" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">خالص پرداختی</td>
-        <td colspan="2" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:800;">{{record.gross_amount}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">ناخالص</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.earnings_total}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">خالص پرداختی</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:800;">{{record.gross_amount}}</td>
       </tr>
     </tbody>
   </table>
   ${buildBlockSnippetTemplate("payroll_slips", "lines")}
   <div style="margin-top:8px;">${buildBlockSnippetTemplate("payroll_slips", "payments")}</div>
-  <div style="margin-top:8px; border:1px solid var(--table-border-color, #d1d5db); background:rgba(var(--brand-50-rgb),0.12); padding:8px;">
+  <div data-print-optional-field="record.notes" style="margin-top:8px; border:1px solid var(--table-border-color, #d1d5db); background:rgba(var(--brand-50-rgb),0.12); padding:8px;">
     <div style="font-weight:800; color:rgb(var(--brand-500-rgb)); margin-bottom:4px;">توضیحات</div>
     <div style="${getLongTextPrintStyle(11)}">{{record.notes}}</div>
   </div>

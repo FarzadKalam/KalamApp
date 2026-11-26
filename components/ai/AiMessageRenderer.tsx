@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Button, Tooltip } from 'antd';
 import { CopyOutlined, ReloadOutlined } from '@ant-design/icons';
+import XMarkdown, { type ComponentProps } from '@ant-design/x-markdown';
 import AiActivityStatus from './AiActivityStatus';
+import AiSourcesCard, { type AiSourceItem } from './AiSourcesCard';
 import type { AiAgentActivity } from '../../supabase/functions/_shared/ai-agents';
 
 type AiMessageRendererProps = {
@@ -14,225 +16,30 @@ type AiMessageRendererProps = {
   onStop?: () => void;
   agentId?: string;
   activities?: AiAgentActivity[];
+  sources?: AiSourceItem[];
 };
 
-type Block =
-  | { type: 'paragraph'; text: string }
-  | { type: 'heading'; level: 1 | 2 | 3 | 4 | 5 | 6; text: string }
-  | { type: 'quote'; text: string }
-  | { type: 'ul'; items: string[] }
-  | { type: 'ol'; items: string[] }
-  | { type: 'code'; text: string; language?: string }
-  | { type: 'table'; headers: string[]; rows: string[][] }
-  | { type: 'hr' };
-
-const URL_RE = /https?:\/\/[^\s<>()]+/gi;
-
-const isSafeUrl = (value: string) => {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch {
-    return false;
+const extractNodeText = (node: React.ReactNode): string => {
+  if (node == null || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(extractNodeText).join('');
+  if (React.isValidElement<{ children?: React.ReactNode }>(node)) {
+    const typeName = typeof node.type === 'string' ? node.type : '';
+    const inner = extractNodeText(node.props?.children);
+    if (typeName === 'p' || typeName === 'div' || typeName === 'li') {
+      return `${inner}\n`;
+    }
+    return inner;
   }
+  return '';
 };
 
-const splitInline = (text: string) => {
-  const tokens: Array<{ type: 'text' | 'bold' | 'code' | 'link'; text: string }> = [];
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|https?:\/\/[^\s<>()]+)/gi;
-  let cursor = 0;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > cursor) tokens.push({ type: 'text', text: text.slice(cursor, match.index) });
-    const raw = match[0];
-    if (raw.startsWith('**') && raw.endsWith('**')) {
-      tokens.push({ type: 'bold', text: raw.slice(2, -2) });
-    } else if (raw.startsWith('`') && raw.endsWith('`')) {
-      tokens.push({ type: 'code', text: raw.slice(1, -1) });
-    } else if (URL_RE.test(raw) && isSafeUrl(raw)) {
-      tokens.push({ type: 'link', text: raw });
-    } else {
-      tokens.push({ type: 'text', text: raw });
-    }
-    URL_RE.lastIndex = 0;
-    cursor = match.index + raw.length;
-  }
-  if (cursor < text.length) tokens.push({ type: 'text', text: text.slice(cursor) });
-  return tokens;
-};
-
-const renderInline = (text: string) => splitInline(text).map((part, index) => {
-  const key = `${part.type}-${index}-${part.text.slice(0, 8)}`;
-  if (part.type === 'bold') return <strong key={key} className="font-bold text-slate-900 dark:text-white">{renderInline(part.text)}</strong>;
-  if (part.type === 'code') return <code key={key} className="rounded bg-slate-100 px-1 py-0.5 text-[11px] text-slate-800 dark:bg-white/10 dark:text-slate-100">{part.text}</code>;
-  if (part.type === 'link') return <a key={key} href={part.text} target="_blank" rel="noreferrer" className="break-all text-[rgb(var(--brand-700-rgb))] underline underline-offset-2">{part.text}</a>;
-  return <React.Fragment key={key}>{part.text}</React.Fragment>;
-});
-
-const headingClassByLevel: Record<1 | 2 | 3 | 4 | 5 | 6, string> = {
-  1: 'text-[16px] font-extrabold leading-8 text-slate-950 dark:text-white',
-  2: 'text-[15px] font-extrabold leading-7 text-slate-950 dark:text-white',
-  3: 'text-[14px] font-bold leading-7 text-slate-900 dark:text-white',
-  4: 'text-[13px] font-bold leading-6 text-slate-900 dark:text-white',
-  5: 'text-[12px] font-bold leading-6 text-slate-800 dark:text-slate-100',
-  6: 'text-[12px] font-semibold leading-6 text-slate-700 dark:text-slate-200',
-};
-
-const renderHeading = (block: Extract<Block, { type: 'heading' }>, index: number) => {
-  const className = `m-0 min-w-0 break-words ${headingClassByLevel[block.level]}`;
-  if (block.level === 1) return <h1 key={`h-${index}`} className={className}>{renderInline(block.text)}</h1>;
-  if (block.level === 2) return <h2 key={`h-${index}`} className={className}>{renderInline(block.text)}</h2>;
-  if (block.level === 3) return <h3 key={`h-${index}`} className={className}>{renderInline(block.text)}</h3>;
-  if (block.level === 4) return <h4 key={`h-${index}`} className={className}>{renderInline(block.text)}</h4>;
-  if (block.level === 5) return <h5 key={`h-${index}`} className={className}>{renderInline(block.text)}</h5>;
-  return <h6 key={`h-${index}`} className={className}>{renderInline(block.text)}</h6>;
-};
-
-const parseBlocks = (text: string): Block[] => {
-  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
-  const blocks: Block[] = [];
-  let paragraph: string[] = [];
-  let listType: 'ul' | 'ol' | null = null;
-  let listItems: string[] = [];
-  let quote: string[] = [];
-  let tableLines: string[] = [];
-  let codeLines: string[] | null = null;
-  let codeLanguage = '';
-
-  const flushParagraph = () => {
-    if (paragraph.length) blocks.push({ type: 'paragraph', text: paragraph.join('\n').trim() });
-    paragraph = [];
-  };
-  const flushQuote = () => {
-    if (quote.length) blocks.push({ type: 'quote', text: quote.join('\n').trim() });
-    quote = [];
-  };
-  const flushList = () => {
-    if (listType && listItems.length) blocks.push({ type: listType, items: listItems });
-    listType = null;
-    listItems = [];
-  };
-  const flushTable = () => {
-    if (tableLines.length >= 2) {
-      const parseRow = (rowStr: string) =>
-        rowStr.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
-      const headerLine = tableLines[0];
-      const separatorLine = tableLines[1];
-      const isSeparator = /^[\s|:-]+$/.test(separatorLine) && separatorLine.includes('-');
-      if (isSeparator) {
-        const headers = parseRow(headerLine);
-        const rows = tableLines.slice(2).map(parseRow).filter((r) => r.some(Boolean));
-        blocks.push({ type: 'table', headers, rows });
-        tableLines = [];
-        return;
-      }
-    }
-    if (tableLines.length) {
-      paragraph.push(...tableLines);
-      tableLines = [];
-    }
-  };
-
-  lines.forEach((line) => {
-    const fence = line.match(/^```(\S*)\s*$/);
-    if (fence) {
-      if (codeLines) {
-        blocks.push({ type: 'code', text: codeLines.join('\n'), language: codeLanguage });
-        codeLines = null;
-        codeLanguage = '';
-      } else {
-        flushParagraph();
-        flushQuote();
-        flushList();
-        flushTable();
-        codeLines = [];
-        codeLanguage = fence[1] || '';
-      }
-      return;
-    }
-    if (codeLines) {
-      codeLines.push(line);
-      return;
-    }
-    if (/^\s*$/.test(line)) {
-      flushParagraph();
-      flushQuote();
-      flushList();
-      flushTable();
-      return;
-    }
-    if (/^\s*---+\s*$/.test(line)) {
-      flushParagraph();
-      flushQuote();
-      flushList();
-      flushTable();
-      blocks.push({ type: 'hr' });
-      return;
-    }
-    // Markdown table row detection
-    const isPipeRow = /^\s*\|(.+)\|\s*$/.test(line) || (line.includes('|') && /^[\s|:-]+$/.test(line));
-    if (isPipeRow) {
-      flushParagraph();
-      flushQuote();
-      flushList();
-      tableLines.push(line);
-      return;
-    }
-    if (tableLines.length > 0) {
-      flushTable();
-    }
-    const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*$/);
-    if (heading) {
-      flushParagraph();
-      flushQuote();
-      flushList();
-      blocks.push({
-        type: 'heading',
-        level: heading[1].length as 1 | 2 | 3 | 4 | 5 | 6,
-        text: heading[2].replace(/\s+#+\s*$/, '').trim(),
-      });
-      return;
-    }
-    const quoted = line.match(/^\s*>\s?(.*)$/);
-    if (quoted) {
-      flushParagraph();
-      flushList();
-      quote.push(quoted[1]);
-      return;
-    }
-    const unordered = line.match(/^\s*[-*]\s+(.+)$/);
-    if (unordered) {
-      flushParagraph();
-      flushQuote();
-      if (listType && listType !== 'ul') flushList();
-      listType = 'ul';
-      listItems.push(unordered[1]);
-      return;
-    }
-    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
-    if (ordered) {
-      flushParagraph();
-      flushQuote();
-      if (listType && listType !== 'ol') flushList();
-      listType = 'ol';
-      listItems.push(ordered[1]);
-      return;
-    }
-    flushList();
-    flushQuote();
-    paragraph.push(line);
-  });
-
-  const remainingCodeLines = codeLines as unknown as string[] | null;
-  if (remainingCodeLines) blocks.push({ type: 'code', text: remainingCodeLines.join('\n'), language: codeLanguage });
-  flushParagraph();
-  flushQuote();
-  flushList();
-  flushTable();
-  return blocks.length ? blocks : [{ type: 'paragraph', text: String(text || '').trim() }];
-};
-
-const CopyButton: React.FC<{ text: string; title: string; onCopy?: (text: string, label?: string) => void; label?: string }> = ({ text, title, onCopy, label }) => (
+const CopyButton: React.FC<{
+  text: string;
+  title: string;
+  onCopy?: (text: string, label?: string) => void;
+  label?: string;
+}> = ({ text, title, onCopy, label }) => (
   <Tooltip title={title}>
     <Button
       type="text"
@@ -245,6 +52,15 @@ const CopyButton: React.FC<{ text: string; title: string; onCopy?: (text: string
   </Tooltip>
 );
 
+const headingClassByLevel: Record<1 | 2 | 3 | 4 | 5 | 6, string> = {
+  1: 'text-[16px] font-extrabold leading-8 text-slate-950 dark:text-white',
+  2: 'text-[15px] font-extrabold leading-7 text-slate-950 dark:text-white',
+  3: 'text-[14px] font-bold leading-7 text-slate-900 dark:text-white',
+  4: 'text-[13px] font-bold leading-6 text-slate-900 dark:text-white',
+  5: 'text-[12px] font-bold leading-6 text-slate-800 dark:text-slate-100',
+  6: 'text-[12px] font-semibold leading-6 text-slate-700 dark:text-slate-200',
+};
+
 const AiMessageRenderer: React.FC<AiMessageRendererProps> = ({
   text,
   streaming,
@@ -255,89 +71,126 @@ const AiMessageRenderer: React.FC<AiMessageRendererProps> = ({
   onStop,
   agentId = 'text_chat',
   activities,
+  sources = [],
 }) => {
-  const blocks = parseBlocks(text);
-  const hasText = String(text || '').trim().length > 0;
+  const normalizedText = String(text || '').trim();
+  const hasText = normalizedText.length > 0;
+  const hasCompletedActivities = !streaming && Array.isArray(activities) && activities.some((item) => item.phase === 'completed');
+
+  const markdownComponents = useMemo(() => ({
+    pre: ({ children }: ComponentProps) => <>{children}</>,
+    code: ({ children, block, lang }: ComponentProps) => {
+      const rawCode = extractNodeText(children).replace(/\n$/, '');
+      if (!block) {
+        return (
+          <code className="rounded bg-slate-100 px-1 py-0.5 text-[11px] text-slate-800 dark:bg-white/10 dark:text-slate-100">
+            {children}
+          </code>
+        );
+      }
+      return (
+        <div className="my-2 overflow-hidden rounded-lg border border-slate-200 bg-slate-950 text-slate-100 dark:border-white/10">
+          <div className="flex items-center justify-between border-b border-white/10 px-2 py-1 text-[10px] text-slate-300">
+            <span>{lang || 'کد'}</span>
+            <CopyButton text={rawCode} title="کپی کد" label="کد" onCopy={onCopyText} />
+          </div>
+          <pre className="m-0 overflow-x-auto p-2 text-left text-[11px] leading-5" dir="ltr">
+            <code>{children}</code>
+          </pre>
+        </div>
+      );
+    },
+    blockquote: ({ children }: ComponentProps) => {
+      const rawQuote = extractNodeText(children).replace(/^\n+|\n+$/g, '');
+      return (
+        <blockquote className="my-2 rounded-md border-s-4 border-[rgb(var(--brand-500-rgb))] bg-slate-50 px-3 py-2 text-slate-800 dark:bg-white/5 dark:text-slate-100">
+          <div className="mb-1 flex justify-end">
+            <CopyButton text={rawQuote} title="کپی متن" label="متن" onCopy={onCopyText} />
+          </div>
+          <div className="whitespace-pre-wrap leading-7">{children}</div>
+        </blockquote>
+      );
+    },
+    table: ({ children }: ComponentProps) => (
+      <div className="my-2.5 max-w-full overflow-x-auto rounded-xl border border-slate-200/90 bg-white/95 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
+        <table className="w-full min-w-full border-collapse text-right text-xs">{children}</table>
+      </div>
+    ),
+    thead: ({ children }: ComponentProps) => (
+      <thead className="border-b border-slate-200/90 bg-slate-100/80 font-bold text-slate-900 dark:border-white/10 dark:bg-white/[0.08] dark:text-slate-100">
+        {children}
+      </thead>
+    ),
+    tbody: ({ children }: ComponentProps) => (
+      <tbody className="divide-y divide-slate-100 dark:divide-white/[0.04]">{children}</tbody>
+    ),
+    tr: ({ children }: ComponentProps) => (
+      <tr className="transition-colors hover:bg-slate-50/70 dark:hover:bg-white/[0.02]">{children}</tr>
+    ),
+    th: ({ children }: ComponentProps) => (
+      <th className="whitespace-nowrap px-3 py-2">{children}</th>
+    ),
+    td: ({ children }: ComponentProps) => (
+      <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{children}</td>
+    ),
+    hr: () => <hr className="my-2 border-slate-200 dark:border-white/10" />,
+    a: ({ href, children }: ComponentProps<{ href?: string }>) => (
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        className="break-all text-[rgb(var(--brand-700-rgb))] underline underline-offset-2 dark:text-[rgb(var(--brand-200-rgb))]"
+      >
+        {children}
+      </a>
+    ),
+    h1: ({ children }: ComponentProps) => <h1 className={`m-0 min-w-0 break-words ${headingClassByLevel[1]}`}>{children}</h1>,
+    h2: ({ children }: ComponentProps) => <h2 className={`m-0 min-w-0 break-words ${headingClassByLevel[2]}`}>{children}</h2>,
+    h3: ({ children }: ComponentProps) => <h3 className={`m-0 min-w-0 break-words ${headingClassByLevel[3]}`}>{children}</h3>,
+    h4: ({ children }: ComponentProps) => <h4 className={`m-0 min-w-0 break-words ${headingClassByLevel[4]}`}>{children}</h4>,
+    h5: ({ children }: ComponentProps) => <h5 className={`m-0 min-w-0 break-words ${headingClassByLevel[5]}`}>{children}</h5>,
+    h6: ({ children }: ComponentProps) => <h6 className={`m-0 min-w-0 break-words ${headingClassByLevel[6]}`}>{children}</h6>,
+  }), [onCopyText]);
+
   return (
     <div className="ai-message-renderer min-w-0">
-      {streaming && <AiActivityStatus agentId={agentId} activities={activities} onStop={onStop} />}
-      {(failed || stopped) && onRetry && <div className="mb-1 flex items-center justify-end gap-1">
-        {(failed || stopped) && onRetry ? (
+      {(streaming || hasCompletedActivities) && (
+        <AiActivityStatus
+          agentId={agentId}
+          activities={activities}
+          streaming={Boolean(streaming)}
+          onStop={onStop}
+        />
+      )}
+      {(failed || stopped) && onRetry ? (
+        <div className="mb-1 flex items-center justify-end gap-1">
           <Tooltip title="تلاش دوباره">
-            <Button type="text" size="small" className="ai-chat-icon" icon={<ReloadOutlined />} onClick={onRetry} aria-label="تلاش دوباره" />
+            <Button
+              type="text"
+              size="small"
+              className="ai-chat-icon"
+              icon={<ReloadOutlined />}
+              onClick={onRetry}
+              aria-label="تلاش دوباره"
+            />
           </Tooltip>
-        ) : null}
-      </div>}
-      {!hasText && streaming ? (
-        null
-      ) : (
-        <div className="space-y-2">
-          {blocks.map((block, index) => {
-            if (block.type === 'hr') return <hr key={`hr-${index}`} className="border-slate-200 dark:border-white/10" />;
-            if (block.type === 'heading') return renderHeading(block, index);
-            if (block.type === 'code') {
-              return (
-                <div key={`code-${index}`} className="overflow-hidden rounded-lg border border-slate-200 bg-slate-950 text-slate-100 dark:border-white/10">
-                  <div className="flex items-center justify-between border-b border-white/10 px-2 py-1 text-[10px] text-slate-300">
-                    <span>{block.language || 'کد'}</span>
-                    <CopyButton text={block.text} title="کپی کد" label="کد" onCopy={onCopyText} />
-                  </div>
-                  <pre className="m-0 overflow-x-auto p-2 text-left text-[11px] leading-5" dir="ltr"><code>{block.text}</code></pre>
-                </div>
-              );
-            }
-            if (block.type === 'table') {
-              return (
-                <div key={`tbl-${index}`} className="my-2.5 max-w-full overflow-x-auto rounded-xl border border-slate-200/90 bg-white/95 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
-                  <table className="w-full min-w-full border-collapse text-right text-xs">
-                    <thead>
-                      <tr className="border-b border-slate-200/90 bg-slate-100/80 text-slate-900 dark:border-white/10 dark:bg-white/[0.08] dark:text-slate-100 font-bold">
-                        {block.headers.map((h, hIdx) => (
-                          <th key={hIdx} className="px-3 py-2 whitespace-nowrap">
-                            {renderInline(h)}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-white/[0.04]">
-                      {block.rows.map((row, rIdx) => (
-                        <tr key={rIdx} className="transition-colors hover:bg-slate-50/70 dark:hover:bg-white/[0.02]">
-                          {row.map((cell, cIdx) => (
-                            <td key={cIdx} className="px-3 py-2 text-slate-700 dark:text-slate-200">
-                              {renderInline(cell)}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              );
-            }
-            if (block.type === 'quote') {
-              return (
-                <blockquote key={`quote-${index}`} className="m-0 rounded-md border-s-4 border-[rgb(var(--brand-500-rgb))] bg-slate-50 px-3 py-2 text-slate-800 dark:bg-white/5 dark:text-slate-100">
-                  <div className="mb-1 flex justify-end">
-                    <CopyButton text={block.text} title="کپی متن" label="متن" onCopy={onCopyText} />
-                  </div>
-                  <div className="whitespace-pre-wrap leading-7">{renderInline(block.text)}</div>
-                </blockquote>
-              );
-            }
-            if (block.type === 'ul' || block.type === 'ol') {
-              const Tag = block.type;
-              return (
-                <Tag key={`${block.type}-${index}`} className={`m-0 ps-5 ${block.type === 'ul' ? 'list-disc' : 'list-decimal'}`}>
-                  {block.items.map((item, itemIndex) => <li key={`${index}-${itemIndex}`} className="mb-1 last:mb-0">{renderInline(item)}</li>)}
-                </Tag>
-              );
-            }
-            return (
-              <p key={`p-${index}`} className="m-0 min-w-0 whitespace-pre-wrap">{renderInline(block.text)}</p>
-            );
-          })}
-          {streaming ? <span className="ai-chat-stream-cursor" aria-hidden="true" /> : null}
         </div>
+      ) : null}
+      {!hasText && streaming ? null : (
+        <>
+          <div className="ai-xmarkdown-body">
+            <XMarkdown
+              content={String(text || '')}
+              escapeRawHtml
+              openLinksInNewTab
+              disableDefaultStyles={['pre', 'code', 'table', 'th', 'td', 'hr']}
+              streaming={streaming ? { hasNextChunk: true, incompleteMarkdown: 'complete' } : false}
+              components={markdownComponents as any}
+            />
+            {streaming ? <span className="ai-chat-stream-cursor" aria-hidden="true" /> : null}
+          </div>
+          {!streaming && sources.length > 0 ? <AiSourcesCard sources={sources} /> : null}
+        </>
       )}
     </div>
   );

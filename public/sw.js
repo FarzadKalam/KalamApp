@@ -293,6 +293,49 @@ self.addEventListener('message', (event) => {
   }
 });
 
+self.addEventListener('push', (event) => {
+  event.waitUntil((async () => {
+    const visibleClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (visibleClients.some((client) => client.visibilityState === 'visible')) return;
+
+    let payload = {};
+    try {
+      payload = event.data?.json() || {};
+    } catch {
+      payload = { body: event.data?.text() || '' };
+    }
+    const title = String(payload.title || 'پیام جدید در تازه سیستم').trim();
+    const body = String(payload.body || 'برای مشاهده جزئیات، سامانه را باز کنید.').trim();
+    const targetUrl = String(payload.url || '/messages?tab=notes&conversation=system');
+    await self.registration.showNotification(title, {
+      body,
+      icon: '/pwa-192x192.png?v=f01',
+      dir: 'rtl',
+      lang: 'fa-IR',
+      tag: String(payload.tag || payload.eventKey || 'tazesystem-system-message'),
+      renotify: true,
+      timestamp: Number(payload.timestamp || Date.now()),
+      data: { url: targetUrl },
+      actions: [{ action: 'open', title: 'مشاهده' }],
+    });
+  })());
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const targetUrl = new URL(String(event.notification.data?.url || '/messages?tab=notes&conversation=system'), self.location.origin).href;
+  event.waitUntil((async () => {
+    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const matchingClient = clients.find((client) => client.url.startsWith(self.location.origin));
+    if (matchingClient) {
+      await matchingClient.focus();
+      if ('navigate' in matchingClient) await matchingClient.navigate(targetUrl);
+      return;
+    }
+    await self.clients.openWindow(targetUrl);
+  })());
+});
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   const requestUrl = new URL(request.url);

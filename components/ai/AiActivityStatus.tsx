@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Button, Tooltip } from 'antd';
+import { Button, Tag, Tooltip } from 'antd';
+import { ThoughtChain, type ThoughtChainItem } from '@ant-design/x';
 import {
   AudioOutlined,
   BookOutlined,
@@ -96,8 +97,40 @@ export const getActivityLineText = (activity: AiAgentActivity): string => {
   return raw.endsWith('…') ? raw : `${raw}…`;
 };
 
+const buildThoughtChainItems = (items: AiAgentActivity[], streaming: boolean): ThoughtChainItem[] =>
+  items.map((item, idx) => {
+    const isRunning = streaming && item.phase === 'started';
+    const titleText = getActivityLineText(item);
+    const agentLabel = getAiAgent(item.agentId).label;
+    const actionLabel = item.actionType ? ACTION_LABEL_MAP[item.actionType] : '';
+    const descriptionText = item.detail && agentLabel && !item.detail.includes(agentLabel)
+      ? agentLabel
+      : actionLabel && !titleText.includes(actionLabel)
+        ? actionLabel
+        : undefined;
+
+    return {
+      key: `${item.agentId}-${idx}`,
+      icon: isRunning ? <LoadingOutlined spin /> : getActivityIcon(item),
+      title: (
+        <span className={isRunning ? 'font-semibold text-slate-800 dark:text-slate-100' : 'text-slate-600 dark:text-slate-300'}>
+          {titleText}
+        </span>
+      ),
+      description: descriptionText,
+      status: isRunning ? 'pending' : 'success',
+      extra: isRunning ? (
+        <Tag color="processing" className="m-0 rounded-full text-[10px]">
+          در حال اجرا
+        </Tag>
+      ) : (
+        <CheckOutlined className="text-[11px] text-emerald-500" />
+      ),
+    };
+  });
+
 export default function AiActivityStatus({ agentId = 'text_chat', activities = [], streaming = true, onStop }: Props) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   const items: AiAgentActivity[] = activities.length
     ? activities
@@ -109,34 +142,25 @@ export default function AiActivityStatus({ agentId = 'text_chat', activities = [
 
   const runningCount = items.filter((item) => item.phase === 'started').length;
   const completedCount = items.filter((item) => item.phase === 'completed').length;
+  const chainItems = buildThoughtChainItems(items, streaming);
 
-  // After streaming completes, keep a compact collapsible 1-line summary
+  // After streaming completes, keep a compact AntD X v2-inspired collapsible Think block
   if (!streaming && completedCount > 0) {
     return (
-      <div className="ai-chat-theme mb-1.5" dir="rtl">
+      <div className="ai-chat-theme ai-think-box mb-2" dir="rtl">
         <button
           type="button"
-          onClick={() => setCollapsed((prev) => !prev)}
-          className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[11px] text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-slate-200"
+          onClick={() => setExpanded((prev) => !prev)}
+          aria-expanded={expanded}
+          className="ai-think-trigger inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11.5px] font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/5"
         >
-          <CheckOutlined className="text-[10px] text-emerald-500" />
-          <span>{completedCount.toLocaleString('fa-IR')} فعالیت انجام شد</span>
-          {collapsed ? <DownOutlined className="text-[9px]" /> : <UpOutlined className="text-[9px]" />}
+          <BulbOutlined className="text-[12px] text-[rgb(var(--brand-600-rgb))] dark:text-[rgb(var(--brand-300-rgb))]" />
+          <span>{completedCount.toLocaleString('fa-IR')} مرحله بررسی و انجام شد</span>
+          {expanded ? <UpOutlined className="text-[9px]" /> : <DownOutlined className="text-[9px]" />}
         </button>
-        {!collapsed && (
-          <div className="mt-1 space-y-0.5 border-r-2 border-slate-200/80 pr-2 dark:border-white/10">
-            {items.map((item, idx) => (
-              <div
-                key={`${item.agentId}-${idx}`}
-                className="flex min-w-0 items-center gap-1.5 text-[11.5px] leading-5 text-slate-600 dark:text-slate-300"
-              >
-                <span className="shrink-0 text-[12px] text-slate-400 dark:text-slate-500">
-                  {getActivityIcon(item)}
-                </span>
-                <span className="truncate">{getActivityLineText(item)}</span>
-                <CheckOutlined className="mr-auto shrink-0 text-[10px] text-emerald-500" />
-              </div>
-            ))}
+        {expanded && (
+          <div className="ai-think-body mt-1.5 rounded-xl border border-[var(--ai-chat-line)] bg-[var(--ai-chat-surface)] p-2.5">
+            <ThoughtChain size="small" items={chainItems} />
           </div>
         )}
       </div>
@@ -144,37 +168,34 @@ export default function AiActivityStatus({ agentId = 'text_chat', activities = [
   }
 
   return (
-    <div className="ai-chat-theme ai-activity-status" role="status" aria-live="polite" aria-atomic="true" dir="rtl">
-      <div className="ai-activity-lines flex-1 min-w-0">
-        {items.map((item, idx) => {
-          const isRunning = item.phase === 'started';
-          return (
-            <div
-              className="ai-activity-line flex min-w-0 items-center gap-2 text-[12px] leading-5"
-              key={`${item.agentId}-${idx}`}
-            >
-              <span className={`shrink-0 text-[13px] ${isRunning ? 'text-[rgb(var(--brand-600-rgb))] dark:text-[rgb(var(--brand-300-rgb))]' : 'text-slate-400 dark:text-slate-500'}`}>
-                {getActivityIcon(item)}
-              </span>
-              <span className={`truncate ${isRunning ? 'font-medium text-slate-800 dark:text-slate-100' : 'text-slate-500 dark:text-slate-400'}`}>
-                {getActivityLineText(item)}
-              </span>
-              <span className="mr-auto shrink-0 text-[11px]">
-                {isRunning ? (
-                  <LoadingOutlined className="text-[rgb(var(--brand-600-rgb))] dark:text-[rgb(var(--brand-300-rgb))]" />
-                ) : (
-                  <CheckOutlined className="text-emerald-500" />
-                )}
-              </span>
-            </div>
-          );
-        })}
+    <div
+      className="ai-chat-theme ai-activity-status ai-think-streaming rounded-xl border border-[var(--ai-chat-line)] bg-[var(--ai-chat-surface)] px-3 py-2.5"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      dir="rtl"
+    >
+      <div className="min-w-0 flex-1">
+        <div className="mb-1.5 flex items-center justify-between gap-2">
+          <div className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-700 dark:text-slate-200">
+            <BulbOutlined className="text-[rgb(var(--brand-600-rgb))] dark:text-[rgb(var(--brand-300-rgb))]" />
+            <span className="ai-think-shimmer">فرآیند بررسی و آماده‌سازی دستیار</span>
+          </div>
+          {onStop && runningCount > 0 && (
+            <Tooltip title="توقف دریافت پاسخ">
+              <Button
+                type="text"
+                size="small"
+                className="ai-chat-icon shrink-0"
+                icon={<StopOutlined />}
+                aria-label="توقف دریافت پاسخ"
+                onClick={onStop}
+              />
+            </Tooltip>
+          )}
+        </div>
+        <ThoughtChain size="small" items={chainItems} />
       </div>
-      {onStop && runningCount > 0 && (
-        <Tooltip title="توقف دریافت پاسخ">
-          <Button type="text" className="ai-chat-icon shrink-0" icon={<StopOutlined />} aria-label="توقف دریافت پاسخ" onClick={onStop} />
-        </Tooltip>
-      )}
     </div>
   );
 }

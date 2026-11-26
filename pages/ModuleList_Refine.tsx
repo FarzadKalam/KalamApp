@@ -28,6 +28,7 @@ import {
 import { dataProvider as refineSupabaseDataProvider } from "@refinedev/supabase";
 import { useNavigate, useParams } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
+import { useModuleSettingsVersion } from "../utils/moduleSettingsRuntime";
 import { useSaasReadonly } from "../components/saas/SaasReadonlyContext";
 import { renderModuleIcon } from "../utils/moduleIcons";
 import SmartTableRenderer from "../components/SmartTableRenderer";
@@ -137,7 +138,9 @@ import { useContentCalendarPlanModule } from "../hooks/useContentCalendarFeature
 import { useRetailSalesInvoiceFeature } from "../hooks/useRetailSalesInvoiceFeature";
 import { getRecordPhoneCandidates } from "../utils/recordMessaging";
 import { formatIranMobileForInput } from "../utils/phoneNumber";
-import { WORKFLOW_ASSIGNEE_FIELD_KEY } from "../utils/workflowTypes";
+import { parseWorkflowRelatedFieldKey, WORKFLOW_ASSIGNEE_FIELD_KEY, type WorkflowCondition } from "../utils/workflowTypes";
+import { getModuleTableBlocks } from "../utils/conditionTableFields";
+import { isTableConditionOperator } from "../shared/recordRuntime";
 import {
   createWorkflowEvaluationContext,
   evaluateWorkflowConditions,
@@ -193,7 +196,7 @@ import { isWorkflowVirtualField } from "../utils/moduleFieldVisibility";
 import { createSchemaCompatibleDataProvider } from "../utils/selectCompat";
 import { applyModuleListLocalChanges, hasModuleListLocalChange } from '../utils/moduleListLocalRows';
 import { isModuleListCreateShortcut, MODULE_LIST_CREATE_SHORTCUT } from '../utils/moduleListShortcut';
-import { buildViewDateBoundaryValue } from "../utils/viewDateFilters";
+import { buildCalendarViewFilters, CALENDAR_VIEW_OPERATORS, refreshRelativeViewDateFilter } from "../utils/viewDateFilters";
 import {
   fetchRecordLockMap,
   getRecordLockStateFromRecord,
@@ -416,15 +419,13 @@ interface PersistedModuleListState {
 }
 
 const buildModuleListStateKey = (
-  moduleId?: string | null,
-  suffix?: string | null,
-) => {
-  const normalizedModuleId = String(moduleId || "").trim();
-  const normalizedSuffix = String(suffix || "").trim();
-  return normalizedSuffix
-    ? `module_list_state:${normalizedModuleId}:${normalizedSuffix}`
-    : `module_list_state:${normalizedModuleId}`;
-};
+  moduleId: string | null | undefined,
+  suffix: string | null | undefined,
+  orgId: string | null,
+  userId: string | null,
+) => moduleId && orgId && userId
+  ? `module_list_state:${JSON.stringify([orgId, userId, moduleId, suffix || ''])}`
+  : null;
 
 const sanitizeModuleVisibleColumns = (
   moduleId: string | null | undefined,
@@ -560,6 +561,7 @@ const buildModuleListRowSelect = (
     calendarDateField?: string | null;
     filters?: CrudFilters | null;
     sorters?: CrudSort[] | null;
+    conditionFields?: readonly string[];
   },
 ) => {
   if (!moduleConfig) return "*";
@@ -621,6 +623,13 @@ const buildModuleListRowSelect = (
     (field) => addKnownKey(field.key),
   );
   collectCrudFilterFields(options?.filters).forEach((key) => addKnownKey(key));
+  if (options?.conditionFields?.length) {
+    const tableKeys = new Set(getModuleTableBlocks(moduleConfig.id).map(({ id }) => id));
+    for (const key of options.conditionFields) {
+      if (tableKeys.has(key)) addKey(key);
+      else addKnownKey(parseWorkflowRelatedFieldKey(key)?.relationFieldKey || key, true);
+    }
+  }
   (options?.sorters || []).forEach((sorter) =>
     addKnownKey(String(sorter?.field || "")),
   );
@@ -663,17 +672,11 @@ const buildModuleListRowSelect = (
   return Array.from(selectedKeys).join(",");
 };
 
-const readPersistedModuleListState = (
-  moduleId?: string | null,
-  suffix?: string | null,
-): PersistedModuleListState | null => {
-  if (typeof window === "undefined" || !moduleId) return null;
+const readPersistedModuleListState = (storageKey: string | null): PersistedModuleListState | null => {
+  if (typeof window === "undefined" || !storageKey) return null;
   try {
-    const raw = window.localStorage.getItem(
-      buildModuleListStateKey(moduleId, suffix),
-    );
-    if (!raw) return null;
-    return JSON.parse(raw) as PersistedModuleListState;
+    const raw = window.localStorage.getItem(storageKey);
+    return raw ? JSON.parse(raw) as PersistedModuleListState : null;
   } catch {
     return null;
   }
@@ -1087,7 +1090,11 @@ export const ModuleListRefine: React.FC<{
   const [surveyTemplateSnapshot, setSurveyTemplateSnapshot] = useState(() =>
     normalizeSurveyTemplateSnapshot({}),
   );
-  const baseModuleConfig = resolvedModuleId ? MODULES[resolvedModuleId] : null;
+  const moduleSettingsVersion = useModuleSettingsVersion();
+  const baseModuleConfig = useMemo(
+    () => (resolvedModuleId && MODULES[resolvedModuleId] ? { ...MODULES[resolvedModuleId] } : null),
+    [moduleSettingsVersion, resolvedModuleId],
+  );
   const { moduleConfig: planBaseModuleConfig } =
     useContentCalendarPlanModule(baseModuleConfig);
   const { enabled: retailSalesInvoiceEnabled } = useRetailSalesInvoiceFeature();
@@ -1143,10 +1150,11 @@ export const ModuleListRefine: React.FC<{
           : [],
     [fieldPermissions, fieldPermissionsReady, moduleConfig, searchTargetField],
   );
-  const persistedState = useMemo(
-    () => readPersistedModuleListState(resolvedModuleId, storageKeySuffix),
-    [resolvedModuleId, storageKeySuffix],
-  );
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
+  const listStateKey = buildModuleListStateKey(resolvedModuleId, storageKeySuffix, currentOrgId, currentUserId);
+  const [restoredListStateKey, setRestoredListStateKey] = useState<string | null>(null);
+  const persistedState = useMemo(() => readPersistedModuleListState(listStateKey), [listStateKey]);
   const cachedOptionSnapshot = useMemo(
     () => readModuleOptionSnapshot(resolvedModuleId),
     [resolvedModuleId],
@@ -1196,6 +1204,7 @@ export const ModuleListRefine: React.FC<{
   const [listVisibleRowKeys, setListVisibleRowKeys] = useState<
     React.Key[] | null
   >(null);
+  const viewFilterRequestId = useRef(0);
   const [currentView, setCurrentView] = useState<SavedView | null>(
     Array.isArray(initialViewFiltersOverride) &&
       initialViewFiltersOverride.length > 0
@@ -1223,6 +1232,17 @@ export const ModuleListRefine: React.FC<{
       persistedState?.visibleColumns || [],
     ),
   ); // ✅ ستون‌های انتخاب‌شده
+  useEffect(() => {
+    if (!moduleSettingsVersion) return;
+    setVisibleColumns((prev) =>
+      normalizeVisibleColumnsForView(
+        resolvedModuleId,
+        moduleConfig,
+        currentView || null,
+        prev,
+      ),
+    );
+  }, [currentView, moduleConfig, moduleSettingsVersion, resolvedModuleId]);
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, any[]>>(
     () => cachedOptionSnapshot?.dynamicOptions || {},
   ); // ✅ اضافه شد
@@ -1272,24 +1292,16 @@ export const ModuleListRefine: React.FC<{
   }>({});
   const [permissionViewConditions, setPermissionViewConditions] =
     useState<ViewConditionGroup | null>(null);
-  const [permissionConditionAllowedIds, setPermissionConditionAllowedIds] =
-    useState<Set<string> | null>(null);
-  const [permissionConditionLoading, setPermissionConditionLoading] =
-    useState(false);
-  const [clientPermissionPageRows, setClientPermissionPageRows] = useState<
-    any[]
-  >([]);
-  const [clientPermissionTotal, setClientPermissionTotal] = useState(0);
+  const [permissionConditionLoading, setPermissionConditionLoading] = useState(false);
+  const [conditionMatchedRows, setConditionMatchedRows] = useState<any[] | null>(null);
   const [
     clientPermissionPaginationActive,
     setClientPermissionPaginationActive,
   ] = useState(false);
   const [permissionFilters, setPermissionFilters] = useState<CrudFilters>([]);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserRoleId, setCurrentUserRoleId] = useState<string | null>(
     null,
   );
-  const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
   const [localListRevision, setLocalListRevision] = useState(0);
   const [currentPermissionMap, setCurrentPermissionMap] =
     useState<PermissionMap | null>(null);
@@ -1508,6 +1520,24 @@ export const ModuleListRefine: React.FC<{
     syncWithLocation: false,
   });
 
+  const clientPermissionTotal = conditionMatchedRows?.length ?? 0;
+  const conditionPageSize = Math.max(1, Number(pageSize || DEFAULT_LIST_PAGE_SIZE));
+  const lastConditionPage = Math.max(1, Math.ceil(clientPermissionTotal / conditionPageSize));
+  const conditionPage = Math.min(Math.max(1, Number(current || 1)), lastConditionPage);
+  const clientPermissionPageRows = useMemo(() => {
+    if (!conditionMatchedRows) return [];
+    if (!isListView) return conditionMatchedRows;
+    const offset = (conditionPage - 1) * conditionPageSize;
+    return conditionMatchedRows.slice(offset, offset + conditionPageSize);
+  }, [conditionMatchedRows, conditionPage, conditionPageSize, isListView]);
+  const permissionConditionAllowedIds = useMemo(() => conditionMatchedRows
+    ? new Set(clientPermissionPageRows.map((record) => String(record.id)))
+    : null, [clientPermissionPageRows, conditionMatchedRows]);
+
+  useEffect(() => {
+    if (conditionMatchedRows && isListView && Number(current || 1) > lastConditionPage) setCurrent?.(lastConditionPage);
+  }, [conditionMatchedRows, current, isListView, lastConditionPage, setCurrent]);
+
   const { mutate: deleteMany } = useDeleteMany();
 
   const baseLoading = tableQueryResult.isLoading;
@@ -1576,15 +1606,15 @@ export const ModuleListRefine: React.FC<{
       : isKanbanView
         ? kanbanLoading
         : nonListLoading);
-  const sourceAllData = isListView
-    ? clientPermissionPaginationActive
-      ? clientPermissionPageRows
-      : hasActiveTagViewFilters
+  const sourceAllData = clientPermissionPaginationActive
+    ? clientPermissionPageRows
+    : isListView
+      ? hasActiveTagViewFilters
         ? tagViewFilterRows
         : baseAllData
-    : isKanbanView
-      ? kanbanRows
-      : nonListRows;
+      : isKanbanView
+        ? kanbanRows
+        : nonListRows;
   const allData = useMemo(() => applyModuleListLocalChanges(sourceAllData, currentOrgId, resolvedModuleId, isListView ? Number(tableQueryResult.dataUpdatedAt || 0) : 0, currentUserId),
     [sourceAllData, currentOrgId, currentUserId, resolvedModuleId, isListView, tableQueryResult.dataUpdatedAt, localListRevision]);
   const effectiveBaseAllData = useMemo(() => {
@@ -1844,7 +1874,7 @@ export const ModuleListRefine: React.FC<{
   ]);
 
   const fetchRowsByIdsPreservingOrder = useCallback(
-    async (ids: string[], serverFilters: CrudFilters) => {
+    async (ids: string[], serverFilters: CrudFilters, conditionFields?: readonly string[]) => {
       if (!ids.length || !resolvedModuleId) return [];
       const resource = dataResource || resolvedModuleId;
       const CHUNK_SIZE = 500;
@@ -1866,6 +1896,7 @@ export const ModuleListRefine: React.FC<{
               kanbanGroupBy,
               calendarDateField,
               filters: serverFilters,
+              conditionFields,
               sorters: stableSorters,
             }),
           },
@@ -1895,7 +1926,11 @@ export const ModuleListRefine: React.FC<{
   );
 
   const fetchAllRowsForFilters = useCallback(
-    async (serverFilters: CrudFilters) => {
+    async (
+      serverFilters: CrudFilters,
+      conditionFields?: readonly string[],
+      onPage?: (rows: any[]) => Promise<boolean>,
+    ) => {
       if (!resolvedModuleId) {
         return { rows: [], total: 0 };
       }
@@ -1918,13 +1953,18 @@ export const ModuleListRefine: React.FC<{
               kanbanGroupBy,
               calendarDateField,
               filters: serverFilters,
+              conditionFields,
               sorters: stableSorters,
             }),
           },
         });
 
         const pageRows = Array.isArray(response?.data) ? response.data : [];
-        rows.push(...pageRows);
+        if (onPage) {
+          if (!await onPage(pageRows)) break;
+        } else {
+          rows.push(...pageRows);
+        }
 
         if (currentPage === 1) {
           resolvedTotal = Number(response?.total || 0);
@@ -2636,10 +2676,9 @@ export const ModuleListRefine: React.FC<{
       return;
     }
 
-    const restoredState = readPersistedModuleListState(
-      resolvedModuleId,
-      storageKeySuffix,
-    );
+    const restoredState = persistedState;
+    viewFilterRequestId.current += 1;
+    setRestoredListStateKey(listStateKey);
     const restoredSorters = resolveCrudSortersWithDefault(
       restoredState?.sorters,
       moduleConfig,
@@ -2718,11 +2757,12 @@ export const ModuleListRefine: React.FC<{
   }, [
     cachedOptionSnapshot,
     initialViewFiltersOverride,
+    listStateKey,
+    persistedState,
     moduleConfig,
     resolvedModuleId,
     setCurrent,
     setSorters,
-    storageKeySuffix,
   ]);
 
   const fetchPermissions = useCallback(async () => {
@@ -2788,7 +2828,12 @@ export const ModuleListRefine: React.FC<{
         setFieldPermissionsModuleId(String(resolvedModuleId || ""));
         setPermissionViewConditions(null);
         setPermissionFilters([]);
-        setCanOpenWorkflows(false);
+        if (resolvedModuleId === 'saas_orgs' || resolvedModuleId === 'saas_demo_requests') {
+          const { data: allowed, error: workflowError } = await supabase.rpc('saas_lifecycle_workflows_allowed');
+          setCanOpenWorkflows(!workflowError && allowed === true);
+        } else {
+          setCanOpenWorkflows(false);
+        }
         setCanOpenGoals(false);
         setCanShowGoalCards(false);
         return;
@@ -2829,42 +2874,12 @@ export const ModuleListRefine: React.FC<{
           ? normalizedViewConditions
           : null,
       );
-      // build permission-level filters from view_conditions
       if (hasViewConditionGroupConditions(normalizedViewConditions)) {
         buildPermissionViewCrudFilters(normalizedViewConditions)
-          .then((pFilters) => {
-            const nextPermissionFilters = [...recordScopeFilters, ...pFilters];
-            setPermissionFilters(nextPermissionFilters);
-            applyCombinedFilters(
-              effectiveInitialViewFilters as CrudFilters,
-              persistedState?.searchTerm || "",
-              persistedState?.columnFilters || {},
-              false,
-              nextPermissionFilters,
-              nextFieldPermissions,
-            );
-          })
-          .catch(() => {
-            setPermissionFilters(recordScopeFilters);
-            applyCombinedFilters(
-              effectiveInitialViewFilters as CrudFilters,
-              persistedState?.searchTerm || "",
-              persistedState?.columnFilters || {},
-              false,
-              recordScopeFilters,
-              nextFieldPermissions,
-            );
-          });
+          .then((filters) => setPermissionFilters([...recordScopeFilters, ...filters]))
+          .catch(() => setPermissionFilters(recordScopeFilters));
       } else {
         setPermissionFilters(recordScopeFilters);
-        applyCombinedFilters(
-          effectiveInitialViewFilters as CrudFilters,
-          persistedState?.searchTerm || "",
-          persistedState?.columnFilters || {},
-          false,
-          recordScopeFilters,
-          nextFieldPermissions,
-        );
       }
       setCanOpenWorkflows(
         workflowPerms.view !== false &&
@@ -2895,6 +2910,11 @@ export const ModuleListRefine: React.FC<{
   useEffect(() => {
     fetchPermissions();
   }, [fetchPermissions]);
+
+  useEffect(() => {
+    if (!fieldPermissionsReady) return;
+    applyCombinedFilters(viewFiltersState, searchTerm, columnFilters, false);
+  }, [columnFilters, fieldPermissions, fieldPermissionsReady, permissionFilters, searchTerm, viewFiltersState]);
 
   const moduleListLiveWatermarkKey = useMemo(
     () =>
@@ -3232,7 +3252,9 @@ export const ModuleListRefine: React.FC<{
       ...(normalizedPermissionViewConditions.conditions_all || []),
       ...(normalizedPermissionViewConditions.conditions_any || []),
     ];
-    return conditions.some(
+    return (normalizedPermissionViewConditions.conditions_any || []).some(
+      (condition) => ([...CALENDAR_VIEW_OPERATORS, "datetime_between"] as string[]).includes(String(condition.operator)),
+    ) || conditions.some(
       (condition) => !canBuildViewConditionAsCrudFilter(condition),
     );
   }, [
@@ -3241,6 +3263,11 @@ export const ModuleListRefine: React.FC<{
     normalizedPermissionViewConditions,
     permissionViewConditionsSignature,
   ]);
+  const savedViewResidualConditions = useMemo<WorkflowCondition[]>(() => {
+    const conditions = currentView?.config?.filters || [];
+    return conditions.filter((condition) => !canBuildViewConditionAsCrudFilter(condition)) as WorkflowCondition[];
+  }, [currentView, moduleConfig]);
+  const needsClientViewConditions = shouldEvaluatePermissionConditionsOnClient || savedViewResidualConditions.length > 0;
   const clientPermissionViewConditions = useMemo(() => {
     const resolveAssigneeValue = (value: any): any => {
       if (Array.isArray(value)) return value.map(resolveAssigneeValue);
@@ -3277,19 +3304,35 @@ export const ModuleListRefine: React.FC<{
     normalizedPermissionViewConditions,
     permissionViewConditionsSignature,
   ]);
+  const conditionFilterFields = useMemo(() => Array.from(new Set([
+    ...(shouldEvaluatePermissionConditionsOnClient ? [
+      ...(clientPermissionViewConditions.conditions_all || []),
+      ...(clientPermissionViewConditions.conditions_any || []),
+    ] : []),
+    ...savedViewResidualConditions,
+  ].map(({ field }) => field))), [clientPermissionViewConditions, savedViewResidualConditions, shouldEvaluatePermissionConditionsOnClient]);
+  const evaluateViewResidual = useCallback(async (record: any, context: ReturnType<typeof createWorkflowEvaluationContext>) => {
+    if (!resolvedModuleId) return false;
+    if (shouldEvaluatePermissionConditionsOnClient && !await evaluateWorkflowConditions({
+      conditionsAll: clientPermissionViewConditions.conditions_all,
+      conditionsAny: clientPermissionViewConditions.conditions_any,
+      currentRecord: record,
+      moduleId: resolvedModuleId,
+      context,
+    })) return false;
+    if (savedViewResidualConditions.some(({ field }) => !canViewField(parseWorkflowRelatedFieldKey(field)?.relationFieldKey || field))) return false;
+    return evaluateWorkflowConditions({
+      conditionsAll: savedViewResidualConditions,
+      currentRecord: record,
+      moduleId: resolvedModuleId,
+      context,
+    });
+  }, [canViewField, clientPermissionViewConditions, resolvedModuleId, savedViewResidualConditions, shouldEvaluatePermissionConditionsOnClient]);
 
   useEffect(() => {
-    if (
-      !isListView ||
-      !resolvedModuleId ||
-      !shouldEvaluatePermissionConditionsOnClient
-    ) {
-      setPermissionConditionAllowedIds(null);
+    if (!resolvedModuleId || !needsClientViewConditions || !fieldPermissionsReady || (listStateKey && listStateKey !== restoredListStateKey)) {
       setPermissionConditionLoading(false);
-      setClientPermissionPageRows((previous) =>
-        previous.length > 0 ? [] : previous,
-      );
-      setClientPermissionTotal((previous) => (previous !== 0 ? 0 : previous));
+      setConditionMatchedRows(null);
       setClientPermissionPaginationActive(false);
       return;
     }
@@ -3298,92 +3341,48 @@ export const ModuleListRefine: React.FC<{
     const context = createWorkflowEvaluationContext(resolvedModuleId);
     setPermissionConditionLoading(true);
     setClientPermissionPaginationActive(true);
-    setPermissionConditionAllowedIds(null);
+    setConditionMatchedRows(null);
 
     const evaluateRows = async () => {
       try {
-        const serverFilters = buildMergedFilters(
-          viewFiltersState,
-          searchTerm,
-          columnFilters,
-        );
-        const rows = hasActiveTagViewFilters
-          ? await (async () => {
-              const orderedIds =
-                await resolveOrderedTagFilteredIds(serverFilters);
-              return orderedIds.length > 0
-                ? fetchRowsByIdsPreservingOrder(orderedIds, serverFilters)
-                : [];
-            })()
-          : (await fetchAllRowsForFilters(serverFilters)).rows;
-        if (!isActive) return;
-
-        if (rows.length === 0) {
-          setPermissionConditionAllowedIds(new Set());
-          setClientPermissionPageRows([]);
-          setClientPermissionTotal(0);
-          return;
+        const serverFilters = buildMergedFilters(viewFiltersState, searchTerm, columnFilters, permissionFilters);
+        const filteredRows: any[] = [];
+        const evaluatePage = async (rows: any[]) => {
+          for (let offset = 0; isActive && offset < rows.length; offset += 250) {
+            const chunk = rows.slice(offset, offset + 250);
+            if (conditionFilterFields.includes("tags")) await prefetchWorkflowRecordTags({
+              moduleId: resolvedModuleId, records: chunk, context,
+            });
+            const matches = await Promise.all(chunk.map(async (record: any) => {
+              if (!record?.id || !canAccessAssignedRecord(record, currentUserId, currentUserRoleId, recordScope, {
+                currentOrgId, allowedUserIds, allowedRoleIds,
+              })) return null;
+              try {
+                const passed = await evaluateViewResidual(record, context);
+                return passed ? record : null;
+              } catch {
+                return null;
+              }
+            }));
+            filteredRows.push(...matches.filter(Boolean));
+          }
+          return isActive;
+        };
+        if (hasActiveTagViewFilters) {
+          const orderedIds = await resolveOrderedTagFilteredIds(serverFilters);
+          for (let offset = 0; isActive && offset < orderedIds.length; offset += 500) {
+            const rows = await fetchRowsByIdsPreservingOrder(orderedIds.slice(offset, offset + 500), serverFilters, conditionFilterFields);
+            await evaluatePage(rows);
+          }
+        } else {
+          await fetchAllRowsForFilters(serverFilters, conditionFilterFields, evaluatePage);
         }
-
-        await prefetchWorkflowRecordTags({
-          moduleId: resolvedModuleId,
-          records: rows,
-          context,
-        });
-
-        const entries = await Promise.all(
-          rows.map(async (record: any) => {
-            const recordId = String(record?.id || "").trim();
-            if (!recordId) return null;
-            try {
-              const passed = await evaluateWorkflowConditions({
-                conditionsAll:
-                  clientPermissionViewConditions.conditions_all || [],
-                conditionsAny:
-                  clientPermissionViewConditions.conditions_any || [],
-                currentRecord: record,
-                moduleId: resolvedModuleId,
-                context,
-              });
-              return passed ? recordId : null;
-            } catch {
-              return null;
-            }
-          }),
-        );
-
-        if (!isActive) return;
-        const allowedRecordIds = new Set(entries.filter(Boolean) as string[]);
-        const filteredRows = rows.filter((record: any) =>
-          allowedRecordIds.has(String(record?.id || "").trim()),
-        );
-        const safePageSize = Math.max(
-          1,
-          Number(pageSize || DEFAULT_LIST_PAGE_SIZE),
-        );
-        const maxPage = Math.max(
-          1,
-          Math.ceil(filteredRows.length / safePageSize),
-        );
-        const safeCurrent = Math.min(
-          Math.max(1, Number(current || 1)),
-          maxPage,
-        );
-        const fromIndex = (safeCurrent - 1) * safePageSize;
-
-        setPermissionConditionAllowedIds(
-          new Set(
-            filteredRows
-              .slice(fromIndex, fromIndex + safePageSize)
-              .map((record: any) => String(record?.id || "").trim())
-              .filter(Boolean),
-          ),
-        );
-        setClientPermissionPageRows(
-          filteredRows.slice(fromIndex, fromIndex + safePageSize),
-        );
-        setClientPermissionTotal(filteredRows.length);
-        if (safeCurrent !== Number(current || 1)) setCurrent?.(safeCurrent);
+        if (isActive) setConditionMatchedRows(filteredRows);
+      } catch (error) {
+        if (isActive) {
+          setConditionMatchedRows([]);
+          showListMessage("error", toFaErrorMessage(error, "بررسی شرط‌های نما انجام نشد"));
+        }
       } finally {
         if (isActive) {
           setPermissionConditionLoading(false);
@@ -3397,19 +3396,29 @@ export const ModuleListRefine: React.FC<{
       isActive = false;
     };
   }, [
-    clientPermissionViewConditions,
+    allowedRoleIds,
+    allowedUserIds,
+    conditionFilterFields,
     columnFilters,
-    current,
+    currentOrgId,
+    currentUserId,
+    currentUserRoleId,
+    evaluateViewResidual,
     fetchAllRowsForFilters,
     fetchRowsByIdsPreservingOrder,
+    fieldPermissionsReady,
     hasActiveTagViewFilters,
-    isListView,
-    pageSize,
+    localListRevision,
+    listStateKey,
+    restoredListStateKey,
+    permissionFilters,
     permissionViewConditionsSignature,
+    recordScope,
     resolvedModuleId,
     resolveOrderedTagFilteredIds,
     searchTerm,
-    shouldEvaluatePermissionConditionsOnClient,
+    needsClientViewConditions,
+    showListMessage,
     tagViewFilterRefreshSeed,
     viewFiltersState,
   ]);
@@ -3507,7 +3516,7 @@ export const ModuleListRefine: React.FC<{
         );
       })
       .filter((record: any) => {
-        if (!shouldEvaluatePermissionConditionsOnClient) return true;
+        if (!needsClientViewConditions) return true;
         const recordId = String(record?.id || "").trim();
         if (!recordId || !permissionConditionAllowedIds) return false;
         return permissionConditionAllowedIds.has(recordId);
@@ -3541,7 +3550,7 @@ export const ModuleListRefine: React.FC<{
     permissionConditionAllowedIds,
     recordScope,
     resolvedModuleId,
-    shouldEvaluatePermissionConditionsOnClient,
+    needsClientViewConditions,
   ]);
 
   const normalizedAccessibleData = useMemo(() => {
@@ -3983,8 +3992,7 @@ export const ModuleListRefine: React.FC<{
   );
 
   useEffect(() => {
-    if (!resolvedModuleId) return;
-    if (typeof window === "undefined") return;
+    if (!listStateKey || listStateKey !== restoredListStateKey || typeof window === "undefined") return;
     const stateToPersist: PersistedModuleListState = {
       viewMode,
       searchTerm,
@@ -3995,16 +4003,16 @@ export const ModuleListRefine: React.FC<{
       sorters: sanitizePersistedSorters(visibleSorters, moduleConfig),
     };
     window.localStorage.setItem(
-      buildModuleListStateKey(resolvedModuleId, storageKeySuffix),
+      listStateKey,
       JSON.stringify(stateToPersist),
     );
   }, [
     columnFilters,
     currentView,
     moduleConfig,
-    resolvedModuleId,
+    listStateKey,
+    restoredListStateKey,
     searchTerm,
-    storageKeySuffix,
     viewFiltersState,
     viewMode,
     visibleColumns,
@@ -4528,8 +4536,9 @@ export const ModuleListRefine: React.FC<{
     tagViewFilterIdsCacheRef.current = null;
     setTagViewFilterRefreshSeed((prev) => prev + 1);
     setKanbanRefreshSeed((prev) => prev + 1);
+    applyCombinedFilters(viewFiltersState, searchTerm, columnFilters, false);
     void tableQueryResult.refetch();
-  }, [tableQueryResult]);
+  }, [columnFilters, fieldPermissions, fieldPermissionsReady, permissionFilters, searchTerm, tableQueryResult, viewFiltersState]);
 
   const handleSyncVoipCalls = useCallback(async () => {
     if (resolvedModuleId !== "voip_call_reports" || voipCallSyncing) return;
@@ -4760,6 +4769,7 @@ export const ModuleListRefine: React.FC<{
         .filter(Boolean),
     );
     const sanitizeFilter = (item: any): any | null => {
+      if (!item || typeof item !== 'object') return null;
       const fieldKey = String(item?.field || "").trim();
       if (fieldKey && virtualFieldKeys.has(fieldKey)) return null;
       if (
@@ -4769,7 +4779,7 @@ export const ModuleListRefine: React.FC<{
         const value = item.value.map(sanitizeFilter).filter(Boolean);
         return value.length > 0 ? { ...item, value } : null;
       }
-      return item;
+      return refreshRelativeViewDateFilter(item, moduleConfig?.fields || []);
     };
     const mergedFilters = [...nextPermFilters, ...nextViewFilters]
       .map(sanitizeFilter)
@@ -5192,25 +5202,25 @@ export const ModuleListRefine: React.FC<{
           continue;
         case "is_today":
         case "is_yesterday":
-        case "is_tomorrow": {
-          const baseDate = new Date();
-          baseDate.setHours(0, 0, 0, 0);
-          if (operator === "is_yesterday")
-            baseDate.setDate(baseDate.getDate() - 1);
-          if (operator === "is_tomorrow")
-            baseDate.setDate(baseDate.getDate() + 1);
-          filters.push(
-            {
-              field: fieldKey,
-              operator: "gte",
-              value: buildViewDateBoundaryValue(field, baseDate, "start"),
-            } as any,
-            {
-              field: fieldKey,
-              operator: "lte",
-              value: buildViewDateBoundaryValue(field, baseDate, "end"),
-            } as any,
-          );
+        case "is_tomorrow":
+        case "is_this_week":
+        case "is_last_week":
+        case "is_this_month":
+        case "is_last_month":
+        case "date_between": {
+          const rangeFilters = buildCalendarViewFilters(field, operator, value);
+          if (rangeFilters) filters.push(...rangeFilters);
+          continue;
+        }
+        case "datetime_between": {
+          const from = typeof value?.from === "string" ? new Date(value.from) : null;
+          const to = typeof value?.to === "string" ? new Date(value.to) : null;
+          if (from && to && Number.isFinite(from.getTime()) && Number.isFinite(to.getTime())) {
+            filters.push(
+              { field: fieldKey, operator: "gte", value: from.toISOString() },
+              { field: fieldKey, operator: "lte", value: to.toISOString() },
+            );
+          }
           continue;
         }
         default:
@@ -5229,11 +5239,19 @@ export const ModuleListRefine: React.FC<{
     const fieldKey = String(condition?.field || "").trim();
     const operator = String(condition?.operator || "").trim();
     if (!fieldKey || !operator || !moduleConfig) return false;
-    if (fieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) return true;
+    if (isTableConditionOperator(operator)) return false;
+    if (fieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY)
+      return ["eq", "contains", "in", "neq", "not_contains", "not_in"].includes(operator);
     const field = moduleConfig.fields.find(
       (item) => String(item?.key || "").trim() === fieldKey,
     );
-    return !!field && !isWorkflowVirtualField(field);
+    if (!field || isWorkflowVirtualField(field)) return false;
+    if (operator === "multi_count_gt" || operator === "multi_count_lt")
+      return field.type === FieldType.TAGS || isJsonArrayViewFilterField(field);
+    return [
+      "eq", "contains", "gt", "gte", "lt", "lte", "neq", "not_contains", "starts_with", "ends_with",
+      "in", "not_in", "is_true", "is_false", "is_null", "not_null", "datetime_between", ...CALENDAR_VIEW_OPERATORS,
+    ].includes(operator);
   }
 
   async function buildPermissionViewCrudFilters(
@@ -5249,7 +5267,8 @@ export const ModuleListRefine: React.FC<{
 
     if (conditionsAny.length === 0) return allFilters;
 
-    if (!conditionsAny.every(canBuildViewConditionAsCrudFilter)) {
+    if (!conditionsAny.every((condition) => canBuildViewConditionAsCrudFilter(condition)
+      && !([...CALENDAR_VIEW_OPERATORS, "datetime_between"] as string[]).includes(String(condition.operator)))) {
       return allFilters;
     }
 
@@ -5371,26 +5390,26 @@ export const ModuleListRefine: React.FC<{
 
   const handleViewChange = useCallback(
     (view: SavedView | null, config: any) => {
+      const requestId = ++viewFilterRequestId.current;
       const currentConfig = currentView?.config || null;
       const sameViewId = (currentView?.id || null) === (view?.id || null);
-      const sameConfig =
-        JSON.stringify(currentConfig || null) ===
-        JSON.stringify(config || null);
-      if (sameViewId && sameConfig) {
-        return;
-      }
+      const sameConfig = JSON.stringify(currentConfig) === JSON.stringify(config || null);
+      if (sameViewId && sameConfig) return;
 
-      setCurrentView(view);
       const applyViewFilters = async () => {
-        const refineFilters: CrudFilters =
-          config &&
-          config.filters &&
-          Array.isArray(config.filters) &&
-          config.filters.length > 0
-            ? await buildViewCrudFilters(config.filters)
+        try {
+          const filters = Array.isArray(config?.filters)
+            ? await buildViewCrudFilters(config.filters.filter(canBuildViewConditionAsCrudFilter))
             : [];
-        setViewFiltersState(refineFilters);
-        applyCombinedFilters(refineFilters, searchTerm, columnFilters);
+          if (requestId !== viewFilterRequestId.current) return;
+          setCurrentView(view);
+          setViewFiltersState(filters);
+          applyCombinedFilters(filters, searchTerm, columnFilters);
+        } catch (error) {
+          if (requestId === viewFilterRequestId.current) {
+            showListMessage("error", toFaErrorMessage(error, "اعمال شرط‌های نما انجام نشد"));
+          }
+        }
       };
       void applyViewFilters();
 
@@ -5437,6 +5456,7 @@ export const ModuleListRefine: React.FC<{
       resolvedModuleId,
       searchTerm,
       setSorters,
+      showListMessage,
     ],
   );
 
@@ -5577,7 +5597,9 @@ export const ModuleListRefine: React.FC<{
           sorters: stableSorters,
           filters: mergedFilters,
           meta: {
-            select: "id,status,assignee_type,assignee_id,assignee_role_id",
+            select: needsClientViewConditions
+              ? buildModuleListRowSelect(moduleConfig, [], { filters: mergedFilters, conditionFields: conditionFilterFields })
+              : "id,status,assignee_type,assignee_id,assignee_role_id",
           },
         });
 
@@ -5624,33 +5646,25 @@ export const ModuleListRefine: React.FC<{
       );
 
       if (
-        shouldEvaluatePermissionConditionsOnClient &&
+        needsClientViewConditions &&
         allowedRows.length > 0
       ) {
         const context = createWorkflowEvaluationContext(resolvedModuleId);
-        await prefetchWorkflowRecordTags({
-          moduleId: resolvedModuleId,
-          records: allowedRows,
-          context,
-        });
-        const evaluatedRows = await Promise.all(
-          allowedRows.map(async (row) => {
+        const evaluatedRows: any[] = [];
+        for (let offset = 0; offset < allowedRows.length; offset += 250) {
+          const chunk = allowedRows.slice(offset, offset + 250);
+          if (conditionFilterFields.includes("tags")) await prefetchWorkflowRecordTags({
+            moduleId: resolvedModuleId, records: chunk, context,
+          });
+          evaluatedRows.push(...await Promise.all(chunk.map(async (row) => {
             try {
-              const passed = await evaluateWorkflowConditions({
-                conditionsAll:
-                  clientPermissionViewConditions.conditions_all || [],
-                conditionsAny:
-                  clientPermissionViewConditions.conditions_any || [],
-                currentRecord: row,
-                moduleId: resolvedModuleId,
-                context,
-              });
+              const passed = await evaluateViewResidual(row, context);
               return passed ? row : null;
             } catch {
               return null;
             }
-          }),
-        );
+          })));
+        }
         allowedRows = evaluatedRows.filter(Boolean) as any[];
       }
       const allowedKeys = allowedRows
@@ -5702,7 +5716,8 @@ export const ModuleListRefine: React.FC<{
     currentOrgId,
     currentUserId,
     currentUserRoleId,
-    clientPermissionViewConditions,
+    conditionFilterFields,
+    evaluateViewResidual,
     recordScope,
     refineProvider,
     dataResource,
@@ -5710,7 +5725,7 @@ export const ModuleListRefine: React.FC<{
     searchTerm,
     selectAllPagesLoading,
     showListMessage,
-    shouldEvaluatePermissionConditionsOnClient,
+    needsClientViewConditions,
     stableSorters,
     viewFiltersState,
   ]);
@@ -6798,7 +6813,7 @@ export const ModuleListRefine: React.FC<{
     if (!isSystemManagedModule && canOpenGoals) {
       items.push({ key: "goals", label: "هدف‌گذاری" });
     }
-    if (!isSystemManagedModule && canOpenWorkflows) {
+    if ((!isSystemManagedModule || resolvedModuleId === 'saas_orgs' || resolvedModuleId === 'saas_demo_requests') && canOpenWorkflows) {
       items.push({ key: "workflows", label: "گردش کارها" });
     }
     if (!isSystemManagedModule && canEditModule) {
@@ -7153,7 +7168,7 @@ export const ModuleListRefine: React.FC<{
                   onClick={() => setIsMobileViewModeSheetOpen(true)}>
                   {mobileViewModeOptions.find((option) => option.value === viewMode)?.label}
                 </Button>
-                <ViewManager moduleId={resolvedModuleId} currentView={currentView} onViewChange={handleViewChange} onRefresh={handleRefresh} renderMode="mobile-sheet" />
+                <ViewManager key={JSON.stringify([currentOrgId, currentUserId, resolvedModuleId])} moduleId={resolvedModuleId} orgId={currentOrgId} userId={currentUserId} currentView={currentView} onViewChange={handleViewChange} onRefresh={handleRefresh} renderMode="mobile-sheet" />
               </> : (
               <Toolbar viewMode={viewMode} setViewMode={handleViewModeChange}
                 kanbanEnabled={availableGroupFields.length > 0} calendarEnabled={availableCalendarFields.length > 0} mapEnabled={mapEnabled}
@@ -7350,7 +7365,10 @@ export const ModuleListRefine: React.FC<{
 
       {!isMobileViewport ? <div className="module-list-saved-views mb-1 shrink-0">
           <ViewManager
+            key={JSON.stringify([currentOrgId, currentUserId, resolvedModuleId])}
             moduleId={resolvedModuleId}
+            orgId={currentOrgId}
+            userId={currentUserId}
             currentView={currentView}
             onViewChange={handleViewChange}
             onRefresh={handleRefresh}
@@ -7753,6 +7771,7 @@ export const ModuleListRefine: React.FC<{
             onClose={() => setIsWorkflowsModalOpen(false)}
             defaultModuleId={resolvedModuleId}
             context="module_list"
+            saasOnly={resolvedModuleId === 'saas_orgs' || resolvedModuleId === 'saas_demo_requests'}
           />
         </React.Suspense>
       ) : null}

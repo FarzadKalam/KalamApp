@@ -28,13 +28,14 @@ import {
   PlusOutlined,
   SaveOutlined,
   SettingOutlined,
+  TableOutlined,
+  UndoOutlined,
 } from '@ant-design/icons';
 import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
 import {
   BlockDefinition,
   BlockType,
-  FieldNature,
   FieldType,
   ModuleDefinition,
   ModuleField,
@@ -52,10 +53,12 @@ import {
 } from './moduleSettingsTypes';
 import { clearSystemCodeSettingsCache } from '../../utils/systemCode';
 import {
+  applyModuleSettingsStoreToRegistry,
   getBaseModuleFieldDefinition,
   getBaseModuleSchemaSnapshot,
   mergeModuleSchemaWithBase,
   MODULE_SETTINGS_UPDATED_EVENT,
+  primeModuleSettingsCache,
 } from '../../utils/moduleSettingsRuntime';
 import { ensureModuleSettingsCustomColumns } from '../../utils/moduleSettingsSchema';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
@@ -216,7 +219,7 @@ const mergeModuleSettings = (
     general: mergedGeneral,
     specific: mergedSpecific,
     schema: normalizeSchema(
-      mergeModuleSchemaWithBase(base.schema, incoming.schema || base.schema)
+      mergeModuleSchemaWithBase(base.schema, incoming.schema || base.schema, moduleId)
     ),
     conditionalDisplay: {
       rules: cloneDeep(incoming.conditionalDisplay?.rules || base.conditionalDisplay?.rules || []),
@@ -348,14 +351,60 @@ const getFieldDefaultEditorMode = (
   return 'custom';
 };
 
-const criticalFieldKeysByModule: Record<string, string[]> = {
-  __default: ['name', 'title', 'system_code', 'category', 'status'],
-  products: ['name', 'system_code', 'category', 'status', 'product_type'],
-  invoices: ['name', 'system_code', 'invoice_date', 'status'],
-  purchase_invoices: ['name', 'system_code', 'invoice_date', 'status'],
+const TRACKABLE_CLEAR_FIELD_KEYS = [
+  'blockId',
+  'defaultValue',
+  'dynamicOptionsCategory',
+  'relationConfig',
+  'options',
+] as const;
+
+const syncClearedKeys = <T extends Record<string, any>>(
+  item: T,
+  trackKeys: readonly string[] = TRACKABLE_CLEAR_FIELD_KEYS
+): T => {
+  const existing = new Set<string>(Array.isArray((item as any)?._clearedKeys) ? (item as any)._clearedKeys : []);
+  trackKeys.forEach((key) => {
+    const value = (item as any)?.[key];
+    if (value === undefined) {
+      existing.add(key);
+    } else {
+      existing.delete(key);
+    }
+  });
+  const nextList = Array.from(existing);
+  const next: any = { ...item };
+  if (nextList.length > 0) {
+    next._clearedKeys = nextList;
+  } else {
+    delete next._clearedKeys;
+  }
+  return next as T;
 };
 
-const serializeOptions = (field: ModuleField): string => {
+const prepareConfigForPersistence = (config: ModuleSettingsConfig): ModuleSettingsConfig => ({
+  ...config,
+  schema: {
+    blocks: (config.schema?.blocks || []).map((block) => ({
+      ...block,
+      ...(Array.isArray(block.tableColumns)
+        ? {
+            tableColumns: block.tableColumns.map((col) => syncClearedKeys(col)),
+          }
+        : {}),
+    })),
+    fields: (config.schema?.fields || []).map((field) => syncClearedKeys(field)),
+  },
+});
+
+const criticalFieldKeysByModule: Record<string, string[]> = {
+  __default: ['name', 'title', 'full_name', 'business_name', 'system_code'],
+  products: ['name', 'system_code', 'product_type'],
+  invoices: ['name', 'system_code', 'invoice_date'],
+  purchase_invoices: ['name', 'system_code', 'invoice_date'],
+};
+
+const serializeOptions = (field: { options?: Array<{ label?: any; value?: any; color?: any }> }): string => {
   return (field.options || [])
     .map((option) =>
       [String(option.label || ''), String(option.value || ''), String(option.color || '')]
@@ -382,7 +431,7 @@ const parseOptionsText = (value: string): Array<{ label: string; value: string; 
     });
 };
 
-const supportsOptionEditor = (field: ModuleField) => {
+const supportsOptionEditor = (field: { type: FieldType; dynamicOptionsCategory?: string }) => {
   return optionEditableTypes.has(field.type) || !!field.dynamicOptionsCategory;
 };
 
@@ -395,10 +444,12 @@ const buildProtectedFieldKeys = (moduleDef: ModuleDefinition | null): Set<string
     ...(criticalFieldKeysByModule[moduleDef.id] || []),
   ]);
 
-  (moduleDef.fields || []).forEach((field) => {
+  const baseSnapshot = getBaseModuleSchemaSnapshot(moduleDef.id);
+  const sourceFields = baseSnapshot?.fields || moduleDef.fields || [];
+  sourceFields.forEach((field) => {
     const key = String(field.key || '').trim();
     if (!key) return;
-    if (field.nature === FieldNature.SYSTEM || field.isKey) {
+    if (field.isKey) {
       protectedKeys.add(key);
     }
   });
@@ -427,6 +478,14 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
   const [optionEditorFieldKey, setOptionEditorFieldKey] = useState<string | null>(null);
   const [optionEditorText, setOptionEditorText] = useState('');
   const [optionEditorDynamicCategory, setOptionEditorDynamicCategory] = useState('');
+  const [tableColumnsEditorBlockId, setTableColumnsEditorBlockId] = useState<string | null>(null);
+  const [tableColOptionEditor, setTableColOptionEditor] = useState<{
+    blockId: string;
+    columnKey: string;
+    text: string;
+    dynamicCategory: string;
+    supportsDynamic: boolean;
+  } | null>(null);
   const [addFieldForm] = Form.useForm<AddFieldFormValues>();
   const [addBlockForm] = Form.useForm<{ id: string; title: string; type: BlockType }>();
 
@@ -628,6 +687,38 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
     return [...currentConfig.schema.blocks].sort((a, b) => (a.order || 0) - (b.order || 0));
   }, [currentConfig]);
 
+  const activeBlocks = useMemo(
+    () => sortedBlocks.filter((block) => block.isActive !== false),
+    [sortedBlocks]
+  );
+
+  const inactiveBlocks = useMemo(
+    () => sortedBlocks.filter((block) => block.isActive === false),
+    [sortedBlocks]
+  );
+
+  const activeBlockIdsSet = useMemo(
+    () => new Set(activeBlocks.map((block) => String(block.id || '').trim()).filter(Boolean)),
+    [activeBlocks]
+  );
+
+  const activeFields = useMemo(
+    () =>
+      sortedFields.filter((field) => {
+        if (field.isActive === false) return false;
+        const blockId = String(field.blockId || '').trim();
+        if (!blockId || blockId === HEADER_DESTINATION) return true;
+        return activeBlockIdsSet.has(blockId) || sortedBlocks.every((block) => block.id !== blockId);
+      }),
+    [activeBlockIdsSet, sortedBlocks, sortedFields]
+  );
+
+  const inactiveFields = useMemo(
+    () =>
+      sortedFields.filter((field) => !activeFields.some((candidate) => candidate.key === field.key)),
+    [activeFields, sortedFields]
+  );
+
   const fieldSections = useMemo(() => {
     const sections: Array<{
       key: string;
@@ -636,7 +727,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
       fields: ModuleField[];
     }> = [];
 
-    const headerFields = sortedFields.filter((field) => {
+    const headerFields = activeFields.filter((field) => {
       const destination = String(field.blockId || '').trim();
       return !destination || destination === HEADER_DESTINATION || field.location === 'header';
     });
@@ -648,8 +739,8 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
       fields: headerFields,
     });
 
-    sortedBlocks.forEach((block) => {
-      const blockFields = sortedFields.filter((field) => String(field.blockId || '').trim() === String(block.id || '').trim());
+    activeBlocks.forEach((block) => {
+      const blockFields = activeFields.filter((field) => String(field.blockId || '').trim() === String(block.id || '').trim());
       sections.push({
         key: String(block.id || ''),
         title: block.titles?.fa || block.id,
@@ -659,7 +750,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
     });
 
     const assignedFieldKeys = new Set(sections.flatMap((section) => section.fields.map((field) => field.key)));
-    const uncategorizedFields = sortedFields.filter((field) => !assignedFieldKeys.has(field.key));
+    const uncategorizedFields = activeFields.filter((field) => !assignedFieldKeys.has(field.key));
     if (uncategorizedFields.length > 0) {
       sections.push({
         key: '__uncategorized__',
@@ -670,22 +761,22 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
     }
 
     return sections.filter((section) => section.fields.length > 0);
-  }, [sortedBlocks, sortedFields]);
+  }, [activeBlocks, activeFields]);
 
   const defaultListColumnsCount = useMemo(
-    () => sortedFields.filter((field) => field.isTableColumn === true).length,
-    [sortedFields]
+    () => activeFields.filter((field) => field.isTableColumn === true).length,
+    [activeFields]
   );
 
   const blockDestinationOptions = useMemo(
     () => [
       { value: HEADER_DESTINATION, label: 'سربرگ (هیرو)' },
-      ...sortedBlocks.map((block) => ({
+      ...activeBlocks.map((block) => ({
         value: block.id,
         label: block.titles.fa,
       })),
     ],
-    [sortedBlocks]
+    [activeBlocks]
   );
 
   const fieldTypeOptions = useMemo(
@@ -725,13 +816,14 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
 
     setSaving(true);
     try {
+      const persistedConfig = prepareConfigForPersistence(currentConfig);
       if (selectedModuleConfig) {
-        await ensureModuleSettingsCustomColumns(supabase, selectedModuleConfig, currentConfig);
+        await ensureModuleSettingsCustomColumns(supabase, selectedModuleConfig, persistedConfig);
       }
 
       const nextModules: Record<string, ModuleSettingsConfig> = {
         ...settingsByModule,
-        [selectedModuleId]: currentConfig,
+        [selectedModuleId]: persistedConfig,
       };
       const currentOrgId = await getResolvedCurrentOrgId();
 
@@ -759,11 +851,15 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
 
       if (error) throw error;
 
+      const nextStore: ModuleSettingsStore = { modules: nextModules };
+      primeModuleSettingsCache(nextStore, currentOrgId);
+      applyModuleSettingsStoreToRegistry(nextStore);
       setSettingsByModule(nextModules);
+      setCurrentConfig(persistedConfig);
       setSettingsRowId(data?.id ? String(data.id) : settingsRowId);
       clearSystemCodeSettingsCache();
       if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent(MODULE_SETTINGS_UPDATED_EVENT));
+        window.dispatchEvent(new CustomEvent(MODULE_SETTINGS_UPDATED_EVENT, { detail: { skipReload: true } }));
       }
       setIsDirty(false);
       message.success('تنظیمات ماژول ذخیره شد.');
@@ -781,22 +877,50 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
     }
   };
 
-  const moveField = (index: number, direction: 'up' | 'down') => {
+  const moveBlock = (blockId: string, direction: 'up' | 'down') => {
+    updateSchema((prev) => {
+      const active = [...prev.blocks]
+        .filter((block) => block.isActive !== false)
+        .sort((a, b) => (a.order || 0) - (b.order || 0));
+      const inactive = [...prev.blocks]
+        .filter((block) => block.isActive === false)
+        .sort((a, b) => (a.order || 0) - (b.order || 0));
+      const index = active.findIndex((block) => block.id === blockId);
+      const target = direction === 'up' ? index - 1 : index + 1;
+      if (index < 0 || target < 0 || target >= active.length) return prev;
+      const temp = active[index];
+      active[index] = active[target];
+      active[target] = temp;
+      const reordered = [...active, ...inactive].map((block, idx) => ({ ...block, order: idx + 1 }));
+      return { ...prev, blocks: reordered };
+    });
+  };
+
+  const moveFieldInSection = (sectionFieldKeys: string[], fieldKey: string, direction: 'up' | 'down') => {
+    const sectionIndex = sectionFieldKeys.indexOf(fieldKey);
+    const targetSectionIndex = direction === 'up' ? sectionIndex - 1 : sectionIndex + 1;
+    if (sectionIndex < 0 || targetSectionIndex < 0 || targetSectionIndex >= sectionFieldKeys.length) return;
+    const swapFieldKey = sectionFieldKeys[targetSectionIndex];
+
     updateSchema((prev) => {
       const fields = [...prev.fields].sort((a, b) => (a.order || 0) - (b.order || 0));
-      const target = direction === 'up' ? index - 1 : index + 1;
-      if (target < 0 || target >= fields.length) return prev;
-      const temp = fields[index];
-      fields[index] = fields[target];
-      fields[target] = temp;
-      return { ...prev, fields };
+      const idxA = fields.findIndex((field) => field.key === fieldKey);
+      const idxB = fields.findIndex((field) => field.key === swapFieldKey);
+      if (idxA < 0 || idxB < 0) return prev;
+      const temp = fields[idxA];
+      fields[idxA] = fields[idxB];
+      fields[idxB] = temp;
+      return {
+        ...prev,
+        fields: fields.map((field, index) => ({ ...field, order: index + 1 })),
+      };
     });
   };
 
   const updateField = (fieldKey: string, updater: (field: ModuleField) => ModuleField) => {
     updateSchema((prev) => ({
       ...prev,
-      fields: prev.fields.map((field) => (field.key === fieldKey ? updater(field) : field)),
+      fields: prev.fields.map((field) => (field.key === fieldKey ? syncClearedKeys(updater(field)) : field)),
     }));
   };
 
@@ -811,7 +935,9 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
       updateSchema((prev) => ({
         ...prev,
         fields: prev.fields.map((field) => (
-          field.key === fieldKey ? { ...field, isActive: false, isTableColumn: false } : field
+          field.key === fieldKey
+            ? { ...field, isActive: false, printable: false, isTableColumn: false }
+            : field
         )),
       }));
       return;
@@ -820,6 +946,24 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
       ...prev,
       fields: prev.fields.filter((field) => field.key !== fieldKey),
     }));
+  };
+
+  const restoreField = (fieldKey: string) => {
+    updateSchema((prev) => {
+      const target = prev.fields.find((field) => field.key === fieldKey);
+      const blockId = String(target?.blockId || '').trim();
+      const targetBlockActive = !blockId || prev.blocks.some((block) => block.id === blockId && block.isActive !== false);
+      return {
+        ...prev,
+        fields: prev.fields.map((field) => {
+          if (field.key !== fieldKey) return field;
+          if (!targetBlockActive) {
+            return syncClearedKeys({ ...field, isActive: true, blockId: undefined, location: 'header' });
+          }
+          return { ...field, isActive: true };
+        }),
+      };
+    });
   };
 
   const addBlock = async () => {
@@ -852,6 +996,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
             type: values.type,
             order: prev.blocks.length + 1,
             isActive: true,
+            printable: true,
             titles: { fa: values.title || normalizedId },
           } as BlockDefinition,
         ],
@@ -870,7 +1015,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
           block.id === blockId ? { ...block, isActive: false, printable: false } : block
         )),
         fields: prev.fields.map((field) => (
-          field.blockId === blockId ? { ...field, isActive: false, isTableColumn: false } : field
+          field.blockId === blockId ? { ...field, isActive: false, printable: false, isTableColumn: false } : field
         )),
       }));
       return;
@@ -879,8 +1024,17 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
       blocks: prev.blocks.filter((block) => block.id !== blockId),
       fields: prev.fields.map((field) => {
         if (field.blockId !== blockId) return field;
-        return { ...field, blockId: undefined, location: 'header' };
+        return syncClearedKeys({ ...field, blockId: undefined, location: 'header' });
       }),
+    }));
+  };
+
+  const restoreBlock = (blockId: string) => {
+    updateSchema((prev) => ({
+      ...prev,
+      blocks: prev.blocks.map((block) => (
+        block.id === blockId ? { ...block, isActive: true } : block
+      )),
     }));
   };
 
@@ -919,6 +1073,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
             blockId,
             location: blockId ? 'block' : 'header',
             isActive: true,
+            printable: true,
             isTableColumn: true,
             order: prev.fields.length + 1,
             validation: { required: false },
@@ -958,6 +1113,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
     updateField(optionEditorFieldKey, (field) => ({
       ...field,
       options: parsedOptions,
+      _optionsCustomized: true,
       dynamicOptionsCategory: nextDynamic || undefined,
     }));
 
@@ -965,6 +1121,38 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
     setOptionEditorText('');
     setOptionEditorDynamicCategory('');
   };
+
+  const tableColumnsEditorBlock = useMemo(
+    () => sortedBlocks.find((block) => block.id === tableColumnsEditorBlockId) || null,
+    [sortedBlocks, tableColumnsEditorBlockId]
+  );
+
+  const updateBlockTableColumns = (
+    blockId: string,
+    updater: (columns: NonNullable<BlockDefinition['tableColumns']>) => NonNullable<BlockDefinition['tableColumns']>
+  ) => {
+    updateSchema((prev) => ({
+      ...prev,
+      blocks: prev.blocks.map((block) => {
+        if (block.id !== blockId) return block;
+        const currentCols = Array.isArray(block.tableColumns) ? block.tableColumns : [];
+        return {
+          ...block,
+          _tableColumnsCustomized: true,
+          tableColumns: updater(currentCols).map((col) => syncClearedKeys(col)),
+        };
+      }),
+    }));
+  };
+
+  const isBaseTableColumn = useCallback(
+    (blockId: string, columnKey: string) => {
+      const baseSchema = getBaseModuleSchemaSnapshot(selectedModuleId);
+      const baseBlock = (baseSchema?.blocks || []).find((block) => block.id === blockId);
+      return Boolean((baseBlock?.tableColumns || []).some((col) => String(col?.key || '').trim() === columnKey));
+    },
+    [selectedModuleId]
+  );
 
   const resetSchemaToDefault = () => {
     if (!selectedModuleConfig) return;
@@ -1362,81 +1550,170 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                       className="border-gray-200 dark:!bg-[#141414] dark:!border-gray-800"
                     >
                       <Space direction="vertical" className="w-full">
-                        {sortedBlocks.length === 0 ? (
-                          <Empty description="بلاکی وجود ندارد" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                        {activeBlocks.length === 0 ? (
+                          <Empty description="بلاک فعالی وجود ندارد" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                         ) : (
-                          sortedBlocks.map((block) => (
+                          activeBlocks.map((block, blockIndex) => (
                             <div
                               key={block.id}
-                              className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 flex flex-wrap items-center gap-2"
+                              className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2"
                             >
-                              <Input
-                                className="max-w-[260px]"
-                                value={block.titles.fa}
-                                onChange={(e) =>
-                                  updateSchema((prev) => ({
-                                    ...prev,
-                                    blocks: prev.blocks.map((item) =>
-                                      item.id === block.id
-                                        ? {
-                                            ...item,
-                                            titles: { ...(item.titles || {}), fa: e.target.value || item.id },
-                                          }
-                                        : item
-                                    ),
-                                  }))
-                                }
-                              />
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs text-gray-500 dark:text-gray-400">فعال</span>
-                                <Switch
-                                  size="small"
-                                  checked={block.isActive !== false}
-                                  onChange={(checked) =>
+                              <div className="flex flex-wrap items-center gap-2 flex-1 min-w-[260px]">
+                                <Input
+                                  className="max-w-[240px]"
+                                  value={block.titles?.fa || ''}
+                                  onChange={(e) =>
                                     updateSchema((prev) => ({
                                       ...prev,
                                       blocks: prev.blocks.map((item) =>
                                         item.id === block.id
-                                          ? { ...item, isActive: checked }
+                                          ? {
+                                              ...item,
+                                              titles: { ...(item.titles || {}), fa: e.target.value || item.id },
+                                            }
                                           : item
                                       ),
                                     }))
                                   }
                                 />
+                                {block.type === BlockType.FIELD_GROUP || block.type === BlockType.DEFAULT ? (
+                                  <Select
+                                    size="small"
+                                    className="w-[150px]"
+                                    value={block.type}
+                                    options={[
+                                      { value: BlockType.FIELD_GROUP, label: blockTypeLabels[BlockType.FIELD_GROUP] },
+                                      { value: BlockType.DEFAULT, label: blockTypeLabels[BlockType.DEFAULT] },
+                                    ]}
+                                    onChange={(nextType: BlockType) =>
+                                      updateSchema((prev) => ({
+                                        ...prev,
+                                        blocks: prev.blocks.map((item) =>
+                                          item.id === block.id ? { ...item, type: nextType } : item
+                                        ),
+                                      }))
+                                    }
+                                  />
+                                ) : (
+                                  <Tag color="blue">{blockTypeLabels[block.type] || block.type}</Tag>
+                                )}
+                                <Tag>{block.id}</Tag>
                               </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs text-gray-500 dark:text-gray-400">قابل چاپ</span>
-                                <Switch
+
+                              <div className="flex flex-wrap items-center gap-3">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-xs text-gray-500 dark:text-gray-400">قابل چاپ</span>
+                                  <Switch
+                                    size="small"
+                                    checked={block.printable !== false}
+                                    onChange={(checked) =>
+                                      updateSchema((prev) => ({
+                                        ...prev,
+                                        blocks: prev.blocks.map((item) =>
+                                          item.id === block.id
+                                            ? { ...item, printable: checked }
+                                            : item
+                                        ),
+                                      }))
+                                    }
+                                  />
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-xs text-gray-500 dark:text-gray-400">فقط خواندنی</span>
+                                  <Switch
+                                    size="small"
+                                    checked={block.readonly === true}
+                                    onChange={(checked) =>
+                                      updateSchema((prev) => ({
+                                        ...prev,
+                                        blocks: prev.blocks.map((item) =>
+                                          item.id === block.id ? { ...item, readonly: checked } : item
+                                        ),
+                                      }))
+                                    }
+                                  />
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-xs text-gray-500 dark:text-gray-400">مخفی در ایجاد</span>
+                                  <Switch
+                                    size="small"
+                                    checked={block.hideInCreateForm === true}
+                                    onChange={(checked) =>
+                                      updateSchema((prev) => ({
+                                        ...prev,
+                                        blocks: prev.blocks.map((item) =>
+                                          item.id === block.id ? { ...item, hideInCreateForm: checked } : item
+                                        ),
+                                      }))
+                                    }
+                                  />
+                                </div>
+                                {(block.type === BlockType.TABLE || block.type === BlockType.GRID_TABLE || Array.isArray(block.tableColumns)) && (
+                                  <Button
+                                    size="small"
+                                    icon={<TableOutlined />}
+                                    onClick={() => setTableColumnsEditorBlockId(block.id)}
+                                  >
+                                    ستون‌های جدول ({(block.tableColumns || []).filter((c) => c?.isActive !== false).length})
+                                  </Button>
+                                )}
+                                <Button
                                   size="small"
-                                  checked={block.printable !== false}
-                                  onChange={(checked) =>
-                                    updateSchema((prev) => ({
-                                      ...prev,
-                                      blocks: prev.blocks.map((item) =>
-                                        item.id === block.id
-                                          ? { ...item, printable: checked }
-                                          : item
-                                      ),
-                                    }))
-                                  }
+                                  icon={<ArrowUpOutlined />}
+                                  disabled={blockIndex <= 0}
+                                  onClick={() => moveBlock(block.id, 'up')}
                                 />
+                                <Button
+                                  size="small"
+                                  icon={<ArrowDownOutlined />}
+                                  disabled={blockIndex === activeBlocks.length - 1}
+                                  onClick={() => moveBlock(block.id, 'down')}
+                                />
+                                <Popconfirm
+                                  title="حذف بلاک"
+                                  description={isBaseBlock(block.id) ? 'این بلاک غیرفعال و از نمایش و چاپ حذف می‌شود.' : 'فیلدهای این بلاک به سربرگ منتقل می‌شوند.'}
+                                  onConfirm={() => deleteBlock(block.id)}
+                                  okText="حذف"
+                                  cancelText="انصراف"
+                                >
+                                  <Button danger size="small" icon={<DeleteOutlined />}>
+                                    حذف
+                                  </Button>
+                                </Popconfirm>
                               </div>
-                              <Tag>{block.id}</Tag>
-                              <Tag color="blue">{blockTypeLabels[block.type] || block.type}</Tag>
-                              {block.isActive === false && <Tag color="orange">غیرفعال</Tag>}
-                              <Popconfirm
-                                title="حذف بلاک"
-                                description={isBaseBlock(block.id) ? 'این بلاک سیستمی غیرفعال می‌شود.' : 'فیلدهای این بلاک به سربرگ منتقل می‌شوند.'}
-                                onConfirm={() => deleteBlock(block.id)}
-                                okText="حذف"
-                                cancelText="انصراف"
-                              >
-                                <Button danger size="small" icon={<DeleteOutlined />}>
-                                  حذف
-                                </Button>
-                              </Popconfirm>
                             </div>
                           ))
+                        )}
+                        {inactiveBlocks.length > 0 && (
+                          <SettingsCollapsiblePanel
+                            defaultExpanded={false}
+                            className="rounded-xl border border-dashed border-orange-300 bg-orange-50/40 p-3 dark:border-orange-700/60 dark:bg-orange-950/20"
+                            bodyClassName="mt-2 space-y-2"
+                            header={(
+                              <div className="flex items-center gap-2">
+                                <Tag color="orange">بلاک‌های غیرفعال / حذف‌شده ({inactiveBlocks.length})</Tag>
+                              </div>
+                            )}
+                          >
+                            {inactiveBlocks.map((block) => (
+                              <div
+                                key={block.id}
+                                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-gray-200 bg-white p-2 dark:border-gray-700 dark:bg-[#141414]"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <Tag>{block.id}</Tag>
+                                  <Typography.Text className="text-sm">{block.titles?.fa || block.id}</Typography.Text>
+                                </div>
+                                <Button
+                                  size="small"
+                                  icon={<UndoOutlined />}
+                                  onClick={() => restoreBlock(block.id)}
+                                >
+                                  بازگردانی
+                                </Button>
+                              </div>
+                            ))}
+                          </SettingsCollapsiblePanel>
                         )}
                       </Space>
                     </Card>
@@ -1447,7 +1724,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                       className="border-gray-200 dark:!bg-[#141414] dark:!border-gray-800"
                     >
                       <Space direction="vertical" className="w-full">
-                        {sortedFields.length === 0 ? (
+                        {activeFields.length === 0 && inactiveFields.length === 0 ? (
                           <Empty description="فیلدی وجود ندارد" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                         ) : (
                           <>
@@ -1456,11 +1733,13 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                               showIcon
                               message={
                                 defaultListColumnsCount > 0
-                                  ? `در حال حاضر ${defaultListColumnsCount} فیلد به‌عنوان ستون پیش‌فرض لیست فعال است. این تنظیم فقط روی نمای اصلی لیست همین ماژول اثر می‌گذارد و تنظیمات View Manager را تغییر نمی‌دهد.`
-                                  : 'در حال حاضر هیچ ستون پیش‌فرضی برای لیست فعال نیست؛ در این حالت لیست به fallback عمومی پروژه برمی‌گردد. این تنظیم فقط روی نمای اصلی لیست همین ماژول اثر می‌گذارد و تنظیمات View Manager را تغییر نمی‌دهد.'
+                                  ? `در حال حاضر ${defaultListColumnsCount} فیلد به‌عنوان ستون پیش‌فرض لیست فعال است. تغییرات فیلدها و بلاک‌ها بلافاصله پس از ذخیره مرجع کل سامانه می‌شود.`
+                                  : 'در حال حاضر هیچ ستون پیش‌فرضی برای لیست فعال نیست؛ در این حالت لیست به fallback عمومی پروژه برمی‌گردد.'
                               }
                             />
-                            {fieldSections.map((section) => (
+                            {fieldSections.map((section) => {
+                              const sectionFieldKeys = section.fields.map((f) => f.key);
+                              return (
                               <Card
                                 key={section.key}
                                 size="small"
@@ -1475,8 +1754,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                 className="border-gray-200 dark:!bg-[#181818] dark:!border-gray-700"
                               >
                                 <Space direction="vertical" className="w-full">
-                                  {section.fields.map((field) => {
-                                    const globalIndex = sortedFields.findIndex((candidate) => candidate.key === field.key);
+                                  {section.fields.map((field, sectionIndex) => {
                                     const protectedField = isProtectedField(field);
                                     const relationTargetModule = field.relationConfig?.targetModule;
                                     const relationTargetModuleConfig = relationTargetModule
@@ -1516,18 +1794,19 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                     <div className="rounded bg-gray-100 px-2 py-1 font-mono text-xs dark:bg-gray-800">
                                       {field.key}
                                     </div>
-                                            <Tag color="default">{fieldTypeLabels[field.type] || field.type}</Tag>
-                                            {field.isTableColumn === true && <Tag color="blue">ستون لیست</Tag>}
-                                            {field.isActive === false && <Tag color="orange">غیرفعال</Tag>}
-                                            <Typography.Text className="text-sm">
-                                              {field.labels?.fa || 'بدون عنوان'}
-                                            </Typography.Text>
+                                    <Tag color="default">{fieldTypeLabels[field.type] || field.type}</Tag>
+                                    {field.isTableColumn === true && <Tag color="blue">ستون لیست</Tag>}
+                                    {field.printable === false && <Tag color="purple">غیرقابل چاپ</Tag>}
+                                    {field.readonly === true && <Tag color="default">فقط خواندنی</Tag>}
+                                    <Typography.Text className="text-sm">
+                                      {field.labels?.fa || 'بدون عنوان'}
+                                    </Typography.Text>
                                     {field.defaultValue !== undefined && (
                                       <Tag color="gold">
                                         پیش‌فرض: {formatFieldDefaultSummary(field, field.defaultValue)}
                                       </Tag>
                                     )}
-                                    {protectedField && <Tag color="red">سیستمی/ضروری</Tag>}
+                                    {protectedField && <Tag color="red">فیلد کلیدی</Tag>}
                                   </div>
                                 )}
                                 extra={(
@@ -1535,23 +1814,23 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                     <Button
                                       size="small"
                                       icon={<ArrowUpOutlined />}
-                                      disabled={globalIndex <= 0 || protectedField}
-                                      onClick={() => moveField(globalIndex, 'up')}
+                                      disabled={sectionIndex <= 0}
+                                      onClick={() => moveFieldInSection(sectionFieldKeys, field.key, 'up')}
                                     />
                                     <Button
                                       size="small"
                                       icon={<ArrowDownOutlined />}
-                                      disabled={globalIndex === sortedFields.length - 1 || protectedField}
-                                      onClick={() => moveField(globalIndex, 'down')}
+                                      disabled={sectionIndex === section.fields.length - 1}
+                                      onClick={() => moveFieldInSection(sectionFieldKeys, field.key, 'down')}
                                     />
-                                    {supportsOptionEditor(field) && !protectedField && (
+                                    {supportsOptionEditor(field) && (
                                       <Button size="small" onClick={() => openOptionsEditor(field)}>
                                         گزینه‌ها
                                       </Button>
                                     )}
                                     <Tooltip
                                       title={
-                                        protectedField ? 'این فیلد سیستمی/ضروری است و قابل حذف نیست.' : undefined
+                                        protectedField ? 'فیلدهای کلیدی برای پایداری رکورد قابل حذف نیستند.' : undefined
                                       }
                                     >
                                       <Popconfirm
@@ -1584,7 +1863,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                       }
                                     />
                                   </Col>
-                                  <Col xs={24} md={6}>
+                                  <Col xs={24} md={8}>
                                     <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
                                       نوع فیلد
                                     </Typography.Text>
@@ -1620,14 +1899,13 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                       options={fieldTypeOptions}
                                     />
                                   </Col>
-                                  <Col xs={24} md={6}>
+                                  <Col xs={24} md={8}>
                                     <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
                                       بلاک مقصد
                                     </Typography.Text>
                                     <Select
                                       className="w-full"
                                       value={field.blockId || HEADER_DESTINATION}
-                                      disabled={protectedField}
                                       options={blockDestinationOptions}
                                       onChange={(value) =>
                                         updateField(field.key, (prev) => ({
@@ -1638,32 +1916,51 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                       }
                                     />
                                   </Col>
-                                  <Col xs={12} md={2}>
+                                </Row>
+
+                                <Row gutter={[12, 12]}>
+                                  <Col xs={12} md={4}>
                                     <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
-                                      فعال
+                                      قابل چاپ
                                     </Typography.Text>
                                     <div>
                                       <Switch
-                                        checked={field.isActive !== false}
-                                        disabled={protectedField}
+                                        size="small"
+                                        checked={field.printable !== false}
                                         onChange={(checked) =>
                                           updateField(field.key, (prev) => ({
                                             ...prev,
-                                            isActive: checked,
-                                            isTableColumn: checked ? prev.isTableColumn : false,
+                                            printable: checked,
                                           }))
                                         }
                                       />
                                     </div>
                                   </Col>
-                                  <Col xs={12} md={2}>
+                                  <Col xs={12} md={4}>
+                                    <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
+                                      ستون پیش‌فرض لیست
+                                    </Typography.Text>
+                                    <div>
+                                      <Switch
+                                        size="small"
+                                        checked={field.isTableColumn === true}
+                                        onChange={(checked) =>
+                                          updateField(field.key, (prev) => ({
+                                            ...prev,
+                                            isTableColumn: checked,
+                                          }))
+                                        }
+                                      />
+                                    </div>
+                                  </Col>
+                                  <Col xs={12} md={4}>
                                     <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
                                       اجباری
                                     </Typography.Text>
                                     <div>
                                       <Switch
+                                        size="small"
                                         checked={!!field.validation?.required}
-                                        disabled={protectedField}
                                         onChange={(checked) =>
                                           updateField(field.key, (prev) => ({
                                             ...prev,
@@ -1673,18 +1970,53 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                       />
                                     </div>
                                   </Col>
-                                  <Col xs={12} md={2}>
+                                  <Col xs={12} md={4}>
                                     <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
-                                      ستون پیش‌فرض لیست
+                                      فقط خواندنی
                                     </Typography.Text>
                                     <div>
-                                              <Switch
-                                                checked={field.isTableColumn === true}
-                                                disabled={protectedField}
-                                                onChange={(checked) =>
-                                                  updateField(field.key, (prev) => ({
+                                      <Switch
+                                        size="small"
+                                        checked={field.readonly === true}
+                                        onChange={(checked) =>
+                                          updateField(field.key, (prev) => ({
                                             ...prev,
-                                            isTableColumn: checked,
+                                            readonly: checked,
+                                          }))
+                                        }
+                                      />
+                                    </div>
+                                  </Col>
+                                  <Col xs={12} md={4}>
+                                    <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
+                                      مخفی در فرم ایجاد
+                                    </Typography.Text>
+                                    <div>
+                                      <Switch
+                                        size="small"
+                                        checked={field.hideInCreateForm === true}
+                                        onChange={(checked) =>
+                                          updateField(field.key, (prev) => ({
+                                            ...prev,
+                                            hideInCreateForm: checked,
+                                          }))
+                                        }
+                                      />
+                                    </div>
+                                  </Col>
+                                  <Col xs={12} md={4}>
+                                    <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
+                                      مخفی در جدول لیست
+                                    </Typography.Text>
+                                    <div>
+                                      <Switch
+                                        size="small"
+                                        checked={field.hideInTable === true}
+                                        onChange={(checked) =>
+                                          updateField(field.key, (prev) => ({
+                                            ...prev,
+                                            hideInTable: checked,
+                                            isTableColumn: checked ? false : prev.isTableColumn,
                                           }))
                                         }
                                       />
@@ -1700,7 +2032,6 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                     <Select
                                       className="w-full"
                                       value={defaultEditorMode}
-                                      disabled={protectedField}
                                       options={defaultSourceOptions}
                                       onChange={(nextMode: 'none' | 'system' | 'custom') =>
                                         updateField(field.key, (prev) => {
@@ -1738,7 +2069,6 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                       <SettingsFieldValueInput
                                         field={field}
                                         value={normalizedFieldDefaultValue}
-                                        disabled={protectedField}
                                         moduleId={selectedModuleId || undefined}
                                         onChange={(nextValue) =>
                                           updateField(field.key, (prev) => ({
@@ -1807,7 +2137,6 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                             allowClear
                                             className="w-full"
                                             value={field.relationConfig?.targetField}
-                                            disabled={protectedField}
                                             options={relationTargetFieldOptions}
                                             onChange={(value) =>
                                               updateField(field.key, (prev) => ({
@@ -1834,7 +2163,6 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                         <Input
                                           placeholder="مثال: product_categories"
                                           value={field.dynamicOptionsCategory || ''}
-                                          disabled={protectedField}
                                           onChange={(e) =>
                                             updateField(field.key, (prev) => ({
                                               ...prev,
@@ -1849,7 +2177,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
 
                                 {protectedField && (
                                   <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
-                                    برای فیلدهای سیستمی/ضروری فقط تغییر عنوان فارسی مجاز است.
+                                    برای حفظ پایداری داده‌ها، حذف یا تغییر نوع فیلد کلیدی مجاز نیست؛ سایر ویژگی‌های آن قابل ویرایش است.
                                   </Typography.Text>
                                 )}
                               </SettingsCollapsiblePanel>
@@ -1857,7 +2185,39 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                   })}
                                 </Space>
                               </Card>
-                            ))}
+                              );
+                            })}
+                            {inactiveFields.length > 0 && (
+                              <SettingsCollapsiblePanel
+                                defaultExpanded={false}
+                                className="rounded-xl border border-dashed border-orange-300 bg-orange-50/40 p-3 dark:border-orange-700/60 dark:bg-orange-950/20"
+                                bodyClassName="mt-2 space-y-2"
+                                header={(
+                                  <div className="flex items-center gap-2">
+                                    <Tag color="orange">فیلدهای غیرفعال / حذف‌شده ({inactiveFields.length})</Tag>
+                                  </div>
+                                )}
+                              >
+                                {inactiveFields.map((field) => (
+                                  <div
+                                    key={field.key}
+                                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-gray-200 bg-white p-2 dark:border-gray-700 dark:bg-[#141414]"
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <Tag>{field.key}</Tag>
+                                      <Typography.Text className="text-sm">{field.labels?.fa || field.key}</Typography.Text>
+                                    </div>
+                                    <Button
+                                      size="small"
+                                      icon={<UndoOutlined />}
+                                      onClick={() => restoreField(field.key)}
+                                    >
+                                      بازگردانی
+                                    </Button>
+                                  </div>
+                                ))}
+                              </SettingsCollapsiblePanel>
+                            )}
                           </>
                         )}
                       </Space>
@@ -1991,6 +2351,327 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
           rows={10}
           value={optionEditorText}
           onChange={(e) => setOptionEditorText(e.target.value)}
+          placeholder={'مثال:\nفعال|active|green\nغیرفعال|inactive|red'}
+        />
+      </Modal>
+
+      <Modal
+        title={
+          <span className="flex items-center gap-2">
+            <TableOutlined />
+            ویرایش ستون‌های جدول: {tableColumnsEditorBlock?.titles?.fa || tableColumnsEditorBlock?.id || ''}
+          </span>
+        }
+        open={!!tableColumnsEditorBlock}
+        width={880}
+        style={{ maxWidth: 'calc(100vw - 1.5rem)' }}
+        onCancel={() => setTableColumnsEditorBlockId(null)}
+        footer={[
+          <Button
+            key="add"
+            type="dashed"
+            icon={<PlusOutlined />}
+            onClick={() => {
+              if (!tableColumnsEditorBlock) return;
+              const existingKeys = new Set((tableColumnsEditorBlock.tableColumns || []).map((c) => c.key));
+              let idx = (tableColumnsEditorBlock.tableColumns || []).length + 1;
+              let newKey = `custom_col_${idx}`;
+              while (existingKeys.has(newKey)) {
+                idx += 1;
+                newKey = `custom_col_${idx}`;
+              }
+              updateBlockTableColumns(tableColumnsEditorBlock.id, (cols) => [
+                ...cols,
+                {
+                  key: newKey,
+                  title: `ستون ${idx}`,
+                  labels: { fa: `ستون ${idx}`, en: newKey },
+                  type: FieldType.TEXT,
+                  isActive: true,
+                  printable: true,
+                },
+              ]);
+            }}
+          >
+            افزودن ستون سفارشی
+          </Button>,
+          <Button key="close" type="primary" onClick={() => setTableColumnsEditorBlockId(null)}>
+            بستن
+          </Button>,
+        ]}
+      >
+        {tableColumnsEditorBlock && (
+          <div className="space-y-3 max-h-[65vh] overflow-y-auto pl-1">
+            {((tableColumnsEditorBlock.tableColumns || []).filter((c) => c.isActive !== false)).length === 0 ? (
+              <Empty description="ستون فعالی در این جدول وجود ندارد" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            ) : (
+              (tableColumnsEditorBlock.tableColumns || [])
+                .filter((col) => col.isActive !== false)
+                .map((col, activeIndex, activeArr) => {
+                  const baseCol = isBaseTableColumn(tableColumnsEditorBlock.id, col.key);
+                  return (
+                    <div
+                      key={col.key}
+                      className="rounded-xl border border-gray-200 dark:border-gray-700 p-3 space-y-2 bg-gray-50/40 dark:bg-[#141414]"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Tag className="font-mono">{col.key}</Tag>
+                          <Input
+                            size="small"
+                            className="w-[190px]"
+                            value={col.labels?.fa || col.title || ''}
+                            placeholder="عنوان ستون"
+                            onChange={(e) =>
+                              updateBlockTableColumns(tableColumnsEditorBlock.id, (cols) =>
+                                cols.map((item) =>
+                                  item.key === col.key
+                                    ? {
+                                        ...item,
+                                        title: e.target.value,
+                                        labels: { ...(item.labels || {}), fa: e.target.value },
+                                      }
+                                    : item
+                                )
+                              )
+                            }
+                          />
+                          <Select
+                            size="small"
+                            className="w-[130px]"
+                            value={col.type}
+                            disabled={baseCol}
+                            options={addFieldTypeOptions}
+                            onChange={(nextType: FieldType) =>
+                              updateBlockTableColumns(tableColumnsEditorBlock.id, (cols) =>
+                                cols.map((item) =>
+                                  item.key === col.key
+                                    ? {
+                                        ...item,
+                                        type: nextType,
+                                        options: optionEditableTypes.has(nextType) ? item.options || [] : undefined,
+                                        dynamicOptionsCategory: supportsDynamicCategory(nextType)
+                                          ? item.dynamicOptionsCategory
+                                          : undefined,
+                                      }
+                                    : item
+                                )
+                              )
+                            }
+                          />
+                          <InputNumber
+                            size="small"
+                            className="w-[90px]"
+                            placeholder="عرض"
+                            min={40}
+                            max={600}
+                            value={col.width}
+                            onChange={(val) =>
+                              updateBlockTableColumns(tableColumnsEditorBlock.id, (cols) =>
+                                cols.map((item) =>
+                                  item.key === col.key ? { ...item, width: val ?? undefined } : item
+                                )
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-gray-500">قابل چاپ</span>
+                            <Switch
+                              size="small"
+                              checked={col.printable !== false}
+                              onChange={(checked) =>
+                                updateBlockTableColumns(tableColumnsEditorBlock.id, (cols) =>
+                                  cols.map((item) =>
+                                    item.key === col.key ? { ...item, printable: checked } : item
+                                  )
+                                )
+                              }
+                            />
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-gray-500">جمع کل</span>
+                            <Switch
+                              size="small"
+                              checked={col.showTotal === true}
+                              onChange={(checked) =>
+                                updateBlockTableColumns(tableColumnsEditorBlock.id, (cols) =>
+                                  cols.map((item) =>
+                                    item.key === col.key ? { ...item, showTotal: checked } : item
+                                  )
+                                )
+                              }
+                            />
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-gray-500">فقط خواندنی</span>
+                            <Switch
+                              size="small"
+                              checked={col.readonly === true}
+                              onChange={(checked) =>
+                                updateBlockTableColumns(tableColumnsEditorBlock.id, (cols) =>
+                                  cols.map((item) =>
+                                    item.key === col.key ? { ...item, readonly: checked } : item
+                                  )
+                                )
+                              }
+                            />
+                          </div>
+                          {supportsOptionEditor(col) && (
+                            <Button
+                              size="small"
+                              onClick={() =>
+                                setTableColOptionEditor({
+                                  blockId: tableColumnsEditorBlock.id,
+                                  columnKey: col.key,
+                                  text: serializeOptions(col),
+                                  dynamicCategory: String(col.dynamicOptionsCategory || ''),
+                                  supportsDynamic: supportsDynamicCategory(col.type),
+                                })
+                              }
+                            >
+                              گزینه‌ها
+                            </Button>
+                          )}
+                          <Button
+                            size="small"
+                            icon={<ArrowUpOutlined />}
+                            disabled={activeIndex <= 0}
+                            onClick={() => {
+                              const prevKey = activeArr[activeIndex - 1]?.key;
+                              if (!prevKey) return;
+                              updateBlockTableColumns(tableColumnsEditorBlock.id, (cols) => {
+                                const next = [...cols];
+                                const idxA = next.findIndex((c) => c.key === col.key);
+                                const idxB = next.findIndex((c) => c.key === prevKey);
+                                if (idxA < 0 || idxB < 0) return cols;
+                                [next[idxA], next[idxB]] = [next[idxB], next[idxA]];
+                                return next;
+                              });
+                            }}
+                          />
+                          <Button
+                            size="small"
+                            icon={<ArrowDownOutlined />}
+                            disabled={activeIndex === activeArr.length - 1}
+                            onClick={() => {
+                              const nextKey = activeArr[activeIndex + 1]?.key;
+                              if (!nextKey) return;
+                              updateBlockTableColumns(tableColumnsEditorBlock.id, (cols) => {
+                                const next = [...cols];
+                                const idxA = next.findIndex((c) => c.key === col.key);
+                                const idxB = next.findIndex((c) => c.key === nextKey);
+                                if (idxA < 0 || idxB < 0) return cols;
+                                [next[idxA], next[idxB]] = [next[idxB], next[idxA]];
+                                return next;
+                              });
+                            }}
+                          />
+                          <Popconfirm
+                            title={baseCol ? 'غیرفعال کردن ستون' : 'حذف ستون'}
+                            onConfirm={() =>
+                              updateBlockTableColumns(tableColumnsEditorBlock.id, (cols) =>
+                                baseCol
+                                  ? cols.map((item) =>
+                                      item.key === col.key ? { ...item, isActive: false, printable: false } : item
+                                    )
+                                  : cols.filter((item) => item.key !== col.key)
+                              )
+                            }
+                            okText="تایید"
+                            cancelText="انصراف"
+                          >
+                            <Button size="small" danger icon={<DeleteOutlined />} />
+                          </Popconfirm>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+            )}
+
+            {(tableColumnsEditorBlock.tableColumns || []).some((c) => c.isActive === false) && (
+              <SettingsCollapsiblePanel
+                defaultExpanded={false}
+                className="rounded-xl border border-dashed border-orange-300 bg-orange-50/40 p-3 dark:border-orange-700/60 dark:bg-orange-950/20"
+                bodyClassName="mt-2 space-y-2"
+                header={(
+                  <Tag color="orange">
+                    ستون‌های حذف‌شده ({(tableColumnsEditorBlock.tableColumns || []).filter((c) => c.isActive === false).length})
+                  </Tag>
+                )}
+              >
+                {(tableColumnsEditorBlock.tableColumns || [])
+                  .filter((c) => c.isActive === false)
+                  .map((col) => (
+                    <div key={col.key} className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 bg-white p-2 dark:border-gray-700 dark:bg-[#141414]">
+                      <div className="flex items-center gap-2">
+                        <Tag>{col.key}</Tag>
+                        <Typography.Text className="text-sm">{col.labels?.fa || col.title || col.key}</Typography.Text>
+                      </div>
+                      <Button
+                        size="small"
+                        icon={<UndoOutlined />}
+                        onClick={() =>
+                          updateBlockTableColumns(tableColumnsEditorBlock.id, (cols) =>
+                            cols.map((item) => (item.key === col.key ? { ...item, isActive: true } : item))
+                          )
+                        }
+                      >
+                        بازگردانی
+                      </Button>
+                    </div>
+                  ))}
+              </SettingsCollapsiblePanel>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        title="ویرایش گزینه‌های ستون جدول"
+        open={!!tableColOptionEditor}
+        onCancel={() => setTableColOptionEditor(null)}
+        onOk={() => {
+          if (!tableColOptionEditor) return;
+          const parsedOptions = parseOptionsText(tableColOptionEditor.text);
+          const nextDynamic = String(tableColOptionEditor.dynamicCategory || '').trim();
+          updateBlockTableColumns(tableColOptionEditor.blockId, (cols) =>
+            cols.map((item) =>
+              item.key === tableColOptionEditor.columnKey
+                ? {
+                    ...item,
+                    options: parsedOptions,
+                    _optionsCustomized: true,
+                    dynamicOptionsCategory: nextDynamic || undefined,
+                  }
+                : item
+            )
+          );
+          setTableColOptionEditor(null);
+        }}
+        okText="ثبت گزینه‌ها"
+      >
+        {tableColOptionEditor?.supportsDynamic && (
+          <Form layout="vertical">
+            <Form.Item label="دسته‌بندی داینامیک">
+              <Input
+                value={tableColOptionEditor.dynamicCategory}
+                onChange={(e) =>
+                  setTableColOptionEditor((prev) => (prev ? { ...prev, dynamicCategory: e.target.value } : prev))
+                }
+                placeholder="مثال: unit_types"
+              />
+            </Form.Item>
+          </Form>
+        )}
+        <Input.TextArea
+          rows={8}
+          value={tableColOptionEditor?.text || ''}
+          onChange={(e) =>
+            setTableColOptionEditor((prev) => (prev ? { ...prev, text: e.target.value } : prev))
+          }
           placeholder={'مثال:\nفعال|active|green\nغیرفعال|inactive|red'}
         />
       </Modal>

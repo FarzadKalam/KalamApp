@@ -5,7 +5,6 @@
 .dashboard-date-line .ant-btn{color:var(--workspace-muted);min-height:40px}
 .dashboard-occasion-popover{width:min(360px,calc(100vw - 40px));max-height:65dvh;overflow:auto}
 .dashboard-occasion-popover>div{margin:0}
-.dashboard-overview-row{display:grid;grid-template-columns:5fr 7fr;gap:20px;align-items:center;margin-bottom:20px}
 .dashboard-widget-frame{position:relative;min-width:0}
 .dashboard-widget-frame[hidden]{display:none!important}
 .dashboard-widget-menu.ant-btn{position:absolute;left:7px;top:9px;width:44px;height:44px;min-width:44px;z-index:5;color:var(--workspace-muted);border-radius:12px}
@@ -70,7 +69,6 @@
 .dark .dashboard-stat-label .anticon{background:rgb(var(--brand-500-rgb)/.12);color:var(--app-dark-info,#86ddf2)}
 .dark .dashboard-shell [class*="dark:bg-[#111827]"]{background:#222225!important}
 @media(max-width:1100px){.dashboard-widget-grid>[data-dashboard-widget=reports_slider],.dashboard-widget-grid>[data-dashboard-widget=my_tasks]{grid-column:span 6}
-.dashboard-overview-row{grid-template-columns:1fr 1fr}
 .dashboard-shell{padding:20px}
 }
 @media(max-width:767px){.dashboard-shell{padding:14px 14px 28px}
@@ -81,7 +79,6 @@
 .dashboard-date-line{gap:4px;font-size:12px}
 .dashboard-date-line>.anticon{display:none}
 .dashboard-date-line .ant-btn{font-size:12px;min-height:44px;padding-inline:5px}
-.dashboard-overview-row{display:flex;flex-direction:column;gap:14px;margin-bottom:15px;align-items:stretch}
 .dashboard-widget-frame>.ant-card{border-radius:22px}
 .dashboard-widget-frame>.ant-card>.ant-card-body{padding:15px 16px}
 .dashboard-widget-frame>.ant-card>.ant-card-head{min-height:58px;padding-right:17px}
@@ -118,8 +115,36 @@
 }
 @media(max-width:767px){
   .dashboard-personalize-trigger.ant-btn{display:inline-flex;align-items:center;justify-content:center;gap:0}
-  .dashboard-personalize-trigger .dashboard-personalize-label{display:none}
   .dashboard-personalize-trigger .ant-btn-icon,.dashboard-personalize-trigger .anticon{display:inline-flex;align-items:center;justify-content:center;margin:0!important;line-height:1}
   .dashboard-personalize-trigger svg{display:block;vertical-align:middle}
   .dashboard-summary-grid>.dashboard-widget-frame:last-child:nth-child(odd){grid-column:1/-1}
+}
+
+.dashboard-layout-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.dashboard-layout-actions>.ant-btn{min-height:44px}
+.dashboard-layout-actions .dashboard-personalize-trigger.ant-btn{width:44px;height:44px;border-radius:14px;font-size:18px}
+.dashboard-layout-container{container:dashboard-layout / inline-size}
+.dashboard-layout.dashboard-widget-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));align-items:start}
+.dashboard-layout.dashboard-widget-grid>[data-dashboard-widget]{width:auto;grid-column:span var(--widget-span,3)}
+.dashboard-layout[data-editing=true]>.dashboard-widget-frame{outline:1px dashed var(--workspace-line);outline-offset:2px;border-radius:20px}
+.dashboard-widget-edit-tools{display:flex;gap:4px;padding:4px 8px}
+.dashboard-widget-edit-tools>.ant-btn{width:44px;height:44px;touch-action:none}
+.dashboard-widget-grip{cursor:grab}
+.dashboard-widget-resize{cursor:ew-resize}
+.dashboard-widget-frame[data-dragging=true]{z-index:7;cursor:grabbing}
+.dashboard-quick-actions{grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))}
+@container dashboard-layout (width < 1100px){
+  .dashboard-layout.dashboard-widget-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .dashboard-layout.dashboard-widget-grid>[data-widget-width]{grid-column:span 2}
+  .dashboard-layout.dashboard-widget-grid>[data-widget-width="2"]{grid-column:span 1}
+  .dashboard-layout.dashboard-widget-grid>[data-widget-width="5"],
+  .dashboard-layout.dashboard-widget-grid>[data-widget-width="6"]{grid-column:1/-1}
+  .dashboard-widget-edit-tools>.dashboard-widget-resize{display:none}
+}
+@container dashboard-layout (width < 720px){
+  .dashboard-layout.dashboard-widget-grid{grid-template-columns:minmax(0,1fr);gap:15px}
+  .dashboard-layout.dashboard-widget-grid>[data-widget-width]{grid-column:1/-1}
+}
+@media(prefers-reduced-motion:reduce){
+  .dashboard-widget-frame{transition:none!important}
 }

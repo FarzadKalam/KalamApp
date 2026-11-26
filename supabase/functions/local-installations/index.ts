@@ -27,9 +27,9 @@ export async function handleLocalInstallations(request: Request) {
       const result = await rpc('admin_local_installation', { p_action: 'download', p_id: body.installation_id, p_payload: { job_id: body.job_id } });
       if (!result.path || typeof result.path !== 'string' || result.path.includes('..') || !result.path.startsWith(`${body.org_id}/${body.installation_id}/`)) return json(409, { message: 'فایل معتبر برای این نصب ثبت نشده است.' });
       const sign = async (path: string) => {
-      const response = await fetch(`${url}/storage/v1/object/sign/local-installations-private/${path.split('/').map(encodeURIComponent).join('/')}`, {
-        method: 'POST', headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ expiresIn: 120 }),
-      });
+        const response = await fetch(`${url}/storage/v1/object/sign/local-installations-private/${path.split('/').map(encodeURIComponent).join('/')}`, {
+          method: 'POST', headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ expiresIn: 14400 }),
+        });
       const signed = await response.json();
       if (!response.ok || !signed.signedURL) throw new Error('ARTIFACT_MISSING');
       const publicUrl = Deno.env.get('API_EXTERNAL_URL') || Deno.env.get('PUBLIC_SITE_URL');
@@ -38,10 +38,16 @@ export async function handleLocalInstallations(request: Request) {
       };
       const files = [{ title: result.kind === 'prepare' ? 'تنظیمات این نصب' : 'اطلاعات رمزگذاری‌شدهٔ مشتری', url: await sign(result.path) }];
       if (result.kind === 'prepare') {
-        const response = await fetch(`${url}/rest/v1/saas_local_releases?id=eq.${result.release_id}&org_id=eq.${body.org_id}&select=artifact_path`, { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } });
+        const response = await fetch(`${url}/rest/v1/saas_local_releases?id=eq.${result.release_id}&org_id=eq.${body.org_id}&select=artifact_path,checksum,version,verified_at`, { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } });
         const releases = await response.json();
         if (!response.ok || !releases?.[0]?.artifact_path?.startsWith(`${body.org_id}/releases/`)) throw new Error('RELEASE_MISSING');
-        files.push({ title: 'بستهٔ کامل مشترک نرم‌افزار', url: await sign(releases[0].artifact_path) });
+        files.push({
+          title: 'بستهٔ کامل مشترک نرم‌افزار',
+          url: await sign(releases[0].artifact_path),
+          checksum: releases[0].checksum,
+          version: releases[0].version,
+          verified_at: releases[0].verified_at,
+        });
       }
       return json(200, { files });
     }

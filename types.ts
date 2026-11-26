@@ -164,12 +164,15 @@ export interface ModuleField {
   type: FieldType;
   labels: { fa: string; en?: string };
   isActive?: boolean;
+  printable?: boolean;
   isTableColumn?: boolean;
   hideInTable?: boolean;
   hideInCreateForm?: boolean;
   botSettingsOnly?: boolean;
   virtualBotField?: boolean;
   options?: SelectOption[];
+  _clearedKeys?: string[];
+  _optionsCustomized?: boolean;
 
   // --- ویژگی اضافه شده برای رفع خطا ---
   dynamicOptionsCategory?: string;
@@ -259,6 +262,8 @@ export interface BlockDefinition {
   order: number;
   isActive?: boolean;
   printable?: boolean;
+  _clearedKeys?: string[];
+  _tableColumnsCustomized?: boolean;
   icon?: string;
   visibleIf?: any;
   hideInCreateForm?: boolean;
@@ -271,11 +276,16 @@ export interface BlockDefinition {
     title: string;
     labels?: { fa: string; en?: string };
     type: FieldType;
+    isActive?: boolean;
+    printable?: boolean;
     width?: number;
     defaultValue?: any;
     showTotal?: boolean; // <--- این خط جدید است: برای نمایش جمع کل در پایین ستون
     options?: SelectOption[];
+    dynamicOptionsCategory?: string;
     readonly?: boolean;
+    _clearedKeys?: string[];
+    _optionsCustomized?: boolean;
     relationConfig?: {
       targetModule: string;
       targetField: string;

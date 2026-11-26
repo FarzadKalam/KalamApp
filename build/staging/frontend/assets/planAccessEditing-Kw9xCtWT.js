@@ -1,0 +1,1 @@
+const i=e=>{if(e===!0)return!0;if(typeof e=="string")return["true","1","yes","on","enabled","full","limited"].includes(e.trim().toLowerCase());if(e&&typeof e=="object"){const t=e;return t.enabled===!0||t.available===!0}return!1},l=(e,t,n={})=>{const s=new Set(t);return{...n,...Object.fromEntries(e.map(r=>[r,s.has(r)]))}};export{l as b,i};

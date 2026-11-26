@@ -1,0 +1,23 @@
+[Unit]
+Description=KalamApp dedicated installation worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kalamapp-installer
+Group=kalamapp-installer
+EnvironmentFile=/etc/kalamapp-install-worker.env
+ExecStart=/usr/bin/python3 /opt/kalamapp-install-worker/worker.py
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/kalamapp-install-worker
+ReadOnlyPaths=/etc/kalamapp-install-worker.env
+
+[Install]
+WantedBy=multi-user.target

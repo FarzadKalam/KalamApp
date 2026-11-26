@@ -181,11 +181,16 @@ const contrastRatio = (first: string, second: string) => {
 
 // رنگ متنی برند در تم شب باید روی هر دو سطح تیرهٔ برند حداقل کنتراست AA داشته باشد.
 // لینک‌ها و متن‌های تأکیدی از همین رنگ استفاده می‌کنند.
-export const getAccessibleDarkBrandTextColor = (palette: BrandingPalette) => {
-  const backgrounds = [palette.darkBg, palette.darkSurface, APP_DARK_COLORS.hover];
-  for (let ratio = 0; ratio <= 1; ratio += 0.02) {
-    const candidate = mixColors(palette.primary, '#FFFFFF', ratio);
-    if (backgrounds.every((background) => contrastRatio(candidate, background) >= 4.5)) return candidate;
+export const getAccessibleDarkBrandTextColor = (palette: BrandingPalette, emphasis = 0) => {
+  const backgrounds = [palette.darkBg, palette.darkSurface, APP_DARK_COLORS.elevated, APP_DARK_COLORS.hover];
+  for (let step = 0; step <= 50; step++) {
+    const candidate = mixColors(palette.primary, '#FFFFFF', step / 50);
+    if (backgrounds.every((background) => contrastRatio(candidate, background) >= 4.5)) {
+      const emphasized = mixColors(candidate, '#FFFFFF', emphasis);
+      return backgrounds.every((background) => contrastRatio(emphasized, background) >= 4.5)
+        ? emphasized
+        : candidate;
+    }
   }
   return '#FFFFFF';
 };
@@ -302,6 +307,7 @@ export const buildBrandCssVars = (palette: BrandingPalette): Record<string, stri
     '--brand-900-rgb': toRgbChannels(shades[900]),
     '--brand-accent-pink-rgb': toRgbChannels(palette.accentPink),
     '--brand-text-rgb': toRgbChannels(getAccessibleDarkBrandTextColor(palette)),
+    '--brand-text-hover-rgb': toRgbChannels(getAccessibleDarkBrandTextColor(palette, 0.2)),
     '--brand-on-primary-rgb': toRgbChannels(getReadableBrandButtonTextColor(shades[500])),
     '--brand-on-primary-hover-rgb': toRgbChannels(getReadableBrandButtonTextColor(shades[400])),
     '--app-dark-bg-rgb': toRgbChannels(palette.darkBg),

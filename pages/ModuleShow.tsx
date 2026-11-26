@@ -1,3 +1,4 @@
+import { isDuplicateHrEmployeeField } from '../utils/hrEmployeeFields';
 import { iranMobileLocal } from '../supabase/functions/_shared/phone-number';
 import { canFieldAction, canWriteFieldValue, canModuleAction } from '../utils/fieldAccess';
 import type { ModulePermissionConfig } from '../utils/permissions';
@@ -7,6 +8,7 @@ import { Button, App, Checkbox, Modal, Progress, Select, Form, Input, Skeleton }
 import { EditOutlined, CheckOutlined, CloseOutlined, CopyOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
+import { useModuleSettingsVersion } from '../utils/moduleSettingsRuntime';
 import { useSaasReadonly } from '../components/saas/SaasReadonlyContext';
 import { FieldType, BlockType, FieldLocation, FieldNature, type ModuleDefinition } from '../types';
 import RelatedSidebar from '../components/Sidebar/RelatedSidebar';
@@ -469,7 +471,11 @@ const ModuleShow: React.FC = () => {
   const location = useLocation();
   const { message: msg, modal } = App.useApp();
   const { label: currencyLabel } = useCurrencyConfig();
-  const baseModuleConfig = MODULES[moduleId];
+  const moduleSettingsVersion = useModuleSettingsVersion();
+  const baseModuleConfig = useMemo(
+    () => (MODULES[moduleId] ? { ...MODULES[moduleId] } : undefined),
+    [moduleId, moduleSettingsVersion]
+  );
   const { moduleConfig: planBaseModuleConfig } = useContentCalendarPlanModule(baseModuleConfig);
   const focusBlockId = useMemo(
     () => String((location.state as any)?.focusBlockId || '').trim() || null,
@@ -5392,6 +5398,7 @@ const ModuleShow: React.FC = () => {
       .filter(f => f.type !== FieldType.IMAGE && f.type !== FieldType.JSON && f.type !== FieldType.READONLY_LOOKUP)
       .filter((field) => isPrintableModuleField(moduleConfig, field))
       .filter(f => !shouldHideManagedAssigneeField(moduleId, f.key))
+      .filter((f) => !isDuplicateHrEmployeeField(moduleId, f.key))
       .filter(f => conditionalFieldRuntime.isFieldVisible(f))
       .filter(f => canViewField(f.key))
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))

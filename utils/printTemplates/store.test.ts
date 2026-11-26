@@ -228,12 +228,16 @@ describe('print template store grouping', () => {
     expect(template?.contentHtml).toContain('>خالص پرداختی<');
     expect(template?.contentHtml).toContain('{{record.gross_amount}}');
     expect(template?.contentHtml).not.toContain('{{record.net_amount}}');
+    expect(template?.contentHtml).toContain('{{record.employee_job_title}}');
+    expect(template?.contentHtml).not.toContain('{{record.total_received_amount}}');
+    expect(template?.contentHtml).not.toContain('{{record.remaining_balance}}');
     // Summary amounts are already formatted; payment rows keep the currency
     // variable used by the shared payment table.
     const summaryHtml = template?.contentHtml.split('data-print-block="lines"')[0];
     expect(summaryHtml).not.toContain('{{company.currency_label}}');
     expect(template?.contentHtml).toContain('data-print-block="payments"');
     expect(variables.find((item) => item.value === 'employee.insurance_number')?.group).toBe('اطلاعات کارمند');
+    expect(variables.find((item) => item.value === 'employee.job_title')?.group).toBe('اطلاعات کارمند');
     expect(templates).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: 'default_payroll_slip_formal_a4_landscape',
@@ -272,5 +276,40 @@ describe('print template store grouping', () => {
     expect(stored).toEqual({
       products: [expect.objectContaining({ id: 'custom-products-template' })],
     });
+  });
+
+  it('respects employee_identity block printable flag when building payroll slip job title option', () => {
+    const enabledModule = {
+      id: 'payroll_slips',
+      fields: [
+        { key: 'employee_national_code', labels: { fa: 'کد ملی' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'employee_identity' },
+      ],
+      blocks: [
+        { id: 'employee_identity', titles: { fa: 'مشخصات کارمند' }, type: BlockType.FIELD_GROUP, printable: true },
+      ],
+    };
+    const disabledModule = {
+      id: 'payroll_slips',
+      fields: [],
+      blocks: [
+        { id: 'employee_identity', titles: { fa: 'مشخصات کارمند' }, type: BlockType.FIELD_GROUP, printable: false },
+      ],
+    };
+
+    expect(buildSystemTemplateFieldOptionsForModule(enabledModule).some((item) => item.key === 'record.employee_job_title')).toBe(true);
+    expect(buildSystemTemplateFieldOptionsForModule(disabledModule).some((item) => item.key === 'record.employee_job_title')).toBe(false);
+  });
+
+  it('marks optional notes, body, and logo wrappers on operational templates', () => {
+    const delivery = buildDefaultTemplatesForModule('delivery_forms').find((item) => item.id === 'default_delivery_form_operational_a4');
+    const stock = buildDefaultTemplatesForModule('stock_transfers').find((item) => item.id === 'default_stock_transfer_voucher_a4');
+    const contract = buildDefaultTemplatesForModule('employee_contracts').find((item) => item.id === 'default_employee_contract_formal_a4');
+    const letter = buildDefaultTemplatesForModule('secretariat_documents').find((item) => item.id === 'default_secretariat_official_letter_a4');
+
+    expect(delivery?.contentHtml).toContain('data-print-optional-field="record.notes"');
+    expect(stock?.contentHtml).toContain('data-print-optional-field="record.notes"');
+    expect(contract?.contentHtml).toContain('data-print-optional-field="record.body"');
+    expect(letter?.contentHtml).toContain('data-print-optional-field="record.body"');
+    expect(letter?.headerHtml).toContain('data-print-optional-field="company.logo_url"');
   });
 });

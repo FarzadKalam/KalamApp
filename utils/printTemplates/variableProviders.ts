@@ -31,10 +31,10 @@ const buildInvoiceComputedVariables = (
 ): PrintTemplateVariableOption[] => [
   recordField('تاریخ فاکتور', 'record.invoice_date'),
   recordField('وضعیت فاکتور', 'record.status'),
+  recordField('تخفیف کل', 'record.global_discount_amount'),
+  recordField('تخفیف کل (متنی)', 'record.global_discount_display'),
   recordField('جمع کل فاکتور', 'record.total_invoice_amount'),
-  ...(relationKey === 'customer'
-    ? [recordField('جمع کل به حروف', 'record.total_invoice_amount_words')]
-    : []),
+  recordField('جمع کل به حروف', 'record.total_invoice_amount_words'),
   recordField(paidLabel, 'record.total_received_amount'),
   recordField(balanceLabel, 'record.remaining_balance'),
   counterpartyField(`نام ${relationTitle}`, `${relationKey}.full_name`),
@@ -60,6 +60,7 @@ const buildInvoiceComputedVariables = (
   counterpartyField(`استان ${relationTitle}`, `${relationKey}.province`),
   counterpartyField(`شهر ${relationTitle}`, `${relationKey}.city`),
   counterpartyField(`تلفن ${relationTitle}`, `${relationKey}.mobile_1`),
+  counterpartyField(`تلفن دوم ${relationTitle}`, `${relationKey}.mobile_2`),
   counterpartyField(`آدرس ${relationTitle}`, `${relationKey}.address`),
 ];
 
@@ -77,12 +78,30 @@ const PROVIDERS: Record<string, PrintVariableProvider> = {
     'مانده بدهی',
   ),
   payroll_slips: () => [
+    employeeField('سمت / عنوان شغلی', 'employee.job_title'),
     employeeField('کد ملی کارمند', 'employee.national_code'),
     employeeField('نام پدر کارمند', 'employee.father_name'),
     employeeField('وضعیت تاهل کارمند', 'employee.marital_status'),
     employeeField('وضعیت نظام وظیفه کارمند', 'employee.military_service_status'),
     employeeField('تعداد فرزندان کارمند', 'employee.children_count'),
     employeeField('شماره بیمه کارمند', 'employee.insurance_number'),
+    recordField('سمت / عنوان شغلی', 'record.employee_job_title'),
+  ],
+  secretariat_documents: () => [
+    {
+      label: 'فرستنده نامه',
+      value: 'system.letter_sender_display',
+      kind: 'field',
+      group: 'فیلدهای رکورد',
+      scopes: ['record'],
+    },
+    {
+      label: 'گیرنده نامه',
+      value: 'system.letter_recipient_display',
+      kind: 'field',
+      group: 'فیلدهای رکورد',
+      scopes: ['record'],
+    },
   ],
   product_bundles: () => [
     recordField('جمع قبل از تخفیف پکیج', 'record.package_gross_total'),

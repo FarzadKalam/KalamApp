@@ -1,0 +1,1 @@
+const e={green:"#16a34a",red:"#dc2626",blue:"#2563eb",orange:"#ea580c",yellow:"#ca8a04",purple:"#7c3aed",cyan:"#0891b2",gray:"#64748b",grey:"#64748b",pink:"#db2777",gold:"#d97706",volcano:"#e34d20",default:"#64748b"},a=t=>{const r=String(t||"").trim().toLowerCase();return r?r.startsWith("#")||r.startsWith("rgb")||r.startsWith("hsl")?r:e[r]||"":""};export{a as r};

@@ -49,9 +49,12 @@ import { printInIframe } from "./printInIframe";
 import { sanitizeSelectedPrintFieldKeys } from "./fieldAccess";
 import {
   hasMeaningfulPrintValue,
+  isPathAllowedByModulePrintSettings,
   resolveEffectivePrintFieldKeys,
   shouldInitializePrintFieldSelection,
 } from "./printableFields";
+import { applyPrintFieldVisibilityAndReflow } from "./tableReflow";
+import { getBaseModuleSchemaSnapshot } from "../moduleSettingsRuntime";
 import {
   loadPrintFieldPreferenceFromServer,
   getTemplateStoredPrintFieldSelection,
@@ -1099,6 +1102,42 @@ export const useListPrintManager = ({
     ],
   );
 
+  const isListTemplateFieldVisible = useCallback(
+    (fieldPath: string) => {
+      const normalizedPath = String(fieldPath || "").trim();
+      if (!normalizedPath) return false;
+      const baseModuleConfig = getBaseModuleSchemaSnapshot(moduleId);
+      if (
+        !isPathAllowedByModulePrintSettings({
+          moduleConfig,
+          baseModuleConfig,
+          fieldPath: normalizedPath,
+        })
+      ) {
+        return false;
+      }
+      const hasExplicitSelection = Object.prototype.hasOwnProperty.call(
+        selectedPrintFields,
+        selectedTemplateId,
+      );
+      if (
+        hasExplicitSelection &&
+        printableFieldsForTemplate.some((field) => field.key === normalizedPath)
+      ) {
+        return selectedFields.some((field) => field.key === normalizedPath);
+      }
+      return true;
+    },
+    [
+      moduleConfig,
+      moduleId,
+      printableFieldsForTemplate,
+      selectedFields,
+      selectedPrintFields,
+      selectedTemplateId,
+    ],
+  );
+
   const renderTemplateSection = useCallback(
     (
       html: string | undefined,
@@ -1115,8 +1154,11 @@ export const useListPrintManager = ({
               "{{system.list_context_table}}$1",
             )
           : rawHtml;
+      const reflowedHtml = applyPrintFieldVisibilityAndReflow(htmlWithContext, {
+        isFieldVisible: isListTemplateFieldVisible,
+      });
       const filled = renderPrintTemplateHtml({
-        templateHtml: htmlWithContext,
+        templateHtml: reflowedHtml,
         resolveVariableValue: (key) =>
           resolveValue(key, pageIndex, pageCount, pageRows, rowOffset),
       });
@@ -1135,7 +1177,7 @@ export const useListPrintManager = ({
         }),
       );
     },
-    [renderedContextTable, resolveValue],
+    [isListTemplateFieldVisible, renderedContextTable, resolveValue],
   );
 
   const handleTogglePrintField = useCallback(

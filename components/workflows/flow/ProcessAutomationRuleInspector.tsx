@@ -19,6 +19,7 @@ import AdaptiveSelectField from '../../AdaptiveSelectField';
 import PersianDatePicker from '../../PersianDatePicker';
 import WorkflowActionsBuilder from '../WorkflowActionsBuilder';
 import WorkflowConditionsGroup from '../WorkflowConditionsGroup';
+import type { ConditionTableSource } from '../../../utils/conditionTableFields';
 import { FlowSelection } from './flowTypes';
 
 type OptionList = Array<{ label: string; value: string }>;
@@ -27,6 +28,7 @@ export type ProcessAutomationRuleInspectorContext = {
   triggerTypeOptions: Array<{ label: string; value: any }>;
   legacyTriggerOption?: { label: string; value: any };
   conditionFields: ModuleField[];
+  conditionTableSources?: ConditionTableSource[];
   hasLockedTaskType: boolean;
   lockedTaskTypeLabel?: string;
   dynamicOptions: Record<string, OptionList>;
@@ -232,6 +234,7 @@ const ProcessAutomationRuleInspector: React.FC<ProcessAutomationRuleInspectorPro
               ),
             })}
             fields={context.conditionFields}
+            tableSources={context.conditionTableSources}
             dynamicOptions={context.dynamicOptions}
             relationOptions={context.relationOptions}
             dynamicFieldProps={context.dynamicFieldProps}
@@ -249,6 +252,7 @@ const ProcessAutomationRuleInspector: React.FC<ProcessAutomationRuleInspectorPro
               conditions_any: filterEditableAutomationConditions(next as WorkflowCondition[]),
             })}
             fields={context.conditionFields}
+            tableSources={context.conditionTableSources}
             dynamicOptions={context.dynamicOptions}
             relationOptions={context.relationOptions}
             dynamicFieldProps={context.dynamicFieldProps}

@@ -34,7 +34,8 @@ class ControlClient:
     def upload(self, source: Path, object_path: str):
         parsed = urllib.parse.urlsplit(self.url)
         connection_type = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-        connection = connection_type(parsed.hostname, parsed.port, timeout=120)
+        timeout = max(600, int(source.stat().st_size / (512 * 1024)))
+        connection = connection_type(parsed.hostname, parsed.port, timeout=timeout)
         path = parsed.path.rstrip("/") + "/storage/v1/object/local-installations-private/" + urllib.parse.quote(object_path, safe="/")
         try:
             connection.putrequest("POST", path)

@@ -4,6 +4,7 @@ import { FileAddOutlined, MoreOutlined, PaperClipOutlined, PlusOutlined, ReloadO
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import WorkflowsManager from '../components/workflows/WorkflowsManager';
+import SaasTicketRecipientPicker from '../components/saas/SaasTicketRecipientPicker';
 import { getSupportFileUrl, SUPPORT_STATUS, type SupportAttachment, type SupportMessage, type SupportThread, type SupportTicket, uploadSupportFiles, validateSupportFiles } from '../utils/supportTickets';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { fetchCurrentUserRoleContext, SETTINGS_PERMISSION_KEY } from '../utils/permissions';
@@ -73,11 +74,9 @@ const SupportTicketsPage: React.FC<Props> = ({ admin: adminRoute = false }) => {
   const [newBody, setNewBody] = useState('');
   const [newFiles, setNewFiles] = useState<File[]>([]);
   const [customerOrgId, setCustomerOrgId] = useState<string>();
-  const [customerUserId, setCustomerUserId] = useState<string>();
+  const [customerRecipients, setCustomerRecipients] = useState<string[]>(['default']);
   const [customerSearch, setCustomerSearch] = useState('');
-  const [recipientSearch, setRecipientSearch] = useState('');
   const [customerOptions, setCustomerOptions] = useState<Operator[]>([]);
-  const [recipientOptions, setRecipientOptions] = useState<Operator[]>([]);
   const [replyBody, setReplyBody] = useState('');
   const [replyInternal, setReplyInternal] = useState(false);
   const [replyFiles, setReplyFiles] = useState<File[]>([]);
@@ -142,16 +141,6 @@ const SupportTicketsPage: React.FC<Props> = ({ admin: adminRoute = false }) => {
     }, 250);
     return () => { active = false; window.clearTimeout(timer); };
   }, [admin, createOpen, customerSearch]);
-  useEffect(() => {
-    if (!admin || !createOpen || !customerOrgId) { setRecipientOptions([]); return; }
-    let active = true;
-    const timer = window.setTimeout(() => {
-      void supabase.rpc('support_search_customers', { p_org_id: customerOrgId, p_search: recipientSearch || null }).then(({ data, error }) => {
-        if (active) setRecipientOptions(!error && Array.isArray(data) ? data : []);
-      });
-    }, 250);
-    return () => { active = false; window.clearTimeout(timer); };
-  }, [admin, createOpen, customerOrgId, recipientSearch]);
 
   const loadTickets = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -238,14 +227,14 @@ const SupportTicketsPage: React.FC<Props> = ({ admin: adminRoute = false }) => {
   };
 
   const createTicket = () => void run(async () => {
-    if (!canCreate || (admin && (!customerOrgId || !customerUserId))) throw new Error('سازمان و گیرنده تیکت را انتخاب کنید.');
+    if (!canCreate || (admin && !customerOrgId)) throw new Error('سازمان گیرنده تیکت را انتخاب کنید.');
     validateSupportFiles(newFiles);
-    const { data, error } = await supabase.rpc(admin ? 'support_create_outgoing_ticket' : 'support_create_ticket', {
-      ...(admin ? { p_customer_org_id: customerOrgId, p_customer_user_id: customerUserId } : {}),
+    const { data, error } = await supabase.rpc(admin ? 'support_create_outgoing_ticket_multi' : 'support_create_ticket', {
+      ...(admin ? { p_customer_org_id: customerOrgId, p_recipients: customerRecipients } : {}),
       p_category: newCategory, p_subject: newSubject.trim(), p_body: newBody.trim(),
     });
     if (error) throw error;
-    setCreateOpen(false); setNewSubject(''); setNewBody(''); setNewFiles([]); setNewCategory(undefined); setCustomerOrgId(undefined); setCustomerUserId(undefined);
+    setCreateOpen(false); setNewSubject(''); setNewBody(''); setNewFiles([]); setNewCategory(undefined); setCustomerOrgId(undefined); setCustomerRecipients(['default']);
     navigate(`${basePath}/${data.id}`);
     if (newFiles.length) {
       try { await uploadSupportFiles(data.id, data.message_id, newFiles); }
@@ -364,13 +353,14 @@ const SupportTicketsPage: React.FC<Props> = ({ admin: adminRoute = false }) => {
       </> : <div className="m-auto"><Empty description="گفتگو در دسترس نیست." /></div>}
     </section>
 
-    <Modal title={admin ? 'ارسال تیکت به مشتری' : 'تیکت جدید'} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={createTicket} okText="ثبت تیکت" cancelText="انصراف" okButtonProps={{ loading: saving, disabled: !newCategory || newSubject.trim().length < 3 || !newBody.trim() || (admin && (!customerOrgId || !customerUserId)) }}>
+    <Modal title={admin ? 'ارسال تیکت به مشتری' : 'تیکت جدید'} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={createTicket} okText="ثبت تیکت" cancelText="انصراف" okButtonProps={{ loading: saving, disabled: !newCategory || newSubject.trim().length < 3 || !newBody.trim() || (admin && !customerOrgId) }}>
       <div className="space-y-3">
         {admin && <>
           <label className="block text-sm">سازمان گیرنده<Select className="mt-1 w-full" placeholder="جستجوی سازمان مشتری" showSearch filterOption={false} onSearch={setCustomerSearch} value={customerOrgId}
-            onChange={(value) => { setCustomerOrgId(value); setCustomerUserId(undefined); setRecipientSearch(''); }} options={customerOptions.map((item) => ({ value: item.id, label: item.name }))} /></label>
-          <label className="block text-sm">گیرنده تیکت<Select className="mt-1 w-full" placeholder="جستجوی کاربر سازمان" showSearch filterOption={false} onSearch={setRecipientSearch} disabled={!customerOrgId} value={customerUserId}
-            onChange={setCustomerUserId} options={recipientOptions.map((item) => ({ value: item.id, label: item.name }))} /></label>
+            onChange={(value) => { setCustomerOrgId(value); setCustomerRecipients(['default']); }} options={customerOptions.map((item) => ({ value: item.id, label: item.name }))} /></label>
+          <div className="text-sm">گیرندگان تیکت</div>
+          <SaasTicketRecipientPicker key={customerOrgId || 'none'} tenantId={customerOrgId}
+            value={customerRecipients} onChange={setCustomerRecipients} disabled={!customerOrgId || saving} />
           <p className="text-xs text-gray-500">نوع این تیکت در صندوق پشتیبانی «ارسالی» ثبت می‌شود.</p>
         </>}
         <Select className="w-full" placeholder="دسته‌بندی را انتخاب کنید" value={newCategory} onChange={setNewCategory} options={categories.map((item) => ({ value: item.code, label: item.title }))} />

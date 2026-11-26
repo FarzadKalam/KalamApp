@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { dialPhone } from '../_shared/phone-number.ts';
+import { isSaasWorkflowSource, readSaasWorkflowSource, saasWorkflowRelationField } from '../_shared/saas-workflow-source.ts';
 import { summarizeAgentTaskDeliveries } from '../_shared/ai-agent-task-contract.ts';
 import { enqueueDueAgentTasks } from '../_shared/ai-agent-task-queue.ts';
 // workflow-interval-runner: Server-side interval workflow executor
@@ -26,10 +27,14 @@ import { renderProcessStageForTaskCreation } from '../_shared/process-stage-temp
 import { buildAutomatedBotSenderPayload, extractBotProviderMessageId } from '../_shared/bot-system-message.ts';
 import {
   evaluateConditionCollection as evaluateCentralConditionCollection,
+  getConditionRecordField,
+  getTableRowRelationId,
+  isTableConditionOperator,
   richTextMarkupToPlainText,
   renderTemplateAsync as renderCentralTemplateAsync,
 } from './_runtime-deps/recordRuntime.ts';
 import { evaluateWorkflowConditionWithResolver } from './_runtime-deps/workflowConditionRuntime.ts';
+import { loadOrgPlanAccess } from '../_shared/org-plan-access.ts';
 import { assignProcessTemplateSystemVariableValues } from './_runtime-deps/processTemplateSystemVariables.ts';
 import {
   getLegacyWorkflowAttachmentFields,
@@ -51,9 +56,9 @@ import {
   isFridayAtTehranDate,
 } from '../_shared/persian-calendar-resolver.ts';
 import { getAgentDefinition } from '../_shared/ai-agent-catalog.ts';
-import { tryResolveModelSlot } from '../_shared/ai-gateway.ts';
+import { buildAvalaiPromptCacheKey, fetchAvalaiChatWithCacheKey, isModelReasoning, tryResolveModelSlot } from '../_shared/ai-gateway.ts';
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-09-30-separate-image-worker';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-11-18-saas-sales-and-support';
 const MAX_WORKFLOWS = 30;
 const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
@@ -477,6 +482,11 @@ async function resolveWorkflowFieldValue(
 
   const relatedMeta = parseWorkflowRelatedFieldKey(normalizedFieldKey);
   if (relatedMeta) {
+    if (relatedMeta.targetModuleId === 'reservations') {
+      if (!orgId) return undefined;
+      const access = await loadOrgPlanAccess(url, key, orgId);
+      if (!access.available || access.enabledModules?.reservations !== true) return undefined;
+    }
     const relationId = String(getFieldValue(record, relatedMeta.relationFieldKey) || '').trim();
     if (!relationId) return null;
     const relatedRecord = await fetchRelatedRecord(url, key, relatedMeta.targetModuleId, relationId, orgId);
@@ -1052,11 +1062,10 @@ async function evaluateConditionWithPrevious(
   const field = String(condition?.field || '').trim();
   if (!field) return true;
   const operator = String(condition?.operator || 'eq').trim();
-  const expected = condition?.value;
   const current = runtime
     ? await resolveWorkflowFieldValue(runtime.url, runtime.key, field, record, runtime.orgId, runtime.moduleId)
     : getFieldValueForCondition(record, field);
-  const previous = previousRecord
+  const previous = previousRecord && !isTableConditionOperator(operator)
     ? (runtime
         ? await resolveWorkflowFieldValue(runtime.url, runtime.key, field, previousRecord, runtime.orgId, runtime.moduleId)
         : getFieldValueForCondition(previousRecord, field))
@@ -1065,6 +1074,21 @@ async function evaluateConditionWithPrevious(
   return evaluateWorkflowConditionWithResolver({
     condition,
     resolveValues: async () => ({ currentValue: current, previousValue: previous }),
+    resolveTableRowValue: async (fieldKey, row) => {
+      const related = parseWorkflowRelatedFieldKey(fieldKey);
+      if (!related) return getConditionRecordField(row, fieldKey);
+      if (!runtime || !runtime.orgId || !WORKFLOW_MUTATION_MODULE_IDS.has(related.targetModuleId)
+          || !/^[a-z][a-z0-9_]*$/.test(related.targetFieldKey)) return undefined;
+      const relatedId = getTableRowRelationId(row, related.relationFieldKey, related.targetModuleId);
+      if (!relatedId) return undefined;
+      if (related.targetModuleId === 'billboards' || related.targetModuleId === 'reservations') {
+        const access = await loadOrgPlanAccess(runtime.url, runtime.key, runtime.orgId);
+        if (!access.available || access.enabledModules?.[related.targetModuleId] !== true) return undefined;
+      }
+      const rows = await dbGet(runtime.url, runtime.key,
+        `${getModuleTable(related.targetModuleId)}?id=eq.${encodeURIComponent(relatedId)}&org_id=eq.${encodeURIComponent(runtime.orgId)}&select=${related.targetFieldKey}&limit=1`);
+      return getConditionRecordField(rows[0], related.targetFieldKey);
+    },
     evaluateAsyncOperator: async ({ operator, currentValue, expectedValue }) => {
       switch (operator) {
     case 'is_friday': {
@@ -2831,7 +2855,7 @@ async function createWorkflowAiThread(
   return { thread, assistantMessage };
 }
 
-async function loadWorkflowAiModel(url: string, key: string, orgId: string, agentKey?: string | null): Promise<string> {
+async function loadWorkflowAiModel(url: string, key: string, orgId: string, agentKey?: string | null) {
   const normalizedAgent = String(agentKey || '').trim().toLowerCase() || null;
   const [settingsRows, catalogRows, saasDefaultRows, agentConfigRows] = await Promise.all([
     dbGet(url, key, `org_ai_settings?org_id=eq.${orgId}&select=selected_models&limit=1`).catch(() => []),
@@ -2855,7 +2879,7 @@ async function loadWorkflowAiModel(url: string, key: string, orgId: string, agen
     saasDefaultModels,
     agentConfig,
   });
-  if (resolved?.model) return resolved.model;
+  if (resolved?.model) return resolved;
   throw new Error('برای اجرای پرامپت گردش کار، مدل فعال در تنظیمات هوش مصنوعی سازمان پیدا نشد.');
 }
 
@@ -3347,8 +3371,8 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
   await assertWorkflowAiEnabled(url, key, orgId);
   const agentKey = String(options?.agentKey || '').trim().toLowerCase() || null;
   const agentDef = agentKey ? getAgentDefinition(agentKey) : null;
-  const model = await loadWorkflowAiModel(url, key, orgId, agentKey);
-  const isReasoningModel = [/^o\d/i, /\bo[34][-_]/i, /^gpt-5/i, /deepseek-r\d/i, /\bqwq\b/i, /\breasonin/i].some((p) => p.test(model));
+  const { model, catalogRow } = await loadWorkflowAiModel(url, key, orgId, agentKey);
+  const isReasoningModel = isModelReasoning(model, catalogRow);
   const schema = options?.recordCreationSchema && typeof options.recordCreationSchema === 'object'
     ? options.recordCreationSchema
     : null;
@@ -3396,6 +3420,10 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
     requestBody.temperature = 0.2;
     requestBody.max_tokens = 2000;
   }
+  const cacheKey = await buildAvalaiPromptCacheKey({
+    orgId, workload: 'workflow_ai_prompt', modelId: model, modelCatalog: catalogRow,
+    stableSystemPrefix: requestBody.messages[0].content,
+  });
   let response: Response | null = null;
   let usedBaseUrl = '';
   // Do not chain fallback requests for long-running AI actions. On self-hosted
@@ -3403,15 +3431,14 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
   const baseUrls = workflowAiBaseUrls().slice(0, 1);
   for (const baseUrl of baseUrls) {
     try {
-      const nextResponse = await fetch(`${baseUrl}/chat/completions`, {
+      const nextResponse = await fetchAvalaiChatWithCacheKey(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify(requestBody),
         signal: AbortSignal.timeout(45000),
-      });
+      }, requestBody, cacheKey);
       response = nextResponse;
       usedBaseUrl = baseUrl;
       if (nextResponse.ok || !isRetryableAiStatus(nextResponse.status) || baseUrl === baseUrls[baseUrls.length - 1]) break;
@@ -3848,7 +3875,7 @@ async function executeAction(
     const messageChannels = Array.from(new Set(
       asArray(config.message_channels)
         .map((item: any) => String(item || '').trim())
-        .filter((item: string) => ['note', 'sms', 'bot_group', 'bot_private', 'instagram', 'email'].includes(item)),
+        .filter((item: string) => ['note', 'sms', 'bot_group', 'bot_private', 'instagram', 'email', 'ticket'].includes(item)),
     ));
     if (messageChannels.length === 0) return actionResult(action, 'skipped', 'کانالی برای ارسال پیام انتخاب نشده است.');
 
@@ -3897,6 +3924,22 @@ async function executeAction(
     };
     const channelResults: ActionExecutionResult[] = [];
     for (const channel of messageChannels) {
+      if (channel === 'ticket') {
+        try {
+          const title = await renderTemplateAsync(String(config.message_title || ''), actionRecord, url, key, false, orgId, moduleId);
+          const body = await renderTemplateAsync(String(config.message_ticket || ''), actionRecord, url, key, false, orgId, moduleId);
+          const ticket = await callRpc(url, key, 'workflow_send_saas_ticket', {
+            p_provider: orgId, p_actor: actorUserId, p_module: moduleId, p_record: recordId,
+            p_recipients: Array.isArray(config.ticket_recipients) ? config.ticket_recipients : ['default'],
+            p_category: String(config.ticket_category || ''), p_subject: title, p_body: body,
+            p_key: String(config.__durable_execution_key || ''),
+          });
+          channelResults.push(actionResult(action, 'success', undefined, { details: { channel: 'ticket', ticket_code: ticket?.code } }));
+        } catch (error) {
+          channelResults.push(actionResult(action, 'failed', String(error?.message || error), { details: { channel: 'ticket' } }));
+        }
+        continue;
+      }
       const nestedAction = channel === 'note'
         ? { ...action, type: 'send_note', config: { ...config, ...sharedRecipients, note_text: String(config.message_note || '') } }
         : channel === 'sms'
@@ -3913,10 +3956,27 @@ async function executeAction(
     const successfulChannels = channelResults.filter((result) => result.status === 'success').length;
     return actionResult(
       action,
-      successfulChannels > 0 ? 'success' : 'skipped',
-      successfulChannels > 0 ? undefined : 'هیچ کانال انتخاب‌شده‌ای ارسال نشد.',
+      channelResults.some((result) => result.status === 'failed') ? 'failed' : successfulChannels > 0 ? 'success' : 'skipped',
+      channelResults.find((result) => result.status === 'failed')?.message
+        || (successfulChannels > 0 ? undefined : 'هیچ کانال انتخاب‌شده‌ای ارسال نشد.'),
       { affected_count: successfulChannels, details: { channel_results: channelResults } },
     );
+  }
+
+  if (action.type === 'send_saas_invoice' || action.type === 'apply_saas_invoice_access') {
+    if (!recordId) return actionResult(action, 'failed', 'رکورد مبدأ گردش کار مشخص نیست.');
+    if (action.type === 'send_saas_invoice') {
+      const result = await callRpc(url, key, 'workflow_deliver_saas_sales_invoice', {
+        p_provider: orgId, p_actor: actorUserId, p_module: moduleId, p_record: recordId,
+        p_term_months: Number(config.subscription_term_months || 1),
+      });
+      return actionResult(action, 'success', result?.already_sent ? 'این فاکتور قبلاً در پنل مشتری قرار گرفته است.' : 'فاکتور در حساب و اشتراک مشتری قرار گرفت.');
+    }
+    if (moduleId !== 'invoices') return actionResult(action, 'failed', 'اعمال دسترسی فقط برای فاکتور فروش پشتیبانی می‌شود.');
+    await callRpc(url, key, 'workflow_apply_saas_sales_invoice_access', {
+      p_provider: orgId, p_actor: actorUserId, p_invoice: recordId,
+    });
+    return actionResult(action, 'success', 'دسترسی اقلام پرداخت‌شده تأیید شد.');
   }
 
   // ── run_ai_prompt ─────────────────────────────────────────────────────
@@ -4402,6 +4462,49 @@ async function executeAction(
       return actionResult(action, 'skipped', 'گیرنده یادداشت پیدا نشد.', { recipient_count: 0 });
     }
     for (const noteRow of noteRows) await insertNote(url, key, noteRow as any);
+    let browserPushStatus = 'disabled';
+    if (config.notify_when_app_closed === true) {
+      const pushAllowed = await callRpc(url, key, 'org_has_plan_feature', {
+        p_org_id: orgId,
+        p_feature_key: 'internal_realtime_notifications',
+        p_default_enabled: true,
+      }).catch(() => false);
+      if (pushAllowed === true) {
+        const targetUserIds = Array.from(new Set([
+          ...mentionTargets.mentionUserIds,
+          ...mentionTargets.groupTargets.flatMap((group) => group.userIds || []),
+        ].map((value) => String(value || '').trim()).filter(Boolean)));
+        const targetRoleIds = Array.from(new Set([
+          ...mentionTargets.mentionRoleIds,
+          ...mentionTargets.groupTargets.flatMap((group) => group.roleIds || []),
+        ].map((value) => String(value || '').trim()).filter(Boolean)));
+        const pushTitle = (await renderTemplateAsync(String(config.message_title || config.title || 'پیام جدید در تازه سیستم'), record, url, key, false, orgId, moduleId)).trim()
+          || 'پیام جدید در تازه سیستم';
+        try {
+          const pushResponse = await fetch(`${url}/functions/v1/web-push`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              orgId,
+              eventKey: String(config.__durable_execution_key || `${action.id || 'workflow'}:${recordId}`),
+              targetUserIds,
+              targetRoleIds,
+              title: pushTitle,
+              message: noteText || 'پیام سیستمی جدید برای شما ثبت شد.',
+              url: '/messages?tab=notes&conversation=system',
+              tag: `workflow-system:${action.id || 'message'}`,
+            }),
+          });
+          browserPushStatus = pushResponse.ok ? 'queued' : 'failed';
+          if (!pushResponse.ok) console.warn('[workflow-runner] Browser push delivery failed:', pushResponse.status);
+        } catch (pushError) {
+          browserPushStatus = 'failed';
+          console.warn('[workflow-runner] Browser push delivery failed:', String(pushError?.message || pushError));
+        }
+      } else {
+        browserPushStatus = 'plan_disabled';
+      }
+    }
     let smsRecipientCount = 0;
     if (action.type === 'send_note_sms') {
       const smsText = `پیام جدید از طرف "سیستم"\n"${noteText.replace(/\*\*/g, '').substring(0, 80)}"\nبرای مشاهده به سامانه مراجعه کنید`;
@@ -4423,7 +4526,7 @@ async function executeAction(
     return actionResult(action, 'success', undefined, {
       recipient_count: mentionTargets.mentionUserIds.length + mentionTargets.mentionRoleIds.length + mentionTargets.groupTargets.length + smsRecipientCount,
       affected_count: noteRows.length,
-      details: { note_count: noteRows.length, sms_recipient_count: smsRecipientCount },
+      details: { note_count: noteRows.length, sms_recipient_count: smsRecipientCount, browser_push_status: browserPushStatus },
     });
   }
 
@@ -4726,6 +4829,9 @@ async function executeAction(
   if (action.type === 'create_related_record') {
     const targetModuleId = String(config.target_module_id || '').trim();
     const sourceModuleId = String(config.source_module_id || moduleId).trim() || moduleId;
+    if (isSaasWorkflowSource(sourceModuleId) && !['tasks','invoices'].includes(targetModuleId)) {
+      throw new Error('مقصد رکورد مرتبط برای این مبدأ SaaS پشتیبانی نمی‌شود.');
+    }
     const isProcessRelatedRecord = sourceModuleId === '__process_run__'
       || String(config.relation_field_key || '').trim() === '__process_run_link__';
     const processLinks = parseObjectValue(record?.process_links || record?.process_link_map);
@@ -4753,8 +4859,12 @@ async function executeAction(
     if (isProcessRelatedRecord) {
       processAttachment = await getProcessRelatedRecordAttachmentContext(url, key, orgId, record, targetModuleId);
     } else {
-      assertWorkflowMutationModule(sourceModuleId);
-      const sourceRows = await dbGet(
+      if (!isSaasWorkflowSource(sourceModuleId)) assertWorkflowMutationModule(sourceModuleId);
+      const sourceRows = isSaasWorkflowSource(sourceModuleId)
+        ? await readSaasWorkflowSource((name, args) => callRpc(url, key, name, args), {
+          orgId, actorUserId, moduleId: sourceModuleId, recordId: relationRecordId, limit: 1,
+        })
+        : await dbGet(
         url,
         key,
         `${getModuleTable(sourceModuleId)}?id=eq.${encodeURIComponent(relationRecordId)}&org_id=eq.${encodeURIComponent(orgId)}&select=id&limit=1`,
@@ -4787,6 +4897,18 @@ async function executeAction(
     if (!isProcessRelatedRecord && targetModuleId === 'tasks') {
       payload.related_to_module = sourceModuleId;
       payload.source_record_id = sourceRecordId;
+    }
+    if (isSaasWorkflowSource(sourceModuleId) && targetModuleId === 'invoices') {
+      if (relationFieldKey !== saasWorkflowRelationField(sourceModuleId)) throw new Error('فیلد ارتباط فاکتور با مبدأ SaaS معتبر نیست.');
+      if (Array.isArray(config.saas_invoice_items) && config.saas_invoice_items.length) {
+        payload.invoiceItems = config.saas_invoice_items;
+      }
+      const created = await callRpc(url, key, 'workflow_create_saas_related_invoice', {
+        p_provider_org_id: orgId, p_actor_user_id: actorUserId, p_module_id: sourceModuleId,
+        p_record_id: relationRecordId, p_input: payload,
+        p_execution_key: String(config.__durable_execution_key || '').trim() || null,
+      });
+      return actionResult(action, 'success', undefined, { affected_count: 1, created_record_id: created, target_module_id: targetModuleId });
     }
     const created = await createRecord(
       url,
@@ -5911,10 +6033,14 @@ async function processWorkflowScanJob(url: string, key: string, job: WorkflowInt
     ? Math.max(1, Math.min(50000, Number(workflow.batch_size)))
     : 50000;
   const offset = Math.max(0, Number(job.page_offset || 0));
-  const pageSize = Math.max(1, Math.min(DEFAULT_BATCH_SIZE, configuredRecordLimit - offset));
+  const pageSize = Math.max(1, Math.min(isSaasWorkflowSource(moduleId) ? 200 : DEFAULT_BATCH_SIZE, configuredRecordLimit - offset));
   if (pageSize <= 0) return { scanned: 0, matched: 0, queuedActions: 0, complete: true };
   const table = getModuleTable(moduleId);
-  const records = await fetchModuleRecordsPage(url, key, table, workflow.org_id, pageSize, offset);
+  const records = isSaasWorkflowSource(moduleId)
+    ? await readSaasWorkflowSource((name, args) => callRpc(url, key, name, args), {
+      orgId: workflow.org_id, actorUserId: resolveWorkflowActorId(workflow), moduleId, limit: pageSize, offset,
+    })
+    : await fetchModuleRecordsPage(url, key, table, workflow.org_id, pageSize, offset);
   const conditionsAll = (Array.isArray(workflow.conditions_all) ? workflow.conditions_all : [])
     .filter((condition) => !['changed', 'changed_from', 'changed_to'].includes(String(condition?.operator || '')));
   const conditionsAny = (Array.isArray(workflow.conditions_any) ? workflow.conditions_any : [])
@@ -7186,7 +7312,9 @@ async function runServerProcessAutomationRules(
       conditionsAny,
       actionRecord,
       previousActionRecord,
-      evaluateConditionWithPrevious,
+      (condition, record, previous) => evaluateConditionWithPrevious(condition, record, previous, {
+        url, key, orgId, moduleId: source.moduleId || 'tasks',
+      }),
     )) continue;
     const firstMatch = String(rule?.execution_mode || 'every_match') === 'first_match' && Boolean(ruleId);
     if (firstMatch && !await claimProcessAutomationFirstMatchExecution(url, key, orgId, ruleId, taskId)) {

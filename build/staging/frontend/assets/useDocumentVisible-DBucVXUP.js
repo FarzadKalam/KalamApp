@@ -1,0 +1,1 @@
+import{a as t}from"./ant-icons-vendor-Uj5X7Obb.js";function o(){const[i,n]=t.useState(()=>typeof document>"u"||document.visibilityState==="visible");return t.useEffect(()=>{const e=()=>n(document.visibilityState==="visible");return document.addEventListener("visibilitychange",e),()=>document.removeEventListener("visibilitychange",e)},[]),i}export{o as u};

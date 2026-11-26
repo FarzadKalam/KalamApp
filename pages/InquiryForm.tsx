@@ -754,7 +754,12 @@ const InquiryForm = () => {
           setLoadError("وب فرم موردنظر پیدا نشد یا غیرفعال است.");
         }
       } catch (error: any) {
-        if (requestedSlug === "inquiry" && isMissingWebFormSetupError(error)) {
+        if (String(error?.message || "").includes("WEB_FORM_ORG_ACCESS_DENIED")) {
+          if (!cancelled) {
+            setPublicForm(null);
+            setLoadError("برای دسترسی به این فرم باید عضو فعال سازمان باشید.");
+          }
+        } else if (requestedSlug === "inquiry" && isMissingWebFormSetupError(error)) {
           const companySettings = await loadCompanySettings().catch(() => ({}));
           if (!cancelled) setPublicForm(buildLegacyInquiryState(companySettings));
         } else {
@@ -774,7 +779,7 @@ const InquiryForm = () => {
     return () => {
       cancelled = true;
     };
-  }, [accessToken, requestedSlug]);
+  }, [accessToken, requestedSlug, authUser?.id]);
 
   const palette = branding.palette || DEFAULT_BRANDING.palette;
   const companySettings = publicForm?.companySettings || {};
@@ -1710,6 +1715,8 @@ const InquiryForm = () => {
     } catch (error: any) {
       if (String(error?.message || "").includes("WEB_FORM_AUTH_REQUIRED")) {
         navigate(loginRedirectUrl);
+      } else if (String(error?.message || "").includes("WEB_FORM_ORG_ACCESS_DENIED")) {
+        message.error("برای ثبت این فرم باید عضو فعال سازمان باشید.");
       } else {
         const debugInfo = {
           message: String(error?.message || ""),

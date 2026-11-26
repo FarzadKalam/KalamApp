@@ -1,0 +1,1 @@
+import{j as r}from"./brand-loading-DylTKg69.js";import{a as o}from"./richText-C3Z3fJXW.js";const i=({value:e,className:n=""})=>{const t=o(e);return t?r.jsx("div",{className:`rich-text-content ${n}`,dangerouslySetInnerHTML:{__html:t}}):null};export{i as R};

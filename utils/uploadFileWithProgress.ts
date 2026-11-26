@@ -25,6 +25,8 @@ type UploadFileWithProgressOptions = {
   metadata?: Record<string, any>;
   label?: string;
   detail?: string;
+  onTaskCreated?: (taskId: string) => void;
+  allowManualRetry?: boolean;
 };
 
 export class UploadCanceledError extends Error {
@@ -117,6 +119,8 @@ export const uploadFileWithProgress = async ({
   metadata,
   label,
   detail,
+  onTaskCreated,
+  allowManualRetry = true,
 }: UploadFileWithProgressOptions) => {
   const { url, anonKey } = resolveClientConfig(client);
   const { data } = await client.auth.getSession();
@@ -130,7 +134,8 @@ export const uploadFileWithProgress = async ({
   if (fileSizeError) throw new Error(fileSizeError);
 
   const taskId = createUploadTask(normalizeLabel(path, label), totalBytes, detail);
-  setUploadTaskRetry(taskId, () => {
+  onTaskCreated?.(taskId);
+  if (allowManualRetry) setUploadTaskRetry(taskId, () => {
     dismissUploadTask(taskId);
     void uploadFileWithProgress({
       client,

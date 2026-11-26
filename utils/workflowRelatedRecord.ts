@@ -81,6 +81,11 @@ export const getCreateRelatedRecordTargetModuleOptions = (
       .map(normalizeModuleId)
       .filter((moduleId) => Boolean(moduleId && MODULES[moduleId])),
   ));
+  if (['saas_orgs', 'saas_demo_requests'].includes(normalizedSourceModuleId)) {
+    addOption('invoices');
+    addOption(TASKS_MODULE_ID);
+    return result;
+  }
   if (processTargets.length > 0) {
     processTargets.forEach((moduleId) => {
       const configuredLabel = (moduleOptions || []).find((option) => normalizeModuleId(option?.value) === moduleId)?.label;
@@ -125,6 +130,10 @@ export const getCreateRelatedRecordRelationFieldOptions = (
   const normalizedTargetModuleId = normalizeModuleId(targetModuleId);
   const normalizedSourceModuleId = normalizeModuleId(sourceModuleId);
   if (!normalizedTargetModuleId || !MODULES[normalizedTargetModuleId]) return [];
+  if (normalizedTargetModuleId === 'invoices' && ['saas_orgs', 'saas_demo_requests'].includes(normalizedSourceModuleId)) {
+    return [{ label: normalizedSourceModuleId === 'saas_orgs' ? 'سازمان مشتری SaaS' : 'درخواست دمو',
+      value: normalizedSourceModuleId === 'saas_orgs' ? 'saas_tenant_org_id' : 'saas_demo_request_id' }];
+  }
 
   if ((processTargetModuleIds || []).map(normalizeModuleId).includes(normalizedTargetModuleId)) {
     return [{

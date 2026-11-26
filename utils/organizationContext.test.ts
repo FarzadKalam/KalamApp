@@ -22,6 +22,8 @@ describe('request-scoped organization context', () => {
     expect(headers.get('Authorization')).toBe('Bearer test-token');
     await organizationContextFetch('https://api.example.test/functions/v1/send-sms');
     expect((fetch.mock.calls[1][1].headers as Headers).has('x-organization-id')).toBe(false);
+    await organizationContextFetch('https://api.example.test/functions/v1/ai-assistant', { headers: { 'x-client-info': 'client; org=old' } });
+    expect((fetch.mock.calls[2][1].headers as Headers).get('x-client-info')).toBe('client; org=org-selected');
     clearOrganizationContext(); expect(getSelectedOrganizationId()).toBeNull();
   });
   it('uses membership permissions instead of a privileged legacy profile in another org', async () => {

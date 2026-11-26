@@ -8,7 +8,7 @@ const corsHeaders = {
 };
 
 const FUNCTION_BUILD =
-  "payment-gateway-2026-10-29-saas-wallet-return";
+  "payment-gateway-2026-11-18-saas-delivered-invoice";
 
 const json = (status: number, payload: Record<string, any>) =>
   new Response(JSON.stringify({ build: FUNCTION_BUILD, ...payload }), {
@@ -214,12 +214,20 @@ const rpcAsAuthenticatedUser = async (
   key: string,
   name: string,
   body: Record<string, any>,
+  forwardTenantContext = false,
 ) => {
   const token = String(req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
   if (!token) throw new Error("نشست کاربر معتبر نیست.");
+  const headers = new Headers({ ...h(key), Authorization: `Bearer ${token}` });
+  if (forwardTenantContext) {
+    for (const header of ['origin', 'x-client-info']) {
+      const value = req.headers.get(header);
+      if (value) headers.set(header, value);
+    }
+  }
   const res = await fetch(`${trimSlashEnd(urlBase)}/rest/v1/rpc/${name}`, {
     method: "POST",
-    headers: { ...h(key), Authorization: `Bearer ${token}` },
+    headers,
     body: JSON.stringify(body),
   });
   const text = await res.text();
@@ -868,7 +876,7 @@ const createSaasAccountOrderPayment = async (
   // database recalculates/validates the amount; the browser never supplies it.
   const requestedOrderId = String(body?.order_id || "").trim();
   const order = requestedOrderId
-    ? await rpcAsAuthenticatedUser(req, urlBase, key, "prepare_current_saas_order_payment", { p_order_id: requestedOrderId })
+    ? await rpcAsAuthenticatedUser(req, urlBase, key, "prepare_current_saas_order_payment", { p_order_id: requestedOrderId }, true)
     : await rpcAsAuthenticatedUser(req, urlBase, key, "create_current_saas_order", {
       p_items: Array.isArray(body?.items) ? body.items : [],
     });
@@ -876,11 +884,17 @@ const createSaasAccountOrderPayment = async (
   const amountIrt = Math.round(Number(order?.total_irt || 0));
   if (!orderId || !Number.isFinite(amountIrt) || amountIrt <= 0) throw new Error("سبد خرید معتبر نیست.");
   const mode = String(Deno.env.get("ZARINPAL_MODE") || "production") === "sandbox" ? "sandbox" : "production";
-  const returnOrigin = (await getTenantPublicOrigin(urlBase, key, String(profile.org_id || ""), true)) || normalizeSafeReturnOrigin(body?.return_origin);
+  const orderOrgId = String(order?.org_id || profile.org_id || "");
+  const returnOrigin = (await getTenantPublicOrigin(urlBase, key, orderOrgId, true)) || normalizeSafeReturnOrigin(body?.return_origin);
+  if (order.sales_invoice === true) {
+    const existing = first(await rest(urlBase, key,
+      `payment_transactions?org_id=eq.${enc(orderOrgId)}&purpose=eq.saas_account_order&metadata->>saas_order_id=eq.${enc(orderId)}&status=eq.redirected&select=id,start_url&order=created_at.desc&limit=1`));
+    if (existing?.start_url) return json(200, { success: true, payment_url: existing.start_url, transaction_id: existing.id, order_id: orderId });
+  }
   const [tx] = await rest(urlBase, key, "payment_transactions", {
     method: "POST",
     body: JSON.stringify([{
-      org_id: profile.org_id, created_by: profile.id, gateway_scope: "system", provider: "zarinpal",
+      org_id: orderOrgId, created_by: profile.id, gateway_scope: "system", provider: "zarinpal",
       purpose: "saas_account_order", module_id: null, record_id: null, amount: amountIrt, currency: "IRT", status: "pending", callback_url: "",
       description: `خرید حساب تازه سیستم ${amountIrt.toLocaleString("fa-IR")} تومان`,
       metadata: { saas_order_id: orderId, return_origin: returnOrigin, mode, source: "saas_account_center" },

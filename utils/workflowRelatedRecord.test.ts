@@ -8,6 +8,11 @@ import {
 } from './workflowRelatedRecord';
 
 describe('workflowRelatedRecord', () => {
+  it('offers provider invoices and activities for SaaS sources using explicit source links', () => {
+    expect(getCreateRelatedRecordTargetModuleOptions('saas_orgs', [{label:'سازمان',value:'saas_orgs'}]).map(x=>x.value)).toEqual(['invoices','tasks']);
+    expect(getCreateRelatedRecordRelationFieldOptions('invoices','saas_orgs')[0].value).toBe('saas_tenant_org_id');
+    expect(getCreateRelatedRecordRelationFieldOptions('invoices','saas_demo_requests')[0].value).toBe('saas_demo_request_id');
+  });
   it('keeps activities available as a target for related record creation', () => {
     const options = getCreateRelatedRecordTargetModuleOptions('customers', [
       { label: 'فعالیت ها', value: 'tasks' },

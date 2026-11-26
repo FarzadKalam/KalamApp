@@ -186,6 +186,27 @@ export default defineConfig(({ mode }) => {
       plugins: [
         react({ babel: { compact: mode === 'production' } }),
         generateVersionJson(),
+        ...(mode === 'test' ? [{
+          name: 'vitest-antd-es-to-lib',
+          enforce: 'pre' as const,
+          resolveId(source: string) {
+            if (source === '@ant-design/x') {
+              return toPosixPath(path.resolve(__dirname, 'node_modules/@ant-design/x/es/index.js'));
+            }
+            if (!source.startsWith('antd/es/')) return null;
+            const rel = source.slice('antd/es/'.length).replace(/\.js$/, '');
+            const base = path.resolve(__dirname, 'node_modules/antd/lib', rel);
+            const fileCandidate = `${base}.js`;
+            const indexCandidate = path.join(base, 'index.js');
+            const target = fs.existsSync(fileCandidate)
+              ? fileCandidate
+              : fs.existsSync(indexCandidate)
+                ? indexCandidate
+                : null;
+            if (!target) return null;
+            return toPosixPath(target);
+          },
+        }] : []),
       ],
       build: {
         rollupOptions: {
@@ -234,6 +255,12 @@ export default defineConfig(({ mode }) => {
         // رابط‌های Ant Design و مسیرهای چندرسانه‌ای دستیار در آزمون‌های یکپارچهٔ
         // سنگین، روی دستگاه‌های معمولی بیش از ۲۰ ثانیه زمان می‌برند.
         testTimeout: 40_000,
+        server: {
+          deps: {
+            fallbackCJS: true,
+            inline: [/@ant-design[\\/]x/],
+          },
+        },
       }
     };
 });

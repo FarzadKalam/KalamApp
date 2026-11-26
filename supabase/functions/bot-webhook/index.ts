@@ -2,6 +2,7 @@
 import { hasBotPlanAccess } from '../_shared/bot-plan-access.ts';
 
 import { normalizeAgentPlan, shouldEscalateCustomerAutoReply } from '../_shared/ai-agent-contract.ts';
+import { buildAvalaiPromptCacheKey, fetchAvalaiChatWithCacheKey, isModelReasoning } from '../_shared/ai-gateway.ts';
 
 type BotChannel = 'telegram' | 'bale' | 'rubika';
 
@@ -2632,7 +2633,7 @@ const loadBotAiProviderConfig = async (supabaseUrl: string, serviceRoleKey: stri
       limit: 1,
     }).catch(() => []),
     restSelectRows(supabaseUrl, serviceRoleKey, 'ai_model_catalog', {
-      select: 'id,provider,capability_tags,is_active,is_coming_soon',
+      select: 'id,provider,capability_tags,is_active,is_coming_soon,metadata',
       limit: 500,
     }).catch(() => []),
   ]);
@@ -2654,6 +2655,8 @@ const loadBotAiProviderConfig = async (supabaseUrl: string, serviceRoleKey: stri
   return {
     provider: String(resolved?.provider || 'avalai').trim() || 'avalai',
     model: String(resolved?.id || '').trim(),
+    modelCatalog: resolved,
+    orgId: normalizedOrgId,
     apiKey: String(Deno.env.get('AVALAI_API_KEY') || Deno.env.get('AI_API_KEY') || Deno.env.get('OPENAI_API_KEY') || '').trim(),
   };
 };
@@ -2662,7 +2665,7 @@ const callBotAutoReplyAi = async (providerConfig: any, payload: Record<string, a
   if (!providerConfig?.model) throw new Error('مدل پاسخ خودکار بات تنظیم نشده است.');
   if (!providerConfig?.apiKey) throw new Error('کلید مرکزی AI برای پاسخ خودکار بات تنظیم نشده است.');
   const model = String(providerConfig.model || '').trim();
-  const isReasoningModel = [/^o\d/i, /\bo[34][-_]/i, /^gpt-5/i, /deepseek-r\d/i, /\bqwq\b/i, /\breasonin/i].some((pattern) => pattern.test(model));
+  const isReasoningModel = isModelReasoning(model, providerConfig.modelCatalog);
   const tenantName = [payload?.tenant?.trade_name, payload?.tenant?.company_name, payload?.tenant?.organization_name]
     .map((value) => String(value || '').trim())
     .find(Boolean);
@@ -2674,7 +2677,11 @@ const callBotAutoReplyAi = async (providerConfig: any, payload: Record<string, a
     messages: [
       {
         role: 'system',
-        content: `شما عامل پاسخگویی خودکار سازمان «${tenantName || 'فعلی'}» هستید؛ KalamApp فقط بستر نرم‌افزاری است. ${continuityInstruction} فقط JSON معتبر برگردان: {"reply":"...","risk":"low|medium|high","confidence":"low|medium|high","requires_handoff":true|false,"reason":"..."}. پاسخ reply فارسی، کوتاه، حرفه‌ای و محتاط باشد. اگر اطلاعات کافی نیست، requires_handoff را true کن و یک سوال کوتاه در reply بنویس. برای قیمت، امور مالی، حقوقی، تغییر داده یا هر ادعای بدون منبع، risk را low نگذار و requires_handoff را true کن. هیچ Markdown یا متن خارج از JSON ننویس.`,
+        content: 'شما عامل پاسخ‌گویی خودکار سازمان هستید. KalamApp فقط بستر نرم‌افزاری است. فقط JSON معتبر برگردان: {"reply":"...","risk":"low|medium|high","confidence":"low|medium|high","requires_handoff":true|false,"reason":"..."}. پاسخ reply فارسی، کوتاه، حرفه‌ای و محتاط باشد. اگر اطلاعات کافی نیست، requires_handoff را true کن و یک سوال کوتاه در reply بنویس. برای قیمت، امور مالی، حقوقی، تغییر داده یا هر ادعای بدون منبع، risk را low نگذار و requires_handoff را true کن. هیچ Markdown یا متن خارج از JSON ننویس.',
+      },
+      {
+        role: 'system',
+        content: `سازمان پاسخ‌دهنده «${tenantName || 'فعلی'}» است. ${continuityInstruction}`,
       },
       {
         role: 'user',
@@ -2688,6 +2695,10 @@ const callBotAutoReplyAi = async (providerConfig: any, payload: Record<string, a
     requestBody.temperature = 0.22;
     requestBody.max_tokens = 520;
   }
+  const cacheKey = await buildAvalaiPromptCacheKey({
+    orgId: providerConfig.orgId, workload: 'customer_reply_suggestion', modelId: model,
+    modelCatalog: providerConfig.modelCatalog, stableSystemPrefix: requestBody.messages[0].content,
+  });
   let response: Response | null = null;
   let raw = '';
   // Keep bot auto-replies within the worker budget. Retrying another base URL
@@ -2695,15 +2706,14 @@ const callBotAutoReplyAi = async (providerConfig: any, payload: Record<string, a
   const baseUrls = botAiBaseUrls().slice(0, 1);
   for (const baseUrl of baseUrls) {
     try {
-      const nextResponse = await fetch(`${baseUrl}/chat/completions`, {
+      const nextResponse = await fetchAvalaiChatWithCacheKey(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${providerConfig.apiKey}`,
         },
-        body: JSON.stringify(requestBody),
         signal: AbortSignal.timeout(45000),
-      });
+      }, requestBody, cacheKey);
       response = nextResponse;
       raw = await nextResponse.text();
       if (nextResponse.ok || !isRetryableAiStatus(nextResponse.status) || baseUrl === baseUrls[baseUrls.length - 1]) break;

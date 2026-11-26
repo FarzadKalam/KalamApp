@@ -14,6 +14,7 @@ import { formatAiCurrencyFromIrt } from '../../utils/aiCurrency';
 import AssistantPanel from './AssistantPanel';
 import type { AiComposerCapability } from './AiCapabilityComposerActions';
 import { getAgentDefinition, normalizeSelectedAgents, type AgentKey } from '../../utils/aiAgentCatalog';
+import { usePersonalAssistantTitle } from '../../hooks/usePersonalAssistantTitle';
 import { AiAgentCameoFigure } from './AiAgentIcon';
 import './AiChatSurfaceV2.css';
 const AgentInboxSurface=React.lazy(()=>import('../notifications/messaging/MessagingSurfacePrototype'));
@@ -112,7 +113,7 @@ const getThreadSource = (thread: AiThreadRow): AiThreadSource | null => {
   };
 };
 
-const getThreadAgent = (thread: AiThreadRow) => {
+const getThreadAgent = (thread: AiThreadRow, personalTitle: string) => {
   const metadata = thread.metadata || {};
   if (metadata.free_chat === true) return { ...getAgentDefinition('lead_orchestrator')!,titleFa: 'بدون ایجنت',badgeColor: '#64748b' };
   const rawKey = String(
@@ -120,7 +121,8 @@ const getThreadAgent = (thread: AiThreadRow) => {
     || (Array.isArray(metadata.selected_agents) ? metadata.selected_agents[0] : '')
     || 'lead_orchestrator'
   ).trim() as AgentKey;
-  return getAgentDefinition(rawKey) || getAgentDefinition('lead_orchestrator')!;
+  const agent = getAgentDefinition(rawKey) || getAgentDefinition('lead_orchestrator')!;
+  return agent.key === 'lead_orchestrator' ? { ...agent, titleFa: personalTitle, shortTitleFa: personalTitle } : agent;
 };
 
 const getThreadSubtitle = (thread: AiThreadRow) => {
@@ -196,6 +198,7 @@ const isHiddenAssistantThread = (thread?: AiThreadRow | null) => {
 };
 
 const AiChatSurfaceV2: React.FC = () => {
+  const personalTitle = usePersonalAssistantTitle();
   const { message } = App.useApp();
   const orgCurrency = useCurrencyConfig();
   const location = useLocation();
@@ -498,7 +501,7 @@ const AiChatSurfaceV2: React.FC = () => {
           const active = thread.id === activeThreadId;
           const title = getThreadTitle(thread);
           const source = getThreadSource(thread);
-          const threadAgent = getThreadAgent(thread);
+          const threadAgent = getThreadAgent(thread, personalTitle);
           if (compact) {
             return (
               <div

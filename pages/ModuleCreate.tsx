@@ -2,6 +2,7 @@ import { showRecordCreatedFeedback } from '../utils/recordFeedback';
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
+import { useModuleSettingsVersion } from "../utils/moduleSettingsRuntime";
 import SmartForm from "../components/SmartForm";
 import { App, Result, Spin } from "antd";
 import { supabase } from "../supabaseClient";
@@ -50,7 +51,11 @@ export const ModuleCreate = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { message: messageApi } = App.useApp();
-  const baseModuleConfig = moduleId ? MODULES[moduleId] : null;
+  const moduleSettingsVersion = useModuleSettingsVersion();
+  const baseModuleConfig = useMemo(
+    () => (moduleId && MODULES[moduleId] ? { ...MODULES[moduleId] } : null),
+    [moduleId, moduleSettingsVersion]
+  );
   const { moduleConfig: planBaseModuleConfig } = useContentCalendarPlanModule(baseModuleConfig);
   const { enabled: retailSalesInvoiceEnabled } = useRetailSalesInvoiceFeature();
   const [retailMode, setRetailMode] = useState(false);

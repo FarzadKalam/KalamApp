@@ -21,6 +21,7 @@ import {
   Upload,
 } from "antd";
 import {
+  CheckSquareOutlined,
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -37,6 +38,7 @@ import {
   buildDefaultFooterTemplateForModule,
   buildDefaultHeaderTemplateForModule,
   buildDefaultTemplateForModule,
+  buildSystemTemplateFieldOptionsForModule,
   getSystemTemplateFieldOptions,
   getPrintTemplateVariables,
   isPrintTemplateAvailableForModule,
@@ -51,6 +53,15 @@ import {
   type StoredPrintTemplate,
 } from "../../utils/printTemplates/store";
 import { buildListPrintableFields } from "../../utils/listPrintExport";
+import { expandLegacyTableSelection } from "../../utils/printTemplates/printFieldCatalog";
+import { isPathAllowedByModulePrintSettings } from "../../utils/printTemplates/printableFields";
+import {
+  loadPrintFieldPreferenceFromServer,
+  savePrintFieldPreference,
+  savePrintFieldPreferenceToServer,
+} from "../../utils/printTemplates/fieldPreferences";
+import { getBaseModuleSchemaSnapshot, useModuleSettingsVersion } from "../../utils/moduleSettingsRuntime";
+import { fetchSessionBootstrap } from "../../utils/sessionCache";
 import { supabase } from "../../supabaseClient";
 import {
   isUploadCanceledError,
@@ -245,11 +256,29 @@ const PrintTemplatesTab: React.FC = () => {
     any
   > | null>(null);
   const [loadingRolePermissions, setLoadingRolePermissions] = useState(true);
+  const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [savingSystemFields, setSavingSystemFields] = useState(false);
+  const moduleSettingsVersion = useModuleSettingsVersion();
   const openedExternalTemplateRef = React.useRef<string | null>(null);
   const requestedModuleId = String(searchParams.get("moduleId") || "").trim();
   const requestedTemplateId = String(
     searchParams.get("templateId") || "",
   ).trim();
+
+  useEffect(() => {
+    let active = true;
+    void fetchSessionBootstrap(supabase)
+      .then((snapshot) => {
+        if (!active) return;
+        setCurrentOrgId(String(snapshot?.orgId || "").trim() || null);
+        setCurrentUserId(String(snapshot?.user?.id || "").trim() || null);
+      })
+      .catch(() => {
+        // Ignore session bootstrap errors
+      });
+    return () => { active = false; };
+  }, []);
 
   const moduleOptions = useMemo(
     () =>
@@ -259,7 +288,7 @@ const PrintTemplatesTab: React.FC = () => {
           value: module.id,
           label: module.titles.fa,
         })),
-    [],
+    [moduleSettingsVersion],
   );
 
   const selectedTemplates = useMemo(
@@ -291,19 +320,28 @@ const PrintTemplatesTab: React.FC = () => {
                 Array.isArray(item?.scopes) && item.scopes.length > 0
                   ? item.scopes
                   : ["record", "list"];
-              return scopes.includes(currentScope);
+              if (!scopes.includes(currentScope)) return false;
+              const moduleConfig = MODULES[selectedModuleId];
+              const baseModuleConfig = getBaseModuleSchemaSnapshot(selectedModuleId);
+              return isPathAllowedByModulePrintSettings({
+                moduleConfig,
+                baseModuleConfig,
+                fieldPath: String(item.value || ""),
+              });
             }),
             canViewSelectedModuleField,
           ),
-    [currentScope, loadingRolePermissions, rolePermissions, selectedModuleId],
+    [currentScope, loadingRolePermissions, moduleSettingsVersion, rolePermissions, selectedModuleId],
   );
-  const systemFieldOptions = useMemo(
-    () => {
+  const buildFieldOptionsForScope = React.useCallback(
+    (scope: "record" | "list") => {
       if (loadingRolePermissions) return [];
-      const moduleOptions = currentScope === "list"
-        ? (MODULES[selectedModuleId]
+      const moduleConfig = MODULES[selectedModuleId];
+      const baseModuleConfig = getBaseModuleSchemaSnapshot(selectedModuleId);
+      const moduleOptions = scope === "list"
+        ? (moduleConfig
               ? buildListPrintableFields(
-                  MODULES[selectedModuleId],
+                  moduleConfig,
                   canViewSelectedModuleField,
                 )
               : []
@@ -312,15 +350,36 @@ const PrintTemplatesTab: React.FC = () => {
               label: field.label,
               group: "ستون‌های لیست",
               kind: "record" as const,
+              parentKey: undefined as string | undefined,
             }))
         : filterSystemTemplateFieldOptions(
-              getSystemTemplateFieldOptions(selectedModuleId),
+              moduleConfig
+                ? buildSystemTemplateFieldOptionsForModule(moduleConfig)
+                : getSystemTemplateFieldOptions(selectedModuleId),
               canViewSelectedModuleField,
+            ).filter((item) =>
+              isPathAllowedByModulePrintSettings({
+                moduleConfig,
+                baseModuleConfig,
+                fieldPath: item.key,
+              }),
             );
-      const variableOptions = filterPrintTemplateVariableOptions(
+      const moduleKeySet = new Set(moduleOptions.map((item) => String(item.key || "").trim()));
+      const variableFieldOptions = filterPrintTemplateVariableOptions(
         getPrintTemplateVariables(selectedModuleId).filter((item) => {
           const scopes = item.scopes?.length ? item.scopes : ["record", "list"];
-          return scopes.includes(currentScope);
+          if (!scopes.includes(scope)) return false;
+          const val = String(item.value || "").trim();
+          if (!val || val.startsWith("row.")) return false;
+          if (selectedModuleId === "payroll_slips" && val.startsWith("employee.")) {
+            const recordAlias = `record.employee_${val.slice("employee.".length)}`;
+            if (moduleKeySet.has(recordAlias)) return false;
+          }
+          return isPathAllowedByModulePrintSettings({
+            moduleConfig,
+            baseModuleConfig,
+            fieldPath: val,
+          });
         }),
         canViewSelectedModuleField,
       ).map((item) => ({
@@ -328,15 +387,20 @@ const PrintTemplatesTab: React.FC = () => {
         label: item.label,
         group: item.group,
         kind: item.kind === 'block' ? 'table' as const : 'record' as const,
+        parentKey: undefined as string | undefined,
       }));
       const seen = new Set<string>();
-      return [...moduleOptions, ...variableOptions].filter((item) => {
+      return [...moduleOptions, ...variableFieldOptions].filter((item) => {
         if (seen.has(item.key)) return false;
         seen.add(item.key);
         return true;
       });
     },
-    [currentScope, loadingRolePermissions, rolePermissions, selectedModuleId],
+    [loadingRolePermissions, moduleSettingsVersion, rolePermissions, selectedModuleId],
+  );
+  const systemFieldOptions = useMemo(
+    () => buildFieldOptionsForScope(currentScope),
+    [buildFieldOptionsForScope, currentScope],
   );
   const filteredSystemFieldOptions = useMemo(() => {
     const q = systemFieldsSearch.trim().toLowerCase();
@@ -656,44 +720,103 @@ const PrintTemplatesTab: React.FC = () => {
   }, [loading, requestedModuleId, requestedTemplateId, templatesByModule]);
 
   const openSystemFieldsEditor = (template: StoredPrintTemplate) => {
-    const allKeys = systemFieldOptions.map((item) => item.key);
-    const selectedKeys =
+    const scope = (template.scope || "record") as "record" | "list";
+    const optionsForTemplate = buildFieldOptionsForScope(scope);
+    const allKeys = optionsForTemplate.map((item) => item.key);
+    const fallbackSelected =
       Array.isArray(template.selectedFieldKeys) &&
       template.selectedFieldKeys.length > 0
-        ? sanitizeSelectedPrintFieldKeys(template.selectedFieldKeys, allKeys)
+        ? expandLegacyTableSelection(
+            sanitizeSelectedPrintFieldKeys(template.selectedFieldKeys, allKeys),
+            optionsForTemplate,
+          )
         : allKeys;
     setSystemFieldsEditingTemplate(template);
-    setSystemFieldKeysDraft(selectedKeys);
+    setSystemFieldKeysDraft(fallbackSelected);
     setSystemFieldsSearch("");
     setSystemFieldsModalOpen(true);
+
+    if (currentOrgId) {
+      void loadPrintFieldPreferenceFromServer({
+        orgId: currentOrgId,
+        moduleId: selectedModuleId,
+        templateId: template.id,
+        scope,
+      }).then((serverKeys) => {
+        if (!Array.isArray(serverKeys)) return;
+        const expanded = expandLegacyTableSelection(
+          sanitizeSelectedPrintFieldKeys(serverKeys, allKeys),
+          optionsForTemplate,
+        );
+        setSystemFieldKeysDraft(expanded);
+      });
+    }
   };
 
   const saveSystemFieldsEditor = async () => {
     if (!systemFieldsEditingTemplate) return;
-    const allowedKeys = systemFieldOptions.map((item) => item.key);
-    const current = templatesByModule[selectedModuleId] || [];
-    const nextModuleTemplates = current.map((template) =>
-      template.id === systemFieldsEditingTemplate.id
-        ? {
-            ...template,
-            selectedFieldKeys: sanitizeSelectedPrintFieldKeys(
-              systemFieldKeysDraft,
-              allowedKeys,
-            ),
-            updatedAt: nowIso(),
-          }
-        : template,
+    const scope = (systemFieldsEditingTemplate.scope || "record") as "record" | "list";
+    const optionsForTemplate = buildFieldOptionsForScope(scope);
+    const allowedKeys = optionsForTemplate.map((item) => item.key);
+    const sanitizedKeys = sanitizeSelectedPrintFieldKeys(
+      systemFieldKeysDraft,
+      allowedKeys,
     );
-    const nextState = {
-      ...templatesByModule,
-      [selectedModuleId]: nextModuleTemplates,
-    };
-    const ok = await persistTemplates(nextState);
-    if (ok) {
+
+    setSavingSystemFields(true);
+    try {
+      savePrintFieldPreference({
+        scope,
+        userId: currentUserId,
+        orgId: currentOrgId,
+        moduleId: selectedModuleId,
+        templateId: systemFieldsEditingTemplate.id,
+        selectedFieldKeys: sanitizedKeys,
+      });
+
+      if (currentOrgId) {
+        const savedOnServer = await savePrintFieldPreferenceToServer({
+          orgId: currentOrgId,
+          moduleId: selectedModuleId,
+          templateId: systemFieldsEditingTemplate.id,
+          scope,
+          selectedFieldKeys: sanitizedKeys,
+        });
+        if (!savedOnServer) {
+          throw new Error("save_print_field_preferences_failed");
+        }
+      }
+
+      const current = templatesByModule[selectedModuleId] || [];
+      const nextModuleTemplates = current.map((template) =>
+        template.id === systemFieldsEditingTemplate.id
+          ? {
+              ...template,
+              selectedFieldKeys: sanitizedKeys,
+              updatedAt: nowIso(),
+            }
+          : template,
+      );
+      const nextState = {
+        ...templatesByModule,
+        [selectedModuleId]: nextModuleTemplates,
+      };
+      setTemplatesByModule(nextState);
+
+      if (systemFieldsEditingTemplate.isSystem !== true) {
+        await persistTemplates(nextState);
+      } else {
+        message.success("فیلدهای قابل چاپ قالب ذخیره شد.");
+      }
+
       setSystemFieldsModalOpen(false);
       setSystemFieldsEditingTemplate(null);
       setSystemFieldsSearch("");
       setSystemFieldKeysDraft([]);
+    } catch (error) {
+      message.error(toFaErrorMessage(error, "ذخیره فیلدهای قابل چاپ ناموفق بود."));
+    } finally {
+      setSavingSystemFields(false);
     }
   };
 
@@ -1010,7 +1133,18 @@ const PrintTemplatesTab: React.FC = () => {
                         }}
                       />
                     </Tooltip>,
-                    <Tooltip key="edit" title="ویرایش">
+                    <Tooltip key="fields" title="فیلدهای قابل چاپ">
+                      <Button
+                        size="small"
+                        type="text"
+                        icon={<CheckSquareOutlined />}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openSystemFieldsEditor(item);
+                        }}
+                      />
+                    </Tooltip>,
+                    <Tooltip key="edit" title={item.isSystem ? "تنظیم فیلدهای قابل چاپ" : "ویرایش"}>
                       <Button
                         size="small"
                         type="text"
@@ -1532,7 +1666,7 @@ const PrintTemplatesTab: React.FC = () => {
       </Drawer>
 
       <Modal
-        title={`تنظیم فیلدهای قالب سیستمی${systemFieldsEditingTemplate ? ` - ${systemFieldsEditingTemplate.title}` : ""}`}
+        title={`تنظیم فیلدهای قابل چاپ${systemFieldsEditingTemplate ? ` - ${systemFieldsEditingTemplate.title}` : ""}`}
         open={systemFieldsModalOpen}
         onCancel={() => {
           setSystemFieldsModalOpen(false);
@@ -1543,7 +1677,7 @@ const PrintTemplatesTab: React.FC = () => {
         onOk={saveSystemFieldsEditor}
         okText="ذخیره"
         cancelText="انصراف"
-        confirmLoading={saving}
+        confirmLoading={saving || savingSystemFields}
         width={860}
         destroyOnHidden
       >

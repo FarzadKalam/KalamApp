@@ -46,6 +46,8 @@ export const INTERVAL_DAY_CONDITION_OPTIONS: Array<{ label: string; value: Inter
 
 export type WorkflowActionType =
   | 'send_message'
+  | 'send_saas_invoice'
+  | 'apply_saas_invoice_access'
   | 'send_note'
   | 'send_note_sms'
   | 'send_web_form_link'
@@ -182,6 +184,8 @@ export const intervalUnitOptions: Array<{ label: string; value: WorkflowInterval
 
 export const actionTypeOptions: Array<{ label: string; value: WorkflowActionType }> = [
   { label: 'ارسال پیام', value: 'send_message' },
+  { label: 'ارسال فاکتور / پیش‌فاکتور به پنل مشتری', value: 'send_saas_invoice' },
+  { label: 'اعمال دسترسی اقلام فاکتور پرداخت‌شده', value: 'apply_saas_invoice_access' },
   { label: 'ارسال لینک وب‌فرم', value: 'send_web_form_link' },
   { label: 'ارسال پیامک', value: 'send_sms' },
   { label: 'ارسال پیام اینستاگرام', value: 'send_instagram_message' },

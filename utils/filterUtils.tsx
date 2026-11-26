@@ -3,6 +3,8 @@ import { SearchOutlined, FilterOutlined } from '@ant-design/icons';
 import { FieldType, FilterOperator, ModuleField } from '../types';
 
 export const WORKFLOW_OPERATORS = {
+  table_any: 'حداقل یک ردیف',
+  table_all: 'همهٔ ردیف‌ها',
   eq: 'برابر است با',
   neq: 'برابر نیست با',
   contains: 'شامل است',

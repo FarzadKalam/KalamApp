@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe,expect,it,vi } from 'vitest';
-import { createContextBudgetController,contextMessageGroups,contextRequestTokens,summarizeContextMessages,appendContinuationText,createContinuationDeltaBuffer } from './ai-context-lifecycle';
+import { createContextBudgetController,contextMessageGroups,contextRequestTokens,summarizeContextMessages,appendContinuationText,createContinuationDeltaBuffer,buildDeterministicContextSummary } from './ai-context-lifecycle';
+import { getModelContextWindowTokens,getModelMaxOutputTokens,parseProviderContextLimitFromError } from './ai-context-policy';
 import { shouldAutoCompactContext,mergeWorkingStateFromMessages } from './ai-context-compressor';
 
 describe('shared context lifecycle for every agent',() => {
@@ -32,6 +33,18 @@ describe('shared context lifecycle for every agent',() => {
     expect(JSON.stringify(compress.mock.calls)).toContain('IMPORTANT_TAIL');
   });
 
+  it('includes the latest old answer in the summary when pinned context leaves little space',async () => {
+    const system={ role: 'system',content: 'z'.repeat(6600) },current={ role: 'user',content: 'درخواست جاری' };
+    const latest={ role: 'assistant',content: 'نقطهٔ ادامه '+ 'x'.repeat(1550) };
+    const messages=[system,{ role: 'user',content: 'هدف اولیه' },latest,current];
+    const compress=vi.fn(async () => 'هدف اولیه و نقطهٔ ادامه');
+    const next=await createContextBudgetController({ initialMessages: messages,modelCatalog: { metadata: { context_window: 4096 } },outputTokens: 1024,compress }).prepare(messages,true);
+    expect(next[0]).toBe(system);
+    expect(next.at(-1)).toBe(current);
+    expect(next).not.toContain(latest);
+    expect(JSON.stringify(compress.mock.calls)).toContain('نقطهٔ ادامه');
+  });
+
   it('keeps file references and processed/pending identities outside the lossy summary',() => {
     const state=mergeWorkingStateFromMessages(null,[{ id: 'message',role: 'user',metadata: { attachments: [{ name: 'تصویر',url: 'https://files.test/image',assetId: 'asset',mimeType: 'image/jpeg',data: 'DO_NOT_STORE' }] } },
       { role: 'assistant',metadata: { action_log_id: 'action',requires_confirmation: true } }]);
@@ -56,5 +69,29 @@ describe('shared context lifecycle for every agent',() => {
     expect(push('a'.repeat(70))).toBe('');
     expect(push(' ادامه تازه',true)).toBe(' ادامه تازه');
     expect(appendContinuationText('{"name":"بخ','ش"}')).toBe('{"name":"بخش"}');
+  });
+
+  it('infers family context/output limits when metadata is absent and parses provider limit errors',() => {
+    expect(getModelContextWindowTokens({ id: 'claude-sonnet-5-5',metadata: {} })).toBe(200_000);
+    expect(getModelContextWindowTokens({ id: 'claude-sonnet-5-5',metadata: { context_window: 128_000 } })).toBe(128_000);
+    expect(getModelMaxOutputTokens({ id: 'claude-sonnet-5-5',metadata: {} })).toBe(32_768);
+    expect(getModelMaxOutputTokens({ id: 'custom-model',metadata: { max_output_tokens: 24_000 } })).toBe(24_000);
+    expect(parseProviderContextLimitFromError('This model maximum context length is 131072 tokens')).toBe(131072);
+    expect(parseProviderContextLimitFromError('prompt is too long: 205000 tokens > 200000 maximum')).toBe(200000);
+  });
+
+  it('gracefully trims oversized turn-1 context instead of throwing a hard context error',async () => {
+    const system={ role: 'system',content: 'سیاست ثابت' };
+    const extraSystem={ role: 'system',content: 'فهرست بزرگ '.repeat(3000) };
+    const current={ role: 'user',content: 'درخواست جدید' };
+    const next=await createContextBudgetController({
+      initialMessages: [system,extraSystem,current],
+      modelCatalog: { id: 'small-model',metadata: { context_window: 4096 } },
+      outputTokens: 1024,
+      compress: async () => buildDeterministicContextSummary([current]),
+    }).prepare([system,extraSystem,current]);
+    expect(next[0]).toBe(system);
+    expect(next.at(-1)).toBe(current);
+    expect(contextRequestTokens(next)).toBeLessThan(4096 - 1024);
   });
 });

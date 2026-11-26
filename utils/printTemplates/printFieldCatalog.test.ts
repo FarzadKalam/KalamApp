@@ -4,6 +4,7 @@ import {
   expandLegacyTableSelection,
   getSelectedPrintTableColumns,
 } from './printFieldCatalog';
+import { isPathAllowedByModulePrintSettings } from './printableFields';
 
 describe('print field catalog', () => {
   const moduleConfig = {
@@ -64,5 +65,42 @@ describe('print field catalog', () => {
       selectedFieldKeys: ['block.products.product_id'],
       hasExplicitSelection: true,
     }).map((column) => column.key)).toEqual(['product_id']);
+  });
+
+  it('excludes json, progress_stages, readonly_lookup, inactive, and unprintable fields and enforces higher-level module switches', () => {
+    const customConfig = {
+      id: 'employees',
+      fields: [
+        { key: 'full_name', labels: { fa: 'نام و نام خانوادگی' }, type: 'text', order: 1 },
+        { key: 'job_title', labels: { fa: 'سمت' }, blockId: 'work_info', type: 'text', order: 2 },
+        { key: 'raw_payload', labels: { fa: 'داده خام' }, type: 'json', order: 3 },
+        { key: 'stages', labels: { fa: 'مراحل' }, type: 'progress_stages', order: 4 },
+        { key: 'secret_salary', labels: { fa: 'محرمانه' }, type: 'price', printable: false, order: 5 },
+      ],
+      blocks: [
+        { id: 'work_info', type: 'field_group', titles: { fa: 'اطلاعات شغلی' } },
+        {
+          id: 'history',
+          type: 'table',
+          titles: { fa: 'سوابق' },
+          tableColumns: [
+            { key: 'title', title: 'عنوان', printable: true },
+            { key: 'internal_note', title: 'یادداشت داخلی', printable: false },
+          ],
+        },
+      ],
+    };
+
+    const catalog = buildModulePrintFieldCatalog({ moduleConfig: customConfig });
+    expect(catalog.map((item) => item.key)).toEqual([
+      'record.full_name',
+      'record.job_title',
+      'block.history',
+      'block.history.title',
+    ]);
+    expect(catalog.find((item) => item.key === 'record.job_title')?.group).toBe('بخش: اطلاعات شغلی');
+    expect(isPathAllowedByModulePrintSettings({ moduleConfig: customConfig, fieldPath: 'record.secret_salary' })).toBe(false);
+    expect(isPathAllowedByModulePrintSettings({ moduleConfig: customConfig, fieldPath: 'block.history.internal_note' })).toBe(false);
+    expect(isPathAllowedByModulePrintSettings({ moduleConfig: customConfig, fieldPath: 'record.full_name' })).toBe(true);
   });
 });

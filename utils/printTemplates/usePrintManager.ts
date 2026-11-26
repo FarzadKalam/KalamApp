@@ -91,9 +91,12 @@ import {
 } from "./fieldAccess";
 import {
   hasMeaningfulPrintValue,
+  isPathAllowedByModulePrintSettings,
   isPrintTemplateFieldVisible,
   resolveEffectivePrintFieldKeys,
 } from "./printableFields";
+import { applyPrintFieldVisibilityAndReflow } from "./tableReflow";
+import { getBaseModuleSchemaSnapshot } from "../moduleSettingsRuntime";
 import {
   expandLegacyTableSelection,
   getSelectedPrintTableColumns,
@@ -498,6 +501,7 @@ const PAYROLL_EMPLOYEE_VALUE_LABELS: Record<string, string> = {
 };
 
 const PAYROLL_EMPLOYEE_PRINT_FIELD_SOURCES: Record<string, string> = {
+  employee_job_title: "job_title",
   employee_national_code: "national_code",
   employee_father_name: "father_name",
   employee_marital_status: "marital_status",
@@ -1250,36 +1254,59 @@ export const usePrintManager = ({
       return true;
     };
 
+    const baseModuleConfig = getBaseModuleSchemaSnapshot(moduleId);
     const baseOptions = filterSystemTemplateFieldOptions(
       moduleConfig
         ? buildSystemTemplateFieldOptionsForModule(moduleConfig)
         : getSystemTemplateFieldOptions(moduleId),
       canViewField,
-    ).map((item) => ({
-      key: item.key,
-      labels: { fa: item.label },
-      value: item.key.startsWith("record.")
-        ? (() => {
-            const recordPath = String(item.key || "").replace(/^record\./, "");
-            const employeeSourceField =
-              PAYROLL_EMPLOYEE_PRINT_FIELD_SOURCES[recordPath];
-            return (
-              getPathValue(data, recordPath) ??
-              (employeeSourceField
-                ? employeeInfo?.[employeeSourceField]
-                : undefined)
-            );
-          })()
-        : true,
-      hasValue: resolveSystemFieldHasValue(item.key),
-      group: item.group,
-      kind: item.kind,
-      parentKey: item.parentKey,
-    }));
+    )
+      .filter((item) =>
+        isPathAllowedByModulePrintSettings({
+          moduleConfig,
+          baseModuleConfig,
+          fieldPath: item.key,
+        }),
+      )
+      .map((item) => ({
+        key: item.key,
+        labels: { fa: item.label },
+        value: item.key.startsWith("record.")
+          ? (() => {
+              const recordPath = String(item.key || "").replace(/^record\./, "");
+              const employeeSourceField =
+                PAYROLL_EMPLOYEE_PRINT_FIELD_SOURCES[recordPath];
+              return (
+                getPathValue(data, recordPath) ??
+                (employeeSourceField
+                  ? employeeInfo?.[employeeSourceField]
+                  : undefined)
+              );
+            })()
+          : true,
+        hasValue: resolveSystemFieldHasValue(item.key),
+        group: item.group,
+        kind: item.kind,
+        parentKey: item.parentKey,
+      }));
 
+    const baseKeySet = new Set(baseOptions.map((item) => String(item.key || "").trim()));
     const providerOptions = getPrintTemplateVariables(moduleId)
       .filter((item) => !item.scopes || item.scopes.includes('record'))
       .filter((item) => !String(item.value || '').startsWith('row.'))
+      .filter((item) => {
+        const val = String(item.value || '').trim();
+        if (!val) return false;
+        if (moduleId === 'payroll_slips' && val.startsWith('employee.')) {
+          const recordAlias = `record.employee_${val.slice('employee.'.length)}`;
+          if (baseKeySet.has(recordAlias)) return false;
+        }
+        return isPathAllowedByModulePrintSettings({
+          moduleConfig,
+          baseModuleConfig,
+          fieldPath: val,
+        });
+      })
       .map((item) => ({
         key: String(item.value || '').trim(),
         labels: { fa: String(item.label || item.value || '') },
@@ -1519,6 +1546,16 @@ export const usePrintManager = ({
       // Row numbers are renderer-owned presentation cells, not selectable
       // record fields. They are intentionally absent from the field catalog.
       if (/^block\.[^.]+\.__row_index__$/.test(normalizedPath)) return true;
+      const baseModuleConfig = getBaseModuleSchemaSnapshot(moduleId);
+      if (
+        !isPathAllowedByModulePrintSettings({
+          moduleConfig,
+          baseModuleConfig,
+          fieldPath: normalizedPath,
+        })
+      ) {
+        return false;
+      }
       // A selection is a template-level visibility contract. It must apply to
       // direct placeholders in manual templates as well as system blocks,
       // otherwise the "printable fields" tab would save a setting that has no
@@ -1546,7 +1583,7 @@ export const usePrintManager = ({
         selectedFieldKeys: templateSelectedKeySet,
       });
     },
-    [canViewPrintFieldPath, knownTemplateFieldKeys, templateSelectedKeySet],
+    [canViewPrintFieldPath, knownTemplateFieldKeys, moduleConfig, moduleId, templateSelectedKeySet],
   );
   const pageUrl = typeof window !== "undefined" ? window.location.href : "";
   const printQrValue = pageUrl;
@@ -1679,7 +1716,7 @@ export const usePrintManager = ({
         ? supabase
             .from("employees")
             .select(
-              "national_code, father_name, marital_status, military_service_status, children_count, insurance_number",
+              "job_title, national_code, father_name, marital_status, military_service_status, children_count, insurance_number",
             )
             .eq("id", payrollEmployeeId)
             .maybeSingle()
@@ -2215,12 +2252,23 @@ export const usePrintManager = ({
   useEffect(() => {
     if (!selectedTemplateId || !userPreferencesReady || !currentOrgId || !printableFieldsForTemplate.length) return;
     let active = true;
-    void loadPrintFieldPreferenceFromServer({
-      orgId: currentOrgId,
-      moduleId,
-      templateId: selectedStoredTemplate?.id || selectedTemplateId,
-      scope: 'record',
-    }).then((serverKeys) => {
+    const primaryTemplateId = selectedStoredTemplate?.id || selectedTemplateId;
+    const sourceTemplateId = String((selectedStoredTemplate as any)?.sourceTemplateId || "").trim();
+    const fetchPreference = async () => {
+      let serverKeys = await loadPrintFieldPreferenceFromServer({
+        orgId: currentOrgId,
+        moduleId,
+        templateId: primaryTemplateId,
+        scope: 'record',
+      });
+      if (!Array.isArray(serverKeys) && sourceTemplateId && sourceTemplateId !== primaryTemplateId) {
+        serverKeys = await loadPrintFieldPreferenceFromServer({
+          orgId: currentOrgId,
+          moduleId,
+          templateId: sourceTemplateId,
+          scope: 'record',
+        });
+      }
       if (!active || !Array.isArray(serverKeys)) return;
       setSelectedPrintFields((prev) => ({
         ...prev,
@@ -2233,13 +2281,15 @@ export const usePrintManager = ({
           printableFieldsForTemplate,
         ),
       }));
-    });
+    };
+    void fetchPreference();
     return () => { active = false; };
   }, [
     currentOrgId,
+    isPrintModalOpen,
     moduleId,
     printableFieldsForTemplate,
-    selectedStoredTemplate?.id,
+    selectedStoredTemplate,
     selectedTemplateId,
     userPreferencesReady,
   ]);
@@ -3041,9 +3091,11 @@ export const usePrintManager = ({
         )
         .forEach((field: any) => {
           const raw = data?.[field.key];
-          if (raw === null || raw === undefined || raw === "") return;
-          let displayValue = resolvePrintIdentityFieldLabel(field.key) || "";
-          if (!displayValue) {
+          const isEmptyValue = raw === null || raw === undefined || raw === "";
+          const keepExplicitlySelectedEmpty = hasTemplateSelectionState && !ignoreTemplateSelection;
+          if (isEmptyValue && !keepExplicitlySelectedEmpty) return;
+          let displayValue = isEmptyValue ? "-" : (resolvePrintIdentityFieldLabel(field.key) || "");
+          if (!isEmptyValue && !displayValue) {
             try {
               displayValue = getSafePrintText(
                 formatPrintValue(field, raw),
@@ -3053,13 +3105,14 @@ export const usePrintManager = ({
               displayValue = "";
             }
           }
-          if (!displayValue) displayValue = localizePlainText(raw);
-          if (!displayValue || displayValue === "-") return;
+          if (!isEmptyValue && !displayValue) displayValue = localizePlainText(raw);
+          if ((!displayValue || displayValue === "-") && !keepExplicitlySelectedEmpty) return;
+          if (!displayValue) displayValue = "-";
           if (isLongTextType(field?.type)) {
             longTextRows.push(`
           <div style="margin-top:8px;">
             <div style="margin:0 0 3px 0; font-size:10px; color:#64748b;">${getFieldLabelFa(field, { moduleId, fallback: field.key })}</div>
-            <div class="rich-text-print" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; background:#fff; font-size:${getReducedPrintFontSize(11)}; line-height:1.9; ${MULTILINE_PRINT_STYLE}">${normalizeRichTextHtmlForPrint(raw)}</div>
+            <div class="rich-text-print" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; background:#fff; font-size:${getReducedPrintFontSize(11)}; line-height:1.9; ${MULTILINE_PRINT_STYLE}">${isEmptyValue ? "-" : normalizeRichTextHtmlForPrint(raw)}</div>
           </div>
         `);
             return;
@@ -4435,9 +4488,13 @@ export const usePrintManager = ({
       if (root === "company") source = sellerInfo || {};
 
       if (
-        root === "record" &&
-        nestedPath &&
-        !isSystemFieldVisible(`record.${nestedPath}`)
+        (root === "record"
+          || root === "customer"
+          || root === "supplier"
+          || root === "employee"
+          || root === "company")
+        && nestedPath
+        && !isSystemFieldVisible(`${root}.${nestedPath}`)
       ) {
         return "";
       }
@@ -4740,10 +4797,18 @@ export const usePrintManager = ({
       ),
     );
 
+    const reflowVisibleHtml = (templateHtml: string) =>
+      applyPrintFieldVisibilityAndReflow(templateHtml, {
+        isFieldVisible: (fieldPath, fromOptionalAttr) =>
+          isSystemFieldVisible(fieldPath, Boolean(fromOptionalAttr)),
+      });
+
     return {
       headerHtml: localizeHtmlNumbers(
         normalizeRenderedImages(
-          renderBlockTemplateHtml(fillTemplateHtml(normalizedHeaderHtml)),
+          renderBlockTemplateHtml(
+            fillTemplateHtml(reflowVisibleHtml(normalizedHeaderHtml)),
+          ),
         ),
       ),
       contentHtml: annotatePrintFlowHtml(
@@ -4751,7 +4816,9 @@ export const usePrintManager = ({
           normalizeRenderedImages(
             renderBlockTemplateHtml(
               fillTemplateHtml(
-                stripLegacyPrintSignatureTokens(normalizedContentHtml),
+                reflowVisibleHtml(
+                  stripLegacyPrintSignatureTokens(normalizedContentHtml),
+                ),
               ),
             ),
           ),
@@ -4759,13 +4826,16 @@ export const usePrintManager = ({
       ),
       footerHtml: localizeHtmlNumbers(
         normalizeRenderedImages(
-          renderBlockTemplateHtml(fillTemplateHtml(normalizedFooterHtml)),
+          renderBlockTemplateHtml(
+            fillTemplateHtml(reflowVisibleHtml(normalizedFooterHtml)),
+          ),
         ),
       ),
     };
   }, [
     fillTemplateHtml,
     imageDisplayMode,
+    isSystemFieldVisible,
     isSystemRecordTemplate,
     localizeHtmlNumbers,
     moduleId,

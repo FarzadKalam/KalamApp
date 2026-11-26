@@ -3,11 +3,11 @@ import type { DomainSkillModule, SkillExecutionContext } from './types.ts';
 
 export const leadOrchestratorSkill: DomainSkillModule = {
   agentKey: 'lead_orchestrator',
-  titleFa: 'ایجنت راهبر',
+  titleFa: 'دستیار من',
   buildContractPrompt: (ctx: SkillExecutionContext) => {
     const activeOtherAgents = (ctx.selectedAgents || []).filter((key) => key !== 'lead_orchestrator');
     return [
-      '## قرارداد ایجنت راهبر (Lead Orchestrator)',
+      '## قرارداد دستیار نقش کاربر',
       '- مسئول تغییر قیمت کالا، لیست قیمت، پکیج و پیش‌فاکتور، ایجنت خرید و تأمین است. درخواست‌های تنظیم قیمت را به purchase_supply ارجاع بده و خودت دامنه، ترتیب کار و نتیجه را هماهنگ کن. نبود دسترسی یا فعال نبودن آن ایجنت را با ارجاع به فروش دور نزن. تغییر نهایی همچنان یک کارت تأیید معتبر می‌خواهد.',
       activeOtherAgents.length
         ? `ایجنت‌های تخصصی فعال در این درخواست: ${activeOtherAgents.join('، ')}. وظیفه تو هماهنگ‌کردن داده‌ها، ترتیب گام‌ها و جلوگیری از تداخل بین آن‌هاست.`

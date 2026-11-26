@@ -17,6 +17,13 @@ describe('report row capacity',()=>{
   expect(await fetchReportRowsByPage(1000,read)).toEqual(source);
   let calls=0;await expect(fetchReportRowsByPage(1000,async()=>++calls===1?{data:[1,2],error:null}:{data:null,error:new Error('read failed')})).rejects.toThrow('read failed');
  });
+ it('keeps scanning source pages until the matching row limit is reached', async () => {
+  const source = Array.from({ length: 850 }, (_, index) => ({ id: index, match: index >= 500 }));
+  const read = vi.fn(async (start: number, end: number) => ({ data: source.slice(start, end + 1), error: null }));
+  const rows = await fetchReportRowsByPage(20, read, { accept: async (row) => row.match });
+  expect(rows.map(({ id }) => id)).toEqual(source.slice(500, 520).map(({ id }) => id));
+  expect(read.mock.calls).toEqual([[0, 249], [250, 499], [500, 749]]);
+ });
  it.each(['tasks','invoices'])('loads 100000 %s records without omissions or oversized requests',async(moduleId)=>{
   const source=Array.from({length:100000},(_,id)=>({id,name:`${moduleId} ${id}`,invoiceItems:moduleId==='invoices'?[{quantity:2,price:1000},{quantity:1,price:500}]:undefined}));
   const read=vi.fn(async(start:number,end:number)=>({data:source.slice(start,end+1),error:null}));
