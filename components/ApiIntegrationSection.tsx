@@ -30,6 +30,7 @@ import { App as AntdApp } from 'antd';
 import { supabase } from '../supabaseClient';
 import { hasCurrentOrgPlanFeature } from '../utils/saasPlanFeatures';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import McpConnectionPanel from './integrations/McpConnectionPanel';
 import type { ColumnsType } from 'antd/es/table';
 
 const { Title, Text, Paragraph } = Typography;
@@ -654,10 +655,18 @@ const ApiIntegrationSection: React.FC<ApiIntegrationSectionProps> = ({ orgId }) 
       <ApiOutlined />
       <Title level={4} className="!mb-0">اتصال به نرم‌افزارهای دیگر</Title>
     </div>
-    {!access ? <Spin /> : !access.read ? <Alert type="info" showIcon message="اجازهٔ مشاهده یا مدیریت اتصال‌های سازمان را ندارید." /> : <>
-      {access.api ? <ApiTokensSection orgId={orgId} writable={access.write} /> : <Alert type="info" showIcon message="دسترسی API در پلن سازمان فعال نیست." />}
-      <Divider />
-      {access.webhooks ? <WebhooksSection orgId={orgId} writable={access.write} /> : <Alert type="info" showIcon message="وب‌هوک در پلن سازمان فعال نیست." />}
+    {!access ? <Spin /> : <>
+      {!access.read ? (
+        <Alert type="info" showIcon className="mb-4" message="اجازهٔ مشاهده یا مدیریت کلیدهای API و وب‌هوک سازمان را ندارید." />
+      ) : (
+        <>
+          {access.api ? <ApiTokensSection orgId={orgId} writable={access.write} /> : <Alert type="info" showIcon message="دسترسی API در پلن سازمان فعال نیست." />}
+          <Divider />
+          {access.webhooks ? <WebhooksSection orgId={orgId} writable={access.write} /> : <Alert type="info" showIcon message="وب‌هوک در پلن سازمان فعال نیست." />}
+          <Divider />
+        </>
+      )}
+      <McpConnectionPanel orgId={orgId} canWriteTokens={!access.read || access.write} onlyCurrentUser={!access.read} />
     </>}
   </div>;
 };

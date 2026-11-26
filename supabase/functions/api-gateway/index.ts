@@ -27,6 +27,7 @@ type EnabledModules = Record<string, unknown>;
 const BLOCKED_TABLES = new Set([
   'saas_orgs', 'saas_demo_requests', 'saas_users', 'saas_user_announcements',
   'profiles', 'organizations', 'org_roles', 'org_api_tokens', 'org_webhooks',
+  'mcp_oauth_clients', 'mcp_oauth_codes', 'mcp_oauth_tokens', 'mcp_user_tokens',
   'integration_settings', 'system_code_counters', 'app_schema_migrations',
   'notification_read_states', 'outbound_messages',
 ]);

@@ -371,6 +371,7 @@ jobs:
           components/ai/AiChatSurfaceV2.test.tsx components/ai/AssistantPanel.operators.test.tsx
           components/ai/AiCapabilityComposerActions.test.tsx components/ai/AiComposeModelBar.test.tsx components/AdaptivePickerSurface.test.tsx
           components/ai/AiRecordMutationApprovalCard.test.tsx components/ai/AiApprovalReviewModal.test.tsx components/ai/AiQuestionCard.test.tsx components/ai/AiMessageRenderer.test.tsx
+          supabase/functions/_shared/mcp-server.test.ts
           --maxWorkers=1 --no-file-parallelism
 
       - name: Organization membership and login regression checks
@@ -419,7 +420,7 @@ jobs:
           deno check --node-modules-dir=none supabase/functions/_shared/ai-process-data.ts supabase/functions/_shared/ai-process-operations.ts
           deno check --node-modules-dir=none supabase/functions/_shared/ai-context-policy.ts supabase/functions/_shared/ai-context-lifecycle.ts supabase/functions/_shared/ai-context-compressor.ts
           deno check --node-modules-dir=none supabase/functions/_shared/ai-reasoning.ts supabase/functions/_shared/ai-reasoning-transport.ts
-          deno check --node-modules-dir=none supabase/functions/_shared/ai-agents.ts supabase/functions/ai-assistant/index.ts supabase/functions/external-connectors/index.ts supabase/functions/api-gateway/index.ts supabase/functions/webhook-delivery/index.ts supabase/functions/user-admin/index.ts supabase/functions/bot-admin/index.ts supabase/functions/bot-webhook/index.ts supabase/functions/report-runtime/index.ts supabase/functions/activity-performance/index.ts
+          deno check --node-modules-dir=none supabase/functions/_shared/ai-agents.ts supabase/functions/_shared/mcp-oauth.ts supabase/functions/_shared/mcp-runtime.ts supabase/functions/mcp-server/index.ts supabase/functions/ai-assistant/index.ts supabase/functions/external-connectors/index.ts supabase/functions/api-gateway/index.ts supabase/functions/webhook-delivery/index.ts supabase/functions/user-admin/index.ts supabase/functions/bot-admin/index.ts supabase/functions/bot-webhook/index.ts supabase/functions/report-runtime/index.ts supabase/functions/activity-performance/index.ts
 
       - name: Messaging attachment and viewer isolation regression checks
         timeout-minutes: 8
@@ -846,7 +847,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVER_USER }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $migrations = @('database_v1_phase615_customer_club_invoice_conditions.sql', 'database_v1_phase616_cash_bank_private_saved_views.sql', 'database_v1_phase619_saas_ai_provider_keys.sql')
+          $migrations = @('database_v1_phase615_customer_club_invoice_conditions.sql', 'database_v1_phase616_cash_bank_private_saved_views.sql', 'database_v1_phase619_saas_ai_provider_keys.sql', 'database_v1_phase620_external_mcp_access.sql')
           $migrations | ForEach-Object { Get-FileHash -Algorithm SHA256 -LiteralPath $_ } | Format-List
           & ./scripts/run-server-db-migrations.ps1 -SqlFiles $migrations
 
@@ -859,7 +860,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVER_USER }}
           DEPLOY_FUNCTIONS_PATH: /opt/kalamapp/supabase/docker/volumes/functions
           DEPLOY_FUNCTIONS_COMPOSE_DIR: /opt/kalamapp/supabase/docker
-        run: ./scripts/deploy-supabase-function.ps1 -Functions @('goal-progress','report-runtime','workflow-interval-runner','ai-assistant','bot-webhook')
+        run: ./scripts/deploy-supabase-function.ps1 -Functions @('goal-progress','report-runtime','workflow-interval-runner','ai-assistant','bot-webhook','mcp-server','api-gateway')
 
       - uses: actions/setup-node@v4
         if: ${{ !inputs.frontend_only }}

@@ -152,6 +152,7 @@ const loadCmsPostEditor = () => import("./pages/SaasAdmin/CmsPostEditor");
 const loadLandingPageEditor = () => import("./pages/SaasAdmin/LandingPageEditor");
 const loadCmsPageEditor = () => import("./pages/SaasAdmin/CmsPageEditor");
 const loadApiDocsPage = () => import("./pages/ApiDocsPage");
+const loadMcpOAuthAuthorizePage = () => import("./pages/McpOAuthAuthorizePage");
 const loadMessagesPage = () => import("./pages/MessagesPage");
 const loadSupportTicketsPage = () => import("./pages/SupportTicketsPage");
 const loadSupportWorkflowsPage = () => import("./pages/SupportTicketsPage").then((page) => ({ default: page.SupportWorkflowsPage }));
@@ -222,6 +223,7 @@ const CmsPostEditor = lazy(loadCmsPostEditor);
 const LandingPageEditor = lazy(loadLandingPageEditor);
 const CmsPageEditor = lazy(loadCmsPageEditor);
 const ApiDocsPage = lazy(loadApiDocsPage);
+const McpOAuthAuthorizePage = lazy(loadMcpOAuthAuthorizePage);
 const MessagesPage = lazy(loadMessagesPage);
 const ContactCenterPage=lazy(()=>import('./pages/ContactCenterPage'));
 const SupportTicketsPage = lazy(loadSupportTicketsPage);
@@ -840,6 +842,7 @@ function App() {
             </>
           ) : null}
           <Route path="/login" element={<Suspense fallback={workspaceLoading}><Login /></Suspense>} />
+          <Route path="/mcp/authorize" element={<LazyRouteBoundary><McpOAuthAuthorizePage /></LazyRouteBoundary>} />
           <Route path="/inquiry/*" element={<PublicLazyRouteBoundary><InquiryForm /></PublicLazyRouteBoundary>} />
           <Route path="/i/:code" element={<PublicLazyRouteBoundary><InvoicePublicPage /></PublicLazyRouteBoundary>} />
           <Route path="/d/:code" element={<PublicLazyRouteBoundary><DeliveryPublicPage /></PublicLazyRouteBoundary>} />

@@ -42,6 +42,7 @@ import { toFaErrorMessage } from '../utils/errorMessageFa';
 import ProfileAvatar from '../components/common/ProfileAvatar';
 import { emitProfileAvatarUpdated } from '../utils/profileAvatarEvents';
 import AiUserMemoryManager from '../components/ai/AiUserMemoryManager';
+import McpConnectionPanel from '../components/integrations/McpConnectionPanel';
 
 const ProfilePage: React.FC = () => {
   const { id } = useParams();
@@ -1030,6 +1031,15 @@ const ProfilePage: React.FC = () => {
                                                     description={staffBotOtpInfo.instructionFa}
                                                 />
                                             ) : null}
+                                        </div>
+                                    ) : null}
+                                    {canSelfVerifyPhone ? (
+                                        <div className="rounded-2xl border border-gray-200 dark:border-gray-800 p-4">
+                                            <McpConnectionPanel
+                                                orgId={currentOrgId}
+                                                canWriteTokens={true}
+                                                onlyCurrentUser={true}
+                                            />
                                         </div>
                                     ) : null}
                                 </div>

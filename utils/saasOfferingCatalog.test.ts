@@ -17,7 +17,7 @@ describe('shared SaaS offering catalog', () => {
     expect(modules).toEqual(expect.arrayContaining(['goals', 'assets', 'organization_chart', 'job_descriptions', 'sms_delivery_reports']));
   });
   it('keeps the demo provisioning catalog synchronized with every configurable offering', () => {
-    const sql = readFileSync('database_v1_phase587_unified_voip_asterisk_realtime.sql', 'utf8');
+    const sql = readFileSync('database_v1_phase620_external_mcp_access.sql', 'utf8');
     const snapshot = JSON.parse(sql.match(/select '(\{[^\n]*"features":[^\n]*\})'::jsonb/)![1]);
     expect(snapshot.moduleParents).toEqual(SAAS_MODULE_PLAN_INHERITANCE);
     expect(snapshot.moduleFeatures).toEqual(SAAS_MODULE_FEATURE_INHERITANCE);

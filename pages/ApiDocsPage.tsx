@@ -193,6 +193,8 @@ const IntroSection: React.FC = () => (
       description={
         <span>
           همه درخواست‌ها به آدرس <code style={{ direction: 'ltr', display: 'inline-block' }}>{GATEWAY_URL}</code> ارسال می‌شوند.
+          همچنین برای اتصال مستقیم ChatGPT / Codex، Gemini و Claude از نقطه پایانی{' '}
+          <code style={{ direction: 'ltr', display: 'inline-block' }}>{`${SUPABASE_URL}/functions/v1/mcp-server`}</code> با پروتکل Streamable HTTP (OAuth 2.0 + PKCE یا توکن شخصی MCP) استفاده کنید.
         </span>
       }
       style={{ marginBottom: 24 }}

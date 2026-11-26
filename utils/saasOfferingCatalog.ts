@@ -60,6 +60,7 @@ export const SAAS_FEATURE_OPTIONS: SaasOfferingOption[] = [
   { id: 'ai_voip_auto_reply', label: 'پاسخگویی خودکار VoIP با هوش مصنوعی' },
   { id: 'ai_staff_bot', label: 'بات هوشمند همکار (تلگرام/بله/روبیکا)' },
   { id: 'ai_background_agents', label: 'ایجنت‌های خودکار پس‌زمینه (زمان‌بندی خودکار)' },
+  { id: 'mcp_access', label: 'اتصال به هوش مصنوعی خارجی (MCP)', description: 'اتصال امن سازمان به ChatGPT / Codex، Gemini و Claude با رعایت دسترسی پلن و کاربران' },
   ...AI_AGENT_PLAN_FEATURES,
   { id: 'taxpayer_system', label: 'سامانه مودیان' },
   { id: 'internal_realtime_notifications', label: 'اعلان لحظه‌ای داخل سامانه' },
@@ -87,7 +88,7 @@ export const SAAS_FEATURE_OPTIONS: SaasOfferingOption[] = [
 ];
 
 const featureGroupIds: Array<{ label: string; ids: string[] }> = [
-  { label: 'هوش مصنوعی', ids: ['ai_chat','ai_knowledge','ai_knowledge_limited','ai_document_analysis','ai_web_search','ai_voice_input','ai_voice_output','ai_image_generation','ai_video_generation','ai_deep_reasoning','ai_legal_assistant','ai_voip_auto_reply','ai_staff_bot','ai_background_agents','ai_credit_topup','mbti_ai_analysis'] },
+  { label: 'هوش مصنوعی', ids: ['ai_chat','ai_knowledge','ai_knowledge_limited','ai_document_analysis','ai_web_search','ai_voice_input','ai_voice_output','ai_image_generation','ai_video_generation','ai_deep_reasoning','ai_legal_assistant','ai_voip_auto_reply','ai_staff_bot','ai_background_agents','mcp_access','ai_credit_topup','mbti_ai_analysis'] },
   { label: 'ایجنت‌های هوشمند', ids: AI_AGENT_PLAN_FEATURES.map((item) => item.id) },
   { label: 'ارتباطات و کمپین', ids: ['internal_realtime_notifications','instagram_inbox','campaign_sms','campaign_email','campaign_bot_group','campaign_bot_private','campaign_instagram_post','campaign_voice_call','voip_webphone','telegram_bot','bale_bot','rubika_bot'] },
   { label: 'مدیریت و گزارش', ids: ['webhooks','support_tickets','api_access','advanced_reports','map_view','multi_lane_processes','content_calendar','billboard_status_management','white_label','custom_domain','reservations','qr_scan','business_model_canvas','online_catalog'] },

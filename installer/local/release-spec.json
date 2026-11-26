@@ -35,6 +35,7 @@
       "ai_knowledge": true,
       "ai_staff_bot": true,
       "ai_background_agents": true,
+      "mcp_access": true,
       "taxpayer_system": true,
       "internal_realtime_notifications": true,
       "organization_email": true,
