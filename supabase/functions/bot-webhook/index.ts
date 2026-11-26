@@ -3,6 +3,7 @@ import { hasBotPlanAccess } from '../_shared/bot-plan-access.ts';
 
 import { normalizeAgentPlan, shouldEscalateCustomerAutoReply } from '../_shared/ai-agent-contract.ts';
 import { buildAvalaiPromptCacheKey, fetchAvalaiChatWithCacheKey, isModelReasoning } from '../_shared/ai-gateway.ts';
+import { resolveCentralAiApiKey } from '../_shared/ai-provider-keys.ts';
 
 type BotChannel = 'telegram' | 'bale' | 'rubika';
 
@@ -2626,7 +2627,7 @@ const isRecentBotConversation = (conversation: any[]) => {
 const loadBotAiProviderConfig = async (supabaseUrl: string, serviceRoleKey: string, orgId: string) => {
   const normalizedOrgId = String(orgId || '').trim();
   if (!normalizedOrgId) return null;
-  const [settingsRows, catalogRows] = await Promise.all([
+  const [settingsRows, catalogRows, resolvedKey] = await Promise.all([
     restSelectRows(supabaseUrl, serviceRoleKey, 'org_ai_settings', {
       org_id: `eq.${normalizedOrgId}`,
       select: 'selected_models,feature_flags',
@@ -2636,6 +2637,7 @@ const loadBotAiProviderConfig = async (supabaseUrl: string, serviceRoleKey: stri
       select: 'id,provider,capability_tags,is_active,is_coming_soon,metadata',
       limit: 500,
     }).catch(() => []),
+    resolveCentralAiApiKey({ supabaseUrl, serviceRoleKey, provider: 'avalai' }),
   ]);
   const settings = settingsRows[0] || {};
   const flags = settings?.feature_flags && typeof settings.feature_flags === 'object' ? settings.feature_flags : {};
@@ -2657,7 +2659,7 @@ const loadBotAiProviderConfig = async (supabaseUrl: string, serviceRoleKey: stri
     model: String(resolved?.id || '').trim(),
     modelCatalog: resolved,
     orgId: normalizedOrgId,
-    apiKey: String(Deno.env.get('AVALAI_API_KEY') || Deno.env.get('AI_API_KEY') || Deno.env.get('OPENAI_API_KEY') || '').trim(),
+    apiKey: String(resolvedKey?.apiKey || '').trim(),
   };
 };
 

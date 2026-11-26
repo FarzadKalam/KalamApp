@@ -11,6 +11,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Popconfirm,
   Select,
   Space,
   Statistic,
@@ -22,13 +23,18 @@ import {
   Typography,
 } from 'antd';
 import {
+  CheckCircleOutlined,
   CloudSyncOutlined,
+  DeleteOutlined,
   EditOutlined,
   GiftOutlined,
+  KeyOutlined,
   PlusOutlined,
   ReloadOutlined,
   RobotOutlined,
   SaveOutlined,
+  SafetyCertificateOutlined,
+  StopOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { getAiAgentLabel } from '../../supabase/functions/_shared/ai-agents';
@@ -135,6 +141,22 @@ type ProviderModel = {
   raw?: Record<string, any>;
 };
 
+type ProviderKeyRecord = {
+  id: string;
+  provider: string;
+  label?: string | null;
+  key_masked: string;
+  is_active: boolean;
+  created_by?: string | null;
+  created_by_name?: string | null;
+  created_at: string;
+  updated_at?: string | null;
+  activated_at?: string | null;
+  last_tested_at?: string | null;
+  last_test_status?: string | null;
+  last_test_message?: string | null;
+};
+
 const modelTabKey = (model: Pick<ProviderModel, 'id' | 'suggested_capability_tags'>) => {
   const id = String(model.id || '').toLowerCase();
   const tags = model.suggested_capability_tags || [];
@@ -169,6 +191,12 @@ const SaasAdminAiSettings: React.FC = () => {
   const [centralReasoningDraft,setCentralReasoningDraft]=useState<Record<string,string | null>>({});
   const [centralDefaultsSaving, setCentralDefaultsSaving] = useState(false);
   const [centralDefaultsRecommending, setCentralDefaultsRecommending] = useState(false);
+  const [keyModalOpen, setKeyModalOpen] = useState(false);
+  const [newApiKey, setNewApiKey] = useState('');
+  const [newKeyLabel, setNewKeyLabel] = useState('');
+  const [newKeyActivate, setNewKeyActivate] = useState(true);
+  const [keySaving, setKeySaving] = useState(false);
+  const [keyActionId, setKeyActionId] = useState<string | null>(null);
   const [form] = Form.useForm<ModelFormValues>();
   const defaultCapabilityTags = Form.useWatch(['metadata', 'default_capability_tags'], form) || [];
   const isDefaultModel = Form.useWatch(['metadata', 'is_default_model'], form) === true;
@@ -269,6 +297,58 @@ const SaasAdminAiSettings: React.FC = () => {
   const liveExchangeRateIrt = Number(liveExchangeRate?.rate || 0) > 0 ? Number(liveExchangeRate.rate) : null;
   const liveExchangeRateSource = String(liveExchangeRate?.source || '').trim();
   const providerCredit = overview?.providerCredit || {};
+  const providerKeys = useMemo<ProviderKeyRecord[]>(() => (overview?.providerKeys || []) as ProviderKeyRecord[], [overview]);
+  const activeProviderKeyMeta = overview?.activeProviderKeyMeta || {};
+
+  const handleAddProviderKey = async () => {
+    const cleanKey = String(newApiKey || '').trim();
+    if (cleanKey.length < 10 || /\s/.test(cleanKey)) {
+      message.error('کلید API معتبر وارد کنید (حداقل ۱۰ کاراکتر و بدون فاصله).');
+      return;
+    }
+    setKeySaving(true);
+    try {
+      const data = await callAi({
+        action: 'saas_ai',
+        sub: 'add_provider_key',
+        apiKey: cleanKey,
+        label: String(newKeyLabel || '').trim() || null,
+        activate: newKeyActivate,
+      });
+      message.success(String(data?.message || 'کلید جدید با موفقیت ثبت شد.'));
+      setKeyModalOpen(false);
+      setNewApiKey('');
+      setNewKeyLabel('');
+      setNewKeyActivate(true);
+      await loadOverview();
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'ثبت کلید AvalAI ناموفق بود.'));
+    } finally {
+      setKeySaving(false);
+    }
+  };
+
+  const handleProviderKeyAction = async (
+    sub: 'activate_provider_key' | 'deactivate_provider_key' | 'test_provider_key' | 'delete_provider_key',
+    keyId: string,
+  ) => {
+    setKeyActionId(`${sub}:${keyId}`);
+    try {
+      const data = await callAi({ action: 'saas_ai', sub, keyId });
+      if (data?.message) {
+        if (sub === 'test_provider_key' && data?.testOk === false) {
+          message.warning(String(data.message));
+        } else {
+          message.success(String(data.message));
+        }
+      }
+      await loadOverview();
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'انجام عملیات روی کلید ناموفق بود.'));
+    } finally {
+      setKeyActionId(null);
+    }
+  };
   const providerBalance = providerCredit?.credit?.toman
     ?? providerCredit?.credit?.irt
     ?? (providerCredit?.credit?.rial !== null && providerCredit?.credit?.rial !== undefined
@@ -536,6 +616,119 @@ const SaasAdminAiSettings: React.FC = () => {
     },
   ];
 
+  const providerKeyColumns = [
+    {
+      title: 'عنوان کلید',
+      dataIndex: 'label',
+      width: 180,
+      render: (value: string | null) => (
+        <span className="text-xs font-semibold">{value || 'کلید AvalAI'}</span>
+      ),
+    },
+    {
+      title: 'کلید API (ماسک‌شده)',
+      dataIndex: 'key_masked',
+      width: 180,
+      render: (value: string) => (
+        <Text code className="text-xs" style={{ direction: 'ltr', unicodeBidi: 'plaintext' }}>
+          {value}
+        </Text>
+      ),
+    },
+    {
+      title: 'وضعیت',
+      width: 170,
+      render: (_: unknown, row: ProviderKeyRecord) => (
+        <Space direction="vertical" size={2}>
+          <Space size={4} wrap>
+            <Tag color={row.is_active ? 'green' : 'default'} className="m-0">
+              {row.is_active ? 'فعال (جاری)' : 'غیرفعال'}
+            </Tag>
+            {row.last_test_status === 'ok' ? (
+              <Tag color="cyan" className="m-0 text-[10px]">تست موفق</Tag>
+            ) : row.last_test_status === 'error' ? (
+              <Tooltip title={row.last_test_message || 'خطا در تست اتصال'}>
+                <Tag color="red" className="m-0 text-[10px]">خطای تست</Tag>
+              </Tooltip>
+            ) : null}
+          </Space>
+          {row.activated_at && row.is_active ? (
+            <span className="text-[10px] text-gray-500">
+              فعال‌سازی: {new Date(row.activated_at).toLocaleString('fa-IR', { dateStyle: 'short', timeStyle: 'short' })}
+            </span>
+          ) : null}
+        </Space>
+      ),
+    },
+    {
+      title: 'زمان ثبت',
+      dataIndex: 'created_at',
+      width: 165,
+      render: (value: string) =>
+        value
+          ? new Date(value).toLocaleString('fa-IR', { dateStyle: 'short', timeStyle: 'short' })
+          : '-',
+    },
+    {
+      title: 'ثبت‌کننده',
+      dataIndex: 'created_by_name',
+      width: 140,
+      render: (value: string | null) => <span className="text-xs text-gray-600 dark:text-gray-300">{value || '-'}</span>,
+    },
+    {
+      title: 'عملیات',
+      width: 220,
+      render: (_: unknown, row: ProviderKeyRecord) => (
+        <Space size={4} wrap>
+          {!row.is_active ? (
+            <Button
+              size="small"
+              type="primary"
+              icon={<CheckCircleOutlined />}
+              loading={keyActionId === `activate_provider_key:${row.id}`}
+              onClick={() => void handleProviderKeyAction('activate_provider_key', row.id)}
+            >
+              فعال‌سازی
+            </Button>
+          ) : (
+            <Button
+              size="small"
+              icon={<StopOutlined />}
+              loading={keyActionId === `deactivate_provider_key:${row.id}`}
+              onClick={() => void handleProviderKeyAction('deactivate_provider_key', row.id)}
+            >
+              غیرفعال
+            </Button>
+          )}
+          <Button
+            size="small"
+            icon={<SafetyCertificateOutlined />}
+            loading={keyActionId === `test_provider_key:${row.id}`}
+            onClick={() => void handleProviderKeyAction('test_provider_key', row.id)}
+          >
+            تست
+          </Button>
+          {!row.is_active ? (
+            <Popconfirm
+              title="حذف کلید API"
+              description="این کلید از تاریخچه حذف شود؟"
+              okText="حذف"
+              cancelText="انصراف"
+              onConfirm={() => void handleProviderKeyAction('delete_provider_key', row.id)}
+            >
+              <Button
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+                loading={keyActionId === `delete_provider_key:${row.id}`}
+              />
+            </Popconfirm>
+          ) : null}
+        </Space>
+      ),
+    },
+  ];
+
   const usageColumns = [
     { title: 'تاریخ', dataIndex: 'created_at', width: 140, render: (v: string) => v ? new Date(v).toLocaleDateString('fa-IR', { dateStyle: 'short' }) : '-' },
     {
@@ -604,6 +797,12 @@ const SaasAdminAiSettings: React.FC = () => {
           </p>
         </div>
         <Space wrap>
+          <Button
+            icon={<KeyOutlined />}
+            onClick={() => setKeyModalOpen(true)}
+          >
+            ثبت کلید AvalAI
+          </Button>
           <Button
             icon={<CloudSyncOutlined />}
             loading={syncing}
@@ -679,8 +878,54 @@ const SaasAdminAiSettings: React.FC = () => {
       ) : null}
 
       <Collapse
-        defaultActiveKey={['central_defaults', 'models', 'usage_all']}
+        defaultActiveKey={['provider_keys', 'central_defaults', 'models', 'usage_all']}
         items={[
+          {
+            key: 'provider_keys',
+            label: (
+              <span className="inline-flex items-center gap-2">
+                <KeyOutlined /> کلیدهای API سرویس AvalAI ({providerKeys.length.toLocaleString('fa-IR')})
+              </span>
+            ),
+            children: (
+              <div className="space-y-3">
+                <Alert
+                  type={activeProviderKeyMeta?.source === 'db' ? 'success' : activeProviderKeyMeta?.source === 'env' ? 'info' : 'warning'}
+                  showIcon
+                  className="text-xs"
+                  message={
+                    activeProviderKeyMeta?.source === 'db'
+                      ? 'کلید فعال AvalAI از فهرست کلیدهای ثبت‌شده در این پنل استفاده می‌شود.'
+                      : activeProviderKeyMeta?.source === 'env'
+                        ? `در حال حاضر کلید fallback سرور (${activeProviderKeyMeta?.envFallbackMasked || 'تنظیم‌شده'}) فعال است؛ می‌توانید کلید جدید ثبت و فعال کنید.`
+                        : 'هیچ کلید فعالی برای AvalAI ثبت نشده است.'
+                  }
+                />
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <Button
+                    type="primary"
+                    icon={<PlusOutlined />}
+                    onClick={() => setKeyModalOpen(true)}
+                  >
+                    ثبت کلید AvalAI جدید
+                  </Button>
+                  <Text type="secondary" className="text-xs">
+                    کلیدها به‌صورت رمزنگاری‌شده در سرور نگهداری می‌شوند و در این جدول فقط نسخهٔ ماسک‌شده و زمان ثبت آن‌ها نمایش داده می‌شود.
+                  </Text>
+                </div>
+                <Table
+                  rowKey="id"
+                  size="small"
+                  loading={loading}
+                  dataSource={providerKeys}
+                  columns={providerKeyColumns}
+                  pagination={{ pageSize: 10, showSizeChanger: false }}
+                  locale={{ emptyText: <Empty description="هنوز کلیدی برای AvalAI ثبت نشده است." /> }}
+                  scroll={{ x: 880 }}
+                />
+              </div>
+            ),
+          },
           {
             key: 'central_defaults',
             label: (
@@ -1113,6 +1358,57 @@ const SaasAdminAiSettings: React.FC = () => {
             ) : null}
           </div>
         </Form>
+      </Modal>
+
+      <Modal
+        open={keyModalOpen}
+        title="ثبت کلید API جدید AvalAI"
+        onCancel={() => {
+          if (keySaving) return;
+          setKeyModalOpen(false);
+        }}
+        onOk={() => void handleAddProviderKey()}
+        confirmLoading={keySaving}
+        okText="ثبت کلید"
+        cancelText="انصراف"
+        destroyOnHidden
+      >
+        <div className="space-y-3" dir="rtl">
+          <Alert
+            type="info"
+            showIcon
+            className="text-xs"
+            message="کلید API به‌صورت رمزنگاری‌شده در سرور ذخیره می‌شود و پس از ثبت فقط به‌شکل ماسک‌شده همراه با زمان ثبت در فهرست کلیدها نمایش داده خواهد شد."
+          />
+          <div>
+            <div className="mb-1 text-xs text-gray-500">عنوان یا توضیح کلید (اختیاری)</div>
+            <Input
+              value={newKeyLabel}
+              onChange={(event) => setNewKeyLabel(event.target.value)}
+              placeholder="مثلاً: کلید اصلی AvalAI آذر"
+              maxLength={120}
+            />
+          </div>
+          <div>
+            <div className="mb-1 text-xs text-gray-500">کلید API سرویس AvalAI</div>
+            <Input.Password
+              value={newApiKey}
+              onChange={(event) => setNewApiKey(event.target.value)}
+              placeholder="aa-..."
+              style={{ direction: 'ltr' }}
+              autoComplete="new-password"
+            />
+          </div>
+          <div className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
+            <span className="text-xs font-medium">فعال‌سازی بلافاصله پس از ثبت</span>
+            <Switch
+              checked={newKeyActivate}
+              onChange={setNewKeyActivate}
+              checkedChildren="بله"
+              unCheckedChildren="خیر"
+            />
+          </div>
+        </div>
       </Modal>
     </div>
   );

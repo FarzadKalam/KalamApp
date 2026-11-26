@@ -1,5 +1,14 @@
 // @ts-nocheck
 import {runCustomerVoiceTurn} from '../_shared/customer-voice-turn.ts';
+import {
+  clearCentralAiProviderKeyCache,
+  decryptProviderApiKey,
+  encryptProviderApiKey,
+  getProviderKeyEncryptionSeed,
+  hashProviderApiKeySha256,
+  maskProviderApiKey,
+  resolveCentralAiApiKey,
+} from '../_shared/ai-provider-keys.ts';
 import { loadOrgPlanAccess } from '../_shared/org-plan-access.ts';
 import { executeAgentToolCalls, appendStreamToolCalls, buildAgentToolResultFallback, type AgentToolExecutor } from '../_shared/ai-tool-calls.ts';
 import { AGENT_DATA_TOOLS, readAgentDataPage, countAgentData, aggregateAgentData, agentRecordMatchesViewConditions, tenantAgentDataModuleIds, type AgentDataAccess } from '../_shared/ai-agent-data.ts';
@@ -1642,6 +1651,23 @@ const getCentralProviderConfig = () => {
   };
 };
 
+const resolveCentralProviderConfig = async (supabaseUrl?: string | null, serviceRoleKey?: string | null) => {
+  const baseConfig = getCentralProviderConfig();
+  if (!supabaseUrl || !serviceRoleKey) return baseConfig;
+  const resolved = await resolveCentralAiApiKey({
+    supabaseUrl,
+    serviceRoleKey,
+    provider: baseConfig.provider,
+    envFallbackKey: baseConfig.apiKey,
+  });
+  return {
+    ...baseConfig,
+    apiKey: resolved.apiKey || baseConfig.apiKey,
+    apiKeySource: resolved.source,
+    apiKeyId: resolved.keyId,
+  };
+};
+
 const resolveProviderConfig = async (
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -1649,7 +1675,7 @@ const resolveProviderConfig = async (
   capability = 'dashboard_chat',
   options: { modelOverride?: string | null; agentConfig?: any } = {},
 ) => {
-  const centralConfig = getCentralProviderConfig();
+  const centralConfig = await resolveCentralProviderConfig(supabaseUrl, serviceRoleKey);
   const [settings, catalogRows, centralDefaults] = await Promise.all([
     loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext),
     listActiveAiModels(supabaseUrl, serviceRoleKey),
@@ -1732,7 +1758,7 @@ const resolveSpecializedProviderConfig = async (
   capability: string,
   modelOverride?:string|null,
 ) => {
-  const centralConfig = getCentralProviderConfig();
+  const centralConfig = await resolveCentralProviderConfig(supabaseUrl, serviceRoleKey);
   const settings = await loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
   const catalogRows = await listActiveAiModels(supabaseUrl, serviceRoleKey);
   const selected = settings?.selected_models && typeof settings.selected_models === 'object'
@@ -3257,7 +3283,7 @@ const fetchKnowledgeChunks = async (
   const queryText = String(query || '').trim();
   if (queryText) {
     try {
-      const providerConfig = getCentralProviderConfig();
+      const providerConfig = await resolveCentralProviderConfig(supabaseUrl, serviceRoleKey);
       const orgSettings = await loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
       const embeddingRuntime = await resolveEmbeddingRuntime(supabaseUrl, serviceRoleKey, orgSettings);
       if (providerConfig.apiKey && embeddingRuntime?.model) {
@@ -4198,7 +4224,7 @@ const resolveLiveAvalaiExchangeRate = async (
   }
   const loader = (async () => {
     try {
-      const creditResult = await fetchAvalaiCredit(getCentralProviderConfig()).catch(() => null);
+      const creditResult = await fetchAvalaiCredit(await resolveCentralProviderConfig(supabaseUrl, serviceRoleKey)).catch(() => null);
       if (creditResult?.available && creditResult?.credit) {
         const cached = cacheLiveAvalaiRateFromCreditPayload(creditResult.credit);
         if (cached) return cached;
@@ -4375,7 +4401,7 @@ const recordAiUsageLedger = async (
         supabaseUrl,
         serviceRoleKey,
         rows[0],
-        getCentralProviderConfig(),
+        await resolveCentralProviderConfig(supabaseUrl, serviceRoleKey),
       ));
     }
     return rows[0] || null;
@@ -14246,7 +14272,7 @@ const handleListModels = async (supabaseUrl: string, serviceRoleKey: string, aut
       raw: { source: 'ai_model_catalog' },
     });
   }
-  const providerConfig = getCentralProviderConfig();
+  const providerConfig = await resolveCentralProviderConfig(supabaseUrl, serviceRoleKey);
   if (!providerConfig.apiKey) {
     return json(200, {
       success: true,
@@ -14322,7 +14348,7 @@ const handleGetCredit = async (supabaseUrl: string, serviceRoleKey: string, auth
   if (!canManageAiSettings(authContext)) {
     return json(403, { success: false, message: 'دسترسی مدیریت اتصالات AI را ندارید.' });
   }
-  const providerCredit = await fetchAvalaiCredit(getCentralProviderConfig());
+  const providerCredit = await fetchAvalaiCredit(await resolveCentralProviderConfig(supabaseUrl, serviceRoleKey));
   const normalized = providerCredit.available ? normalizeCreditPayload(providerCredit.credit) : null;
   if (providerCredit.available && providerCredit.credit) {
     cacheLiveAvalaiRateFromCreditPayload(providerCredit.credit);
@@ -14380,7 +14406,7 @@ const handleEmbedDocumentChunks = async (supabaseUrl: string, serviceRoleKey: st
   if (chunks.length === 0) {
     return json(200, { success: true, processed: 0, failed: 0, message: 'بخشی برای embedding پیدا نشد.' });
   }
-  const providerConfig = getCentralProviderConfig();
+  const providerConfig = await resolveCentralProviderConfig(supabaseUrl, serviceRoleKey);
   const embeddingRuntime = await resolveEmbeddingRuntime(supabaseUrl, serviceRoleKey, settings);
   if (!embeddingRuntime?.model) {
     return json(400, { success: false, message: 'مدل بردارسازی (Embedding) فعال در کاتالوگ مدل‌های هوش مصنوعی پیدا نشد.' });
@@ -14528,7 +14554,7 @@ const handleRebuildInstructionAiContext = async (supabaseUrl: string, serviceRol
     });
   }
 
-  const providerConfig = getCentralProviderConfig();
+  const providerConfig = await resolveCentralProviderConfig(supabaseUrl, serviceRoleKey);
   const embeddingRuntime = await resolveEmbeddingRuntime(supabaseUrl, serviceRoleKey, settings);
   if (!embeddingRuntime?.model) {
     return json(400, { success: false, message: 'مدل بردارسازی (Embedding) فعال در کاتالوگ مدل‌های هوش مصنوعی پیدا نشد.' });
@@ -14699,7 +14725,7 @@ const handleRebuildJobDescriptionAiContext = async (supabaseUrl: string, service
     });
   }
 
-  const providerConfig = getCentralProviderConfig();
+  const providerConfig = await resolveCentralProviderConfig(supabaseUrl, serviceRoleKey);
   const embeddingRuntime = await resolveEmbeddingRuntime(supabaseUrl, serviceRoleKey, settings);
   if (!embeddingRuntime?.model) {
     return json(400, { success: false, message: 'مدل بردارسازی (Embedding) فعال در کاتالوگ مدل‌های هوش مصنوعی پیدا نشد.' });
@@ -15099,12 +15125,87 @@ const handleProposeNote = async (supabaseUrl: string, serviceRoleKey: string, au
   });
 };
 
+const listMaskedSaasProviderKeys = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  provider = 'avalai',
+) => {
+  const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'saas_ai_provider_keys', {
+    provider: `eq.${String(provider || 'avalai').trim().toLowerCase()}`,
+    select: 'id,provider,label,key_masked,is_active,created_by,created_at,updated_at,activated_at,last_tested_at,last_test_status,last_test_message',
+    order: 'created_at.desc',
+    limit: 100,
+  });
+  const creatorIds = Array.from(new Set(
+    (rows || []).map((row: any) => String(row?.created_by || '').trim()).filter((id) => isUuid(id)),
+  ));
+  let creatorNames = new Map<string, string>();
+  if (creatorIds.length > 0) {
+    const profiles = await safeRestSelect(supabaseUrl, serviceRoleKey, 'profiles', {
+      id: `in.(${creatorIds.join(',')})`,
+      select: 'id,full_name',
+      limit: creatorIds.length,
+    });
+    creatorNames = new Map((profiles || []).map((p: any) => [
+      String(p?.id || '').trim(),
+      String(p?.full_name || '').trim(),
+    ]));
+  }
+  return (rows || []).map((row: any) => ({
+    ...row,
+    created_by_name: row?.created_by ? (creatorNames.get(String(row.created_by).trim()) || null) : null,
+  }));
+};
+
+const testAvalaiKeyLive = async (apiKey: string): Promise<{ ok: boolean; message: string }> => {
+  const testConfig = {
+    ...getCentralProviderConfig(),
+    apiKey: String(apiKey || '').trim(),
+  };
+  if (!testConfig.apiKey) {
+    return { ok: false, message: 'کلید API خالی است.' };
+  }
+  try {
+    const creditRes = await fetchAvalaiCredit(testConfig).catch(() => null);
+    if (creditRes?.available) {
+      return { ok: true, message: 'اتصال برقرار شد و اعتبار AvalAI دریافت گردید.' };
+    }
+    const { response } = await requestAvalaiWithFallback(testConfig, '/models', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${testConfig.apiKey}`, 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(8000),
+    }, { perAttemptTimeoutMs: 8000 });
+    if (response.ok) {
+      return { ok: true, message: 'کلید روی سرویس AvalAI معتبر است.' };
+    }
+    const raw = await response.text().catch(() => '');
+    const parsed = parseJsonSafe(raw);
+    const errMsg = typeof parsed === 'object' && parsed?.error?.message
+      ? String(parsed.error.message)
+      : `خطای سرویس AvalAI (کد ${response.status})`;
+    return { ok: false, message: errMsg };
+  } catch (err: any) {
+    return { ok: false, message: String(err?.message || 'برقراری ارتباط با AvalAI ناموفق بود.') };
+  }
+};
+
 const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   if (!canViewSaasAdmin(authContext)) {
     return json(403, { success: false, message: 'دسترسی پنل مدیریت تازه سیستم لازم است.' });
   }
   const subAction = String(body?.sub || '').trim();
-  if (['gift_credit','upsert_model','toggle_model','save_central_defaults','apply_recommended_defaults'].includes(subAction)
+  if ([
+    'gift_credit',
+    'upsert_model',
+    'toggle_model',
+    'save_central_defaults',
+    'apply_recommended_defaults',
+    'add_provider_key',
+    'activate_provider_key',
+    'deactivate_provider_key',
+    'delete_provider_key',
+    'test_provider_key',
+  ].includes(subAction)
     && authContext.permissions?.__saas_admin?.edit !== true) {
     return json(403,{ success: false,message: 'برای تغییر تنظیمات مرکزی، مجوز ویرایش مدیریت تازه سیستم لازم است.' });
   }
@@ -15112,14 +15213,14 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
   if (subAction === 'usage_page') return await handleAiUsagePage(supabaseUrl, serviceRoleKey, authContext, body, true);
 
   if (subAction === 'overview') {
-    const [statistics, models, providerCredit, orgRows, companyCurrencyRows, walletRows, grantRows, centralDefaults] = await Promise.all([
+    const [statistics, models, providerCredit, orgRows, companyCurrencyRows, walletRows, grantRows, centralDefaults, providerKeys, centralResolved] = await Promise.all([
       restRpc(supabaseUrl, serviceRoleKey, 'get_ai_usage_complete_statistics', { p_org_id: null }),
       safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_model_catalog', {
         select: '*',
         order: 'id.asc',
         limit: 300,
       }),
-      fetchAvalaiCredit(getCentralProviderConfig()).catch(() => ({ available: false, message: 'اعتبار دریافت نشد.' })),
+      fetchAvalaiCredit(await resolveCentralProviderConfig(supabaseUrl, serviceRoleKey)).catch(() => ({ available: false, message: 'اعتبار دریافت نشد.' })),
       safeRestSelect(supabaseUrl, serviceRoleKey, 'organizations', {
         select: 'id,name,slug',
         limit: 2000,
@@ -15138,6 +15239,8 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
         limit: 3000,
       }),
       loadSaasAiDefaultModels(supabaseUrl, serviceRoleKey),
+      listMaskedSaasProviderKeys(supabaseUrl, serviceRoleKey, 'avalai'),
+      resolveCentralProviderConfig(supabaseUrl, serviceRoleKey),
     ]);
     const normalizedProviderCredit = (providerCredit as any)?.available
       ? normalizeCreditPayload((providerCredit as any).credit)
@@ -15217,6 +15320,12 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
         ...providerCredit,
         credit: normalizedProviderCredit,
       },
+      providerKeys: providerKeys || [],
+      activeProviderKeyMeta: {
+        source: centralResolved?.apiKeySource || (centralResolved?.apiKey ? 'env' : 'none'),
+        activeKeyId: centralResolved?.apiKeyId || null,
+        envFallbackMasked: getEnvProviderConfig().apiKey ? maskProviderApiKey(getEnvProviderConfig().apiKey) : null,
+      },
     });
   }
 
@@ -15259,7 +15368,7 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
   }
 
   if (subAction === 'sync_models') {
-    const providerConfig = getCentralProviderConfig();
+    const providerConfig = await resolveCentralProviderConfig(supabaseUrl, serviceRoleKey);
     if (!providerConfig.apiKey) {
       return json(200, { success: true, models: [], warning: 'کلید مرکزی AI تنظیم نشده است.' });
     }
@@ -15539,6 +15648,159 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
     }
     const centralDefaults = await loadSaasAiDefaultModels(supabaseUrl, serviceRoleKey);
     return json(200, { success: true, centralDefaults, message: 'ترکیب پیشنهادی اقتصادی و موثر روی همه ایجنت‌ها و رله تنظیم شد.' });
+  }
+
+  if (subAction === 'add_provider_key') {
+    const rawKey = String(body?.apiKey || body?.api_key || '').trim();
+    if (rawKey.length < 10 || /\s/.test(rawKey)) {
+      return json(400, { success: false, message: 'کلید API معتبر وارد کنید (حداقل ۱۰ کاراکتر و بدون فاصله).' });
+    }
+    const label = String(body?.label || '').trim().slice(0, 120) || null;
+    const activate = body?.activate !== false;
+    const keySha256 = await hashProviderApiKeySha256(rawKey);
+    const duplicateRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'saas_ai_provider_keys', {
+      provider: 'eq.avalai',
+      key_sha256: `eq.${keySha256}`,
+      select: 'id',
+      limit: 1,
+    });
+    if ((duplicateRows || []).length > 0) {
+      return json(409, { success: false, message: 'این کلید API قبلاً در فهرست کلیدهای AvalAI ثبت شده است.' });
+    }
+    const nowIso = new Date().toISOString();
+    const ciphertext = await encryptProviderApiKey(rawKey, getProviderKeyEncryptionSeed(serviceRoleKey));
+    const masked = maskProviderApiKey(rawKey);
+    if (activate) {
+      await restPatch(supabaseUrl, serviceRoleKey, 'saas_ai_provider_keys', {
+        provider: 'eq.avalai',
+        is_active: 'eq.true',
+      }, {
+        is_active: false,
+        updated_at: nowIso,
+      }).catch(() => []);
+    }
+    const inserted = await restInsert(supabaseUrl, serviceRoleKey, 'saas_ai_provider_keys', [{
+      provider: 'avalai',
+      label,
+      key_masked: masked,
+      key_sha256: keySha256,
+      api_key_ciphertext: ciphertext,
+      is_active: activate,
+      created_by: isUuid(authContext?.userId) ? authContext.userId : null,
+      created_at: nowIso,
+      updated_at: nowIso,
+      activated_at: activate ? nowIso : null,
+    }]);
+    if (activate) {
+      clearCentralAiProviderKeyCache('avalai');
+      liveAvalaiExchangeRateCache = { rate: 0, source: 'unavailable', fetchedAt: null, expiresAt: 0 };
+    }
+    const providerKeys = await listMaskedSaasProviderKeys(supabaseUrl, serviceRoleKey, 'avalai');
+    return json(200, {
+      success: true,
+      keyId: inserted[0]?.id || null,
+      providerKeys,
+      message: activate ? 'کلید جدید AvalAI ثبت و بلافاصله فعال شد.' : 'کلید جدید AvalAI در فهرست ثبت شد.',
+    });
+  }
+
+  if (subAction === 'activate_provider_key') {
+    const keyId = normalizeId(body?.keyId);
+    if (!isUuid(keyId)) return json(400, { success: false, message: 'شناسه کلید معتبر نیست.' });
+    const targetRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'saas_ai_provider_keys', {
+      id: `eq.${keyId}`,
+      provider: 'eq.avalai',
+      select: 'id',
+      limit: 1,
+    });
+    if (!targetRows[0]?.id) return json(404, { success: false, message: 'کلید موردنظر پیدا نشد.' });
+    const nowIso = new Date().toISOString();
+    await restPatch(supabaseUrl, serviceRoleKey, 'saas_ai_provider_keys', {
+      provider: 'eq.avalai',
+      is_active: 'eq.true',
+    }, {
+      is_active: false,
+      updated_at: nowIso,
+    }).catch(() => []);
+    await restPatch(supabaseUrl, serviceRoleKey, 'saas_ai_provider_keys', {
+      id: `eq.${keyId}`,
+      provider: 'eq.avalai',
+    }, {
+      is_active: true,
+      activated_at: nowIso,
+      updated_at: nowIso,
+    });
+    clearCentralAiProviderKeyCache('avalai');
+    liveAvalaiExchangeRateCache = { rate: 0, source: 'unavailable', fetchedAt: null, expiresAt: 0 };
+    const providerKeys = await listMaskedSaasProviderKeys(supabaseUrl, serviceRoleKey, 'avalai');
+    return json(200, { success: true, providerKeys, message: 'کلید انتخاب‌شده برای AvalAI فعال شد.' });
+  }
+
+  if (subAction === 'deactivate_provider_key') {
+    const keyId = normalizeId(body?.keyId);
+    if (!isUuid(keyId)) return json(400, { success: false, message: 'شناسه کلید معتبر نیست.' });
+    const nowIso = new Date().toISOString();
+    await restPatch(supabaseUrl, serviceRoleKey, 'saas_ai_provider_keys', {
+      id: `eq.${keyId}`,
+      provider: 'eq.avalai',
+    }, {
+      is_active: false,
+      updated_at: nowIso,
+    });
+    clearCentralAiProviderKeyCache('avalai');
+    liveAvalaiExchangeRateCache = { rate: 0, source: 'unavailable', fetchedAt: null, expiresAt: 0 };
+    const providerKeys = await listMaskedSaasProviderKeys(supabaseUrl, serviceRoleKey, 'avalai');
+    return json(200, { success: true, providerKeys, message: 'کلید غیرفعال شد.' });
+  }
+
+  if (subAction === 'test_provider_key') {
+    const keyId = normalizeId(body?.keyId);
+    if (!isUuid(keyId)) return json(400, { success: false, message: 'شناسه کلید معتبر نیست.' });
+    const targetRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'saas_ai_provider_keys', {
+      id: `eq.${keyId}`,
+      provider: 'eq.avalai',
+      select: 'id,api_key_ciphertext',
+      limit: 1,
+    });
+    const row = targetRows[0];
+    if (!row?.api_key_ciphertext) return json(404, { success: false, message: 'کلید موردنظر پیدا نشد.' });
+    const plainKey = await decryptProviderApiKey(
+      String(row.api_key_ciphertext),
+      getProviderKeyEncryptionSeed(serviceRoleKey),
+    );
+    const result = await testAvalaiKeyLive(plainKey);
+    const nowIso = new Date().toISOString();
+    await restPatch(supabaseUrl, serviceRoleKey, 'saas_ai_provider_keys', {
+      id: `eq.${keyId}`,
+    }, {
+      last_tested_at: nowIso,
+      last_test_status: result.ok ? 'ok' : 'error',
+      last_test_message: result.message.slice(0, 500),
+      updated_at: nowIso,
+    });
+    const providerKeys = await listMaskedSaasProviderKeys(supabaseUrl, serviceRoleKey, 'avalai');
+    return json(200, { success: true, testOk: result.ok, message: result.message, providerKeys });
+  }
+
+  if (subAction === 'delete_provider_key') {
+    const keyId = normalizeId(body?.keyId);
+    if (!isUuid(keyId)) return json(400, { success: false, message: 'شناسه کلید معتبر نیست.' });
+    const targetRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'saas_ai_provider_keys', {
+      id: `eq.${keyId}`,
+      provider: 'eq.avalai',
+      select: 'id,is_active',
+      limit: 1,
+    });
+    if (!targetRows[0]?.id) return json(404, { success: false, message: 'کلید موردنظر پیدا نشد.' });
+    if (targetRows[0].is_active === true) {
+      return json(400, { success: false, message: 'برای جلوگیری از قطع سرویس، ابتدا کلید دیگری را فعال یا این کلید را غیرفعال کنید.' });
+    }
+    await restDelete(supabaseUrl, serviceRoleKey, 'saas_ai_provider_keys', {
+      id: `eq.${keyId}`,
+      provider: 'eq.avalai',
+    });
+    const providerKeys = await listMaskedSaasProviderKeys(supabaseUrl, serviceRoleKey, 'avalai');
+    return json(200, { success: true, providerKeys, message: 'کلید از فهرست حذف شد.' });
   }
 
   return json(400, { success: false, message: 'عملیات SaaS AI پشتیبانی نمی‌شود.' });

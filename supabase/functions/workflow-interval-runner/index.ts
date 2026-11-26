@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { dialPhone } from '../_shared/phone-number.ts';
+import { resolveCentralAiApiKey } from '../_shared/ai-provider-keys.ts';
 import { isSaasWorkflowSource, readSaasWorkflowSource, saasWorkflowRelationField } from '../_shared/saas-workflow-source.ts';
 import { summarizeAgentTaskDeliveries } from '../_shared/ai-agent-task-contract.ts';
 import { enqueueDueAgentTasks } from '../_shared/ai-agent-task-queue.ts';
@@ -3361,12 +3362,11 @@ async function executeWorkflowProcessOperation(url: string, key: string, orgId: 
 }
 
 async function callWorkflowAiPrompt(url: string, key: string, orgId: string, prompt: string, options: Record<string, any> = {}): Promise<Record<string, any>> {
-  const apiKey = String(
-    Deno.env.get('AVALAI_API_KEY')
-    || Deno.env.get('AI_API_KEY')
-    || Deno.env.get('OPENAI_API_KEY')
-    || ''
-  ).trim();
+  const { apiKey } = await resolveCentralAiApiKey({
+    supabaseUrl: url,
+    serviceRoleKey: key,
+    provider: 'avalai',
+  });
   if (!apiKey) throw new Error('کلید مرکزی AI برای اجرای گردش‌کار خودکار تنظیم نشده است.');
   await assertWorkflowAiEnabled(url, key, orgId);
   const agentKey = String(options?.agentKey || '').trim().toLowerCase() || null;
