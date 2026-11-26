@@ -780,37 +780,36 @@ const isProviderTimeoutError = (error: any) => {
   return /abort|timeout|timed out|upstream server is timing out|request has been cancelled|stream_inactive/i.test(text);
 };
 
-const createLinkedAttemptSignal = (outerSignal: AbortSignal | null | undefined, perAttemptTimeoutMs?: number) => {
-  if (!perAttemptTimeoutMs || perAttemptTimeoutMs <= 0) {
-    return { signal: outerSignal ?? undefined, cleanup: () => {} };
-  }
-  const controller = new AbortController();
-  const onOuterAbort = () => controller.abort((outerSignal as any)?.reason);
-  if (outerSignal) {
-    if (outerSignal.aborted) {
-      controller.abort((outerSignal as any)?.reason);
-      return { signal: controller.signal, cleanup: () => {} };
-    }
-    outerSignal.addEventListener('abort', onOuterAbort, { once: true });
-  }
-  const timer = setTimeout(() => {
-    controller.abort(new DOMException(`Attempt timed out after ${perAttemptTimeoutMs}ms`, 'TimeoutError'));
-  }, perAttemptTimeoutMs);
-  return {
-    signal: controller.signal,
-    cleanup: () => {
-      clearTimeout(timer);
-      if (outerSignal) outerSignal.removeEventListener('abort', onOuterAbort);
-    },
-  };
-};
-
 const requestAvalaiWithFallback = async (
   providerConfig: any,
   path: string,
   init: RequestInit,
   options?: { stripVersionForPath?: boolean; disableFallback?: boolean; perAttemptTimeoutMs?: number },
 ) => {
+  const createLinkedAttemptSignal = (outerSignal: AbortSignal | null | undefined, perAttemptTimeoutMs?: number) => {
+    if (!perAttemptTimeoutMs || perAttemptTimeoutMs <= 0) {
+      return { signal: outerSignal ?? undefined, cleanup: () => {} };
+    }
+    const controller = new AbortController();
+    const onOuterAbort = () => controller.abort((outerSignal as any)?.reason);
+    if (outerSignal) {
+      if (outerSignal.aborted) {
+        controller.abort((outerSignal as any)?.reason);
+        return { signal: controller.signal, cleanup: () => {} };
+      }
+      outerSignal.addEventListener('abort', onOuterAbort, { once: true });
+    }
+    const timer = setTimeout(() => {
+      controller.abort(new DOMException(`Attempt timed out after ${perAttemptTimeoutMs}ms`, 'TimeoutError'));
+    }, perAttemptTimeoutMs);
+    return {
+      signal: controller.signal,
+      cleanup: () => {
+        clearTimeout(timer);
+        if (outerSignal) outerSignal.removeEventListener('abort', onOuterAbort);
+      },
+    };
+  };
   let protocol='chat',stream=false;
   if (path==='/chat/completions' && typeof init.body==='string') {
     const chat=JSON.parse(init.body);
