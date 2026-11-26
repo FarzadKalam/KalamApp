@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   App,
@@ -41,7 +41,7 @@ import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { getHolidaySummaryForDate, type HolidayDaySummary } from '../utils/holidayCalendar';
 import {
   normalizeWorkScheduleMonthlyPlan,
-  resolveWorkScheduleDayPlan,
+  normalizeWorkScheduleDayPlan,
   type WorkScheduleDayPlan,
   type WorkScheduleMonthlyPlan,
 } from '../utils/workSchedulePlan';
@@ -251,6 +251,34 @@ const startOfSaturdayWeek = (date: Date) => {
   return next;
 };
 
+const getDatePlan = (column: ColumnState, date: Date): WorkScheduleDayPlan => (
+  column.monthlyPlan?.[dateKeyFromDate(date)] ?? normalizeWorkScheduleDayPlan(column.weeklyPlan[dayKeyFromDate(date)])
+);
+
+type UpdateShiftTime = (columnKey: string, date: Date, shift: ShiftKey, part: 'start' | 'end', value: string | null) => void;
+
+const ScheduleTimeField = React.memo(function ScheduleTimeField({ columnKey, date, shift, part, value, disabled, onChange }: {
+  columnKey: string;
+  date: Date;
+  shift: ShiftKey;
+  part: 'start' | 'end';
+  value: string | null;
+  disabled: boolean;
+  onChange: UpdateShiftTime;
+}) {
+  return (
+    <PersianDatePicker
+      type="TIME"
+      value={value}
+      onChange={(nextValue) => onChange(columnKey, date, shift, part, nextValue)}
+      disabled={disabled}
+      placeholder={part === 'start' ? 'شروع' : 'پایان'}
+      className="w-full"
+      mountOnOpen
+    />
+  );
+});
+
 const WorkSchedulesPage: React.FC = () => {
   const { message } = App.useApp();
   const navigate = useNavigate();
@@ -271,6 +299,7 @@ const WorkSchedulesPage: React.FC = () => {
   const [scheduleStatus, setScheduleStatus] = useState<StatusKey>('draft');
   const [effectiveFrom, setEffectiveFrom] = useState<string | null>(null);
   const [effectiveTo, setEffectiveTo] = useState<string | null>(null);
+  const [selectedWeekKey, setSelectedWeekKey] = useState<string>();
   const [columns, setColumns] = useState<ColumnState[]>([makeColumn()]);
   const [nameFilter, setNameFilter] = useState('');
   const [teamFilter, setTeamFilter] = useState<string | undefined>();
@@ -285,6 +314,7 @@ const WorkSchedulesPage: React.FC = () => {
   const [officialHolidaysLoading, setOfficialHolidaysLoading] = useState(false);
   const [notificationSchedule, setNotificationSchedule] = useState<WorkScheduleNotificationConfig>(createDefaultWorkScheduleNotificationConfig);
   const [botGroupOptions, setBotGroupOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const loadRequest = useRef(0);
   const popupContainer = useCallback((triggerNode?: HTMLElement | null) => resolveOverlayPopupContainer(triggerNode), []);
 
   useEffect(() => {
@@ -308,16 +338,17 @@ const WorkSchedulesPage: React.FC = () => {
   }, [isCreate, scheduleTitle]);
 
   const loadPage = useCallback(async () => {
+    const request = ++loadRequest.current;
     try {
       setLoading(true);
-      const { data: authData } = await supabase.auth.getUser();
-      setCurrentUserId(authData?.user?.id || null);
-
-      const [employeesRes, recordRes] = await Promise.all([
+      const [{ data: authData }, employeesRes, recordRes] = await Promise.all([
+        supabase.auth.getUser(),
         supabase.from('employees').select('id, full_name, department, team, employment_status').order('full_name', { ascending: true }),
-        isCreate || !recordId ? Promise.resolve({ data: null, error: null } as any) : supabase.from('work_schedules').select('*').eq('id', recordId).maybeSingle(),
+        isCreate || !recordId ? Promise.resolve({ data: null, error: null }) : supabase.from('work_schedules')
+          .select('id, title, status, effective_from, effective_to, weekly_plan, notification_schedule').eq('id', recordId).maybeSingle(),
       ]);
 
+      if (request !== loadRequest.current) return;
       if (employeesRes.error) throw employeesRes.error;
       if (recordRes?.error) throw recordRes.error;
 
@@ -328,30 +359,35 @@ const WorkSchedulesPage: React.FC = () => {
         new Set(nextColumns.flatMap((column) => [column.createdBy, column.updatedBy]).filter((value): value is string => Boolean(value))),
       );
 
-      let nextProfileNames: Record<string, string> = {};
-      if (userIds.length) {
-        const { data: profilesData, error: profilesError } = await supabase.from('profiles').select('id, full_name').in('id', userIds);
-        if (profilesError) throw profilesError;
-        nextProfileNames = Object.fromEntries((profilesData || []).map((item: any) => [String(item.id), String(item.full_name || 'بدون نام')]));
-      }
-
+      setCurrentUserId(authData?.user?.id || null);
       setEmployees(nextEmployees);
-      setProfileNames(nextProfileNames);
+      setProfileNames({});
       setColumns(nextColumns);
       setScheduleTitle(String(record?.title || ''));
       setScheduleStatus((record?.status as StatusKey) || 'draft');
       setEffectiveFrom(record?.effective_from || null);
       setEffectiveTo(record?.effective_to || null);
+      setSelectedWeekKey(undefined);
+      setCopyPopover(null);
       setNotificationSchedule(normalizeWorkScheduleNotificationConfig(record?.notification_schedule));
+      if (userIds.length) {
+        void Promise.resolve(supabase.from('profiles').select('id, full_name').in('id', userIds))
+          .then(({ data, error }) => {
+            if (request !== loadRequest.current || error) return;
+            setProfileNames(Object.fromEntries((data || []).map((item) => [String(item.id), String(item.full_name || 'بدون نام')])));
+          })
+          .catch(() => {});
+      }
     } catch (error) {
-      message.error(toFaErrorMessage(error as any, 'خطا در دریافت برنامه حضور'));
+      if (request === loadRequest.current) message.error(toFaErrorMessage(error as any, 'خطا در دریافت برنامه حضور'));
     } finally {
-      setLoading(false);
+      if (request === loadRequest.current) setLoading(false);
     }
   }, [isCreate, message, recordId]);
 
   useEffect(() => {
     void loadPage();
+    return () => { loadRequest.current += 1; };
   }, [loadPage]);
 
   useEffect(() => {
@@ -413,9 +449,11 @@ const WorkSchedulesPage: React.FC = () => {
     [visibleColumns],
   );
 
+  const calendarDates = useMemo(() => buildDateRange(effectiveFrom, effectiveTo), [effectiveFrom, effectiveTo]);
+
   useEffect(() => {
     let isActive = true;
-    const dates = buildDateRange(effectiveFrom, effectiveTo);
+    const dates = calendarDates;
 
     if (!dates.length) {
       setOfficialHolidaySummaries([]);
@@ -438,9 +476,8 @@ const WorkSchedulesPage: React.FC = () => {
     return () => {
       isActive = false;
     };
-  }, [effectiveFrom, effectiveTo]);
+  }, [calendarDates]);
 
-  const calendarDates = useMemo(() => buildDateRange(effectiveFrom, effectiveTo), [effectiveFrom, effectiveTo]);
   const calendarWeeks = useMemo(() => {
     const byWeek = new Map<string, Date[]>();
     calendarDates.forEach((date) => {
@@ -449,6 +486,19 @@ const WorkSchedulesPage: React.FC = () => {
     });
     return Array.from(byWeek.entries()).map(([key, dates]) => ({ key, dates }));
   }, [calendarDates]);
+  const visibleWeekIndex = Math.max(0, calendarWeeks.findIndex((week) => week.key === selectedWeekKey));
+  const visibleWeek = calendarWeeks[visibleWeekIndex];
+  const nextWeek = calendarWeeks[visibleWeekIndex + 1];
+  const dateLabels = useMemo(() => new Map(calendarDates.map((date) => {
+    const key = dateKeyFromDate(date);
+    return [key, toPersianNumber(safeJalaliFormat(key, 'YYYY/MM/DD') || '')];
+  })), [calendarDates]);
+  const holidayByDate = useMemo(() => new Map(officialHolidaySummaries.map((holiday) => [holiday.dateKey, holiday])), [officialHolidaySummaries]);
+  const weekOptions = useMemo(() => calendarWeeks.map(({ key, dates }) => {
+    const firstDay = safeJalaliFormat(dateKeyFromDate(dates[0]), 'YYYY/MM/DD') || '';
+    const lastDay = safeJalaliFormat(dateKeyFromDate(dates[dates.length - 1]), 'YYYY/MM/DD') || '';
+    return { value: key, label: `${toPersianNumber(firstDay)} تا ${toPersianNumber(lastDay)}` };
+  }), [calendarWeeks]);
 
   const getEmployeeOptions = useCallback(
     (currentEmployeeId: string | null) => {
@@ -459,9 +509,9 @@ const WorkSchedulesPage: React.FC = () => {
     [employeeMap, filteredEmployees],
   );
 
-  const updateColumn = (columnKey: string, updater: (column: ColumnState) => ColumnState) => {
+  const updateColumn = useCallback((columnKey: string, updater: (column: ColumnState) => ColumnState) => {
     setColumns((prev) => prev.map((column) => (column.key === columnKey ? updater(column) : column)));
-  };
+  }, []);
 
   const handleEmployeeChange = (columnKey: string, employeeId: string | null) => {
     const duplicate = columns.find((column) => column.key !== columnKey && column.employeeId === employeeId);
@@ -472,30 +522,20 @@ const WorkSchedulesPage: React.FC = () => {
     updateColumn(columnKey, (column) => ({ ...column, employeeId, dirty: true }));
   };
 
-  const getDatePlan = (column: ColumnState, date: Date): WorkScheduleDayPlan => {
+  const updateCell = useCallback<UpdateShiftTime>((columnKey, date, shiftKey, part, value) => {
     const dateKey = dateKeyFromDate(date);
-    return resolveWorkScheduleDayPlan({
-      monthlyPlan: column.monthlyPlan,
-      weeklyPlan: column.weeklyPlan,
-      dateKey,
-      weekdayKey: dayKeyFromDate(date),
-    });
-  };
-
-  const updateCell = (columnKey: string, date: Date, shiftKey: ShiftKey, part: 'start' | 'end', value: string | null) => {
-    const dateKey = dateKeyFromDate(date);
-    updateColumn(columnKey, (column) => ({
-      ...column,
-      dirty: true,
-      monthlyPlan: {
-        ...(column.monthlyPlan || {}),
-        [dateKey]: {
-          ...getDatePlan(column, date),
-          [shiftKey]: { ...getDatePlan(column, date)[shiftKey], [part]: value },
+    updateColumn(columnKey, (column) => {
+      const plan = getDatePlan(column, date);
+      return {
+        ...column,
+        dirty: true,
+        monthlyPlan: {
+          ...column.monthlyPlan,
+          [dateKey]: { ...plan, [shiftKey]: { ...plan[shiftKey], [part]: value } },
         },
-      },
-    }));
-  };
+      };
+    });
+  }, [updateColumn]);
 
   const resetCopySettings = () => {
     setCopyScope('day');
@@ -764,16 +804,16 @@ const WorkSchedulesPage: React.FC = () => {
         </div>
 
         <div className="divide-y divide-gray-100 dark:divide-white/5">
-          {calendarDates.map((date) => {
+          {visibleWeek?.dates.map((date) => {
             const dayKey = dayKeyFromDate(date);
             const day = DAYS.find((item) => item.key === dayKey) || DAYS[0];
             const dateKey = dateKeyFromDate(date);
-            const holidaySummary = officialHolidaySummaries.find((item) => item.dateKey === dateKey);
+            const holidaySummary = holidayByDate.get(dateKey);
             const plan = getDatePlan(column, date);
             return (
             <div key={`${column.key}_${dateKey}`} className="px-5 py-4">
               <div className="flex items-center justify-between gap-3 mb-3">
-                <div className="font-bold text-gray-800 dark:text-white">{day.label} <span className="text-xs text-gray-500 persian-number">{toPersianNumber(safeJalaliFormat(dateKey, 'YYYY/MM/DD') || '')}</span></div>
+                <div className="font-bold text-gray-800 dark:text-white">{day.label} <span className="text-xs text-gray-500 persian-number">{dateLabels.get(dateKey)}</span></div>
                 <div className="flex flex-wrap justify-end gap-1">
                   {day.key === 'fri' && <Tag color="red">تعطیل هفتگی</Tag>}
                   {holidaySummary && <Tag color="red">تعطیل رسمی</Tag>}
@@ -1056,6 +1096,21 @@ const WorkSchedulesPage: React.FC = () => {
             />
           </div>
         )}
+        {visibleWeek && calendarWeeks.length > 1 && (pageMode === 'edit' ? visibleColumns.length : assignedVisibleColumns.length) > 0 && (
+          <div className="flex flex-wrap items-center gap-3 px-5 py-3">
+            <span>هفتهٔ برنامه</span>
+            <Select
+              aria-label="هفتهٔ برنامه"
+              value={visibleWeek.key}
+              onChange={(key) => {
+                setSelectedWeekKey(key);
+                setCopyPopover(null);
+                resetCopySettings();
+              }}
+              options={weekOptions}
+            />
+          </div>
+        )}
         {pageMode === 'view' ? (
           assignedVisibleColumns.length === 0 ? (
             <div className="py-16">
@@ -1069,6 +1124,10 @@ const WorkSchedulesPage: React.FC = () => {
         ) : visibleColumns.length === 0 ? (
           <div className="py-16">
             <Empty description="ستونی برای نمایش وجود ندارد." />
+          </div>
+        ) : !visibleWeek ? (
+          <div className="py-16">
+            <Empty description="برای نمایش شیفت‌ها، یک بازهٔ تاریخ معتبر انتخاب کنید." />
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -1144,14 +1203,13 @@ const WorkSchedulesPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {calendarDates.map((date) => {
+                {visibleWeek.dates.map((date) => {
                   const dayKey = dayKeyFromDate(date);
                   const day = DAYS.find((item) => item.key === dayKey) || DAYS[0];
                   const dateKey = dateKeyFromDate(date);
-                  const weekKey = dateKeyFromDate(startOfSaturdayWeek(date));
-                  const currentWeek = calendarWeeks.find((week) => week.key === weekKey);
-                  const nextWeek = calendarWeeks[calendarWeeks.findIndex((week) => week.key === weekKey) + 1];
-                  const holidaySummary = officialHolidaySummaries.find((item) => item.dateKey === dateKey);
+                  const currentWeek = visibleWeek;
+                  const weekKey = currentWeek.key;
+                  const holidaySummary = holidayByDate.get(dateKey);
                   return SHIFTS.map((shift, shiftIndex) => (
                     <tr key={`${dateKey}_${shift.key}`} className={day.accent}>
                       {shiftIndex === 0 && (
@@ -1162,7 +1220,7 @@ const WorkSchedulesPage: React.FC = () => {
                         >
                           <div className="flex flex-col gap-1">
                             <span>{day.label}</span>
-                            <span className="text-xs text-gray-500 persian-number">{toPersianNumber(safeJalaliFormat(dateKey, 'YYYY/MM/DD') || '')}</span>
+                            <span className="text-xs text-gray-500 persian-number">{dateLabels.get(dateKey)}</span>
                             {day.key === 'fri' && <Tag color="red">تعطیل هفتگی</Tag>}
                             {holidaySummary && <Tag color="red">تعطیل رسمی</Tag>}
                           </div>
@@ -1198,7 +1256,7 @@ const WorkSchedulesPage: React.FC = () => {
                                           resetCopySettings();
                                         }
                                       }}
-                                      content={(
+                                      content={() => (
                                         <div className="w-72 space-y-3">
                                           <div className="text-xs text-gray-500">
                                             ساعت‌های {day.label} {toPersianNumber(safeJalaliFormat(dateKey, 'YYYY/MM/DD') || '')} را کپی کن.
@@ -1324,24 +1382,26 @@ const WorkSchedulesPage: React.FC = () => {
                                 )}
                                 <div className="space-y-1">
                                   <span className="text-[11px] text-gray-500 dark:text-gray-400">از</span>
-                                  <PersianDatePicker
-                                    type="TIME"
+                                  <ScheduleTimeField
+                                    columnKey={column.key}
+                                    date={date}
+                                    shift={shift.key}
+                                    part="start"
                                     value={item.start}
-                                    onChange={(value) => updateCell(column.key, date, shift.key, 'start', value)}
+                                    onChange={updateCell}
                                     disabled={disabled}
-                                    placeholder="شروع"
-                                    className="w-full"
                                   />
                                 </div>
                                 <div className="space-y-1">
                                   <span className="text-[11px] text-gray-500 dark:text-gray-400">تا</span>
-                                  <PersianDatePicker
-                                    type="TIME"
+                                  <ScheduleTimeField
+                                    columnKey={column.key}
+                                    date={date}
+                                    shift={shift.key}
+                                    part="end"
                                     value={item.end}
-                                    onChange={(value) => updateCell(column.key, date, shift.key, 'end', value)}
+                                    onChange={updateCell}
                                     disabled={disabled}
-                                    placeholder="پایان"
-                                    className="w-full"
                                   />
                                 </div>
                               </div>

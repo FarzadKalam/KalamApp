@@ -32,6 +32,7 @@ interface PersianDatePickerProps {
   overlayZIndexBase?: number;
   adaptiveMode?: AdaptivePickerMode;
   pickerTitle?: string;
+  mountOnOpen?: boolean;
 }
 
 const holidayMonthCache = new Map<string, Promise<Record<string, HolidayMarker>>>();
@@ -260,22 +261,24 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
   modalContainer,
   overlayZIndexBase,
   pickerTitle,
+  mountOnOpen = false,
 }) => {
   const safeOnChange = onChange ?? (() => {});
   const fieldRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState<DateObject | null>(() => convertToPersianDateObject(value, type));
-  const [viewDate, setViewDate] = useState<DateObject | null>(() => convertToPersianDateObject(value, type));
+  const [surfaceMounted, setSurfaceMounted] = useState(!mountOnOpen);
+  const [draft, setDraft] = useState<DateObject | null>(() => mountOnOpen ? null : convertToPersianDateObject(value, type));
+  const [viewDate, setViewDate] = useState<DateObject | null>(() => mountOnOpen ? null : convertToPersianDateObject(value, type));
   const [step, setStep] = useState<"date" | "time">(type === "TIME" ? "time" : "date");
   const [holidayMarkers, setHolidayMarkers] = useState<Record<string, HolidayMarker>>({});
 
   useEffect(() => {
-    if (open) return;
+    if (open || mountOnOpen) return;
     const nextDraft = convertToPersianDateObject(value, type);
     setDraft(nextDraft);
     setViewDate(nextDraft);
     setStep(type === "TIME" ? "time" : "date");
-  }, [open, type, value]);
+  }, [mountOnOpen, open, type, value]);
 
   const syncHolidayMonth = async (source: DateObject | null) => {
     if (type === "TIME" || !source) return;
@@ -314,6 +317,13 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
 
   const handleOpenChange = (nextOpen: boolean) => {
     if (disabled) return;
+    if (nextOpen && mountOnOpen) {
+      const nextDraft = convertToPersianDateObject(value, type);
+      setDraft(nextDraft);
+      setViewDate(nextDraft ? new DateObject(nextDraft) : null);
+      setStep(type === "TIME" ? "time" : "date");
+      setSurfaceMounted(true);
+    }
     setOpen(nextOpen);
   };
 
@@ -517,7 +527,7 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
   const triggerIcon = type === "TIME" ? <ClockCircleOutlined /> : <CalendarOutlined />;
   const panelSubtitle =
     draftDisplay || (placeholder && placeholder !== panelTitle ? placeholder : "");
-  const panelContent = (
+  const panelContent = surfaceMounted ? (
     <>
       {(type === "DATE" || type === "DATETIME") && step === "date" ? (
         <>
@@ -543,7 +553,7 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
       )}
 
     </>
-  );
+  ) : null;
   const zIndexBase = overlayZIndexBase ?? buildOverlayZIndexBase(zIndex - 40).base;
 
   return (
@@ -561,12 +571,13 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
         </span>
       </button>
 
-      <AdaptivePickerSurface
+      {surfaceMounted && <AdaptivePickerSurface
         open={open}
         title={panelTitle}
         subtitle={panelSubtitle}
         zIndex={overlayZIndexBase ? zIndexBase + 40 : zIndex}
         onClose={() => setOpen(false)}
+        afterClose={mountOnOpen ? () => { if (!open) setSurfaceMounted(false); } : undefined}
         onConfirm={type === "DATETIME" && step === "date" ? () => setStep("time") : applyValue}
         confirmLabel={type === "DATETIME" && step === "date" ? "مرحله بعد" : "تایید"}
         onClear={value ? clearValue : undefined}
@@ -591,7 +602,7 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
         modalContainer={modalContainer}
       >
         {panelContent}
-      </AdaptivePickerSurface>
+      </AdaptivePickerSurface>}
     </div>
   );
 };

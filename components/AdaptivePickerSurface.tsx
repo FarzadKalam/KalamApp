@@ -10,6 +10,7 @@ interface AdaptivePickerSurfaceProps {
   zIndex?: number;
   pickerTitle?: string;
   onClose: () => void;
+  afterClose?: () => void;
   onConfirm?: () => void;
   onClear?: () => void;
   confirmLabel?: string;
@@ -28,6 +29,7 @@ const AdaptivePickerSurface: React.FC<AdaptivePickerSurfaceProps> = ({
   zIndex = 10050,
   pickerTitle,
   onClose,
+  afterClose,
   onConfirm,
   onClear,
   confirmLabel = 'تایید',
@@ -65,6 +67,7 @@ const AdaptivePickerSurface: React.FC<AdaptivePickerSurfaceProps> = ({
         open={open}
         footer={null}
         onCancel={onClose}
+        afterClose={afterClose}
         maskClosable
         keyboard
         destroyOnHidden={false}
