@@ -1,3 +1,5 @@
+import { canViewAiAgentModule, hasAiSettingsAdminPermission } from '../supabase/functions/_shared/ai-agent-role-access';
+
 export type AgentKey =
   | 'lead_orchestrator'
   | 'sales_leads'
@@ -841,14 +843,6 @@ export const deriveLegacyEnabledAiAgentFeatureKeys = (
     .map((def) => getAiAgentPlanFeatureKey(def.key));
 };
 
-const canViewModuleClient = (permissions: Record<string, any> | null | undefined, moduleId: string): boolean => {
-  if (!permissions || typeof permissions !== 'object') return true;
-  const canonical = RETURN_INVOICE_PARENT_MODULES[moduleId] || moduleId;
-  const perm = permissions[moduleId] ?? permissions[canonical];
-  if (!perm || typeof perm !== 'object') return false;
-  return perm.view !== false;
-};
-
 export const resolveClientAgentAccess = (params: {
   permissions?: Record<string, any> | null;
   enabledModules?: Record<string, boolean> | null;
@@ -864,6 +858,7 @@ export const resolveClientAgentAccess = (params: {
   userId?: string | null;
   roleId?: string | null;
   isOrgAdmin?: boolean;
+  softwareRole?: string | null;
 }): Record<AgentKey, ClientAgentAccessEvaluation> => {
   const userId = String(params.userId || '').trim();
   const roleId = String(params.roleId || '').trim();
@@ -873,7 +868,7 @@ export const resolveClientAgentAccess = (params: {
   const aiFields = aiPerm?.fields && typeof aiPerm.fields === 'object' ? aiPerm.fields : {};
   const sectionView = !params.permissions || aiPerm?.view !== false;
   const sectionEdit = aiPerm?.edit === true;
-  const isOrgAdmin = Boolean(params.isOrgAdmin);
+  const isOrgAdmin = params.isOrgAdmin ?? hasAiSettingsAdminPermission(params.permissions);
 
   const findMemberPerm = (key: string) => {
     const matching = perms.filter((row) => String(row?.agent_key || '') === key);
@@ -920,24 +915,23 @@ export const resolveClientAgentAccess = (params: {
 
     const hasUsableRbac = def.key === 'lead_orchestrator'
       ? true
-      : def.primaryModules.some((m) => isPlanModEnabled(m) && canViewModuleClient(params.permissions, m));
+      : def.primaryModules.some((moduleId) => isPlanModEnabled(moduleId) && canViewAiAgentModule({
+        permissions: params.permissions, moduleId, parentModuleId: RETURN_INVOICE_PARENT_MODULES[moduleId],
+        softwareRole: params.softwareRole, isOrgAdmin,
+      }));
     const roleAgentViewAllowed = sectionView && aiFields[`${def.key}.view`] !== false;
-    const rbacAllowed = roleAgentViewAllowed && (!params.permissions || isOrgAdmin || hasUsableRbac);
+    const rbacAllowed = roleAgentViewAllowed && hasUsableRbac;
     const memberCanUse = permRow ? permRow.can_use !== false : true;
 
-    const baseRoleCanToggle = isOrgAdmin
-      ? aiFields[`${def.key}.toggle`] !== false
-      : (sectionEdit || aiFields[`${def.key}.toggle`] === true);
-    const baseRoleCanEdit = isOrgAdmin
-      ? aiFields[`${def.key}.edit`] !== false
-      : (sectionEdit || aiFields[`${def.key}.edit`] === true);
+    const baseRoleCanToggle = aiFields[`${def.key}.toggle`] ?? (isOrgAdmin || sectionEdit);
+    const baseRoleCanEdit = aiFields[`${def.key}.edit`] ?? (isOrgAdmin || sectionEdit);
     const baseRoleCanChat = !params.permissions
       ? true
       : aiFields[`${def.key}.chat`] !== false;
 
     const eligibleActor = planAllowed && rbacAllowed && memberCanUse;
-    const canToggle = eligibleActor && baseRoleCanToggle;
-    const canEdit = eligibleActor && baseRoleCanEdit;
+    const canToggle = eligibleActor && baseRoleCanToggle === true;
+    const canEdit = eligibleActor && baseRoleCanEdit === true;
     const canView = eligibleActor && (orgEnabled || canToggle || canEdit);
     const canChat = canView && orgEnabled && baseRoleCanChat;
     const canUse = canView && canChat;

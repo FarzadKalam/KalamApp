@@ -63,3 +63,6 @@ if (typeof window !== 'undefined') window.addEventListener('storage', event => {
 });
 const subscribe = (notify: () => void) => { listeners.add(notify); return () => { listeners.delete(notify); }; };
 export const useDashboardPreferences = (orgId?: string | null, userId?: string | null) => useSyncExternalStore(subscribe, () => readDashboardPreferences(orgId, userId), () => EMPTY);
+
+export const resetDashboardLayout = (orgId?: string | null, userId?: string | null) =>
+  updateDashboardPreferences(orgId, userId, { layoutMode: 'default', hiddenWidgets: [], widgetOrder: [], widgetWidths: {}, widgetHeights: {} });

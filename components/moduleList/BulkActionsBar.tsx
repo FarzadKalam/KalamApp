@@ -1,7 +1,7 @@
 import React from 'react';
 import { Button, Dropdown, Tag, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
-import { CopyOutlined, DeleteOutlined, EditOutlined, ExportOutlined } from '@ant-design/icons';
+import { CopyOutlined, DeleteOutlined, EditOutlined, ExportOutlined, FormOutlined } from '@ant-design/icons';
 
 interface BulkActionsBarProps {
   selectedCount: number;
@@ -17,6 +17,7 @@ interface BulkActionsBarProps {
   onExport?: () => void;
   exportMenuItems?: MenuProps['items'];
   onEdit?: () => void;
+  onQuickEdit?: () => void;
   onCopy?: () => void;
   selectAllDisabled?: boolean;
   selectAllPagesDisabled?: boolean;
@@ -48,6 +49,7 @@ const BulkActionsBar: React.FC<BulkActionsBarProps> = ({
   onExport,
   exportMenuItems,
   onEdit,
+  onQuickEdit,
   onCopy,
   selectAllDisabled = false,
   selectAllPagesDisabled = false,
@@ -162,6 +164,9 @@ const BulkActionsBar: React.FC<BulkActionsBarProps> = ({
             </span>
           </Tooltip>
         )}
+        {onQuickEdit && <Tooltip {...sharedTooltipProps} title="ویرایش سریع">
+          <Button type="text" icon={<FormOutlined />} size="small" onClick={onQuickEdit} aria-label="ویرایش سریع" className="!min-h-11 !min-w-11 md:!min-h-8 md:!min-w-8" />
+        </Tooltip>}
         {onCopy && (
           <Tooltip {...sharedTooltipProps} title="کپی">
             <span className="inline-flex">

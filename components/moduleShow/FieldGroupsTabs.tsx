@@ -1,6 +1,6 @@
 import { isDuplicateHrEmployeeField } from '../../utils/hrEmployeeFields';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Tabs } from 'antd';
+import { Skeleton, Tabs } from 'antd';
 import EditableTable from '../EditableTable';
 import { FieldType } from '../../types';
 import ProductStockMovementsPanel from '../products/ProductStockMovementsPanel';
@@ -11,6 +11,11 @@ import { isTaskLegacySourceField } from '../../utils/taskMeta';
 import { shouldRenderInGeneralModuleUi } from '../../utils/moduleFieldVisibility';
 import { supabase } from '../../supabaseClient';
 import { fetchPayrollSlipServerSummary } from '../../utils/payrollSlipSummary';
+import { useProductSalesSummary, type ProductSalesSummary } from '../../hooks/useProductSalesSummary';
+import { formatPersianNumberWithGrouping, formatPersianPrice } from '../../utils/persianNumberFormatter';
+
+const ProductSiteContentPanel = React.lazy(() => import('../products/ProductSiteContentPanel'));
+const productSalesFields = ['invoice_count', 'total_sold_quantity', 'total_sold_amount'] as const;
 
 interface FieldGroupsTabsProps {
   fieldGroups: any[];
@@ -66,6 +71,7 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
     'run_stages_preview',
   ]);
   const processTemplateFieldKeys = new Set(['process_template_id']);
+  const hasProductSiteContent = moduleId === 'products' && Boolean(recordId && data?.org_id);
   const visibleFieldGroups = useMemo(() => (
     (fieldGroups || [])
       .filter((block: any) => (canViewField ? canViewField(String(block.id)) !== false : true))
@@ -96,12 +102,15 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
           !!block.tableColumns
           || (moduleId === 'products' && block.id === 'product_inventory')
           || (moduleId === 'shelves' && block.id === 'shelf_inventory');
-        const hasExtraBlockContent = Boolean(extraBlockContent?.[String(block.id)]);
+        const hasExtraBlockContent = Boolean(extraBlockContent?.[String(block.id)])
+          || (block.id === 'product_site_content' && hasProductSiteContent);
         return hasVisibleField || hasBlockTable || hasExtraBlockContent;
       })
-  ), [canViewField, checkVisibility, extraBlockContent, fieldGroups, moduleConfig?.fields, moduleId, processStageFieldKeys, processTemplateFieldKeys]);
+  ), [canViewField, checkVisibility, extraBlockContent, fieldGroups, moduleConfig?.fields, moduleId, processStageFieldKeys, processTemplateFieldKeys, hasProductSiteContent]);
   const firstVisibleBlockId = String(visibleFieldGroups[0]?.id || '');
   const [activeBlockId, setActiveBlockId] = useState<string>(firstVisibleBlockId);
+  const salesSummary = useProductSalesSummary(String(data?.org_id || ''), recordId,
+    moduleId === 'products' && activeBlockId === 'sales_info');
 
   useEffect(() => {
     if (!firstVisibleBlockId) return;
@@ -150,7 +159,15 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
               className={f.type === FieldType.SUPER_LONG_TEXT ? 'flex flex-col gap-1 md:col-span-2 lg:col-span-3' : 'flex flex-col gap-1'}
             >
               <span className="text-xs text-gray-400">{f.labels.fa}</span>
-              {renderSmartField(f)}
+              {moduleId === 'products' && block.id === 'sales_info' && productSalesFields.includes(f.key)
+                ? <span className="py-1 text-sm">
+                    {salesSummary.data
+                      ? f.key === 'total_sold_amount'
+                        ? formatPersianPrice(salesSummary.data.total_sold_amount)
+                        : formatPersianNumberWithGrouping(salesSummary.data[f.key as keyof ProductSalesSummary], 3)
+                      : salesSummary.isFetching ? 'در حال دریافت…' : '—'}
+                  </span>
+                : renderSmartField(f)}
             </div>
           ))}
       </div>
@@ -255,7 +272,12 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
         items={visibleFieldGroups.map(block => ({
           key: block.id,
           label: <span className="flex items-center gap-2 py-3">{block.titles.fa}</span>,
-          children: renderBlockContent(block),
+          children: block.id === 'product_site_content' && hasProductSiteContent ? (
+            <React.Suspense fallback={<Skeleton active paragraph={{ rows: 4 }} />}>
+              <ProductSiteContentPanel key={`${data.org_id}:${recordId}`} title={block.titles.fa} product={{ ...data, id: recordId }}
+                canEdit={canEditModule && canEditField?.('product_site_content') !== false} />
+            </React.Suspense>
+          ) : renderBlockContent(block),
         }))}
       />
     </div>

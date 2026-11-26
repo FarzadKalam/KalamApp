@@ -14,7 +14,6 @@ import { MODULES } from '../moduleRegistry';
 import { FieldType, type ModuleDefinition } from '../types';
 import {
   DASHBOARD_PERMISSION_KEY,
-  SAAS_ADMIN_PERMISSION_KEY,
   SETTINGS_PERMISSION_KEY,
   canAccessAssignedRecord,
   fetchCurrentUserRecordAccessContext,
@@ -1021,7 +1020,7 @@ const Dashboard: React.FC = () => {
   const [storyRefreshKey, setStoryRefreshKey] = useState(0);
   const preferences = useDashboardPreferences(orgId, currentUserId);
   const modulePreferenceKey = preferences.moduleIds?.join('|') ?? '__default__';
-  const dataVisibilityKey = preferences.hiddenWidgets.filter(id => id.startsWith('summary:') || id.startsWith('recent:') || id === 'summary_cards' || id === 'recent_lists').sort().join('|');
+  const dataVisibilityKey = preferences.hiddenWidgets.filter(id => id.startsWith('recent:') || id === 'summary_cards' || id === 'recent_lists').sort().join('|');
   const communicationsAccess = resolveCommunicationsPermissions(dashboardPermissions);
   const refreshDashboard = useCallback(() => {
     dashboardCardCache.clear();dashboardRecentSectionCache.clear();_dashboardTasksCache.expiresAt = 0;
@@ -1086,16 +1085,11 @@ const Dashboard: React.FC = () => {
         setCanPublishSaasStory(resolveSaasAdminFieldPermission(perms, 'publish_saas_story'));
         setCanPublishSaasAdminStory(resolveSaasAdminFieldPermission(perms, 'publish_saas_admin_story'));
         if (userId) {
-          const normalizedRole = String(profile?.role || '').trim().toLowerCase();
           setDashboardAgentAccessMap((prev) => prev || resolveClientAgentAccess({
             permissions: perms,
             userId,
             roleId: snapshot.roleId,
-            isOrgAdmin:
-              perms?.[SETTINGS_PERMISSION_KEY]?.edit === true
-              || perms?.[SAAS_ADMIN_PERMISSION_KEY]?.edit === true
-              || normalizedRole === 'super_admin'
-              || normalizedRole === 'admin',
+            softwareRole: snapshot.orgId ? profile?.role : null,
           }));
         }
         const prepared = await buildDashboardBootstrap();
@@ -1108,7 +1102,7 @@ const Dashboard: React.FC = () => {
         const hidden = new Set(preferences.hiddenWidgets);
         const reportFailure = (cause: unknown) => { if (active) setDashboardError(toFaErrorMessage(cause as any, 'دریافت بخشی از داشبورد انجام نشد؛ دوباره تلاش کنید.')); };
         await Promise.all([
-          mapWithConcurrency(prepared.moduleIds.filter(id => prepared.widgetPermissions.summary_cards !== false && !hidden.has('summary_cards') && !hidden.has('summary:' + id)), DASHBOARD_CARD_CONCURRENCY, async id => {
+          mapWithConcurrency((prepared.widgetPermissions.summary_cards !== false && !hidden.has('summary_cards') ? prepared.moduleIds : []), DASHBOARD_CARD_CONCURRENCY, async id => {
             try { const card = await loadCardForModule(id, prepared.recordAccess);if (active && card) setCards(previous => [...previous.filter(item => item.moduleId !== id), card]); }
             catch (cause) { reportFailure(cause); }
           }),

@@ -1,7 +1,7 @@
 import DOMPurify from 'dompurify';
 import { richTextMarkupToPlainText } from '../shared/recordRuntime';
 
-const RICH_TEXT_TAG_PATTERN = /<\/?(?:p|h[2-4]|strong|b|em|i|u|ul|ol|li|span|br)\b/i;
+const RICH_TEXT_TAG_PATTERN = /<\/?(?:p|h[2-4]|strong|b|em|i|u|ul|ol|li|span|br|a)\b/i;
 
 const escapeHtml = (value: string) => value
   .replace(/&/g, '&amp;')
@@ -10,42 +10,25 @@ const escapeHtml = (value: string) => value
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#39;');
 
-// Rich-text values are frequently pasted from office tools or copied from
-// another record. Those sources carry layout rules (font family/size,
-// direction, paragraph spacing, …) which must not override the place where a
-// value is shown. Keep semantic marks such as <strong>/<em>/<u> and colours
-// selected in the editor, but make typography and layout inherit from the
-// surrounding screen or print template.
-const INHERITED_RICH_TEXT_STYLE_PROPERTIES = new Set([
-  'font',
-  'font-family',
-  'font-size',
-  'line-height',
-  'direction',
-  'text-align',
-  'letter-spacing',
-  'word-spacing',
-  'white-space',
-  'text-indent',
-]);
-
-const removeInheritedRichTextStyles = (html: string): string => html.replace(
-  /\sstyle=(['"])([\s\S]*?)\1/gi,
-  (_attribute, quote: string, styleText: string) => {
-    const retained = String(styleText || '')
-      .split(';')
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .filter((part) => {
-        const property = part.slice(0, part.indexOf(':')).trim().toLowerCase();
-        return property && !INHERITED_RICH_TEXT_STYLE_PROPERTIES.has(property);
-      });
-    return retained.length ? ` style=${quote}${retained.join('; ')}${quote}` : '';
-  },
-);
+const normalizeStyles = (fragment: DocumentFragment, preserveAlignment: boolean) => {
+  for (const element of fragment.querySelectorAll('[style]')) {
+    const retained = (element.getAttribute('style') || '').split(';').map((part) => part.trim()).filter((part) => {
+      const separator = part.indexOf(':');
+      if (separator < 0) return false;
+      const property = part.slice(0, separator).trim().toLowerCase();
+      const value = part.slice(separator + 1).trim();
+      if (property === 'text-align') {
+        return preserveAlignment && /^(?:p|h[2-4])$/i.test(element.tagName) && /^(right|center|left)$/i.test(value);
+      }
+      return property === 'color' && /^(?:#[\da-f]{3,8}|rgb\(\d{1,3},\s*\d{1,3},\s*\d{1,3}\))$/i.test(value);
+    });
+    if (retained.length) element.setAttribute('style', retained.join('; '));
+    else element.removeAttribute('style');
+  }
+};
 
 /** محتوای قدیمیِ ساده را بدون از دست‌دادن خط‌های جدید به HTML امن تبدیل می‌کند. */
-export const normalizeRichTextHtml = (value: unknown): string => {
+export const normalizeRichTextHtml = (value: unknown, preserveAlignment = true): string => {
   const source = String(value ?? '');
   if (!source.trim()) return '';
   const html = RICH_TEXT_TAG_PATTERN.test(source)
@@ -53,10 +36,15 @@ export const normalizeRichTextHtml = (value: unknown): string => {
     : escapeHtml(source).replace(/\r?\n/g, '<br>');
 
   const sanitized = DOMPurify.sanitize(html, {
-    ALLOWED_TAGS: ['p', 'h2', 'h3', 'h4', 'strong', 'b', 'em', 'i', 'u', 'ul', 'ol', 'li', 'span', 'br'],
-    ALLOWED_ATTR: ['style'],
+    ALLOWED_TAGS: ['p', 'h2', 'h3', 'h4', 'strong', 'b', 'em', 'i', 'u', 'ul', 'ol', 'li', 'span', 'br', 'a'],
+    ALLOWED_ATTR: ['style', 'href'],
+    ALLOW_DATA_ATTR: false,
+    RETURN_DOM_FRAGMENT: true,
   });
-  return removeInheritedRichTextStyles(sanitized);
+  normalizeStyles(sanitized, preserveAlignment);
+  const template = sanitized.ownerDocument.createElement('template');
+  template.content.append(sanitized);
+  return template.innerHTML;
 };
 
 /**
@@ -64,7 +52,7 @@ export const normalizeRichTextHtml = (value: unknown): string => {
  * ارث می‌برد؛ تنها تأکیدها و رنگ‌هایی که کاربر انتخاب کرده حفظ می‌شوند.
  */
 export const normalizeRichTextHtmlForPrint = (value: unknown): string => {
-  const html = normalizeRichTextHtml(value);
+  const html = normalizeRichTextHtml(value, false);
   return html
     ? `<div class="rich-text-print" style="font-family:inherit; font-size:inherit; line-height:inherit; direction:inherit; text-align:inherit;">${html}</div>`
     : '';

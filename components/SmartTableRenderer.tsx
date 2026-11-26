@@ -1,3 +1,5 @@
+import { getQuickEditAssigneeField } from '../utils/moduleListQuickEdit';
+import { useQuickEditCellEvents, type QuickEditCellController } from './moduleList/QuickEditCell';
 import { EmailActions } from './email/EmailActions';
 import { isEmailField } from '../utils/organizationEmail';
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
@@ -77,6 +79,7 @@ interface SmartTableRendererProps {
   onClearExternalFilters?: () => void;
   sorters?: Array<{ field: string; order: 'asc' | 'desc' }>;
   showFilterBar?: boolean;
+  quickEdit?: QuickEditCellController;
 }
 
 export const buildSmartTablePagination = (pagination: any, isMobileViewport = false) =>
@@ -189,6 +192,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   allUsers = [],  // ✅ اضافه شد
   allRoles = [],   // ✅ اضافه شد
   canViewField,
+  quickEdit,
   containerClassName,
   onVisibleDataChange,
   columnFilters: controlledColumnFilters,
@@ -832,6 +836,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     return options.length > 0 ? options : undefined;
   };
 
+  const getQuickEditCellEvents = useQuickEditCellEvents(quickEdit);
   const columns = useMemo((): ColumnsType<any> => {
     const cols: ColumnsType<any> = tableFields.map(field => {
     const isKeyLikeField = isNameOrTitleField(field);
@@ -942,7 +947,10 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       key: field.key,
       columnLabel: fieldLabel,
       align: field.type === FieldType.IMAGE ? 'center' : undefined,
-      onCell: field.type === FieldType.IMAGE ? () => ({ className: 'smarttable-image-cell' }) : undefined,
+      onCell: (record: any) => {
+        const props = quickEdit && isFieldVisibleForRecord(field, record) ? getQuickEditCellEvents(field, record, fieldLabel) : {};
+        return field.type === FieldType.IMAGE ? { ...props, className: `smarttable-image-cell ${props.className || ''}` } : props;
+      },
       onHeaderCell: field.type === FieldType.IMAGE ? () => ({ className: 'smarttable-image-cell' }) : undefined,
       width: estimateTableColumnWidth({
         field, label: fieldLabel, primary: isPrimaryTitleColumn, mobile: isMobileViewport,
@@ -1381,6 +1389,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
 
   // ✅ اضافه کردن ستون assignee به انتهای تمام جداول
   if (shouldAppendManagedAssigneeColumn && (!canViewField || canViewField('assignee_id') !== false)) {
+    const quickAssigneeField = quickEdit && moduleConfig ? getQuickEditAssigneeField(moduleConfig, assigneeLabel) : undefined;
     const assigneeFilterOptions = [
       ...allUsers.map((user: any) => ({ text: user.full_name || user.display_name || user.id, value: user.id })),
       ...allRoles
@@ -1398,6 +1407,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     title: <span className="text-[11px] text-gray-500">{assigneeLabel}</span>,
     dataIndex: 'assignee_id',
     key: 'assignee_id',
+    onCell: quickAssigneeField ? (record: any) => isFieldVisibleForRecord(quickAssigneeField, record) ? getQuickEditCellEvents(quickAssigneeField, record, assigneeLabel) : {} : undefined,
     width: 120,
     filteredValue: activeColumnFilters.assignee_id ?? null,
     sorter: true,
@@ -1460,6 +1470,8 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   }, [
     data,
     tableFields,
+    quickEdit,
+    getQuickEditCellEvents,
     primaryTitleField,
     tagsField,
     activeColumnFilters,

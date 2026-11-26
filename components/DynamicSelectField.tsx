@@ -37,6 +37,7 @@ interface DynamicSelectFieldProps {
   adaptiveMode?: AdaptivePickerMode;
   pickerTitle?: string;
   preferLocalPopupContainer?: boolean;
+  allowOptionManagement?: boolean;
 }
 
 const normalizeDynamicCompareValue = (value: string) =>
@@ -119,6 +120,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
   adaptiveMode = 'auto',
   pickerTitle,
   preferLocalPopupContainer = false,
+  allowOptionManagement = true,
 }) => {
   const { message: msg } = App.useApp();
   const [newOptionValue, setNewOptionValue] = useState('');
@@ -618,7 +620,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
         pickerTitle={pickerTitle || placeholder}
         preferLocalPopupContainer={preferLocalPopupContainer}
         sheetSubtitle={category ? `دسته: ${category}` : undefined}
-        optionRender={(option) => (
+        optionRender={allowOptionManagement ? (option) => (
           <div
             style={{
               display: 'flex',
@@ -647,8 +649,8 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
               }}
             />
           </div>
-        )}
-        renderMobileOption={(option, selected) => {
+        ) : undefined}
+        renderMobileOption={allowOptionManagement ? (option, selected) => {
           const protectedOption = protectedValueSet.has(String(option?.value || '').trim());
           return (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, width: '100%' }}>
@@ -685,8 +687,8 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
               ) : null}
             </div>
           );
-        }}
-        popupRender={(menu) => (
+        } : undefined}
+        popupRender={allowOptionManagement ? (menu) => (
           <>
             {menu}
             <Divider style={{ margin: '8px 0' }} />
@@ -741,8 +743,8 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
               </div>
             </div>
           </>
-        )}
-        sheetToolbar={(
+        ) : undefined}
+        sheetToolbar={allowOptionManagement ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
             <Input
               placeholder="افزودن گزینه جدید..."
@@ -773,7 +775,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
               </Button>
             </div>
           </div>
-        )}
+        ) : undefined}
       />
 
       <Modal

@@ -1,9 +1,15 @@
 import React, { useEffect, useMemo, useRef } from 'react';
-import { Button, Dropdown, Popover, Tooltip } from 'antd';
+import { Button, Dropdown, Input, Popover, Tooltip } from 'antd';
 import {
   BoldOutlined,
+  AlignLeftOutlined,
+  AlignCenterOutlined,
+  AlignRightOutlined,
   FontColorsOutlined,
   ItalicOutlined,
+  LinkOutlined,
+  UndoOutlined,
+  RedoOutlined,
   OrderedListOutlined,
   UnderlineOutlined,
   UnorderedListOutlined,
@@ -13,6 +19,7 @@ import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import { TextStyle } from '@tiptap/extension-text-style';
 import Color from '@tiptap/extension-color';
+import TextAlign from '@tiptap/extension-text-align';
 import { normalizeRichTextHtml } from '../utils/richText';
 
 const COLORS = ['#111827', '#dc2626', '#ea580c', '#ca8a04', '#16a34a', '#0284c7', '#4f46e5', '#9333ea'];
@@ -44,16 +51,20 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange, disabl
   const emitTimer = useRef<number | null>(null);
   const normalizedValue = useMemo(() => normalizeRichTextHtml(value), [value]);
   const onChangeRef = useRef(onChange);
+  const [linkOpen, setLinkOpen] = React.useState(false);
+  const [linkUrl, setLinkUrl] = React.useState('');
   onChangeRef.current = onChange;
 
   const editor = useEditor({
     immediatelyRender: false,
+    shouldRerenderOnTransaction: true,
     editable: !disabled,
     extensions: [
-      StarterKit.configure({ heading: { levels: [2, 3, 4] }, underline: false }),
+      StarterKit.configure({ heading: { levels: [2, 3, 4] }, underline: false, link: { openOnClick: false } }),
       Underline,
       TextStyle,
       Color,
+      TextAlign.configure({ types: ['heading', 'paragraph'], alignments: ['right', 'center', 'left'] }),
     ],
     content: normalizedValue,
     onUpdate: ({ editor: currentEditor }) => {
@@ -85,6 +96,13 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange, disabl
     if (emitTimer.current !== null) window.clearTimeout(emitTimer.current);
     emitTimer.current = null;
     onChangeRef.current(latestValue.current);
+  };
+
+  const applyLink = () => {
+    const href = linkUrl.trim();
+    const command = editor?.chain().focus().extendMarkRange('link');
+    if (href ? !command?.setLink({ href }).run() : !command?.unsetLink().run()) return;
+    setLinkOpen(false);
   };
 
   const colorPicker = (
@@ -126,6 +144,30 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange, disabl
         </Dropdown>
         {toolButton('فهرست نقطه‌ای', <UnorderedListOutlined />, !!editor?.isActive('bulletList'), () => editor?.chain().focus().toggleBulletList().run(), disabled)}
         {toolButton('فهرست شماره‌ای', <OrderedListOutlined />, !!editor?.isActive('orderedList'), () => editor?.chain().focus().toggleOrderedList().run(), disabled)}
+        {([
+          ['right', 'راست‌چین', <AlignRightOutlined />],
+          ['center', 'وسط‌چین', <AlignCenterOutlined />],
+          ['left', 'چپ‌چین', <AlignLeftOutlined />],
+        ] as const).map(([align, title, icon]) => (
+          <React.Fragment key={align}>
+            {toolButton(title, icon, !!editor?.isActive({ textAlign: align }),
+              () => editor?.chain().focus().setTextAlign(align).run(), disabled)}
+          </React.Fragment>
+        ))}
+        <Popover open={linkOpen} onOpenChange={(open) => {
+          if (open) setLinkUrl(editor?.getAttributes('link').href ?? '');
+          setLinkOpen(open);
+        }} trigger="click" content={
+          <div className="flex items-center gap-2">
+            <Input size="small" dir="ltr" aria-label="نشانی پیوند" value={linkUrl} onChange={(event) => setLinkUrl(event.target.value)}
+              onPressEnter={(event) => { event.preventDefault(); applyLink(); }} />
+            <Button size="small" onClick={applyLink}>{linkUrl.trim() ? 'ثبت پیوند' : 'حذف پیوند'}</Button>
+          </div>
+        }>
+          <Button size="small" type={editor?.isActive('link') ? 'primary' : 'text'} icon={<LinkOutlined />} aria-label="پیوند" disabled={disabled} onMouseDown={(event) => event.preventDefault()} />
+        </Popover>
+        {toolButton('واگرد', <UndoOutlined />, false, () => editor?.chain().focus().undo().run(), disabled)}
+        {toolButton('انجام دوباره', <RedoOutlined />, false, () => editor?.chain().focus().redo().run(), disabled)}
         <Popover content={colorPicker} trigger="click" placement="bottomRight">
           <Button size="small" type="text" icon={<FontColorsOutlined />} aria-label="رنگ متن" disabled={disabled} />
         </Popover>

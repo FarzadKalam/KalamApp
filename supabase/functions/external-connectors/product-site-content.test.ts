@@ -59,7 +59,7 @@ describe('manual WooCommerce product-content payload', () => {
   });
 
   it('rejects invalid slugs and does not overwrite images when no image is selected', () => {
-    expect(() => buildWooProductContentPayload({ slug: '../unsafe' }, 'Product', allowedOrigins)).toThrow('slug');
+    expect(() => buildWooProductContentPayload({ slug: '../unsafe' }, 'Product', allowedOrigins)).toThrow('نشانی کوتاه');
     const result = buildWooProductContentPayload({ title: '', site_image_url: '' }, 'Fallback product', allowedOrigins);
     expect(result.payload).toHaveProperty('name', 'Fallback product');
     expect(result.payload).not.toHaveProperty('images');

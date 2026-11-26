@@ -80,7 +80,8 @@ export default function DashboardWidgetFrame({ widgetId, title, className = '', 
     ] }}>
       <Button className="dashboard-widget-menu" type="text" icon={<MoreOutlined />} aria-label={`تنظیمات ${title}`} onClick={event => event.stopPropagation()} />
     </Dropdown>
-    {children}
+    <div className="dashboard-widget-body" tabIndex={displayHeight !== undefined ? 0 : undefined}>{children}</div>
+    {editing && <>{edge('inline-start')}{edge('inline-end')}{edge('block-end')}</>}
     <Modal title={`تنظیمات ${title}`} open={settingsOpen} onCancel={() => setSettingsOpen(false)} footer={<Button onClick={() => setSettingsOpen(false)}>بستن</Button>} destroyOnClose>
       {settings || <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="این ویجت تنظیم اختصاصی ندارد؛ کنترل‌های آن در خود ویجت در دسترس‌اند." />}
       <Typography.Paragraph type="secondary">این انتخاب‌ها فقط نمای داشبورد شما در همین سازمان را تغییر می‌دهند.</Typography.Paragraph>

@@ -20,7 +20,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const BOT_WEBHOOK_BUILD = 'bot-webhook-2026-07-10-rubika-media-import-v2';
+const BOT_WEBHOOK_BUILD = 'bot-webhook-2026-11-18-stable-prompt-routing';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 

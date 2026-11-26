@@ -1946,8 +1946,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           permissions: bootstrap?.permissions || null,
           userId: bootstrap?.user?.id || null,
           roleId: bootstrap?.roleId || null,
-          isOrgAdmin: String(bootstrap?.profile?.role || '').toLowerCase() === 'admin'
-            || bootstrap?.permissions?.__settings_tabs?.edit === true,
+          softwareRole: bootstrap?.orgId ? bootstrap.profile?.role : null,
         }));
         const [overviewRes, workspaceRes] = await Promise.allSettled([
           callAssistant({ action: 'get_ai_overview' }),
@@ -2031,6 +2030,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     try {
       const runStreamingChat = async (streamBody: Record<string, any>) => {
         let serverError: any = null;
+        let receivedStreamText = false;
         await callAssistantStream(streamBody, {
           onActivity: (payload) => {
             const activity = parseAiAgentActivity(payload);
@@ -2070,6 +2070,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           },
           onDelta: (delta) => {
             if (!delta) return;
+            if (delta.trim()) receivedStreamText = true;
             setMessages((prev) => prev.map((item) => item.id === thinkingMessage.id
               ? { ...item, content: `${String(item.content || '')}${delta}` }
               : item));

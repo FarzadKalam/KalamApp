@@ -1,9 +1,11 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import SmartTableRenderer, { buildSmartTablePagination } from './SmartTableRenderer';
 import { FieldType, ModuleNature, ViewMode, type ModuleDefinition } from '../types';
+import { QUICK_EDIT_HOLD_MS } from './moduleList/QuickEditCell';
+import { canQuickEditModuleField } from '../utils/moduleListQuickEdit';
 
 vi.mock('./ProductionStagesField', () => ({ default: () => null }));
 vi.mock('./RelatedRecordPopover', () => ({ default: ({ children }: any) => <>{children}</> }));
@@ -69,6 +71,66 @@ const StatefulTable = () => {
 };
 
 describe('SmartTableRenderer', () => {
+  it('edits an unselected cell by mouse or keyboard and leaves disallowed rows unchanged', () => {
+    const open = vi.fn();
+    const navigate = vi.fn();
+    const { container } = render(<SmartTableRenderer moduleConfig={testModule} data={rows.slice(0, 3)} loading={false}
+      pagination={false} rowSelection={{ selectedRowKeys: ['1'] }} onRow={() => ({ onClick: navigate })}
+      quickEdit={{ active: true, canEdit: (_field, row) => row.id !== '3', open }} />);
+    const second = container.querySelector('[data-row-key="2"] .module-quick-edit-cell-active')!;
+    fireEvent.click(second);
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ key: 'name' }), rows[1], second.closest('td'));
+    expect(navigate).not.toHaveBeenCalled();
+    fireEvent.keyDown(second.closest('td')!, { key: 'Enter' });
+    expect(open).toHaveBeenCalledTimes(2);
+    fireEvent.click(container.querySelector('[data-row-key="3"] td:not(.ant-table-selection-column)')!);
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(navigate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['touch', 'mouse', 'pen'])('opens on %s hold and preserves the short click or drag', pointerType => {
+    const open = vi.fn();
+    const navigate = vi.fn();
+    const { container, unmount } = render(<SmartTableRenderer moduleConfig={testModule} data={rows.slice(0, 1)} loading={false}
+      pagination={false} onRow={() => ({ onClick: navigate })} quickEdit={{ active: false, canEdit: () => true, open }} />);
+    const cell = container.querySelector('[data-row-key="1"] .module-quick-edit-cell')!;
+    const pointer = (type: string, x: number, button = 0) => {
+      const event = new MouseEvent(type, { bubbles: true, clientX: x, clientY: 20, button });
+      Object.defineProperties(event, { isPrimary: { value: true }, pointerId: { value: 1 }, pointerType: { value: pointerType } });
+      fireEvent(cell, event);
+    };
+    vi.useFakeTimers();
+    try {
+      pointer('pointerdown', 50);
+      pointer('pointerup', 50);
+      fireEvent.click(cell);
+      expect(navigate).toHaveBeenCalledTimes(1);
+      pointer('pointerdown', 50, 2);
+      act(() => vi.advanceTimersByTime(QUICK_EDIT_HOLD_MS));
+      expect(open).not.toHaveBeenCalled();
+      pointer('pointerdown', 50);
+      pointer('pointermove', 80);
+      act(() => vi.advanceTimersByTime(QUICK_EDIT_HOLD_MS));
+      expect(open).not.toHaveBeenCalled();
+      pointer('pointerdown', 50);
+      act(() => vi.advanceTimersByTime(QUICK_EDIT_HOLD_MS));
+      expect(open).toHaveBeenCalledTimes(1);
+      fireEvent.click(cell);
+      expect(navigate).toHaveBeenCalledTimes(1);
+      unmount();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('uses field edit rights and leaves computed, identifier and lookup fields read-only', () => {
+    const field = testModule.fields[0];
+    expect(canQuickEditModuleField(testModule, field, { create: false })).toBe(true);
+    expect(canQuickEditModuleField(testModule, field, { edit: false })).toBe(false);
+    expect(canQuickEditModuleField(testModule, field, { field_actions: { name: { edit: false } } })).toBe(false);
+    expect(canQuickEditModuleField(testModule, { ...field, isCalculated: true }, {})).toBe(false);
+    expect(canQuickEditModuleField(testModule, { ...field, key: 'org_id' }, {})).toBe(false);
+    expect(canQuickEditModuleField(testModule, { ...field, type: FieldType.READONLY_LOOKUP }, {})).toBe(false);
+  });
+
   it('keeps image column names accessible without rendering a visible media heading', () => {
     render(<SmartTableRenderer moduleConfig={{ ...testModule, fields: [...testModule.fields,
       { key: 'image_url', labels: { fa: 'تصویر / فایل' }, type: FieldType.IMAGE, isTableColumn: true },

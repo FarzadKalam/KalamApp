@@ -1,7 +1,7 @@
 // اتصال‌های خارجی: اعتبارسنجی و دریافت امن سفارش‌های ووکامرس در صندوق ورودی.
 import { createClient } from 'npm:@supabase/supabase-js@2.49.8';
-import { getSyncRowCounts } from '../_shared/external-sync-history.ts';
-import { buildWooProductContentPayload, mergeWooProductImages } from '../_shared/product-site-content.ts';
+import { getSyncRowCounts } from './external-sync-history.ts';
+import { createWooProductContentService, withWooProductLease } from './product-content.ts';
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -100,10 +100,21 @@ const safeHistoryError = (error: unknown) => {
   // Deliberately whitelist known generic failures; never persist third-party/server text.
   if (/واحد پول/.test(message)) return 'currency_mismatch';
   if (/ایمیل/.test(message)) return 'required_email';
+  if (/دوباره بررسی|محتوا .*تغییر کرده/.test(message)) return 'comparison_stale';
+  if (/مرجع تعیین‌شده/.test(message)) return 'policy_blocked';
+  if (/نشانی تصویر/.test(message)) return 'invalid_image';
+  if (/در حال اجرا|در حال انجام/.test(message)) return 'operation_busy';
   if (/پیدا نشد/.test(message)) return 'record_not_found';
   if (/اتصال/.test(message)) return 'connection_error';
   return 'sync_failed';
 };
+const wooImportIssueMessages: Array<[RegExp, string]> = [
+  [/recorded payments|Paid or missing/, 'فاکتور دارای دریافت یا پرداخت ثبت‌شده است یا در دسترس نیست.'],
+  [/before WooCommerce order completion|changed before completion/, 'اطلاعات فاکتور یا اقلام سفارش پیش از تکمیل تغییر کرده و نیاز به بررسی دارد.'],
+  [/sales return module/, 'برگشت سفارش را از ماژول برگشت از فروش بررسی کنید.'],
+  [/Ambiguous product SKU/, 'کد کالا به بیش از یک محصول اشاره می‌کند.'],
+  [/currency/, 'واحد پول سفارش و فاکتور قابل تطبیق نیستند.'],
+];
 const historyFields = (module: string, direction: string) => {
   const fields: Record<string, string[]> = {
     products: ['name','manual_code','product_type','sell_price','description','image_url','status','stock'],
@@ -121,11 +132,12 @@ const beginHistory = async (event: Record<string, unknown>) => {
   } catch (error) { console.warn('external sync history start failed'); return null; }
 };
 const finishHistory = async (id: string | null, fields: Record<string, unknown>) => {
-  if (!id) return;
+  if (!id) return false;
   try {
     const { error } = await client.from('external_sync_history').update({ ...fields, finished_at: new Date().toISOString() }).eq('id', id);
     if (error) throw error;
-  } catch (error) { console.warn('external sync history finish failed'); }
+    return true;
+  } catch (error) { console.warn('external sync history finish failed'); return false; }
 };
 
 const getConnection = async (orgId: string, id: string) => {
@@ -182,6 +194,7 @@ const wooRequest = async (connection: any, method: 'GET' | 'POST' | 'PUT', path:
   if (!response.ok) throw new Error(`فروشگاه درخواست همگام‌سازی را نپذیرفت (وضعیت ${response.status}).`);
   return response.json();
 };
+const productContentService = createWooProductContentService(client, wooRequest, productImageAllowedOrigins);
 const previewRecords = async (connection: any, module: SyncModule, scope: 'site' | 'system', page: number) => {
   const config = syncModules[module];
   const limit = 25;
@@ -488,7 +501,7 @@ const syncRecord = async (connection: any, module: SyncModule, direction: 'from_
   const { data: local, error: localError } = await client.from(syncModules[module].local).select('*')
     .eq('org_id', connection.org_id).eq('id', localId).maybeSingle();
   if (localError || !local) throw new Error('رکورد تازه سیستم پیدا نشد.');
-  const { data: link, error: linkError } = await client.from('external_record_links').select('external_id')
+  const { data: link, error: linkError } = await client.from('external_record_links').select('id,external_id')
     .eq('connection_id', connection.id).eq('org_id', connection.org_id)
     .eq('module_key', module).eq('local_id', localId).maybeSingle();
   if (linkError) throw linkError;
@@ -512,41 +525,28 @@ const syncRecord = async (connection: any, module: SyncModule, direction: 'from_
       last_name: trim(local.last_name), billing: { phone: trim(local.mobile_1),
         address_1: trim(local.address), city: trim(local.city) } };
   }
-  const remote = await wooRequest(connection, targetExternal ? 'PUT' : 'POST',
-    `${syncModules[module].woo}${targetExternal ? `/${targetExternal}` : ''}`, payload);
-  const nextExternal = trim(remote.id);
-  if (!/^\d+$/.test(nextExternal)) throw new Error('پاسخ فروشگاه شناسهٔ معتبر ندارد.');
-  await persistLink(connection, module, localId, nextExternal);
-  return { localId, externalId: nextExternal, operation: targetExternal ? 'updated' : 'created' };
-};
-
-const syncProductSiteContent = async (connection: any, localId: string) => {
-  if (!/^[0-9a-f-]{36}$/i.test(localId)) throw new Error('شناسهٔ محصول معتبر نیست.');
-  const [{ data: product, error: productError }, { data: content, error: contentError }, { data: link, error: linkError }] = await Promise.all([
-    client.from('products').select('id,name').eq('org_id', connection.org_id).eq('id', localId).maybeSingle(),
-    client.from('product_site_content').select('title,short_description,description,slug,site_image_url,site_image_alt')
-      .eq('org_id', connection.org_id).eq('product_id', localId).maybeSingle(),
-    client.from('external_record_links').select('external_id').eq('org_id', connection.org_id)
-      .eq('connection_id', connection.id).eq('module_key', 'products').eq('local_id', localId).maybeSingle(),
-  ]);
-  if (productError || contentError || linkError) throw productError || contentError || linkError;
-  if (!product) throw new Error('کالا در این سازمان پیدا نشد.');
-  if (!content) throw new Error('ابتدا محتوای سایت محصول را به‌صورت پیش‌نویس ذخیره کنید.');
-  const externalId = trim(link?.external_id);
-  if (!/^\d+$/.test(externalId)) throw new Error('ابتدا کالا را به محصول متناظر در WooCommerce متصل کنید.');
-  const { payload, changedFields } = buildWooProductContentPayload(content, product.name, productImageAllowedOrigins());
-  const selectedImage = payload.selectedImage as { src: string; alt: string } | undefined;
-  if (selectedImage) {
-    const remoteCurrent = await wooRequest(connection, 'GET', `products/${externalId}`);
-    const images = mergeWooProductImages(remoteCurrent?.images, selectedImage);
-    if (images) payload.images = images;
-    delete payload.selectedImage;
+  const send = async () => {
+    const remote = await wooRequest(connection, targetExternal ? 'PUT' : 'POST',
+      `${syncModules[module].woo}${targetExternal ? `/${targetExternal}` : ''}`, payload);
+    const nextExternal = trim(remote.id);
+    if (!/^\d+$/.test(nextExternal)) throw new Error('پاسخ فروشگاه شناسهٔ معتبر ندارد.');
+    await persistLink(connection, module, localId, nextExternal);
+    return { localId, externalId: nextExternal, operation: targetExternal ? 'updated' : 'created' };
+  };
+  if (module === 'products' && link?.id && targetExternal) {
+    return withWooProductLease(client, connection.org_id, link.id, async (_operation, baseline) => {
+      const { data: draft, error } = await client.from('product_site_content').select('id')
+        .eq('org_id', connection.org_id).eq('product_id', localId).maybeSingle();
+      if (error) throw error;
+      if (baseline || draft) {
+        delete payload.name;
+        delete payload.description;
+        delete payload.images;
+      }
+      return send();
+    });
   }
-  const remote = await wooRequest(connection, 'PUT', `products/${externalId}`, payload);
-  await persistLink(connection, 'products', localId, externalId);
-  return { localId, externalId, operation: 'updated', changedFields, statusUnchanged: true,
-    note: 'عنوان SEO، توضیح متا و عبارت کلیدی در WooCommerce core نگاشت عمومی ندارند و ارسال نشدند.',
-    remoteUpdatedAt: trim(remote?.date_modified_gmt || remote?.date_modified) || null };
+  return send();
 };
 
 const storeOrder = async (connection: any, order: any) => {
@@ -566,9 +566,13 @@ const storeOrder = async (connection: any, order: any) => {
     p_connection_id: connection.id, p_external_id: externalId,
   });
   if (importError) {
-    await client.from('external_order_inbox').update({ processing_status: 'error' })
-      .eq('connection_id', connection.id).eq('org_id', connection.org_id).eq('external_id', externalId);
-    throw new Error(`سفارش ${externalId} دریافت شد ولی تبدیل آن به فاکتور ناموفق بود: ${importError.message}`);
+    const inbox = client.from('external_order_inbox').update({ processing_status: 'error' })
+      .eq('connection_id', connection.id).eq('org_id', connection.org_id).eq('external_id', externalId)
+      .neq('processing_status', 'processed');
+    await (sourceUpdatedAt ? inbox.eq('source_updated_at', sourceUpdatedAt) : inbox.is('source_updated_at', null));
+    const detail = wooImportIssueMessages.find(([pattern]) => pattern.test(importError.message))?.[1]
+      || 'جزئیات سفارش و اتصال کالاها را بررسی کنید.';
+    throw new Error(`ارتباط سفارش ${externalId} با فاکتور کامل نشد. ${detail}`);
   }
   const result = Array.isArray(importResult) ? importResult[0] : importResult;
   return { outcome: trim(result?.outcome) || 'unknown', invoiceId: trim(result?.invoice_id) || null };
@@ -621,7 +625,30 @@ Deno.serve(async (req: Request) => {
     const action = trim(body?.action);
     const orgId = trim(body?.orgId);
     if (!/^[0-9a-f-]{36}$/i.test(orgId)) return reply(400, { error: 'invalid_org' });
-    const authContext = await requireUserOrg(req, orgId, !['list', 'list_orders', 'preview_sync', 'list_sync_history'].includes(action));
+    const authContext = await requireUserOrg(req, orgId, !['list', 'list_orders', 'preview_sync', 'list_sync_history', 'product_content_overview'].includes(action));
+
+    if (action === 'product_content_overview' || action === 'sync_product_content') {
+      const userClient = createClient(supabaseUrl, trim(Deno.env.get('SUPABASE_ANON_KEY')) || serviceKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+        global: { headers: { Authorization: req.headers.get('Authorization') || '' } },
+      });
+      const permission = action === 'product_content_overview' ? 'view' : 'edit';
+      const [membership, fieldAccess] = await Promise.all([
+        userClient.rpc('can_access_product_site_content', { p_org_id: orgId, p_action: permission }),
+        userClient.rpc('current_user_can_module_field', {
+          p_module: 'products', p_action: permission, p_field: 'product_site_content',
+        }),
+      ]);
+      if (membership.error || fieldAccess.error || membership.data !== true || fieldAccess.data !== true) {
+        return reply(403, { error: 'forbidden', message: 'اجازهٔ دسترسی به محتوای محصول وجود ندارد.' });
+      }
+    }
+
+    if (action === 'product_content_overview') {
+      const page = Math.max(1, Math.min(10000, Math.floor(Number(body.page) || 1)));
+      const result = await productContentService.overview(orgId, trim(body.localId), trim(body.id), page);
+      return reply(200, result);
+    }
 
     if (action === 'list_sync_history') {
       const connectionId = trim(body.id || body.connectionId);
@@ -702,14 +729,17 @@ Deno.serve(async (req: Request) => {
       const direction = body.direction === 'from_site' ? 'from_site' : body.direction === 'to_site' ? 'to_site' : null;
       if (!direction) throw new Error('جهت همگام‌سازی معتبر نیست.');
       const startedAt = new Date().toISOString();
+      const requestedLocalId = trim(body.localId);
       const eventId = await beginHistory({ org_id: orgId, connection_id: connection.id, module_key: module,
+        ...(module === 'products' && /^[0-9a-f-]{36}$/i.test(requestedLocalId) ? { local_record_id: requestedLocalId } : {}),
         action: 'sync_record', direction, source: 'manual', started_at: startedAt, status: 'started', actor_user_id: authContext.userId });
       try {
         const result = await syncRecord(connection, module, direction, trim(body.localId), trim(body.externalId));
         const counts = getSyncRowCounts(result?.operation);
         await finishHistory(eventId, { status: 'succeeded', rows_received: 1, rows_created: counts.rowsCreated,
           rows_updated: counts.rowsUpdated, rows_failed: 0,
-          changed_fields: counts.changed ? historyFields(module, direction) : [] });
+          changed_fields: counts.changed ? historyFields(module, direction) : [],
+          ...(module === 'products' && result?.localId ? { local_record_id: result.localId } : {}) });
         return reply(200, { result });
       } catch (error) {
         await finishHistory(eventId, { status: 'failed', rows_received: 0, rows_created: 0, rows_updated: 0, rows_failed: 1,
@@ -721,14 +751,21 @@ Deno.serve(async (req: Request) => {
       const connection = await getConnection(orgId, trim(body.id));
       if (!connection.is_active) throw new Error('ابتدا اتصال را فعال کنید.');
       const localId = trim(body.localId || body.local_id);
+      const direction = body.direction === 'from_site' ? 'from_site' : body.direction === 'to_site' ? 'to_site' : null;
+      const expected = { localHash: trim(body.localHash), remoteHash: trim(body.remoteHash) };
+      if (!direction || !/^[0-9a-f-]{36}$/i.test(localId) ||
+          ![expected.localHash, expected.remoteHash].every((hash) => /^[0-9a-f]{64}$/.test(hash))) {
+        return reply(400, { error: 'comparison_required', message: 'ابتدا وضعیت و تفاوت‌های محصول را دوباره بررسی کنید.' });
+      }
       const eventId = await beginHistory({ org_id: orgId, connection_id: connection.id, module_key: 'products',
-        action: 'sync_product_content', direction: 'to_site', source: 'manual', started_at: new Date().toISOString(),
+        local_record_id: localId, action: 'sync_product_content', direction, source: 'manual', started_at: new Date().toISOString(),
         status: 'started', actor_user_id: authContext.userId });
+      if (!eventId) throw new Error('ثبت سابقهٔ انتقال در دسترس نیست. دوباره تلاش کنید.');
       try {
-        const result = await syncProductSiteContent(connection, localId);
-        await finishHistory(eventId, { status: 'succeeded', rows_received: 1, rows_created: 0, rows_updated: 1,
+        const result = await productContentService.sync(connection, localId, authContext.userId, direction, expected);
+        const historySaved = await finishHistory(eventId, { status: result.status, rows_received: 1, rows_created: 0, rows_updated: 1,
           rows_failed: 0, changed_fields: result.changedFields });
-        return reply(200, { success: true, result });
+        return reply(200, { success: true, result, historySaved });
       } catch (error) {
         await finishHistory(eventId, { status: 'failed', rows_received: 1, rows_created: 0, rows_updated: 0,
           rows_failed: 1, changed_fields: [], error_code: safeHistoryError(error) });
@@ -745,10 +782,15 @@ Deno.serve(async (req: Request) => {
       const connection = await getConnection(orgId, trim(body.id));
       const module = parseModule(body.module);
       if (module === 'invoices') throw new Error('اتصال فاکتور به سفارش برای جلوگیری از ثبت تکراری قابل حذف نیست.');
-      const { error } = await client.from('external_record_links').delete()
+      let unlink = client.from('external_record_links').delete()
         .eq('org_id', orgId).eq('connection_id', connection.id).eq('module_key', module)
         .eq('local_id', trim(body.localId)).eq('external_id', trim(body.externalId));
+      if (module === 'products') {
+        unlink = unlink.or(`product_content_operation.is.null,product_content_operation_until.lt.${new Date().toISOString()}`);
+      }
+      const { data, error } = await unlink.select('id').maybeSingle();
       if (error) throw error;
+      if (!data && module === 'products') throw new Error('نگاشت در دسترس نیست یا انتقال همین محصول در حال اجراست.');
       return reply(200, { ok: true });
     }
     if (action === 'rotate_webhook_secret') {

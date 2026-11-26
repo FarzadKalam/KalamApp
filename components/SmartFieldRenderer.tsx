@@ -1,3 +1,4 @@
+import { hasCurrentOrgPlanModule } from '../utils/saasPlanModules';
 import { EmailActions, EmailComposeButton } from './email/EmailActions';
 import { isEmailField } from '../utils/organizationEmail';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -49,7 +50,7 @@ import { joinStoragePath, sanitizeStorageFileName } from '../utils/storagePath';
 import { getChoiceLabelFallbackFa, getSafeOptionFallback, isEmptyRelationValue } from '../utils/optionHelpers';
 import { getFinancialStatusLabelFa } from '../utils/financialValueLabels';
 import { fetchCurrentUserRolePermissions, resolveReadyTextPermissions } from '../utils/permissions';
-import { fetchDynamicOptionsByCategory } from '../utils/referenceData';
+import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../utils/referenceData';
 import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
 import { evaluateLegacyVisibilityRule } from '../utils/conditionalFieldRules';
 import { syncRecordTags } from '../utils/recordTags';
@@ -375,6 +376,9 @@ interface SmartFieldRendererProps {
   overlayZIndexBase?: number;
   popupContainer?: (trigger?: HTMLElement | null) => HTMLElement;
   preferLocalPopupContainer?: boolean;
+  canCreateRelatedRecord?: (moduleId: string) => boolean;
+  deferRecordFileAttach?: boolean;
+  allowOptionManagement?: boolean;
 }
 
 type ReadyTextItem = {
@@ -385,7 +389,7 @@ type ReadyTextItem = {
 };
 
 const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({ 
-  field, value, onChange, label, type, options, forceEditMode, onOptionsUpdate, allValues = {}, recordId, moduleId, compactMode = false, canViewFilesManager = true, disableRequired = false, standalone = false, overlayZIndexBase = 1400, popupContainer, preferLocalPopupContainer = false
+  field, value, onChange, label, type, options, forceEditMode, onOptionsUpdate, allValues = {}, recordId, moduleId, compactMode = false, canViewFilesManager = true, disableRequired = false, standalone = false, overlayZIndexBase = 1400, popupContainer, preferLocalPopupContainer = false, canCreateRelatedRecord, deferRecordFileAttach = false, allowOptionManagement = true
 }) => {
   const { message: msg } = App.useApp();
   const [uploading, setUploading] = useState(false);
@@ -540,6 +544,17 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       ? mergeSelectOptions(merged as any[], [relationExactOption] as any[])
       : merged;
   }, [fieldOptions, relationExactOption, relationLiveOptions]);
+  const [directoryUserOptions, setDirectoryUserOptions] = useState<Array<{ value: string; label: string }>>([]);
+  const needsUserDirectory = fieldType === FieldType.USER && !options?.length && !field.options?.length && (!!value || !!forceEditMode);
+  useEffect(() => {
+    if (!needsUserDirectory) return;
+    let active = true;
+    void fetchAssigneeDirectory(supabase).then(({ users }) => {
+      if (active) setDirectoryUserOptions(users.map((user: any) => ({ value: String(user.id), label: user.full_name || user.display_name || 'کاربر' })));
+    }).catch(() => { if (active) setDirectoryUserOptions([]); });
+    return () => { active = false; };
+  }, [needsUserDirectory]);
+  const userOptions = fieldOptions.length ? fieldOptions : directoryUserOptions;
   const isReadonly = field?.readonly === true || field?.nature === FieldNature.SYSTEM;
   const parsedLocation = useMemo(() => parseLocationValue(value), [value]);
   const relationConfigAny = (
@@ -560,12 +575,13 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     && !!quickCreateTargetModule
     && quickCreateTargetModule.disableCreate !== true
     && quickCreateTargetModule.systemManaged !== true
-    && relationConfigAny?.disableQuickCreate !== true;
-  const relationTargetNeedsFullCreate = quickCreateTargetModuleId !== 'tasks' && !!quickCreateTargetModule?.blocks?.some((block: any) => (
+    && relationConfigAny?.disableQuickCreate !== true
+    && (!canCreateRelatedRecord || canCreateRelatedRecord(quickCreateTargetModuleId));
+  const relationTargetNeedsFullCreate = !!canCreateRelatedRecord || (quickCreateTargetModuleId !== 'tasks' && !!quickCreateTargetModule?.blocks?.some((block: any) => (
     block?.type === BlockType.TABLE
     || block?.type === BlockType.GRID_TABLE
     || (Array.isArray(block?.tableColumns) && block.tableColumns.length > 0)
-  ));
+  )));
   const resolveRelationDisplayLabel = useCallback(() => {
     if (isEmptyRelationValue(value)) return '';
     const matchedOption = relationResolvedOptions.find((item: any) => String(item?.value) === String(value))
@@ -1190,7 +1206,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       const { data: { publicUrl } } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
       const uploadedFileType = file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : 'file';
 
-      if (recordId && moduleId) {
+      if (recordId && moduleId && !deferRecordFileAttach) {
         const hasFileManagerTables = await detectFileManagerTables(supabase, false);
         if (hasFileManagerTables) {
           try {
@@ -1226,7 +1242,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         }
       }
 
-      if (updateValue && !recordId && moduleId && field.key === 'image_url') {
+      if (updateValue && (!recordId || deferRecordFileAttach) && moduleId && field.key === 'image_url') {
         await stageMainRecordFiles(supabase, moduleId, String(value || ''), publicUrl, [{
           file_url: publicUrl, file_name: file.name || null, mime_type: file.type || null, file_type: uploadedFileType,
         }]);
@@ -1254,7 +1270,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       if (url && !mainUrl) mainUrl = url;
       if (url) uploadedFiles.push({ file_url: url, file_name: file.name || null, mime_type: file.type || null, file_type: file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : 'file' });
     }
-    if (mainUrl && !recordId && moduleId && field.key === 'image_url') {
+    if (mainUrl && (!recordId || deferRecordFileAttach) && moduleId && field.key === 'image_url') {
       try {
         await stageMainRecordFiles(supabase, moduleId, String(value || ''), mainUrl, uploadedFiles);
       } catch (error) {
@@ -1546,9 +1562,10 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     setQuickCreateRelationOptions({});
     setQuickCreateDynamicOptions({});
   };
-  const openRelationCreate = () => {
-    if (relationTargetNeedsFullCreate) {
-      setQuickCreateOpen(true);
+  const openRelationCreate = async () => {
+    if (!canUseRelationQuickCreate || !quickCreateTargetModuleId) return;
+    if (canCreateRelatedRecord && !(await hasCurrentOrgPlanModule(quickCreateTargetModuleId))) {
+      msg.error('ایجاد رکورد در ماژول مرتبط برای این سازمان فعال نیست.');
       return;
     }
     setQuickCreateOpen(true);
@@ -1850,7 +1867,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   };
 
   const handleQuickCreate = async () => {
-    if (!quickCreateTargetModuleId) return;
+    if (!quickCreateTargetModuleId || !canUseRelationQuickCreate) return;
     setQuickCreateLoading(true);
     try {
       const draftValues = applyQuickCreateAutoNaming(quickCreateForm.getFieldsValue(true));
@@ -2006,6 +2023,10 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     }
 
     if (!forceEditMode) {
+        if (fieldType === FieldType.USER) {
+          const selected = Array.isArray(value) ? value : [value];
+          return selected.filter(Boolean).map(id => userOptions.find(option => String(option.value) === String(id))?.label || 'کاربر').join('، ') || '—';
+        }
         if (fieldType === FieldType.CHECKBOX) {
             return value ? <Tag color="green">بله</Tag> : <Tag color="red">خیر</Tag>;
         }
@@ -2366,11 +2387,12 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     value={value}
                     onChange={onChange}
                     options={fieldOptions}
+                    allowOptionManagement={allowOptionManagement}
                     category={field.dynamicOptionsCategory}
                     protectedValues={getProtectedDynamicValues(field.dynamicOptionsCategory)}
                     placeholder={compactMode ? '' : "انتخاب کنید"}
                     onOptionsUpdate={onOptionsUpdate}
-                     disabled={!forceEditMode}
+                     disabled={!forceEditMode || isReadonly}
                      getPopupContainer={selectPopupContainer}
                      popupStyle={{ zIndex: selectPopupZIndex }}
                      modalZIndex={modalOverlayZIndex}
@@ -2397,6 +2419,12 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             />
         );
 
+      case FieldType.USER:
+        return <AdaptiveSelectField {...commonProps} options={userOptions} mode={field.mode === 'multiple' ? 'multiple' : undefined}
+          pickerTitle={fieldLabel} optionFilterProp="label" showSearch allowClear getPopupContainer={selectPopupContainer}
+          overlayZIndexBase={selectPopupZIndex} preferLocalPopupContainer={preferLocalPopupContainer} />;
+
+      case FieldType.CHECKLIST:
       case FieldType.MULTI_SELECT:
         if (field.dynamicOptionsCategory) {
              return (
@@ -2404,12 +2432,13 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     value={value}
                     onChange={onChange}
                     options={fieldOptions}
+                    allowOptionManagement={allowOptionManagement}
                     category={field.dynamicOptionsCategory}
                     protectedValues={getProtectedDynamicValues(field.dynamicOptionsCategory)}
                     placeholder={compactMode ? '' : "انتخاب کنید"}
                     mode="multiple"
                     onOptionsUpdate={onOptionsUpdate}
-                    disabled={!forceEditMode}
+                    disabled={!forceEditMode || isReadonly}
                     getPopupContainer={selectPopupContainer}
                     popupStyle={{ zIndex: selectPopupZIndex }}
                     modalZIndex={modalOverlayZIndex}

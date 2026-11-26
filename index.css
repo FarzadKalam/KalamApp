@@ -1553,3 +1553,12 @@ html:not(.dark) .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-danger
   animation: kanban-card-settled 520ms cubic-bezier(.22,.8,.32,1);
 }
 
+
+/* Quick editing uses the existing record editor; only mark actionable table cells. */
+.module-quick-edit-cell-active { cursor: cell; }
+.module-quick-edit-cell-active:hover,
+.module-quick-edit-cell-active:focus-visible { box-shadow: inset 0 0 0 2px rgba(var(--brand-500-rgb), 0.55); }
+.module-quick-edit-cell-active:focus-visible { outline: 2px solid transparent; }
+@media (pointer: coarse) {
+  .module-quick-edit-cell { -webkit-touch-callout: none; }
+}

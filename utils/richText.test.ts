@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { appendReadyTextToRichText, hasMeaningfulRichTextContent, normalizeRichTextHtml, normalizeRichTextHtmlForPrint, richTextToPlainText } from './richText';
 
 describe('rich text print normalization', () => {
+  it('preserves explicit paragraph and heading alignment and safe links for preview', () => {
+    const formatted = normalizeRichTextHtml('<p style="text-align:right; position:fixed">الف</p><h2 style="text-align:center">ب</h2><p style="text-align:left"><a href="https://example.org">ج</a></p>');
+    expect(formatted).toContain('<p style="text-align:right">الف</p>');
+    expect(formatted).toContain('<h2 style="text-align:center">ب</h2>');
+    expect(formatted).toContain('<p style="text-align:left"><a href="https://example.org">ج</a></p>');
+    expect(normalizeRichTextHtml('<p><a href="javascript:alert(1)">متن</a></p>')).not.toContain('href=');
+  });
   it('keeps supported formatting and converts legacy line breaks safely', () => {
     expect(normalizeRichTextHtml('<p><strong>متن مهم</strong><br>سطر دوم</p>'))
       .toContain('<strong>متن مهم</strong><br>سطر دوم');

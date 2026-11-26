@@ -8,7 +8,19 @@ on:
   workflow_dispatch:
     inputs:
       deploy:
-        description: 'Publish this tested release with explicit phases 589/590/591/592 and the approved tenant-content functions'
+        description: 'Publish this tested release'
+        type: boolean
+        default: false
+      frontend_only:
+        description: 'Publish the frontend without applying migrations or deploying Edge Functions'
+        type: boolean
+        default: false
+      woocommerce_connector_only:
+        description: 'Deploy just the WooCommerce Edge Function and verify its live response'
+        type: boolean
+        default: false
+      cash_bank_ledger_migration_only:
+        description: 'Apply only the approved phase 617 cash and bank ledger migration'
         type: boolean
         default: false
       skip_browser_checks:
@@ -17,8 +29,8 @@ on:
         default: false
 
 concurrency:
-  group: kalamapp-${{ github.ref }}
-  cancel-in-progress: true
+  group: kalamapp-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.deploy && 'deploy' || 'check' }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || !inputs.deploy }}
 
 permissions:
   contents: read
@@ -26,6 +38,7 @@ permissions:
 
 jobs:
   ci:
+    if: ${{ !inputs.woocommerce_connector_only }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -154,6 +167,9 @@ jobs:
             database_v1_phase582_cash_bank_context_performance.sql \
             database_v1_phase583_internal_organization_lookup_index.sql \
             database_v1_phase583_internal_organization_lookup_index.sql \
+            database_v1_phase617_cash_bank_ledger_cheque_lookup.sql \
+            database_v1_phase617_cash_bank_ledger_cheque_lookup.sql \
+            tests/sql/cash_bank_cheque_lookup_assertions.sql \
             tests/sql/cash_bank_context_assertions.sql; do
             docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d cash_bank_context_test -v ON_ERROR_STOP=1 < "$file"
           done
@@ -311,6 +327,15 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: WooCommerce product content and sales regressions
+        run: >-
+          npx vitest run test/wooProductSales.test.ts utils/richText.test.ts
+          supabase/functions/external-connectors/product-site-content.test.ts
+          supabase/functions/external-connectors/product-content-status.test.ts
+          supabase/functions/external-connectors/external-sync-history.test.ts
+          components/products/ProductWooSyncTable.test.tsx components/moduleShow/FieldGroupsTabs.test.tsx
+          --maxWorkers=1 --no-file-parallelism
+
       - name: Typecheck
         env:
           NODE_OPTIONS: --max-old-space-size=4096
@@ -322,7 +347,7 @@ jobs:
           npx vitest run utils/uiNotificationOverlayStore.test.ts utils/notificationOverlayCategories.test.ts
           utils/aiNotifications.test.ts hooks/useAiConversationRead.test.tsx
           utils/appFeedback.test.ts utils/feedbackRouting.test.ts utils/feedbackArchitecture.test.ts utils/recordFeedback.test.ts
-          components/RecordMessageActions.test.tsx components/UploadProgressOverlay.test.tsx components/dashboard/MyTasksWidget.test.tsx
+          components/RecordMessageActions.test.tsx components/UploadProgressOverlay.test.tsx pages/ShareTargetPage.test.tsx utils/uploadFileWithProgress.test.ts components/dashboard/MyTasksWidget.test.tsx components/dashboard/DashboardLayout.test.tsx
           --maxWorkers=1 --no-file-parallelism
 
       - name: Shared AI agents and chat surfaces regression checks
@@ -333,6 +358,7 @@ jobs:
           supabase/functions/_shared/ai-process-data.test.ts supabase/functions/_shared/ai-process-operations.test.ts supabase/functions/ai-assistant/process-execution.test.ts
           supabase/functions/_shared/ai-context-lifecycle.test.ts supabase/functions/ai-assistant/thread-memory.test.ts supabase/functions/ai-assistant/free-chat.test.ts
           supabase/functions/_shared/ai-reasoning.test.ts
+          supabase/functions/_shared/ai-focused-skills.test.ts supabase/functions/main/index.test.ts components/ai/AiAgentSkillsEditor.test.tsx components/ai/AiVoiceRecorder.test.tsx
           supabase/functions/_shared/ai-tool-calls.test.ts supabase/functions/ai-assistant/data-tool-loop.test.ts
           supabase/functions/_shared/ai-agent-task-contract.test.ts supabase/functions/_shared/ai-agent-task-runtime.test.ts
           supabase/functions/_shared/ai-agent-task-management.test.ts supabase/functions/ai-assistant/agent-task-execution.test.ts
@@ -365,6 +391,13 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.9.6
+
+      - name: WooCommerce product transfer lock regression
+        run: |
+          directory="$(mktemp -d)"
+          cp -r supabase/functions/external-connectors "$directory/"
+          deno check --frozen --lock=deno.lock --node-modules-dir=none "$directory/external-connectors/index.ts"
+          deno test --frozen --lock=deno.lock --node-modules-dir=none --allow-env=CI,FORCE_COLOR,NO_COLOR,TERM "$directory/external-connectors/product-content.deno.ts"
 
       - name: Organization email backend regression checks
         run: deno test --node-modules-dir=none --allow-env --allow-read --allow-sys supabase/functions/_shared/email-runtime.deno.ts supabase/functions/send-email/send-email.deno.ts
@@ -459,7 +492,7 @@ jobs:
         timeout-minutes: 5
         run: >-
           npx vitest run
-          utils/hrFilters.test.ts utils/popupContainer.test.ts
+          utils/hrFilters.test.ts utils/popupContainer.test.ts test/internalWebFormMembership.test.ts
           components/AdaptiveSelectField.test.tsx components/PersianDateRangePicker.test.tsx
           --maxWorkers=1 --no-file-parallelism
 
@@ -488,8 +521,13 @@ jobs:
           VITE_WEB_PUSH_PUBLIC_KEY: ${{ secrets.VITE_WEB_PUSH_PUBLIC_KEY }}
         run: npm run build
 
+      - name: Check table conditions across feature runtimes
+        run: npx vitest run shared/recordRuntime.test.ts utils/workflowRuntime.test.ts utils/reporting.test.ts utils/reportQueryPrefilters.test.ts utils/viewDateFilters.test.ts utils/customerClub.test.ts utils/processActivatorContext.test.ts components/workflows/WorkflowConditionsGroup.test.tsx --maxWorkers=1 --no-file-parallelism
+
       - name: Verify PWA release
-        run: node scripts/verify-pwa-release.mjs
+        run: |
+          node --test scripts/verify-live-pwa-release.test.mjs
+          node scripts/verify-pwa-release.mjs
 
       - name: Public ecosystem browser checks
         if: github.event_name != 'workflow_dispatch' || !inputs.skip_browser_checks
@@ -552,8 +590,92 @@ jobs:
           name: dist
           path: dist
 
+  deploy_woocommerce_connector:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy && inputs.woocommerce_connector_only && !inputs.frontend_only && !inputs.cash_bank_ledger_migration_only
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: Check the WooCommerce connector and its regression tests
+        run: |
+          directory="$(mktemp -d)"
+          cp -r supabase/functions/external-connectors "$directory/"
+          deno check --frozen --lock=deno.lock --node-modules-dir=none "$directory/external-connectors/index.ts"
+          deno test --frozen --lock=deno.lock --node-modules-dir=none --allow-env=CI,FORCE_COLOR,NO_COLOR,TERM "$directory/external-connectors/product-content.deno.ts"
+      - name: Verify latest main and wait for earlier releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/wait-for-production-release.mjs
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+      - name: Add server host key
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -T 15 -p "${SERVER_PORT:-22}" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 600 ~/.ssh/known_hosts
+      - name: Deploy the WooCommerce connector
+        shell: pwsh
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PORT: ${{ secrets.SERVER_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVER_USER }}
+          DEPLOY_FUNCTIONS_PATH: /opt/kalamapp/supabase/docker/volumes/functions
+          DEPLOY_FUNCTIONS_COMPOSE_DIR: /opt/kalamapp/supabase/docker
+        run: ./scripts/deploy-supabase-function.ps1 -Functions @('external-connectors')
+      - name: Check the live WooCommerce connector
+        run: node scripts/smoke-woocommerce-connector.mjs
+
+  deploy_cash_bank_ledger_migration:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy && inputs.cash_bank_ledger_migration_only && !inputs.frontend_only && !inputs.woocommerce_connector_only
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify latest main and wait for earlier releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/wait-for-production-release.mjs
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+      - name: Add server host key
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -T 15 -p "${SERVER_PORT:-22}" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 600 ~/.ssh/known_hosts
+      - name: Apply the approved ledger migration
+        shell: pwsh
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PORT: ${{ secrets.SERVER_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git fetch --no-tags origin main
+          if ($LASTEXITCODE -ne 0 -or (git rev-parse origin/main) -ne $env:GITHUB_SHA) {
+            throw 'Main advanced before the ledger migration. Validate the newest revision first.'
+          }
+          $migration = 'database_v1_phase617_cash_bank_ledger_cheque_lookup.sql'
+          Get-FileHash -Algorithm SHA256 -LiteralPath $migration | Format-List
+          & ./scripts/run-server-db-migrations.ps1 -SqlFiles @($migration)
+
   deploy:
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy && !inputs.woocommerce_connector_only && !inputs.cash_bank_ledger_migration_only
     needs: ci
     runs-on: ubuntu-latest
     steps:
@@ -706,7 +828,16 @@ jobs:
             exit 1
           fi
 
-      - name: Apply the explicitly approved plan feature migrations
+      - name: Confirm this release includes the latest changes on main
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$GITHUB_SHA" != "$(git rev-parse origin/main)" ]; then
+            echo "::error::main has advanced. Test the newest source before deploying."
+            exit 1
+          fi
+
+      - name: Apply the explicitly approved condition-table migrations
+        if: ${{ !inputs.frontend_only }}
         shell: pwsh
         env:
           DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
@@ -714,11 +845,12 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVER_USER }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $migrations = @('database_v1_phase589_external_sync_history.sql', 'database_v1_phase590_tenant_site_builder.sql', 'database_v1_phase591_product_site_content_drafts.sql', 'database_v1_phase592_woo_import_outcome.sql')
+          $migrations = @('database_v1_phase615_customer_club_invoice_conditions.sql', 'database_v1_phase616_cash_bank_private_saved_views.sql')
           $migrations | ForEach-Object { Get-FileHash -Algorithm SHA256 -LiteralPath $_ } | Format-List
           & ./scripts/run-server-db-migrations.ps1 -SqlFiles $migrations
 
-      - name: Deploy the AI assistant with shared agents
+      - name: Deploy report and workflow condition runtimes
+        if: ${{ !inputs.frontend_only }}
         shell: pwsh
         env:
           DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
@@ -726,7 +858,27 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVER_USER }}
           DEPLOY_FUNCTIONS_PATH: /opt/kalamapp/supabase/docker/volumes/functions
           DEPLOY_FUNCTIONS_COMPOSE_DIR: /opt/kalamapp/supabase/docker
-        run: ./scripts/deploy-supabase-function.ps1 -Functions @('ai-assistant','external-connectors')
+        run: ./scripts/deploy-supabase-function.ps1 -Functions @('goal-progress','report-runtime','workflow-interval-runner')
+
+      - uses: actions/setup-node@v4
+        if: ${{ !inputs.frontend_only }}
+        with:
+          node-version: 20
+
+      - name: Verify the live condition RPC and Edge Functions
+        if: ${{ !inputs.frontend_only }}
+        env:
+          DEPLOY_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          DEPLOY_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: node scripts/smoke-condition-runtimes.mjs
+
+      - name: Recheck main before activating the frontend
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$GITHUB_SHA" != "$(git rev-parse origin/main)" ]; then
+            echo "::error::main has advanced. Test the newest source before activating the frontend."
+            exit 1
+          fi
 
       - name: Activate release
         env:
