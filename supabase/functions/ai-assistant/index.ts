@@ -22,7 +22,7 @@ import { createProcessDataRuntime, sanitizeProcessValue, PROCESS_RECORD_FIELDS, 
 import { createEmployeeDataRuntime } from '../_shared/ai-employee-data.ts';
 import { createGoalDataRuntime } from '../_shared/ai-goal-data.ts';
 import { summarizeMutationCandidates } from '../_shared/ai-mutation-context.ts';
-import { APPROVAL_ROW, isInvoiceApprovalTable, mergeInvoiceApprovalRows, prepareInvoiceApprovalRows } from '../_shared/ai-approval-table.ts';
+import { APPROVAL_ROW, finalizeApprovedInvoiceRow, invoiceAmountModeColumns, isInvoiceApprovalTable, mergeInvoiceApprovalRows, prepareInvoiceApprovalRows } from '../_shared/ai-approval-table.ts';
 import { createRelationIntakeRuntime, findRelationField } from '../_shared/ai-relation-intake.ts';
 import {createCallContactTools,CALL_CONTEXT_TOOL_MODULES} from '../_shared/voip-contact-tools.ts';
 import { NATIVE_AGENT_SKILLS, runNativeAgentInput } from '../_shared/ai-native-skills.ts';
@@ -5356,8 +5356,18 @@ const sanitizeAiRecordPayload = (rawPayload: any, schema: any) => {
   return payload;
 };
 
+const invoiceApprovalColumns = (table: any, permission: any) => {
+  const columns = (table.columns || []).filter((column: any) => !column.readonly);
+  if (table.key !== 'invoiceItems') return columns;
+  return [...columns, ...invoiceAmountModeColumns.filter(({ key, amountKey }) =>
+    columns.some((column: any) => column.key === amountKey)
+    && ![key, `${table.key}.${key}`].some(field => permission?.fields?.[field] === false || permission?.field_actions?.[field]?.view === false)
+  ).map(({ key }) => ({ key, type: 'select', options: [{ value: 'amount' }, { value: 'percent' }] }))];
+};
+
 const sanitizeAiRecordTables = (rawPayload: any, schema: any, options?: {
   emptyKeys?: Set<string>; invoiceModule?: string; keepInvoiceRow?: boolean;
+  permission?: any;
 }) => {
   const tableSchemas = Array.isArray(schema?.tables) ? schema.tables : [];
   const rawTables = rawPayload?.tables && typeof rawPayload.tables === 'object' ? rawPayload.tables : {};
@@ -5366,7 +5376,7 @@ const sanitizeAiRecordTables = (rawPayload: any, schema: any, options?: {
     const tableKey = String(tableSchema?.key || '').trim();
     if (!tableKey || !Array.isArray(rawTables[tableKey])) continue;
     const invoiceRows = options?.invoiceModule && isInvoiceApprovalTable(options.invoiceModule, tableKey);
-    const columns = (tableSchema?.columns || []).filter((column: any) => !invoiceRows || !column.readonly);
+    const columns = invoiceRows ? invoiceApprovalColumns(tableSchema, options?.permission) : (tableSchema.columns || []);
     if (options?.emptyKeys?.has(tableKey) && rawTables[tableKey].length > 200) {
       throw new Error('جدول قابل تأیید حداکثر ۲۰۰ ردیف دارد.');
     }
@@ -7592,7 +7602,7 @@ const handleGetThread = async (supabaseUrl: string, serviceRoleKey: string, auth
             schema.fields = schema.fields.filter((field: any) => storedKeys.has(field.key));
             const visibleRecords = (proposed.records || []).map((record: any) => ({ ...record, fields: sanitizeAiRecordPayload(record, { ...schema,
               fields: schema.fields.map((field: any) => ({ ...field, options: [...(field.options || []), ...(proposed.option_proposals || []).filter((option: any) => option.category === field.dynamicOptionsCategory)] })) }),
-              tables: sanitizeAiRecordTables(record, schema, { invoiceModule: targetModuleId, keepInvoiceRow: true }) }));
+              tables: sanitizeAiRecordTables(record, schema, { invoiceModule: targetModuleId, keepInvoiceRow: true, permission }) }));
             const options = prepareAiRecordOptions(visibleRecords, schema, canAddAiDynamicOption(permission));
             if (!options.questions.length) proposedAction = {
               id: action.id, actionType: action.action_type, targetModuleId, title: schema.moduleLabel, status: 'proposed',
@@ -10069,7 +10079,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
               throw new Error('ردیف‌های فاکتور در زمان آماده‌سازی تغییر کرده‌اند. درخواست را دوباره بفرستید.');
             }
             const { rows, changed } = prepareInvoiceApprovalRows(currentRows, proposedRows, row =>
-              sanitizeAiRecordPayload({ fields: row }, { fields: tableSchema.columns.filter((column: any) => !column.readonly) }));
+              sanitizeAiRecordPayload({ fields: row }, { fields: invoiceApprovalColumns(tableSchema, targetPerm) }));
             tablePayload[tableKey] = rows;
             if (changed) editedTableKeys.push(tableKey);
             continue;
@@ -16429,7 +16439,7 @@ const executeProposedActionLog = async (
           record_id,
           fields: sanitizeAiRecordPayload({ fields: draft?.fields || draft?.payload || {} }, schema),
           tables: sanitizeAiRecordTables({ tables: rawTables }, schema, {
-            emptyKeys: edited, invoiceModule: isUpdate ? targetModuleId : undefined, keepInvoiceRow: isUpdate,
+            emptyKeys: edited, invoiceModule: targetModuleId, keepInvoiceRow: isUpdate, permission: targetPerm,
           }),
           table_base_updated_at: stored?.table_base_updated_at || null,
         };
@@ -16469,16 +16479,24 @@ const executeProposedActionLog = async (
             const mayDelete = targetPerm.field_actions?.[key]?.delete !== false
               && !(AI_RECORD_SCHEMAS[targetModuleId]?.tables?.find((table: any) => table.key === key)?.columns || []).some((column: any) =>
                 targetPerm.field_actions?.[`${key}.${column.key}`]?.delete === false || targetPerm.field_actions?.[column.key]?.delete === false);
-            const columns = schema.tables.find((table: any) => table.key === key)?.columns || [];
+            const columns = invoiceApprovalColumns(schema.tables.find((table: any) => table.key === key), targetPerm);
             draft.tables[key] = mergeInvoiceApprovalRows(Array.isArray(current[key]) ? current[key] : [], rows, mayDelete, (values, original) => {
               const before = original ? sanitizeAiRecordPayload({ fields: original }, { fields: columns }) : {};
               if (Object.entries(values).some(([column, value]) => JSON.stringify(value) !== JSON.stringify(before[column])
                 && (fieldDenied(column, value) || fieldDenied(`${key}.${column}`, value)))) {
                 throw new Error('دسترسی تغییر یکی از ستون‌های فاکتور را ندارید.');
               }
-            });
+            }, (row, original) => finalizeApprovedInvoiceRow(key, row, original));
           } catch (error) {
             return { status: 400, payload: { success: false, message: error instanceof Error ? error.message : 'ردیف‌های فاکتور معتبر نیستند.' } };
+          }
+        }
+      }
+    } else {
+      for (const draft of resolvedMutationDrafts) {
+        for (const [key, rows] of Object.entries(draft.tables)) {
+          if (isInvoiceApprovalTable(targetModuleId, key) && Array.isArray(rows)) {
+            draft.tables[key] = rows.map(row => finalizeApprovedInvoiceRow(key, row));
           }
         }
       }

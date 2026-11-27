@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { validateProcessApprovalEdits } from './ai-process-approval';
-import { APPROVAL_ROW, mergeInvoiceApprovalRows, prepareInvoiceApprovalRows } from './ai-approval-table';
+import { APPROVAL_ROW, finalizeApprovedInvoiceRow, mergeInvoiceApprovalRows, prepareInvoiceApprovalRows } from './ai-approval-table';
 
 const calendar = { type: 'schedule_calendar_content', draft_id: 'stored-id', name: 'پست',
   content_type: 'post', start_date: '2026-11-28T09:00', due_date: '2026-11-28T17:00' };
@@ -36,5 +36,11 @@ describe('invoice rows in approval cards', () => {
     expect(mergeInvoiceApprovalRows(stored, [], true)).toEqual([]);
     expect(() => mergeInvoiceApprovalRows(stored, [], false)).toThrow();
     expect(() => mergeInvoiceApprovalRows(stored, [{ [APPROVAL_ROW]: 1 }, { [APPROVAL_ROW]: 1 }], true)).toThrow();
+  });
+  it('recalculates an edited item using the invoice form rules before database totals are calculated', () => {
+    const original = { row_key: 'existing', quantity: 1, unit_price: 200, discount: 10, discount_type: 'percent', vat: 10, vat_type: 'percent', total_price: 198 };
+    const rows = mergeInvoiceApprovalRows([original], [{ [APPROVAL_ROW]: 1, quantity: 3 }], true, undefined,
+      (row, prior) => finalizeApprovedInvoiceRow('invoiceItems', row, prior));
+    expect(rows).toEqual([{ ...original, quantity: 3, total_price: 594 }]);
   });
 });

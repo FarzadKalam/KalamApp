@@ -1,4 +1,5 @@
 import { RowCalculationType, SummaryCalculationType, BlockType } from '../types';
+import { calculateInvoiceRowAmount } from '../supabase/functions/_shared/invoice-row-calculation';
 
 const PAYMENT_INCLUDED_STATUSES = new Set(['received', 'paid', 'approved', 'cleared']);
 const normalizePaymentStatus = (value: any) => String(value || '').trim().toLowerCase();
@@ -20,6 +21,7 @@ const resolveInvoiceGlobalDiscountAmount = (subtotal: number, type: 'percent' | 
 };
 
 export const calculateRow = (row: any, type: RowCalculationType = RowCalculationType.SIMPLE_MULTIPLY) => {
+    if (type === RowCalculationType.INVOICE_ROW) return calculateInvoiceRowAmount(row);
     const lengthVal = parseFloat(row.length);
     const widthVal = parseFloat(row.width);
     const areaUsage = Number.isFinite(lengthVal) && Number.isFinite(widthVal) ? lengthVal * widthVal : null;
@@ -31,33 +33,7 @@ export const calculateRow = (row: any, type: RowCalculationType = RowCalculation
         || 0;
     const price = parseFloat(row.unit_price) || parseFloat(row.buy_price) || parseFloat(row.price) || 0;
     
-    let baseTotal = qty * price;
-
-    // محاسبات فاکتور
-    if (type === RowCalculationType.INVOICE_ROW) {
-        // اصلاح مهم: مالیات به عنوان درصد در نظر گرفته می‌شود
-        // مثال: اگر vat = 9 باشد، یعنی 9 درصد
-        let discountInput = parseFloat(row.discount) || 0;
-        let vatInput = parseFloat(row.vat) || 0;
-
-        const discountType = row.discount_type || 'amount';
-        const vatType = row.vat_type || 'percent';
-
-        const discountAmount = discountType === 'percent'
-            ? baseTotal * (discountInput / 100)
-            : discountInput;
-
-        const afterDiscount = baseTotal - discountAmount;
-
-        const vatAmount = vatType === 'percent'
-            ? afterDiscount * (vatInput / 100)
-            : vatInput;
-
-        return afterDiscount + vatAmount;
-    }
-
-    // محاسبات ساده (BOM)
-    return baseTotal;
+    return qty * price;
 };
 
 export const calculateSummary = (data: any, blocks: any[], summaryConfig: any) => {
